@@ -13,11 +13,12 @@ Steps:
     1. Verify clean working tree
     2. Run build check (TypeScript compiles cleanly)
     3. Bump version in plugin.json
-    4. Run git-cliff to regenerate CHANGELOG.md (if git-cliff is available)
-    5. Commit version bump + changelog
-    6. Create annotated git tag (vX.Y.Z)
-    7. Push commits and tags (pre-push hook runs validation again as gate)
-    8. Create GitHub release with changelog entry as release notes
+    4. Update README.md badges (version, build status)
+    5. Run git-cliff to regenerate CHANGELOG.md (aborts if commits skipped)
+    6. Commit version bump + changelog + badges
+    7. Create annotated git tag (vX.Y.Z)
+    8. Push commits and tags (pre-push hook runs validation again as gate)
+    9. Create GitHub release with changelog entry as release notes
 """
 
 import argparse
@@ -27,6 +28,35 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+
+def update_readme_badges(readme_path: Path, version: str, build_ok: bool) -> bool:
+    """Update shields.io badges between <!-- badges-start --> and <!-- badges-end --> markers.
+
+    Returns True if badges were updated, False if markers not found.
+    """
+    if not readme_path.exists():
+        return False
+    content = readme_path.read_text(encoding="utf-8")
+    start_marker = "<!-- badges-start -->"
+    end_marker = "<!-- badges-end -->"
+    start_idx = content.find(start_marker)
+    end_idx = content.find(end_marker)
+    if start_idx == -1 or end_idx == -1:
+        return False
+    build_color = "brightgreen" if build_ok else "red"
+    build_label = "passing" if build_ok else "failing"
+    badges = f"""{start_marker}
+![version](https://img.shields.io/badge/version-{version}-blue)
+![build](https://img.shields.io/badge/build-{build_label}-{build_color})
+![typescript](https://img.shields.io/badge/typescript-5.x-blue)
+![node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
+![license](https://img.shields.io/badge/license-MIT-green)
+![marketplace](https://img.shields.io/badge/marketplace-emasoft--plugins-purple)
+{end_marker}"""
+    new_content = content[:start_idx] + badges + content[end_idx + len(end_marker):]
+    readme_path.write_text(new_content, encoding="utf-8")
+    return True
 
 
 def run(
@@ -190,7 +220,7 @@ def main():
 
     if args.dry_run:
         print(
-            "\n[DRY RUN] Would update plugin.json, CHANGELOG.md"
+            "\n[DRY RUN] Would update plugin.json, README.md badges, CHANGELOG.md"
         )
         print(f"[DRY RUN] Would commit, tag {tag}, push, and create GitHub release")
         return
@@ -203,35 +233,69 @@ def main():
     )
     print()
 
-    # ── 3. Update CHANGELOG.md with git-cliff ──
-    print("── 3. Update changelog ──")
+    # ── 3. Update README badges ──
+    readme = repo_root / "README.md"
+    print("── 3. Update README badges ──")
+    if update_readme_badges(readme, new_version, checks_ok):
+        print(f"  Updated badges in {readme.relative_to(repo_root)}")
+    else:
+        print("  No badge markers found in README.md, skipping")
+    print()
+
+    # ── 4. Update CHANGELOG.md with git-cliff ──
+    print("── 4. Update changelog ──")
     if shutil.which("git-cliff"):
-        run(["git-cliff", "--tag", tag, "--output", str(changelog)], capture=False)
+        cliff_result = run(
+            ["git-cliff", "--tag", tag, "--output", str(changelog)],
+            capture=True,
+            check=False,
+        )
+        # Check for skipped commits in stderr
+        cliff_output = (cliff_result.stderr or "") + (cliff_result.stdout or "")
+        if "were skipped" in cliff_output:
+            print(
+                f"  WARNING: {cliff_output.strip()}",
+                file=sys.stderr,
+            )
+            print(
+                "  ERROR: git-cliff skipped commits. Ensure cliff.toml has "
+                "filter_unconventional = false and a catch-all parser.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if cliff_result.returncode != 0:
+            print(f"  ERROR: git-cliff failed (exit {cliff_result.returncode})", file=sys.stderr)
+            if cliff_result.stderr:
+                print(f"  {cliff_result.stderr.strip()}", file=sys.stderr)
+            sys.exit(1)
+        print("  OK: changelog generated, no commits skipped")
     else:
         print("  git-cliff not found, skipping changelog generation")
     print()
 
-    # ── 4. Commit ──
-    print("── 4. Commit ──")
+    # ── 5. Commit ──
+    print("── 5. Commit ──")
     files_to_stage = [str(plugin_json)]
     if changelog.exists():
         files_to_stage.append(str(changelog))
+    if readme.exists():
+        files_to_stage.append(str(readme))
     run(["git", "add"] + files_to_stage, capture=False)
     run(["git", "commit", "-m", f"Release {tag}"], capture=False)
     print()
 
-    # ── 5. Tag ──
-    print("── 5. Tag ──")
+    # ── 6. Tag ──
+    print("── 6. Tag ──")
     run(["git", "tag", "-a", tag, "-m", f"Release {tag}"], capture=False)
     print()
 
-    # ── 6. Push (pre-push hook runs validation) ──
-    print("── 6. Push ──")
+    # ── 7. Push (pre-push hook runs validation) ──
+    print("── 7. Push ──")
     run(["git", "push", "--follow-tags"], capture=False)
     print()
 
-    # ── 7. GitHub release ──
-    print("── 7. Create GitHub release ──")
+    # ── 8. GitHub release ──
+    print("── 8. Create GitHub release ──")
     notes = extract_release_notes(changelog, new_version)
     run(
         ["gh", "release", "create", tag, "--title", tag, "--notes", notes],
