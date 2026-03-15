@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.2.3] - 2026-03-15
+
+### Added
+
+- Bundle all dependencies with esbuild for standalone dist/
+
 ## [3.2.2] - 2026-03-15
 
 ### Documentation
