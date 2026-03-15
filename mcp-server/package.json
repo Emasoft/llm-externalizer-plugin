@@ -8,7 +8,7 @@
     "llm-externalizer": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc && node add-shebang.mjs",
+    "build": "tsc --noEmit && node esbuild.config.mjs",
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -40,6 +40,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.0.0",
+    "esbuild": "^0.27.4",
     "eslint": "^10.0.3",
     "prettier": "^3.8.1",
     "typescript": "^5.7.0",
