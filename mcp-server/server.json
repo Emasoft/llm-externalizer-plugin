@@ -1,13 +1,13 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "LLM Externalizer",
-  "description": "MCP server that connects Claude to local LLMs (LM Studio, Ollama) and remote models via OpenRouter. Persistent settings at ~/.llm-externalizer/settings.yml. Dynamic model switching with fuzzy name matching.",
-  "version": "3.1.0",
+  "description": "MCP server that connects Claude to local LLMs (LM Studio, Ollama) and remote models via OpenRouter. Persistent settings at ~/.llm-externalizer/settings.yaml. Dynamic model switching with fuzzy name matching.",
+  "version": "3.2.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "llm-externalizer",
-      "version": "3.1.0",
+      "version": "3.2.0",
       "transport": [
         {
           "type": "stdio"
@@ -16,39 +16,39 @@
       "environmentVariables": [
         {
           "name": "OPENROUTER_API_KEY",
-          "description": "OpenRouter API key. If set, enables remote model access via OpenRouter. Can also be set in ~/.llm-externalizer/settings.yml.",
+          "description": "OpenRouter API key. If set, enables remote model access via OpenRouter. Can also be set in ~/.llm-externalizer/settings.yaml.",
           "isRequired": false,
           "isSecret": true,
           "format": "string"
         },
         {
           "name": "LM_STUDIO_URL",
-          "description": "Base URL of an LM Studio server (default: http://localhost:1234). Can also be set in settings.yml.",
+          "description": "Base URL of an LM Studio server (default: http://localhost:1234). Can also be set in settings.yaml.",
           "isRequired": false,
           "format": "url"
         },
         {
           "name": "LM_STUDIO_MODEL",
-          "description": "Model identifier for LM Studio backend (auto-detected if not set). Can also be set in settings.yml.",
+          "description": "Model identifier for LM Studio backend (auto-detected if not set). Can also be set in settings.yaml.",
           "isRequired": false,
           "format": "string"
         },
         {
           "name": "LM_API_TOKEN",
-          "description": "Bearer token for LM Studio API authentication. Also accepts LM_STUDIO_PASSWORD (legacy). Can also be set in settings.yml as lmstudio.api_token.",
+          "description": "Bearer token for LM Studio API authentication. Also accepts LM_STUDIO_PASSWORD (legacy). Can also be set in settings.yaml as lmstudio.api_token.",
           "isRequired": false,
           "isSecret": true,
           "format": "string"
         },
         {
           "name": "OLLAMA_URL",
-          "description": "Base URL of an Ollama server (default: http://localhost:11434). Can also be set in settings.yml.",
+          "description": "Base URL of an Ollama server (default: http://localhost:11434). Can also be set in settings.yaml.",
           "isRequired": false,
           "format": "url"
         },
         {
           "name": "OLLAMA_MODEL",
-          "description": "Model name for Ollama backend (e.g., llama3.2, codellama). Can also be set in settings.yml.",
+          "description": "Model name for Ollama backend (e.g., llama3.2, codellama). Can also be set in settings.yaml.",
           "isRequired": false,
           "format": "string"
         },

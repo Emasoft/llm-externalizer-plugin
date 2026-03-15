@@ -1,12 +1,15 @@
 ---
 name: LLM Externalizer Usage
 description: >-
-  Teaches Claude how to use the LLM Externalizer MCP tools for offloading bounded
-  tasks to cheaper external LLMs. Activates when the agent needs to analyze files,
-  scan codebases, compare files, check imports/references, generate boilerplate,
-  or perform any bounded text task that does not require real-time tool access.
-  Also activates when the agent considers using Haiku subagents for read-only work,
-  since LLM Externalizer is more capable and cheaper.
+  This skill should be used when the agent needs to call LLM Externalizer MCP tools
+  (mcp__llm-externalizer__*) to offload analysis work to external LLMs. Use for:
+  analyzing or summarizing files, scanning codebases for bugs or security issues,
+  comparing two files, checking broken imports or references after refactoring,
+  generating boilerplate or stubs, reviewing code, or processing large logs and JSON.
+  Also use when the agent considers spawning Haiku subagents for read-only work,
+  since LLM Externalizer is more capable and cheaper. Trigger phrases include:
+  "use the external LLM", "offload to LLM Externalizer", "scan folder for issues",
+  "check imports", "code review with external LLM", "analyze these files".
 version: 1.0.0
 ---
 
@@ -71,6 +74,8 @@ input_files_content   — Inline content (DISCOURAGED — wastes your tokens)
 
 **ALWAYS** use `input_files_paths` instead of reading files into your context. The server reads files from disk directly.
 
+Use `instructions_files_paths` to share reusable review rules, coding standards, or large instruction sets across multiple operations — avoids duplicating instructions in every call.
+
 **NOTE**: `batch_check` does NOT support `input_files_content`.
 
 ## Advanced Parameters
@@ -90,7 +95,7 @@ input_files_content   — Inline content (DISCOURAGED — wastes your tokens)
 - **120s timeout**: MCP spec hard limit per call. Long outputs may truncate.
 - **No project context**: The remote LLM knows NOTHING about your project. ALWAYS include brief context in instructions.
 - **File paths only**: ALWAYS pass file paths in `input_files_paths`, NEVER paste contents into `instructions`.
-- **Output location**: All responses saved to `llm_externalizer_output/`. Tool returns ONLY the file path. Read it when needed.
+- **Output location**: All responses saved to `llm_externalizer_output/`. Tool returns ONLY the file path — never inline content. Always use Read to access the output after the tool call completes.
 - **Auto-batching**: If input files exceed context window, they are automatically split into batches.
 - **Concurrency**: Up to 5 parallel calls on OpenRouter, 1 on local. Check with `discover`.
 
@@ -103,3 +108,5 @@ input_files_content   — Inline content (DISCOURAGED — wastes your tokens)
 ## Usage Patterns
 
 See `references/usage-patterns.md` for concrete examples of every tool with recommended parameters.
+
+See `examples/end-to-end-workflow.md` for a complete workflow: tool selection, invocation, output reading, and acting on results.

@@ -1,11 +1,12 @@
 ---
 name: LLM Externalizer Configuration
 description: >-
-  Teaches Claude how to configure and manage LLM Externalizer profiles, settings,
-  and backend connections. Activates when the agent needs to switch models, add
-  profiles, configure local or remote LLM backends, manage ensemble mode, troubleshoot
-  auth or connectivity issues, or modify settings.yaml. Also activates when the user
-  asks about LLM Externalizer setup, profiles, or backend configuration.
+  This skill should be used when the user says "switch LLM model", "add a profile",
+  "configure LM Studio", "set up Ollama", "configure OpenRouter", "change LLM backend",
+  "edit settings.yaml", "fix auth token not found", "enable ensemble mode",
+  "show LLM Externalizer profiles", "configure remote LLM", "set up local LLM",
+  or asks about LLM Externalizer profile configuration, backend setup, or
+  troubleshooting connection and authentication issues.
 version: 1.0.0
 ---
 
@@ -62,7 +63,7 @@ Auth fields accept either:
 - **`$ENV_VAR_NAME`** — resolved from process environment at runtime
 - **`"direct-value"`** — used as-is
 
-Default env vars are set by the API preset. Do NOT report auth errors if `discover` shows the token is resolved. If `discover` shows `(NOT SET)`, the env var is missing from the MCP server's process environment.
+Default env vars are set by the API preset. If `discover` shows the token is resolved, auth is working. If it shows `(NOT SET)`, the env var is missing from the MCP server's process environment — check the MCP server env configuration.
 
 ## Managing Profiles via MCP
 
@@ -116,6 +117,31 @@ On OpenRouter with `remote-ensemble` mode, read-only content tools run on both m
 | `VLLM_API_KEY` | vLLM auth token |
 | `LLM_EXT_CONFIG_DIR` | Override settings directory (default: `~/.llm-externalizer`) |
 | `LLM_OUTPUT_DIR` | Override output directory (default: `./llm_externalizer_output`) |
+
+## CLI Profile Management
+
+As an alternative to the MCP workflow, use the CLI directly:
+
+```bash
+npx llm-externalizer profile list
+npx llm-externalizer profile add <name> --mode <mode> --api <api> --model <model>
+npx llm-externalizer profile select <name>
+npx llm-externalizer profile edit <name> --field <value>
+npx llm-externalizer profile remove <name>
+npx llm-externalizer profile rename <old> <new>
+```
+
+Run from the `mcp-server/` directory within the plugin.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `discover` shows `(NOT SET)` for auth token | Env var missing from MCP server process | Add the env var to `.mcp.json` env block or export it in shell |
+| Connection refused to local server | LM Studio / Ollama not running | Start the local server, verify URL and port |
+| `set_settings` validation error | Invalid profile config | Check validation rules above; ensure mode/api preset match |
+| Ensemble returns only one model's results | File exceeds size limit for one model | Normal behavior — grok limit is 20K lines, gemini 50K lines |
+| Tools return "not configured" | No active profile or settings.yaml missing | Run `discover` to check; create settings with `get_settings` + `set_settings` |
 
 ## Profile Templates
 
