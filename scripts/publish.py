@@ -231,6 +231,31 @@ def main():
         json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
+
+    # Sync version to mcp-server/package.json and server.json
+    pkg_json = repo_root / "mcp-server" / "package.json"
+    if pkg_json.exists():
+        pkg = json.loads(pkg_json.read_text(encoding="utf-8"))
+        pkg["version"] = new_version
+        pkg_json.write_text(
+            json.dumps(pkg, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        print(f"  Synced version to {pkg_json.relative_to(repo_root)}")
+
+    srv_json = repo_root / "mcp-server" / "server.json"
+    if srv_json.exists():
+        srv = json.loads(srv_json.read_text(encoding="utf-8"))
+        if "version" in srv:
+            srv["version"] = new_version
+        for pkg_entry in srv.get("packages", []):
+            if "version" in pkg_entry:
+                pkg_entry["version"] = new_version
+        srv_json.write_text(
+            json.dumps(srv, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        print(f"  Synced version to {srv_json.relative_to(repo_root)}")
     print()
 
     # ── 3. Update README badges ──
@@ -276,10 +301,16 @@ def main():
     # ── 5. Commit ──
     print("── 5. Commit ──")
     files_to_stage = [str(plugin_json)]
+    pkg_json_path = repo_root / "mcp-server" / "package.json"
+    srv_json_path = repo_root / "mcp-server" / "server.json"
     if changelog.exists():
         files_to_stage.append(str(changelog))
     if readme.exists():
         files_to_stage.append(str(readme))
+    if pkg_json_path.exists():
+        files_to_stage.append(str(pkg_json_path))
+    if srv_json_path.exists():
+        files_to_stage.append(str(srv_json_path))
     run(["git", "add"] + files_to_stage, capture=False)
     run(["git", "commit", "-m", f"Release {tag}"], capture=False)
     print()

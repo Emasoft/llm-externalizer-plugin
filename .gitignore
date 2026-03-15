@@ -11,7 +11,6 @@ uv.lock
 
 # Node
 node_modules/
-mcp-server/dist/
 mcp-server/node_modules/
 mcp-server/*.tsbuildinfo
 mcp-server/*.tgz
@@ -21,6 +20,7 @@ mcp-server/llm_externalizer_output/
 
 # Build artifacts
 dist/
+!mcp-server/dist/
 build/
 
 # macOS
