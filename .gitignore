@@ -1,15 +1,13 @@
-# macOS
-.DS_Store
-
-# Dev folders (not published)
-docs_dev/
-scripts_dev/
-samples_dev/
-examples_dev/
-tests_dev/
-downloads_dev/
-libs_dev/
-builds_dev/
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+uv.lock
 
 # Node
 node_modules/
@@ -18,14 +16,30 @@ mcp-server/node_modules/
 mcp-server/*.tsbuildinfo
 mcp-server/*.tgz
 mcp-server/coverage/
-mcp-server/docs_dev/
-mcp-server/scripts_dev/
 mcp-server/logs/
 mcp-server/llm_externalizer_output/
 
-# Python
-__pycache__/
-*.pyc
+# Build artifacts
+dist/
+build/
+
+# macOS
+.DS_Store
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude Code
+.claude/
+CLAUDE.md
+.tldr/
+.tldrignore
+
+# Dev folders (not published)
+*_dev/
 
 # Logs
 *.log
@@ -35,7 +49,12 @@ logs/
 .env
 .env.*
 
+# Security / validation output
+security-results/
+validation-report.txt
+
 # LLM Externalizer output
 llm_externalizer_output/
 *.externbak
 *.externtmp
+*.bak
