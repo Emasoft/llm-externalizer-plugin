@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.2.5] - 2026-03-15
+
+### Fixed
+
+- Rebuild dist after version sync in publish.py
+
 ## [3.2.3] - 2026-03-15
 
 ### Added
