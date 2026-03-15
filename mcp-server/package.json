@@ -1,0 +1,58 @@
+{
+  "name": "llm-externalizer",
+  "version": "3.2.0",
+  "type": "module",
+  "description": "MCP server for LLMs — profile-based configuration for local (LM Studio, Ollama, vLLM, llama.cpp) and remote (OpenRouter) backends with ensemble mode",
+  "main": "dist/index.js",
+  "bin": {
+    "llm-externalizer": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc && node add-shebang.mjs",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "lm-studio",
+    "ollama",
+    "vllm",
+    "openai",
+    "openai-compatible",
+    "openrouter",
+    "local-llm",
+    "ai-tools",
+    "llama-cpp",
+    "ai",
+    "llm",
+    "model-switching",
+    "llm-externalizer"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "yaml": "^2.8.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.0.0",
+    "eslint": "^10.0.3",
+    "prettier": "^3.8.1",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.57.0",
+    "vitest": "^4.0.18"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist/**/*",
+    "server.json",
+    "README.md",
+    "LICENSE"
+  ]
+}
