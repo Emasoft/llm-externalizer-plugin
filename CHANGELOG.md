@@ -1,6 +1,19 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.2.2] - 2026-03-15
+
+### Documentation
+
+- Update install instructions with marketplace update step
+
+### Fixed
+
+- Remove env block from .mcp.json to fix missing env var error
+- Comprehensive audit — security hardening, version sync, skill structure, CI
+- Commit dist/, sync versions, harden publish pipeline
+- Add cliff.toml and harden publish.py changelog generation
+
 ## [3.2.1] - 2026-03-15
 
 ### Changed
