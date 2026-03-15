@@ -271,6 +271,20 @@ def main():
             print(f"  Synced version to {index_ts.relative_to(repo_root)}")
     print()
 
+    # ── 2b. Rebuild dist (so bundled version matches source) ──
+    print("── 2b. Rebuild dist ──")
+    saved_cwd2 = os.getcwd()
+    os.chdir(repo_root / "mcp-server")
+    rebuild = run(["npm", "run", "build"], capture=True, check=False)
+    os.chdir(saved_cwd2)
+    if rebuild.returncode != 0:
+        print("ERROR: dist rebuild failed after version sync.", file=sys.stderr)
+        if rebuild.stderr:
+            print(f"  {rebuild.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+    print("  OK: dist rebuilt with updated version")
+    print()
+
     # ── 3. Update README badges ──
     readme = repo_root / "README.md"
     print("── 3. Update README badges ──")
@@ -327,6 +341,10 @@ def main():
     index_ts_path = repo_root / "mcp-server" / "src" / "index.ts"
     if index_ts_path.exists():
         files_to_stage.append(str(index_ts_path))
+    # Stage rebuilt dist files
+    dist_dir = repo_root / "mcp-server" / "dist"
+    if dist_dir.exists():
+        files_to_stage.append(str(dist_dir))
     run(["git", "add"] + files_to_stage, capture=False)
     run(["git", "commit", "-m", f"Release {tag}"], capture=False)
     print()
