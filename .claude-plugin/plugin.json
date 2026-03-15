@@ -1,5 +1,5 @@
 {
-  "name": "llm-externalizer-plugin",
+  "name": "llm-externalizer",
   "version": "3.2.0",
   "description": "MCP server that offloads bounded LLM tasks from Claude Code to cheaper local (LM Studio, Ollama, vLLM, llama.cpp) or remote (OpenRouter) models. Profile-based configuration with ensemble mode.",
   "author": {
@@ -7,6 +7,7 @@
     "email": "713559+Emasoft@users.noreply.github.com",
     "url": "https://github.com/Emasoft"
   },
+  "homepage": "https://github.com/Emasoft/llm-externalizer-plugin",
   "repository": "https://github.com/Emasoft/llm-externalizer-plugin",
   "license": "MIT",
   "keywords": [

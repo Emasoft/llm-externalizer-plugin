@@ -1,0 +1,61 @@
+# Notify marketplace repo when this plugin is updated.
+# Requires MARKETPLACE_PAT secret — a GitHub Personal Access Token (fine-grained
+# or classic) with 'repo' scope on the target marketplace repository.
+
+name: Notify Marketplace
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.claude-plugin/plugin.json'
+
+permissions:
+  contents: read
+
+env:
+  MARKETPLACE_OWNER: 'Emasoft'
+  MARKETPLACE_REPO: 'emasoft-plugins'
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: '.claude-plugin/plugin.json'
+
+      - name: Get plugin info
+        id: plugin
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          # Read the actual plugin name from plugin.json (may differ from repo name)
+          PLUGIN_NAME=$(python3 -c "import json; print(json.load(open('.claude-plugin/plugin.json'))['name'])")
+          echo "name=${PLUGIN_NAME}" >> "$GITHUB_OUTPUT"
+          echo "ref=${COMMIT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger marketplace update
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
+        with:
+          token: ${{ secrets.MARKETPLACE_PAT }}
+          repository: ${{ env.MARKETPLACE_OWNER }}/${{ env.MARKETPLACE_REPO }}
+          event-type: plugin-updated
+          client-payload: >-
+            {"plugin": ${{ toJSON(steps.plugin.outputs.name) }}, "ref": ${{ toJSON(steps.plugin.outputs.ref) }}, "source_repo": ${{ toJSON(github.repository) }}, "triggered_by": ${{ toJSON(github.actor) }}}
+
+      - name: Summary
+        env:
+          PLUGIN_NAME: ${{ steps.plugin.outputs.name }}
+          PLUGIN_REF: ${{ steps.plugin.outputs.ref }}
+        run: |
+          {
+            echo "## Marketplace Notification"
+            echo ""
+            echo "Triggered update in ${MARKETPLACE_OWNER}/${MARKETPLACE_REPO}"
+            echo ""
+            echo "- Plugin: ${PLUGIN_NAME}"
+            echo "- Commit: ${PLUGIN_REF}"
+          } >> "$GITHUB_STEP_SUMMARY"

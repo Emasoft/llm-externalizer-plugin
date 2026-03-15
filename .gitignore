@@ -1,18 +1,41 @@
+# macOS
+.DS_Store
+
+# Dev folders (not published)
+docs_dev/
+scripts_dev/
+samples_dev/
+examples_dev/
+tests_dev/
+downloads_dev/
+libs_dev/
+builds_dev/
+
+# Node
 node_modules/
 mcp-server/dist/
 mcp-server/node_modules/
 mcp-server/*.tsbuildinfo
-mcp-server/logs/
-mcp-server/llm_externalizer_output/
+mcp-server/*.tgz
 mcp-server/coverage/
 mcp-server/docs_dev/
 mcp-server/scripts_dev/
-mcp-server/*.tgz
-.DS_Store
-Thumbs.db
+mcp-server/logs/
+mcp-server/llm_externalizer_output/
+
+# Python
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+logs/
+
+# Environment
 .env
 .env.*
-*.log
+
+# LLM Externalizer output
+llm_externalizer_output/
 *.externbak
 *.externtmp
-llm_externalizer_output/
