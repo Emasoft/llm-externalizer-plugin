@@ -11,7 +11,7 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
 PUSHING_TO_MAIN=0
-while read -r local_ref local_sha remote_ref remote_sha; do
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
   if [[ "$remote_ref" == "refs/heads/main" ]]; then
     PUSHING_TO_MAIN=1
   fi
@@ -55,7 +55,7 @@ echo ""
 
 # ── 2. Plugin manifest check ────────────────────────────
 echo "── 2. Plugin manifest ──"
-python3 -c "import json; json.load(open('.claude-plugin/plugin.json'))" || {
+python3 -c "import json; json.load(open('.claude-plugin/plugin.json', encoding='utf-8'))" || {
   echo ""; echo "BLOCKED: plugin.json is not valid JSON"; exit 1
 }
 echo "OK: plugin.json valid"

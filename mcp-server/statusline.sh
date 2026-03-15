@@ -214,7 +214,7 @@ get_oauth_token() {
 # ===== LINE 2 & 3: Usage limits with progress bars (cached) =====
 cache_file="/tmp/claude/statusline-usage-cache.json"
 cache_max_age=300  # 5 minutes — /api/oauth/usage is heavily rate-limited
-mkdir -p /tmp/claude
+mkdir -p /tmp/claude && chmod 700 /tmp/claude
 
 needs_refresh=true
 usage_data=""
@@ -239,7 +239,7 @@ if $needs_refresh; then
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $token" \
             -H "anthropic-beta: oauth-2025-04-20" \
-            -H "User-Agent: claude-code/2.1.34" \
+            -H "User-Agent: claude-code/${claude_version:-0.0.0}" \
             "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)
         if [ -n "$response" ] && echo "$response" | jq . >/dev/null 2>&1; then
             usage_data="$response"

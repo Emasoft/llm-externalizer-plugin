@@ -1516,7 +1516,7 @@ const STATS_FILE = "/tmp/claude/llm-externalizer-stats.json";
 
 function writeStatsFile(): void {
   try {
-    mkdirSync("/tmp/claude", { recursive: true });
+    mkdirSync("/tmp/claude", { recursive: true, mode: 0o700 });
     const stats = {
       session_id: SESSION_ID,
       session_start: SESSION_START.toISOString(),
@@ -4025,7 +4025,7 @@ function buildTools() {
 // ── MCP Server ───────────────────────────────────────────────────────
 
 const server = new Server(
-  { name: "llm-externalizer", version: "3.1.0" },
+  { name: "llm-externalizer", version: "3.2.1" },
   { capabilities: { tools: { listChanged: true } } },
 );
 
@@ -6750,7 +6750,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // diff exit codes: 0=identical, 1=different, 2=error
         const diffResult = spawnSync(
           "diff",
-          ["-u", "--label", fileA, "--label", fileB, fileA, fileB],
+          ["-u", "--label", fileA, "--label", fileB, "--", fileA, fileB],
           {
             encoding: "utf-8",
             timeout: 30000,

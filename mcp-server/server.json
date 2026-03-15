@@ -77,6 +77,13 @@
           "format": "string"
         },
         {
+          "name": "VLLM_API_KEY",
+          "description": "API key for vLLM server authentication. Can also be set in settings.yaml.",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
           "name": "LM_CONTEXT_WINDOW",
           "description": "Fallback context window size in tokens if auto-detection fails (default: 100000)",
           "isRequired": false,

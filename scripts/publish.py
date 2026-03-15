@@ -256,6 +256,19 @@ def main():
             encoding="utf-8",
         )
         print(f"  Synced version to {srv_json.relative_to(repo_root)}")
+
+    # Sync hardcoded version in MCP server source (index.ts Server constructor)
+    index_ts = repo_root / "mcp-server" / "src" / "index.ts"
+    if index_ts.exists():
+        src = index_ts.read_text(encoding="utf-8")
+        updated = re.sub(
+            r'(\{\s*name:\s*"llm-externalizer",\s*version:\s*")[^"]+(")',
+            rf"\g<1>{new_version}\2",
+            src,
+        )
+        if updated != src:
+            index_ts.write_text(updated, encoding="utf-8")
+            print(f"  Synced version to {index_ts.relative_to(repo_root)}")
     print()
 
     # ── 3. Update README badges ──
@@ -311,6 +324,9 @@ def main():
         files_to_stage.append(str(pkg_json_path))
     if srv_json_path.exists():
         files_to_stage.append(str(srv_json_path))
+    index_ts_path = repo_root / "mcp-server" / "src" / "index.ts"
+    if index_ts_path.exists():
+        files_to_stage.append(str(index_ts_path))
     run(["git", "add"] + files_to_stage, capture=False)
     run(["git", "commit", "-m", f"Release {tag}"], capture=False)
     print()

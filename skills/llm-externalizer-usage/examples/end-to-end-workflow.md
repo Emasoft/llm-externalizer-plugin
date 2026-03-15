@@ -1,5 +1,10 @@
 # End-to-End Workflow: Using LLM Externalizer
 
+## Table of Contents
+
+- [Scenario: Security audit](#scenario-security-audit-of-a-typescript-project)
+- [Quick Decision Tree](#quick-decision-tree)
+
 Complete example showing tool selection, invocation, output reading, and acting on results.
 
 ## Scenario: Security audit of a TypeScript project

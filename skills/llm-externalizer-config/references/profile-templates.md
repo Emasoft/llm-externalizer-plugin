@@ -1,5 +1,17 @@
 # LLM Externalizer — Profile Templates
 
+## Table of Contents
+
+- [Local LM Studio](#local-lm-studio)
+- [Local Ollama](#local-ollama)
+- [Local vLLM](#local-vllm)
+- [Local llama.cpp](#local-llamacpp)
+- [Local generic](#local-generic-custom-url)
+- [Remote single model (OpenRouter)](#remote-single-model-openrouter)
+- [Remote single model (Claude)](#remote-single-model-claude)
+- [Remote ensemble](#remote-ensemble-two-models-in-parallel)
+- [Complete settings.yaml example](#complete-settingsyaml-example)
+
 Ready-to-use YAML profile blocks. Copy into `~/.llm-externalizer/settings.yaml` under `profiles:`.
 
 ## Local LM Studio

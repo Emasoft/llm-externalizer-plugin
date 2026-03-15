@@ -1,148 +1,83 @@
 ---
-name: LLM Externalizer Configuration
+name: llm-externalizer-config
 description: >-
-  This skill should be used when the user says "switch LLM model", "add a profile",
-  "configure LM Studio", "set up Ollama", "configure OpenRouter", "change LLM backend",
-  "edit settings.yaml", "fix auth token not found", "enable ensemble mode",
-  "show LLM Externalizer profiles", "configure remote LLM", "set up local LLM",
-  or asks about LLM Externalizer profile configuration, backend setup, or
-  troubleshooting connection and authentication issues.
+  Use when managing LLM Externalizer profiles in settings.yaml.
+  Trigger with: "switch LLM profile", "add LLM Externalizer
+  profile", "change active model", "edit settings.yaml".
 version: 1.0.0
 ---
 
 # LLM Externalizer — Configuration
 
-Profile-based configuration for local and remote LLM backends. Settings stored at `~/.llm-externalizer/settings.yaml`.
+## Overview
 
-## Modes
+Profile-based configuration for local and remote LLM backends. Settings stored at `~/.llm-externalizer/settings.yaml`. Three modes: `local` (sequential), `remote` (parallel via OpenRouter), `remote-ensemble` (two models in parallel).
 
-| Mode | Behavior |
-|------|----------|
-| `local` | Sequential requests to a local server |
-| `remote` | Parallel requests, single model via OpenRouter |
-| `remote-ensemble` | Parallel requests, two models in parallel, combined report |
+## Prerequisites
 
-## API Presets
+- LLM Externalizer MCP server running (auto-started by Claude Code plugin)
+- For local backends: LM Studio, Ollama, vLLM, or llama.cpp running locally
+- For remote backends: `OPENROUTER_API_KEY` environment variable set
 
-Each profile uses an `api` preset that bundles protocol + default connection settings.
+## Instructions
 
-### Local presets (mode: local)
-
-| Preset | Protocol | Default URL | Auth |
-|--------|----------|-------------|------|
-| `lmstudio-local` | LM Studio native API | `http://localhost:1234` | `$LM_API_TOKEN` |
-| `ollama-local` | OpenAI-compatible | `http://localhost:11434` | (none) |
-| `vllm-local` | OpenAI-compatible | `http://localhost:8000` | `$VLLM_API_KEY` |
-| `llamacpp-local` | OpenAI-compatible | `http://localhost:8080` | (none) |
-| `generic-local` | OpenAI-compatible | (url required) | `$LM_API_TOKEN` |
-
-### Remote presets (mode: remote / remote-ensemble)
-
-| Preset | Protocol | Default URL | Auth |
-|--------|----------|-------------|------|
-| `openrouter-remote` | OpenRouter API | `https://openrouter.ai/api` | `$OPENROUTER_API_KEY` |
-
-## Profile Fields
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `mode` | Yes | `local`, `remote`, or `remote-ensemble` |
-| `api` | Yes | API preset name from the presets table |
-| `model` | Yes | Model identifier (e.g. `thecluster/qwen3.5-27b-mlx`) |
-| `url` | No | Override preset default URL |
-| `api_key` | No | API key for remote presets (env var ref or direct value) |
-| `api_token` | No | Auth token for local presets (env var ref or direct value) |
-| `second_model` | Only for `remote-ensemble` | Second model identifier |
-| `timeout` | No | Request timeout in seconds |
-| `context_window` | No | Context window override (0 = auto-detect) |
-| `max_concurrent` | No | Max parallel requests (0 = auto) |
-
-## Auth Resolution
-
-Auth fields accept either:
-- **`$ENV_VAR_NAME`** — resolved from process environment at runtime
-- **`"direct-value"`** — used as-is
-
-Default env vars are set by the API preset. If `discover` shows the token is resolved, auth is working. If it shows `(NOT SET)`, the env var is missing from the MCP server's process environment — check the MCP server env configuration.
-
-## Managing Profiles via MCP
-
-The settings file is `~/.llm-externalizer/settings.yaml` (YAML format, NOT JSON).
-
-### Step-by-step workflow
-
-**Step 1**: Call `get_settings` (no parameters) to get an editable copy. Returns a file path.
-
-**Step 2**: Read and edit the file using Read and Edit tools. The YAML structure:
-
-```yaml
-active: my-profile-name       # must match a key under profiles:
-
-profiles:
-  my-profile-name:
-    mode: local                # REQUIRED: local | remote | remote-ensemble
-    api: lmstudio-local        # REQUIRED: preset name
-    model: "model-name-or-id"  # REQUIRED: model identifier
-```
-
-**Step 3**: Call `set_settings` with `file_path` pointing to the edited file. Validates before writing. Old settings never overwritten if new content is invalid.
-
-**Step 4**: Call `discover` to verify.
+1. Call `mcp__llm-externalizer__discover` to check the current active profile and service health
+2. Call `mcp__llm-externalizer__get_settings` to get an editable copy of `settings.yaml`
+3. Read the returned file path with the Read tool
+4. Use Edit to modify profiles (add, switch active, change model, etc.)
+5. Call `mcp__llm-externalizer__set_settings` with the edited file path to apply changes
+6. Call `mcp__llm-externalizer__discover` again to verify the changes took effect
 
 **CRITICAL**: `set_settings` replaces the entire settings.yaml. The edited file must include ALL profiles, not just the one you changed.
 
-## Validation Rules
+## Context
 
-- `active` must reference an existing profile key
-- `mode` must be `local`, `remote`, or `remote-ensemble`
-- `api` must be a valid preset name
-- `local` mode requires a `-local` preset; `remote`/`remote-ensemble` requires `openrouter-remote`
-- `remote-ensemble` requires `second_model`
-- Remote presets require a resolvable `api_key`
+Use this skill when the user wants to switch the active LLM Externalizer profile, add/edit/remove profiles in settings.yaml, fix auth token issues shown by `discover`, enable ensemble mode, or asks about supported API presets and profile fields.
 
-## Ensemble Mode
+## Output
 
-On OpenRouter with `remote-ensemble` mode, read-only content tools run on both models in parallel. Results are combined in one report with per-model sections.
+- `discover` returns active profile name, mode, model, auth status, context window, concurrency limits
+- `get_settings` returns a file path to the editable settings copy
+- `set_settings` returns success confirmation or validation error details
 
-- Set `ensemble: false` on individual tool calls for simple tasks to save tokens
-- Per-model file size limits: grok skipped >20,000 lines, gemini skipped >50,000 lines
-- On local backends, ensemble is a no-op
+## Error Handling
 
-## Environment Variables
+| Error | Cause | Resolution |
+|-------|-------|------------|
+| Validation error | Invalid YAML or profile config | Check mode/api preset compatibility in the [configuration guide](references/configuration-guide.md) |
+| Auth token `(NOT SET)` | Env var missing from MCP process | Add the env var to `.mcp.json` env block or export in shell |
+| Connection refused | Local LLM server not running | Start LM Studio/Ollama/vLLM, verify URL and port |
 
-| Variable | Description |
-|----------|-------------|
-| `OPENROUTER_API_KEY` | OpenRouter API key (default for openrouter-remote preset) |
-| `LM_API_TOKEN` | LM Studio / generic-local auth token |
-| `VLLM_API_KEY` | vLLM auth token |
-| `LLM_EXT_CONFIG_DIR` | Override settings directory (default: `~/.llm-externalizer`) |
-| `LLM_OUTPUT_DIR` | Override output directory (default: `./llm_externalizer_output`) |
+## Examples
 
-## CLI Profile Management
+### Switch active profile
 
-As an alternative to the MCP workflow, use the CLI directly:
-
-```bash
-npx llm-externalizer profile list
-npx llm-externalizer profile add <name> --mode <mode> --api <api> --model <model>
-npx llm-externalizer profile select <name>
-npx llm-externalizer profile edit <name> --field <value>
-npx llm-externalizer profile remove <name>
-npx llm-externalizer profile rename <old> <new>
+```
+1. get_settings → /path/to/settings_edit.yaml
+2. Read, then Edit: change `active: old-profile` to `active: new-profile`
+3. set_settings with file_path → discover to verify
 ```
 
-Run from the `mcp-server/` directory within the plugin.
+### Add a new profile
 
-## Troubleshooting
+```yaml
+  my-local:
+    mode: local
+    api: lmstudio-local
+    model: "bartowski/Llama-3.3-70B-Instruct-GGUF"
+```
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `discover` shows `(NOT SET)` for auth token | Env var missing from MCP server process | Add the env var to `.mcp.json` env block or export it in shell |
-| Connection refused to local server | LM Studio / Ollama not running | Start the local server, verify URL and port |
-| `set_settings` validation error | Invalid profile config | Check validation rules above; ensure mode/api preset match |
-| Ensemble returns only one model's results | File exceeds size limit for one model | Normal behavior — grok limit is 20K lines, gemini 50K lines |
-| Tools return "not configured" | No active profile or settings.yaml missing | Run `discover` to check; create settings with `get_settings` + `set_settings` |
+## Resources
 
-## Profile Templates
-
-See `references/profile-templates.md` for ready-to-use profile YAML blocks.
+- [Configuration guide](references/configuration-guide.md)
+  - Modes, API Presets, Profile Fields, Auth Resolution
+  - Managing Profiles via MCP, Validation Rules
+  - Ensemble Mode, Environment Variables
+  - CLI Profile Management, Troubleshooting
+- [Profile templates](references/profile-templates.md)
+  - Local LM Studio, Local Ollama, Local vLLM, Local llama.cpp
+  - Local generic, Remote single model (OpenRouter)
+  - Remote single model (Claude), Remote ensemble
+  - Complete settings.yaml example
+- `/configure` command — Interactive profile management
+- `/discover` command — Quick health check

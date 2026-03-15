@@ -52,7 +52,6 @@
   "files": [
     "dist/**/*",
     "server.json",
-    "README.md",
     "LICENSE"
   ]
 }

@@ -1,112 +1,82 @@
 ---
-name: LLM Externalizer Usage
+name: llm-externalizer-usage
 description: >-
-  This skill should be used when the agent needs to call LLM Externalizer MCP tools
-  (mcp__llm-externalizer__*) to offload analysis work to external LLMs. Use for:
-  analyzing or summarizing files, scanning codebases for bugs or security issues,
-  comparing two files, checking broken imports or references after refactoring,
-  generating boilerplate or stubs, reviewing code, or processing large logs and JSON.
-  Also use when the agent considers spawning Haiku subagents for read-only work,
-  since LLM Externalizer is more capable and cheaper. Trigger phrases include:
-  "use the external LLM", "offload to LLM Externalizer", "scan folder for issues",
-  "check imports", "code review with external LLM", "analyze these files".
+  Use when offloading analysis or scanning to external LLMs.
+  Trigger with: "analyze files", "scan folder", "check imports",
+  "compare files", "use LLM Externalizer".
 version: 1.0.0
 ---
 
 # LLM Externalizer — Tool Usage
 
-Prefer LLM Externalizer MCP tools (`mcp__llm-externalizer__*`) over Haiku subagents for bounded tasks. The external LLM is more capable and cheaper.
+## Overview
 
-## When to Use
+Offload bounded analysis tasks to cheaper external LLMs via MCP tools (`mcp__llm-externalizer__*`). More capable than Haiku subagents and cheaper. Supports local backends (LM Studio, Ollama) and remote (OpenRouter with optional ensemble mode).
 
-Use LLM Externalizer instead of subagents when:
-- Reading, summarizing, or analyzing files (especially large ones or 3+ files)
-- Scanning codebases for patterns, bugs, security issues, dead code
-- Processing tool output (linter logs, test logs, big JSON)
-- Generating boilerplate, stubs, type definitions, draft text
-- Comparing files without flooding your context with diffs
-- Checking for broken imports or code references after refactoring
-- Getting a second opinion on code or a problem
-- Any bounded text task that does not need tool access
+## Prerequisites
 
-## When NOT to Use
+- LLM Externalizer MCP server running (auto-started by Claude Code plugin)
+- At least one profile configured (see `llm-externalizer-config` skill)
 
-- Precise surgical edits (use Read+Edit directly)
-- Cross-file logic requiring multiple tool calls in sequence
-- Subtle reasoning only Opus can handle
-- Tasks needing real-time tool access (git, filesystem, web)
-- Applying code fixes (write tools are disabled — use Read+Edit)
+## Instructions
 
-## Tool Selection Guide
+1. Choose the right tool based on your task (see [tool reference](references/tool-reference.md))
+2. Always pass file paths via `input_files_paths` — never paste content into `instructions`
+3. Include brief project context in `instructions` (the remote LLM has zero knowledge of your project)
+4. Call the tool and receive the output file path
+5. Read the output file with the Read tool to access the LLM's response
+6. Act on the results (apply fixes with Edit, create issues, report findings)
 
-### Read-only analysis tools
+## Context
 
-| Tool | Use When | Default answer_mode |
-|------|----------|-------------------|
-| `chat` | General-purpose: summarize, compare, translate, generate text. Also handles custom_prompt calls. | 2 (merged) |
-| `code_task` | Code-optimized analysis with code-review system prompt. Use for audits, reviews. | 2 (merged) |
-| `batch_check` | Apply the SAME instructions to EACH file separately — one report per file. | 0 (per-file) |
-| `scan_folder` | Auto-discover files in a directory tree and check each. Good for codebase-wide scans. | 2 (merged) |
-| `compare_files` | Auto-compute unified diff between 2 files, LLM summarizes changes. | N/A |
-| `check_references` | Auto-resolve local imports, send source+dependencies to LLM to validate symbol references. | 2 (merged) |
-| `check_imports` | Two-phase: LLM extracts all import paths, server validates each exists on disk. | 2 (merged) |
+Use this skill when you need to analyze/summarize files without consuming orchestrator context, scan a codebase for patterns or bugs, compare files, check imports after refactoring, or generate boilerplate. Do NOT use for precise surgical edits, cross-file logic requiring tool chains, or tasks needing real-time tool access.
 
-### Utility tools
+## Output
 
-| Tool | Purpose |
-|------|---------|
-| `discover` | Check service health, auth token status, context window, concurrency mode, profiles |
-| `reset` | Full soft-restart. Waits for running requests (up to 120s), then reloads settings and clears caches. |
-| `change_model` | Switch model in active profile |
-| `get_settings` | Copy settings.yaml to output dir, return file path |
-| `set_settings` | Read YAML from file_path, validate, backup old, write new settings |
+All responses saved as `.md` files in `llm_externalizer_output/`. The tool returns only the file path — use Read to access the content. Output organization depends on `answer_mode`: `0` (per-file), `1` (per-request), `2` (merged, default).
 
-## Standard Input Fields
+## Error Handling
 
-All content tools share these 4 input fields:
+| Error | Cause | Resolution |
+|-------|-------|------------|
+| 120s timeout | Response too large | Lower `max_tokens` or split into smaller calls |
+| Auth error | API key not set | Run `discover` to check; set the env var |
+| Empty response | File exceeds model limit | Split large files or use a different model |
 
-```
-instructions          — Task text (unfenced, placed before files)
-instructions_files_paths — Path(s) to instruction files (appended to instructions)
-input_files_paths     — Path(s) to content files (code-fenced by the server)
-input_files_content   — Inline content (DISCOURAGED — wastes your tokens)
+## Examples
+
+### Scan a folder for security issues
+
+```json
+{"tool": "scan_folder", "folder_path": "/path/to/src",
+ "extensions": [".ts"], "instructions": "Find security vulns. Node.js Express API."}
 ```
 
-**ALWAYS** use `input_files_paths` instead of reading files into your context. The server reads files from disk directly.
+### Compare two files
 
-Use `instructions_files_paths` to share reusable review rules, coding standards, or large instruction sets across multiple operations — avoids duplicating instructions in every call.
+```json
+{"tool": "compare_files", "input_files_paths": ["/path/old.ts", "/path/new.ts"],
+ "instructions": "Focus on API breaking changes"}
+```
 
-**NOTE**: `batch_check` does NOT support `input_files_content`.
+### Quick analysis (ensemble off)
 
-## Advanced Parameters
+```json
+{"tool": "chat", "instructions": "What is the main export?",
+ "input_files_paths": "/path/to/file.ts", "ensemble": false, "max_tokens": 500}
+```
 
-| Parameter | Tools | Values | Notes |
-|-----------|-------|--------|-------|
-| `max_tokens` | All content tools | number | Override max response tokens (default: model max ~65,535). Set lower to save cost or avoid 120s timeout. |
-| `temperature` | `chat` only | 0.1 factual, 0.3 analysis, 0.7 creative | Stay under 0.5 for code tasks. |
-| `system` | `chat` only | string | Persona override. Be specific: `"Senior TypeScript dev"`. |
-| `language` | `code_task` only | string | Programming language hint. Auto-detected from file extension. |
-| `exclude_dirs` | `scan_folder` only | string array | Additional dirs to skip beyond built-in exclusions. |
-| `ensemble` | All content tools | boolean (default: true on OpenRouter) | Run both models in parallel. Set `false` for simple tasks to save tokens. |
-| `answer_mode` | Multi-file tools | 0, 1, or 2 | 0=per-file reports, 1=per-request sections, 2=merged into one file. |
+## Resources
 
-## Critical Constraints
-
-- **120s timeout**: MCP spec hard limit per call. Long outputs may truncate.
-- **No project context**: The remote LLM knows NOTHING about your project. ALWAYS include brief context in instructions.
-- **File paths only**: ALWAYS pass file paths in `input_files_paths`, NEVER paste contents into `instructions`.
-- **Output location**: All responses saved to `llm_externalizer_output/`. Tool returns ONLY the file path — never inline content. Always use Read to access the output after the tool call completes.
-- **Auto-batching**: If input files exceed context window, they are automatically split into batches.
-- **Concurrency**: Up to 5 parallel calls on OpenRouter, 1 on local. Check with `discover`.
-
-## Safety Features
-
-- `scan_secrets` (boolean): Scans input files for secrets and aborts if found.
-- `redact_secrets` (boolean): Replaces secrets with `[REDACTED:LABEL]`. Prefer moving secrets to `.env` instead.
-- `use_gitignore` (boolean, `scan_folder` only): Respects `.gitignore` rules.
-
-## Usage Patterns
-
-See `references/usage-patterns.md` for concrete examples of every tool with recommended parameters.
-
-See `examples/end-to-end-workflow.md` for a complete workflow: tool selection, invocation, output reading, and acting on results.
+- [Tool reference](references/tool-reference.md)
+  - Read-only analysis tools, Utility tools
+  - Standard Input Fields, Advanced Parameters
+  - Critical Constraints, Safety Features
+- [Usage patterns](references/usage-patterns.md)
+  - Scan a codebase, Analyze multiple files, Batch check
+  - Compare two files, Check broken references, Check imports
+  - Reuse instructions, Ensemble off, Low max_tokens
+  - Code review with persona, Scan with gitignore, Code-optimized analysis
+- [End-to-end workflow](examples/end-to-end-workflow.md)
+  - Scenario: Security audit of a TypeScript project
+  - Quick Decision Tree

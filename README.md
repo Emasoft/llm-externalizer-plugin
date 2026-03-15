@@ -334,7 +334,7 @@ ln -sf ../../scripts/pre-push .git/hooks/pre-push
 
 - **Marketplace**: [Emasoft/emasoft-plugins](https://github.com/Emasoft/emasoft-plugins)
 - **Repository**: [Emasoft/llm-externalizer-plugin](https://github.com/Emasoft/llm-externalizer-plugin)
-- **MCP Server Source**: [llm_externalizer](https://github.com/Emasoft/llm-externalizer) (upstream)
+- **MCP Server Source**: Bundled in `mcp-server/` directory
 
 ## License
 

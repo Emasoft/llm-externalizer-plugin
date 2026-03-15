@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        working-directory: mcp-server
+        run: npm install --ignore-scripts
+
+      - name: TypeScript build check
+        working-directory: mcp-server
+        run: npx tsc --noEmit
+
+      - name: Validate plugin manifest
+        run: python3 -c "import json; json.load(open('.claude-plugin/plugin.json', encoding='utf-8'))"
+
+      - name: Version consistency check
+        run: |
+          PV=$(python3 -c "import json; print(json.load(open('.claude-plugin/plugin.json'))['version'])")
+          PKG=$(python3 -c "import json; print(json.load(open('mcp-server/package.json'))['version'])")
+          SRV=$(python3 -c "import json; print(json.load(open('mcp-server/server.json'))['version'])")
+          echo "plugin.json: $PV | package.json: $PKG | server.json: $SRV"
+          if [ "$PV" != "$PKG" ] || [ "$PV" != "$SRV" ]; then
+            echo "::error::Version mismatch across manifests"
+            exit 1
+          fi

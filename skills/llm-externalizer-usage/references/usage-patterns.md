@@ -1,5 +1,20 @@
 # LLM Externalizer — Usage Patterns
 
+## Table of Contents
+
+- [Scan a codebase for issues](#scan-a-codebase-for-issues)
+- [Analyze multiple files together](#analyze-multiple-files-together)
+- [Apply same check to each file independently](#apply-same-check-to-each-file-independently)
+- [Compare two file versions](#compare-two-file-versions)
+- [Check for broken code references](#check-for-broken-code-references-after-refactoring)
+- [Check for broken file imports](#check-for-broken-file-imports)
+- [Reuse instructions across operations](#reuse-instructions-across-operations)
+- [Simple task with ensemble off](#simple-task-with-ensemble-off-save-tokens)
+- [Quick factual answer](#quick-factual-answer-with-low-max_tokens)
+- [Code review with persona](#code-review-with-persona)
+- [Scan folder with gitignore](#scan-folder-with-gitignore--excluded-dirs)
+- [Code-optimized analysis](#code-optimized-analysis)
+
 Concrete examples for every tool with recommended parameters.
 
 ## Scan a codebase for issues
