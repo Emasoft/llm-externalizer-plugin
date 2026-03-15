@@ -91,17 +91,19 @@ The plugin name and repo name are intentionally different. When installing or re
 ### From the emasoft-plugins marketplace (recommended)
 
 ```bash
-claude plugin install llm-externalizer@emasoft-plugins
-```
-
-If you haven't added the marketplace yet:
-
-```bash
+# Add the marketplace (first time only)
 claude plugin marketplace add Emasoft/emasoft-plugins
+
+# Update the marketplace index to get the latest plugin list
+claude plugin marketplace update emasoft-plugins
+
+# Install the plugin
 claude plugin install llm-externalizer@emasoft-plugins
 ```
 
 Restart Claude Code to activate.
+
+> **Note**: If `claude plugin install` says "not found", run `claude plugin marketplace update emasoft-plugins` first to refresh the local marketplace cache.
 
 ### Alternative: manual settings.json
 
