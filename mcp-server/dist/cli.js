@@ -7331,8 +7331,11 @@ import {
   readFileSync,
   writeFileSync,
   mkdirSync,
-  copyFileSync
+  copyFileSync,
+  renameSync,
+  chmodSync
 } from "node:fs";
+import { resolve } from "node:path";
 import { join } from "node:path";
 import { homedir } from "node:os";
 var API_PRESETS = {
@@ -7406,7 +7409,12 @@ var API_PRESETS = {
   }
 };
 function getConfigDir() {
-  return process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer");
+  const dir = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
+  const home = homedir();
+  if (!dir.startsWith(home + "/") && !dir.startsWith("/tmp/") && dir !== home && dir !== "/tmp") {
+    throw new Error(`Config directory '${dir}' is outside allowed paths (${home} or /tmp)`);
+  }
+  return dir;
 }
 function getSettingsPath() {
   return join(getConfigDir(), "settings.yaml");
@@ -7417,7 +7425,7 @@ function getBackupDir() {
 function resolveEnvValue(value) {
   if (!value) return "";
   if (value.startsWith("$")) {
-    return process.env[value.slice(1)] || "";
+    return process.env[value.slice(1).trim()] || "";
   }
   return value;
 }
@@ -7430,7 +7438,7 @@ function loadSettings() {
   try {
     if (!existsSync(settingsPath)) return null;
     const raw = readFileSync(settingsPath, "utf-8");
-    const parsed = (0, import_yaml.parse)(raw);
+    const parsed = JSON.parse(JSON.stringify((0, import_yaml.parse)(raw)));
     if (!parsed || typeof parsed !== "object") return null;
     return {
       active: parsed.active || "",
@@ -7450,13 +7458,16 @@ function saveSettings(settings) {
   const backupDir = getBackupDir();
   mkdirSync(configDir, { recursive: true });
   mkdirSync(backupDir, { recursive: true });
+  chmodSync(backupDir, 448);
   if (existsSync(settingsPath)) {
     const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
     const backupPath = join(backupDir, `settings_${ts}.yaml`);
     copyFileSync(settingsPath, backupPath);
   }
   const yaml = (0, import_yaml.stringify)(settings, { lineWidth: 120 });
-  writeFileSync(settingsPath, yaml, "utf-8");
+  const tmpPath = `${settingsPath}.tmp.${process.pid}`;
+  writeFileSync(tmpPath, yaml, "utf-8");
+  renameSync(tmpPath, settingsPath);
 }
 function ensureSettingsExist() {
   const settingsPath = getSettingsPath();
@@ -7563,6 +7574,15 @@ function validateProfile(name, profile) {
     errors.push(
       `Profile '${name}': max_concurrent must be a non-negative finite number`
     );
+  }
+  if (typeof profile.timeout === "number" && profile.timeout > 3600) {
+    errors.push(`Profile '${name}': timeout must be <= 3600 (1 hour)`);
+  }
+  if (typeof profile.max_concurrent === "number" && profile.max_concurrent > 32) {
+    errors.push(`Profile '${name}': max_concurrent must be <= 32`);
+  }
+  if (typeof profile.context_window === "number" && profile.context_window > 1e7) {
+    errors.push(`Profile '${name}': context_window must be <= 10,000,000`);
   }
   if (!preset.isLocal) {
     const rawAuth = profile.api_key || preset.defaultAuthEnv;

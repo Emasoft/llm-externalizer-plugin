@@ -17,7 +17,10 @@ import {
   writeFileSync,
   mkdirSync,
   copyFileSync,
+  renameSync,
+  chmodSync,
 } from "node:fs";
+import { resolve } from "node:path";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
@@ -182,7 +185,13 @@ export const API_PRESETS: Record<string, ApiPreset> = {
 
 /** Config directory: ~/.llm-externalizer (or LLM_EXT_CONFIG_DIR for CI) */
 export function getConfigDir(): string {
-  return process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer");
+  const dir = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
+  // M8: Path traversal guard — config dir must be under homedir() or /tmp
+  const home = homedir();
+  if (!dir.startsWith(home + "/") && !dir.startsWith("/tmp/") && dir !== home && dir !== "/tmp") {
+    throw new Error(`Config directory '${dir}' is outside allowed paths (${home} or /tmp)`);
+  }
+  return dir;
 }
 
 /** Settings file: ~/.llm-externalizer/settings.yaml */
@@ -206,7 +215,8 @@ export function getBackupDir(): string {
 export function resolveEnvValue(value: string | undefined): string {
   if (!value) return "";
   if (value.startsWith("$")) {
-    return process.env[value.slice(1)] || "";
+    // M9: Trim env var name to prevent whitespace injection (e.g. "$VAR_NAME ")
+    return process.env[value.slice(1).trim()] || "";
   }
   return value;
 }
@@ -232,7 +242,8 @@ export function loadSettings(): Settings | null {
   try {
     if (!existsSync(settingsPath)) return null;
     const raw = readFileSync(settingsPath, "utf-8");
-    const parsed = yamlParse(raw);
+    // H10: Sanitize YAML output to strip __proto__ and prevent prototype pollution
+    const parsed = JSON.parse(JSON.stringify(yamlParse(raw)));
     if (!parsed || typeof parsed !== "object") return null;
     return {
       active: parsed.active || "",
@@ -257,16 +268,21 @@ export function saveSettings(settings: Settings): void {
 
   mkdirSync(configDir, { recursive: true });
   mkdirSync(backupDir, { recursive: true });
+  // L: Restrict backup directory permissions to owner-only (0o700)
+  chmodSync(backupDir, 0o700);
 
-  // Timestamped backup of existing file
+  // Timestamped backup of existing file (done BEFORE temp write)
   if (existsSync(settingsPath)) {
     const ts = new Date().toISOString().replace(/[:.]/g, "-");
     const backupPath = join(backupDir, `settings_${ts}.yaml`);
     copyFileSync(settingsPath, backupPath);
   }
 
+  // M7: Atomic write — write to temp file first, then rename (atomic on same filesystem)
   const yaml = yamlStringify(settings, { lineWidth: 120 });
-  writeFileSync(settingsPath, yaml, "utf-8");
+  const tmpPath = `${settingsPath}.tmp.${process.pid}`;
+  writeFileSync(tmpPath, yaml, "utf-8");
+  renameSync(tmpPath, settingsPath);
 }
 
 /** Default settings with 4 predefined profiles */
@@ -466,6 +482,17 @@ export function validateProfile(
     errors.push(
       `Profile '${name}': max_concurrent must be a non-negative finite number`,
     );
+  }
+
+  // M10: Upper bounds on numeric overrides to prevent resource abuse
+  if (typeof profile.timeout === "number" && profile.timeout > 3600) {
+    errors.push(`Profile '${name}': timeout must be <= 3600 (1 hour)`);
+  }
+  if (typeof profile.max_concurrent === "number" && profile.max_concurrent > 32) {
+    errors.push(`Profile '${name}': max_concurrent must be <= 32`);
+  }
+  if (typeof profile.context_window === "number" && profile.context_window > 10_000_000) {
+    errors.push(`Profile '${name}': context_window must be <= 10,000,000`);
   }
 
   // ── Remote auth ───────────────────────────────────────────────────

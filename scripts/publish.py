@@ -23,6 +23,7 @@ Steps:
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -100,11 +101,11 @@ def run_checks(repo_root: Path) -> bool:
     if not (mcp_dir / "node_modules").exists():
         print("  Installing dependencies...")
         result = run(
-            ["npm", "install", "--ignore-scripts"],
+            ["npm", "ci", "--ignore-scripts"],
             check=False,
         )
         if result.returncode != 0:
-            print("ERROR: npm install failed", file=sys.stderr)
+            print("ERROR: npm ci failed", file=sys.stderr)
             if result.stderr:
                 print(result.stderr, file=sys.stderr)
             return False
@@ -149,6 +150,11 @@ def main():
     )
     args = parser.parse_args()
 
+    # Verify required CLI tools are available
+    if not shutil.which("gh"):
+        print("ERROR: 'gh' (GitHub CLI) not found on PATH. Install it first.", file=sys.stderr)
+        sys.exit(1)
+
     # Resolve paths from script location
     repo_root = Path(__file__).resolve().parent.parent
     plugin_json = repo_root / ".claude-plugin" / "plugin.json"
@@ -170,11 +176,12 @@ def main():
 
     # ── 1. Run checks (before any file modifications) ──
     print("── 1. Run checks ──")
-    import os
     saved_cwd = os.getcwd()
-    os.chdir(repo_root / "mcp-server")
-    checks_ok = run_checks(repo_root)
-    os.chdir(saved_cwd)
+    try:
+        os.chdir(repo_root / "mcp-server")
+        checks_ok = run_checks(repo_root)
+    finally:
+        os.chdir(saved_cwd)
     if not checks_ok:
         print("ERROR: checks failed. Fix issues before publishing.", file=sys.stderr)
         sys.exit(1)
@@ -210,10 +217,16 @@ def main():
 
     tag = f"v{new_version}"
 
-    # Verify tag does not already exist
+    # Verify tag does not already exist locally
     tag_check = run(["git", "tag", "--list", tag], check=False)
     if tag_check.stdout and tag_check.stdout.strip() == tag:
-        print(f"ERROR: tag '{tag}' already exists", file=sys.stderr)
+        print(f"ERROR: tag '{tag}' already exists locally", file=sys.stderr)
+        sys.exit(1)
+
+    # Verify tag does not already exist on remote
+    remote_tag_check = run(["git", "ls-remote", "--tags", "origin", tag], check=False)
+    if remote_tag_check.stdout and remote_tag_check.stdout.strip():
+        print(f"ERROR: tag '{tag}' already exists on remote origin", file=sys.stderr)
         sys.exit(1)
 
     print(f"  {current} -> {new_version} (tag: {tag})")
@@ -266,22 +279,33 @@ def main():
             rf"\g<1>{new_version}\2",
             src,
         )
-        if updated != src:
-            index_ts.write_text(updated, encoding="utf-8")
-            print(f"  Synced version to {index_ts.relative_to(repo_root)}")
+        if updated == src:
+            print("ERROR: regex failed to match version in index.ts Server constructor", file=sys.stderr)
+            sys.exit(1)
+        index_ts.write_text(updated, encoding="utf-8")
+        print(f"  Synced version to {index_ts.relative_to(repo_root)}")
     print()
 
     # ── 2b. Rebuild dist (so bundled version matches source) ──
     print("── 2b. Rebuild dist ──")
     saved_cwd2 = os.getcwd()
-    os.chdir(repo_root / "mcp-server")
-    rebuild = run(["npm", "run", "build"], capture=True, check=False)
-    os.chdir(saved_cwd2)
+    try:
+        os.chdir(repo_root / "mcp-server")
+        rebuild = run(["npm", "run", "build"], capture=True, check=False)
+    finally:
+        os.chdir(saved_cwd2)
     if rebuild.returncode != 0:
         print("ERROR: dist rebuild failed after version sync.", file=sys.stderr)
         if rebuild.stderr:
             print(f"  {rebuild.stderr.strip()}", file=sys.stderr)
         sys.exit(1)
+    # H9: Verify new version string appears in built dist
+    dist_index = repo_root / "mcp-server" / "dist" / "index.js"
+    if dist_index.exists():
+        dist_content = dist_index.read_text(encoding="utf-8")
+        if new_version not in dist_content:
+            print(f"ERROR: version '{new_version}' not found in dist/index.js after rebuild", file=sys.stderr)
+            sys.exit(1)
     print("  OK: dist rebuilt with updated version")
     print()
 
@@ -322,7 +346,8 @@ def main():
             sys.exit(1)
         print("  OK: changelog generated, no commits skipped")
     else:
-        print("  git-cliff not found, skipping changelog generation")
+        print("ERROR: git-cliff not found on PATH. Install it first.", file=sys.stderr)
+        sys.exit(1)
     print()
 
     # ── 5. Commit ──
@@ -346,6 +371,18 @@ def main():
     if dist_dir.exists():
         files_to_stage.append(str(dist_dir))
     run(["git", "add"] + files_to_stage, capture=False)
+    # M: Detect any unstaged modified files that may have been missed
+    porcelain = run(["git", "status", "--porcelain"], check=False)
+    if porcelain.stdout:
+        unstaged = [
+            line for line in porcelain.stdout.strip().splitlines()
+            if line and not line.startswith("A ") and not line.startswith("M ")
+            and not line.startswith("?? ")
+        ]
+        if unstaged:
+            print("WARNING: unstaged modified files detected:", file=sys.stderr)
+            for line in unstaged:
+                print(f"  {line}", file=sys.stderr)
     run(["git", "commit", "-m", f"Release {tag}"], capture=False)
     print()
 
@@ -356,7 +393,15 @@ def main():
 
     # ── 7. Push (pre-push hook runs validation) ──
     print("── 7. Push ──")
-    run(["git", "push", "--follow-tags"], capture=False)
+    push_result = run(["git", "push", "--follow-tags"], capture=True, check=False)
+    if push_result.returncode != 0:
+        print("ERROR: push failed. Rolling back commit and tag.", file=sys.stderr)
+        if push_result.stderr:
+            print(f"  {push_result.stderr.strip()}", file=sys.stderr)
+        # Undo the commit (keep changes staged) and delete the local tag
+        run(["git", "reset", "--soft", "HEAD~1"], check=False, capture=False)
+        run(["git", "tag", "-d", tag], check=False, capture=False)
+        sys.exit(1)
     print()
 
     # ── 8. GitHub release ──

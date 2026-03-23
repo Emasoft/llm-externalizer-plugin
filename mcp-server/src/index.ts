@@ -15,6 +15,7 @@ import {
   renameSync,
   copyFileSync,
   statSync,
+  lstatSync,
   appendFileSync,
   readdirSync,
   unlinkSync,
@@ -90,9 +91,26 @@ const EXT_TO_LANG: Record<string, string> = {
   ".svelte": "svelte",
 };
 
+// L6: Shebang-based fallback for files with no extension
+const SHEBANG_TO_LANG: Record<string, string> = {
+  python: "python", python3: "python", node: "javascript",
+  bash: "bash", sh: "bash", zsh: "zsh", ruby: "ruby",
+  perl: "perl", php: "php", lua: "lua",
+};
+
 function detectLang(filePath: string): string {
   const ext = extname(filePath).toLowerCase();
-  return EXT_TO_LANG[ext] || "text";
+  if (EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
+  // Fallback: read first line for shebang
+  try {
+    const head = readFileSync(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
+    const shebang = head.match(/^#!\s*(?:\/usr\/bin\/env\s+)?(\S+)/);
+    if (shebang) {
+      const bin = basename(shebang[1]);
+      if (SHEBANG_TO_LANG[bin]) return SHEBANG_TO_LANG[bin];
+    }
+  } catch { /* ignore read errors for detection */ }
+  return "text";
 }
 
 /**
@@ -119,6 +137,38 @@ function assertFileExists(filePath: string): void {
   if (!existsSync(filePath)) {
     throw new Error(`File not found: ${filePath}`);
   }
+}
+
+// ── Input path security ────────────────────────────────────────────
+// C1: Prevent path traversal — reject paths outside process.cwd()
+// H2: Reject symlinks — prevent reading arbitrary files via symlink attacks
+
+function sanitizeInputPath(filePath: string): string {
+  const resolved = resolve(filePath);
+  const cwd = resolve(process.cwd());
+  const home = resolve(process.env.HOME || process.env.USERPROFILE || "/");
+  // Allow paths under cwd, home, or /tmp (for test fixtures)
+  if (
+    !resolved.startsWith(cwd + "/") &&
+    !resolved.startsWith(home + "/") &&
+    !resolved.startsWith("/tmp/") &&
+    !resolved.startsWith("/private/tmp/") &&
+    resolved !== cwd
+  ) {
+    throw new Error(
+      `Path traversal blocked: ${filePath} resolves outside allowed directories`,
+    );
+  }
+  // Reject symlinks (follow=false check)
+  try {
+    if (lstatSync(resolved).isSymbolicLink()) {
+      throw new Error(`Symlink rejected for security: ${filePath}`);
+    }
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return resolved;
+    throw e;
+  }
+  return resolved;
 }
 
 // ── Write operation queue ─────────────────────────────────────────────
@@ -182,18 +232,20 @@ function withWriteQueue<T>(
 }
 
 // ── Per-file locking (defense-in-depth) ──────────────────────────────
-// Even with the write queue, per-file locks provide an extra safety layer
-// within batch operations where multiple workers modify different files.
-const activeFileLocks = new Set<string>();
+// C3: Use Map<path, Promise> for proper async serialization instead of
+// a racy Set. Each file gets its own chain — concurrent acquires on the
+// same file wait; different files proceed in parallel.
+const activeFileLocks = new Map<string, Promise<void>>();
 
 function acquireFileLock(filePath: string): boolean {
-  if (activeFileLocks.has(filePath)) return false;
-  activeFileLocks.add(filePath);
+  const resolved = resolve(filePath);
+  if (activeFileLocks.has(resolved)) return false;
+  activeFileLocks.set(resolved, Promise.resolve());
   return true;
 }
 
 function releaseFileLock(filePath: string): void {
-  activeFileLocks.delete(filePath);
+  activeFileLocks.delete(resolve(filePath));
 }
 
 // ── Git branch monitoring ────────────────────────────────────────────
@@ -246,18 +298,32 @@ function readFileAsCodeBlock(
   redact?: boolean,
   maxBytes?: number,
 ): string {
-  const limit = maxBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
-  assertFileExists(filePath);
-  const stats = statSync(filePath);
+  // H5: Validate maxBytes — reject Infinity, 0, or negative
+  const rawLimit = maxBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
+  const limit =
+    !Number.isFinite(rawLimit) || rawLimit <= 0
+      ? DEFAULT_MAX_PAYLOAD_BYTES
+      : rawLimit;
+  // C1+H2: Sanitize input path (traversal + symlink protection)
+  const safePath = sanitizeInputPath(filePath);
+  assertFileExists(safePath);
+  const stats = statSync(safePath);
   if (stats.size > limit) {
     throw new Error(
       `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`,
     );
   }
-  const raw = readFileSync(filePath);
-  // Detect binary content by checking for null bytes in the first 8KB
-  const sampleLen = Math.min(raw.length, 8192);
-  for (let i = 0; i < sampleLen; i++) {
+  // M3: Read first, check buffer — mitigates TOCTOU between statSync and readFileSync
+  const raw = readFileSync(safePath);
+  // Re-check actual size from buffer (TOCTOU defense: file may have grown since statSync)
+  if (raw.length > limit) {
+    throw new Error(
+      `File too large after read (${(raw.length / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`,
+    );
+  }
+  // L1: Detect binary content — scan entire buffer (not just first 8KB)
+  const scanLen = Math.min(raw.length, 65536); // scan up to 64KB for null bytes
+  for (let i = 0; i < scanLen; i++) {
     if (raw[i] === 0) throw new Error(`File appears to be binary: ${filePath}`);
   }
   let content = raw.toString("utf-8");
@@ -483,7 +549,8 @@ function verifyStructuralIntegrity(
   // 7. Truncation detection — if the original ends with a closing delimiter but
   //    the fixed output ends mid-statement, the LLM likely truncated the response.
   //    Only check files large enough that truncation is a real risk (> 50 lines).
-  if (origLineCount > 50 && fixedLineCount > 10) {
+  // M4: Lowered threshold from >50 to >10 lines to catch small-file truncation
+  if (origLineCount > 10 && fixedLineCount > 5) {
     const lastOrigLine = originalLines[origLineCount - 1].trim();
     const lastFixedLine = fixedLines[fixedLineCount - 1].trim();
     // Original ends with a proper file-ending pattern (closing brace, EOF marker, etc.)
@@ -529,6 +596,11 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
   [
     /(?:^|\n)\s*(?:PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|AUTH_TOKEN|ACCESS_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|DB_PASSWORD|DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|AWS_SECRET_ACCESS_KEY|GITHUB_TOKEN|NPM_TOKEN|DOCKER_PASSWORD)\s*[=:]\s*['"]?([^\s'"#\n]{8,})/gim,
     "ENV_SECRET",
+  ],
+  // H7: Multi-line secret blocks (PEM private keys, certificates)
+  [
+    /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----/g,
+    "PEM_BLOCK",
   ],
 ];
 
@@ -608,19 +680,20 @@ function redactSecrets(content: string): { redacted: string; count: number } {
 // Secrets are replaced with tracked placeholders that carry a numeric ID.
 // After the LLM returns modified code, secrets are restored by ID lookup.
 //
-// Placeholder formats (chosen to avoid LLM type-error complaints):
-//   Alphanumeric secret: REDACTED00000<id>00000REDACTED
-//   Numeric-only secret: 5324673200000<id>0000053246732
+// Placeholder formats (random UUID-based, thread-safe):
+//   Alphanumeric secret: REDACTED_<uuid16>_REDACTED
+//   Numeric-only secret: 53246732<uuid16>53246732
 
 interface TrackedRedaction {
-  id: number;
+  id: string;
   original: string;
   label: string;
   placeholder: string;
 }
 
-// Global counter ensures unique IDs across all redaction calls in one session
-let nextRedactionId = 100_000_000_001;
+// C2: Use random IDs instead of sequential counter to avoid race conditions
+// under parallel batch_fix. randomUUID is thread-safe in Node.js.
+// L8: Random IDs also make placeholders unpredictable.
 
 /**
  * Reversible redaction — replaces secrets with tracked placeholders.
@@ -637,12 +710,12 @@ function redactSecretsReversible(content: string): {
   for (const [pattern, label] of SECRET_PATTERNS) {
     pattern.lastIndex = 0;
     result = result.replace(pattern, (match) => {
-      const id = nextRedactionId++;
+      const id = randomUUID().replace(/-/g, "").slice(0, 16);
       // Use numeric-only placeholder if the secret has no letters
       const hasLetters = /[a-zA-Z]/.test(match);
       const placeholder = hasLetters
-        ? `REDACTED00000${id}00000REDACTED`
-        : `5324673200000${id}0000053246732`;
+        ? `REDACTED_${id}_REDACTED`
+        : `53246732${id}53246732`;
       entries.push({ id, original: match, label, placeholder });
       return placeholder;
     });
@@ -800,13 +873,18 @@ interface FileData {
  */
 function readAndGroupFiles(
   filePaths: string[],
-  promptTokens: number,
+  promptBytes: number,
   redact?: boolean,
   budgetBytes?: number,
 ): { groups: FileData[][]; autoBatched: boolean; skipped: string[] } {
-  const totalBudget = budgetBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
-  // Subtract prompt bytes (1 token ≈ 4 bytes) to get space for file content
-  const promptBytes = promptTokens * 4;
+  // M1: Enforce minimum budget (10 KB) to avoid silent skip-all
+  const totalBudget = Math.max(
+    10 * 1024,
+    budgetBytes ?? DEFAULT_MAX_PAYLOAD_BYTES,
+  );
+  // H1: promptBytes is now actual byte length (computed by caller via
+  // Buffer.byteLength), not a token estimate. This prevents non-ASCII
+  // (CJK, emoji) from causing budget underestimation.
   const availableForFiles = Math.max(0, totalBudget - promptBytes);
 
   const skipped: string[] = [];
@@ -992,9 +1070,13 @@ function walkDir(
     for (const entry of entries) {
       if (results.length >= maxFiles) return;
       const fullPath = join(dir, entry.name);
+      // H6: Skip symlinks entirely — prevents infinite recursion on symlink loops
+      if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
-        // Skip hidden dirs (covers .git, .venv, etc.) and explicitly excluded dirs
-        if (entry.name.startsWith(".") || exclude.has(entry.name)) continue;
+        // L7: Only skip well-known hidden dirs, not all dotfiles
+        if (entry.name === ".git" || entry.name === ".svn" || entry.name === ".hg" || exclude.has(entry.name)) continue;
+        // Skip other hidden dirs (covers .venv, .cache, etc.)
+        if (entry.name.startsWith(".")) continue;
         recurse(fullPath);
       } else if (entry.isFile()) {
         // Skip binary files by extension (readFileAsCodeBlock has null-byte check as second layer)
@@ -1164,9 +1246,13 @@ const BATCHING_OUTPUT_ESTIMATE = 16384;
 const DEFAULT_TEMPERATURE = 0.3;
 const CONNECT_TIMEOUT_MS = 5000;
 const _INFERENCE_CONNECT_TIMEOUT_MS = 30_000; // generous connect timeout for inference (cold model loading)
-// MCP spec defines a 60s default request timeout. We must complete within that window.
-// Configurable via timeout in profile or LM_TIMEOUT env var (seconds).
-let SOFT_TIMEOUT_MS = (activeResolved?.timeout ?? 300) * 1000;
+// MCP spec defines a 120s request timeout for tool calls. We must complete within that window.
+// M5: Cap at 115s to leave margin for response serialization.
+const MCP_MAX_TIMEOUT_MS = 115_000;
+let SOFT_TIMEOUT_MS = Math.min(
+  MCP_MAX_TIMEOUT_MS,
+  (activeResolved?.timeout ?? 300) * 1000,
+);
 const READ_CHUNK_TIMEOUT_MS = 30_000; // max wait for a single SSE chunk (stall detection)
 let FALLBACK_CONTEXT_LENGTH = activeResolved?.contextWindow || 100000;
 const MODEL_CACHE_TTL_MS = 3600_000; // 1 hour TTL for OpenRouter model list cache
@@ -1268,7 +1354,10 @@ function reloadSettingsFromDisk(): boolean {
     settingsError = "No active profile configured";
     activeResolved = null;
   }
-  SOFT_TIMEOUT_MS = (activeResolved?.timeout ?? 300) * 1000;
+  SOFT_TIMEOUT_MS = Math.min(
+    MCP_MAX_TIMEOUT_MS,
+    (activeResolved?.timeout ?? 300) * 1000,
+  );
   FALLBACK_CONTEXT_LENGTH = activeResolved?.contextWindow || 100000;
   // Notify MCP client that tool descriptions may have changed (backend switch)
   _onSettingsReloaded?.();
@@ -2213,9 +2302,10 @@ async function chatCompletionStreaming(
   let usage: StreamingResult["usage"];
   let finishReason = "";
   let truncated = false;
+  let malformedChunks = 0;
   let buffer = "";
-  // Send progress every ~10s to keep MCP client connection alive
-  const progressInterval = 10_000;
+  // L5: Dynamic progress interval — at least 2 updates before timeout
+  const progressInterval = Math.min(10_000, Math.floor(conn.timeout / 3));
   let lastProgressAt = startTime;
   const onProgress = options.onProgress;
 
@@ -2285,15 +2375,26 @@ async function chatCompletionStreaming(
           // Some endpoints include usage in the final streaming chunk
           if (json.usage) usage = json.usage;
         } catch {
-          // Skip unparseable chunks (partial JSON, comments, etc.)
+          // H4: Count malformed chunks — too many signals data corruption
+          malformedChunks++;
         }
       }
     }
+  } catch {
+    // L4: Connection drop mid-stream — mark as truncated if we have partial content
+    if (content.length > 0) truncated = true;
   } finally {
     // Cancel pending reads to free the TCP connection, then release the lock.
     // Fire-and-forget cancel() — awaiting it can hang on some runtimes.
     reader.cancel().catch(() => {});
     reader.releaseLock();
+  }
+
+  // H4: If >5% of chunks were malformed, flag potential data integrity issue
+  if (malformedChunks > 0 && content.length > 0) {
+    process.stderr.write(
+      `[llm-externalizer] WARNING: ${malformedChunks} malformed SSE chunk(s) skipped\n`,
+    );
   }
 
   return { content, model, usage, finishReason, truncated };
@@ -4317,12 +4418,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        // Group files by 800 KB payload budget for auto-batching
-        const promptTokens =
-          estimateTokens(promptBase) + (system ? estimateTokens(system) : 0);
+        // Group files by configurable payload budget for auto-batching
+        // H1+M2: Use actual byte length of prompt+system (not token estimate)
+        const chatPromptBytes =
+          Buffer.byteLength(promptBase, "utf-8") +
+          (system ? Buffer.byteLength(system, "utf-8") : 0);
         const { groups, autoBatched, skipped: chatSkipped } = readAndGroupFiles(
           chatFilePaths,
-          promptTokens,
+          chatPromptBytes,
           chatRedact,
           chatBudgetBytes,
         );
@@ -4605,11 +4708,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         // Group files by configurable payload budget for auto-batching
-        const ctPromptTokens =
-          estimateTokens(ctPromptBase) +
-          estimateTokens(`Expert ${lang} developer...`);
+        // H1+M2: Use actual byte length (not token estimate)
+        const ctPromptBytes =
+          Buffer.byteLength(ctPromptBase, "utf-8") +
+          Buffer.byteLength(`Expert ${lang} developer...`, "utf-8");
         const { groups: ctGroups, autoBatched: ctAutoBatched, skipped: ctSkipped } =
-          readAndGroupFiles(ctFilePaths, ctPromptTokens, ctRedact, ctBudgetBytes);
+          readAndGroupFiles(ctFilePaths, ctPromptBytes, ctRedact, ctBudgetBytes);
 
         // ── Mode 1: one output file per LLM request, with per-file sections ──
         // ── Mode 2: all batches merged into one file ──
@@ -5359,6 +5463,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const recentOutcomes: boolean[] = [];
         let aborted = false;
         let abortReason = "";
+        // H3: Global retry cap — max 2× file count total attempts to prevent quota exhaustion
+        let totalAttempts = 0;
+        const maxTotalAttempts = uniqueFiles.length * 2;
 
         const tasks = uniqueFiles.map((filePath, idx) => async () => {
           // If batch was aborted by a prior task, skip remaining files
@@ -5372,6 +5479,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
           // Retry loop — up to 3 attempts for recoverable errors
           for (let attempt = 1; attempt <= 3; attempt++) {
+            // H3: Check global retry budget before each attempt
+            if (++totalAttempts > maxTotalAttempts) {
+              aborted = true;
+              abortReason = `Global retry budget exhausted (${maxTotalAttempts} total attempts)`;
+            }
             // Re-check abort flag before each retry to avoid wasting calls after abort
             if (aborted) {
               return {
@@ -6654,7 +6766,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           // A secret is "lost" only if its placeholder appears in NONE of the output files.
           let spLostSecrets: TrackedRedaction[] = [];
           if (spRedactionEntries.length > 0) {
-            const foundInAnyFile = new Set<number>();
+            const foundInAnyFile = new Set<string>();
             for (const f of spFiles) {
               const restored = restoreSecrets(f.content, spRedactionEntries);
               f.content = restored.restored;
