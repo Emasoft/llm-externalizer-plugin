@@ -233,21 +233,25 @@ function assertBranchUnchanged(
   }
 }
 
-// 800 KB per file — ensures both ensemble models (Grok ≤20K lines, Gemini ≤50K lines)
-// can process the content reliably. Also used as the per-batch byte budget so that
-// batches never exceed what the weakest ensemble model can handle.
-const MAX_FILE_SIZE_BYTES = 800 * 1024; // 800 KB
+// Default payload budget per batch (in bytes). Covers the ENTIRE payload: prompt +
+// instructions + instruction files + code files + inline content.
+// Set to 400 KB — conservative for the weakest ensemble model (Grok 4.1 Fast:
+// ~131K token context, minus ~30K output, minus ~5K prompt ≈ 96K tokens × 4 bytes ≈ 384 KB).
+// Configurable via max_payload_kb parameter on each tool.
+const DEFAULT_MAX_PAYLOAD_BYTES = 400 * 1024; // 400 KB
 
 function readFileAsCodeBlock(
   filePath: string,
   langOverride?: string,
   redact?: boolean,
+  maxBytes?: number,
 ): string {
+  const limit = maxBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
   assertFileExists(filePath);
   const stats = statSync(filePath);
-  if (stats.size > MAX_FILE_SIZE_BYTES) {
+  if (stats.size > limit) {
     throw new Error(
-      `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${MAX_FILE_SIZE_BYTES / 1024} KB`,
+      `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`,
     );
   }
   const raw = readFileSync(filePath);
@@ -783,24 +787,27 @@ interface FileData {
 }
 
 /**
- * Read files from disk and group them into batches that fit within 800 KB total
- * payload budget. The budget covers the ENTIRE payload: prompt + instructions +
- * instruction files + code files + inline content. Files exceeding 800 KB on disk
- * are skipped (reported in the returned `skipped` list).
+ * Read files from disk and group them into batches using First-Fit Decreasing
+ * (FFD) bin packing. The budget covers the ENTIRE payload: prompt + instructions +
+ * instruction files + code files + inline content.
  *
- * Token estimation: 1 token ≈ 4 bytes, so 800 KB ≈ 200K tokens. This ensures
- * both ensemble models (Grok ≤20K lines, Gemini ≤50K lines) can process every
- * batch reliably with no silent model skipping.
+ * Since ensemble requires both models to process every batch, the budget must fit
+ * within the WEAKER model's context window. Default: 400 KB (safe for Grok 4.1
+ * Fast ~131K token context minus output and prompt overhead).
+ *
+ * @param budgetBytes Total payload budget in bytes. Overrides DEFAULT_MAX_PAYLOAD_BYTES.
+ *                    Typically set from the tool's max_payload_kb parameter × 1024.
  */
 function readAndGroupFiles(
   filePaths: string[],
   promptTokens: number,
   redact?: boolean,
+  budgetBytes?: number,
 ): { groups: FileData[][]; autoBatched: boolean; skipped: string[] } {
-  // 800 KB total payload budget. Subtract prompt bytes (1 token ≈ 4 bytes)
-  // to get the remaining space available for file content.
+  const totalBudget = budgetBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
+  // Subtract prompt bytes (1 token ≈ 4 bytes) to get space for file content
   const promptBytes = promptTokens * 4;
-  const availableForFiles = Math.max(0, MAX_FILE_SIZE_BYTES - promptBytes);
+  const availableForFiles = Math.max(0, totalBudget - promptBytes);
 
   const skipped: string[] = [];
   const fileData: FileData[] = [];
@@ -808,13 +815,13 @@ function readAndGroupFiles(
   for (const fp of filePaths) {
     try {
       const stats = statSync(fp);
-      // Skip files that exceed the per-file hard limit (800 KB)
-      if (stats.size > MAX_FILE_SIZE_BYTES) {
+      // Skip files larger than the total budget (can never fit in any batch)
+      if (stats.size > totalBudget) {
         skipped.push(fp);
         continue;
       }
-      const block = readFileAsCodeBlock(fp, undefined, redact);
-      // Skip files whose content exceeds the remaining payload budget
+      const block = readFileAsCodeBlock(fp, undefined, redact, totalBudget);
+      // Skip files whose fenced content exceeds available space after prompt
       if (block.length > availableForFiles) {
         skipped.push(fp);
         continue;
@@ -837,24 +844,30 @@ function readAndGroupFiles(
     return { groups: [fileData], autoBatched: false, skipped };
   }
 
-  // Auto-batch: split files into groups where total content ≤ available budget
-  const groups: FileData[][] = [];
-  let currentGroup: FileData[] = [];
-  let currentBytes = 0;
+  // ── First-Fit Decreasing (FFD) bin packing ──
+  // Sort files largest-first so big files get placed first, then smaller files
+  // fill remaining space. This minimizes the number of batches (API calls).
+  const sorted = [...fileData].sort((a, b) => b.block.length - a.block.length);
+  const bins: { items: FileData[]; used: number }[] = [];
 
-  for (const fd of fileData) {
-    if (currentBytes + fd.block.length > availableForFiles && currentGroup.length > 0) {
-      groups.push(currentGroup);
-      currentGroup = [];
-      currentBytes = 0;
+  for (const fd of sorted) {
+    // Find first bin with enough remaining space
+    let placed = false;
+    for (const bin of bins) {
+      if (bin.used + fd.block.length <= availableForFiles) {
+        bin.items.push(fd);
+        bin.used += fd.block.length;
+        placed = true;
+        break;
+      }
     }
-    currentGroup.push(fd);
-    currentBytes += fd.block.length;
-  }
-  if (currentGroup.length > 0) {
-    groups.push(currentGroup);
+    if (!placed) {
+      // Open a new bin
+      bins.push({ items: [fd], used: fd.block.length });
+    }
   }
 
+  const groups = bins.map((bin) => bin.items);
   return { groups, autoBatched: groups.length > 1, skipped };
 }
 
@@ -2831,6 +2844,7 @@ interface ProcessOptions {
   redact?: boolean; // redact secrets before sending to LLM
   onProgress?: ProgressFn; // MCP progress notifications to keep client alive
   ensemble?: boolean; // run on multiple models and combine results (default true)
+  maxBytes?: number; // max file size in bytes (default: DEFAULT_MAX_PAYLOAD_BYTES)
 }
 
 async function processFileCheck(
@@ -2845,6 +2859,7 @@ async function processFileCheck(
     filePath,
     options.language,
     options.redact,
+    options.maxBytes,
   );
   const lang = options.language || detectLang(filePath);
   // Derive line count from the already-read code block (avoid double file read)
@@ -3371,6 +3386,13 @@ function buildTools() {
           },
           ensemble: ensembleSchema,
           answer_mode: answerModeSchema,
+          max_payload_kb: {
+            type: "number",
+            description:
+              "Max total payload per batch in KB (prompt + instructions + files). " +
+              "Default: 400. Must fit within the weakest ensemble model's context. " +
+              "Lower if you see hallucinations or truncations on large batches.",
+          },
         },
         required: [],
       },
@@ -3440,6 +3462,13 @@ function buildTools() {
           },
           ensemble: ensembleSchema,
           answer_mode: answerModeSchema,
+          max_payload_kb: {
+            type: "number",
+            description:
+              "Max total payload per batch in KB (prompt + instructions + files). " +
+              "Default: 400. Must fit within the weakest ensemble model's context. " +
+              "Lower if you see hallucinations or truncations on large batches.",
+          },
         },
         required: ["instructions"],
       },
@@ -3659,6 +3688,11 @@ function buildTools() {
           },
           ensemble: ensembleSchema,
           answer_mode: answerModeSchema,
+          max_payload_kb: {
+            type: "number",
+            description:
+              "Max file size in KB per file. Default: 400. Files exceeding this are skipped and reported.",
+          },
         },
         required: ["input_files_paths"],
       },
@@ -3786,6 +3820,11 @@ function buildTools() {
           },
           ensemble: ensembleSchema,
           answer_mode: answerModeSchema,
+          max_payload_kb: {
+            type: "number",
+            description:
+              "Max file size in KB per file. Default: 400. Files exceeding this are skipped and reported.",
+          },
         },
         required: ["folder_path"],
       },
@@ -3938,6 +3977,11 @@ function buildTools() {
               "Redact secrets before sending to LLM. DISCOURAGED: prefer moving secrets to .env files (gitignored).",
           },
           ensemble: ensembleSchema,
+          max_payload_kb: {
+            type: "number",
+            description:
+              "Max file size in KB per file. Default: 400. Files exceeding this are skipped.",
+          },
         },
         required: ["input_files_paths"],
       },
@@ -3986,6 +4030,11 @@ function buildTools() {
           },
           ensemble: ensembleSchema,
           answer_mode: answerModeSchema,
+          max_payload_kb: {
+            type: "number",
+            description:
+              "Max payload in KB (prompt + files). Default: 400. Lower if you see hallucinations.",
+          },
         },
         required: ["input_files_paths"],
       },
@@ -4039,6 +4088,11 @@ function buildTools() {
           },
           ensemble: ensembleSchema,
           answer_mode: answerModeSchema,
+          max_payload_kb: {
+            type: "number",
+            description:
+              "Max payload in KB (prompt + files). Default: 400. Lower if you see hallucinations.",
+          },
         },
         required: ["input_files_paths"],
       },
@@ -4139,6 +4193,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           scan_secrets: chatScan,
           redact_secrets: chatRedact,
           ensemble: chatEnsemble,
+          max_payload_kb: chatMaxPayloadKb,
         } = args as {
           instructions?: string;
           instructions_files_paths?: string | string[];
@@ -4151,8 +4206,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           scan_secrets?: boolean;
           redact_secrets?: boolean;
           ensemble?: boolean;
+          max_payload_kb?: number;
         };
         const useEnsemble = chatEnsemble !== false; // default true
+        const chatBudgetBytes = (chatMaxPayloadKb ?? 400) * 1024;
         const chatPrompt = resolvePrompt(
           instructions,
           instructions_files_paths,
@@ -4267,6 +4324,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           chatFilePaths,
           promptTokens,
           chatRedact,
+          chatBudgetBytes,
         );
 
         // ── Mode 1: one output file per LLM request, with per-file sections ──
@@ -4377,6 +4435,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           scan_secrets: ctScan,
           redact_secrets: ctRedact,
           ensemble: ctEnsemble,
+          max_payload_kb: ctMaxPayloadKb,
         } = args as {
           instructions?: string;
           instructions_files_paths?: string | string[];
@@ -4388,8 +4447,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           scan_secrets?: boolean;
           redact_secrets?: boolean;
           ensemble?: boolean;
+          max_payload_kb?: number;
         };
         const ctUseEnsemble = ctEnsemble !== false;
+        const ctBudgetBytes = (ctMaxPayloadKb ?? 400) * 1024;
         const ctMode = resolveAnswerMode(ctRawMode, 2);
         const ctTask = resolvePrompt(ctInstructions, ctInstructionsFilesPaths);
         if (!ctTask.trim()) {
@@ -4543,12 +4604,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        // Group files by 800 KB payload budget for auto-batching
+        // Group files by configurable payload budget for auto-batching
         const ctPromptTokens =
           estimateTokens(ctPromptBase) +
           estimateTokens(`Expert ${lang} developer...`);
         const { groups: ctGroups, autoBatched: ctAutoBatched, skipped: ctSkipped } =
-          readAndGroupFiles(ctFilePaths, ctPromptTokens, ctRedact);
+          readAndGroupFiles(ctFilePaths, ctPromptTokens, ctRedact, ctBudgetBytes);
 
         // ── Mode 1: one output file per LLM request, with per-file sections ──
         // ── Mode 2: all batches merged into one file ──
@@ -5239,6 +5300,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           scan_secrets: bcScan,
           redact_secrets: bcRedact,
           ensemble: bcEnsemble,
+          max_payload_kb: bcMaxPayloadKb,
         } = args as {
           instructions?: string;
           instructions_files_paths?: string | string[];
@@ -5248,8 +5310,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           scan_secrets?: boolean;
           redact_secrets?: boolean;
           ensemble?: boolean;
+          max_payload_kb?: number;
         };
         const bcUseEnsemble = bcEnsemble !== false;
+        const bcBudgetBytes = (bcMaxPayloadKb ?? 400) * 1024;
         const bcMode = resolveAnswerMode(bcRawMode, 0);
 
         const bcNormalizedPaths = normalizePaths(bcInputPaths);
@@ -5324,6 +5388,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 redact: bcRedact,
                 onProgress,
                 ensemble: bcUseEnsemble,
+                maxBytes: bcBudgetBytes,
               });
               recentOutcomes.push(result.success);
               // Report per-file batch progress
@@ -5879,8 +5944,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           use_gitignore?: boolean;
           scan_secrets?: boolean;
           ensemble?: boolean;
+          max_payload_kb?: number;
         };
         const sfUseEnsemble = sfEnsemble !== false;
+        const sfBudgetBytes = ((args as { max_payload_kb?: number }).max_payload_kb ?? 400) * 1024;
 
         if (!existsSync(folder_path)) {
           return {
@@ -5976,6 +6043,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 redact: sfRedact,
                 onProgress,
                 ensemble: sfUseEnsemble,
+                maxBytes: sfBudgetBytes,
               });
               recentOutcomes.push(result.success);
               // Report per-file batch progress
@@ -6725,6 +6793,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           redact_secrets: cfRedact,
           scan_secrets: cfScan,
           ensemble: cfEnsemble,
+          max_payload_kb: cfMaxPayloadKb,
         } = args as {
           input_files_paths: string[];
           instructions?: string;
@@ -6733,7 +6802,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           redact_secrets?: boolean;
           scan_secrets?: boolean;
           ensemble?: boolean;
+          max_payload_kb?: number;
         };
+        const cfBudgetBytes = (cfMaxPayloadKb ?? 400) * 1024;
         const cfUseEnsemble = cfEnsemble !== false;
 
         const cfNormalizedPaths = normalizePaths(cfInputPaths);
@@ -6824,8 +6895,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Include both source files alongside the diff for context on renamed/moved code
         let sourceFileBlocks = "";
         try {
-          const blockA = readFileAsCodeBlock(fileA, undefined, cfRedact);
-          const blockB = readFileAsCodeBlock(fileB, undefined, cfRedact);
+          const blockA = readFileAsCodeBlock(fileA, undefined, cfRedact, cfBudgetBytes);
+          const blockB = readFileAsCodeBlock(fileB, undefined, cfRedact, cfBudgetBytes);
           // Only include source files if total size is manageable
           const totalSourceChars = blockA.length + blockB.length;
           if (totalSourceChars < 300_000) {
@@ -6898,6 +6969,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           answer_mode: crRawMode,
           scan_secrets: crScan,
           ensemble: crEnsemble,
+          max_payload_kb: crMaxPayloadKb,
         } = args as {
           input_files_paths: string | string[];
           instructions?: string;
@@ -6907,8 +6979,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           answer_mode?: number;
           scan_secrets?: boolean;
           ensemble?: boolean;
+          max_payload_kb?: number;
         };
         const crUseEnsemble = crEnsemble !== false;
+        const crBudgetBytes = (crMaxPayloadKb ?? 400) * 1024;
 
         const crFilePaths = [...new Set(normalizePaths(crInputPathsRaw))];
         if (crFilePaths.length === 0) {
@@ -6953,13 +7027,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const depBlocks: string[] = [];
           for (const dp of depPaths) {
             try {
-              depBlocks.push(readFileAsCodeBlock(dp, undefined, crRedact));
+              depBlocks.push(readFileAsCodeBlock(dp, undefined, crRedact, crBudgetBytes));
             } catch {
               /* skip unreadable */
             }
           }
 
-          const srcBlock = readFileAsCodeBlock(filePath, undefined, crRedact);
+          const srcBlock = readFileAsCodeBlock(filePath, undefined, crRedact, crBudgetBytes);
           const crMessages: ChatMessage[] = [
             {
               role: "system",
@@ -7063,6 +7137,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           answer_mode: ciRawMode,
           scan_secrets: ciScan,
           ensemble: ciEnsemble,
+          max_payload_kb: ciMaxPayloadKb,
         } = args as {
           input_files_paths: string | string[];
           project_root?: string;
@@ -7073,8 +7148,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           answer_mode?: number;
           scan_secrets?: boolean;
           ensemble?: boolean;
+          max_payload_kb?: number;
         };
         const _ciUseEnsemble = ciEnsemble !== false;
+        const ciBudgetBytes = (ciMaxPayloadKb ?? 400) * 1024;
 
         const ciFilePaths = [...new Set(normalizePaths(ciInputPathsRaw))];
         if (ciFilePaths.length === 0) {
@@ -7131,7 +7208,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               role: "user",
               content:
                 `${ciPrompt ? ciPrompt + "\n\n" : ""}Extract all import and file references from:\n\n` +
-                readFileAsCodeBlock(filePath, undefined, ciRedact),
+                readFileAsCodeBlock(filePath, undefined, ciRedact, ciBudgetBytes),
             },
           ];
 
