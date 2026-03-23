@@ -1,6 +1,17 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.2.6] - 2026-03-23
+
+### Added
+
+- Configurable max_payload_kb on all tools + FFD bin packing
+
+### Fixed
+
+- Comprehensive adversarial audit — 32 findings across all severity levels
+- 800 KB payload budget for batching — guarantees full ensemble
+
 ## [3.2.5] - 2026-03-15
 
 ### Fixed
