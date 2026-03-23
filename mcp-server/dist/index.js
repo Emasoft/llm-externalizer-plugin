@@ -28529,13 +28529,13 @@ function assertBranchUnchanged(filePath, expectedBranch) {
     );
   }
 }
-var MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024;
+var MAX_FILE_SIZE_BYTES = 800 * 1024;
 function readFileAsCodeBlock(filePath, langOverride, redact) {
   assertFileExists(filePath);
   const stats = statSync(filePath);
   if (stats.size > MAX_FILE_SIZE_BYTES) {
     throw new Error(
-      `File too large (${(stats.size / 1024 / 1024).toFixed(1)} MB). Max: ${MAX_FILE_SIZE_BYTES / 1024 / 1024} MB`
+      `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${MAX_FILE_SIZE_BYTES / 1024} KB`
     );
   }
   const raw = readFileSync2(filePath);
@@ -28846,15 +28846,6 @@ ${content}` : content;
 function estimateTokens(text) {
   return Math.ceil(text.length / 4);
 }
-function resolveCurrentContextWindow() {
-  if (currentBackend.type === "openrouter" && currentBackend.model) {
-    const match = openRouterModelCache.find(
-      (m) => m.id === currentBackend.model
-    );
-    if (match?.context_length) return match.context_length;
-  }
-  return FALLBACK_CONTEXT_LENGTH;
-}
 function resolveDefaultMaxTokens() {
   if (currentBackend.type === "openrouter" && currentBackend.model) {
     const match = openRouterModelCache.find(
@@ -28867,33 +28858,50 @@ function resolveDefaultMaxTokens() {
   return FALLBACK_CONTEXT_LENGTH;
 }
 function readAndGroupFiles(filePaths, promptTokens, redact) {
-  const contextWindow = resolveCurrentContextWindow();
-  const safetyMargin = 500;
-  const availableForFiles = contextWindow - promptTokens - BATCHING_OUTPUT_ESTIMATE - safetyMargin;
-  const fileData = filePaths.map((fp) => {
-    const block = readFileAsCodeBlock(fp, void 0, redact);
-    return { path: fp, block, tokens: estimateTokens(block) };
-  });
-  const totalFileTokens = fileData.reduce((sum, fd) => sum + fd.tokens, 0);
-  if (availableForFiles > 0 && totalFileTokens <= availableForFiles) {
-    return { groups: [fileData], autoBatched: false };
+  const promptBytes = promptTokens * 4;
+  const availableForFiles = Math.max(0, MAX_FILE_SIZE_BYTES - promptBytes);
+  const skipped = [];
+  const fileData = [];
+  for (const fp of filePaths) {
+    try {
+      const stats = statSync(fp);
+      if (stats.size > MAX_FILE_SIZE_BYTES) {
+        skipped.push(fp);
+        continue;
+      }
+      const block = readFileAsCodeBlock(fp, void 0, redact);
+      if (block.length > availableForFiles) {
+        skipped.push(fp);
+        continue;
+      }
+      fileData.push({ path: fp, block, tokens: estimateTokens(block) });
+    } catch {
+      skipped.push(fp);
+    }
+  }
+  if (fileData.length === 0) {
+    return { groups: [], autoBatched: false, skipped };
+  }
+  const totalFileBytes = fileData.reduce((sum, fd) => sum + fd.block.length, 0);
+  if (totalFileBytes <= availableForFiles) {
+    return { groups: [fileData], autoBatched: false, skipped };
   }
   const groups = [];
   let currentGroup = [];
-  let currentTokens = 0;
+  let currentBytes = 0;
   for (const fd of fileData) {
-    if (currentTokens + fd.tokens > availableForFiles && currentGroup.length > 0) {
+    if (currentBytes + fd.block.length > availableForFiles && currentGroup.length > 0) {
       groups.push(currentGroup);
       currentGroup = [];
-      currentTokens = 0;
+      currentBytes = 0;
     }
     currentGroup.push(fd);
-    currentTokens += fd.tokens;
+    currentBytes += fd.block.length;
   }
   if (currentGroup.length > 0) {
     groups.push(currentGroup);
   }
-  return { groups, autoBatched: true };
+  return { groups, autoBatched: groups.length > 1, skipped };
 }
 function resolveAnswerMode(raw, defaultMode) {
   if (raw === 0 || raw === 1 || raw === 2) return raw;
@@ -29077,7 +29085,6 @@ Settings file: ${SETTINGS_FILE}`;
   return resolved;
 })();
 var DEFAULT_OPENROUTER_CONCURRENCY = 5;
-var BATCHING_OUTPUT_ESTIMATE = 16384;
 var DEFAULT_TEMPERATURE = 0.3;
 var CONNECT_TIMEOUT_MS = 5e3;
 var SOFT_TIMEOUT_MS = (activeResolved?.timeout ?? 300) * 1e3;
@@ -31190,13 +31197,18 @@ ${fence}`;
             };
           }
           const promptTokens = estimateTokens(promptBase) + (system ? estimateTokens(system) : 0);
-          const { groups, autoBatched } = readAndGroupFiles(
+          const { groups, autoBatched, skipped: chatSkipped } = readAndGroupFiles(
             chatFilePaths,
             promptTokens,
             chatRedact
           );
           const batchResults = [];
           const batchOutputPaths = [];
+          if (chatSkipped.length > 0) {
+            const skipNote = `SKIPPED (exceeds 800 KB payload budget): ${chatSkipped.length} file(s)
+${chatSkipped.map((f) => `  - ${f}`).join("\n")}`;
+            batchResults.push(skipNote);
+          }
           for (let gi = 0; gi < groups.length; gi++) {
             const group = groups[gi];
             let userContent = promptBase;
@@ -31437,9 +31449,14 @@ RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/M
             };
           }
           const ctPromptTokens = estimateTokens(ctPromptBase) + estimateTokens(`Expert ${lang} developer...`);
-          const { groups: ctGroups, autoBatched: ctAutoBatched } = readAndGroupFiles(ctFilePaths, ctPromptTokens, ctRedact);
+          const { groups: ctGroups, autoBatched: ctAutoBatched, skipped: ctSkipped } = readAndGroupFiles(ctFilePaths, ctPromptTokens, ctRedact);
           const ctBatchResults = [];
           const ctBatchPaths = [];
+          if (ctSkipped.length > 0) {
+            const skipNote = `SKIPPED (exceeds 800 KB payload budget): ${ctSkipped.length} file(s)
+${ctSkipped.map((f) => `  - ${f}`).join("\n")}`;
+            ctBatchResults.push(skipNote);
+          }
           for (let gi = 0; gi < ctGroups.length; gi++) {
             const group = ctGroups[gi];
             let userContent = ctPromptBase;

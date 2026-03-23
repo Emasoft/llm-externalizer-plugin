@@ -233,7 +233,10 @@ function assertBranchUnchanged(
   }
 }
 
-const MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024; // 2 MB — prevents OOM from giant files
+// 800 KB per file — ensures both ensemble models (Grok ≤20K lines, Gemini ≤50K lines)
+// can process the content reliably. Also used as the per-batch byte budget so that
+// batches never exceed what the weakest ensemble model can handle.
+const MAX_FILE_SIZE_BYTES = 800 * 1024; // 800 KB
 
 function readFileAsCodeBlock(
   filePath: string,
@@ -244,7 +247,7 @@ function readFileAsCodeBlock(
   const stats = statSync(filePath);
   if (stats.size > MAX_FILE_SIZE_BYTES) {
     throw new Error(
-      `File too large (${(stats.size / 1024 / 1024).toFixed(1)} MB). Max: ${MAX_FILE_SIZE_BYTES / 1024 / 1024} MB`,
+      `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${MAX_FILE_SIZE_BYTES / 1024} KB`,
     );
   }
   const raw = readFileSync(filePath);
@@ -780,58 +783,79 @@ interface FileData {
 }
 
 /**
- * Read files from disk and group them into batches that fit within the context window.
- * Each group can be sent as a single LLM call with the prompt repeated.
- * Returns { groups, autoBatched } where autoBatched=true if files were split.
+ * Read files from disk and group them into batches that fit within 800 KB total
+ * payload budget. The budget covers the ENTIRE payload: prompt + instructions +
+ * instruction files + code files + inline content. Files exceeding 800 KB on disk
+ * are skipped (reported in the returned `skipped` list).
+ *
+ * Token estimation: 1 token ≈ 4 bytes, so 800 KB ≈ 200K tokens. This ensures
+ * both ensemble models (Grok ≤20K lines, Gemini ≤50K lines) can process every
+ * batch reliably with no silent model skipping.
  */
 function readAndGroupFiles(
   filePaths: string[],
   promptTokens: number,
   redact?: boolean,
-): { groups: FileData[][]; autoBatched: boolean } {
-  const contextWindow = resolveCurrentContextWindow();
-  const safetyMargin = 500;
-  // Use a conservative output estimate for batching math — NOT the model's max_tokens
-  // (which can equal the context window and would make availableForFiles negative).
-  const availableForFiles =
-    contextWindow - promptTokens - BATCHING_OUTPUT_ESTIMATE - safetyMargin;
+): { groups: FileData[][]; autoBatched: boolean; skipped: string[] } {
+  // 800 KB total payload budget. Subtract prompt bytes (1 token ≈ 4 bytes)
+  // to get the remaining space available for file content.
+  const promptBytes = promptTokens * 4;
+  const availableForFiles = Math.max(0, MAX_FILE_SIZE_BYTES - promptBytes);
 
-  // Read all files and estimate tokens
-  const fileData: FileData[] = filePaths.map((fp) => {
-    const block = readFileAsCodeBlock(fp, undefined, redact);
-    return { path: fp, block, tokens: estimateTokens(block) };
-  });
+  const skipped: string[] = [];
+  const fileData: FileData[] = [];
 
-  const totalFileTokens = fileData.reduce((sum, fd) => sum + fd.tokens, 0);
-
-  // If everything fits in one call, return a single group
-  if (availableForFiles > 0 && totalFileTokens <= availableForFiles) {
-    return { groups: [fileData], autoBatched: false };
+  for (const fp of filePaths) {
+    try {
+      const stats = statSync(fp);
+      // Skip files that exceed the per-file hard limit (800 KB)
+      if (stats.size > MAX_FILE_SIZE_BYTES) {
+        skipped.push(fp);
+        continue;
+      }
+      const block = readFileAsCodeBlock(fp, undefined, redact);
+      // Skip files whose content exceeds the remaining payload budget
+      if (block.length > availableForFiles) {
+        skipped.push(fp);
+        continue;
+      }
+      fileData.push({ path: fp, block, tokens: estimateTokens(block) });
+    } catch {
+      // Unreadable or binary — skip silently
+      skipped.push(fp);
+    }
   }
 
-  // Auto-batch: split files into groups that fit within the token budget
+  if (fileData.length === 0) {
+    return { groups: [], autoBatched: false, skipped };
+  }
+
+  const totalFileBytes = fileData.reduce((sum, fd) => sum + fd.block.length, 0);
+
+  // If everything fits in one call, return a single group
+  if (totalFileBytes <= availableForFiles) {
+    return { groups: [fileData], autoBatched: false, skipped };
+  }
+
+  // Auto-batch: split files into groups where total content ≤ available budget
   const groups: FileData[][] = [];
   let currentGroup: FileData[] = [];
-  let currentTokens = 0;
+  let currentBytes = 0;
 
   for (const fd of fileData) {
-    // If adding this file would exceed budget and group is non-empty, start new group
-    if (
-      currentTokens + fd.tokens > availableForFiles &&
-      currentGroup.length > 0
-    ) {
+    if (currentBytes + fd.block.length > availableForFiles && currentGroup.length > 0) {
       groups.push(currentGroup);
       currentGroup = [];
-      currentTokens = 0;
+      currentBytes = 0;
     }
     currentGroup.push(fd);
-    currentTokens += fd.tokens;
+    currentBytes += fd.block.length;
   }
   if (currentGroup.length > 0) {
     groups.push(currentGroup);
   }
 
-  return { groups, autoBatched: true };
+  return { groups, autoBatched: groups.length > 1, skipped };
 }
 
 /**
@@ -1121,8 +1145,9 @@ const DEFAULT_OPENROUTER_CONCURRENCY = 5; // conservative default — even $5 ba
 // window as the output budget. The API clamps this to the model's actual max output.
 // This ensures the LLM is never artificially truncated — truncation causes more harm
 // than the marginal cost of extra output tokens (you only pay for tokens generated).
-// For batching token-budget calculations, we use a conservative estimate instead.
-const BATCHING_OUTPUT_ESTIMATE = 16384; // conservative estimate for readAndGroupFiles math
+// Note: readAndGroupFiles now uses byte-based 800 KB payload budget instead of tokens.
+// This constant is kept for any remaining callers that need a token-based estimate.
+const BATCHING_OUTPUT_ESTIMATE = 16384;
 const DEFAULT_TEMPERATURE = 0.3;
 const CONNECT_TIMEOUT_MS = 5000;
 const _INFERENCE_CONNECT_TIMEOUT_MS = 30_000; // generous connect timeout for inference (cold model loading)
@@ -4235,10 +4260,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        // Group files by token budget for auto-batching
+        // Group files by 800 KB payload budget for auto-batching
         const promptTokens =
           estimateTokens(promptBase) + (system ? estimateTokens(system) : 0);
-        const { groups, autoBatched } = readAndGroupFiles(
+        const { groups, autoBatched, skipped: chatSkipped } = readAndGroupFiles(
           chatFilePaths,
           promptTokens,
           chatRedact,
@@ -4248,6 +4273,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // ── Mode 2: all batches merged into one file ──
         const batchResults: string[] = [];
         const batchOutputPaths: string[] = [];
+        // Report files skipped due to size
+        if (chatSkipped.length > 0) {
+          const skipNote = `SKIPPED (exceeds 800 KB payload budget): ${chatSkipped.length} file(s)\n${chatSkipped.map((f) => `  - ${f}`).join("\n")}`;
+          batchResults.push(skipNote);
+        }
         for (let gi = 0; gi < groups.length; gi++) {
           const group = groups[gi];
           let userContent = promptBase;
@@ -4513,17 +4543,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        // Group files by token budget for auto-batching
+        // Group files by 800 KB payload budget for auto-batching
         const ctPromptTokens =
           estimateTokens(ctPromptBase) +
           estimateTokens(`Expert ${lang} developer...`);
-        const { groups: ctGroups, autoBatched: ctAutoBatched } =
+        const { groups: ctGroups, autoBatched: ctAutoBatched, skipped: ctSkipped } =
           readAndGroupFiles(ctFilePaths, ctPromptTokens, ctRedact);
 
         // ── Mode 1: one output file per LLM request, with per-file sections ──
         // ── Mode 2: all batches merged into one file ──
         const ctBatchResults: string[] = [];
         const ctBatchPaths: string[] = [];
+        // Report files skipped due to size
+        if (ctSkipped.length > 0) {
+          const skipNote = `SKIPPED (exceeds 800 KB payload budget): ${ctSkipped.length} file(s)\n${ctSkipped.map((f) => `  - ${f}`).join("\n")}`;
+          ctBatchResults.push(skipNote);
+        }
         for (let gi = 0; gi < ctGroups.length; gi++) {
           const group = ctGroups[gi];
           let userContent = ctPromptBase;
