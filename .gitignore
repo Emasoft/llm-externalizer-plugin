@@ -58,3 +58,5 @@ llm_externalizer_output/
 *.externbak
 *.externtmp
 *.bak
+# TLDR artifacts (added by rechecker)
+.tldr_session_*
