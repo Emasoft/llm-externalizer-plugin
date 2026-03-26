@@ -1,6 +1,22 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.2.8] - 2026-03-26
+
+### Added
+
+- Add check_spec tool — compare source files against a specification
+
+### Fixed
+
+- Max_files default 1000, useGitignore default true
+- Apply rechecker fixes [rechecker: skip]
+- Remove stale max_tokens references from tool descriptions
+
+### Refactored
+
+- Rename check_spec → check_against_specs + folder scanning
+
 ## [3.2.7] - 2026-03-26
 
 ### Added
