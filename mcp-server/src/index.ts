@@ -2827,9 +2827,70 @@ function batchReportFilename(
   return `${toolName}_${shortUuid}_${fileIndex}_${sanitizeFilename(filePath)}_${ts}.md`;
 }
 
+// ── Global service health tracker ────────────────────────────────────
+// Tracks consecutive failures across ALL requests to detect systemic issues
+// (offline servers, broken connections, traffic overload). When the failure
+// rate exceeds the threshold, pauses with exponential backoff before retrying.
+// If all backoff attempts fail, aborts with a clear server-side error message.
+
+const SERVICE_HEALTH = {
+  consecutiveFailures: 0,
+  lastSuccessAt: Date.now(),
+  // Threshold: 5 consecutive failures across any requests → likely systemic
+  failureThreshold: 5,
+  // Backoff delays in ms: 60s, 120s, 350s, then give up
+  backoffDelays: [60_000, 120_000, 350_000],
+  backoffAttempt: 0,
+  // If true, service is in backoff/cooldown mode
+  inCooldown: false,
+};
+
+function recordServiceSuccess(): void {
+  SERVICE_HEALTH.consecutiveFailures = 0;
+  SERVICE_HEALTH.lastSuccessAt = Date.now();
+  SERVICE_HEALTH.backoffAttempt = 0;
+  SERVICE_HEALTH.inCooldown = false;
+}
+
+function recordServiceFailure(): void {
+  SERVICE_HEALTH.consecutiveFailures++;
+}
+
+/** Returns true if we should abort (server-side issue confirmed). */
+async function checkServiceHealthOrWait(): Promise<string | null> {
+  if (SERVICE_HEALTH.consecutiveFailures < SERVICE_HEALTH.failureThreshold) {
+    return null; // Not enough failures to trigger cooldown
+  }
+
+  const { backoffDelays, backoffAttempt } = SERVICE_HEALTH;
+  if (backoffAttempt >= backoffDelays.length) {
+    // Exhausted all backoff attempts — abort
+    return (
+      `SERVER ISSUE DETECTED: ${SERVICE_HEALTH.consecutiveFailures} consecutive failures. ` +
+      `Last success was ${Math.round((Date.now() - SERVICE_HEALTH.lastSuccessAt) / 1000)}s ago. ` +
+      `Tried waiting ${backoffDelays.map((d) => `${d / 1000}s`).join(", ")}. ` +
+      `The issue appears to be server-side (offline, overloaded, or connection broken). ` +
+      `Please retry later.`
+    );
+  }
+
+  // Pause with backoff
+  const delay = backoffDelays[backoffAttempt];
+  SERVICE_HEALTH.inCooldown = true;
+  process.stderr.write(
+    `[llm-externalizer] ${SERVICE_HEALTH.consecutiveFailures} consecutive failures detected — ` +
+    `waiting ${delay / 1000}s before retrying (backoff ${backoffAttempt + 1}/${backoffDelays.length})\n`,
+  );
+  await new Promise((r) => setTimeout(r, delay));
+  SERVICE_HEALTH.backoffAttempt++;
+  SERVICE_HEALTH.inCooldown = false;
+  return null;
+}
+
 // ── Retry-on-truncation wrapper ──────────────────────────────────────
 // Retries LLM calls when the response is truncated (finishReason !== "stop")
-// or when a timeout caused partial output. Up to 2 retries.
+// or when a timeout caused partial output. Up to 3 retries.
+// Integrates with SERVICE_HEALTH to detect systemic server issues.
 const MAX_TRUNCATION_RETRIES = 3;
 
 async function chatCompletionWithRetry(
@@ -2841,40 +2902,90 @@ async function chatCompletionWithRetry(
     onProgress?: ProgressFn;
   },
 ): Promise<StreamingResult> {
+  // Check global service health before attempting
+  const healthAbort = await checkServiceHealthOrWait();
+  if (healthAbort) {
+    return {
+      content: healthAbort,
+      model: options.model || currentBackend.model,
+      finishReason: "error",
+      truncated: true,
+    };
+  }
+
   for (let attempt = 0; attempt <= MAX_TRUNCATION_RETRIES; attempt++) {
-    const resp = await chatCompletionStreaming(messages, options);
+    let resp: StreamingResult;
+    try {
+      resp = await chatCompletionStreaming(messages, options);
+    } catch (err) {
+      // Network/connection error — count as failure
+      recordServiceFailure();
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (attempt < MAX_TRUNCATION_RETRIES) {
+        process.stderr.write(
+          `[llm-externalizer] Request error: ${errMsg} — retrying (${attempt + 1}/${MAX_TRUNCATION_RETRIES})\n`,
+        );
+        // Check if this triggered the systemic failure threshold
+        const abort = await checkServiceHealthOrWait();
+        if (abort) {
+          return {
+            content: abort,
+            model: options.model || currentBackend.model,
+            finishReason: "error",
+            truncated: true,
+          };
+        }
+        continue;
+      }
+      throw err; // Exhausted retries
+    }
 
-    // "stop" means normal completion — return immediately
+    // "stop" means normal completion — record success, return immediately
     if (resp.finishReason === "stop" && !resp.truncated) {
+      recordServiceSuccess();
       return resp;
     }
 
-    // "length" means output hit max_tokens — the model ran out of output space.
-    // Retrying with the same input won't help (same limit), so return with warning.
+    // "length" means output hit max_tokens limit — not a server issue, don't retry.
+    // Append truncation notice to the content so it appears in the output report.
     if (resp.finishReason === "length") {
-      process.stderr.write(
-        `[llm-externalizer] finishReason=length (output token limit hit) on attempt ${attempt + 1} — returning partial result\n`,
-      );
+      recordServiceSuccess(); // The server worked fine, just hit the limit
       resp.truncated = true;
+      resp.content += "\n\n---\n**TRUNCATED**: Response hit output token limit (finishReason=length). The analysis above may be incomplete.";
+      process.stderr.write(
+        `[llm-externalizer] finishReason=length on attempt ${attempt + 1} — output token limit hit\n`,
+      );
       return resp;
     }
 
-    // Truncated by timeout or connection drop — retry if attempts remain
+    // Truncated by timeout or connection drop — count as failure, retry
+    recordServiceFailure();
+
     if (attempt < MAX_TRUNCATION_RETRIES) {
       process.stderr.write(
-        `[llm-externalizer] Truncated response (finishReason=${resp.finishReason}, truncated=${resp.truncated}) — retrying (${attempt + 1}/${MAX_TRUNCATION_RETRIES})\n`,
+        `[llm-externalizer] Truncated (finishReason=${resp.finishReason}, truncated=${resp.truncated}) — retrying (${attempt + 1}/${MAX_TRUNCATION_RETRIES})\n`,
       );
+      // Check systemic failure threshold
+      const abort = await checkServiceHealthOrWait();
+      if (abort) {
+        return {
+          content: abort,
+          model: resp.model,
+          finishReason: "error",
+          truncated: true,
+        };
+      }
       continue;
     }
 
-    // Exhausted retries — return whatever we got
+    // Exhausted retries — append notice to content for the output report
+    resp.content += `\n\n---\n**TRUNCATED**: Still incomplete after ${MAX_TRUNCATION_RETRIES} retries (finishReason=${resp.finishReason}). The analysis above may be incomplete.`;
     process.stderr.write(
       `[llm-externalizer] Still truncated after ${MAX_TRUNCATION_RETRIES} retries — returning partial result\n`,
     );
     return resp;
   }
 
-  // Unreachable but TypeScript needs it
   throw new Error("Unreachable: retry loop exited without returning");
 }
 

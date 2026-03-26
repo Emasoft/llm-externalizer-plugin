@@ -30089,28 +30089,116 @@ function batchReportFilename(toolName, batchId, filePath, fileIndex) {
   const shortUuid = batchId.slice(0, 8);
   return `${toolName}_${shortUuid}_${fileIndex}_${sanitizeFilename(filePath)}_${ts}.md`;
 }
+var SERVICE_HEALTH = {
+  consecutiveFailures: 0,
+  lastSuccessAt: Date.now(),
+  // Threshold: 5 consecutive failures across any requests → likely systemic
+  failureThreshold: 5,
+  // Backoff delays in ms: 60s, 120s, 350s, then give up
+  backoffDelays: [6e4, 12e4, 35e4],
+  backoffAttempt: 0,
+  // If true, service is in backoff/cooldown mode
+  inCooldown: false
+};
+function recordServiceSuccess() {
+  SERVICE_HEALTH.consecutiveFailures = 0;
+  SERVICE_HEALTH.lastSuccessAt = Date.now();
+  SERVICE_HEALTH.backoffAttempt = 0;
+  SERVICE_HEALTH.inCooldown = false;
+}
+function recordServiceFailure() {
+  SERVICE_HEALTH.consecutiveFailures++;
+}
+async function checkServiceHealthOrWait() {
+  if (SERVICE_HEALTH.consecutiveFailures < SERVICE_HEALTH.failureThreshold) {
+    return null;
+  }
+  const { backoffDelays, backoffAttempt } = SERVICE_HEALTH;
+  if (backoffAttempt >= backoffDelays.length) {
+    return `SERVER ISSUE DETECTED: ${SERVICE_HEALTH.consecutiveFailures} consecutive failures. Last success was ${Math.round((Date.now() - SERVICE_HEALTH.lastSuccessAt) / 1e3)}s ago. Tried waiting ${backoffDelays.map((d) => `${d / 1e3}s`).join(", ")}. The issue appears to be server-side (offline, overloaded, or connection broken). Please retry later.`;
+  }
+  const delay = backoffDelays[backoffAttempt];
+  SERVICE_HEALTH.inCooldown = true;
+  process.stderr.write(
+    `[llm-externalizer] ${SERVICE_HEALTH.consecutiveFailures} consecutive failures detected \u2014 waiting ${delay / 1e3}s before retrying (backoff ${backoffAttempt + 1}/${backoffDelays.length})
+`
+  );
+  await new Promise((r) => setTimeout(r, delay));
+  SERVICE_HEALTH.backoffAttempt++;
+  SERVICE_HEALTH.inCooldown = false;
+  return null;
+}
 var MAX_TRUNCATION_RETRIES = 3;
 async function chatCompletionWithRetry(messages, options) {
+  const healthAbort = await checkServiceHealthOrWait();
+  if (healthAbort) {
+    return {
+      content: healthAbort,
+      model: options.model || currentBackend.model,
+      finishReason: "error",
+      truncated: true
+    };
+  }
   for (let attempt = 0; attempt <= MAX_TRUNCATION_RETRIES; attempt++) {
-    const resp = await chatCompletionStreaming(messages, options);
+    let resp;
+    try {
+      resp = await chatCompletionStreaming(messages, options);
+    } catch (err) {
+      recordServiceFailure();
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (attempt < MAX_TRUNCATION_RETRIES) {
+        process.stderr.write(
+          `[llm-externalizer] Request error: ${errMsg} \u2014 retrying (${attempt + 1}/${MAX_TRUNCATION_RETRIES})
+`
+        );
+        const abort = await checkServiceHealthOrWait();
+        if (abort) {
+          return {
+            content: abort,
+            model: options.model || currentBackend.model,
+            finishReason: "error",
+            truncated: true
+          };
+        }
+        continue;
+      }
+      throw err;
+    }
     if (resp.finishReason === "stop" && !resp.truncated) {
+      recordServiceSuccess();
       return resp;
     }
     if (resp.finishReason === "length") {
+      recordServiceSuccess();
+      resp.truncated = true;
+      resp.content += "\n\n---\n**TRUNCATED**: Response hit output token limit (finishReason=length). The analysis above may be incomplete.";
       process.stderr.write(
-        `[llm-externalizer] finishReason=length (output token limit hit) on attempt ${attempt + 1} \u2014 returning partial result
+        `[llm-externalizer] finishReason=length on attempt ${attempt + 1} \u2014 output token limit hit
 `
       );
-      resp.truncated = true;
       return resp;
     }
+    recordServiceFailure();
     if (attempt < MAX_TRUNCATION_RETRIES) {
       process.stderr.write(
-        `[llm-externalizer] Truncated response (finishReason=${resp.finishReason}, truncated=${resp.truncated}) \u2014 retrying (${attempt + 1}/${MAX_TRUNCATION_RETRIES})
+        `[llm-externalizer] Truncated (finishReason=${resp.finishReason}, truncated=${resp.truncated}) \u2014 retrying (${attempt + 1}/${MAX_TRUNCATION_RETRIES})
 `
       );
+      const abort = await checkServiceHealthOrWait();
+      if (abort) {
+        return {
+          content: abort,
+          model: resp.model,
+          finishReason: "error",
+          truncated: true
+        };
+      }
       continue;
     }
+    resp.content += `
+
+---
+**TRUNCATED**: Still incomplete after ${MAX_TRUNCATION_RETRIES} retries (finishReason=${resp.finishReason}). The analysis above may be incomplete.`;
     process.stderr.write(
       `[llm-externalizer] Still truncated after ${MAX_TRUNCATION_RETRIES} retries \u2014 returning partial result
 `
