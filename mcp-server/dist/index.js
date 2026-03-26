@@ -30626,7 +30626,7 @@ ${codeFence}${lostSecretsSection}`;
 function limitsBlock() {
   const concurrency = currentBackend.type === "openrouter" ? "\u2022 PARALLEL: up to 5 simultaneous calls." : "\u2022 SEQUENTIAL: 1 call at a time.";
   return "\n\nLIMITS:\n" + concurrency + `
-\u2022 ${SOFT_TIMEOUT_MS / 1e3}s timeout per call (MCP spec limit). Long outputs may truncate \u2014 use lower max_tokens or split into smaller calls.`;
+\u2022 ${SOFT_TIMEOUT_MS / 1e3}s timeout per call (MCP spec limit). Auto-retries up to 3 times on truncated responses.`;
 }
 var answerModeSchema = {
   type: "number",
@@ -32002,7 +32002,7 @@ API presets: ${Object.keys(API_PRESETS).join(", ")}`);
               `Context window: ${contextWindow.toLocaleString()} tokens (input + output combined)`
             );
             parts.push(
-              `Max output tokens per call: defaults to model maximum (${resolveDefaultMaxTokens().toLocaleString()}). Override with max_tokens parameter.`
+              `Max output tokens per call: model maximum (${resolveDefaultMaxTokens().toLocaleString()}). Auto-managed, not user-configurable.`
             );
             const maxConcurrent = await getMaxConcurrent();
             if (maxConcurrent > 1) {

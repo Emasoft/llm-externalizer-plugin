@@ -3512,7 +3512,7 @@ function limitsBlock(): string {
     "\n\nLIMITS:\n" +
     concurrency +
     "\n" +
-    `• ${SOFT_TIMEOUT_MS / 1000}s timeout per call (MCP spec limit). Long outputs may truncate — use lower max_tokens or split into smaller calls.`
+    `• ${SOFT_TIMEOUT_MS / 1000}s timeout per call (MCP spec limit). Auto-retries up to 3 times on truncated responses.`
   );
 }
 
@@ -5215,7 +5215,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             `Context window: ${contextWindow.toLocaleString()} tokens (input + output combined)`,
           );
           parts.push(
-            `Max output tokens per call: defaults to model maximum (${resolveDefaultMaxTokens().toLocaleString()}). Override with max_tokens parameter.`,
+            `Max output tokens per call: model maximum (${resolveDefaultMaxTokens().toLocaleString()}). Auto-managed, not user-configurable.`,
           );
 
           const maxConcurrent = await getMaxConcurrent();
