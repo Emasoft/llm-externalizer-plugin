@@ -30089,19 +30089,49 @@ function batchReportFilename(toolName, batchId, filePath, fileIndex) {
   const shortUuid = batchId.slice(0, 8);
   return `${toolName}_${shortUuid}_${fileIndex}_${sanitizeFilename(filePath)}_${ts}.md`;
 }
+var MAX_TRUNCATION_RETRIES = 3;
+async function chatCompletionWithRetry(messages, options) {
+  for (let attempt = 0; attempt <= MAX_TRUNCATION_RETRIES; attempt++) {
+    const resp = await chatCompletionStreaming(messages, options);
+    if (resp.finishReason === "stop" && !resp.truncated) {
+      return resp;
+    }
+    if (resp.finishReason === "length") {
+      process.stderr.write(
+        `[llm-externalizer] finishReason=length (output token limit hit) on attempt ${attempt + 1} \u2014 returning partial result
+`
+      );
+      resp.truncated = true;
+      return resp;
+    }
+    if (attempt < MAX_TRUNCATION_RETRIES) {
+      process.stderr.write(
+        `[llm-externalizer] Truncated response (finishReason=${resp.finishReason}, truncated=${resp.truncated}) \u2014 retrying (${attempt + 1}/${MAX_TRUNCATION_RETRIES})
+`
+      );
+      continue;
+    }
+    process.stderr.write(
+      `[llm-externalizer] Still truncated after ${MAX_TRUNCATION_RETRIES} retries \u2014 returning partial result
+`
+    );
+    return resp;
+  }
+  throw new Error("Unreachable: retry loop exited without returning");
+}
 async function ensembleStreaming(messages, options, ensemble, fileLineCount) {
   const ensembleModels = getEnsembleModels();
   if (!ensemble || currentBackend.type !== "openrouter" || ensembleModels.length === 0) {
-    return chatCompletionStreaming(messages, options);
+    return chatCompletionWithRetry(messages, options);
   }
   const models = ensembleModels.filter(
     (m) => !fileLineCount || fileLineCount <= m.maxInputLines
   );
   if (models.length === 0) {
-    return chatCompletionStreaming(messages, options);
+    return chatCompletionWithRetry(messages, options);
   }
   if (models.length === 1) {
-    return chatCompletionStreaming(messages, {
+    return chatCompletionWithRetry(messages, {
       ...options,
       model: models[0].id,
       maxTokens: Math.min(
@@ -30113,7 +30143,7 @@ async function ensembleStreaming(messages, options, ensemble, fileLineCount) {
   const results = await Promise.all(
     models.map(async (m) => {
       try {
-        const resp = await chatCompletionStreaming(messages, {
+        const resp = await chatCompletionWithRetry(messages, {
           ...options,
           model: m.id,
           maxTokens: Math.min(options.maxTokens ?? m.maxOutput, m.maxOutput)

@@ -2827,6 +2827,57 @@ function batchReportFilename(
   return `${toolName}_${shortUuid}_${fileIndex}_${sanitizeFilename(filePath)}_${ts}.md`;
 }
 
+// ── Retry-on-truncation wrapper ──────────────────────────────────────
+// Retries LLM calls when the response is truncated (finishReason !== "stop")
+// or when a timeout caused partial output. Up to 2 retries.
+const MAX_TRUNCATION_RETRIES = 3;
+
+async function chatCompletionWithRetry(
+  messages: ChatMessage[],
+  options: {
+    temperature?: number;
+    maxTokens?: number;
+    model?: string;
+    onProgress?: ProgressFn;
+  },
+): Promise<StreamingResult> {
+  for (let attempt = 0; attempt <= MAX_TRUNCATION_RETRIES; attempt++) {
+    const resp = await chatCompletionStreaming(messages, options);
+
+    // "stop" means normal completion — return immediately
+    if (resp.finishReason === "stop" && !resp.truncated) {
+      return resp;
+    }
+
+    // "length" means output hit max_tokens — the model ran out of output space.
+    // Retrying with the same input won't help (same limit), so return with warning.
+    if (resp.finishReason === "length") {
+      process.stderr.write(
+        `[llm-externalizer] finishReason=length (output token limit hit) on attempt ${attempt + 1} — returning partial result\n`,
+      );
+      resp.truncated = true;
+      return resp;
+    }
+
+    // Truncated by timeout or connection drop — retry if attempts remain
+    if (attempt < MAX_TRUNCATION_RETRIES) {
+      process.stderr.write(
+        `[llm-externalizer] Truncated response (finishReason=${resp.finishReason}, truncated=${resp.truncated}) — retrying (${attempt + 1}/${MAX_TRUNCATION_RETRIES})\n`,
+      );
+      continue;
+    }
+
+    // Exhausted retries — return whatever we got
+    process.stderr.write(
+      `[llm-externalizer] Still truncated after ${MAX_TRUNCATION_RETRIES} retries — returning partial result\n`,
+    );
+    return resp;
+  }
+
+  // Unreachable but TypeScript needs it
+  throw new Error("Unreachable: retry loop exited without returning");
+}
+
 // ── Ensemble streaming helper ────────────────────────────────────────
 // Runs the same prompt on multiple models in parallel, combines results.
 // When ensemble=false or backend is local, falls through to single-model call.
@@ -2848,7 +2899,7 @@ async function ensembleStreaming(
     currentBackend.type !== "openrouter" ||
     ensembleModels.length === 0
   ) {
-    return chatCompletionStreaming(messages, options);
+    return chatCompletionWithRetry(messages, options);
   }
 
   // Filter models by file size limit
@@ -2857,12 +2908,12 @@ async function ensembleStreaming(
   );
   if (models.length === 0) {
     // File too large for all ensemble models — fall back to current model
-    return chatCompletionStreaming(messages, options);
+    return chatCompletionWithRetry(messages, options);
   }
 
   // Single qualifying model — no need to combine
   if (models.length === 1) {
-    return chatCompletionStreaming(messages, {
+    return chatCompletionWithRetry(messages, {
       ...options,
       model: models[0].id,
       maxTokens: Math.min(
@@ -2872,11 +2923,11 @@ async function ensembleStreaming(
     });
   }
 
-  // Run all qualifying models in parallel
+  // Run all qualifying models in parallel — each model retries independently on truncation
   const results = await Promise.all(
     models.map(async (m) => {
       try {
-        const resp = await chatCompletionStreaming(messages, {
+        const resp = await chatCompletionWithRetry(messages, {
           ...options,
           model: m.id,
           maxTokens: Math.min(options.maxTokens ?? m.maxOutput, m.maxOutput),
