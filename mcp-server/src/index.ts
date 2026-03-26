@@ -4357,12 +4357,12 @@ function buildTools() {
           use_gitignore: {
             type: "boolean",
             description:
-              "When scanning folder_path, use git ls-files to respect .gitignore rules. Default: false.",
+              "Use git ls-files to respect .gitignore rules when scanning folders. Default: true. Set false to include gitignored files.",
           },
           max_files: {
             type: "number",
             description:
-              "Maximum number of files to process when using folder_path. Default: 500. " +
+              "Maximum number of files to process when using folder_path. Default: 1000. " +
               "Safety limit to prevent runaway scans on large directory trees.",
           },
           instructions: {
@@ -6284,9 +6284,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // When use_gitignore is true, uses git ls-files to respect .gitignore rules.
         const files = walkDir(folder_path, {
           extensions,
-          maxFiles: max_files ?? 500,
+          maxFiles: max_files ?? 1000,
           exclude: exclude_dirs,
-          useGitignore: sfUseGitignore,
+          useGitignore: sfUseGitignore !== false, // default true
         });
         if (files.length === 0) {
           return {
@@ -7716,9 +7716,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const csMaxFiles = (args as { max_files?: number }).max_files;
           csFilePaths = walkDir(csFolderPath, {
             extensions: csExtensions,
-            maxFiles: csMaxFiles ?? 500,
+            maxFiles: csMaxFiles ?? 1000,
             exclude: csExcludeDirs,
-            useGitignore: csUseGitignore,
+            useGitignore: csUseGitignore !== false, // default true
           });
           if (csFilePaths.length === 0) {
             return {
