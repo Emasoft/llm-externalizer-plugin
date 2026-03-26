@@ -4301,17 +4301,20 @@ function buildTools() {
       },
     },
     {
-      name: "check_spec",
+      name: "check_against_specs",
       description:
         "Compare source files against a specification file. The spec file defines requirements, rules, " +
         "API parameters, output formats, restrictions, forbidden patterns, forbidden endpoints/services/tools, etc. " +
         "Each source file is strictly examined for spec violations: wrong implementations, missed rules, " +
         "forbidden patterns used, incorrect API contracts, wrong output formats, etc.\n\n" +
+        "Accepts individual files via input_files_paths OR an entire folder via folder_path (recursive). " +
+        "Files are auto-batched using FFD bin packing — the spec file is included in EVERY batch so " +
+        "each source file is always checked against the full spec. No limit on number of files.\n\n" +
         "NOTE: The LLM does NOT have the full project — some requirements may be implemented elsewhere. " +
         "Therefore only VIOLATIONS of the spec are reported (things done wrong), not MISSING features " +
         "(things not yet implemented). Everything that IS implemented must follow the spec exactly.\n\n" +
         "CONTEXT WARNING: Remote LLM has ZERO project context — include brief context in instructions.\n\n" +
-        "OUTPUT: Per-file violation report saved to .md file, returns only the file path." +
+        "OUTPUT: Violation report saved to .md file, returns only the file path." +
         limitsBlock(),
       inputSchema: {
         type: "object" as const,
@@ -4320,7 +4323,8 @@ function buildTools() {
             type: "string",
             description:
               "Absolute path to the specification file (requirements, rules, API contracts, restrictions). " +
-              "This is the source of truth — all source files are checked against it.",
+              "This is the source of truth — all source files are checked against it. " +
+              "Included in EVERY batch when files are split across multiple requests.",
           },
           input_files_paths: {
             oneOf: [
@@ -4328,7 +4332,32 @@ function buildTools() {
               { type: "array", items: { type: "string" } },
             ],
             description:
-              "Source file(s) to check against the spec. Each file is examined for violations.",
+              "Source file(s) to check against the spec. Use this OR folder_path (not both).",
+          },
+          folder_path: {
+            type: "string",
+            description:
+              "Absolute path to a folder to scan recursively. All matching files are checked against the spec. " +
+              "Use this OR input_files_paths (not both).",
+          },
+          extensions: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              'File extensions to include when using folder_path. E.g., [".ts", ".py"]. ' +
+              "If not set, all non-binary files are included.",
+          },
+          exclude_dirs: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Additional directory names to skip when scanning folder_path. " +
+              "Hidden dirs, node_modules, .git, dist, build are always skipped.",
+          },
+          use_gitignore: {
+            type: "boolean",
+            description:
+              "When scanning folder_path, use git ls-files to respect .gitignore rules. Default: false.",
           },
           instructions: {
             type: "string",
@@ -4357,10 +4386,11 @@ function buildTools() {
           max_payload_kb: {
             type: "number",
             description:
-              "Max payload in KB (prompt + spec + files). Default: 400. Lower if you see hallucinations.",
+              "Max payload in KB (prompt + spec + source files) per batch. Default: 400. " +
+              "The spec file is always included — remaining budget is for source files.",
           },
         },
-        required: ["spec_file_path", "input_files_paths"],
+        required: ["spec_file_path"],
       },
     },
   ];
@@ -7613,10 +7643,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: "text", text: ciMergedPath }] };
       }
 
-      case "check_spec": {
+      case "check_against_specs": {
         const {
           spec_file_path: csSpecPath,
           input_files_paths: csInputPathsRaw,
+          folder_path: csFolderPath,
+          extensions: csExtensions,
+          exclude_dirs: csExcludeDirs,
+          use_gitignore: csUseGitignore,
           instructions: csInstructions,
           instructions_files_paths: csInstructionsFilesPaths,
           scan_secrets: csScan,
@@ -7625,7 +7659,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           max_payload_kb: csMaxPayloadKb,
         } = args as {
           spec_file_path: string;
-          input_files_paths: string | string[];
+          input_files_paths?: string | string[];
+          folder_path?: string;
+          extensions?: string[];
+          exclude_dirs?: string[];
+          use_gitignore?: boolean;
           instructions?: string;
           instructions_files_paths?: string | string[];
           scan_secrets?: boolean;
@@ -7644,12 +7682,39 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             isError: true,
           };
         }
-        const csFilePaths = normalizePaths(csInputPathsRaw);
-        if (csFilePaths.length === 0) {
-          return {
-            content: [{ type: "text", text: "FAILED: input_files_paths is required." }],
-            isError: true,
-          };
+
+        // Resolve source files from either input_files_paths or folder_path
+        let csFilePaths: string[];
+        if (csFolderPath) {
+          if (!existsSync(csFolderPath)) {
+            return {
+              content: [{ type: "text", text: `FAILED: folder_path not found: ${csFolderPath}` }],
+              isError: true,
+            };
+          }
+          csFilePaths = walkDir(csFolderPath, {
+            extensions: csExtensions,
+            exclude: csExcludeDirs,
+            useGitignore: csUseGitignore,
+          });
+          if (csFilePaths.length === 0) {
+            return {
+              content: [{
+                type: "text",
+                text: `FAILED: No matching files found in ${csFolderPath}` +
+                  (csExtensions ? ` with extensions ${csExtensions.join(", ")}` : ""),
+              }],
+              isError: true,
+            };
+          }
+        } else {
+          csFilePaths = normalizePaths(csInputPathsRaw);
+          if (csFilePaths.length === 0) {
+            return {
+              content: [{ type: "text", text: "FAILED: Provide input_files_paths or folder_path." }],
+              isError: true,
+            };
+          }
         }
 
         // Read the spec file
@@ -7743,7 +7808,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             { maxTokens: resolveDefaultMaxTokens(), onProgress },
             csUseEnsemble,
           );
-          const csFooter = formatFooter(csResp, "check_spec", group[0]?.path);
+          const csFooter = formatFooter(csResp, "check_against_specs", group[0]?.path);
           if (csResp.content.trim().length > 0) {
             if (csAutoBatched) {
               const fileList = group.map((fd) => fd.path).join(", ");
@@ -7768,7 +7833,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           csUseEnsemble && activeResolved?.secondModel
             ? `ensemble: ${currentBackend.model} + ${activeResolved.secondModel}`
             : currentBackend.model;
-        const csReportPath = saveResponse("check_spec", csFinalContent, {
+        const csReportPath = saveResponse("check_against_specs", csFinalContent, {
           model: csMergedModel,
           task: `Spec compliance: ${basename(csSpecPath)} vs ${csFilePaths.length} file(s)`,
           inputFile: csFilePaths[0],
