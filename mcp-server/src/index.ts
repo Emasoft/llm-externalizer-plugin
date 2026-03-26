@@ -4359,6 +4359,12 @@ function buildTools() {
             description:
               "When scanning folder_path, use git ls-files to respect .gitignore rules. Default: false.",
           },
+          max_files: {
+            type: "number",
+            description:
+              "Maximum number of files to process when using folder_path. Default: 500. " +
+              "Safety limit to prevent runaway scans on large directory trees.",
+          },
           instructions: {
             type: "string",
             description:
@@ -7683,6 +7689,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
+        // Reject if both folder_path and input_files_paths are provided
+        const csNormalized = normalizePaths(csInputPathsRaw);
+        if (csFolderPath && csNormalized.length > 0) {
+          return {
+            content: [{ type: "text", text: "FAILED: Provide input_files_paths OR folder_path, not both." }],
+            isError: true,
+          };
+        }
+
         // Resolve source files from either input_files_paths or folder_path
         let csFilePaths: string[];
         if (csFolderPath) {
@@ -7692,8 +7707,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               isError: true,
             };
           }
+          if (!statSync(csFolderPath).isDirectory()) {
+            return {
+              content: [{ type: "text", text: `FAILED: Not a directory: ${csFolderPath}` }],
+              isError: true,
+            };
+          }
+          const csMaxFiles = (args as { max_files?: number }).max_files;
           csFilePaths = walkDir(csFolderPath, {
             extensions: csExtensions,
+            maxFiles: csMaxFiles ?? 500,
             exclude: csExcludeDirs,
             useGitignore: csUseGitignore,
           });
@@ -7708,7 +7731,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             };
           }
         } else {
-          csFilePaths = normalizePaths(csInputPathsRaw);
+          csFilePaths = csNormalized;
           if (csFilePaths.length === 0) {
             return {
               content: [{ type: "text", text: "FAILED: Provide input_files_paths or folder_path." }],

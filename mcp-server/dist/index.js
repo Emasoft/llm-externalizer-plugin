@@ -31244,6 +31244,10 @@ function buildTools() {
             type: "boolean",
             description: "When scanning folder_path, use git ls-files to respect .gitignore rules. Default: false."
           },
+          max_files: {
+            type: "number",
+            description: "Maximum number of files to process when using folder_path. Default: 500. Safety limit to prevent runaway scans on large directory trees."
+          },
           instructions: {
             type: "string",
             description: "Optional additional context or focus areas. E.g., 'Focus on API response format violations' or 'Check if forbidden endpoints are used'."
@@ -34020,6 +34024,13 @@ FAILED: File not found.`);
               isError: true
             };
           }
+          const csNormalized = normalizePaths(csInputPathsRaw);
+          if (csFolderPath && csNormalized.length > 0) {
+            return {
+              content: [{ type: "text", text: "FAILED: Provide input_files_paths OR folder_path, not both." }],
+              isError: true
+            };
+          }
           let csFilePaths;
           if (csFolderPath) {
             if (!existsSync2(csFolderPath)) {
@@ -34028,8 +34039,16 @@ FAILED: File not found.`);
                 isError: true
               };
             }
+            if (!statSync(csFolderPath).isDirectory()) {
+              return {
+                content: [{ type: "text", text: `FAILED: Not a directory: ${csFolderPath}` }],
+                isError: true
+              };
+            }
+            const csMaxFiles = args.max_files;
             csFilePaths = walkDir(csFolderPath, {
               extensions: csExtensions,
+              maxFiles: csMaxFiles ?? 500,
               exclude: csExcludeDirs,
               useGitignore: csUseGitignore
             });
@@ -34043,7 +34062,7 @@ FAILED: File not found.`);
               };
             }
           } else {
-            csFilePaths = normalizePaths(csInputPathsRaw);
+            csFilePaths = csNormalized;
             if (csFilePaths.length === 0) {
               return {
                 content: [{ type: "text", text: "FAILED: Provide input_files_paths or folder_path." }],
