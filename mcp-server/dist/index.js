@@ -30510,10 +30510,6 @@ function limitsBlock() {
   return "\n\nLIMITS:\n" + concurrency + `
 \u2022 ${SOFT_TIMEOUT_MS / 1e3}s timeout per call (MCP spec limit). Long outputs may truncate \u2014 use lower max_tokens or split into smaller calls.`;
 }
-var ensembleSchema = {
-  type: "boolean",
-  description: "Run on both grok-4.1-fast and gemini-2.5-flash for thorough analysis (results combined in one report). Set false for simple tasks (finding a name, summarizing, etc.) to save tokens. Default: true."
-};
 var answerModeSchema = {
   type: "number",
   enum: [0, 1, 2],
@@ -30578,10 +30574,6 @@ function buildTools() {
             type: "number",
             description: "0.1 for factual/code, 0.3 for analysis (default), 0.7 for creative. Stay under 0.5 for code."
           },
-          max_tokens: {
-            type: "number",
-            description: "Max response tokens. Defaults to model maximum. Set lower to save cost on quick answers."
-          },
           scan_secrets: {
             type: "boolean",
             description: "Scan input files for secrets (API keys, tokens, passwords) and ABORT if any are found."
@@ -30590,7 +30582,6 @@ function buildTools() {
             type: "boolean",
             description: "Redact secrets before sending to LLM. Prevents leaking sensitive data to the remote service."
           },
-          ensemble: ensembleSchema,
           answer_mode: answerModeSchema,
           max_payload_kb: {
             type: "number",
@@ -30634,10 +30625,6 @@ function buildTools() {
             type: "string",
             description: "Programming language (auto-detected from input_files_paths extension if not set)."
           },
-          max_tokens: {
-            type: "number",
-            description: "Max response tokens. Defaults to model maximum."
-          },
           scan_secrets: {
             type: "boolean",
             description: "Scan input files for secrets (API keys, tokens, passwords) and ABORT if any are found."
@@ -30646,7 +30633,6 @@ function buildTools() {
             type: "boolean",
             description: "Redact secrets before sending to LLM. Prevents leaking sensitive data to the remote service."
           },
-          ensemble: ensembleSchema,
           answer_mode: answerModeSchema,
           max_payload_kb: {
             type: "number",
@@ -30687,10 +30673,6 @@ function buildTools() {
           language: {
             type: "string",
             description: "Programming language (auto-detected from file extension if not set)."
-          },
-          max_tokens: {
-            type: "number",
-            description: "Max response tokens. Defaults to model maximum."
           },
           scan_secrets: {
             type: "boolean",
@@ -30792,10 +30774,6 @@ function buildTools() {
             type: "string",
             description: "NOT SUPPORTED for batch_check \u2014 files must be on disk via input_files_paths."
           },
-          max_tokens: {
-            type: "number",
-            description: "Per-file output token limit. Defaults to model maximum."
-          },
           scan_secrets: {
             type: "boolean",
             description: "Scan input files for secrets and ABORT if any are found. Best practice: move secrets to .env (gitignored)."
@@ -30804,7 +30782,6 @@ function buildTools() {
             type: "boolean",
             description: "Redact secrets before sending to LLM. DISCOURAGED: prefer moving secrets to .env files (gitignored)."
           },
-          ensemble: ensembleSchema,
           answer_mode: answerModeSchema,
           max_payload_kb: {
             type: "number",
@@ -30839,10 +30816,6 @@ function buildTools() {
           input_files_content: {
             type: "string",
             description: "NOT SUPPORTED for batch_fix \u2014 files must be on disk via input_files_paths."
-          },
-          max_tokens: {
-            type: "number",
-            description: "Per-file output token limit. Auto-estimated from file size if not set (capped at 32768)."
           },
           scan_secrets: {
             type: "boolean",
@@ -30893,10 +30866,6 @@ function buildTools() {
             ],
             description: "File(s) containing instructions."
           },
-          max_tokens: {
-            type: "number",
-            description: "Per-file output token limit. Defaults to model maximum."
-          },
           scan_secrets: {
             type: "boolean",
             description: "Scan input files for secrets and ABORT if any are found. Best practice: move secrets to .env (gitignored)."
@@ -30909,7 +30878,6 @@ function buildTools() {
             type: "boolean",
             description: "Use .gitignore rules to filter files (via git ls-files). When true, only files not ignored by git are included. Falls back to manual walk if not in a git repo. Default: false."
           },
-          ensemble: ensembleSchema,
           answer_mode: answerModeSchema,
           max_payload_kb: {
             type: "number",
@@ -30944,10 +30912,6 @@ function buildTools() {
           output_path: {
             type: "string",
             description: "Absolute path where the merged file will be written."
-          },
-          max_tokens: {
-            type: "number",
-            description: "Max response tokens. Defaults to model maximum."
           },
           scan_secrets: {
             type: "boolean",
@@ -30989,10 +30953,6 @@ function buildTools() {
             type: "string",
             description: "Absolute path to the directory for new modules. Defaults to the source file's directory."
           },
-          max_tokens: {
-            type: "number",
-            description: "Max response tokens. Defaults to model maximum."
-          },
           scan_secrets: {
             type: "boolean",
             description: "Scan input files for secrets and ABORT if any are found. Best practice: move secrets to .env (gitignored)."
@@ -31029,10 +30989,6 @@ function buildTools() {
             ],
             description: "File(s) containing comparison instructions."
           },
-          max_tokens: {
-            type: "number",
-            description: "Max response tokens. Defaults to model maximum."
-          },
           scan_secrets: {
             type: "boolean",
             description: "Scan input files for secrets and ABORT if any are found. Best practice: move secrets to .env (gitignored)."
@@ -31041,7 +30997,6 @@ function buildTools() {
             type: "boolean",
             description: "Redact secrets before sending to LLM. DISCOURAGED: prefer moving secrets to .env files (gitignored)."
           },
-          ensemble: ensembleSchema,
           max_payload_kb: {
             type: "number",
             description: "Max file size in KB per file. Default: 400. Files exceeding this are skipped."
@@ -31074,10 +31029,6 @@ function buildTools() {
             ],
             description: "File(s) containing additional instructions."
           },
-          max_tokens: {
-            type: "number",
-            description: "Max response tokens. Defaults to model maximum."
-          },
           scan_secrets: {
             type: "boolean",
             description: "Scan input files for secrets and ABORT if any are found. Best practice: move secrets to .env (gitignored)."
@@ -31086,7 +31037,6 @@ function buildTools() {
             type: "boolean",
             description: "Redact secrets before sending to LLM. DISCOURAGED: prefer moving secrets to .env files (gitignored)."
           },
-          ensemble: ensembleSchema,
           answer_mode: answerModeSchema,
           max_payload_kb: {
             type: "number",
@@ -31124,10 +31074,6 @@ function buildTools() {
             ],
             description: "File(s) containing additional instructions."
           },
-          max_tokens: {
-            type: "number",
-            description: "Max response tokens. Defaults to model maximum."
-          },
           scan_secrets: {
             type: "boolean",
             description: "Scan input files for secrets and ABORT if any are found. Best practice: move secrets to .env (gitignored)."
@@ -31136,7 +31082,6 @@ function buildTools() {
             type: "boolean",
             description: "Redact secrets before sending to LLM. DISCOURAGED: prefer moving secrets to .env files (gitignored)."
           },
-          ensemble: ensembleSchema,
           answer_mode: answerModeSchema,
           max_payload_kb: {
             type: "number",
@@ -31218,14 +31163,12 @@ Settings file: ${SETTINGS_FILE}`
             input_files_content,
             system,
             temperature,
-            max_tokens,
             answer_mode: rawAnswerMode,
             scan_secrets: chatScan,
             redact_secrets: chatRedact,
-            ensemble: chatEnsemble,
             max_payload_kb: chatMaxPayloadKb
           } = args;
-          const useEnsemble = chatEnsemble !== false;
+          const useEnsemble = currentBackend.type === "openrouter";
           const chatBudgetBytes = (chatMaxPayloadKb ?? 400) * 1024;
           const chatPrompt = resolvePrompt(
             instructions,
@@ -31271,7 +31214,7 @@ Remove secrets before sending to remote LLM.`
               }
             }
           }
-          const maxTokens = max_tokens ?? resolveDefaultMaxTokens();
+          const maxTokens = resolveDefaultMaxTokens();
           const chatMode = resolveAnswerMode(rawAnswerMode, 2);
           const chatHasFiles = chatFilePaths.length > 0 || !!input_files_content;
           let promptBase = buildPreInstructions(chatHasFiles, "read") + chatPrompt;
@@ -31428,14 +31371,12 @@ ${resp.content}${footer}`
             input_files_paths: ctInputPathsRaw,
             input_files_content: ctInputContent,
             language,
-            max_tokens: codeMaxTokens,
             answer_mode: ctRawMode,
             scan_secrets: ctScan,
             redact_secrets: ctRedact,
-            ensemble: ctEnsemble,
             max_payload_kb: ctMaxPayloadKb
           } = args;
-          const ctUseEnsemble = ctEnsemble !== false;
+          const ctUseEnsemble = currentBackend.type === "openrouter";
           const ctBudgetBytes = (ctMaxPayloadKb ?? 400) * 1024;
           const ctMode = resolveAnswerMode(ctRawMode, 2);
           const ctTask = resolvePrompt(ctInstructions, ctInstructionsFilesPaths);
@@ -31482,7 +31423,7 @@ Remove secrets before sending to remote LLM.`
           if (ctFilePaths.length === 1 && !ctInputContent) {
             const result = await processFileCheck(ctFilePaths[0], ctTask, {
               language,
-              maxTokens: codeMaxTokens,
+              maxTokens: resolveDefaultMaxTokens(),
               redact: ctRedact,
               onProgress,
               ensemble: ctUseEnsemble
@@ -31543,7 +31484,7 @@ RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/M
               codeMessages,
               {
                 temperature: 0.2,
-                maxTokens: codeMaxTokens ?? resolveDefaultMaxTokens(),
+                maxTokens: resolveDefaultMaxTokens(),
                 onProgress
               },
               ctUseEnsemble
@@ -31569,7 +31510,7 @@ RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/M
             for (const fp of ctFilePaths) {
               const result = await processFileCheck(fp, ctTask, {
                 language,
-                maxTokens: codeMaxTokens,
+                maxTokens: resolveDefaultMaxTokens(),
                 onProgress,
                 ensemble: ctUseEnsemble
               });
@@ -31614,7 +31555,7 @@ RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/M
               codeMessages,
               {
                 temperature: 0.2,
-                maxTokens: codeMaxTokens ?? resolveDefaultMaxTokens(),
+                maxTokens: resolveDefaultMaxTokens(),
                 onProgress
               },
               ctUseEnsemble
@@ -31682,7 +31623,6 @@ ${codeResp.content}${codeFooter}` : codeResp.content + codeFooter
               instructions_files_paths: fixInstructionsFilesPaths,
               input_files_paths: fixInputPathsRaw,
               language,
-              max_tokens: fixMaxTokens,
               answer_mode: fixRawMode,
               scan_secrets: fixScan,
               redact_secrets: fixRedact
@@ -31727,7 +31667,7 @@ ${codeResp.content}${codeFooter}` : codeResp.content + codeFooter
               const fixFilePath = fixFilePaths[0];
               const fixResult = await processFileFix(fixFilePath, fixIssues, {
                 language,
-                maxTokens: fixMaxTokens,
+                maxTokens: resolveDefaultMaxTokens(),
                 redact: fixRedact,
                 onProgress
               });
@@ -31765,7 +31705,7 @@ ${codeResp.content}${codeFooter}` : codeResp.content + codeFooter
               fixFileResults.push(
                 await processFileFix(fp, fixIssues, {
                   language,
-                  maxTokens: fixMaxTokens,
+                  maxTokens: resolveDefaultMaxTokens(),
                   redact: fixRedact,
                   onProgress
                 })
@@ -32175,14 +32115,12 @@ Settings saved to ${SETTINGS_FILE}`
             instructions: bcInstructions,
             instructions_files_paths: bcInstructionsFilesPaths,
             input_files_paths: bcInputPaths,
-            max_tokens: batchCheckMaxTokens,
             answer_mode: bcRawMode,
             scan_secrets: bcScan,
             redact_secrets: bcRedact,
-            ensemble: bcEnsemble,
             max_payload_kb: bcMaxPayloadKb
           } = args;
-          const bcUseEnsemble = bcEnsemble !== false;
+          const bcUseEnsemble = currentBackend.type === "openrouter";
           const bcBudgetBytes = (bcMaxPayloadKb ?? 400) * 1024;
           const bcMode = resolveAnswerMode(bcRawMode, 0);
           const bcNormalizedPaths = normalizePaths(bcInputPaths);
@@ -32241,7 +32179,7 @@ Settings saved to ${SETTINGS_FILE}`
               }
               try {
                 const result = await processFileCheck(filePath, resolvedTask, {
-                  maxTokens: batchCheckMaxTokens,
+                  maxTokens: resolveDefaultMaxTokens(),
                   batchId,
                   fileIndex: idx,
                   redact: bcRedact,
@@ -32367,7 +32305,6 @@ ${content}`);
               instructions: bfInstructions,
               instructions_files_paths: bfInstructionsFilesPaths,
               input_files_paths: bfInputPaths,
-              max_tokens: batchFixMaxTokens,
               answer_mode: bfRawMode,
               scan_secrets: bfScan,
               redact_secrets: bfRedact
@@ -32464,7 +32401,7 @@ ${content}`);
                 try {
                   updateManifest(filePath, "processing");
                   const result = await processFileFix(filePath, batchIssues, {
-                    maxTokens: batchFixMaxTokens,
+                    maxTokens: resolveDefaultMaxTokens(),
                     batchId,
                     fileIndex: idx,
                     redact: bfRedact,
@@ -32675,14 +32612,12 @@ ${content}`
             max_files,
             instructions: sfInstructions,
             instructions_files_paths: sfInstructionsFilesPaths,
-            max_tokens: sfMaxTokens,
             redact_secrets: sfRedact,
             answer_mode: sfRawMode,
             use_gitignore: sfUseGitignore,
-            scan_secrets: sfScan,
-            ensemble: sfEnsemble
+            scan_secrets: sfScan
           } = args;
-          const sfUseEnsemble = sfEnsemble !== false;
+          const sfUseEnsemble = currentBackend.type === "openrouter";
           const sfBudgetBytes = (args.max_payload_kb ?? 400) * 1024;
           if (!existsSync2(folder_path)) {
             return {
@@ -32764,7 +32699,7 @@ ${content}`
                 };
               try {
                 const result = await processFileCheck(filePath, sfPrompt, {
-                  maxTokens: sfMaxTokens,
+                  maxTokens: resolveDefaultMaxTokens(),
                   batchId,
                   fileIndex: idx,
                   redact: sfRedact,
@@ -32886,7 +32821,6 @@ ${content}`);
               instructions_files_paths: mfInstructionsFilesPaths,
               input_files_paths: mfInputPaths,
               output_path: mfOutputPath,
-              max_tokens: mfMaxTokens,
               redact_secrets: mfRedact,
               scan_secrets: mfScan
             } = args;
@@ -32988,7 +32922,7 @@ Return JSON: {"code": "complete merged file", "summary": "what was merged and ho
               ];
               const mfResp = await chatCompletionJSON(mfMessages, {
                 temperature: 0.1,
-                maxTokens: mfMaxTokens ?? resolveDefaultMaxTokens(),
+                maxTokens: resolveDefaultMaxTokens(),
                 jsonSchema: FIX_CODE_SCHEMA,
                 onProgress
               });
@@ -33139,7 +33073,6 @@ TO REVERT: restore from ${mfOutputPath}.externbak`
               instructions_files_paths: spInstructionsFilesPaths,
               input_files_paths: spInputPathsRaw,
               output_dir: spOutputDir,
-              max_tokens: spMaxTokens,
               redact_secrets: spRedact,
               scan_secrets: spScan
             } = args;
@@ -33213,7 +33146,7 @@ ${srcFence}`
             ];
             const spResp = await chatCompletionJSON(spMessages, {
               temperature: 0.1,
-              maxTokens: spMaxTokens ?? resolveDefaultMaxTokens(),
+              maxTokens: resolveDefaultMaxTokens(),
               jsonSchema: SPLIT_FILE_SCHEMA,
               onProgress
             });
@@ -33409,14 +33342,12 @@ REPORT: ${spReportPath}`
             input_files_paths: cfInputPaths,
             instructions: cfInstructions,
             instructions_files_paths: cfInstructionsFilesPaths,
-            max_tokens: cfMaxTokens,
             redact_secrets: cfRedact,
             scan_secrets: cfScan,
-            ensemble: cfEnsemble,
             max_payload_kb: cfMaxPayloadKb
           } = args;
           const cfBudgetBytes = (cfMaxPayloadKb ?? 400) * 1024;
-          const cfUseEnsemble = cfEnsemble !== false;
+          const cfUseEnsemble = currentBackend.type === "openrouter";
           const cfNormalizedPaths = normalizePaths(cfInputPaths);
           if (cfNormalizedPaths.length !== 2) {
             return {
@@ -33525,7 +33456,7 @@ ${diffFence}` + sourceFileBlocks
             cfMessages,
             {
               temperature: 0.2,
-              maxTokens: cfMaxTokens ?? resolveDefaultMaxTokens(),
+              maxTokens: resolveDefaultMaxTokens(),
               onProgress
             },
             cfUseEnsemble
@@ -33555,14 +33486,12 @@ ${diffFence}` + sourceFileBlocks
             input_files_paths: crInputPathsRaw,
             instructions: crInstructions,
             instructions_files_paths: crInstructionsFilesPaths,
-            max_tokens: crMaxTokens,
             redact_secrets: crRedact,
             answer_mode: crRawMode,
             scan_secrets: crScan,
-            ensemble: crEnsemble,
             max_payload_kb: crMaxPayloadKb
           } = args;
-          const crUseEnsemble = crEnsemble !== false;
+          const crUseEnsemble = currentBackend.type === "openrouter";
           const crBudgetBytes = (crMaxPayloadKb ?? 400) * 1024;
           const crFilePaths = [...new Set(normalizePaths(crInputPathsRaw))];
           if (crFilePaths.length === 0) {
@@ -33630,7 +33559,7 @@ ${depBlocks.join("\n\n")}` : "## No local dependencies resolved \u2014 check for
               crMessages,
               {
                 temperature: 0.1,
-                maxTokens: crMaxTokens ?? resolveDefaultMaxTokens(),
+                maxTokens: resolveDefaultMaxTokens(),
                 onProgress
               },
               crUseEnsemble,
@@ -33697,14 +33626,12 @@ ${crResp.content}${crFooter}`
             project_root,
             instructions: ciInstructions,
             instructions_files_paths: ciInstructionsFilesPaths,
-            max_tokens: ciMaxTokens,
             redact_secrets: ciRedact,
             answer_mode: ciRawMode,
             scan_secrets: ciScan,
-            ensemble: ciEnsemble,
             max_payload_kb: ciMaxPayloadKb
           } = args;
-          const _ciUseEnsemble = ciEnsemble !== false;
+          const _ciUseEnsemble = currentBackend.type === "openrouter";
           const ciBudgetBytes = (ciMaxPayloadKb ?? 400) * 1024;
           const ciFilePaths = [...new Set(normalizePaths(ciInputPathsRaw))];
           if (ciFilePaths.length === 0) {
@@ -33755,8 +33682,7 @@ FAILED: File not found.`);
             ];
             const extractResp = await chatCompletionJSON(extractMessages, {
               temperature: 0,
-              maxTokens: ciMaxTokens ?? 8192,
-              // Extraction needs enough tokens for large import lists
+              maxTokens: resolveDefaultMaxTokens(),
               jsonSchema: EXTRACT_PATHS_SCHEMA,
               onProgress
             });
