@@ -31208,6 +31208,51 @@ function buildTools() {
         },
         required: ["input_files_paths"]
       }
+    },
+    {
+      name: "check_spec",
+      description: "Compare source files against a specification file. The spec file defines requirements, rules, API parameters, output formats, restrictions, forbidden patterns, forbidden endpoints/services/tools, etc. Each source file is strictly examined for spec violations: wrong implementations, missed rules, forbidden patterns used, incorrect API contracts, wrong output formats, etc.\n\nNOTE: The LLM does NOT have the full project \u2014 some requirements may be implemented elsewhere. Therefore only VIOLATIONS of the spec are reported (things done wrong), not MISSING features (things not yet implemented). Everything that IS implemented must follow the spec exactly.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context in instructions.\n\nOUTPUT: Per-file violation report saved to .md file, returns only the file path." + limitsBlock(),
+      inputSchema: {
+        type: "object",
+        properties: {
+          spec_file_path: {
+            type: "string",
+            description: "Absolute path to the specification file (requirements, rules, API contracts, restrictions). This is the source of truth \u2014 all source files are checked against it."
+          },
+          input_files_paths: {
+            oneOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ],
+            description: "Source file(s) to check against the spec. Each file is examined for violations."
+          },
+          instructions: {
+            type: "string",
+            description: "Optional additional context or focus areas. E.g., 'Focus on API response format violations' or 'Check if forbidden endpoints are used'."
+          },
+          instructions_files_paths: {
+            oneOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ],
+            description: "File(s) containing additional instructions."
+          },
+          scan_secrets: {
+            type: "boolean",
+            description: "Scan input files for secrets and ABORT if any are found."
+          },
+          redact_secrets: {
+            type: "boolean",
+            description: "Redact secrets before sending to LLM."
+          },
+          answer_mode: answerModeSchema,
+          max_payload_kb: {
+            type: "number",
+            description: "Max payload in KB (prompt + spec + files). Default: 400. Lower if you see hallucinations."
+          }
+        },
+        required: ["spec_file_path", "input_files_paths"]
+      }
     }
   ];
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
@@ -33932,6 +33977,120 @@ FAILED: File not found.`);
             }
           );
           return { content: [{ type: "text", text: ciMergedPath }] };
+        }
+        case "check_spec": {
+          const {
+            spec_file_path: csSpecPath,
+            input_files_paths: csInputPathsRaw,
+            instructions: csInstructions,
+            instructions_files_paths: csInstructionsFilesPaths,
+            scan_secrets: csScan,
+            redact_secrets: csRedact,
+            answer_mode: csRawMode,
+            max_payload_kb: csMaxPayloadKb
+          } = args;
+          const csUseEnsemble = currentBackend.type === "openrouter";
+          const csBudgetBytes = (csMaxPayloadKb ?? 400) * 1024;
+          const csMode = resolveAnswerMode(csRawMode, 2);
+          if (!csSpecPath) {
+            return {
+              content: [{ type: "text", text: "FAILED: spec_file_path is required." }],
+              isError: true
+            };
+          }
+          const csFilePaths = normalizePaths(csInputPathsRaw);
+          if (csFilePaths.length === 0) {
+            return {
+              content: [{ type: "text", text: "FAILED: input_files_paths is required." }],
+              isError: true
+            };
+          }
+          let csSpecBlock;
+          try {
+            csSpecBlock = readFileAsCodeBlock(csSpecPath, void 0, csRedact, csBudgetBytes);
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            return {
+              content: [{ type: "text", text: `FAILED: Cannot read spec file: ${errMsg}` }],
+              isError: true
+            };
+          }
+          if (csScan) {
+            const scanResult = scanFilesForSecrets([csSpecPath, ...csFilePaths]);
+            if (scanResult.found)
+              return {
+                content: [{ type: "text", text: scanResult.report }],
+                isError: true
+              };
+          }
+          const csExtraInstructions = resolvePrompt(csInstructions, csInstructionsFilesPaths);
+          const csSystemPrompt = "You are a strict specification compliance auditor. You will receive a SPECIFICATION FILE and one or more SOURCE FILES. Your job is to find every violation of the specification in the source files.\n\nRULES:\n1. The specification is the ABSOLUTE source of truth. Every rule, restriction, format, API contract, forbidden pattern, and requirement in the spec MUST be followed exactly.\n2. Report ONLY VIOLATIONS \u2014 things implemented WRONGLY or FORBIDDEN patterns used. Do NOT report MISSING features \u2014 some requirements may be implemented in other files that are not included here.\n3. For each violation, report:\n   - **File**: which source file\n   - **Location**: function/class/method name (NEVER line numbers)\n   - **Spec rule violated**: quote the exact spec text\n   - **What the code does**: describe the actual behavior\n   - **Severity**: CRITICAL (security/data loss), HIGH (wrong behavior), MEDIUM (non-compliance), LOW (style/convention)\n4. If a source file has NO violations, explicitly state: 'CLEAN \u2014 no spec violations found.'\n5. At the end, provide a SUMMARY with total violation counts by severity.\n6. Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.\n";
+          const csSpecBytes = Buffer.byteLength(csSpecBlock, "utf-8");
+          const csSystemBytes = Buffer.byteLength(csSystemPrompt, "utf-8");
+          const csExtraBytes = Buffer.byteLength(csExtraInstructions, "utf-8");
+          const csPromptBytes = csSpecBytes + csSystemBytes + csExtraBytes;
+          const { groups: csGroups, autoBatched: csAutoBatched, skipped: csSkipped } = readAndGroupFiles(csFilePaths, csPromptBytes, csRedact, csBudgetBytes);
+          const csBatchResults = [];
+          if (csSkipped.length > 0) {
+            csBatchResults.push(
+              `SKIPPED (exceeds ${csBudgetBytes / 1024} KB payload budget): ${csSkipped.length} file(s)
+` + csSkipped.map((f) => `  - ${f}`).join("\n")
+            );
+          }
+          for (let gi = 0; gi < csGroups.length; gi++) {
+            const group = csGroups[gi];
+            let userContent = "## SPECIFICATION (source of truth)\n\n" + csSpecBlock + "\n\n";
+            if (csExtraInstructions) {
+              userContent += "## ADDITIONAL INSTRUCTIONS\n\n" + csExtraInstructions + "\n\n";
+            }
+            userContent += "## SOURCE FILES TO CHECK\n\n";
+            if (csMode === 1) {
+              userContent += buildPerFileSectionPrompt(group.map((fd) => fd.path));
+            }
+            for (const fd of group) {
+              userContent += `
+
+${fd.block}`;
+            }
+            const csMessages = [
+              { role: "system", content: csSystemPrompt },
+              { role: "user", content: userContent }
+            ];
+            const csResp = await ensembleStreaming(
+              csMessages,
+              { maxTokens: resolveDefaultMaxTokens(), onProgress },
+              csUseEnsemble
+            );
+            const csFooter = formatFooter(csResp, "check_spec", group[0]?.path);
+            if (csResp.content.trim().length > 0) {
+              if (csAutoBatched) {
+                const fileList = group.map((fd) => fd.path).join(", ");
+                csBatchResults.push(
+                  `## Batch ${gi + 1}/${csGroups.length}
+
+Files: ${fileList}
+
+${csResp.content}${csFooter}`
+                );
+              } else {
+                csBatchResults.push(csResp.content + csFooter);
+              }
+            }
+          }
+          if (csBatchResults.length === 0) {
+            return {
+              content: [{ type: "text", text: "FAILED: LLM returned empty response." }],
+              isError: true
+            };
+          }
+          const csFinalContent = csBatchResults.join("\n\n---\n\n");
+          const csMergedModel = csUseEnsemble && activeResolved?.secondModel ? `ensemble: ${currentBackend.model} + ${activeResolved.secondModel}` : currentBackend.model;
+          const csReportPath = saveResponse("check_spec", csFinalContent, {
+            model: csMergedModel,
+            task: `Spec compliance: ${basename(csSpecPath)} vs ${csFilePaths.length} file(s)`,
+            inputFile: csFilePaths[0]
+          });
+          return { content: [{ type: "text", text: csReportPath }] };
         }
         default:
           throw new Error(`Unknown tool: ${name}`);
