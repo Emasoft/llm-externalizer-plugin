@@ -1,6 +1,22 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.2.7] - 2026-03-26
+
+### Added
+
+- Global service health tracker + truncation in output reports
+- Auto-retry on truncated LLM responses (up to 3 retries)
+
+### Miscellaneous
+
+- Gitignore tldr session artifacts
+- Add Serena project config, remove stale worktrees
+
+### Refactored
+
+- Remove ensemble and max_tokens from tool parameters
+
 ## [3.2.6] - 2026-03-23
 
 ### Added
