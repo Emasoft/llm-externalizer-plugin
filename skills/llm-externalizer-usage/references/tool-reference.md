@@ -49,6 +49,8 @@ Use `instructions_files_paths` to share reusable review rules, coding standards,
 
 **NOTE**: `batch_check` does NOT support `input_files_content`.
 
+**NOTE**: `check_against_specs` uses `spec_file_path` (required) plus `input_files_paths` OR `folder_path` for source files.
+
 ## Advanced Parameters
 
 | Parameter | Tools | Values | Notes |
@@ -57,7 +59,7 @@ Use `instructions_files_paths` to share reusable review rules, coding standards,
 | `temperature` | `chat` only | 0.1 factual, 0.3 analysis, 0.7 creative | Stay under 0.5 for code tasks. |
 | `system` | `chat` only | string | Persona override. Be specific: `"Senior TypeScript dev"`. |
 | `language` | `code_task` only | string | Programming language hint. Auto-detected from file extension. |
-| `exclude_dirs` | `scan_folder` only | string array | Additional dirs to skip beyond built-in exclusions. |
+| `exclude_dirs` | `scan_folder`, `check_against_specs` | string array | Additional dirs to skip beyond built-in exclusions. |
 | `ensemble` | All content tools | boolean (default: true on OpenRouter) | Run both models in parallel. Set `false` for simple tasks to save tokens. |
 | `answer_mode` | Multi-file tools | 0, 1, or 2 | 0=per-file reports, 1=per-request sections, 2=merged into one file. |
 
@@ -74,4 +76,4 @@ Use `instructions_files_paths` to share reusable review rules, coding standards,
 
 - `scan_secrets` (boolean): Scans input files for secrets and aborts if found.
 - `redact_secrets` (boolean): Replaces secrets with `[REDACTED:LABEL]`. Prefer moving secrets to `.env` instead.
-- `use_gitignore` (boolean, `scan_folder` only): Respects `.gitignore` rules.
+- `use_gitignore` (boolean, `scan_folder` and `check_against_specs`): Respects `.gitignore` rules.

@@ -121,6 +121,10 @@ fi
 ctx_bar=$(build_bar "$pct_used" 8)
 out+=" ${dim}|${reset} "
 out+="📊 ${orange}${used_tokens}/${total_tokens}${reset} ${ctx_bar} ${cyan}${pct_used}%${reset}"
+
+# Ensure /tmp/claude exists for cache files (OpenRouter, usage API)
+mkdir -p /tmp/claude 2>/dev/null && chmod 700 /tmp/claude 2>/dev/null
+
 # ===== LLM Externalizer MCP stats (from live stats file) =====
 mcp_stats_file="/tmp/claude/llm-externalizer-stats.json"
 if [ -f "$mcp_stats_file" ]; then
@@ -207,7 +211,6 @@ else
 
     cache_file="/tmp/claude/statusline-usage-cache.json"
     cache_max_age=300  # 5 minutes — /api/oauth/usage is heavily rate-limited
-    mkdir -p /tmp/claude && chmod 700 /tmp/claude
 
     needs_refresh=true
 
