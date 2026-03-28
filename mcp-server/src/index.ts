@@ -3874,8 +3874,10 @@ function buildTools() {
         "Auto-batches if total exceeds context window.\n\n" +
         "FILE GROUPING: Organize files into named groups using ---GROUP:id--- / ---/GROUP:id--- " +
         "markers in input_files_paths. Each group is processed in COMPLETE ISOLATION (no cross-group " +
-        "LLM calls) and produces its own report file with the group ID in the filename. " +
+        "LLM calls) and produces its own SEPARATE report file with the group ID in the filename. " +
         "Output: one line per group: [group:id] /path/to/report_group-id_....md. " +
+        "WHY: Each downstream agent only reads the report for its own group, " +
+        "saving context tokens by not loading findings about files it is not responsible for. " +
         "Without markers, all files are processed together (backward compatible).\n\n" +
         "CONTEXT WARNING: Remote LLM has ZERO project context — always include brief context in instructions.\n\n" +
         "OUTPUT: Saved to .md file, returns only the file path." +
@@ -3962,7 +3964,8 @@ function buildTools() {
         "Pass input_files_paths (read from disk, language auto-detected). " +
         "Be specific in instructions.\n\n" +
         "FILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths " +
-        "to process groups in isolation. Each group produces its own report: [group:id] path.\n\n" +
+        "to process groups in isolation. Each group produces its own SEPARATE report: [group:id] path. " +
+        "WHY: downstream agents only read their own group's report, saving context tokens.\n\n" +
         "CONTEXT WARNING: Remote LLM has ZERO project context — always include brief context.\n\n" +
         "OUTPUT: Saved to .md file, returns only the file path." +
         limitsBlock(),
@@ -4191,7 +4194,8 @@ function buildTools() {
         "DEPRECATED: Use chat or code_task with answer_mode=0 and max_retries=3 instead.\n\n" +
         "Same prompt applied to EACH file separately — one report per file.\n\n" +
         "FILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths " +
-        "to process groups in isolation. Each group produces one merged report: [group:id] path.\n\n" +
+        "to process groups in isolation. Each group produces its own SEPARATE merged report: [group:id] path. " +
+        "WHY: downstream agents only read their own group's report, saving context tokens.\n\n" +
         "CONTEXT WARNING: Remote LLM has ZERO project context — include brief context.\n\n" +
         "Retry: 3 attempts for recoverable errors. Aborts on auth/payment errors or 3+ consecutive failures.",
       inputSchema: {
@@ -4515,7 +4519,8 @@ function buildTools() {
         "Check source file for broken symbol references. Auto-resolves local imports, reads dependencies, " +
         "LLM validates all symbols exist.\n\n" +
         "FILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths " +
-        "to process groups in isolation. Each group produces its own report: [group:id] path.\n\n" +
+        "to process groups in isolation. Each group produces its own SEPARATE report: [group:id] path. " +
+        "WHY: downstream agents only read their own group's report, saving context tokens.\n\n" +
         "CONTEXT WARNING: Remote LLM has ZERO project context — include brief context." +
         limitsBlock(),
       inputSchema: {
@@ -4567,7 +4572,8 @@ function buildTools() {
         "Two-phase import checker: (1) LLM extracts import paths, (2) server validates each exists on disk. " +
         "Detects broken imports after file moves/renames.\n\n" +
         "FILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths " +
-        "to process groups in isolation. Each group produces its own report: [group:id] path.\n\n" +
+        "to process groups in isolation. Each group produces its own SEPARATE report: [group:id] path. " +
+        "WHY: downstream agents only read their own group's report, saving context tokens.\n\n" +
         "CONTEXT WARNING: Remote LLM has ZERO project context — include brief context." +
         limitsBlock(),
       inputSchema: {
@@ -4628,7 +4634,8 @@ function buildTools() {
         "Accepts individual files via input_files_paths OR an entire folder via folder_path (recursive). " +
         "Files are auto-batched using FFD bin packing — the spec file is included in EVERY batch.\n\n" +
         "FILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths " +
-        "to process groups in isolation. Each group produces its own report: [group:id] path.\n\n" +
+        "to process groups in isolation. Each group produces its own SEPARATE report: [group:id] path. " +
+        "WHY: downstream agents only read their own group's report, saving context tokens.\n\n" +
         "NOTE: The LLM does NOT have the full project — some requirements may be implemented elsewhere. " +
         "Therefore only VIOLATIONS of the spec are reported (things done wrong), not MISSING features " +
         "(things not yet implemented). Everything that IS implemented must follow the spec exactly.\n\n" +
