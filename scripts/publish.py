@@ -10,15 +10,17 @@ Usage:
     uv run scripts/publish.py --dry-run    # preview without changes
 
 Steps:
-    1. Verify clean working tree
-    2. Run build check (TypeScript compiles cleanly)
-    3. Bump version in plugin.json
-    4. Update README.md badges (version, build status)
-    5. Run git-cliff to regenerate CHANGELOG.md (aborts if commits skipped)
-    6. Commit version bump + changelog + badges
-    7. Create annotated git tag (vX.Y.Z)
-    8. Push commits and tags (pre-push hook runs validation again as gate)
-    9. Create GitHub release with changelog entry as release notes
+    0. Verify clean working tree
+    1. Run build check (TypeScript compiles cleanly)
+    1b. CPV plugin validation (remote via uvx — blocks on critical/major)
+    2. Bump version in plugin.json
+    2b. Rebuild dist
+    3. Update README.md badges (version, build status)
+    4. Run git-cliff to regenerate CHANGELOG.md (aborts if commits skipped)
+    5. Commit version bump + changelog + badges
+    6. Create annotated git tag (vX.Y.Z)
+    7. Push commits and tags (pre-push hook runs validation again as gate)
+    8. Create GitHub release with changelog entry as release notes
 """
 
 import argparse
@@ -186,6 +188,42 @@ def main():
         print("ERROR: checks failed. Fix issues before publishing.", file=sys.stderr)
         sys.exit(1)
     print("  build: passing | manifest: valid")
+    print()
+
+    # ── 1b. CPV plugin validation (remote execution via uvx) ──
+    print("── 1b. CPV plugin validation ──")
+    if shutil.which("uvx"):
+        cpv_result = run(
+            [
+                "uvx",
+                "--from", "git+https://github.com/Emasoft/claude-plugins-validation",
+                "--with", "pyyaml",
+                "cpv-validate",
+                str(repo_root),
+            ],
+            capture=True,
+            check=False,
+        )
+        # CPV exit codes: 0=pass, 1=critical/major issues, 2=minor only
+        if cpv_result.returncode == 0:
+            print("  OK: CPV validation passed")
+        elif cpv_result.returncode == 2:
+            # Minor issues only — warn but don't block publish
+            print("  WARNING: CPV found minor issues (non-blocking):")
+            if cpv_result.stdout:
+                # Show last 10 lines of output (summary)
+                for line in cpv_result.stdout.strip().splitlines()[-10:]:
+                    print(f"    {line}")
+        else:
+            # Critical or major issues — block publish
+            print("ERROR: CPV validation found critical/major issues:", file=sys.stderr)
+            if cpv_result.stdout:
+                print(cpv_result.stdout, file=sys.stderr)
+            if cpv_result.stderr:
+                print(cpv_result.stderr, file=sys.stderr)
+            sys.exit(1)
+    else:
+        print("  SKIP: 'uvx' not found on PATH (install uv for CPV validation)")
     print()
 
     # ── 2. Bump version ──
