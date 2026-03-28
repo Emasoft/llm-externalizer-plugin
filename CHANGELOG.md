@@ -1,6 +1,15 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.5.3] - 2026-03-28
+
+### Fixed
+
+- Use numbered checklist, remove colon after 'Trigger with', comma-separated TOC
+- Resolve remaining CPV issues — numbered steps, TOC format, description format
+- Resolve all CPV validation issues (6 MINOR + 6 WARNING)
+- CPV must pass with 0 issues to allow publish
+
 ## [3.5.2] - 2026-03-28
 
 ### Added
