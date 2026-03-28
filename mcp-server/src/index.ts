@@ -2683,7 +2683,7 @@ const OUTPUT_DIR =
 function saveResponse(
   toolName: string,
   responseText: string,
-  meta: { model: string; task?: string; inputFile?: string },
+  meta: { model: string; task?: string; inputFile?: string; groupId?: string },
   overrideFilename?: string,
 ): string {
   mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -2693,7 +2693,9 @@ function saveResponse(
   const ts = now.toISOString().replace(/[:.]/g, "-").slice(0, 23);
   // Add short UUID suffix to prevent timestamp collisions on parallel calls
   const shortId = randomUUID().slice(0, 6);
-  const filename = overrideFilename || `${toolName}_${ts}_${shortId}.md`;
+  // Include group ID in filename when processing grouped files
+  const groupSuffix = meta.groupId ? `_group-${meta.groupId.replace(/[^a-zA-Z0-9_-]/g, "_")}` : "";
+  const filename = overrideFilename || `${toolName}${groupSuffix}_${ts}_${shortId}.md`;
   const filepath = join(OUTPUT_DIR, filename);
 
   const lines: string[] = [
@@ -2703,6 +2705,7 @@ function saveResponse(
     `- **Model**: \`${meta.model}\``,
     `- **Timestamp**: ${now.toISOString()}`,
   ];
+  if (meta.groupId) lines.push(`- **Group**: \`${meta.groupId}\``);
   if (meta.inputFile) lines.push(`- **Input file**: \`${meta.inputFile}\``);
   if (meta.task) lines.push(`- **Task**: ${meta.task}`);
   lines.push("", "---", "", responseText);
@@ -2812,6 +2815,102 @@ function normalizePaths(raw: string | string[] | undefined | null): string[] {
   if (!raw) return [];
   const arr = Array.isArray(raw) ? raw : [raw];
   return arr.filter((p): p is string => typeof p === "string" && p.length > 0);
+}
+
+// ── File grouping support ──────────────────────────────────────────
+// Callers can organize files into named groups using delimiter strings
+// in the input_files_paths array. Each group is processed in isolation
+// (no cross-group LLM calls) and produces its own report file.
+//
+// Syntax:
+//   "---GROUP:<id>---"   → starts group <id>
+//   "---/GROUP:<id>---"  → ends group <id> (optional: next header or end-of-array also closes)
+//
+// Files outside any group markers are collected into a single unnamed group.
+// If no markers are present, the entire array is one unnamed group (backward compat).
+
+const GROUP_HEADER_RE = /^---GROUP:(.+)---$/;
+const GROUP_FOOTER_RE = /^---\/GROUP:(.+)---$/;
+
+interface FileGroup {
+  /** Group identifier. Empty string for ungrouped files (backward compat). */
+  id: string;
+  /** Absolute file paths in this group. */
+  files: string[];
+}
+
+/**
+ * Parse group markers from a normalized file path array.
+ * Returns an array of FileGroup objects. If no markers are present,
+ * returns a single group with id="" containing all files (backward compat).
+ */
+function parseFileGroups(paths: string[]): FileGroup[] {
+  // Quick check: any markers at all?
+  const hasMarkers = paths.some(
+    (p) => GROUP_HEADER_RE.test(p) || GROUP_FOOTER_RE.test(p),
+  );
+  if (!hasMarkers) {
+    // No markers — backward compatible: one unnamed group with all files
+    return paths.length > 0 ? [{ id: "", files: paths }] : [];
+  }
+
+  const groups: FileGroup[] = [];
+  // Collect ungrouped files (before first header, between footer and next header)
+  let ungrouped: string[] = [];
+  let currentGroup: FileGroup | null = null;
+
+  for (const entry of paths) {
+    const headerMatch = entry.match(GROUP_HEADER_RE);
+    if (headerMatch) {
+      // Close any open group
+      if (currentGroup && currentGroup.files.length > 0) {
+        groups.push(currentGroup);
+      }
+      // Flush ungrouped files
+      if (ungrouped.length > 0) {
+        groups.push({ id: "", files: ungrouped });
+        ungrouped = [];
+      }
+      currentGroup = { id: headerMatch[1], files: [] };
+      continue;
+    }
+
+    const footerMatch = entry.match(GROUP_FOOTER_RE);
+    if (footerMatch) {
+      // Close matching group
+      if (currentGroup && currentGroup.files.length > 0) {
+        groups.push(currentGroup);
+      }
+      currentGroup = null;
+      continue;
+    }
+
+    // Regular file path
+    if (currentGroup) {
+      currentGroup.files.push(entry);
+    } else {
+      ungrouped.push(entry);
+    }
+  }
+
+  // Close any remaining open group
+  if (currentGroup && currentGroup.files.length > 0) {
+    groups.push(currentGroup);
+  }
+  // Flush remaining ungrouped files
+  if (ungrouped.length > 0) {
+    groups.push({ id: "", files: ungrouped });
+  }
+
+  return groups;
+}
+
+/**
+ * Check if file groups contain named groups (id !== "").
+ * If true, the tool should process each group independently.
+ */
+function hasNamedGroups(groups: FileGroup[]): boolean {
+  return groups.some((g) => g.id !== "");
 }
 
 // fileIndex disambiguates files with the same basename processed in the same millisecond
@@ -4596,133 +4695,139 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return { content: [{ type: "text", text: savedPath }] };
         }
 
-        // ── Mode 0: one output file per input file (separate LLM calls) ──
-        if (chatMode === 0) {
-          const perFileResults: string[] = [];
-          for (const fp of chatFilePaths) {
-            const result = await processFileCheck(fp, chatPrompt, {
-              maxTokens,
-              redact: chatRedact,
-              onProgress,
-              ensemble: useEnsemble,
-            });
-            perFileResults.push(
-              result.success && result.reportPath
-                ? result.reportPath
-                : `FAILED: ${fp} — ${result.error}`,
-            );
-          }
-          return {
-            content: [{ type: "text", text: perFileResults.join("\n") }],
-          };
-        }
+        // ── Group-aware processing ──
+        // If input_files_paths contains group markers (---GROUP:id---),
+        // process each group in isolation and produce one report per group.
+        const chatFileGroups = parseFileGroups(chatFilePaths);
+        const chatIsGrouped = hasNamedGroups(chatFileGroups);
 
-        // Group files by configurable payload budget for auto-batching
-        // H1+M2: Use actual byte length of prompt+system (not token estimate)
-        const chatPromptBytes =
-          Buffer.byteLength(promptBase, "utf-8") +
-          (system ? Buffer.byteLength(system, "utf-8") : 0);
-        const { groups, autoBatched, skipped: chatSkipped } = readAndGroupFiles(
-          chatFilePaths,
-          chatPromptBytes,
-          chatRedact,
-          chatBudgetBytes,
-        );
+        // Process each group (or single unnamed group for backward compat)
+        const allGroupReports: string[] = [];
+        for (const fg of chatFileGroups) {
+          const fgPaths = fg.files;
+          if (fgPaths.length === 0) continue;
+          const fgId = fg.id; // empty string for unnamed/backward-compat
 
-        // ── Mode 1: one output file per LLM request, with per-file sections ──
-        // ── Mode 2: all batches merged into one file ──
-        const batchResults: string[] = [];
-        const batchOutputPaths: string[] = [];
-        // Report files skipped due to size
-        if (chatSkipped.length > 0) {
-          const skipNote = `SKIPPED (exceeds 800 KB payload budget): ${chatSkipped.length} file(s)\n${chatSkipped.map((f) => `  - ${f}`).join("\n")}`;
-          batchResults.push(skipNote);
-        }
-        for (let gi = 0; gi < groups.length; gi++) {
-          const group = groups[gi];
-          let userContent = promptBase;
-          // For mode 1, add per-file section instruction
-          if (chatMode === 1) {
-            const groupPaths = group.map((fd) => fd.path);
-            userContent += buildPerFileSectionPrompt(groupPaths);
-          }
-          // Append fenced file content blocks
-          for (const fd of group) {
-            userContent += `\n\n${fd.block}`;
-          }
-          const messages: ChatMessage[] = [];
-          if (system) messages.push({ role: "system", content: system });
-          messages.push({ role: "user", content: userContent });
-          const resp = await ensembleStreaming(
-            messages,
-            { temperature, maxTokens, onProgress },
-            useEnsemble,
-          );
-          const footer = formatFooter(resp, "chat", group[0]?.path);
-          if (resp.content.trim().length > 0) {
-            if (chatMode === 1) {
-              // Save each batch as its own file
-              const batchPath = saveResponse("chat", resp.content + footer, {
-                model: resp.model,
-                task: chatPrompt,
-                inputFile: group[0]?.path,
+          // ── Mode 0: one output file per input file (separate LLM calls) ──
+          if (chatMode === 0 && !chatIsGrouped) {
+            const perFileResults: string[] = [];
+            for (const fp of fgPaths) {
+              const result = await processFileCheck(fp, chatPrompt, {
+                maxTokens,
+                redact: chatRedact,
+                onProgress,
+                ensemble: useEnsemble,
               });
-              batchOutputPaths.push(batchPath);
-            } else {
-              // Mode 2: collect for merging
-              if (autoBatched) {
-                const fileList = group.map((fd) => fd.path).join(", ");
-                batchResults.push(
-                  `## Batch ${gi + 1}/${groups.length}\n\nFiles: ${fileList}\n\n${resp.content}${footer}`,
-                );
+              perFileResults.push(
+                result.success && result.reportPath
+                  ? result.reportPath
+                  : `FAILED: ${fp} — ${result.error}`,
+              );
+            }
+            return {
+              content: [{ type: "text", text: perFileResults.join("\n") }],
+            };
+          }
+
+          // Group files by configurable payload budget for auto-batching
+          const chatPromptBytes =
+            Buffer.byteLength(promptBase, "utf-8") +
+            (system ? Buffer.byteLength(system, "utf-8") : 0);
+          const { groups, autoBatched, skipped: chatSkipped } = readAndGroupFiles(
+            fgPaths,
+            chatPromptBytes,
+            chatRedact,
+            chatBudgetBytes,
+          );
+
+          // Collect results for this file group (merged mode)
+          const batchResults: string[] = [];
+          const batchOutputPaths: string[] = [];
+          if (chatSkipped.length > 0) {
+            const skipNote = `SKIPPED (exceeds 800 KB payload budget): ${chatSkipped.length} file(s)\n${chatSkipped.map((f) => `  - ${f}`).join("\n")}`;
+            batchResults.push(skipNote);
+          }
+          for (let gi = 0; gi < groups.length; gi++) {
+            const group = groups[gi];
+            let userContent = promptBase;
+            if (chatMode === 1 && !chatIsGrouped) {
+              const groupPaths = group.map((fd) => fd.path);
+              userContent += buildPerFileSectionPrompt(groupPaths);
+            }
+            for (const fd of group) {
+              userContent += `\n\n${fd.block}`;
+            }
+            const messages: ChatMessage[] = [];
+            if (system) messages.push({ role: "system", content: system });
+            messages.push({ role: "user", content: userContent });
+            const resp = await ensembleStreaming(
+              messages,
+              { temperature, maxTokens, onProgress },
+              useEnsemble,
+            );
+            const footer = formatFooter(resp, "chat", group[0]?.path);
+            if (resp.content.trim().length > 0) {
+              if (chatMode === 1 && !chatIsGrouped) {
+                const batchPath = saveResponse("chat", resp.content + footer, {
+                  model: resp.model,
+                  task: chatPrompt,
+                  inputFile: group[0]?.path,
+                });
+                batchOutputPaths.push(batchPath);
               } else {
-                batchResults.push(resp.content + footer);
+                if (autoBatched) {
+                  const fileList = group.map((fd) => fd.path).join(", ");
+                  batchResults.push(
+                    `## Batch ${gi + 1}/${groups.length}\n\nFiles: ${fileList}\n\n${resp.content}${footer}`,
+                  );
+                } else {
+                  batchResults.push(resp.content + footer);
+                }
               }
             }
           }
-        }
 
-        if (chatMode === 1) {
-          if (batchOutputPaths.length === 0) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "FAILED: LLM returned empty response for all batches.",
-                },
-              ],
-              isError: true,
-            };
+          // Mode 1 (non-grouped only): return per-batch output paths
+          if (chatMode === 1 && !chatIsGrouped) {
+            if (batchOutputPaths.length === 0) {
+              return {
+                content: [{ type: "text", text: "FAILED: LLM returned empty response for all batches." }],
+                isError: true,
+              };
+            }
+            return { content: [{ type: "text", text: batchOutputPaths.join("\n") }] };
           }
-          return {
-            content: [{ type: "text", text: batchOutputPaths.join("\n") }],
-          };
+
+          // Mode 2 (or grouped): merge batch results into one report for this file group
+          if (batchResults.length === 0) continue; // skip empty groups
+          const finalContent = batchResults.join("\n\n---\n\n");
+          const chatMergedModel =
+            useEnsemble && activeResolved?.secondModel
+              ? `ensemble: ${currentBackend.model} + ${activeResolved.secondModel}`
+              : currentBackend.model;
+          const savedPath = saveResponse("chat", finalContent, {
+            model: chatMergedModel,
+            task: chatPrompt,
+            inputFile: fgPaths[0],
+            groupId: fgId || undefined,
+          });
+
+          if (chatIsGrouped) {
+            allGroupReports.push(`[group:${fgId}] ${savedPath}`);
+          } else {
+            // Single unnamed group — return directly (backward compat)
+            return { content: [{ type: "text", text: savedPath }] };
+          }
         }
 
-        // Mode 2: merge all batch results
-        if (batchResults.length === 0) {
+        // Grouped mode: return all per-group report paths
+        if (allGroupReports.length === 0) {
           return {
-            content: [
-              {
-                type: "text",
-                text: "FAILED: LLM returned empty response for all batches.",
-              },
-            ],
+            content: [{ type: "text", text: "FAILED: LLM returned empty response for all groups." }],
             isError: true,
           };
         }
-        const finalContent = batchResults.join("\n\n---\n\n");
-        // Use ensemble model label when multiple models were used, otherwise primary model
-        const chatMergedModel =
-          useEnsemble && activeResolved?.secondModel
-            ? `ensemble: ${currentBackend.model} + ${activeResolved.secondModel}`
-            : currentBackend.model;
-        const savedPath = saveResponse("chat", finalContent, {
-          model: chatMergedModel,
-          task: chatPrompt,
-          inputFile: chatFilePaths[0],
-        });
-        return { content: [{ type: "text", text: savedPath }] };
+        return { content: [{ type: "text", text: allGroupReports.join("\n") }] };
       }
 
       case "code_task": {
@@ -4794,7 +4899,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         // Single file path — delegate to processFileCheck (existing optimized path)
-        if (ctFilePaths.length === 1 && !ctInputContent) {
+        if (ctFilePaths.length === 1 && !ctInputContent && !GROUP_HEADER_RE.test(ctFilePaths[0])) {
           const result = await processFileCheck(ctFilePaths[0], ctTask, {
             language,
             maxTokens: resolveDefaultMaxTokens(),
@@ -4881,132 +4986,118 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return { content: [{ type: "text", text: savedPath }] };
         }
 
-        // ── Mode 0: one output file per input file (separate LLM calls) ──
-        if (ctMode === 0) {
-          const perFileResults: string[] = [];
-          for (const fp of ctFilePaths) {
-            const result = await processFileCheck(fp, ctTask, {
-              language,
-              maxTokens: resolveDefaultMaxTokens(),
-              onProgress,
-              ensemble: ctUseEnsemble,
-            });
-            perFileResults.push(
-              result.success && result.reportPath
-                ? result.reportPath
-                : `FAILED: ${fp} — ${result.error}`,
-            );
-          }
-          return {
-            content: [{ type: "text", text: perFileResults.join("\n") }],
-          };
-        }
+        // ── Group-aware processing ──
+        const ctFileGroups = parseFileGroups(ctFilePaths);
+        const ctIsGrouped = hasNamedGroups(ctFileGroups);
+        const ctAllGroupReports: string[] = [];
 
-        // Group files by configurable payload budget for auto-batching
-        // H1+M2: Use actual byte length (not token estimate)
-        const ctPromptBytes =
-          Buffer.byteLength(ctPromptBase, "utf-8") +
-          Buffer.byteLength(`Expert ${lang} developer...`, "utf-8");
-        const { groups: ctGroups, autoBatched: ctAutoBatched, skipped: ctSkipped } =
-          readAndGroupFiles(ctFilePaths, ctPromptBytes, ctRedact, ctBudgetBytes);
+        for (const fg of ctFileGroups) {
+          const fgPaths = fg.files;
+          if (fgPaths.length === 0) continue;
+          const fgId = fg.id;
 
-        // ── Mode 1: one output file per LLM request, with per-file sections ──
-        // ── Mode 2: all batches merged into one file ──
-        const ctBatchResults: string[] = [];
-        const ctBatchPaths: string[] = [];
-        // Report files skipped due to size
-        if (ctSkipped.length > 0) {
-          const skipNote = `SKIPPED (exceeds 800 KB payload budget): ${ctSkipped.length} file(s)\n${ctSkipped.map((f) => `  - ${f}`).join("\n")}`;
-          ctBatchResults.push(skipNote);
-        }
-        for (let gi = 0; gi < ctGroups.length; gi++) {
-          const group = ctGroups[gi];
-          let userContent = ctPromptBase;
-          if (ctMode === 1)
-            userContent += buildPerFileSectionPrompt(
-              group.map((fd) => fd.path),
-            );
-          for (const fd of group) {
-            userContent += `\n\n${fd.block}`;
-          }
-          const codeMessages: ChatMessage[] = [
-            {
-              role: "system",
-              content: `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.\nRULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Reference files by their labeled path in the code fence header. Be specific and actionable.`,
-            },
-            { role: "user", content: userContent },
-          ];
-          const codeResp = await ensembleStreaming(
-            codeMessages,
-            {
-              temperature: 0.2,
-              maxTokens: resolveDefaultMaxTokens(),
-              onProgress,
-            },
-            ctUseEnsemble,
-          );
-          const codeFooter = formatFooter(
-            codeResp,
-            "code_task",
-            group[0]?.path,
-          );
-          if (codeResp.content.trim().length > 0) {
-            if (ctMode === 1) {
-              ctBatchPaths.push(
-                saveResponse("code_task", codeResp.content + codeFooter, {
-                  model: codeResp.model,
-                  task: ctTask,
-                  inputFile: group[0]?.path,
-                }),
-              );
-            } else {
-              ctBatchResults.push(
-                ctAutoBatched
-                  ? `## Batch ${gi + 1}/${ctGroups.length}\n\nFiles: ${group.map((fd) => fd.path).join(", ")}\n\n${codeResp.content}${codeFooter}`
-                  : codeResp.content + codeFooter,
+          // Mode 0 (non-grouped only): one output per input file
+          if (ctMode === 0 && !ctIsGrouped) {
+            const perFileResults: string[] = [];
+            for (const fp of fgPaths) {
+              const result = await processFileCheck(fp, ctTask, {
+                language,
+                maxTokens: resolveDefaultMaxTokens(),
+                onProgress,
+                ensemble: ctUseEnsemble,
+              });
+              perFileResults.push(
+                result.success && result.reportPath
+                  ? result.reportPath
+                  : `FAILED: ${fp} — ${result.error}`,
               );
             }
+            return {
+              content: [{ type: "text", text: perFileResults.join("\n") }],
+            };
+          }
+
+          // Group files by payload budget for auto-batching
+          const ctPromptBytes =
+            Buffer.byteLength(ctPromptBase, "utf-8") +
+            Buffer.byteLength(`Expert ${lang} developer...`, "utf-8");
+          const { groups: ctGroups, autoBatched: ctAutoBatched, skipped: ctSkipped } =
+            readAndGroupFiles(fgPaths, ctPromptBytes, ctRedact, ctBudgetBytes);
+
+          const ctBatchResults: string[] = [];
+          const ctBatchPaths: string[] = [];
+          if (ctSkipped.length > 0) {
+            ctBatchResults.push(`SKIPPED (exceeds payload budget): ${ctSkipped.length} file(s)\n${ctSkipped.map((f) => `  - ${f}`).join("\n")}`);
+          }
+          for (let gi = 0; gi < ctGroups.length; gi++) {
+            const group = ctGroups[gi];
+            let userContent = ctPromptBase;
+            if (ctMode === 1 && !ctIsGrouped)
+              userContent += buildPerFileSectionPrompt(group.map((fd) => fd.path));
+            for (const fd of group) {
+              userContent += `\n\n${fd.block}`;
+            }
+            const codeMessages: ChatMessage[] = [
+              {
+                role: "system",
+                content: `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.\nRULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Reference files by their labeled path in the code fence header. Be specific and actionable.`,
+              },
+              { role: "user", content: userContent },
+            ];
+            const codeResp = await ensembleStreaming(
+              codeMessages,
+              { temperature: 0.2, maxTokens: resolveDefaultMaxTokens(), onProgress },
+              ctUseEnsemble,
+            );
+            const codeFooter = formatFooter(codeResp, "code_task", group[0]?.path);
+            if (codeResp.content.trim().length > 0) {
+              if (ctMode === 1 && !ctIsGrouped) {
+                ctBatchPaths.push(
+                  saveResponse("code_task", codeResp.content + codeFooter, {
+                    model: codeResp.model, task: ctTask, inputFile: group[0]?.path,
+                  }),
+                );
+              } else {
+                ctBatchResults.push(
+                  ctAutoBatched
+                    ? `## Batch ${gi + 1}/${ctGroups.length}\n\nFiles: ${group.map((fd) => fd.path).join(", ")}\n\n${codeResp.content}${codeFooter}`
+                    : codeResp.content + codeFooter,
+                );
+              }
+            }
+          }
+
+          // Mode 1 (non-grouped): return per-batch paths
+          if (ctMode === 1 && !ctIsGrouped) {
+            return ctBatchPaths.length > 0
+              ? { content: [{ type: "text", text: ctBatchPaths.join("\n") }] }
+              : { content: [{ type: "text", text: "FAILED: LLM returned empty response for all batches." }], isError: true };
+          }
+
+          // Merge batch results into one report for this file group
+          if (ctBatchResults.length === 0) continue;
+          const ctFinalContent = ctBatchResults.join("\n\n---\n\n");
+          const ctMergedModel =
+            ctUseEnsemble && activeResolved?.secondModel
+              ? `ensemble: ${currentBackend.model} + ${activeResolved.secondModel}`
+              : currentBackend.model;
+          const savedPath = saveResponse("code_task", ctFinalContent, {
+            model: ctMergedModel, task: ctTask, inputFile: fgPaths[0],
+            groupId: fgId || undefined,
+          });
+
+          if (ctIsGrouped) {
+            ctAllGroupReports.push(`[group:${fgId}] ${savedPath}`);
+          } else {
+            return { content: [{ type: "text", text: savedPath }] };
           }
         }
 
-        if (ctMode === 1) {
-          return ctBatchPaths.length > 0
-            ? { content: [{ type: "text", text: ctBatchPaths.join("\n") }] }
-            : {
-                content: [
-                  {
-                    type: "text",
-                    text: "FAILED: LLM returned empty response for all batches.",
-                  },
-                ],
-                isError: true,
-              };
+        // Grouped: return all per-group report paths
+        if (ctAllGroupReports.length === 0) {
+          return { content: [{ type: "text", text: "FAILED: LLM returned empty response for all groups." }], isError: true };
         }
-
-        // Mode 2: merge all batch results
-        if (ctBatchResults.length === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: "FAILED: LLM returned empty response for all batches.",
-              },
-            ],
-            isError: true,
-          };
-        }
-        const ctFinalContent = ctBatchResults.join("\n\n---\n\n");
-        // Use ensemble model label when multiple models were used
-        const ctMergedModel =
-          ctUseEnsemble && activeResolved?.secondModel
-            ? `ensemble: ${currentBackend.model} + ${activeResolved.secondModel}`
-            : currentBackend.model;
-        const savedPath = saveResponse("code_task", ctFinalContent, {
-          model: ctMergedModel,
-          task: ctTask,
-          inputFile: ctFilePaths[0],
-        });
-        return { content: [{ type: "text", text: savedPath }] };
+        return { content: [{ type: "text", text: ctAllGroupReports.join("\n") }] };
       }
 
       case "fix_code":
@@ -5627,12 +5718,62 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // scan_secrets: abort if any secrets are found in input files
         if (bcScan) {
-          const scanResult = scanFilesForSecrets(uniqueFiles);
-          if (scanResult.found)
-            return {
-              content: [{ type: "text", text: scanResult.report }],
-              isError: true,
-            };
+          // Filter out group markers before scanning
+          const realFiles = uniqueFiles.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
+          if (realFiles.length > 0) {
+            const scanResult = scanFilesForSecrets(realFiles);
+            if (scanResult.found)
+              return {
+                content: [{ type: "text", text: scanResult.report }],
+                isError: true,
+              };
+          }
+        }
+
+        // ── Group-aware: if groups present, process each independently ──
+        const bcFileGroups = parseFileGroups(uniqueFiles);
+        if (hasNamedGroups(bcFileGroups)) {
+          const bcGroupReports: string[] = [];
+          for (const fg of bcFileGroups) {
+            if (fg.files.length === 0) continue;
+            const gid = fg.id || "ungrouped";
+            const gBatchId = randomUUID();
+            const gTask = resolvePrompt(bcInstructions, bcInstructionsFilesPaths).trim() ||
+              "Find all bugs, type errors, logic errors, security vulnerabilities, and potential runtime failures.";
+            const gConcurrency = await getMaxConcurrent();
+            const gTasks = fg.files.map((filePath, idx) => async () => {
+              return processFileCheck(filePath, gTask, {
+                maxTokens: resolveDefaultMaxTokens(),
+                batchId: gBatchId, fileIndex: idx,
+                redact: bcRedact, onProgress, ensemble: bcUseEnsemble, maxBytes: bcBudgetBytes,
+              });
+            });
+            const gResults = await parallelLimit(gTasks, gConcurrency);
+            const gSucceeded = gResults.filter((r) => r.success);
+            // Merge into one report per group
+            const reportSections: string[] = [];
+            for (const r of gSucceeded) {
+              const content = r.reportPath && existsSync(r.reportPath)
+                ? readFileSync(r.reportPath, "utf-8") : "";
+              reportSections.push(`## File: ${r.filePath}\n\n${content}`);
+            }
+            const gFailed = gResults.filter((r) => !r.success);
+            if (gFailed.length > 0) {
+              reportSections.push(`## FAILED (${gFailed.length})\n\n${gFailed.map((r) => `- ${r.filePath}: ${r.error}`).join("\n")}`);
+            }
+            if (reportSections.length > 0) {
+              const mergedContent = reportSections.join("\n\n---\n\n");
+              const mergedPath = saveResponse("batch_check", mergedContent, {
+                model: currentBackend.model, task: gTask,
+                inputFile: fg.files[0], groupId: gid,
+              });
+              bcGroupReports.push(`[group:${gid}] ${mergedPath}`);
+            }
+          }
+          if (bcGroupReports.length === 0) {
+            return { content: [{ type: "text", text: "FAILED: No results for any group." }], isError: true };
+          }
+          return { content: [{ type: "text", text: bcGroupReports.join("\n") }] };
         }
 
         const batchId = randomUUID();
@@ -7267,8 +7408,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const crUseEnsemble = currentBackend.type === "openrouter";
         const crBudgetBytes = (crMaxPayloadKb ?? 400) * 1024;
 
-        const crFilePaths = [...new Set(normalizePaths(crInputPathsRaw))];
-        if (crFilePaths.length === 0) {
+        const crFilePathsAll = [...new Set(normalizePaths(crInputPathsRaw))];
+        if (crFilePathsAll.length === 0) {
           return {
             content: [
               { type: "text", text: "FAILED: input_files_paths is required." },
@@ -7279,12 +7420,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // scan_secrets: abort if any secrets are found
         if (crScan) {
-          const scanResult = scanFilesForSecrets(crFilePaths);
-          if (scanResult.found)
-            return {
-              content: [{ type: "text", text: scanResult.report }],
-              isError: true,
-            };
+          const crRealFiles = crFilePathsAll.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
+          if (crRealFiles.length > 0) {
+            const scanResult = scanFilesForSecrets(crRealFiles);
+            if (scanResult.found)
+              return {
+                content: [{ type: "text", text: scanResult.report }],
+                isError: true,
+              };
+          }
         }
 
         const crPrompt = resolvePrompt(
@@ -7293,6 +7437,50 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         );
         const crMode = resolveAnswerMode(crRawMode, 2);
 
+        // ── Group-aware processing ──
+        const crFileGroups = parseFileGroups(crFilePathsAll);
+        const crIsGrouped = hasNamedGroups(crFileGroups);
+
+        if (crIsGrouped) {
+          const crGroupReports: string[] = [];
+          for (const fg of crFileGroups) {
+            if (fg.files.length === 0) continue;
+            const gid = fg.id || "ungrouped";
+            const gReports: string[] = [];
+            for (const filePath of fg.files) {
+              if (!existsSync(filePath)) { gReports.push(`## ${filePath}\n\nFAILED: File not found.`); continue; }
+              const src = readFileSync(filePath, "utf-8");
+              const lang = detectLang(filePath);
+              const deps = extractLocalImports(filePath, src);
+              const depBlocks: string[] = [];
+              for (const dp of deps) { try { depBlocks.push(readFileAsCodeBlock(dp, undefined, crRedact, crBudgetBytes)); } catch { /* skip */ } }
+              const srcBlock = readFileAsCodeBlock(filePath, undefined, crRedact, crBudgetBytes);
+              const msgs: ChatMessage[] = [
+                { role: "system", content: `Expert ${lang} developer. Check the source file for broken or outdated references to functions, variables, constants, types, and classes. Cross-reference all symbols against the dependency files provided. Report each broken reference with: the symbol name, the function/class/method where it is used (never by line number), and what is wrong. Reference files by their labeled path in the code fence header. If all references are valid, say so.` },
+                { role: "user", content: `${crPrompt ? crPrompt + "\n\n" : ""}Check this file for broken code references:\n\n## Source File\n\n${srcBlock}\n\n${depBlocks.length > 0 ? `## Local Dependencies (${deps.length} files)\n\n${depBlocks.join("\n\n")}` : "## No local dependencies resolved."}` },
+              ];
+              const resp = await ensembleStreaming(msgs, { temperature: 0.1, maxTokens: resolveDefaultMaxTokens(), onProgress }, crUseEnsemble, src.split("\n").length);
+              const footer = formatFooter(resp, "check_references", filePath);
+              if (resp.content.trim()) {
+                const depInfo = deps.length > 0 ? `\n\nDependencies checked: ${deps.map((p) => `\`${p}\``).join(", ")}` : "";
+                gReports.push(`## File: ${filePath}${depInfo}\n\n${resp.content}${footer}`);
+              }
+            }
+            if (gReports.length > 0) {
+              const mergedPath = saveResponse("check_references", gReports.join("\n\n---\n\n"), {
+                model: currentBackend.model, task: "Check references", inputFile: fg.files[0], groupId: gid,
+              });
+              crGroupReports.push(`[group:${gid}] ${mergedPath}`);
+            }
+          }
+          if (crGroupReports.length === 0) {
+            return { content: [{ type: "text", text: "FAILED: No results for any group." }], isError: true };
+          }
+          return { content: [{ type: "text", text: crGroupReports.join("\n") }] };
+        }
+
+        // Non-grouped: existing behavior
+        const crFilePaths = crFilePathsAll;
         const crReports: string[] = [];
         const crReportPaths: string[] = [];
 
@@ -7432,8 +7620,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const _ciUseEnsemble = currentBackend.type === "openrouter";
         const ciBudgetBytes = (ciMaxPayloadKb ?? 400) * 1024;
 
-        const ciFilePaths = [...new Set(normalizePaths(ciInputPathsRaw))];
-        if (ciFilePaths.length === 0) {
+        const ciFilePathsAll = [...new Set(normalizePaths(ciInputPathsRaw))];
+        if (ciFilePathsAll.length === 0) {
           return {
             content: [
               { type: "text", text: "FAILED: input_files_paths is required." },
@@ -7444,12 +7632,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // scan_secrets: abort if any secrets are found
         if (ciScan) {
-          const scanResult = scanFilesForSecrets(ciFilePaths);
-          if (scanResult.found)
-            return {
-              content: [{ type: "text", text: scanResult.report }],
-              isError: true,
-            };
+          const ciRealFiles = ciFilePathsAll.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
+          if (ciRealFiles.length > 0) {
+            const scanResult = scanFilesForSecrets(ciRealFiles);
+            if (scanResult.found)
+              return {
+                content: [{ type: "text", text: scanResult.report }],
+                isError: true,
+              };
+          }
         }
 
         const ciPrompt = resolvePrompt(
@@ -7458,6 +7649,60 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         );
         const ciMode = resolveAnswerMode(ciRawMode, 2);
 
+        // ── Group-aware processing ──
+        const ciFileGroups = parseFileGroups(ciFilePathsAll);
+        if (hasNamedGroups(ciFileGroups)) {
+          const ciGroupReports: string[] = [];
+          for (const fg of ciFileGroups) {
+            if (fg.files.length === 0) continue;
+            const gid = fg.id || "ungrouped";
+            const gReports: string[] = [];
+            for (const filePath of fg.files) {
+              if (!existsSync(filePath)) { gReports.push(`## ${filePath}\n\nFAILED: File not found.`); continue; }
+              const ciLang = detectLang(filePath);
+              const fileDir = dirname(filePath);
+              const ciResolveBase = project_root || fileDir;
+              const extractMessages: ChatMessage[] = [
+                { role: "system", content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path in the code fence header — reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.` },
+                { role: "user", content: `${ciPrompt ? ciPrompt + "\n\n" : ""}Extract all import and file references from:\n\n${readFileAsCodeBlock(filePath, undefined, ciRedact, ciBudgetBytes)}` },
+              ];
+              const extractResp = await chatCompletionJSON(extractMessages, { temperature: 0, maxTokens: resolveDefaultMaxTokens(), jsonSchema: EXTRACT_PATHS_SCHEMA, onProgress });
+              recordUsage(extractResp.usage);
+              logRequest({ tool: "check_imports", model: extractResp.model, status: "success", usage: extractResp.usage, filePath });
+              const rawPaths = extractResp.parsed.paths;
+              const extractedPaths: string[] = Array.isArray(rawPaths) ? rawPaths.filter((p): p is string => typeof p === "string") : [];
+              const validPaths: string[] = []; const brokenPaths: string[] = []; const packageImports: string[] = [];
+              for (const importPath of extractedPaths) {
+                if (!importPath.startsWith(".") && !importPath.startsWith("/")) { packageImports.push(importPath); continue; }
+                const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
+                const resolvedBase = importPath.startsWith("/") ? importPath : join(resolveDir, importPath);
+                let found = existsSync(resolvedBase) && statSync(resolvedBase).isFile();
+                if (!found && !extname(resolvedBase)) {
+                  for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".json"]) { if (existsSync(resolvedBase + ext)) { found = true; break; } }
+                  if (!found) { for (const ext of [".ts", ".tsx", ".js", ".jsx"]) { if (existsSync(join(resolvedBase, `index${ext}`))) { found = true; break; } } }
+                }
+                (found ? validPaths : brokenPaths).push(importPath);
+              }
+              const lines = [`# Import Check: ${filePath}`, "", `**Total**: ${extractedPaths.length}, **Valid**: ${validPaths.length}, **BROKEN**: ${brokenPaths.length}, **Packages**: ${packageImports.length}`, ""];
+              if (brokenPaths.length > 0) lines.push("## BROKEN IMPORTS", "", ...brokenPaths.map((p) => `- \`${p}\``), "");
+              if (validPaths.length > 0) lines.push("## Valid", "", ...validPaths.map((p) => `- \`${p}\``), "");
+              gReports.push(lines.join("\n"));
+            }
+            if (gReports.length > 0) {
+              const mergedPath = saveResponse("check_imports", gReports.join("\n\n---\n\n"), {
+                model: currentBackend.model, task: "Check imports", inputFile: fg.files[0], groupId: gid,
+              });
+              ciGroupReports.push(`[group:${gid}] ${mergedPath}`);
+            }
+          }
+          if (ciGroupReports.length === 0) {
+            return { content: [{ type: "text", text: "No reports generated." }], isError: true };
+          }
+          return { content: [{ type: "text", text: ciGroupReports.join("\n") }] };
+        }
+
+        // Non-grouped: existing behavior
+        const ciFilePaths = ciFilePathsAll;
         const ciReports: string[] = [];
         const ciReportPaths: string[] = [];
 
@@ -7793,75 +8038,94 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const csExtraBytes = Buffer.byteLength(csExtraInstructions, "utf-8");
         const csPromptBytes = csSpecBytes + csSystemBytes + csExtraBytes;
 
-        // Group source files using FFD bin packing
-        const { groups: csGroups, autoBatched: csAutoBatched, skipped: csSkipped } =
-          readAndGroupFiles(csFilePaths, csPromptBytes, csRedact, csBudgetBytes);
+        // ── Group-aware processing (only for input_files_paths, not folder_path) ──
+        const csFileGroups = csFolderPath ? [{ id: "", files: csFilePaths }] : parseFileGroups(csFilePaths);
+        const csIsGrouped = hasNamedGroups(csFileGroups);
+        const csAllGroupReports: string[] = [];
 
-        const csBatchResults: string[] = [];
-        if (csSkipped.length > 0) {
-          csBatchResults.push(
-            `SKIPPED (exceeds ${csBudgetBytes / 1024} KB payload budget): ${csSkipped.length} file(s)\n` +
-            csSkipped.map((f) => `  - ${f}`).join("\n"),
-          );
-        }
+        for (const fg of csFileGroups) {
+          const fgPaths = fg.files;
+          if (fgPaths.length === 0) continue;
+          const fgId = fg.id;
 
-        for (let gi = 0; gi < csGroups.length; gi++) {
-          const group = csGroups[gi];
-          // Build user content: spec + source files
-          let userContent =
-            "## SPECIFICATION (source of truth)\n\n" + csSpecBlock + "\n\n";
-          if (csExtraInstructions) {
-            userContent += "## ADDITIONAL INSTRUCTIONS\n\n" + csExtraInstructions + "\n\n";
-          }
-          userContent += "## SOURCE FILES TO CHECK\n\n";
-          if (csMode === 1) {
-            userContent += buildPerFileSectionPrompt(group.map((fd) => fd.path));
-          }
-          for (const fd of group) {
-            userContent += `\n\n${fd.block}`;
+          // Group source files using FFD bin packing
+          const { groups: csGroups, autoBatched: csAutoBatched, skipped: csSkipped } =
+            readAndGroupFiles(fgPaths, csPromptBytes, csRedact, csBudgetBytes);
+
+          const csBatchResults: string[] = [];
+          if (csSkipped.length > 0) {
+            csBatchResults.push(
+              `SKIPPED (exceeds ${csBudgetBytes / 1024} KB payload budget): ${csSkipped.length} file(s)\n` +
+              csSkipped.map((f) => `  - ${f}`).join("\n"),
+            );
           }
 
-          const csMessages: ChatMessage[] = [
-            { role: "system", content: csSystemPrompt },
-            { role: "user", content: userContent },
-          ];
+          for (let gi = 0; gi < csGroups.length; gi++) {
+            const group = csGroups[gi];
+            let userContent =
+              "## SPECIFICATION (source of truth)\n\n" + csSpecBlock + "\n\n";
+            if (csExtraInstructions) {
+              userContent += "## ADDITIONAL INSTRUCTIONS\n\n" + csExtraInstructions + "\n\n";
+            }
+            userContent += "## SOURCE FILES TO CHECK\n\n";
+            if (csMode === 1 && !csIsGrouped) {
+              userContent += buildPerFileSectionPrompt(group.map((fd) => fd.path));
+            }
+            for (const fd of group) {
+              userContent += `\n\n${fd.block}`;
+            }
 
-          const csResp = await ensembleStreaming(
-            csMessages,
-            { maxTokens: resolveDefaultMaxTokens(), onProgress },
-            csUseEnsemble,
-          );
-          const csFooter = formatFooter(csResp, "check_against_specs", group[0]?.path);
-          if (csResp.content.trim().length > 0) {
-            if (csAutoBatched) {
-              const fileList = group.map((fd) => fd.path).join(", ");
-              csBatchResults.push(
-                `## Batch ${gi + 1}/${csGroups.length}\n\nFiles: ${fileList}\n\n${csResp.content}${csFooter}`,
-              );
-            } else {
-              csBatchResults.push(csResp.content + csFooter);
+            const csMessages: ChatMessage[] = [
+              { role: "system", content: csSystemPrompt },
+              { role: "user", content: userContent },
+            ];
+
+            const csResp = await ensembleStreaming(
+              csMessages,
+              { maxTokens: resolveDefaultMaxTokens(), onProgress },
+              csUseEnsemble,
+            );
+            const csFooter = formatFooter(csResp, "check_against_specs", group[0]?.path);
+            if (csResp.content.trim().length > 0) {
+              if (csAutoBatched) {
+                const fileList = group.map((fd) => fd.path).join(", ");
+                csBatchResults.push(
+                  `## Batch ${gi + 1}/${csGroups.length}\n\nFiles: ${fileList}\n\n${csResp.content}${csFooter}`,
+                );
+              } else {
+                csBatchResults.push(csResp.content + csFooter);
+              }
             }
           }
+
+          if (csBatchResults.length === 0) continue;
+          const csFinalContent = csBatchResults.join("\n\n---\n\n");
+          const csMergedModel =
+            csUseEnsemble && activeResolved?.secondModel
+              ? `ensemble: ${currentBackend.model} + ${activeResolved.secondModel}`
+              : currentBackend.model;
+          const csReportPath = saveResponse("check_against_specs", csFinalContent, {
+            model: csMergedModel,
+            task: `Spec compliance: ${basename(csSpecPath)} vs ${fgPaths.length} file(s)`,
+            inputFile: fgPaths[0],
+            groupId: fgId || undefined,
+          });
+
+          if (csIsGrouped) {
+            csAllGroupReports.push(`[group:${fgId}] ${csReportPath}`);
+          } else {
+            return { content: [{ type: "text", text: csReportPath }] };
+          }
         }
 
-        if (csBatchResults.length === 0) {
-          return {
-            content: [{ type: "text", text: "FAILED: LLM returned empty response." }],
-            isError: true,
-          };
+        // Grouped: return per-group reports
+        if (csIsGrouped) {
+          if (csAllGroupReports.length === 0) {
+            return { content: [{ type: "text", text: "FAILED: No results for any group." }], isError: true };
+          }
+          return { content: [{ type: "text", text: csAllGroupReports.join("\n") }] };
         }
-
-        const csFinalContent = csBatchResults.join("\n\n---\n\n");
-        const csMergedModel =
-          csUseEnsemble && activeResolved?.secondModel
-            ? `ensemble: ${currentBackend.model} + ${activeResolved.secondModel}`
-            : currentBackend.model;
-        const csReportPath = saveResponse("check_against_specs", csFinalContent, {
-          model: csMergedModel,
-          task: `Spec compliance: ${basename(csSpecPath)} vs ${csFilePaths.length} file(s)`,
-          inputFile: csFilePaths[0],
-        });
-        return { content: [{ type: "text", text: csReportPath }] };
+        return { content: [{ type: "text", text: "FAILED: LLM returned empty response." }], isError: true };
       }
 
       default:
