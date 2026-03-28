@@ -6,6 +6,7 @@
 - [Utility tools](#utility-tools)
 - [Standard Input Fields](#standard-input-fields)
 - [Advanced Parameters](#advanced-parameters)
+- [File Grouping](#file-grouping)
 - [Critical Constraints](#critical-constraints)
 - [Safety Features](#safety-features)
 
@@ -62,6 +63,46 @@ Use `instructions_files_paths` to share reusable review rules, coding standards,
 | `exclude_dirs` | `scan_folder`, `check_against_specs` | string array | Additional dirs to skip beyond built-in exclusions. |
 | `ensemble` | All content tools | boolean (default: true on OpenRouter) | Run both models in parallel. Set `false` for simple tasks to save tokens. |
 | `answer_mode` | Multi-file tools | 0, 1, or 2 | 0=per-file reports, 1=per-request sections, 2=merged into one file. |
+
+## File Grouping
+
+Files in `input_files_paths` can be organized into named groups for isolated processing.
+Each group produces its own report file — n groups in, n reports out.
+
+### Syntax
+
+```json
+{
+  "input_files_paths": [
+    "---GROUP:auth---",
+    "/path/to/auth.ts",
+    "/path/to/auth.test.ts",
+    "---/GROUP:auth---",
+    "---GROUP:api---",
+    "/path/to/api.ts",
+    "/path/to/routes.ts",
+    "---/GROUP:api---"
+  ]
+}
+```
+
+- `---GROUP:<id>---` starts a named group
+- `---/GROUP:<id>---` ends a group (optional — next header or end of array also closes)
+- Files outside markers go into a default unnamed group
+- No markers = backward compatible (single unnamed group)
+- Groups apply to `input_files_paths` only, not `instructions_files_paths` or `spec_file_path`
+
+### Output
+
+Each group produces one report file with the group ID in the filename:
+```
+[group:auth] /path/to/llm_externalizer_output/chat_group-auth_2026-03-28T...md
+[group:api] /path/to/llm_externalizer_output/chat_group-api_2026-03-28T...md
+```
+
+### Supported tools
+
+`chat`, `code_task`, `batch_check`, `check_references`, `check_imports`, `check_against_specs`
 
 ## Critical Constraints
 

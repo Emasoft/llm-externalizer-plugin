@@ -78,6 +78,7 @@ All responses saved as `.md` files in `llm_externalizer_output/`. The tool retur
 - [Tool reference](references/tool-reference.md)
   - Read-only analysis tools, Utility tools
   - Standard Input Fields, Advanced Parameters
+  - File Grouping (isolated per-group reports)
   - Critical Constraints, Safety Features
 - [Usage patterns](references/usage-patterns.md)
   - Scan a codebase, Analyze multiple files, Batch check

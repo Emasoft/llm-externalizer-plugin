@@ -15,6 +15,7 @@
 - [Scan folder with gitignore](#scan-folder-with-gitignore--excluded-dirs)
 - [Check source against specification](#check-source-against-specification)
 - [Check entire folder against specification](#check-entire-folder-against-specification)
+- [Grouped file processing](#grouped-file-processing-isolated-reports)
 - [Code-optimized analysis](#code-optimized-analysis)
 
 Concrete examples for every tool with recommended parameters.
@@ -160,6 +161,31 @@ Concrete examples for every tool with recommended parameters.
   "use_gitignore": true,
   "instructions": "Check if forbidden endpoints are used"
 }
+```
+
+## Grouped file processing (isolated reports)
+
+```json
+{
+  "tool": "code_task",
+  "instructions": "Find bugs and security issues. This is a Node.js API.",
+  "input_files_paths": [
+    "---GROUP:auth---",
+    "/path/to/auth.ts",
+    "/path/to/auth.test.ts",
+    "---/GROUP:auth---",
+    "---GROUP:api---",
+    "/path/to/routes.ts",
+    "/path/to/middleware.ts",
+    "---/GROUP:api---"
+  ]
+}
+```
+
+Returns one report per group:
+```
+[group:auth] /path/to/llm_externalizer_output/code_task_group-auth_...md
+[group:api] /path/to/llm_externalizer_output/code_task_group-api_...md
 ```
 
 ## Code-optimized analysis
