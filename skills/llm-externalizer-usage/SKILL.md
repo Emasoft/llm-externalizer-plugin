@@ -2,7 +2,7 @@
 name: llm-externalizer-usage
 description: |-
   Use when offloading file analysis to external LLMs.
-  Trigger with: "analyze files", "scan folder", "check imports", "compare files", "batch check".
+  Trigger with "analyze files", "scan folder", "check imports", "compare files", "batch check".
 version: 1.0.0
 ---
 
