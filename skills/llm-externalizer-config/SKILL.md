@@ -1,9 +1,8 @@
 ---
 name: llm-externalizer-config
-description: >-
+description: |-
   Use when managing LLM Externalizer profiles in settings.yaml.
-  Trigger with: "switch LLM profile", "add LLM Externalizer profile",
-  "change active model", "edit settings.yaml", "configure LLM backend".
+  Trigger with: "switch LLM profile", "add profile", "change active model", "edit settings.yaml".
 version: 1.0.0
 ---
 
@@ -21,12 +20,14 @@ Profile-based configuration for local and remote LLM backends. Settings stored a
 
 ## Instructions
 
-- [ ] Call `mcp__llm-externalizer__discover` to check the current active profile and service health
-- [ ] Call `mcp__llm-externalizer__get_settings` to get an editable copy of `settings.yaml`
-- [ ] Read the returned file path with the Read tool
-- [ ] Use Edit to modify profiles (add, switch active, change model, etc.)
-- [ ] Call `mcp__llm-externalizer__set_settings` with the edited file path to apply changes
-- [ ] Call `mcp__llm-externalizer__discover` again to verify the changes took effect
+Copy this checklist and track your progress:
+
+1. [ ] Call `mcp__llm-externalizer__discover` to check the current active profile and service health
+2. [ ] Call `mcp__llm-externalizer__get_settings` to get an editable copy of `settings.yaml`
+3. [ ] Read the returned file path with the Read tool
+4. [ ] Use Edit to modify profiles (add, switch active, change model, etc.)
+5. [ ] Call `mcp__llm-externalizer__set_settings` with the edited file path to apply changes
+6. [ ] Call `mcp__llm-externalizer__discover` again to verify the changes took effect
 
 **CRITICAL**: `set_settings` replaces the entire settings.yaml. The edited file must include ALL profiles, not just the one you changed.
 

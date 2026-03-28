@@ -1,10 +1,8 @@
 ---
 name: llm-externalizer-usage
-description: >-
-  Use when offloading analysis or scanning to external LLMs.
-  Trigger with: "analyze files", "scan folder", "check imports",
-  "compare files", "check against spec", "use LLM Externalizer",
-  "batch check", "check references".
+description: |-
+  Use when offloading file analysis to external LLMs.
+  Trigger with: "analyze files", "scan folder", "check imports", "compare files", "batch check".
 version: 1.0.0
 ---
 
@@ -21,12 +19,14 @@ Offload bounded analysis tasks to cheaper external LLMs via MCP tools (`mcp__llm
 
 ## Instructions
 
-- [ ] Choose the right tool based on your task (see [tool reference](references/tool-reference.md))
-- [ ] Always pass file paths via `input_files_paths` — never paste content into `instructions`
-- [ ] Include brief project context in `instructions` (the remote LLM has zero knowledge of your project)
-- [ ] Call the tool and receive the output file path
-- [ ] Read the output file with the Read tool to access the LLM's response
-- [ ] Act on the results (apply fixes with Edit, create issues, report findings)
+Copy this checklist and track your progress:
+
+1. [ ] Choose the right tool based on your task (see [tool reference](references/tool-reference.md))
+2. [ ] Always pass file paths via `input_files_paths` — never paste content into `instructions`
+3. [ ] Include brief project context in `instructions` (the remote LLM has zero knowledge of your project)
+4. [ ] Call the tool and receive the output file path
+5. [ ] Read the output file with the Read tool to access the LLM's response
+6. [ ] Act on the results (apply fixes with Edit, create issues, report findings)
 
 ## Context
 
@@ -77,29 +77,17 @@ All responses saved as `.md` files in `llm_externalizer_output/`. The tool retur
 ## Resources
 
 - [Tool reference](references/tool-reference.md)
-  - Read-only analysis tools
-  - Utility tools
-  - Standard Input Fields
-  - Advanced Parameters
-  - File Grouping
-  - Critical Constraints
-  - Safety Features
+  - Read-only analysis tools, Utility tools
+  - Standard Input Fields, Advanced Parameters
+  - File Grouping, Critical Constraints, Safety Features
 - [Usage patterns](references/usage-patterns.md)
-  - Scan a codebase for issues
-  - Analyze multiple files together
-  - Apply same check to each file independently
-  - Compare two file versions
-  - Check for broken code references after refactoring
-  - Check for broken file imports
-  - Reuse instructions across operations
-  - Simple task with ensemble off (save tokens)
-  - Quick factual answer with low max_tokens
-  - Code review with persona
-  - Scan folder with gitignore + excluded dirs
-  - Check source against specification
-  - Check entire folder against specification
-  - Grouped file processing (isolated reports)
+  - Scan a codebase for issues, Analyze multiple files together
+  - Apply same check to each file independently, Compare two file versions
+  - Check for broken code references after refactoring, Check for broken file imports
+  - Reuse instructions across operations, Simple task with ensemble off (save tokens)
+  - Quick factual answer with low max_tokens, Code review with persona
+  - Scan folder with gitignore + excluded dirs, Check source against specification
+  - Check entire folder against specification, Grouped file processing (isolated reports)
   - Code-optimized analysis
 - [End-to-end workflow](examples/end-to-end-workflow.md)
-  - Scenario: Security audit of a TypeScript project
-  - Quick Decision Tree
+  - Scenario: Security audit of a TypeScript project, Quick Decision Tree
