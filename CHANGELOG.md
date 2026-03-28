@@ -1,6 +1,16 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.5.2] - 2026-03-28
+
+### Added
+
+- Add CPV remote validation to publish pipeline
+
+### Fixed
+
+- Parse CPV output for severity instead of relying on exit codes
+
 ## [3.5.1] - 2026-03-28
 
 ### Documentation
