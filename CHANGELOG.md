@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.6.2] - 2026-03-28
+
+### Fixed
+
+- Explain WHY file grouping saves tokens in all tool descriptions
+
 ## [3.6.1] - 2026-03-28
 
 ### Fixed
