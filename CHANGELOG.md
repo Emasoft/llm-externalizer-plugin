@@ -1,6 +1,20 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.6.0] - 2026-03-28
+
+### Added
+
+- Convert all bash scripts to Python for cross-platform support
+
+### Fixed
+
+- Update last setup.sh reference in README to setup.py
+
+### Miscellaneous
+
+- Remove bash scripts replaced by Python equivalents
+
 ## [3.5.3] - 2026-03-28
 
 ### Fixed
