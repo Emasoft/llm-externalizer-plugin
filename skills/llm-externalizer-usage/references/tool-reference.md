@@ -16,7 +16,7 @@
 |------|----------|-------------------|
 | `chat` | General-purpose: summarize, compare, translate, generate text. Also handles custom_prompt calls. | 2 (merged) |
 | `code_task` | Code-optimized analysis with code-review system prompt. Use for audits, reviews. | 2 (merged) |
-| `batch_check` | Apply the SAME instructions to EACH file separately — one report per file. | 0 (per-file) |
+| `batch_check` | **DEPRECATED** — use any tool with `answer_mode: 0, max_retries: 3`. Per-file processing with retry. | 0 (per-file) |
 | `scan_folder` | Auto-discover files in a directory tree and check each. Good for codebase-wide scans. | 2 (merged) |
 | `compare_files` | Auto-compute unified diff between 2 files, LLM summarizes changes. | N/A |
 | `check_references` | Auto-resolve local imports, send source+dependencies to LLM to validate symbol references. | 2 (merged) |
@@ -62,7 +62,8 @@ Use `instructions_files_paths` to share reusable review rules, coding standards,
 | `language` | `code_task` only | string | Programming language hint. Auto-detected from file extension. |
 | `exclude_dirs` | `scan_folder`, `check_against_specs` | string array | Additional dirs to skip beyond built-in exclusions. |
 | `ensemble` | All content tools | boolean (default: true on OpenRouter) | Run both models in parallel. Set `false` for simple tasks to save tokens. |
-| `answer_mode` | Multi-file tools | 0, 1, or 2 | 0=per-file reports, 1=per-request sections, 2=merged into one file. |
+| `answer_mode` | Multi-file tools | 0, 1, or 2 | 0=per-file reports (parallel+retry when max_retries>1), 1=per-request sections, 2=merged. |
+| `max_retries` | All content tools | number (default: 1) | Max retries per file in mode 0. Set 3 for robust batch processing with circuit breaker. |
 
 ## File Grouping
 
