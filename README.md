@@ -13,11 +13,14 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 
 ## Features
 
-- **12 MCP tools** — 7 read-only analysis tools + 5 utility tools
+- **13 MCP tools** — 8 read-only analysis tools + 5 utility tools
 - **Profile-based configuration** — named profiles in `~/.llm-externalizer/settings.yaml`
 - **Ensemble mode** — two models in parallel on OpenRouter, combined report
 - **Auto-batching** — large file sets split automatically to fit context window
+- **File grouping** — organize files into named groups (`---GROUP:id---`) for isolated per-group reports
 - **Secret scanning** — detects API keys and tokens before sending to LLM
+- **User-defined regex redaction** — `redact_regex` parameter to redact custom patterns
+- **Robust batch processing** — `max_retries` parameter with parallel execution, retry, and circuit breaker on all tools
 - **File-based output** — all results saved to files, only paths returned (keeps orchestrator context clean)
 - **2 auto-discovered skills** — tool usage patterns and configuration management
 - **2 slash commands** — health check and profile management
@@ -29,13 +32,14 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 
 | Tool | Purpose |
 |------|---------|
-| `chat` | General-purpose: summarize, compare, translate, generate text. Supports `temperature`, `system` persona, `max_tokens` |
+| `chat` | General-purpose: summarize, compare, translate, generate text. Supports `temperature`, `system` persona |
 | `code_task` | Code-optimized analysis with code-review system prompt (temperature=0.2). Supports `language` hint |
-| `batch_check` | Same instructions applied to EACH file separately — one report per file. Retry logic (3 attempts) |
-| `scan_folder` | Recursively scan a directory, auto-discover files by extension, process each with LLM. Supports `exclude_dirs`, `use_gitignore`, `max_files` |
+| `batch_check` | **Deprecated** — use any tool with `answer_mode: 0, max_retries: 3`. Per-file processing with retry |
+| `scan_folder` | Recursively scan a directory, auto-discover files by extension, process each with LLM |
 | `compare_files` | Auto-compute unified diff between 2 files, LLM summarizes changes concisely |
 | `check_references` | Auto-resolve local imports, send source+dependencies to LLM to validate symbol references |
 | `check_imports` | Two-phase — LLM extracts all import paths, server validates each exists on disk |
+| `check_against_specs` | Compare source files against a specification file. Reports violations only. Supports folder scanning |
 
 ### Utility tools
 
@@ -55,6 +59,37 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 | `instructions_files_paths` | Path(s) to instruction files (appended to instructions). Use for reusable prompts |
 | `input_files_paths` | Path(s) to content files (code-fenced by server). **Always prefer this over inline content** |
 | `input_files_content` | Inline content (DISCOURAGED — wastes orchestrator context tokens) |
+
+### Advanced parameters (all content tools)
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `answer_mode` | 2 (chat/code_task), 0 (batch_check) | 0=per-file, 1=per-request, 2=merged |
+| `max_retries` | 1 | Max retries per file in mode 0. Set 3 for parallel + retry + circuit breaker |
+| `redact_regex` | (none) | JavaScript regex to redact matching strings before sending to LLM |
+| `scan_secrets` | false | Abort if API keys/tokens/passwords detected in input files |
+| `redact_secrets` | false | Replace detected secrets with `[REDACTED:LABEL]` |
+| `max_payload_kb` | 400 | Max payload per batch in KB |
+
+### File grouping
+
+Organize files into named groups for isolated processing — n groups in, n reports out:
+
+```json
+{
+  "input_files_paths": [
+    "---GROUP:auth---",
+    "/path/to/auth.ts",
+    "/path/to/auth.test.ts",
+    "---/GROUP:auth---",
+    "---GROUP:api---",
+    "/path/to/routes.ts",
+    "---/GROUP:api---"
+  ]
+}
+```
+
+Each group produces its own report: `[group:auth] /path/to/report_group-auth_...md`. Groups apply to `input_files_paths` only, not instructions or spec files. No markers = backward compatible.
 
 ### Ensemble mode
 
@@ -226,7 +261,7 @@ Auth is auto-detected from environment. Profile fields `api_key` / `api_token` c
 
 | Skill | Description |
 |-------|-------------|
-| **llm-externalizer-usage** | When and how to use the MCP tools, input fields, usage patterns, constraints, output handling |
+| **llm-externalizer-usage** | Tool reference, usage patterns, file grouping, advanced parameters, end-to-end workflows |
 | **llm-externalizer-config** | Profile management, settings workflow, validation rules, ensemble configuration, troubleshooting |
 
 Skills activate automatically when Claude Code encounters tasks matching their trigger descriptions.
@@ -270,12 +305,14 @@ llm-externalizer-plugin/
 │   ├── llm-externalizer-usage/
 │   │   ├── SKILL.md
 │   │   ├── references/
+│   │   │   ├── tool-reference.md
 │   │   │   └── usage-patterns.md
 │   │   └── examples/
 │   │       └── end-to-end-workflow.md
 │   └── llm-externalizer-config/
 │       ├── SKILL.md
 │       └── references/
+│           ├── configuration-guide.md
 │           └── profile-templates.md
 ├── .gitignore
 ├── .mcp.json
