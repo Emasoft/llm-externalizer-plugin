@@ -1,6 +1,16 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.4.0] - 2026-03-28
+
+### Added
+
+- Add max_retries parameter to all content tools, deprecate batch_check
+
+### Documentation
+
+- Add max_retries to tool reference, mark batch_check as deprecated
+
 ## [3.3.1] - 2026-03-28
 
 ### Fixed
