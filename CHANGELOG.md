@@ -1,6 +1,23 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.2.9] - 2026-03-28
+
+### Changed
+
+- Update plugin for Claude Code v2.1.80–v2.1.86 compatibility
+
+- statusline: use rate_limits from input JSON (v2.1.80+) instead of
+  OAuth token lookup + API call; falls back to API for older versions
+- commands: add effort frontmatter (v2.1.76) — discover:low, configure:medium
+- docs: add check_against_specs to tool reference, usage patterns,
+  decision tree, and skill trigger list (was added in v3.2.8 but
+  undocumented in skill files)
+
+### Fixed
+
+- Statusline mkdir race + docs inconsistencies
+
 ## [3.2.8] - 2026-03-26
 
 ### Added
