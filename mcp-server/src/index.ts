@@ -3871,7 +3871,12 @@ function buildTools() {
         "General-purpose LLM call. More capable than Haiku, costs less. " +
         "Offloads bounded work (summarise, generate, translate, compare) to a separate LLM.\n\n" +
         "Files via input_files_paths are read from disk (saves your context). " +
-        "Auto-batches if total exceeds context window. For per-file analysis, use batch_check.\n\n" +
+        "Auto-batches if total exceeds context window.\n\n" +
+        "FILE GROUPING: Organize files into named groups using ---GROUP:id--- / ---/GROUP:id--- " +
+        "markers in input_files_paths. Each group is processed in COMPLETE ISOLATION (no cross-group " +
+        "LLM calls) and produces its own report file with the group ID in the filename. " +
+        "Output: one line per group: [group:id] /path/to/report_group-id_....md. " +
+        "Without markers, all files are processed together (backward compatible).\n\n" +
         "CONTEXT WARNING: Remote LLM has ZERO project context — always include brief context in instructions.\n\n" +
         "OUTPUT: Saved to .md file, returns only the file path." +
         limitsBlock(),
@@ -3901,7 +3906,10 @@ function buildTools() {
               "One or more absolute file paths. Accepts a single string OR an array. " +
               "Files are read from disk, code-fenced, and included in the prompt after the instructions. " +
               "Auto-batched if they exceed context window. " +
-              "ALWAYS prefer this over input_files_content — saves your context tokens.",
+              "ALWAYS prefer this over input_files_content — saves your context tokens. " +
+              "GROUPING: Insert ---GROUP:id--- before a group of files and ---/GROUP:id--- after " +
+              "to process groups in isolation. Each group produces its own report. " +
+              'Example: ["---GROUP:auth---", "/path/auth.ts", "---/GROUP:auth---", "---GROUP:api---", "/path/api.ts", "---/GROUP:api---"]',
           },
           input_files_content: {
             type: "string",
@@ -3953,6 +3961,8 @@ function buildTools() {
         "More capable than Haiku, costs less. Less capable than Sonnet/Opus.\n\n" +
         "Pass input_files_paths (read from disk, language auto-detected). " +
         "Be specific in instructions.\n\n" +
+        "FILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths " +
+        "to process groups in isolation. Each group produces its own report: [group:id] path.\n\n" +
         "CONTEXT WARNING: Remote LLM has ZERO project context — always include brief context.\n\n" +
         "OUTPUT: Saved to .md file, returns only the file path." +
         limitsBlock(),
@@ -4179,9 +4189,9 @@ function buildTools() {
       name: "batch_check",
       description:
         "DEPRECATED: Use chat or code_task with answer_mode=0 and max_retries=3 instead.\n\n" +
-        "Same prompt applied to EACH file separately — one report per file (parallel on OpenRouter). " +
-        "vs chat: chat combines all files in one prompt; batch_check runs per-file.\n\n" +
-        "Default: comprehensive bug-finding. Set instructions to any task.\n\n" +
+        "Same prompt applied to EACH file separately — one report per file.\n\n" +
+        "FILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths " +
+        "to process groups in isolation. Each group produces one merged report: [group:id] path.\n\n" +
         "CONTEXT WARNING: Remote LLM has ZERO project context — include brief context.\n\n" +
         "Retry: 3 attempts for recoverable errors. Aborts on auth/payment errors or 3+ consecutive failures.",
       inputSchema: {
@@ -4504,6 +4514,8 @@ function buildTools() {
       description:
         "Check source file for broken symbol references. Auto-resolves local imports, reads dependencies, " +
         "LLM validates all symbols exist.\n\n" +
+        "FILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths " +
+        "to process groups in isolation. Each group produces its own report: [group:id] path.\n\n" +
         "CONTEXT WARNING: Remote LLM has ZERO project context — include brief context." +
         limitsBlock(),
       inputSchema: {
@@ -4554,6 +4566,8 @@ function buildTools() {
       description:
         "Two-phase import checker: (1) LLM extracts import paths, (2) server validates each exists on disk. " +
         "Detects broken imports after file moves/renames.\n\n" +
+        "FILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths " +
+        "to process groups in isolation. Each group produces its own report: [group:id] path.\n\n" +
         "CONTEXT WARNING: Remote LLM has ZERO project context — include brief context." +
         limitsBlock(),
       inputSchema: {
@@ -4612,8 +4626,9 @@ function buildTools() {
         "Each source file is strictly examined for spec violations: wrong implementations, missed rules, " +
         "forbidden patterns used, incorrect API contracts, wrong output formats, etc.\n\n" +
         "Accepts individual files via input_files_paths OR an entire folder via folder_path (recursive). " +
-        "Files are auto-batched using FFD bin packing — the spec file is included in EVERY batch so " +
-        "each source file is always checked against the full spec. No limit on number of files.\n\n" +
+        "Files are auto-batched using FFD bin packing — the spec file is included in EVERY batch.\n\n" +
+        "FILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths " +
+        "to process groups in isolation. Each group produces its own report: [group:id] path.\n\n" +
         "NOTE: The LLM does NOT have the full project — some requirements may be implemented elsewhere. " +
         "Therefore only VIOLATIONS of the spec are reported (things done wrong), not MISSING features " +
         "(things not yet implemented). Everything that IS implemented must follow the spec exactly.\n\n" +
