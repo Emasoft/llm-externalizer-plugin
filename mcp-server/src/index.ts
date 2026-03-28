@@ -2810,6 +2810,111 @@ function sanitizeFilename(filePath: string): string {
   return base.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
+// ── Robust per-file processing ─────────────────────────────────────
+// Shared function that processes each file independently with:
+// - Parallel execution (via parallelLimit)
+// - Per-file retry with exponential backoff
+// - Circuit breaker (abort after 3 consecutive failures)
+// - Progress reporting
+// Used by all content tools when answer_mode=0 and max_retries > 1.
+
+interface RobustPerFileOpts {
+  task: string;
+  maxRetries: number;
+  redact?: boolean;
+  onProgress?: ProgressFn;
+  ensemble: boolean;
+  budgetBytes: number;
+  language?: string;
+  toolName: string;
+  batchId?: string;
+}
+
+interface RobustPerFileResult {
+  results: FileProcessResult[];
+  succeeded: FileProcessResult[];
+  failed: FileProcessResult[];
+  skipped: FileProcessResult[];
+  aborted: boolean;
+  abortReason: string;
+}
+
+async function robustPerFileProcess(
+  files: string[],
+  opts: RobustPerFileOpts,
+): Promise<RobustPerFileResult> {
+  const batchId = opts.batchId || randomUUID();
+  const concurrency = await getMaxConcurrent();
+  const recentOutcomes: boolean[] = [];
+  let aborted = false;
+  let abortReason = "";
+  let totalAttempts = 0;
+  const maxTotalAttempts = files.length * 2;
+  const maxRetries = Math.max(1, opts.maxRetries);
+
+  const tasks = files.map((filePath, idx) => async () => {
+    if (aborted) {
+      return { filePath, success: false, error: "Batch aborted" } as FileProcessResult;
+    }
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      if (++totalAttempts > maxTotalAttempts) {
+        aborted = true;
+        abortReason = `Global retry budget exhausted (${maxTotalAttempts} total attempts)`;
+      }
+      if (aborted) {
+        return { filePath, success: false, error: "Batch aborted" } as FileProcessResult;
+      }
+      try {
+        const result = await processFileCheck(filePath, opts.task, {
+          language: opts.language,
+          maxTokens: resolveDefaultMaxTokens(),
+          batchId,
+          fileIndex: idx,
+          redact: opts.redact,
+          onProgress: opts.onProgress,
+          ensemble: opts.ensemble,
+          maxBytes: opts.budgetBytes,
+        });
+        recentOutcomes.push(result.success);
+        if (opts.onProgress) {
+          const completed = recentOutcomes.length;
+          opts.onProgress(completed, files.length, `${opts.toolName}: ${completed}/${files.length} files done`);
+        }
+        return result;
+      } catch (err) {
+        const classified = classifyError(err);
+        if (classified.unrecoverable) {
+          if (classified.serviceLevel) {
+            aborted = true;
+            abortReason = `Unrecoverable service error on ${filePath}: ${classified.reason}`;
+          }
+          return { filePath, success: false, error: classified.reason } as FileProcessResult;
+        }
+        if (attempt < maxRetries) {
+          const delayMs = Math.pow(3, attempt - 1) * 1000;
+          await new Promise((r) => setTimeout(r, delayMs));
+          continue;
+        }
+        recentOutcomes.push(false);
+        if (recentOutcomes.length >= 3 && recentOutcomes.slice(-3).every((v) => !v)) {
+          aborted = true;
+          abortReason = `3 of the last 3 completions failed. Last error: ${classified.reason}`;
+        }
+        return { filePath, success: false, error: `Failed after ${maxRetries} retries: ${classified.reason}` } as FileProcessResult;
+      }
+    }
+    return { filePath, success: false, error: "Unexpected retry loop exit" } as FileProcessResult;
+  });
+
+  const results = await parallelLimit(tasks, concurrency);
+  const succeeded = results.filter((r) => r.success);
+  const failed = results.filter((r) => !r.success && r.error !== "Batch aborted");
+  const skipped = results.filter((r) => r.error === "Batch aborted");
+
+  return { results, succeeded, failed, skipped, aborted, abortReason };
+}
+
 /** Normalize input_files_paths: accept string|string[]|undefined, return string[] with no undefined/null/empty entries. */
 function normalizePaths(raw: string | string[] | undefined | null): string[] {
   if (!raw) return [];
@@ -3624,10 +3729,18 @@ const answerModeSchema = {
   enum: [0, 1, 2],
   description:
     "Controls output file organization. " +
-    "0 = one .md file per input file (separate LLM calls). " +
+    "0 = one .md file per input file (separate LLM calls, with parallel execution + retry when max_retries > 1). " +
     "1 = one .md file per LLM request, with structured per-file sections inside. " +
     "2 = one .md file for the entire operation (all batches merged). " +
-    "Default depends on tool: 2 for chat/custom_prompt/code_task, 0 for batch_check/batch_fix/fix_code.",
+    "Default depends on tool: 2 for chat/code_task, 0 for batch_check.",
+};
+
+const maxRetriesSchema = {
+  type: "number" as const,
+  description:
+    "Max retries per file when answer_mode=0 (per-file processing). Default: 1 (no retry). " +
+    "Set to 3 for robust batch processing with exponential backoff and circuit breaker. " +
+    "When > 1, enables parallel execution and automatic abort after 3 consecutive failures.",
 };
 
 // Write tools disabled: no current OpenRouter model can faithfully return files >3000 lines.
@@ -3737,6 +3850,7 @@ function buildTools() {
               "Redact secrets before sending to LLM. Prevents leaking sensitive data to the remote service.",
           },
           answer_mode: answerModeSchema,
+          max_retries: maxRetriesSchema,
           max_payload_kb: {
             type: "number",
             description:
@@ -3808,6 +3922,7 @@ function buildTools() {
               "Redact secrets before sending to LLM. Prevents leaking sensitive data to the remote service.",
           },
           answer_mode: answerModeSchema,
+          max_retries: maxRetriesSchema,
           max_payload_kb: {
             type: "number",
             description:
@@ -3980,6 +4095,7 @@ function buildTools() {
     {
       name: "batch_check",
       description:
+        "DEPRECATED: Use chat or code_task with answer_mode=0 and max_retries=3 instead.\n\n" +
         "Same prompt applied to EACH file separately — one report per file (parallel on OpenRouter). " +
         "vs chat: chat combines all files in one prompt; batch_check runs per-file.\n\n" +
         "Default: comprehensive bug-finding. Set instructions to any task.\n\n" +
@@ -4337,6 +4453,7 @@ function buildTools() {
               "Redact secrets before sending to LLM. DISCOURAGED: prefer moving secrets to .env files (gitignored).",
           },
           answer_mode: answerModeSchema,
+          max_retries: maxRetriesSchema,
           max_payload_kb: {
             type: "number",
             description:
@@ -4390,6 +4507,7 @@ function buildTools() {
               "Redact secrets before sending to LLM. DISCOURAGED: prefer moving secrets to .env files (gitignored).",
           },
           answer_mode: answerModeSchema,
+          max_retries: maxRetriesSchema,
           max_payload_kb: {
             type: "number",
             description:
@@ -4488,6 +4606,7 @@ function buildTools() {
               "Redact secrets before sending to LLM.",
           },
           answer_mode: answerModeSchema,
+          max_retries: maxRetriesSchema,
           max_payload_kb: {
             type: "number",
             description:
@@ -4593,6 +4712,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           scan_secrets: chatScan,
           redact_secrets: chatRedact,
           max_payload_kb: chatMaxPayloadKb,
+          max_retries: chatMaxRetries,
         } = args as {
           instructions?: string;
           instructions_files_paths?: string | string[];
@@ -4603,6 +4723,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           answer_mode?: number;
           scan_secrets?: boolean;
           redact_secrets?: boolean;
+          max_retries?: number;
           max_payload_kb?: number;
         };
         // Ensemble always ON for remote backends, OFF for local
@@ -4712,6 +4833,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
           // ── Mode 0: one output file per input file (separate LLM calls) ──
           if (chatMode === 0 && !chatIsGrouped) {
+            const chatRetries = chatMaxRetries ?? 1;
+            if (chatRetries > 1) {
+              // Robust path: parallel + retry + circuit breaker
+              const rpResult = await robustPerFileProcess(fgPaths, {
+                task: chatPrompt, maxRetries: chatRetries,
+                redact: chatRedact, onProgress, ensemble: useEnsemble,
+                budgetBytes: chatBudgetBytes, toolName: "chat",
+              });
+              const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
+              if (rpResult.failed.length > 0) lines.push("", "FAILED:", ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
+              if (rpResult.aborted) lines.push("", `ABORTED: ${rpResult.abortReason}`);
+              return { content: [{ type: "text", text: lines.join("\n") }], isError: rpResult.aborted };
+            }
+            // Simple sequential path (max_retries=1, no retry)
             const perFileResults: string[] = [];
             for (const fp of fgPaths) {
               const result = await processFileCheck(fp, chatPrompt, {
@@ -4843,6 +4978,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           scan_secrets: ctScan,
           redact_secrets: ctRedact,
           max_payload_kb: ctMaxPayloadKb,
+          max_retries: ctMaxRetries,
         } = args as {
           instructions?: string;
           instructions_files_paths?: string | string[];
@@ -4853,6 +4989,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           scan_secrets?: boolean;
           redact_secrets?: boolean;
           max_payload_kb?: number;
+          max_retries?: number;
         };
         const ctUseEnsemble = currentBackend.type === "openrouter";
         const ctBudgetBytes = (ctMaxPayloadKb ?? 400) * 1024;
@@ -5002,6 +5139,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
           // Mode 0 (non-grouped only): one output per input file
           if (ctMode === 0 && !ctIsGrouped) {
+            const ctRetries = ctMaxRetries ?? 1;
+            if (ctRetries > 1) {
+              // Robust path: parallel + retry + circuit breaker
+              const rpResult = await robustPerFileProcess(fgPaths, {
+                task: ctTask, maxRetries: ctRetries, language,
+                redact: ctRedact, onProgress, ensemble: ctUseEnsemble,
+                budgetBytes: ctBudgetBytes, toolName: "code_task",
+              });
+              const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
+              if (rpResult.failed.length > 0) lines.push("", "FAILED:", ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
+              if (rpResult.aborted) lines.push("", `ABORTED: ${rpResult.abortReason}`);
+              return { content: [{ type: "text", text: lines.join("\n") }], isError: rpResult.aborted };
+            }
+            // Simple sequential path (max_retries=1, no retry)
             const perFileResults: string[] = [];
             for (const fp of fgPaths) {
               const result = await processFileCheck(fp, ctTask, {
