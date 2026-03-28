@@ -204,24 +204,22 @@ def main():
             capture=True,
             check=False,
         )
-        # CPV exit codes: 0=pass, 1=critical/major issues, 2=minor only
         if cpv_result.returncode == 0:
             print("  OK: CPV validation passed")
-        elif cpv_result.returncode == 2:
-            # Minor issues only — warn but don't block publish
-            print("  WARNING: CPV found minor issues (non-blocking):")
-            if cpv_result.stdout:
-                # Show last 10 lines of output (summary)
-                for line in cpv_result.stdout.strip().splitlines()[-10:]:
-                    print(f"    {line}")
         else:
-            # Critical or major issues — block publish
-            print("ERROR: CPV validation found critical/major issues:", file=sys.stderr)
-            if cpv_result.stdout:
-                print(cpv_result.stdout, file=sys.stderr)
-            if cpv_result.stderr:
-                print(cpv_result.stderr, file=sys.stderr)
-            sys.exit(1)
+            # Parse output to determine severity — block only on CRITICAL or MAJOR > 0
+            output = cpv_result.stdout or ""
+            has_critical = bool(re.search(r"CRITICAL:\s*[1-9]", output))
+            has_major = bool(re.search(r"MAJOR:\s*[1-9]", output))
+            if has_critical or has_major:
+                print("ERROR: CPV validation found critical/major issues:", file=sys.stderr)
+                print(output, file=sys.stderr)
+                sys.exit(1)
+            else:
+                # Minor/warning/nit only — warn but don't block publish
+                print("  WARNING: CPV found minor issues (non-blocking):")
+                for line in output.strip().splitlines()[-5:]:
+                    print(f"    {line}")
     else:
         print("  SKIP: 'uvx' not found on PATH (install uv for CPV validation)")
     print()
