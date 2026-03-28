@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.5.0] - 2026-03-28
+
+### Added
+
+- Add redact_regex parameter to all content tools
+
 ## [3.4.0] - 2026-03-28
 
 ### Added
