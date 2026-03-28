@@ -34,15 +34,15 @@ from pathlib import Path
 
 
 def update_readme_badges(readme_path: Path, version: str, build_ok: bool) -> bool:
-    """Update shields.io badges between <!-- badges-start --> and <!-- badges-end --> markers.
+    """Update shields.io badges between <!--BADGES-START--> and <!--BADGES-END--> markers.
 
     Returns True if badges were updated, False if markers not found.
     """
     if not readme_path.exists():
         return False
     content = readme_path.read_text(encoding="utf-8")
-    start_marker = "<!-- badges-start -->"
-    end_marker = "<!-- badges-end -->"
+    start_marker = "<!--BADGES-START-->"
+    end_marker = "<!--BADGES-END-->"
     start_idx = content.find(start_marker)
     end_idx = content.find(end_marker)
     if start_idx == -1 or end_idx == -1:

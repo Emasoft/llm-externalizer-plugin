@@ -1,0 +1,15 @@
+#!/bin/bash
+# Pre-push quality gate — blocks push if any check fails.
+# Install: git config core.hooksPath .githooks
+set -e
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+echo "── Pre-push: TypeScript build check ──"
+cd "$REPO_ROOT/mcp-server"
+npx tsc --noEmit
+
+echo "── Pre-push: Manifest check ──"
+python3 -c "import json; json.load(open('$REPO_ROOT/.claude-plugin/plugin.json'))"
+
+echo "── Pre-push: all checks passed ──"

@@ -1,13 +1,13 @@
 # llm-externalizer
 
-<!-- badges-start -->
+<!--BADGES-START-->
 ![version](https://img.shields.io/badge/version-3.5.2-blue)
 ![build](https://img.shields.io/badge/build-passing-brightgreen)
 ![typescript](https://img.shields.io/badge/typescript-5.x-blue)
 ![node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![marketplace](https://img.shields.io/badge/marketplace-emasoft--plugins-purple)
-<!-- badges-end -->
+<!--BADGES-END-->
 
 A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote models via MCP. Supports local backends (LM Studio, Ollama, vLLM, llama.cpp) and remote backends (OpenRouter) with profile-based configuration and ensemble mode.
 
@@ -111,8 +111,11 @@ On OpenRouter, requests run on **two models in parallel** (default: `grok-4.1-fa
 ## Prerequisites
 
 - **Node.js >= 18** and **npm** — to build the bundled MCP server
+- **macOS or Linux** — build and statusline scripts require Bash (Windows: use WSL)
 - For local backends: a running LM Studio, Ollama, vLLM, or llama.cpp server
 - For remote backends: an OpenRouter API key (`OPENROUTER_API_KEY` environment variable)
+
+> **Note**: The `mcp-server/` directory contains the bundled TypeScript MCP server source, build output, and server manifest. It is built during installation via `scripts/setup.sh`.
 
 ## Naming
 
