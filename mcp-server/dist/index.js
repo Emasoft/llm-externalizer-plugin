@@ -28593,7 +28593,7 @@ function assertBranchUnchanged(filePath, expectedBranch) {
   }
 }
 var DEFAULT_MAX_PAYLOAD_BYTES = 400 * 1024;
-function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes) {
+function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexRedact) {
   const rawLimit = maxBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
   const limit = !Number.isFinite(rawLimit) || rawLimit <= 0 ? DEFAULT_MAX_PAYLOAD_BYTES : rawLimit;
   const safePath = sanitizeInputPath(filePath);
@@ -28620,6 +28620,10 @@ function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes) {
   }
   if (redact) {
     const result = redactSecrets(content);
+    content = result.redacted;
+  }
+  if (regexRedact) {
+    const result = applyRegexRedaction(content, regexRedact);
     content = result.redacted;
   }
   const lang = langOverride || detectLang(filePath);
@@ -28853,6 +28857,36 @@ function redactSecrets(content) {
   }
   return { redacted: result, count };
 }
+function parseRedactRegex(raw) {
+  if (!raw || typeof raw !== "string") return null;
+  const pattern = raw.trim();
+  if (!pattern) {
+    throw new Error("Invalid redact_regex: pattern must not be empty.");
+  }
+  try {
+    const regex = new RegExp(pattern, "g");
+    return { regex, patternStr: pattern };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Invalid redact_regex pattern: ${msg}
+
+Pattern received: ${pattern}
+
+Ensure it is a valid JavaScript regular expression.`
+    );
+  }
+}
+function applyRegexRedaction(content, opts) {
+  opts.regex.lastIndex = 0;
+  let count = 0;
+  const redacted = content.replace(opts.regex, (match) => {
+    count++;
+    const hasLetters = /[a-zA-Z]/.test(match);
+    return hasLetters ? "[REDACTED:USER_PATTERN]" : "0".repeat(match.length);
+  });
+  return { redacted, count };
+}
 function redactSecretsReversible(content) {
   let result = content;
   const entries = [];
@@ -28932,7 +28966,7 @@ function resolveDefaultMaxTokens() {
   }
   return FALLBACK_CONTEXT_LENGTH;
 }
-function readAndGroupFiles(filePaths, promptBytes, redact, budgetBytes) {
+function readAndGroupFiles(filePaths, promptBytes, redact, budgetBytes, regexRedact) {
   const totalBudget = Math.max(
     10 * 1024,
     budgetBytes ?? DEFAULT_MAX_PAYLOAD_BYTES
@@ -28947,7 +28981,7 @@ function readAndGroupFiles(filePaths, promptBytes, redact, budgetBytes) {
         skipped.push(fp);
         continue;
       }
-      const block = readFileAsCodeBlock(fp, void 0, redact, totalBudget);
+      const block = readFileAsCodeBlock(fp, void 0, redact, totalBudget, regexRedact);
       if (block.length > availableForFiles) {
         skipped.push(fp);
         continue;
@@ -30108,6 +30142,7 @@ async function robustPerFileProcess(files, opts) {
           batchId,
           fileIndex: idx,
           redact: opts.redact,
+          regexRedact: opts.regexRedact,
           onProgress: opts.onProgress,
           ensemble: opts.ensemble,
           maxBytes: opts.budgetBytes
@@ -30408,7 +30443,8 @@ async function processFileCheck(filePath, task, options = {}) {
     filePath,
     options.language,
     options.redact,
-    options.maxBytes
+    options.maxBytes,
+    options.regexRedact
   );
   const lang = options.language || detectLang(filePath);
   const fileLineCount = codeBlock.split("\n").length;
@@ -30757,6 +30793,10 @@ var maxRetriesSchema = {
   type: "number",
   description: "Max retries per file when answer_mode=0 (per-file processing). Default: 1 (no retry). Set to 3 for robust batch processing with exponential backoff and circuit breaker. When > 1, enables parallel execution and automatic abort after 3 consecutive failures."
 };
+var redactRegexSchema = {
+  type: "string",
+  description: "JavaScript regex pattern to redact matching strings from file content before sending to LLM. Applied after secret redaction. Alphanumeric matches \u2192 [REDACTED:USER_PATTERN], numeric-only matches \u2192 zero-padded placeholder. Invalid regex returns an error with details."
+};
 var DISABLED_TOOLS = /* @__PURE__ */ new Set([
   "fix_code",
   "batch_fix",
@@ -30826,6 +30866,7 @@ function buildTools() {
           },
           answer_mode: answerModeSchema,
           max_retries: maxRetriesSchema,
+          redact_regex: redactRegexSchema,
           max_payload_kb: {
             type: "number",
             description: "Max total payload per batch in KB (prompt + instructions + files). Default: 400. Must fit within the weakest ensemble model's context. Lower if you see hallucinations or truncations on large batches."
@@ -30878,6 +30919,7 @@ function buildTools() {
           },
           answer_mode: answerModeSchema,
           max_retries: maxRetriesSchema,
+          redact_regex: redactRegexSchema,
           max_payload_kb: {
             type: "number",
             description: "Max total payload per batch in KB (prompt + instructions + files). Default: 400. Must fit within the weakest ensemble model's context. Lower if you see hallucinations or truncations on large batches."
@@ -31027,6 +31069,7 @@ function buildTools() {
             description: "Redact secrets before sending to LLM. DISCOURAGED: prefer moving secrets to .env files (gitignored)."
           },
           answer_mode: answerModeSchema,
+          redact_regex: redactRegexSchema,
           max_payload_kb: {
             type: "number",
             description: "Max file size in KB per file. Default: 400. Files exceeding this are skipped and reported."
@@ -31123,6 +31166,7 @@ function buildTools() {
             description: "Use .gitignore rules to filter files (via git ls-files). When true, only files not ignored by git are included. Falls back to manual walk if not in a git repo. Default: false."
           },
           answer_mode: answerModeSchema,
+          redact_regex: redactRegexSchema,
           max_payload_kb: {
             type: "number",
             description: "Max file size in KB per file. Default: 400. Files exceeding this are skipped and reported."
@@ -31283,6 +31327,7 @@ function buildTools() {
           },
           answer_mode: answerModeSchema,
           max_retries: maxRetriesSchema,
+          redact_regex: redactRegexSchema,
           max_payload_kb: {
             type: "number",
             description: "Max payload in KB (prompt + files). Default: 400. Lower if you see hallucinations."
@@ -31329,6 +31374,7 @@ function buildTools() {
           },
           answer_mode: answerModeSchema,
           max_retries: maxRetriesSchema,
+          redact_regex: redactRegexSchema,
           max_payload_kb: {
             type: "number",
             description: "Max payload in KB (prompt + files). Default: 400. Lower if you see hallucinations."
@@ -31397,6 +31443,7 @@ function buildTools() {
           },
           answer_mode: answerModeSchema,
           max_retries: maxRetriesSchema,
+          redact_regex: redactRegexSchema,
           max_payload_kb: {
             type: "number",
             description: "Max payload in KB (prompt + spec + source files) per batch. Default: 400. The spec file is always included \u2014 remaining budget is for source files."
@@ -31481,10 +31528,17 @@ Settings file: ${SETTINGS_FILE}`
             scan_secrets: chatScan,
             redact_secrets: chatRedact,
             max_payload_kb: chatMaxPayloadKb,
-            max_retries: chatMaxRetries
+            max_retries: chatMaxRetries,
+            redact_regex: chatRedactRegexRaw
           } = args;
           const useEnsemble = currentBackend.type === "openrouter";
           const chatBudgetBytes = (chatMaxPayloadKb ?? 400) * 1024;
+          let chatRegexRedact = null;
+          try {
+            chatRegexRedact = parseRedactRegex(chatRedactRegexRaw);
+          } catch (err) {
+            return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+          }
           const chatPrompt = resolvePrompt(
             instructions,
             instructions_files_paths
@@ -31582,6 +31636,7 @@ ${fence}`;
                   task: chatPrompt,
                   maxRetries: chatRetries,
                   redact: chatRedact,
+                  regexRedact: chatRegexRedact,
                   onProgress,
                   ensemble: useEnsemble,
                   budgetBytes: chatBudgetBytes,
@@ -31613,7 +31668,8 @@ ${fence}`;
               fgPaths,
               chatPromptBytes,
               chatRedact,
-              chatBudgetBytes
+              chatBudgetBytes,
+              chatRegexRedact
             );
             const batchResults = [];
             const batchOutputPaths = [];
@@ -31710,7 +31766,8 @@ ${resp.content}${footer}`
             scan_secrets: ctScan,
             redact_secrets: ctRedact,
             max_payload_kb: ctMaxPayloadKb,
-            max_retries: ctMaxRetries
+            max_retries: ctMaxRetries,
+            redact_regex: ctRedactRegexRaw
           } = args;
           const ctUseEnsemble = currentBackend.type === "openrouter";
           const ctBudgetBytes = (ctMaxPayloadKb ?? 400) * 1024;
@@ -31728,6 +31785,12 @@ ${resp.content}${footer}`
             };
           }
           const ctFilePaths = normalizePaths(ctInputPathsRaw);
+          let ctRegexRedact = null;
+          try {
+            ctRegexRedact = parseRedactRegex(ctRedactRegexRaw);
+          } catch (err) {
+            return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+          }
           if (ctScan) {
             const ctRealFiles = ctFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
             if (ctRealFiles.length > 0) {
@@ -31857,6 +31920,7 @@ RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/M
                   maxRetries: ctRetries,
                   language,
                   redact: ctRedact,
+                  regexRedact: ctRegexRedact,
                   onProgress,
                   ensemble: ctUseEnsemble,
                   budgetBytes: ctBudgetBytes,
@@ -31884,7 +31948,7 @@ RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/M
               };
             }
             const ctPromptBytes = Buffer.byteLength(ctPromptBase, "utf-8") + Buffer.byteLength(`Expert ${lang} developer...`, "utf-8");
-            const { groups: ctGroups, autoBatched: ctAutoBatched, skipped: ctSkipped } = readAndGroupFiles(fgPaths, ctPromptBytes, ctRedact, ctBudgetBytes);
+            const { groups: ctGroups, autoBatched: ctAutoBatched, skipped: ctSkipped } = readAndGroupFiles(fgPaths, ctPromptBytes, ctRedact, ctBudgetBytes, ctRegexRedact);
             const ctBatchResults = [];
             const ctBatchPaths = [];
             if (ctSkipped.length > 0) {
@@ -34374,11 +34438,18 @@ FAILED: File not found.`);
             scan_secrets: csScan,
             redact_secrets: csRedact,
             answer_mode: csRawMode,
-            max_payload_kb: csMaxPayloadKb
+            max_payload_kb: csMaxPayloadKb,
+            redact_regex: csRedactRegexRaw
           } = args;
           const csUseEnsemble = currentBackend.type === "openrouter";
           const csBudgetBytes = (csMaxPayloadKb ?? 400) * 1024;
           const csMode = resolveAnswerMode(csRawMode, 2);
+          let csRegexRedact = null;
+          try {
+            csRegexRedact = parseRedactRegex(csRedactRegexRaw);
+          } catch (err) {
+            return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+          }
           if (!csSpecPath) {
             return {
               content: [{ type: "text", text: "FAILED: spec_file_path is required." }],
@@ -34464,7 +34535,7 @@ FAILED: File not found.`);
             const fgPaths = fg.files;
             if (fgPaths.length === 0) continue;
             const fgId = fg.id;
-            const { groups: csGroups, autoBatched: csAutoBatched, skipped: csSkipped } = readAndGroupFiles(fgPaths, csPromptBytes, csRedact, csBudgetBytes);
+            const { groups: csGroups, autoBatched: csAutoBatched, skipped: csSkipped } = readAndGroupFiles(fgPaths, csPromptBytes, csRedact, csBudgetBytes, csRegexRedact);
             const csBatchResults = [];
             if (csSkipped.length > 0) {
               csBatchResults.push(

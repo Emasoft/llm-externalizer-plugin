@@ -297,6 +297,7 @@ function readFileAsCodeBlock(
   langOverride?: string,
   redact?: boolean,
   maxBytes?: number,
+  regexRedact?: RegexRedactOpts | null,
 ): string {
   // H5: Validate maxBytes — reject Infinity, 0, or negative
   const rawLimit = maxBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
@@ -334,6 +335,11 @@ function readFileAsCodeBlock(
   // Optional secret redaction — replaces API keys, tokens, passwords with [REDACTED:...]
   if (redact) {
     const result = redactSecrets(content);
+    content = result.redacted;
+  }
+  // Optional user-defined regex redaction — replaces matches with user's replacement string
+  if (regexRedact) {
+    const result = applyRegexRedaction(content, regexRedact);
     content = result.redacted;
   }
   const lang = langOverride || detectLang(filePath);
@@ -676,6 +682,68 @@ function redactSecrets(content: string): { redacted: string; count: number } {
   return { redacted: result, count };
 }
 
+// ── User-defined regex redaction ─────────────────────────────────────
+// Allows callers to redact arbitrary patterns from file content before
+// sending to the LLM. Uses the same tested replacement format as
+// secret redaction: [REDACTED:USER_PATTERN] for alphanumeric matches,
+// numeric-safe placeholders for numeric-only matches.
+
+interface RegexRedactOpts {
+  /** Compiled regex (with 'g' flag). */
+  regex: RegExp;
+  /** Original pattern string (for error messages). */
+  patternStr: string;
+}
+
+/**
+ * Validate and parse the redact_regex parameter.
+ * Accepts a regex pattern string.
+ * Returns compiled opts or throws with a descriptive error.
+ */
+function parseRedactRegex(
+  raw: string | undefined | null,
+): RegexRedactOpts | null {
+  if (!raw || typeof raw !== "string") return null;
+
+  const pattern = raw.trim();
+  if (!pattern) {
+    throw new Error("Invalid redact_regex: pattern must not be empty.");
+  }
+
+  // Validate the regex by trying to compile it
+  try {
+    const regex = new RegExp(pattern, "g");
+    return { regex, patternStr: pattern };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Invalid redact_regex pattern: ${msg}\n\nPattern received: ${pattern}\n\nEnsure it is a valid JavaScript regular expression.`,
+    );
+  }
+}
+
+/**
+ * Apply user-defined regex redaction to content.
+ * Uses the same replacement format as secret redaction:
+ * - Alphanumeric matches → [REDACTED:USER_PATTERN]
+ * - Numeric-only matches → 00000000 (same length, safe for numeric contexts)
+ */
+function applyRegexRedaction(
+  content: string,
+  opts: RegexRedactOpts,
+): { redacted: string; count: number } {
+  // Reset lastIndex in case the regex was used before
+  opts.regex.lastIndex = 0;
+  let count = 0;
+  const redacted = content.replace(opts.regex, (match) => {
+    count++;
+    // Use numeric-safe placeholder for numeric-only matches (same as secret redaction)
+    const hasLetters = /[a-zA-Z]/.test(match);
+    return hasLetters ? "[REDACTED:USER_PATTERN]" : "0".repeat(match.length);
+  });
+  return { redacted, count };
+}
+
 // ── Reversible redaction for write tools ─────────────────────────────
 // Secrets are replaced with tracked placeholders that carry a numeric ID.
 // After the LLM returns modified code, secrets are restored by ID lookup.
@@ -876,6 +944,7 @@ function readAndGroupFiles(
   promptBytes: number,
   redact?: boolean,
   budgetBytes?: number,
+  regexRedact?: RegexRedactOpts | null,
 ): { groups: FileData[][]; autoBatched: boolean; skipped: string[] } {
   // M1: Enforce minimum budget (10 KB) to avoid silent skip-all
   const totalBudget = Math.max(
@@ -898,7 +967,7 @@ function readAndGroupFiles(
         skipped.push(fp);
         continue;
       }
-      const block = readFileAsCodeBlock(fp, undefined, redact, totalBudget);
+      const block = readFileAsCodeBlock(fp, undefined, redact, totalBudget, regexRedact);
       // Skip files whose fenced content exceeds available space after prompt
       if (block.length > availableForFiles) {
         skipped.push(fp);
@@ -2822,6 +2891,7 @@ interface RobustPerFileOpts {
   task: string;
   maxRetries: number;
   redact?: boolean;
+  regexRedact?: RegexRedactOpts | null;
   onProgress?: ProgressFn;
   ensemble: boolean;
   budgetBytes: number;
@@ -2872,6 +2942,7 @@ async function robustPerFileProcess(
           batchId,
           fileIndex: idx,
           redact: opts.redact,
+          regexRedact: opts.regexRedact,
           onProgress: opts.onProgress,
           ensemble: opts.ensemble,
           maxBytes: opts.budgetBytes,
@@ -3309,6 +3380,7 @@ interface ProcessOptions {
   batchId?: string; // if set, uses batch-style report filenames
   fileIndex?: number; // disambiguates files with same basename in a batch
   redact?: boolean; // redact secrets before sending to LLM
+  regexRedact?: RegexRedactOpts | null; // user-defined regex redaction
   onProgress?: ProgressFn; // MCP progress notifications to keep client alive
   ensemble?: boolean; // run on multiple models and combine results (default true)
   maxBytes?: number; // max file size in bytes (default: DEFAULT_MAX_PAYLOAD_BYTES)
@@ -3327,6 +3399,7 @@ async function processFileCheck(
     options.language,
     options.redact,
     options.maxBytes,
+    options.regexRedact,
   );
   const lang = options.language || detectLang(filePath);
   // Derive line count from the already-read code block (avoid double file read)
@@ -3743,6 +3816,14 @@ const maxRetriesSchema = {
     "When > 1, enables parallel execution and automatic abort after 3 consecutive failures.",
 };
 
+const redactRegexSchema = {
+  type: "string" as const,
+  description:
+    "JavaScript regex pattern to redact matching strings from file content before sending to LLM. " +
+    "Applied after secret redaction. Alphanumeric matches → [REDACTED:USER_PATTERN], " +
+    "numeric-only matches → zero-padded placeholder. Invalid regex returns an error with details.",
+};
+
 // Write tools disabled: no current OpenRouter model can faithfully return files >3000 lines.
 // grok-4.1-fast abbreviates (uses 10% of output budget); gemini-2.5-flash hits 65K output ceiling.
 // Keep the implementation code intact — re-enable when a model with sufficient output capacity appears.
@@ -3851,6 +3932,7 @@ function buildTools() {
           },
           answer_mode: answerModeSchema,
           max_retries: maxRetriesSchema,
+          redact_regex: redactRegexSchema,
           max_payload_kb: {
             type: "number",
             description:
@@ -3923,6 +4005,7 @@ function buildTools() {
           },
           answer_mode: answerModeSchema,
           max_retries: maxRetriesSchema,
+          redact_regex: redactRegexSchema,
           max_payload_kb: {
             type: "number",
             description:
@@ -4140,6 +4223,7 @@ function buildTools() {
               "Redact secrets before sending to LLM. DISCOURAGED: prefer moving secrets to .env files (gitignored).",
           },
           answer_mode: answerModeSchema,
+          redact_regex: redactRegexSchema,
           max_payload_kb: {
             type: "number",
             description:
@@ -4261,6 +4345,7 @@ function buildTools() {
               "Use .gitignore rules to filter files (via git ls-files). When true, only files not ignored by git are included. Falls back to manual walk if not in a git repo. Default: false.",
           },
           answer_mode: answerModeSchema,
+          redact_regex: redactRegexSchema,
           max_payload_kb: {
             type: "number",
             description:
@@ -4454,6 +4539,7 @@ function buildTools() {
           },
           answer_mode: answerModeSchema,
           max_retries: maxRetriesSchema,
+          redact_regex: redactRegexSchema,
           max_payload_kb: {
             type: "number",
             description:
@@ -4508,6 +4594,7 @@ function buildTools() {
           },
           answer_mode: answerModeSchema,
           max_retries: maxRetriesSchema,
+          redact_regex: redactRegexSchema,
           max_payload_kb: {
             type: "number",
             description:
@@ -4607,6 +4694,7 @@ function buildTools() {
           },
           answer_mode: answerModeSchema,
           max_retries: maxRetriesSchema,
+          redact_regex: redactRegexSchema,
           max_payload_kb: {
             type: "number",
             description:
@@ -4713,6 +4801,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           redact_secrets: chatRedact,
           max_payload_kb: chatMaxPayloadKb,
           max_retries: chatMaxRetries,
+          redact_regex: chatRedactRegexRaw,
         } = args as {
           instructions?: string;
           instructions_files_paths?: string | string[];
@@ -4725,10 +4814,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           redact_secrets?: boolean;
           max_retries?: number;
           max_payload_kb?: number;
+          redact_regex?: string;
         };
         // Ensemble always ON for remote backends, OFF for local
         const useEnsemble = currentBackend.type === "openrouter";
         const chatBudgetBytes = (chatMaxPayloadKb ?? 400) * 1024;
+
+        // Validate redact_regex upfront — fail fast on invalid patterns
+        let chatRegexRedact: RegexRedactOpts | null = null;
+        try {
+          chatRegexRedact = parseRedactRegex(chatRedactRegexRaw);
+        } catch (err) {
+          return { content: [{ type: "text", text: `FAILED: ${(err as Error).message}` }], isError: true };
+        }
         const chatPrompt = resolvePrompt(
           instructions,
           instructions_files_paths,
@@ -4838,7 +4936,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               // Robust path: parallel + retry + circuit breaker
               const rpResult = await robustPerFileProcess(fgPaths, {
                 task: chatPrompt, maxRetries: chatRetries,
-                redact: chatRedact, onProgress, ensemble: useEnsemble,
+                redact: chatRedact, regexRedact: chatRegexRedact,
+                onProgress, ensemble: useEnsemble,
                 budgetBytes: chatBudgetBytes, toolName: "chat",
               });
               const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
@@ -4875,6 +4974,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             chatPromptBytes,
             chatRedact,
             chatBudgetBytes,
+            chatRegexRedact,
           );
 
           // Collect results for this file group (merged mode)
@@ -4979,6 +5079,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           redact_secrets: ctRedact,
           max_payload_kb: ctMaxPayloadKb,
           max_retries: ctMaxRetries,
+          redact_regex: ctRedactRegexRaw,
         } = args as {
           instructions?: string;
           instructions_files_paths?: string | string[];
@@ -4990,6 +5091,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           redact_secrets?: boolean;
           max_payload_kb?: number;
           max_retries?: number;
+          redact_regex?: string;
         };
         const ctUseEnsemble = currentBackend.type === "openrouter";
         const ctBudgetBytes = (ctMaxPayloadKb ?? 400) * 1024;
@@ -5007,6 +5109,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
         const ctFilePaths = normalizePaths(ctInputPathsRaw);
+
+        // Validate redact_regex upfront
+        let ctRegexRedact: RegexRedactOpts | null = null;
+        try {
+          ctRegexRedact = parseRedactRegex(ctRedactRegexRaw);
+        } catch (err) {
+          return { content: [{ type: "text", text: `FAILED: ${(err as Error).message}` }], isError: true };
+        }
 
         // scan_secrets: abort if any secrets are found in input files or inline content
         if (ctScan) {
@@ -5144,7 +5254,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               // Robust path: parallel + retry + circuit breaker
               const rpResult = await robustPerFileProcess(fgPaths, {
                 task: ctTask, maxRetries: ctRetries, language,
-                redact: ctRedact, onProgress, ensemble: ctUseEnsemble,
+                redact: ctRedact, regexRedact: ctRegexRedact,
+                onProgress, ensemble: ctUseEnsemble,
                 budgetBytes: ctBudgetBytes, toolName: "code_task",
               });
               const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
@@ -5177,7 +5288,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             Buffer.byteLength(ctPromptBase, "utf-8") +
             Buffer.byteLength(`Expert ${lang} developer...`, "utf-8");
           const { groups: ctGroups, autoBatched: ctAutoBatched, skipped: ctSkipped } =
-            readAndGroupFiles(fgPaths, ctPromptBytes, ctRedact, ctBudgetBytes);
+            readAndGroupFiles(fgPaths, ctPromptBytes, ctRedact, ctBudgetBytes, ctRegexRedact);
 
           const ctBatchResults: string[] = [];
           const ctBatchPaths: string[] = [];
@@ -8063,9 +8174,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           redact_secrets: csRedact,
           answer_mode: csRawMode,
           max_payload_kb: csMaxPayloadKb,
+          redact_regex: csRedactRegexRaw,
         } = args as {
           spec_file_path: string;
           input_files_paths?: string | string[];
+          redact_regex?: string;
           folder_path?: string;
           extensions?: string[];
           exclude_dirs?: string[];
@@ -8080,6 +8193,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const csUseEnsemble = currentBackend.type === "openrouter";
         const csBudgetBytes = (csMaxPayloadKb ?? 400) * 1024;
         const csMode = resolveAnswerMode(csRawMode, 2);
+
+        // Validate redact_regex upfront
+        let csRegexRedact: RegexRedactOpts | null = null;
+        try {
+          csRegexRedact = parseRedactRegex(csRedactRegexRaw);
+        } catch (err) {
+          return { content: [{ type: "text", text: `FAILED: ${(err as Error).message}` }], isError: true };
+        }
 
         // Validate required params
         if (!csSpecPath) {
@@ -8206,7 +8327,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
           // Group source files using FFD bin packing
           const { groups: csGroups, autoBatched: csAutoBatched, skipped: csSkipped } =
-            readAndGroupFiles(fgPaths, csPromptBytes, csRedact, csBudgetBytes);
+            readAndGroupFiles(fgPaths, csPromptBytes, csRedact, csBudgetBytes, csRegexRedact);
 
           const csBatchResults: string[] = [];
           if (csSkipped.length > 0) {
