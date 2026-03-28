@@ -1,6 +1,16 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.3.0] - 2026-03-28
+
+### Added
+
+- Add file grouping support for isolated batch processing
+
+### Documentation
+
+- Add file grouping documentation to skill references
+
 ## [3.2.9] - 2026-03-28
 
 ### Changed
