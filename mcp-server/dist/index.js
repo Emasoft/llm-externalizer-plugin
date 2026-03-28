@@ -31424,8 +31424,9 @@ Settings file: ${SETTINGS_FILE}`
           }
           const chatFilePaths = normalizePaths(chatInputPathsRaw);
           if (chatScan) {
-            if (chatFilePaths.length > 0) {
-              const scanResult = scanFilesForSecrets(chatFilePaths);
+            const chatRealFiles = chatFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
+            if (chatRealFiles.length > 0) {
+              const scanResult = scanFilesForSecrets(chatRealFiles);
               if (scanResult.found)
                 return {
                   content: [{ type: "text", text: scanResult.report }],
@@ -31633,8 +31634,9 @@ ${resp.content}${footer}`
           }
           const ctFilePaths = normalizePaths(ctInputPathsRaw);
           if (ctScan) {
-            if (ctFilePaths.length > 0) {
-              const scanResult = scanFilesForSecrets(ctFilePaths);
+            const ctRealFiles = ctFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
+            if (ctRealFiles.length > 0) {
+              const scanResult = scanFilesForSecrets(ctRealFiles);
               if (scanResult.found)
                 return {
                   content: [{ type: "text", text: scanResult.report }],
@@ -31660,7 +31662,7 @@ Remove secrets before sending to remote LLM.`
               }
             }
           }
-          if (ctFilePaths.length === 1 && !ctInputContent && !GROUP_HEADER_RE.test(ctFilePaths[0])) {
+          if (ctFilePaths.length === 1 && !ctInputContent && !GROUP_HEADER_RE.test(ctFilePaths[0]) && !GROUP_FOOTER_RE.test(ctFilePaths[0])) {
             const result = await processFileCheck(ctFilePaths[0], ctTask, {
               language,
               maxTokens: resolveDefaultMaxTokens(),
@@ -34329,7 +34331,8 @@ FAILED: File not found.`);
             };
           }
           if (csScan) {
-            const scanResult = scanFilesForSecrets([csSpecPath, ...csFilePaths]);
+            const csRealFiles = csFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
+            const scanResult = scanFilesForSecrets([csSpecPath, ...csRealFiles]);
             if (scanResult.found)
               return {
                 content: [{ type: "text", text: scanResult.report }],

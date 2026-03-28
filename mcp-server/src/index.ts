@@ -4627,8 +4627,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // scan_secrets: abort if any secrets are found in input files or inline content
         if (chatScan) {
-          if (chatFilePaths.length > 0) {
-            const scanResult = scanFilesForSecrets(chatFilePaths);
+          // Filter out group markers before scanning — they are delimiters, not file paths
+          const chatRealFiles = chatFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
+          if (chatRealFiles.length > 0) {
+            const scanResult = scanFilesForSecrets(chatRealFiles);
             if (scanResult.found)
               return {
                 content: [{ type: "text", text: scanResult.report }],
@@ -4871,8 +4873,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // scan_secrets: abort if any secrets are found in input files or inline content
         if (ctScan) {
-          if (ctFilePaths.length > 0) {
-            const scanResult = scanFilesForSecrets(ctFilePaths);
+          // Filter out group markers before scanning — they are delimiters, not file paths
+          const ctRealFiles = ctFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
+          if (ctRealFiles.length > 0) {
+            const scanResult = scanFilesForSecrets(ctRealFiles);
             if (scanResult.found)
               return {
                 content: [{ type: "text", text: scanResult.report }],
@@ -4899,7 +4903,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         // Single file path — delegate to processFileCheck (existing optimized path)
-        if (ctFilePaths.length === 1 && !ctInputContent && !GROUP_HEADER_RE.test(ctFilePaths[0])) {
+        if (ctFilePaths.length === 1 && !ctInputContent && !GROUP_HEADER_RE.test(ctFilePaths[0]) && !GROUP_FOOTER_RE.test(ctFilePaths[0])) {
           const result = await processFileCheck(ctFilePaths[0], ctTask, {
             language,
             maxTokens: resolveDefaultMaxTokens(),
@@ -7997,9 +8001,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        // scan_secrets: abort if any secrets are found
+        // scan_secrets: abort if any secrets are found (filter out group markers)
         if (csScan) {
-          const scanResult = scanFilesForSecrets([csSpecPath, ...csFilePaths]);
+          const csRealFiles = csFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
+          const scanResult = scanFilesForSecrets([csSpecPath, ...csRealFiles]);
           if (scanResult.found)
             return {
               content: [{ type: "text", text: scanResult.report }],
