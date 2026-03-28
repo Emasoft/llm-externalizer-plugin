@@ -1,6 +1,6 @@
 {
   "name": "llm-externalizer",
-  "version": "3.3.0",
+  "version": "3.3.1",
   "description": "MCP server that offloads bounded LLM tasks from Claude Code to cheaper local (LM Studio, Ollama, vLLM, llama.cpp) or remote (OpenRouter) models. Profile-based configuration with ensemble mode.",
   "author": {
     "name": "Emasoft",
