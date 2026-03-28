@@ -111,11 +111,11 @@ On OpenRouter, requests run on **two models in parallel** (default: `grok-4.1-fa
 ## Prerequisites
 
 - **Node.js >= 18** and **npm** — to build the bundled MCP server
-- **macOS or Linux** — build and statusline scripts require Bash (Windows: use WSL)
+- **Python >= 3.12** — build, statusline, and publishing scripts
 - For local backends: a running LM Studio, Ollama, vLLM, or llama.cpp server
 - For remote backends: an OpenRouter API key (`OPENROUTER_API_KEY` environment variable)
 
-> **Note**: The `mcp-server/` directory contains the bundled TypeScript MCP server source, build output, and server manifest. It is built during installation via `scripts/setup.sh`.
+> **Note**: The `mcp-server/` directory contains the bundled TypeScript MCP server source, build output, and server manifest. It is built during installation via `scripts/setup.py`.
 
 ## Naming
 
@@ -168,7 +168,7 @@ git clone https://github.com/Emasoft/llm-externalizer-plugin.git /tmp/llm-extern
 
 # Build the MCP server
 cd /tmp/llm-externalizer-plugin
-bash scripts/setup.sh
+python3 scripts/setup.py
 
 # Install from local path
 claude plugin install /tmp/llm-externalizer-plugin
@@ -179,7 +179,7 @@ claude plugin install /tmp/llm-externalizer-plugin
 After installation, the MCP server needs to be built (the marketplace install triggers `scripts/setup.sh` automatically):
 
 ```bash
-cd mcp-server && npm install && npm run build
+python3 scripts/setup.py
 ```
 
 On first run, the server creates a settings template at `~/.llm-externalizer/settings.yaml` with 4 predefined profiles.
@@ -187,7 +187,7 @@ On first run, the server creates a settings template at `~/.llm-externalizer/set
 ### Optional: statusline
 
 ```bash
-bash $CLAUDE_PLUGIN_ROOT/scripts/install-statusline.sh
+python3 $CLAUDE_PLUGIN_ROOT/scripts/install_statusline.py
 ```
 
 Shows model, context usage, and cost stats in the Claude Code status bar.
@@ -297,10 +297,10 @@ llm-externalizer-plugin/
 │   ├── package.json
 │   ├── tsconfig.json
 │   ├── server.json               # MCP server manifest
-│   └── statusline.sh             # Status bar script
+│   └── statusline.py             # Status bar script (cross-platform)
 ├── scripts/
-│   ├── setup.sh                  # Build: npm install + npm run build
-│   ├── install-statusline.sh     # Statusline installer
+│   ├── setup.py                  # Build: npm install + npm run build
+│   ├── install_statusline.py     # Statusline installer
 │   ├── bump_version.py           # Semver bumper for plugin.json
 │   ├── publish.py                # Release pipeline (bump, changelog, tag, push, gh release)
 │   └── pre-push                  # Git pre-push quality gate

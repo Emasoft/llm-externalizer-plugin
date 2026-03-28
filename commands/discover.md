@@ -17,4 +17,4 @@ Show:
 5. Concurrency mode and max parallel calls
 6. Available profiles list
 
-If the service is unreachable, suggest running `bash $CLAUDE_PLUGIN_ROOT/scripts/setup.sh` to build the MCP server.
+If the service is unreachable, suggest running `python3 $CLAUDE_PLUGIN_ROOT/scripts/setup.py` to build the MCP server.
