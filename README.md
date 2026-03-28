@@ -176,7 +176,7 @@ claude plugin install /tmp/llm-externalizer-plugin
 
 ## Setup
 
-After installation, the MCP server needs to be built (the marketplace install triggers `scripts/setup.sh` automatically):
+After installation, the MCP server needs to be built (the marketplace install triggers `scripts/setup.py` automatically):
 
 ```bash
 python3 scripts/setup.py
