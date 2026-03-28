@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.5.1] - 2026-03-28
+
+### Documentation
+
+- Update README for v3.3–v3.5 features
+
 ## [3.5.0] - 2026-03-28
 
 ### Added
