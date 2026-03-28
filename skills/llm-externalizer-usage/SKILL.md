@@ -3,7 +3,7 @@ name: llm-externalizer-usage
 description: >-
   Use when offloading analysis or scanning to external LLMs.
   Trigger with: "analyze files", "scan folder", "check imports",
-  "compare files", "use LLM Externalizer".
+  "compare files", "check against spec", "use LLM Externalizer".
 version: 1.0.0
 ---
 
@@ -59,6 +59,13 @@ All responses saved as `.md` files in `llm_externalizer_output/`. The tool retur
  "instructions": "Focus on API breaking changes"}
 ```
 
+### Check source against specification
+
+```json
+{"tool": "check_against_specs", "spec_file_path": "/path/to/api-spec.md",
+ "input_files_paths": "/path/to/impl.ts", "instructions": "Check API contract compliance"}
+```
+
 ### Quick analysis (ensemble off)
 
 ```json
@@ -75,6 +82,7 @@ All responses saved as `.md` files in `llm_externalizer_output/`. The tool retur
 - [Usage patterns](references/usage-patterns.md)
   - Scan a codebase, Analyze multiple files, Batch check
   - Compare two files, Check broken references, Check imports
+  - Check source against specification, Check folder against specification
   - Reuse instructions, Ensemble off, Low max_tokens
   - Code review with persona, Scan with gitignore, Code-optimized analysis
 - [End-to-end workflow](examples/end-to-end-workflow.md)

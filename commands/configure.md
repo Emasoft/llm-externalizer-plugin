@@ -8,6 +8,7 @@ allowed-tools:
   - Read
   - Edit
 argument-hint: "[list | switch <profile> | add <name> --mode <mode> --api <api> --model <model>]"
+effort: medium
 ---
 
 Manage LLM Externalizer profile configuration.

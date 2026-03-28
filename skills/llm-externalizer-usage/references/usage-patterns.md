@@ -13,6 +13,8 @@
 - [Quick factual answer](#quick-factual-answer-with-low-max_tokens)
 - [Code review with persona](#code-review-with-persona)
 - [Scan folder with gitignore](#scan-folder-with-gitignore--excluded-dirs)
+- [Check source against specification](#check-source-against-specification)
+- [Check entire folder against specification](#check-entire-folder-against-specification)
 - [Code-optimized analysis](#code-optimized-analysis)
 
 Concrete examples for every tool with recommended parameters.
@@ -133,6 +135,30 @@ Concrete examples for every tool with recommended parameters.
   "use_gitignore": true,
   "exclude_dirs": ["migrations", "fixtures"],
   "instructions": "Find security vulnerabilities. This is a Django REST API."
+}
+```
+
+## Check source against specification
+
+```json
+{
+  "tool": "check_against_specs",
+  "spec_file_path": "/path/to/api-spec.md",
+  "input_files_paths": "/path/to/impl.ts",
+  "instructions": "Check compliance with the API contract"
+}
+```
+
+## Check entire folder against specification
+
+```json
+{
+  "tool": "check_against_specs",
+  "spec_file_path": "/path/to/rules.md",
+  "folder_path": "/path/to/src",
+  "extensions": [".ts"],
+  "use_gitignore": true,
+  "instructions": "Check if forbidden endpoints are used"
 }
 ```
 

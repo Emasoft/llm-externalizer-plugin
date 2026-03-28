@@ -20,6 +20,7 @@
 | `compare_files` | Auto-compute unified diff between 2 files, LLM summarizes changes. | N/A |
 | `check_references` | Auto-resolve local imports, send source+dependencies to LLM to validate symbol references. | 2 (merged) |
 | `check_imports` | Two-phase: LLM extracts all import paths, server validates each exists on disk. | 2 (merged) |
+| `check_against_specs` | Compare source files against a specification file. Reports violations only (not missing features). Supports folder scanning. | 2 (merged) |
 
 ## Utility tools
 

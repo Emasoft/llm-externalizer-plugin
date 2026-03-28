@@ -161,94 +161,87 @@ if [ -f "$or_cache" ]; then
     out+=" 🏦 ${cyan}\$${or_remain}${reset}"
 fi
 
-# ===== Cross-platform OAuth token resolution (from statusline.sh) =====
-# Tries credential sources in order: env var → macOS Keychain → Linux creds file → GNOME Keyring
-get_oauth_token() {
-    local token=""
-
-    # 1. Explicit env var override
-    if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
-        echo "$CLAUDE_CODE_OAUTH_TOKEN"
-        return 0
-    fi
-
-    # 2. macOS Keychain
-    if command -v security >/dev/null 2>&1; then
-        local blob
-        blob=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
-        if [ -n "$blob" ]; then
-            token=$(echo "$blob" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
-            if [ -n "$token" ] && [ "$token" != "null" ]; then
-                echo "$token"
-                return 0
-            fi
-        fi
-    fi
-
-    # 3. Linux credentials file
-    local creds_file="${HOME}/.claude/.credentials.json"
-    if [ -f "$creds_file" ]; then
-        token=$(jq -r '.claudeAiOauth.accessToken // empty' "$creds_file" 2>/dev/null)
-        if [ -n "$token" ] && [ "$token" != "null" ]; then
-            echo "$token"
-            return 0
-        fi
-    fi
-
-    # 4. GNOME Keyring via secret-tool
-    if command -v secret-tool >/dev/null 2>&1; then
-        local blob
-        blob=$(timeout 2 secret-tool lookup service "Claude Code-credentials" 2>/dev/null)
-        if [ -n "$blob" ]; then
-            token=$(echo "$blob" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
-            if [ -n "$token" ] && [ "$token" != "null" ]; then
-                echo "$token"
-                return 0
-            fi
-        fi
-    fi
-
-    echo ""
-}
-
-# ===== LINE 2 & 3: Usage limits with progress bars (cached) =====
-cache_file="/tmp/claude/statusline-usage-cache.json"
-cache_max_age=300  # 5 minutes — /api/oauth/usage is heavily rate-limited
-mkdir -p /tmp/claude && chmod 700 /tmp/claude
-
-needs_refresh=true
+# ===== Usage limits: prefer rate_limits from input JSON (v2.1.80+), fallback to API =====
+# Since Claude Code v2.1.80, rate_limits data is passed directly in the statusline input JSON.
+# This eliminates the need for OAuth token resolution and API calls in most cases.
 usage_data=""
 
-# Check cache
-if [ -f "$cache_file" ]; then
-    cache_mtime=$(stat -c %Y "$cache_file" 2>/dev/null || stat -f %m "$cache_file" 2>/dev/null)
-    now=$(date +%s)
-    cache_age=$(( now - cache_mtime ))
-    if [ "$cache_age" -lt "$cache_max_age" ]; then
-        needs_refresh=false
-        usage_data=$(cat "$cache_file" 2>/dev/null)
-    fi
-fi
+# Try rate_limits from input JSON first (fast path — no network call needed)
+rate_limits_check=$(echo "$input" | jq -r '.rate_limits // empty' 2>/dev/null)
+if [ -n "$rate_limits_check" ] && [ "$rate_limits_check" != "null" ]; then
+    # rate_limits present in input JSON — use it directly
+    usage_data=$(echo "$input" | jq '.rate_limits' 2>/dev/null)
+else
+    # Fallback: fetch from API (for Claude Code < v2.1.80)
+    # Cross-platform OAuth token resolution
+    get_oauth_token() {
+        local token=""
+        # 1. Explicit env var override
+        if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then echo "$CLAUDE_CODE_OAUTH_TOKEN"; return 0; fi
+        # 2. macOS Keychain
+        if command -v security >/dev/null 2>&1; then
+            local blob
+            blob=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
+            if [ -n "$blob" ]; then
+                token=$(echo "$blob" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
+                if [ -n "$token" ] && [ "$token" != "null" ]; then echo "$token"; return 0; fi
+            fi
+        fi
+        # 3. Linux credentials file
+        local creds_file="${HOME}/.claude/.credentials.json"
+        if [ -f "$creds_file" ]; then
+            token=$(jq -r '.claudeAiOauth.accessToken // empty' "$creds_file" 2>/dev/null)
+            if [ -n "$token" ] && [ "$token" != "null" ]; then echo "$token"; return 0; fi
+        fi
+        # 4. GNOME Keyring via secret-tool
+        if command -v secret-tool >/dev/null 2>&1; then
+            local blob
+            blob=$(timeout 2 secret-tool lookup service "Claude Code-credentials" 2>/dev/null)
+            if [ -n "$blob" ]; then
+                token=$(echo "$blob" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
+                if [ -n "$token" ] && [ "$token" != "null" ]; then echo "$token"; return 0; fi
+            fi
+        fi
+        echo ""
+    }
 
-# Fetch fresh data if cache is stale
-if $needs_refresh; then
-    token=$(get_oauth_token)
-    if [ -n "$token" ] && [ "$token" != "null" ]; then
-        response=$(curl -s --max-time 10 \
-            -H "Accept: application/json" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $token" \
-            -H "anthropic-beta: oauth-2025-04-20" \
-            -H "User-Agent: claude-code/${claude_version:-0.0.0}" \
-            "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)
-        if [ -n "$response" ] && echo "$response" | jq . >/dev/null 2>&1; then
-            usage_data="$response"
-            echo "$response" > "$cache_file"
+    cache_file="/tmp/claude/statusline-usage-cache.json"
+    cache_max_age=300  # 5 minutes — /api/oauth/usage is heavily rate-limited
+    mkdir -p /tmp/claude && chmod 700 /tmp/claude
+
+    needs_refresh=true
+
+    # Check cache
+    if [ -f "$cache_file" ]; then
+        cache_mtime=$(stat -c %Y "$cache_file" 2>/dev/null || stat -f %m "$cache_file" 2>/dev/null)
+        now=$(date +%s)
+        cache_age=$(( now - cache_mtime ))
+        if [ "$cache_age" -lt "$cache_max_age" ]; then
+            needs_refresh=false
+            usage_data=$(cat "$cache_file" 2>/dev/null)
         fi
     fi
-    # Fall back to stale cache
-    if [ -z "$usage_data" ] && [ -f "$cache_file" ]; then
-        usage_data=$(cat "$cache_file" 2>/dev/null)
+
+    # Fetch fresh data if cache is stale
+    if $needs_refresh; then
+        token=$(get_oauth_token)
+        if [ -n "$token" ] && [ "$token" != "null" ]; then
+            response=$(curl -s --max-time 10 \
+                -H "Accept: application/json" \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer $token" \
+                -H "anthropic-beta: oauth-2025-04-20" \
+                -H "User-Agent: claude-code/${claude_version:-0.0.0}" \
+                "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)
+            if [ -n "$response" ] && echo "$response" | jq . >/dev/null 2>&1; then
+                usage_data="$response"
+                echo "$response" > "$cache_file"
+            fi
+        fi
+        # Fall back to stale cache
+        if [ -z "$usage_data" ] && [ -f "$cache_file" ]; then
+            usage_data=$(cat "$cache_file" 2>/dev/null)
+        fi
     fi
 fi
 

@@ -74,4 +74,5 @@ Need to process files with an external LLM?
     +-- Whole directory --> scan_folder
     +-- Check imports valid --> check_imports
     +-- Check symbol refs --> check_references
+    +-- Check against spec --> check_against_specs
 ```
