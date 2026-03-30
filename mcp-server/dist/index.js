@@ -31163,7 +31163,7 @@ function buildTools() {
           },
           use_gitignore: {
             type: "boolean",
-            description: "Use .gitignore rules to filter files (via git ls-files). When true, only files not ignored by git are included. Falls back to manual walk if not in a git repo. Default: false."
+            description: "Use .gitignore rules to filter files (via git ls-files). When true, only files not ignored by git are included. Falls back to manual walk if not in a git repo. Default: true."
           },
           answer_mode: answerModeSchema,
           redact_regex: redactRegexSchema,
