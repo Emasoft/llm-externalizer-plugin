@@ -31146,6 +31146,7 @@ function buildTools() {
             type: "string",
             description: "NOT SUPPORTED for batch_check \u2014 files must be on disk via input_files_paths."
           },
+          ...folderSchemaProps,
           scan_secrets: {
             type: "boolean",
             description: "Scan input files for secrets and ABORT if any are found. Best practice: move secrets to .env (gitignored)."
@@ -32654,18 +32655,39 @@ Settings saved to ${SETTINGS_FILE}`
             answer_mode: bcRawMode,
             scan_secrets: bcScan,
             redact_secrets: bcRedact,
-            max_payload_kb: bcMaxPayloadKb
+            max_payload_kb: bcMaxPayloadKb,
+            folder_path: bcFolderPath,
+            extensions: bcExtensions,
+            exclude_dirs: bcExcludeDirs,
+            use_gitignore: bcUseGitignore,
+            recursive: bcRecursive,
+            follow_symlinks: bcFollowSymlinks,
+            max_files: bcMaxFiles
           } = args;
           const bcUseEnsemble = currentBackend.type === "openrouter";
           const bcBudgetBytes = (bcMaxPayloadKb ?? 400) * 1024;
           const bcMode = resolveAnswerMode(bcRawMode, 0);
-          const bcNormalizedPaths = normalizePaths(bcInputPaths);
+          let bcNormalizedPaths = normalizePaths(bcInputPaths);
+          if (bcFolderPath) {
+            const folderResult = resolveFolderPath(bcFolderPath, {
+              extensions: bcExtensions,
+              excludeDirs: bcExcludeDirs,
+              useGitignore: bcUseGitignore,
+              recursive: bcRecursive,
+              followSymlinks: bcFollowSymlinks,
+              maxFiles: bcMaxFiles
+            });
+            if (folderResult.error && folderResult.files.length === 0 && bcNormalizedPaths.length === 0) {
+              return { content: [{ type: "text", text: `FAILED: ${folderResult.error}` }], isError: true };
+            }
+            bcNormalizedPaths = [...bcNormalizedPaths, ...folderResult.files];
+          }
           if (bcNormalizedPaths.length === 0) {
             return {
               content: [
                 {
                   type: "text",
-                  text: "FAILED: input_files_paths array is required and must not be empty."
+                  text: "FAILED: input_files_paths or folder_path is required."
                 }
               ],
               isError: true
