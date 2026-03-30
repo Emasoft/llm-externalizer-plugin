@@ -10,7 +10,7 @@ version: 1.0.0
 
 ## Overview
 
-Offload bounded analysis tasks to cheaper external LLMs via MCP tools (`mcp__llm-externalizer__*`). More capable than Haiku subagents and cheaper. Supports local backends (LM Studio, Ollama) and remote (OpenRouter with optional ensemble mode).
+Offload bounded analysis tasks to cheaper external LLMs via MCP tools (`mcp__llm-externalizer__*`). Supports local backends (LM Studio, Ollama) and remote (OpenRouter with ensemble mode).
 
 ## Prerequisites
 
@@ -22,102 +22,56 @@ Offload bounded analysis tasks to cheaper external LLMs via MCP tools (`mcp__llm
 Copy this checklist and track your progress:
 
 1. [ ] Choose the right tool based on your task (see [tool reference](references/tool-reference.md))
-2. [ ] Always pass file paths via `input_files_paths` — never paste content into `instructions`
-3. [ ] Include brief project context in `instructions` (the remote LLM has zero knowledge of your project)
+2. [ ] Pass file paths via `input_files_paths` or `folder_path` — never paste content
+3. [ ] Include brief project context in `instructions`
 4. [ ] Call the tool and receive the output file path
-5. [ ] Read the output file with the Read tool to access the LLM's response
-6. [ ] Act on the results (apply fixes with Edit, create issues, report findings)
+5. [ ] Read the output file with the Read tool
+6. [ ] Act on the results (apply fixes with Edit, create issues)
 
 ## Context
 
-Use this skill when you need to analyze/summarize files without consuming orchestrator context, scan a codebase for patterns or bugs, compare files, check imports after refactoring, or generate boilerplate. Do NOT use for precise surgical edits, cross-file logic requiring tool chains, or tasks needing real-time tool access.
+Use when you need to analyze files without consuming orchestrator context, scan a codebase, compare files, or check imports. Do NOT use for surgical edits or tasks needing real-time tool access.
 
 ## Output
 
-All responses saved as `.md` files in `llm_externalizer_output/`. The tool returns only the file path — use Read to access the content. Output organization depends on `answer_mode`: `0` (per-file), `1` (per-request), `2` (merged, default).
+All responses saved as `.md` files in `llm_externalizer_output/`. Output depends on `answer_mode`: `0` (per-file), `1` (per-request), `2` (merged, default).
 
 ## Error Handling
 
 | Error | Cause | Resolution |
 |-------|-------|------------|
-| 120s timeout | Response too large | Lower `max_tokens` or split into smaller calls |
-| Auth error | API key not set | Run `discover` to check; set the env var |
-| Empty response | File exceeds model limit | Split large files or use a different model |
+| 120s timeout | Response too large | Lower `max_tokens` or split calls |
+| Auth error | API key not set | Run `discover`; set env var |
+| Empty response | File exceeds model limit | Split files or change model |
 
 ## Examples
 
-### Scan a folder for security issues
-
-```json
-{"tool": "scan_folder", "folder_path": "/path/to/src",
- "extensions": [".ts"], "instructions": "Find security vulns. Node.js Express API."}
-```
-
-### Compare two files (pair mode)
-
-```json
-{"tool": "compare_files", "input_files_paths": ["/path/old.ts", "/path/new.ts"],
- "instructions": "Focus on API breaking changes"}
-```
-
-### Compare files (batch mode)
-
-```json
-{"tool": "compare_files", "file_pairs": [["/path/a_old.ts", "/path/a_new.ts"],
- ["/path/b_old.ts", "/path/b_new.ts"]], "instructions": "Summarize changes"}
-```
-
-### Compare files (git diff mode)
-
-```json
-{"tool": "compare_files", "git_repo": "/path/to/repo", "from_ref": "v1.0.0",
- "to_ref": "HEAD", "instructions": "Focus on breaking changes"}
-```
-
-### Check source against specification
-
-```json
-{"tool": "check_against_specs", "spec_file_path": "/path/to/api-spec.md",
- "input_files_paths": "/path/to/impl.ts", "instructions": "Check API contract compliance"}
-```
-
-### Scan a folder with folder_path
-
 ```json
 {"tool": "code_task", "folder_path": "/path/to/src", "extensions": [".ts"],
- "instructions": "Find security issues. Node.js Express API."}
+ "instructions": "Find bugs. Node.js Express API."}
 ```
 
-### Quick analysis (ensemble off)
-
 ```json
-{"tool": "chat", "instructions": "What is the main export?",
- "input_files_paths": "/path/to/file.ts", "ensemble": false, "max_tokens": 500}
-```
-
-### Redact custom patterns
-
-```json
-{"tool": "chat", "instructions": "Review this config file",
- "input_files_paths": "/path/to/config.ts",
- "redact_regex": "https?://[a-zA-Z0-9._/-]+"}
+{"tool": "compare_files", "git_repo": "/path/to/repo",
+ "from_ref": "v1.0.0", "to_ref": "HEAD"}
 ```
 
 ## Resources
 
 - [Tool reference](references/tool-reference.md)
-  - Read-only analysis tools, Utility tools
-  - Standard Input Fields, Advanced Parameters (folder_path, recursive, follow_symlinks, max_files, max_retries, redact_regex)
-  - File Grouping, Critical Constraints, Safety Features
+  - Read-only analysis tools, Utility tools, Standard Input Fields
+  - Advanced Parameters, File Grouping, Critical Constraints, Safety Features
 - [Usage patterns](references/usage-patterns.md)
   - Scan a codebase for issues, Analyze multiple files together
   - Apply same check to each file independently
-  - Compare files: pair mode, batch mode, git diff mode
+  - Compare two file versions (pair mode), Compare files in batch mode
+  - Compare files via git diff
   - Check for broken code references after refactoring, Check for broken file imports
   - Reuse instructions across operations, Simple task with ensemble off (save tokens)
   - Quick factual answer with low max_tokens, Code review with persona
-  - Scan folder with gitignore + excluded dirs, Check source against specification
-  - Check entire folder against specification, Grouped file processing (isolated reports)
-  - Code-optimized analysis, folder_path usage, redact_regex usage
+  - Scan folder with gitignore + excluded dirs, Use folder_path on any tool
+  - Redact custom patterns, Check source against specification
+  - Check entire folder against specification
+  - Grouped file processing (isolated reports), Code-optimized analysis
 - [End-to-end workflow](examples/end-to-end-workflow.md)
   - Scenario: Security audit of a TypeScript project, Quick Decision Tree
