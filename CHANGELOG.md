@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.7.0] - 2026-03-30
+
+### Added
+
+- Add folder_path to chat, code_task, check_references, check_imports
+
 ## [3.6.4] - 2026-03-30
 
 ### Fixed
