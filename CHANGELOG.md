@@ -1,6 +1,16 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.8.6] - 2026-03-30
+
+### Documentation
+
+- Comprehensive update for v3.8 features
+
+### Fixed
+
+- Trim SKILL.md to <4000 chars, embed all 19 usage-patterns TOC headings
+
 ## [3.8.5] - 2026-03-30
 
 ### Fixed
