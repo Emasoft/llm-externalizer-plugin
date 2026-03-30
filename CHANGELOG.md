@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.8.2] - 2026-03-30
+
+### Fixed
+
+- Address 10 issues from code correctness audit
+
 ## [3.8.1] - 2026-03-30
 
 ### Fixed
