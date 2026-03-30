@@ -4330,7 +4330,7 @@ function buildTools() {
           max_files: {
             type: "number",
             description:
-              "Maximum number of files to process (default: 500). Safety limit to prevent runaway scans.",
+              "Maximum number of files to process (default: 2500). Safety limit to prevent runaway scans.",
           },
           instructions: {
             type: "string",
@@ -4688,7 +4688,7 @@ function buildTools() {
           max_files: {
             type: "number",
             description:
-              "Maximum number of files to process when using folder_path. Default: 1000. " +
+              "Maximum number of files to process when using folder_path. Default: 2500. " +
               "Safety limit to prevent runaway scans on large directory trees.",
           },
           instructions: {
@@ -6713,7 +6713,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // When use_gitignore is true, uses git ls-files to respect .gitignore rules.
         const files = walkDir(folder_path, {
           extensions,
-          maxFiles: max_files ?? 1000,
+          maxFiles: max_files ?? 2500,
           exclude: exclude_dirs,
           useGitignore: sfUseGitignore !== false, // default true
         });
@@ -8259,7 +8259,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const csMaxFiles = (args as { max_files?: number }).max_files;
           csFilePaths = walkDir(csFolderPath, {
             extensions: csExtensions,
-            maxFiles: csMaxFiles ?? 1000,
+            maxFiles: csMaxFiles ?? 2500,
             exclude: csExcludeDirs,
             useGitignore: csUseGitignore !== false, // default true
           });

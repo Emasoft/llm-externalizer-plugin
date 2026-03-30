@@ -31140,7 +31140,7 @@ function buildTools() {
           },
           max_files: {
             type: "number",
-            description: "Maximum number of files to process (default: 500). Safety limit to prevent runaway scans."
+            description: "Maximum number of files to process (default: 2500). Safety limit to prevent runaway scans."
           },
           instructions: {
             type: "string",
@@ -31420,7 +31420,7 @@ function buildTools() {
           },
           max_files: {
             type: "number",
-            description: "Maximum number of files to process when using folder_path. Default: 1000. Safety limit to prevent runaway scans on large directory trees."
+            description: "Maximum number of files to process when using folder_path. Default: 2500. Safety limit to prevent runaway scans on large directory trees."
           },
           instructions: {
             type: "string",
@@ -33115,7 +33115,7 @@ ${content}`
           }
           const files = walkDir(folder_path, {
             extensions,
-            maxFiles: max_files ?? 1e3,
+            maxFiles: max_files ?? 2500,
             exclude: exclude_dirs,
             useGitignore: sfUseGitignore !== false
             // default true
@@ -34480,7 +34480,7 @@ FAILED: File not found.`);
             const csMaxFiles = args.max_files;
             csFilePaths = walkDir(csFolderPath, {
               extensions: csExtensions,
-              maxFiles: csMaxFiles ?? 1e3,
+              maxFiles: csMaxFiles ?? 2500,
               exclude: csExcludeDirs,
               useGitignore: csUseGitignore !== false
               // default true
