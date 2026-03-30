@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.6.4] - 2026-03-30
+
+### Fixed
+
+- Scan_folder use_gitignore description said 'Default: false' but code defaults to true
+
 ## [3.6.3] - 2026-03-30
 
 ### Fixed
