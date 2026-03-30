@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.8.1] - 2026-03-30
+
+### Fixed
+
+- ReDoS protection, git ls-files flag incompatibility, unused param
+
 ## [3.8.0] - 2026-03-30
 
 ### Added
