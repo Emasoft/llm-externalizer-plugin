@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.8.4] - 2026-03-30
+
+### Miscellaneous
+
+- Remove old bash pre-push hook (replaced by .githooks/pre-push in Python)
+
 ## [3.8.3] - 2026-03-30
 
 ### Fixed
