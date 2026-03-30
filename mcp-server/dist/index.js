@@ -31889,8 +31889,10 @@ ${fence}`;
                 const result = await processFileCheck(fp, chatPrompt, {
                   maxTokens,
                   redact: chatRedact,
+                  regexRedact: chatRegexRedact,
                   onProgress,
-                  ensemble: useEnsemble
+                  ensemble: useEnsemble,
+                  maxBytes: chatBudgetBytes
                 });
                 perFileResults.push(
                   result.success && result.reportPath ? result.reportPath : `FAILED: ${fp} \u2014 ${result.error}`
@@ -32083,8 +32085,10 @@ Remove secrets before sending to remote LLM.`
               language,
               maxTokens: resolveDefaultMaxTokens(),
               redact: ctRedact,
+              regexRedact: ctRegexRedact,
               onProgress,
-              ensemble: ctUseEnsemble
+              ensemble: ctUseEnsemble,
+              maxBytes: ctBudgetBytes
             });
             if (!result.success) {
               return {
@@ -32194,8 +32198,11 @@ RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/M
                 const result = await processFileCheck(fp, ctTask, {
                   language,
                   maxTokens: resolveDefaultMaxTokens(),
+                  redact: ctRedact,
+                  regexRedact: ctRegexRedact,
                   onProgress,
-                  ensemble: ctUseEnsemble
+                  ensemble: ctUseEnsemble,
+                  maxBytes: ctBudgetBytes
                 });
                 perFileResults.push(
                   result.success && result.reportPath ? result.reportPath : `FAILED: ${fp} \u2014 ${result.error}`
@@ -34150,7 +34157,12 @@ ${fence}
 ${diffOutput2}
 ${fence}${sourceBlocks}` }
             ];
-            const resp = await ensembleStreaming(msgs, { temperature: 0.2, maxTokens: resolveDefaultMaxTokens(), onProgress }, cfUseEnsemble);
+            let resp;
+            try {
+              resp = await ensembleStreaming(msgs, { temperature: 0.2, maxTokens: resolveDefaultMaxTokens(), onProgress }, cfUseEnsemble);
+            } catch (err) {
+              return { error: `LLM error: ${err instanceof Error ? err.message : String(err)}` };
+            }
             if (!resp.content.trim()) return { error: "LLM returned empty response" };
             return { content: resp.content + formatFooter(resp, "compare_files", fA), model: resp.model };
           };
@@ -34164,6 +34176,9 @@ ${fence}${sourceBlocks}` }
             if (!cfFromRef) return { content: [{ type: "text", text: "FAILED: from_ref is required with git_repo." }], isError: true };
             if (!existsSync2(cfGitRepo)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
             const toRef = cfToRef || "HEAD";
+            if (cfFromRef.startsWith("-") || toRef.startsWith("-")) {
+              return { content: [{ type: "text", text: "FAILED: git refs must not start with '-'" }], isError: true };
+            }
             const nameResult = spawnSync("git", ["diff", "--name-only", cfFromRef, toRef], { cwd: cfGitRepo, encoding: "utf-8", timeout: 15e3 });
             if (nameResult.status !== 0 && nameResult.status !== 1) {
               return { content: [{ type: "text", text: `FAILED: git diff --name-only failed: ${nameResult.stderr?.trim()}` }], isError: true };
@@ -34432,6 +34447,7 @@ ${diffFence}` + sourceFileBlocks
             answer_mode: crRawMode,
             scan_secrets: crScan,
             max_payload_kb: crMaxPayloadKb,
+            redact_regex: crRedactRegexRaw,
             folder_path: crFolderPath,
             extensions: crExtensions,
             exclude_dirs: crExcludeDirs,
@@ -34442,6 +34458,12 @@ ${diffFence}` + sourceFileBlocks
           } = args;
           const crUseEnsemble = currentBackend.type === "openrouter";
           const crBudgetBytes = (crMaxPayloadKb ?? 400) * 1024;
+          let crRegexRedact = null;
+          try {
+            crRegexRedact = parseRedactRegex(crRedactRegexRaw);
+          } catch (err) {
+            return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+          }
           let crFilePathsAll = [...new Set(normalizePaths(crInputPathsRaw))];
           if (crFolderPath) {
             const folderResult = resolveFolderPath(crFolderPath, {
@@ -34502,11 +34524,11 @@ FAILED: File not found.`);
                 const depBlocks = [];
                 for (const dp of deps) {
                   try {
-                    depBlocks.push(readFileAsCodeBlock(dp, void 0, crRedact, crBudgetBytes));
+                    depBlocks.push(readFileAsCodeBlock(dp, void 0, crRedact, crBudgetBytes, crRegexRedact));
                   } catch {
                   }
                 }
-                const srcBlock = readFileAsCodeBlock(filePath, void 0, crRedact, crBudgetBytes);
+                const srcBlock = readFileAsCodeBlock(filePath, void 0, crRedact, crBudgetBytes, crRegexRedact);
                 const msgs = [
                   { role: "system", content: `Expert ${lang} developer. Check the source file for broken or outdated references to functions, variables, constants, types, and classes. Cross-reference all symbols against the dependency files provided. Report each broken reference with: the symbol name, the function/class/method where it is used (never by line number), and what is wrong. Reference files by their labeled path in the code fence header. If all references are valid, say so.` },
                   { role: "user", content: `${crPrompt ? crPrompt + "\n\n" : ""}Check this file for broken code references:
@@ -34562,11 +34584,11 @@ FAILED: File not found.`);
             const depBlocks = [];
             for (const dp of depPaths) {
               try {
-                depBlocks.push(readFileAsCodeBlock(dp, void 0, crRedact, crBudgetBytes));
+                depBlocks.push(readFileAsCodeBlock(dp, void 0, crRedact, crBudgetBytes, crRegexRedact));
               } catch {
               }
             }
-            const srcBlock = readFileAsCodeBlock(filePath, void 0, crRedact, crBudgetBytes);
+            const srcBlock = readFileAsCodeBlock(filePath, void 0, crRedact, crBudgetBytes, crRegexRedact);
             const crMessages = [
               {
                 role: "system",
@@ -34661,6 +34683,7 @@ ${crResp.content}${crFooter}`
             answer_mode: ciRawMode,
             scan_secrets: ciScan,
             max_payload_kb: ciMaxPayloadKb,
+            redact_regex: ciRedactRegexRaw,
             folder_path: ciFolderPath,
             extensions: ciExtensions,
             exclude_dirs: ciExcludeDirs,
@@ -34671,6 +34694,12 @@ ${crResp.content}${crFooter}`
           } = args;
           const _ciUseEnsemble = currentBackend.type === "openrouter";
           const ciBudgetBytes = (ciMaxPayloadKb ?? 400) * 1024;
+          let ciRegexRedact = null;
+          try {
+            ciRegexRedact = parseRedactRegex(ciRedactRegexRaw);
+          } catch (err) {
+            return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+          }
           let ciFilePathsAll = [...new Set(normalizePaths(ciInputPathsRaw))];
           if (ciFolderPath) {
             const folderResult = resolveFolderPath(ciFolderPath, {
@@ -34731,7 +34760,7 @@ FAILED: File not found.`);
                   { role: "system", content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path in the code fence header \u2014 reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.` },
                   { role: "user", content: `${ciPrompt ? ciPrompt + "\n\n" : ""}Extract all import and file references from:
 
-${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes)}` }
+${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}` }
                 ];
                 const extractResp = await chatCompletionJSON(extractMessages, { temperature: 0, maxTokens: resolveDefaultMaxTokens(), jsonSchema: EXTRACT_PATHS_SCHEMA, onProgress });
                 recordUsage(extractResp.usage);
@@ -34810,7 +34839,7 @@ FAILED: File not found.`);
                 role: "user",
                 content: `${ciPrompt ? ciPrompt + "\n\n" : ""}Extract all import and file references from:
 
-` + readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes)
+` + readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)
               }
             ];
             const extractResp = await chatCompletionJSON(extractMessages, {
@@ -34980,51 +35009,24 @@ FAILED: File not found.`);
             };
           }
           const csNormalized = normalizePaths(csInputPathsRaw);
-          if (csFolderPath && csNormalized.length > 0) {
+          let csFilePaths = [...csNormalized];
+          if (csFolderPath) {
+            const csFolderResult = resolveFolderPath(csFolderPath, {
+              extensions: csExtensions,
+              excludeDirs: csExcludeDirs,
+              useGitignore: csUseGitignore,
+              maxFiles: args.max_files
+            });
+            if (csFolderResult.error && csFolderResult.files.length === 0 && csFilePaths.length === 0) {
+              return { content: [{ type: "text", text: `FAILED: ${csFolderResult.error}` }], isError: true };
+            }
+            csFilePaths = [...csFilePaths, ...csFolderResult.files];
+          }
+          if (csFilePaths.length === 0) {
             return {
-              content: [{ type: "text", text: "FAILED: Provide input_files_paths OR folder_path, not both." }],
+              content: [{ type: "text", text: "FAILED: Provide input_files_paths or folder_path." }],
               isError: true
             };
-          }
-          let csFilePaths;
-          if (csFolderPath) {
-            if (!existsSync2(csFolderPath)) {
-              return {
-                content: [{ type: "text", text: `FAILED: folder_path not found: ${csFolderPath}` }],
-                isError: true
-              };
-            }
-            if (!statSync(csFolderPath).isDirectory()) {
-              return {
-                content: [{ type: "text", text: `FAILED: Not a directory: ${csFolderPath}` }],
-                isError: true
-              };
-            }
-            const csMaxFiles = args.max_files;
-            csFilePaths = walkDir(csFolderPath, {
-              extensions: csExtensions,
-              maxFiles: csMaxFiles ?? 2500,
-              exclude: csExcludeDirs,
-              useGitignore: csUseGitignore !== false
-              // default true
-            });
-            if (csFilePaths.length === 0) {
-              return {
-                content: [{
-                  type: "text",
-                  text: `FAILED: No matching files found in ${csFolderPath}` + (csExtensions ? ` with extensions ${csExtensions.join(", ")}` : "")
-                }],
-                isError: true
-              };
-            }
-          } else {
-            csFilePaths = csNormalized;
-            if (csFilePaths.length === 0) {
-              return {
-                content: [{ type: "text", text: "FAILED: Provide input_files_paths or folder_path." }],
-                isError: true
-              };
-            }
           }
           let csSpecBlock;
           try {

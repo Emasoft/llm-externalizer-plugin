@@ -5283,8 +5283,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               const result = await processFileCheck(fp, chatPrompt, {
                 maxTokens,
                 redact: chatRedact,
+                regexRedact: chatRegexRedact,
                 onProgress,
                 ensemble: useEnsemble,
+                maxBytes: chatBudgetBytes,
               });
               perFileResults.push(
                 result.success && result.reportPath
@@ -5516,8 +5518,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             language,
             maxTokens: resolveDefaultMaxTokens(),
             redact: ctRedact,
+            regexRedact: ctRegexRedact,
             onProgress,
             ensemble: ctUseEnsemble,
+            maxBytes: ctBudgetBytes,
           });
           if (!result.success) {
             return {
@@ -5630,8 +5634,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               const result = await processFileCheck(fp, ctTask, {
                 language,
                 maxTokens: resolveDefaultMaxTokens(),
+                redact: ctRedact,
+                regexRedact: ctRegexRedact,
                 onProgress,
                 ensemble: ctUseEnsemble,
+                maxBytes: ctBudgetBytes,
               });
               perFileResults.push(
                 result.success && result.reportPath
@@ -7913,7 +7920,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           redact_secrets?: boolean;
           scan_secrets?: boolean;
           max_payload_kb?: number;
-          output_dir?: string;
         };
         const cfBudgetBytes = (cfMaxPayloadKb ?? 400) * 1024;
         const cfUseEnsemble = currentBackend.type === "openrouter";
@@ -7942,7 +7948,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             { role: "system", content: "Expert code reviewer. Analyse the unified diff and provide a clear, structured summary. Group related changes. Note potential issues. Identify code by FUNCTION/CLASS/METHOD NAME, never by line number." },
             { role: "user", content: `${prompt ? prompt + "\n\n" : ""}Compare:\n- Before: ${fA}\n- After: ${fB}\n\nDiff:\n${fence}\n${diffOutput}\n${fence}${sourceBlocks}` },
           ];
-          const resp = await ensembleStreaming(msgs, { temperature: 0.2, maxTokens: resolveDefaultMaxTokens(), onProgress }, cfUseEnsemble);
+          let resp;
+          try {
+            resp = await ensembleStreaming(msgs, { temperature: 0.2, maxTokens: resolveDefaultMaxTokens(), onProgress }, cfUseEnsemble);
+          } catch (err) {
+            return { error: `LLM error: ${err instanceof Error ? err.message : String(err)}` };
+          }
           if (!resp.content.trim()) return { error: "LLM returned empty response" };
           return { content: resp.content + formatFooter(resp, "compare_files", fA), model: resp.model };
         };
@@ -7962,6 +7973,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (!existsSync(cfGitRepo)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
           const toRef = cfToRef || "HEAD";
           // Get list of changed files between the two refs
+          // Validate refs don't start with - (prevents flag injection)
+          if (cfFromRef.startsWith("-") || toRef.startsWith("-")) {
+            return { content: [{ type: "text", text: "FAILED: git refs must not start with '-'" }], isError: true };
+          }
           const nameResult = spawnSync("git", ["diff", "--name-only", cfFromRef, toRef], { cwd: cfGitRepo, encoding: "utf-8", timeout: 15000 });
           if (nameResult.status !== 0 && nameResult.status !== 1) {
             return { content: [{ type: "text", text: `FAILED: git diff --name-only failed: ${nameResult.stderr?.trim()}` }], isError: true };
@@ -8243,6 +8258,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           answer_mode: crRawMode,
           scan_secrets: crScan,
           max_payload_kb: crMaxPayloadKb,
+          redact_regex: crRedactRegexRaw,
           folder_path: crFolderPath,
           extensions: crExtensions,
           exclude_dirs: crExcludeDirs,
@@ -8258,6 +8274,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           answer_mode?: number;
           scan_secrets?: boolean;
           max_payload_kb?: number;
+          redact_regex?: string;
           folder_path?: string;
           extensions?: string[];
           exclude_dirs?: string[];
@@ -8268,6 +8285,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
         const crUseEnsemble = currentBackend.type === "openrouter";
         const crBudgetBytes = (crMaxPayloadKb ?? 400) * 1024;
+
+        let crRegexRedact: RegexRedactOpts | null = null;
+        try { crRegexRedact = parseRedactRegex(crRedactRegexRaw); }
+        catch (err) { return { content: [{ type: "text", text: `FAILED: ${(err as Error).message}` }], isError: true }; }
 
         let crFilePathsAll = [...new Set(normalizePaths(crInputPathsRaw))];
         if (crFolderPath) {
@@ -8325,8 +8346,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               const lang = detectLang(filePath);
               const deps = extractLocalImports(filePath, src);
               const depBlocks: string[] = [];
-              for (const dp of deps) { try { depBlocks.push(readFileAsCodeBlock(dp, undefined, crRedact, crBudgetBytes)); } catch { /* skip */ } }
-              const srcBlock = readFileAsCodeBlock(filePath, undefined, crRedact, crBudgetBytes);
+              for (const dp of deps) { try { depBlocks.push(readFileAsCodeBlock(dp, undefined, crRedact, crBudgetBytes, crRegexRedact)); } catch { /* skip */ } }
+              const srcBlock = readFileAsCodeBlock(filePath, undefined, crRedact, crBudgetBytes, crRegexRedact);
               const msgs: ChatMessage[] = [
                 { role: "system", content: `Expert ${lang} developer. Check the source file for broken or outdated references to functions, variables, constants, types, and classes. Cross-reference all symbols against the dependency files provided. Report each broken reference with: the symbol name, the function/class/method where it is used (never by line number), and what is wrong. Reference files by their labeled path in the code fence header. If all references are valid, say so.` },
                 { role: "user", content: `${crPrompt ? crPrompt + "\n\n" : ""}Check this file for broken code references:\n\n## Source File\n\n${srcBlock}\n\n${depBlocks.length > 0 ? `## Local Dependencies (${deps.length} files)\n\n${depBlocks.join("\n\n")}` : "## No local dependencies resolved."}` },
@@ -8370,13 +8391,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const depBlocks: string[] = [];
           for (const dp of depPaths) {
             try {
-              depBlocks.push(readFileAsCodeBlock(dp, undefined, crRedact, crBudgetBytes));
+              depBlocks.push(readFileAsCodeBlock(dp, undefined, crRedact, crBudgetBytes, crRegexRedact));
             } catch {
               /* skip unreadable */
             }
           }
 
-          const srcBlock = readFileAsCodeBlock(filePath, undefined, crRedact, crBudgetBytes);
+          const srcBlock = readFileAsCodeBlock(filePath, undefined, crRedact, crBudgetBytes, crRegexRedact);
           const crMessages: ChatMessage[] = [
             {
               role: "system",
@@ -8479,6 +8500,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           answer_mode: ciRawMode,
           scan_secrets: ciScan,
           max_payload_kb: ciMaxPayloadKb,
+          redact_regex: ciRedactRegexRaw,
           folder_path: ciFolderPath,
           extensions: ciExtensions,
           exclude_dirs: ciExcludeDirs,
@@ -8495,6 +8517,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           answer_mode?: number;
           scan_secrets?: boolean;
           max_payload_kb?: number;
+          redact_regex?: string;
           folder_path?: string;
           extensions?: string[];
           exclude_dirs?: string[];
@@ -8505,6 +8528,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
         const _ciUseEnsemble = currentBackend.type === "openrouter";
         const ciBudgetBytes = (ciMaxPayloadKb ?? 400) * 1024;
+
+        let ciRegexRedact: RegexRedactOpts | null = null;
+        try { ciRegexRedact = parseRedactRegex(ciRedactRegexRaw); }
+        catch (err) { return { content: [{ type: "text", text: `FAILED: ${(err as Error).message}` }], isError: true }; }
 
         let ciFilePathsAll = [...new Set(normalizePaths(ciInputPathsRaw))];
         if (ciFolderPath) {
@@ -8561,7 +8588,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               const ciResolveBase = project_root || fileDir;
               const extractMessages: ChatMessage[] = [
                 { role: "system", content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path in the code fence header — reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.` },
-                { role: "user", content: `${ciPrompt ? ciPrompt + "\n\n" : ""}Extract all import and file references from:\n\n${readFileAsCodeBlock(filePath, undefined, ciRedact, ciBudgetBytes)}` },
+                { role: "user", content: `${ciPrompt ? ciPrompt + "\n\n" : ""}Extract all import and file references from:\n\n${readFileAsCodeBlock(filePath, undefined, ciRedact, ciBudgetBytes, ciRegexRedact)}` },
               ];
               const extractResp = await chatCompletionJSON(extractMessages, { temperature: 0, maxTokens: resolveDefaultMaxTokens(), jsonSchema: EXTRACT_PATHS_SCHEMA, onProgress });
               recordUsage(extractResp.usage);
@@ -8629,7 +8656,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               role: "user",
               content:
                 `${ciPrompt ? ciPrompt + "\n\n" : ""}Extract all import and file references from:\n\n` +
-                readFileAsCodeBlock(filePath, undefined, ciRedact, ciBudgetBytes),
+                readFileAsCodeBlock(filePath, undefined, ciRedact, ciBudgetBytes, ciRegexRedact),
             },
           ];
 
@@ -8843,53 +8870,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // Reject if both folder_path and input_files_paths are provided
         const csNormalized = normalizePaths(csInputPathsRaw);
-        if (csFolderPath && csNormalized.length > 0) {
+
+        // Resolve source files from input_files_paths AND/OR folder_path (can combine both)
+        let csFilePaths: string[] = [...csNormalized];
+        if (csFolderPath) {
+          const csFolderResult = resolveFolderPath(csFolderPath, {
+            extensions: csExtensions,
+            excludeDirs: csExcludeDirs,
+            useGitignore: csUseGitignore,
+            maxFiles: (args as { max_files?: number }).max_files,
+          });
+          if (csFolderResult.error && csFolderResult.files.length === 0 && csFilePaths.length === 0) {
+            return { content: [{ type: "text", text: `FAILED: ${csFolderResult.error}` }], isError: true };
+          }
+          csFilePaths = [...csFilePaths, ...csFolderResult.files];
+        }
+        if (csFilePaths.length === 0) {
           return {
-            content: [{ type: "text", text: "FAILED: Provide input_files_paths OR folder_path, not both." }],
+            content: [{ type: "text", text: "FAILED: Provide input_files_paths or folder_path." }],
             isError: true,
           };
-        }
-
-        // Resolve source files from either input_files_paths or folder_path
-        let csFilePaths: string[];
-        if (csFolderPath) {
-          if (!existsSync(csFolderPath)) {
-            return {
-              content: [{ type: "text", text: `FAILED: folder_path not found: ${csFolderPath}` }],
-              isError: true,
-            };
-          }
-          if (!statSync(csFolderPath).isDirectory()) {
-            return {
-              content: [{ type: "text", text: `FAILED: Not a directory: ${csFolderPath}` }],
-              isError: true,
-            };
-          }
-          const csMaxFiles = (args as { max_files?: number }).max_files;
-          csFilePaths = walkDir(csFolderPath, {
-            extensions: csExtensions,
-            maxFiles: csMaxFiles ?? 2500,
-            exclude: csExcludeDirs,
-            useGitignore: csUseGitignore !== false, // default true
-          });
-          if (csFilePaths.length === 0) {
-            return {
-              content: [{
-                type: "text",
-                text: `FAILED: No matching files found in ${csFolderPath}` +
-                  (csExtensions ? ` with extensions ${csExtensions.join(", ")}` : ""),
-              }],
-              isError: true,
-            };
-          }
-        } else {
-          csFilePaths = csNormalized;
-          if (csFilePaths.length === 0) {
-            return {
-              content: [{ type: "text", text: "FAILED: Provide input_files_paths or folder_path." }],
-              isError: true,
-            };
-          }
         }
 
         // Read the spec file
