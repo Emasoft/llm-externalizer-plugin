@@ -14111,6 +14111,7 @@ import {
   appendFileSync,
   readdirSync,
   unlinkSync,
+  realpathSync,
   watchFile,
   unwatchFile
 } from "node:fs";
@@ -29047,6 +29048,8 @@ function walkDir(dirPath, options) {
   const maxFiles = options?.maxFiles ?? 1e4;
   const extensions = options?.extensions;
   const skipBinary = !options?.includeBinary;
+  const recursive = options?.recursive !== false;
+  const followSymlinks = options?.followSymlinks !== false;
   if (options?.useGitignore) {
     const gitResult = spawnSync(
       "git",
@@ -29080,6 +29083,7 @@ function walkDir(dirPath, options) {
   const results = [];
   const extraExclude = options?.exclude ?? [];
   const exclude = /* @__PURE__ */ new Set([...WALK_DEFAULT_EXCLUDE, ...extraExclude]);
+  const visitedPaths = /* @__PURE__ */ new Set();
   function recurse(dir) {
     if (results.length >= maxFiles) return;
     let entries;
@@ -29091,8 +29095,32 @@ function walkDir(dirPath, options) {
     for (const entry of entries) {
       if (results.length >= maxFiles) return;
       const fullPath = join2(dir, entry.name);
-      if (entry.isSymbolicLink()) continue;
+      if (entry.isSymbolicLink()) {
+        if (!followSymlinks) continue;
+        try {
+          const realPath = realpathSync(fullPath);
+          if (visitedPaths.has(realPath)) continue;
+          visitedPaths.add(realPath);
+          const targetStat = statSync(realPath);
+          if (targetStat.isDirectory() && recursive) {
+            if (!entry.name.startsWith(".") && !exclude.has(entry.name)) {
+              recurse(fullPath);
+            }
+          } else if (targetStat.isFile()) {
+            if (skipBinary && isBinaryExtension(fullPath)) continue;
+            if (extensions) {
+              const ext = extname(entry.name).toLowerCase();
+              if (!extensions.includes(ext)) continue;
+            }
+            results.push(fullPath);
+          }
+        } catch {
+          continue;
+        }
+        continue;
+      }
       if (entry.isDirectory()) {
+        if (!recursive) continue;
         if (entry.name === ".git" || entry.name === ".svn" || entry.name === ".hg" || exclude.has(entry.name)) continue;
         if (entry.name.startsWith(".")) continue;
         recurse(fullPath);
@@ -30188,6 +30216,30 @@ function normalizePaths(raw) {
   const arr = Array.isArray(raw) ? raw : [raw];
   return arr.filter((p) => typeof p === "string" && p.length > 0);
 }
+function resolveFolderPath(folderPath, opts) {
+  if (!existsSync2(folderPath)) {
+    return { files: [], error: `folder_path not found: ${folderPath}` };
+  }
+  if (!statSync(folderPath).isDirectory()) {
+    return { files: [], error: `Not a directory: ${folderPath}` };
+  }
+  const files = walkDir(folderPath, {
+    extensions: opts?.extensions,
+    maxFiles: opts?.maxFiles ?? 2500,
+    exclude: opts?.excludeDirs,
+    useGitignore: opts?.useGitignore !== false,
+    // default true
+    recursive: opts?.recursive !== false,
+    // default true
+    followSymlinks: opts?.followSymlinks !== false
+    // default true
+  });
+  if (files.length === 0) {
+    const extInfo = opts?.extensions ? ` with extensions ${opts.extensions.join(", ")}` : "";
+    return { files: [], error: `No matching files found in ${folderPath}${extInfo}` };
+  }
+  return { files };
+}
 var GROUP_HEADER_RE = /^---GROUP:(.+)---$/;
 var GROUP_FOOTER_RE = /^---\/GROUP:(.+)---$/;
 function parseFileGroups(paths) {
@@ -30793,6 +30845,38 @@ var maxRetriesSchema = {
   type: "number",
   description: "Max retries per file when answer_mode=0 (per-file processing). Default: 1 (no retry). Set to 3 for robust batch processing with exponential backoff and circuit breaker. When > 1, enables parallel execution and automatic abort after 3 consecutive failures."
 };
+var folderSchemaProps = {
+  folder_path: {
+    type: "string",
+    description: "Absolute path to a folder to scan. All matching files are processed. Can be combined with input_files_paths."
+  },
+  extensions: {
+    type: "array",
+    items: { type: "string" },
+    description: 'File extensions to include when using folder_path. E.g., [".ts", ".py"]. If not set, all non-binary files are included.'
+  },
+  exclude_dirs: {
+    type: "array",
+    items: { type: "string" },
+    description: "Additional directory names to skip when scanning folder_path. Hidden dirs, node_modules, .git, dist, build are always skipped."
+  },
+  use_gitignore: {
+    type: "boolean",
+    description: "Use .gitignore rules to filter files (via git ls-files). Default: true. Set false to include gitignored files."
+  },
+  recursive: {
+    type: "boolean",
+    description: "Recurse into subdirectories when scanning folder_path. Default: true."
+  },
+  follow_symlinks: {
+    type: "boolean",
+    description: "Follow symbolic links to files and directories. Default: true. Circular symlinks are detected and skipped automatically."
+  },
+  max_files: {
+    type: "number",
+    description: "Maximum number of files to discover from folder_path. Default: 2500."
+  }
+};
 var redactRegexSchema = {
   type: "string",
   description: "JavaScript regex pattern to redact matching strings from file content before sending to LLM. Applied after secret redaction. Alphanumeric matches \u2192 [REDACTED:USER_PATTERN], numeric-only matches \u2192 zero-padded placeholder. Invalid regex returns an error with details."
@@ -30848,6 +30932,7 @@ function buildTools() {
             type: "string",
             description: "Inline content, code-fenced in the prompt. DISCOURAGED \u2014 wastes your context tokens. Use input_files_paths instead. Only for short snippets that are not on disk."
           },
+          ...folderSchemaProps,
           system: {
             type: "string",
             description: 'Persona. Be specific: "Senior TypeScript dev" not "helpful assistant".'
@@ -30905,6 +30990,7 @@ function buildTools() {
             type: "string",
             description: "Inline source code, code-fenced. DISCOURAGED \u2014 wastes your context tokens. Use input_files_paths instead. Only for short snippets not on disk."
           },
+          ...folderSchemaProps,
           language: {
             type: "string",
             description: "Programming language (auto-detected from input_files_paths extension if not set)."
@@ -31306,6 +31392,7 @@ function buildTools() {
             ],
             description: "Source file(s) to check for broken references."
           },
+          ...folderSchemaProps,
           instructions: {
             type: "string",
             description: "Optional additional context or focus areas."
@@ -31349,6 +31436,7 @@ function buildTools() {
             ],
             description: "Source file(s) to check for broken imports."
           },
+          ...folderSchemaProps,
           project_root: {
             type: "string",
             description: "Project root for resolving relative imports. Defaults to the source file's directory."
@@ -31529,7 +31617,14 @@ Settings file: ${SETTINGS_FILE}`
             redact_secrets: chatRedact,
             max_payload_kb: chatMaxPayloadKb,
             max_retries: chatMaxRetries,
-            redact_regex: chatRedactRegexRaw
+            redact_regex: chatRedactRegexRaw,
+            folder_path: chatFolderPath,
+            extensions: chatExtensions,
+            exclude_dirs: chatExcludeDirs,
+            use_gitignore: chatUseGitignore,
+            recursive: chatRecursive,
+            follow_symlinks: chatFollowSymlinks,
+            max_files: chatMaxFiles
           } = args;
           const useEnsemble = currentBackend.type === "openrouter";
           const chatBudgetBytes = (chatMaxPayloadKb ?? 400) * 1024;
@@ -31554,7 +31649,21 @@ Settings file: ${SETTINGS_FILE}`
               isError: true
             };
           }
-          const chatFilePaths = normalizePaths(chatInputPathsRaw);
+          let chatFilePaths = normalizePaths(chatInputPathsRaw);
+          if (chatFolderPath) {
+            const folderResult = resolveFolderPath(chatFolderPath, {
+              extensions: chatExtensions,
+              excludeDirs: chatExcludeDirs,
+              useGitignore: chatUseGitignore,
+              recursive: chatRecursive,
+              followSymlinks: chatFollowSymlinks,
+              maxFiles: chatMaxFiles
+            });
+            if (folderResult.error && folderResult.files.length === 0 && chatFilePaths.length === 0) {
+              return { content: [{ type: "text", text: `FAILED: ${folderResult.error}` }], isError: true };
+            }
+            chatFilePaths = [...chatFilePaths, ...folderResult.files];
+          }
           if (chatScan) {
             const chatRealFiles = chatFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
             if (chatRealFiles.length > 0) {
@@ -31767,7 +31876,14 @@ ${resp.content}${footer}`
             redact_secrets: ctRedact,
             max_payload_kb: ctMaxPayloadKb,
             max_retries: ctMaxRetries,
-            redact_regex: ctRedactRegexRaw
+            redact_regex: ctRedactRegexRaw,
+            folder_path: ctFolderPath,
+            extensions: ctExtensions,
+            exclude_dirs: ctExcludeDirs,
+            use_gitignore: ctUseGitignore,
+            recursive: ctRecursive,
+            follow_symlinks: ctFollowSymlinks,
+            max_files: ctMaxFiles
           } = args;
           const ctUseEnsemble = currentBackend.type === "openrouter";
           const ctBudgetBytes = (ctMaxPayloadKb ?? 400) * 1024;
@@ -31784,7 +31900,21 @@ ${resp.content}${footer}`
               isError: true
             };
           }
-          const ctFilePaths = normalizePaths(ctInputPathsRaw);
+          let ctFilePaths = normalizePaths(ctInputPathsRaw);
+          if (ctFolderPath) {
+            const folderResult = resolveFolderPath(ctFolderPath, {
+              extensions: ctExtensions,
+              excludeDirs: ctExcludeDirs,
+              useGitignore: ctUseGitignore,
+              recursive: ctRecursive,
+              followSymlinks: ctFollowSymlinks,
+              maxFiles: ctMaxFiles
+            });
+            if (folderResult.error && folderResult.files.length === 0 && ctFilePaths.length === 0) {
+              return { content: [{ type: "text", text: `FAILED: ${folderResult.error}` }], isError: true };
+            }
+            ctFilePaths = [...ctFilePaths, ...folderResult.files];
+          }
           let ctRegexRedact = null;
           try {
             ctRegexRedact = parseRedactRegex(ctRedactRegexRaw);
@@ -33950,11 +34080,32 @@ ${diffFence}` + sourceFileBlocks
             redact_secrets: crRedact,
             answer_mode: crRawMode,
             scan_secrets: crScan,
-            max_payload_kb: crMaxPayloadKb
+            max_payload_kb: crMaxPayloadKb,
+            folder_path: crFolderPath,
+            extensions: crExtensions,
+            exclude_dirs: crExcludeDirs,
+            use_gitignore: crUseGitignore,
+            recursive: crRecursive,
+            follow_symlinks: crFollowSymlinks,
+            max_files: crMaxFiles
           } = args;
           const crUseEnsemble = currentBackend.type === "openrouter";
           const crBudgetBytes = (crMaxPayloadKb ?? 400) * 1024;
-          const crFilePathsAll = [...new Set(normalizePaths(crInputPathsRaw))];
+          let crFilePathsAll = [...new Set(normalizePaths(crInputPathsRaw))];
+          if (crFolderPath) {
+            const folderResult = resolveFolderPath(crFolderPath, {
+              extensions: crExtensions,
+              excludeDirs: crExcludeDirs,
+              useGitignore: crUseGitignore,
+              recursive: crRecursive,
+              followSymlinks: crFollowSymlinks,
+              maxFiles: crMaxFiles
+            });
+            if (folderResult.error && folderResult.files.length === 0 && crFilePathsAll.length === 0) {
+              return { content: [{ type: "text", text: `FAILED: ${folderResult.error}` }], isError: true };
+            }
+            crFilePathsAll = [.../* @__PURE__ */ new Set([...crFilePathsAll, ...folderResult.files])];
+          }
           if (crFilePathsAll.length === 0) {
             return {
               content: [
@@ -34158,15 +34309,36 @@ ${crResp.content}${crFooter}`
             redact_secrets: ciRedact,
             answer_mode: ciRawMode,
             scan_secrets: ciScan,
-            max_payload_kb: ciMaxPayloadKb
+            max_payload_kb: ciMaxPayloadKb,
+            folder_path: ciFolderPath,
+            extensions: ciExtensions,
+            exclude_dirs: ciExcludeDirs,
+            use_gitignore: ciUseGitignore,
+            recursive: ciRecursive,
+            follow_symlinks: ciFollowSymlinks,
+            max_files: ciMaxFiles
           } = args;
           const _ciUseEnsemble = currentBackend.type === "openrouter";
           const ciBudgetBytes = (ciMaxPayloadKb ?? 400) * 1024;
-          const ciFilePathsAll = [...new Set(normalizePaths(ciInputPathsRaw))];
+          let ciFilePathsAll = [...new Set(normalizePaths(ciInputPathsRaw))];
+          if (ciFolderPath) {
+            const folderResult = resolveFolderPath(ciFolderPath, {
+              extensions: ciExtensions,
+              excludeDirs: ciExcludeDirs,
+              useGitignore: ciUseGitignore,
+              recursive: ciRecursive,
+              followSymlinks: ciFollowSymlinks,
+              maxFiles: ciMaxFiles
+            });
+            if (folderResult.error && folderResult.files.length === 0 && ciFilePathsAll.length === 0) {
+              return { content: [{ type: "text", text: `FAILED: ${folderResult.error}` }], isError: true };
+            }
+            ciFilePathsAll = [.../* @__PURE__ */ new Set([...ciFilePathsAll, ...folderResult.files])];
+          }
           if (ciFilePathsAll.length === 0) {
             return {
               content: [
-                { type: "text", text: "FAILED: input_files_paths is required." }
+                { type: "text", text: "FAILED: input_files_paths or folder_path is required." }
               ],
               isError: true
             };

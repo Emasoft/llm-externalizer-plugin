@@ -19,6 +19,7 @@ import {
   appendFileSync,
   readdirSync,
   unlinkSync,
+  realpathSync,
   watchFile,
   unwatchFile,
 } from "node:fs";
@@ -1084,11 +1085,15 @@ function walkDir(
     exclude?: string[];
     includeBinary?: boolean;
     useGitignore?: boolean;
+    recursive?: boolean;       // default: true — recurse into subdirectories
+    followSymlinks?: boolean;  // default: true — follow symlinks to files/dirs
   },
 ): string[] {
   const maxFiles = options?.maxFiles ?? 10000;
   const extensions = options?.extensions;
   const skipBinary = !options?.includeBinary;
+  const recursive = options?.recursive !== false;       // default true
+  const followSymlinks = options?.followSymlinks !== false; // default true
 
   // When useGitignore is true, use `git ls-files` which respects all .gitignore rules.
   // This is the most correct way to filter — it handles nested .gitignore files,
@@ -1127,6 +1132,8 @@ function walkDir(
   const results: string[] = [];
   const extraExclude = options?.exclude ?? [];
   const exclude = new Set([...WALK_DEFAULT_EXCLUDE, ...extraExclude]);
+  // Track visited real paths to detect circular symlinks
+  const visitedPaths = new Set<string>();
 
   function recurse(dir: string) {
     if (results.length >= maxFiles) return;
@@ -1139,9 +1146,36 @@ function walkDir(
     for (const entry of entries) {
       if (results.length >= maxFiles) return;
       const fullPath = join(dir, entry.name);
-      // H6: Skip symlinks entirely — prevents infinite recursion on symlink loops
-      if (entry.isSymbolicLink()) continue;
+
+      // Resolve symlinks: follow them to their target (file or dir)
+      // Track visited real paths to prevent infinite loops from circular symlinks
+      if (entry.isSymbolicLink()) {
+        if (!followSymlinks) continue;
+        try {
+          const realPath = realpathSync(fullPath);
+          if (visitedPaths.has(realPath)) continue; // circular symlink — skip
+          visitedPaths.add(realPath);
+          const targetStat = statSync(realPath);
+          if (targetStat.isDirectory() && recursive) {
+            if (!entry.name.startsWith(".") && !exclude.has(entry.name)) {
+              recurse(fullPath);
+            }
+          } else if (targetStat.isFile()) {
+            if (skipBinary && isBinaryExtension(fullPath)) continue;
+            if (extensions) {
+              const ext = extname(entry.name).toLowerCase();
+              if (!extensions.includes(ext)) continue;
+            }
+            results.push(fullPath);
+          }
+        } catch {
+          continue; // broken symlink — skip
+        }
+        continue;
+      }
+
       if (entry.isDirectory()) {
+        if (!recursive) continue;
         // L7: Only skip well-known hidden dirs, not all dotfiles
         if (entry.name === ".git" || entry.name === ".svn" || entry.name === ".hg" || exclude.has(entry.name)) continue;
         // Skip other hidden dirs (covers .venv, .cache, etc.)
@@ -1156,7 +1190,6 @@ function walkDir(
         }
         results.push(fullPath);
       }
-      // Symlinks (isSymbolicLink()) are silently skipped — avoids infinite loops
     }
   }
 
@@ -2993,6 +3026,47 @@ function normalizePaths(raw: string | string[] | undefined | null): string[] {
   return arr.filter((p): p is string => typeof p === "string" && p.length > 0);
 }
 
+// ── Folder path resolution ─────────────────────────────────────────
+// Shared logic for resolving folder_path to file paths. Used by tools
+// that accept folder_path as an alternative to input_files_paths.
+
+interface FolderResolveResult {
+  files: string[];
+  error?: string;
+}
+
+function resolveFolderPath(
+  folderPath: string,
+  opts?: {
+    extensions?: string[];
+    excludeDirs?: string[];
+    useGitignore?: boolean;
+    recursive?: boolean;
+    followSymlinks?: boolean;
+    maxFiles?: number;
+  },
+): FolderResolveResult {
+  if (!existsSync(folderPath)) {
+    return { files: [], error: `folder_path not found: ${folderPath}` };
+  }
+  if (!statSync(folderPath).isDirectory()) {
+    return { files: [], error: `Not a directory: ${folderPath}` };
+  }
+  const files = walkDir(folderPath, {
+    extensions: opts?.extensions,
+    maxFiles: opts?.maxFiles ?? 2500,
+    exclude: opts?.excludeDirs,
+    useGitignore: opts?.useGitignore !== false,     // default true
+    recursive: opts?.recursive !== false,            // default true
+    followSymlinks: opts?.followSymlinks !== false,   // default true
+  });
+  if (files.length === 0) {
+    const extInfo = opts?.extensions ? ` with extensions ${opts.extensions.join(", ")}` : "";
+    return { files: [], error: `No matching files found in ${folderPath}${extInfo}` };
+  }
+  return { files };
+}
+
 // ── File grouping support ──────────────────────────────────────────
 // Callers can organize files into named groups using delimiter strings
 // in the input_files_paths array. Each group is processed in isolation
@@ -3816,6 +3890,52 @@ const maxRetriesSchema = {
     "When > 1, enables parallel execution and automatic abort after 3 consecutive failures.",
 };
 
+// Reusable schema properties for folder-based file discovery
+const folderSchemaProps = {
+  folder_path: {
+    type: "string" as const,
+    description:
+      "Absolute path to a folder to scan. " +
+      "All matching files are processed. Can be combined with input_files_paths.",
+  },
+  extensions: {
+    type: "array" as const,
+    items: { type: "string" as const },
+    description:
+      'File extensions to include when using folder_path. E.g., [".ts", ".py"]. ' +
+      "If not set, all non-binary files are included.",
+  },
+  exclude_dirs: {
+    type: "array" as const,
+    items: { type: "string" as const },
+    description:
+      "Additional directory names to skip when scanning folder_path. " +
+      "Hidden dirs, node_modules, .git, dist, build are always skipped.",
+  },
+  use_gitignore: {
+    type: "boolean" as const,
+    description:
+      "Use .gitignore rules to filter files (via git ls-files). Default: true. " +
+      "Set false to include gitignored files.",
+  },
+  recursive: {
+    type: "boolean" as const,
+    description:
+      "Recurse into subdirectories when scanning folder_path. Default: true.",
+  },
+  follow_symlinks: {
+    type: "boolean" as const,
+    description:
+      "Follow symbolic links to files and directories. Default: true. " +
+      "Circular symlinks are detected and skipped automatically.",
+  },
+  max_files: {
+    type: "number" as const,
+    description:
+      "Maximum number of files to discover from folder_path. Default: 2500.",
+  },
+};
+
 const redactRegexSchema = {
   type: "string" as const,
   description:
@@ -3920,6 +4040,7 @@ function buildTools() {
               "DISCOURAGED — wastes your context tokens. Use input_files_paths instead. " +
               "Only for short snippets that are not on disk.",
           },
+          ...folderSchemaProps,
           system: {
             type: "string",
             description:
@@ -4001,6 +4122,7 @@ function buildTools() {
               "Inline source code, code-fenced. DISCOURAGED — wastes your context tokens. " +
               "Use input_files_paths instead. Only for short snippets not on disk.",
           },
+          ...folderSchemaProps,
           language: {
             type: "string",
             description:
@@ -4533,6 +4655,7 @@ function buildTools() {
             ],
             description: "Source file(s) to check for broken references.",
           },
+          ...folderSchemaProps,
           instructions: {
             type: "string",
             description: "Optional additional context or focus areas.",
@@ -4586,6 +4709,7 @@ function buildTools() {
             ],
             description: "Source file(s) to check for broken imports.",
           },
+          ...folderSchemaProps,
           project_root: {
             type: "string",
             description:
@@ -4824,6 +4948,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           max_payload_kb: chatMaxPayloadKb,
           max_retries: chatMaxRetries,
           redact_regex: chatRedactRegexRaw,
+          folder_path: chatFolderPath,
+          extensions: chatExtensions,
+          exclude_dirs: chatExcludeDirs,
+          use_gitignore: chatUseGitignore,
+          recursive: chatRecursive,
+          follow_symlinks: chatFollowSymlinks,
+          max_files: chatMaxFiles,
         } = args as {
           instructions?: string;
           instructions_files_paths?: string | string[];
@@ -4837,6 +4968,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           max_retries?: number;
           max_payload_kb?: number;
           redact_regex?: string;
+          folder_path?: string;
+          extensions?: string[];
+          exclude_dirs?: string[];
+          use_gitignore?: boolean;
+          recursive?: boolean;
+          follow_symlinks?: boolean;
+          max_files?: number;
         };
         // Ensemble always ON for remote backends, OFF for local
         const useEnsemble = currentBackend.type === "openrouter";
@@ -4864,7 +5002,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             isError: true,
           };
         }
-        const chatFilePaths = normalizePaths(chatInputPathsRaw);
+        // Resolve file paths: folder_path OR input_files_paths (or both)
+        let chatFilePaths = normalizePaths(chatInputPathsRaw);
+        if (chatFolderPath) {
+          const folderResult = resolveFolderPath(chatFolderPath, {
+            extensions: chatExtensions,
+            excludeDirs: chatExcludeDirs,
+            useGitignore: chatUseGitignore,
+            recursive: chatRecursive,
+            followSymlinks: chatFollowSymlinks,
+            maxFiles: chatMaxFiles,
+          });
+          if (folderResult.error && folderResult.files.length === 0 && chatFilePaths.length === 0) {
+            return { content: [{ type: "text", text: `FAILED: ${folderResult.error}` }], isError: true };
+          }
+          chatFilePaths = [...chatFilePaths, ...folderResult.files];
+        }
 
         // scan_secrets: abort if any secrets are found in input files or inline content
         if (chatScan) {
@@ -5102,6 +5255,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           max_payload_kb: ctMaxPayloadKb,
           max_retries: ctMaxRetries,
           redact_regex: ctRedactRegexRaw,
+          folder_path: ctFolderPath,
+          extensions: ctExtensions,
+          exclude_dirs: ctExcludeDirs,
+          use_gitignore: ctUseGitignore,
+          recursive: ctRecursive,
+          follow_symlinks: ctFollowSymlinks,
+          max_files: ctMaxFiles,
         } = args as {
           instructions?: string;
           instructions_files_paths?: string | string[];
@@ -5114,6 +5274,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           max_payload_kb?: number;
           max_retries?: number;
           redact_regex?: string;
+          folder_path?: string;
+          extensions?: string[];
+          exclude_dirs?: string[];
+          use_gitignore?: boolean;
+          recursive?: boolean;
+          follow_symlinks?: boolean;
+          max_files?: number;
         };
         const ctUseEnsemble = currentBackend.type === "openrouter";
         const ctBudgetBytes = (ctMaxPayloadKb ?? 400) * 1024;
@@ -5130,7 +5297,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             isError: true,
           };
         }
-        const ctFilePaths = normalizePaths(ctInputPathsRaw);
+        // Resolve file paths: folder_path OR input_files_paths (or both)
+        let ctFilePaths = normalizePaths(ctInputPathsRaw);
+        if (ctFolderPath) {
+          const folderResult = resolveFolderPath(ctFolderPath, {
+            extensions: ctExtensions,
+            excludeDirs: ctExcludeDirs,
+            useGitignore: ctUseGitignore,
+            recursive: ctRecursive,
+            followSymlinks: ctFollowSymlinks,
+            maxFiles: ctMaxFiles,
+          });
+          if (folderResult.error && folderResult.files.length === 0 && ctFilePaths.length === 0) {
+            return { content: [{ type: "text", text: `FAILED: ${folderResult.error}` }], isError: true };
+          }
+          ctFilePaths = [...ctFilePaths, ...folderResult.files];
+        }
 
         // Validate redact_regex upfront
         let ctRegexRedact: RegexRedactOpts | null = null;
@@ -7684,6 +7866,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           answer_mode: crRawMode,
           scan_secrets: crScan,
           max_payload_kb: crMaxPayloadKb,
+          folder_path: crFolderPath,
+          extensions: crExtensions,
+          exclude_dirs: crExcludeDirs,
+          use_gitignore: crUseGitignore,
+          recursive: crRecursive,
+          follow_symlinks: crFollowSymlinks,
+          max_files: crMaxFiles,
         } = args as {
           input_files_paths: string | string[];
           instructions?: string;
@@ -7692,11 +7881,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           answer_mode?: number;
           scan_secrets?: boolean;
           max_payload_kb?: number;
+          folder_path?: string;
+          extensions?: string[];
+          exclude_dirs?: string[];
+          use_gitignore?: boolean;
+          recursive?: boolean;
+          follow_symlinks?: boolean;
+          max_files?: number;
         };
         const crUseEnsemble = currentBackend.type === "openrouter";
         const crBudgetBytes = (crMaxPayloadKb ?? 400) * 1024;
 
-        const crFilePathsAll = [...new Set(normalizePaths(crInputPathsRaw))];
+        let crFilePathsAll = [...new Set(normalizePaths(crInputPathsRaw))];
+        if (crFolderPath) {
+          const folderResult = resolveFolderPath(crFolderPath, {
+            extensions: crExtensions, excludeDirs: crExcludeDirs,
+            useGitignore: crUseGitignore, recursive: crRecursive,
+            followSymlinks: crFollowSymlinks, maxFiles: crMaxFiles,
+          });
+          if (folderResult.error && folderResult.files.length === 0 && crFilePathsAll.length === 0) {
+            return { content: [{ type: "text", text: `FAILED: ${folderResult.error}` }], isError: true };
+          }
+          crFilePathsAll = [...new Set([...crFilePathsAll, ...folderResult.files])];
+        }
         if (crFilePathsAll.length === 0) {
           return {
             content: [
@@ -7895,6 +8102,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           answer_mode: ciRawMode,
           scan_secrets: ciScan,
           max_payload_kb: ciMaxPayloadKb,
+          folder_path: ciFolderPath,
+          extensions: ciExtensions,
+          exclude_dirs: ciExcludeDirs,
+          use_gitignore: ciUseGitignore,
+          recursive: ciRecursive,
+          follow_symlinks: ciFollowSymlinks,
+          max_files: ciMaxFiles,
         } = args as {
           input_files_paths: string | string[];
           project_root?: string;
@@ -7904,15 +8118,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           answer_mode?: number;
           scan_secrets?: boolean;
           max_payload_kb?: number;
+          folder_path?: string;
+          extensions?: string[];
+          exclude_dirs?: string[];
+          use_gitignore?: boolean;
+          recursive?: boolean;
+          follow_symlinks?: boolean;
+          max_files?: number;
         };
         const _ciUseEnsemble = currentBackend.type === "openrouter";
         const ciBudgetBytes = (ciMaxPayloadKb ?? 400) * 1024;
 
-        const ciFilePathsAll = [...new Set(normalizePaths(ciInputPathsRaw))];
+        let ciFilePathsAll = [...new Set(normalizePaths(ciInputPathsRaw))];
+        if (ciFolderPath) {
+          const folderResult = resolveFolderPath(ciFolderPath, {
+            extensions: ciExtensions, excludeDirs: ciExcludeDirs,
+            useGitignore: ciUseGitignore, recursive: ciRecursive,
+            followSymlinks: ciFollowSymlinks, maxFiles: ciMaxFiles,
+          });
+          if (folderResult.error && folderResult.files.length === 0 && ciFilePathsAll.length === 0) {
+            return { content: [{ type: "text", text: `FAILED: ${folderResult.error}` }], isError: true };
+          }
+          ciFilePathsAll = [...new Set([...ciFilePathsAll, ...folderResult.files])];
+        }
         if (ciFilePathsAll.length === 0) {
           return {
             content: [
-              { type: "text", text: "FAILED: input_files_paths is required." },
+              { type: "text", text: "FAILED: input_files_paths or folder_path is required." },
             ],
             isError: true,
           };
