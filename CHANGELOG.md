@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.8.5] - 2026-03-30
+
+### Fixed
+
+- Address 10 issues from full src audit (CC-P3-001 through CC-P3-012)
+
 ## [3.8.4] - 2026-03-30
 
 ### Miscellaneous
