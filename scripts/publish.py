@@ -25,8 +25,8 @@ Steps:
 
 import argparse
 import json
-import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -63,11 +63,13 @@ def update_readme_badges(readme_path: Path, version: str, build_ok: bool) -> boo
 
 
 def run(
-    cmd: list[str], *, check: bool = True, capture: bool = True
+    cmd: list[str], *, check: bool = True, capture: bool = True, cwd: str | None = None,
+    capture_output: bool | None = None,
 ) -> subprocess.CompletedProcess:
     """Run a command, printing it first. Fail-fast on error."""
-    print(f"  $ {' '.join(cmd)}")
-    return subprocess.run(cmd, check=check, capture_output=capture, text=True)
+    print(f"  $ {shlex.join(cmd)}")
+    use_capture = capture_output if capture_output is not None else capture
+    return subprocess.run(cmd, check=check, capture_output=use_capture, text=True, cwd=cwd)
 
 
 def bump_version(current: str, part: str) -> str:
@@ -98,13 +100,13 @@ def extract_release_notes(changelog_path: Path, version: str) -> str:
 
 def run_checks(repo_root: Path) -> bool:
     """Run build check on the MCP server. Return True if it compiles."""
-    mcp_dir = repo_root / "mcp-server"
+    mcp_dir = str(repo_root / "mcp-server")
 
-    if not (mcp_dir / "node_modules").exists():
+    if not (repo_root / "mcp-server" / "node_modules").exists():
         print("  Installing dependencies...")
         result = run(
             ["npm", "ci", "--ignore-scripts"],
-            check=False,
+            check=False, cwd=mcp_dir,
         )
         if result.returncode != 0:
             print("ERROR: npm ci failed", file=sys.stderr)
@@ -115,7 +117,7 @@ def run_checks(repo_root: Path) -> bool:
     # TypeScript compile check
     result = run(
         ["npx", "tsc", "--noEmit"],
-        check=False,
+        check=False, cwd=mcp_dir,
     )
     if result.returncode != 0:
         print("ERROR: TypeScript compilation failed", file=sys.stderr)
@@ -178,12 +180,7 @@ def main():
 
     # ── 1. Run checks (before any file modifications) ──
     print("── 1. Run checks ──")
-    saved_cwd = os.getcwd()
-    try:
-        os.chdir(repo_root / "mcp-server")
-        checks_ok = run_checks(repo_root)
-    finally:
-        os.chdir(saved_cwd)
+    checks_ok = run_checks(repo_root)
     if not checks_ok:
         print("ERROR: checks failed. Fix issues before publishing.", file=sys.stderr)
         sys.exit(1)
@@ -316,12 +313,7 @@ def main():
 
     # ── 2b. Rebuild dist (so bundled version matches source) ──
     print("── 2b. Rebuild dist ──")
-    saved_cwd2 = os.getcwd()
-    try:
-        os.chdir(repo_root / "mcp-server")
-        rebuild = run(["npm", "run", "build"], capture=True, check=False)
-    finally:
-        os.chdir(saved_cwd2)
+    rebuild = run(["npm", "run", "build"], capture=True, check=False, cwd=str(repo_root / "mcp-server"))
     if rebuild.returncode != 0:
         print("ERROR: dist rebuild failed after version sync.", file=sys.stderr)
         if rebuild.stderr:

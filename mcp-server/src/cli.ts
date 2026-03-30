@@ -39,13 +39,19 @@ function parseFlags(args: string[]): Record<string, string> {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg.startsWith("--")) {
-      const key = arg.slice(2);
-      const next = args[i + 1];
-      if (next !== undefined && !next.startsWith("--")) {
-        flags[key] = next;
-        i++;
+      const eqIdx = arg.indexOf("=");
+      if (eqIdx !== -1) {
+        // --key=value syntax
+        flags[arg.slice(2, eqIdx)] = arg.slice(eqIdx + 1);
       } else {
-        flags[key] = "true";
+        const key = arg.slice(2);
+        const next = args[i + 1];
+        if (next !== undefined && !next.startsWith("--")) {
+          flags[key] = next;
+          i++;
+        } else {
+          flags[key] = "true";
+        }
       }
     }
   }

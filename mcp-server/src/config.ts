@@ -283,6 +283,8 @@ export function saveSettings(settings: Settings): void {
   const tmpPath = `${settingsPath}.tmp.${process.pid}`;
   writeFileSync(tmpPath, yaml, "utf-8");
   renameSync(tmpPath, settingsPath);
+  // Restrict permissions — settings may contain API keys in plaintext
+  try { chmodSync(settingsPath, 0o600); } catch { /* Windows may not support chmod */ }
 }
 
 /** Default settings with 4 predefined profiles */

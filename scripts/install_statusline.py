@@ -36,7 +36,7 @@ def main() -> None:
     print(f"Installed statusline.py to {dest}")
 
     # Update or create settings.json with statusLine configuration
-    command = f"python3 {dest}"
+    command = f'python3 "{dest}"'
     if settings_path.is_file():
         try:
             settings = json.loads(settings_path.read_text(encoding="utf-8"))

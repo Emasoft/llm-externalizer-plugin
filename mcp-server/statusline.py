@@ -7,6 +7,7 @@ No external dependencies — uses only Python stdlib.
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -75,7 +76,6 @@ def get_claude_version() -> str:
         )
         if result.returncode == 0 and result.stdout.strip():
             # Extract version number from output
-            import re
             m = re.match(r"[\d.]+", result.stdout.strip())
             return m.group(0) if m else ""
     except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -255,6 +255,13 @@ def fetch_openrouter_budget(cache_dir: Path) -> float | None:
     return None
 
 
+def _strftime_nopad(fmt: str) -> str:
+    """Replace %-X with %#X on Windows (platform-portable no-padding)."""
+    if sys.platform == "win32":
+        return fmt.replace("%-", "%#")
+    return fmt
+
+
 def iso_to_local(iso_str: str, style: str = "time") -> str:
     """Convert ISO 8601 timestamp to compact local time string."""
     if not iso_str or iso_str == "null":
@@ -264,11 +271,11 @@ def iso_to_local(iso_str: str, style: str = "time") -> str:
         dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
         local_dt = dt.astimezone()
         if style == "time":
-            return local_dt.strftime("%-I:%M%p").lower()
+            return local_dt.strftime(_strftime_nopad("%-I:%M%p")).lower()
         elif style == "datetime":
-            return local_dt.strftime("%b %-d, %-I:%M%p").lower()
+            return local_dt.strftime(_strftime_nopad("%b %-d, %-I:%M%p")).lower()
         else:
-            return local_dt.strftime("%b %-d").lower()
+            return local_dt.strftime(_strftime_nopad("%b %-d")).lower()
     except (ValueError, OSError):
         return ""
 

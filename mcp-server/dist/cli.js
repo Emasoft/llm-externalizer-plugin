@@ -7468,6 +7468,10 @@ function saveSettings(settings) {
   const tmpPath = `${settingsPath}.tmp.${process.pid}`;
   writeFileSync(tmpPath, yaml, "utf-8");
   renameSync(tmpPath, settingsPath);
+  try {
+    chmodSync(settingsPath, 384);
+  } catch {
+  }
 }
 function ensureSettingsExist() {
   const settingsPath = getSettingsPath();
@@ -7705,13 +7709,18 @@ function parseFlags(args) {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg.startsWith("--")) {
-      const key = arg.slice(2);
-      const next = args[i + 1];
-      if (next !== void 0 && !next.startsWith("--")) {
-        flags[key] = next;
-        i++;
+      const eqIdx = arg.indexOf("=");
+      if (eqIdx !== -1) {
+        flags[arg.slice(2, eqIdx)] = arg.slice(eqIdx + 1);
       } else {
-        flags[key] = "true";
+        const key = arg.slice(2);
+        const next = args[i + 1];
+        if (next !== void 0 && !next.startsWith("--")) {
+          flags[key] = next;
+          i++;
+        } else {
+          flags[key] = "true";
+        }
       }
     }
   }

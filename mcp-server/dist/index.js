@@ -28131,6 +28131,10 @@ function saveSettings(settings) {
   const tmpPath = `${settingsPath}.tmp.${process.pid}`;
   writeFileSync(tmpPath, yaml, "utf-8");
   renameSync(tmpPath, settingsPath);
+  try {
+    chmodSync(settingsPath, 384);
+  } catch {
+  }
 }
 function generateDefaultSettings() {
   return {
