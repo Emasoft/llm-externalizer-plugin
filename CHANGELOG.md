@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.7.2] - 2026-03-30
+
+### Added
+
+- Respect gitignore across submodules and nested git repos
+
 ## [3.7.1] - 2026-03-30
 
 ### Added
