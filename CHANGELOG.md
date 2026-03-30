@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.7.1] - 2026-03-30
+
+### Added
+
+- Add folder_path support to batch_check (last tool missing it)
+
 ## [3.7.0] - 2026-03-30
 
 ### Added
