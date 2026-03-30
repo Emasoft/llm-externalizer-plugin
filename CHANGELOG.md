@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.8.3] - 2026-03-30
+
+### Fixed
+
+- Address 11 issues from second audit (CC-P2-001 through CC-P2-011)
+
 ## [3.8.2] - 2026-03-30
 
 ### Fixed
