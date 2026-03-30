@@ -28881,12 +28881,13 @@ Ensure it is a valid JavaScript regular expression.`
 function applyRegexRedaction(content, opts) {
   opts.regex.lastIndex = 0;
   let count = 0;
+  const MAX_REPLACEMENTS = 1e5;
   const redacted = content.replace(opts.regex, (match) => {
-    count++;
+    if (++count > MAX_REPLACEMENTS) return match;
     const hasLetters = /[a-zA-Z]/.test(match);
     return hasLetters ? "[REDACTED:USER_PATTERN]" : "0".repeat(match.length);
   });
-  return { redacted, count };
+  return { redacted, count: Math.min(count, MAX_REPLACEMENTS) };
 }
 function redactSecretsReversible(content) {
   let result = content;
@@ -29053,29 +29054,38 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
   );
   const isInGitRepo = topLevelResult.status === 0 && topLevelResult.stdout.trim();
   if (isInGitRepo) {
-    const args = ["ls-files", "--cached", "--others", "--exclude-standard"];
-    args.push("--recurse-submodules");
-    const result = spawnSync("git", args, {
-      cwd: dirPath,
-      encoding: "utf-8",
-      timeout: 3e4
-    });
-    if (result.status === 0 && result.stdout) {
-      for (const relPath of result.stdout.split("\n")) {
+    const trackedResult = spawnSync(
+      "git",
+      ["ls-files", "--cached", "--recurse-submodules"],
+      { cwd: dirPath, encoding: "utf-8", timeout: 3e4 }
+    );
+    if (trackedResult.status === 0 && trackedResult.stdout) {
+      for (const relPath of trackedResult.stdout.split("\n")) {
         if (!relPath.trim()) continue;
         allFiles.add(join2(dirPath, relPath));
       }
     } else {
-      const fallbackResult = spawnSync(
+      const fallback = spawnSync(
         "git",
-        ["ls-files", "--cached", "--others", "--exclude-standard"],
+        ["ls-files", "--cached"],
         { cwd: dirPath, encoding: "utf-8", timeout: 15e3 }
       );
-      if (fallbackResult.status === 0 && fallbackResult.stdout) {
-        for (const relPath of fallbackResult.stdout.split("\n")) {
+      if (fallback.status === 0 && fallback.stdout) {
+        for (const relPath of fallback.stdout.split("\n")) {
           if (!relPath.trim()) continue;
           allFiles.add(join2(dirPath, relPath));
         }
+      }
+    }
+    const untrackedResult = spawnSync(
+      "git",
+      ["ls-files", "--others", "--exclude-standard"],
+      { cwd: dirPath, encoding: "utf-8", timeout: 15e3 }
+    );
+    if (untrackedResult.status === 0 && untrackedResult.stdout) {
+      for (const relPath of untrackedResult.stdout.split("\n")) {
+        if (!relPath.trim()) continue;
+        allFiles.add(join2(dirPath, relPath));
       }
     }
   }
@@ -31458,10 +31468,6 @@ function buildTools() {
               { type: "array", items: { type: "string" } }
             ],
             description: "File(s) containing comparison instructions."
-          },
-          output_dir: {
-            type: "string",
-            description: "Directory to save reports. Default: llm_externalizer_output/ in the project directory."
           },
           scan_secrets: {
             type: "boolean",
@@ -34060,8 +34066,7 @@ REPORT: ${spReportPath}`
             instructions_files_paths: cfInstructionsFilesPaths,
             redact_secrets: cfRedact,
             scan_secrets: cfScan,
-            max_payload_kb: cfMaxPayloadKb,
-            output_dir: cfOutputDir
+            max_payload_kb: cfMaxPayloadKb
           } = args;
           const cfBudgetBytes = (cfMaxPayloadKb ?? 400) * 1024;
           const cfUseEnsemble = currentBackend.type === "openrouter";

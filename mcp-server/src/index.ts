@@ -736,13 +736,16 @@ function applyRegexRedaction(
   // Reset lastIndex in case the regex was used before
   opts.regex.lastIndex = 0;
   let count = 0;
+  // ReDoS protection: cap replacements at 100K to prevent catastrophic backtracking
+  // on pathological patterns. After 100K matches the regex is likely wrong.
+  const MAX_REPLACEMENTS = 100_000;
   const redacted = content.replace(opts.regex, (match) => {
-    count++;
+    if (++count > MAX_REPLACEMENTS) return match; // stop replacing, return original
     // Use numeric-safe placeholder for numeric-only matches (same as secret redaction)
     const hasLetters = /[a-zA-Z]/.test(match);
     return hasLetters ? "[REDACTED:USER_PATTERN]" : "0".repeat(match.length);
   });
-  return { redacted, count };
+  return { redacted, count: Math.min(count, MAX_REPLACEMENTS) };
 }
 
 // ── Reversible redaction for write tools ─────────────────────────────
@@ -1091,28 +1094,39 @@ function gitLsFilesMultiRepo(dirPath: string, recursive: boolean): string[] | nu
 
   // Run git ls-files from dirPath (handles main repo + submodules)
   if (isInGitRepo) {
-    const args = ["ls-files", "--cached", "--others", "--exclude-standard"];
-    // --recurse-submodules respects each submodule's own .gitignore
-    args.push("--recurse-submodules");
-    const result = spawnSync("git", args, {
-      cwd: dirPath, encoding: "utf-8", timeout: 30000,
-    });
-    if (result.status === 0 && result.stdout) {
-      for (const relPath of result.stdout.split("\n")) {
+    // Step 1: tracked files + submodules (--recurse-submodules is incompatible with --others)
+    const trackedResult = spawnSync(
+      "git", ["ls-files", "--cached", "--recurse-submodules"],
+      { cwd: dirPath, encoding: "utf-8", timeout: 30000 },
+    );
+    if (trackedResult.status === 0 && trackedResult.stdout) {
+      for (const relPath of trackedResult.stdout.split("\n")) {
         if (!relPath.trim()) continue;
         allFiles.add(join(dirPath, relPath));
       }
     } else {
       // --recurse-submodules may fail on older git — retry without it
-      const fallbackResult = spawnSync(
-        "git", ["ls-files", "--cached", "--others", "--exclude-standard"],
+      const fallback = spawnSync(
+        "git", ["ls-files", "--cached"],
         { cwd: dirPath, encoding: "utf-8", timeout: 15000 },
       );
-      if (fallbackResult.status === 0 && fallbackResult.stdout) {
-        for (const relPath of fallbackResult.stdout.split("\n")) {
+      if (fallback.status === 0 && fallback.stdout) {
+        for (const relPath of fallback.stdout.split("\n")) {
           if (!relPath.trim()) continue;
           allFiles.add(join(dirPath, relPath));
         }
+      }
+    }
+
+    // Step 2: untracked files (not in submodules — --others doesn't support --recurse-submodules)
+    const untrackedResult = spawnSync(
+      "git", ["ls-files", "--others", "--exclude-standard"],
+      { cwd: dirPath, encoding: "utf-8", timeout: 15000 },
+    );
+    if (untrackedResult.status === 0 && untrackedResult.stdout) {
+      for (const relPath of untrackedResult.stdout.split("\n")) {
+        if (!relPath.trim()) continue;
+        allFiles.add(join(dirPath, relPath));
       }
     }
   }
@@ -4739,11 +4753,6 @@ function buildTools() {
             ],
             description: "File(s) containing comparison instructions.",
           },
-          output_dir: {
-            type: "string",
-            description:
-              "Directory to save reports. Default: llm_externalizer_output/ in the project directory.",
-          },
           scan_secrets: {
             type: "boolean",
             description:
@@ -7851,7 +7860,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           redact_secrets: cfRedact,
           scan_secrets: cfScan,
           max_payload_kb: cfMaxPayloadKb,
-          output_dir: cfOutputDir,
         } = args as {
           input_files_paths?: string[];
           file_pairs?: (string[] | string)[];
