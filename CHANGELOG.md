@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.6.3] - 2026-03-30
+
+### Fixed
+
+- Raise max_files default from 1000 to 2500
+
 ## [3.6.2] - 2026-03-28
 
 ### Fixed
