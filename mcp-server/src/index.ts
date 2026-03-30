@@ -4679,8 +4679,15 @@ function buildTools() {
     {
       name: "compare_files",
       description:
-        "Compare two files — auto-computes unified diff, LLM summarises differences. " +
-        "Keeps full diff out of your context.\n\n" +
+        "Compare files — auto-computes unified diff, LLM summarises differences. " +
+        "Three modes:\n\n" +
+        "1. PAIR MODE: input_files_paths with exactly 2 paths (before, after).\n" +
+        "2. BATCH MODE: file_pairs array of [fileA, fileB] pairs for batch comparison.\n" +
+        "3. GIT DIFF MODE: git_repo + from_ref + to_ref to compare files between " +
+        "two commits/tags. Diffs computed via git, LLM summarises each.\n\n" +
+        "FILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in file_pairs " +
+        "to produce separate reports per group. " +
+        "WHY: downstream agents only read their own group's report, saving context tokens.\n\n" +
         "CONTEXT WARNING: Remote LLM has ZERO project context — include brief context." +
         limitsBlock(),
       inputSchema: {
@@ -4689,10 +4696,36 @@ function buildTools() {
           input_files_paths: {
             type: "array",
             items: { type: "string" },
-            minItems: 2,
-            maxItems: 2,
             description:
-              'Exactly 2 absolute file paths. First is "before", second is "after".',
+              'Two absolute file paths: [before, after]. For batch comparisons, use file_pairs instead.',
+          },
+          file_pairs: {
+            type: "array",
+            items: {
+              type: "array" as const,
+              items: { type: "string" as const },
+              minItems: 2,
+              maxItems: 2,
+            },
+            description:
+              'Array of [fileA, fileB] pairs for batch comparison. ' +
+              'Supports ---GROUP:id--- markers: use ["---GROUP:id---"] as a single-element entry ' +
+              'between pairs to group them. Each group produces its own report.',
+          },
+          git_repo: {
+            type: "string",
+            description:
+              "Absolute path to a git repository. Used with from_ref and to_ref for git diff mode.",
+          },
+          from_ref: {
+            type: "string",
+            description:
+              "Git ref (commit hash, tag, branch) for the 'before' version. Used with git_repo.",
+          },
+          to_ref: {
+            type: "string",
+            description:
+              "Git ref (commit hash, tag, branch) for the 'after' version. Used with git_repo. Defaults to HEAD.",
           },
           instructions: {
             type: "string",
@@ -4705,6 +4738,11 @@ function buildTools() {
               { type: "array", items: { type: "string" } },
             ],
             description: "File(s) containing comparison instructions.",
+          },
+          output_dir: {
+            type: "string",
+            description:
+              "Directory to save reports. Default: llm_externalizer_output/ in the project directory.",
           },
           scan_secrets: {
             type: "boolean",
@@ -7804,29 +7842,208 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "compare_files": {
         const {
           input_files_paths: cfInputPaths,
+          file_pairs: cfFilePairs,
+          git_repo: cfGitRepo,
+          from_ref: cfFromRef,
+          to_ref: cfToRef,
           instructions: cfInstructions,
           instructions_files_paths: cfInstructionsFilesPaths,
           redact_secrets: cfRedact,
           scan_secrets: cfScan,
           max_payload_kb: cfMaxPayloadKb,
+          output_dir: cfOutputDir,
         } = args as {
-          input_files_paths: string[];
+          input_files_paths?: string[];
+          file_pairs?: (string[] | string)[];
+          git_repo?: string;
+          from_ref?: string;
+          to_ref?: string;
           instructions?: string;
           instructions_files_paths?: string | string[];
           redact_secrets?: boolean;
           scan_secrets?: boolean;
           max_payload_kb?: number;
+          output_dir?: string;
         };
         const cfBudgetBytes = (cfMaxPayloadKb ?? 400) * 1024;
         const cfUseEnsemble = currentBackend.type === "openrouter";
 
+        // ── Helper: compare a single pair and return report content ──
+        const comparePair = async (fA: string, fB: string, prompt: string): Promise<{ content: string; model: string } | { error: string }> => {
+          if (!existsSync(fA)) return { error: `File not found: ${fA}` };
+          if (!existsSync(fB)) return { error: `File not found: ${fB}` };
+          if (cfScan) {
+            const scanResult = scanFilesForSecrets([fA, fB]);
+            if (scanResult.found) return { error: scanResult.report };
+          }
+          const diffResult = spawnSync("diff", ["-u", "--label", fA, "--label", fB, "--", fA, fB], { encoding: "utf-8", timeout: 30000 });
+          if (diffResult.status === 2 || diffResult.error) return { error: `diff error: ${diffResult.error?.message || diffResult.stderr}` };
+          let diffOutput = diffResult.stdout?.trim() ? diffResult.stdout : "(files are identical)";
+          if (diffOutput.length > 200_000) { diffOutput = diffOutput.slice(0, 200_000); }
+          if (cfRedact) diffOutput = redactSecrets(diffOutput).redacted;
+          let sourceBlocks = "";
+          try {
+            const bA = readFileAsCodeBlock(fA, undefined, cfRedact, cfBudgetBytes);
+            const bB = readFileAsCodeBlock(fB, undefined, cfRedact, cfBudgetBytes);
+            if (bA.length + bB.length < 300_000) sourceBlocks = `\n\n## File A (full): ${fA}\n\n${bA}\n\n## File B (full): ${fB}\n\n${bB}`;
+          } catch { /* too large */ }
+          const fence = fenceBackticks(diffOutput);
+          const msgs: ChatMessage[] = [
+            { role: "system", content: "Expert code reviewer. Analyse the unified diff and provide a clear, structured summary. Group related changes. Note potential issues. Identify code by FUNCTION/CLASS/METHOD NAME, never by line number." },
+            { role: "user", content: `${prompt ? prompt + "\n\n" : ""}Compare:\n- Before: ${fA}\n- After: ${fB}\n\nDiff:\n${fence}\n${diffOutput}\n${fence}${sourceBlocks}` },
+          ];
+          const resp = await ensembleStreaming(msgs, { temperature: 0.2, maxTokens: resolveDefaultMaxTokens(), onProgress }, cfUseEnsemble);
+          if (!resp.content.trim()) return { error: "LLM returned empty response" };
+          return { content: resp.content + formatFooter(resp, "compare_files", fA), model: resp.model };
+        };
+
+        // ── Helper: git diff between two refs (no LLM) ──
+        const gitDiffPair = (repo: string, fromRef: string, toRef: string, filePath: string): string => {
+          const result = spawnSync("git", ["diff", fromRef, toRef, "--", filePath], { cwd: repo, encoding: "utf-8", timeout: 30000 });
+          if (result.status !== 0 && result.status !== 1) return `(git diff failed: ${result.stderr?.trim() || "unknown error"})`;
+          return result.stdout?.trim() || "(no differences)";
+        };
+
+        const cfPrompt = resolvePrompt(cfInstructions, cfInstructionsFilesPaths);
+
+        // ── GIT DIFF MODE ──
+        if (cfGitRepo) {
+          if (!cfFromRef) return { content: [{ type: "text", text: "FAILED: from_ref is required with git_repo." }], isError: true };
+          if (!existsSync(cfGitRepo)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
+          const toRef = cfToRef || "HEAD";
+          // Get list of changed files between the two refs
+          const nameResult = spawnSync("git", ["diff", "--name-only", cfFromRef, toRef], { cwd: cfGitRepo, encoding: "utf-8", timeout: 15000 });
+          if (nameResult.status !== 0 && nameResult.status !== 1) {
+            return { content: [{ type: "text", text: `FAILED: git diff --name-only failed: ${nameResult.stderr?.trim()}` }], isError: true };
+          }
+          let changedFiles = (nameResult.stdout || "").split("\n").filter((f) => f.trim());
+
+          // If file_pairs contains group markers, use them to filter/group the changed files
+          // Otherwise create one group with all changed files
+          interface DiffGroup { id: string; files: string[] }
+          let diffGroups: DiffGroup[];
+
+          if (cfFilePairs && cfFilePairs.length > 0) {
+            // Parse group markers from file_pairs (single-element entries are markers)
+            diffGroups = [];
+            let currentGroup: DiffGroup | null = null;
+            let ungrouped: string[] = [];
+            for (const entry of cfFilePairs) {
+              const marker = Array.isArray(entry) ? (entry.length === 1 ? entry[0] : null) : entry;
+              if (marker && typeof marker === "string" && GROUP_HEADER_RE.test(marker)) {
+                if (currentGroup && currentGroup.files.length > 0) diffGroups.push(currentGroup);
+                if (ungrouped.length > 0) { diffGroups.push({ id: "", files: ungrouped }); ungrouped = []; }
+                currentGroup = { id: marker.match(GROUP_HEADER_RE)![1], files: [] };
+                continue;
+              }
+              if (marker && typeof marker === "string" && GROUP_FOOTER_RE.test(marker)) {
+                if (currentGroup && currentGroup.files.length > 0) diffGroups.push(currentGroup);
+                currentGroup = null;
+                continue;
+              }
+              // Regular file path — filter from changed files
+              const filePath = Array.isArray(entry) ? entry[0] : entry;
+              if (typeof filePath === "string" && changedFiles.includes(filePath)) {
+                if (currentGroup) currentGroup.files.push(filePath);
+                else ungrouped.push(filePath);
+              }
+            }
+            if (currentGroup && currentGroup.files.length > 0) diffGroups.push(currentGroup);
+            if (ungrouped.length > 0) diffGroups.push({ id: "", files: ungrouped });
+          } else {
+            diffGroups = [{ id: "", files: changedFiles }];
+          }
+
+          const isGrouped = diffGroups.some((g) => g.id !== "");
+          const reportPaths: string[] = [];
+
+          for (const dg of diffGroups) {
+            if (dg.files.length === 0) continue;
+            const sections: string[] = [];
+            for (const filePath of dg.files) {
+              const diff = gitDiffPair(cfGitRepo, cfFromRef, toRef, filePath);
+              const fence = fenceBackticks(diff);
+              sections.push(`## ${filePath}\n\n${fence}diff\n${diff}\n${fence}`);
+            }
+            const reportContent = `# Git Diff: ${cfFromRef} → ${toRef}\n\nRepository: ${cfGitRepo}\nFiles changed: ${dg.files.length}\n\n---\n\n${sections.join("\n\n---\n\n")}`;
+            const gid = dg.id || undefined;
+            const rp = saveResponse("compare_files", reportContent, {
+              model: "git-diff (no LLM)", task: `${cfFromRef} → ${toRef}`,
+              inputFile: join(cfGitRepo, dg.files[0]), groupId: gid,
+            });
+            if (isGrouped) reportPaths.push(`[group:${dg.id}] ${rp}`);
+            else reportPaths.push(rp);
+          }
+          return { content: [{ type: "text", text: reportPaths.join("\n") }] };
+        }
+
+        // ── BATCH MODE (file_pairs) ──
+        if (cfFilePairs && cfFilePairs.length > 0) {
+          // Parse pairs and group markers
+          interface PairGroup { id: string; pairs: [string, string][] }
+          const pairGroups: PairGroup[] = [];
+          let currentPG: PairGroup | null = null;
+          let ungroupedPairs: [string, string][] = [];
+
+          for (const entry of cfFilePairs) {
+            // Single-element entries are group markers
+            const marker = Array.isArray(entry) ? (entry.length === 1 ? entry[0] : null) : entry;
+            if (marker && typeof marker === "string" && GROUP_HEADER_RE.test(marker)) {
+              if (currentPG && currentPG.pairs.length > 0) pairGroups.push(currentPG);
+              if (ungroupedPairs.length > 0) { pairGroups.push({ id: "", pairs: ungroupedPairs }); ungroupedPairs = []; }
+              currentPG = { id: marker.match(GROUP_HEADER_RE)![1], pairs: [] };
+              continue;
+            }
+            if (marker && typeof marker === "string" && GROUP_FOOTER_RE.test(marker)) {
+              if (currentPG && currentPG.pairs.length > 0) pairGroups.push(currentPG);
+              currentPG = null;
+              continue;
+            }
+            // Must be a [fileA, fileB] pair
+            if (Array.isArray(entry) && entry.length === 2) {
+              const pair: [string, string] = [entry[0], entry[1]];
+              if (currentPG) currentPG.pairs.push(pair);
+              else ungroupedPairs.push(pair);
+            }
+          }
+          if (currentPG && currentPG.pairs.length > 0) pairGroups.push(currentPG);
+          if (ungroupedPairs.length > 0) pairGroups.push({ id: "", pairs: ungroupedPairs });
+
+          const isGrouped = pairGroups.some((g) => g.id !== "");
+          const reportPaths: string[] = [];
+
+          for (const pg of pairGroups) {
+            if (pg.pairs.length === 0) continue;
+            const sections: string[] = [];
+            for (const [fA, fB] of pg.pairs) {
+              const result = await comparePair(fA, fB, cfPrompt);
+              if ("error" in result) {
+                sections.push(`## ${fA} vs ${fB}\n\nFAILED: ${result.error}`);
+              } else {
+                sections.push(`## ${fA} vs ${fB}\n\n${result.content}`);
+              }
+            }
+            const reportContent = sections.join("\n\n---\n\n");
+            const gid = pg.id || undefined;
+            const model = currentBackend.model;
+            const rp = saveResponse("compare_files", reportContent, {
+              model, task: `Batch compare: ${pg.pairs.length} pair(s)`,
+              inputFile: pg.pairs[0][0], groupId: gid,
+            });
+            if (isGrouped) reportPaths.push(`[group:${pg.id}] ${rp}`);
+            else reportPaths.push(rp);
+          }
+          return { content: [{ type: "text", text: reportPaths.join("\n") }] };
+        }
+
+        // ── PAIR MODE (original: exactly 2 files) ──
         const cfNormalizedPaths = normalizePaths(cfInputPaths);
         if (cfNormalizedPaths.length !== 2) {
           return {
             content: [
               {
                 type: "text",
-                text: "FAILED: input_files_paths must contain exactly 2 file paths.",
+                text: "FAILED: Provide input_files_paths (2 files), file_pairs (batch), or git_repo+from_ref (git diff).",
               },
             ],
             isError: true,
@@ -7859,11 +8076,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               isError: true,
             };
         }
-
-        const cfPrompt = resolvePrompt(
-          cfInstructions,
-          cfInstructionsFilesPaths,
-        );
 
         // Compute unified diff using system diff command
         // diff exit codes: 0=identical, 1=different, 2=error

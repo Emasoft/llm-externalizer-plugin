@@ -31417,16 +31417,36 @@ function buildTools() {
     },
     {
       name: "compare_files",
-      description: "Compare two files \u2014 auto-computes unified diff, LLM summarises differences. Keeps full diff out of your context.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context." + limitsBlock(),
+      description: "Compare files \u2014 auto-computes unified diff, LLM summarises differences. Three modes:\n\n1. PAIR MODE: input_files_paths with exactly 2 paths (before, after).\n2. BATCH MODE: file_pairs array of [fileA, fileB] pairs for batch comparison.\n3. GIT DIFF MODE: git_repo + from_ref + to_ref to compare files between two commits/tags. Diffs computed via git, LLM summarises each.\n\nFILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in file_pairs to produce separate reports per group. WHY: downstream agents only read their own group's report, saving context tokens.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context." + limitsBlock(),
       inputSchema: {
         type: "object",
         properties: {
           input_files_paths: {
             type: "array",
             items: { type: "string" },
-            minItems: 2,
-            maxItems: 2,
-            description: 'Exactly 2 absolute file paths. First is "before", second is "after".'
+            description: "Two absolute file paths: [before, after]. For batch comparisons, use file_pairs instead."
+          },
+          file_pairs: {
+            type: "array",
+            items: {
+              type: "array",
+              items: { type: "string" },
+              minItems: 2,
+              maxItems: 2
+            },
+            description: 'Array of [fileA, fileB] pairs for batch comparison. Supports ---GROUP:id--- markers: use ["---GROUP:id---"] as a single-element entry between pairs to group them. Each group produces its own report.'
+          },
+          git_repo: {
+            type: "string",
+            description: "Absolute path to a git repository. Used with from_ref and to_ref for git diff mode."
+          },
+          from_ref: {
+            type: "string",
+            description: "Git ref (commit hash, tag, branch) for the 'before' version. Used with git_repo."
+          },
+          to_ref: {
+            type: "string",
+            description: "Git ref (commit hash, tag, branch) for the 'after' version. Used with git_repo. Defaults to HEAD."
           },
           instructions: {
             type: "string",
@@ -31438,6 +31458,10 @@ function buildTools() {
               { type: "array", items: { type: "string" } }
             ],
             description: "File(s) containing comparison instructions."
+          },
+          output_dir: {
+            type: "string",
+            description: "Directory to save reports. Default: llm_externalizer_output/ in the project directory."
           },
           scan_secrets: {
             type: "boolean",
@@ -34028,21 +34052,211 @@ REPORT: ${spReportPath}`
         case "compare_files": {
           const {
             input_files_paths: cfInputPaths,
+            file_pairs: cfFilePairs,
+            git_repo: cfGitRepo,
+            from_ref: cfFromRef,
+            to_ref: cfToRef,
             instructions: cfInstructions,
             instructions_files_paths: cfInstructionsFilesPaths,
             redact_secrets: cfRedact,
             scan_secrets: cfScan,
-            max_payload_kb: cfMaxPayloadKb
+            max_payload_kb: cfMaxPayloadKb,
+            output_dir: cfOutputDir
           } = args;
           const cfBudgetBytes = (cfMaxPayloadKb ?? 400) * 1024;
           const cfUseEnsemble = currentBackend.type === "openrouter";
+          const comparePair = async (fA, fB, prompt) => {
+            if (!existsSync2(fA)) return { error: `File not found: ${fA}` };
+            if (!existsSync2(fB)) return { error: `File not found: ${fB}` };
+            if (cfScan) {
+              const scanResult = scanFilesForSecrets([fA, fB]);
+              if (scanResult.found) return { error: scanResult.report };
+            }
+            const diffResult2 = spawnSync("diff", ["-u", "--label", fA, "--label", fB, "--", fA, fB], { encoding: "utf-8", timeout: 3e4 });
+            if (diffResult2.status === 2 || diffResult2.error) return { error: `diff error: ${diffResult2.error?.message || diffResult2.stderr}` };
+            let diffOutput2 = diffResult2.stdout?.trim() ? diffResult2.stdout : "(files are identical)";
+            if (diffOutput2.length > 2e5) {
+              diffOutput2 = diffOutput2.slice(0, 2e5);
+            }
+            if (cfRedact) diffOutput2 = redactSecrets(diffOutput2).redacted;
+            let sourceBlocks = "";
+            try {
+              const bA = readFileAsCodeBlock(fA, void 0, cfRedact, cfBudgetBytes);
+              const bB = readFileAsCodeBlock(fB, void 0, cfRedact, cfBudgetBytes);
+              if (bA.length + bB.length < 3e5) sourceBlocks = `
+
+## File A (full): ${fA}
+
+${bA}
+
+## File B (full): ${fB}
+
+${bB}`;
+            } catch {
+            }
+            const fence = fenceBackticks(diffOutput2);
+            const msgs = [
+              { role: "system", content: "Expert code reviewer. Analyse the unified diff and provide a clear, structured summary. Group related changes. Note potential issues. Identify code by FUNCTION/CLASS/METHOD NAME, never by line number." },
+              { role: "user", content: `${prompt ? prompt + "\n\n" : ""}Compare:
+- Before: ${fA}
+- After: ${fB}
+
+Diff:
+${fence}
+${diffOutput2}
+${fence}${sourceBlocks}` }
+            ];
+            const resp = await ensembleStreaming(msgs, { temperature: 0.2, maxTokens: resolveDefaultMaxTokens(), onProgress }, cfUseEnsemble);
+            if (!resp.content.trim()) return { error: "LLM returned empty response" };
+            return { content: resp.content + formatFooter(resp, "compare_files", fA), model: resp.model };
+          };
+          const gitDiffPair = (repo, fromRef, toRef, filePath) => {
+            const result = spawnSync("git", ["diff", fromRef, toRef, "--", filePath], { cwd: repo, encoding: "utf-8", timeout: 3e4 });
+            if (result.status !== 0 && result.status !== 1) return `(git diff failed: ${result.stderr?.trim() || "unknown error"})`;
+            return result.stdout?.trim() || "(no differences)";
+          };
+          const cfPrompt = resolvePrompt(cfInstructions, cfInstructionsFilesPaths);
+          if (cfGitRepo) {
+            if (!cfFromRef) return { content: [{ type: "text", text: "FAILED: from_ref is required with git_repo." }], isError: true };
+            if (!existsSync2(cfGitRepo)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
+            const toRef = cfToRef || "HEAD";
+            const nameResult = spawnSync("git", ["diff", "--name-only", cfFromRef, toRef], { cwd: cfGitRepo, encoding: "utf-8", timeout: 15e3 });
+            if (nameResult.status !== 0 && nameResult.status !== 1) {
+              return { content: [{ type: "text", text: `FAILED: git diff --name-only failed: ${nameResult.stderr?.trim()}` }], isError: true };
+            }
+            let changedFiles = (nameResult.stdout || "").split("\n").filter((f) => f.trim());
+            let diffGroups;
+            if (cfFilePairs && cfFilePairs.length > 0) {
+              diffGroups = [];
+              let currentGroup = null;
+              let ungrouped = [];
+              for (const entry of cfFilePairs) {
+                const marker = Array.isArray(entry) ? entry.length === 1 ? entry[0] : null : entry;
+                if (marker && typeof marker === "string" && GROUP_HEADER_RE.test(marker)) {
+                  if (currentGroup && currentGroup.files.length > 0) diffGroups.push(currentGroup);
+                  if (ungrouped.length > 0) {
+                    diffGroups.push({ id: "", files: ungrouped });
+                    ungrouped = [];
+                  }
+                  currentGroup = { id: marker.match(GROUP_HEADER_RE)[1], files: [] };
+                  continue;
+                }
+                if (marker && typeof marker === "string" && GROUP_FOOTER_RE.test(marker)) {
+                  if (currentGroup && currentGroup.files.length > 0) diffGroups.push(currentGroup);
+                  currentGroup = null;
+                  continue;
+                }
+                const filePath = Array.isArray(entry) ? entry[0] : entry;
+                if (typeof filePath === "string" && changedFiles.includes(filePath)) {
+                  if (currentGroup) currentGroup.files.push(filePath);
+                  else ungrouped.push(filePath);
+                }
+              }
+              if (currentGroup && currentGroup.files.length > 0) diffGroups.push(currentGroup);
+              if (ungrouped.length > 0) diffGroups.push({ id: "", files: ungrouped });
+            } else {
+              diffGroups = [{ id: "", files: changedFiles }];
+            }
+            const isGrouped = diffGroups.some((g) => g.id !== "");
+            const reportPaths = [];
+            for (const dg of diffGroups) {
+              if (dg.files.length === 0) continue;
+              const sections = [];
+              for (const filePath of dg.files) {
+                const diff = gitDiffPair(cfGitRepo, cfFromRef, toRef, filePath);
+                const fence = fenceBackticks(diff);
+                sections.push(`## ${filePath}
+
+${fence}diff
+${diff}
+${fence}`);
+              }
+              const reportContent = `# Git Diff: ${cfFromRef} \u2192 ${toRef}
+
+Repository: ${cfGitRepo}
+Files changed: ${dg.files.length}
+
+---
+
+${sections.join("\n\n---\n\n")}`;
+              const gid = dg.id || void 0;
+              const rp = saveResponse("compare_files", reportContent, {
+                model: "git-diff (no LLM)",
+                task: `${cfFromRef} \u2192 ${toRef}`,
+                inputFile: join2(cfGitRepo, dg.files[0]),
+                groupId: gid
+              });
+              if (isGrouped) reportPaths.push(`[group:${dg.id}] ${rp}`);
+              else reportPaths.push(rp);
+            }
+            return { content: [{ type: "text", text: reportPaths.join("\n") }] };
+          }
+          if (cfFilePairs && cfFilePairs.length > 0) {
+            const pairGroups = [];
+            let currentPG = null;
+            let ungroupedPairs = [];
+            for (const entry of cfFilePairs) {
+              const marker = Array.isArray(entry) ? entry.length === 1 ? entry[0] : null : entry;
+              if (marker && typeof marker === "string" && GROUP_HEADER_RE.test(marker)) {
+                if (currentPG && currentPG.pairs.length > 0) pairGroups.push(currentPG);
+                if (ungroupedPairs.length > 0) {
+                  pairGroups.push({ id: "", pairs: ungroupedPairs });
+                  ungroupedPairs = [];
+                }
+                currentPG = { id: marker.match(GROUP_HEADER_RE)[1], pairs: [] };
+                continue;
+              }
+              if (marker && typeof marker === "string" && GROUP_FOOTER_RE.test(marker)) {
+                if (currentPG && currentPG.pairs.length > 0) pairGroups.push(currentPG);
+                currentPG = null;
+                continue;
+              }
+              if (Array.isArray(entry) && entry.length === 2) {
+                const pair = [entry[0], entry[1]];
+                if (currentPG) currentPG.pairs.push(pair);
+                else ungroupedPairs.push(pair);
+              }
+            }
+            if (currentPG && currentPG.pairs.length > 0) pairGroups.push(currentPG);
+            if (ungroupedPairs.length > 0) pairGroups.push({ id: "", pairs: ungroupedPairs });
+            const isGrouped = pairGroups.some((g) => g.id !== "");
+            const reportPaths = [];
+            for (const pg of pairGroups) {
+              if (pg.pairs.length === 0) continue;
+              const sections = [];
+              for (const [fA, fB] of pg.pairs) {
+                const result = await comparePair(fA, fB, cfPrompt);
+                if ("error" in result) {
+                  sections.push(`## ${fA} vs ${fB}
+
+FAILED: ${result.error}`);
+                } else {
+                  sections.push(`## ${fA} vs ${fB}
+
+${result.content}`);
+                }
+              }
+              const reportContent = sections.join("\n\n---\n\n");
+              const gid = pg.id || void 0;
+              const model = currentBackend.model;
+              const rp = saveResponse("compare_files", reportContent, {
+                model,
+                task: `Batch compare: ${pg.pairs.length} pair(s)`,
+                inputFile: pg.pairs[0][0],
+                groupId: gid
+              });
+              if (isGrouped) reportPaths.push(`[group:${pg.id}] ${rp}`);
+              else reportPaths.push(rp);
+            }
+            return { content: [{ type: "text", text: reportPaths.join("\n") }] };
+          }
           const cfNormalizedPaths = normalizePaths(cfInputPaths);
           if (cfNormalizedPaths.length !== 2) {
             return {
               content: [
                 {
                   type: "text",
-                  text: "FAILED: input_files_paths must contain exactly 2 file paths."
+                  text: "FAILED: Provide input_files_paths (2 files), file_pairs (batch), or git_repo+from_ref (git diff)."
                 }
               ],
               isError: true
@@ -34073,10 +34287,6 @@ REPORT: ${spReportPath}`
                 isError: true
               };
           }
-          const cfPrompt = resolvePrompt(
-            cfInstructions,
-            cfInstructionsFilesPaths
-          );
           const diffResult = spawnSync(
             "diff",
             ["-u", "--label", fileA, "--label", fileB, "--", fileA, fileB],
