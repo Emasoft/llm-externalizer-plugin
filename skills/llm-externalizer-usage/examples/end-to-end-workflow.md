@@ -11,9 +11,11 @@ Complete example showing tool selection, invocation, output reading, and acting 
 
 ### Step 1: Choose the right tool
 
-- Need to scan multiple files in a directory? Use `scan_folder`.
-- Need to analyze specific files? Use `code_task` or `batch_check`.
-- Need to compare two files? Use `compare_files`.
+- Need to scan multiple files in a directory? Use `scan_folder` or any tool with `folder_path`.
+- Need to analyze specific files? Use `code_task` (or `chat` with `answer_mode: 0, max_retries: 3` for per-file processing).
+- Need to compare two files? Use `compare_files` (pair mode).
+- Need to compare multiple file pairs? Use `compare_files` (batch mode with `file_pairs`).
+- Need to compare between git commits? Use `compare_files` (git diff mode with `git_repo` + `from_ref` + `to_ref`).
 
 For a directory scan: `scan_folder`.
 
@@ -54,7 +56,9 @@ The output file contains the LLM's analysis with per-file findings. Use the find
 Re-scan specific fixed files to verify:
 ```json
 {
-  "tool": "mcp__llm-externalizer__batch_check",
+  "tool": "mcp__llm-externalizer__code_task",
+  "answer_mode": 0,
+  "max_retries": 3,
   "instructions": "Verify these files have no remaining security vulnerabilities. This is a Node.js Express REST API.",
   "input_files_paths": ["/path/to/fixed-file-1.ts", "/path/to/fixed-file-2.ts"]
 }
@@ -67,12 +71,14 @@ Need to process files with an external LLM?
 |
 +-- How many files?
     |
-    +-- 1 file, code analysis --> code_task
-    +-- 1 file, general task --> chat
-    +-- 2 files, compare --> compare_files
-    +-- 2+ files, same check each --> batch_check
-    +-- Whole directory --> scan_folder
-    +-- Check imports valid --> check_imports
-    +-- Check symbol refs --> check_references
-    +-- Check against spec --> check_against_specs
+    +-- 1 file, code analysis ---------> code_task
+    +-- 1 file, general task ----------> chat
+    +-- 2 files, compare --------------> compare_files (pair mode)
+    +-- N file pairs, compare ---------> compare_files (batch mode, file_pairs)
+    +-- Compare between git commits ---> compare_files (git diff mode, git_repo + refs)
+    +-- 2+ files, same check each -----> code_task with answer_mode=0, max_retries=3
+    +-- Whole directory ----------------> scan_folder (or any tool with folder_path)
+    +-- Check imports valid ------------> check_imports
+    +-- Check symbol refs --------------> check_references
+    +-- Check against spec -------------> check_against_specs
 ```

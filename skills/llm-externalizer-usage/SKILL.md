@@ -53,11 +53,25 @@ All responses saved as `.md` files in `llm_externalizer_output/`. The tool retur
  "extensions": [".ts"], "instructions": "Find security vulns. Node.js Express API."}
 ```
 
-### Compare two files
+### Compare two files (pair mode)
 
 ```json
 {"tool": "compare_files", "input_files_paths": ["/path/old.ts", "/path/new.ts"],
  "instructions": "Focus on API breaking changes"}
+```
+
+### Compare files (batch mode)
+
+```json
+{"tool": "compare_files", "file_pairs": [["/path/a_old.ts", "/path/a_new.ts"],
+ ["/path/b_old.ts", "/path/b_new.ts"]], "instructions": "Summarize changes"}
+```
+
+### Compare files (git diff mode)
+
+```json
+{"tool": "compare_files", "git_repo": "/path/to/repo", "from_ref": "v1.0.0",
+ "to_ref": "HEAD", "instructions": "Focus on breaking changes"}
 ```
 
 ### Check source against specification
@@ -67,6 +81,13 @@ All responses saved as `.md` files in `llm_externalizer_output/`. The tool retur
  "input_files_paths": "/path/to/impl.ts", "instructions": "Check API contract compliance"}
 ```
 
+### Scan a folder with folder_path
+
+```json
+{"tool": "code_task", "folder_path": "/path/to/src", "extensions": [".ts"],
+ "instructions": "Find security issues. Node.js Express API."}
+```
+
 ### Quick analysis (ensemble off)
 
 ```json
@@ -74,20 +95,29 @@ All responses saved as `.md` files in `llm_externalizer_output/`. The tool retur
  "input_files_paths": "/path/to/file.ts", "ensemble": false, "max_tokens": 500}
 ```
 
+### Redact custom patterns
+
+```json
+{"tool": "chat", "instructions": "Review this config file",
+ "input_files_paths": "/path/to/config.ts",
+ "redact_regex": "https?://[a-zA-Z0-9._/-]+"}
+```
+
 ## Resources
 
 - [Tool reference](references/tool-reference.md)
   - Read-only analysis tools, Utility tools
-  - Standard Input Fields, Advanced Parameters
+  - Standard Input Fields, Advanced Parameters (folder_path, recursive, follow_symlinks, max_files, max_retries, redact_regex)
   - File Grouping, Critical Constraints, Safety Features
 - [Usage patterns](references/usage-patterns.md)
   - Scan a codebase for issues, Analyze multiple files together
-  - Apply same check to each file independently, Compare two file versions
+  - Apply same check to each file independently
+  - Compare files: pair mode, batch mode, git diff mode
   - Check for broken code references after refactoring, Check for broken file imports
   - Reuse instructions across operations, Simple task with ensemble off (save tokens)
   - Quick factual answer with low max_tokens, Code review with persona
   - Scan folder with gitignore + excluded dirs, Check source against specification
   - Check entire folder against specification, Grouped file processing (isolated reports)
-  - Code-optimized analysis
+  - Code-optimized analysis, folder_path usage, redact_regex usage
 - [End-to-end workflow](examples/end-to-end-workflow.md)
   - Scenario: Security audit of a TypeScript project, Quick Decision Tree

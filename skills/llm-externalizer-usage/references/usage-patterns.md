@@ -5,7 +5,9 @@
 - [Scan a codebase for issues](#scan-a-codebase-for-issues)
 - [Analyze multiple files together](#analyze-multiple-files-together)
 - [Apply same check to each file independently](#apply-same-check-to-each-file-independently)
-- [Compare two file versions](#compare-two-file-versions)
+- [Compare two file versions (pair mode)](#compare-two-file-versions-pair-mode)
+- [Compare files in batch mode](#compare-files-in-batch-mode)
+- [Compare files via git diff](#compare-files-via-git-diff)
 - [Check for broken code references](#check-for-broken-code-references-after-refactoring)
 - [Check for broken file imports](#check-for-broken-file-imports)
 - [Reuse instructions across operations](#reuse-instructions-across-operations)
@@ -13,6 +15,8 @@
 - [Quick factual answer](#quick-factual-answer-with-low-max_tokens)
 - [Code review with persona](#code-review-with-persona)
 - [Scan folder with gitignore](#scan-folder-with-gitignore--excluded-dirs)
+- [Use folder_path on any tool](#use-folder_path-on-any-tool)
+- [Redact custom patterns](#redact-custom-patterns)
 - [Check source against specification](#check-source-against-specification)
 - [Check entire folder against specification](#check-entire-folder-against-specification)
 - [Grouped file processing](#grouped-file-processing-isolated-reports)
@@ -43,15 +47,19 @@ Concrete examples for every tool with recommended parameters.
 
 ## Apply same check to each file independently
 
+> **Note**: `batch_check` is **deprecated**. Use any tool with `answer_mode: 0, max_retries: 3` instead.
+
 ```json
 {
-  "tool": "batch_check",
+  "tool": "code_task",
+  "answer_mode": 0,
+  "max_retries": 3,
   "instructions": "Find all TODO comments and classify by urgency",
   "input_files_paths": ["/path/a.ts", "/path/b.ts", "/path/c.ts"]
 }
 ```
 
-## Compare two file versions
+## Compare two file versions (pair mode)
 
 ```json
 {
@@ -60,6 +68,55 @@ Concrete examples for every tool with recommended parameters.
   "instructions": "Focus on API breaking changes"
 }
 ```
+
+## Compare files in batch mode
+
+Compare multiple file pairs at once using the `file_pairs` parameter:
+
+```json
+{
+  "tool": "compare_files",
+  "file_pairs": [
+    ["/path/old/auth.ts", "/path/new/auth.ts"],
+    ["/path/old/routes.ts", "/path/new/routes.ts"],
+    ["/path/old/middleware.ts", "/path/new/middleware.ts"]
+  ],
+  "instructions": "Summarize changes in each pair. This is a Node.js Express API."
+}
+```
+
+Supports `---GROUP:id---` markers as single-element entries in `file_pairs` for grouped reports:
+
+```json
+{
+  "tool": "compare_files",
+  "file_pairs": [
+    ["---GROUP:auth---"],
+    ["/path/old/auth.ts", "/path/new/auth.ts"],
+    ["---/GROUP:auth---"],
+    ["---GROUP:api---"],
+    ["/path/old/routes.ts", "/path/new/routes.ts"],
+    ["---/GROUP:api---"]
+  ],
+  "instructions": "Summarize changes per group"
+}
+```
+
+## Compare files via git diff
+
+Compare files between two git refs (commits, tags, branches):
+
+```json
+{
+  "tool": "compare_files",
+  "git_repo": "/path/to/repo",
+  "from_ref": "v1.0.0",
+  "to_ref": "v2.0.0",
+  "instructions": "Focus on API breaking changes and security implications"
+}
+```
+
+`to_ref` defaults to `HEAD` if omitted.
 
 ## Check for broken code references after refactoring
 
@@ -84,7 +141,9 @@ Concrete examples for every tool with recommended parameters.
 
 ```json
 {
-  "tool": "batch_check",
+  "tool": "code_task",
+  "answer_mode": 0,
+  "max_retries": 3,
   "instructions_files_paths": "/path/to/review-rules.md",
   "input_files_paths": ["/path/a.ts", "/path/b.ts"]
 }
@@ -138,6 +197,50 @@ Concrete examples for every tool with recommended parameters.
   "instructions": "Find security vulnerabilities. This is a Django REST API."
 }
 ```
+
+## Use folder_path on any tool
+
+All content tools (except `scan_folder` which requires it, and `compare_files` which has its own modes) accept `folder_path` to auto-discover files from a directory. Can be combined with `input_files_paths`:
+
+```json
+{
+  "tool": "code_task",
+  "folder_path": "/path/to/src",
+  "extensions": [".ts"],
+  "recursive": true,
+  "follow_symlinks": true,
+  "use_gitignore": true,
+  "max_files": 2500,
+  "instructions": "Find potential null pointer exceptions. TypeScript Node.js project."
+}
+```
+
+Combining `folder_path` with explicit files:
+
+```json
+{
+  "tool": "chat",
+  "folder_path": "/path/to/src/utils",
+  "extensions": [".ts"],
+  "input_files_paths": ["/path/to/src/index.ts"],
+  "instructions": "Summarize what this module does. All utils + the entry point."
+}
+```
+
+## Redact custom patterns
+
+Use `redact_regex` to redact matching strings before they reach the LLM:
+
+```json
+{
+  "tool": "chat",
+  "instructions": "Review this configuration for best practices",
+  "input_files_paths": "/path/to/config.ts",
+  "redact_regex": "https?://[a-zA-Z0-9._:/-]+"
+}
+```
+
+Alphanumeric matches become `[REDACTED:USER_PATTERN]`, numeric-only matches become zero-padded placeholders. Works on all content tools alongside `scan_secrets` and `redact_secrets`.
 
 ## Check source against specification
 

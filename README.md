@@ -32,14 +32,14 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 
 | Tool | Purpose |
 |------|---------|
-| `chat` | General-purpose: summarize, compare, translate, generate text. Supports `temperature`, `system` persona |
-| `code_task` | Code-optimized analysis with code-review system prompt (temperature=0.2). Supports `language` hint |
+| `chat` | General-purpose: summarize, compare, translate, generate text. Supports `temperature`, `system` persona. Accepts `folder_path` for directory scanning |
+| `code_task` | Code-optimized analysis with code-review system prompt (temperature=0.2). Supports `language` hint. Accepts `folder_path` for directory scanning |
 | `batch_check` | **Deprecated** — use any tool with `answer_mode: 0, max_retries: 3`. Per-file processing with retry |
 | `scan_folder` | Recursively scan a directory, auto-discover files by extension, process each with LLM |
-| `compare_files` | Auto-compute unified diff between 2 files, LLM summarizes changes concisely |
-| `check_references` | Auto-resolve local imports, send source+dependencies to LLM to validate symbol references |
-| `check_imports` | Two-phase — LLM extracts all import paths, server validates each exists on disk |
-| `check_against_specs` | Compare source files against a specification file. Reports violations only. Supports folder scanning |
+| `compare_files` | Compare files in 3 modes: pair (2 files), batch (`file_pairs`), or git diff (`git_repo` + refs). LLM summarizes differences |
+| `check_references` | Auto-resolve local imports, send source+dependencies to LLM to validate symbol references. Accepts `folder_path` |
+| `check_imports` | Two-phase — LLM extracts all import paths, server validates each exists on disk. Accepts `folder_path` |
+| `check_against_specs` | Compare source files against a specification file. Reports violations only. Accepts `folder_path`, `input_files_paths`, or both combined |
 
 ### Utility tools
 
@@ -65,11 +65,16 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `answer_mode` | 2 (chat/code_task), 0 (batch_check) | 0=per-file, 1=per-request, 2=merged |
-| `max_retries` | 1 | Max retries per file in mode 0. Set 3 for parallel + retry + circuit breaker |
-| `redact_regex` | (none) | JavaScript regex to redact matching strings before sending to LLM |
+| `max_retries` | 1 | Max retries per file in mode 0. Set 3 for parallel + retry + circuit breaker. Available on `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs` |
+| `redact_regex` | (none) | JavaScript regex to redact matching strings before sending to LLM. Alphanumeric matches become `[REDACTED:USER_PATTERN]` |
 | `scan_secrets` | false | Abort if API keys/tokens/passwords detected in input files |
 | `redact_secrets` | false | Replace detected secrets with `[REDACTED:LABEL]` |
 | `max_payload_kb` | 400 | Max payload per batch in KB |
+| `folder_path` | (none) | Absolute path to a folder to scan. Can be combined with `input_files_paths`. Available on `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs` |
+| `recursive` | true | Recurse into subdirectories when scanning `folder_path` |
+| `follow_symlinks` | true | Follow symbolic links (circular symlinks auto-detected and skipped) |
+| `max_files` | 2500 | Maximum number of files to discover from `folder_path` |
+| `use_gitignore` | true | Use `.gitignore` rules to filter files. Handles submodules and nested git repos. Set `false` to include gitignored files |
 
 ### File grouping
 
@@ -89,7 +94,7 @@ Organize files into named groups for isolated processing — n groups in, n repo
 }
 ```
 
-Each group produces its own report: `[group:auth] /path/to/report_group-auth_...md`. Groups apply to `input_files_paths` only, not instructions or spec files. No markers = backward compatible.
+Each group produces its own report: `[group:auth] /path/to/report_group-auth_...md`. Groups apply to `input_files_paths` (and `file_pairs` in `compare_files`), not instructions or spec files. No markers = backward compatible.
 
 ### Ensemble mode
 
@@ -111,7 +116,7 @@ On OpenRouter, requests run on **two models in parallel** (default: `grok-4.1-fa
 ## Prerequisites
 
 - **Node.js >= 18** and **npm** — to build the bundled MCP server
-- **Python >= 3.12** — build, statusline, and publishing scripts
+- **Python >= 3.12** — build, statusline, and publishing scripts (all scripts are Python, no shell scripts)
 - For local backends: a running LM Studio, Ollama, vLLM, or llama.cpp server
 - For remote backends: an OpenRouter API key (`OPENROUTER_API_KEY` environment variable)
 
@@ -298,12 +303,11 @@ llm-externalizer-plugin/
 │   ├── tsconfig.json
 │   ├── server.json               # MCP server manifest
 │   └── statusline.py             # Status bar script (cross-platform)
-├── scripts/
+├── scripts/                      # All Python, no shell scripts
 │   ├── setup.py                  # Build: npm install + npm run build
 │   ├── install_statusline.py     # Statusline installer
 │   ├── bump_version.py           # Semver bumper for plugin.json
-│   ├── publish.py                # Release pipeline (bump, changelog, tag, push, gh release)
-│   └── pre-push                  # Git pre-push quality gate
+│   └── publish.py                # Release pipeline (bump, changelog, tag, push, gh release)
 ├── skills/
 │   ├── llm-externalizer-usage/
 │   │   ├── SKILL.md
@@ -318,7 +322,6 @@ llm-externalizer-plugin/
 │           ├── configuration-guide.md
 │           └── profile-templates.md
 ├── .gitignore
-├── .mcp.json
 ├── LICENSE
 └── README.md
 ```
@@ -349,25 +352,13 @@ The script performs these steps in order:
 8. **Push** — pushes commits and tags (pre-push hook validates again)
 9. **GitHub release** — creates release via `gh` CLI with changelog entry as notes
 
-### Pre-push hook (quality gate)
-
-The pre-push hook runs automatically on every `git push` to `main` and blocks the push if any check fails:
-
-1. **Clean tree** — no uncommitted changes
-2. **TypeScript build** — `npx tsc --noEmit` in `mcp-server/`
-3. **Manifest** — `plugin.json` is valid JSON
-
-Install the hook:
-```bash
-ln -sf ../../scripts/pre-push .git/hooks/pre-push
-```
-
 ## Requirements
 
 | Requirement | Version | Purpose |
 |-------------|---------|---------|
 | Node.js | >= 18 | Build and run MCP server |
 | npm | >= 8 | Install dependencies |
+| Python | >= 3.12 | Build, statusline, and publishing scripts |
 | `uv` | any | Run publish/bump scripts |
 | `gh` | any | GitHub releases (publish.py) |
 | `git-cliff` | any (optional) | Changelog generation |
