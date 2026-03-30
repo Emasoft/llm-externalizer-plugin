@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.8.0] - 2026-03-30
+
+### Added
+
+- Compare_files batch mode + git diff mode + grouping
+
 ## [3.7.2] - 2026-03-30
 
 ### Added
