@@ -1074,6 +1074,103 @@ const WALK_DEFAULT_EXCLUDE = new Set([
 ]);
 
 /**
+ * Run `git ls-files` across all git repos within a directory.
+ * Handles: the main repo, git submodules (--recurse-submodules),
+ * and independent nested git repos (separate .git directories).
+ * Returns null if no git repos found at all.
+ */
+function gitLsFilesMultiRepo(dirPath: string, recursive: boolean): string[] | null {
+  const allFiles = new Set<string>();
+
+  // Find the git root for dirPath (if it's inside a git repo)
+  const topLevelResult = spawnSync(
+    "git", ["rev-parse", "--show-toplevel"],
+    { cwd: dirPath, encoding: "utf-8", timeout: 5000 },
+  );
+  const isInGitRepo = topLevelResult.status === 0 && topLevelResult.stdout.trim();
+
+  // Run git ls-files from dirPath (handles main repo + submodules)
+  if (isInGitRepo) {
+    const args = ["ls-files", "--cached", "--others", "--exclude-standard"];
+    // --recurse-submodules respects each submodule's own .gitignore
+    args.push("--recurse-submodules");
+    const result = spawnSync("git", args, {
+      cwd: dirPath, encoding: "utf-8", timeout: 30000,
+    });
+    if (result.status === 0 && result.stdout) {
+      for (const relPath of result.stdout.split("\n")) {
+        if (!relPath.trim()) continue;
+        allFiles.add(join(dirPath, relPath));
+      }
+    } else {
+      // --recurse-submodules may fail on older git — retry without it
+      const fallbackResult = spawnSync(
+        "git", ["ls-files", "--cached", "--others", "--exclude-standard"],
+        { cwd: dirPath, encoding: "utf-8", timeout: 15000 },
+      );
+      if (fallbackResult.status === 0 && fallbackResult.stdout) {
+        for (const relPath of fallbackResult.stdout.split("\n")) {
+          if (!relPath.trim()) continue;
+          allFiles.add(join(dirPath, relPath));
+        }
+      }
+    }
+  }
+
+  // Scan for independent nested git repos (directories with their own .git
+  // that are NOT submodules of the parent repo). Each gets its own git ls-files.
+  if (recursive) {
+    const nestedGitRoots: string[] = [];
+    function findNestedGitRoots(dir: string, depth: number) {
+      if (depth > 10) return; // prevent deep recursion
+      let entries;
+      try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (entry.name === ".git" || entry.name === "node_modules") continue;
+        if (entry.name.startsWith(".")) continue;
+        const subDir = join(dir, entry.name);
+        // Check if this subdirectory is an independent git repo
+        const gitDir = join(subDir, ".git");
+        if (existsSync(gitDir)) {
+          // Verify it's not a submodule (submodules have .git as a FILE, not a DIR)
+          // or verify its toplevel is different from the parent
+          const subTopLevel = spawnSync(
+            "git", ["rev-parse", "--show-toplevel"],
+            { cwd: subDir, encoding: "utf-8", timeout: 3000 },
+          );
+          const parentTopLevel = isInGitRepo ? topLevelResult.stdout.trim() : "";
+          if (subTopLevel.status === 0 && subTopLevel.stdout.trim() !== parentTopLevel) {
+            nestedGitRoots.push(subDir);
+            continue; // don't recurse further into this repo's subdirs for more git roots
+          }
+        }
+        findNestedGitRoots(subDir, depth + 1);
+      }
+    }
+    findNestedGitRoots(dirPath, 0);
+
+    // Run git ls-files in each nested git repo
+    for (const nestedRoot of nestedGitRoots) {
+      const nestedResult = spawnSync(
+        "git", ["ls-files", "--cached", "--others", "--exclude-standard"],
+        { cwd: nestedRoot, encoding: "utf-8", timeout: 15000 },
+      );
+      if (nestedResult.status === 0 && nestedResult.stdout) {
+        for (const relPath of nestedResult.stdout.split("\n")) {
+          if (!relPath.trim()) continue;
+          allFiles.add(join(nestedRoot, relPath));
+        }
+      }
+    }
+  }
+
+  // Return null if no git repos found at all (triggers manual walk fallback)
+  if (!isInGitRepo && allFiles.size === 0) return null;
+  return [...allFiles];
+}
+
+/**
  * Recursively walk a directory and return file paths matching criteria.
  * Skips hidden directories and common non-source directories by default.
  */
@@ -1095,37 +1192,29 @@ function walkDir(
   const recursive = options?.recursive !== false;       // default true
   const followSymlinks = options?.followSymlinks !== false; // default true
 
-  // When useGitignore is true, use `git ls-files` which respects all .gitignore rules.
-  // This is the most correct way to filter — it handles nested .gitignore files,
-  // global gitignore, and all gitignore patterns that regex can't replicate.
+  // When useGitignore is true, use `git ls-files` which respects all .gitignore rules:
+  // - Nested .gitignore files in subdirectories
+  // - Global gitignore (~/.config/git/ignore)
+  // - Git submodules (--recurse-submodules)
+  // - Independent git repos nested inside dirPath (detected and scanned separately)
   if (options?.useGitignore) {
-    const gitResult = spawnSync(
-      "git",
-      ["ls-files", "--cached", "--others", "--exclude-standard"],
-      {
-        cwd: dirPath,
-        encoding: "utf-8",
-        timeout: 15000,
-      },
-    );
-    if (gitResult.status === 0 && gitResult.stdout) {
+    const gitResults = gitLsFilesMultiRepo(dirPath, recursive);
+    if (gitResults !== null) {
       const results: string[] = [];
-      for (const relPath of gitResult.stdout.split("\n")) {
-        if (!relPath.trim()) continue;
+      for (const fullPath of gitResults) {
         if (results.length >= maxFiles) break;
-        const fullPath = join(dirPath, relPath);
         if (skipBinary && isBinaryExtension(fullPath)) continue;
         if (extensions) {
-          const ext = extname(relPath).toLowerCase();
+          const ext = extname(fullPath).toLowerCase();
           if (!extensions.includes(ext)) continue;
         }
         results.push(fullPath);
       }
       return results;
     }
-    // Fall through to manual walk if git command fails (not a git repo, etc.)
+    // Fall through to manual walk if no git repos found in dirPath
     process.stderr.write(
-      `[llm-externalizer] git ls-files failed in ${dirPath}, falling back to manual walk\n`,
+      `[llm-externalizer] No git repo found in ${dirPath}, falling back to manual walk\n`,
     );
   }
 

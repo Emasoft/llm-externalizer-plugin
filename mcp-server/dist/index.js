@@ -29044,6 +29044,91 @@ var WALK_DEFAULT_EXCLUDE = /* @__PURE__ */ new Set([
   ".turbo",
   "target"
 ]);
+function gitLsFilesMultiRepo(dirPath, recursive) {
+  const allFiles = /* @__PURE__ */ new Set();
+  const topLevelResult = spawnSync(
+    "git",
+    ["rev-parse", "--show-toplevel"],
+    { cwd: dirPath, encoding: "utf-8", timeout: 5e3 }
+  );
+  const isInGitRepo = topLevelResult.status === 0 && topLevelResult.stdout.trim();
+  if (isInGitRepo) {
+    const args = ["ls-files", "--cached", "--others", "--exclude-standard"];
+    args.push("--recurse-submodules");
+    const result = spawnSync("git", args, {
+      cwd: dirPath,
+      encoding: "utf-8",
+      timeout: 3e4
+    });
+    if (result.status === 0 && result.stdout) {
+      for (const relPath of result.stdout.split("\n")) {
+        if (!relPath.trim()) continue;
+        allFiles.add(join2(dirPath, relPath));
+      }
+    } else {
+      const fallbackResult = spawnSync(
+        "git",
+        ["ls-files", "--cached", "--others", "--exclude-standard"],
+        { cwd: dirPath, encoding: "utf-8", timeout: 15e3 }
+      );
+      if (fallbackResult.status === 0 && fallbackResult.stdout) {
+        for (const relPath of fallbackResult.stdout.split("\n")) {
+          if (!relPath.trim()) continue;
+          allFiles.add(join2(dirPath, relPath));
+        }
+      }
+    }
+  }
+  if (recursive) {
+    let findNestedGitRoots2 = function(dir, depth) {
+      if (depth > 10) return;
+      let entries;
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (entry.name === ".git" || entry.name === "node_modules") continue;
+        if (entry.name.startsWith(".")) continue;
+        const subDir = join2(dir, entry.name);
+        const gitDir = join2(subDir, ".git");
+        if (existsSync2(gitDir)) {
+          const subTopLevel = spawnSync(
+            "git",
+            ["rev-parse", "--show-toplevel"],
+            { cwd: subDir, encoding: "utf-8", timeout: 3e3 }
+          );
+          const parentTopLevel = isInGitRepo ? topLevelResult.stdout.trim() : "";
+          if (subTopLevel.status === 0 && subTopLevel.stdout.trim() !== parentTopLevel) {
+            nestedGitRoots.push(subDir);
+            continue;
+          }
+        }
+        findNestedGitRoots2(subDir, depth + 1);
+      }
+    };
+    var findNestedGitRoots = findNestedGitRoots2;
+    const nestedGitRoots = [];
+    findNestedGitRoots2(dirPath, 0);
+    for (const nestedRoot of nestedGitRoots) {
+      const nestedResult = spawnSync(
+        "git",
+        ["ls-files", "--cached", "--others", "--exclude-standard"],
+        { cwd: nestedRoot, encoding: "utf-8", timeout: 15e3 }
+      );
+      if (nestedResult.status === 0 && nestedResult.stdout) {
+        for (const relPath of nestedResult.stdout.split("\n")) {
+          if (!relPath.trim()) continue;
+          allFiles.add(join2(nestedRoot, relPath));
+        }
+      }
+    }
+  }
+  if (!isInGitRepo && allFiles.size === 0) return null;
+  return [...allFiles];
+}
 function walkDir(dirPath, options) {
   const maxFiles = options?.maxFiles ?? 1e4;
   const extensions = options?.extensions;
@@ -29051,24 +29136,14 @@ function walkDir(dirPath, options) {
   const recursive = options?.recursive !== false;
   const followSymlinks = options?.followSymlinks !== false;
   if (options?.useGitignore) {
-    const gitResult = spawnSync(
-      "git",
-      ["ls-files", "--cached", "--others", "--exclude-standard"],
-      {
-        cwd: dirPath,
-        encoding: "utf-8",
-        timeout: 15e3
-      }
-    );
-    if (gitResult.status === 0 && gitResult.stdout) {
+    const gitResults = gitLsFilesMultiRepo(dirPath, recursive);
+    if (gitResults !== null) {
       const results2 = [];
-      for (const relPath of gitResult.stdout.split("\n")) {
-        if (!relPath.trim()) continue;
+      for (const fullPath of gitResults) {
         if (results2.length >= maxFiles) break;
-        const fullPath = join2(dirPath, relPath);
         if (skipBinary && isBinaryExtension(fullPath)) continue;
         if (extensions) {
-          const ext = extname(relPath).toLowerCase();
+          const ext = extname(fullPath).toLowerCase();
           if (!extensions.includes(ext)) continue;
         }
         results2.push(fullPath);
@@ -29076,7 +29151,7 @@ function walkDir(dirPath, options) {
       return results2;
     }
     process.stderr.write(
-      `[llm-externalizer] git ls-files failed in ${dirPath}, falling back to manual walk
+      `[llm-externalizer] No git repo found in ${dirPath}, falling back to manual walk
 `
     );
   }
