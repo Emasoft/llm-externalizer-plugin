@@ -711,6 +711,13 @@ function parseRedactRegex(
     throw new Error("Invalid redact_regex: pattern must not be empty.");
   }
 
+  // ReDoS protection: reject patterns with nested quantifiers that cause catastrophic backtracking
+  if (/\([^)]*[+*][^)]*\)[+*]/.test(pattern)) {
+    throw new Error(
+      `Invalid redact_regex: pattern contains nested quantifiers (e.g. (a+)+) that cause catastrophic backtracking.\n\nPattern: ${pattern}\n\nSimplify the quantifiers to avoid ReDoS.`,
+    );
+  }
+
   // Validate the regex by trying to compile it
   try {
     const regex = new RegExp(pattern, "g");
@@ -1283,6 +1290,12 @@ function walkDir(
         if (entry.name === ".git" || entry.name === ".svn" || entry.name === ".hg" || exclude.has(entry.name)) continue;
         // Skip other hidden dirs (covers .venv, .cache, etc.)
         if (entry.name.startsWith(".")) continue;
+        // Track real path of directories to prevent cycles via symlinks pointing to ancestors
+        try {
+          const dirRealPath = realpathSync(fullPath);
+          if (visitedPaths.has(dirRealPath)) continue;
+          visitedPaths.add(dirRealPath);
+        } catch { continue; }
         recurse(fullPath);
       } else if (entry.isFile()) {
         // Skip binary files by extension (readFileAsCodeBlock has null-byte check as second layer)
@@ -3149,6 +3162,12 @@ function resolveFolderPath(
     maxFiles?: number;
   },
 ): FolderResolveResult {
+  // Path traversal protection — reject symlinks and normalize traversal sequences
+  try {
+    folderPath = sanitizeInputPath(folderPath);
+  } catch (err) {
+    return { files: [], error: `Invalid folder_path: ${err instanceof Error ? err.message : String(err)}` };
+  }
   if (!existsSync(folderPath)) {
     return { files: [], error: `folder_path not found: ${folderPath}` };
   }
@@ -4769,7 +4788,7 @@ function buildTools() {
               "Max file size in KB per file. Default: 400. Files exceeding this are skipped.",
           },
         },
-        required: ["input_files_paths"],
+        required: [],
       },
     },
     {
@@ -5065,6 +5084,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const LLM_TOOLS = new Set([
       "chat", "code_task", "batch_check", "scan_folder",
       "compare_files", "check_references", "check_imports",
+      "check_against_specs",
     ]);
     const isLLMTool = LLM_TOOLS.has(name);
     if (isLLMTool) trackRequestStart();
@@ -6293,6 +6313,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           answer_mode: bcRawMode,
           scan_secrets: bcScan,
           redact_secrets: bcRedact,
+          redact_regex: bcRedactRegexRaw,
           max_payload_kb: bcMaxPayloadKb,
           folder_path: bcFolderPath,
           extensions: bcExtensions,
@@ -6308,6 +6329,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           answer_mode?: number;
           scan_secrets?: boolean;
           redact_secrets?: boolean;
+          redact_regex?: string;
           max_payload_kb?: number;
           folder_path?: string;
           extensions?: string[];
@@ -6320,6 +6342,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const bcUseEnsemble = currentBackend.type === "openrouter";
         const bcBudgetBytes = (bcMaxPayloadKb ?? 400) * 1024;
         const bcMode = resolveAnswerMode(bcRawMode, 0);
+
+        // Validate redact_regex
+        let bcRegexRedact: RegexRedactOpts | null = null;
+        try {
+          bcRegexRedact = parseRedactRegex(bcRedactRegexRaw);
+        } catch (err) {
+          return { content: [{ type: "text", text: `FAILED: ${(err as Error).message}` }], isError: true };
+        }
 
         let bcNormalizedPaths = normalizePaths(bcInputPaths);
         if (bcFolderPath) {
@@ -6377,7 +6407,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               return processFileCheck(filePath, gTask, {
                 maxTokens: resolveDefaultMaxTokens(),
                 batchId: gBatchId, fileIndex: idx,
-                redact: bcRedact, onProgress, ensemble: bcUseEnsemble, maxBytes: bcBudgetBytes,
+                redact: bcRedact, regexRedact: bcRegexRedact, onProgress, ensemble: bcUseEnsemble, maxBytes: bcBudgetBytes,
               });
             });
             const gResults = await parallelLimit(gTasks, gConcurrency);
@@ -6460,6 +6490,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 batchId,
                 fileIndex: idx,
                 redact: bcRedact,
+                regexRedact: bcRegexRedact,
                 onProgress,
                 ensemble: bcUseEnsemble,
                 maxBytes: bcBudgetBytes,
@@ -6998,6 +7029,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           instructions: sfInstructions,
           instructions_files_paths: sfInstructionsFilesPaths,
           redact_secrets: sfRedact,
+          redact_regex: sfRedactRegexRaw,
           answer_mode: sfRawMode,
           use_gitignore: sfUseGitignore,
           scan_secrets: sfScan,
@@ -7009,6 +7041,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           instructions?: string;
           instructions_files_paths?: string | string[];
           redact_secrets?: boolean;
+          redact_regex?: string;
           answer_mode?: number;
           use_gitignore?: boolean;
           scan_secrets?: boolean;
@@ -7016,6 +7049,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
         const sfUseEnsemble = currentBackend.type === "openrouter";
         const sfBudgetBytes = ((args as { max_payload_kb?: number }).max_payload_kb ?? 400) * 1024;
+
+        // Validate redact_regex
+        let sfRegexRedact: RegexRedactOpts | null = null;
+        try {
+          sfRegexRedact = parseRedactRegex(sfRedactRegexRaw);
+        } catch (err) {
+          return { content: [{ type: "text", text: `FAILED: ${(err as Error).message}` }], isError: true };
+        }
 
         if (!existsSync(folder_path)) {
           return {
@@ -7109,6 +7150,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 batchId,
                 fileIndex: idx,
                 redact: sfRedact,
+                regexRedact: sfRegexRedact,
                 onProgress,
                 ensemble: sfUseEnsemble,
                 maxBytes: sfBudgetBytes,

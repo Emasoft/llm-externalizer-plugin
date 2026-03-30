@@ -28864,6 +28864,15 @@ function parseRedactRegex(raw) {
   if (!pattern) {
     throw new Error("Invalid redact_regex: pattern must not be empty.");
   }
+  if (/\([^)]*[+*][^)]*\)[+*]/.test(pattern)) {
+    throw new Error(
+      `Invalid redact_regex: pattern contains nested quantifiers (e.g. (a+)+) that cause catastrophic backtracking.
+
+Pattern: ${pattern}
+
+Simplify the quantifiers to avoid ReDoS.`
+    );
+  }
   try {
     const regex = new RegExp(pattern, "g");
     return { regex, patternStr: pattern };
@@ -29208,6 +29217,13 @@ function walkDir(dirPath, options) {
         if (!recursive) continue;
         if (entry.name === ".git" || entry.name === ".svn" || entry.name === ".hg" || exclude.has(entry.name)) continue;
         if (entry.name.startsWith(".")) continue;
+        try {
+          const dirRealPath = realpathSync(fullPath);
+          if (visitedPaths.has(dirRealPath)) continue;
+          visitedPaths.add(dirRealPath);
+        } catch {
+          continue;
+        }
         recurse(fullPath);
       } else if (entry.isFile()) {
         if (skipBinary && isBinaryExtension(fullPath)) continue;
@@ -30302,6 +30318,11 @@ function normalizePaths(raw) {
   return arr.filter((p) => typeof p === "string" && p.length > 0);
 }
 function resolveFolderPath(folderPath, opts) {
+  try {
+    folderPath = sanitizeInputPath(folderPath);
+  } catch (err) {
+    return { files: [], error: `Invalid folder_path: ${err instanceof Error ? err.message : String(err)}` };
+  }
   if (!existsSync2(folderPath)) {
     return { files: [], error: `folder_path not found: ${folderPath}` };
   }
@@ -31482,7 +31503,7 @@ function buildTools() {
             description: "Max file size in KB per file. Default: 400. Files exceeding this are skipped."
           }
         },
-        required: ["input_files_paths"]
+        required: []
       }
     },
     {
@@ -31704,7 +31725,8 @@ Settings file: ${SETTINGS_FILE}`
       "scan_folder",
       "compare_files",
       "check_references",
-      "check_imports"
+      "check_imports",
+      "check_against_specs"
     ]);
     const isLLMTool = LLM_TOOLS.has(name);
     if (isLLMTool) trackRequestStart();
@@ -32760,6 +32782,7 @@ Settings saved to ${SETTINGS_FILE}`
             answer_mode: bcRawMode,
             scan_secrets: bcScan,
             redact_secrets: bcRedact,
+            redact_regex: bcRedactRegexRaw,
             max_payload_kb: bcMaxPayloadKb,
             folder_path: bcFolderPath,
             extensions: bcExtensions,
@@ -32772,6 +32795,12 @@ Settings saved to ${SETTINGS_FILE}`
           const bcUseEnsemble = currentBackend.type === "openrouter";
           const bcBudgetBytes = (bcMaxPayloadKb ?? 400) * 1024;
           const bcMode = resolveAnswerMode(bcRawMode, 0);
+          let bcRegexRedact = null;
+          try {
+            bcRegexRedact = parseRedactRegex(bcRedactRegexRaw);
+          } catch (err) {
+            return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+          }
           let bcNormalizedPaths = normalizePaths(bcInputPaths);
           if (bcFolderPath) {
             const folderResult = resolveFolderPath(bcFolderPath, {
@@ -32825,6 +32854,7 @@ Settings saved to ${SETTINGS_FILE}`
                   batchId: gBatchId,
                   fileIndex: idx,
                   redact: bcRedact,
+                  regexRedact: bcRegexRedact,
                   onProgress,
                   ensemble: bcUseEnsemble,
                   maxBytes: bcBudgetBytes
@@ -32900,6 +32930,7 @@ ${gFailed.map((r) => `- ${r.filePath}: ${r.error}`).join("\n")}`);
                   batchId,
                   fileIndex: idx,
                   redact: bcRedact,
+                  regexRedact: bcRegexRedact,
                   onProgress,
                   ensemble: bcUseEnsemble,
                   maxBytes: bcBudgetBytes
@@ -33330,12 +33361,19 @@ ${content}`
             instructions: sfInstructions,
             instructions_files_paths: sfInstructionsFilesPaths,
             redact_secrets: sfRedact,
+            redact_regex: sfRedactRegexRaw,
             answer_mode: sfRawMode,
             use_gitignore: sfUseGitignore,
             scan_secrets: sfScan
           } = args;
           const sfUseEnsemble = currentBackend.type === "openrouter";
           const sfBudgetBytes = (args.max_payload_kb ?? 400) * 1024;
+          let sfRegexRedact = null;
+          try {
+            sfRegexRedact = parseRedactRegex(sfRedactRegexRaw);
+          } catch (err) {
+            return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+          }
           if (!existsSync2(folder_path)) {
             return {
               content: [
@@ -33421,6 +33459,7 @@ ${content}`
                   batchId,
                   fileIndex: idx,
                   redact: sfRedact,
+                  regexRedact: sfRegexRedact,
                   onProgress,
                   ensemble: sfUseEnsemble,
                   maxBytes: sfBudgetBytes
