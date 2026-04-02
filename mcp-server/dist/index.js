@@ -31288,7 +31288,7 @@ function buildTools() {
             description: "Max file size in KB per file. Default: 400. Files exceeding this are skipped and reported."
           }
         },
-        required: ["input_files_paths"]
+        required: []
       }
     },
     {
@@ -31567,7 +31567,7 @@ function buildTools() {
             description: "Max payload in KB (prompt + files). Default: 400. Lower if you see hallucinations."
           }
         },
-        required: ["input_files_paths"]
+        required: []
       }
     },
     {
@@ -31615,7 +31615,7 @@ function buildTools() {
             description: "Max payload in KB (prompt + files). Default: 400. Lower if you see hallucinations."
           }
         },
-        required: ["input_files_paths"]
+        required: []
       }
     },
     {
@@ -33081,7 +33081,7 @@ ${content}`);
                 content: [
                   {
                     type: "text",
-                    text: "FAILED: input_files_paths array is required and must not be empty."
+                    text: "FAILED: input_files_paths or folder_path is required."
                   }
                 ],
                 isError: true
@@ -34492,7 +34492,7 @@ ${diffFence}` + sourceFileBlocks
           if (crFilePathsAll.length === 0) {
             return {
               content: [
-                { type: "text", text: "FAILED: input_files_paths is required." }
+                { type: "text", text: "FAILED: input_files_paths or folder_path is required." }
               ],
               isError: true
             };
