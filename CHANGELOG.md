@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.8.7] - 2026-04-02
+
+### Fixed
+
+- Resolve remaining deferred audit issues + dead code cleanup
+
 ## [3.8.6] - 2026-03-30
 
 ### Documentation
