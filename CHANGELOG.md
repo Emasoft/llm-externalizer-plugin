@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.8.8] - 2026-04-02
+
+### Fixed
+
+- Schema required arrays block folder_path-only calls
+
 ## [3.8.7] - 2026-04-02
 
 ### Fixed
