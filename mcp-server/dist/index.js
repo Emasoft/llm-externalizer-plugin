@@ -14111,7 +14111,7 @@ import {
   appendFileSync,
   readdirSync,
   unlinkSync,
-  realpathSync,
+  realpathSync as realpathSync2,
   watchFile,
   unwatchFile
 } from "node:fs";
@@ -27996,7 +27996,8 @@ import {
   mkdirSync,
   copyFileSync,
   renameSync,
-  chmodSync
+  chmodSync,
+  realpathSync
 } from "node:fs";
 import { resolve } from "node:path";
 import { join } from "node:path";
@@ -28072,9 +28073,14 @@ var API_PRESETS = {
   }
 };
 function getConfigDir() {
-  const dir = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
+  let dir = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
+  try {
+    dir = realpathSync(dir);
+  } catch {
+  }
   const home = homedir();
-  if (!dir.startsWith(home + "/") && !dir.startsWith("/tmp/") && dir !== home && dir !== "/tmp") {
+  const sep = process.platform === "win32" ? "\\" : "/";
+  if (!dir.startsWith(home + sep) && !dir.startsWith("/tmp/") && dir !== home && dir !== "/tmp") {
     throw new Error(`Config directory '${dir}' is outside allowed paths (${home} or /tmp)`);
   }
   return dir;
@@ -29196,7 +29202,7 @@ function walkDir(dirPath, options) {
       if (entry.isSymbolicLink()) {
         if (!followSymlinks) continue;
         try {
-          const realPath = realpathSync(fullPath);
+          const realPath = realpathSync2(fullPath);
           if (visitedPaths.has(realPath)) continue;
           visitedPaths.add(realPath);
           const targetStat = statSync(realPath);
@@ -29222,7 +29228,7 @@ function walkDir(dirPath, options) {
         if (entry.name === ".git" || entry.name === ".svn" || entry.name === ".hg" || exclude.has(entry.name)) continue;
         if (entry.name.startsWith(".")) continue;
         try {
-          const dirRealPath = realpathSync(fullPath);
+          const dirRealPath = realpathSync2(fullPath);
           if (visitedPaths.has(dirRealPath)) continue;
           visitedPaths.add(dirRealPath);
         } catch {
@@ -30991,6 +30997,16 @@ var redactRegexSchema = {
   type: "string",
   description: "JavaScript regex pattern to redact matching strings from file content before sending to LLM. Applied after secret redaction. Alphanumeric matches \u2192 [REDACTED:USER_PATTERN], numeric-only matches \u2192 zero-padded placeholder. Invalid regex returns an error with details."
 };
+var LLM_TOOLS_SET = /* @__PURE__ */ new Set([
+  "chat",
+  "code_task",
+  "batch_check",
+  "scan_folder",
+  "compare_files",
+  "check_references",
+  "check_imports",
+  "check_against_specs"
+]);
 var DISABLED_TOOLS = /* @__PURE__ */ new Set([
   "fix_code",
   "batch_fix",
@@ -31722,17 +31738,7 @@ Settings file: ${SETTINGS_FILE}`
         isError: true
       };
     }
-    const LLM_TOOLS = /* @__PURE__ */ new Set([
-      "chat",
-      "code_task",
-      "batch_check",
-      "scan_folder",
-      "compare_files",
-      "check_references",
-      "check_imports",
-      "check_against_specs"
-    ]);
-    const isLLMTool = LLM_TOOLS.has(name);
+    const isLLMTool = LLM_TOOLS_SET.has(name);
     if (isLLMTool) trackRequestStart();
     try {
       switch (name) {

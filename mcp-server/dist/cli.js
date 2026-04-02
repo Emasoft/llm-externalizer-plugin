@@ -7333,7 +7333,8 @@ import {
   mkdirSync,
   copyFileSync,
   renameSync,
-  chmodSync
+  chmodSync,
+  realpathSync
 } from "node:fs";
 import { resolve } from "node:path";
 import { join } from "node:path";
@@ -7409,9 +7410,14 @@ var API_PRESETS = {
   }
 };
 function getConfigDir() {
-  const dir = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
+  let dir = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
+  try {
+    dir = realpathSync(dir);
+  } catch {
+  }
   const home = homedir();
-  if (!dir.startsWith(home + "/") && !dir.startsWith("/tmp/") && dir !== home && dir !== "/tmp") {
+  const sep = process.platform === "win32" ? "\\" : "/";
+  if (!dir.startsWith(home + sep) && !dir.startsWith("/tmp/") && dir !== home && dir !== "/tmp") {
     throw new Error(`Config directory '${dir}' is outside allowed paths (${home} or /tmp)`);
   }
   return dir;
@@ -7735,13 +7741,13 @@ function profileFromFlags(flags) {
   if (flags.api_key) p.api_key = flags.api_key;
   if (flags.api_token) p.api_token = flags.api_token;
   if (flags.second_model) p.second_model = flags.second_model;
-  if (flags.timeout) {
+  if (flags.timeout && flags.timeout !== "null" && flags.timeout !== "") {
     const n = Number(flags.timeout);
     if (!isFinite(n) || n < 0)
       die(`--timeout must be a non-negative number, got '${flags.timeout}'`);
     p.timeout = n;
   }
-  if (flags.context_window) {
+  if (flags.context_window && flags.context_window !== "null" && flags.context_window !== "") {
     const n = Number(flags.context_window);
     if (!isFinite(n) || n < 0)
       die(
@@ -7749,7 +7755,7 @@ function profileFromFlags(flags) {
       );
     p.context_window = n;
   }
-  if (flags.max_concurrent) {
+  if (flags.max_concurrent && flags.max_concurrent !== "null" && flags.max_concurrent !== "") {
     const n = Number(flags.max_concurrent);
     if (!isFinite(n) || n < 0)
       die(

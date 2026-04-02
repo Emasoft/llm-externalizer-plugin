@@ -19,6 +19,7 @@ import {
   copyFileSync,
   renameSync,
   chmodSync,
+  realpathSync,
 } from "node:fs";
 import { resolve } from "node:path";
 import { join } from "node:path";
@@ -185,10 +186,13 @@ export const API_PRESETS: Record<string, ApiPreset> = {
 
 /** Config directory: ~/.llm-externalizer (or LLM_EXT_CONFIG_DIR for CI) */
 export function getConfigDir(): string {
-  const dir = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
+  let dir = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
+  // Follow symlinks to detect if the resolved target is outside allowed boundaries
+  try { dir = realpathSync(dir); } catch { /* dir may not exist yet — resolve() is sufficient */ }
   // M8: Path traversal guard — config dir must be under homedir() or /tmp
   const home = homedir();
-  if (!dir.startsWith(home + "/") && !dir.startsWith("/tmp/") && dir !== home && dir !== "/tmp") {
+  const sep = process.platform === "win32" ? "\\" : "/";
+  if (!dir.startsWith(home + sep) && !dir.startsWith("/tmp/") && dir !== home && dir !== "/tmp") {
     throw new Error(`Config directory '${dir}' is outside allowed paths (${home} or /tmp)`);
   }
   return dir;

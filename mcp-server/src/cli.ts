@@ -69,13 +69,13 @@ function profileFromFlags(flags: Record<string, string>): Partial<Profile> {
   if (flags.api_key) p.api_key = flags.api_key;
   if (flags.api_token) p.api_token = flags.api_token;
   if (flags.second_model) p.second_model = flags.second_model;
-  if (flags.timeout) {
+  if (flags.timeout && flags.timeout !== "null" && flags.timeout !== "") {
     const n = Number(flags.timeout);
     if (!isFinite(n) || n < 0)
       die(`--timeout must be a non-negative number, got '${flags.timeout}'`);
     p.timeout = n;
   }
-  if (flags.context_window) {
+  if (flags.context_window && flags.context_window !== "null" && flags.context_window !== "") {
     const n = Number(flags.context_window);
     if (!isFinite(n) || n < 0)
       die(
@@ -83,7 +83,7 @@ function profileFromFlags(flags: Record<string, string>): Partial<Profile> {
       );
     p.context_window = n;
   }
-  if (flags.max_concurrent) {
+  if (flags.max_concurrent && flags.max_concurrent !== "null" && flags.max_concurrent !== "") {
     const n = Number(flags.max_concurrent);
     if (!isFinite(n) || n < 0)
       die(

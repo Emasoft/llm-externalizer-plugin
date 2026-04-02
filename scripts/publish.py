@@ -394,10 +394,12 @@ def main():
     # M: Detect any unstaged modified files that may have been missed
     porcelain = run(["git", "status", "--porcelain"], check=False)
     if porcelain.stdout:
+        # Check working-tree column (2nd char) for modifications not yet staged
+        # Porcelain format: XY where X=index status, Y=worktree status
+        # ' '=unmodified, '?'=untracked — anything else in Y means worktree changes
         unstaged = [
             line for line in porcelain.stdout.strip().splitlines()
-            if line and not line.startswith("A ") and not line.startswith("M ")
-            and not line.startswith("?? ")
+            if len(line) >= 2 and line[1] not in (" ", "?")
         ]
         if unstaged:
             print("WARNING: unstaged modified files detected:", file=sys.stderr)

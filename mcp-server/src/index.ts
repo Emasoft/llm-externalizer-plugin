@@ -1457,13 +1457,8 @@ const DEFAULT_OPENROUTER_CONCURRENCY = 5; // conservative default — even $5 ba
 // When the caller doesn't specify max_tokens, we request the model's full context
 // window as the output budget. The API clamps this to the model's actual max output.
 // This ensures the LLM is never artificially truncated — truncation causes more harm
-// than the marginal cost of extra output tokens (you only pay for tokens generated).
-// Note: readAndGroupFiles now uses byte-based 800 KB payload budget instead of tokens.
-// This constant is kept for any remaining callers that need a token-based estimate.
-const BATCHING_OUTPUT_ESTIMATE = 16384;
 const DEFAULT_TEMPERATURE = 0.3;
 const CONNECT_TIMEOUT_MS = 5000;
-const _INFERENCE_CONNECT_TIMEOUT_MS = 30_000; // generous connect timeout for inference (cold model loading)
 // MCP spec defines a 120s request timeout for tool calls. We must complete within that window.
 // M5: Cap at 115s to leave margin for response serialization.
 const MCP_MAX_TIMEOUT_MS = 115_000;
@@ -1715,62 +1710,6 @@ async function getMaxConcurrent(): Promise<number> {
 // ── Fuzzy model matching ─────────────────────────────────────────────
 // Scores a query against model IDs so "gpt 4o" resolves to "openai/gpt-4o".
 
-function normalizeForMatch(s: string): string {
-  return s.toLowerCase().replace(/[-_./]/g, "");
-}
-
-function scoreModel(query: string, modelId: string): number {
-  const qLower = query.toLowerCase().trim();
-  const idLower = modelId.toLowerCase();
-
-  // Exact match on full ID
-  if (idLower === qLower) return 1000;
-
-  // Exact match after the provider/ prefix
-  const shortId = idLower.includes("/")
-    ? idLower.split("/").slice(1).join("/")
-    : idLower;
-  if (shortId === qLower) return 900;
-
-  // Starts with query
-  if (idLower.startsWith(qLower) || shortId.startsWith(qLower)) return 500;
-
-  // Contains query as substring
-  if (idLower.includes(qLower) || shortId.includes(qLower)) return 200;
-
-  // Token matching: split query into words, check how many appear in the model ID
-  const qTokens = qLower.split(/[\s\-_./]+/).filter(Boolean);
-  if (qTokens.length > 1) {
-    const matched = qTokens.filter((t) => idLower.includes(t)).length;
-    if (matched === qTokens.length) return 150; // all tokens match
-    if (matched > 0) return 80 * (matched / qTokens.length);
-  }
-
-  // Normalized matching: strip separators and check
-  const qNorm = normalizeForMatch(qLower);
-  const idNorm = normalizeForMatch(idLower);
-  if (idNorm.includes(qNorm)) return 50;
-
-  return 0;
-}
-
-interface ModelMatch {
-  model: OpenRouterModelInfo;
-  score: number;
-}
-
-function _findBestModels(
-  query: string,
-  models: OpenRouterModelInfo[],
-  maxResults = 5,
-): ModelMatch[] {
-  const scored = models
-    .map((m) => ({ model: m, score: scoreModel(query, m.id) }))
-    .filter((m) => m.score > 0)
-    .sort((a, b) => b.score - a.score);
-  return scored.slice(0, maxResults);
-}
-
 // ── Session-level token accounting ───────────────────────────────────
 // Tracks cumulative tokens offloaded across all calls in this session.
 
@@ -1937,14 +1876,6 @@ function recordUsage(usage?: {
   }
   // Update the live stats file for the statusline to read
   writeStatsFile();
-}
-
-function _sessionSummary(): string {
-  const total = session.promptTokens + session.completionTokens;
-  if (session.calls === 0) return "";
-  const costStr =
-    session.totalCost > 0 ? ` | Cost: $${session.totalCost.toFixed(6)}` : "";
-  return `Session total: ${total.toLocaleString()} tokens across ${session.calls} call${session.calls === 1 ? "" : "s"}${costStr}`;
 }
 
 function apiHeaders(): Record<string, string> {
@@ -4069,6 +4000,13 @@ const redactRegexSchema = {
 // Write tools disabled: no current OpenRouter model can faithfully return files >3000 lines.
 // grok-4.1-fast abbreviates (uses 10% of output budget); gemini-2.5-flash hits 65K output ceiling.
 // Keep the implementation code intact — re-enable when a model with sufficient output capacity appears.
+// Track which tools make LLM calls — used by `reset` to wait for in-flight requests
+const LLM_TOOLS_SET = new Set([
+  "chat", "code_task", "batch_check", "scan_folder",
+  "compare_files", "check_references", "check_imports",
+  "check_against_specs",
+]);
+
 const DISABLED_TOOLS = new Set([
   "fix_code",
   "batch_fix",
@@ -5081,12 +5019,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     // Track active LLM requests so `reset` can wait for them to drain
-    const LLM_TOOLS = new Set([
-      "chat", "code_task", "batch_check", "scan_folder",
-      "compare_files", "check_references", "check_imports",
-      "check_against_specs",
-    ]);
-    const isLLMTool = LLM_TOOLS.has(name);
+    const isLLMTool = LLM_TOOLS_SET.has(name);
     if (isLLMTool) trackRequestStart();
 
     try {
