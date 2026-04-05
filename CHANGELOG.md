@@ -1,6 +1,17 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.0] - 2026-04-05
+
+### Added
+
+- 3-model ensemble support (third_model)
+
+### Fixed
+
+- Cpv-remote-validate uses 'plugin' not 'cpv-validate'
+- Use cpv-remote-validate for isolated CPV execution
+
 ## [3.8.8] - 2026-04-02
 
 ### Fixed
