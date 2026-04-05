@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.3] - 2026-04-05
+
+### Fixed
+
+- Simplify lock file protocol — existence = validation passed
+
 ## [3.9.2] - 2026-04-05
 
 ### Added
