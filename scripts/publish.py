@@ -195,6 +195,7 @@ def main():
                 "uvx",
                 "--from", "git+https://github.com/Emasoft/claude-plugins-validation",
                 "--with", "pyyaml",
+                "cpv-remote-validate",
                 "cpv-validate",
                 str(repo_root),
             ],
