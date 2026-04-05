@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.4] - 2026-04-05
+
+### Added
+
+- Publish.py always bumps version first, then validates
+
 ## [3.9.3] - 2026-04-05
 
 ### Fixed
