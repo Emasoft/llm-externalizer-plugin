@@ -8,6 +8,7 @@ Usage:
     uv run scripts/publish.py --major      # 3.2.0 -> 4.0.0
     uv run scripts/publish.py --set 4.0.0  # explicit version
     uv run scripts/publish.py --dry-run    # preview without changes
+    uv run scripts/publish.py --check-only # run checks only (used by pre-push hook)
 
 Steps:
     0. Verify clean working tree
@@ -152,10 +153,14 @@ def main():
     parser.add_argument(
         "--dry-run", "-n", action="store_true", help="Preview without making changes"
     )
+    parser.add_argument(
+        "--check-only", action="store_true",
+        help="Run checks only (build, manifest, CPV) without publishing. Used by pre-push hook.",
+    )
     args = parser.parse_args()
 
-    # Verify required CLI tools are available
-    if not shutil.which("gh"):
+    # gh is only required for actual publishing
+    if not args.check_only and not shutil.which("gh"):
         print("ERROR: 'gh' (GitHub CLI) not found on PATH. Install it first.", file=sys.stderr)
         sys.exit(1)
 
@@ -164,19 +169,20 @@ def main():
     plugin_json = repo_root / ".claude-plugin" / "plugin.json"
     changelog = repo_root / "CHANGELOG.md"
 
-    # ── 0. Verify clean working tree ──
-    print("\n── 0. Verify clean working tree ──")
-    result = run(["git", "diff", "--quiet"], check=False, capture=False)
-    if result.returncode != 0:
-        print(
-            "ERROR: uncommitted changes found. Commit or stash first.", file=sys.stderr
-        )
-        sys.exit(1)
-    result = run(["git", "diff", "--cached", "--quiet"], check=False, capture=False)
-    if result.returncode != 0:
-        print("ERROR: staged changes found. Commit or stash first.", file=sys.stderr)
-        sys.exit(1)
-    print("OK: working tree clean\n")
+    # ── 0. Verify clean working tree (skip for --check-only, pre-push may have commits) ──
+    if not args.check_only:
+        print("\n── 0. Verify clean working tree ──")
+        result = run(["git", "diff", "--quiet"], check=False, capture=False)
+        if result.returncode != 0:
+            print(
+                "ERROR: uncommitted changes found. Commit or stash first.", file=sys.stderr
+            )
+            sys.exit(1)
+        result = run(["git", "diff", "--cached", "--quiet"], check=False, capture=False)
+        if result.returncode != 0:
+            print("ERROR: staged changes found. Commit or stash first.", file=sys.stderr)
+            sys.exit(1)
+        print("OK: working tree clean\n")
 
     # ── 1. Run checks (before any file modifications) ──
     print("── 1. Run checks ──")
@@ -213,6 +219,11 @@ def main():
     else:
         print("  SKIP: 'uvx' not found on PATH (install uv for CPV validation)")
     print()
+
+    # --check-only: exit after checks succeed
+    if args.check_only:
+        print("All checks passed.")
+        return
 
     # ── 2. Bump version ──
     print("── 2. Bump version ──")

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Pre-push quality gate — blocks push if any check fails.
+"""Pre-push quality gate — delegates all checks to publish.py --check-only.
 
 Install: git config core.hooksPath .githooks
 """
 
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -17,23 +16,19 @@ def main() -> None:
             capture_output=True, text=True, check=True,
         ).stdout.strip()
     )
-    mcp_dir = repo_root / "mcp-server"
-    plugin_json = repo_root / ".claude-plugin" / "plugin.json"
+    publish_script = repo_root / "scripts" / "publish.py"
 
-    print("── Pre-push: TypeScript build check ──")
-    result = subprocess.run(["npx", "tsc", "--noEmit"], cwd=str(mcp_dir))
+    if not publish_script.is_file():
+        print("WARNING: scripts/publish.py not found, skipping pre-push checks", file=sys.stderr)
+        return
+
+    result = subprocess.run(
+        [sys.executable, str(publish_script), "--check-only"],
+        cwd=str(repo_root),
+    )
     if result.returncode != 0:
-        print("ERROR: TypeScript compilation failed", file=sys.stderr)
+        print("\nPre-push checks FAILED. Push blocked.", file=sys.stderr)
         sys.exit(1)
-
-    print("── Pre-push: Manifest check ──")
-    try:
-        json.loads(plugin_json.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, FileNotFoundError) as e:
-        print(f"ERROR: plugin.json invalid: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    print("── Pre-push: all checks passed ──")
 
 
 if __name__ == "__main__":
