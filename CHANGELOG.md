@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.6] - 2026-04-05
+
+### Fixed
+
+- Add types:["node"] to tsconfig to resolve IDE false positives
+
 ## [3.9.5] - 2026-04-05
 
 ### Fixed
