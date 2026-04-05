@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.1] - 2026-04-05
+
+### Added
+
+- Unify pre-push hook with publish.py --check-only
+
 ## [3.9.0] - 2026-04-05
 
 ### Added
