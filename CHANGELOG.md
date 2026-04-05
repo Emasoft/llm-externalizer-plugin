@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.8] - 2026-04-05
+
+### Changed
+
+- Remove ensemble deadline — user will extend MCP timeout instead
+
 ## [3.9.7] - 2026-04-05
 
 ### Fixed
