@@ -60,3 +60,4 @@ llm_externalizer_output/
 *.bak
 # TLDR artifacts (added by rechecker)
 .tldr_session_*
+.publish.lock

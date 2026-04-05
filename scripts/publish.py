@@ -26,6 +26,7 @@ Steps:
 
 import argparse
 import json
+import os
 import re
 import shlex
 import shutil
@@ -168,6 +169,23 @@ def main():
     repo_root = Path(__file__).resolve().parent.parent
     plugin_json = repo_root / ".claude-plugin" / "plugin.json"
     changelog = repo_root / "CHANGELOG.md"
+    lock_file = repo_root / ".publish.lock"
+
+    # Lock file: prevents pre-push hook from re-running checks when publish.py is the caller.
+    # The pre-push hook checks for this file and skips if present.
+    if not args.check_only:
+        lock_file.write_text(str(os.getpid()), encoding="utf-8")
+    try:
+        _run_publish(args, repo_root, plugin_json, changelog, lock_file)
+    finally:
+        if lock_file.exists():
+            try:
+                lock_file.unlink()
+            except OSError:
+                pass
+
+
+def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path, lock_file: Path) -> None:
 
     # ── 0. Verify clean working tree (skip for --check-only, pre-push may have commits) ──
     if not args.check_only:
@@ -217,7 +235,9 @@ def main():
                 print(cpv_result.stdout, file=sys.stderr)
             sys.exit(1)
     else:
-        print("  SKIP: 'uvx' not found on PATH (install uv for CPV validation)")
+        print("ERROR: 'uvx' not found on PATH. CPV validation is required.", file=sys.stderr)
+        print("Install uv: https://docs.astral.sh/uv/getting-started/installation/", file=sys.stderr)
+        sys.exit(1)
     print()
 
     # --check-only: exit after checks succeed
