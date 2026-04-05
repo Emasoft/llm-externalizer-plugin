@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.2] - 2026-04-05
+
+### Added
+
+- Pre-push hook skips when publish.py running, CPV now mandatory
+
 ## [3.9.1] - 2026-04-05
 
 ### Added
