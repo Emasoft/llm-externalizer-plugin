@@ -65,12 +65,10 @@ def update_readme_badges(readme_path: Path, version: str, build_ok: bool) -> boo
 
 def run(
     cmd: list[str], *, check: bool = True, capture: bool = True, cwd: str | None = None,
-    capture_output: bool | None = None,
 ) -> subprocess.CompletedProcess:
     """Run a command, printing it first. Fail-fast on error."""
     print(f"  $ {shlex.join(cmd)}")
-    use_capture = capture_output if capture_output is not None else capture
-    return subprocess.run(cmd, check=check, capture_output=use_capture, text=True, cwd=cwd)
+    return subprocess.run(cmd, check=check, capture_output=capture, text=True, cwd=cwd)
 
 
 def bump_version(current: str, part: str) -> str:
@@ -443,7 +441,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path, lock
         sys.exit(1)
     print()
 
-    # ── 8. GitHub release ──
+    # ── 9. GitHub release ──
     print("── 9. Create GitHub release ──")
     notes = extract_release_notes(changelog, new_version)
     run(

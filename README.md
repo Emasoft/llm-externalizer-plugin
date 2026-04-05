@@ -342,15 +342,15 @@ uv run scripts/publish.py --dry-run    # preview without changes
 
 The script performs these steps in order:
 
-1. **Verify** clean working tree
-2. **Build check** — `npx tsc --noEmit` (TypeScript compiles cleanly)
-3. **Manifest check** — `plugin.json` is valid JSON
-4. **Version bump** — increments version in `plugin.json`
-5. **Changelog** — regenerates `CHANGELOG.md` via `git-cliff` (if available)
-6. **Commit** — commits version bump + changelog
+1. **Bump version** — always bumps (marketplace needs change to detect updates). Syncs to `plugin.json`, `package.json`, `server.json`, `index.ts`
+2. **Rebuild dist** — bundles TypeScript with new version
+3. **Validate** — build check + CPV plugin validation (0 issues required)
+4. **Badges** — updates `README.md` version/build badges
+5. **Changelog** — regenerates `CHANGELOG.md` via `git-cliff`
+6. **Commit** — commits all version-bumped files
 7. **Tag** — creates annotated git tag (`vX.Y.Z`)
-8. **Push** — pushes commits and tags (pre-push hook validates again)
-9. **GitHub release** — creates release via `gh` CLI with changelog entry as notes
+8. **Push** — pushes (pre-push hook skips — publish.py already validated)
+9. **GitHub release** — creates release via `gh` CLI
 
 ## Requirements
 
@@ -359,9 +359,9 @@ The script performs these steps in order:
 | Node.js | >= 18 | Build and run MCP server |
 | npm | >= 8 | Install dependencies |
 | Python | >= 3.12 | Build, statusline, and publishing scripts |
-| `uv` | any | Run publish/bump scripts |
+| `uv`/`uvx` | any | Run publish/bump scripts + CPV validation |
 | `gh` | any | GitHub releases (publish.py) |
-| `git-cliff` | any (optional) | Changelog generation |
+| `git-cliff` | any | Changelog generation (required for publish) |
 
 ## Links
 
