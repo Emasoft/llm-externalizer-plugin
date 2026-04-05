@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.5] - 2026-04-05
+
+### Fixed
+
+- Publish.py cleanup + README steps updated
+
 ## [3.9.4] - 2026-04-05
 
 ### Added
