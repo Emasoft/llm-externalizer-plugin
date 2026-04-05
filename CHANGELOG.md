@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.7] - 2026-04-05
+
+### Fixed
+
+- 3-model ensemble deadline prevents MCP timeout on large files
+
 ## [3.9.6] - 2026-04-05
 
 ### Fixed
