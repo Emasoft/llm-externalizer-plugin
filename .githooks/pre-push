@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""Pre-push quality gate — delegates checks to publish.py --check-only.
+"""Pre-push quality gate.
 
-If publish.py is already running (lock file exists), skips to avoid
-duplicate validation. publish.py creates .publish.lock while active.
+If publish.py is the caller (.publish.lock exists), all validation
+already passed — publish.py would have exited before reaching git push
+if any check failed. Allow the push.
+
+If direct git push (no lock), run publish.py --check-only to validate.
+Push is blocked unless all checks pass with 0 issues.
 
 Install: git config core.hooksPath .githooks
 """
@@ -22,21 +26,21 @@ def main() -> None:
     lock_file = repo_root / ".publish.lock"
     publish_script = repo_root / "scripts" / "publish.py"
 
-    # If publish.py is already running, it handles all validation — skip.
+    # publish.py is the caller — validation already passed
     if lock_file.exists():
-        print("Pre-push: publish.py is running (lock file present), skipping duplicate checks.")
         return
 
+    # Direct git push — run validation
     if not publish_script.is_file():
-        print("WARNING: scripts/publish.py not found, skipping pre-push checks", file=sys.stderr)
-        return
+        print("ERROR: scripts/publish.py not found. Cannot validate.", file=sys.stderr)
+        sys.exit(1)
 
     result = subprocess.run(
         [sys.executable, str(publish_script), "--check-only"],
         cwd=str(repo_root),
     )
     if result.returncode != 0:
-        print("\nPre-push checks FAILED. Push blocked.", file=sys.stderr)
+        print("\nPush blocked: validation failed.", file=sys.stderr)
         sys.exit(1)
 
 

@@ -171,8 +171,9 @@ def main():
     changelog = repo_root / "CHANGELOG.md"
     lock_file = repo_root / ".publish.lock"
 
-    # Lock file: prevents pre-push hook from re-running checks when publish.py is the caller.
-    # The pre-push hook checks for this file and skips if present.
+    # Lock file: tells the pre-push hook that publish.py is the caller.
+    # publish.py exits before git push if any check fails, so lock presence
+    # at push time guarantees validation passed.
     if not args.check_only:
         lock_file.write_text(str(os.getpid()), encoding="utf-8")
     try:
