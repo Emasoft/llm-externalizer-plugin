@@ -196,7 +196,7 @@ def main():
                 "--from", "git+https://github.com/Emasoft/claude-plugins-validation",
                 "--with", "pyyaml",
                 "cpv-remote-validate",
-                "cpv-validate",
+                "plugin",
                 str(repo_root),
             ],
             capture=True,
