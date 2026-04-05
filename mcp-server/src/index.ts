@@ -3436,34 +3436,64 @@ async function ensembleStreaming(
     });
   }
 
-  // Run all qualifying models in parallel — each model retries independently on truncation
-  const results = await Promise.all(
-    models.map(async (m) => {
-      try {
-        const resp = await chatCompletionWithRetry(messages, {
-          ...options,
-          model: m.id,
-          maxTokens: Math.min(options.maxTokens ?? m.maxOutput, m.maxOutput),
-        });
-        return {
-          model: m.id,
-          content: resp.content,
-          usage: resp.usage,
-          truncated: resp.truncated,
-          error: false,
-        };
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        return {
-          model: m.id,
-          content: `ERROR: ${errMsg}`,
-          usage: undefined,
-          truncated: false,
-          error: true,
-        };
-      }
-    }),
+  // Run all qualifying models in parallel with a deadline.
+  // MCP has a 115s timeout — we must finish before it. Use 100s deadline
+  // to leave margin for response serialization. If a model hasn't responded
+  // by the deadline, use whatever results we have (partial ensemble).
+  const ENSEMBLE_DEADLINE_MS = Math.max(SOFT_TIMEOUT_MS - 15_000, 60_000);
+
+  const modelPromises = models.map(async (m) => {
+    try {
+      const resp = await chatCompletionWithRetry(messages, {
+        ...options,
+        model: m.id,
+        maxTokens: Math.min(options.maxTokens ?? m.maxOutput, m.maxOutput),
+      });
+      return {
+        model: m.id,
+        content: resp.content,
+        usage: resp.usage,
+        truncated: resp.truncated,
+        error: false,
+        timedOut: false,
+      };
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      return {
+        model: m.id,
+        content: `ERROR: ${errMsg}`,
+        usage: undefined,
+        truncated: false,
+        error: true,
+        timedOut: false,
+      };
+    }
+  });
+
+  // Race each model against the deadline
+  const deadlinePromise = new Promise<null>((resolve) =>
+    setTimeout(() => resolve(null), ENSEMBLE_DEADLINE_MS),
   );
+  const settled = await Promise.allSettled(
+    modelPromises.map((p) =>
+      Promise.race([p, deadlinePromise.then(() => null)]),
+    ),
+  );
+
+  const results = settled.map((s, i) => {
+    if (s.status === "fulfilled" && s.value !== null) {
+      return s.value;
+    }
+    // Model timed out — include a note instead of blocking
+    return {
+      model: models[i].id,
+      content: `(timed out after ${ENSEMBLE_DEADLINE_MS / 1000}s — response not available)`,
+      usage: undefined,
+      truncated: false,
+      error: true,
+      timedOut: true,
+    };
+  });
 
   // Combine: label each model's output clearly
   const parts = results.map((r) => `## Model: ${r.model}\n\n${r.content}`);
