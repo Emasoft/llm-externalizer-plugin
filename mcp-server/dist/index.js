@@ -30556,55 +30556,33 @@ async function ensembleStreaming(messages, options, ensemble, fileLineCount) {
       )
     });
   }
-  const ENSEMBLE_DEADLINE_MS = Math.max(SOFT_TIMEOUT_MS - 15e3, 6e4);
-  const modelPromises = models.map(async (m) => {
-    try {
-      const resp = await chatCompletionWithRetry(messages, {
-        ...options,
-        model: m.id,
-        maxTokens: Math.min(options.maxTokens ?? m.maxOutput, m.maxOutput)
-      });
-      return {
-        model: m.id,
-        content: resp.content,
-        usage: resp.usage,
-        truncated: resp.truncated,
-        error: false,
-        timedOut: false
-      };
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      return {
-        model: m.id,
-        content: `ERROR: ${errMsg}`,
-        usage: void 0,
-        truncated: false,
-        error: true,
-        timedOut: false
-      };
-    }
-  });
-  const deadlinePromise = new Promise(
-    (resolve3) => setTimeout(() => resolve3(null), ENSEMBLE_DEADLINE_MS)
+  const results = await Promise.all(
+    models.map(async (m) => {
+      try {
+        const resp = await chatCompletionWithRetry(messages, {
+          ...options,
+          model: m.id,
+          maxTokens: Math.min(options.maxTokens ?? m.maxOutput, m.maxOutput)
+        });
+        return {
+          model: m.id,
+          content: resp.content,
+          usage: resp.usage,
+          truncated: resp.truncated,
+          error: false
+        };
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        return {
+          model: m.id,
+          content: `ERROR: ${errMsg}`,
+          usage: void 0,
+          truncated: false,
+          error: true
+        };
+      }
+    })
   );
-  const settled = await Promise.allSettled(
-    modelPromises.map(
-      (p) => Promise.race([p, deadlinePromise.then(() => null)])
-    )
-  );
-  const results = settled.map((s, i) => {
-    if (s.status === "fulfilled" && s.value !== null) {
-      return s.value;
-    }
-    return {
-      model: models[i].id,
-      content: `(timed out after ${ENSEMBLE_DEADLINE_MS / 1e3}s \u2014 response not available)`,
-      usage: void 0,
-      truncated: false,
-      error: true,
-      timedOut: true
-    };
-  });
   const parts = results.map((r) => `## Model: ${r.model}
 
 ${r.content}`);
