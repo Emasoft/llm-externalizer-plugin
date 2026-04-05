@@ -4025,10 +4025,22 @@ const KNOWN_MODEL_LIMITS: Record<
 > = {
   "x-ai/grok-4.1-fast": { maxOutput: 30_000, maxInputLines: 20_000 },
   "google/gemini-2.5-flash": { maxOutput: 65_535, maxInputLines: 50_000 },
+  // Qwen 3.6 Plus: declared 1M context but accuracy degrades beyond ~500K tokens.
+  // Conservative limits to avoid hallucination on large inputs.
+  "qwen/qwen3.6-plus:free": { maxOutput: 65_535, maxInputLines: 40_000 },
+  "qwen/qwen3.6-plus": { maxOutput: 65_535, maxInputLines: 40_000 },
 };
 const DEFAULT_MODEL_LIMITS = { maxOutput: 32_000, maxInputLines: 30_000 };
 
-/** Build ensemble model list from the active profile's model + second_model */
+/** Build the display label for ensemble model name */
+function ensembleModelLabel(useEnsemble: boolean): string {
+  if (!useEnsemble || !activeResolved?.secondModel) return currentBackend.model;
+  const models = [currentBackend.model, activeResolved.secondModel];
+  if (activeResolved.thirdModel) models.push(activeResolved.thirdModel);
+  return `ensemble: ${models.join(" + ")}`;
+}
+
+/** Build ensemble model list from the active profile's model + second_model + third_model */
 function getEnsembleModels(): Array<{
   id: string;
   maxOutput: number;
@@ -4037,6 +4049,7 @@ function getEnsembleModels(): Array<{
   if (!activeResolved || activeResolved.mode !== "remote-ensemble") return [];
   const models = [activeResolved.model];
   if (activeResolved.secondModel) models.push(activeResolved.secondModel);
+  if (activeResolved.thirdModel) models.push(activeResolved.thirdModel);
   return models.map((id) => {
     const limits = KNOWN_MODEL_LIMITS[id] || DEFAULT_MODEL_LIMITS;
     return { id, ...limits };
@@ -5306,9 +5319,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (batchResults.length === 0) continue; // skip empty groups
           const finalContent = batchResults.join("\n\n---\n\n");
           const chatMergedModel =
-            useEnsemble && activeResolved?.secondModel
-              ? `ensemble: ${currentBackend.model} + ${activeResolved.secondModel}`
-              : currentBackend.model;
+            ensembleModelLabel(useEnsemble);
           const savedPath = saveResponse("chat", finalContent, {
             model: chatMergedModel,
             task: chatPrompt,
@@ -5645,9 +5656,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (ctBatchResults.length === 0) continue;
           const ctFinalContent = ctBatchResults.join("\n\n---\n\n");
           const ctMergedModel =
-            ctUseEnsemble && activeResolved?.secondModel
-              ? `ensemble: ${currentBackend.model} + ${activeResolved.secondModel}`
-              : currentBackend.model;
+            ensembleModelLabel(ctUseEnsemble);
           const savedPath = saveResponse("code_task", ctFinalContent, {
             model: ctMergedModel, task: ctTask, inputFile: fgPaths[0],
             groupId: fgId || undefined,
@@ -5921,6 +5930,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         parts.push(`Model: ${activeResolved.model}`);
         if (activeResolved.secondModel) {
           parts.push(`Second model: ${activeResolved.secondModel}`);
+        }
+        if (activeResolved.thirdModel) {
+          parts.push(`Third model: ${activeResolved.thirdModel}`);
         }
         // Show auth status so agents can verify the token is available
         const authSource = (() => {
@@ -8942,9 +8954,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (csBatchResults.length === 0) continue;
           const csFinalContent = csBatchResults.join("\n\n---\n\n");
           const csMergedModel =
-            csUseEnsemble && activeResolved?.secondModel
-              ? `ensemble: ${currentBackend.model} + ${activeResolved.secondModel}`
-              : currentBackend.model;
+            ensembleModelLabel(csUseEnsemble);
           const csReportPath = saveResponse("check_against_specs", csFinalContent, {
             model: csMergedModel,
             task: `Spec compliance: ${basename(csSpecPath)} vs ${fgPaths.length} file(s)`,

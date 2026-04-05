@@ -7550,6 +7550,9 @@ function validateProfile(name, profile) {
       "Mode 'remote' does not support 'second_model'. Use 'remote-ensemble'"
     );
   }
+  if (profile.third_model && profile.mode !== "remote-ensemble") {
+    errors.push("'third_model' is only supported in 'remote-ensemble' mode");
+  }
   if (profile.api === "lmstudio-local") {
     if (profile.second_model) {
       errors.push("LM Studio native API does not support second_model");
@@ -7618,6 +7621,7 @@ function resolveProfile(name, profile) {
     model: profile.model,
     authToken: resolveEnvValue(rawAuth),
     secondModel: profile.second_model || "",
+    thirdModel: profile.third_model || "",
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
     maxConcurrent: profile.max_concurrent ?? preset.defaultMaxConcurrent,

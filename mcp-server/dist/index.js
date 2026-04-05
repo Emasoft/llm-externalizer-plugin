@@ -28167,6 +28167,7 @@ function generateDefaultSettings() {
         api: "openrouter-remote",
         model: "google/gemini-2.5-flash",
         second_model: "x-ai/grok-4.1-fast",
+        third_model: "qwen/qwen3.6-plus:free",
         api_key: "$OPENROUTER_API_KEY"
       }
     }
@@ -28242,6 +28243,9 @@ function validateProfile(name, profile) {
     errors.push(
       "Mode 'remote' does not support 'second_model'. Use 'remote-ensemble'"
     );
+  }
+  if (profile.third_model && profile.mode !== "remote-ensemble") {
+    errors.push("'third_model' is only supported in 'remote-ensemble' mode");
   }
   if (profile.api === "lmstudio-local") {
     if (profile.second_model) {
@@ -28332,6 +28336,7 @@ function resolveProfile(name, profile) {
     model: profile.model,
     authToken: resolveEnvValue(rawAuth),
     secondModel: profile.second_model || "",
+    thirdModel: profile.third_model || "",
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
     maxConcurrent: profile.max_concurrent ?? preset.defaultMaxConcurrent,
@@ -31016,13 +31021,24 @@ var DISABLED_TOOLS = /* @__PURE__ */ new Set([
 ]);
 var KNOWN_MODEL_LIMITS = {
   "x-ai/grok-4.1-fast": { maxOutput: 3e4, maxInputLines: 2e4 },
-  "google/gemini-2.5-flash": { maxOutput: 65535, maxInputLines: 5e4 }
+  "google/gemini-2.5-flash": { maxOutput: 65535, maxInputLines: 5e4 },
+  // Qwen 3.6 Plus: declared 1M context but accuracy degrades beyond ~500K tokens.
+  // Conservative limits to avoid hallucination on large inputs.
+  "qwen/qwen3.6-plus:free": { maxOutput: 65535, maxInputLines: 4e4 },
+  "qwen/qwen3.6-plus": { maxOutput: 65535, maxInputLines: 4e4 }
 };
 var DEFAULT_MODEL_LIMITS = { maxOutput: 32e3, maxInputLines: 3e4 };
+function ensembleModelLabel(useEnsemble) {
+  if (!useEnsemble || !activeResolved?.secondModel) return currentBackend.model;
+  const models = [currentBackend.model, activeResolved.secondModel];
+  if (activeResolved.thirdModel) models.push(activeResolved.thirdModel);
+  return `ensemble: ${models.join(" + ")}`;
+}
 function getEnsembleModels() {
   if (!activeResolved || activeResolved.mode !== "remote-ensemble") return [];
   const models = [activeResolved.model];
   if (activeResolved.secondModel) models.push(activeResolved.secondModel);
+  if (activeResolved.thirdModel) models.push(activeResolved.thirdModel);
   return models.map((id) => {
     const limits = KNOWN_MODEL_LIMITS[id] || DEFAULT_MODEL_LIMITS;
     return { id, ...limits };
@@ -31983,7 +31999,7 @@ ${resp.content}${footer}`
             }
             if (batchResults.length === 0) continue;
             const finalContent = batchResults.join("\n\n---\n\n");
-            const chatMergedModel = useEnsemble && activeResolved?.secondModel ? `ensemble: ${currentBackend.model} + ${activeResolved.secondModel}` : currentBackend.model;
+            const chatMergedModel = ensembleModelLabel(useEnsemble);
             const savedPath = saveResponse("chat", finalContent, {
               model: chatMergedModel,
               task: chatPrompt,
@@ -32279,7 +32295,7 @@ ${codeResp.content}${codeFooter}` : codeResp.content + codeFooter
             }
             if (ctBatchResults.length === 0) continue;
             const ctFinalContent = ctBatchResults.join("\n\n---\n\n");
-            const ctMergedModel = ctUseEnsemble && activeResolved?.secondModel ? `ensemble: ${currentBackend.model} + ${activeResolved.secondModel}` : currentBackend.model;
+            const ctMergedModel = ensembleModelLabel(ctUseEnsemble);
             const savedPath = saveResponse("code_task", ctFinalContent, {
               model: ctMergedModel,
               task: ctTask,
@@ -32524,6 +32540,9 @@ API presets: ${Object.keys(API_PRESETS).join(", ")}`);
           parts.push(`Model: ${activeResolved.model}`);
           if (activeResolved.secondModel) {
             parts.push(`Second model: ${activeResolved.secondModel}`);
+          }
+          if (activeResolved.thirdModel) {
+            parts.push(`Third model: ${activeResolved.thirdModel}`);
           }
           const authSource = (() => {
             const preset = API_PRESETS[activeSettings.profiles[activeSettings.active]?.api];
@@ -35120,7 +35139,7 @@ ${csResp.content}${csFooter}`
             }
             if (csBatchResults.length === 0) continue;
             const csFinalContent = csBatchResults.join("\n\n---\n\n");
-            const csMergedModel = csUseEnsemble && activeResolved?.secondModel ? `ensemble: ${currentBackend.model} + ${activeResolved.secondModel}` : currentBackend.model;
+            const csMergedModel = ensembleModelLabel(csUseEnsemble);
             const csReportPath = saveResponse("check_against_specs", csFinalContent, {
               model: csMergedModel,
               task: `Spec compliance: ${basename(csSpecPath)} vs ${fgPaths.length} file(s)`,

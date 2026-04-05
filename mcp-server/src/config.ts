@@ -66,6 +66,8 @@ export interface Profile {
   api_token?: string;
   /** Second model for remote-ensemble mode */
   second_model?: string;
+  /** Third model for remote-ensemble mode (optional) */
+  third_model?: string;
   /** Request timeout in seconds */
   timeout?: number;
   /** Context window override (0 = auto-detect) */
@@ -94,6 +96,7 @@ export interface ResolvedProfile {
   model: string;
   authToken: string;
   secondModel: string;
+  thirdModel: string;
   timeout: number;
   contextWindow: number;
   maxConcurrent: number;
@@ -317,6 +320,7 @@ export function generateDefaultSettings(): Settings {
         api: "openrouter-remote",
         model: "google/gemini-2.5-flash",
         second_model: "x-ai/grok-4.1-fast",
+        third_model: "qwen/qwen3.6-plus:free",
         api_key: "$OPENROUTER_API_KEY",
       },
     },
@@ -416,7 +420,7 @@ export function validateProfile(
     );
   }
 
-  // ── second_model rules ────────────────────────────────────────────
+  // ── second_model / third_model rules ──────────────────────────────
   if (profile.mode === "remote-ensemble" && !profile.second_model) {
     errors.push("Mode 'remote-ensemble' requires 'second_model'");
   }
@@ -427,6 +431,9 @@ export function validateProfile(
     errors.push(
       "Mode 'remote' does not support 'second_model'. Use 'remote-ensemble'",
     );
+  }
+  if (profile.third_model && profile.mode !== "remote-ensemble") {
+    errors.push("'third_model' is only supported in 'remote-ensemble' mode");
   }
 
   // ── LM Studio native API constraints ──────────────────────────────
@@ -571,6 +578,7 @@ export function resolveProfile(
     model: profile.model,
     authToken: resolveEnvValue(rawAuth),
     secondModel: profile.second_model || "",
+    thirdModel: profile.third_model || "",
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
     maxConcurrent: profile.max_concurrent ?? preset.defaultMaxConcurrent,
