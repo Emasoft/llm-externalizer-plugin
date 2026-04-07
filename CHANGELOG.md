@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.14] - 2026-04-07
+
+### Fixed
+
+- Llm-ext MCP handshake — add initialized notification + stream parsing
+
 ## [3.9.13] - 2026-04-07
 
 ### Documentation
