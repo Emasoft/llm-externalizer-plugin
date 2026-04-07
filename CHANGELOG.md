@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.16] - 2026-04-07
+
+### Fixed
+
+- Llm-ext help — note absolute paths recommended, report save location
+
 ## [3.9.15] - 2026-04-07
 
 ### Fixed
