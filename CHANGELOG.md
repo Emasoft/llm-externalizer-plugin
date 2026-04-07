@@ -1,6 +1,16 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.21] - 2026-04-07
+
+### Changed
+
+- Increase OpenRouter default timeout from 120s to 600s
+
+Reasoning models (Qwen 3.6 Plus, etc.) need extended thinking time.
+120s was too short — models would time out during the thinking phase.
+600s base timeout + dynamic extension when reasoning tokens are flowing.
+
 ## [3.9.20] - 2026-04-07
 
 ### Changed

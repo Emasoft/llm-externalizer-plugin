@@ -28059,7 +28059,8 @@ var API_PRESETS = {
     protocol: "openrouter_api",
     defaultUrl: "https://openrouter.ai/api",
     defaultAuthEnv: "$OPENROUTER_API_KEY",
-    defaultTimeout: 120,
+    defaultTimeout: 600,
+    // 10 min — reasoning models (Qwen, etc.) need extended thinking time
     defaultAppName: "llm-externalizer",
     defaultHttpReferer: "",
     defaultContextWindow: 0,
@@ -31125,7 +31126,7 @@ ${codeFence}${lostSecretsSection}`;
 function limitsBlock() {
   const throughput = currentBackend.type === "openrouter" ? "\u2022 PARALLEL: rate-limited dispatch (RPS auto-detected from balance). Many requests in-flight simultaneously." : "\u2022 SEQUENTIAL: 1 call at a time.";
   return "\n\nLIMITS:\n" + throughput + `
-\u2022 ${SOFT_TIMEOUT_MS / 1e3}s timeout per call (MCP spec limit). Auto-retries up to 3 times on truncated responses.`;
+\u2022 ${SOFT_TIMEOUT_MS / 1e3}s base timeout per call. Extended automatically when reasoning models are actively thinking. Auto-retries up to 3 times on truncated responses.`;
 }
 var answerModeSchema = {
   type: "number",
@@ -31877,7 +31878,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.20" },
+  { name: "llm-externalizer", version: "3.9.21" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {
