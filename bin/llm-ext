@@ -256,11 +256,13 @@ async function main() {
   });
 
   let stdout = "";
-  child.stdout.on("data", (d) => { stdout += d.toString(); });
   child.stderr.on("data", () => {}); // suppress server logs
 
-  // Send init, wait for handshake, send tool request
+  // MCP handshake: initialize → wait → notifications/initialized → wait → tool call
   child.stdin.write(JSON.stringify(initRequest) + "\n");
+  await new Promise((r) => setTimeout(r, 1000));
+  // Required by MCP protocol: acknowledge initialization before calling tools
+  child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   await new Promise((r) => setTimeout(r, 500));
   child.stdin.write(JSON.stringify(toolRequest) + "\n");
 
@@ -270,14 +272,16 @@ async function main() {
     process.exit(1);
   }, 600_000);
 
-  child.on("close", () => {
-    clearTimeout(timeout);
-    // Find the tool response (id: 1) in stdout
+  // Watch stdout for the tool response (id: 1) — server stays alive, so we
+  // parse incrementally and kill the child once we have the answer.
+  child.stdout.on("data", (d) => {
+    stdout += d.toString();
     const lines = stdout.trim().split("\n").filter(Boolean);
-    for (let i = lines.length - 1; i >= 0; i--) {
+    for (const line of lines) {
       try {
-        const resp = JSON.parse(lines[i]);
+        const resp = JSON.parse(line);
         if (resp.id === 1 && resp.result) {
+          clearTimeout(timeout);
           const content = resp.result.content;
           if (Array.isArray(content)) {
             const text = content
@@ -285,13 +289,12 @@ async function main() {
               .map((c) => c.text)
               .join("\n");
             console.log(text);
+            child.kill();
             process.exit(resp.result.isError ? 1 : 0);
           }
         }
       } catch { continue; }
     }
-    console.error("No response from MCP server");
-    process.exit(1);
   });
 }
 
