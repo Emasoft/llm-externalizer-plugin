@@ -1,6 +1,19 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.20] - 2026-04-07
+
+### Changed
+
+- Fix reasoning model timeout: detect thinking tokens, extend timeout dynamically
+
+- Remove 115s hard cap (MCP_MAX_TIMEOUT_MS) — use profile timeout (300s default)
+- Detect reasoning/thinking tokens in SSE stream (delta.reasoning, delta.reasoning_content)
+- When reasoning tokens are actively flowing, suspend the soft timeout — model is working
+- Don't retry when reasoning was detected but content is empty — retrying restarts thinking
+- Progress notifications show "Reasoning… Xs (model is thinking)" during thinking phase
+- Fixes Qwen 3.6 Plus truncation on large files (was timing out during thinking phase)
+
 ## [3.9.19] - 2026-04-07
 
 ### Changed

@@ -29329,11 +29329,7 @@ var DEFAULT_MAX_IN_FLIGHT_REMOTE = 200;
 var DEFAULT_TEMPERATURE = 0.3;
 var BREVITY_RULES = "\nOUTPUT RULES:\n- Be SUCCINCT. Use bullet points, not paragraphs.\n- Skip preamble, filler, and restating the task.\n- Only report findings, not things that are correct.\n- For code reviews: skip files/areas with no issues \u2014 only mention what needs attention.\n- Maximum 3 sentences per finding. Lead with the problem, not the context.";
 var CONNECT_TIMEOUT_MS = 5e3;
-var MCP_MAX_TIMEOUT_MS = 115e3;
-var SOFT_TIMEOUT_MS = Math.min(
-  MCP_MAX_TIMEOUT_MS,
-  (activeResolved?.timeout ?? 300) * 1e3
-);
+var SOFT_TIMEOUT_MS = (activeResolved?.timeout ?? 300) * 1e3;
 var READ_CHUNK_TIMEOUT_MS = 3e4;
 var FALLBACK_CONTEXT_LENGTH = activeResolved?.contextWindow || 1e5;
 var MODEL_CACHE_TTL_MS = 36e5;
@@ -29400,10 +29396,7 @@ function reloadSettingsFromDisk() {
     settingsError = "No active profile configured";
     activeResolved = null;
   }
-  SOFT_TIMEOUT_MS = Math.min(
-    MCP_MAX_TIMEOUT_MS,
-    (activeResolved?.timeout ?? 300) * 1e3
-  );
+  SOFT_TIMEOUT_MS = (activeResolved?.timeout ?? 300) * 1e3;
   FALLBACK_CONTEXT_LENGTH = activeResolved?.contextWindow || 1e5;
   _onSettingsReloaded?.();
   return true;
@@ -29953,13 +29946,17 @@ async function chatCompletionStreaming(messages, options = {}) {
   let truncated = false;
   let malformedChunks = 0;
   let buffer = "";
+  let reasoningActive = false;
+  let lastActivityAt = startTime;
   const progressInterval = Math.min(1e4, Math.floor(conn.timeout / 3));
   let lastProgressAt = startTime;
   const onProgress = options.onProgress;
   try {
     while (true) {
       const elapsed = Date.now() - startTime;
-      if (elapsed > conn.timeout) {
+      const sinceLastActivity = Date.now() - lastActivityAt;
+      const isActivelyReasoning = reasoningActive && sinceLastActivity < READ_CHUNK_TIMEOUT_MS;
+      if (elapsed > conn.timeout && !isActivelyReasoning) {
         truncated = true;
         process.stderr.write(
           `[llm-externalizer] Soft timeout at ${elapsed}ms, returning ${content.length} chars of partial content
@@ -29968,12 +29965,13 @@ async function chatCompletionStreaming(messages, options = {}) {
         break;
       }
       if (onProgress && Date.now() - lastProgressAt >= progressInterval) {
-        const pct = Math.min(90, Math.round(elapsed / conn.timeout * 100));
-        onProgress(pct, 100, `Streaming\u2026 ${content.length} chars received`);
+        const pct = isActivelyReasoning ? 50 : Math.min(90, Math.round(elapsed / conn.timeout * 100));
+        const msg = isActivelyReasoning ? `Reasoning\u2026 ${Math.round(elapsed / 1e3)}s (model is thinking)` : `Streaming\u2026 ${content.length} chars received`;
+        onProgress(pct, 100, msg);
         lastProgressAt = Date.now();
       }
       const remaining = conn.timeout - elapsed;
-      const chunkTimeout = Math.min(READ_CHUNK_TIMEOUT_MS, remaining);
+      const chunkTimeout = isActivelyReasoning ? READ_CHUNK_TIMEOUT_MS : Math.min(READ_CHUNK_TIMEOUT_MS, Math.max(1e3, remaining));
       const result = await timedRead(reader, chunkTimeout);
       if (result === "timeout") {
         truncated = true;
@@ -29996,8 +29994,16 @@ async function chatCompletionStreaming(messages, options = {}) {
           const json2 = JSON.parse(payload);
           if (json2.model) model = json2.model;
           const delta = json2.choices?.[0]?.delta;
+          const reasoning = delta?.reasoning || delta?.reasoning_content || "";
+          if (reasoning) {
+            reasoningActive = true;
+            lastActivityAt = Date.now();
+          }
           const text = delta?.content || "";
-          if (text) content += text;
+          if (text) {
+            content += text;
+            lastActivityAt = Date.now();
+          }
           const reason = json2.choices?.[0]?.finish_reason;
           if (reason) finishReason = reason;
           if (json2.usage) usage = json2.usage;
@@ -30019,7 +30025,7 @@ async function chatCompletionStreaming(messages, options = {}) {
 `
     );
   }
-  return { content, model, usage, finishReason, truncated };
+  return { content, model, usage, finishReason, truncated, reasoningDetected: reasoningActive };
 }
 var FIX_CODE_SCHEMA = {
   name: "fix_code_response",
@@ -30640,6 +30646,15 @@ async function chatCompletionWithRetry(messages, options) {
         `[llm-externalizer] finishReason=length on attempt ${attempt + 1} \u2014 output token limit hit
 `
       );
+      return resp;
+    }
+    if (resp.reasoningDetected && resp.content.trim().length === 0) {
+      process.stderr.write(
+        `[llm-externalizer] Reasoning model timed out after ${Math.round(SOFT_TIMEOUT_MS / 1e3)}s of thinking with no content output \u2014 skipping retries
+`
+      );
+      resp.content = `\u26A0 Reasoning model timed out \u2014 spent ${Math.round(SOFT_TIMEOUT_MS / 1e3)}s thinking but produced no content. The task may be too complex for this model's speed at this input size.`;
+      resp.truncated = true;
       return resp;
     }
     recordServiceFailure();
@@ -31862,7 +31877,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.19" },
+  { name: "llm-externalizer", version: "3.9.20" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {
