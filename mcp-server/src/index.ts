@@ -1065,22 +1065,45 @@ function buildPerFileSectionPrompt(filePaths: string[]): string {
 // ── Directory walking helper ─────────────────────────────────────────
 
 const WALK_DEFAULT_EXCLUDE = new Set([
+  // Version control
   ".git",
+  // Package managers / dependencies
   "node_modules",
+  "bower_components",
+  ".pnpm-store",
+  // Python
   "__pycache__",
   ".venv",
   "venv",
   ".tox",
   ".mypy_cache",
   ".pytest_cache",
+  ".eggs",
+  "*.egg-info",
+  // Build outputs
   "dist",
   "build",
+  "out",
   ".next",
   ".nuxt",
-  "coverage",
+  ".output",
+  "target",
+  // Caches / temp
   ".cache",
   ".turbo",
-  "target",
+  "coverage",
+  "tmp",
+  "temp",
+  ".temp",
+  ".tmp",
+  // IDE / editor
+  ".idea",
+  ".vscode",
+  // Other
+  ".gradle",
+  ".cargo",
+  ".nx",
+  "vendor",
 ]);
 
 /**
