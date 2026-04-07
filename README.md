@@ -108,10 +108,41 @@ On OpenRouter, requests run on **two models in parallel** (default: `grok-4.1-fa
 
 ### Key constraints
 
-- **120s timeout** per MCP call (MCP spec hard limit)
+- **120s timeout** per MCP call (MCP spec hard limit, configurable via `MCP_TIMEOUT` env var)
 - **No project context** — the remote LLM knows nothing about your project; always include brief context in instructions
 - **File paths only** — always use `input_files_paths`, never paste file contents into instructions
 - **Output location** — all responses saved to `llm_externalizer_output/` in the project directory
+
+### Subagent access
+
+**Regular subagents** (spawned by Claude Code via the Agent tool) can use all LLM Externalizer MCP tools — they inherit the parent session's tool access.
+
+**Plugin-shipped agents** (`.md` files in a plugin's `agents/` directory) **cannot** use MCP servers. Claude Code strips `mcpServers` and `hooks` from plugin agent frontmatter for security. This means a plugin agent cannot start the LLM Externalizer MCP server.
+
+**Workarounds for plugin agents:**
+
+1. **Copy to user agents** — copy the agent `.md` file to `~/.claude/agents/` (user agent) or `<project>/.claude/agents/` (project agent). User/project agents support `mcpServers` frontmatter.
+
+2. **Direct invocation via node** — run the MCP server directly from the plugin cache without npm/npx:
+   ```bash
+   # Find the plugin cache path
+   PLUGIN_ROOT=$(claude plugin path llm-externalizer 2>/dev/null || echo "$HOME/.claude/plugins/llm-externalizer")
+   
+   # Run the MCP server directly
+   node "$PLUGIN_ROOT/mcp-server/dist/index.js"
+   ```
+
+3. **Add to `.mcp.json`** — register the server in your project's `.mcp.json` so it's available to all agents:
+   ```json
+   {
+     "mcpServers": {
+       "llm-externalizer": {
+         "command": "node",
+         "args": ["$HOME/.claude/plugins/llm-externalizer/mcp-server/dist/index.js"]
+       }
+     }
+   }
+   ```
 
 ## Prerequisites
 
