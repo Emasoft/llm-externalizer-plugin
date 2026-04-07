@@ -1,6 +1,15 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.18] - 2026-04-07
+
+### Changed
+
+- Remove user-facing concurrency options, update docs
+
+Rate limiting is now fully automatic — no max_concurrent,
+max_in_flight, or max_rps profile fields needed.
+
 ## [3.9.16] - 2026-04-07
 
 ### Fixed
