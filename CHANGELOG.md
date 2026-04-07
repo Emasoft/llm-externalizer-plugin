@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.13] - 2026-04-07
+
+### Documentation
+
+- Add copy-paste snippet for enabling llm-ext in plugin agents
+
 ## [3.9.12] - 2026-04-07
 
 ### Added
