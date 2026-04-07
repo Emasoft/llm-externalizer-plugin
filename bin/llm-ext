@@ -2,86 +2,241 @@
 /**
  * CLI wrapper for LLM Externalizer MCP tools.
  *
- * Allows plugin-shipped agents to call LLM Externalizer tools via Bash
- * without needing MCP access. The MCP server runs as a child process,
- * executes one tool call, and exits.
+ * Allows any agent to call LLM Externalizer tools via Bash without
+ * needing MCP access. Spawns the MCP server as a subprocess, executes
+ * one tool call, prints the result, and exits.
  *
  * Usage:
- *   llm-ext <tool> [--param value ...]
+ *   llm-ext --help                    # list all tools with descriptions
+ *   llm-ext --help <tool>             # show tool parameters
+ *   llm-ext <tool> [--param value]    # execute a tool
  *
  * Examples:
- *   llm-ext chat --instructions "Summarize this file" --input_files_paths /path/to/file.ts
- *   llm-ext code_task --instructions "Find bugs" --folder_path /path/to/src --extensions .ts
+ *   llm-ext chat --instructions "Summarize" --input_files_paths /path/to/file.ts
+ *   llm-ext code_task --instructions "Find bugs" --folder_path /path/to/src
  *   llm-ext discover
- *   llm-ext check_imports --input_files_paths /path/to/file.ts
  *
- * The output is the file path to the saved report (same as the MCP tool response).
- * Exit code 0 = success, 1 = error.
+ * Output: file path to the saved report (or tool result text).
+ * Exit code: 0 = success, 1 = error.
+ * Timeout: 10 minutes (not subject to MCP 115s limit).
  */
 
 const { join } = require("path");
 const { spawn } = require("child_process");
 
-const TOOLS = new Set([
-  "chat", "code_task", "batch_check", "scan_folder", "compare_files",
-  "check_references", "check_imports", "check_against_specs",
-  "discover", "reset", "get_settings", "set_settings", "change_model",
-]);
+// ── Tool catalog (for --help discovery) ──────────────────────────────
+
+const TOOL_CATALOG = {
+  // Analysis tools
+  chat: {
+    desc: "General-purpose LLM call. Summarize, compare, translate, generate text.",
+    params: {
+      instructions: "Task instructions (required for meaningful results)",
+      input_files_paths: "File path(s) to analyze. String or JSON array",
+      folder_path: "Folder to scan recursively (alternative to input_files_paths)",
+      extensions: 'File extensions filter, e.g. \'[".ts",".py"]\'',
+      system: 'Persona, e.g. "Senior TypeScript dev"',
+      temperature: "0.1=factual, 0.3=analysis (default), 0.7=creative",
+      answer_mode: "0=per-file reports, 1=per-request, 2=merged (default)",
+      max_retries: "Retries per file in mode 0. Set 3 for parallel+retry",
+      redact_regex: "JS regex to redact matching strings before sending to LLM",
+      scan_secrets: "true to abort if API keys/tokens found in files",
+      max_files: "Max files from folder_path (default: 2500)",
+      use_gitignore: "Respect .gitignore rules (default: true)",
+    },
+  },
+  code_task: {
+    desc: "Code analysis with code-review system prompt (temperature=0.2).",
+    params: {
+      instructions: "What to analyze (REQUIRED)",
+      input_files_paths: "Source file path(s). String or JSON array",
+      folder_path: "Folder to scan recursively",
+      extensions: 'File extensions, e.g. \'[".ts"]\'',
+      language: "Programming language (auto-detected from extension)",
+      answer_mode: "0=per-file, 1=per-request, 2=merged (default)",
+      max_retries: "Retries per file in mode 0",
+      redact_regex: "JS regex to redact matching strings",
+    },
+  },
+  scan_folder: {
+    desc: "Scan a directory recursively, process each file with LLM.",
+    params: {
+      folder_path: "Folder to scan (REQUIRED)",
+      instructions: "What to check in each file",
+      extensions: 'File extensions, e.g. \'[".ts",".py"]\'',
+      exclude_dirs: 'Dirs to skip, e.g. \'["tests","fixtures"]\'',
+      use_gitignore: "Respect .gitignore (default: true)",
+      max_files: "Max files (default: 2500)",
+    },
+  },
+  compare_files: {
+    desc: "Compare files. 3 modes: pair (2 files), batch (file_pairs), git diff.",
+    params: {
+      input_files_paths: 'Pair mode: exactly 2 paths, e.g. \'["/a.ts","/b.ts"]\'',
+      file_pairs: "Batch mode: array of [fileA,fileB] pairs (JSON)",
+      git_repo: "Git diff mode: path to git repository",
+      from_ref: "Git diff: source ref (commit/tag/branch)",
+      to_ref: "Git diff: target ref (default: HEAD)",
+      instructions: "Focus area for comparison",
+    },
+  },
+  check_references: {
+    desc: "Check source files for broken symbol references.",
+    params: {
+      input_files_paths: "Source file(s) to check",
+      folder_path: "Or scan a folder",
+      instructions: "Additional context",
+    },
+  },
+  check_imports: {
+    desc: "Two-phase import checker: LLM extracts imports, server validates on disk.",
+    params: {
+      input_files_paths: "Source file(s) to check",
+      folder_path: "Or scan a folder",
+      project_root: "Root for resolving relative imports",
+    },
+  },
+  check_against_specs: {
+    desc: "Compare source files against a specification file. Reports violations only.",
+    params: {
+      spec_file_path: "Path to the specification file (REQUIRED)",
+      input_files_paths: "Source file(s) to check against spec",
+      folder_path: "Or scan a folder",
+      instructions: "Focus areas",
+    },
+  },
+  batch_check: {
+    desc: "DEPRECATED: use code_task with answer_mode=0, max_retries=3.",
+    params: {
+      instructions: "Prompt applied to each file",
+      input_files_paths: "Files to process",
+      folder_path: "Or scan a folder",
+    },
+  },
+  // Utility tools
+  discover: {
+    desc: "Check service health, active profile, model, auth status.",
+    params: {},
+  },
+  reset: {
+    desc: "Full soft-restart. Reloads settings, clears caches.",
+    params: {},
+  },
+  get_settings: {
+    desc: "Copy settings.yaml to output dir. Returns the file path.",
+    params: {},
+  },
+  set_settings: {
+    desc: "Apply a modified settings file.",
+    params: { file_path: "Path to the edited YAML file" },
+  },
+  change_model: {
+    desc: "Quick model switch in the active profile.",
+    params: { model: "Model name or ID" },
+  },
+};
+
+// ── Help output ──────────────────────────────────────────────────────
+
+function showHelp(toolName) {
+  if (toolName && TOOL_CATALOG[toolName]) {
+    const t = TOOL_CATALOG[toolName];
+    console.log(`\n${toolName}: ${t.desc}\n`);
+    const params = Object.entries(t.params);
+    if (params.length === 0) {
+      console.log("  No parameters.\n");
+    } else {
+      console.log("Parameters:");
+      for (const [k, v] of params) {
+        console.log(`  --${k.padEnd(22)} ${v}`);
+      }
+      console.log();
+    }
+    console.log(`Example:`);
+    if (toolName === "discover") {
+      console.log(`  llm-ext discover`);
+    } else if (toolName === "code_task") {
+      console.log(`  llm-ext code_task --instructions "Find bugs" --input_files_paths /path/to/file.ts`);
+    } else {
+      console.log(`  llm-ext ${toolName} --instructions "..." --input_files_paths /path/to/file`);
+    }
+    return;
+  }
+
+  console.log(`
+LLM Externalizer CLI — call tools from any agent via Bash.
+
+Usage:
+  llm-ext <tool> [--param value ...]
+  llm-ext --help              Show this help
+  llm-ext --help <tool>       Show tool parameters
+
+Tools:`);
+  for (const [name, t] of Object.entries(TOOL_CATALOG)) {
+    const deprecated = name === "batch_check" ? " (DEPRECATED)" : "";
+    console.log(`  ${name.padEnd(22)} ${t.desc}${deprecated}`);
+  }
+  console.log(`
+Output: file path to the saved report (printed to stdout).
+Timeout: 10 minutes. Not subject to MCP 115s limit.
+`);
+}
+
+// ── Argument parsing ─────────────────────────────────────────────────
 
 function parseArgs(argv) {
   const args = argv.slice(2);
-  if (args.length === 0) {
-    console.error("Usage: llm-ext <tool> [--param value ...]");
-    console.error("Tools: " + [...TOOLS].join(", "));
-    process.exit(1);
+
+  if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
+    showHelp(args[1]);
+    process.exit(0);
   }
 
   const tool = args[0];
-  if (!TOOLS.has(tool)) {
+  if (!TOOL_CATALOG[tool]) {
     console.error(`Unknown tool: ${tool}`);
-    console.error("Available: " + [...TOOLS].join(", "));
+    console.error(`Run 'llm-ext --help' for available tools.`);
     process.exit(1);
   }
 
   const params = {};
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
+    if (arg === "--help" || arg === "-h") {
+      showHelp(tool);
+      process.exit(0);
+    }
     if (arg.startsWith("--")) {
-      const key = arg.slice(2);
-      const next = args[i + 1];
-      if (next !== undefined && !next.startsWith("--")) {
-        // Try to parse as JSON (for arrays, numbers, booleans)
-        try {
-          params[key] = JSON.parse(next);
-        } catch {
-          params[key] = next;
-        }
-        i++;
+      const eqIdx = arg.indexOf("=");
+      let key, value;
+      if (eqIdx !== -1) {
+        key = arg.slice(2, eqIdx);
+        value = arg.slice(eqIdx + 1);
       } else {
-        params[key] = true;
+        key = arg.slice(2);
+        const next = args[i + 1];
+        if (next !== undefined && !next.startsWith("--")) {
+          value = next;
+          i++;
+        } else {
+          value = "true";
+        }
       }
+      // Try JSON parse for arrays, numbers, booleans
+      try { params[key] = JSON.parse(value); } catch { params[key] = value; }
     }
   }
 
   return { tool, params };
 }
 
+// ── MCP server communication ─────────────────────────────────────────
+
 async function main() {
   const { tool, params } = parseArgs(process.argv);
 
-  // Build a JSON-RPC request for the MCP server
-  const request = {
-    jsonrpc: "2.0",
-    id: 1,
-    method: "tools/call",
-    params: { name: tool, arguments: params },
-  };
-
-  // We need to initialize the MCP connection first
   const initRequest = {
-    jsonrpc: "2.0",
-    id: 0,
-    method: "initialize",
+    jsonrpc: "2.0", id: 0, method: "initialize",
     params: {
       protocolVersion: "2024-11-05",
       capabilities: {},
@@ -89,43 +244,40 @@ async function main() {
     },
   };
 
-  const serverPath = join(__dirname, "..", "mcp-server", "dist", "index.js");
+  const toolRequest = {
+    jsonrpc: "2.0", id: 1, method: "tools/call",
+    params: { name: tool, arguments: params },
+  };
 
+  const serverPath = join(__dirname, "..", "mcp-server", "dist", "index.js");
   const child = spawn("node", [serverPath], {
     stdio: ["pipe", "pipe", "pipe"],
     env: { ...process.env },
   });
 
   let stdout = "";
-  let stderr = "";
+  child.stdout.on("data", (d) => { stdout += d.toString(); });
+  child.stderr.on("data", () => {}); // suppress server logs
 
-  child.stdout.on("data", (data) => { stdout += data.toString(); });
-  child.stderr.on("data", (data) => { stderr += data.toString(); });
-
-  // Send initialize, wait for response, then send the tool call
+  // Send init, wait for handshake, send tool request
   child.stdin.write(JSON.stringify(initRequest) + "\n");
+  await new Promise((r) => setTimeout(r, 500));
+  child.stdin.write(JSON.stringify(toolRequest) + "\n");
 
-  // Wait briefly for init, then send the tool request
-  await new Promise((resolve) => setTimeout(resolve, 500));
-  child.stdin.write(JSON.stringify(request) + "\n");
-
-  // Wait for the response with a generous timeout
   const timeout = setTimeout(() => {
-    console.error("Timeout: MCP server did not respond within 10 minutes");
+    console.error("Timeout after 10 minutes");
     child.kill();
     process.exit(1);
   }, 600_000);
 
-  child.on("close", (code) => {
+  child.on("close", () => {
     clearTimeout(timeout);
-
-    // Parse the last JSON-RPC response from stdout
+    // Find the tool response (id: 1) in stdout
     const lines = stdout.trim().split("\n").filter(Boolean);
     for (let i = lines.length - 1; i >= 0; i--) {
       try {
         const resp = JSON.parse(lines[i]);
         if (resp.id === 1 && resp.result) {
-          // Extract text content from MCP response
           const content = resp.result.content;
           if (Array.isArray(content)) {
             const text = content
@@ -136,13 +288,8 @@ async function main() {
             process.exit(resp.result.isError ? 1 : 0);
           }
         }
-      } catch {
-        continue;
-      }
+      } catch { continue; }
     }
-
-    // No valid response found
-    if (stderr) console.error(stderr.slice(0, 500));
     console.error("No response from MCP server");
     process.exit(1);
   });
