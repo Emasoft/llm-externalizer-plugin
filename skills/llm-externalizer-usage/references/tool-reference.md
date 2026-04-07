@@ -121,7 +121,7 @@ For `compare_files`, grouping uses `---GROUP:id---` markers as single-element en
 - **File paths only**: ALWAYS pass file paths in `input_files_paths`, NEVER paste contents into `instructions`.
 - **Output location**: All responses saved to `llm_externalizer_output/`. Tool returns ONLY the file path — never inline content.
 - **Auto-batching**: If input files exceed context window, they are automatically split into batches.
-- **Concurrency**: Up to 5 parallel calls on OpenRouter, 1 on local. Check with `discover`.
+- **Rate limiting**: Adaptive RPS auto-detected from OpenRouter balance ($1 ≈ 1 RPS, max 500). Self-adjusts on 429 errors. Up to 200 in-flight. Local = sequential.
 
 ## Safety Features
 

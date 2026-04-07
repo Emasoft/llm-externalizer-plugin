@@ -54,7 +54,6 @@ Each profile uses an `api` preset that bundles protocol + default connection set
 | `second_model` | Only for `remote-ensemble` | Second model identifier |
 | `timeout` | No | Request timeout in seconds |
 | `context_window` | No | Context window override (0 = auto-detect) |
-| `max_concurrent` | No | Max parallel requests (0 = auto) |
 
 ## Auth Resolution
 

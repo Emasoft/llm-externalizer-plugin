@@ -40,8 +40,6 @@ export interface ApiPreset {
   defaultAuthEnv: string;
   /** Default request timeout in seconds */
   defaultTimeout: number;
-  /** Default max parallel requests (0 = auto-detect or sequential) */
-  defaultMaxConcurrent: number;
   /** Default app name (OpenRouter dashboard) */
   defaultAppName: string;
   /** Default HTTP referer (OpenRouter analytics) */
@@ -72,8 +70,6 @@ export interface Profile {
   timeout?: number;
   /** Context window override (0 = auto-detect) */
   context_window?: number;
-  /** Max parallel requests (0 = auto) */
-  max_concurrent?: number;
   /** App name for OpenRouter dashboard */
   app_name?: string;
   /** HTTP Referer for OpenRouter analytics */
@@ -99,7 +95,6 @@ export interface ResolvedProfile {
   thirdModel: string;
   timeout: number;
   contextWindow: number;
-  maxConcurrent: number;
   appName: string;
   httpReferer: string;
 }
@@ -120,7 +115,7 @@ export const API_PRESETS: Record<string, ApiPreset> = {
     defaultUrl: "http://localhost:1234",
     defaultAuthEnv: "$LM_API_TOKEN",
     defaultTimeout: 300,
-    defaultMaxConcurrent: 0,
+
     defaultAppName: "",
     defaultHttpReferer: "",
     defaultContextWindow: 0,
@@ -131,7 +126,7 @@ export const API_PRESETS: Record<string, ApiPreset> = {
     defaultUrl: "http://localhost:11434",
     defaultAuthEnv: "",
     defaultTimeout: 300,
-    defaultMaxConcurrent: 0,
+
     defaultAppName: "",
     defaultHttpReferer: "",
     defaultContextWindow: 0,
@@ -142,7 +137,7 @@ export const API_PRESETS: Record<string, ApiPreset> = {
     defaultUrl: "http://localhost:8000",
     defaultAuthEnv: "$VLLM_API_KEY",
     defaultTimeout: 300,
-    defaultMaxConcurrent: 0,
+
     defaultAppName: "",
     defaultHttpReferer: "",
     defaultContextWindow: 0,
@@ -153,7 +148,7 @@ export const API_PRESETS: Record<string, ApiPreset> = {
     defaultUrl: "http://localhost:8080",
     defaultAuthEnv: "",
     defaultTimeout: 300,
-    defaultMaxConcurrent: 0,
+
     defaultAppName: "",
     defaultHttpReferer: "",
     defaultContextWindow: 0,
@@ -164,7 +159,7 @@ export const API_PRESETS: Record<string, ApiPreset> = {
     defaultUrl: "",
     defaultAuthEnv: "$LM_API_TOKEN",
     defaultTimeout: 300,
-    defaultMaxConcurrent: 0,
+
     defaultAppName: "",
     defaultHttpReferer: "",
     defaultContextWindow: 0,
@@ -176,7 +171,7 @@ export const API_PRESETS: Record<string, ApiPreset> = {
     defaultUrl: "https://openrouter.ai/api",
     defaultAuthEnv: "$OPENROUTER_API_KEY",
     defaultTimeout: 120,
-    defaultMaxConcurrent: 0,
+
     defaultAppName: "llm-externalizer",
     defaultHttpReferer: "",
     defaultContextWindow: 0,
@@ -441,11 +436,6 @@ export function validateProfile(
     if (profile.second_model) {
       errors.push("LM Studio native API does not support second_model");
     }
-    if (profile.max_concurrent !== undefined && profile.max_concurrent !== 0) {
-      errors.push(
-        "LM Studio native API is sequential only (max_concurrent must be 0 or omitted)",
-      );
-    }
   }
 
   // ── URL validation ────────────────────────────────────────────────
@@ -486,23 +476,10 @@ export function validateProfile(
       `Profile '${name}': context_window must be a non-negative finite number`,
     );
   }
-  if (
-    profile.max_concurrent !== undefined &&
-    (typeof profile.max_concurrent !== "number" ||
-      !isFinite(profile.max_concurrent) ||
-      profile.max_concurrent < 0)
-  ) {
-    errors.push(
-      `Profile '${name}': max_concurrent must be a non-negative finite number`,
-    );
-  }
 
   // M10: Upper bounds on numeric overrides to prevent resource abuse
   if (typeof profile.timeout === "number" && profile.timeout > 3600) {
     errors.push(`Profile '${name}': timeout must be <= 3600 (1 hour)`);
-  }
-  if (typeof profile.max_concurrent === "number" && profile.max_concurrent > 32) {
-    errors.push(`Profile '${name}': max_concurrent must be <= 32`);
   }
   if (typeof profile.context_window === "number" && profile.context_window > 10_000_000) {
     errors.push(`Profile '${name}': context_window must be <= 10,000,000`);
@@ -581,7 +558,6 @@ export function resolveProfile(
     thirdModel: profile.third_model || "",
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
-    maxConcurrent: profile.max_concurrent ?? preset.defaultMaxConcurrent,
     appName: profile.app_name ?? preset.defaultAppName,
     httpReferer: profile.http_referer ?? preset.defaultHttpReferer,
   };

@@ -83,14 +83,6 @@ function profileFromFlags(flags: Record<string, string>): Partial<Profile> {
       );
     p.context_window = n;
   }
-  if (flags.max_concurrent && flags.max_concurrent !== "null" && flags.max_concurrent !== "") {
-    const n = Number(flags.max_concurrent);
-    if (!isFinite(n) || n < 0)
-      die(
-        `--max_concurrent must be a non-negative number, got '${flags.max_concurrent}'`,
-      );
-    p.max_concurrent = n;
-  }
   if (flags.app_name) p.app_name = flags.app_name;
   if (flags.http_referer) p.http_referer = flags.http_referer;
 
@@ -296,7 +288,6 @@ Optional flags (for add/edit):
   --second_model <model>   Second model for remote-ensemble mode
   --timeout <seconds>      Request timeout
   --context_window <size>  Context window override (0 = auto)
-  --max_concurrent <n>     Max parallel requests (0 = auto)
   --app_name <name>        App name for OpenRouter dashboard
   --http_referer <url>     HTTP Referer for OpenRouter analytics
 
