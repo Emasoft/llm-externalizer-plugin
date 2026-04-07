@@ -170,7 +170,7 @@ export const API_PRESETS: Record<string, ApiPreset> = {
     protocol: "openrouter_api",
     defaultUrl: "https://openrouter.ai/api",
     defaultAuthEnv: "$OPENROUTER_API_KEY",
-    defaultTimeout: 120,
+    defaultTimeout: 600, // 10 min — reasoning models (Qwen, etc.) need extended thinking time
 
     defaultAppName: "llm-externalizer",
     defaultHttpReferer: "",

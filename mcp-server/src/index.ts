@@ -4194,7 +4194,7 @@ function limitsBlock(): string {
     "\n\nLIMITS:\n" +
     throughput +
     "\n" +
-    `• ${SOFT_TIMEOUT_MS / 1000}s timeout per call (MCP spec limit). Auto-retries up to 3 times on truncated responses.`
+    `• ${SOFT_TIMEOUT_MS / 1000}s base timeout per call. Extended automatically when reasoning models are actively thinking. Auto-retries up to 3 times on truncated responses.`
   );
 }
 
