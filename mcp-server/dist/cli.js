@@ -7346,7 +7346,6 @@ var API_PRESETS = {
     defaultUrl: "http://localhost:1234",
     defaultAuthEnv: "$LM_API_TOKEN",
     defaultTimeout: 300,
-    defaultMaxConcurrent: 0,
     defaultAppName: "",
     defaultHttpReferer: "",
     defaultContextWindow: 0,
@@ -7357,7 +7356,6 @@ var API_PRESETS = {
     defaultUrl: "http://localhost:11434",
     defaultAuthEnv: "",
     defaultTimeout: 300,
-    defaultMaxConcurrent: 0,
     defaultAppName: "",
     defaultHttpReferer: "",
     defaultContextWindow: 0,
@@ -7368,7 +7366,6 @@ var API_PRESETS = {
     defaultUrl: "http://localhost:8000",
     defaultAuthEnv: "$VLLM_API_KEY",
     defaultTimeout: 300,
-    defaultMaxConcurrent: 0,
     defaultAppName: "",
     defaultHttpReferer: "",
     defaultContextWindow: 0,
@@ -7379,7 +7376,6 @@ var API_PRESETS = {
     defaultUrl: "http://localhost:8080",
     defaultAuthEnv: "",
     defaultTimeout: 300,
-    defaultMaxConcurrent: 0,
     defaultAppName: "",
     defaultHttpReferer: "",
     defaultContextWindow: 0,
@@ -7390,7 +7386,6 @@ var API_PRESETS = {
     defaultUrl: "",
     defaultAuthEnv: "$LM_API_TOKEN",
     defaultTimeout: 300,
-    defaultMaxConcurrent: 0,
     defaultAppName: "",
     defaultHttpReferer: "",
     defaultContextWindow: 0,
@@ -7402,7 +7397,6 @@ var API_PRESETS = {
     defaultUrl: "https://openrouter.ai/api",
     defaultAuthEnv: "$OPENROUTER_API_KEY",
     defaultTimeout: 120,
-    defaultMaxConcurrent: 0,
     defaultAppName: "llm-externalizer",
     defaultHttpReferer: "",
     defaultContextWindow: 0,
@@ -7557,11 +7551,6 @@ function validateProfile(name, profile) {
     if (profile.second_model) {
       errors.push("LM Studio native API does not support second_model");
     }
-    if (profile.max_concurrent !== void 0 && profile.max_concurrent !== 0) {
-      errors.push(
-        "LM Studio native API is sequential only (max_concurrent must be 0 or omitted)"
-      );
-    }
   }
   const effectiveUrl = profile.url || preset.defaultUrl;
   if (effectiveUrl) {
@@ -7583,16 +7572,8 @@ function validateProfile(name, profile) {
       `Profile '${name}': context_window must be a non-negative finite number`
     );
   }
-  if (profile.max_concurrent !== void 0 && (typeof profile.max_concurrent !== "number" || !isFinite(profile.max_concurrent) || profile.max_concurrent < 0)) {
-    errors.push(
-      `Profile '${name}': max_concurrent must be a non-negative finite number`
-    );
-  }
   if (typeof profile.timeout === "number" && profile.timeout > 3600) {
     errors.push(`Profile '${name}': timeout must be <= 3600 (1 hour)`);
-  }
-  if (typeof profile.max_concurrent === "number" && profile.max_concurrent > 32) {
-    errors.push(`Profile '${name}': max_concurrent must be <= 32`);
   }
   if (typeof profile.context_window === "number" && profile.context_window > 1e7) {
     errors.push(`Profile '${name}': context_window must be <= 10,000,000`);
@@ -7624,7 +7605,6 @@ function resolveProfile(name, profile) {
     thirdModel: profile.third_model || "",
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
-    maxConcurrent: profile.max_concurrent ?? preset.defaultMaxConcurrent,
     appName: profile.app_name ?? preset.defaultAppName,
     httpReferer: profile.http_referer ?? preset.defaultHttpReferer
   };
@@ -7758,14 +7738,6 @@ function profileFromFlags(flags) {
         `--context_window must be a non-negative number, got '${flags.context_window}'`
       );
     p.context_window = n;
-  }
-  if (flags.max_concurrent && flags.max_concurrent !== "null" && flags.max_concurrent !== "") {
-    const n = Number(flags.max_concurrent);
-    if (!isFinite(n) || n < 0)
-      die(
-        `--max_concurrent must be a non-negative number, got '${flags.max_concurrent}'`
-      );
-    p.max_concurrent = n;
   }
   if (flags.app_name) p.app_name = flags.app_name;
   if (flags.http_referer) p.http_referer = flags.http_referer;
@@ -7928,7 +7900,6 @@ Optional flags (for add/edit):
   --second_model <model>   Second model for remote-ensemble mode
   --timeout <seconds>      Request timeout
   --context_window <size>  Context window override (0 = auto)
-  --max_concurrent <n>     Max parallel requests (0 = auto)
   --app_name <name>        App name for OpenRouter dashboard
   --http_referer <url>     HTTP Referer for OpenRouter analytics
 

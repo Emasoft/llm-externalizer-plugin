@@ -28009,7 +28009,6 @@ var API_PRESETS = {
     defaultUrl: "http://localhost:1234",
     defaultAuthEnv: "$LM_API_TOKEN",
     defaultTimeout: 300,
-    defaultMaxConcurrent: 0,
     defaultAppName: "",
     defaultHttpReferer: "",
     defaultContextWindow: 0,
@@ -28020,7 +28019,6 @@ var API_PRESETS = {
     defaultUrl: "http://localhost:11434",
     defaultAuthEnv: "",
     defaultTimeout: 300,
-    defaultMaxConcurrent: 0,
     defaultAppName: "",
     defaultHttpReferer: "",
     defaultContextWindow: 0,
@@ -28031,7 +28029,6 @@ var API_PRESETS = {
     defaultUrl: "http://localhost:8000",
     defaultAuthEnv: "$VLLM_API_KEY",
     defaultTimeout: 300,
-    defaultMaxConcurrent: 0,
     defaultAppName: "",
     defaultHttpReferer: "",
     defaultContextWindow: 0,
@@ -28042,7 +28039,6 @@ var API_PRESETS = {
     defaultUrl: "http://localhost:8080",
     defaultAuthEnv: "",
     defaultTimeout: 300,
-    defaultMaxConcurrent: 0,
     defaultAppName: "",
     defaultHttpReferer: "",
     defaultContextWindow: 0,
@@ -28053,7 +28049,6 @@ var API_PRESETS = {
     defaultUrl: "",
     defaultAuthEnv: "$LM_API_TOKEN",
     defaultTimeout: 300,
-    defaultMaxConcurrent: 0,
     defaultAppName: "",
     defaultHttpReferer: "",
     defaultContextWindow: 0,
@@ -28065,7 +28060,6 @@ var API_PRESETS = {
     defaultUrl: "https://openrouter.ai/api",
     defaultAuthEnv: "$OPENROUTER_API_KEY",
     defaultTimeout: 120,
-    defaultMaxConcurrent: 0,
     defaultAppName: "llm-externalizer",
     defaultHttpReferer: "",
     defaultContextWindow: 0,
@@ -28251,11 +28245,6 @@ function validateProfile(name, profile) {
     if (profile.second_model) {
       errors.push("LM Studio native API does not support second_model");
     }
-    if (profile.max_concurrent !== void 0 && profile.max_concurrent !== 0) {
-      errors.push(
-        "LM Studio native API is sequential only (max_concurrent must be 0 or omitted)"
-      );
-    }
   }
   const effectiveUrl = profile.url || preset.defaultUrl;
   if (effectiveUrl) {
@@ -28277,16 +28266,8 @@ function validateProfile(name, profile) {
       `Profile '${name}': context_window must be a non-negative finite number`
     );
   }
-  if (profile.max_concurrent !== void 0 && (typeof profile.max_concurrent !== "number" || !isFinite(profile.max_concurrent) || profile.max_concurrent < 0)) {
-    errors.push(
-      `Profile '${name}': max_concurrent must be a non-negative finite number`
-    );
-  }
   if (typeof profile.timeout === "number" && profile.timeout > 3600) {
     errors.push(`Profile '${name}': timeout must be <= 3600 (1 hour)`);
-  }
-  if (typeof profile.max_concurrent === "number" && profile.max_concurrent > 32) {
-    errors.push(`Profile '${name}': max_concurrent must be <= 32`);
   }
   if (typeof profile.context_window === "number" && profile.context_window > 1e7) {
     errors.push(`Profile '${name}': context_window must be <= 10,000,000`);
@@ -28339,7 +28320,6 @@ function resolveProfile(name, profile) {
     thirdModel: profile.third_model || "",
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
-    maxConcurrent: profile.max_concurrent ?? preset.defaultMaxConcurrent,
     appName: profile.app_name ?? preset.defaultAppName,
     httpReferer: profile.http_referer ?? preset.defaultHttpReferer
   };
@@ -29344,7 +29324,8 @@ Settings file: ${SETTINGS_FILE}`;
   }
   return resolved;
 })();
-var DEFAULT_OPENROUTER_CONCURRENCY = 5;
+var DEFAULT_OPENROUTER_RPS = 5;
+var DEFAULT_MAX_IN_FLIGHT_REMOTE = 200;
 var DEFAULT_TEMPERATURE = 0.3;
 var CONNECT_TIMEOUT_MS = 5e3;
 var MCP_MAX_TIMEOUT_MS = 115e3;
@@ -29410,7 +29391,8 @@ function reloadSettingsFromDisk() {
     currentBackend = makeBackendFromProfile(activeResolved);
     settingsValid = true;
     settingsError = "";
-    cachedMaxConcurrent = 0;
+    cachedRateLimitConfig = null;
+    rateLimitCacheTime = 0;
     openRouterCacheTime = 0;
   } else {
     settingsValid = false;
@@ -29470,41 +29452,90 @@ async function fetchOpenRouterModels() {
   openRouterCacheTime = now;
   return openRouterModelCache;
 }
-var cachedMaxConcurrent = 0;
-var concurrencyCacheTime = 0;
-async function getMaxConcurrent() {
-  if (activeResolved && activeResolved.maxConcurrent > 0)
-    return activeResolved.maxConcurrent;
-  if (!activeResolved || activeResolved.mode === "local") return 1;
-  const now = Date.now();
-  if (cachedMaxConcurrent > 0 && now - concurrencyCacheTime < MODEL_CACHE_TTL_MS) {
-    return cachedMaxConcurrent;
+var cachedRateLimitConfig = null;
+var rateLimitCacheTime = 0;
+function balanceToRps(balance) {
+  if (!isFinite(balance) || balance <= 0) return DEFAULT_OPENROUTER_RPS;
+  return Math.min(500, Math.max(1, Math.floor(balance)));
+}
+function parseIntervalMs(interval) {
+  if (!interval) return 1e3;
+  const match = interval.match(/^(\d+)(s|m|ms)?$/i);
+  if (!match) return 1e3;
+  const n = parseInt(match[1], 10);
+  const unit = (match[2] || "s").toLowerCase();
+  if (unit === "ms") return n;
+  if (unit === "m") return n * 6e4;
+  return n * 1e3;
+}
+async function getRateLimitConfig() {
+  if (!activeResolved || activeResolved.mode === "local") {
+    return { rps: 1, maxInFlight: 1 };
   }
+  const maxInFlight = DEFAULT_MAX_IN_FLIGHT_REMOTE;
+  const now = Date.now();
+  if (cachedRateLimitConfig && now - rateLimitCacheTime < MODEL_CACHE_TTL_MS) {
+    return cachedRateLimitConfig;
+  }
+  let detectedRps = DEFAULT_OPENROUTER_RPS;
   if (activeResolved.protocol === "openrouter_api") {
     try {
-      const res = await fetchWithTimeout(`${activeResolved.url}/v1/key`, {
+      const keyRes = await fetchWithTimeout(`${activeResolved.url}/v1/key`, {
         headers: { Authorization: `Bearer ${activeResolved.authToken}` }
       });
-      if (res.ok) {
-        const body = await res.json();
+      if (keyRes.ok) {
+        const body = await keyRes.json();
         const rl = body.data?.rate_limit;
         if (rl?.requests && rl.requests > 0) {
-          cachedMaxConcurrent = Math.min(rl.requests, 50);
-          concurrencyCacheTime = now;
-          return cachedMaxConcurrent;
-        }
-        if (body.data?.is_free_tier) {
-          cachedMaxConcurrent = 2;
-          concurrencyCacheTime = now;
-          return cachedMaxConcurrent;
+          const intervalMs = parseIntervalMs(rl.interval);
+          detectedRps = Math.max(1, Math.floor(rl.requests / (intervalMs / 1e3)));
+          process.stderr.write(
+            `[llm-externalizer] Rate limit: ${rl.requests} req/${rl.interval || "1s"} \u2192 ${detectedRps} RPS
+`
+          );
+        } else if (body.data?.is_free_tier) {
+          detectedRps = 2;
+          process.stderr.write("[llm-externalizer] Free tier detected \u2192 2 RPS\n");
+        } else if (body.data?.limit_remaining !== null && body.data?.limit_remaining !== void 0 && body.data.limit_remaining > 0) {
+          detectedRps = balanceToRps(body.data.limit_remaining);
+          process.stderr.write(
+            `[llm-externalizer] Balance: $${body.data.limit_remaining.toFixed(2)} \u2192 ${detectedRps} RPS
+`
+          );
+        } else if (body.data?.limit === null) {
+          detectedRps = await queryCreditsForRps();
         }
       }
     } catch {
     }
   }
-  cachedMaxConcurrent = DEFAULT_OPENROUTER_CONCURRENCY;
-  concurrencyCacheTime = now;
-  return cachedMaxConcurrent;
+  cachedRateLimitConfig = { rps: detectedRps, maxInFlight };
+  rateLimitCacheTime = now;
+  return cachedRateLimitConfig;
+}
+async function queryCreditsForRps() {
+  if (!activeResolved) return DEFAULT_OPENROUTER_RPS;
+  try {
+    const res = await fetchWithTimeout(`${activeResolved.url}/v1/credits`, {
+      headers: { Authorization: `Bearer ${activeResolved.authToken}` }
+    });
+    if (res.ok) {
+      const body = await res.json();
+      const credits = body.data?.total_credits ?? 0;
+      const usage = body.data?.total_usage ?? 0;
+      const balance = credits - usage;
+      if (balance > 0) {
+        const rps = balanceToRps(balance);
+        process.stderr.write(
+          `[llm-externalizer] Credits: $${balance.toFixed(2)} \u2192 ${rps} RPS
+`
+        );
+        return rps;
+      }
+    }
+  } catch {
+  }
+  return DEFAULT_OPENROUTER_RPS;
 }
 var session = {
   calls: 0,
@@ -30237,20 +30268,123 @@ function classifyError(error2) {
     return { unrecoverable: true, serviceLevel: true, reason: msg };
   if (msg.includes("currently being processed"))
     return { unrecoverable: false, serviceLevel: false, reason: msg };
+  if (/API error 429\b/.test(msg) || /rate.?limit/i.test(msg)) {
+    if (adaptiveRateLimiter) adaptiveRateLimiter.onRateLimit();
+    return { unrecoverable: false, serviceLevel: false, reason: msg };
+  }
   return { unrecoverable: false, serviceLevel: false, reason: msg };
 }
-async function parallelLimit(tasks, limit) {
-  const results = new Array(tasks.length);
-  let nextIndex = 0;
-  async function worker() {
-    while (nextIndex < tasks.length) {
-      const i = nextIndex++;
-      results[i] = await tasks[i]();
+var AdaptiveRateLimiter = class {
+  tokens;
+  lastRefill;
+  currentRps;
+  initialRps;
+  minRps = 1;
+  refillPerMs;
+  consecutiveSuccesses = 0;
+  constructor(rps) {
+    this.initialRps = Math.max(1, rps);
+    this.currentRps = this.initialRps;
+    this.tokens = this.currentRps;
+    this.refillPerMs = this.currentRps / 1e3;
+    this.lastRefill = Date.now();
+  }
+  get rps() {
+    return this.currentRps;
+  }
+  refill() {
+    const now = Date.now();
+    const elapsed = now - this.lastRefill;
+    if (elapsed > 0) {
+      this.tokens = Math.min(this.currentRps, this.tokens + elapsed * this.refillPerMs);
+      this.lastRefill = now;
     }
   }
-  const safeLim = Math.max(1, limit);
-  const workerCount = Math.min(safeLim, tasks.length);
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  updateRate(newRps) {
+    this.currentRps = Math.max(this.minRps, Math.min(this.initialRps, newRps));
+    this.refillPerMs = this.currentRps / 1e3;
+  }
+  /** Wait until a token is available, then consume it. */
+  async acquire() {
+    this.refill();
+    if (this.tokens >= 1) {
+      this.tokens -= 1;
+      return;
+    }
+    const waitMs = Math.ceil((1 - this.tokens) / this.refillPerMs);
+    await new Promise((r) => setTimeout(r, Math.max(1, waitMs)));
+    this.refill();
+    this.tokens = Math.max(0, this.tokens - 1);
+  }
+  /** Call after a successful request — additive increase */
+  onSuccess() {
+    this.consecutiveSuccesses++;
+    if (this.consecutiveSuccesses >= 10 && this.currentRps < this.initialRps) {
+      this.updateRate(this.currentRps + 1);
+      this.consecutiveSuccesses = 0;
+      process.stderr.write(`[llm-externalizer] AIMD: RPS increased to ${this.currentRps}
+`);
+    }
+  }
+  /** Call after a 429 rate-limit error — multiplicative decrease */
+  onRateLimit() {
+    this.consecutiveSuccesses = 0;
+    const newRps = Math.floor(this.currentRps / 2);
+    if (newRps !== this.currentRps) {
+      this.updateRate(newRps);
+      process.stderr.write(`[llm-externalizer] AIMD: 429 detected, RPS halved to ${this.currentRps}
+`);
+    }
+  }
+  /** Reset to initial RPS (e.g., after profile switch) */
+  reset(newInitialRps) {
+    if (newInitialRps !== void 0) {
+      this.initialRps = Math.max(1, newInitialRps);
+    }
+    this.currentRps = this.initialRps;
+    this.refillPerMs = this.currentRps / 1e3;
+    this.tokens = this.currentRps;
+    this.consecutiveSuccesses = 0;
+    this.lastRefill = Date.now();
+  }
+};
+var adaptiveRateLimiter = null;
+function getAdaptiveRateLimiter(rps) {
+  if (!adaptiveRateLimiter || adaptiveRateLimiter.rps !== rps) {
+    adaptiveRateLimiter = new AdaptiveRateLimiter(rps);
+  }
+  return adaptiveRateLimiter;
+}
+var DEFAULT_MAX_IN_FLIGHT = 200;
+var HEARTBEAT_INTERVAL_MS = 3e4;
+async function rateLimitedParallel(tasks, rps, maxInFlight = DEFAULT_MAX_IN_FLIGHT, onProgress) {
+  if (tasks.length === 0) return [];
+  const results = new Array(tasks.length);
+  const limiter = getAdaptiveRateLimiter(rps);
+  let nextIndex = 0;
+  let completedCount = 0;
+  const heartbeat = onProgress ? setInterval(() => {
+    onProgress(completedCount, tasks.length, `Processing: ${completedCount}/${tasks.length} done (${limiter.rps} RPS)`);
+  }, HEARTBEAT_INTERVAL_MS) : null;
+  try {
+    async function worker() {
+      while (true) {
+        const i = nextIndex;
+        if (i >= tasks.length) return;
+        nextIndex++;
+        await limiter.acquire();
+        results[i] = await tasks[i]();
+        completedCount++;
+        if (onProgress) {
+          onProgress(completedCount, tasks.length, `Done: ${completedCount}/${tasks.length}`);
+        }
+      }
+    }
+    const workerCount = Math.min(Math.max(1, maxInFlight), tasks.length);
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+  }
   return results;
 }
 function sanitizeFilename(filePath) {
@@ -30260,7 +30394,7 @@ function sanitizeFilename(filePath) {
 }
 async function robustPerFileProcess(files, opts) {
   const batchId = opts.batchId || randomUUID();
-  const concurrency = await getMaxConcurrent();
+  const rlConfig = await getRateLimitConfig();
   const recentOutcomes = [];
   let aborted2 = false;
   let abortReason = "";
@@ -30292,6 +30426,7 @@ async function robustPerFileProcess(files, opts) {
           maxBytes: opts.budgetBytes
         });
         recentOutcomes.push(result.success);
+        if (result.success && adaptiveRateLimiter) adaptiveRateLimiter.onSuccess();
         if (opts.onProgress) {
           const completed = recentOutcomes.length;
           opts.onProgress(completed, files.length, `${opts.toolName}: ${completed}/${files.length} files done`);
@@ -30321,7 +30456,7 @@ async function robustPerFileProcess(files, opts) {
     }
     return { filePath, success: false, error: "Unexpected retry loop exit" };
   });
-  const results = await parallelLimit(tasks, concurrency);
+  const results = await rateLimitedParallel(tasks, rlConfig.rps, rlConfig.maxInFlight, opts.onProgress);
   const succeeded = results.filter((r) => r.success);
   const failed = results.filter((r) => !r.success && r.error !== "Batch aborted");
   const skipped = results.filter((r) => r.error === "Batch aborted");
@@ -30583,26 +30718,45 @@ async function ensembleStreaming(messages, options, ensemble, fileLineCount) {
       }
     })
   );
-  const parts = results.map((r) => `## Model: ${r.model}
+  const succeeded = results.filter((r) => !r.error);
+  const failed = results.filter((r) => r.error);
+  if (succeeded.length === 0) {
+    const errorSummary = failed.map((r) => `${r.model}: ${r.content}`).join("; ");
+    throw new Error(`All ensemble models failed: ${errorSummary}`);
+  }
+  if (failed.length > 0) {
+    for (const f of failed) {
+      process.stderr.write(
+        `[llm-externalizer] Ensemble model unavailable: ${f.model} \u2014 ${f.content}. Continuing with ${succeeded.length} model(s).
+`
+      );
+    }
+  }
+  const parts = succeeded.map((r) => `## Model: ${r.model}
 
 ${r.content}`);
+  if (failed.length > 0) {
+    parts.push(`## Unavailable models
+
+${failed.map((r) => `- **${r.model}**: ${r.content}`).join("\n")}`);
+  }
   const combined = parts.join("\n\n---\n\n");
   const usage = {
-    prompt_tokens: results.reduce(
+    prompt_tokens: succeeded.reduce(
       (s, r) => s + (r.usage?.prompt_tokens ?? 0),
       0
     ),
-    completion_tokens: results.reduce(
+    completion_tokens: succeeded.reduce(
       (s, r) => s + (r.usage?.completion_tokens ?? 0),
       0
     ),
-    total_tokens: results.reduce((s, r) => s + (r.usage?.total_tokens ?? 0), 0),
-    cost: results.reduce((s, r) => s + (r.usage?.cost ?? 0), 0)
+    total_tokens: succeeded.reduce((s, r) => s + (r.usage?.total_tokens ?? 0), 0),
+    cost: succeeded.reduce((s, r) => s + (r.usage?.cost ?? 0), 0)
   };
-  const anyTruncated = results.some((r) => r.truncated);
+  const anyTruncated = succeeded.some((r) => r.truncated);
   return {
     content: combined,
-    model: results.filter((r) => !r.error).map((r) => r.model).join(" + "),
+    model: succeeded.map((r) => r.model).join(" + "),
     usage,
     finishReason: "stop",
     truncated: anyTruncated
@@ -30953,8 +31107,8 @@ ${codeFence}${lostSecretsSection}`;
   }
 }
 function limitsBlock() {
-  const concurrency = currentBackend.type === "openrouter" ? "\u2022 PARALLEL: up to 5 simultaneous calls." : "\u2022 SEQUENTIAL: 1 call at a time.";
-  return "\n\nLIMITS:\n" + concurrency + `
+  const throughput = currentBackend.type === "openrouter" ? "\u2022 PARALLEL: rate-limited dispatch (RPS auto-detected from balance). Many requests in-flight simultaneously." : "\u2022 SEQUENTIAL: 1 call at a time.";
+  return "\n\nLIMITS:\n" + throughput + `
 \u2022 ${SOFT_TIMEOUT_MS / 1e3}s timeout per call (MCP spec limit). Auto-retries up to 3 times on truncated responses.`;
 }
 var answerModeSchema = {
@@ -31707,7 +31861,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.16" },
+  { name: "llm-externalizer", version: "3.9.17" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {
@@ -32586,10 +32740,10 @@ API presets: ${Object.keys(API_PRESETS).join(", ")}`);
             parts.push(
               `Max output tokens per call: model maximum (${resolveDefaultMaxTokens().toLocaleString()}). Auto-managed, not user-configurable.`
             );
-            const maxConcurrent = await getMaxConcurrent();
-            if (maxConcurrent > 1) {
+            const rlCfg = await getRateLimitConfig();
+            if (rlCfg.rps > 1) {
               parts.push(
-                `Concurrency: PARALLEL \u2014 up to ${maxConcurrent} simultaneous calls supported. Spawn parallel tool calls for throughput.`
+                `Rate limit: ${rlCfg.rps} RPS (requests/second), up to ${rlCfg.maxInFlight} in-flight. Spawn parallel tool calls for throughput.`
               );
             } else {
               parts.push(
@@ -32636,7 +32790,8 @@ Profiles: ${profileNames.join(", ")}`);
           reloadSettingsFromDisk();
           openRouterModelCache = [];
           openRouterCacheTime = 0;
-          cachedMaxConcurrent = 0;
+          cachedRateLimitConfig = null;
+          rateLimitCacheTime = 0;
           if (currentBackend.type === "local") {
             currentBackend.isLMStudio = void 0;
             currentBackend.lmStudioDetected = void 0;
@@ -32883,7 +33038,7 @@ Settings saved to ${SETTINGS_FILE}`
               const gid = fg.id || "ungrouped";
               const gBatchId = randomUUID();
               const gTask = resolvePrompt(bcInstructions, bcInstructionsFilesPaths).trim() || "Find all bugs, type errors, logic errors, security vulnerabilities, and potential runtime failures.";
-              const gConcurrency = await getMaxConcurrent();
+              const gRl = await getRateLimitConfig();
               const gTasks = fg.files.map((filePath, idx) => async () => {
                 return processFileCheck(filePath, gTask, {
                   maxTokens: resolveDefaultMaxTokens(),
@@ -32896,8 +33051,8 @@ Settings saved to ${SETTINGS_FILE}`
                   maxBytes: bcBudgetBytes
                 });
               });
-              const gResults = await parallelLimit(gTasks, gConcurrency);
-              const gSucceeded = gResults.filter((r) => r.success);
+              const gAll = await rateLimitedParallel(gTasks, gRl.rps, gRl.maxInFlight, onProgress);
+              const gSucceeded = gAll.filter((r) => r.success);
               const reportSections = [];
               for (const r of gSucceeded) {
                 const content = r.reportPath && existsSync2(r.reportPath) ? readFileSync2(r.reportPath, "utf-8") : "";
@@ -32905,7 +33060,7 @@ Settings saved to ${SETTINGS_FILE}`
 
 ${content}`);
               }
-              const gFailed = gResults.filter((r) => !r.success);
+              const gFailed = gAll.filter((r) => !r.success);
               if (gFailed.length > 0) {
                 reportSections.push(`## FAILED (${gFailed.length})
 
@@ -32934,7 +33089,7 @@ ${gFailed.map((r) => `- ${r.filePath}: ${r.error}`).join("\n")}`);
             bcInstructionsFilesPaths
           );
           const resolvedTask = bcPrompt.trim() || defaultTask;
-          const concurrency = await getMaxConcurrent();
+          const bcRl = await getRateLimitConfig();
           const recentOutcomes = [];
           let aborted2 = false;
           let abortReason = "";
@@ -33017,7 +33172,7 @@ ${gFailed.map((r) => `- ${r.filePath}: ${r.error}`).join("\n")}`);
               error: "Unexpected retry loop exit"
             };
           });
-          const batchResults = await parallelLimit(tasks, concurrency);
+          const batchResults = await rateLimitedParallel(tasks, bcRl.rps, bcRl.maxInFlight, onProgress);
           const succeeded = batchResults.filter((r) => r.success);
           const failed = batchResults.filter(
             (r) => !r.success && r.error !== "Batch aborted"
@@ -33131,7 +33286,7 @@ ${content}`);
                 };
             }
             const batchId = randomUUID();
-            const concurrency = await getMaxConcurrent();
+            const bfRl = await getRateLimitConfig();
             const manifestPath = join2(
               OUTPUT_DIR,
               `batch_fix_manifest_${batchId}.json`
@@ -33263,7 +33418,7 @@ ${content}`);
                 error: "Unexpected retry loop exit"
               };
             });
-            const batchResults = await parallelLimit(tasks, concurrency);
+            const batchResults = await rateLimitedParallel(tasks, bfRl.rps, bfRl.maxInFlight, onProgress);
             const fixed = batchResults.filter(
               (r) => r.success && !r.noChange && r.backupPath
             );
@@ -33471,7 +33626,7 @@ ${content}`
           }
           const sfMode = resolveAnswerMode(sfRawMode, 2);
           const batchId = randomUUID();
-          const concurrency = await getMaxConcurrent();
+          const sfRl = await getRateLimitConfig();
           const recentOutcomes = [];
           let aborted2 = false;
           let abortReason = "";
@@ -33547,7 +33702,7 @@ ${content}`
               error: "Unexpected retry loop exit"
             };
           });
-          const batchResults = await parallelLimit(tasks, concurrency);
+          const batchResults = await rateLimitedParallel(tasks, sfRl.rps, sfRl.maxInFlight, onProgress);
           const succeeded = batchResults.filter((r) => r.success);
           const failed = batchResults.filter(
             (r) => !r.success && r.error !== "Batch aborted"

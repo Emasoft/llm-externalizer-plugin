@@ -1452,7 +1452,8 @@ let activeResolved: ResolvedProfile | null = (() => {
   return resolved;
 })();
 
-const DEFAULT_OPENROUTER_CONCURRENCY = 5; // conservative default — even $5 balance supports 5 RPS
+const DEFAULT_OPENROUTER_RPS = 5; // conservative default if balance can't be determined
+const DEFAULT_MAX_IN_FLIGHT_REMOTE = 200; // safety cap on total concurrent requests
 
 // When the caller doesn't specify max_tokens, we request the model's full context
 // window as the output budget. The API clamps this to the model's actual max output.
@@ -1560,7 +1561,7 @@ function reloadSettingsFromDisk(): boolean {
     currentBackend = makeBackendFromProfile(activeResolved);
     settingsValid = true;
     settingsError = "";
-    cachedMaxConcurrent = 0;
+    cachedRateLimitConfig = null; rateLimitCacheTime = 0;
     openRouterCacheTime = 0;
   } else {
     settingsValid = false;
@@ -1646,54 +1647,103 @@ async function fetchOpenRouterModels(): Promise<OpenRouterModelInfo[]> {
   return openRouterModelCache;
 }
 
-// ── OpenRouter concurrency detection ─────────────────────────────────
-// Queries /api/v1/key to get the rate limit for this API key.
-// OpenRouter's formula: $1 balance = 1 RPS, max 500.
-// The /api/v1/key endpoint may return a rate_limit object with requests + interval.
+// ── OpenRouter rate-limit detection ──────────────────────────────────
+// RPS (requests per second) != concurrency. RPS controls how many NEW requests
+// can be started each second. Multiple requests run in-flight simultaneously.
+// OpenRouter formula: $1 balance ≈ 1 RPS, capped at 500.
+//
+// Detection priority:
+//   1. Profile explicit max_rps override
+//   2. /api/v1/key → rate_limit.requests (if > 0)
+//   3. /api/v1/key → derive from limit_remaining (available balance)
+//   4. /api/v1/credits → derive from total_credits - total_usage (needs mgmt key)
+//   5. Conservative default (DEFAULT_OPENROUTER_RPS)
 
-let cachedMaxConcurrent = 0; // 0 = not yet fetched
-let concurrencyCacheTime = 0;
+interface RateLimitConfig {
+  rps: number;       // max new requests per second
+  maxInFlight: number; // max concurrent requests (safety cap)
+}
 
-async function getMaxConcurrent(): Promise<number> {
-  // Profile explicit override takes priority
-  if (activeResolved && activeResolved.maxConcurrent > 0)
-    return activeResolved.maxConcurrent;
+let cachedRateLimitConfig: RateLimitConfig | null = null;
+let rateLimitCacheTime = 0;
 
-  // Local mode is always sequential
-  if (!activeResolved || activeResolved.mode === "local") return 1;
+/** Derive RPS from dollar balance: $1 = 1 RPS, min 1, max 500 */
+function balanceToRps(balance: number): number {
+  if (!isFinite(balance) || balance <= 0) return DEFAULT_OPENROUTER_RPS;
+  return Math.min(500, Math.max(1, Math.floor(balance)));
+}
 
-  // Return cached value if fresh (cache for 1 hour, same as model list)
-  const now = Date.now();
-  if (
-    cachedMaxConcurrent > 0 &&
-    now - concurrencyCacheTime < MODEL_CACHE_TTL_MS
-  ) {
-    return cachedMaxConcurrent;
+/** Parse interval string like "10s", "1m", "60s" into milliseconds. Defaults to 1000ms. */
+function parseIntervalMs(interval?: string): number {
+  if (!interval) return 1000;
+  const match = interval.match(/^(\d+)(s|m|ms)?$/i);
+  if (!match) return 1000;
+  const n = parseInt(match[1], 10);
+  const unit = (match[2] || "s").toLowerCase();
+  if (unit === "ms") return n;
+  if (unit === "m") return n * 60_000;
+  return n * 1000; // seconds
+}
+
+async function getRateLimitConfig(): Promise<RateLimitConfig> {
+  // Local mode: sequential, no rate limiting needed
+  if (!activeResolved || activeResolved.mode === "local") {
+    return { rps: 1, maxInFlight: 1 };
   }
 
-  // For OpenRouter: query /api/v1/key for dynamic rate limit info
+  const maxInFlight = DEFAULT_MAX_IN_FLIGHT_REMOTE;
+
+  // Return cached value if fresh
+  const now = Date.now();
+  if (cachedRateLimitConfig && now - rateLimitCacheTime < MODEL_CACHE_TTL_MS) {
+    return cachedRateLimitConfig;
+  }
+
+  let detectedRps = DEFAULT_OPENROUTER_RPS;
+
   if (activeResolved.protocol === "openrouter_api") {
     try {
-      const res = await fetchWithTimeout(`${activeResolved.url}/v1/key`, {
+      // Step 1: Query /api/v1/key for rate_limit and balance info
+      const keyRes = await fetchWithTimeout(`${activeResolved.url}/v1/key`, {
         headers: { Authorization: `Bearer ${activeResolved.authToken}` },
       });
-      if (res.ok) {
-        const body = (await res.json()) as {
+      if (keyRes.ok) {
+        const body = (await keyRes.json()) as {
           data: {
-            rate_limit?: { requests?: number; interval?: string };
+            rate_limit?: { requests?: number; interval?: string; note?: string };
             is_free_tier?: boolean;
+            limit?: number | null;
+            usage?: number;
+            limit_remaining?: number | null;
           };
         };
+
         const rl = body.data?.rate_limit;
         if (rl?.requests && rl.requests > 0) {
-          cachedMaxConcurrent = Math.min(rl.requests, 50);
-          concurrencyCacheTime = now;
-          return cachedMaxConcurrent;
-        }
-        if (body.data?.is_free_tier) {
-          cachedMaxConcurrent = 2;
-          concurrencyCacheTime = now;
-          return cachedMaxConcurrent;
+          // API returned explicit rate limit — use it
+          const intervalMs = parseIntervalMs(rl.interval);
+          // Normalize to per-second: e.g. 20 requests per 10s = 2 RPS
+          detectedRps = Math.max(1, Math.floor(rl.requests / (intervalMs / 1000)));
+          process.stderr.write(
+            `[llm-externalizer] Rate limit: ${rl.requests} req/${rl.interval || "1s"} → ${detectedRps} RPS\n`,
+          );
+        } else if (body.data?.is_free_tier) {
+          // Free tier: very limited
+          detectedRps = 2;
+          process.stderr.write("[llm-externalizer] Free tier detected → 2 RPS\n");
+        } else if (
+          body.data?.limit_remaining !== null &&
+          body.data?.limit_remaining !== undefined &&
+          body.data.limit_remaining > 0
+        ) {
+          // Derive from remaining balance: $1 ≈ 1 RPS
+          detectedRps = balanceToRps(body.data.limit_remaining);
+          process.stderr.write(
+            `[llm-externalizer] Balance: $${body.data.limit_remaining.toFixed(2)} → ${detectedRps} RPS\n`,
+          );
+        } else if (body.data?.limit === null) {
+          // Unlimited key — try /api/v1/credits for actual balance
+          detectedRps = await queryCreditsForRps();
         }
       }
     } catch {
@@ -1701,11 +1751,40 @@ async function getMaxConcurrent(): Promise<number> {
     }
   }
 
-  // Fallback: conservative default for remote
-  cachedMaxConcurrent = DEFAULT_OPENROUTER_CONCURRENCY;
-  concurrencyCacheTime = now;
-  return cachedMaxConcurrent;
+  cachedRateLimitConfig = { rps: detectedRps, maxInFlight };
+  rateLimitCacheTime = now;
+  return cachedRateLimitConfig;
 }
+
+/** Fallback: query /api/v1/credits (requires management key). Returns RPS or default. */
+async function queryCreditsForRps(): Promise<number> {
+  if (!activeResolved) return DEFAULT_OPENROUTER_RPS;
+  try {
+    const res = await fetchWithTimeout(`${activeResolved.url}/v1/credits`, {
+      headers: { Authorization: `Bearer ${activeResolved.authToken}` },
+    });
+    if (res.ok) {
+      const body = (await res.json()) as {
+        data: { total_credits?: number; total_usage?: number };
+      };
+      const credits = body.data?.total_credits ?? 0;
+      const usage = body.data?.total_usage ?? 0;
+      const balance = credits - usage;
+      if (balance > 0) {
+        const rps = balanceToRps(balance);
+        process.stderr.write(
+          `[llm-externalizer] Credits: $${balance.toFixed(2)} → ${rps} RPS\n`,
+        );
+        return rps;
+      }
+    }
+    // 403 = not a management key, or other error — fall through
+  } catch {
+    // Non-fatal
+  }
+  return DEFAULT_OPENROUTER_RPS;
+}
+
 
 // ── Fuzzy model matching ─────────────────────────────────────────────
 // Scores a query against model IDs so "gpt 4o" resolves to "openai/gpt-4o".
@@ -2915,32 +2994,172 @@ function classifyError(error: unknown): {
     return { unrecoverable: true, serviceLevel: true, reason: msg };
   if (msg.includes("currently being processed"))
     return { unrecoverable: false, serviceLevel: false, reason: msg };
-  // Everything else is recoverable (timeouts, 429, 5xx, malformed responses)
+  // 429 rate limit — signal AIMD to halve RPS
+  if (/API error 429\b/.test(msg) || /rate.?limit/i.test(msg)) {
+    if (adaptiveRateLimiter) adaptiveRateLimiter.onRateLimit();
+    return { unrecoverable: false, serviceLevel: false, reason: msg };
+  }
+  // Everything else is recoverable (timeouts, 5xx, malformed responses)
   return { unrecoverable: false, serviceLevel: false, reason: msg };
 }
 
-// ── Concurrency-limited parallel executor ────────────────────────────
-// Runs up to `limit` tasks concurrently, returning results in original order.
+// ── Adaptive rate limiter (AIMD) ─────────────────────────────────────
+// Token-bucket rate limiter with Additive Increase / Multiplicative Decrease:
+//   - On 429 (rate limit hit): halve RPS immediately
+//   - On success streak (10 consecutive): increase RPS by 1 (up to initial max)
+// This is a module-level singleton so ALL tool calls share the same state.
+// The rate limiter is auto-created on first use with the detected RPS.
 
-async function parallelLimit<T>(
-  tasks: (() => Promise<T>)[],
-  limit: number,
-): Promise<T[]> {
-  const results: T[] = new Array(tasks.length);
-  let nextIndex = 0;
+class AdaptiveRateLimiter {
+  private tokens: number;
+  private lastRefill: number;
+  private currentRps: number;
+  private initialRps: number;
+  private readonly minRps: number = 1;
+  private refillPerMs: number;
+  private consecutiveSuccesses: number = 0;
 
-  async function worker() {
-    while (nextIndex < tasks.length) {
-      const i = nextIndex++;
-      results[i] = await tasks[i]();
+  constructor(rps: number) {
+    this.initialRps = Math.max(1, rps);
+    this.currentRps = this.initialRps;
+    this.tokens = this.currentRps;
+    this.refillPerMs = this.currentRps / 1000;
+    this.lastRefill = Date.now();
+  }
+
+  get rps(): number {
+    return this.currentRps;
+  }
+
+  private refill(): void {
+    const now = Date.now();
+    const elapsed = now - this.lastRefill;
+    if (elapsed > 0) {
+      this.tokens = Math.min(this.currentRps, this.tokens + elapsed * this.refillPerMs);
+      this.lastRefill = now;
     }
   }
 
-  const safeLim = Math.max(1, limit); // Guard against limit=0 causing zero workers
-  const workerCount = Math.min(safeLim, tasks.length);
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  private updateRate(newRps: number): void {
+    this.currentRps = Math.max(this.minRps, Math.min(this.initialRps, newRps));
+    this.refillPerMs = this.currentRps / 1000;
+    // Don't reset tokens — let existing tokens drain naturally
+  }
+
+  /** Wait until a token is available, then consume it. */
+  async acquire(): Promise<void> {
+    this.refill();
+    if (this.tokens >= 1) {
+      this.tokens -= 1;
+      return;
+    }
+    const waitMs = Math.ceil((1 - this.tokens) / this.refillPerMs);
+    await new Promise((r) => setTimeout(r, Math.max(1, waitMs)));
+    this.refill();
+    this.tokens = Math.max(0, this.tokens - 1);
+  }
+
+  /** Call after a successful request — additive increase */
+  onSuccess(): void {
+    this.consecutiveSuccesses++;
+    if (this.consecutiveSuccesses >= 10 && this.currentRps < this.initialRps) {
+      this.updateRate(this.currentRps + 1);
+      this.consecutiveSuccesses = 0;
+      process.stderr.write(`[llm-externalizer] AIMD: RPS increased to ${this.currentRps}\n`);
+    }
+  }
+
+  /** Call after a 429 rate-limit error — multiplicative decrease */
+  onRateLimit(): void {
+    this.consecutiveSuccesses = 0;
+    const newRps = Math.floor(this.currentRps / 2);
+    if (newRps !== this.currentRps) {
+      this.updateRate(newRps);
+      process.stderr.write(`[llm-externalizer] AIMD: 429 detected, RPS halved to ${this.currentRps}\n`);
+    }
+  }
+
+  /** Reset to initial RPS (e.g., after profile switch) */
+  reset(newInitialRps?: number): void {
+    if (newInitialRps !== undefined) {
+      this.initialRps = Math.max(1, newInitialRps);
+    }
+    this.currentRps = this.initialRps;
+    this.refillPerMs = this.currentRps / 1000;
+    this.tokens = this.currentRps;
+    this.consecutiveSuccesses = 0;
+    this.lastRefill = Date.now();
+  }
+}
+
+// Module-level singleton — shared across all tool calls
+let adaptiveRateLimiter: AdaptiveRateLimiter | null = null;
+
+function getAdaptiveRateLimiter(rps: number): AdaptiveRateLimiter {
+  if (!adaptiveRateLimiter || adaptiveRateLimiter.rps !== rps) {
+    adaptiveRateLimiter = new AdaptiveRateLimiter(rps);
+  }
+  return adaptiveRateLimiter;
+}
+
+// ── Rate-limited parallel executor ───────────────────────────────────
+// Dispatches tasks respecting two independent limits:
+//   1. RPS (rate): max N new tasks started per second (adaptive token bucket)
+//   2. maxInFlight: max N tasks running simultaneously (safety cap)
+// Workers grab the next task, wait for a rate-limit token, then execute.
+// Results are returned in original order.
+//
+// No wall-clock deadline: Claude Code's MCP timeout is an INACTIVITY timeout
+// (no progress for 1800s), not a hard deadline. As long as progress notifications
+// keep flowing, the tool call can run indefinitely. A heartbeat timer sends
+// progress every 30s to keep the connection alive even during slow LLM calls.
+
+const DEFAULT_MAX_IN_FLIGHT = 200;
+const HEARTBEAT_INTERVAL_MS = 30_000; // 30s — well under 1800s inactivity timeout
+
+async function rateLimitedParallel<T>(
+  tasks: (() => Promise<T>)[],
+  rps: number,
+  maxInFlight: number = DEFAULT_MAX_IN_FLIGHT,
+  onProgress?: ProgressFn,
+): Promise<T[]> {
+  if (tasks.length === 0) return [];
+  const results: T[] = new Array(tasks.length);
+  const limiter = getAdaptiveRateLimiter(rps);
+  let nextIndex = 0;
+  let completedCount = 0;
+
+  // Heartbeat: send progress notifications every 30s to prevent inactivity timeout
+  const heartbeat = onProgress
+    ? setInterval(() => {
+        onProgress(completedCount, tasks.length, `Processing: ${completedCount}/${tasks.length} done (${limiter.rps} RPS)`);
+      }, HEARTBEAT_INTERVAL_MS)
+    : null;
+
+  try {
+    async function worker() {
+      while (true) {
+        const i = nextIndex;
+        if (i >= tasks.length) return;
+        nextIndex++;
+        await limiter.acquire();
+        results[i] = await tasks[i]();
+        completedCount++;
+        // Notify on each completion too (supplements heartbeat)
+        if (onProgress) {
+          onProgress(completedCount, tasks.length, `Done: ${completedCount}/${tasks.length}`);
+        }
+      }
+    }
+
+    const workerCount = Math.min(Math.max(1, maxInFlight), tasks.length);
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+  }
   return results;
 }
+
 
 // ── Batch helpers ───────────────────────────────────────────────────
 
@@ -2961,7 +3180,7 @@ function sanitizeFilename(filePath: string): string {
 
 // ── Robust per-file processing ─────────────────────────────────────
 // Shared function that processes each file independently with:
-// - Parallel execution (via parallelLimit)
+// - Rate-limited parallel execution (via rateLimitedParallel)
 // - Per-file retry with exponential backoff
 // - Circuit breaker (abort after 3 consecutive failures)
 // - Progress reporting
@@ -2994,7 +3213,7 @@ async function robustPerFileProcess(
   opts: RobustPerFileOpts,
 ): Promise<RobustPerFileResult> {
   const batchId = opts.batchId || randomUUID();
-  const concurrency = await getMaxConcurrent();
+  const rlConfig = await getRateLimitConfig();
   const recentOutcomes: boolean[] = [];
   let aborted = false;
   let abortReason = "";
@@ -3028,6 +3247,7 @@ async function robustPerFileProcess(
           maxBytes: opts.budgetBytes,
         });
         recentOutcomes.push(result.success);
+        if (result.success && adaptiveRateLimiter) adaptiveRateLimiter.onSuccess();
         if (opts.onProgress) {
           const completed = recentOutcomes.length;
           opts.onProgress(completed, files.length, `${opts.toolName}: ${completed}/${files.length} files done`);
@@ -3058,7 +3278,7 @@ async function robustPerFileProcess(
     return { filePath, success: false, error: "Unexpected retry loop exit" } as FileProcessResult;
   });
 
-  const results = await parallelLimit(tasks, concurrency);
+  const results = await rateLimitedParallel(tasks, rlConfig.rps, rlConfig.maxInFlight, opts.onProgress);
   const succeeded = results.filter((r) => r.success);
   const failed = results.filter((r) => !r.success && r.error !== "Batch aborted");
   const skipped = results.filter((r) => r.error === "Batch aborted");
@@ -3466,33 +3686,51 @@ async function ensembleStreaming(
     }),
   );
 
-  // Combine: label each model's output clearly
-  const parts = results.map((r) => `## Model: ${r.model}\n\n${r.content}`);
+  // Separate successful from failed model responses
+  const succeeded = results.filter((r) => !r.error);
+  const failed = results.filter((r) => r.error);
+
+  // ALL models failed — propagate error
+  if (succeeded.length === 0) {
+    const errorSummary = failed.map((r) => `${r.model}: ${r.content}`).join("; ");
+    throw new Error(`All ensemble models failed: ${errorSummary}`);
+  }
+
+  // Some models failed — log warning, continue with successful ones
+  if (failed.length > 0) {
+    for (const f of failed) {
+      process.stderr.write(
+        `[llm-externalizer] Ensemble model unavailable: ${f.model} — ${f.content}. Continuing with ${succeeded.length} model(s).\n`,
+      );
+    }
+  }
+
+  // Combine only successful model outputs
+  const parts = succeeded.map((r) => `## Model: ${r.model}\n\n${r.content}`);
+  if (failed.length > 0) {
+    parts.push(`## Unavailable models\n\n${failed.map((r) => `- **${r.model}**: ${r.content}`).join("\n")}`);
+  }
   const combined = parts.join("\n\n---\n\n");
 
-  // Merge usage stats across all models (including cost for OpenRouter billing)
+  // Merge usage stats across successful models only
   const usage = {
-    prompt_tokens: results.reduce(
+    prompt_tokens: succeeded.reduce(
       (s, r) => s + (r.usage?.prompt_tokens ?? 0),
       0,
     ),
-    completion_tokens: results.reduce(
+    completion_tokens: succeeded.reduce(
       (s, r) => s + (r.usage?.completion_tokens ?? 0),
       0,
     ),
-    total_tokens: results.reduce((s, r) => s + (r.usage?.total_tokens ?? 0), 0),
-    cost: results.reduce((s, r) => s + (r.usage?.cost ?? 0), 0),
+    total_tokens: succeeded.reduce((s, r) => s + (r.usage?.total_tokens ?? 0), 0),
+    cost: succeeded.reduce((s, r) => s + (r.usage?.cost ?? 0), 0),
   };
 
-  // Truncated if ANY model returned truncated results
-  const anyTruncated = results.some((r) => r.truncated);
+  const anyTruncated = succeeded.some((r) => r.truncated);
 
   return {
     content: combined,
-    model: results
-      .filter((r) => !r.error)
-      .map((r) => r.model)
-      .join(" + "),
+    model: succeeded.map((r) => r.model).join(" + "),
     usage,
     finishReason: "stop",
     truncated: anyTruncated,
@@ -3909,13 +4147,13 @@ async function processFileFix(
 // Dynamic limits block appended to each task tool description.
 // Changes based on which backend is active (local = sequential, OpenRouter = parallel).
 function limitsBlock(): string {
-  const concurrency =
+  const throughput =
     currentBackend.type === "openrouter"
-      ? "• PARALLEL: up to 5 simultaneous calls."
+      ? "• PARALLEL: rate-limited dispatch (RPS auto-detected from balance). Many requests in-flight simultaneously."
       : "• SEQUENTIAL: 1 call at a time.";
   return (
     "\n\nLIMITS:\n" +
-    concurrency +
+    throughput +
     "\n" +
     `• ${SOFT_TIMEOUT_MS / 1000}s timeout per call (MCP spec limit). Auto-retries up to 3 times on truncated responses.`
   );
@@ -4966,7 +5204,7 @@ function buildTools() {
 // ── MCP Server ───────────────────────────────────────────────────────
 
 const server = new Server(
-  { name: "llm-externalizer", version: "3.9.16" },
+  { name: "llm-externalizer", version: "3.9.17" },
   { capabilities: { tools: { listChanged: true } } },
 );
 
@@ -5988,10 +6226,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             `Max output tokens per call: model maximum (${resolveDefaultMaxTokens().toLocaleString()}). Auto-managed, not user-configurable.`,
           );
 
-          const maxConcurrent = await getMaxConcurrent();
-          if (maxConcurrent > 1) {
+          const rlCfg = await getRateLimitConfig();
+          if (rlCfg.rps > 1) {
             parts.push(
-              `Concurrency: PARALLEL — up to ${maxConcurrent} simultaneous calls supported. Spawn parallel tool calls for throughput.`,
+              `Rate limit: ${rlCfg.rps} RPS (requests/second), up to ${rlCfg.maxInFlight} in-flight. Spawn parallel tool calls for throughput.`,
             );
           } else {
             parts.push(
@@ -6056,7 +6294,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // 2. Clear all caches
         openRouterModelCache = [];
         openRouterCacheTime = 0;
-        cachedMaxConcurrent = 0;
+        cachedRateLimitConfig = null; rateLimitCacheTime = 0;
         // Reset LM Studio detection so it re-probes on next call
         if (currentBackend.type === "local") {
           currentBackend.isLMStudio = undefined;
@@ -6355,7 +6593,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             const gBatchId = randomUUID();
             const gTask = resolvePrompt(bcInstructions, bcInstructionsFilesPaths).trim() ||
               "Find all bugs, type errors, logic errors, security vulnerabilities, and potential runtime failures.";
-            const gConcurrency = await getMaxConcurrent();
+            const gRl = await getRateLimitConfig();
             const gTasks = fg.files.map((filePath, idx) => async () => {
               return processFileCheck(filePath, gTask, {
                 maxTokens: resolveDefaultMaxTokens(),
@@ -6363,8 +6601,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 redact: bcRedact, regexRedact: bcRegexRedact, onProgress, ensemble: bcUseEnsemble, maxBytes: bcBudgetBytes,
               });
             });
-            const gResults = await parallelLimit(gTasks, gConcurrency);
-            const gSucceeded = gResults.filter((r) => r.success);
+            const gAll = await rateLimitedParallel(gTasks, gRl.rps, gRl.maxInFlight, onProgress);
+            const gSucceeded = gAll.filter((r) => r.success);
             // Merge into one report per group
             const reportSections: string[] = [];
             for (const r of gSucceeded) {
@@ -6372,7 +6610,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 ? readFileSync(r.reportPath, "utf-8") : "";
               reportSections.push(`## File: ${r.filePath}\n\n${content}`);
             }
-            const gFailed = gResults.filter((r) => !r.success);
+            const gFailed: FileProcessResult[] = gAll.filter((r) => !r.success);
             if (gFailed.length > 0) {
               reportSections.push(`## FAILED (${gFailed.length})\n\n${gFailed.map((r) => `- ${r.filePath}: ${r.error}`).join("\n")}`);
             }
@@ -6400,7 +6638,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           bcInstructionsFilesPaths,
         );
         const resolvedTask = bcPrompt.trim() || defaultTask;
-        const concurrency = await getMaxConcurrent();
+        const bcRl = await getRateLimitConfig();
 
         // Sliding window of recent completion outcomes for circuit breaker.
         // Under parallel execution, "consecutive" is meaningless — instead we track
@@ -6504,7 +6742,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           } as FileProcessResult;
         });
 
-        const batchResults = await parallelLimit(tasks, concurrency);
+        const batchResults = await rateLimitedParallel(tasks, bcRl.rps, bcRl.maxInFlight, onProgress);
 
         // Categorize results
         const succeeded = batchResults.filter((r) => r.success);
@@ -6646,7 +6884,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
 
           const batchId = randomUUID();
-          const concurrency = await getMaxConcurrent();
+          const bfRl = await getRateLimitConfig();
 
           // Write a recovery manifest BEFORE processing starts.
           // If the MCP call times out, this file persists on disk so the agent
@@ -6816,7 +7054,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             } as FileProcessResult;
           });
 
-          const batchResults = await parallelLimit(tasks, concurrency);
+          const batchResults = await rateLimitedParallel(tasks, bfRl.rps, bfRl.maxInFlight, onProgress);
 
           // Categorize results
           const fixed = batchResults.filter(
@@ -7078,7 +7316,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const sfMode = resolveAnswerMode(sfRawMode, 2);
         const batchId = randomUUID();
-        const concurrency = await getMaxConcurrent();
+        const sfRl = await getRateLimitConfig();
         const recentOutcomes: boolean[] = [];
         let aborted = false;
         let abortReason = "";
@@ -7160,7 +7398,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           } as FileProcessResult;
         });
 
-        const batchResults = await parallelLimit(tasks, concurrency);
+        const batchResults = await rateLimitedParallel(tasks, sfRl.rps, sfRl.maxInFlight, onProgress);
         const succeeded = batchResults.filter((r) => r.success);
         const failed = batchResults.filter(
           (r) => !r.success && r.error !== "Batch aborted",
