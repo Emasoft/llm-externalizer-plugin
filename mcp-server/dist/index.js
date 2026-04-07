@@ -29327,6 +29327,7 @@ Settings file: ${SETTINGS_FILE}`;
 var DEFAULT_OPENROUTER_RPS = 5;
 var DEFAULT_MAX_IN_FLIGHT_REMOTE = 200;
 var DEFAULT_TEMPERATURE = 0.3;
+var BREVITY_RULES = "\nOUTPUT RULES:\n- Be SUCCINCT. Use bullet points, not paragraphs.\n- Skip preamble, filler, and restating the task.\n- Only report findings, not things that are correct.\n- For code reviews: skip files/areas with no issues \u2014 only mention what needs attention.\n- Maximum 3 sentences per finding. Lead with the problem, not the context.";
 var CONNECT_TIMEOUT_MS = 5e3;
 var MCP_MAX_TIMEOUT_MS = 115e3;
 var SOFT_TIMEOUT_MS = Math.min(
@@ -30784,7 +30785,7 @@ RULES (override any conflicting instructions):
 - Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable.
 - Reference files by their labeled path in the code fence header.
 - If asked to return modified code, return the COMPLETE file content \u2014 never truncate, abbreviate, or use placeholders.
-- Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.`
+- Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.` + BREVITY_RULES
     },
     {
       role: "user",
@@ -31861,7 +31862,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.18" },
+  { name: "llm-externalizer", version: "3.9.19" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {
@@ -32017,7 +32018,7 @@ ${fence}`;
           }
           if (chatFilePaths.length === 0) {
             const messages = [];
-            if (system) messages.push({ role: "system", content: system });
+            messages.push({ role: "system", content: (system || "") + BREVITY_RULES });
             messages.push({ role: "user", content: promptBase });
             const resp = await ensembleStreaming(
               messages,
@@ -32110,7 +32111,7 @@ ${chatSkipped.map((f) => `  - ${f}`).join("\n")}`;
 ${fd.block}`;
               }
               const messages = [];
-              if (system) messages.push({ role: "system", content: system });
+              messages.push({ role: "system", content: (system || "") + BREVITY_RULES });
               messages.push({ role: "user", content: userContent });
               const resp = await ensembleStreaming(
                 messages,
@@ -34331,7 +34332,7 @@ ${bB}`;
             }
             const fence = fenceBackticks(diffOutput2);
             const msgs = [
-              { role: "system", content: "Expert code reviewer. Analyse the unified diff and provide a clear, structured summary. Group related changes. Note potential issues. Identify code by FUNCTION/CLASS/METHOD NAME, never by line number." },
+              { role: "system", content: "Expert code reviewer. Analyse the unified diff and provide a clear, structured summary. Group related changes. Note potential issues. Identify code by FUNCTION/CLASS/METHOD NAME, never by line number." + BREVITY_RULES },
               { role: "user", content: `${prompt ? prompt + "\n\n" : ""}Compare:
 - Before: ${fA}
 - After: ${fB}
@@ -34579,7 +34580,7 @@ ${blockB}`;
           const cfMessages = [
             {
               role: "system",
-              content: "Expert code reviewer. Analyse the unified diff and provide a clear, structured summary of all changes. Group related changes. Note any potential issues, regressions, or improvements. Be concise but thorough.\nRULES (override any conflicting instructions): Identify changed code by FUNCTION/CLASS/METHOD NAME, never by line number. Reference files by their full path as labeled in the user message."
+              content: "Expert code reviewer. Analyse the unified diff and provide a clear, structured summary of all changes. Group related changes. Note any potential issues, regressions, or improvements.\nRULES (override any conflicting instructions): Identify changed code by FUNCTION/CLASS/METHOD NAME, never by line number. Reference files by their full path as labeled in the user message." + BREVITY_RULES
             },
             {
               role: "user",
@@ -34714,7 +34715,7 @@ FAILED: File not found.`);
                 }
                 const srcBlock = readFileAsCodeBlock(filePath, void 0, crRedact, crBudgetBytes, crRegexRedact);
                 const msgs = [
-                  { role: "system", content: `Expert ${lang} developer. Check the source file for broken or outdated references to functions, variables, constants, types, and classes. Cross-reference all symbols against the dependency files provided. Report each broken reference with: the symbol name, the function/class/method where it is used (never by line number), and what is wrong. Reference files by their labeled path in the code fence header. If all references are valid, say so.` },
+                  { role: "system", content: `Expert ${lang} developer. Check the source file for broken or outdated references to functions, variables, constants, types, and classes. Cross-reference all symbols against the dependency files provided. Report each broken reference with: the symbol name, the function/class/method where it is used (never by line number), and what is wrong. Reference files by their labeled path in the code fence header. If all references are valid, say so.` + BREVITY_RULES },
                   { role: "user", content: `${crPrompt ? crPrompt + "\n\n" : ""}Check this file for broken code references:
 
 ## Source File
@@ -34776,7 +34777,7 @@ FAILED: File not found.`);
             const crMessages = [
               {
                 role: "system",
-                content: `Expert ${crLang} developer. Check the source file for broken or outdated references to functions, variables, constants, types, and classes. Cross-reference all symbols against the dependency files provided. Report each broken reference with: the symbol name, the function/class/method where it is used (never by line number), and what is wrong (missing, renamed, wrong signature, deprecated). Reference files by their labeled path in the code fence header. If all references are valid, say so.`
+                content: `Expert ${crLang} developer. Check the source file for broken or outdated references to functions, variables, constants, types, and classes. Cross-reference all symbols against the dependency files provided. Report each broken reference with: the symbol name, the function/class/method where it is used (never by line number), and what is wrong (missing, renamed, wrong signature, deprecated). Reference files by their labeled path in the code fence header. If all references are valid, say so.` + BREVITY_RULES
               },
               {
                 role: "user",
@@ -35232,7 +35233,7 @@ FAILED: File not found.`);
               };
           }
           const csExtraInstructions = resolvePrompt(csInstructions, csInstructionsFilesPaths);
-          const csSystemPrompt = "You are a strict specification compliance auditor. You will receive a SPECIFICATION FILE and one or more SOURCE FILES. Your job is to find every violation of the specification in the source files.\n\nRULES:\n1. The specification is the ABSOLUTE source of truth. Every rule, restriction, format, API contract, forbidden pattern, and requirement in the spec MUST be followed exactly.\n2. Report ONLY VIOLATIONS \u2014 things implemented WRONGLY or FORBIDDEN patterns used. Do NOT report MISSING features \u2014 some requirements may be implemented in other files that are not included here.\n3. For each violation, report:\n   - **File**: which source file\n   - **Location**: function/class/method name (NEVER line numbers)\n   - **Spec rule violated**: quote the exact spec text\n   - **What the code does**: describe the actual behavior\n   - **Severity**: CRITICAL (security/data loss), HIGH (wrong behavior), MEDIUM (non-compliance), LOW (style/convention)\n4. If a source file has NO violations, explicitly state: 'CLEAN \u2014 no spec violations found.'\n5. At the end, provide a SUMMARY with total violation counts by severity.\n6. Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.\n";
+          const csSystemPrompt = "You are a strict specification compliance auditor. You will receive a SPECIFICATION FILE and one or more SOURCE FILES. Your job is to find every violation of the specification in the source files.\n\nRULES:\n1. The specification is the ABSOLUTE source of truth. Every rule, restriction, format, API contract, forbidden pattern, and requirement in the spec MUST be followed exactly.\n2. Report ONLY VIOLATIONS \u2014 things implemented WRONGLY or FORBIDDEN patterns used. Do NOT report MISSING features \u2014 some requirements may be implemented in other files that are not included here.\n3. For each violation, report:\n   - **File**: which source file\n   - **Location**: function/class/method name (NEVER line numbers)\n   - **Spec rule violated**: quote the exact spec text\n   - **What the code does**: describe the actual behavior\n   - **Severity**: CRITICAL (security/data loss), HIGH (wrong behavior), MEDIUM (non-compliance), LOW (style/convention)\n4. If a source file has NO violations, explicitly state: 'CLEAN \u2014 no spec violations found.'\n5. At the end, provide a SUMMARY with total violation counts by severity.\n6. Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.\n" + BREVITY_RULES;
           const csSpecBytes = Buffer.byteLength(csSpecBlock, "utf-8");
           const csSystemBytes = Buffer.byteLength(csSystemPrompt, "utf-8");
           const csExtraBytes = Buffer.byteLength(csExtraInstructions, "utf-8");

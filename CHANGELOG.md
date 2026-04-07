@@ -1,6 +1,17 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.19] - 2026-04-07
+
+### Changed
+
+- Add BREVITY_RULES to all LLM system prompts
+
+Instructs models to be succinct (bullets, no preamble, only
+report findings, max 3 sentences per finding). Prevents
+verbose output that wastes tokens and causes truncation on
+weaker models like Qwen 3.6 Plus.
+
 ## [3.9.18] - 2026-04-07
 
 ### Changed
