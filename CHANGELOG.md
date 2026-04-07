@@ -1,6 +1,17 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.22] - 2026-04-07
+
+### Changed
+
+- Expand default directory exclusions in walkDir
+
+Add .idea, .vscode, tmp, temp, .gradle, .cargo, vendor, out,
+.output, bower_components, .pnpm-store, .eggs, .nx to
+WALK_DEFAULT_EXCLUDE. These are non-project directories that
+should never be scanned by default.
+
 ## [3.9.21] - 2026-04-07
 
 ### Changed

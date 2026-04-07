@@ -29033,22 +29033,45 @@ function buildPerFileSectionPrompt(filePaths) {
   return "\n\nOUTPUT FORMAT: You are receiving " + filePaths.length + " input files. Produce a SEPARATE report section for each file, using this exact format:\n\n## File: <absolute-file-path>\n\n<your analysis/report for this file>\n\n---\n\nProduce exactly " + filePaths.length + " sections, one for each input file, in the order they appear. Do NOT merge or combine sections. Each file must have its own complete, independent section.\n";
 }
 var WALK_DEFAULT_EXCLUDE = /* @__PURE__ */ new Set([
+  // Version control
   ".git",
+  // Package managers / dependencies
   "node_modules",
+  "bower_components",
+  ".pnpm-store",
+  // Python
   "__pycache__",
   ".venv",
   "venv",
   ".tox",
   ".mypy_cache",
   ".pytest_cache",
+  ".eggs",
+  "*.egg-info",
+  // Build outputs
   "dist",
   "build",
+  "out",
   ".next",
   ".nuxt",
-  "coverage",
+  ".output",
+  "target",
+  // Caches / temp
   ".cache",
   ".turbo",
-  "target"
+  "coverage",
+  "tmp",
+  "temp",
+  ".temp",
+  ".tmp",
+  // IDE / editor
+  ".idea",
+  ".vscode",
+  // Other
+  ".gradle",
+  ".cargo",
+  ".nx",
+  "vendor"
 ]);
 function gitLsFilesMultiRepo(dirPath, recursive) {
   const allFiles = /* @__PURE__ */ new Set();
@@ -31878,7 +31901,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.21" },
+  { name: "llm-externalizer", version: "3.9.22" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {
