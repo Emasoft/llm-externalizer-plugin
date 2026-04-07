@@ -119,31 +119,25 @@ On OpenRouter, requests run on **two models in parallel** (default: `grok-4.1-fa
 
 **Plugin-shipped agents** (`.md` files in a plugin's `agents/` directory) **cannot** use MCP servers. Claude Code strips `mcpServers` and `hooks` from plugin agent frontmatter for security. This means a plugin agent cannot start the LLM Externalizer MCP server.
 
-**Workarounds for plugin agents:**
+**Solution:** The plugin ships `bin/llm-ext`, a CLI wrapper that plugin agents can call via the Bash tool. No MCP access needed — it spawns the server as a subprocess, executes one tool call, and returns the result.
 
-The plugin ships a standalone launcher at `bin/llm-externalizer` that can be used to register the MCP server manually.
+```bash
+# From any agent (including plugin-shipped agents):
+node "${CLAUDE_PLUGIN_ROOT}/bin/llm-ext" code_task \
+  --instructions "Find bugs" \
+  --input_files_paths /path/to/file.ts
 
-1. **Add to project `.mcp.json`** — makes the server available to all agents in the project:
-   ```json
-   {
-     "mcpServers": {
-       "llm-externalizer": {
-         "command": "node",
-         "args": ["${CLAUDE_PLUGIN_ROOT}/bin/llm-externalizer"]
-       }
-     }
-   }
-   ```
+# Folder scan:
+node "${CLAUDE_PLUGIN_ROOT}/bin/llm-ext" chat \
+  --instructions "Summarize this codebase" \
+  --folder_path /path/to/src \
+  --extensions '[".ts",".py"]'
 
-2. **Add to agent frontmatter** — for user/project agents (not plugin agents):
-   ```yaml
-   mcpServers:
-     - name: llm-externalizer
-       command: node
-       args: ["${CLAUDE_PLUGIN_ROOT}/bin/llm-externalizer"]
-   ```
+# Health check:
+node "${CLAUDE_PLUGIN_ROOT}/bin/llm-ext" discover
+```
 
-3. **Copy agent to user directory** — move the agent `.md` file from the plugin's `agents/` to `~/.claude/agents/` or `<project>/.claude/agents/`. User/project agents support `mcpServers` frontmatter.
+The output is the file path to the saved report — same as the MCP tool response. All parameters use `--key value` syntax. Arrays/objects are passed as JSON strings.
 
 ## Prerequisites
 
@@ -324,7 +318,8 @@ llm-externalizer-plugin/
 │       └── notify-marketplace.yml # Auto-notify emasoft-plugins on version bump
 ├── .mcp.json                     # MCP server configuration
 ├── bin/
-│   └── llm-externalizer          # Standalone MCP server launcher
+│   ├── llm-externalizer          # Standalone MCP server launcher (stdio)
+│   └── llm-ext                   # CLI wrapper for Bash-based tool invocation
 ├── commands/
 │   ├── configure.md              # /llm-externalizer:configure
 │   └── discover.md               # /llm-externalizer:discover

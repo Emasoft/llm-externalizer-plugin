@@ -1,0 +1,154 @@
+#!/usr/bin/env node
+/**
+ * CLI wrapper for LLM Externalizer MCP tools.
+ *
+ * Allows plugin-shipped agents to call LLM Externalizer tools via Bash
+ * without needing MCP access. The MCP server runs as a child process,
+ * executes one tool call, and exits.
+ *
+ * Usage:
+ *   llm-ext <tool> [--param value ...]
+ *
+ * Examples:
+ *   llm-ext chat --instructions "Summarize this file" --input_files_paths /path/to/file.ts
+ *   llm-ext code_task --instructions "Find bugs" --folder_path /path/to/src --extensions .ts
+ *   llm-ext discover
+ *   llm-ext check_imports --input_files_paths /path/to/file.ts
+ *
+ * The output is the file path to the saved report (same as the MCP tool response).
+ * Exit code 0 = success, 1 = error.
+ */
+
+const { join } = require("path");
+const { spawn } = require("child_process");
+
+const TOOLS = new Set([
+  "chat", "code_task", "batch_check", "scan_folder", "compare_files",
+  "check_references", "check_imports", "check_against_specs",
+  "discover", "reset", "get_settings", "set_settings", "change_model",
+]);
+
+function parseArgs(argv) {
+  const args = argv.slice(2);
+  if (args.length === 0) {
+    console.error("Usage: llm-ext <tool> [--param value ...]");
+    console.error("Tools: " + [...TOOLS].join(", "));
+    process.exit(1);
+  }
+
+  const tool = args[0];
+  if (!TOOLS.has(tool)) {
+    console.error(`Unknown tool: ${tool}`);
+    console.error("Available: " + [...TOOLS].join(", "));
+    process.exit(1);
+  }
+
+  const params = {};
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith("--")) {
+      const key = arg.slice(2);
+      const next = args[i + 1];
+      if (next !== undefined && !next.startsWith("--")) {
+        // Try to parse as JSON (for arrays, numbers, booleans)
+        try {
+          params[key] = JSON.parse(next);
+        } catch {
+          params[key] = next;
+        }
+        i++;
+      } else {
+        params[key] = true;
+      }
+    }
+  }
+
+  return { tool, params };
+}
+
+async function main() {
+  const { tool, params } = parseArgs(process.argv);
+
+  // Build a JSON-RPC request for the MCP server
+  const request = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: { name: tool, arguments: params },
+  };
+
+  // We need to initialize the MCP connection first
+  const initRequest = {
+    jsonrpc: "2.0",
+    id: 0,
+    method: "initialize",
+    params: {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "llm-ext-cli", version: "1.0.0" },
+    },
+  };
+
+  const serverPath = join(__dirname, "..", "mcp-server", "dist", "index.js");
+
+  const child = spawn("node", [serverPath], {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env },
+  });
+
+  let stdout = "";
+  let stderr = "";
+
+  child.stdout.on("data", (data) => { stdout += data.toString(); });
+  child.stderr.on("data", (data) => { stderr += data.toString(); });
+
+  // Send initialize, wait for response, then send the tool call
+  child.stdin.write(JSON.stringify(initRequest) + "\n");
+
+  // Wait briefly for init, then send the tool request
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  child.stdin.write(JSON.stringify(request) + "\n");
+
+  // Wait for the response with a generous timeout
+  const timeout = setTimeout(() => {
+    console.error("Timeout: MCP server did not respond within 10 minutes");
+    child.kill();
+    process.exit(1);
+  }, 600_000);
+
+  child.on("close", (code) => {
+    clearTimeout(timeout);
+
+    // Parse the last JSON-RPC response from stdout
+    const lines = stdout.trim().split("\n").filter(Boolean);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const resp = JSON.parse(lines[i]);
+        if (resp.id === 1 && resp.result) {
+          // Extract text content from MCP response
+          const content = resp.result.content;
+          if (Array.isArray(content)) {
+            const text = content
+              .filter((c) => c.type === "text")
+              .map((c) => c.text)
+              .join("\n");
+            console.log(text);
+            process.exit(resp.result.isError ? 1 : 0);
+          }
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    // No valid response found
+    if (stderr) console.error(stderr.slice(0, 500));
+    console.error("No response from MCP server");
+    process.exit(1);
+  });
+}
+
+main().catch((err) => {
+  console.error(err.message);
+  process.exit(1);
+});
