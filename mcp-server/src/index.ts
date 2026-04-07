@@ -1469,13 +1469,10 @@ const BREVITY_RULES =
   "- For code reviews: skip files/areas with no issues — only mention what needs attention.\n" +
   "- Maximum 3 sentences per finding. Lead with the problem, not the context.";
 const CONNECT_TIMEOUT_MS = 5000;
-// MCP spec defines a 120s request timeout for tool calls. We must complete within that window.
-// M5: Cap at 115s to leave margin for response serialization.
-const MCP_MAX_TIMEOUT_MS = 115_000;
-let SOFT_TIMEOUT_MS = Math.min(
-  MCP_MAX_TIMEOUT_MS,
-  (activeResolved?.timeout ?? 300) * 1000,
-);
+// Per-LLM-request timeout. Reasoning models (Qwen, etc.) need extended time for thinking.
+// The MCP tool-call timeout is inactivity-based, kept alive by heartbeat — no hard cap needed.
+// Default: profile timeout (300s). Extended dynamically when reasoning tokens are flowing.
+let SOFT_TIMEOUT_MS = (activeResolved?.timeout ?? 300) * 1000;
 const READ_CHUNK_TIMEOUT_MS = 30_000; // max wait for a single SSE chunk (stall detection)
 let FALLBACK_CONTEXT_LENGTH = activeResolved?.contextWindow || 100000;
 const MODEL_CACHE_TTL_MS = 3600_000; // 1 hour TTL for OpenRouter model list cache
@@ -1577,10 +1574,7 @@ function reloadSettingsFromDisk(): boolean {
     settingsError = "No active profile configured";
     activeResolved = null;
   }
-  SOFT_TIMEOUT_MS = Math.min(
-    MCP_MAX_TIMEOUT_MS,
-    (activeResolved?.timeout ?? 300) * 1000,
-  );
+  SOFT_TIMEOUT_MS = (activeResolved?.timeout ?? 300) * 1000;
   FALLBACK_CONTEXT_LENGTH = activeResolved?.contextWindow || 100000;
   // Notify MCP client that tool descriptions may have changed (backend switch)
   _onSettingsReloaded?.();
@@ -2163,6 +2157,8 @@ interface StreamingResult {
   };
   finishReason: string;
   truncated: boolean;
+  /** True if reasoning/thinking tokens were detected during streaming. */
+  reasoningDetected?: boolean;
 }
 
 interface ModelInfo {
@@ -2541,6 +2537,8 @@ async function chatCompletionStreaming(
   let truncated = false;
   let malformedChunks = 0;
   let buffer = "";
+  let reasoningActive = false; // true if we've seen reasoning/thinking tokens
+  let lastActivityAt = startTime; // last time ANY token (reasoning or content) was received
   // L5: Dynamic progress interval — at least 2 updates before timeout
   const progressInterval = Math.min(10_000, Math.floor(conn.timeout / 3));
   let lastProgressAt = startTime;
@@ -2548,9 +2546,13 @@ async function chatCompletionStreaming(
 
   try {
     while (true) {
-      // Check soft timeout before each read
+      // Check soft timeout before each read.
+      // If reasoning tokens are actively flowing, suspend the timeout — the model is working,
+      // not stalled. Only enforce timeout when there's been no activity for READ_CHUNK_TIMEOUT_MS.
       const elapsed = Date.now() - startTime;
-      if (elapsed > conn.timeout) {
+      const sinceLastActivity = Date.now() - lastActivityAt;
+      const isActivelyReasoning = reasoningActive && sinceLastActivity < READ_CHUNK_TIMEOUT_MS;
+      if (elapsed > conn.timeout && !isActivelyReasoning) {
         truncated = true;
         process.stderr.write(
           `[llm-externalizer] Soft timeout at ${elapsed}ms, returning ${content.length} chars of partial content\n`,
@@ -2560,14 +2562,22 @@ async function chatCompletionStreaming(
 
       // Send periodic progress notification to prevent MCP client timeout
       if (onProgress && Date.now() - lastProgressAt >= progressInterval) {
-        const pct = Math.min(90, Math.round((elapsed / conn.timeout) * 100));
-        onProgress(pct, 100, `Streaming… ${content.length} chars received`);
+        const pct = isActivelyReasoning
+          ? 50 // reasoning in progress — don't show misleading % based on wall clock
+          : Math.min(90, Math.round((elapsed / conn.timeout) * 100));
+        const msg = isActivelyReasoning
+          ? `Reasoning… ${Math.round(elapsed / 1000)}s (model is thinking)`
+          : `Streaming… ${content.length} chars received`;
+        onProgress(pct, 100, msg);
         lastProgressAt = Date.now();
       }
 
-      // Read with per-chunk timeout (handles stalled generation)
+      // Read with per-chunk timeout (handles stalled generation).
+      // During reasoning, use the full chunk timeout — don't cap by remaining wall-clock.
       const remaining = conn.timeout - elapsed;
-      const chunkTimeout = Math.min(READ_CHUNK_TIMEOUT_MS, remaining);
+      const chunkTimeout = isActivelyReasoning
+        ? READ_CHUNK_TIMEOUT_MS
+        : Math.min(READ_CHUNK_TIMEOUT_MS, Math.max(1000, remaining));
       const result = await timedRead(reader, chunkTimeout);
 
       if (result === "timeout") {
@@ -2600,11 +2610,19 @@ async function chatCompletionStreaming(
           if (json.model) model = json.model;
 
           const delta = json.choices?.[0]?.delta;
+          // Track reasoning/thinking tokens — the model is working, not stalled.
+          // These are NOT included in the output but their presence extends the timeout.
+          const reasoning = delta?.reasoning || delta?.reasoning_content || "";
+          if (reasoning) {
+            reasoningActive = true;
+            lastActivityAt = Date.now();
+          }
           // Only include the model's final answer (delta.content).
-          // Reasoning/thinking tokens (delta.reasoning, delta.reasoning_content)
-          // are internal chain-of-thought and must not leak into the output.
           const text = delta?.content || "";
-          if (text) content += text;
+          if (text) {
+            content += text;
+            lastActivityAt = Date.now();
+          }
 
           const reason = json.choices?.[0]?.finish_reason;
           if (reason) finishReason = reason;
@@ -2634,7 +2652,7 @@ async function chatCompletionStreaming(
     );
   }
 
-  return { content, model, usage, finishReason, truncated };
+  return { content, model, usage, finishReason, truncated, reasoningDetected: reasoningActive };
 }
 
 // ── Non-streaming JSON completion ────────────────────────────────────
@@ -3586,6 +3604,17 @@ async function chatCompletionWithRetry(
       process.stderr.write(
         `[llm-externalizer] finishReason=length on attempt ${attempt + 1} — output token limit hit\n`,
       );
+      return resp;
+    }
+
+    // If reasoning tokens were detected but content is empty, the model was still thinking
+    // when the timeout hit. Retrying starts from scratch — pointless. Return what we have.
+    if (resp.reasoningDetected && resp.content.trim().length === 0) {
+      process.stderr.write(
+        `[llm-externalizer] Reasoning model timed out after ${Math.round(SOFT_TIMEOUT_MS / 1000)}s of thinking with no content output — skipping retries\n`,
+      );
+      resp.content = `⚠ Reasoning model timed out — spent ${Math.round(SOFT_TIMEOUT_MS / 1000)}s thinking but produced no content. The task may be too complex for this model's speed at this input size.`;
+      resp.truncated = true;
       return resp;
     }
 
