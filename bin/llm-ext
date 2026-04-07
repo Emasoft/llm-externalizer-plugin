@@ -22,12 +22,12 @@
  */
 
 const { join } = require("path");
+const { existsSync } = require("fs");
 const { spawn } = require("child_process");
 
 // ── Tool catalog (for --help discovery) ──────────────────────────────
 
 const TOOL_CATALOG = {
-  // Analysis tools
   chat: {
     desc: "General-purpose LLM call. Summarize, compare, translate, generate text.",
     params: {
@@ -113,27 +113,11 @@ const TOOL_CATALOG = {
       folder_path: "Or scan a folder",
     },
   },
-  // Utility tools
-  discover: {
-    desc: "Check service health, active profile, model, auth status.",
-    params: {},
-  },
-  reset: {
-    desc: "Full soft-restart. Reloads settings, clears caches.",
-    params: {},
-  },
-  get_settings: {
-    desc: "Copy settings.yaml to output dir. Returns the file path.",
-    params: {},
-  },
-  set_settings: {
-    desc: "Apply a modified settings file.",
-    params: { file_path: "Path to the edited YAML file" },
-  },
-  change_model: {
-    desc: "Quick model switch in the active profile.",
-    params: { model: "Model name or ID" },
-  },
+  discover: { desc: "Check service health, active profile, model, auth status.", params: {} },
+  reset: { desc: "Full soft-restart. Reloads settings, clears caches.", params: {} },
+  get_settings: { desc: "Copy settings.yaml to output dir. Returns the file path.", params: {} },
+  set_settings: { desc: "Apply a modified settings file.", params: { file_path: "Path to the edited YAML file" } },
+  change_model: { desc: "Quick model switch in the active profile.", params: { model: "Model name or ID" } },
 };
 
 // ── Help output ──────────────────────────────────────────────────────
@@ -152,11 +136,11 @@ function showHelp(toolName) {
       }
       console.log();
     }
-    console.log(`Example:`);
+    console.log("Example:");
     if (toolName === "discover") {
-      console.log(`  llm-ext discover`);
+      console.log("  llm-ext discover");
     } else if (toolName === "code_task") {
-      console.log(`  llm-ext code_task --instructions "Find bugs" --input_files_paths /path/to/file.ts`);
+      console.log('  llm-ext code_task --instructions "Find bugs" --input_files_paths /path/to/file.ts');
     } else {
       console.log(`  llm-ext ${toolName} --instructions "..." --input_files_paths /path/to/file`);
     }
@@ -195,7 +179,7 @@ function parseArgs(argv) {
   const tool = args[0];
   if (!TOOL_CATALOG[tool]) {
     console.error(`Unknown tool: ${tool}`);
-    console.error(`Run 'llm-ext --help' for available tools.`);
+    console.error("Run 'llm-ext --help' for available tools.");
     process.exit(1);
   }
 
@@ -222,7 +206,6 @@ function parseArgs(argv) {
           value = "true";
         }
       }
-      // Try JSON parse for arrays, numbers, booleans
       try { params[key] = JSON.parse(value); } catch { params[key] = value; }
     }
   }
@@ -232,73 +215,122 @@ function parseArgs(argv) {
 
 // ── MCP server communication ─────────────────────────────────────────
 
+function sendJson(child, obj) {
+  try {
+    child.stdin.write(JSON.stringify(obj) + "\n");
+  } catch {
+    // stdin closed (server crashed) — handled by exit/error handlers
+  }
+}
+
 async function main() {
   const { tool, params } = parseArgs(process.argv);
 
-  const initRequest = {
+  // Verify server binary exists
+  const serverPath = join(__dirname, "..", "mcp-server", "dist", "index.js");
+  if (!existsSync(serverPath)) {
+    console.error(`ERROR: MCP server not found at ${serverPath}`);
+    console.error("Run 'python3 scripts/setup.py' in the plugin directory to build it.");
+    process.exit(1);
+  }
+
+  const child = spawn("node", [serverPath], {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env },
+  });
+
+  // Handle spawn errors (e.g., node not found)
+  child.on("error", (err) => {
+    console.error(`ERROR: Failed to start MCP server: ${err.message}`);
+    process.exit(1);
+  });
+
+  // Handle unexpected server exit before we get a response
+  let gotResponse = false;
+  child.on("exit", (code) => {
+    if (!gotResponse) {
+      console.error(`ERROR: MCP server exited unexpectedly (code ${code})`);
+      process.exit(1);
+    }
+  });
+
+  // Line-buffered JSON-RPC parsing — handles partial chunks correctly
+  let lineBuf = "";
+
+  function onLine(line) {
+    if (!line.trim()) return;
+    try {
+      const msg = JSON.parse(line);
+      handleMessage(msg);
+    } catch {
+      // Not valid JSON — ignore (server log line or partial data)
+    }
+  }
+
+  let phase = "init"; // init → ready → waiting
+
+  function handleMessage(msg) {
+    if (phase === "init" && msg.id === 0 && msg.result) {
+      // Init response received — send initialized notification + tool call
+      phase = "ready";
+      sendJson(child, { jsonrpc: "2.0", method: "notifications/initialized" });
+      sendJson(child, {
+        jsonrpc: "2.0", id: 1, method: "tools/call",
+        params: { name: tool, arguments: params },
+      });
+      phase = "waiting";
+      return;
+    }
+
+    if (phase === "waiting" && msg.id === 1 && msg.result) {
+      // Tool response received — print result and exit
+      gotResponse = true;
+      clearTimeout(deadline);
+      const content = msg.result.content;
+      if (Array.isArray(content)) {
+        const text = content
+          .filter((c) => c.type === "text")
+          .map((c) => c.text)
+          .join("\n");
+        console.log(text);
+      }
+      child.kill();
+      process.exit(msg.result.isError ? 1 : 0);
+    }
+  }
+
+  child.stdout.on("data", (chunk) => {
+    lineBuf += chunk.toString();
+    const lines = lineBuf.split("\n");
+    // Keep the last (potentially incomplete) line in the buffer
+    lineBuf = lines.pop() || "";
+    for (const line of lines) {
+      onLine(line);
+    }
+  });
+
+  // Send initialize request — response triggers the rest via handleMessage
+  sendJson(child, {
     jsonrpc: "2.0", id: 0, method: "initialize",
     params: {
       protocolVersion: "2024-11-05",
       capabilities: {},
       clientInfo: { name: "llm-ext-cli", version: "1.0.0" },
     },
-  };
-
-  const toolRequest = {
-    jsonrpc: "2.0", id: 1, method: "tools/call",
-    params: { name: tool, arguments: params },
-  };
-
-  const serverPath = join(__dirname, "..", "mcp-server", "dist", "index.js");
-  const child = spawn("node", [serverPath], {
-    stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env },
   });
 
-  let stdout = "";
-  child.stderr.on("data", () => {}); // suppress server logs
-
-  // MCP handshake: initialize → wait → notifications/initialized → wait → tool call
-  child.stdin.write(JSON.stringify(initRequest) + "\n");
-  await new Promise((r) => setTimeout(r, 1000));
-  // Required by MCP protocol: acknowledge initialization before calling tools
-  child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
-  await new Promise((r) => setTimeout(r, 500));
-  child.stdin.write(JSON.stringify(toolRequest) + "\n");
-
-  const timeout = setTimeout(() => {
-    console.error("Timeout after 10 minutes");
+  // Global deadline
+  const deadline = setTimeout(() => {
+    console.error("ERROR: Timeout after 10 minutes");
     child.kill();
     process.exit(1);
   }, 600_000);
 
-  // Watch stdout for the tool response (id: 1) — server stays alive, so we
-  // parse incrementally and kill the child once we have the answer.
-  child.stdout.on("data", (d) => {
-    stdout += d.toString();
-    const lines = stdout.trim().split("\n").filter(Boolean);
-    for (const line of lines) {
-      try {
-        const resp = JSON.parse(line);
-        if (resp.id === 1 && resp.result) {
-          clearTimeout(timeout);
-          const content = resp.result.content;
-          if (Array.isArray(content)) {
-            const text = content
-              .filter((c) => c.type === "text")
-              .map((c) => c.text)
-              .join("\n");
-            console.log(text);
-            child.kill();
-            process.exit(resp.result.isError ? 1 : 0);
-          }
-        }
-      } catch { continue; }
-    }
-  });
+  // Suppress stderr (server logs)
+  child.stderr.on("data", () => {});
 }
 
 main().catch((err) => {
-  console.error(err.message);
+  console.error(`ERROR: ${err.message}`);
   process.exit(1);
 });
