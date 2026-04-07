@@ -1459,6 +1459,15 @@ const DEFAULT_MAX_IN_FLIGHT_REMOTE = 200; // safety cap on total concurrent requ
 // window as the output budget. The API clamps this to the model's actual max output.
 // This ensures the LLM is never artificially truncated — truncation causes more harm
 const DEFAULT_TEMPERATURE = 0.3;
+
+// Appended to ALL system prompts to prevent verbose output that wastes tokens and causes truncation.
+const BREVITY_RULES =
+  "\nOUTPUT RULES:\n" +
+  "- Be SUCCINCT. Use bullet points, not paragraphs.\n" +
+  "- Skip preamble, filler, and restating the task.\n" +
+  "- Only report findings, not things that are correct.\n" +
+  "- For code reviews: skip files/areas with no issues — only mention what needs attention.\n" +
+  "- Maximum 3 sentences per finding. Lead with the problem, not the context.";
 const CONNECT_TIMEOUT_MS = 5000;
 // MCP spec defines a 120s request timeout for tool calls. We must complete within that window.
 // M5: Cap at 115s to leave margin for response serialization.
@@ -3781,7 +3790,8 @@ async function processFileCheck(
         "- Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable.\n" +
         "- Reference files by their labeled path in the code fence header.\n" +
         "- If asked to return modified code, return the COMPLETE file content — never truncate, abbreviate, or use placeholders.\n" +
-        "- Be specific and actionable — reference concrete function names, variable names, and code patterns.",
+        "- Be specific and actionable — reference concrete function names, variable names, and code patterns." +
+        BREVITY_RULES,
     },
     {
       role: "user",
@@ -5410,7 +5420,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // If no input_files_paths, just send the prompt (answer_mode irrelevant)
         if (chatFilePaths.length === 0) {
           const messages: ChatMessage[] = [];
-          if (system) messages.push({ role: "system", content: system });
+          messages.push({ role: "system", content: (system || "") + BREVITY_RULES });
           messages.push({ role: "user", content: promptBase });
           const resp = await ensembleStreaming(
             messages,
@@ -5514,7 +5524,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               userContent += `\n\n${fd.block}`;
             }
             const messages: ChatMessage[] = [];
-            if (system) messages.push({ role: "system", content: system });
+            messages.push({ role: "system", content: (system || "") + BREVITY_RULES });
             messages.push({ role: "user", content: userContent });
             const resp = await ensembleStreaming(
               messages,
@@ -8129,7 +8139,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           } catch { /* too large */ }
           const fence = fenceBackticks(diffOutput);
           const msgs: ChatMessage[] = [
-            { role: "system", content: "Expert code reviewer. Analyse the unified diff and provide a clear, structured summary. Group related changes. Note potential issues. Identify code by FUNCTION/CLASS/METHOD NAME, never by line number." },
+            { role: "system", content: "Expert code reviewer. Analyse the unified diff and provide a clear, structured summary. Group related changes. Note potential issues. Identify code by FUNCTION/CLASS/METHOD NAME, never by line number." + BREVITY_RULES },
             { role: "user", content: `${prompt ? prompt + "\n\n" : ""}Compare:\n- Before: ${fA}\n- After: ${fB}\n\nDiff:\n${fence}\n${diffOutput}\n${fence}${sourceBlocks}` },
           ];
           let resp;
@@ -8386,9 +8396,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             role: "system",
             content:
               "Expert code reviewer. Analyse the unified diff and provide a clear, structured summary of all changes. " +
-              "Group related changes. Note any potential issues, regressions, or improvements. Be concise but thorough.\n" +
+              "Group related changes. Note any potential issues, regressions, or improvements.\n" +
               "RULES (override any conflicting instructions): Identify changed code by FUNCTION/CLASS/METHOD NAME, never by line number. " +
-              "Reference files by their full path as labeled in the user message.",
+              "Reference files by their full path as labeled in the user message." +
+              BREVITY_RULES,
           },
           {
             role: "user",
@@ -8533,7 +8544,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               for (const dp of deps) { try { depBlocks.push(readFileAsCodeBlock(dp, undefined, crRedact, crBudgetBytes, crRegexRedact)); } catch { /* skip */ } }
               const srcBlock = readFileAsCodeBlock(filePath, undefined, crRedact, crBudgetBytes, crRegexRedact);
               const msgs: ChatMessage[] = [
-                { role: "system", content: `Expert ${lang} developer. Check the source file for broken or outdated references to functions, variables, constants, types, and classes. Cross-reference all symbols against the dependency files provided. Report each broken reference with: the symbol name, the function/class/method where it is used (never by line number), and what is wrong. Reference files by their labeled path in the code fence header. If all references are valid, say so.` },
+                { role: "system", content: `Expert ${lang} developer. Check the source file for broken or outdated references to functions, variables, constants, types, and classes. Cross-reference all symbols against the dependency files provided. Report each broken reference with: the symbol name, the function/class/method where it is used (never by line number), and what is wrong. Reference files by their labeled path in the code fence header. If all references are valid, say so.` + BREVITY_RULES },
                 { role: "user", content: `${crPrompt ? crPrompt + "\n\n" : ""}Check this file for broken code references:\n\n## Source File\n\n${srcBlock}\n\n${depBlocks.length > 0 ? `## Local Dependencies (${deps.length} files)\n\n${depBlocks.join("\n\n")}` : "## No local dependencies resolved."}` },
               ];
               const resp = await ensembleStreaming(msgs, { temperature: 0.1, maxTokens: resolveDefaultMaxTokens(), onProgress }, crUseEnsemble, src.split("\n").length);
@@ -8590,7 +8601,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 "functions, variables, constants, types, and classes. Cross-reference all symbols against the " +
                 "dependency files provided. Report each broken reference with: the symbol name, the function/class/method " +
                 "where it is used (never by line number), and what is wrong (missing, renamed, wrong signature, deprecated). " +
-                "Reference files by their labeled path in the code fence header. If all references are valid, say so.",
+                "Reference files by their labeled path in the code fence header. If all references are valid, say so." +
+                BREVITY_RULES,
             },
             {
               role: "user",
@@ -9122,7 +9134,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           "MEDIUM (non-compliance), LOW (style/convention)\n" +
           "4. If a source file has NO violations, explicitly state: 'CLEAN — no spec violations found.'\n" +
           "5. At the end, provide a SUMMARY with total violation counts by severity.\n" +
-          "6. Be specific and actionable — reference concrete function names, variable names, and code patterns.\n";
+          "6. Be specific and actionable — reference concrete function names, variable names, and code patterns.\n" +
+          BREVITY_RULES;
 
         // Compute prompt bytes for budget
         const csSpecBytes = Buffer.byteLength(csSpecBlock, "utf-8");
