@@ -1,0 +1,18 @@
+#!/usr/bin/env node
+// Standalone launcher for the LLM Externalizer MCP server.
+// Use this to register the server in .mcp.json or agent frontmatter
+// when the plugin's auto-started server is not available (e.g., plugin
+// agents that cannot use mcpServers frontmatter).
+//
+// Usage:
+//   node <plugin-root>/bin/llm-externalizer
+//   # or in .mcp.json:
+//   { "command": "node", "args": ["<plugin-root>/bin/llm-externalizer"] }
+
+const { join } = require("path");
+const { execFileSync } = require("child_process");
+
+const serverPath = join(__dirname, "..", "mcp-server", "dist", "index.js");
+
+// Forward to the bundled MCP server
+require(serverPath);

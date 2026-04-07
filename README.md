@@ -121,28 +121,29 @@ On OpenRouter, requests run on **two models in parallel** (default: `grok-4.1-fa
 
 **Workarounds for plugin agents:**
 
-1. **Copy to user agents** — copy the agent `.md` file to `~/.claude/agents/` (user agent) or `<project>/.claude/agents/` (project agent). User/project agents support `mcpServers` frontmatter.
+The plugin ships a standalone launcher at `bin/llm-externalizer` that can be used to register the MCP server manually.
 
-2. **Direct invocation via node** — run the MCP server directly from the plugin cache without npm/npx:
-   ```bash
-   # Find the plugin cache path
-   PLUGIN_ROOT=$(claude plugin path llm-externalizer 2>/dev/null || echo "$HOME/.claude/plugins/llm-externalizer")
-   
-   # Run the MCP server directly
-   node "$PLUGIN_ROOT/mcp-server/dist/index.js"
-   ```
-
-3. **Add to `.mcp.json`** — register the server in your project's `.mcp.json` so it's available to all agents:
+1. **Add to project `.mcp.json`** — makes the server available to all agents in the project:
    ```json
    {
      "mcpServers": {
        "llm-externalizer": {
          "command": "node",
-         "args": ["$HOME/.claude/plugins/llm-externalizer/mcp-server/dist/index.js"]
+         "args": ["${CLAUDE_PLUGIN_ROOT}/bin/llm-externalizer"]
        }
      }
    }
    ```
+
+2. **Add to agent frontmatter** — for user/project agents (not plugin agents):
+   ```yaml
+   mcpServers:
+     - name: llm-externalizer
+       command: node
+       args: ["${CLAUDE_PLUGIN_ROOT}/bin/llm-externalizer"]
+   ```
+
+3. **Copy agent to user directory** — move the agent `.md` file from the plugin's `agents/` to `~/.claude/agents/` or `<project>/.claude/agents/`. User/project agents support `mcpServers` frontmatter.
 
 ## Prerequisites
 
@@ -322,6 +323,8 @@ llm-externalizer-plugin/
 │   └── workflows/
 │       └── notify-marketplace.yml # Auto-notify emasoft-plugins on version bump
 ├── .mcp.json                     # MCP server configuration
+├── bin/
+│   └── llm-externalizer          # Standalone MCP server launcher
 ├── commands/
 │   ├── configure.md              # /llm-externalizer:configure
 │   └── discover.md               # /llm-externalizer:discover
