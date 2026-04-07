@@ -119,25 +119,31 @@ On OpenRouter, requests run on **two models in parallel** (default: `grok-4.1-fa
 
 **Plugin-shipped agents** (`.md` files in a plugin's `agents/` directory) **cannot** use MCP servers. Claude Code strips `mcpServers` and `hooks` from plugin agent frontmatter for security. This means a plugin agent cannot start the LLM Externalizer MCP server.
 
-**Solution:** The plugin ships `bin/llm-ext`, a CLI wrapper that plugin agents can call via the Bash tool. No MCP access needed — it spawns the server as a subprocess, executes one tool call, and returns the result.
+**Solution:** The plugin ships `bin/llm-ext`, a CLI wrapper that any agent can call via the Bash tool. No MCP access needed — it spawns the server, executes one tool call, and returns the result.
 
-```bash
-# From any agent (including plugin-shipped agents):
-node "${CLAUDE_PLUGIN_ROOT}/bin/llm-ext" code_task \
-  --instructions "Find bugs" \
-  --input_files_paths /path/to/file.ts
+To enable LLM Externalizer in your plugin agent, add this snippet to the agent's `.md` file instructions:
 
-# Folder scan:
-node "${CLAUDE_PLUGIN_ROOT}/bin/llm-ext" chat \
-  --instructions "Summarize this codebase" \
-  --folder_path /path/to/src \
-  --extensions '[".ts",".py"]'
+```markdown
+## LLM Externalizer (external model analysis)
 
-# Health check:
-node "${CLAUDE_PLUGIN_ROOT}/bin/llm-ext" discover
+You have access to the LLM Externalizer CLI for offloading analysis tasks to cheaper external LLMs.
+The CLI is at: node "${CLAUDE_PLUGIN_ROOT}/bin/llm-ext"
+
+FIRST, discover available tools and their parameters:
+  node "${CLAUDE_PLUGIN_ROOT}/bin/llm-ext" --help
+  node "${CLAUDE_PLUGIN_ROOT}/bin/llm-ext" --help <tool_name>
+
+THEN, call the appropriate tool. Examples:
+  node "${CLAUDE_PLUGIN_ROOT}/bin/llm-ext" code_task --instructions "Find bugs" --input_files_paths /path/to/file.ts
+  node "${CLAUDE_PLUGIN_ROOT}/bin/llm-ext" chat --instructions "Summarize" --folder_path /path/to/src --extensions '[".ts"]'
+  node "${CLAUDE_PLUGIN_ROOT}/bin/llm-ext" discover
+
+The output is a file path to the saved report. Read the report with the Read tool.
+All parameters use --key value syntax. Arrays use JSON: --extensions '[".ts",".py"]'
+Timeout: 10 minutes. Not subject to MCP 115s limit.
 ```
 
-The output is the file path to the saved report — same as the MCP tool response. All parameters use `--key value` syntax. Arrays/objects are passed as JSON strings.
+The agent will call `--help` first to learn the available tools and parameters, then select the right command for its task.
 
 ## Prerequisites
 
