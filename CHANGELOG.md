@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.11] - 2026-04-07
+
+### Added
+
+- Add bin/llm-ext CLI wrapper for plugin agents
+
 ## [3.9.10] - 2026-04-07
 
 ### Added
