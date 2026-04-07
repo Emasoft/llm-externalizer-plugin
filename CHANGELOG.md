@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.15] - 2026-04-07
+
+### Fixed
+
+- Llm-ext event-driven handshake + line buffering + error handling
+
 ## [3.9.14] - 2026-04-07
 
 ### Fixed
