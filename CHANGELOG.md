@@ -1,6 +1,37 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.28] - 2026-04-08
+
+### Changed
+
+- Fix scan skill: add required sections, self-contained references
+
+Pass CPV validation: 0 MAJOR, 0 MINOR, 0 CRITICAL.
+
+## [3.9.27] - 2026-04-08
+
+### Changed
+
+- Add cost comparison chart to README
+
+Shows actual cost per project scan: Opus $2.53, Sonnet $0.51,
+Ensemble $0.08 (32x cheaper). Based on real session data
+scanning 8 TypeScript source files (88K input, 16K output tokens).
+
+## [3.9.26] - 2026-04-08
+
+### Changed
+
+- Add project scan skill, update rules file
+
+- New skill: llm-externalizer-scan — triggers on "scan project",
+  "audit codebase", "full scan". Guides Claude through a full
+  ensemble scan with proper parameters.
+- Update ~/.claude/rules/use-llm-externalizer.md: fix stale values
+  (115s→600s timeout, 2-model→3-model ensemble, add Qwen pricing,
+  fix scan_folder defaults, add model fallback docs).
+
 ## [3.9.24] - 2026-04-08
 
 ### Changed
