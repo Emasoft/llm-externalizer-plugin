@@ -98,17 +98,34 @@ Each group produces its own report: `[group:auth] /path/to/report_group-auth_...
 
 ### Ensemble mode
 
-On OpenRouter, requests run on **two models in parallel** (default: `grok-4.1-fast` + `gemini-2.5-flash`) with results combined in one report. Per-model file size limits: grok skipped >20K lines, gemini skipped >50K lines.
+On OpenRouter (`remote-ensemble` profile), requests run on **three models in parallel** with results combined in one report. If one or two models fail (removed, rate-limited, timed out), the report includes results from the surviving models — only errors if all three fail.
+
+**Default ensemble models:**
+
+| Model | Role | Pricing (per 1M tokens) | File size limit |
+|-------|------|------------------------|-----------------|
+| `google/gemini-2.5-flash` | Primary | $0.15 input / $0.60 output | ≤50K lines |
+| `x-ai/grok-4.1-fast` | Secondary | $0.30 input / $0.50 output | ≤20K lines |
+| `qwen/qwen3.6-plus` | Tertiary (reasoning) | $0.33 input / $1.95 output | ≤40K lines |
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `ensemble` | `true` (on OpenRouter) | Set `false` for simple tasks to save tokens |
-| `max_tokens` | model maximum (65,535) | Override to save cost or avoid 120s timeout truncation |
+| `max_tokens` | model maximum (65,535) | Auto-managed, not user-configurable |
 | `temperature` | 0.3 (`chat` only) | 0.1=factual, 0.3=analysis, 0.7=creative |
+
+### Rate limiting
+
+Rate limiting is **fully automatic** — no configuration needed.
+
+- **RPS auto-detected** from OpenRouter balance ($1 ≈ 1 RPS, max 500)
+- **Adaptive AIMD**: halves RPS on 429 errors, increases by 1 after 10 consecutive successes
+- **Up to 200 requests in-flight** simultaneously
+- **Heartbeat** every 30s keeps MCP connection alive during long batches
 
 ### Key constraints
 
-- **120s timeout** per MCP call (MCP spec hard limit, configurable via `MCP_TIMEOUT` env var)
+- **600s base timeout** per LLM request. Extended automatically when reasoning models (Qwen, etc.) are actively thinking — no hard cap during reasoning
 - **No project context** — the remote LLM knows nothing about your project; always include brief context in instructions
 - **File paths only** — always use `input_files_paths`, never paste file contents into instructions
 - **Output location** — all responses saved to `llm_externalizer_output/` in the project directory
@@ -140,7 +157,7 @@ THEN, call the appropriate tool. Examples:
 
 The output is a file path to the saved report. Read the report with the Read tool.
 All parameters use --key value syntax. Arrays use JSON: --extensions '[".ts",".py"]'
-Timeout: 10 minutes. Not subject to MCP 115s limit.
+Timeout: 10 minutes. Paths: absolute paths recommended.
 ```
 
 The agent will call `--help` first to learn the available tools and parameters, then select the right command for its task.
