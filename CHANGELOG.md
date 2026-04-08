@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.29] - 2026-04-08
+
+### Changed
+
+- Improve cost comparison chart: show project name, file stats, fix readability
+
 ## [3.9.28] - 2026-04-08
 
 ### Changed
