@@ -100,6 +100,10 @@ Each group produces its own report: `[group:auth] /path/to/report_group-auth_...
 
 On OpenRouter (`remote-ensemble` profile), requests run on **three models in parallel** with results combined in one report. If one or two models fail (removed, rate-limited, timed out), the report includes results from the surviving models — only errors if all three fail.
 
+#### Cost comparison
+
+![Cost comparison: Opus $2.53, Sonnet $0.51, Ensemble $0.08](docs/cost_comparison.png)
+
 **Default ensemble models:**
 
 | Model | Role | Pricing (per 1M tokens) | File size limit |
