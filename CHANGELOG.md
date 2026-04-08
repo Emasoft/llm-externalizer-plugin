@@ -1,6 +1,18 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.24] - 2026-04-08
+
+### Changed
+
+- Update README: 3-model ensemble with pricing, rate limiting, timeout fixes
+
+- Document all 3 ensemble models (Gemini, Grok, Qwen) with pricing
+- Add model fallback behavior (1-2 fail → partial results)
+- Add rate limiting section (adaptive AIMD, auto-detected RPS)
+- Fix timeout: 600s base, extended for reasoning models
+- Remove stale 115s/120s references
+
 ## [3.9.23] - 2026-04-08
 
 ### Changed
