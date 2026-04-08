@@ -11,6 +11,10 @@
 
 A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote models via MCP. Supports local backends (LM Studio, Ollama, vLLM, llama.cpp) and remote backends (OpenRouter) with profile-based configuration and ensemble mode.
 
+### Cost comparison
+
+![Cost comparison: Opus $0.84, Sonnet $0.51, Ensemble $0.08](docs/cost_comparison.png)
+
 ## Features
 
 - **13 MCP tools** — 8 read-only analysis tools + 5 utility tools
@@ -99,10 +103,6 @@ Each group produces its own report: `[group:auth] /path/to/report_group-auth_...
 ### Ensemble mode
 
 On OpenRouter (`remote-ensemble` profile), requests run on **three models in parallel** with results combined in one report. If one or two models fail (removed, rate-limited, timed out), the report includes results from the surviving models — only errors if all three fail.
-
-#### Cost comparison
-
-![Cost comparison: Opus $2.53, Sonnet $0.51, Ensemble $0.08](docs/cost_comparison.png)
 
 **Default ensemble models:**
 
