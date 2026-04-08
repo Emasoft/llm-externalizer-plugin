@@ -4326,9 +4326,7 @@ const KNOWN_MODEL_LIMITS: Record<
 > = {
   "x-ai/grok-4.1-fast": { maxOutput: 30_000, maxInputLines: 20_000 },
   "google/gemini-2.5-flash": { maxOutput: 65_535, maxInputLines: 50_000 },
-  // Qwen 3.6 Plus: declared 1M context but accuracy degrades beyond ~500K tokens.
-  // Conservative limits to avoid hallucination on large inputs.
-  "qwen/qwen3.6-plus:free": { maxOutput: 65_535, maxInputLines: 40_000 },
+  // Qwen 3.6 Plus: 1M context, 65K max output. Free variant deprecated 2026-04.
   "qwen/qwen3.6-plus": { maxOutput: 65_535, maxInputLines: 40_000 },
 };
 const DEFAULT_MODEL_LIMITS = { maxOutput: 32_000, maxInputLines: 30_000 };
