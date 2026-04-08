@@ -1,6 +1,15 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.32] - 2026-04-08
+
+### Changed
+
+- Add percentage column to cost comparison chart
+
+Shows savings vs Opus baseline: Sonnet 60%, Ensemble 8%.
+Badges show -40% and -92% savings. Tightened subtitle to one line.
+
 ## [3.9.31] - 2026-04-08
 
 ### Changed
