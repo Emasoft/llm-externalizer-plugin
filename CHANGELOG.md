@@ -1,6 +1,15 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.23] - 2026-04-08
+
+### Changed
+
+- Remove deprecated qwen3.6-plus:free model variant
+
+The free variant was deprecated by OpenRouter in April 2026.
+Remove from KNOWN_MODEL_LIMITS. Paid qwen/qwen3.6-plus remains.
+
 ## [3.9.22] - 2026-04-07
 
 ### Changed

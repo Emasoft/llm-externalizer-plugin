@@ -31216,9 +31216,7 @@ var DISABLED_TOOLS = /* @__PURE__ */ new Set([
 var KNOWN_MODEL_LIMITS = {
   "x-ai/grok-4.1-fast": { maxOutput: 3e4, maxInputLines: 2e4 },
   "google/gemini-2.5-flash": { maxOutput: 65535, maxInputLines: 5e4 },
-  // Qwen 3.6 Plus: declared 1M context but accuracy degrades beyond ~500K tokens.
-  // Conservative limits to avoid hallucination on large inputs.
-  "qwen/qwen3.6-plus:free": { maxOutput: 65535, maxInputLines: 4e4 },
+  // Qwen 3.6 Plus: 1M context, 65K max output. Free variant deprecated 2026-04.
   "qwen/qwen3.6-plus": { maxOutput: 65535, maxInputLines: 4e4 }
 };
 var DEFAULT_MODEL_LIMITS = { maxOutput: 32e3, maxInputLines: 3e4 };
@@ -31901,7 +31899,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.22" },
+  { name: "llm-externalizer", version: "3.9.23" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {
