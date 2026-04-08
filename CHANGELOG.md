@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.33] - 2026-04-08
+
+### Changed
+
+- Add 'Bug discovery statistics — coming soon' to cost chart
+
 ## [3.9.32] - 2026-04-08
 
 ### Changed
