@@ -1,6 +1,16 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.30] - 2026-04-08
+
+### Changed
+
+- Fix cost chart: correct OpenRouter prices, move to top of README
+
+Opus is $5/$25 on OpenRouter (not $15/$75 Anthropic direct).
+Chart now shows file count, total KB, and actual ensemble cost
+from OpenRouter billing. Moved chart to top of README under description.
+
 ## [3.9.29] - 2026-04-08
 
 ### Changed
