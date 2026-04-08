@@ -1,6 +1,17 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.31] - 2026-04-08
+
+### Changed
+
+- Update cost chart with full 50-file project scan data
+
+Previous chart only covered 8 .ts files. Now includes all 50 files
+(.ts, .md, .py, .json, .yaml, .sh, .toml) — 729 KB, 20K lines.
+Opus $4.26, Sonnet $2.56, Ensemble $0.35 (12x cheaper, actual
+OpenRouter billing).
+
 ## [3.9.30] - 2026-04-08
 
 ### Changed
