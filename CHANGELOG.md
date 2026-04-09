@@ -1,6 +1,19 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.34] - 2026-04-09
+
+### Changed
+
+- Per-file output mode, output_dir, fixed temperature, new defaults
+
+- Default answer_mode changed to 0 (one report per file) for ALL tools
+- Output directory: reports_dev/llm_externalizer/ (was llm_externalizer_output/)
+- New output_dir parameter on all tools for custom output location
+- Temperature fixed to 0.1 for all models (removed user parameter)
+- Report filenames now include source filename for easy identification
+- Updated README, rules, and scan skill docs
+
 ## [3.9.33] - 2026-04-08
 
 ### Changed

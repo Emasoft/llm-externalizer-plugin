@@ -29350,7 +29350,7 @@ Settings file: ${SETTINGS_FILE}`;
 })();
 var DEFAULT_OPENROUTER_RPS = 5;
 var DEFAULT_MAX_IN_FLIGHT_REMOTE = 200;
-var DEFAULT_TEMPERATURE = 0.3;
+var DEFAULT_TEMPERATURE = 0.1;
 var BREVITY_RULES = "\nOUTPUT RULES:\n- Be SUCCINCT. Use bullet points, not paragraphs.\n- Skip preamble, filler, and restating the task.\n- Only report findings, not things that are correct.\n- For code reviews: skip files/areas with no issues \u2014 only mention what needs attention.\n- Maximum 3 sentences per finding. Lead with the problem, not the context.";
 var CONNECT_TIMEOUT_MS = 5e3;
 var SOFT_TIMEOUT_MS = (activeResolved?.timeout ?? 300) * 1e3;
@@ -30237,15 +30237,18 @@ function formatFooter(resp, toolName, filePath) {
     return "\n\n---\n\u26A0 TRUNCATED (partial result due to timeout)";
   return "";
 }
-var OUTPUT_DIR = process.env.LLM_OUTPUT_DIR || join2(process.cwd(), "llm_externalizer_output");
-function saveResponse(toolName, responseText, meta3, overrideFilename) {
-  mkdirSync2(OUTPUT_DIR, { recursive: true });
+var DEFAULT_OUTPUT_DIR = process.env.LLM_OUTPUT_DIR || join2(process.cwd(), "reports_dev", "llm_externalizer");
+var OUTPUT_DIR = DEFAULT_OUTPUT_DIR;
+function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir) {
+  const dir = outputDir || OUTPUT_DIR;
+  mkdirSync2(dir, { recursive: true });
   const now = /* @__PURE__ */ new Date();
   const ts = now.toISOString().replace(/[:.]/g, "-").slice(0, 23);
   const shortId = randomUUID().slice(0, 6);
+  const srcName = meta3.inputFile ? `_${sanitizeFilename(meta3.inputFile).replace(/\.md$/, "")}` : "";
   const groupSuffix = meta3.groupId ? `_group-${meta3.groupId.replace(/[^a-zA-Z0-9_-]/g, "_")}` : "";
-  const filename = overrideFilename || `${toolName}${groupSuffix}_${ts}_${shortId}.md`;
-  const filepath = join2(OUTPUT_DIR, filename);
+  const filename = overrideFilename || `${toolName}${groupSuffix}${srcName}_${ts}_${shortId}.md`;
+  const filepath = join2(dir, filename);
   const lines = [
     "# LLM Externalizer Response",
     "",
@@ -30577,11 +30580,12 @@ function parseFileGroups(paths) {
 function hasNamedGroups(groups) {
   return groups.some((g) => g.id !== "");
 }
-function batchReportFilename(toolName, batchId, filePath, fileIndex) {
+function batchReportFilename(toolName, _batchId, filePath, _fileIndex) {
   const now = /* @__PURE__ */ new Date();
   const ts = now.toISOString().replace(/[:.]/g, "-").slice(0, 23);
-  const shortUuid = batchId.slice(0, 8);
-  return `${toolName}_${shortUuid}_${fileIndex}_${sanitizeFilename(filePath)}_${ts}.md`;
+  const shortId = randomUUID().slice(0, 6);
+  const srcName = sanitizeFilename(filePath).replace(/\.md$/, "");
+  return `${toolName}_${srcName}_${ts}_${shortId}.md`;
 }
 var SERVICE_HEALTH = {
   consecutiveFailures: 0,
@@ -30836,7 +30840,7 @@ ${codeBlock}`
   const resp = await ensembleStreaming(
     messages,
     {
-      temperature: 0.2,
+      temperature: DEFAULT_TEMPERATURE,
       maxTokens: options.maxTokens ?? resolveDefaultMaxTokens(),
       onProgress: options.onProgress
     },
@@ -30931,7 +30935,7 @@ VALIDATION CHECKLIST (verify before returning):
     let usageInfo;
     try {
       const jsonResp = await chatCompletionJSON(fixMessages, {
-        temperature: 0.1,
+        temperature: DEFAULT_TEMPERATURE,
         maxTokens: resolvedMaxTokens,
         jsonSchema: FIX_CODE_SCHEMA,
         onProgress: options.onProgress
@@ -31154,7 +31158,7 @@ function limitsBlock() {
 var answerModeSchema = {
   type: "number",
   enum: [0, 1, 2],
-  description: "Controls output file organization. 0 = one .md file per input file (separate LLM calls, with parallel execution + retry when max_retries > 1). 1 = one .md file per LLM request, with structured per-file sections inside. 2 = one .md file for the entire operation (all batches merged). Default depends on tool: 2 for chat/code_task, 0 for batch_check."
+  description: "Controls output file organization. 0 = one .md file per input file (separate LLM calls, with parallel execution + retry when max_retries > 1). 1 = one .md file per LLM request, with structured per-file sections inside. 2 = one .md file for the entire operation (all batches merged). Default: 0 (one report per file, each containing all ensemble model outputs)."
 };
 var maxRetriesSchema = {
   type: "number",
@@ -31190,6 +31194,10 @@ var folderSchemaProps = {
   max_files: {
     type: "number",
     description: "Maximum number of files to discover from folder_path. Default: 2500."
+  },
+  output_dir: {
+    type: "string",
+    description: "Absolute path to a custom output directory for reports. Default: <project>/reports_dev/llm_externalizer/. Reports are always saved as .md files in this directory."
   }
 };
 var redactRegexSchema = {
@@ -31271,10 +31279,6 @@ function buildTools() {
             type: "string",
             description: 'Persona. Be specific: "Senior TypeScript dev" not "helpful assistant".'
           },
-          temperature: {
-            type: "number",
-            description: "0.1 for factual/code, 0.3 for analysis (default), 0.7 for creative. Stay under 0.5 for code."
-          },
           scan_secrets: {
             type: "boolean",
             description: "Scan input files for secrets (API keys, tokens, passwords) and ABORT if any are found."
@@ -31298,7 +31302,7 @@ function buildTools() {
     // The 'custom_prompt' case in the switch handler still works for backward compatibility.
     {
       name: "code_task",
-      description: "Code analysis with optimised code-review system prompt (temperature=0.2). More capable than Haiku, costs less. Less capable than Sonnet/Opus.\n\nPass input_files_paths (read from disk, language auto-detected). Be specific in instructions.\n\nFILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths to process groups in isolation. Each group produces its own SEPARATE report: [group:id] path. WHY: downstream agents only read their own group's report, saving context tokens.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 always include brief context.\n\nOUTPUT: Saved to .md file, returns only the file path." + limitsBlock(),
+      description: "Code analysis with optimised code-review system prompt. More capable than Haiku, costs less. Less capable than Sonnet/Opus.\n\nPass input_files_paths (read from disk, language auto-detected). Be specific in instructions.\n\nFILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths to process groups in isolation. Each group produces its own SEPARATE report: [group:id] path. WHY: downstream agents only read their own group's report, saving context tokens.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 always include brief context.\n\nOUTPUT: Saved to .md file, returns only the file path." + limitsBlock(),
       inputSchema: {
         type: "object",
         properties: {
@@ -31899,7 +31903,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.33" },
+  { name: "llm-externalizer", version: "3.9.34" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {
@@ -31948,6 +31952,10 @@ Settings file: ${SETTINGS_FILE}`
     }
     const isLLMTool = LLM_TOOLS_SET.has(name);
     if (isLLMTool) trackRequestStart();
+    const requestOutputDir = args?.output_dir;
+    if (typeof requestOutputDir === "string" && requestOutputDir.trim()) {
+      OUTPUT_DIR = requestOutputDir.trim();
+    }
     try {
       switch (name) {
         case "chat": {
@@ -31957,7 +31965,6 @@ Settings file: ${SETTINGS_FILE}`
             input_files_paths: chatInputPathsRaw,
             input_files_content,
             system,
-            temperature,
             answer_mode: rawAnswerMode,
             scan_secrets: chatScan,
             redact_secrets: chatRedact,
@@ -32040,7 +32047,7 @@ Remove secrets before sending to remote LLM.`
             }
           }
           const maxTokens = resolveDefaultMaxTokens();
-          const chatMode = resolveAnswerMode(rawAnswerMode, 2);
+          const chatMode = resolveAnswerMode(rawAnswerMode, 0);
           const chatHasFiles = chatFilePaths.length > 0 || !!input_files_content;
           let promptBase = buildPreInstructions(chatHasFiles, "read") + chatPrompt;
           if (input_files_content) {
@@ -32059,7 +32066,7 @@ ${fence}`;
             messages.push({ role: "user", content: promptBase });
             const resp = await ensembleStreaming(
               messages,
-              { temperature, maxTokens, onProgress },
+              { temperature: DEFAULT_TEMPERATURE, maxTokens, onProgress },
               useEnsemble
             );
             const footer = formatFooter(resp, "chat");
@@ -32152,7 +32159,7 @@ ${fd.block}`;
               messages.push({ role: "user", content: userContent });
               const resp = await ensembleStreaming(
                 messages,
-                { temperature, maxTokens, onProgress },
+                { temperature: DEFAULT_TEMPERATURE, maxTokens, onProgress },
                 useEnsemble
               );
               const footer = formatFooter(resp, "chat", group[0]?.path);
@@ -32235,7 +32242,7 @@ ${resp.content}${footer}`
           } = args;
           const ctUseEnsemble = currentBackend.type === "openrouter";
           const ctBudgetBytes = (ctMaxPayloadKb ?? 400) * 1024;
-          const ctMode = resolveAnswerMode(ctRawMode, 2);
+          const ctMode = resolveAnswerMode(ctRawMode, 0);
           const ctTask = resolvePrompt(ctInstructions, ctInstructionsFilesPaths);
           if (!ctTask.trim()) {
             return {
@@ -32363,7 +32370,7 @@ RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/M
             const codeResp = await ensembleStreaming(
               codeMessages,
               {
-                temperature: 0.2,
+                temperature: DEFAULT_TEMPERATURE,
                 maxTokens: resolveDefaultMaxTokens(),
                 onProgress
               },
@@ -32458,7 +32465,7 @@ RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/M
               ];
               const codeResp = await ensembleStreaming(
                 codeMessages,
-                { temperature: 0.2, maxTokens: resolveDefaultMaxTokens(), onProgress },
+                { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress },
                 ctUseEnsemble
               );
               const codeFooter = formatFooter(codeResp, "code_task", group[0]?.path);
@@ -33662,7 +33669,7 @@ ${content}`
                 isError: true
               };
           }
-          const sfMode = resolveAnswerMode(sfRawMode, 2);
+          const sfMode = resolveAnswerMode(sfRawMode, 0);
           const batchId = randomUUID();
           const sfRl = await getRateLimitConfig();
           const recentOutcomes = [];
@@ -33907,7 +33914,7 @@ Return JSON: {"code": "complete merged file", "summary": "what was merged and ho
                 }
               ];
               const mfResp = await chatCompletionJSON(mfMessages, {
-                temperature: 0.1,
+                temperature: DEFAULT_TEMPERATURE,
                 maxTokens: resolveDefaultMaxTokens(),
                 jsonSchema: FIX_CODE_SCHEMA,
                 onProgress
@@ -34131,7 +34138,7 @@ ${srcFence}`
               }
             ];
             const spResp = await chatCompletionJSON(spMessages, {
-              temperature: 0.1,
+              temperature: DEFAULT_TEMPERATURE,
               maxTokens: resolveDefaultMaxTokens(),
               jsonSchema: SPLIT_FILE_SCHEMA,
               onProgress
@@ -34381,7 +34388,7 @@ ${fence}${sourceBlocks}` }
             ];
             let resp;
             try {
-              resp = await ensembleStreaming(msgs, { temperature: 0.2, maxTokens: resolveDefaultMaxTokens(), onProgress }, cfUseEnsemble);
+              resp = await ensembleStreaming(msgs, { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress }, cfUseEnsemble);
             } catch (err) {
               return { error: `LLM error: ${err instanceof Error ? err.message : String(err)}` };
             }
@@ -34634,7 +34641,7 @@ ${diffFence}` + sourceFileBlocks
           const cfResp = await ensembleStreaming(
             cfMessages,
             {
-              temperature: 0.2,
+              temperature: DEFAULT_TEMPERATURE,
               maxTokens: resolveDefaultMaxTokens(),
               onProgress
             },
@@ -34724,7 +34731,7 @@ ${diffFence}` + sourceFileBlocks
             crInstructions,
             crInstructionsFilesPaths
           );
-          const crMode = resolveAnswerMode(crRawMode, 2);
+          const crMode = resolveAnswerMode(crRawMode, 0);
           const crFileGroups = parseFileGroups(crFilePathsAll);
           const crIsGrouped = hasNamedGroups(crFileGroups);
           if (crIsGrouped) {
@@ -34763,7 +34770,7 @@ ${depBlocks.length > 0 ? `## Local Dependencies (${deps.length} files)
 
 ${depBlocks.join("\n\n")}` : "## No local dependencies resolved."}` }
                 ];
-                const resp = await ensembleStreaming(msgs, { temperature: 0.1, maxTokens: resolveDefaultMaxTokens(), onProgress }, crUseEnsemble, src.split("\n").length);
+                const resp = await ensembleStreaming(msgs, { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress }, crUseEnsemble, src.split("\n").length);
                 const footer = formatFooter(resp, "check_references", filePath);
                 if (resp.content.trim()) {
                   const depInfo = deps.length > 0 ? `
@@ -34833,7 +34840,7 @@ ${depBlocks.join("\n\n")}` : "## No local dependencies resolved \u2014 check for
             const crResp = await ensembleStreaming(
               crMessages,
               {
-                temperature: 0.1,
+                temperature: DEFAULT_TEMPERATURE,
                 maxTokens: resolveDefaultMaxTokens(),
                 onProgress
               },
@@ -34960,7 +34967,7 @@ ${crResp.content}${crFooter}`
             ciInstructions,
             ciInstructionsFilesPaths
           );
-          const ciMode = resolveAnswerMode(ciRawMode, 2);
+          const ciMode = resolveAnswerMode(ciRawMode, 0);
           const ciFileGroups = parseFileGroups(ciFilePathsAll);
           if (hasNamedGroups(ciFileGroups)) {
             const ciGroupReports = [];
@@ -35217,7 +35224,7 @@ FAILED: File not found.`);
           } = args;
           const csUseEnsemble = currentBackend.type === "openrouter";
           const csBudgetBytes = (csMaxPayloadKb ?? 400) * 1024;
-          const csMode = resolveAnswerMode(csRawMode, 2);
+          const csMode = resolveAnswerMode(csRawMode, 0);
           let csRegexRedact = null;
           try {
             csRegexRedact = parseRedactRegex(csRedactRegexRaw);
@@ -35358,6 +35365,7 @@ ${csResp.content}${csFooter}`
       }
     } finally {
       if (isLLMTool) trackRequestEnd();
+      OUTPUT_DIR = DEFAULT_OUTPUT_DIR;
     }
   } catch (error2) {
     const errMsg = error2 instanceof Error ? error2.message : String(error2);
