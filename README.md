@@ -37,7 +37,7 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 | Tool | Purpose |
 |------|---------|
 | `chat` | General-purpose: summarize, compare, translate, generate text. Supports `temperature`, `system` persona. Accepts `folder_path` for directory scanning |
-| `code_task` | Code-optimized analysis with code-review system prompt (temperature=0.2). Supports `language` hint. Accepts `folder_path` for directory scanning |
+| `code_task` | Code-optimized analysis with code-review system prompt. Supports `language` hint. Accepts `folder_path` for directory scanning |
 | `batch_check` | **Deprecated** — use any tool with `answer_mode: 0, max_retries: 3`. Per-file processing with retry |
 | `scan_folder` | Recursively scan a directory, auto-discover files by extension, process each with LLM |
 | `compare_files` | Compare files in 3 modes: pair (2 files), batch (`file_pairs`), or git diff (`git_repo` + refs). LLM summarizes differences |

@@ -34,7 +34,7 @@ Use when you need to analyze files without consuming orchestrator context, scan 
 
 ## Output
 
-All responses saved as `.md` files in `llm_externalizer_output/`. Output depends on `answer_mode`: `0` (per-file), `1` (per-request), `2` (merged, default).
+All responses saved as `.md` files in `reports_dev/llm_externalizer/`. Output depends on `answer_mode`: `0` (per-file, default), `1` (per-request), `2` (merged).
 
 ## Error Handling
 

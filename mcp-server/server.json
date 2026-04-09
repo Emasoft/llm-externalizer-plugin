@@ -97,7 +97,7 @@
         },
         {
           "name": "LLM_OUTPUT_DIR",
-          "description": "Override the output directory for LLM response files (default: ./llm_externalizer_output)",
+          "description": "Override the output directory for LLM response files (default: ./reports_dev/llm_externalizer)",
           "isRequired": false,
           "format": "string"
         }

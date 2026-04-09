@@ -36,12 +36,12 @@ For a directory scan: `scan_folder`.
 
 The tool returns ONLY a file path:
 ```
-/path/to/project/llm_externalizer_output/scan_folder_20260315_143022.md
+/path/to/project/reports_dev/llm_externalizer/scan_folder_20260315_143022.md
 ```
 
 Read the output file:
 ```
-Read /path/to/project/llm_externalizer_output/scan_folder_20260315_143022.md
+Read /path/to/project/reports_dev/llm_externalizer/scan_folder_20260315_143022.md
 ```
 
 ### Step 4: Act on the findings

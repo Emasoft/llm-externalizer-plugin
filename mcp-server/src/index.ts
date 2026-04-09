@@ -5343,7 +5343,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // Per-request output_dir override (reset to default after request)
     const requestOutputDir = (args as Record<string, unknown>)?.output_dir;
     if (typeof requestOutputDir === "string" && requestOutputDir.trim()) {
-      OUTPUT_DIR = requestOutputDir.trim();
+      OUTPUT_DIR = resolve(requestOutputDir.trim()); // resolve to absolute path
     }
 
     try {

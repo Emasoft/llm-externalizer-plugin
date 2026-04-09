@@ -18,7 +18,7 @@
  *
  * Output: file path to the saved report (or tool result text).
  * Exit code: 0 = success, 1 = error.
- * Timeout: 10 minutes (not subject to MCP 115s limit).
+ * Timeout: 10 minutes. Temperature: 0.1 (fixed).
  */
 
 const { join } = require("path");
@@ -36,8 +36,8 @@ const TOOL_CATALOG = {
       folder_path: "Folder to scan recursively (alternative to input_files_paths)",
       extensions: 'File extensions filter, e.g. \'[".ts",".py"]\'',
       system: 'Persona, e.g. "Senior TypeScript dev"',
-      temperature: "0.1=factual, 0.3=analysis (default), 0.7=creative",
-      answer_mode: "0=per-file reports, 1=per-request, 2=merged (default)",
+      answer_mode: "0=per-file reports (default), 1=per-request, 2=merged",
+      output_dir: "Custom output directory for reports",
       max_retries: "Retries per file in mode 0. Set 3 for parallel+retry",
       redact_regex: "JS regex to redact matching strings before sending to LLM",
       scan_secrets: "true to abort if API keys/tokens found in files",
@@ -46,14 +46,15 @@ const TOOL_CATALOG = {
     },
   },
   code_task: {
-    desc: "Code analysis with code-review system prompt (temperature=0.2).",
+    desc: "Code analysis with code-review system prompt.",
     params: {
       instructions: "What to analyze (REQUIRED)",
       input_files_paths: "Source file path(s). String or JSON array",
       folder_path: "Folder to scan recursively",
       extensions: 'File extensions, e.g. \'[".ts"]\'',
       language: "Programming language (auto-detected from extension)",
-      answer_mode: "0=per-file, 1=per-request, 2=merged (default)",
+      answer_mode: "0=per-file (default), 1=per-request, 2=merged",
+      output_dir: "Custom output directory for reports",
       max_retries: "Retries per file in mode 0",
       redact_regex: "JS regex to redact matching strings",
     },
@@ -162,9 +163,9 @@ Tools:`);
   }
   console.log(`
 Output: file path to the saved report (printed to stdout).
-Reports saved to: llm_externalizer_output/ in the current working directory.
+Reports saved to: reports_dev/llm_externalizer/ in the current working directory.
 Paths: absolute paths recommended. Relative paths resolve from cwd.
-Timeout: 10 minutes. Not subject to MCP 115s limit.
+Timeout: 10 minutes. Temperature: 0.1 (fixed, not configurable).
 `);
 }
 

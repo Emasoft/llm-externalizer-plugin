@@ -112,7 +112,7 @@ On OpenRouter with `remote-ensemble` mode, read-only content tools run on both m
 | `LM_API_TOKEN` | LM Studio / generic-local auth token |
 | `VLLM_API_KEY` | vLLM auth token |
 | `LLM_EXT_CONFIG_DIR` | Override settings directory (default: `~/.llm-externalizer`) |
-| `LLM_OUTPUT_DIR` | Override output directory (default: `./llm_externalizer_output`) |
+| `LLM_OUTPUT_DIR` | Override output directory (default: `./reports_dev/llm_externalizer`) |
 
 ## CLI Profile Management
 

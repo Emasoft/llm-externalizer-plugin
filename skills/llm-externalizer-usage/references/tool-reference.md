@@ -57,7 +57,8 @@ Use `instructions_files_paths` to share reusable review rules, coding standards,
 | Parameter | Tools | Values | Notes |
 |-----------|-------|--------|-------|
 | `max_tokens` | All content tools | number | Override max response tokens (default: model max ~65,535). Set lower to save cost or avoid 120s timeout. |
-| `temperature` | `chat` only | 0.1 factual, 0.3 analysis, 0.7 creative | Stay under 0.5 for code tasks. |
+| `temperature` | Fixed | 0.1 | Not configurable. Optimized for factual/code analysis. |
+| `output_dir` | All content tools | string | Custom output directory for reports (default: `reports_dev/llm_externalizer/`). |
 | `system` | `chat` only | string | Persona override. Be specific: `"Senior TypeScript dev"`. |
 | `language` | `code_task` only | string | Programming language hint. Auto-detected from file extension. |
 | `folder_path` | `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs` | string | Absolute path to a folder to scan. Can be combined with `input_files_paths`. |
@@ -104,8 +105,8 @@ Each group produces its own report file — n groups in, n reports out.
 
 Each group produces one report file with the group ID in the filename:
 ```
-[group:auth] /path/to/llm_externalizer_output/chat_group-auth_2026-03-28T...md
-[group:api] /path/to/llm_externalizer_output/chat_group-api_2026-03-28T...md
+[group:auth] /path/to/reports_dev/llm_externalizer/chat_group-auth_2026-03-28T...md
+[group:api] /path/to/reports_dev/llm_externalizer/chat_group-api_2026-03-28T...md
 ```
 
 ### Supported tools
@@ -119,7 +120,7 @@ For `compare_files`, grouping uses `---GROUP:id---` markers as single-element en
 - **120s timeout**: MCP spec hard limit per call. Long outputs may truncate.
 - **No project context**: The remote LLM knows NOTHING about your project. ALWAYS include brief context in instructions.
 - **File paths only**: ALWAYS pass file paths in `input_files_paths`, NEVER paste contents into `instructions`.
-- **Output location**: All responses saved to `llm_externalizer_output/`. Tool returns ONLY the file path — never inline content.
+- **Output location**: All responses saved to `reports_dev/llm_externalizer/`. Tool returns ONLY the file path — never inline content.
 - **Auto-batching**: If input files exceed context window, they are automatically split into batches.
 - **Rate limiting**: Adaptive RPS auto-detected from OpenRouter balance ($1 ≈ 1 RPS, max 500). Self-adjusts on 429 errors. Up to 200 in-flight. Local = sequential.
 

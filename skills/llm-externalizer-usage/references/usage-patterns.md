@@ -180,8 +180,7 @@ Compare files between two git refs (commits, tags, branches):
   "tool": "chat",
   "instructions": "Review this Python CLI script for error handling gaps.",
   "input_files_paths": "/path/to/cli.py",
-  "system": "Senior Python CLI developer",
-  "temperature": 0.2
+  "system": "Senior Python CLI developer"
 }
 ```
 
@@ -287,8 +286,8 @@ Alphanumeric matches become `[REDACTED:USER_PATTERN]`, numeric-only matches beco
 
 Returns one report per group:
 ```
-[group:auth] /path/to/llm_externalizer_output/code_task_group-auth_...md
-[group:api] /path/to/llm_externalizer_output/code_task_group-api_...md
+[group:auth] /path/to/reports_dev/llm_externalizer/code_task_group-auth_...md
+[group:api] /path/to/reports_dev/llm_externalizer/code_task_group-api_...md
 ```
 
 ## Code-optimized analysis
