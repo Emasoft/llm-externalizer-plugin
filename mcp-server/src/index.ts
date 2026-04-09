@@ -2956,9 +2956,8 @@ function formatFooter(
 // The output dir defaults to process.cwd()/reports_dev/llm_externalizer but can be
 // overridden with LLM_OUTPUT_DIR env var or per-tool output_dir parameter.
 
-const DEFAULT_OUTPUT_DIR =
+const OUTPUT_DIR =
   process.env.LLM_OUTPUT_DIR || join(process.cwd(), "reports_dev", "llm_externalizer");
-let OUTPUT_DIR = DEFAULT_OUTPUT_DIR;
 
 function saveResponse(
   toolName: string,
@@ -3251,6 +3250,7 @@ interface RobustPerFileOpts {
   toolName: string;
   batchId?: string;
   modelOverride?: string;
+  outputDir?: string;
 }
 
 interface RobustPerFileResult {
@@ -3300,6 +3300,7 @@ async function robustPerFileProcess(
           ensemble: opts.ensemble,
           maxBytes: opts.budgetBytes,
           modelOverride: opts.modelOverride,
+          outputDir: opts.outputDir,
         });
         recentOutcomes.push(result.success);
         if (result.success && adaptiveRateLimiter) adaptiveRateLimiter.onSuccess();
@@ -3823,6 +3824,7 @@ interface ProcessOptions {
   ensemble?: boolean; // run on multiple models and combine results (default true)
   maxBytes?: number; // max file size in bytes (default: DEFAULT_MAX_PAYLOAD_BYTES)
   modelOverride?: string; // skip ensemble, use this specific model (e.g. free mode)
+  outputDir?: string; // custom output directory for reports
 }
 
 async function processFileCheck(
@@ -3895,6 +3897,7 @@ async function processFileCheck(
     resp.content + footer,
     { model: resp.model, task, inputFile: filePath },
     filename,
+    options.outputDir,
   );
 
   return { filePath, success: true, reportPath };
@@ -5363,13 +5366,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const isLLMTool = LLM_TOOLS_SET.has(name);
     if (isLLMTool) trackRequestStart();
 
-    // Per-request output_dir override (reset to default after request)
-    const requestOutputDir = (args as Record<string, unknown>)?.output_dir;
-    if (typeof requestOutputDir === "string" && requestOutputDir.trim()) {
-      OUTPUT_DIR = resolve(requestOutputDir.trim()); // resolve to absolute path
-    }
-
-    // Free mode: resolve model override (passed through function chain, no global mutation)
+    // Per-request overrides — passed through function chain, no global mutation
+    const rawOutputDir = (args as Record<string, unknown>)?.output_dir;
+    const outputDir = typeof rawOutputDir === "string" && rawOutputDir.trim()
+      ? resolve(rawOutputDir.trim())
+      : undefined;
     const modelOverride = (args as Record<string, unknown>)?.free === true ? FREE_MODEL_ID : undefined;
     if (modelOverride) {
       process.stderr.write(`[llm-externalizer] Free mode: using ${modelOverride}\n`);
@@ -5555,7 +5556,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 redact: chatRedact, regexRedact: chatRegexRedact,
                 onProgress, ensemble: useEnsemble,
                 budgetBytes: chatBudgetBytes, toolName: "chat",
-                modelOverride,
+                modelOverride, outputDir,
               });
               const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
               if (rpResult.failed.length > 0) lines.push("", "FAILED:", ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
@@ -5572,7 +5573,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 onProgress,
                 ensemble: useEnsemble,
                 maxBytes: chatBudgetBytes,
-                modelOverride,
+                modelOverride, outputDir,
               });
               perFileResults.push(
                 result.success && result.reportPath
@@ -5908,7 +5909,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 redact: ctRedact, regexRedact: ctRegexRedact,
                 onProgress, ensemble: ctUseEnsemble,
                 budgetBytes: ctBudgetBytes, toolName: "code_task",
-                modelOverride,
+                modelOverride, outputDir,
               });
               const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
               if (rpResult.failed.length > 0) lines.push("", "FAILED:", ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
@@ -5926,7 +5927,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 onProgress,
                 ensemble: ctUseEnsemble,
                 maxBytes: ctBudgetBytes,
-                modelOverride,
+                modelOverride, outputDir,
               });
               perFileResults.push(
                 result.success && result.reportPath
@@ -6703,7 +6704,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               return processFileCheck(filePath, gTask, {
                 maxTokens: resolveDefaultMaxTokens(),
                 batchId: gBatchId, fileIndex: idx,
-                redact: bcRedact, regexRedact: bcRegexRedact, onProgress, ensemble: bcUseEnsemble, maxBytes: bcBudgetBytes, modelOverride,
+                redact: bcRedact, regexRedact: bcRegexRedact, onProgress, ensemble: bcUseEnsemble, maxBytes: bcBudgetBytes, modelOverride, outputDir,
               });
             });
             const gAll = await rateLimitedParallel(gTasks, gRl.rps, gRl.maxInFlight, onProgress);
@@ -6790,7 +6791,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 onProgress,
                 ensemble: bcUseEnsemble,
                 maxBytes: bcBudgetBytes,
-                modelOverride,
+                modelOverride, outputDir,
               });
               recentOutcomes.push(result.success);
               // Report per-file batch progress
@@ -7451,7 +7452,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 onProgress,
                 ensemble: sfUseEnsemble,
                 maxBytes: sfBudgetBytes,
-                modelOverride,
+                modelOverride, outputDir,
               });
               recentOutcomes.push(result.success);
               // Report per-file batch progress
@@ -9336,8 +9337,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     } finally {
       // Release active request tracker so `reset` can proceed when all LLM calls finish
       if (isLLMTool) trackRequestEnd();
-      // Reset output dir to default after each request
-      OUTPUT_DIR = DEFAULT_OUTPUT_DIR;
     }
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
