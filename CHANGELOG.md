@@ -1,6 +1,18 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.44] - 2026-04-09
+
+### Changed
+
+- Improve /free-scan: accept free-form prompt with path, extensions, instructions
+
+Parse prompt for folder path, file extensions, exclude dirs,
+and LLM instructions. Examples:
+  /free-scan find security issues
+  /free-scan /path/to/src .ts .py find dead code
+  /free-scan skip tests find TODO comments
+
 ## [3.9.43] - 2026-04-09
 
 ### Changed
