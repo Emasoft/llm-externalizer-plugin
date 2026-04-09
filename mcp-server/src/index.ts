@@ -3690,12 +3690,13 @@ async function ensembleStreaming(
   ensemble: boolean,
   fileLineCount?: number,
 ): Promise<StreamingResult> {
-  // Single-model path: ensemble off, not remote-ensemble mode, or no models configured
+  // Single-model path: ensemble off, free mode, not remote-ensemble, or no models configured
   const ensembleModels = getEnsembleModels();
   if (
     !ensemble ||
     currentBackend.type !== "openrouter" ||
-    ensembleModels.length === 0
+    ensembleModels.length === 0 ||
+    currentBackend.model === FREE_MODEL_ID
   ) {
     return chatCompletionWithRetry(messages, options);
   }
@@ -4299,6 +4300,13 @@ const folderSchemaProps = {
       "Default: <project>/reports_dev/llm_externalizer/. " +
       "Reports are always saved as .md files in this directory.",
   },
+  free: {
+    type: "boolean" as const,
+    description:
+      "Use the free Nemotron 3 Super model (nvidia/nemotron-3-super-120b-a12b:free) " +
+      "instead of the ensemble. No cost, single model, 262K context. " +
+      "WARNING: prompts are logged by the provider — do not use with sensitive code.",
+  },
 };
 
 const redactRegexSchema = {
@@ -4339,8 +4347,15 @@ const KNOWN_MODEL_LIMITS: Record<
   "google/gemini-2.5-flash": { maxOutput: 65_535, maxInputLines: 50_000 },
   // Qwen 3.6 Plus: 1M context, 65K max output. Free variant deprecated 2026-04.
   "qwen/qwen3.6-plus": { maxOutput: 65_535, maxInputLines: 40_000 },
+  // Nemotron 3 Super: 262K context, 262K max output, free on OpenRouter.
+  // Conservative limits: 40K lines input, 65K output (avoid quality degradation on long contexts).
+  "nvidia/nemotron-3-super-120b-a12b:free": { maxOutput: 65_535, maxInputLines: 40_000 },
 };
 const DEFAULT_MODEL_LIMITS = { maxOutput: 32_000, maxInputLines: 30_000 };
+
+// Free mode model — used when `free: true` parameter is set on any tool.
+// Single model, no ensemble, no cost. Prompts are logged by provider.
+const FREE_MODEL_ID = "nvidia/nemotron-3-super-120b-a12b:free";
 
 /** Build the display label for ensemble model name */
 function ensembleModelLabel(useEnsemble: boolean): string {
@@ -5344,6 +5359,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const requestOutputDir = (args as Record<string, unknown>)?.output_dir;
     if (typeof requestOutputDir === "string" && requestOutputDir.trim()) {
       OUTPUT_DIR = resolve(requestOutputDir.trim()); // resolve to absolute path
+    }
+
+    // Free mode: use the free Nemotron model, skip ensemble
+    const freeMode = (args as Record<string, unknown>)?.free === true;
+    const savedBackend = freeMode ? { ...currentBackend } : null;
+    if (freeMode) {
+      currentBackend = { ...currentBackend, model: FREE_MODEL_ID };
+      process.stderr.write(`[llm-externalizer] Free mode: using ${FREE_MODEL_ID}\n`);
     }
 
     try {
@@ -9299,6 +9322,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (isLLMTool) trackRequestEnd();
       // Reset output dir to default after each request
       OUTPUT_DIR = DEFAULT_OUTPUT_DIR;
+      // Restore backend model after free mode
+      if (savedBackend) currentBackend = savedBackend;
     }
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);

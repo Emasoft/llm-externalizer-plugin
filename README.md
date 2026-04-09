@@ -140,8 +140,22 @@ On OpenRouter (`remote-ensemble` profile), requests run on **three models in par
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `ensemble` | `true` (on OpenRouter) | Set `false` for simple tasks to save tokens |
+| `free` | `false` | Use the free Nemotron 3 Super model instead of ensemble. No cost, single model, 262K context. **WARNING**: prompts are logged by the provider — do not use with sensitive/proprietary code |
 | `max_tokens` | model maximum (65,535) | Auto-managed, not user-configurable |
 | `temperature` | 0.1 (fixed) | Optimized for factual/code analysis. Not user-configurable |
+
+### Free mode
+
+Set `free: true` on any tool to use **NVIDIA Nemotron 3 Super** (`nvidia/nemotron-3-super-120b-a12b:free`) — a 120B-parameter MoE model (12B active) available for free on OpenRouter.
+
+| | Ensemble | Free mode |
+|---|---|---|
+| **Cost** | ~$0.35 per full scan | **$0** |
+| **Models** | 3 (Gemini + Grok + Qwen) | 1 (Nemotron 3 Super) |
+| **Context** | 1M tokens (Gemini) | 262K tokens |
+| **Quality** | 3 independent reviews | Single review |
+| **Privacy** | Standard OpenRouter terms | **Prompts are logged** by provider |
+| **Use case** | Production code, thorough audit | Quick checks, open-source code, cost-sensitive |
 
 ### Rate limiting
 
