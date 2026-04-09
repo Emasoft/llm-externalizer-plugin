@@ -30457,7 +30457,8 @@ async function robustPerFileProcess(files, opts) {
           regexRedact: opts.regexRedact,
           onProgress: opts.onProgress,
           ensemble: opts.ensemble,
-          maxBytes: opts.budgetBytes
+          maxBytes: opts.budgetBytes,
+          modelOverride: opts.modelOverride
         });
         recentOutcomes.push(result.success);
         if (result.success && adaptiveRateLimiter) adaptiveRateLimiter.onSuccess();
@@ -30715,8 +30716,11 @@ async function chatCompletionWithRetry(messages, options) {
   throw new Error("Unreachable: retry loop exited without returning");
 }
 async function ensembleStreaming(messages, options, ensemble, fileLineCount) {
+  if (options.modelOverride) {
+    return chatCompletionWithRetry(messages, { ...options, model: options.modelOverride });
+  }
   const ensembleModels = getEnsembleModels();
-  if (!ensemble || currentBackend.type !== "openrouter" || ensembleModels.length === 0 || currentBackend.model === FREE_MODEL_ID) {
+  if (!ensemble || currentBackend.type !== "openrouter" || ensembleModels.length === 0) {
     return chatCompletionWithRetry(messages, options);
   }
   const models = ensembleModels.filter(
@@ -30842,7 +30846,8 @@ ${codeBlock}`
     {
       temperature: DEFAULT_TEMPERATURE,
       maxTokens: options.maxTokens ?? resolveDefaultMaxTokens(),
-      onProgress: options.onProgress
+      onProgress: options.onProgress,
+      modelOverride: options.modelOverride
     },
     useEnsemble,
     fileLineCount
@@ -31911,7 +31916,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.38" },
+  { name: "llm-externalizer", version: "3.9.39" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {
@@ -31964,11 +31969,9 @@ Settings file: ${SETTINGS_FILE}`
     if (typeof requestOutputDir === "string" && requestOutputDir.trim()) {
       OUTPUT_DIR = resolve2(requestOutputDir.trim());
     }
-    const freeMode = args?.free === true;
-    const savedBackend = freeMode ? { ...currentBackend } : null;
-    if (freeMode) {
-      currentBackend = { ...currentBackend, model: FREE_MODEL_ID };
-      process.stderr.write(`[llm-externalizer] Free mode: using ${FREE_MODEL_ID}
+    const modelOverride = args?.free === true ? FREE_MODEL_ID : void 0;
+    if (modelOverride) {
+      process.stderr.write(`[llm-externalizer] Free mode: using ${modelOverride}
 `);
     }
     try {
@@ -32081,7 +32084,7 @@ ${fence}`;
             messages.push({ role: "user", content: promptBase });
             const resp = await ensembleStreaming(
               messages,
-              { temperature: DEFAULT_TEMPERATURE, maxTokens, onProgress },
+              { temperature: DEFAULT_TEMPERATURE, maxTokens, onProgress, modelOverride },
               useEnsemble
             );
             const footer = formatFooter(resp, "chat");
@@ -32117,7 +32120,8 @@ ${fence}`;
                   onProgress,
                   ensemble: useEnsemble,
                   budgetBytes: chatBudgetBytes,
-                  toolName: "chat"
+                  toolName: "chat",
+                  modelOverride
                 });
                 const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
                 if (rpResult.failed.length > 0) lines.push("", "FAILED:", ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
@@ -32132,7 +32136,8 @@ ${fence}`;
                   regexRedact: chatRegexRedact,
                   onProgress,
                   ensemble: useEnsemble,
-                  maxBytes: chatBudgetBytes
+                  maxBytes: chatBudgetBytes,
+                  modelOverride
                 });
                 perFileResults.push(
                   result.success && result.reportPath ? result.reportPath : `FAILED: ${fp} \u2014 ${result.error}`
@@ -32174,7 +32179,7 @@ ${fd.block}`;
               messages.push({ role: "user", content: userContent });
               const resp = await ensembleStreaming(
                 messages,
-                { temperature: DEFAULT_TEMPERATURE, maxTokens, onProgress },
+                { temperature: DEFAULT_TEMPERATURE, maxTokens, onProgress, modelOverride },
                 useEnsemble
               );
               const footer = formatFooter(resp, "chat", group[0]?.path);
@@ -32328,7 +32333,8 @@ Remove secrets before sending to remote LLM.`
               regexRedact: ctRegexRedact,
               onProgress,
               ensemble: ctUseEnsemble,
-              maxBytes: ctBudgetBytes
+              maxBytes: ctBudgetBytes,
+              modelOverride
             });
             if (!result.success) {
               return {
@@ -32387,7 +32393,8 @@ RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/M
               {
                 temperature: DEFAULT_TEMPERATURE,
                 maxTokens: resolveDefaultMaxTokens(),
-                onProgress
+                onProgress,
+                modelOverride
               },
               ctUseEnsemble
             );
@@ -32426,7 +32433,8 @@ RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/M
                   onProgress,
                   ensemble: ctUseEnsemble,
                   budgetBytes: ctBudgetBytes,
-                  toolName: "code_task"
+                  toolName: "code_task",
+                  modelOverride
                 });
                 const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
                 if (rpResult.failed.length > 0) lines.push("", "FAILED:", ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
@@ -32442,7 +32450,8 @@ RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/M
                   regexRedact: ctRegexRedact,
                   onProgress,
                   ensemble: ctUseEnsemble,
-                  maxBytes: ctBudgetBytes
+                  maxBytes: ctBudgetBytes,
+                  modelOverride
                 });
                 perFileResults.push(
                   result.success && result.reportPath ? result.reportPath : `FAILED: ${fp} \u2014 ${result.error}`
@@ -32480,7 +32489,7 @@ RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/M
               ];
               const codeResp = await ensembleStreaming(
                 codeMessages,
-                { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress },
+                { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride },
                 ctUseEnsemble
               );
               const codeFooter = formatFooter(codeResp, "code_task", group[0]?.path);
@@ -33108,7 +33117,8 @@ Settings saved to ${SETTINGS_FILE}`
                   regexRedact: bcRegexRedact,
                   onProgress,
                   ensemble: bcUseEnsemble,
-                  maxBytes: bcBudgetBytes
+                  maxBytes: bcBudgetBytes,
+                  modelOverride
                 });
               });
               const gAll = await rateLimitedParallel(gTasks, gRl.rps, gRl.maxInFlight, onProgress);
@@ -33184,7 +33194,8 @@ ${gFailed.map((r) => `- ${r.filePath}: ${r.error}`).join("\n")}`);
                   regexRedact: bcRegexRedact,
                   onProgress,
                   ensemble: bcUseEnsemble,
-                  maxBytes: bcBudgetBytes
+                  maxBytes: bcBudgetBytes,
+                  modelOverride
                 });
                 recentOutcomes.push(result.success);
                 if (onProgress) {
@@ -33713,7 +33724,8 @@ ${content}`
                   regexRedact: sfRegexRedact,
                   onProgress,
                   ensemble: sfUseEnsemble,
-                  maxBytes: sfBudgetBytes
+                  maxBytes: sfBudgetBytes,
+                  modelOverride
                 });
                 recentOutcomes.push(result.success);
                 if (onProgress) {
@@ -34403,7 +34415,7 @@ ${fence}${sourceBlocks}` }
             ];
             let resp;
             try {
-              resp = await ensembleStreaming(msgs, { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress }, cfUseEnsemble);
+              resp = await ensembleStreaming(msgs, { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride }, cfUseEnsemble);
             } catch (err) {
               return { error: `LLM error: ${err instanceof Error ? err.message : String(err)}` };
             }
@@ -34658,7 +34670,8 @@ ${diffFence}` + sourceFileBlocks
             {
               temperature: DEFAULT_TEMPERATURE,
               maxTokens: resolveDefaultMaxTokens(),
-              onProgress
+              onProgress,
+              modelOverride
             },
             cfUseEnsemble
           );
@@ -34785,7 +34798,7 @@ ${depBlocks.length > 0 ? `## Local Dependencies (${deps.length} files)
 
 ${depBlocks.join("\n\n")}` : "## No local dependencies resolved."}` }
                 ];
-                const resp = await ensembleStreaming(msgs, { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress }, crUseEnsemble, src.split("\n").length);
+                const resp = await ensembleStreaming(msgs, { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride }, crUseEnsemble, src.split("\n").length);
                 const footer = formatFooter(resp, "check_references", filePath);
                 if (resp.content.trim()) {
                   const depInfo = deps.length > 0 ? `
@@ -34857,7 +34870,8 @@ ${depBlocks.join("\n\n")}` : "## No local dependencies resolved \u2014 check for
               {
                 temperature: DEFAULT_TEMPERATURE,
                 maxTokens: resolveDefaultMaxTokens(),
-                onProgress
+                onProgress,
+                modelOverride
               },
               crUseEnsemble,
               crLineCount
@@ -35333,7 +35347,7 @@ ${fd.block}`;
               ];
               const csResp = await ensembleStreaming(
                 csMessages,
-                { maxTokens: resolveDefaultMaxTokens(), onProgress },
+                { maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride },
                 csUseEnsemble
               );
               const csFooter = formatFooter(csResp, "check_against_specs", group[0]?.path);
@@ -35381,7 +35395,6 @@ ${csResp.content}${csFooter}`
     } finally {
       if (isLLMTool) trackRequestEnd();
       OUTPUT_DIR = DEFAULT_OUTPUT_DIR;
-      if (savedBackend) currentBackend = savedBackend;
     }
   } catch (error2) {
     const errMsg = error2 instanceof Error ? error2.message : String(error2);

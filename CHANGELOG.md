@@ -1,6 +1,18 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.39] - 2026-04-09
+
+### Changed
+
+- Refactor free mode: pass modelOverride through chain, no global state
+
+Replace save/restore currentBackend pattern with clean parameter
+passing. modelOverride flows through:
+  handler → processFileCheck/robustPerFileProcess → ensembleStreaming
+ensembleStreaming checks modelOverride first, skips ensemble if set.
+No global state mutation for free mode.
+
 ## [3.9.38] - 2026-04-09
 
 ### Changed
