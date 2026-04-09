@@ -1,6 +1,20 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.35] - 2026-04-09
+
+### Changed
+
+- Fix stale references across all files after v3.9.34 changes
+
+- Fix llm_externalizer_output → reports_dev/llm_externalizer in:
+  server.json, bin/llm-ext, all skill reference files, examples
+- Fix temperature references: remove 0.2/0.3, note fixed at 0.1
+- Fix answer_mode defaults in CLI wrapper (0=default, not 2)
+- Add output_dir to CLI wrapper tool catalog
+- Resolve output_dir to absolute path in tool handler
+- Sync scan skill reference copies from usage skill
+
 ## [3.9.34] - 2026-04-09
 
 ### Changed
