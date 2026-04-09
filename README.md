@@ -36,7 +36,7 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 
 | Tool | Purpose |
 |------|---------|
-| `chat` | General-purpose: summarize, compare, translate, generate text. Supports `temperature`, `system` persona. Accepts `folder_path` for directory scanning |
+| `chat` | General-purpose: summarize, compare, translate, generate text. Supports `system` persona. Accepts `folder_path` for directory scanning |
 | `code_task` | Code-optimized analysis with code-review system prompt. Supports `language` hint. Accepts `folder_path` for directory scanning |
 | `batch_check` | **Deprecated** — use any tool with `answer_mode: 0, max_retries: 3`. Per-file processing with retry |
 | `scan_folder` | Recursively scan a directory, auto-discover files by extension, process each with LLM |
@@ -76,6 +76,8 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 | `redact_secrets` | false | Replace detected secrets with `[REDACTED:LABEL]` |
 | `max_payload_kb` | 400 | Max payload per batch in KB |
 | `folder_path` | (none) | Absolute path to a folder to scan. Can be combined with `input_files_paths`. Available on `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs` |
+| `extensions` | (all) | File extensions filter when using `folder_path`, e.g. `[".ts", ".py"]`. Omit to scan all non-binary files |
+| `exclude_dirs` | (none) | Additional directory names to skip beyond defaults (`node_modules`, `.git`, `dist`, `build`, `.venv`, `.idea`, `tmp`, `vendor`, etc.) |
 | `recursive` | true | Recurse into subdirectories when scanning `folder_path` |
 | `follow_symlinks` | true | Follow symbolic links (circular symlinks auto-detected and skipped) |
 | `max_files` | 2500 | Maximum number of files to discover from `folder_path` |
