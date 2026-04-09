@@ -1,6 +1,17 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.40] - 2026-04-09
+
+### Changed
+
+- Make OUTPUT_DIR a constant, thread outputDir through function chain
+
+No global state mutation. OUTPUT_DIR is now const. Per-request
+output_dir override is passed through ProcessOptions/RobustPerFileOpts
+to saveResponse, same pattern as modelOverride. Each Claude Code
+instance uses its own cwd for the default output path.
+
 ## [3.9.39] - 2026-04-09
 
 ### Changed

@@ -30237,8 +30237,7 @@ function formatFooter(resp, toolName, filePath) {
     return "\n\n---\n\u26A0 TRUNCATED (partial result due to timeout)";
   return "";
 }
-var DEFAULT_OUTPUT_DIR = process.env.LLM_OUTPUT_DIR || join2(process.cwd(), "reports_dev", "llm_externalizer");
-var OUTPUT_DIR = DEFAULT_OUTPUT_DIR;
+var OUTPUT_DIR = process.env.LLM_OUTPUT_DIR || join2(process.cwd(), "reports_dev", "llm_externalizer");
 function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir) {
   const dir = outputDir || OUTPUT_DIR;
   mkdirSync2(dir, { recursive: true });
@@ -30458,7 +30457,8 @@ async function robustPerFileProcess(files, opts) {
           onProgress: opts.onProgress,
           ensemble: opts.ensemble,
           maxBytes: opts.budgetBytes,
-          modelOverride: opts.modelOverride
+          modelOverride: opts.modelOverride,
+          outputDir: opts.outputDir
         });
         recentOutcomes.push(result.success);
         if (result.success && adaptiveRateLimiter) adaptiveRateLimiter.onSuccess();
@@ -30866,7 +30866,8 @@ ${codeBlock}`
     "code_task",
     resp.content + footer,
     { model: resp.model, task, inputFile: filePath },
-    filename
+    filename,
+    options.outputDir
   );
   return { filePath, success: true, reportPath };
 }
@@ -31916,7 +31917,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.39" },
+  { name: "llm-externalizer", version: "3.9.40" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {
@@ -31965,10 +31966,8 @@ Settings file: ${SETTINGS_FILE}`
     }
     const isLLMTool = LLM_TOOLS_SET.has(name);
     if (isLLMTool) trackRequestStart();
-    const requestOutputDir = args?.output_dir;
-    if (typeof requestOutputDir === "string" && requestOutputDir.trim()) {
-      OUTPUT_DIR = resolve2(requestOutputDir.trim());
-    }
+    const rawOutputDir = args?.output_dir;
+    const outputDir = typeof rawOutputDir === "string" && rawOutputDir.trim() ? resolve2(rawOutputDir.trim()) : void 0;
     const modelOverride = args?.free === true ? FREE_MODEL_ID : void 0;
     if (modelOverride) {
       process.stderr.write(`[llm-externalizer] Free mode: using ${modelOverride}
@@ -32121,7 +32120,8 @@ ${fence}`;
                   ensemble: useEnsemble,
                   budgetBytes: chatBudgetBytes,
                   toolName: "chat",
-                  modelOverride
+                  modelOverride,
+                  outputDir
                 });
                 const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
                 if (rpResult.failed.length > 0) lines.push("", "FAILED:", ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
@@ -32137,7 +32137,8 @@ ${fence}`;
                   onProgress,
                   ensemble: useEnsemble,
                   maxBytes: chatBudgetBytes,
-                  modelOverride
+                  modelOverride,
+                  outputDir
                 });
                 perFileResults.push(
                   result.success && result.reportPath ? result.reportPath : `FAILED: ${fp} \u2014 ${result.error}`
@@ -32434,7 +32435,8 @@ RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/M
                   ensemble: ctUseEnsemble,
                   budgetBytes: ctBudgetBytes,
                   toolName: "code_task",
-                  modelOverride
+                  modelOverride,
+                  outputDir
                 });
                 const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
                 if (rpResult.failed.length > 0) lines.push("", "FAILED:", ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
@@ -32451,7 +32453,8 @@ RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/M
                   onProgress,
                   ensemble: ctUseEnsemble,
                   maxBytes: ctBudgetBytes,
-                  modelOverride
+                  modelOverride,
+                  outputDir
                 });
                 perFileResults.push(
                   result.success && result.reportPath ? result.reportPath : `FAILED: ${fp} \u2014 ${result.error}`
@@ -33118,7 +33121,8 @@ Settings saved to ${SETTINGS_FILE}`
                   onProgress,
                   ensemble: bcUseEnsemble,
                   maxBytes: bcBudgetBytes,
-                  modelOverride
+                  modelOverride,
+                  outputDir
                 });
               });
               const gAll = await rateLimitedParallel(gTasks, gRl.rps, gRl.maxInFlight, onProgress);
@@ -33195,7 +33199,8 @@ ${gFailed.map((r) => `- ${r.filePath}: ${r.error}`).join("\n")}`);
                   onProgress,
                   ensemble: bcUseEnsemble,
                   maxBytes: bcBudgetBytes,
-                  modelOverride
+                  modelOverride,
+                  outputDir
                 });
                 recentOutcomes.push(result.success);
                 if (onProgress) {
@@ -33725,7 +33730,8 @@ ${content}`
                   onProgress,
                   ensemble: sfUseEnsemble,
                   maxBytes: sfBudgetBytes,
-                  modelOverride
+                  modelOverride,
+                  outputDir
                 });
                 recentOutcomes.push(result.success);
                 if (onProgress) {
@@ -35394,7 +35400,6 @@ ${csResp.content}${csFooter}`
       }
     } finally {
       if (isLLMTool) trackRequestEnd();
-      OUTPUT_DIR = DEFAULT_OUTPUT_DIR;
     }
   } catch (error2) {
     const errMsg = error2 instanceof Error ? error2.message : String(error2);
