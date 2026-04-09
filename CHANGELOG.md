@@ -1,6 +1,17 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.45] - 2026-04-09
+
+### Changed
+
+- Convert /free-scan command to llm-externalizer-free-scan skill
+
+Skill triggers on "free scan", "scan for free", "cheap scan", etc.
+Parses free-form prompt for path, extensions, exclude dirs, instructions.
+Includes quality warning and reference files.
+Removes the old command (superseded by skill).
+
 ## [3.9.44] - 2026-04-09
 
 ### Changed

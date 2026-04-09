@@ -31917,7 +31917,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.44" },
+  { name: "llm-externalizer", version: "3.9.45" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {
