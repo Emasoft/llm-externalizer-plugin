@@ -153,9 +153,9 @@ Set `free: true` on any tool to use **NVIDIA Nemotron 3 Super** (`nvidia/nemotro
 | **Cost** | ~$0.35 per full scan | **$0** |
 | **Models** | 3 (Gemini + Grok + Qwen) | 1 (Nemotron 3 Super) |
 | **Context** | 1M tokens (Gemini) | 262K tokens |
-| **Quality** | 3 independent reviews | Single review |
+| **Quality** | 3 independent reviews, high accuracy | **Low** — single weak model, more false positives, shallow analysis |
 | **Privacy** | Standard OpenRouter terms | **Prompts are logged** by provider |
-| **Use case** | Production code, thorough audit | Quick checks, open-source code, cost-sensitive |
+| **Use case** | Production code, thorough audit | Quick rough checks on non-critical/open-source code |
 
 ### Rate limiting
 

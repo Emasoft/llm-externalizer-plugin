@@ -4316,7 +4316,8 @@ const folderSchemaProps = {
     description:
       "Use the free Nemotron 3 Super model (nvidia/nemotron-3-super-120b-a12b:free) " +
       "instead of the ensemble. No cost, single model, 262K context. " +
-      "WARNING: prompts are logged by the provider — do not use with sensitive code.",
+      "LOW QUALITY: significantly lower intelligence than ensemble — more false positives, missed bugs, shallow analysis. " +
+      "WARNING: prompts are logged by the provider — do not use with sensitive/proprietary code.",
   },
 };
 
