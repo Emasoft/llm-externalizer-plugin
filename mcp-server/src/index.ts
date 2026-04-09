@@ -5285,7 +5285,7 @@ function buildTools() {
 // ── MCP Server ───────────────────────────────────────────────────────
 
 const server = new Server(
-  { name: "llm-externalizer", version: "3.9.37" },
+  { name: "llm-externalizer", version: "3.9.38" },
   { capabilities: { tools: { listChanged: true } } },
 );
 

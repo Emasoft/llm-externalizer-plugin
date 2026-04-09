@@ -1,6 +1,20 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.38] - 2026-04-09
+
+### Changed
+
+- Add free mode: nvidia/nemotron-3-super-120b-a12b:free
+
+New 'free' parameter on all tools. When true:
+- Uses NVIDIA Nemotron 3 Super (120B MoE, 12B active, 262K context)
+- Skips ensemble (single model only)
+- Zero cost on OpenRouter
+- WARNING: prompts logged by provider (not for sensitive code)
+
+Added to KNOWN_MODEL_LIMITS, tool schemas, README with comparison table.
+
 ## [3.9.37] - 2026-04-09
 
 ### Changed

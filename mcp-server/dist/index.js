@@ -30716,7 +30716,7 @@ async function chatCompletionWithRetry(messages, options) {
 }
 async function ensembleStreaming(messages, options, ensemble, fileLineCount) {
   const ensembleModels = getEnsembleModels();
-  if (!ensemble || currentBackend.type !== "openrouter" || ensembleModels.length === 0) {
+  if (!ensemble || currentBackend.type !== "openrouter" || ensembleModels.length === 0 || currentBackend.model === FREE_MODEL_ID) {
     return chatCompletionWithRetry(messages, options);
   }
   const models = ensembleModels.filter(
@@ -31198,6 +31198,10 @@ var folderSchemaProps = {
   output_dir: {
     type: "string",
     description: "Absolute path to a custom output directory for reports. Default: <project>/reports_dev/llm_externalizer/. Reports are always saved as .md files in this directory."
+  },
+  free: {
+    type: "boolean",
+    description: "Use the free Nemotron 3 Super model (nvidia/nemotron-3-super-120b-a12b:free) instead of the ensemble. No cost, single model, 262K context. WARNING: prompts are logged by the provider \u2014 do not use with sensitive code."
   }
 };
 var redactRegexSchema = {
@@ -31225,9 +31229,13 @@ var KNOWN_MODEL_LIMITS = {
   "x-ai/grok-4.1-fast": { maxOutput: 3e4, maxInputLines: 2e4 },
   "google/gemini-2.5-flash": { maxOutput: 65535, maxInputLines: 5e4 },
   // Qwen 3.6 Plus: 1M context, 65K max output. Free variant deprecated 2026-04.
-  "qwen/qwen3.6-plus": { maxOutput: 65535, maxInputLines: 4e4 }
+  "qwen/qwen3.6-plus": { maxOutput: 65535, maxInputLines: 4e4 },
+  // Nemotron 3 Super: 262K context, 262K max output, free on OpenRouter.
+  // Conservative limits: 40K lines input, 65K output (avoid quality degradation on long contexts).
+  "nvidia/nemotron-3-super-120b-a12b:free": { maxOutput: 65535, maxInputLines: 4e4 }
 };
 var DEFAULT_MODEL_LIMITS = { maxOutput: 32e3, maxInputLines: 3e4 };
+var FREE_MODEL_ID = "nvidia/nemotron-3-super-120b-a12b:free";
 function ensembleModelLabel(useEnsemble) {
   if (!useEnsemble || !activeResolved?.secondModel) return currentBackend.model;
   const models = [currentBackend.model, activeResolved.secondModel];
@@ -31903,7 +31911,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.37" },
+  { name: "llm-externalizer", version: "3.9.38" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {
@@ -31955,6 +31963,13 @@ Settings file: ${SETTINGS_FILE}`
     const requestOutputDir = args?.output_dir;
     if (typeof requestOutputDir === "string" && requestOutputDir.trim()) {
       OUTPUT_DIR = resolve2(requestOutputDir.trim());
+    }
+    const freeMode = args?.free === true;
+    const savedBackend = freeMode ? { ...currentBackend } : null;
+    if (freeMode) {
+      currentBackend = { ...currentBackend, model: FREE_MODEL_ID };
+      process.stderr.write(`[llm-externalizer] Free mode: using ${FREE_MODEL_ID}
+`);
     }
     try {
       switch (name) {
@@ -35366,6 +35381,7 @@ ${csResp.content}${csFooter}`
     } finally {
       if (isLLMTool) trackRequestEnd();
       OUTPUT_DIR = DEFAULT_OUTPUT_DIR;
+      if (savedBackend) currentBackend = savedBackend;
     }
   } catch (error2) {
     const errMsg = error2 instanceof Error ? error2.message : String(error2);
