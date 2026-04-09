@@ -31207,7 +31207,7 @@ var folderSchemaProps = {
   },
   free: {
     type: "boolean",
-    description: "Use the free Nemotron 3 Super model (nvidia/nemotron-3-super-120b-a12b:free) instead of the ensemble. No cost, single model, 262K context. WARNING: prompts are logged by the provider \u2014 do not use with sensitive code."
+    description: "Use the free Nemotron 3 Super model (nvidia/nemotron-3-super-120b-a12b:free) instead of the ensemble. No cost, single model, 262K context. LOW QUALITY: significantly lower intelligence than ensemble \u2014 more false positives, missed bugs, shallow analysis. WARNING: prompts are logged by the provider \u2014 do not use with sensitive/proprietary code."
   }
 };
 var redactRegexSchema = {
@@ -31917,7 +31917,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.41" },
+  { name: "llm-externalizer", version: "3.9.42" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {

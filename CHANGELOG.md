@@ -1,6 +1,16 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.42] - 2026-04-09
+
+### Changed
+
+- Document free mode as low quality in tool schema, README, rules
+
+Free mode uses a significantly weaker model — more false positives,
+missed bugs, shallow analysis. Updated tool description, README
+comparison table, and rules file to set correct expectations.
+
 ## [3.9.41] - 2026-04-09
 
 ### Changed
