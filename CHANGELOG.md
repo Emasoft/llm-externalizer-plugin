@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.36] - 2026-04-09
+
+### Changed
+
+- Fix README: add missing extensions/exclude_dirs params, remove stale temperature ref
+
 ## [3.9.35] - 2026-04-09
 
 ### Changed
