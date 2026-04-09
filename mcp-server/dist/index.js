@@ -28162,7 +28162,7 @@ function generateDefaultSettings() {
         api: "openrouter-remote",
         model: "google/gemini-2.5-flash",
         second_model: "x-ai/grok-4.1-fast",
-        third_model: "qwen/qwen3.6-plus:free",
+        third_model: "qwen/qwen3.6-plus",
         api_key: "$OPENROUTER_API_KEY"
       }
     }
@@ -31418,7 +31418,7 @@ function buildTools() {
     },
     {
       name: "reset",
-      description: "Full soft-restart. NOT IMMEDIATE \u2014 waits for all currently running LLM requests to finish before resetting (up to 120s timeout). Then: reloads settings.yaml from disk, clears all caches (model list, concurrency, LM Studio detection), resets session counters (tokens/cost/calls), re-resolves the active profile, and notifies the client to refresh the tool list. Use when settings were changed externally, the backend is misbehaving, or you need a clean slate.",
+      description: "Full soft-restart. NOT IMMEDIATE \u2014 waits for all currently running LLM requests to finish before resetting. Then: reloads settings.yaml from disk, clears all caches (model list, concurrency, LM Studio detection), resets session counters (tokens/cost/calls), re-resolves the active profile, and notifies the client to refresh the tool list. Use when settings were changed externally, the backend is misbehaving, or you need a clean slate.",
       inputSchema: { type: "object", properties: {} }
     },
     {
@@ -31917,7 +31917,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.40" },
+  { name: "llm-externalizer", version: "3.9.41" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {

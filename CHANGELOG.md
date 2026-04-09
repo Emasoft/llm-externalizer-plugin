@@ -1,6 +1,18 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.41] - 2026-04-09
+
+### Changed
+
+- Fix all stale references found in audit
+
+- 'two models' → 'three models' in 5 files (README, config skill, templates)
+- qwen3.6-plus:free → qwen3.6-plus in config.ts template
+- 120s timeout → 600s/removed in 4 skill files + index.ts reset desc
+- Added third_model to ensemble profile template
+- Synced tool-reference.md to scan skill copy
+
 ## [3.9.40] - 2026-04-09
 
 ### Changed
