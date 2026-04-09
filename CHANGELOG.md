@@ -1,6 +1,15 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.37] - 2026-04-09
+
+### Changed
+
+- Add Output Modes section to README with comparison table
+
+Explains modes 0/1/2 with pros, cons, response format examples,
+and when to use each. Mode 0 (per-file) is the default.
+
 ## [3.9.36] - 2026-04-09
 
 ### Changed
