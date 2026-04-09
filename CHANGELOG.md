@@ -1,6 +1,15 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.43] - 2026-04-09
+
+### Changed
+
+- Add /free-scan command for zero-cost project scanning
+
+Uses the free Nemotron 3 Super model (no ensemble, no cost).
+Warns about lower quality and prompt logging.
+
 ## [3.9.42] - 2026-04-09
 
 ### Changed
