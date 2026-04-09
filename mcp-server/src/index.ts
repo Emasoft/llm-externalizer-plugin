@@ -3250,6 +3250,7 @@ interface RobustPerFileOpts {
   language?: string;
   toolName: string;
   batchId?: string;
+  modelOverride?: string;
 }
 
 interface RobustPerFileResult {
@@ -3298,6 +3299,7 @@ async function robustPerFileProcess(
           onProgress: opts.onProgress,
           ensemble: opts.ensemble,
           maxBytes: opts.budgetBytes,
+          modelOverride: opts.modelOverride,
         });
         recentOutcomes.push(result.success);
         if (result.success && adaptiveRateLimiter) adaptiveRateLimiter.onSuccess();
@@ -3686,17 +3688,21 @@ async function ensembleStreaming(
     temperature?: number;
     maxTokens?: number;
     onProgress?: ProgressFn;
+    modelOverride?: string; // skip ensemble, use this specific model
   },
   ensemble: boolean,
   fileLineCount?: number,
 ): Promise<StreamingResult> {
-  // Single-model path: ensemble off, free mode, not remote-ensemble, or no models configured
+  // Model override: skip ensemble entirely, use the specified model
+  if (options.modelOverride) {
+    return chatCompletionWithRetry(messages, { ...options, model: options.modelOverride });
+  }
+  // Single-model path: ensemble off, not remote-ensemble, or no models configured
   const ensembleModels = getEnsembleModels();
   if (
     !ensemble ||
     currentBackend.type !== "openrouter" ||
-    ensembleModels.length === 0 ||
-    currentBackend.model === FREE_MODEL_ID
+    ensembleModels.length === 0
   ) {
     return chatCompletionWithRetry(messages, options);
   }
@@ -3816,6 +3822,7 @@ interface ProcessOptions {
   onProgress?: ProgressFn; // MCP progress notifications to keep client alive
   ensemble?: boolean; // run on multiple models and combine results (default true)
   maxBytes?: number; // max file size in bytes (default: DEFAULT_MAX_PAYLOAD_BYTES)
+  modelOverride?: string; // skip ensemble, use this specific model (e.g. free mode)
 }
 
 async function processFileCheck(
@@ -3862,6 +3869,7 @@ async function processFileCheck(
       temperature: DEFAULT_TEMPERATURE,
       maxTokens: options.maxTokens ?? resolveDefaultMaxTokens(),
       onProgress: options.onProgress,
+      modelOverride: options.modelOverride,
     },
     useEnsemble,
     fileLineCount,
@@ -5361,12 +5369,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       OUTPUT_DIR = resolve(requestOutputDir.trim()); // resolve to absolute path
     }
 
-    // Free mode: use the free Nemotron model, skip ensemble
-    const freeMode = (args as Record<string, unknown>)?.free === true;
-    const savedBackend = freeMode ? { ...currentBackend } : null;
-    if (freeMode) {
-      currentBackend = { ...currentBackend, model: FREE_MODEL_ID };
-      process.stderr.write(`[llm-externalizer] Free mode: using ${FREE_MODEL_ID}\n`);
+    // Free mode: resolve model override (passed through function chain, no global mutation)
+    const modelOverride = (args as Record<string, unknown>)?.free === true ? FREE_MODEL_ID : undefined;
+    if (modelOverride) {
+      process.stderr.write(`[llm-externalizer] Free mode: using ${modelOverride}\n`);
     }
 
     try {
@@ -5507,7 +5513,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           messages.push({ role: "user", content: promptBase });
           const resp = await ensembleStreaming(
             messages,
-            { temperature: DEFAULT_TEMPERATURE, maxTokens, onProgress },
+            { temperature: DEFAULT_TEMPERATURE, maxTokens, onProgress, modelOverride },
             useEnsemble,
           );
           const footer = formatFooter(resp, "chat");
@@ -5549,6 +5555,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 redact: chatRedact, regexRedact: chatRegexRedact,
                 onProgress, ensemble: useEnsemble,
                 budgetBytes: chatBudgetBytes, toolName: "chat",
+                modelOverride,
               });
               const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
               if (rpResult.failed.length > 0) lines.push("", "FAILED:", ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
@@ -5565,6 +5572,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 onProgress,
                 ensemble: useEnsemble,
                 maxBytes: chatBudgetBytes,
+                modelOverride,
               });
               perFileResults.push(
                 result.success && result.reportPath
@@ -5611,7 +5619,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             messages.push({ role: "user", content: userContent });
             const resp = await ensembleStreaming(
               messages,
-              { temperature: DEFAULT_TEMPERATURE, maxTokens, onProgress },
+              { temperature: DEFAULT_TEMPERATURE, maxTokens, onProgress, modelOverride },
               useEnsemble,
             );
             const footer = formatFooter(resp, "chat", group[0]?.path);
@@ -5798,6 +5806,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             onProgress,
             ensemble: ctUseEnsemble,
             maxBytes: ctBudgetBytes,
+            modelOverride,
           });
           if (!result.success) {
             return {
@@ -5858,6 +5867,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               temperature: DEFAULT_TEMPERATURE,
               maxTokens: resolveDefaultMaxTokens(),
               onProgress,
+              modelOverride,
             },
             ctUseEnsemble,
           );
@@ -5898,6 +5908,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 redact: ctRedact, regexRedact: ctRegexRedact,
                 onProgress, ensemble: ctUseEnsemble,
                 budgetBytes: ctBudgetBytes, toolName: "code_task",
+                modelOverride,
               });
               const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
               if (rpResult.failed.length > 0) lines.push("", "FAILED:", ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
@@ -5915,6 +5926,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 onProgress,
                 ensemble: ctUseEnsemble,
                 maxBytes: ctBudgetBytes,
+                modelOverride,
               });
               perFileResults.push(
                 result.success && result.reportPath
@@ -5956,7 +5968,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ];
             const codeResp = await ensembleStreaming(
               codeMessages,
-              { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress },
+              { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride },
               ctUseEnsemble,
             );
             const codeFooter = formatFooter(codeResp, "code_task", group[0]?.path);
@@ -6691,7 +6703,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               return processFileCheck(filePath, gTask, {
                 maxTokens: resolveDefaultMaxTokens(),
                 batchId: gBatchId, fileIndex: idx,
-                redact: bcRedact, regexRedact: bcRegexRedact, onProgress, ensemble: bcUseEnsemble, maxBytes: bcBudgetBytes,
+                redact: bcRedact, regexRedact: bcRegexRedact, onProgress, ensemble: bcUseEnsemble, maxBytes: bcBudgetBytes, modelOverride,
               });
             });
             const gAll = await rateLimitedParallel(gTasks, gRl.rps, gRl.maxInFlight, onProgress);
@@ -6778,6 +6790,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 onProgress,
                 ensemble: bcUseEnsemble,
                 maxBytes: bcBudgetBytes,
+                modelOverride,
               });
               recentOutcomes.push(result.success);
               // Report per-file batch progress
@@ -7438,6 +7451,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 onProgress,
                 ensemble: sfUseEnsemble,
                 maxBytes: sfBudgetBytes,
+                modelOverride,
               });
               recentOutcomes.push(result.success);
               // Report per-file batch progress
@@ -8227,7 +8241,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ];
           let resp;
           try {
-            resp = await ensembleStreaming(msgs, { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress }, cfUseEnsemble);
+            resp = await ensembleStreaming(msgs, { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride }, cfUseEnsemble);
           } catch (err) {
             return { error: `LLM error: ${err instanceof Error ? err.message : String(err)}` };
           }
@@ -8502,6 +8516,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             temperature: DEFAULT_TEMPERATURE,
             maxTokens: resolveDefaultMaxTokens(),
             onProgress,
+            modelOverride,
           },
           cfUseEnsemble,
         );
@@ -8630,7 +8645,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 { role: "system", content: `Expert ${lang} developer. Check the source file for broken or outdated references to functions, variables, constants, types, and classes. Cross-reference all symbols against the dependency files provided. Report each broken reference with: the symbol name, the function/class/method where it is used (never by line number), and what is wrong. Reference files by their labeled path in the code fence header. If all references are valid, say so.` + BREVITY_RULES },
                 { role: "user", content: `${crPrompt ? crPrompt + "\n\n" : ""}Check this file for broken code references:\n\n## Source File\n\n${srcBlock}\n\n${depBlocks.length > 0 ? `## Local Dependencies (${deps.length} files)\n\n${depBlocks.join("\n\n")}` : "## No local dependencies resolved."}` },
               ];
-              const resp = await ensembleStreaming(msgs, { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress }, crUseEnsemble, src.split("\n").length);
+              const resp = await ensembleStreaming(msgs, { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride }, crUseEnsemble, src.split("\n").length);
               const footer = formatFooter(resp, "check_references", filePath);
               if (resp.content.trim()) {
                 const depInfo = deps.length > 0 ? `\n\nDependencies checked: ${deps.map((p) => `\`${p}\``).join(", ")}` : "";
@@ -8705,6 +8720,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               temperature: DEFAULT_TEMPERATURE,
               maxTokens: resolveDefaultMaxTokens(),
               onProgress,
+              modelOverride,
             },
             crUseEnsemble,
             crLineCount,
@@ -9270,7 +9286,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
             const csResp = await ensembleStreaming(
               csMessages,
-              { maxTokens: resolveDefaultMaxTokens(), onProgress },
+              { maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride },
               csUseEnsemble,
             );
             const csFooter = formatFooter(csResp, "check_against_specs", group[0]?.path);
@@ -9322,8 +9338,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (isLLMTool) trackRequestEnd();
       // Reset output dir to default after each request
       OUTPUT_DIR = DEFAULT_OUTPUT_DIR;
-      // Restore backend model after free mode
-      if (savedBackend) currentBackend = savedBackend;
     }
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
