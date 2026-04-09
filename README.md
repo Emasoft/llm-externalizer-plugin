@@ -68,7 +68,7 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `answer_mode` | 0 | 0=one report per file (default, each containing all ensemble model outputs), 1=per-request, 2=merged |
+| `answer_mode` | 0 | Output mode (see [Output modes](#output-modes) below) |
 | `output_dir` | `reports_dev/llm_externalizer/` | Custom output directory for reports. Absolute path |
 | `max_retries` | 1 | Max retries per file in mode 0. Set 3 for parallel + retry + circuit breaker. Available on `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs` |
 | `redact_regex` | (none) | JavaScript regex to redact matching strings before sending to LLM. Alphanumeric matches become `[REDACTED:USER_PATTERN]` |
@@ -82,6 +82,28 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 | `follow_symlinks` | true | Follow symbolic links (circular symlinks auto-detected and skipped) |
 | `max_files` | 2500 | Maximum number of files to discover from `folder_path` |
 | `use_gitignore` | true | Use `.gitignore` rules to filter files. Handles submodules and nested git repos. Set `false` to include gitignored files |
+
+### Output modes
+
+Controls how reports are organized when processing multiple files. Each mode produces `.md` files in `reports_dev/llm_externalizer/`.
+
+| Mode | Name | Output | Best for |
+|------|------|--------|----------|
+| **0** (default) | Per-file | One `.md` report per source file. Each report contains findings from all 3 ensemble models combined. Filename includes the source file name for easy identification. | Large codebases, CI pipelines, delegating files to different agents. Each agent reads only its own file's report. |
+| **1** | Per-request | One `.md` per LLM request (may cover multiple files if batched together). Structured per-file sections inside. | Medium projects where you want fewer output files but still see per-file breakdown. |
+| **2** | Merged | Everything merged into one `.md` file. All files, all models, one report. | Small projects (<10 files), quick overviews, single-file analysis. |
+
+**Mode 0 response format** — the tool returns one report path per line:
+```
+/path/to/reports_dev/llm_externalizer/code_task_auth-ts_2026-04-07T19-43-26_a1b2c3.md
+/path/to/reports_dev/llm_externalizer/code_task_routes-ts_2026-04-07T19-43-28_d4e5f6.md
+/path/to/reports_dev/llm_externalizer/code_task_db-ts_2026-04-07T19-43-30_g7h8i9.md
+```
+
+**Mode 2 response format** — one path:
+```
+/path/to/reports_dev/llm_externalizer/scan_folder_2026-04-07T19-43-26_a1b2c3.md
+```
 
 ### File grouping
 
