@@ -4637,7 +4637,7 @@ function buildTools() {
       name: "reset",
       description:
         "Full soft-restart. NOT IMMEDIATE — waits for all currently running LLM requests to finish " +
-        "before resetting (up to 120s timeout). Then: reloads settings.yaml from disk, clears all caches " +
+        "before resetting. Then: reloads settings.yaml from disk, clears all caches " +
         "(model list, concurrency, LM Studio detection), resets session counters (tokens/cost/calls), " +
         "re-resolves the active profile, and notifies the client to refresh the tool list. " +
         "Use when settings were changed externally, the backend is misbehaving, or you need a clean slate.",

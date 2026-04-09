@@ -19,7 +19,7 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 
 - **13 MCP tools** — 8 read-only analysis tools + 5 utility tools
 - **Profile-based configuration** — named profiles in `~/.llm-externalizer/settings.yaml`
-- **Ensemble mode** — two models in parallel on OpenRouter, combined report
+- **Ensemble mode** — three models in parallel on OpenRouter, combined report
 - **Auto-batching** — large file sets split automatically to fit context window
 - **File grouping** — organize files into named groups (`---GROUP:id---`) for isolated per-group reports
 - **Secret scanning** — detects API keys and tokens before sending to LLM
@@ -345,7 +345,7 @@ profiles:
 |------|----------|
 | `local` | Sequential requests to a local server |
 | `remote` | Parallel requests, single model via OpenRouter |
-| `remote-ensemble` | Parallel requests, two models in parallel, combined report |
+| `remote-ensemble` | Parallel requests, three models in parallel, combined report |
 
 ### Environment variables
 

@@ -10,7 +10,7 @@ version: 1.0.0
 
 ## Overview
 
-Profile-based configuration for local and remote LLM backends. Settings stored at `~/.llm-externalizer/settings.yaml`. Three modes: `local` (sequential), `remote` (parallel via OpenRouter), `remote-ensemble` (two models in parallel).
+Profile-based configuration for local and remote LLM backends. Settings stored at `~/.llm-externalizer/settings.yaml`. Three modes: `local` (sequential), `remote` (parallel via OpenRouter), `remote-ensemble` (three models in parallel).
 
 ## Prerequisites
 

@@ -40,7 +40,7 @@ All responses saved as `.md` files in `reports_dev/llm_externalizer/`. Output de
 
 | Error | Cause | Resolution |
 |-------|-------|------------|
-| 120s timeout | Response too large | Lower `max_tokens` or split calls |
+| Timeout | Long reasoning on large file | Automatic — reasoning models get extended time |
 | Auth error | API key not set | Run `discover`; set env var |
 | Empty response | File exceeds model limit | Split files or change model |
 

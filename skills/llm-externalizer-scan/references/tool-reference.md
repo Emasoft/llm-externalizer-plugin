@@ -56,7 +56,7 @@ Use `instructions_files_paths` to share reusable review rules, coding standards,
 
 | Parameter | Tools | Values | Notes |
 |-----------|-------|--------|-------|
-| `max_tokens` | All content tools | number | Override max response tokens (default: model max ~65,535). Set lower to save cost or avoid 120s timeout. |
+| `max_tokens` | All content tools | number | Override max response tokens (default: model max ~65,535). |
 | `temperature` | Fixed | 0.1 | Not configurable. Optimized for factual/code analysis. |
 | `output_dir` | All content tools | string | Custom output directory for reports (default: `reports_dev/llm_externalizer/`). |
 | `system` | `chat` only | string | Persona override. Be specific: `"Senior TypeScript dev"`. |
@@ -117,7 +117,7 @@ For `compare_files`, grouping uses `---GROUP:id---` markers as single-element en
 
 ## Critical Constraints
 
-- **120s timeout**: MCP spec hard limit per call. Long outputs may truncate.
+- **600s base timeout** per LLM request. Extended automatically when reasoning models are actively thinking.
 - **No project context**: The remote LLM knows NOTHING about your project. ALWAYS include brief context in instructions.
 - **File paths only**: ALWAYS pass file paths in `input_files_paths`, NEVER paste contents into `instructions`.
 - **Output location**: All responses saved to `reports_dev/llm_externalizer/`. Tool returns ONLY the file path — never inline content.

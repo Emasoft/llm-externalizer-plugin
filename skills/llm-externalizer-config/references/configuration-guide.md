@@ -19,7 +19,7 @@
 |------|----------|
 | `local` | Sequential requests to a local server |
 | `remote` | Parallel requests, single model via OpenRouter |
-| `remote-ensemble` | Parallel requests, two models in parallel, combined report |
+| `remote-ensemble` | Parallel requests, three models in parallel, combined report |
 
 ## API Presets
 

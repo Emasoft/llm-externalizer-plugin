@@ -90,7 +90,7 @@ No auth needed.
     api_key: $OPENROUTER_API_KEY
 ```
 
-## Remote ensemble (two models in parallel)
+## Remote ensemble (three models in parallel)
 
 ```yaml
   remote-ensemble:
@@ -98,6 +98,7 @@ No auth needed.
     api: openrouter-remote
     model: "google/gemini-2.5-flash"
     second_model: "x-ai/grok-4.1-fast"
+    third_model: "qwen/qwen3.6-plus"
     api_key: $OPENROUTER_API_KEY
 ```
 

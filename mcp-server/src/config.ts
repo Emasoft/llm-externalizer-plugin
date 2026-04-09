@@ -315,7 +315,7 @@ export function generateDefaultSettings(): Settings {
         api: "openrouter-remote",
         model: "google/gemini-2.5-flash",
         second_model: "x-ai/grok-4.1-fast",
-        third_model: "qwen/qwen3.6-plus:free",
+        third_model: "qwen/qwen3.6-plus",
         api_key: "$OPENROUTER_API_KEY",
       },
     },
