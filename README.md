@@ -68,7 +68,8 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `answer_mode` | 2 (chat/code_task), 0 (batch_check) | 0=per-file, 1=per-request, 2=merged |
+| `answer_mode` | 0 | 0=one report per file (default, each containing all ensemble model outputs), 1=per-request, 2=merged |
+| `output_dir` | `reports_dev/llm_externalizer/` | Custom output directory for reports. Absolute path |
 | `max_retries` | 1 | Max retries per file in mode 0. Set 3 for parallel + retry + circuit breaker. Available on `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs` |
 | `redact_regex` | (none) | JavaScript regex to redact matching strings before sending to LLM. Alphanumeric matches become `[REDACTED:USER_PATTERN]` |
 | `scan_secrets` | false | Abort if API keys/tokens/passwords detected in input files |
@@ -116,7 +117,7 @@ On OpenRouter (`remote-ensemble` profile), requests run on **three models in par
 |-----------|---------|-------------|
 | `ensemble` | `true` (on OpenRouter) | Set `false` for simple tasks to save tokens |
 | `max_tokens` | model maximum (65,535) | Auto-managed, not user-configurable |
-| `temperature` | 0.3 (`chat` only) | 0.1=factual, 0.3=analysis, 0.7=creative |
+| `temperature` | 0.1 (fixed) | Optimized for factual/code analysis. Not user-configurable |
 
 ### Rate limiting
 
@@ -132,7 +133,7 @@ Rate limiting is **fully automatic** — no configuration needed.
 - **600s base timeout** per LLM request. Extended automatically when reasoning models (Qwen, etc.) are actively thinking — no hard cap during reasoning
 - **No project context** — the remote LLM knows nothing about your project; always include brief context in instructions
 - **File paths only** — always use `input_files_paths`, never paste file contents into instructions
-- **Output location** — all responses saved to `llm_externalizer_output/` in the project directory
+- **Output location** — all responses saved to `reports_dev/llm_externalizer/` in the project directory. Customizable via `output_dir` parameter
 
 ### Subagent access
 

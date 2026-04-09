@@ -32,7 +32,7 @@ Copy this checklist and track your progress:
   "folder_path": "<absolute path to project root>",
   "instructions": "<brief project description>. Audit for: 1) Logic bugs 2) Error handling gaps 3) Security issues 4) Resource leaks 5) Broken references. Reference function names.",
   "use_gitignore": true,
-  "answer_mode": 2
+  "answer_mode": 0
 }
 ```
 
@@ -42,7 +42,7 @@ Copy this checklist and track your progress:
 
 ## Output
 
-The tool returns a file path to a merged `.md` report in `llm_externalizer_output/`. The report contains per-file sections with findings from all 3 ensemble models. Use the Read tool to access it.
+One `.md` report per source file, saved in `reports_dev/llm_externalizer/`. Each report contains findings from all 3 ensemble models combined. Report filenames include the source filename for easy identification (e.g., `code_task_index-ts_2026-04-07T19-43-26_a1b2c3.md`). Use the Read tool to access them.
 
 ## Error Handling
 
@@ -59,14 +59,14 @@ The tool returns a file path to a merged `.md` report in `llm_externalizer_outpu
 ```json
 {"tool": "scan_folder", "folder_path": "/path/to/project/src",
  "instructions": "Node.js Express API. Find bugs, security issues, error handling gaps.",
- "use_gitignore": true, "answer_mode": 2}
+ "use_gitignore": true}
 ```
 
 ```json
 {"tool": "scan_folder", "folder_path": "/path/to/project",
  "extensions": [".py"], "exclude_dirs": ["migrations", "fixtures"],
  "instructions": "Django REST API. Find security vulnerabilities and logic bugs.",
- "answer_mode": 0}
+ "answer_mode": 2}
 ```
 
 ## Resources

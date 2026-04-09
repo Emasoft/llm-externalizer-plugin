@@ -1481,7 +1481,7 @@ const DEFAULT_MAX_IN_FLIGHT_REMOTE = 200; // safety cap on total concurrent requ
 // When the caller doesn't specify max_tokens, we request the model's full context
 // window as the output budget. The API clamps this to the model's actual max output.
 // This ensures the LLM is never artificially truncated — truncation causes more harm
-const DEFAULT_TEMPERATURE = 0.3;
+const DEFAULT_TEMPERATURE = 0.1;
 
 // Appended to ALL system prompts to prevent verbose output that wastes tokens and causes truncation.
 const BREVITY_RULES =
@@ -2951,30 +2951,33 @@ function formatFooter(
 }
 
 // ── Response file output ────────────────────────────────────────────
-// LLM responses are saved to timestamped .md files in llm_externalizer_output/
+// LLM responses are saved to timestamped .md files in reports_dev/llm_externalizer/
 // so the caller's context is never flooded with the response text.
-// The output dir defaults to process.cwd() but can be overridden with LLM_OUTPUT_DIR.
+// The output dir defaults to process.cwd()/reports_dev/llm_externalizer but can be
+// overridden with LLM_OUTPUT_DIR env var or per-tool output_dir parameter.
 
-const OUTPUT_DIR =
-  process.env.LLM_OUTPUT_DIR || join(process.cwd(), "llm_externalizer_output");
+const DEFAULT_OUTPUT_DIR =
+  process.env.LLM_OUTPUT_DIR || join(process.cwd(), "reports_dev", "llm_externalizer");
+let OUTPUT_DIR = DEFAULT_OUTPUT_DIR;
 
 function saveResponse(
   toolName: string,
   responseText: string,
   meta: { model: string; task?: string; inputFile?: string; groupId?: string },
   overrideFilename?: string,
+  outputDir?: string,
 ): string {
-  mkdirSync(OUTPUT_DIR, { recursive: true });
+  const dir = outputDir || OUTPUT_DIR;
+  mkdirSync(dir, { recursive: true });
 
   const now = new Date();
-  // Include milliseconds to avoid collisions on parallel calls
   const ts = now.toISOString().replace(/[:.]/g, "-").slice(0, 23);
-  // Add short UUID suffix to prevent timestamp collisions on parallel calls
   const shortId = randomUUID().slice(0, 6);
-  // Include group ID in filename when processing grouped files
+  // Include source filename for easy identification
+  const srcName = meta.inputFile ? `_${sanitizeFilename(meta.inputFile).replace(/\.md$/, "")}` : "";
   const groupSuffix = meta.groupId ? `_group-${meta.groupId.replace(/[^a-zA-Z0-9_-]/g, "_")}` : "";
-  const filename = overrideFilename || `${toolName}${groupSuffix}_${ts}_${shortId}.md`;
-  const filepath = join(OUTPUT_DIR, filename);
+  const filename = overrideFilename || `${toolName}${groupSuffix}${srcName}_${ts}_${shortId}.md`;
+  const filepath = join(dir, filename);
 
   const lines: string[] = [
     "# LLM Externalizer Response",
@@ -3489,14 +3492,15 @@ function hasNamedGroups(groups: FileGroup[]): boolean {
 // fileIndex disambiguates files with the same basename processed in the same millisecond
 function batchReportFilename(
   toolName: string,
-  batchId: string,
+  _batchId: string,
   filePath: string,
-  fileIndex: number,
+  _fileIndex: number,
 ): string {
   const now = new Date();
   const ts = now.toISOString().replace(/[:.]/g, "-").slice(0, 23);
-  const shortUuid = batchId.slice(0, 8);
-  return `${toolName}_${shortUuid}_${fileIndex}_${sanitizeFilename(filePath)}_${ts}.md`;
+  const shortId = randomUUID().slice(0, 6);
+  const srcName = sanitizeFilename(filePath).replace(/\.md$/, "");
+  return `${toolName}_${srcName}_${ts}_${shortId}.md`;
 }
 
 // ── Global service health tracker ────────────────────────────────────
@@ -3854,7 +3858,7 @@ async function processFileCheck(
   const resp = await ensembleStreaming(
     messages,
     {
-      temperature: 0.2,
+      temperature: DEFAULT_TEMPERATURE,
       maxTokens: options.maxTokens ?? resolveDefaultMaxTokens(),
       onProgress: options.onProgress,
     },
@@ -3973,7 +3977,7 @@ async function processFileFix(
 
     try {
       const jsonResp = await chatCompletionJSON(fixMessages, {
-        temperature: 0.1,
+        temperature: DEFAULT_TEMPERATURE,
         maxTokens: resolvedMaxTokens,
         jsonSchema: FIX_CODE_SCHEMA,
         onProgress: options.onProgress,
@@ -4233,7 +4237,7 @@ const answerModeSchema = {
     "0 = one .md file per input file (separate LLM calls, with parallel execution + retry when max_retries > 1). " +
     "1 = one .md file per LLM request, with structured per-file sections inside. " +
     "2 = one .md file for the entire operation (all batches merged). " +
-    "Default depends on tool: 2 for chat/code_task, 0 for batch_check.",
+    "Default: 0 (one report per file, each containing all ensemble model outputs).",
 };
 
 const maxRetriesSchema = {
@@ -4287,6 +4291,13 @@ const folderSchemaProps = {
     type: "number" as const,
     description:
       "Maximum number of files to discover from folder_path. Default: 2500.",
+  },
+  output_dir: {
+    type: "string" as const,
+    description:
+      "Absolute path to a custom output directory for reports. " +
+      "Default: <project>/reports_dev/llm_externalizer/. " +
+      "Reports are always saved as .md files in this directory.",
   },
 };
 
@@ -4418,11 +4429,6 @@ function buildTools() {
             description:
               'Persona. Be specific: "Senior TypeScript dev" not "helpful assistant".',
           },
-          temperature: {
-            type: "number",
-            description:
-              "0.1 for factual/code, 0.3 for analysis (default), 0.7 for creative. Stay under 0.5 for code.",
-          },
           scan_secrets: {
             type: "boolean",
             description:
@@ -4452,7 +4458,7 @@ function buildTools() {
     {
       name: "code_task",
       description:
-        "Code analysis with optimised code-review system prompt (temperature=0.2). " +
+        "Code analysis with optimised code-review system prompt. " +
         "More capable than Haiku, costs less. Less capable than Sonnet/Opus.\n\n" +
         "Pass input_files_paths (read from disk, language auto-detected). " +
         "Be specific in instructions.\n\n" +
@@ -5334,6 +5340,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const isLLMTool = LLM_TOOLS_SET.has(name);
     if (isLLMTool) trackRequestStart();
 
+    // Per-request output_dir override (reset to default after request)
+    const requestOutputDir = (args as Record<string, unknown>)?.output_dir;
+    if (typeof requestOutputDir === "string" && requestOutputDir.trim()) {
+      OUTPUT_DIR = requestOutputDir.trim();
+    }
+
     try {
     switch (name) {
       case "chat": {
@@ -5343,7 +5355,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           input_files_paths: chatInputPathsRaw,
           input_files_content,
           system,
-          temperature,
           answer_mode: rawAnswerMode,
           scan_secrets: chatScan,
           redact_secrets: chatRedact,
@@ -5363,7 +5374,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           input_files_paths?: string | string[];
           input_files_content?: string;
           system?: string;
-          temperature?: number;
           answer_mode?: number;
           scan_secrets?: boolean;
           redact_secrets?: boolean;
@@ -5454,7 +5464,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // Always use model's maximum output capacity — no user override
         const maxTokens = resolveDefaultMaxTokens();
-        const chatMode = resolveAnswerMode(rawAnswerMode, 2);
+        const chatMode = resolveAnswerMode(rawAnswerMode, 0);
 
         // Build prompt base: pre-instructions + unfenced instructions + optional fenced inline content
         const chatHasFiles = chatFilePaths.length > 0 || !!input_files_content;
@@ -5474,7 +5484,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           messages.push({ role: "user", content: promptBase });
           const resp = await ensembleStreaming(
             messages,
-            { temperature, maxTokens, onProgress },
+            { temperature: DEFAULT_TEMPERATURE, maxTokens, onProgress },
             useEnsemble,
           );
           const footer = formatFooter(resp, "chat");
@@ -5578,7 +5588,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             messages.push({ role: "user", content: userContent });
             const resp = await ensembleStreaming(
               messages,
-              { temperature, maxTokens, onProgress },
+              { temperature: DEFAULT_TEMPERATURE, maxTokens, onProgress },
               useEnsemble,
             );
             const footer = formatFooter(resp, "chat", group[0]?.path);
@@ -5686,7 +5696,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
         const ctUseEnsemble = currentBackend.type === "openrouter";
         const ctBudgetBytes = (ctMaxPayloadKb ?? 400) * 1024;
-        const ctMode = resolveAnswerMode(ctRawMode, 2);
+        const ctMode = resolveAnswerMode(ctRawMode, 0);
         const ctTask = resolvePrompt(ctInstructions, ctInstructionsFilesPaths);
         if (!ctTask.trim()) {
           return {
@@ -5822,7 +5832,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const codeResp = await ensembleStreaming(
             codeMessages,
             {
-              temperature: 0.2,
+              temperature: DEFAULT_TEMPERATURE,
               maxTokens: resolveDefaultMaxTokens(),
               onProgress,
             },
@@ -5923,7 +5933,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ];
             const codeResp = await ensembleStreaming(
               codeMessages,
-              { temperature: 0.2, maxTokens: resolveDefaultMaxTokens(), onProgress },
+              { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress },
               ctUseEnsemble,
             );
             const codeFooter = formatFooter(codeResp, "code_task", group[0]?.path);
@@ -7374,7 +7384,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             };
         }
 
-        const sfMode = resolveAnswerMode(sfRawMode, 2);
+        const sfMode = resolveAnswerMode(sfRawMode, 0);
         const batchId = randomUUID();
         const sfRl = await getRateLimitConfig();
         const recentOutcomes: boolean[] = [];
@@ -7658,7 +7668,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ];
 
             const mfResp = await chatCompletionJSON(mfMessages, {
-              temperature: 0.1,
+              temperature: DEFAULT_TEMPERATURE,
               maxTokens: resolveDefaultMaxTokens(),
               jsonSchema: FIX_CODE_SCHEMA,
               onProgress,
@@ -7923,7 +7933,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ];
 
           const spResp = await chatCompletionJSON(spMessages, {
-            temperature: 0.1,
+            temperature: DEFAULT_TEMPERATURE,
             maxTokens: resolveDefaultMaxTokens(),
             jsonSchema: SPLIT_FILE_SCHEMA,
             onProgress,
@@ -8194,7 +8204,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ];
           let resp;
           try {
-            resp = await ensembleStreaming(msgs, { temperature: 0.2, maxTokens: resolveDefaultMaxTokens(), onProgress }, cfUseEnsemble);
+            resp = await ensembleStreaming(msgs, { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress }, cfUseEnsemble);
           } catch (err) {
             return { error: `LLM error: ${err instanceof Error ? err.message : String(err)}` };
           }
@@ -8466,7 +8476,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const cfResp = await ensembleStreaming(
           cfMessages,
           {
-            temperature: 0.2,
+            temperature: DEFAULT_TEMPERATURE,
             maxTokens: resolveDefaultMaxTokens(),
             onProgress,
           },
@@ -8573,7 +8583,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           crInstructions,
           crInstructionsFilesPaths,
         );
-        const crMode = resolveAnswerMode(crRawMode, 2);
+        const crMode = resolveAnswerMode(crRawMode, 0);
 
         // ── Group-aware processing ──
         const crFileGroups = parseFileGroups(crFilePathsAll);
@@ -8597,7 +8607,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 { role: "system", content: `Expert ${lang} developer. Check the source file for broken or outdated references to functions, variables, constants, types, and classes. Cross-reference all symbols against the dependency files provided. Report each broken reference with: the symbol name, the function/class/method where it is used (never by line number), and what is wrong. Reference files by their labeled path in the code fence header. If all references are valid, say so.` + BREVITY_RULES },
                 { role: "user", content: `${crPrompt ? crPrompt + "\n\n" : ""}Check this file for broken code references:\n\n## Source File\n\n${srcBlock}\n\n${depBlocks.length > 0 ? `## Local Dependencies (${deps.length} files)\n\n${depBlocks.join("\n\n")}` : "## No local dependencies resolved."}` },
               ];
-              const resp = await ensembleStreaming(msgs, { temperature: 0.1, maxTokens: resolveDefaultMaxTokens(), onProgress }, crUseEnsemble, src.split("\n").length);
+              const resp = await ensembleStreaming(msgs, { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress }, crUseEnsemble, src.split("\n").length);
               const footer = formatFooter(resp, "check_references", filePath);
               if (resp.content.trim()) {
                 const depInfo = deps.length > 0 ? `\n\nDependencies checked: ${deps.map((p) => `\`${p}\``).join(", ")}` : "";
@@ -8669,7 +8679,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const crResp = await ensembleStreaming(
             crMessages,
             {
-              temperature: 0.1,
+              temperature: DEFAULT_TEMPERATURE,
               maxTokens: resolveDefaultMaxTokens(),
               onProgress,
             },
@@ -8817,7 +8827,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ciInstructions,
           ciInstructionsFilesPaths,
         );
-        const ciMode = resolveAnswerMode(ciRawMode, 2);
+        const ciMode = resolveAnswerMode(ciRawMode, 0);
 
         // ── Group-aware processing ──
         const ciFileGroups = parseFileGroups(ciFilePathsAll);
@@ -9096,7 +9106,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
         const csUseEnsemble = currentBackend.type === "openrouter";
         const csBudgetBytes = (csMaxPayloadKb ?? 400) * 1024;
-        const csMode = resolveAnswerMode(csRawMode, 2);
+        const csMode = resolveAnswerMode(csRawMode, 0);
 
         // Validate redact_regex upfront
         let csRegexRedact: RegexRedactOpts | null = null;
@@ -9287,6 +9297,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     } finally {
       // Release active request tracker so `reset` can proceed when all LLM calls finish
       if (isLLMTool) trackRequestEnd();
+      // Reset output dir to default after each request
+      OUTPUT_DIR = DEFAULT_OUTPUT_DIR;
     }
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
