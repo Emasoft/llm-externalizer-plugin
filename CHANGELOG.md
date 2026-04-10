@@ -1,6 +1,86 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.84] - 2026-04-10
+
+### Changed
+
+- Cliff.toml: use raw_message to keep full commit body in changelog
+
+The previous template used {{ commit.message }} which, with
+conventional_commits=true, drops the full body when git-cliff
+successfully parses a 'scope: subject' format — commit.message
+becomes only the subject-after-colon, and commit.body only
+contains the first paragraph (up to the first blank line).
+
+Result: commits like 'publish.py: strict mode...' had their
+entire multi-line body silently dropped from the changelog and
+release notes. Commits like 'Separate retry budget...' (no colon)
+kept the body because the conventional parser failed and
+commit.message fell back to the raw text.
+
+Fix: template now uses {{ commit.raw_message }}, which returns
+the unparsed full commit text (subject + body + trailers) directly
+from git. conventional_commits=true is still enabled so the
+commit_parsers keep classifying commits into groups (Added /
+Fixed / Changed / etc), but the displayed content is always the
+full raw message regardless of parse success.
+
+Regenerated CHANGELOG.md for v3.9.83 so the entry now has the
+full 6-item change list, not just the subject. GitHub release
+notes for v3.9.83 updated to match.
+
+
+### Refactored
+
+- Refactor(publish): validate first, auto-detect version via git-cliff
+
+User directive: 'first lint, test, validate. then bump/git-cliff/
+commit.' Reorganized publish.py to follow that exact workflow,
+adapting the reference script the user provided.
+
+New flow:
+
+  1. Pre-flight      — working tree clean
+  2. Validate        — run_checks() + run_cpv_validation() (MOVED UP)
+  3. Determine ver.  — git-cliff --bumped-version (default) or flag
+  4. Generate CL.    — git-cliff regenerates full CHANGELOG.md
+  5. Sync version    — plugin.json, package.json, server.json, index.ts
+  6. Rebuild dist    — npm run build with the new version
+  7. README badges   — shields.io badge URLs
+  8. Commit          — 'chore(release): vX.Y.Z' (conventional format)
+  9. Tag             — git tag -a vX.Y.Z
+  10. Push           — git push --follow-tags
+  11. GitHub release — gh release create
+
+Key changes from the old flow:
+
+- VALIDATION NOW RUNS FIRST. Previously checks ran AFTER planning
+  the version bump (step 2 was validate, but step 1 was 'plan
+  version'). New order makes more sense: validate, THEN decide what
+  version to release.
+
+- AUTO-DETECTED VERSION VIA GIT-CLIFF. Default behavior is now
+  `git-cliff --bumped-version`, which parses conventional commits
+  since the last tag to decide patch/minor/major. Manual override
+  flags --patch/--minor/--major/--set still work and take
+  precedence over the auto-detection.
+
+  New helper: determine_next_version(args, current).
+  New helper: git_cliff_bumped_version() — wraps the CLI call.
+
+- CONVENTIONAL COMMIT MESSAGE. The release commit is now
+  'chore(release): vX.Y.Z' instead of 'Release vX.Y.Z'. Matches
+  conventional commits format, and cliff.toml already has a
+  commit_parsers rule to skip '^chore\\(release\\)' from future
+  changelog output.
+
+- DRY-RUN NOW EXITS AFTER VERSION DETERMINATION. Dry-run still runs
+  the full check suite (validation is mandatory even in dry-run),
+  then shows what WOULD be published with the auto-detected or
+  flag-specified version, then exits without any file mutations.
+
+
 ## [3.9.83] - 2026-04-10
 
 ### Changed
