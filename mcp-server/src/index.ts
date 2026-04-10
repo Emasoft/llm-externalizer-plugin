@@ -2925,15 +2925,14 @@ async function chatCompletionJSON(
   }
 
   // Reasoning ladder (OpenRouter only): xhigh → high → none.
-  // IMPORTANT: when jsonSchema is requested, we skip reasoning entirely.
-  // Structured output (json_schema + response-healing) is fragile across
-  // providers, and combining it with `reasoning: { effort }` is untested
-  // on most models — some return reasoning traces inlined into the JSON
-  // content field, which breaks JSON.parse. The structured-output path
-  // already delivers precise output via schema enforcement, so it doesn't
-  // benefit much from reasoning anyway.
+  // Reasoning is enforced for structured-output calls too. With
+  // `exclude: true` on every reasoning config, the thinking trace stays
+  // out of `message.content`, so JSON.parse still sees pure output. If a
+  // specific provider rejects the reasoning + json_schema combination
+  // with a 400, the ladder catches it via isReasoningRejectionError and
+  // downgrades through xhigh → high → none automatically.
   const reasoningLadder =
-    currentBackend.type === "openrouter" && !options.jsonSchema
+    currentBackend.type === "openrouter"
       ? reasoningLadderForModel(conn.model || "")
       : [null];
 
