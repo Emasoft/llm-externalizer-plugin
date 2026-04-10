@@ -28590,7 +28590,7 @@ function assertBranchUnchanged(filePath, expectedBranch) {
   }
 }
 var DEFAULT_MAX_PAYLOAD_BYTES = 400 * 1024;
-function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexRedact) {
+function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexRedact, tagPrefix = "") {
   const rawLimit = maxBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
   const limit = !Number.isFinite(rawLimit) || rawLimit <= 0 ? DEFAULT_MAX_PAYLOAD_BYTES : rawLimit;
   const safePath = sanitizeInputPath(filePath);
@@ -28625,14 +28625,16 @@ function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexReda
   }
   const lang = langOverride || detectLang(filePath);
   const fence = fenceBackticks(content);
-  return `<filename>
+  const nameTag = `${tagPrefix}filename`;
+  const contentTag = `${tagPrefix}file-content`;
+  return `<${nameTag}>
 ${filePath}
-</filename>
-<file-content>
+</${nameTag}>
+<${contentTag}>
 ${fence}${lang}
 ${content}
 ${fence}
-</file-content>`;
+</${contentTag}>`;
 }
 var BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
   ".png",
@@ -31817,7 +31819,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.56" },
+  { name: "llm-externalizer", version: "3.9.57" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {
@@ -35194,7 +35196,7 @@ FAILED: File not found.`);
           }
           let csSpecBlock;
           try {
-            csSpecBlock = readFileAsCodeBlock(csSpecPath, void 0, csRedact, csBudgetBytes);
+            csSpecBlock = readFileAsCodeBlock(csSpecPath, void 0, csRedact, csBudgetBytes, null, "specs-");
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
             return {
@@ -35212,7 +35214,7 @@ FAILED: File not found.`);
               };
           }
           const csExtraInstructions = resolvePrompt(csInstructions, csInstructionsFilesPaths);
-          const csSystemPrompt = "You are a strict specification compliance auditor. You will receive a SPECIFICATION FILE and one or more SOURCE FILES. Your job is to find every violation of the specification in the source files.\n\nRULES:\n1. The specification is the ABSOLUTE source of truth. Every rule, restriction, format, API contract, forbidden pattern, and requirement in the spec MUST be followed exactly.\n2. Report ONLY VIOLATIONS \u2014 things implemented WRONGLY or FORBIDDEN patterns used. Do NOT report MISSING features \u2014 some requirements may be implemented in other files that are not included here.\n3. For each violation, report:\n   - **File**: which source file\n   - **Location**: function/class/method name (NEVER line numbers)\n   - **Spec rule violated**: quote the exact spec text\n   - **What the code does**: describe the actual behavior\n   - **Severity**: CRITICAL (security/data loss), HIGH (wrong behavior), MEDIUM (non-compliance), LOW (style/convention)\n4. If a source file has NO violations, explicitly state: 'CLEAN \u2014 no spec violations found.'\n5. At the end, provide a SUMMARY with total violation counts by severity.\n6. Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.\n" + FILE_FORMAT_EXAMPLE + BREVITY_RULES;
+          const csSystemPrompt = "You are a strict specification compliance auditor. You will receive a SPECIFICATION FILE and one or more SOURCE FILES. Your job is to find every violation of the specification in the source files.\n\nRULES:\n1. The specification is the ABSOLUTE source of truth. Every rule, restriction, format, API contract, forbidden pattern, and requirement in the spec MUST be followed exactly.\n2. Report ONLY VIOLATIONS \u2014 things implemented WRONGLY or FORBIDDEN patterns used. Do NOT report MISSING features \u2014 some requirements may be implemented in other files that are not included here.\n3. For each violation, report:\n   - **File**: which source file\n   - **Location**: function/class/method name (NEVER line numbers)\n   - **Spec rule violated**: quote the exact spec text\n   - **What the code does**: describe the actual behavior\n   - **Severity**: CRITICAL (security/data loss), HIGH (wrong behavior), MEDIUM (non-compliance), LOW (style/convention)\n4. If a source file has NO violations, explicitly state: 'CLEAN \u2014 no spec violations found.'\n5. At the end, provide a SUMMARY with total violation counts by severity.\n6. Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.\n\nSPEC FORMAT: The specification file is wrapped in <specs-filename> and <specs-file-content> tags (distinct from source file tags).\n" + FILE_FORMAT_EXAMPLE + BREVITY_RULES;
           const csSpecBytes = Buffer.byteLength(csSpecBlock, "utf-8");
           const csSystemBytes = Buffer.byteLength(csSystemPrompt, "utf-8");
           const csExtraBytes = Buffer.byteLength(csExtraInstructions, "utf-8");

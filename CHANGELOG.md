@@ -1,6 +1,17 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.57] - 2026-04-10
+
+### Changed
+
+- Use <specs-filename>/<specs-file-content> for spec files
+
+check_against_specs now wraps the specification file in distinct
+XML tags to avoid confusion with source files. readFileAsCodeBlock
+accepts a tagPrefix parameter (""|"specs-"). System prompt updated
+to document the spec-specific format.
+
 ## [3.9.56] - 2026-04-10
 
 ### Changed
