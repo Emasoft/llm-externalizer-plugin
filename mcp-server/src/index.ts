@@ -1509,6 +1509,46 @@ let SOFT_TIMEOUT_MS = (activeResolved?.timeout ?? 300) * 1000;
 let FALLBACK_CONTEXT_LENGTH = activeResolved?.contextWindow || 100000;
 const MODEL_CACHE_TTL_MS = 3600_000; // 1 hour TTL for OpenRouter model list cache
 
+// ── Reasoning effort cache ──────────────────────────────────────────
+// OpenRouter's chat/completions accepts a `reasoning: { effort, exclude }`
+// field. Not every model supports it, and some only support certain effort
+// levels. We try xhigh first, fall back to high, then drop reasoning
+// entirely. Results are cached per model ID so we only probe once per
+// session. `exclude: true` suppresses the reasoning trace from the response
+// — we get the benefit of deeper thinking without paying to stream the chain.
+// Values stored: "xhigh" (unprobed or confirmed xhigh), "high" (downgraded),
+// "none" (reasoning rejected or unsupported).
+const MODEL_REASONING_CACHE = new Map<string, "xhigh" | "high" | "none">();
+
+function reasoningLadderForModel(
+  modelId: string,
+): Array<Record<string, unknown> | null> {
+  if (!modelId) return [null];
+  const cached = MODEL_REASONING_CACHE.get(modelId);
+  if (cached === "none") return [null];
+  if (cached === "high") return [{ effort: "high", exclude: true }, null];
+  return [
+    { effort: "xhigh", exclude: true },
+    { effort: "high", exclude: true },
+    null,
+  ];
+}
+
+function recordReasoningRejection(
+  modelId: string,
+  failedReasoning: Record<string, unknown> | null,
+): void {
+  if (!modelId || !failedReasoning) return;
+  const effort = (failedReasoning as { effort?: string }).effort;
+  if (effort === "xhigh") MODEL_REASONING_CACHE.set(modelId, "high");
+  else if (effort === "high") MODEL_REASONING_CACHE.set(modelId, "none");
+}
+
+function isReasoningRejectionError(status: number, bodyText: string): boolean {
+  if (status !== 400 && status !== 422) return false;
+  return /reason|effort|xhigh|thinking/i.test(bodyText);
+}
+
 // ── Backend configuration ────────────────────────────────────────────
 // Tracks which backend (local or OpenRouter) is currently active.
 // Built from the resolved profile. Mutable — profile switching updates this.
@@ -2502,13 +2542,20 @@ async function chatCompletionSimple(
     return chatCompletionNative(conn, messages, options);
   }
 
-  const body: Record<string, unknown> = {
+  const baseBody: Record<string, unknown> = {
     messages,
     temperature: options.temperature ?? DEFAULT_TEMPERATURE,
     max_tokens: options.maxTokens ?? resolveDefaultMaxTokens(),
     stream: false,
   };
-  if (conn.model) body.model = conn.model;
+  if (conn.model) baseBody.model = conn.model;
+
+  // Reasoning ladder: OpenRouter backend tries xhigh → high → none.
+  // Other backends (ollama/vllm/llamacpp OpenAI-compat) get [null] — no reasoning field.
+  const reasoningLadder =
+    currentBackend.type === "openrouter"
+      ? reasoningLadderForModel(conn.model || "")
+      : [null];
 
   const startTime = Date.now();
 
@@ -2522,42 +2569,64 @@ async function chatCompletionSimple(
     : null;
 
   try {
-    const res = await fetchWithRetry429(
-      conn.url,
-      {
-        method: "POST",
-        headers: conn.headers,
-        body: JSON.stringify(body),
-      },
-      conn.timeout,
-      startTime,
-    );
+    let lastError: Error | null = null;
 
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`API error ${res.status} (${currentBackend.type}): ${text}`);
+    for (const reasoning of reasoningLadder) {
+      const body: Record<string, unknown> = { ...baseBody };
+      if (reasoning) body.reasoning = reasoning;
+
+      const res = await fetchWithRetry429(
+        conn.url,
+        {
+          method: "POST",
+          headers: conn.headers,
+          body: JSON.stringify(body),
+        },
+        conn.timeout,
+        startTime,
+      );
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        if (reasoning && isReasoningRejectionError(res.status, text)) {
+          const effort = (reasoning as { effort?: string }).effort;
+          process.stderr.write(
+            `[llm-externalizer] Model ${conn.model} rejected reasoning.effort=${effort} — downgrading\n`,
+          );
+          recordReasoningRejection(conn.model || "", reasoning);
+          lastError = new Error(
+            `API error ${res.status} (${currentBackend.type}): ${text}`,
+          );
+          continue;
+        }
+        throw new Error(
+          `API error ${res.status} (${currentBackend.type}): ${text}`,
+        );
+      }
+
+      const data = (await res.json()) as {
+        choices?: Array<{
+          message?: { content?: string };
+          finish_reason?: string;
+        }>;
+        model?: string;
+        usage?: {
+          prompt_tokens: number;
+          completion_tokens: number;
+          total_tokens: number;
+          cost?: number;
+        };
+      };
+
+      const content = data.choices?.[0]?.message?.content ?? "";
+      const model = data.model ?? options.model ?? "unknown";
+      const finishReason = data.choices?.[0]?.finish_reason ?? "";
+      const usage = data.usage;
+
+      return { content, model, usage, finishReason, truncated: false };
     }
 
-    const data = await res.json() as {
-      choices?: Array<{
-        message?: { content?: string };
-        finish_reason?: string;
-      }>;
-      model?: string;
-      usage?: {
-        prompt_tokens: number;
-        completion_tokens: number;
-        total_tokens: number;
-        cost?: number;
-      };
-    };
-
-    const content = data.choices?.[0]?.message?.content ?? "";
-    const model = data.model ?? options.model ?? "unknown";
-    const finishReason = data.choices?.[0]?.finish_reason ?? "";
-    const usage = data.usage;
-
-    return { content, model, usage, finishReason, truncated: false };
+    throw lastError ?? new Error("Reasoning ladder exhausted with no response");
   } finally {
     if (heartbeat) clearInterval(heartbeat);
   }
@@ -2702,30 +2771,30 @@ async function chatCompletionJSON(
     };
   }
 
-  const body: Record<string, unknown> = {
+  const baseBody: Record<string, unknown> = {
     messages,
     temperature: options.temperature ?? DEFAULT_TEMPERATURE,
     max_tokens: options.maxTokens ?? resolveDefaultMaxTokens(),
     stream: false, // Non-streaming for structured output
   };
 
-  if (conn.model) body.model = conn.model;
+  if (conn.model) baseBody.model = conn.model;
 
   // Structured output: json_schema + response-healing (OpenRouter only)
   if (options.jsonSchema && currentBackend.type === "openrouter") {
-    body.response_format = {
+    baseBody.response_format = {
       type: "json_schema",
       json_schema: options.jsonSchema,
     };
     // Response-healing plugin auto-fixes malformed JSON from weaker models
-    body.plugins = [{ id: "response-healing" }];
+    baseBody.plugins = [{ id: "response-healing" }];
   }
 
-  const fetchOpts = {
-    method: "POST",
-    headers: conn.headers,
-    body: JSON.stringify(body),
-  };
+  // Reasoning ladder (OpenRouter only): xhigh → high → none
+  const reasoningLadder =
+    currentBackend.type === "openrouter"
+      ? reasoningLadderForModel(conn.model || "")
+      : [null];
 
   // Periodic progress keepalive while waiting for non-streaming response
   const jsonStartTime = Date.now();
@@ -2743,33 +2812,66 @@ async function chatCompletionJSON(
   }
 
   try {
-    const res = await fetchWithRetry429(
-      conn.url,
-      fetchOpts,
-      conn.timeout,
-      jsonStartTime,
-    );
+    let lastLadderError: Error | null = null;
+    let rawContent = "";
+    let model = "";
+    let usage: StreamingResult["usage"] | undefined;
+    let finishReason = "";
+    let gotResponse = false;
 
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(
-        `API error ${res.status} (${currentBackend.type}): ${text}`,
+    for (const reasoning of reasoningLadder) {
+      const body: Record<string, unknown> = { ...baseBody };
+      if (reasoning) body.reasoning = reasoning;
+
+      const res = await fetchWithRetry429(
+        conn.url,
+        {
+          method: "POST",
+          headers: conn.headers,
+          body: JSON.stringify(body),
+        },
+        conn.timeout,
+        jsonStartTime,
       );
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        if (reasoning && isReasoningRejectionError(res.status, text)) {
+          const effort = (reasoning as { effort?: string }).effort;
+          process.stderr.write(
+            `[llm-externalizer] Model ${conn.model} rejected reasoning.effort=${effort} (JSON mode) — downgrading\n`,
+          );
+          recordReasoningRejection(conn.model || "", reasoning);
+          lastLadderError = new Error(
+            `API error ${res.status} (${currentBackend.type}): ${text}`,
+          );
+          continue;
+        }
+        throw new Error(
+          `API error ${res.status} (${currentBackend.type}): ${text}`,
+        );
+      }
+
+      const data = (await res.json()) as {
+        choices?: Array<{
+          message?: { content?: string };
+          finish_reason?: string;
+        }>;
+        model?: string;
+        usage?: StreamingResult["usage"];
+      };
+
+      rawContent = data.choices?.[0]?.message?.content ?? "";
+      model = data.model ?? conn.model ?? "";
+      usage = data.usage;
+      finishReason = data.choices?.[0]?.finish_reason ?? "";
+      gotResponse = true;
+      break;
     }
 
-    const data = (await res.json()) as {
-      choices?: Array<{
-        message?: { content?: string };
-        finish_reason?: string;
-      }>;
-      model?: string;
-      usage?: StreamingResult["usage"];
-    };
-
-    const rawContent = data.choices?.[0]?.message?.content ?? "";
-    const model = data.model ?? conn.model ?? "";
-    const usage = data.usage;
-    const finishReason = data.choices?.[0]?.finish_reason ?? "";
+    if (!gotResponse) {
+      throw lastLadderError ?? new Error("Reasoning ladder exhausted with no response");
+    }
 
     // Parse the JSON response — guard against empty/whitespace-only content
     if (!rawContent.trim()) {
@@ -3506,32 +3608,49 @@ async function chatCompletionWithRetry(
       throw err; // Exhausted retries
     }
 
-    // "stop" means normal completion — record success, return immediately
-    if (resp.finishReason === "stop" && !resp.truncated) {
+    // "stop" with non-empty content means normal completion — return immediately.
+    // Note: some providers return finishReason="stop" with empty content for
+    // problematic prompts. We treat that as an empty response (retryable).
+    if (resp.finishReason === "stop" && !resp.truncated && resp.content.trim().length > 0) {
       recordServiceSuccess();
       return resp;
     }
 
-    // "length" means output hit max_tokens limit — not a server issue, don't retry.
-    // Append truncation notice to the content so it appears in the output report.
+    // "length" — output hit max_tokens limit, real truncation. Don't retry.
     if (resp.finishReason === "length") {
-      recordServiceSuccess(); // The server worked fine, just hit the limit
+      recordServiceSuccess();
       resp.truncated = true;
-      resp.content += "\n\n---\n**TRUNCATED**: Response hit output token limit (finishReason=length). The analysis above may be incomplete.";
+      resp.content +=
+        "\n\n---\n**TRUNCATED**: Response hit the output-token limit (finish_reason=length). The analysis above is cut off mid-generation.";
       process.stderr.write(
-        `[llm-externalizer] finishReason=length on attempt ${attempt + 1} — output token limit hit\n`,
+        `[llm-externalizer] finish_reason=length on attempt ${attempt + 1} — output token limit hit\n`,
       );
       return resp;
     }
 
-    // Empty response — count as failure, retry
+    // "content_filter" — provider blocked the response. Deterministic, don't retry.
+    if (resp.finishReason === "content_filter") {
+      recordServiceSuccess();
+      resp.truncated = true;
+      resp.content +=
+        "\n\n---\n**BLOCKED**: The provider's content filter blocked this response (finish_reason=content_filter). No retry — the block is deterministic for this prompt.";
+      process.stderr.write(
+        `[llm-externalizer] finish_reason=content_filter on attempt ${attempt + 1} — content filter blocked response\n`,
+      );
+      return resp;
+    }
+
+    // Everything else: empty content, finishReason="" (malformed/glitch),
+    // finishReason="error", or unknown values. Retry up to MAX_TRUNCATION_RETRIES.
     recordServiceFailure();
+
+    const isEmpty = resp.content.trim().length === 0;
+    const reasonLabel = resp.finishReason || "empty";
 
     if (attempt < MAX_TRUNCATION_RETRIES) {
       process.stderr.write(
-        `[llm-externalizer] Truncated (finishReason=${resp.finishReason}, truncated=${resp.truncated}) — retrying (${attempt + 1}/${MAX_TRUNCATION_RETRIES})\n`,
+        `[llm-externalizer] Empty/invalid response (finish_reason=${reasonLabel}, empty=${isEmpty}) — retrying (${attempt + 1}/${MAX_TRUNCATION_RETRIES})\n`,
       );
-      // Check systemic failure threshold
       const abort = await checkServiceHealthOrWait();
       if (abort) {
         return {
@@ -3544,10 +3663,17 @@ async function chatCompletionWithRetry(
       continue;
     }
 
-    // Exhausted retries — append notice to content for the output report
-    resp.content += `\n\n---\n**TRUNCATED**: Still incomplete after ${MAX_TRUNCATION_RETRIES} retries (finishReason=${resp.finishReason}). The analysis above may be incomplete.`;
+    // Exhausted retries — label by cause so the report makes sense.
+    if (isEmpty && (resp.finishReason === "" || resp.finishReason === "stop")) {
+      resp.content = `**EMPTY RESPONSE**: The provider returned no content after ${MAX_TRUNCATION_RETRIES} retries (finish_reason=${reasonLabel}). This usually means a transient provider glitch or the model failed on this specific prompt. No partial output available.`;
+    } else if (resp.finishReason === "error") {
+      resp.content += `\n\n---\n**UPSTREAM ERROR**: The provider reported an error (finish_reason=error) after ${MAX_TRUNCATION_RETRIES} retries. The partial output above may be incomplete.`;
+    } else {
+      resp.content += `\n\n---\n**INCOMPLETE**: Response did not finish cleanly after ${MAX_TRUNCATION_RETRIES} retries (finish_reason=${reasonLabel}). The output above may be incomplete.`;
+    }
+    resp.truncated = true;
     process.stderr.write(
-      `[llm-externalizer] Still truncated after ${MAX_TRUNCATION_RETRIES} retries — returning partial result\n`,
+      `[llm-externalizer] Exhausted ${MAX_TRUNCATION_RETRIES} retries (finish_reason=${reasonLabel}, empty=${isEmpty}) — returning with label\n`,
     );
     return resp;
   }

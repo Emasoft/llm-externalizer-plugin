@@ -265,8 +265,25 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path, lock
         print("All checks passed.")
         return
 
-    # ── 1. Bump version (always — marketplace needs version change to detect updates) ──
-    print("\n── 1. Bump version ──")
+    # ── 0. Pre-flight: working tree must be clean ──
+    # Mutating version in a dirty tree mixes user changes with publish artifacts.
+    print("\n── 0. Pre-flight: working tree check ──")
+    pf_status = run(["git", "status", "--porcelain"], check=False)
+    pf_dirty = [
+        line for line in (pf_status.stdout or "").strip().splitlines()
+        if line and not line.startswith("??")  # untracked files are ok
+    ]
+    if pf_dirty:
+        print("ERROR: working tree has uncommitted changes:", file=sys.stderr)
+        for line in pf_dirty:
+            print(f"  {line}", file=sys.stderr)
+        print("Commit or stash changes before publishing.", file=sys.stderr)
+        sys.exit(1)
+    print("  Working tree is clean")
+    print()
+
+    # ── 1. Plan version bump (no file writes yet) ──
+    print("── 1. Plan version bump ──")
     if not plugin_json.exists():
         print(f"ERROR: {plugin_json} not found", file=sys.stderr)
         sys.exit(1)
@@ -287,19 +304,17 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path, lock
 
     tag = f"v{new_version}"
 
-    # Verify tag does not already exist locally
+    # Verify tag does not already exist (local + remote) — read-only checks
     tag_check = run(["git", "tag", "--list", tag], check=False)
     if tag_check.stdout and tag_check.stdout.strip() == tag:
         print(f"ERROR: tag '{tag}' already exists locally", file=sys.stderr)
         sys.exit(1)
-
-    # Verify tag does not already exist on remote
     remote_tag_check = run(["git", "ls-remote", "--tags", "origin", tag], check=False)
     if remote_tag_check.stdout and remote_tag_check.stdout.strip():
         print(f"ERROR: tag '{tag}' already exists on remote origin", file=sys.stderr)
         sys.exit(1)
 
-    print(f"  {current} -> {new_version} (tag: {tag})")
+    print(f"  Planned: {current} -> {new_version} (tag: {tag})")
 
     if args.dry_run:
         print(
@@ -308,6 +323,33 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path, lock
         print(f"[DRY RUN] Would commit, tag {tag}, push, and create GitHub release")
         return
 
+    # ── 2. Validate CURRENT code BEFORE any mutations ──
+    # All linters + typecheck + CPV run on the current working tree.
+    # If any fail, abort — working tree is unchanged.
+    print("\n── 2. Validate (linting + typecheck + CPV) ──")
+    if not run_checks(repo_root):
+        print("ERROR: validation failed. Aborting BEFORE version bump.", file=sys.stderr)
+        print("Working tree is unchanged — fix the issues and re-run.", file=sys.stderr)
+        sys.exit(1)
+    if not shutil.which("uvx"):
+        print("ERROR: 'uvx' not found. CPV validation is required.", file=sys.stderr)
+        sys.exit(1)
+    cpv_pre = run(
+        ["uvx", "--from", "git+https://github.com/Emasoft/claude-plugins-validation",
+         "--with", "pyyaml", "cpv-remote-validate", "plugin", str(repo_root)],
+        capture=True, check=False,
+    )
+    if cpv_pre.returncode != 0:
+        print("ERROR: CPV validation failed:", file=sys.stderr)
+        if cpv_pre.stdout:
+            print(cpv_pre.stdout, file=sys.stderr)
+        sys.exit(1)
+    print("  CPV: passed")
+    print("  All checks passed — safe to bump version and commit")
+    print()
+
+    # ── 3. Apply version bump to files ──
+    print("── 3. Apply version bump ──")
     # Update plugin.json
     manifest["version"] = new_version
     plugin_json.write_text(
@@ -356,8 +398,8 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path, lock
         print(f"  Synced version to {index_ts.relative_to(repo_root)}")
     print()
 
-    # ── 2. Rebuild dist (with new version) ──
-    print("── 2. Rebuild dist ──")
+    # ── 4. Rebuild dist (with new version) ──
+    print("── 4. Rebuild dist ──")
     mcp_dir = str(repo_root / "mcp-server")
     rebuild = run(["npm", "run", "build"], capture=True, check=False, cwd=mcp_dir)
     if rebuild.returncode != 0:
@@ -374,41 +416,17 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path, lock
     print("  OK: dist rebuilt with updated version")
     print()
 
-    # ── 3. Validate (build + CPV — blocks publish if anything fails) ──
-    print("── 3. Validate ──")
-    checks_ok = run_checks(repo_root)
-    if not checks_ok:
-        print("ERROR: build checks failed.", file=sys.stderr)
-        sys.exit(1)
-    print("  build: passing | manifest: valid")
-
-    if not shutil.which("uvx"):
-        print("ERROR: 'uvx' not found. CPV validation is required.", file=sys.stderr)
-        sys.exit(1)
-    cpv_result = run(
-        ["uvx", "--from", "git+https://github.com/Emasoft/claude-plugins-validation",
-         "--with", "pyyaml", "cpv-remote-validate", "plugin", str(repo_root)],
-        capture=True, check=False,
-    )
-    if cpv_result.returncode != 0:
-        print("ERROR: CPV validation failed:", file=sys.stderr)
-        if cpv_result.stdout:
-            print(cpv_result.stdout, file=sys.stderr)
-        sys.exit(1)
-    print("  CPV: passed (0 issues)")
-    print()
-
-    # ── 4. Update README badges ──
+    # ── 5. Update README badges ──
     readme = repo_root / "README.md"
-    print("── 4. Update README badges ──")
-    if update_readme_badges(readme, new_version, checks_ok):
+    print("── 5. Update README badges ──")
+    if update_readme_badges(readme, new_version, True):
         print(f"  Updated badges in {readme.relative_to(repo_root)}")
     else:
         print("  No badge markers found in README.md, skipping")
     print()
 
-    # ── 5. Update CHANGELOG.md with git-cliff ──
-    print("── 5. Update changelog ──")
+    # ── 6. Update CHANGELOG.md with git-cliff ──
+    print("── 6. Update changelog ──")
     if shutil.which("git-cliff"):
         cliff_result = run(
             ["git-cliff", "--tag", tag, "--output", str(changelog)],
@@ -439,8 +457,8 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path, lock
         sys.exit(1)
     print()
 
-    # ── 6. Commit ──
-    print("── 6. Commit ──")
+    # ── 7. Commit ──
+    print("── 7. Commit ──")
     files_to_stage = [str(plugin_json)]
     pkg_json_path = repo_root / "mcp-server" / "package.json"
     srv_json_path = repo_root / "mcp-server" / "server.json"
@@ -477,13 +495,13 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path, lock
     run(["git", "commit", "-m", f"Release {tag}"], capture=False)
     print()
 
-    # ── 7. Tag ──
-    print("── 7. Tag ──")
+    # ── 8. Tag ──
+    print("── 8. Tag ──")
     run(["git", "tag", "-a", tag, "-m", f"Release {tag}"], capture=False)
     print()
 
-    # ── 8. Push (pre-push hook skips — lock file present) ──
-    print("── 8. Push ──")
+    # ── 9. Push (pre-push hook skips — lock file present) ──
+    print("── 9. Push ──")
     push_result = run(["git", "push", "--follow-tags"], capture=True, check=False)
     if push_result.returncode != 0:
         print("ERROR: push failed. Rolling back commit and tag.", file=sys.stderr)
@@ -495,8 +513,8 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path, lock
         sys.exit(1)
     print()
 
-    # ── 9. GitHub release ──
-    print("── 9. Create GitHub release ──")
+    # ── 10. GitHub release ──
+    print("── 10. Create GitHub release ──")
     notes = extract_release_notes(changelog, new_version)
     run(
         ["gh", "release", "create", tag, "--title", tag, "--notes", notes],

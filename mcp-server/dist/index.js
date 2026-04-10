@@ -29365,6 +29365,28 @@ var CONNECT_TIMEOUT_MS = 5e3;
 var SOFT_TIMEOUT_MS = (activeResolved?.timeout ?? 300) * 1e3;
 var FALLBACK_CONTEXT_LENGTH = activeResolved?.contextWindow || 1e5;
 var MODEL_CACHE_TTL_MS = 36e5;
+var MODEL_REASONING_CACHE = /* @__PURE__ */ new Map();
+function reasoningLadderForModel(modelId) {
+  if (!modelId) return [null];
+  const cached2 = MODEL_REASONING_CACHE.get(modelId);
+  if (cached2 === "none") return [null];
+  if (cached2 === "high") return [{ effort: "high", exclude: true }, null];
+  return [
+    { effort: "xhigh", exclude: true },
+    { effort: "high", exclude: true },
+    null
+  ];
+}
+function recordReasoningRejection(modelId, failedReasoning) {
+  if (!modelId || !failedReasoning) return;
+  const effort = failedReasoning.effort;
+  if (effort === "xhigh") MODEL_REASONING_CACHE.set(modelId, "high");
+  else if (effort === "high") MODEL_REASONING_CACHE.set(modelId, "none");
+}
+function isReasoningRejectionError(status, bodyText) {
+  if (status !== 400 && status !== 422) return false;
+  return /reason|effort|xhigh|thinking/i.test(bodyText);
+}
 function makeBackendFromProfile(resolved, modelOverride) {
   const isRemote = resolved.protocol === "openrouter_api";
   return {
@@ -29926,39 +29948,60 @@ async function chatCompletionSimple(messages, options = {}) {
   if (conn.isNative) {
     return chatCompletionNative(conn, messages, options);
   }
-  const body = {
+  const baseBody = {
     messages,
     temperature: options.temperature ?? DEFAULT_TEMPERATURE,
     max_tokens: options.maxTokens ?? resolveDefaultMaxTokens(),
     stream: false
   };
-  if (conn.model) body.model = conn.model;
+  if (conn.model) baseBody.model = conn.model;
+  const reasoningLadder = currentBackend.type === "openrouter" ? reasoningLadderForModel(conn.model || "") : [null];
   const startTime = Date.now();
   const heartbeat = options.onProgress ? setInterval(() => {
     const elapsed = Math.round((Date.now() - startTime) / 1e3);
     options.onProgress(50, 100, `Processing\u2026 ${elapsed}s elapsed`);
   }, HEARTBEAT_INTERVAL_MS) : null;
   try {
-    const res = await fetchWithRetry429(
-      conn.url,
-      {
-        method: "POST",
-        headers: conn.headers,
-        body: JSON.stringify(body)
-      },
-      conn.timeout,
-      startTime
-    );
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`API error ${res.status} (${currentBackend.type}): ${text}`);
+    let lastError = null;
+    for (const reasoning of reasoningLadder) {
+      const body = { ...baseBody };
+      if (reasoning) body.reasoning = reasoning;
+      const res = await fetchWithRetry429(
+        conn.url,
+        {
+          method: "POST",
+          headers: conn.headers,
+          body: JSON.stringify(body)
+        },
+        conn.timeout,
+        startTime
+      );
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        if (reasoning && isReasoningRejectionError(res.status, text)) {
+          const effort = reasoning.effort;
+          process.stderr.write(
+            `[llm-externalizer] Model ${conn.model} rejected reasoning.effort=${effort} \u2014 downgrading
+`
+          );
+          recordReasoningRejection(conn.model || "", reasoning);
+          lastError = new Error(
+            `API error ${res.status} (${currentBackend.type}): ${text}`
+          );
+          continue;
+        }
+        throw new Error(
+          `API error ${res.status} (${currentBackend.type}): ${text}`
+        );
+      }
+      const data = await res.json();
+      const content = data.choices?.[0]?.message?.content ?? "";
+      const model = data.model ?? options.model ?? "unknown";
+      const finishReason = data.choices?.[0]?.finish_reason ?? "";
+      const usage = data.usage;
+      return { content, model, usage, finishReason, truncated: false };
     }
-    const data = await res.json();
-    const content = data.choices?.[0]?.message?.content ?? "";
-    const model = data.model ?? options.model ?? "unknown";
-    const finishReason = data.choices?.[0]?.finish_reason ?? "";
-    const usage = data.usage;
-    return { content, model, usage, finishReason, truncated: false };
+    throw lastError ?? new Error("Reasoning ladder exhausted with no response");
   } finally {
     if (heartbeat) clearInterval(heartbeat);
   }
@@ -30055,26 +30098,22 @@ async function chatCompletionJSON(messages, options = {}) {
       finishReason: nativeResult.finishReason
     };
   }
-  const body = {
+  const baseBody = {
     messages,
     temperature: options.temperature ?? DEFAULT_TEMPERATURE,
     max_tokens: options.maxTokens ?? resolveDefaultMaxTokens(),
     stream: false
     // Non-streaming for structured output
   };
-  if (conn.model) body.model = conn.model;
+  if (conn.model) baseBody.model = conn.model;
   if (options.jsonSchema && currentBackend.type === "openrouter") {
-    body.response_format = {
+    baseBody.response_format = {
       type: "json_schema",
       json_schema: options.jsonSchema
     };
-    body.plugins = [{ id: "response-healing" }];
+    baseBody.plugins = [{ id: "response-healing" }];
   }
-  const fetchOpts = {
-    method: "POST",
-    headers: conn.headers,
-    body: JSON.stringify(body)
-  };
+  const reasoningLadder = currentBackend.type === "openrouter" ? reasoningLadderForModel(conn.model || "") : [null];
   const jsonStartTime = Date.now();
   let progressTimer;
   if (options.onProgress) {
@@ -30089,23 +30128,54 @@ async function chatCompletionJSON(messages, options = {}) {
     }, 1e4);
   }
   try {
-    const res = await fetchWithRetry429(
-      conn.url,
-      fetchOpts,
-      conn.timeout,
-      jsonStartTime
-    );
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(
-        `API error ${res.status} (${currentBackend.type}): ${text}`
+    let lastLadderError = null;
+    let rawContent = "";
+    let model = "";
+    let usage;
+    let finishReason = "";
+    let gotResponse = false;
+    for (const reasoning of reasoningLadder) {
+      const body = { ...baseBody };
+      if (reasoning) body.reasoning = reasoning;
+      const res = await fetchWithRetry429(
+        conn.url,
+        {
+          method: "POST",
+          headers: conn.headers,
+          body: JSON.stringify(body)
+        },
+        conn.timeout,
+        jsonStartTime
       );
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        if (reasoning && isReasoningRejectionError(res.status, text)) {
+          const effort = reasoning.effort;
+          process.stderr.write(
+            `[llm-externalizer] Model ${conn.model} rejected reasoning.effort=${effort} (JSON mode) \u2014 downgrading
+`
+          );
+          recordReasoningRejection(conn.model || "", reasoning);
+          lastLadderError = new Error(
+            `API error ${res.status} (${currentBackend.type}): ${text}`
+          );
+          continue;
+        }
+        throw new Error(
+          `API error ${res.status} (${currentBackend.type}): ${text}`
+        );
+      }
+      const data = await res.json();
+      rawContent = data.choices?.[0]?.message?.content ?? "";
+      model = data.model ?? conn.model ?? "";
+      usage = data.usage;
+      finishReason = data.choices?.[0]?.finish_reason ?? "";
+      gotResponse = true;
+      break;
     }
-    const data = await res.json();
-    const rawContent = data.choices?.[0]?.message?.content ?? "";
-    const model = data.model ?? conn.model ?? "";
-    const usage = data.usage;
-    const finishReason = data.choices?.[0]?.finish_reason ?? "";
+    if (!gotResponse) {
+      throw lastLadderError ?? new Error("Reasoning ladder exhausted with no response");
+    }
     if (!rawContent.trim()) {
       throw new Error(
         "LLM returned empty response (expected JSON). Model may not support structured output."
