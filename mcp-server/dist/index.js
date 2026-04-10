@@ -29396,6 +29396,77 @@ function applyModelOverrides(body, modelId) {
   if (override.top_p !== void 0) out.top_p = override.top_p;
   return out;
 }
+var MODEL_SUPPORTED_PARAMS = /* @__PURE__ */ new Map();
+var modelSupportedParamsCacheTime = 0;
+var MODEL_SUPPORTED_PARAMS_TTL_MS = 36e5;
+var FILTERABLE_REQUEST_FIELDS = /* @__PURE__ */ new Set([
+  "temperature",
+  "top_p",
+  "top_k",
+  "min_p",
+  "top_a",
+  "frequency_penalty",
+  "presence_penalty",
+  "repetition_penalty",
+  "reasoning",
+  "include_reasoning",
+  "response_format",
+  "structured_outputs",
+  "seed",
+  "stop",
+  "tools",
+  "tool_choice",
+  "parallel_tool_calls",
+  "logit_bias",
+  "logprobs",
+  "top_logprobs"
+]);
+async function getModelSupportedParams(modelId) {
+  if (!modelId || currentBackend.type !== "openrouter") return null;
+  const now = Date.now();
+  if (now - modelSupportedParamsCacheTime > MODEL_SUPPORTED_PARAMS_TTL_MS) {
+    MODEL_SUPPORTED_PARAMS.clear();
+    modelSupportedParamsCacheTime = now;
+  }
+  const cached2 = MODEL_SUPPORTED_PARAMS.get(modelId);
+  if (cached2 !== void 0) return cached2;
+  try {
+    const res = await fetchWithTimeout(
+      `${currentBackend.baseUrl}/v1/models/${modelId}/endpoints`,
+      { headers: apiHeaders() }
+    );
+    if (!res.ok) return null;
+    const body = await res.json();
+    const endpoints = body.data?.endpoints;
+    if (!Array.isArray(endpoints) || endpoints.length === 0) return null;
+    const merged = /* @__PURE__ */ new Set();
+    for (const ep of endpoints) {
+      if (Array.isArray(ep.supported_parameters)) {
+        for (const p of ep.supported_parameters) merged.add(p);
+      }
+    }
+    if (merged.size === 0) return null;
+    MODEL_SUPPORTED_PARAMS.set(modelId, merged);
+    process.stderr.write(
+      `[llm-externalizer] Model ${modelId} supports: ${Array.from(merged).sort().join(", ")}
+`
+    );
+    return merged;
+  } catch {
+    return null;
+  }
+}
+function filterBodyForSupportedParams(body, supported) {
+  if (!supported) return body;
+  const out = {};
+  for (const [key, value] of Object.entries(body)) {
+    if (FILTERABLE_REQUEST_FIELDS.has(key) && !supported.has(key)) {
+      continue;
+    }
+    out[key] = value;
+  }
+  return out;
+}
 function recordReasoningRejection(modelId, failedReasoning) {
   if (!modelId || !failedReasoning) return;
   const effort = failedReasoning.effort;
@@ -30045,6 +30116,7 @@ async function chatCompletionSimple(messages, options = {}) {
   };
   if (conn.model) baseBody.model = conn.model;
   const reasoningLadder = currentBackend.type === "openrouter" ? reasoningLadderForModel(conn.model || "") : [null];
+  const supportedParams = await getModelSupportedParams(conn.model || "");
   const startTime = Date.now();
   const heartbeat = options.onProgress ? setInterval(() => {
     const elapsed = Math.round((Date.now() - startTime) / 1e3);
@@ -30056,6 +30128,7 @@ async function chatCompletionSimple(messages, options = {}) {
       let body = { ...baseBody };
       if (reasoning) body.reasoning = reasoning;
       body = applyModelOverrides(body, conn.model);
+      body = filterBodyForSupportedParams(body, supportedParams);
       const res = await fetchWithRetry429(
         conn.url,
         {
@@ -30204,6 +30277,7 @@ async function chatCompletionJSON(messages, options = {}) {
     baseBody.plugins = [{ id: "response-healing" }];
   }
   const reasoningLadder = currentBackend.type === "openrouter" ? reasoningLadderForModel(conn.model || "") : [null];
+  const supportedParams = await getModelSupportedParams(conn.model || "");
   const jsonStartTime = Date.now();
   let progressTimer;
   if (options.onProgress) {
@@ -30228,6 +30302,7 @@ async function chatCompletionJSON(messages, options = {}) {
       let body = { ...baseBody };
       if (reasoning) body.reasoning = reasoning;
       body = applyModelOverrides(body, conn.model);
+      body = filterBodyForSupportedParams(body, supportedParams);
       const res = await fetchWithRetry429(
         conn.url,
         {

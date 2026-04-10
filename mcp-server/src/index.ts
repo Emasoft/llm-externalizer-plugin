@@ -1592,6 +1592,116 @@ function applyModelOverrides(
   return out;
 }
 
+// ── Dynamic per-model supported_parameters filter ────────────────────
+// OpenRouter's /v1/models endpoint reports each model's
+// `supported_parameters` — a concrete list of which request-body fields
+// the upstream provider accepts. For example, Nemotron 3 Super :free
+// supports reasoning/temperature/top_p but NOT frequency_penalty,
+// presence_penalty, top_k, min_p, stop, or repetition_penalty.
+//
+// We cache this per model and filter the outgoing request body so that
+// unsupported fields are silently dropped. This is forward-compatible:
+// any new model is handled automatically without hardcoding overrides.
+// OpenRouter control fields (stream, plugins, messages, model, etc.)
+// are NOT in supported_parameters and must never be filtered — we only
+// touch the subset in FILTERABLE_REQUEST_FIELDS below.
+const MODEL_SUPPORTED_PARAMS = new Map<string, Set<string>>();
+let modelSupportedParamsCacheTime = 0;
+const MODEL_SUPPORTED_PARAMS_TTL_MS = 3600_000; // 1 hour
+
+// The subset of request-body keys we compare against supported_parameters.
+// OpenRouter routing/control fields (stream, model, messages, plugins,
+// metadata, provider, debug, etc.) are NOT listed here — they are always
+// forwarded regardless of the model.
+const FILTERABLE_REQUEST_FIELDS = new Set([
+  "temperature",
+  "top_p",
+  "top_k",
+  "min_p",
+  "top_a",
+  "frequency_penalty",
+  "presence_penalty",
+  "repetition_penalty",
+  "reasoning",
+  "include_reasoning",
+  "response_format",
+  "structured_outputs",
+  "seed",
+  "stop",
+  "tools",
+  "tool_choice",
+  "parallel_tool_calls",
+  "logit_bias",
+  "logprobs",
+  "top_logprobs",
+]);
+
+async function getModelSupportedParams(
+  modelId: string,
+): Promise<Set<string> | null> {
+  if (!modelId || currentBackend.type !== "openrouter") return null;
+  const now = Date.now();
+  if (now - modelSupportedParamsCacheTime > MODEL_SUPPORTED_PARAMS_TTL_MS) {
+    MODEL_SUPPORTED_PARAMS.clear();
+    modelSupportedParamsCacheTime = now;
+  }
+  const cached = MODEL_SUPPORTED_PARAMS.get(modelId);
+  if (cached !== undefined) return cached;
+
+  try {
+    // Query the per-model endpoint with the EXACT model id.
+    // /v1/models/{id}/endpoints returns { data: { endpoints: [...] } }
+    // where each endpoint carries its own supported_parameters list.
+    // We take the UNION across endpoints — if any provider for this
+    // model accepts a field, sending it is safe (the provider that
+    // doesn't accept will either ignore it or return a 400, which the
+    // reasoning ladder and retry loop already handle).
+    const res = await fetchWithTimeout(
+      `${currentBackend.baseUrl}/v1/models/${modelId}/endpoints`,
+      { headers: apiHeaders() },
+    );
+    if (!res.ok) return null;
+    const body = (await res.json()) as {
+      data?: {
+        endpoints?: Array<{ supported_parameters?: string[] }>;
+      };
+    };
+    const endpoints = body.data?.endpoints;
+    if (!Array.isArray(endpoints) || endpoints.length === 0) return null;
+    const merged = new Set<string>();
+    for (const ep of endpoints) {
+      if (Array.isArray(ep.supported_parameters)) {
+        for (const p of ep.supported_parameters) merged.add(p);
+      }
+    }
+    if (merged.size === 0) return null;
+    MODEL_SUPPORTED_PARAMS.set(modelId, merged);
+    process.stderr.write(
+      `[llm-externalizer] Model ${modelId} supports: ${Array.from(merged).sort().join(", ")}\n`,
+    );
+    return merged;
+  } catch {
+    // Non-fatal — unknown support, proceed without filtering
+    return null;
+  }
+}
+
+function filterBodyForSupportedParams(
+  body: Record<string, unknown>,
+  supported: Set<string> | null,
+): Record<string, unknown> {
+  if (!supported) return body;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(body)) {
+    if (FILTERABLE_REQUEST_FIELDS.has(key) && !supported.has(key)) {
+      // Known filterable field, not supported by this model — drop it
+      continue;
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
 function recordReasoningRejection(
   modelId: string,
   failedReasoning: Record<string, unknown> | null,
@@ -2738,6 +2848,13 @@ async function chatCompletionSimple(
       ? reasoningLadderForModel(conn.model || "")
       : [null];
 
+  // Dynamically look up which request-body fields this model accepts.
+  // The result is a Set<string> or null (unknown — don't filter). Queried
+  // from /v1/models/{id}/endpoints and cached per model for 1 hour. This
+  // is forward-compatible: any new model's unsupported fields are dropped
+  // automatically instead of causing 400 errors.
+  const supportedParams = await getModelSupportedParams(conn.model || "");
+
   const startTime = Date.now();
 
   // Heartbeat: send progress every 30s while waiting for the response.
@@ -2755,8 +2872,12 @@ async function chatCompletionSimple(
     for (const reasoning of reasoningLadder) {
       let body: Record<string, unknown> = { ...baseBody };
       if (reasoning) body.reasoning = reasoning;
-      // Apply per-model overrides last so they win over baseBody defaults.
+      // Apply per-model overrides before filtering so the filter has
+      // the full picture of what we intend to send.
       body = applyModelOverrides(body, conn.model);
+      // Filter to only fields this model supports. Does nothing for
+      // non-OpenRouter backends and for models with unknown metadata.
+      body = filterBodyForSupportedParams(body, supportedParams);
 
       const res = await fetchWithRetry429(
         conn.url,
@@ -2974,16 +3095,18 @@ async function chatCompletionJSON(
   }
 
   // Reasoning ladder (OpenRouter only): xhigh → high → none.
-  // Reasoning is enforced for structured-output calls too. With
-  // `exclude: true` on every reasoning config, the thinking trace stays
-  // out of `message.content`, so JSON.parse still sees pure output. If a
-  // specific provider rejects the reasoning + json_schema combination
-  // with a 400, the ladder catches it via isReasoningRejectionError and
-  // downgrades through xhigh → high → none automatically.
+  // Reasoning is enforced for structured-output calls too. The ladder
+  // sends only schema-valid fields (effort + summary). Providers that
+  // reject reasoning + json_schema return 400 and the ladder downgrades
+  // automatically.
   const reasoningLadder =
     currentBackend.type === "openrouter"
       ? reasoningLadderForModel(conn.model || "")
       : [null];
+
+  // Dynamic per-model parameter filter — drops request-body fields the
+  // model doesn't list in its supported_parameters. Cached per model.
+  const supportedParams = await getModelSupportedParams(conn.model || "");
 
   // Periodic progress keepalive while waiting for non-streaming response
   const jsonStartTime = Date.now();
@@ -3013,6 +3136,9 @@ async function chatCompletionJSON(
       if (reasoning) body.reasoning = reasoning;
       // Apply per-model overrides last so they win over baseBody defaults.
       body = applyModelOverrides(body, conn.model);
+      // Filter to only fields this model supports (Nemotron drops
+      // frequency_penalty etc., other models may drop reasoning).
+      body = filterBodyForSupportedParams(body, supportedParams);
 
       const res = await fetchWithRetry429(
         conn.url,
