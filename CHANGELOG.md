@@ -1,6 +1,28 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.81] - 2026-04-10
+
+### Changed
+
+- Or_model_info skill: don't reprint — trust the Bash tool output pane
+
+User directive: let the Bash tool output stand alone. The tool pane
+renders ANSI colors natively; if the output is collapsed behind a
+'+N lines' fold, the user expands it with ctrl+o themselves. No
+reprinting, no paraphrase, no summary.
+
+The assistant should run the CLI and stop. Only add commentary when
+the user asks an explicit follow-up question beyond 'show me the
+info' (like 'which provider is cheapest?' or 'does it support
+reasoning?').
+
+This resolves the long thread about ANSI surviving markdown
+reprints — it doesn't, and Claude Code's markdown renderer strips
+ESC bytes in every form (fenced, unfenced, with any language tag).
+The only rendering pipeline that processes ANSI is the Bash tool
+output pane itself, so we just let that pane do its job.
+
 ## [3.9.80] - 2026-04-10
 
 ### Changed
