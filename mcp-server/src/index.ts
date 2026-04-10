@@ -2678,6 +2678,70 @@ async function chatCompletionStreaming(
   return { content, model, usage, finishReason, truncated, reasoningDetected: reasoningActive };
 }
 
+// ── Non-streaming text completion ────────────────────────────────────
+// Simple request/response — no SSE, no chunk parsing, no progress tracking.
+// Used for free/cheap models that may not handle streaming well.
+// Returns the same StreamingResult interface for compatibility.
+
+async function chatCompletionSimple(
+  messages: ChatMessage[],
+  options: {
+    temperature?: number;
+    maxTokens?: number;
+    model?: string;
+  } = {},
+): Promise<StreamingResult> {
+  const conn = await resolveConnection(options);
+
+  const body: Record<string, unknown> = {
+    messages,
+    temperature: options.temperature ?? DEFAULT_TEMPERATURE,
+    max_tokens: options.maxTokens ?? resolveDefaultMaxTokens(),
+    stream: false,
+    // Explicit text output — no SSE, single JSON response
+    response_format: { type: "text" },
+  };
+  if (conn.model) body.model = conn.model;
+
+  const startTime = Date.now();
+  const res = await fetchWithRetry429(
+    conn.url,
+    {
+      method: "POST",
+      headers: conn.headers,
+      body: JSON.stringify(body),
+    },
+    conn.timeout,
+    startTime,
+  );
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`API error ${res.status} (${currentBackend.type}): ${text}`);
+  }
+
+  const data = await res.json() as {
+    choices?: Array<{
+      message?: { content?: string };
+      finish_reason?: string;
+    }>;
+    model?: string;
+    usage?: {
+      prompt_tokens: number;
+      completion_tokens: number;
+      total_tokens: number;
+      cost?: number;
+    };
+  };
+
+  const content = data.choices?.[0]?.message?.content ?? "";
+  const model = data.model ?? options.model ?? "unknown";
+  const finishReason = data.choices?.[0]?.finish_reason ?? "";
+  const usage = data.usage;
+
+  return { content, model, usage, finishReason, truncated: false };
+}
+
 // ── Non-streaming JSON completion ────────────────────────────────────
 // Used for fix_code/batch_fix where we need structured output.
 // Non-streaming allows response_format + response-healing plugin.
@@ -3592,10 +3656,15 @@ async function chatCompletionWithRetry(
     };
   }
 
+  // Use non-streaming for free/override models — simpler, more reliable, no SSE parsing
+  const useSimple = options.model === FREE_MODEL_ID;
+
   for (let attempt = 0; attempt <= MAX_TRUNCATION_RETRIES; attempt++) {
     let resp: StreamingResult;
     try {
-      resp = await chatCompletionStreaming(messages, options);
+      resp = useSimple
+        ? await chatCompletionSimple(messages, options)
+        : await chatCompletionStreaming(messages, options);
     } catch (err) {
       // Network/connection error — count as failure
       recordServiceFailure();
