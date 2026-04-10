@@ -1,6 +1,34 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.74] - 2026-04-10
+
+### Changed
+
+- Or_model_info skill: reprint CLI stdout verbatim + use --no-color
+
+Two fixes to the skill instructions:
+
+1. Claude Code collapses long Bash tool output behind a
+   '+N lines (ctrl+o to expand)' fold, so the rich table rendered
+   by the CLI was never actually visible to the user — they only
+   saw the first few lines inside the collapsed tool result. The
+   skill now explicitly instructs the assistant to COPY THE ENTIRE
+   CLI STDOUT VERBATIM into its response as a fenced code block.
+   The table must appear in the rendered transcript, not behind a
+   fold.
+
+2. Default to --no-color. ANSI escape codes get stripped when the
+   output is reprinted inside a code block anyway, and they add
+   noise. The Unicode borders, row separators, column alignment,
+   and footer legend all survive without color. The --no-color
+   variant is strictly better for the skill's use case. Users who
+   want the colored version directly in their terminal can run the
+   CLI themselves without --no-color.
+
+Also shrunk the Prerequisites section from 6 lines to 2 to keep
+SKILL.md under the 5000-char CPV strict-mode limit.
+
 ## [3.9.73] - 2026-04-10
 
 ### Changed
