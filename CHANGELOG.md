@@ -1,6 +1,72 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.67] - 2026-04-10
+
+### Changed
+
+- Restructure or_model_info skill to satisfy CPV strict mode
+
+CPV required:
+- SKILL.md under 5000 chars (move detail to references/)
+- ## Error Handling and ## Examples sections present
+- Description under 250 chars with "Trigger with ..." phrase
+- "Copy this checklist and track your progress" phrase
+- Reference files with explicit Table of Contents
+- Embedded TOC of each referenced file immediately after its link
+
+New reference files under skills/llm-externalizer-or-model-info/references/:
+
+- errors.md — full error table with 7 error codes and resolutions,
+  plus debugging tips (partial-name workaround, :free vs paid id
+  distinction, :thinking variants)
+- example-output.md — complete sample response for
+  nvidia/nemotron-3-super-120b-a12b:free with annotated explanation
+  of how to read pricing, latency percentiles, throughput percentiles,
+  and uptime
+- use-cases.md — six primary scenarios: verify supported params,
+  compare provider pricing, debug slow calls, check quantization,
+  confirm context length, check reasoning support
+
+SKILL.md now 4062 chars with embedded TOC summaries for each
+referenced file so progressive discovery can find the sub-content.
+
+CPV result: CRITICAL=0 MAJOR=0 MINOR=0.
+- Add or_model_info tool + llm-externalizer-or-model-info skill
+
+New MCP tool that queries OpenRouter's /v1/models/{exact_id}/endpoints
+for any model and returns formatted metadata: architecture, per-endpoint
+provider info, context length, pricing (per-M-tokens), supported
+request-body parameters, quantization, uptime (30m / 1d), latency
+percentiles, and throughput.
+
+Required input: `model` — the EXACT OpenRouter model id, case-sensitive,
+including vendor prefix and any :free / :thinking / :beta suffix. Only
+works when the active profile is OpenRouter; returns a clear error
+with a suggestion to switch profiles otherwise.
+
+The tool is informational only, not an LLM call — not added to
+LLM_TOOLS_SET, does not count toward session usage, no rate limiting.
+
+New skill: skills/llm-externalizer-or-model-info/SKILL.md. Triggers on
+phrases like "openrouter model info", "what params does X support",
+"show pricing for model", "check model support", etc. Walks the caller
+through parsing the exact model id (with fallback to asking for
+clarification on partial names) and presents the markdown block.
+
+Primary use cases:
+
+- Verify supported_parameters before integrating a new model —
+  Nemotron :free accepts `reasoning` + `temperature` + `top_p` but
+  NOT `frequency_penalty` / `presence_penalty` / `top_k` / `min_p` /
+  `stop`. The paid variant supports all of them. Important distinction.
+- Compare pricing across multiple providers hosting the same model.
+- Debug slow or failing calls by checking current uptime + latency.
+- Look up quantization and max token limits for a specific endpoint.
+
+The results are live — no caching on the MCP side. Every call hits
+OpenRouter directly. Safe to call repeatedly.
+
 ## [3.9.66] - 2026-04-10
 
 ### Changed
