@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.73] - 2026-04-10
+
+### Changed
+
+- Bright borders + row separators + no-paraphrase skill
+
 ## [3.9.72] - 2026-04-10
 
 ### Changed
