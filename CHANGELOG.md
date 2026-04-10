@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.71] - 2026-04-10
+
+### Changed
+
+- Dedicated capability rows + null uptime crash fix
+
 ## [3.9.70] - 2026-04-10
 
 ### Changed
