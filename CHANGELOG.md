@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.70] - 2026-04-10
+
+### Changed
+
+- Dynamic percentile parsing + header box overflow fix
+
 ## [3.9.69] - 2026-04-10
 
 ### Changed
