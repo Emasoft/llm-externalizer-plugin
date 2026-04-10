@@ -31623,6 +31623,20 @@ function buildTools() {
       inputSchema: { type: "object", properties: {} }
     },
     {
+      name: "or_model_info",
+      description: "Query OpenRouter for detailed information about a specific model by its EXACT id (e.g. 'nvidia/nemotron-3-super-120b-a12b:free' or 'anthropic/claude-sonnet-4'). Returns model metadata, per-endpoint provider info, context length, pricing, supported request-body parameters (reasoning, temperature, top_p, etc.), quantization, uptime, latency percentiles, and throughput. Uses the /v1/models/{id}/endpoints OpenRouter endpoint. Only works when the active profile is configured for OpenRouter. Use this before calling a new model to verify which parameters it accepts and what pricing applies.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          model: {
+            type: "string",
+            description: "Exact OpenRouter model id (e.g. 'nvidia/nemotron-3-super-120b-a12b:free'). Must match the id as listed in OpenRouter \u2014 case sensitive, includes the vendor prefix and any ':free' / ':thinking' suffix."
+          }
+        },
+        required: ["model"]
+      }
+    },
+    {
       name: "reset",
       description: "Full soft-restart. NOT IMMEDIATE \u2014 waits for all currently running LLM requests to finish before resetting. Then: reloads settings.yaml from disk, clears all caches (model list, concurrency, LM Studio detection), resets session counters (tokens/cost/calls), re-resolves the active profile, and notifies the client to refresh the tool list. Use when settings were changed externally, the backend is misbehaving, or you need a clean slate.",
       inputSchema: { type: "object", properties: {} }
@@ -33056,6 +33070,139 @@ Profiles: ${profileNames.join(", ")}`);
           parts.push(`Session log: ${LOG_FILE}`);
           return {
             content: [{ type: "text", text: parts.join("\n") }]
+          };
+        }
+        case "or_model_info": {
+          const { model: infoModel } = args;
+          if (!infoModel || typeof infoModel !== "string") {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "FAILED: `model` parameter is required. Pass the exact OpenRouter model id, e.g. 'nvidia/nemotron-3-super-120b-a12b:free'."
+                }
+              ],
+              isError: true
+            };
+          }
+          if (currentBackend.type !== "openrouter") {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `or_model_info only works with OpenRouter backends. Active profile is '${activeResolved?.name}' (${activeResolved?.mode}). Switch to a remote profile to query model metadata.`
+                }
+              ],
+              isError: true
+            };
+          }
+          let res;
+          try {
+            res = await fetchWithTimeout(
+              `${currentBackend.baseUrl}/v1/models/${infoModel}/endpoints`,
+              { headers: apiHeaders() }
+            );
+          } catch (err) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `FAILED: could not reach OpenRouter: ${err instanceof Error ? err.message : String(err)}`
+                }
+              ],
+              isError: true
+            };
+          }
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `FAILED: OpenRouter returned ${res.status} for model '${infoModel}'. ${body.slice(0, 300)}`
+                }
+              ],
+              isError: true
+            };
+          }
+          const payload = await res.json();
+          const data = payload.data;
+          if (!data || !Array.isArray(data.endpoints) || data.endpoints.length === 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `No endpoints found for model '${infoModel}'. Check the model id is correct \u2014 OpenRouter is case sensitive and requires the vendor prefix (e.g. 'nvidia/nemotron-3-super-120b-a12b:free').`
+                }
+              ],
+              isError: true
+            };
+          }
+          const infoLines = [];
+          infoLines.push(`# ${data.name ?? data.id ?? infoModel}`);
+          infoLines.push(`**id**: \`${data.id ?? infoModel}\``);
+          if (data.architecture) {
+            const arch = data.architecture;
+            const mods = [
+              arch.input_modalities?.length ? `in: ${arch.input_modalities.join("/")}` : null,
+              arch.output_modalities?.length ? `out: ${arch.output_modalities.join("/")}` : null,
+              arch.tokenizer ? `tokenizer: ${arch.tokenizer}` : null
+            ].filter(Boolean).join(" \xB7 ");
+            if (mods) infoLines.push(`**architecture**: ${mods}`);
+          }
+          if (data.description) {
+            const desc = data.description.replace(/\s+/g, " ").trim();
+            infoLines.push(`**description**: ${desc.length > 400 ? desc.slice(0, 400) + "\u2026" : desc}`);
+          }
+          infoLines.push("");
+          infoLines.push(`## Endpoints (${data.endpoints.length})`);
+          for (const ep of data.endpoints) {
+            infoLines.push("");
+            infoLines.push(`### ${ep.provider_name ?? ep.name ?? "unknown"}`);
+            if (ep.context_length !== void 0)
+              infoLines.push(`- **context_length**: ${ep.context_length.toLocaleString()} tokens`);
+            if (ep.max_completion_tokens !== void 0 && ep.max_completion_tokens !== null)
+              infoLines.push(`- **max_completion_tokens**: ${ep.max_completion_tokens.toLocaleString()}`);
+            if (ep.max_prompt_tokens !== null && ep.max_prompt_tokens !== void 0)
+              infoLines.push(`- **max_prompt_tokens**: ${ep.max_prompt_tokens.toLocaleString()}`);
+            if (ep.quantization) infoLines.push(`- **quantization**: ${ep.quantization}`);
+            if (ep.pricing) {
+              const p = ep.pricing;
+              const toPerM = (s) => {
+                if (!s) return "n/a";
+                const n = Number(s);
+                if (!isFinite(n)) return s;
+                if (n === 0) return "free";
+                return `$${(n * 1e6).toFixed(4)}/M`;
+              };
+              infoLines.push(
+                `- **pricing**: prompt ${toPerM(p.prompt)}, completion ${toPerM(p.completion)}` + (p.input_cache_read ? `, cache-read ${toPerM(p.input_cache_read)}` : "")
+              );
+            }
+            if (Array.isArray(ep.supported_parameters) && ep.supported_parameters.length > 0) {
+              const sorted = [...ep.supported_parameters].sort();
+              infoLines.push(`- **supported_parameters** (${sorted.length}): ${sorted.join(", ")}`);
+            }
+            if (ep.uptime_last_30m !== void 0) {
+              const up30m = ep.uptime_last_30m?.toFixed(1);
+              const up1d = ep.uptime_last_1d?.toFixed(1);
+              infoLines.push(`- **uptime**: ${up30m}% (30m) \xB7 ${up1d}% (1d)`);
+            }
+            if (ep.latency_last_30m) {
+              const l = ep.latency_last_30m;
+              infoLines.push(
+                `- **latency** (30m): p50 ${l.p50}ms \xB7 p75 ${l.p75}ms \xB7 p90 ${l.p90}ms \xB7 p99 ${l.p99}ms`
+              );
+            }
+            if (ep.throughput_last_30m) {
+              const t = ep.throughput_last_30m;
+              infoLines.push(
+                `- **throughput** (30m): p50 ${t.p50} tok/s \xB7 p75 ${t.p75} tok/s \xB7 p90 ${t.p90} tok/s \xB7 p99 ${t.p99} tok/s`
+              );
+            }
+          }
+          return {
+            content: [{ type: "text", text: infoLines.join("\n") }]
           };
         }
         case "reset": {
