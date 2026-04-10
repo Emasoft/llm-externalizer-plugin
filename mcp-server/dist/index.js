@@ -28756,8 +28756,24 @@ function renderEndpointTable(ep, colors) {
     const label = annot ? `Throughput ${key} (${annot})` : `Throughput ${key}`;
     rows.push([label, paint(ANSI[classifyThroughput(value)], `${round(value)} tok/s`, colors)]);
   }
+  if (Array.isArray(ep.supported_parameters) && ep.supported_parameters.length > 0) {
+    const sorted = [...ep.supported_parameters].sort();
+    const painted = sorted.map(
+      (p) => paint(ANSI.green, "\u2713 ", colors) + paint(ANSI.bwhite, p, colors)
+    );
+    rows.push([
+      `Supported params (${sorted.length})`,
+      painted
+    ]);
+  }
   const labelW = Math.max(...rows.map((r) => r[0].length), "Endpoint".length);
-  const valueW = Math.max(...rows.map((r) => visibleLength(r[1])), provider.length);
+  const valueW = Math.max(
+    ...rows.flatMap((r) => {
+      const v = r[1];
+      return Array.isArray(v) ? v.map(visibleLength) : [visibleLength(v)];
+    }),
+    provider.length
+  );
   const top = `\u250C${"\u2500".repeat(labelW + 2)}\u252C${"\u2500".repeat(valueW + 2)}\u2510`;
   const sep = `\u251C${"\u2500".repeat(labelW + 2)}\u253C${"\u2500".repeat(valueW + 2)}\u2524`;
   const bot = `\u2514${"\u2500".repeat(labelW + 2)}\u2534${"\u2500".repeat(valueW + 2)}\u2518`;
@@ -28768,26 +28784,17 @@ function renderEndpointTable(ep, colors) {
   );
   lines.push(paint(ANSI.dim, sep, colors));
   for (const [label, value] of rows) {
+    const values = Array.isArray(value) ? value : [value];
     lines.push(
-      paint(ANSI.dim, "\u2502 ", colors) + padRight(paint(ANSI.cyan, label, colors), labelW) + paint(ANSI.dim, " \u2502 ", colors) + padRight(value, valueW) + paint(ANSI.dim, " \u2502", colors)
+      paint(ANSI.dim, "\u2502 ", colors) + padRight(paint(ANSI.cyan, label, colors), labelW) + paint(ANSI.dim, " \u2502 ", colors) + padRight(values[0] ?? "", valueW) + paint(ANSI.dim, " \u2502", colors)
     );
-  }
-  lines.push(paint(ANSI.dim, bot, colors));
-  if (Array.isArray(ep.supported_parameters) && ep.supported_parameters.length > 0) {
-    const sorted = [...ep.supported_parameters].sort();
-    lines.push("");
-    lines.push(
-      paint(ANSI.bold + ANSI.cyan, `Supported parameters (${sorted.length}):`, colors)
-    );
-    const colWidth = sorted.reduce((m, s) => Math.max(m, s.length), 0) + 4;
-    const cols = Math.max(1, Math.floor(80 / colWidth));
-    for (let i = 0; i < sorted.length; i += cols) {
-      const row = sorted.slice(i, i + cols).map(
-        (p) => padRight(paint(ANSI.green, "\u2713 ", colors) + paint(ANSI.bwhite, p, colors), colWidth)
-      ).join("");
-      lines.push("  " + row);
+    for (let i = 1; i < values.length; i++) {
+      lines.push(
+        paint(ANSI.dim, "\u2502 ", colors) + padRight("", labelW) + paint(ANSI.dim, " \u2502 ", colors) + padRight(values[i], valueW) + paint(ANSI.dim, " \u2502", colors)
+      );
     }
   }
+  lines.push(paint(ANSI.dim, bot, colors));
   return lines.join("\n");
 }
 

@@ -413,7 +413,12 @@ export function formatModelInfoTable(
 
 function renderEndpointTable(ep: ModelEndpoint, colors: boolean): string {
   const provider = ep.provider_name ?? ep.name ?? "unknown";
-  type Row = [string, string]; // [label, value (may contain ANSI)]
+  // Each row is [label, value]. The value can be a single string or an
+  // array of strings — arrays are rendered as a multi-line cell with the
+  // label only on the first line and continuation rows for the rest.
+  // Used for supported_parameters so related values are listed as a
+  // column inside the table rather than packed side-by-side on one line.
+  type Row = [string, string | string[]];
   const rows: Row[] = [];
 
   // Full endpoint backing name (often includes versioned model id)
@@ -548,9 +553,29 @@ function renderEndpointTable(ep: ModelEndpoint, colors: boolean): string {
     rows.push([label, paint(ANSI[classifyThroughput(value)], `${round(value)} tok/s`, colors)]);
   }
 
-  // ── Column widths ─────────────────────────────────────────────
+  // Supported parameters — one value per line inside a multi-line cell.
+  // Listing values side-by-side is confusing; a column of checkmarks is
+  // much easier to scan.
+  if (Array.isArray(ep.supported_parameters) && ep.supported_parameters.length > 0) {
+    const sorted = [...ep.supported_parameters].sort();
+    const painted = sorted.map(
+      (p) => paint(ANSI.green, "✓ ", colors) + paint(ANSI.bwhite, p, colors),
+    );
+    rows.push([
+      `Supported params (${sorted.length})`,
+      painted,
+    ]);
+  }
+
+  // ── Column widths (account for multi-line cells) ─────────────
   const labelW = Math.max(...rows.map((r) => r[0].length), "Endpoint".length);
-  const valueW = Math.max(...rows.map((r) => visibleLength(r[1])), provider.length);
+  const valueW = Math.max(
+    ...rows.flatMap((r) => {
+      const v = r[1];
+      return Array.isArray(v) ? v.map(visibleLength) : [visibleLength(v)];
+    }),
+    provider.length,
+  );
 
   const top = `┌${"─".repeat(labelW + 2)}┬${"─".repeat(valueW + 2)}┐`;
   const sep = `├${"─".repeat(labelW + 2)}┼${"─".repeat(valueW + 2)}┤`;
@@ -567,36 +592,27 @@ function renderEndpointTable(ep: ModelEndpoint, colors: boolean): string {
   );
   lines.push(paint(ANSI.dim, sep, colors));
   for (const [label, value] of rows) {
+    const values = Array.isArray(value) ? value : [value];
+    // First line: label + first value
     lines.push(
       paint(ANSI.dim, "│ ", colors) +
         padRight(paint(ANSI.cyan, label, colors), labelW) +
         paint(ANSI.dim, " │ ", colors) +
-        padRight(value, valueW) +
+        padRight(values[0] ?? "", valueW) +
         paint(ANSI.dim, " │", colors),
     );
-  }
-  lines.push(paint(ANSI.dim, bot, colors));
-
-  // ── Supported parameters (after the table, as a grid) ─────────
-  if (Array.isArray(ep.supported_parameters) && ep.supported_parameters.length > 0) {
-    const sorted = [...ep.supported_parameters].sort();
-    lines.push("");
-    lines.push(
-      paint(ANSI.bold + ANSI.cyan, `Supported parameters (${sorted.length}):`, colors),
-    );
-    const colWidth =
-      sorted.reduce((m, s) => Math.max(m, s.length), 0) + 4; // ✓ + space + name + spacing
-    const cols = Math.max(1, Math.floor(80 / colWidth));
-    for (let i = 0; i < sorted.length; i += cols) {
-      const row = sorted
-        .slice(i, i + cols)
-        .map((p) =>
-          padRight(paint(ANSI.green, "✓ ", colors) + paint(ANSI.bwhite, p, colors), colWidth),
-        )
-        .join("");
-      lines.push("  " + row);
+    // Continuation lines (if any): empty label column, next value
+    for (let i = 1; i < values.length; i++) {
+      lines.push(
+        paint(ANSI.dim, "│ ", colors) +
+          padRight("", labelW) +
+          paint(ANSI.dim, " │ ", colors) +
+          padRight(values[i], valueW) +
+          paint(ANSI.dim, " │", colors),
+      );
     }
   }
+  lines.push(paint(ANSI.dim, bot, colors));
 
   return lines.join("\n");
 }
