@@ -1419,6 +1419,11 @@ import {
   getConfigDir,
   generateDefaultSettings,
 } from "./config.js";
+import {
+  fetchOpenRouterModelInfo,
+  formatModelInfoMarkdown,
+  formatModelInfoTable,
+} from "./or-model-info.js";
 
 // Settings path (cross-platform, see config.ts)
 const SETTINGS_FILE = getSettingsPath();
@@ -5057,6 +5062,29 @@ function buildTools() {
       },
     },
     {
+      name: "or_model_info_table",
+      description:
+        "Same as or_model_info but returns the data formatted as a human-readable " +
+        "Unicode-bordered table with ANSI colors. Use this for terminal display; use " +
+        "or_model_info for programmatic consumption or contexts where ANSI escape codes " +
+        "are not rendered. Takes the same `model` input (exact OpenRouter id). Colors: " +
+        "green = good (high uptime, low latency, free pricing), yellow = borderline, " +
+        "red = poor. Headers bold cyan. Compares multiple endpoints side-by-side in a " +
+        "single table if the model has multiple hosting providers.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          model: {
+            type: "string",
+            description:
+              "Exact OpenRouter model id (case-sensitive, vendor-prefixed, with any " +
+              "':free' / ':thinking' suffix).",
+          },
+        },
+        required: ["model"],
+      },
+    },
+    {
       name: "reset",
       description:
         "Full soft-restart. NOT IMMEDIATE — waits for all currently running LLM requests to finish " +
@@ -6812,14 +6840,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      case "or_model_info": {
+      case "or_model_info":
+      case "or_model_info_table": {
         const { model: infoModel } = args as { model?: string };
         if (!infoModel || typeof infoModel !== "string") {
           return {
             content: [
               {
                 type: "text",
-                text: "FAILED: `model` parameter is required. Pass the exact OpenRouter model id, e.g. 'nvidia/nemotron-3-super-120b-a12b:free'.",
+                text: `FAILED: \`model\` parameter is required. Pass the exact OpenRouter model id, e.g. 'nvidia/nemotron-3-super-120b-a12b:free'.`,
               },
             ],
             isError: true,
@@ -6830,180 +6859,40 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             content: [
               {
                 type: "text",
-                text: `or_model_info only works with OpenRouter backends. Active profile is '${activeResolved?.name}' (${activeResolved?.mode}). Switch to a remote profile to query model metadata.`,
+                text: `${name} only works with OpenRouter backends. Active profile is '${activeResolved?.name}' (${activeResolved?.mode}). Switch to a remote profile to query model metadata.`,
               },
             ],
             isError: true,
           };
         }
 
-        // Query /v1/models/{exact_id}/endpoints — per-model endpoint with
-        // supported_parameters, quantization, uptime, latency, throughput.
-        let res: Response;
-        try {
-          res = await fetchWithTimeout(
-            `${currentBackend.baseUrl}/v1/models/${infoModel}/endpoints`,
-            { headers: apiHeaders() },
-          );
-        } catch (err) {
+        const result = await fetchOpenRouterModelInfo(
+          infoModel,
+          currentBackend.baseUrl,
+          currentBackend.apiKey,
+        );
+        if (!result.ok) {
           return {
             content: [
               {
                 type: "text",
-                text: `FAILED: could not reach OpenRouter: ${err instanceof Error ? err.message : String(err)}`,
-              },
-            ],
-            isError: true,
-          };
-        }
-        if (!res.ok) {
-          const body = await res.text().catch(() => "");
-          return {
-            content: [
-              {
-                type: "text",
-                text: `FAILED: OpenRouter returned ${res.status} for model '${infoModel}'. ${body.slice(0, 300)}`,
+                text:
+                  result.status === 404
+                    ? `FAILED: OpenRouter returned 404 for model '${infoModel}'. Check the id is correct — case-sensitive, requires vendor prefix and any ':free' / ':thinking' suffix.`
+                    : `FAILED: ${result.error}${result.status ? ` (status ${result.status})` : ""}`,
               },
             ],
             isError: true,
           };
         }
 
-        const payload = (await res.json()) as {
-          data?: {
-            id?: string;
-            name?: string;
-            description?: string;
-            architecture?: {
-              tokenizer?: string;
-              modality?: string;
-              input_modalities?: string[];
-              output_modalities?: string[];
-            };
-            endpoints?: Array<{
-              name?: string;
-              provider_name?: string;
-              context_length?: number;
-              max_completion_tokens?: number;
-              max_prompt_tokens?: number | null;
-              quantization?: string;
-              pricing?: {
-                prompt?: string;
-                completion?: string;
-                image?: string;
-                request?: string;
-                input_cache_read?: string;
-              };
-              supported_parameters?: string[];
-              status?: number;
-              uptime_last_30m?: number;
-              uptime_last_5m?: number;
-              uptime_last_1d?: number;
-              latency_last_30m?: {
-                p50?: number;
-                p75?: number;
-                p90?: number;
-                p99?: number;
-              };
-              throughput_last_30m?: {
-                p50?: number;
-                p75?: number;
-                p90?: number;
-                p99?: number;
-              };
-            }>;
-          };
-        };
-
-        const data = payload.data;
-        if (!data || !Array.isArray(data.endpoints) || data.endpoints.length === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `No endpoints found for model '${infoModel}'. Check the model id is correct — OpenRouter is case sensitive and requires the vendor prefix (e.g. 'nvidia/nemotron-3-super-120b-a12b:free').`,
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        const infoLines: string[] = [];
-        infoLines.push(`# ${data.name ?? data.id ?? infoModel}`);
-        infoLines.push(`**id**: \`${data.id ?? infoModel}\``);
-        if (data.architecture) {
-          const arch = data.architecture;
-          const mods = [
-            arch.input_modalities?.length ? `in: ${arch.input_modalities.join("/")}` : null,
-            arch.output_modalities?.length ? `out: ${arch.output_modalities.join("/")}` : null,
-            arch.tokenizer ? `tokenizer: ${arch.tokenizer}` : null,
-          ]
-            .filter(Boolean)
-            .join(" · ");
-          if (mods) infoLines.push(`**architecture**: ${mods}`);
-        }
-        if (data.description) {
-          const desc = data.description.replace(/\s+/g, " ").trim();
-          infoLines.push(`**description**: ${desc.length > 400 ? desc.slice(0, 400) + "…" : desc}`);
-        }
-        infoLines.push("");
-        infoLines.push(`## Endpoints (${data.endpoints.length})`);
-
-        for (const ep of data.endpoints) {
-          infoLines.push("");
-          infoLines.push(`### ${ep.provider_name ?? ep.name ?? "unknown"}`);
-          if (ep.context_length !== undefined)
-            infoLines.push(`- **context_length**: ${ep.context_length.toLocaleString()} tokens`);
-          if (ep.max_completion_tokens !== undefined && ep.max_completion_tokens !== null)
-            infoLines.push(`- **max_completion_tokens**: ${ep.max_completion_tokens.toLocaleString()}`);
-          if (ep.max_prompt_tokens !== null && ep.max_prompt_tokens !== undefined)
-            infoLines.push(`- **max_prompt_tokens**: ${ep.max_prompt_tokens.toLocaleString()}`);
-          if (ep.quantization) infoLines.push(`- **quantization**: ${ep.quantization}`);
-
-          if (ep.pricing) {
-            const p = ep.pricing;
-            // OpenRouter pricing is per-token as a string; convert to per-million for readability
-            const toPerM = (s?: string): string => {
-              if (!s) return "n/a";
-              const n = Number(s);
-              if (!isFinite(n)) return s;
-              if (n === 0) return "free";
-              return `$${(n * 1_000_000).toFixed(4)}/M`;
-            };
-            infoLines.push(
-              `- **pricing**: prompt ${toPerM(p.prompt)}, completion ${toPerM(p.completion)}` +
-                (p.input_cache_read ? `, cache-read ${toPerM(p.input_cache_read)}` : ""),
-            );
-          }
-
-          if (Array.isArray(ep.supported_parameters) && ep.supported_parameters.length > 0) {
-            const sorted = [...ep.supported_parameters].sort();
-            infoLines.push(`- **supported_parameters** (${sorted.length}): ${sorted.join(", ")}`);
-          }
-
-          if (ep.uptime_last_30m !== undefined) {
-            const up30m = ep.uptime_last_30m?.toFixed(1);
-            const up1d = ep.uptime_last_1d?.toFixed(1);
-            infoLines.push(`- **uptime**: ${up30m}% (30m) · ${up1d}% (1d)`);
-          }
-
-          if (ep.latency_last_30m) {
-            const l = ep.latency_last_30m;
-            infoLines.push(
-              `- **latency** (30m): p50 ${l.p50}ms · p75 ${l.p75}ms · p90 ${l.p90}ms · p99 ${l.p99}ms`,
-            );
-          }
-
-          if (ep.throughput_last_30m) {
-            const t = ep.throughput_last_30m;
-            infoLines.push(
-              `- **throughput** (30m): p50 ${t.p50} tok/s · p75 ${t.p75} tok/s · p90 ${t.p90} tok/s · p99 ${t.p99} tok/s`,
-            );
-          }
-        }
+        const text =
+          name === "or_model_info_table"
+            ? formatModelInfoTable(result.data, infoModel, true)
+            : formatModelInfoMarkdown(result.data, infoModel);
 
         return {
-          content: [{ type: "text", text: infoLines.join("\n") }],
+          content: [{ type: "text", text }],
         };
       }
 

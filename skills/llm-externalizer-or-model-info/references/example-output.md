@@ -3,6 +3,7 @@
 ## Table of Contents
 - [Sample response](#sample-response)
 - [Reading the output](#reading-the-output)
+- [Percentiles explained](#percentiles-explained)
 - [Comparing multiple endpoints](#comparing-multiple-endpoints)
 
 ## Sample response
@@ -50,6 +51,39 @@ multi-agent applications. Built on a hybrid Mamba-Transformer architecture…
 
 - **uptime**: rolling 30-minute and 24-hour availability. Below 95% means the provider
   is struggling — consider switching to a different model or waiting.
+
+## Percentiles explained
+
+Percentile values (p50, p75, p90, p99) describe the *distribution* of latency and
+throughput across many real requests to the provider in the last 30 minutes.
+
+- **p50** — the **median**. Half of all requests finished *faster* than this, the
+  other half *slower*. This is the "typical" case. If p50 latency is 2,000 ms, a
+  normal request takes ~2 seconds.
+- **p75** — the 75th percentile. 3 out of 4 requests finished faster than this.
+  1 in 4 requests is slower. Useful for budget planning.
+- **p90** — the 90th percentile. 9 out of 10 requests finished faster. 1 in 10 is
+  slower. The "uncommonly bad" case — users will hit this often enough to notice.
+- **p99** — the 99th percentile. The **worst 1%** of requests. This is the
+  tail-latency number — what your unluckiest users see. If p99 is 100 seconds,
+  roughly 1 request in 100 will take that long or more.
+
+Example from Nemotron :free:
+- `p50 12000ms · p75 27000ms · p90 53000ms · p99 107000ms`
+- Most calls (p50) take ~12 s.
+- A quarter of calls (p75) take more than 27 s.
+- 10% of calls take more than 53 s.
+- 1% of calls take **more than 107 seconds** — you must set generous timeouts to
+  avoid dropping these.
+
+Percentiles are the right way to measure latency because averages hide tail
+behaviour: a single 100-second outlier can drag the mean up dramatically, but the
+p50 tells you what the typical user experiences.
+
+**Throughput percentiles** work the same way but higher is better (more tokens
+per second). p50 throughput of 15 tok/s means half the time you'll generate
+faster than 15 tok/s, half the time slower. p99 of 50 tok/s means the best 1%
+of runs hit that speed.
 
 ## Comparing multiple endpoints
 

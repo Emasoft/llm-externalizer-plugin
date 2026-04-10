@@ -28400,6 +28400,323 @@ profiles:
 #   "direct-value"    Used as-is (no env lookup)
 `;
 
+// src/or-model-info.ts
+async function fetchOpenRouterModelInfo(modelId, baseUrl, authToken) {
+  let res;
+  try {
+    res = await fetch(`${baseUrl}/v1/models/${modelId}/endpoints`, {
+      headers: { Authorization: `Bearer ${authToken}` }
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      error: `Network error: ${err instanceof Error ? err.message : String(err)}`
+    };
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    return { ok: false, error: body.slice(0, 300), status: res.status };
+  }
+  try {
+    const payload = await res.json();
+    if (!payload.data || !Array.isArray(payload.data.endpoints)) {
+      return { ok: false, error: "OpenRouter returned no endpoints for this model" };
+    }
+    return { ok: true, data: payload.data };
+  } catch (err) {
+    return {
+      ok: false,
+      error: `Failed to parse response: ${err instanceof Error ? err.message : String(err)}`
+    };
+  }
+}
+function formatPricePerM(s) {
+  if (!s) return "n/a";
+  const n = Number(s);
+  if (!isFinite(n)) return s;
+  if (n === 0) return "free";
+  return `$${(n * 1e6).toFixed(4)}/M`;
+}
+function formatModelInfoMarkdown(data, modelId) {
+  const lines = [];
+  lines.push(`# ${data.name ?? data.id ?? modelId}`);
+  lines.push(`**id**: \`${data.id ?? modelId}\``);
+  if (data.architecture) {
+    const arch = data.architecture;
+    const mods = [
+      arch.input_modalities?.length ? `in: ${arch.input_modalities.join("/")}` : null,
+      arch.output_modalities?.length ? `out: ${arch.output_modalities.join("/")}` : null,
+      arch.tokenizer ? `tokenizer: ${arch.tokenizer}` : null
+    ].filter(Boolean).join(" \xB7 ");
+    if (mods) lines.push(`**architecture**: ${mods}`);
+  }
+  if (data.description) {
+    const desc = data.description.replace(/\s+/g, " ").trim();
+    lines.push(
+      `**description**: ${desc.length > 400 ? desc.slice(0, 400) + "\u2026" : desc}`
+    );
+  }
+  lines.push("");
+  const endpoints = data.endpoints ?? [];
+  lines.push(`## Endpoints (${endpoints.length})`);
+  for (const ep of endpoints) {
+    lines.push("");
+    lines.push(`### ${ep.provider_name ?? ep.name ?? "unknown"}`);
+    if (ep.context_length !== void 0)
+      lines.push(`- **context_length**: ${ep.context_length.toLocaleString()} tokens`);
+    if (ep.max_completion_tokens !== void 0 && ep.max_completion_tokens !== null)
+      lines.push(`- **max_completion_tokens**: ${ep.max_completion_tokens.toLocaleString()}`);
+    if (ep.max_prompt_tokens !== null && ep.max_prompt_tokens !== void 0)
+      lines.push(`- **max_prompt_tokens**: ${ep.max_prompt_tokens.toLocaleString()}`);
+    if (ep.quantization) lines.push(`- **quantization**: ${ep.quantization}`);
+    if (ep.pricing) {
+      const p = ep.pricing;
+      lines.push(
+        `- **pricing**: prompt ${formatPricePerM(p.prompt)}, completion ${formatPricePerM(p.completion)}` + (p.input_cache_read ? `, cache-read ${formatPricePerM(p.input_cache_read)}` : "")
+      );
+    }
+    if (Array.isArray(ep.supported_parameters) && ep.supported_parameters.length > 0) {
+      const sorted = [...ep.supported_parameters].sort();
+      lines.push(`- **supported_parameters** (${sorted.length}): ${sorted.join(", ")}`);
+    }
+    if (ep.uptime_last_30m !== void 0) {
+      const up30m = ep.uptime_last_30m?.toFixed(1);
+      const up1d = ep.uptime_last_1d?.toFixed(1);
+      lines.push(`- **uptime**: ${up30m}% (30m) \xB7 ${up1d}% (1d)`);
+    }
+    const r = (n) => n === void 0 ? "?" : Math.round(n).toString();
+    if (ep.latency_last_30m) {
+      const l = ep.latency_last_30m;
+      lines.push(
+        `- **latency** (30m): p50 ${r(l.p50)}ms \xB7 p75 ${r(l.p75)}ms \xB7 p90 ${r(l.p90)}ms \xB7 p99 ${r(l.p99)}ms`
+      );
+    }
+    if (ep.throughput_last_30m) {
+      const t = ep.throughput_last_30m;
+      lines.push(
+        `- **throughput** (30m): p50 ${r(t.p50)} tok/s \xB7 p75 ${r(t.p75)} tok/s \xB7 p90 ${r(t.p90)} tok/s \xB7 p99 ${r(t.p99)} tok/s`
+      );
+    }
+  }
+  return lines.join("\n");
+}
+var ANSI = {
+  reset: "\x1B[0m",
+  bold: "\x1B[1m",
+  dim: "\x1B[2m",
+  red: "\x1B[31m",
+  green: "\x1B[32m",
+  yellow: "\x1B[33m",
+  cyan: "\x1B[36m",
+  bcyan: "\x1B[96m",
+  bwhite: "\x1B[97m",
+  bgreen: "\x1B[92m",
+  byellow: "\x1B[93m",
+  bred: "\x1B[91m"
+};
+function paint(code, text, enabled) {
+  if (!enabled) return text;
+  return `${code}${text}${ANSI.reset}`;
+}
+var ANSI_STRIP_RE = /\u001b\[[0-9;]*m/g;
+function visibleLength(s) {
+  return s.replace(ANSI_STRIP_RE, "").length;
+}
+function padRight(s, width) {
+  const vlen = visibleLength(s);
+  if (vlen >= width) return s;
+  return s + " ".repeat(width - vlen);
+}
+function classifyUptime(pct) {
+  if (pct === void 0) return "dim";
+  if (pct >= 99) return "bgreen";
+  if (pct >= 95) return "green";
+  if (pct >= 90) return "yellow";
+  return "bred";
+}
+function classifyLatencyMs(ms) {
+  if (ms === void 0) return "dim";
+  if (ms < 2e3) return "bgreen";
+  if (ms < 1e4) return "green";
+  if (ms < 3e4) return "yellow";
+  return "bred";
+}
+function classifyThroughput(tps) {
+  if (tps === void 0) return "dim";
+  if (tps >= 50) return "bgreen";
+  if (tps >= 20) return "green";
+  if (tps >= 10) return "yellow";
+  return "bred";
+}
+function classifyPriceIsFree(s) {
+  if (!s) return "dim";
+  const n = Number(s);
+  if (isFinite(n) && n === 0) return "bgreen";
+  return "byellow";
+}
+function formatModelInfoTable(data, modelId, colors = true) {
+  const out = [];
+  const endpoints = data.endpoints ?? [];
+  const title = data.name ?? data.id ?? modelId;
+  const id = data.id ?? modelId;
+  const titlePainted = paint(ANSI.bold + ANSI.bcyan, title, colors);
+  const idPainted = paint(ANSI.dim, id, colors);
+  const innerTitleLen = visibleLength(titlePainted);
+  const innerIdLen = visibleLength(idPainted) + 5;
+  const boxInner = Math.max(innerTitleLen, innerIdLen, 40);
+  const topBorder = `\u250F${"\u2501".repeat(boxInner + 2)}\u2513`;
+  const bottomBorder = `\u2517${"\u2501".repeat(boxInner + 2)}\u251B`;
+  out.push(paint(ANSI.cyan, topBorder, colors));
+  out.push(
+    paint(ANSI.cyan, "\u2503 ", colors) + padRight(titlePainted, boxInner) + paint(ANSI.cyan, " \u2503", colors)
+  );
+  out.push(
+    paint(ANSI.cyan, "\u2503 ", colors) + padRight("id: " + idPainted, boxInner) + paint(ANSI.cyan, " \u2503", colors)
+  );
+  if (data.architecture) {
+    const arch = data.architecture;
+    const mods = [
+      arch.input_modalities?.length ? `in: ${arch.input_modalities.join("/")}` : null,
+      arch.output_modalities?.length ? `out: ${arch.output_modalities.join("/")}` : null,
+      arch.tokenizer ? `tokenizer: ${arch.tokenizer}` : null
+    ].filter(Boolean).join(" \xB7 ");
+    if (mods) {
+      out.push(
+        paint(ANSI.cyan, "\u2503 ", colors) + padRight(paint(ANSI.dim, mods, colors), boxInner) + paint(ANSI.cyan, " \u2503", colors)
+      );
+    }
+  }
+  out.push(paint(ANSI.cyan, bottomBorder, colors));
+  out.push("");
+  if (endpoints.length === 0) {
+    out.push(paint(ANSI.yellow, "No endpoints reported for this model.", colors));
+    return out.join("\n");
+  }
+  for (const ep of endpoints) {
+    out.push(renderEndpointTable(ep, colors));
+    out.push("");
+  }
+  out.push(paint(ANSI.dim, "\u2500".repeat(72), colors));
+  out.push(
+    paint(ANSI.bold + ANSI.cyan, "Percentiles", colors) + paint(
+      ANSI.dim,
+      ": p50 = median (half of requests are faster) \xB7 p75 = 75th (1 in 4 slower) \xB7 p90 = 90th (1 in 10 slower) \xB7 p99 = worst 1%",
+      colors
+    )
+  );
+  out.push(
+    paint(ANSI.bold + ANSI.cyan, "Colors    ", colors) + paint(ANSI.dim, ": ", colors) + paint(ANSI.bgreen, "excellent", colors) + paint(ANSI.dim, " \xB7 ", colors) + paint(ANSI.green, "good", colors) + paint(ANSI.dim, " \xB7 ", colors) + paint(ANSI.yellow, "borderline", colors) + paint(ANSI.dim, " \xB7 ", colors) + paint(ANSI.bred, "poor", colors)
+  );
+  out.push(
+    paint(ANSI.bold + ANSI.cyan, "Pricing   ", colors) + paint(ANSI.dim, ": shown per 1,000,000 tokens (M). ", colors) + paint(ANSI.bgreen, "free", colors) + paint(ANSI.dim, " = $0, ", colors) + paint(ANSI.byellow, "$X.XXXX/M", colors) + paint(ANSI.dim, " = paid", colors)
+  );
+  return out.join("\n").trimEnd();
+}
+function renderEndpointTable(ep, colors) {
+  const provider = ep.provider_name ?? ep.name ?? "unknown";
+  const rows = [];
+  if (ep.context_length !== void 0) {
+    rows.push([
+      "Context length",
+      paint(ANSI.bwhite, ep.context_length.toLocaleString(), colors) + " tokens"
+    ]);
+  }
+  if (ep.max_completion_tokens !== void 0 && ep.max_completion_tokens !== null) {
+    rows.push([
+      "Max completion",
+      paint(ANSI.bwhite, ep.max_completion_tokens.toLocaleString(), colors)
+    ]);
+  }
+  if (ep.max_prompt_tokens !== void 0 && ep.max_prompt_tokens !== null) {
+    rows.push([
+      "Max prompt",
+      paint(ANSI.bwhite, ep.max_prompt_tokens.toLocaleString(), colors)
+    ]);
+  }
+  if (ep.quantization) {
+    rows.push(["Quantization", paint(ANSI.dim, ep.quantization, colors)]);
+  }
+  if (ep.pricing) {
+    const p = ep.pricing;
+    rows.push([
+      "Prompt price",
+      paint(ANSI[classifyPriceIsFree(p.prompt)], formatPricePerM(p.prompt), colors)
+    ]);
+    rows.push([
+      "Completion price",
+      paint(ANSI[classifyPriceIsFree(p.completion)], formatPricePerM(p.completion), colors)
+    ]);
+    if (p.input_cache_read) {
+      rows.push([
+        "Cache-read price",
+        paint(ANSI[classifyPriceIsFree(p.input_cache_read)], formatPricePerM(p.input_cache_read), colors)
+      ]);
+    }
+  }
+  if (ep.uptime_last_30m !== void 0) {
+    const col = ANSI[classifyUptime(ep.uptime_last_30m)];
+    rows.push(["Uptime (30m)", paint(col, `${ep.uptime_last_30m.toFixed(1)}%`, colors)]);
+  }
+  if (ep.uptime_last_1d !== void 0) {
+    const col = ANSI[classifyUptime(ep.uptime_last_1d)];
+    rows.push(["Uptime (1d)", paint(col, `${ep.uptime_last_1d.toFixed(1)}%`, colors)]);
+  }
+  const round = (n) => n === void 0 ? "?" : Math.round(n).toString();
+  if (ep.latency_last_30m) {
+    const l = ep.latency_last_30m;
+    const latencyLine = [
+      paint(ANSI[classifyLatencyMs(l.p50)], `p50 ${round(l.p50)}ms`, colors),
+      paint(ANSI[classifyLatencyMs(l.p75)], `p75 ${round(l.p75)}ms`, colors),
+      paint(ANSI[classifyLatencyMs(l.p90)], `p90 ${round(l.p90)}ms`, colors),
+      paint(ANSI[classifyLatencyMs(l.p99)], `p99 ${round(l.p99)}ms`, colors)
+    ].join(" \xB7 ");
+    rows.push(["Latency (30m)", latencyLine]);
+  }
+  if (ep.throughput_last_30m) {
+    const t = ep.throughput_last_30m;
+    const tpLine = [
+      paint(ANSI[classifyThroughput(t.p50)], `p50 ${round(t.p50)} tok/s`, colors),
+      paint(ANSI[classifyThroughput(t.p75)], `p75 ${round(t.p75)} tok/s`, colors),
+      paint(ANSI[classifyThroughput(t.p90)], `p90 ${round(t.p90)} tok/s`, colors),
+      paint(ANSI[classifyThroughput(t.p99)], `p99 ${round(t.p99)} tok/s`, colors)
+    ].join(" \xB7 ");
+    rows.push(["Throughput (30m)", tpLine]);
+  }
+  const labelW = Math.max(...rows.map((r) => r[0].length), "Endpoint".length);
+  const valueW = Math.max(...rows.map((r) => visibleLength(r[1])), provider.length);
+  const top = `\u250C${"\u2500".repeat(labelW + 2)}\u252C${"\u2500".repeat(valueW + 2)}\u2510`;
+  const sep = `\u251C${"\u2500".repeat(labelW + 2)}\u253C${"\u2500".repeat(valueW + 2)}\u2524`;
+  const bot = `\u2514${"\u2500".repeat(labelW + 2)}\u2534${"\u2500".repeat(valueW + 2)}\u2518`;
+  const lines = [];
+  lines.push(paint(ANSI.dim, top, colors));
+  lines.push(
+    paint(ANSI.dim, "\u2502 ", colors) + padRight(paint(ANSI.bold + ANSI.cyan, "Endpoint", colors), labelW) + paint(ANSI.dim, " \u2502 ", colors) + padRight(paint(ANSI.bold + ANSI.bwhite, provider, colors), valueW) + paint(ANSI.dim, " \u2502", colors)
+  );
+  lines.push(paint(ANSI.dim, sep, colors));
+  for (const [label, value] of rows) {
+    lines.push(
+      paint(ANSI.dim, "\u2502 ", colors) + padRight(paint(ANSI.cyan, label, colors), labelW) + paint(ANSI.dim, " \u2502 ", colors) + padRight(value, valueW) + paint(ANSI.dim, " \u2502", colors)
+    );
+  }
+  lines.push(paint(ANSI.dim, bot, colors));
+  if (Array.isArray(ep.supported_parameters) && ep.supported_parameters.length > 0) {
+    const sorted = [...ep.supported_parameters].sort();
+    lines.push("");
+    lines.push(
+      paint(ANSI.bold + ANSI.cyan, `Supported parameters (${sorted.length}):`, colors)
+    );
+    const colWidth = sorted.reduce((m, s) => Math.max(m, s.length), 0) + 4;
+    const cols = Math.max(1, Math.floor(80 / colWidth));
+    for (let i = 0; i < sorted.length; i += cols) {
+      const row = sorted.slice(i, i + cols).map(
+        (p) => padRight(paint(ANSI.green, "\u2713 ", colors) + paint(ANSI.bwhite, p, colors), colWidth)
+      ).join("");
+      lines.push("  " + row);
+    }
+  }
+  return lines.join("\n");
+}
+
 // src/index.ts
 var EXT_TO_LANG = {
   ".ts": "typescript",
@@ -31637,6 +31954,20 @@ function buildTools() {
       }
     },
     {
+      name: "or_model_info_table",
+      description: "Same as or_model_info but returns the data formatted as a human-readable Unicode-bordered table with ANSI colors. Use this for terminal display; use or_model_info for programmatic consumption or contexts where ANSI escape codes are not rendered. Takes the same `model` input (exact OpenRouter id). Colors: green = good (high uptime, low latency, free pricing), yellow = borderline, red = poor. Headers bold cyan. Compares multiple endpoints side-by-side in a single table if the model has multiple hosting providers.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          model: {
+            type: "string",
+            description: "Exact OpenRouter model id (case-sensitive, vendor-prefixed, with any ':free' / ':thinking' suffix)."
+          }
+        },
+        required: ["model"]
+      }
+    },
+    {
       name: "reset",
       description: "Full soft-restart. NOT IMMEDIATE \u2014 waits for all currently running LLM requests to finish before resetting. Then: reloads settings.yaml from disk, clears all caches (model list, concurrency, LM Studio detection), resets session counters (tokens/cost/calls), re-resolves the active profile, and notifies the client to refresh the tool list. Use when settings were changed externally, the backend is misbehaving, or you need a clean slate.",
       inputSchema: { type: "object", properties: {} }
@@ -33072,14 +33403,15 @@ Profiles: ${profileNames.join(", ")}`);
             content: [{ type: "text", text: parts.join("\n") }]
           };
         }
-        case "or_model_info": {
+        case "or_model_info":
+        case "or_model_info_table": {
           const { model: infoModel } = args;
           if (!infoModel || typeof infoModel !== "string") {
             return {
               content: [
                 {
                   type: "text",
-                  text: "FAILED: `model` parameter is required. Pass the exact OpenRouter model id, e.g. 'nvidia/nemotron-3-super-120b-a12b:free'."
+                  text: `FAILED: \`model\` parameter is required. Pass the exact OpenRouter model id, e.g. 'nvidia/nemotron-3-super-120b-a12b:free'.`
                 }
               ],
               isError: true
@@ -33090,119 +33422,31 @@ Profiles: ${profileNames.join(", ")}`);
               content: [
                 {
                   type: "text",
-                  text: `or_model_info only works with OpenRouter backends. Active profile is '${activeResolved?.name}' (${activeResolved?.mode}). Switch to a remote profile to query model metadata.`
+                  text: `${name} only works with OpenRouter backends. Active profile is '${activeResolved?.name}' (${activeResolved?.mode}). Switch to a remote profile to query model metadata.`
                 }
               ],
               isError: true
             };
           }
-          let res;
-          try {
-            res = await fetchWithTimeout(
-              `${currentBackend.baseUrl}/v1/models/${infoModel}/endpoints`,
-              { headers: apiHeaders() }
-            );
-          } catch (err) {
+          const result = await fetchOpenRouterModelInfo(
+            infoModel,
+            currentBackend.baseUrl,
+            currentBackend.apiKey
+          );
+          if (!result.ok) {
             return {
               content: [
                 {
                   type: "text",
-                  text: `FAILED: could not reach OpenRouter: ${err instanceof Error ? err.message : String(err)}`
+                  text: result.status === 404 ? `FAILED: OpenRouter returned 404 for model '${infoModel}'. Check the id is correct \u2014 case-sensitive, requires vendor prefix and any ':free' / ':thinking' suffix.` : `FAILED: ${result.error}${result.status ? ` (status ${result.status})` : ""}`
                 }
               ],
               isError: true
             };
           }
-          if (!res.ok) {
-            const body = await res.text().catch(() => "");
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `FAILED: OpenRouter returned ${res.status} for model '${infoModel}'. ${body.slice(0, 300)}`
-                }
-              ],
-              isError: true
-            };
-          }
-          const payload = await res.json();
-          const data = payload.data;
-          if (!data || !Array.isArray(data.endpoints) || data.endpoints.length === 0) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No endpoints found for model '${infoModel}'. Check the model id is correct \u2014 OpenRouter is case sensitive and requires the vendor prefix (e.g. 'nvidia/nemotron-3-super-120b-a12b:free').`
-                }
-              ],
-              isError: true
-            };
-          }
-          const infoLines = [];
-          infoLines.push(`# ${data.name ?? data.id ?? infoModel}`);
-          infoLines.push(`**id**: \`${data.id ?? infoModel}\``);
-          if (data.architecture) {
-            const arch = data.architecture;
-            const mods = [
-              arch.input_modalities?.length ? `in: ${arch.input_modalities.join("/")}` : null,
-              arch.output_modalities?.length ? `out: ${arch.output_modalities.join("/")}` : null,
-              arch.tokenizer ? `tokenizer: ${arch.tokenizer}` : null
-            ].filter(Boolean).join(" \xB7 ");
-            if (mods) infoLines.push(`**architecture**: ${mods}`);
-          }
-          if (data.description) {
-            const desc = data.description.replace(/\s+/g, " ").trim();
-            infoLines.push(`**description**: ${desc.length > 400 ? desc.slice(0, 400) + "\u2026" : desc}`);
-          }
-          infoLines.push("");
-          infoLines.push(`## Endpoints (${data.endpoints.length})`);
-          for (const ep of data.endpoints) {
-            infoLines.push("");
-            infoLines.push(`### ${ep.provider_name ?? ep.name ?? "unknown"}`);
-            if (ep.context_length !== void 0)
-              infoLines.push(`- **context_length**: ${ep.context_length.toLocaleString()} tokens`);
-            if (ep.max_completion_tokens !== void 0 && ep.max_completion_tokens !== null)
-              infoLines.push(`- **max_completion_tokens**: ${ep.max_completion_tokens.toLocaleString()}`);
-            if (ep.max_prompt_tokens !== null && ep.max_prompt_tokens !== void 0)
-              infoLines.push(`- **max_prompt_tokens**: ${ep.max_prompt_tokens.toLocaleString()}`);
-            if (ep.quantization) infoLines.push(`- **quantization**: ${ep.quantization}`);
-            if (ep.pricing) {
-              const p = ep.pricing;
-              const toPerM = (s) => {
-                if (!s) return "n/a";
-                const n = Number(s);
-                if (!isFinite(n)) return s;
-                if (n === 0) return "free";
-                return `$${(n * 1e6).toFixed(4)}/M`;
-              };
-              infoLines.push(
-                `- **pricing**: prompt ${toPerM(p.prompt)}, completion ${toPerM(p.completion)}` + (p.input_cache_read ? `, cache-read ${toPerM(p.input_cache_read)}` : "")
-              );
-            }
-            if (Array.isArray(ep.supported_parameters) && ep.supported_parameters.length > 0) {
-              const sorted = [...ep.supported_parameters].sort();
-              infoLines.push(`- **supported_parameters** (${sorted.length}): ${sorted.join(", ")}`);
-            }
-            if (ep.uptime_last_30m !== void 0) {
-              const up30m = ep.uptime_last_30m?.toFixed(1);
-              const up1d = ep.uptime_last_1d?.toFixed(1);
-              infoLines.push(`- **uptime**: ${up30m}% (30m) \xB7 ${up1d}% (1d)`);
-            }
-            if (ep.latency_last_30m) {
-              const l = ep.latency_last_30m;
-              infoLines.push(
-                `- **latency** (30m): p50 ${l.p50}ms \xB7 p75 ${l.p75}ms \xB7 p90 ${l.p90}ms \xB7 p99 ${l.p99}ms`
-              );
-            }
-            if (ep.throughput_last_30m) {
-              const t = ep.throughput_last_30m;
-              infoLines.push(
-                `- **throughput** (30m): p50 ${t.p50} tok/s \xB7 p75 ${t.p75} tok/s \xB7 p90 ${t.p90} tok/s \xB7 p99 ${t.p99} tok/s`
-              );
-            }
-          }
+          const text = name === "or_model_info_table" ? formatModelInfoTable(result.data, infoModel, true) : formatModelInfoMarkdown(result.data, infoModel);
           return {
-            content: [{ type: "text", text: infoLines.join("\n") }]
+            content: [{ type: "text", text }]
           };
         }
         case "reset": {

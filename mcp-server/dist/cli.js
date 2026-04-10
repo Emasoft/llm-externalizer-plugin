@@ -7685,6 +7685,323 @@ profiles:
 #   "direct-value"    Used as-is (no env lookup)
 `;
 
+// src/or-model-info.ts
+async function fetchOpenRouterModelInfo(modelId, baseUrl, authToken) {
+  let res;
+  try {
+    res = await fetch(`${baseUrl}/v1/models/${modelId}/endpoints`, {
+      headers: { Authorization: `Bearer ${authToken}` }
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      error: `Network error: ${err instanceof Error ? err.message : String(err)}`
+    };
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    return { ok: false, error: body.slice(0, 300), status: res.status };
+  }
+  try {
+    const payload = await res.json();
+    if (!payload.data || !Array.isArray(payload.data.endpoints)) {
+      return { ok: false, error: "OpenRouter returned no endpoints for this model" };
+    }
+    return { ok: true, data: payload.data };
+  } catch (err) {
+    return {
+      ok: false,
+      error: `Failed to parse response: ${err instanceof Error ? err.message : String(err)}`
+    };
+  }
+}
+function formatPricePerM(s) {
+  if (!s) return "n/a";
+  const n = Number(s);
+  if (!isFinite(n)) return s;
+  if (n === 0) return "free";
+  return `$${(n * 1e6).toFixed(4)}/M`;
+}
+function formatModelInfoMarkdown(data, modelId) {
+  const lines = [];
+  lines.push(`# ${data.name ?? data.id ?? modelId}`);
+  lines.push(`**id**: \`${data.id ?? modelId}\``);
+  if (data.architecture) {
+    const arch = data.architecture;
+    const mods = [
+      arch.input_modalities?.length ? `in: ${arch.input_modalities.join("/")}` : null,
+      arch.output_modalities?.length ? `out: ${arch.output_modalities.join("/")}` : null,
+      arch.tokenizer ? `tokenizer: ${arch.tokenizer}` : null
+    ].filter(Boolean).join(" \xB7 ");
+    if (mods) lines.push(`**architecture**: ${mods}`);
+  }
+  if (data.description) {
+    const desc = data.description.replace(/\s+/g, " ").trim();
+    lines.push(
+      `**description**: ${desc.length > 400 ? desc.slice(0, 400) + "\u2026" : desc}`
+    );
+  }
+  lines.push("");
+  const endpoints = data.endpoints ?? [];
+  lines.push(`## Endpoints (${endpoints.length})`);
+  for (const ep of endpoints) {
+    lines.push("");
+    lines.push(`### ${ep.provider_name ?? ep.name ?? "unknown"}`);
+    if (ep.context_length !== void 0)
+      lines.push(`- **context_length**: ${ep.context_length.toLocaleString()} tokens`);
+    if (ep.max_completion_tokens !== void 0 && ep.max_completion_tokens !== null)
+      lines.push(`- **max_completion_tokens**: ${ep.max_completion_tokens.toLocaleString()}`);
+    if (ep.max_prompt_tokens !== null && ep.max_prompt_tokens !== void 0)
+      lines.push(`- **max_prompt_tokens**: ${ep.max_prompt_tokens.toLocaleString()}`);
+    if (ep.quantization) lines.push(`- **quantization**: ${ep.quantization}`);
+    if (ep.pricing) {
+      const p = ep.pricing;
+      lines.push(
+        `- **pricing**: prompt ${formatPricePerM(p.prompt)}, completion ${formatPricePerM(p.completion)}` + (p.input_cache_read ? `, cache-read ${formatPricePerM(p.input_cache_read)}` : "")
+      );
+    }
+    if (Array.isArray(ep.supported_parameters) && ep.supported_parameters.length > 0) {
+      const sorted = [...ep.supported_parameters].sort();
+      lines.push(`- **supported_parameters** (${sorted.length}): ${sorted.join(", ")}`);
+    }
+    if (ep.uptime_last_30m !== void 0) {
+      const up30m = ep.uptime_last_30m?.toFixed(1);
+      const up1d = ep.uptime_last_1d?.toFixed(1);
+      lines.push(`- **uptime**: ${up30m}% (30m) \xB7 ${up1d}% (1d)`);
+    }
+    const r = (n) => n === void 0 ? "?" : Math.round(n).toString();
+    if (ep.latency_last_30m) {
+      const l = ep.latency_last_30m;
+      lines.push(
+        `- **latency** (30m): p50 ${r(l.p50)}ms \xB7 p75 ${r(l.p75)}ms \xB7 p90 ${r(l.p90)}ms \xB7 p99 ${r(l.p99)}ms`
+      );
+    }
+    if (ep.throughput_last_30m) {
+      const t = ep.throughput_last_30m;
+      lines.push(
+        `- **throughput** (30m): p50 ${r(t.p50)} tok/s \xB7 p75 ${r(t.p75)} tok/s \xB7 p90 ${r(t.p90)} tok/s \xB7 p99 ${r(t.p99)} tok/s`
+      );
+    }
+  }
+  return lines.join("\n");
+}
+var ANSI = {
+  reset: "\x1B[0m",
+  bold: "\x1B[1m",
+  dim: "\x1B[2m",
+  red: "\x1B[31m",
+  green: "\x1B[32m",
+  yellow: "\x1B[33m",
+  cyan: "\x1B[36m",
+  bcyan: "\x1B[96m",
+  bwhite: "\x1B[97m",
+  bgreen: "\x1B[92m",
+  byellow: "\x1B[93m",
+  bred: "\x1B[91m"
+};
+function paint(code, text, enabled) {
+  if (!enabled) return text;
+  return `${code}${text}${ANSI.reset}`;
+}
+var ANSI_STRIP_RE = /\u001b\[[0-9;]*m/g;
+function visibleLength(s) {
+  return s.replace(ANSI_STRIP_RE, "").length;
+}
+function padRight(s, width) {
+  const vlen = visibleLength(s);
+  if (vlen >= width) return s;
+  return s + " ".repeat(width - vlen);
+}
+function classifyUptime(pct) {
+  if (pct === void 0) return "dim";
+  if (pct >= 99) return "bgreen";
+  if (pct >= 95) return "green";
+  if (pct >= 90) return "yellow";
+  return "bred";
+}
+function classifyLatencyMs(ms) {
+  if (ms === void 0) return "dim";
+  if (ms < 2e3) return "bgreen";
+  if (ms < 1e4) return "green";
+  if (ms < 3e4) return "yellow";
+  return "bred";
+}
+function classifyThroughput(tps) {
+  if (tps === void 0) return "dim";
+  if (tps >= 50) return "bgreen";
+  if (tps >= 20) return "green";
+  if (tps >= 10) return "yellow";
+  return "bred";
+}
+function classifyPriceIsFree(s) {
+  if (!s) return "dim";
+  const n = Number(s);
+  if (isFinite(n) && n === 0) return "bgreen";
+  return "byellow";
+}
+function formatModelInfoTable(data, modelId, colors = true) {
+  const out = [];
+  const endpoints = data.endpoints ?? [];
+  const title = data.name ?? data.id ?? modelId;
+  const id = data.id ?? modelId;
+  const titlePainted = paint(ANSI.bold + ANSI.bcyan, title, colors);
+  const idPainted = paint(ANSI.dim, id, colors);
+  const innerTitleLen = visibleLength(titlePainted);
+  const innerIdLen = visibleLength(idPainted) + 5;
+  const boxInner = Math.max(innerTitleLen, innerIdLen, 40);
+  const topBorder = `\u250F${"\u2501".repeat(boxInner + 2)}\u2513`;
+  const bottomBorder = `\u2517${"\u2501".repeat(boxInner + 2)}\u251B`;
+  out.push(paint(ANSI.cyan, topBorder, colors));
+  out.push(
+    paint(ANSI.cyan, "\u2503 ", colors) + padRight(titlePainted, boxInner) + paint(ANSI.cyan, " \u2503", colors)
+  );
+  out.push(
+    paint(ANSI.cyan, "\u2503 ", colors) + padRight("id: " + idPainted, boxInner) + paint(ANSI.cyan, " \u2503", colors)
+  );
+  if (data.architecture) {
+    const arch = data.architecture;
+    const mods = [
+      arch.input_modalities?.length ? `in: ${arch.input_modalities.join("/")}` : null,
+      arch.output_modalities?.length ? `out: ${arch.output_modalities.join("/")}` : null,
+      arch.tokenizer ? `tokenizer: ${arch.tokenizer}` : null
+    ].filter(Boolean).join(" \xB7 ");
+    if (mods) {
+      out.push(
+        paint(ANSI.cyan, "\u2503 ", colors) + padRight(paint(ANSI.dim, mods, colors), boxInner) + paint(ANSI.cyan, " \u2503", colors)
+      );
+    }
+  }
+  out.push(paint(ANSI.cyan, bottomBorder, colors));
+  out.push("");
+  if (endpoints.length === 0) {
+    out.push(paint(ANSI.yellow, "No endpoints reported for this model.", colors));
+    return out.join("\n");
+  }
+  for (const ep of endpoints) {
+    out.push(renderEndpointTable(ep, colors));
+    out.push("");
+  }
+  out.push(paint(ANSI.dim, "\u2500".repeat(72), colors));
+  out.push(
+    paint(ANSI.bold + ANSI.cyan, "Percentiles", colors) + paint(
+      ANSI.dim,
+      ": p50 = median (half of requests are faster) \xB7 p75 = 75th (1 in 4 slower) \xB7 p90 = 90th (1 in 10 slower) \xB7 p99 = worst 1%",
+      colors
+    )
+  );
+  out.push(
+    paint(ANSI.bold + ANSI.cyan, "Colors    ", colors) + paint(ANSI.dim, ": ", colors) + paint(ANSI.bgreen, "excellent", colors) + paint(ANSI.dim, " \xB7 ", colors) + paint(ANSI.green, "good", colors) + paint(ANSI.dim, " \xB7 ", colors) + paint(ANSI.yellow, "borderline", colors) + paint(ANSI.dim, " \xB7 ", colors) + paint(ANSI.bred, "poor", colors)
+  );
+  out.push(
+    paint(ANSI.bold + ANSI.cyan, "Pricing   ", colors) + paint(ANSI.dim, ": shown per 1,000,000 tokens (M). ", colors) + paint(ANSI.bgreen, "free", colors) + paint(ANSI.dim, " = $0, ", colors) + paint(ANSI.byellow, "$X.XXXX/M", colors) + paint(ANSI.dim, " = paid", colors)
+  );
+  return out.join("\n").trimEnd();
+}
+function renderEndpointTable(ep, colors) {
+  const provider = ep.provider_name ?? ep.name ?? "unknown";
+  const rows = [];
+  if (ep.context_length !== void 0) {
+    rows.push([
+      "Context length",
+      paint(ANSI.bwhite, ep.context_length.toLocaleString(), colors) + " tokens"
+    ]);
+  }
+  if (ep.max_completion_tokens !== void 0 && ep.max_completion_tokens !== null) {
+    rows.push([
+      "Max completion",
+      paint(ANSI.bwhite, ep.max_completion_tokens.toLocaleString(), colors)
+    ]);
+  }
+  if (ep.max_prompt_tokens !== void 0 && ep.max_prompt_tokens !== null) {
+    rows.push([
+      "Max prompt",
+      paint(ANSI.bwhite, ep.max_prompt_tokens.toLocaleString(), colors)
+    ]);
+  }
+  if (ep.quantization) {
+    rows.push(["Quantization", paint(ANSI.dim, ep.quantization, colors)]);
+  }
+  if (ep.pricing) {
+    const p = ep.pricing;
+    rows.push([
+      "Prompt price",
+      paint(ANSI[classifyPriceIsFree(p.prompt)], formatPricePerM(p.prompt), colors)
+    ]);
+    rows.push([
+      "Completion price",
+      paint(ANSI[classifyPriceIsFree(p.completion)], formatPricePerM(p.completion), colors)
+    ]);
+    if (p.input_cache_read) {
+      rows.push([
+        "Cache-read price",
+        paint(ANSI[classifyPriceIsFree(p.input_cache_read)], formatPricePerM(p.input_cache_read), colors)
+      ]);
+    }
+  }
+  if (ep.uptime_last_30m !== void 0) {
+    const col = ANSI[classifyUptime(ep.uptime_last_30m)];
+    rows.push(["Uptime (30m)", paint(col, `${ep.uptime_last_30m.toFixed(1)}%`, colors)]);
+  }
+  if (ep.uptime_last_1d !== void 0) {
+    const col = ANSI[classifyUptime(ep.uptime_last_1d)];
+    rows.push(["Uptime (1d)", paint(col, `${ep.uptime_last_1d.toFixed(1)}%`, colors)]);
+  }
+  const round = (n) => n === void 0 ? "?" : Math.round(n).toString();
+  if (ep.latency_last_30m) {
+    const l = ep.latency_last_30m;
+    const latencyLine = [
+      paint(ANSI[classifyLatencyMs(l.p50)], `p50 ${round(l.p50)}ms`, colors),
+      paint(ANSI[classifyLatencyMs(l.p75)], `p75 ${round(l.p75)}ms`, colors),
+      paint(ANSI[classifyLatencyMs(l.p90)], `p90 ${round(l.p90)}ms`, colors),
+      paint(ANSI[classifyLatencyMs(l.p99)], `p99 ${round(l.p99)}ms`, colors)
+    ].join(" \xB7 ");
+    rows.push(["Latency (30m)", latencyLine]);
+  }
+  if (ep.throughput_last_30m) {
+    const t = ep.throughput_last_30m;
+    const tpLine = [
+      paint(ANSI[classifyThroughput(t.p50)], `p50 ${round(t.p50)} tok/s`, colors),
+      paint(ANSI[classifyThroughput(t.p75)], `p75 ${round(t.p75)} tok/s`, colors),
+      paint(ANSI[classifyThroughput(t.p90)], `p90 ${round(t.p90)} tok/s`, colors),
+      paint(ANSI[classifyThroughput(t.p99)], `p99 ${round(t.p99)} tok/s`, colors)
+    ].join(" \xB7 ");
+    rows.push(["Throughput (30m)", tpLine]);
+  }
+  const labelW = Math.max(...rows.map((r) => r[0].length), "Endpoint".length);
+  const valueW = Math.max(...rows.map((r) => visibleLength(r[1])), provider.length);
+  const top = `\u250C${"\u2500".repeat(labelW + 2)}\u252C${"\u2500".repeat(valueW + 2)}\u2510`;
+  const sep = `\u251C${"\u2500".repeat(labelW + 2)}\u253C${"\u2500".repeat(valueW + 2)}\u2524`;
+  const bot = `\u2514${"\u2500".repeat(labelW + 2)}\u2534${"\u2500".repeat(valueW + 2)}\u2518`;
+  const lines = [];
+  lines.push(paint(ANSI.dim, top, colors));
+  lines.push(
+    paint(ANSI.dim, "\u2502 ", colors) + padRight(paint(ANSI.bold + ANSI.cyan, "Endpoint", colors), labelW) + paint(ANSI.dim, " \u2502 ", colors) + padRight(paint(ANSI.bold + ANSI.bwhite, provider, colors), valueW) + paint(ANSI.dim, " \u2502", colors)
+  );
+  lines.push(paint(ANSI.dim, sep, colors));
+  for (const [label, value] of rows) {
+    lines.push(
+      paint(ANSI.dim, "\u2502 ", colors) + padRight(paint(ANSI.cyan, label, colors), labelW) + paint(ANSI.dim, " \u2502 ", colors) + padRight(value, valueW) + paint(ANSI.dim, " \u2502", colors)
+    );
+  }
+  lines.push(paint(ANSI.dim, bot, colors));
+  if (Array.isArray(ep.supported_parameters) && ep.supported_parameters.length > 0) {
+    const sorted = [...ep.supported_parameters].sort();
+    lines.push("");
+    lines.push(
+      paint(ANSI.bold + ANSI.cyan, `Supported parameters (${sorted.length}):`, colors)
+    );
+    const colWidth = sorted.reduce((m, s) => Math.max(m, s.length), 0) + 4;
+    const cols = Math.max(1, Math.floor(80 / colWidth));
+    for (let i = 0; i < sorted.length; i += cols) {
+      const row = sorted.slice(i, i + cols).map(
+        (p) => padRight(paint(ANSI.green, "\u2713 ", colors) + paint(ANSI.bwhite, p, colors), colWidth)
+      ).join("");
+      lines.push("  " + row);
+    }
+  }
+  return lines.join("\n");
+}
+
 // src/cli.ts
 function die(msg) {
   process.stderr.write(`Error: ${msg}
@@ -7870,6 +8187,38 @@ function cmdRename(oldName, newName) {
   saveSettings(settings);
   info(`Profile '${oldName}' renamed to '${newName}'.`);
 }
+async function cmdModelInfo(modelId, flags) {
+  const settings = ensureSettingsExist();
+  const activeName = settings.active;
+  const active = activeName ? settings.profiles[activeName] : void 0;
+  let baseUrl = "https://openrouter.ai/api";
+  let authToken;
+  if (active && active.api === "openrouter-remote") {
+    const resolved = resolveProfile(activeName, active);
+    baseUrl = resolved.url;
+    authToken = resolved.authToken;
+  } else {
+    authToken = process.env.OPENROUTER_API_KEY ?? "";
+  }
+  if (!authToken) {
+    die(
+      "No OpenRouter auth token available. Set $OPENROUTER_API_KEY or switch to an openrouter-remote profile."
+    );
+  }
+  const result = await fetchOpenRouterModelInfo(modelId, baseUrl, authToken);
+  if (!result.ok) {
+    if (result.status === 404) {
+      die(
+        `OpenRouter returned 404 for model '${modelId}'. Check the id \u2014 case-sensitive, with vendor prefix and any ':free' / ':thinking' suffix.`
+      );
+    }
+    die(`${result.error}${result.status ? ` (status ${result.status})` : ""}`);
+  }
+  const useMarkdown = flags.markdown === "true" || flags.plain === "true";
+  const useColor = flags["no-color"] !== "true" && !process.env.NO_COLOR && process.stdout.isTTY !== false;
+  const text = useMarkdown ? formatModelInfoMarkdown(result.data, modelId) : formatModelInfoTable(result.data, modelId, useColor);
+  info(text);
+}
 function printUsage() {
   info(`LLM Externalizer \u2014 Profile Management CLI
 
@@ -7880,6 +8229,7 @@ Usage:
   llm-externalizer profile edit <name> --field <value> [...]
   llm-externalizer profile remove <name>
   llm-externalizer profile rename <old-name> <new-name>
+  llm-externalizer model-info <model-id> [--markdown] [--no-color]
 
 Modes:
   local             Sequential requests to a local server
@@ -7907,14 +8257,23 @@ Optional flags (for add/edit):
 Settings file: ${getSettingsPath()}
 `);
 }
-function main() {
+async function main() {
   const args = process.argv.slice(2);
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
     printUsage();
     process.exit(0);
   }
+  if (args[0] === "model-info") {
+    const modelId = args[1];
+    if (!modelId || modelId.startsWith("--")) {
+      die("Usage: llm-externalizer model-info <model-id> [--markdown] [--no-color]");
+    }
+    const flags = parseFlags(args.slice(2));
+    await cmdModelInfo(modelId, flags);
+    return;
+  }
   if (args[0] !== "profile") {
-    die(`Unknown command '${args[0]}'. Use 'profile' subcommand or --help.`);
+    die(`Unknown command '${args[0]}'. Use 'profile' or 'model-info' subcommand, or --help.`);
   }
   const subcommand = args[1];
   const rest = args.slice(2);
@@ -7959,5 +8318,7 @@ function main() {
       );
   }
 }
-main();
+main().catch((err) => {
+  die(err instanceof Error ? err.message : String(err));
+});
 //# sourceMappingURL=cli.js.map

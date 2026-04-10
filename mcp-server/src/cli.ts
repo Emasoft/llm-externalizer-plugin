@@ -21,6 +21,11 @@ import {
   resolveProfile,
   getSettingsPath,
 } from "./config.js";
+import {
+  fetchOpenRouterModelInfo,
+  formatModelInfoTable,
+  formatModelInfoMarkdown,
+} from "./or-model-info.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -257,6 +262,58 @@ function cmdRename(oldName: string, newName: string): void {
 
 // ── Usage ────────────────────────────────────────────────────────────
 
+// ── model-info command ──────────────────────────────────────────────
+
+async function cmdModelInfo(modelId: string, flags: Record<string, string>): Promise<void> {
+  // Resolve the OpenRouter base URL and auth token.
+  // Prefer the active profile's resolved values; fall back to environment
+  // variables + the openrouter-remote preset default URL so this works
+  // even when the active profile is local (the user might want to look
+  // up an OpenRouter model regardless of which backend is active).
+  const settings = ensureSettingsExist();
+  const activeName = settings.active;
+  const active = activeName ? settings.profiles[activeName] : undefined;
+
+  let baseUrl = "https://openrouter.ai/api";
+  let authToken: string;
+
+  if (active && active.api === "openrouter-remote") {
+    const resolved = resolveProfile(activeName, active);
+    baseUrl = resolved.url;
+    authToken = resolved.authToken;
+  } else {
+    // Fall back to env var so the user can query OpenRouter even when the
+    // active profile is local.
+    authToken = process.env.OPENROUTER_API_KEY ?? "";
+  }
+
+  if (!authToken) {
+    die(
+      "No OpenRouter auth token available. Set $OPENROUTER_API_KEY or switch to an openrouter-remote profile.",
+    );
+  }
+
+  const result = await fetchOpenRouterModelInfo(modelId, baseUrl, authToken);
+  if (!result.ok) {
+    if (result.status === 404) {
+      die(
+        `OpenRouter returned 404 for model '${modelId}'. Check the id — case-sensitive, with vendor prefix and any ':free' / ':thinking' suffix.`,
+      );
+    }
+    die(`${result.error}${result.status ? ` (status ${result.status})` : ""}`);
+  }
+
+  // Render as table by default, markdown on --markdown / --plain, no-color on --no-color
+  const useMarkdown = flags.markdown === "true" || flags.plain === "true";
+  const useColor =
+    flags["no-color"] !== "true" && !process.env.NO_COLOR && process.stdout.isTTY !== false;
+
+  const text = useMarkdown
+    ? formatModelInfoMarkdown(result.data, modelId)
+    : formatModelInfoTable(result.data, modelId, useColor);
+  info(text);
+}
+
 function printUsage(): void {
   info(`LLM Externalizer — Profile Management CLI
 
@@ -267,6 +324,7 @@ Usage:
   llm-externalizer profile edit <name> --field <value> [...]
   llm-externalizer profile remove <name>
   llm-externalizer profile rename <old-name> <new-name>
+  llm-externalizer model-info <model-id> [--markdown] [--no-color]
 
 Modes:
   local             Sequential requests to a local server
@@ -297,7 +355,7 @@ Settings file: ${getSettingsPath()}
 
 // ── Main ─────────────────────────────────────────────────────────────
 
-function main(): void {
+async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
@@ -305,8 +363,19 @@ function main(): void {
     process.exit(0);
   }
 
+  // ── model-info top-level command ────────────────────────────────
+  if (args[0] === "model-info") {
+    const modelId = args[1];
+    if (!modelId || modelId.startsWith("--")) {
+      die("Usage: llm-externalizer model-info <model-id> [--markdown] [--no-color]");
+    }
+    const flags = parseFlags(args.slice(2));
+    await cmdModelInfo(modelId, flags);
+    return;
+  }
+
   if (args[0] !== "profile") {
-    die(`Unknown command '${args[0]}'. Use 'profile' subcommand or --help.`);
+    die(`Unknown command '${args[0]}'. Use 'profile' or 'model-info' subcommand, or --help.`);
   }
 
   const subcommand = args[1];
@@ -360,4 +429,6 @@ function main(): void {
   }
 }
 
-main();
+main().catch((err) => {
+  die(err instanceof Error ? err.message : String(err));
+});

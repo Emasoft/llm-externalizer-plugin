@@ -11,65 +11,81 @@ version: 1.0.0
 
 ## Overview
 
-Query OpenRouter's `/v1/models/{exact_id}/endpoints` for a specific model. Returns
-per-endpoint provider metadata: context length, pricing, **supported request-body
-parameters**, quantization, uptime, latency, throughput. Requires the active LLM
-Externalizer profile to be an OpenRouter profile.
+Query OpenRouter's `/v1/models/{exact_id}/endpoints` for a specific model and display
+context length, pricing, **supported request-body parameters**, quantization, uptime,
+latency, and throughput. Uses the LLM Externalizer CLI (not the MCP tool) so it works
+from subagents — MCP tools from plugins are not available in subagent contexts.
 
 ## Prerequisites
 
-- Active profile uses OpenRouter (not local LM Studio / Ollama / vLLM / llama.cpp)
-- `$OPENROUTER_API_KEY` set in the MCP server's environment
+- LLM Externalizer CLI installed and on PATH (bundled with the plugin: `llm-externalizer`
+  binary inside the plugin's `mcp-server` package).
+- **Either** the active profile is OpenRouter-backed, **or** `$OPENROUTER_API_KEY` is set
+  in the environment. The CLI falls back to the env var when the active profile is local.
 
 ## Instructions
 
 Copy this checklist and track your progress:
 
-1. [ ] Parse the user's prompt for the **exact OpenRouter model id**. The id is case-sensitive,
-       includes the vendor prefix, and includes any `:free` / `:thinking` / `:beta` suffix.
-2. [ ] If the user gave only a partial name (e.g. "nemotron", "claude"), ask for the full
-       id or list likely candidates and pick one with the user.
-3. [ ] Call `mcp__plugin_llm-externalizer_llm-externalizer__or_model_info` with
-       `{ "model": "<exact-id>" }`.
-4. [ ] Present the returned markdown to the user. Highlight the field the user asked
-       about (e.g. supported_parameters for "does X support reasoning", pricing for
-       cost questions).
+1. [ ] Parse the user's prompt for the **exact OpenRouter model id** — case-sensitive,
+       vendor-prefixed, with any `:free` / `:thinking` / `:beta` suffix. Examples:
+       `nvidia/nemotron-3-super-120b-a12b:free`, `anthropic/claude-sonnet-4`,
+       `google/gemini-2.5-flash`, `x-ai/grok-4.1-fast`, `qwen/qwen3.6-plus`.
+2. [ ] If the user gave only a partial name, ask for the full id or list candidates.
+3. [ ] Run the CLI via Bash:
+       `npx llm-externalizer model-info "<exact-id>"`
+       Or if the plugin is installed locally via `setup.py`, the binary may be at
+       `<plugin-root>/mcp-server/node_modules/.bin/llm-externalizer`.
+4. [ ] Present the ANSI-bordered table output to the user. Highlight the field they
+       asked about (supported_parameters for "does X support reasoning", pricing for
+       cost questions, etc.).
+5. [ ] If the CLI returns an error, see [references/errors.md](references/errors.md).
 
 ## Output
 
-One markdown block with: model header, architecture line, short description, and
-one section per endpoint containing context_length, max_completion_tokens,
-max_prompt_tokens, quantization, pricing ($/M tokens), **supported_parameters**
-(sorted list), uptime (30m / 1d), latency percentiles (ms), throughput percentiles
-(tok/s). Live data — not cached. Safe to call repeatedly. Not an LLM call; does
-not count toward session usage.
+An ANSI-colored Unicode-bordered table with one section per endpoint (provider):
+context_length, max_completion_tokens, max_prompt_tokens, quantization, pricing
+(converted to $/M tokens), uptime (30m + 1d), latency percentiles, throughput
+percentiles — followed by a grid of supported_parameters with green checkmarks.
+Color key: green = good values, yellow = borderline, red = poor.
+
+Pass `--markdown` for plain markdown instead (useful when piping to another tool).
+Pass `--no-color` to suppress ANSI codes for log capture. Results are live — no
+caching. Safe to call repeatedly.
 
 ## Examples
 
 Verify Nemotron's supported parameters:
 
-```json
-{ "tool": "or_model_info", "model": "nvidia/nemotron-3-super-120b-a12b:free" }
+```bash
+npx llm-externalizer model-info "nvidia/nemotron-3-super-120b-a12b:free"
 ```
 
 Compare providers hosting Llama 3.3:
 
-```json
-{ "tool": "or_model_info", "model": "meta-llama/llama-3.3-70b-instruct" }
+```bash
+npx llm-externalizer model-info "meta-llama/llama-3.3-70b-instruct"
 ```
 
-Check reasoning support on Claude:
+Check reasoning support on Claude, capture to a file without colors:
 
-```json
-{ "tool": "or_model_info", "model": "anthropic/claude-sonnet-4.5" }
+```bash
+npx llm-externalizer model-info "anthropic/claude-sonnet-4.5" --no-color > claude-info.txt
 ```
 
-For a full sample response see [references/example-output.md](references/example-output.md):
+Get plain markdown for further processing:
+
+```bash
+npx llm-externalizer model-info "google/gemini-2.5-flash" --markdown
+```
+
+See [references/example-output.md](references/example-output.md) for a full sample:
   - Sample response
   - Reading the output
+  - Percentiles explained
   - Comparing multiple endpoints
 
-For more scenarios see [references/use-cases.md](references/use-cases.md):
+And [references/use-cases.md](references/use-cases.md) for more scenarios:
   - Verify supported parameters before integrating a model
   - Compare pricing across providers hosting the same model
   - Debug slow or failing calls
@@ -81,10 +97,10 @@ For more scenarios see [references/use-cases.md](references/use-cases.md):
 
 | Error | Resolution |
 |-|-|
-| `only works with OpenRouter backends` | Switch to a remote profile via `/llm-externalizer:configure` |
 | `OpenRouter returned 404` | Wrong model id — check case, vendor prefix, `:free` / `:thinking` suffix |
-| `OpenRouter returned 401` | `$OPENROUTER_API_KEY` missing or invalid |
-| `No endpoints found` | Model deprecated or all providers offline — suggest an alternative |
+| `No OpenRouter auth token available` | Set `$OPENROUTER_API_KEY` or switch to an openrouter-remote profile |
+| `Network error` | Retry once; check `/llm-externalizer:discover` for service status |
+| `OpenRouter returned no endpoints` | Model deprecated — suggest alternative |
 
 Full table in [references/errors.md](references/errors.md):
   - Error table
@@ -98,6 +114,7 @@ Full table in [references/errors.md](references/errors.md):
 - [references/example-output.md](references/example-output.md) — full sample output
   - Sample response
   - Reading the output
+  - Percentiles explained
   - Comparing multiple endpoints
 - [references/use-cases.md](references/use-cases.md) — six common scenarios
   - Verify supported parameters before integrating a model
