@@ -18,10 +18,8 @@ from subagents — MCP tools from plugins are not available in subagent contexts
 
 ## Prerequisites
 
-- LLM Externalizer CLI installed and on PATH (bundled with the plugin: `llm-externalizer`
-  binary inside the plugin's `mcp-server` package).
-- **Either** the active profile is OpenRouter-backed, **or** `$OPENROUTER_API_KEY` is set
-  in the environment. The CLI falls back to the env var when the active profile is local.
+- `llm-externalizer` CLI on PATH (bundled with the plugin)
+- `$OPENROUTER_API_KEY` set, OR active profile is OpenRouter-backed
 
 ## Instructions
 
@@ -30,11 +28,17 @@ Copy this checklist and track your progress:
 1. [ ] Parse the user's prompt for the **exact OpenRouter model id** — case-sensitive,
        with vendor prefix and any `:free` / `:thinking` / `:beta` suffix.
 2. [ ] If the user gave only a partial name, ask for the full id.
-3. [ ] Run: `npx llm-externalizer model-info "<exact-id>"`
-4. [ ] **Show the raw CLI output — do NOT paraphrase, summarize, or rewrite it.** The CLI
-       already produces a full ANSI-colored Unicode-bordered table with row separators,
-       color-coded quality flags, and a footer legend. That IS the final output. Only add
-       commentary if the user explicitly asked a follow-up beyond "show me the info".
+3. [ ] Run: `npx llm-externalizer model-info "<exact-id>" --no-color`
+       Use `--no-color` because ANSI codes are stripped in the rendered transcript
+       and just add noise. The rich border / row separators / column alignment all
+       survive without color.
+4. [ ] **Copy the entire CLI stdout verbatim into your response as a fenced code
+       block.** Claude Code collapses long Bash tool output behind a "+N lines" fold,
+       so the user cannot see the table unless you reprint it. Do NOT paraphrase,
+       summarize, or rewrite it — the CLI already produces the final format with
+       borders, row separators, capability flags, percentiles, and a footer legend.
+       Your response must contain the raw output, nothing more unless the user
+       asked a follow-up question.
 5. [ ] On error, see [references/errors.md](references/errors.md).
 
 ## Output
