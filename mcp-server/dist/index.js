@@ -28366,7 +28366,7 @@ profiles:
     model: "google/gemini-2.5-flash"
     api_key: $OPENROUTER_API_KEY          # set this env var, or replace with direct key
 
-  # \u2500\u2500 Remote: Ensemble (two models in parallel) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  # \u2500\u2500 Remote: Ensemble (three models in parallel) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   remote-ensemble-geminigrok:
     mode: remote-ensemble
     api: openrouter-remote
@@ -28392,7 +28392,7 @@ profiles:
 # \u2500\u2500 Modes Reference \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 #   local             Sequential requests to a local server
 #   remote            Parallel requests, single model via OpenRouter
-#   remote-ensemble   Parallel requests, two models, combined report
+#   remote-ensemble   Parallel requests, three models, combined report
 #
 # \u2500\u2500 Auth Values \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 # Auth fields (api_key, api_token) accept either:
@@ -31811,7 +31811,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.50" },
+  { name: "llm-externalizer", version: "3.9.51" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {

@@ -1,6 +1,16 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.51] - 2026-04-10
+
+### Changed
+
+- Fix last 2 stale references: reset 120s timeout, two models comments
+
+- tool-reference.md: remove "up to 120s" from reset description
+- config.ts: "two models" → "three models" in settings template comments
+- Synced tool-reference.md across all 3 skill copies
+
 ## [3.9.50] - 2026-04-10
 
 ### Changed
