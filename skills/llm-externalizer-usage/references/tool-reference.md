@@ -28,7 +28,7 @@
 | Tool | Purpose |
 |------|---------|
 | `discover` | Check service health, auth token status, context window, concurrency mode, profiles |
-| `reset` | Full soft-restart. Waits for running requests (up to 120s), then reloads settings and clears caches. |
+| `reset` | Full soft-restart. Waits for running requests, then reloads settings and clears caches. |
 | `change_model` | Switch model in active profile |
 | `get_settings` | Copy settings.yaml to output dir, return file path |
 | `set_settings` | Read YAML from file_path, validate, backup old, write new settings |

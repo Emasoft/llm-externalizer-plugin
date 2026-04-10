@@ -608,7 +608,7 @@ profiles:
     model: "google/gemini-2.5-flash"
     api_key: $OPENROUTER_API_KEY          # set this env var, or replace with direct key
 
-  # ── Remote: Ensemble (two models in parallel) ─────────────────────
+  # ── Remote: Ensemble (three models in parallel) ────────────────────
   remote-ensemble-geminigrok:
     mode: remote-ensemble
     api: openrouter-remote
@@ -634,7 +634,7 @@ profiles:
 # ── Modes Reference ─────────────────────────────────────────────────
 #   local             Sequential requests to a local server
 #   remote            Parallel requests, single model via OpenRouter
-#   remote-ensemble   Parallel requests, two models, combined report
+#   remote-ensemble   Parallel requests, three models, combined report
 #
 # ── Auth Values ──────────────────────────────────────────────────────
 # Auth fields (api_key, api_token) accept either:
