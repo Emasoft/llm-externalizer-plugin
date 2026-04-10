@@ -85,6 +85,67 @@ def bump_version(current: str, part: str) -> str:
     return f"{major}.{minor}.{patch + 1}"
 
 
+def git_cliff_bumped_version() -> str | None:
+    """Ask git-cliff to compute the next version from unreleased commits.
+
+    git-cliff inspects the commits since the last matching tag and uses
+    the conventional-commit types (feat / fix / BREAKING CHANGE / etc.)
+    to decide major / minor / patch. Returns the bumped version string
+    WITHOUT the leading 'v' (so it can be compared against semver).
+
+    Returns None if git-cliff decides there's nothing to bump or fails.
+    """
+    result = run(
+        ["git-cliff", "--bumped-version"],
+        check=False,
+        capture=True,
+    )
+    if result.returncode != 0:
+        return None
+    raw = (result.stdout or "").strip()
+    if not raw:
+        return None
+    # git-cliff output follows the configured tag_pattern; strip the
+    # leading 'v' for semver comparison and downstream file writes.
+    version = raw.lstrip("v")
+    if not re.match(r"^\d+\.\d+\.\d+$", version):
+        return None
+    return version
+
+
+def determine_next_version(args, current: str) -> str:
+    """Pick the next version. Flags override, otherwise git-cliff auto-detects.
+
+    Order of precedence:
+      1. --set <x.y.z>   → explicit
+      2. --major         → bump major
+      3. --minor         → bump minor
+      4. --patch         → bump patch
+      5. default         → git-cliff --bumped-version (based on commit types)
+      6. fallback        → patch bump (if git-cliff has nothing to say)
+    """
+    if args.set:
+        if not re.match(r"^\d+\.\d+\.\d+$", args.set):
+            print(f"ERROR: '{args.set}' is not valid semver (x.y.z)", file=sys.stderr)
+            sys.exit(1)
+        return args.set
+    if args.major:
+        return bump_version(current, "major")
+    if args.minor:
+        return bump_version(current, "minor")
+    if args.patch:
+        return bump_version(current, "patch")
+    # Auto-detection via git-cliff (conventional commits).
+    auto = git_cliff_bumped_version()
+    if auto and auto != current:
+        print(f"  git-cliff --bumped-version: {current} -> {auto}")
+        return auto
+    # Fallback: no bumpable commits detected (or git-cliff returned the
+    # same version). Default to patch bump so the release still happens.
+    print("  git-cliff found no bumpable commits — defaulting to patch bump")
+    return bump_version(current, "patch")
+
+
 def extract_release_notes(changelog_path: Path, version: str) -> str:
     """Extract the changelog entry for a specific version."""
     if not changelog_path.exists():
@@ -341,9 +402,9 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
         print("All checks passed.")
         return
 
-    # ── 0. Pre-flight: working tree must be clean ──
+    # ── 1. Pre-flight: working tree must be clean ──
     # Mutating version in a dirty tree mixes user changes with publish artifacts.
-    print("\n── 0. Pre-flight: working tree check ──")
+    print("\n── 1. Pre-flight: working tree check ──")
     pf_status = run(["git", "status", "--porcelain"], check=False)
     pf_dirty = [
         line for line in (pf_status.stdout or "").strip().splitlines()
@@ -358,29 +419,40 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     print("  Working tree is clean")
     print()
 
-    # ── 1. Plan version bump (no file writes yet) ──
-    print("── 1. Plan version bump ──")
+    # ── 2. Validate — FIRST thing after pre-flight ──
+    # MANDATORY. Every check runs on the CURRENT code (no version bump
+    # yet), so the validation result reflects the exact state being
+    # released. If anything fails, publish aborts without touching any
+    # file and the working tree is guaranteed untouched.
+    #
+    # Order matters: validation must pass BEFORE we compute the next
+    # version or generate the changelog. There's no point determining
+    # a version for code that won't build.
+    print("── 2. Validate (MANDATORY — all checks must pass with 0 errors) ──")
+    if not run_checks(repo_root):
+        print("ERROR: validation failed. Aborting.", file=sys.stderr)
+        print("Working tree is unchanged — fix the issues and re-run.", file=sys.stderr)
+        sys.exit(1)
+    if not run_cpv_validation(repo_root):
+        print("ERROR: CPV validation failed. Aborting.", file=sys.stderr)
+        sys.exit(1)
+    print("  All checks passed")
+    print()
+
+    # ── 3. Determine next version ──
+    # Default: git-cliff --bumped-version (uses conventional commit
+    # types to decide major/minor/patch). Flags --patch/--minor/--major/--set
+    # override the auto-detection for manual control.
+    print("── 3. Determine next version ──")
     if not plugin_json.exists():
         print(f"ERROR: {plugin_json} not found", file=sys.stderr)
         sys.exit(1)
     manifest = json.loads(plugin_json.read_text(encoding="utf-8"))
     current = manifest.get("version", "0.0.0")
-
-    if args.set:
-        if not re.match(r"^\d+\.\d+\.\d+$", args.set):
-            print(f"ERROR: '{args.set}' is not valid semver (x.y.z)", file=sys.stderr)
-            sys.exit(1)
-        new_version = args.set
-    elif args.major:
-        new_version = bump_version(current, "major")
-    elif args.minor:
-        new_version = bump_version(current, "minor")
-    else:
-        new_version = bump_version(current, "patch")
-
+    new_version = determine_next_version(args, current)
     tag = f"v{new_version}"
 
-    # Verify tag does not already exist (local + remote) — read-only checks
+    # Verify tag does not already exist (local + remote)
     tag_check = run(["git", "tag", "--list", tag], check=False)
     if tag_check.stdout and tag_check.stdout.strip() == tag:
         print(f"ERROR: tag '{tag}' already exists locally", file=sys.stderr)
@@ -393,48 +465,41 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     print(f"  Planned: {current} -> {new_version} (tag: {tag})")
     print()
 
-    # ── 2. Validate CURRENT code BEFORE any mutations ──
-    # MANDATORY — no mode skips this. Even --dry-run runs the full check
-    # suite: the point of --dry-run is to preview a would-be publish, and
-    # the publish isn't viable unless every check passes. Skipping checks
-    # in dry-run would let a broken state reach the planning step silently.
-    #
-    # Every check below is mandatory:
-    #   • run_checks()          — npm ci / typecheck / lint / build / test
-    #                             / ruff / shellcheck / plugin.json
-    #   • run_cpv_validation()  — CPV remote validation (CRITICAL=MAJOR=0)
-    #
-    # If ANY check fails, publish.py aborts BEFORE touching any file. The
-    # working tree is guaranteed to be untouched on the failure path.
-    print("── 2. Validate (MANDATORY — all checks must pass with 0 errors) ──")
-    if not run_checks(repo_root):
-        print(
-            "ERROR: validation failed. Aborting BEFORE version bump.",
-            file=sys.stderr,
-        )
-        print(
-            "Working tree is unchanged — fix the issues and re-run.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    if not run_cpv_validation(repo_root):
-        print(
-            "ERROR: CPV validation failed. Aborting BEFORE version bump.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    print("  All checks passed — safe to bump version and commit")
-    print()
-
-    # ── dry-run exits here, AFTER checks pass ──
+    # ── dry-run exits here, after checks pass AND version is determined ──
     if args.dry_run:
         print("[DRY RUN] All checks passed.")
-        print("[DRY RUN] Would update plugin.json, README.md badges, CHANGELOG.md")
-        print(f"[DRY RUN] Would commit, tag {tag}, push, and create GitHub release")
+        print(f"[DRY RUN] Would bump {current} -> {new_version}")
+        print(f"[DRY RUN] Would generate CHANGELOG.md, sync version, commit, tag {tag}, push")
         return
 
-    # ── 3. Apply version bump to files ──
-    print("── 3. Apply version bump ──")
+    # ── 4. Generate CHANGELOG.md via git-cliff ──
+    # git-cliff re-generates the full CHANGELOG from all commits since
+    # the initial tag. The unreleased commits get grouped under the new
+    # tag. commit_parsers in cliff.toml control the section layout.
+    print("── 4. Generate CHANGELOG.md ──")
+    cliff_result = run(
+        ["git-cliff", "--tag", tag, "--output", str(changelog)],
+        capture=True, check=False,
+    )
+    cliff_output = (cliff_result.stderr or "") + (cliff_result.stdout or "")
+    if "were skipped" in cliff_output:
+        print(f"  WARNING: {cliff_output.strip()}", file=sys.stderr)
+        print(
+            "  ERROR: git-cliff skipped commits. Ensure cliff.toml has "
+            "filter_unconventional = false and a catch-all parser.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if cliff_result.returncode != 0:
+        print(f"  ERROR: git-cliff failed (exit {cliff_result.returncode})", file=sys.stderr)
+        if cliff_result.stderr:
+            print(f"  {cliff_result.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+    print("  OK: CHANGELOG.md regenerated")
+    print()
+
+    # ── 5. Sync version to all files ──
+    print("── 5. Sync version to files ──")
     # Update plugin.json
     manifest["version"] = new_version
     plugin_json.write_text(
@@ -483,8 +548,8 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
         print(f"  Synced version to {index_ts.relative_to(repo_root)}")
     print()
 
-    # ── 4. Rebuild dist (with new version) ──
-    print("── 4. Rebuild dist ──")
+    # ── 6. Rebuild dist (with new version) ──
+    print("── 6. Rebuild dist ──")
     mcp_dir = str(repo_root / "mcp-server")
     rebuild = run(["npm", "run", "build"], capture=True, check=False, cwd=mcp_dir)
     if rebuild.returncode != 0:
@@ -501,49 +566,20 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     print("  OK: dist rebuilt with updated version")
     print()
 
-    # ── 5. Update README badges ──
+    # ── 7. Update README badges ──
     readme = repo_root / "README.md"
-    print("── 5. Update README badges ──")
+    print("── 7. Update README badges ──")
     if update_readme_badges(readme, new_version, True):
         print(f"  Updated badges in {readme.relative_to(repo_root)}")
     else:
         print("  No badge markers found in README.md, skipping")
     print()
 
-    # ── 6. Update CHANGELOG.md with git-cliff ──
-    print("── 6. Update changelog ──")
-    if shutil.which("git-cliff"):
-        cliff_result = run(
-            ["git-cliff", "--tag", tag, "--output", str(changelog)],
-            capture=True,
-            check=False,
-        )
-        # Check for skipped commits in stderr
-        cliff_output = (cliff_result.stderr or "") + (cliff_result.stdout or "")
-        if "were skipped" in cliff_output:
-            print(
-                f"  WARNING: {cliff_output.strip()}",
-                file=sys.stderr,
-            )
-            print(
-                "  ERROR: git-cliff skipped commits. Ensure cliff.toml has "
-                "filter_unconventional = false and a catch-all parser.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        if cliff_result.returncode != 0:
-            print(f"  ERROR: git-cliff failed (exit {cliff_result.returncode})", file=sys.stderr)
-            if cliff_result.stderr:
-                print(f"  {cliff_result.stderr.strip()}", file=sys.stderr)
-            sys.exit(1)
-        print("  OK: changelog generated, no commits skipped")
-    else:
-        print("ERROR: git-cliff not found on PATH. Install it first.", file=sys.stderr)
-        sys.exit(1)
-    print()
-
-    # ── 7. Commit ──
-    print("── 7. Commit ──")
+    # ── 8. Commit — conventional release commit ──
+    # Single commit with 'chore(release): vX.Y.Z' format. The
+    # cliff.toml commit_parsers skip-rule for '^chore\\(release\\)'
+    # excludes this commit from future changelog generation.
+    print("── 8. Commit ──")
     files_to_stage = [str(plugin_json)]
     pkg_json_path = repo_root / "mcp-server" / "package.json"
     srv_json_path = repo_root / "mcp-server" / "server.json"
@@ -558,17 +594,13 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     index_ts_path = repo_root / "mcp-server" / "src" / "index.ts"
     if index_ts_path.exists():
         files_to_stage.append(str(index_ts_path))
-    # Stage rebuilt dist files
     dist_dir = repo_root / "mcp-server" / "dist"
     if dist_dir.exists():
         files_to_stage.append(str(dist_dir))
     run(["git", "add"] + files_to_stage, capture=False)
-    # M: Detect any unstaged modified files that may have been missed
+    # Warn if any modified files were missed
     porcelain = run(["git", "status", "--porcelain"], check=False)
     if porcelain.stdout:
-        # Check working-tree column (2nd char) for modifications not yet staged
-        # Porcelain format: XY where X=index status, Y=worktree status
-        # ' '=unmodified, '?'=untracked — anything else in Y means worktree changes
         unstaged = [
             line for line in porcelain.stdout.strip().splitlines()
             if len(line) >= 2 and line[1] not in (" ", "?")
@@ -577,29 +609,28 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
             print("WARNING: unstaged modified files detected:", file=sys.stderr)
             for line in unstaged:
                 print(f"  {line}", file=sys.stderr)
-    run(["git", "commit", "-m", f"Release {tag}"], capture=False)
+    run(["git", "commit", "-m", f"chore(release): {tag}"], capture=False)
     print()
 
-    # ── 8. Tag ──
-    print("── 8. Tag ──")
+    # ── 9. Tag ──
+    print("── 9. Tag ──")
     run(["git", "tag", "-a", tag, "-m", f"Release {tag}"], capture=False)
     print()
 
-    # ── 9. Push (pre-push hook skips — lock file present) ──
-    print("── 9. Push ──")
+    # ── 10. Push (pre-push hook sees the lock file and skips its own checks) ──
+    print("── 10. Push ──")
     push_result = run(["git", "push", "--follow-tags"], capture=True, check=False)
     if push_result.returncode != 0:
         print("ERROR: push failed. Rolling back commit and tag.", file=sys.stderr)
         if push_result.stderr:
             print(f"  {push_result.stderr.strip()}", file=sys.stderr)
-        # Undo the commit (keep changes staged) and delete the local tag
         run(["git", "reset", "--soft", "HEAD~1"], check=False, capture=False)
         run(["git", "tag", "-d", tag], check=False, capture=False)
         sys.exit(1)
     print()
 
-    # ── 10. GitHub release ──
-    print("── 10. Create GitHub release ──")
+    # ── 11. GitHub release ──
+    print("── 11. Create GitHub release ──")
     notes = extract_release_notes(changelog, new_version)
     run(
         ["gh", "release", "create", tag, "--title", tag, "--notes", notes],
