@@ -346,25 +346,25 @@ export function formatModelInfoTable(
   const boxInner = Math.max(innerTitleLen, innerIdLen, innerModsLen, 40);
   const topBorder = `┏${"━".repeat(boxInner + 2)}┓`;
   const bottomBorder = `┗${"━".repeat(boxInner + 2)}┛`;
-  out.push(paint(ANSI.cyan, topBorder, colors));
+  out.push(paint(ANSI.bcyan, topBorder, colors));
   out.push(
-    paint(ANSI.cyan, "┃ ", colors) +
+    paint(ANSI.bcyan, "┃ ", colors) +
       padRight(titlePainted, boxInner) +
-      paint(ANSI.cyan, " ┃", colors),
+      paint(ANSI.bcyan, " ┃", colors),
   );
   out.push(
-    paint(ANSI.cyan, "┃ ", colors) +
+    paint(ANSI.bcyan, "┃ ", colors) +
       padRight("id: " + idPainted, boxInner) +
-      paint(ANSI.cyan, " ┃", colors),
+      paint(ANSI.bcyan, " ┃", colors),
   );
   if (modsLine) {
     out.push(
-      paint(ANSI.cyan, "┃ ", colors) +
+      paint(ANSI.bcyan, "┃ ", colors) +
         padRight(paint(ANSI.dim, modsLine, colors), boxInner) +
-        paint(ANSI.cyan, " ┃", colors),
+        paint(ANSI.bcyan, " ┃", colors),
     );
   }
-  out.push(paint(ANSI.cyan, bottomBorder, colors));
+  out.push(paint(ANSI.bcyan, bottomBorder, colors));
   out.push("");
 
   // ── One table per endpoint ─────────────────────────────────────
@@ -577,42 +577,57 @@ function renderEndpointTable(ep: ModelEndpoint, colors: boolean): string {
     provider.length,
   );
 
+  // Bright border color — cyan was previously rendered dim, which is
+  // nearly invisible on many terminals. Use bright cyan throughout.
+  const BORDER = ANSI.bcyan;
+
   const top = `┌${"─".repeat(labelW + 2)}┬${"─".repeat(valueW + 2)}┐`;
   const sep = `├${"─".repeat(labelW + 2)}┼${"─".repeat(valueW + 2)}┤`;
   const bot = `└${"─".repeat(labelW + 2)}┴${"─".repeat(valueW + 2)}┘`;
 
   const lines: string[] = [];
-  lines.push(paint(ANSI.dim, top, colors));
+  lines.push(paint(BORDER, top, colors));
   lines.push(
-    paint(ANSI.dim, "│ ", colors) +
+    paint(BORDER, "│ ", colors) +
       padRight(paint(ANSI.bold + ANSI.cyan, "Endpoint", colors), labelW) +
-      paint(ANSI.dim, " │ ", colors) +
+      paint(BORDER, " │ ", colors) +
       padRight(paint(ANSI.bold + ANSI.bwhite, provider, colors), valueW) +
-      paint(ANSI.dim, " │", colors),
+      paint(BORDER, " │", colors),
   );
-  lines.push(paint(ANSI.dim, sep, colors));
-  for (const [label, value] of rows) {
+  lines.push(paint(BORDER, sep, colors));
+
+  // Render each logical row, followed by a separator. Multi-line cells
+  // (arrays) render as a group with NO internal separator — the label
+  // only appears on the first line — and a single `├─┼─┤` row after the
+  // whole group. This keeps supported_parameters visually grouped.
+  for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
+    const [label, value] = rows[rowIdx];
     const values = Array.isArray(value) ? value : [value];
     // First line: label + first value
     lines.push(
-      paint(ANSI.dim, "│ ", colors) +
+      paint(BORDER, "│ ", colors) +
         padRight(paint(ANSI.cyan, label, colors), labelW) +
-        paint(ANSI.dim, " │ ", colors) +
+        paint(BORDER, " │ ", colors) +
         padRight(values[0] ?? "", valueW) +
-        paint(ANSI.dim, " │", colors),
+        paint(BORDER, " │", colors),
     );
-    // Continuation lines (if any): empty label column, next value
+    // Continuation lines (multi-line cell): empty label column, next value
     for (let i = 1; i < values.length; i++) {
       lines.push(
-        paint(ANSI.dim, "│ ", colors) +
+        paint(BORDER, "│ ", colors) +
           padRight("", labelW) +
-          paint(ANSI.dim, " │ ", colors) +
+          paint(BORDER, " │ ", colors) +
           padRight(values[i], valueW) +
-          paint(ANSI.dim, " │", colors),
+          paint(BORDER, " │", colors),
       );
     }
+    // Separator between logical rows (not after the last one — the
+    // bottom border serves as closer).
+    if (rowIdx < rows.length - 1) {
+      lines.push(paint(BORDER, sep, colors));
+    }
   }
-  lines.push(paint(ANSI.dim, bot, colors));
+  lines.push(paint(BORDER, bot, colors));
 
   return lines.join("\n");
 }

@@ -28595,19 +28595,19 @@ function formatModelInfoTable(data, modelId, colors = true) {
   const boxInner = Math.max(innerTitleLen, innerIdLen, innerModsLen, 40);
   const topBorder = `\u250F${"\u2501".repeat(boxInner + 2)}\u2513`;
   const bottomBorder = `\u2517${"\u2501".repeat(boxInner + 2)}\u251B`;
-  out.push(paint(ANSI.cyan, topBorder, colors));
+  out.push(paint(ANSI.bcyan, topBorder, colors));
   out.push(
-    paint(ANSI.cyan, "\u2503 ", colors) + padRight(titlePainted, boxInner) + paint(ANSI.cyan, " \u2503", colors)
+    paint(ANSI.bcyan, "\u2503 ", colors) + padRight(titlePainted, boxInner) + paint(ANSI.bcyan, " \u2503", colors)
   );
   out.push(
-    paint(ANSI.cyan, "\u2503 ", colors) + padRight("id: " + idPainted, boxInner) + paint(ANSI.cyan, " \u2503", colors)
+    paint(ANSI.bcyan, "\u2503 ", colors) + padRight("id: " + idPainted, boxInner) + paint(ANSI.bcyan, " \u2503", colors)
   );
   if (modsLine) {
     out.push(
-      paint(ANSI.cyan, "\u2503 ", colors) + padRight(paint(ANSI.dim, modsLine, colors), boxInner) + paint(ANSI.cyan, " \u2503", colors)
+      paint(ANSI.bcyan, "\u2503 ", colors) + padRight(paint(ANSI.dim, modsLine, colors), boxInner) + paint(ANSI.bcyan, " \u2503", colors)
     );
   }
-  out.push(paint(ANSI.cyan, bottomBorder, colors));
+  out.push(paint(ANSI.bcyan, bottomBorder, colors));
   out.push("");
   if (endpoints.length === 0) {
     out.push(paint(ANSI.yellow, "No endpoints reported for this model.", colors));
@@ -28774,27 +28774,32 @@ function renderEndpointTable(ep, colors) {
     }),
     provider.length
   );
+  const BORDER = ANSI.bcyan;
   const top = `\u250C${"\u2500".repeat(labelW + 2)}\u252C${"\u2500".repeat(valueW + 2)}\u2510`;
   const sep = `\u251C${"\u2500".repeat(labelW + 2)}\u253C${"\u2500".repeat(valueW + 2)}\u2524`;
   const bot = `\u2514${"\u2500".repeat(labelW + 2)}\u2534${"\u2500".repeat(valueW + 2)}\u2518`;
   const lines = [];
-  lines.push(paint(ANSI.dim, top, colors));
+  lines.push(paint(BORDER, top, colors));
   lines.push(
-    paint(ANSI.dim, "\u2502 ", colors) + padRight(paint(ANSI.bold + ANSI.cyan, "Endpoint", colors), labelW) + paint(ANSI.dim, " \u2502 ", colors) + padRight(paint(ANSI.bold + ANSI.bwhite, provider, colors), valueW) + paint(ANSI.dim, " \u2502", colors)
+    paint(BORDER, "\u2502 ", colors) + padRight(paint(ANSI.bold + ANSI.cyan, "Endpoint", colors), labelW) + paint(BORDER, " \u2502 ", colors) + padRight(paint(ANSI.bold + ANSI.bwhite, provider, colors), valueW) + paint(BORDER, " \u2502", colors)
   );
-  lines.push(paint(ANSI.dim, sep, colors));
-  for (const [label, value] of rows) {
+  lines.push(paint(BORDER, sep, colors));
+  for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
+    const [label, value] = rows[rowIdx];
     const values = Array.isArray(value) ? value : [value];
     lines.push(
-      paint(ANSI.dim, "\u2502 ", colors) + padRight(paint(ANSI.cyan, label, colors), labelW) + paint(ANSI.dim, " \u2502 ", colors) + padRight(values[0] ?? "", valueW) + paint(ANSI.dim, " \u2502", colors)
+      paint(BORDER, "\u2502 ", colors) + padRight(paint(ANSI.cyan, label, colors), labelW) + paint(BORDER, " \u2502 ", colors) + padRight(values[0] ?? "", valueW) + paint(BORDER, " \u2502", colors)
     );
     for (let i = 1; i < values.length; i++) {
       lines.push(
-        paint(ANSI.dim, "\u2502 ", colors) + padRight("", labelW) + paint(ANSI.dim, " \u2502 ", colors) + padRight(values[i], valueW) + paint(ANSI.dim, " \u2502", colors)
+        paint(BORDER, "\u2502 ", colors) + padRight("", labelW) + paint(BORDER, " \u2502 ", colors) + padRight(values[i], valueW) + paint(BORDER, " \u2502", colors)
       );
     }
+    if (rowIdx < rows.length - 1) {
+      lines.push(paint(BORDER, sep, colors));
+    }
   }
-  lines.push(paint(ANSI.dim, bot, colors));
+  lines.push(paint(BORDER, bot, colors));
   return lines.join("\n");
 }
 

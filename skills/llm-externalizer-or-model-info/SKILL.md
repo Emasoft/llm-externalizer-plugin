@@ -28,18 +28,14 @@ from subagents — MCP tools from plugins are not available in subagent contexts
 Copy this checklist and track your progress:
 
 1. [ ] Parse the user's prompt for the **exact OpenRouter model id** — case-sensitive,
-       vendor-prefixed, with any `:free` / `:thinking` / `:beta` suffix. Examples:
-       `nvidia/nemotron-3-super-120b-a12b:free`, `anthropic/claude-sonnet-4`,
-       `google/gemini-2.5-flash`, `x-ai/grok-4.1-fast`, `qwen/qwen3.6-plus`.
-2. [ ] If the user gave only a partial name, ask for the full id or list candidates.
-3. [ ] Run the CLI via Bash:
-       `npx llm-externalizer model-info "<exact-id>"`
-       Or if the plugin is installed locally via `setup.py`, the binary may be at
-       `<plugin-root>/mcp-server/node_modules/.bin/llm-externalizer`.
-4. [ ] Present the ANSI-bordered table output to the user. Highlight the field they
-       asked about (supported_parameters for "does X support reasoning", pricing for
-       cost questions, etc.).
-5. [ ] If the CLI returns an error, see [references/errors.md](references/errors.md).
+       with vendor prefix and any `:free` / `:thinking` / `:beta` suffix.
+2. [ ] If the user gave only a partial name, ask for the full id.
+3. [ ] Run: `npx llm-externalizer model-info "<exact-id>"`
+4. [ ] **Show the raw CLI output — do NOT paraphrase, summarize, or rewrite it.** The CLI
+       already produces a full ANSI-colored Unicode-bordered table with row separators,
+       color-coded quality flags, and a footer legend. That IS the final output. Only add
+       commentary if the user explicitly asked a follow-up beyond "show me the info".
+5. [ ] On error, see [references/errors.md](references/errors.md).
 
 ## Output
 
