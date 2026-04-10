@@ -1,6 +1,16 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.56] - 2026-04-10
+
+### Changed
+
+- Add FILE_FORMAT_EXAMPLE to system prompts
+
+Shows LLMs the exact <filename>/<file-content> wrapping format
+they'll receive, so they can parse multi-file batches reliably.
+Injected before BREVITY_RULES in all file-handling tools.
+
 ## [3.9.55] - 2026-04-10
 
 ### Changed
