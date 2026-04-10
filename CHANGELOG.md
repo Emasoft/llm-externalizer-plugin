@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.77] - 2026-04-10
+
+### Changed
+
+- Proper markdown tables + --json [file] option
+
 ## [3.9.76] - 2026-04-10
 
 ### Changed
