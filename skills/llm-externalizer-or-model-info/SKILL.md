@@ -28,17 +28,16 @@ Copy this checklist and track your progress:
 1. [ ] Parse the user's prompt for the **exact OpenRouter model id** — case-sensitive,
        with vendor prefix and any `:free` / `:thinking` / `:beta` suffix.
 2. [ ] If the user gave only a partial name, ask for the full id.
-3. [ ] Run: `npx llm-externalizer model-info "<exact-id>" --no-color`
-       Use `--no-color` because ANSI codes are stripped in the rendered transcript
-       and just add noise. The rich border / row separators / column alignment all
-       survive without color.
+3. [ ] Run: `npx llm-externalizer model-info "<exact-id>"` (colors ON by default).
+       Claude Code's terminal UI renders ANSI escape codes — bright cyan borders,
+       green capability flags, yellow/red latency percentiles. Keep them.
 4. [ ] **Copy the entire CLI stdout verbatim into your response as a fenced code
        block.** Claude Code collapses long Bash tool output behind a "+N lines" fold,
        so the user cannot see the table unless you reprint it. Do NOT paraphrase,
-       summarize, or rewrite it — the CLI already produces the final format with
-       borders, row separators, capability flags, percentiles, and a footer legend.
-       Your response must contain the raw output, nothing more unless the user
-       asked a follow-up question.
+       summarize, or rewrite — the CLI already produces the final format. Reprint
+       the raw output as-is (ANSI codes included — they render correctly in the
+       chat transcript). Only add commentary if the user asked a follow-up beyond
+       "show me the info".
 5. [ ] On error, see [references/errors.md](references/errors.md).
 
 ## Output
