@@ -29359,7 +29359,7 @@ var DEFAULT_OPENROUTER_RPS = 5;
 var DEFAULT_MAX_IN_FLIGHT_REMOTE = 200;
 var DEFAULT_TEMPERATURE = 0.1;
 var BREVITY_RULES = "\nOUTPUT RULES:\n- Be SUCCINCT. Use bullet points, not paragraphs.\n- Skip preamble, filler, and restating the task.\n- Only report findings, not things that are correct.\n- For code reviews: skip files/areas with no issues \u2014 only mention what needs attention.\n- Maximum 3 sentences per finding. Lead with the problem, not the context.";
-var FILE_FORMAT_EXAMPLE = "\nINPUT FORMAT: Each attached file is wrapped as follows:\n<filename>\n/absolute/path/to/file.ext\n</filename>\n<file-content>\n````language\n<file contents here>\n````\n</file-content>\nReference files by the path inside <filename>. Multiple files may appear in sequence.\n";
+var FILE_FORMAT_EXAMPLE = "\nINPUT FORMAT: Each attached file is wrapped as follows (placeholders use {BRACES}, actual tags use angle brackets):\n<filename>\n{ABSOLUTE_PATH_HERE}\n</filename>\n<file-content>\n````{LANGUAGE}\n{FILE_CONTENTS_HERE}\n````\n</file-content>\nReference files by the path inside the filename tag. Multiple files may appear in sequence.\n";
 var CONNECT_TIMEOUT_MS = 5e3;
 var SOFT_TIMEOUT_MS = (activeResolved?.timeout ?? 300) * 1e3;
 var FALLBACK_CONTEXT_LENGTH = activeResolved?.contextWindow || 1e5;
@@ -31819,7 +31819,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.57" },
+  { name: "llm-externalizer", version: "3.9.58" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {

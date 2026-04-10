@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.58] - 2026-04-10
+
+### Changed
+
+- Fix FILE_FORMAT_EXAMPLE: use {BRACES} for placeholders, not angle brackets
+
 ## [3.9.57] - 2026-04-10
 
 ### Changed
