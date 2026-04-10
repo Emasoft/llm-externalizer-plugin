@@ -345,14 +345,9 @@ function readFileAsCodeBlock(
   }
   const lang = langOverride || detectLang(filePath);
   const fence = fenceBackticks(content);
-  // Wrap in XML tags for unambiguous file delimitation (LLMs parse XML better than nested fences).
-  // Escape special XML chars in the path attribute.
-  const escapedPath = filePath
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-  return `<file path="${escapedPath}">\n${fence}${lang}\n${content}\n${fence}\n</file>`;
+  // Wrap in <file>...</file> for unambiguous file delimitation.
+  // Path is emitted on the fence header line (not as an XML attribute — no escaping needed).
+  return `<file>\n${fence}${lang} ${filePath}\n${content}\n${fence}\n</file>`;
 }
 
 // ── Binary extension detection ───────────────────────────────────────
