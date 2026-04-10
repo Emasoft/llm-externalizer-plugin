@@ -1,6 +1,25 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.55] - 2026-04-10
+
+### Changed
+
+- Use <filename>/<file-content> XML tags for file wrapping
+
+Each file now wraps as:
+  <filename>
+  /path/to/file.ext
+  </filename>
+  <file-content>
+  ```lang
+  ...
+  ```
+  </file-content>
+
+Cleaner separation of path and content, both unambiguously
+delimited by XML tags. No escaping needed.
+
 ## [3.9.54] - 2026-04-10
 
 ### Changed
