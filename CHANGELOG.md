@@ -1,6 +1,44 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.78] - 2026-04-10
+
+### Changed
+
+- Add or_model_info_json MCP tool with optional file_path
+
+Parity between the CLI and the MCP surface. The CLI gained
+`--json [file]` in v3.9.77; this release exposes the same feature
+as a dedicated MCP tool.
+
+New tool:
+  or_model_info_json
+    input:
+      model: string (required) — exact OpenRouter model id
+      file_path: string (optional) — absolute path to write JSON to
+
+Behavior:
+
+  • file_path omitted   → returns pretty JSON inline in the tool result
+  • file_path provided  → writes JSON to the resolved absolute path
+                          and returns only 'JSON written to <path>',
+                          saving caller context tokens when the JSON
+                          is large or when it will be consumed by
+                          another tool instead of the assistant.
+
+The handler for or_model_info / or_model_info_table / or_model_info_json
+is now a single case block that dispatches on `name`. The fetch +
+error-handling path is shared; only the final formatting step branches.
+
+Imports: formatModelInfoJson from ./or-model-info.js. writeFileSync
+and resolve are already imported at the top of index.ts.
+
+Three OpenRouter model info tools on the MCP now:
+
+  • or_model_info        — markdown (pipe-delimited table)
+  • or_model_info_table  — ANSI-colored Unicode-bordered table
+  • or_model_info_json   — raw JSON (stdout or file)
+
 ## [3.9.77] - 2026-04-10
 
 ### Changed
