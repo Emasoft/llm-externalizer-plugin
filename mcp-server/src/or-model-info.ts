@@ -19,11 +19,46 @@ export interface ModelEndpointPricing {
   discount?: number;
 }
 
-export interface ModelEndpointLatency {
-  p50?: number;
-  p75?: number;
-  p90?: number;
-  p99?: number;
+/**
+ * Percentile container. OpenRouter uses keys like `p50`, `p75`, `p90`, `p99`
+ * today but may add fractional (`p99.9`) or other keys in the future. Modeled
+ * as an open record so we discover and render whatever the API returns.
+ */
+export type ModelEndpointPercentiles = Record<string, number | undefined>;
+
+/**
+ * Extract numeric percentile entries from a record, sorted by numeric value.
+ * Filters out non-percentile keys and non-number values. Handles both
+ * integer (p50) and fractional (p99.9) percentiles.
+ */
+export function sortedPercentiles(
+  obj: ModelEndpointPercentiles | undefined,
+): Array<{ key: string; value: number; numeric: number }> {
+  if (!obj || typeof obj !== "object") return [];
+  const out: Array<{ key: string; value: number; numeric: number }> = [];
+  for (const [key, value] of Object.entries(obj)) {
+    if (typeof value !== "number" || !isFinite(value)) continue;
+    const match = /^p(\d+(?:\.\d+)?)$/.exec(key);
+    if (!match) continue;
+    out.push({ key, value, numeric: parseFloat(match[1]) });
+  }
+  out.sort((a, b) => a.numeric - b.numeric);
+  return out;
+}
+
+/**
+ * Human label for a percentile key — adds a qualitative annotation to
+ * the median and extreme percentiles, leaves the mid ones bare.
+ *
+ * - p50 → "(median)"
+ * - p0-p5 → "(best case)"  (mostly for throughput where low = worst)
+ * - p95+ → "(worst 1-5%)" for latency / "(best 1-5%)" for throughput
+ */
+export function percentileAnnotation(numeric: number, higherIsBetter: boolean): string {
+  if (numeric === 50) return "median";
+  if (numeric >= 95) return higherIsBetter ? `best ${(100 - numeric).toFixed(numeric % 1 ? 1 : 0)}%` : `worst ${(100 - numeric).toFixed(numeric % 1 ? 1 : 0)}%`;
+  if (numeric <= 5) return higherIsBetter ? `worst ${numeric.toFixed(numeric % 1 ? 1 : 0)}%` : `best ${numeric.toFixed(numeric % 1 ? 1 : 0)}%`;
+  return "";
 }
 
 export interface ModelEndpoint {
@@ -40,8 +75,8 @@ export interface ModelEndpoint {
   uptime_last_30m?: number;
   uptime_last_5m?: number;
   uptime_last_1d?: number;
-  latency_last_30m?: ModelEndpointLatency;
-  throughput_last_30m?: ModelEndpointLatency;
+  latency_last_30m?: ModelEndpointPercentiles;
+  throughput_last_30m?: ModelEndpointPercentiles;
   supports_implicit_caching?: boolean;
 }
 
@@ -177,20 +212,19 @@ export function formatModelInfoMarkdown(
       lines.push(`- **uptime**: ${up30m}% (30m) · ${up1d}% (1d)`);
     }
 
-    const r = (n: number | undefined): string =>
-      n === undefined ? "?" : Math.round(n).toString();
+    const round = (n: number): string => Math.round(n).toString();
 
-    if (ep.latency_last_30m) {
-      const l = ep.latency_last_30m;
+    const latencyPcts = sortedPercentiles(ep.latency_last_30m);
+    if (latencyPcts.length > 0) {
       lines.push(
-        `- **latency** (30m): p50 ${r(l.p50)}ms · p75 ${r(l.p75)}ms · p90 ${r(l.p90)}ms · p99 ${r(l.p99)}ms`,
+        `- **latency** (30m): ${latencyPcts.map(({ key, value }) => `${key} ${round(value)}ms`).join(" · ")}`,
       );
     }
 
-    if (ep.throughput_last_30m) {
-      const t = ep.throughput_last_30m;
+    const throughputPcts = sortedPercentiles(ep.throughput_last_30m);
+    if (throughputPcts.length > 0) {
       lines.push(
-        `- **throughput** (30m): p50 ${r(t.p50)} tok/s · p75 ${r(t.p75)} tok/s · p90 ${r(t.p90)} tok/s · p99 ${r(t.p99)} tok/s`,
+        `- **throughput** (30m): ${throughputPcts.map(({ key, value }) => `${key} ${round(value)} tok/s`).join(" · ")}`,
       );
     }
   }
@@ -289,9 +323,27 @@ export function formatModelInfoTable(
   const id = data.id ?? modelId;
   const titlePainted = paint(ANSI.bold + ANSI.bcyan, title, colors);
   const idPainted = paint(ANSI.dim, id, colors);
+
+  // Pre-compute the architecture mods line so it can contribute to
+  // the box width calculation — otherwise wide modality lists overflow
+  // the right border.
+  let modsLine: string | null = null;
+  if (data.architecture) {
+    const arch = data.architecture;
+    const mods = [
+      arch.input_modalities?.length ? `in: ${arch.input_modalities.join("/")}` : null,
+      arch.output_modalities?.length ? `out: ${arch.output_modalities.join("/")}` : null,
+      arch.tokenizer ? `tokenizer: ${arch.tokenizer}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    if (mods) modsLine = mods;
+  }
+
   const innerTitleLen = visibleLength(titlePainted);
-  const innerIdLen = visibleLength(idPainted) + 5; // "id: " prefix + 1 space
-  const boxInner = Math.max(innerTitleLen, innerIdLen, 40);
+  const innerIdLen = visibleLength(idPainted) + "id: ".length;
+  const innerModsLen = modsLine ? modsLine.length : 0;
+  const boxInner = Math.max(innerTitleLen, innerIdLen, innerModsLen, 40);
   const topBorder = `┏${"━".repeat(boxInner + 2)}┓`;
   const bottomBorder = `┗${"━".repeat(boxInner + 2)}┛`;
   out.push(paint(ANSI.cyan, topBorder, colors));
@@ -305,22 +357,12 @@ export function formatModelInfoTable(
       padRight("id: " + idPainted, boxInner) +
       paint(ANSI.cyan, " ┃", colors),
   );
-  if (data.architecture) {
-    const arch = data.architecture;
-    const mods = [
-      arch.input_modalities?.length ? `in: ${arch.input_modalities.join("/")}` : null,
-      arch.output_modalities?.length ? `out: ${arch.output_modalities.join("/")}` : null,
-      arch.tokenizer ? `tokenizer: ${arch.tokenizer}` : null,
-    ]
-      .filter(Boolean)
-      .join(" · ");
-    if (mods) {
-      out.push(
-        paint(ANSI.cyan, "┃ ", colors) +
-          padRight(paint(ANSI.dim, mods, colors), boxInner) +
-          paint(ANSI.cyan, " ┃", colors),
-      );
-    }
+  if (modsLine) {
+    out.push(
+      paint(ANSI.cyan, "┃ ", colors) +
+        padRight(paint(ANSI.dim, modsLine, colors), boxInner) +
+        paint(ANSI.cyan, " ┃", colors),
+    );
   }
   out.push(paint(ANSI.cyan, bottomBorder, colors));
   out.push("");
@@ -474,33 +516,22 @@ function renderEndpointTable(ep: ModelEndpoint, colors: boolean): string {
     ]);
   }
 
-  const round = (n: number | undefined): string =>
-    n === undefined ? "?" : Math.round(n).toString();
+  const round = (n: number): string => Math.round(n).toString();
 
-  // Latency — one row per percentile so each value gets its own color
-  if (ep.latency_last_30m) {
-    const l = ep.latency_last_30m;
-    if (l.p50 !== undefined)
-      rows.push(["Latency p50 (median)", paint(ANSI[classifyLatencyMs(l.p50)], `${round(l.p50)} ms`, colors)]);
-    if (l.p75 !== undefined)
-      rows.push(["Latency p75", paint(ANSI[classifyLatencyMs(l.p75)], `${round(l.p75)} ms`, colors)]);
-    if (l.p90 !== undefined)
-      rows.push(["Latency p90", paint(ANSI[classifyLatencyMs(l.p90)], `${round(l.p90)} ms`, colors)]);
-    if (l.p99 !== undefined)
-      rows.push(["Latency p99 (worst 1%)", paint(ANSI[classifyLatencyMs(l.p99)], `${round(l.p99)} ms`, colors)]);
+  // Latency — one row per percentile (dynamically discovered).
+  // Lower is better → p99 = worst 1%.
+  for (const { key, value, numeric } of sortedPercentiles(ep.latency_last_30m)) {
+    const annot = percentileAnnotation(numeric, /* higherIsBetter */ false);
+    const label = annot ? `Latency ${key} (${annot})` : `Latency ${key}`;
+    rows.push([label, paint(ANSI[classifyLatencyMs(value)], `${round(value)} ms`, colors)]);
   }
 
-  // Throughput — one row per percentile
-  if (ep.throughput_last_30m) {
-    const t = ep.throughput_last_30m;
-    if (t.p50 !== undefined)
-      rows.push(["Throughput p50 (median)", paint(ANSI[classifyThroughput(t.p50)], `${round(t.p50)} tok/s`, colors)]);
-    if (t.p75 !== undefined)
-      rows.push(["Throughput p75", paint(ANSI[classifyThroughput(t.p75)], `${round(t.p75)} tok/s`, colors)]);
-    if (t.p90 !== undefined)
-      rows.push(["Throughput p90", paint(ANSI[classifyThroughput(t.p90)], `${round(t.p90)} tok/s`, colors)]);
-    if (t.p99 !== undefined)
-      rows.push(["Throughput p99 (best 1%)", paint(ANSI[classifyThroughput(t.p99)], `${round(t.p99)} tok/s`, colors)]);
+  // Throughput — one row per percentile (dynamically discovered).
+  // Higher is better → p99 = best 1%.
+  for (const { key, value, numeric } of sortedPercentiles(ep.throughput_last_30m)) {
+    const annot = percentileAnnotation(numeric, /* higherIsBetter */ true);
+    const label = annot ? `Throughput ${key} (${annot})` : `Throughput ${key}`;
+    rows.push([label, paint(ANSI[classifyThroughput(value)], `${round(value)} tok/s`, colors)]);
   }
 
   // ── Column widths ─────────────────────────────────────────────

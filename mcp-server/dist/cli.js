@@ -7686,6 +7686,24 @@ profiles:
 `;
 
 // src/or-model-info.ts
+function sortedPercentiles(obj) {
+  if (!obj || typeof obj !== "object") return [];
+  const out = [];
+  for (const [key, value] of Object.entries(obj)) {
+    if (typeof value !== "number" || !isFinite(value)) continue;
+    const match = /^p(\d+(?:\.\d+)?)$/.exec(key);
+    if (!match) continue;
+    out.push({ key, value, numeric: parseFloat(match[1]) });
+  }
+  out.sort((a, b) => a.numeric - b.numeric);
+  return out;
+}
+function percentileAnnotation(numeric, higherIsBetter) {
+  if (numeric === 50) return "median";
+  if (numeric >= 95) return higherIsBetter ? `best ${(100 - numeric).toFixed(numeric % 1 ? 1 : 0)}%` : `worst ${(100 - numeric).toFixed(numeric % 1 ? 1 : 0)}%`;
+  if (numeric <= 5) return higherIsBetter ? `worst ${numeric.toFixed(numeric % 1 ? 1 : 0)}%` : `best ${numeric.toFixed(numeric % 1 ? 1 : 0)}%`;
+  return "";
+}
 async function fetchOpenRouterModelInfo(modelId, baseUrl, authToken) {
   let res;
   try {
@@ -7769,17 +7787,17 @@ function formatModelInfoMarkdown(data, modelId) {
       const up1d = ep.uptime_last_1d?.toFixed(1);
       lines.push(`- **uptime**: ${up30m}% (30m) \xB7 ${up1d}% (1d)`);
     }
-    const r = (n) => n === void 0 ? "?" : Math.round(n).toString();
-    if (ep.latency_last_30m) {
-      const l = ep.latency_last_30m;
+    const round = (n) => Math.round(n).toString();
+    const latencyPcts = sortedPercentiles(ep.latency_last_30m);
+    if (latencyPcts.length > 0) {
       lines.push(
-        `- **latency** (30m): p50 ${r(l.p50)}ms \xB7 p75 ${r(l.p75)}ms \xB7 p90 ${r(l.p90)}ms \xB7 p99 ${r(l.p99)}ms`
+        `- **latency** (30m): ${latencyPcts.map(({ key, value }) => `${key} ${round(value)}ms`).join(" \xB7 ")}`
       );
     }
-    if (ep.throughput_last_30m) {
-      const t = ep.throughput_last_30m;
+    const throughputPcts = sortedPercentiles(ep.throughput_last_30m);
+    if (throughputPcts.length > 0) {
       lines.push(
-        `- **throughput** (30m): p50 ${r(t.p50)} tok/s \xB7 p75 ${r(t.p75)} tok/s \xB7 p90 ${r(t.p90)} tok/s \xB7 p99 ${r(t.p99)} tok/s`
+        `- **throughput** (30m): ${throughputPcts.map(({ key, value }) => `${key} ${round(value)} tok/s`).join(" \xB7 ")}`
       );
     }
   }
@@ -7846,9 +7864,20 @@ function formatModelInfoTable(data, modelId, colors = true) {
   const id = data.id ?? modelId;
   const titlePainted = paint(ANSI.bold + ANSI.bcyan, title, colors);
   const idPainted = paint(ANSI.dim, id, colors);
+  let modsLine = null;
+  if (data.architecture) {
+    const arch = data.architecture;
+    const mods = [
+      arch.input_modalities?.length ? `in: ${arch.input_modalities.join("/")}` : null,
+      arch.output_modalities?.length ? `out: ${arch.output_modalities.join("/")}` : null,
+      arch.tokenizer ? `tokenizer: ${arch.tokenizer}` : null
+    ].filter(Boolean).join(" \xB7 ");
+    if (mods) modsLine = mods;
+  }
   const innerTitleLen = visibleLength(titlePainted);
-  const innerIdLen = visibleLength(idPainted) + 5;
-  const boxInner = Math.max(innerTitleLen, innerIdLen, 40);
+  const innerIdLen = visibleLength(idPainted) + "id: ".length;
+  const innerModsLen = modsLine ? modsLine.length : 0;
+  const boxInner = Math.max(innerTitleLen, innerIdLen, innerModsLen, 40);
   const topBorder = `\u250F${"\u2501".repeat(boxInner + 2)}\u2513`;
   const bottomBorder = `\u2517${"\u2501".repeat(boxInner + 2)}\u251B`;
   out.push(paint(ANSI.cyan, topBorder, colors));
@@ -7858,18 +7887,10 @@ function formatModelInfoTable(data, modelId, colors = true) {
   out.push(
     paint(ANSI.cyan, "\u2503 ", colors) + padRight("id: " + idPainted, boxInner) + paint(ANSI.cyan, " \u2503", colors)
   );
-  if (data.architecture) {
-    const arch = data.architecture;
-    const mods = [
-      arch.input_modalities?.length ? `in: ${arch.input_modalities.join("/")}` : null,
-      arch.output_modalities?.length ? `out: ${arch.output_modalities.join("/")}` : null,
-      arch.tokenizer ? `tokenizer: ${arch.tokenizer}` : null
-    ].filter(Boolean).join(" \xB7 ");
-    if (mods) {
-      out.push(
-        paint(ANSI.cyan, "\u2503 ", colors) + padRight(paint(ANSI.dim, mods, colors), boxInner) + paint(ANSI.cyan, " \u2503", colors)
-      );
-    }
+  if (modsLine) {
+    out.push(
+      paint(ANSI.cyan, "\u2503 ", colors) + padRight(paint(ANSI.dim, modsLine, colors), boxInner) + paint(ANSI.cyan, " \u2503", colors)
+    );
   }
   out.push(paint(ANSI.cyan, bottomBorder, colors));
   out.push("");
@@ -7992,28 +8013,24 @@ function renderEndpointTable(ep, colors) {
       paint(ANSI[classifyUptime(ep.uptime_last_1d)], `${ep.uptime_last_1d.toFixed(1)}%`, colors)
     ]);
   }
-  const round = (n) => n === void 0 ? "?" : Math.round(n).toString();
-  if (ep.latency_last_30m) {
-    const l = ep.latency_last_30m;
-    if (l.p50 !== void 0)
-      rows.push(["Latency p50 (median)", paint(ANSI[classifyLatencyMs(l.p50)], `${round(l.p50)} ms`, colors)]);
-    if (l.p75 !== void 0)
-      rows.push(["Latency p75", paint(ANSI[classifyLatencyMs(l.p75)], `${round(l.p75)} ms`, colors)]);
-    if (l.p90 !== void 0)
-      rows.push(["Latency p90", paint(ANSI[classifyLatencyMs(l.p90)], `${round(l.p90)} ms`, colors)]);
-    if (l.p99 !== void 0)
-      rows.push(["Latency p99 (worst 1%)", paint(ANSI[classifyLatencyMs(l.p99)], `${round(l.p99)} ms`, colors)]);
+  const round = (n) => Math.round(n).toString();
+  for (const { key, value, numeric } of sortedPercentiles(ep.latency_last_30m)) {
+    const annot = percentileAnnotation(
+      numeric,
+      /* higherIsBetter */
+      false
+    );
+    const label = annot ? `Latency ${key} (${annot})` : `Latency ${key}`;
+    rows.push([label, paint(ANSI[classifyLatencyMs(value)], `${round(value)} ms`, colors)]);
   }
-  if (ep.throughput_last_30m) {
-    const t = ep.throughput_last_30m;
-    if (t.p50 !== void 0)
-      rows.push(["Throughput p50 (median)", paint(ANSI[classifyThroughput(t.p50)], `${round(t.p50)} tok/s`, colors)]);
-    if (t.p75 !== void 0)
-      rows.push(["Throughput p75", paint(ANSI[classifyThroughput(t.p75)], `${round(t.p75)} tok/s`, colors)]);
-    if (t.p90 !== void 0)
-      rows.push(["Throughput p90", paint(ANSI[classifyThroughput(t.p90)], `${round(t.p90)} tok/s`, colors)]);
-    if (t.p99 !== void 0)
-      rows.push(["Throughput p99 (best 1%)", paint(ANSI[classifyThroughput(t.p99)], `${round(t.p99)} tok/s`, colors)]);
+  for (const { key, value, numeric } of sortedPercentiles(ep.throughput_last_30m)) {
+    const annot = percentileAnnotation(
+      numeric,
+      /* higherIsBetter */
+      true
+    );
+    const label = annot ? `Throughput ${key} (${annot})` : `Throughput ${key}`;
+    rows.push([label, paint(ANSI[classifyThroughput(value)], `${round(value)} tok/s`, colors)]);
   }
   const labelW = Math.max(...rows.map((r) => r[0].length), "Endpoint".length);
   const valueW = Math.max(...rows.map((r) => visibleLength(r[1])), provider.length);
