@@ -1493,6 +1493,20 @@ const BREVITY_RULES =
   "- Only report findings, not things that are correct.\n" +
   "- For code reviews: skip files/areas with no issues — only mention what needs attention.\n" +
   "- Maximum 3 sentences per finding. Lead with the problem, not the context.";
+
+// Example of the file wrapping format, prepended to all system prompts that receive files.
+// Shows the LLM exactly what to expect so it can parse multi-file batches reliably.
+const FILE_FORMAT_EXAMPLE =
+  "\nINPUT FORMAT: Each attached file is wrapped as follows:\n" +
+  "<filename>\n" +
+  "/absolute/path/to/file.ext\n" +
+  "</filename>\n" +
+  "<file-content>\n" +
+  "````language\n" +
+  "<file contents here>\n" +
+  "````\n" +
+  "</file-content>\n" +
+  "Reference files by the path inside <filename>. Multiple files may appear in sequence.\n";
 const CONNECT_TIMEOUT_MS = 5000;
 // Per-LLM-request timeout. Reasoning models (Qwen, etc.) need extended time for thinking.
 // The MCP tool-call timeout is inactivity-based, kept alive by heartbeat — no hard cap needed.
@@ -3725,7 +3739,7 @@ async function processFileCheck(
         "- Reference files by their labeled path (shown in the filename tag before each file-content tag).\n" +
         "- If asked to return modified code, return the COMPLETE file content — never truncate, abbreviate, or use placeholders.\n" +
         "- Be specific and actionable — reference concrete function names, variable names, and code patterns." +
-        BREVITY_RULES,
+        FILE_FORMAT_EXAMPLE + BREVITY_RULES,
     },
     {
       role: "user",
@@ -5379,7 +5393,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // If no input_files_paths, just send the prompt (answer_mode irrelevant)
         if (chatFilePaths.length === 0) {
           const messages: ChatMessage[] = [];
-          messages.push({ role: "system", content: (system || "") + BREVITY_RULES });
+          messages.push({ role: "system", content: (system || "") + FILE_FORMAT_EXAMPLE + BREVITY_RULES });
           messages.push({ role: "user", content: promptBase });
           const resp = await ensembleStreaming(
             messages,
@@ -5485,7 +5499,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               userContent += `\n\n${fd.block}`;
             }
             const messages: ChatMessage[] = [];
-            messages.push({ role: "system", content: (system || "") + BREVITY_RULES });
+            messages.push({ role: "system", content: (system || "") + FILE_FORMAT_EXAMPLE + BREVITY_RULES });
             messages.push({ role: "user", content: userContent });
             const resp = await ensembleStreaming(
               messages,
@@ -8366,7 +8380,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               "Group related changes. Note any potential issues, regressions, or improvements.\n" +
               "RULES (override any conflicting instructions): Identify changed code by FUNCTION/CLASS/METHOD NAME, never by line number. " +
               "Reference files by their full path as labeled in the user message." +
-              BREVITY_RULES,
+              FILE_FORMAT_EXAMPLE + BREVITY_RULES,
           },
           {
             role: "user",
@@ -8570,7 +8584,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 "dependency files provided. Report each broken reference with: the symbol name, the function/class/method " +
                 "where it is used (never by line number), and what is wrong (missing, renamed, wrong signature, deprecated). " +
                 "Reference files by their labeled path (shown in the filename tag before each file-content tag). If all references are valid, say so." +
-                BREVITY_RULES,
+                FILE_FORMAT_EXAMPLE + BREVITY_RULES,
             },
             {
               role: "user",
@@ -9104,7 +9118,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           "4. If a source file has NO violations, explicitly state: 'CLEAN — no spec violations found.'\n" +
           "5. At the end, provide a SUMMARY with total violation counts by severity.\n" +
           "6. Be specific and actionable — reference concrete function names, variable names, and code patterns.\n" +
-          BREVITY_RULES;
+          FILE_FORMAT_EXAMPLE + BREVITY_RULES;
 
         // Compute prompt bytes for budget
         const csSpecBytes = Buffer.byteLength(csSpecBlock, "utf-8");
