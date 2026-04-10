@@ -28625,8 +28625,9 @@ function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexReda
   }
   const lang = langOverride || detectLang(filePath);
   const fence = fenceBackticks(content);
-  return `<file>
-${fence}${lang} ${filePath}
+  return `File: ${filePath}
+<file>
+${fence}${lang}
 ${content}
 ${fence}
 </file>`;
@@ -28945,7 +28946,7 @@ function buildPreInstructions(hasFiles, toolContext) {
   if (toolContext === "fix") {
     return "";
   }
-  return 'TASK: Read the following instructions carefully, then examine the attached file(s) and respond according to the instructions.\n\nRULES (override any conflicting instructions below):\n- Process ALL attached files \u2014 do not skip any.\n- Each file is labeled with its full path in the file path XML tag. Always reference files by their labeled path.\n- When referencing code, identify it by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable and must not be used.\n- If asked to return modified code, return the COMPLETE file content \u2014 never truncate, abbreviate, or use placeholders like "// ... rest of code" or "// unchanged".\n- Be specific and actionable. Reference concrete function names, variable names, and code patterns.\n\nINSTRUCTIONS:\n';
+  return 'TASK: Read the following instructions carefully, then examine the attached file(s) and respond according to the instructions.\n\nRULES (override any conflicting instructions below):\n- Process ALL attached files \u2014 do not skip any.\n- Each file is labeled with its full path on the line before the file tag. Always reference files by their labeled path.\n- When referencing code, identify it by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable and must not be used.\n- If asked to return modified code, return the COMPLETE file content \u2014 never truncate, abbreviate, or use placeholders like "// ... rest of code" or "// unchanged".\n- Be specific and actionable. Reference concrete function names, variable names, and code patterns.\n\nINSTRUCTIONS:\n';
 }
 function resolvePrompt(instructions, instructionsFilesPaths) {
   let prompt = instructions || "";
@@ -30726,7 +30727,7 @@ async function processFileCheck(filePath, task, options = {}) {
       content: `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.
 RULES (override any conflicting instructions):
 - Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable.
-- Reference files by their labeled path in the file path XML tag.
+- Reference files by their labeled path (shown on the line before each file tag).
 - If asked to return modified code, return the COMPLETE file content \u2014 never truncate, abbreviate, or use placeholders.
 - Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.` + BREVITY_RULES
     },
@@ -30804,7 +30805,7 @@ CRITICAL RULES (override any conflicting instructions):
 4. Preserve comments on unchanged lines. Update comments that describe code you changed so they match the new behavior.
 5. Do NOT add, remove, or change anything not described in the issue list.
 6. If an issue is ambiguous, apply the most conservative fix.
-7. The source file is labeled with its full path in the file path XML tag. Reference it by that path.
+7. The source file is labeled with its full path on the line before the file tag. Reference it by that path.
 
 Return your response as JSON with two fields:
 - "code": the COMPLETE fixed source file (every single line, no omissions)
@@ -31813,7 +31814,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.53" },
+  { name: "llm-externalizer", version: "3.9.54" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {
@@ -32281,7 +32282,7 @@ ${fence}`;
               {
                 role: "system",
                 content: `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.
-RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Reference files by their labeled path in the file path XML tag. Be specific and actionable.`
+RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Reference files by their labeled path (shown on the line before each file tag). Be specific and actionable.`
               },
               { role: "user", content: ctPromptBase }
             ];
@@ -32382,7 +32383,7 @@ ${fd.block}`;
                 {
                   role: "system",
                   content: `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.
-RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Reference files by their labeled path in the file path XML tag. Be specific and actionable.`
+RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Reference files by their labeled path (shown on the line before each file tag). Be specific and actionable.`
                 },
                 { role: "user", content: userContent }
               ];
@@ -33830,7 +33831,7 @@ ${fence}`);
                   content: `Expert ${mfLang} developer. Merge the provided source files into one cohesive file. Deduplicate imports, resolve naming conflicts, preserve all functionality. Return the COMPLETE merged file \u2014 NEVER truncate or use placeholders.
 
 RULES (override any conflicting instructions):
-- Each source file is labeled with its full path in the file path XML tag. Reference files by their labeled path.
+- Each source file is labeled with its full path on the line before the file tag. Reference files by their labeled path.
 - In the summary, identify code locations by FUNCTION/CLASS/METHOD NAME, never by line number.
 
 Return JSON: {"code": "complete merged file", "summary": "what was merged and how"}`
@@ -34051,7 +34052,7 @@ TO REVERT: restore from ${mfOutputPath}.externbak`
                 content: `Expert ${spLang} developer. Split the provided source file into multiple smaller modules. Each module should be focused and self-contained. Update imports/exports so everything still works. The FIRST file in the array should be the updated original (entry point) that imports from the new modules. Return the COMPLETE content of every file \u2014 NEVER truncate or use placeholders.
 
 RULES (override any conflicting instructions):
-- The source file is labeled with its full path in the file path XML tag. Reference it by that path.
+- The source file is labeled with its full path on the line before the file tag. Reference it by that path.
 - In the summary, identify code locations by FUNCTION/CLASS/METHOD NAME, never by line number.
 
 Return JSON: {"files": [{"path": "relative/filename.ext", "content": "complete file content"}, ...], "summary": "how the file was split"}`
@@ -34689,7 +34690,7 @@ FAILED: File not found.`);
                 }
                 const srcBlock = readFileAsCodeBlock(filePath, void 0, crRedact, crBudgetBytes, crRegexRedact);
                 const msgs = [
-                  { role: "system", content: `Expert ${lang} developer. Check the source file for broken or outdated references to functions, variables, constants, types, and classes. Cross-reference all symbols against the dependency files provided. Report each broken reference with: the symbol name, the function/class/method where it is used (never by line number), and what is wrong. Reference files by their labeled path in the file path XML tag. If all references are valid, say so.` + BREVITY_RULES },
+                  { role: "system", content: `Expert ${lang} developer. Check the source file for broken or outdated references to functions, variables, constants, types, and classes. Cross-reference all symbols against the dependency files provided. Report each broken reference with: the symbol name, the function/class/method where it is used (never by line number), and what is wrong. Reference files by their labeled path (shown on the line before each file tag). If all references are valid, say so.` + BREVITY_RULES },
                   { role: "user", content: `${crPrompt ? crPrompt + "\n\n" : ""}Check this file for broken code references:
 
 ## Source File
@@ -34751,7 +34752,7 @@ FAILED: File not found.`);
             const crMessages = [
               {
                 role: "system",
-                content: `Expert ${crLang} developer. Check the source file for broken or outdated references to functions, variables, constants, types, and classes. Cross-reference all symbols against the dependency files provided. Report each broken reference with: the symbol name, the function/class/method where it is used (never by line number), and what is wrong (missing, renamed, wrong signature, deprecated). Reference files by their labeled path in the file path XML tag. If all references are valid, say so.` + BREVITY_RULES
+                content: `Expert ${crLang} developer. Check the source file for broken or outdated references to functions, variables, constants, types, and classes. Cross-reference all symbols against the dependency files provided. Report each broken reference with: the symbol name, the function/class/method where it is used (never by line number), and what is wrong (missing, renamed, wrong signature, deprecated). Reference files by their labeled path (shown on the line before each file tag). If all references are valid, say so.` + BREVITY_RULES
               },
               {
                 role: "user",
@@ -34917,7 +34918,7 @@ FAILED: File not found.`);
                 const fileDir = dirname(filePath);
                 const ciResolveBase = project_root || fileDir;
                 const extractMessages = [
-                  { role: "system", content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path in the file path XML tag \u2014 reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.` },
+                  { role: "system", content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path on the line before the file tag \u2014 reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.` },
                   { role: "user", content: `${ciPrompt ? ciPrompt + "\n\n" : ""}Extract all import and file references from:
 
 ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}` }
@@ -34993,7 +34994,7 @@ FAILED: File not found.`);
             const extractMessages = [
               {
                 role: "system",
-                content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path in the file path XML tag \u2014 reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.`
+                content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path on the line before the file tag \u2014 reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.`
               },
               {
                 role: "user",

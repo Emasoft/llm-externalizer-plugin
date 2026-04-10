@@ -1,6 +1,16 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.54] - 2026-04-10
+
+### Changed
+
+- Move file path before <file> tag, simplify wrapping
+
+Format: "File: /path/to/file.ts\n<file>\n```lang\n...\n```\n</file>"
+Path is visible and accessible without XML parsing. System prompts
+updated to reference "line before each file tag".
+
 ## [3.9.53] - 2026-04-10
 
 ### Changed
