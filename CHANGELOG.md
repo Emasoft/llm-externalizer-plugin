@@ -1,6 +1,32 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.76] - 2026-04-10
+
+### Changed
+
+- Or_model_info skill: optional --no-color / --markdown passthrough
+
+The skill now scans the user's args for optional flags and forwards
+them to the underlying CLI invocation:
+
+- --no-color / --nocolor / --bw / --mono → CLI --no-color
+  For users with monochrome terminals or log captures where ANSI
+  escape sequences would appear as garbage.
+- --markdown / --plain → CLI --markdown
+  For users who want the plain markdown output instead of the
+  Unicode-bordered table (useful for piping into another tool,
+  or for very narrow terminals where the table wraps).
+
+Default behavior unchanged: no flags → colored ANSI table, which
+Claude Code's terminal UI renders correctly inside fenced code
+blocks in the chat transcript.
+
+Invocation examples:
+  /llm-externalizer:llm-externalizer-or-model-info <model-id>
+  /llm-externalizer:llm-externalizer-or-model-info <model-id> --no-color
+  /llm-externalizer:llm-externalizer-or-model-info <model-id> --markdown
+
 ## [3.9.75] - 2026-04-10
 
 ### Changed
