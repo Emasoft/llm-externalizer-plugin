@@ -30645,24 +30645,36 @@ async function chatCompletionWithRetry(messages, options) {
       }
       throw err;
     }
-    if (resp.finishReason === "stop" && !resp.truncated) {
+    if (resp.finishReason === "stop" && !resp.truncated && resp.content.trim().length > 0) {
       recordServiceSuccess();
       return resp;
     }
     if (resp.finishReason === "length") {
       recordServiceSuccess();
       resp.truncated = true;
-      resp.content += "\n\n---\n**TRUNCATED**: Response hit output token limit (finishReason=length). The analysis above may be incomplete.";
+      resp.content += "\n\n---\n**TRUNCATED**: Response hit the output-token limit (finish_reason=length). The analysis above is cut off mid-generation.";
       process.stderr.write(
-        `[llm-externalizer] finishReason=length on attempt ${attempt + 1} \u2014 output token limit hit
+        `[llm-externalizer] finish_reason=length on attempt ${attempt + 1} \u2014 output token limit hit
+`
+      );
+      return resp;
+    }
+    if (resp.finishReason === "content_filter") {
+      recordServiceSuccess();
+      resp.truncated = true;
+      resp.content += "\n\n---\n**BLOCKED**: The provider's content filter blocked this response (finish_reason=content_filter). No retry \u2014 the block is deterministic for this prompt.";
+      process.stderr.write(
+        `[llm-externalizer] finish_reason=content_filter on attempt ${attempt + 1} \u2014 content filter blocked response
 `
       );
       return resp;
     }
     recordServiceFailure();
+    const isEmpty = resp.content.trim().length === 0;
+    const reasonLabel = resp.finishReason || "empty";
     if (attempt < MAX_TRUNCATION_RETRIES) {
       process.stderr.write(
-        `[llm-externalizer] Truncated (finishReason=${resp.finishReason}, truncated=${resp.truncated}) \u2014 retrying (${attempt + 1}/${MAX_TRUNCATION_RETRIES})
+        `[llm-externalizer] Empty/invalid response (finish_reason=${reasonLabel}, empty=${isEmpty}) \u2014 retrying (${attempt + 1}/${MAX_TRUNCATION_RETRIES})
 `
       );
       const abort = await checkServiceHealthOrWait();
@@ -30676,12 +30688,22 @@ async function chatCompletionWithRetry(messages, options) {
       }
       continue;
     }
-    resp.content += `
+    if (isEmpty && (resp.finishReason === "" || resp.finishReason === "stop")) {
+      resp.content = `**EMPTY RESPONSE**: The provider returned no content after ${MAX_TRUNCATION_RETRIES} retries (finish_reason=${reasonLabel}). This usually means a transient provider glitch or the model failed on this specific prompt. No partial output available.`;
+    } else if (resp.finishReason === "error") {
+      resp.content += `
 
 ---
-**TRUNCATED**: Still incomplete after ${MAX_TRUNCATION_RETRIES} retries (finishReason=${resp.finishReason}). The analysis above may be incomplete.`;
+**UPSTREAM ERROR**: The provider reported an error (finish_reason=error) after ${MAX_TRUNCATION_RETRIES} retries. The partial output above may be incomplete.`;
+    } else {
+      resp.content += `
+
+---
+**INCOMPLETE**: Response did not finish cleanly after ${MAX_TRUNCATION_RETRIES} retries (finish_reason=${reasonLabel}). The output above may be incomplete.`;
+    }
+    resp.truncated = true;
     process.stderr.write(
-      `[llm-externalizer] Still truncated after ${MAX_TRUNCATION_RETRIES} retries \u2014 returning partial result
+      `[llm-externalizer] Exhausted ${MAX_TRUNCATION_RETRIES} retries (finish_reason=${reasonLabel}, empty=${isEmpty}) \u2014 returning with label
 `
     );
     return resp;
@@ -31890,7 +31912,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.60" },
+  { name: "llm-externalizer", version: "3.9.61" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {

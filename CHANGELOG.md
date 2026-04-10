@@ -1,6 +1,29 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.61] - 2026-04-10
+
+### Changed
+
+- Enable reasoning on OpenRouter and refactor publish flow
+
+- Send `reasoning: { effort: "xhigh", exclude: true }` on all OpenRouter
+  chat/completions calls. Fallback ladder: xhigh → high → none, cached
+  per model so rejections are only probed once per session. The exclude
+  flag keeps the reasoning chain out of the response body.
+- Apply the ladder to both chatCompletionSimple and chatCompletionJSON,
+  so regular tools and structured-output tools (fix_code, split_file,
+  check_imports) both benefit.
+- Fix truncation labeling: distinguish EMPTY RESPONSE (finish_reason="")
+  from real TRUNCATED (length), BLOCKED (content_filter), UPSTREAM ERROR
+  (error), and INCOMPLETE (unknown). content_filter no longer retries
+  since the block is deterministic. `stop` with empty content now
+  retries instead of being mistaken for success.
+- Restructure publish.py so version bumping happens AFTER linting,
+  typecheck, and CPV validation — a bad build no longer leaves a dirty
+  working tree. Added pre-flight working-tree-clean check. Lint output
+  redirects to reports_dev/publish/.
+
 ## [3.9.60] - 2026-04-10
 
 ### Changed
