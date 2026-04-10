@@ -30187,7 +30187,7 @@ async function chatCompletionJSON(messages, options = {}) {
     };
     baseBody.plugins = [{ id: "response-healing" }];
   }
-  const reasoningLadder = currentBackend.type === "openrouter" && !options.jsonSchema ? reasoningLadderForModel(conn.model || "") : [null];
+  const reasoningLadder = currentBackend.type === "openrouter" ? reasoningLadderForModel(conn.model || "") : [null];
   const jsonStartTime = Date.now();
   let progressTimer;
   if (options.onProgress) {
@@ -32031,7 +32031,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.62" },
+  { name: "llm-externalizer", version: "3.9.63" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {

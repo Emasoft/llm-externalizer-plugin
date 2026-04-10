@@ -1,6 +1,26 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.63] - 2026-04-10
+
+### Changed
+
+- Re-enable reasoning on structured-output calls
+
+Previous release unnecessarily skipped reasoning entirely for
+chatCompletionJSON when jsonSchema was requested. With `exclude: true`
+on every reasoning config, the thinking trace never enters
+`message.content`, so JSON.parse still sees pure output. The
+`isReasoningRejectionError` ladder inside chatCompletionJSON already
+handles providers that reject the reasoning + json_schema combination
+— it downgrades xhigh -> high -> none automatically on 400 responses.
+
+Keeps reasoning enforcement consistent across chat, code_task,
+scan_folder, compare_files, check_against_specs, check_references,
+check_imports AND the structured-output tools (fix_code, split_file,
+extract_paths). Previously the last group quietly ran without
+reasoning.
+
 ## [3.9.62] - 2026-04-10
 
 ### Changed
