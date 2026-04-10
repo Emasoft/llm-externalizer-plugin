@@ -2482,6 +2482,7 @@ async function chatCompletionSimple(
     temperature?: number;
     maxTokens?: number;
     model?: string;
+    onProgress?: ProgressFn;
   } = {},
 ): Promise<StreamingResult> {
   const conn = await resolveConnection(options);
@@ -2500,42 +2501,56 @@ async function chatCompletionSimple(
   if (conn.model) body.model = conn.model;
 
   const startTime = Date.now();
-  const res = await fetchWithRetry429(
-    conn.url,
-    {
-      method: "POST",
-      headers: conn.headers,
-      body: JSON.stringify(body),
-    },
-    conn.timeout,
-    startTime,
-  );
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`API error ${res.status} (${currentBackend.type}): ${text}`);
-  }
+  // Heartbeat: send progress every 30s while waiting for the response.
+  // Prevents MCP inactivity timeout on long-running requests (reasoning models).
+  const heartbeat = options.onProgress
+    ? setInterval(() => {
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        options.onProgress!(50, 100, `Processing… ${elapsed}s elapsed`);
+      }, HEARTBEAT_INTERVAL_MS)
+    : null;
 
-  const data = await res.json() as {
-    choices?: Array<{
-      message?: { content?: string };
-      finish_reason?: string;
-    }>;
-    model?: string;
-    usage?: {
-      prompt_tokens: number;
-      completion_tokens: number;
-      total_tokens: number;
-      cost?: number;
+  try {
+    const res = await fetchWithRetry429(
+      conn.url,
+      {
+        method: "POST",
+        headers: conn.headers,
+        body: JSON.stringify(body),
+      },
+      conn.timeout,
+      startTime,
+    );
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`API error ${res.status} (${currentBackend.type}): ${text}`);
+    }
+
+    const data = await res.json() as {
+      choices?: Array<{
+        message?: { content?: string };
+        finish_reason?: string;
+      }>;
+      model?: string;
+      usage?: {
+        prompt_tokens: number;
+        completion_tokens: number;
+        total_tokens: number;
+        cost?: number;
+      };
     };
-  };
 
-  const content = data.choices?.[0]?.message?.content ?? "";
-  const model = data.model ?? options.model ?? "unknown";
-  const finishReason = data.choices?.[0]?.finish_reason ?? "";
-  const usage = data.usage;
+    const content = data.choices?.[0]?.message?.content ?? "";
+    const model = data.model ?? options.model ?? "unknown";
+    const finishReason = data.choices?.[0]?.finish_reason ?? "";
+    const usage = data.usage;
 
-  return { content, model, usage, finishReason, truncated: false };
+    return { content, model, usage, finishReason, truncated: false };
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+  }
 }
 
 // ── Non-streaming JSON completion ────────────────────────────────────
