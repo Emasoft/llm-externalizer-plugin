@@ -8124,7 +8124,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           } catch { /* too large */ }
           const fence = fenceBackticks(diffOutput);
           const msgs: ChatMessage[] = [
-            { role: "system", content: "Expert code reviewer. Analyse the unified diff and provide a clear, structured summary. Group related changes. Note potential issues. Identify code by FUNCTION/CLASS/METHOD NAME, never by line number." + BREVITY_RULES },
+            { role: "system", content: "Expert code reviewer. Analyse the unified diff and provide a clear, structured summary. Group related changes. Note potential issues. Identify code by FUNCTION/CLASS/METHOD NAME, never by line number." + FILE_FORMAT_EXAMPLE + BREVITY_RULES },
             { role: "user", content: `${prompt ? prompt + "\n\n" : ""}Compare:\n- Before: ${fA}\n- After: ${fB}\n\nDiff:\n${fence}\n${diffOutput}\n${fence}${sourceBlocks}` },
           ];
           let resp;
@@ -8530,7 +8530,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               for (const dp of deps) { try { depBlocks.push(readFileAsCodeBlock(dp, undefined, crRedact, crBudgetBytes, crRegexRedact)); } catch { /* skip */ } }
               const srcBlock = readFileAsCodeBlock(filePath, undefined, crRedact, crBudgetBytes, crRegexRedact);
               const msgs: ChatMessage[] = [
-                { role: "system", content: `Expert ${lang} developer. Check the source file for broken or outdated references to functions, variables, constants, types, and classes. Cross-reference all symbols against the dependency files provided. Report each broken reference with: the symbol name, the function/class/method where it is used (never by line number), and what is wrong. Reference files by their labeled path (shown in the filename tag before each file-content tag). If all references are valid, say so.` + BREVITY_RULES },
+                { role: "system", content: `Expert ${lang} developer. Check the source file for broken or outdated references to functions, variables, constants, types, and classes. Cross-reference all symbols against the dependency files provided. Report each broken reference with: the symbol name, the function/class/method where it is used (never by line number), and what is wrong. Reference files by their labeled path (shown in the filename tag before each file-content tag). If all references are valid, say so.` + FILE_FORMAT_EXAMPLE + BREVITY_RULES },
                 { role: "user", content: `${crPrompt ? crPrompt + "\n\n" : ""}Check this file for broken code references:\n\n## Source File\n\n${srcBlock}\n\n${depBlocks.length > 0 ? `## Local Dependencies (${deps.length} files)\n\n${depBlocks.join("\n\n")}` : "## No local dependencies resolved."}` },
               ];
               const resp = await ensembleStreaming(msgs, { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride }, crUseEnsemble, src.split("\n").length);
@@ -8770,7 +8770,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               const fileDir = dirname(filePath);
               const ciResolveBase = project_root || fileDir;
               const extractMessages: ChatMessage[] = [
-                { role: "system", content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path inside a filename tag before the file-content tag — reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.` },
+                { role: "system", content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path inside a filename tag before the file-content tag — reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.` + FILE_FORMAT_EXAMPLE },
                 { role: "user", content: `${ciPrompt ? ciPrompt + "\n\n" : ""}Extract all import and file references from:\n\n${readFileAsCodeBlock(filePath, undefined, ciRedact, ciBudgetBytes, ciRegexRedact)}` },
               ];
               const extractResp = await chatCompletionJSON(extractMessages, { temperature: 0, maxTokens: resolveDefaultMaxTokens(), jsonSchema: EXTRACT_PATHS_SCHEMA, onProgress });
@@ -8833,7 +8833,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 "The source file is labeled with its full path inside a filename tag before the file-content tag — reference it by that path. " +
                 "Include: import/require paths, file path strings, configuration references. " +
                 'Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. ' +
-                "Include both local (relative) and package imports. Be exhaustive.",
+                "Include both local (relative) and package imports. Be exhaustive." +
+                FILE_FORMAT_EXAMPLE,
             },
             {
               role: "user",
