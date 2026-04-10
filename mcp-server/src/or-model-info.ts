@@ -29,6 +29,7 @@ export interface ModelEndpointLatency {
 export interface ModelEndpoint {
   name?: string;
   provider_name?: string;
+  tag?: string;
   context_length?: number;
   max_completion_tokens?: number;
   max_prompt_tokens?: number | null;
@@ -41,6 +42,7 @@ export interface ModelEndpoint {
   uptime_last_1d?: number;
   latency_last_30m?: ModelEndpointLatency;
   throughput_last_30m?: ModelEndpointLatency;
+  supports_implicit_caching?: boolean;
 }
 
 export interface ModelInfoArchitecture {
@@ -372,6 +374,19 @@ function renderEndpointTable(ep: ModelEndpoint, colors: boolean): string {
   type Row = [string, string]; // [label, value (may contain ANSI)]
   const rows: Row[] = [];
 
+  // Full endpoint backing name (often includes versioned model id)
+  if (ep.name && ep.name !== provider) {
+    rows.push(["Endpoint name", paint(ANSI.dim, ep.name, colors)]);
+  }
+  if (ep.tag && ep.tag !== provider.toLowerCase()) {
+    rows.push(["Tag", paint(ANSI.dim, ep.tag, colors)]);
+  }
+  if (ep.status !== undefined) {
+    const statusColor = ep.status === 0 ? ANSI.bgreen : ANSI.bred;
+    const statusText = ep.status === 0 ? "operational" : `status code ${ep.status}`;
+    rows.push(["Status", paint(statusColor, statusText, colors)]);
+  }
+
   if (ep.context_length !== undefined) {
     rows.push([
       "Context length",
@@ -393,6 +408,14 @@ function renderEndpointTable(ep: ModelEndpoint, colors: boolean): string {
   if (ep.quantization) {
     rows.push(["Quantization", paint(ANSI.dim, ep.quantization, colors)]);
   }
+  if (ep.supports_implicit_caching !== undefined) {
+    rows.push([
+      "Implicit caching",
+      ep.supports_implicit_caching
+        ? paint(ANSI.bgreen, "yes", colors)
+        : paint(ANSI.dim, "no", colors),
+    ]);
+  }
 
   if (ep.pricing) {
     const p = ep.pricing;
@@ -410,40 +433,74 @@ function renderEndpointTable(ep: ModelEndpoint, colors: boolean): string {
         paint(ANSI[classifyPriceIsFree(p.input_cache_read)], formatPricePerM(p.input_cache_read), colors),
       ]);
     }
+    if (p.image) {
+      rows.push([
+        "Image price",
+        paint(ANSI[classifyPriceIsFree(p.image)], formatPricePerM(p.image), colors),
+      ]);
+    }
+    if (p.request) {
+      rows.push([
+        "Request price",
+        paint(ANSI[classifyPriceIsFree(p.request)], formatPricePerM(p.request), colors),
+      ]);
+    }
+    if (p.discount !== undefined && p.discount !== 0) {
+      const discountPct = (p.discount * 100).toFixed(0);
+      rows.push([
+        "Discount",
+        paint(ANSI.bgreen, `${discountPct}% off`, colors),
+      ]);
+    }
   }
 
+  // Uptime — three time windows, each on its own row
+  if (ep.uptime_last_5m !== undefined) {
+    rows.push([
+      "Uptime (5m)",
+      paint(ANSI[classifyUptime(ep.uptime_last_5m)], `${ep.uptime_last_5m.toFixed(1)}%`, colors),
+    ]);
+  }
   if (ep.uptime_last_30m !== undefined) {
-    const col = ANSI[classifyUptime(ep.uptime_last_30m)];
-    rows.push(["Uptime (30m)", paint(col, `${ep.uptime_last_30m.toFixed(1)}%`, colors)]);
+    rows.push([
+      "Uptime (30m)",
+      paint(ANSI[classifyUptime(ep.uptime_last_30m)], `${ep.uptime_last_30m.toFixed(1)}%`, colors),
+    ]);
   }
   if (ep.uptime_last_1d !== undefined) {
-    const col = ANSI[classifyUptime(ep.uptime_last_1d)];
-    rows.push(["Uptime (1d)", paint(col, `${ep.uptime_last_1d.toFixed(1)}%`, colors)]);
+    rows.push([
+      "Uptime (1d)",
+      paint(ANSI[classifyUptime(ep.uptime_last_1d)], `${ep.uptime_last_1d.toFixed(1)}%`, colors),
+    ]);
   }
 
   const round = (n: number | undefined): string =>
     n === undefined ? "?" : Math.round(n).toString();
 
+  // Latency — one row per percentile so each value gets its own color
   if (ep.latency_last_30m) {
     const l = ep.latency_last_30m;
-    const latencyLine = [
-      paint(ANSI[classifyLatencyMs(l.p50)], `p50 ${round(l.p50)}ms`, colors),
-      paint(ANSI[classifyLatencyMs(l.p75)], `p75 ${round(l.p75)}ms`, colors),
-      paint(ANSI[classifyLatencyMs(l.p90)], `p90 ${round(l.p90)}ms`, colors),
-      paint(ANSI[classifyLatencyMs(l.p99)], `p99 ${round(l.p99)}ms`, colors),
-    ].join(" · ");
-    rows.push(["Latency (30m)", latencyLine]);
+    if (l.p50 !== undefined)
+      rows.push(["Latency p50 (median)", paint(ANSI[classifyLatencyMs(l.p50)], `${round(l.p50)} ms`, colors)]);
+    if (l.p75 !== undefined)
+      rows.push(["Latency p75", paint(ANSI[classifyLatencyMs(l.p75)], `${round(l.p75)} ms`, colors)]);
+    if (l.p90 !== undefined)
+      rows.push(["Latency p90", paint(ANSI[classifyLatencyMs(l.p90)], `${round(l.p90)} ms`, colors)]);
+    if (l.p99 !== undefined)
+      rows.push(["Latency p99 (worst 1%)", paint(ANSI[classifyLatencyMs(l.p99)], `${round(l.p99)} ms`, colors)]);
   }
 
+  // Throughput — one row per percentile
   if (ep.throughput_last_30m) {
     const t = ep.throughput_last_30m;
-    const tpLine = [
-      paint(ANSI[classifyThroughput(t.p50)], `p50 ${round(t.p50)} tok/s`, colors),
-      paint(ANSI[classifyThroughput(t.p75)], `p75 ${round(t.p75)} tok/s`, colors),
-      paint(ANSI[classifyThroughput(t.p90)], `p90 ${round(t.p90)} tok/s`, colors),
-      paint(ANSI[classifyThroughput(t.p99)], `p99 ${round(t.p99)} tok/s`, colors),
-    ].join(" · ");
-    rows.push(["Throughput (30m)", tpLine]);
+    if (t.p50 !== undefined)
+      rows.push(["Throughput p50 (median)", paint(ANSI[classifyThroughput(t.p50)], `${round(t.p50)} tok/s`, colors)]);
+    if (t.p75 !== undefined)
+      rows.push(["Throughput p75", paint(ANSI[classifyThroughput(t.p75)], `${round(t.p75)} tok/s`, colors)]);
+    if (t.p90 !== undefined)
+      rows.push(["Throughput p90", paint(ANSI[classifyThroughput(t.p90)], `${round(t.p90)} tok/s`, colors)]);
+    if (t.p99 !== undefined)
+      rows.push(["Throughput p99 (best 1%)", paint(ANSI[classifyThroughput(t.p99)], `${round(t.p99)} tok/s`, colors)]);
   }
 
   // ── Column widths ─────────────────────────────────────────────

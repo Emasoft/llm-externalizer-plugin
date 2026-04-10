@@ -28615,6 +28615,17 @@ function formatModelInfoTable(data, modelId, colors = true) {
 function renderEndpointTable(ep, colors) {
   const provider = ep.provider_name ?? ep.name ?? "unknown";
   const rows = [];
+  if (ep.name && ep.name !== provider) {
+    rows.push(["Endpoint name", paint(ANSI.dim, ep.name, colors)]);
+  }
+  if (ep.tag && ep.tag !== provider.toLowerCase()) {
+    rows.push(["Tag", paint(ANSI.dim, ep.tag, colors)]);
+  }
+  if (ep.status !== void 0) {
+    const statusColor = ep.status === 0 ? ANSI.bgreen : ANSI.bred;
+    const statusText = ep.status === 0 ? "operational" : `status code ${ep.status}`;
+    rows.push(["Status", paint(statusColor, statusText, colors)]);
+  }
   if (ep.context_length !== void 0) {
     rows.push([
       "Context length",
@@ -28636,6 +28647,12 @@ function renderEndpointTable(ep, colors) {
   if (ep.quantization) {
     rows.push(["Quantization", paint(ANSI.dim, ep.quantization, colors)]);
   }
+  if (ep.supports_implicit_caching !== void 0) {
+    rows.push([
+      "Implicit caching",
+      ep.supports_implicit_caching ? paint(ANSI.bgreen, "yes", colors) : paint(ANSI.dim, "no", colors)
+    ]);
+  }
   if (ep.pricing) {
     const p = ep.pricing;
     rows.push([
@@ -28652,35 +28669,66 @@ function renderEndpointTable(ep, colors) {
         paint(ANSI[classifyPriceIsFree(p.input_cache_read)], formatPricePerM(p.input_cache_read), colors)
       ]);
     }
+    if (p.image) {
+      rows.push([
+        "Image price",
+        paint(ANSI[classifyPriceIsFree(p.image)], formatPricePerM(p.image), colors)
+      ]);
+    }
+    if (p.request) {
+      rows.push([
+        "Request price",
+        paint(ANSI[classifyPriceIsFree(p.request)], formatPricePerM(p.request), colors)
+      ]);
+    }
+    if (p.discount !== void 0 && p.discount !== 0) {
+      const discountPct = (p.discount * 100).toFixed(0);
+      rows.push([
+        "Discount",
+        paint(ANSI.bgreen, `${discountPct}% off`, colors)
+      ]);
+    }
+  }
+  if (ep.uptime_last_5m !== void 0) {
+    rows.push([
+      "Uptime (5m)",
+      paint(ANSI[classifyUptime(ep.uptime_last_5m)], `${ep.uptime_last_5m.toFixed(1)}%`, colors)
+    ]);
   }
   if (ep.uptime_last_30m !== void 0) {
-    const col = ANSI[classifyUptime(ep.uptime_last_30m)];
-    rows.push(["Uptime (30m)", paint(col, `${ep.uptime_last_30m.toFixed(1)}%`, colors)]);
+    rows.push([
+      "Uptime (30m)",
+      paint(ANSI[classifyUptime(ep.uptime_last_30m)], `${ep.uptime_last_30m.toFixed(1)}%`, colors)
+    ]);
   }
   if (ep.uptime_last_1d !== void 0) {
-    const col = ANSI[classifyUptime(ep.uptime_last_1d)];
-    rows.push(["Uptime (1d)", paint(col, `${ep.uptime_last_1d.toFixed(1)}%`, colors)]);
+    rows.push([
+      "Uptime (1d)",
+      paint(ANSI[classifyUptime(ep.uptime_last_1d)], `${ep.uptime_last_1d.toFixed(1)}%`, colors)
+    ]);
   }
   const round = (n) => n === void 0 ? "?" : Math.round(n).toString();
   if (ep.latency_last_30m) {
     const l = ep.latency_last_30m;
-    const latencyLine = [
-      paint(ANSI[classifyLatencyMs(l.p50)], `p50 ${round(l.p50)}ms`, colors),
-      paint(ANSI[classifyLatencyMs(l.p75)], `p75 ${round(l.p75)}ms`, colors),
-      paint(ANSI[classifyLatencyMs(l.p90)], `p90 ${round(l.p90)}ms`, colors),
-      paint(ANSI[classifyLatencyMs(l.p99)], `p99 ${round(l.p99)}ms`, colors)
-    ].join(" \xB7 ");
-    rows.push(["Latency (30m)", latencyLine]);
+    if (l.p50 !== void 0)
+      rows.push(["Latency p50 (median)", paint(ANSI[classifyLatencyMs(l.p50)], `${round(l.p50)} ms`, colors)]);
+    if (l.p75 !== void 0)
+      rows.push(["Latency p75", paint(ANSI[classifyLatencyMs(l.p75)], `${round(l.p75)} ms`, colors)]);
+    if (l.p90 !== void 0)
+      rows.push(["Latency p90", paint(ANSI[classifyLatencyMs(l.p90)], `${round(l.p90)} ms`, colors)]);
+    if (l.p99 !== void 0)
+      rows.push(["Latency p99 (worst 1%)", paint(ANSI[classifyLatencyMs(l.p99)], `${round(l.p99)} ms`, colors)]);
   }
   if (ep.throughput_last_30m) {
     const t = ep.throughput_last_30m;
-    const tpLine = [
-      paint(ANSI[classifyThroughput(t.p50)], `p50 ${round(t.p50)} tok/s`, colors),
-      paint(ANSI[classifyThroughput(t.p75)], `p75 ${round(t.p75)} tok/s`, colors),
-      paint(ANSI[classifyThroughput(t.p90)], `p90 ${round(t.p90)} tok/s`, colors),
-      paint(ANSI[classifyThroughput(t.p99)], `p99 ${round(t.p99)} tok/s`, colors)
-    ].join(" \xB7 ");
-    rows.push(["Throughput (30m)", tpLine]);
+    if (t.p50 !== void 0)
+      rows.push(["Throughput p50 (median)", paint(ANSI[classifyThroughput(t.p50)], `${round(t.p50)} tok/s`, colors)]);
+    if (t.p75 !== void 0)
+      rows.push(["Throughput p75", paint(ANSI[classifyThroughput(t.p75)], `${round(t.p75)} tok/s`, colors)]);
+    if (t.p90 !== void 0)
+      rows.push(["Throughput p90", paint(ANSI[classifyThroughput(t.p90)], `${round(t.p90)} tok/s`, colors)]);
+    if (t.p99 !== void 0)
+      rows.push(["Throughput p99 (best 1%)", paint(ANSI[classifyThroughput(t.p99)], `${round(t.p99)} tok/s`, colors)]);
   }
   const labelW = Math.max(...rows.map((r) => r[0].length), "Endpoint".length);
   const valueW = Math.max(...rows.map((r) => visibleLength(r[1])), provider.length);
