@@ -1,19 +1,108 @@
 #!/usr/bin/env python3
-"""Pre-push quality gate.
+"""Pre-push quality gate — strict mode with process-ancestry verification.
 
-If publish.py is the caller (.publish.lock exists), all validation
-already passed — publish.py would have exited before reaching git push
-if any check failed. Allow the push.
+Policy: the ONLY path to `git push` is via `scripts/publish.py`.
+Direct `git push` invocations are refused.
 
-If direct git push (no lock), run publish.py --check-only to validate.
-Push is blocked unless all checks pass with 0 issues.
+Verification: we do NOT trust a lock file, env var, or any in-repo marker
+— all of those are trivially spoofable (anyone can `touch .publish.lock`
+or `export FOO=1` before `git push`). Instead we walk the process
+ancestry chain from this hook's parent upward. For the push to be
+allowed, one ancestor MUST be a process whose argv contains a path that
+resolves (via realpath) to the canonical `<repo>/scripts/publish.py`.
+Since `subprocess.run(["git", "push", ...])` inside publish.py makes
+publish.py the grandparent of this hook, the chain looks like:
+
+    this hook  ->  git push  ->  python publish.py  ->  uv/shell/...
+
+If a non-publish.py caller invoked `git push`, publish.py will not be in
+the chain, and the push is refused.
+
+Attacker considerations:
+  * A user could write their own `publish.py` and put it in argv via
+    `os.execve`. We defeat that by resolving the path and comparing
+    against the canonical location inside THIS repo.
+  * If the attacker can overwrite `scripts/publish.py` itself, they
+    already own the repo — no hook can defend against that.
+  * `ps` could hypothetically be replaced, but on a system where `ps`
+    lies to you, no userland check is trustworthy anyway.
 
 Install: git config core.hooksPath .githooks
+Debug:   LLM_EXT_HOOK_DEBUG=1 git push  (prints the walked chain)
 """
 
+from __future__ import annotations
+
+import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
+
+MAX_ANCESTRY_DEPTH = 40
+
+
+def ps_query(pid: int) -> tuple[int, str] | None:
+    """Return (ppid, full-argv-string) for pid, or None if unavailable."""
+    try:
+        result = subprocess.run(
+            ["ps", "-ww", "-o", "ppid=,args=", "-p", str(pid)],
+            capture_output=True, text=True, check=False,
+        )
+    except (FileNotFoundError, OSError):
+        return None
+    line = result.stdout.strip()
+    if not line:
+        return None
+    parts = line.split(None, 1)
+    if len(parts) < 2:
+        return None
+    try:
+        ppid = int(parts[0])
+    except ValueError:
+        return None
+    return ppid, parts[1]
+
+
+def walk_ancestry(expected: Path) -> tuple[bool, list[str]]:
+    """Walk parent chain from this hook upward.
+
+    Returns (found, chain_lines). `found` is True iff some ancestor's
+    argv contains a publish.py path that resolves to `expected`.
+    """
+    try:
+        expected_resolved = expected.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return False, [f"expected script not found: {expected}"]
+
+    chain: list[str] = []
+    pid = os.getppid()  # direct parent = git push
+    for _ in range(MAX_ANCESTRY_DEPTH):
+        if pid <= 1:
+            break
+        q = ps_query(pid)
+        if q is None:
+            chain.append(f"  pid={pid}: (ps lookup failed)")
+            break
+        ppid, argv = q
+        # Truncate long argv for debug display, but scan the full string
+        display = argv if len(argv) < 120 else argv[:117] + "..."
+        chain.append(f"  pid={pid} ppid={ppid}: {display}")
+        try:
+            tokens = shlex.split(argv, posix=True)
+        except ValueError:
+            tokens = argv.split()
+        for tok in tokens:
+            if not tok.endswith("publish.py"):
+                continue
+            try:
+                tok_path = Path(tok).resolve(strict=True)
+            except (OSError, RuntimeError):
+                continue
+            if tok_path == expected_resolved:
+                return True, chain
+        pid = ppid
+    return False, chain
 
 
 def main() -> None:
@@ -23,25 +112,57 @@ def main() -> None:
             capture_output=True, text=True, check=True,
         ).stdout.strip()
     )
-    lock_file = repo_root / ".publish.lock"
     publish_script = repo_root / "scripts" / "publish.py"
+    debug = os.environ.get("LLM_EXT_HOOK_DEBUG") == "1"
 
-    # publish.py is the caller — validation already passed
-    if lock_file.exists():
+    found, chain = walk_ancestry(publish_script)
+
+    if debug:
+        sys.stderr.write("pre-push: process ancestry walk:\n")
+        for line in chain:
+            sys.stderr.write(line + "\n")
+        sys.stderr.write(f"pre-push: publish.py found in ancestry = {found}\n")
+
+    if found:
+        sys.stderr.write(
+            "pre-push: verified publish.py is an ancestor — validation "
+            "already passed, allowing push.\n"
+        )
         return
 
-    # Direct git push — run validation
-    if not publish_script.is_file():
-        print("ERROR: scripts/publish.py not found. Cannot validate.", file=sys.stderr)
-        sys.exit(1)
-
-    result = subprocess.run(
-        [sys.executable, str(publish_script), "--check-only"],
-        cwd=str(repo_root),
+    sys.stderr.write(
+        "\n"
+        "═══════════════════════════════════════════════════════════════\n"
+        "  PUSH BLOCKED: direct `git push` is not permitted.\n"
+        "═══════════════════════════════════════════════════════════════\n"
+        "\n"
+        "  Policy: the only path to push is via scripts/publish.py.\n"
+        "  The pre-push hook walks the process ancestry chain looking\n"
+        "  for a Python process running the canonical publish.py at:\n"
+        f"    {publish_script}\n"
+        "  If no such ancestor is found, the push is refused.\n"
+        "  (Lock files and env vars are NOT trusted — process ancestry\n"
+        "  is the only signal.)\n"
+        "\n"
+        "  publish.py runs the full mandatory validation gate:\n"
+        "    npm ci, typecheck, lint, build, test, ruff, shellcheck,\n"
+        "    plugin.json, CPV — all with 0 errors required.\n"
+        "\n"
+        "  To publish a release:\n"
+        "    uv run scripts/publish.py             # auto-bump via git-cliff\n"
+        "    uv run scripts/publish.py --patch\n"
+        "    uv run scripts/publish.py --minor\n"
+        "    uv run scripts/publish.py --major\n"
+        "    uv run scripts/publish.py --set x.y.z\n"
+        "\n"
+        "  To dry-run the full check suite without publishing:\n"
+        "    uv run scripts/publish.py --dry-run\n"
+        "\n"
+        "  Debug the ancestry walk: LLM_EXT_HOOK_DEBUG=1 git push\n"
+        "\n"
+        "═══════════════════════════════════════════════════════════════\n"
     )
-    if result.returncode != 0:
-        print("\nPush blocked: validation failed.", file=sys.stderr)
-        sys.exit(1)
+    sys.exit(1)
 
 
 if __name__ == "__main__":

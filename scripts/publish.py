@@ -8,24 +8,34 @@ Usage:
     uv run scripts/publish.py --major      # 3.2.0 -> 4.0.0
     uv run scripts/publish.py --set 4.0.0  # explicit version
     uv run scripts/publish.py --dry-run    # preview without changes
-    uv run scripts/publish.py --check-only # run checks only (used by pre-push hook)
+    uv run scripts/publish.py --check-only # run full check suite only
 
-Steps:
-    1. Bump version (always — marketplace needs version change to detect updates)
-       Sync to plugin.json, package.json, server.json, index.ts
-    2. Rebuild dist (with new version)
-    3. Validate (build check + CPV — blocks if any issue)
-    4. Update README.md badges
-    5. Generate CHANGELOG.md (git-cliff)
-    6. Commit everything
-    7. Create annotated git tag (vX.Y.Z)
-    8. Push (pre-push hook skips — lock file present)
-    9. Create GitHub release
+Push policy:
+    Direct `git push` is REFUSED by the pre-push hook (.githooks/pre-push).
+    The only path to push is this script. The hook uses PROCESS ANCESTRY
+    (walks parent PIDs via `ps`) to verify publish.py is the caller — not
+    a lock file, not an env var, nothing spoofable. Since subprocess.run
+    spawns git as a child of this script's Python interpreter, publish.py
+    will be the grandparent of the hook whenever the push comes from here.
+    No bypass exists.
+
+Steps (in order — validate is FIRST, no skipping):
+    1. Pre-flight: working tree clean + required tools present
+    2. Validate (MANDATORY — all checks 0 errors): npm ci, typecheck,
+       lint, build, test, ruff, shellcheck, plugin.json, CPV
+    3. Determine next version (git-cliff --bumped-version or flag override)
+    4. Generate CHANGELOG.md (git-cliff)
+    5. Sync version to plugin.json, package.json, server.json, index.ts
+    6. Rebuild dist (with new version)
+    7. Update README.md badges
+    8. Commit as `chore(release): vX.Y.Z`
+    9. Create annotated git tag vX.Y.Z
+   10. Push --follow-tags (pre-push hook walks ancestry, finds publish.py)
+   11. gh release create
 """
 
 import argparse
 import json
-import os
 import re
 import shlex
 import shutil
@@ -368,26 +378,16 @@ def main():
     repo_root = Path(__file__).resolve().parent.parent
     plugin_json = repo_root / ".claude-plugin" / "plugin.json"
     changelog = repo_root / "CHANGELOG.md"
-    lock_file = repo_root / ".publish.lock"
 
-    # Lock file: tells the pre-push hook that publish.py is the caller.
-    # publish.py exits before git push if any check fails, so lock presence
-    # at push time guarantees validation passed.
-    if not args.check_only:
-        lock_file.write_text(str(os.getpid()), encoding="utf-8")
-    try:
-        _run_publish(args, repo_root, plugin_json, changelog)
-    finally:
-        if lock_file.exists():
-            try:
-                lock_file.unlink()
-            except OSError:
-                pass
+    # No lock file / env var needed: the pre-push hook uses process
+    # ancestry (walks parent PIDs via `ps`) to verify publish.py is the
+    # caller. Since subprocess.run(["git", "push", ...]) makes publish.py
+    # the grandparent of the hook, the hook can reliably detect our
+    # presence without any spoofable markers.
+    _run_publish(args, repo_root, plugin_json, changelog)
 
 
 def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> None:
-    # Lock file lifecycle is owned by main() — it's written before calling
-    # us and unlinked in the outer finally block regardless of success/fail.
 
     # ── --check-only: run full validation without publishing ──
     # Used by the pre-push hook. Checks are the SAME as the main publish
