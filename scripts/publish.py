@@ -97,9 +97,39 @@ def extract_release_notes(changelog_path: Path, version: str) -> str:
     return match.group(1).strip()
 
 
+def _reports_dir(repo_root: Path) -> Path:
+    d = repo_root / "reports_dev" / "publish"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _run_check(
+    name: str,
+    cmd: list[str],
+    cwd: str,
+    repo_root: Path,
+) -> bool:
+    """Run a check command, redirect output to a report file, return True on success."""
+    report = _reports_dir(repo_root) / f"{name}.log"
+    result = run(cmd, check=False, cwd=cwd)
+    output = (result.stdout or "") + (result.stderr or "")
+    report.write_text(output, encoding="utf-8")
+    if result.returncode != 0:
+        print(f"ERROR: {name} failed — see {report}", file=sys.stderr)
+        # Print last 40 lines inline for immediate visibility
+        lines = output.strip().split("\n")
+        for line in lines[-40:]:
+            print(f"  {line}", file=sys.stderr)
+        return False
+    print(f"  OK: {name}")
+    return True
+
+
 def run_checks(repo_root: Path) -> bool:
-    """Run build check on the MCP server. Return True if it compiles."""
+    """Run lint + typecheck + shellcheck + ruff on the plugin. Fail-fast on any error."""
     mcp_dir = str(repo_root / "mcp-server")
+    reports = _reports_dir(repo_root)
+    print(f"  Reports: {reports}")
 
     if not (repo_root / "mcp-server" / "node_modules").exists():
         print("  Installing dependencies...")
@@ -113,26 +143,50 @@ def run_checks(repo_root: Path) -> bool:
                 print(result.stderr, file=sys.stderr)
             return False
 
-    # TypeScript compile check
-    result = run(
-        ["npx", "tsc", "--noEmit"],
-        check=False, cwd=mcp_dir,
-    )
-    if result.returncode != 0:
-        print("ERROR: TypeScript compilation failed", file=sys.stderr)
-        if result.stdout:
-            print(result.stdout)
-        if result.stderr:
-            print(result.stderr, file=sys.stderr)
+    # 1. TypeScript compile check
+    if not _run_check("tsc", ["npx", "tsc", "--noEmit"], mcp_dir, repo_root):
         return False
 
-    # Plugin manifest JSON check
+    # 2. ESLint
+    if not _run_check("eslint", ["npx", "eslint", "src", "--max-warnings", "0"], mcp_dir, repo_root):
+        return False
+
+    # 3. Ruff on Python scripts (if ruff is available)
+    ruff_check = run(["which", "ruff"], check=False)
+    if ruff_check.returncode == 0:
+        if not _run_check("ruff", ["ruff", "check", "scripts/"], str(repo_root), repo_root):
+            return False
+    else:
+        print("  SKIP: ruff not installed (install with: uv tool install ruff)")
+
+    # 4. Shellcheck on any .sh files (if shellcheck is available)
+    shellcheck_bin = run(["which", "shellcheck"], check=False)
+    if shellcheck_bin.returncode == 0:
+        # Only check .sh files in the main plugin tree (exclude dev/tmp/vendored dirs)
+        exclude_dirs = {"node_modules", ".git", "scripts_dev", "docs_dev",
+                        "samples_dev", "examples_dev", "tests_dev",
+                        "downloads_dev", "libs_dev", "builds_dev", ".claude",
+                        "dist", "reports_dev"}
+        sh_files: list[Path] = []
+        for f in repo_root.rglob("*.sh"):
+            if not any(part in exclude_dirs for part in f.relative_to(repo_root).parts):
+                sh_files.append(f)
+        if sh_files:
+            if not _run_check("shellcheck", ["shellcheck", *(str(f) for f in sh_files)], str(repo_root), repo_root):
+                return False
+        else:
+            print("  SKIP: no .sh files in main tree")
+    else:
+        print("  SKIP: shellcheck not installed (install with: brew install shellcheck)")
+
+    # 5. Plugin manifest JSON check
     plugin_json = repo_root / ".claude-plugin" / "plugin.json"
     try:
         json.loads(plugin_json.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, FileNotFoundError) as e:
         print(f"ERROR: plugin.json invalid: {e}", file=sys.stderr)
         return False
+    print("  OK: plugin.json")
 
     return True
 

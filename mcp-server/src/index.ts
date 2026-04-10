@@ -732,6 +732,7 @@ function parseRedactRegex(
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
       `Invalid redact_regex pattern: ${msg}\n\nPattern received: ${pattern}\n\nEnsure it is a valid JavaScript regular expression.`,
+      { cause: err },
     );
   }
 }
@@ -905,17 +906,6 @@ function resolvePrompt(
 /** Rough token estimate: ~4 chars per token (good enough for batching decisions). */
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
-}
-
-/** Resolve the current model's context window size (sync, uses cache). */
-function resolveCurrentContextWindow(): number {
-  if (currentBackend.type === "openrouter" && currentBackend.model) {
-    const match = openRouterModelCache.find(
-      (m) => m.id === currentBackend.model,
-    );
-    if (match?.context_length) return match.context_length;
-  }
-  return FALLBACK_CONTEXT_LENGTH;
 }
 
 /**
@@ -8160,7 +8150,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (nameResult.status !== 0 && nameResult.status !== 1) {
             return { content: [{ type: "text", text: `FAILED: git diff --name-only failed: ${nameResult.stderr?.trim()}` }], isError: true };
           }
-          let changedFiles = (nameResult.stdout || "").split("\n").filter((f) => f.trim());
+          const changedFiles = (nameResult.stdout || "").split("\n").filter((f) => f.trim());
 
           // If file_pairs contains group markers, use them to filter/group the changed files
           // Otherwise create one group with all changed files

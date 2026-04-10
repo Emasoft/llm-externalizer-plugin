@@ -17,6 +17,8 @@ mcp-server/*.tgz
 mcp-server/coverage/
 mcp-server/logs/
 mcp-server/llm_externalizer_output/
+mcp-server/reports_dev/
+reports_dev/
 
 # Build artifacts
 dist/
