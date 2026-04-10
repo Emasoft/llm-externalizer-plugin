@@ -1,6 +1,26 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.85] - 2026-04-10
+
+### Fixed
+
+- Fix(publish): use process ancestry instead of lock file for push gate
+
+The pre-push hook now walks the parent PID chain via `ps` to verify
+that scripts/publish.py is an ancestor of the git push process.
+This replaces the .publish.lock file which was trivially spoofable
+(anyone could `touch .publish.lock` before `git push`).
+
+- .githooks/pre-push: rewritten with walk_ancestry() that resolves
+  each ancestor's argv tokens and compares to the canonical
+  scripts/publish.py path
+- scripts/publish.py: removed all lock file write/cleanup logic,
+  updated docstrings to document ancestry-based verification
+- core.hooksPath set to .githooks (was defaulting to .git/hooks
+  which had a broken symlink)
+
+
 ## [3.9.84] - 2026-04-10
 
 ### Changed
