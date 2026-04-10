@@ -28554,6 +28554,9 @@ function formatModelInfoMarkdown(data, modelId) {
   }
   return lines.join("\n").trimEnd();
 }
+function formatModelInfoJson(data, _modelId) {
+  return JSON.stringify(data, null, 2);
+}
 var ANSI = {
   reset: "\x1B[0m",
   bold: "\x1B[1m",
@@ -32090,6 +32093,24 @@ function buildTools() {
       }
     },
     {
+      name: "or_model_info_json",
+      description: "Same as or_model_info but returns the raw OpenRouter response data as pretty JSON. Use this when you need the unprocessed fields (every numeric value, every field OpenRouter exposes) to pipe into another tool or parse in code. Takes the same `model` input plus an optional `file_path` \u2014 when set, the JSON is written to that file (absolute path recommended) instead of being returned inline, and the tool result contains only the absolute path. This mirrors the CLI `llm-externalizer model-info <id> --json [file]`.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          model: {
+            type: "string",
+            description: "Exact OpenRouter model id (case-sensitive, vendor-prefixed, with any ':free' / ':thinking' suffix)."
+          },
+          file_path: {
+            type: "string",
+            description: "Optional absolute path to write the JSON to. When set, the tool result contains only the resolved file path, not the JSON itself \u2014 saves caller context tokens. When omitted, the JSON is returned inline."
+          }
+        },
+        required: ["model"]
+      }
+    },
+    {
       name: "reset",
       description: "Full soft-restart. NOT IMMEDIATE \u2014 waits for all currently running LLM requests to finish before resetting. Then: reloads settings.yaml from disk, clears all caches (model list, concurrency, LM Studio detection), resets session counters (tokens/cost/calls), re-resolves the active profile, and notifies the client to refresh the tool list. Use when settings were changed externally, the backend is misbehaving, or you need a clean slate.",
       inputSchema: { type: "object", properties: {} }
@@ -33526,8 +33547,9 @@ Profiles: ${profileNames.join(", ")}`);
           };
         }
         case "or_model_info":
-        case "or_model_info_table": {
-          const { model: infoModel } = args;
+        case "or_model_info_table":
+        case "or_model_info_json": {
+          const { model: infoModel, file_path: infoFilePath } = args;
           if (!infoModel || typeof infoModel !== "string") {
             return {
               content: [
@@ -33564,6 +33586,33 @@ Profiles: ${profileNames.join(", ")}`);
                 }
               ],
               isError: true
+            };
+          }
+          if (name === "or_model_info_json") {
+            const jsonText = formatModelInfoJson(result.data, infoModel);
+            if (infoFilePath && typeof infoFilePath === "string" && infoFilePath.trim()) {
+              const absPath = resolve2(infoFilePath.trim());
+              try {
+                writeFileSync2(absPath, jsonText, "utf-8");
+              } catch (err) {
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: `FAILED: could not write JSON to '${absPath}': ${err instanceof Error ? err.message : String(err)}`
+                    }
+                  ],
+                  isError: true
+                };
+              }
+              return {
+                content: [
+                  { type: "text", text: `JSON written to ${absPath}` }
+                ]
+              };
+            }
+            return {
+              content: [{ type: "text", text: jsonText }]
             };
           }
           const text = name === "or_model_info_table" ? formatModelInfoTable(result.data, infoModel, true) : formatModelInfoMarkdown(result.data, infoModel);

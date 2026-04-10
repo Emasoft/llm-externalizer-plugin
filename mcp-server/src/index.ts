@@ -1423,6 +1423,7 @@ import {
   fetchOpenRouterModelInfo,
   formatModelInfoMarkdown,
   formatModelInfoTable,
+  formatModelInfoJson,
 } from "./or-model-info.js";
 
 // Settings path (cross-platform, see config.ts)
@@ -5085,6 +5086,36 @@ function buildTools() {
       },
     },
     {
+      name: "or_model_info_json",
+      description:
+        "Same as or_model_info but returns the raw OpenRouter response data as pretty " +
+        "JSON. Use this when you need the unprocessed fields (every numeric value, " +
+        "every field OpenRouter exposes) to pipe into another tool or parse in code. " +
+        "Takes the same `model` input plus an optional `file_path` — when set, the " +
+        "JSON is written to that file (absolute path recommended) instead of being " +
+        "returned inline, and the tool result contains only the absolute path. This " +
+        "mirrors the CLI `llm-externalizer model-info <id> --json [file]`.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          model: {
+            type: "string",
+            description:
+              "Exact OpenRouter model id (case-sensitive, vendor-prefixed, with any " +
+              "':free' / ':thinking' suffix).",
+          },
+          file_path: {
+            type: "string",
+            description:
+              "Optional absolute path to write the JSON to. When set, the tool result " +
+              "contains only the resolved file path, not the JSON itself — saves " +
+              "caller context tokens. When omitted, the JSON is returned inline.",
+          },
+        },
+        required: ["model"],
+      },
+    },
+    {
       name: "reset",
       description:
         "Full soft-restart. NOT IMMEDIATE — waits for all currently running LLM requests to finish " +
@@ -6841,8 +6872,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "or_model_info":
-      case "or_model_info_table": {
-        const { model: infoModel } = args as { model?: string };
+      case "or_model_info_table":
+      case "or_model_info_json": {
+        const { model: infoModel, file_path: infoFilePath } = args as {
+          model?: string;
+          file_path?: string;
+        };
         if (!infoModel || typeof infoModel !== "string") {
           return {
             content: [
@@ -6883,6 +6918,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               },
             ],
             isError: true,
+          };
+        }
+
+        // JSON branch: optionally write to a file, returning only the
+        // absolute path so the caller's context isn't flooded.
+        if (name === "or_model_info_json") {
+          const jsonText = formatModelInfoJson(result.data, infoModel);
+          if (infoFilePath && typeof infoFilePath === "string" && infoFilePath.trim()) {
+            const absPath = resolve(infoFilePath.trim());
+            try {
+              writeFileSync(absPath, jsonText, "utf-8");
+            } catch (err) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `FAILED: could not write JSON to '${absPath}': ${err instanceof Error ? err.message : String(err)}`,
+                  },
+                ],
+                isError: true,
+              };
+            }
+            return {
+              content: [
+                { type: "text", text: `JSON written to ${absPath}` },
+              ],
+            };
+          }
+          return {
+            content: [{ type: "text", text: jsonText }],
           };
         }
 
