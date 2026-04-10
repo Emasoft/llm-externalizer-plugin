@@ -1,6 +1,18 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.52] - 2026-04-10
+
+### Changed
+
+- Wrap file content in XML tags for clearer file delimitation
+
+Each file is now wrapped: <file path="...">...code fence...</file>
+Helps LLMs (especially weaker ones like Nemotron) parse multi-file
+batches unambiguously. Quad backticks (min 4, auto-escalate) already
+handle nested code fences safely. XML path attribute is escaped.
+Updated all system prompts to reference the new delimiter.
+
 ## [3.9.51] - 2026-04-10
 
 ### Changed
