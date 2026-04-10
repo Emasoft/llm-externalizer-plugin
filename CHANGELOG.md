@@ -1,6 +1,26 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.75] - 2026-04-10
+
+### Changed
+
+- Or_model_info skill: keep ANSI colors, revert --no-color default
+
+Claude Code's terminal UI renders ANSI escape codes in Bash tool
+output — the user saw the colorized borders in earlier runs and
+complained they were dim (proving the codes were being interpreted,
+not shown as literal garbage).
+
+Previous release switched the skill to --no-color based on a wrong
+assumption that ANSI codes would appear as raw escape sequences in
+the rendered transcript. They don't. Reverting: the skill now runs
+the CLI with colors ON and reprints the output verbatim.
+
+Users viewing the rendered transcript see bright cyan borders, green
+capability flags, yellow/red latency percentiles, and the footer
+legend color key as intended.
+
 ## [3.9.74] - 2026-04-10
 
 ### Changed
