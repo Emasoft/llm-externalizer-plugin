@@ -1,6 +1,17 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.59] - 2026-04-10
+
+### Changed
+
+- Add FILE_FORMAT_EXAMPLE to remaining system prompts
+
+compare_files (pair mode), check_references (single-file), and
+check_imports (both paths) were missing the format example.
+Now ALL file-handling tools show the LLM the expected XML
+wrapping format.
+
 ## [3.9.58] - 2026-04-10
 
 ### Changed
