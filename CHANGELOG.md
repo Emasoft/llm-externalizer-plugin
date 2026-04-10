@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.80] - 2026-04-10
+
+### Changed
+
+- Emoji quality markers survive markdown reprint
+
 ## [3.9.79] - 2026-04-10
 
 ### Changed
