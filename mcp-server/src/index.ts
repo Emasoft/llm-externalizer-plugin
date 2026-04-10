@@ -1520,68 +1520,62 @@ const MODEL_CACHE_TTL_MS = 3600_000; // 1 hour TTL for OpenRouter model list cac
 // "none" (reasoning rejected or unsupported).
 const MODEL_REASONING_CACHE = new Map<string, "xhigh" | "high" | "none">();
 
+// OpenRouter's `ChatRequestReasoning` schema (chat/completions) has
+// ONLY two properties: `effort` and `summary`. There is no `exclude`,
+// `enabled`, or `max_tokens` on this endpoint — those belong to the
+// Responses API's ReasoningConfig. See docs/openrouter/chat-completions-api.md
+// for the raw OpenAPI spec. Earlier code sent `exclude: true`, which
+// OpenRouter silently dropped. The reasoning trace comes back in
+// `message.reasoning` / `message.reasoning_details`, which we ignore;
+// we only read `message.content`.
 function reasoningLadderForModel(
   modelId: string,
 ): Array<Record<string, unknown> | null> {
   if (!modelId) return [null];
   const cached = MODEL_REASONING_CACHE.get(modelId);
   if (cached === "none") return [null];
-  if (cached === "high") return [{ effort: "high", exclude: true }, null];
-  return [
-    { effort: "xhigh", exclude: true },
-    { effort: "high", exclude: true },
-    null,
-  ];
+  if (cached === "high") return [{ effort: "high" }, null];
+  return [{ effort: "xhigh" }, { effort: "high" }, null];
 }
 
 // ── Per-model request body overrides ────────────────────────────────
-// Some models need sampling parameters, thinking flags, or sampling
-// temperatures that differ from our defaults. This registry keeps the
-// model-specific knobs out of the main code paths — every entry is
-// optional and unset fields fall back to the caller's defaults.
+// Some models need sampling parameters that differ from our defaults.
+// This registry keeps the model-specific knobs out of the main code
+// paths — every entry is optional and unset fields fall back to the
+// caller's defaults.
 //
-// IMPORTANT — OpenRouter wire format:
-//   The `provider` field in OpenRouter's chat/completions request body
-//   has a fixed schema (order/allow_fallbacks/require_parameters/…) and
-//   does not support arbitrary pass-through. However, OpenRouter's
-//   documented behavior is to forward known vendor-specific parameters
-//   (safe_prompt for Mistral, raw_mode for Hyperbolic, etc.) as
-//   top-level fields. `extraBody` is merged at the top level of the
-//   request body — if OpenRouter recognizes the field for the chosen
-//   provider it forwards it, otherwise it silently drops it. This is
-//   the belt-and-suspenders approach: we also keep reasoning.effort in
-//   the ladder so OpenRouter's internal translation has a chance to
-//   work even when pass-through fails.
+// IMPORTANT — what OpenRouter can and can't forward:
+//   There is NO generic pass-through for vendor-specific parameters in
+//   either /chat/completions or /responses. Both `provider` objects
+//   have fixed schemas. OpenRouter only forwards known vendor fields
+//   (safe_prompt for Mistral, raw_mode for Hyperbolic, etc.) that are
+//   explicitly mapped in its routing layer. Sending unknown top-level
+//   fields like vLLM's `chat_template_kwargs` results in them being
+//   silently dropped. See docs/openrouter/chat-completions-api.md and
+//   docs/openrouter/responses-api.md for the raw OpenAPI specs.
+//
+//   For models that need thinking enabled, the only supported path is
+//   `reasoning.effort` — OpenRouter's internal routing translates this
+//   into whatever provider-specific flag the backend expects, based on
+//   the model's `supports_reasoning` metadata. Our ladder sends this
+//   automatically.
 interface ModelRequestOverrides {
   temperature?: number;
   top_p?: number;
-  // Extra fields merged into the request body at the top level. For
-  // vendor-specific flags that OpenRouter forwards to the provider.
-  extraBody?: Record<string, unknown>;
 }
 
 const MODEL_REQUEST_OVERRIDES: Record<string, ModelRequestOverrides> = {
-  // NVIDIA Nemotron 3 Super 120B (free tier). NVIDIA's own recommended
-  // generation params are: temperature=1.0, top_p=0.95, and the vLLM
-  // chat-template hook `chat_template_kwargs.enable_thinking=true`.
-  //
-  // OpenRouter's model metadata reports supports_reasoning=true for
-  // this model, so our ladder's reasoning.effort field is still sent
-  // (OpenRouter is expected to translate it into enable_thinking
-  // internally). We also include chat_template_kwargs as a top-level
-  // field so that if OpenRouter forwards it to the underlying vLLM
-  // backend, thinking is enabled at the request body level even when
-  // reasoning.effort translation is broken.
-  //
-  // The earlier empty-response failures were caused by our default
-  // temperature=0.1 being far below what Nemotron tolerates. The
-  // sampling floor was collapsing the output distribution to empty.
+  // NVIDIA Nemotron 3 Super 120B (free tier). NVIDIA's documented
+  // sampling recommendation: temperature=1.0, top_p=0.95. The earlier
+  // empty-response failures were caused by our ensemble default of
+  // temperature=0.1, which is far below what this model tolerates —
+  // the sampling floor collapsed the output distribution to empty on
+  // large inputs. OpenRouter reports supports_reasoning=true for this
+  // model, so the reasoning.effort field from the ladder is still
+  // sent and translated to the vLLM enable_thinking flag internally.
   "nvidia/nemotron-3-super-120b-a12b:free": {
     temperature: 1.0,
     top_p: 0.95,
-    extraBody: {
-      chat_template_kwargs: { enable_thinking: true },
-    },
   },
 };
 
@@ -1595,7 +1589,6 @@ function applyModelOverrides(
   const out = { ...body };
   if (override.temperature !== undefined) out.temperature = override.temperature;
   if (override.top_p !== undefined) out.top_p = override.top_p;
-  if (override.extraBody) Object.assign(out, override.extraBody);
   return out;
 }
 
