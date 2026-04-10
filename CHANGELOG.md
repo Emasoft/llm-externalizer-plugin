@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.79] - 2026-04-10
+
+### Changed
+
+- Audit fixes — timeout, validation, error codes, paths
+
 ## [3.9.78] - 2026-04-10
 
 ### Changed
