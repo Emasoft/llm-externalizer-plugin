@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.72] - 2026-04-10
+
+### Changed
+
+- Supported_parameters as multi-line column inside the table
+
 ## [3.9.71] - 2026-04-10
 
 ### Changed
