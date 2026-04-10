@@ -28625,9 +28625,8 @@ function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexReda
   }
   const lang = langOverride || detectLang(filePath);
   const fence = fenceBackticks(content);
-  const escapedPath = filePath.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  return `<file path="${escapedPath}">
-${fence}${lang}
+  return `<file>
+${fence}${lang} ${filePath}
 ${content}
 ${fence}
 </file>`;
@@ -31814,7 +31813,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.52" },
+  { name: "llm-externalizer", version: "3.9.53" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {

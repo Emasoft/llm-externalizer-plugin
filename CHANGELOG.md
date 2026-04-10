@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.53] - 2026-04-10
+
+### Changed
+
+- Simplify XML wrapping: use plain <file>...</file>, keep path in fence header
+
 ## [3.9.52] - 2026-04-10
 
 ### Changed
