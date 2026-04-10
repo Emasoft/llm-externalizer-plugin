@@ -72,9 +72,9 @@ export interface ModelEndpoint {
   pricing?: ModelEndpointPricing;
   supported_parameters?: string[];
   status?: number;
-  uptime_last_30m?: number;
-  uptime_last_5m?: number;
-  uptime_last_1d?: number;
+  uptime_last_30m?: number | null;
+  uptime_last_5m?: number | null;
+  uptime_last_1d?: number | null;
   latency_last_30m?: ModelEndpointPercentiles;
   throughput_last_30m?: ModelEndpointPercentiles;
   supports_implicit_caching?: boolean;
@@ -438,24 +438,36 @@ function renderEndpointTable(ep: ModelEndpoint, colors: boolean): string {
   if (ep.max_completion_tokens !== undefined && ep.max_completion_tokens !== null) {
     rows.push([
       "Max completion",
-      paint(ANSI.bwhite, ep.max_completion_tokens.toLocaleString(), colors),
+      paint(ANSI.bwhite, ep.max_completion_tokens.toLocaleString(), colors) + " tokens",
     ]);
   }
   if (ep.max_prompt_tokens !== undefined && ep.max_prompt_tokens !== null) {
     rows.push([
       "Max prompt",
-      paint(ANSI.bwhite, ep.max_prompt_tokens.toLocaleString(), colors),
+      paint(ANSI.bwhite, ep.max_prompt_tokens.toLocaleString(), colors) + " tokens",
     ]);
   }
   if (ep.quantization) {
     rows.push(["Quantization", paint(ANSI.dim, ep.quantization, colors)]);
   }
+
+  // ── Capability flags ─────────────────────────────────────────
+  // Derived from supported_parameters. These answer the "what can I
+  // configure on this model?" question at a glance without reading the
+  // full checkmark grid below.
+  const params = new Set(ep.supported_parameters ?? []);
+  const yes = () => paint(ANSI.bgreen, "yes", colors);
+  const no = () => paint(ANSI.dim, "no", colors);
+  rows.push(["Reasoning", params.has("reasoning") ? yes() : no()]);
+  rows.push(["Tool calling", params.has("tools") ? yes() : no()]);
+  rows.push([
+    "Structured output",
+    params.has("structured_outputs") || params.has("response_format") ? yes() : no(),
+  ]);
   if (ep.supports_implicit_caching !== undefined) {
     rows.push([
       "Implicit caching",
-      ep.supports_implicit_caching
-        ? paint(ANSI.bgreen, "yes", colors)
-        : paint(ANSI.dim, "no", colors),
+      ep.supports_implicit_caching ? yes() : no(),
     ]);
   }
 
@@ -496,20 +508,22 @@ function renderEndpointTable(ep: ModelEndpoint, colors: boolean): string {
     }
   }
 
-  // Uptime — three time windows, each on its own row
-  if (ep.uptime_last_5m !== undefined) {
+  // Uptime — three time windows, each on its own row.
+  // OpenRouter sometimes returns null for newly added or idle endpoints;
+  // explicit null check is required (typeof null === "object").
+  if (typeof ep.uptime_last_5m === "number") {
     rows.push([
       "Uptime (5m)",
       paint(ANSI[classifyUptime(ep.uptime_last_5m)], `${ep.uptime_last_5m.toFixed(1)}%`, colors),
     ]);
   }
-  if (ep.uptime_last_30m !== undefined) {
+  if (typeof ep.uptime_last_30m === "number") {
     rows.push([
       "Uptime (30m)",
       paint(ANSI[classifyUptime(ep.uptime_last_30m)], `${ep.uptime_last_30m.toFixed(1)}%`, colors),
     ]);
   }
-  if (ep.uptime_last_1d !== undefined) {
+  if (typeof ep.uptime_last_1d === "number") {
     rows.push([
       "Uptime (1d)",
       paint(ANSI[classifyUptime(ep.uptime_last_1d)], `${ep.uptime_last_1d.toFixed(1)}%`, colors),

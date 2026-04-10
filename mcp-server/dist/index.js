@@ -28656,22 +28656,31 @@ function renderEndpointTable(ep, colors) {
   if (ep.max_completion_tokens !== void 0 && ep.max_completion_tokens !== null) {
     rows.push([
       "Max completion",
-      paint(ANSI.bwhite, ep.max_completion_tokens.toLocaleString(), colors)
+      paint(ANSI.bwhite, ep.max_completion_tokens.toLocaleString(), colors) + " tokens"
     ]);
   }
   if (ep.max_prompt_tokens !== void 0 && ep.max_prompt_tokens !== null) {
     rows.push([
       "Max prompt",
-      paint(ANSI.bwhite, ep.max_prompt_tokens.toLocaleString(), colors)
+      paint(ANSI.bwhite, ep.max_prompt_tokens.toLocaleString(), colors) + " tokens"
     ]);
   }
   if (ep.quantization) {
     rows.push(["Quantization", paint(ANSI.dim, ep.quantization, colors)]);
   }
+  const params = new Set(ep.supported_parameters ?? []);
+  const yes = () => paint(ANSI.bgreen, "yes", colors);
+  const no = () => paint(ANSI.dim, "no", colors);
+  rows.push(["Reasoning", params.has("reasoning") ? yes() : no()]);
+  rows.push(["Tool calling", params.has("tools") ? yes() : no()]);
+  rows.push([
+    "Structured output",
+    params.has("structured_outputs") || params.has("response_format") ? yes() : no()
+  ]);
   if (ep.supports_implicit_caching !== void 0) {
     rows.push([
       "Implicit caching",
-      ep.supports_implicit_caching ? paint(ANSI.bgreen, "yes", colors) : paint(ANSI.dim, "no", colors)
+      ep.supports_implicit_caching ? yes() : no()
     ]);
   }
   if (ep.pricing) {
@@ -28710,19 +28719,19 @@ function renderEndpointTable(ep, colors) {
       ]);
     }
   }
-  if (ep.uptime_last_5m !== void 0) {
+  if (typeof ep.uptime_last_5m === "number") {
     rows.push([
       "Uptime (5m)",
       paint(ANSI[classifyUptime(ep.uptime_last_5m)], `${ep.uptime_last_5m.toFixed(1)}%`, colors)
     ]);
   }
-  if (ep.uptime_last_30m !== void 0) {
+  if (typeof ep.uptime_last_30m === "number") {
     rows.push([
       "Uptime (30m)",
       paint(ANSI[classifyUptime(ep.uptime_last_30m)], `${ep.uptime_last_30m.toFixed(1)}%`, colors)
     ]);
   }
-  if (ep.uptime_last_1d !== void 0) {
+  if (typeof ep.uptime_last_1d === "number") {
     rows.push([
       "Uptime (1d)",
       paint(ANSI[classifyUptime(ep.uptime_last_1d)], `${ep.uptime_last_1d.toFixed(1)}%`, colors)
