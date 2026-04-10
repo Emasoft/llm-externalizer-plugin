@@ -29925,26 +29925,34 @@ async function chatCompletionSimple(messages, options = {}) {
   };
   if (conn.model) body.model = conn.model;
   const startTime = Date.now();
-  const res = await fetchWithRetry429(
-    conn.url,
-    {
-      method: "POST",
-      headers: conn.headers,
-      body: JSON.stringify(body)
-    },
-    conn.timeout,
-    startTime
-  );
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`API error ${res.status} (${currentBackend.type}): ${text}`);
+  const heartbeat = options.onProgress ? setInterval(() => {
+    const elapsed = Math.round((Date.now() - startTime) / 1e3);
+    options.onProgress(50, 100, `Processing\u2026 ${elapsed}s elapsed`);
+  }, HEARTBEAT_INTERVAL_MS) : null;
+  try {
+    const res = await fetchWithRetry429(
+      conn.url,
+      {
+        method: "POST",
+        headers: conn.headers,
+        body: JSON.stringify(body)
+      },
+      conn.timeout,
+      startTime
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`API error ${res.status} (${currentBackend.type}): ${text}`);
+    }
+    const data = await res.json();
+    const content = data.choices?.[0]?.message?.content ?? "";
+    const model = data.model ?? options.model ?? "unknown";
+    const finishReason = data.choices?.[0]?.finish_reason ?? "";
+    const usage = data.usage;
+    return { content, model, usage, finishReason, truncated: false };
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
   }
-  const data = await res.json();
-  const content = data.choices?.[0]?.message?.content ?? "";
-  const model = data.model ?? options.model ?? "unknown";
-  const finishReason = data.choices?.[0]?.finish_reason ?? "";
-  const usage = data.usage;
-  return { content, model, usage, finishReason, truncated: false };
 }
 var FIX_CODE_SCHEMA = {
   name: "fix_code_response",
@@ -31803,7 +31811,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.49" },
+  { name: "llm-externalizer", version: "3.9.50" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {

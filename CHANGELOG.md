@@ -1,6 +1,17 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.50] - 2026-04-10
+
+### Changed
+
+- Add heartbeat to chatCompletionSimple for MCP keepalive
+
+Sends progress notification every 30s while waiting for the
+non-streaming HTTP response. Prevents MCP inactivity timeout
+on long-running requests (reasoning models on large files).
+Cleared in finally block — no timer leaks.
+
 ## [3.9.49] - 2026-04-10
 
 ### Changed
