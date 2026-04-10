@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.68] - 2026-04-10
+
+### Changed
+
+- Table formatter, CLI subcommand, shared module, legend
+
 ## [3.9.67] - 2026-04-10
 
 ### Changed
