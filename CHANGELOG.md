@@ -1,6 +1,43 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.64] - 2026-04-10
+
+### Changed
+
+- Per-model request overrides: Nemotron needs temperature=1.0, top_p=0.95
+
+Root cause of the empty-response failures on Nemotron 3 Super free:
+our default temperature=0.1 is far below what the model tolerates.
+NVIDIA's documented recommended settings are temperature=1.0,
+top_p=0.95, and a vLLM chat_template_kwargs.enable_thinking flag.
+The low sampling floor was collapsing the output distribution to
+empty on large inputs.
+
+New MODEL_REQUEST_OVERRIDES registry applies per-model sampling
+params and vendor extraBody fields to the request body after the
+reasoning ladder runs. For Nemotron free:
+
+- temperature: 1.0 (override 0.1 default)
+- top_p: 0.95 (we didn't send top_p at all before)
+- extraBody.chat_template_kwargs.enable_thinking: true
+
+OpenRouter wire format: the `provider` field has a fixed schema, so
+extraBody is merged at the top level of the request body. OpenRouter
+forwards known vendor params (safe_prompt for Mistral, raw_mode for
+Hyperbolic, etc.) in this way. chat_template_kwargs may or may not
+make it through — if it doesn't, OpenRouter's own
+supports_reasoning=true metadata for this model implies internal
+translation of our reasoning.effort field into enable_thinking, so
+either path enables thinking.
+
+reasoningLadderForModel no longer special-cases Nemotron — all
+OpenRouter models go through the same xhigh -> high -> none ladder.
+The new registry handles the sampling-param differences cleanly.
+
+applyModelOverrides is wired into both chatCompletionSimple and
+chatCompletionJSON after baseBody construction.
+
 ## [3.9.63] - 2026-04-10
 
 ### Changed
