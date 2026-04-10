@@ -2698,8 +2698,6 @@ async function chatCompletionSimple(
     temperature: options.temperature ?? DEFAULT_TEMPERATURE,
     max_tokens: options.maxTokens ?? resolveDefaultMaxTokens(),
     stream: false,
-    // Explicit text output — no SSE, single JSON response
-    response_format: { type: "text" },
   };
   if (conn.model) body.model = conn.model;
 
