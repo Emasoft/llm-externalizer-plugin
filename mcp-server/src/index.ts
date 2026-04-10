@@ -1526,6 +1526,17 @@ function reasoningLadderForModel(
   if (!modelId) return [null];
   const cached = MODEL_REASONING_CACHE.get(modelId);
   if (cached === "none") return [null];
+
+  // Nemotron free model: cap effort at medium. xhigh/high empirically
+  // cause empty responses (likely because OpenRouter doesn't plumb the
+  // reasoning field through to the NVIDIA endpoint for this free variant,
+  // or because the free-tier budget is too small to accommodate deep
+  // reasoning + output). Medium is the safe ceiling.
+  if (modelId === "nvidia/nemotron-3-super-120b-a12b:free") {
+    if (cached === "high") return [{ effort: "medium", exclude: true }, null];
+    return [{ effort: "medium", exclude: true }, null];
+  }
+
   if (cached === "high") return [{ effort: "high", exclude: true }, null];
   return [
     { effort: "xhigh", exclude: true },
@@ -1873,6 +1884,129 @@ const session = {
   completionTokens: 0,
   totalCost: 0, // Cumulative cost in USD from OpenRouter usage.cost
 };
+
+// ── OpenRouter balance + credit-exhaustion state ────────────────────
+// Session-level flag that flips to true the first time we hit a 402
+// "Payment required" error. All subsequent calls automatically route
+// through FREE_MODEL_ID instead of the paid ensemble. The flag is only
+// cleared on process restart — no point probing a dead wallet repeatedly.
+let creditExhausted = false;
+
+// Minimum balance required to attempt an ensemble call without falling
+// back to free mode. An ensemble pass runs 3 models on one prompt; the
+// cheapest of our three (Gemini 2.5 Flash at $0.15 in / $0.60 out) can
+// still easily cost a couple of cents per file on larger inputs. $0.05
+// is a floor that guarantees at least one small ensemble call can clear
+// without a mid-flight 402.
+const MIN_BALANCE_FOR_PAID_USD = 0.05;
+
+// Balance query cache: fresh for 60s so we don't hammer /v1/credits
+// every time a tool is invoked. Still queried on demand when the cache
+// is stale. `null` means "not yet queried this session".
+let cachedBalanceUsd: number | null = null;
+let balanceCacheTime = 0;
+const BALANCE_CACHE_TTL_MS = 60_000;
+
+/**
+ * Returns the remaining OpenRouter balance in USD, or `Infinity` if the
+ * key is unlimited (no cap), or `NaN` if the query fails / we can't tell.
+ * Callers should treat NaN as "unknown — proceed as if paid".
+ */
+async function getOpenRouterBalance(): Promise<number> {
+  if (!activeResolved || activeResolved.protocol !== "openrouter_api") {
+    return NaN;
+  }
+  const now = Date.now();
+  if (cachedBalanceUsd !== null && now - balanceCacheTime < BALANCE_CACHE_TTL_MS) {
+    return cachedBalanceUsd;
+  }
+  try {
+    // /v1/key is the cheapest probe — returns limit_remaining for capped keys.
+    const keyRes = await fetchWithTimeout(`${activeResolved.url}/v1/key`, {
+      headers: { Authorization: `Bearer ${activeResolved.authToken}` },
+    });
+    if (keyRes.ok) {
+      const body = (await keyRes.json()) as {
+        data: {
+          limit?: number | null;
+          usage?: number;
+          limit_remaining?: number | null;
+        };
+      };
+      if (
+        body.data?.limit_remaining !== null &&
+        body.data?.limit_remaining !== undefined
+      ) {
+        cachedBalanceUsd = body.data.limit_remaining;
+        balanceCacheTime = now;
+        return cachedBalanceUsd;
+      }
+      if (body.data?.limit === null) {
+        // Unlimited key — no cap. Treat as infinite for the purpose of
+        // pre-flight checks; we'll still react to 402 mid-flight.
+        cachedBalanceUsd = Infinity;
+        balanceCacheTime = now;
+        return Infinity;
+      }
+    }
+    // Fall back to /v1/credits (requires management-level key).
+    const credRes = await fetchWithTimeout(`${activeResolved.url}/v1/credits`, {
+      headers: { Authorization: `Bearer ${activeResolved.authToken}` },
+    });
+    if (credRes.ok) {
+      const body = (await credRes.json()) as {
+        data: { total_credits?: number; total_usage?: number };
+      };
+      const credits = body.data?.total_credits ?? 0;
+      const usage = body.data?.total_usage ?? 0;
+      cachedBalanceUsd = credits - usage;
+      balanceCacheTime = now;
+      return cachedBalanceUsd;
+    }
+  } catch {
+    // Non-fatal — unknown balance, proceed normally.
+  }
+  return NaN;
+}
+
+/**
+ * Decide which model (if any) to force for a given tool invocation.
+ *
+ * - If the caller explicitly set `free: true`, always return FREE_MODEL_ID.
+ * - If the backend is not OpenRouter, return undefined (no override).
+ * - If the credit-exhausted session flag is set, return FREE_MODEL_ID.
+ * - If the balance query succeeds and the remaining balance is below
+ *   MIN_BALANCE_FOR_PAID_USD, return FREE_MODEL_ID and log the fallback.
+ * - Otherwise return undefined (proceed with the normal ensemble / profile).
+ */
+async function resolveModelOverride(
+  freeRequested: boolean,
+): Promise<string | undefined> {
+  if (freeRequested) return FREE_MODEL_ID;
+  if (currentBackend.type !== "openrouter") return undefined;
+  if (creditExhausted) {
+    process.stderr.write(
+      "[llm-externalizer] Credit exhausted this session — routing through free model\n",
+    );
+    return FREE_MODEL_ID;
+  }
+  const balance = await getOpenRouterBalance();
+  if (!isFinite(balance)) return undefined; // unknown → proceed normally
+  if (balance < MIN_BALANCE_FOR_PAID_USD) {
+    process.stderr.write(
+      `[llm-externalizer] Low balance ($${balance.toFixed(4)} < $${MIN_BALANCE_FOR_PAID_USD}) — auto-falling back to free model\n`,
+    );
+    creditExhausted = true; // lock the session so we don't re-probe
+    return FREE_MODEL_ID;
+  }
+  return undefined;
+}
+
+/** Invalidate the cached balance so the next check hits the API fresh. */
+function invalidateBalanceCache(): void {
+  cachedBalanceUsd = null;
+  balanceCacheTime = 0;
+}
 
 // ── Active request tracking ─────────────────────────────────────────
 // Tracks in-flight LLM requests so `reset` can wait for them to drain.
@@ -2790,9 +2924,16 @@ async function chatCompletionJSON(
     baseBody.plugins = [{ id: "response-healing" }];
   }
 
-  // Reasoning ladder (OpenRouter only): xhigh → high → none
+  // Reasoning ladder (OpenRouter only): xhigh → high → none.
+  // IMPORTANT: when jsonSchema is requested, we skip reasoning entirely.
+  // Structured output (json_schema + response-healing) is fragile across
+  // providers, and combining it with `reasoning: { effort }` is untested
+  // on most models — some return reasoning traces inlined into the JSON
+  // content field, which breaks JSON.parse. The structured-output path
+  // already delivers precise output via schema enforcement, so it doesn't
+  // benefit much from reasoning anyway.
   const reasoningLadder =
-    currentBackend.type === "openrouter"
+    currentBackend.type === "openrouter" && !options.jsonSchema
       ? reasoningLadderForModel(conn.model || "")
       : [null];
 
@@ -2931,9 +3072,20 @@ function formatFooter(
     filePath,
   });
 
-  // Only show truncation warning to the caller — everything else goes to logs/statusline
-  if (resp.truncated)
-    return "\n\n---\n⚠ TRUNCATED (partial result due to timeout)";
+  // Body already carries a specific label for non-success finish reasons
+  // (TRUNCATED / EMPTY RESPONSE / BLOCKED / UPSTREAM ERROR / INCOMPLETE) —
+  // don't append a generic "partial result due to timeout" footer that
+  // contradicts the actual cause. Only fall back to the generic footer
+  // when the body is missing a label (e.g., older code paths or a real
+  // network timeout surfaced directly by fetch).
+  if (resp.truncated) {
+    const hasLabel = /\*\*(TRUNCATED|EMPTY RESPONSE|BLOCKED|UPSTREAM ERROR|INCOMPLETE)\*\*/i.test(
+      resp.content,
+    );
+    if (!hasLabel) {
+      return "\n\n---\n⚠ Request did not complete cleanly (partial result or timeout).";
+    }
+  }
   return "";
 }
 
@@ -3014,12 +3166,21 @@ function classifyError(error: unknown): {
       serviceLevel: true,
       reason: "Authentication failed (invalid API key)",
     };
-  if (/API error 402\b/.test(msg))
+  if (/API error 402\b/.test(msg)) {
+    // Credit exhausted. Flag the session so all subsequent calls go
+    // through the free model automatically. This specific call is also
+    // retried at the chatCompletionWithRetry layer with FREE_MODEL_ID,
+    // so we report it as recoverable here — the caller does not need
+    // to abort the batch. The 402 is still surfaced to stderr by the
+    // caller, and the free-mode fallback is logged separately.
+    creditExhausted = true;
+    invalidateBalanceCache();
     return {
-      unrecoverable: true,
-      serviceLevel: true,
-      reason: "Payment required (credit exhausted on OpenRouter)",
+      unrecoverable: false,
+      serviceLevel: false,
+      reason: "Payment required (credit exhausted on OpenRouter) — switching to free model",
     };
+  }
   if (/API error 403\b/.test(msg))
     return {
       unrecoverable: true,
@@ -3586,9 +3747,41 @@ async function chatCompletionWithRetry(
       // Batch-level heartbeat in rateLimitedParallel keeps MCP alive.
       resp = await chatCompletionSimple(messages, options);
     } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+
+      // 402 Payment Required — credit exhausted mid-flight. Flag the session
+      // and immediately retry this call with the free model, no cooldown.
+      // This is the promised "never fail, switch to free" behavior.
+      if (
+        /API error 402\b/.test(errMsg) &&
+        currentBackend.type === "openrouter" &&
+        options.model !== FREE_MODEL_ID
+      ) {
+        creditExhausted = true;
+        invalidateBalanceCache();
+        process.stderr.write(
+          `[llm-externalizer] Credit exhausted (402) — retrying call with free model (${FREE_MODEL_ID})\n`,
+        );
+        try {
+          return await chatCompletionSimple(messages, {
+            ...options,
+            model: FREE_MODEL_ID,
+          });
+        } catch (freeErr) {
+          // Free model also failed. Count as a regular failure and continue
+          // the normal retry loop so it either recovers or surfaces a proper
+          // error label. Don't mask the free-mode error.
+          const freeMsg =
+            freeErr instanceof Error ? freeErr.message : String(freeErr);
+          process.stderr.write(
+            `[llm-externalizer] Free-mode fallback also failed: ${freeMsg}\n`,
+          );
+          // Fall through to standard error handling below
+        }
+      }
+
       // Network/connection error — count as failure
       recordServiceFailure();
-      const errMsg = err instanceof Error ? err.message : String(err);
       if (attempt < MAX_TRUNCATION_RETRIES) {
         process.stderr.write(
           `[llm-externalizer] Request error: ${errMsg} — retrying (${attempt + 1}/${MAX_TRUNCATION_RETRIES})\n`,
@@ -3646,6 +3839,32 @@ async function chatCompletionWithRetry(
 
     const isEmpty = resp.content.trim().length === 0;
     const reasonLabel = resp.finishReason || "empty";
+
+    // Empty-response escalation: on OpenRouter, silently-empty 200 responses
+    // often indicate the reasoning field was accepted but the model spun in
+    // thinking mode without producing output. The per-attempt ladder inside
+    // chatCompletionSimple only downgrades on 400 errors, so we mutate the
+    // shared MODEL_REASONING_CACHE here to force a lower effort next attempt.
+    // xhigh -> high -> none across successive retries.
+    if (
+      isEmpty &&
+      currentBackend.type === "openrouter" &&
+      options.model &&
+      attempt < MAX_TRUNCATION_RETRIES
+    ) {
+      const current = MODEL_REASONING_CACHE.get(options.model);
+      if (current === undefined || current === "xhigh") {
+        MODEL_REASONING_CACHE.set(options.model, "high");
+        process.stderr.write(
+          `[llm-externalizer] Empty response on ${options.model} — downgrading reasoning cache to high\n`,
+        );
+      } else if (current === "high") {
+        MODEL_REASONING_CACHE.set(options.model, "none");
+        process.stderr.write(
+          `[llm-externalizer] Empty response on ${options.model} — disabling reasoning\n`,
+        );
+      }
+    }
 
     if (attempt < MAX_TRUNCATION_RETRIES) {
       process.stderr.write(
@@ -5374,9 +5593,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const outputDir = typeof rawOutputDir === "string" && rawOutputDir.trim()
       ? resolve(rawOutputDir.trim())
       : undefined;
-    const modelOverride = (args as Record<string, unknown>)?.free === true ? FREE_MODEL_ID : undefined;
+    // resolveModelOverride handles: explicit free=true, credit-exhausted
+    // session flag, and pre-flight balance check. If the OpenRouter balance
+    // drops below MIN_BALANCE_FOR_PAID_USD, this tool call (and all later
+    // ones in the session) will automatically route through FREE_MODEL_ID
+    // instead of the paid ensemble. Never throws — always returns something.
+    const freeRequested = (args as Record<string, unknown>)?.free === true;
+    const modelOverride = await resolveModelOverride(freeRequested);
     if (modelOverride) {
-      process.stderr.write(`[llm-externalizer] Free mode: using ${modelOverride}\n`);
+      process.stderr.write(
+        `[llm-externalizer] Routing through ${modelOverride}${freeRequested ? " (free requested)" : " (auto-fallback)"}\n`,
+      );
     }
 
     try {

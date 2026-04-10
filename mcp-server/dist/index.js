@@ -29370,6 +29370,10 @@ function reasoningLadderForModel(modelId) {
   if (!modelId) return [null];
   const cached2 = MODEL_REASONING_CACHE.get(modelId);
   if (cached2 === "none") return [null];
+  if (modelId === "nvidia/nemotron-3-super-120b-a12b:free") {
+    if (cached2 === "high") return [{ effort: "medium", exclude: true }, null];
+    return [{ effort: "medium", exclude: true }, null];
+  }
   if (cached2 === "high") return [{ effort: "high", exclude: true }, null];
   return [
     { effort: "xhigh", exclude: true },
@@ -29592,6 +29596,76 @@ var session = {
   totalCost: 0
   // Cumulative cost in USD from OpenRouter usage.cost
 };
+var creditExhausted = false;
+var MIN_BALANCE_FOR_PAID_USD = 0.05;
+var cachedBalanceUsd = null;
+var balanceCacheTime = 0;
+var BALANCE_CACHE_TTL_MS = 6e4;
+async function getOpenRouterBalance() {
+  if (!activeResolved || activeResolved.protocol !== "openrouter_api") {
+    return NaN;
+  }
+  const now = Date.now();
+  if (cachedBalanceUsd !== null && now - balanceCacheTime < BALANCE_CACHE_TTL_MS) {
+    return cachedBalanceUsd;
+  }
+  try {
+    const keyRes = await fetchWithTimeout(`${activeResolved.url}/v1/key`, {
+      headers: { Authorization: `Bearer ${activeResolved.authToken}` }
+    });
+    if (keyRes.ok) {
+      const body = await keyRes.json();
+      if (body.data?.limit_remaining !== null && body.data?.limit_remaining !== void 0) {
+        cachedBalanceUsd = body.data.limit_remaining;
+        balanceCacheTime = now;
+        return cachedBalanceUsd;
+      }
+      if (body.data?.limit === null) {
+        cachedBalanceUsd = Infinity;
+        balanceCacheTime = now;
+        return Infinity;
+      }
+    }
+    const credRes = await fetchWithTimeout(`${activeResolved.url}/v1/credits`, {
+      headers: { Authorization: `Bearer ${activeResolved.authToken}` }
+    });
+    if (credRes.ok) {
+      const body = await credRes.json();
+      const credits = body.data?.total_credits ?? 0;
+      const usage = body.data?.total_usage ?? 0;
+      cachedBalanceUsd = credits - usage;
+      balanceCacheTime = now;
+      return cachedBalanceUsd;
+    }
+  } catch {
+  }
+  return NaN;
+}
+async function resolveModelOverride(freeRequested) {
+  if (freeRequested) return FREE_MODEL_ID;
+  if (currentBackend.type !== "openrouter") return void 0;
+  if (creditExhausted) {
+    process.stderr.write(
+      "[llm-externalizer] Credit exhausted this session \u2014 routing through free model\n"
+    );
+    return FREE_MODEL_ID;
+  }
+  const balance = await getOpenRouterBalance();
+  if (!isFinite(balance)) return void 0;
+  if (balance < MIN_BALANCE_FOR_PAID_USD) {
+    process.stderr.write(
+      `[llm-externalizer] Low balance ($${balance.toFixed(4)} < $${MIN_BALANCE_FOR_PAID_USD}) \u2014 auto-falling back to free model
+`
+    );
+    creditExhausted = true;
+    return FREE_MODEL_ID;
+  }
+  return void 0;
+}
+function invalidateBalanceCache() {
+  cachedBalanceUsd = null;
+  balanceCacheTime = 0;
+}
 var _activeRequests = 0;
 var _activeRequestsDrained = null;
 function trackRequestStart() {
@@ -30113,7 +30187,7 @@ async function chatCompletionJSON(messages, options = {}) {
     };
     baseBody.plugins = [{ id: "response-healing" }];
   }
-  const reasoningLadder = currentBackend.type === "openrouter" ? reasoningLadderForModel(conn.model || "") : [null];
+  const reasoningLadder = currentBackend.type === "openrouter" && !options.jsonSchema ? reasoningLadderForModel(conn.model || "") : [null];
   const jsonStartTime = Date.now();
   let progressTimer;
   if (options.onProgress) {
@@ -30215,8 +30289,14 @@ function formatFooter(resp, toolName, filePath) {
     usage: resp.usage,
     filePath
   });
-  if (resp.truncated)
-    return "\n\n---\n\u26A0 TRUNCATED (partial result due to timeout)";
+  if (resp.truncated) {
+    const hasLabel = /\*\*(TRUNCATED|EMPTY RESPONSE|BLOCKED|UPSTREAM ERROR|INCOMPLETE)\*\*/i.test(
+      resp.content
+    );
+    if (!hasLabel) {
+      return "\n\n---\n\u26A0 Request did not complete cleanly (partial result or timeout).";
+    }
+  }
   return "";
 }
 var OUTPUT_DIR = process.env.LLM_OUTPUT_DIR || join2(process.cwd(), "reports_dev", "llm_externalizer");
@@ -30265,12 +30345,15 @@ function classifyError(error2) {
       serviceLevel: true,
       reason: "Authentication failed (invalid API key)"
     };
-  if (/API error 402\b/.test(msg))
+  if (/API error 402\b/.test(msg)) {
+    creditExhausted = true;
+    invalidateBalanceCache();
     return {
-      unrecoverable: true,
-      serviceLevel: true,
-      reason: "Payment required (credit exhausted on OpenRouter)"
+      unrecoverable: false,
+      serviceLevel: false,
+      reason: "Payment required (credit exhausted on OpenRouter) \u2014 switching to free model"
     };
+  }
   if (/API error 403\b/.test(msg))
     return {
       unrecoverable: true,
@@ -30625,8 +30708,28 @@ async function chatCompletionWithRetry(messages, options) {
     try {
       resp = await chatCompletionSimple(messages, options);
     } catch (err) {
-      recordServiceFailure();
       const errMsg = err instanceof Error ? err.message : String(err);
+      if (/API error 402\b/.test(errMsg) && currentBackend.type === "openrouter" && options.model !== FREE_MODEL_ID) {
+        creditExhausted = true;
+        invalidateBalanceCache();
+        process.stderr.write(
+          `[llm-externalizer] Credit exhausted (402) \u2014 retrying call with free model (${FREE_MODEL_ID})
+`
+        );
+        try {
+          return await chatCompletionSimple(messages, {
+            ...options,
+            model: FREE_MODEL_ID
+          });
+        } catch (freeErr) {
+          const freeMsg = freeErr instanceof Error ? freeErr.message : String(freeErr);
+          process.stderr.write(
+            `[llm-externalizer] Free-mode fallback also failed: ${freeMsg}
+`
+          );
+        }
+      }
+      recordServiceFailure();
       if (attempt < MAX_TRUNCATION_RETRIES) {
         process.stderr.write(
           `[llm-externalizer] Request error: ${errMsg} \u2014 retrying (${attempt + 1}/${MAX_TRUNCATION_RETRIES})
@@ -30672,6 +30775,22 @@ async function chatCompletionWithRetry(messages, options) {
     recordServiceFailure();
     const isEmpty = resp.content.trim().length === 0;
     const reasonLabel = resp.finishReason || "empty";
+    if (isEmpty && currentBackend.type === "openrouter" && options.model && attempt < MAX_TRUNCATION_RETRIES) {
+      const current = MODEL_REASONING_CACHE.get(options.model);
+      if (current === void 0 || current === "xhigh") {
+        MODEL_REASONING_CACHE.set(options.model, "high");
+        process.stderr.write(
+          `[llm-externalizer] Empty response on ${options.model} \u2014 downgrading reasoning cache to high
+`
+        );
+      } else if (current === "high") {
+        MODEL_REASONING_CACHE.set(options.model, "none");
+        process.stderr.write(
+          `[llm-externalizer] Empty response on ${options.model} \u2014 disabling reasoning
+`
+        );
+      }
+    }
     if (attempt < MAX_TRUNCATION_RETRIES) {
       process.stderr.write(
         `[llm-externalizer] Empty/invalid response (finish_reason=${reasonLabel}, empty=${isEmpty}) \u2014 retrying (${attempt + 1}/${MAX_TRUNCATION_RETRIES})
@@ -31963,10 +32082,13 @@ Settings file: ${SETTINGS_FILE}`
     if (isLLMTool) trackRequestStart();
     const rawOutputDir = args?.output_dir;
     const outputDir = typeof rawOutputDir === "string" && rawOutputDir.trim() ? resolve2(rawOutputDir.trim()) : void 0;
-    const modelOverride = args?.free === true ? FREE_MODEL_ID : void 0;
+    const freeRequested = args?.free === true;
+    const modelOverride = await resolveModelOverride(freeRequested);
     if (modelOverride) {
-      process.stderr.write(`[llm-externalizer] Free mode: using ${modelOverride}
-`);
+      process.stderr.write(
+        `[llm-externalizer] Routing through ${modelOverride}${freeRequested ? " (free requested)" : " (auto-fallback)"}
+`
+      );
     }
     try {
       switch (name) {
