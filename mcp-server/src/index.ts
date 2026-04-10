@@ -299,6 +299,7 @@ function readFileAsCodeBlock(
   redact?: boolean,
   maxBytes?: number,
   regexRedact?: RegexRedactOpts | null,
+  tagPrefix: "" | "specs-" = "",
 ): string {
   // H5: Validate maxBytes — reject Infinity, 0, or negative
   const rawLimit = maxBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
@@ -346,8 +347,11 @@ function readFileAsCodeBlock(
   const lang = langOverride || detectLang(filePath);
   const fence = fenceBackticks(content);
   // Path and content wrapped in separate XML tags for unambiguous delimitation.
-  // Code fence inside provides language hint.
-  return `<filename>\n${filePath}\n</filename>\n<file-content>\n${fence}${lang}\n${content}\n${fence}\n</file-content>`;
+  // tagPrefix="specs-" is used for spec files (check_against_specs) to distinguish
+  // them from source files in the same prompt.
+  const nameTag = `${tagPrefix}filename`;
+  const contentTag = `${tagPrefix}file-content`;
+  return `<${nameTag}>\n${filePath}\n</${nameTag}>\n<${contentTag}>\n${fence}${lang}\n${content}\n${fence}\n</${contentTag}>`;
 }
 
 // ── Binary extension detection ───────────────────────────────────────
@@ -9074,7 +9078,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Read the spec file
         let csSpecBlock: string;
         try {
-          csSpecBlock = readFileAsCodeBlock(csSpecPath, undefined, csRedact, csBudgetBytes);
+          csSpecBlock = readFileAsCodeBlock(csSpecPath, undefined, csRedact, csBudgetBytes, null, "specs-");
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
           return {
@@ -9118,6 +9122,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           "4. If a source file has NO violations, explicitly state: 'CLEAN — no spec violations found.'\n" +
           "5. At the end, provide a SUMMARY with total violation counts by severity.\n" +
           "6. Be specific and actionable — reference concrete function names, variable names, and code patterns.\n" +
+          "\nSPEC FORMAT: The specification file is wrapped in <specs-filename> and <specs-file-content> tags (distinct from source file tags).\n" +
           FILE_FORMAT_EXAMPLE + BREVITY_RULES;
 
         // Compute prompt bytes for budget
