@@ -1,6 +1,16 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.49] - 2026-04-10
+
+### Changed
+
+- Remove all streaming code — SSE, timedRead, reasoning detection
+
+Deleted chatCompletionStreaming (~180 lines), timedRead helper,
+READ_CHUNK_TIMEOUT_MS, reasoningDetected field. All LLM requests
+now use chatCompletionSimple (stream: false, single JSON response).
+
 ## [3.9.48] - 2026-04-10
 
 ### Changed
