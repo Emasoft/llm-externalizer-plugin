@@ -1,6 +1,51 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.82] - 2026-04-10
+
+### Changed
+
+- Separate retry budget for empty responses (15 attempts, 2s fixed wait)
+
+OpenRouter's free-tier models (notably Nemotron 3 Super :free) have
+~96% per-request reliability due to cold-start and scaling behavior
+documented in their error reference as 'no content generated'. The
+recommended workaround is a retry mechanism, but our previous
+MAX_TRUNCATION_RETRIES = 3 cap gave up too early for this failure
+mode — most empty-response files would succeed on attempt 4 or 5.
+
+New retry loop structure:
+
+- Generic failures (network errors, finishReason=error, unknown
+  values): MAX_TRUNCATION_RETRIES = 3 attempts (unchanged)
+- Empty responses on OpenRouter (finishReason=empty/stop with zero
+  content): MAX_EMPTY_RESPONSE_RETRIES = 15 attempts with a fixed
+  2-second wait between each
+
+Fixed interval, not exponential backoff. Empty responses are
+cold-start / scaling signals, not rate-limit signals — exponential
+backoff would be the wrong primitive (it makes us wait longer
+precisely when the provider has had more time to warm up). A
+constant 2s gap just gives the upstream endpoint a moment to finish
+whatever scaling it was doing, without piling requests on top of
+each other.
+
+Two counters (genericAttempts and emptyAttempts) track each budget
+separately so a mix of transient network errors and empty responses
+doesn't exhaust either budget prematurely. The retry loop now uses
+`while (true)` with dynamic cap selection instead of a fixed-range
+for loop.
+
+The reasoning-cache escalation (xhigh -> high -> none) still
+happens on empty responses as before, so a model that can't
+tolerate xhigh reasoning will step down over the first few retries
+and the remaining attempts run with less aggressive settings.
+
+Service-health cooldown still fires if the global consecutive
+failure threshold is hit, so a persistent provider outage eventually
+aborts with a proper error instead of looping forever. That's the
+hard safety net.
+
 ## [3.9.81] - 2026-04-10
 
 ### Changed
