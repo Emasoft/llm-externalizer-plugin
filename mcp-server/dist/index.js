@@ -30051,6 +30051,39 @@ async function chatCompletionStreaming(messages, options = {}) {
   }
   return { content, model, usage, finishReason, truncated, reasoningDetected: reasoningActive };
 }
+async function chatCompletionSimple(messages, options = {}) {
+  const conn = await resolveConnection(options);
+  const body = {
+    messages,
+    temperature: options.temperature ?? DEFAULT_TEMPERATURE,
+    max_tokens: options.maxTokens ?? resolveDefaultMaxTokens(),
+    stream: false,
+    // Explicit text output — no SSE, single JSON response
+    response_format: { type: "text" }
+  };
+  if (conn.model) body.model = conn.model;
+  const startTime = Date.now();
+  const res = await fetchWithRetry429(
+    conn.url,
+    {
+      method: "POST",
+      headers: conn.headers,
+      body: JSON.stringify(body)
+    },
+    conn.timeout,
+    startTime
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`API error ${res.status} (${currentBackend.type}): ${text}`);
+  }
+  const data = await res.json();
+  const content = data.choices?.[0]?.message?.content ?? "";
+  const model = data.model ?? options.model ?? "unknown";
+  const finishReason = data.choices?.[0]?.finish_reason ?? "";
+  const usage = data.usage;
+  return { content, model, usage, finishReason, truncated: false };
+}
 var FIX_CODE_SCHEMA = {
   name: "fix_code_response",
   strict: true,
@@ -30638,10 +30671,11 @@ async function chatCompletionWithRetry(messages, options) {
       truncated: true
     };
   }
+  const useSimple = options.model === FREE_MODEL_ID;
   for (let attempt = 0; attempt <= MAX_TRUNCATION_RETRIES; attempt++) {
     let resp;
     try {
-      resp = await chatCompletionStreaming(messages, options);
+      resp = useSimple ? await chatCompletionSimple(messages, options) : await chatCompletionStreaming(messages, options);
     } catch (err) {
       recordServiceFailure();
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -31917,7 +31951,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.45" },
+  { name: "llm-externalizer", version: "3.9.46" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {

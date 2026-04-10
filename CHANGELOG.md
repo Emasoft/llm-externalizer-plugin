@@ -1,6 +1,17 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.46] - 2026-04-10
+
+### Changed
+
+- Add non-streaming path for free model, no SSE parsing
+
+New chatCompletionSimple: stream=false, response_format=text,
+single JSON response. Used automatically when modelOverride is
+set (free mode). No progress tracking, no SSE chunk parsing,
+no reasoning token detection needed. Simpler and more reliable.
+
 ## [3.9.45] - 2026-04-09
 
 ### Changed
