@@ -1496,7 +1496,6 @@ const CONNECT_TIMEOUT_MS = 5000;
 // The MCP tool-call timeout is inactivity-based, kept alive by heartbeat — no hard cap needed.
 // Default: profile timeout (300s). Extended dynamically when reasoning tokens are flowing.
 let SOFT_TIMEOUT_MS = (activeResolved?.timeout ?? 300) * 1000;
-const READ_CHUNK_TIMEOUT_MS = 30_000; // max wait for a single SSE chunk (stall detection)
 let FALLBACK_CONTEXT_LENGTH = activeResolved?.contextWindow || 100000;
 const MODEL_CACHE_TTL_MS = 3600_000; // 1 hour TTL for OpenRouter model list cache
 
@@ -2180,8 +2179,6 @@ interface StreamingResult {
   };
   finishReason: string;
   truncated: boolean;
-  /** True if reasoning/thinking tokens were detected during streaming. */
-  reasoningDetected?: boolean;
 }
 
 interface ModelInfo {
@@ -2213,21 +2210,6 @@ async function fetchWithTimeout(
  * Read from a stream with a per-chunk timeout.
  * Prevents hanging forever if the LLM stalls mid-generation.
  */
-async function timedRead(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  timeoutMs: number,
-): Promise<{ done: boolean; value?: Uint8Array } | "timeout"> {
-  let timer: ReturnType<typeof setTimeout>;
-  const timeout = new Promise<"timeout">((resolve) => {
-    timer = setTimeout(() => resolve("timeout"), timeoutMs);
-  });
-  try {
-    return await Promise.race([reader.read(), timeout]);
-  } finally {
-    clearTimeout(timer!);
-  }
-}
-
 // ── LM Studio native API (/api/v1/chat) ──────────────────────────────
 // LM Studio is the only local backend with MCP support, reasoning control,
 // model load events, and prompt processing events via its native API.
@@ -2490,198 +2472,9 @@ function makeProgressFn(
   };
 }
 
-/**
- * Streaming chat completion with soft timeout.
- *
- * Uses SSE streaming (`stream: true`) so tokens arrive incrementally.
- * If we approach the MCP 60s request timeout (soft limit at 55s, configurable via LM_TIMEOUT), we
- * return whatever content we have so far with `truncated: true`.
- * This means large code reviews return partial results instead of nothing.
- */
-async function chatCompletionStreaming(
-  messages: ChatMessage[],
-  options: {
-    temperature?: number;
-    maxTokens?: number;
-    model?: string;
-    onProgress?: ProgressFn;
-  } = {},
-): Promise<StreamingResult> {
-  const conn = await resolveConnection(options);
-
-  // Route through LM Studio native API when detected
-  if (conn.isNative) {
-    return chatCompletionNative(conn, messages, options);
-  }
-
-  const body: Record<string, unknown> = {
-    messages,
-    temperature: options.temperature ?? DEFAULT_TEMPERATURE,
-    max_tokens: options.maxTokens ?? resolveDefaultMaxTokens(),
-    stream: true,
-    // Request usage stats in the final SSE chunk (OpenAI-compatible, supported by OpenRouter)
-    stream_options: { include_usage: true },
-  };
-  if (conn.model) body.model = conn.model;
-
-  const startTime = Date.now();
-  const fetchOpts = {
-    method: "POST",
-    headers: conn.headers,
-    body: JSON.stringify(body),
-  };
-
-  const res = await fetchWithRetry429(
-    conn.url,
-    fetchOpts,
-    conn.timeout,
-    startTime,
-  );
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(
-      `API error ${res.status} (${currentBackend.type}): ${text}`,
-    );
-  }
-
-  if (!res.body) {
-    throw new Error(
-      "Response body is null — streaming not supported by endpoint",
-    );
-  }
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let content = "";
-  let model = "";
-  let usage: StreamingResult["usage"];
-  let finishReason = "";
-  let truncated = false;
-  let malformedChunks = 0;
-  let buffer = "";
-  let reasoningActive = false; // true if we've seen reasoning/thinking tokens
-  let lastActivityAt = startTime; // last time ANY token (reasoning or content) was received
-  // L5: Dynamic progress interval — at least 2 updates before timeout
-  const progressInterval = Math.min(10_000, Math.floor(conn.timeout / 3));
-  let lastProgressAt = startTime;
-  const onProgress = options.onProgress;
-
-  try {
-    while (true) {
-      // Check soft timeout before each read.
-      // If reasoning tokens are actively flowing, suspend the timeout — the model is working,
-      // not stalled. Only enforce timeout when there's been no activity for READ_CHUNK_TIMEOUT_MS.
-      const elapsed = Date.now() - startTime;
-      const sinceLastActivity = Date.now() - lastActivityAt;
-      const isActivelyReasoning = reasoningActive && sinceLastActivity < READ_CHUNK_TIMEOUT_MS;
-      if (elapsed > conn.timeout && !isActivelyReasoning) {
-        truncated = true;
-        process.stderr.write(
-          `[llm-externalizer] Soft timeout at ${elapsed}ms, returning ${content.length} chars of partial content\n`,
-        );
-        break;
-      }
-
-      // Send periodic progress notification to prevent MCP client timeout
-      if (onProgress && Date.now() - lastProgressAt >= progressInterval) {
-        const pct = isActivelyReasoning
-          ? 50 // reasoning in progress — don't show misleading % based on wall clock
-          : Math.min(90, Math.round((elapsed / conn.timeout) * 100));
-        const msg = isActivelyReasoning
-          ? `Reasoning… ${Math.round(elapsed / 1000)}s (model is thinking)`
-          : `Streaming… ${content.length} chars received`;
-        onProgress(pct, 100, msg);
-        lastProgressAt = Date.now();
-      }
-
-      // Read with per-chunk timeout (handles stalled generation).
-      // During reasoning, use the full chunk timeout — don't cap by remaining wall-clock.
-      const remaining = conn.timeout - elapsed;
-      const chunkTimeout = isActivelyReasoning
-        ? READ_CHUNK_TIMEOUT_MS
-        : Math.min(READ_CHUNK_TIMEOUT_MS, Math.max(1000, remaining));
-      const result = await timedRead(reader, chunkTimeout);
-
-      if (result === "timeout") {
-        truncated = true;
-        process.stderr.write(
-          `[llm-externalizer] Chunk read timeout, returning ${content.length} chars of partial content\n`,
-        );
-        break;
-      }
-
-      if (result.done) break;
-
-      buffer += decoder.decode(result.value, { stream: true });
-
-      // Parse SSE lines
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || ""; // Keep incomplete line in buffer
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith("data:")) continue;
-        // SSE spec: space after colon is optional — handle both "data: X" and "data:X"
-        const payload = trimmed.startsWith("data: ")
-          ? trimmed.slice(6)
-          : trimmed.slice(5);
-        if (payload === "[DONE]") continue;
-
-        try {
-          const json = JSON.parse(payload);
-          if (json.model) model = json.model;
-
-          const delta = json.choices?.[0]?.delta;
-          // Track reasoning/thinking tokens — the model is working, not stalled.
-          // These are NOT included in the output but their presence extends the timeout.
-          const reasoning = delta?.reasoning || delta?.reasoning_content || "";
-          if (reasoning) {
-            reasoningActive = true;
-            lastActivityAt = Date.now();
-          }
-          // Only include the model's final answer (delta.content).
-          const text = delta?.content || "";
-          if (text) {
-            content += text;
-            lastActivityAt = Date.now();
-          }
-
-          const reason = json.choices?.[0]?.finish_reason;
-          if (reason) finishReason = reason;
-
-          // Some endpoints include usage in the final streaming chunk
-          if (json.usage) usage = json.usage;
-        } catch {
-          // H4: Count malformed chunks — too many signals data corruption
-          malformedChunks++;
-        }
-      }
-    }
-  } catch {
-    // L4: Connection drop mid-stream — mark as truncated if we have partial content
-    if (content.length > 0) truncated = true;
-  } finally {
-    // Cancel pending reads to free the TCP connection, then release the lock.
-    // Fire-and-forget cancel() — awaiting it can hang on some runtimes.
-    reader.cancel().catch(() => {});
-    reader.releaseLock();
-  }
-
-  // H4: If >5% of chunks were malformed, flag potential data integrity issue
-  if (malformedChunks > 0 && content.length > 0) {
-    process.stderr.write(
-      `[llm-externalizer] WARNING: ${malformedChunks} malformed SSE chunk(s) skipped\n`,
-    );
-  }
-
-  return { content, model, usage, finishReason, truncated, reasoningDetected: reasoningActive };
-}
-
 // ── Non-streaming text completion ────────────────────────────────────
-// Simple request/response — no SSE, no chunk parsing, no progress tracking.
-// Used for free/cheap models that may not handle streaming well.
-// Returns the same StreamingResult interface for compatibility.
+// All LLM requests use this. stream=false, single JSON response.
+// Batch-level heartbeat in rateLimitedParallel keeps MCP connection alive.
 
 async function chatCompletionSimple(
   messages: ChatMessage[],
