@@ -25,7 +25,10 @@ import {
   fetchOpenRouterModelInfo,
   formatModelInfoTable,
   formatModelInfoMarkdown,
+  formatModelInfoJson,
 } from "./or-model-info.js";
+import { writeFileSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -303,14 +306,42 @@ async function cmdModelInfo(modelId: string, flags: Record<string, string>): Pro
     die(`${result.error}${result.status ? ` (status ${result.status})` : ""}`);
   }
 
-  // Render as table by default, markdown on --markdown / --plain, no-color on --no-color
+  // Render mode: table (default) | markdown | json.
+  //
+  // --json accepts an optional filepath argument:
+  //   --json                  → print JSON to stdout
+  //   --json output.json      → write JSON to output.json, stdout shows the path
+  //
+  // parseFlags already handles this: `--json foo.json` → flags.json = "foo.json",
+  // `--json` alone → flags.json = "true".
+  const jsonFlag = flags.json;
+  const useJson = jsonFlag !== undefined;
   const useMarkdown = flags.markdown === "true" || flags.plain === "true";
   const useColor =
     flags["no-color"] !== "true" && !process.env.NO_COLOR && process.stdout.isTTY !== false;
 
-  const text = useMarkdown
-    ? formatModelInfoMarkdown(result.data, modelId)
-    : formatModelInfoTable(result.data, modelId, useColor);
+  let text: string;
+  if (useJson) {
+    text = formatModelInfoJson(result.data, modelId);
+    // If a filepath was passed alongside --json, write to that file.
+    // "true" is the sentinel parseFlags uses when the flag has no argument.
+    if (jsonFlag && jsonFlag !== "true") {
+      const filepath = resolvePath(jsonFlag);
+      try {
+        writeFileSync(filepath, text, "utf-8");
+      } catch (err) {
+        die(
+          `Failed to write JSON to '${filepath}': ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      info(`JSON written to ${filepath}`);
+      return;
+    }
+  } else if (useMarkdown) {
+    text = formatModelInfoMarkdown(result.data, modelId);
+  } else {
+    text = formatModelInfoTable(result.data, modelId, useColor);
+  }
   info(text);
 }
 
@@ -324,7 +355,7 @@ Usage:
   llm-externalizer profile edit <name> --field <value> [...]
   llm-externalizer profile remove <name>
   llm-externalizer profile rename <old-name> <new-name>
-  llm-externalizer model-info <model-id> [--markdown] [--no-color]
+  llm-externalizer model-info <model-id> [--markdown | --json [file]] [--no-color]
 
 Modes:
   local             Sequential requests to a local server

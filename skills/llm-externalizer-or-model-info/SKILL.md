@@ -27,9 +27,10 @@ Copy this checklist and track your progress:
 
 1. [ ] Parse the user's prompt for the **exact OpenRouter model id** (first arg) —
        case-sensitive, vendor-prefixed, with any `:free` / `:thinking` / `:beta`
-       suffix. Also scan the args for optional flags:
-       - `--no-color` / `--nocolor` / `--bw` / `--mono` → forward `--no-color` to CLI
-       - `--markdown` / `--plain` → forward `--markdown` to CLI
+       suffix. Also scan the args for optional format flags:
+       - `--no-color` / `--nocolor` / `--bw` / `--mono` → forward `--no-color` (b/w terminals)
+       - `--markdown` / `--plain` → forward `--markdown` (pipe-delimited markdown table)
+       - `--json` / `--raw` → forward `--json` (raw OpenRouter JSON for scripts/jq)
 2. [ ] If the user gave only a partial name, ask for the full id.
 3. [ ] Run: `npx llm-externalizer model-info "<exact-id>" [flags]`
        Default (no flags) keeps colors ON — Claude Code renders ANSI codes so bright
@@ -44,40 +45,27 @@ Copy this checklist and track your progress:
 
 ## Output
 
-An ANSI-colored Unicode-bordered table with one section per endpoint (provider):
-context_length, max_completion_tokens, max_prompt_tokens, quantization, pricing
-(converted to $/M tokens), uptime (30m + 1d), latency percentiles, throughput
-percentiles — followed by a grid of supported_parameters with green checkmarks.
-Color key: green = good values, yellow = borderline, red = poor.
-
-Pass `--markdown` for plain markdown instead (useful when piping to another tool).
-Pass `--no-color` to suppress ANSI codes for log capture. Results are live — no
-caching. Safe to call repeatedly.
+Per endpoint: context, max_completion, quantization, capability flags (reasoning,
+tools, structured output, caching), pricing ($/M tokens), uptime (5m/30m/1d),
+latency + throughput percentiles, supported_parameters. Live data, no cache.
 
 ## Examples
 
-Verify Nemotron's supported parameters:
-
 ```bash
+# Default colored table
 npx llm-externalizer model-info "nvidia/nemotron-3-super-120b-a12b:free"
-```
 
-Compare providers hosting Llama 3.3:
-
-```bash
+# Compare providers (Llama 3.3 has 17 endpoints)
 npx llm-externalizer model-info "meta-llama/llama-3.3-70b-instruct"
-```
 
-Check reasoning support on Claude, capture to a file without colors:
-
-```bash
-npx llm-externalizer model-info "anthropic/claude-sonnet-4.5" --no-color > claude-info.txt
-```
-
-Get plain markdown for further processing:
-
-```bash
+# Markdown table — renders in any markdown viewer
 npx llm-externalizer model-info "google/gemini-2.5-flash" --markdown
+
+# Raw JSON to stdout (for jq / scripts)
+npx llm-externalizer model-info "anthropic/claude-sonnet-4.5" --json
+
+# Raw JSON written to a file
+npx llm-externalizer model-info "x-ai/grok-4.1-fast" --json grok-info.json
 ```
 
 See [references/example-output.md](references/example-output.md) for a full sample:

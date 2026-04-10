@@ -28455,9 +28455,13 @@ function formatPricePerM(s) {
   if (n === 0) return "free";
   return `$${(n * 1e6).toFixed(4)}/M`;
 }
+function mdCell(s) {
+  return s.replace(/\|/g, "\\|");
+}
 function formatModelInfoMarkdown(data, modelId) {
   const lines = [];
   lines.push(`# ${data.name ?? data.id ?? modelId}`);
+  lines.push("");
   lines.push(`**id**: \`${data.id ?? modelId}\``);
   if (data.architecture) {
     const arch = data.architecture;
@@ -28470,53 +28474,85 @@ function formatModelInfoMarkdown(data, modelId) {
   }
   if (data.description) {
     const desc = data.description.replace(/\s+/g, " ").trim();
-    lines.push(
-      `**description**: ${desc.length > 400 ? desc.slice(0, 400) + "\u2026" : desc}`
-    );
+    lines.push("");
+    lines.push(desc.length > 400 ? desc.slice(0, 400) + "\u2026" : desc);
   }
   lines.push("");
   const endpoints = data.endpoints ?? [];
-  lines.push(`## Endpoints (${endpoints.length})`);
+  if (endpoints.length === 0) {
+    lines.push("_No endpoints reported for this model._");
+    return lines.join("\n");
+  }
+  const round = (n) => Math.round(n).toString();
   for (const ep of endpoints) {
+    const provider = ep.provider_name ?? ep.name ?? "unknown";
+    lines.push(`## ${mdCell(provider)}`);
     lines.push("");
-    lines.push(`### ${ep.provider_name ?? ep.name ?? "unknown"}`);
+    const rows = [];
+    if (ep.name && ep.name !== provider) rows.push(["Endpoint name", ep.name]);
+    if (ep.tag && ep.tag !== provider.toLowerCase()) rows.push(["Tag", ep.tag]);
+    if (ep.status !== void 0) {
+      rows.push(["Status", ep.status === 0 ? "operational" : `status code ${ep.status}`]);
+    }
     if (ep.context_length !== void 0)
-      lines.push(`- **context_length**: ${ep.context_length.toLocaleString()} tokens`);
+      rows.push(["Context length", `${ep.context_length.toLocaleString()} tokens`]);
     if (ep.max_completion_tokens !== void 0 && ep.max_completion_tokens !== null)
-      lines.push(`- **max_completion_tokens**: ${ep.max_completion_tokens.toLocaleString()}`);
-    if (ep.max_prompt_tokens !== null && ep.max_prompt_tokens !== void 0)
-      lines.push(`- **max_prompt_tokens**: ${ep.max_prompt_tokens.toLocaleString()}`);
-    if (ep.quantization) lines.push(`- **quantization**: ${ep.quantization}`);
+      rows.push(["Max completion", `${ep.max_completion_tokens.toLocaleString()} tokens`]);
+    if (ep.max_prompt_tokens !== void 0 && ep.max_prompt_tokens !== null)
+      rows.push(["Max prompt", `${ep.max_prompt_tokens.toLocaleString()} tokens`]);
+    if (ep.quantization) rows.push(["Quantization", ep.quantization]);
+    const params = new Set(ep.supported_parameters ?? []);
+    rows.push(["Reasoning", params.has("reasoning") ? "yes" : "no"]);
+    rows.push(["Tool calling", params.has("tools") ? "yes" : "no"]);
+    rows.push([
+      "Structured output",
+      params.has("structured_outputs") || params.has("response_format") ? "yes" : "no"
+    ]);
+    if (ep.supports_implicit_caching !== void 0) {
+      rows.push(["Implicit caching", ep.supports_implicit_caching ? "yes" : "no"]);
+    }
     if (ep.pricing) {
       const p = ep.pricing;
-      lines.push(
-        `- **pricing**: prompt ${formatPricePerM(p.prompt)}, completion ${formatPricePerM(p.completion)}` + (p.input_cache_read ? `, cache-read ${formatPricePerM(p.input_cache_read)}` : "")
-      );
+      rows.push(["Prompt price", formatPricePerM(p.prompt)]);
+      rows.push(["Completion price", formatPricePerM(p.completion)]);
+      if (p.input_cache_read) rows.push(["Cache-read price", formatPricePerM(p.input_cache_read)]);
+      if (p.image) rows.push(["Image price", formatPricePerM(p.image)]);
+      if (p.request) rows.push(["Request price", formatPricePerM(p.request)]);
+      if (p.discount !== void 0 && p.discount !== 0) {
+        rows.push(["Discount", `${(p.discount * 100).toFixed(0)}% off`]);
+      }
+    }
+    if (typeof ep.uptime_last_5m === "number")
+      rows.push(["Uptime (5m)", `${ep.uptime_last_5m.toFixed(1)}%`]);
+    if (typeof ep.uptime_last_30m === "number")
+      rows.push(["Uptime (30m)", `${ep.uptime_last_30m.toFixed(1)}%`]);
+    if (typeof ep.uptime_last_1d === "number")
+      rows.push(["Uptime (1d)", `${ep.uptime_last_1d.toFixed(1)}%`]);
+    for (const { key, value, numeric } of sortedPercentiles(ep.latency_last_30m)) {
+      const annot = percentileAnnotation(numeric, false);
+      const label = annot ? `Latency ${key} (${annot})` : `Latency ${key}`;
+      rows.push([label, `${round(value)} ms`]);
+    }
+    for (const { key, value, numeric } of sortedPercentiles(ep.throughput_last_30m)) {
+      const annot = percentileAnnotation(numeric, true);
+      const label = annot ? `Throughput ${key} (${annot})` : `Throughput ${key}`;
+      rows.push([label, `${round(value)} tok/s`]);
+    }
+    lines.push("| Field | Value |");
+    lines.push("|---|---|");
+    for (const [label, value] of rows) {
+      lines.push(`| ${mdCell(label)} | ${mdCell(value)} |`);
     }
     if (Array.isArray(ep.supported_parameters) && ep.supported_parameters.length > 0) {
       const sorted = [...ep.supported_parameters].sort();
-      lines.push(`- **supported_parameters** (${sorted.length}): ${sorted.join(", ")}`);
+      lines.push("");
+      lines.push(`**Supported parameters (${sorted.length}):**`);
+      lines.push("");
+      for (const p of sorted) lines.push(`- \u2713 \`${p}\``);
     }
-    if (ep.uptime_last_30m !== void 0) {
-      const up30m = ep.uptime_last_30m?.toFixed(1);
-      const up1d = ep.uptime_last_1d?.toFixed(1);
-      lines.push(`- **uptime**: ${up30m}% (30m) \xB7 ${up1d}% (1d)`);
-    }
-    const round = (n) => Math.round(n).toString();
-    const latencyPcts = sortedPercentiles(ep.latency_last_30m);
-    if (latencyPcts.length > 0) {
-      lines.push(
-        `- **latency** (30m): ${latencyPcts.map(({ key, value }) => `${key} ${round(value)}ms`).join(" \xB7 ")}`
-      );
-    }
-    const throughputPcts = sortedPercentiles(ep.throughput_last_30m);
-    if (throughputPcts.length > 0) {
-      lines.push(
-        `- **throughput** (30m): ${throughputPcts.map(({ key, value }) => `${key} ${round(value)} tok/s`).join(" \xB7 ")}`
-      );
-    }
+    lines.push("");
   }
-  return lines.join("\n");
+  return lines.join("\n").trimEnd();
 }
 var ANSI = {
   reset: "\x1B[0m",
