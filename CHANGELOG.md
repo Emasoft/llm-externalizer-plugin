@@ -1,6 +1,55 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.65] - 2026-04-10
+
+### Changed
+
+- Align reasoning + model overrides with OpenRouter's real OpenAPI spec
+
+Fetched the raw OpenAPI schemas for /chat/completions and /responses
+and saved them to docs/openrouter/. Two prior releases were built on
+an outdated best-practices doc page that advertised fields which do
+not exist in the wire schema.
+
+Corrections based on the saved specs:
+
+- ChatRequestReasoning on /chat/completions has ONLY `effort` and
+  `summary`. No `exclude`, `enabled`, or `max_tokens`. The earlier
+  `exclude: true` field was silently dropped by OpenRouter. Removed
+  from the ladder — the reasoning trace now comes back in
+  message.reasoning / message.reasoning_details, which we already
+  ignore in favour of message.content.
+
+- Neither /chat/completions nor /responses has a generic vendor
+  pass-through. `provider` has a fixed schema in both. Unknown
+  top-level fields are not forwarded to the backend. Removed the
+  v3.9.64 chat_template_kwargs extraBody for Nemotron — it was a
+  no-op.
+
+- For Nemotron, the ONLY supported path to enable thinking is
+  `reasoning.effort`, which OpenRouter translates into the vLLM
+  enable_thinking flag internally (the model metadata reports
+  supports_reasoning=true, so the translation layer exists).
+
+Kept:
+
+- temperature: 1.0 and top_p: 0.95 overrides for Nemotron.
+  These are standard schema fields and the primary root cause of
+  the earlier empty-response failures — our default temperature=0.1
+  was far below what Nemotron tolerates.
+
+- The MODEL_REQUEST_OVERRIDES registry pattern. Trimmed to just
+  temperature + top_p now that extraBody is gone.
+
+Saved:
+
+- docs/openrouter/chat-completions-api.md (81 KB raw OpenAPI)
+- docs/openrouter/responses-api.md (129 KB raw OpenAPI)
+
+These are the authoritative wire-format references for any future
+changes to the request/response parsing code.
+
 ## [3.9.64] - 2026-04-10
 
 ### Changed
