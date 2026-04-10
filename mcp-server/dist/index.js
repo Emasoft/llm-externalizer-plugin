@@ -29370,16 +29370,46 @@ function reasoningLadderForModel(modelId) {
   if (!modelId) return [null];
   const cached2 = MODEL_REASONING_CACHE.get(modelId);
   if (cached2 === "none") return [null];
-  if (modelId === "nvidia/nemotron-3-super-120b-a12b:free") {
-    if (cached2 === "high") return [{ effort: "medium", exclude: true }, null];
-    return [{ effort: "medium", exclude: true }, null];
-  }
   if (cached2 === "high") return [{ effort: "high", exclude: true }, null];
   return [
     { effort: "xhigh", exclude: true },
     { effort: "high", exclude: true },
     null
   ];
+}
+var MODEL_REQUEST_OVERRIDES = {
+  // NVIDIA Nemotron 3 Super 120B (free tier). NVIDIA's own recommended
+  // generation params are: temperature=1.0, top_p=0.95, and the vLLM
+  // chat-template hook `chat_template_kwargs.enable_thinking=true`.
+  //
+  // OpenRouter's model metadata reports supports_reasoning=true for
+  // this model, so our ladder's reasoning.effort field is still sent
+  // (OpenRouter is expected to translate it into enable_thinking
+  // internally). We also include chat_template_kwargs as a top-level
+  // field so that if OpenRouter forwards it to the underlying vLLM
+  // backend, thinking is enabled at the request body level even when
+  // reasoning.effort translation is broken.
+  //
+  // The earlier empty-response failures were caused by our default
+  // temperature=0.1 being far below what Nemotron tolerates. The
+  // sampling floor was collapsing the output distribution to empty.
+  "nvidia/nemotron-3-super-120b-a12b:free": {
+    temperature: 1,
+    top_p: 0.95,
+    extraBody: {
+      chat_template_kwargs: { enable_thinking: true }
+    }
+  }
+};
+function applyModelOverrides(body, modelId) {
+  if (!modelId) return body;
+  const override = MODEL_REQUEST_OVERRIDES[modelId];
+  if (!override) return body;
+  const out = { ...body };
+  if (override.temperature !== void 0) out.temperature = override.temperature;
+  if (override.top_p !== void 0) out.top_p = override.top_p;
+  if (override.extraBody) Object.assign(out, override.extraBody);
+  return out;
 }
 function recordReasoningRejection(modelId, failedReasoning) {
   if (!modelId || !failedReasoning) return;
@@ -30038,8 +30068,9 @@ async function chatCompletionSimple(messages, options = {}) {
   try {
     let lastError = null;
     for (const reasoning of reasoningLadder) {
-      const body = { ...baseBody };
+      let body = { ...baseBody };
       if (reasoning) body.reasoning = reasoning;
+      body = applyModelOverrides(body, conn.model);
       const res = await fetchWithRetry429(
         conn.url,
         {
@@ -30209,8 +30240,9 @@ async function chatCompletionJSON(messages, options = {}) {
     let finishReason = "";
     let gotResponse = false;
     for (const reasoning of reasoningLadder) {
-      const body = { ...baseBody };
+      let body = { ...baseBody };
       if (reasoning) body.reasoning = reasoning;
+      body = applyModelOverrides(body, conn.model);
       const res = await fetchWithRetry429(
         conn.url,
         {
