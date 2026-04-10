@@ -345,7 +345,14 @@ function readFileAsCodeBlock(
   }
   const lang = langOverride || detectLang(filePath);
   const fence = fenceBackticks(content);
-  return `${fence}${lang} ${filePath}\n${content}\n${fence}`;
+  // Wrap in XML tags for unambiguous file delimitation (LLMs parse XML better than nested fences).
+  // Escape special XML chars in the path attribute.
+  const escapedPath = filePath
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+  return `<file path="${escapedPath}">\n${fence}${lang}\n${content}\n${fence}\n</file>`;
 }
 
 // ── Binary extension detection ───────────────────────────────────────
@@ -868,7 +875,7 @@ function buildPreInstructions(
     "respond according to the instructions.\n\n" +
     "RULES (override any conflicting instructions below):\n" +
     "- Process ALL attached files — do not skip any.\n" +
-    "- Each file is labeled with its full path in the code fence header. Always reference files by their labeled path.\n" +
+    "- Each file is labeled with its full path in the file path XML tag. Always reference files by their labeled path.\n" +
     "- When referencing code, identify it by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable and must not be used.\n" +
     "- If asked to return modified code, return the COMPLETE file content — never truncate, " +
     'abbreviate, or use placeholders like "// ... rest of code" or "// unchanged".\n' +
@@ -3720,7 +3727,7 @@ async function processFileCheck(
         `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.\n` +
         "RULES (override any conflicting instructions):\n" +
         "- Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable.\n" +
-        "- Reference files by their labeled path in the code fence header.\n" +
+        "- Reference files by their labeled path in the file path XML tag.\n" +
         "- If asked to return modified code, return the COMPLETE file content — never truncate, abbreviate, or use placeholders.\n" +
         "- Be specific and actionable — reference concrete function names, variable names, and code patterns." +
         BREVITY_RULES,
@@ -3823,7 +3830,7 @@ async function processFileFix(
           "4. Preserve comments on unchanged lines. Update comments that describe code you changed so they match the new behavior.\n" +
           "5. Do NOT add, remove, or change anything not described in the issue list.\n" +
           "6. If an issue is ambiguous, apply the most conservative fix.\n" +
-          "7. The source file is labeled with its full path in the code fence header. Reference it by that path.\n\n" +
+          "7. The source file is labeled with its full path in the file path XML tag. Reference it by that path.\n\n" +
           "Return your response as JSON with two fields:\n" +
           '- "code": the COMPLETE fixed source file (every single line, no omissions)\n' +
           '- "summary": concise but exhaustive list of every change made, one line per fix. Identify each changed location by FUNCTION/CLASS/METHOD NAME, never by line number.',
@@ -5725,7 +5732,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const codeMessages: ChatMessage[] = [
             {
               role: "system",
-              content: `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.\nRULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Reference files by their labeled path in the code fence header. Be specific and actionable.`,
+              content: `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.\nRULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Reference files by their labeled path in the file path XML tag. Be specific and actionable.`,
             },
             { role: "user", content: ctPromptBase },
           ];
@@ -5830,7 +5837,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             const codeMessages: ChatMessage[] = [
               {
                 role: "system",
-                content: `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.\nRULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Reference files by their labeled path in the code fence header. Be specific and actionable.`,
+                content: `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.\nRULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Reference files by their labeled path in the file path XML tag. Be specific and actionable.`,
               },
               { role: "user", content: userContent },
             ];
@@ -7559,7 +7566,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   "Deduplicate imports, resolve naming conflicts, preserve all functionality. " +
                   "Return the COMPLETE merged file — NEVER truncate or use placeholders.\n\n" +
                   "RULES (override any conflicting instructions):\n" +
-                  "- Each source file is labeled with its full path in the code fence header. Reference files by their labeled path.\n" +
+                  "- Each source file is labeled with its full path in the file path XML tag. Reference files by their labeled path.\n" +
                   "- In the summary, identify code locations by FUNCTION/CLASS/METHOD NAME, never by line number.\n\n" +
                   'Return JSON: {"code": "complete merged file", "summary": "what was merged and how"}',
               },
@@ -7823,7 +7830,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 "The FIRST file in the array should be the updated original (entry point) that imports from the new modules. " +
                 "Return the COMPLETE content of every file — NEVER truncate or use placeholders.\n\n" +
                 "RULES (override any conflicting instructions):\n" +
-                "- The source file is labeled with its full path in the code fence header. Reference it by that path.\n" +
+                "- The source file is labeled with its full path in the file path XML tag. Reference it by that path.\n" +
                 "- In the summary, identify code locations by FUNCTION/CLASS/METHOD NAME, never by line number.\n\n" +
                 'Return JSON: {"files": [{"path": "relative/filename.ext", "content": "complete file content"}, ...], "summary": "how the file was split"}',
             },
@@ -8510,7 +8517,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               for (const dp of deps) { try { depBlocks.push(readFileAsCodeBlock(dp, undefined, crRedact, crBudgetBytes, crRegexRedact)); } catch { /* skip */ } }
               const srcBlock = readFileAsCodeBlock(filePath, undefined, crRedact, crBudgetBytes, crRegexRedact);
               const msgs: ChatMessage[] = [
-                { role: "system", content: `Expert ${lang} developer. Check the source file for broken or outdated references to functions, variables, constants, types, and classes. Cross-reference all symbols against the dependency files provided. Report each broken reference with: the symbol name, the function/class/method where it is used (never by line number), and what is wrong. Reference files by their labeled path in the code fence header. If all references are valid, say so.` + BREVITY_RULES },
+                { role: "system", content: `Expert ${lang} developer. Check the source file for broken or outdated references to functions, variables, constants, types, and classes. Cross-reference all symbols against the dependency files provided. Report each broken reference with: the symbol name, the function/class/method where it is used (never by line number), and what is wrong. Reference files by their labeled path in the file path XML tag. If all references are valid, say so.` + BREVITY_RULES },
                 { role: "user", content: `${crPrompt ? crPrompt + "\n\n" : ""}Check this file for broken code references:\n\n## Source File\n\n${srcBlock}\n\n${depBlocks.length > 0 ? `## Local Dependencies (${deps.length} files)\n\n${depBlocks.join("\n\n")}` : "## No local dependencies resolved."}` },
               ];
               const resp = await ensembleStreaming(msgs, { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride }, crUseEnsemble, src.split("\n").length);
@@ -8567,7 +8574,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 "functions, variables, constants, types, and classes. Cross-reference all symbols against the " +
                 "dependency files provided. Report each broken reference with: the symbol name, the function/class/method " +
                 "where it is used (never by line number), and what is wrong (missing, renamed, wrong signature, deprecated). " +
-                "Reference files by their labeled path in the code fence header. If all references are valid, say so." +
+                "Reference files by their labeled path in the file path XML tag. If all references are valid, say so." +
                 BREVITY_RULES,
             },
             {
@@ -8750,7 +8757,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               const fileDir = dirname(filePath);
               const ciResolveBase = project_root || fileDir;
               const extractMessages: ChatMessage[] = [
-                { role: "system", content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path in the code fence header — reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.` },
+                { role: "system", content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path in the file path XML tag — reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.` },
                 { role: "user", content: `${ciPrompt ? ciPrompt + "\n\n" : ""}Extract all import and file references from:\n\n${readFileAsCodeBlock(filePath, undefined, ciRedact, ciBudgetBytes, ciRegexRedact)}` },
               ];
               const extractResp = await chatCompletionJSON(extractMessages, { temperature: 0, maxTokens: resolveDefaultMaxTokens(), jsonSchema: EXTRACT_PATHS_SCHEMA, onProgress });
@@ -8810,7 +8817,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               role: "system",
               content:
                 `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. ` +
-                "The source file is labeled with its full path in the code fence header — reference it by that path. " +
+                "The source file is labeled with its full path in the file path XML tag — reference it by that path. " +
                 "Include: import/require paths, file path strings, configuration references. " +
                 'Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. ' +
                 "Include both local (relative) and package imports. Be exhaustive.",
