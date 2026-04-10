@@ -125,61 +125,116 @@ def _run_check(
     return True
 
 
+REQUIRED_TOOLS: list[tuple[str, str]] = [
+    ("git", "https://git-scm.com/"),
+    ("node", "https://nodejs.org/ (>= 18)"),
+    ("npm", "comes with Node.js"),
+    ("npx", "comes with Node.js"),
+    ("gh", "brew install gh  OR  https://cli.github.com/"),
+    ("uvx", "curl -LsSf https://astral.sh/uv/install.sh | sh"),
+    ("ruff", "uv tool install ruff"),
+    ("shellcheck", "brew install shellcheck"),
+    ("git-cliff", "brew install git-cliff  OR  cargo install git-cliff"),
+]
+
+
+def require_tools() -> None:
+    """Verify every required tool is on PATH. Die if any is missing.
+
+    This is the first gate — publish.py cannot proceed if any tool is
+    missing. No 'SKIP because tool not installed' paths anywhere in
+    run_checks(), so a missing tool must be caught here upfront.
+    """
+    missing: list[tuple[str, str]] = []
+    for tool, hint in REQUIRED_TOOLS:
+        if not shutil.which(tool):
+            missing.append((tool, hint))
+    if missing:
+        print("ERROR: required tools missing from PATH:", file=sys.stderr)
+        for tool, hint in missing:
+            print(f"  {tool:<14} → {hint}", file=sys.stderr)
+        print(
+            "\nAll these tools are MANDATORY — publish.py will not run any checks "
+            "or mutations until they are installed.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
 def run_checks(repo_root: Path) -> bool:
-    """Run lint + typecheck + shellcheck + ruff on the plugin. Fail-fast on any error."""
+    """Run every mandatory check on the plugin. Fail-fast on any error.
+
+    STRICT MODE: every check is mandatory. There are NO conditional SKIP
+    paths. If a check tool is not available, require_tools() should have
+    aborted earlier. If a check fails, this returns False and the caller
+    must abort the publish — no exceptions, no overrides.
+
+    The full list of checks (all mandatory, all must return 0):
+      1. npm ci          — clean dependency install (always, not conditional)
+      2. npm run typecheck — tsc --noEmit
+      3. npm run lint     — eslint --max-warnings 0
+      4. npm run build    — full esbuild bundle (catches issues tsc misses)
+      5. npm test         — vitest run (all tests must pass)
+      6. ruff check       — lint all Python scripts
+      7. shellcheck       — lint all .sh files in the main tree
+      8. plugin.json parse — manifest must be valid JSON
+    """
     mcp_dir = str(repo_root / "mcp-server")
     reports = _reports_dir(repo_root)
     print(f"  Reports: {reports}")
 
-    if not (repo_root / "mcp-server" / "node_modules").exists():
-        print("  Installing dependencies...")
-        result = run(
-            ["npm", "ci", "--ignore-scripts"],
-            check=False, cwd=mcp_dir,
-        )
-        if result.returncode != 0:
-            print("ERROR: npm ci failed", file=sys.stderr)
-            if result.stderr:
-                print(result.stderr, file=sys.stderr)
-            return False
-
-    # 1. TypeScript compile check
-    if not _run_check("tsc", ["npx", "tsc", "--noEmit"], mcp_dir, repo_root):
+    # 1. Clean dependency install. Always — no conditional skip. A publish
+    # must run against a reproducible dep tree, not whatever the local
+    # node_modules happens to have.
+    if not _run_check("npm-ci", ["npm", "ci", "--ignore-scripts"], mcp_dir, repo_root):
         return False
 
-    # 2. ESLint
-    if not _run_check("eslint", ["npx", "eslint", "src", "--max-warnings", "0"], mcp_dir, repo_root):
+    # 2. TypeScript compile check
+    if not _run_check("typecheck", ["npm", "run", "typecheck"], mcp_dir, repo_root):
         return False
 
-    # 3. Ruff on Python scripts (if ruff is available)
-    ruff_check = run(["which", "ruff"], check=False)
-    if ruff_check.returncode == 0:
-        if not _run_check("ruff", ["ruff", "check", "scripts/"], str(repo_root), repo_root):
+    # 3. ESLint (--max-warnings 0 configured in package.json)
+    if not _run_check("lint", ["npm", "run", "lint"], mcp_dir, repo_root):
+        return False
+
+    # 4. Full build — esbuild bundle, catches runtime import errors and
+    # bundler issues that tsc --noEmit doesn't see.
+    if not _run_check("build", ["npm", "run", "build"], mcp_dir, repo_root):
+        return False
+
+    # 5. Tests — all must pass. No flakes allowed, no skips allowed.
+    if not _run_check("test", ["npm", "test"], mcp_dir, repo_root):
+        return False
+
+    # 6. Ruff on all Python scripts (mandatory — require_tools verified it).
+    if not _run_check("ruff", ["ruff", "check", "scripts/"], str(repo_root), repo_root):
+        return False
+
+    # 7. Shellcheck on every .sh file in the main tree (mandatory).
+    exclude_dirs = {
+        "node_modules", ".git", "scripts_dev", "docs_dev", "samples_dev",
+        "examples_dev", "tests_dev", "downloads_dev", "libs_dev",
+        "builds_dev", ".claude", "dist", "reports_dev",
+    }
+    sh_files: list[Path] = []
+    for f in repo_root.rglob("*.sh"):
+        if not any(part in exclude_dirs for part in f.relative_to(repo_root).parts):
+            sh_files.append(f)
+    if sh_files:
+        if not _run_check(
+            "shellcheck",
+            ["shellcheck", *(str(f) for f in sh_files)],
+            str(repo_root),
+            repo_root,
+        ):
             return False
     else:
-        print("  SKIP: ruff not installed (install with: uv tool install ruff)")
+        # Absence of .sh files is not a failure — there's nothing to check.
+        # This is NOT a skip of the check tool; the tool is installed and
+        # would run if there were files.
+        print("  OK: shellcheck (no .sh files in main tree)")
 
-    # 4. Shellcheck on any .sh files (if shellcheck is available)
-    shellcheck_bin = run(["which", "shellcheck"], check=False)
-    if shellcheck_bin.returncode == 0:
-        # Only check .sh files in the main plugin tree (exclude dev/tmp/vendored dirs)
-        exclude_dirs = {"node_modules", ".git", "scripts_dev", "docs_dev",
-                        "samples_dev", "examples_dev", "tests_dev",
-                        "downloads_dev", "libs_dev", "builds_dev", ".claude",
-                        "dist", "reports_dev"}
-        sh_files: list[Path] = []
-        for f in repo_root.rglob("*.sh"):
-            if not any(part in exclude_dirs for part in f.relative_to(repo_root).parts):
-                sh_files.append(f)
-        if sh_files:
-            if not _run_check("shellcheck", ["shellcheck", *(str(f) for f in sh_files)], str(repo_root), repo_root):
-                return False
-        else:
-            print("  SKIP: no .sh files in main tree")
-    else:
-        print("  SKIP: shellcheck not installed (install with: brew install shellcheck)")
-
-    # 5. Plugin manifest JSON check
+    # 8. Plugin manifest JSON check
     plugin_json = repo_root / ".claude-plugin" / "plugin.json"
     try:
         json.loads(plugin_json.read_text(encoding="utf-8"))
@@ -188,6 +243,37 @@ def run_checks(repo_root: Path) -> bool:
         return False
     print("  OK: plugin.json")
 
+    return True
+
+
+def run_cpv_validation(repo_root: Path) -> bool:
+    """Run CPV remote validation. Fail if any CRITICAL or MAJOR issue found.
+
+    CPV (claude-plugins-validation) is a third-party validator for Claude
+    Code plugins. It enforces strict structural rules on skills / agents /
+    hooks / commands. Publish aborts if CPV returns a non-zero exit code,
+    which it does when CRITICAL or MAJOR issues are present.
+    """
+    # uvx is verified by require_tools() — this is mandatory.
+    cpv_result = run(
+        [
+            "uvx", "--from",
+            "git+https://github.com/Emasoft/claude-plugins-validation",
+            "--with", "pyyaml",
+            "cpv-remote-validate", "plugin", str(repo_root),
+        ],
+        capture=True, check=False,
+    )
+    report = _reports_dir(repo_root) / "cpv.log"
+    output = (cpv_result.stdout or "") + (cpv_result.stderr or "")
+    report.write_text(output, encoding="utf-8")
+    if cpv_result.returncode != 0:
+        print("ERROR: CPV validation failed — see", report, file=sys.stderr)
+        if cpv_result.stdout:
+            for line in cpv_result.stdout.strip().split("\n")[-40:]:
+                print(f"  {line}", file=sys.stderr)
+        return False
+    print("  OK: cpv")
     return True
 
 
@@ -211,10 +297,11 @@ def main():
     )
     args = parser.parse_args()
 
-    # gh is only required for actual publishing
-    if not args.check_only and not shutil.which("gh"):
-        print("ERROR: 'gh' (GitHub CLI) not found on PATH. Install it first.", file=sys.stderr)
-        sys.exit(1)
+    # Gate #1 — every required tool must be present. No mode skips this
+    # (dry-run, check-only, and normal publish all need the full tool set
+    # because they all run the full check suite). This replaces the old
+    # per-mode `shutil.which("gh")` guard which only covered one tool.
+    require_tools()
 
     # Resolve paths from script location
     repo_root = Path(__file__).resolve().parent.parent
@@ -228,7 +315,7 @@ def main():
     if not args.check_only:
         lock_file.write_text(str(os.getpid()), encoding="utf-8")
     try:
-        _run_publish(args, repo_root, plugin_json, changelog, lock_file)
+        _run_publish(args, repo_root, plugin_json, changelog)
     finally:
         if lock_file.exists():
             try:
@@ -237,30 +324,19 @@ def main():
                 pass
 
 
-def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path, lock_file: Path) -> None:
+def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> None:
+    # Lock file lifecycle is owned by main() — it's written before calling
+    # us and unlinked in the outer finally block regardless of success/fail.
 
-    # ── --check-only: run validation without publishing ──
+    # ── --check-only: run full validation without publishing ──
+    # Used by the pre-push hook. Checks are the SAME as the main publish
+    # flow — same run_checks(), same run_cpv_validation(). No shortcuts.
     if args.check_only:
         print("\n── Check-only mode ──")
-        checks_ok = run_checks(repo_root)
-        if not checks_ok:
-            print("ERROR: build checks failed.", file=sys.stderr)
+        if not run_checks(repo_root):
+            print("ERROR: checks failed — see reports_dev/publish/.", file=sys.stderr)
             sys.exit(1)
-        print("  build: passing | manifest: valid")
-        if shutil.which("uvx"):
-            cpv_result = run(
-                ["uvx", "--from", "git+https://github.com/Emasoft/claude-plugins-validation",
-                 "--with", "pyyaml", "cpv-remote-validate", "plugin", str(repo_root)],
-                capture=True, check=False,
-            )
-            if cpv_result.returncode != 0:
-                print("ERROR: CPV validation failed:", file=sys.stderr)
-                if cpv_result.stdout:
-                    print(cpv_result.stdout, file=sys.stderr)
-                sys.exit(1)
-            print("  CPV: passed")
-        else:
-            print("ERROR: 'uvx' not found. CPV validation is required.", file=sys.stderr)
+        if not run_cpv_validation(repo_root):
             sys.exit(1)
         print("All checks passed.")
         return
@@ -315,38 +391,47 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path, lock
         sys.exit(1)
 
     print(f"  Planned: {current} -> {new_version} (tag: {tag})")
-
-    if args.dry_run:
-        print(
-            "\n[DRY RUN] Would update plugin.json, README.md badges, CHANGELOG.md"
-        )
-        print(f"[DRY RUN] Would commit, tag {tag}, push, and create GitHub release")
-        return
+    print()
 
     # ── 2. Validate CURRENT code BEFORE any mutations ──
-    # All linters + typecheck + CPV run on the current working tree.
-    # If any fail, abort — working tree is unchanged.
-    print("\n── 2. Validate (linting + typecheck + CPV) ──")
+    # MANDATORY — no mode skips this. Even --dry-run runs the full check
+    # suite: the point of --dry-run is to preview a would-be publish, and
+    # the publish isn't viable unless every check passes. Skipping checks
+    # in dry-run would let a broken state reach the planning step silently.
+    #
+    # Every check below is mandatory:
+    #   • run_checks()          — npm ci / typecheck / lint / build / test
+    #                             / ruff / shellcheck / plugin.json
+    #   • run_cpv_validation()  — CPV remote validation (CRITICAL=MAJOR=0)
+    #
+    # If ANY check fails, publish.py aborts BEFORE touching any file. The
+    # working tree is guaranteed to be untouched on the failure path.
+    print("── 2. Validate (MANDATORY — all checks must pass with 0 errors) ──")
     if not run_checks(repo_root):
-        print("ERROR: validation failed. Aborting BEFORE version bump.", file=sys.stderr)
-        print("Working tree is unchanged — fix the issues and re-run.", file=sys.stderr)
+        print(
+            "ERROR: validation failed. Aborting BEFORE version bump.",
+            file=sys.stderr,
+        )
+        print(
+            "Working tree is unchanged — fix the issues and re-run.",
+            file=sys.stderr,
+        )
         sys.exit(1)
-    if not shutil.which("uvx"):
-        print("ERROR: 'uvx' not found. CPV validation is required.", file=sys.stderr)
+    if not run_cpv_validation(repo_root):
+        print(
+            "ERROR: CPV validation failed. Aborting BEFORE version bump.",
+            file=sys.stderr,
+        )
         sys.exit(1)
-    cpv_pre = run(
-        ["uvx", "--from", "git+https://github.com/Emasoft/claude-plugins-validation",
-         "--with", "pyyaml", "cpv-remote-validate", "plugin", str(repo_root)],
-        capture=True, check=False,
-    )
-    if cpv_pre.returncode != 0:
-        print("ERROR: CPV validation failed:", file=sys.stderr)
-        if cpv_pre.stdout:
-            print(cpv_pre.stdout, file=sys.stderr)
-        sys.exit(1)
-    print("  CPV: passed")
     print("  All checks passed — safe to bump version and commit")
     print()
+
+    # ── dry-run exits here, AFTER checks pass ──
+    if args.dry_run:
+        print("[DRY RUN] All checks passed.")
+        print("[DRY RUN] Would update plugin.json, README.md badges, CHANGELOG.md")
+        print(f"[DRY RUN] Would commit, tag {tag}, push, and create GitHub release")
+        return
 
     # ── 3. Apply version bump to files ──
     print("── 3. Apply version bump ──")

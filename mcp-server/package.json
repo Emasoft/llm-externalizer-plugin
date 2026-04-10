@@ -10,7 +10,9 @@
   "scripts": {
     "build": "tsc --noEmit && node esbuild.config.mjs",
     "dev": "tsc --watch",
-    "test": "vitest run",
+    "test": "vitest run --exclude 'src/live*.test.ts'",
+    "test:live": "vitest run src/live.test.ts src/live-extended.test.ts src/live-websearch.test.ts",
+    "test:all": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint src --max-warnings 0",
     "typecheck": "tsc --noEmit",
