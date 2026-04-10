@@ -1,6 +1,18 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.48] - 2026-04-10
+
+### Changed
+
+- Switch ALL LLM requests to non-streaming (stream: false)
+
+chatCompletionWithRetry now always uses chatCompletionSimple.
+No SSE parsing, no progress tracking per-request, no reasoning
+token detection. Batch-level heartbeat keeps MCP connection alive.
+Removes reasoning timeout skip logic (dead code with non-streaming).
+chatCompletionStreaming is now unused (kept for reference, will remove).
+
 ## [3.9.47] - 2026-04-10
 
 ### Changed

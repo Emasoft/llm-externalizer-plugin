@@ -29354,7 +29354,6 @@ var DEFAULT_TEMPERATURE = 0.1;
 var BREVITY_RULES = "\nOUTPUT RULES:\n- Be SUCCINCT. Use bullet points, not paragraphs.\n- Skip preamble, filler, and restating the task.\n- Only report findings, not things that are correct.\n- For code reviews: skip files/areas with no issues \u2014 only mention what needs attention.\n- Maximum 3 sentences per finding. Lead with the problem, not the context.";
 var CONNECT_TIMEOUT_MS = 5e3;
 var SOFT_TIMEOUT_MS = (activeResolved?.timeout ?? 300) * 1e3;
-var READ_CHUNK_TIMEOUT_MS = 3e4;
 var FALLBACK_CONTEXT_LENGTH = activeResolved?.contextWindow || 1e5;
 var MODEL_CACHE_TTL_MS = 36e5;
 function makeBackendFromProfile(resolved, modelOverride) {
@@ -29767,17 +29766,6 @@ async function fetchWithTimeout(url2, options, timeoutMs = CONNECT_TIMEOUT_MS) {
     clearTimeout(timer);
   }
 }
-async function timedRead(reader, timeoutMs) {
-  let timer;
-  const timeout = new Promise((resolve3) => {
-    timer = setTimeout(() => resolve3("timeout"), timeoutMs);
-  });
-  try {
-    return await Promise.race([reader.read(), timeout]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
 async function detectLMStudio() {
   if (currentBackend.type !== "local") return false;
   if (currentBackend.lmStudioDetected !== void 0)
@@ -29924,135 +29912,11 @@ function makeProgressFn(progressToken) {
     });
   };
 }
-async function chatCompletionStreaming(messages, options = {}) {
+async function chatCompletionSimple(messages, options = {}) {
   const conn = await resolveConnection(options);
   if (conn.isNative) {
     return chatCompletionNative(conn, messages, options);
   }
-  const body = {
-    messages,
-    temperature: options.temperature ?? DEFAULT_TEMPERATURE,
-    max_tokens: options.maxTokens ?? resolveDefaultMaxTokens(),
-    stream: true,
-    // Request usage stats in the final SSE chunk (OpenAI-compatible, supported by OpenRouter)
-    stream_options: { include_usage: true }
-  };
-  if (conn.model) body.model = conn.model;
-  const startTime = Date.now();
-  const fetchOpts = {
-    method: "POST",
-    headers: conn.headers,
-    body: JSON.stringify(body)
-  };
-  const res = await fetchWithRetry429(
-    conn.url,
-    fetchOpts,
-    conn.timeout,
-    startTime
-  );
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(
-      `API error ${res.status} (${currentBackend.type}): ${text}`
-    );
-  }
-  if (!res.body) {
-    throw new Error(
-      "Response body is null \u2014 streaming not supported by endpoint"
-    );
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let content = "";
-  let model = "";
-  let usage;
-  let finishReason = "";
-  let truncated = false;
-  let malformedChunks = 0;
-  let buffer = "";
-  let reasoningActive = false;
-  let lastActivityAt = startTime;
-  const progressInterval = Math.min(1e4, Math.floor(conn.timeout / 3));
-  let lastProgressAt = startTime;
-  const onProgress = options.onProgress;
-  try {
-    while (true) {
-      const elapsed = Date.now() - startTime;
-      const sinceLastActivity = Date.now() - lastActivityAt;
-      const isActivelyReasoning = reasoningActive && sinceLastActivity < READ_CHUNK_TIMEOUT_MS;
-      if (elapsed > conn.timeout && !isActivelyReasoning) {
-        truncated = true;
-        process.stderr.write(
-          `[llm-externalizer] Soft timeout at ${elapsed}ms, returning ${content.length} chars of partial content
-`
-        );
-        break;
-      }
-      if (onProgress && Date.now() - lastProgressAt >= progressInterval) {
-        const pct = isActivelyReasoning ? 50 : Math.min(90, Math.round(elapsed / conn.timeout * 100));
-        const msg = isActivelyReasoning ? `Reasoning\u2026 ${Math.round(elapsed / 1e3)}s (model is thinking)` : `Streaming\u2026 ${content.length} chars received`;
-        onProgress(pct, 100, msg);
-        lastProgressAt = Date.now();
-      }
-      const remaining = conn.timeout - elapsed;
-      const chunkTimeout = isActivelyReasoning ? READ_CHUNK_TIMEOUT_MS : Math.min(READ_CHUNK_TIMEOUT_MS, Math.max(1e3, remaining));
-      const result = await timedRead(reader, chunkTimeout);
-      if (result === "timeout") {
-        truncated = true;
-        process.stderr.write(
-          `[llm-externalizer] Chunk read timeout, returning ${content.length} chars of partial content
-`
-        );
-        break;
-      }
-      if (result.done) break;
-      buffer += decoder.decode(result.value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith("data:")) continue;
-        const payload = trimmed.startsWith("data: ") ? trimmed.slice(6) : trimmed.slice(5);
-        if (payload === "[DONE]") continue;
-        try {
-          const json2 = JSON.parse(payload);
-          if (json2.model) model = json2.model;
-          const delta = json2.choices?.[0]?.delta;
-          const reasoning = delta?.reasoning || delta?.reasoning_content || "";
-          if (reasoning) {
-            reasoningActive = true;
-            lastActivityAt = Date.now();
-          }
-          const text = delta?.content || "";
-          if (text) {
-            content += text;
-            lastActivityAt = Date.now();
-          }
-          const reason = json2.choices?.[0]?.finish_reason;
-          if (reason) finishReason = reason;
-          if (json2.usage) usage = json2.usage;
-        } catch {
-          malformedChunks++;
-        }
-      }
-    }
-  } catch {
-    if (content.length > 0) truncated = true;
-  } finally {
-    reader.cancel().catch(() => {
-    });
-    reader.releaseLock();
-  }
-  if (malformedChunks > 0 && content.length > 0) {
-    process.stderr.write(
-      `[llm-externalizer] WARNING: ${malformedChunks} malformed SSE chunk(s) skipped
-`
-    );
-  }
-  return { content, model, usage, finishReason, truncated, reasoningDetected: reasoningActive };
-}
-async function chatCompletionSimple(messages, options = {}) {
-  const conn = await resolveConnection(options);
   const body = {
     messages,
     temperature: options.temperature ?? DEFAULT_TEMPERATURE,
@@ -30669,11 +30533,10 @@ async function chatCompletionWithRetry(messages, options) {
       truncated: true
     };
   }
-  const useSimple = options.model === FREE_MODEL_ID;
   for (let attempt = 0; attempt <= MAX_TRUNCATION_RETRIES; attempt++) {
     let resp;
     try {
-      resp = useSimple ? await chatCompletionSimple(messages, options) : await chatCompletionStreaming(messages, options);
+      resp = await chatCompletionSimple(messages, options);
     } catch (err) {
       recordServiceFailure();
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -30707,15 +30570,6 @@ async function chatCompletionWithRetry(messages, options) {
         `[llm-externalizer] finishReason=length on attempt ${attempt + 1} \u2014 output token limit hit
 `
       );
-      return resp;
-    }
-    if (resp.reasoningDetected && resp.content.trim().length === 0) {
-      process.stderr.write(
-        `[llm-externalizer] Reasoning model timed out after ${Math.round(SOFT_TIMEOUT_MS / 1e3)}s of thinking with no content output \u2014 skipping retries
-`
-      );
-      resp.content = `\u26A0 Reasoning model timed out \u2014 spent ${Math.round(SOFT_TIMEOUT_MS / 1e3)}s thinking but produced no content. The task may be too complex for this model's speed at this input size.`;
-      resp.truncated = true;
       return resp;
     }
     recordServiceFailure();
@@ -31949,7 +31803,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.47" },
+  { name: "llm-externalizer", version: "3.9.48" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {
