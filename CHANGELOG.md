@@ -1,6 +1,64 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.66] - 2026-04-10
+
+### Changed
+
+- Dynamic per-model parameter filter from /v1/models/{id}/endpoints
+
+OpenRouter exposes each model's accepted request-body fields via
+/v1/models/{exact_id}/endpoints as `supported_parameters`. Query
+this once per model, cache for 1 hour, and filter the outgoing
+request body so unsupported fields are dropped before sending.
+
+For nvidia/nemotron-3-super-120b-a12b:free the live API reports:
+  reasoning, include_reasoning, temperature, max_tokens, seed,
+  top_p, tools, tool_choice, structured_outputs, response_format
+
+It does NOT accept: frequency_penalty, presence_penalty, top_k,
+min_p, stop, repetition_penalty — sending any of these to the
+free tier produces undefined behavior including the empty-response
+problem we saw earlier.
+
+New helpers:
+
+- getModelSupportedParams(modelId) — queries the per-model endpoint
+  with the EXACT model id, extracts the union of supported_parameters
+  across all endpoints (providers) for the model, caches the Set.
+  Returns null on failure so we proceed without filtering. Only
+  active for OpenRouter backend.
+- filterBodyForSupportedParams(body, supported) — drops keys in
+  FILTERABLE_REQUEST_FIELDS that are not in the model's supported set.
+  OpenRouter control fields (stream, plugins, messages, model,
+  provider, metadata, debug, etc.) are NEVER filtered regardless.
+
+Wired into both chatCompletionSimple and chatCompletionJSON just
+after applyModelOverrides so it sees the final intended body.
+
+Added docs/openrouter/get-models-api.md (671 lines) as the
+authoritative reference for the /v1/models endpoint schema.
+
+This is forward-compatible: any future model's parameter
+restrictions are handled automatically without code changes.
+- Add OpenRouter errors and debugging reference to docs/openrouter/
+
+Saved from https://openrouter.ai/docs/api/reference/errors-and-debugging.md
+for offline reference. Key sections:
+
+- Error codes (400/401/402/403/408/429/502/503) — our classifyError
+  logic is aligned with this list.
+- 'When No Content is Generated' — documents that empty responses are
+  expected during cold-start warm-up and provider scaling, and
+  recommends a retry mechanism (which we already implement).
+- Moderation error metadata shape — could be surfaced in report labels
+  for finish_reason=content_filter cases.
+- Debug option (debug.echo_upstream_body) — returns the exact request
+  body OpenRouter forwards to the provider. Useful for verifying the
+  reasoning.effort -> chat_template_kwargs.enable_thinking translation
+  for Nemotron. Caveat: requires stream:true, which we removed, so it
+  would need a temporary streaming branch to use for diagnosis.
+
 ## [3.9.65] - 2026-04-10
 
 ### Changed
