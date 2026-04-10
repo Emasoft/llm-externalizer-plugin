@@ -3898,9 +3898,19 @@ async function checkServiceHealthOrWait(): Promise<string | null> {
 
 // ── Retry-on-truncation wrapper ──────────────────────────────────────
 // Retries LLM calls when the response is truncated (finishReason !== "stop")
-// or when a timeout caused partial output. Up to 3 retries.
+// or when a timeout caused partial output. Up to 3 retries for generic
+// failures; up to 15 retries for silent empty responses on OpenRouter
+// (the documented "no content generated" case — cold-start / scaling).
 // Integrates with SERVICE_HEALTH to detect systemic server issues.
 const MAX_TRUNCATION_RETRIES = 3;
+const MAX_EMPTY_RESPONSE_RETRIES = 15;
+// Fixed wait between empty-response retries. Empty responses aren't a
+// rate-limit signal — they're documented cold-start / scaling behavior,
+// so exponential backoff would be the wrong primitive (it would make us
+// wait longer the more the provider needs a warm request). A small,
+// constant delay just gives the provider a moment to finish whatever
+// scaling it was doing before we try again.
+const EMPTY_RESPONSE_RETRY_DELAY_MS = 2000;
 
 async function chatCompletionWithRetry(
   messages: ChatMessage[],
@@ -3922,7 +3932,14 @@ async function chatCompletionWithRetry(
     };
   }
 
-  for (let attempt = 0; attempt <= MAX_TRUNCATION_RETRIES; attempt++) {
+  // Separate counters for generic failures and empty-response failures.
+  // Empty responses get a much higher budget (with exponential backoff)
+  // because OpenRouter's docs say this is the expected cold-start behavior
+  // and a retry is the documented workaround.
+  let genericAttempts = 0;
+  let emptyAttempts = 0;
+
+  while (true) {
     let resp: StreamingResult;
     try {
       // Non-streaming: single JSON response, no SSE parsing.
@@ -3950,9 +3967,6 @@ async function chatCompletionWithRetry(
             model: FREE_MODEL_ID,
           });
         } catch (freeErr) {
-          // Free model also failed. Count as a regular failure and continue
-          // the normal retry loop so it either recovers or surfaces a proper
-          // error label. Don't mask the free-mode error.
           const freeMsg =
             freeErr instanceof Error ? freeErr.message : String(freeErr);
           process.stderr.write(
@@ -3962,13 +3976,13 @@ async function chatCompletionWithRetry(
         }
       }
 
-      // Network/connection error — count as failure
+      // Network/connection error — count as generic failure
       recordServiceFailure();
-      if (attempt < MAX_TRUNCATION_RETRIES) {
+      genericAttempts++;
+      if (genericAttempts <= MAX_TRUNCATION_RETRIES) {
         process.stderr.write(
-          `[llm-externalizer] Request error: ${errMsg} — retrying (${attempt + 1}/${MAX_TRUNCATION_RETRIES})\n`,
+          `[llm-externalizer] Request error: ${errMsg} — retrying (${genericAttempts}/${MAX_TRUNCATION_RETRIES})\n`,
         );
-        // Check if this triggered the systemic failure threshold
         const abort = await checkServiceHealthOrWait();
         if (abort) {
           return {
@@ -3998,7 +4012,7 @@ async function chatCompletionWithRetry(
       resp.content +=
         "\n\n---\n**TRUNCATED**: Response hit the output-token limit (finish_reason=length). The analysis above is cut off mid-generation.";
       process.stderr.write(
-        `[llm-externalizer] finish_reason=length on attempt ${attempt + 1} — output token limit hit\n`,
+        `[llm-externalizer] finish_reason=length — output token limit hit\n`,
       );
       return resp;
     }
@@ -4010,30 +4024,37 @@ async function chatCompletionWithRetry(
       resp.content +=
         "\n\n---\n**BLOCKED**: The provider's content filter blocked this response (finish_reason=content_filter). No retry — the block is deterministic for this prompt.";
       process.stderr.write(
-        `[llm-externalizer] finish_reason=content_filter on attempt ${attempt + 1} — content filter blocked response\n`,
+        `[llm-externalizer] finish_reason=content_filter — content filter blocked response\n`,
       );
       return resp;
     }
 
     // Everything else: empty content, finishReason="" (malformed/glitch),
-    // finishReason="error", or unknown values. Retry up to MAX_TRUNCATION_RETRIES.
+    // finishReason="error", or unknown values.
     recordServiceFailure();
-
     const isEmpty = resp.content.trim().length === 0;
     const reasonLabel = resp.finishReason || "empty";
 
-    // Empty-response escalation: on OpenRouter, silently-empty 200 responses
-    // often indicate the reasoning field was accepted but the model spun in
-    // thinking mode without producing output. The per-attempt ladder inside
-    // chatCompletionSimple only downgrades on 400 errors, so we mutate the
-    // shared MODEL_REASONING_CACHE here to force a lower effort next attempt.
-    // xhigh -> high -> none across successive retries.
-    if (
-      isEmpty &&
-      currentBackend.type === "openrouter" &&
-      options.model &&
-      attempt < MAX_TRUNCATION_RETRIES
-    ) {
+    // Pick the right retry budget based on failure type.
+    //
+    // Empty responses on OpenRouter are the documented "no content generated"
+    // case (cold-start, scaling) — the recommended workaround is to retry.
+    // We use MAX_EMPTY_RESPONSE_RETRIES (15) with exponential backoff so the
+    // provider has time to warm up between attempts. Non-empty failures
+    // (finishReason=error, unknown values) keep the stricter MAX_TRUNCATION_RETRIES
+    // budget since they're less likely to be transient.
+    const useEmptyBudget = isEmpty && currentBackend.type === "openrouter";
+    if (useEmptyBudget) {
+      emptyAttempts++;
+    } else {
+      genericAttempts++;
+    }
+    const limit = useEmptyBudget ? MAX_EMPTY_RESPONSE_RETRIES : MAX_TRUNCATION_RETRIES;
+    const currentAttempt = useEmptyBudget ? emptyAttempts : genericAttempts;
+
+    // Empty-response escalation: downgrade the reasoning cache so the next
+    // attempt runs with less (or no) reasoning. xhigh -> high -> none.
+    if (useEmptyBudget && options.model && currentAttempt <= limit) {
       const current = MODEL_REASONING_CACHE.get(options.model);
       if (current === undefined || current === "xhigh") {
         MODEL_REASONING_CACHE.set(options.model, "high");
@@ -4048,10 +4069,11 @@ async function chatCompletionWithRetry(
       }
     }
 
-    if (attempt < MAX_TRUNCATION_RETRIES) {
+    if (currentAttempt <= limit) {
       process.stderr.write(
-        `[llm-externalizer] Empty/invalid response (finish_reason=${reasonLabel}, empty=${isEmpty}) — retrying (${attempt + 1}/${MAX_TRUNCATION_RETRIES})\n`,
+        `[llm-externalizer] ${useEmptyBudget ? "Empty" : "Invalid"} response (finish_reason=${reasonLabel}) — retrying (${currentAttempt}/${limit})\n`,
       );
+      // Check systemic failure threshold (may block/abort)
       const abort = await checkServiceHealthOrWait();
       if (abort) {
         return {
@@ -4061,25 +4083,34 @@ async function chatCompletionWithRetry(
           truncated: true,
         };
       }
+      // Fixed short wait between empty-response retries. Empty responses
+      // are cold-start / scaling signals, not rate-limit signals, so a
+      // constant interval is the right shape (see EMPTY_RESPONSE_RETRY_DELAY_MS
+      // comment above). Non-empty retries go through the service-health
+      // cooldown and don't need an extra delay here.
+      if (useEmptyBudget) {
+        process.stderr.write(
+          `[llm-externalizer] Waiting ${Math.round(EMPTY_RESPONSE_RETRY_DELAY_MS / 1000)}s before retry ${currentAttempt + 1}\n`,
+        );
+        await new Promise((r) => setTimeout(r, EMPTY_RESPONSE_RETRY_DELAY_MS));
+      }
       continue;
     }
 
     // Exhausted retries — label by cause so the report makes sense.
     if (isEmpty && (resp.finishReason === "" || resp.finishReason === "stop")) {
-      resp.content = `**EMPTY RESPONSE**: The provider returned no content after ${MAX_TRUNCATION_RETRIES} retries (finish_reason=${reasonLabel}). This usually means a transient provider glitch or the model failed on this specific prompt. No partial output available.`;
+      resp.content = `**EMPTY RESPONSE**: The provider returned no content after ${limit} retries (finish_reason=${reasonLabel}). This usually means a transient provider glitch or the model failed on this specific prompt. No partial output available.`;
     } else if (resp.finishReason === "error") {
-      resp.content += `\n\n---\n**UPSTREAM ERROR**: The provider reported an error (finish_reason=error) after ${MAX_TRUNCATION_RETRIES} retries. The partial output above may be incomplete.`;
+      resp.content += `\n\n---\n**UPSTREAM ERROR**: The provider reported an error (finish_reason=error) after ${limit} retries. The partial output above may be incomplete.`;
     } else {
-      resp.content += `\n\n---\n**INCOMPLETE**: Response did not finish cleanly after ${MAX_TRUNCATION_RETRIES} retries (finish_reason=${reasonLabel}). The output above may be incomplete.`;
+      resp.content += `\n\n---\n**INCOMPLETE**: Response did not finish cleanly after ${limit} retries (finish_reason=${reasonLabel}). The output above may be incomplete.`;
     }
     resp.truncated = true;
     process.stderr.write(
-      `[llm-externalizer] Exhausted ${MAX_TRUNCATION_RETRIES} retries (finish_reason=${reasonLabel}, empty=${isEmpty}) — returning with label\n`,
+      `[llm-externalizer] Exhausted ${limit} retries (finish_reason=${reasonLabel}, empty=${isEmpty}) — returning with label\n`,
     );
     return resp;
   }
-
-  throw new Error("Unreachable: retry loop exited without returning");
 }
 
 // ── Ensemble streaming helper ────────────────────────────────────────

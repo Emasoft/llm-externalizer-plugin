@@ -31278,6 +31278,8 @@ async function checkServiceHealthOrWait() {
   return null;
 }
 var MAX_TRUNCATION_RETRIES = 3;
+var MAX_EMPTY_RESPONSE_RETRIES = 15;
+var EMPTY_RESPONSE_RETRY_DELAY_MS = 2e3;
 async function chatCompletionWithRetry(messages, options) {
   const healthAbort = await checkServiceHealthOrWait();
   if (healthAbort) {
@@ -31288,7 +31290,9 @@ async function chatCompletionWithRetry(messages, options) {
       truncated: true
     };
   }
-  for (let attempt = 0; attempt <= MAX_TRUNCATION_RETRIES; attempt++) {
+  let genericAttempts = 0;
+  let emptyAttempts = 0;
+  while (true) {
     let resp;
     try {
       resp = await chatCompletionSimple(messages, options);
@@ -31315,9 +31319,10 @@ async function chatCompletionWithRetry(messages, options) {
         }
       }
       recordServiceFailure();
-      if (attempt < MAX_TRUNCATION_RETRIES) {
+      genericAttempts++;
+      if (genericAttempts <= MAX_TRUNCATION_RETRIES) {
         process.stderr.write(
-          `[llm-externalizer] Request error: ${errMsg} \u2014 retrying (${attempt + 1}/${MAX_TRUNCATION_RETRIES})
+          `[llm-externalizer] Request error: ${errMsg} \u2014 retrying (${genericAttempts}/${MAX_TRUNCATION_RETRIES})
 `
         );
         const abort = await checkServiceHealthOrWait();
@@ -31342,7 +31347,7 @@ async function chatCompletionWithRetry(messages, options) {
       resp.truncated = true;
       resp.content += "\n\n---\n**TRUNCATED**: Response hit the output-token limit (finish_reason=length). The analysis above is cut off mid-generation.";
       process.stderr.write(
-        `[llm-externalizer] finish_reason=length on attempt ${attempt + 1} \u2014 output token limit hit
+        `[llm-externalizer] finish_reason=length \u2014 output token limit hit
 `
       );
       return resp;
@@ -31352,7 +31357,7 @@ async function chatCompletionWithRetry(messages, options) {
       resp.truncated = true;
       resp.content += "\n\n---\n**BLOCKED**: The provider's content filter blocked this response (finish_reason=content_filter). No retry \u2014 the block is deterministic for this prompt.";
       process.stderr.write(
-        `[llm-externalizer] finish_reason=content_filter on attempt ${attempt + 1} \u2014 content filter blocked response
+        `[llm-externalizer] finish_reason=content_filter \u2014 content filter blocked response
 `
       );
       return resp;
@@ -31360,7 +31365,15 @@ async function chatCompletionWithRetry(messages, options) {
     recordServiceFailure();
     const isEmpty = resp.content.trim().length === 0;
     const reasonLabel = resp.finishReason || "empty";
-    if (isEmpty && currentBackend.type === "openrouter" && options.model && attempt < MAX_TRUNCATION_RETRIES) {
+    const useEmptyBudget = isEmpty && currentBackend.type === "openrouter";
+    if (useEmptyBudget) {
+      emptyAttempts++;
+    } else {
+      genericAttempts++;
+    }
+    const limit = useEmptyBudget ? MAX_EMPTY_RESPONSE_RETRIES : MAX_TRUNCATION_RETRIES;
+    const currentAttempt = useEmptyBudget ? emptyAttempts : genericAttempts;
+    if (useEmptyBudget && options.model && currentAttempt <= limit) {
       const current = MODEL_REASONING_CACHE.get(options.model);
       if (current === void 0 || current === "xhigh") {
         MODEL_REASONING_CACHE.set(options.model, "high");
@@ -31376,9 +31389,9 @@ async function chatCompletionWithRetry(messages, options) {
         );
       }
     }
-    if (attempt < MAX_TRUNCATION_RETRIES) {
+    if (currentAttempt <= limit) {
       process.stderr.write(
-        `[llm-externalizer] Empty/invalid response (finish_reason=${reasonLabel}, empty=${isEmpty}) \u2014 retrying (${attempt + 1}/${MAX_TRUNCATION_RETRIES})
+        `[llm-externalizer] ${useEmptyBudget ? "Empty" : "Invalid"} response (finish_reason=${reasonLabel}) \u2014 retrying (${currentAttempt}/${limit})
 `
       );
       const abort = await checkServiceHealthOrWait();
@@ -31390,29 +31403,35 @@ async function chatCompletionWithRetry(messages, options) {
           truncated: true
         };
       }
+      if (useEmptyBudget) {
+        process.stderr.write(
+          `[llm-externalizer] Waiting ${Math.round(EMPTY_RESPONSE_RETRY_DELAY_MS / 1e3)}s before retry ${currentAttempt + 1}
+`
+        );
+        await new Promise((r) => setTimeout(r, EMPTY_RESPONSE_RETRY_DELAY_MS));
+      }
       continue;
     }
     if (isEmpty && (resp.finishReason === "" || resp.finishReason === "stop")) {
-      resp.content = `**EMPTY RESPONSE**: The provider returned no content after ${MAX_TRUNCATION_RETRIES} retries (finish_reason=${reasonLabel}). This usually means a transient provider glitch or the model failed on this specific prompt. No partial output available.`;
+      resp.content = `**EMPTY RESPONSE**: The provider returned no content after ${limit} retries (finish_reason=${reasonLabel}). This usually means a transient provider glitch or the model failed on this specific prompt. No partial output available.`;
     } else if (resp.finishReason === "error") {
       resp.content += `
 
 ---
-**UPSTREAM ERROR**: The provider reported an error (finish_reason=error) after ${MAX_TRUNCATION_RETRIES} retries. The partial output above may be incomplete.`;
+**UPSTREAM ERROR**: The provider reported an error (finish_reason=error) after ${limit} retries. The partial output above may be incomplete.`;
     } else {
       resp.content += `
 
 ---
-**INCOMPLETE**: Response did not finish cleanly after ${MAX_TRUNCATION_RETRIES} retries (finish_reason=${reasonLabel}). The output above may be incomplete.`;
+**INCOMPLETE**: Response did not finish cleanly after ${limit} retries (finish_reason=${reasonLabel}). The output above may be incomplete.`;
     }
     resp.truncated = true;
     process.stderr.write(
-      `[llm-externalizer] Exhausted ${MAX_TRUNCATION_RETRIES} retries (finish_reason=${reasonLabel}, empty=${isEmpty}) \u2014 returning with label
+      `[llm-externalizer] Exhausted ${limit} retries (finish_reason=${reasonLabel}, empty=${isEmpty}) \u2014 returning with label
 `
     );
     return resp;
   }
-  throw new Error("Unreachable: retry loop exited without returning");
 }
 async function ensembleStreaming(messages, options, ensemble, fileLineCount) {
   if (options.modelOverride) {
