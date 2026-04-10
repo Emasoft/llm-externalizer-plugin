@@ -27,21 +27,22 @@ Copy this checklist and track your progress:
 
 1. [ ] Parse the user's prompt for the **exact OpenRouter model id** (first arg) —
        case-sensitive, vendor-prefixed, with any `:free` / `:thinking` / `:beta`
-       suffix. Also scan the args for optional format flags:
-       - `--no-color` / `--nocolor` / `--bw` / `--mono` → forward `--no-color` (b/w terminals)
-       - `--markdown` / `--plain` → forward `--markdown` (pipe-delimited markdown table)
-       - `--json` / `--raw` → forward `--json` (raw OpenRouter JSON for scripts/jq)
+       suffix. Also scan for optional format flags:
+       - `--no-color` / `--nocolor` / `--bw` / `--mono` → forward `--no-color`
+       - `--markdown` / `--plain` → forward `--markdown`
+       - `--json` / `--raw` → forward `--json`
 2. [ ] If the user gave only a partial name, ask for the full id.
 3. [ ] Run: `npx llm-externalizer model-info "<exact-id>" [flags]`
-       Default (no flags) keeps colors ON — Claude Code renders ANSI codes so bright
-       cyan borders, green capability flags, and yellow/red latency percentiles all
-       display correctly. Pass `--no-color` only when the user's terminal is
-       monochrome or they explicitly asked for it.
-4. [ ] **Copy the entire CLI stdout verbatim into your response as a fenced code
-       block.** Claude Code collapses long Bash tool output behind a "+N lines" fold,
-       so reprint it. Do NOT paraphrase or summarize. Only add commentary on an
-       explicit follow-up question.
-5. [ ] On error, see [references/errors.md](references/errors.md).
+4. [ ] **Stop. Do not reprint, paraphrase, summarize, or add commentary.** The Bash
+       tool output pane renders the ANSI-colored table natively. If Claude Code
+       collapses it behind a "+N lines" fold the user will expand it with ctrl+o
+       themselves. Your response should contain nothing beyond what's necessary to
+       confirm the command ran — ideally just acknowledge completion in a single
+       short sentence.
+5. [ ] Only add a textual summary if the user explicitly asks a follow-up question
+       beyond "show me the info" (e.g. "which provider is cheapest?",
+       "does it support reasoning?"). Otherwise the table speaks for itself.
+6. [ ] On error, see [references/errors.md](references/errors.md).
 
 ## Output
 
