@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.83] - 2026-04-10
+
+### Changed
+
+- Strict mode — zero-skip validation gates
+
 ## [3.9.82] - 2026-04-10
 
 ### Changed
