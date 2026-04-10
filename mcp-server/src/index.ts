@@ -2693,6 +2693,11 @@ async function chatCompletionSimple(
 ): Promise<StreamingResult> {
   const conn = await resolveConnection(options);
 
+  // LM Studio native API — delegate to native handler (different request format)
+  if (conn.isNative) {
+    return chatCompletionNative(conn, messages, options);
+  }
+
   const body: Record<string, unknown> = {
     messages,
     temperature: options.temperature ?? DEFAULT_TEMPERATURE,
@@ -3654,15 +3659,12 @@ async function chatCompletionWithRetry(
     };
   }
 
-  // Use non-streaming for free/override models — simpler, more reliable, no SSE parsing
-  const useSimple = options.model === FREE_MODEL_ID;
-
   for (let attempt = 0; attempt <= MAX_TRUNCATION_RETRIES; attempt++) {
     let resp: StreamingResult;
     try {
-      resp = useSimple
-        ? await chatCompletionSimple(messages, options)
-        : await chatCompletionStreaming(messages, options);
+      // Non-streaming: single JSON response, no SSE parsing.
+      // Batch-level heartbeat in rateLimitedParallel keeps MCP alive.
+      resp = await chatCompletionSimple(messages, options);
     } catch (err) {
       // Network/connection error — count as failure
       recordServiceFailure();
@@ -3704,18 +3706,7 @@ async function chatCompletionWithRetry(
       return resp;
     }
 
-    // If reasoning tokens were detected but content is empty, the model was still thinking
-    // when the timeout hit. Retrying starts from scratch — pointless. Return what we have.
-    if (resp.reasoningDetected && resp.content.trim().length === 0) {
-      process.stderr.write(
-        `[llm-externalizer] Reasoning model timed out after ${Math.round(SOFT_TIMEOUT_MS / 1000)}s of thinking with no content output — skipping retries\n`,
-      );
-      resp.content = `⚠ Reasoning model timed out — spent ${Math.round(SOFT_TIMEOUT_MS / 1000)}s thinking but produced no content. The task may be too complex for this model's speed at this input size.`;
-      resp.truncated = true;
-      return resp;
-    }
-
-    // Truncated by timeout or connection drop — count as failure, retry
+    // Empty response — count as failure, retry
     recordServiceFailure();
 
     if (attempt < MAX_TRUNCATION_RETRIES) {
