@@ -1,6 +1,51 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.62] - 2026-04-10
+
+### Changed
+
+- Credit-aware free-mode fallback + reasoning/labeling polish
+
+Reasoning:
+- Nemotron free model capped at medium effort. xhigh/high empirically
+  produced empty responses for large files, likely because OpenRouter
+  does not plumb the reasoning field through to the NVIDIA endpoint for
+  this free variant, or the free-tier budget cannot accommodate deep
+  reasoning + output. Medium is the safe ceiling.
+- Empty-response escalation: when chatCompletionWithRetry receives an
+  empty response from an OpenRouter model, it now downgrades the
+  MODEL_REASONING_CACHE entry (xhigh -> high -> none) for that model
+  so the next retry attempt runs with less (or no) reasoning. Silent
+  empty 200 responses are now handled in addition to explicit 400
+  reasoning rejections.
+- Structured-output path (chatCompletionJSON) skips reasoning entirely
+  when jsonSchema is requested. Mixing json_schema with reasoning is
+  untested across providers — some inline reasoning into the content
+  field and break JSON.parse. Schema enforcement already delivers
+  precise output, so this is a safe no-op.
+
+Credit-aware fallback:
+- New getOpenRouterBalance() helper queries /v1/key and /v1/credits,
+  cached 60s. Returns Infinity for unlimited keys, NaN on failure.
+- resolveModelOverride() replaces the old one-liner in the tool-handler
+  switch. It forces FREE_MODEL_ID when: caller requested free=true, the
+  session creditExhausted flag is set, or the pre-flight balance is
+  below MIN_BALANCE_FOR_PAID_USD ($0.05).
+- classifyError no longer aborts on 402. Sets creditExhausted instead
+  and reports the error as recoverable. chatCompletionWithRetry catches
+  402 mid-flight and immediately retries the failed call with the free
+  model — no cooldown, no batch abort. The "never fail, switch to free"
+  promise is now guaranteed for any in-flight request.
+
+Labeling fix:
+- formatFooter no longer emits the generic "partial result due to
+  timeout" footer when the body already carries a specific label
+  (TRUNCATED / EMPTY RESPONSE / BLOCKED / UPSTREAM ERROR / INCOMPLETE).
+  The old footer was misleading for non-timeout failures. When no label
+  is present (older paths or a real network timeout), the footer still
+  appears but with neutral wording.
+
 ## [3.9.61] - 2026-04-10
 
 ### Changed
