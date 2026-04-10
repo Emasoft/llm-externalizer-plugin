@@ -1501,16 +1501,16 @@ const BREVITY_RULES =
 // Example of the file wrapping format, prepended to all system prompts that receive files.
 // Shows the LLM exactly what to expect so it can parse multi-file batches reliably.
 const FILE_FORMAT_EXAMPLE =
-  "\nINPUT FORMAT: Each attached file is wrapped as follows:\n" +
+  "\nINPUT FORMAT: Each attached file is wrapped as follows (placeholders use {BRACES}, actual tags use angle brackets):\n" +
   "<filename>\n" +
-  "/absolute/path/to/file.ext\n" +
+  "{ABSOLUTE_PATH_HERE}\n" +
   "</filename>\n" +
   "<file-content>\n" +
-  "````language\n" +
-  "<file contents here>\n" +
+  "````{LANGUAGE}\n" +
+  "{FILE_CONTENTS_HERE}\n" +
   "````\n" +
   "</file-content>\n" +
-  "Reference files by the path inside <filename>. Multiple files may appear in sequence.\n";
+  "Reference files by the path inside the filename tag. Multiple files may appear in sequence.\n";
 const CONNECT_TIMEOUT_MS = 5000;
 // Per-LLM-request timeout. Reasoning models (Qwen, etc.) need extended time for thinking.
 // The MCP tool-call timeout is inactivity-based, kept alive by heartbeat — no hard cap needed.
