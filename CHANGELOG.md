@@ -1,6 +1,20 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.60] - 2026-04-10
+
+### Changed
+
+- Add linters to publish.py: eslint, ruff, shellcheck + output to reports_dev
+
+- New ESLint flat config (mcp-server/eslint.config.mjs) for TypeScript
+- Added lint/typecheck scripts to mcp-server/package.json
+- Fixed 7 existing lint errors (dead code, unused imports, prefer-const)
+- Updated ruff config: line-length 120, ignore E501
+- publish.py run_checks() now runs: tsc, eslint, ruff, shellcheck
+- All check output redirected to reports_dev/publish/<name>.log
+- reports_dev/ added to .gitignore
+
 ## [3.9.59] - 2026-04-10
 
 ### Changed

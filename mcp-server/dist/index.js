@@ -28886,7 +28886,8 @@ Simplify the quantifiers to avoid ReDoS.`
 
 Pattern received: ${pattern}
 
-Ensure it is a valid JavaScript regular expression.`
+Ensure it is a valid JavaScript regular expression.`,
+      { cause: err }
     );
   }
 }
@@ -31819,7 +31820,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.59" },
+  { name: "llm-externalizer", version: "3.9.60" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {
@@ -34347,7 +34348,7 @@ ${fence}${sourceBlocks}` }
             if (nameResult.status !== 0 && nameResult.status !== 1) {
               return { content: [{ type: "text", text: `FAILED: git diff --name-only failed: ${nameResult.stderr?.trim()}` }], isError: true };
             }
-            let changedFiles = (nameResult.stdout || "").split("\n").filter((f) => f.trim());
+            const changedFiles = (nameResult.stdout || "").split("\n").filter((f) => f.trim());
             let diffGroups;
             if (cfFilePairs && cfFilePairs.length > 0) {
               diffGroups = [];
