@@ -14116,7 +14116,7 @@ import {
   unwatchFile
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { extname, join as join2, basename, dirname, resolve as resolve2 } from "node:path";
+import { extname, join as join2, basename, dirname, resolve as resolve2, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 
 // node_modules/zod/v3/helpers/util.js
@@ -28419,18 +28419,40 @@ function percentileAnnotation(numeric, higherIsBetter) {
   if (numeric <= 5) return higherIsBetter ? `worst ${numeric.toFixed(numeric % 1 ? 1 : 0)}%` : `best ${numeric.toFixed(numeric % 1 ? 1 : 0)}%`;
   return "";
 }
-async function fetchOpenRouterModelInfo(modelId, baseUrl, authToken) {
+function isValidOpenRouterModelId(id) {
+  if (!id || typeof id !== "string") return false;
+  if (id.length > 200) return false;
+  if (id.includes("..") || id.includes("//")) return false;
+  return /^[a-z0-9][a-z0-9._-]*\/[a-zA-Z0-9._-]+(?::[a-zA-Z0-9._-]+)?$/.test(id);
+}
+var MODEL_INFO_FETCH_TIMEOUT_MS = 15e3;
+async function fetchOpenRouterModelInfo(modelId, baseUrl, authToken, timeoutMs = MODEL_INFO_FETCH_TIMEOUT_MS) {
+  if (!isValidOpenRouterModelId(modelId)) {
+    return {
+      ok: false,
+      error: `Invalid model id '${modelId}'. Expected '<vendor>/<model>[:variant]' (e.g. 'nvidia/nemotron-3-super-120b-a12b:free').`
+    };
+  }
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
   let res;
   try {
     res = await fetch(`${baseUrl}/v1/models/${modelId}/endpoints`, {
-      headers: { Authorization: `Bearer ${authToken}` }
+      headers: { Authorization: `Bearer ${authToken}` },
+      signal: controller.signal
     });
   } catch (err) {
-    return {
-      ok: false,
-      error: `Network error: ${err instanceof Error ? err.message : String(err)}`
-    };
+    clearTimeout(timeoutHandle);
+    const msg = err instanceof Error ? err.message : String(err);
+    if (err instanceof Error && err.name === "AbortError") {
+      return {
+        ok: false,
+        error: `OpenRouter request timed out after ${timeoutMs / 1e3}s`
+      };
+    }
+    return { ok: false, error: `Network error: ${msg}` };
   }
+  clearTimeout(timeoutHandle);
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     return { ok: false, error: body.slice(0, 300), status: res.status };
@@ -28502,7 +28524,10 @@ function formatModelInfoMarkdown(data, modelId) {
       rows.push(["Max prompt", `${ep.max_prompt_tokens.toLocaleString()} tokens`]);
     if (ep.quantization) rows.push(["Quantization", ep.quantization]);
     const params = new Set(ep.supported_parameters ?? []);
-    rows.push(["Reasoning", params.has("reasoning") ? "yes" : "no"]);
+    rows.push([
+      "Reasoning",
+      params.has("reasoning") || params.has("include_reasoning") ? "yes" : "no"
+    ]);
     rows.push(["Tool calling", params.has("tools") ? "yes" : "no"]);
     rows.push([
       "Structured output",
@@ -28710,7 +28735,10 @@ function renderEndpointTable(ep, colors) {
   const params = new Set(ep.supported_parameters ?? []);
   const yes = () => paint(ANSI.bgreen, "yes", colors);
   const no = () => paint(ANSI.dim, "no", colors);
-  rows.push(["Reasoning", params.has("reasoning") ? yes() : no()]);
+  rows.push([
+    "Reasoning",
+    params.has("reasoning") || params.has("include_reasoning") ? yes() : no()
+  ]);
   rows.push(["Tool calling", params.has("tools") ? yes() : no()]);
   rows.push([
     "Structured output",
@@ -33578,20 +33606,58 @@ Profiles: ${profileNames.join(", ")}`);
             currentBackend.apiKey
           );
           if (!result.ok) {
+            let msg;
+            switch (result.status) {
+              case 400:
+                msg = `FAILED: OpenRouter rejected the request for '${infoModel}' (400 Bad Request). ${result.error}`;
+                break;
+              case 401:
+                msg = `FAILED: OpenRouter authentication failed (401). Check that $OPENROUTER_API_KEY is set and valid \u2014 run 'discover' to verify.`;
+                break;
+              case 402:
+                msg = `FAILED: OpenRouter credit exhausted (402). Add credits at https://openrouter.ai/credits or fall back to a :free model.`;
+                break;
+              case 403:
+                msg = `FAILED: OpenRouter blocked the request for '${infoModel}' (403 Forbidden). The model may require moderation approval or be unavailable in your region.`;
+                break;
+              case 404:
+                msg = `FAILED: OpenRouter returned 404 for model '${infoModel}'. Check the id \u2014 case-sensitive, requires vendor prefix and any ':free' / ':thinking' suffix.`;
+                break;
+              case 408:
+                msg = `FAILED: OpenRouter request timed out (408). Retry in a moment.`;
+                break;
+              case 429:
+                msg = `FAILED: OpenRouter rate limit hit (429). Wait a few seconds before retrying.`;
+                break;
+              case 502:
+              case 503:
+              case 504:
+                msg = `FAILED: OpenRouter upstream error (${result.status}). The provider is down or unreachable \u2014 retry later.`;
+                break;
+              default:
+                msg = `FAILED: ${result.error}${result.status ? ` (status ${result.status})` : ""}`;
+            }
             return {
-              content: [
-                {
-                  type: "text",
-                  text: result.status === 404 ? `FAILED: OpenRouter returned 404 for model '${infoModel}'. Check the id is correct \u2014 case-sensitive, requires vendor prefix and any ':free' / ':thinking' suffix.` : `FAILED: ${result.error}${result.status ? ` (status ${result.status})` : ""}`
-                }
-              ],
+              content: [{ type: "text", text: msg }],
               isError: true
             };
           }
           if (name === "or_model_info_json") {
             const jsonText = formatModelInfoJson(result.data, infoModel);
             if (infoFilePath && typeof infoFilePath === "string" && infoFilePath.trim()) {
-              const absPath = resolve2(infoFilePath.trim());
+              const rawPath = infoFilePath.trim();
+              if (!isAbsolute(rawPath)) {
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: `FAILED: file_path must be an absolute path (e.g. /tmp/model-info.json). Got '${rawPath}'.`
+                    }
+                  ],
+                  isError: true
+                };
+              }
+              const absPath = resolve2(rawPath);
               try {
                 writeFileSync2(absPath, jsonText, "utf-8");
               } catch (err) {

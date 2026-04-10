@@ -25,7 +25,7 @@ import {
 } from "node:fs";
 import { parse as yamlParse } from "yaml";
 import { spawnSync } from "node:child_process";
-import { extname, join, basename, dirname, resolve } from "node:path";
+import { extname, join, basename, dirname, resolve, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -6907,16 +6907,42 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           currentBackend.apiKey,
         );
         if (!result.ok) {
+          // Friendly error messages per status code. OpenRouter uses
+          // the standard HTTP error code set — see
+          // docs/openrouter/errors-and-debugging.md.
+          let msg: string;
+          switch (result.status) {
+            case 400:
+              msg = `FAILED: OpenRouter rejected the request for '${infoModel}' (400 Bad Request). ${result.error}`;
+              break;
+            case 401:
+              msg = `FAILED: OpenRouter authentication failed (401). Check that $OPENROUTER_API_KEY is set and valid — run 'discover' to verify.`;
+              break;
+            case 402:
+              msg = `FAILED: OpenRouter credit exhausted (402). Add credits at https://openrouter.ai/credits or fall back to a :free model.`;
+              break;
+            case 403:
+              msg = `FAILED: OpenRouter blocked the request for '${infoModel}' (403 Forbidden). The model may require moderation approval or be unavailable in your region.`;
+              break;
+            case 404:
+              msg = `FAILED: OpenRouter returned 404 for model '${infoModel}'. Check the id — case-sensitive, requires vendor prefix and any ':free' / ':thinking' suffix.`;
+              break;
+            case 408:
+              msg = `FAILED: OpenRouter request timed out (408). Retry in a moment.`;
+              break;
+            case 429:
+              msg = `FAILED: OpenRouter rate limit hit (429). Wait a few seconds before retrying.`;
+              break;
+            case 502:
+            case 503:
+            case 504:
+              msg = `FAILED: OpenRouter upstream error (${result.status}). The provider is down or unreachable — retry later.`;
+              break;
+            default:
+              msg = `FAILED: ${result.error}${result.status ? ` (status ${result.status})` : ""}`;
+          }
           return {
-            content: [
-              {
-                type: "text",
-                text:
-                  result.status === 404
-                    ? `FAILED: OpenRouter returned 404 for model '${infoModel}'. Check the id is correct — case-sensitive, requires vendor prefix and any ':free' / ':thinking' suffix.`
-                    : `FAILED: ${result.error}${result.status ? ` (status ${result.status})` : ""}`,
-              },
-            ],
+            content: [{ type: "text", text: msg }],
             isError: true,
           };
         }
@@ -6926,7 +6952,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (name === "or_model_info_json") {
           const jsonText = formatModelInfoJson(result.data, infoModel);
           if (infoFilePath && typeof infoFilePath === "string" && infoFilePath.trim()) {
-            const absPath = resolve(infoFilePath.trim());
+            const rawPath = infoFilePath.trim();
+            // Enforce absolute paths — relative paths silently resolve
+            // against process.cwd() which may surprise the caller and
+            // opens a small path-confusion window.
+            if (!isAbsolute(rawPath)) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `FAILED: file_path must be an absolute path (e.g. /tmp/model-info.json). Got '${rawPath}'.`,
+                  },
+                ],
+                isError: true,
+              };
+            }
+            const absPath = resolve(rawPath);
             try {
               writeFileSync(absPath, jsonText, "utf-8");
             } catch (err) {

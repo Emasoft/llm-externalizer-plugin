@@ -100,25 +100,76 @@ export type FetchModelInfoResult =
   | { ok: false; error: string; status?: number };
 
 /**
+ * Validate that a model id is a well-formed OpenRouter identifier.
+ * Accepts: lowercase/digits/hyphens/dots in vendor and model segments,
+ * a single required `/` separator, and an optional `:suffix` for
+ * variants (`:free`, `:thinking`, `:beta`). Rejects anything that
+ * could be used for URL path traversal or injection, most importantly
+ * `..`, embedded spaces, and other URL-reserved characters.
+ */
+export function isValidOpenRouterModelId(id: string): boolean {
+  if (!id || typeof id !== "string") return false;
+  if (id.length > 200) return false;
+  // Reject path-traversal attempts and characters that could escape
+  // the /v1/models/{id}/endpoints path segment.
+  if (id.includes("..") || id.includes("//")) return false;
+  // Well-formed: <vendor>/<model>[:<variant>]
+  // vendor and model allow lowercase letters, digits, hyphens, dots,
+  // underscores. Variant (after `:`) allows the same plus some
+  // additional characters OpenRouter uses (e.g. `:free`, `:thinking`).
+  return /^[a-z0-9][a-z0-9._-]*\/[a-zA-Z0-9._-]+(?::[a-zA-Z0-9._-]+)?$/.test(id);
+}
+
+/**
+ * Default timeout for the OpenRouter /v1/models/{id}/endpoints request.
+ * OpenRouter is usually sub-second; 15s is a generous ceiling.
+ */
+const MODEL_INFO_FETCH_TIMEOUT_MS = 15_000;
+
+/**
  * Fetch model metadata from OpenRouter. Returns a tagged union so callers
- * can distinguish "data" from "error" without exceptions.
+ * can distinguish "data" from "error" without exceptions. Always uses an
+ * AbortController timeout so callers never hang on provider outages.
  */
 export async function fetchOpenRouterModelInfo(
   modelId: string,
   baseUrl: string,
   authToken: string,
+  timeoutMs: number = MODEL_INFO_FETCH_TIMEOUT_MS,
 ): Promise<FetchModelInfoResult> {
+  // Validate the model id BEFORE constructing the URL — prevents path
+  // traversal (`../`) and unexpected URL injections.
+  if (!isValidOpenRouterModelId(modelId)) {
+    return {
+      ok: false,
+      error: `Invalid model id '${modelId}'. Expected '<vendor>/<model>[:variant]' (e.g. 'nvidia/nemotron-3-super-120b-a12b:free').`,
+    };
+  }
+
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+
   let res: Response;
   try {
     res = await fetch(`${baseUrl}/v1/models/${modelId}/endpoints`, {
       headers: { Authorization: `Bearer ${authToken}` },
+      signal: controller.signal,
     });
   } catch (err) {
-    return {
-      ok: false,
-      error: `Network error: ${err instanceof Error ? err.message : String(err)}`,
-    };
+    clearTimeout(timeoutHandle);
+    const msg = err instanceof Error ? err.message : String(err);
+    // AbortError has name === "AbortError" — surface as a timeout so
+    // the user understands it wasn't a transient connection failure.
+    if (err instanceof Error && err.name === "AbortError") {
+      return {
+        ok: false,
+        error: `OpenRouter request timed out after ${timeoutMs / 1000}s`,
+      };
+    }
+    return { ok: false, error: `Network error: ${msg}` };
   }
+  clearTimeout(timeoutHandle);
+
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     return { ok: false, error: body.slice(0, 300), status: res.status };
@@ -216,7 +267,10 @@ export function formatModelInfoMarkdown(
     if (ep.quantization) rows.push(["Quantization", ep.quantization]);
 
     const params = new Set(ep.supported_parameters ?? []);
-    rows.push(["Reasoning", params.has("reasoning") ? "yes" : "no"]);
+    rows.push([
+      "Reasoning",
+      params.has("reasoning") || params.has("include_reasoning") ? "yes" : "no",
+    ]);
     rows.push(["Tool calling", params.has("tools") ? "yes" : "no"]);
     rows.push([
       "Structured output",
@@ -524,7 +578,10 @@ function renderEndpointTable(ep: ModelEndpoint, colors: boolean): string {
   const params = new Set(ep.supported_parameters ?? []);
   const yes = () => paint(ANSI.bgreen, "yes", colors);
   const no = () => paint(ANSI.dim, "no", colors);
-  rows.push(["Reasoning", params.has("reasoning") ? yes() : no()]);
+  rows.push([
+    "Reasoning",
+    params.has("reasoning") || params.has("include_reasoning") ? yes() : no(),
+  ]);
   rows.push(["Tool calling", params.has("tools") ? yes() : no()]);
   rows.push([
     "Structured output",

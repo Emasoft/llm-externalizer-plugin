@@ -28,7 +28,7 @@ import {
   formatModelInfoJson,
 } from "./or-model-info.js";
 import { writeFileSync } from "node:fs";
-import { resolve as resolvePath } from "node:path";
+import { resolve as resolvePath, isAbsolute } from "node:path";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -298,11 +298,19 @@ async function cmdModelInfo(modelId: string, flags: Record<string, string>): Pro
 
   const result = await fetchOpenRouterModelInfo(modelId, baseUrl, authToken);
   if (!result.ok) {
-    if (result.status === 404) {
-      die(
-        `OpenRouter returned 404 for model '${modelId}'. Check the id — case-sensitive, with vendor prefix and any ':free' / ':thinking' suffix.`,
-      );
-    }
+    // Friendly error messages per status code. See
+    // docs/openrouter/errors-and-debugging.md for the full list.
+    // die() returns `never`, so this chain always exits.
+    const s = result.status;
+    if (s === 400) die(`OpenRouter rejected the request for '${modelId}' (400 Bad Request). ${result.error}`);
+    if (s === 401) die("OpenRouter authentication failed (401). Check that $OPENROUTER_API_KEY is set and valid.");
+    if (s === 402) die("OpenRouter credit exhausted (402). Add credits at https://openrouter.ai/credits or use a :free model.");
+    if (s === 403) die(`OpenRouter blocked the request for '${modelId}' (403 Forbidden). The model may require moderation approval or be unavailable in your region.`);
+    if (s === 404) die(`OpenRouter returned 404 for model '${modelId}'. Check the id — case-sensitive, with vendor prefix and any ':free' / ':thinking' suffix.`);
+    if (s === 408) die("OpenRouter request timed out (408). Retry in a moment.");
+    if (s === 429) die("OpenRouter rate limit hit (429). Wait a few seconds before retrying.");
+    if (s === 502 || s === 503 || s === 504)
+      die(`OpenRouter upstream error (${s}). The provider is down or unreachable — retry later.`);
     die(`${result.error}${result.status ? ` (status ${result.status})` : ""}`);
   }
 
@@ -326,7 +334,14 @@ async function cmdModelInfo(modelId: string, flags: Record<string, string>): Pro
     // If a filepath was passed alongside --json, write to that file.
     // "true" is the sentinel parseFlags uses when the flag has no argument.
     if (jsonFlag && jsonFlag !== "true") {
-      const filepath = resolvePath(jsonFlag);
+      // CLI is more permissive than the MCP tool — relative paths are
+      // resolved against process.cwd() the way users expect on a shell.
+      // We still warn (on stderr via die if anything) and reject obvious
+      // mistakes like empty strings.
+      if (!jsonFlag.trim()) {
+        die("--json filepath must be a non-empty path");
+      }
+      const filepath = isAbsolute(jsonFlag) ? jsonFlag : resolvePath(jsonFlag);
       try {
         writeFileSync(filepath, text, "utf-8");
       } catch (err) {
