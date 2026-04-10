@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.47] - 2026-04-10
+
+### Changed
+
+- Remove response_format: text — unsupported models would reject it
+
 ## [3.9.46] - 2026-04-10
 
 ### Changed

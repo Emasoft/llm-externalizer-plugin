@@ -30057,9 +30057,7 @@ async function chatCompletionSimple(messages, options = {}) {
     messages,
     temperature: options.temperature ?? DEFAULT_TEMPERATURE,
     max_tokens: options.maxTokens ?? resolveDefaultMaxTokens(),
-    stream: false,
-    // Explicit text output — no SSE, single JSON response
-    response_format: { type: "text" }
+    stream: false
   };
   if (conn.model) body.model = conn.model;
   const startTime = Date.now();
@@ -31951,7 +31949,7 @@ function buildTools() {
   return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "3.9.46" },
+  { name: "llm-externalizer", version: "3.9.47" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {
