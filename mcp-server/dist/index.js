@@ -28477,6 +28477,49 @@ function formatPricePerM(s) {
   if (n === 0) return "free";
   return `$${(n * 1e6).toFixed(4)}/M`;
 }
+function qualityEmoji(level) {
+  switch (level) {
+    case "excellent":
+    case "good":
+    case "free":
+    case "yes":
+      return "\u{1F7E2}";
+    case "borderline":
+      return "\u{1F7E1}";
+    case "poor":
+    case "no":
+      return "\u{1F534}";
+    case "neutral":
+      return "\u26AA";
+  }
+}
+function uptimeLevel(pct) {
+  if (pct === void 0) return "neutral";
+  if (pct >= 99) return "excellent";
+  if (pct >= 95) return "good";
+  if (pct >= 90) return "borderline";
+  return "poor";
+}
+function latencyLevel(ms) {
+  if (ms === void 0) return "neutral";
+  if (ms < 2e3) return "excellent";
+  if (ms < 1e4) return "good";
+  if (ms < 3e4) return "borderline";
+  return "poor";
+}
+function throughputLevel(tps) {
+  if (tps === void 0) return "neutral";
+  if (tps >= 50) return "excellent";
+  if (tps >= 20) return "good";
+  if (tps >= 10) return "borderline";
+  return "poor";
+}
+function priceLevel(s) {
+  if (!s) return "neutral";
+  const n = Number(s);
+  if (isFinite(n) && n === 0) return "free";
+  return "neutral";
+}
 function mdCell(s) {
   return s.replace(/\|/g, "\\|");
 }
@@ -28524,44 +28567,51 @@ function formatModelInfoMarkdown(data, modelId) {
       rows.push(["Max prompt", `${ep.max_prompt_tokens.toLocaleString()} tokens`]);
     if (ep.quantization) rows.push(["Quantization", ep.quantization]);
     const params = new Set(ep.supported_parameters ?? []);
+    const yesNo = (cond) => `${qualityEmoji(cond ? "yes" : "no")} ${cond ? "yes" : "no"}`;
     rows.push([
       "Reasoning",
-      params.has("reasoning") || params.has("include_reasoning") ? "yes" : "no"
+      yesNo(params.has("reasoning") || params.has("include_reasoning"))
     ]);
-    rows.push(["Tool calling", params.has("tools") ? "yes" : "no"]);
+    rows.push(["Tool calling", yesNo(params.has("tools"))]);
     rows.push([
       "Structured output",
-      params.has("structured_outputs") || params.has("response_format") ? "yes" : "no"
+      yesNo(params.has("structured_outputs") || params.has("response_format"))
     ]);
     if (ep.supports_implicit_caching !== void 0) {
-      rows.push(["Implicit caching", ep.supports_implicit_caching ? "yes" : "no"]);
+      rows.push(["Implicit caching", yesNo(ep.supports_implicit_caching)]);
     }
     if (ep.pricing) {
       const p = ep.pricing;
-      rows.push(["Prompt price", formatPricePerM(p.prompt)]);
-      rows.push(["Completion price", formatPricePerM(p.completion)]);
-      if (p.input_cache_read) rows.push(["Cache-read price", formatPricePerM(p.input_cache_read)]);
-      if (p.image) rows.push(["Image price", formatPricePerM(p.image)]);
-      if (p.request) rows.push(["Request price", formatPricePerM(p.request)]);
+      const priceCell = (s) => {
+        const level = priceLevel(s);
+        const emoji3 = level === "free" ? qualityEmoji("free") : "";
+        const text = formatPricePerM(s);
+        return emoji3 ? `${emoji3} ${text}` : text;
+      };
+      rows.push(["Prompt price", priceCell(p.prompt)]);
+      rows.push(["Completion price", priceCell(p.completion)]);
+      if (p.input_cache_read) rows.push(["Cache-read price", priceCell(p.input_cache_read)]);
+      if (p.image) rows.push(["Image price", priceCell(p.image)]);
+      if (p.request) rows.push(["Request price", priceCell(p.request)]);
       if (p.discount !== void 0 && p.discount !== 0) {
-        rows.push(["Discount", `${(p.discount * 100).toFixed(0)}% off`]);
+        rows.push(["Discount", `\u{1F7E2} ${(p.discount * 100).toFixed(0)}% off`]);
       }
     }
     if (typeof ep.uptime_last_5m === "number")
-      rows.push(["Uptime (5m)", `${ep.uptime_last_5m.toFixed(1)}%`]);
+      rows.push(["Uptime (5m)", `${qualityEmoji(uptimeLevel(ep.uptime_last_5m))} ${ep.uptime_last_5m.toFixed(1)}%`]);
     if (typeof ep.uptime_last_30m === "number")
-      rows.push(["Uptime (30m)", `${ep.uptime_last_30m.toFixed(1)}%`]);
+      rows.push(["Uptime (30m)", `${qualityEmoji(uptimeLevel(ep.uptime_last_30m))} ${ep.uptime_last_30m.toFixed(1)}%`]);
     if (typeof ep.uptime_last_1d === "number")
-      rows.push(["Uptime (1d)", `${ep.uptime_last_1d.toFixed(1)}%`]);
+      rows.push(["Uptime (1d)", `${qualityEmoji(uptimeLevel(ep.uptime_last_1d))} ${ep.uptime_last_1d.toFixed(1)}%`]);
     for (const { key, value, numeric } of sortedPercentiles(ep.latency_last_30m)) {
       const annot = percentileAnnotation(numeric, false);
       const label = annot ? `Latency ${key} (${annot})` : `Latency ${key}`;
-      rows.push([label, `${round(value)} ms`]);
+      rows.push([label, `${qualityEmoji(latencyLevel(value))} ${round(value)} ms`]);
     }
     for (const { key, value, numeric } of sortedPercentiles(ep.throughput_last_30m)) {
       const annot = percentileAnnotation(numeric, true);
       const label = annot ? `Throughput ${key} (${annot})` : `Throughput ${key}`;
-      rows.push([label, `${round(value)} tok/s`]);
+      rows.push([label, `${qualityEmoji(throughputLevel(value))} ${round(value)} tok/s`]);
     }
     lines.push("| Field | Value |");
     lines.push("|---|---|");
@@ -28733,77 +28783,48 @@ function renderEndpointTable(ep, colors) {
     rows.push(["Quantization", paint(ANSI.dim, ep.quantization, colors)]);
   }
   const params = new Set(ep.supported_parameters ?? []);
-  const yes = () => paint(ANSI.bgreen, "yes", colors);
-  const no = () => paint(ANSI.dim, "no", colors);
+  const yesVal = () => qualityEmoji("yes") + " " + paint(ANSI.bgreen, "yes", colors);
+  const noVal = () => qualityEmoji("no") + " " + paint(ANSI.dim, "no", colors);
   rows.push([
     "Reasoning",
-    params.has("reasoning") || params.has("include_reasoning") ? yes() : no()
+    params.has("reasoning") || params.has("include_reasoning") ? yesVal() : noVal()
   ]);
-  rows.push(["Tool calling", params.has("tools") ? yes() : no()]);
+  rows.push(["Tool calling", params.has("tools") ? yesVal() : noVal()]);
   rows.push([
     "Structured output",
-    params.has("structured_outputs") || params.has("response_format") ? yes() : no()
+    params.has("structured_outputs") || params.has("response_format") ? yesVal() : noVal()
   ]);
   if (ep.supports_implicit_caching !== void 0) {
     rows.push([
       "Implicit caching",
-      ep.supports_implicit_caching ? yes() : no()
+      ep.supports_implicit_caching ? yesVal() : noVal()
     ]);
   }
   if (ep.pricing) {
     const p = ep.pricing;
-    rows.push([
-      "Prompt price",
-      paint(ANSI[classifyPriceIsFree(p.prompt)], formatPricePerM(p.prompt), colors)
-    ]);
-    rows.push([
-      "Completion price",
-      paint(ANSI[classifyPriceIsFree(p.completion)], formatPricePerM(p.completion), colors)
-    ]);
-    if (p.input_cache_read) {
-      rows.push([
-        "Cache-read price",
-        paint(ANSI[classifyPriceIsFree(p.input_cache_read)], formatPricePerM(p.input_cache_read), colors)
-      ]);
-    }
-    if (p.image) {
-      rows.push([
-        "Image price",
-        paint(ANSI[classifyPriceIsFree(p.image)], formatPricePerM(p.image), colors)
-      ]);
-    }
-    if (p.request) {
-      rows.push([
-        "Request price",
-        paint(ANSI[classifyPriceIsFree(p.request)], formatPricePerM(p.request), colors)
-      ]);
-    }
+    const priceCellAnsi = (s) => {
+      const level = priceLevel(s);
+      const colorKey = classifyPriceIsFree(s);
+      const emoji3 = level === "free" ? qualityEmoji("free") + " " : "";
+      return emoji3 + paint(ANSI[colorKey], formatPricePerM(s), colors);
+    };
+    rows.push(["Prompt price", priceCellAnsi(p.prompt)]);
+    rows.push(["Completion price", priceCellAnsi(p.completion)]);
+    if (p.input_cache_read) rows.push(["Cache-read price", priceCellAnsi(p.input_cache_read)]);
+    if (p.image) rows.push(["Image price", priceCellAnsi(p.image)]);
+    if (p.request) rows.push(["Request price", priceCellAnsi(p.request)]);
     if (p.discount !== void 0 && p.discount !== 0) {
       const discountPct = (p.discount * 100).toFixed(0);
       rows.push([
         "Discount",
-        paint(ANSI.bgreen, `${discountPct}% off`, colors)
+        qualityEmoji("free") + " " + paint(ANSI.bgreen, `${discountPct}% off`, colors)
       ]);
     }
   }
-  if (typeof ep.uptime_last_5m === "number") {
-    rows.push([
-      "Uptime (5m)",
-      paint(ANSI[classifyUptime(ep.uptime_last_5m)], `${ep.uptime_last_5m.toFixed(1)}%`, colors)
-    ]);
-  }
-  if (typeof ep.uptime_last_30m === "number") {
-    rows.push([
-      "Uptime (30m)",
-      paint(ANSI[classifyUptime(ep.uptime_last_30m)], `${ep.uptime_last_30m.toFixed(1)}%`, colors)
-    ]);
-  }
-  if (typeof ep.uptime_last_1d === "number") {
-    rows.push([
-      "Uptime (1d)",
-      paint(ANSI[classifyUptime(ep.uptime_last_1d)], `${ep.uptime_last_1d.toFixed(1)}%`, colors)
-    ]);
-  }
+  const uptimeCell = (pct) => qualityEmoji(uptimeLevel(pct)) + " " + paint(ANSI[classifyUptime(pct)], `${pct.toFixed(1)}%`, colors);
+  if (typeof ep.uptime_last_5m === "number") rows.push(["Uptime (5m)", uptimeCell(ep.uptime_last_5m)]);
+  if (typeof ep.uptime_last_30m === "number") rows.push(["Uptime (30m)", uptimeCell(ep.uptime_last_30m)]);
+  if (typeof ep.uptime_last_1d === "number") rows.push(["Uptime (1d)", uptimeCell(ep.uptime_last_1d)]);
   const round = (n) => Math.round(n).toString();
   for (const { key, value, numeric } of sortedPercentiles(ep.latency_last_30m)) {
     const annot = percentileAnnotation(
@@ -28812,7 +28833,8 @@ function renderEndpointTable(ep, colors) {
       false
     );
     const label = annot ? `Latency ${key} (${annot})` : `Latency ${key}`;
-    rows.push([label, paint(ANSI[classifyLatencyMs(value)], `${round(value)} ms`, colors)]);
+    const cell = qualityEmoji(latencyLevel(value)) + " " + paint(ANSI[classifyLatencyMs(value)], `${round(value)} ms`, colors);
+    rows.push([label, cell]);
   }
   for (const { key, value, numeric } of sortedPercentiles(ep.throughput_last_30m)) {
     const annot = percentileAnnotation(
@@ -28821,7 +28843,8 @@ function renderEndpointTable(ep, colors) {
       true
     );
     const label = annot ? `Throughput ${key} (${annot})` : `Throughput ${key}`;
-    rows.push([label, paint(ANSI[classifyThroughput(value)], `${round(value)} tok/s`, colors)]);
+    const cell = qualityEmoji(throughputLevel(value)) + " " + paint(ANSI[classifyThroughput(value)], `${round(value)} tok/s`, colors);
+    rows.push([label, cell]);
   }
   if (Array.isArray(ep.supported_parameters) && ep.supported_parameters.length > 0) {
     const sorted = [...ep.supported_parameters].sort();

@@ -199,6 +199,59 @@ export function formatPricePerM(s?: string): string {
   return `$${(n * 1_000_000).toFixed(4)}/M`;
 }
 
+// ── Emoji color markers ─────────────────────────────────────────────
+// Emoji survive markdown code blocks (unlike ANSI escape sequences,
+// which Claude Code's renderer strips). Prefixing color-classified
+// values with an emoji preserves the "quality" information when the
+// table is reprinted in a response, without losing the ANSI colors
+// for terminal users who run the CLI directly.
+export type QualityLevel = "excellent" | "good" | "borderline" | "poor" | "neutral" | "free" | "yes" | "no";
+
+export function qualityEmoji(level: QualityLevel): string {
+  switch (level) {
+    case "excellent":
+    case "good":
+    case "free":
+    case "yes":
+      return "🟢";
+    case "borderline":
+      return "🟡";
+    case "poor":
+    case "no":
+      return "🔴";
+    case "neutral":
+      return "⚪";
+  }
+}
+
+function uptimeLevel(pct: number | undefined): QualityLevel {
+  if (pct === undefined) return "neutral";
+  if (pct >= 99) return "excellent";
+  if (pct >= 95) return "good";
+  if (pct >= 90) return "borderline";
+  return "poor";
+}
+function latencyLevel(ms: number | undefined): QualityLevel {
+  if (ms === undefined) return "neutral";
+  if (ms < 2000) return "excellent";
+  if (ms < 10000) return "good";
+  if (ms < 30000) return "borderline";
+  return "poor";
+}
+function throughputLevel(tps: number | undefined): QualityLevel {
+  if (tps === undefined) return "neutral";
+  if (tps >= 50) return "excellent";
+  if (tps >= 20) return "good";
+  if (tps >= 10) return "borderline";
+  return "poor";
+}
+function priceLevel(s?: string): QualityLevel {
+  if (!s) return "neutral";
+  const n = Number(s);
+  if (isFinite(n) && n === 0) return "free";
+  return "neutral";
+}
+
 // ── Markdown table formatter ────────────────────────────────────────
 
 /** Escape a cell value for markdown tables (pipe must be backslash-escaped). */
@@ -267,47 +320,55 @@ export function formatModelInfoMarkdown(
     if (ep.quantization) rows.push(["Quantization", ep.quantization]);
 
     const params = new Set(ep.supported_parameters ?? []);
+    const yesNo = (cond: boolean): string =>
+      `${qualityEmoji(cond ? "yes" : "no")} ${cond ? "yes" : "no"}`;
     rows.push([
       "Reasoning",
-      params.has("reasoning") || params.has("include_reasoning") ? "yes" : "no",
+      yesNo(params.has("reasoning") || params.has("include_reasoning")),
     ]);
-    rows.push(["Tool calling", params.has("tools") ? "yes" : "no"]);
+    rows.push(["Tool calling", yesNo(params.has("tools"))]);
     rows.push([
       "Structured output",
-      params.has("structured_outputs") || params.has("response_format") ? "yes" : "no",
+      yesNo(params.has("structured_outputs") || params.has("response_format")),
     ]);
     if (ep.supports_implicit_caching !== undefined) {
-      rows.push(["Implicit caching", ep.supports_implicit_caching ? "yes" : "no"]);
+      rows.push(["Implicit caching", yesNo(ep.supports_implicit_caching)]);
     }
 
     if (ep.pricing) {
       const p = ep.pricing;
-      rows.push(["Prompt price", formatPricePerM(p.prompt)]);
-      rows.push(["Completion price", formatPricePerM(p.completion)]);
-      if (p.input_cache_read) rows.push(["Cache-read price", formatPricePerM(p.input_cache_read)]);
-      if (p.image) rows.push(["Image price", formatPricePerM(p.image)]);
-      if (p.request) rows.push(["Request price", formatPricePerM(p.request)]);
+      const priceCell = (s?: string): string => {
+        const level = priceLevel(s);
+        const emoji = level === "free" ? qualityEmoji("free") : "";
+        const text = formatPricePerM(s);
+        return emoji ? `${emoji} ${text}` : text;
+      };
+      rows.push(["Prompt price", priceCell(p.prompt)]);
+      rows.push(["Completion price", priceCell(p.completion)]);
+      if (p.input_cache_read) rows.push(["Cache-read price", priceCell(p.input_cache_read)]);
+      if (p.image) rows.push(["Image price", priceCell(p.image)]);
+      if (p.request) rows.push(["Request price", priceCell(p.request)]);
       if (p.discount !== undefined && p.discount !== 0) {
-        rows.push(["Discount", `${(p.discount * 100).toFixed(0)}% off`]);
+        rows.push(["Discount", `🟢 ${(p.discount * 100).toFixed(0)}% off`]);
       }
     }
 
     if (typeof ep.uptime_last_5m === "number")
-      rows.push(["Uptime (5m)", `${ep.uptime_last_5m.toFixed(1)}%`]);
+      rows.push(["Uptime (5m)", `${qualityEmoji(uptimeLevel(ep.uptime_last_5m))} ${ep.uptime_last_5m.toFixed(1)}%`]);
     if (typeof ep.uptime_last_30m === "number")
-      rows.push(["Uptime (30m)", `${ep.uptime_last_30m.toFixed(1)}%`]);
+      rows.push(["Uptime (30m)", `${qualityEmoji(uptimeLevel(ep.uptime_last_30m))} ${ep.uptime_last_30m.toFixed(1)}%`]);
     if (typeof ep.uptime_last_1d === "number")
-      rows.push(["Uptime (1d)", `${ep.uptime_last_1d.toFixed(1)}%`]);
+      rows.push(["Uptime (1d)", `${qualityEmoji(uptimeLevel(ep.uptime_last_1d))} ${ep.uptime_last_1d.toFixed(1)}%`]);
 
     for (const { key, value, numeric } of sortedPercentiles(ep.latency_last_30m)) {
       const annot = percentileAnnotation(numeric, false);
       const label = annot ? `Latency ${key} (${annot})` : `Latency ${key}`;
-      rows.push([label, `${round(value)} ms`]);
+      rows.push([label, `${qualityEmoji(latencyLevel(value))} ${round(value)} ms`]);
     }
     for (const { key, value, numeric } of sortedPercentiles(ep.throughput_last_30m)) {
       const annot = percentileAnnotation(numeric, true);
       const label = annot ? `Throughput ${key} (${annot})` : `Throughput ${key}`;
-      rows.push([label, `${round(value)} tok/s`]);
+      rows.push([label, `${qualityEmoji(throughputLevel(value))} ${round(value)} tok/s`]);
     }
 
     // Emit the markdown table
@@ -572,103 +633,80 @@ function renderEndpointTable(ep: ModelEndpoint, colors: boolean): string {
   }
 
   // ── Capability flags ─────────────────────────────────────────
-  // Derived from supported_parameters. These answer the "what can I
-  // configure on this model?" question at a glance without reading the
-  // full checkmark grid below.
+  // Each value is prefixed with an emoji (🟢/🔴/🟡) so the quality
+  // indicator survives markdown rendering when the table is reprinted
+  // in a response. ANSI colors still apply for direct terminal use.
   const params = new Set(ep.supported_parameters ?? []);
-  const yes = () => paint(ANSI.bgreen, "yes", colors);
-  const no = () => paint(ANSI.dim, "no", colors);
+  const yesVal = () => qualityEmoji("yes") + " " + paint(ANSI.bgreen, "yes", colors);
+  const noVal = () => qualityEmoji("no") + " " + paint(ANSI.dim, "no", colors);
   rows.push([
     "Reasoning",
-    params.has("reasoning") || params.has("include_reasoning") ? yes() : no(),
+    params.has("reasoning") || params.has("include_reasoning") ? yesVal() : noVal(),
   ]);
-  rows.push(["Tool calling", params.has("tools") ? yes() : no()]);
+  rows.push(["Tool calling", params.has("tools") ? yesVal() : noVal()]);
   rows.push([
     "Structured output",
-    params.has("structured_outputs") || params.has("response_format") ? yes() : no(),
+    params.has("structured_outputs") || params.has("response_format") ? yesVal() : noVal(),
   ]);
   if (ep.supports_implicit_caching !== undefined) {
     rows.push([
       "Implicit caching",
-      ep.supports_implicit_caching ? yes() : no(),
+      ep.supports_implicit_caching ? yesVal() : noVal(),
     ]);
   }
 
   if (ep.pricing) {
     const p = ep.pricing;
-    rows.push([
-      "Prompt price",
-      paint(ANSI[classifyPriceIsFree(p.prompt)], formatPricePerM(p.prompt), colors),
-    ]);
-    rows.push([
-      "Completion price",
-      paint(ANSI[classifyPriceIsFree(p.completion)], formatPricePerM(p.completion), colors),
-    ]);
-    if (p.input_cache_read) {
-      rows.push([
-        "Cache-read price",
-        paint(ANSI[classifyPriceIsFree(p.input_cache_read)], formatPricePerM(p.input_cache_read), colors),
-      ]);
-    }
-    if (p.image) {
-      rows.push([
-        "Image price",
-        paint(ANSI[classifyPriceIsFree(p.image)], formatPricePerM(p.image), colors),
-      ]);
-    }
-    if (p.request) {
-      rows.push([
-        "Request price",
-        paint(ANSI[classifyPriceIsFree(p.request)], formatPricePerM(p.request), colors),
-      ]);
-    }
+    const priceCellAnsi = (s?: string): string => {
+      const level = priceLevel(s);
+      const colorKey = classifyPriceIsFree(s);
+      const emoji = level === "free" ? qualityEmoji("free") + " " : "";
+      return emoji + paint(ANSI[colorKey], formatPricePerM(s), colors);
+    };
+    rows.push(["Prompt price", priceCellAnsi(p.prompt)]);
+    rows.push(["Completion price", priceCellAnsi(p.completion)]);
+    if (p.input_cache_read) rows.push(["Cache-read price", priceCellAnsi(p.input_cache_read)]);
+    if (p.image) rows.push(["Image price", priceCellAnsi(p.image)]);
+    if (p.request) rows.push(["Request price", priceCellAnsi(p.request)]);
     if (p.discount !== undefined && p.discount !== 0) {
       const discountPct = (p.discount * 100).toFixed(0);
       rows.push([
         "Discount",
-        paint(ANSI.bgreen, `${discountPct}% off`, colors),
+        qualityEmoji("free") + " " + paint(ANSI.bgreen, `${discountPct}% off`, colors),
       ]);
     }
   }
 
-  // Uptime — three time windows, each on its own row.
-  // OpenRouter sometimes returns null for newly added or idle endpoints;
-  // explicit null check is required (typeof null === "object").
-  if (typeof ep.uptime_last_5m === "number") {
-    rows.push([
-      "Uptime (5m)",
-      paint(ANSI[classifyUptime(ep.uptime_last_5m)], `${ep.uptime_last_5m.toFixed(1)}%`, colors),
-    ]);
-  }
-  if (typeof ep.uptime_last_30m === "number") {
-    rows.push([
-      "Uptime (30m)",
-      paint(ANSI[classifyUptime(ep.uptime_last_30m)], `${ep.uptime_last_30m.toFixed(1)}%`, colors),
-    ]);
-  }
-  if (typeof ep.uptime_last_1d === "number") {
-    rows.push([
-      "Uptime (1d)",
-      paint(ANSI[classifyUptime(ep.uptime_last_1d)], `${ep.uptime_last_1d.toFixed(1)}%`, colors),
-    ]);
-  }
+  // Uptime — three time windows. Each value gets the same emoji +
+  // ANSI classification so the quality is readable in both pipelines.
+  const uptimeCell = (pct: number): string =>
+    qualityEmoji(uptimeLevel(pct)) + " " + paint(ANSI[classifyUptime(pct)], `${pct.toFixed(1)}%`, colors);
+  if (typeof ep.uptime_last_5m === "number") rows.push(["Uptime (5m)", uptimeCell(ep.uptime_last_5m)]);
+  if (typeof ep.uptime_last_30m === "number") rows.push(["Uptime (30m)", uptimeCell(ep.uptime_last_30m)]);
+  if (typeof ep.uptime_last_1d === "number") rows.push(["Uptime (1d)", uptimeCell(ep.uptime_last_1d)]);
 
   const round = (n: number): string => Math.round(n).toString();
 
-  // Latency — one row per percentile (dynamically discovered).
-  // Lower is better → p99 = worst 1%.
+  // Latency — one row per percentile. Lower is better → p99 = worst 1%.
   for (const { key, value, numeric } of sortedPercentiles(ep.latency_last_30m)) {
     const annot = percentileAnnotation(numeric, /* higherIsBetter */ false);
     const label = annot ? `Latency ${key} (${annot})` : `Latency ${key}`;
-    rows.push([label, paint(ANSI[classifyLatencyMs(value)], `${round(value)} ms`, colors)]);
+    const cell =
+      qualityEmoji(latencyLevel(value)) +
+      " " +
+      paint(ANSI[classifyLatencyMs(value)], `${round(value)} ms`, colors);
+    rows.push([label, cell]);
   }
 
-  // Throughput — one row per percentile (dynamically discovered).
-  // Higher is better → p99 = best 1%.
+  // Throughput — one row per percentile. Higher is better → p99 = best 1%.
   for (const { key, value, numeric } of sortedPercentiles(ep.throughput_last_30m)) {
     const annot = percentileAnnotation(numeric, /* higherIsBetter */ true);
     const label = annot ? `Throughput ${key} (${annot})` : `Throughput ${key}`;
-    rows.push([label, paint(ANSI[classifyThroughput(value)], `${round(value)} tok/s`, colors)]);
+    const cell =
+      qualityEmoji(throughputLevel(value)) +
+      " " +
+      paint(ANSI[classifyThroughput(value)], `${round(value)} tok/s`, colors);
+    rows.push([label, cell]);
   }
 
   // Supported parameters — one value per line inside a multi-line cell.
