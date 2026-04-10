@@ -1,6 +1,41 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.9.69] - 2026-04-10
+
+### Changed
+
+- Or_model_info table: row-per-percentile + fill in missing fields
+
+Expanded the endpoint table so every metric is on its own row —
+easier to read than the packed one-liner, and each value gets its
+own independently-colored cell.
+
+New rows:
+
+- Endpoint name — the full backing id, often includes a versioned
+  suffix like 'Nvidia | nvidia/nemotron-3-super-120b-a12b-20230311:free'
+- Tag — shown when it differs from the provider name
+- Status — 'operational' (code 0) or 'status code N' colored red
+- Implicit caching — yes/no
+- Image price, Request price, Discount — from the pricing object
+  (previously only prompt/completion/cache-read were shown)
+- Uptime (5m) — recent-window uptime, added alongside 30m and 1d
+
+Restructured rows:
+
+- Latency p50/p75/p90/p99 — now FOUR rows with clear labels
+  ('Latency p50 (median)', 'Latency p99 (worst 1%)')
+- Throughput p50/p75/p90/p99 — same treatment
+  ('Throughput p50 (median)', 'Throughput p99 (best 1%)')
+
+Each percentile row gets its own color classification, so the eye
+can immediately spot the tail-latency red cells without scanning
+a packed one-liner.
+
+The ModelEndpoint interface grew to cover `tag`, `supports_implicit_caching`,
+and `ModelEndpointPricing.discount`.
+
 ## [3.9.68] - 2026-04-10
 
 ### Changed
