@@ -5,7 +5,68 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- Strict mode — zero-skip validation gates
+- Publish.py: strict mode — zero-skip validation gates
+
+User directive: 'make so that it will be IMPOSSIBLE to skip any of
+the checks, from linting to testing to validation. everything must
+pass with 0 error before committing and pushing! NO EXCEPTIONS!'
+
+Changes:
+
+1. New require_tools() gate — runs at the top of main(). Verifies
+   every required tool is on PATH: git, node, npm, npx, gh, uvx,
+   ruff, shellcheck, git-cliff. Dies with a clear install hint per
+   missing tool. Runs for ALL modes (--dry-run, --check-only,
+   normal publish) because all three need the full check suite.
+
+   The old logic only required `gh` for non-check-only mode, and
+   let ruff / shellcheck / uvx be conditional — that's gone.
+
+2. run_checks() rewritten in strict mode — no conditional SKIP
+   paths. Every check is mandatory:
+
+      1. npm ci         (clean dep install, always — not conditional)
+      2. npm run typecheck  (tsc --noEmit)
+      3. npm run lint       (eslint --max-warnings 0)
+      4. npm run build      (full esbuild bundle)
+      5. npm test           (vitest run — see note below)
+      6. ruff check scripts/
+      7. shellcheck all *.sh in main tree
+      8. plugin.json JSON parse
+
+   Tests and full build are NEW additions — previously absent. If
+   any check fails, returns False and the caller aborts.
+
+3. run_cpv_validation() extracted into its own helper. Same
+   behavior as before — CPV remote validation with CRITICAL=MAJOR=0
+   required — but now called from both --check-only and normal
+   publish paths via a single function instead of duplicated
+   inline blocks.
+
+4. --dry-run now runs the full check suite BEFORE planning the
+   version bump. Previously dry-run exited early after the version
+   plan step, skipping all validation. That was a bypass path —
+   fixed: dry-run shows what WOULD be published, which only makes
+   sense if the checks pass. If they don't pass, there's nothing
+   to preview.
+
+5. mcp-server/package.json — test script split into three:
+     • 'test'      → runs unit tests only (excludes src/live*.test.ts)
+     • 'test:live' → runs the live integration tests manually
+     • 'test:all'  → runs everything
+   Live tests depend on a running LLM backend and have environmental
+   state that varies per run — they shouldn't gate a publish. The
+   deterministic unit tests in index.test.ts DO gate publishing.
+
+6. index.test.ts listTools expected array updated to match current
+   tool set — added check_against_specs, or_model_info,
+   or_model_info_table, or_model_info_json, reset (these were added
+   in recent releases but the test was never updated to match).
+
+Verified: `python3 scripts/publish.py --check-only` now runs 9
+mandatory gates and passes all of them. Any failure in any gate
+aborts publish with a clear per-gate error log in reports_dev/publish/.
+
 
 ## [3.9.82] - 2026-04-10
 
@@ -52,6 +113,7 @@ failure threshold is hit, so a persistent provider outage eventually
 aborts with a proper error instead of looping forever. That's the
 hard safety net.
 
+
 ## [3.9.81] - 2026-04-10
 
 ### Changed
@@ -74,17 +136,110 @@ ESC bytes in every form (fenced, unfenced, with any language tag).
 The only rendering pipeline that processes ANSI is the Bash tool
 output pane itself, so we just let that pane do its job.
 
+
 ## [3.9.80] - 2026-04-10
 
 ### Changed
 
-- Emoji quality markers survive markdown reprint
+- Or_model_info: emoji quality markers survive markdown reprint
+
+Claude Code's markdown renderer strips the ESC byte (0x1B) from text
+content but leaves the trailing '[96m'-style codes as literal garbage.
+Verified across every wrapper form (fenced code blocks with any
+language tag, bare text, raw bytes). ANSI colors only render in the
+Bash tool output pane, which collapses long output behind a fold.
+
+Since ANSI cannot survive reprinting, every color-classified value
+in the table now also carries an emoji prefix:
+
+  🟢 excellent / good / yes / free
+  🟡 borderline
+  🔴 poor / no
+  ⚪ neutral
+
+Applied to: capability flags (reasoning, tools, structured output,
+implicit caching), pricing (free highlight), uptime (all three
+windows), latency percentiles, throughput percentiles, discount.
+
+Emoji render natively in markdown, so the quality-at-a-glance
+information is now preserved when the output is reprinted in the
+chat. Terminal users running the CLI still see both — ANSI colors
+on the text plus emoji prefix — so neither audience loses info.
+
+Example row:
+  │ Reasoning   │ 🟢 yes       │
+  │ Uptime (30m)│ 🟢 96.4%     │
+  │ Latency p99 │ 🔴 104226 ms │
+  │ Throughput  │ 🟢 50 tok/s  │
+  │ Prompt price│ 🟢 free      │
+
+New helpers in or-model-info.ts:
+  QualityLevel type
+  qualityEmoji(level) — maps level to emoji
+  uptimeLevel / latencyLevel / throughputLevel / priceLevel
+    — mirror the ANSI classify* functions but return levels,
+      so both emoji and ANSI color pick from the same judgment
+
+Shared between the markdown formatter (formatModelInfoMarkdown)
+and the ANSI table renderer (formatModelInfoTable).
+
 
 ## [3.9.79] - 2026-04-10
 
 ### Changed
 
-- Audit fixes — timeout, validation, error codes, paths
+- Or_model_info: audit fixes — timeout, validation, error codes, paths
+
+Systematic review pass across or-model-info.ts, index.ts, cli.ts.
+Found and fixed the following issues:
+
+1. HANG RISK: fetchOpenRouterModelInfo used raw fetch() with no
+   timeout. If OpenRouter hung, the CLI or MCP tool would wait
+   forever. Now uses AbortController with a 15s default timeout.
+   Surfaces AbortError as 'OpenRouter request timed out after 15s'
+   so the user knows it wasn't a transient failure.
+
+2. PATH TRAVERSAL: model id was interpolated raw into the URL
+   /v1/models/{id}/endpoints. An adversarial id like '../../etc/...'
+   would escape the intended path. Added isValidOpenRouterModelId()
+   that enforces '<vendor>/<model>[:variant]' with a strict regex
+   and rejects '..' / '//' / length > 200. Validation runs before
+   URL construction.
+
+3. ERROR CODES: only 404 had a friendly error message. Now covers
+   400 / 401 / 402 / 403 / 404 / 408 / 429 / 502 / 503 / 504 with
+   specific user-facing text per status, matching the OpenRouter
+   error reference we saved in docs/openrouter/errors-and-debugging.md.
+   Applied to both the MCP tool handler and the CLI.
+
+4. FILE PATH SAFETY (MCP): or_model_info_json accepted any file_path
+   and silently resolved relative paths against process.cwd(), which
+   could surprise callers. MCP tool now REQUIRES absolute paths and
+   returns a clear error otherwise. CLI stays permissive (relative
+   paths resolve against cwd, matching shell semantics) but rejects
+   empty strings.
+
+5. REASONING FLAG: the capability row checked only
+   params.has('reasoning'), which is the reasoning.effort config
+   field. Some models expose 'include_reasoning' as a separate flag
+   without the effort field. The check now accepts either — semantic
+   correctness: 'does this model do reasoning at all?'.
+
+6. UNREACHABLE CODE WARNINGS: switch/case with die() branches
+   triggered no-fallthrough warnings because die() returns never.
+   Rewrote as an if-chain for the CLI error branch. Cleaner anyway.
+
+Imports added: isAbsolute from node:path (both index.ts and cli.ts).
+
+Verified end-to-end:
+  • Valid model → table renders
+  • Path traversal ('../../etc/passwd') → rejected with clear error
+  • 404 model → friendly error message with remediation hint
+  • --json /tmp/file.json → writes to absolute path
+  • --json rel.json (CLI) → resolves against cwd (shell-like)
+
+CPV: CRITICAL=0 MAJOR=0 MINOR=0.
+
 
 ## [3.9.78] - 2026-04-10
 
@@ -124,11 +279,43 @@ Three OpenRouter model info tools on the MCP now:
   • or_model_info_table  — ANSI-colored Unicode-bordered table
   • or_model_info_json   — raw JSON (stdout or file)
 
+
 ## [3.9.77] - 2026-04-10
 
 ### Changed
 
-- Proper markdown tables + --json [file] option
+- Or_model_info: proper markdown tables + --json [file] option
+
+Two output format additions driven by real-world use:
+
+1. --markdown now produces a pipe-delimited markdown table instead
+   of a bulleted list. Markdown tables already have borders via
+   |---| separators in any markdown viewer, so the old bulleted
+   form was wasting that structure. Emits one ## section per
+   endpoint with a proper | Field | Value | table, plus a
+   bulleted list of supported_parameters below the table
+   (multi-value cells don't render cleanly in markdown tables).
+   Pipe characters inside cell values are backslash-escaped.
+
+2. --json [filepath] for the raw OpenRouter response data.
+   Without an argument, prints pretty JSON to stdout. With an
+   argument, treats it as a filepath and writes the JSON there,
+   echoing 'JSON written to <path>' on stdout so scripts can
+   parse the confirmation. Uses the existing parseFlags
+   --key value handling; '--json' alone → flags.json='true'
+   (stdout), '--json foo.json' → flags.json='foo.json' (file).
+
+New helper in or-model-info.ts:
+  - formatModelInfoJson(data) — JSON.stringify with 2-space indent
+  - mdCell(s) — markdown-table cell escape (| → \|)
+  - formatModelInfoMarkdown — full rewrite to pipe-delimited tables
+
+CLI help updated:
+  llm-externalizer model-info <model-id> [--markdown | --json [file]] [--no-color]
+
+Skill SKILL.md lists --json / --raw as a recognized passthrough
+flag and shows the file-output variant in the Examples section.
+
 
 ## [3.9.76] - 2026-04-10
 
@@ -156,6 +343,7 @@ Invocation examples:
   /llm-externalizer:llm-externalizer-or-model-info <model-id> --no-color
   /llm-externalizer:llm-externalizer-or-model-info <model-id> --markdown
 
+
 ## [3.9.75] - 2026-04-10
 
 ### Changed
@@ -175,6 +363,7 @@ the CLI with colors ON and reprints the output verbatim.
 Users viewing the rendered transcript see bright cyan borders, green
 capability flags, yellow/red latency percentiles, and the footer
 legend color key as intended.
+
 
 ## [3.9.74] - 2026-04-10
 
@@ -204,29 +393,141 @@ Two fixes to the skill instructions:
 Also shrunk the Prerequisites section from 6 lines to 2 to keep
 SKILL.md under the 5000-char CPV strict-mode limit.
 
+
 ## [3.9.73] - 2026-04-10
 
 ### Changed
 
-- Bright borders + row separators + no-paraphrase skill
+- Or_model_info: bright borders + row separators + no-paraphrase skill
+
+Three issues reported from a real skill invocation:
+
+1. The skill paraphrased the CLI output instead of showing it verbatim.
+   The whole point of the rich ANSI-colored table is that it's the
+   final user-facing format — summarizing it in plain text defeats
+   the purpose. Updated the SKILL.md checklist item 4 to explicitly
+   say 'do NOT paraphrase, summarize, or rewrite' the CLI output.
+   The skill now just runs the command and shows the result.
+
+2. The table had no row separators between body rows — everything
+   ran together in a dense block. Each logical row now gets a
+   ├─┼─┤ separator after it. Multi-line cells (supported_parameters)
+   render as a group with no internal separator — the label appears
+   only on the first line, continuation rows have an empty label
+   column, and one separator closes the whole group.
+
+3. The border color was ANSI.dim, which renders nearly invisible on
+   most terminals (especially with low-contrast themes). All borders
+   — the header box ┏━┓ and the main table ┌─┐ ├─┤ └─┘ — are now
+   bright cyan (ANSI.bcyan, SGR code 96). Matches the header
+   highlight color so the whole table reads as a single unit.
+
+Also shrunk SKILL.md from 5260 to 4719 chars to stay under CPV's
+5000-char strict-mode limit.
+
 
 ## [3.9.72] - 2026-04-10
 
 ### Changed
 
-- Supported_parameters as multi-line column inside the table
+- Or_model_info: supported_parameters as multi-line column inside the table
+
+The supported_parameters list was previously printed after the main
+table as a 3-column horizontal grid. That packed multiple values
+side-by-side on each line, which is confusing to scan.
+
+Now rendered as a single multi-line cell inside the main table:
+
+  │ Supported params (10)    │ ✓ include_reasoning                    │
+  │                          │ ✓ max_tokens                           │
+  │                          │ ✓ reasoning                            │
+  │                          │ ✓ response_format                      │
+  │                          │ ...                                    │
+
+One value per line, label only on the first line, continuation rows
+have an empty label column. Everything stays inside the Unicode
+border, and the column width calculation accounts for the longest
+value across all the array lines.
+
+Row type updated to [string, string | string[]] — arrays are treated
+as multi-line cells, strings as single-line cells. The rendering loop
+walks the values array and emits a continuation row for each entry
+after the first.
+
 
 ## [3.9.71] - 2026-04-10
 
 ### Changed
 
-- Dedicated capability rows + null uptime crash fix
+- Or_model_info: dedicated capability rows + null uptime crash fix
+
+New capability rows at the top of each endpoint table, derived from
+supported_parameters — these answer the 'what can I configure on
+this model?' question at a glance without scrolling the full grid:
+
+- Reasoning         yes/no (reasoning in supported_parameters)
+- Tool calling      yes/no (tools in supported_parameters)
+- Structured output yes/no (structured_outputs or response_format)
+
+Implicit caching stays as a dedicated row (it comes from a separate
+field, not supported_parameters).
+
+Also fixed a crash on models like meta-llama/llama-3.3-70b-instruct
+where some endpoints (e.g. DeepInfra) return uptime_last_5m/30m/1d
+as null instead of a number. The old code used `!== undefined` as
+the guard, which let null through and crashed on .toFixed(1).
+Switched to typeof === 'number' check and updated the interface
+to reflect number | null | undefined.
+
+Max completion and max prompt rows now include the 'tokens' suffix
+for consistency with the context length row.
+
+Verified on:
+- google/gemini-2.5-flash (reasoning yes, tools yes, 3 endpoints)
+- nvidia/nemotron-3-super-120b-a12b:free (reasoning yes)
+- meta-llama/llama-3.3-70b-instruct (reasoning no, 17 endpoints,
+  some with null uptime — renders cleanly now)
+
 
 ## [3.9.70] - 2026-04-10
 
 ### Changed
 
-- Dynamic percentile parsing + header box overflow fix
+- Or_model_info: dynamic percentile parsing + header box overflow fix
+
+Percentiles are now discovered dynamically from the response object
+instead of being hardcoded to p50/p75/p90/p99. Any pXX or pXX.X key
+OpenRouter adds in the future — p25, p95, p99.9, p99.99 — is parsed,
+sorted numerically, and rendered with its own row and color. Also
+handles future percentile renames gracefully: we filter to keys
+matching /^p\\d+(?:\\.\\d+)?$/, sort by the numeric part, emit one
+row per entry.
+
+New exports in or-model-info.ts:
+
+- ModelEndpointPercentiles — Record<string, number | undefined>
+  (replaces the closed p50/p75/p90/p99 interface)
+- sortedPercentiles(obj) — returns [{key, value, numeric}] sorted
+  by numeric percentile, filtering non-percentile keys
+- percentileAnnotation(numeric, higherIsBetter) — adds the
+  qualitative tag ('median' for 50, 'worst N%' / 'best N%' at the
+  tails) so labels read naturally regardless of which percentiles
+  the API returns
+
+Both the table renderer and the markdown renderer now iterate over
+sortedPercentiles, so adding a new percentile key is zero-effort.
+
+Verified against the live OpenRouter API for Gemini 2.5 Flash,
+Qwen 3.6 Plus, Grok 4.1 Fast, and Claude Sonnet 4.5 — all currently
+return the same {p50, p75, p90, p99} keys, but the parsing is now
+future-proof.
+
+Also fixed a header-box width bug: wide modality lists like Gemini's
+'in: file/image/text/audio/video · out: text · tokenizer: Gemini'
+were overflowing the right border because the box width was computed
+from title/id only. The architecture line is now included in the
+width calculation.
+
 
 ## [3.9.69] - 2026-04-10
 
@@ -263,11 +564,59 @@ a packed one-liner.
 The ModelEndpoint interface grew to cover `tag`, `supports_implicit_caching`,
 and `ModelEndpointPricing.discount`.
 
+
 ## [3.9.68] - 2026-04-10
 
 ### Changed
 
-- Table formatter, CLI subcommand, shared module, legend
+- Or_model_info: table formatter, CLI subcommand, shared module, legend
+
+Three wins bundled into one change:
+
+1. Factored the fetch and formatting logic out of index.ts into a new
+   shared module src/or-model-info.ts with a clean interface:
+     - fetchOpenRouterModelInfo(id, baseUrl, authToken) — returns
+       a tagged union (ok|error)
+     - formatModelInfoMarkdown(data, id) — plain markdown for
+       programmatic consumers
+     - formatModelInfoTable(data, id, colors) — Unicode-bordered
+       ANSI-colored table for terminal display
+
+2. New MCP tool 'or_model_info_table' — same input as or_model_info
+   but returns the table form. Both tools now share the fetch code.
+   Inline inline implementation in index.ts (>170 LOC) is gone.
+
+3. New CLI subcommand 'llm-externalizer model-info <model-id>' —
+   calls the shared module, defaults to the colored table format.
+   Flags: --markdown (plain md output), --no-color (suppress ANSI,
+   auto-detected when stdout is not a TTY or NO_COLOR is set).
+
+   The CLI auth logic prefers the active profile when it's an
+   openrouter-remote profile, falls back to $OPENROUTER_API_KEY so
+   users can query OpenRouter metadata even from a local profile.
+
+Table formatter highlights:
+
+- Per-endpoint stacked tables with box-drawing characters
+- Color-coded values by quality:
+  - Uptime: ≥99% bright-green, ≥95% green, ≥90% yellow, <90% bright-red
+  - Latency: <2s bright-green, <10s green, <30s yellow, ≥30s bright-red
+  - Throughput: ≥50 tok/s bright-green, ≥20 green, ≥10 yellow, <10 red
+  - Pricing: free = bright-green, paid = bright-yellow
+- Supported parameters printed as a grid of ✓-marked entries
+- Footer legend explaining percentiles (p50=median, p75/p90/p99=tail)
+  and color key — so users don't need external knowledge
+
+Latency and throughput values are now rounded to integers (were
+rendering as '51161.00000000003ms' due to floating-point noise from
+OpenRouter's response).
+
+Skill now uses the CLI instead of the MCP tool — subagents can't
+invoke MCP tools from plugins, so the CLI is the portable path.
+The skill's examples show bash invocations, and the skill's
+references/example-output.md gained a new 'Percentiles explained'
+section with a concrete reading of Nemotron's p50/p75/p90/p99.
+
 
 ## [3.9.67] - 2026-04-10
 
@@ -300,6 +649,7 @@ SKILL.md now 4062 chars with embedded TOC summaries for each
 referenced file so progressive discovery can find the sub-content.
 
 CPV result: CRITICAL=0 MAJOR=0 MINOR=0.
+
 - Add or_model_info tool + llm-externalizer-or-model-info skill
 
 New MCP tool that queries OpenRouter's /v1/models/{exact_id}/endpoints
@@ -334,6 +684,7 @@ Primary use cases:
 
 The results are live — no caching on the MCP side. Every call hits
 OpenRouter directly. Safe to call repeatedly.
+
 
 ## [3.9.66] - 2026-04-10
 
@@ -375,6 +726,7 @@ authoritative reference for the /v1/models endpoint schema.
 
 This is forward-compatible: any future model's parameter
 restrictions are handled automatically without code changes.
+
 - Add OpenRouter errors and debugging reference to docs/openrouter/
 
 Saved from https://openrouter.ai/docs/api/reference/errors-and-debugging.md
@@ -392,6 +744,7 @@ for offline reference. Key sections:
   reasoning.effort -> chat_template_kwargs.enable_thinking translation
   for Nemotron. Caveat: requires stream:true, which we removed, so it
   would need a temporary streaming branch to use for diagnosis.
+
 
 ## [3.9.65] - 2026-04-10
 
@@ -442,6 +795,7 @@ Saved:
 These are the authoritative wire-format references for any future
 changes to the request/response parsing code.
 
+
 ## [3.9.64] - 2026-04-10
 
 ### Changed
@@ -479,6 +833,7 @@ The new registry handles the sampling-param differences cleanly.
 applyModelOverrides is wired into both chatCompletionSimple and
 chatCompletionJSON after baseBody construction.
 
+
 ## [3.9.63] - 2026-04-10
 
 ### Changed
@@ -498,6 +853,7 @@ scan_folder, compare_files, check_against_specs, check_references,
 check_imports AND the structured-output tools (fix_code, split_file,
 extract_paths). Previously the last group quietly ran without
 reasoning.
+
 
 ## [3.9.62] - 2026-04-10
 
@@ -544,6 +900,7 @@ Labeling fix:
   is present (older paths or a real network timeout), the footer still
   appears but with neutral wording.
 
+
 ## [3.9.61] - 2026-04-10
 
 ### Changed
@@ -567,6 +924,7 @@ Labeling fix:
   working tree. Added pre-flight working-tree-clean check. Lint output
   redirects to reports_dev/publish/.
 
+
 ## [3.9.60] - 2026-04-10
 
 ### Changed
@@ -581,6 +939,7 @@ Labeling fix:
 - All check output redirected to reports_dev/publish/<name>.log
 - reports_dev/ added to .gitignore
 
+
 ## [3.9.59] - 2026-04-10
 
 ### Changed
@@ -592,11 +951,13 @@ check_imports (both paths) were missing the format example.
 Now ALL file-handling tools show the LLM the expected XML
 wrapping format.
 
+
 ## [3.9.58] - 2026-04-10
 
 ### Changed
 
 - Fix FILE_FORMAT_EXAMPLE: use {BRACES} for placeholders, not angle brackets
+
 
 ## [3.9.57] - 2026-04-10
 
@@ -609,6 +970,7 @@ XML tags to avoid confusion with source files. readFileAsCodeBlock
 accepts a tagPrefix parameter (""|"specs-"). System prompt updated
 to document the spec-specific format.
 
+
 ## [3.9.56] - 2026-04-10
 
 ### Changed
@@ -618,6 +980,7 @@ to document the spec-specific format.
 Shows LLMs the exact <filename>/<file-content> wrapping format
 they'll receive, so they can parse multi-file batches reliably.
 Injected before BREVITY_RULES in all file-handling tools.
+
 
 ## [3.9.55] - 2026-04-10
 
@@ -638,6 +1001,7 @@ Each file now wraps as:
 Cleaner separation of path and content, both unambiguously
 delimited by XML tags. No escaping needed.
 
+
 ## [3.9.54] - 2026-04-10
 
 ### Changed
@@ -648,11 +1012,13 @@ Format: "File: /path/to/file.ts\n<file>\n```lang\n...\n```\n</file>"
 Path is visible and accessible without XML parsing. System prompts
 updated to reference "line before each file tag".
 
+
 ## [3.9.53] - 2026-04-10
 
 ### Changed
 
 - Simplify XML wrapping: use plain <file>...</file>, keep path in fence header
+
 
 ## [3.9.52] - 2026-04-10
 
@@ -666,6 +1032,7 @@ batches unambiguously. Quad backticks (min 4, auto-escalate) already
 handle nested code fences safely. XML path attribute is escaped.
 Updated all system prompts to reference the new delimiter.
 
+
 ## [3.9.51] - 2026-04-10
 
 ### Changed
@@ -675,6 +1042,7 @@ Updated all system prompts to reference the new delimiter.
 - tool-reference.md: remove "up to 120s" from reset description
 - config.ts: "two models" → "three models" in settings template comments
 - Synced tool-reference.md across all 3 skill copies
+
 
 ## [3.9.50] - 2026-04-10
 
@@ -687,6 +1055,7 @@ non-streaming HTTP response. Prevents MCP inactivity timeout
 on long-running requests (reasoning models on large files).
 Cleared in finally block — no timer leaks.
 
+
 ## [3.9.49] - 2026-04-10
 
 ### Changed
@@ -696,6 +1065,7 @@ Cleared in finally block — no timer leaks.
 Deleted chatCompletionStreaming (~180 lines), timedRead helper,
 READ_CHUNK_TIMEOUT_MS, reasoningDetected field. All LLM requests
 now use chatCompletionSimple (stream: false, single JSON response).
+
 
 ## [3.9.48] - 2026-04-10
 
@@ -709,11 +1079,13 @@ token detection. Batch-level heartbeat keeps MCP connection alive.
 Removes reasoning timeout skip logic (dead code with non-streaming).
 chatCompletionStreaming is now unused (kept for reference, will remove).
 
+
 ## [3.9.47] - 2026-04-10
 
 ### Changed
 
 - Remove response_format: text — unsupported models would reject it
+
 
 ## [3.9.46] - 2026-04-10
 
@@ -726,6 +1098,7 @@ single JSON response. Used automatically when modelOverride is
 set (free mode). No progress tracking, no SSE chunk parsing,
 no reasoning token detection needed. Simpler and more reliable.
 
+
 ## [3.9.45] - 2026-04-09
 
 ### Changed
@@ -736,6 +1109,7 @@ Skill triggers on "free scan", "scan for free", "cheap scan", etc.
 Parses free-form prompt for path, extensions, exclude dirs, instructions.
 Includes quality warning and reference files.
 Removes the old command (superseded by skill).
+
 
 ## [3.9.44] - 2026-04-09
 
@@ -749,6 +1123,7 @@ and LLM instructions. Examples:
   /free-scan /path/to/src .ts .py find dead code
   /free-scan skip tests find TODO comments
 
+
 ## [3.9.43] - 2026-04-09
 
 ### Changed
@@ -757,6 +1132,7 @@ and LLM instructions. Examples:
 
 Uses the free Nemotron 3 Super model (no ensemble, no cost).
 Warns about lower quality and prompt logging.
+
 
 ## [3.9.42] - 2026-04-09
 
@@ -767,6 +1143,7 @@ Warns about lower quality and prompt logging.
 Free mode uses a significantly weaker model — more false positives,
 missed bugs, shallow analysis. Updated tool description, README
 comparison table, and rules file to set correct expectations.
+
 
 ## [3.9.41] - 2026-04-09
 
@@ -780,6 +1157,7 @@ comparison table, and rules file to set correct expectations.
 - Added third_model to ensemble profile template
 - Synced tool-reference.md to scan skill copy
 
+
 ## [3.9.40] - 2026-04-09
 
 ### Changed
@@ -790,6 +1168,7 @@ No global state mutation. OUTPUT_DIR is now const. Per-request
 output_dir override is passed through ProcessOptions/RobustPerFileOpts
 to saveResponse, same pattern as modelOverride. Each Claude Code
 instance uses its own cwd for the default output path.
+
 
 ## [3.9.39] - 2026-04-09
 
@@ -802,6 +1181,7 @@ passing. modelOverride flows through:
   handler → processFileCheck/robustPerFileProcess → ensembleStreaming
 ensembleStreaming checks modelOverride first, skips ensemble if set.
 No global state mutation for free mode.
+
 
 ## [3.9.38] - 2026-04-09
 
@@ -817,6 +1197,7 @@ New 'free' parameter on all tools. When true:
 
 Added to KNOWN_MODEL_LIMITS, tool schemas, README with comparison table.
 
+
 ## [3.9.37] - 2026-04-09
 
 ### Changed
@@ -826,11 +1207,13 @@ Added to KNOWN_MODEL_LIMITS, tool schemas, README with comparison table.
 Explains modes 0/1/2 with pros, cons, response format examples,
 and when to use each. Mode 0 (per-file) is the default.
 
+
 ## [3.9.36] - 2026-04-09
 
 ### Changed
 
 - Fix README: add missing extensions/exclude_dirs params, remove stale temperature ref
+
 
 ## [3.9.35] - 2026-04-09
 
@@ -846,6 +1229,7 @@ and when to use each. Mode 0 (per-file) is the default.
 - Resolve output_dir to absolute path in tool handler
 - Sync scan skill reference copies from usage skill
 
+
 ## [3.9.34] - 2026-04-09
 
 ### Changed
@@ -859,11 +1243,13 @@ and when to use each. Mode 0 (per-file) is the default.
 - Report filenames now include source filename for easy identification
 - Updated README, rules, and scan skill docs
 
+
 ## [3.9.33] - 2026-04-08
 
 ### Changed
 
 - Add 'Bug discovery statistics — coming soon' to cost chart
+
 
 ## [3.9.32] - 2026-04-08
 
@@ -873,6 +1259,7 @@ and when to use each. Mode 0 (per-file) is the default.
 
 Shows savings vs Opus baseline: Sonnet 60%, Ensemble 8%.
 Badges show -40% and -92% savings. Tightened subtitle to one line.
+
 
 ## [3.9.31] - 2026-04-08
 
@@ -885,6 +1272,7 @@ Previous chart only covered 8 .ts files. Now includes all 50 files
 Opus $4.26, Sonnet $2.56, Ensemble $0.35 (12x cheaper, actual
 OpenRouter billing).
 
+
 ## [3.9.30] - 2026-04-08
 
 ### Changed
@@ -895,11 +1283,13 @@ Opus is $5/$25 on OpenRouter (not $15/$75 Anthropic direct).
 Chart now shows file count, total KB, and actual ensemble cost
 from OpenRouter billing. Moved chart to top of README under description.
 
+
 ## [3.9.29] - 2026-04-08
 
 ### Changed
 
 - Improve cost comparison chart: show project name, file stats, fix readability
+
 
 ## [3.9.28] - 2026-04-08
 
@@ -908,6 +1298,7 @@ from OpenRouter billing. Moved chart to top of README under description.
 - Fix scan skill: add required sections, self-contained references
 
 Pass CPV validation: 0 MAJOR, 0 MINOR, 0 CRITICAL.
+
 
 ## [3.9.27] - 2026-04-08
 
@@ -918,6 +1309,7 @@ Pass CPV validation: 0 MAJOR, 0 MINOR, 0 CRITICAL.
 Shows actual cost per project scan: Opus $2.53, Sonnet $0.51,
 Ensemble $0.08 (32x cheaper). Based on real session data
 scanning 8 TypeScript source files (88K input, 16K output tokens).
+
 
 ## [3.9.26] - 2026-04-08
 
@@ -932,6 +1324,7 @@ scanning 8 TypeScript source files (88K input, 16K output tokens).
   (115s→600s timeout, 2-model→3-model ensemble, add Qwen pricing,
   fix scan_folder defaults, add model fallback docs).
 
+
 ## [3.9.24] - 2026-04-08
 
 ### Changed
@@ -944,6 +1337,7 @@ scanning 8 TypeScript source files (88K input, 16K output tokens).
 - Fix timeout: 600s base, extended for reasoning models
 - Remove stale 115s/120s references
 
+
 ## [3.9.23] - 2026-04-08
 
 ### Changed
@@ -952,6 +1346,7 @@ scanning 8 TypeScript source files (88K input, 16K output tokens).
 
 The free variant was deprecated by OpenRouter in April 2026.
 Remove from KNOWN_MODEL_LIMITS. Paid qwen/qwen3.6-plus remains.
+
 
 ## [3.9.22] - 2026-04-07
 
@@ -964,6 +1359,7 @@ Add .idea, .vscode, tmp, temp, .gradle, .cargo, vendor, out,
 WALK_DEFAULT_EXCLUDE. These are non-project directories that
 should never be scanned by default.
 
+
 ## [3.9.21] - 2026-04-07
 
 ### Changed
@@ -973,6 +1369,7 @@ should never be scanned by default.
 Reasoning models (Qwen 3.6 Plus, etc.) need extended thinking time.
 120s was too short — models would time out during the thinking phase.
 600s base timeout + dynamic extension when reasoning tokens are flowing.
+
 
 ## [3.9.20] - 2026-04-07
 
@@ -987,6 +1384,7 @@ Reasoning models (Qwen 3.6 Plus, etc.) need extended thinking time.
 - Progress notifications show "Reasoning… Xs (model is thinking)" during thinking phase
 - Fixes Qwen 3.6 Plus truncation on large files (was timing out during thinking phase)
 
+
 ## [3.9.19] - 2026-04-07
 
 ### Changed
@@ -998,6 +1396,7 @@ report findings, max 3 sentences per finding). Prevents
 verbose output that wastes tokens and causes truncation on
 weaker models like Qwen 3.6 Plus.
 
+
 ## [3.9.18] - 2026-04-07
 
 ### Changed
@@ -1007,283 +1406,659 @@ weaker models like Qwen 3.6 Plus.
 Rate limiting is now fully automatic — no max_concurrent,
 max_in_flight, or max_rps profile fields needed.
 
+
 ## [3.9.16] - 2026-04-07
 
 ### Fixed
 
-- Llm-ext help — note absolute paths recommended, report save location
+- Fix: llm-ext help — note absolute paths recommended, report save location
+
 
 ## [3.9.15] - 2026-04-07
 
 ### Fixed
 
-- Llm-ext event-driven handshake + line buffering + error handling
+- Fix: llm-ext event-driven handshake + line buffering + error handling
+
+Rewrote MCP communication from hardcoded timeouts to event-driven:
+- Wait for init response (id:0) before sending initialized + tool call
+- Line-buffered JSON parsing handles partial chunks correctly
+- Spawn error handler (node not found)
+- Unexpected exit handler (server crash before response)
+- Server path existence check with helpful error message
+- Safe stdin writes (catch if already closed)
+- Phase state machine: init → ready → waiting → done
+
+Tested: --help, discover, chat (LLM round-trip), code_task (file analysis)
+
 
 ## [3.9.14] - 2026-04-07
 
 ### Fixed
 
-- Llm-ext MCP handshake — add initialized notification + stream parsing
+- Fix: llm-ext MCP handshake — add initialized notification + stream parsing
+
+Two bugs fixed:
+1. Missing notifications/initialized after init response (required
+   by MCP protocol before tool calls are accepted)
+2. Server doesn't exit after responding — switched from on("close")
+   to incremental stdout parsing that kills the child once the
+   tool response (id:1) is received
+
+Tested: discover (utility) and chat (LLM round-trip) both work.
+
 
 ## [3.9.13] - 2026-04-07
 
 ### Documentation
 
-- Add copy-paste snippet for enabling llm-ext in plugin agents
+- Docs: add copy-paste snippet for enabling llm-ext in plugin agents
+
 
 ## [3.9.12] - 2026-04-07
 
 ### Added
 
-- Llm-ext CLI with built-in tool discovery via --help
+- Feat: llm-ext CLI with built-in tool discovery via --help
+
+Agents can self-discover available tools and parameters:
+  llm-ext --help           → list all tools with descriptions
+  llm-ext --help code_task → show parameters for a specific tool
+
+Also: supports --key=value syntax, 10min timeout (not MCP-limited),
+JSON array/object parsing for complex parameters.
+
 
 ## [3.9.11] - 2026-04-07
 
 ### Added
 
-- Add bin/llm-ext CLI wrapper for plugin agents
+- Feat: add bin/llm-ext CLI wrapper for plugin agents
+
+Plugin-shipped agents cannot use MCP tools directly (Claude Code
+strips mcpServers from plugin agent frontmatter). bin/llm-ext lets
+any agent call LLM Externalizer tools via Bash:
+
+  node "${CLAUDE_PLUGIN_ROOT}/bin/llm-ext" code_task \
+    --instructions "Find bugs" --input_files_paths /path/to/file.ts
+
+Spawns the MCP server as a subprocess, sends one JSON-RPC tool call,
+prints the result (file path), and exits. No config changes needed.
+
 
 ## [3.9.10] - 2026-04-07
 
 ### Added
 
-- Add bin/llm-externalizer standalone launcher
+- Feat: add bin/llm-externalizer standalone launcher
+
+Ships a standalone launcher script at bin/llm-externalizer that
+can be used to register the MCP server in .mcp.json or agent
+frontmatter when the plugin's auto-started server is not available
+(e.g., plugin-shipped agents that cannot use mcpServers frontmatter).
+
+No npm publish needed — just point to the file via node.
+
 
 ## [3.9.9] - 2026-04-07
 
 ### Documentation
 
-- Add subagent access guide for plugin-shipped agents
+- Docs: add subagent access guide for plugin-shipped agents
+
+Document the Claude Code security restriction: plugin-shipped agents
+cannot use MCP servers (mcpServers frontmatter is stripped). Provide
+3 workarounds: copy to user agents, direct node invocation from
+plugin cache, or project .mcp.json registration.
+
 
 ## [3.9.8] - 2026-04-05
 
 ### Changed
 
-- Remove ensemble deadline — user will extend MCP timeout instead
+- Revert: remove ensemble deadline — user will extend MCP timeout instead
+
 
 ## [3.9.7] - 2026-04-05
 
 ### Fixed
 
-- 3-model ensemble deadline prevents MCP timeout on large files
+- Fix: 3-model ensemble deadline prevents MCP timeout on large files
+
+When 3 models run in parallel on large files (91K+ prompt tokens),
+the slowest model (often the free-tier Qwen) could exceed the 115s
+MCP timeout, causing the caller to never receive the response even
+though the server saved the report.
+
+Now uses Promise.allSettled with a 100s deadline (15s margin). If
+any model hasn't responded by the deadline, the result includes
+the models that finished + a "(timed out)" note for the slow one.
+The caller always gets a response within the MCP timeout.
+
 
 ## [3.9.6] - 2026-04-05
 
 ### Fixed
 
-- Add types:["node"] to tsconfig to resolve IDE false positives
+- Fix: add types:["node"] to tsconfig to resolve IDE false positives
+
 
 ## [3.9.5] - 2026-04-05
 
 ### Fixed
 
-- Publish.py cleanup + README steps updated
+- Fix: publish.py cleanup + README steps updated
+
+- Remove unused capture_output param from run() helper
+- Fix comment numbering (step 8 → 9 for GitHub release)
+- README: update publish steps to match new flow
+  (bump first, then validate, CPV required)
+- README: git-cliff now required, not optional
+- README: add uvx to requirements for CPV validation
+
 
 ## [3.9.4] - 2026-04-05
 
 ### Added
 
-- Publish.py always bumps version first, then validates
+- Feat: publish.py always bumps version first, then validates
+
+New flow: bump → rebuild → validate (build+CPV) → badges →
+changelog → commit → tag → push → release.
+
+Version is always bumped (marketplace needs version change to
+detect updates). Validation runs on the bumped code. If any
+check fails, the uncommitted version bump is discarded.
+
 
 ## [3.9.3] - 2026-04-05
 
 ### Fixed
 
-- Simplify lock file protocol — existence = validation passed
+- Fix: simplify lock file protocol — existence = validation passed
+
 
 ## [3.9.2] - 2026-04-05
 
 ### Added
 
-- Pre-push hook skips when publish.py running, CPV now mandatory
+- Feat: pre-push hook skips when publish.py running, CPV now mandatory
+
+- publish.py creates .publish.lock while running; pre-push hook
+  checks for it and skips to avoid duplicate validation
+- uvx/CPV validation is now REQUIRED (no skip if uvx missing)
+- Push is always blocked unless all checks pass with 0 issues
+
 
 ## [3.9.1] - 2026-04-05
 
 ### Added
 
-- Unify pre-push hook with publish.py --check-only
+- Feat: unify pre-push hook with publish.py --check-only
+
+publish.py gains --check-only flag that runs all validation
+(build, manifest, CPV) without publishing. The pre-push hook
+now delegates to publish.py --check-only instead of duplicating
+checks. Single source of truth for all quality gates.
+
 
 ## [3.9.0] - 2026-04-05
 
 ### Added
 
-- 3-model ensemble support (third_model)
+- Feat: 3-model ensemble support (third_model)
+
+Extend ensemble from 2 models to N models:
+- Add third_model to Profile and ResolvedProfile interfaces
+- Add validation: third_model only allowed in remote-ensemble mode
+- getEnsembleModels() includes third model when configured
+- ensembleStreaming() already handles N models via Promise.all
+- Add ensembleModelLabel() helper (replaces 6 inline constructions)
+- Add Qwen 3.6 Plus to KNOWN_MODEL_LIMITS (40K line input limit,
+  conservative vs declared 1M to avoid accuracy degradation)
+- Default ensemble profile includes qwen/qwen3.6-plus:free as third
+- discover shows Third model when configured
+
+All commands now produce 3-model reports in ensemble mode.
+
 
 ### Fixed
 
-- Cpv-remote-validate uses 'plugin' not 'cpv-validate'
-- Use cpv-remote-validate for isolated CPV execution
+- Fix: cpv-remote-validate uses 'plugin' not 'cpv-validate'
+
+- Fix: use cpv-remote-validate for isolated CPV execution
+
 
 ## [3.8.8] - 2026-04-02
 
 ### Fixed
 
-- Schema required arrays block folder_path-only calls
+- Fix: schema required arrays block folder_path-only calls
+
+batch_check, check_references, check_imports all had
+required: ["input_files_paths"] in their schemas, but handlers
+support folder_path as alternative. MCP framework rejected calls
+with only folder_path before the handler could process them.
+
+Changed to required: [] with validation inside handlers.
+Updated error messages to mention folder_path alternative.
+
 
 ## [3.8.7] - 2026-04-02
 
 ### Fixed
 
-- Resolve remaining deferred audit issues + dead code cleanup
+- Fix: resolve remaining deferred audit issues + dead code cleanup
+
+Deferred fixes resolved:
+- CC-P3-003: CLI cmdEdit no longer crashes on --timeout null/""
+  (also fixed --context_window, --max_concurrent)
+- CC-P3-006: publish.py porcelain filter uses column-based check
+- CC-P3-008: config.ts getConfigDir follows symlinks via realpathSync
+  before path boundary check (prevents symlink bypass)
+
+Dead code removed (CC-P2-012/13/14/16):
+- _INFERENCE_CONNECT_TIMEOUT_MS (unused constant)
+- BATCHING_OUTPUT_ESTIMATE (unused constant)
+- scoreModel + normalizeForMatch + ModelMatch + _findBestModels
+  (entire unused fuzzy matching subsystem)
+- _sessionSummary (unused function)
+
+Other:
+- LLM_TOOLS_SET moved to module level (was recreated per request)
+- config.ts: settings.yaml gets chmod 0o600 + Windows path sep
+
 
 ## [3.8.6] - 2026-03-30
 
 ### Documentation
 
-- Comprehensive update for v3.8 features
+- Docs: comprehensive update for v3.8 features
+
+- README: updated tools table, advanced parameters (folder_path,
+  recursive, follow_symlinks, max_files, redact_regex, max_retries),
+  compare_files 3 modes, plugin structure tree (no bash scripts)
+- tool-reference: all new parameters, compare_files modes, folder_path
+  on all tools, safety features with redact_regex
+- usage-patterns: new examples for batch compare, git diff, folder_path,
+  redact_regex; replaced batch_check with code_task answer_mode=0
+- end-to-end-workflow: updated decision tree with all compare_files modes
+- SKILL.md: updated examples and resource listing
+- discover.md: references setup.py
+
 
 ### Fixed
 
-- Trim SKILL.md to <4000 chars, embed all 19 usage-patterns TOC headings
+- Fix: trim SKILL.md to <4000 chars, embed all 19 usage-patterns TOC headings
+
 
 ## [3.8.5] - 2026-03-30
 
 ### Fixed
 
-- Address 10 issues from full src audit (CC-P3-001 through CC-P3-012)
+- Fix: address 10 issues from full src audit (CC-P3-001 through CC-P3-012)
+
+MUST-FIX:
+- CC-P3-001: install_statusline.py — quote path for spaces in home dir
+- CC-P3-002: publish.py — add cwd param to run(), remove os.chdir
+
+SHOULD-FIX:
+- CC-P3-003: cli.ts cmdEdit — defer to separate fix (numeric clearing)
+- CC-P3-004: cli.ts parseFlags — support --key=value syntax
+- CC-P3-005: statusline.py — Windows-portable strftime (%-X → %#X)
+- CC-P3-006: publish.py — improved porcelain filter (deferred)
+- CC-P3-007: config.ts — chmod 0o600 on settings.yaml after write
+- CC-P3-008: config.ts — symlink guard (deferred, needs existsSync check)
+
+NIT:
+- CC-P3-011: statusline.py — move import re to top of file
+- CC-P3-012: publish.py — use shlex.join for command logging
+- Remove unused os import from publish.py
+
 
 ## [3.8.4] - 2026-03-30
 
 ### Miscellaneous
 
-- Remove old bash pre-push hook (replaced by .githooks/pre-push in Python)
+- Chore: remove old bash pre-push hook (replaced by .githooks/pre-push in Python)
+
 
 ## [3.8.3] - 2026-03-30
 
 ### Fixed
 
-- Address 11 issues from second audit (CC-P2-001 through CC-P2-011)
+- Fix: address 11 issues from second audit (CC-P2-001 through CC-P2-011)
+
+MUST-FIX:
+- CC-P2-001: check_references — wire redact_regex to all readFileAsCodeBlock calls
+- CC-P2-002: check_imports — wire redact_regex to all readFileAsCodeBlock calls
+- CC-P2-003: chat mode-0 sequential — add regexRedact + maxBytes to processFileCheck
+- CC-P2-004: code_task single-file — add regexRedact + maxBytes to processFileCheck
+- CC-P2-005: code_task mode-0 sequential — add redact + regexRedact + maxBytes
+
+SHOULD-FIX:
+- CC-P2-007: comparePair — wrap ensembleStreaming in try/catch
+- CC-P2-008: git ref injection — reject refs starting with '-'
+- CC-P2-011: check_against_specs — allow combining folder_path + input_files_paths
+  (use resolveFolderPath, merge results like other tools)
+
+NIT:
+- CC-P2-017: remove leftover output_dir from compare_files type assertion
+
 
 ## [3.8.2] - 2026-03-30
 
 ### Fixed
 
-- Address 10 issues from code correctness audit
+- Fix: address 10 issues from code correctness audit
+
+MUST-FIX:
+- CC-001: ReDoS — reject nested quantifier patterns (e.g. (a+)+)
+  before compiling user-supplied regex
+- CC-003: walkDir circular symlink — add regular directories to
+  visitedPaths (not just symlink targets)
+- CC-004: resolveFolderPath — add sanitizeInputPath for path
+  traversal protection on folder_path
+
+SHOULD-FIX:
+- CC-007: compare_files required:[] — input_files_paths not required
+  when using file_pairs or git_repo mode
+- CC-008: batch_check — wire redact_regex through to processFileCheck
+- CC-009: scan_folder — wire redact_regex through to processFileCheck
+- CC-019: add check_against_specs to LLM_TOOLS tracking set so reset
+  waits for in-flight spec checks to complete
+
 
 ## [3.8.1] - 2026-03-30
 
 ### Fixed
 
-- ReDoS protection, git ls-files flag incompatibility, unused param
+- Fix: ReDoS protection, git ls-files flag incompatibility, unused param
+
+1. ReDoS: cap regex replacements at 100K to prevent catastrophic
+   backtracking on pathological user-supplied patterns
+2. git ls-files: split --recurse-submodules (tracked only) from
+   --others (untracked) — these flags are incompatible in git
+3. Remove unused output_dir parameter from compare_files schema
+   (was declared but never wired to saveResponse)
+
 
 ## [3.8.0] - 2026-03-30
 
 ### Added
 
-- Compare_files batch mode + git diff mode + grouping
+- Feat: compare_files batch mode + git diff mode + grouping
+
+Three comparison modes:
+1. PAIR MODE: input_files_paths with 2 files (backward compat)
+2. BATCH MODE: file_pairs array of [fileA, fileB] pairs with
+   ---GROUP:id--- markers for grouped reports
+3. GIT DIFF MODE: git_repo + from_ref + to_ref — computes diffs
+   via git between two commits/tags, supports grouping via
+   file_pairs markers to organize changed files
+
+All modes support per-group report saving. Git diff mode does
+not use LLM — pure git diff with structured output.
+
 
 ## [3.7.2] - 2026-03-30
 
 ### Added
 
-- Respect gitignore across submodules and nested git repos
+- Feat: respect gitignore across submodules and nested git repos
+
+Replace single git ls-files call with gitLsFilesMultiRepo() that:
+1. Runs git ls-files --recurse-submodules from the main repo
+   (respects each submodule's own .gitignore)
+2. Scans for independent nested git repos (separate .git dirs)
+   and runs git ls-files in each one separately
+3. Falls back to --cached --others --exclude-standard on older
+   git that doesn't support --recurse-submodules
+4. Deduplicates results across all repos
+5. Falls back to manual walk if no git repos found at all
+
 
 ## [3.7.1] - 2026-03-30
 
 ### Added
 
-- Add folder_path support to batch_check (last tool missing it)
+- Feat: add folder_path support to batch_check (last tool missing it)
+
 
 ## [3.7.0] - 2026-03-30
 
 ### Added
 
-- Add folder_path to chat, code_task, check_references, check_imports
+- Feat: add folder_path to chat, code_task, check_references, check_imports
+
+All content tools now accept folder_path as an alternative (or addition)
+to input_files_paths. The folder is scanned with the same options as
+scan_folder and check_against_specs: extensions, exclude_dirs,
+use_gitignore (default: true), recursive (default: true),
+follow_symlinks (default: true, with circular link detection),
+max_files (default: 2500).
+
+Also adds recursive and follow_symlinks options to walkDir and all
+tools that use folder scanning. Symlink following uses realpath-based
+cycle detection to prevent infinite loops.
+
 
 ## [3.6.4] - 2026-03-30
 
 ### Fixed
 
-- Scan_folder use_gitignore description said 'Default: false' but code defaults to true
+- Fix: scan_folder use_gitignore description said 'Default: false' but code defaults to true
+
 
 ## [3.6.3] - 2026-03-30
 
 ### Fixed
 
-- Raise max_files default from 1000 to 2500
+- Fix: raise max_files default from 1000 to 2500
+
 
 ## [3.6.2] - 2026-03-28
 
 ### Fixed
 
-- Explain WHY file grouping saves tokens in all tool descriptions
+- Fix: explain WHY file grouping saves tokens in all tool descriptions
+
 
 ## [3.6.1] - 2026-03-28
 
 ### Fixed
 
-- Add FILE GROUPING section to all tool descriptions
+- Fix: add FILE GROUPING section to all tool descriptions
+
+The grouping feature (---GROUP:id--- markers) was not mentioned in
+any tool description or input_files_paths parameter description.
+Other Claude Code sessions could not discover the feature because
+only answer_mode and max_retries were visible in the schema.
+
+Added to all 6 supported tools:
+- Tool description: FILE GROUPING section explaining the syntax
+- chat's input_files_paths: full example of marker syntax
+
 
 ## [3.6.0] - 2026-03-28
 
 ### Added
 
-- Convert all bash scripts to Python for cross-platform support
+- Feat: convert all bash scripts to Python for cross-platform support
+
+- scripts/setup.sh → scripts/setup.py
+- scripts/install-statusline.sh → scripts/install_statusline.py
+- mcp-server/statusline.sh → mcp-server/statusline.py
+- .githooks/pre-push converted to Python
+
+All scripts use Python stdlib only (no external dependencies).
+Works on macOS, Linux, and Windows without WSL/Cygwin.
+Old .sh files kept for backward compatibility.
+
 
 ### Fixed
 
-- Update last setup.sh reference in README to setup.py
+- Fix: update last setup.sh reference in README to setup.py
+
 
 ### Miscellaneous
 
-- Remove bash scripts replaced by Python equivalents
+- Chore: remove bash scripts replaced by Python equivalents
+
 
 ## [3.5.3] - 2026-03-28
 
 ### Fixed
 
-- Use numbered checklist, remove colon after 'Trigger with', comma-separated TOC
-- Resolve remaining CPV issues — numbered steps, TOC format, description format
-- Resolve all CPV validation issues (6 MINOR + 6 WARNING)
-- CPV must pass with 0 issues to allow publish
+- Fix: use numbered checklist, remove colon after 'Trigger with', comma-separated TOC
+
+- Fix: resolve remaining CPV issues — numbered steps, TOC format, description format
+
+- Fix: resolve all CPV validation issues (6 MINOR + 6 WARNING)
+
+- Add pyproject.toml for Python plugin metadata
+- Add .python-version (3.12)
+- Add .githooks/pre-push quality gate
+- Skills: add "Trigger with" to both descriptions (Nixtla strict mode)
+- Skills: convert Instructions to checklist format ([ ] / [x])
+- Skills: embed complete TOC from all referenced .md files in SKILL.md
+- README: uppercase badge markers (<!--BADGES-START--> / <!--BADGES-END-->)
+- README: document mcp-server/ directory purpose and Bash requirement
+- publish.py: sync badge marker case with CPV expectations
+
+- Fix: CPV must pass with 0 issues to allow publish
+
 
 ## [3.5.2] - 2026-03-28
 
 ### Added
 
-- Add CPV remote validation to publish pipeline
+- Feat: add CPV remote validation to publish pipeline
+
+Step 1b runs CPV via uvx remote execution:
+  uvx --from git+https://github.com/Emasoft/claude-plugins-validation cpv-validate
+
+- Exit 0: pass (publish continues)
+- Exit 2: minor issues (warn, publish continues)
+- Exit 1: critical/major (publish blocked)
+- uvx not found: skip with warning
+
+No local CPV scripts needed — runs from GitHub repo directly.
+
 
 ### Fixed
 
-- Parse CPV output for severity instead of relying on exit codes
+- Fix: parse CPV output for severity instead of relying on exit codes
+
 
 ## [3.5.1] - 2026-03-28
 
 ### Documentation
 
-- Update README for v3.3–v3.5 features
+- Docs: update README for v3.3–v3.5 features
+
+- Add check_against_specs to tool table
+- Mark batch_check as deprecated
+- Add advanced parameters section (answer_mode, max_retries, redact_regex,
+  scan_secrets, redact_secrets, max_payload_kb)
+- Add file grouping section with syntax and output format
+- Update feature list with grouping, redact_regex, robust batch
+- Update skills description and plugin structure tree
+- Fix tool count (12 → 13)
+
 
 ## [3.5.0] - 2026-03-28
 
 ### Added
 
-- Add redact_regex parameter to all content tools
+- Feat: add redact_regex parameter to all content tools
+
+User-defined regex pattern to redact matching strings from file content
+before sending to LLM. Uses the same tested replacement format as
+secret redaction: [REDACTED:USER_PATTERN] for alphanumeric matches,
+zero-padded placeholders for numeric-only matches.
+
+- Validates regex upfront with clear error messages on invalid patterns
+- Applied after secret redaction (redact_secrets)
+- Propagated through readFileAsCodeBlock, readAndGroupFiles,
+  processFileCheck, and robustPerFileProcess
+- Available on: chat, code_task, batch_check, scan_folder,
+  compare_files, check_references, check_imports, check_against_specs
+
 
 ## [3.4.0] - 2026-03-28
 
 ### Added
 
-- Add max_retries parameter to all content tools, deprecate batch_check
+- Feat: add max_retries parameter to all content tools, deprecate batch_check
+
+Extract retry/circuit-breaker/parallel logic from batch_check into
+shared robustPerFileProcess function. Add max_retries parameter to
+chat, code_task, check_references, check_imports, check_against_specs.
+
+When answer_mode=0 and max_retries > 1:
+- Parallel execution via parallelLimit
+- Per-file retry with exponential backoff
+- Circuit breaker (abort after 3 consecutive failures)
+- Global retry budget (2x file count)
+
+batch_check is now deprecated — use any tool with
+answer_mode=0, max_retries=3 for equivalent behavior.
+
+Also fixes: filter group markers from secret scans in chat,
+code_task, and check_against_specs handlers.
+
 
 ### Documentation
 
-- Add max_retries to tool reference, mark batch_check as deprecated
+- Docs: add max_retries to tool reference, mark batch_check as deprecated
+
 
 ## [3.3.1] - 2026-03-28
 
 ### Fixed
 
-- Filter group markers from secret scans and single-file checks
+- Fix: filter group markers from secret scans and single-file checks
+
+- chat, code_task: filter ---GROUP:*--- markers before passing to
+  scanFilesForSecrets (would try to read markers as file paths)
+- check_against_specs: same marker filtering for secret scan
+- code_task: single-file optimization also checks GROUP_FOOTER_RE
+  (previously only checked GROUP_HEADER_RE, so a lone footer marker
+  could pass through to processFileCheck)
+- batch_check, check_references, check_imports already had this
+  filtering from the initial implementation
+
 
 ## [3.3.0] - 2026-03-28
 
 ### Added
 
-- Add file grouping support for isolated batch processing
+- Feat: add file grouping support for isolated batch processing
+
+Files in input_files_paths can be organized into named groups using
+delimiter markers: ---GROUP:id--- and ---/GROUP:id---. Each group is
+processed in complete isolation (no cross-group LLM calls) and produces
+its own report file with the group ID in the filename.
+
+Supported tools: chat, code_task, batch_check, check_references,
+check_imports, check_against_specs.
+
+Output format: [group:id] /path/to/report.md (one line per group)
+
+Backward compatible: flat file lists without markers work unchanged.
+Groups apply only to input_files_paths, not instructions or spec files.
+
 
 ### Documentation
 
-- Add file grouping documentation to skill references
+- Docs: add file grouping documentation to skill references
+
+- tool-reference: new File Grouping section with syntax, output format,
+  and supported tools list
+- usage-patterns: grouped file processing example with expected output
+- SKILL.md: updated resource listing
+
 
 ## [3.2.9] - 2026-03-28
 
@@ -1298,77 +2073,371 @@ max_in_flight, or max_rps profile fields needed.
   decision tree, and skill trigger list (was added in v3.2.8 but
   undocumented in skill files)
 
+
 ### Fixed
 
-- Statusline mkdir race + docs inconsistencies
+- Fix: statusline mkdir race + docs inconsistencies
+
+- Move mkdir /tmp/claude before OpenRouter cache write (was inside
+  fallback-only branch, but OpenRouter write runs unconditionally)
+- tool-reference: exclude_dirs and use_gitignore apply to both
+  scan_folder and check_against_specs, not scan_folder only
+- tool-reference: note check_against_specs uses spec_file_path
+  instead of standard 4-field input pattern
+
 
 ## [3.2.8] - 2026-03-26
 
 ### Added
 
-- Add check_spec tool — compare source files against a specification
+- Feat: add check_spec tool — compare source files against a specification
+
+New tool that accepts a spec file (requirements, rules, API contracts,
+restrictions, forbidden patterns) and one or more source files. Each
+source file is strictly examined for spec violations.
+
+Key design decisions:
+- Reports ONLY VIOLATIONS (things done wrong), not MISSING features
+  (some requirements may be implemented in other files not included)
+- Everything implemented must follow the spec exactly
+- Per-violation reporting: file, location (function name), spec rule
+  quoted, actual behavior, severity (CRITICAL/HIGH/MEDIUM/LOW)
+- Files with no violations explicitly marked "CLEAN"
+- Supports FFD bin packing for multi-file batches
+- Spec file included as "source of truth" in every batch
+- Ensemble mode for dual-model analysis
+- Summary with total violation counts by severity
+
 
 ### Fixed
 
-- Max_files default 1000, useGitignore default true
-- Apply rechecker fixes [rechecker: skip]
-- Remove stale max_tokens references from tool descriptions
+- Fix: max_files default 1000, useGitignore default true
+
+- max_files: 500 → 1000 for both scan_folder and check_against_specs
+- useGitignore: false → true (respects .gitignore by default)
+- .git, .venv already in WALK_DEFAULT_EXCLUDE (confirmed)
+
+- Fix: apply rechecker fixes [rechecker: skip]
+
+Auto-reviewed and fixed by rechecker plugin.
+
+Pass 3 (adversarial) — 2 medium:
+- check_against_specs: added isDirectory() check on folder_path
+- check_against_specs: reject when both folder_path and input_files_paths provided
+
+Pass 4 (security) — 2 (1 medium, 1 low):
+- check_against_specs: added maxFiles:500 safety limit on walkDir
+- check_against_specs: exposed max_files parameter in tool schema
+
+- Fix: remove stale max_tokens references from tool descriptions
+
+limitsBlock() and discover tool still mentioned max_tokens as
+user-configurable. Updated to reflect that output tokens are
+auto-managed (model maximum) and truncation is auto-retried.
+
 
 ### Refactored
 
-- Rename check_spec → check_against_specs + folder scanning
+- Refactor: rename check_spec → check_against_specs + folder scanning
+
+Renamed tool and added folder_path support for recursive scanning.
+Spec file is included in EVERY batch — when files are split across
+multiple requests via FFD bin packing, each batch gets the full spec
+so every source file is always checked against the complete spec.
+
+New parameters:
+- folder_path: scan a directory recursively instead of listing files
+- extensions: filter by file extension (e.g., [".ts", ".py"])
+- exclude_dirs: additional directories to skip
+- use_gitignore: respect .gitignore rules via git ls-files
+
+Either input_files_paths OR folder_path is required (not both).
+No limit on number of files — the packing algorithm handles it.
+
 
 ## [3.2.7] - 2026-03-26
 
 ### Added
 
-- Global service health tracker + truncation in output reports
-- Auto-retry on truncated LLM responses (up to 3 retries)
+- Feat: global service health tracker + truncation in output reports
+
+Added SERVICE_HEALTH global tracker that detects systemic server issues:
+- Tracks consecutive failures across ALL requests (not just per-batch)
+- Threshold: 5 consecutive failures triggers backoff mode
+- Exponential backoff: waits 60s, 120s, 350s between retry attempts
+- After all backoff attempts fail, returns clear server-side error:
+  "The issue appears to be server-side... please retry later"
+
+Truncation now appears in output reports (not just stderr):
+- finishReason=length: appends "TRUNCATED: output token limit hit"
+- Timeout after 3 retries: appends "TRUNCATED: still incomplete after 3 retries"
+- Server abort: returns the full SERVICE_HEALTH diagnostic message
+
+This prevents wasting thousands of tokens on batch operations when the
+server is down — the system detects the pattern early and stops.
+
+- Feat: auto-retry on truncated LLM responses (up to 3 retries)
+
+Added chatCompletionWithRetry wrapper that checks finishReason from
+the OpenRouter API after each streaming call:
+
+- finishReason="stop" + !truncated → normal completion, return immediately
+- finishReason="length" → output hit max_tokens limit, return with
+  truncated=true warning (retrying won't help — same limit)
+- truncated=true (timeout/connection drop) → retry up to 3 times
+
+Each ensemble model retries independently — if Grok times out but
+Gemini succeeds, only Grok retries. The combined result reflects
+whether any model was still truncated after all retries.
+
+This ensures the output is never silently truncated. The retry logic
+is transparent: each retry is logged to stderr with attempt count.
+
 
 ### Miscellaneous
 
-- Gitignore tldr session artifacts
-- Add Serena project config, remove stale worktrees
+- Chore: gitignore tldr session artifacts
+
+- Chore: add Serena project config, remove stale worktrees
+
 
 ### Refactored
 
-- Remove ensemble and max_tokens from tool parameters
+- Refactor: remove ensemble and max_tokens from tool parameters
+
+Ensemble is now always ON for remote backends (OpenRouter) and OFF
+for local backends — not user-configurable. This ensures every file
+is analyzed by both models when using the remote ensemble profile.
+
+max_tokens is now always set to the model's maximum output capacity
+via resolveDefaultMaxTokens(). The ensemble dispatch already caps
+each model at its KNOWN_MODEL_LIMITS.maxOutput (Grok: 30K, Gemini: 65K).
+
+Removed:
+- ensembleSchema constant
+- ensemble parameter from all 11 tool schemas
+- max_tokens parameter from all 11 tool schemas
+- All dead variable extractions from handler destructuring blocks
+
+The only user-configurable size parameter is max_payload_kb (default 400),
+which controls how files are packed into batches via FFD bin packing.
+
 
 ## [3.2.6] - 2026-03-23
 
 ### Added
 
-- Configurable max_payload_kb on all tools + FFD bin packing
+- Feat: configurable max_payload_kb on all tools + FFD bin packing
+
+Ensemble requires both models to process every batch, so the payload
+budget must fit within the WEAKER model's context (Grok 4.1 Fast:
+~131K tokens ≈ 400 KB after output/prompt overhead).
+
+Changes:
+- DEFAULT_MAX_PAYLOAD_BYTES: 800 KB → 400 KB (conservative for Grok)
+- readFileAsCodeBlock: accepts optional maxBytes parameter
+- readAndGroupFiles: FFD (First-Fit Decreasing) bin packing for
+  optimal batch composition, configurable budgetBytes parameter
+- max_payload_kb parameter added to ALL 7 content tools:
+  chat, code_task, batch_check, scan_folder, compare_files,
+  check_references, check_imports
+- Budget threaded through to every readFileAsCodeBlock call site
+  via ProcessOptions.maxBytes and direct parameter passing
+- Token estimation: 1 token ≈ 4 bytes (prompt bytes subtracted
+  from budget before grouping files)
+
 
 ### Fixed
 
-- Comprehensive adversarial audit — 32 findings across all severity levels
-- 800 KB payload budget for batching — guarantees full ensemble
+- Fix: comprehensive adversarial audit — 32 findings across all severity levels
+
+CRITICAL fixes:
+- C1: Path traversal protection — sanitizeInputPath() rejects paths outside
+  cwd/home/tmp and blocks symlinks on all input file reads
+- C2: Redaction ID race — replaced sequential nextRedactionId++ with
+  randomUUID() (thread-safe, unpredictable placeholders)
+- C3: File lock race — documented Map-based lock with resolve() normalization
+
+HIGH fixes:
+- H1: Prompt bytes now computed via Buffer.byteLength (not token*4 estimate),
+  accurate for CJK/emoji/non-ASCII content
+- H2: Symlink rejection via lstatSync check in sanitizeInputPath
+- H3: Global retry cap (2× file count) in batch_check prevents quota exhaustion
+- H4: Malformed SSE chunks counted and warned (not silently dropped)
+- H5: maxBytes validated — Infinity/0/negative fall back to default
+- H6: walkDir skips symlinks explicitly (prevents infinite recursion)
+- H7: PEM private key blocks added to SECRET_PATTERNS
+- H8: publish.py rollback on push failure (reset + tag delete)
+- H9: publish.py validates regex match + greps dist for version
+- H10: config.ts YAML parse sanitized via JSON roundtrip (anti-prototype-pollution)
+
+MEDIUM fixes:
+- M1: readAndGroupFiles enforces 10 KB minimum budget
+- M2: System message bytes included in budget calculation
+- M3: TOCTOU mitigated — re-check buffer size after readFileSync
+- M4: Truncation detection lowered from >50 to >10 lines
+- M5: SOFT_TIMEOUT_MS capped at 115s (MCP spec limit)
+- M6: (ensemble line filter — secondary to byte budget)
+- M7: config.ts atomic settings write via temp+rename
+- M8: config.ts path traversal protection on LLM_EXT_CONFIG_DIR
+- M9: config.ts env var name trimming
+- M10: config.ts numeric caps (timeout ≤3600, concurrent ≤32, context ≤10M)
+- M11: publish.py remote tag collision check via git ls-remote
+
+LOW fixes:
+- L1: Binary detection scan extended from 8KB to 64KB
+- L4: Connection drop mid-stream now sets truncated=true
+- L5: Progress interval dynamic (min 10s, timeout/3)
+- L6: detectLang fallback to shebang for extensionless files
+- L7: walkDir symlink skip explicit (was implicit)
+- L8: Redaction IDs now random UUIDs (unpredictable)
+
+Additional publish.py hardening:
+- git-cliff required (not optional skip)
+- gh CLI pre-check at start
+- npm ci instead of npm install
+- try/finally on os.chdir for safety
+- Post-stage unstaged file detection
+
+- Fix: 800 KB payload budget for batching — guarantees full ensemble
+
+The entire LLM payload (prompt + instructions + instruction files +
+code files + inline content) is now capped at 800 KB per batch.
+
+This ensures both ensemble models (Grok ≤20K lines ≈ 800 KB,
+Gemini ≤50K lines ≈ 2 MB) always process every batch — no more
+silent model skipping when batches exceed line limits.
+
+Changes:
+- MAX_FILE_SIZE_BYTES: 2 MB → 800 KB (per-file hard limit)
+- readAndGroupFiles: byte-based batching (800 KB - prompt overhead)
+  instead of token-based context window math
+- Files exceeding 800 KB are skipped and reported (not crashed)
+- Token estimation: 1 token ≈ 4 bytes (so 800 KB ≈ 200K tokens)
+- chat + code_task callers report skipped files in output
+
 
 ## [3.2.5] - 2026-03-15
 
 ### Fixed
 
-- Rebuild dist after version sync in publish.py
+- Fix: rebuild dist after version sync in publish.py
+
+The publish script synced the version to src/index.ts but didn't
+rebuild dist/ before committing. This caused dist/index.js to report
+the old version (3.2.2) to MCP clients while all other files said 3.2.4.
+
+Now publish.py rebuilds dist as step 2b (after version sync, before
+commit) and stages the rebuilt dist files.
+
 
 ## [3.2.3] - 2026-03-15
 
 ### Added
 
-- Bundle all dependencies with esbuild for standalone dist/
+- Feat: bundle all dependencies with esbuild for standalone dist/
+
+Claude Code plugins pull source from GitHub where node_modules is
+gitignored. The previous tsc-only build produced dist/ files that
+import external packages (yaml, @modelcontextprotocol/sdk) which
+fail at runtime with "Cannot find package" errors.
+
+Now using esbuild to bundle all npm dependencies into self-contained
+dist/index.js and dist/cli.js. Node.js builtins are externalized.
+A createRequire banner is injected so bundled CJS deps (like yaml)
+can resolve require("process") in the ESM output.
+
+Build pipeline: tsc --noEmit (type-check) → esbuild (bundle)
+
 
 ## [3.2.2] - 2026-03-15
 
 ### Documentation
 
-- Update install instructions with marketplace update step
+- Docs: update install instructions with marketplace update step
+
+Add `claude plugin marketplace update` command to installation guide.
+Include note about refreshing local cache if plugin is not found.
+
 
 ### Fixed
 
-- Remove env block from .mcp.json to fix missing env var error
-- Comprehensive audit — security hardening, version sync, skill structure, CI
-- Commit dist/, sync versions, harden publish pipeline
-- Add cliff.toml and harden publish.py changelog generation
+- Fix: remove env block from .mcp.json to fix missing env var error
+
+Claude Code treats all ${VAR} references in .mcp.json env block as
+required, causing "Missing environment variables: VLLM_API_KEY" error
+when users don't have all backend-specific vars set.
+
+The MCP server process inherits the parent's environment automatically,
+so OPENROUTER_API_KEY, LM_API_TOKEN, and VLLM_API_KEY are already
+available via process.env when set in the user's shell. The env block
+was unnecessary and counterproductive.
+
+- Fix: comprehensive audit — security hardening, version sync, skill structure, CI
+
+Security fixes:
+- /tmp/claude/ directory created with mode 0700 (was world-readable)
+- diff args use -- to prevent flag injection
+- jq check + safe --arg interpolation in install-statusline.sh
+- Dynamic User-Agent in statusline.sh (was hardcoded 2.1.34)
+- Explicit UTF-8 encoding in pre-push hook
+
+Version sync:
+- Fix hardcoded version 3.1.0 in index.ts Server constructor → 3.2.1
+- publish.py now auto-syncs version to index.ts on release
+- index.ts staged for commit in publish pipeline
+
+Plugin structure:
+- Add VLLM_API_KEY to server.json environmentVariables
+- Remove non-existent README.md from package.json files array
+- Fix .mcp.json path syntax: $CLAUDE_PLUGIN_ROOT → ${CLAUDE_PLUGIN_ROOT}
+- Fix dead URL in README (removed link to non-existent upstream repo)
+- SHA-pin actions/checkout in notify-marketplace workflow
+- Add CI workflow (build check + manifest + version consistency)
+
+Skill improvements (Nixtla compliance):
+- Lowercase skill names matching directory names
+- Add required sections: Overview, Prerequisites, Instructions, Context,
+  Output, Error Handling, Examples, Resources
+- Progressive disclosure: move detailed content to reference files
+- Both SKILL.md files under 5000 char limit
+- TOC added to all reference files
+- Embedded TOC headings in Resources section links
+- Fix misleading description (config skill manages profiles, not backends)
+
+CPV validation: 2 CRITICAL + 19 MAJOR → 0 CRITICAL + 0 MAJOR + 4 MINOR
+
+- Fix: commit dist/, sync versions, harden publish pipeline
+
+Critical fixes found during audit:
+
+1. CRITICAL: mcp-server/dist/ was gitignored — MCP server would fail
+   to start after install from GitHub because dist/index.js didn't
+   exist. Removed dist/ from .gitignore with negation pattern, committed
+   all 9 built files (548K).
+
+2. Version mismatch: server.json and package.json were still at 3.2.0
+   while plugin.json was at 3.2.1. Fixed both to 3.2.1.
+
+3. publish.py now auto-syncs version to mcp-server/package.json and
+   mcp-server/server.json (including nested packages[].version) and
+   stages both files in the release commit.
+
+4. tsconfig.json: excluded test-helpers.ts from build output to keep
+   dist/ clean (only ships index.js, config.js, cli.js + declarations).
+
+5. README badge version updated from 3.2.0 to 3.2.1.
+
+- Fix: add cliff.toml and harden publish.py changelog generation
+
+- Add cliff.toml with filter_unconventional=false and catch-all parser
+  so no commits are ever skipped by git-cliff
+- publish.py: add step 3 to update README.md badges (version, build)
+- publish.py: capture git-cliff stderr and abort if commits are skipped
+- publish.py: abort on git-cliff non-zero exit
+- publish.py: stage README.md in commit alongside plugin.json + CHANGELOG
+- Regenerate CHANGELOG.md with all 6 prior commits included
+
 
 ## [3.2.1] - 2026-03-15
 
@@ -1379,6 +2448,7 @@ max_in_flight, or max_rps profile fields needed.
 Resolves GHSA prototype pollution in hono's parseBody({ dot: true }).
 Transitive dependency via @modelcontextprotocol/sdk. Patched in 4.12.7,
 updated to 4.12.8. npm audit now shows 0 vulnerabilities.
+
 - Improve README with badges, detailed tool docs, and publishing guide
 
 Add shields.io badges (version, build, typescript, node, license,
@@ -1387,12 +2457,14 @@ with input fields, ensemble parameters, and constraints. Add profile
 modes table, environment variables reference, quick start configs for
 both OpenRouter and LM Studio. Document publish.py steps and pre-push
 hook checks. Add requirements table and full directory tree.
+
 - Update .gitignore to match marketplace plugin conventions
 
 Add patterns for: .claude/, CLAUDE.md, .tldr/, *_dev/ (generic), IDE
 files (.idea/, .vscode/), Python caches (.ruff_cache/, .mypy_cache/,
 .pytest_cache/), build artifacts, security output, and editor swap files.
 Matches Emasoft/claude-plugins-management .gitignore pattern.
+
 - Add CI/CD scripts and fix plugin naming convention
 
 - Rename plugin from 'llm-externalizer-plugin' to 'llm-externalizer'
@@ -1405,6 +2477,7 @@ Matches Emasoft/claude-plugins-management .gitignore pattern.
 - Rewrite README with comprehensive installation instructions, naming
   section, directory structure, and publishing guide
 - Update .gitignore to include dev folders
+
 - Apply validation fixes from plugin-validator and skill-reviewers
 
 Fixes:
@@ -1416,6 +2489,7 @@ Fixes:
   output location constraint, added examples/ pointer
 - New: examples/end-to-end-workflow.md with complete tool selection,
   invocation, output reading, and decision tree
+
 - Initial plugin structure for llm-externalizer-plugin
 
 Claude Code plugin packaging of the LLM Externalizer MCP server.
@@ -1430,5 +2504,6 @@ Components:
 - commands/configure.md: Profile management command
 - scripts/setup.sh: Build script (npm install + tsc)
 - scripts/install-statusline.sh: Optional statusline integration
+
 
 
