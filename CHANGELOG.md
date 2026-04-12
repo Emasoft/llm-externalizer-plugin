@@ -1,6 +1,31 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.10.0] - 2026-04-12
+
+### Added
+
+- Feat(plugin): align with Claude Code v2.1.101 spec
+
+Plugin compliance updates against the current Claude Code plugin
+spec (plugins-reference.md, skills.md) as of 2026-04-10:
+
+- skills/*/SKILL.md: remove non-spec `version:` field (not part of
+  skill frontmatter — versioning lives in plugin.json); present in
+  all 5 skills and silently ignored today
+- skills/*/SKILL.md: add `effort:` frontmatter (v2.1.80) — `low` for
+  or-model-info, `medium` for scan/free-scan/config/usage
+- skills/*/SKILL.md: add `argument-hint:` to 4 skills that accept
+  arguments (config, free-scan, or-model-info, scan) for better UX
+- scripts/publish.py: add `claude plugin validate .` as mandatory
+  check #9, add `claude` to REQUIRED_TOOLS list — catches future
+  schema drift automatically
+
+Deferred (design discussion needed): userConfig keychain for
+OPENROUTER_API_KEY, git-subdir marketplace source, dedicated
+code-review agent, context:fork on scan skill.
+
+
 ## [3.9.85] - 2026-04-10
 
 ### Fixed
