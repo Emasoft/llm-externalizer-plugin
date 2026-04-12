@@ -4,7 +4,8 @@ description: |-
   Use when scanning a project for free using the Nemotron model (no cost, lower quality).
   Trigger with "free scan", "free-scan", "scan for free", "quick scan", "cheap scan",
   "scan without cost", "nemotron scan".
-version: 1.0.0
+argument-hint: "[folder-path | .]"
+effort: medium
 ---
 
 # LLM Externalizer — Free Project Scan

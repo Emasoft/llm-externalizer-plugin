@@ -206,6 +206,7 @@ REQUIRED_TOOLS: list[tuple[str, str]] = [
     ("ruff", "uv tool install ruff"),
     ("shellcheck", "brew install shellcheck"),
     ("git-cliff", "brew install git-cliff  OR  cargo install git-cliff"),
+    ("claude", "npm install -g @anthropic-ai/claude-code  (Claude Code CLI)"),
 ]
 
 
@@ -249,6 +250,7 @@ def run_checks(repo_root: Path) -> bool:
       6. ruff check       — lint all Python scripts
       7. shellcheck       — lint all .sh files in the main tree
       8. plugin.json parse — manifest must be valid JSON
+      9. claude plugin validate — authoritative Claude Code plugin validator
     """
     mcp_dir = str(repo_root / "mcp-server")
     reports = _reports_dir(repo_root)
@@ -313,6 +315,17 @@ def run_checks(repo_root: Path) -> bool:
         print(f"ERROR: plugin.json invalid: {e}", file=sys.stderr)
         return False
     print("  OK: plugin.json")
+
+    # 9. Authoritative Claude Code plugin validator. Catches schema drift
+    # in plugin.json, skills, commands, agents, hooks — anything the
+    # current Claude Code CLI version considers non-compliant.
+    if not _run_check(
+        "claude-plugin-validate",
+        ["claude", "plugin", "validate", "."],
+        str(repo_root),
+        repo_root,
+    ):
+        return False
 
     return True
 

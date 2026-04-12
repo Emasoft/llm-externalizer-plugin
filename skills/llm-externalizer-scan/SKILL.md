@@ -4,7 +4,8 @@ description: |-
   Use when scanning an entire project or codebase for bugs, security issues, or code quality problems.
   Trigger with "scan project", "audit codebase", "scan codebase", "full scan",
   "run project scan", "check whole project", "scan all files".
-version: 1.0.0
+argument-hint: "[folder-path | .]"
+effort: medium
 ---
 
 # LLM Externalizer — Full Project Scan

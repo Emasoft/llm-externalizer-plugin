@@ -4,7 +4,8 @@ description: |-
   Use when asking for OpenRouter model details — supported params, pricing, latency,
   uptime, quantization. Trigger with "openrouter model info", "or-model-info",
   "what params does X support", "show pricing for", "check model support".
-version: 1.0.0
+argument-hint: "<model-id>"
+effort: low
 ---
 
 # LLM Externalizer — OpenRouter Model Info

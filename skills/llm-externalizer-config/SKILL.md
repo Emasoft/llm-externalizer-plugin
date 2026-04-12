@@ -3,7 +3,8 @@ name: llm-externalizer-config
 description: |-
   Use when managing LLM Externalizer profiles in settings.yaml.
   Trigger with "switch LLM profile", "add profile", "change active model", "edit settings.yaml".
-version: 1.0.0
+argument-hint: "[list | switch <profile> | add <name>]"
+effort: medium
 ---
 
 # LLM Externalizer — Configuration
