@@ -208,17 +208,38 @@ export function getBackupDir(): string {
 
 // ── Env var resolution ──────────────────────────────────────────────
 
+// Map of env-var names that have a corresponding plugin.json userConfig key.
+// When the user sets a value via the Claude Code plugin config UI, Claude
+// exports it as CLAUDE_PLUGIN_OPTION_<KEY> to this subprocess. We transparently
+// map that into the canonical env-var name the rest of the code reads from,
+// so both new (userConfig) and old (shell env var) setups work unchanged.
+// Preference: userConfig wins over shell env if both are set.
+const USER_CONFIG_ENV_MAP: Record<string, string> = {
+  OPENROUTER_API_KEY: "CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY",
+};
+
 /**
  * Resolve a value that may be an env var reference.
  * - Values starting with '$' are env var names → resolved from process.env
  * - All other values are direct values → returned as-is
  * - Empty/undefined → returns ''
+ *
+ * For env vars in USER_CONFIG_ENV_MAP, the corresponding CLAUDE_PLUGIN_OPTION_*
+ * var takes precedence if non-empty. This means plugin.json userConfig values
+ * override shell env vars — users can migrate to userConfig without changing
+ * anything else in their setup.
  */
 export function resolveEnvValue(value: string | undefined): string {
   if (!value) return "";
   if (value.startsWith("$")) {
     // M9: Trim env var name to prevent whitespace injection (e.g. "$VAR_NAME ")
-    return process.env[value.slice(1).trim()] || "";
+    const name = value.slice(1).trim();
+    const userConfigVar = USER_CONFIG_ENV_MAP[name];
+    if (userConfigVar) {
+      const userConfigVal = process.env[userConfigVar];
+      if (userConfigVal && userConfigVal.length > 0) return userConfigVal;
+    }
+    return process.env[name] || "";
   }
   return value;
 }

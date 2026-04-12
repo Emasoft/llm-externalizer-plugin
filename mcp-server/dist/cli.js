@@ -7423,10 +7423,19 @@ function getSettingsPath() {
 function getBackupDir() {
   return join(getConfigDir(), "backups");
 }
+var USER_CONFIG_ENV_MAP = {
+  OPENROUTER_API_KEY: "CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY"
+};
 function resolveEnvValue(value) {
   if (!value) return "";
   if (value.startsWith("$")) {
-    return process.env[value.slice(1).trim()] || "";
+    const name = value.slice(1).trim();
+    const userConfigVar = USER_CONFIG_ENV_MAP[name];
+    if (userConfigVar) {
+      const userConfigVal = process.env[userConfigVar];
+      if (userConfigVal && userConfigVal.length > 0) return userConfigVal;
+    }
+    return process.env[name] || "";
   }
   return value;
 }
