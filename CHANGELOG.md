@@ -1,6 +1,74 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.11.0] - 2026-04-12
+
+### Added
+
+- Feat(plugin): adopt userConfig, ship reviewer agent, fork scan to subagent
+
+Three plugin-spec features deferred from v3.10.0 are now implemented
+(marketplace source intentionally not changed):
+
+1. userConfig for OPENROUTER_API_KEY (plugin.json + config.ts)
+   - plugin.json: declare openrouter_api_key with type=string,
+     sensitive=true, title, description; Claude Code prompts on
+     install and stores in system keychain
+   - config.ts: USER_CONFIG_ENV_MAP transparently maps the auto-
+     exported CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY env var into
+     the canonical OPENROUTER_API_KEY name. userConfig wins over
+     shell env when both are set; existing shell-env-only setups
+     keep working unchanged
+
+2. agents/llm-ext-reviewer.md (new)
+   - Plugin-shipped Haiku-class agent for fast code reviews
+   - Restricted tools allowlist: Read, Glob, Grep, Bash + read-only
+     llm-externalizer MCP tools (no Write/Edit)
+   - Returns ONLY report file paths to the orchestrator — never
+     reads or summarizes report contents
+   - Default rubric: bugs, error handling gaps, security, resource
+     leaks, broken references
+
+3. llm-externalizer-scan skill: context: fork + agent: llm-ext-reviewer
+   - Skill body rewritten to a self-contained task prompt using
+     $ARGUMENTS — runs in the reviewer's isolated subagent context
+   - Verbose scan output stays out of the orchestrator's context
+     window; only the final report path comes back
+
+Verified:
+- claude plugin validate . passes
+- npm test: 18/18 unit tests pass
+- npm run build: dist rebuilt cleanly with the config.ts changes
+
+
+### Fixed
+
+- Fix(skill): restore CPV-required sections in scan skill body
+
+The v3.11.0 context: fork rewrite stripped all 7 sections required
+by CPV strict mode (Overview, Prerequisites, Instructions, Output,
+Error Handling, Examples, Resources), causing 7 MAJOR validation
+errors that blocked publish.
+
+Fix: rewrite the scan SKILL.md so it satisfies BOTH constraints:
+- All 7 CPV-required section headings present (Anthropic strict
+  skill structure)
+- Body is still a self-contained task prompt for the forked
+  llm-ext-reviewer subagent — the lead-in paragraph and the
+  Instructions section give clear actionable steps using $ARGUMENTS
+
+Also:
+- Compressed body to 4358 chars (under CPV's 5000-char ceiling
+  for progressive disclosure)
+- Restored "Copy this checklist and track your progress" phrase
+  required by CPV checklist convention
+- Trimmed Examples to 2 entries and Error Handling table to 5 rows
+
+Verified: CPV remote validation now reports CRITICAL=0 MAJOR=0
+MINOR=0 (5 pre-existing WARNINGs remain, all structural and
+non-blocking).
+
+
 ## [3.10.0] - 2026-04-12
 
 ### Added
