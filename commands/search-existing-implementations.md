@@ -1,44 +1,51 @@
 ---
 name: search-existing-implementations
-description: Scan the codebase (same language as the input files) for existing implementations that duplicate or overlap a PR's new feature. Delegates per-file comparison to the LLM Externalizer MCP server to keep orchestrator tokens low. Takes a mandatory feature description and one or more source files, optionally a diff.
+description: Given a PR's new implementation, scan the target codebase (same language) to find any existing similar feature, function, or helper that already solves the problem. Each file is reviewed independently by the LLM Externalizer ensemble (so disagreements between models flag false positives). The LLM's answer per file is just NO, or YES with the offending symbol and line range — keeping reports tiny. Takes a quoted feature description, source files, a diff, and one or more codebase paths.
 allowed-tools:
   - mcp__llm-externalizer__discover
   - mcp__llm-externalizer__code_task
   - Read
   - Glob
   - Bash
-argument-hint: '"<description>" <src-file> [more-files...] [--folder <path>] [--diff <path>]'
+argument-hint: '"<description>" <src-file> [more-srcs...] --in <path> [--in <path>...] --diff <diff-path> [--free] [--output-dir <path>] [--exclude-dirs <list>]'
 effort: medium
 ---
 
-Search the codebase for existing implementations that already solve the feature the PR is introducing. Per-file comparison is delegated to the LLM Externalizer MCP server so that verbose output never touches the orchestrator's context window — you return only report file paths.
+Search for duplicate implementations of a PR's new feature. All file-to-file comparison is delegated to the LLM Externalizer MCP server. The orchestrator never reads source content and returns only report paths.
 
 ## Step 1 — Parse `$ARGUMENTS`
 
-Extract these fields from the user's arguments. Fail fast if validation fails.
+All four inputs are MANDATORY. Abort with `[FAILED] search-existing-implementations — <reason>` on any validation failure.
 
-1. **`feature_description`** (MANDATORY): the first quoted string in `$ARGUMENTS`. Must be non-empty. This is the concise, human-written description of the PR's feature (e.g. `"async retry with exponential backoff and jitter"`). It will be injected into the per-file LLM prompt so the model knows what to look for even when the source files contain many unrelated functions.
-2. **`source_files`** (MANDATORY, one or more): absolute paths to the PR's new/modified file(s), given as positional arguments after the quoted description. These are the **reference** — their contents are shipped to the LLM as context but they are NOT scanned as targets.
-3. **`--folder <path>`** (OPTIONAL): subtree to search. Default: the current working directory (project root).
-4. **`--diff <path>`** (OPTIONAL): absolute path to a unified-diff file showing the exact PR changes. When present, the diff is also shipped to the LLM as extra context so it can pinpoint the NEW lines (prefixed with `+`) inside the source files.
+1. **`description`** (MANDATORY): the first quoted string in `$ARGUMENTS`. Non-empty. One concise sentence describing the PR feature (e.g. `"async retry with exponential backoff and jitter"`). The source files may contain many unrelated functions — this string is what tells the LLM which one matters.
+2. **`source_files`** (MANDATORY, 1+): the PR's new/modified files, given as positional absolute paths after the quoted description. These are the **reference** — their contents are shipped to the LLM as instruction context, never scanned as targets.
+3. **`--diff <path>`** (MANDATORY, exactly one): absolute path to a unified-diff file showing the exact PR changes. Used by the LLM to focus on the NEW lines (prefixed with `+`) rather than the whole reference file.
+4. **`--in <path>`** (MANDATORY, repeatable or comma-separated): one or more paths describing the codebase receiving the PR. Each entry may be an absolute path to a directory (walked recursively) or an absolute path to a specific file. Repeat the flag to add more paths: `--in /proj/src --in /proj/tests`, or use commas: `--in /proj/src,/proj/tests`. At least one is required.
 
-Validation (abort with `[FAILED] search-existing-implementations — <reason>` if any fails):
-- `feature_description` must be non-empty
-- At least one `source_files` path must be provided and each file MUST exist
-- `--folder` (if provided) MUST exist and be a directory
-- `--diff` (if provided) MUST exist and be a readable file
-- All paths MUST be absolute
+Forwarded optional flags (same semantics as all other LLM Externalizer commands):
+
+- `--free` → pass `"free": true` to the tool (Nemotron free mode, single model, lower quality, prompts logged by provider)
+- `--output-dir <abs-path>` → pass `"output_dir": "<path>"` (custom reports directory)
+- `--exclude-dirs <a,b,c>` → pass `"exclude_dirs": ["a","b","c"]` (extra dirs to skip on top of the built-in defaults)
+- `--redact-regex <pattern>` → pass `"redact_regex": "<pattern>"` (custom redaction)
+
+Validation checklist:
+- `description` non-empty
+- every `source_files` path exists and is a file
+- `--diff` path exists and is a file
+- every `--in` path exists (directory or file)
+- all paths are absolute
 
 ## Step 2 — Verify the service is online
 
-Call `mcp__llm-externalizer__discover`. If it reports OFFLINE, abort with `[FAILED] search-existing-implementations — service offline`.
+Call `mcp__llm-externalizer__discover`. Abort with `[FAILED] — service offline` if it reports OFFLINE.
 
-## Step 3 — Detect language and build the target file list
+## Step 3 — Detect language and collect target files
 
-Inspect each source file's extension to build the language-extension filter set. Common mappings:
+Detect the language-extension set from the source files' extensions. Union across all source files. Common mappings:
 
-| Extension | Filter set |
-|-----------|-----------|
+| Extensions | Filter set |
+|------------|-----------|
 | `.py` | `{.py}` |
 | `.ts`, `.tsx` | `{.ts, .tsx}` |
 | `.js`, `.jsx` | `{.js, .jsx}` |
@@ -52,100 +59,103 @@ Inspect each source file's extension to build the language-extension filter set.
 | `.swift` | `{.swift}` |
 | `.kt` | `{.kt}` |
 
-If the source files span multiple languages, union their filter sets.
+For each `--in` entry, build the target list:
 
-Use `Glob` to list every file under the target folder (default: cwd) matching the filter set, then strip:
+- If the entry is a directory → use `Glob` recursively with the language extensions
+- If the entry is a file → add directly (only if its extension is in the filter set)
 
-- Any non-code directories: `node_modules/**`, `.git/**`, `dist/**`, `build/**`, `.venv/**`, `__pycache__/**`, `vendor/**`, `reports_dev/**`, `docs_dev/**`, `scripts_dev/**`, `.claude/**`, `target/**`, `out/**`
-- Every path in `source_files` — the reference files must NOT be scanned against themselves (they'd trivially match)
+Then apply these filters:
 
-If the filtered list is empty, abort with `[FAILED] search-existing-implementations — no matching files found in <folder>`.
+- **Drop** anything under the default excluded directories: `node_modules`, `.git`, `dist`, `build`, `.venv`, `__pycache__`, `vendor`, `reports_dev`, `docs_dev`, `scripts_dev`, `.claude`, `target`, `out` — plus any extra dirs supplied via `--exclude-dirs`
+- **Drop** every path listed in `source_files` — the reference files must NOT be scanned against themselves (trivial self-match)
+- **Dedupe** across all `--in` paths
+
+If the final list is empty, abort with `[FAILED] — no matching files found across --in paths`.
+
+If the final list exceeds 2500 files, abort with `[FAILED] — codebase too large (<N> files); narrow --in or add --exclude-dirs`. The LLM Externalizer server has a 2500-file safety cap on scan_folder; the same cap applies here for consistency.
 
 ## Step 4 — Build the specialized instructions string
 
-Construct the `instructions` payload below, substituting `{DESCRIPTION}` with the user's feature description. Include the `{DIFF_NOTE}` block only if `--diff` was provided.
+The LLM's job is to give a one-line answer per file. Build exactly this `instructions` string, substituting `{DESCRIPTION}`:
 
 ```
-You are helping a code reviewer check for duplicate implementations. A pull request
-proposes adding the following feature:
+You are checking whether the file below already contains an implementation of this
+feature, or a helper that could be trivially composed to achieve it:
 
     {DESCRIPTION}
 
-The reference implementation from the PR is appended to these instructions (one or
-more source files). {DIFF_NOTE}
+The reference implementation from the PR is appended to these instructions as one or
+more source files, followed by a unified diff showing the EXACT new lines (prefixed
+with "+"). Focus on the new lines when reasoning about what the PR adds. The source
+files may contain many unrelated functions — only the one matching the description
+above is relevant.
 
-For the current file you are reviewing, answer ONE question: does this file already
-implement — or contain helpers that could be trivially composed to implement — the
-feature described above?
+For the current file, answer SEMANTIC equivalence: the same goal achieved by
+different code still counts. Ignore naming differences and surface-level style.
 
-Focus on SEMANTIC equivalence, not line-by-line match. Different code achieving the
-same goal still counts. The source files the PR adds may contain many functions and
-features — only the one matching the feature description above is relevant; ignore
-the rest.
+Output format: EXACTLY ONE LINE per finding, no other text, no preamble, no
+explanation.
 
-Output format per finding (sorted by strength, most overlapping first):
+On no match:
+    NO
 
-  STATUS:     EXISTS | SIMILAR | HELPER | NONE
-  SYMBOL:     <function / class / module name>
-  LINES:      <start-end>
-  RATIONALE:  <1-2 sentences on what already exists and how it relates>
-  REUSE_PATH: <how the PR code could reuse or refactor to share with this symbol;
-               only when STATUS != NONE>
+On one match:
+    YES symbol=<function-or-class-name> lines=<start-end>
 
-Status meanings:
-  EXISTS  — the same feature is already implemented in this file
-  SIMILAR — a close variant exists; the PR could refactor to share code
-  HELPER  — a utility exists that the PR could compose
-  NONE    — no overlap in this file
+On multiple matches in the same file, output multiple lines, one per match, most
+relevant first (max 5 lines).
 
-If nothing matches, output exactly one line:
-    NONE — no existing implementation in this file
+Special case: if the file appears to BE the reference (you recognize the PR code
+itself), output:
+    NO (self-reference)
 
-Do NOT rewrite the PR code. Do NOT echo the reference back. Be terse and actionable.
+Do NOT write rationale. Do NOT quote code. Do NOT explain. Do NOT rewrite the PR.
+One line per match. Nothing else.
 ```
 
-`{DIFF_NOTE}` (insert only when `--diff` was provided):
-
-```
-A unified diff showing the EXACT PR changes is also appended — focus on lines
-prefixed with "+" when reasoning about what's being added, since the source files
-may contain other unchanged code.
-```
+Note that ensemble mode runs this prompt on every configured model in parallel. Each per-file report will contain one section per model. Disagreements between models on the same file are a strong signal for false positives and give the reviewer a cheap way to spot them.
 
 ## Step 5 — Call `mcp__llm-externalizer__code_task`
 
-Pass exactly:
+Build the payload:
 
 ```json
 {
-  "instructions": "<the string built in step 4>",
-  "instructions_files_paths": ["<each source file>", "<--diff path if provided>"],
-  "input_files_paths": ["<filtered codebase list from step 3>"],
+  "instructions": "<specialized prompt from step 4>",
+  "instructions_files_paths": ["<src-file-1>", "<src-file-2>", "...", "<diff-path>"],
+  "input_files_paths": ["<filtered target list from step 3>"],
   "answer_mode": 0,
   "max_retries": 3
 }
 ```
 
-Field-by-field:
+Then add the forwarded optional fields if the user supplied them:
 
-- **`instructions_files_paths`**: source files + diff (if given). The server reads each file once and appends its content to the per-file LLM prompt. This is the key trick that keeps the orchestrator's token budget low — you never read the source file contents into your own context, the server does it.
-- **`input_files_paths`**: the filtered codebase list from step 3 — each one becomes its own scan target.
-- **`answer_mode: 0`**: one `.md` report per input file.
-- **`max_retries: 3`**: per-file retry with circuit breaker.
-- The server auto-batches if the payload exceeds its budget (400 KB default).
+- If `--free` was set → add `"free": true`
+- If `--output-dir` was set → add `"output_dir": "<abs-path>"`
+- If `--exclude-dirs` was set → already applied in step 3 filtering (no need to forward to the server since we control the target list directly)
+- If `--redact-regex` was set → add `"redact_regex": "<pattern>"`
+
+Key points:
+
+- **`instructions_files_paths`** carries the reference content (sources + diff). The MCP server reads these files once and appends their contents to every per-file prompt — you never read them into your own context.
+- **`input_files_paths`** is the filtered codebase list from step 3 — the source files have already been removed.
+- **`answer_mode: 0`** produces one `.md` report per input file. When ensemble mode is active in the profile (default: `remote-ensemble`), each report contains one section per model.
+- **Auto-batching**: the server packs multiple target files into each LLM request up to the 400 KB payload budget (`max_payload_kb`), keeping the request count low while respecting size limits.
+- **`max_retries: 3`**: per-file retry with a circuit breaker after 3 consecutive failures.
 
 ## Step 6 — Return the report paths
 
-The tool returns a list of absolute `.md` report file paths. Report them to the user verbatim using this exact format — do NOT read the reports, do NOT summarize, do NOT add commentary:
+The tool returns a list of absolute `.md` report file paths. Report them verbatim in this exact format — do NOT read the reports, do NOT summarize, do NOT add commentary:
 
 ```
 [DONE] search-existing-implementations — <N> reports
-<absolute-path-1>
-<absolute-path-2>
+<abs-path-1>
+<abs-path-2>
 ...
 ```
 
-On any failure during the workflow:
+On any failure in the workflow:
 
 ```
 [FAILED] search-existing-implementations — <one-line reason>
@@ -153,8 +163,9 @@ On any failure during the workflow:
 
 ## Constraints
 
-- You MUST NOT read any report contents. The whole point of this command is to keep verbose comparison output out of the orchestrator — return only paths.
-- You MUST NOT include the source files in `input_files_paths`. They go into `instructions_files_paths` only, otherwise they will self-match.
+- You MUST NOT read any report contents. The entire point of this command is to keep verbose per-file analysis out of the orchestrator. Return only paths.
+- You MUST NOT include the source files in `input_files_paths`. They go into `instructions_files_paths` only, or they will self-match.
 - You MUST NOT modify any files. This command is strictly read-only.
-- If the filtered codebase exceeds ~2500 files (the MCP server's safety cap), ask the user to narrow with `--folder <subpath>` before re-running. Do not attempt to work around the cap.
-- If the user did not quote the feature description or passed it without quotes, try to reconstruct it from the first contiguous non-flag, non-file argument. If that's ambiguous, abort and ask the user to wrap the description in quotes.
+- You MUST NOT pre-filter the reports or try to synthesize a summary. Each report is one file's verdict; the reviewer reads the ones they care about.
+- If the user did not quote the feature description, abort and ask them to wrap it in quotes — there's no safe way to guess where the description ends and the file list begins.
+- Ensemble vs free trade-off: by default the active profile's ensemble runs all models in parallel, which gives the reviewer a built-in voting signal for false positives. Only use `--free` when the user explicitly asks for a fast rough check and accepts lower quality + prompt logging by the provider.
