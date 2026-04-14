@@ -1,6 +1,49 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.13.0] - 2026-04-14
+
+### Added
+
+- Feat(command): auto-generate PR diff via git in search-existing-implementations
+
+The command now generates the PR diff itself instead of requiring
+the user to pre-make and pass --diff <path>.
+
+New resolution order for the diff (in Step 2.5):
+
+Path A — user-supplied --diff <path>: escape hatch, used as-is.
+  Useful outside a git checkout or for curated patches.
+
+Path B — user-supplied --base <ref>: command runs
+  `git diff <ref>...HEAD -- <source-files>` using the three-dot
+  merge-base form (matches what GitHub/GitLab show on a PR),
+  restricted to the source files so only the relevant changes are
+  included. Writes to a fresh /tmp/llm-ext-search-existing-diff-
+  <ts>.patch and passes that path to code_task.
+
+Path C — neither flag: auto-detect the base branch. Tries
+  `git symbolic-ref --short refs/remotes/origin/HEAD` first
+  (authoritative default-branch signal), then main, then master.
+  Aborts with a helpful message if none resolve or cwd is not a
+  git working tree.
+
+Aborts cleanly on:
+  - git diff failure (ref missing, bad working tree)
+  - empty diff (no changes vs base for the source files)
+  - not inside a git repo and no --diff given
+  - auto-detection found no usable base branch
+
+The --diff flag remains an escape hatch for edge cases. Previously
+it was the ONLY way to supply the diff; the spec required users to
+manually generate and save the patch before calling the command —
+now they just run `/search-existing-implementations "desc" src.py
+--in /path/to/codebase` and the command handles the rest.
+
+Verified: claude plugin validate . ✓, CPV remote validation ✓
+(CRITICAL=0 MAJOR=0 MINOR=0).
+
+
 ## [3.12.1] - 2026-04-14
 
 ### Refactored
