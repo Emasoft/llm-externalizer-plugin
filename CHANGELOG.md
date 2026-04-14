@@ -1,6 +1,51 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.12.0] - 2026-04-14
+
+### Added
+
+- Feat(command): add search-existing-implementations
+
+New slash command for PR reviewers: given a new feature from a PR,
+scan the rest of the codebase in the same language to find existing
+implementations that already solve the same problem — avoiding
+duplicate code.
+
+Takes:
+  - MANDATORY: a quoted feature description (e.g. "async retry with
+    exponential backoff"). Used directly in the specialized LLM
+    prompt so the model knows what to look for even when source
+    files contain many unrelated functions
+  - MANDATORY: one or more source file paths (the PR files with the
+    new implementation). These become reference context passed to
+    the LLM — NOT targets to scan
+  - OPTIONAL --folder <path>: limit the search subtree (default cwd)
+  - OPTIONAL --diff <path>: unified-diff file to narrow the LLM's
+    focus to the exact new lines
+
+The command delegates per-file comparison to
+mcp__llm-externalizer__code_task with:
+  - instructions: specialized prompt with the feature description
+  - instructions_files_paths: source files + diff (shipped as
+    reference context by the server — orchestrator never reads
+    the source content)
+  - input_files_paths: every matching-language file in the target
+    folder, minus the source files themselves, minus common
+    non-code dirs
+  - answer_mode: 0 (one report per file)
+  - max_retries: 3
+
+Each report classifies the file's relationship to the PR feature:
+EXISTS / SIMILAR / HELPER / NONE, with symbol name, line range,
+rationale, and reuse path. The command returns ONLY the list of
+report file paths — the verbose per-file analysis never touches
+the orchestrator context window.
+
+Verified: claude plugin validate . ✓, CPV remote validation ✓
+(CRITICAL=0 MAJOR=0 MINOR=0).
+
+
 ## [3.11.0] - 2026-04-12
 
 ### Added
