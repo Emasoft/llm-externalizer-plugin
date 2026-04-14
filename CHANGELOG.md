@@ -1,6 +1,52 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.12.1] - 2026-04-14
+
+### Refactored
+
+- Refactor(command): tighten search-existing-implementations spec
+
+Revisions after user feedback on the v3.12.0 draft:
+
+Inputs — all four are now MANDATORY:
+  1. Quoted feature description (first $ARGUMENTS token)
+  2. Source file(s) (positional, 1+)
+  3. --diff <path> (now mandatory, was optional)
+  4. --in <path> (now mandatory, was optional; defaulted to cwd)
+     Supports multiple paths via repeated flag or comma-separated
+     list. Each entry can be a directory (walked) or a single file
+
+LLM output — drastically simplified:
+  - One line per finding: `NO` or `YES symbol=<name> lines=<a-b>`
+  - Max 5 YES lines per file if multiple matches
+  - Special: `NO (self-reference)` when the LLM recognises the PR
+    file itself
+  - No STATUS categories (EXISTS/SIMILAR/HELPER dropped)
+  - No RATIONALE field, no REUSE_PATH field
+  - Ensemble mode trusted for false-positive filtering —
+    disagreements between the 3 models are the reviewer's signal
+
+Forwarded options (same as every other LLM Externalizer command):
+  --free           → pass through to code_task as free: true
+  --output-dir     → pass through as output_dir
+  --exclude-dirs   → applied during target filtering
+  --redact-regex   → pass through as redact_regex
+
+Architecture (unchanged):
+  - instructions_files_paths carries sources + diff (server reads
+    them once, orchestrator never loads file contents)
+  - input_files_paths is the filtered codebase list (Glob + dedupe
+    + exclude source files + exclude non-code dirs)
+  - Auto-batching by the server keeps request count low inside
+    max_payload_kb
+  - answer_mode: 0 → one .md report per input file, each report
+    has one section per ensemble model
+
+Verified: claude plugin validate . ✓, CPV remote validation ✓
+(CRITICAL=0 MAJOR=0 MINOR=0).
+
+
 ## [3.12.0] - 2026-04-14
 
 ### Added
