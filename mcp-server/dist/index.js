@@ -32390,7 +32390,7 @@ function buildTools() {
     },
     {
       name: "search_existing_implementations",
-      description: "Search a codebase for an existing implementation of a specified feature. The server walks the target folder(s), filters by language extension, and asks the LLM one file at a time whether that file already contains the feature described. Use for PR duplicate-check reviews or for greenfield 'is this already done?' audits.\n\nThe feature_description is the primary signal. Optionally pass PR source files (shipped as reference context and automatically excluded from the scan to avoid self-match) and/or a unified diff (to focus the LLM on the new lines). Both are optional \u2014 the tool also works as a pure description-based scan.\n\nPer-file output is terse: either 'NO' or 'YES symbol=<name> lines=<a-b>'. Ensemble mode runs all configured models in parallel so reviewers can spot false positives from model disagreement.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include the brief context in feature_description." + limitsBlock(),
+      description: "Search a codebase for an existing implementation of a specified feature. The server walks the target folder(s), filters by language extension, FFD-packs all matching files into batches up to max_payload_kb per LLM request, and asks the LLM (ensemble by default) to emit per-file YES/NO answers. Each batch is one LLM call \u2014 for a 10k-file codebase this is typically ~500 calls instead of 10k. Use for PR duplicate-check reviews or greenfield 'is this already done?' audits.\n\nThe feature_description is the primary signal. Optionally pass PR source files (shipped as reference context and automatically excluded from the scan to avoid self-match) and/or a unified diff (to focus the LLM on the new lines). Both are optional \u2014 the tool also works as a pure description-based scan.\n\nPer-file answer is terse \u2014 either 'NO' or one-or-more 'YES symbol=<name> lines=<a-b>' lines. EXHAUSTIVE: the LLM reports every occurrence in every file, no cap \u2014 so a reviewer can delete every duplicate and keep only the PR's new one. Ensemble mode runs all configured models in parallel so reviewers can spot false positives from model disagreement.\n\nanswer_mode: default 2 (single merged report covering all batches). Set to 1 for one report per batch. Mode 0 is not meaningful here and falls back to mode 1.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include the brief context in feature_description." + limitsBlock(),
       inputSchema: {
         type: "object",
         properties: {
@@ -32428,7 +32428,7 @@ function buildTools() {
           },
           max_files: {
             type: "number",
-            description: "Maximum number of files to process (default: 2500). Safety limit."
+            description: "Maximum number of files to walk (default: 10000). The FFD batcher packs files up to max_payload_kb per batch, so a 10k-file codebase typically fits in ~500 LLM calls."
           },
           scan_secrets: {
             type: "boolean",
@@ -32446,7 +32446,7 @@ function buildTools() {
           redact_regex: redactRegexSchema,
           max_payload_kb: {
             type: "number",
-            description: "Max file size in KB per file. Default: 400."
+            description: "Max batch payload size in KB (default: 400). Controls FFD bin packing: larger values pack more files per LLM call."
           }
         },
         required: ["feature_description", "folder_path"]
@@ -34875,28 +34875,29 @@ ${content}`);
           const descTrimmed = feature_description.trim();
           const hasRef = sourceFiles.length > 0 || !!diffPathResolved;
           const refBlock = hasRef ? "The reference implementation from the PR is appended to these instructions as " + (sourceFiles.length > 0 ? "one or more source files" : "context") + (diffPathResolved ? ", followed by a unified diff showing the EXACT new lines (prefixed with '+'). Focus on the new lines when reasoning about what the PR adds. " : ". ") + "The source files may contain many unrelated functions \u2014 only the one matching the description above is relevant.\n\n" : "No reference source files were provided \u2014 rely purely on the feature description above when reasoning about semantic equivalence.\n\n";
-          const seiSpecializedInstructions = `You are checking whether the file below already contains an implementation of this feature (or a helper that could be trivially composed to achieve it):
+          const seiBasePrompt = `You are checking every file in this batch for an existing implementation of this feature (or a helper that could be trivially composed to achieve it):
 
     ${descTrimmed}
 
-` + refBlock + "For the current file, answer SEMANTIC equivalence: the same goal achieved by different code still counts. Ignore naming differences and surface-level style.\n\nOutput format: EXACTLY ONE LINE per finding, no other text, no preamble, no explanation.\n\nOn no match:\n    NO\n\nOn one match:\n    YES symbol=<function-or-class-name> lines=<start-end>\n\nOn multiple matches in the same file, output multiple lines, one per match, most relevant first (max 5 lines).\n\nSpecial case: if the file appears to BE the reference (you recognize the PR code itself), output:\n    NO (self-reference)\n\nDo NOT write rationale. Do NOT quote code. Do NOT explain. Do NOT rewrite the PR. One line per match. Nothing else.";
+` + refBlock + "For EACH file in the batch, answer SEMANTIC equivalence: the same goal achieved by different code still counts. Ignore naming differences and surface-level style.\n\nOutput format: each file gets its own section in the response, separated by '---'. Per-file answer is one line per finding, no preamble, no explanation.\n\nSection template:\n\n## File: <absolute-file-path>\n\n<one line per finding>\n\n---\n\nPer-finding line format:\n    NO\n  or\n    YES symbol=<function-or-class-name> lines=<start-end>\n\nEXHAUSTIVE: If a file contains MULTIPLE matches, output ALL of them as successive YES lines. Do NOT cap the count. Do NOT keep only the most relevant. The reviewer may want to delete EVERY existing copy and leave only the PR's new one, so every occurrence MUST be listed.\n\nSpecial case: if a file IS the reference (you recognize the PR code itself), output:\n    NO (self-reference)\n\nProduce exactly one section per input file, in the order they appear in the batch, separated by '---'. Do NOT merge sections. Do NOT write rationale. Do NOT quote code. Do NOT explain. One line per match per file. Nothing else.";
           const seiInstrFiles = [...sourceFiles];
           if (diffPathResolved) seiInstrFiles.push(diffPathResolved);
-          const seiPrompt = resolvePrompt(
-            seiSpecializedInstructions,
+          const seiBasePromptWithRef = resolvePrompt(
+            seiBasePrompt,
             seiInstrFiles.length > 0 ? seiInstrFiles : void 0
           );
-          if (!seiPrompt.trim()) {
+          if (!seiBasePromptWithRef.trim()) {
             return {
               content: [{ type: "text", text: "FAILED: specialized prompt came out empty (internal error)." }],
               isError: true
             };
           }
           const fileSet = /* @__PURE__ */ new Set();
+          const seiMaxFilesEffective = seiMaxFiles ?? 1e4;
           for (const fp of folderPaths) {
             const walked = walkDir(fp, {
               extensions: seiEffectiveExts,
-              maxFiles: seiMaxFiles ?? 2500,
+              maxFiles: seiMaxFilesEffective,
               exclude: seiExcludeDirs,
               useGitignore: seiUseGitignore !== false
               // default true
@@ -34915,12 +34916,12 @@ ${content}`);
               ]
             };
           }
-          if (files.length > (seiMaxFiles ?? 2500)) {
+          if (files.length > seiMaxFilesEffective) {
             return {
               content: [
                 {
                   type: "text",
-                  text: `FAILED: ${files.length} files matched, exceeding max_files=${seiMaxFiles ?? 2500}. Narrow folder_path, pass extensions, or raise max_files.`
+                  text: `FAILED: ${files.length} files matched, exceeding max_files=${seiMaxFilesEffective}. Narrow folder_path, pass extensions, or raise max_files.`
                 }
               ],
               isError: true
@@ -34934,111 +34935,148 @@ ${content}`);
                 isError: true
               };
           }
-          const seiMode = resolveAnswerMode(seiRawMode, 0);
-          const seiBatchId = randomUUID();
-          const seiRl = await getRateLimitConfig();
-          const seiRecentOutcomes = [];
-          let seiAborted = false;
-          let seiAbortReason = "";
-          const seiTasks = files.map((filePath, idx) => async () => {
-            if (seiAborted)
-              return { filePath, success: false, error: "Batch aborted" };
-            for (let attempt = 1; attempt <= 3; attempt++) {
-              if (seiAborted)
-                return { filePath, success: false, error: "Batch aborted" };
-              try {
-                const result = await processFileCheck(filePath, seiPrompt, {
-                  maxTokens: resolveDefaultMaxTokens(),
-                  batchId: seiBatchId,
-                  fileIndex: idx,
-                  redact: seiRedact,
-                  regexRedact: seiRegexRedact,
-                  onProgress,
-                  ensemble: seiUseEnsemble,
-                  maxBytes: seiBudgetBytes,
-                  modelOverride,
-                  outputDir
-                });
-                seiRecentOutcomes.push(result.success);
-                if (onProgress) {
-                  const completed = seiRecentOutcomes.length;
-                  onProgress(
-                    completed,
-                    files.length,
-                    `search_existing_implementations: ${completed}/${files.length} files done`
-                  );
-                }
-                return result;
-              } catch (err) {
-                const classified = classifyError(err);
-                if (classified.unrecoverable) {
-                  if (classified.serviceLevel) {
-                    seiAborted = true;
-                    seiAbortReason = `Unrecoverable: ${classified.reason}`;
-                  }
-                  return { filePath, success: false, error: classified.reason };
-                }
-                if (attempt < 3) {
-                  await new Promise((r) => setTimeout(r, Math.pow(3, attempt - 1) * 1e3));
-                  continue;
-                }
-                seiRecentOutcomes.push(false);
-                if (seiRecentOutcomes.length >= 3 && seiRecentOutcomes.slice(-3).every((v) => !v)) {
-                  seiAborted = true;
-                  seiAbortReason = `3 consecutive failures. Last: ${classified.reason}`;
-                }
-                return {
-                  filePath,
-                  success: false,
-                  error: `Failed after 3 retries: ${classified.reason}`
-                };
-              }
+          const seiSystemMessage = "You are a code reviewer checking for duplicate implementations. Output per-file NO/YES answers in the exact format specified in the user prompt. Be terse \u2014 no rationale, no code quotes, no explanation. Identify matches by function/class/method NAME, never by line number in prose.";
+          const seiSystemBytes = Buffer.byteLength(seiSystemMessage, "utf-8");
+          const seiBaseBytes = Buffer.byteLength(seiBasePromptWithRef, "utf-8");
+          const seiPromptBytes = seiSystemBytes + seiBaseBytes + 2048;
+          const { groups: seiGroups, autoBatched: seiAutoBatched, skipped: seiSkipped } = readAndGroupFiles(files, seiPromptBytes, seiRedact, seiBudgetBytes, seiRegexRedact);
+          if (seiGroups.length === 0) {
+            const reasons = [];
+            if (seiSkipped.length > 0) {
+              reasons.push(
+                `${seiSkipped.length} file(s) exceeded the payload budget and were skipped`
+              );
+            } else {
+              reasons.push("no files fit within the payload budget");
             }
             return {
-              filePath,
-              success: false,
-              error: "Unexpected retry loop exit"
+              content: [
+                {
+                  type: "text",
+                  text: `FAILED: no batches could be formed. ${reasons.join("; ")}. Raise max_payload_kb (current: ${Math.round(seiBudgetBytes / 1024)} KB) or narrow folder_path to smaller files.`
+                }
+              ],
+              isError: true
             };
-          });
-          const seiBatchResults = await rateLimitedParallel(
-            seiTasks,
-            seiRl.rps,
-            seiRl.maxInFlight,
-            onProgress
-          );
-          const seiSucceeded = seiBatchResults.filter((r) => r.success);
-          const seiFailed = seiBatchResults.filter(
-            (r) => !r.success && r.error !== "Batch aborted"
-          );
-          const seiSkipped = seiBatchResults.filter((r) => r.error === "Batch aborted");
-          if ((seiMode === 1 || seiMode === 2) && seiSucceeded.length > 0) {
-            const sections = [];
-            for (const r of seiSucceeded) {
-              const content = r.reportPath && existsSync2(r.reportPath) ? readFileSync2(r.reportPath, "utf-8") : "";
-              sections.push(`## File: ${r.filePath}
+          }
+          const seiMode = resolveAnswerMode(seiRawMode, 2);
+          const seiBatchId = randomUUID();
+          const seiBatchResponses = [];
+          let seiAborted = false;
+          let seiAbortReason = "";
+          for (let gi = 0; gi < seiGroups.length; gi++) {
+            if (seiAborted) break;
+            const group = seiGroups[gi];
+            const groupPaths = group.map((fd) => fd.path);
+            let userContent = seiBasePromptWithRef;
+            userContent += buildPerFileSectionPrompt(groupPaths);
+            for (const fd of group) {
+              userContent += `
 
-${content}`);
+${fd.block}`;
+            }
+            const messages = [
+              { role: "system", content: seiSystemMessage },
+              { role: "user", content: userContent }
+            ];
+            try {
+              const resp = await ensembleStreaming(
+                messages,
+                {
+                  temperature: DEFAULT_TEMPERATURE,
+                  maxTokens: resolveDefaultMaxTokens(),
+                  onProgress,
+                  modelOverride
+                  // honours --free and credit-exhausted auto-fallback
+                },
+                seiUseEnsemble
+              );
+              seiBatchResponses.push({
+                idx: gi,
+                filePaths: groupPaths,
+                content: resp.content ?? "",
+                model: resp.model ?? currentBackend.model
+              });
+              if (onProgress) {
+                onProgress(
+                  gi + 1,
+                  seiGroups.length,
+                  `search_existing_implementations: batch ${gi + 1}/${seiGroups.length} done (${groupPaths.length} files)`
+                );
+              }
+            } catch (err) {
+              const classified = classifyError(err);
+              seiBatchResponses.push({
+                idx: gi,
+                filePaths: groupPaths,
+                content: "",
+                model: currentBackend.model,
+                error: classified.reason
+              });
+              if (classified.unrecoverable && classified.serviceLevel) {
+                seiAborted = true;
+                seiAbortReason = `Unrecoverable: ${classified.reason}`;
+              }
+            }
+          }
+          const seiBatchOk = seiBatchResponses.filter((r) => !r.error && r.content.trim().length > 0);
+          const seiBatchFailed = seiBatchResponses.filter((r) => r.error || !r.content.trim());
+          if (seiMode === 2 && seiBatchOk.length > 0) {
+            const sections = [];
+            sections.push(`# LLM Externalizer \u2014 search_existing_implementations`);
+            sections.push("");
+            sections.push(`**Feature**: ${descTrimmed}`);
+            sections.push(`**Folders**: ${folderPaths.join(", ")}`);
+            sections.push(`**Files scanned**: ${files.length}`);
+            sections.push(`**Batches**: ${seiGroups.length} (FFD bin-packed, ${seiAutoBatched ? "auto-batched" : "single batch"})`);
+            if (sourceFiles.length > 0) sections.push(`**Reference source files**: ${sourceFiles.length}`);
+            if (diffPathResolved) sections.push(`**Diff**: ${diffPathResolved}`);
+            if (seiSkipped.length > 0) {
+              sections.push("");
+              sections.push(`**SKIPPED** (exceeded payload budget): ${seiSkipped.length}`);
+              for (const s of seiSkipped) sections.push(`  - ${s}`);
+            }
+            sections.push("");
+            for (const r of seiBatchOk) {
+              sections.push(`---
+
+## Batch ${r.idx + 1}/${seiGroups.length} \u2014 ${r.filePaths.length} files`);
+              sections.push("");
+              sections.push(r.content.trim());
+              sections.push("");
+            }
+            if (seiBatchFailed.length > 0) {
+              sections.push("---\n\n## FAILED BATCHES");
+              sections.push("");
+              for (const r of seiBatchFailed) {
+                sections.push(`### Batch ${r.idx + 1}/${seiGroups.length} \u2014 ${r.filePaths.length} files`);
+                sections.push(`Error: ${r.error ?? "empty response"}`);
+                sections.push("Files:");
+                for (const fp of r.filePaths) sections.push(`  - ${fp}`);
+                sections.push("");
+              }
             }
             const mergedPath = saveResponse(
               "search_existing_implementations",
-              sections.join("\n\n---\n\n"),
+              sections.join("\n"),
               {
-                model: currentBackend.model,
-                task: seiPrompt,
-                inputFile: folderPaths.join(",")
-              }
+                model: ensembleModelLabel(seiUseEnsemble),
+                task: descTrimmed,
+                inputFile: folderPaths[0]
+              },
+              void 0,
+              outputDir
             );
             const summary = [
-              `SEARCH COMPLETE \u2014 ${seiSucceeded.length} processed, ${seiFailed.length} failed, ${seiSkipped.length} skipped (${files.length} files found)`,
+              `SEARCH COMPLETE \u2014 ${seiBatchOk.length}/${seiGroups.length} batches processed, ${files.length} files scanned, ${seiSkipped.length} skipped`,
               `Folders: ${folderPaths.join(", ")}`,
               sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
               diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
               `Batch UUID: ${seiBatchId}`,
               `MERGED REPORT: ${mergedPath}`
             ];
-            if (seiFailed.length > 0) {
-              summary.push("", "FAILED:");
-              for (const r of seiFailed) summary.push(`  ${r.filePath}: ${r.error}`);
+            if (seiBatchFailed.length > 0) {
+              summary.push("", `FAILED BATCHES: ${seiBatchFailed.length} (see merged report for details)`);
             }
             if (seiAborted) summary.push("", `ABORTED: ${seiAbortReason}`);
             return {
@@ -35046,22 +35084,51 @@ ${content}`);
               isError: seiAborted
             };
           }
+          const seiBatchReportPaths = [];
+          for (const r of seiBatchOk) {
+            const batchHeader = `# search_existing_implementations \u2014 Batch ${r.idx + 1}/${seiGroups.length}
+
+**Feature**: ${descTrimmed}
+**Files in batch**: ${r.filePaths.length}
+
+` + r.filePaths.map((fp) => `  - ${fp}`).join("\n") + "\n\n---\n\n";
+            const reportPath = saveResponse(
+              "search_existing_implementations",
+              batchHeader + r.content.trim(),
+              {
+                model: r.model,
+                task: descTrimmed,
+                inputFile: r.filePaths[0] ?? folderPaths[0],
+                groupId: `batch-${r.idx + 1}`
+              },
+              void 0,
+              outputDir
+            );
+            seiBatchReportPaths.push(reportPath);
+          }
           const seiSummaryLines = [
-            `SEARCH COMPLETE \u2014 ${seiSucceeded.length} processed, ${seiFailed.length} failed, ${seiSkipped.length} skipped (${files.length} files found)`,
+            `SEARCH COMPLETE \u2014 ${seiBatchOk.length}/${seiGroups.length} batches processed, ${files.length} files scanned, ${seiSkipped.length} skipped`,
             `Folders: ${folderPaths.join(", ")}`,
             sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
             diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
             `Batch UUID: ${seiBatchId}`,
             ""
           ];
-          if (seiSucceeded.length > 0) {
-            seiSummaryLines.push("REPORTS:");
-            for (const r of seiSucceeded) seiSummaryLines.push(`  ${r.reportPath}`);
+          if (seiBatchReportPaths.length > 0) {
+            seiSummaryLines.push(`REPORTS (one per batch, ${seiBatchReportPaths.length} total):`);
+            for (const p of seiBatchReportPaths) seiSummaryLines.push(`  ${p}`);
           }
-          if (seiFailed.length > 0) {
-            seiSummaryLines.push("", "FAILED:");
-            for (const r of seiFailed)
-              seiSummaryLines.push(`  ${r.filePath}: ${r.error}`);
+          if (seiSkipped.length > 0) {
+            seiSummaryLines.push("", `SKIPPED (exceeded payload budget, ${seiSkipped.length}):`);
+            for (const s of seiSkipped) seiSummaryLines.push(`  ${s}`);
+          }
+          if (seiBatchFailed.length > 0) {
+            seiSummaryLines.push("", `FAILED BATCHES (${seiBatchFailed.length}):`);
+            for (const r of seiBatchFailed) {
+              seiSummaryLines.push(
+                `  Batch ${r.idx + 1}/${seiGroups.length} (${r.filePaths.length} files): ${r.error ?? "empty response"}`
+              );
+            }
           }
           if (seiAborted) seiSummaryLines.push("", `ABORTED: ${seiAbortReason}`);
           return {

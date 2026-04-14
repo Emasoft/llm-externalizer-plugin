@@ -656,7 +656,7 @@ search-existing flags:
   --diff <path>        Pre-made unified-diff file (overrides --base).
   --extensions <a,b>   Language extensions to scan. Auto-detected from src files.
   --exclude-dirs <a,b> Extra dirs to skip.
-  --max-files <n>      Max files to process (default 2500).
+  --max-files <n>      Max files to walk (default 10000).
   --no-gitignore       Disable .gitignore filtering (default: enabled).
   --answer-mode <n>    0 = per-file reports (default), 1/2 = merged.
   --free               Use free Nemotron model (lower quality, prompts logged).
