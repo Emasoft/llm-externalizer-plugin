@@ -1,6 +1,65 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.14.0] - 2026-04-14
+
+### Added
+
+- Feat(mcp): add search_existing_implementations as a native MCP tool + CLI
+
+What changed:
+  - NEW MCP tool: search_existing_implementations (index.ts, ~320 lines).
+    Walks the target folder(s), filters by language extension (auto-
+    detected from source_files if not supplied), excludes source_files
+    from the scan list to avoid self-match, builds the specialized
+    yes/no prompt internally, and dispatches each file to the LLM
+    pipeline (ensemble mode, auto-batching, per-file retry, circuit
+    breaker). Output per file is terse: one line of NO, NO
+    (self-reference), or YES symbol=<name> lines=<a-b> (max 5 per file).
+
+  - NEW CLI subcommand: `llm-externalizer search-existing` (cli.ts).
+    Spawns the MCP server via StdioClientTransport, calls the tool,
+    prints the text result, exits. Supports all tool options plus
+    `--base <ref>` (auto-generates the PR diff via
+    `git diff <ref>...HEAD -- <src-files>`) and `--diff <path>` as an
+    escape hatch. Auto-detects the base branch from origin/HEAD → main
+    → master when neither flag is given and source files are provided.
+
+  - Slash command /search-existing-implementations: rewritten as a
+    thin 4824-char wrapper (was 13121 chars). Now just calls the MCP
+    tool; all heavy logic lives in the server handler.
+
+Inputs (all but one are optional):
+  - feature_description  MANDATORY — drives the LLM prompt
+  - folder_path          MANDATORY — single or list of codebase paths
+  - source_files         OPTIONAL  — reference files; excluded from scan
+  - diff_path            OPTIONAL  — narrows focus to new lines
+  - extensions, exclude_dirs, max_files, scan_secrets, redact_secrets,
+    answer_mode, redact_regex, use_gitignore, max_payload_kb  — same
+    semantics as scan_folder
+
+Why native MCP tool instead of slash-command-only:
+  - Usable from any MCP client, not just Claude Code
+  - Accessible from shell / CI via the CLI subcommand
+  - Subagents can call it via mcp__ tool calls
+  - The specialized yes/no prompt template lives server-side, so it
+    doesn't need to be re-implemented in every caller
+  - Consistent auto-batching, retry, and ensemble semantics with the
+    other llm-externalizer tools
+
+Tests:
+  - index.test.ts: expected tools list now includes
+    `search_existing_implementations` alphabetically between
+    `scan_folder` and `set_settings`. All 18 unit tests pass.
+  - CLI smoke-tested: missing description aborts with a clean error,
+    missing --in aborts with a clean error, --help shows the new
+    command with all flags documented.
+
+Verified: claude plugin validate . ✓, CPV remote validation ✓
+(CRITICAL=0 MAJOR=0 MINOR=0), npm run typecheck ✓, npm run lint ✓,
+npm run build ✓ (fully bundled dist/), npm test 18/18 ✓.
+
+
 ## [3.13.0] - 2026-04-14
 
 ### Added
