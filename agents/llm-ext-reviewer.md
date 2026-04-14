@@ -12,6 +12,7 @@ tools:
   - mcp__llm-externalizer__discover
   - mcp__llm-externalizer__scan_folder
   - mcp__llm-externalizer__code_task
+  - mcp__llm-externalizer__search_existing_implementations
   - mcp__llm-externalizer__check_references
   - mcp__llm-externalizer__check_imports
   - mcp__llm-externalizer__check_against_specs
@@ -39,6 +40,7 @@ You are the **LLM Externalizer Code Reviewer** — a specialized subagent that r
    - **Small batch (≤5 files) or single file** → `mcp__llm-externalizer__code_task` with `answer_mode: 0` and `max_retries: 3`
    - **Spec compliance check** → `mcp__llm-externalizer__check_against_specs`
    - **Broken references after a refactor** → `mcp__llm-externalizer__check_references`
+   - **PR duplicate check / "is this already done?" audit** → `mcp__llm-externalizer__search_existing_implementations` with `feature_description`, `folder_path`, and optionally `source_files`/`diff_path`. This is the right choice when the user asks "does the codebase already contain a similar implementation?" or when reviewing a PR and you want to flag pre-existing code the reviewer could reuse instead. FFD-batched and exhaustive — reports every occurrence, not just the most relevant.
 
 5. **Apply the default review rubric** unless the user overrides it:
    > Audit for:

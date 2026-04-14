@@ -17,17 +17,20 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 
 ## Features
 
-- **13 MCP tools** — 8 read-only analysis tools + 5 utility tools
+- **17 MCP tools** — 9 read-only analysis tools + 5 utility tools + 3 OpenRouter model-info formatters
+- **`llm-ext-reviewer` agent** — Haiku-class plugin agent for fast code reviews with restricted tool allowlist (no Write/Edit)
 - **Profile-based configuration** — named profiles in `~/.llm-externalizer/settings.yaml`
+- **`userConfig.openrouter_api_key`** — keychain-stored OpenRouter key via plugin configure UI (falls back to shell `$OPENROUTER_API_KEY`)
 - **Ensemble mode** — three models in parallel on OpenRouter, combined report
-- **Auto-batching** — large file sets split automatically to fit context window
+- **Auto-batching** — FFD bin-packing by payload size for all multi-file tools
 - **File grouping** — organize files into named groups (`---GROUP:id---`) for isolated per-group reports
 - **Secret scanning** — detects API keys and tokens before sending to LLM
 - **User-defined regex redaction** — `redact_regex` parameter to redact custom patterns
 - **Robust batch processing** — `max_retries` parameter with parallel execution, retry, and circuit breaker on all tools
 - **File-based output** — all results saved to files, only paths returned (keeps orchestrator context clean)
-- **2 auto-discovered skills** — tool usage patterns and configuration management
-- **2 slash commands** — health check and profile management
+- **5 auto-discovered skills** — usage, config, full scan, free scan, OpenRouter model info
+- **3 slash commands** — `/discover`, `/configure`, `/search-existing-implementations`
+- **CLI subcommand** — `llm-externalizer search-existing` for shell / CI duplicate-check workflows
 - **6 backend presets** — LM Studio, Ollama, vLLM, llama.cpp, generic local, OpenRouter
 
 ## MCP Tools
@@ -38,12 +41,12 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 |------|---------|
 | `chat` | General-purpose: summarize, compare, translate, generate text. Supports `system` persona. Accepts `folder_path` for directory scanning |
 | `code_task` | Code-optimized analysis with code-review system prompt. Supports `language` hint. Accepts `folder_path` for directory scanning |
-| `batch_check` | **Deprecated** — use any tool with `answer_mode: 0, max_retries: 3`. Per-file processing with retry |
 | `scan_folder` | Recursively scan a directory, auto-discover files by extension, process each with LLM |
 | `compare_files` | Compare files in 3 modes: pair (2 files), batch (`file_pairs`), or git diff (`git_repo` + refs). LLM summarizes differences |
 | `check_references` | Auto-resolve local imports, send source+dependencies to LLM to validate symbol references. Accepts `folder_path` |
 | `check_imports` | Two-phase — LLM extracts all import paths, server validates each exists on disk. Accepts `folder_path` |
 | `check_against_specs` | Compare source files against a specification file. Reports violations only. Accepts `folder_path`, `input_files_paths`, or both combined |
+| `search_existing_implementations` | Scan a codebase (same language) for existing implementations of a described feature. FFD-batched, ensemble-backed, exhaustive per-file `NO` / `YES symbol=<name> lines=<a-b>` output. Optional `source_files` and `diff_path` for PR duplicate-check reviews. Default `max_files: 10000`. |
 
 ### Utility tools
 
@@ -54,6 +57,9 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 | `change_model` | Switch model in active profile |
 | `get_settings` | Copy settings.yaml to output dir for editing (returns file path only) |
 | `set_settings` | Read YAML from file, validate, backup old settings, write new. Rejects invalid configs |
+| `or_model_info` | Query OpenRouter for a model's supported params, pricing, latency, uptime — pipe-delimited markdown table output |
+| `or_model_info_table` | Same as `or_model_info` but ANSI-colored Unicode-bordered table for terminal rendering |
+| `or_model_info_json` | Raw JSON for programmatic use; optional `file_path` to persist to disk |
 
 ### Standard input fields (all content tools)
 

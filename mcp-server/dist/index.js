@@ -31891,7 +31891,7 @@ function limitsBlock() {
 var answerModeSchema = {
   type: "number",
   enum: [0, 1, 2],
-  description: "Controls output file organization. 0 = one .md file per input file (separate LLM calls, with parallel execution + retry when max_retries > 1). 1 = one .md file per LLM request, with structured per-file sections inside. 2 = one .md file for the entire operation (all batches merged). Default: 0 (one report per file, each containing all ensemble model outputs)."
+  description: "Controls output file organization. 0 = one .md file per input file (separate LLM calls, with parallel execution + retry when max_retries > 1). 1 = one .md file per LLM request, with structured per-file sections inside. 2 = one .md file for the entire operation (all batches merged). Default varies per tool \u2014 check each tool's schema description: scan_folder=0, chat/code_task/check_*=2, search_existing_implementations=2 (mode 0 falls back to mode 1 since per-file LLM calls would defeat the FFD batching this tool relies on)."
 };
 var maxRetriesSchema = {
   type: "number",
@@ -32394,10 +32394,15 @@ function buildTools() {
       inputSchema: {
         type: "object",
         properties: {
+          // Inherit the shared folder-scan props — exposes extensions,
+          // exclude_dirs, use_gitignore, recursive, follow_symlinks, max_files,
+          // output_dir, free. Overridden below where SEI needs different semantics.
+          ...folderSchemaProps,
           feature_description: {
             type: "string",
             description: "Concise one-sentence description of the feature to look for. The source files (if any) may contain many unrelated functions \u2014 this string is what tells the LLM which one matters. Required."
           },
+          // Override folder_path: SEI accepts a single path OR an array of paths.
           folder_path: {
             oneOf: [
               { type: "string" },
@@ -32405,30 +32410,22 @@ function buildTools() {
             ],
             description: "Absolute path(s) to the codebase folder(s) to scan. Single folder or list of folders; each entry is walked recursively. Required."
           },
+          // Override max_files: SEI defaults to 10000 (vs scan_folder's 2500)
+          // because this tool is designed for massive-codebase PR-review scans.
+          max_files: {
+            type: "number",
+            description: "Maximum number of files to walk (default: 10000 for this tool, higher than scan_folder's 2500). The FFD batcher packs files up to max_payload_kb per batch, so a 10k-file codebase typically fits in ~500 LLM calls."
+          },
           source_files: {
             oneOf: [
               { type: "string" },
               { type: "array", items: { type: "string" } }
             ],
-            description: "Optional absolute path(s) to the PR's new/modified files. Their contents are shipped to the LLM as reference context, and the paths are automatically excluded from the scan target list so they don't self-match. Omit for pure description-based scans."
+            description: "Optional absolute path(s) to the PR's new/modified files. Their contents are shipped to the LLM as reference context, and the paths are automatically excluded from the scan target list so they don't self-match (symlinks are canonicalized via realpathSync). Omit for pure description-based scans."
           },
           diff_path: {
             type: "string",
             description: "Optional absolute path to a unified-diff file showing the exact PR changes. The server ships it alongside source_files as reference context so the LLM focuses on the NEW lines (prefixed with '+')."
-          },
-          extensions: {
-            type: "array",
-            items: { type: "string" },
-            description: `File extensions to include (e.g. [".py", ".ts"]). If omitted, auto-detected from source_files' extensions when possible; otherwise all files are included.`
-          },
-          exclude_dirs: {
-            type: "array",
-            items: { type: "string" },
-            description: "Additional directory names to skip (hidden dirs, node_modules, .git, dist, build are always skipped)."
-          },
-          max_files: {
-            type: "number",
-            description: "Maximum number of files to walk (default: 10000). The FFD batcher packs files up to max_payload_kb per batch, so a 10k-file codebase typically fits in ~500 LLM calls."
           },
           scan_secrets: {
             type: "boolean",
@@ -32438,15 +32435,11 @@ function buildTools() {
             type: "boolean",
             description: "Redact secrets before sending to LLM. DISCOURAGED: prefer .env."
           },
-          use_gitignore: {
-            type: "boolean",
-            description: "Use .gitignore rules to filter files (via git ls-files). Default: true."
-          },
           answer_mode: answerModeSchema,
           redact_regex: redactRegexSchema,
           max_payload_kb: {
             type: "number",
-            description: "Max batch payload size in KB (default: 400). Controls FFD bin packing: larger values pack more files per LLM call."
+            description: "Max batch payload size in KB (default: 400). Controls FFD bin packing: larger values pack more files per LLM call. search_existing_implementations default answer_mode is 2 (single merged report). Mode 0 falls back to mode 1 (per-batch reports) because per-file LLM calls would defeat the batching this tool relies on for 10k-file codebases."
           }
         },
         required: ["feature_description", "folder_path"]
@@ -34832,6 +34825,7 @@ ${content}`);
             }
           }
           const sourceFiles = [];
+          const sourceFilesCanonical = /* @__PURE__ */ new Set();
           if (seiSourceFilesRaw !== void 0 && seiSourceFilesRaw !== null) {
             const raw = Array.isArray(seiSourceFilesRaw) ? seiSourceFilesRaw : [seiSourceFilesRaw];
             for (const sf of raw) {
@@ -34844,6 +34838,11 @@ ${content}`);
                 };
               }
               sourceFiles.push(resolved);
+              sourceFilesCanonical.add(resolved);
+              try {
+                sourceFilesCanonical.add(realpathSync2(resolved));
+              } catch {
+              }
             }
           }
           let diffPathResolved = void 0;
@@ -34904,7 +34903,19 @@ ${content}`);
             });
             for (const f of walked) fileSet.add(f);
           }
-          for (const sf of sourceFiles) fileSet.delete(sf);
+          for (const walked of Array.from(fileSet)) {
+            if (sourceFilesCanonical.has(walked)) {
+              fileSet.delete(walked);
+              continue;
+            }
+            try {
+              const canonical = realpathSync2(walked);
+              if (sourceFilesCanonical.has(canonical)) {
+                fileSet.delete(walked);
+              }
+            } catch {
+            }
+          }
           const files = Array.from(fileSet);
           if (files.length === 0) {
             return {
@@ -35021,7 +35032,34 @@ ${fd.block}`;
           }
           const seiBatchOk = seiBatchResponses.filter((r) => !r.error && r.content.trim().length > 0);
           const seiBatchFailed = seiBatchResponses.filter((r) => r.error || !r.content.trim());
-          if (seiMode === 2 && seiBatchOk.length > 0) {
+          if (seiBatchOk.length === 0) {
+            const reason = seiAborted ? seiAbortReason : seiBatchFailed.length > 0 ? `all ${seiBatchFailed.length} batch(es) failed or returned empty: ${seiBatchFailed[0].error ?? "empty response"}` : "no batches produced output";
+            const failLines = [
+              `FAILED: search_existing_implementations produced zero usable output (${seiBatchOk.length}/${seiGroups.length} batches succeeded, ${files.length} files discovered)`,
+              `Reason: ${reason}`,
+              `Folders: ${folderPaths.join(", ")}`,
+              sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
+              diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
+              `Batch UUID: ${seiBatchId}`
+            ];
+            if (seiBatchFailed.length > 0) {
+              failLines.push("", "PER-BATCH FAILURES:");
+              for (const r of seiBatchFailed) {
+                failLines.push(
+                  `  Batch ${r.idx + 1}/${seiGroups.length} (${r.filePaths.length} files): ${r.error ?? "empty response"}`
+                );
+              }
+            }
+            if (seiSkipped.length > 0) {
+              failLines.push("", `SKIPPED (exceeded payload budget, ${seiSkipped.length}):`);
+              for (const s of seiSkipped) failLines.push(`  ${s}`);
+            }
+            return {
+              content: [{ type: "text", text: failLines.join("\n") }],
+              isError: true
+            };
+          }
+          if (seiMode === 2) {
             const sections = [];
             sections.push(`# LLM Externalizer \u2014 search_existing_implementations`);
             sections.push("");

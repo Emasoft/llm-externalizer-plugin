@@ -4683,7 +4683,9 @@ const answerModeSchema = {
     "0 = one .md file per input file (separate LLM calls, with parallel execution + retry when max_retries > 1). " +
     "1 = one .md file per LLM request, with structured per-file sections inside. " +
     "2 = one .md file for the entire operation (all batches merged). " +
-    "Default: 0 (one report per file, each containing all ensemble model outputs).",
+    "Default varies per tool — check each tool's schema description: scan_folder=0, " +
+    "chat/code_task/check_*=2, search_existing_implementations=2 (mode 0 falls back to mode 1 " +
+    "since per-file LLM calls would defeat the FFD batching this tool relies on).",
 };
 
 const maxRetriesSchema = {
@@ -5437,84 +5439,77 @@ function buildTools() {
       inputSchema: {
         type: "object" as const,
         properties: {
+          // Inherit the shared folder-scan props — exposes extensions,
+          // exclude_dirs, use_gitignore, recursive, follow_symlinks, max_files,
+          // output_dir, free. Overridden below where SEI needs different semantics.
+          ...folderSchemaProps,
           feature_description: {
-            type: "string",
+            type: "string" as const,
             description:
               "Concise one-sentence description of the feature to look for. " +
               "The source files (if any) may contain many unrelated functions — " +
               "this string is what tells the LLM which one matters. Required.",
           },
+          // Override folder_path: SEI accepts a single path OR an array of paths.
           folder_path: {
             oneOf: [
-              { type: "string" },
-              { type: "array", items: { type: "string" } },
+              { type: "string" as const },
+              { type: "array" as const, items: { type: "string" as const } },
             ],
             description:
               "Absolute path(s) to the codebase folder(s) to scan. Single folder " +
               "or list of folders; each entry is walked recursively. Required.",
           },
+          // Override max_files: SEI defaults to 10000 (vs scan_folder's 2500)
+          // because this tool is designed for massive-codebase PR-review scans.
+          max_files: {
+            type: "number" as const,
+            description:
+              "Maximum number of files to walk (default: 10000 for this tool, " +
+              "higher than scan_folder's 2500). The FFD batcher packs files up " +
+              "to max_payload_kb per batch, so a 10k-file codebase typically " +
+              "fits in ~500 LLM calls.",
+          },
           source_files: {
             oneOf: [
-              { type: "string" },
-              { type: "array", items: { type: "string" } },
+              { type: "string" as const },
+              { type: "array" as const, items: { type: "string" as const } },
             ],
             description:
               "Optional absolute path(s) to the PR's new/modified files. Their " +
               "contents are shipped to the LLM as reference context, and the paths " +
               "are automatically excluded from the scan target list so they don't " +
-              "self-match. Omit for pure description-based scans.",
+              "self-match (symlinks are canonicalized via realpathSync). Omit for " +
+              "pure description-based scans.",
           },
           diff_path: {
-            type: "string",
+            type: "string" as const,
             description:
               "Optional absolute path to a unified-diff file showing the exact PR " +
               "changes. The server ships it alongside source_files as reference " +
               "context so the LLM focuses on the NEW lines (prefixed with '+').",
           },
-          extensions: {
-            type: "array",
-            items: { type: "string" },
-            description:
-              'File extensions to include (e.g. [".py", ".ts"]). If omitted, ' +
-              "auto-detected from source_files' extensions when possible; " +
-              "otherwise all files are included.",
-          },
-          exclude_dirs: {
-            type: "array",
-            items: { type: "string" },
-            description:
-              "Additional directory names to skip (hidden dirs, node_modules, " +
-              ".git, dist, build are always skipped).",
-          },
-          max_files: {
-            type: "number",
-            description:
-              "Maximum number of files to walk (default: 10000). The FFD batcher " +
-              "packs files up to max_payload_kb per batch, so a 10k-file codebase " +
-              "typically fits in ~500 LLM calls.",
-          },
           scan_secrets: {
-            type: "boolean",
+            type: "boolean" as const,
             description:
               "Scan input files for secrets and ABORT if any are found.",
           },
           redact_secrets: {
-            type: "boolean",
+            type: "boolean" as const,
             description:
               "Redact secrets before sending to LLM. DISCOURAGED: prefer .env.",
-          },
-          use_gitignore: {
-            type: "boolean",
-            description:
-              "Use .gitignore rules to filter files (via git ls-files). Default: true.",
           },
           answer_mode: answerModeSchema,
           redact_regex: redactRegexSchema,
           max_payload_kb: {
-            type: "number",
+            type: "number" as const,
             description:
               "Max batch payload size in KB (default: 400). Controls FFD bin " +
-              "packing: larger values pack more files per LLM call.",
+              "packing: larger values pack more files per LLM call. " +
+              "search_existing_implementations default answer_mode is 2 (single " +
+              "merged report). Mode 0 falls back to mode 1 (per-batch reports) " +
+              "because per-file LLM calls would defeat the batching this tool " +
+              "relies on for 10k-file codebases.",
           },
         },
         required: ["feature_description", "folder_path"],
@@ -8393,8 +8388,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         }
 
-        // Normalize source_files (optional)
+        // Normalize source_files (optional). Collect both the user-supplied
+        // path AND the canonical (realpath-resolved) path so the later exclude
+        // step can match files that walkDir may reach via a symlinked parent
+        // directory. Without canonicalization, a source file reachable via
+        // /pr/repo/src/retry.py but walked via /scan/link-to-repo/src/retry.py
+        // would appear in the scan target list and produce a spurious
+        // self-match in the LLM output.
         const sourceFiles: string[] = [];
+        const sourceFilesCanonical = new Set<string>();
         if (seiSourceFilesRaw !== undefined && seiSourceFilesRaw !== null) {
           const raw = Array.isArray(seiSourceFilesRaw) ? seiSourceFilesRaw : [seiSourceFilesRaw];
           for (const sf of raw) {
@@ -8407,6 +8409,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               };
             }
             sourceFiles.push(resolved);
+            sourceFilesCanonical.add(resolved);
+            try {
+              sourceFilesCanonical.add(realpathSync(resolved));
+            } catch {
+              // realpath can fail on broken symlinks or permission errors — the
+              // non-canonical resolve() path is already in the set, so the
+              // exclude still works for the common (no symlink) case.
+            }
           }
         }
 
@@ -8531,7 +8541,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           });
           for (const f of walked) fileSet.add(f);
         }
-        for (const sf of sourceFiles) fileSet.delete(sf);
+        // Exclude source files. Try both the non-canonical path (matches when
+        // walkDir pushes the same display path) AND the realpath-canonicalized
+        // path (catches symlinked-parent cases where walkDir reaches the same
+        // file via a different display name). This is the fix for the self-
+        // match leak: walkDir currently pushes display paths but does realpath
+        // only for cycle detection, so a single scan could otherwise see the
+        // reference files under both names and the naive delete-by-resolve()
+        // path would miss the symlink variant.
+        for (const walked of Array.from(fileSet)) {
+          if (sourceFilesCanonical.has(walked)) {
+            fileSet.delete(walked);
+            continue;
+          }
+          try {
+            const canonical = realpathSync(walked);
+            if (sourceFilesCanonical.has(canonical)) {
+              fileSet.delete(walked);
+            }
+          } catch {
+            // If realpath fails on a walked path, leave it in — we'd rather
+            // include it and accept a possible false self-match than drop a
+            // file entirely due to a transient permission error.
+          }
+        }
 
         const files = Array.from(fileSet);
         if (files.length === 0) {
@@ -8679,13 +8712,51 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const seiBatchOk = seiBatchResponses.filter((r) => !r.error && r.content.trim().length > 0);
         const seiBatchFailed = seiBatchResponses.filter((r) => r.error || !r.content.trim());
 
+        // Catch zero-success before either output branch runs, so an all-
+        // batches-failed run always returns isError: true. The earlier code
+        // path silently skipped the mode-2 branch and fell through to the
+        // mode-1 branch, which emitted "SEARCH COMPLETE — 0/N batches
+        // processed" with isError: false if none of the failures were
+        // service-level — a silent no-op that looked like success.
+        if (seiBatchOk.length === 0) {
+          const reason = seiAborted
+            ? seiAbortReason
+            : seiBatchFailed.length > 0
+              ? `all ${seiBatchFailed.length} batch(es) failed or returned empty: ${seiBatchFailed[0].error ?? "empty response"}`
+              : "no batches produced output";
+          const failLines: string[] = [
+            `FAILED: search_existing_implementations produced zero usable output (${seiBatchOk.length}/${seiGroups.length} batches succeeded, ${files.length} files discovered)`,
+            `Reason: ${reason}`,
+            `Folders: ${folderPaths.join(", ")}`,
+            sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
+            diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
+            `Batch UUID: ${seiBatchId}`,
+          ];
+          if (seiBatchFailed.length > 0) {
+            failLines.push("", "PER-BATCH FAILURES:");
+            for (const r of seiBatchFailed) {
+              failLines.push(
+                `  Batch ${r.idx + 1}/${seiGroups.length} (${r.filePaths.length} files): ${r.error ?? "empty response"}`,
+              );
+            }
+          }
+          if (seiSkipped.length > 0) {
+            failLines.push("", `SKIPPED (exceeded payload budget, ${seiSkipped.length}):`);
+            for (const s of seiSkipped) failLines.push(`  ${s}`);
+          }
+          return {
+            content: [{ type: "text", text: failLines.join("\n") }],
+            isError: true,
+          };
+        }
+
         // Build output per answer_mode:
         //   mode 2 (default) — single merged report with all batches appended
         //   mode 1           — one report per batch
         //   mode 0           — one report per batch (mode 0 is nonsensical for
         //                      this tool since it forces per-file LLM calls,
         //                      which defeats the point — fall back to mode 1)
-        if (seiMode === 2 && seiBatchOk.length > 0) {
+        if (seiMode === 2) {
           const sections: string[] = [];
           sections.push(`# LLM Externalizer — search_existing_implementations`);
           sections.push("");

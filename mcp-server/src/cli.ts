@@ -386,7 +386,19 @@ interface SearchExistingOpts {
   useGitignore?: boolean;
   answerMode?: number;
   maxFiles?: number;
+  maxPayloadKb?: number;
+  redactRegex?: string;
+  timeoutMs?: number;
 }
+
+// Default CLI → MCP callTool timeout: 4 hours.
+// A 10k-file scan packs into ~500 FFD batches at 400 KB/batch; each batch
+// is one ensemble call (~10-60s with reasoning models). Worst case that's
+// ~8h of wall time, but typical runs finish in under 2h. We pick 4h as the
+// default because it's the sweet spot between "long enough for most 10k
+// scans" and "short enough that a stuck call doesn't linger forever". Users
+// can override with --timeout-hours <n> or set it to 0 to disable.
+const DEFAULT_SEARCH_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 
 /** Locate the compiled server entry point (dist/index.js) next to this CLI. */
 function findServerScript(): string {
@@ -437,11 +449,38 @@ function generateGitDiff(base: string, sourceFiles: string[]): string {
     die("cwd is not a git repository; pass --diff <path> or run from inside a git checkout.");
   }
   const outPath = join(tmpdir(), `llm-ext-search-existing-diff-${Date.now()}.patch`);
+  // 256 MB buffer is large enough to hold any realistic PR diff (a 10k-line
+  // diff is ~1 MB, a 100k-line generated-code diff is ~15 MB). A PR touching
+  // a megabyte of lockfile changes can exceed 64 MB; bumping here prevents
+  // silent truncation. If this is still not enough we detect it below.
   const result = spawnSync(
     "git",
     ["diff", `${base}...HEAD`, "--", ...sourceFiles],
-    { cwd: process.cwd(), encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 },
+    { cwd: process.cwd(), encoding: "utf-8", maxBuffer: 256 * 1024 * 1024 },
   );
+  // Detect three distinct failure modes explicitly:
+  //   1. spawn error (git not on PATH, exec failure) — result.error is set
+  //   2. git exit non-zero (bad ref, bad args) — result.status is non-zero
+  //   3. maxBuffer overflow (ENOBUFS) — result.error.code === "ENOBUFS"
+  //      OR the process was killed with SIGTERM, OR result.signal is set
+  if (result.error) {
+    const err = result.error as NodeJS.ErrnoException;
+    if (err.code === "ENOBUFS") {
+      die(
+        `git diff ${base}...HEAD exceeded 256 MB buffer. The PR diff is too large ` +
+          `for in-memory capture. Generate the diff manually with ` +
+          `'git diff ${base}...HEAD -- <files> > /tmp/pr.patch' and pass it via --diff.`,
+      );
+    }
+    die(`Failed to spawn git: ${err.message}`);
+  }
+  if (result.signal) {
+    die(
+      `git diff ${base}...HEAD was killed by signal ${result.signal}. ` +
+        `Most likely the output exceeded the buffer; generate the diff ` +
+        `manually and pass it via --diff.`,
+    );
+  }
   if (result.status !== 0) {
     die(
       `git diff ${base}...HEAD failed: ${result.stderr?.trim() || "unknown error"}`,
@@ -541,6 +580,16 @@ function parseSearchExistingArgs(args: string[]): SearchExistingOpts {
     if (!existsSync(abs)) die(`Source file not found: ${sf}`);
   }
 
+  // timeout-hours is parsed as a float (e.g. 0.5 for 30 minutes). 0 disables.
+  let timeoutMs: number | undefined = undefined;
+  if (flags["timeout-hours"] && flags["timeout-hours"] !== "true") {
+    const hours = Number(flags["timeout-hours"]);
+    if (!Number.isFinite(hours) || hours < 0) {
+      die(`Invalid --timeout-hours: ${flags["timeout-hours"]}`);
+    }
+    timeoutMs = hours === 0 ? 0 : Math.round(hours * 60 * 60 * 1000);
+  }
+
   return {
     description,
     folderPaths: folderPaths.map((p) => (isAbsolute(p) ? p : resolvePath(p))),
@@ -563,6 +612,15 @@ function parseSearchExistingArgs(args: string[]): SearchExistingOpts {
       flags["max-files"] && /^\d+$/.test(flags["max-files"])
         ? Number(flags["max-files"])
         : undefined,
+    maxPayloadKb:
+      flags["max-payload-kb"] && /^\d+$/.test(flags["max-payload-kb"])
+        ? Number(flags["max-payload-kb"])
+        : undefined,
+    redactRegex:
+      flags["redact-regex"] && flags["redact-regex"] !== "true"
+        ? flags["redact-regex"]
+        : undefined,
+    timeoutMs,
   };
 }
 
@@ -584,18 +642,24 @@ async function cmdSearchExisting(rawArgs: string[]): Promise<void> {
   }
 
   // Build the tool arguments — omit fields that are undefined so the server
-  // sees a minimal call.
+  // sees a minimal call and its schema defaults apply. Never default
+  // answer_mode on the CLI side — let the server decide (2 = single merged
+  // report for this tool). The earlier v3.14.x CLI defaulted to 0, which
+  // invisibly forced the handler into its mode-1 fallback path. Omitting
+  // keeps CLI and direct MCP callers in sync.
   const toolArgs: Record<string, unknown> = {
     feature_description: opts.description,
     folder_path: opts.folderPaths.length === 1 ? opts.folderPaths[0] : opts.folderPaths,
-    answer_mode: opts.answerMode ?? 0,
   };
   if (opts.sourceFiles.length > 0) toolArgs.source_files = opts.sourceFiles;
   if (diffPath) toolArgs.diff_path = diffPath;
   if (opts.extensions) toolArgs.extensions = opts.extensions;
   if (opts.excludeDirs) toolArgs.exclude_dirs = opts.excludeDirs;
   if (opts.useGitignore === false) toolArgs.use_gitignore = false;
-  if (opts.maxFiles) toolArgs.max_files = opts.maxFiles;
+  if (opts.maxFiles !== undefined) toolArgs.max_files = opts.maxFiles;
+  if (opts.maxPayloadKb !== undefined) toolArgs.max_payload_kb = opts.maxPayloadKb;
+  if (opts.answerMode !== undefined) toolArgs.answer_mode = opts.answerMode;
+  if (opts.redactRegex) toolArgs.redact_regex = opts.redactRegex;
   if (opts.free) toolArgs.free = true;
   if (opts.outputDir) toolArgs.output_dir = opts.outputDir;
 
@@ -612,12 +676,17 @@ async function cmdSearchExisting(rawArgs: string[]): Promise<void> {
     { capabilities: {} },
   );
 
+  // Effective timeout: --timeout-hours override, else DEFAULT_SEARCH_TIMEOUT_MS.
+  // 0 disables (the MCP SDK treats 0 as "no timeout" via undefined upstream).
+  const effectiveTimeoutMs =
+    opts.timeoutMs !== undefined ? opts.timeoutMs : DEFAULT_SEARCH_TIMEOUT_MS;
+
   try {
     await client.connect(transport);
     const result = await client.callTool(
       { name: "search_existing_implementations", arguments: toolArgs },
       undefined,
-      { timeout: 900_000 }, // 15 min — full scans on large codebases can take time
+      effectiveTimeoutMs > 0 ? { timeout: effectiveTimeoutMs } : undefined,
     );
     const content = result.content as Array<{ type: string; text: string }>;
     for (const c of content) {
@@ -649,18 +718,26 @@ Usage:
   llm-externalizer search-existing "<description>" [<src-files>...] --in <path> [--base <ref>] [--diff <path>] [--free]
 
 search-existing flags:
-  --in <path>          (MANDATORY) Codebase folder to scan. Repeat or comma-separate.
-  --src <path>         Alternative to positional source-file args. Repeatable.
-  --base <ref>         Git ref to diff against (default: origin/HEAD → main → master).
-                       Only used when source files are given.
-  --diff <path>        Pre-made unified-diff file (overrides --base).
-  --extensions <a,b>   Language extensions to scan. Auto-detected from src files.
-  --exclude-dirs <a,b> Extra dirs to skip.
-  --max-files <n>      Max files to walk (default 10000).
-  --no-gitignore       Disable .gitignore filtering (default: enabled).
-  --answer-mode <n>    0 = per-file reports (default), 1/2 = merged.
-  --free               Use free Nemotron model (lower quality, prompts logged).
-  --output-dir <path>  Custom reports directory.
+  --in <path>            (MANDATORY) Codebase folder to scan. Repeat or comma-separate.
+  --src <path>           Alternative to positional source-file args. Repeatable.
+  --base <ref>           Git ref to diff against (default: origin/HEAD → main → master).
+                         Only used when source files are given.
+  --diff <path>          Pre-made unified-diff file (overrides --base).
+  --extensions <a,b>     Language extensions to scan. Auto-detected from src files.
+  --exclude-dirs <a,b>   Extra dirs to skip.
+  --max-files <n>        Max files to walk (default 10000).
+  --max-payload-kb <n>   Max batch payload size in KB (default 400). Larger packs
+                         more files per LLM call.
+  --no-gitignore         Disable .gitignore filtering (default: enabled).
+  --answer-mode <n>      2 = single merged report with all batches (default).
+                         1 = one report per FFD batch. 0 falls back to 1 (per-file
+                         calls would defeat the batching this tool relies on).
+  --redact-regex <pat>   Custom JavaScript regex to redact matching tokens from
+                         file content before sending to the LLM.
+  --free                 Use free Nemotron model (lower quality, prompts logged).
+  --output-dir <path>    Custom reports directory.
+  --timeout-hours <n>    Max wall time for the whole scan (default 4 hours).
+                         Pass 0 to disable. Accepts fractional hours (e.g. 0.5 = 30 min).
 
 Modes:
   local             Sequential requests to a local server

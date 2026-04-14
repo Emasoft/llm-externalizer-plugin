@@ -20,7 +20,7 @@ The server packs files into batches up to `max_payload_kb` (default 400 KB) each
 - **`--in <path>`** (MANDATORY, repeatable or comma-separated): codebase path(s) to scan. Each entry must be an absolute path to a directory.
 - **`--base <ref>`** (OPTIONAL): git ref to diff source files against. Default auto-detection order: `origin/HEAD` → `main` → `master`. Only used when source files are given.
 - **`--diff <path>`** (OPTIONAL escape hatch): pre-made unified-diff file. Overrides `--base`.
-- **Forwarded flags**: `--free`, `--output-dir <path>`, `--exclude-dirs <a,b,c>`, `--extensions <a,b>`, `--max-files <n>`, `--redact-regex <pattern>`, `--answer-mode <n>`.
+- **Forwarded flags**: `--free`, `--output-dir <path>`, `--exclude-dirs <a,b,c>`, `--extensions <a,b>`, `--max-files <n>`, `--max-payload-kb <n>`, `--answer-mode <n>`.
 
 Abort with `[FAILED] search-existing-implementations — <reason>` on any validation failure.
 
@@ -28,57 +28,41 @@ Abort with `[FAILED] search-existing-implementations — <reason>` on any valida
 
 Call `mcp__llm-externalizer__discover`. Abort with `[FAILED] — service offline` if OFFLINE.
 
-## Step 3 — Resolve the PR diff (only if source files were given)
+## Step 3 — Call the MCP tool directly
 
-- **If `--diff <path>` was given** → use that path as-is.
-- **Else if source files were given and `--base <ref>` was given** → run via `Bash`:
-  ```
-  cd <git repo root of the first source file>
-  git diff "<ref>...HEAD" -- <src-file-1> <src-file-2> ... > /tmp/llm-ext-search-existing-diff-<timestamp>.patch
-  ```
-- **Else if source files were given and no `--base`** → auto-detect the base branch:
-  1. `git symbolic-ref --quiet --short refs/remotes/origin/HEAD` → use that
-  2. If it fails, check `git show-ref --verify --quiet refs/heads/main` → use `main`
-  3. If that fails, check `refs/heads/master` → use `master`
-  4. If none resolve OR cwd is not a git repo → abort with `[FAILED] — cannot auto-detect base branch; pass --base <ref> or --diff <path>`
-- **Else (no source files)** → skip this step; `diff_path` stays undefined and the server runs a pure description-based scan.
-
-If git diff fails or produces an empty diff, abort with a clear `[FAILED]` message.
-
-## Step 4 — Call the MCP tool
-
-Call `mcp__llm-externalizer__search_existing_implementations` with:
+Prefer calling `mcp__llm-externalizer__search_existing_implementations` directly. All diff generation, batching, and file filtering happens server-side:
 
 ```json
 {
   "feature_description": "<description from step 1>",
   "folder_path": "<single path or array from --in>",
   "source_files": "<array from step 1 if non-empty, else omit>",
-  "diff_path": "<resolved path from step 3 if any, else omit>"
+  "diff_path": "<pre-made --diff path if given, else omit>"
 }
 ```
 
-`answer_mode` defaults to 2 (single merged report). Set it explicitly only if the user asked for per-batch reports (`1`).
-
-Forward the optional flags if the user supplied them:
+Forward optional flags the user supplied:
 
 - `--free` → `"free": true`
 - `--output-dir` → `"output_dir": "<path>"`
 - `--exclude-dirs` → `"exclude_dirs": ["a","b","c"]`
 - `--extensions` → `"extensions": [".py", ".ts"]`
-- `--max-files` → `"max_files": N`
-- `--redact-regex` → `"redact_regex": "<pattern>"`
-- `--answer-mode` → `"answer_mode": N`
+- `--max-files` → `"max_files": N`  (server default: 10000 — higher than scan_folder's 2500)
+- `--max-payload-kb` → `"max_payload_kb": N`
+- `--answer-mode` → `"answer_mode": N`  (server default: 2 = single merged report; mode 0 falls back to mode 1 per-batch reports since per-file calls defeat the batching)
 
-The server handles everything: walks the folder(s), filters by extensions (auto-detected from source files if not supplied), excludes source files from the scan, builds the specialized yes/no prompt internally, runs each file through the ensemble with auto-batching up to `max_payload_kb`, and returns one report per file.
+**If the user passed `--base <ref>` (no `--diff`)**, you need to generate the diff yourself. Use `Bash` to run `git diff <ref>...HEAD -- <source-files> > /tmp/llm-ext-diff-<timestamp>.patch` from the git root, then pass the temp path as `diff_path`. Auto-detect the base if missing: try `git symbolic-ref --quiet --short refs/remotes/origin/HEAD`, fall back to `main`, then `master`. Abort with a clear `[FAILED]` if cwd is not a git repo, if the diff is empty, or if auto-detection fails.
 
-## Step 5 — Return the result
+**Alternative — shell out to the CLI**: `llm-externalizer search-existing` implements all of the above natively (including `--base` auto-generation and 4-hour timeout) and can be invoked via `Bash` as a single command. Prefer this for non-interactive workflows.
 
-The MCP tool returns a text body with the `SEARCH COMPLETE` summary and a list of `REPORTS:` paths. Forward that text to the user verbatim — do NOT read any report, do NOT summarize. The reviewer opens the reports they care about.
+## Step 4 — Return the result
+
+The MCP tool returns a text body with the `SEARCH COMPLETE` summary, a `MERGED REPORT:` path (mode 2) or a list of `REPORTS:` paths (mode 1), and any failed/skipped batches. Forward that text to the user verbatim — do NOT read any report, do NOT summarize. The reviewer opens the reports they care about.
 
 ## Constraints
 
 - You MUST NOT read any report contents.
 - You MUST NOT include source files in `folder_path` — they go in `source_files` only.
 - You MUST NOT modify any files.
-- If the filtered codebase exceeds `max_files` (default 2500), ask the user to narrow `--in` or raise `--max-files`; do not attempt workarounds.
+- If the filtered codebase exceeds `max_files` (default 10000), ask the user to narrow `--in` or raise `--max-files`; do not attempt workarounds.
+- If source files are given but the user passed neither `--base` nor `--diff`, and cwd is not a git repo, omit `diff_path` entirely and run a pure description-based scan (do not abort).

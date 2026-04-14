@@ -16,12 +16,12 @@
 |------|----------|-------------------|
 | `chat` | General-purpose: summarize, compare, translate, generate text. Also handles custom_prompt calls. Accepts `folder_path`. | 2 (merged) |
 | `code_task` | Code-optimized analysis with code-review system prompt. Use for audits, reviews. Accepts `folder_path`. | 2 (merged) |
-| `batch_check` | **DEPRECATED** — use any tool with `answer_mode: 0, max_retries: 3`. Per-file processing with retry. | 0 (per-file) |
-| `scan_folder` | Auto-discover files in a directory tree and check each. Good for codebase-wide scans. | 2 (merged) |
+| `scan_folder` | Auto-discover files in a directory tree and check each. Good for codebase-wide scans. Per-file LLM calls (no batching — one call per file). | 0 (per-file) |
 | `compare_files` | 3 modes: pair (2 files), batch (`file_pairs` array), git diff (`git_repo` + `from_ref` + `to_ref`). LLM summarizes differences. | N/A |
 | `check_references` | Auto-resolve local imports, send source+dependencies to LLM to validate symbol references. Accepts `folder_path`. | 2 (merged) |
 | `check_imports` | Two-phase: LLM extracts all import paths, server validates each exists on disk. Accepts `folder_path`. | 2 (merged) |
 | `check_against_specs` | Compare source files against a specification file. Reports violations only (not missing features). Accepts `folder_path`, `input_files_paths`, or both combined. | 2 (merged) |
+| `search_existing_implementations` | Scan a codebase for existing implementations of a described feature. FFD-batched (~500 calls for a 10k-file codebase), ensemble-backed, exhaustive per-file `NO` / `YES symbol=<name> lines=<a-b>` output. Optional `source_files` and `diff_path` for PR duplicate-check. Default `max_files: 10000`. Mode 0 falls back to mode 1 (per-batch reports) because per-file calls would defeat the batching. | 2 (merged) |
 
 ## Utility tools
 
@@ -32,6 +32,7 @@
 | `change_model` | Switch model in active profile |
 | `get_settings` | Copy settings.yaml to output dir, return file path |
 | `set_settings` | Read YAML from file_path, validate, backup old, write new settings |
+| `or_model_info` / `or_model_info_table` / `or_model_info_json` | Query OpenRouter for a model's supported params, pricing, latency, uptime. Three output formats (pipe-delimited markdown, ANSI-colored terminal table, raw JSON). |
 
 ## Standard Input Fields
 
@@ -47,8 +48,6 @@ input_files_content   — Inline content (DISCOURAGED — wastes your tokens)
 **ALWAYS** use `input_files_paths` instead of reading files into your context. The server reads files from disk directly.
 
 Use `instructions_files_paths` to share reusable review rules, coding standards, or large instruction sets across multiple operations.
-
-**NOTE**: `batch_check` does NOT support `input_files_content`.
 
 **NOTE**: `check_against_specs` uses `spec_file_path` (required) plus `input_files_paths`, `folder_path`, or both combined for source files.
 

@@ -34,7 +34,7 @@ Use when you need to analyze files without consuming orchestrator context, scan 
 
 ## Output
 
-All responses saved as `.md` files in `reports_dev/llm_externalizer/`. Output depends on `answer_mode`: `0` (per-file, default), `1` (per-request), `2` (merged).
+All responses saved as `.md` files in `reports_dev/llm_externalizer/`. Output depends on `answer_mode`: `0` (one .md per input file, per-file LLM calls), `1` (one .md per request with per-file sections inside, FFD-batched), `2` (one .md for the entire operation, FFD-batched). Defaults differ per tool — `scan_folder` defaults to 0, most others (including `search_existing_implementations`) default to 2. Check each tool's schema.
 
 ## Error Handling
 
@@ -52,8 +52,15 @@ All responses saved as `.md` files in `reports_dev/llm_externalizer/`. Output de
 ```
 
 ```json
-{"tool": "compare_files", "git_repo": "/path/to/repo",
- "from_ref": "v1.0.0", "to_ref": "HEAD"}
+{"tool": "compare_files", "input_files_paths": ["/path/old.ts", "/path/new.ts"],
+ "instructions": "Focus on API breaking changes"}
+```
+
+```json
+{"tool": "search_existing_implementations",
+ "feature_description": "rate-limited HTTP client with retry backoff",
+ "folder_path": "/path/to/codebase",
+ "source_files": ["/path/to/pr/http_client.py"]}
 ```
 
 ## Resources

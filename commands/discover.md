@@ -17,4 +17,9 @@ Show:
 5. Concurrency mode and max parallel calls
 6. Available profiles list
 
-If the service is unreachable, suggest running `python3 scripts/setup.py` from the plugin root to build the MCP server.
+If the service is unreachable, the plugin's MCP server failed to start. The server is spawned automatically by Claude Code from `.mcp.json` — recovery steps:
+
+1. Restart Claude Code to retry the MCP server spawn
+2. Check that `$OPENROUTER_API_KEY` is set (or the plugin `userConfig.openrouter_api_key` is populated) if you're using a remote profile
+3. Inspect the Claude Code MCP server logs for stderr output from the llm-externalizer process
+4. As a last resort, run `npm run build` in `mcp-server/` to rebuild `dist/index.js`

@@ -29907,6 +29907,7 @@ async function cmdModelInfo(modelId, flags) {
   }
   info(text);
 }
+var DEFAULT_SEARCH_TIMEOUT_MS = 4 * 60 * 60 * 1e3;
 function findServerScript() {
   const here = dirname(fileURLToPath(import.meta.url));
   const candidates = [
@@ -29955,8 +29956,22 @@ function generateGitDiff(base, sourceFiles) {
   const result = spawnSync(
     "git",
     ["diff", `${base}...HEAD`, "--", ...sourceFiles],
-    { cwd: process.cwd(), encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 }
+    { cwd: process.cwd(), encoding: "utf-8", maxBuffer: 256 * 1024 * 1024 }
   );
+  if (result.error) {
+    const err = result.error;
+    if (err.code === "ENOBUFS") {
+      die(
+        `git diff ${base}...HEAD exceeded 256 MB buffer. The PR diff is too large for in-memory capture. Generate the diff manually with 'git diff ${base}...HEAD -- <files> > /tmp/pr.patch' and pass it via --diff.`
+      );
+    }
+    die(`Failed to spawn git: ${err.message}`);
+  }
+  if (result.signal) {
+    die(
+      `git diff ${base}...HEAD was killed by signal ${result.signal}. Most likely the output exceeded the buffer; generate the diff manually and pass it via --diff.`
+    );
+  }
   if (result.status !== 0) {
     die(
       `git diff ${base}...HEAD failed: ${result.stderr?.trim() || "unknown error"}`
@@ -30038,6 +30053,14 @@ function parseSearchExistingArgs(args) {
     const abs = isAbsolute(sf) ? sf : resolvePath(sf);
     if (!existsSync2(abs)) die(`Source file not found: ${sf}`);
   }
+  let timeoutMs = void 0;
+  if (flags["timeout-hours"] && flags["timeout-hours"] !== "true") {
+    const hours = Number(flags["timeout-hours"]);
+    if (!Number.isFinite(hours) || hours < 0) {
+      die(`Invalid --timeout-hours: ${flags["timeout-hours"]}`);
+    }
+    timeoutMs = hours === 0 ? 0 : Math.round(hours * 60 * 60 * 1e3);
+  }
   return {
     description,
     folderPaths: folderPaths.map((p) => isAbsolute(p) ? p : resolvePath(p)),
@@ -30051,7 +30074,10 @@ function parseSearchExistingArgs(args) {
     useGitignore: flags["no-gitignore"] === "true" ? false : void 0,
     // default true server-side
     answerMode: flags["answer-mode"] && /^\d+$/.test(flags["answer-mode"]) ? Number(flags["answer-mode"]) : void 0,
-    maxFiles: flags["max-files"] && /^\d+$/.test(flags["max-files"]) ? Number(flags["max-files"]) : void 0
+    maxFiles: flags["max-files"] && /^\d+$/.test(flags["max-files"]) ? Number(flags["max-files"]) : void 0,
+    maxPayloadKb: flags["max-payload-kb"] && /^\d+$/.test(flags["max-payload-kb"]) ? Number(flags["max-payload-kb"]) : void 0,
+    redactRegex: flags["redact-regex"] && flags["redact-regex"] !== "true" ? flags["redact-regex"] : void 0,
+    timeoutMs
   };
 }
 async function cmdSearchExisting(rawArgs) {
@@ -30068,15 +30094,17 @@ async function cmdSearchExisting(rawArgs) {
   }
   const toolArgs = {
     feature_description: opts.description,
-    folder_path: opts.folderPaths.length === 1 ? opts.folderPaths[0] : opts.folderPaths,
-    answer_mode: opts.answerMode ?? 0
+    folder_path: opts.folderPaths.length === 1 ? opts.folderPaths[0] : opts.folderPaths
   };
   if (opts.sourceFiles.length > 0) toolArgs.source_files = opts.sourceFiles;
   if (diffPath) toolArgs.diff_path = diffPath;
   if (opts.extensions) toolArgs.extensions = opts.extensions;
   if (opts.excludeDirs) toolArgs.exclude_dirs = opts.excludeDirs;
   if (opts.useGitignore === false) toolArgs.use_gitignore = false;
-  if (opts.maxFiles) toolArgs.max_files = opts.maxFiles;
+  if (opts.maxFiles !== void 0) toolArgs.max_files = opts.maxFiles;
+  if (opts.maxPayloadKb !== void 0) toolArgs.max_payload_kb = opts.maxPayloadKb;
+  if (opts.answerMode !== void 0) toolArgs.answer_mode = opts.answerMode;
+  if (opts.redactRegex) toolArgs.redact_regex = opts.redactRegex;
   if (opts.free) toolArgs.free = true;
   if (opts.outputDir) toolArgs.output_dir = opts.outputDir;
   const serverScript = findServerScript();
@@ -30090,13 +30118,13 @@ async function cmdSearchExisting(rawArgs) {
     { name: "llm-externalizer-cli", version: "1.0.0" },
     { capabilities: {} }
   );
+  const effectiveTimeoutMs = opts.timeoutMs !== void 0 ? opts.timeoutMs : DEFAULT_SEARCH_TIMEOUT_MS;
   try {
     await client.connect(transport);
     const result = await client.callTool(
       { name: "search_existing_implementations", arguments: toolArgs },
       void 0,
-      { timeout: 9e5 }
-      // 15 min — full scans on large codebases can take time
+      effectiveTimeoutMs > 0 ? { timeout: effectiveTimeoutMs } : void 0
     );
     const content = result.content;
     for (const c of content) {
@@ -30126,18 +30154,26 @@ Usage:
   llm-externalizer search-existing "<description>" [<src-files>...] --in <path> [--base <ref>] [--diff <path>] [--free]
 
 search-existing flags:
-  --in <path>          (MANDATORY) Codebase folder to scan. Repeat or comma-separate.
-  --src <path>         Alternative to positional source-file args. Repeatable.
-  --base <ref>         Git ref to diff against (default: origin/HEAD \u2192 main \u2192 master).
-                       Only used when source files are given.
-  --diff <path>        Pre-made unified-diff file (overrides --base).
-  --extensions <a,b>   Language extensions to scan. Auto-detected from src files.
-  --exclude-dirs <a,b> Extra dirs to skip.
-  --max-files <n>      Max files to walk (default 10000).
-  --no-gitignore       Disable .gitignore filtering (default: enabled).
-  --answer-mode <n>    0 = per-file reports (default), 1/2 = merged.
-  --free               Use free Nemotron model (lower quality, prompts logged).
-  --output-dir <path>  Custom reports directory.
+  --in <path>            (MANDATORY) Codebase folder to scan. Repeat or comma-separate.
+  --src <path>           Alternative to positional source-file args. Repeatable.
+  --base <ref>           Git ref to diff against (default: origin/HEAD \u2192 main \u2192 master).
+                         Only used when source files are given.
+  --diff <path>          Pre-made unified-diff file (overrides --base).
+  --extensions <a,b>     Language extensions to scan. Auto-detected from src files.
+  --exclude-dirs <a,b>   Extra dirs to skip.
+  --max-files <n>        Max files to walk (default 10000).
+  --max-payload-kb <n>   Max batch payload size in KB (default 400). Larger packs
+                         more files per LLM call.
+  --no-gitignore         Disable .gitignore filtering (default: enabled).
+  --answer-mode <n>      2 = single merged report with all batches (default).
+                         1 = one report per FFD batch. 0 falls back to 1 (per-file
+                         calls would defeat the batching this tool relies on).
+  --redact-regex <pat>   Custom JavaScript regex to redact matching tokens from
+                         file content before sending to the LLM.
+  --free                 Use free Nemotron model (lower quality, prompts logged).
+  --output-dir <path>    Custom reports directory.
+  --timeout-hours <n>    Max wall time for the whole scan (default 4 hours).
+                         Pass 0 to disable. Accepts fractional hours (e.g. 0.5 = 30 min).
 
 Modes:
   local             Sequential requests to a local server
