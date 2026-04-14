@@ -1,6 +1,164 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.14.2] - 2026-04-14
+
+### Fixed
+
+- Fix(sei): comprehensive review fixes for search_existing_implementations
+
+Consolidates post-review fixes across the whole plugin surface after the
+v3.14.0/v3.14.1 rollout. 7 BLOCKERS, 13 MAJORS, selected MINORS fixed.
+
+=== BLOCKERS ===
+
+B-1: ~/.claude/rules/use-llm-externalizer.md (user scope) had no mention
+     of search_existing_implementations, the llm-ext-reviewer agent, the
+     CLI subcommand, or userConfig. Also still listed batch_check as a
+     deprecated-but-recommended option. Rewrote the Analysis tools table,
+     added SEI-specific section with full example, added CLI section,
+     added userConfig bridge auth section. Dropped batch_check row and
+     NOTE blocks. Updated answer_mode section to document per-tool
+     defaults instead of a one-size-fits-all "default: 0".
+
+B-2: agents/llm-ext-reviewer.md's tools: allowlist did not include
+     mcp__llm-externalizer__search_existing_implementations, which meant
+     the plugin-shipped reviewer agent literally could not invoke the
+     tool it was positioned for. Added it. Also added a new workflow
+     bullet mentioning SEI as the first-choice tool for PR duplicate-
+     check and "is this already done?" audits.
+
+B-3: search_existing_implementations inputSchema was missing output_dir,
+     free, recursive, follow_symlinks — the handler reads them from the
+     outer scope variables (modelOverride, outputDir) but they were
+     never declared in the tool contract, so strict MCP clients would
+     filter them out. Rewrote the schema to spread ...folderSchemaProps
+     and only override folder_path (to accept string|array) and max_files
+     (to document the 10000 default instead of 2500). This fixes both
+     B-3 (declare output_dir and free) and n-1 (schema duplication).
+
+B-4: CLI callTool timeout was hardcoded at 900_000 ms (15 min). At
+     ~10-60 s per ensemble batch × ~500 batches for a 10k-file scan,
+     that's up to ~8h wall time — the 15 min timeout would always fire
+     before completion. New CLI default: 4 hours. New flag: --timeout-
+     hours <n> (fractional hours accepted, 0 disables).
+
+B-5: README.md feature counts outdated — claimed "13 MCP tools", "2
+     skills", "2 slash commands". Actual: 17 tools (9 analysis + 5
+     utility + 3 or_model_info), 5 skills, 3 slash commands. The tools
+     table was also missing search_existing_implementations and the
+     or_model_info trio. Added a Feature bullet for the llm-ext-reviewer
+     agent and the CLI subcommand. Dropped the batch_check "deprecated"
+     row.
+
+B-6: commands/search-existing-implementations.md had multiple stale
+     claims:
+     - "default 2500" (now 10000)
+     - "returns one report per file" (now one merged report, mode 2)
+     - --redact-regex listed but never plumbed through the CLI
+     - Step 3 told Claude to shell out to git diff manually, duplicating
+       the CLI's generateGitDiff logic
+     Rewrote to prefer calling the MCP tool directly OR the CLI
+     subcommand, with the --base/git-diff shell-out kept only as a
+     fallback for when neither is available.
+
+B-7: skills/llm-externalizer-usage/references/tool-reference.md tools
+     table missing search_existing_implementations. Added a row with the
+     full semantics description. Dropped batch_check row. Added or_model_*
+     trio. Updated scan_folder default from 2 to 0 (the survey showed
+     scan_folder actually defaults to 0, not 2).
+
+=== MAJORS ===
+
+M-1: The shared answerModeSchema.description said "Default: 0" globally,
+     but tools have different defaults (scan_folder=0, chat/code_task/
+     check_*=2, search_existing_implementations=2). Rewrote the shared
+     description to document the per-tool defaults explicitly.
+
+M-2: SEI's mode-2 branch was guarded by `seiMode === 2 && seiBatchOk.
+     length > 0`, so an all-batches-failed run silently fell through to
+     the mode-1 branch, which produced "0/N batches processed" with
+     isError: false when failures were per-batch recoverable. Added an
+     early return that catches zero-success irrespective of
+     answer_mode and always returns isError: true with a detailed
+     failure report including per-batch reasons and skipped files.
+
+M-3: CLI set `answer_mode: 0` as its default (never omitted the field),
+     which invisibly forced the handler into its mode-1 fallback path.
+     Direct MCP callers got mode 2. Same tool, two defaults. Fixed by
+     omitting answer_mode when --answer-mode is not supplied — server
+     default (2) applies to both invocation paths.
+
+M-4: printUsage said "0 = per-file reports (default), 1/2 = merged".
+     Wrong on both counts — mode 1 is per-batch (not merged), and the
+     CLI no longer defaults to 0. Rewrote the help text.
+
+M-5, M-6: Symlink self-match leak. The handler excluded sourceFiles
+     from the scan list via `fileSet.delete(sf)`, but walkDir pushes
+     non-canonical display paths into the result list (it does
+     realpathSync only for cycle detection). If a source file was
+     reachable via a symlinked parent dir inside folder_path, the
+     exclude missed it and the LLM saw the PR reference file as a scan
+     target — producing a spurious self-match. Fix: collect both the
+     user-supplied path AND realpathSync(path) into
+     sourceFilesCanonical; post-walk, loop over fileSet and drop any
+     entry whose non-canonical OR realpath-canonical form matches.
+
+M-7: generateGitDiff used spawnSync with maxBuffer: 64MB. A PR touching
+     a megabyte of lockfile changes exceeds 64 MB and gets truncated
+     silently — the subsequent .trim() check then reports "diff vs BASE
+     is empty". Raised buffer to 256 MB, added explicit ENOBUFS / signal
+     detection with a clear error that tells the user to generate the
+     diff manually and pass it via --diff.
+
+M-9: skills/llm-externalizer-scan/SKILL.md instructed the forked
+     llm-ext-reviewer agent on which tool to call (scan_folder /
+     code_task / glob), but never mentioned
+     search_existing_implementations. A natural "scan this codebase and
+     tell me if this PR duplicates existing code" request couldn't
+     reach the right tool. Added a bullet for duplicate check /
+     "already done" audits.
+
+M-13: .githooks/pre-push error message listed 8 check tools (npm ci,
+      typecheck, lint, build, test, ruff, shellcheck, plugin.json, CPV)
+      but was missing the v3.10.0 `claude plugin validate` gate. Added.
+
+=== MINORS ===
+
+m-3: skills/llm-externalizer-usage/SKILL.md:37 said "answer_mode: 0
+     (default)" globally. Updated to document per-tool defaults.
+
+m-4: Same file had a compare_files example using {git_repo, from_ref,
+     to_ref} as top-level params, but these are file_pairs-mode fields.
+     Replaced with the correct input_files_paths two-file form, and
+     added a search_existing_implementations example.
+
+m-8: commands/discover.md told users to run `python3 scripts/setup.py`
+     if the service was offline. scripts/setup.py is a build step, not
+     a recovery step — the MCP server is spawned by Claude Code from
+     .mcp.json. Replaced with correct recovery instructions (restart
+     Claude Code, check API key, check MCP logs, rebuild dist as last
+     resort).
+
+=== Intentional NO-OPs ===
+
+- M-10 (free-scan skill using mcp__plugin_* prefix): false positive.
+  The prefix has been verified to work in production in earlier
+  sessions. Not changing without runtime evidence.
+- m-1 (other tools not forwarding outputDir to saveResponse): existing
+  bug in code_task, chat, and other unchanged tools. Not introduced by
+  this session's changes; out of scope.
+
+Verified:
+- claude plugin validate . ✓
+- CPV remote validation ✓ (CRITICAL=0 MAJOR=0 MINOR=0)
+- npm run typecheck ✓
+- npm run lint ✓
+- npm run build ✓ (fully bundled dist/)
+- npm test 18/18 ✓
+- CLI smoke tests: missing description / missing --in / --help all clean
+
+
 ## [3.14.1] - 2026-04-14
 
 ### Fixed
