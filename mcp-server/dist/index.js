@@ -31949,7 +31949,8 @@ var LLM_TOOLS_SET = /* @__PURE__ */ new Set([
   "compare_files",
   "check_references",
   "check_imports",
-  "check_against_specs"
+  "check_against_specs",
+  "search_existing_implementations"
 ]);
 var DISABLED_TOOLS = /* @__PURE__ */ new Set([
   "fix_code",
@@ -32385,6 +32386,70 @@ function buildTools() {
           }
         },
         required: ["folder_path"]
+      }
+    },
+    {
+      name: "search_existing_implementations",
+      description: "Search a codebase for an existing implementation of a specified feature. The server walks the target folder(s), filters by language extension, and asks the LLM one file at a time whether that file already contains the feature described. Use for PR duplicate-check reviews or for greenfield 'is this already done?' audits.\n\nThe feature_description is the primary signal. Optionally pass PR source files (shipped as reference context and automatically excluded from the scan to avoid self-match) and/or a unified diff (to focus the LLM on the new lines). Both are optional \u2014 the tool also works as a pure description-based scan.\n\nPer-file output is terse: either 'NO' or 'YES symbol=<name> lines=<a-b>'. Ensemble mode runs all configured models in parallel so reviewers can spot false positives from model disagreement.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include the brief context in feature_description." + limitsBlock(),
+      inputSchema: {
+        type: "object",
+        properties: {
+          feature_description: {
+            type: "string",
+            description: "Concise one-sentence description of the feature to look for. The source files (if any) may contain many unrelated functions \u2014 this string is what tells the LLM which one matters. Required."
+          },
+          folder_path: {
+            oneOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ],
+            description: "Absolute path(s) to the codebase folder(s) to scan. Single folder or list of folders; each entry is walked recursively. Required."
+          },
+          source_files: {
+            oneOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ],
+            description: "Optional absolute path(s) to the PR's new/modified files. Their contents are shipped to the LLM as reference context, and the paths are automatically excluded from the scan target list so they don't self-match. Omit for pure description-based scans."
+          },
+          diff_path: {
+            type: "string",
+            description: "Optional absolute path to a unified-diff file showing the exact PR changes. The server ships it alongside source_files as reference context so the LLM focuses on the NEW lines (prefixed with '+')."
+          },
+          extensions: {
+            type: "array",
+            items: { type: "string" },
+            description: `File extensions to include (e.g. [".py", ".ts"]). If omitted, auto-detected from source_files' extensions when possible; otherwise all files are included.`
+          },
+          exclude_dirs: {
+            type: "array",
+            items: { type: "string" },
+            description: "Additional directory names to skip (hidden dirs, node_modules, .git, dist, build are always skipped)."
+          },
+          max_files: {
+            type: "number",
+            description: "Maximum number of files to process (default: 2500). Safety limit."
+          },
+          scan_secrets: {
+            type: "boolean",
+            description: "Scan input files for secrets and ABORT if any are found."
+          },
+          redact_secrets: {
+            type: "boolean",
+            description: "Redact secrets before sending to LLM. DISCOURAGED: prefer .env."
+          },
+          use_gitignore: {
+            type: "boolean",
+            description: "Use .gitignore rules to filter files (via git ls-files). Default: true."
+          },
+          answer_mode: answerModeSchema,
+          redact_regex: redactRegexSchema,
+          max_payload_kb: {
+            type: "number",
+            description: "Max file size in KB per file. Default: 400."
+          }
+        },
+        required: ["feature_description", "folder_path"]
       }
     },
     {
@@ -34726,6 +34791,282 @@ ${content}`);
           return {
             content: [{ type: "text", text: sfSummaryLines.join("\n") }],
             isError: aborted2
+          };
+        }
+        case "search_existing_implementations": {
+          const {
+            feature_description,
+            folder_path: seiFolderPathRaw,
+            source_files: seiSourceFilesRaw,
+            diff_path: seiDiffPathRaw,
+            extensions: seiExtensions,
+            exclude_dirs: seiExcludeDirs,
+            max_files: seiMaxFiles,
+            redact_secrets: seiRedact,
+            redact_regex: seiRedactRegexRaw,
+            answer_mode: seiRawMode,
+            use_gitignore: seiUseGitignore,
+            scan_secrets: seiScan
+          } = args;
+          const seiUseEnsemble = currentBackend.type === "openrouter";
+          const seiBudgetBytes = (args.max_payload_kb ?? 400) * 1024;
+          if (typeof feature_description !== "string" || !feature_description.trim()) {
+            return {
+              content: [{ type: "text", text: "FAILED: feature_description is required (non-empty string)." }],
+              isError: true
+            };
+          }
+          const folderPaths = Array.isArray(seiFolderPathRaw) ? seiFolderPathRaw.filter((p) => typeof p === "string" && p.trim()) : typeof seiFolderPathRaw === "string" && seiFolderPathRaw.trim() ? [seiFolderPathRaw] : [];
+          if (folderPaths.length === 0) {
+            return {
+              content: [{ type: "text", text: "FAILED: folder_path is required (string or array of strings)." }],
+              isError: true
+            };
+          }
+          for (const fp of folderPaths) {
+            if (!existsSync2(fp)) {
+              return { content: [{ type: "text", text: `FAILED: Folder not found: ${fp}` }], isError: true };
+            }
+            if (!statSync(fp).isDirectory()) {
+              return { content: [{ type: "text", text: `FAILED: Not a directory: ${fp}` }], isError: true };
+            }
+          }
+          const sourceFiles = [];
+          if (seiSourceFilesRaw !== void 0 && seiSourceFilesRaw !== null) {
+            const raw = Array.isArray(seiSourceFilesRaw) ? seiSourceFilesRaw : [seiSourceFilesRaw];
+            for (const sf of raw) {
+              if (typeof sf !== "string" || !sf.trim()) continue;
+              const resolved = resolve2(sf);
+              if (!existsSync2(resolved)) {
+                return {
+                  content: [{ type: "text", text: `FAILED: source_files entry not found: ${sf}` }],
+                  isError: true
+                };
+              }
+              sourceFiles.push(resolved);
+            }
+          }
+          let diffPathResolved = void 0;
+          if (typeof seiDiffPathRaw === "string" && seiDiffPathRaw.trim()) {
+            const r = resolve2(seiDiffPathRaw);
+            if (!existsSync2(r)) {
+              return {
+                content: [{ type: "text", text: `FAILED: diff_path not found: ${seiDiffPathRaw}` }],
+                isError: true
+              };
+            }
+            diffPathResolved = r;
+          }
+          let seiEffectiveExts = seiExtensions;
+          if ((!seiEffectiveExts || seiEffectiveExts.length === 0) && sourceFiles.length > 0) {
+            const extSet = /* @__PURE__ */ new Set();
+            for (const sf of sourceFiles) {
+              const m = /\.[^./\\]+$/.exec(sf);
+              if (m) extSet.add(m[0]);
+            }
+            if (extSet.size > 0) seiEffectiveExts = Array.from(extSet);
+          }
+          let seiRegexRedact = null;
+          try {
+            seiRegexRedact = parseRedactRegex(seiRedactRegexRaw);
+          } catch (err) {
+            return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+          }
+          const descTrimmed = feature_description.trim();
+          const hasRef = sourceFiles.length > 0 || !!diffPathResolved;
+          const refBlock = hasRef ? "The reference implementation from the PR is appended to these instructions as " + (sourceFiles.length > 0 ? "one or more source files" : "context") + (diffPathResolved ? ", followed by a unified diff showing the EXACT new lines (prefixed with '+'). Focus on the new lines when reasoning about what the PR adds. " : ". ") + "The source files may contain many unrelated functions \u2014 only the one matching the description above is relevant.\n\n" : "No reference source files were provided \u2014 rely purely on the feature description above when reasoning about semantic equivalence.\n\n";
+          const seiSpecializedInstructions = `You are checking whether the file below already contains an implementation of this feature (or a helper that could be trivially composed to achieve it):
+
+    ${descTrimmed}
+
+` + refBlock + "For the current file, answer SEMANTIC equivalence: the same goal achieved by different code still counts. Ignore naming differences and surface-level style.\n\nOutput format: EXACTLY ONE LINE per finding, no other text, no preamble, no explanation.\n\nOn no match:\n    NO\n\nOn one match:\n    YES symbol=<function-or-class-name> lines=<start-end>\n\nOn multiple matches in the same file, output multiple lines, one per match, most relevant first (max 5 lines).\n\nSpecial case: if the file appears to BE the reference (you recognize the PR code itself), output:\n    NO (self-reference)\n\nDo NOT write rationale. Do NOT quote code. Do NOT explain. Do NOT rewrite the PR. One line per match. Nothing else.";
+          const seiInstrFiles = [...sourceFiles];
+          if (diffPathResolved) seiInstrFiles.push(diffPathResolved);
+          const seiPrompt = resolvePrompt(
+            seiSpecializedInstructions,
+            seiInstrFiles.length > 0 ? seiInstrFiles : void 0
+          );
+          if (!seiPrompt.trim()) {
+            return {
+              content: [{ type: "text", text: "FAILED: specialized prompt came out empty (internal error)." }],
+              isError: true
+            };
+          }
+          const fileSet = /* @__PURE__ */ new Set();
+          for (const fp of folderPaths) {
+            const walked = walkDir(fp, {
+              extensions: seiEffectiveExts,
+              maxFiles: seiMaxFiles ?? 2500,
+              exclude: seiExcludeDirs,
+              useGitignore: seiUseGitignore !== false
+              // default true
+            });
+            for (const f of walked) fileSet.add(f);
+          }
+          for (const sf of sourceFiles) fileSet.delete(sf);
+          const files = Array.from(fileSet);
+          if (files.length === 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `No matching files found after filtering. Folders: ${folderPaths.join(", ")}` + (seiEffectiveExts?.length ? `; extensions: ${seiEffectiveExts.join(", ")}` : "") + (sourceFiles.length ? `; excluded source_files: ${sourceFiles.length}` : "")
+                }
+              ]
+            };
+          }
+          if (files.length > (seiMaxFiles ?? 2500)) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `FAILED: ${files.length} files matched, exceeding max_files=${seiMaxFiles ?? 2500}. Narrow folder_path, pass extensions, or raise max_files.`
+                }
+              ],
+              isError: true
+            };
+          }
+          if (seiScan) {
+            const scanResult = scanFilesForSecrets(files);
+            if (scanResult.found)
+              return {
+                content: [{ type: "text", text: scanResult.report }],
+                isError: true
+              };
+          }
+          const seiMode = resolveAnswerMode(seiRawMode, 0);
+          const seiBatchId = randomUUID();
+          const seiRl = await getRateLimitConfig();
+          const seiRecentOutcomes = [];
+          let seiAborted = false;
+          let seiAbortReason = "";
+          const seiTasks = files.map((filePath, idx) => async () => {
+            if (seiAborted)
+              return { filePath, success: false, error: "Batch aborted" };
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              if (seiAborted)
+                return { filePath, success: false, error: "Batch aborted" };
+              try {
+                const result = await processFileCheck(filePath, seiPrompt, {
+                  maxTokens: resolveDefaultMaxTokens(),
+                  batchId: seiBatchId,
+                  fileIndex: idx,
+                  redact: seiRedact,
+                  regexRedact: seiRegexRedact,
+                  onProgress,
+                  ensemble: seiUseEnsemble,
+                  maxBytes: seiBudgetBytes,
+                  modelOverride,
+                  outputDir
+                });
+                seiRecentOutcomes.push(result.success);
+                if (onProgress) {
+                  const completed = seiRecentOutcomes.length;
+                  onProgress(
+                    completed,
+                    files.length,
+                    `search_existing_implementations: ${completed}/${files.length} files done`
+                  );
+                }
+                return result;
+              } catch (err) {
+                const classified = classifyError(err);
+                if (classified.unrecoverable) {
+                  if (classified.serviceLevel) {
+                    seiAborted = true;
+                    seiAbortReason = `Unrecoverable: ${classified.reason}`;
+                  }
+                  return { filePath, success: false, error: classified.reason };
+                }
+                if (attempt < 3) {
+                  await new Promise((r) => setTimeout(r, Math.pow(3, attempt - 1) * 1e3));
+                  continue;
+                }
+                seiRecentOutcomes.push(false);
+                if (seiRecentOutcomes.length >= 3 && seiRecentOutcomes.slice(-3).every((v) => !v)) {
+                  seiAborted = true;
+                  seiAbortReason = `3 consecutive failures. Last: ${classified.reason}`;
+                }
+                return {
+                  filePath,
+                  success: false,
+                  error: `Failed after 3 retries: ${classified.reason}`
+                };
+              }
+            }
+            return {
+              filePath,
+              success: false,
+              error: "Unexpected retry loop exit"
+            };
+          });
+          const seiBatchResults = await rateLimitedParallel(
+            seiTasks,
+            seiRl.rps,
+            seiRl.maxInFlight,
+            onProgress
+          );
+          const seiSucceeded = seiBatchResults.filter((r) => r.success);
+          const seiFailed = seiBatchResults.filter(
+            (r) => !r.success && r.error !== "Batch aborted"
+          );
+          const seiSkipped = seiBatchResults.filter((r) => r.error === "Batch aborted");
+          if ((seiMode === 1 || seiMode === 2) && seiSucceeded.length > 0) {
+            const sections = [];
+            for (const r of seiSucceeded) {
+              const content = r.reportPath && existsSync2(r.reportPath) ? readFileSync2(r.reportPath, "utf-8") : "";
+              sections.push(`## File: ${r.filePath}
+
+${content}`);
+            }
+            const mergedPath = saveResponse(
+              "search_existing_implementations",
+              sections.join("\n\n---\n\n"),
+              {
+                model: currentBackend.model,
+                task: seiPrompt,
+                inputFile: folderPaths.join(",")
+              }
+            );
+            const summary = [
+              `SEARCH COMPLETE \u2014 ${seiSucceeded.length} processed, ${seiFailed.length} failed, ${seiSkipped.length} skipped (${files.length} files found)`,
+              `Folders: ${folderPaths.join(", ")}`,
+              sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
+              diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
+              `Batch UUID: ${seiBatchId}`,
+              `MERGED REPORT: ${mergedPath}`
+            ];
+            if (seiFailed.length > 0) {
+              summary.push("", "FAILED:");
+              for (const r of seiFailed) summary.push(`  ${r.filePath}: ${r.error}`);
+            }
+            if (seiAborted) summary.push("", `ABORTED: ${seiAbortReason}`);
+            return {
+              content: [{ type: "text", text: summary.join("\n") }],
+              isError: seiAborted
+            };
+          }
+          const seiSummaryLines = [
+            `SEARCH COMPLETE \u2014 ${seiSucceeded.length} processed, ${seiFailed.length} failed, ${seiSkipped.length} skipped (${files.length} files found)`,
+            `Folders: ${folderPaths.join(", ")}`,
+            sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
+            diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
+            `Batch UUID: ${seiBatchId}`,
+            ""
+          ];
+          if (seiSucceeded.length > 0) {
+            seiSummaryLines.push("REPORTS:");
+            for (const r of seiSucceeded) seiSummaryLines.push(`  ${r.reportPath}`);
+          }
+          if (seiFailed.length > 0) {
+            seiSummaryLines.push("", "FAILED:");
+            for (const r of seiFailed)
+              seiSummaryLines.push(`  ${r.filePath}: ${r.error}`);
+          }
+          if (seiAborted) seiSummaryLines.push("", `ABORTED: ${seiAbortReason}`);
+          return {
+            content: [{ type: "text", text: seiSummaryLines.join("\n") }],
+            isError: seiAborted
           };
         }
         case "merge_files":

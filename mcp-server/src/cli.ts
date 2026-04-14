@@ -27,8 +27,13 @@ import {
   formatModelInfoMarkdown,
   formatModelInfoJson,
 } from "./or-model-info.js";
-import { writeFileSync } from "node:fs";
-import { resolve as resolvePath, isAbsolute } from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { writeFileSync, existsSync, statSync } from "node:fs";
+import { resolve as resolvePath, isAbsolute, join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -360,6 +365,276 @@ async function cmdModelInfo(modelId: string, flags: Record<string, string>): Pro
   info(text);
 }
 
+// ── search-existing-implementations ──────────────────────────────────
+//
+// Spawns the MCP server as a child process, calls the
+// search_existing_implementations tool, prints the text result, exits.
+// This is a thin shell over the MCP tool — all the heavy lifting
+// (walking, per-file dispatch, ensemble, auto-batching) happens in
+// index.ts. The CLI is just a convenience wrapper for shell/CI use.
+
+interface SearchExistingOpts {
+  description: string;
+  folderPaths: string[];
+  sourceFiles: string[];
+  diffPath?: string;
+  base?: string;
+  free: boolean;
+  outputDir?: string;
+  extensions?: string[];
+  excludeDirs?: string[];
+  useGitignore?: boolean;
+  answerMode?: number;
+  maxFiles?: number;
+}
+
+/** Locate the compiled server entry point (dist/index.js) next to this CLI. */
+function findServerScript(): string {
+  // dist/cli.js → ../dist/index.js (same dir when running from dist/)
+  // src/cli.ts → ../dist/index.js (when running via ts-node or similar)
+  const here = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    join(here, "index.js"),           // running from dist/
+    join(here, "..", "dist", "index.js"), // running from src/
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) return c;
+  }
+  die(
+    `Cannot locate MCP server entry point. Looked for:\n  ${candidates.join("\n  ")}`,
+  );
+}
+
+/** Parse repeatable / comma-separated list flags like --in a --in b,c */
+function collectListFlag(args: string[], flagName: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === `--${flagName}`) {
+      const next = args[i + 1];
+      if (next && !next.startsWith("--")) {
+        out.push(...next.split(",").map((s) => s.trim()).filter(Boolean));
+        i++;
+      }
+    } else if (a.startsWith(`--${flagName}=`)) {
+      const value = a.slice(flagName.length + 3);
+      out.push(...value.split(",").map((s) => s.trim()).filter(Boolean));
+    }
+  }
+  return out;
+}
+
+/** Generate a PR diff via git diff <base>...HEAD -- <src-files>, return the temp path. */
+function generateGitDiff(base: string, sourceFiles: string[]): string {
+  if (sourceFiles.length === 0) {
+    die("--base requires at least one --src <file>; cannot generate a diff with no files.");
+  }
+  const cwdIsGit = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
+    cwd: process.cwd(),
+    encoding: "utf-8",
+  });
+  if (cwdIsGit.status !== 0) {
+    die("cwd is not a git repository; pass --diff <path> or run from inside a git checkout.");
+  }
+  const outPath = join(tmpdir(), `llm-ext-search-existing-diff-${Date.now()}.patch`);
+  const result = spawnSync(
+    "git",
+    ["diff", `${base}...HEAD`, "--", ...sourceFiles],
+    { cwd: process.cwd(), encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 },
+  );
+  if (result.status !== 0) {
+    die(
+      `git diff ${base}...HEAD failed: ${result.stderr?.trim() || "unknown error"}`,
+    );
+  }
+  const diffText = result.stdout ?? "";
+  if (!diffText.trim()) {
+    die(
+      `diff vs ${base} is empty for ${sourceFiles.length} source file(s); nothing to review.`,
+    );
+  }
+  writeFileSync(outPath, diffText, "utf-8");
+  return outPath;
+}
+
+/** Auto-detect the default base branch: origin/HEAD, then main, then master. */
+function autoDetectBase(): string {
+  const originHead = spawnSync(
+    "git",
+    ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+    { cwd: process.cwd(), encoding: "utf-8" },
+  );
+  if (originHead.status === 0 && originHead.stdout.trim()) {
+    return originHead.stdout.trim();
+  }
+  for (const ref of ["main", "master"]) {
+    const check = spawnSync(
+      "git",
+      ["show-ref", "--verify", "--quiet", `refs/heads/${ref}`],
+      { cwd: process.cwd(), encoding: "utf-8" },
+    );
+    if (check.status === 0) return ref;
+  }
+  die(
+    "Cannot auto-detect base branch (no origin/HEAD, main, or master). " +
+      "Pass --base <ref> or --diff <path> explicitly.",
+  );
+}
+
+/** Parse the `search-existing` CLI args into a structured options record. */
+function parseSearchExistingArgs(args: string[]): SearchExistingOpts {
+  // Positional args: first non-flag arg is the description; subsequent
+  // non-flag args are source files (positional). Flags override.
+  const positional: string[] = [];
+  const flags: Record<string, string> = {};
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a.startsWith("--")) {
+      const eqIdx = a.indexOf("=");
+      if (eqIdx !== -1) {
+        flags[a.slice(2, eqIdx)] = a.slice(eqIdx + 1);
+      } else {
+        const next = args[i + 1];
+        if (next !== undefined && !next.startsWith("--")) {
+          flags[a.slice(2)] = next;
+          i++;
+        } else {
+          flags[a.slice(2)] = "true";
+        }
+      }
+    } else {
+      positional.push(a);
+    }
+  }
+
+  // Description comes from --description flag, else first positional arg.
+  const description =
+    flags.description ?? flags.desc ?? positional.shift() ?? "";
+  if (!description.trim()) {
+    die(
+      'Missing description. Usage: llm-externalizer search-existing "<description>" [<src-files>...] --in <path> ...',
+    );
+  }
+
+  // Positional remainder: source files (optional)
+  const positionalSources = positional.slice();
+
+  // Collect list flags
+  const folderPaths = collectListFlag(args, "in");
+  const srcFromFlag = collectListFlag(args, "src");
+  const sourceFiles = [...positionalSources, ...srcFromFlag];
+  const excludeDirs = collectListFlag(args, "exclude-dirs");
+  const extensions = collectListFlag(args, "extensions");
+
+  if (folderPaths.length === 0) {
+    die("--in <path> is required (codebase folder to scan). Can be repeated or comma-separated.");
+  }
+
+  // Validate paths exist before calling the server
+  for (const fp of folderPaths) {
+    const abs = isAbsolute(fp) ? fp : resolvePath(fp);
+    if (!existsSync(abs)) die(`--in path not found: ${fp}`);
+    if (!statSync(abs).isDirectory()) die(`--in path is not a directory: ${fp}`);
+  }
+  for (const sf of sourceFiles) {
+    const abs = isAbsolute(sf) ? sf : resolvePath(sf);
+    if (!existsSync(abs)) die(`Source file not found: ${sf}`);
+  }
+
+  return {
+    description,
+    folderPaths: folderPaths.map((p) => (isAbsolute(p) ? p : resolvePath(p))),
+    sourceFiles: sourceFiles.map((p) => (isAbsolute(p) ? p : resolvePath(p))),
+    diffPath: flags.diff && flags.diff !== "true" ? flags.diff : undefined,
+    base: flags.base && flags.base !== "true" ? flags.base : undefined,
+    free: flags.free === "true",
+    outputDir:
+      flags["output-dir"] && flags["output-dir"] !== "true"
+        ? flags["output-dir"]
+        : undefined,
+    extensions: extensions.length > 0 ? extensions : undefined,
+    excludeDirs: excludeDirs.length > 0 ? excludeDirs : undefined,
+    useGitignore: flags["no-gitignore"] === "true" ? false : undefined, // default true server-side
+    answerMode:
+      flags["answer-mode"] && /^\d+$/.test(flags["answer-mode"])
+        ? Number(flags["answer-mode"])
+        : undefined,
+    maxFiles:
+      flags["max-files"] && /^\d+$/.test(flags["max-files"])
+        ? Number(flags["max-files"])
+        : undefined,
+  };
+}
+
+async function cmdSearchExisting(rawArgs: string[]): Promise<void> {
+  const opts = parseSearchExistingArgs(rawArgs);
+
+  // Resolve the diff path: explicit --diff → use as-is; --base → generate via git;
+  // neither → auto-detect base branch and generate, but ONLY if source files exist.
+  // With no source files and no base, skip the diff entirely.
+  let diffPath = opts.diffPath;
+  if (!diffPath && opts.sourceFiles.length > 0) {
+    const base = opts.base ?? autoDetectBase();
+    diffPath = generateGitDiff(base, opts.sourceFiles);
+    info(`Generated PR diff via git: ${diffPath}`);
+  } else if (opts.diffPath) {
+    const abs = isAbsolute(opts.diffPath) ? opts.diffPath : resolvePath(opts.diffPath);
+    if (!existsSync(abs)) die(`--diff file not found: ${opts.diffPath}`);
+    diffPath = abs;
+  }
+
+  // Build the tool arguments — omit fields that are undefined so the server
+  // sees a minimal call.
+  const toolArgs: Record<string, unknown> = {
+    feature_description: opts.description,
+    folder_path: opts.folderPaths.length === 1 ? opts.folderPaths[0] : opts.folderPaths,
+    answer_mode: opts.answerMode ?? 0,
+  };
+  if (opts.sourceFiles.length > 0) toolArgs.source_files = opts.sourceFiles;
+  if (diffPath) toolArgs.diff_path = diffPath;
+  if (opts.extensions) toolArgs.extensions = opts.extensions;
+  if (opts.excludeDirs) toolArgs.exclude_dirs = opts.excludeDirs;
+  if (opts.useGitignore === false) toolArgs.use_gitignore = false;
+  if (opts.maxFiles) toolArgs.max_files = opts.maxFiles;
+  if (opts.free) toolArgs.free = true;
+  if (opts.outputDir) toolArgs.output_dir = opts.outputDir;
+
+  // Spawn the MCP server as a child process and call the tool via stdio.
+  const serverScript = findServerScript();
+  const transport = new StdioClientTransport({
+    command: "node",
+    args: [serverScript],
+    env: { ...process.env } as Record<string, string>,
+    stderr: "inherit",
+  });
+  const client = new Client(
+    { name: "llm-externalizer-cli", version: "1.0.0" },
+    { capabilities: {} },
+  );
+
+  try {
+    await client.connect(transport);
+    const result = await client.callTool(
+      { name: "search_existing_implementations", arguments: toolArgs },
+      undefined,
+      { timeout: 900_000 }, // 15 min — full scans on large codebases can take time
+    );
+    const content = result.content as Array<{ type: string; text: string }>;
+    for (const c of content) {
+      if (c.type === "text") info(c.text);
+    }
+    if (result.isError) {
+      process.exit(1);
+    }
+  } finally {
+    try {
+      await transport.close();
+    } catch {
+      /* ignore cleanup errors */
+    }
+  }
+}
+
 function printUsage(): void {
   info(`LLM Externalizer — Profile Management CLI
 
@@ -371,6 +646,21 @@ Usage:
   llm-externalizer profile remove <name>
   llm-externalizer profile rename <old-name> <new-name>
   llm-externalizer model-info <model-id> [--markdown | --json [file]] [--no-color]
+  llm-externalizer search-existing "<description>" [<src-files>...] --in <path> [--base <ref>] [--diff <path>] [--free]
+
+search-existing flags:
+  --in <path>          (MANDATORY) Codebase folder to scan. Repeat or comma-separate.
+  --src <path>         Alternative to positional source-file args. Repeatable.
+  --base <ref>         Git ref to diff against (default: origin/HEAD → main → master).
+                       Only used when source files are given.
+  --diff <path>        Pre-made unified-diff file (overrides --base).
+  --extensions <a,b>   Language extensions to scan. Auto-detected from src files.
+  --exclude-dirs <a,b> Extra dirs to skip.
+  --max-files <n>      Max files to process (default 2500).
+  --no-gitignore       Disable .gitignore filtering (default: enabled).
+  --answer-mode <n>    0 = per-file reports (default), 1/2 = merged.
+  --free               Use free Nemotron model (lower quality, prompts logged).
+  --output-dir <path>  Custom reports directory.
 
 Modes:
   local             Sequential requests to a local server
@@ -420,8 +710,14 @@ async function main(): Promise<void> {
     return;
   }
 
+  // ── search-existing top-level command ───────────────────────────
+  if (args[0] === "search-existing" || args[0] === "search-existing-implementations") {
+    await cmdSearchExisting(args.slice(1));
+    return;
+  }
+
   if (args[0] !== "profile") {
-    die(`Unknown command '${args[0]}'. Use 'profile' or 'model-info' subcommand, or --help.`);
+    die(`Unknown command '${args[0]}'. Use 'profile', 'model-info', or 'search-existing' subcommand, or --help.`);
   }
 
   const subcommand = args[1];

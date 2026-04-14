@@ -62,6 +62,7 @@ describe('listTools', () => {
       'or_model_info_table',
       'reset',
       'scan_folder',
+      'search_existing_implementations',
       'set_settings',
     ].sort();
 
