@@ -1,6 +1,54 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.15.1] - 2026-04-15
+
+### Fixed
+
+- Fix(mcp): review follow-ups — tautology, stale comments, pre-existing warning
+
+Post-publish self-audit addressed 3 real issues:
+
+1. check_against_specs had a trivially-tautological ternary
+   `csFolderPath ? csFilePaths : csFilePaths` when deciding which path
+   list to pass to autoGroupByHeuristic. folder_path is already normalized
+   into csFilePaths upstream, so both branches were identical. Simplified
+   to `autoGroupByHeuristic(csFilePaths)`.
+
+2. search_existing_implementations had a stale code comment claiming
+   "mode 1 — one report per batch" and "mode 0 — one report per batch
+   (fall back to mode 1)" — both obsolete after the answer_mode redesign.
+   Rewrote the comment to match the new semantics (mode 2 = SINGLE REPORT,
+   mode 0 = ONE REPORT PER FILE via splitPerFileSections, mode 1 = ONE
+   REPORT PER GROUP via autoGroupByHeuristic).
+
+3. scan_folder mode 1 now carries an explicit comment documenting that
+   grouping is POST-HOC (per-file LLM calls already ran, we cluster the
+   finished reports) to contrast with chat/code_task/check_* which
+   auto-group BEFORE calling the LLM.
+
+4. Removed the pre-existing `_ciUseEnsemble` dead variable in the
+   check_imports handler — it referenced currentBackend.type but was
+   never used since check_imports calls chatCompletionJSON directly
+   (no ensembleStreaming).
+
+Self-audit also verified (false alarms from the ensemble review):
+- batch_check / check_references / check_imports DO process mode 0/2
+  non-grouped inputs correctly — the `if (effectivelyGrouped) { return }`
+  block falls through to the existing non-grouped path below.
+- search_existing_implementations mode 2 branch is still present at the
+  expected location — the refactor only rewrote mode 1, not mode 2.
+- splitPerFileSections handles trailing \r via .trim() on the captured
+  path, so \r\n line endings already work.
+- autoGroupByHeuristic GROUP_HEADER_RE/FOOTER_RE are defined at module
+  level earlier in the file (not the helper's scope issue).
+- chat/code_task `if (mode === 0 && !effectivelyGrouped)` is NOT
+  redundant: it correctly skips the per-file path when markers are
+  supplied with mode 0, matching pre-refactor behavior.
+
+Validation: typecheck ok, lint 0 warnings, build ok, 18/18 tests pass.
+
+
 ## [3.15.0] - 2026-04-15
 
 ### Added
