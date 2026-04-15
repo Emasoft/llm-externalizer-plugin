@@ -8675,11 +8675,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         if (sfMode === 1 && succeeded.length > 0) {
-          // Mode 1 — one merged report per auto-group (by subfolder/ext etc.)
+          // Mode 1 — one merged report per auto-group (by subfolder/ext/basename).
+          //
+          // scan_folder is inherently per-file: every file already got its
+          // own LLM call and its own intermediate per-file report. Mode 1
+          // therefore performs POST-HOC output grouping — we cluster the
+          // finished per-file reports by autoGroupByHeuristic() and merge
+          // each cluster into one group-level .md. This contrasts with
+          // chat / code_task / check_* where auto-grouping happens BEFORE
+          // the LLM call so batches can share cross-file context. The
+          // scan_folder design is a deliberate trade-off: per-file LLM calls
+          // give every file its own focused audit, and mode 1 keeps the disk
+          // output organised by directory without changing what the LLM saw.
           const succeededPaths = succeeded.map((r) => r.filePath);
           const sfAutoGroups = autoGroupByHeuristic(succeededPaths);
-          // If auto-grouping collapsed into a single group, mode 1 and mode 2
-          // produce equivalent output — emit one file either way.
           const pathToResult = new Map<string, FileProcessResult>();
           for (const r of succeeded) pathToResult.set(r.filePath, r);
           const sfGroupReportPaths: string[] = [];
@@ -9174,11 +9183,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         // Build output per answer_mode:
-        //   mode 2 (default) — single merged report with all batches appended
-        //   mode 1           — one report per batch
-        //   mode 0           — one report per batch (mode 0 is nonsensical for
-        //                      this tool since it forces per-file LLM calls,
-        //                      which defeats the point — fall back to mode 1)
+        //   mode 2 (default) — SINGLE REPORT: one merged .md with all batches
+        //                      appended in per-batch sections.
+        //   mode 0           — ONE REPORT PER FILE: splits each batch response
+        //                      by `## File: <path>` markers and writes one .md
+        //                      per input file. Batching is unchanged.
+        //   mode 1           — ONE REPORT PER GROUP: auto-groups files via
+        //                      autoGroupByHeuristic (subfolder/ext/basename)
+        //                      and writes one merged .md per auto-group.
         if (seiMode === 2) {
           const sections: string[] = [];
           sections.push(`# LLM Externalizer — search_existing_implementations`);
@@ -10685,7 +10697,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           follow_symlinks?: boolean;
           max_files?: number;
         };
-        const _ciUseEnsemble = currentBackend.type === "openrouter";
+        // check_imports uses chatCompletionJSON directly (not ensembleStreaming),
+        // so currentBackend.type is not referenced here.
         const ciBudgetBytes = (ciMaxPayloadKb ?? 400) * 1024;
 
         let ciRegexRedact: RegexRedactOpts | null = null;
@@ -11121,13 +11134,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // ── Group-aware processing (only for input_files_paths, not folder_path) ──
         // answer_mode=1 means "one report per group". Auto-group the input
         // files when the caller did not supply ---GROUP:id--- markers.
+        // folder_path input already normalizes to a single unnamed group, so
+        // auto-grouping works on csFilePaths regardless of the source.
         let csFileGroups = csFolderPath
           ? [{ id: "", files: csFilePaths }]
           : parseFileGroups(csFilePaths);
         let csEffectivelyGrouped = hasNamedGroups(csFileGroups);
         if (csMode === 1 && !csEffectivelyGrouped) {
-          const autoSourcePaths = csFolderPath ? csFilePaths : csFilePaths;
-          const autoGroups = autoGroupByHeuristic(autoSourcePaths);
+          const autoGroups = autoGroupByHeuristic(csFilePaths);
           if (autoGroups.length > 0) {
             csFileGroups = autoGroups;
             csEffectivelyGrouped = true;

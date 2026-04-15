@@ -36615,7 +36615,6 @@ ${crResp.content}${crFooter}`
             follow_symlinks: ciFollowSymlinks,
             max_files: ciMaxFiles
           } = args;
-          const _ciUseEnsemble = currentBackend.type === "openrouter";
           const ciBudgetBytes = (ciMaxPayloadKb ?? 400) * 1024;
           let ciRegexRedact = null;
           try {
@@ -36987,8 +36986,7 @@ FAILED: File not found.`);
           let csFileGroups = csFolderPath ? [{ id: "", files: csFilePaths }] : parseFileGroups(csFilePaths);
           let csEffectivelyGrouped = hasNamedGroups(csFileGroups);
           if (csMode === 1 && !csEffectivelyGrouped) {
-            const autoSourcePaths = csFolderPath ? csFilePaths : csFilePaths;
-            const autoGroups = autoGroupByHeuristic(autoSourcePaths);
+            const autoGroups = autoGroupByHeuristic(csFilePaths);
             if (autoGroups.length > 0) {
               csFileGroups = autoGroups;
               csEffectivelyGrouped = true;
