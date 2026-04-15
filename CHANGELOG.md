@@ -1,6 +1,79 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.15.0] - 2026-04-15
+
+### Added
+
+- Feat(mcp): redefine answer_mode — remove per-request mode, add per-group auto-grouping
+
+Agents were being misled by the old "per-request" semantics of answer_mode=1
+and the vague "per-file" wording of mode 0. A report from a real user:
+agents assumed that avoiding mode 0 would let the LLM see the whole set of
+input files at once, and repeatedly launched whole-codebase cross-file
+searches via chat/code_task — wasting tokens for hours with no result.
+
+This change rewrites the API and the docs so that:
+
+1. answer_mode is clearly a DISK-OUTPUT control, not a batching control.
+   The LLM always sees 1-5 files per request (FFD bin-packed or one group
+   per request when ---GROUP:id--- markers are used).
+
+2. In ensemble mode each file is reviewed by 3 different LLMs in parallel
+   (3 responses per file). In free/local mode each file gets 1 response.
+
+3. The old "per-request" meaning of mode 1 is GONE. New semantics:
+   - 0 = ONE REPORT PER FILE  (unchanged — split by ## File: markers)
+   - 1 = ONE REPORT PER GROUP (new — one .md per group)
+   - 2 = SINGLE REPORT        (unchanged — everything merged)
+
+4. Mode 1 auto-grouping: when the caller picks mode 1 without supplying
+   ---GROUP:id--- markers, the server auto-clusters files by priority
+   (subfolder > language/extension > namespace > shared basename >
+   shared imports), capping each group at 1 MB via FFD sub-splitting.
+
+Implementation:
+- Added autoGroupByHeuristic() helper in index.ts (+ SizedFile struct,
+  splitBucketBySize, splitBucketByBasenamePrefix).
+- Rewrote BATCHING_NOTE and answerModeSchema.description using the
+  structured NAME/DESCRIPTION/FORMAT/WHEN TO USE/ADVANTAGES/DISADVANTAGES
+  format the user explicitly asked for.
+- Spliced auto-grouping into the mode-1 branch of all multi-file handlers:
+  chat, code_task, batch_check, check_references, check_imports,
+  check_against_specs, scan_folder, search_existing_implementations.
+- Removed the obsolete mode-1 per-batch save logic (batchOutputPaths,
+  per-FFD-batch report persistence) from chat + code_task.
+- scan_folder mode 1 now clusters the per-file results by auto-group and
+  emits one merged report per group instead of collapsing to mode 2.
+- search_existing_implementations mode 1 now splits batch responses by
+  ## File: markers, re-groups files with autoGroupByHeuristic, and emits
+  one merged report per auto-group (not per FFD batch).
+- Updated the [DEPRECATED] batch_check handler to use auto-grouping when
+  mode 1 is selected.
+- Updated inline FILE GROUPING text in every tool description.
+
+Docs touched:
+- README.md — new answer_mode table with the full structured format and
+  per-mode response examples.
+- ~/.claude/rules/use-llm-externalizer.md — ensemble-vs-free clarification
+  at the top, full structured mode block in the answer_mode section.
+- skills/llm-externalizer-usage/SKILL.md — trimmed + new mode definitions.
+- skills/llm-externalizer-usage/references/tool-reference.md — structured
+  mode block replacing the old per-request wording, updated answer_mode
+  row in the Advanced Parameters table.
+- skills/llm-externalizer-scan/SKILL.md — ensemble note + new mode block.
+- skills/llm-externalizer-scan/references/tool-reference.md +
+  skills/llm-externalizer-free-scan/references/tool-reference.md —
+  answer_mode row refreshed.
+- commands/search-existing-implementations.md — new mode block describing
+  what each mode writes.
+- agents/llm-ext-reviewer.md — structured mode block.
+- mcp-server/src/cli.ts — CLI help for `llm-externalizer search-existing`
+  now documents all three modes and ensemble-vs-free behavior.
+
+Validation: typecheck ok, lint 0, build ok, 18/18 tests pass.
+
+
 ## [3.14.2] - 2026-04-14
 
 ### Fixed
