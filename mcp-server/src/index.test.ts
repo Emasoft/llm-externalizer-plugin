@@ -398,3 +398,175 @@ describe('progress notifications', () => {
   });
 });
 
+// ── answer_mode dispatch ─────────────────────────────────────────────
+// These tests verify that the new mode 1 auto-grouping path routes
+// requests correctly through the handlers. The LLM backend is not
+// reachable in CI, so we assert that:
+//   (a) validation errors (no instructions) come from the expected
+//       branch (per-group path), and
+//   (b) the server doesn't crash when mode 1 walks a real folder with
+//       multiple extensions and subdirectories.
+
+describe('answer_mode dispatch', () => {
+  let client: Client;
+  let transport: StdioClientTransport;
+  const tmpDir = '/tmp/__llm_ext_test_mode1';
+  const srcDir = join(tmpDir, 'src');
+  const scriptsDir = join(tmpDir, 'scripts');
+  const srcA = join(srcDir, 'auth.ts');
+  const srcB = join(srcDir, 'db.ts');
+  const scriptFoo = join(scriptsDir, 'foo.py');
+  const scriptBar = join(scriptsDir, 'bar.py');
+
+  beforeAll(async () => {
+    ({ client, transport } = await createClient());
+    mkdirSync(srcDir, { recursive: true });
+    mkdirSync(scriptsDir, { recursive: true });
+    writeFileSync(srcA, 'export const a = 1;\n', 'utf-8');
+    writeFileSync(srcB, 'export function db() {}\n', 'utf-8');
+    writeFileSync(scriptFoo, 'def foo(): pass\n', 'utf-8');
+    writeFileSync(scriptBar, 'def bar(): pass\n', 'utf-8');
+  });
+
+  afterAll(async () => {
+    try { unlinkSync(srcA); } catch { /* ignore */ }
+    try { unlinkSync(srcB); } catch { /* ignore */ }
+    try { unlinkSync(scriptFoo); } catch { /* ignore */ }
+    try { unlinkSync(scriptBar); } catch { /* ignore */ }
+    await transport.close();
+  });
+
+  it('chat: answer_mode=1 routes mixed-extension files through auto-grouping without crash', async () => {
+    /** With 4 files in 2 subdirs × 2 extensions, auto-grouping should
+     * produce 2 groups (src-ts, scripts-py). The LLM is unreachable so
+     * the call fails after the grouping decision — we only verify that
+     * the server survives the routing path and didn't reject the request
+     * up-front with a validation error. */
+    let result;
+    try {
+      result = await client.callTool(
+        {
+          name: 'chat',
+          arguments: {
+            instructions: 'audit for bugs',
+            input_files_paths: [srcA, srcB, scriptFoo, scriptBar],
+            answer_mode: 1,
+          },
+        },
+        undefined,
+        { timeout: 60_000 },
+      );
+    } catch {
+      // LLM unreachable or timed out mid-call — both acceptable.
+      // The assertion below verifies the server is still alive.
+    }
+    // If the call returned cleanly (e.g. service returned an error body
+    // but didn't throw), the response must NOT be a pre-LLM validation
+    // failure (e.g. "instructions required"). An empty-LLM error is fine.
+    if (result) {
+      const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? '';
+      expect(text).not.toMatch(/instructions or input_files_paths is required/i);
+      expect(text).not.toMatch(/folder_path is required/i);
+    }
+    // Server must still be responsive
+    const discoverResult = await client.callTool({ name: 'discover', arguments: {} });
+    expect(discoverResult.isError).toBeFalsy();
+  });
+
+  it('code_task: answer_mode=1 with explicit ---GROUP:id--- markers routes through grouped path', async () => {
+    /** Group markers bypass auto-grouping — ensure the explicit path
+     * still works. The LLM call fails but the server mustn't crash. */
+    let result;
+    try {
+      result = await client.callTool(
+        {
+          name: 'code_task',
+          arguments: {
+            instructions: 'review',
+            input_files_paths: [
+              '---GROUP:typescript---',
+              srcA,
+              srcB,
+              '---/GROUP:typescript---',
+              '---GROUP:python---',
+              scriptFoo,
+              scriptBar,
+              '---/GROUP:python---',
+            ],
+            answer_mode: 1,
+          },
+        },
+        undefined,
+        { timeout: 60_000 },
+      );
+    } catch {
+      // LLM unreachable
+    }
+    if (result) {
+      const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? '';
+      expect(text).not.toMatch(/instructions.*required/i);
+    }
+    const discoverResult = await client.callTool({ name: 'discover', arguments: {} });
+    expect(discoverResult.isError).toBeFalsy();
+  });
+
+  it('scan_folder: answer_mode=1 rejects nonexistent folder before any LLM call', async () => {
+    /** scan_folder mode 1 should validate the folder exists BEFORE
+     * walking it or issuing LLM calls, and BEFORE the auto-grouping
+     * step runs on the (empty) file list. */
+    const result = await client.callTool({
+      name: 'scan_folder',
+      arguments: {
+        folder_path: '/tmp/__llm_ext_nonexistent_grouping',
+        instructions: 'audit',
+        answer_mode: 1,
+      },
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? '';
+    expect(text).toMatch(/not found|Folder not found/i);
+  });
+
+  it('chat: answer_mode=2 still works as the single-merged-report path', async () => {
+    /** Regression guard — the redesign must not have broken mode 2. */
+    let result;
+    try {
+      result = await client.callTool(
+        {
+          name: 'chat',
+          arguments: {
+            instructions: 'summarize',
+            input_files_paths: [srcA],
+            answer_mode: 2,
+          },
+        },
+        undefined,
+        { timeout: 60_000 },
+      );
+    } catch {
+      // LLM unreachable
+    }
+    if (result) {
+      const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? '';
+      expect(text).not.toMatch(/instructions.*required/i);
+    }
+    const discoverResult = await client.callTool({ name: 'discover', arguments: {} });
+    expect(discoverResult.isError).toBeFalsy();
+  });
+
+  it('search_existing_implementations: answer_mode=1 validates feature_description before grouping', async () => {
+    /** SEI mode 1 path — missing feature_description must fail at the
+     * top-level validator, not silently in the mode 1 branch. */
+    const result = await client.callTool({
+      name: 'search_existing_implementations',
+      arguments: {
+        folder_path: tmpDir,
+        answer_mode: 1,
+      },
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? '';
+    expect(text).toMatch(/feature_description/i);
+  });
+});
+

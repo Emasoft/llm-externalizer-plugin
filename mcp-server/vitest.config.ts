@@ -7,8 +7,14 @@ export default defineConfig({
     // Batch tests with 3 files need ~6-10 min; single-file tests need ~2-3 min.
     testTimeout: 900_000,
     hookTimeout: 120_000,
-    // Only run index.test.ts by default — live tests require LM Studio
+    // Only run integration + unit tests by default — live tests require LM Studio
     // Run live tests explicitly: npx vitest run src/live.test.ts
-    include: ['src/index.test.ts', 'src/live.test.ts', 'src/live-extended.test.ts', 'src/live-websearch.test.ts'],
+    include: [
+      'src/index.test.ts',
+      'src/grouping.test.ts',
+      'src/live.test.ts',
+      'src/live-extended.test.ts',
+      'src/live-websearch.test.ts',
+    ],
   },
 });

@@ -14106,7 +14106,7 @@ import {
   existsSync as existsSync2,
   renameSync as renameSync2,
   copyFileSync as copyFileSync2,
-  statSync,
+  statSync as statSync2,
   lstatSync,
   appendFileSync,
   readdirSync,
@@ -14116,8 +14116,226 @@ import {
   unwatchFile
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { extname, join as join2, basename, dirname, resolve as resolve2, isAbsolute } from "node:path";
+import { extname as extname2, join as join2, basename as basename2, dirname as dirname2, resolve as resolve2, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
+
+// src/grouping.ts
+import { statSync } from "node:fs";
+import { basename, dirname, extname } from "node:path";
+var GROUP_HEADER_RE = /^---GROUP:(.+)---$/;
+var GROUP_FOOTER_RE = /^---\/GROUP:(.+)---$/;
+function parseFileGroups(paths) {
+  const hasMarkers = paths.some(
+    (p) => GROUP_HEADER_RE.test(p) || GROUP_FOOTER_RE.test(p)
+  );
+  if (!hasMarkers) {
+    return paths.length > 0 ? [{ id: "", files: paths }] : [];
+  }
+  const groups = [];
+  let ungrouped = [];
+  let currentGroup = null;
+  for (const entry of paths) {
+    const headerMatch = entry.match(GROUP_HEADER_RE);
+    if (headerMatch) {
+      if (currentGroup && currentGroup.files.length > 0) {
+        groups.push(currentGroup);
+      }
+      if (ungrouped.length > 0) {
+        groups.push({ id: "", files: ungrouped });
+        ungrouped = [];
+      }
+      currentGroup = { id: headerMatch[1], files: [] };
+      continue;
+    }
+    const footerMatch = entry.match(GROUP_FOOTER_RE);
+    if (footerMatch) {
+      if (currentGroup && currentGroup.files.length > 0) {
+        groups.push(currentGroup);
+      }
+      currentGroup = null;
+      continue;
+    }
+    if (currentGroup) {
+      currentGroup.files.push(entry);
+    } else {
+      ungrouped.push(entry);
+    }
+  }
+  if (currentGroup && currentGroup.files.length > 0) {
+    groups.push(currentGroup);
+  }
+  if (ungrouped.length > 0) {
+    groups.push({ id: "", files: ungrouped });
+  }
+  return groups;
+}
+function hasNamedGroups(groups) {
+  return groups.some((g) => g.id !== "");
+}
+var AUTO_GROUP_DEFAULT_MAX_BYTES = 1024 * 1024;
+function sanitizeGroupId(raw) {
+  const cleaned = raw.replace(/[^a-zA-Z0-9._-]/g, "_");
+  return cleaned.length > 0 ? cleaned.slice(0, 60) : "auto";
+}
+function uniqueGroupId(raw, counts) {
+  const n = counts.get(raw) ?? 0;
+  counts.set(raw, n + 1);
+  return n === 0 ? raw : `${raw}_${n + 1}`;
+}
+function statFileForGrouping(p) {
+  const parent = dirname(p);
+  const extWithDot = extname(p);
+  const ext = extWithDot ? extWithDot.slice(1).toLowerCase() : "noext";
+  const base = basename(p);
+  const stem = base.slice(0, base.length - extWithDot.length);
+  let size = 0;
+  try {
+    const st = statSync(p);
+    if (st.isFile()) size = st.size;
+  } catch {
+    size = 0;
+  }
+  return { path: p, parent, ext, base, stem, size };
+}
+function splitBucketBySize(bucket, maxBytes) {
+  const sorted = [...bucket].sort((a, b) => b.size - a.size);
+  const parts = [];
+  const partTotals = [];
+  for (const fi of sorted) {
+    let placed = false;
+    for (let i = 0; i < parts.length; i++) {
+      if (partTotals[i] + fi.size <= maxBytes) {
+        parts[i].push(fi);
+        partTotals[i] += fi.size;
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      parts.push([fi]);
+      partTotals.push(fi.size);
+    }
+  }
+  return parts;
+}
+function splitBucketByBasenamePrefix(bucket, maxBytes) {
+  if (bucket.length < 2) return [bucket];
+  const byPrefix = /* @__PURE__ */ new Map();
+  for (const fi of bucket) {
+    const prefix = fi.stem.slice(0, 3).toLowerCase() || "zz";
+    const arr = byPrefix.get(prefix) ?? [];
+    arr.push(fi);
+    byPrefix.set(prefix, arr);
+  }
+  if (byPrefix.size <= 1) return splitBucketBySize(bucket, maxBytes);
+  const out = [];
+  for (const arr of byPrefix.values()) {
+    const total = arr.reduce((s, f) => s + f.size, 0);
+    if (total <= maxBytes) out.push(arr);
+    else out.push(...splitBucketBySize(arr, maxBytes));
+  }
+  return out;
+}
+function autoGroupByHeuristic(paths, maxGroupBytes = AUTO_GROUP_DEFAULT_MAX_BYTES) {
+  const filtered = paths.filter(
+    (p) => typeof p === "string" && !GROUP_HEADER_RE.test(p) && !GROUP_FOOTER_RE.test(p)
+  );
+  if (filtered.length === 0) return [];
+  const primaryBuckets = /* @__PURE__ */ new Map();
+  for (const p of filtered) {
+    const fi = statFileForGrouping(p);
+    const key = `${fi.parent}||${fi.ext}`;
+    const bucket = primaryBuckets.get(key) ?? [];
+    bucket.push(fi);
+    primaryBuckets.set(key, bucket);
+  }
+  const out = [];
+  const idCounts = /* @__PURE__ */ new Map();
+  for (const [, bucket] of primaryBuckets) {
+    const sample = bucket[0];
+    const lastDir = sample.parent.split("/").filter(Boolean).pop() || "root";
+    const rawIdBase = `${lastDir}-${sample.ext}`;
+    const totalSize = bucket.reduce((s, f) => s + f.size, 0);
+    if (totalSize <= maxGroupBytes) {
+      const id = uniqueGroupId(sanitizeGroupId(rawIdBase), idCounts);
+      out.push({ id, files: bucket.map((f) => f.path) });
+      continue;
+    }
+    const parts = splitBucketByBasenamePrefix(bucket, maxGroupBytes);
+    if (parts.length === 1) {
+      const fallback = splitBucketBySize(parts[0], maxGroupBytes);
+      for (let i = 0; i < fallback.length; i++) {
+        const id = uniqueGroupId(
+          sanitizeGroupId(`${rawIdBase}-p${i + 1}`),
+          idCounts
+        );
+        out.push({ id, files: fallback[i].map((f) => f.path) });
+      }
+      continue;
+    }
+    for (let i = 0; i < parts.length; i++) {
+      const suffix = parts.length > 1 ? `-p${i + 1}` : "";
+      const id = uniqueGroupId(
+        sanitizeGroupId(`${rawIdBase}${suffix}`),
+        idCounts
+      );
+      out.push({ id, files: parts[i].map((f) => f.path) });
+    }
+  }
+  return out;
+}
+function splitPerFileSections(content, expectedPaths) {
+  const result = /* @__PURE__ */ new Map();
+  if (!content || !expectedPaths || expectedPaths.length === 0) return result;
+  const headerRe = /^\s*#{1,6}\s*File:\s*[`"']?(.+?)[`"']?\s*$/gm;
+  const headers = [];
+  let m;
+  while ((m = headerRe.exec(content)) !== null) {
+    headers.push({
+      pathRaw: m[1].trim(),
+      start: m.index,
+      bodyStart: m.index + m[0].length
+    });
+  }
+  if (headers.length === 0) return result;
+  const byExact = /* @__PURE__ */ new Map();
+  const byBasename = /* @__PURE__ */ new Map();
+  for (const fp of expectedPaths) {
+    byExact.set(fp, fp);
+    const base = fp.split("/").pop() || fp;
+    const bucket = byBasename.get(base) ?? [];
+    bucket.push(fp);
+    byBasename.set(base, bucket);
+  }
+  for (let i = 0; i < headers.length; i++) {
+    const h = headers[i];
+    const bodyEnd = i + 1 < headers.length ? headers[i + 1].start : content.length;
+    let body = content.slice(h.bodyStart, bodyEnd);
+    body = body.replace(/\n\s*---\s*$/m, "").trim();
+    let matched;
+    if (byExact.has(h.pathRaw)) {
+      matched = h.pathRaw;
+    } else {
+      for (const fp of expectedPaths) {
+        if (h.pathRaw.endsWith(fp) || fp.endsWith(h.pathRaw)) {
+          matched = fp;
+          break;
+        }
+      }
+      if (!matched) {
+        const base = h.pathRaw.split("/").pop() || h.pathRaw;
+        const bucket = byBasename.get(base);
+        if (bucket && bucket.length === 1) {
+          matched = bucket[0];
+        }
+      }
+    }
+    if (matched && !result.has(matched)) {
+      result.set(matched, body);
+    }
+  }
+  return result;
+}
 
 // node_modules/zod/v3/helpers/util.js
 var util;
@@ -28969,13 +29187,13 @@ var SHEBANG_TO_LANG = {
   lua: "lua"
 };
 function detectLang(filePath) {
-  const ext = extname(filePath).toLowerCase();
+  const ext = extname2(filePath).toLowerCase();
   if (EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
   try {
     const head = readFileSync2(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
     const shebang = head.match(/^#!\s*(?:\/usr\/bin\/env\s+)?(\S+)/);
     if (shebang) {
-      const bin = basename(shebang[1]);
+      const bin = basename2(shebang[1]);
       if (SHEBANG_TO_LANG[bin]) return SHEBANG_TO_LANG[bin];
     }
   } catch {
@@ -29071,7 +29289,7 @@ function releaseFileLock(filePath) {
   activeFileLocks.delete(resolve2(filePath));
 }
 function getGitBranch(filePath) {
-  const dir = existsSync2(filePath) && statSync(filePath).isDirectory() ? filePath : dirname(filePath);
+  const dir = existsSync2(filePath) && statSync2(filePath).isDirectory() ? filePath : dirname2(filePath);
   const result = spawnSync("git", ["branch", "--show-current"], {
     cwd: dir,
     encoding: "utf-8",
@@ -29097,7 +29315,7 @@ function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexReda
   const limit = !Number.isFinite(rawLimit) || rawLimit <= 0 ? DEFAULT_MAX_PAYLOAD_BYTES : rawLimit;
   const safePath = sanitizeInputPath(filePath);
   assertFileExists(safePath);
-  const stats = statSync(safePath);
+  const stats = statSync2(safePath);
   if (stats.size > limit) {
     throw new Error(
       `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
@@ -29201,7 +29419,7 @@ var BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
   ".lock"
 ]);
 function isBinaryExtension(filePath) {
-  return BINARY_EXTENSIONS.has(extname(filePath).toLowerCase()) || basename(filePath) === ".DS_Store";
+  return BINARY_EXTENSIONS.has(extname2(filePath).toLowerCase()) || basename2(filePath) === ".DS_Store";
 }
 function sanitizeOutputPath(baseDir, relativePath) {
   const full = relativePath.startsWith("/") ? relativePath : join2(baseDir, relativePath);
@@ -29493,7 +29711,7 @@ function readAndGroupFiles(filePaths, promptBytes, redact, budgetBytes, regexRed
   const fileData = [];
   for (const fp of filePaths) {
     try {
-      const stats = statSync(fp);
+      const stats = statSync2(fp);
       if (stats.size > totalBudget) {
         skipped.push(fp);
         continue;
@@ -29541,58 +29759,6 @@ function resolveAnswerMode(raw, defaultMode) {
 function buildPerFileSectionPrompt(filePaths) {
   if (filePaths.length <= 1) return "";
   return "\n\nOUTPUT FORMAT: You are receiving " + filePaths.length + " input files. Produce a SEPARATE report section for each file, using this exact format:\n\n## File: <absolute-file-path>\n\n<your analysis/report for this file>\n\n---\n\nProduce exactly " + filePaths.length + " sections, one for each input file, in the order they appear. Do NOT merge or combine sections. Each file must have its own complete, independent section.\n";
-}
-function splitPerFileSections(content, expectedPaths) {
-  const result = /* @__PURE__ */ new Map();
-  if (!content || !expectedPaths || expectedPaths.length === 0) return result;
-  const headerRe = /^\s*#{1,6}\s*File:\s*[`"']?(.+?)[`"']?\s*$/gm;
-  const headers = [];
-  let m;
-  while ((m = headerRe.exec(content)) !== null) {
-    headers.push({
-      pathRaw: m[1].trim(),
-      start: m.index,
-      bodyStart: m.index + m[0].length
-    });
-  }
-  if (headers.length === 0) return result;
-  const byExact = /* @__PURE__ */ new Map();
-  const byBasename = /* @__PURE__ */ new Map();
-  for (const fp of expectedPaths) {
-    byExact.set(fp, fp);
-    const base = fp.split("/").pop() || fp;
-    const bucket = byBasename.get(base) ?? [];
-    bucket.push(fp);
-    byBasename.set(base, bucket);
-  }
-  for (let i = 0; i < headers.length; i++) {
-    const h = headers[i];
-    const bodyEnd = i + 1 < headers.length ? headers[i + 1].start : content.length;
-    let body = content.slice(h.bodyStart, bodyEnd);
-    body = body.replace(/\n\s*---\s*$/m, "").trim();
-    let matched;
-    if (byExact.has(h.pathRaw)) {
-      matched = h.pathRaw;
-    } else {
-      for (const fp of expectedPaths) {
-        if (h.pathRaw.endsWith(fp) || fp.endsWith(h.pathRaw)) {
-          matched = fp;
-          break;
-        }
-      }
-      if (!matched) {
-        const base = h.pathRaw.split("/").pop() || h.pathRaw;
-        const bucket = byBasename.get(base);
-        if (bucket && bucket.length === 1) {
-          matched = bucket[0];
-        }
-      }
-    }
-    if (matched && !result.has(matched)) {
-      result.set(matched, body);
-    }
-  }
-  return result;
 }
 var WALK_DEFAULT_EXCLUDE = /* @__PURE__ */ new Set([
   // Version control
@@ -29743,7 +29909,7 @@ function walkDir(dirPath, options) {
         if (results2.length >= maxFiles) break;
         if (skipBinary && isBinaryExtension(fullPath)) continue;
         if (extensions) {
-          const ext = extname(fullPath).toLowerCase();
+          const ext = extname2(fullPath).toLowerCase();
           if (!extensions.includes(ext)) continue;
         }
         results2.push(fullPath);
@@ -29776,7 +29942,7 @@ function walkDir(dirPath, options) {
           const realPath = realpathSync2(fullPath);
           if (visitedPaths.has(realPath)) continue;
           visitedPaths.add(realPath);
-          const targetStat = statSync(realPath);
+          const targetStat = statSync2(realPath);
           if (targetStat.isDirectory() && recursive) {
             if (!entry.name.startsWith(".") && !exclude.has(entry.name)) {
               recurse(fullPath);
@@ -29784,7 +29950,7 @@ function walkDir(dirPath, options) {
           } else if (targetStat.isFile()) {
             if (skipBinary && isBinaryExtension(fullPath)) continue;
             if (extensions) {
-              const ext = extname(entry.name).toLowerCase();
+              const ext = extname2(entry.name).toLowerCase();
               if (!extensions.includes(ext)) continue;
             }
             results.push(fullPath);
@@ -29809,7 +29975,7 @@ function walkDir(dirPath, options) {
       } else if (entry.isFile()) {
         if (skipBinary && isBinaryExtension(fullPath)) continue;
         if (extensions) {
-          const ext = extname(entry.name).toLowerCase();
+          const ext = extname2(entry.name).toLowerCase();
           if (!extensions.includes(ext)) continue;
         }
         results.push(fullPath);
@@ -29820,7 +29986,7 @@ function walkDir(dirPath, options) {
   return results;
 }
 function extractLocalImports(filePath, sourceCode) {
-  const dir = dirname(filePath);
+  const dir = dirname2(filePath);
   const lang = detectLang(filePath);
   const paths = [];
   const patterns = [];
@@ -29836,7 +30002,7 @@ function extractLocalImports(filePath, sourceCode) {
     while ((match = pattern.exec(sourceCode)) !== null) {
       const importPath = match[1];
       let resolved = join2(dir, importPath);
-      if (!extname(resolved)) {
+      if (!extname2(resolved)) {
         const tryExts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"];
         let found = false;
         for (const ext of tryExts) {
@@ -30101,7 +30267,7 @@ function reloadSettingsFromDisk() {
 }
 var _settingsLastMtimeMs = (() => {
   try {
-    return statSync(SETTINGS_FILE).mtimeMs;
+    return statSync2(SETTINGS_FILE).mtimeMs;
   } catch {
     return 0;
   }
@@ -31132,7 +31298,7 @@ async function rateLimitedParallel(tasks, rps, maxInFlight = DEFAULT_MAX_IN_FLIG
   return results;
 }
 function sanitizeFilename(filePath) {
-  const base = basename(filePath);
+  const base = basename2(filePath);
   if (!base || base === "/") return "unknown";
   return base.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
@@ -31222,7 +31388,7 @@ function resolveFolderPath(folderPath, opts) {
   if (!existsSync2(folderPath)) {
     return { files: [], error: `folder_path not found: ${folderPath}` };
   }
-  if (!statSync(folderPath).isDirectory()) {
+  if (!statSync2(folderPath).isDirectory()) {
     return { files: [], error: `Not a directory: ${folderPath}` };
   }
   const files = walkDir(folderPath, {
@@ -31241,168 +31407,6 @@ function resolveFolderPath(folderPath, opts) {
     return { files: [], error: `No matching files found in ${folderPath}${extInfo}` };
   }
   return { files };
-}
-var GROUP_HEADER_RE = /^---GROUP:(.+)---$/;
-var GROUP_FOOTER_RE = /^---\/GROUP:(.+)---$/;
-function parseFileGroups(paths) {
-  const hasMarkers = paths.some(
-    (p) => GROUP_HEADER_RE.test(p) || GROUP_FOOTER_RE.test(p)
-  );
-  if (!hasMarkers) {
-    return paths.length > 0 ? [{ id: "", files: paths }] : [];
-  }
-  const groups = [];
-  let ungrouped = [];
-  let currentGroup = null;
-  for (const entry of paths) {
-    const headerMatch = entry.match(GROUP_HEADER_RE);
-    if (headerMatch) {
-      if (currentGroup && currentGroup.files.length > 0) {
-        groups.push(currentGroup);
-      }
-      if (ungrouped.length > 0) {
-        groups.push({ id: "", files: ungrouped });
-        ungrouped = [];
-      }
-      currentGroup = { id: headerMatch[1], files: [] };
-      continue;
-    }
-    const footerMatch = entry.match(GROUP_FOOTER_RE);
-    if (footerMatch) {
-      if (currentGroup && currentGroup.files.length > 0) {
-        groups.push(currentGroup);
-      }
-      currentGroup = null;
-      continue;
-    }
-    if (currentGroup) {
-      currentGroup.files.push(entry);
-    } else {
-      ungrouped.push(entry);
-    }
-  }
-  if (currentGroup && currentGroup.files.length > 0) {
-    groups.push(currentGroup);
-  }
-  if (ungrouped.length > 0) {
-    groups.push({ id: "", files: ungrouped });
-  }
-  return groups;
-}
-function hasNamedGroups(groups) {
-  return groups.some((g) => g.id !== "");
-}
-var AUTO_GROUP_DEFAULT_MAX_BYTES = 1024 * 1024;
-function sanitizeGroupId(raw) {
-  const cleaned = raw.replace(/[^a-zA-Z0-9._-]/g, "_");
-  return cleaned.length > 0 ? cleaned.slice(0, 60) : "auto";
-}
-function uniqueGroupId(raw, counts) {
-  const n = counts.get(raw) ?? 0;
-  counts.set(raw, n + 1);
-  return n === 0 ? raw : `${raw}_${n + 1}`;
-}
-function statFileForGrouping(p) {
-  const parent = dirname(p);
-  const extWithDot = extname(p);
-  const ext = extWithDot ? extWithDot.slice(1).toLowerCase() : "noext";
-  const base = basename(p);
-  const stem = base.slice(0, base.length - extWithDot.length);
-  let size = 0;
-  try {
-    const st = statSync(p);
-    if (st.isFile()) size = st.size;
-  } catch {
-    size = 0;
-  }
-  return { path: p, parent, ext, base, stem, size };
-}
-function splitBucketBySize(bucket, maxBytes) {
-  const sorted = [...bucket].sort((a, b) => b.size - a.size);
-  const parts = [];
-  const partTotals = [];
-  for (const fi of sorted) {
-    let placed = false;
-    for (let i = 0; i < parts.length; i++) {
-      if (partTotals[i] + fi.size <= maxBytes) {
-        parts[i].push(fi);
-        partTotals[i] += fi.size;
-        placed = true;
-        break;
-      }
-    }
-    if (!placed) {
-      parts.push([fi]);
-      partTotals.push(fi.size);
-    }
-  }
-  return parts;
-}
-function splitBucketByBasenamePrefix(bucket, maxBytes) {
-  if (bucket.length < 2) return [bucket];
-  const byPrefix = /* @__PURE__ */ new Map();
-  for (const fi of bucket) {
-    const prefix = fi.stem.slice(0, 3).toLowerCase() || "zz";
-    const arr = byPrefix.get(prefix) ?? [];
-    arr.push(fi);
-    byPrefix.set(prefix, arr);
-  }
-  if (byPrefix.size <= 1) return splitBucketBySize(bucket, maxBytes);
-  const out = [];
-  for (const arr of byPrefix.values()) {
-    const total = arr.reduce((s, f) => s + f.size, 0);
-    if (total <= maxBytes) out.push(arr);
-    else out.push(...splitBucketBySize(arr, maxBytes));
-  }
-  return out;
-}
-function autoGroupByHeuristic(paths, maxGroupBytes = AUTO_GROUP_DEFAULT_MAX_BYTES) {
-  const filtered = paths.filter(
-    (p) => typeof p === "string" && !GROUP_HEADER_RE.test(p) && !GROUP_FOOTER_RE.test(p)
-  );
-  if (filtered.length === 0) return [];
-  const primaryBuckets = /* @__PURE__ */ new Map();
-  for (const p of filtered) {
-    const fi = statFileForGrouping(p);
-    const key = `${fi.parent}||${fi.ext}`;
-    const bucket = primaryBuckets.get(key) ?? [];
-    bucket.push(fi);
-    primaryBuckets.set(key, bucket);
-  }
-  const out = [];
-  const idCounts = /* @__PURE__ */ new Map();
-  for (const [, bucket] of primaryBuckets) {
-    const sample = bucket[0];
-    const lastDir = sample.parent.split("/").filter(Boolean).pop() || "root";
-    const rawIdBase = `${lastDir}-${sample.ext}`;
-    const totalSize = bucket.reduce((s, f) => s + f.size, 0);
-    if (totalSize <= maxGroupBytes) {
-      const id = uniqueGroupId(sanitizeGroupId(rawIdBase), idCounts);
-      out.push({ id, files: bucket.map((f) => f.path) });
-      continue;
-    }
-    const parts = splitBucketByBasenamePrefix(bucket, maxGroupBytes);
-    if (parts.length === 1) {
-      const fallback = splitBucketBySize(parts[0], maxGroupBytes);
-      for (let i = 0; i < fallback.length; i++) {
-        const id = uniqueGroupId(
-          sanitizeGroupId(`${rawIdBase}-p${i + 1}`),
-          idCounts
-        );
-        out.push({ id, files: fallback[i].map((f) => f.path) });
-      }
-      continue;
-    }
-    for (let i = 0; i < parts.length; i++) {
-      const suffix = parts.length > 1 ? `-p${i + 1}` : "";
-      const id = uniqueGroupId(
-        sanitizeGroupId(`${rawIdBase}${suffix}`),
-        idCounts
-      );
-      out.push({ id, files: parts[i].map((f) => f.path) });
-    }
-  }
-  return out;
 }
 function batchReportFilename(toolName, _batchId, filePath, _fileIndex) {
   const now = /* @__PURE__ */ new Date();
@@ -34071,7 +34075,7 @@ ${validation.errors.map((e) => `  - ${e}`).join("\n")}`
           }
           saveSettings(newSettings);
           try {
-            _settingsLastMtimeMs = statSync(SETTINGS_FILE).mtimeMs;
+            _settingsLastMtimeMs = statSync2(SETTINGS_FILE).mtimeMs;
           } catch {
           }
           reloadSettingsFromDisk();
@@ -34109,7 +34113,7 @@ Active profile: ${newSettings.active || "(none)"}`
           activeProfile.model = modelQuery.trim();
           saveSettings(activeSettings);
           try {
-            _settingsLastMtimeMs = statSync(SETTINGS_FILE).mtimeMs;
+            _settingsLastMtimeMs = statSync2(SETTINGS_FILE).mtimeMs;
           } catch {
           }
           reloadSettingsFromDisk();
@@ -34748,7 +34752,7 @@ ${content}`
               isError: true
             };
           }
-          if (!statSync(folder_path).isDirectory()) {
+          if (!statSync2(folder_path).isDirectory()) {
             return {
               content: [
                 { type: "text", text: `FAILED: Not a directory: ${folder_path}` }
@@ -35020,7 +35024,7 @@ ${content}`);
             if (!existsSync2(fp)) {
               return { content: [{ type: "text", text: `FAILED: Folder not found: ${fp}` }], isError: true };
             }
-            if (!statSync(fp).isDirectory()) {
+            if (!statSync2(fp).isDirectory()) {
               return { content: [{ type: "text", text: `FAILED: Not a directory: ${fp}` }], isError: true };
             }
           }
@@ -35671,7 +35675,7 @@ Return JSON: {"code": "complete merged file", "summary": "what was merged and ho
                 copyFileSync2(mfOutputPath, mfBackupPath);
               }
               try {
-                mkdirSync2(dirname(mfOutputPath), { recursive: true });
+                mkdirSync2(dirname2(mfOutputPath), { recursive: true });
                 const mfTmpPath = mfOutputPath + ".externtmp";
                 if (existsSync2(mfTmpPath)) {
                   try {
@@ -35800,7 +35804,7 @@ TO REVERT: restore from ${mfOutputPath}.externbak`
               spRedactionEntries = redResult.entries;
             }
             const srcFence = fenceBackticks(sourceCode);
-            const outDir = spOutputDir || dirname(spFilePath);
+            const outDir = spOutputDir || dirname2(spFilePath);
             const spMessages = [
               {
                 role: "system",
@@ -35935,7 +35939,7 @@ ${srcFence}`
                   );
                 }
                 lockedPaths.push(fullPath);
-                mkdirSync2(dirname(fullPath), { recursive: true });
+                mkdirSync2(dirname2(fullPath), { recursive: true });
                 const spBackup = fullPath + ".externbak";
                 if (existsSync2(fullPath)) {
                   if (!existsSync2(spBackup)) {
@@ -36347,7 +36351,7 @@ ${diffFence}` + sourceFileBlocks
             cfResp.content + cfFooter,
             {
               model: cfResp.model,
-              task: `Compare ${basename(fileA)} vs ${basename(fileB)}`,
+              task: `Compare ${basename2(fileA)} vs ${basename2(fileB)}`,
               inputFile: fileA
             }
           );
@@ -36684,7 +36688,7 @@ FAILED: File not found.`);
                   continue;
                 }
                 const ciLang = detectLang(filePath);
-                const fileDir = dirname(filePath);
+                const fileDir = dirname2(filePath);
                 const ciResolveBase = project_root || fileDir;
                 const extractMessages = [
                   { role: "system", content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path inside a filename tag before the file-content tag \u2014 reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.` + FILE_FORMAT_EXAMPLE },
@@ -36707,8 +36711,8 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                   }
                   const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
                   const resolvedBase = importPath.startsWith("/") ? importPath : join2(resolveDir, importPath);
-                  let found = existsSync2(resolvedBase) && statSync(resolvedBase).isFile();
-                  if (!found && !extname(resolvedBase)) {
+                  let found = existsSync2(resolvedBase) && statSync2(resolvedBase).isFile();
+                  if (!found && !extname2(resolvedBase)) {
                     for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".json"]) {
                       if (existsSync2(resolvedBase + ext)) {
                         found = true;
@@ -36758,7 +36762,7 @@ FAILED: File not found.`);
               continue;
             }
             const ciLang = detectLang(filePath);
-            const fileDir = dirname(filePath);
+            const fileDir = dirname2(filePath);
             const ciResolveBase = project_root || fileDir;
             const extractMessages = [
               {
@@ -36799,10 +36803,10 @@ FAILED: File not found.`);
               const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
               const resolvedBase = importPath.startsWith("/") ? importPath : join2(resolveDir, importPath);
               let found = false;
-              if (existsSync2(resolvedBase) && statSync(resolvedBase).isFile()) {
+              if (existsSync2(resolvedBase) && statSync2(resolvedBase).isFile()) {
                 found = true;
               }
-              if (!found && !extname(resolvedBase)) {
+              if (!found && !extname2(resolvedBase)) {
                 for (const ext of [
                   ".ts",
                   ".tsx",
@@ -37047,7 +37051,7 @@ ${csResp.content}${csFooter}`
             const csMergedModel = ensembleModelLabel(csUseEnsemble);
             const csReportPath = saveResponse("check_against_specs", csFinalContent, {
               model: csMergedModel,
-              task: `Spec compliance: ${basename(csSpecPath)} vs ${fgPaths.length} file(s)`,
+              task: `Spec compliance: ${basename2(csSpecPath)} vs ${fgPaths.length} file(s)`,
               inputFile: fgPaths[0],
               groupId: fgId || void 0
             });
