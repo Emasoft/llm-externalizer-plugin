@@ -1,6 +1,86 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.15.2] - 2026-04-15
+
+### Testing
+
+- Test(mcp): extract grouping helpers + 36 new tests (31 unit, 5 dispatch)
+
+Motivation: the answer_mode=1 refactor added autoGroupByHeuristic() and
+rewrote splitPerFileSections(), but neither had unit tests and the
+helpers lived inside index.ts (which has top-level server.connect()
+side effects that make direct import unsafe). This commit extracts the
+helpers into a pure module and adds 36 tests.
+
+1. New file: mcp-server/src/grouping.ts
+   - Moved parseFileGroups, hasNamedGroups, autoGroupByHeuristic,
+     splitPerFileSections, GROUP_HEADER_RE, GROUP_FOOTER_RE, FileGroup,
+     and the private helpers (sanitizeGroupId, uniqueGroupId,
+     statFileForGrouping, splitBucketBySize, splitBucketByBasenamePrefix)
+     out of index.ts.
+   - Module has zero side effects — only imports from node:fs and
+     node:path — so tests can require it without booting the MCP server.
+   - index.ts now imports from ./grouping.js.
+
+2. New file: mcp-server/src/grouping.test.ts — 31 unit tests
+   parseFileGroups (7):
+     - empty input
+     - unmarked paths → single unnamed group
+     - single named group
+     - multiple named groups preserve order
+     - header closes previous group without explicit footer
+     - files outside markers go into id=""
+     - empty named groups dropped
+   hasNamedGroups (3): all-empty, at least one named, empty array
+   autoGroupByHeuristic (10, uses real tmp files on disk):
+     - empty input
+     - filters ---GROUP:id--- markers defensively
+     - same-ext files in same dir → one group
+     - different extensions in same dir → separate groups
+     - different dirs with same ext → separate groups
+     - nested subdirectories get their own group
+     - stable deterministic ids across invocations
+     - single file input
+     - oversized bucket splits via FFD with -p{n} suffix
+     - duplicate dir-name collision → unique _2 suffix
+   splitPerFileSections (11):
+     - empty input
+     - no `## File:` headers → empty map
+     - exact-path matching
+     - suffix matching (dropped directory prefix)
+     - basename matching
+     - Windows CRLF line endings (trailing \r stripped by .trim())
+     - backtick/quote decorations around path
+     - missing sections omitted from map
+     - duplicate header → first section kept
+     - trailing `---` separator trimmed
+     - single-file section without separator
+
+3. New tests in index.test.ts — 5 answer_mode dispatch integration tests
+   - chat mode 1: mixed-extension files route through auto-grouping
+     without pre-LLM validation errors
+   - code_task mode 1 + explicit ---GROUP:id--- markers: routes through
+     the explicit grouped path
+   - scan_folder mode 1: validates nonexistent folder BEFORE any LLM call
+   - chat mode 2: regression guard for the single-merged-report path
+   - search_existing_implementations mode 1: validates feature_description
+     before the grouping step runs
+
+4. vitest.config.ts — include grouping.test.ts in the default run.
+
+Validation:
+  - typecheck: ok
+  - lint: 0 warnings
+  - build: ok
+  - npm test: 54/54 pass (31 unit + 23 integration, 18 pre-existing + 5 new)
+  - grouping unit tests run in 6 ms
+
+Note: the original index.ts was ~10k lines with scattered helper
+definitions; extracting the grouping module also trims ~270 lines of
+duplicated code from the main file.
+
+
 ## [3.15.1] - 2026-04-15
 
 ### Fixed
