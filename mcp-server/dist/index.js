@@ -29542,6 +29542,58 @@ function buildPerFileSectionPrompt(filePaths) {
   if (filePaths.length <= 1) return "";
   return "\n\nOUTPUT FORMAT: You are receiving " + filePaths.length + " input files. Produce a SEPARATE report section for each file, using this exact format:\n\n## File: <absolute-file-path>\n\n<your analysis/report for this file>\n\n---\n\nProduce exactly " + filePaths.length + " sections, one for each input file, in the order they appear. Do NOT merge or combine sections. Each file must have its own complete, independent section.\n";
 }
+function splitPerFileSections(content, expectedPaths) {
+  const result = /* @__PURE__ */ new Map();
+  if (!content || !expectedPaths || expectedPaths.length === 0) return result;
+  const headerRe = /^\s*#{1,6}\s*File:\s*[`"']?(.+?)[`"']?\s*$/gm;
+  const headers = [];
+  let m;
+  while ((m = headerRe.exec(content)) !== null) {
+    headers.push({
+      pathRaw: m[1].trim(),
+      start: m.index,
+      bodyStart: m.index + m[0].length
+    });
+  }
+  if (headers.length === 0) return result;
+  const byExact = /* @__PURE__ */ new Map();
+  const byBasename = /* @__PURE__ */ new Map();
+  for (const fp of expectedPaths) {
+    byExact.set(fp, fp);
+    const base = fp.split("/").pop() || fp;
+    const bucket = byBasename.get(base) ?? [];
+    bucket.push(fp);
+    byBasename.set(base, bucket);
+  }
+  for (let i = 0; i < headers.length; i++) {
+    const h = headers[i];
+    const bodyEnd = i + 1 < headers.length ? headers[i + 1].start : content.length;
+    let body = content.slice(h.bodyStart, bodyEnd);
+    body = body.replace(/\n\s*---\s*$/m, "").trim();
+    let matched;
+    if (byExact.has(h.pathRaw)) {
+      matched = h.pathRaw;
+    } else {
+      for (const fp of expectedPaths) {
+        if (h.pathRaw.endsWith(fp) || fp.endsWith(h.pathRaw)) {
+          matched = fp;
+          break;
+        }
+      }
+      if (!matched) {
+        const base = h.pathRaw.split("/").pop() || h.pathRaw;
+        const bucket = byBasename.get(base);
+        if (bucket && bucket.length === 1) {
+          matched = bucket[0];
+        }
+      }
+    }
+    if (matched && !result.has(matched)) {
+      result.set(matched, body);
+    }
+  }
+  return result;
+}
 var WALK_DEFAULT_EXCLUDE = /* @__PURE__ */ new Set([
   // Version control
   ".git",
@@ -31240,6 +31292,118 @@ function parseFileGroups(paths) {
 function hasNamedGroups(groups) {
   return groups.some((g) => g.id !== "");
 }
+var AUTO_GROUP_DEFAULT_MAX_BYTES = 1024 * 1024;
+function sanitizeGroupId(raw) {
+  const cleaned = raw.replace(/[^a-zA-Z0-9._-]/g, "_");
+  return cleaned.length > 0 ? cleaned.slice(0, 60) : "auto";
+}
+function uniqueGroupId(raw, counts) {
+  const n = counts.get(raw) ?? 0;
+  counts.set(raw, n + 1);
+  return n === 0 ? raw : `${raw}_${n + 1}`;
+}
+function statFileForGrouping(p) {
+  const parent = dirname(p);
+  const extWithDot = extname(p);
+  const ext = extWithDot ? extWithDot.slice(1).toLowerCase() : "noext";
+  const base = basename(p);
+  const stem = base.slice(0, base.length - extWithDot.length);
+  let size = 0;
+  try {
+    const st = statSync(p);
+    if (st.isFile()) size = st.size;
+  } catch {
+    size = 0;
+  }
+  return { path: p, parent, ext, base, stem, size };
+}
+function splitBucketBySize(bucket, maxBytes) {
+  const sorted = [...bucket].sort((a, b) => b.size - a.size);
+  const parts = [];
+  const partTotals = [];
+  for (const fi of sorted) {
+    let placed = false;
+    for (let i = 0; i < parts.length; i++) {
+      if (partTotals[i] + fi.size <= maxBytes) {
+        parts[i].push(fi);
+        partTotals[i] += fi.size;
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      parts.push([fi]);
+      partTotals.push(fi.size);
+    }
+  }
+  return parts;
+}
+function splitBucketByBasenamePrefix(bucket, maxBytes) {
+  if (bucket.length < 2) return [bucket];
+  const byPrefix = /* @__PURE__ */ new Map();
+  for (const fi of bucket) {
+    const prefix = fi.stem.slice(0, 3).toLowerCase() || "zz";
+    const arr = byPrefix.get(prefix) ?? [];
+    arr.push(fi);
+    byPrefix.set(prefix, arr);
+  }
+  if (byPrefix.size <= 1) return splitBucketBySize(bucket, maxBytes);
+  const out = [];
+  for (const arr of byPrefix.values()) {
+    const total = arr.reduce((s, f) => s + f.size, 0);
+    if (total <= maxBytes) out.push(arr);
+    else out.push(...splitBucketBySize(arr, maxBytes));
+  }
+  return out;
+}
+function autoGroupByHeuristic(paths, maxGroupBytes = AUTO_GROUP_DEFAULT_MAX_BYTES) {
+  const filtered = paths.filter(
+    (p) => typeof p === "string" && !GROUP_HEADER_RE.test(p) && !GROUP_FOOTER_RE.test(p)
+  );
+  if (filtered.length === 0) return [];
+  const primaryBuckets = /* @__PURE__ */ new Map();
+  for (const p of filtered) {
+    const fi = statFileForGrouping(p);
+    const key = `${fi.parent}||${fi.ext}`;
+    const bucket = primaryBuckets.get(key) ?? [];
+    bucket.push(fi);
+    primaryBuckets.set(key, bucket);
+  }
+  const out = [];
+  const idCounts = /* @__PURE__ */ new Map();
+  for (const [, bucket] of primaryBuckets) {
+    const sample = bucket[0];
+    const lastDir = sample.parent.split("/").filter(Boolean).pop() || "root";
+    const rawIdBase = `${lastDir}-${sample.ext}`;
+    const totalSize = bucket.reduce((s, f) => s + f.size, 0);
+    if (totalSize <= maxGroupBytes) {
+      const id = uniqueGroupId(sanitizeGroupId(rawIdBase), idCounts);
+      out.push({ id, files: bucket.map((f) => f.path) });
+      continue;
+    }
+    const parts = splitBucketByBasenamePrefix(bucket, maxGroupBytes);
+    if (parts.length === 1) {
+      const fallback = splitBucketBySize(parts[0], maxGroupBytes);
+      for (let i = 0; i < fallback.length; i++) {
+        const id = uniqueGroupId(
+          sanitizeGroupId(`${rawIdBase}-p${i + 1}`),
+          idCounts
+        );
+        out.push({ id, files: fallback[i].map((f) => f.path) });
+      }
+      continue;
+    }
+    for (let i = 0; i < parts.length; i++) {
+      const suffix = parts.length > 1 ? `-p${i + 1}` : "";
+      const id = uniqueGroupId(
+        sanitizeGroupId(`${rawIdBase}${suffix}`),
+        idCounts
+      );
+      out.push({ id, files: parts[i].map((f) => f.path) });
+    }
+  }
+  return out;
+}
 function batchReportFilename(toolName, _batchId, filePath, _fileIndex) {
   const now = /* @__PURE__ */ new Date();
   const ts = now.toISOString().replace(/[:.]/g, "-").slice(0, 23);
@@ -31888,10 +32052,11 @@ function limitsBlock() {
   return "\n\nLIMITS:\n" + throughput + `
 \u2022 ${SOFT_TIMEOUT_MS / 1e3}s base timeout per call. Extended automatically when reasoning models are actively thinking. Auto-retries up to 3 times on truncated responses.`;
 }
+var BATCHING_NOTE = "\n\nBATCHING (READ THIS): The LLM never sees your whole set of input files at once. Files are packed into LLM requests of typically 1-5 files each \u2014 by default via First-Fit Decreasing bin packing into ~400 KB batches (sized to fit the context window), or one group per request when ---GROUP:id--- markers are used. In ensemble mode each file is reviewed by 3 different LLMs in parallel so every file receives 3 distinct responses; in free mode and local mode each file receives only 1 response. answer_mode controls ONLY how reports are written to disk, NOT how many files the LLM sees per request: 0 = ONE REPORT PER FILE, 1 = ONE REPORT PER GROUP (auto-grouped by subfolder/language/namespace/basename/imports if no ---GROUP:id--- markers are supplied, max 1 MB per group), 2 = SINGLE REPORT (everything merged). If you need cross-file analysis across the whole codebase, use search_existing_implementations \u2014 it is purpose-built for it.";
 var answerModeSchema = {
   type: "number",
   enum: [0, 1, 2],
-  description: "Controls output file organization. 0 = one .md file per input file (separate LLM calls, with parallel execution + retry when max_retries > 1). 1 = one .md file per LLM request, with structured per-file sections inside. 2 = one .md file for the entire operation (all batches merged). Default varies per tool \u2014 check each tool's schema description: scan_folder=0, chat/code_task/check_*=2, search_existing_implementations=2 (mode 0 falls back to mode 1 since per-file LLM calls would defeat the FFD batching this tool relies on)."
+  description: "Output file organization. Does NOT change how many files the LLM sees per request \u2014 that is governed by the batching algorithm, not by this field. The LLM never sees your whole set of input files at once: files are packed into LLM requests of typically 1-5 files each (First-Fit Decreasing bin packing into ~400 KB batches, or one group per request when ---GROUP:id--- markers are supplied). In ENSEMBLE mode each file is reviewed by 3 different LLMs in parallel so every file receives 3 distinct responses; in FREE mode and LOCAL mode each file receives only 1 response.\n\nanswer_mode : 0\nNAME: ONE REPORT PER FILE\nDESCRIPTION: One .md report is saved for every input file. Files are still batched into LLM requests of typically 1-5 files each (FFD bin packing); each LLM response contains structured per-file sections that the MCP server splits apart and persists as individual reports. Output is a list of (input_file_path -> report_path) pairs.\nFORMAT: markdown (.md)\nWHEN TO USE: Downstream consumers (agents, tools, CI) need to pick up one file's review without scanning an aggregate. Typical for per-file lint/audit pipelines and for fan-out workflows that route each file's findings to a different handler.\nADVANTAGES: Trivially routed \u2014 one file in, one report out. Supports parallel execution with retry and circuit breaker via max_retries.\nDISADVANTAGES: N files = N report files on disk. Slightly more overhead when you only want the big picture.\n\nanswer_mode : 1\nNAME: ONE REPORT PER GROUP\nDESCRIPTION: One .md report is saved per GROUP of files. Groups are either explicit (---GROUP:id--- / ---/GROUP:id--- markers inside input_files_paths) or auto-generated. When the caller supplies markers, files inside each ---GROUP:id--- block share a report. When no markers are supplied, the MCP server auto-groups files intelligently using these priorities, in order: 1) parent subfolder, 2) language/format (file extension), 3) namespace/package (inferred from directory hierarchy), 4) shared filename prefix (e.g. user.ts + user.test.ts), 5) shared imports/libraries. Each auto-group contains at most 1 MB of source; oversized buckets are split into sub-groups by bin packing. The LLM still processes each group in isolation and cannot cross-reference files across groups.\nFORMAT: markdown (.md)\nWHEN TO USE: You want one report per logical chunk of the codebase (e.g. one report per feature folder, one per module). Keeps related-file context together while still producing separate files for independent groups.\nADVANTAGES: Balanced output \u2014 fewer files than mode 0, more granular than mode 2. Group boundaries match natural project structure so reports are easy to route and review.\nDISADVANTAGES: Group composition is a heuristic when markers are not supplied; callers who need exact control must pass explicit ---GROUP:id--- markers.\n\nanswer_mode : 2\nNAME: SINGLE REPORT\nDESCRIPTION: Exactly one .md report is saved, merging the responses from every LLM batch into a single document with per-batch and per-file sections.\nFORMAT: markdown (.md)\nWHEN TO USE: You want one top-level summary across all scanned files \u2014 e.g. a single audit report to share with a reviewer or attach to a PR.\nADVANTAGES: Simplest output. One file path returned. Easy to email, attach, or hand off.\nDISADVANTAGES: For very large scans the merged file can be long. Downstream per-file routing requires re-parsing sections out of the single report.\n\nDefaults per tool: scan_folder=0, chat/code_task/check_*=2, search_existing_implementations=2."
 };
 var maxRetriesSchema = {
   type: "number",
@@ -31990,7 +32155,7 @@ function buildTools() {
   const allTools = [
     {
       name: "chat",
-      description: "General-purpose LLM call. More capable than Haiku, costs less. Offloads bounded work (summarise, generate, translate, compare) to a separate LLM.\n\nFiles via input_files_paths are read from disk (saves your context). Auto-batches if total exceeds context window.\n\nFILE GROUPING: Organize files into named groups using ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths. Each group is processed in COMPLETE ISOLATION (no cross-group LLM calls) and produces its own SEPARATE report file with the group ID in the filename. Output: one line per group: [group:id] /path/to/report_group-id_....md. WHY: Each downstream agent only reads the report for its own group, saving context tokens by not loading findings about files it is not responsible for. Without markers, all files are processed together (backward compatible).\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 always include brief context in instructions.\n\nOUTPUT: Saved to .md file, returns only the file path." + limitsBlock(),
+      description: "General-purpose LLM call. More capable than Haiku, costs less. Offloads bounded work (summarise, generate, translate, compare) to a separate LLM.\n\nFiles via input_files_paths are read from disk (saves your context).\n\nFILE GROUPING: Organize files into named groups using ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths. Each group is processed in COMPLETE ISOLATION (no cross-group LLM calls) and produces its own SEPARATE report file with the group ID in the filename. Output: one line per group: [group:id] /path/to/report_group-id_....md. WHY: Each downstream agent only reads the report for its own group, saving context tokens by not loading findings about files it is not responsible for. Without markers, all files are processed together (backward compatible).\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 always include brief context in instructions.\n\nOUTPUT: Saved to .md file, returns only the file path." + BATCHING_NOTE + limitsBlock(),
       inputSchema: {
         type: "object",
         properties: {
@@ -32044,7 +32209,7 @@ function buildTools() {
     // The 'custom_prompt' case in the switch handler still works for backward compatibility.
     {
       name: "code_task",
-      description: "Code analysis with optimised code-review system prompt. More capable than Haiku, costs less. Less capable than Sonnet/Opus.\n\nPass input_files_paths (read from disk, language auto-detected). Be specific in instructions.\n\nFILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths to process groups in isolation. Each group produces its own SEPARATE report: [group:id] path. WHY: downstream agents only read their own group's report, saving context tokens.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 always include brief context.\n\nOUTPUT: Saved to .md file, returns only the file path." + limitsBlock(),
+      description: "Code analysis with optimised code-review system prompt. More capable than Haiku, costs less. Less capable than Sonnet/Opus.\n\nPass input_files_paths (read from disk, language auto-detected). Be specific in instructions.\n\nFILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths to process groups in isolation. Each group produces its own SEPARATE report: [group:id] path. When no markers are supplied, answer_mode=1 auto-groups files by subfolder/language/basename (max 1 MB per group) so every answer_mode=1 run emits one merged report per group. WHY: downstream agents only read their own group's report, saving context tokens.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 always include brief context.\n\nOUTPUT: Saved to .md file, returns only the file path." + BATCHING_NOTE + limitsBlock(),
       inputSchema: {
         type: "object",
         properties: {
@@ -32248,7 +32413,7 @@ function buildTools() {
     // ── Batch Operations ────────────────────────────────────────────────
     {
       name: "batch_check",
-      description: "DEPRECATED: Use chat or code_task with answer_mode=0 and max_retries=3 instead.\n\nSame prompt applied to EACH file separately \u2014 one report per file.\n\nFILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths to process groups in isolation. Each group produces its own SEPARATE merged report: [group:id] path. WHY: downstream agents only read their own group's report, saving context tokens.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context.\n\nRetry: 3 attempts for recoverable errors. Aborts on auth/payment errors or 3+ consecutive failures.",
+      description: "DEPRECATED: Use chat or code_task with answer_mode=0 and max_retries=3 instead.\n\nSame prompt applied to EACH file separately \u2014 one report per file.\n\nFILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths to process groups in isolation. Each group produces its own SEPARATE merged report: [group:id] path. When no markers are supplied, answer_mode=1 auto-groups files by subfolder/language/basename (max 1 MB per group) so every answer_mode=1 run emits one merged report per group. WHY: downstream agents only read their own group's report, saving context tokens.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context.\n\nRetry: 3 attempts for recoverable errors. Aborts on auth/payment errors or 3+ consecutive failures.",
       inputSchema: {
         type: "object",
         properties: {
@@ -32333,7 +32498,7 @@ function buildTools() {
     // ── Specialized Operations ─────────────────────────────────────────
     {
       name: "scan_folder",
-      description: "Like batch_check but auto-discovers files from a directory tree. Filters by extension, skips hidden dirs/node_modules/.git/dist/build.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context." + limitsBlock(),
+      description: "Auto-discover files from a directory tree and run the given instructions against each. Filters by extension, skips hidden dirs/node_modules/.git/dist/build.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context." + BATCHING_NOTE + limitsBlock(),
       inputSchema: {
         type: "object",
         properties: {
@@ -32390,7 +32555,7 @@ function buildTools() {
     },
     {
       name: "search_existing_implementations",
-      description: "Search a codebase for an existing implementation of a specified feature. The server walks the target folder(s), filters by language extension, FFD-packs all matching files into batches up to max_payload_kb per LLM request, and asks the LLM (ensemble by default) to emit per-file YES/NO answers. Each batch is one LLM call \u2014 for a 10k-file codebase this is typically ~500 calls instead of 10k. Use for PR duplicate-check reviews or greenfield 'is this already done?' audits.\n\nThe feature_description is the primary signal. Optionally pass PR source files (shipped as reference context and automatically excluded from the scan to avoid self-match) and/or a unified diff (to focus the LLM on the new lines). Both are optional \u2014 the tool also works as a pure description-based scan.\n\nPer-file answer is terse \u2014 either 'NO' or one-or-more 'YES symbol=<name> lines=<a-b>' lines. EXHAUSTIVE: the LLM reports every occurrence in every file, no cap \u2014 so a reviewer can delete every duplicate and keep only the PR's new one. Ensemble mode runs all configured models in parallel so reviewers can spot false positives from model disagreement.\n\nanswer_mode: default 2 (single merged report covering all batches). Set to 1 for one report per batch. Mode 0 is not meaningful here and falls back to mode 1.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include the brief context in feature_description." + limitsBlock(),
+      description: "Search a codebase for an existing implementation of a specified feature. THE CANONICAL WAY to answer 'does this already exist in the codebase?' or 'does this PR duplicate existing code?'. Works even though the LLM never sees the whole codebase at once \u2014 see the batching note below.\n\nThe server walks the target folder(s), filters by language extension, FFD-packs all matching files into batches up to max_payload_kb per LLM request (typically 1\u20135 files per batch, depending on file sizes), and asks the LLM (ensemble by default) to emit per-file YES/NO answers for every file in the batch. Each batch is ONE LLM call \u2014 for a 10k-file codebase this is typically ~500 calls instead of 10k. The LLM never needs global codebase visibility because every file is checked against a REFERENCE (feature_description + optional source_files + optional diff_path), not against other files in the codebase.\n\nBATCHING vs ANSWER_MODE (important): batching behavior is the same in all modes. The LLM always sees 1\u20135 files per request. answer_mode only controls how the per-file output is persisted to disk:\n  - answer_mode 0: one .md per input file (MCP splits each batch response by per-file section markers and saves one report per original file; returns a list of (input_file -> report_file) pairs).\n  - answer_mode 1: one .md per batch (per LLM request).\n  - answer_mode 2 (default): one .md for the whole operation, merged.\n\nThe feature_description is the primary signal. Optionally pass PR source files (shipped as reference context and automatically excluded from the scan to avoid self-match) and/or a unified diff (to focus the LLM on the new lines). Both are optional \u2014 the tool also works as a pure description-based scan.\n\nPer-file answer is terse \u2014 either 'NO' or one-or-more 'YES symbol=<name> lines=<a-b>' lines. EXHAUSTIVE: the LLM reports every occurrence in every file, no cap \u2014 so a reviewer can delete every duplicate and keep only the PR's new one. Ensemble mode runs all configured models in parallel so reviewers can spot false positives from model disagreement.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include the brief context in feature_description." + limitsBlock(),
       inputSchema: {
         type: "object",
         properties: {
@@ -32439,7 +32604,7 @@ function buildTools() {
           redact_regex: redactRegexSchema,
           max_payload_kb: {
             type: "number",
-            description: "Max batch payload size in KB (default: 400). Controls FFD bin packing: larger values pack more files per LLM call. search_existing_implementations default answer_mode is 2 (single merged report). Mode 0 falls back to mode 1 (per-batch reports) because per-file LLM calls would defeat the batching this tool relies on for 10k-file codebases."
+            description: "Max batch payload size in KB (default: 400). Controls FFD bin packing: larger values pack more files per LLM call. search_existing_implementations default answer_mode is 2 (SINGLE REPORT). Mode 1 (ONE REPORT PER GROUP) auto-clusters files by subfolder/extension heuristic and emits one merged report per group. Mode 0 (ONE REPORT PER FILE) splits each batch response by per-file section so every scanned file gets its own report. Batching (1-5 files per LLM call) is always active \u2014 this tool is designed to scale to 10k-file codebases."
           }
         },
         required: ["feature_description", "folder_path"]
@@ -32585,7 +32750,7 @@ function buildTools() {
     },
     {
       name: "check_references",
-      description: "Check source file for broken symbol references. Auto-resolves local imports, reads dependencies, LLM validates all symbols exist.\n\nFILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths to process groups in isolation. Each group produces its own SEPARATE report: [group:id] path. WHY: downstream agents only read their own group's report, saving context tokens.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context." + limitsBlock(),
+      description: "Check source file for broken symbol references. Auto-resolves local imports, reads dependencies, LLM validates all symbols exist.\n\nFILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths to process groups in isolation. Each group produces its own SEPARATE report: [group:id] path. When no markers are supplied, answer_mode=1 auto-groups files by subfolder/language/basename (max 1 MB per group) so every answer_mode=1 run emits one merged report per group. WHY: downstream agents only read their own group's report, saving context tokens.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context." + BATCHING_NOTE + limitsBlock(),
       inputSchema: {
         type: "object",
         properties: {
@@ -32629,7 +32794,7 @@ function buildTools() {
     },
     {
       name: "check_imports",
-      description: "Two-phase import checker: (1) LLM extracts import paths, (2) server validates each exists on disk. Detects broken imports after file moves/renames.\n\nFILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths to process groups in isolation. Each group produces its own SEPARATE report: [group:id] path. WHY: downstream agents only read their own group's report, saving context tokens.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context." + limitsBlock(),
+      description: "Two-phase import checker: (1) LLM extracts import paths, (2) server validates each exists on disk. Detects broken imports after file moves/renames.\n\nFILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths to process groups in isolation. Each group produces its own SEPARATE report: [group:id] path. When no markers are supplied, answer_mode=1 auto-groups files by subfolder/language/basename (max 1 MB per group) so every answer_mode=1 run emits one merged report per group. WHY: downstream agents only read their own group's report, saving context tokens.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context." + BATCHING_NOTE + limitsBlock(),
       inputSchema: {
         type: "object",
         properties: {
@@ -32677,7 +32842,7 @@ function buildTools() {
     },
     {
       name: "check_against_specs",
-      description: "Compare source files against a specification file. The spec file defines requirements, rules, API parameters, output formats, restrictions, forbidden patterns, forbidden endpoints/services/tools, etc. Each source file is strictly examined for spec violations: wrong implementations, missed rules, forbidden patterns used, incorrect API contracts, wrong output formats, etc.\n\nAccepts individual files via input_files_paths OR an entire folder via folder_path (recursive). Files are auto-batched using FFD bin packing \u2014 the spec file is included in EVERY batch.\n\nFILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths to process groups in isolation. Each group produces its own SEPARATE report: [group:id] path. WHY: downstream agents only read their own group's report, saving context tokens.\n\nNOTE: The LLM does NOT have the full project \u2014 some requirements may be implemented elsewhere. Therefore only VIOLATIONS of the spec are reported (things done wrong), not MISSING features (things not yet implemented). Everything that IS implemented must follow the spec exactly.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context in instructions.\n\nOUTPUT: Violation report saved to .md file, returns only the file path." + limitsBlock(),
+      description: "Compare source files against a specification file. The spec file defines requirements, rules, API parameters, output formats, restrictions, forbidden patterns, forbidden endpoints/services/tools, etc. Each source file is strictly examined for spec violations: wrong implementations, missed rules, forbidden patterns used, incorrect API contracts, wrong output formats, etc.\n\nAccepts individual files via input_files_paths OR an entire folder via folder_path (recursive). Files are auto-batched using FFD bin packing \u2014 the spec file is included in EVERY batch.\n\nFILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths to process groups in isolation. Each group produces its own SEPARATE report: [group:id] path. When no markers are supplied, answer_mode=1 auto-groups files by subfolder/language/basename (max 1 MB per group) so every answer_mode=1 run emits one merged report per group. WHY: downstream agents only read their own group's report, saving context tokens.\n\nNOTE: The LLM does NOT have the full project \u2014 some requirements may be implemented elsewhere. Therefore only VIOLATIONS of the spec are reported (things done wrong), not MISSING features (things not yet implemented). Everything that IS implemented must follow the spec exactly.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context in instructions.\n\nOUTPUT: Violation report saved to .md file, returns only the file path." + BATCHING_NOTE + limitsBlock(),
       inputSchema: {
         type: "object",
         properties: {
@@ -32935,14 +33100,21 @@ ${fence}`;
             });
             return { content: [{ type: "text", text: savedPath }] };
           }
-          const chatFileGroups = parseFileGroups(chatFilePaths);
-          const chatIsGrouped = hasNamedGroups(chatFileGroups);
+          let chatFileGroups = parseFileGroups(chatFilePaths);
+          let chatEffectivelyGrouped = hasNamedGroups(chatFileGroups);
+          if (chatMode === 1 && !chatEffectivelyGrouped) {
+            const autoGroups = autoGroupByHeuristic(chatFilePaths);
+            if (autoGroups.length > 0) {
+              chatFileGroups = autoGroups;
+              chatEffectivelyGrouped = true;
+            }
+          }
           const allGroupReports = [];
           for (const fg of chatFileGroups) {
             const fgPaths = fg.files;
             if (fgPaths.length === 0) continue;
             const fgId = fg.id;
-            if (chatMode === 0 && !chatIsGrouped) {
+            if (chatMode === 0 && !chatEffectivelyGrouped) {
               const chatRetries = chatMaxRetries ?? 1;
               if (chatRetries > 1) {
                 const rpResult = await robustPerFileProcess(fgPaths, {
@@ -32991,7 +33163,6 @@ ${fence}`;
               chatRegexRedact
             );
             const batchResults = [];
-            const batchOutputPaths = [];
             if (chatSkipped.length > 0) {
               const skipNote = `SKIPPED (exceeds 800 KB payload budget): ${chatSkipped.length} file(s)
 ${chatSkipped.map((f) => `  - ${f}`).join("\n")}`;
@@ -33000,10 +33171,6 @@ ${chatSkipped.map((f) => `  - ${f}`).join("\n")}`;
             for (let gi = 0; gi < groups.length; gi++) {
               const group = groups[gi];
               let userContent = promptBase;
-              if (chatMode === 1 && !chatIsGrouped) {
-                const groupPaths = group.map((fd) => fd.path);
-                userContent += buildPerFileSectionPrompt(groupPaths);
-              }
               for (const fd of group) {
                 userContent += `
 
@@ -33019,37 +33186,19 @@ ${fd.block}`;
               );
               const footer = formatFooter(resp, "chat", group[0]?.path);
               if (resp.content.trim().length > 0) {
-                if (chatMode === 1 && !chatIsGrouped) {
-                  const batchPath = saveResponse("chat", resp.content + footer, {
-                    model: resp.model,
-                    task: chatPrompt,
-                    inputFile: group[0]?.path
-                  });
-                  batchOutputPaths.push(batchPath);
-                } else {
-                  if (autoBatched) {
-                    const fileList = group.map((fd) => fd.path).join(", ");
-                    batchResults.push(
-                      `## Batch ${gi + 1}/${groups.length}
+                if (autoBatched) {
+                  const fileList = group.map((fd) => fd.path).join(", ");
+                  batchResults.push(
+                    `## Batch ${gi + 1}/${groups.length}
 
 Files: ${fileList}
 
 ${resp.content}${footer}`
-                    );
-                  } else {
-                    batchResults.push(resp.content + footer);
-                  }
+                  );
+                } else {
+                  batchResults.push(resp.content + footer);
                 }
               }
-            }
-            if (chatMode === 1 && !chatIsGrouped) {
-              if (batchOutputPaths.length === 0) {
-                return {
-                  content: [{ type: "text", text: "FAILED: LLM returned empty response for all batches." }],
-                  isError: true
-                };
-              }
-              return { content: [{ type: "text", text: batchOutputPaths.join("\n") }] };
             }
             if (batchResults.length === 0) continue;
             const finalContent = batchResults.join("\n\n---\n\n");
@@ -33060,8 +33209,9 @@ ${resp.content}${footer}`
               inputFile: fgPaths[0],
               groupId: fgId || void 0
             });
-            if (chatIsGrouped) {
-              allGroupReports.push(`[group:${fgId}] ${savedPath}`);
+            if (chatEffectivelyGrouped) {
+              const labelId = fgId || "auto";
+              allGroupReports.push(`[group:${labelId}] ${savedPath}`);
             } else {
               return { content: [{ type: "text", text: savedPath }] };
             }
@@ -33249,14 +33399,21 @@ RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/M
             );
             return { content: [{ type: "text", text: savedPath }] };
           }
-          const ctFileGroups = parseFileGroups(ctFilePaths);
-          const ctIsGrouped = hasNamedGroups(ctFileGroups);
+          let ctFileGroups = parseFileGroups(ctFilePaths);
+          let ctEffectivelyGrouped = hasNamedGroups(ctFileGroups);
+          if (ctMode === 1 && !ctEffectivelyGrouped) {
+            const autoGroups = autoGroupByHeuristic(ctFilePaths);
+            if (autoGroups.length > 0) {
+              ctFileGroups = autoGroups;
+              ctEffectivelyGrouped = true;
+            }
+          }
           const ctAllGroupReports = [];
           for (const fg of ctFileGroups) {
             const fgPaths = fg.files;
             if (fgPaths.length === 0) continue;
             const fgId = fg.id;
-            if (ctMode === 0 && !ctIsGrouped) {
+            if (ctMode === 0 && !ctEffectivelyGrouped) {
               const ctRetries = ctMaxRetries ?? 1;
               if (ctRetries > 1) {
                 const rpResult = await robustPerFileProcess(fgPaths, {
@@ -33301,7 +33458,6 @@ RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/M
             const ctPromptBytes = Buffer.byteLength(ctPromptBase, "utf-8") + Buffer.byteLength(`Expert ${lang} developer...`, "utf-8");
             const { groups: ctGroups, autoBatched: ctAutoBatched, skipped: ctSkipped } = readAndGroupFiles(fgPaths, ctPromptBytes, ctRedact, ctBudgetBytes, ctRegexRedact);
             const ctBatchResults = [];
-            const ctBatchPaths = [];
             if (ctSkipped.length > 0) {
               ctBatchResults.push(`SKIPPED (exceeds payload budget): ${ctSkipped.length} file(s)
 ${ctSkipped.map((f) => `  - ${f}`).join("\n")}`);
@@ -33309,8 +33465,6 @@ ${ctSkipped.map((f) => `  - ${f}`).join("\n")}`);
             for (let gi = 0; gi < ctGroups.length; gi++) {
               const group = ctGroups[gi];
               let userContent = ctPromptBase;
-              if (ctMode === 1 && !ctIsGrouped)
-                userContent += buildPerFileSectionPrompt(group.map((fd) => fd.path));
               for (const fd of group) {
                 userContent += `
 
@@ -33331,27 +33485,14 @@ RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/M
               );
               const codeFooter = formatFooter(codeResp, "code_task", group[0]?.path);
               if (codeResp.content.trim().length > 0) {
-                if (ctMode === 1 && !ctIsGrouped) {
-                  ctBatchPaths.push(
-                    saveResponse("code_task", codeResp.content + codeFooter, {
-                      model: codeResp.model,
-                      task: ctTask,
-                      inputFile: group[0]?.path
-                    })
-                  );
-                } else {
-                  ctBatchResults.push(
-                    ctAutoBatched ? `## Batch ${gi + 1}/${ctGroups.length}
+                ctBatchResults.push(
+                  ctAutoBatched ? `## Batch ${gi + 1}/${ctGroups.length}
 
 Files: ${group.map((fd) => fd.path).join(", ")}
 
 ${codeResp.content}${codeFooter}` : codeResp.content + codeFooter
-                  );
-                }
+                );
               }
-            }
-            if (ctMode === 1 && !ctIsGrouped) {
-              return ctBatchPaths.length > 0 ? { content: [{ type: "text", text: ctBatchPaths.join("\n") }] } : { content: [{ type: "text", text: "FAILED: LLM returned empty response for all batches." }], isError: true };
             }
             if (ctBatchResults.length === 0) continue;
             const ctFinalContent = ctBatchResults.join("\n\n---\n\n");
@@ -33362,8 +33503,9 @@ ${codeResp.content}${codeFooter}` : codeResp.content + codeFooter
               inputFile: fgPaths[0],
               groupId: fgId || void 0
             });
-            if (ctIsGrouped) {
-              ctAllGroupReports.push(`[group:${fgId}] ${savedPath}`);
+            if (ctEffectivelyGrouped) {
+              const labelId = fgId || "auto";
+              ctAllGroupReports.push(`[group:${labelId}] ${savedPath}`);
             } else {
               return { content: [{ type: "text", text: savedPath }] };
             }
@@ -34048,12 +34190,20 @@ Settings saved to ${SETTINGS_FILE}`
                 };
             }
           }
-          const bcFileGroups = parseFileGroups(uniqueFiles);
-          if (hasNamedGroups(bcFileGroups)) {
+          let bcFileGroups = parseFileGroups(uniqueFiles);
+          let bcEffectivelyGrouped = hasNamedGroups(bcFileGroups);
+          if (bcMode === 1 && !bcEffectivelyGrouped) {
+            const autoGroups = autoGroupByHeuristic(uniqueFiles);
+            if (autoGroups.length > 0) {
+              bcFileGroups = autoGroups;
+              bcEffectivelyGrouped = true;
+            }
+          }
+          if (bcEffectivelyGrouped) {
             const bcGroupReports = [];
             for (const fg of bcFileGroups) {
               if (fg.files.length === 0) continue;
-              const gid = fg.id || "ungrouped";
+              const gid = fg.id || "auto";
               const gBatchId = randomUUID();
               const gTask = resolvePrompt(bcInstructions, bcInstructionsFilesPaths).trim() || "Find all bugs, type errors, logic errors, security vulnerabilities, and potential runtime failures.";
               const gRl = await getRateLimitConfig();
@@ -34732,7 +34882,7 @@ ${content}`
             (r) => !r.success && r.error !== "Batch aborted"
           );
           const skipped = batchResults.filter((r) => r.error === "Batch aborted");
-          if ((sfMode === 1 || sfMode === 2) && succeeded.length > 0) {
+          if (sfMode === 2 && succeeded.length > 0) {
             const sections = [];
             for (const r of succeeded) {
               const content = r.reportPath && existsSync2(r.reportPath) ? readFileSync2(r.reportPath, "utf-8") : "";
@@ -34755,6 +34905,56 @@ ${content}`);
               `Batch UUID: ${batchId}`,
               `MERGED REPORT: ${mergedPath}`
             ];
+            if (failed.length > 0) {
+              summary.push("", "FAILED:");
+              for (const r of failed) summary.push(`  ${r.filePath}: ${r.error}`);
+            }
+            if (aborted2) summary.push("", `ABORTED: ${abortReason}`);
+            return {
+              content: [{ type: "text", text: summary.join("\n") }],
+              isError: aborted2
+            };
+          }
+          if (sfMode === 1 && succeeded.length > 0) {
+            const succeededPaths = succeeded.map((r) => r.filePath);
+            const sfAutoGroups = autoGroupByHeuristic(succeededPaths);
+            const pathToResult = /* @__PURE__ */ new Map();
+            for (const r of succeeded) pathToResult.set(r.filePath, r);
+            const sfGroupReportPaths = [];
+            for (const fg of sfAutoGroups) {
+              if (fg.files.length === 0) continue;
+              const sections = [];
+              for (const fp of fg.files) {
+                const r = pathToResult.get(fp);
+                if (!r) continue;
+                const content = r.reportPath && existsSync2(r.reportPath) ? readFileSync2(r.reportPath, "utf-8") : "";
+                sections.push(`## File: ${fp}
+
+${content}`);
+              }
+              if (sections.length === 0) continue;
+              const gid = fg.id || "auto";
+              const groupPath = saveResponse(
+                "scan_folder",
+                sections.join("\n\n---\n\n"),
+                {
+                  model: currentBackend.model,
+                  task: sfPrompt,
+                  inputFile: fg.files[0],
+                  groupId: gid
+                }
+              );
+              sfGroupReportPaths.push(`[group:${gid}] ${groupPath}`);
+            }
+            const summary = [
+              `SCAN COMPLETE \u2014 ${succeeded.length} processed, ${failed.length} failed, ${skipped.length} skipped (${files.length} files found)`,
+              `Folder: ${folder_path}`,
+              `Batch UUID: ${batchId}`
+            ];
+            if (sfGroupReportPaths.length > 0) {
+              summary.push("", `GROUP REPORTS (${sfGroupReportPaths.length}):`);
+              for (const line of sfGroupReportPaths) summary.push(`  ${line}`);
+            }
             if (failed.length > 0) {
               summary.push("", "FAILED:");
               for (const r of failed) summary.push(`  ${r.filePath}: ${r.error}`);
@@ -35122,27 +35322,138 @@ ${fd.block}`;
               isError: seiAborted
             };
           }
-          const seiBatchReportPaths = [];
-          for (const r of seiBatchOk) {
-            const batchHeader = `# search_existing_implementations \u2014 Batch ${r.idx + 1}/${seiGroups.length}
+          if (seiMode === 0) {
+            const seiPerFileReports = [];
+            const seiPerFileMissing = [];
+            for (const r of seiBatchOk) {
+              const sections = splitPerFileSections(r.content, r.filePaths);
+              for (const fp of r.filePaths) {
+                const body = sections.get(fp);
+                if (!body || !body.trim()) {
+                  seiPerFileMissing.push({ inputPath: fp, batchIdx: r.idx });
+                  continue;
+                }
+                const header = `# search_existing_implementations \u2014 ${fp}
 
 **Feature**: ${descTrimmed}
-**Files in batch**: ${r.filePaths.length}
+**Source file**: ${fp}
+**Batch**: ${r.idx + 1}/${seiGroups.length}
+**Model**: ${r.model}
 
-` + r.filePaths.map((fp) => `  - ${fp}`).join("\n") + "\n\n---\n\n";
+---
+
+`;
+                const reportPath = saveResponse(
+                  "search_existing_implementations",
+                  header + body.trim(),
+                  {
+                    model: r.model,
+                    task: descTrimmed,
+                    inputFile: fp
+                  },
+                  void 0,
+                  outputDir
+                );
+                seiPerFileReports.push({ inputPath: fp, reportPath });
+              }
+            }
+            const seiModeZeroLines = [
+              `SEARCH COMPLETE \u2014 ${seiBatchOk.length}/${seiGroups.length} batches processed, ${files.length} files scanned, ${seiSkipped.length} skipped`,
+              `Folders: ${folderPaths.join(", ")}`,
+              sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
+              diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
+              `Batch UUID: ${seiBatchId}`,
+              ""
+            ];
+            if (seiPerFileReports.length > 0) {
+              seiModeZeroLines.push(`REPORTS (one per input file, ${seiPerFileReports.length} total):`);
+              for (const p of seiPerFileReports) {
+                seiModeZeroLines.push(`  ${p.inputPath} -> ${p.reportPath}`);
+              }
+            }
+            if (seiPerFileMissing.length > 0) {
+              seiModeZeroLines.push(
+                "",
+                `MISSING SECTIONS (${seiPerFileMissing.length} files had no per-file section in the LLM response \u2014 raw batch content preserved in batch reports):`
+              );
+              for (const m of seiPerFileMissing) {
+                seiModeZeroLines.push(`  ${m.inputPath} (batch ${m.batchIdx + 1}/${seiGroups.length})`);
+              }
+            }
+            if (seiSkipped.length > 0) {
+              seiModeZeroLines.push("", `SKIPPED (exceeded payload budget, ${seiSkipped.length}):`);
+              for (const s of seiSkipped) seiModeZeroLines.push(`  ${s}`);
+            }
+            if (seiBatchFailed.length > 0) {
+              seiModeZeroLines.push("", `FAILED BATCHES (${seiBatchFailed.length}):`);
+              for (const r of seiBatchFailed) {
+                seiModeZeroLines.push(
+                  `  Batch ${r.idx + 1}/${seiGroups.length} (${r.filePaths.length} files): ${r.error ?? "empty response"}`
+                );
+              }
+            }
+            if (seiAborted) seiModeZeroLines.push("", `ABORTED: ${seiAbortReason}`);
+            return {
+              content: [{ type: "text", text: seiModeZeroLines.join("\n") }],
+              isError: seiAborted
+            };
+          }
+          const seiAutoGroups = autoGroupByHeuristic(files);
+          const seiSectionByPath = /* @__PURE__ */ new Map();
+          const seiModelByPath = /* @__PURE__ */ new Map();
+          const seiBatchIdxByPath = /* @__PURE__ */ new Map();
+          for (const r of seiBatchOk) {
+            const sections = splitPerFileSections(r.content, r.filePaths);
+            for (const fp of r.filePaths) {
+              const body = sections.get(fp);
+              if (body && body.trim().length > 0) {
+                seiSectionByPath.set(fp, body.trim());
+                seiModelByPath.set(fp, r.model);
+                seiBatchIdxByPath.set(fp, r.idx);
+              }
+            }
+          }
+          const seiGroupReportPaths = [];
+          const seiGroupMissing = [];
+          for (const fg of seiAutoGroups) {
+            if (fg.files.length === 0) continue;
+            const gid = fg.id || "auto";
+            const sections = [];
+            sections.push(
+              `# search_existing_implementations \u2014 group ${gid}
+
+**Feature**: ${descTrimmed}
+**Files in group**: ${fg.files.length}
+
+` + fg.files.map((fp) => `  - ${fp}`).join("\n") + "\n\n---\n"
+            );
+            let anyBody = false;
+            for (const fp of fg.files) {
+              const body = seiSectionByPath.get(fp);
+              if (!body) {
+                seiGroupMissing.push(fp);
+                continue;
+              }
+              anyBody = true;
+              sections.push(`## File: ${fp}
+
+${body}
+`);
+            }
+            if (!anyBody) continue;
             const reportPath = saveResponse(
               "search_existing_implementations",
-              batchHeader + r.content.trim(),
+              sections.join("\n"),
               {
-                model: r.model,
+                model: ensembleModelLabel(seiUseEnsemble),
                 task: descTrimmed,
-                inputFile: r.filePaths[0] ?? folderPaths[0],
-                groupId: `batch-${r.idx + 1}`
+                inputFile: fg.files[0],
+                groupId: gid
               },
               void 0,
               outputDir
             );
-            seiBatchReportPaths.push(reportPath);
+            seiGroupReportPaths.push(`[group:${gid}] ${reportPath}`);
           }
           const seiSummaryLines = [
             `SEARCH COMPLETE \u2014 ${seiBatchOk.length}/${seiGroups.length} batches processed, ${files.length} files scanned, ${seiSkipped.length} skipped`,
@@ -35152,9 +35463,16 @@ ${fd.block}`;
             `Batch UUID: ${seiBatchId}`,
             ""
           ];
-          if (seiBatchReportPaths.length > 0) {
-            seiSummaryLines.push(`REPORTS (one per batch, ${seiBatchReportPaths.length} total):`);
-            for (const p of seiBatchReportPaths) seiSummaryLines.push(`  ${p}`);
+          if (seiGroupReportPaths.length > 0) {
+            seiSummaryLines.push(`GROUP REPORTS (one per auto-group, ${seiGroupReportPaths.length} total):`);
+            for (const p of seiGroupReportPaths) seiSummaryLines.push(`  ${p}`);
+          }
+          if (seiGroupMissing.length > 0) {
+            seiSummaryLines.push(
+              "",
+              `MISSING SECTIONS (${seiGroupMissing.length} files had no per-file section in the LLM response):`
+            );
+            for (const p of seiGroupMissing) seiSummaryLines.push(`  ${p}`);
           }
           if (seiSkipped.length > 0) {
             seiSummaryLines.push("", `SKIPPED (exceeded payload budget, ${seiSkipped.length}):`);
@@ -36100,13 +36418,20 @@ ${diffFence}` + sourceFileBlocks
             crInstructionsFilesPaths
           );
           const crMode = resolveAnswerMode(crRawMode, 0);
-          const crFileGroups = parseFileGroups(crFilePathsAll);
-          const crIsGrouped = hasNamedGroups(crFileGroups);
-          if (crIsGrouped) {
+          let crFileGroups = parseFileGroups(crFilePathsAll);
+          let crEffectivelyGrouped = hasNamedGroups(crFileGroups);
+          if (crMode === 1 && !crEffectivelyGrouped) {
+            const autoGroups = autoGroupByHeuristic(crFilePathsAll);
+            if (autoGroups.length > 0) {
+              crFileGroups = autoGroups;
+              crEffectivelyGrouped = true;
+            }
+          }
+          if (crEffectivelyGrouped) {
             const crGroupReports = [];
             for (const fg of crFileGroups) {
               if (fg.files.length === 0) continue;
-              const gid = fg.id || "ungrouped";
+              const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
                 if (!existsSync2(filePath)) {
@@ -36337,12 +36662,20 @@ ${crResp.content}${crFooter}`
             ciInstructionsFilesPaths
           );
           const ciMode = resolveAnswerMode(ciRawMode, 0);
-          const ciFileGroups = parseFileGroups(ciFilePathsAll);
-          if (hasNamedGroups(ciFileGroups)) {
+          let ciFileGroups = parseFileGroups(ciFilePathsAll);
+          let ciEffectivelyGrouped = hasNamedGroups(ciFileGroups);
+          if (ciMode === 1 && !ciEffectivelyGrouped) {
+            const autoGroups = autoGroupByHeuristic(ciFilePathsAll);
+            if (autoGroups.length > 0) {
+              ciFileGroups = autoGroups;
+              ciEffectivelyGrouped = true;
+            }
+          }
+          if (ciEffectivelyGrouped) {
             const ciGroupReports = [];
             for (const fg of ciFileGroups) {
               if (fg.files.length === 0) continue;
-              const gid = fg.id || "ungrouped";
+              const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
                 if (!existsSync2(filePath)) {
@@ -36651,8 +36984,16 @@ FAILED: File not found.`);
           const csSystemBytes = Buffer.byteLength(csSystemPrompt, "utf-8");
           const csExtraBytes = Buffer.byteLength(csExtraInstructions, "utf-8");
           const csPromptBytes = csSpecBytes + csSystemBytes + csExtraBytes;
-          const csFileGroups = csFolderPath ? [{ id: "", files: csFilePaths }] : parseFileGroups(csFilePaths);
-          const csIsGrouped = hasNamedGroups(csFileGroups);
+          let csFileGroups = csFolderPath ? [{ id: "", files: csFilePaths }] : parseFileGroups(csFilePaths);
+          let csEffectivelyGrouped = hasNamedGroups(csFileGroups);
+          if (csMode === 1 && !csEffectivelyGrouped) {
+            const autoSourcePaths = csFolderPath ? csFilePaths : csFilePaths;
+            const autoGroups = autoGroupByHeuristic(autoSourcePaths);
+            if (autoGroups.length > 0) {
+              csFileGroups = autoGroups;
+              csEffectivelyGrouped = true;
+            }
+          }
           const csAllGroupReports = [];
           for (const fg of csFileGroups) {
             const fgPaths = fg.files;
@@ -36673,9 +37014,6 @@ FAILED: File not found.`);
                 userContent += "## ADDITIONAL INSTRUCTIONS\n\n" + csExtraInstructions + "\n\n";
               }
               userContent += "## SOURCE FILES TO CHECK\n\n";
-              if (csMode === 1 && !csIsGrouped) {
-                userContent += buildPerFileSectionPrompt(group.map((fd) => fd.path));
-              }
               for (const fd of group) {
                 userContent += `
 
@@ -36715,13 +37053,14 @@ ${csResp.content}${csFooter}`
               inputFile: fgPaths[0],
               groupId: fgId || void 0
             });
-            if (csIsGrouped) {
-              csAllGroupReports.push(`[group:${fgId}] ${csReportPath}`);
+            if (csEffectivelyGrouped) {
+              const labelId = fgId || "auto";
+              csAllGroupReports.push(`[group:${labelId}] ${csReportPath}`);
             } else {
               return { content: [{ type: "text", text: csReportPath }] };
             }
           }
-          if (csIsGrouped) {
+          if (csEffectivelyGrouped) {
             if (csAllGroupReports.length === 0) {
               return { content: [{ type: "text", text: "FAILED: No results for any group." }], isError: true };
             }

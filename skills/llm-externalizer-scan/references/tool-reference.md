@@ -68,8 +68,8 @@ Use `instructions_files_paths` to share reusable review rules, coding standards,
 | `extensions` | `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs`, `scan_folder` | string array | File extensions to include when using `folder_path`. |
 | `exclude_dirs` | `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs`, `scan_folder` | string array | Additional dirs to skip beyond built-in exclusions (hidden dirs, node_modules, .git, dist, build). |
 | `use_gitignore` | `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs`, `scan_folder` | boolean (default: true) | Use `.gitignore` rules via `git ls-files`. Handles submodules and nested git repos. Set `false` to include gitignored files. |
-| `ensemble` | All content tools | boolean (default: true on OpenRouter) | Run both models in parallel. Set `false` for simple tasks to save tokens. |
-| `answer_mode` | Multi-file tools | 0, 1, or 2 | 0=per-file reports (parallel+retry when max_retries>1), 1=per-request sections, 2=merged. |
+| `ensemble` | All content tools | boolean (default: true on OpenRouter) | Run all ensemble models in parallel. Set `false` for simple tasks to save tokens. |
+| `answer_mode` | Multi-file tools | 0, 1, or 2 | 0 = ONE REPORT PER FILE (parallel+retry when `max_retries>1`). 1 = ONE REPORT PER GROUP (auto-grouped by subfolder/language/basename if no `---GROUP:id---` markers, max 1 MB per group). 2 = SINGLE REPORT (merged). |
 | `max_retries` | `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs` | number (default: 1) | Max retries per file in mode 0. Set 3 for robust batch processing with exponential backoff and circuit breaker (aborts after 3 consecutive failures). |
 | `redact_regex` | All content tools | string | JavaScript regex pattern to redact matching strings before sending to LLM. Applied after secret redaction. Alphanumeric matches become `[REDACTED:USER_PATTERN]`, numeric-only matches become zero-padded placeholders. |
 

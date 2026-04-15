@@ -30153,6 +30153,22 @@ Usage:
   llm-externalizer model-info <model-id> [--markdown | --json [file]] [--no-color]
   llm-externalizer search-existing "<description>" [<src-files>...] --in <path> [--base <ref>] [--diff <path>] [--free]
 
+search-existing batches the codebase into FFD-packed LLM requests of typically
+1-5 files each, or one group per request if you pass ---GROUP:id--- markers.
+The LLM never sees the whole codebase at once \u2014 each file is compared against
+the description + optional source files + optional diff, so no cross-file
+visibility is needed. In ensemble mode each file receives 3 different LLM
+responses (3 models in parallel); in --free mode each file receives 1
+response from the free Nemotron model.
+
+answer_mode (all LLM Externalizer tools):
+  0 = ONE REPORT PER FILE     \u2014 one .md per input file, batching unchanged.
+  1 = ONE REPORT PER GROUP    \u2014 one .md per group. If ---GROUP:id--- markers
+                                are not supplied, the MCP server auto-groups
+                                files by subfolder/extension/basename with
+                                1 MB per group.
+  2 = SINGLE REPORT (merged)  \u2014 one .md for the whole operation.
+
 search-existing flags:
   --in <path>            (MANDATORY) Codebase folder to scan. Repeat or comma-separate.
   --src <path>           Alternative to positional source-file args. Repeatable.
@@ -30165,9 +30181,8 @@ search-existing flags:
   --max-payload-kb <n>   Max batch payload size in KB (default 400). Larger packs
                          more files per LLM call.
   --no-gitignore         Disable .gitignore filtering (default: enabled).
-  --answer-mode <n>      2 = single merged report with all batches (default).
-                         1 = one report per FFD batch. 0 falls back to 1 (per-file
-                         calls would defeat the batching this tool relies on).
+  --answer-mode <n>      Output organization \u2014 see the answer_mode table above.
+                         Default for search-existing is 2 (single merged report).
   --redact-regex <pat>   Custom JavaScript regex to redact matching tokens from
                          file content before sending to the LLM.
   --free                 Use free Nemotron model (lower quality, prompts logged).

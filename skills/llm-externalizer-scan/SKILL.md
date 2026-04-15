@@ -16,7 +16,7 @@ Scan the target in `$ARGUMENTS` with the LLM Externalizer ensemble and return on
 
 ## Overview
 
-Run a codebase scan via the LLM Externalizer MCP server using the active profile (default: `remote-ensemble` — Gemini 2.5 Flash + Grok 4.1 Fast + Qwen 3.6 Plus, parallel). One report is written per file. Because this skill uses `context: fork`, work runs in the restricted `llm-ext-reviewer` subagent (Haiku-class, no Write/Edit) and only the final report paths come back.
+Run a codebase scan via the LLM Externalizer MCP server using the active profile (default: `remote-ensemble`, parallel). One report is written per file. Uses `context: fork` — work runs in the restricted `llm-ext-reviewer` subagent (Haiku, no Write/Edit) and only final report paths come back.
 
 ## Prerequisites
 
@@ -28,21 +28,25 @@ Run a codebase scan via the LLM Externalizer MCP server using the active profile
 
 Copy this checklist and track your progress:
 
-1. [ ] Parse `$ARGUMENTS` for **target** (folder/file/glob, default `.`), **focus** (bugs/security/all/"duplicate check"/"already done?"), and **budget** (free if "free"/"cheap"/"quick" present).
-2. [ ] Call `mcp__llm-externalizer__discover` to verify service is online. Abort with `[FAILED] — service offline` if not.
-3. [ ] Pick the right tool for the intent:
-   - **Duplicate check / "is this already implemented?"** → `mcp__llm-externalizer__search_existing_implementations` with `feature_description`, `folder_path`, and optionally `source_files` / `diff_path`. Exhaustive per-file YES/NO, FFD-batched for 10k-file codebases.
-   - **General audit (bugs / security / leaks)** on a folder → `mcp__llm-externalizer__scan_folder` with `use_gitignore: true`, `answer_mode: 0`.
-   - **Small batch (≤5 files)** → `mcp__llm-externalizer__code_task` with `answer_mode: 0`, `max_retries: 3`.
-   - **Glob → file list** → use `Glob` to expand, then `code_task`.
-4. [ ] Call the chosen tool. Pass `free: true` only if the user asked for it (warn about prompt logging first).
-5. [ ] Use the default rubric in `instructions` unless the user supplied a focus override: *"Audit for: 1) Logic bugs, 2) Error handling gaps, 3) Security issues, 4) Resource leaks, 5) Broken references. Reference function names. Be terse."*
-6. [ ] Collect report paths from the tool result. Do NOT read or summarize report contents.
-7. [ ] Return paths to the orchestrator using the Output format below.
+1. [ ] Parse `$ARGUMENTS` for **target** (folder/file/glob, default `.`), **focus** (bugs/security/duplicate-check/etc.), **budget** (`free` flag if user asked).
+2. [ ] `mcp__llm-externalizer__discover`. Abort `[FAILED] — service offline` if offline.
+3. [ ] Pick the tool:
+   - **Duplicate check / "already implemented?"** → `search_existing_implementations` with `feature_description`, `folder_path`, and optional `source_files` / `diff_path`.
+   - **General audit on a folder** → `scan_folder` with `use_gitignore: true`, `answer_mode: 0`.
+   - **≤5 files** → `code_task` with `answer_mode: 0`, `max_retries: 3`.
+   - **Glob** → `Glob` to expand, then `code_task`.
+4. [ ] Call the tool. Pass `free: true` only if asked (warn about prompt logging first).
+5. [ ] Default rubric for `instructions` unless overridden: *"Audit for: 1) Logic bugs, 2) Error handling gaps, 3) Security issues, 4) Resource leaks, 5) Broken references. Reference function names. Be terse."*
+6. [ ] Collect report paths. Do NOT read or summarize report contents.
+7. [ ] Return paths using the Output format below.
 
 ## Output
 
-One `.md` report per source file under `<project>/reports_dev/llm_externalizer/`. Filenames embed the source filename.
+Reports under `<project>/reports_dev/llm_externalizer/`. Filenames embed the source filename or group id.
+
+**Batching**: LLM never sees the whole codebase at once. Files are FFD-packed into ~400 KB batches (1–5 files each) or one group per request with `---GROUP:id---` markers. In ensemble mode each file gets 3 responses; in free/local mode each file gets 1.
+
+**answer_mode**: `0` = ONE REPORT PER FILE (default for scan_folder). `1` = ONE REPORT PER GROUP — auto-groups files by subfolder/extension/basename (1 MB per group) if no `---GROUP:id---` markers. `2` = SINGLE REPORT (merged). `answer_mode` controls disk output only, not LLM visibility. For cross-file analysis use `search_existing_implementations`.
 
 Reply format (exact, no preamble):
 ```

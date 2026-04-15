@@ -11,7 +11,15 @@ effort: medium
 
 Thin wrapper over `mcp__llm-externalizer__search_existing_implementations`. All heavy lifting (folder walking, FFD bin-packing, batched ensemble LLM calls, source-file exclusion) happens server-side.
 
-The server packs files into batches up to `max_payload_kb` (default 400 KB) each, so one LLM call processes many files at once. For a 10k-file codebase this typically means ~500 LLM calls instead of 10k. Default `answer_mode` is 2 (single merged report with per-batch sections and per-file `NO` / `YES symbol=... lines=...` entries). EXHAUSTIVE: every occurrence in every file is reported — no 5-match cap — so a reviewer can delete every duplicate and keep only the PR's new implementation.
+**How the LLM sees the codebase**: The server packs files into batches up to `max_payload_kb` (default 400 KB) each — **typically 1–5 files per batch**. Each batch is ONE LLM call. The LLM never sees the whole codebase at once and doesn't need to: each file is compared against the reference (feature description + optional source files + optional diff), not against other files. In **ensemble mode** each file receives 3 responses from 3 LLMs running in parallel; in `--free` mode each file receives 1 response. For a 10k-file codebase this is typically ~500 LLM calls instead of 10k.
+
+**Output** (default `answer_mode` is 2):
+
+- **answer_mode : 0 — ONE REPORT PER FILE.** MCP splits each batch response by `## File:` markers and writes one `.md` per input file. Output: `<input_file> -> <report_file>` pairs.
+- **answer_mode : 1 — ONE REPORT PER GROUP.** MCP auto-groups scanned files by subfolder/extension/basename (max 1 MB per group) and writes one merged `.md` per group. Output: `[group:id] <report>` lines.
+- **answer_mode : 2 — SINGLE REPORT (default).** One merged `.md` with per-batch sections and per-file `NO` / `YES symbol=... lines=...` entries.
+
+Batching is identical across all three modes — only the persistence differs. EXHAUSTIVE: every occurrence in every file is reported (no cap) so a reviewer can delete every duplicate and keep only the PR's new implementation.
 
 ## Step 1 — Parse `$ARGUMENTS`
 

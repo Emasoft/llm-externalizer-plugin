@@ -34,7 +34,19 @@ Use when you need to analyze files without consuming orchestrator context, scan 
 
 ## Output
 
-All responses saved as `.md` files in `reports_dev/llm_externalizer/`. Output depends on `answer_mode`: `0` (one .md per input file, per-file LLM calls), `1` (one .md per request with per-file sections inside, FFD-batched), `2` (one .md for the entire operation, FFD-batched). Defaults differ per tool — `scan_folder` defaults to 0, most others (including `search_existing_implementations`) default to 2. Check each tool's schema.
+**READ THIS — common misconception**: `answer_mode` controls how reports are written to disk, NOT how many files the LLM sees per request. The LLM **never** sees the whole set at once. Files are batched into requests of typically **1–5 files each** (FFD bin packing into ~400 KB batches, or one group per request when `---GROUP:id---` markers are supplied). In **ensemble** mode each file gets **3 responses** from 3 LLMs; in **free** and **local** mode each file gets **1 response**.
+
+For cross-file analysis across a whole codebase use `search_existing_implementations` — each file is compared against a REFERENCE.
+
+Reports are `.md` files in `reports_dev/llm_externalizer/`.
+
+**answer_mode : 0** — ONE REPORT PER FILE. One `.md` per input file; MCP splits each batch response by `## File:` markers. Best for per-file fan-out.
+
+**answer_mode : 1** — ONE REPORT PER GROUP. One `.md` per group. Without `---GROUP:id---` markers MCP auto-groups by subfolder → extension → namespace → basename → shared imports (max 1 MB per group). Best for per-module review.
+
+**answer_mode : 2** — SINGLE REPORT. Everything merged into one `.md`. Best for a top-level audit summary.
+
+Defaults: `scan_folder`=0, `chat` / `code_task` / `check_*`=2, `search_existing_implementations`=2.
 
 ## Error Handling
 

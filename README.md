@@ -35,6 +35,14 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 
 ## MCP Tools
 
+> ⚠️ **How files reach the LLM (read this before picking `answer_mode`)**:
+> All multi-file tools pack files into LLM requests of **typically 1–5 files each** — FFD bin packing into ~400 KB batches, or one group per request when `---GROUP:id---` markers are used. The LLM **never** sees your whole set of input files at once, and `answer_mode` does NOT change that — it only controls how reports are persisted to disk.
+>
+> - **Ensemble mode**: each file is reviewed by **3 different LLMs** in parallel, so every file receives **3 distinct responses**.
+> - **Free mode** (`free: true`, Nemotron 120B free tier) and **local mode**: each file receives **1 response** from a single model.
+>
+> If you need cross-file analysis across the whole codebase (e.g. "find every duplicate implementation of X"), use `search_existing_implementations` — it is the only tool designed for that use case and compares each file against a REFERENCE (description + optional source files + optional diff) rather than against other files.
+
 ### Read-only analysis tools
 
 | Tool | Purpose |
@@ -89,21 +97,50 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 | `max_files` | 2500 | Maximum number of files to discover from `folder_path` |
 | `use_gitignore` | true | Use `.gitignore` rules to filter files. Handles submodules and nested git repos. Set `false` to include gitignored files |
 
-### Output modes
+### Output modes (`answer_mode`)
 
-Controls how reports are organized when processing multiple files. Each mode produces `.md` files in `reports_dev/llm_externalizer/`.
+`answer_mode` controls **only how reports are persisted to disk**. It does NOT change how many files the LLM sees per request — that is governed by the batching algorithm, independently of this field. The LLM always sees **1–5 files per request** (FFD-packed, or one group per request when `---GROUP:id---` markers are supplied). In **ensemble mode** each file receives **3 different responses** from 3 LLMs in parallel; in **free mode** and **local mode** each file receives **1 response**.
 
-| Mode | Name | Output | Best for |
-|------|------|--------|----------|
-| **0** (default) | Per-file | One `.md` report per source file. Each report contains findings from all 3 ensemble models combined. Filename includes the source file name for easy identification. | Large codebases, CI pipelines, delegating files to different agents. Each agent reads only its own file's report. |
-| **1** | Per-request | One `.md` per LLM request (may cover multiple files if batched together). Structured per-file sections inside. | Medium projects where you want fewer output files but still see per-file breakdown. |
-| **2** | Merged | Everything merged into one `.md` file. All files, all models, one report. | Small projects (<10 files), quick overviews, single-file analysis. |
+---
 
-**Mode 0 response format** — the tool returns one report path per line:
+**answer_mode : 0**
+- **NAME**: ONE REPORT PER FILE
+- **DESCRIPTION**: One `.md` report is saved for every input file. Files are still batched into LLM requests of typically 1–5 files each; each LLM response contains structured per-file sections that the MCP server splits apart and persists as individual reports. Output is a list of `<input_file_path> -> <report_path>` pairs.
+- **FORMAT**: markdown (`.md`)
+- **WHEN TO USE**: Downstream consumers (agents, tools, CI) need to pick up one file's review without scanning an aggregate. Typical for per-file lint/audit pipelines and fan-out workflows.
+- **ADVANTAGES**: Trivially routed — one file in, one report out. Supports parallel execution with retry and circuit breaker via `max_retries`.
+- **DISADVANTAGES**: `N` files → `N` report files on disk. Slightly more overhead when you only want a big-picture summary.
+
+**answer_mode : 1**
+- **NAME**: ONE REPORT PER GROUP
+- **DESCRIPTION**: One `.md` report is saved per **group of files**. Groups are either explicit (`---GROUP:id---` / `---/GROUP:id---` markers in `input_files_paths`) or auto-generated. When the caller supplies markers, files inside each `---GROUP:id---` block share a report. When no markers are supplied, the MCP server auto-groups files intelligently using these priorities, in order: (1) parent **subfolder**, (2) **language/format** (file extension), (3) **namespace/package** inferred from the directory hierarchy, (4) shared **filename prefix** (e.g. `user.ts` + `user.test.ts`), (5) shared **imports/libraries**. Each auto-group contains at most **1 MB of source**; oversized buckets are split into sub-groups via bin packing. The LLM still processes each group in isolation and cannot cross-reference files across groups.
+- **FORMAT**: markdown (`.md`)
+- **WHEN TO USE**: You want one report per logical chunk of the codebase (e.g. one report per feature folder, one per module). Keeps related-file context together while still producing separate files for independent groups.
+- **ADVANTAGES**: Balanced output — fewer files than mode 0, more granular than mode 2. Group boundaries match natural project structure so reports are easy to route and review.
+- **DISADVANTAGES**: Group composition is a heuristic when markers are not supplied; callers who need exact control must pass explicit `---GROUP:id---` markers.
+
+**answer_mode : 2**
+- **NAME**: SINGLE REPORT
+- **DESCRIPTION**: Exactly one `.md` report is saved, merging the responses from every LLM batch into a single document with per-batch and per-file sections.
+- **FORMAT**: markdown (`.md`)
+- **WHEN TO USE**: You want one top-level summary across all scanned files — e.g. a single audit report to share with a reviewer or attach to a PR.
+- **ADVANTAGES**: Simplest output. One file path returned. Easy to email, attach, or hand off.
+- **DISADVANTAGES**: For very large scans the merged file can be long. Downstream per-file routing requires re-parsing sections out of the single report.
+
+---
+
+**Default per tool**: `scan_folder` = 0, `chat` / `code_task` / `check_*` = 2, `search_existing_implementations` = 2.
+
+**Mode 0 response format** — one pair per line, input file → report path:
 ```
-/path/to/reports_dev/llm_externalizer/code_task_auth-ts_2026-04-07T19-43-26_a1b2c3.md
-/path/to/reports_dev/llm_externalizer/code_task_routes-ts_2026-04-07T19-43-28_d4e5f6.md
-/path/to/reports_dev/llm_externalizer/code_task_db-ts_2026-04-07T19-43-30_g7h8i9.md
+/path/to/src/auth.ts -> /path/to/reports_dev/llm_externalizer/code_task_auth-ts_2026-04-07T19-43-26_a1b2c3.md
+/path/to/src/routes.ts -> /path/to/reports_dev/llm_externalizer/code_task_routes-ts_2026-04-07T19-43-28_d4e5f6.md
+```
+
+**Mode 1 response format** — one line per group, group id tag → report path:
+```
+[group:auth-ts] /path/to/reports_dev/llm_externalizer/code_task_group-auth-ts_2026-04-07T19-43-26_a1b2c3.md
+[group:routes-ts] /path/to/reports_dev/llm_externalizer/code_task_group-routes-ts_2026-04-07T19-43-28_d4e5f6.md
 ```
 
 **Mode 2 response format** — one path:

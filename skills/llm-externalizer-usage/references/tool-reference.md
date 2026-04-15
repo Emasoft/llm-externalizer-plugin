@@ -2,6 +2,7 @@
 
 ## Table of Contents
 
+- [How batching works](#how-batching-works)
 - [Read-only analysis tools](#read-only-analysis-tools)
 - [Utility tools](#utility-tools)
 - [Standard Input Fields](#standard-input-fields)
@@ -9,6 +10,40 @@
 - [File Grouping](#file-grouping)
 - [Critical Constraints](#critical-constraints)
 - [Safety Features](#safety-features)
+
+## How batching works
+
+⚠️ **Read this before choosing `answer_mode`.** The LLM **never** sees your whole set of input files at once. All multi-file tools pack files into LLM requests of **typically 1–5 files each** — First-Fit Decreasing bin packing into ~400 KB batches, or **one group per request** when `---GROUP:id---` markers are supplied. The LLM only ever sees the files in a single batch and cannot cross-reference against files in other batches.
+
+**Ensemble vs free/local**: in **ensemble mode** (`remote-ensemble`) each file is reviewed by **3 different LLMs** in parallel, so every file receives **3 distinct responses**. In **free mode** (`free: true`, Nemotron 120B free tier) and **local mode** (LM Studio, Ollama, …) each file receives **1 response**.
+
+**`answer_mode` controls only how reports are written to disk, NOT how files are grouped into LLM requests.** Avoiding `answer_mode: 0` does NOT give the LLM wider visibility.
+
+**answer_mode : 0**
+- **NAME**: ONE REPORT PER FILE
+- **DESCRIPTION**: One `.md` per input file. MCP parses the LLM's batch response by `## File: <path>` markers and saves one report per file.
+- **FORMAT**: markdown (`.md`)
+- **WHEN TO USE**: You want fine-grained, per-file output — each downstream consumer reads only its own file's report.
+- **ADVANTAGES**: Trivially routed. Supports `max_retries` parallel + retry + circuit breaker.
+- **DISADVANTAGES**: N files → N reports on disk.
+
+**answer_mode : 1**
+- **NAME**: ONE REPORT PER GROUP
+- **DESCRIPTION**: One `.md` per group. Groups are either explicit (`---GROUP:id---` markers) or auto-generated when no markers are supplied. Auto-grouping priorities: (1) parent subfolder, (2) language/extension, (3) namespace/package, (4) shared basename prefix, (5) shared imports. Max 1 MB per group; oversized buckets split via bin packing.
+- **FORMAT**: markdown (`.md`)
+- **WHEN TO USE**: You want one report per logical chunk of the codebase (feature folder, module).
+- **ADVANTAGES**: Fewer files than mode 0, more granular than mode 2. Group boundaries match natural project structure.
+- **DISADVANTAGES**: Heuristic grouping when markers are not supplied — pass explicit markers for exact control.
+
+**answer_mode : 2**
+- **NAME**: SINGLE REPORT
+- **DESCRIPTION**: Exactly one `.md` for the whole operation, all batches merged.
+- **FORMAT**: markdown (`.md`)
+- **WHEN TO USE**: A single summary across all scanned files; easy to hand off.
+- **ADVANTAGES**: Simplest output. One path returned.
+- **DISADVANTAGES**: Large scans produce long reports; downstream per-file routing requires re-parsing sections.
+
+If you need cross-file analysis across the whole codebase (e.g. "find duplicates" or "is this already implemented?"), use `search_existing_implementations` — each file is compared against a REFERENCE, no global visibility needed.
 
 ## Read-only analysis tools
 
@@ -21,7 +56,7 @@
 | `check_references` | Auto-resolve local imports, send source+dependencies to LLM to validate symbol references. Accepts `folder_path`. | 2 (merged) |
 | `check_imports` | Two-phase: LLM extracts all import paths, server validates each exists on disk. Accepts `folder_path`. | 2 (merged) |
 | `check_against_specs` | Compare source files against a specification file. Reports violations only (not missing features). Accepts `folder_path`, `input_files_paths`, or both combined. | 2 (merged) |
-| `search_existing_implementations` | Scan a codebase for existing implementations of a described feature. FFD-batched (~500 calls for a 10k-file codebase), ensemble-backed, exhaustive per-file `NO` / `YES symbol=<name> lines=<a-b>` output. Optional `source_files` and `diff_path` for PR duplicate-check. Default `max_files: 10000`. Mode 0 falls back to mode 1 (per-batch reports) because per-file calls would defeat the batching. | 2 (merged) |
+| `search_existing_implementations` | Scan a codebase for existing implementations of a described feature. FFD-batched (~500 calls for a 10k-file codebase), ensemble-backed, exhaustive per-file `NO` / `YES symbol=<name> lines=<a-b>` output. Optional `source_files` and `diff_path` for PR duplicate-check. Default `max_files: 10000`. Mode 1 emits one merged report per auto-group; mode 0 splits each batch response by `## File:` markers into per-file reports. Batching (1-5 files per LLM call) is always active. | 2 (merged) |
 
 ## Utility tools
 
@@ -67,8 +102,8 @@ Use `instructions_files_paths` to share reusable review rules, coding standards,
 | `extensions` | `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs`, `scan_folder` | string array | File extensions to include when using `folder_path`. |
 | `exclude_dirs` | `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs`, `scan_folder` | string array | Additional dirs to skip beyond built-in exclusions (hidden dirs, node_modules, .git, dist, build). |
 | `use_gitignore` | `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs`, `scan_folder` | boolean (default: true) | Use `.gitignore` rules via `git ls-files`. Handles submodules and nested git repos. Set `false` to include gitignored files. |
-| `ensemble` | All content tools | boolean (default: true on OpenRouter) | Run both models in parallel. Set `false` for simple tasks to save tokens. |
-| `answer_mode` | Multi-file tools | 0, 1, or 2 | 0=per-file reports (parallel+retry when max_retries>1), 1=per-request sections, 2=merged. |
+| `ensemble` | All content tools | boolean (default: true on OpenRouter) | Run all ensemble models in parallel. Set `false` for simple tasks to save tokens. |
+| `answer_mode` | Multi-file tools | 0, 1, or 2 | 0 = ONE REPORT PER FILE (parallel+retry when `max_retries>1`). 1 = ONE REPORT PER GROUP (auto-grouped by subfolder/language/basename if no `---GROUP:id---` markers, max 1 MB per group). 2 = SINGLE REPORT (merged). See "How batching works" above. |
 | `max_retries` | `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs` | number (default: 1) | Max retries per file in mode 0. Set 3 for robust batch processing with exponential backoff and circuit breaker (aborts after 3 consecutive failures). |
 | `redact_regex` | All content tools | string | JavaScript regex pattern to redact matching strings before sending to LLM. Applied after secret redaction. Alphanumeric matches become `[REDACTED:USER_PATTERN]`, numeric-only matches become zero-padded placeholders. |
 
