@@ -1,6 +1,38 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [4.0.2] - 2026-04-17
+
+### Fixed
+
+- Fix(scan-and-fix): require explicit target, never silently default to cwd
+
+When the user invoked /llm-externalizer:llm-externalizer-scan-and-fix
+with no arguments, the old spec silently defaulted to `.` — which in
+real setups is often the parent of a plugin/workspace and contains
+dev/runtime folders (`*_dev/`, `reports/`, `.rechecker/`, generated
+output, sibling projects). Fixers WRITE to source files, so a wrong
+default has real blast radius.
+
+Changes to commands/llm-externalizer-scan-and-fix.md:
+
+- Target-path is now REQUIRED (unless `--file-list` is supplied).
+  The orchestrator must STOP and ask the user when no target is
+  given. The command spec calls this out in both the Arguments
+  section and Step 1.5.
+- When the user asks for "the actual codebase", auto-detect via
+  `git rev-parse --show-toplevel` (falling back to CLAUDE_PROJECT_DIR
+  if not a git repo). This gives a safe whole-codebase scan.
+- scan_folder calls now ALWAYS pass `exclude_dirs` with the standard
+  *_dev folders from the project rules plus common runtime/artifact
+  folders (reports, .rechecker, .mypy_cache, .ruff_cache, .serena,
+  .claude, .venv, __pycache__). Combined with `use_gitignore: true`
+  this keeps scans focused on source code even when the target is
+  a wide codebase root.
+
+Verified: check_references.py --strict -> 0 broken, 0 dynamic.
+
+
 ## [4.0.1] - 2026-04-17
 
 ### Documentation
