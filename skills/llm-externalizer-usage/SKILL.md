@@ -33,19 +33,9 @@ Copy this checklist and track your progress:
 
 Use when you need to analyze files without consuming orchestrator context, scan a codebase, compare files, or check imports. Do NOT use for surgical edits or tasks needing real-time tool access.
 
-## Scanning `.md` files — special rules
+## Scanning `.md` files
 
-`.md` files (agent / command / skill definitions, docs, README) are **excluded by default** from scans. The default audit rubric is a source-code audit; handing a .md file to it produces hallucinated findings or empty reports — wasted tokens either way.
-
-To scan `.md` files, pass explicit `instructions` describing what to look for: stale references to renamed symbols/commands, hardcoded values that should be placeholders, TODO/FIXME triage, outdated API snippets, coverage of specific caveats — things only a semantic reader can do.
-
-**Do NOT use LLM scans for structural validation of plugin files** — frontmatter schema, argument-hint consistency, skill description coverage, plugin.json conformance. Those are deterministic checks that belong to:
-
-- `claude-plugin-validation` (CPV) — `cpv-validate-plugin`, `cpv-validate-skill`, `cpv-semantic-validation`
-- `claude plugin validate .` — the authoritative Claude Code CLI validator
-- Project-local validation scripts (AST / schema parsers)
-
-A validator runs these in milliseconds and is reproducible. An LLM doing the same work is orders of magnitude more expensive, non-reproducible, and prone to hallucinated findings.
+`.md` files are EXCLUDED by default — the source-code rubric is wrong for prose. To include them, pass explicit `instructions` for a semantic search (stale references, outdated API snippets, TODO triage). For structural validation (frontmatter / schema / argument-hint / plugin.json) use **CPV** or `claude plugin validate .`, not the LLM.
 
 ## Output
 

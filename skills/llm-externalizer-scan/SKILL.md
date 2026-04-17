@@ -40,19 +40,9 @@ Copy this checklist and track your progress:
 6. [ ] Collect report paths. Do NOT read or summarize report contents.
 7. [ ] Return paths using the Output format below.
 
-## Scanning `.md` files — special rules
+## Scanning `.md` files
 
-`.md` files (agent / command / skill definitions, docs, README) are **excluded by default** from scans. The default audit rubric is a source-code audit; handing a .md file to it produces hallucinated findings or empty reports — wasted tokens either way.
-
-To scan `.md` files, pass explicit `instructions` describing what to look for: stale references to renamed symbols/commands, hardcoded values that should be placeholders, TODO/FIXME triage, outdated API snippets, coverage of specific caveats — things only a semantic reader can do.
-
-**Do NOT use this skill for structural validation of plugin files** — frontmatter schema, argument-hint consistency, skill description coverage, plugin.json conformance. Those are deterministic checks that belong to:
-
-- `claude-plugin-validation` (CPV) — `cpv-validate-plugin`, `cpv-validate-skill`, `cpv-semantic-validation`
-- `claude plugin validate .` — the authoritative Claude Code CLI validator
-- Project-local validation scripts (AST / schema parsers)
-
-A validator runs these in milliseconds and is reproducible. An LLM doing the same work is orders of magnitude more expensive, non-reproducible, and prone to hallucinated findings.
+`.md` files are EXCLUDED by default — the source-code rubric is wrong for prose. To include them, pass explicit `instructions` for a semantic search (stale references, outdated API snippets, TODO triage). For structural validation (frontmatter / schema / argument-hint / plugin.json) use **CPV** (`cpv-validate-plugin`, etc.) or `claude plugin validate .`, not the LLM.
 
 ## Output
 
@@ -82,21 +72,9 @@ On failure: `[FAILED] scan-<label> — <one-line reason>`
 
 ## Examples
 
-Scan a folder with the default rubric:
-```json
-{"tool": "scan_folder", "folder_path": "/path/to/src",
- "instructions": "Node.js Express API. Audit for bugs, security, error handling.",
- "use_gitignore": true, "answer_mode": 0}
-```
-
-Scan only Python files, excluding migrations:
-```json
-{"tool": "scan_folder", "folder_path": "/path/to/django-app",
- "extensions": [".py"], "exclude_dirs": ["migrations"],
- "instructions": "Django REST API. Find security vulnerabilities."}
-```
+See [Usage patterns](references/usage-patterns.md) for representative tool calls — scan folder with gitignore, filter by extensions, exclude dirs, custom rubrics, grouped processing, etc.
 
 ## Resources
 
-- [Tool reference](references/tool-reference.md) — Read-only analysis tools, Utility tools, Standard Input Fields, Advanced Parameters, File Grouping, Critical Constraints, Safety Features
-- [Usage patterns](references/usage-patterns.md) — Scan codebase, Analyze multiple files, Per-file checks, Compare versions, Compare via git diff, Check broken references, Check broken imports, Reuse instructions, Simple task, Quick factual answer, Code review with persona, Scan with gitignore, folder_path on any tool, Redact patterns, Check against specs, Folder vs specs, Grouped processing, Code-optimized analysis, Free quick scan
+- [Tool reference](references/tool-reference.md) — read-only analysis tools, utility tools, standard input fields, advanced parameters, file grouping, constraints, safety features.
+- [Usage patterns](references/usage-patterns.md) — scan codebase, per-file checks, compare versions, check references/imports, reuse instructions, scan with gitignore, redact patterns, specs checks, grouped processing.
