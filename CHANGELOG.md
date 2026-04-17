@@ -1,6 +1,47 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [4.1.0] - 2026-04-17
+
+### Added
+
+- Feat(scan-and-fix): auto-curate a file list when the user omits the target
+
+When the user invokes /llm-externalizer:llm-externalizer-scan-and-fix
+with no target-path and no --file-list, the orchestrator now runs a
+Step 0 auto-discovery pass instead of asking blindly or defaulting
+to cwd.
+
+The agent:
+
+  1. Finds the real codebase root via `git rev-parse --show-toplevel`
+     from CLAUDE_PROJECT_DIR, or searches up to 3 levels deep for
+     nested .git dirs. Handles the "parent workspace with no
+     .gitignore, child repo with one" case automatically.
+  2. Enumerates tracked files via `git ls-files` (so .gitignore is
+     respected and nothing untracked is ever scanned).
+  3. Filters the list using agent judgment — drops docs, examples,
+     samples, fixtures, templates, snapshots, build output, lock
+     files, binary assets, vendored deps, *_dev folders, runtime
+     artifacts. Keeps real source code and plugin-authored
+     markdown (agents, commands, skills).
+  4. Writes /tmp/llm-externalizer-scan-and-fix.<TS>.auto-filelist.txt.
+  5. Shows the user the curated list (root, count, breakdown,
+     samples, excluded samples) and asks for confirmation.
+  6. On confirm, continues in --file-list mode. On cancel, aborts.
+     On "edit", surfaces the tmp path for manual pruning.
+
+Rationale: only an agent can tell docs from source, distinguish
+samples from real examples, and locate the actual project repo
+when the working dir is a workspace or a parent without a
+.gitignore. A folder-path default can't do any of that.
+
+Verified: check_references.py --strict -> 32 refs, 0 broken,
+0 dynamic. (Caught one of my own prose false-positives — a
+comma-list rendered as one path — during the commit dance; fixed
+by punctuating.)
+
+
 ## [4.0.2] - 2026-04-17
 
 ### Fixed
