@@ -1,6 +1,40 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [4.1.4] - 2026-04-17
+
+### Documentation
+
+- Docs: rename 'Analyze multiple files together' -> 'in parallel'
+
+'Together' wrongly suggested the LLM can see every file in a single
+request. It cannot — the server batches 1–5 files per LLM call
+(FFD ~400 KB budget) or one group per call when ---GROUP:id---
+markers are used. 'In parallel' accurately describes the multi-file
+behavior from the LLM's point of view: each file gets processed,
+and in ensemble mode each file gets 3 responses concurrently from
+3 different models.
+
+Renamed across 6 files:
+
+  - skills/llm-externalizer-scan/references/usage-patterns.md
+    (heading + TOC link + anchor slug)
+  - skills/llm-externalizer-free-scan/references/usage-patterns.md
+    (same)
+  - skills/llm-externalizer-usage/references/usage-patterns.md
+    (same)
+  - skills/llm-externalizer-scan/SKILL.md
+    (embedded TOC text)
+  - skills/llm-externalizer-free-scan/SKILL.md
+    (embedded TOC text)
+  - skills/llm-externalizer-usage/SKILL.md
+    (embedded TOC text)
+
+Verified:
+  CPV: CRITICAL=0 MAJOR=0 MINOR=0 (WARNING=6 all pre-existing)
+  check_references.py --strict: 0 broken, 0 dynamic
+
+
 ## [4.1.3] - 2026-04-17
 
 ### Documentation
