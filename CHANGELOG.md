@@ -1,6 +1,39 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [4.1.2] - 2026-04-17
+
+### Documentation
+
+- Docs(scan-and-fix): fix wrong .md-scan examples + warn against LLM-as-validator
+
+The previous examples suggested using the LLM scan for:
+
+  - verifying skill descriptions match their tools
+  - verifying argument-hints match actual command args
+
+Those are deterministic structural checks — they belong to
+CPV (claude-plugin-validation), `claude plugin validate .`, or
+project-local AST/schema scripts. A validator runs them in
+milliseconds, is reproducible, and cannot hallucinate. An LLM
+doing the same work is orders of magnitude more expensive,
+non-reproducible, and prone to false findings.
+
+Replaced the two wrong examples with genuine LLM-appropriate
+scans that only a semantic reader can do:
+
+  - hardcoded model-id placeholders that need parameterizing
+  - TODO/FIXME/XXX triage by urgency
+  - pre-v4 API snippets that still ship in the docs
+  - coverage of the --free flag's prompt-logging caveat
+
+Added an explicit "DO NOT use this command for structural
+validation" note pointing users to CPV, `claude plugin validate`,
+and their own validation scripts.
+
+Verified: check_references.py --strict -> 0 broken, 0 dynamic.
+
+
 ## [4.1.1] - 2026-04-17
 
 ### Fixed
