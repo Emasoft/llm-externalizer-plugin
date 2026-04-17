@@ -18,6 +18,20 @@ Orchestrates a full **scan → per-file report → parallel fix → join** pass.
 - `answer_mode: 0` — ONE REPORT PER FILE. Required so each fixer agent can be dispatched with exactly one report path and zero orchestrator-side consolidation.
 - `output_dir: $CLAUDE_PROJECT_DIR/reports/llm-externalizer/` — required so the join script can find every `.fixer.`-tagged summary.
 
+## ⚠️ Cross-file / cross-reference limitation — MUST READ
+
+The LLM used by this command sees only **1–5 files per request** (FFD bin-packed into ~400 KB batches, or one group per request when `---GROUP:id---` markers are supplied). It **cannot see the whole codebase at once**, period. That has a hard consequence:
+
+- The LLM **cannot reliably verify that a reference in file A exists in file B** (or anywhere else). When you ask the default rubric to "find broken references", "check if this API call is valid", "verify symbol reachability", or anything that needs to cross-check against files NOT in the current 1–5-file batch, the LLM **hallucinates** — it guesses based on what "looks plausible", not on what actually exists.
+- The default scan rubric's "5) Broken references" line is a best-effort heuristic for obvious local breakage (e.g. a function called in the same file that doesn't exist in that file). It does NOT mean the LLM has validated every imported symbol across the codebase — it hasn't.
+
+**If you need cross-file reference validation, DO NOT use the default rubric. Use one of these two tools instead:**
+
+1. **`mcp__llm-externalizer__check_against_specs`** (the equivalent of a `validate-against-specs` command) — you provide the explicit API surface / spec file, the tool compares each source file against the spec. Every batch sees its source + the spec, so each reference is validated against an authoritative list instead of against "whatever the LLM thinks might exist". Pass the spec to this command via `--specs <path>` for the same effect.
+2. **`mcp__llm-externalizer__search_existing_implementations`** (exposed as `/llm-externalizer:llm-externalizer-search-existing-implementations`) — for semantic duplicate hunts ("is feature X already implemented somewhere?"). Each file is compared against a REFERENCE (description + optional source files + optional diff), NOT against every other file. Purpose-built for cross-codebase questions that an AST / schema check cannot answer.
+
+For everything else — logic bugs, error handling, security, resource leaks in the local function — the 1–5-file batch is enough and this command is the right tool. Just don't ask it questions that require global visibility.
+
 **Why answer_mode is forced to 0 (do NOT change this):** Modes 1 and 2 produce merged reports, which would force the orchestrator to read and split the merged file to build per-file tasks — that burns exactly the tokens this command is designed to save. With mode 0, the orchestrator only ever touches file paths (scan report paths → fixer prompts → fixer summary paths → join script input). No report content ever enters the orchestrator context.
 
 ## Arguments

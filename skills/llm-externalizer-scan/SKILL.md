@@ -40,17 +40,16 @@ Copy this checklist and track your progress:
 6. [ ] Collect report paths. Do NOT read or summarize report contents.
 7. [ ] Return paths using the Output format below.
 
-## Scanning `.md` files
+## Limitations
 
-`.md` files are EXCLUDED by default. To include, pass explicit `instructions` for a semantic search (stale refs, outdated snippets, TODO triage). Use CPV or `claude plugin validate .` for structural validation — not the LLM.
+- `.md` files EXCLUDED by default. Pass `instructions` describing a semantic search to include them. Use CPV or `claude plugin validate .` for structural validation — not the LLM.
+- LLM sees only 1–5 files per request — CANNOT cross-check a ref in file A against file B. For cross-file API validation use `check_against_specs` with an explicit spec. For "already implemented?" hunts use `search_existing_implementations`.
 
 ## Output
 
 Reports under `<project>/reports_dev/llm_externalizer/`. Filenames embed the source filename or group id.
 
-**Batching**: LLM sees 1–5 files per request (FFD ~400 KB, or one `---GROUP:id---` group). Ensemble: 3 responses/file; free/local: 1.
-
-**answer_mode**: `0`=per-file (scan_folder default), `1`=per-group (subfolder/extension/basename, 1 MB cap), `2`=merged. Controls disk output only, not LLM visibility. Use `search_existing_implementations` for cross-file analysis.
+**answer_mode**: `0`=per-file (scan_folder default), `1`=per-group (subfolder/extension/basename, 1 MB cap), `2`=merged. Controls disk output only, not LLM visibility.
 
 Reply format (exact, no preamble):
 ```

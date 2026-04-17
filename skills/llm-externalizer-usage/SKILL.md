@@ -33,9 +33,10 @@ Copy this checklist and track your progress:
 
 Use when you need to analyze files without consuming orchestrator context, scan a codebase, compare files, or check imports. Do NOT use for surgical edits or tasks needing real-time tool access.
 
-## Scanning `.md` files
+## Limitations
 
-`.md` files are EXCLUDED by default — the source-code rubric is wrong for prose. To include them, pass explicit `instructions` for a semantic search (stale references, outdated API snippets, TODO triage). For structural validation (frontmatter / schema / argument-hint / plugin.json) use **CPV** or `claude plugin validate .`, not the LLM.
+- `.md` files EXCLUDED by default. Pass `instructions` for a semantic search to include them. Structural validation → CPV / `claude plugin validate .`, not LLM.
+- LLM sees only 1–5 files per request — cannot cross-check a ref in file A against file B. Cross-file API validation → `check_against_specs` with an explicit spec. "Already implemented?" → `search_existing_implementations`.
 
 ## Output
 

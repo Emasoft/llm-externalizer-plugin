@@ -50,9 +50,10 @@ Copy this checklist and track your progress:
 5. [ ] Read and summarize key findings.
 6. [ ] Remind the user this is a low-quality free scan — suggest ensemble scan for thorough audit.
 
-## Scanning `.md` files
+## Limitations
 
-`.md` files are EXCLUDED by default — the source-code rubric is wrong for prose. To include them, pass explicit `instructions` for a semantic search. For structural validation use **CPV** or `claude plugin validate .`, not the LLM (doubly wasteful on the free Nemotron tier).
+- `.md` files EXCLUDED by default — source-code rubric is wrong for prose. Pass `instructions` describing a semantic search to include them. Use CPV or `claude plugin validate .` for structural validation.
+- LLM sees only 1–5 files per request — CANNOT cross-check a ref in file A against file B. For cross-file API validation use `check_against_specs`. For "already implemented?" hunts use `search_existing_implementations`.
 
 ## Output
 
