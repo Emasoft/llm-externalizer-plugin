@@ -42,15 +42,15 @@ Copy this checklist and track your progress:
 
 ## Scanning `.md` files
 
-`.md` files are EXCLUDED by default — the source-code rubric is wrong for prose. To include them, pass explicit `instructions` for a semantic search (stale references, outdated API snippets, TODO triage). For structural validation (frontmatter / schema / argument-hint / plugin.json) use **CPV** (`cpv-validate-plugin`, etc.) or `claude plugin validate .`, not the LLM.
+`.md` files are EXCLUDED by default. To include, pass explicit `instructions` for a semantic search (stale refs, outdated snippets, TODO triage). Use CPV or `claude plugin validate .` for structural validation — not the LLM.
 
 ## Output
 
 Reports under `<project>/reports_dev/llm_externalizer/`. Filenames embed the source filename or group id.
 
-**Batching**: LLM never sees the whole codebase at once. Files are FFD-packed into ~400 KB batches (1–5 files each) or one group per request with `---GROUP:id---` markers. In ensemble mode each file gets 3 responses; in free/local mode each file gets 1.
+**Batching**: LLM sees 1–5 files per request (FFD ~400 KB, or one `---GROUP:id---` group). Ensemble: 3 responses/file; free/local: 1.
 
-**answer_mode**: `0` = ONE REPORT PER FILE (default for scan_folder). `1` = ONE REPORT PER GROUP — auto-groups files by subfolder/extension/basename (1 MB per group) if no `---GROUP:id---` markers. `2` = SINGLE REPORT (merged). `answer_mode` controls disk output only, not LLM visibility. For cross-file analysis use `search_existing_implementations`.
+**answer_mode**: `0`=per-file (scan_folder default), `1`=per-group (subfolder/extension/basename, 1 MB cap), `2`=merged. Controls disk output only, not LLM visibility. Use `search_existing_implementations` for cross-file analysis.
 
 Reply format (exact, no preamble):
 ```
@@ -76,5 +76,5 @@ See [Usage patterns](references/usage-patterns.md) for representative tool calls
 
 ## Resources
 
-- [Tool reference](references/tool-reference.md) — read-only analysis tools, utility tools, standard input fields, advanced parameters, file grouping, constraints, safety features.
-- [Usage patterns](references/usage-patterns.md) — scan codebase, per-file checks, compare versions, check broken references, check broken imports, reuse instructions, scan with gitignore, redact patterns, specs checks, grouped processing.
+- [Tool reference](references/tool-reference.md) — Read-only analysis tools, Utility tools, Standard Input Fields, Advanced Parameters, File Grouping, Critical Constraints, Safety Features
+- [Usage patterns](references/usage-patterns.md) — Scan a codebase for issues, Analyze multiple files together, Apply same check to each file independently, Compare two file versions (pair mode), Compare files in batch mode, Compare files via git diff, Check for broken code references after refactoring, Check for broken file imports, Reuse instructions across operations, Simple task with ensemble off (save tokens), Quick factual answer with low max_tokens, Code review with persona, Scan folder with gitignore + excluded dirs, Use folder_path on any tool, Redact custom patterns, Check source against specification, Check entire folder against specification, Grouped file processing (isolated reports), Code-optimized analysis
