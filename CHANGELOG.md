@@ -1,6 +1,91 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [4.1.3] - 2026-04-17
+
+### Documentation
+
+- Docs: avoid 'references/imports' prose that my own checker reads as a path
+
+check_references.py flagged the slash-separated 'references/imports'
+as a broken path reference. Replaced with 'check broken references,
+check broken imports' (two items) — which also matches the actual
+reference file's section names more accurately.
+
+- Docs: shrink .md-scan rule block to stay under CPV's 5000-char SKILL.md cap
+
+The ~900-char rule block I added to the three SKILL.md files
+pushed each over the CPV-enforced 5000-character limit for
+progressive-disclosure skill files. CPV correctly blocked the
+publish — this commit compresses the inline version to ~300 chars
+(two sentences) while keeping the full rule in
+commands/llm-externalizer-scan-and-fix.md where no char limit
+applies.
+
+Also trimmed the llm-externalizer-scan SKILL.md Examples block
+(redundant with references/usage-patterns.md) and shortened the
+Resources descriptions to fit the budget.
+
+Verified:
+  - CPV: 0 CRITICAL, 0 MAJOR (was 3 MAJOR)
+  - check_references.py --strict: 0 broken
+
+- Docs: propagate .md-exclusion + no-structural-validation rules to all scanners
+
+The rule "don't waste LLM tokens auditing .md files with a
+source-code rubric, and don't use the LLM for structural
+validation — CPV and `claude plugin validate` do that better,
+cheaper, deterministically" applies to every scanning entity in
+this plugin, not just /llm-externalizer-scan-and-fix.
+
+Added the same rule block to:
+
+  - skills/llm-externalizer-scan/SKILL.md
+  - skills/llm-externalizer-free-scan/SKILL.md
+  - skills/llm-externalizer-usage/SKILL.md
+  - commands/llm-externalizer-search-existing-implementations.md
+    (adapted — this command's semantic-duplicate-detection use
+    case is LLM-only, so the block is phrased as "don't use this
+    for what validators do better" instead of "exclude .md by
+    default")
+
+Left untouched (no scanning behavior, rule doesn't apply):
+
+  - commands/llm-externalizer-configure.md
+  - commands/llm-externalizer-discover.md
+  - skills/llm-externalizer-config/SKILL.md
+  - skills/llm-externalizer-or-model-info/SKILL.md
+
+
+### Fixed
+
+- Fix(cpv): satisfy progressive-disclosure TOC + shebang+exec warnings
+
+CPV blocked the v4.1.3 publish with MAJOR/MINOR on
+skills/llm-externalizer-scan/SKILL.md:
+
+  * TOC-coverage MINOR: my shortened Resources list matched only
+    1/19 (then 4/19) of the H2 headings in usage-patterns.md.
+    Restored the full 19-item TOC using the EXACT heading
+    strings from references/usage-patterns.md.
+  * 5000-char MAJOR (side-effect of the TOC restore): offset
+    by trimming the `.md files` rule block + `Batching` and
+    `answer_mode` paragraphs. Final size 5029 bytes (CPV counts
+    ~4950 chars — under the 5000 cap).
+
+Also addressed the shebang-without-executable warnings:
+
+  * chmod +x scripts/validate_report.py
+  * chmod +x scripts/validate_fixer_summary.py
+  * chmod +x scripts/check_references.py
+
+CPV result: CRITICAL=0 MAJOR=0 MINOR=0 NIT=0 WARNING=6 (all
+remaining warnings are pre-existing / unrelated: mcp-server/
+dir name, 7/8 and 18/19 TOC coverage on other skills, .config/
+dotnet-tools.json backtick false-positive, uv.lock in .gitignore).
+check_references.py --strict -> 0 broken, 0 dynamic.
+
+
 ## [4.1.2] - 2026-04-17
 
 ### Documentation
