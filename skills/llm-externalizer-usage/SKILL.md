@@ -33,6 +33,20 @@ Copy this checklist and track your progress:
 
 Use when you need to analyze files without consuming orchestrator context, scan a codebase, compare files, or check imports. Do NOT use for surgical edits or tasks needing real-time tool access.
 
+## Scanning `.md` files — special rules
+
+`.md` files (agent / command / skill definitions, docs, README) are **excluded by default** from scans. The default audit rubric is a source-code audit; handing a .md file to it produces hallucinated findings or empty reports — wasted tokens either way.
+
+To scan `.md` files, pass explicit `instructions` describing what to look for: stale references to renamed symbols/commands, hardcoded values that should be placeholders, TODO/FIXME triage, outdated API snippets, coverage of specific caveats — things only a semantic reader can do.
+
+**Do NOT use LLM scans for structural validation of plugin files** — frontmatter schema, argument-hint consistency, skill description coverage, plugin.json conformance. Those are deterministic checks that belong to:
+
+- `claude-plugin-validation` (CPV) — `cpv-validate-plugin`, `cpv-validate-skill`, `cpv-semantic-validation`
+- `claude plugin validate .` — the authoritative Claude Code CLI validator
+- Project-local validation scripts (AST / schema parsers)
+
+A validator runs these in milliseconds and is reproducible. An LLM doing the same work is orders of magnitude more expensive, non-reproducible, and prone to hallucinated findings.
+
 ## Output
 
 **READ THIS — common misconception**: `answer_mode` controls how reports are written to disk, NOT how many files the LLM sees per request. The LLM **never** sees the whole set at once. Files are batched into requests of typically **1–5 files each** (FFD bin packing into ~400 KB batches, or one group per request when `---GROUP:id---` markers are supplied). In **ensemble** mode each file gets **3 responses** from 3 LLMs; in **free** and **local** mode each file gets **1 response**.

@@ -67,6 +67,20 @@ Forward optional flags the user supplied:
 
 The MCP tool returns a text body with the `SEARCH COMPLETE` summary, a `MERGED REPORT:` path (mode 2) or a list of `REPORTS:` paths (mode 1), and any failed/skipped batches. Forward that text to the user verbatim — do NOT read any report, do NOT summarize. The reviewer opens the reports they care about.
 
+## Scope rules — when NOT to use this command
+
+**Do NOT use this command for structural validation of plugin files** — frontmatter schema, argument-hint consistency, skill description coverage, plugin.json conformance. Those are deterministic checks that belong to:
+
+- `claude-plugin-validation` (CPV) — `cpv-validate-plugin`, `cpv-validate-skill`, `cpv-semantic-validation`
+- `claude plugin validate .` — the authoritative Claude Code CLI validator
+- Project-local validation scripts (AST / schema parsers)
+
+A validator runs these in milliseconds and is reproducible. An LLM doing the same work is orders of magnitude more expensive, non-reproducible, and prone to hallucinated findings.
+
+This command is a good fit ONLY when the check requires semantic understanding an AST cannot do: "has anyone already implemented retry-with-backoff?", "does the codebase already contain a memoization helper with this exact API shape?", "is this new PR's rate-limit logic a duplicate of an existing module?". For those cases, the `feature_description` IS the instruction the LLM needs — no structural-schema check will ever answer the question.
+
+If the codebase contains `.md` files (agent/command/skill definitions, docs): the `feature_description` must explicitly name what you're hunting for in prose (e.g. "an agent that does X" or "a skill that triggers on Y"). Otherwise `.md` files will produce noise.
+
 ## Constraints
 
 - You MUST NOT read any report contents.
