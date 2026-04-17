@@ -1,6 +1,48 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [4.1.5] - 2026-04-17
+
+### Documentation
+
+- Docs(scan): warn that LLM cannot cross-reference files — 1-5 per batch
+
+Added a fundamental-limitation warning: the LLM sees only 1-5 files
+per request (FFD ~400 KB batches, or one ---GROUP:id--- group).
+It cannot verify that a reference in file A exists in file B or
+anywhere else in the codebase — no single LLM call ever has global
+visibility, so the default 'broken references' heuristic is
+best-effort LOCAL only.
+
+For real cross-file validation, users must use:
+
+  * mcp__llm-externalizer__check_against_specs (or the --specs
+    flag on /llm-externalizer:llm-externalizer-scan-and-fix): each
+    batch includes the authoritative spec, so every reference is
+    validated against it instead of against 'whatever the LLM
+    thinks exists elsewhere'.
+  * mcp__llm-externalizer__search_existing_implementations
+    (or the search-existing-implementations command): purpose-built
+    for 'is this already implemented?' cross-codebase hunts,
+    comparing each file against a REFERENCE description rather
+    than against other files.
+
+Changes:
+
+  - commands/llm-externalizer-scan-and-fix.md: full warning block
+    immediately after the HARDCODED section.
+  - skills/llm-externalizer-scan/SKILL.md, -free-scan, -usage:
+    merged the previous '.md files' rule with the new cross-file
+    warning into one '## Limitations' section (kept SKILL.md
+    sizes under CPV's 5000-char progressive-disclosure cap by
+    dropping the redundant Batching paragraph, whose content is
+    now in Limitations).
+
+Verified:
+  CPV: 0 CRITICAL / 0 MAJOR / 0 MINOR (WARNING=6 all pre-existing)
+  check_references.py --strict: 0 broken, 0 dynamic
+
+
 ## [4.1.4] - 2026-04-17
 
 ### Documentation
