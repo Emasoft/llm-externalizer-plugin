@@ -64,12 +64,22 @@ The agent — not a blind glob — curates the scan target. Humans cannot reliab
 
    The default scan rubric ("logic bugs, error handling gaps, security issues, resource leaks, broken references") is a source-code audit. It has **no meaningful application to prose**: there's no control flow in an agent definition, no null-pointer risk in a SKILL.md, no resource leak in a command description. If the orchestrator feeds a .md file to the default rubric, the LLM has no idea what to check for and will either hallucinate findings or produce empty reports — both wasteful.
 
-   Therefore: auto-curation ALWAYS drops every `.md` file from the list. The only way to include .md files in a scan is for the user to pass an explicit `--instructions <path>` flag whose content tells the LLM concretely what to check for, such as:
+   Therefore: auto-curation ALWAYS drops every `.md` file from the list. The only way to include .md files in a scan is for the user to pass an explicit `--instructions <path>` flag whose content tells the LLM concretely what to search for — the kind of thing only a human reader / semantic match can do. Good examples:
 
    - *"Find every reference to the old command names `/llm-externalizer:discover`, `/llm-externalizer:configure`, `/llm-externalizer:scan-and-fix`, `/llm-externalizer:search-existing-implementations` and replace with the prefixed names `/llm-externalizer:llm-externalizer-*`."*
    - *"Find every reference to the agent names `llm-ext-fixer` or `llm-ext-reviewer` (old) and update to `llm-externalizer-fixer` / `llm-externalizer-reviewer`."*
-   - *"Verify that every skill description accurately reflects the behavior of its referenced tools."*
-   - *"Check that argument-hints in command frontmatters match the actual arguments the command parses."*
+   - *"Find every hardcoded OpenRouter model id in the examples and replace it with `{model-id}` placeholders."*
+   - *"List every TODO / FIXME / XXX comment and categorize by urgency (blocking, nice-to-have, stale)."*
+   - *"Find every code snippet that still shows the pre-v4 API surface (e.g. old `answer_mode: 1` defaults, old response shapes) and flag them for update."*
+   - *"Locate every explanation of the `--free` flag and confirm it mentions the provider prompt-logging caveat."*
+
+   > **Do NOT use this command to do structural validation of plugin files** — frontmatter schema, argument-hint consistency with the command body, skill description / tool coverage, plugin.json conformance, skill directory layout, agent.tools allowlist correctness, etc. Those checks are deterministic, cheap, and belong to dedicated validators:
+   >
+   >   - **`claude-plugin-validation`** (CPV) — `cpv-validate-plugin`, `cpv-validate-skill`, `cpv-semantic-validation`, etc. — run thousands of rules in milliseconds, return reproducible errors.
+   >   - **`claude plugin validate .`** — the authoritative Claude Code CLI validator for plugin schema.
+   >   - **Project-local validation scripts** — AST / schema parsers give you O(file-size) deterministic answers.
+   >
+   > An LLM doing the same work is orders of magnitude more expensive, non-reproducible, and prone to hallucinated findings. Reserve LLM .md scans for things a validator literally cannot do: fuzzy reference hunting, semantic consistency checks, stale-snippet detection, and user-authored instruction sets.
 
    When the user provides such `--instructions`, auto-curation INCLUDES `.md` files in the relevant subtrees (agent/command/skill definitions, docs the user pointed at) and lets the scan run. Without explicit instructions, they stay excluded.
 
