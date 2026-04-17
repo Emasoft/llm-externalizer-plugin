@@ -1,6 +1,44 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [4.1.1] - 2026-04-17
+
+### Fixed
+
+- Fix(scan-and-fix): exclude .md files from auto-curation unless --instructions given
+
+The default scan rubric audits source code — logic bugs, error
+handling, security, resource leaks, broken references. None of
+those apply to prose. A .md file (agent definition, SKILL.md,
+command description, skill reference) has no control flow, no
+exception paths, no resource lifecycle — feeding one to the
+default rubric makes the LLM hallucinate findings or produce
+empty reports. Both waste tokens.
+
+Step 0 auto-curation now ALWAYS drops every .md file from the
+list. The ONLY way to scan .md files is for the user to pass
+an explicit --instructions <path> whose content tells the LLM
+concretely what to check for, e.g.:
+
+  * "Find references to the old command names /llm-externalizer:discover,
+    /llm-externalizer:configure, /llm-externalizer:scan-and-fix,
+    /llm-externalizer:search-existing-implementations and replace with
+    the prefixed names /llm-externalizer:llm-externalizer-*."
+  * "Find references to the old agent names llm-ext-fixer or
+    llm-ext-reviewer and update to llm-externalizer-fixer / reviewer."
+  * "Verify every skill description accurately reflects its tools."
+  * "Check argument-hints in command frontmatters match the
+    actual arguments the command parses."
+
+When --instructions provides such a rubric, auto-curation includes
+.md files in the relevant subtrees (agents/, commands/, skills/,
+docs the user pointed at) and lets the scan run. Without
+instructions, they stay excluded.
+
+Verified: check_references.py --strict -> 31 refs, 0 broken, 0
+dynamic.
+
+
 ## [4.1.0] - 2026-04-17
 
 ### Added
