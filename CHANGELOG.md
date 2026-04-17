@@ -1,6 +1,50 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [4.0.0] - 2026-04-17
+
+### Refactored
+
+- Refactor!: unify all command/skill/agent names under llm-externalizer- prefix
+
+Every user-facing entity in the plugin now uses the same prefix so
+discovery, autocompletion, and global listings are consistent.
+
+Commands (all renamed):
+  configure                       -> llm-externalizer-configure
+  discover                        -> llm-externalizer-discover
+  scan-and-fix                    -> llm-externalizer-scan-and-fix
+  search-existing-implementations -> llm-externalizer-search-existing-implementations
+
+Agents (all renamed):
+  llm-ext-fixer    -> llm-externalizer-fixer
+  llm-ext-reviewer -> llm-externalizer-reviewer
+
+Skills (already prefixed — unchanged):
+  llm-externalizer-config, llm-externalizer-free-scan,
+  llm-externalizer-or-model-info, llm-externalizer-scan,
+  llm-externalizer-usage
+
+Additional fixes:
+  - llm-externalizer-usage skill gains an argument-hint so every
+    command and skill now advertises autocompletion hints.
+  - All internal cross-references updated (scan-and-fix command's
+    subagent_type, fixer agent self-refs including the /tmp backup
+    filename prefix, scan skill's agent: field, validate_fixer_summary
+    docstring).
+  - [FAILED]/[DONE] tag strings in the command bodies updated to
+    match the new command names.
+
+BREAKING CHANGE: slash commands have been renamed. Users must update
+from /llm-externalizer:<short-name> to
+/llm-externalizer:llm-externalizer-<short-name>. Agent subagent_type
+strings in any external automation must update from llm-ext-fixer /
+llm-ext-reviewer to llm-externalizer-fixer / llm-externalizer-reviewer.
+
+Verified: check_references.py --strict -> 29 refs, 0 broken, 0 dynamic.
+ruff check scripts/ -> clean.
+
+
 ## [3.16.0] - 2026-04-17
 
 ### Added
