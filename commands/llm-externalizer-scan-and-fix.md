@@ -49,7 +49,8 @@ The agent — not a blind glob — curates the scan target. Humans cannot reliab
 
 3. **Filter with agent judgment.** The list from `git ls-files` still includes non-source entries — the orchestrator (the agent) uses project conventions to drop them. Typical exclusions:
    - Documentation directories: `docs/`, `doc/`, `documentation/`, external-API reference dumps like `docs/openrouter/`
-   - Project-level meta: `CHANGELOG.md`, `LICENSE`, `LICENSE.*`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `SECURITY.md`, `README.md` (judgment call — include it only if the scan's purpose covers docs)
+   - Project-level meta: `CHANGELOG.md`, `LICENSE`, `LICENSE.*`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `SECURITY.md`, `README.md` (judgment call — include only when the scan's purpose covers docs AND `--instructions` says what to check for)
+   - **ALL `.md` files** including agent / command / skill definitions (`agents/*.md`, `commands/*.md`, `skills/**/*.md`). See the dedicated rule below.
    - Examples, samples, fixtures, templates, snapshots: `examples/`, `samples/`, `fixtures/`, `templates/`, `__snapshots__/`, `.snap` files
    - Build / bundled output: `dist/`, `build/`, pre-compiled bundles (even if committed)
    - Lock files: `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `uv.lock`, `poetry.lock`, `Cargo.lock`, `Pipfile.lock`
@@ -57,7 +58,20 @@ The agent — not a blind glob — curates the scan target. Humans cannot reliab
    - Vendored deps: `vendor/`, `third_party/`, anything under `*/node_modules/`
    - Runtime artifacts even if tracked by accident: `*_dev/`, `reports/`, generated output
 
-   What to KEEP is everything that is real source: source code in the project's primary languages; agent / command / skill definitions for Claude Code plugins (`agents/*.md`, `commands/*.md`, `skills/**/SKILL.md` and their `references/*.md` / `examples/*.md`); config files that ship as part of the product (`plugin.json`, `.mcp.json`, `pyproject.toml`, `tsconfig.json`). Use the user's project conventions — when in doubt, prefer excluding over including.
+   What to KEEP is everything that is real source: source code in the project's primary languages (`.py`, `.ts`, `.tsx`, `.js`, `.go`, `.rs`, `.java`, `.rb`, `.php`, `.c`, `.cc`, `.cpp`, `.cs`, `.swift`, `.dart`, `.ex`, `.lua`, `.sh`, etc.) plus structured configs that ship as part of the product (`plugin.json`, `.mcp.json`, `pyproject.toml`, `tsconfig.json`, `package.json`). Use the user's project conventions — when in doubt, prefer excluding over including.
+
+   ### Rule: `.md` files are EXCLUDED by default — even plugin-authored ones
+
+   The default scan rubric ("logic bugs, error handling gaps, security issues, resource leaks, broken references") is a source-code audit. It has **no meaningful application to prose**: there's no control flow in an agent definition, no null-pointer risk in a SKILL.md, no resource leak in a command description. If the orchestrator feeds a .md file to the default rubric, the LLM has no idea what to check for and will either hallucinate findings or produce empty reports — both wasteful.
+
+   Therefore: auto-curation ALWAYS drops every `.md` file from the list. The only way to include .md files in a scan is for the user to pass an explicit `--instructions <path>` flag whose content tells the LLM concretely what to check for, such as:
+
+   - *"Find every reference to the old command names `/llm-externalizer:discover`, `/llm-externalizer:configure`, `/llm-externalizer:scan-and-fix`, `/llm-externalizer:search-existing-implementations` and replace with the prefixed names `/llm-externalizer:llm-externalizer-*`."*
+   - *"Find every reference to the agent names `llm-ext-fixer` or `llm-ext-reviewer` (old) and update to `llm-externalizer-fixer` / `llm-externalizer-reviewer`."*
+   - *"Verify that every skill description accurately reflects the behavior of its referenced tools."*
+   - *"Check that argument-hints in command frontmatters match the actual arguments the command parses."*
+
+   When the user provides such `--instructions`, auto-curation INCLUDES `.md` files in the relevant subtrees (agent/command/skill definitions, docs the user pointed at) and lets the scan run. Without explicit instructions, they stay excluded.
 
 4. **Write the curated list to a tmp file.**
    ```bash
