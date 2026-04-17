@@ -1,6 +1,42 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [4.0.1] - 2026-04-17
+
+### Documentation
+
+- Docs: update stale command/agent name references after v4.0.0 rename
+
+The v4.0.0 refactor renamed all commands and agents to carry the
+llm-externalizer- prefix, but several in-tree .md files still
+referenced the old short names. This commit sweeps every remaining
+stale reference in the live tree.
+
+README.md:
+  - Features list:
+      * `llm-ext-reviewer` -> `llm-externalizer-reviewer`
+      * Added `llm-externalizer-fixer` agent to the feature list
+      * "3 slash commands" -> "4 slash commands" with full prefixed names
+  - Verify section: /llm-externalizer:discover -> llm-externalizer-discover
+  - Configuration section: /llm-externalizer:configure -> llm-externalizer-configure
+  - Commands table: all 4 commands listed with fully prefixed names,
+    scan-and-fix and search-existing-implementations added
+  - Plugin Structure tree: commands/ directory now lists all four
+    renamed files plus an agents/ entry for the two agents
+
+Skills:
+  - skills/llm-externalizer-free-scan/SKILL.md:
+    /llm-externalizer:discover -> llm-externalizer-discover
+  - skills/llm-externalizer-or-model-info/SKILL.md: same
+  - skills/llm-externalizer-or-model-info/references/errors.md:
+    /llm-externalizer:configure and :discover both updated
+
+Verified via `python3 scripts/check_references.py --strict`
+(0 broken, 0 dynamic) and an exhaustive grep sweep across all .md /
+.yml / .yaml / .json / .toml / .py files in the live tree — zero
+remaining stale references.
+
+
 ## [4.0.0] - 2026-04-17
 
 ### Refactored
