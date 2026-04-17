@@ -58,7 +58,7 @@ One `.md` report per source file, saved in `reports_dev/llm_externalizer/`. Each
 
 | Error | Cause | Resolution |
 |-------|-------|------------|
-| Service offline | MCP server not running | Restart Claude Code or run `/llm-externalizer:discover` |
+| Service offline | MCP server not running | Restart Claude Code or run `/llm-externalizer:llm-externalizer-discover` |
 | Auth error | `$OPENROUTER_API_KEY` not set | Set the env var in `.claude/settings.json` or shell profile |
 | Empty response | Model timed out | May need simpler instructions or smaller files |
 | No files found | Wrong path or all files gitignored | Check `folder_path` is correct and `use_gitignore` setting |

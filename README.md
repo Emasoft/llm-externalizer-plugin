@@ -18,7 +18,8 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 ## Features
 
 - **17 MCP tools** — 9 read-only analysis tools + 5 utility tools + 3 OpenRouter model-info formatters
-- **`llm-ext-reviewer` agent** — Haiku-class plugin agent for fast code reviews with restricted tool allowlist (no Write/Edit)
+- **`llm-externalizer-reviewer` agent** — Haiku-class plugin agent for fast code reviews with restricted tool allowlist (no Write/Edit)
+- **`llm-externalizer-fixer` agent** — Opus-class agent that verifies and fixes findings from a single per-file scan report (one fixer per report, dispatched in parallel by `/llm-externalizer:llm-externalizer-scan-and-fix`)
 - **Profile-based configuration** — named profiles in `~/.llm-externalizer/settings.yaml`
 - **`userConfig.openrouter_api_key`** — keychain-stored OpenRouter key via plugin configure UI (falls back to shell `$OPENROUTER_API_KEY`)
 - **Ensemble mode** — three models in parallel on OpenRouter, combined report
@@ -29,7 +30,7 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 - **Robust batch processing** — `max_retries` parameter with parallel execution, retry, and circuit breaker on all tools
 - **File-based output** — all results saved to files, only paths returned (keeps orchestrator context clean)
 - **5 auto-discovered skills** — usage, config, full scan, free scan, OpenRouter model info
-- **3 slash commands** — `/discover`, `/configure`, `/search-existing-implementations`
+- **4 slash commands** — `/llm-externalizer:llm-externalizer-discover`, `/llm-externalizer:llm-externalizer-configure`, `/llm-externalizer:llm-externalizer-search-existing-implementations`, `/llm-externalizer:llm-externalizer-scan-and-fix`
 - **CLI subcommand** — `llm-externalizer search-existing` for shell / CI duplicate-check workflows
 - **6 backend presets** — LM Studio, Ollama, vLLM, llama.cpp, generic local, OpenRouter
 
@@ -336,14 +337,14 @@ Shows model, context usage, and cost stats in the Claude Code status bar.
 
 ```bash
 # Inside Claude Code, run the discover command:
-/llm-externalizer:discover
+/llm-externalizer:llm-externalizer-discover
 ```
 
 This shows service health, active profile, model, auth token status, and available profiles.
 
 ## Configuration
 
-Settings at `~/.llm-externalizer/settings.yaml`. Use `/llm-externalizer:configure` to manage profiles interactively, or edit the YAML directly.
+Settings at `~/.llm-externalizer/settings.yaml`. Use `/llm-externalizer:llm-externalizer-configure` to manage profiles interactively, or edit the YAML directly.
 
 ### Quick start with OpenRouter
 
@@ -413,8 +414,10 @@ Skills activate automatically when Claude Code encounters tasks matching their t
 
 | Command | Description |
 |---------|-------------|
-| `/llm-externalizer:discover` | Check health, active profile, model, auth status, context window |
-| `/llm-externalizer:configure` | List, switch, or add profiles (`list`, `switch <name>`, `add <name> --mode ... --api ... --model ...`) |
+| `/llm-externalizer:llm-externalizer-discover` | Check health, active profile, model, auth status, context window |
+| `/llm-externalizer:llm-externalizer-configure` | List, switch, or add profiles (`list`, `switch <name>`, `add <name> --mode ... --api ... --model ...`) |
+| `/llm-externalizer:llm-externalizer-search-existing-implementations` | Scan a codebase for existing implementations of a described feature (FFD-batched PR duplicate check) |
+| `/llm-externalizer:llm-externalizer-scan-and-fix` | Two-stage audit — per-file scan (answer_mode=0) + parallel `llm-externalizer-fixer` subagents (≤15 concurrent) + joined final report |
 
 ## Plugin Structure
 
@@ -430,8 +433,13 @@ llm-externalizer-plugin/
 │   ├── llm-externalizer          # Standalone MCP server launcher (stdio)
 │   └── llm-ext                   # CLI wrapper for Bash-based tool invocation
 ├── commands/
-│   ├── configure.md              # /llm-externalizer:configure
-│   └── discover.md               # /llm-externalizer:discover
+│   ├── llm-externalizer-configure.md                       # /llm-externalizer:llm-externalizer-configure
+│   ├── llm-externalizer-discover.md                        # /llm-externalizer:llm-externalizer-discover
+│   ├── llm-externalizer-scan-and-fix.md                    # /llm-externalizer:llm-externalizer-scan-and-fix
+│   └── llm-externalizer-search-existing-implementations.md # /llm-externalizer:llm-externalizer-search-existing-implementations
+├── agents/
+│   ├── llm-externalizer-fixer.md                           # Opus-class per-report fixer (dispatched by scan-and-fix)
+│   └── llm-externalizer-reviewer.md                        # Haiku-class reviewer (read-only MCP tools)
 ├── mcp-server/                   # Bundled TypeScript MCP server
 │   ├── src/
 │   │   ├── index.ts              # Main server (tool definitions, request handling)

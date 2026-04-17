@@ -90,7 +90,7 @@ And [references/use-cases.md](references/use-cases.md) for more scenarios:
 |-|-|
 | `OpenRouter returned 404` | Wrong model id — check case, vendor prefix, `:free` / `:thinking` suffix |
 | `No OpenRouter auth token available` | Set `$OPENROUTER_API_KEY` or switch to an openrouter-remote profile |
-| `Network error` | Retry once; check `/llm-externalizer:discover` for service status |
+| `Network error` | Retry once; check `/llm-externalizer:llm-externalizer-discover` for service status |
 | `OpenRouter returned no endpoints` | Model deprecated — suggest alternative |
 
 Full table in [references/errors.md](references/errors.md):
