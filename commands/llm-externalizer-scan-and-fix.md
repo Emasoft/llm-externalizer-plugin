@@ -24,7 +24,14 @@ Orchestrates a full **scan → per-file report → parallel fix → join** pass.
 
 Parse `$ARGUMENTS` into:
 
-- `[target-path]` (positional, optional; default `.`): folder to scan. **Ignored** when `--file-list` is supplied. Relative paths resolve against `$CLAUDE_PROJECT_DIR`.
+- `[target-path]` (positional, **required unless `--file-list` is supplied**): absolute folder to scan. Relative paths resolve against `$CLAUDE_PROJECT_DIR`.
+
+  > **If the user invokes the command WITHOUT a target-path and WITHOUT `--file-list`, the orchestrator MUST stop and ask the user for a target.** Do NOT silently default to `.` or `$CLAUDE_PROJECT_DIR` — those often contain non-codebase folders (`*_dev/`, generated reports, caches, sibling projects) and the fixers WRITE to source files, so the blast radius is real.
+  >
+  > Offer these defaults when asking:
+  >   - **"the actual codebase"** → auto-detect via `git rev-parse --show-toplevel` inside `$CLAUDE_PROJECT_DIR` if it is a git repo, otherwise fall back to `$CLAUDE_PROJECT_DIR` itself. Combined with the standard exclude-dirs below this gives a safe whole-codebase scan.
+  >   - A specific subdirectory the user names (e.g. `src/`, `mcp-server/src/`).
+  >   - A `--file-list <path>` for a precise, user-curated set.
 - `--text-files`: include plain-text formats (`.md .txt .json .yml .yaml .toml .ini .cfg .conf .xml .html .rst .csv`) in the scan. Without this flag, `scan_folder` uses its default source-code extensions.
 - `--file-list <path>`: absolute path to a `.txt` file with ONE absolute file path per line. When present, the command routes through `code_task` and scans exactly those files (positional target-path is ignored).
 - `--instructions <path>`: absolute path to an `.md` file whose contents become the scan instructions. Replaces the default audit rubric.
@@ -46,7 +53,9 @@ Using `Bash`:
 2. If `--file-list <path>` is set: `test -f <path>` and read it with `cat` → build an array of non-empty, non-comment lines. Abort if the file is empty.
 3. If `--instructions <path>` is set: `test -f <path>`. Abort if missing.
 4. If `--specs <path>` is set: `test -f <path>`. Abort if missing.
-5. If no `--file-list`: resolve target-path (default `.`) to an absolute path. `test -d` it. Abort if missing.
+5. If no `--file-list`:
+   - **If the user did not supply a target-path**, STOP and ask them for one. Do NOT silently pick a default. See the "ask-first" note under Arguments above. Only proceed when the user has named a target (or explicitly said "the actual codebase", in which case use the auto-detected codebase root).
+   - Once a target is chosen, resolve it to an absolute path and `test -d` it. Abort with `[FAILED] llm-externalizer-scan-and-fix — target path not found: <path>` if missing.
 
 Then call `mcp__llm-externalizer__discover`. Abort with `[FAILED] llm-externalizer-scan-and-fix — service offline` if the service is offline.
 
@@ -107,6 +116,14 @@ Call `mcp__llm-externalizer__scan_folder`:
   "use_gitignore": true,
   "output_dir": "<CLAUDE_PROJECT_DIR>/reports/llm-externalizer",
   "extensions": ["<only if --text-files>"],
+  "exclude_dirs": [
+    "docs_dev", "reports_dev", "scripts_dev", "tests_dev",
+    "samples_dev", "examples_dev", "downloads_dev",
+    "libs_dev", "builds_dev",
+    "reports", "llm_externalizer_output",
+    ".rechecker", ".mypy_cache", ".ruff_cache",
+    ".serena", ".claude", ".venv", "__pycache__"
+  ],
   "instructions": "<see above>",
   "instructions_files_paths": ["<if applicable>"],
   "free": <if applicable>,
@@ -115,6 +132,8 @@ Call `mcp__llm-externalizer__scan_folder`:
 ```
 
 With `--text-files`, set `extensions: [".md", ".txt", ".json", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf", ".xml", ".html", ".rst", ".csv"]`. Without it, OMIT the `extensions` field.
+
+> The `exclude_dirs` list above is **always sent**, on top of the server's own built-in ignores (`node_modules`, `.git`, `dist`, `build`, etc.). It covers the `*_dev/` convention from the project-level rules (cache/tmp/runtime directories that must never be committed or scanned) plus other recurrent runtime/artifact folders. `use_gitignore: true` handles anything listed in `.gitignore` when the target is a git repo; `exclude_dirs` catches the rest for non-git trees.
 
 ## Step 3 — Extract report paths and persist them to a file
 
