@@ -24,14 +24,7 @@ Orchestrates a full **scan → per-file report → parallel fix → join** pass.
 
 Parse `$ARGUMENTS` into:
 
-- `[target-path]` (positional, **required unless `--file-list` is supplied**): absolute folder to scan. Relative paths resolve against `$CLAUDE_PROJECT_DIR`.
-
-  > **If the user invokes the command WITHOUT a target-path and WITHOUT `--file-list`, the orchestrator MUST stop and ask the user for a target.** Do NOT silently default to `.` or `$CLAUDE_PROJECT_DIR` — those often contain non-codebase folders (`*_dev/`, generated reports, caches, sibling projects) and the fixers WRITE to source files, so the blast radius is real.
-  >
-  > Offer these defaults when asking:
-  >   - **"the actual codebase"** → auto-detect via `git rev-parse --show-toplevel` inside `$CLAUDE_PROJECT_DIR` if it is a git repo, otherwise fall back to `$CLAUDE_PROJECT_DIR` itself. Combined with the standard exclude-dirs below this gives a safe whole-codebase scan.
-  >   - A specific subdirectory the user names (e.g. `src/`, `mcp-server/src/`).
-  >   - A `--file-list <path>` for a precise, user-curated set.
+- `[target-path]` (positional, optional): absolute folder to scan. Relative paths resolve against `$CLAUDE_PROJECT_DIR`. **If omitted (and `--file-list` is also omitted), the orchestrator runs an auto-discovery pass (Step 0 below) that builds a curated file list and presents it for confirmation. It does NOT silently default to `.` or `$CLAUDE_PROJECT_DIR` and does NOT just hand a folder to `scan_folder` — silent defaults + blind folder scans dilute the audit with docs, examples, samples, and generated output while exposing fixers to non-source content.**
 - `--text-files`: include plain-text formats (`.md .txt .json .yml .yaml .toml .ini .cfg .conf .xml .html .rst .csv`) in the scan. Without this flag, `scan_folder` uses its default source-code extensions.
 - `--file-list <path>`: absolute path to a `.txt` file with ONE absolute file path per line. When present, the command routes through `code_task` and scans exactly those files (positional target-path is ignored).
 - `--instructions <path>`: absolute path to an `.md` file whose contents become the scan instructions. Replaces the default audit rubric.
@@ -40,6 +33,48 @@ Parse `$ARGUMENTS` into:
 - `--free`: use the free Nemotron model (`free: true`). Warn once about provider prompt logging before running on proprietary code; proceed only after user confirms or when the argument was explicit.
 
 Abort with `[FAILED] llm-externalizer-scan-and-fix — <one-line reason>` on any validation failure.
+
+## Step 0 — Auto-discover the codebase (only when the user supplied NO target-path AND NO --file-list)
+
+The agent — not a blind glob — curates the scan target. Humans cannot reliably name every codebase folder and a folder glob cannot tell documentation from source. Only an agent can judge what is *really* part of the codebase.
+
+1. **Find the real codebase root.** `scan_folder` on `$CLAUDE_PROJECT_DIR` is the wrong default when the project dir is a workspace / parent containing multiple repos, sibling projects, or runtime output.
+   - Try `git -C "$CLAUDE_PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null`. If that succeeds, the stdout IS the codebase root.
+   - Otherwise search for git repos nested up to 3 levels deep: `find "$CLAUDE_PROJECT_DIR" -maxdepth 3 -type d -name '.git' -not -path '*/node_modules/*' -not -path '*/.claude/*' 2>/dev/null`.
+     - Exactly one match → use its parent directory as the root.
+     - More than one match → STOP, list the candidates, ask the user which repo to target.
+     - Zero matches → STOP, ask the user for an explicit target path.
+
+2. **Enumerate tracked files inside the root.** `git -C <root> ls-files` respects `.gitignore`, skips untracked/ignored content, and gives a clean baseline. Never scan anything git doesn't track.
+
+3. **Filter with agent judgment.** The list from `git ls-files` still includes non-source entries — the orchestrator (the agent) uses project conventions to drop them. Typical exclusions:
+   - Documentation directories: `docs/`, `doc/`, `documentation/`, external-API reference dumps like `docs/openrouter/`
+   - Project-level meta: `CHANGELOG.md`, `LICENSE`, `LICENSE.*`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `SECURITY.md`, `README.md` (judgment call — include it only if the scan's purpose covers docs)
+   - Examples, samples, fixtures, templates, snapshots: `examples/`, `samples/`, `fixtures/`, `templates/`, `__snapshots__/`, `.snap` files
+   - Build / bundled output: `dist/`, `build/`, pre-compiled bundles (even if committed)
+   - Lock files: `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `uv.lock`, `poetry.lock`, `Cargo.lock`, `Pipfile.lock`
+   - Binary / asset files: `*.{png,jpg,jpeg,gif,svg,webp,ico,pdf,zip,tar,tar.gz,mp4,mov,bin,wasm,woff,woff2,ttf,otf,eot}`
+   - Vendored deps: `vendor/`, `third_party/`, anything under `*/node_modules/`
+   - Runtime artifacts even if tracked by accident: `*_dev/`, `reports/`, generated output
+
+   What to KEEP is everything that is real source: source code in the project's primary languages; agent / command / skill definitions for Claude Code plugins (`agents/*.md`, `commands/*.md`, `skills/**/SKILL.md` and their `references/*.md` / `examples/*.md`); config files that ship as part of the product (`plugin.json`, `.mcp.json`, `pyproject.toml`, `tsconfig.json`). Use the user's project conventions — when in doubt, prefer excluding over including.
+
+4. **Write the curated list to a tmp file.**
+   ```bash
+   RUN_TS=$(date +%Y%m%dT%H%M%S%z)
+   AUTO_LIST="/tmp/llm-externalizer-scan-and-fix.$RUN_TS.auto-filelist.txt"
+   : > "$AUTO_LIST"
+   # emit one absolute path per line via printf or a heredoc
+   ```
+
+5. **Show the user the curated list before committing.** Print ONLY:
+   - Codebase root (`git rev-parse --show-toplevel` result).
+   - Total file count, breakdown by top-level directory (e.g. `mcp-server/src: 18, scripts: 6, agents: 2, commands: 4, skills: 11`).
+   - 3–5 representative included paths.
+   - 3–5 representative EXCLUDED paths (so the user can sanity-check the filter).
+   - Ask one question: "Proceed with these N files? [y / edit list / cancel]". Do NOT auto-run.
+
+6. On confirm, treat the tmp file as if the user had supplied `--file-list $AUTO_LIST` and continue from Step 1 in Branch-A mode. On "cancel", abort cleanly. On "edit list", surface the tmp path so the user can prune it and re-invoke with `--file-list <that-path>`.
 
 ## Step 1 — Validate inputs
 
@@ -50,12 +85,10 @@ Using `Bash`:
    REPORTS_DIR="$CLAUDE_PROJECT_DIR/reports/llm-externalizer"
    mkdir -p "$REPORTS_DIR"
    ```
-2. If `--file-list <path>` is set: `test -f <path>` and read it with `cat` → build an array of non-empty, non-comment lines. Abort if the file is empty.
+2. If `--file-list <path>` is set (either user-provided or produced by Step 0): `test -f <path>` and read it with `cat` → build an array of non-empty, non-comment lines. Abort if the file is empty.
 3. If `--instructions <path>` is set: `test -f <path>`. Abort if missing.
 4. If `--specs <path>` is set: `test -f <path>`. Abort if missing.
-5. If no `--file-list`:
-   - **If the user did not supply a target-path**, STOP and ask them for one. Do NOT silently pick a default. See the "ask-first" note under Arguments above. Only proceed when the user has named a target (or explicitly said "the actual codebase", in which case use the auto-detected codebase root).
-   - Once a target is chosen, resolve it to an absolute path and `test -d` it. Abort with `[FAILED] llm-externalizer-scan-and-fix — target path not found: <path>` if missing.
+5. If the user supplied a target-path (not auto-discovered in Step 0): resolve it to an absolute path and `test -d` it. Abort with `[FAILED] llm-externalizer-scan-and-fix — target path not found: <path>` if missing.
 
 Then call `mcp__llm-externalizer__discover`. Abort with `[FAILED] llm-externalizer-scan-and-fix — service offline` if the service is offline.
 
