@@ -86,7 +86,7 @@ Defaults: `scan_folder`=0, `chat` / `code_task` / `check_*`=2, `search_existing_
   - Read-only analysis tools, Utility tools, Standard Input Fields
   - Advanced Parameters, File Grouping, Critical Constraints, Safety Features
 - [Usage patterns](references/usage-patterns.md)
-  - Scan a codebase for issues, Analyze multiple files together
+  - Scan a codebase for issues, Analyze multiple files in parallel
   - Apply same check to each file independently
   - Compare two file versions (pair mode), Compare files in batch mode
   - Compare files via git diff

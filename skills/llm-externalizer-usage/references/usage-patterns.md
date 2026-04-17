@@ -3,7 +3,7 @@
 ## Table of Contents
 
 - [Scan a codebase for issues](#scan-a-codebase-for-issues)
-- [Analyze multiple files together](#analyze-multiple-files-together)
+- [Analyze multiple files in parallel](#analyze-multiple-files-in-parallel)
 - [Apply same check to each file independently](#apply-same-check-to-each-file-independently)
 - [Compare two file versions (pair mode)](#compare-two-file-versions-pair-mode)
 - [Compare files in batch mode](#compare-files-in-batch-mode)
@@ -35,7 +35,7 @@ Concrete examples for every tool with recommended parameters.
 }
 ```
 
-## Analyze multiple files together
+## Analyze multiple files in parallel
 
 ```json
 {
