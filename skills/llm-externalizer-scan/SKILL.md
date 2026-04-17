@@ -77,4 +77,4 @@ See [Usage patterns](references/usage-patterns.md) for representative tool calls
 ## Resources
 
 - [Tool reference](references/tool-reference.md) — read-only analysis tools, utility tools, standard input fields, advanced parameters, file grouping, constraints, safety features.
-- [Usage patterns](references/usage-patterns.md) — scan codebase, per-file checks, compare versions, check references/imports, reuse instructions, scan with gitignore, redact patterns, specs checks, grouped processing.
+- [Usage patterns](references/usage-patterns.md) — scan codebase, per-file checks, compare versions, check broken references, check broken imports, reuse instructions, scan with gitignore, redact patterns, specs checks, grouped processing.
