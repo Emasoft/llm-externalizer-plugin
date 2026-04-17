@@ -1,6 +1,56 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [3.16.0] - 2026-04-17
+
+### Added
+
+- Feat: add scan-and-fix command with parallel fixer agents and validation
+
+New slash command /llm-externalizer:scan-and-fix orchestrates a full
+codebase audit in three stages, with zero orchestrator-side report
+reads:
+
+  1. LLM Externalizer scan with answer_mode hardcoded to 0 (one report
+     per input file) and output_dir hardcoded to
+     \$CLAUDE_PROJECT_DIR/reports/llm-externalizer/.
+  2. Parallel dispatch of the new llm-ext-fixer subagent (max 15
+     concurrent) — one agent per report, no batching across files.
+  3. Join via bundled Python script into a single final report whose
+     filename is prefixed with a sortable local-timezone ISO-8601
+     timestamp (%Y%m%dT%H%M%S%z).
+
+Script-enforced reference validation (not agent-trusted):
+
+  - scripts/validate_report.py — pre-flight: confirms scan-report
+    File: reference resolves, line ranges are in-bounds, source
+    stays inside --project-dir (path-traversal guard).
+  - scripts/validate_fixer_summary.py — post-flight: confirms
+    summary exists, non-empty, has the .fixer. tag, resolves inside
+    --reports-dir, has the expected markdown structure.
+  - scripts/join_fixer_reports.py — inlines those checks; rejected
+    summaries recorded in the final-report header with reasons.
+  - scripts/check_references.py — plugin-wide cross-file reference
+    integrity tool for .md / .yml / .json / .toml. Static refs =
+    errors; dynamic refs (containing \$, %, {{) = warnings only
+    (--strict promotes them to errors).
+
+Fixer agent hardening:
+
+  - Tag changed from [FIXER] (shell character-class trap) to .fixer.
+    (lowercase, dot-delimited, shell-safe).
+  - Bash cp backup before any Edit — rollback is cp back, not LLM
+    memory reconstruction.
+  - Mandatory per-language linter matrix with Runner Fallback Chain:
+    local binary -> project-runtime wrapper -> ephemeral remote
+    runner (uvx / pipx run / bunx / pnpm dlx / npx --yes / go run).
+    Silent skip only if no runner can invoke the tool.
+  - Mandatory Bash argument quoting; path-traversal guard on every
+    newly-discovered path.
+  - Summary filename prefixed with sortable local-timezone
+    ISO-8601 timestamp.
+
+
 ## [3.15.2] - 2026-04-15
 
 ### Testing
