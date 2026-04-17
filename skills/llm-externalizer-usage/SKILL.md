@@ -3,6 +3,7 @@ name: llm-externalizer-usage
 description: |-
   Use when offloading file analysis to external LLMs.
   Trigger with "analyze files", "scan folder", "check imports", "compare files", "batch check".
+argument-hint: "[task-description] [<file-or-folder-paths>...]"
 effort: medium
 ---
 

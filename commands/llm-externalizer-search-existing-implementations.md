@@ -1,5 +1,5 @@
 ---
-name: search-existing-implementations
+name: llm-externalizer-search-existing-implementations
 description: Scan a codebase (same language as the input files) for an existing implementation of the described feature. Wraps the llm-externalizer search_existing_implementations MCP tool. Takes a mandatory feature description, one or more codebase paths, and OPTIONAL PR source files and diff. When source files are given, the command auto-generates a PR diff via `git diff <base>...HEAD` unless one is supplied. Files are FFD-batched into ~400KB LLM requests (configurable), so 10k-file codebases typically need ~500 LLM calls instead of 10k. Exhaustive per-file output — every occurrence is reported, no cap. Works both for PR duplicate-check reviews and for greenfield "is this already done?" audits.
 allowed-tools:
   - mcp__llm-externalizer__discover
@@ -30,7 +30,7 @@ Batching is identical across all three modes — only the persistence differs. E
 - **`--diff <path>`** (OPTIONAL escape hatch): pre-made unified-diff file. Overrides `--base`.
 - **Forwarded flags**: `--free`, `--output-dir <path>`, `--exclude-dirs <a,b,c>`, `--extensions <a,b>`, `--max-files <n>`, `--max-payload-kb <n>`, `--answer-mode <n>`.
 
-Abort with `[FAILED] search-existing-implementations — <reason>` on any validation failure.
+Abort with `[FAILED] llm-externalizer-search-existing-implementations — <reason>` on any validation failure.
 
 ## Step 2 — Verify service is online
 

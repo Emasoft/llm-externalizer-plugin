@@ -1,6 +1,6 @@
 ---
-name: scan-and-fix
-description: Two-stage codebase audit — LLM Externalizer scan with ONE report per file (answer_mode hardcoded to 0), then parallel `llm-ext-fixer` agents (max 15 concurrent) verify and fix each finding. All outputs land in `./reports/llm-externalizer/`. Final output is a single joined report path — the orchestrator never reads any scan or fixer content.
+name: llm-externalizer-scan-and-fix
+description: Two-stage codebase audit — LLM Externalizer scan with ONE report per file (answer_mode hardcoded to 0), then parallel `llm-externalizer-fixer` agents (max 15 concurrent) verify and fix each finding. All outputs land in `./reports/llm-externalizer/`. Final output is a single joined report path — the orchestrator never reads any scan or fixer content.
 allowed-tools:
   - mcp__llm-externalizer__discover
   - mcp__llm-externalizer__scan_folder
@@ -32,7 +32,7 @@ Parse `$ARGUMENTS` into:
 - `--no-scan-secrets`: disables the pre-scan secret detector (`scan_secrets: false`).
 - `--free`: use the free Nemotron model (`free: true`). Warn once about provider prompt logging before running on proprietary code; proceed only after user confirms or when the argument was explicit.
 
-Abort with `[FAILED] scan-and-fix — <one-line reason>` on any validation failure.
+Abort with `[FAILED] llm-externalizer-scan-and-fix — <one-line reason>` on any validation failure.
 
 ## Step 1 — Validate inputs
 
@@ -48,7 +48,7 @@ Using `Bash`:
 4. If `--specs <path>` is set: `test -f <path>`. Abort if missing.
 5. If no `--file-list`: resolve target-path (default `.`) to an absolute path. `test -d` it. Abort if missing.
 
-Then call `mcp__llm-externalizer__discover`. Abort with `[FAILED] scan-and-fix — service offline` if the service is offline.
+Then call `mcp__llm-externalizer__discover`. Abort with `[FAILED] llm-externalizer-scan-and-fix — service offline` if the service is offline.
 
 ## Step 2 — Build and run the scan call
 
@@ -122,9 +122,9 @@ The MCP response from Step 2 already contains every `<source> -> <report>` pair 
 
 ```bash
 RUN_TS=$(date +%Y%m%dT%H%M%S%z)
-EXTRACTED="/tmp/scan-and-fix.$RUN_TS.extracted.txt"
-VALIDATED="/tmp/scan-and-fix.$RUN_TS.validated.txt"
-REJECTED="/tmp/scan-and-fix.$RUN_TS.rejected.txt"
+EXTRACTED="/tmp/llm-externalizer-scan-and-fix.$RUN_TS.extracted.txt"
+VALIDATED="/tmp/llm-externalizer-scan-and-fix.$RUN_TS.validated.txt"
+REJECTED="/tmp/llm-externalizer-scan-and-fix.$RUN_TS.rejected.txt"
 REPORTS_DIR="$CLAUDE_PROJECT_DIR/reports/llm-externalizer"
 : > "$EXTRACTED"
 : > "$VALIDATED"
@@ -133,7 +133,7 @@ REPORTS_DIR="$CLAUDE_PROJECT_DIR/reports/llm-externalizer"
 
 Then emit one `printf '%s\n' "<absolute-path>" >> "$EXTRACTED"` command per report path you parsed from the MCP response (or build the list inline with a heredoc). Exclude any line already containing `.fixer.`. Pass the same `$RUN_TS` through subsequent Bash steps so the filenames stay consistent (or capture them into your conversation state).
 
-Abort with `[FAILED] scan-and-fix — scan produced 0 reports` if `wc -l "$EXTRACTED"` shows zero.
+Abort with `[FAILED] llm-externalizer-scan-and-fix — scan produced 0 reports` if `wc -l "$EXTRACTED"` shows zero.
 
 ### Step 3b — Script-validate every extracted report before dispatching fixers
 
@@ -152,7 +152,7 @@ done < "$EXTRACTED"
 wc -l "$EXTRACTED" "$VALIDATED" "$REJECTED"
 ```
 
-Dispatch fixers (Step 4) ONLY against `$VALIDATED`. If `wc -l "$VALIDATED"` is 0, abort with `[FAILED] scan-and-fix — all N reports failed validate_report.py`.
+Dispatch fixers (Step 4) ONLY against `$VALIDATED`. If `wc -l "$VALIDATED"` is 0, abort with `[FAILED] llm-externalizer-scan-and-fix — all N reports failed validate_report.py`.
 
 > Under the hood `validate_report.py` checks: report file exists / source file referenced inside it exists / source is inside `--project-dir` / every `lines N-M` range fits the source's line count. Delegating to the script makes every reference **script-enforced, not agent-trusted**.
 
@@ -175,14 +175,14 @@ sed -n '16,30p' "$VALIDATED"
 # … and so on until TOTAL
 ```
 
-For every path that batch returns, spawn one `llm-ext-fixer` subagent via the `Task` tool. The prompt is EXACTLY the absolute report path (one line, nothing else).
+For every path that batch returns, spawn one `llm-externalizer-fixer` subagent via the `Task` tool. The prompt is EXACTLY the absolute report path (one line, nothing else).
 
 Batch rule:
 
 - **Up to 15 Task calls in a single assistant message** → they run concurrently.
 - If the batch size is > 15, emit 15 per message and wait for the batch to finish before sending the next. NEVER exceed 15 in flight at once.
 - Each `Task` call:
-  - `subagent_type: "llm-ext-fixer"`
+  - `subagent_type: "llm-externalizer-fixer"`
   - `description: "Fix report: <basename>"` (≤5 words)
   - `prompt: "<absolute report path>"` (nothing else)
 
@@ -209,7 +209,7 @@ if command -v python3 >/dev/null 2>&1; then
 elif command -v uv >/dev/null 2>&1; then
     JOIN_RUNNER=(uv run --no-project)
 else
-    echo "[FAILED] scan-and-fix — no python3 or uv on PATH" >&2
+    echo "[FAILED] llm-externalizer-scan-and-fix — no python3 or uv on PATH" >&2
     exit 1
 fi
 
@@ -231,10 +231,10 @@ The script prints one line — the `$FINAL` absolute path — on success. On exi
 Emit exactly ONE line to the user:
 
 ```
-[DONE] scan-and-fix — <N-scanned> reports / <M-fixed> summaries → <FINAL-absolute-path>
+[DONE] llm-externalizer-scan-and-fix — <N-scanned> reports / <M-fixed> summaries → <FINAL-absolute-path>
 ```
 
-On any error: `[FAILED] scan-and-fix — <one-line reason>`.
+On any error: `[FAILED] llm-externalizer-scan-and-fix — <one-line reason>`.
 
 ## Constraints
 
@@ -243,7 +243,7 @@ On any error: `[FAILED] scan-and-fix — <one-line reason>`.
 - You MUST NOT `Read` any scan report, fixer summary, or the final joined report.
 - You MUST NOT summarize any report content. Only file paths flow through the orchestrator.
 - Fixer dispatch MUST be parallel (batches of ≤15). Sequential dispatch defeats the whole design.
-- The fixer agent (`llm-ext-fixer`) must exist in the plugin. If it is missing, abort with `[FAILED] scan-and-fix — llm-ext-fixer agent not installed`.
+- The fixer agent (`llm-externalizer-fixer`) must exist in the plugin. If it is missing, abort with `[FAILED] llm-externalizer-scan-and-fix — llm-externalizer-fixer agent not installed`.
 - Flags `--file-list` and the positional `[target-path]` are mutually exclusive in effect (the target-path is silently ignored when `--file-list` is set). Flags `--instructions` and `--specs` are NOT mutually exclusive — both can be supplied and are unioned into `instructions_files_paths`.
 
 ## Error handling
@@ -253,6 +253,6 @@ On any error: `[FAILED] scan-and-fix — <one-line reason>`.
 | MCP service offline                  | Abort `[FAILED] — service offline`. Tell user to restart Claude Code.      |
 | Target path / file-list / instructions / specs missing | Abort `[FAILED] — <which> not found: <path>`.                    |
 | Scan returns 0 reports               | Abort `[FAILED] — scan produced 0 reports`. User should widen target.      |
-| Fixer agent missing                  | Abort `[FAILED] — llm-ext-fixer agent not installed`.                      |
+| Fixer agent missing                  | Abort `[FAILED] — llm-externalizer-fixer agent not installed`.                      |
 | Join script exits non-zero           | Abort `[FAILED] — join script failed: <stderr first line>`.                |
 | `--free` + proprietary code implied  | Warn ONCE about provider prompt logging, then proceed on user confirmation.|

@@ -1,5 +1,5 @@
 ---
-name: configure
+name: llm-externalizer-configure
 description: Manage LLM Externalizer profiles — switch, add, edit, or list profiles
 allowed-tools:
   - mcp__llm-externalizer__get_settings
