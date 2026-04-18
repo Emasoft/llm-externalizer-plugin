@@ -7,7 +7,7 @@ allowed-tools:
   - mcp__llm-externalizer__code_task
   - Bash
   - Task
-argument-hint: "[target] [--file-list path] [--instructions path] [--specs path] [--free]"
+argument-hint: "[target] [--file-list path] [--instructions path] [--specs path] [--free] [--no-scan-secrets] [--text-files]"
 effort: high
 ---
 
