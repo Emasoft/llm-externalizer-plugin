@@ -11,6 +11,9 @@
 
 A Claude Code plugin that offloads bounded LLM tasks (code review, bug fixing, duplicate hunting) to cheaper local or remote models via MCP. Profile-based configuration, ensemble mode, and a serial/parallel fixer pair that keep every report out of the orchestrator context.
 
+> [!NOTE]
+> **Marketplace:** this plugin ships in **[`Emasoft/emasoft-plugins`](https://github.com/Emasoft/emasoft-plugins)**. You must add that marketplace to Claude Code before you can install the plugin.
+
 ![Cost comparison: Opus $0.84, Sonnet $0.51, Ensemble $0.08](docs/cost_comparison.png)
 
 ---
@@ -50,7 +53,7 @@ A Claude Code plugin that offloads bounded LLM tasks (code review, bug fixing, d
 
 ## Requirements
 
-### For users (marketplace install)
+For regular users installing from the marketplace:
 
 - **Claude Code** 2.0+
 - **Node.js** ≥ 18 + **npm** — the marketplace install hook rebuilds the bundled MCP server
@@ -60,49 +63,66 @@ A Claude Code plugin that offloads bounded LLM tasks (code review, bug fixing, d
   - **OpenRouter API key** for remote / ensemble modes, **OR**
   - a **local model server**: LM Studio, Ollama, vLLM, or llama.cpp
 
-### For contributors (building / publishing from source)
-
-Everything above, plus:
-
-- **`uv`** — Python dependency management for plugin scripts
-- **`gh`** (GitHub CLI) — `scripts/publish.py` uses it for `gh release create`
-- **`git-cliff`** — `scripts/publish.py` uses it to auto-compute the next version and regenerate `CHANGELOG.md` from conventional commits
-
 > [!NOTE]
-> If you only install from the marketplace, you do **not** need `uv`, `gh`, or `git-cliff` — those are for running the release pipeline, not the plugin itself.
+> Building from source or opening a PR requires additional tools (`uv`, `gh`, `git-cliff`). See [Contributing → Developer requirements](#developer-requirements) at the bottom of this page.
 
 ---
 
 ## Quick start
 
-### 1. Install from the marketplace
+All commands below are **Claude Code CLI** commands — run them in your shell, not inside a Claude Code session. Run `claude plugins --help` for the complete reference of plugin subcommands and options.
+
+### 1. Add the marketplace
 
 ```bash
 claude plugin marketplace add Emasoft/emasoft-plugins
+```
+
+### 2. (optional) Update the marketplace index
+
+```bash
 claude plugin marketplace update emasoft-plugins
+```
+
+> [!TIP]
+> Run this if `claude plugin install` later says *not found* — it refreshes the local marketplace cache.
+
+### 3. Install the plugin
+
+```bash
 claude plugin install llm-externalizer@emasoft-plugins
 ```
 
-Restart Claude Code to activate.
+Restart Claude Code (or run `/reload-plugins` inside a session) to activate.
 
-> [!NOTE]
-> If `claude plugin install` says *not found*, run `claude plugin marketplace update emasoft-plugins` first to refresh the local index.
+### 4. Update the plugin (later)
 
-### 2. Configure a backend
-
-Edit `~/.llm-externalizer/settings.yaml` (created on first install with 4 templates). The fastest path:
-
-- **Remote ensemble** — set `$OPENROUTER_API_KEY` in your shell (or store it via `/plugin configure llm-externalizer`). The default `remote-ensemble` profile works out of the box.
-- **Local LM Studio** — start LM Studio with a model loaded, then set `active: local` in `settings.yaml`.
-
-Full config reference: [Configuration](#configuration).
-
-### 3. Verify + run
-
+```bash
+claude plugin update llm-externalizer
 ```
-/llm-externalizer:llm-externalizer-discover     # prints profile, model, auth, health
-/llm-externalizer:llm-externalizer-scan-and-fix # audit the whole codebase in parallel
+
+### 5. (optional) Uninstall
+
+```bash
+claude plugin uninstall llm-externalizer
 ```
+
+### How to install from inside Claude Code
+
+Paste the URL of this repository (`https://github.com/Emasoft/llm-externalizer-plugin`) in the prompt and ask Claude to install it for you as a **project**, **local**, or **user** scope plugin.
+
+### Post-install: configure + verify
+
+1. **Configure a backend.** Edit `~/.llm-externalizer/settings.yaml` (created on first install with 4 templates). The fastest path:
+   - **Remote ensemble** — set `$OPENROUTER_API_KEY` in your shell (or store it via `/plugin configure llm-externalizer`). The default `remote-ensemble` profile works out of the box.
+   - **Local LM Studio** — start LM Studio with a model loaded, then set `active: local` in `settings.yaml`.
+   - Full reference: [Configuration](#configuration).
+
+2. **Verify + run** (inside a Claude Code session):
+   ```
+   /llm-externalizer:llm-externalizer-discover     # prints profile, model, auth, health
+   /llm-externalizer:llm-externalizer-scan-and-fix # audit the whole codebase in parallel
+   ```
 
 ---
 
@@ -374,9 +394,68 @@ llm-externalizer-plugin/
 
 ## Contributing
 
-- **Branch + PR workflow** — fork, branch, PR.
-- **Release pipeline** — `scripts/publish.py`. Runs 9 validation gates (npm-ci, typecheck, lint, build, test, ruff, plugin.json, `claude plugin validate`, CPV) before pushing; direct `git push` is blocked by a process-ancestry pre-push hook.
-- **Validation** — `claude plugin validate .` and `cpv-remote-validate plugin <path>` both run clean on every release.
+### Developer install (build from source + open a PR)
+
+```bash
+# 1. Fork the repo on GitHub: https://github.com/Emasoft/llm-externalizer-plugin/fork
+#    Then clone YOUR fork (replace <your-username>):
+git clone https://github.com/<your-username>/llm-externalizer-plugin.git
+cd llm-externalizer-plugin
+
+# 2. Add the upstream remote so you can pull in new releases:
+git remote add upstream https://github.com/Emasoft/llm-externalizer-plugin.git
+
+# 3. Build the bundled MCP server (installs npm deps + compiles TypeScript):
+python3 scripts/setup.py
+
+# 4. (optional) Install the plugin locally to test your changes before pushing.
+#    Either point Claude Code at your working copy:
+claude plugin install "$PWD"
+#    …or, if you prefer marketplace flow, install via the marketplace using
+#    the CLI commands shown in Quick start above.
+
+# 5. Create a feature branch:
+git checkout -b feat/<short-description>
+
+# 6. Hack. Run validation before committing — every PR must pass these gates:
+claude plugin validate .
+# (optional) also run the CPV remote validator for deeper checks:
+uvx --from git+https://github.com/Emasoft/claude-plugins-validation \
+    --with pyyaml cpv-remote-validate plugin "$PWD"
+
+# 7. Commit with a Conventional Commit prefix so git-cliff can classify it
+#    (feat: / fix: / docs: / refactor: / chore: / BREAKING CHANGE: …).
+#    Use `git commit` — NEVER `git push` directly (pre-push hook will refuse).
+git commit -m "feat: <what it does>"
+
+# 8. Push YOUR fork and open a PR against Emasoft/llm-externalizer-plugin main:
+git push origin feat/<short-description>
+gh pr create --repo Emasoft/llm-externalizer-plugin --base main
+```
+
+> [!IMPORTANT]
+> Direct `git push` is blocked by a process-ancestry pre-push hook. The only path from local commits to the upstream remote is `scripts/publish.py`, which runs **9 mandatory validation gates** before pushing: `npm ci`, `npm run typecheck`, `npm run lint`, `npm run build`, `npm test`, `ruff check`, `shellcheck`, `plugin.json` schema, `claude plugin validate`, and the CPV remote validator. All must pass with 0 errors. `publish.py` also uses `git-cliff` to auto-compute the next version from your Conventional Commits and regenerate `CHANGELOG.md`. **For contributors, you only push to YOUR fork — the upstream release is cut by the maintainer via `publish.py`.**
+
+### Developer requirements
+
+Beyond the user requirements above, you'll also need:
+
+- **`uv`** — Python dependency management for plugin scripts (`uv venv --python 3.12`, `uv run …`)
+- **`gh`** (GitHub CLI) — for `gh pr create` and the maintainer's `gh release create`
+- **`git-cliff`** — used by `scripts/publish.py` to compute the next version and regenerate `CHANGELOG.md` from Conventional Commits
+
+### Release pipeline (maintainer only)
+
+`scripts/publish.py` is the only path from `main` to an upstream tag + GitHub release:
+
+```bash
+python3 scripts/publish.py              # auto-bump via git-cliff
+python3 scripts/publish.py --patch      # force patch bump
+python3 scripts/publish.py --minor      # force minor bump
+python3 scripts/publish.py --major      # force major bump
+python3 scripts/publish.py --dry-run    # preview (still runs all checks)
+python3 scripts/publish.py --check-only # run checks only, no mutations (used by pre-push hook)
+```
 
 ---
 
