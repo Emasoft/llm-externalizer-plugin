@@ -7,8 +7,7 @@ allowed-tools:
   - mcp__llm-externalizer__code_task
   - Bash
   - Task
-argument-hint: "[target] [--file-list path] [--instructions path] [--specs path] [--free] [--no-scan-secrets] [--text-files]"
-effort: high
+argument-hint: "[target] [--file-list path] [--instructions path] [--specs path] [--free] [--no-secrets] [--text]"
 ---
 
 Orchestrates a full **scan → per-file report → parallel fix → join** pass.
@@ -39,11 +38,11 @@ For everything else — logic bugs, error handling, security, resource leaks in 
 Parse `$ARGUMENTS` into:
 
 - `[target-path]` (positional, optional): absolute folder to scan. Relative paths resolve against `$CLAUDE_PROJECT_DIR`. **If omitted (and `--file-list` is also omitted), the orchestrator runs an auto-discovery pass (Step 0 below) that builds a curated file list and presents it for confirmation. It does NOT silently default to `.` or `$CLAUDE_PROJECT_DIR` and does NOT just hand a folder to `scan_folder` — silent defaults + blind folder scans dilute the audit with docs, examples, samples, and generated output while exposing fixers to non-source content.**
-- `--text-files`: include plain-text formats (`.md .txt .json .yml .yaml .toml .ini .cfg .conf .xml .html .rst .csv`) in the scan. Without this flag, `scan_folder` uses its default source-code extensions.
+- `--text`: include plain-text formats (`.md .txt .json .yml .yaml .toml .ini .cfg .conf .xml .html .rst .csv`) in the scan. Without this flag, `scan_folder` uses its default source-code extensions.
 - `--file-list <path>`: absolute path to a `.txt` file with ONE absolute file path per line. When present, the command routes through `code_task` and scans exactly those files (positional target-path is ignored).
 - `--instructions <path>`: absolute path to an `.md` file whose contents become the scan instructions. Replaces the default audit rubric.
 - `--specs <path>`: absolute path to an `.md` specification file. Appended to `instructions_files_paths`; the scan checks each file against the spec.
-- `--no-scan-secrets`: disables the pre-scan secret detector (`scan_secrets: false`).
+- `--no-secrets`: disables the pre-scan secret detector (`scan_secrets: false`).
 - `--free`: use the free Nemotron model (`free: true`). Warn once about provider prompt logging before running on proprietary code; proceed only after user confirms or when the argument was explicit.
 
 Abort with `[FAILED] llm-externalizer-scan-and-fix — <one-line reason>` on any validation failure.
@@ -177,7 +176,7 @@ Reference function names and line numbers. Be terse. One line per finding. No pr
 Add the flags:
 
 - `--free` → `"free": true`
-- `--no-scan-secrets` → `"scan_secrets": false`
+- `--no-secrets` → `"scan_secrets": false`
 
 Common tool arguments (ALWAYS present, NOT overridable):
 
@@ -201,7 +200,7 @@ Call `mcp__llm-externalizer__code_task`:
   "instructions": "<see above>",
   "instructions_files_paths": ["<if applicable>"],
   "free": <if applicable>,
-  "scan_secrets": <if --no-scan-secrets: false>
+  "scan_secrets": <if --no-secrets: false>
 }
 ```
 
@@ -215,7 +214,7 @@ Call `mcp__llm-externalizer__scan_folder`:
   "answer_mode": 0,
   "use_gitignore": true,
   "output_dir": "<CLAUDE_PROJECT_DIR>/reports/llm-externalizer",
-  "extensions": ["<only if --text-files>"],
+  "extensions": ["<only if --text>"],
   "exclude_dirs": [
     "docs_dev", "reports_dev", "scripts_dev", "tests_dev",
     "samples_dev", "examples_dev", "downloads_dev",
@@ -227,11 +226,11 @@ Call `mcp__llm-externalizer__scan_folder`:
   "instructions": "<see above>",
   "instructions_files_paths": ["<if applicable>"],
   "free": <if applicable>,
-  "scan_secrets": <if --no-scan-secrets: false>
+  "scan_secrets": <if --no-secrets: false>
 }
 ```
 
-With `--text-files`, set `extensions: [".md", ".txt", ".json", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf", ".xml", ".html", ".rst", ".csv"]`. Without it, OMIT the `extensions` field.
+With `--text`, set `extensions: [".md", ".txt", ".json", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf", ".xml", ".html", ".rst", ".csv"]`. Without it, OMIT the `extensions` field.
 
 > The `exclude_dirs` list above is **always sent**, on top of the server's own built-in ignores (`node_modules`, `.git`, `dist`, `build`, etc.). It covers the `*_dev/` convention from the project-level rules (cache/tmp/runtime directories that must never be committed or scanned) plus other recurrent runtime/artifact folders. `use_gitignore: true` handles anything listed in `.gitignore` when the target is a git repo; `exclude_dirs` catches the rest for non-git trees.
 
