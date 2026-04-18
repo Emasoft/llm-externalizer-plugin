@@ -1,6 +1,39 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [8.0.0] - 2026-04-18
+
+### Added
+
+- Feat!: shorten scan-phase flag names
+
+BREAKING: two flags on both scan commands are renamed:
+
+  --no-scan-secrets  ->  --no-secrets
+  --text-files       ->  --text
+
+Users who invoked scan-and-fix or scan-and-fix-serially with the old
+flag names must update their commands.
+
+Motivation: CPV's command validator warns when argument-hint > ~100
+chars ("may be truncated in UI"). With both flags visible in the hint
+(as you asked), the old spelling came in at 108 chars and both
+commands scored 97/100. The shorter names cut the hint to 97 chars
+and both commands are now at 100/100.
+
+Semantically the flags are unchanged: --no-secrets still disables the
+pre-scan secret detector (scan_secrets: false); --text still widens
+the scan to include plain-text formats (.md .txt .json .yml .yaml
+.toml .ini .cfg .conf .xml .html .rst .csv) instead of the default
+source-code extensions.
+
+Also dropped a stale 'effort: high' line from scan-and-fix.md's
+frontmatter — it's not in the plugin-shipped command allowed-fields
+set (CPV warning), and the command runs fine without it. scan-and-fix
+is already dispatched with the effort inherited from the model
+config, so the field was a no-op anyway.
+
+
 ## [7.1.2] - 2026-04-18
 
 ### Fixed
