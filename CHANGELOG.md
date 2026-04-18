@@ -1,6 +1,74 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [6.0.0] - 2026-04-18
+
+### Added
+
+- Feat!: rename agents with -agent suffix + add llm-externalizer-fix-report command + drop line-count CANTFIX cap
+
+BREAKING: all three plugin-shipped agents are renamed. Any user config,
+slash-command script, or Task dispatch that references the old names
+must be updated:
+
+  llm-externalizer-fixer      -> llm-externalizer-fixer-agent
+  llm-externalizer-reviewer   -> llm-externalizer-reviewer-agent
+  llm-externalizer-bug-fixer  -> llm-externalizer-bug-fixer-agent
+
+Motivation: the `-agent` suffix makes agents visibly distinct from
+commands in the slash-command menu and in logs. Commands are the
+user-facing surface; agents are internal dispatch targets that the user
+should NOT invoke directly. The naming makes this hierarchy obvious.
+
+Updated everywhere the old names appeared: agent frontmatter `name:`
+fields, example dialog lines, /tmp BACKUP path prefixes, command
+`subagent_type:` dispatches, README features list + commands table +
+plugin-structure block, skill frontmatter `agent:` field, and doc
+references in scripts. CHANGELOG entries are historical commit records
+and were left untouched.
+
+New command: `/llm-externalizer:llm-externalizer-fix-report`. Wraps a
+single `llm-externalizer-fixer-agent` dispatch for one already-generated
+per-file scan report — the single-file counterpart to the parallel
+dispatcher in `scan-and-fix`. User-facing surface now has a command per
+fixer agent: `scan-and-fix` + `fix-report` invoke `fixer-agent`;
+`fix-found-bugs` invokes `bug-fixer-agent`. Users should never need to
+call an agent directly.
+
+Rules change in both fixer agents: remove the ">10 lines of rewrite"
+clause from the CANTFIX-escalation rule. Size of the fix is no longer
+a reason to escalate — only SCOPE growth (touching another file or
+changing a public API) does. A large in-file rewrite with
+mcp__serena-mcp__replace_symbol_body is fine.
+
+Files touched:
+- agents/llm-externalizer-{fixer,reviewer,bug-fixer}.md renamed to
+  *-agent.md; frontmatter name: fields updated; internal refs updated
+- commands/llm-externalizer-fix-report.md NEW
+- commands/llm-externalizer-{scan-and-fix,fix-found-bugs}.md refs
+  updated
+- skills/llm-externalizer-scan/SKILL.md agent: field updated
+- scripts/fix_found_bugs_helper.py help text updated
+- scripts/validate_fixer_summary.py docstring updated
+- README.md features, commands table, plugin structure updated
+
+
+### Fixed
+
+- Fix(reviewer): upgrade model from haiku to sonnet
+
+User reports the Haiku-class reviewer hallucinates too often to be
+trusted on real-code audits — upgrade to Sonnet to improve signal-to-
+noise. The reviewer is read-only (no Write/Edit in its tool surface)
+so this is a pure capability/cost upgrade, not a scope change.
+
+- agents/llm-externalizer-reviewer-agent.md: model: haiku -> sonnet
+- README: "Haiku-class" -> "Sonnet-class" (features bullet + plugin
+  tree comment)
+- skills/llm-externalizer-scan/SKILL.md: "(Haiku, no Write/Edit)" ->
+  "(Sonnet, no Write/Edit)"
+
+
 ## [5.2.1] - 2026-04-18
 
 ### Documentation
