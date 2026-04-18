@@ -28,6 +28,7 @@ A Claude Code plugin that offloads bounded LLM tasks (code review, bug fixing, d
 - [Configuration](#configuration)
 - [MCP tools reference](#mcp-tools-reference)
 - [Skills](#skills)
+- [Troubleshooting](#troubleshooting)
 - [Plugin structure](#plugin-structure)
 - [Contributing](#contributing)
 - [License](#license)
@@ -171,7 +172,7 @@ No parameters. Read-only — shows the current profile table. To change settings
 | `--instructions PATH` | `.md` path | no | built-in REAL-BUGS-ONLY rubric | Replaces the default audit rubric. Default rubric forbids flagging missing try/except, null checks, docstrings, or style suggestions — only REAL bugs (logic errors, crashes, security w/ exploit path, resource leaks, data corruption, contract mismatch, local broken refs) |
 | `--specs PATH` | `.md` path | no | — | Spec file. Each batch sees source + spec, so references are validated against the authoritative spec. Combinable with `--instructions` |
 | `--free` | flag | no | off | Use the free Nemotron model. Lower quality than ensemble; provider logs prompts |
-| `--no-secrets` | flag | no | off | **Default: secrets ARE scanned and the run aborts on any finding.** Opt-out skips the check (use only after moving secrets to `.env`) |
+| `--no-secrets` | flag | no | off | **Default: `scan_secrets: true` + `redact_secrets: true`** — any detected API key / token / password is replaced with `[REDACTED:LABEL]` and the scan continues. Opt-out turns off BOTH (skips detection AND redaction); use only after moving secrets to `.env` |
 | `--text` | flag | no | off | Include `.md .txt .json .yml .yaml .toml .ini .cfg .conf .xml .html .rst .csv` in the scan. Pair with `--instructions` |
 
 **Behaviour.** Scan → N per-file (or per-group) reports in `./reports/llm-externalizer/` → parallel dispatch (≤15 concurrent) of `llm-externalizer-parallel-fixer-agent` → each writes a `.fixer.`-tagged summary → join script merges into one final report.
@@ -203,13 +204,15 @@ Same parameter set as `scan-and-fix` (scan phase is byte-identical — see that 
 
 ## Agents
 
-All three agents are **internal** — users dispatch them via slash commands, not directly. Each Task spawn is fresh (zero parent-conversation context); user/project `CLAUDE.md` load the same way they do under `claude -p`.
+All five agents are **internal** — users dispatch them via slash commands, not directly. Each Task spawn is fresh (zero parent-conversation context); user/project `CLAUDE.md` load the same way they do under `claude -p`. The fixer commands show a two-option menu (Sonnet default, Opus optional) before dispatching; the two fixer variants below exist so the right model is pre-baked and pickable without a `model:` override at call time.
 
 | Agent | Model | Role | Dispatched by |
 |---|---|---|---|
 | `llm-externalizer-reviewer-agent` | sonnet | Read-only code reviewer. Inherits full tool surface (SERENA, TLDR, Grepika, LSP). Returns only report paths | The `llm-externalizer-scan` skill (`context: fork`) |
-| `llm-externalizer-parallel-fixer-agent` | opus | Verifies and fixes ALL findings in ONE scan report. Stateless; writes a `.fixer.`-tagged summary; dispatched ≤15 in parallel | `scan-and-fix`, `fix-report` |
-| `llm-externalizer-serial-fixer-agent` | opus | Fixes exactly ONE bug per invocation from an aggregated bug list. Stateful on disk (mutates the list). Dispatched one at a time | `scan-and-fix-serially`, `fix-found-bugs` |
+| `llm-externalizer-parallel-fixer-sonnet-agent` | sonnet | Verifies and fixes ALL findings in ONE scan report. Stateless; writes a `.fixer.`-tagged summary; dispatched ≤15 in parallel | `scan-and-fix`, `fix-report` — picked when the user chooses **Sonnet** on the menu |
+| `llm-externalizer-parallel-fixer-opus-agent` | opus | Same role as the sonnet variant but on Opus | `scan-and-fix`, `fix-report` — picked when the user chooses **Opus** on the menu |
+| `llm-externalizer-serial-fixer-sonnet-agent` | sonnet | Fixes exactly ONE bug per invocation from an aggregated bug list. Stateful on disk (mutates the list). Dispatched one at a time | `scan-and-fix-serially`, `fix-found-bugs` — picked when the user chooses **Sonnet** |
+| `llm-externalizer-serial-fixer-opus-agent` | opus | Same role as the sonnet variant but on Opus | `scan-and-fix-serially`, `fix-found-bugs` — picked when the user chooses **Opus** |
 
 ---
 
@@ -217,7 +220,10 @@ All three agents are **internal** — users dispatch them via slash commands, no
 
 Settings file: `~/.llm-externalizer/settings.yaml`. The `/configure` command is a **read-only inspector** — to change anything, edit the file, save, then restart Claude Code or call the MCP `reset` tool.
 
-### Remote (OpenRouter)
+> [!NOTE]
+> The model IDs shown below are our **recommended defaults** — wise picks for the common cases. You can change any of them in `~/.llm-externalizer/settings.yaml` (model, second_model, third_model, url, api_token). Just restart Claude Code or call the MCP `reset` tool after editing.
+
+### Remote (OpenRouter ensemble — three models)
 
 ```yaml
 active: remote-ensemble
@@ -226,22 +232,64 @@ profiles:
   remote-ensemble:
     mode: remote-ensemble
     api: openrouter-remote
-    model: "google/gemini-2.5-flash"
+    model:        "google/gemini-2.5-flash"
     second_model: "x-ai/grok-4.1-fast"
+    third_model:  "qwen/qwen3.6-plus"
     api_key: $OPENROUTER_API_KEY
 ```
 
-### Local (LM Studio)
+`mode: remote-ensemble` requires **three** model IDs. Every file is reviewed by all three in parallel; you get three independent responses combined into one report. The three defaults above are our recommendation — swap any line to try a different model.
+
+### Remote (OpenRouter single model)
 
 ```yaml
-active: local
+active: remote
 
 profiles:
-  local:
+  remote:
+    mode: remote
+    api: openrouter-remote
+    model: "anthropic/claude-sonnet-4"
+    api_key: $OPENROUTER_API_KEY
+```
+
+### Local (LM Studio — Qwen 3.5 27B)
+
+```yaml
+active: local-lmstudio
+
+profiles:
+  local-lmstudio:
     mode: local
     api: lmstudio-local
-    model: "bartowski/Llama-3.3-70B-Instruct-GGUF"
+    # macOS (Apple Silicon) — MLX build, much faster than GGUF:
+    model: "mlx-community/Qwen3.5-27B-Instruct-4bit"
+    # Windows / Linux — GGUF build:
+    # model: "bartowski/Qwen3.5-27B-Instruct-GGUF"
 ```
+
+Start LM Studio, load the model above into the server tab, and `llm-externalizer-discover` will pick it up.
+
+### Local (Ollama)
+
+```yaml
+active: local-ollama
+
+profiles:
+  local-ollama:
+    mode: local
+    api: ollama-local
+    model: "qwen3.5:27b"
+    # url defaults to http://localhost:11434 — override only if Ollama runs on a different host/port:
+    # url: "http://192.168.1.42:11434"
+    # Ollama normally needs no auth, so api_token is omitted.
+```
+
+Pull the model first: `ollama pull qwen3.5:27b`. Then start the Ollama daemon (`ollama serve` or the tray app) and `llm-externalizer-discover` will list it.
+
+### Local (vLLM / llama.cpp)
+
+Same shape as the Ollama block; change `api: ollama-local` to `api: vllm-local` (port 8000, `$VLLM_API_KEY`) or `api: llamacpp-local` (port 8080, no auth). Set the `model:` to whatever model ID your server advertises at its `/v1/models` endpoint.
 
 ### Backend presets
 
@@ -335,7 +383,7 @@ If a file exceeds a model's limit, that model is excluded and the others run. Lo
 Uses `nvidia/nemotron-3-super-120b-a12b:free`. No cost, single model, 262K context.
 
 > [!WARNING]
-> **Provider logs prompts on the free tier.** Don't use on proprietary code. Lower quality than ensemble — expect more false positives and shallower analysis.
+> **Provider logs prompts on the free tier.** Don't use on proprietary code.
 
 ### Rate limiting
 
@@ -349,8 +397,8 @@ Adaptive RPS auto-detected from OpenRouter balance ($1 ≈ 1 RPS, max 500). AIMD
 | `output_dir` | `reports_dev/llm_externalizer/` | Absolute path for reports |
 | `max_retries` | 1 | Per-file retries in mode 0. Set 3 for parallel + retry + circuit breaker |
 | `redact_regex` | — | JavaScript regex — matches become `[REDACTED:USER_PATTERN]` |
-| `scan_secrets` | true | Abort run if secrets are detected |
-| `redact_secrets` | false | Redact instead of aborting (discouraged — prefer `.env`) |
+| `scan_secrets` | true | Run the secret detector on every input file before sending to the LLM |
+| `redact_secrets` | true | Replace any detected secret with `[REDACTED:LABEL]` instead of aborting. **Paired with `scan_secrets: true` by default** — the slash commands always send both together so the run keeps going. Set both to `false` with `--no-secrets` on the slash-command flags |
 | `free` | false | Free Nemotron model |
 | `max_payload_kb` | 400 | Max payload per LLM request |
 
@@ -366,6 +414,51 @@ Two skills activate automatically when Claude Code sees matching triggers:
 | `llm-externalizer-config` | Profile management, settings workflow, validation rules, ensemble configuration, troubleshooting |
 
 Plus three more skills that drive specific workflows (`llm-externalizer-scan`, `llm-externalizer-free-scan`, `llm-externalizer-or-model-info`).
+
+---
+
+## Troubleshooting
+
+Run `/llm-externalizer:llm-externalizer-discover` first — it prints active profile, model, auth-token status, API URL, and service health. Most problems show up there.
+
+### OpenRouter
+
+| Symptom | Cause / fix |
+|---|---|
+| `discover` shows `$OPENROUTER_API_KEY (NOT SET)` | The env var is missing from the MCP server's process environment. Set it in your shell (`export OPENROUTER_API_KEY=sk-or-...`) then restart Claude Code, OR set it via `/plugin configure llm-externalizer` (stores in keychain) |
+| `discover` shows the token resolved but scans 401 | Key revoked or wrong project. Confirm at <https://openrouter.ai/keys>. Regenerate and re-set |
+| `discover` shows the token resolved but all scans 429 | You're out of credits or hit the per-minute RPS ceiling. Check balance at <https://openrouter.ai/activity>. AIMD back-off will recover automatically — just wait |
+| Scan fails with `model not found` | The model ID in `settings.yaml` was renamed or deprecated upstream. Look up the current ID at <https://openrouter.ai/models> and update `model:` / `second_model:` / `third_model:` |
+| Ensemble report shows only 1-2 models | One of the three exceeded its file-size limit (see [Ensemble mode](#ensemble-mode-default-models)) or the model was temporarily removed. The report still lands — just with fewer sections |
+| `plugin configure` asks for the key every time | You're on a system without a usable keychain. Use the shell env var instead: `export OPENROUTER_API_KEY=...` in your shell rc |
+
+### LM Studio
+
+| Symptom | Cause / fix |
+|---|---|
+| `discover` shows `service offline` | LM Studio isn't running, or its server tab isn't started. Open LM Studio → **Developer** / **Server** tab → **Start Server**. Default port is 1234 |
+| Scan times out on every file | The loaded model is too big for your RAM and is swapping. Switch to a smaller quant (`Qwen3.5-27B-Instruct-4bit` instead of `Qwen3.5-27B-Instruct-8bit`), or close other apps |
+| `model not loaded` or wrong output | The `model:` string in `settings.yaml` doesn't match the loaded model ID. Check LM Studio's **Server** tab — the model ID it advertises is what you put in `settings.yaml` |
+| Structured output errors (`response_format`) | LM Studio older than v0.3.x doesn't support structured output. Update LM Studio to the latest version |
+| Wrong default: on Mac you got the GGUF | Use the MLX build for Apple Silicon — much faster. Set `model: "mlx-community/Qwen3.5-27B-Instruct-4bit"`. GGUF is for Windows / Linux |
+
+### Ollama
+
+| Symptom | Cause / fix |
+|---|---|
+| `discover` shows `service offline` | Ollama daemon isn't running. Start with `ollama serve` (CLI) or launch the Ollama tray app |
+| `model not found` | You haven't pulled the model locally. Run `ollama pull qwen3.5:27b` (substitute whatever `model:` you set in `settings.yaml`) |
+| Very slow first request | Ollama is loading the model weights. First scan after a cold start is always slower; subsequent requests hit the cache |
+| Wrong host / port | Default is `http://localhost:11434`. If Ollama runs elsewhere (remote box, different port), add `url: "http://..."` to the profile |
+| Structured output flaky | Ollama's structured-output support varies by model. If JSON-schema calls fail, try a different model that advertises `tools: true` in `ollama list` |
+
+### General
+
+| Symptom | Cause / fix |
+|---|---|
+| `/llm-externalizer:...` commands don't autocomplete | Plugin not installed or not loaded. Run `claude plugin list` — if `llm-externalizer` is missing, install per [Quick start](#quick-start). If installed, restart Claude Code or `/reload-plugins` |
+| `discover` works but scans never produce reports | Check `$CLAUDE_PROJECT_DIR/reports/llm-externalizer/` — reports always land there. If the dir is empty, the scan aborted; look at the last assistant message for the `[FAILED]` reason |
+| Pre-scan secret-scan aborts the run | Default is redact-not-abort (secrets are replaced with `[REDACTED:LABEL]` and the scan continues). If you're seeing an abort, you may be on an older plugin version — run `claude plugin update llm-externalizer` |
 
 ---
 

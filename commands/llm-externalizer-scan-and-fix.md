@@ -1,6 +1,6 @@
 ---
 name: llm-externalizer-scan-and-fix
-description: Two-stage codebase audit. LLM Externalizer scan produces one report per file; parallel llm-externalizer-parallel-fixer-agent subagents (≤15 concurrent) verify and fix each finding. Orchestrator never reads scan or fixer content — only report paths.
+description: Two-stage codebase audit. LLM Externalizer scan produces one report per file; parallel sonnet- or opus-model fixer subagents (≤15 concurrent) verify and fix each finding. Orchestrator never reads scan or fixer content — only report paths.
 allowed-tools:
   - mcp__llm-externalizer__discover
   - mcp__llm-externalizer__scan_folder
@@ -42,7 +42,7 @@ Parse `$ARGUMENTS` into:
 - `--file-list <path>`: absolute path to a `.txt` file with ONE absolute file path per line. When present, the command routes through `code_task` and scans exactly those files (positional target-path is ignored).
 - `--instructions <path>`: absolute path to an `.md` file whose contents become the scan instructions. Replaces the default audit rubric.
 - `--specs <path>`: absolute path to an `.md` specification file. Appended to `instructions_files_paths`; the scan checks each file against the spec.
-- `--no-secrets`: disables the pre-scan secret detector (`scan_secrets: false`).
+- `--no-secrets`: disables the pre-scan secret detector (`scan_secrets: false`, `redact_secrets: false`). Default behaviour is `scan_secrets: true` + `redact_secrets: true` — secrets are detected and REDACTED (replaced by `[REDACTED:LABEL]`) before the files reach the LLM, so the scan keeps running. Use this flag only when you've already moved secrets to `.env` (gitignored) and want to skip the redaction pass.
 - `--free`: use the free Nemotron model (`free: true`). Warn once about provider prompt logging before running on proprietary code; proceed only after user confirms or when the argument was explicit.
 
 Abort with `[FAILED] llm-externalizer-scan-and-fix — <one-line reason>` on any validation failure.
@@ -104,14 +104,29 @@ The agent — not a blind glob — curates the scan target. Humans cannot reliab
    # emit one absolute path per line via printf or a heredoc
    ```
 
-5. **Show the user the curated list before committing.** Print ONLY:
-   - Codebase root (`git rev-parse --show-toplevel` result).
-   - Total file count, breakdown by top-level directory (e.g. `mcp-server/src: 18, scripts: 6, agents: 2, commands: 4, skills: 11`).
-   - 3–5 representative included paths.
-   - 3–5 representative EXCLUDED paths (so the user can sanity-check the filter).
-   - Ask one question: "Proceed with these N files? [y / edit list / cancel]". Do NOT auto-run.
+5. **Show a terse summary, then ask via `AskUserQuestion`.** Print only:
+   - `Codebase root: <path>` (one line)
+   - `Files: N (<dir1>: n, <dir2>: n, …)` (one line)
+   - `Included e.g.: <3-5 paths>` (one line)
+   - `Excluded e.g.: <3-5 paths>` (one line)
 
-6. On confirm, treat the tmp file as if the user had supplied `--file-list $AUTO_LIST` and continue from Step 1 in Branch-A mode. On "cancel", abort cleanly. On "edit list", surface the tmp path so the user can prune it and re-invoke with `--file-list <that-path>`.
+   Then call **`AskUserQuestion`** with a multiple-choice menu. Default (first option) is `Proceed` so the user can just press Enter:
+
+   ```
+   question: "Proceed with the scan?"
+   options:
+     - label: "Proceed"
+       description: "Scan the N curated files and continue."
+     - label: "Edit list"
+       description: "Pause so I can prune the tmp file list, then re-invoke with --file-list."
+     - label: "Cancel"
+       description: "Abort cleanly — no scan."
+   ```
+
+6. Map the user's answer:
+   - `Proceed` → treat the tmp file as an implicit `--file-list $AUTO_LIST` and continue from Step 1 in Branch-A mode.
+   - `Edit list` → print the tmp path and stop.
+   - `Cancel` → abort cleanly.
 
 ## Step 1 — Validate inputs
 
@@ -176,7 +191,8 @@ Reference function names and line numbers. Be terse. One line per finding. No pr
 Add the flags:
 
 - `--free` → `"free": true`
-- `--no-secrets` → `"scan_secrets": false`
+- `--no-secrets` → `"scan_secrets": false, "redact_secrets": false`
+- **Default (no `--no-secrets`)** → `"scan_secrets": true, "redact_secrets": true` — ALWAYS pair these. Scan ON + redact ON means secrets are replaced with `[REDACTED:LABEL]` and the run continues; scan ON + redact OFF would abort on any finding, which is more disruptive than the redacting default.
 
 **Auto-detect answer_mode** — compute BEFORE building the scan JSON:
 
@@ -215,7 +231,8 @@ Call `mcp__llm-externalizer__code_task`:
   "instructions": "<see above>",
   "instructions_files_paths": ["<if applicable>"],
   "free": <if applicable>,
-  "scan_secrets": <if --no-secrets: false>
+  "scan_secrets": <default true; --no-secrets: false>,
+  "redact_secrets": <default true; --no-secrets: false>
 }
 ```
 
@@ -243,7 +260,8 @@ Call `mcp__llm-externalizer__scan_folder`:
   "instructions": "<see above>",
   "instructions_files_paths": ["<if applicable>"],
   "free": <if applicable>,
-  "scan_secrets": <if --no-secrets: false>
+  "scan_secrets": <default true; --no-secrets: false>,
+  "redact_secrets": <default true; --no-secrets: false>
 }
 ```
 
@@ -297,7 +315,47 @@ Dispatch fixers (Step 4) ONLY against `$VALIDATED`. If `wc -l "$VALIDATED"` is 0
 
 For scans producing more than ~200 reports, write the extracted path list to a tmp file with `Bash` and iterate it in batches of 15 via `sed -n "N,Mp"` rather than keeping the full list in a single assistant message. Peak context per batch stays at ~1.8 KB regardless of N. If `--file-list` is used with more than 200 paths, stop and suggest the user switch to a folder scan — `code_task`'s `input_files_paths` array forces the orchestrator to JSON-serialize every path once.
 
-## Step 4 — Dispatch fixer agents (max 15 concurrent, sourced from `$VALIDATED`)
+## Step 4a — Pre-fix checkpoint (mandatory)
+
+Before any fixer touches source, the working tree must be clean enough to revert. Call `Bash` from the codebase root:
+
+```bash
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if [ -n "$(git status --porcelain)" ]; then
+    # Uncommitted work exists — create a checkpoint the user can diff against.
+    STAMP=$(date +%Y%m%dT%H%M%S%z)
+    git add -A \
+      && git commit -m "chore(checkpoint): pre-scan-and-fix $STAMP" \
+      && echo "Checkpoint commit created. Revert with: git reset --soft HEAD~1"
+  else
+    echo "Working tree clean — no checkpoint needed."
+  fi
+else
+  echo "Not a git repo — the user is responsible for backups."
+fi
+```
+
+Do NOT use `AskUserQuestion` here — checkpointing is always cheap and always safe; a menu would add a prompt for nothing. Just print the one-line result and move on.
+
+## Step 4b — Pick the fixer model
+
+Ask via `AskUserQuestion`. Default (first option) is `Sonnet` so the user can press Enter:
+
+```
+question: "Which model should the fixers use?"
+options:
+  - label: "Sonnet"
+    description: "Faster, cheaper. Recommended default."
+  - label: "Opus"
+    description: "Slower, more thorough. Pick for high-stakes or subtle bugs."
+```
+
+Map the answer to the agent name:
+
+- `Sonnet` → `FIXER_AGENT="llm-externalizer-parallel-fixer-sonnet-agent"`
+- `Opus`   → `FIXER_AGENT="llm-externalizer-parallel-fixer-opus-agent"`
+
+## Step 4c — Dispatch fixer agents (max 15 concurrent, sourced from `$VALIDATED`)
 
 Read the validated path list from `$VALIDATED` in batches of 15 using `sed -n "START,ENDp"`:
 
@@ -310,14 +368,14 @@ sed -n '16,30p' "$VALIDATED"
 # … and so on until TOTAL
 ```
 
-For every path that batch returns, spawn one `llm-externalizer-parallel-fixer-agent` subagent via the `Task` tool. The prompt is EXACTLY the absolute report path (one line, nothing else).
+For every path that batch returns, spawn one `$FIXER_AGENT` subagent via the `Task` tool. The prompt is EXACTLY the absolute report path (one line, nothing else).
 
 Batch rule:
 
 - **Up to 15 Task calls in a single assistant message** → they run concurrently.
 - If the batch size is > 15, emit 15 per message and wait for the batch to finish before sending the next. NEVER exceed 15 in flight at once.
 - Each `Task` call:
-  - `subagent_type: "llm-externalizer-parallel-fixer-agent"`
+  - `subagent_type: "$FIXER_AGENT"` (either `…-sonnet-agent` or `…-opus-agent`, depending on Step 4b)
   - `description: "Fix report: <basename>"` (≤5 words)
   - `prompt: "<absolute report path>"` (nothing else)
 
@@ -378,7 +436,7 @@ On any error: `[FAILED] llm-externalizer-scan-and-fix — <one-line reason>`.
 - You MUST NOT `Read` any scan report, fixer summary, or the final joined report.
 - You MUST NOT summarize any report content. Only file paths flow through the orchestrator.
 - Fixer dispatch MUST be parallel (batches of ≤15). Sequential dispatch defeats the whole design.
-- The fixer agent (`llm-externalizer-parallel-fixer-agent`) must exist in the plugin. If it is missing, abort with `[FAILED] llm-externalizer-scan-and-fix — llm-externalizer-parallel-fixer-agent not installed`.
+- Both fixer-agent variants (`llm-externalizer-parallel-fixer-sonnet-agent` and `…-opus-agent`) must exist in the plugin. If the variant the user picked in Step 4b is missing, abort with `[FAILED] llm-externalizer-scan-and-fix — <agent-name> not installed`.
 - Flags `--file-list` and the positional `[target-path]` are mutually exclusive in effect (the target-path is silently ignored when `--file-list` is set). Flags `--instructions` and `--specs` are NOT mutually exclusive — both can be supplied and are unioned into `instructions_files_paths`.
 
 ## Error handling
@@ -388,6 +446,6 @@ On any error: `[FAILED] llm-externalizer-scan-and-fix — <one-line reason>`.
 | MCP service offline                  | Abort `[FAILED] — service offline`. Tell user to restart Claude Code.      |
 | Target path / file-list / instructions / specs missing | Abort `[FAILED] — <which> not found: <path>`.                    |
 | Scan returns 0 reports               | Abort `[FAILED] — scan produced 0 reports`. User should widen target.      |
-| Fixer agent missing                  | Abort `[FAILED] — llm-externalizer-parallel-fixer-agent not installed`.                      |
+| Selected fixer variant missing       | Abort `[FAILED] — <agent-name> not installed` (where `<agent-name>` is the variant picked in Step 4b). |
 | Join script exits non-zero           | Abort `[FAILED] — join script failed: <stderr first line>`.                |
 | `--free` + proprietary code implied  | Warn ONCE about provider prompt logging, then proceed on user confirmation.|

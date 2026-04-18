@@ -1,6 +1,6 @@
 ---
 name: llm-externalizer-scan-and-fix-serially
-description: Scan a codebase, aggregate findings into one canonical bug list, then fix each bug serially with `llm-externalizer-serial-fixer-agent`. Use when fixes mutate shared state or bug order matters.
+description: Scan a codebase, aggregate findings into one canonical bug list, then fix each bug serially with a sonnet- or opus-model serial-fixer subagent. Use when fixes mutate shared state or bug order matters.
 allowed-tools:
   - mcp__llm-externalizer__discover
   - mcp__llm-externalizer__scan_folder
@@ -10,7 +10,7 @@ allowed-tools:
 argument-hint: "[target] [--file-list path] [--instructions path] [--specs path] [--free] [--no-secrets] [--text]"
 ---
 
-Two-phase audit that mirrors `/llm-externalizer:llm-externalizer-scan-and-fix` exactly through the scan phase, then diverges at the fix step: instead of dispatching up to 15 parallel `llm-externalizer-parallel-fixer-agent` subagents (one per report), it aggregates every finding into one canonical bug list and dispatches one `llm-externalizer-serial-fixer-agent` **per bug, in a serial loop**, until none remain.
+Two-phase audit that mirrors `/llm-externalizer:llm-externalizer-scan-and-fix` exactly through the scan phase, then diverges at the fix step: instead of dispatching up to 15 parallel-fixer subagents (one per report), it aggregates every finding into one canonical bug list and dispatches one serial-fixer subagent (sonnet or opus — picked via menu) **per bug, in a serial loop**, until none remain.
 
 **HARDCODED (not overridable):**
 
@@ -43,7 +43,7 @@ Parse `$ARGUMENTS` into:
 - `--file-list <path>`: absolute path to a `.txt` file with ONE absolute file path per line. When present, the command routes through `code_task` and scans exactly those files (positional target-path is ignored).
 - `--instructions <path>`: absolute path to an `.md` file whose contents become the scan instructions. Replaces the default audit rubric.
 - `--specs <path>`: absolute path to an `.md` specification file. Appended to `instructions_files_paths`; the scan checks each file against the spec.
-- `--no-secrets`: disables the pre-scan secret detector (`scan_secrets: false`).
+- `--no-secrets`: disables the pre-scan secret detector (`scan_secrets: false`, `redact_secrets: false`). Default behaviour is `scan_secrets: true` + `redact_secrets: true` — secrets are detected and REDACTED (replaced by `[REDACTED:LABEL]`) before the files reach the LLM, so the scan keeps running. Use this flag only when you've already moved secrets to `.env` (gitignored) and want to skip the redaction pass.
 - `--free`: use the free Nemotron model (`free: true`). Warn once about provider prompt logging before running on proprietary code; proceed only after user confirms or when the argument was explicit.
 
 Abort with `[FAILED] llm-externalizer-scan-and-fix-serially — <one-line reason>` on any validation failure.
@@ -105,14 +105,29 @@ The agent — not a blind glob — curates the scan target. Humans cannot reliab
    # emit one absolute path per line via printf or a heredoc
    ```
 
-5. **Show the user the curated list before committing.** Print ONLY:
-   - Codebase root (`git rev-parse --show-toplevel` result).
-   - Total file count, breakdown by top-level directory (e.g. `mcp-server/src: 18, scripts: 6, agents: 2, commands: 4, skills: 11`).
-   - 3–5 representative included paths.
-   - 3–5 representative EXCLUDED paths (so the user can sanity-check the filter).
-   - Ask one question: "Proceed with these N files? [y / edit list / cancel]". Do NOT auto-run.
+5. **Show a terse summary, then ask via `AskUserQuestion`.** Print only:
+   - `Codebase root: <path>` (one line)
+   - `Files: N (<dir1>: n, <dir2>: n, …)` (one line)
+   - `Included e.g.: <3-5 paths>` (one line)
+   - `Excluded e.g.: <3-5 paths>` (one line)
 
-6. On confirm, treat the tmp file as if the user had supplied `--file-list $AUTO_LIST` and continue from Step 1 in Branch-A mode. On "cancel", abort cleanly. On "edit list", surface the tmp path so the user can prune it and re-invoke with `--file-list <that-path>`.
+   Then call **`AskUserQuestion`** with a multiple-choice menu. Default (first option) is `Proceed` so the user can just press Enter:
+
+   ```
+   question: "Proceed with the scan?"
+   options:
+     - label: "Proceed"
+       description: "Scan the N curated files and continue."
+     - label: "Edit list"
+       description: "Pause so I can prune the tmp file list, then re-invoke with --file-list."
+     - label: "Cancel"
+       description: "Abort cleanly — no scan."
+   ```
+
+6. Map the answer:
+   - `Proceed` → treat the tmp file as an implicit `--file-list $AUTO_LIST` and continue from Step 1 in Branch-A mode.
+   - `Edit list` → print the tmp path and stop.
+   - `Cancel` → abort cleanly.
 
 ## Step 1 — Validate inputs
 
@@ -177,7 +192,8 @@ Reference function names and line numbers. Be terse. One line per finding. No pr
 Add the flags:
 
 - `--free` → `"free": true`
-- `--no-secrets` → `"scan_secrets": false`
+- `--no-secrets` → `"scan_secrets": false, "redact_secrets": false`
+- **Default (no `--no-secrets`)** → `"scan_secrets": true, "redact_secrets": true` — ALWAYS pair these. Scan ON + redact ON means secrets are replaced with `[REDACTED:LABEL]` and the run continues.
 
 **Auto-detect answer_mode** — compute BEFORE building the scan JSON:
 
@@ -213,7 +229,8 @@ Call `mcp__llm-externalizer__code_task`:
   "instructions": "<see above>",
   "instructions_files_paths": ["<if applicable>"],
   "free": <if applicable>,
-  "scan_secrets": <if --no-secrets: false>
+  "scan_secrets": <default true; --no-secrets: false>,
+  "redact_secrets": <default true; --no-secrets: false>
 }
 ```
 
@@ -241,7 +258,8 @@ Call `mcp__llm-externalizer__scan_folder`:
   "instructions": "<see above>",
   "instructions_files_paths": ["<if applicable>"],
   "free": <if applicable>,
-  "scan_secrets": <if --no-secrets: false>
+  "scan_secrets": <default true; --no-secrets: false>,
+  "redact_secrets": <default true; --no-secrets: false>
 }
 ```
 
@@ -325,23 +343,59 @@ cp "$INITIAL_STATE" "$SNAPSHOT"
 
 **Normalisation** (only when `is-canonical` exits 1): rewrite the bug list in place so every bug is a `### N. Title` heading under one of `## High severity`, `## Medium severity`, `## Low severity`. Promote bullet-item bugs to `### N.` headings; reparent sub-severity labels (`### Critical` → High, `### Medium` → Medium, `### Minor` → Low); move non-canonical `## ` sections under the right severity. Renumber `### N.` entries sequentially across the file. Never rephrase, summarise, or drop bug bodies or FIXED postmortems.
 
-## Step 6 — Serial fix loop
+## Step 5b — Pre-fix checkpoint (mandatory)
 
-Pick subagent:
+Before any fixer touches source, the working tree must be clean enough to revert. Call `Bash` from the codebase root:
 
 ```bash
-if test -f "${CLAUDE_PLUGIN_ROOT}/agents/llm-externalizer-serial-fixer-agent.md" \
-   || test -f "$HOME/.claude/agents/llm-externalizer-serial-fixer-agent.md"; then
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if [ -n "$(git status --porcelain)" ]; then
+    STAMP=$(date +%Y%m%dT%H%M%S%z)
+    git add -A \
+      && git commit -m "chore(checkpoint): pre-scan-and-fix-serially $STAMP" \
+      && echo "Checkpoint commit created. Revert with: git reset --soft HEAD~1"
+  else
+    echo "Working tree clean — no checkpoint needed."
+  fi
+else
+  echo "Not a git repo — the user is responsible for backups."
+fi
+```
+
+No menu here — checkpointing is always cheap and always safe.
+
+## Step 5c — Pick the fixer model
+
+Call `AskUserQuestion`. Default (first option) is `Sonnet`:
+
+```
+question: "Which model should the serial fixer use?"
+options:
+  - label: "Sonnet"
+    description: "Faster, cheaper. Recommended default."
+  - label: "Opus"
+    description: "Slower, more thorough. Pick for high-stakes or subtle bugs."
+```
+
+Map:
+- `Sonnet` → `FIXER_AGENT="llm-externalizer-serial-fixer-sonnet-agent"`
+- `Opus`   → `FIXER_AGENT="llm-externalizer-serial-fixer-opus-agent"`
+
+## Step 6 — Serial fix loop
+
+Pick subagent variant (fall back to `general-purpose` if the chosen variant isn't installed):
+
+```bash
+if test -f "${CLAUDE_PLUGIN_ROOT}/agents/${FIXER_AGENT}.md" \
+   || test -f "$HOME/.claude/agents/${FIXER_AGENT}.md"; then
   USE_CUSTOM=1
 else
   USE_CUSTOM=0
 fi
 ```
 
-- `USE_CUSTOM=1` → `subagent_type: "llm-externalizer-serial-fixer-agent"`, `prompt: "$BUGS_TO_FIX"` (bare absolute path, nothing else).
+- `USE_CUSTOM=1` → `subagent_type: "$FIXER_AGENT"`, `prompt: "$BUGS_TO_FIX"` (bare absolute path, nothing else).
 - `USE_CUSTOM=0` → `subagent_type: "general-purpose"`, `prompt: $($H print-fallback-prompt --file "$BUGS_TO_FIX")`.
-
-Model defaults to `opus`; honour any user request for sonnet/haiku by passing `model:` on the Task call.
 
 For `i = 1 .. MAX_ITER`, maintain `stuck_streak = 0`, `prev_unfixed`, `prev_total`:
 

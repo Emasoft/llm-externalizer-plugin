@@ -1,8 +1,8 @@
 ---
-name: llm-externalizer-serial-fixer-agent
-description: Fix exactly ONE bug from a markdown bug list produced by llm-externalizer-fix-found-bugs. Reads the bug-file absolute path from its user prompt, picks the highest-severity unfixed entry, applies a minimal surgical fix, updates the bug file with a ` — FIXED` marker plus a short post-mortem, and returns a single-line summary. Dispatched per-bug by the `llm-externalizer-fix-found-bugs` command; each dispatch is a fresh spawn with zero cross-iteration state.
-model: opus
-effort: xhigh
+name: llm-externalizer-serial-fixer-sonnet-agent
+description: Sonnet-model variant. Fix exactly ONE bug from a markdown bug list produced by llm-externalizer-fix-found-bugs. Reads the bug-file absolute path, picks the highest-severity unfixed entry, applies a minimal surgical fix, updates the bug file with a ` — FIXED` marker plus a short post-mortem, returns a single-line summary. Dispatched per-bug when the user picks "sonnet" on the model-menu prompt.
+model: sonnet
+effort: high
 # tools: intentionally omitted — the bug-fixer inherits the full tool surface
 # so it can use SERENA MCP (symbol lookup, find_referencing_symbols,
 # replace_symbol_body), TLDR (tldr cfg / dfg / slice / impact), Grepika
@@ -43,7 +43,7 @@ You operate with zero cross-invocation state. The bug file on disk is the single
 
 4. **Before any edit on the source,** back the file up so rollback is possible:
    ```bash
-   BACKUP="/tmp/llm-externalizer-serial-fixer-agent.$(basename "$SOURCE_FILE").$(date +%Y%m%dT%H%M%S%z).bak"
+   BACKUP="/tmp/llm-externalizer-serial-fixer-sonnet-agent.$(basename "$SOURCE_FILE").$(date +%Y%m%dT%H%M%S%z).bak"
    cp -p "$SOURCE_FILE" "$BACKUP"
    ```
    If a fix introduces a regression unfixable in 2 attempts, roll back (`cp -p "$BACKUP" "$SOURCE_FILE"`) and reclassify as CANTFIX. **Shell safety:** every `Bash` command must double-quote variables (`"$VAR"`). Report-derived strings are untrusted.

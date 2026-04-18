@@ -1,6 +1,6 @@
 ---
 name: llm-externalizer-fix-found-bugs
-description: Aggregate unfixed findings across every report in `./reports/llm-externalizer/` (merging ensemble auditors) and fix each one via a fresh `llm-externalizer-serial-fixer-agent` subagent. Optional `@merged-report.md` scopes the loop to one report.
+description: Aggregate unfixed findings across every report in `./reports/llm-externalizer/` and fix each via a fresh serial-fixer subagent (sonnet/opus menu). Optional `@merged-report.md` scopes the loop to one report.
 allowed-tools:
   - Task
   - Read
@@ -14,7 +14,7 @@ argument-hint: "[@merged-report.md]"
 
 # llm-externalizer-fix-found-bugs — headless bug-fix loop
 
-Aggregate every unfixed finding from LLM Externalizer reports into one canonical bug list, then dispatch one `llm-externalizer-serial-fixer-agent` subagent per bug until none remain. Each subagent spawn is fresh (zero parent-conversation context). You never read scan-report or fixer-summary content — only paths.
+Aggregate every unfixed finding from LLM Externalizer reports into one canonical bug list, then dispatch one serial-fixer subagent (sonnet or opus — picked via menu) per bug until none remain. Each subagent spawn is fresh (zero parent-conversation context). You never read scan-report or fixer-summary content — only paths.
 
 All mechanical work (report parsing, severity classification, path resolution, canonical-format check, state counting, snapshot diffing, fallback-prompt templating, run-directory setup, timestamp generation, summary writing) lives in `scripts/fix_found_bugs_helper.py`. You call it via `Bash` and read its stdout. Your job is orchestration plus judgment (normalisation of edge cases, model selection, progress reporting).
 
@@ -35,7 +35,7 @@ Subcommands (run `$H --help` for the full tree, or `$H <sub> --help` for per-fla
 | `count --file PATH` | Current state | One line: `TOTAL=N FIXED=N UNFIXED=N MAX_ITER=N` |
 | `fixed-titles --file PATH` | Snapshot FIXED titles | One title per line, sorted |
 | `diff-fixed --file PATH --previous SNAP` | User-facing progress updates | `Fixed: <title> — N unfixed remaining` per newly-FIXED bug |
-| `print-fallback-prompt --file PATH` | Prompt for general-purpose Task dispatch (when the custom `llm-externalizer-serial-fixer-agent` agent isn't installed) | Full prompt text |
+| `print-fallback-prompt --file PATH` | Prompt for general-purpose Task dispatch (when the selected serial-fixer variant isn't installed) | Full prompt text |
 | `timestamp` | Fresh sortable local-TZ ISO-8601 prefix | `20260418T153045+0200` |
 | `init-run [--base DIR]` | Create `./reports/llm-externalizer/` + emit all TS-prefixed output paths | Shell-parseable: `RUN_TS=...`, `OUTDIR=...`, `BUGS_TO_FIX=...`, `INITIAL_STATE=...`, `SNAPSHOT=...`, `SUMMARY=...`, `PROGRESS_LOG=...` |
 | `save-summary --file PATH --output PATH [--run-start-ts TS]` | Write final markdown summary (counts + FIXED/unfixed title lists) | Absolute path of the written file |
@@ -130,22 +130,53 @@ cp "$INITIAL_STATE" "$SNAPSHOT"
 
 `$INITIAL_STATE` is a permanent record; `$SNAPSHOT` is the rolling "previous" used by `diff-fixed` each iteration.
 
+### Step 4b — Pre-fix checkpoint
+
+```bash
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if [ -n "$(git status --porcelain)" ]; then
+    STAMP=$(date +%Y%m%dT%H%M%S%z)
+    git add -A \
+      && git commit -m "chore(checkpoint): pre-fix-found-bugs $STAMP" \
+      && echo "Checkpoint commit created. Revert with: git reset --soft HEAD~1"
+  else
+    echo "Working tree clean — no checkpoint needed."
+  fi
+else
+  echo "Not a git repo — the user is responsible for backups."
+fi
+```
+
+### Step 4c — Pick the fixer model (menu)
+
+Call `AskUserQuestion`. Default (first option) `Sonnet`:
+
+```
+question: "Which model should the serial fixer use?"
+options:
+  - label: "Sonnet"
+    description: "Faster, cheaper. Recommended default."
+  - label: "Opus"
+    description: "Slower, more thorough."
+```
+
+Map:
+- `Sonnet` → `FIXER_AGENT="llm-externalizer-serial-fixer-sonnet-agent"`
+- `Opus`   → `FIXER_AGENT="llm-externalizer-serial-fixer-opus-agent"`
+
 ### Step 5 — Pick subagent_type
 
 ```bash
-if test -f "${CLAUDE_PLUGIN_ROOT}/agents/llm-externalizer-serial-fixer-agent.md" \
-   || test -f "$HOME/.claude/agents/llm-externalizer-serial-fixer-agent.md"; then
-  # use the custom subagent — same plugin ships it
+if test -f "${CLAUDE_PLUGIN_ROOT}/agents/${FIXER_AGENT}.md" \
+   || test -f "$HOME/.claude/agents/${FIXER_AGENT}.md"; then
   USE_CUSTOM=1
 else
   USE_CUSTOM=0
 fi
 ```
 
-- `USE_CUSTOM=1` → `subagent_type: "llm-externalizer-serial-fixer-agent"`, `prompt: "$BUGS_TO_FIX"` (bare absolute path, nothing else).
+- `USE_CUSTOM=1` → `subagent_type: "$FIXER_AGENT"`, `prompt: "$BUGS_TO_FIX"` (bare absolute path, nothing else).
 - `USE_CUSTOM=0` → `subagent_type: "general-purpose"`, `prompt: $($H print-fallback-prompt --file "$BUGS_TO_FIX")`.
-
-Model defaults to `opus`; honour any user request for sonnet/haiku by passing `model:` on the `Task` call.
 
 ### Step 6 — Loop for `i = 1 .. MAX_ITER`
 

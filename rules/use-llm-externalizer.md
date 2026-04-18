@@ -75,17 +75,19 @@ Output per file: one line of `NO` or `YES symbol=<name> lines=<a-b>`. EXHAUSTIVE
  "diff_path": "/tmp/pr.patch"}
 ```
 
-### Plugin-shipped agents (as of v8.0.0)
+### Plugin-shipped agents
 
-Three agents ship with the plugin — all are **internal**; users dispatch them via slash commands, not directly:
+Five agents ship with the plugin — all are **internal**; users dispatch them via slash commands, not directly. The scan-and-fix / fix-report / fix-found-bugs / scan-and-fix-serially commands show a `Sonnet` / `Opus` menu (Sonnet default) before dispatching so the right pre-baked fixer variant is chosen:
 
 | Agent | Model | Purpose | Dispatched by |
 |---|---|---|---|
-| `llm-externalizer-reviewer-agent` | sonnet | Read-only code reviewer; inherits full tool surface (SERENA, TLDR, Grepika, LSP). Returns only report paths — never reads or summarizes report contents. | The `llm-externalizer-scan` skill (`context: fork`). |
-| `llm-externalizer-parallel-fixer-agent` | opus | Verifies and fixes ALL findings in ONE per-file LLM Externalizer scan report. Stateless; writes a `.fixer.`-tagged summary file; returns the summary path. Dispatched up to 15 in parallel. | `/llm-externalizer:llm-externalizer-scan-and-fix` (folder scan) and `/llm-externalizer:llm-externalizer-fix-report` (one report). |
-| `llm-externalizer-serial-fixer-agent` | opus | Fixes exactly ONE bug per invocation from an aggregated bug list. Stateful on disk (mutates the list with ` — FIXED` markers). Dispatched one at a time in a loop. | `/llm-externalizer:llm-externalizer-fix-found-bugs` (aggregate + loop) and `/llm-externalizer:llm-externalizer-scan-and-fix-serially` (scan + aggregate + loop). |
+| `llm-externalizer-reviewer-agent` | sonnet | Read-only code reviewer; inherits full tool surface (SERENA, TLDR, Grepika, LSP). Returns only report paths. | `llm-externalizer-scan` skill (`context: fork`). |
+| `llm-externalizer-parallel-fixer-sonnet-agent` | sonnet | Fixes ALL findings in ONE per-file scan report. Stateless; writes a `.fixer.`-tagged summary. Dispatched up to 15 in parallel. | `/llm-externalizer:llm-externalizer-scan-and-fix`, `/llm-externalizer:llm-externalizer-fix-report` — picked when the user chooses **Sonnet** on the menu. |
+| `llm-externalizer-parallel-fixer-opus-agent` | opus | Same role as the sonnet variant but on Opus. | Same commands when the user chooses **Opus**. |
+| `llm-externalizer-serial-fixer-sonnet-agent` | sonnet | Fixes exactly ONE bug per invocation from an aggregated bug list. Stateful on disk (mutates the list with ` — FIXED` markers). Dispatched one at a time in a loop. | `/llm-externalizer:llm-externalizer-fix-found-bugs`, `/llm-externalizer:llm-externalizer-scan-and-fix-serially` — picked when the user chooses **Sonnet**. |
+| `llm-externalizer-serial-fixer-opus-agent` | opus | Same role as the sonnet variant but on Opus. | Same commands when the user chooses **Opus**. |
 
-All three agents are fresh-spawn (zero parent-conversation context) and load CLAUDE.md the same way `claude -p` does.
+All five agents are fresh-spawn (zero parent-conversation context) and load CLAUDE.md the same way `claude -p` does.
 
 ### CLI — `llm-externalizer search-existing`
 Shell entry point for the `search_existing_implementations` tool. Use for scripting, CI, or quick terminal checks without spawning a subagent. Supports `--base <ref>` to auto-generate the PR diff via `git diff <ref>...HEAD` (with auto-detection of origin/HEAD → main → master when omitted), and `--diff <path>` as an escape hatch for pre-made patches.

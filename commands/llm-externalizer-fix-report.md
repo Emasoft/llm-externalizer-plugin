@@ -1,6 +1,6 @@
 ---
 name: llm-externalizer-fix-report
-description: Fix findings in ONE existing per-file scan report. Dispatches a single `llm-externalizer-parallel-fixer-agent` and returns its `.fixer.`-summary path. For whole-folder audits use `/llm-externalizer:llm-externalizer-scan-and-fix`.
+description: Fix findings in ONE existing per-file scan report. Pick sonnet or opus via menu, dispatches a single parallel-fixer subagent, returns its `.fixer.`-summary path. For whole-folder audits use `/llm-externalizer:llm-externalizer-scan-and-fix`.
 allowed-tools:
   - Task
   - Bash
@@ -9,7 +9,7 @@ argument-hint: "@scan-report.md"
 
 # llm-externalizer-fix-report — single-report fixer wrapper
 
-Dispatch one `llm-externalizer-parallel-fixer-agent` subagent against one scan report. The agent reads the report, classifies each finding (REAL BUG / FALSE-POSITIVE / HALLUCINATION / CANTFIX), applies surgical edits for real bugs, runs per-language linters, writes a `.fixer.`-tagged summary beside the report, and returns the summary path.
+Dispatch one parallel-fixer-agent subagent (sonnet or opus — picked via menu) against one scan report. The agent reads the report, classifies each finding (REAL BUG / FALSE-POSITIVE / HALLUCINATION / CANTFIX), applies surgical edits for real bugs, runs per-language linters, writes a `.fixer.`-tagged summary beside the report, and returns the summary path.
 
 You (the orchestrator) never read the report, the source, or the summary. You just validate the argument, dispatch the Task, and surface the result.
 
@@ -58,19 +58,53 @@ echo "$REPORT_PATH"
 
 Capture stdout as `$REPORT_PATH`.
 
-### Step 2 — Verify the fixer agent exists
+### Step 2a — Pre-fix checkpoint
 
 ```bash
-test -f "${CLAUDE_PLUGIN_ROOT}/agents/llm-externalizer-parallel-fixer-agent.md" \
-  || test -f "$HOME/.claude/agents/llm-externalizer-parallel-fixer-agent.md" \
-  || { echo "[FAILED] llm-externalizer-fix-report — llm-externalizer-parallel-fixer-agent not installed"; exit 1; }
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if [ -n "$(git status --porcelain)" ]; then
+    STAMP=$(date +%Y%m%dT%H%M%S%z)
+    git add -A \
+      && git commit -m "chore(checkpoint): pre-fix-report $STAMP" \
+      && echo "Checkpoint commit created. Revert with: git reset --soft HEAD~1"
+  else
+    echo "Working tree clean — no checkpoint needed."
+  fi
+else
+  echo "Not a git repo — the user is responsible for backups."
+fi
+```
+
+### Step 2b — Pick the fixer model (menu)
+
+Call `AskUserQuestion`. Default (first option) `Sonnet`:
+
+```
+question: "Which model should the fixer use?"
+options:
+  - label: "Sonnet"
+    description: "Faster, cheaper. Recommended default."
+  - label: "Opus"
+    description: "Slower, more thorough."
+```
+
+Map:
+- `Sonnet` → `FIXER_AGENT="llm-externalizer-parallel-fixer-sonnet-agent"`
+- `Opus`   → `FIXER_AGENT="llm-externalizer-parallel-fixer-opus-agent"`
+
+### Step 2c — Verify the fixer agent exists
+
+```bash
+test -f "${CLAUDE_PLUGIN_ROOT}/agents/${FIXER_AGENT}.md" \
+  || test -f "$HOME/.claude/agents/${FIXER_AGENT}.md" \
+  || { echo "[FAILED] llm-externalizer-fix-report — $FIXER_AGENT not installed"; exit 1; }
 ```
 
 ### Step 3 — Dispatch ONE Task call
 
 Exactly one `Task` call:
 
-- `subagent_type: "llm-externalizer-parallel-fixer-agent"`
+- `subagent_type: "$FIXER_AGENT"` (either `…-sonnet-agent` or `…-opus-agent`, per Step 2b)
 - `description: "Fix report: <basename>"` (≤5 words)
 - `prompt: "<REPORT_PATH>"` (bare absolute path, nothing else)
 
@@ -78,7 +112,7 @@ Do NOT pass the user's conversation context, do NOT paraphrase the report, do NO
 
 ### Step 4 — Surface the result
 
-The agent returns ONE line — its `.fixer.`-summary path, or `[FAILED] llm-externalizer-parallel-fixer-agent — <reason>`.
+The agent returns ONE line — its `.fixer.`-summary path, or `[FAILED] <agent-name> — <reason>`.
 
 - On success, emit to the user: `Fixed report: <summary-path>`. Do NOT `Read` the summary content; the user reviews it directly.
 - On `[FAILED]` return, relay the failure line verbatim and stop.
@@ -97,5 +131,5 @@ The agent returns ONE line — its `.fixer.`-summary path, or `[FAILED] llm-exte
 | Report path missing / empty / unreadable | `[FAILED] llm-externalizer-fix-report — report not found / empty / unreadable: <path>` |
 | Basename contains `.fixer.` | `[FAILED] llm-externalizer-fix-report — already a fixer summary: <path>` |
 | Basename contains `.final-report.` | `[FAILED] llm-externalizer-fix-report — joined final-report, not a per-file scan: <path>. Use scan-and-fix for folder audits.` |
-| Fixer agent not installed | `[FAILED] llm-externalizer-fix-report — llm-externalizer-parallel-fixer-agent not installed` |
+| Picked fixer variant missing | `[FAILED] llm-externalizer-fix-report — <agent-name> not installed` (either `llm-externalizer-parallel-fixer-sonnet-agent` or `…-opus-agent`) |
 | Fixer returns `[FAILED] …` | Relay verbatim to the user. |
