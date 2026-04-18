@@ -1,6 +1,48 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [7.1.2] - 2026-04-18
+
+### Fixed
+
+- Fix(commands): make scan phase identical across scan-and-fix and scan-and-fix-serially
+
+Two related fixes:
+
+1. Restore --no-scan-secrets and --text-files in both commands'
+   argument-hint. They were silently dropped from the hint in v7.1.1
+   (still usable per the Arguments doc and the scan_folder / code_task
+   JSON calls, but invisible from the slash-command menu — user
+   couldn't see they were options). Now both commands show the full
+   flag set:
+
+   [target] [--file-list path] [--instructions path] [--specs path]
+     [--free] [--no-scan-secrets] [--text-files]
+
+2. Make the scan phase (Step 0 auto-discovery through Step 3b report
+   validation) byte-identical between the two commands. The previous
+   scan-and-fix-serially version condensed the prose for brevity; the
+   result was functionally equivalent but visually diverged. Now Step
+   0-3b in scan-and-fix-serially is a verbatim copy of the same
+   section in scan-and-fix, minus three necessary deltas:
+
+   a. [FAILED] prefix strings use the invoking command's name (user
+      doesn't see the wrong command in an error message).
+   b. Step 3b heading: "before dispatching fixers" (scan-and-fix) vs
+      "before the aggregator" (serially) — the two commands use the
+      validated list for different downstream steps.
+   c. The "Token-budget note for very large scans" section is
+      parallel-dispatch-specific; serially does not need it.
+
+   Added a visible marker at the end of serially's Step 3b noting that
+   the whole scan phase is a mirror of scan-and-fix's and must stay in
+   sync on future edits.
+
+Outcome: a user reading the two commands sees the same scan pipeline
+end-to-end and can trust that switching between parallel and serial
+fix modes does not quietly change how the codebase is scanned.
+
+
 ## [7.1.1] - 2026-04-18
 
 ### Fixed
