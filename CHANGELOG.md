@@ -1,6 +1,38 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [7.1.0] - 2026-04-18
+
+### Added
+
+- Feat: add /llm-externalizer:llm-externalizer-scan-and-fix-serially command
+
+Composition command that reuses the scan phase from scan-and-fix and
+the serial loop from fix-found-bugs:
+
+  scan (parallel per-file reports)
+    -> aggregate into one canonical bug list
+    -> serial llm-externalizer-serial-fixer-agent loop (1 bug / dispatch)
+
+Use this instead of scan-and-fix when fixes mutate shared state
+(imports, types, schemas, shared mocks) — running 15 parallel fixers
+would race — or when bug order matters (an earlier fix may supersede
+or unblock a later one).
+
+The command body is deliberately terse: ~60 lines of delta-only prose
+pointing back to the two existing commands rather than re-inlining
+their orchestration. Every token loaded into the slash-command
+context is a token the orchestrator pays for — the longer the
+description, the higher the floor per invocation. Treating this
+command as "scan-and-fix scan phase + fix-found-bugs serial phase,
+with these four deltas" keeps the marginal cost low.
+
+README updates:
+- 6 slash commands -> 7, new command added to the top bullet
+- Commands table row added, describing the serial/stateful trade-off
+- Plugin structure tree includes the new commands/*.md entry
+
+
 ## [7.0.0] - 2026-04-18
 
 ### Added
