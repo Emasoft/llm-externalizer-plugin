@@ -14,7 +14,7 @@ Two-phase audit that mirrors `/llm-externalizer:llm-externalizer-scan-and-fix` e
 
 **HARDCODED (not overridable):**
 
-- `answer_mode: 0` — ONE REPORT PER FILE. Required so the aggregator can classify findings per source file.
+- `answer_mode: auto` — `0` (ONE REPORT PER FILE) by default, **automatically upgraded to `1` (ONE REPORT PER GROUP) if the `--file-list` contains `---GROUP:id---` markers**. The aggregator walks every `.md` in the reports dir regardless of mode, so both work; mode 1 is more efficient when logically related files share an audit (the LLM sees them together in one request).
 - `output_dir: $CLAUDE_PROJECT_DIR/reports/llm-externalizer/` — required so the aggregator finds every scan report and the bug list shares a directory with them.
 - Never more than **1** concurrent Task call in the fix loop. Bug order matters here — do not parallelise.
 
@@ -179,11 +179,23 @@ Add the flags:
 - `--free` → `"free": true`
 - `--no-secrets` → `"scan_secrets": false`
 
+**Auto-detect answer_mode** — compute BEFORE building the scan JSON:
+
+```bash
+ANSWER_MODE=0
+if [ -n "$FILE_LIST_PATH" ] && grep -Eq '^---GROUP:[A-Za-z0-9_.-]+---[[:space:]]*$' "$FILE_LIST_PATH"; then
+    ANSWER_MODE=1
+fi
+echo "ANSWER_MODE=$ANSWER_MODE"
+```
+
+If `ANSWER_MODE=1`, log `File list contains group markers — using answer_mode=1 (one report per group)` to the user.
+
 Common tool arguments (ALWAYS present, NOT overridable):
 
 ```json
 {
-  "answer_mode": 0,
+  "answer_mode": <ANSWER_MODE>,
   "output_dir": "<CLAUDE_PROJECT_DIR>/reports/llm-externalizer"
 }
 ```
@@ -194,10 +206,10 @@ Call `mcp__llm-externalizer__code_task`:
 
 ```json
 {
-  "answer_mode": 0,
+  "answer_mode": <ANSWER_MODE>,
   "max_retries": 3,
   "output_dir": "<CLAUDE_PROJECT_DIR>/reports/llm-externalizer",
-  "input_files_paths": ["<each absolute path from the list file>"],
+  "input_files_paths": ["<each absolute path from the list file — pass ---GROUP:id--- markers through verbatim>"],
   "instructions": "<see above>",
   "instructions_files_paths": ["<if applicable>"],
   "free": <if applicable>,
@@ -206,6 +218,8 @@ Call `mcp__llm-externalizer__code_task`:
 ```
 
 ### Branch B — folder scan (default)
+
+`scan_folder` does not accept group markers — always use `answer_mode: 0` on this branch.
 
 Call `mcp__llm-externalizer__scan_folder`:
 

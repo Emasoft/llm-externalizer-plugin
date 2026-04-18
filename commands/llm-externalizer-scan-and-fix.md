@@ -14,7 +14,7 @@ Orchestrates a full **scan → per-file report → parallel fix → join** pass.
 
 **HARDCODED (not overridable):**
 
-- `answer_mode: 0` — ONE REPORT PER FILE. Required so each fixer agent can be dispatched with exactly one report path and zero orchestrator-side consolidation.
+- `answer_mode: auto` — `0` (ONE REPORT PER FILE) by default, **automatically upgraded to `1` (ONE REPORT PER GROUP) if the `--file-list` contains `---GROUP:id---` markers**. Either way, each report is dispatched to exactly one fixer agent with zero orchestrator-side consolidation — the fixer doesn't care whether a report covers one file or a whole group; it just verifies and fixes the findings inside.
 - `output_dir: $CLAUDE_PROJECT_DIR/reports/llm-externalizer/` — required so the join script can find every `.fixer.`-tagged summary.
 
 ## ⚠️ Cross-file / cross-reference limitation — MUST READ
@@ -31,7 +31,7 @@ The LLM used by this command sees only **1–5 files per request** (FFD bin-pack
 
 For everything else — logic bugs, error handling, security, resource leaks in the local function — the 1–5-file batch is enough and this command is the right tool. Just don't ask it questions that require global visibility.
 
-**Why answer_mode is forced to 0 (do NOT change this):** Modes 1 and 2 produce merged reports, which would force the orchestrator to read and split the merged file to build per-file tasks — that burns exactly the tokens this command is designed to save. With mode 0, the orchestrator only ever touches file paths (scan report paths → fixer prompts → fixer summary paths → join script input). No report content ever enters the orchestrator context.
+**Why answer_mode is fixed at 0 or 1 (never 2):** Mode 2 produces one merged report covering every scanned file, which would force the orchestrator to read and split that file to build per-fixer tasks — burning exactly the tokens this command is designed to save. Mode 0 (per-file) and mode 1 (per-group) both emit multiple report FILES — the orchestrator only ever touches file paths (scan report paths → fixer prompts → fixer summary paths → join script input). No report content ever enters the orchestrator context. The auto-switch between 0 and 1 is safe: a group report is dispatched to exactly one fixer agent the same way a per-file report is, so the rest of the pipeline doesn't need to know.
 
 ## Arguments
 
@@ -178,11 +178,26 @@ Add the flags:
 - `--free` → `"free": true`
 - `--no-secrets` → `"scan_secrets": false`
 
+**Auto-detect answer_mode** — compute BEFORE building the scan JSON:
+
+```bash
+# Default: per-file reports
+ANSWER_MODE=0
+# If --file-list is set and contains at least one ---GROUP:<id>--- marker,
+# upgrade to per-group reports. Grep is lenient about trailing whitespace.
+if [ -n "$FILE_LIST_PATH" ] && grep -Eq '^---GROUP:[A-Za-z0-9_.-]+---[[:space:]]*$' "$FILE_LIST_PATH"; then
+    ANSWER_MODE=1
+fi
+echo "ANSWER_MODE=$ANSWER_MODE"
+```
+
+If `ANSWER_MODE=1`, log a one-line notice to the user (`File list contains group markers — using answer_mode=1 (one report per group)`) so they know why the output shape differs from the default.
+
 Common tool arguments (ALWAYS present, NOT overridable):
 
 ```json
 {
-  "answer_mode": 0,
+  "answer_mode": <ANSWER_MODE>,
   "output_dir": "<CLAUDE_PROJECT_DIR>/reports/llm-externalizer"
 }
 ```
@@ -193,10 +208,10 @@ Call `mcp__llm-externalizer__code_task`:
 
 ```json
 {
-  "answer_mode": 0,
+  "answer_mode": <ANSWER_MODE>,
   "max_retries": 3,
   "output_dir": "<CLAUDE_PROJECT_DIR>/reports/llm-externalizer",
-  "input_files_paths": ["<each absolute path from the list file>"],
+  "input_files_paths": ["<each absolute path from the list file — PASS THROUGH the ---GROUP:id--- markers verbatim if present; the MCP server parses them>"],
   "instructions": "<see above>",
   "instructions_files_paths": ["<if applicable>"],
   "free": <if applicable>,
@@ -205,6 +220,8 @@ Call `mcp__llm-externalizer__code_task`:
 ```
 
 ### Branch B — folder scan (default)
+
+`scan_folder` does not accept group markers (it auto-discovers paths). Always use `ANSWER_MODE=0` on this branch — if the user wanted grouping, they'd pass an explicit `--file-list`.
 
 Call `mcp__llm-externalizer__scan_folder`:
 
@@ -356,7 +373,7 @@ On any error: `[FAILED] llm-externalizer-scan-and-fix — <one-line reason>`.
 
 ## Constraints
 
-- `answer_mode` is hardcoded to `0`. Do NOT accept overrides from `$ARGUMENTS`.
+- `answer_mode` is chosen by the command itself: `0` (per-file) by default, `1` (per-group) when `--file-list` contains `---GROUP:id---` markers, on `scan_folder` always `0`. Never `2`. Do NOT accept overrides from `$ARGUMENTS`.
 - `output_dir` is hardcoded to `$CLAUDE_PROJECT_DIR/reports/llm-externalizer`. Do NOT accept overrides from `$ARGUMENTS`.
 - You MUST NOT `Read` any scan report, fixer summary, or the final joined report.
 - You MUST NOT summarize any report content. Only file paths flow through the orchestrator.
