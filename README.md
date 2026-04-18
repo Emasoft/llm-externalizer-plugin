@@ -422,15 +422,73 @@ Skills activate automatically when Claude Code encounters tasks matching their t
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `/llm-externalizer:llm-externalizer-discover` | Check health, active profile, model, auth status, context window |
-| `/llm-externalizer:llm-externalizer-configure` | Read-only inspector. Shows the current profile table and reminds you to edit `~/.llm-externalizer/settings.yaml` manually to change anything |
-| `/llm-externalizer:llm-externalizer-search-existing-implementations` | Scan a codebase for existing implementations of a described feature (FFD-batched PR duplicate check) |
-| `/llm-externalizer:llm-externalizer-scan-and-fix` | Two-stage audit — per-file scan (answer_mode=0) + parallel `llm-externalizer-parallel-fixer-agent` subagents (≤15 concurrent) + joined final report |
-| `/llm-externalizer:llm-externalizer-scan-and-fix-serially` | Same scan as `scan-and-fix`, but chains into a serial `llm-externalizer-serial-fixer-agent` loop over one aggregated bug list instead of parallel per-report dispatch. Use when fixes mutate shared state or bug order matters |
-| `/llm-externalizer:llm-externalizer-fix-report` | Fix findings in ONE already-generated per-file scan report (dispatches one `llm-externalizer-parallel-fixer-agent`). Use when you already have a report and don't want to re-scan |
-| `/llm-externalizer:llm-externalizer-fix-found-bugs` | Aggregate unfixed findings across every report under `./reports/llm-externalizer/` (merging ensemble auditors) and fix each one via a fresh `llm-externalizer-serial-fixer-agent` subagent — serial loop, zero parent-context per bug. Pass `@merged-report.md` to scope the loop to one report |
+Overview (details and per-command parameter tables follow):
+
+| Command | Purpose |
+|---|---|
+| `/llm-externalizer:llm-externalizer-discover` | Check service health, active profile, model, auth status, context window |
+| `/llm-externalizer:llm-externalizer-configure` | Read-only profile inspector (edit `~/.llm-externalizer/settings.yaml` manually) |
+| `/llm-externalizer:llm-externalizer-search-existing-implementations` | FFD-batched PR duplicate-check — scan a codebase for existing implementations of a described feature |
+| `/llm-externalizer:llm-externalizer-scan-and-fix` | Scan folder → per-file reports → parallel `llm-externalizer-parallel-fixer-agent` (≤15 concurrent) → joined final report |
+| `/llm-externalizer:llm-externalizer-scan-and-fix-serially` | Same scan phase as `scan-and-fix`, then aggregate + serial `llm-externalizer-serial-fixer-agent` loop (1 bug at a time). Use when fixes mutate shared state |
+| `/llm-externalizer:llm-externalizer-fix-report` | Fix findings in ONE already-generated per-file scan report (one `llm-externalizer-parallel-fixer-agent` dispatch) |
+| `/llm-externalizer:llm-externalizer-fix-found-bugs` | Aggregate unfixed findings across every report under `./reports/llm-externalizer/` and fix each via a serial loop. Pass `@merged-report.md` to scope to one report |
+
+### `/llm-externalizer:llm-externalizer-discover`
+
+No parameters. Prints active profile, model IDs, API URL, auth-token status (resolved / missing), context-window size, concurrency mode (sequential vs parallel), RPS ceiling, and whether the service is online.
+
+### `/llm-externalizer:llm-externalizer-configure`
+
+No parameters. Read-only — prints the current profile table so you can see which profile is active and what backend it's wired to. Does NOT modify settings — to change a profile, edit `~/.llm-externalizer/settings.yaml` in your editor, then call `reset` or restart Claude Code.
+
+### `/llm-externalizer:llm-externalizer-search-existing-implementations`
+
+| Parameter | Kind | Required | Meaning |
+|---|---|---|---|
+| `<feature-description>` | positional, string | yes | Non-empty natural-language description of the feature to search for (e.g. `"async retry with exponential backoff and jitter"`) |
+| `<codebase-path>` | positional, absolute path | yes | Root folder to scan. Accepted as a single path or repeated for multiple roots |
+| `--source-files PATH ...` | repeated | no | One or more reference source files that define what the feature looks like in code. The scan auto-excludes these paths so it won't flag them as matches of themselves |
+| `--diff PATH` | file path | no | Unified-diff file to narrow the scan to files changed in the diff (useful for PR duplicate hunts). Mutually exclusive with `--base` |
+| `--base REF` | git ref | no | Auto-generate the diff via `git diff <ref>...HEAD` (auto-detects `origin/HEAD` → `main` → `master` when omitted). Mutually exclusive with `--diff` |
+| `--max-files N` | integer | no | Cap on files scanned. Default `10000` (higher than `scan_folder`'s 2500 — designed for massive PR-review scans) |
+| `--free` | flag | no | Use the free Nemotron model. Warn once about provider prompt logging before running on proprietary code |
+
+Output: one line per file in the codebase — `NO` if no match, `YES symbol=<name> lines=<a-b>` if the feature is already implemented there. Exhaustive (every occurrence reported, no cap) so a reviewer can delete duplicates and keep only the PR's new one.
+
+### `/llm-externalizer:llm-externalizer-scan-and-fix`
+
+| Parameter | Kind | Required | Meaning |
+|---|---|---|---|
+| `[target]` | positional, path | no (but either this or `--file-list`) | Absolute or relative folder to scan. Relative paths resolve against `$CLAUDE_PROJECT_DIR`. If omitted AND no `--file-list`, the command runs auto-discovery (curate tracked files from `git ls-files` under the real codebase root, ask you to confirm) |
+| `--file-list PATH` | file path | no | `.txt` file with ONE absolute source path per line. When set, routes through `code_task` and scans exactly those files; `[target]` is ignored |
+| `--instructions PATH` | `.md` path | no | Replaces the default audit rubric with the file's contents (used to re-target the scan, e.g. a custom audit checklist) |
+| `--specs PATH` | `.md` path | no | Appended to `instructions_files_paths`; scan checks each source file against the spec |
+| `--free` | flag | no | Use the free Nemotron model. **Warning:** provider logs prompts — don't use on proprietary code |
+| `--no-secrets` | flag | no | Disable the pre-scan secret detector (`scan_secrets: false`). Default: secrets are detected and redacted before files are sent to the LLM |
+| `--text` | flag | no | Include `.md .txt .json .yml .yaml .toml .ini .cfg .conf .xml .html .rst .csv` in the scan. Without this flag, only source-code extensions are scanned |
+
+Behaviour: one LLM Externalizer scan call → N per-file reports in `$CLAUDE_PROJECT_DIR/reports/llm-externalizer/` → parallel dispatch (≤15 concurrent) of `llm-externalizer-parallel-fixer-agent` subagents (one per report) → each writes a `.fixer.`-tagged summary → join script merges summaries into one final report.
+
+### `/llm-externalizer:llm-externalizer-scan-and-fix-serially`
+
+Same parameter set as `scan-and-fix` (the scan phase is byte-identical). The table above applies unchanged. Only the fix phase differs: after the scan, findings are aggregated into one canonical bug list and fixed one at a time by `llm-externalizer-serial-fixer-agent` in a serial loop (never more than 1 concurrent Task call). Use when fixes mutate shared state or bug order matters.
+
+### `/llm-externalizer:llm-externalizer-fix-report`
+
+| Parameter | Kind | Required | Meaning |
+|---|---|---|---|
+| `@scan-report.md` (or bare path) | positional, path | yes | Absolute or relative path to ONE already-generated per-file LLM Externalizer scan report (typically under `./reports/llm-externalizer/`). The leading `@` is stripped. Paths that already contain `.fixer.` or `.final-report.` are rejected |
+
+Behaviour: dispatches exactly ONE `llm-externalizer-parallel-fixer-agent` against the supplied report and returns the fixer's `.fixer.`-summary path. Use when you already have a report and don't need to re-scan. For whole-folder audits use `scan-and-fix` instead.
+
+### `/llm-externalizer:llm-externalizer-fix-found-bugs`
+
+| Parameter | Kind | Required | Meaning |
+|---|---|---|---|
+| `@merged-report.md` (or bare path) | positional, path | no | If supplied, scopes the bug-list aggregation to findings in this ONE merged (`answer_mode=2`) report instead of every report in the reports directory |
+
+Behaviour: if no argument, aggregates every report under `$CLAUDE_PROJECT_DIR/reports/llm-externalizer/` (skipping any with a `.fixer.` sibling — those were already processed). Merges ensemble-mode per-model auditor responses and emits one canonical bug list (severity assigned by keyword). Then loops: fresh `llm-externalizer-serial-fixer-agent` spawn per iteration, each fixing exactly ONE bug, until none remain or the safety rail trips (MAX_ITER or 2 consecutive no-progress iterations). Zero parent-conversation context per bug.
 
 ## Plugin Structure
 
