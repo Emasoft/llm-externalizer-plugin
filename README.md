@@ -20,6 +20,7 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 - **17 MCP tools** — 9 read-only analysis tools + 5 utility tools + 3 OpenRouter model-info formatters
 - **`llm-externalizer-reviewer` agent** — Haiku-class plugin agent for fast code reviews with restricted tool allowlist (no Write/Edit)
 - **`llm-externalizer-fixer` agent** — Opus-class agent that verifies and fixes findings from a single per-file scan report (one fixer per report, dispatched in parallel by `/llm-externalizer:llm-externalizer-scan-and-fix`)
+- **`llm-externalizer-bug-fixer` agent** — Opus-class per-bug fixer dispatched serially by `/llm-externalizer:llm-externalizer-fix-found-bugs`; each spawn is fresh (zero parent-conversation context) and fixes exactly one bug from an aggregated bug list
 - **Profile-based configuration** — named profiles in `~/.llm-externalizer/settings.yaml`
 - **`userConfig.openrouter_api_key`** — keychain-stored OpenRouter key via plugin configure UI (falls back to shell `$OPENROUTER_API_KEY`)
 - **Ensemble mode** — three models in parallel on OpenRouter, combined report
@@ -30,7 +31,7 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 - **Robust batch processing** — `max_retries` parameter with parallel execution, retry, and circuit breaker on all tools
 - **File-based output** — all results saved to files, only paths returned (keeps orchestrator context clean)
 - **5 auto-discovered skills** — usage, config, full scan, free scan, OpenRouter model info
-- **4 slash commands** — `/llm-externalizer:llm-externalizer-discover`, `/llm-externalizer:llm-externalizer-configure`, `/llm-externalizer:llm-externalizer-search-existing-implementations`, `/llm-externalizer:llm-externalizer-scan-and-fix`
+- **5 slash commands** — `/llm-externalizer:llm-externalizer-discover`, `/llm-externalizer:llm-externalizer-configure`, `/llm-externalizer:llm-externalizer-search-existing-implementations`, `/llm-externalizer:llm-externalizer-scan-and-fix`, `/llm-externalizer:llm-externalizer-fix-found-bugs`
 - **CLI subcommand** — `llm-externalizer search-existing` for shell / CI duplicate-check workflows
 - **6 backend presets** — LM Studio, Ollama, vLLM, llama.cpp, generic local, OpenRouter
 
