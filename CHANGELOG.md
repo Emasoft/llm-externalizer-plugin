@@ -1,6 +1,71 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.0.1] - 2026-04-18
+
+### Changed
+
+- Build: rebuild dist after redact_secrets fix
+
+
+### Fixed
+
+- Fix(mcp): honor redact_secrets:true to skip the scan_secrets abort
+
+The v9.0.0 commit set up the slash commands to send both scan_secrets:
+true AND redact_secrets: true on every fix run, with a contract that
+read like this in the README and in the doc comment in mcp-server/
+src/index.ts:
+
+  scan_secrets=true   + redact_secrets=false → detect, abort
+  scan_secrets=true   + redact_secrets=true  → detect, REDACT, continue
+  scan_secrets=false                         → no detection, no redaction
+
+But the actual MCP-server code never honored the second case. Every
+tool's abort guard was a flat `if (xxxScan)` that returned an isError
+response the moment scanFilesForSecrets() found anything — regardless
+of whether redact_secrets was also true. The default v9.0.0 fix-loop
+invocation on this very repo hit the bug immediately: the scan aborted
+on env-variable-NAME references in the plugin's own source (e.g.
+$OPENROUTER_API_KEY in mcp-server/src/config.ts) instead of redacting
+and continuing.
+
+Fix: at every abort guard (10 sites, one per tool entry point), wrap
+the condition with `&& !xxxRedact`. When the caller asked for both
+scan and redact, the abort is skipped — downstream readAndGroupFiles
++ the inline-content branch already call redactSecrets() to replace
+every match with [REDACTED:LABEL] before the LLM ever sees it. The
+bytes the upstream LLM gets are identical to what scan-then-abort
+would have prevented; the user just doesn't lose the run.
+
+Sites updated (all in mcp-server/src/index.ts):
+
+  chat:                          line 5067 → if (chatScan && !chatRedact)
+  code_task:                     line 5360 → if (ctScan   && !ctRedact)
+  batch_check:                   line 6020 → if (bcScan   && !bcRedact)
+  scan_folder:                   line 6379 → if (sfScan   && !sfRedact)
+  search_existing_implementations: line 6869 → if (seiScan && !seiRedact)
+  compare_files (single):        line 7514 → if (cfScan   && !cfRedact)
+  compare_files (comparePair):   line 7321 → if (cfScan   && !cfRedact)
+  check_references:              line 7695 → if (crScan   && !crRedact)
+  check_imports:                 line 7951 → if (ciScan   && !ciRedact)
+  check_against_specs:           line 8312 → if (csScan   && !csRedact)
+
+Updated the doc comment at lines 324-334 to describe the three modes
+explicitly (was a two-line summary that said abort and redact were
+distinct alternatives — the new comment makes the composition clear).
+
+Validation: typecheck clean, build clean, eslint clean
+(--max-warnings 0), all 51 vitest tests pass. Pre-existing
+'Server is deprecated' diagnostics on lines 38 and 4912 are
+unrelated to this change.
+
+Backwards compat: callers that send only scan_secrets:true (no
+redact_secrets) still abort on detection — same behaviour as before.
+The new path activates only when both flags are true, which was
+previously broken / undocumented.
+
+
 ## [9.0.0] - 2026-04-18
 
 ### Added
