@@ -1,32 +1,34 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
-
-## [Unreleased]
+## [5.1.0] - 2026-04-18
 
 ### Added
 
-- `/llm-externalizer:llm-externalizer-fix-found-bugs` command and companion
-  `llm-externalizer-bug-fixer` agent. Aggregates every unfixed finding across
-  all reports in `./reports/llm-externalizer/` (merging the per-model auditor
-  responses when ensemble mode was used) into one canonical bug list, then
-  dispatches one fresh `llm-externalizer-bug-fixer` subagent per bug until
-  none remain. Pass `@merged-report.md` as the argument to scope the loop to
-  a single merged (`answer_mode=2`) report. Loop is serial by design (bug
-  order matters), each dispatch is a fresh spawn with zero parent-conversation
-  context, and the orchestrator never reads scan or fixer content — only
-  paths.
-- `scripts/fix_found_bugs_helper.py` — backend for the new command. Ten
-  subcommands: `aggregate-reports`, `resolve-path`, `is-canonical`, `count`,
-  `fixed-titles`, `diff-fixed`, `print-fallback-prompt`, `timestamp`,
-  `init-run`, `save-summary`. Handles ensemble (3 `## Response (Model: X)`
-  sections), merged (multiple `## File:` sections), and single-model report
-  shapes. Severity classification via keyword heuristics (security/crash/
-  race/data-corruption → High; style/naming/readability/docstring → Low;
-  everything else → Medium). `--skip-if-fixer-exists` skips reports already
-  processed by `scan-and-fix`. All output files under
-  `./reports/llm-externalizer/` with a sortable `<RUN_TS>.fix-found-bugs.*`
-  prefix.
+- Feat: add llm-externalizer-fix-found-bugs command
+
+Aggregate unfixed findings across every report under ./reports/llm-externalizer/
+(merging the 3 per-model auditor responses when ensemble mode was used) into one
+canonical bug list, then dispatch one fresh llm-externalizer-bug-fixer subagent
+per bug until none remain. Pass @merged-report.md as the argument to scope the
+loop to a single merged (answer_mode=2) report.
+
+Each dispatch is a fresh spawn with zero parent-conversation context. The loop
+is serial by design — later bugs may be superseded by fixes in earlier ones.
+The orchestrator never reads scan or fixer content, only paths.
+
+- commands/llm-externalizer-fix-found-bugs.md — orchestrator (argument-hint:
+  "[@merged-report.md]")
+- agents/llm-externalizer-bug-fixer.md — Opus-class per-bug fixer with
+  REAL-BUG / FALSE-POSITIVE / HALLUCINATION / CANTFIX classification, /tmp
+  backup + rollback on regression, per-language linter verification
+- scripts/fix_found_bugs_helper.py — backend with 10 subcommands including
+  the new aggregate-reports that handles ensemble (## Response per-model
+  sections), merged (## File: sections), and single-model report shapes
+  with keyword-based severity classification; --skip-if-fixer-exists skips
+  reports already processed by scan-and-fix
+- README + CHANGELOG updated
+
 
 ## [5.0.0] - 2026-04-18
 
