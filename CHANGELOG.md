@@ -1,6 +1,55 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [8.1.0] - 2026-04-18
+
+### Added
+
+- Feat: auto-switch answer_mode to 1 when --file-list contains group markers
+
+Both scan commands now auto-detect the presence of ---GROUP:<id>---
+markers in the user-supplied --file-list and, when present, set
+answer_mode=1 on the mcp__llm-externalizer__code_task call. Without
+markers (or when the scan goes through scan_folder on Branch B), the
+mode stays at the default 0 (one report per file).
+
+Why: users who put group markers in their file list expect a report
+per group (that's the whole point of grouping). Silently keeping
+answer_mode=0 produced per-file reports that fragmented the grouping
+intent — the MCP server still packed the files per-group into the
+LLM request, but the reports came back split.
+
+Implementation in the command prose:
+
+  ANSWER_MODE=0
+  if [ -n "$FILE_LIST_PATH" ] && \
+     grep -Eq '^---GROUP:[A-Za-z0-9_.-]+---[[:space:]]*$' "$FILE_LIST_PATH"; then
+      ANSWER_MODE=1
+  fi
+
+Then the scan JSON uses <ANSWER_MODE> instead of a hardcoded 0. Branch
+B (folder scan via scan_folder) always uses 0 — scan_folder
+auto-discovers paths and doesn't accept group markers. The orchestrator
+also logs a one-line notice ("File list contains group markers — using
+answer_mode=1 (one report per group)") so the user knows why the
+output shape differs from the default.
+
+Downstream pipeline is unchanged:
+  * parallel-fixer dispatch (scan-and-fix): each group report -> one
+    fixer. Same as per-file.
+  * aggregator (scan-and-fix-serially): walks every .md in the
+    reports dir. Group reports work the same as per-file reports.
+
+Constraint section updated: "answer_mode is hardcoded to 0" is now
+"answer_mode is chosen by the command itself: 0 default, 1 if file
+list has group markers, never 2, never overridable from $ARGUMENTS".
+
+README table entry for --file-list now explicitly states the
+auto-switch ("if the file contains at least one ---GROUP:<id>--- line,
+the command automatically uses answer_mode: 1 instead of the default
+answer_mode: 0").
+
+
 ## [8.0.2] - 2026-04-18
 
 ### Documentation
