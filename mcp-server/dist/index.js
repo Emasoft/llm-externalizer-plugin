@@ -32264,7 +32264,7 @@ Run the "discover" tool to see the current profile status.`
             }
             chatFilePaths = [...chatFilePaths, ...folderResult.files];
           }
-          if (chatScan) {
+          if (chatScan && !chatRedact) {
             const chatRealFiles = chatFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
             if (chatRealFiles.length > 0) {
               const scanResult = scanFilesForSecrets(chatRealFiles);
@@ -32512,7 +32512,7 @@ ${resp.content}${footer}`
           } catch (err) {
             return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
           }
-          if (ctScan) {
+          if (ctScan && !ctRedact) {
             const ctRealFiles = ctFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
             if (ctRealFiles.length > 0) {
               const scanResult = scanFilesForSecrets(ctRealFiles);
@@ -33080,7 +33080,7 @@ Profiles: ${profileNames.join(", ")}`);
             };
           }
           const uniqueFiles = [...new Set(bcNormalizedPaths)];
-          if (bcScan) {
+          if (bcScan && !bcRedact) {
             const realFiles = uniqueFiles.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
             if (realFiles.length > 0) {
               const scanResult = scanFilesForSecrets(realFiles);
@@ -33385,7 +33385,7 @@ ${content}`);
               ]
             };
           }
-          if (sfScan) {
+          if (sfScan && !sfRedact) {
             const scanResult = scanFilesForSecrets(files);
             if (scanResult.found)
               return {
@@ -33735,7 +33735,7 @@ ${content}`);
               isError: true
             };
           }
-          if (seiScan) {
+          if (seiScan && !seiRedact) {
             const scanResult = scanFilesForSecrets(files);
             if (scanResult.found)
               return {
@@ -34107,7 +34107,7 @@ ${body}
           const comparePair = async (fA, fB, prompt) => {
             if (!existsSync2(fA)) return { error: `File not found: ${fA}` };
             if (!existsSync2(fB)) return { error: `File not found: ${fB}` };
-            if (cfScan) {
+            if (cfScan && !cfRedact) {
               const scanResult = scanFilesForSecrets([fA, fB]);
               if (scanResult.found) return { error: scanResult.report };
             }
@@ -34326,7 +34326,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (cfScan) {
+          if (cfScan && !cfRedact) {
             const scanResult = scanFilesForSecrets([fileA, fileB]);
             if (scanResult.found)
               return {
@@ -34476,7 +34476,7 @@ ${diffFence}` + sourceFileBlocks
               isError: true
             };
           }
-          if (crScan) {
+          if (crScan && !crRedact) {
             const crRealFiles = crFilePathsAll.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
             if (crRealFiles.length > 0) {
               const scanResult = scanFilesForSecrets(crRealFiles);
@@ -34719,7 +34719,7 @@ ${crResp.content}${crFooter}`
               isError: true
             };
           }
-          if (ciScan) {
+          if (ciScan && !ciRedact) {
             const ciRealFiles = ciFilePathsAll.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
             if (ciRealFiles.length > 0) {
               const scanResult = scanFilesForSecrets(ciRealFiles);
@@ -35042,7 +35042,7 @@ FAILED: File not found.`);
               isError: true
             };
           }
-          if (csScan) {
+          if (csScan && !csRedact) {
             const csRealFiles = csFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
             const scanResult = scanFilesForSecrets([csSpecPath, ...csRealFiles]);
             if (scanResult.found)
