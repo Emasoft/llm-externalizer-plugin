@@ -1,6 +1,93 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.0.0] - 2026-04-18
+
+### Added
+
+- Feat!: 8 fixes from user review — sonnet/opus split, menus, checkpoint, redact default, qwen, ollama, troubleshooting
+
+BREAKING: the two opus-only fixer agents are split into sonnet + opus
+variants (4 agents total), so the fixer commands can pre-bake the
+user's model pick and dispatch directly. Users dispatching the old
+agent names from custom commands MUST update to the *-sonnet-agent or
+*-opus-agent variants:
+
+  llm-externalizer-parallel-fixer-agent  -> llm-externalizer-parallel-fixer-sonnet-agent
+                                          + llm-externalizer-parallel-fixer-opus-agent
+  llm-externalizer-serial-fixer-agent    -> llm-externalizer-serial-fixer-sonnet-agent
+                                          + llm-externalizer-serial-fixer-opus-agent
+
+Eight user-requested changes:
+
+1. `redact_secrets` default flipped to true when `scan_secrets` is true.
+   Previous default aborted the whole run if any secret was detected;
+   now the default is to REDACT (replace with [REDACTED:LABEL]) and
+   keep scanning. Users who want the old abort behaviour can still get
+   it by running with --no-secrets and enabling a stricter external
+   pre-flight, but the sensible default for "wise" secret scanning is
+   redact-not-abort. All 4 scan-and-fix variants updated; the scan
+   call now sends scan_secrets + redact_secrets as a pair.
+
+2. All user-facing choice prompts moved to AskUserQuestion menus with
+   the yes/default option first, so pressing Enter takes the obvious
+   path:
+     - Auto-discovery confirm step: Proceed (default) / Edit list / Cancel.
+     - Fixer-model pick step: Sonnet (default) / Opus.
+   No more "type y to continue" text prompts.
+
+3. Step 0 output trimmed: one line each for codebase root, file count
+   + top-level breakdown, included examples, excluded examples. Then
+   the menu. No prose lectures before the scan.
+
+4. Pre-fix checkpoint step added to all four fix-touching commands
+   (scan-and-fix, scan-and-fix-serially, fix-report, fix-found-bugs).
+   Before any fixer touches source, the orchestrator creates a
+   `chore(checkpoint): ...` commit if the tree has uncommitted
+   changes, so the user can always revert with one `git reset --soft
+   HEAD~1`. No menu — checkpointing is cheap and always safe.
+
+5. Ensemble model list completed in both the README and the YAML
+   example. The Remote (OpenRouter) block now shows third_model:
+   "qwen/qwen3.6-plus" alongside gemini-2.5-flash and grok-4.1-fast.
+   remote-ensemble requires three models — the doc now states this.
+
+6. Fixer model is now picked via menu (Sonnet default, Opus optional),
+   and the four new agent files hard-code the picked model. Splitting
+   into two files per fixer role keeps the `model:` frontmatter field
+   honest and the CPV validator happy (effort: xhigh needs Opus;
+   sonnet variants use effort: high).
+
+7. LM Studio default switched from the old Llama-3.3-70B-GGUF to the
+   recommended Qwen 3.5 27B with platform-split guidance:
+     * mlx-community/Qwen3.5-27B-Instruct-4bit   (macOS Apple Silicon)
+     * bartowski/Qwen3.5-27B-Instruct-GGUF       (Windows / Linux)
+   One comment line in the profile explains which to pick.
+
+8. Two new README sections:
+     * "Local (Ollama)" — full profile example, `ollama pull` hint,
+       url override note.
+     * "## Troubleshooting" — 4 tables (OpenRouter / LM Studio /
+       Ollama / General) covering the common symptoms users hit:
+       missing env vars, 401/429 errors, model-not-found, timeouts,
+       MLX-vs-GGUF pick on Mac, daemon not running, etc.
+
+Also dropped editorializing on model quality. The README used to say
+free mode is "LOWER quality than ensemble — expect more false
+positives and shallower analysis" and similar on --free in the
+scan-and-fix tables. Those are design decisions we already committed
+to — readers don't need the caveat. Kept the one truly material
+warning on free mode: the provider logs prompts.
+
+Rule file synced: rules/use-llm-externalizer.md lists all 5 agents and
+the Sonnet/Opus menu, and the user-global ~/.claude/rules/ copy
+mirrors the plugin version byte-for-byte so next-install users get
+the same guidance.
+
+Validation: all agents 100/100, all commands 100/100, plugin clean
+(only the pre-existing mcp-server/ directory WARNING, unchanged).
+
+
 ## [8.1.2] - 2026-04-18
 
 ### Documentation
