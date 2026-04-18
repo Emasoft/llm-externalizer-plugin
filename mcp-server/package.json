@@ -1,6 +1,6 @@
 {
   "name": "llm-externalizer",
-  "version": "8.0.0",
+  "version": "8.0.1",
   "type": "module",
   "description": "MCP server for LLMs — profile-based configuration for local (LM Studio, Ollama, vLLM, llama.cpp) and remote (OpenRouter) backends with ensemble mode",
   "main": "dist/index.js",

@@ -1,6 +1,48 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [8.0.1] - 2026-04-18
+
+### Documentation
+
+- Docs: per-command parameter tables in README + bundle the use-llm-externalizer rule file
+
+Three changes:
+
+1. README.md: every slash command now has its own parameter table
+   (positional + flag) with Kind / Required / Meaning columns. Each
+   table is preceded by a short behaviour summary so readers can see
+   what the command does without following every link. Tables added
+   for:
+     - llm-externalizer-discover  (no params)
+     - llm-externalizer-configure (no params)
+     - llm-externalizer-search-existing-implementations (2 positional
+       + 5 flags)
+     - llm-externalizer-scan-and-fix (target + 6 flags)
+     - llm-externalizer-scan-and-fix-serially (cross-references the
+       scan-and-fix table since the parameter set is byte-identical)
+     - llm-externalizer-fix-report (one positional)
+     - llm-externalizer-fix-found-bugs (one optional positional)
+
+   The original compact overview table stays at the top so existing
+   links to "## Commands" still land on a readable summary.
+
+2. rules/use-llm-externalizer.md NEW: plugin-bundled copy of the
+   per-user global rules file at ~/.claude/rules/use-llm-externalizer.md.
+   Having the canonical content ship with the plugin means new installs
+   get the up-to-date guidance without the user having to hand-copy
+   anything. The two files are byte-identical as of this commit and
+   should be synced together on future edits.
+
+3. The plugin-bundled rule file already reflects the v8.0.0 renames:
+     * Agent names: llm-ext-reviewer -> llm-externalizer-reviewer-agent
+       (the rest are llm-externalizer-parallel-fixer-agent and
+       llm-externalizer-serial-fixer-agent)
+     * Flag renames: --no-scan-secrets -> --no-secrets,
+       --text-files -> --text
+   So anyone installing v8.1.0 gets current docs out of the box.
+
+
 ## [8.0.0] - 2026-04-18
 
 ### Added
