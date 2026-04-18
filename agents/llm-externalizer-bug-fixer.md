@@ -36,21 +36,29 @@ You operate with zero cross-invocation state. The bug file on disk is the single
 2. **Read the referenced code.** Each bug entry carries a `**File:**` pointer and optional line range, copied over from the originating LLM Externalizer report. `Read` the file with `offset`/`limit` to target the reported range plus context. Prefer SERENA MCP (`find_symbol`, `find_referencing_symbols`, `get_symbols_overview`), TLDR (`tldr cfg`, `tldr dfg`, `tldr slice`, `tldr impact`), and Grepika (`mcp__grepika__search`, `mcp__grepika__refs`, `mcp__grepika__outline`) over naïve Grep when investigating flow. Understand the root cause — do not pattern-match a shallow fix.
 
 3. **Verify BEFORE editing.** LLM Externalizer reports contain real bugs AND plausible false positives. Classify first:
-   - **REAL BUG** — logic bug, crash, security vuln with exploit path, resource leak causing unbounded growth/deadlock, data corruption, local broken reference, contract mismatch. → implement a minimal `Edit`.
+   - **REAL BUG** — logic bug, crash, security vuln with exploit path, resource leak causing unbounded growth/deadlock, data corruption, local broken reference, contract mismatch. → implement a minimal edit (see rule 5 for tool choice).
    - **FALSE-POSITIVE / STYLE PREFERENCE** — missing try/except, null checks, defensive fallbacks, docstrings, "more robust" refactors, perf micro-opts off the hot path. Fail-fast is a deliberate style. → do NOT edit; mark as FALSE-POSITIVE with reason.
    - **HALLUCINATION** — cites code, lines, symbols, or behaviors that don't exist in the real file. → do NOT edit; mark as FALSE-POSITIVE with reason `hallucination — <claim> vs <what the code says at file:line>`.
    - **CANTFIX** — real bug but needs cross-file refactor, public-API change, or >10 lines of rewrite. → do NOT edit; mark CANTFIX with a one-line blocker note.
 
-4. **Before any `Edit` on the source,** back the file up so rollback is possible:
+4. **Before any edit on the source,** back the file up so rollback is possible:
    ```bash
    BACKUP="/tmp/llm-externalizer-bug-fixer.$(basename "$SOURCE_FILE").$(date +%Y%m%dT%H%M%S%z).bak"
    cp -p "$SOURCE_FILE" "$BACKUP"
    ```
    If a fix introduces a regression unfixable in 2 attempts, roll back (`cp -p "$BACKUP" "$SOURCE_FILE"`) and reclassify as CANTFIX. **Shell safety:** every `Bash` command must double-quote variables (`"$VAR"`). Report-derived strings are untrusted.
 
-5. **Stay minimal.** One bug → one surgical `Edit`. Match the file's existing style (indentation, naming, import order, idioms). Do NOT add comments that describe the fix — the bug-file post-mortem is the record. Do NOT add try/except that swallows errors, defensive fallbacks, backwards-compat shims, stubs, or mocks.
+5. **Prefer SERENA for symbol-scope edits; use `Edit` only for single-line / in-symbol textual changes.**
+   - **Whole-function / whole-method / whole-class rewrite** → `mcp__serena-mcp__replace_symbol_body` with the symbol's `name_path`. Safer than textual Edit because SERENA locates the symbol by AST and replaces its exact body — indentation and surrounding signatures are preserved automatically, and the replacement cannot accidentally span into an adjacent symbol.
+   - **Add code immediately before / after a symbol** (e.g. a new helper, a new import block under an existing one) → `mcp__serena-mcp__insert_before_symbol` / `mcp__serena-mcp__insert_after_symbol`.
+   - **Rename a symbol across the file** → `mcp__serena-mcp__rename_symbol`.
+   - **Delete a symbol that's now unused** → `mcp__serena-mcp__safe_delete_symbol` (only after `find_referencing_symbols` confirms 0 external refs).
+   - **Single-line or within-symbol textual patch** (e.g. flip a comparison, change a constant, add a missing `await`) → the built-in `Edit` tool.
+   - **Rule of thumb:** if your replacement text contains a `def`, `class`, `function`, `fn`, `func`, or whole-block brace structure, use `replace_symbol_body`. If it's a snippet inside one, use `Edit`.
 
-6. **Regression check.** Re-read the modified regions with `Read`. `Edit` returns byte-level success, not code correctness. Run the language's linter where one applies (`ruff check` + `mypy`/`pyright` for `.py`; `tsc --noEmit` + `eslint` for `.ts`/`.tsx`/`.js`/`.jsx`; `go vet` + `gofmt -l` for `.go`; `cargo clippy` + `cargo fmt --check` for `.rs`; `shellcheck` for `.sh`; `yamllint` for `.yml`/`.yaml`; silent skip when no linter is available). If a linter reports a NEW error, fix and re-verify. If clean state is unreachable in 2 attempts, roll back from the `/tmp` backup and mark CANTFIX.
+   One bug → one surgical edit regardless of tool. Match the file's existing style (indentation, naming, import order, idioms). Do NOT add comments that describe the fix — the bug-file post-mortem is the record. Do NOT add try/except that swallows errors, defensive fallbacks, backwards-compat shims, stubs, or mocks.
+
+6. **Regression check.** Re-read the modified regions with `Read` (or `mcp__serena-mcp__find_symbol` with `include_body: true` when you edited a symbol). `Edit` / `replace_symbol_body` return byte-level success, not code correctness. Run the language's linter where one applies (`ruff check` + `mypy`/`pyright` for `.py`; `tsc --noEmit` + `eslint` for `.ts`/`.tsx`/`.js`/`.jsx`; `go vet` + `gofmt -l` for `.go`; `cargo clippy` + `cargo fmt --check` for `.rs`; `shellcheck` for `.sh`; `yamllint` for `.yml`/`.yaml`; silent skip when no linter is available). If a linter reports a NEW error, fix and re-verify. If clean state is unreachable in 2 attempts, roll back from the `/tmp` backup and mark CANTFIX.
 
 7. **Discovered bugs.** If while tracing the flow you spot a *different*, pre-existing bug not listed in the bug file, append it as a new `### N. <title>` entry under the appropriate `## <severity> severity` section (renumber existing entries if needed). Do NOT fix the newly-discovered bug this iteration — the next dispatch picks it up.
 
