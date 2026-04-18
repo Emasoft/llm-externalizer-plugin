@@ -1,6 +1,55 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [5.2.0] - 2026-04-18
+
+### Added
+
+- Feat(agent): prefer SERENA replace_symbol_body for whole-symbol rewrites
+
+Add an explicit tool-selection rule for the llm-externalizer-bug-fixer:
+
+- whole-function / whole-method / whole-class rewrite →
+  mcp__serena-mcp__replace_symbol_body (AST-scoped, preserves
+  indentation and cannot spill into adjacent symbols)
+- insert code around a symbol → insert_before_symbol / insert_after_symbol
+- rename a symbol → rename_symbol
+- delete an unused symbol → safe_delete_symbol (after find_referencing_symbols
+  confirms 0 external refs)
+- single-line / in-symbol textual patch → built-in Edit
+
+Rule of thumb: if the replacement contains a def / class / fn block,
+use replace_symbol_body; if it's a snippet inside one, use Edit.
+
+Also update the regression-check step to re-read modified symbols via
+SERENA's find_symbol (include_body: true) when the edit was symbol-scoped
+— matches the editing tool used.
+
+Motivation: textual Edit is fragile on whole-function rewrites because
+it matches by unique substring and silently fails when indentation
+drifts or when the function appears twice in the file. SERENA's
+symbol-scoped edit tools address both issues and are already in the
+agent's inherited tool surface.
+
+
+### Fixed
+
+- Fix(agent): let llm-externalizer-bug-fixer inherit full tool surface
+
+Remove the narrow Read/Edit/Write/Bash/Grep/Glob allowlist so the agent
+can use SERENA MCP, TLDR, and Grepika (plus LSP diagnostics and any
+other MCP tools configured in the session) to trace flow before editing.
+
+Mirrors the pattern already used by llm-externalizer-fixer — a narrow
+tools: line starves the agent of the cheap, symbol-aware tools it needs
+to verify findings before touching source, which is exactly the verify-
+before-edit behaviour the agent body already asks for.
+
+Also update the "Read the referenced code" rule to name Grepika
+(mcp__grepika__search / refs / outline) alongside SERENA and TLDR, so
+the agent explicitly knows which tools to reach for before Grep.
+
+
 ## [5.1.1] - 2026-04-18
 
 ### Documentation
