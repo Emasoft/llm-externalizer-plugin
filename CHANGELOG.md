@@ -1,6 +1,16 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [5.1.1] - 2026-04-18
+
+### Documentation
+
+- Docs: update README features list for v5.1.0
+
+Mention the new llm-externalizer-bug-fixer agent and bump the
+slash-command count from 4 to 5 (added llm-externalizer-fix-found-bugs).
+
+
 ## [5.1.0] - 2026-04-18
 
 ### Added
