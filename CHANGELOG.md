@@ -1,6 +1,69 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [8.1.2] - 2026-04-18
+
+### Documentation
+
+- Docs(readme): split user install vs dev install; marketplace link at top
+
+Three related fixes per user feedback:
+
+1. Marketplace visibility at the top.
+   Right under the tagline a [!NOTE] banner spells out the plugin
+   ships in Emasoft/emasoft-plugins (with a link). Anyone reading
+   the README — Claude Code included — can see which marketplace to
+   add before the install commands even start.
+
+2. Quick start = USER install only, via the Claude Code CLI.
+   Rewrote the whole Quick start section around `claude plugin …`
+   CLI commands (not inside-Claude slash commands), step-by-step:
+
+     1. claude plugin marketplace add Emasoft/emasoft-plugins
+     2. claude plugin marketplace update emasoft-plugins
+     3. claude plugin install llm-externalizer@emasoft-plugins
+     4. claude plugin update llm-externalizer
+     5. claude plugin uninstall llm-externalizer
+
+   Each with a short "why". Pointer at the top to `claude plugins
+   --help` for the full reference.
+
+   The old "alternative: manual settings.json" branch and the
+   "/plugin ..." slash-command flow are gone from Quick start —
+   those belong in the Claude Code docs, not here.
+
+   Added a dedicated subsection "How to install from inside Claude
+   Code" that is deliberately one sentence: "Paste the URL of this
+   repository in the prompt and ask Claude to install it for you as
+   a project, local, or user scope plugin."
+
+3. Contributing = DEV install at the bottom, with the exact command
+   sequence a contributor needs:
+
+     fork -> clone -> add upstream -> scripts/setup.py -> local
+     install -> feature branch -> claude plugin validate +
+     cpv-remote-validate -> conventional-commit -> push fork ->
+     gh pr create
+
+   Added an [!IMPORTANT] banner explaining the pre-push hook blocks
+   direct git push to upstream; only scripts/publish.py (run by the
+   maintainer) ships a release, and it runs the 9 mandatory
+   validation gates every time.
+
+   Developer requirements (uv, gh, git-cliff) live here now —
+   Requirements section up top only lists what a regular marketplace
+   user needs, with a pointer to this section for devs.
+
+   Release pipeline subsection shows every scripts/publish.py flag
+   (--patch / --minor / --major / --dry-run / --check-only) so
+   maintainers don't have to `--help` to remember.
+
+Net: user path is top-to-bottom (marketplace, install, configure,
+run). Dev path is anchored at the bottom with the full fork-build-PR
+sequence. No duplicate Requirements list, no inside-Claude-slash-
+command install noise in Quick start.
+
+
 ## [8.1.1] - 2026-04-18
 
 ### Documentation
