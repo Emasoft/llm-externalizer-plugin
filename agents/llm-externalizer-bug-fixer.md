@@ -1,9 +1,14 @@
 ---
 name: llm-externalizer-bug-fixer
 description: Fix exactly ONE bug from a markdown bug list produced by llm-externalizer-fix-found-bugs. Reads the bug-file absolute path from its user prompt, picks the highest-severity unfixed entry, applies a minimal surgical fix, updates the bug file with a ` — FIXED` marker plus a short post-mortem, and returns a single-line summary. Dispatched per-bug by the `llm-externalizer-fix-found-bugs` command; each dispatch is a fresh spawn with zero cross-iteration state.
-tools: Read, Edit, Write, Bash, Grep, Glob
 model: opus
 effort: xhigh
+# tools: intentionally omitted — the bug-fixer inherits the full tool surface
+# so it can use SERENA MCP (symbol lookup, find_referencing_symbols,
+# replace_symbol_body), TLDR (tldr cfg / dfg / slice / impact), Grepika
+# (semantic search), LSP diagnostics, etc. on top of the base Read/Edit/
+# Write/Grep/Glob/Bash. A narrow allowlist starved the agent of the tools
+# it needs to verify findings cheaply and trace flow before editing.
 ---
 
 <example>
@@ -28,7 +33,7 @@ You operate with zero cross-invocation state. The bug file on disk is the single
 
 1. **Read the bug file** at the path in the user prompt. The highest-severity unfixed bug is the FIRST `### ` heading under `## High severity` (then `## Medium severity`, then `## Low severity`) that does NOT contain the literal word `FIXED`. There is only ONE target bug per invocation — never touch any other.
 
-2. **Read the referenced code.** Each bug entry carries a `**File:**` pointer and optional line range, copied over from the originating LLM Externalizer report. `Read` the file with `offset`/`limit` to target the reported range plus context. Prefer SERENA MCP (`find_symbol`, `find_referencing_symbols`) and TLDR (`tldr cfg`, `tldr dfg`, `tldr slice`) over naïve Grep when investigating flow. Understand the root cause — do not pattern-match a shallow fix.
+2. **Read the referenced code.** Each bug entry carries a `**File:**` pointer and optional line range, copied over from the originating LLM Externalizer report. `Read` the file with `offset`/`limit` to target the reported range plus context. Prefer SERENA MCP (`find_symbol`, `find_referencing_symbols`, `get_symbols_overview`), TLDR (`tldr cfg`, `tldr dfg`, `tldr slice`, `tldr impact`), and Grepika (`mcp__grepika__search`, `mcp__grepika__refs`, `mcp__grepika__outline`) over naïve Grep when investigating flow. Understand the root cause — do not pattern-match a shallow fix.
 
 3. **Verify BEFORE editing.** LLM Externalizer reports contain real bugs AND plausible false positives. Classify first:
    - **REAL BUG** — logic bug, crash, security vuln with exploit path, resource leak causing unbounded growth/deadlock, data corruption, local broken reference, contract mismatch. → implement a minimal `Edit`.
