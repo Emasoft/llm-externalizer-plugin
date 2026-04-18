@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Post-flight validator for a fixer summary written by `llm-externalizer-fixer`.
+"""Post-flight validator for a fixer summary written by `llm-externalizer-fixer-agent`.
 
 Given `--summary <path>` and `--reports-dir <path>`, verifies:
 

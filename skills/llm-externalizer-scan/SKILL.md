@@ -7,16 +7,16 @@ description: |-
 argument-hint: "[folder-path | . | glob-pattern] [focus: bugs|security|all]"
 effort: medium
 context: fork
-agent: llm-externalizer-reviewer
+agent: llm-externalizer-reviewer-agent
 ---
 
 # LLM Externalizer — Full Project Scan
 
-Scan `$ARGUMENTS` with the LLM Externalizer ensemble and return only report file paths. Runs in the `llm-externalizer-reviewer` forked subagent — verbose scan output stays out of the orchestrator.
+Scan `$ARGUMENTS` with the LLM Externalizer ensemble and return only report file paths. Runs in the `llm-externalizer-reviewer-agent` forked subagent — verbose scan output stays out of the orchestrator.
 
 ## Overview
 
-Codebase scan via the LLM Externalizer MCP server, active profile (default: `remote-ensemble`, parallel). One report per file. `context: fork` runs work in the `llm-externalizer-reviewer` subagent (Haiku, no Write/Edit); only report paths come back.
+Codebase scan via the LLM Externalizer MCP server, active profile (default: `remote-ensemble`, parallel). One report per file. `context: fork` runs work in the `llm-externalizer-reviewer-agent` subagent (Haiku, no Write/Edit); only report paths come back.
 
 ## Prerequisites
 

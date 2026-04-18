@@ -1,6 +1,6 @@
 ---
 name: llm-externalizer-fix-found-bugs
-description: Aggregate unfixed findings across every report in `./reports/llm-externalizer/` (merging ensemble auditors) and fix each one via a fresh `llm-externalizer-bug-fixer` subagent. Optional `@merged-report.md` scopes the loop to one report.
+description: Aggregate unfixed findings across every report in `./reports/llm-externalizer/` (merging ensemble auditors) and fix each one via a fresh `llm-externalizer-bug-fixer-agent` subagent. Optional `@merged-report.md` scopes the loop to one report.
 allowed-tools:
   - Task
   - Read
@@ -14,7 +14,7 @@ argument-hint: "[@merged-report.md]"
 
 # llm-externalizer-fix-found-bugs — headless bug-fix loop
 
-Aggregate every unfixed finding from LLM Externalizer reports into one canonical bug list, then dispatch one `llm-externalizer-bug-fixer` subagent per bug until none remain. Each subagent spawn is fresh (zero parent-conversation context). You never read scan-report or fixer-summary content — only paths.
+Aggregate every unfixed finding from LLM Externalizer reports into one canonical bug list, then dispatch one `llm-externalizer-bug-fixer-agent` subagent per bug until none remain. Each subagent spawn is fresh (zero parent-conversation context). You never read scan-report or fixer-summary content — only paths.
 
 All mechanical work (report parsing, severity classification, path resolution, canonical-format check, state counting, snapshot diffing, fallback-prompt templating, run-directory setup, timestamp generation, summary writing) lives in `scripts/fix_found_bugs_helper.py`. You call it via `Bash` and read its stdout. Your job is orchestration plus judgment (normalisation of edge cases, model selection, progress reporting).
 
@@ -35,7 +35,7 @@ Subcommands (run `$H --help` for the full tree, or `$H <sub> --help` for per-fla
 | `count --file PATH` | Current state | One line: `TOTAL=N FIXED=N UNFIXED=N MAX_ITER=N` |
 | `fixed-titles --file PATH` | Snapshot FIXED titles | One title per line, sorted |
 | `diff-fixed --file PATH --previous SNAP` | User-facing progress updates | `Fixed: <title> — N unfixed remaining` per newly-FIXED bug |
-| `print-fallback-prompt --file PATH` | Prompt for general-purpose Task dispatch (when the custom `llm-externalizer-bug-fixer` agent isn't installed) | Full prompt text |
+| `print-fallback-prompt --file PATH` | Prompt for general-purpose Task dispatch (when the custom `llm-externalizer-bug-fixer-agent` agent isn't installed) | Full prompt text |
 | `timestamp` | Fresh sortable local-TZ ISO-8601 prefix | `20260418T153045+0200` |
 | `init-run [--base DIR]` | Create `./reports/llm-externalizer/` + emit all TS-prefixed output paths | Shell-parseable: `RUN_TS=...`, `OUTDIR=...`, `BUGS_TO_FIX=...`, `INITIAL_STATE=...`, `SNAPSHOT=...`, `SUMMARY=...`, `PROGRESS_LOG=...` |
 | `save-summary --file PATH --output PATH [--run-start-ts TS]` | Write final markdown summary (counts + FIXED/unfixed title lists) | Absolute path of the written file |
@@ -133,8 +133,8 @@ cp "$INITIAL_STATE" "$SNAPSHOT"
 ### Step 5 — Pick subagent_type
 
 ```bash
-if test -f "${CLAUDE_PLUGIN_ROOT}/agents/llm-externalizer-bug-fixer.md" \
-   || test -f "$HOME/.claude/agents/llm-externalizer-bug-fixer.md"; then
+if test -f "${CLAUDE_PLUGIN_ROOT}/agents/llm-externalizer-bug-fixer-agent.md" \
+   || test -f "$HOME/.claude/agents/llm-externalizer-bug-fixer-agent.md"; then
   # use the custom subagent — same plugin ships it
   USE_CUSTOM=1
 else
@@ -142,7 +142,7 @@ else
 fi
 ```
 
-- `USE_CUSTOM=1` → `subagent_type: "llm-externalizer-bug-fixer"`, `prompt: "$BUGS_TO_FIX"` (bare absolute path, nothing else).
+- `USE_CUSTOM=1` → `subagent_type: "llm-externalizer-bug-fixer-agent"`, `prompt: "$BUGS_TO_FIX"` (bare absolute path, nothing else).
 - `USE_CUSTOM=0` → `subagent_type: "general-purpose"`, `prompt: $($H print-fallback-prompt --file "$BUGS_TO_FIX")`.
 
 Model defaults to `opus`; honour any user request for sonnet/haiku by passing `model:` on the `Task` call.

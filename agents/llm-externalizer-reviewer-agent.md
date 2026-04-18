@@ -1,5 +1,5 @@
 ---
-name: llm-externalizer-reviewer
+name: llm-externalizer-reviewer-agent
 description: Use for a fast code review from the LLM Externalizer ensemble without loading scan output into the main context. Accepts a file/folder/glob and returns only report paths. Trigger with "review this file", "llm-ext review", "audit these files", "scan for bugs".
 model: haiku
 effort: medium
@@ -12,14 +12,14 @@ effort: medium
 <example>
 Context: user just finished editing a Python module and wants it reviewed without flooding the main conversation with scan output.
 user: review src/payments.py via llm externalizer
-assistant: Dispatching the llm-externalizer-reviewer agent — it will run the scan and return only the report path.
+assistant: Dispatching the llm-externalizer-reviewer-agent — it will run the scan and return only the report path.
 <commentary>The reviewer spawns code_task on the file, collects the report path, returns it as a single line. The orchestrator never sees the scan content.</commentary>
 </example>
 
 <example>
 Context: user wants a cheap, scoped audit of a folder before opening a PR.
 user: audit the auth/ folder for real bugs
-assistant: Using the llm-externalizer-reviewer — it will scan_folder against the active ensemble and hand back report paths.
+assistant: Using the llm-externalizer-reviewer-agent — it will scan_folder against the active ensemble and hand back report paths.
 <commentary>Reviewer picks scan_folder, passes the default real-bugs-only rubric, and returns `[DONE] review-auth — N reports` plus the paths.</commentary>
 </example>
 
