@@ -427,6 +427,7 @@ Skills activate automatically when Claude Code encounters tasks matching their t
 | `/llm-externalizer:llm-externalizer-configure` | Read-only inspector. Shows the current profile table and reminds you to edit `~/.llm-externalizer/settings.yaml` manually to change anything |
 | `/llm-externalizer:llm-externalizer-search-existing-implementations` | Scan a codebase for existing implementations of a described feature (FFD-batched PR duplicate check) |
 | `/llm-externalizer:llm-externalizer-scan-and-fix` | Two-stage audit — per-file scan (answer_mode=0) + parallel `llm-externalizer-fixer` subagents (≤15 concurrent) + joined final report |
+| `/llm-externalizer:llm-externalizer-fix-found-bugs` | Aggregate unfixed findings across every report under `./reports/llm-externalizer/` (merging ensemble auditors) and fix each one via a fresh `llm-externalizer-bug-fixer` subagent — serial loop, zero parent-context per bug. Pass `@merged-report.md` to scope the loop to one report |
 
 ## Plugin Structure
 
@@ -444,9 +445,11 @@ llm-externalizer-plugin/
 ├── commands/
 │   ├── llm-externalizer-configure.md                       # /llm-externalizer:llm-externalizer-configure
 │   ├── llm-externalizer-discover.md                        # /llm-externalizer:llm-externalizer-discover
+│   ├── llm-externalizer-fix-found-bugs.md                  # /llm-externalizer:llm-externalizer-fix-found-bugs
 │   ├── llm-externalizer-scan-and-fix.md                    # /llm-externalizer:llm-externalizer-scan-and-fix
 │   └── llm-externalizer-search-existing-implementations.md # /llm-externalizer:llm-externalizer-search-existing-implementations
 ├── agents/
+│   ├── llm-externalizer-bug-fixer.md                       # Opus-class per-bug fixer (dispatched by fix-found-bugs)
 │   ├── llm-externalizer-fixer.md                           # Opus-class per-report fixer (dispatched by scan-and-fix)
 │   └── llm-externalizer-reviewer.md                        # Haiku-class reviewer (read-only MCP tools)
 ├── mcp-server/                   # Bundled TypeScript MCP server
@@ -462,6 +465,10 @@ llm-externalizer-plugin/
 │   ├── setup.py                  # Build: npm install + npm run build
 │   ├── install_statusline.py     # Statusline installer
 │   ├── bump_version.py           # Semver bumper for plugin.json
+│   ├── fix_found_bugs_helper.py  # Backend for /llm-externalizer:llm-externalizer-fix-found-bugs
+│   ├── join_fixer_reports.py     # Merges .fixer.* summaries into one final report
+│   ├── validate_fixer_summary.py # Post-flight validator for fixer summaries
+│   ├── validate_report.py        # Pre-flight validator for per-file scan reports
 │   └── publish.py                # Release pipeline (bump, changelog, tag, push, gh release)
 ├── skills/
 │   ├── llm-externalizer-usage/

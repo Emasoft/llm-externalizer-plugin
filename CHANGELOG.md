@@ -1,6 +1,33 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+
+## [Unreleased]
+
+### Added
+
+- `/llm-externalizer:llm-externalizer-fix-found-bugs` command and companion
+  `llm-externalizer-bug-fixer` agent. Aggregates every unfixed finding across
+  all reports in `./reports/llm-externalizer/` (merging the per-model auditor
+  responses when ensemble mode was used) into one canonical bug list, then
+  dispatches one fresh `llm-externalizer-bug-fixer` subagent per bug until
+  none remain. Pass `@merged-report.md` as the argument to scope the loop to
+  a single merged (`answer_mode=2`) report. Loop is serial by design (bug
+  order matters), each dispatch is a fresh spawn with zero parent-conversation
+  context, and the orchestrator never reads scan or fixer content — only
+  paths.
+- `scripts/fix_found_bugs_helper.py` — backend for the new command. Ten
+  subcommands: `aggregate-reports`, `resolve-path`, `is-canonical`, `count`,
+  `fixed-titles`, `diff-fixed`, `print-fallback-prompt`, `timestamp`,
+  `init-run`, `save-summary`. Handles ensemble (3 `## Response (Model: X)`
+  sections), merged (multiple `## File:` sections), and single-model report
+  shapes. Severity classification via keyword heuristics (security/crash/
+  race/data-corruption → High; style/naming/readability/docstring → Low;
+  everything else → Medium). `--skip-if-fixer-exists` skips reports already
+  processed by `scan-and-fix`. All output files under
+  `./reports/llm-externalizer/` with a sortable `<RUN_TS>.fix-found-bugs.*`
+  prefix.
+
 ## [5.0.0] - 2026-04-18
 
 ### Added
