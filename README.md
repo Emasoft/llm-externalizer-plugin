@@ -1,7 +1,7 @@
 # llm-externalizer
 
 <!--BADGES-START-->
-![version](https://img.shields.io/badge/version-5.2.0-blue)
+![version](https://img.shields.io/badge/version-5.2.1-blue)
 ![build](https://img.shields.io/badge/build-passing-brightgreen)
 ![typescript](https://img.shields.io/badge/typescript-5.x-blue)
 ![node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)

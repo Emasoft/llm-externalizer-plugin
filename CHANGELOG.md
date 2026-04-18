@@ -1,6 +1,31 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [5.2.1] - 2026-04-18
+
+### Documentation
+
+- Docs(agent): mirror the 10-rule block from llm-externalizer-fixer
+
+Add a '## Rules' summary at the end of llm-externalizer-bug-fixer,
+mirroring the block already present in llm-externalizer-fixer so the
+two agents look the same at a glance.
+
+Adaptations for the bug-fixer's role (fix from a markdown bug list
+rather than from a scan report):
+
+- Rule 4 — source of truth is the bug file + the real source tree
+  (validate_report.py / validate_fixer_summary.py don't exist in this
+  flow).
+- Rule 5 — CANTFIX note must be appended to the bug body with a
+  timestamp (RUN_TS) so future runs see the prior attempt.
+- Rule 10 — return exactly one status line of the four allowed shapes
+  (Fixed / False-positive / CANTFIX / [FAILED]) rather than a summary
+  path; a missing or multi-line return breaks diff-fixed parsing.
+- Rule 2 — add a pointer to SERENA replace_symbol_body (matches the
+  tool-selection rule added earlier).
+
+
 ## [5.2.0] - 2026-04-18
 
 ### Added
