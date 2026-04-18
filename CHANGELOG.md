@@ -1,6 +1,39 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [7.1.1] - 2026-04-18
+
+### Fixed
+
+- Fix(commands): make scan-and-fix-serially self-contained (command -> agent, no nested command chain)
+
+Previous v7.1.0 draft relied on cross-command references ("follow
+scan-and-fix Steps 0-3b, then follow fix-found-bugs Steps 4-8"),
+which forces the orchestrator to open the other command files at
+runtime — more tokens, more indirection, and the wrong orchestration
+pattern (command -> command -> agent instead of command -> agent).
+
+Rewrite as a single self-contained command: the scan phase, the
+aggregator call, the canonicalisation step, and the serial fix loop
+are all inlined here. The only outgoing Task call is to
+llm-externalizer-serial-fixer-agent (plus the MCP scan calls and
+helper-script invocations, which are data/tooling, not command
+chaining). No "see scan-and-fix.md" or "see fix-found-bugs.md"
+pointers remain.
+
+The command is longer on disk (~230 lines vs 63 in the v7.1.0 draft)
+but the steady-state cost is lower: a user who invokes this command
+loads ONE command's prose, not three. The earlier "delta-only" doc
+looked shorter but made every invocation pay the cost of resolving
+the cross-references.
+
+Also trimmed:
+- description: 300 -> 193 chars (was over the 250-char slash-menu cap)
+- argument-hint: dropped rarely-used [--no-scan-secrets] and
+  [--text-files] entries (108 -> 83 chars; they're still documented
+  in the Arguments section)
+
+
 ## [7.1.0] - 2026-04-18
 
 ### Added
