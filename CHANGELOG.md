@@ -1,6 +1,38 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [7.0.0] - 2026-04-18
+
+### Added
+
+- Feat!: rename fixer agents by concurrency model (parallel / serial)
+
+BREAKING: both Opus-class fixer agents are renamed to spell out the
+fundamental design distinction — concurrency — directly in the name:
+
+  llm-externalizer-fixer-agent      -> llm-externalizer-parallel-fixer-agent
+  llm-externalizer-bug-fixer-agent  -> llm-externalizer-serial-fixer-agent
+
+The pair "fixer" vs "bug-fixer" was ambiguous — both agents fix bugs,
+and a reader couldn't tell from the name which was which. The real
+design axis is how they execute:
+
+- parallel-fixer-agent: stateless, writes a .fixer. summary per report,
+  dispatched up to 15 in parallel against a folder-wide scan
+- serial-fixer-agent: stateful on disk (mutates the aggregated bug
+  list with " — FIXED" markers), dispatched one at a time in a loop
+  over one bug list
+
+Reviewer-agent name is unchanged (it's read-only, not a fixer).
+
+Touched everywhere: agent files (git mv + frontmatter name: field +
+internal BACKUP path prefixes + [FAILED] messages + example dialog),
+command Task dispatches and descriptions, README features + commands
+table + plugin structure, scripts (fix_found_bugs_helper.py help text,
+validate_fixer_summary.py docstring). CHANGELOG entries are historical
+commit records and were left untouched.
+
+
 ## [6.0.0] - 2026-04-18
 
 ### Added
