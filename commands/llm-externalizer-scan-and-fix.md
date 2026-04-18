@@ -1,6 +1,6 @@
 ---
 name: llm-externalizer-scan-and-fix
-description: Two-stage codebase audit. LLM Externalizer scan produces one report per file; parallel llm-externalizer-fixer-agent subagents (≤15 concurrent) verify and fix each finding. Orchestrator never reads scan or fixer content — only report paths.
+description: Two-stage codebase audit. LLM Externalizer scan produces one report per file; parallel llm-externalizer-parallel-fixer-agent subagents (≤15 concurrent) verify and fix each finding. Orchestrator never reads scan or fixer content — only report paths.
 allowed-tools:
   - mcp__llm-externalizer__discover
   - mcp__llm-externalizer__scan_folder
@@ -294,14 +294,14 @@ sed -n '16,30p' "$VALIDATED"
 # … and so on until TOTAL
 ```
 
-For every path that batch returns, spawn one `llm-externalizer-fixer-agent` subagent via the `Task` tool. The prompt is EXACTLY the absolute report path (one line, nothing else).
+For every path that batch returns, spawn one `llm-externalizer-parallel-fixer-agent` subagent via the `Task` tool. The prompt is EXACTLY the absolute report path (one line, nothing else).
 
 Batch rule:
 
 - **Up to 15 Task calls in a single assistant message** → they run concurrently.
 - If the batch size is > 15, emit 15 per message and wait for the batch to finish before sending the next. NEVER exceed 15 in flight at once.
 - Each `Task` call:
-  - `subagent_type: "llm-externalizer-fixer-agent"`
+  - `subagent_type: "llm-externalizer-parallel-fixer-agent"`
   - `description: "Fix report: <basename>"` (≤5 words)
   - `prompt: "<absolute report path>"` (nothing else)
 
@@ -362,7 +362,7 @@ On any error: `[FAILED] llm-externalizer-scan-and-fix — <one-line reason>`.
 - You MUST NOT `Read` any scan report, fixer summary, or the final joined report.
 - You MUST NOT summarize any report content. Only file paths flow through the orchestrator.
 - Fixer dispatch MUST be parallel (batches of ≤15). Sequential dispatch defeats the whole design.
-- The fixer agent (`llm-externalizer-fixer-agent`) must exist in the plugin. If it is missing, abort with `[FAILED] llm-externalizer-scan-and-fix — llm-externalizer-fixer-agent not installed`.
+- The fixer agent (`llm-externalizer-parallel-fixer-agent`) must exist in the plugin. If it is missing, abort with `[FAILED] llm-externalizer-scan-and-fix — llm-externalizer-parallel-fixer-agent not installed`.
 - Flags `--file-list` and the positional `[target-path]` are mutually exclusive in effect (the target-path is silently ignored when `--file-list` is set). Flags `--instructions` and `--specs` are NOT mutually exclusive — both can be supplied and are unioned into `instructions_files_paths`.
 
 ## Error handling
@@ -372,6 +372,6 @@ On any error: `[FAILED] llm-externalizer-scan-and-fix — <one-line reason>`.
 | MCP service offline                  | Abort `[FAILED] — service offline`. Tell user to restart Claude Code.      |
 | Target path / file-list / instructions / specs missing | Abort `[FAILED] — <which> not found: <path>`.                    |
 | Scan returns 0 reports               | Abort `[FAILED] — scan produced 0 reports`. User should widen target.      |
-| Fixer agent missing                  | Abort `[FAILED] — llm-externalizer-fixer-agent not installed`.                      |
+| Fixer agent missing                  | Abort `[FAILED] — llm-externalizer-parallel-fixer-agent not installed`.                      |
 | Join script exits non-zero           | Abort `[FAILED] — join script failed: <stderr first line>`.                |
 | `--free` + proprietary code implied  | Warn ONCE about provider prompt logging, then proceed on user confirmation.|

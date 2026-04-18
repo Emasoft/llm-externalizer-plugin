@@ -19,8 +19,8 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 
 - **17 MCP tools** — 9 read-only analysis tools + 5 utility tools + 3 OpenRouter model-info formatters
 - **`llm-externalizer-reviewer-agent`** — Sonnet-class plugin agent for fast code reviews with restricted tool allowlist (no Write/Edit). Internal — dispatched by the `llm-externalizer-scan` skill
-- **`llm-externalizer-fixer-agent`** — Opus-class agent that verifies and fixes findings from a single per-file scan report. Internal — dispatched by `/llm-externalizer:llm-externalizer-scan-and-fix` (parallel per-report over a whole folder) and `/llm-externalizer:llm-externalizer-fix-report` (single-report wrapper)
-- **`llm-externalizer-bug-fixer-agent`** — Opus-class per-bug fixer dispatched serially by `/llm-externalizer:llm-externalizer-fix-found-bugs`; each spawn is fresh (zero parent-conversation context) and fixes exactly one bug from an aggregated bug list. Internal — dispatched by the command, not invoked directly
+- **`llm-externalizer-parallel-fixer-agent`** — Opus-class agent that verifies and fixes findings from a single per-file scan report. Internal — dispatched by `/llm-externalizer:llm-externalizer-scan-and-fix` (parallel per-report over a whole folder) and `/llm-externalizer:llm-externalizer-fix-report` (single-report wrapper)
+- **`llm-externalizer-serial-fixer-agent`** — Opus-class per-bug fixer dispatched serially by `/llm-externalizer:llm-externalizer-fix-found-bugs`; each spawn is fresh (zero parent-conversation context) and fixes exactly one bug from an aggregated bug list. Internal — dispatched by the command, not invoked directly
 - **Profile-based configuration** — named profiles in `~/.llm-externalizer/settings.yaml`
 - **`userConfig.openrouter_api_key`** — keychain-stored OpenRouter key via plugin configure UI (falls back to shell `$OPENROUTER_API_KEY`)
 - **Ensemble mode** — three models in parallel on OpenRouter, combined report
@@ -427,9 +427,9 @@ Skills activate automatically when Claude Code encounters tasks matching their t
 | `/llm-externalizer:llm-externalizer-discover` | Check health, active profile, model, auth status, context window |
 | `/llm-externalizer:llm-externalizer-configure` | Read-only inspector. Shows the current profile table and reminds you to edit `~/.llm-externalizer/settings.yaml` manually to change anything |
 | `/llm-externalizer:llm-externalizer-search-existing-implementations` | Scan a codebase for existing implementations of a described feature (FFD-batched PR duplicate check) |
-| `/llm-externalizer:llm-externalizer-scan-and-fix` | Two-stage audit — per-file scan (answer_mode=0) + parallel `llm-externalizer-fixer-agent` subagents (≤15 concurrent) + joined final report |
-| `/llm-externalizer:llm-externalizer-fix-report` | Fix findings in ONE already-generated per-file scan report (dispatches one `llm-externalizer-fixer-agent`). Use when you already have a report and don't want to re-scan |
-| `/llm-externalizer:llm-externalizer-fix-found-bugs` | Aggregate unfixed findings across every report under `./reports/llm-externalizer/` (merging ensemble auditors) and fix each one via a fresh `llm-externalizer-bug-fixer-agent` subagent — serial loop, zero parent-context per bug. Pass `@merged-report.md` to scope the loop to one report |
+| `/llm-externalizer:llm-externalizer-scan-and-fix` | Two-stage audit — per-file scan (answer_mode=0) + parallel `llm-externalizer-parallel-fixer-agent` subagents (≤15 concurrent) + joined final report |
+| `/llm-externalizer:llm-externalizer-fix-report` | Fix findings in ONE already-generated per-file scan report (dispatches one `llm-externalizer-parallel-fixer-agent`). Use when you already have a report and don't want to re-scan |
+| `/llm-externalizer:llm-externalizer-fix-found-bugs` | Aggregate unfixed findings across every report under `./reports/llm-externalizer/` (merging ensemble auditors) and fix each one via a fresh `llm-externalizer-serial-fixer-agent` subagent — serial loop, zero parent-context per bug. Pass `@merged-report.md` to scope the loop to one report |
 
 ## Plugin Structure
 
@@ -452,8 +452,8 @@ llm-externalizer-plugin/
 │   ├── llm-externalizer-scan-and-fix.md                    # /llm-externalizer:llm-externalizer-scan-and-fix
 │   └── llm-externalizer-search-existing-implementations.md # /llm-externalizer:llm-externalizer-search-existing-implementations
 ├── agents/
-│   ├── llm-externalizer-bug-fixer-agent.md                 # Opus-class per-bug fixer (dispatched by fix-found-bugs)
-│   ├── llm-externalizer-fixer-agent.md                     # Opus-class per-report fixer (dispatched by scan-and-fix / fix-report)
+│   ├── llm-externalizer-serial-fixer-agent.md                 # Opus-class per-bug fixer (dispatched by fix-found-bugs)
+│   ├── llm-externalizer-parallel-fixer-agent.md                     # Opus-class per-report fixer (dispatched by scan-and-fix / fix-report)
 │   └── llm-externalizer-reviewer-agent.md                  # Sonnet-class reviewer (read-only MCP tools)
 ├── mcp-server/                   # Bundled TypeScript MCP server
 │   ├── src/

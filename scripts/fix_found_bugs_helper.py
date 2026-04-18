@@ -604,7 +604,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  2. init-run                                   -> RUN_TS, OUTDIR, paths...\n"
             "  3. count --file $BUGS_TO_FIX                  -> TOTAL/UNFIXED/MAX_ITER\n"
             "  4. fixed-titles --file $BUGS_TO_FIX > $SNAPSHOT\n"
-            "  5. (dispatch llm-externalizer-bug-fixer-agent subagent per iteration)\n"
+            "  5. (dispatch llm-externalizer-serial-fixer-agent subagent per iteration)\n"
             "  6. diff-fixed --file $BUGS_TO_FIX --previous $SNAPSHOT\n"
             "  7. save-summary --file $BUGS_TO_FIX --output $SUMMARY\n"
             "\n"
@@ -696,7 +696,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser(
         "print-fallback-prompt",
-        help="Print the fix-one-bug prompt for a general-purpose Task dispatch (used when the custom llm-externalizer-bug-fixer-agent is NOT installed).",
+        help="Print the fix-one-bug prompt for a general-purpose Task dispatch (used when the custom llm-externalizer-serial-fixer-agent is NOT installed).",
     )
     p.add_argument(
         "--file", required=True, metavar="PATH",

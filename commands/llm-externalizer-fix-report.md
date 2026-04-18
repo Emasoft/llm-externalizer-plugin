@@ -1,6 +1,6 @@
 ---
 name: llm-externalizer-fix-report
-description: Fix findings in ONE existing per-file scan report. Dispatches a single `llm-externalizer-fixer-agent` and returns its `.fixer.`-summary path. For whole-folder audits use `/llm-externalizer:llm-externalizer-scan-and-fix`.
+description: Fix findings in ONE existing per-file scan report. Dispatches a single `llm-externalizer-parallel-fixer-agent` and returns its `.fixer.`-summary path. For whole-folder audits use `/llm-externalizer:llm-externalizer-scan-and-fix`.
 allowed-tools:
   - Task
   - Bash
@@ -9,7 +9,7 @@ argument-hint: "@scan-report.md"
 
 # llm-externalizer-fix-report — single-report fixer wrapper
 
-Dispatch one `llm-externalizer-fixer-agent` subagent against one scan report. The agent reads the report, classifies each finding (REAL BUG / FALSE-POSITIVE / HALLUCINATION / CANTFIX), applies surgical edits for real bugs, runs per-language linters, writes a `.fixer.`-tagged summary beside the report, and returns the summary path.
+Dispatch one `llm-externalizer-parallel-fixer-agent` subagent against one scan report. The agent reads the report, classifies each finding (REAL BUG / FALSE-POSITIVE / HALLUCINATION / CANTFIX), applies surgical edits for real bugs, runs per-language linters, writes a `.fixer.`-tagged summary beside the report, and returns the summary path.
 
 You (the orchestrator) never read the report, the source, or the summary. You just validate the argument, dispatch the Task, and surface the result.
 
@@ -61,16 +61,16 @@ Capture stdout as `$REPORT_PATH`.
 ### Step 2 — Verify the fixer agent exists
 
 ```bash
-test -f "${CLAUDE_PLUGIN_ROOT}/agents/llm-externalizer-fixer-agent.md" \
-  || test -f "$HOME/.claude/agents/llm-externalizer-fixer-agent.md" \
-  || { echo "[FAILED] llm-externalizer-fix-report — llm-externalizer-fixer-agent not installed"; exit 1; }
+test -f "${CLAUDE_PLUGIN_ROOT}/agents/llm-externalizer-parallel-fixer-agent.md" \
+  || test -f "$HOME/.claude/agents/llm-externalizer-parallel-fixer-agent.md" \
+  || { echo "[FAILED] llm-externalizer-fix-report — llm-externalizer-parallel-fixer-agent not installed"; exit 1; }
 ```
 
 ### Step 3 — Dispatch ONE Task call
 
 Exactly one `Task` call:
 
-- `subagent_type: "llm-externalizer-fixer-agent"`
+- `subagent_type: "llm-externalizer-parallel-fixer-agent"`
 - `description: "Fix report: <basename>"` (≤5 words)
 - `prompt: "<REPORT_PATH>"` (bare absolute path, nothing else)
 
@@ -78,7 +78,7 @@ Do NOT pass the user's conversation context, do NOT paraphrase the report, do NO
 
 ### Step 4 — Surface the result
 
-The agent returns ONE line — its `.fixer.`-summary path, or `[FAILED] llm-externalizer-fixer-agent — <reason>`.
+The agent returns ONE line — its `.fixer.`-summary path, or `[FAILED] llm-externalizer-parallel-fixer-agent — <reason>`.
 
 - On success, emit to the user: `Fixed report: <summary-path>`. Do NOT `Read` the summary content; the user reviews it directly.
 - On `[FAILED]` return, relay the failure line verbatim and stop.
@@ -97,5 +97,5 @@ The agent returns ONE line — its `.fixer.`-summary path, or `[FAILED] llm-exte
 | Report path missing / empty / unreadable | `[FAILED] llm-externalizer-fix-report — report not found / empty / unreadable: <path>` |
 | Basename contains `.fixer.` | `[FAILED] llm-externalizer-fix-report — already a fixer summary: <path>` |
 | Basename contains `.final-report.` | `[FAILED] llm-externalizer-fix-report — joined final-report, not a per-file scan: <path>. Use scan-and-fix for folder audits.` |
-| Fixer agent not installed | `[FAILED] llm-externalizer-fix-report — llm-externalizer-fixer-agent not installed` |
+| Fixer agent not installed | `[FAILED] llm-externalizer-fix-report — llm-externalizer-parallel-fixer-agent not installed` |
 | Fixer returns `[FAILED] …` | Relay verbatim to the user. |
