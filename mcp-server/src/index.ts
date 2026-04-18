@@ -322,9 +322,16 @@ function isBinaryExtension(filePath: string): boolean {
 }
 
 // ── Secret scanning and redaction ────────────────────────────────────
-// Two modes:
-//   scan_secrets=true    → detect secrets, abort operation (fail-fast)
-//   redact_secrets=true  → replace secrets with tracked placeholders, continue
+// Two modes that COMPOSE:
+//   scan_secrets=true  + redact_secrets=false → detect, abort (fail-fast)
+//   scan_secrets=true  + redact_secrets=true  → detect, REDACT, continue (default)
+//   scan_secrets=false                        → no detection, no redaction
+//
+// When both flags are true, the abort-on-detect guard is skipped — downstream
+// `readAndGroupFiles` (and the inline-content branch) call `redactSecrets`
+// which replaces every match with `[REDACTED:LABEL]` before the LLM ever sees
+// it. The slash commands ship with both flags true so users get a safe
+// default that doesn't interrupt the run on benign env-variable references.
 //
 // Read-only tools use irreversible [REDACTED:LABEL] format — no restoration
 // is needed and the label is more informative for analysis.
@@ -5063,8 +5070,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           chatFilePaths = [...chatFilePaths, ...folderResult.files];
         }
 
-        // scan_secrets: abort if any secrets are found in input files or inline content
-        if (chatScan) {
+        // scan_secrets: abort if any secrets are found in input files or inline content.
+        // When redact_secrets is also true, skip the abort — downstream redaction handles it.
+        if (chatScan && !chatRedact) {
           // Filter out group markers before scanning — they are delimiters, not file paths
           const chatRealFiles = chatFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
           if (chatRealFiles.length > 0) {
@@ -5356,8 +5364,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return { content: [{ type: "text", text: `FAILED: ${(err as Error).message}` }], isError: true };
         }
 
-        // scan_secrets: abort if any secrets are found in input files or inline content
-        if (ctScan) {
+        // scan_secrets: abort if any secrets are found in input files or inline content.
+        // When redact_secrets is also true, skip the abort — downstream redaction handles it.
+        if (ctScan && !ctRedact) {
           // Filter out group markers before scanning — they are delimiters, not file paths
           const ctRealFiles = ctFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
           if (ctRealFiles.length > 0) {
@@ -6016,8 +6025,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Deduplicate file paths to avoid redundant LLM calls
         const uniqueFiles = [...new Set(bcNormalizedPaths)];
 
-        // scan_secrets: abort if any secrets are found in input files
-        if (bcScan) {
+        // scan_secrets: abort if any secrets are found in input files.
+        // When redact_secrets is also true, skip the abort — downstream redaction handles it.
+        if (bcScan && !bcRedact) {
           // Filter out group markers before scanning
           const realFiles = uniqueFiles.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
           if (realFiles.length > 0) {
@@ -6375,8 +6385,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        // scan_secrets: abort if any secrets are found in discovered files
-        if (sfScan) {
+        // scan_secrets: abort if any secrets are found in discovered files.
+        // When redact_secrets is also true, skip the abort — downstream redaction handles it.
+        if (sfScan && !sfRedact) {
           const scanResult = scanFilesForSecrets(files);
           if (scanResult.found)
             return {
@@ -6865,8 +6876,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        // scan_secrets: abort if any secrets are found in discovered files
-        if (seiScan) {
+        // scan_secrets: abort if any secrets are found in discovered files.
+        // When redact_secrets is also true, skip the abort — downstream redaction handles it.
+        if (seiScan && !seiRedact) {
           const scanResult = scanFilesForSecrets(files);
           if (scanResult.found)
             return {
@@ -7306,7 +7318,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const comparePair = async (fA: string, fB: string, prompt: string): Promise<{ content: string; model: string } | { error: string }> => {
           if (!existsSync(fA)) return { error: `File not found: ${fA}` };
           if (!existsSync(fB)) return { error: `File not found: ${fB}` };
-          if (cfScan) {
+          if (cfScan && !cfRedact) {
             const scanResult = scanFilesForSecrets([fA, fB]);
             if (scanResult.found) return { error: scanResult.report };
           }
@@ -7510,8 +7522,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        // scan_secrets: abort if any secrets are found
-        if (cfScan) {
+        // scan_secrets: abort if any secrets are found.
+        // When redact_secrets is also true, skip the abort — downstream redaction handles it.
+        if (cfScan && !cfRedact) {
           const scanResult = scanFilesForSecrets([fileA, fileB]);
           if (scanResult.found)
             return {
@@ -7691,8 +7704,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        // scan_secrets: abort if any secrets are found
-        if (crScan) {
+        // scan_secrets: abort if any secrets are found.
+        // When redact_secrets is also true, skip the abort — downstream redaction handles it.
+        if (crScan && !crRedact) {
           const crRealFiles = crFilePathsAll.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
           if (crRealFiles.length > 0) {
             const scanResult = scanFilesForSecrets(crRealFiles);
@@ -7947,8 +7961,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        // scan_secrets: abort if any secrets are found
-        if (ciScan) {
+        // scan_secrets: abort if any secrets are found.
+        // When redact_secrets is also true, skip the abort — downstream redaction handles it.
+        if (ciScan && !ciRedact) {
           const ciRealFiles = ciFilePathsAll.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
           if (ciRealFiles.length > 0) {
             const scanResult = scanFilesForSecrets(ciRealFiles);
@@ -8308,8 +8323,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        // scan_secrets: abort if any secrets are found (filter out group markers)
-        if (csScan) {
+        // scan_secrets: abort if any secrets are found (filter out group markers).
+        // When redact_secrets is also true, skip the abort — downstream redaction handles it.
+        if (csScan && !csRedact) {
           const csRealFiles = csFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
           const scanResult = scanFilesForSecrets([csSpecPath, ...csRealFiles]);
           if (scanResult.found)
