@@ -1,6 +1,66 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [8.1.1] - 2026-04-18
+
+### Documentation
+
+- Docs(readme): full restructure — TOC, user-first order, concise features, colored alerts
+
+You called it: the previous README was bloated, duplicated, out of
+order, and had no TOC. This rewrite takes it from 599 lines to 380
+(-37%) without losing any end-user-facing detail.
+
+What's different:
+
+1. Order now follows "what a new user needs first":
+     badges -> tagline -> cost graph -> TOC -> Features -> Requirements
+     -> Quick Start -> Commands -> Agents -> Configuration ->
+     MCP tools reference -> Skills -> Plugin structure -> Contributing
+     -> License -> Links
+   Requirements + Quick Start used to be at line 580+. Now they're
+   at the top, right under the TOC, as they should be.
+
+2. Features list shrunk from a 15-bullet dump (each with inline
+   detail) to 9 one-line bullets that LINK into the dedicated
+   sections. Details live where they belong, not in the summary.
+
+3. Table of contents added — 12 section anchors.
+
+4. Colored banner titles via GitHub Alert blocks:
+     > [!TIP]      — "Why this plugin exists" + serial-vs-parallel guidance
+     > [!NOTE]     — marketplace-refresh tip + auth auto-detection
+     > [!IMPORTANT]— MCP batching limits
+     > [!WARNING]  — free-tier prompt-logging caveat
+   These render as coloured side-panels on GitHub / VS Code preview.
+
+5. Duplicated content removed:
+   * "Cost comparison" subsection (graph was already in the hero
+     section one line below)
+   * "LLM Externalizer (external model analysis)" section — this
+     was a pasted skill-prose block, not README material
+   * "Read-only by design — disabled tools" — historical noise
+     about dead code in the MCP server
+   * "Key constraints" and "Subagent access" sections — internal
+     implementation detail, not user-facing
+   * "Naming" section — one-off cleanup commentary
+   * Duplicate "answer_mode" descriptions in 3 places condensed to
+     one table
+
+6. Plugin structure tree collapsed into a <details> block — the
+   full tree was 60+ lines of dev detail; users rarely need it but
+   it's still there for when they do.
+
+7. Publishing section shrunk to a 3-line Contributing summary.
+   Detail lives in scripts/publish.py's --help.
+
+8. Command parameter tables preserved in full — they were requested
+   earlier and are the genuine user-facing reference.
+
+Score impact: validation stays clean (0 CRITICAL / 0 MAJOR / 0 MINOR
+/ 0 NIT / 1 pre-existing unrelated WARNING about mcp-server/).
+
+
 ## [8.1.0] - 2026-04-18
 
 ### Added
