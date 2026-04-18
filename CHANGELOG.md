@@ -1,6 +1,68 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [8.0.2] - 2026-04-18
+
+### Documentation
+
+- Docs(readme): expand parameter tables with defaults + behaviour nuances
+
+You asked: does the doc say what happens when no target AND no
+--file-list are passed? Does it explain that a file list with
+---GROUP:id--- markers produces per-group reports instead of per-file?
+The answers were "barely" and "no" — fixed.
+
+Every parameter table now has a dedicated "Default" column and
+expanded "Meaning" prose covering the subtle cases a reader would
+otherwise miss:
+
+scan-and-fix / scan-and-fix-serially:
+  * [target] — default behaviour is DEFAULT-TO-SCANNING-THE-WHOLE-
+    CODEBASE (auto-discover tracked files, filter non-source, confirm
+    with the user, treat as implicit --file-list). Explicit that the
+    command does NOT silently hand a folder to scan_folder.
+  * --file-list — documented the ---GROUP:id--- marker semantics:
+    lines between ---GROUP:id--- and ---/GROUP:id--- are packed into
+    ONE LLM request and produce ONE report per group instead of one
+    per file (basename carries _group-<id>_). Also: empty list
+    aborts.
+  * --instructions — described what the DEFAULT rubric is (REAL
+    bugs only, strict exclusions for style / try-except / null-
+    checks / refactors).
+  * --specs — explicit that each batch sees source+spec, making
+    cross-reference validation trustworthy (unlike the default
+    rubric's best-effort local-only check).
+  * --free — called out that it's LOWER quality than the ensemble
+    and that the provider LOGS PROMPTS (don't use on proprietary
+    code).
+  * --no-secrets — clarified that default behaviour ABORTS the run
+    if a secret is found (safety net, not silent redaction).
+  * --text — clarified that the default rubric has nothing useful
+    to say about prose and should be paired with --instructions.
+
+search-existing-implementations:
+  * --base — explicit auto-detect chain (origin/HEAD → main →
+    master).
+  * --max-files — default 10000 stated with the reason (designed
+    for massive PR-review scans).
+  * Added output spec (one line per file, exhaustive, answer_mode=2
+    merged report).
+
+fix-report:
+  * Added explicit .fixer. / .final-report. basename rejection up
+    front, relative-path resolution rule.
+
+fix-found-bugs:
+  * The DEFAULT when no arg is supplied is now explicit: aggregate
+    EVERY report in ./reports/llm-externalizer/, skip any with a
+    .fixer. sibling.
+  * Stated the MAX_ITER formula and stuck-streak safety rail.
+
+All tables now gain a Default column; tables that had no default
+(required positional only) still show "—" so the column is
+consistent across commands.
+
+
 ## [8.0.1] - 2026-04-18
 
 ### Documentation
