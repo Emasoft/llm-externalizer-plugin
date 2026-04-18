@@ -31,7 +31,7 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 - **Robust batch processing** — `max_retries` parameter with parallel execution, retry, and circuit breaker on all tools
 - **File-based output** — all results saved to files, only paths returned (keeps orchestrator context clean)
 - **5 auto-discovered skills** — usage, config, full scan, free scan, OpenRouter model info
-- **6 slash commands** — `/llm-externalizer:llm-externalizer-discover`, `/llm-externalizer:llm-externalizer-configure`, `/llm-externalizer:llm-externalizer-search-existing-implementations`, `/llm-externalizer:llm-externalizer-scan-and-fix`, `/llm-externalizer:llm-externalizer-fix-report`, `/llm-externalizer:llm-externalizer-fix-found-bugs`
+- **7 slash commands** — `/llm-externalizer:llm-externalizer-discover`, `/llm-externalizer:llm-externalizer-configure`, `/llm-externalizer:llm-externalizer-search-existing-implementations`, `/llm-externalizer:llm-externalizer-scan-and-fix`, `/llm-externalizer:llm-externalizer-scan-and-fix-serially`, `/llm-externalizer:llm-externalizer-fix-report`, `/llm-externalizer:llm-externalizer-fix-found-bugs`
 - **CLI subcommand** — `llm-externalizer search-existing` for shell / CI duplicate-check workflows
 - **6 backend presets** — LM Studio, Ollama, vLLM, llama.cpp, generic local, OpenRouter
 
@@ -428,6 +428,7 @@ Skills activate automatically when Claude Code encounters tasks matching their t
 | `/llm-externalizer:llm-externalizer-configure` | Read-only inspector. Shows the current profile table and reminds you to edit `~/.llm-externalizer/settings.yaml` manually to change anything |
 | `/llm-externalizer:llm-externalizer-search-existing-implementations` | Scan a codebase for existing implementations of a described feature (FFD-batched PR duplicate check) |
 | `/llm-externalizer:llm-externalizer-scan-and-fix` | Two-stage audit — per-file scan (answer_mode=0) + parallel `llm-externalizer-parallel-fixer-agent` subagents (≤15 concurrent) + joined final report |
+| `/llm-externalizer:llm-externalizer-scan-and-fix-serially` | Same scan as `scan-and-fix`, but chains into a serial `llm-externalizer-serial-fixer-agent` loop over one aggregated bug list instead of parallel per-report dispatch. Use when fixes mutate shared state or bug order matters |
 | `/llm-externalizer:llm-externalizer-fix-report` | Fix findings in ONE already-generated per-file scan report (dispatches one `llm-externalizer-parallel-fixer-agent`). Use when you already have a report and don't want to re-scan |
 | `/llm-externalizer:llm-externalizer-fix-found-bugs` | Aggregate unfixed findings across every report under `./reports/llm-externalizer/` (merging ensemble auditors) and fix each one via a fresh `llm-externalizer-serial-fixer-agent` subagent — serial loop, zero parent-context per bug. Pass `@merged-report.md` to scope the loop to one report |
 
@@ -449,6 +450,7 @@ llm-externalizer-plugin/
 │   ├── llm-externalizer-discover.md                        # /llm-externalizer:llm-externalizer-discover
 │   ├── llm-externalizer-fix-found-bugs.md                  # /llm-externalizer:llm-externalizer-fix-found-bugs
 │   ├── llm-externalizer-fix-report.md                      # /llm-externalizer:llm-externalizer-fix-report
+│   ├── llm-externalizer-scan-and-fix-serially.md           # /llm-externalizer:llm-externalizer-scan-and-fix-serially
 │   ├── llm-externalizer-scan-and-fix.md                    # /llm-externalizer:llm-externalizer-scan-and-fix
 │   └── llm-externalizer-search-existing-implementations.md # /llm-externalizer:llm-externalizer-search-existing-implementations
 ├── agents/
