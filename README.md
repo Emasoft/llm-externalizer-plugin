@@ -18,7 +18,7 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 ## Features
 
 - **17 MCP tools** — 9 read-only analysis tools + 5 utility tools + 3 OpenRouter model-info formatters
-- **`llm-externalizer-reviewer-agent`** — Haiku-class plugin agent for fast code reviews with restricted tool allowlist (no Write/Edit). Internal — dispatched by the `llm-externalizer-scan` skill
+- **`llm-externalizer-reviewer-agent`** — Sonnet-class plugin agent for fast code reviews with restricted tool allowlist (no Write/Edit). Internal — dispatched by the `llm-externalizer-scan` skill
 - **`llm-externalizer-fixer-agent`** — Opus-class agent that verifies and fixes findings from a single per-file scan report. Internal — dispatched by `/llm-externalizer:llm-externalizer-scan-and-fix` (parallel per-report over a whole folder) and `/llm-externalizer:llm-externalizer-fix-report` (single-report wrapper)
 - **`llm-externalizer-bug-fixer-agent`** — Opus-class per-bug fixer dispatched serially by `/llm-externalizer:llm-externalizer-fix-found-bugs`; each spawn is fresh (zero parent-conversation context) and fixes exactly one bug from an aggregated bug list. Internal — dispatched by the command, not invoked directly
 - **Profile-based configuration** — named profiles in `~/.llm-externalizer/settings.yaml`
@@ -454,7 +454,7 @@ llm-externalizer-plugin/
 ├── agents/
 │   ├── llm-externalizer-bug-fixer-agent.md                 # Opus-class per-bug fixer (dispatched by fix-found-bugs)
 │   ├── llm-externalizer-fixer-agent.md                     # Opus-class per-report fixer (dispatched by scan-and-fix / fix-report)
-│   └── llm-externalizer-reviewer-agent.md                  # Haiku-class reviewer (read-only MCP tools)
+│   └── llm-externalizer-reviewer-agent.md                  # Sonnet-class reviewer (read-only MCP tools)
 ├── mcp-server/                   # Bundled TypeScript MCP server
 │   ├── src/
 │   │   ├── index.ts              # Main server (tool definitions, request handling)

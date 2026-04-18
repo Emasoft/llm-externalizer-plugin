@@ -16,7 +16,7 @@ Scan `$ARGUMENTS` with the LLM Externalizer ensemble and return only report file
 
 ## Overview
 
-Codebase scan via the LLM Externalizer MCP server, active profile (default: `remote-ensemble`, parallel). One report per file. `context: fork` runs work in the `llm-externalizer-reviewer-agent` subagent (Haiku, no Write/Edit); only report paths come back.
+Codebase scan via the LLM Externalizer MCP server, active profile (default: `remote-ensemble`, parallel). One report per file. `context: fork` runs work in the `llm-externalizer-reviewer-agent` subagent (Sonnet, no Write/Edit); only report paths come back.
 
 ## Prerequisites
 
