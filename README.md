@@ -444,31 +444,31 @@ No parameters. Read-only — prints the current profile table so you can see whi
 
 ### `/llm-externalizer:llm-externalizer-search-existing-implementations`
 
-| Parameter | Kind | Required | Meaning |
-|---|---|---|---|
-| `<feature-description>` | positional, string | yes | Non-empty natural-language description of the feature to search for (e.g. `"async retry with exponential backoff and jitter"`) |
-| `<codebase-path>` | positional, absolute path | yes | Root folder to scan. Accepted as a single path or repeated for multiple roots |
-| `--source-files PATH ...` | repeated | no | One or more reference source files that define what the feature looks like in code. The scan auto-excludes these paths so it won't flag them as matches of themselves |
-| `--diff PATH` | file path | no | Unified-diff file to narrow the scan to files changed in the diff (useful for PR duplicate hunts). Mutually exclusive with `--base` |
-| `--base REF` | git ref | no | Auto-generate the diff via `git diff <ref>...HEAD` (auto-detects `origin/HEAD` → `main` → `master` when omitted). Mutually exclusive with `--diff` |
-| `--max-files N` | integer | no | Cap on files scanned. Default `10000` (higher than `scan_folder`'s 2500 — designed for massive PR-review scans) |
-| `--free` | flag | no | Use the free Nemotron model. Warn once about provider prompt logging before running on proprietary code |
+| Parameter | Kind | Required | Default | Meaning |
+|---|---|---|---|---|
+| `<feature-description>` | positional, string | yes | — | Non-empty natural-language description of the feature to search for (e.g. `"async retry with exponential backoff and jitter"`). The LLM compares every scanned file against this description — precise wording helps |
+| `<codebase-path>` | positional, absolute path | yes | — | Root folder to scan. Accepted as a single path or repeated for multiple roots. Respects `.gitignore` via `git ls-files` when inside a git repo |
+| `--source-files PATH ...` | repeated | no | — | One or more reference source files that show what the feature looks like in code. Passed as context to each LLM batch alongside the scanned file. These paths are auto-excluded from the scan so they won't flag themselves as matches |
+| `--diff PATH` | file path | no | — | Unified-diff file used to narrow the scan to files changed in the diff. Perfect for PR duplicate hunts. Mutually exclusive with `--base` |
+| `--base REF` | git ref | no | auto-detect `origin/HEAD` → `main` → `master` | Auto-generate the PR diff via `git diff <ref>...HEAD`. If `REF` is omitted, auto-detects the default branch. Mutually exclusive with `--diff` |
+| `--max-files N` | integer | no | `10000` | Cap on files scanned. Much higher than `scan_folder`'s 2500 because this command is designed for massive PR-review scans. Only tune down if you need to fit a smaller budget |
+| `--free` | flag | no | off (use active profile) | Use the free Nemotron model. **Warning:** provider logs prompts — don't use on proprietary code |
 
-Output: one line per file in the codebase — `NO` if no match, `YES symbol=<name> lines=<a-b>` if the feature is already implemented there. Exhaustive (every occurrence reported, no cap) so a reviewer can delete duplicates and keep only the PR's new one.
+Output: EXHAUSTIVE — one line per file in the codebase, `NO` if no match, `YES symbol=<name> lines=<a-b>` if the feature is already implemented there. Every occurrence reported, no cap. A reviewer can delete duplicates and keep only the PR's new one. Default `answer_mode: 2` (one merged report).
 
 ### `/llm-externalizer:llm-externalizer-scan-and-fix`
 
-| Parameter | Kind | Required | Meaning |
-|---|---|---|---|
-| `[target]` | positional, path | no (but either this or `--file-list`) | Absolute or relative folder to scan. Relative paths resolve against `$CLAUDE_PROJECT_DIR`. If omitted AND no `--file-list`, the command runs auto-discovery (curate tracked files from `git ls-files` under the real codebase root, ask you to confirm) |
-| `--file-list PATH` | file path | no | `.txt` file with ONE absolute source path per line. When set, routes through `code_task` and scans exactly those files; `[target]` is ignored |
-| `--instructions PATH` | `.md` path | no | Replaces the default audit rubric with the file's contents (used to re-target the scan, e.g. a custom audit checklist) |
-| `--specs PATH` | `.md` path | no | Appended to `instructions_files_paths`; scan checks each source file against the spec |
-| `--free` | flag | no | Use the free Nemotron model. **Warning:** provider logs prompts — don't use on proprietary code |
-| `--no-secrets` | flag | no | Disable the pre-scan secret detector (`scan_secrets: false`). Default: secrets are detected and redacted before files are sent to the LLM |
-| `--text` | flag | no | Include `.md .txt .json .yml .yaml .toml .ini .cfg .conf .xml .html .rst .csv` in the scan. Without this flag, only source-code extensions are scanned |
+| Parameter | Kind | Required | Default | Meaning |
+|---|---|---|---|---|
+| `[target]` | positional, path | no (but either this or `--file-list`) | **auto-discover the whole codebase** | Absolute or relative folder to scan. Relative paths resolve against `$CLAUDE_PROJECT_DIR`. **If both `[target]` and `--file-list` are omitted, the default is to scan the WHOLE codebase** — the command runs an auto-discovery pass (`git rev-parse --show-toplevel` → `git ls-files` → filter docs/examples/fixtures/binaries/lock-files/etc.), presents the curated list for your confirmation, and on `y` treats it as an implicit `--file-list`. It does NOT silently hand a folder to `scan_folder` (that would dilute the audit with docs and generated output). On zero nested repos or multiple nested repos, it stops and asks |
+| `--file-list PATH` | file path | no | — | `.txt` file with ONE absolute source path per line (or a `---GROUP:id---` marker — see below). Routes through `code_task` and scans exactly those files; `[target]` is ignored. **Group markers inside the list change scan layout**: lines between `---GROUP:id---` and `---/GROUP:id---` are packed into a single LLM request and produce ONE report per group instead of one per file — basename carries `_group-<id>_`. Use for semantic grouping (same module, same feature) when per-file reports would fragment context the LLM needs together. Empty / all-blank file → abort |
+| `--instructions PATH` | `.md` path | no | default rubric (see below) | Replaces the default audit rubric with the file's contents. The default rubric is strict: REAL bugs only (logic errors, crashes, security with exploit paths, resource leaks, data corruption, contract mismatch, local broken references). It explicitly forbids reporting missing try/except, null checks, docstrings, refactoring suggestions, and style preferences. Use `--instructions` to re-target the scan (e.g. "find every `TODO`", "flag every hardcoded URL") |
+| `--specs PATH` | `.md` path | no | — | Appended to `instructions_files_paths` alongside any `--instructions`. Each per-file batch sees source + spec, so every reference is validated against the authoritative spec instead of "whatever the LLM thinks might exist" — the right tool for API-surface / contract checks. Can be combined with `--instructions` (instructions come first and take precedence) |
+| `--free` | flag | no | off (use active profile) | Use the free Nemotron model (`nvidia/nemotron-3-super-120b-a12b:free`). **Warning:** provider logs prompts — don't use on proprietary code. Also LOWER quality than the ensemble models (more false positives, shallower analysis). Orchestrator warns once and asks for confirmation unless the flag was explicit |
+| `--no-secrets` | flag | no | off (secrets ARE detected) | Disable the pre-scan secret detector. **Default behaviour (flag OFF): files are scanned for API keys, tokens, passwords, and the run is ABORTED if any are found** — this is a safety net, not silent redaction. Use `--no-secrets` only after you've moved secrets to `.env` (gitignored) and want to skip the re-check |
+| `--text` | flag | no | off (source-code only) | Include `.md .txt .json .yml .yaml .toml .ini .cfg .conf .xml .html .rst .csv` in the scan. Without this flag, only source-code extensions (`.py .ts .tsx .js .jsx .go .rs .java .rb .php .c .cc .cpp .cs .swift .dart .ex .lua .sh` etc.) are scanned. Combine with a custom `--instructions` when scanning prose — the default rubric has nothing useful to say about a `.md` file |
 
-Behaviour: one LLM Externalizer scan call → N per-file reports in `$CLAUDE_PROJECT_DIR/reports/llm-externalizer/` → parallel dispatch (≤15 concurrent) of `llm-externalizer-parallel-fixer-agent` subagents (one per report) → each writes a `.fixer.`-tagged summary → join script merges summaries into one final report.
+Behaviour: one LLM Externalizer scan call → N per-file reports (or per-group reports if the file list contained `---GROUP:id---` markers) in `$CLAUDE_PROJECT_DIR/reports/llm-externalizer/` → parallel dispatch (≤15 concurrent) of `llm-externalizer-parallel-fixer-agent` subagents (one per report) → each writes a `.fixer.`-tagged summary → join script merges summaries into one final report.
 
 ### `/llm-externalizer:llm-externalizer-scan-and-fix-serially`
 
@@ -476,19 +476,19 @@ Same parameter set as `scan-and-fix` (the scan phase is byte-identical). The tab
 
 ### `/llm-externalizer:llm-externalizer-fix-report`
 
-| Parameter | Kind | Required | Meaning |
-|---|---|---|---|
-| `@scan-report.md` (or bare path) | positional, path | yes | Absolute or relative path to ONE already-generated per-file LLM Externalizer scan report (typically under `./reports/llm-externalizer/`). The leading `@` is stripped. Paths that already contain `.fixer.` or `.final-report.` are rejected |
+| Parameter | Kind | Required | Default | Meaning |
+|---|---|---|---|---|
+| `@scan-report.md` (or bare path) | positional, path | yes | — | Absolute or relative path to ONE already-generated per-file LLM Externalizer scan report (typically under `./reports/llm-externalizer/`). The leading `@` is stripped. Relative paths resolve against `$CLAUDE_PROJECT_DIR`. Paths whose basename contains `.fixer.` (already-processed summary) or `.final-report.` (joined report, not per-file) are rejected up front |
 
 Behaviour: dispatches exactly ONE `llm-externalizer-parallel-fixer-agent` against the supplied report and returns the fixer's `.fixer.`-summary path. Use when you already have a report and don't need to re-scan. For whole-folder audits use `scan-and-fix` instead.
 
 ### `/llm-externalizer:llm-externalizer-fix-found-bugs`
 
-| Parameter | Kind | Required | Meaning |
-|---|---|---|---|
-| `@merged-report.md` (or bare path) | positional, path | no | If supplied, scopes the bug-list aggregation to findings in this ONE merged (`answer_mode=2`) report instead of every report in the reports directory |
+| Parameter | Kind | Required | Default | Meaning |
+|---|---|---|---|---|
+| `@merged-report.md` (or bare path) | positional, path | no | aggregate EVERY report under `./reports/llm-externalizer/` | If supplied, scopes bug-list aggregation to findings in this ONE merged (`answer_mode=2`) report. **If omitted, the default is to aggregate every scan report in the reports directory, skipping any report that has a `.fixer.` sibling** (those were already processed by `scan-and-fix` or `fix-report`). Aggregation merges ensemble per-model auditor responses, assigns severity by keyword (security/crash/race → High; style/naming → Low; else Medium), and emits one canonical bug list |
 
-Behaviour: if no argument, aggregates every report under `$CLAUDE_PROJECT_DIR/reports/llm-externalizer/` (skipping any with a `.fixer.` sibling — those were already processed). Merges ensemble-mode per-model auditor responses and emits one canonical bug list (severity assigned by keyword). Then loops: fresh `llm-externalizer-serial-fixer-agent` spawn per iteration, each fixing exactly ONE bug, until none remain or the safety rail trips (MAX_ITER or 2 consecutive no-progress iterations). Zero parent-conversation context per bug.
+Behaviour: loop until done — fresh `llm-externalizer-serial-fixer-agent` spawn per iteration, each fixing exactly ONE bug, until no unfixed entries remain or a safety rail trips (`MAX_ITER = max(UNFIXED_START * 2 + 5, 5)` or 2 consecutive no-progress iterations). Zero parent-conversation context per bug; each iteration re-reads the bug list from disk.
 
 ## Plugin Structure
 
