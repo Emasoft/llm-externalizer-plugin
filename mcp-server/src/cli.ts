@@ -1,25 +1,24 @@
 #!/usr/bin/env node
 /**
- * CLI for LLM Externalizer profile management.
+ * CLI for LLM Externalizer.
+ *
+ * NOTE: Profile-mutating subcommands (add / select / edit / remove / rename)
+ * are DISABLED by design. Model and profile configuration is user-only —
+ * the user must edit ~/.llm-externalizer/settings.yaml manually with an
+ * editor, then either restart Claude Code or call the MCP "reset" tool to
+ * reload. Read-only subcommands (list, model-info, search-existing) remain
+ * available.
  *
  * Usage:
  *   npx llm-externalizer profile list
- *   npx llm-externalizer profile add <name> --mode <mode> --api <api> --model <model> [options]
- *   npx llm-externalizer profile select <name>
- *   npx llm-externalizer profile edit <name> [--field value ...]
- *   npx llm-externalizer profile remove <name>
- *   npx llm-externalizer profile rename <old> <new>
+ *   npx llm-externalizer model-info <model-id> [options]
+ *   npx llm-externalizer search-existing "<description>" [<src-files>...] --in <path>
  */
 
 import {
-  type Mode,
-  type Profile,
-  API_PRESETS,
   ensureSettingsExist,
-  saveSettings,
-  validateProfile,
-  resolveProfile,
   getSettingsPath,
+  resolveProfile,
 } from "./config.js";
 import {
   fetchOpenRouterModelInfo,
@@ -29,7 +28,7 @@ import {
 } from "./or-model-info.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { writeFileSync, existsSync, statSync } from "node:fs";
+import { writeFileSync, existsSync, statSync, unlinkSync } from "node:fs";
 import { resolve as resolvePath, isAbsolute, join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -71,37 +70,6 @@ function parseFlags(args: string[]): Record<string, string> {
   return flags;
 }
 
-/** Build a Profile from CLI flags */
-function profileFromFlags(flags: Record<string, string>): Partial<Profile> {
-  const p: Partial<Profile> = {};
-
-  if (flags.mode) p.mode = flags.mode as Mode;
-  if (flags.api) p.api = flags.api;
-  if (flags.model) p.model = flags.model;
-  if (flags.url) p.url = flags.url;
-  if (flags.api_key) p.api_key = flags.api_key;
-  if (flags.api_token) p.api_token = flags.api_token;
-  if (flags.second_model) p.second_model = flags.second_model;
-  if (flags.timeout && flags.timeout !== "null" && flags.timeout !== "") {
-    const n = Number(flags.timeout);
-    if (!isFinite(n) || n < 0)
-      die(`--timeout must be a non-negative number, got '${flags.timeout}'`);
-    p.timeout = n;
-  }
-  if (flags.context_window && flags.context_window !== "null" && flags.context_window !== "") {
-    const n = Number(flags.context_window);
-    if (!isFinite(n) || n < 0)
-      die(
-        `--context_window must be a non-negative number, got '${flags.context_window}'`,
-      );
-    p.context_window = n;
-  }
-  if (flags.app_name) p.app_name = flags.app_name;
-  if (flags.http_referer) p.http_referer = flags.http_referer;
-
-  return p;
-}
-
 // ── Commands ─────────────────────────────────────────────────────────
 
 function cmdList(): void {
@@ -123,152 +91,9 @@ function cmdList(): void {
   }
 }
 
-function cmdAdd(name: string, args: string[]): void {
-  const settings = ensureSettingsExist();
-
-  if (settings.profiles[name]) {
-    die(`Profile '${name}' already exists. Use 'profile edit' to modify it.`);
-  }
-
-  const flags = parseFlags(args);
-
-  if (!flags.mode)
-    die("Missing required flag: --mode (local | remote | remote-ensemble)");
-  if (!flags.api)
-    die(
-      `Missing required flag: --api (${Object.keys(API_PRESETS).join(", ")})`,
-    );
-  if (!flags.model) die("Missing required flag: --model <model-identifier>");
-
-  const profile = profileFromFlags(flags) as Profile;
-
-  // Validate before saving
-  const validation = validateProfile(name, profile);
-  if (!validation.valid) {
-    die(
-      `Profile validation failed:\n${validation.errors.map((e) => `  - ${e}`).join("\n")}`,
-    );
-  }
-
-  settings.profiles[name] = profile;
-  saveSettings(settings);
-  info(`Profile '${name}' added.`);
-}
-
-function cmdSelect(name: string): void {
-  const settings = ensureSettingsExist();
-
-  if (!settings.profiles[name]) {
-    const available = Object.keys(settings.profiles).join(", ") || "(none)";
-    die(`Profile '${name}' not found. Available: ${available}`);
-  }
-
-  // Validate the profile before activating
-  const profile = settings.profiles[name];
-  const validation = validateProfile(name, profile);
-  if (!validation.valid) {
-    die(
-      `Cannot select profile '${name}' — validation failed:\n` +
-        validation.errors.map((e) => `  - ${e}`).join("\n"),
-    );
-  }
-
-  settings.active = name;
-  saveSettings(settings);
-
-  // Show resolved info
-  const resolved = resolveProfile(name, profile);
-  info(`Active profile: ${name}`);
-  info(`  Mode:     ${resolved.mode}`);
-  info(`  Protocol: ${resolved.protocol}`);
-  info(`  URL:      ${resolved.url}`);
-  info(`  Model:    ${resolved.model}`);
-  if (resolved.secondModel) {
-    info(`  Second:   ${resolved.secondModel}`);
-  }
-}
-
-function cmdEdit(name: string, args: string[]): void {
-  const settings = ensureSettingsExist();
-
-  if (!settings.profiles[name]) {
-    die(`Profile '${name}' not found.`);
-  }
-
-  const flags = parseFlags(args);
-  if (Object.keys(flags).length === 0) {
-    die(
-      'No fields to edit. Use --field value pairs (e.g. --model "new-model").',
-    );
-  }
-
-  // Check for fields to clear BEFORE numeric conversion
-  const clearFields = Object.entries(flags)
-    .filter(([, v]) => v === "" || v === "null")
-    .map(([k]) => k);
-
-  const updates = profileFromFlags(flags);
-  const updated = { ...settings.profiles[name], ...updates } as Profile;
-
-  // Remove fields explicitly set to empty string or 'null'
-  for (const key of clearFields) {
-    delete (updated as unknown as Record<string, unknown>)[key];
-  }
-
-  // Validate merged profile
-  const validation = validateProfile(name, updated);
-  if (!validation.valid) {
-    die(
-      `Validation failed after edit:\n${validation.errors.map((e) => `  - ${e}`).join("\n")}`,
-    );
-  }
-
-  settings.profiles[name] = updated;
-  saveSettings(settings);
-  info(`Profile '${name}' updated.`);
-}
-
-function cmdRemove(name: string): void {
-  const settings = ensureSettingsExist();
-
-  if (!settings.profiles[name]) {
-    die(`Profile '${name}' not found.`);
-  }
-
-  if (name === settings.active) {
-    die(
-      `Cannot remove the active profile '${name}'. Select a different profile first.`,
-    );
-  }
-
-  delete settings.profiles[name];
-  saveSettings(settings);
-  info(`Profile '${name}' removed.`);
-}
-
-function cmdRename(oldName: string, newName: string): void {
-  const settings = ensureSettingsExist();
-
-  if (!settings.profiles[oldName]) {
-    die(`Profile '${oldName}' not found.`);
-  }
-
-  if (settings.profiles[newName]) {
-    die(`Profile '${newName}' already exists.`);
-  }
-
-  settings.profiles[newName] = settings.profiles[oldName];
-  delete settings.profiles[oldName];
-
-  if (settings.active === oldName) {
-    settings.active = newName;
-  }
-
-  saveSettings(settings);
-  info(`Profile '${oldName}' renamed to '${newName}'.`);
-}
-
-// ── Usage ────────────────────────────────────────────────────────────
+// Mutation commands (add / select / edit / remove / rename) were removed.
+// Model & profile configuration is user-only — edit ~/.llm-externalizer/settings.yaml
+// manually, then restart Claude Code or call the MCP "reset" tool to reload.
 
 // ── model-info command ──────────────────────────────────────────────
 
@@ -445,6 +270,10 @@ function generateGitDiff(base: string, sourceFiles: string[]): string {
     cwd: process.cwd(),
     encoding: "utf-8",
   });
+  if (cwdIsGit.error) {
+    const err = cwdIsGit.error as NodeJS.ErrnoException;
+    die(`Failed to spawn git: ${err.message}`);
+  }
   if (cwdIsGit.status !== 0) {
     die("cwd is not a git repository; pass --diff <path> or run from inside a git checkout.");
   }
@@ -492,7 +321,13 @@ function generateGitDiff(base: string, sourceFiles: string[]): string {
       `diff vs ${base} is empty for ${sourceFiles.length} source file(s); nothing to review.`,
     );
   }
-  writeFileSync(outPath, diffText, "utf-8");
+  try {
+    writeFileSync(outPath, diffText, "utf-8");
+  } catch (err) {
+    die(
+      `Failed to write diff to '${outPath}': ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
   return outPath;
 }
 
@@ -503,6 +338,10 @@ function autoDetectBase(): string {
     ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
     { cwd: process.cwd(), encoding: "utf-8" },
   );
+  if (originHead.error) {
+    const err = originHead.error as NodeJS.ErrnoException;
+    die(`Failed to spawn git: ${err.message}`);
+  }
   if (originHead.status === 0 && originHead.stdout.trim()) {
     return originHead.stdout.trim();
   }
@@ -573,7 +412,15 @@ function parseSearchExistingArgs(args: string[]): SearchExistingOpts {
   for (const fp of folderPaths) {
     const abs = isAbsolute(fp) ? fp : resolvePath(fp);
     if (!existsSync(abs)) die(`--in path not found: ${fp}`);
-    if (!statSync(abs).isDirectory()) die(`--in path is not a directory: ${fp}`);
+    let isDir: boolean;
+    try {
+      isDir = statSync(abs).isDirectory();
+    } catch (err) {
+      die(
+        `Cannot stat --in path '${fp}': ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    if (!isDir) die(`--in path is not a directory: ${fp}`);
   }
   for (const sf of sourceFiles) {
     const abs = isAbsolute(sf) ? sf : resolvePath(sf);
@@ -631,9 +478,11 @@ async function cmdSearchExisting(rawArgs: string[]): Promise<void> {
   // neither → auto-detect base branch and generate, but ONLY if source files exist.
   // With no source files and no base, skip the diff entirely.
   let diffPath = opts.diffPath;
+  let autoGeneratedDiffPath: string | undefined;
   if (!diffPath && opts.sourceFiles.length > 0) {
     const base = opts.base ?? autoDetectBase();
     diffPath = generateGitDiff(base, opts.sourceFiles);
+    autoGeneratedDiffPath = diffPath;
     info(`Generated PR diff via git: ${diffPath}`);
   } else if (opts.diffPath) {
     const abs = isAbsolute(opts.diffPath) ? opts.diffPath : resolvePath(opts.diffPath);
@@ -701,21 +550,30 @@ async function cmdSearchExisting(rawArgs: string[]): Promise<void> {
     } catch {
       /* ignore cleanup errors */
     }
+    if (autoGeneratedDiffPath) {
+      try {
+        unlinkSync(autoGeneratedDiffPath);
+      } catch {
+        /* ignore cleanup errors */
+      }
+    }
   }
 }
 
 function printUsage(): void {
-  info(`LLM Externalizer — Profile Management CLI
+  info(`LLM Externalizer — CLI
+
+Profile mutation is DISABLED. Edit ${getSettingsPath()} manually with your
+editor to change models, profiles, or API keys. Then restart Claude Code, or
+call the MCP "reset" tool, to reload.
 
 Usage:
-  llm-externalizer profile list
-  llm-externalizer profile add <name> --mode <mode> --api <api> --model <model> [options]
-  llm-externalizer profile select <name>
-  llm-externalizer profile edit <name> --field <value> [...]
-  llm-externalizer profile remove <name>
-  llm-externalizer profile rename <old-name> <new-name>
+  llm-externalizer profile list                          # read-only profile inspector
   llm-externalizer model-info <model-id> [--markdown | --json [file]] [--no-color]
   llm-externalizer search-existing "<description>" [<src-files>...] --in <path> [--base <ref>] [--diff <path>] [--free]
+
+Disabled (would change settings.yaml — do this manually instead):
+  llm-externalizer profile add | select | edit | remove | rename
 
 search-existing batches the codebase into FFD-packed LLM requests of typically
 1-5 files each, or one group per request if you pass ---GROUP:id--- markers.
@@ -754,30 +612,13 @@ search-existing flags:
   --timeout-hours <n>    Max wall time for the whole scan (default 4 hours).
                          Pass 0 to disable. Accepts fractional hours (e.g. 0.5 = 30 min).
 
-Modes:
-  local             Sequential requests to a local server
-  remote            Parallel requests, single model via OpenRouter
-  remote-ensemble   Parallel requests, two models, combined report
-
-API Presets:
-  lmstudio-local    LM Studio native API     http://localhost:1234
-  ollama-local      Ollama OpenAI-compat     http://localhost:11434
-  vllm-local        vLLM OpenAI-compat       http://localhost:8000
-  llamacpp-local    llama.cpp OpenAI-compat   http://localhost:8080
-  generic-local     Any OpenAI-compat        (url required)
-  openrouter-remote OpenRouter               https://openrouter.ai/api
-
-Optional flags (for add/edit):
-  --url <url>              Override preset default URL
-  --api_key <key|$ENV>     API key (remote) — env var ref or direct value
-  --api_token <token|$ENV> Auth token (local) — env var ref or direct value
-  --second_model <model>   Second model for remote-ensemble mode
-  --timeout <seconds>      Request timeout
-  --context_window <size>  Context window override (0 = auto)
-  --app_name <name>        App name for OpenRouter dashboard
-  --http_referer <url>     HTTP Referer for OpenRouter analytics
-
 Settings file: ${getSettingsPath()}
+
+To change models, profiles, API keys, URLs, timeouts, or the active profile:
+open the settings file above in your editor, make the edits, save, and then
+either restart Claude Code or call the MCP "reset" tool to reload. The CLI
+mutation subcommands (add / select / edit / remove / rename) were removed on
+purpose — only the user may change configuration, not agents.
 `);
 }
 
@@ -813,7 +654,30 @@ async function main(): Promise<void> {
   }
 
   const subcommand = args[1];
-  const rest = args.slice(2);
+
+  // Profile-mutating subcommands are disabled. Model / profile configuration
+  // is user-only: edit ~/.llm-externalizer/settings.yaml manually with an
+  // editor, then restart Claude Code or call the MCP "reset" tool to reload.
+  // list / ls stays — it is read-only.
+  const MUTATING_SUBCOMMANDS = new Set([
+    "add",
+    "select",
+    "use",
+    "edit",
+    "remove",
+    "rm",
+    "rename",
+    "mv",
+  ]);
+
+  if (MUTATING_SUBCOMMANDS.has(subcommand)) {
+    die(
+      `'profile ${subcommand}' is disabled. Model and profile configuration is user-only. ` +
+        `Edit ${getSettingsPath()} manually in your editor, then restart Claude Code ` +
+        "or call the MCP 'reset' tool to reload. " +
+        "Use 'profile list' to inspect the current configuration.",
+    );
+  }
 
   switch (subcommand) {
     case "list":
@@ -821,44 +685,11 @@ async function main(): Promise<void> {
       cmdList();
       break;
 
-    case "add":
-      if (!rest[0] || rest[0].startsWith("--")) {
-        die(
-          "Usage: profile add <name> --mode <mode> --api <api> --model <model>",
-        );
-      }
-      cmdAdd(rest[0], rest.slice(1));
-      break;
-
-    case "select":
-    case "use":
-      if (!rest[0]) die("Usage: profile select <name>");
-      cmdSelect(rest[0]);
-      break;
-
-    case "edit":
-      if (!rest[0] || rest[0].startsWith("--")) {
-        die("Usage: profile edit <name> --field <value> [...]");
-      }
-      cmdEdit(rest[0], rest.slice(1));
-      break;
-
-    case "remove":
-    case "rm":
-      if (!rest[0]) die("Usage: profile remove <name>");
-      cmdRemove(rest[0]);
-      break;
-
-    case "rename":
-    case "mv":
-      if (!rest[0] || !rest[1])
-        die("Usage: profile rename <old-name> <new-name>");
-      cmdRename(rest[0], rest[1]);
-      break;
-
     default:
       die(
-        `Unknown profile command '${subcommand}'. Use: list, add, select, edit, remove, rename.`,
+        `Unknown profile command '${subcommand}'. Only 'list' is available — ` +
+          "profile mutation was disabled by design. Edit " +
+          `${getSettingsPath()} manually to change models or profiles.`,
       );
   }
 }

@@ -115,10 +115,13 @@ const TOOL_CATALOG = {
     },
   },
   discover: { desc: "Check service health, active profile, model, auth status.", params: {} },
-  reset: { desc: "Full soft-restart. Reloads settings, clears caches.", params: {} },
-  get_settings: { desc: "Copy settings.yaml to output dir. Returns the file path.", params: {} },
-  set_settings: { desc: "Apply a modified settings file.", params: { file_path: "Path to the edited YAML file" } },
-  change_model: { desc: "Quick model switch in the active profile.", params: { model: "Model name or ID" } },
+  reset: { desc: "Full soft-restart. Reloads settings (picks up manual edits to ~/.llm-externalizer/settings.yaml), clears caches.", params: {} },
+  get_settings: { desc: "Copy settings.yaml to output dir. Returns the file path (read-only view — edit the REAL file at ~/.llm-externalizer/settings.yaml manually, then call reset).", params: {} },
+  // set_settings and change_model are disabled by design. Model & profile
+  // configuration is user-only — edit ~/.llm-externalizer/settings.yaml
+  // manually. File-write tools (fix_code / batch_fix / merge_files /
+  // split_file / revert_file) are also disabled — apply fixes via the
+  // llm-externalizer-scan-and-fix plugin command instead.
 };
 
 // ── Help output ──────────────────────────────────────────────────────
@@ -210,6 +213,10 @@ function parseArgs(argv) {
         }
       }
       try { params[key] = JSON.parse(value); } catch { params[key] = value; }
+    } else {
+      console.error(`ERROR: Unexpected positional argument: '${arg}'. Use --flag value syntax.`);
+      console.error("Run 'llm-ext --help' for usage.");
+      process.exit(1);
     }
   }
 
@@ -273,32 +280,54 @@ async function main() {
   let phase = "init"; // init → ready → waiting
 
   function handleMessage(msg) {
-    if (phase === "init" && msg.id === 0 && msg.result) {
-      // Init response received — send initialized notification + tool call
-      phase = "ready";
-      sendJson(child, { jsonrpc: "2.0", method: "notifications/initialized" });
-      sendJson(child, {
-        jsonrpc: "2.0", id: 1, method: "tools/call",
-        params: { name: tool, arguments: params },
-      });
-      phase = "waiting";
+    if (phase === "init" && msg.id === 0) {
+      if (msg.error) {
+        gotResponse = true;
+        clearTimeout(deadline);
+        console.error(`ERROR: MCP server rejected initialize: ${JSON.stringify(msg.error)}`);
+        child.kill();
+        process.exit(1);
+      }
+      if (msg.result) {
+        // Init response received — send initialized notification + tool call
+        phase = "ready";
+        sendJson(child, { jsonrpc: "2.0", method: "notifications/initialized" });
+        sendJson(child, {
+          jsonrpc: "2.0", id: 1, method: "tools/call",
+          params: { name: tool, arguments: params },
+        });
+        phase = "waiting";
+      }
       return;
     }
 
-    if (phase === "waiting" && msg.id === 1 && msg.result) {
-      // Tool response received — print result and exit
-      gotResponse = true;
-      clearTimeout(deadline);
-      const content = msg.result.content;
-      if (Array.isArray(content)) {
-        const text = content
-          .filter((c) => c.type === "text")
-          .map((c) => c.text)
-          .join("\n");
-        console.log(text);
+    if (phase === "waiting" && msg.id === 1) {
+      if (msg.error) {
+        gotResponse = true;
+        clearTimeout(deadline);
+        console.error(`ERROR: Tool call failed: ${JSON.stringify(msg.error)}`);
+        child.kill();
+        process.exit(1);
       }
-      child.kill();
-      process.exit(msg.result.isError ? 1 : 0);
+      if (msg.result) {
+        // Tool response received — print result and exit
+        gotResponse = true;
+        clearTimeout(deadline);
+        const content = msg.result.content;
+        if (Array.isArray(content)) {
+          const text = content
+            .filter((c) => c.type === "text")
+            .map((c) => c.text)
+            .join("\n");
+          console.log(text);
+          child.kill();
+          process.exit(msg.result.isError ? 1 : 0);
+        } else {
+          console.error(`ERROR: Tool response missing content array: ${JSON.stringify(msg.result)}`);
+          child.kill();
+          process.exit(1);
+        }
+      }
     }
   }
 
@@ -329,8 +358,10 @@ async function main() {
     process.exit(1);
   }, 600_000);
 
-  // Suppress stderr (server logs)
-  child.stderr.on("data", () => {});
+  // Forward server stderr to our stderr so crashes and diagnostic logs are visible
+  child.stderr.on("data", (chunk) => {
+    process.stderr.write(chunk);
+  });
 }
 
 main().catch((err) => {

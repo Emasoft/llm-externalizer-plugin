@@ -75,7 +75,7 @@ describe('pre-flight (websearch)', () => {
   let transport: StdioClientTransport;
 
   beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { await transport.close(); });
+  afterAll(async () => { if (transport) await transport.close(); });
 
   it('LLM backend is reachable', async () => {
     /** discover should report the backend as online */
@@ -95,7 +95,7 @@ describe('web search: React deprecation detection', () => {
   let transport: StdioClientTransport;
 
   beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { await transport.close(); });
+  afterAll(async () => { if (transport) await transport.close(); });
 
   it('detects deprecated React patterns by searching the web', async () => {
     /**
@@ -185,7 +185,7 @@ describe('web search: Express.js deprecation detection', () => {
   let transport: StdioClientTransport;
 
   beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { await transport.close(); });
+  afterAll(async () => { if (transport) await transport.close(); });
 
   it('detects deprecated Express.js patterns by searching the web', async () => {
     /**
@@ -278,7 +278,7 @@ describe('web search: Node.js API currency check', () => {
   let transport: StdioClientTransport;
 
   beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { await transport.close(); });
+  afterAll(async () => { if (transport) await transport.close(); });
 
   it('identifies outdated Node.js patterns by checking current docs', async () => {
     /**

@@ -16,4 +16,5 @@ for (const file of ['index.js', 'cli.js']) {
   } else {
     console.log(`Shebang already present in dist/${file}`);
   }
+  fs.chmodSync(filePath, 0o755);
 }

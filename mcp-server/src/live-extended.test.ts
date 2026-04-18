@@ -17,7 +17,6 @@ const TMP_DIR = '/tmp/__llm_ext_extended_test';
 
 // Resolve live test config from real settings.yaml.
 const testConfig = resolveTestConfig({ testName: 'extended', timeout: 300 });
-const MODEL = testConfig.resolved.model;
 
 async function createClient(): Promise<{ client: Client; transport: StdioClientTransport }> {
   return createTestClient(testConfig, 'extended-test-client');
@@ -29,7 +28,9 @@ function cleanDir(dir: string) {
 }
 
 function getText(result: unknown): string {
-  return (((result as Record<string, unknown>).content as Array<{ type: string; text: string }>)[0]?.text) ?? '';
+  const content = (result as Record<string, unknown>).content;
+  if (!Array.isArray(content)) return '';
+  return (content[0] as { type: string; text: string } | undefined)?.text ?? '';
 }
 
 // ── chat: multi-file input ───────────────────────────────────────────
@@ -39,7 +40,7 @@ describe('chat: multi-file input', () => {
   let transport: StdioClientTransport;
 
   beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { await transport.close(); });
+  afterAll(async () => { if (transport) await transport.close(); });
 
   it('analyzes multiple files passed together', async () => {
     /** chat should read and respond about multiple input files */
@@ -78,7 +79,7 @@ describe('chat: instructions from file', () => {
   let transport: StdioClientTransport;
 
   beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { await transport.close(); });
+  afterAll(async () => { if (transport) await transport.close(); });
 
   it('reads instructions from a file', async () => {
     /** instructions_files_paths should be appended to instructions */
@@ -117,7 +118,7 @@ describe('scan_folder (live)', () => {
   let transport: StdioClientTransport;
 
   beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { await transport.close(); });
+  afterAll(async () => { if (transport) await transport.close(); });
 
   it('scans a folder of .ts files', async () => {
     /** scan_folder should discover and process files by extension */
@@ -139,44 +140,16 @@ describe('scan_folder (live)', () => {
 
       expect(result.isError).toBeFalsy();
       const text = getText(result);
-      expect(text).toBeDefined();
-      // Should mention processing 2 files (not the .txt)
+      expect(text).toMatch(/\.md$/);
+      const report = readFileSync(text, 'utf-8');
+      // Should mention both .ts files and not the skipped .txt
+      expect(report).toMatch(/a\.ts/);
+      expect(report).toMatch(/b\.ts/);
+      expect(report).not.toMatch(/c\.txt/);
     } finally {
       cleanDir(scanDir);
     }
   });
-});
-
-// ── disabled write tools — verify rejection ─────────────────────────
-
-describe('disabled write tools (live)', () => {
-  let client: Client;
-  let transport: StdioClientTransport;
-
-  beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { await transport.close(); });
-
-  it('merge_files is disabled', async () => {
-    /** merge_files should return DISABLED error */
-    const result = await client.callTool({
-      name: 'merge_files',
-      arguments: { input_files_paths: ['/tmp/a.ts', '/tmp/b.ts'], output_path: '/tmp/out.ts' },
-    });
-    expect(result.isError).toBe(true);
-    expect(getText(result)).toMatch(/DISABLED/);
-  }, 10_000);
-
-  it('fix_code + revert_file are both disabled', async () => {
-    /** fix_code and revert_file should both return DISABLED error */
-    for (const tool of ['fix_code', 'revert_file']) {
-      const result = await client.callTool({
-        name: tool,
-        arguments: { input_files_paths: '/tmp/test.ts', instructions: 'test' },
-      });
-      expect(result.isError).toBe(true);
-      expect(getText(result)).toMatch(/DISABLED/);
-    }
-  }, 10_000);
 });
 
 // ── batch_check stress: 3 files with diverse content ─────────────────
@@ -190,7 +163,7 @@ describe('batch_check stress: 3 files', () => {
   let transport: StdioClientTransport;
 
   beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { await transport.close(); });
+  afterAll(async () => { if (transport) await transport.close(); });
 
   it('checks 3 files with diverse content and reports progress', async () => {
     /** batch_check with 3 diverse files should process each and report progress */
@@ -247,26 +220,6 @@ describe('batch_check stress: 3 files', () => {
   });
 });
 
-// ── batch_fix — disabled ─────────────────────────────────────────────
-
-describe('batch_fix (live)', () => {
-  let client: Client;
-  let transport: StdioClientTransport;
-
-  beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { await transport.close(); });
-
-  it('batch_fix is disabled', async () => {
-    /** batch_fix should return DISABLED error */
-    const result = await client.callTool({
-      name: 'batch_fix',
-      arguments: { input_files_paths: ['/tmp/a.ts'], instructions: 'fix' },
-    });
-    expect(result.isError).toBe(true);
-    expect(getText(result)).toMatch(/DISABLED/);
-  }, 10_000);
-});
-
 // ── check_imports ────────────────────────────────────────────────────
 
 describe('check_imports (live)', () => {
@@ -274,7 +227,7 @@ describe('check_imports (live)', () => {
   let transport: StdioClientTransport;
 
   beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { await transport.close(); });
+  afterAll(async () => { if (transport) await transport.close(); });
 
   it('validates import paths in a TypeScript file', async () => {
     /** check_imports should find broken imports */
@@ -323,7 +276,7 @@ describe('check_references (live)', () => {
   let transport: StdioClientTransport;
 
   beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { await transport.close(); });
+  afterAll(async () => { if (transport) await transport.close(); });
 
   it('validates symbol references across files', async () => {
     /** check_references should detect undefined symbols */
@@ -372,7 +325,7 @@ describe('API deprecation check (live)', () => {
   let transport: StdioClientTransport;
 
   beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { await transport.close(); });
+  afterAll(async () => { if (transport) await transport.close(); });
 
   it('detects deprecated API usage by comparing against docs', async () => {
     /**
@@ -587,34 +540,6 @@ describe('API deprecation check (live)', () => {
   });
 });
 
-// ── change_model + discover round-trip ───────────────────────────────
-
-describe('change_model + discover', () => {
-  let client: Client;
-  let transport: StdioClientTransport;
-
-  beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { await transport.close(); });
-
-  it('changes model and discover reflects the change', async () => {
-    /** change_model to a different name, verify discover still works */
-    // Change to a model name that may or may not exist — just testing the mechanism
-    const changeResult = await client.callTool({
-      name: 'change_model',
-      arguments: { model: MODEL, backend: 'local' },
-    }, undefined, { timeout: 600_000 });
-
-    expect(changeResult.isError).toBeFalsy();
-    const changeText = getText(changeResult);
-    expect(changeText).toMatch(/switched|model/i);
-
-    // Discover should still work
-    const discoverResult = await client.callTool({ name: 'discover', arguments: {} });
-    const discoverText = getText(discoverResult);
-    expect(discoverText).toMatch(/ONLINE/i);
-  });
-});
-
 // ── scan_secrets validation ──────────────────────────────────────────
 
 describe('scan_secrets (live)', () => {
@@ -622,7 +547,7 @@ describe('scan_secrets (live)', () => {
   let transport: StdioClientTransport;
 
   beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { await transport.close(); });
+  afterAll(async () => { if (transport) await transport.close(); });
 
   it('aborts batch_check when file contains secrets', async () => {
     /** scan_secrets should prevent processing files with leaked secrets */

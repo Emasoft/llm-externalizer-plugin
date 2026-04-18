@@ -77,14 +77,36 @@ _KNOWN_DIRS = (
 )
 
 _KNOWN_LINK_SUFFIXES = (
-    ".md", ".py", ".sh", ".js", ".ts", ".mjs", ".cjs",
-    ".json", ".yml", ".yaml", ".toml", ".sql", ".html", ".css",
+    ".md",
+    ".py",
+    ".sh",
+    ".js",
+    ".ts",
+    ".mjs",
+    ".cjs",
+    ".json",
+    ".yml",
+    ".yaml",
+    ".toml",
+    ".sql",
+    ".html",
+    ".css",
 )
 
 _EXCLUDE_PARTS = {
-    ".git", ".mypy_cache", ".rechecker", "node_modules", "dist",
-    "reports_dev", "docs_dev", "scripts_dev", "reports",
-    "llm_externalizer_output", ".serena", ".venv", "__pycache__",
+    ".git",
+    ".mypy_cache",
+    ".rechecker",
+    "node_modules",
+    "dist",
+    "reports_dev",
+    "docs_dev",
+    "scripts_dev",
+    "reports",
+    "llm_externalizer_output",
+    ".serena",
+    ".venv",
+    "__pycache__",
     "worktrees",
 }
 
@@ -100,19 +122,17 @@ _EXCLUDE_FILE_BASENAMES = {
 # allowed inside paths; everything else listed here terminates a match.
 _PATH_TERMINATORS = r"\s)'\"`>}{\[\]|:,;<(*"
 
-_PLUGIN_ROOT_RE = re.compile(
-    r"\$\{?CLAUDE_PLUGIN_ROOT\}?/(?P<path>[^" + _PATH_TERMINATORS + r"]+)"
-)
+_PLUGIN_ROOT_RE = re.compile(r"\$\{?CLAUDE_PLUGIN_ROOT\}?/(?P<path>[^" + _PATH_TERMINATORS + r"]+)")
 
 _KNOWN_DIR_RE = re.compile(
     r"(?<![A-Za-z0-9_./-])(?P<path>(?:"
     + "|".join(re.escape(d) for d in _KNOWN_DIRS)
-    + r")/[^" + _PATH_TERMINATORS + r"]+)"
+    + r")/[^"
+    + _PATH_TERMINATORS
+    + r"]+)"
 )
 
-_MD_LINK_RE = re.compile(
-    r"\]\((?P<target>(?!https?://)(?!mailto:)(?!tel:)(?!#)[^\s)'\"`]+?)\)"
-)
+_MD_LINK_RE = re.compile(r"\]\((?P<target>(?!https?://)(?!mailto:)(?!tel:)(?!#)[^\s)'\"`]+?)\)")
 
 
 def _is_excluded(path: Path, root: Path) -> bool:
@@ -198,16 +218,38 @@ def _extract_references(text: str, source_file: Path, root: Path) -> list[tuple[
     return found
 
 
-def _exists(path: Path) -> bool:
-    return path.exists()
+def _exists_within(path: Path, root: Path) -> bool:
+    """True when `path` exists AND its resolved form is inside `root`.
+
+    This rejects `../`-traversal references that happen to point at a real
+    file outside the plugin tree (e.g. a link like `[foo](../../../bar)`
+    resolving to a system file).
+    """
+    if not path.exists():
+        return False
+    try:
+        return path.resolve().is_relative_to(root)
+    except (OSError, ValueError):
+        return False
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else "")
-    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent, help="Plugin root (default: parent of scripts/)")
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=Path(__file__).resolve().parent.parent,
+        help="Plugin root (default: parent of scripts/)",
+    )
     parser.add_argument("--quiet", action="store_true", help="Print only broken references / warnings")
-    parser.add_argument("--verbose", action="store_true", help="Print every detected reference and its resolution (for debugging the detector)")
-    parser.add_argument("--strict", action="store_true", help="Treat dynamic references as errors (default: they are warnings only)")
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print every detected reference and its resolution (for debugging the detector)",
+    )
+    parser.add_argument(
+        "--strict", action="store_true", help="Treat dynamic references as errors (default: they are warnings only)"
+    )
     args = parser.parse_args()
 
     root: Path = args.root.resolve()
@@ -236,20 +278,20 @@ def main() -> int:
                     print(f"{rel_source}: '{raw}' DYNAMIC (unresolvable — reported as warning)")
                 continue
             resolved: Path | None = None
-            if rel_file is not None and _exists(rel_file):
+            if rel_file is not None and _exists_within(rel_file, root):
                 resolved = rel_file
-            elif _exists(rel_root):
+            elif _exists_within(rel_root, root):
                 resolved = rel_root
             if args.verbose:
-                verdict = f"OK -> {resolved.relative_to(root)}" if resolved else "BROKEN"
+                verdict = f"OK -> {resolved.resolve().relative_to(root)}" if resolved else "BROKEN"
                 print(f"{rel_source}: '{raw}' {verdict}")
             if resolved is None:
-                broken.append((rel_source, raw, f"tried: {rel_file} | {rel_root}"))
+                tried = f"root/{target_rel}" if rel_file is None else f"{rel_file} | {rel_root}"
+                broken.append((rel_source, raw, f"tried: {tried}"))
 
     if not args.quiet:
         print(
-            f"scanned {scanned} files, {total_refs} references, "
-            f"{len(broken)} broken, {len(dynamic)} dynamic (warnings)"
+            f"scanned {scanned} files, {total_refs} references, {len(broken)} broken, {len(dynamic)} dynamic (warnings)"
         )
 
     for source_rel, raw in dynamic:

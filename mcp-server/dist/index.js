@@ -14104,8 +14104,7 @@ import {
   writeFileSync as writeFileSync2,
   mkdirSync as mkdirSync2,
   existsSync as existsSync2,
-  renameSync as renameSync2,
-  copyFileSync as copyFileSync2,
+  renameSync,
   statSync as statSync2,
   lstatSync,
   appendFileSync,
@@ -14149,6 +14148,11 @@ function parseFileGroups(paths) {
     }
     const footerMatch = entry.match(GROUP_FOOTER_RE);
     if (footerMatch) {
+      if (currentGroup && footerMatch[1] !== currentGroup.id) {
+        throw new Error(
+          `Group footer '${entry}' does not match open group '${currentGroup.id}'`
+        );
+      }
       if (currentGroup && currentGroup.files.length > 0) {
         groups.push(currentGroup);
       }
@@ -14188,13 +14192,8 @@ function statFileForGrouping(p) {
   const ext = extWithDot ? extWithDot.slice(1).toLowerCase() : "noext";
   const base = basename(p);
   const stem = base.slice(0, base.length - extWithDot.length);
-  let size = 0;
-  try {
-    const st = statSync(p);
-    if (st.isFile()) size = st.size;
-  } catch {
-    size = 0;
-  }
+  const st = statSync(p);
+  const size = st.isFile() ? st.size : 0;
   return { path: p, parent, ext, base, stem, size };
 }
 function splitBucketBySize(bucket, maxBytes) {
@@ -14253,7 +14252,7 @@ function autoGroupByHeuristic(paths, maxGroupBytes = AUTO_GROUP_DEFAULT_MAX_BYTE
   const idCounts = /* @__PURE__ */ new Map();
   for (const [, bucket] of primaryBuckets) {
     const sample = bucket[0];
-    const lastDir = sample.parent.split("/").filter(Boolean).pop() || "root";
+    const lastDir = basename(sample.parent) || "root";
     const rawIdBase = `${lastDir}-${sample.ext}`;
     const totalSize = bucket.reduce((s, f) => s + f.size, 0);
     if (totalSize <= maxGroupBytes) {
@@ -14284,6 +14283,12 @@ function autoGroupByHeuristic(paths, maxGroupBytes = AUTO_GROUP_DEFAULT_MAX_BYTE
   }
   return out;
 }
+function isPathSuffix(haystack, needle) {
+  if (haystack === needle) return true;
+  if (!haystack.endsWith(needle)) return false;
+  const boundary = haystack[haystack.length - needle.length - 1];
+  return boundary === "/" || boundary === "\\";
+}
 function splitPerFileSections(content, expectedPaths) {
   const result = /* @__PURE__ */ new Map();
   if (!content || !expectedPaths || expectedPaths.length === 0) return result;
@@ -14302,7 +14307,7 @@ function splitPerFileSections(content, expectedPaths) {
   const byBasename = /* @__PURE__ */ new Map();
   for (const fp of expectedPaths) {
     byExact.set(fp, fp);
-    const base = fp.split("/").pop() || fp;
+    const base = basename(fp) || fp;
     const bucket = byBasename.get(base) ?? [];
     bucket.push(fp);
     byBasename.set(base, bucket);
@@ -14316,17 +14321,16 @@ function splitPerFileSections(content, expectedPaths) {
     if (byExact.has(h.pathRaw)) {
       matched = h.pathRaw;
     } else {
-      for (const fp of expectedPaths) {
-        if (h.pathRaw.endsWith(fp) || fp.endsWith(h.pathRaw)) {
-          matched = fp;
-          break;
-        }
-      }
-      if (!matched) {
-        const base = h.pathRaw.split("/").pop() || h.pathRaw;
-        const bucket = byBasename.get(base);
-        if (bucket && bucket.length === 1) {
-          matched = bucket[0];
+      const headerBase = basename(h.pathRaw) || h.pathRaw;
+      const basenameBucket = byBasename.get(headerBase);
+      if (basenameBucket && basenameBucket.length === 1) {
+        matched = basenameBucket[0];
+      } else {
+        for (const fp of expectedPaths) {
+          if (isPathSuffix(h.pathRaw, fp) || isPathSuffix(fp, h.pathRaw)) {
+            matched = fp;
+            break;
+          }
         }
       }
     }
@@ -28212,8 +28216,6 @@ import {
   readFileSync,
   writeFileSync,
   mkdirSync,
-  copyFileSync,
-  renameSync,
   chmodSync,
   realpathSync
 } from "node:fs";
@@ -28301,9 +28303,6 @@ function getConfigDir() {
 function getSettingsPath() {
   return join(getConfigDir(), "settings.yaml");
 }
-function getBackupDir() {
-  return join(getConfigDir(), "backups");
-}
 var USER_CONFIG_ENV_MAP = {
   OPENROUTER_API_KEY: "CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY"
 };
@@ -28341,27 +28340,6 @@ function loadSettings() {
 `
     );
     return null;
-  }
-}
-function saveSettings(settings) {
-  const settingsPath = getSettingsPath();
-  const configDir = getConfigDir();
-  const backupDir = getBackupDir();
-  mkdirSync(configDir, { recursive: true });
-  mkdirSync(backupDir, { recursive: true });
-  chmodSync(backupDir, 448);
-  if (existsSync(settingsPath)) {
-    const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-    const backupPath = join(backupDir, `settings_${ts}.yaml`);
-    copyFileSync(settingsPath, backupPath);
-  }
-  const yaml = (0, import_yaml.stringify)(settings, { lineWidth: 120 });
-  const tmpPath = `${settingsPath}.tmp.${process.pid}`;
-  writeFileSync(tmpPath, yaml, "utf-8");
-  renameSync(tmpPath, settingsPath);
-  try {
-    chmodSync(settingsPath, 384);
-  } catch {
   }
 }
 function generateDefaultSettings() {
@@ -28409,6 +28387,10 @@ function ensureSettingsExist() {
   if (!existsSync(settingsPath)) {
     mkdirSync(configDir, { recursive: true });
     writeFileSync(settingsPath, SETTINGS_TEMPLATE, "utf-8");
+    try {
+      chmodSync(settingsPath, 384);
+    } catch {
+    }
     process.stderr.write(
       `[llm-externalizer] Generated default settings at ${settingsPath}
 `
@@ -28515,7 +28497,7 @@ function validateSettings(settings) {
     return {
       valid: false,
       errors: [
-        "No active profile set. Use: npx llm-externalizer profile select <name>"
+        `No active profile set. Edit ${getSettingsPath()} manually and set the 'active:' field to one of the profile names listed under 'profiles:', then restart Claude Code or call the MCP 'reset' tool.`
       ]
     };
   }
@@ -28556,12 +28538,10 @@ var SETTINGS_TEMPLATE = `# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u250
 # LLM Externalizer \u2014 Settings
 # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 # Profile-based configuration. Each profile defines a complete LLM
-# backend setup. Switch profiles with:
-#   npx llm-externalizer profile select <name>
-# Or via MCP: get_settings / set_settings
+# backend setup. Edit this file manually and either restart Claude Code
+# or call the MCP 'reset' tool to reload.
 #
 # Location: ~/.llm-externalizer/settings.yaml
-# Backups:  ~/.llm-externalizer/backups/
 # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
 # Active profile name
@@ -28641,9 +28621,13 @@ function sortedPercentiles(obj) {
   return out;
 }
 function percentileAnnotation(numeric, higherIsBetter) {
+  const fmt = (n) => {
+    if (Number.isInteger(n)) return n.toString();
+    return (Math.round(n * 100) / 100).toString();
+  };
   if (numeric === 50) return "median";
-  if (numeric >= 95) return higherIsBetter ? `best ${(100 - numeric).toFixed(numeric % 1 ? 1 : 0)}%` : `worst ${(100 - numeric).toFixed(numeric % 1 ? 1 : 0)}%`;
-  if (numeric <= 5) return higherIsBetter ? `worst ${numeric.toFixed(numeric % 1 ? 1 : 0)}%` : `best ${numeric.toFixed(numeric % 1 ? 1 : 0)}%`;
+  if (numeric >= 95) return higherIsBetter ? `best ${fmt(100 - numeric)}%` : `worst ${fmt(100 - numeric)}%`;
+  if (numeric <= 5) return higherIsBetter ? `worst ${fmt(numeric)}%` : `best ${fmt(numeric)}%`;
   return "";
 }
 function isValidOpenRouterModelId(id) {
@@ -28682,7 +28666,9 @@ async function fetchOpenRouterModelInfo(modelId, baseUrl, authToken, timeoutMs =
   clearTimeout(timeoutHandle);
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    return { ok: false, error: body.slice(0, 300), status: res.status };
+    const truncated = body.length > 300 ? body.slice(0, 300) + "\u2026 (truncated)" : body;
+    const error2 = truncated || `HTTP ${res.status} error`;
+    return { ok: false, error: error2, status: res.status };
   }
   try {
     const payload = await res.json();
@@ -28748,7 +28734,7 @@ function priceLevel(s) {
   return "neutral";
 }
 function mdCell(s) {
-  return s.replace(/\|/g, "\\|");
+  return s.replace(/\|/g, "\\|").replace(/\n/g, " ");
 }
 function formatModelInfoMarkdown(data, modelId) {
   const lines = [];
@@ -29238,77 +29224,6 @@ function sanitizeInputPath(filePath) {
   }
   return resolved;
 }
-var writeQueueTail = Promise.resolve();
-var writeQueueDepth = 0;
-function withWriteQueue(fn, onProgress) {
-  const position = ++writeQueueDepth;
-  const previous = writeQueueTail;
-  let release;
-  writeQueueTail = new Promise((r) => {
-    release = r;
-  });
-  let queueTimer;
-  if (onProgress && position > 1) {
-    try {
-      onProgress(
-        0,
-        100,
-        `Queued \u2014 waiting for ${position - 1} write operation(s) to finish\u2026`
-      );
-    } catch {
-    }
-    queueTimer = setInterval(() => {
-      try {
-        onProgress(
-          0,
-          100,
-          `Still queued \u2014 waiting for write operations ahead in queue\u2026`
-        );
-      } catch {
-      }
-    }, 1e4);
-  }
-  return previous.then(async () => {
-    if (queueTimer) clearInterval(queueTimer);
-    writeQueueDepth = Math.max(0, writeQueueDepth - 1);
-    try {
-      return await fn();
-    } finally {
-      release();
-    }
-  });
-}
-var activeFileLocks = /* @__PURE__ */ new Map();
-function acquireFileLock(filePath) {
-  const resolved = resolve2(filePath);
-  if (activeFileLocks.has(resolved)) return false;
-  activeFileLocks.set(resolved, Promise.resolve());
-  return true;
-}
-function releaseFileLock(filePath) {
-  activeFileLocks.delete(resolve2(filePath));
-}
-function getGitBranch(filePath) {
-  const dir = existsSync2(filePath) && statSync2(filePath).isDirectory() ? filePath : dirname2(filePath);
-  const result = spawnSync("git", ["branch", "--show-current"], {
-    cwd: dir,
-    encoding: "utf-8",
-    timeout: 5e3
-  });
-  if (result.status !== 0 || result.error) return null;
-  const branch = result.stdout.trim();
-  return branch || "(detached HEAD)";
-}
-function assertBranchUnchanged(filePath, expectedBranch) {
-  if (expectedBranch === null) return;
-  const current = getGitBranch(filePath);
-  if (current === null) return;
-  if (current !== expectedBranch) {
-    throw new Error(
-      `Git branch changed during operation: was "${expectedBranch}", now "${current}". Aborting to prevent writing to the wrong branch. Re-run the operation on the correct branch.`
-    );
-  }
-}
 var DEFAULT_MAX_PAYLOAD_BYTES = 400 * 1024;
 function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexRedact, tagPrefix = "") {
   const rawLimit = maxBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
@@ -29420,89 +29335,6 @@ var BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
 ]);
 function isBinaryExtension(filePath) {
   return BINARY_EXTENSIONS.has(extname2(filePath).toLowerCase()) || basename2(filePath) === ".DS_Store";
-}
-function sanitizeOutputPath(baseDir, relativePath) {
-  const full = relativePath.startsWith("/") ? relativePath : join2(baseDir, relativePath);
-  const normalized = resolve2(full);
-  const normalizedBase = resolve2(baseDir);
-  if (!normalized.startsWith(normalizedBase + "/") && normalized !== normalizedBase) {
-    throw new Error(
-      `Path traversal blocked: "${relativePath}" escapes output directory "${baseDir}"`
-    );
-  }
-  return normalized;
-}
-var UTF8_BOM = "\uFEFF";
-function hasBOM(content) {
-  return content.startsWith(UTF8_BOM);
-}
-function detectLineEnding(content) {
-  const crlfCount = (content.match(/\r\n/g) ?? []).length;
-  const lfOnly = (content.match(/(?<!\r)\n/g) ?? []).length;
-  return crlfCount > lfOnly ? "\r\n" : "\n";
-}
-function restoreFileConventions(content, originalHadBOM, originalLineEnding) {
-  let result = content;
-  if (originalLineEnding === "\r\n") {
-    result = result.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n");
-  }
-  if (originalHadBOM && !result.startsWith(UTF8_BOM)) {
-    result = UTF8_BOM + result;
-  }
-  return result;
-}
-function verifyStructuralIntegrity(originalContent, fixedContent) {
-  const originalLines = originalContent.split("\n");
-  const fixedLines = fixedContent.split("\n");
-  const origLineCount = originalLines.length;
-  const fixedLineCount = fixedLines.length;
-  if (fixedContent.trim().length === 0) {
-    return "Output is empty";
-  }
-  if (originalContent.length > 50 && fixedContent.length < 20) {
-    return `Output is only ${fixedContent.length} chars (original: ${originalContent.length}) \u2014 likely not a valid file`;
-  }
-  const sizeRatio = fixedContent.length / originalContent.length;
-  if (originalContent.length > 100 && sizeRatio < 0.3) {
-    return `Output is only ${(sizeRatio * 100).toFixed(0)}% of original size (${fixedContent.length} vs ${originalContent.length} chars)`;
-  }
-  if (origLineCount >= 3) {
-    const lineRatio = fixedLineCount / origLineCount;
-    const charRatio = fixedContent.length / originalContent.length;
-    if (lineRatio < 0.7 && lineRatio > 0) {
-      const inflation = charRatio / lineRatio;
-      if (inflation > 2) {
-        return `Line count dropped ${origLineCount}\u2192${fixedLineCount} (${(lineRatio * 100).toFixed(0)}%) but chars only to ${(charRatio * 100).toFixed(0)}%. Inflation=${inflation.toFixed(1)}x \u2014 likely newline stripping`;
-      }
-    }
-  }
-  const origMaxLineLen = Math.max(
-    originalLines.reduce((m, l) => l.length > m ? l.length : m, 0),
-    1
-  );
-  const fixedMaxLineLen = Math.max(
-    fixedLines.reduce((m, l) => l.length > m ? l.length : m, 0),
-    1
-  );
-  if (fixedMaxLineLen > origMaxLineLen * 5 && fixedMaxLineLen > 500) {
-    return `Longest line exploded from ${origMaxLineLen} to ${fixedMaxLineLen} chars \u2014 likely line joining`;
-  }
-  const nullBytes = (fixedContent.match(/\0/g) ?? []).length;
-  if (nullBytes > 0) {
-    return `Output contains ${nullBytes} null byte(s) \u2014 binary corruption`;
-  }
-  if (origLineCount > 10 && fixedLineCount > 5) {
-    const lastOrigLine = originalLines[origLineCount - 1].trim();
-    const lastFixedLine = fixedLines[fixedLineCount - 1].trim();
-    const endsWithClosing = /^[}\])]|^end\b|^fi\b|^done\b|^esac\b|^#endif/i.test(lastOrigLine);
-    const endsWithOpening = /[{([]$|^(if|for|while|def|func|class|switch|case)\b/i.test(
-      lastFixedLine
-    );
-    if (endsWithClosing && endsWithOpening && sizeRatio < 0.8) {
-      return `Likely truncation: original ends with "${lastOrigLine}" but output ends with "${lastFixedLine.substring(0, 60)}" (${(sizeRatio * 100).toFixed(0)}% of original size)`;
-    }
-  }
-  return null;
 }
 var SECRET_PATTERNS = [
   [/AKIA[0-9A-Z]{16}/g, "AWS_KEY"],
@@ -29621,50 +29453,6 @@ function applyRegexRedaction(content, opts) {
     return hasLetters ? "[REDACTED:USER_PATTERN]" : "0".repeat(match.length);
   });
   return { redacted, count: Math.min(count, MAX_REPLACEMENTS) };
-}
-function redactSecretsReversible(content) {
-  let result = content;
-  const entries = [];
-  for (const [pattern, label] of SECRET_PATTERNS) {
-    pattern.lastIndex = 0;
-    result = result.replace(pattern, (match) => {
-      const id = randomUUID().replace(/-/g, "").slice(0, 16);
-      const hasLetters = /[a-zA-Z]/.test(match);
-      const placeholder = hasLetters ? `REDACTED_${id}_REDACTED` : `53246732${id}53246732`;
-      entries.push({ id, original: match, label, placeholder });
-      return placeholder;
-    });
-  }
-  return { redacted: result, entries, count: entries.length };
-}
-function restoreSecrets(content, entries) {
-  let result = content;
-  const lost = [];
-  for (const entry of entries) {
-    if (result.includes(entry.placeholder)) {
-      result = result.split(entry.placeholder).join(entry.original);
-    } else {
-      lost.push(entry);
-    }
-  }
-  return { restored: result, lost };
-}
-function formatLostSecrets(lost) {
-  if (lost.length === 0) return "";
-  const lines = [
-    "",
-    "## \u26A0 Lost Secrets",
-    "",
-    "The following secrets were redacted before sending to the LLM, but their placeholders were not found in the output.",
-    "This means the LLM removed or restructured the code containing these secrets during processing.",
-    "You may need to re-add them manually.",
-    ""
-  ];
-  for (const entry of lost) {
-    const masked = entry.original.length > 6 ? entry.original.slice(0, 2) + "***" + entry.original.slice(-2) : "***";
-    lines.push(`- **${entry.label}**: \`${masked}\` (ID: ${entry.id})`);
-  }
-  return lines.join("\n");
 }
 function buildPreInstructions(hasFiles, toolContext) {
   if (!hasFiles) return "";
@@ -30531,7 +30319,7 @@ function writeStatsFile() {
     };
     const tmpStats = STATS_FILE + ".tmp";
     writeFileSync2(tmpStats, JSON.stringify(stats), "utf-8");
-    renameSync2(tmpStats, STATS_FILE);
+    renameSync(tmpStats, STATS_FILE);
   } catch {
   }
 }
@@ -30889,56 +30677,6 @@ async function chatCompletionSimple(messages, options = {}) {
     if (heartbeat) clearInterval(heartbeat);
   }
 }
-var FIX_CODE_SCHEMA = {
-  name: "fix_code_response",
-  strict: true,
-  schema: {
-    type: "object",
-    properties: {
-      code: {
-        type: "string",
-        description: "The COMPLETE fixed source file, every line from first to last. No truncation, no placeholders."
-      },
-      summary: {
-        type: "string",
-        description: "Concise but exhaustive list of every change made. One line per fix."
-      }
-    },
-    required: ["code", "summary"],
-    additionalProperties: false
-  }
-};
-var SPLIT_FILE_SCHEMA = {
-  name: "split_file_response",
-  strict: true,
-  schema: {
-    type: "object",
-    properties: {
-      files: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            path: {
-              type: "string",
-              description: "Relative file path for this module."
-            },
-            content: { type: "string", description: "Complete file content." }
-          },
-          required: ["path", "content"],
-          additionalProperties: false
-        },
-        description: "Array of files to create. First entry should be the updated original."
-      },
-      summary: {
-        type: "string",
-        description: "Brief description of how the file was split."
-      }
-    },
-    required: ["files", "summary"],
-    additionalProperties: false
-  }
-};
 var EXTRACT_PATHS_SCHEMA = {
   name: "extract_paths_response",
   strict: true,
@@ -31136,7 +30874,7 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
   const tmpPath = filepath + ".tmp";
   try {
     writeFileSync2(tmpPath, lines.join("\n"), "utf-8");
-    renameSync2(tmpPath, filepath);
+    renameSync(tmpPath, filepath);
   } catch (err) {
     try {
       unlinkSync(tmpPath);
@@ -31766,291 +31504,6 @@ ${codeBlock}`
   );
   return { filePath, success: true, reportPath };
 }
-async function processFileFix(filePath, issues, options = {}) {
-  if (!existsSync2(filePath)) {
-    return { filePath, success: false, error: `File not found: ${filePath}` };
-  }
-  if (!acquireFileLock(filePath)) {
-    return {
-      filePath,
-      success: false,
-      error: "File is currently being processed by another operation"
-    };
-  }
-  try {
-    const fixBranchAtStart = getGitBranch(filePath);
-    const lang = options.language || detectLang(filePath);
-    const originalCode = readFileSync2(filePath, "utf-8");
-    const originalHadBOM = hasBOM(originalCode);
-    const originalLineEnding = detectLineEnding(originalCode);
-    let codeForLLM = originalCode;
-    let redactionEntries = [];
-    if (options.redact) {
-      const redactionResult = redactSecretsReversible(originalCode);
-      codeForLLM = redactionResult.redacted;
-      redactionEntries = redactionResult.entries;
-    }
-    const srcFence = fenceBackticks(codeForLLM);
-    const fixMessages = [
-      {
-        role: "system",
-        content: `You are an expert ${lang} developer. You will receive a source file and a list of bugs/issues to fix. Apply ALL requested fixes and return the COMPLETE corrected source file.
-
-CRITICAL RULES (override any conflicting instructions):
-1. Return the ENTIRE file from first line to last line. NEVER truncate, abbreviate, or omit any part.
-2. NEVER use placeholders like "// ... rest of code", "// unchanged", "// same as before". These destroy the file.
-3. Preserve ALL original line breaks, indentation (tabs vs spaces), blank lines, and whitespace. Every line in the original must remain a separate line in the output.
-4. Preserve comments on unchanged lines. Update comments that describe code you changed so they match the new behavior.
-5. Do NOT add, remove, or change anything not described in the issue list.
-6. If an issue is ambiguous, apply the most conservative fix.
-7. The source file is labeled with its full path inside a filename tag before the file-content tag. Reference it by that path.
-
-Return your response as JSON with two fields:
-- "code": the COMPLETE fixed source file (every single line, no omissions)
-- "summary": concise but exhaustive list of every change made, one line per fix. Identify each changed location by FUNCTION/CLASS/METHOD NAME, never by line number.`
-      },
-      {
-        role: "user",
-        content: `ISSUES TO FIX:
-${issues}
-
-SOURCE FILE (${filePath}):
-${srcFence}${lang}
-${codeForLLM}
-${srcFence}
-
-Return the COMPLETE fixed file in the "code" JSON field. Every line must be present.
-
-VALIDATION CHECKLIST (verify before returning):
-- [ ] The "code" field contains the ENTIRE file \u2014 first line to last line
-- [ ] Every line break (\\n) from the original is preserved in the output
-- [ ] No lines were joined or concatenated \u2014 each original line remains a separate line
-- [ ] Indentation (tabs/spaces) is identical to the original for unchanged lines
-- [ ] No placeholders like "// rest of code" or "// unchanged" were used
-- [ ] Only the lines described in ISSUES TO FIX were modified`
-      }
-    ];
-    const resolvedMaxTokens = options.maxTokens ?? resolveDefaultMaxTokens();
-    let fixedCode;
-    let summary;
-    let usageInfo;
-    try {
-      const jsonResp = await chatCompletionJSON(fixMessages, {
-        temperature: DEFAULT_TEMPERATURE,
-        maxTokens: resolvedMaxTokens,
-        jsonSchema: FIX_CODE_SCHEMA,
-        onProgress: options.onProgress
-      });
-      fixedCode = String(jsonResp.parsed.code ?? "");
-      summary = String(jsonResp.parsed.summary ?? "");
-      usageInfo = jsonResp.usage;
-      recordUsage(usageInfo);
-      logRequest({
-        tool: options.batchId ? "batch_fix" : "fix_code",
-        model: jsonResp.model,
-        status: "success",
-        usage: usageInfo,
-        filePath
-      });
-    } catch (jsonErr) {
-      const errMsg = jsonErr instanceof Error ? jsonErr.message : String(jsonErr);
-      logRequest({
-        tool: options.batchId ? "batch_fix" : "fix_code",
-        model: currentBackend.model ?? "",
-        status: "error",
-        filePath,
-        error: errMsg
-      });
-      return {
-        filePath,
-        success: false,
-        error: `Structured output failed: ${errMsg}`
-      };
-    }
-    let lostSecrets = [];
-    if (redactionEntries.length > 0) {
-      const restored = restoreSecrets(fixedCode, redactionEntries);
-      fixedCode = restored.restored;
-      lostSecrets = restored.lost;
-    }
-    const originalEndsWithNewline = originalCode.endsWith("\n");
-    if (originalEndsWithNewline && !fixedCode.endsWith("\n")) {
-      fixedCode += "\n";
-    } else if (!originalEndsWithNewline && fixedCode.endsWith("\n")) {
-      fixedCode = fixedCode.replace(/\n+$/, "");
-    }
-    fixedCode = restoreFileConventions(
-      fixedCode,
-      originalHadBOM,
-      originalLineEnding
-    );
-    if (fixedCode === originalCode) {
-      const noChangeReport = `The LLM returned the file unchanged.
-
-## Issues Requested
-
-${issues}
-
-## Summary
-
-${summary}`;
-      const rp = saveResponse(
-        "fix_code_NO_CHANGE",
-        noChangeReport,
-        {
-          model: currentBackend.model,
-          task: "Fix code (NO CHANGES)",
-          inputFile: filePath
-        },
-        options.batchId ? batchReportFilename(
-          "batch_fix_NO_CHANGE",
-          options.batchId,
-          filePath,
-          options.fileIndex ?? 0
-        ) : void 0
-      );
-      return { filePath, success: true, reportPath: rp, noChange: true };
-    }
-    const preWriteError = verifyStructuralIntegrity(originalCode, fixedCode);
-    if (preWriteError) {
-      const failReport = `PRE-WRITE INTEGRITY FAILURE: ${preWriteError}
-
-Fix NOT applied \u2014 file unchanged.
-
-## Summary
-
-${summary}`;
-      const rp = saveResponse(
-        "fix_code_INTEGRITY_FAIL",
-        failReport,
-        {
-          model: currentBackend.model,
-          task: "Fix code (INTEGRITY FAIL)",
-          inputFile: filePath
-        },
-        options.batchId ? batchReportFilename(
-          "batch_fix_INTEGRITY_FAIL",
-          options.batchId,
-          filePath,
-          options.fileIndex ?? 0
-        ) : void 0
-      );
-      return {
-        filePath,
-        success: false,
-        reportPath: rp,
-        error: `Integrity check failed: ${preWriteError}`
-      };
-    }
-    const currentBranch = getGitBranch(filePath);
-    if (fixBranchAtStart !== null && currentBranch !== null && currentBranch !== fixBranchAtStart) {
-      return {
-        filePath,
-        success: false,
-        error: `Git branch changed during operation: was "${fixBranchAtStart}", now "${currentBranch}". Aborting to prevent writing to the wrong branch.`
-      };
-    }
-    const backupPath = filePath + ".externbak";
-    if (!existsSync2(backupPath)) {
-      copyFileSync2(filePath, backupPath);
-    }
-    try {
-      const tmpPath = filePath + ".externtmp";
-      if (existsSync2(tmpPath)) {
-        try {
-          unlinkSync(tmpPath);
-        } catch {
-        }
-      }
-      writeFileSync2(tmpPath, fixedCode, "utf-8");
-      renameSync2(tmpPath, filePath);
-      const writtenContent = readFileSync2(filePath, "utf-8");
-      if (writtenContent !== fixedCode) {
-        throw new Error(
-          "Post-write verification failed: written file does not match intended content"
-        );
-      }
-      const postWriteError = verifyStructuralIntegrity(
-        originalCode,
-        writtenContent
-      );
-      if (postWriteError) {
-        throw new Error(`Post-write integrity check failed: ${postWriteError}`);
-      }
-    } catch (writeErr) {
-      try {
-        if (existsSync2(backupPath)) {
-          renameSync2(backupPath, filePath);
-        }
-      } catch {
-      }
-      const errMsg = writeErr instanceof Error ? writeErr.message : String(writeErr);
-      const failReport = `AUTO-REVERTED: ${errMsg}
-
-File restored from backup. Original file is intact.
-
-## Summary
-
-${summary}`;
-      const rp = saveResponse(
-        "fix_code_AUTO_REVERTED",
-        failReport,
-        {
-          model: currentBackend.model,
-          task: "Fix code (AUTO-REVERTED)",
-          inputFile: filePath
-        },
-        options.batchId ? batchReportFilename(
-          "batch_fix_AUTO_REVERTED",
-          options.batchId,
-          filePath,
-          options.fileIndex ?? 0
-        ) : void 0
-      );
-      return {
-        filePath,
-        success: false,
-        reportPath: rp,
-        error: `Auto-reverted: ${errMsg}`
-      };
-    }
-    const codeFence = fenceBackticks(fixedCode);
-    const lostSecretsSection = formatLostSecrets(lostSecrets);
-    const reportContent = `File \`${filePath}\` has been overwritten with the corrected version.
-
-## Summary
-
-${summary}
-
-## Issues Fixed
-
-${issues}
-
-## Fixed Source Code
-
-${codeFence}${lang}
-${fixedCode}
-${codeFence}${lostSecretsSection}`;
-    const reportPath = saveResponse(
-      "fix_code",
-      reportContent,
-      {
-        model: currentBackend.model,
-        task: "Fix code issues",
-        inputFile: filePath
-      },
-      options.batchId ? batchReportFilename(
-        "batch_fix",
-        options.batchId,
-        filePath,
-        options.fileIndex ?? 0
-      ) : void 0
-    );
-    return { filePath, success: true, reportPath, backupPath };
-  } finally {
-    releaseFileLock(filePath);
-  }
-}
 function limitsBlock() {
   const throughput = currentBackend.type === "openrouter" ? "\u2022 PARALLEL: rate-limited dispatch (RPS auto-detected from balance). Many requests in-flight simultaneously." : "\u2022 SEQUENTIAL: 1 call at a time.";
   return "\n\nLIMITS:\n" + throughput + `
@@ -32120,13 +31573,6 @@ var LLM_TOOLS_SET = /* @__PURE__ */ new Set([
   "check_imports",
   "check_against_specs",
   "search_existing_implementations"
-]);
-var DISABLED_TOOLS = /* @__PURE__ */ new Set([
-  "fix_code",
-  "batch_fix",
-  "merge_files",
-  "split_file",
-  "revert_file"
 ]);
 var KNOWN_MODEL_LIMITS = {
   "x-ai/grok-4.1-fast": { maxOutput: 3e4, maxInputLines: 2e4 },
@@ -32264,51 +31710,6 @@ function buildTools() {
       }
     },
     {
-      name: "fix_code",
-      description: "Fix bugs in source file(s). Sends file + your bug descriptions to LLM, writes corrected code back. Creates .externbak backup \u2014 NEVER delete these until you verify the fix is correct. Use revert_file to restore if needed.\n\nIMPORTANT: YOU must diagnose the bugs \u2014 the LLM applies fixes mechanically. Provide detailed, actionable issues: function names, what is wrong, what correct behavior is. Do NOT use line numbers \u2014 reference function/variable names instead.\n\nWARNING: OVERWRITES the file. Commit to git first.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context.\n\nOUTPUT: Fixed file written to disk. Report saved to .md, returns only the path." + limitsBlock(),
-      inputSchema: {
-        type: "object",
-        properties: {
-          instructions: {
-            type: "string",
-            description: "Detailed, actionable list of bugs/issues to fix. For each issue include: the function/class name, a quote or description of the broken code, what is wrong, and what the correct behavior should be. Do NOT reference line numbers."
-          },
-          instructions_files_paths: {
-            oneOf: [
-              { type: "string" },
-              { type: "array", items: { type: "string" } }
-            ],
-            description: "Path(s) to file(s) containing fix instructions (appended to instructions)."
-          },
-          input_files_paths: {
-            oneOf: [
-              { type: "string" },
-              { type: "array", items: { type: "string" } }
-            ],
-            description: "Absolute path(s) to the source file(s) to fix. Files are read from disk, sent to the LLM, and overwritten with corrected versions. COMMIT FILES FIRST. Multiple files are processed sequentially."
-          },
-          input_files_content: {
-            type: "string",
-            description: "NOT SUPPORTED for fix_code \u2014 files must be on disk (input_files_paths) so they can be overwritten."
-          },
-          language: {
-            type: "string",
-            description: "Programming language (auto-detected from file extension if not set)."
-          },
-          scan_secrets: {
-            type: "boolean",
-            description: "Scan input files for secrets (API keys, tokens, passwords) and ABORT if any are found. Use this to enforce clean code before processing. Best practice: move secrets to .env (gitignored) instead of relying on redaction."
-          },
-          redact_secrets: {
-            type: "boolean",
-            description: 'Redact secrets with reversible tracked placeholders before sending to LLM. Secrets are automatically restored when writing the fixed file back. Any secrets the LLM removed during refactoring are reported as "lost" in the report. DISCOURAGED: prefer moving secrets to .env files (gitignored) and referencing them via environment variables \u2014 this is safer than relying on redaction.'
-          },
-          answer_mode: answerModeSchema
-        },
-        required: ["input_files_paths"]
-      }
-    },
-    {
       name: "discover",
       description: "Check service availability, active profile, auth status, available profiles and API presets. Returns: status (online/offline), active profile name/mode/model, auth token status (shows whether env vars like $LM_API_TOKEN or $OPENROUTER_API_KEY are resolved), context window, concurrency mode, response latency, session usage, and lists of available profiles/presets for editing guidance. Call this before delegating work.",
       inputSchema: { type: "object", properties: {} }
@@ -32366,53 +31767,8 @@ function buildTools() {
     },
     {
       name: "get_settings",
-      description: "Copies settings.yaml to the output directory and returns the file path. Edit the copied file with your editor tools, then call set_settings with the path. Saves context tokens by not returning YAML inline.",
+      description: "Read-only view of settings.yaml. Copies the current settings file to the output directory and returns the copy's path. The MCP cannot write settings \u2014 model & profile changes are user-only. Edit ~/.llm-externalizer/settings.yaml manually in your editor, then call the 'reset' tool (or restart Claude Code) to reload.",
       inputSchema: { type: "object", properties: {} }
-    },
-    {
-      name: "set_settings",
-      description: "Apply a modified settings file. Reads YAML from the given file path, validates all profiles, creates a timestamped backup of the old settings.yaml, then writes the new one. Invalid settings are rejected \u2014 the old file is never overwritten on error. Workflow: get_settings \u2192 edit the returned file \u2192 set_settings with the file path.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          file_path: {
-            type: "string",
-            description: "Path to the YAML file to apply as the new settings. Typically the file returned by get_settings after editing."
-          }
-        },
-        required: ["file_path"]
-      }
-    },
-    {
-      name: "change_model",
-      description: "Quick model switch \u2014 updates the model in the active profile. For full profile management, use get_settings/set_settings.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          model: {
-            type: "string",
-            description: "Model name or ID to set in the active profile."
-          }
-        },
-        required: ["model"]
-      }
-    },
-    {
-      name: "revert_file",
-      description: "Revert a file that was modified by fix_code back to its original version. When fix_code edits a file, it creates a `.externbak` backup next to the original. This tool restores that backup, undoing the fix_code changes.\n\nUse this when:\n\u2022 The fixed file fails to compile or lint\n\u2022 The fixes introduced new bugs\n\u2022 The output was corrupted or truncated\n\u2022 You want to try a different approach",
-      inputSchema: {
-        type: "object",
-        properties: {
-          input_files_paths: {
-            oneOf: [
-              { type: "string" },
-              { type: "array", items: { type: "string" } }
-            ],
-            description: "Absolute path(s) to the file(s) to revert (the same paths you passed to fix_code)."
-          }
-        },
-        required: ["input_files_paths"]
-      }
     },
     // ── Batch Operations ────────────────────────────────────────────────
     {
@@ -32458,45 +31814,6 @@ function buildTools() {
           }
         },
         required: []
-      }
-    },
-    {
-      name: "batch_fix",
-      description: "Fix bugs in multiple files (parallel on OpenRouter). Same instructions applied per-file. Creates .externbak backup for each modified file. A recovery manifest JSON is written to the output directory BEFORE processing starts.\n\nCRITICAL: NEVER delete .externbak files until you have verified ALL fixed files are correct. Use revert_file to restore any file that was corrupted or incorrectly fixed.\n\nIf this tool times out, check the recovery manifest in the output directory (batch_fix_manifest_*.json) to see which files were modified and revert any that need recovery.\n\nYOU must diagnose bugs \u2014 the LLM applies fixes mechanically.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context.\n\nRetry: 3 attempts for recoverable errors. Aborts on auth/payment errors or 3+ consecutive failures.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          instructions: {
-            type: "string",
-            description: "Issues to fix. Applied to each input-file \u2014 the LLM determines which issues are relevant per file."
-          },
-          instructions_files_paths: {
-            oneOf: [
-              { type: "string" },
-              { type: "array", items: { type: "string" } }
-            ],
-            description: "Path(s) to file(s) containing fix instructions (appended to instructions)."
-          },
-          input_files_paths: {
-            type: "array",
-            items: { type: "string" },
-            description: "Absolute paths to the source files to fix."
-          },
-          input_files_content: {
-            type: "string",
-            description: "NOT SUPPORTED for batch_fix \u2014 files must be on disk via input_files_paths."
-          },
-          scan_secrets: {
-            type: "boolean",
-            description: "Scan input files for secrets and ABORT if any are found. Best practice: move secrets to .env (gitignored)."
-          },
-          redact_secrets: {
-            type: "boolean",
-            description: "Redact secrets with reversible tracked placeholders. Secrets are restored when writing fixed files back. Lost secrets are reported. DISCOURAGED: prefer .env files."
-          },
-          answer_mode: answerModeSchema
-        },
-        required: ["input_files_paths"]
       }
     },
     // ── Specialized Operations ─────────────────────────────────────────
@@ -32612,84 +31929,6 @@ function buildTools() {
           }
         },
         required: ["feature_description", "folder_path"]
-      }
-    },
-    {
-      name: "merge_files",
-      description: "Merge multiple source files into one. LLM deduplicates imports and resolves conflicts. WRITES to output_path (.externbak backup if exists).\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context." + limitsBlock(),
-      inputSchema: {
-        type: "object",
-        properties: {
-          instructions: {
-            type: "string",
-            description: "How to merge the files. Specify merge strategy, naming, conflict resolution."
-          },
-          instructions_files_paths: {
-            oneOf: [
-              { type: "string" },
-              { type: "array", items: { type: "string" } }
-            ],
-            description: "File(s) containing merge instructions."
-          },
-          input_files_paths: {
-            type: "array",
-            items: { type: "string" },
-            description: "Absolute paths to the source files to merge (minimum 2)."
-          },
-          output_path: {
-            type: "string",
-            description: "Absolute path where the merged file will be written."
-          },
-          scan_secrets: {
-            type: "boolean",
-            description: "Scan input files for secrets and ABORT if any are found. Best practice: move secrets to .env (gitignored)."
-          },
-          redact_secrets: {
-            type: "boolean",
-            description: "Redact secrets with reversible tracked placeholders. Secrets are restored when writing the output file. Lost secrets are reported. DISCOURAGED: prefer .env files."
-          }
-        },
-        required: ["input_files_paths", "output_path"]
-      }
-    },
-    {
-      name: "split_file",
-      description: "Split a large file into multiple modules. First returned file is the updated entry point. WRITES to output_dir (.externbak backups for existing files).\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context." + limitsBlock(),
-      inputSchema: {
-        type: "object",
-        properties: {
-          instructions: {
-            type: "string",
-            description: "How to split the file. Specify module boundaries, naming, what goes where."
-          },
-          instructions_files_paths: {
-            oneOf: [
-              { type: "string" },
-              { type: "array", items: { type: "string" } }
-            ],
-            description: "File(s) containing split instructions."
-          },
-          input_files_paths: {
-            oneOf: [
-              { type: "string" },
-              { type: "array", items: { type: "string" } }
-            ],
-            description: "Absolute path to the source file to split (only the first path is used)."
-          },
-          output_dir: {
-            type: "string",
-            description: "Absolute path to the directory for new modules. Defaults to the source file's directory."
-          },
-          scan_secrets: {
-            type: "boolean",
-            description: "Scan input files for secrets and ABORT if any are found. Best practice: move secrets to .env (gitignored)."
-          },
-          redact_secrets: {
-            type: "boolean",
-            description: "Redact secrets with reversible tracked placeholders. Secrets are restored in each output file. Lost secrets are reported. DISCOURAGED: prefer .env files."
-          }
-        },
-        required: ["input_files_paths"]
       }
     },
     {
@@ -32914,7 +32153,7 @@ function buildTools() {
       }
     }
   ];
-  return allTools.filter((t) => !DISABLED_TOOLS.has(t.name));
+  return allTools;
 }
 var server = new Server(
   { name: "llm-externalizer", version: "4.1.5" },
@@ -32936,18 +32175,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const progressToken = request.params._meta?.progressToken;
   const onProgress = makeProgressFn(progressToken);
   try {
-    if (DISABLED_TOOLS.has(name)) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `DISABLED: "${name}" is currently disabled. No OpenRouter model can faithfully return files >3000 lines \u2014 they abbreviate or truncate. Use code_task for analysis and apply fixes manually with Read+Edit.`
-          }
-        ],
-        isError: true
-      };
-    }
-    if (!settingsValid && name !== "discover" && name !== "reset" && name !== "get_settings" && name !== "set_settings") {
+    if (!settingsValid && name !== "discover" && name !== "reset" && name !== "get_settings") {
       return {
         content: [
           {
@@ -32956,9 +32184,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 ${settingsError}
 
-Quick fix: npx llm-externalizer profile select <name>
-Or run the "discover" tool to see available profiles and status.
-Settings file: ${SETTINGS_FILE}`
+Quick fix: edit ${SETTINGS_FILE} manually in your editor, then call the "reset" tool (or restart Claude Code).
+Run the "discover" tool to see the current profile status.`
           }
         ],
         isError: true
@@ -33519,208 +32746,6 @@ ${codeResp.content}${codeFooter}` : codeResp.content + codeFooter
           }
           return { content: [{ type: "text", text: ctAllGroupReports.join("\n") }] };
         }
-        case "fix_code":
-          return withWriteQueue(async () => {
-            const {
-              instructions: fixInstructions,
-              instructions_files_paths: fixInstructionsFilesPaths,
-              input_files_paths: fixInputPathsRaw,
-              language,
-              answer_mode: fixRawMode,
-              scan_secrets: fixScan,
-              redact_secrets: fixRedact
-            } = args;
-            const fixMode = resolveAnswerMode(fixRawMode, 0);
-            const fixIssues = resolvePrompt(
-              fixInstructions,
-              fixInstructionsFilesPaths
-            );
-            if (!fixIssues.trim()) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "FAILED: Either instructions or instructions_files_paths must be provided with fix instructions."
-                  }
-                ],
-                isError: true
-              };
-            }
-            const fixFilePaths = [...new Set(normalizePaths(fixInputPathsRaw))];
-            if (fixFilePaths.length === 0) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "FAILED: input_files_paths is required."
-                  }
-                ],
-                isError: true
-              };
-            }
-            if (fixScan) {
-              const scanResult = scanFilesForSecrets(fixFilePaths);
-              if (scanResult.found)
-                return {
-                  content: [{ type: "text", text: scanResult.report }],
-                  isError: true
-                };
-            }
-            if (fixFilePaths.length === 1) {
-              const fixFilePath = fixFilePaths[0];
-              const fixResult = await processFileFix(fixFilePath, fixIssues, {
-                language,
-                maxTokens: resolveDefaultMaxTokens(),
-                redact: fixRedact,
-                onProgress
-              });
-              if (!fixResult.success) {
-                const errorMsg = fixResult.reportPath ? `FAILED: ${fixResult.error}. File NOT modified. Report: ${fixResult.reportPath}` : `FAILED: ${fixResult.error}. File NOT modified.`;
-                return {
-                  content: [{ type: "text", text: errorMsg }],
-                  isError: true
-                };
-              }
-              if (fixResult.noChange) {
-                return {
-                  content: [
-                    {
-                      type: "text",
-                      text: `NO CHANGES: The LLM returned the file unchanged. Report: ${fixResult.reportPath}`
-                    }
-                  ]
-                };
-              }
-              const resultLines = [
-                `FIXED: ${fixFilePath}`,
-                `REPORT: ${fixResult.reportPath}`,
-                "",
-                "ACTION REQUIRED: Verify the fix \u2014 compile, lint, or run tests.",
-                "",
-                `TO REVERT: call revert_file with input_files_paths="${fixFilePath}"`
-              ];
-              return {
-                content: [{ type: "text", text: resultLines.join("\n") }]
-              };
-            }
-            const fixFileResults = [];
-            for (const fp of fixFilePaths) {
-              fixFileResults.push(
-                await processFileFix(fp, fixIssues, {
-                  language,
-                  maxTokens: resolveDefaultMaxTokens(),
-                  redact: fixRedact,
-                  onProgress
-                })
-              );
-            }
-            if (fixMode === 0) {
-              const fixLines = [];
-              for (const r of fixFileResults) {
-                if (r.success && !r.noChange) {
-                  fixLines.push(`FIXED: ${r.filePath} \u2014 Report: ${r.reportPath}`);
-                } else if (r.noChange) {
-                  fixLines.push(
-                    `NO CHANGE: ${r.filePath} \u2014 Report: ${r.reportPath}`
-                  );
-                } else {
-                  fixLines.push(`FAILED: ${r.filePath} \u2014 ${r.error}`);
-                }
-              }
-              fixLines.push(
-                "",
-                "TO REVERT: call revert_file with the input_files_paths shown above."
-              );
-              return { content: [{ type: "text", text: fixLines.join("\n") }] };
-            }
-            const fixReportSections = [];
-            const fixSummaryLines = [];
-            for (const r of fixFileResults) {
-              if (r.success && r.reportPath) {
-                const reportContent = existsSync2(r.reportPath) ? readFileSync2(r.reportPath, "utf-8") : "";
-                fixReportSections.push(
-                  `## File: ${r.filePath}
-
-**Status**: ${r.noChange ? "NO CHANGE" : "FIXED"}
-
-${reportContent}`
-                );
-              } else {
-                fixReportSections.push(
-                  `## File: ${r.filePath}
-
-**Status**: FAILED \u2014 ${r.error}`
-                );
-              }
-              if (r.success && !r.noChange) {
-                fixSummaryLines.push(`FIXED: ${r.filePath}`);
-              } else if (r.noChange) {
-                fixSummaryLines.push(`NO CHANGE: ${r.filePath}`);
-              } else {
-                fixSummaryLines.push(`FAILED: ${r.filePath} \u2014 ${r.error}`);
-              }
-            }
-            const mergedReport = fixReportSections.join("\n\n---\n\n");
-            const mergedPath = saveResponse("fix_code", mergedReport, {
-              model: currentBackend.model,
-              task: fixIssues,
-              inputFile: fixFilePaths[0]
-            });
-            fixSummaryLines.push("", `MERGED REPORT: ${mergedPath}`);
-            fixSummaryLines.push(
-              "TO REVERT: call revert_file with the input_files_paths shown above."
-            );
-            return {
-              content: [{ type: "text", text: fixSummaryLines.join("\n") }]
-            };
-          }, onProgress);
-        case "revert_file":
-          return withWriteQueue(async () => {
-            const { input_files_paths: revertInputPathsRaw } = args;
-            const revertFilePaths = normalizePaths(revertInputPathsRaw);
-            if (revertFilePaths.length === 0) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "FAILED: input_files_paths is required."
-                  }
-                ],
-                isError: true
-              };
-            }
-            const revertResults = [];
-            for (const revertFilePath of revertFilePaths) {
-              const revertBackupPath = revertFilePath + ".externbak";
-              if (!acquireFileLock(revertFilePath)) {
-                revertResults.push(
-                  `SKIPPED: ${revertFilePath} \u2014 currently being processed by another operation.`
-                );
-                continue;
-              }
-              try {
-                if (!existsSync2(revertBackupPath)) {
-                  revertResults.push(
-                    `SKIPPED: ${revertFilePath} \u2014 no backup found.`
-                  );
-                  continue;
-                }
-                const revertBranch = getGitBranch(revertFilePath);
-                assertBranchUnchanged(revertFilePath, revertBranch);
-                renameSync2(revertBackupPath, revertFilePath);
-                revertResults.push(`REVERTED: ${revertFilePath}`);
-              } catch (revertErr) {
-                revertResults.push(
-                  `FAILED: ${revertFilePath} \u2014 ${revertErr instanceof Error ? revertErr.message : String(revertErr)}`
-                );
-              } finally {
-                releaseFileLock(revertFilePath);
-              }
-            }
-            return {
-              content: [{ type: "text", text: revertResults.join("\n") }]
-            };
-          }, onProgress);
         case "discover": {
           const parts = [];
           if (!settingsValid || !activeResolved) {
@@ -33999,134 +33024,6 @@ Profiles: ${profileNames.join(", ")}`);
               isError: true
             };
           }
-        }
-        case "set_settings": {
-          const { file_path: settingsFilePath, content: legacyContent } = args;
-          let yamlContent;
-          if (settingsFilePath) {
-            if (!existsSync2(settingsFilePath)) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `FAILED: File not found: ${settingsFilePath}`
-                  }
-                ],
-                isError: true
-              };
-            }
-            yamlContent = readFileSync2(settingsFilePath, "utf-8");
-          } else if (legacyContent && legacyContent.trim()) {
-            yamlContent = legacyContent;
-          } else {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "FAILED: file_path is required. Use get_settings to get the editable file, modify it, then pass its path here."
-                }
-              ],
-              isError: true
-            };
-          }
-          let newSettings;
-          try {
-            const parsed = (0, import_yaml2.parse)(yamlContent);
-            if (!parsed || typeof parsed !== "object" || !parsed.profiles) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: 'FAILED: Invalid settings format. Must contain "active" and "profiles" fields.'
-                  }
-                ],
-                isError: true
-              };
-            }
-            newSettings = {
-              active: parsed.active || "",
-              profiles: parsed.profiles || {}
-            };
-          } catch (err) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `FAILED: YAML parse error: ${err instanceof Error ? err.message : String(err)}`
-                }
-              ],
-              isError: true
-            };
-          }
-          if (newSettings.active) {
-            const validation = validateSettings(newSettings);
-            if (!validation.valid) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `FAILED: Validation errors:
-${validation.errors.map((e) => `  - ${e}`).join("\n")}`
-                  }
-                ],
-                isError: true
-              };
-            }
-          }
-          saveSettings(newSettings);
-          try {
-            _settingsLastMtimeMs = statSync2(SETTINGS_FILE).mtimeMs;
-          } catch {
-          }
-          reloadSettingsFromDisk();
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Settings saved to ${SETTINGS_FILE} (backup created).
-Active profile: ${newSettings.active || "(none)"}`
-              }
-            ]
-          };
-        }
-        // Legacy change_model — kept for backward compatibility, delegates to profile system
-        case "change_model": {
-          const { model: modelQuery } = args;
-          if (!modelQuery?.trim()) {
-            return {
-              content: [{ type: "text", text: "Model name is required." }],
-              isError: true
-            };
-          }
-          if (!activeResolved || !activeSettings.active) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "No active profile. Use set_settings to configure."
-                }
-              ],
-              isError: true
-            };
-          }
-          const activeProfile = activeSettings.profiles[activeSettings.active];
-          activeProfile.model = modelQuery.trim();
-          saveSettings(activeSettings);
-          try {
-            _settingsLastMtimeMs = statSync2(SETTINGS_FILE).mtimeMs;
-          } catch {
-          }
-          reloadSettingsFromDisk();
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Model changed to: ${modelQuery.trim()}
-Profile: ${activeSettings.active}
-Settings saved to ${SETTINGS_FILE}`
-              }
-            ]
-          };
         }
         // ── Batch Operations ──────────────────────────────────────────────
         case "batch_check": {
@@ -34414,310 +33311,6 @@ ${content}`);
             isError: aborted2
           };
         }
-        case "batch_fix":
-          return withWriteQueue(async () => {
-            const {
-              instructions: bfInstructions,
-              instructions_files_paths: bfInstructionsFilesPaths,
-              input_files_paths: bfInputPaths,
-              answer_mode: bfRawMode,
-              scan_secrets: bfScan,
-              redact_secrets: bfRedact
-            } = args;
-            const bfMode = resolveAnswerMode(bfRawMode, 0);
-            const bfNormalizedPaths = normalizePaths(bfInputPaths);
-            if (bfNormalizedPaths.length === 0) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "FAILED: input_files_paths or folder_path is required."
-                  }
-                ],
-                isError: true
-              };
-            }
-            const batchIssues = resolvePrompt(
-              bfInstructions,
-              bfInstructionsFilesPaths
-            );
-            if (!batchIssues.trim()) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "FAILED: Either instructions or instructions_files_paths must be provided with fix instructions."
-                  }
-                ],
-                isError: true
-              };
-            }
-            const uniqueFiles = [...new Set(bfNormalizedPaths)];
-            if (bfScan) {
-              const scanResult = scanFilesForSecrets(uniqueFiles);
-              if (scanResult.found)
-                return {
-                  content: [{ type: "text", text: scanResult.report }],
-                  isError: true
-                };
-            }
-            const batchId = randomUUID();
-            const bfRl = await getRateLimitConfig();
-            const manifestPath = join2(
-              OUTPUT_DIR,
-              `batch_fix_manifest_${batchId}.json`
-            );
-            mkdirSync2(OUTPUT_DIR, { recursive: true });
-            const manifest = {
-              batchId,
-              startedAt: (/* @__PURE__ */ new Date()).toISOString(),
-              status: "IN_PROGRESS",
-              instructions: batchIssues.substring(0, 500),
-              files: uniqueFiles.map((fp) => ({
-                path: fp,
-                status: "pending",
-                backupPath: fp + ".externbak"
-              })),
-              revertCommand: "To revert ANY file: call revert_file with input_files_paths set to the file path."
-            };
-            writeFileSync2(
-              manifestPath,
-              JSON.stringify(manifest, null, 2),
-              "utf-8"
-            );
-            const recentOutcomes = [];
-            let aborted2 = false;
-            let abortReason = "";
-            function updateManifest(filePath, fileStatus) {
-              const entry = manifest.files.find((f) => f.path === filePath);
-              if (entry) entry.status = fileStatus;
-              writeFileSync2(
-                manifestPath,
-                JSON.stringify(manifest, null, 2),
-                "utf-8"
-              );
-            }
-            const tasks = uniqueFiles.map((filePath, idx) => async () => {
-              if (aborted2) {
-                return {
-                  filePath,
-                  success: false,
-                  error: "Batch aborted"
-                };
-              }
-              for (let attempt = 1; attempt <= 3; attempt++) {
-                if (aborted2) {
-                  return {
-                    filePath,
-                    success: false,
-                    error: "Batch aborted"
-                  };
-                }
-                try {
-                  updateManifest(filePath, "processing");
-                  const result = await processFileFix(filePath, batchIssues, {
-                    maxTokens: resolveDefaultMaxTokens(),
-                    batchId,
-                    fileIndex: idx,
-                    redact: bfRedact,
-                    onProgress
-                  });
-                  if (!result.success && result.error?.includes("currently being processed")) {
-                    if (attempt < 3) {
-                      await new Promise((r) => setTimeout(r, 2e3));
-                      continue;
-                    }
-                    recentOutcomes.push(false);
-                    updateManifest(filePath, "lock_contention");
-                    return result;
-                  }
-                  recentOutcomes.push(result.success);
-                  if (result.success) {
-                    updateManifest(
-                      filePath,
-                      result.noChange ? "unchanged" : "fixed"
-                    );
-                  } else {
-                    updateManifest(
-                      filePath,
-                      `failed: ${result.error ?? "unknown"}`
-                    );
-                    if (recentOutcomes.length >= 3 && recentOutcomes.slice(-3).every((v) => !v)) {
-                      aborted2 = true;
-                      abortReason = `3 consecutive files failed \u2014 possible model or service issue. Last: ${result.error}`;
-                    }
-                  }
-                  if (onProgress) {
-                    const completed = recentOutcomes.length;
-                    onProgress(
-                      completed,
-                      uniqueFiles.length,
-                      `batch_fix: ${completed}/${uniqueFiles.length} files done`
-                    );
-                  }
-                  return result;
-                } catch (err) {
-                  const classified = classifyError(err);
-                  if (classified.unrecoverable) {
-                    if (classified.serviceLevel) {
-                      aborted2 = true;
-                      abortReason = `Unrecoverable service error on ${filePath}: ${classified.reason}`;
-                    }
-                    updateManifest(filePath, `error: ${classified.reason}`);
-                    return {
-                      filePath,
-                      success: false,
-                      error: classified.reason
-                    };
-                  }
-                  if (attempt < 3) {
-                    const delayMs = Math.pow(3, attempt - 1) * 1e3;
-                    await new Promise((r) => setTimeout(r, delayMs));
-                    continue;
-                  }
-                  recentOutcomes.push(false);
-                  updateManifest(filePath, `failed: ${classified.reason}`);
-                  if (recentOutcomes.length >= 3 && recentOutcomes.slice(-3).every((v) => !v)) {
-                    aborted2 = true;
-                    abortReason = `3 of the last 3 completions failed \u2014 possible connectivity or service issue. Last error: ${classified.reason}`;
-                  }
-                  return {
-                    filePath,
-                    success: false,
-                    error: `Failed after 3 retries: ${classified.reason}`
-                  };
-                }
-              }
-              return {
-                filePath,
-                success: false,
-                error: "Unexpected retry loop exit"
-              };
-            });
-            const batchResults = await rateLimitedParallel(tasks, bfRl.rps, bfRl.maxInFlight, onProgress);
-            const fixed = batchResults.filter(
-              (r) => r.success && !r.noChange && r.backupPath
-            );
-            const noChange = batchResults.filter((r) => r.success && r.noChange);
-            const failed = batchResults.filter(
-              (r) => !r.success && r.error !== "Batch aborted"
-            );
-            const skipped = batchResults.filter(
-              (r) => r.error === "Batch aborted"
-            );
-            const finalStatus = aborted2 ? "ABORTED" : failed.length > 0 ? "PARTIAL" : "COMPLETE";
-            manifest.status = finalStatus;
-            writeFileSync2(
-              manifestPath,
-              JSON.stringify(manifest, null, 2),
-              "utf-8"
-            );
-            const bfStatusWord = failed.length > 0 ? "PARTIAL" : "COMPLETE";
-            const bfStatusHeader = `BATCH FIX ${bfStatusWord} \u2014 ${fixed.length} fixed, ${noChange.length} unchanged, ${failed.length} failed/auto-reverted (${uniqueFiles.length} total)`;
-            if ((bfMode === 1 || bfMode === 2) && (fixed.length > 0 || noChange.length > 0)) {
-              if (failed.length > 0 || aborted2) {
-              } else {
-                const reportSections = [];
-                for (const r of [...fixed, ...noChange]) {
-                  const content = r.reportPath && existsSync2(r.reportPath) ? readFileSync2(r.reportPath, "utf-8") : "";
-                  const status = r.noChange ? "NO CHANGE" : "FIXED";
-                  reportSections.push(
-                    `## File: ${r.filePath}
-
-**Status**: ${status}
-
-${content}`
-                  );
-                }
-                const mergedContent = reportSections.join("\n\n---\n\n");
-                const mergedPath = saveResponse("batch_fix", mergedContent, {
-                  model: currentBackend.model,
-                  task: batchIssues,
-                  inputFile: uniqueFiles[0]
-                });
-                const bfSummary = [
-                  bfStatusHeader,
-                  `Batch UUID: ${batchId}`,
-                  `MERGED REPORT: ${mergedPath}`,
-                  `RECOVERY MANIFEST: ${manifestPath}`,
-                  ""
-                ];
-                for (const r of fixed)
-                  bfSummary.push(
-                    `FIXED: ${r.filePath} \u2014 Revert: call revert_file with input_files_paths="${r.filePath}"`
-                  );
-                bfSummary.push(
-                  "",
-                  "ACTION REQUIRED: Verify all fixed files. Compile, lint, or run tests \u2014 do NOT read files to check."
-                );
-                bfSummary.push(
-                  "WARNING: Do NOT delete .externbak files \u2014 they are your only recovery option if a fix introduced errors."
-                );
-                return {
-                  content: [{ type: "text", text: bfSummary.join("\n") }]
-                };
-              }
-            }
-            const summaryLines = [
-              bfStatusHeader,
-              `Batch UUID: ${batchId}`,
-              ""
-            ];
-            if (uniqueFiles.length < bfNormalizedPaths.length) {
-              summaryLines.push(
-                `Note: ${bfNormalizedPaths.length - uniqueFiles.length} duplicate path(s) removed.`
-              );
-            }
-            if (fixed.length > 0) {
-              summaryLines.push("FIXED FILES:");
-              for (const r of fixed) {
-                summaryLines.push(`  ${r.filePath}`);
-                summaryLines.push(`    Report: ${r.reportPath}`);
-                summaryLines.push(
-                  `    Revert: call revert_file with input_files_paths="${r.filePath}"`
-                );
-              }
-            }
-            if (noChange.length > 0) {
-              summaryLines.push("", "UNCHANGED (LLM made no changes):");
-              for (const r of noChange) {
-                summaryLines.push(`  ${r.filePath} \u2014 Report: ${r.reportPath}`);
-              }
-            }
-            if (failed.length > 0) {
-              summaryLines.push(
-                "",
-                "FAILED (auto-reverted to backup \u2014 original file intact):"
-              );
-              for (const r of failed) {
-                const reportNote = r.reportPath ? ` \u2014 Report: ${r.reportPath}` : "";
-                summaryLines.push(`  ${r.filePath}: ${r.error}${reportNote}`);
-              }
-            }
-            if (skipped.length > 0) {
-              summaryLines.push(
-                "",
-                `SKIPPED (batch aborted): ${skipped.length} file(s)`
-              );
-            }
-            if (aborted2) {
-              summaryLines.push("", `BATCH ABORTED: ${abortReason}`);
-            }
-            summaryLines.push("", `RECOVERY MANIFEST: ${manifestPath}`);
-            summaryLines.push(
-              "ACTION REQUIRED: Verify all fixed files. Compile, lint, or run tests \u2014 do NOT read files to check."
-            );
-            summaryLines.push(
-              "TO REVERT ANY FILE: call revert_file with the input_files_paths shown above."
-            );
-            summaryLines.push(
-              "WARNING: Do NOT delete .externbak files \u2014 they are your only recovery option if a fix introduced errors."
-            );
-            return {
-              content: [{ type: "text", text: summaryLines.join("\n") }],
-              isError: aborted2
-            };
-          }, onProgress);
         // ── Specialized Operations ──────────────────────────────────────
         case "scan_folder": {
           const {
@@ -35496,529 +34089,6 @@ ${body}
             isError: seiAborted
           };
         }
-        case "merge_files":
-          return withWriteQueue(async () => {
-            const {
-              instructions: mfInstructions,
-              instructions_files_paths: mfInstructionsFilesPaths,
-              input_files_paths: mfInputPaths,
-              output_path: mfOutputPath,
-              redact_secrets: mfRedact,
-              scan_secrets: mfScan
-            } = args;
-            const mfNormalizedPaths = normalizePaths(mfInputPaths);
-            if (mfNormalizedPaths.length < 2) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "FAILED: input_files_paths must contain at least 2 files to merge."
-                  }
-                ],
-                isError: true
-              };
-            }
-            const mfUniquePaths = [...new Set(mfNormalizedPaths)];
-            if (mfUniquePaths.length < 2) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "FAILED: Need at least 2 unique files to merge (duplicates removed)."
-                  }
-                ],
-                isError: true
-              };
-            }
-            if (mfScan) {
-              const scanResult = scanFilesForSecrets(mfUniquePaths);
-              if (scanResult.found)
-                return {
-                  content: [{ type: "text", text: scanResult.report }],
-                  isError: true
-                };
-            }
-            const mfPrompt = resolvePrompt(
-              mfInstructions,
-              mfInstructionsFilesPaths
-            );
-            if (!acquireFileLock(mfOutputPath)) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `FAILED: Output file is currently being processed: ${mfOutputPath}`
-                  }
-                ],
-                isError: true
-              };
-            }
-            try {
-              const mfBranchAtStart = getGitBranch(mfUniquePaths[0]);
-              const mfFirstRaw = readFileSync2(mfUniquePaths[0], "utf-8");
-              const mfOriginalBOM = hasBOM(mfFirstRaw);
-              const mfOriginalLineEnding = detectLineEnding(mfFirstRaw);
-              const fileBlocks = [];
-              const mfRedactionEntries = [];
-              for (const fp of mfUniquePaths) {
-                if (!existsSync2(fp)) {
-                  return {
-                    content: [
-                      { type: "text", text: `FAILED: File not found: ${fp}` }
-                    ],
-                    isError: true
-                  };
-                }
-                if (mfRedact) {
-                  const raw = readFileSync2(fp, "utf-8");
-                  const redResult = redactSecretsReversible(raw);
-                  mfRedactionEntries.push(...redResult.entries);
-                  const content = redResult.redacted.length === 0 ? "(empty file \u2014 0 bytes)" : redResult.redacted;
-                  const lang = detectLang(fp);
-                  const fence = fenceBackticks(content);
-                  fileBlocks.push(`${fence}${lang} ${fp}
-${content}
-${fence}`);
-                } else {
-                  fileBlocks.push(readFileAsCodeBlock(fp));
-                }
-              }
-              const mfLang = detectLang(mfOutputPath) || detectLang(mfUniquePaths[0]);
-              const mfMessages = [
-                {
-                  role: "system",
-                  content: `Expert ${mfLang} developer. Merge the provided source files into one cohesive file. Deduplicate imports, resolve naming conflicts, preserve all functionality. Return the COMPLETE merged file \u2014 NEVER truncate or use placeholders.
-
-RULES (override any conflicting instructions):
-- Each source file is labeled with its full path inside a filename tag before the file-content tag. Reference files by their labeled path.
-- In the summary, identify code locations by FUNCTION/CLASS/METHOD NAME, never by line number.
-
-Return JSON: {"code": "complete merged file", "summary": "what was merged and how"}`
-                },
-                {
-                  role: "user",
-                  content: `${buildPreInstructions(true, "fix")}${mfPrompt ? mfPrompt + "\n\n" : ""}Merge the following ${mfUniquePaths.length} files into a single file.
-
-` + fileBlocks.join("\n\n")
-                }
-              ];
-              const mfResp = await chatCompletionJSON(mfMessages, {
-                temperature: DEFAULT_TEMPERATURE,
-                maxTokens: resolveDefaultMaxTokens(),
-                jsonSchema: FIX_CODE_SCHEMA,
-                onProgress
-              });
-              recordUsage(mfResp.usage);
-              logRequest({
-                tool: "merge_files",
-                model: mfResp.model,
-                status: "success",
-                usage: mfResp.usage
-              });
-              let mergedCode = String(mfResp.parsed.code ?? "");
-              const mergeSummary = String(mfResp.parsed.summary ?? "");
-              if (!mergedCode.trim()) {
-                return {
-                  content: [
-                    {
-                      type: "text",
-                      text: "FAILED: LLM returned empty merged code."
-                    }
-                  ],
-                  isError: true
-                };
-              }
-              let mfLostSecrets = [];
-              if (mfRedactionEntries.length > 0) {
-                const restored = restoreSecrets(mergedCode, mfRedactionEntries);
-                mergedCode = restored.restored;
-                mfLostSecrets = restored.lost;
-              }
-              mergedCode = restoreFileConventions(
-                mergedCode,
-                mfOriginalBOM,
-                mfOriginalLineEnding
-              );
-              const mfCombinedInput = mfUniquePaths.map((fp) => readFileSync2(fp, "utf-8")).join("\n");
-              const mfIntegrityError = verifyStructuralIntegrity(
-                mfCombinedInput,
-                mergedCode
-              );
-              if (mfIntegrityError) {
-                return {
-                  content: [
-                    {
-                      type: "text",
-                      text: `FAILED: Integrity check: ${mfIntegrityError}. Merge NOT applied.`
-                    }
-                  ],
-                  isError: true
-                };
-              }
-              {
-                const mfCurrentBranch = getGitBranch(mfUniquePaths[0]);
-                if (mfBranchAtStart !== null && mfCurrentBranch !== null && mfCurrentBranch !== mfBranchAtStart) {
-                  return {
-                    content: [
-                      {
-                        type: "text",
-                        text: `FAILED: Git branch changed during operation: was "${mfBranchAtStart}", now "${mfCurrentBranch}". Merge NOT applied.`
-                      }
-                    ],
-                    isError: true
-                  };
-                }
-              }
-              const mfBackupPath = mfOutputPath + ".externbak";
-              const mfHadExistingFile = existsSync2(mfOutputPath);
-              if (mfHadExistingFile && !existsSync2(mfBackupPath)) {
-                copyFileSync2(mfOutputPath, mfBackupPath);
-              }
-              try {
-                mkdirSync2(dirname2(mfOutputPath), { recursive: true });
-                const mfTmpPath = mfOutputPath + ".externtmp";
-                if (existsSync2(mfTmpPath)) {
-                  try {
-                    unlinkSync(mfTmpPath);
-                  } catch {
-                  }
-                }
-                writeFileSync2(mfTmpPath, mergedCode, "utf-8");
-                renameSync2(mfTmpPath, mfOutputPath);
-                const mfWritten = readFileSync2(mfOutputPath, "utf-8");
-                if (mfWritten !== mergedCode) {
-                  throw new Error(
-                    "Post-write verification failed: written file does not match intended content"
-                  );
-                }
-                const mfPostError = verifyStructuralIntegrity(
-                  mfCombinedInput,
-                  mfWritten
-                );
-                if (mfPostError) {
-                  throw new Error(`Post-write integrity: ${mfPostError}`);
-                }
-              } catch (mfWriteErr) {
-                try {
-                  if (mfHadExistingFile && existsSync2(mfBackupPath)) {
-                    renameSync2(mfBackupPath, mfOutputPath);
-                  } else if (existsSync2(mfOutputPath)) {
-                    unlinkSync(mfOutputPath);
-                  }
-                } catch {
-                }
-                const errMsg = mfWriteErr instanceof Error ? mfWriteErr.message : String(mfWriteErr);
-                return {
-                  content: [
-                    {
-                      type: "text",
-                      text: `FAILED: ${errMsg}. Merge auto-reverted.`
-                    }
-                  ],
-                  isError: true
-                };
-              }
-              const mfLostSection = formatLostSecrets(mfLostSecrets);
-              const mfReportContent = `Merged ${mfUniquePaths.length} files into \`${mfOutputPath}\`.
-
-## Summary
-
-${mergeSummary}
-
-## Source Files
-
-${mfUniquePaths.map((p) => `- \`${p}\``).join("\n")}${mfLostSection}`;
-              const mfReportPath = saveResponse("merge_files", mfReportContent, {
-                model: mfResp.model,
-                task: "Merge files",
-                inputFile: mfUniquePaths[0]
-              });
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `MERGED: ${mfOutputPath}
-REPORT: ${mfReportPath}
-
-TO REVERT: restore from ${mfOutputPath}.externbak`
-                  }
-                ]
-              };
-            } finally {
-              releaseFileLock(mfOutputPath);
-            }
-          }, onProgress);
-        case "split_file":
-          return withWriteQueue(async () => {
-            const {
-              instructions: spInstructions,
-              instructions_files_paths: spInstructionsFilesPaths,
-              input_files_paths: spInputPathsRaw,
-              output_dir: spOutputDir,
-              redact_secrets: spRedact,
-              scan_secrets: spScan
-            } = args;
-            const spInputPaths = normalizePaths(spInputPathsRaw);
-            if (spInputPaths.length === 0) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "FAILED: input_files_paths is required."
-                  }
-                ],
-                isError: true
-              };
-            }
-            const spFilePath = spInputPaths[0];
-            if (!existsSync2(spFilePath)) {
-              return {
-                content: [
-                  { type: "text", text: `FAILED: File not found: ${spFilePath}` }
-                ],
-                isError: true
-              };
-            }
-            if (spScan) {
-              const scanResult = scanFilesForSecrets([spFilePath]);
-              if (scanResult.found)
-                return {
-                  content: [{ type: "text", text: scanResult.report }],
-                  isError: true
-                };
-            }
-            const spBranchAtStart = getGitBranch(spFilePath);
-            const spPrompt = resolvePrompt(
-              spInstructions,
-              spInstructionsFilesPaths
-            );
-            const spLang = detectLang(spFilePath);
-            const spRawSource = readFileSync2(spFilePath, "utf-8");
-            const spOriginalBOM = hasBOM(spRawSource);
-            const spOriginalLineEnding = detectLineEnding(spRawSource);
-            let sourceCode = spRawSource;
-            let spRedactionEntries = [];
-            if (spRedact) {
-              const redResult = redactSecretsReversible(spRawSource);
-              sourceCode = redResult.redacted;
-              spRedactionEntries = redResult.entries;
-            }
-            const srcFence = fenceBackticks(sourceCode);
-            const outDir = spOutputDir || dirname2(spFilePath);
-            const spMessages = [
-              {
-                role: "system",
-                content: `Expert ${spLang} developer. Split the provided source file into multiple smaller modules. Each module should be focused and self-contained. Update imports/exports so everything still works. The FIRST file in the array should be the updated original (entry point) that imports from the new modules. Return the COMPLETE content of every file \u2014 NEVER truncate or use placeholders.
-
-RULES (override any conflicting instructions):
-- The source file is labeled with its full path inside a filename tag before the file-content tag. Reference it by that path.
-- In the summary, identify code locations by FUNCTION/CLASS/METHOD NAME, never by line number.
-
-Return JSON: {"files": [{"path": "relative/filename.ext", "content": "complete file content"}, ...], "summary": "how the file was split"}`
-              },
-              {
-                role: "user",
-                content: `${buildPreInstructions(true, "fix")}${spPrompt ? spPrompt + "\n\n" : ""}Split this file into smaller modules. Output directory: ${outDir}
-Original file: ${spFilePath}
-
-${srcFence}${spLang}
-${sourceCode}
-${srcFence}`
-              }
-            ];
-            const spResp = await chatCompletionJSON(spMessages, {
-              temperature: DEFAULT_TEMPERATURE,
-              maxTokens: resolveDefaultMaxTokens(),
-              jsonSchema: SPLIT_FILE_SCHEMA,
-              onProgress
-            });
-            recordUsage(spResp.usage);
-            logRequest({
-              tool: "split_file",
-              model: spResp.model,
-              status: "success",
-              usage: spResp.usage
-            });
-            const rawSpFiles = spResp.parsed.files;
-            const spSummary = String(spResp.parsed.summary ?? "");
-            if (!Array.isArray(rawSpFiles) || rawSpFiles.length === 0) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "FAILED: LLM returned no files (or malformed response)."
-                  }
-                ],
-                isError: true
-              };
-            }
-            const spFiles = rawSpFiles.filter(
-              (f) => typeof f === "object" && f !== null && typeof f.path === "string" && typeof f.content === "string"
-            );
-            if (spFiles.length === 0) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "FAILED: LLM returned files with missing path/content fields."
-                  }
-                ],
-                isError: true
-              };
-            }
-            {
-              const spCurrentBranch = getGitBranch(spFilePath);
-              if (spBranchAtStart !== null && spCurrentBranch !== null && spCurrentBranch !== spBranchAtStart) {
-                return {
-                  content: [
-                    {
-                      type: "text",
-                      text: `FAILED: Git branch changed during operation: was "${spBranchAtStart}", now "${spCurrentBranch}". Split NOT applied.`
-                    }
-                  ],
-                  isError: true
-                };
-              }
-            }
-            const spCombinedOutput = spFiles.map((f) => f.content).join("\n");
-            const spIntegrityError = verifyStructuralIntegrity(
-              spRawSource,
-              spCombinedOutput
-            );
-            if (spIntegrityError) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `FAILED: Integrity check: ${spIntegrityError}. Split NOT applied.`
-                  }
-                ],
-                isError: true
-              };
-            }
-            let spLostSecrets = [];
-            if (spRedactionEntries.length > 0) {
-              const foundInAnyFile = /* @__PURE__ */ new Set();
-              for (const f of spFiles) {
-                const restored = restoreSecrets(f.content, spRedactionEntries);
-                f.content = restored.restored;
-                for (const entry of spRedactionEntries) {
-                  if (!restored.lost.some((l) => l.id === entry.id))
-                    foundInAnyFile.add(entry.id);
-                }
-              }
-              spLostSecrets = spRedactionEntries.filter(
-                (e) => !foundInAnyFile.has(e.id)
-              );
-            }
-            for (const f of spFiles) {
-              f.content = restoreFileConventions(
-                f.content,
-                spOriginalBOM,
-                spOriginalLineEnding
-              );
-            }
-            const createdFiles = [];
-            const lockedPaths = [];
-            const backedUpFiles = [];
-            const newFiles = [];
-            try {
-              for (const f of spFiles) {
-                let fullPath;
-                try {
-                  fullPath = sanitizeOutputPath(outDir, f.path);
-                } catch (e) {
-                  throw new Error(
-                    `Path sanitization: ${e instanceof Error ? e.message : String(e)}`,
-                    { cause: e }
-                  );
-                }
-                if (!acquireFileLock(fullPath)) {
-                  throw new Error(
-                    `File is currently being processed: ${fullPath}`
-                  );
-                }
-                lockedPaths.push(fullPath);
-                mkdirSync2(dirname2(fullPath), { recursive: true });
-                const spBackup = fullPath + ".externbak";
-                if (existsSync2(fullPath)) {
-                  if (!existsSync2(spBackup)) {
-                    copyFileSync2(fullPath, spBackup);
-                  }
-                  backedUpFiles.push({ path: fullPath, backup: spBackup });
-                } else {
-                  newFiles.push(fullPath);
-                }
-                const tmpPath = fullPath + ".externtmp";
-                if (existsSync2(tmpPath)) {
-                  try {
-                    unlinkSync(tmpPath);
-                  } catch {
-                  }
-                }
-                writeFileSync2(tmpPath, f.content, "utf-8");
-                renameSync2(tmpPath, fullPath);
-                const written = readFileSync2(fullPath, "utf-8");
-                if (written !== f.content) {
-                  throw new Error(
-                    `Post-write verification failed for ${fullPath}`
-                  );
-                }
-                createdFiles.push(fullPath);
-              }
-            } catch (spWriteErr) {
-              for (const bf of backedUpFiles) {
-                try {
-                  if (existsSync2(bf.backup)) renameSync2(bf.backup, bf.path);
-                } catch {
-                }
-              }
-              for (const nf of newFiles) {
-                try {
-                  if (existsSync2(nf)) unlinkSync(nf);
-                } catch {
-                }
-              }
-              const errMsg = spWriteErr instanceof Error ? spWriteErr.message : String(spWriteErr);
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `FAILED: ${errMsg}. Split auto-reverted \u2014 all files restored.`
-                  }
-                ],
-                isError: true
-              };
-            } finally {
-              for (const lp of lockedPaths) releaseFileLock(lp);
-            }
-            const spLostSection = formatLostSecrets(spLostSecrets);
-            const spReportContent = `Split \`${spFilePath}\` into ${spFiles.length} files.
-
-## Summary
-
-${spSummary}
-
-## Created Files
-
-${createdFiles.map((p) => `- \`${p}\``).join("\n")}${spLostSection}`;
-            const spReportPath = saveResponse("split_file", spReportContent, {
-              model: spResp.model,
-              task: "Split file",
-              inputFile: spFilePath
-            });
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `SPLIT: ${spFilePath} \u2192 ${spFiles.length} files
-FILES:
-${createdFiles.map((p) => `  ${p}`).join("\n")}
-REPORT: ${spReportPath}`
-                }
-              ]
-            };
-          }, onProgress);
         case "compare_files": {
           const {
             input_files_paths: cfInputPaths,

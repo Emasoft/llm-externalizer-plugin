@@ -1,8 +1,8 @@
 /**
  * Live integration tests — require a running LLM backend (LM Studio / Ollama).
  *
- * These tests exercise real LLM round-trips: chat, code_task, fix_code,
- * and verify that MCP progress notifications are sent during streaming.
+ * These tests exercise real LLM round-trips: chat, code_task, and verify
+ * that MCP progress notifications are sent during streaming.
  *
  * Run with: LM_STUDIO_MODEL=thecluster/qwen3.5-27b-mlx npx vitest run src/live.test.ts
  * Skip with: npx vitest run --exclude src/live.test.ts
@@ -20,7 +20,6 @@ const TMP_DIR = '/tmp/__llm_ext_live_test';
 // Resolve live test config from real settings.yaml.
 // Uses whatever the user configured. timeout: 300s for reasoning models.
 const testConfig = resolveTestConfig({ testName: 'live', timeout: 300 });
-const _MODEL = testConfig.resolved.model;
 
 async function createClient(): Promise<{ client: Client; transport: StdioClientTransport }> {
   return createTestClient(testConfig, 'live-test-client');
@@ -37,7 +36,7 @@ describe('pre-flight', () => {
   });
 
   afterAll(async () => {
-    await transport.close();
+    if (transport) await transport.close();
   });
 
   it('LLM backend is reachable', async () => {
@@ -63,7 +62,7 @@ describe('chat (live)', () => {
   });
 
   afterAll(async () => {
-    await transport.close();
+    if (transport) await transport.close();
   });
 
   it('returns a response for a simple prompt', async () => {
@@ -160,7 +159,7 @@ describe('code_task (live)', () => {
   });
 
   afterAll(async () => {
-    await transport.close();
+    if (transport) await transport.close();
   });
 
   it('analyzes a code file for bugs', async () => {
@@ -201,36 +200,6 @@ describe('code_task (live)', () => {
   });
 });
 
-// ── fix_code tool — disabled, verify rejection ──────────────────────
-
-describe('fix_code (live)', () => {
-  let client: Client;
-  let transport: StdioClientTransport;
-
-  beforeAll(async () => {
-    ({ client, transport } = await createClient());
-  });
-
-  afterAll(async () => {
-    await transport.close();
-  });
-
-  it('fix_code is disabled and returns DISABLED error', async () => {
-    /** fix_code is disabled — should reject with DISABLED message */
-    const result = await client.callTool({
-      name: 'fix_code',
-      arguments: {
-        input_files_paths: '/tmp/__live_test_fixme.ts',
-        instructions: 'Fix the typo',
-      },
-    });
-
-    expect(result.isError).toBe(true);
-    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
-    expect(text).toMatch(/DISABLED/);
-  }, 10_000);
-});
-
 // ── compare_files tool — real LLM round-trip ─────────────────────────
 
 describe('compare_files (live)', () => {
@@ -242,7 +211,7 @@ describe('compare_files (live)', () => {
   });
 
   afterAll(async () => {
-    await transport.close();
+    if (transport) await transport.close();
   });
 
   it('compares two files and describes differences', async () => {
@@ -289,7 +258,7 @@ describe('batch_check (live)', () => {
   });
 
   afterAll(async () => {
-    await transport.close();
+    if (transport) await transport.close();
   });
 
   it('checks multiple files and reports per-file progress', async () => {
@@ -327,7 +296,10 @@ describe('batch_check (live)', () => {
 
       expect(result.isError).toBeFalsy();
       const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
-      expect(text).toBeDefined();
+      expect(text).toMatch(/\.md$/);
+
+      // At least one progress notification (batch or streaming) must arrive.
+      expect(progressEvents.length).toBeGreaterThan(0);
 
       // Check for batch progress notifications
       const batchProgress = progressEvents.filter(e => e.message?.includes('batch_check'));

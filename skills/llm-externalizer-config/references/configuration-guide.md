@@ -6,11 +6,10 @@
 - [API Presets](#api-presets)
 - [Profile Fields](#profile-fields)
 - [Auth Resolution](#auth-resolution)
-- [Managing Profiles via MCP](#managing-profiles-via-mcp)
+- [Manual Edit Workflow](#manual-edit-workflow)
 - [Validation Rules](#validation-rules)
 - [Ensemble Mode](#ensemble-mode)
 - [Environment Variables](#environment-variables)
-- [CLI Profile Management](#cli-profile-management)
 - [Troubleshooting](#troubleshooting)
 
 ## Modes
@@ -52,6 +51,7 @@ Each profile uses an `api` preset that bundles protocol + default connection set
 | `api_key` | No | API key for remote presets (env var ref or direct value) |
 | `api_token` | No | Auth token for local presets (env var ref or direct value) |
 | `second_model` | Only for `remote-ensemble` | Second model identifier |
+| `third_model` | Optional for `remote-ensemble` | Third model identifier |
 | `timeout` | No | Request timeout in seconds |
 | `context_window` | No | Context window override (0 = auto-detect) |
 
@@ -63,13 +63,13 @@ Auth fields accept either:
 
 Default env vars are set by the API preset. If `discover` shows the token is resolved, auth is working. If it shows `(NOT SET)`, the env var is missing from the MCP server's process environment — check the MCP server env configuration.
 
-## Managing Profiles via MCP
+## Manual Edit Workflow
 
-The settings file is `~/.llm-externalizer/settings.yaml` (YAML format, NOT JSON).
+**Model & profile configuration is user-only.** The MCP tools `set_settings` and `change_model`, and the CLI subcommands `profile add | select | edit | remove | rename`, are disabled by design. The only supported path is:
 
-**Step 1**: Call `get_settings` (no parameters) to get an editable copy. Returns a file path.
+**Step 1** — Open `~/.llm-externalizer/settings.yaml` in your editor. You can also call the MCP `get_settings` tool first — it copies the file to the output directory and returns the copy's path, but you are expected to transfer your edits back to the real file yourself.
 
-**Step 2**: Read and edit the file using Read and Edit tools. The YAML structure:
+**Step 2** — Edit the YAML. The structure:
 
 ```yaml
 active: my-profile-name       # must match a key under profiles:
@@ -79,15 +79,27 @@ profiles:
     mode: local                # REQUIRED: local | remote | remote-ensemble
     api: lmstudio-local        # REQUIRED: preset name
     model: "model-name-or-id"  # REQUIRED: model identifier
+    # OPTIONAL fields:
+    # url: "http://localhost:1234"
+    # api_token: $LM_API_TOKEN
+    # api_key: $OPENROUTER_API_KEY
+    # second_model: "model-id"         # required for remote-ensemble
+    # third_model: "model-id"          # optional for remote-ensemble
+    # timeout: 300
+    # context_window: 100000
 ```
 
-**Step 3**: Call `set_settings` with `file_path` pointing to the edited file. Validates before writing. Old settings never overwritten if new content is invalid.
+**Step 3** — Save the file.
 
-**Step 4**: Call `discover` to verify.
+**Step 4** — Reload. Either restart Claude Code, or call the `reset` MCP tool to reload without restarting.
 
-**CRITICAL**: `set_settings` replaces the entire settings.yaml. The edited file must include ALL profiles, not just the one you changed.
+**Step 5** — Verify with `discover`.
+
+**CRITICAL**: The file on disk IS the source of truth. Every profile you want to keep must appear in the file — a missing profile is a deleted profile after reload.
 
 ## Validation Rules
+
+Validation runs at load time (when the server starts or `reset` is called). If validation fails, the server logs an error and the affected profile becomes unusable. Rules:
 
 - `active` must reference an existing profile key
 - `mode` must be `local`, `remote`, or `remote-ensemble`
@@ -96,11 +108,12 @@ profiles:
 - `remote-ensemble` requires `second_model`
 - Remote presets require a resolvable `api_key`
 
+To recover: edit the file to fix the issue, save, and call `reset` (or restart Claude Code).
+
 ## Ensemble Mode
 
-On OpenRouter with `remote-ensemble` mode, read-only content tools run on both models in parallel. Results are combined in one report with per-model sections.
+On OpenRouter with `remote-ensemble` mode, read-only content tools run on multiple models in parallel. Results are combined in one report with per-model sections.
 
-- Set `ensemble: false` on individual tool calls for simple tasks to save tokens
 - Per-model file size limits: grok skipped >20,000 lines, gemini skipped >50,000 lines
 - On local backends, ensemble is a no-op
 
@@ -114,27 +127,14 @@ On OpenRouter with `remote-ensemble` mode, read-only content tools run on both m
 | `LLM_EXT_CONFIG_DIR` | Override settings directory (default: `~/.llm-externalizer`) |
 | `LLM_OUTPUT_DIR` | Override output directory (default: `./reports_dev/llm_externalizer`) |
 
-## CLI Profile Management
-
-As an alternative to the MCP workflow, use the CLI directly:
-
-```bash
-npx llm-externalizer profile list
-npx llm-externalizer profile add <name> --mode <mode> --api <api> --model <model>
-npx llm-externalizer profile select <name>
-npx llm-externalizer profile edit <name> --field <value>
-npx llm-externalizer profile remove <name>
-npx llm-externalizer profile rename <old> <new>
-```
-
-Run from the `mcp-server/` directory within the plugin.
-
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `discover` shows `(NOT SET)` for auth token | Env var missing from MCP server process | Add the env var to `.mcp.json` env block or export it in shell |
+| `discover` shows `(NOT SET)` for auth token | Env var missing from MCP server process | Add the env var to `.mcp.json` env block or export it in shell, then restart Claude Code |
 | Connection refused to local server | LM Studio / Ollama not running | Start the local server, verify URL and port |
-| `set_settings` validation error | Invalid profile config | Check validation rules above; ensure mode/api preset match |
+| Validation error on reload | Invalid profile config | Check validation rules above; ensure mode/api preset match |
 | Ensemble returns only one model's results | File exceeds size limit for one model | Normal behavior — grok limit is 20K lines, gemini 50K lines |
-| Tools return "not configured" | No active profile or settings.yaml missing | Run `discover` to check; create settings with `get_settings` + `set_settings` |
+| Tools return "not configured" | No active profile or settings.yaml missing | Open `~/.llm-externalizer/settings.yaml`, confirm `active:` points to a valid profile, save, call `reset` |
+| `set_settings` / `change_model` return DISABLED | Expected — tools are user-only | Edit `~/.llm-externalizer/settings.yaml` manually instead |
+| `npx llm-externalizer profile add/select/edit/remove/rename` errors out | Expected — CLI mutation is disabled | Edit `~/.llm-externalizer/settings.yaml` manually instead |

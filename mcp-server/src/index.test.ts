@@ -5,15 +5,15 @@
  * using the MCP SDK client. No LLM backend is required for most tests —
  * only tools that don't make LLM calls (discover, listTools) are tested.
  *
- * For tools that DO call the LLM (chat, code_task, fix_code, etc.),
- * we test only the input validation / error paths that fail before the LLM call.
+ * For tools that DO call the LLM (chat, code_task, etc.), we test only the
+ * input validation / error paths that fail before the LLM call.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { join } from 'node:path';
-import { writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { resolveTestConfig, createTestClient } from './test-helpers';
 
 // Uses the real ~/.llm-externalizer/settings.yaml — tests exercise the real pipeline.
@@ -27,14 +27,14 @@ async function createClient(): Promise<{ client: Client; transport: StdioClientT
 
 describe('listTools', () => {
   let client: Client;
-  let transport: StdioClientTransport;
+  let transport: StdioClientTransport | undefined;
 
   beforeAll(async () => {
     ({ client, transport } = await createClient());
   });
 
   afterAll(async () => {
-    await transport.close();
+    if (transport) await transport.close();
   });
 
   it('returns all expected tools', async () => {
@@ -43,12 +43,12 @@ describe('listTools', () => {
     const toolNames = result.tools.map(t => t.name).sort();
 
     // custom_prompt was merged into chat — it still works via switch fall-through
-    // but is NOT listed as a separate tool in buildTools()
+    // but is NOT listed as a separate tool in buildTools().
     // Write tools (fix_code, batch_fix, merge_files, split_file, revert_file)
-    // are disabled via DISABLED_TOOLS and filtered out of buildTools()
+    // and settings-write tools (set_settings, change_model) have been removed
+    // from the codebase — the MCP server is read-only by design.
     const expected = [
       'batch_check',
-      'change_model',
       'chat',
       'check_against_specs',
       'check_imports',
@@ -63,7 +63,6 @@ describe('listTools', () => {
       'reset',
       'scan_folder',
       'search_existing_implementations',
-      'set_settings',
     ].sort();
 
     expect(toolNames).toEqual(expected);
@@ -92,14 +91,14 @@ describe('listTools', () => {
 
 describe('discover', () => {
   let client: Client;
-  let transport: StdioClientTransport;
+  let transport: StdioClientTransport | undefined;
 
   beforeAll(async () => {
     ({ client, transport } = await createClient());
   });
 
   afterAll(async () => {
-    await transport.close();
+    if (transport) await transport.close();
   });
 
   it('returns service health information', async () => {
@@ -115,19 +114,11 @@ describe('discover', () => {
 
   it('accepts progress token without error', async () => {
     /** discover with a progress token should work (even though it finishes instantly) */
-    const progressEvents: Array<{ progress: number; total?: number; message?: string }> = [];
-
     const result = await client.callTool(
       { name: 'discover', arguments: {} },
       undefined,
       {
-        onprogress: (p) => {
-          progressEvents.push({
-            progress: p.progress,
-            total: p.total,
-            message: p.message,
-          });
-        },
+        onprogress: () => {},
         timeout: 30_000,
       },
     );
@@ -140,14 +131,14 @@ describe('discover', () => {
 
 describe('input validation', () => {
   let client: Client;
-  let transport: StdioClientTransport;
+  let transport: StdioClientTransport | undefined;
 
   beforeAll(async () => {
     ({ client, transport } = await createClient());
   });
 
   afterAll(async () => {
-    await transport.close();
+    if (transport) await transport.close();
   });
 
   it('chat: fails without instructions or input', async () => {
@@ -168,19 +159,6 @@ describe('input validation', () => {
       arguments: {},
     });
     expect(result.isError).toBe(true);
-  });
-
-  it('disabled write tools return DISABLED error', async () => {
-    /** All disabled write tools should be rejected with a DISABLED message */
-    for (const toolName of ['fix_code', 'batch_fix', 'merge_files', 'split_file', 'revert_file']) {
-      const result = await client.callTool({
-        name: toolName,
-        arguments: { instructions: 'test', input_files_paths: '/tmp/test.ts' },
-      });
-      expect(result.isError, `${toolName} should return isError`).toBe(true);
-      const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
-      expect(text, `${toolName} should mention DISABLED`).toMatch(/DISABLED/);
-    }
   });
 
   it('batch_check: fails with empty input_files_paths', async () => {
@@ -221,7 +199,7 @@ describe('input validation', () => {
 
 describe('scan_secrets', () => {
   let client: Client;
-  let transport: StdioClientTransport;
+  let transport: StdioClientTransport | undefined;
   const tmpDir = '/tmp/__llm_ext_test_secrets';
   const secretFile = join(tmpDir, 'secret.ts');
 
@@ -233,8 +211,8 @@ describe('scan_secrets', () => {
   });
 
   afterAll(async () => {
-    try { unlinkSync(secretFile); } catch { /* ignore */ }
-    await transport.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    if (transport) await transport.close();
   });
 
   it('chat: aborts when scan_secrets finds secrets', async () => {
@@ -282,41 +260,6 @@ describe('scan_secrets', () => {
   });
 });
 
-// ── change_model ─────────────────────────────────────────────────────
-
-describe('change_model', () => {
-  let client: Client;
-  let transport: StdioClientTransport;
-
-  beforeAll(async () => {
-    ({ client, transport } = await createClient());
-  });
-
-  afterAll(async () => {
-    await transport.close();
-  });
-
-  it('updates model in active profile', async () => {
-    /** change_model should update the model in the active profile */
-    const result = await client.callTool({
-      name: 'change_model',
-      arguments: { model: 'test-model' },
-    });
-    expect(result.isError).toBeFalsy();
-    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
-    expect(text).toMatch(/Model changed|test-model/i);
-  });
-
-  it('rejects empty model name', async () => {
-    /** change_model with empty string should fail */
-    const result = await client.callTool({
-      name: 'change_model',
-      arguments: { model: '   ' },
-    });
-    expect(result.isError).toBe(true);
-  });
-});
-
 // ── Progress notifications during LLM calls ──────────────────────────
 // These tests verify that the server sends progress notifications when
 // a tool takes a long time. Since we don't have an LLM backend, we
@@ -325,7 +268,7 @@ describe('change_model', () => {
 
 describe('progress notifications', () => {
   let client: Client;
-  let transport: StdioClientTransport;
+  let transport: StdioClientTransport | undefined;
   const tmpDir = '/tmp/__llm_ext_test_progress';
   const testFile = join(tmpDir, 'hello.ts');
 
@@ -336,14 +279,12 @@ describe('progress notifications', () => {
   });
 
   afterAll(async () => {
-    try { unlinkSync(testFile); } catch { /* ignore */ }
-    await transport.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    if (transport) await transport.close();
   });
 
   it('chat: sends progress token in request without crash', async () => {
     /** Calling chat with a progressToken should not crash, even if LLM is unreachable */
-    const progressEvents: Array<{ progress: number; total?: number }> = [];
-
     try {
       await client.callTool(
         {
@@ -354,9 +295,7 @@ describe('progress notifications', () => {
         },
         undefined,
         {
-          onprogress: (p) => {
-            progressEvents.push({ progress: p.progress, total: p.total });
-          },
+          onprogress: () => {},
           // Short timeout since the LLM backend is unreachable — it will fail on connect
           timeout: 120_000,
         },
@@ -409,7 +348,7 @@ describe('progress notifications', () => {
 
 describe('answer_mode dispatch', () => {
   let client: Client;
-  let transport: StdioClientTransport;
+  let transport: StdioClientTransport | undefined;
   const tmpDir = '/tmp/__llm_ext_test_mode1';
   const srcDir = join(tmpDir, 'src');
   const scriptsDir = join(tmpDir, 'scripts');
@@ -429,11 +368,8 @@ describe('answer_mode dispatch', () => {
   });
 
   afterAll(async () => {
-    try { unlinkSync(srcA); } catch { /* ignore */ }
-    try { unlinkSync(srcB); } catch { /* ignore */ }
-    try { unlinkSync(scriptFoo); } catch { /* ignore */ }
-    try { unlinkSync(scriptBar); } catch { /* ignore */ }
-    await transport.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    if (transport) await transport.close();
   });
 
   it('chat: answer_mode=1 routes mixed-extension files through auto-grouping without crash', async () => {

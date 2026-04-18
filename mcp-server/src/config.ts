@@ -1,11 +1,10 @@
 /**
  * Profile-based configuration for the LLM Externalizer MCP server.
  *
- * Single source of truth for settings.yaml loading, saving, validation,
+ * Single source of truth for settings.yaml loading, validation,
  * and resolution. Used by the server (index.ts), CLI (cli.ts), and tests.
  *
  * Settings file: ~/.llm-externalizer/settings.yaml
- * Backups:       ~/.llm-externalizer/backups/settings_<timestamp>.yaml
  *
  * Cross-platform: uses os.homedir() + path.join() for all paths.
  * Works on macOS, Linux, and Windows WSL.
@@ -16,15 +15,13 @@ import {
   readFileSync,
   writeFileSync,
   mkdirSync,
-  copyFileSync,
-  renameSync,
   chmodSync,
   realpathSync,
 } from "node:fs";
 import { resolve } from "node:path";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { parse as yamlParse, stringify as yamlStringify } from "yaml";
+import { parse as yamlParse } from "yaml";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -201,11 +198,6 @@ export function getSettingsPath(): string {
   return join(getConfigDir(), "settings.yaml");
 }
 
-/** Backup directory: ~/.llm-externalizer/backups/ */
-export function getBackupDir(): string {
-  return join(getConfigDir(), "backups");
-}
-
 // ── Env var resolution ──────────────────────────────────────────────
 
 // Map of env-var names that have a corresponding plugin.json userConfig key.
@@ -280,36 +272,6 @@ export function loadSettings(): Settings | null {
   }
 }
 
-/**
- * Save settings to disk. Creates a timestamped backup of the previous
- * file before overwriting. Creates config and backup directories if needed.
- */
-export function saveSettings(settings: Settings): void {
-  const settingsPath = getSettingsPath();
-  const configDir = getConfigDir();
-  const backupDir = getBackupDir();
-
-  mkdirSync(configDir, { recursive: true });
-  mkdirSync(backupDir, { recursive: true });
-  // L: Restrict backup directory permissions to owner-only (0o700)
-  chmodSync(backupDir, 0o700);
-
-  // Timestamped backup of existing file (done BEFORE temp write)
-  if (existsSync(settingsPath)) {
-    const ts = new Date().toISOString().replace(/[:.]/g, "-");
-    const backupPath = join(backupDir, `settings_${ts}.yaml`);
-    copyFileSync(settingsPath, backupPath);
-  }
-
-  // M7: Atomic write — write to temp file first, then rename (atomic on same filesystem)
-  const yaml = yamlStringify(settings, { lineWidth: 120 });
-  const tmpPath = `${settingsPath}.tmp.${process.pid}`;
-  writeFileSync(tmpPath, yaml, "utf-8");
-  renameSync(tmpPath, settingsPath);
-  // Restrict permissions — settings may contain API keys in plaintext
-  try { chmodSync(settingsPath, 0o600); } catch { /* Windows may not support chmod */ }
-}
-
 /** Default settings with 4 predefined profiles */
 export function generateDefaultSettings(): Settings {
   return {
@@ -364,6 +326,9 @@ export function ensureSettingsExist(): Settings {
     mkdirSync(configDir, { recursive: true });
     // First run: write commented template for human readability
     writeFileSync(settingsPath, SETTINGS_TEMPLATE, "utf-8");
+    // Restrict permissions immediately — users may add API keys to the template,
+    // so default umask (0644) is not safe.
+    try { chmodSync(settingsPath, 0o600); } catch { /* Windows may not support chmod */ }
     process.stderr.write(
       `[llm-externalizer] Generated default settings at ${settingsPath}\n`,
     );
@@ -529,7 +494,7 @@ export function validateSettings(settings: Settings): ValidationResult {
     return {
       valid: false,
       errors: [
-        "No active profile set. Use: npx llm-externalizer profile select <name>",
+        `No active profile set. Edit ${getSettingsPath()} manually and set the 'active:' field to one of the profile names listed under 'profiles:', then restart Claude Code or call the MCP 'reset' tool.`,
       ],
     };
   }
@@ -586,18 +551,16 @@ export function resolveProfile(
 
 // ── Settings template ───────────────────────────────────────────────
 // Written on first run for human readability (comments are preserved).
-// Subsequent saves via saveSettings() use yamlStringify (no comments).
+// Users edit settings.yaml manually in their editor.
 
 export const SETTINGS_TEMPLATE = `# ──────────────────────────────────────────────────────────────────────
 # LLM Externalizer — Settings
 # ──────────────────────────────────────────────────────────────────────
 # Profile-based configuration. Each profile defines a complete LLM
-# backend setup. Switch profiles with:
-#   npx llm-externalizer profile select <name>
-# Or via MCP: get_settings / set_settings
+# backend setup. Edit this file manually and either restart Claude Code
+# or call the MCP 'reset' tool to reload.
 #
 # Location: ~/.llm-externalizer/settings.yaml
-# Backups:  ~/.llm-externalizer/backups/
 # ──────────────────────────────────────────────────────────────────────
 
 # Active profile name

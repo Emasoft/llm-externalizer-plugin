@@ -37,6 +37,13 @@ import sys
 from pathlib import Path
 
 _FILE_PATTERNS = (
+    # The canonical format emitted by code_task / scan_folder in mode 0:
+    #   - **Input file**: `<absolute-path>`
+    re.compile(
+        r"^\s*-\s*\*\*\s*(?:Input\s*file|File|Source(?:\s*file)?)\s*\*\*\s*:\s*`?(?P<path>[^`\n]+?)`?\s*$",
+        re.MULTILINE | re.IGNORECASE,
+    ),
+    # Plain bullet / heading / bare line variants (kept for hand-written reports).
     re.compile(r"^\s*#{1,6}\s*File\s*:\s*`?(?P<path>[^`\n]+?)`?\s*$", re.MULTILINE | re.IGNORECASE),
     re.compile(r"^\s*-\s*File\s*:\s*`?(?P<path>[^`\n]+?)`?\s*$", re.MULTILINE | re.IGNORECASE),
     re.compile(r"^\s*File\s*:\s*`?(?P<path>[^`\n]+?)`?\s*$", re.MULTILINE | re.IGNORECASE),
@@ -82,8 +89,15 @@ def _count_lines(path: Path) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--report", required=True, type=Path, help="Absolute path to an LLM Externalizer per-file report")
-    parser.add_argument("--project-dir", required=True, type=Path, help="Project root; relative paths in the report resolve against this")
+    parser.add_argument(
+        "--report", required=True, type=Path, help="Absolute path to an LLM Externalizer per-file report"
+    )
+    parser.add_argument(
+        "--project-dir",
+        required=True,
+        type=Path,
+        help="Project root; relative paths in the report resolve against this",
+    )
     args = parser.parse_args()
 
     report: Path = args.report

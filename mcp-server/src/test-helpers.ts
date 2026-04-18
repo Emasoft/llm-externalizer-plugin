@@ -93,6 +93,11 @@ export async function createTestClient(
     { capabilities: {} },
   );
 
-  await client.connect(transport);
+  try {
+    await client.connect(transport);
+  } catch (err) {
+    await transport.close();
+    throw err;
+  }
   return { client, transport };
 }

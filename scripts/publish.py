@@ -56,7 +56,7 @@ def update_readme_badges(readme_path: Path, version: str, build_ok: bool) -> boo
     end_marker = "<!--BADGES-END-->"
     start_idx = content.find(start_marker)
     end_idx = content.find(end_marker)
-    if start_idx == -1 or end_idx == -1:
+    if start_idx == -1 or end_idx == -1 or end_idx < start_idx:
         return False
     build_color = "brightgreen" if build_ok else "red"
     build_label = "passing" if build_ok else "failing"
@@ -68,17 +68,28 @@ def update_readme_badges(readme_path: Path, version: str, build_ok: bool) -> boo
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![marketplace](https://img.shields.io/badge/marketplace-emasoft--plugins-purple)
 {end_marker}"""
-    new_content = content[:start_idx] + badges + content[end_idx + len(end_marker):]
+    new_content = content[:start_idx] + badges + content[end_idx + len(end_marker) :]
     readme_path.write_text(new_content, encoding="utf-8")
     return True
 
 
 def run(
-    cmd: list[str], *, check: bool = True, capture: bool = True, cwd: str | None = None,
+    cmd: list[str],
+    *,
+    check: bool = True,
+    capture: bool = True,
+    cwd: str | None = None,
 ) -> subprocess.CompletedProcess:
     """Run a command, printing it first. Fail-fast on error."""
     print(f"  $ {shlex.join(cmd)}")
-    return subprocess.run(cmd, check=check, capture_output=capture, text=True, cwd=cwd)
+    return subprocess.run(
+        cmd,
+        check=check,
+        capture_output=capture,
+        text=True,
+        encoding="utf-8",
+        cwd=cwd,
+    )
 
 
 def bump_version(current: str, part: str) -> str:
@@ -285,9 +296,19 @@ def run_checks(repo_root: Path) -> bool:
 
     # 7. Shellcheck on every .sh file in the main tree (mandatory).
     exclude_dirs = {
-        "node_modules", ".git", "scripts_dev", "docs_dev", "samples_dev",
-        "examples_dev", "tests_dev", "downloads_dev", "libs_dev",
-        "builds_dev", ".claude", "dist", "reports_dev",
+        "node_modules",
+        ".git",
+        "scripts_dev",
+        "docs_dev",
+        "samples_dev",
+        "examples_dev",
+        "tests_dev",
+        "downloads_dev",
+        "libs_dev",
+        "builds_dev",
+        ".claude",
+        "dist",
+        "reports_dev",
     }
     sh_files: list[Path] = []
     for f in repo_root.rglob("*.sh"):
@@ -341,12 +362,17 @@ def run_cpv_validation(repo_root: Path) -> bool:
     # uvx is verified by require_tools() — this is mandatory.
     cpv_result = run(
         [
-            "uvx", "--from",
+            "uvx",
+            "--from",
             "git+https://github.com/Emasoft/claude-plugins-validation",
-            "--with", "pyyaml",
-            "cpv-remote-validate", "plugin", str(repo_root),
+            "--with",
+            "pyyaml",
+            "cpv-remote-validate",
+            "plugin",
+            str(repo_root),
         ],
-        capture=True, check=False,
+        capture=True,
+        check=False,
     )
     report = _reports_dir(repo_root) / "cpv.log"
     output = (cpv_result.stdout or "") + (cpv_result.stderr or "")
@@ -364,19 +390,14 @@ def run_cpv_validation(repo_root: Path) -> bool:
 def main():
     parser = argparse.ArgumentParser(description="Publish a new release")
     group = parser.add_mutually_exclusive_group()
-    group.add_argument(
-        "--patch", action="store_true", help="Bump patch version (default)"
-    )
+    group.add_argument("--patch", action="store_true", help="Bump patch version (default)")
     group.add_argument("--minor", action="store_true", help="Bump minor version")
     group.add_argument("--major", action="store_true", help="Bump major version")
-    group.add_argument(
-        "--set", type=str, metavar="VERSION", help="Set explicit version (x.y.z)"
-    )
+    group.add_argument("--set", type=str, metavar="VERSION", help="Set explicit version (x.y.z)")
+    parser.add_argument("--dry-run", "-n", action="store_true", help="Preview without making changes")
     parser.add_argument(
-        "--dry-run", "-n", action="store_true", help="Preview without making changes"
-    )
-    parser.add_argument(
-        "--check-only", action="store_true",
+        "--check-only",
+        action="store_true",
         help="Run checks only (build, manifest, CPV) without publishing. Used by pre-push hook.",
     )
     args = parser.parse_args()
@@ -420,7 +441,8 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     print("\n── 1. Pre-flight: working tree check ──")
     pf_status = run(["git", "status", "--porcelain"], check=False)
     pf_dirty = [
-        line for line in (pf_status.stdout or "").strip().splitlines()
+        line
+        for line in (pf_status.stdout or "").strip().splitlines()
         if line and not line.startswith("??")  # untracked files are ok
     ]
     if pf_dirty:
@@ -492,7 +514,8 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     print("── 4. Generate CHANGELOG.md ──")
     cliff_result = run(
         ["git-cliff", "--tag", tag, "--output", str(changelog)],
-        capture=True, check=False,
+        capture=True,
+        check=False,
     )
     cliff_output = (cliff_result.stderr or "") + (cliff_result.stdout or "")
     if "were skipped" in cliff_output:
@@ -615,8 +638,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     porcelain = run(["git", "status", "--porcelain"], check=False)
     if porcelain.stdout:
         unstaged = [
-            line for line in porcelain.stdout.strip().splitlines()
-            if len(line) >= 2 and line[1] not in (" ", "?")
+            line for line in porcelain.stdout.strip().splitlines() if len(line) >= 2 and line[1] not in (" ", "?")
         ]
         if unstaged:
             print("WARNING: unstaged modified files detected:", file=sys.stderr)

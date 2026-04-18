@@ -7,7 +7,9 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 .pytest_cache/
-uv.lock
+# uv.lock: scripts/ are stdlib-only (no runtime deps in pyproject.toml),
+# so a lockfile adds no value. If deps are ever introduced, remove this
+# comment and commit uv.lock alongside them.
 
 # Node
 node_modules/

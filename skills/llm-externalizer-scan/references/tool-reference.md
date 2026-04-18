@@ -28,10 +28,12 @@
 | Tool | Purpose |
 |------|---------|
 | `discover` | Check service health, auth token status, context window, concurrency mode, profiles |
-| `reset` | Full soft-restart. Waits for running requests, then reloads settings and clears caches. |
-| `change_model` | Switch model in active profile |
-| `get_settings` | Copy settings.yaml to output dir, return file path |
-| `set_settings` | Read YAML from file_path, validate, backup old, write new settings |
+| `reset` | Full soft-restart. Waits for running requests, then reloads settings (picks up manual edits to `settings.yaml`) and clears caches. |
+| `get_settings` | Copy `settings.yaml` to output dir and return the path. Read-only view — edit `~/.llm-externalizer/settings.yaml` manually, then call `reset`. |
+
+### Disabled tools (by design)
+
+MCP is read-only. `fix_code`, `batch_fix`, `merge_files`, `split_file`, `revert_file` → apply fixes via the `llm-externalizer-scan-and-fix` plugin command instead. `set_settings`, `change_model` → edit `~/.llm-externalizer/settings.yaml` manually and call `reset`.
 
 ## Standard Input Fields
 

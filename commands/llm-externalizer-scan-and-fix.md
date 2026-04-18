@@ -1,13 +1,13 @@
 ---
 name: llm-externalizer-scan-and-fix
-description: Two-stage codebase audit — LLM Externalizer scan with ONE report per file (answer_mode hardcoded to 0), then parallel `llm-externalizer-fixer` agents (max 15 concurrent) verify and fix each finding. All outputs land in `./reports/llm-externalizer/`. Final output is a single joined report path — the orchestrator never reads any scan or fixer content.
+description: Two-stage codebase audit. LLM Externalizer scan produces one report per file; parallel llm-externalizer-fixer agents (≤15 concurrent) verify and fix each finding. Orchestrator never reads scan or fixer content — only report paths.
 allowed-tools:
   - mcp__llm-externalizer__discover
   - mcp__llm-externalizer__scan_folder
   - mcp__llm-externalizer__code_task
   - Bash
   - Task
-argument-hint: "[target-path] [--text-files] [--file-list <path>] [--instructions <path>] [--specs <path>] [--no-scan-secrets] [--free]"
+argument-hint: "[target] [--file-list path] [--instructions path] [--specs path] [--free]"
 effort: high
 ---
 
@@ -143,7 +143,36 @@ Build the `instructions` string:
 
 - If `--specs` but no `--instructions`: `"Audit each file for compliance against the specification provided in instructions_files_paths. Report deviations, missing features, or incorrect implementations with file paths and line numbers. Be terse."`
 - If `--instructions` (with or without `--specs`): `"Follow the instructions provided in instructions_files_paths. Reference function names and line numbers. Be terse."`
-- Neither: `"Audit for: 1) Logic bugs, 2) Error handling gaps, 3) Security issues, 4) Resource leaks, 5) Broken references. Reference function names and line numbers. Be terse."`
+- Neither (default rubric — REPORT ONLY REAL BUGS, RESPECT CODING STYLE):
+
+```
+Audit each file for REAL DEFECTS only. A real defect is:
+  1) Logic bug — code does not do what its name, docstring, or the surrounding context says it should; wrong conditionals, off-by-one, unreachable code, typos in expressions, incorrect default values, broken state transitions.
+  2) Crash / unintended exception — code path that will throw or segfault under documented inputs and is not meant to.
+  3) Security vulnerability with a concrete exploit path — shell injection (unquoted "$VAR" interpolation), path traversal, unsafe deserialization, secret exposure, auth bypass, SSRF.
+  4) Resource leak that actually causes unbounded growth, deadlock, or starvation — NOT "file not closed in a short-lived script that exits anyway".
+  5) Data corruption — a write that produces malformed state.
+  6) Functionality not matching its contract — documented input-output mismatch, missing branch for a documented case.
+  7) Broken reference visible WITHIN this file — function called but not defined in this file, attribute accessed that the class does not declare, import referencing a non-existent symbol.
+
+DO NOT REPORT (these are coding-style choices, not bugs — respect the author's style):
+  * Missing try/except or error handling. Fail-fast is a valid, deliberate choice. Do NOT recommend adding defensive wrappers.
+  * Missing null / None / undefined checks. Type-checker / upstream contract handles this.
+  * Missing input validation for internal-only functions. Boundaries already validate.
+  * "Could be more robust" / "consider using". Suggestions ≠ defects.
+  * "Should add logging / comments / type hints / docstrings". Documentation preferences are not bugs.
+  * Refactoring suggestions (split this function, rename this variable, use comprehension here). Style, not bugs.
+  * Warnings about hypothetical future scenarios. Report only what is actually broken today.
+  * Assertions / invariants the author removed on purpose.
+  * Performance micro-optimizations when the code is not on a hot path.
+
+VERIFICATION RULE FOR EACH FINDING:
+  Before reporting, ask: "Does this claim describe code that actually misbehaves on documented inputs?" If the answer is "only under attacker-controlled input" → security finding (OK to report with the exploit path). If the answer is "only if the author had coded defensively against themselves" → coding-style, DO NOT REPORT.
+
+Respect the coding style of the source file. Fail-fast code, no backwards-compat, no defensive checks, minimal docstrings, compact expressions — these are style choices. Do NOT push a different style onto the author.
+
+Reference function names and line numbers. Be terse. One line per finding. No preamble.
+```
 
 Add the flags:
 

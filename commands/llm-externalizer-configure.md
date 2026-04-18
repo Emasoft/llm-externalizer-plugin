@@ -1,42 +1,40 @@
 ---
 name: llm-externalizer-configure
-description: Manage LLM Externalizer profiles — switch, add, edit, or list profiles
+description: Inspect LLM Externalizer profile configuration. Read-only — model & profile changes are user-only via manual YAML editing.
 allowed-tools:
   - mcp__llm-externalizer__get_settings
-  - mcp__llm-externalizer__set_settings
   - mcp__llm-externalizer__discover
+  - mcp__llm-externalizer__reset
   - Read
-  - Edit
-argument-hint: "[list | switch <profile> | add <name> --mode <mode> --api <api> --model <model>]"
-effort: medium
+argument-hint: "[list]"
+effort: low
 ---
 
-Manage LLM Externalizer profile configuration.
+Inspect LLM Externalizer configuration. **This command never mutates settings** — model & profile changes are user-only.
+
+## Configuration policy
+
+Model and profile configuration is **user-only**. The MCP `set_settings` and `change_model` tools, and the CLI `profile add | select | edit | remove | rename` subcommands, are **disabled by design** so agents cannot silently swap models or leak configuration to the wrong backend.
+
+To change anything (active profile, model, second_model, api preset, URL, api_key, timeouts):
+
+1. Open `~/.llm-externalizer/settings.yaml` in your editor and save your edits.
+2. Either restart Claude Code, or call the `reset` MCP tool to reload without restarting.
 
 ## Subcommands
 
-Based on the user's argument:
-
 ### `list` (or no argument)
-1. Call `get_settings` to get the settings file path
-2. Read the file and present a formatted table of all profiles with: name, mode, api preset, model, and whether it is the active profile
 
-### `switch <profile-name>`
-1. Call `get_settings` to get the settings file path
-2. Read the file
-3. Use Edit to change the `active:` field to the requested profile name
-4. Call `set_settings` with the edited file path
-5. Call `discover` to verify the switch
-6. Report the result to the user
+1. Call `mcp__llm-externalizer__discover` and report: active profile name, mode, api preset, model, auth status, service health.
+2. Call `mcp__llm-externalizer__get_settings` — it returns an **editable copy** of `settings.yaml` (not the original). Read that file and show a formatted table of ALL profiles: name, mode, api preset, model, second_model (if any), and whether it is the active one.
+3. Append a one-line reminder: `To edit: open ~/.llm-externalizer/settings.yaml manually, save, then call the 'reset' tool or restart Claude Code.`
 
-### `add <name> --mode <mode> --api <api> --model <model> [--second_model <model>] [--url <url>] [--api_key <key>]`
-1. Call `get_settings` to get the settings file path
-2. Read the file
-3. Use Edit to add a new profile block under `profiles:` with the provided fields
-4. Optionally set it as active if the user requests
-5. Call `set_settings` with the edited file path
-6. Report the result
+### Any other argument
 
-### Error handling
-- If `set_settings` returns validation errors, show them clearly and suggest fixes
-- Refer the user to the `llm-externalizer-config` skill's profile templates for valid configurations
+Decline politely and explain the policy: configuration is user-only. Point the user to `~/.llm-externalizer/settings.yaml`, the `reset` tool, and the `llm-externalizer-config` skill for profile templates.
+
+## What this command will NOT do
+
+- Write to `settings.yaml` in any way.
+- Call `set_settings` or `change_model` (both are disabled MCP-side; calls return a refusal).
+- Invoke `npx llm-externalizer profile add | select | edit | remove | rename` (those CLI subcommands are also disabled).

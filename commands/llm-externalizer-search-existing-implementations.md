@@ -1,11 +1,11 @@
 ---
 name: llm-externalizer-search-existing-implementations
-description: Scan a codebase (same language as the input files) for an existing implementation of the described feature. Wraps the llm-externalizer search_existing_implementations MCP tool. Takes a mandatory feature description, one or more codebase paths, and OPTIONAL PR source files and diff. When source files are given, the command auto-generates a PR diff via `git diff <base>...HEAD` unless one is supplied. Files are FFD-batched into ~400KB LLM requests (configurable), so 10k-file codebases typically need ~500 LLM calls instead of 10k. Exhaustive per-file output — every occurrence is reported, no cap. Works both for PR duplicate-check reviews and for greenfield "is this already done?" audits.
+description: Scan a codebase (same language as the input files) for an existing implementation of a described feature. FFD-batched ensemble calls, exhaustive per-file output. Works for PR duplicate-check and greenfield audits.
 allowed-tools:
   - mcp__llm-externalizer__discover
   - mcp__llm-externalizer__search_existing_implementations
   - Bash
-argument-hint: '"<description>" [<src-files>...] --in <path> [--base <ref>] [--diff <path>] [--free] [--output-dir <path>]'
+argument-hint: '"description" [src-files...] --in path [--base ref] [--free]'
 effort: medium
 ---
 

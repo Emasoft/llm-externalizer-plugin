@@ -3,7 +3,6 @@ name: llm-externalizer-discover
 description: Check LLM Externalizer health, active profile, model, auth status, and context window
 allowed-tools:
   - mcp__llm-externalizer__discover
-argument-hint: ""
 effort: low
 ---
 

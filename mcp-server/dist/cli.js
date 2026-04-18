@@ -14601,8 +14601,6 @@ import {
   readFileSync,
   writeFileSync,
   mkdirSync,
-  copyFileSync,
-  renameSync,
   chmodSync,
   realpathSync
 } from "node:fs";
@@ -14690,9 +14688,6 @@ function getConfigDir() {
 function getSettingsPath() {
   return join(getConfigDir(), "settings.yaml");
 }
-function getBackupDir() {
-  return join(getConfigDir(), "backups");
-}
 var USER_CONFIG_ENV_MAP = {
   OPENROUTER_API_KEY: "CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY"
 };
@@ -14708,10 +14703,6 @@ function resolveEnvValue(value) {
     return process.env[name] || "";
   }
   return value;
-}
-var LOCAL_URL_PATTERN = /\/\/localhost([:/]|$)|\/\/127\.\d+\.\d+\.\d+|\/\/192\.168\.\d+\.\d+|\/\/10\.\d+\.\d+\.\d+|\/\/172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|\/\/\[::1\]|\/\/0\.0\.0\.0/i;
-function isLocalUrl(url2) {
-  return LOCAL_URL_PATTERN.test(url2);
 }
 function loadSettings() {
   const settingsPath = getSettingsPath();
@@ -14732,27 +14723,6 @@ function loadSettings() {
     return null;
   }
 }
-function saveSettings(settings) {
-  const settingsPath = getSettingsPath();
-  const configDir = getConfigDir();
-  const backupDir = getBackupDir();
-  mkdirSync(configDir, { recursive: true });
-  mkdirSync(backupDir, { recursive: true });
-  chmodSync(backupDir, 448);
-  if (existsSync(settingsPath)) {
-    const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-    const backupPath = join(backupDir, `settings_${ts}.yaml`);
-    copyFileSync(settingsPath, backupPath);
-  }
-  const yaml = (0, import_yaml.stringify)(settings, { lineWidth: 120 });
-  const tmpPath = `${settingsPath}.tmp.${process.pid}`;
-  writeFileSync(tmpPath, yaml, "utf-8");
-  renameSync(tmpPath, settingsPath);
-  try {
-    chmodSync(settingsPath, 384);
-  } catch {
-  }
-}
 function ensureSettingsExist() {
   const settingsPath = getSettingsPath();
   const configDir = getConfigDir();
@@ -14767,6 +14737,10 @@ function ensureSettingsExist() {
   if (!existsSync(settingsPath)) {
     mkdirSync(configDir, { recursive: true });
     writeFileSync(settingsPath, SETTINGS_TEMPLATE, "utf-8");
+    try {
+      chmodSync(settingsPath, 384);
+    } catch {
+    }
     process.stderr.write(
       `[llm-externalizer] Generated default settings at ${settingsPath}
 `
@@ -14777,96 +14751,6 @@ function ensureSettingsExist() {
     throw new Error(`Failed to parse ${settingsPath}. Check YAML syntax.`);
   }
   return settings;
-}
-function validateProfile(name, profile) {
-  const errors = [];
-  if (!profile.mode) {
-    errors.push(`Profile '${name}': missing required field: mode`);
-  } else if (!["local", "remote", "remote-ensemble"].includes(profile.mode)) {
-    errors.push(
-      `Invalid mode '${profile.mode}'. Must be: local, remote, or remote-ensemble`
-    );
-  }
-  if (!profile.api) {
-    errors.push(`Profile '${name}': missing required field: api`);
-  }
-  if (!profile.model) {
-    errors.push(`Profile '${name}': missing required field: model`);
-  }
-  const preset = profile.api ? API_PRESETS[profile.api] : void 0;
-  if (profile.api && !preset) {
-    errors.push(
-      `Unknown api preset '${profile.api}'. Valid presets: ${Object.keys(API_PRESETS).join(", ")}`
-    );
-    return { valid: false, errors };
-  }
-  if (!preset || !profile.mode) {
-    return { valid: false, errors };
-  }
-  if (profile.mode === "local" && !preset.isLocal) {
-    errors.push(
-      `Mode 'local' requires a -local api preset, got '${profile.api}'`
-    );
-  }
-  if ((profile.mode === "remote" || profile.mode === "remote-ensemble") && preset.isLocal) {
-    errors.push(
-      `Mode '${profile.mode}' requires a -remote api preset, got '${profile.api}'`
-    );
-  }
-  if (profile.mode === "remote-ensemble" && !profile.second_model) {
-    errors.push("Mode 'remote-ensemble' requires 'second_model'");
-  }
-  if (profile.mode === "local" && profile.second_model) {
-    errors.push("Mode 'local' does not support 'second_model'");
-  }
-  if (profile.mode === "remote" && profile.second_model) {
-    errors.push(
-      "Mode 'remote' does not support 'second_model'. Use 'remote-ensemble'"
-    );
-  }
-  if (profile.third_model && profile.mode !== "remote-ensemble") {
-    errors.push("'third_model' is only supported in 'remote-ensemble' mode");
-  }
-  if (profile.api === "lmstudio-local") {
-    if (profile.second_model) {
-      errors.push("LM Studio native API does not support second_model");
-    }
-  }
-  const effectiveUrl = profile.url || preset.defaultUrl;
-  if (effectiveUrl) {
-    const urlIsLocal = isLocalUrl(effectiveUrl);
-    if ((profile.mode === "remote" || profile.mode === "remote-ensemble") && urlIsLocal) {
-      errors.push(`Remote mode cannot use local URL '${effectiveUrl}'`);
-    }
-  }
-  if (profile.api === "generic-local" && !profile.url) {
-    errors.push("Api preset 'generic-local' requires explicit 'url'");
-  }
-  if (profile.timeout !== void 0 && (typeof profile.timeout !== "number" || !isFinite(profile.timeout) || profile.timeout < 0)) {
-    errors.push(
-      `Profile '${name}': timeout must be a non-negative finite number`
-    );
-  }
-  if (profile.context_window !== void 0 && (typeof profile.context_window !== "number" || !isFinite(profile.context_window) || profile.context_window < 0)) {
-    errors.push(
-      `Profile '${name}': context_window must be a non-negative finite number`
-    );
-  }
-  if (typeof profile.timeout === "number" && profile.timeout > 3600) {
-    errors.push(`Profile '${name}': timeout must be <= 3600 (1 hour)`);
-  }
-  if (typeof profile.context_window === "number" && profile.context_window > 1e7) {
-    errors.push(`Profile '${name}': context_window must be <= 10,000,000`);
-  }
-  if (!preset.isLocal) {
-    const rawAuth = profile.api_key || preset.defaultAuthEnv;
-    const resolved = resolveEnvValue(rawAuth);
-    if (!resolved) {
-      const hint = rawAuth?.startsWith("$") ? ` (env var ${rawAuth} is not set)` : "";
-      errors.push(`Remote api '${profile.api}' requires 'api_key'${hint}`);
-    }
-  }
-  return { valid: errors.length === 0, errors };
 }
 function resolveProfile(name, profile) {
   const preset = API_PRESETS[profile.api];
@@ -14893,12 +14777,10 @@ var SETTINGS_TEMPLATE = `# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u250
 # LLM Externalizer \u2014 Settings
 # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 # Profile-based configuration. Each profile defines a complete LLM
-# backend setup. Switch profiles with:
-#   npx llm-externalizer profile select <name>
-# Or via MCP: get_settings / set_settings
+# backend setup. Edit this file manually and either restart Claude Code
+# or call the MCP 'reset' tool to reload.
 #
 # Location: ~/.llm-externalizer/settings.yaml
-# Backups:  ~/.llm-externalizer/backups/
 # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
 # Active profile name
@@ -14978,9 +14860,13 @@ function sortedPercentiles(obj) {
   return out;
 }
 function percentileAnnotation(numeric, higherIsBetter) {
+  const fmt = (n) => {
+    if (Number.isInteger(n)) return n.toString();
+    return (Math.round(n * 100) / 100).toString();
+  };
   if (numeric === 50) return "median";
-  if (numeric >= 95) return higherIsBetter ? `best ${(100 - numeric).toFixed(numeric % 1 ? 1 : 0)}%` : `worst ${(100 - numeric).toFixed(numeric % 1 ? 1 : 0)}%`;
-  if (numeric <= 5) return higherIsBetter ? `worst ${numeric.toFixed(numeric % 1 ? 1 : 0)}%` : `best ${numeric.toFixed(numeric % 1 ? 1 : 0)}%`;
+  if (numeric >= 95) return higherIsBetter ? `best ${fmt(100 - numeric)}%` : `worst ${fmt(100 - numeric)}%`;
+  if (numeric <= 5) return higherIsBetter ? `worst ${fmt(numeric)}%` : `best ${fmt(numeric)}%`;
   return "";
 }
 function isValidOpenRouterModelId(id) {
@@ -15019,7 +14905,9 @@ async function fetchOpenRouterModelInfo(modelId, baseUrl, authToken, timeoutMs =
   clearTimeout(timeoutHandle);
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    return { ok: false, error: body.slice(0, 300), status: res.status };
+    const truncated = body.length > 300 ? body.slice(0, 300) + "\u2026 (truncated)" : body;
+    const error2 = truncated || `HTTP ${res.status} error`;
+    return { ok: false, error: error2, status: res.status };
   }
   try {
     const payload = await res.json();
@@ -15085,7 +14973,7 @@ function priceLevel(s) {
   return "neutral";
 }
 function mdCell(s) {
-  return s.replace(/\|/g, "\\|");
+  return s.replace(/\|/g, "\\|").replace(/\n/g, " ");
 }
 function formatModelInfoMarkdown(data, modelId) {
   const lines = [];
@@ -29657,7 +29545,7 @@ function isElectron() {
 }
 
 // src/cli.ts
-import { writeFileSync as writeFileSync2, existsSync as existsSync2, statSync } from "node:fs";
+import { writeFileSync as writeFileSync2, existsSync as existsSync2, statSync, unlinkSync } from "node:fs";
 import { resolve as resolvePath, isAbsolute, join as join2, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -29693,33 +29581,6 @@ function parseFlags(args) {
   }
   return flags;
 }
-function profileFromFlags(flags) {
-  const p = {};
-  if (flags.mode) p.mode = flags.mode;
-  if (flags.api) p.api = flags.api;
-  if (flags.model) p.model = flags.model;
-  if (flags.url) p.url = flags.url;
-  if (flags.api_key) p.api_key = flags.api_key;
-  if (flags.api_token) p.api_token = flags.api_token;
-  if (flags.second_model) p.second_model = flags.second_model;
-  if (flags.timeout && flags.timeout !== "null" && flags.timeout !== "") {
-    const n = Number(flags.timeout);
-    if (!isFinite(n) || n < 0)
-      die(`--timeout must be a non-negative number, got '${flags.timeout}'`);
-    p.timeout = n;
-  }
-  if (flags.context_window && flags.context_window !== "null" && flags.context_window !== "") {
-    const n = Number(flags.context_window);
-    if (!isFinite(n) || n < 0)
-      die(
-        `--context_window must be a non-negative number, got '${flags.context_window}'`
-      );
-    p.context_window = n;
-  }
-  if (flags.app_name) p.app_name = flags.app_name;
-  if (flags.http_referer) p.http_referer = flags.http_referer;
-  return p;
-}
 function cmdList() {
   const settings = ensureSettingsExist();
   const names = Object.keys(settings.profiles);
@@ -29736,115 +29597,6 @@ function cmdList() {
     const ensemble = p.second_model ? ` + ${p.second_model}` : "";
     info(`${marker} ${name}  [${p.mode}]  ${p.api}  ${p.model}${ensemble}`);
   }
-}
-function cmdAdd(name, args) {
-  const settings = ensureSettingsExist();
-  if (settings.profiles[name]) {
-    die(`Profile '${name}' already exists. Use 'profile edit' to modify it.`);
-  }
-  const flags = parseFlags(args);
-  if (!flags.mode)
-    die("Missing required flag: --mode (local | remote | remote-ensemble)");
-  if (!flags.api)
-    die(
-      `Missing required flag: --api (${Object.keys(API_PRESETS).join(", ")})`
-    );
-  if (!flags.model) die("Missing required flag: --model <model-identifier>");
-  const profile = profileFromFlags(flags);
-  const validation = validateProfile(name, profile);
-  if (!validation.valid) {
-    die(
-      `Profile validation failed:
-${validation.errors.map((e) => `  - ${e}`).join("\n")}`
-    );
-  }
-  settings.profiles[name] = profile;
-  saveSettings(settings);
-  info(`Profile '${name}' added.`);
-}
-function cmdSelect(name) {
-  const settings = ensureSettingsExist();
-  if (!settings.profiles[name]) {
-    const available = Object.keys(settings.profiles).join(", ") || "(none)";
-    die(`Profile '${name}' not found. Available: ${available}`);
-  }
-  const profile = settings.profiles[name];
-  const validation = validateProfile(name, profile);
-  if (!validation.valid) {
-    die(
-      `Cannot select profile '${name}' \u2014 validation failed:
-` + validation.errors.map((e) => `  - ${e}`).join("\n")
-    );
-  }
-  settings.active = name;
-  saveSettings(settings);
-  const resolved = resolveProfile(name, profile);
-  info(`Active profile: ${name}`);
-  info(`  Mode:     ${resolved.mode}`);
-  info(`  Protocol: ${resolved.protocol}`);
-  info(`  URL:      ${resolved.url}`);
-  info(`  Model:    ${resolved.model}`);
-  if (resolved.secondModel) {
-    info(`  Second:   ${resolved.secondModel}`);
-  }
-}
-function cmdEdit(name, args) {
-  const settings = ensureSettingsExist();
-  if (!settings.profiles[name]) {
-    die(`Profile '${name}' not found.`);
-  }
-  const flags = parseFlags(args);
-  if (Object.keys(flags).length === 0) {
-    die(
-      'No fields to edit. Use --field value pairs (e.g. --model "new-model").'
-    );
-  }
-  const clearFields = Object.entries(flags).filter(([, v]) => v === "" || v === "null").map(([k]) => k);
-  const updates = profileFromFlags(flags);
-  const updated = { ...settings.profiles[name], ...updates };
-  for (const key of clearFields) {
-    delete updated[key];
-  }
-  const validation = validateProfile(name, updated);
-  if (!validation.valid) {
-    die(
-      `Validation failed after edit:
-${validation.errors.map((e) => `  - ${e}`).join("\n")}`
-    );
-  }
-  settings.profiles[name] = updated;
-  saveSettings(settings);
-  info(`Profile '${name}' updated.`);
-}
-function cmdRemove(name) {
-  const settings = ensureSettingsExist();
-  if (!settings.profiles[name]) {
-    die(`Profile '${name}' not found.`);
-  }
-  if (name === settings.active) {
-    die(
-      `Cannot remove the active profile '${name}'. Select a different profile first.`
-    );
-  }
-  delete settings.profiles[name];
-  saveSettings(settings);
-  info(`Profile '${name}' removed.`);
-}
-function cmdRename(oldName, newName) {
-  const settings = ensureSettingsExist();
-  if (!settings.profiles[oldName]) {
-    die(`Profile '${oldName}' not found.`);
-  }
-  if (settings.profiles[newName]) {
-    die(`Profile '${newName}' already exists.`);
-  }
-  settings.profiles[newName] = settings.profiles[oldName];
-  delete settings.profiles[oldName];
-  if (settings.active === oldName) {
-    settings.active = newName;
-  }
-  saveSettings(settings);
-  info(`Profile '${oldName}' renamed to '${newName}'.`);
 }
 async function cmdModelInfo(modelId, flags) {
   const settings = ensureSettingsExist();
@@ -29949,6 +29701,10 @@ function generateGitDiff(base, sourceFiles) {
     cwd: process.cwd(),
     encoding: "utf-8"
   });
+  if (cwdIsGit.error) {
+    const err = cwdIsGit.error;
+    die(`Failed to spawn git: ${err.message}`);
+  }
   if (cwdIsGit.status !== 0) {
     die("cwd is not a git repository; pass --diff <path> or run from inside a git checkout.");
   }
@@ -29983,7 +29739,13 @@ function generateGitDiff(base, sourceFiles) {
       `diff vs ${base} is empty for ${sourceFiles.length} source file(s); nothing to review.`
     );
   }
-  writeFileSync2(outPath, diffText, "utf-8");
+  try {
+    writeFileSync2(outPath, diffText, "utf-8");
+  } catch (err) {
+    die(
+      `Failed to write diff to '${outPath}': ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
   return outPath;
 }
 function autoDetectBase() {
@@ -29992,6 +29754,10 @@ function autoDetectBase() {
     ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
     { cwd: process.cwd(), encoding: "utf-8" }
   );
+  if (originHead.error) {
+    const err = originHead.error;
+    die(`Failed to spawn git: ${err.message}`);
+  }
   if (originHead.status === 0 && originHead.stdout.trim()) {
     return originHead.stdout.trim();
   }
@@ -30047,7 +29813,15 @@ function parseSearchExistingArgs(args) {
   for (const fp of folderPaths) {
     const abs = isAbsolute(fp) ? fp : resolvePath(fp);
     if (!existsSync2(abs)) die(`--in path not found: ${fp}`);
-    if (!statSync(abs).isDirectory()) die(`--in path is not a directory: ${fp}`);
+    let isDir;
+    try {
+      isDir = statSync(abs).isDirectory();
+    } catch (err) {
+      die(
+        `Cannot stat --in path '${fp}': ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+    if (!isDir) die(`--in path is not a directory: ${fp}`);
   }
   for (const sf of sourceFiles) {
     const abs = isAbsolute(sf) ? sf : resolvePath(sf);
@@ -30083,9 +29857,11 @@ function parseSearchExistingArgs(args) {
 async function cmdSearchExisting(rawArgs) {
   const opts = parseSearchExistingArgs(rawArgs);
   let diffPath = opts.diffPath;
+  let autoGeneratedDiffPath;
   if (!diffPath && opts.sourceFiles.length > 0) {
     const base = opts.base ?? autoDetectBase();
     diffPath = generateGitDiff(base, opts.sourceFiles);
+    autoGeneratedDiffPath = diffPath;
     info(`Generated PR diff via git: ${diffPath}`);
   } else if (opts.diffPath) {
     const abs = isAbsolute(opts.diffPath) ? opts.diffPath : resolvePath(opts.diffPath);
@@ -30138,20 +29914,28 @@ async function cmdSearchExisting(rawArgs) {
       await transport.close();
     } catch {
     }
+    if (autoGeneratedDiffPath) {
+      try {
+        unlinkSync(autoGeneratedDiffPath);
+      } catch {
+      }
+    }
   }
 }
 function printUsage() {
-  info(`LLM Externalizer \u2014 Profile Management CLI
+  info(`LLM Externalizer \u2014 CLI
+
+Profile mutation is DISABLED. Edit ${getSettingsPath()} manually with your
+editor to change models, profiles, or API keys. Then restart Claude Code, or
+call the MCP "reset" tool, to reload.
 
 Usage:
-  llm-externalizer profile list
-  llm-externalizer profile add <name> --mode <mode> --api <api> --model <model> [options]
-  llm-externalizer profile select <name>
-  llm-externalizer profile edit <name> --field <value> [...]
-  llm-externalizer profile remove <name>
-  llm-externalizer profile rename <old-name> <new-name>
+  llm-externalizer profile list                          # read-only profile inspector
   llm-externalizer model-info <model-id> [--markdown | --json [file]] [--no-color]
   llm-externalizer search-existing "<description>" [<src-files>...] --in <path> [--base <ref>] [--diff <path>] [--free]
+
+Disabled (would change settings.yaml \u2014 do this manually instead):
+  llm-externalizer profile add | select | edit | remove | rename
 
 search-existing batches the codebase into FFD-packed LLM requests of typically
 1-5 files each, or one group per request if you pass ---GROUP:id--- markers.
@@ -30190,30 +29974,13 @@ search-existing flags:
   --timeout-hours <n>    Max wall time for the whole scan (default 4 hours).
                          Pass 0 to disable. Accepts fractional hours (e.g. 0.5 = 30 min).
 
-Modes:
-  local             Sequential requests to a local server
-  remote            Parallel requests, single model via OpenRouter
-  remote-ensemble   Parallel requests, two models, combined report
-
-API Presets:
-  lmstudio-local    LM Studio native API     http://localhost:1234
-  ollama-local      Ollama OpenAI-compat     http://localhost:11434
-  vllm-local        vLLM OpenAI-compat       http://localhost:8000
-  llamacpp-local    llama.cpp OpenAI-compat   http://localhost:8080
-  generic-local     Any OpenAI-compat        (url required)
-  openrouter-remote OpenRouter               https://openrouter.ai/api
-
-Optional flags (for add/edit):
-  --url <url>              Override preset default URL
-  --api_key <key|$ENV>     API key (remote) \u2014 env var ref or direct value
-  --api_token <token|$ENV> Auth token (local) \u2014 env var ref or direct value
-  --second_model <model>   Second model for remote-ensemble mode
-  --timeout <seconds>      Request timeout
-  --context_window <size>  Context window override (0 = auto)
-  --app_name <name>        App name for OpenRouter dashboard
-  --http_referer <url>     HTTP Referer for OpenRouter analytics
-
 Settings file: ${getSettingsPath()}
+
+To change models, profiles, API keys, URLs, timeouts, or the active profile:
+open the settings file above in your editor, make the edits, save, and then
+either restart Claude Code or call the MCP "reset" tool to reload. The CLI
+mutation subcommands (add / select / edit / remove / rename) were removed on
+purpose \u2014 only the user may change configuration, not agents.
 `);
 }
 async function main() {
@@ -30239,45 +30006,29 @@ async function main() {
     die(`Unknown command '${args[0]}'. Use 'profile', 'model-info', or 'search-existing' subcommand, or --help.`);
   }
   const subcommand = args[1];
-  const rest = args.slice(2);
+  const MUTATING_SUBCOMMANDS = /* @__PURE__ */ new Set([
+    "add",
+    "select",
+    "use",
+    "edit",
+    "remove",
+    "rm",
+    "rename",
+    "mv"
+  ]);
+  if (MUTATING_SUBCOMMANDS.has(subcommand)) {
+    die(
+      `'profile ${subcommand}' is disabled. Model and profile configuration is user-only. Edit ${getSettingsPath()} manually in your editor, then restart Claude Code or call the MCP 'reset' tool to reload. Use 'profile list' to inspect the current configuration.`
+    );
+  }
   switch (subcommand) {
     case "list":
     case "ls":
       cmdList();
       break;
-    case "add":
-      if (!rest[0] || rest[0].startsWith("--")) {
-        die(
-          "Usage: profile add <name> --mode <mode> --api <api> --model <model>"
-        );
-      }
-      cmdAdd(rest[0], rest.slice(1));
-      break;
-    case "select":
-    case "use":
-      if (!rest[0]) die("Usage: profile select <name>");
-      cmdSelect(rest[0]);
-      break;
-    case "edit":
-      if (!rest[0] || rest[0].startsWith("--")) {
-        die("Usage: profile edit <name> --field <value> [...]");
-      }
-      cmdEdit(rest[0], rest.slice(1));
-      break;
-    case "remove":
-    case "rm":
-      if (!rest[0]) die("Usage: profile remove <name>");
-      cmdRemove(rest[0]);
-      break;
-    case "rename":
-    case "mv":
-      if (!rest[0] || !rest[1])
-        die("Usage: profile rename <old-name> <new-name>");
-      cmdRename(rest[0], rest[1]);
-      break;
     default:
       die(
-        `Unknown profile command '${subcommand}'. Use: list, add, select, edit, remove, rename.`
+        `Unknown profile command '${subcommand}'. Only 'list' is available \u2014 profile mutation was disabled by design. Edit ${getSettingsPath()} manually to change models or profiles.`
       );
   }
 }

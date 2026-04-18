@@ -100,7 +100,7 @@ describe("parseFileGroups", () => {
     expect(groups.find((g) => g.id === "auth")?.files).toEqual(["/path/auth.ts"]);
     const trailingUnnamed = groups[groups.length - 1];
     expect(trailingUnnamed.id).toBe("");
-    expect(trailingUnnamed.files).toContain("/path/stray.ts");
+    expect(trailingUnnamed.files).toEqual(["/path/stray.ts"]);
   });
 
   it("drops empty named groups (header immediately followed by footer)", () => {
@@ -167,7 +167,11 @@ describe("autoGroupByHeuristic", () => {
   });
 
   afterAll(() => {
-    try { rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    } catch (err) {
+      console.warn(`grouping.test cleanup failed for ${tmpRoot}:`, err);
+    }
   });
 
   it("returns empty array for empty input", () => {
@@ -333,8 +337,8 @@ describe("splitPerFileSections", () => {
     const result = splitPerFileSections(content, [fileA, fileB]);
     expect(result.size).toBe(2);
     expect(result.get(fileA)).toBe("Body for auth.");
-    // The body for the last file may include trailing whitespace — trimmed.
-    expect(result.get(fileB)?.startsWith("Body for db.")).toBe(true);
+    // Trailing whitespace is stripped by .trim() in splitPerFileSections.
+    expect(result.get(fileB)).toBe("Body for db.");
   });
 
   it("tolerates backtick and quote decorations around the path", () => {

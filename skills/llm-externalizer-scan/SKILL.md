@@ -10,13 +10,13 @@ context: fork
 agent: llm-externalizer-reviewer
 ---
 
-Scan the target in `$ARGUMENTS` with the LLM Externalizer ensemble and return only report file paths. Runs in the `llm-externalizer-reviewer` forked subagent — verbose scan output stays out of the orchestrator window.
-
 # LLM Externalizer — Full Project Scan
+
+Scan `$ARGUMENTS` with the LLM Externalizer ensemble and return only report file paths. Runs in the `llm-externalizer-reviewer` forked subagent — verbose scan output stays out of the orchestrator.
 
 ## Overview
 
-Run a codebase scan via the LLM Externalizer MCP server using the active profile (default: `remote-ensemble`, parallel). One report is written per file. Uses `context: fork` — work runs in the restricted `llm-externalizer-reviewer` subagent (Haiku, no Write/Edit) and only final report paths come back.
+Codebase scan via the LLM Externalizer MCP server, active profile (default: `remote-ensemble`, parallel). One report per file. `context: fork` runs work in the `llm-externalizer-reviewer` subagent (Haiku, no Write/Edit); only report paths come back.
 
 ## Prerequisites
 
@@ -36,7 +36,7 @@ Copy this checklist and track your progress:
    - **≤5 files** → `code_task` with `answer_mode: 0`, `max_retries: 3`.
    - **Glob** → `Glob` to expand, then `code_task`.
 4. [ ] Call the tool. Pass `free: true` only if asked (warn about prompt logging first).
-5. [ ] Default rubric for `instructions` unless overridden: *"Audit for: 1) Logic bugs, 2) Error handling gaps, 3) Security issues, 4) Resource leaks, 5) Broken references. Reference function names. Be terse."*
+5. [ ] Default rubric: *"Report REAL bugs only — logic errors, crashes, security with exploit paths, data corruption, functionality mismatch, local broken references. DO NOT report missing error handling / null checks / input validation / logging / style preferences / refactoring suggestions. Respect the source file's coding style. Cite function names + line numbers. Be terse."*
 6. [ ] Collect report paths. Do NOT read or summarize report contents.
 7. [ ] Return paths using the Output format below.
 
@@ -61,13 +61,13 @@ On failure: `[FAILED] scan-<label> — <one-line reason>`
 
 ## Error Handling
 
-| Error | Cause | Resolution |
-|-------|-------|------------|
-| Service offline | MCP server not running | Restart Claude Code; abort |
-| Auth 401 | OpenRouter key missing | Set `userConfig.openrouter_api_key` or `$OPENROUTER_API_KEY` |
-| Credit 402 | Balance < $0.05 | Server auto-falls back to free Nemotron |
-| Empty response | Cold start / timeout | Server retries up to 15× with 2s backoff |
-| No files found | Wrong path or all gitignored | Verify target and `use_gitignore` setting |
+| Error | Fix |
+|-------|-----|
+| Service offline | Restart Claude Code; abort |
+| Auth 401 | Set `userConfig.openrouter_api_key` or `$OPENROUTER_API_KEY` |
+| Credit 402 | Server auto-falls back to free Nemotron |
+| Empty response | Server auto-retries up to 15× (2s backoff) |
+| No files found | Verify target path and `use_gitignore` |
 
 ## Examples
 

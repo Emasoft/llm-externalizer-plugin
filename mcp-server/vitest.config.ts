@@ -12,9 +12,6 @@ export default defineConfig({
     include: [
       'src/index.test.ts',
       'src/grouping.test.ts',
-      'src/live.test.ts',
-      'src/live-extended.test.ts',
-      'src/live-websearch.test.ts',
     ],
   },
 });

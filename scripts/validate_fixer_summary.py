@@ -37,7 +37,7 @@ import sys
 from pathlib import Path
 
 _FIXER_TAG = ".fixer."
-_HEADER_RE = re.compile(r"^#\s+Fixer\s+Summary", re.MULTILINE | re.IGNORECASE)
+_HEADER_RE = re.compile(r"\A\s*#\s+Fixer\s+Summary", re.IGNORECASE)
 _SECTION_MARKERS = (
     re.compile(r"^##\s+Findings\b", re.MULTILINE | re.IGNORECASE),
     re.compile(r"^##\s+Verification\s+checks\b", re.MULTILINE | re.IGNORECASE),
@@ -48,7 +48,9 @@ _SECTION_MARKERS = (
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--summary", required=True, type=Path, help="Absolute path to a fixer .fixer. summary")
-    parser.add_argument("--reports-dir", required=True, type=Path, help="Expected reports directory — summary must resolve inside this")
+    parser.add_argument(
+        "--reports-dir", required=True, type=Path, help="Expected reports directory — summary must resolve inside this"
+    )
     args = parser.parse_args()
 
     summary: Path = args.summary
@@ -58,7 +60,12 @@ def main() -> int:
         print(f"ERROR: summary not found: {summary}", file=sys.stderr)
         return 2
 
-    if summary.stat().st_size == 0:
+    try:
+        size = summary.stat().st_size
+    except OSError as exc:
+        print(f"ERROR: cannot stat {summary}: {exc}", file=sys.stderr)
+        return 2
+    if size == 0:
         print(f"ERROR: summary is empty: {summary}", file=sys.stderr)
         return 7
 

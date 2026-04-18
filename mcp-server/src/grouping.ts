@@ -78,6 +78,11 @@ export function parseFileGroups(paths: string[]): FileGroup[] {
 
     const footerMatch = entry.match(GROUP_FOOTER_RE);
     if (footerMatch) {
+      if (currentGroup && footerMatch[1] !== currentGroup.id) {
+        throw new Error(
+          `Group footer '${entry}' does not match open group '${currentGroup.id}'`,
+        );
+      }
       if (currentGroup && currentGroup.files.length > 0) {
         groups.push(currentGroup);
       }
@@ -155,13 +160,8 @@ function statFileForGrouping(p: string): SizedFile {
   const ext = extWithDot ? extWithDot.slice(1).toLowerCase() : "noext";
   const base = basename(p);
   const stem = base.slice(0, base.length - extWithDot.length);
-  let size = 0;
-  try {
-    const st = statSync(p);
-    if (st.isFile()) size = st.size;
-  } catch {
-    size = 0;
-  }
+  const st = statSync(p);
+  const size = st.isFile() ? st.size : 0;
   return { path: p, parent, ext, base, stem, size };
 }
 
@@ -260,7 +260,7 @@ export function autoGroupByHeuristic(
 
   for (const [, bucket] of primaryBuckets) {
     const sample = bucket[0];
-    const lastDir = sample.parent.split("/").filter(Boolean).pop() || "root";
+    const lastDir = basename(sample.parent) || "root";
     const rawIdBase = `${lastDir}-${sample.ext}`;
 
     const totalSize = bucket.reduce((s, f) => s + f.size, 0);
@@ -305,11 +305,25 @@ export function autoGroupByHeuristic(
 // one report per file.
 
 /**
+ * True when `needle` is a proper path-boundary suffix of `haystack`
+ * (equal strings, or `haystack` ends with `needle` with a `/` or `\`
+ * immediately preceding the match). This prevents `/lib/utils.ts` from
+ * falsely matching `/src/utils.ts` via loose `endsWith`.
+ */
+function isPathSuffix(haystack: string, needle: string): boolean {
+  if (haystack === needle) return true;
+  if (!haystack.endsWith(needle)) return false;
+  const boundary = haystack[haystack.length - needle.length - 1];
+  return boundary === "/" || boundary === "\\";
+}
+
+/**
  * Parse an LLM response that contains per-file `## File: <path>` section
  * markers into a map of expected path → section body. Matching priority:
  *   1. exact path match
- *   2. suffix match (LLM dropped directory prefix)
- *   3. unique basename match (LLM returned bare filename)
+ *   2. unique basename match (LLM returned bare filename and exactly one
+ *      expected path shares that basename)
+ *   3. path-boundary suffix match (LLM dropped a directory prefix)
  *
  * Paths are trimmed so trailing whitespace or stray CR characters do not
  * break the lookup.
@@ -340,7 +354,7 @@ export function splitPerFileSections(
   const byBasename = new Map<string, string[]>();
   for (const fp of expectedPaths) {
     byExact.set(fp, fp);
-    const base = fp.split("/").pop() || fp;
+    const base = basename(fp) || fp;
     const bucket = byBasename.get(base) ?? [];
     bucket.push(fp);
     byBasename.set(base, bucket);
@@ -358,17 +372,21 @@ export function splitPerFileSections(
     if (byExact.has(h.pathRaw)) {
       matched = h.pathRaw;
     } else {
-      for (const fp of expectedPaths) {
-        if (h.pathRaw.endsWith(fp) || fp.endsWith(h.pathRaw)) {
-          matched = fp;
-          break;
-        }
-      }
-      if (!matched) {
-        const base = h.pathRaw.split("/").pop() || h.pathRaw;
-        const bucket = byBasename.get(base);
-        if (bucket && bucket.length === 1) {
-          matched = bucket[0];
+      // Prefer unique-basename match before loose suffix match: when the
+      // LLM returns a bare filename and exactly one expected path shares
+      // that basename, pick it. Falling through to endsWith() would grab
+      // the first sibling basename in insertion order and silently
+      // misassign the section when multiple expected paths share it.
+      const headerBase = basename(h.pathRaw) || h.pathRaw;
+      const basenameBucket = byBasename.get(headerBase);
+      if (basenameBucket && basenameBucket.length === 1) {
+        matched = basenameBucket[0];
+      } else {
+        for (const fp of expectedPaths) {
+          if (isPathSuffix(h.pathRaw, fp) || isPathSuffix(fp, h.pathRaw)) {
+            matched = fp;
+            break;
+          }
         }
       }
     }

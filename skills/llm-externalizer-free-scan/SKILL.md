@@ -42,7 +42,7 @@ Copy this checklist and track your progress:
   "use_gitignore": true,
   "extensions": "<if parsed from prompt>",
   "exclude_dirs": "<if parsed from prompt>",
-  "instructions": "<parsed instructions or default: 'Audit for bugs, error handling gaps, security issues, and resource leaks. Reference function names.'>"
+  "instructions": "<parsed instructions or default: 'Report REAL bugs only — logic bugs, crashes, security vulnerabilities with exploit paths, data corruption, functionality mismatch. DO NOT report missing error handling / null checks / validation / logging (fail-fast is a valid style choice). Respect the source file coding style. Reference function names + line numbers. Be terse.'>"
 }
 ```
 
@@ -90,10 +90,12 @@ One `.md` report per source file, saved in `reports_dev/llm_externalizer/`. Each
 - [Usage patterns](references/usage-patterns.md)
   - Scan a codebase for issues, Analyze multiple files in parallel
   - Apply same check to each file independently
-  - Compare two file versions, Compare files in batch mode, Compare files via git diff
-  - Check for broken code references, Check for broken file imports
-  - Reuse instructions across operations, Simple task with ensemble off
-  - Quick factual answer, Code review with persona
+  - Compare two file versions (pair mode), Compare files in batch mode
+  - Compare files via git diff
+  - Check for broken code references after refactoring, Check for broken file imports
+  - Reuse instructions across operations, Simple task with ensemble off (save tokens)
+  - Quick factual answer with low max_tokens, Code review with persona
   - Scan folder with gitignore + excluded dirs, Use folder_path on any tool
   - Redact custom patterns, Check source against specification
-  - Check entire folder against specification, Grouped file processing, Code-optimized analysis
+  - Check entire folder against specification
+  - Grouped file processing (isolated reports), Code-optimized analysis

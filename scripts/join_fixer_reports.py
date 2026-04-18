@@ -45,7 +45,9 @@ _SECTION_MARKERS = (
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=_DESCRIPTION)
     parser.add_argument("--input-dir", required=True, type=Path, help="Directory containing .fixer.-tagged .md reports")
-    parser.add_argument("--output", required=True, type=Path, help="Absolute path of the final joined report (parent dirs auto-created)")
+    parser.add_argument(
+        "--output", required=True, type=Path, help="Absolute path of the final joined report (parent dirs auto-created)"
+    )
     return parser.parse_args()
 
 
@@ -78,14 +80,14 @@ def _validate(report: Path, reports_dir: Path) -> tuple[bool, str]:
     return True, ""
 
 
-def _write_joined(valid: list[Path], rejected: list[tuple[Path, str]], output: Path) -> None:
+def _write_joined(valid: list[Path], rejected: list[tuple[Path, str]], output: Path, input_dir: Path) -> None:
     ts = _dt.datetime.now().astimezone().isoformat(timespec="seconds")
     with output.open("w", encoding="utf-8") as out:
         out.write("# LLM Externalizer — Final Fixer Report\n\n")
         out.write(f"- Generated (local with UTC offset): {ts}\n")
         out.write(f"- Valid summaries joined: {len(valid)}\n")
         out.write(f"- Rejected (validation failed): {len(rejected)}\n")
-        out.write(f"- Input dir: `{output.parent}`\n\n")
+        out.write(f"- Input dir: `{input_dir}`\n\n")
         if rejected:
             out.write("## Rejected summaries\n\n")
             for path, reason in rejected:
@@ -142,7 +144,7 @@ def main() -> int:
         print(f"ERROR: cannot create output parent {output.parent}: {exc}", file=sys.stderr)
         return 4
 
-    _write_joined(valid, rejected, output)
+    _write_joined(valid, rejected, output, reports_dir)
     print(str(output))
     return 0
 

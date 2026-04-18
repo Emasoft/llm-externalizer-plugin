@@ -30,13 +30,13 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Validate plugin manifest
-        run: python3 -c "import json; json.load(open('.claude-plugin/plugin.json', encoding='utf-8'))"
+        run: python3 -c "import json, pathlib; json.loads(pathlib.Path('.claude-plugin/plugin.json').read_text(encoding='utf-8'))"
 
       - name: Version consistency check
         run: |
-          PV=$(python3 -c "import json; print(json.load(open('.claude-plugin/plugin.json'))['version'])")
-          PKG=$(python3 -c "import json; print(json.load(open('mcp-server/package.json'))['version'])")
-          SRV=$(python3 -c "import json; print(json.load(open('mcp-server/server.json'))['version'])")
+          PV=$(python3 -c "import json, pathlib; print(json.loads(pathlib.Path('.claude-plugin/plugin.json').read_text(encoding='utf-8'))['version'])")
+          PKG=$(python3 -c "import json, pathlib; print(json.loads(pathlib.Path('mcp-server/package.json').read_text(encoding='utf-8'))['version'])")
+          SRV=$(python3 -c "import json, pathlib; print(json.loads(pathlib.Path('mcp-server/server.json').read_text(encoding='utf-8'))['version'])")
           echo "plugin.json: $PV | package.json: $PKG | server.json: $SRV"
           if [ "$PV" != "$PKG" ] || [ "$PV" != "$SRV" ]; then
             echo "::error::Version mismatch across manifests"

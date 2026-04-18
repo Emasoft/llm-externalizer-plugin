@@ -40,8 +40,13 @@ def main() -> None:
     if settings_path.is_file():
         try:
             settings = json.loads(settings_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            settings = {}
+        except json.JSONDecodeError as exc:
+            print(
+                f"Error: {settings_path} is not valid JSON ({exc}). "
+                "Refusing to overwrite — fix or remove the file manually, then re-run.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         settings["statusLine"] = {"type": "command", "command": command}
         settings_path.write_text(
             json.dumps(settings, indent=2, ensure_ascii=False) + "\n",

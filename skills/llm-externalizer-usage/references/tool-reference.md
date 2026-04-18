@@ -63,11 +63,18 @@ If you need cross-file analysis across the whole codebase (e.g. "find duplicates
 | Tool | Purpose |
 |------|---------|
 | `discover` | Check service health, auth token status, context window, concurrency mode, profiles |
-| `reset` | Full soft-restart. Waits for running requests, then reloads settings and clears caches. |
-| `change_model` | Switch model in active profile |
-| `get_settings` | Copy settings.yaml to output dir, return file path |
-| `set_settings` | Read YAML from file_path, validate, backup old, write new settings |
+| `reset` | Full soft-restart. Waits for running requests, then reloads settings (picks up manual edits to `settings.yaml`) and clears caches. |
+| `get_settings` | Copy `settings.yaml` to output dir and return the path. Read-only view — edit the REAL file at `~/.llm-externalizer/settings.yaml` manually, then call `reset`. |
 | `or_model_info` / `or_model_info_table` / `or_model_info_json` | Query OpenRouter for a model's supported params, pricing, latency, uptime. Three output formats (pipe-delimited markdown, ANSI-colored terminal table, raw JSON). |
+
+### Disabled tools (by design)
+
+The LLM Externalizer MCP is read-only by design. The following tools exist but are disabled — calling them returns a refusal message:
+
+| Tool | Why disabled |
+|------|--------------|
+| `fix_code`, `batch_fix`, `merge_files`, `split_file`, `revert_file` | File edits are applied exclusively by the `llm-externalizer-scan-and-fix` plugin command, which spawns local agents that use Read+Edit directly. |
+| `set_settings`, `change_model` | Model & profile configuration is user-only. Edit `~/.llm-externalizer/settings.yaml` manually in your editor, then call `reset` or restart Claude Code. |
 
 ## Standard Input Fields
 

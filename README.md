@@ -62,13 +62,22 @@ A Claude Code plugin that offloads bounded LLM tasks to cheaper local or remote 
 | Tool | Purpose |
 |------|---------|
 | `discover` | Check service health, context window, concurrency mode, profiles, auth status |
-| `reset` | Full soft-restart — waits for running requests, reloads settings, clears caches |
-| `change_model` | Switch model in active profile |
-| `get_settings` | Copy settings.yaml to output dir for editing (returns file path only) |
-| `set_settings` | Read YAML from file, validate, backup old settings, write new. Rejects invalid configs |
+| `reset` | Full soft-restart — waits for running requests, reloads settings (picks up manual edits to `~/.llm-externalizer/settings.yaml`), clears caches |
+| `get_settings` | Copy `settings.yaml` to output dir for reading (returns the file path only — read-only view; edit the real file manually) |
 | `or_model_info` | Query OpenRouter for a model's supported params, pricing, latency, uptime — pipe-delimited markdown table output |
 | `or_model_info_table` | Same as `or_model_info` but ANSI-colored Unicode-bordered table for terminal rendering |
 | `or_model_info_json` | Raw JSON for programmatic use; optional `file_path` to persist to disk |
+
+### Read-only by design — disabled tools
+
+The MCP is read-only. Two classes of write tools exist in the codebase but are **disabled** — calling them returns a refusal message:
+
+| Disabled tool | Use this instead |
+|--------------|------------------|
+| `fix_code`, `batch_fix`, `merge_files`, `split_file`, `revert_file` | The `/llm-externalizer:llm-externalizer-scan-and-fix` plugin command — it spawns local agents that use Claude Code's Read+Edit directly. The MCP never writes to user source files. |
+| `set_settings`, `change_model` | Model & profile configuration is user-only. Edit `~/.llm-externalizer/settings.yaml` in your editor, then call `reset` or restart Claude Code. |
+
+The CLI mutation subcommands (`npx llm-externalizer profile add | select | edit | remove | rename`) are likewise disabled and refuse to run. Only `npx llm-externalizer profile list` is still available.
 
 ### Standard input fields (all content tools)
 
@@ -344,7 +353,7 @@ This shows service health, active profile, model, auth token status, and availab
 
 ## Configuration
 
-Settings at `~/.llm-externalizer/settings.yaml`. Use `/llm-externalizer:llm-externalizer-configure` to manage profiles interactively, or edit the YAML directly.
+Settings at `~/.llm-externalizer/settings.yaml`. **Changing models, profiles, API keys, or timeouts is user-only** — edit the file in your editor, save, then either restart Claude Code or call the MCP `reset` tool to reload. The `/llm-externalizer:llm-externalizer-configure` command is a read-only inspector only; it cannot mutate the file.
 
 ### Quick start with OpenRouter
 
@@ -415,7 +424,7 @@ Skills activate automatically when Claude Code encounters tasks matching their t
 | Command | Description |
 |---------|-------------|
 | `/llm-externalizer:llm-externalizer-discover` | Check health, active profile, model, auth status, context window |
-| `/llm-externalizer:llm-externalizer-configure` | List, switch, or add profiles (`list`, `switch <name>`, `add <name> --mode ... --api ... --model ...`) |
+| `/llm-externalizer:llm-externalizer-configure` | Read-only inspector. Shows the current profile table and reminds you to edit `~/.llm-externalizer/settings.yaml` manually to change anything |
 | `/llm-externalizer:llm-externalizer-search-existing-implementations` | Scan a codebase for existing implementations of a described feature (FFD-batched PR duplicate check) |
 | `/llm-externalizer:llm-externalizer-scan-and-fix` | Two-stage audit — per-file scan (answer_mode=0) + parallel `llm-externalizer-fixer` subagents (≤15 concurrent) + joined final report |
 

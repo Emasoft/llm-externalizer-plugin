@@ -1,0 +1,28 @@
+---
+# yamllint config — pragmatic defaults for this project.
+# Rationale: plain yamllint defaults are too strict for GitHub Actions
+# workflows (80-char lines, must-quote-truthy `on:` key, mandatory `---`
+# document start) and force either ugly line-breaks inside `${{ ... }}`
+# expressions or wrong edits (`on:` → `"on":`). This config keeps
+# yamllint useful for real mistakes (tab-indent, trailing whitespace,
+# syntax errors) while staying out of the way on stylistic non-issues.
+
+extends: default
+
+rules:
+  # GitHub Actions expressions routinely exceed 80 cols; 200 is a safe
+  # ceiling that still catches runaway single-line YAML.
+  line-length:
+    max: 200
+    level: warning
+  # The `---` marker is optional; many workflows in the wild omit it.
+  document-start: disable
+  # `on:` is a valid GitHub Actions top-level key; yamllint's "truthy"
+  # rule wants it quoted. Don't check keys — only flag bare truthy values.
+  truthy:
+    check-keys: false
+  # One space before inline comments is fine; yamllint's default is 2.
+  comments:
+    min-spaces-from-content: 1
+  # Workflow files rely on trailing newlines from editors; nothing fancy.
+  new-line-at-end-of-file: enable

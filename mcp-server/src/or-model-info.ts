@@ -55,9 +55,17 @@ export function sortedPercentiles(
  * - p95+ → "(worst 1-5%)" for latency / "(best 1-5%)" for throughput
  */
 export function percentileAnnotation(numeric: number, higherIsBetter: boolean): string {
+  // Pick enough decimal places to preserve sub-percent accuracy for
+  // fractional percentiles like p99.99 (delta = 0.01) — integer
+  // percentiles render as integers, fractional percentiles render with
+  // up to 2 decimals and trailing zeros trimmed.
+  const fmt = (n: number): string => {
+    if (Number.isInteger(n)) return n.toString();
+    return (Math.round(n * 100) / 100).toString();
+  };
   if (numeric === 50) return "median";
-  if (numeric >= 95) return higherIsBetter ? `best ${(100 - numeric).toFixed(numeric % 1 ? 1 : 0)}%` : `worst ${(100 - numeric).toFixed(numeric % 1 ? 1 : 0)}%`;
-  if (numeric <= 5) return higherIsBetter ? `worst ${numeric.toFixed(numeric % 1 ? 1 : 0)}%` : `best ${numeric.toFixed(numeric % 1 ? 1 : 0)}%`;
+  if (numeric >= 95) return higherIsBetter ? `best ${fmt(100 - numeric)}%` : `worst ${fmt(100 - numeric)}%`;
+  if (numeric <= 5) return higherIsBetter ? `worst ${fmt(numeric)}%` : `best ${fmt(numeric)}%`;
   return "";
 }
 
@@ -172,7 +180,9 @@ export async function fetchOpenRouterModelInfo(
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    return { ok: false, error: body.slice(0, 300), status: res.status };
+    const truncated = body.length > 300 ? body.slice(0, 300) + "… (truncated)" : body;
+    const error = truncated || `HTTP ${res.status} error`;
+    return { ok: false, error, status: res.status };
   }
   try {
     const payload = (await res.json()) as { data?: ModelInfoData };
@@ -256,7 +266,7 @@ function priceLevel(s?: string): QualityLevel {
 
 /** Escape a cell value for markdown tables (pipe must be backslash-escaped). */
 function mdCell(s: string): string {
-  return s.replace(/\|/g, "\\|");
+  return s.replace(/\|/g, "\\|").replace(/\n/g, " ");
 }
 
 /**

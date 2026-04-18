@@ -1,6 +1,47 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+
+## [Unreleased]
+
+### Breaking
+
+- MCP and CLI mutation surfaces are now disabled by design. The LLM
+  Externalizer MCP is **read-only**:
+  * `set_settings` and `change_model` MCP tools refuse every call with a
+    DISABLED message. Model and profile configuration is user-only —
+    edit `~/.llm-externalizer/settings.yaml` manually, then call the
+    `reset` tool (or restart Claude Code) to reload.
+  * `fix_code`, `batch_fix`, `merge_files`, `split_file`, `revert_file`
+    MCP tools likewise refuse every call. File edits are applied
+    exclusively by the `/llm-externalizer:llm-externalizer-scan-and-fix`
+    plugin command, which spawns local agents that use Claude Code's
+    Read+Edit tools directly. The MCP itself never writes to user
+    source files.
+  * CLI subcommands `npx llm-externalizer profile add | select | edit |
+    remove | rename` are removed. Only `profile list` remains as a
+    read-only inspector.
+- Rubric tightened: all scan/fix commands and agents now instruct the
+  LLM to report REAL bugs only (logic errors, crashes, security with
+  exploit path, data corruption, functionality mismatch, local broken
+  references). Missing error handling, null checks, input validation,
+  docstrings, logging, and refactoring suggestions are treated as
+  style preferences and must NOT be reported.
+- Fixer agent gained a 4-bucket classification step (REAL BUG / STYLE
+  PREFERENCE / HALLUCINATION / EXAGGERATION / CANTFIX) applied to every
+  finding before any edit. Only REAL BUG findings become FIXED; all
+  other classes are logged as FALSE-POSITIVE or CANTFIX with a reason.
+- Fixer and reviewer agents no longer declare a `tools:` allowlist —
+  they inherit the full Claude Code tool surface so they can use
+  SERENA MCP, TLDR, Grepika, LSP diagnostics, etc. for cheap
+  verification.
+
+### Fixed
+
+- The user-local OpenRouter profile had `test-model` as the primary
+  model id (a placeholder, not a real model). Replaced with
+  `google/gemini-3-flash-preview`.
+
 ## [4.1.5] - 2026-04-17
 
 ### Documentation
@@ -244,7 +285,7 @@ with no target-path and no --file-list, the orchestrator now runs a
 Step 0 auto-discovery pass instead of asking blindly or defaulting
 to cwd.
 
-The agent:
+Auto-discovery flow:
 
   1. Finds the real codebase root via `git rev-parse --show-toplevel`
      from CLAUDE_PROJECT_DIR, or searches up to 3 levels deep for
@@ -310,7 +351,7 @@ Verified: check_references.py --strict -> 0 broken, 0 dynamic.
 
 ### Documentation
 
-- Docs: update stale command/agent name references after v4.0.0 rename
+- Docs: update stale command-and-agent name references after v4.0.0 rename
 
 The v4.0.0 refactor renamed all commands and agents to carry the
 llm-externalizer- prefix, but several in-tree .md files still
@@ -346,7 +387,7 @@ remaining stale references.
 
 ### Refactored
 
-- Refactor!: unify all command/skill/agent names under llm-externalizer- prefix
+- Refactor!: unify all command, skill, and agent names under llm-externalizer- prefix
 
 Every user-facing entity in the plugin now uses the same prefix so
 discovery, autocompletion, and global listings are consistent.
@@ -371,7 +412,7 @@ Additional fixes:
     command and skill now advertises autocompletion hints.
   - All internal cross-references updated (scan-and-fix command's
     subagent_type, fixer agent self-refs including the /tmp backup
-    filename prefix, scan skill's agent: field, validate_fixer_summary
+    filename prefix, agent field in scan skill frontmatter, validate_fixer_summary
     docstring).
   - [FAILED]/[DONE] tag strings in the command bodies updated to
     match the new command names.
@@ -1101,7 +1142,7 @@ Three plugin-spec features deferred from v3.10.0 are now implemented
    - Default rubric: bugs, error handling gaps, security, resource
      leaks, broken references
 
-3. llm-externalizer-scan skill: context: fork + agent: llm-ext-reviewer
+3. llm-externalizer-scan skill — forked subagent via context=fork, agent=llm-ext-reviewer
    - Skill body rewritten to a self-contained task prompt using
      $ARGUMENTS — runs in the reviewer's isolated subagent context
    - Verbose scan output stays out of the orchestrator's context

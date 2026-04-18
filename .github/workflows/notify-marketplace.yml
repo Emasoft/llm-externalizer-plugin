@@ -44,7 +44,10 @@ jobs:
           repository: ${{ env.MARKETPLACE_OWNER }}/${{ env.MARKETPLACE_REPO }}
           event-type: plugin-updated
           client-payload: >-
-            {"plugin": ${{ toJSON(steps.plugin.outputs.name) }}, "ref": ${{ toJSON(steps.plugin.outputs.ref) }}, "source_repo": ${{ toJSON(github.repository) }}, "triggered_by": ${{ toJSON(github.actor) }}}
+            {"plugin": ${{ toJSON(steps.plugin.outputs.name) }},
+             "ref": ${{ toJSON(steps.plugin.outputs.ref) }},
+             "source_repo": ${{ toJSON(github.repository) }},
+             "triggered_by": ${{ toJSON(github.actor) }}}
 
       - name: Summary
         env:

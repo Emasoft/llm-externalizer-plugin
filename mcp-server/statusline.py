@@ -13,8 +13,9 @@ import sys
 import tempfile
 import time
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 # ── ANSI colors matching oh-my-posh theme ──
 BLUE = "\033[38;2;0;153;255m"
@@ -57,9 +58,9 @@ def build_bar(pct: int, width: int) -> str:
     return f"{bar_color}{'█' * filled}{bar_dim}{'░' * empty}{RESET}"
 
 
-def safe_jq(data: dict, *keys, default=None):
+def safe_jq(data: dict, *keys: str, default: Any = None) -> Any:
     """Navigate nested dict safely, like jq's .a.b.c // default."""
-    val = data
+    val: Any = data
     for k in keys:
         if isinstance(val, dict):
             val = val.get(k)
@@ -72,11 +73,13 @@ def get_claude_version() -> str:
     try:
         result = subprocess.run(
             ["claude", "--version"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():
             # Extract version number from output
-            m = re.match(r"[\d.]+", result.stdout.strip())
+            m = re.search(r"[\d.]+", result.stdout.strip())
             return m.group(0) if m else ""
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
@@ -88,7 +91,9 @@ def get_git_info(cwd: str) -> tuple[str, bool]:
     try:
         branch = subprocess.run(
             ["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, timeout=3,
+            capture_output=True,
+            text=True,
+            timeout=3,
         )
         if branch.returncode != 0:
             return "", False
@@ -96,11 +101,14 @@ def get_git_info(cwd: str) -> tuple[str, bool]:
         # Check for changes
         diff = subprocess.run(
             ["git", "-C", cwd, "diff", "--quiet", "HEAD"],
-            capture_output=True, timeout=3,
+            capture_output=True,
+            timeout=3,
         )
         untracked = subprocess.run(
             ["git", "-C", cwd, "ls-files", "--others", "--exclude-standard"],
-            capture_output=True, text=True, timeout=3,
+            capture_output=True,
+            text=True,
+            timeout=3,
         )
         has_changes = diff.returncode != 0 or bool(untracked.stdout.strip())
         return branch_name, has_changes
@@ -140,7 +148,9 @@ def get_oauth_token() -> str:
     try:
         result = subprocess.run(
             ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():
             blob = json.loads(result.stdout.strip())
@@ -162,7 +172,9 @@ def get_oauth_token() -> str:
     try:
         result = subprocess.run(
             ["secret-tool", "lookup", "service", "Claude Code-credentials"],
-            capture_output=True, text=True, timeout=3,
+            capture_output=True,
+            text=True,
+            timeout=3,
         )
         if result.returncode == 0 and result.stdout.strip():
             blob = json.loads(result.stdout.strip())
@@ -182,7 +194,10 @@ def fetch_usage_from_api(cache_dir: Path, claude_version: str) -> dict | None:
 
     # Check cache
     if cache_file.is_file():
-        age = time.time() - cache_file.stat().st_mtime
+        try:
+            age = time.time() - cache_file.stat().st_mtime
+        except OSError:
+            age = cache_max_age
         if age < cache_max_age:
             return read_json_file(cache_file)
 
@@ -219,7 +234,10 @@ def fetch_openrouter_budget(cache_dir: Path) -> float | None:
 
     # Check cache
     if cache_file.is_file():
-        age = time.time() - cache_file.stat().st_mtime
+        try:
+            age = time.time() - cache_file.stat().st_mtime
+        except OSError:
+            age = 60
         if age < 60:
             data = read_json_file(cache_file)
             if data and "data" in data:
