@@ -32156,7 +32156,7 @@ function buildTools() {
   return allTools;
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "4.1.5" },
+  { name: "llm-externalizer", version: "5.0.0" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {
