@@ -60,7 +60,7 @@ export function parseFileGroups(paths: string[]): FileGroup[] {
 
   const groups: FileGroup[] = [];
   const seenIds = new Set<string>();
-  let ungrouped: string[] = [];
+  const ungrouped: string[] = [];
   let currentGroup: FileGroup | null = null;
 
   for (const entry of paths) {

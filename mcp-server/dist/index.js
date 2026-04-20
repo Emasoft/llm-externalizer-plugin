@@ -14135,7 +14135,7 @@ function parseFileGroups(paths) {
   }
   const groups = [];
   const seenIds = /* @__PURE__ */ new Set();
-  let ungrouped = [];
+  const ungrouped = [];
   let currentGroup = null;
   for (const entry of paths) {
     const headerMatch = entry.match(GROUP_HEADER_RE);
