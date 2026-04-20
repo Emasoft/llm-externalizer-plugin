@@ -14676,11 +14676,18 @@ var API_PRESETS = {
   }
 };
 function getConfigDir() {
-  let dir = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
-  try {
-    dir = realpathSync(dir);
-  } catch {
+  const raw = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
+  function resolveDeepestExisting(p) {
+    try {
+      return realpathSync(p);
+    } catch {
+    }
+    const parent = join(p, "..");
+    if (parent === p) return p;
+    const resolvedParent = resolveDeepestExisting(parent);
+    return join(resolvedParent, p.slice(parent.length + (parent.endsWith("/") || parent.endsWith("\\") ? 0 : 1)));
   }
+  const dir = resolveDeepestExisting(raw);
   const home = (() => {
     try {
       return realpathSync(homedir());
@@ -14775,7 +14782,7 @@ function resolveProfile(name, profile) {
   if (!preset) {
     throw new Error(`Unknown api preset '${profile.api}'`);
   }
-  const rawAuth = preset.isLocal ? profile.api_token || preset.defaultAuthEnv : profile.api_key || preset.defaultAuthEnv;
+  const rawAuth = preset.isLocal ? profile.api_token || profile.api_key || preset.defaultAuthEnv : profile.api_key || preset.defaultAuthEnv;
   return {
     name,
     mode: profile.mode,

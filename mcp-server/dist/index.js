@@ -14134,6 +14134,7 @@ function parseFileGroups(paths) {
     return paths.length > 0 ? [{ id: "", files: paths }] : [];
   }
   const groups = [];
+  const seenIds = /* @__PURE__ */ new Set();
   let ungrouped = [];
   let currentGroup = null;
   for (const entry of paths) {
@@ -14142,11 +14143,12 @@ function parseFileGroups(paths) {
       if (currentGroup && currentGroup.files.length > 0) {
         groups.push(currentGroup);
       }
-      if (ungrouped.length > 0) {
-        groups.push({ id: "", files: ungrouped });
-        ungrouped = [];
+      const newId = headerMatch[1];
+      if (seenIds.has(newId)) {
+        throw new Error(`Duplicate group id '${newId}' in input_files_paths`);
       }
-      currentGroup = { id: headerMatch[1], files: [] };
+      seenIds.add(newId);
+      currentGroup = { id: newId, files: [] };
       continue;
     }
     const footerMatch = entry.match(GROUP_FOOTER_RE);
@@ -14329,11 +14331,14 @@ function splitPerFileSections(content, expectedPaths) {
       if (basenameBucket && basenameBucket.length === 1) {
         matched = basenameBucket[0];
       } else {
+        const suffixMatches = [];
         for (const fp of expectedPaths) {
           if (isPathSuffix(h.pathRaw, fp) || isPathSuffix(fp, h.pathRaw)) {
-            matched = fp;
-            break;
+            suffixMatches.push(fp);
           }
+        }
+        if (suffixMatches.length === 1) {
+          matched = suffixMatches[0];
         }
       }
     }
@@ -28291,11 +28296,18 @@ var API_PRESETS = {
   }
 };
 function getConfigDir() {
-  let dir = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
-  try {
-    dir = realpathSync(dir);
-  } catch {
+  const raw = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
+  function resolveDeepestExisting(p) {
+    try {
+      return realpathSync(p);
+    } catch {
+    }
+    const parent = join(p, "..");
+    if (parent === p) return p;
+    const resolvedParent = resolveDeepestExisting(parent);
+    return join(resolvedParent, p.slice(parent.length + (parent.endsWith("/") || parent.endsWith("\\") ? 0 : 1)));
   }
+  const dir = resolveDeepestExisting(raw);
   const home = (() => {
     try {
       return realpathSync(homedir());
@@ -28536,7 +28548,7 @@ function resolveProfile(name, profile) {
   if (!preset) {
     throw new Error(`Unknown api preset '${profile.api}'`);
   }
-  const rawAuth = preset.isLocal ? profile.api_token || preset.defaultAuthEnv : profile.api_key || preset.defaultAuthEnv;
+  const rawAuth = preset.isLocal ? profile.api_token || profile.api_key || preset.defaultAuthEnv : profile.api_key || preset.defaultAuthEnv;
   return {
     name,
     mode: profile.mode,
@@ -30351,7 +30363,7 @@ function writeStatsFile() {
       backend: currentBackend.type
     };
     const tmpStats = STATS_FILE + ".tmp";
-    writeFileSync2(tmpStats, JSON.stringify(stats), "utf-8");
+    writeFileSync2(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
     renameSync(tmpStats, STATS_FILE);
   } catch {
   }
@@ -34814,7 +34826,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     continue;
                   }
                   const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-                  const resolvedBase = importPath.startsWith("/") ? importPath : join2(resolveDir, importPath);
+                  const resolvedBase = importPath.startsWith("/") ? resolve2(importPath) : join2(resolveDir, importPath);
                   if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                     packageImports.push(importPath);
                     continue;
@@ -34909,7 +34921,7 @@ FAILED: File not found.`);
                 continue;
               }
               const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-              const resolvedBase = importPath.startsWith("/") ? importPath : join2(resolveDir, importPath);
+              const resolvedBase = importPath.startsWith("/") ? resolve2(importPath) : join2(resolveDir, importPath);
               if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                 packageImports.push(importPath);
                 continue;
