@@ -21,10 +21,6 @@ mcp-server/logs/
 mcp-server/llm_externalizer_output/
 mcp-server/reports_dev/
 reports_dev/
-# Audit reports produced by /llm-externalizer:* commands. These contain
-# absolute local paths and raw LLM output; never publish to the marketplace.
-reports/
-mcp-server/reports/
 
 # Build artifacts
 dist/
