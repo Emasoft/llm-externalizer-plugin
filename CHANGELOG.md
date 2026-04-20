@@ -1,6 +1,25 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.0.4] - 2026-04-20
+
+### Changed
+
+- Revert(publish): drop reports/ → reports_dev/ move step; gitignore reports/
+
+Simpler rule wins: the ./reports/ tree is always audit output, always
+private, and always gitignored. Agents — including those running from
+inside a git worktree — must write to the root-project ./reports/
+folder so the maintainer retains a single place to find audit output.
+No intermediate relocation needed.
+
+- .gitignore: add ./reports/ (and ./mcp-server/reports/) back to the
+  ignore list with a comment stating the agent-behavior rule.
+- scripts/publish.py: remove archive_reports_to_dev() and the Step 0
+  invocation + docstring entry. CPV no longer needs to re-scan the
+  tree because gitignored paths are already outside its scope.
+
+
 ## [9.0.3] - 2026-04-20
 
 ### Added
