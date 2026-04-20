@@ -60,12 +60,24 @@ export function parseFileGroups(paths: string[]): FileGroup[] {
 
   const groups: FileGroup[] = [];
   const seenIds = new Set<string>();
-  const ungrouped: string[] = [];
+  // pendingUngrouped collects files that appear outside any named group.
+  // Each time we encounter a named-group header we flush it as an id="" group
+  // so the ordering in the output matches the input: a pre-group unnamed
+  // chunk, the named group, then any post-group unnamed chunk stays separate.
+  let pendingUngrouped: string[] = [];
   let currentGroup: FileGroup | null = null;
+
+  const flushUngrouped = (): void => {
+    if (pendingUngrouped.length > 0) {
+      groups.push({ id: "", files: pendingUngrouped });
+      pendingUngrouped = [];
+    }
+  };
 
   for (const entry of paths) {
     const headerMatch = entry.match(GROUP_HEADER_RE);
     if (headerMatch) {
+      flushUngrouped();
       if (currentGroup && currentGroup.files.length > 0) {
         groups.push(currentGroup);
       }
@@ -95,16 +107,14 @@ export function parseFileGroups(paths: string[]): FileGroup[] {
     if (currentGroup) {
       currentGroup.files.push(entry);
     } else {
-      ungrouped.push(entry);
+      pendingUngrouped.push(entry);
     }
   }
 
   if (currentGroup && currentGroup.files.length > 0) {
     groups.push(currentGroup);
   }
-  if (ungrouped.length > 0) {
-    groups.push({ id: "", files: ungrouped });
-  }
+  flushUngrouped();
 
   return groups;
 }

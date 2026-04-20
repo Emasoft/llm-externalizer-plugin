@@ -14135,11 +14135,18 @@ function parseFileGroups(paths) {
   }
   const groups = [];
   const seenIds = /* @__PURE__ */ new Set();
-  const ungrouped = [];
+  let pendingUngrouped = [];
   let currentGroup = null;
+  const flushUngrouped = () => {
+    if (pendingUngrouped.length > 0) {
+      groups.push({ id: "", files: pendingUngrouped });
+      pendingUngrouped = [];
+    }
+  };
   for (const entry of paths) {
     const headerMatch = entry.match(GROUP_HEADER_RE);
     if (headerMatch) {
+      flushUngrouped();
       if (currentGroup && currentGroup.files.length > 0) {
         groups.push(currentGroup);
       }
@@ -14167,15 +14174,13 @@ function parseFileGroups(paths) {
     if (currentGroup) {
       currentGroup.files.push(entry);
     } else {
-      ungrouped.push(entry);
+      pendingUngrouped.push(entry);
     }
   }
   if (currentGroup && currentGroup.files.length > 0) {
     groups.push(currentGroup);
   }
-  if (ungrouped.length > 0) {
-    groups.push({ id: "", files: ungrouped });
-  }
+  flushUngrouped();
   return groups;
 }
 function hasNamedGroups(groups) {
