@@ -20,8 +20,8 @@ Push policy:
     No bypass exists.
 
 Steps (in order — validate is FIRST, no skipping):
-    0. Archive ./reports/ into ./reports_dev/reports-archive/<ts>/
-       (gitignored; keeps local paths out of CPV and the published tarball)
+    0. Move ./reports/ -> ./reports_dev/ (1:1 path mapping; gitignored;
+       keeps local paths out of CPV and the published tarball)
     1. Pre-flight: working tree clean + required tools present
     2. Validate (MANDATORY — all checks 0 errors): npm ci, typecheck,
        lint, build, test, ruff, shellcheck, plugin.json, CPV
@@ -187,58 +187,55 @@ def extract_release_notes(changelog_path: Path, version: str) -> str:
 
 
 def archive_reports_to_dev(repo_root: Path) -> int:
-    """Move everything under ./reports/ (and ./mcp-server/reports/) into
-    ./reports_dev/reports-archive/<UTC-timestamp>/ before validation runs.
+    """Move everything under ./reports/ into ./reports_dev/ preserving the
+    exact directory structure (and the same for ./mcp-server/reports/
+    -> ./mcp-server/reports_dev/).
 
     Why: the ./reports/ tree is where agents and workflow runs drop audit
     output. Those files carry absolute local paths (/Users/<name>/...),
     redacted secrets, and raw LLM output — none of which should ever land
     in the published plugin. ./reports_dev/ is gitignored (see .gitignore),
-    so moving the content there both keeps CPV / package publishers from
-    scanning sensitive paths AND preserves the data so agents that produced
-    it retain their audit trail after their workflow branch is merged
-    or deleted.
+    so moving the content there keeps CPV / package publishers from
+    scanning sensitive paths AND preserves the data so agents retain their
+    audit trail after their workflow branch is merged or deleted.
 
-    Idempotent and non-destructive: each run creates a fresh timestamped
-    subfolder, so repeated publishes never overwrite earlier archives.
-    Returns the number of files moved (0 when there was nothing to archive).
+    Path mapping is 1:1. A file at `reports/llm-externalizer/foo.md` lands
+    at `reports_dev/llm-externalizer/foo.md` — the exact same sub-path,
+    just with `reports` → `reports_dev` in the prefix. On collision the
+    destination is overwritten: the newer run's output wins, which is the
+    desired behavior for repeated publishes.
+
+    Returns the number of files moved (0 when there was nothing to move).
     """
-    import datetime
-
     moved = 0
-    sources = [repo_root / "reports", repo_root / "mcp-server" / "reports"]
-    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    archive_root = repo_root / "reports_dev" / "reports-archive" / ts
-    for src in sources:
-        if not src.is_dir():
+    pairs = [
+        (repo_root / "reports", repo_root / "reports_dev"),
+        (repo_root / "mcp-server" / "reports", repo_root / "mcp-server" / "reports_dev"),
+    ]
+    for src_root, dst_root in pairs:
+        if not src_root.is_dir():
             continue
-        # Count files first so we only create the archive folder if needed
-        files = [p for p in src.rglob("*") if p.is_file()]
+        files = [p for p in src_root.rglob("*") if p.is_file()]
         if not files:
             continue
-        # Preserve sub-tree structure: reports-archive/<ts>/reports/... and
-        # reports-archive/<ts>/mcp-server-reports/... so the archive is
-        # unambiguous even when both source trees are used.
-        dest_prefix = (
-            "reports" if src.name == "reports" and src.parent == repo_root
-            else "mcp-server-reports"
-        )
         for f in files:
-            rel = f.relative_to(src)
-            dest = archive_root / dest_prefix / rel
+            rel = f.relative_to(src_root)
+            dest = dst_root / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
+            if dest.exists():
+                dest.unlink()  # overwrite collisions — newer run wins
             shutil.move(str(f), str(dest))
             moved += 1
-        # Remove empty sub-directories that remained after moving files.
+        # Remove now-empty sub-directories (deepest-first).
         for d in sorted(
-            (p for p in src.rglob("*") if p.is_dir()),
+            (p for p in src_root.rglob("*") if p.is_dir()),
             key=lambda p: len(p.parts),
             reverse=True,
         ):
             try:
                 d.rmdir()
             except OSError:
-                pass  # non-empty (a symlink survived, etc.) — leave it
+                pass  # non-empty (symlink survived, etc.) — leave it
     return moved
 
 
@@ -486,25 +483,27 @@ def main():
 
 def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> None:
 
-    # ── 0. Archive ./reports/ into ./reports_dev/ ──
+    # ── 0. Move ./reports/ into ./reports_dev/ (1:1 path mapping) ──
     # Workflows and agents drop audit output under ./reports/. That tree
     # contains local absolute paths, redacted secret markers, and raw LLM
-    # output — none of which belong in a published plugin. Move everything
-    # into the gitignored ./reports_dev/reports-archive/<ts>/ first so:
-    #   (a) the pre-flight working-tree check doesn't trip on tracked
-    #       or untracked report files,
-    #   (b) CPV's "private path leaked" scan ignores them (they now live
-    #       under a gitignored, never-published subtree),
-    #   (c) agents running inside ephemeral workflow branches keep their
-    #       audit trail after their branch is merged or deleted.
-    # Safe-by-default: archives into a fresh timestamped folder each run,
-    # so repeated publishes never overwrite prior snapshots.
-    print("\n── 0. Archive ./reports/ to ./reports_dev/reports-archive/ ──")
+    # output — none of which belong in a published plugin. Move every file
+    # into ./reports_dev/ at the SAME sub-path (just replace the prefix),
+    # so a file at `reports/llm-externalizer/foo.md` ends up at
+    # `reports_dev/llm-externalizer/foo.md`. ./reports_dev/ is gitignored,
+    # so this:
+    #   (a) keeps the pre-flight working-tree check clean,
+    #   (b) keeps CPV's "private path leaked" scan from seeing them
+    #       (they now live under a never-published subtree),
+    #   (c) preserves the audit trail for agents running in ephemeral
+    #       workflow branches — reports survive a merge-and-delete.
+    # Mapping is 1:1: users can locate a moved file by simply replacing
+    # `reports` with `reports_dev` in its path. Collisions overwrite.
+    print("\n── 0. Move ./reports/ -> ./reports_dev/ (same path, gitignored) ──")
     moved = archive_reports_to_dev(repo_root)
     if moved:
         print(f"  Moved {moved} file(s) out of ./reports/ into reports_dev/.")
     else:
-        print("  ./reports/ is empty — nothing to archive.")
+        print("  ./reports/ is empty — nothing to move.")
     print()
 
     # ── --check-only: run full validation without publishing ──
