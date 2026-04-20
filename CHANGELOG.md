@@ -1,6 +1,198 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.0.2] - 2026-04-20
+
+### Added
+
+- Feat(format): sentinel [[FINDING]] blocks replace ### FINDING headings
+
+Why: the old ### FINDING: scan format collides with the aggregator's
+own ### N. FINDING: output numbering and with ensemble-wrapper ## Model:
+sections. When the aggregator embedded an ensemble response into a
+finding body, the nested ### headings in that body got re-parsed as
+separate findings, swallowing all subsequent bugs in the list.
+
+The new format uses markdown-immune sentinels:
+
+  [[FINDING]]
+  Title: <short title>
+  File: <abs path>
+  Source: <function or file:line>
+  Severity: <High|Medium|Low>
+  Description: <1-3 sentences>
+  [[/FINDING]]
+
+- commands/llm-externalizer-scan-and-fix{,-serially}.md: default
+  rubric now instructs models to emit sentinel blocks; explicit
+  warning not to use ### or numbered-list syntax.
+
+- scripts/fix_found_bugs_helper.py: new FINDING_BLOCK_RE recognises
+  the sentinel, _parse_finding_block parses the Key: value fields,
+  and _extract_findings_from_section prefers the new format and
+  falls back to the legacy ### / numbered-list patterns only when
+  no sentinel blocks are found in the section. Mixing formats in
+  one section is explicitly not allowed.
+
+- Feat: strengthen fixer verification + emit canonical scan findings
+
+- agents/llm-externalizer-{parallel,serial}-fixer-{sonnet,opus}-agent.md:
+  lead with a MANDATORY VERIFY BEFORE FIXING callout listing the
+  5 false-positive rejection rules (hallucination, flow-trace,
+  already-fixed, style preference, redaction artifact). A no-edit
+  "false-positive" verdict is explicitly marked as a successful
+  outcome to discourage speculative fixes. Empirically ~15-30% of
+  ensemble findings are false positives; the fixer now rejects them
+  with typed reasons.
+
+- commands/llm-externalizer-scan-and-fix{,-serially}.md: default scan
+  rubric now requires canonical "### FINDING: <title>" / Source /
+  Severity / body format so fix_found_bugs_helper.py aggregate-reports
+  can parse findings without a format-massaging pass. Explicit
+  instruction to ignore [REDACTED:ENV_SECRET]/[REDACTED:API_KEY]
+  placeholders and to emit "No real defects." when clean.
+
+
+### Changed
+
+- Build: rebuild dist after rescan-audit fixes
+
+- Build: rebuild dist after 40-file source audit fixes
+
+
+### Documentation
+
+- Docs: full README rewrite + LLM-Externalizer banner
+
+- Add docs/banner.png (plugin banner/logo at top of README).
+- Rewrite README with a plain-language intro making the scan-vs-fix
+  split explicit: only the SCAN is externalized; FIXES are applied
+  by the local Claude Code session (Sonnet/Opus) via fixer subagents.
+- Fix feature list and counts (15 MCP tools, 5 agents).
+- Separate "Plugin commands" (/llm-externalizer:*) from "MCP tools"
+  (direct mcp__plugin_* calls) so advanced users see each surface clearly.
+- Every shell command now lives in its own pasteable code block, one
+  logical task per block, with # comments.
+- Windows variants added for env-var setup (PowerShell + cmd.exe) and
+  for paths (%USERPROFILE%\.llm-externalizer\ alongside ~/.llm-externalizer).
+- Configuration option B renamed from "single model" to "Remote free
+  (Nemotron)" — users pick between the paid ensemble or the free
+  Nemotron; no paid-single-model profile by default.
+- Contributing section rewritten: contributors never run publish.py
+  (owner-only); documents how to disable the pre-push hook
+  (git config --local --unset core.hooksPath) and how to disable the
+  owner-only workflows on a fork (gh workflow disable "Notify Marketplace"
+  and "CI").
+
+
+### Fixed
+
+- Fix(grouping): preserve pre/post-group ungrouped order in parseFileGroups
+
+The prior rescan fix (rescan #17) collected ALL ungrouped files into a
+single trailing group at the end, which violated the documented
+insertion-order contract and broke the "collects files outside any
+markers into an unnamed group" test. That test expects three groups
+in order: pre-group unnamed, named, post-group unnamed.
+
+Fix: flush the pending-ungrouped buffer each time a new named-group
+header is encountered (so the pre-group chunk lands before the named
+group), and again at end-of-input (so the post-group chunk lands
+after). This preserves ordering while still merging consecutive
+ungrouped files into a single group.
+
+All 31 grouping tests now pass.
+
+- Fix(lint): prefer-const on ungrouped in parseFileGroups + rebuild dist
+
+- Fix: rescan-audit fixes (27 real defects across 10 files)
+
+Second-pass audit against the fixed codebase found 26 new real defects
+(and a further 70 false-positives correctly rejected by the hardened
+fixer's verify-before-editing rules). Highlights:
+
+- .githooks/pre-push: argv chunk parsing no longer swallows trailing
+  args; publish.py ancestry check rejects dummy scripts with crafted
+  argv that embedded "publish.py" as a literal argument.
+- bin/llm-ext: exit/stdout race fixed — crash detection moved to
+  stdout.on("end") so valid late responses are no longer discarded
+  when the child exits immediately after writing.
+- mcp-server/src/config.ts: resolveProfile logic for local authentication.
+- mcp-server/src/grouping.ts: duplicate-group-id handling and the
+  single-unnamed-group contract in parseFileGroups; suffix-match
+  disambiguation in per-file section assignment.
+- mcp-server/src/index.ts: symlink traversal no longer creates
+  directories outside guarded paths; check_imports path traversal
+  hardened; temporary-stats file permissions tightened.
+- mcp-server/src/live{,-extended}.test.ts: shared tmp-dir lifecycle
+  fixed (per-test TMP_DIR, afterAll cleanup on creation failure,
+  scan_secrets assertion robust against structured-error responses).
+- mcp-server/statusline.py: (no new changes in this pass — Pyright
+  warnings at lines 122/284 are platform-check false positives on
+  sys.platform == "win32", not real bugs).
+- scripts/check_references.py: markdown regex handles relative
+  links; exclusion check applied to resolved targets.
+- scripts/publish.py: rollback handles incomplete pushes; duplicate
+  version-bump guard in determine_next_version; temporary directory
+  created with 0o700 perms on POSIX.
+
+- Fix: real defects from 126-finding scan-and-fix-serially audit
+
+Applies fixes verified by the serial-fixer subagents (Sonnet, MANDATORY
+verify-before-fixing rules). Every change was re-read against source
+before editing; ~86 of the 126 findings were rejected as false positives.
+
+Confirmed real fixes:
+- .githooks/pre-push: walk_ancestry no longer splits paths on spaces,
+  and ps_query decodes non-UTF8 bytes with errors="replace".
+- bin/llm-ext: malformed/null tool results don't hang; final JSON-RPC
+  flushed on stdout close; handleMessage exits non-zero when the tool
+  reports an error (was always 0).
+- mcp-server/add-shebang.mjs: guard prevents appending a second shebang
+  to files that already start with "#!".
+- mcp-server/esbuild.config.mjs: __filename/__dirname now defined in
+  the bundled banner so CommonJS deps don't ReferenceError at runtime.
+- mcp-server/server.json: numeric userConfig fields use "format": "number"
+  instead of "string".
+- mcp-server/src/cli.ts: parseSearchExistingArgs no longer misparses flags
+  without values or accepts directories as source files; cmdSearchExisting
+  honors --timeout-hours 0 as "no timeout"; git-diff rejects absolute paths
+  outside the worktree.
+- mcp-server/src/config.ts: getConfigDir resolves /tmp + homedir via
+  realpathSync before path comparison (fixes macOS /private/tmp + Windows
+  /tmp rejection false positives).
+- mcp-server/src/grouping.ts: splitPerFileSections regex fixes.
+- mcp-server/src/index.ts: extractLocalImports correctly resolves Python
+  relative imports; gitLsFilesMultiRepo no longer double-scans submodules;
+  check_against_specs honors answer_mode=0; tool descriptions no longer
+  claim "parallel" for sequential local-mode calls.
+- mcp-server/src/or-model-info.ts: fetchOpenRouterModelInfo handles
+  payloads missing "endpoints" key; percentile labels corrected.
+- mcp-server/src/test-helpers.ts: test output dirs use testName to avoid
+  collisions; client timeout override now effective.
+- mcp-server/src/live*.test.ts: getText guards undefined content; cleanDir
+  no longer deletes LLM_OUTPUT_DIR mid-run; rmSync failures surface.
+- mcp-server/statusline.py: TypeError guard on null JSON tokens.
+- scripts/check_references.py: markdown regex strips anchors/queries;
+  exclusion checks now applied to resolved targets; title links match.
+- scripts/fix_found_bugs_helper.py: cmd_aggregate_reports guards missing
+  args; _find_report_files case-insensitive prefix skip; cmd_diff_fixed
+  correct unfixed_remaining count; cmd_is_canonical accepts severity
+  words in finding titles.
+- scripts/install_statusline.py: handles non-dict settings.json; paths
+  properly escaped.
+- scripts/join_fixer_reports.py: _find_candidates recursive.
+- scripts/publish.py: _run_publish regex accepts single AND double quotes.
+- scripts/validate_fixer_summary.py: handles unresolvable reports_dir.
+- scripts/validate_report.py: _LINE_RANGE_RE matches L12-L40 / lines 12-40
+  / :12-40 / 12-40 formats; BOM handled.
+
+
+### Miscellaneous
+
+- Chore(gitignore): exclude reports/ (local audit output, contains private paths)
+
+
 ## [9.0.1] - 2026-04-18
 
 ### Changed
