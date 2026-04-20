@@ -1,19 +1,19 @@
 /**
  * Profile-based configuration for the LLM Externalizer MCP server.
  *
- * Single source of truth for settings.yaml loading, saving, validation,
+ * Single source of truth for settings.yaml loading, validation,
  * and resolution. Used by the server (index.ts), CLI (cli.ts), and tests.
  *
  * Settings file: ~/.llm-externalizer/settings.yaml
- * Backups:       ~/.llm-externalizer/backups/settings_<timestamp>.yaml
  *
  * Cross-platform: uses os.homedir() + path.join() for all paths.
  * Works on macOS, Linux, and Windows WSL.
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, realpathSync, } from "node:fs";
+import { resolve } from "node:path";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { parse as yamlParse, stringify as yamlStringify } from "yaml";
+import { parse as yamlParse } from "yaml";
 // ── API Presets ──────────────────────────────────────────────────────
 // Each preset bundles protocol + default connection settings.
 // Names use -local / -remote suffix to prevent mode/preset mismatches.
@@ -24,7 +24,6 @@ export const API_PRESETS = {
         defaultUrl: "http://localhost:1234",
         defaultAuthEnv: "$LM_API_TOKEN",
         defaultTimeout: 300,
-        defaultMaxConcurrent: 0,
         defaultAppName: "",
         defaultHttpReferer: "",
         defaultContextWindow: 0,
@@ -35,7 +34,6 @@ export const API_PRESETS = {
         defaultUrl: "http://localhost:11434",
         defaultAuthEnv: "",
         defaultTimeout: 300,
-        defaultMaxConcurrent: 0,
         defaultAppName: "",
         defaultHttpReferer: "",
         defaultContextWindow: 0,
@@ -46,7 +44,6 @@ export const API_PRESETS = {
         defaultUrl: "http://localhost:8000",
         defaultAuthEnv: "$VLLM_API_KEY",
         defaultTimeout: 300,
-        defaultMaxConcurrent: 0,
         defaultAppName: "",
         defaultHttpReferer: "",
         defaultContextWindow: 0,
@@ -57,7 +54,6 @@ export const API_PRESETS = {
         defaultUrl: "http://localhost:8080",
         defaultAuthEnv: "",
         defaultTimeout: 300,
-        defaultMaxConcurrent: 0,
         defaultAppName: "",
         defaultHttpReferer: "",
         defaultContextWindow: 0,
@@ -68,7 +64,6 @@ export const API_PRESETS = {
         defaultUrl: "",
         defaultAuthEnv: "$LM_API_TOKEN",
         defaultTimeout: 300,
-        defaultMaxConcurrent: 0,
         defaultAppName: "",
         defaultHttpReferer: "",
         defaultContextWindow: 0,
@@ -79,8 +74,7 @@ export const API_PRESETS = {
         protocol: "openrouter_api",
         defaultUrl: "https://openrouter.ai/api",
         defaultAuthEnv: "$OPENROUTER_API_KEY",
-        defaultTimeout: 120,
-        defaultMaxConcurrent: 0,
+        defaultTimeout: 600, // 10 min — reasoning models (Qwen, etc.) need extended thinking time
         defaultAppName: "llm-externalizer",
         defaultHttpReferer: "",
         defaultContextWindow: 0,
@@ -91,28 +85,73 @@ export const API_PRESETS = {
 // Cross-platform: homedir() + join() works on macOS, Linux, Windows WSL.
 /** Config directory: ~/.llm-externalizer (or LLM_EXT_CONFIG_DIR for CI) */
 export function getConfigDir() {
-    return process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer");
+    let dir = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
+    // Follow symlinks to detect if the resolved target is outside allowed boundaries
+    try {
+        dir = realpathSync(dir);
+    }
+    catch { /* dir may not exist yet — resolve() is sufficient */ }
+    // M8: Path traversal guard — config dir must be under homedir() or /tmp.
+    // Resolve home and /tmp through symlinks so the comparison uses canonical paths
+    // (e.g. /tmp → /private/tmp on macOS; homedir() may also be a symlink).
+    const home = (() => { try {
+        return realpathSync(homedir());
+    }
+    catch {
+        return homedir();
+    } })();
+    const tmpCanonical = (() => { try {
+        return realpathSync("/tmp");
+    }
+    catch {
+        return "/tmp";
+    } })();
+    const sep = process.platform === "win32" ? "\\" : "/";
+    const underHome = dir.startsWith(home + sep) || dir === home;
+    const underTmp = dir.startsWith(tmpCanonical + sep) || dir === tmpCanonical;
+    if (!underHome && !underTmp) {
+        throw new Error(`Config directory '${dir}' is outside allowed paths (${home} or ${tmpCanonical})`);
+    }
+    return dir;
 }
 /** Settings file: ~/.llm-externalizer/settings.yaml */
 export function getSettingsPath() {
     return join(getConfigDir(), "settings.yaml");
 }
-/** Backup directory: ~/.llm-externalizer/backups/ */
-export function getBackupDir() {
-    return join(getConfigDir(), "backups");
-}
 // ── Env var resolution ──────────────────────────────────────────────
+// Map of env-var names that have a corresponding plugin.json userConfig key.
+// When the user sets a value via the Claude Code plugin config UI, Claude
+// exports it as CLAUDE_PLUGIN_OPTION_<KEY> to this subprocess. We transparently
+// map that into the canonical env-var name the rest of the code reads from,
+// so both new (userConfig) and old (shell env var) setups work unchanged.
+// Preference: userConfig wins over shell env if both are set.
+const USER_CONFIG_ENV_MAP = {
+    OPENROUTER_API_KEY: "CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY",
+};
 /**
  * Resolve a value that may be an env var reference.
  * - Values starting with '$' are env var names → resolved from process.env
  * - All other values are direct values → returned as-is
  * - Empty/undefined → returns ''
+ *
+ * For env vars in USER_CONFIG_ENV_MAP, the corresponding CLAUDE_PLUGIN_OPTION_*
+ * var takes precedence if non-empty. This means plugin.json userConfig values
+ * override shell env vars — users can migrate to userConfig without changing
+ * anything else in their setup.
  */
 export function resolveEnvValue(value) {
     if (!value)
         return "";
     if (value.startsWith("$")) {
-        return process.env[value.slice(1)] || "";
+        // M9: Trim env var name to prevent whitespace injection (e.g. "$VAR_NAME ")
+        const name = value.slice(1).trim();
+        const userConfigVar = USER_CONFIG_ENV_MAP[name];
+        if (userConfigVar) {
+            const userConfigVal = process.env[userConfigVar];
+            if (userConfigVal && userConfigVal.length > 0)
+                return userConfigVal;
+        }
+        return process.env[name] || "";
     }
     return value;
 }
@@ -133,7 +172,8 @@ export function loadSettings() {
         if (!existsSync(settingsPath))
             return null;
         const raw = readFileSync(settingsPath, "utf-8");
-        const parsed = yamlParse(raw);
+        // H10: Sanitize YAML output to strip __proto__ and prevent prototype pollution
+        const parsed = JSON.parse(JSON.stringify(yamlParse(raw)));
         if (!parsed || typeof parsed !== "object")
             return null;
         return {
@@ -145,25 +185,6 @@ export function loadSettings() {
         process.stderr.write(`[llm-externalizer] Warning: Failed to read ${settingsPath}: ${err instanceof Error ? err.message : String(err)}\n`);
         return null;
     }
-}
-/**
- * Save settings to disk. Creates a timestamped backup of the previous
- * file before overwriting. Creates config and backup directories if needed.
- */
-export function saveSettings(settings) {
-    const settingsPath = getSettingsPath();
-    const configDir = getConfigDir();
-    const backupDir = getBackupDir();
-    mkdirSync(configDir, { recursive: true });
-    mkdirSync(backupDir, { recursive: true });
-    // Timestamped backup of existing file
-    if (existsSync(settingsPath)) {
-        const ts = new Date().toISOString().replace(/[:.]/g, "-");
-        const backupPath = join(backupDir, `settings_${ts}.yaml`);
-        copyFileSync(settingsPath, backupPath);
-    }
-    const yaml = yamlStringify(settings, { lineWidth: 120 });
-    writeFileSync(settingsPath, yaml, "utf-8");
 }
 /** Default settings with 4 predefined profiles */
 export function generateDefaultSettings() {
@@ -191,6 +212,7 @@ export function generateDefaultSettings() {
                 api: "openrouter-remote",
                 model: "google/gemini-2.5-flash",
                 second_model: "x-ai/grok-4.1-fast",
+                third_model: "qwen/qwen3.6-plus",
                 api_key: "$OPENROUTER_API_KEY",
             },
         },
@@ -213,6 +235,12 @@ export function ensureSettingsExist() {
         mkdirSync(configDir, { recursive: true });
         // First run: write commented template for human readability
         writeFileSync(settingsPath, SETTINGS_TEMPLATE, "utf-8");
+        // Restrict permissions immediately — users may add API keys to the template,
+        // so default umask (0644) is not safe.
+        try {
+            chmodSync(settingsPath, 0o600);
+        }
+        catch { /* Windows may not support chmod */ }
         process.stderr.write(`[llm-externalizer] Generated default settings at ${settingsPath}\n`);
     }
     const settings = loadSettings();
@@ -260,7 +288,7 @@ export function validateProfile(name, profile) {
         preset.isLocal) {
         errors.push(`Mode '${profile.mode}' requires a -remote api preset, got '${profile.api}'`);
     }
-    // ── second_model rules ────────────────────────────────────────────
+    // ── second_model / third_model rules ──────────────────────────────
     if (profile.mode === "remote-ensemble" && !profile.second_model) {
         errors.push("Mode 'remote-ensemble' requires 'second_model'");
     }
@@ -270,13 +298,13 @@ export function validateProfile(name, profile) {
     if (profile.mode === "remote" && profile.second_model) {
         errors.push("Mode 'remote' does not support 'second_model'. Use 'remote-ensemble'");
     }
+    if (profile.third_model && profile.mode !== "remote-ensemble") {
+        errors.push("'third_model' is only supported in 'remote-ensemble' mode");
+    }
     // ── LM Studio native API constraints ──────────────────────────────
     if (profile.api === "lmstudio-local") {
         if (profile.second_model) {
             errors.push("LM Studio native API does not support second_model");
-        }
-        if (profile.max_concurrent !== undefined && profile.max_concurrent !== 0) {
-            errors.push("LM Studio native API is sequential only (max_concurrent must be 0 or omitted)");
         }
     }
     // ── URL validation ────────────────────────────────────────────────
@@ -305,11 +333,12 @@ export function validateProfile(name, profile) {
             profile.context_window < 0)) {
         errors.push(`Profile '${name}': context_window must be a non-negative finite number`);
     }
-    if (profile.max_concurrent !== undefined &&
-        (typeof profile.max_concurrent !== "number" ||
-            !isFinite(profile.max_concurrent) ||
-            profile.max_concurrent < 0)) {
-        errors.push(`Profile '${name}': max_concurrent must be a non-negative finite number`);
+    // M10: Upper bounds on numeric overrides to prevent resource abuse
+    if (typeof profile.timeout === "number" && profile.timeout > 3600) {
+        errors.push(`Profile '${name}': timeout must be <= 3600 (1 hour)`);
+    }
+    if (typeof profile.context_window === "number" && profile.context_window > 10_000_000) {
+        errors.push(`Profile '${name}': context_window must be <= 10,000,000`);
     }
     // ── Remote auth ───────────────────────────────────────────────────
     if (!preset.isLocal) {
@@ -332,7 +361,7 @@ export function validateSettings(settings) {
         return {
             valid: false,
             errors: [
-                "No active profile set. Use: npx llm-externalizer profile select <name>",
+                `No active profile set. Edit ${getSettingsPath()} manually and set the 'active:' field to one of the profile names listed under 'profiles:', then restart Claude Code or call the MCP 'reset' tool.`,
             ],
         };
     }
@@ -370,26 +399,24 @@ export function resolveProfile(name, profile) {
         model: profile.model,
         authToken: resolveEnvValue(rawAuth),
         secondModel: profile.second_model || "",
+        thirdModel: profile.third_model || "",
         timeout: profile.timeout ?? preset.defaultTimeout,
         contextWindow: profile.context_window ?? preset.defaultContextWindow,
-        maxConcurrent: profile.max_concurrent ?? preset.defaultMaxConcurrent,
         appName: profile.app_name ?? preset.defaultAppName,
         httpReferer: profile.http_referer ?? preset.defaultHttpReferer,
     };
 }
 // ── Settings template ───────────────────────────────────────────────
 // Written on first run for human readability (comments are preserved).
-// Subsequent saves via saveSettings() use yamlStringify (no comments).
+// Users edit settings.yaml manually in their editor.
 export const SETTINGS_TEMPLATE = `# ──────────────────────────────────────────────────────────────────────
 # LLM Externalizer — Settings
 # ──────────────────────────────────────────────────────────────────────
 # Profile-based configuration. Each profile defines a complete LLM
-# backend setup. Switch profiles with:
-#   npx llm-externalizer profile select <name>
-# Or via MCP: get_settings / set_settings
+# backend setup. Edit this file manually and either restart Claude Code
+# or call the MCP 'reset' tool to reload.
 #
 # Location: ~/.llm-externalizer/settings.yaml
-# Backups:  ~/.llm-externalizer/backups/
 # ──────────────────────────────────────────────────────────────────────
 
 # Active profile name
@@ -421,7 +448,7 @@ profiles:
     model: "google/gemini-2.5-flash"
     api_key: $OPENROUTER_API_KEY          # set this env var, or replace with direct key
 
-  # ── Remote: Ensemble (two models in parallel) ─────────────────────
+  # ── Remote: Ensemble (three models in parallel) ────────────────────
   remote-ensemble-geminigrok:
     mode: remote-ensemble
     api: openrouter-remote
@@ -447,7 +474,7 @@ profiles:
 # ── Modes Reference ─────────────────────────────────────────────────
 #   local             Sequential requests to a local server
 #   remote            Parallel requests, single model via OpenRouter
-#   remote-ensemble   Parallel requests, two models, combined report
+#   remote-ensemble   Parallel requests, three models, combined report
 #
 # ── Auth Values ──────────────────────────────────────────────────────
 # Auth fields (api_key, api_token) accept either:

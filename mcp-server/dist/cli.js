@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 import { createRequire as __cjsCreateRequire } from "node:module";
 import { fileURLToPath as __cjsFileURLToPath } from "node:url";
+import { dirname as __cjsDirname } from "node:path";
 const require = __cjsCreateRequire(import.meta.url);
+const __filename = __cjsFileURLToPath(import.meta.url);
+const __dirname = __cjsDirname(__filename);
 
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -14678,10 +14681,25 @@ function getConfigDir() {
     dir = realpathSync(dir);
   } catch {
   }
-  const home = homedir();
+  const home = (() => {
+    try {
+      return realpathSync(homedir());
+    } catch {
+      return homedir();
+    }
+  })();
+  const tmpCanonical = (() => {
+    try {
+      return realpathSync("/tmp");
+    } catch {
+      return "/tmp";
+    }
+  })();
   const sep = process.platform === "win32" ? "\\" : "/";
-  if (!dir.startsWith(home + sep) && !dir.startsWith("/tmp/") && dir !== home && dir !== "/tmp") {
-    throw new Error(`Config directory '${dir}' is outside allowed paths (${home} or /tmp)`);
+  const underHome = dir.startsWith(home + sep) || dir === home;
+  const underTmp = dir.startsWith(tmpCanonical + sep) || dir === tmpCanonical;
+  if (!underHome && !underTmp) {
+    throw new Error(`Config directory '${dir}' is outside allowed paths (${home} or ${tmpCanonical})`);
   }
   return dir;
 }
@@ -14865,8 +14883,15 @@ function percentileAnnotation(numeric, higherIsBetter) {
     return (Math.round(n * 100) / 100).toString();
   };
   if (numeric === 50) return "median";
-  if (numeric >= 95) return higherIsBetter ? `best ${fmt(100 - numeric)}%` : `worst ${fmt(100 - numeric)}%`;
-  if (numeric <= 5) return higherIsBetter ? `worst ${fmt(numeric)}%` : `best ${fmt(numeric)}%`;
+  if (numeric >= 95) {
+    const tail = 100 - numeric;
+    if (tail === 0) return higherIsBetter ? "best case" : "worst case";
+    return higherIsBetter ? `best ${fmt(tail)}%` : `worst ${fmt(tail)}%`;
+  }
+  if (numeric <= 5) {
+    if (numeric === 0) return higherIsBetter ? "worst case" : "best case";
+    return higherIsBetter ? `worst ${fmt(numeric)}%` : `best ${fmt(numeric)}%`;
+  }
   return "";
 }
 function isValidOpenRouterModelId(id) {
@@ -14911,8 +14936,11 @@ async function fetchOpenRouterModelInfo(modelId, baseUrl, authToken, timeoutMs =
   }
   try {
     const payload = await res.json();
-    if (!payload.data || !Array.isArray(payload.data.endpoints)) {
+    if (!payload.data) {
       return { ok: false, error: "OpenRouter returned no endpoints for this model" };
+    }
+    if (!Array.isArray(payload.data.endpoints)) {
+      payload.data.endpoints = [];
     }
     return { ok: true, data: payload.data };
   } catch (err) {
@@ -29708,6 +29736,23 @@ function generateGitDiff(base, sourceFiles) {
   if (cwdIsGit.status !== 0) {
     die("cwd is not a git repository; pass --diff <path> or run from inside a git checkout.");
   }
+  const worktreeResult = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+    cwd: process.cwd(),
+    encoding: "utf-8"
+  });
+  if (worktreeResult.error || worktreeResult.status !== 0) {
+    die("Failed to determine git worktree root; pass --diff <path> instead.");
+  }
+  const worktreeRoot = worktreeResult.stdout.trim().replace(/\\/g, "/");
+  const worktreePrefix = worktreeRoot.endsWith("/") ? worktreeRoot : worktreeRoot + "/";
+  for (const sf of sourceFiles) {
+    const normalized = sf.replace(/\\/g, "/");
+    if (!normalized.startsWith(worktreePrefix) && normalized !== worktreeRoot) {
+      die(
+        `Source file '${sf}' is outside the git worktree ('${worktreeRoot}'). git diff cannot include paths outside the repository.`
+      );
+    }
+  }
   const outPath = join2(tmpdir(), `llm-ext-search-existing-diff-${Date.now()}.patch`);
   const result = spawnSync(
     "git",
@@ -29774,6 +29819,7 @@ function autoDetectBase() {
   );
 }
 function parseSearchExistingArgs(args) {
+  const BOOL_FLAGS = /* @__PURE__ */ new Set(["free", "no-gitignore"]);
   const positional = [];
   const flags = {};
   for (let i = 0; i < args.length; i++) {
@@ -29783,19 +29829,21 @@ function parseSearchExistingArgs(args) {
       if (eqIdx !== -1) {
         flags[a.slice(2, eqIdx)] = a.slice(eqIdx + 1);
       } else {
+        const flagName = a.slice(2);
         const next = args[i + 1];
-        if (next !== void 0 && !next.startsWith("--")) {
-          flags[a.slice(2)] = next;
+        if (!BOOL_FLAGS.has(flagName) && next !== void 0 && !next.startsWith("--")) {
+          flags[flagName] = next;
           i++;
         } else {
-          flags[a.slice(2)] = "true";
+          flags[flagName] = "true";
         }
       }
     } else {
       positional.push(a);
     }
   }
-  const description = flags.description ?? flags.desc ?? positional.shift() ?? "";
+  const rawDesc = flags.description && flags.description !== "true" ? flags.description : flags.desc && flags.desc !== "true" ? flags.desc : void 0;
+  const description = rawDesc ?? positional.shift() ?? "";
   if (!description.trim()) {
     die(
       'Missing description. Usage: llm-externalizer search-existing "<description>" [<src-files>...] --in <path> ...'
@@ -29826,6 +29874,7 @@ function parseSearchExistingArgs(args) {
   for (const sf of sourceFiles) {
     const abs = isAbsolute(sf) ? sf : resolvePath(sf);
     if (!existsSync2(abs)) die(`Source file not found: ${sf}`);
+    if (statSync(abs).isDirectory()) die(`Source file must be a file, not a directory: ${sf}`);
   }
   let timeoutMs = void 0;
   if (flags["timeout-hours"] && flags["timeout-hours"] !== "true") {
@@ -29900,7 +29949,7 @@ async function cmdSearchExisting(rawArgs) {
     const result = await client.callTool(
       { name: "search_existing_implementations", arguments: toolArgs },
       void 0,
-      effectiveTimeoutMs > 0 ? { timeout: effectiveTimeoutMs } : void 0
+      effectiveTimeoutMs > 0 ? { timeout: effectiveTimeoutMs } : { timeout: Number.MAX_SAFE_INTEGER }
     );
     const content = result.content;
     for (const c of content) {

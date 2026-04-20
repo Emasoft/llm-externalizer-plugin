@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 import { createRequire as __cjsCreateRequire } from "node:module";
 import { fileURLToPath as __cjsFileURLToPath } from "node:url";
+import { dirname as __cjsDirname } from "node:path";
 const require = __cjsCreateRequire(import.meta.url);
+const __filename = __cjsFileURLToPath(import.meta.url);
+const __dirname = __cjsDirname(__filename);
 
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -14316,7 +14319,7 @@ function splitPerFileSections(content, expectedPaths) {
     const h = headers[i];
     const bodyEnd = i + 1 < headers.length ? headers[i + 1].start : content.length;
     let body = content.slice(h.bodyStart, bodyEnd);
-    body = body.replace(/\n\s*---\s*$/m, "").trim();
+    body = body.replace(/\n\s*---\s*$/, "").trim();
     let matched;
     if (byExact.has(h.pathRaw)) {
       matched = h.pathRaw;
@@ -28293,10 +28296,25 @@ function getConfigDir() {
     dir = realpathSync(dir);
   } catch {
   }
-  const home = homedir();
+  const home = (() => {
+    try {
+      return realpathSync(homedir());
+    } catch {
+      return homedir();
+    }
+  })();
+  const tmpCanonical = (() => {
+    try {
+      return realpathSync("/tmp");
+    } catch {
+      return "/tmp";
+    }
+  })();
   const sep = process.platform === "win32" ? "\\" : "/";
-  if (!dir.startsWith(home + sep) && !dir.startsWith("/tmp/") && dir !== home && dir !== "/tmp") {
-    throw new Error(`Config directory '${dir}' is outside allowed paths (${home} or /tmp)`);
+  const underHome = dir.startsWith(home + sep) || dir === home;
+  const underTmp = dir.startsWith(tmpCanonical + sep) || dir === tmpCanonical;
+  if (!underHome && !underTmp) {
+    throw new Error(`Config directory '${dir}' is outside allowed paths (${home} or ${tmpCanonical})`);
   }
   return dir;
 }
@@ -28626,8 +28644,15 @@ function percentileAnnotation(numeric, higherIsBetter) {
     return (Math.round(n * 100) / 100).toString();
   };
   if (numeric === 50) return "median";
-  if (numeric >= 95) return higherIsBetter ? `best ${fmt(100 - numeric)}%` : `worst ${fmt(100 - numeric)}%`;
-  if (numeric <= 5) return higherIsBetter ? `worst ${fmt(numeric)}%` : `best ${fmt(numeric)}%`;
+  if (numeric >= 95) {
+    const tail = 100 - numeric;
+    if (tail === 0) return higherIsBetter ? "best case" : "worst case";
+    return higherIsBetter ? `best ${fmt(tail)}%` : `worst ${fmt(tail)}%`;
+  }
+  if (numeric <= 5) {
+    if (numeric === 0) return higherIsBetter ? "worst case" : "best case";
+    return higherIsBetter ? `worst ${fmt(numeric)}%` : `best ${fmt(numeric)}%`;
+  }
   return "";
 }
 function isValidOpenRouterModelId(id) {
@@ -28672,8 +28697,11 @@ async function fetchOpenRouterModelInfo(modelId, baseUrl, authToken, timeoutMs =
   }
   try {
     const payload = await res.json();
-    if (!payload.data || !Array.isArray(payload.data.endpoints)) {
+    if (!payload.data) {
       return { ok: false, error: "OpenRouter returned no endpoints for this model" };
+    }
+    if (!Array.isArray(payload.data.endpoints)) {
+      payload.data.endpoints = [];
     }
     return { ok: true, data: payload.data };
   } catch (err) {
@@ -29648,17 +29676,14 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
         if (entry.name.startsWith(".")) continue;
         const subDir = join2(dir, entry.name);
         const gitDir = join2(subDir, ".git");
-        if (existsSync2(gitDir)) {
-          const subTopLevel = spawnSync(
-            "git",
-            ["rev-parse", "--show-toplevel"],
-            { cwd: subDir, encoding: "utf-8", timeout: 3e3 }
-          );
-          const parentTopLevel = isInGitRepo ? topLevelResult.stdout.trim() : "";
-          if (subTopLevel.status === 0 && subTopLevel.stdout.trim() !== parentTopLevel) {
-            nestedGitRoots.push(subDir);
-            continue;
-          }
+        let gitDirIsDir = false;
+        try {
+          gitDirIsDir = lstatSync(gitDir).isDirectory();
+        } catch {
+        }
+        if (gitDirIsDir) {
+          nestedGitRoots.push(subDir);
+          continue;
         }
         findNestedGitRoots2(subDir, depth + 1);
       }
@@ -29789,7 +29814,15 @@ function extractLocalImports(filePath, sourceCode) {
     let match;
     while ((match = pattern.exec(sourceCode)) !== null) {
       const importPath = match[1];
-      let resolved = join2(dir, importPath);
+      let resolved;
+      if (lang === "python" && importPath.startsWith(".")) {
+        const dotCount = importPath.match(/^\.+/)?.[0].length ?? 1;
+        const modulePart = importPath.slice(dotCount);
+        const baseDir = dotCount === 1 ? dir : join2(dir, ...Array(dotCount - 1).fill(".."));
+        resolved = modulePart ? join2(baseDir, ...modulePart.split(".")) : baseDir;
+      } else {
+        resolved = join2(dir, importPath);
+      }
       if (!extname2(resolved)) {
         const tryExts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"];
         let found = false;
@@ -31231,6 +31264,7 @@ async function chatCompletionWithRetry(messages, options) {
             `[llm-externalizer] Free-mode fallback also failed: ${freeMsg}
 `
           );
+          throw err;
         }
       }
       recordServiceFailure();
@@ -31505,7 +31539,7 @@ ${codeBlock}`
   return { filePath, success: true, reportPath };
 }
 function limitsBlock() {
-  const throughput = currentBackend.type === "openrouter" ? "\u2022 PARALLEL: rate-limited dispatch (RPS auto-detected from balance). Many requests in-flight simultaneously." : "\u2022 SEQUENTIAL: 1 call at a time.";
+  const throughput = currentBackend.type === "openrouter" ? "\u2022 PARALLEL (answer_mode=0 + max_retries>1 only): rate-limited dispatch (RPS auto-detected from balance). Many requests in-flight simultaneously. Default (answer_mode=2 or max_retries=1): sequential batches." : "\u2022 SEQUENTIAL: 1 call at a time.";
   return "\n\nLIMITS:\n" + throughput + `
 \u2022 ${SOFT_TIMEOUT_MS / 1e3}s base timeout per call. Extended automatically when reasoning models are actively thinking. Auto-retries up to 3 times on truncated responses.`;
 }
@@ -34781,6 +34815,10 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                   }
                   const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
                   const resolvedBase = importPath.startsWith("/") ? importPath : join2(resolveDir, importPath);
+                  if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
+                    packageImports.push(importPath);
+                    continue;
+                  }
                   let found = existsSync2(resolvedBase) && statSync2(resolvedBase).isFile();
                   if (!found && !extname2(resolvedBase)) {
                     for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".json"]) {
@@ -34872,6 +34910,10 @@ FAILED: File not found.`);
               }
               const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
               const resolvedBase = importPath.startsWith("/") ? importPath : join2(resolveDir, importPath);
+              if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
+                packageImports.push(importPath);
+                continue;
+              }
               let found = false;
               if (existsSync2(resolvedBase) && statSync2(resolvedBase).isFile()) {
                 found = true;
@@ -35071,6 +35113,48 @@ FAILED: File not found.`);
             const fgPaths = fg.files;
             if (fgPaths.length === 0) continue;
             const fgId = fg.id;
+            if (csMode === 0 && !csEffectivelyGrouped) {
+              const csPerFileResults = [];
+              for (const fp of fgPaths) {
+                if (!existsSync2(fp)) {
+                  csPerFileResults.push(`FAILED: ${fp} \u2014 File not found`);
+                  continue;
+                }
+                let fpBlock;
+                try {
+                  fpBlock = readFileAsCodeBlock(fp, void 0, csRedact, csBudgetBytes, csRegexRedact);
+                } catch (err) {
+                  csPerFileResults.push(`FAILED: ${fp} \u2014 ${err instanceof Error ? err.message : String(err)}`);
+                  continue;
+                }
+                let fpUserContent = "## SPECIFICATION (source of truth)\n\n" + csSpecBlock + "\n\n";
+                if (csExtraInstructions) {
+                  fpUserContent += "## ADDITIONAL INSTRUCTIONS\n\n" + csExtraInstructions + "\n\n";
+                }
+                fpUserContent += "## SOURCE FILES TO CHECK\n\n" + fpBlock;
+                const fpMessages = [
+                  { role: "system", content: csSystemPrompt },
+                  { role: "user", content: fpUserContent }
+                ];
+                const fpResp = await ensembleStreaming(
+                  fpMessages,
+                  { maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride },
+                  csUseEnsemble
+                );
+                if (fpResp.content.trim().length === 0) {
+                  csPerFileResults.push(`FAILED: ${fp} \u2014 LLM returned empty response`);
+                  continue;
+                }
+                const fpFooter = formatFooter(fpResp, "check_against_specs", fp);
+                const fpReportPath = saveResponse("check_against_specs", fpResp.content + fpFooter, {
+                  model: ensembleModelLabel(csUseEnsemble),
+                  task: `Spec compliance: ${basename2(csSpecPath)} vs ${basename2(fp)}`,
+                  inputFile: fp
+                }, void 0, outputDir);
+                csPerFileResults.push(fpReportPath);
+              }
+              return { content: [{ type: "text", text: csPerFileResults.join("\n") }] };
+            }
             const { groups: csGroups, autoBatched: csAutoBatched, skipped: csSkipped } = readAndGroupFiles(fgPaths, csPromptBytes, csRedact, csBudgetBytes, csRegexRedact);
             const csBatchResults = [];
             if (csSkipped.length > 0) {
