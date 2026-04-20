@@ -84,8 +84,25 @@ RESPONSE_HEADER_RE = re.compile(
     r"^##\s+Response\b[^\n]*?(?:\(\s*(?:Model\s*:\s*)?(?P<model>[^)]+?)\s*\))?\s*$",
     re.MULTILINE,
 )
-# A "finding" is either a ### heading or a numbered list item at column 0.
-# Numbered items must be followed by whitespace so we don't match version refs.
+# Preferred finding format: a sentinel-delimited block, immune to markdown
+# heading collisions and ensemble-wrapper nesting. The entire block is captured
+# with named groups so we can pull Title / File / Source / Severity / Description
+# without secondary parsing.
+FINDING_BLOCK_RE = re.compile(
+    r"^\[\[FINDING\]\]\s*\n"
+    r"(?P<fields>.*?)"
+    r"^\[\[/FINDING\]\]\s*$",
+    re.MULTILINE | re.DOTALL,
+)
+# Inside a finding block, each known field sits on its own line as "Key: value".
+# Description can span multiple lines (greedy capture stops at the next Key: or EOB).
+_FIELD_LINE_RE = re.compile(
+    r"^(?P<key>Title|File|Source|Severity|Description)\s*:\s*(?P<value>.*?)\s*$",
+    re.MULTILINE,
+)
+
+# Legacy fallback: a "finding" is either a ### heading or a numbered list item.
+# Retained so older reports still parse; new rubrics should emit [[FINDING]]..[[/FINDING]].
 FINDING_H3_RE = re.compile(r"^###\s+(?P<title>.+?)\s*$", re.MULTILINE)
 FINDING_NUM_RE = re.compile(r"^(?P<num>\d+)\.\s+(?P<title>.+?)\s*$", re.MULTILINE)
 # Sidecar-file markers (names we never treat as bug reports)
@@ -219,14 +236,77 @@ def _extract_source_file(text: str, default: str) -> str:
     return default
 
 
+def _parse_finding_block(fields_text: str) -> dict:
+    """Parse the body of a [[FINDING]] block into Title/File/Source/Severity/Description.
+
+    Lines are "Key: value" pairs. Description can span multiple lines and runs
+    from its "Description:" line until the next known Key: or end of block.
+    Unknown / missing keys yield empty strings — the caller decides what's required.
+    """
+    # First pass: find the offsets of every known Key: line so Description can
+    # greedily capture until the next one.
+    key_positions: list[tuple[int, int, str, str]] = []  # (start, end, key, value)
+    for m in _FIELD_LINE_RE.finditer(fields_text):
+        key_positions.append((m.start(), m.end(), m.group("key"), m.group("value")))
+    out: dict[str, str] = {k: "" for k in ("Title", "File", "Source", "Severity", "Description")}
+    for i, (_, end, key, value) in enumerate(key_positions):
+        if key == "Description":
+            next_start = (
+                key_positions[i + 1][0] if i + 1 < len(key_positions) else len(fields_text)
+            )
+            tail = fields_text[end:next_start].strip()
+            out["Description"] = (value + ("\n" + tail if tail else "")).strip()
+        else:
+            out[key] = value.strip()
+    return out
+
+
 def _extract_findings_from_section(
     section: str, source_file: str, auditor: str | None = None
 ) -> list[dict]:
-    """Pull findings out of a report section. A finding is either a '### '
-    heading or a numbered list item. The body runs until the next finding
-    marker or the end of the section.
+    """Pull findings out of a report section.
+
+    Preferred format: [[FINDING]] ... [[/FINDING]] sentinel blocks with Key: Value
+    fields inside. This format is immune to markdown heading collisions and to
+    ensemble-wrapper nesting (### headings embedded in auditor text no longer
+    hijack the parse).
+
+    Legacy fallback: a '### ' heading or a numbered list item at column 0 with
+    the body running until the next marker. Only attempted when no [[FINDING]]
+    blocks were found — mixing the two in one section is not allowed.
     """
-    # Locate all finding start positions (heading or numbered item)
+    findings: list[dict] = []
+
+    # 1) Preferred: scan for [[FINDING]]..[[/FINDING]] blocks first.
+    for m in FINDING_BLOCK_RE.finditer(section):
+        parsed = _parse_finding_block(m.group("fields"))
+        title = parsed.get("Title", "").strip()
+        if not title:
+            continue
+        # File field in the block, if present, overrides the section's default.
+        file_field = parsed.get("File", "").strip()
+        effective_source = file_field or source_file
+        # Body = Description field; if empty fall back to Source line for context.
+        body_parts: list[str] = []
+        if parsed.get("Source"):
+            body_parts.append(f"Source: {parsed['Source']}")
+        if parsed.get("Severity"):
+            body_parts.append(f"Severity: {parsed['Severity']}")
+        if parsed.get("Description"):
+            body_parts.append(parsed["Description"])
+        body = "\n".join(body_parts).strip()
+        findings.append(
+            {
+                "source_file": effective_source,
+                "title": title,
+                "body": body,
+                "auditor": auditor,
+            }
+        )
+    if findings:
+        return findings
+
+    # 2) Legacy fallback: ### headings / numbered items.
     markers: list[tuple[int, str, str]] = []  # (offset, title, kind)
     for m in FINDING_H3_RE.finditer(section):
         title = m.group("title").strip()
@@ -244,7 +324,6 @@ def _extract_findings_from_section(
     markers.sort(key=lambda t: t[0])
     if not markers:
         return []
-    findings: list[dict] = []
     for i, (offset, title, _) in enumerate(markers):
         # Body runs from end-of-title-line to next marker (or end)
         next_offset = markers[i + 1][0] if i + 1 < len(markers) else len(section)
@@ -328,7 +407,7 @@ def _find_report_files(reports_dir: Path, skip_if_fixer_exists: bool) -> list[Pa
                 fixer_prefixes.add(p.name.lower()[:idx])
     kept: list[Path] = []
     for p in candidates:
-        if any(p.name.lower().startswith(prefix) for prefix in fixer_prefixes):
+        if any(p.name.lower().startswith(prefix + ".") for prefix in fixer_prefixes):
             continue
         kept.append(p)
     return sorted(kept)

@@ -187,17 +187,21 @@ VERIFICATION RULE FOR EACH FINDING:
 Respect the coding style of the source file. Fail-fast code, no backwards-compat, no defensive checks, minimal docstrings, compact expressions — these are style choices. Do NOT push a different style onto the author.
 
 OUTPUT FORMAT (STRICT — the downstream aggregator parses this):
-For each real defect found, emit exactly:
+For each real defect found, emit ONE sentinel-delimited block of exactly this shape:
 
-### FINDING: <short title, one line, be specific>
-Source: <function_name or file:line>
+[[FINDING]]
+Title: <short title, one line, be specific>
+File: <absolute path to the source file containing the defect>
+Source: <function name or file:line>
 Severity: <High|Medium|Low>
-<1–3 sentence body explaining the defect. Reference the exact function/line/symbol.>
+Description: <1–3 sentence explanation of the defect. Reference the exact function/line/symbol.>
+[[/FINDING]]
 
 Rules:
-- ONE `### FINDING:` block per defect. No nested H3 headings inside a finding body.
-- If NO real defects, emit a single line: "No real defects." — no FINDING blocks at all.
-- Do NOT echo these instructions. No preamble. No summary. No severity section headers.
+- Emit ONE `[[FINDING]]`...`[[/FINDING]]` block per defect. Do NOT use `###` or numbered-list syntax for findings — those collide with the aggregator's output format and with ensemble-wrapper headings.
+- Keys are `Title`, `File`, `Source`, `Severity`, `Description`. `Title` and `Description` are REQUIRED. Others are optional but recommended.
+- If NO real defects, emit a single line: `No real defects.` — no sentinel blocks at all.
+- Do NOT echo these instructions. No preamble. No summary. No severity section headers. No `---` separators between findings.
 - Do NOT treat `[REDACTED:ENV_SECRET]` / `[REDACTED:API_KEY]` placeholders as defects — they are redaction artifacts of scan_secrets=true + redact_secrets=true.
 ```
 
