@@ -186,7 +186,19 @@ VERIFICATION RULE FOR EACH FINDING:
 
 Respect the coding style of the source file. Fail-fast code, no backwards-compat, no defensive checks, minimal docstrings, compact expressions — these are style choices. Do NOT push a different style onto the author.
 
-Reference function names and line numbers. Be terse. One line per finding. No preamble.
+OUTPUT FORMAT (STRICT — the downstream aggregator parses this):
+For each real defect found, emit exactly:
+
+### FINDING: <short title, one line, be specific>
+Source: <function_name or file:line>
+Severity: <High|Medium|Low>
+<1–3 sentence body explaining the defect. Reference the exact function/line/symbol.>
+
+Rules:
+- ONE `### FINDING:` block per defect. No nested H3 headings inside a finding body.
+- If NO real defects, emit a single line: "No real defects." — no FINDING blocks at all.
+- Do NOT echo these instructions. No preamble. No summary. No severity section headers.
+- Do NOT treat `[REDACTED:ENV_SECRET]` / `[REDACTED:API_KEY]` placeholders as defects — they are redaction artifacts of scan_secrets=true + redact_secrets=true.
 ```
 
 Add the flags:
