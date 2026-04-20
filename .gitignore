@@ -21,6 +21,12 @@ mcp-server/logs/
 mcp-server/llm_externalizer_output/
 mcp-server/reports_dev/
 reports_dev/
+# Audit output from /llm-externalizer:* commands (and any plugin agent).
+# Reports routinely contain absolute local paths, raw LLM responses, and
+# redacted secret markers — never publish them. Agents should write to the
+# root-project ./reports/ even when running inside a git worktree.
+reports/
+mcp-server/reports/
 
 # Build artifacts
 dist/

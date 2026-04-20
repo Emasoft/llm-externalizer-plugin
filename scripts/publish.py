@@ -20,8 +20,6 @@ Push policy:
     No bypass exists.
 
 Steps (in order — validate is FIRST, no skipping):
-    0. Move ./reports/ -> ./reports_dev/ (1:1 path mapping; gitignored;
-       keeps local paths out of CPV and the published tarball)
     1. Pre-flight: working tree clean + required tools present
     2. Validate (MANDATORY — all checks 0 errors): npm ci, typecheck,
        lint, build, test, ruff, shellcheck, plugin.json, CPV
@@ -184,59 +182,6 @@ def extract_release_notes(changelog_path: Path, version: str) -> str:
     if not match:
         return f"Release v{version}"
     return match.group(1).strip()
-
-
-def archive_reports_to_dev(repo_root: Path) -> int:
-    """Move everything under ./reports/ into ./reports_dev/ preserving the
-    exact directory structure (and the same for ./mcp-server/reports/
-    -> ./mcp-server/reports_dev/).
-
-    Why: the ./reports/ tree is where agents and workflow runs drop audit
-    output. Those files carry absolute local paths (/Users/<name>/...),
-    redacted secrets, and raw LLM output — none of which should ever land
-    in the published plugin. ./reports_dev/ is gitignored (see .gitignore),
-    so moving the content there keeps CPV / package publishers from
-    scanning sensitive paths AND preserves the data so agents retain their
-    audit trail after their workflow branch is merged or deleted.
-
-    Path mapping is 1:1. A file at `reports/llm-externalizer/foo.md` lands
-    at `reports_dev/llm-externalizer/foo.md` — the exact same sub-path,
-    just with `reports` → `reports_dev` in the prefix. On collision the
-    destination is overwritten: the newer run's output wins, which is the
-    desired behavior for repeated publishes.
-
-    Returns the number of files moved (0 when there was nothing to move).
-    """
-    moved = 0
-    pairs = [
-        (repo_root / "reports", repo_root / "reports_dev"),
-        (repo_root / "mcp-server" / "reports", repo_root / "mcp-server" / "reports_dev"),
-    ]
-    for src_root, dst_root in pairs:
-        if not src_root.is_dir():
-            continue
-        files = [p for p in src_root.rglob("*") if p.is_file()]
-        if not files:
-            continue
-        for f in files:
-            rel = f.relative_to(src_root)
-            dest = dst_root / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if dest.exists():
-                dest.unlink()  # overwrite collisions — newer run wins
-            shutil.move(str(f), str(dest))
-            moved += 1
-        # Remove now-empty sub-directories (deepest-first).
-        for d in sorted(
-            (p for p in src_root.rglob("*") if p.is_dir()),
-            key=lambda p: len(p.parts),
-            reverse=True,
-        ):
-            try:
-                d.rmdir()
-            except OSError:
-                pass  # non-empty (symlink survived, etc.) — leave it
-    return moved
 
 
 def _reports_dir(repo_root: Path) -> Path:
@@ -482,29 +427,6 @@ def main():
 
 
 def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> None:
-
-    # ── 0. Move ./reports/ into ./reports_dev/ (1:1 path mapping) ──
-    # Workflows and agents drop audit output under ./reports/. That tree
-    # contains local absolute paths, redacted secret markers, and raw LLM
-    # output — none of which belong in a published plugin. Move every file
-    # into ./reports_dev/ at the SAME sub-path (just replace the prefix),
-    # so a file at `reports/llm-externalizer/foo.md` ends up at
-    # `reports_dev/llm-externalizer/foo.md`. ./reports_dev/ is gitignored,
-    # so this:
-    #   (a) keeps the pre-flight working-tree check clean,
-    #   (b) keeps CPV's "private path leaked" scan from seeing them
-    #       (they now live under a never-published subtree),
-    #   (c) preserves the audit trail for agents running in ephemeral
-    #       workflow branches — reports survive a merge-and-delete.
-    # Mapping is 1:1: users can locate a moved file by simply replacing
-    # `reports` with `reports_dev` in its path. Collisions overwrite.
-    print("\n── 0. Move ./reports/ -> ./reports_dev/ (same path, gitignored) ──")
-    moved = archive_reports_to_dev(repo_root)
-    if moved:
-        print(f"  Moved {moved} file(s) out of ./reports/ into reports_dev/.")
-    else:
-        print("  ./reports/ is empty — nothing to move.")
-    print()
 
     # ── --check-only: run full validation without publishing ──
     # Used by the pre-push hook. Checks are the SAME as the main publish
