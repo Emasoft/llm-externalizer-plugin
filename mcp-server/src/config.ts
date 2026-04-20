@@ -184,11 +184,16 @@ export function getConfigDir(): string {
   let dir = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
   // Follow symlinks to detect if the resolved target is outside allowed boundaries
   try { dir = realpathSync(dir); } catch { /* dir may not exist yet — resolve() is sufficient */ }
-  // M8: Path traversal guard — config dir must be under homedir() or /tmp
-  const home = homedir();
+  // M8: Path traversal guard — config dir must be under homedir() or /tmp.
+  // Resolve home and /tmp through symlinks so the comparison uses canonical paths
+  // (e.g. /tmp → /private/tmp on macOS; homedir() may also be a symlink).
+  const home = (() => { try { return realpathSync(homedir()); } catch { return homedir(); } })();
+  const tmpCanonical = (() => { try { return realpathSync("/tmp"); } catch { return "/tmp"; } })();
   const sep = process.platform === "win32" ? "\\" : "/";
-  if (!dir.startsWith(home + sep) && !dir.startsWith("/tmp/") && dir !== home && dir !== "/tmp") {
-    throw new Error(`Config directory '${dir}' is outside allowed paths (${home} or /tmp)`);
+  const underHome = dir.startsWith(home + sep) || dir === home;
+  const underTmp = dir.startsWith(tmpCanonical + sep) || dir === tmpCanonical;
+  if (!underHome && !underTmp) {
+    throw new Error(`Config directory '${dir}' is outside allowed paths (${home} or ${tmpCanonical})`);
   }
   return dir;
 }

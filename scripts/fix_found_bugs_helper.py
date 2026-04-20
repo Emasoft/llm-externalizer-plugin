@@ -68,7 +68,7 @@ FIXED_HEADING_RE = re.compile(r"^### .*\bFIXED\b.*$")
 ANY_H3_RE = re.compile(r"^### ")
 ANY_H2_RE = re.compile(r"^## ")
 BULLET_BUG_RE = re.compile(r"^- \*\*[^*]+\*\*")
-SEVERITY_WORD_RE = re.compile(r"\b(critical|high|medium|low|minor)\b", re.IGNORECASE)
+SEVERITY_WORD_RE = re.compile(r"\b(high|medium|low)\b", re.IGNORECASE)
 
 # ── LLM-Externalizer report parsing regexes ──────────────────────────────────
 
@@ -305,13 +305,9 @@ def _parse_report(path: Path) -> list[dict]:
                 _extract_findings_from_section(text[start:end], source, auditor=model)
             )
         return findings
-    # Single-model: strip the '# Report' header block heuristically
-    header_end = 0
-    for m in re.finditer(r"^##?\s+\S", text, re.MULTILINE):
-        header_end = m.start()
-        break
-    body = text[header_end:] if header_end else text
-    return _extract_findings_from_section(body, source)
+    # Single-model: pass the full text; _extract_findings_from_section ignores
+    # non-finding lines (# headers, prose), so no heuristic stripping needed.
+    return _extract_findings_from_section(text, source)
 
 
 def _find_report_files(reports_dir: Path, skip_if_fixer_exists: bool) -> list[Path]:
@@ -325,12 +321,14 @@ def _find_report_files(reports_dir: Path, skip_if_fixer_exists: bool) -> list[Pa
     fixer_prefixes: set[str] = set()
     for p in reports_dir.iterdir():
         if p.is_file() and ".fixer." in p.name.lower():
-            # prefix = everything up to the '.fixer.' marker
+            # prefix = everything up to the '.fixer.' marker (lowercased for
+            # case-insensitive matching against candidate names)
             idx = p.name.lower().find(".fixer.")
-            fixer_prefixes.add(p.name[:idx])
+            if idx > 0:
+                fixer_prefixes.add(p.name.lower()[:idx])
     kept: list[Path] = []
     for p in candidates:
-        if any(p.name.startswith(prefix) for prefix in fixer_prefixes):
+        if any(p.name.lower().startswith(prefix) for prefix in fixer_prefixes):
             continue
         kept.append(p)
     return sorted(kept)
@@ -346,6 +344,12 @@ def cmd_aggregate_reports(args: argparse.Namespace) -> int:
     if args.merged_report and args.reports_dir:
         print(
             "ERROR: pass EITHER --merged-report OR --reports-dir, not both",
+            file=sys.stderr,
+        )
+        return 1
+    if not args.merged_report and not args.reports_dir:
+        print(
+            "ERROR: pass --merged-report OR --reports-dir",
             file=sys.stderr,
         )
         return 1
@@ -499,9 +503,10 @@ def cmd_diff_fixed(args: argparse.Namespace) -> int:
                 prev.add(line.strip())
     newly_fixed = sorted(cur_fixed - prev)
     all_titles, _ = _titles(args.file)
-    unfixed_now = len(all_titles) - len(cur_fixed_list)
+    unfixed_remaining = len(all_titles) - len(cur_fixed_list) + len(newly_fixed)
     for t in newly_fixed:
-        print(f"Fixed: {t} — {unfixed_now} unfixed remaining")
+        unfixed_remaining -= 1
+        print(f"Fixed: {t} — {unfixed_remaining} unfixed remaining")
     return 0
 
 

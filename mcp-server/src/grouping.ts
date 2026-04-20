@@ -366,7 +366,7 @@ export function splitPerFileSections(
     // Drop a trailing `---` separator if present — it's the per-file
     // section divider, not part of the report body.
     let body = content.slice(h.bodyStart, bodyEnd);
-    body = body.replace(/\n\s*---\s*$/m, "").trim();
+    body = body.replace(/\n\s*---\s*$/, "").trim();
 
     let matched: string | undefined;
     if (byExact.has(h.pathRaw)) {

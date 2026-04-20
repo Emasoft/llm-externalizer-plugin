@@ -132,7 +132,7 @@ _KNOWN_DIR_RE = re.compile(
     + r"]+)"
 )
 
-_MD_LINK_RE = re.compile(r"\]\((?P<target>(?!https?://)(?!mailto:)(?!tel:)(?!#)[^\s)'\"`]+?)\)")
+_MD_LINK_RE = re.compile(r"\]\((?P<target>(?!https?://)(?!mailto:)(?!tel:)(?!#)[^\s)'\"`]+?)(?:\s+(?:\"[^\"]*\"|'[^']*'))?\)")
 
 
 def _is_excluded(path: Path, root: Path) -> bool:
@@ -175,6 +175,15 @@ def _is_dynamic(path_str: str) -> bool:
     return any(marker in path_str for marker in _DYNAMIC_MARKERS)
 
 
+def _strip_url_fragment(path_str: str) -> str:
+    """Strip #anchor and ?query suffixes from a path string."""
+    for sep in ("#", "?"):
+        idx = path_str.find(sep)
+        if idx != -1:
+            path_str = path_str[:idx]
+    return path_str
+
+
 def _extract_references(text: str, source_file: Path, root: Path) -> list[tuple[str, str, Path | None, Path]]:
     """Return list of (raw_reference, target_rel_path, resolved_under_file_dir, resolved_under_root).
 
@@ -198,14 +207,14 @@ def _extract_references(text: str, source_file: Path, root: Path) -> list[tuple[
         found.append((raw, target_rel, None, (root / target_rel)))
 
     for m in _KNOWN_DIR_RE.finditer(text):
-        raw = _strip_trailing_punct(m.group("path"))
+        raw = _strip_url_fragment(_strip_trailing_punct(m.group("path")))
         if raw in seen:
             continue
         seen.add(raw)
         found.append((raw, raw, (source_file.parent / raw), (root / raw)))
 
     for m in _MD_LINK_RE.finditer(text):
-        target = _strip_trailing_punct(m.group("target"))
+        target = _strip_url_fragment(_strip_trailing_punct(m.group("target")))
         if not target.lower().endswith(_KNOWN_LINK_SUFFIXES):
             continue
         if target in seen:
@@ -282,6 +291,8 @@ def main() -> int:
                 resolved = rel_file
             elif _exists_within(rel_root, root):
                 resolved = rel_root
+            if resolved is not None and _is_excluded(resolved, root):
+                continue
             if args.verbose:
                 verdict = f"OK -> {resolved.resolve().relative_to(root)}" if resolved else "BROKEN"
                 print(f"{rel_source}: '{raw}' {verdict}")

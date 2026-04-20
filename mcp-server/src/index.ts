@@ -823,18 +823,14 @@ function gitLsFilesMultiRepo(dirPath: string, recursive: boolean): string[] | nu
         const subDir = join(dir, entry.name);
         // Check if this subdirectory is an independent git repo
         const gitDir = join(subDir, ".git");
-        if (existsSync(gitDir)) {
-          // Verify it's not a submodule (submodules have .git as a FILE, not a DIR)
-          // or verify its toplevel is different from the parent
-          const subTopLevel = spawnSync(
-            "git", ["rev-parse", "--show-toplevel"],
-            { cwd: subDir, encoding: "utf-8", timeout: 3000 },
-          );
-          const parentTopLevel = isInGitRepo ? topLevelResult.stdout.trim() : "";
-          if (subTopLevel.status === 0 && subTopLevel.stdout.trim() !== parentTopLevel) {
-            nestedGitRoots.push(subDir);
-            continue; // don't recurse further into this repo's subdirs for more git roots
-          }
+        let gitDirIsDir = false;
+        try { gitDirIsDir = lstatSync(gitDir).isDirectory(); } catch { /* not present */ }
+        if (gitDirIsDir) {
+          // .git is a real directory → independent repo, not a submodule.
+          // Submodules have .git as a FILE (containing a "gitdir:" pointer), so
+          // they are correctly excluded by the lstatSync().isDirectory() check above.
+          nestedGitRoots.push(subDir);
+          continue; // don't recurse further into this repo's subdirs for more git roots
         }
         findNestedGitRoots(subDir, depth + 1);
       }
@@ -1019,7 +1015,15 @@ function extractLocalImports(filePath: string, sourceCode: string): string[] {
     let match;
     while ((match = pattern.exec(sourceCode)) !== null) {
       const importPath = match[1];
-      let resolved = join(dir, importPath);
+      let resolved: string;
+      if (lang === "python" && importPath.startsWith(".")) {
+        const dotCount = importPath.match(/^\.+/)?.[0].length ?? 1;
+        const modulePart = importPath.slice(dotCount);
+        const baseDir = dotCount === 1 ? dir : join(dir, ...Array(dotCount - 1).fill(".."));
+        resolved = modulePart ? join(baseDir, ...modulePart.split(".")) : baseDir;
+      } else {
+        resolved = join(dir, importPath);
+      }
       if (!extname(resolved)) {
         const tryExts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"];
         let found = false;
@@ -3469,7 +3473,7 @@ async function chatCompletionWithRetry(
           process.stderr.write(
             `[llm-externalizer] Free-mode fallback also failed: ${freeMsg}\n`,
           );
-          // Fall through to standard error handling below
+          throw err;
         }
       }
 
@@ -3841,7 +3845,7 @@ async function processFileCheck(
 function limitsBlock(): string {
   const throughput =
     currentBackend.type === "openrouter"
-      ? "• PARALLEL: rate-limited dispatch (RPS auto-detected from balance). Many requests in-flight simultaneously."
+      ? "• PARALLEL (answer_mode=0 + max_retries>1 only): rate-limited dispatch (RPS auto-detected from balance). Many requests in-flight simultaneously. Default (answer_mode=2 or max_retries=1): sequential batches."
       : "• SEQUENTIAL: 1 call at a time.";
   return (
     "\n\nLIMITS:\n" +
@@ -8018,6 +8022,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 if (!importPath.startsWith(".") && !importPath.startsWith("/")) { packageImports.push(importPath); continue; }
                 const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
                 const resolvedBase = importPath.startsWith("/") ? importPath : join(resolveDir, importPath);
+                if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) { packageImports.push(importPath); continue; }
                 let found = existsSync(resolvedBase) && statSync(resolvedBase).isFile();
                 if (!found && !extname(resolvedBase)) {
                   for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".json"]) { if (existsSync(resolvedBase + ext)) { found = true; break; } }
@@ -8118,6 +8123,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             const resolvedBase = importPath.startsWith("/")
               ? importPath
               : join(resolveDir, importPath);
+            // Reject paths resolving outside allowed project directories to prevent filesystem oracle attacks.
+            if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
+              packageImports.push(importPath);
+              continue;
+            }
             let found = false;
 
             if (existsSync(resolvedBase) && statSync(resolvedBase).isFile()) {
@@ -8390,6 +8400,50 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const fgPaths = fg.files;
           if (fgPaths.length === 0) continue;
           const fgId = fg.id;
+
+          // Mode 0 (non-grouped only): one output report per input file
+          if (csMode === 0 && !csEffectivelyGrouped) {
+            const csPerFileResults: string[] = [];
+            for (const fp of fgPaths) {
+              if (!existsSync(fp)) {
+                csPerFileResults.push(`FAILED: ${fp} — File not found`);
+                continue;
+              }
+              let fpBlock: string;
+              try {
+                fpBlock = readFileAsCodeBlock(fp, undefined, csRedact, csBudgetBytes, csRegexRedact);
+              } catch (err) {
+                csPerFileResults.push(`FAILED: ${fp} — ${err instanceof Error ? err.message : String(err)}`);
+                continue;
+              }
+              let fpUserContent = "## SPECIFICATION (source of truth)\n\n" + csSpecBlock + "\n\n";
+              if (csExtraInstructions) {
+                fpUserContent += "## ADDITIONAL INSTRUCTIONS\n\n" + csExtraInstructions + "\n\n";
+              }
+              fpUserContent += "## SOURCE FILES TO CHECK\n\n" + fpBlock;
+              const fpMessages: ChatMessage[] = [
+                { role: "system", content: csSystemPrompt },
+                { role: "user", content: fpUserContent },
+              ];
+              const fpResp = await ensembleStreaming(
+                fpMessages,
+                { maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride },
+                csUseEnsemble,
+              );
+              if (fpResp.content.trim().length === 0) {
+                csPerFileResults.push(`FAILED: ${fp} — LLM returned empty response`);
+                continue;
+              }
+              const fpFooter = formatFooter(fpResp, "check_against_specs", fp);
+              const fpReportPath = saveResponse("check_against_specs", fpResp.content + fpFooter, {
+                model: ensembleModelLabel(csUseEnsemble),
+                task: `Spec compliance: ${basename(csSpecPath)} vs ${basename(fp)}`,
+                inputFile: fp,
+              }, undefined, outputDir);
+              csPerFileResults.push(fpReportPath);
+            }
+            return { content: [{ type: "text", text: csPerFileResults.join("\n") }] };
+          }
 
           // Group source files using FFD bin packing
           const { groups: csGroups, autoBatched: csAutoBatched, skipped: csSkipped } =

@@ -65,7 +65,9 @@ async function createClient(): Promise<{ client: Client; transport: StdioClientT
 }
 
 function getText(result: unknown): string {
-  return (((result as Record<string, unknown>).content as Array<{ type: string; text: string }>)[0]?.text) ?? '';
+  const content = (result as Record<string, unknown>).content;
+  if (!Array.isArray(content)) return '';
+  return (content[0] as { type: string; text: string } | undefined)?.text ?? '';
 }
 
 // ── Pre-flight: verify LM Studio is reachable ────────────────────────
@@ -104,6 +106,7 @@ describe('web search: React deprecation detection', () => {
      * 18+ API and identify what's deprecated.
      */
     cleanDir(TMP_DIR);
+    mkdirSync(join(TMP_DIR, 'output'), { recursive: true });
 
     const sourceFile = join(TMP_DIR, 'old-component.tsx');
     writeFileSync(sourceFile, [
@@ -194,6 +197,7 @@ describe('web search: Express.js deprecation detection', () => {
      * The model should search for current Express 4.x/5.x docs and identify them.
      */
     cleanDir(TMP_DIR);
+    mkdirSync(join(TMP_DIR, 'output'), { recursive: true });
 
     const sourceFile = join(TMP_DIR, 'old-server.js');
     writeFileSync(sourceFile, [
@@ -287,6 +291,7 @@ describe('web search: Node.js API currency check', () => {
      * fs callbacks vs fs/promises, url.parse vs URL constructor).
      */
     cleanDir(TMP_DIR);
+    mkdirSync(join(TMP_DIR, 'output'), { recursive: true });
 
     const sourceFile = join(TMP_DIR, 'legacy-utils.js');
     writeFileSync(sourceFile, [

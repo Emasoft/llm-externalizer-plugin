@@ -10,7 +10,7 @@ for (const file of ['index.js', 'cli.js']) {
   const filePath = path.join(__dirname, 'dist', file);
   if (!fs.existsSync(filePath)) continue;
   const content = fs.readFileSync(filePath, 'utf8');
-  if (!content.startsWith('#!/usr/bin/env node')) {
+  if (!content.startsWith('#!')) {
     fs.writeFileSync(filePath, '#!/usr/bin/env node\n' + content);
     console.log(`Added shebang to dist/${file}`);
   } else {

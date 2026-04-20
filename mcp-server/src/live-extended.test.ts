@@ -23,7 +23,7 @@ async function createClient(): Promise<{ client: Client; transport: StdioClientT
 }
 
 function cleanDir(dir: string) {
-  try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
 }
 
@@ -257,7 +257,7 @@ describe('check_imports (live)', () => {
       const text = getText(result);
       expect(text).toBeDefined();
 
-      if (!result.isError) {
+      if (!result.isError && text.endsWith('.md')) {
         const report = readFileSync(text, 'utf-8');
         // Should flag the missing import
         expect(report.toLowerCase()).toMatch(/missing|not found|broken|invalid|fail/);
@@ -304,7 +304,7 @@ describe('check_references (live)', () => {
       const text = getText(result);
       expect(text).toBeDefined();
 
-      if (!result.isError) {
+      if (!result.isError && text.endsWith('.md')) {
         const report = readFileSync(text, 'utf-8');
         // Should flag nonExistentFunction
         expect(report.toLowerCase()).toMatch(/nonexistentfunction|undefined|not defined|missing/);

@@ -303,11 +303,11 @@ describe('batch_check (live)', () => {
 
       // Check for batch progress notifications
       const batchProgress = progressEvents.filter(e => e.message?.includes('batch_check'));
-      // With 2 files, we should get at least 1 batch progress (after first file completes)
-      // But we may also get streaming progress — both are valid
-      if (batchProgress.length > 0) {
-        expect(batchProgress[0].total).toBe(2); // 2 files total
-        expect(batchProgress[0].message).toMatch(/batch_check.*files done/);
+      // With 2 files, at least 1 batch progress event must arrive (after each file completes)
+      expect(batchProgress.length).toBeGreaterThan(0);
+      for (const evt of batchProgress) {
+        expect(evt.total).toBe(2); // 2 files total
+        expect(evt.message).toMatch(/batch_check.*files done/);
       }
     } finally {
       try { unlinkSync(file1); } catch { /* ignore */ }

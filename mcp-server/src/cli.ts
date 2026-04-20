@@ -277,6 +277,24 @@ function generateGitDiff(base: string, sourceFiles: string[]): string {
   if (cwdIsGit.status !== 0) {
     die("cwd is not a git repository; pass --diff <path> or run from inside a git checkout.");
   }
+  const worktreeResult = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+    cwd: process.cwd(),
+    encoding: "utf-8",
+  });
+  if (worktreeResult.error || worktreeResult.status !== 0) {
+    die("Failed to determine git worktree root; pass --diff <path> instead.");
+  }
+  const worktreeRoot = worktreeResult.stdout.trim().replace(/\\/g, "/");
+  const worktreePrefix = worktreeRoot.endsWith("/") ? worktreeRoot : worktreeRoot + "/";
+  for (const sf of sourceFiles) {
+    const normalized = sf.replace(/\\/g, "/");
+    if (!normalized.startsWith(worktreePrefix) && normalized !== worktreeRoot) {
+      die(
+        `Source file '${sf}' is outside the git worktree ('${worktreeRoot}'). ` +
+          `git diff cannot include paths outside the repository.`,
+      );
+    }
+  }
   const outPath = join(tmpdir(), `llm-ext-search-existing-diff-${Date.now()}.patch`);
   // 256 MB buffer is large enough to hold any realistic PR diff (a 10k-line
   // diff is ~1 MB, a 100k-line generated-code diff is ~15 MB). A PR touching
@@ -363,6 +381,7 @@ function autoDetectBase(): string {
 function parseSearchExistingArgs(args: string[]): SearchExistingOpts {
   // Positional args: first non-flag arg is the description; subsequent
   // non-flag args are source files (positional). Flags override.
+  const BOOL_FLAGS = new Set(["free", "no-gitignore"]);
   const positional: string[] = [];
   const flags: Record<string, string> = {};
   for (let i = 0; i < args.length; i++) {
@@ -372,12 +391,13 @@ function parseSearchExistingArgs(args: string[]): SearchExistingOpts {
       if (eqIdx !== -1) {
         flags[a.slice(2, eqIdx)] = a.slice(eqIdx + 1);
       } else {
+        const flagName = a.slice(2);
         const next = args[i + 1];
-        if (next !== undefined && !next.startsWith("--")) {
-          flags[a.slice(2)] = next;
+        if (!BOOL_FLAGS.has(flagName) && next !== undefined && !next.startsWith("--")) {
+          flags[flagName] = next;
           i++;
         } else {
-          flags[a.slice(2)] = "true";
+          flags[flagName] = "true";
         }
       }
     } else {
@@ -386,8 +406,12 @@ function parseSearchExistingArgs(args: string[]): SearchExistingOpts {
   }
 
   // Description comes from --description flag, else first positional arg.
-  const description =
-    flags.description ?? flags.desc ?? positional.shift() ?? "";
+  const rawDesc = flags.description && flags.description !== "true"
+    ? flags.description
+    : flags.desc && flags.desc !== "true"
+      ? flags.desc
+      : undefined;
+  const description = rawDesc ?? positional.shift() ?? "";
   if (!description.trim()) {
     die(
       'Missing description. Usage: llm-externalizer search-existing "<description>" [<src-files>...] --in <path> ...',
@@ -425,6 +449,7 @@ function parseSearchExistingArgs(args: string[]): SearchExistingOpts {
   for (const sf of sourceFiles) {
     const abs = isAbsolute(sf) ? sf : resolvePath(sf);
     if (!existsSync(abs)) die(`Source file not found: ${sf}`);
+    if (statSync(abs).isDirectory()) die(`Source file must be a file, not a directory: ${sf}`);
   }
 
   // timeout-hours is parsed as a float (e.g. 0.5 for 30 minutes). 0 disables.
@@ -526,7 +551,9 @@ async function cmdSearchExisting(rawArgs: string[]): Promise<void> {
   );
 
   // Effective timeout: --timeout-hours override, else DEFAULT_SEARCH_TIMEOUT_MS.
-  // 0 disables (the MCP SDK treats 0 as "no timeout" via undefined upstream).
+  // 0 disables. The MCP SDK always applies a timeout (default 60s when the
+  // options object is omitted), so we pass Number.MAX_SAFE_INTEGER to
+  // effectively never fire the timer when the user requests no timeout.
   const effectiveTimeoutMs =
     opts.timeoutMs !== undefined ? opts.timeoutMs : DEFAULT_SEARCH_TIMEOUT_MS;
 
@@ -535,7 +562,9 @@ async function cmdSearchExisting(rawArgs: string[]): Promise<void> {
     const result = await client.callTool(
       { name: "search_existing_implementations", arguments: toolArgs },
       undefined,
-      effectiveTimeoutMs > 0 ? { timeout: effectiveTimeoutMs } : undefined,
+      effectiveTimeoutMs > 0
+        ? { timeout: effectiveTimeoutMs }
+        : { timeout: Number.MAX_SAFE_INTEGER },
     );
     const content = result.content as Array<{ type: string; text: string }>;
     for (const c of content) {

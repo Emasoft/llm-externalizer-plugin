@@ -573,8 +573,8 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     if index_ts.exists():
         src = index_ts.read_text(encoding="utf-8")
         updated = re.sub(
-            r'(\{\s*name:\s*"llm-externalizer",\s*version:\s*")[^"]+(")',
-            rf"\g<1>{new_version}\2",
+            r"""(\{\s*name:\s*["'`]llm-externalizer["'`],\s*version:\s*(["'`]))[^"'`]+\2""",
+            rf"\g<1>{new_version}\g<2>",
             src,
         )
         if updated == src:

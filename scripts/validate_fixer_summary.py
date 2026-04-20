@@ -54,7 +54,11 @@ def main() -> int:
     args = parser.parse_args()
 
     summary: Path = args.summary
-    reports_dir: Path = args.reports_dir.resolve()
+    try:
+        reports_dir: Path = args.reports_dir.resolve()
+    except OSError as exc:
+        print(f"ERROR: cannot resolve --reports-dir {args.reports_dir}: {exc}", file=sys.stderr)
+        return 2
 
     if not summary.is_file():
         print(f"ERROR: summary not found: {summary}", file=sys.stderr)
@@ -85,7 +89,7 @@ def main() -> int:
         return 4
 
     try:
-        text = resolved.read_text(encoding="utf-8", errors="replace")
+        text = resolved.read_text(encoding="utf-8-sig", errors="replace")
     except OSError as exc:
         print(f"ERROR: cannot read {resolved}: {exc}", file=sys.stderr)
         return 2

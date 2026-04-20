@@ -17,7 +17,10 @@ const nodeExternals = [
 // require() function so bundled CJS code works correctly.
 const banner = `import { createRequire as __cjsCreateRequire } from "node:module";
 import { fileURLToPath as __cjsFileURLToPath } from "node:url";
+import { dirname as __cjsDirname } from "node:path";
 const require = __cjsCreateRequire(import.meta.url);
+const __filename = __cjsFileURLToPath(import.meta.url);
+const __dirname = __cjsDirname(__filename);
 `;
 
 const shared = {

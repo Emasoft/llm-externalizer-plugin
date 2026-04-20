@@ -52,7 +52,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _find_candidates(input_dir: Path) -> list[Path]:
-    return sorted(p for p in input_dir.glob("*.md") if _FIXER_TAG in p.name and p.is_file())
+    return sorted(p for p in input_dir.rglob("*.md") if _FIXER_TAG in p.name and p.is_file())
 
 
 def _validate(report: Path, reports_dir: Path) -> tuple[bool, str]:

@@ -297,6 +297,12 @@ async function main() {
           params: { name: tool, arguments: params },
         });
         phase = "waiting";
+      } else {
+        gotResponse = true;
+        clearTimeout(deadline);
+        console.error(`ERROR: MCP server sent malformed initialize response: ${JSON.stringify(msg)}`);
+        child.kill();
+        process.exit(1);
       }
       return;
     }
@@ -321,12 +327,18 @@ async function main() {
             .join("\n");
           console.log(text);
           child.kill();
-          process.exit(msg.result.isError ? 1 : 0);
+          process.exit(msg.result.isError === true ? 1 : 0);
         } else {
           console.error(`ERROR: Tool response missing content array: ${JSON.stringify(msg.result)}`);
           child.kill();
           process.exit(1);
         }
+      } else {
+        gotResponse = true;
+        clearTimeout(deadline);
+        console.error(`ERROR: MCP server sent malformed tool response: ${JSON.stringify(msg)}`);
+        child.kill();
+        process.exit(1);
       }
     }
   }
@@ -338,6 +350,13 @@ async function main() {
     lineBuf = lines.pop() || "";
     for (const line of lines) {
       onLine(line);
+    }
+  });
+
+  child.stdout.on("end", () => {
+    if (lineBuf) {
+      onLine(lineBuf);
+      lineBuf = "";
     }
   });
 

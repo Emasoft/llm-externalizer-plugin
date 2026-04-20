@@ -51,7 +51,7 @@ _FILE_PATTERNS = (
 )
 
 _LINE_RANGE_RE = re.compile(
-    r"(?:^|[\s(\[:])(?:lines?|L)\s*[:=]?\s*(\d+)(?:\s*[-–]\s*(\d+))?",
+    r"(?:(?:^|[\s(\[])(?:lines?|L)\s*[:=]?\s*(\d+)(?:\s*[-–]\s*L?(\d+))?|:(\d+)(?:\s*[-–]\s*(\d+))?)",
     re.IGNORECASE,
 )
 
@@ -73,8 +73,10 @@ def _extract_source(text: str, project_dir: Path) -> Path | None:
 def _extract_line_ranges(text: str) -> list[tuple[int, int]]:
     ranges: list[tuple[int, int]] = []
     for match in _LINE_RANGE_RE.finditer(text):
-        start = int(match.group(1))
-        end = int(match.group(2) or start)
+        start_raw = match.group(1) or match.group(3)
+        end_raw = match.group(2) or match.group(4)
+        start = int(start_raw)
+        end = int(end_raw) if end_raw else start
         ranges.append((min(start, end), max(start, end)))
     return ranges
 

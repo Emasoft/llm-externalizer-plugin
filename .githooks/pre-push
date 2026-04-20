@@ -34,7 +34,7 @@ Debug:   LLM_EXT_HOOK_DEBUG=1 git push  (prints the walked chain)
 from __future__ import annotations
 
 import os
-import shlex
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -47,7 +47,7 @@ def ps_query(pid: int) -> tuple[int, str] | None:
     try:
         result = subprocess.run(
             ["ps", "-ww", "-o", "ppid=,args=", "-p", str(pid)],
-            capture_output=True, text=True, check=False, timeout=10,
+            capture_output=True, text=True, errors="replace", check=False, timeout=10,
         )
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return None
@@ -62,6 +62,31 @@ def ps_query(pid: int) -> tuple[int, str] | None:
     except ValueError:
         return None
     return ppid, parts[1]
+
+
+def get_process_cwd(pid: int) -> Path | None:
+    """Return the working directory of pid, or None if unavailable."""
+    # Linux: /proc/<pid>/cwd is a symlink to the cwd
+    proc_cwd = Path(f"/proc/{pid}/cwd")
+    if proc_cwd.exists():
+        try:
+            return proc_cwd.resolve(strict=True)
+        except (OSError, RuntimeError):
+            pass
+    # macOS / BSDs: use lsof
+    try:
+        result = subprocess.run(
+            ["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+            capture_output=True, text=True, check=False, timeout=10,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+    for line in result.stdout.splitlines():
+        if line.startswith("n"):
+            cwd_str = line[1:].strip()
+            if cwd_str:
+                return Path(cwd_str)
+    return None
 
 
 def walk_ancestry(expected: Path) -> tuple[bool, list[str]]:
@@ -88,19 +113,50 @@ def walk_ancestry(expected: Path) -> tuple[bool, list[str]]:
         # Truncate long argv for debug display, but scan the full string
         display = argv if len(argv) < 120 else argv[:117] + "..."
         chain.append(f"  pid={pid} ppid={ppid}: {display}")
-        try:
-            tokens = shlex.split(argv, posix=True)
-        except ValueError:
-            tokens = argv.split()
-        for tok in tokens:
-            if not tok.endswith("publish.py"):
-                continue
-            try:
-                tok_path = Path(tok).resolve(strict=True)
-            except (OSError, RuntimeError):
-                continue
-            if tok_path == expected_resolved:
-                return True, chain
+        ancestor_cwd: Path | None = None
+        for m in re.finditer(r'\S*publish\.py', argv):
+            candidate_str = m.group(0)
+            # The regex only captures non-whitespace runs, so paths with spaces
+            # are missed.  Back-fill: also try every prefix of argv up to the
+            # match end that could form a path (i.e. extend leftward through
+            # whitespace until we hit another whitespace-preceded token
+            # boundary or the start of the string, then strip leading
+            # non-path chars).  We collect both the regex hit and a
+            # whitespace-extended variant so we handle "/path with spaces/publish.py".
+            end = m.end()
+            # Walk left from the match start, consuming chars that could
+            # legitimately appear in a filesystem path (everything except NUL).
+            start = m.start()
+            while start > 0 and argv[start - 1] != '\x00':
+                # Stop at a character that cannot appear in a path component
+                # other than a space (we allow spaces in paths).
+                # On POSIX the only forbidden byte in a path is NUL.
+                start -= 1
+            # argv[start:end] is the maximal NUL-free prefix ending at publish.py.
+            # There may be a leading interpreter (e.g. "python3 ") — try both
+            # the full slice and individual space-delimited prefixes.
+            candidates = {candidate_str, argv[start:end]}
+            # Also add each suffix of argv[start:end] that begins after a space,
+            # to handle "python3 /path with spaces/publish.py".
+            chunk = argv[start:end]
+            for i, ch in enumerate(chunk):
+                if ch == ' ':
+                    candidates.add(chunk[i + 1:])
+            for cand in candidates:
+                if not cand.endswith("publish.py"):
+                    continue
+                cand_path = Path(cand)
+                if not cand_path.is_absolute():
+                    if ancestor_cwd is None:
+                        ancestor_cwd = get_process_cwd(pid)
+                    base = ancestor_cwd if ancestor_cwd is not None else Path.cwd()
+                    cand_path = base / cand_path
+                try:
+                    tok_path = cand_path.resolve(strict=True)
+                except (OSError, RuntimeError):
+                    continue
+                if tok_path == expected_resolved:
+                    return True, chain
         pid = ppid
     return False, chain
 

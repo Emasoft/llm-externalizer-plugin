@@ -68,13 +68,13 @@
           "name": "OPENROUTER_MAX_CONCURRENT",
           "description": "Max concurrent calls (auto-detected from API key rate limit if 0, default: 5)",
           "isRequired": false,
-          "format": "string"
+          "format": "number"
         },
         {
           "name": "LM_TIMEOUT",
           "description": "Request timeout in seconds for local backends (default: 300). Reasoning models may need 300+.",
           "isRequired": false,
-          "format": "string"
+          "format": "number"
         },
         {
           "name": "VLLM_API_KEY",
@@ -87,7 +87,7 @@
           "name": "LM_CONTEXT_WINDOW",
           "description": "Fallback context window size in tokens if auto-detection fails (default: 100000)",
           "isRequired": false,
-          "format": "string"
+          "format": "number"
         },
         {
           "name": "LLM_EXT_CONFIG_DIR",

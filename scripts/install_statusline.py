@@ -6,6 +6,7 @@ in the Claude Code status bar.
 """
 
 import json
+import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -36,13 +37,21 @@ def main() -> None:
     print(f"Installed statusline.py to {dest}")
 
     # Update or create settings.json with statusLine configuration
-    command = f'python3 "{dest}"'
+    command = f"python3 {shlex.quote(str(dest))}"
     if settings_path.is_file():
         try:
             settings = json.loads(settings_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             print(
                 f"Error: {settings_path} is not valid JSON ({exc}). "
+                "Refusing to overwrite — fix or remove the file manually, then re-run.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if not isinstance(settings, dict):
+            print(
+                f"Error: {settings_path} contains valid JSON but is not a JSON object "
+                f"(got {type(settings).__name__}). "
                 "Refusing to overwrite — fix or remove the file manually, then re-run.",
                 file=sys.stderr,
             )

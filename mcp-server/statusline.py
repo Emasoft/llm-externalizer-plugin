@@ -353,8 +353,8 @@ def main() -> None:
     mcp_stats_file = cache_dir / "llm-externalizer-stats.json"
     mcp_data = read_json_file(mcp_stats_file)
     if mcp_data:
-        mcp_tokens = mcp_data.get("total_tokens", 0)
-        mcp_cost = mcp_data.get("total_cost", 0)
+        mcp_tokens = mcp_data.get("total_tokens") or 0
+        mcp_cost = mcp_data.get("total_cost") or 0
         out += sep
         out += f"🔌 {WHITE}{format_tokens(mcp_tokens)}{RESET}"
         out += f" 💰 {GREEN}${mcp_cost:.4f}{RESET}"

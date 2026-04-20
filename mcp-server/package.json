@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "tsc --noEmit && node esbuild.config.mjs",
-    "dev": "tsc --watch",
+    "dev": "node esbuild.config.mjs",
     "test": "vitest run --exclude 'src/live*.test.ts'",
     "test:live": "vitest run src/live.test.ts src/live-extended.test.ts src/live-websearch.test.ts",
     "test:all": "vitest run",

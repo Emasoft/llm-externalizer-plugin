@@ -37,6 +37,8 @@ export interface TestConfig {
   resolved: ResolvedProfile;
   /** Timeout in seconds */
   timeout: number;
+  /** Unique test suite name — used for output dir naming */
+  testName: string;
 }
 
 export interface TestConfigOptions {
@@ -64,7 +66,7 @@ export function resolveTestConfig(options: TestConfigOptions): TestConfig {
   const resolved = resolveProfile(settings.active, profile);
   const timeout = options.timeout ?? resolved.timeout;
 
-  return { activeProfile: settings.active, resolved, timeout };
+  return { activeProfile: settings.active, resolved, timeout, testName: options.testName };
 }
 
 /**
@@ -74,8 +76,9 @@ export function resolveTestConfig(options: TestConfigOptions): TestConfig {
 export async function createTestClient(
   config: TestConfig,
   clientName = "test-client",
-): Promise<{ client: Client; transport: StdioClientTransport }> {
-  const outputDir = `/tmp/__llm_ext_${clientName}_output`;
+): Promise<{ client: Client; transport: StdioClientTransport; timeoutMs: number }> {
+  const outputDir = `/tmp/__llm_ext_${config.testName}_output`;
+  const timeoutMs = config.timeout * 1000;
 
   const transport = new StdioClientTransport({
     command: "node",
@@ -99,5 +102,5 @@ export async function createTestClient(
     await transport.close();
     throw err;
   }
-  return { client, transport };
+  return { client, transport, timeoutMs };
 }

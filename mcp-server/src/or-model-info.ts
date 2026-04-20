@@ -64,8 +64,15 @@ export function percentileAnnotation(numeric: number, higherIsBetter: boolean): 
     return (Math.round(n * 100) / 100).toString();
   };
   if (numeric === 50) return "median";
-  if (numeric >= 95) return higherIsBetter ? `best ${fmt(100 - numeric)}%` : `worst ${fmt(100 - numeric)}%`;
-  if (numeric <= 5) return higherIsBetter ? `worst ${fmt(numeric)}%` : `best ${fmt(numeric)}%`;
+  if (numeric >= 95) {
+    const tail = 100 - numeric;
+    if (tail === 0) return higherIsBetter ? "best case" : "worst case";
+    return higherIsBetter ? `best ${fmt(tail)}%` : `worst ${fmt(tail)}%`;
+  }
+  if (numeric <= 5) {
+    if (numeric === 0) return higherIsBetter ? "worst case" : "best case";
+    return higherIsBetter ? `worst ${fmt(numeric)}%` : `best ${fmt(numeric)}%`;
+  }
   return "";
 }
 
@@ -186,8 +193,11 @@ export async function fetchOpenRouterModelInfo(
   }
   try {
     const payload = (await res.json()) as { data?: ModelInfoData };
-    if (!payload.data || !Array.isArray(payload.data.endpoints)) {
+    if (!payload.data) {
       return { ok: false, error: "OpenRouter returned no endpoints for this model" };
+    }
+    if (!Array.isArray(payload.data.endpoints)) {
+      payload.data.endpoints = [];
     }
     return { ok: true, data: payload.data };
   } catch (err) {
