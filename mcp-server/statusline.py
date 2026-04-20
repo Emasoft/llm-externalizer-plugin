@@ -122,11 +122,16 @@ def ensure_cache_dir() -> Path:
         cache_dir = Path(tempfile.gettempdir()) / "claude"
     else:
         cache_dir = Path("/tmp/claude")
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    try:
+    cache_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if sys.platform != "win32":
+        st = cache_dir.stat()
+        if st.st_uid != os.getuid():
+            raise RuntimeError(
+                f"Cache directory {cache_dir} is owned by uid {st.st_uid}, "
+                f"not the current user (uid {os.getuid()}). "
+                "Refusing to use an untrusted directory."
+            )
         cache_dir.chmod(0o700)
-    except OSError:
-        pass
     return cache_dir
 
 

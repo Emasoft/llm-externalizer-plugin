@@ -12,10 +12,12 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { join } from 'node:path';
-import { writeFileSync, unlinkSync, mkdirSync, readFileSync } from 'node:fs';
+import { writeFileSync, unlinkSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { resolveTestConfig, createTestClient } from './test-helpers';
 
 const TMP_DIR = '/tmp/__llm_ext_live_test';
+
+afterAll(() => rmSync(TMP_DIR, { recursive: true, force: true }));
 
 // Resolve live test config from real settings.yaml.
 // Uses whatever the user configured. timeout: 300s for reasoning models.

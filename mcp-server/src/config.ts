@@ -181,9 +181,20 @@ export const API_PRESETS: Record<string, ApiPreset> = {
 
 /** Config directory: ~/.llm-externalizer (or LLM_EXT_CONFIG_DIR for CI) */
 export function getConfigDir(): string {
-  let dir = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
-  // Follow symlinks to detect if the resolved target is outside allowed boundaries
-  try { dir = realpathSync(dir); } catch { /* dir may not exist yet — resolve() is sufficient */ }
+  const raw = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
+  // Resolve symlinks in the deepest existing ancestor so that a symlink like
+  // $HOME/.evil -> /etc is followed even when the full path doesn't exist yet.
+  // Without this, mkdirSync(dir, { recursive: true }) follows symlinks in the
+  // existing prefix while the guard sees only the unresolved string, allowing
+  // directory creation outside allowed paths.
+  function resolveDeepestExisting(p: string): string {
+    try { return realpathSync(p); } catch { /* p doesn't exist */ }
+    const parent = join(p, "..");
+    if (parent === p) return p; // filesystem root
+    const resolvedParent = resolveDeepestExisting(parent);
+    return join(resolvedParent, p.slice(parent.length + (parent.endsWith("/") || parent.endsWith("\\") ? 0 : 1)));
+  }
+  const dir = resolveDeepestExisting(raw);
   // M8: Path traversal guard — config dir must be under homedir() or /tmp.
   // Resolve home and /tmp through symlinks so the comparison uses canonical paths
   // (e.g. /tmp → /private/tmp on macOS; homedir() may also be a symlink).
@@ -533,9 +544,10 @@ export function resolveProfile(
     throw new Error(`Unknown api preset '${profile.api}'`);
   }
 
-  // Auth: api_key for remote presets, api_token for local presets
+  // Auth: api_token preferred for local presets, api_key accepted as fallback;
+  // api_key is the canonical field for remote presets.
   const rawAuth = preset.isLocal
-    ? profile.api_token || preset.defaultAuthEnv
+    ? profile.api_token || profile.api_key || preset.defaultAuthEnv
     : profile.api_key || preset.defaultAuthEnv;
 
   return {

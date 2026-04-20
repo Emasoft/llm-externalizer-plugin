@@ -161,10 +161,15 @@ def determine_next_version(args, current: str) -> str:
     if auto and auto != current:
         print(f"  git-cliff --bumped-version: {current} -> {auto}")
         return auto
-    # Fallback: no bumpable commits detected (or git-cliff returned the
-    # same version). Default to patch bump so the release still happens.
-    print("  git-cliff found no bumpable commits — defaulting to patch bump")
-    return bump_version(current, "patch")
+    # git-cliff returned the current version (no bumpable commits) or failed.
+    # Fail-fast: a release must not be forced when there is nothing to release.
+    # Use --patch, --minor, --major, or --set to override explicitly.
+    print(
+        "ERROR: git-cliff found no bumpable commits since the last tag.\n"
+        "  Use --patch, --minor, --major, or --set <x.y.z> to bump manually.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def extract_release_notes(changelog_path: Path, version: str) -> str:
@@ -659,7 +664,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
         print("ERROR: push failed. Rolling back commit and tag.", file=sys.stderr)
         if push_result.stderr:
             print(f"  {push_result.stderr.strip()}", file=sys.stderr)
-        run(["git", "reset", "--soft", "HEAD~1"], check=False, capture=False)
+        run(["git", "reset", "--hard", "HEAD~1"], check=False, capture=False)
         run(["git", "tag", "-d", tag], check=False, capture=False)
         sys.exit(1)
     print()

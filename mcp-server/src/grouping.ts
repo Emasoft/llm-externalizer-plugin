@@ -59,6 +59,7 @@ export function parseFileGroups(paths: string[]): FileGroup[] {
   }
 
   const groups: FileGroup[] = [];
+  const seenIds = new Set<string>();
   let ungrouped: string[] = [];
   let currentGroup: FileGroup | null = null;
 
@@ -68,11 +69,12 @@ export function parseFileGroups(paths: string[]): FileGroup[] {
       if (currentGroup && currentGroup.files.length > 0) {
         groups.push(currentGroup);
       }
-      if (ungrouped.length > 0) {
-        groups.push({ id: "", files: ungrouped });
-        ungrouped = [];
+      const newId = headerMatch[1];
+      if (seenIds.has(newId)) {
+        throw new Error(`Duplicate group id '${newId}' in input_files_paths`);
       }
-      currentGroup = { id: headerMatch[1], files: [] };
+      seenIds.add(newId);
+      currentGroup = { id: newId, files: [] };
       continue;
     }
 
@@ -382,11 +384,14 @@ export function splitPerFileSections(
       if (basenameBucket && basenameBucket.length === 1) {
         matched = basenameBucket[0];
       } else {
+        const suffixMatches: string[] = [];
         for (const fp of expectedPaths) {
           if (isPathSuffix(h.pathRaw, fp) || isPathSuffix(fp, h.pathRaw)) {
-            matched = fp;
-            break;
+            suffixMatches.push(fp);
           }
+        }
+        if (suffixMatches.length === 1) {
+          matched = suffixMatches[0];
         }
       }
     }

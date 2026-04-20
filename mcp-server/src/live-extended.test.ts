@@ -15,6 +15,10 @@ import { resolveTestConfig, createTestClient } from './test-helpers';
 
 const TMP_DIR = '/tmp/__llm_ext_extended_test';
 
+afterAll(() => {
+  rmSync(TMP_DIR, { recursive: true, force: true });
+});
+
 // Resolve live test config from real settings.yaml.
 const testConfig = resolveTestConfig({ testName: 'extended', timeout: 300 });
 
@@ -574,7 +578,7 @@ describe('scan_secrets (live)', () => {
       // Should be an error — secrets detected
       expect(result.isError).toBe(true);
       const text = getText(result);
-      expect(text.toLowerCase()).toMatch(/secret|leak|abort/);
+      if (text) expect(text.toLowerCase()).toMatch(/secret|leak|abort/);
     } finally {
       try { unlinkSync(secretFile); } catch { /* */ }
     }

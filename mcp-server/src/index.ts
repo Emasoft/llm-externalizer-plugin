@@ -1920,7 +1920,7 @@ function writeStatsFile(): void {
     };
     // Atomic write: temp file + rename to prevent partial reads
     const tmpStats = STATS_FILE + ".tmp";
-    writeFileSync(tmpStats, JSON.stringify(stats), "utf-8");
+    writeFileSync(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 0o600 });
     renameSync(tmpStats, STATS_FILE);
   } catch {
     // Stats file must never crash the MCP
@@ -8021,7 +8021,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               for (const importPath of extractedPaths) {
                 if (!importPath.startsWith(".") && !importPath.startsWith("/")) { packageImports.push(importPath); continue; }
                 const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-                const resolvedBase = importPath.startsWith("/") ? importPath : join(resolveDir, importPath);
+                const resolvedBase = importPath.startsWith("/") ? resolve(importPath) : join(resolveDir, importPath);
                 if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) { packageImports.push(importPath); continue; }
                 let found = existsSync(resolvedBase) && statSync(resolvedBase).isFile();
                 if (!found && !extname(resolvedBase)) {
@@ -8121,7 +8121,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               ? fileDir
               : ciResolveBase;
             const resolvedBase = importPath.startsWith("/")
-              ? importPath
+              ? resolve(importPath)
               : join(resolveDir, importPath);
             // Reject paths resolving outside allowed project directories to prevent filesystem oracle attacks.
             if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {

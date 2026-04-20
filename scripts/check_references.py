@@ -184,7 +184,7 @@ def _strip_url_fragment(path_str: str) -> str:
     return path_str
 
 
-def _extract_references(text: str, source_file: Path, root: Path) -> list[tuple[str, str, Path | None, Path]]:
+def _extract_references(text: str, source_file: Path, root: Path) -> list[tuple[str, str, Path | None, Path | None]]:
     """Return list of (raw_reference, target_rel_path, resolved_under_file_dir, resolved_under_root).
 
     `target_rel_path` is the path AFTER any known prefix (e.g. `${CLAUDE_PLUGIN_ROOT}/`)
@@ -195,7 +195,7 @@ def _extract_references(text: str, source_file: Path, root: Path) -> list[tuple[
     `resolved_under_file_dir` is None when resolution was explicitly plugin-root only
     (e.g. ${CLAUDE_PLUGIN_ROOT}/...).
     """
-    found: list[tuple[str, str, Path | None, Path]] = []
+    found: list[tuple[str, str, Path | None, Path | None]] = []
     seen: set[str] = set()
 
     for m in _PLUGIN_ROOT_RE.finditer(text):
@@ -222,7 +222,7 @@ def _extract_references(text: str, source_file: Path, root: Path) -> list[tuple[
         if any(target.startswith(d + "/") for d in _KNOWN_DIRS):
             continue
         seen.add(target)
-        found.append((target, target, (source_file.parent / target), (root / target)))
+        found.append((target, target, (source_file.parent / target), None))
 
     return found
 
@@ -289,7 +289,7 @@ def main() -> int:
             resolved: Path | None = None
             if rel_file is not None and _exists_within(rel_file, root):
                 resolved = rel_file
-            elif _exists_within(rel_root, root):
+            elif rel_root is not None and _exists_within(rel_root, root):
                 resolved = rel_root
             if resolved is not None and _is_excluded(resolved, root):
                 continue
@@ -297,7 +297,7 @@ def main() -> int:
                 verdict = f"OK -> {resolved.resolve().relative_to(root)}" if resolved else "BROKEN"
                 print(f"{rel_source}: '{raw}' {verdict}")
             if resolved is None:
-                tried = f"root/{target_rel}" if rel_file is None else f"{rel_file} | {rel_root}"
+                tried = f"root/{target_rel}" if rel_file is None else (f"{rel_file} | root/{target_rel}" if rel_root is not None else str(rel_file))
                 broken.append((rel_source, raw, f"tried: {tried}"))
 
     if not args.quiet:

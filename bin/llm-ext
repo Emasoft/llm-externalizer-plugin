@@ -255,13 +255,15 @@ async function main() {
     process.exit(1);
   });
 
-  // Handle unexpected server exit before we get a response
+  // Handle unexpected server exit before we get a response.
+  // NOTE: the exit event can fire before the final stdout data events are
+  // processed.  We track the exit code here but defer the crash check to
+  // stdout.on("end"), which is guaranteed to fire only after all data has
+  // been delivered to our handlers.
   let gotResponse = false;
+  let exitCode = null;
   child.on("exit", (code) => {
-    if (!gotResponse) {
-      console.error(`ERROR: MCP server exited unexpectedly (code ${code})`);
-      process.exit(1);
-    }
+    exitCode = code;
   });
 
   // Line-buffered JSON-RPC parsing — handles partial chunks correctly
@@ -357,6 +359,10 @@ async function main() {
     if (lineBuf) {
       onLine(lineBuf);
       lineBuf = "";
+    }
+    if (!gotResponse) {
+      console.error(`ERROR: MCP server exited unexpectedly (code ${exitCode})`);
+      process.exit(1);
     }
   });
 

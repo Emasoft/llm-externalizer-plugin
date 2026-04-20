@@ -115,6 +115,18 @@ def walk_ancestry(expected: Path) -> tuple[bool, list[str]]:
         chain.append(f"  pid={pid} ppid={ppid}: {display}")
         ancestor_cwd: Path | None = None
         for m in re.finditer(r'\S*publish\.py', argv):
+            # Reject matches that follow a long-option flag (e.g. --script
+            # /path/publish.py). Argv looks like "prog --flag /path/publish.py";
+            # the token immediately before the match start (after stripping
+            # trailing whitespace) would be "--flag" which starts with "--".
+            # Legitimate invocations have the interpreter or a subcommand
+            # (e.g. "python3", "uv run") before the script, none of which
+            # start with "--".
+            pre = argv[:m.start()].rstrip()
+            if pre:
+                preceding_token = pre.rsplit(None, 1)[-1]
+                if preceding_token.startswith("--"):
+                    continue
             candidate_str = m.group(0)
             # The regex only captures non-whitespace runs, so paths with spaces
             # are missed.  Back-fill: also try every prefix of argv up to the
