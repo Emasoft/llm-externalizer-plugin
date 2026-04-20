@@ -1,33 +1,53 @@
-# llm-externalizer
+<p align="center">
+  <img src="docs/banner.png" alt="LLM-Externalizer — Expand Your Reach" width="860">
+</p>
 
-<!--BADGES-START-->
-![version](https://img.shields.io/badge/version-9.0.1-blue)
-![build](https://img.shields.io/badge/build-passing-brightgreen)
-![typescript](https://img.shields.io/badge/typescript-5.x-blue)
-![node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
-![license](https://img.shields.io/badge/license-MIT-green)
-![marketplace](https://img.shields.io/badge/marketplace-emasoft--plugins-purple)
-<!--BADGES-END-->
+<h1 align="center">llm-externalizer</h1>
 
-A Claude Code plugin that offloads bounded LLM tasks (code review, bug fixing, duplicate hunting) to cheaper local or remote models via MCP. Profile-based configuration, ensemble mode, and a serial/parallel fixer pair that keep every report out of the orchestrator context.
+<p align="center">
+<a href="#"><img alt="version" src="https://img.shields.io/badge/version-9.0.1-blue"></a>
+<a href="#"><img alt="build" src="https://img.shields.io/badge/build-passing-brightgreen"></a>
+<a href="#"><img alt="typescript" src="https://img.shields.io/badge/typescript-5.x-blue"></a>
+<a href="#"><img alt="node" src="https://img.shields.io/badge/node-%3E%3D18-brightgreen"></a>
+<a href="#"><img alt="license" src="https://img.shields.io/badge/license-MIT-green"></a>
+<a href="https://github.com/Emasoft/emasoft-plugins"><img alt="marketplace" src="https://img.shields.io/badge/marketplace-emasoft--plugins-purple"></a>
+<a href="#"><img alt="platforms" src="https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey"></a>
+</p>
 
-> [!NOTE]
-> **Marketplace:** this plugin ships in **[`Emasoft/emasoft-plugins`](https://github.com/Emasoft/emasoft-plugins)**. You must add that marketplace to Claude Code before you can install the plugin.
+<p align="center">
+<b>Offload expensive code-scan work to cheap LLMs. Keep the fix loop local in Claude Code.</b>
+</p>
 
-![Cost comparison: Opus $0.84, Sonnet $0.51, Ensemble $0.08](docs/cost_comparison.png)
+---
+
+## What it does
+
+This plugin helps you review a codebase with a cheap model, and then fix the findings with your normal Claude Code session.
+
+The work splits in two halves:
+
+- **The scan** — reading your files and listing what looks wrong (bugs, spec violations, duplicate code, broken imports). This half is sent to an inexpensive model of your choice: a free remote one, a paid remote ensemble of three models, or a local model running on your own machine.
+- **The fix** — actually editing the code to resolve each finding. This half stays inside Claude Code and is done by Claude Sonnet or Opus, so you keep the same review-and-approve flow you already use for any edit.
+
+Keeping the fix half local means the expensive model only touches code when it actually needs to. The scan half does all the slow reading work on the cheap side.
+
+<p align="center">
+  <img src="docs/cost_comparison.png" alt="Cost comparison per scan: Opus $0.84 — Sonnet $0.51 — Ensemble $0.08" width="720">
+</p>
 
 ---
 
 ## Table of contents
 
+- [How it works](#how-it-works)
 - [Features](#features)
 - [Requirements](#requirements)
-- [Quick start](#quick-start)
-- [Commands](#commands)
-- [Agents](#agents)
+- [Install](#install)
+- [First run](#first-run)
+- [Plugin commands](#plugin-commands) (`/llm-externalizer:*` — what you type in Claude Code)
+- [MCP tools](#mcp-tools) (direct tool calls — for skills, custom agents, scripts)
+- [Agents](#agents) (internal, dispatched by commands)
 - [Configuration](#configuration)
-- [MCP tools reference](#mcp-tools-reference)
-- [Skills](#skills)
 - [Troubleshooting](#troubleshooting)
 - [Plugin structure](#plugin-structure)
 - [Contributing](#contributing)
@@ -35,119 +55,271 @@ A Claude Code plugin that offloads bounded LLM tasks (code review, bug fixing, d
 
 ---
 
+## How it works
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  YOUR CLAUDE CODE SESSION (local — Sonnet / Opus / Haiku)               │
+│                                                                         │
+│   /llm-externalizer:llm-externalizer-scan-and-fix                       │
+│        │                                                                │
+│        │  1. auto-discover codebase via git ls-files                    │
+│        │  2. call MCP tool "scan_folder" or "code_task"  ───────┐       │
+│        │                                                        │       │
+│        │                                                        ▼       │
+│        │           ┌─────────────────────────────────────────────────┐  │
+│        │           │  MCP SERVER (bundled with plugin)               │  │
+│        │           │                                                 │  │
+│        │           │  FFD-batches files into ~400 KB payloads        │  │
+│        │           │  Streams each batch to the configured backend:  │  │
+│        │           │    • OpenRouter ensemble (3 models in parallel) │  │
+│        │           │    • OpenRouter single model                    │  │
+│        │           │    • LM Studio / Ollama / vLLM / llama.cpp      │  │
+│        │           │    • Nemotron free tier                         │  │
+│        │           │                                                 │  │
+│        │           │  Writes per-file / per-group / merged reports   │  │
+│        │           │  to ./reports/llm-externalizer/*.md             │  │
+│        │           └─────────────────────────────────────────────────┘  │
+│        │                                                        │       │
+│        │  3. receive report paths (only paths — never bodies)   │       │
+│        │  4. dispatch FIXER SUBAGENTS (local Claude Sonnet/Opus)        │
+│        │       • parallel: up to 15 concurrent, one per report          │
+│        │       • serial:   one bug at a time from an aggregated list    │
+│        │                                                                │
+│        │     EACH FIXER subagent:                                       │
+│        │       a. reads ONE report from disk                            │
+│        │       b. verifies every finding against the real source        │
+│        │       c. rejects false positives / hallucinations              │
+│        │       d. applies a minimal Edit only on REAL defects           │
+│        │       e. runs the language linter, re-verifies                 │
+│        │       f. writes a .fixer.*.md summary                          │
+│        │                                                                │
+│        │  5. join-script merges all fixer summaries into one report     │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**One-line summary.** The MCP server is the scan engine; your Claude Code session is the fix engine. Only file paths cross the boundary — the orchestrator context never reads a report body.
+
+---
+
 ## Features
 
-- **7 slash commands** — scan, fix, audit, discover, configure (full list in [Commands](#commands))
-- **3 internal agents** — one reviewer + two fixers, dispatched by commands, never invoked directly ([Agents](#agents))
-- **Ensemble mode** — three OpenRouter models in parallel, combined report ([Configuration](#configuration))
-- **17 MCP tools** — `chat`, `code_task`, `scan_folder`, `compare_files`, `check_references`, `check_imports`, `check_against_specs`, `search_existing_implementations`, `discover`, `reset`, `get_settings`, and OpenRouter model-info helpers ([MCP tools reference](#mcp-tools-reference))
-- **Auto-batching** — FFD bin-packing by payload size on every multi-file tool
-- **File grouping** — `---GROUP:id---` markers in a file list auto-switch output to one report per group
-- **Secret scanning + regex redaction** — abort on leaked credentials; custom `redact_regex` for project-specific patterns
-- **File-based output** — results land in `./reports/llm-externalizer/`; only paths flow through the orchestrator context
-- **6 backend presets** — LM Studio, Ollama, vLLM, llama.cpp, generic local, OpenRouter
-
-> [!TIP]
-> **Why this plugin exists.** Haiku-class subagents cost more and are less capable than routing the same bounded task to Nemotron free tier, a local model, or an OpenRouter ensemble. This plugin is the routing layer.
+- **Scan externalization** — 15 MCP tools for code review, duplicate hunting, import/reference validation, and spec-compliance checks, all backed by a local or remote LLM you choose.
+- **Fix loop stays local** — fixes are applied by your Claude Code Sonnet / Opus session, NOT by the external LLM. You get the ensemble's second opinion without giving up editorial control.
+- **False-positive-aware fixers** — every fixer subagent runs a verification pass (file-read + flow-trace) before editing. Empirically ~15–30% of ensemble findings are false positives; the fixer rejects them with a typed reason.
+- **7 plugin commands** — `/llm-externalizer:llm-externalizer-{discover, configure, search-existing-implementations, scan-and-fix, scan-and-fix-serially, fix-report, fix-found-bugs}`. Full list in [Plugin commands](#plugin-commands).
+- **15 MCP tools** — `chat`, `code_task`, `scan_folder`, `compare_files`, `check_references`, `check_imports`, `check_against_specs`, `search_existing_implementations`, `batch_check`, `discover`, `reset`, `get_settings`, `or_model_info{,_table,_json}`. Full list in [MCP tools](#mcp-tools).
+- **5 internal agents** — reviewer + 4 fixer variants (parallel/serial × Sonnet/Opus). Dispatched by commands, never invoked directly. See [Agents](#agents).
+- **3 backend modes** — `local` (sequential), `remote` (parallel, single model), `remote-ensemble` (parallel, three models → combined report).
+- **6 backend presets** — LM Studio, Ollama, vLLM, llama.cpp, generic local, OpenRouter.
+- **Auto-batching** — First-Fit-Decreasing bin-packing packs 1–5 files per LLM request (~400 KB per batch). The LLM never sees the whole codebase at once.
+- **File grouping** — `---GROUP:<id>---` markers in a file list pack related files into one request and produce one report per group.
+- **Secret handling** — `scan_secrets: true + redact_secrets: true` is the default on fix runs. Any detected key / token / password is replaced by `[REDACTED:LABEL]` and the scan continues. Opt-out with `--no-secrets`.
+- **File-based output** — every report lands in `./reports/llm-externalizer/`. Only paths flow through the orchestrator context (≤ 200 bytes per report).
+- **Cross-platform** — macOS, Linux, Windows. The MCP server is a bundled Node executable; the helper scripts are pure Python 3.12+.
 
 ---
 
 ## Requirements
 
-For regular users installing from the marketplace:
+> These are the **user** requirements for installing from the marketplace.
+> Additional tools for building from source are listed under [Contributing → Developer requirements](#developer-requirements).
 
-- **Claude Code** 2.0+
-- **Node.js** ≥ 18 + **npm** — the marketplace install hook rebuilds the bundled MCP server
-- **Python** ≥ 3.12 — the install hook runs `scripts/setup.py`; the statusline installer is also Python
-- **git** — the scan commands use `git ls-files` + `git rev-parse` for auto-discovery
-- **ONE backend** — either:
-  - **OpenRouter API key** for remote / ensemble modes, **OR**
-  - a **local model server**: LM Studio, Ollama, vLLM, or llama.cpp
-
-> [!NOTE]
-> Building from source or opening a PR requires additional tools (`uv`, `gh`, `git-cliff`). See [Contributing → Developer requirements](#developer-requirements) at the bottom of this page.
+| Tool | Minimum | Why |
+|---|---|---|
+| **Claude Code** | 2.0+ | Host for the plugin |
+| **Node.js + npm** | Node ≥ 18 | The install hook rebuilds the bundled MCP server |
+| **Python** | ≥ 3.12 | Install hook runs `scripts/setup.py`; statusline is Python |
+| **git** | any recent | `git ls-files` / `git rev-parse` drive codebase auto-discovery |
+| **ONE backend** | — | Either an OpenRouter API key **or** a local model server (LM Studio, Ollama, vLLM, llama.cpp) |
 
 ---
 
-## Quick start
+## Install
 
-All commands below are **Claude Code CLI** commands — run them in your shell, not inside a Claude Code session. Run `claude plugins --help` for the complete reference of plugin subcommands and options.
+Every step below is a **single pasteable block**. Run them in your terminal — not inside a Claude Code session.
 
-### 1. Add the marketplace
+### 1 · Add the marketplace
+
+<details open>
+<summary><b>macOS / Linux</b> (bash / zsh)</summary>
 
 ```bash
+# Add the marketplace that hosts this plugin
 claude plugin marketplace add Emasoft/emasoft-plugins
 ```
+</details>
 
-### 2. (optional) Update the marketplace index
+<details>
+<summary><b>Windows</b> (PowerShell)</summary>
 
-```bash
-claude plugin marketplace update emasoft-plugins
+```powershell
+# Add the marketplace that hosts this plugin
+claude plugin marketplace add Emasoft/emasoft-plugins
 ```
+</details>
 
-> [!TIP]
-> Run this if `claude plugin install` later says *not found* — it refreshes the local marketplace cache.
-
-### 3. Install the plugin
+### 2 · Install the plugin
 
 ```bash
+# Install llm-externalizer from the Emasoft marketplace
 claude plugin install llm-externalizer@emasoft-plugins
 ```
 
-Restart Claude Code (or run `/reload-plugins` inside a session) to activate.
+Then restart Claude Code (or `/reload-plugins` inside a running session).
 
-### 4. Update the plugin (later)
-
-```bash
-claude plugin update llm-externalizer
-```
-
-### 5. (optional) Uninstall
+### 3 · (Later) Update the plugin
 
 ```bash
-claude plugin uninstall llm-externalizer
+# Pull the newest version published in the marketplace
+claude plugin update llm-externalizer@emasoft-plugins
 ```
 
-### How to install from inside Claude Code
+### 4 · (Optional) Uninstall
 
-Paste the URL of this repository (`https://github.com/Emasoft/llm-externalizer-plugin`) in the prompt and ask Claude to install it for you as a **project**, **local**, or **user** scope plugin.
+```bash
+# Remove the plugin
+claude plugin uninstall llm-externalizer@emasoft-plugins
+```
 
-### Post-install: configure + verify
+### Install from inside Claude Code
 
-1. **Configure a backend.** Edit `~/.llm-externalizer/settings.yaml` (created on first install with 4 templates). The fastest path:
-   - **Remote ensemble** — set `$OPENROUTER_API_KEY` in your shell (or store it via `/plugin configure llm-externalizer`). The default `remote-ensemble` profile works out of the box.
-   - **Local LM Studio** — start LM Studio with a model loaded, then set `active: local` in `settings.yaml`.
-   - Full reference: [Configuration](#configuration).
+If you prefer conversational install, paste this repo URL in Claude and ask it to install the plugin:
 
-2. **Verify + run** (inside a Claude Code session):
-   ```
-   /llm-externalizer:llm-externalizer-discover     # prints profile, model, auth, health
-   /llm-externalizer:llm-externalizer-scan-and-fix # audit the whole codebase in parallel
-   ```
+```
+https://github.com/Emasoft/llm-externalizer-plugin
+```
 
 ---
 
-## Commands
+## First run
 
-Overview:
+### 1 · Configure a backend
 
-| Command | Purpose |
-|---|---|
-| `/llm-externalizer:llm-externalizer-discover` | Check service health, active profile, model, auth, context window |
-| `/llm-externalizer:llm-externalizer-configure` | Read-only profile inspector |
-| `/llm-externalizer:llm-externalizer-search-existing-implementations` | FFD-batched PR duplicate-check |
-| `/llm-externalizer:llm-externalizer-scan-and-fix` | Folder scan → per-file reports → parallel fixers (≤15 concurrent) → joined report |
-| `/llm-externalizer:llm-externalizer-scan-and-fix-serially` | Same scan phase, but fixes bugs one at a time in a serial loop |
-| `/llm-externalizer:llm-externalizer-fix-report` | Fix findings in ONE already-generated scan report |
-| `/llm-externalizer:llm-externalizer-fix-found-bugs` | Aggregate unfixed findings across every report and fix them serially |
+Pick **one** of the following four options.
+
+<details open>
+<summary><b>A. OpenRouter (ensemble — recommended for best quality, paid)</b></summary>
+
+Set your OpenRouter key as an environment variable so the MCP server can read it.
+
+<details open>
+<summary>macOS / Linux (bash / zsh)</summary>
+
+```bash
+# Put this in ~/.zshrc or ~/.bashrc so it persists across sessions
+export OPENROUTER_API_KEY="sk-or-v1-..."
+```
+</details>
+
+<details>
+<summary>Windows (PowerShell — persistent)</summary>
+
+```powershell
+# Persist for your user account (survives reboot and new terminals)
+[Environment]::SetEnvironmentVariable("OPENROUTER_API_KEY", "sk-or-v1-...", "User")
+```
+</details>
+
+<details>
+<summary>Windows (cmd.exe — persistent)</summary>
+
+```bat
+setx OPENROUTER_API_KEY "sk-or-v1-..."
+```
+</details>
+
+Alternatively, store it in the Claude Code keychain so it's managed per-plugin:
+
+```bash
+# Opens an interactive TUI; paste the key when prompted
+claude plugin configure llm-externalizer
+```
+
+The default profile `remote-ensemble` works out of the box once the key is set.
+</details>
+
+<details>
+<summary><b>B. OpenRouter free tier (Nemotron — free, single model)</b></summary>
+
+Same OpenRouter key as option A (any free account works). Switch the active profile to the free one in `~/.llm-externalizer/settings.yaml`:
+
+```yaml
+active: remote-free
+```
+
+See [Configuration → B. Remote free (Nemotron)](#b-remote-free-nemotron) for the full profile block.
+
+> [!WARNING]
+> The free provider logs your prompts. Use only on open-source code.
+</details>
+
+<details>
+<summary><b>C. LM Studio (local — free, offline)</b></summary>
+
+1. Install LM Studio from <https://lmstudio.ai>, launch it, and load a model.
+2. Start the local server: **Developer** → **Server** → **Start Server**.
+3. Switch the plugin to the LM Studio profile by editing `settings.yaml` — see [Configuration](#configuration).
+</details>
+
+<details>
+<summary><b>D. Ollama (local — free, offline)</b></summary>
+
+Pull a model and start the daemon:
+
+```bash
+# One-time: pull the model weights (~17 GB for Qwen3.5 27B)
+ollama pull qwen3.5:27b
+
+# Start Ollama (or launch the tray app)
+ollama serve
+```
+
+Then switch the plugin profile to `local-ollama` — see [Configuration](#configuration).
+</details>
+
+### 2 · Verify health
+
+Inside Claude Code:
+
+```
+/llm-externalizer:llm-externalizer-discover
+```
+
+You should see your active profile, model ID, auth status, and `ONLINE`.
+
+### 3 · Run your first scan + fix
+
+```
+/llm-externalizer:llm-externalizer-scan-and-fix
+```
+
+The command will auto-discover your codebase, present the file list for confirmation, run the scan, then dispatch local Claude fixer subagents that verify each finding before editing.
+
+---
+
+## Plugin commands
+
+Commands are slash-invoked inside Claude Code. The format is `/llm-externalizer:llm-externalizer-<name>`.
+
+| Command | Purpose | Produces |
+|---|---|---|
+| `/llm-externalizer:llm-externalizer-discover` | Print active profile, model, auth, context window, health | Text summary |
+| `/llm-externalizer:llm-externalizer-configure` | Read-only profile inspector (edit `settings.yaml` to change) | Profile table |
+| `/llm-externalizer:llm-externalizer-search-existing-implementations` | PR duplicate-check — "is this feature already implemented anywhere?" | Exhaustive `NO` / `YES symbol=<name> lines=<a-b>` per file |
+| `/llm-externalizer:llm-externalizer-scan-and-fix` | Scan whole codebase → per-file reports → parallel fixer subagents (≤15 concurrent) → joined report | Per-file scan reports + fixer summaries + joined report |
+| `/llm-externalizer:llm-externalizer-scan-and-fix-serially` | Same scan; fixes bugs one at a time in a serial loop (safer when fixes touch shared state) | Per-file reports + canonical bug list + serial fixer summary |
+| `/llm-externalizer:llm-externalizer-fix-report` | Dispatch ONE fixer subagent on an already-generated scan report | One `.fixer.`-tagged summary |
+| `/llm-externalizer:llm-externalizer-fix-found-bugs` | Aggregate unfixed findings from all reports in `./reports/llm-externalizer/` and fix serially | Canonical bug list + serial summary |
+
+<details>
+<summary><b>Parameter reference — click to expand</b></summary>
 
 ### `/llm-externalizer:llm-externalizer-discover`
-
-No parameters. Prints active profile, model IDs, API URL, auth-token status, context-window size, concurrency mode, RPS ceiling, service health.
+No parameters.
 
 ### `/llm-externalizer:llm-externalizer-configure`
-
-No parameters. Read-only — shows the current profile table. To change settings, edit `~/.llm-externalizer/settings.yaml` directly, then call `reset` or restart.
+No parameters. Read-only; edit `~/.llm-externalizer/settings.yaml` directly then call MCP `reset` or restart.
 
 ### `/llm-externalizer:llm-externalizer-search-existing-implementations`
 
@@ -155,77 +327,135 @@ No parameters. Read-only — shows the current profile table. To change settings
 |---|---|---|---|---|
 | `<feature-description>` | positional string | yes | — | Natural-language description of the feature to search for |
 | `<codebase-path>` | positional path | yes | — | Root folder to scan (respects `.gitignore` in git repos). Accepts multiple roots |
-| `--source-files PATH ...` | repeated | no | — | Reference source files showing what the feature looks like in code. Passed as context per batch; auto-excluded from the scan |
-| `--diff PATH` | file path | no | — | Unified-diff file to narrow the scan to changed files. Mutually exclusive with `--base` |
-| `--base REF` | git ref | no | auto-detect `origin/HEAD` → `main` → `master` | Auto-generate diff via `git diff <ref>...HEAD`. Mutually exclusive with `--diff` |
-| `--max-files N` | integer | no | `10000` | Cap on files scanned — much higher than `scan_folder`'s 2500 (designed for PR-review scans) |
-| `--free` | flag | no | off | Use the free Nemotron model. **Warning:** provider logs prompts |
-
-**Output.** One line per file — `NO` or `YES symbol=<name> lines=<a-b>`. Exhaustive, no cap on occurrences.
+| `--source-files <path>...` | repeated | no | — | Reference source files showing the feature. Passed as context per batch; auto-excluded from the scan |
+| `--diff <path>` | file path | no | — | Unified-diff file to narrow scope. Mutually exclusive with `--base` |
+| `--base <ref>` | git ref | no | auto-detect `origin/HEAD` → `main` → `master` | Auto-generate diff via `git diff <ref>...HEAD` |
+| `--max-files <N>` | integer | no | `10000` | File cap — higher than `scan_folder`'s 2500 because duplicate hunts scan the whole codebase |
+| `--free` | flag | no | off | Use the free Nemotron model. Provider logs prompts — avoid on proprietary code |
 
 ### `/llm-externalizer:llm-externalizer-scan-and-fix`
 
 | Parameter | Kind | Required | Default | Meaning |
 |---|---|---|---|---|
-| `[target]` | positional path | no | **auto-discover whole codebase** | Folder to scan. **If both `[target]` and `--file-list` are omitted, scans the WHOLE codebase**: runs `git rev-parse --show-toplevel` → `git ls-files` → filters docs/examples/fixtures/binaries/lock-files, presents the curated list for confirmation, then treats it as an implicit `--file-list`. Never silently hands a folder to `scan_folder` (would dilute the audit with docs and generated output). On 0 or >1 nested git repos, stops and asks |
-| `--file-list PATH` | file path | no | — | `.txt` with ONE absolute path per line, or `---GROUP:<id>---` marker lines. Routes through `code_task`; `[target]` is ignored when set. **Group markers auto-switch `answer_mode` from 0 (per-file) to 1 (per-group)** — lines between `---GROUP:<id>---` and `---/GROUP:<id>---` pack into one LLM request and produce one report per group |
-| `--instructions PATH` | `.md` path | no | built-in REAL-BUGS-ONLY rubric | Replaces the default audit rubric. Default rubric forbids flagging missing try/except, null checks, docstrings, or style suggestions — only REAL bugs (logic errors, crashes, security w/ exploit path, resource leaks, data corruption, contract mismatch, local broken refs) |
-| `--specs PATH` | `.md` path | no | — | Spec file. Each batch sees source + spec, so references are validated against the authoritative spec. Combinable with `--instructions` |
-| `--free` | flag | no | off | Use the free Nemotron model. Lower quality than ensemble; provider logs prompts |
-| `--no-secrets` | flag | no | off | **Default: `scan_secrets: true` + `redact_secrets: true`** — any detected API key / token / password is replaced with `[REDACTED:LABEL]` and the scan continues. Opt-out turns off BOTH (skips detection AND redaction); use only after moving secrets to `.env` |
-| `--text` | flag | no | off | Include `.md .txt .json .yml .yaml .toml .ini .cfg .conf .xml .html .rst .csv` in the scan. Pair with `--instructions` |
-
-**Behaviour.** Scan → N per-file (or per-group) reports in `./reports/llm-externalizer/` → parallel dispatch (≤15 concurrent) of `llm-externalizer-parallel-fixer-agent` → each writes a `.fixer.`-tagged summary → join script merges into one final report.
+| `[target]` | positional path | no | **auto-discover whole codebase** | If both `[target]` and `--file-list` are omitted: `git rev-parse --show-toplevel` → `git ls-files` → filters docs/examples/fixtures/binaries/lock-files → presents the curated list for confirmation |
+| `--file-list <path>` | file path | no | — | `.txt` with ONE absolute path per line, or `---GROUP:<id>---` / `---/GROUP:<id>---` marker lines. `[target]` is ignored when set |
+| `--instructions <path>` | `.md` path | no | built-in REAL-BUGS-ONLY rubric | Replaces the default audit rubric |
+| `--specs <path>` | `.md` path | no | — | Spec file. Each batch sees source + spec, so refs are validated against the authoritative list |
+| `--free` | flag | no | off | Free Nemotron model (provider logs prompts) |
+| `--no-secrets` | flag | no | off | **Default is scan+redact.** This flag turns OFF both (no detection, no redaction). Use only after moving secrets to `.env` |
+| `--text` | flag | no | off | Include `.md .txt .json .yml .yaml .toml .ini .cfg .conf .xml .html .rst .csv`. Pair with `--instructions` |
 
 ### `/llm-externalizer:llm-externalizer-scan-and-fix-serially`
-
-Same parameter set as `scan-and-fix` (scan phase is byte-identical — see that table). The fix phase differs: findings are aggregated into one canonical bug list and fixed one at a time by `llm-externalizer-serial-fixer-agent` (never >1 concurrent Task call).
-
-> [!TIP]
-> Use this when fixes mutate shared state (imports, types, schemas, shared mocks) or when bug order matters. For independent per-file fixes, `scan-and-fix` is faster on wall-clock time.
+Same parameters as `scan-and-fix`. Fix phase differs: one fixer subagent at a time, one bug at a time.
 
 ### `/llm-externalizer:llm-externalizer-fix-report`
 
 | Parameter | Kind | Required | Default | Meaning |
 |---|---|---|---|---|
-| `@scan-report.md` (or bare path) | positional path | yes | — | Path to ONE already-generated per-file scan report. `@` is stripped; relative paths resolve against `$CLAUDE_PROJECT_DIR`. Paths containing `.fixer.` or `.final-report.` are rejected |
-
-**Behaviour.** Dispatches exactly ONE `llm-externalizer-parallel-fixer-agent` and returns the `.fixer.`-summary path. Use when you already have a report and don't need to re-scan.
+| `@<scan-report.md>` or bare path | positional path | yes | — | Path to ONE scan report. `@` prefix is stripped. Paths containing `.fixer.` or `.final-report.` are rejected |
 
 ### `/llm-externalizer:llm-externalizer-fix-found-bugs`
 
 | Parameter | Kind | Required | Default | Meaning |
 |---|---|---|---|---|
-| `@merged-report.md` (or bare path) | positional path | no | aggregate EVERY report under `./reports/llm-externalizer/` | If supplied, scopes aggregation to one merged (`answer_mode=2`) report. If omitted, aggregates every scan report in the reports dir, skipping any with a `.fixer.` sibling (already processed) |
+| `@<merged-report.md>` or bare path | positional path | no | aggregate ALL reports in `./reports/llm-externalizer/` | If omitted, every report without a `.fixer.` sibling is aggregated into one canonical bug list |
 
-**Behaviour.** Loop until done — fresh `llm-externalizer-serial-fixer-agent` per iteration, each fixing exactly one bug, until none remain or the safety rail trips (`MAX_ITER = max(UNFIXED_START * 2 + 5, 5)` or 2 consecutive no-progress iterations).
+</details>
+
+---
+
+## MCP tools
+
+These are **direct MCP tool calls** — addressable by skills, custom agents, or scripts as `mcp__plugin_llm-externalizer_llm-externalizer__<tool>`. End users typically don't call these directly; they use the slash commands above. Tools are listed here for advanced users writing custom workflows.
+
+### Analysis tools
+
+| Tool | Purpose |
+|---|---|
+| `chat` | General-purpose: summarize, compare, translate, generate |
+| `code_task` | Code-optimized analysis with code-review system prompt |
+| `scan_folder` | Recursive directory scan; auto-discover files by extension |
+| `compare_files` | Pair / batch / git-diff comparison; LLM summarizes differences |
+| `check_references` | Auto-resolve local imports, validate symbol references |
+| `check_imports` | LLM extracts imports; server verifies each exists on disk |
+| `check_against_specs` | Compare sources against a spec file; report deviations |
+| `search_existing_implementations` | FFD-batched duplicate hunt; exhaustive `NO` / `YES symbol=<name> lines=<a-b>` per file |
+| `batch_check` | Multi-file sanity check wrapper |
+
+### Utility tools
+
+| Tool | Purpose |
+|---|---|
+| `discover` | Health, profile, model, auth-token status, context window, concurrency |
+| `reset` | Soft-restart — waits for running requests, reloads `settings.yaml`, clears caches |
+| `get_settings` | Copy `settings.yaml` to the output dir for read-only inspection |
+| `or_model_info` / `or_model_info_table` / `or_model_info_json` | OpenRouter model params / pricing / latency / uptime — three formats |
+
+### `answer_mode` (every multi-file analysis tool)
+
+| Mode | Name | Output |
+|---|---|---|
+| `0` | ONE REPORT PER FILE | One `.md` per input file |
+| `1` | ONE REPORT PER GROUP | One `.md` per group (explicit `---GROUP:id---` or auto-grouped) |
+| `2` | SINGLE REPORT | One merged `.md` |
+
+**Defaults.** `scan_folder` → 0. `chat` / `code_task` / `check_*` / `search_existing_implementations` → 2.
+
+> [!IMPORTANT]
+> **Batching.** Every multi-file tool packs files into LLM requests of 1–5 files each (~400 KB per batch). The LLM **never** sees the whole codebase at once — `answer_mode` controls only how reports are organised on disk. For cross-file analysis, use `search_existing_implementations` or `check_against_specs` — their per-batch design actually validates against an authoritative reference.
+
+### Advanced parameters (most tools)
+
+| Parameter | Default | Description |
+|---|---|---|
+| `output_dir` | `./reports/llm-externalizer/` | Absolute path for reports |
+| `max_retries` | `1` | Per-file retries in mode 0. Set `3` for parallel + retry + circuit breaker |
+| `redact_regex` | — | JavaScript regex — matches become `[REDACTED:USER_PATTERN]` |
+| `scan_secrets` | `true` | Run the secret detector on every input file before sending to the LLM |
+| `redact_secrets` | `true` | Replace detected secrets with `[REDACTED:LABEL]` instead of aborting (paired with `scan_secrets`) |
+| `free` | `false` | Use the free Nemotron model |
+| `max_payload_kb` | `400` | Max payload per LLM request |
 
 ---
 
 ## Agents
 
-All five agents are **internal** — users dispatch them via slash commands, not directly. Each Task spawn is fresh (zero parent-conversation context); user/project `CLAUDE.md` load the same way they do under `claude -p`. The fixer commands show a two-option menu (Sonnet default, Opus optional) before dispatching; the two fixer variants below exist so the right model is pre-baked and pickable without a `model:` override at call time.
+All five agents are **internal** — users dispatch them via slash commands, not directly. Each Task spawn is fresh (zero parent-conversation context); user / project `CLAUDE.md` load the same way they do under `claude -p`. The fixer commands show a two-option menu (**Sonnet default**, **Opus optional**) before dispatching; the four fixer variants below exist so the selected model is pre-baked and callable without a `model:` override.
 
 | Agent | Model | Role | Dispatched by |
 |---|---|---|---|
-| `llm-externalizer-reviewer-agent` | sonnet | Read-only code reviewer. Inherits full tool surface (SERENA, TLDR, Grepika, LSP). Returns only report paths | The `llm-externalizer-scan` skill (`context: fork`) |
-| `llm-externalizer-parallel-fixer-sonnet-agent` | sonnet | Verifies and fixes ALL findings in ONE scan report. Stateless; writes a `.fixer.`-tagged summary; dispatched ≤15 in parallel | `scan-and-fix`, `fix-report` — picked when the user chooses **Sonnet** on the menu |
-| `llm-externalizer-parallel-fixer-opus-agent` | opus | Same role as the sonnet variant but on Opus | `scan-and-fix`, `fix-report` — picked when the user chooses **Opus** on the menu |
-| `llm-externalizer-serial-fixer-sonnet-agent` | sonnet | Fixes exactly ONE bug per invocation from an aggregated bug list. Stateful on disk (mutates the list). Dispatched one at a time | `scan-and-fix-serially`, `fix-found-bugs` — picked when the user chooses **Sonnet** |
-| `llm-externalizer-serial-fixer-opus-agent` | opus | Same role as the sonnet variant but on Opus | `scan-and-fix-serially`, `fix-found-bugs` — picked when the user chooses **Opus** |
+| `llm-externalizer-reviewer-agent` | sonnet | Read-only code reviewer. Inherits full tool surface (SERENA, TLDR, Grepika, LSP). Returns only report paths | The `llm-externalizer-scan` skill |
+| `llm-externalizer-parallel-fixer-sonnet-agent` | sonnet | Verifies and fixes ALL findings in ONE scan report. Stateless; writes a `.fixer.`-tagged summary; up to 15 dispatched in parallel | `scan-and-fix`, `fix-report` — when the user picks **Sonnet** on the menu |
+| `llm-externalizer-parallel-fixer-opus-agent` | opus | Same role on Opus | `scan-and-fix`, `fix-report` — when the user picks **Opus** |
+| `llm-externalizer-serial-fixer-sonnet-agent` | sonnet | Fixes exactly ONE bug per invocation from an aggregated list. Stateful on disk (mutates the list). One at a time | `scan-and-fix-serially`, `fix-found-bugs` — when the user picks **Sonnet** |
+| `llm-externalizer-serial-fixer-opus-agent` | opus | Same role on Opus | `scan-and-fix-serially`, `fix-found-bugs` — when the user picks **Opus** |
+
+> [!NOTE]
+> **Every fixer agent runs a MANDATORY verification pass** before editing any source file: open the cited line, trace the flow, reject hallucinations / style suggestions / redaction artifacts / already-fixed claims. A no-edit "false-positive" verdict is treated as a SUCCESSFUL outcome.
 
 ---
 
 ## Configuration
 
-Settings file: `~/.llm-externalizer/settings.yaml`. The `/configure` command is a **read-only inspector** — to change anything, edit the file, save, then restart Claude Code or call the MCP `reset` tool.
+The settings file lives at:
 
-> [!NOTE]
-> The model IDs shown below are our **recommended defaults** — wise picks for the common cases. You can change any of them in `~/.llm-externalizer/settings.yaml` (model, second_model, third_model, url, api_token). Just restart Claude Code or call the MCP `reset` tool after editing.
+- **macOS / Linux:** `~/.llm-externalizer/settings.yaml`
+- **Windows:** `%USERPROFILE%\.llm-externalizer\settings.yaml`
 
-### Remote (OpenRouter ensemble — three models)
+The plugin creates it on first install with four starter profiles. Edit it with any text editor, save, then restart Claude Code — or call the MCP `reset` tool to reload without a restart.
+
+### Profile modes
+
+| Mode | Concurrency | Output |
+|---|---|---|
+| `local` | sequential | one model |
+| `remote` | parallel | one model |
+| `remote-ensemble` | parallel | three models, combined report |
+
+### A. Remote ensemble (recommended)
 
 ```yaml
+# ~/.llm-externalizer/settings.yaml   (or %USERPROFILE%\.llm-externalizer\settings.yaml)
 active: remote-ensemble
 
 profiles:
@@ -238,22 +468,27 @@ profiles:
     api_key: $OPENROUTER_API_KEY
 ```
 
-`mode: remote-ensemble` requires **three** model IDs. Every file is reviewed by all three in parallel; you get three independent responses combined into one report. The three defaults above are our recommendation — swap any line to try a different model.
+Every file is reviewed by all three models in parallel; the report combines their responses. Swap any line to try a different model — see <https://openrouter.ai/models>.
 
-### Remote (OpenRouter single model)
+### B. Remote free (Nemotron)
+
+A single call to NVIDIA's free Nemotron tier on OpenRouter. One model, no ensemble, no cost.
 
 ```yaml
-active: remote
+active: remote-free
 
 profiles:
-  remote:
+  remote-free:
     mode: remote
     api: openrouter-remote
-    model: "anthropic/claude-sonnet-4"
+    model: "nvidia/nemotron-3-super-120b-a12b:free"
     api_key: $OPENROUTER_API_KEY
 ```
 
-### Local (LM Studio — Qwen 3.5 27B)
+> [!WARNING]
+> **The free tier logs your prompts on the provider side.** Use this only on open-source code or code you don't mind being logged. For proprietary code, use the ensemble (option A) or a local model (options C / D / E).
+
+### C. Local — LM Studio (Qwen 3.5 27B)
 
 ```yaml
 active: local-lmstudio
@@ -262,15 +497,13 @@ profiles:
   local-lmstudio:
     mode: local
     api: lmstudio-local
-    # macOS (Apple Silicon) — MLX build, much faster than GGUF:
+    # Apple Silicon → use the MLX build (much faster than GGUF):
     model: "mlx-community/Qwen3.5-27B-Instruct-4bit"
-    # Windows / Linux — GGUF build:
+    # Windows / Linux → use the GGUF build:
     # model: "bartowski/Qwen3.5-27B-Instruct-GGUF"
 ```
 
-Start LM Studio, load the model above into the server tab, and `llm-externalizer-discover` will pick it up.
-
-### Local (Ollama)
+### D. Local — Ollama
 
 ```yaml
 active: local-ollama
@@ -280,185 +513,122 @@ profiles:
     mode: local
     api: ollama-local
     model: "qwen3.5:27b"
-    # url defaults to http://localhost:11434 — override only if Ollama runs on a different host/port:
+    # Default URL is http://localhost:11434 — override only for remote/custom hosts:
     # url: "http://192.168.1.42:11434"
-    # Ollama normally needs no auth, so api_token is omitted.
+    # Ollama needs no auth, so api_token is omitted.
 ```
 
-Pull the model first: `ollama pull qwen3.5:27b`. Then start the Ollama daemon (`ollama serve` or the tray app) and `llm-externalizer-discover` will list it.
+Before first use, pull the model:
 
-### Local (vLLM / llama.cpp)
+```bash
+# One-time — downloads ~17 GB of model weights
+ollama pull qwen3.5:27b
+```
 
-Same shape as the Ollama block; change `api: ollama-local` to `api: vllm-local` (port 8000, `$VLLM_API_KEY`) or `api: llamacpp-local` (port 8080, no auth). Set the `model:` to whatever model ID your server advertises at its `/v1/models` endpoint.
+### E. Local — vLLM or llama.cpp
+
+Same shape as the Ollama block; change the `api:` preset:
+
+```yaml
+profiles:
+  local-vllm:
+    mode: local
+    api: vllm-local         # default URL: http://localhost:8000 — auth: $VLLM_API_KEY
+    model: "Qwen/Qwen3.5-27B-Instruct"
+
+  local-llamacpp:
+    mode: local
+    api: llamacpp-local     # default URL: http://localhost:8080 — no auth
+    model: "Qwen3.5-27B-Instruct"
+```
+
+Set `model:` to whatever ID your server advertises at its `/v1/models` endpoint.
 
 ### Backend presets
 
-| Preset | Protocol | Default URL | Auth |
+| Preset | Protocol | Default URL | Auth env var |
 |---|---|---|---|
-| `lmstudio-local` | LM Studio native | `http://localhost:1234` | `$LM_API_TOKEN` |
+| `openrouter-remote` | OpenRouter | `https://openrouter.ai/api` | `OPENROUTER_API_KEY` |
+| `lmstudio-local` | LM Studio native | `http://localhost:1234` | `LM_API_TOKEN` |
 | `ollama-local` | OpenAI-compatible | `http://localhost:11434` | — |
-| `vllm-local` | OpenAI-compatible | `http://localhost:8000` | `$VLLM_API_KEY` |
+| `vllm-local` | OpenAI-compatible | `http://localhost:8000` | `VLLM_API_KEY` |
 | `llamacpp-local` | OpenAI-compatible | `http://localhost:8080` | — |
-| `generic-local` | OpenAI-compatible | (url required) | `$LM_API_TOKEN` |
-| `openrouter-remote` | OpenRouter | `https://openrouter.ai/api` | `$OPENROUTER_API_KEY` |
-
-### Profile modes
-
-| Mode | Concurrency | Output |
-|---|---|---|
-| `local` | sequential | one model |
-| `remote` | parallel | one model |
-| `remote-ensemble` | parallel | three models, combined report |
+| `generic-local` | OpenAI-compatible | (url required) | `LM_API_TOKEN` |
 
 ### Environment variables
 
 | Variable | Used by |
 |---|---|
-| `OPENROUTER_API_KEY` | `openrouter-remote` |
-| `LM_API_TOKEN` | `lmstudio-local`, `generic-local` |
-| `VLLM_API_KEY` | `vllm-local` |
+| `OPENROUTER_API_KEY` | `openrouter-remote` preset |
+| `LM_API_TOKEN` | `lmstudio-local`, `generic-local` presets |
+| `VLLM_API_KEY` | `vllm-local` preset |
 
 > [!NOTE]
-> Auth is auto-detected from shell env. Profile fields `api_key` / `api_token` can override with `$OTHER_VAR` or a direct string. The plugin's `userConfig.openrouter_api_key` stores the key in the system keychain and transparently exports it as `OPENROUTER_API_KEY` — use `/plugin configure llm-externalizer` to set it.
+> Auth is auto-detected from shell env at MCP-server startup. Profile fields `api_key` / `api_token` can override with `$OTHER_VAR` or a literal string. The plugin's `userConfig.openrouter_api_key` (set via `claude plugin configure llm-externalizer`) stores the key in the system keychain and transparently exports it as `OPENROUTER_API_KEY`.
 
 ### Optional: statusline
 
+Adds model name, context usage, and cost to the Claude Code status bar.
+
+<details>
+<summary>macOS / Linux</summary>
+
 ```bash
-python3 $CLAUDE_PLUGIN_ROOT/scripts/install_statusline.py
+# Install the statusline integration
+python3 "$CLAUDE_PLUGIN_ROOT/scripts/install_statusline.py"
 ```
+</details>
 
-Adds model, context usage, and cost stats to the Claude Code status bar.
+<details>
+<summary>Windows (PowerShell)</summary>
 
----
-
-## MCP tools reference
-
-> [!IMPORTANT]
-> **Batching** — every multi-file tool packs files into LLM requests of typically **1–5 files each** (FFD bin-packing into ~400 KB batches, or one group per `---GROUP:id---`). The LLM **never** sees the whole set at once; `answer_mode` controls only how reports are organised on disk. If you need cross-file analysis, use `search_existing_implementations` or `check_against_specs` — their per-batch design actually validates against an authoritative reference.
-
-### Analysis tools
-
-| Tool | Purpose |
-|---|---|
-| `chat` | General-purpose: summarize, compare, translate, generate. `system` persona supported |
-| `code_task` | Code-optimized analysis with code-review system prompt. `language` hint supported |
-| `scan_folder` | Recursive directory scan, auto-discover files by extension |
-| `compare_files` | Pair / batch / git-diff comparison; LLM summarizes differences |
-| `check_references` | Auto-resolve local imports, validate symbol references |
-| `check_imports` | Two-phase — LLM extracts imports, server verifies each exists |
-| `check_against_specs` | Compare sources against a spec file; reports deviations |
-| `search_existing_implementations` | FFD-batched duplicate hunt; exhaustive per-file `NO` / `YES symbol=<name> lines=<a-b>` |
-
-### Utility tools
-
-| Tool | Purpose |
-|---|---|
-| `discover` | Health, profile, model, auth-token status, context window, concurrency |
-| `reset` | Soft-restart — waits for running requests, reloads `settings.yaml`, clears caches |
-| `get_settings` | Copy `settings.yaml` to output dir for reading (read-only) |
-| `or_model_info` / `or_model_info_table` / `or_model_info_json` | OpenRouter model params / pricing / latency / uptime — three output formats |
-
-### answer_mode
-
-| Mode | Name | Output |
-|---|---|---|
-| `0` | ONE REPORT PER FILE | One `.md` per input file |
-| `1` | ONE REPORT PER GROUP | One `.md` per group (explicit `---GROUP:id---` or auto-grouped by folder/language/namespace) |
-| `2` | SINGLE REPORT | One merged `.md` |
-
-**Defaults.** `scan_folder` → 0. `chat` / `code_task` / `check_*` / `search_existing_implementations` → 2.
-
-### Ensemble mode (default models)
-
-| Model | Pricing (per 1M tokens) | File-size limit |
-|---|---|---|
-| `google/gemini-2.5-flash` | $0.15 in / $0.60 out | ≤ 50K lines |
-| `x-ai/grok-4.1-fast` | $0.30 in / $0.50 out | ≤ 20K lines |
-| `qwen/qwen3.6-plus` | $0.33 in / $1.95 out | ≤ 40K lines |
-
-If a file exceeds a model's limit, that model is excluded and the others run. Local backends run a single model; ensemble is OpenRouter-only.
-
-### Free mode (`free: true`)
-
-Uses `nvidia/nemotron-3-super-120b-a12b:free`. No cost, single model, 262K context.
-
-> [!WARNING]
-> **Provider logs prompts on the free tier.** Don't use on proprietary code.
-
-### Rate limiting
-
-Adaptive RPS auto-detected from OpenRouter balance ($1 ≈ 1 RPS, max 500). AIMD adjusts on 429 errors. Up to 200 in-flight. Local backends run sequentially. Check with `discover`.
-
-### Advanced parameters (all content tools)
-
-| Parameter | Default | Description |
-|---|---|---|
-| `answer_mode` | tool-dependent | Output organisation (table above) |
-| `output_dir` | `reports_dev/llm_externalizer/` | Absolute path for reports |
-| `max_retries` | 1 | Per-file retries in mode 0. Set 3 for parallel + retry + circuit breaker |
-| `redact_regex` | — | JavaScript regex — matches become `[REDACTED:USER_PATTERN]` |
-| `scan_secrets` | true | Run the secret detector on every input file before sending to the LLM |
-| `redact_secrets` | true | Replace any detected secret with `[REDACTED:LABEL]` instead of aborting. **Paired with `scan_secrets: true` by default** — the slash commands always send both together so the run keeps going. Set both to `false` with `--no-secrets` on the slash-command flags |
-| `free` | false | Free Nemotron model |
-| `max_payload_kb` | 400 | Max payload per LLM request |
-
----
-
-## Skills
-
-Two skills activate automatically when Claude Code sees matching triggers:
-
-| Skill | When it fires |
-|---|---|
-| `llm-externalizer-usage` | Tool reference, usage patterns, file grouping, advanced parameters, end-to-end workflows |
-| `llm-externalizer-config` | Profile management, settings workflow, validation rules, ensemble configuration, troubleshooting |
-
-Plus three more skills that drive specific workflows (`llm-externalizer-scan`, `llm-externalizer-free-scan`, `llm-externalizer-or-model-info`).
+```powershell
+# Install the statusline integration
+python3 "$env:CLAUDE_PLUGIN_ROOT\scripts\install_statusline.py"
+```
+</details>
 
 ---
 
 ## Troubleshooting
 
-Run `/llm-externalizer:llm-externalizer-discover` first — it prints active profile, model, auth-token status, API URL, and service health. Most problems show up there.
+Run `/llm-externalizer:llm-externalizer-discover` first — the output identifies most problems immediately.
 
 ### OpenRouter
 
 | Symptom | Cause / fix |
 |---|---|
-| `discover` shows `$OPENROUTER_API_KEY (NOT SET)` | The env var is missing from the MCP server's process environment. Set it in your shell (`export OPENROUTER_API_KEY=sk-or-...`) then restart Claude Code, OR set it via `/plugin configure llm-externalizer` (stores in keychain) |
-| `discover` shows the token resolved but scans 401 | Key revoked or wrong project. Confirm at <https://openrouter.ai/keys>. Regenerate and re-set |
-| `discover` shows the token resolved but all scans 429 | You're out of credits or hit the per-minute RPS ceiling. Check balance at <https://openrouter.ai/activity>. AIMD back-off will recover automatically — just wait |
-| Scan fails with `model not found` | The model ID in `settings.yaml` was renamed or deprecated upstream. Look up the current ID at <https://openrouter.ai/models> and update `model:` / `second_model:` / `third_model:` |
-| Ensemble report shows only 1-2 models | One of the three exceeded its file-size limit (see [Ensemble mode](#ensemble-mode-default-models)) or the model was temporarily removed. The report still lands — just with fewer sections |
-| `plugin configure` asks for the key every time | You're on a system without a usable keychain. Use the shell env var instead: `export OPENROUTER_API_KEY=...` in your shell rc |
+| `discover` shows `$OPENROUTER_API_KEY (NOT SET)` | Env var missing from the MCP-server process env. Set it in your shell rc and restart Claude Code — OR store it via `claude plugin configure llm-externalizer` |
+| Token resolved but scans return 401 | Key revoked or scoped incorrectly. Check <https://openrouter.ai/keys> and regenerate |
+| Token resolved but scans return 429 | Out of credits or hit RPS ceiling. Check <https://openrouter.ai/activity>. AIMD back-off recovers automatically — just wait |
+| `model not found` | Model ID in `settings.yaml` was renamed / deprecated upstream. Look it up at <https://openrouter.ai/models> |
+| Ensemble report shows only 1-2 models | One model exceeded its per-file size limit or was temporarily removed. The report still lands, just with fewer sections |
 
 ### LM Studio
 
 | Symptom | Cause / fix |
 |---|---|
-| `discover` shows `service offline` | LM Studio isn't running, or its server tab isn't started. Open LM Studio → **Developer** / **Server** tab → **Start Server**. Default port is 1234 |
-| Scan times out on every file | The loaded model is too big for your RAM and is swapping. Switch to a smaller quant (`Qwen3.5-27B-Instruct-4bit` instead of `Qwen3.5-27B-Instruct-8bit`), or close other apps |
-| `model not loaded` or wrong output | The `model:` string in `settings.yaml` doesn't match the loaded model ID. Check LM Studio's **Server** tab — the model ID it advertises is what you put in `settings.yaml` |
-| Structured output errors (`response_format`) | LM Studio older than v0.3.x doesn't support structured output. Update LM Studio to the latest version |
-| Wrong default: on Mac you got the GGUF | Use the MLX build for Apple Silicon — much faster. Set `model: "mlx-community/Qwen3.5-27B-Instruct-4bit"`. GGUF is for Windows / Linux |
+| `discover` shows `service offline` | LM Studio not running, or its server tab isn't started. **Developer** → **Server** → **Start Server** (default port 1234) |
+| Scan times out on every file | Model too big for RAM → swapping. Switch to a smaller quant (e.g. `-4bit` instead of `-8bit`) |
+| `model not loaded` / wrong output | `model:` in `settings.yaml` doesn't match the ID LM Studio advertises in its **Server** tab |
+| Structured-output errors | Update LM Studio — older versions don't support `response_format: json_schema` |
 
 ### Ollama
 
 | Symptom | Cause / fix |
 |---|---|
-| `discover` shows `service offline` | Ollama daemon isn't running. Start with `ollama serve` (CLI) or launch the Ollama tray app |
-| `model not found` | You haven't pulled the model locally. Run `ollama pull qwen3.5:27b` (substitute whatever `model:` you set in `settings.yaml`) |
-| Very slow first request | Ollama is loading the model weights. First scan after a cold start is always slower; subsequent requests hit the cache |
-| Wrong host / port | Default is `http://localhost:11434`. If Ollama runs elsewhere (remote box, different port), add `url: "http://..."` to the profile |
-| Structured output flaky | Ollama's structured-output support varies by model. If JSON-schema calls fail, try a different model that advertises `tools: true` in `ollama list` |
+| `discover` shows `service offline` | Ollama daemon not running. Start with `ollama serve` or launch the tray app |
+| `model not found` | Model not pulled. Run `ollama pull <model-id>` (the exact ID in `settings.yaml`) |
+| Very slow first request | Ollama is loading weights. Subsequent requests hit the cache |
+| Wrong host / port | Add `url: "http://..."` to the profile (default is `localhost:11434`) |
 
 ### General
 
 | Symptom | Cause / fix |
 |---|---|
-| `/llm-externalizer:...` commands don't autocomplete | Plugin not installed or not loaded. Run `claude plugin list` — if `llm-externalizer` is missing, install per [Quick start](#quick-start). If installed, restart Claude Code or `/reload-plugins` |
-| `discover` works but scans never produce reports | Check `$CLAUDE_PROJECT_DIR/reports/llm-externalizer/` — reports always land there. If the dir is empty, the scan aborted; look at the last assistant message for the `[FAILED]` reason |
-| Pre-scan secret-scan aborts the run | Default is redact-not-abort (secrets are replaced with `[REDACTED:LABEL]` and the scan continues). If you're seeing an abort, you may be on an older plugin version — run `claude plugin update llm-externalizer` |
+| `/llm-externalizer:...` commands don't autocomplete | Plugin not installed or not loaded. `claude plugin list` to verify; `/reload-plugins` to re-scan |
+| `discover` works but scans produce no reports | Look at the last assistant message for a `[FAILED]` reason — the scan aborted before writing |
+| Pre-scan secret detector aborts the run | On current versions (9.0.1+) default is **redact**, not abort. If you see an abort, run `claude plugin update llm-externalizer@emasoft-plugins` |
 
 ---
 
@@ -470,15 +640,15 @@ Run `/llm-externalizer:llm-externalizer-discover` first — it prints active pro
 ```
 llm-externalizer-plugin/
 ├── .claude-plugin/plugin.json     # Plugin manifest
-├── .mcp.json                      # MCP server configuration
+├── .mcp.json                      # MCP server launcher
 ├── bin/                           # MCP launcher + CLI wrapper
 ├── commands/                      # 7 slash commands
-├── agents/                        # 3 plugin-shipped agents
+├── agents/                        # 5 internal agents (reviewer + fixers)
 ├── skills/                        # 5 auto-discovered skills
-├── rules/                         # Canonical usage rules (bundled for users)
+├── rules/                         # Canonical usage rules bundled for users
 ├── mcp-server/                    # Bundled TypeScript MCP server
 ├── scripts/                       # Python: setup, publish, validators, helpers
-└── docs/                          # Cost-comparison image, OpenRouter refs
+└── docs/                          # Banner, cost-comparison image, OpenRouter refs
 ```
 
 </details>
@@ -487,68 +657,198 @@ llm-externalizer-plugin/
 
 ## Contributing
 
-### Developer install (build from source + open a PR)
-
-```bash
-# 1. Fork the repo on GitHub: https://github.com/Emasoft/llm-externalizer-plugin/fork
-#    Then clone YOUR fork (replace <your-username>):
-git clone https://github.com/<your-username>/llm-externalizer-plugin.git
-cd llm-externalizer-plugin
-
-# 2. Add the upstream remote so you can pull in new releases:
-git remote add upstream https://github.com/Emasoft/llm-externalizer-plugin.git
-
-# 3. Build the bundled MCP server (installs npm deps + compiles TypeScript):
-python3 scripts/setup.py
-
-# 4. (optional) Install the plugin locally to test your changes before pushing.
-#    Either point Claude Code at your working copy:
-claude plugin install "$PWD"
-#    …or, if you prefer marketplace flow, install via the marketplace using
-#    the CLI commands shown in Quick start above.
-
-# 5. Create a feature branch:
-git checkout -b feat/<short-description>
-
-# 6. Hack. Run validation before committing — every PR must pass these gates:
-claude plugin validate .
-# (optional) also run the CPV remote validator for deeper checks:
-uvx --from git+https://github.com/Emasoft/claude-plugins-validation \
-    --with pyyaml cpv-remote-validate plugin "$PWD"
-
-# 7. Commit with a Conventional Commit prefix so git-cliff can classify it
-#    (feat: / fix: / docs: / refactor: / chore: / BREAKING CHANGE: …).
-#    Use `git commit` — NEVER `git push` directly (pre-push hook will refuse).
-git commit -m "feat: <what it does>"
-
-# 8. Push YOUR fork and open a PR against Emasoft/llm-externalizer-plugin main:
-git push origin feat/<short-description>
-gh pr create --repo Emasoft/llm-externalizer-plugin --base main
-```
-
 > [!IMPORTANT]
-> Direct `git push` is blocked by a process-ancestry pre-push hook. The only path from local commits to the upstream remote is `scripts/publish.py`, which runs **9 mandatory validation gates** before pushing: `npm ci`, `npm run typecheck`, `npm run lint`, `npm run build`, `npm test`, `ruff check`, `shellcheck`, `plugin.json` schema, `claude plugin validate`, and the CPV remote validator. All must pass with 0 errors. `publish.py` also uses `git-cliff` to auto-compute the next version from your Conventional Commits and regenerate `CHANGELOG.md`. **For contributors, you only push to YOUR fork — the upstream release is cut by the maintainer via `publish.py`.**
+> **The owner-only boundary.** Three things are reserved for the upstream repo owner and **must not** be run by contributors:
+> 1. **`scripts/publish.py`** — bumps the plugin version, regenerates `CHANGELOG.md`, tags, and pushes. Version bumps belong to the release manager, not to individual PRs.
+> 2. **The `.githooks/pre-push` hook** — this hook exists to force the owner through `publish.py` when pushing to upstream. On a fork, it blocks every normal `git push` and is useless.
+> 3. **The `.github/workflows/notify-marketplace.yml` CI** — this workflow notifies the `emasoft-plugins` marketplace that a new release is available. On a fork it would either fail (no `MARKETPLACE_PAT` secret) or try to notify the marketplace about your fork — neither is wanted.
+>
+> The setup below disables all three on your fork so you can push PRs cleanly.
 
 ### Developer requirements
 
-Beyond the user requirements above, you'll also need:
+Beyond the user requirements above, you need:
 
-- **`uv`** — Python dependency management for plugin scripts (`uv venv --python 3.12`, `uv run …`)
-- **`gh`** (GitHub CLI) — for `gh pr create` and the maintainer's `gh release create`
-- **`git-cliff`** — used by `scripts/publish.py` to compute the next version and regenerate `CHANGELOG.md` from Conventional Commits
+- **`uv`** — Python dependency management (`uv venv --python 3.12`, `uv run ...`)
+- **`gh`** (GitHub CLI) — for opening the PR and managing workflows on your fork
 
-### Release pipeline (maintainer only)
-
-`scripts/publish.py` is the only path from `main` to an upstream tag + GitHub release:
+### 1 · Fork on GitHub, then clone YOUR fork
 
 ```bash
-python3 scripts/publish.py              # auto-bump via git-cliff
-python3 scripts/publish.py --patch      # force patch bump
-python3 scripts/publish.py --minor      # force minor bump
-python3 scripts/publish.py --major      # force major bump
-python3 scripts/publish.py --dry-run    # preview (still runs all checks)
-python3 scripts/publish.py --check-only # run checks only, no mutations (used by pre-push hook)
+# Fork at https://github.com/Emasoft/llm-externalizer-plugin/fork
+# Then clone — replace <your-username>
+git clone https://github.com/<your-username>/llm-externalizer-plugin.git
+cd llm-externalizer-plugin
 ```
+
+```bash
+# Track upstream so you can pull in new releases later
+git remote add upstream https://github.com/Emasoft/llm-externalizer-plugin.git
+```
+
+### 2 · Disable owner-only automation on your fork
+
+Do this ONCE, right after cloning, BEFORE your first push. Skipping this step will make your pushes refuse or trigger broken CI runs.
+
+#### 2a · Disable the pre-push hook locally
+
+The repo ships with `core.hooksPath = .githooks` in its committed config. On a fork you need to undo that.
+
+<details open>
+<summary><b>macOS / Linux</b> (bash / zsh)</summary>
+
+```bash
+# Unset the repo's hooksPath so git uses the default .git/hooks/ (which is empty)
+git config --local --unset core.hooksPath
+```
+
+```bash
+# Verify — should print nothing (no active hooks path)
+git config --local --get core.hooksPath
+```
+</details>
+
+<details>
+<summary><b>Windows</b> (PowerShell)</summary>
+
+```powershell
+# Unset the repo's hooksPath so git uses the default .git\hooks\ (empty)
+git config --local --unset core.hooksPath
+```
+
+```powershell
+# Verify — should print nothing
+git config --local --get core.hooksPath
+```
+</details>
+
+> The `pre-push` script itself is unchanged on disk (it's tracked in `.githooks/`). You're only telling *your* git not to run it.
+
+#### 2b · Disable GitHub Actions workflows on your fork
+
+The `notify-marketplace.yml` workflow triggers on every push to `main` and needs a `MARKETPLACE_PAT` secret that only the owner has. The `ci.yml` workflow also runs owner-expected gates. Disable both on your fork so PRs don't spam red CI runs.
+
+**Option A — via the `gh` CLI (fastest):**
+
+```bash
+# Disable the workflow that notifies the marketplace (owner-only)
+gh workflow disable "Notify Marketplace" --repo <your-username>/llm-externalizer-plugin
+```
+
+```bash
+# (optional) Also disable CI on your fork — the upstream PR will run CI instead
+gh workflow disable "CI" --repo <your-username>/llm-externalizer-plugin
+```
+
+**Option B — via the GitHub web UI:**
+
+Go to `https://github.com/<your-username>/llm-externalizer-plugin/actions`, click each workflow listed in the left sidebar → **`...`** menu → **Disable workflow**.
+
+**Option C — delete the workflow files on your fork branch (nuclear):**
+
+If you never want these workflows to run anywhere on your fork, commit a deletion to your branch. Don't do this on `main` — it would show up in your PR diff.
+
+```bash
+# Only if you really want to remove the workflows from your fork's main.
+# This changes the diff — don't include in a PR.
+git checkout -b chore/disable-fork-ci
+git rm .github/workflows/notify-marketplace.yml .github/workflows/ci.yml
+git commit -m "chore: disable owner-only workflows on fork"
+```
+
+### 3 · Build the bundled MCP server
+
+```bash
+# Installs npm deps and compiles TypeScript
+python3 scripts/setup.py
+```
+
+### 4 · Install your working copy for local testing
+
+```bash
+# Point Claude Code at your cloned checkout
+claude plugin install "$PWD"
+```
+
+### 5 · Create a feature branch
+
+```bash
+git checkout -b feat/<short-description>
+```
+
+### 6 · Validate before committing
+
+```bash
+# Fast local validation
+claude plugin validate .
+```
+
+```bash
+# (optional) deeper CPV remote validator
+uvx --from git+https://github.com/Emasoft/claude-plugins-validation --with pyyaml \
+    cpv-remote-validate plugin "$PWD"
+```
+
+### 7 · Commit with a Conventional Commit prefix
+
+```bash
+# The maintainer's release pipeline uses the prefix to classify changes.
+#   feat:  — new feature (minor bump)
+#   fix:   — bug fix      (patch bump)
+#   docs:  — documentation
+#   refactor: / chore:    — other housekeeping
+#   BREAKING CHANGE: …    — major bump (body or footer)
+git commit -m "feat: <what it does>"
+```
+
+> [!CAUTION]
+> **Do NOT bump `version` in `plugin.json`, `mcp-server/package.json`, or `pyproject.toml`** in your PR. Do NOT edit `CHANGELOG.md`. Do NOT run `scripts/publish.py`. All version work is done by the maintainer after merge.
+
+### 8 · Push to YOUR fork and open a PR
+
+```bash
+# Push the feature branch to your fork
+git push origin feat/<short-description>
+```
+
+```bash
+# Open PR against Emasoft/llm-externalizer-plugin main
+gh pr create --repo Emasoft/llm-externalizer-plugin --base main
+```
+
+---
+
+### Release pipeline (maintainer only — DO NOT RUN AS A CONTRIBUTOR)
+
+This section documents the commands the upstream maintainer runs after merging PRs. Contributors should ignore it. The pre-push hook on the upstream clone (which contributors disable via step 2a) exists specifically to force these scripts to be used.
+
+Additional maintainer-only tooling:
+
+- **`git-cliff`** — auto-computes the next version and regenerates `CHANGELOG.md` from Conventional Commits (pulled in by `publish.py`)
+
+```bash
+# Auto-bump version from Conventional Commits, run all gates, push tag + release
+python3 scripts/publish.py
+```
+
+```bash
+# Force a specific bump
+python3 scripts/publish.py --patch
+python3 scripts/publish.py --minor
+python3 scripts/publish.py --major
+```
+
+```bash
+# Dry-run preview (still runs all checks)
+python3 scripts/publish.py --dry-run
+```
+
+```bash
+# Used by the pre-push hook — runs checks, exits, no mutations
+python3 scripts/publish.py --check-only
+```
+
+`publish.py` runs **9 mandatory validation gates** before any tag or push: `npm ci`, `npm run typecheck`, `npm run lint`, `npm run build`, `npm test`, `ruff check`, `shellcheck`, `plugin.json` schema, `claude plugin validate`. All must pass with zero errors.
 
 ---
 
@@ -560,6 +860,6 @@ MIT — see [LICENSE](LICENSE).
 
 ## Links
 
-- Marketplace: [`Emasoft/emasoft-plugins`](https://github.com/Emasoft/emasoft-plugins)
-- Source: [`Emasoft/llm-externalizer-plugin`](https://github.com/Emasoft/llm-externalizer-plugin)
-- Issues: [github.com/Emasoft/llm-externalizer-plugin/issues](https://github.com/Emasoft/llm-externalizer-plugin/issues)
+- **Marketplace:** <https://github.com/Emasoft/emasoft-plugins>
+- **Source:** <https://github.com/Emasoft/llm-externalizer-plugin>
+- **Issues:** <https://github.com/Emasoft/llm-externalizer-plugin/issues>
