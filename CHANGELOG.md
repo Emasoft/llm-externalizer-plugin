@@ -1,6 +1,52 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.0.3] - 2026-04-20
+
+### Added
+
+- Feat(publish): archive ./reports/ into ./reports_dev/ before validation
+
+Rationale: the ./reports/ tree is where agents and workflow runs drop
+audit output. Those files carry absolute local paths (/Users/<user>/...),
+redacted secret markers, and raw LLM output — none of which should ever
+land in a published plugin or in CPV's "private path leaked" scan.
+
+The prior fix (gitignoring ./reports/) worked but threw away the audit
+data when the workflow branch was merged or deleted, and it split the
+convention (reports_dev/ gitignored but reports/ gitignored too is
+confusing when agents spawned in workflows need the data back).
+
+New design:
+- Revert the ./reports/ gitignore — the tree is untracked only because
+  no agent commits it, not because it's hidden from scanners.
+- Step 0 of publish.py (before pre-flight): move every file under
+  ./reports/ and ./mcp-server/reports/ into
+  ./reports_dev/reports-archive/<UTC-timestamp>/ with the subtree
+  preserved. reports_dev/ is already gitignored, so the data survives
+  but never reaches CPV, the published tarball, or the marketplace.
+- Idempotent: each run creates a fresh timestamped folder, so repeated
+  publishes never overwrite prior snapshots. Workflows that merge and
+  delete branches keep their audit trail in reports_dev/ on the
+  maintainer's machine.
+
+
+### Refactored
+
+- Refactor(publish): 1:1 mapping reports/ -> reports_dev/ (no timestamped subfolder)
+
+Rationale: timestamped archive folders were the wrong abstraction.
+Users locate a moved file by simply replacing `reports` with
+`reports_dev` in its path — anything more elaborate breaks that
+intuition and forces grep-by-timestamp to find old output.
+
+New behavior: a file at `reports/llm-externalizer/foo.md` lands at
+`reports_dev/llm-externalizer/foo.md` exactly. Sub-tree preserved.
+Collisions overwrite (newer publish run wins — matches the "latest
+audit output" expectation for workflow agents). Same pairing applies
+to mcp-server/reports/ -> mcp-server/reports_dev/.
+
+
 ## [9.0.2] - 2026-04-20
 
 ### Added
