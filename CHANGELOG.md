@@ -1,6 +1,64 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.0.5] - 2026-04-21
+
+### Added
+
+- Feat(format): canonical <ts±tz>-<slug>.<ext> for every report file
+
+Every surface the plugin ships now writes to the same filename shape
+defined by ~/.claude/rules/agent-reports-location.md — no carve-outs.
+
+Timestamp: %Y%m%d_%H%M%S%z (local time with GMT offset appended as
+compact ±HHMM — filesystem-safe on every OS, sortable by ls -t). Never
+UTC, never ±HH:MM.
+
+- mcp-server/src/index.ts:
+  - new canonicalTimestamp() helper (local time + compact offset).
+  - saveResponse() emits <ts±tz>-<tool>[-group-<id>][-<src>]-<shortId>.md
+    instead of the old <tool>_<src>_<isoZ>_<shortId>.md.
+  - batchReportFilename() follows the same shape.
+
+- scripts/fix_found_bugs_helper.py:
+  - TS_FORMAT switched from "%Y%m%dT%H%M%S%z" (ISO "T") to the canonical
+    "%Y%m%d_%H%M%S%z" (underscore).
+  - init-run prints paths like <ts>-fix-found-bugs-<purpose>.<ext>
+    instead of the legacy dot-separated <ts>.fix-found-bugs.<purpose>.<ext>.
+  - SIDECAR_MARKERS recognises both the legacy dot-shape and the new
+    hyphen-shape so artefacts from either generation are skipped during
+    aggregation.
+
+- mcp-server/dist/index.js: rebuilt to match source.
+
+- Feat(commands): worktree-safe MAIN_ROOT for reports — no carve-outs
+
+Every LLM Externalizer command now resolves the main-repo root via
+`git worktree list | head -n1 | awk '{print $1}'` and writes reports
+under `$MAIN_ROOT/reports/llm-externalizer/` — the same convention as
+every other agent / skill / tool in the project. $CLAUDE_PROJECT_DIR
+points to whatever checkout the session is attached to (including a
+linked worktree), which would scatter audit output across short-lived
+branches. The main checkout is always listed first by `git worktree
+list`, so it's a safe canonical target regardless of where the command
+runs from.
+
+- commands/llm-externalizer-scan-and-fix.md
+- commands/llm-externalizer-scan-and-fix-serially.md
+- commands/llm-externalizer-fix-found-bugs.md
+- commands/llm-externalizer-fix-report.md
+
+Each command now carries a short worktree-safe prologue that the
+orchestrator must reproduce at the top of every Bash step (the tool
+spawns a fresh subshell per call, so env vars don't persist between
+steps). Every JSON-template reference to output_dir uses
+<MAIN_ROOT>/reports/llm-externalizer. Falls back to $CLAUDE_PROJECT_DIR
+only when we're not inside a git working tree (e.g. sandbox runs).
+
+This matches the agent-reports-location rule verbatim: same rule,
+same folder, for everything — even the externalized LLM.
+
+
 ## [9.0.4] - 2026-04-20
 
 ### Changed

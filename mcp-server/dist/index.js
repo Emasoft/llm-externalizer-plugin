@@ -32220,7 +32220,7 @@ function buildTools() {
   return allTools;
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "9.0.4" },
+  { name: "llm-externalizer", version: "9.0.5" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {
