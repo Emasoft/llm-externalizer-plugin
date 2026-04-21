@@ -15,7 +15,7 @@ Orchestrates a full **scan → per-file report → parallel fix → join** pass.
 **HARDCODED (not overridable):**
 
 - `answer_mode: auto` — `0` (ONE REPORT PER FILE) by default, **automatically upgraded to `1` (ONE REPORT PER GROUP) if the `--file-list` contains `---GROUP:id---` markers**. Either way, each report is dispatched to exactly one fixer agent with zero orchestrator-side consolidation — the fixer doesn't care whether a report covers one file or a whole group; it just verifies and fixes the findings inside.
-- `output_dir: $CLAUDE_PROJECT_DIR/reports/llm-externalizer/` — required so the join script can find every `.fixer.`-tagged summary.
+- `output_dir: $MAIN_ROOT/reports/llm-externalizer/` — required so the join script can find every `.fixer.`-tagged summary.
 
 ## ⚠️ Cross-file / cross-reference limitation — MUST READ
 
@@ -132,11 +132,18 @@ The agent — not a blind glob — curates the scan target. Humans cannot reliab
 
 Using `Bash`:
 
-1. Resolve the reports directory:
+1. Resolve the reports directory. `MAIN_ROOT` MUST be the **main-repo root**, not `$CLAUDE_PROJECT_DIR` — when this command runs inside a linked worktree, `CLAUDE_PROJECT_DIR` points to the worktree, and writing there would scatter audit output across short-lived branches. `git worktree list | head -n1` always names the main checkout first.
    ```bash
-   REPORTS_DIR="$CLAUDE_PROJECT_DIR/reports/llm-externalizer"
+   # Worktree-safe: MAIN_ROOT is the main checkout, even when we're inside a linked worktree.
+   if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+     MAIN_ROOT="$(git worktree list | head -n1 | awk '{print $1}')"
+   else
+     MAIN_ROOT="$CLAUDE_PROJECT_DIR"   # fallback for non-git trees
+   fi
+   REPORTS_DIR="$MAIN_ROOT/reports/llm-externalizer"
    mkdir -p "$REPORTS_DIR"
    ```
+   Every subsequent `Bash` step must recompute `MAIN_ROOT` the same way (the tool spawns a fresh subshell per call — env vars do not persist) or substitute the resolved absolute path into the command directly.
 2. If `--file-list <path>` is set (either user-provided or produced by Step 0): `test -f <path>` and read it with `cat` → build an array of non-empty, non-comment lines. Abort if the file is empty.
 3. If `--instructions <path>` is set: `test -f <path>`. Abort if missing.
 4. If `--specs <path>` is set: `test -f <path>`. Abort if missing.
@@ -230,7 +237,7 @@ Common tool arguments (ALWAYS present, NOT overridable):
 ```json
 {
   "answer_mode": <ANSWER_MODE>,
-  "output_dir": "<CLAUDE_PROJECT_DIR>/reports/llm-externalizer"
+  "output_dir": "<MAIN_ROOT>/reports/llm-externalizer"
 }
 ```
 
@@ -242,7 +249,7 @@ Call `mcp__llm-externalizer__code_task`:
 {
   "answer_mode": <ANSWER_MODE>,
   "max_retries": 3,
-  "output_dir": "<CLAUDE_PROJECT_DIR>/reports/llm-externalizer",
+  "output_dir": "<MAIN_ROOT>/reports/llm-externalizer",
   "input_files_paths": ["<each absolute path from the list file — PASS THROUGH the ---GROUP:id--- markers verbatim if present; the MCP server parses them>"],
   "instructions": "<see above>",
   "instructions_files_paths": ["<if applicable>"],
@@ -263,7 +270,7 @@ Call `mcp__llm-externalizer__scan_folder`:
   "folder_path": "<absolute target-path>",
   "answer_mode": 0,
   "use_gitignore": true,
-  "output_dir": "<CLAUDE_PROJECT_DIR>/reports/llm-externalizer",
+  "output_dir": "<MAIN_ROOT>/reports/llm-externalizer",
   "extensions": ["<only if --text>"],
   "exclude_dirs": [
     "docs_dev", "reports_dev", "scripts_dev", "tests_dev",
@@ -294,7 +301,7 @@ RUN_TS=$(date +%Y%m%dT%H%M%S%z)
 EXTRACTED="/tmp/llm-externalizer-scan-and-fix.$RUN_TS.extracted.txt"
 VALIDATED="/tmp/llm-externalizer-scan-and-fix.$RUN_TS.validated.txt"
 REJECTED="/tmp/llm-externalizer-scan-and-fix.$RUN_TS.rejected.txt"
-REPORTS_DIR="$CLAUDE_PROJECT_DIR/reports/llm-externalizer"
+REPORTS_DIR="$MAIN_ROOT/reports/llm-externalizer"
 : > "$EXTRACTED"
 : > "$VALIDATED"
 : > "$REJECTED"
@@ -409,7 +416,7 @@ A single `Bash` step: detect the Python runner, count the `.fixer.` files, and c
 
 ```bash
 TS=$(date +%Y%m%dT%H%M%S%z)   # local time with UTC offset — sortable, unambiguous
-REPORTS_DIR="$CLAUDE_PROJECT_DIR/reports/llm-externalizer"
+REPORTS_DIR="$MAIN_ROOT/reports/llm-externalizer"
 FINAL="$REPORTS_DIR/${TS}.final-report.md"
 
 # Runner detection — abort if neither python3 nor uv is available.
@@ -448,7 +455,7 @@ On any error: `[FAILED] llm-externalizer-scan-and-fix — <one-line reason>`.
 ## Constraints
 
 - `answer_mode` is chosen by the command itself: `0` (per-file) by default, `1` (per-group) when `--file-list` contains `---GROUP:id---` markers, on `scan_folder` always `0`. Never `2`. Do NOT accept overrides from `$ARGUMENTS`.
-- `output_dir` is hardcoded to `$CLAUDE_PROJECT_DIR/reports/llm-externalizer`. Do NOT accept overrides from `$ARGUMENTS`.
+- `output_dir` is hardcoded to `$MAIN_ROOT/reports/llm-externalizer`. Do NOT accept overrides from `$ARGUMENTS`.
 - You MUST NOT `Read` any scan report, fixer summary, or the final joined report.
 - You MUST NOT summarize any report content. Only file paths flow through the orchestrator.
 - Fixer dispatch MUST be parallel (batches of ≤15). Sequential dispatch defeats the whole design.

@@ -15,7 +15,7 @@ Two-phase audit that mirrors `/llm-externalizer:llm-externalizer-scan-and-fix` e
 **HARDCODED (not overridable):**
 
 - `answer_mode: auto` — `0` (ONE REPORT PER FILE) by default, **automatically upgraded to `1` (ONE REPORT PER GROUP) if the `--file-list` contains `---GROUP:id---` markers**. The aggregator walks every `.md` in the reports dir regardless of mode, so both work; mode 1 is more efficient when logically related files share an audit (the LLM sees them together in one request).
-- `output_dir: $CLAUDE_PROJECT_DIR/reports/llm-externalizer/` — required so the aggregator finds every scan report and the bug list shares a directory with them.
+- `output_dir: $MAIN_ROOT/reports/llm-externalizer/` — required so the aggregator finds every scan report and the bug list shares a directory with them.
 - Never more than **1** concurrent Task call in the fix loop. Bug order matters here — do not parallelise.
 
 **Picking this vs `scan-and-fix`:** parallel fixers race on shared state (imports, types, schemas, shared mocks) and fix bugs in an arbitrary per-file order. This command is for audits where later fixes depend on earlier ones, or where the same shared file is edited by multiple findings. For independent per-file fixes, `/llm-externalizer:llm-externalizer-scan-and-fix` is faster on wall-clock time.
@@ -133,11 +133,18 @@ The agent — not a blind glob — curates the scan target. Humans cannot reliab
 
 Using `Bash`:
 
-1. Resolve the reports directory:
+1. Resolve the reports directory. `MAIN_ROOT` MUST be the **main-repo root**, not `$CLAUDE_PROJECT_DIR` — when this command runs inside a linked worktree, `CLAUDE_PROJECT_DIR` points to the worktree, and writing there would scatter audit output across short-lived branches. `git worktree list | head -n1` always names the main checkout first.
    ```bash
-   REPORTS_DIR="$CLAUDE_PROJECT_DIR/reports/llm-externalizer"
+   # Worktree-safe: MAIN_ROOT is the main checkout, even when we're inside a linked worktree.
+   if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+     MAIN_ROOT="$(git worktree list | head -n1 | awk '{print $1}')"
+   else
+     MAIN_ROOT="$CLAUDE_PROJECT_DIR"   # fallback for non-git trees
+   fi
+   REPORTS_DIR="$MAIN_ROOT/reports/llm-externalizer"
    mkdir -p "$REPORTS_DIR"
    ```
+   Every subsequent `Bash` step must recompute `MAIN_ROOT` the same way (the tool spawns a fresh subshell per call — env vars do not persist) or substitute the resolved absolute path into the command directly.
 2. If `--file-list <path>` is set (either user-provided or produced by Step 0): `test -f <path>` and read it with `cat` → build an array of non-empty, non-comment lines. Abort if the file is empty.
 3. If `--instructions <path>` is set: `test -f <path>`. Abort if missing.
 4. If `--specs <path>` is set: `test -f <path>`. Abort if missing.
@@ -228,7 +235,7 @@ Common tool arguments (ALWAYS present, NOT overridable):
 ```json
 {
   "answer_mode": <ANSWER_MODE>,
-  "output_dir": "<CLAUDE_PROJECT_DIR>/reports/llm-externalizer"
+  "output_dir": "<MAIN_ROOT>/reports/llm-externalizer"
 }
 ```
 
@@ -240,7 +247,7 @@ Call `mcp__llm-externalizer__code_task`:
 {
   "answer_mode": <ANSWER_MODE>,
   "max_retries": 3,
-  "output_dir": "<CLAUDE_PROJECT_DIR>/reports/llm-externalizer",
+  "output_dir": "<MAIN_ROOT>/reports/llm-externalizer",
   "input_files_paths": ["<each absolute path from the list file — pass ---GROUP:id--- markers through verbatim>"],
   "instructions": "<see above>",
   "instructions_files_paths": ["<if applicable>"],
@@ -261,7 +268,7 @@ Call `mcp__llm-externalizer__scan_folder`:
   "folder_path": "<absolute target-path>",
   "answer_mode": 0,
   "use_gitignore": true,
-  "output_dir": "<CLAUDE_PROJECT_DIR>/reports/llm-externalizer",
+  "output_dir": "<MAIN_ROOT>/reports/llm-externalizer",
   "extensions": ["<only if --text>"],
   "exclude_dirs": [
     "docs_dev", "reports_dev", "scripts_dev", "tests_dev",
@@ -292,7 +299,7 @@ RUN_TS=$(date +%Y%m%dT%H%M%S%z)
 EXTRACTED="/tmp/llm-externalizer-scan-and-fix.$RUN_TS.extracted.txt"
 VALIDATED="/tmp/llm-externalizer-scan-and-fix.$RUN_TS.validated.txt"
 REJECTED="/tmp/llm-externalizer-scan-and-fix.$RUN_TS.rejected.txt"
-REPORTS_DIR="$CLAUDE_PROJECT_DIR/reports/llm-externalizer"
+REPORTS_DIR="$MAIN_ROOT/reports/llm-externalizer"
 : > "$EXTRACTED"
 : > "$VALIDATED"
 : > "$REJECTED"

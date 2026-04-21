@@ -65,7 +65,7 @@ Example: `20260418T153045+0200.fix-found-bugs.summary.md`.
 
 Parse `$ARGUMENTS` into:
 
-- **(empty)** — default mode. Aggregate every report in `$CLAUDE_PROJECT_DIR/reports/llm-externalizer/` and fix every finding. Skip reports that have a `.fixer.` sibling (those were already processed by `llm-externalizer-scan-and-fix`).
+- **(empty)** — default mode. Aggregate every report in `$MAIN_ROOT/reports/llm-externalizer/` and fix every finding. Skip reports that have a `.fixer.` sibling (those were already processed by `llm-externalizer-scan-and-fix`).
 - **`@path/to/merged-report.md`** or **`path/to/merged-report.md`** — scoped mode. Aggregate ONLY this file's findings (must be a merged `answer_mode=2` report). All other reports in the directory are ignored.
 
 Abort with `[FAILED] llm-externalizer-fix-found-bugs — <one-line reason>` on any validation failure.
@@ -82,13 +82,24 @@ $H init-run
 
 Every filename this run produces uses `$RUN_TS` as its prefix. Every orchestrator path lives under `$OUTDIR`.
 
+Resolve `MAIN_ROOT` at the start of every `Bash` step (the tool spawns a fresh subshell per invocation, so env vars do not persist). `MAIN_ROOT` MUST be the **main-repo root** — `git worktree list | head -n1` always names the main checkout first, so audit output never scatters across linked worktrees.
+
+```bash
+# Worktree-safe: MAIN_ROOT is the main checkout.
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  MAIN_ROOT="$(git worktree list | head -n1 | awk '{print $1}')"
+else
+  MAIN_ROOT="$CLAUDE_PROJECT_DIR"   # fallback for non-git trees
+fi
+```
+
 ### Step 2 — Aggregate reports into the canonical bug list
 
 **Default mode (no arg given):**
 
 ```bash
 $H aggregate-reports \
-  --reports-dir "$CLAUDE_PROJECT_DIR/reports/llm-externalizer" \
+  --reports-dir "$MAIN_ROOT/reports/llm-externalizer" \
   --skip-if-fixer-exists \
   --output "$BUGS_TO_FIX"
 ```
