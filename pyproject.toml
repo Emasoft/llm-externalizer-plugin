@@ -1,6 +1,6 @@
 [project]
 name = "llm-externalizer-plugin"
-version = "9.0.5"
+version = "9.0.6"
 description = "Claude Code plugin: offload bounded LLM tasks to cheaper local or remote models via MCP"
 requires-python = ">=3.12"
 

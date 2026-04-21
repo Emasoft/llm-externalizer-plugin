@@ -1,6 +1,55 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.0.6] - 2026-04-21
+
+### Fixed
+
+- Fix(readme): restore BADGES markers; publish.py emits centered HTML form
+
+The full README rewrite dropped the <!--BADGES-START--> / <!--BADGES-END-->
+comment markers that publish.py's update_readme_badges() function needs
+to auto-refresh the version/build shields on each release. Without them
+the badges went stale (still read v9.0.1 after v9.0.5 shipped).
+
+Fix:
+- README.md: wrap the existing centered <p align="center">…</p> badge
+  block with the two HTML-comment markers + bump the version shield to
+  the current v9.0.5.
+- scripts/publish.py: update_readme_badges() now emits the same
+  <p align="center"> wrapper with one <a><img></a> per badge so the
+  visual layout does not regress when publish regenerates the block.
+
+CPV result after this change: 0 CRITICAL / 0 MAJOR / 0 MINOR / 0 NIT,
+1 WARNING (transient "dead URL" on github.com/Emasoft/emasoft-plugins
+which curl confirms returns 200 — false positive from the validator).
+
+
+### Miscellaneous
+
+- Chore(versioning): align pyproject.toml with plugin version and sync it via publish.py
+
+Before this commit the repo had three version numbers that disagreed:
+- .claude-plugin/plugin.json      → 9.0.5
+- mcp-server/package.json         → 9.0.5
+- pyproject.toml                  → 4.1.5   ← drift
+
+publish.py only synced plugin.json, mcp-server/package.json,
+mcp-server/server.json, and mcp-server/src/index.ts. pyproject.toml
+(and its uv.lock) were never touched, so every release they drifted
+further behind.
+
+This commit:
+- Sets pyproject.toml to 9.0.5 (current plugin version).
+- Regenerates uv.lock so its root-package entry matches.
+- Teaches publish.py to sync pyproject.toml on every release, then
+  run `uv lock` to keep uv.lock consistent, then stage both files
+  alongside the existing release artifacts.
+
+After this, every future release will carry one version across all
+four files. No more "which number is real?".
+
+
 ## [9.0.5] - 2026-04-21
 
 ### Added
