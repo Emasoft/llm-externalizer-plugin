@@ -30900,15 +30900,29 @@ function formatFooter(resp, toolName, filePath) {
   return "";
 }
 var OUTPUT_DIR = process.env.LLM_OUTPUT_DIR || join2(process.cwd(), "reports_dev", "llm_externalizer");
+function canonicalTimestamp(date4 = /* @__PURE__ */ new Date()) {
+  const pad = (n) => String(Math.abs(n)).padStart(2, "0");
+  const Y = date4.getFullYear();
+  const M = pad(date4.getMonth() + 1);
+  const D = pad(date4.getDate());
+  const h = pad(date4.getHours());
+  const m = pad(date4.getMinutes());
+  const s = pad(date4.getSeconds());
+  const offMinutes = -date4.getTimezoneOffset();
+  const sign = offMinutes >= 0 ? "+" : "-";
+  const offH = pad(Math.floor(Math.abs(offMinutes) / 60));
+  const offM = pad(Math.abs(offMinutes) % 60);
+  return `${Y}${M}${D}_${h}${m}${s}${sign}${offH}${offM}`;
+}
 function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir) {
   const dir = outputDir || OUTPUT_DIR;
   mkdirSync2(dir, { recursive: true });
   const now = /* @__PURE__ */ new Date();
-  const ts = now.toISOString().replace(/[:.]/g, "-").slice(0, 23);
+  const ts = canonicalTimestamp(now);
   const shortId = randomUUID().slice(0, 6);
-  const srcName = meta3.inputFile ? `_${sanitizeFilename(meta3.inputFile).replace(/\.md$/, "")}` : "";
-  const groupSuffix = meta3.groupId ? `_group-${meta3.groupId.replace(/[^a-zA-Z0-9_-]/g, "_")}` : "";
-  const filename = overrideFilename || `${toolName}${groupSuffix}${srcName}_${ts}_${shortId}.md`;
+  const srcPart = meta3.inputFile ? `-${sanitizeFilename(meta3.inputFile).replace(/\.md$/, "")}` : "";
+  const groupPart = meta3.groupId ? `-group-${meta3.groupId.replace(/[^a-zA-Z0-9_-]/g, "_")}` : "";
+  const filename = overrideFilename || `${ts}-${toolName}${groupPart}${srcPart}-${shortId}.md`;
   const filepath = join2(dir, filename);
   const lines = [
     "# LLM Externalizer Response",
@@ -31197,11 +31211,10 @@ function resolveFolderPath(folderPath, opts) {
   return { files };
 }
 function batchReportFilename(toolName, _batchId, filePath, _fileIndex) {
-  const now = /* @__PURE__ */ new Date();
-  const ts = now.toISOString().replace(/[:.]/g, "-").slice(0, 23);
+  const ts = canonicalTimestamp();
   const shortId = randomUUID().slice(0, 6);
   const srcName = sanitizeFilename(filePath).replace(/\.md$/, "");
-  return `${toolName}_${srcName}_${ts}_${shortId}.md`;
+  return `${ts}-${toolName}-${srcName}-${shortId}.md`;
 }
 var SERVICE_HEALTH = {
   consecutiveFailures: 0,

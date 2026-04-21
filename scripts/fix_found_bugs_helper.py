@@ -44,11 +44,14 @@ from pathlib import Path
 # ── Output layout ────────────────────────────────────────────────────────────
 
 REPORTS_SUBDIR = Path("reports") / "llm-externalizer"
-TS_FORMAT = "%Y%m%dT%H%M%S%z"
+# Canonical timestamp format per ~/.claude/rules/agent-reports-location.md:
+#   local time + GMT offset in compact ±HHMM form, underscore between date and
+#   time so it's filesystem-safe on every OS. Example: 20260421_183012+0200.
+TS_FORMAT = "%Y%m%d_%H%M%S%z"
 
 
 def _now_ts() -> str:
-    """Local time, ISO-8601 basic, with UTC offset. Sortable."""
+    """Local time with GMT offset (compact ±HHMM). Sortable, filesystem-safe."""
     return datetime.now().astimezone().strftime(TS_FORMAT)
 
 
@@ -105,9 +108,14 @@ _FIELD_LINE_RE = re.compile(
 # Retained so older reports still parse; new rubrics should emit [[FINDING]]..[[/FINDING]].
 FINDING_H3_RE = re.compile(r"^###\s+(?P<title>.+?)\s*$", re.MULTILINE)
 FINDING_NUM_RE = re.compile(r"^(?P<num>\d+)\.\s+(?P<title>.+?)\s*$", re.MULTILINE)
-# Sidecar-file markers (names we never treat as bug reports)
+# Sidecar-file markers (names we never treat as bug reports). Both the old
+# dot-separated shape and the new hyphen-separated canonical shape are
+# matched so legacy artefacts on disk are still skipped during aggregation.
 SIDECAR_MARKERS = (
+    # Shared across both shapes
     ".fixer.",
+    "-fixer-",
+    # Legacy (dot-separated)
     ".final-report.",
     ".summary.",
     ".snapshot.",
@@ -116,6 +124,14 @@ SIDECAR_MARKERS = (
     ".bugs-to-fix.",
     "fix-bugs.",
     "fix-found-bugs.",
+    # Canonical (hyphen-separated per the agent-reports-location rule)
+    "-final-report-",
+    "-summary.",
+    "-snapshot.",
+    "-initial-state.",
+    "-progress.",
+    "-bugs-to-fix.",
+    "-fix-found-bugs-",
 )
 
 # ── Severity keyword tables ──────────────────────────────────────────────────
@@ -612,13 +628,16 @@ def cmd_timestamp(args: argparse.Namespace) -> int:
 def cmd_init_run(args: argparse.Namespace) -> int:
     ts = _now_ts()
     outdir = _reports_dir(args.base)
+    # Canonical filename shape: <ts±tz>-<slug>.<ext>. Everything after the
+    # timestamp is the slug, joined by hyphens (not dots) so the slug is
+    # one segment and the extension is unambiguous.
     print(f"RUN_TS={ts}")
     print(f"OUTDIR={outdir}")
-    print(f"BUGS_TO_FIX={outdir / f'{ts}.fix-found-bugs.bugs-to-fix.md'}")
-    print(f"INITIAL_STATE={outdir / f'{ts}.fix-found-bugs.initial-state.txt'}")
-    print(f"SNAPSHOT={outdir / f'{ts}.fix-found-bugs.snapshot.txt'}")
-    print(f"SUMMARY={outdir / f'{ts}.fix-found-bugs.summary.md'}")
-    print(f"PROGRESS_LOG={outdir / f'{ts}.fix-found-bugs.progress.log'}")
+    print(f"BUGS_TO_FIX={outdir / f'{ts}-fix-found-bugs-bugs-to-fix.md'}")
+    print(f"INITIAL_STATE={outdir / f'{ts}-fix-found-bugs-initial-state.txt'}")
+    print(f"SNAPSHOT={outdir / f'{ts}-fix-found-bugs-snapshot.txt'}")
+    print(f"SUMMARY={outdir / f'{ts}-fix-found-bugs-summary.md'}")
+    print(f"PROGRESS_LOG={outdir / f'{ts}-fix-found-bugs-progress.log'}")
     return 0
 
 

@@ -2877,6 +2877,26 @@ function formatFooter(
 const OUTPUT_DIR =
   process.env.LLM_OUTPUT_DIR || join(process.cwd(), "reports_dev", "llm_externalizer");
 
+// Canonical report-filename timestamp per the agent-reports-location rule:
+//   %Y%m%d_%H%M%S%z — local time, GMT offset appended as compact ±HHMM (no colon).
+// Example: 20260421_183012+0200. Never UTC, never ±HH:MM.
+function canonicalTimestamp(date: Date = new Date()): string {
+  const pad = (n: number): string => String(Math.abs(n)).padStart(2, "0");
+  const Y = date.getFullYear();
+  const M = pad(date.getMonth() + 1);
+  const D = pad(date.getDate());
+  const h = pad(date.getHours());
+  const m = pad(date.getMinutes());
+  const s = pad(date.getSeconds());
+  // getTimezoneOffset returns minutes WEST of UTC (Rome summer = -120), so
+  // the GMT offset is its negation. East-of-UTC offsets are positive.
+  const offMinutes = -date.getTimezoneOffset();
+  const sign = offMinutes >= 0 ? "+" : "-";
+  const offH = pad(Math.floor(Math.abs(offMinutes) / 60));
+  const offM = pad(Math.abs(offMinutes) % 60);
+  return `${Y}${M}${D}_${h}${m}${s}${sign}${offH}${offM}`;
+}
+
 function saveResponse(
   toolName: string,
   responseText: string,
@@ -2888,12 +2908,13 @@ function saveResponse(
   mkdirSync(dir, { recursive: true });
 
   const now = new Date();
-  const ts = now.toISOString().replace(/[:.]/g, "-").slice(0, 23);
+  const ts = canonicalTimestamp(now);
   const shortId = randomUUID().slice(0, 6);
-  // Include source filename for easy identification
-  const srcName = meta.inputFile ? `_${sanitizeFilename(meta.inputFile).replace(/\.md$/, "")}` : "";
-  const groupSuffix = meta.groupId ? `_group-${meta.groupId.replace(/[^a-zA-Z0-9_-]/g, "_")}` : "";
-  const filename = overrideFilename || `${toolName}${groupSuffix}${srcName}_${ts}_${shortId}.md`;
+  // Slug format: <tool>[-group-<id>][-<src>]-<shortId> — everything after the ts is
+  // joined by hyphens so the filename matches the rule's <ts±tz>-<slug>.<ext> shape.
+  const srcPart = meta.inputFile ? `-${sanitizeFilename(meta.inputFile).replace(/\.md$/, "")}` : "";
+  const groupPart = meta.groupId ? `-group-${meta.groupId.replace(/[^a-zA-Z0-9_-]/g, "_")}` : "";
+  const filename = overrideFilename || `${ts}-${toolName}${groupPart}${srcPart}-${shortId}.md`;
   const filepath = join(dir, filename);
 
   const lines: string[] = [
@@ -3323,18 +3344,18 @@ function resolveFolderPath(
   return { files };
 }
 
-// fileIndex disambiguates files with the same basename processed in the same millisecond
+// fileIndex disambiguates files with the same basename processed in the same second
 function batchReportFilename(
   toolName: string,
   _batchId: string,
   filePath: string,
   _fileIndex: number,
 ): string {
-  const now = new Date();
-  const ts = now.toISOString().replace(/[:.]/g, "-").slice(0, 23);
+  const ts = canonicalTimestamp();
   const shortId = randomUUID().slice(0, 6);
   const srcName = sanitizeFilename(filePath).replace(/\.md$/, "");
-  return `${toolName}_${srcName}_${ts}_${shortId}.md`;
+  // Canonical filename: <ts±tz>-<slug>.<ext>
+  return `${ts}-${toolName}-${srcName}-${shortId}.md`;
 }
 
 // ── Global service health tracker ────────────────────────────────────
