@@ -60,13 +60,19 @@ def update_readme_badges(readme_path: Path, version: str, build_ok: bool) -> boo
         return False
     build_color = "brightgreen" if build_ok else "red"
     build_label = "passing" if build_ok else "failing"
+    # Centered HTML badge block — auto-regenerated on every publish run.
+    # Keep this format in sync with the initial block in README.md so the
+    # visual layout (center-aligned, one <a><img> per badge) doesn't drift.
     badges = f"""{start_marker}
-![version](https://img.shields.io/badge/version-{version}-blue)
-![build](https://img.shields.io/badge/build-{build_label}-{build_color})
-![typescript](https://img.shields.io/badge/typescript-5.x-blue)
-![node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
-![license](https://img.shields.io/badge/license-MIT-green)
-![marketplace](https://img.shields.io/badge/marketplace-emasoft--plugins-purple)
+<p align="center">
+<a href="#"><img alt="version" src="https://img.shields.io/badge/version-{version}-blue"></a>
+<a href="#"><img alt="build" src="https://img.shields.io/badge/build-{build_label}-{build_color}"></a>
+<a href="#"><img alt="typescript" src="https://img.shields.io/badge/typescript-5.x-blue"></a>
+<a href="#"><img alt="node" src="https://img.shields.io/badge/node-%3E%3D18-brightgreen"></a>
+<a href="#"><img alt="license" src="https://img.shields.io/badge/license-MIT-green"></a>
+<a href="https://github.com/Emasoft/emasoft-plugins"><img alt="marketplace" src="https://img.shields.io/badge/marketplace-emasoft--plugins-purple"></a>
+<a href="#"><img alt="platforms" src="https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey"></a>
+</p>
 {end_marker}"""
     new_content = content[:start_idx] + badges + content[end_idx + len(end_marker) :]
     readme_path.write_text(new_content, encoding="utf-8")

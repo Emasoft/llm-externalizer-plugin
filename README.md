@@ -4,8 +4,9 @@
 
 <h1 align="center">llm-externalizer</h1>
 
+<!--BADGES-START-->
 <p align="center">
-<a href="#"><img alt="version" src="https://img.shields.io/badge/version-9.0.1-blue"></a>
+<a href="#"><img alt="version" src="https://img.shields.io/badge/version-9.0.5-blue"></a>
 <a href="#"><img alt="build" src="https://img.shields.io/badge/build-passing-brightgreen"></a>
 <a href="#"><img alt="typescript" src="https://img.shields.io/badge/typescript-5.x-blue"></a>
 <a href="#"><img alt="node" src="https://img.shields.io/badge/node-%3E%3D18-brightgreen"></a>
@@ -13,6 +14,7 @@
 <a href="https://github.com/Emasoft/emasoft-plugins"><img alt="marketplace" src="https://img.shields.io/badge/marketplace-emasoft--plugins-purple"></a>
 <a href="#"><img alt="platforms" src="https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey"></a>
 </p>
+<!--BADGES-END-->
 
 <p align="center">
 <b>Offload expensive code-scan work to cheap LLMs. Keep the fix loop local in Claude Code.</b>
