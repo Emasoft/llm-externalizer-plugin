@@ -593,6 +593,34 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
             sys.exit(1)
         index_ts.write_text(updated, encoding="utf-8")
         print(f"  Synced version to {index_ts.relative_to(repo_root)}")
+
+    # Sync version to pyproject.toml (project-level Python tooling package).
+    # Must stay aligned with plugin.json so users don't see three disagreeing
+    # numbers when inspecting the repo.
+    pyproject = repo_root / "pyproject.toml"
+    if pyproject.exists():
+        src = pyproject.read_text(encoding="utf-8")
+        updated = re.sub(
+            r'(?m)^(version\s*=\s*")[^"]+(")',
+            rf"\g<1>{new_version}\g<2>",
+            src,
+            count=1,
+        )
+        if updated == src:
+            print("ERROR: regex failed to match version in pyproject.toml", file=sys.stderr)
+            sys.exit(1)
+        pyproject.write_text(updated, encoding="utf-8")
+        print(f"  Synced version to {pyproject.relative_to(repo_root)}")
+
+        # Regenerate uv.lock so its root-package version matches pyproject.toml.
+        # `uv lock` is fast (no network if nothing changed) and deterministic.
+        lock_result = run(["uv", "lock"], capture=True, check=False, cwd=str(repo_root))
+        if lock_result.returncode != 0:
+            print("ERROR: `uv lock` failed after pyproject.toml bump.", file=sys.stderr)
+            if lock_result.stderr:
+                print(f"  {lock_result.stderr.strip()}", file=sys.stderr)
+            sys.exit(1)
+        print("  Regenerated uv.lock")
     print()
 
     # ── 6. Rebuild dist (with new version) ──
@@ -641,6 +669,12 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     index_ts_path = repo_root / "mcp-server" / "src" / "index.ts"
     if index_ts_path.exists():
         files_to_stage.append(str(index_ts_path))
+    pyproject_path = repo_root / "pyproject.toml"
+    if pyproject_path.exists():
+        files_to_stage.append(str(pyproject_path))
+    uv_lock_path = repo_root / "uv.lock"
+    if uv_lock_path.exists():
+        files_to_stage.append(str(uv_lock_path))
     dist_dir = repo_root / "mcp-server" / "dist"
     if dist_dir.exists():
         files_to_stage.append(str(dist_dir))
