@@ -44,6 +44,11 @@ await Promise.all([
     entryPoints: ["src/cli.ts"],
     outfile: "dist/cli.js",
   }),
+  build({
+    ...shared,
+    entryPoints: ["src/benchmark/index.ts"],
+    outfile: "dist/benchmark.js",
+  }),
 ]);
 
-console.log("Build complete: dist/index.js, dist/cli.js (fully bundled)");
+console.log("Build complete: dist/index.js, dist/cli.js, dist/benchmark.js (fully bundled)");

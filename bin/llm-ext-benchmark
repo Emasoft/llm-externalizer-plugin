@@ -1,0 +1,45 @@
+#!/usr/bin/env node
+/**
+ * CLI wrapper for the LLM Externalizer model benchmark.
+ *
+ * Spawns the bundled benchmark entry point (mcp-server/dist/benchmark.js)
+ * which queries OpenRouter for programming-category models under a cost
+ * cap, runs the keyword-classification benchmark against each, and
+ * writes a markdown report to reports/benchmark/<timestamp>-...md.
+ *
+ * Usage:
+ *   llm-ext-benchmark [--include MODEL_ID]... [--dry-run] [--report PATH]
+ *                     [--reasoning low|medium|high] [--seed N]
+ *
+ * Requires OPENROUTER_API_KEY in the environment (or the plugin userConfig).
+ * Run with --help for the full flag list.
+ */
+
+const { join } = require("path");
+const { existsSync } = require("fs");
+const { spawn } = require("child_process");
+
+const benchmarkPath = join(__dirname, "..", "mcp-server", "dist", "benchmark.js");
+if (!existsSync(benchmarkPath)) {
+  console.error(`ERROR: Benchmark bundle not found at ${benchmarkPath}`);
+  console.error("Run 'cd mcp-server && npm run build' in the plugin directory first.");
+  process.exit(1);
+}
+
+const child = spawn("node", [benchmarkPath, ...process.argv.slice(2)], {
+  stdio: "inherit",
+  env: { ...process.env },
+});
+
+child.on("error", (err) => {
+  console.error(`ERROR: Failed to launch benchmark: ${err.message}`);
+  process.exit(1);
+});
+
+child.on("exit", (code, signal) => {
+  if (signal) {
+    process.kill(process.pid, signal);
+  } else {
+    process.exit(code ?? 1);
+  }
+});
