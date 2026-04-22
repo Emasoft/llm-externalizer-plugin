@@ -1,6 +1,20 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.0.8] - 2026-04-22
+
+### Changed
+
+- Ci: bump setup-node v4.4.0 → v6.4.0 and node-version 18 → 24
+
+Clears the GitHub Actions deprecation warning on setup-node@v4.4.0
+(Node 20 runtime). v6.4.0 runs on Node 24, the current Active LTS.
+
+The mcp-server 'engines' field stays at '>=18.0.0' so end-users of
+the published plugin keep broad Node compatibility — only the CI
+workers bump.
+
+
 ## [9.0.7] - 2026-04-22
 
 ### Changed
