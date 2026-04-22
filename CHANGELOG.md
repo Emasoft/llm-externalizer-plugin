@@ -1,6 +1,62 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.0.7] - 2026-04-22
+
+### Changed
+
+- Build: rebuild dist after index.ts sanitize/retry/imports fixes
+
+
+### Fixed
+
+- Fix: real bugs from verified CANTFIX re-audit + WIP hardening
+
+Re-verified all 34 fixer reports from 2026-04-17 against current code.
+Of the 10 CANTFIX items, 3 were confirmed as real unfixed bugs; the rest
+were false positives, intentional design, or already fixed by other commits.
+
+Real bugs fixed:
+- bin/llm-ext: Add killAndExit() helper (SIGTERM→SIGKILL ladder,
+  2s grace). Replaces 7 race-prone 'child.kill(); process.exit(X)'
+  call sites that could leave orphan MCP server processes under
+  init/systemd when the parent exited before SIGTERM was delivered.
+- live-websearch.test.ts: Add module-level afterAll() that removes
+  both /tmp/__llm_ext_websearch_test and _test_config — the per-suite
+  afterAll hooks only closed transports.
+- live-extended.test.ts: Document the 'if (!result.isError)' guard
+  on the check_references test (same tolerance pattern as check_imports,
+  just missing the explanatory comment).
+
+WIP hardening (was uncommitted from earlier sessions):
+- index.ts: sanitizeInputPath() traversal+symlink protection in
+  scan_folder / compare_files / search_existing_implementations;
+  circuit-breaker+retry in grouped batch_check (parity with the
+  non-grouped branch); gitLsFilesMultiRepo returns null when target
+  is NOT itself a git repo (prevents silently dropping non-git files
+  in mixed trees); extractLocalImports handles Python __init__.py
+  package entry points; chatCompletionJSON strips markdown fences
+  before JSON.parse (some providers wrap JSON even under
+  response_format: json_schema).
+- .githooks/pre-push: Tighten publish.py regex with a (?=\s|$)
+  lookahead so 'publish.py.bak' / 'publish.pyc' substrings cannot
+  bypass ancestry matching.
+- statusline.py: TOCTOU-safe /tmp/claude cache: lstat refuses
+  symlinks, O_NOFOLLOW + fchmod instead of chmod (CWE-59).
+- test-helpers.ts: Drain server stderr via transport.stderr?.pipe
+  to prevent PassThrough buffer from filling and hanging tests.
+- check_references.py: Strip URL fragments from ${CLAUDE_PLUGIN_ROOT}
+  matches; skip absolute '/'-prefixed markdown links; move
+  _is_excluded check BEFORE existence checks.
+- publish.py: Docstring now matches implementation (no-op fallback
+  removed — step 6 fails fast).
+- server.json: Drop legacy LM_STUDIO_PASSWORD mention from description.
+
+Verification: tsc --noEmit clean, eslint --max-warnings 0 clean,
+ruff+mypy on all .py files clean, 82 vitest unit tests pass (index +
+grouping), bin/llm-ext discover E2E exits 0 with no orphans.
+
+
 ## [9.0.6] - 2026-04-21
 
 ### Fixed
