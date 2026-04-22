@@ -1,6 +1,61 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.3.0] - 2026-04-22
+
+### Added
+
+- Feat(commands): add /llm-externalizer:llm-externalizer-change-model
+
+Interactive 3-slot ensemble picker. Runs (or reuses) the benchmark,
+shows the user a SELECT FIRST / SECOND / THIRD menu of passing models,
+reports the new ensemble's cost against the last-accepted snapshot,
+and — on confirmation — atomically rewrites the active profile's
+model/second_model/third_model fields in ~/.llm-externalizer/settings.yaml.
+
+Design notes:
+
+- Mode-agnostic. The benchmark always hits OpenRouter regardless of
+  the active profile's mode (local/remote/remote-ensemble), and the
+  apply step touches ONLY the three ensemble-model fields — mode,
+  api, url, api_key, api_token, timeout, context_window all stay
+  byte-for-byte unchanged. Users running on a local profile can still
+  use this command to set up their ensemble fields for later.
+- Settings.yaml edit uses ruamel.yaml to preserve comments, quotes,
+  and indentation. Pre-edit backup is stamped with the local-tz
+  timestamp (%Y%m%dT%H%M%S%z). Write is atomic (tmp file + fsync +
+  os.replace).
+- Every accept writes ~/.llm-externalizer/ensemble-cost.json — a
+  cost snapshot keyed by the benchmark run it came from. The delta
+  shown in the UI is indicative: it compares the NEW ensemble's cost
+  (today's benchmark) against the LAST-ACCEPTED snapshot (possibly
+  weeks old). This survives the "old model is now defunct" case that
+  would break a re-benchmark approach.
+- Retry loop reuses the same benchmark results (no extra API spend).
+- First-time run with no snapshot shows "(no previous ensemble on
+  record)" and skips the % delta.
+- Cached benchmark choice: if ~/.llm-externalizer/benchmark-results.json
+  exists, the user sees a "Use cached (from <age ago>)" option with
+  the freshness in the label, so they can skip the re-benchmark when
+  it's obviously not needed.
+
+New components:
+
+- mcp-server/src/benchmark/report.ts → renderJson() for the sidecar.
+- mcp-server/src/benchmark/index.ts → --json PATH flag + mandatory
+  auto-save to ~/.llm-externalizer/benchmark-results.json so the
+  change-model command always finds the cache in a known location.
+- scripts/read_ensemble_state.py → one-shot read of settings.yaml +
+  ensemble-cost.json + benchmark-results.json, emits a JSON state
+  object for the command to parse.
+- scripts/apply_ensemble_choice.py → the atomic write. Refuses to
+  record a non-PASSING model in the cost snapshot.
+- commands/llm-externalizer-change-model.md → the interactive flow.
+
+Python scripts use PEP 723 inline metadata to declare ruamel.yaml as
+a dep — `uv run` installs it on demand, no system pip touch.
+
+
 ## [9.2.0] - 2026-04-22
 
 ### Added
