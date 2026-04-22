@@ -1,6 +1,53 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.1.0] - 2026-04-22
+
+### Added
+
+- Feat(benchmark): OpenRouter model selection harness
+
+Completely programmatic (no-agent) benchmark to pick the cheapest
+OpenRouter model that still solves our actual static-analysis workload.
+
+Setup:
+- 5 TypeScript fixture files, 71 top-level functions total.
+- 3 literal keyword substrings: "JSON.parse(", "new URLSearchParams",
+  "performance.now()". Ground truth is derived at runtime from the
+  fixtures via the TypeScript compiler API — the fixtures are the
+  single source of truth, so expected answers cannot drift.
+- Distribution: 20 kw1 / 20 kw2 / 10 kw3 / 21 noise. Each keyworded
+  function contains exactly one keyword (disjoint sets for scoring).
+
+Flow:
+- discover.ts queries /api/v1/models?category=programming and filters
+  by ctx>=128K, out>=64K, in<=$1.5/M, out<=$2.0/M, structured+reasoning.
+- runner.ts sends each qualifying model (plus explicit --include
+  baselines) the fixtures + strict JSON schema. Records latency,
+  tokens, raw response. Falls back from kw1_functions to kw1 when a
+  model violates the strict schema (flagged in the report).
+- score.ts computes precision/recall/F1 per keyword vs ground truth;
+  overall PASS = all 3 arrays exact match.
+- report.ts emits a markdown summary table to
+  $MAIN_ROOT/reports/benchmark/<ts±tz>-model-comparison.md.
+
+Usage:
+  bin/llm-ext-benchmark --dry-run                   # show roster
+  bin/llm-ext-benchmark                             # run full sweep
+  bin/llm-ext-benchmark --include google/gemini-3-flash-preview \
+                        --include x-ai/grok-4.1-fast   # + baselines
+
+Initial run results (2 passes, 7 models):
+- PASS 100%: stepfun/step-3.5-flash ($0.10/M in, $0.30/M out), kimi-k2.5,
+  qwen3.6-plus (⚠ short-name schema violation), gemini-3-flash-preview
+  (baseline), grok-4.1-fast (baseline).
+- FAIL: minimax-m2.5 (non-deterministic, ~99% F1), gpt-5.4-nano (~95%).
+
+Conclusion: stepfun/step-3.5-flash is the clear replacement for
+google/gemini-3-flash-preview — 10× cheaper output tokens, same
+accuracy on the benchmark, schema-compliant.
+
+
 ## [9.0.8] - 2026-04-22
 
 ### Changed
