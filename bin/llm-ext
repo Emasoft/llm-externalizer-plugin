@@ -233,6 +233,47 @@ function sendJson(child, obj) {
   }
 }
 
+// Graceful SIGTERM → SIGKILL escalation before exiting. Replaces the
+// race-prone `child.kill(); process.exit(code);` pattern — a bare
+// `child.kill()` sends SIGTERM and does NOT wait for the child to
+// finish; the immediate `process.exit` then orphans the child, which
+// survives as a zombie under init/systemd on POSIX. This helper waits
+// up to `timeoutMs` for the child to exit after SIGTERM and only then
+// escalates to SIGKILL, guaranteeing the child is reaped before we
+// disappear.
+function killAndExit(child, code, timeoutMs = 2000) {
+  if (child.exitCode !== null) {
+    // Child already exited — no kill needed.
+    process.exit(code);
+    return;
+  }
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    process.exit(code);
+  };
+  child.once("exit", finish);
+  try {
+    child.kill("SIGTERM");
+  } catch {
+    // Child died between exitCode check and kill — still exit cleanly.
+    finish();
+    return;
+  }
+  // Escalate to SIGKILL if the child ignores SIGTERM. unref() so the
+  // timer never keeps the event loop alive on its own.
+  setTimeout(() => {
+    if (done) return;
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Already gone.
+    }
+    finish();
+  }, timeoutMs).unref();
+}
+
 async function main() {
   const { tool, params } = parseArgs(process.argv);
 
@@ -287,8 +328,8 @@ async function main() {
         gotResponse = true;
         clearTimeout(deadline);
         console.error(`ERROR: MCP server rejected initialize: ${JSON.stringify(msg.error)}`);
-        child.kill();
-        process.exit(1);
+        killAndExit(child, 1);
+        return;
       }
       if (msg.result) {
         // Init response received — send initialized notification + tool call
@@ -303,8 +344,8 @@ async function main() {
         gotResponse = true;
         clearTimeout(deadline);
         console.error(`ERROR: MCP server sent malformed initialize response: ${JSON.stringify(msg)}`);
-        child.kill();
-        process.exit(1);
+        killAndExit(child, 1);
+        return;
       }
       return;
     }
@@ -314,8 +355,8 @@ async function main() {
         gotResponse = true;
         clearTimeout(deadline);
         console.error(`ERROR: Tool call failed: ${JSON.stringify(msg.error)}`);
-        child.kill();
-        process.exit(1);
+        killAndExit(child, 1);
+        return;
       }
       if (msg.result) {
         // Tool response received — print result and exit
@@ -328,19 +369,16 @@ async function main() {
             .map((c) => c.text)
             .join("\n");
           console.log(text);
-          child.kill();
-          process.exit(msg.result.isError === true ? 1 : 0);
+          killAndExit(child, msg.result.isError === true ? 1 : 0);
         } else {
           console.error(`ERROR: Tool response missing content array: ${JSON.stringify(msg.result)}`);
-          child.kill();
-          process.exit(1);
+          killAndExit(child, 1);
         }
       } else {
         gotResponse = true;
         clearTimeout(deadline);
         console.error(`ERROR: MCP server sent malformed tool response: ${JSON.stringify(msg)}`);
-        child.kill();
-        process.exit(1);
+        killAndExit(child, 1);
       }
     }
   }
@@ -379,8 +417,7 @@ async function main() {
   // Global deadline
   const deadline = setTimeout(() => {
     console.error("ERROR: Timeout after 10 minutes");
-    child.kill();
-    process.exit(1);
+    killAndExit(child, 1);
   }, 600_000);
 
   // Forward server stderr to our stderr so crashes and diagnostic logs are visible

@@ -149,7 +149,7 @@ def determine_next_version(args, current: str) -> str:
       3. --minor         → bump minor
       4. --patch         → bump patch
       5. default         → git-cliff --bumped-version (based on commit types)
-      6. fallback        → patch bump (if git-cliff has nothing to say)
+      6. no bumpable commits → fail-fast (exit 1; user must pass an explicit bump flag)
     """
     if args.set:
         if not re.match(r"^\d+\.\d+\.\d+$", args.set):

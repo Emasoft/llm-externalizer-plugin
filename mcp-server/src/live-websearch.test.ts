@@ -40,6 +40,16 @@ writeFileSync(join(TEST_CONFIG_DIR, 'settings.yaml'), [
   '',
 ].join('\n'), 'utf-8');
 
+// Remove both module-scope temp directories once the whole suite is done.
+// Without this, repeated runs accumulate /tmp/__llm_ext_websearch_test and
+// /tmp/__llm_ext_websearch_test_config. The per-suite afterAll hooks below
+// only close transports — they do not clean the file-system state, and the
+// module-scope mkdirSync above runs unconditionally on every import.
+afterAll(() => {
+  rmSync(TMP_DIR, { recursive: true, force: true });
+  rmSync(TEST_CONFIG_DIR, { recursive: true, force: true });
+});
+
 function cleanDir(dir: string) {
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
   mkdirSync(dir, { recursive: true });

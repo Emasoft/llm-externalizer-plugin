@@ -305,6 +305,11 @@ describe('check_references (live)', () => {
         },
       }, undefined, { timeout: 600_000 });
 
+      // check_references may return isError if the LLM extraction fails on a
+      // non-deterministic local model, but it should not crash the server.
+      // We therefore only assert on the report content when the tool call
+      // produced a structured .md report (same pattern as the check_imports
+      // test above) — the hard invariant is just that the server returned.
       const text = getText(result);
       expect(text).toBeDefined();
 

@@ -35,7 +35,7 @@
         },
         {
           "name": "LM_API_TOKEN",
-          "description": "Bearer token for LM Studio API authentication. Also accepts LM_STUDIO_PASSWORD (legacy). Can also be set in settings.yaml as lmstudio.api_token.",
+          "description": "Bearer token for LM Studio API authentication. Can also be set in settings.yaml as lmstudio.api_token.",
           "isRequired": false,
           "isSecret": true,
           "format": "string"

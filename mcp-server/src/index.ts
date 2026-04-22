@@ -852,8 +852,13 @@ function gitLsFilesMultiRepo(dirPath: string, recursive: boolean): string[] | nu
     }
   }
 
-  // Return null if no git repos found at all (triggers manual walk fallback)
-  if (!isInGitRepo && allFiles.size === 0) return null;
+  // Return null when target is not itself a git repo (triggers manual walk fallback).
+  // Without this, a mixed-content directory with one or more nested independent git
+  // repos would silently drop every non-git file: gitLsFilesMultiRepo would return
+  // only the nested-repo files, and walkDir's git branch would return that partial
+  // list. Deferring to manual walk ensures every file in the target tree is seen;
+  // manual walk still skips .git/.svn/.hg dirs and respects exclude_dirs.
+  if (!isInGitRepo) return null;
   return [...allFiles];
 }
 
@@ -1035,8 +1040,17 @@ function extractLocalImports(filePath: string, sourceCode: string): string[] {
           }
         }
         if (!found) {
-          for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-            const indexPath = join(resolved, `index${ext}`);
+          // TS/JS package entry points (index.*) and Python package init files
+          // (__init__.py). A Python relative import like `from . import foo`
+          // or `from .pkg import X` resolves to a package directory whose
+          // dependencies live in __init__.py — without this lookup those
+          // deps would be missed by check_references.
+          const indexCandidates = [
+            "index.ts", "index.tsx", "index.js", "index.jsx",
+            "__init__.py",
+          ];
+          for (const leaf of indexCandidates) {
+            const indexPath = join(resolved, leaf);
             if (existsSync(indexPath)) {
               resolved = indexPath;
               found = true;
@@ -2801,7 +2815,14 @@ async function chatCompletionJSON(
     }
     let parsed: Record<string, unknown>;
     try {
-      parsed = JSON.parse(rawContent) as Record<string, unknown>;
+      // Strip markdown fences if present (matches chatCompletionNative branch above).
+      // Even with response_format: json_schema some providers/models wrap JSON in
+      // ```json ... ``` fences, which makes JSON.parse throw.
+      const cleaned = rawContent
+        .replace(/^```(?:json)?\s*\n?/i, "")
+        .replace(/\n?```\s*$/i, "")
+        .trim();
+      parsed = JSON.parse(cleaned) as Record<string, unknown>;
     } catch (e) {
       // LLM may wrap JSON in code fences, include trailing text, or produce malformed JSON
       throw new Error(
@@ -6086,12 +6107,61 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             const gTask = resolvePrompt(bcInstructions, bcInstructionsFilesPaths).trim() ||
               "Find all bugs, type errors, logic errors, security vulnerabilities, and potential runtime failures.";
             const gRl = await getRateLimitConfig();
+            // Circuit-breaker + retry, mirroring the non-grouped branch below. The tool's
+            // documented contract ("3 attempts for recoverable errors; aborts on 3+
+            // consecutive failures") must apply equally to grouped runs — without this
+            // the grouped path would retry zero times and keep hammering a dead backend.
+            const gRecentOutcomes: boolean[] = [];
+            let gAborted = false;
+            let gAbortReason = "";
+            let gTotalAttempts = 0;
+            const gMaxTotalAttempts = fg.files.length * 2;
             const gTasks = fg.files.map((filePath, idx) => async () => {
-              return processFileCheck(filePath, gTask, {
-                maxTokens: resolveDefaultMaxTokens(),
-                batchId: gBatchId, fileIndex: idx,
-                redact: bcRedact, regexRedact: bcRegexRedact, onProgress, ensemble: bcUseEnsemble, maxBytes: bcBudgetBytes, modelOverride, outputDir,
-              });
+              if (gAborted) {
+                return { filePath, success: false, error: "Batch aborted" } as FileProcessResult;
+              }
+              for (let attempt = 1; attempt <= 3; attempt++) {
+                if (++gTotalAttempts > gMaxTotalAttempts) {
+                  gAborted = true;
+                  gAbortReason = `Global retry budget exhausted (${gMaxTotalAttempts} total attempts)`;
+                }
+                if (gAborted) {
+                  return { filePath, success: false, error: "Batch aborted" } as FileProcessResult;
+                }
+                try {
+                  const result = await processFileCheck(filePath, gTask, {
+                    maxTokens: resolveDefaultMaxTokens(),
+                    batchId: gBatchId, fileIndex: idx,
+                    redact: bcRedact, regexRedact: bcRegexRedact, onProgress, ensemble: bcUseEnsemble, maxBytes: bcBudgetBytes, modelOverride, outputDir,
+                  });
+                  gRecentOutcomes.push(result.success);
+                  return result;
+                } catch (err) {
+                  const classified = classifyError(err);
+                  if (classified.unrecoverable) {
+                    if (classified.serviceLevel) {
+                      gAborted = true;
+                      gAbortReason = `Unrecoverable service error on ${filePath}: ${classified.reason}`;
+                    }
+                    return { filePath, success: false, error: classified.reason } as FileProcessResult;
+                  }
+                  if (attempt < 3) {
+                    const delayMs = Math.pow(3, attempt - 1) * 1000;
+                    await new Promise((r) => setTimeout(r, delayMs));
+                    continue;
+                  }
+                  gRecentOutcomes.push(false);
+                  if (
+                    gRecentOutcomes.length >= 3 &&
+                    gRecentOutcomes.slice(-3).every((v) => !v)
+                  ) {
+                    gAborted = true;
+                    gAbortReason = `3 of the last 3 completions failed — possible connectivity or service issue. Last error: ${classified.reason}`;
+                  }
+                  return { filePath, success: false, error: `Failed after 3 retries: ${classified.reason}` } as FileProcessResult;
+                }
+              }
+              return { filePath, success: false, error: "Unexpected retry loop exit" } as FileProcessResult;
             });
             const gAll = await rateLimitedParallel(gTasks, gRl.rps, gRl.maxInFlight, onProgress);
             const gSucceeded = gAll.filter((r) => r.success);
@@ -6105,6 +6175,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             const gFailed: FileProcessResult[] = gAll.filter((r) => !r.success);
             if (gFailed.length > 0) {
               reportSections.push(`## FAILED (${gFailed.length})\n\n${gFailed.map((r) => `- ${r.filePath}: ${r.error}`).join("\n")}`);
+            }
+            if (gAborted) {
+              reportSections.push(`## BATCH ABORTED\n\n${gAbortReason}`);
             }
             if (reportSections.length > 0) {
               const mergedContent = reportSections.join("\n\n---\n\n");
@@ -6355,7 +6428,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return { content: [{ type: "text", text: `FAILED: ${(err as Error).message}` }], isError: true };
         }
 
-        if (!existsSync(folder_path)) {
+        // C1+H2: Sanitize folder_path (traversal + symlink protection)
+        let sfFolderPath: string;
+        try {
+          sfFolderPath = sanitizeInputPath(folder_path);
+        } catch (err) {
+          return { content: [{ type: "text", text: `FAILED: ${(err as Error).message}` }], isError: true };
+        }
+
+        if (!existsSync(sfFolderPath)) {
           return {
             content: [
               {
@@ -6367,7 +6448,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
         // Validate it's a directory, not a file
-        if (!statSync(folder_path).isDirectory()) {
+        if (!statSync(sfFolderPath).isDirectory()) {
           return {
             content: [
               { type: "text", text: `FAILED: Not a directory: ${folder_path}` },
@@ -6393,7 +6474,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // walkDir auto-skips binary extensions, hidden dirs, node_modules, .git, etc.
         // When use_gitignore is true, uses git ls-files to respect .gitignore rules.
-        const files = walkDir(folder_path, {
+        const files = walkDir(sfFolderPath, {
           extensions,
           maxFiles: max_files ?? 2500,
           exclude: exclude_dirs,
@@ -6677,22 +6758,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         // Normalize folder_path to an array and validate each entry
-        const folderPaths: string[] = Array.isArray(seiFolderPathRaw)
+        const folderPathsRaw: string[] = Array.isArray(seiFolderPathRaw)
           ? seiFolderPathRaw.filter((p) => typeof p === "string" && p.trim())
           : (typeof seiFolderPathRaw === "string" && seiFolderPathRaw.trim() ? [seiFolderPathRaw] : []);
-        if (folderPaths.length === 0) {
+        if (folderPathsRaw.length === 0) {
           return {
             content: [{ type: "text", text: "FAILED: folder_path is required (string or array of strings)." }],
             isError: true,
           };
         }
-        for (const fp of folderPaths) {
+        // C1+H2: Sanitize each folder_path entry (traversal + symlink protection)
+        const folderPaths: string[] = [];
+        for (const fpRaw of folderPathsRaw) {
+          let fp: string;
+          try {
+            fp = sanitizeInputPath(fpRaw);
+          } catch (err) {
+            return { content: [{ type: "text", text: `FAILED: ${(err as Error).message}` }], isError: true };
+          }
           if (!existsSync(fp)) {
-            return { content: [{ type: "text", text: `FAILED: Folder not found: ${fp}` }], isError: true };
+            return { content: [{ type: "text", text: `FAILED: Folder not found: ${fpRaw}` }], isError: true };
           }
           if (!statSync(fp).isDirectory()) {
-            return { content: [{ type: "text", text: `FAILED: Not a directory: ${fp}` }], isError: true };
+            return { content: [{ type: "text", text: `FAILED: Not a directory: ${fpRaw}` }], isError: true };
           }
+          folderPaths.push(fp);
         }
 
         // Normalize source_files (optional). Collect both the user-supplied
@@ -7340,9 +7430,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const cfUseEnsemble = currentBackend.type === "openrouter";
 
         // ── Helper: compare a single pair and return report content ──
-        const comparePair = async (fA: string, fB: string, prompt: string): Promise<{ content: string; model: string } | { error: string }> => {
-          if (!existsSync(fA)) return { error: `File not found: ${fA}` };
-          if (!existsSync(fB)) return { error: `File not found: ${fB}` };
+        const comparePair = async (fARaw: string, fBRaw: string, prompt: string): Promise<{ content: string; model: string } | { error: string }> => {
+          // C1+H2: Sanitize input paths (traversal + symlink protection) before spawning diff
+          let fA: string, fB: string;
+          try {
+            fA = sanitizeInputPath(fARaw);
+            fB = sanitizeInputPath(fBRaw);
+          } catch (err) {
+            return { error: (err as Error).message };
+          }
+          if (!existsSync(fA)) return { error: `File not found: ${fARaw}` };
+          if (!existsSync(fB)) return { error: `File not found: ${fBRaw}` };
           if (cfScan && !cfRedact) {
             const scanResult = scanFilesForSecrets([fA, fB]);
             if (scanResult.found) return { error: scanResult.report };
@@ -7385,14 +7483,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // ── GIT DIFF MODE ──
         if (cfGitRepo) {
           if (!cfFromRef) return { content: [{ type: "text", text: "FAILED: from_ref is required with git_repo." }], isError: true };
-          if (!existsSync(cfGitRepo)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
+          // C1+H2: Sanitize git_repo path (traversal + symlink protection) before spawning git
+          let cfGitRepoSafe: string;
+          try {
+            cfGitRepoSafe = sanitizeInputPath(cfGitRepo);
+          } catch (err) {
+            return { content: [{ type: "text", text: `FAILED: ${(err as Error).message}` }], isError: true };
+          }
+          if (!existsSync(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
           const toRef = cfToRef || "HEAD";
           // Get list of changed files between the two refs
           // Validate refs don't start with - (prevents flag injection)
           if (cfFromRef.startsWith("-") || toRef.startsWith("-")) {
             return { content: [{ type: "text", text: "FAILED: git refs must not start with '-'" }], isError: true };
           }
-          const nameResult = spawnSync("git", ["diff", "--name-only", cfFromRef, toRef], { cwd: cfGitRepo, encoding: "utf-8", timeout: 15000 });
+          const nameResult = spawnSync("git", ["diff", "--name-only", cfFromRef, toRef], { cwd: cfGitRepoSafe, encoding: "utf-8", timeout: 15000 });
           if (nameResult.status !== 0 && nameResult.status !== 1) {
             return { content: [{ type: "text", text: `FAILED: git diff --name-only failed: ${nameResult.stderr?.trim()}` }], isError: true };
           }
@@ -7441,15 +7546,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             if (dg.files.length === 0) continue;
             const sections: string[] = [];
             for (const filePath of dg.files) {
-              const diff = gitDiffPair(cfGitRepo, cfFromRef, toRef, filePath);
+              const diff = gitDiffPair(cfGitRepoSafe, cfFromRef, toRef, filePath);
               const fence = fenceBackticks(diff);
               sections.push(`## ${filePath}\n\n${fence}diff\n${diff}\n${fence}`);
             }
-            const reportContent = `# Git Diff: ${cfFromRef} → ${toRef}\n\nRepository: ${cfGitRepo}\nFiles changed: ${dg.files.length}\n\n---\n\n${sections.join("\n\n---\n\n")}`;
+            const reportContent = `# Git Diff: ${cfFromRef} → ${toRef}\n\nRepository: ${cfGitRepoSafe}\nFiles changed: ${dg.files.length}\n\n---\n\n${sections.join("\n\n---\n\n")}`;
             const gid = dg.id || undefined;
             const rp = saveResponse("compare_files", reportContent, {
               model: "git-diff (no LLM)", task: `${cfFromRef} → ${toRef}`,
-              inputFile: join(cfGitRepo, dg.files[0]), groupId: gid,
+              inputFile: join(cfGitRepoSafe, dg.files[0]), groupId: gid,
             });
             if (isGrouped) reportPaths.push(`[group:${dg.id}] ${rp}`);
             else reportPaths.push(rp);
@@ -7529,7 +7634,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             isError: true,
           };
         }
-        const [fileA, fileB] = cfNormalizedPaths;
+        // C1+H2: Sanitize input paths (traversal + symlink protection) before spawning diff
+        let fileA: string, fileB: string;
+        try {
+          fileA = sanitizeInputPath(cfNormalizedPaths[0]);
+          fileB = sanitizeInputPath(cfNormalizedPaths[1]);
+        } catch (err) {
+          return {
+            content: [{ type: "text", text: `FAILED: ${(err as Error).message}` }],
+            isError: true,
+          };
+        }
         if (!existsSync(fileA)) {
           return {
             content: [

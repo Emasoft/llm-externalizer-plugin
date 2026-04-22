@@ -91,6 +91,14 @@ export async function createTestClient(
     stderr: "pipe",
   });
 
+  // Drain the server's stderr into the parent's stderr. If we leave the
+  // piped stderr unconsumed, the PassThrough buffer fills, backpressure
+  // propagates to the child's stderr, the OS pipe buffer (~64 KB) fills,
+  // and the server blocks on its next `process.stderr.write(...)` — which
+  // hangs the entire test. Attach the consumer BEFORE connect() so no
+  // early startup output is lost.
+  transport.stderr?.pipe(process.stderr);
+
   const client = new Client(
     { name: clientName, version: "1.0.0" },
     { capabilities: {} },

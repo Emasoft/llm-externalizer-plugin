@@ -114,7 +114,13 @@ def walk_ancestry(expected: Path) -> tuple[bool, list[str]]:
         display = argv if len(argv) < 120 else argv[:117] + "..."
         chain.append(f"  pid={pid} ppid={ppid}: {display}")
         ancestor_cwd: Path | None = None
-        for m in re.finditer(r'\S*publish\.py', argv):
+        # Require publish.py to be followed by whitespace or end-of-string so
+        # substrings like "publish.py.bak", "publish.pyc", or "publish.py.orig"
+        # do NOT match — otherwise an attacker could run a side-script whose
+        # path contains "publish.py" as a substring and bypass the policy
+        # (resolve(strict=True) on the extracted "publish.py" prefix would
+        # succeed against the canonical publish.py that still exists alongside).
+        for m in re.finditer(r'\S*publish\.py(?=\s|$)', argv):
             # Reject matches that follow a long-option flag (e.g. --script
             # /path/publish.py). Argv looks like "prog --flag /path/publish.py";
             # the token immediately before the match start (after stripping

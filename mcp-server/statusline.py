@@ -8,6 +8,7 @@ No external dependencies — uses only Python stdlib.
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -120,18 +121,36 @@ def ensure_cache_dir() -> Path:
     """Create and return the cache directory for statusline data."""
     if sys.platform == "win32":
         cache_dir = Path(tempfile.gettempdir()) / "claude"
-    else:
-        cache_dir = Path("/tmp/claude")
+        cache_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        return cache_dir
+
+    cache_dir = Path("/tmp/claude")
+    # Refuse symlinks: lstat (no follow) before touching the path. A world-writable
+    # /tmp means any local user can plant /tmp/claude as a symlink to a victim-owned
+    # file/dir and trick us into chmod'ing it. See CWE-59.
+    try:
+        lst = os.lstat(cache_dir)
+    except FileNotFoundError:
+        lst = None
+    if lst is not None and stat.S_ISLNK(lst.st_mode):
+        raise RuntimeError(
+            f"Cache directory path {cache_dir} is a symlink; refusing to follow."
+        )
     cache_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if sys.platform != "win32":
-        st = cache_dir.stat()
+    # Open with O_NOFOLLOW so a symlink swapped in after mkdir still cannot divert
+    # the fchmod() to a target the attacker chose.
+    fd = os.open(cache_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        st = os.fstat(fd)
         if st.st_uid != os.getuid():
             raise RuntimeError(
                 f"Cache directory {cache_dir} is owned by uid {st.st_uid}, "
                 f"not the current user (uid {os.getuid()}). "
                 "Refusing to use an untrusted directory."
             )
-        cache_dir.chmod(0o700)
+        os.fchmod(fd, 0o700)
+    finally:
+        os.close(fd)
     return cache_dir
 
 

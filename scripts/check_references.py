@@ -200,7 +200,7 @@ def _extract_references(text: str, source_file: Path, root: Path) -> list[tuple[
 
     for m in _PLUGIN_ROOT_RE.finditer(text):
         raw = m.group(0)
-        target_rel = _strip_trailing_punct(m.group("path"))
+        target_rel = _strip_url_fragment(_strip_trailing_punct(m.group("path")))
         if raw in seen:
             continue
         seen.add(raw)
@@ -215,6 +215,8 @@ def _extract_references(text: str, source_file: Path, root: Path) -> list[tuple[
 
     for m in _MD_LINK_RE.finditer(text):
         target = _strip_url_fragment(_strip_trailing_punct(m.group("target")))
+        if target.startswith("/"):
+            continue
         if not target.lower().endswith(_KNOWN_LINK_SUFFIXES):
             continue
         if target in seen:
@@ -286,13 +288,15 @@ def main() -> int:
                 if args.verbose:
                     print(f"{rel_source}: '{raw}' DYNAMIC (unresolvable — reported as warning)")
                 continue
+            if (rel_file is not None and _is_excluded(rel_file, root)) or (
+                rel_root is not None and _is_excluded(rel_root, root)
+            ):
+                continue
             resolved: Path | None = None
             if rel_file is not None and _exists_within(rel_file, root):
                 resolved = rel_file
             elif rel_root is not None and _exists_within(rel_root, root):
                 resolved = rel_root
-            if resolved is not None and _is_excluded(resolved, root):
-                continue
             if args.verbose:
                 verdict = f"OK -> {resolved.resolve().relative_to(root)}" if resolved else "BROKEN"
                 print(f"{rel_source}: '{raw}' {verdict}")
