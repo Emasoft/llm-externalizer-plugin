@@ -28,6 +28,77 @@ function usdCost(model: QualifiedModel, run: RunResult): number {
   return inUsd + outUsd;
 }
 
+/**
+ * Machine-readable JSON sidecar to the markdown report. Consumed by
+ * `llm-externalizer-change-model` (and any other programmatic caller)
+ * to build the model-selection menus and compute ensemble costs without
+ * having to parse the markdown.
+ *
+ * The shape is deliberately flat — one object per model, every field
+ * needed for the menu + cost math is at the top level. No nested score
+ * objects, no transport state, no raw response body.
+ */
+export function renderJson(input: ReportInput): string {
+  const results = [...input.results.values()].map((entry) => {
+    const base = {
+      modelId: entry.model.id,
+      name: entry.model.name,
+      isBaseline: entry.isBaseline,
+      contextTokens: entry.model.contextTokens,
+      maxOutputTokens: entry.model.maxOutputTokens,
+      inputDollarsPerMillion: entry.model.inputDollarsPerMillion,
+      outputDollarsPerMillion: entry.model.outputDollarsPerMillion,
+      supportsStructured: entry.model.supportsStructured,
+      supportsReasoning: entry.model.supportsReasoning,
+    };
+    if (!entry.outcome.ok) {
+      return {
+        ...base,
+        ok: false,
+        error: entry.outcome.error,
+        httpStatus: entry.outcome.httpStatus ?? null,
+        latencyMs: entry.outcome.latencyMs,
+      };
+    }
+    const run = entry.outcome;
+    const score = entry.score!;
+    return {
+      ...base,
+      ok: true,
+      pass: score.pass,
+      meanF1: score.meanF1,
+      kw1F1: score.perKeyword[0].f1,
+      kw2F1: score.perKeyword[1].f1,
+      kw3F1: score.perKeyword[2].f1,
+      schemaCompliant: run.schemaCompliant,
+      inputTokens: run.inputTokens,
+      outputTokens: run.outputTokens,
+      reasoningTokens: run.reasoningTokens,
+      latencyMs: run.latencyMs,
+      actualCost: usdCost(entry.model, run),
+      providerFinishReason: run.providerFinishReason,
+      hallucinatedNames: score.hallucinated,
+    };
+  });
+  const payload = {
+    timestamp: input.timestamp,
+    keywords: input.truth.keywords,
+    groundTruth: {
+      kw1FunctionCount: input.truth.keywordFunctions[0].length,
+      kw2FunctionCount: input.truth.keywordFunctions[1].length,
+      kw3FunctionCount: input.truth.keywordFunctions[2].length,
+      noiseFunctionCount: input.truth.noiseFunctions.length,
+      totalFunctionCount: input.truth.allFunctions.length,
+    },
+    roster: {
+      candidates: input.rosterCandidates.map((m) => m.id),
+      baselines: input.rosterBaselines.map((m) => m.id),
+    },
+    results,
+  };
+  return JSON.stringify(payload, null, 2);
+}
+
 export function renderReport(input: ReportInput): string {
   const lines: string[] = [];
   lines.push(`# OpenRouter model benchmark — ${input.timestamp}`);

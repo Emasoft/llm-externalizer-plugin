@@ -16,6 +16,7 @@
  */
 
 import { mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
@@ -29,12 +30,13 @@ import {
 } from "./discover.js";
 import { runBenchmarkOnModel, type RunOutcome } from "./runner.js";
 import { scoreRun, type ModelScore } from "./score.js";
-import { renderReport } from "./report.js";
+import { renderReport, renderJson } from "./report.js";
 
 interface CliOptions {
   includeIds: string[];
   dryRun: boolean;
   reportPath: string | null;
+  jsonPath: string | null;
   reasoningEffort: "low" | "medium" | "high" | undefined;
   seed: number | undefined;
 }
@@ -44,6 +46,7 @@ function parseArgs(argv: readonly string[]): CliOptions {
     includeIds: [],
     dryRun: false,
     reportPath: null,
+    jsonPath: null,
     reasoningEffort: undefined,
     seed: undefined,
   };
@@ -52,6 +55,7 @@ function parseArgs(argv: readonly string[]): CliOptions {
     if (a === "--include") opts.includeIds.push(argv[++i]);
     else if (a === "--dry-run" || a === "-n") opts.dryRun = true;
     else if (a === "--report") opts.reportPath = argv[++i];
+    else if (a === "--json") opts.jsonPath = argv[++i];
     else if (a === "--reasoning") {
       const eff = argv[++i];
       if (eff !== "low" && eff !== "medium" && eff !== "high") {
@@ -83,6 +87,8 @@ function printHelp(): void {
       "                    Use this to benchmark the current production ensemble.",
       "  --dry-run | -n    Print the resolved roster and exit; no API calls made.",
       "  --report PATH     Write the markdown report to PATH (default: auto-timestamped).",
+      "  --json PATH       Write the machine-readable JSON sidecar to PATH.",
+      "                    Always also written to ~/.llm-externalizer/benchmark-results.json.",
       "  --reasoning EFF   Pass reasoning.effort to each model. Default: model default.",
       "  --seed N          Fixed seed (models that support it will respect it).",
       "",
@@ -221,16 +227,34 @@ async function main(): Promise<number> {
 
   const reportPath = opts.reportPath ?? buildReportPath();
   const timestamp = new Date().toISOString();
-  const markdown = renderReport({
+  const reportInput = {
     timestamp,
     truth,
     rosterCandidates: candidates,
     rosterBaselines: baselines,
     results,
-  });
+  };
+
+  const markdown = renderReport(reportInput);
   mkdirSync(dirname(reportPath), { recursive: true });
   writeFileSync(reportPath, markdown, "utf-8");
   console.error(`[benchmark] Report: ${reportPath}`);
+
+  // JSON sidecar. Always write to the well-known cache path
+  // (~/.llm-externalizer/benchmark-results.json) so downstream commands
+  // like /llm-externalizer:llm-externalizer-change-model can pick it up
+  // without needing to be told where. --json PATH adds a second copy at
+  // the user-chosen location.
+  const json = renderJson(reportInput);
+  const cacheJsonPath = join(homedir(), ".llm-externalizer", "benchmark-results.json");
+  mkdirSync(dirname(cacheJsonPath), { recursive: true });
+  writeFileSync(cacheJsonPath, json, "utf-8");
+  console.error(`[benchmark] JSON cache: ${cacheJsonPath}`);
+  if (opts.jsonPath) {
+    mkdirSync(dirname(opts.jsonPath), { recursive: true });
+    writeFileSync(opts.jsonPath, json, "utf-8");
+    console.error(`[benchmark] JSON (user-path): ${opts.jsonPath}`);
+  }
 
   // Summary for easy grep-ing
   const passers = [...results.values()].filter((r) => r.score?.pass).length;
