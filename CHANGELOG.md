@@ -1,6 +1,29 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.2.0] - 2026-04-22
+
+### Added
+
+- Feat(commands): add /llm-externalizer:llm-externalizer-benchmark
+
+Slash-command wrapper over the bin/llm-ext-benchmark CLI introduced in
+v9.1.0. Matches the naming convention of the other llm-externalizer
+commands (prefixed with the plugin name).
+
+- Single Bash step: forwards $ARGUMENTS verbatim to the bundled CLI.
+- Pre-flight: verifies OPENROUTER_API_KEY (skipped when --dry-run).
+- Does NOT read the generated report — only surfaces the path.
+- Non-agentic: no sub-agents, no MCP calls, no retry loops.
+
+Typical use:
+  /llm-externalizer:llm-externalizer-benchmark --dry-run
+  /llm-externalizer:llm-externalizer-benchmark
+  /llm-externalizer:llm-externalizer-benchmark \
+    --include google/gemini-3-flash-preview \
+    --include x-ai/grok-4.1-fast
+
+
 ## [9.1.0] - 2026-04-22
 
 ### Added
