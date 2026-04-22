@@ -29722,7 +29722,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
       }
     }
   }
-  if (!isInGitRepo && allFiles.size === 0) return null;
+  if (!isInGitRepo) return null;
   return [...allFiles];
 }
 function walkDir(dirPath, options) {
@@ -29851,8 +29851,15 @@ function extractLocalImports(filePath, sourceCode) {
           }
         }
         if (!found) {
-          for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-            const indexPath = join2(resolved, `index${ext}`);
+          const indexCandidates = [
+            "index.ts",
+            "index.tsx",
+            "index.js",
+            "index.jsx",
+            "__init__.py"
+          ];
+          for (const leaf of indexCandidates) {
+            const indexPath = join2(resolved, leaf);
             if (existsSync2(indexPath)) {
               resolved = indexPath;
               found = true;
@@ -30857,7 +30864,8 @@ async function chatCompletionJSON(messages, options = {}) {
     }
     let parsed;
     try {
-      parsed = JSON.parse(rawContent);
+      const cleaned = rawContent.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+      parsed = JSON.parse(cleaned);
     } catch (e) {
       throw new Error(
         `LLM returned malformed JSON: ${e instanceof Error ? e.message : String(e)}. Raw (first 200 chars): ${rawContent.slice(0, 200)}`,
@@ -33172,19 +33180,61 @@ Profiles: ${profileNames.join(", ")}`);
               const gBatchId = randomUUID();
               const gTask = resolvePrompt(bcInstructions, bcInstructionsFilesPaths).trim() || "Find all bugs, type errors, logic errors, security vulnerabilities, and potential runtime failures.";
               const gRl = await getRateLimitConfig();
+              const gRecentOutcomes = [];
+              let gAborted = false;
+              let gAbortReason = "";
+              let gTotalAttempts = 0;
+              const gMaxTotalAttempts = fg.files.length * 2;
               const gTasks = fg.files.map((filePath, idx) => async () => {
-                return processFileCheck(filePath, gTask, {
-                  maxTokens: resolveDefaultMaxTokens(),
-                  batchId: gBatchId,
-                  fileIndex: idx,
-                  redact: bcRedact,
-                  regexRedact: bcRegexRedact,
-                  onProgress,
-                  ensemble: bcUseEnsemble,
-                  maxBytes: bcBudgetBytes,
-                  modelOverride,
-                  outputDir
-                });
+                if (gAborted) {
+                  return { filePath, success: false, error: "Batch aborted" };
+                }
+                for (let attempt = 1; attempt <= 3; attempt++) {
+                  if (++gTotalAttempts > gMaxTotalAttempts) {
+                    gAborted = true;
+                    gAbortReason = `Global retry budget exhausted (${gMaxTotalAttempts} total attempts)`;
+                  }
+                  if (gAborted) {
+                    return { filePath, success: false, error: "Batch aborted" };
+                  }
+                  try {
+                    const result = await processFileCheck(filePath, gTask, {
+                      maxTokens: resolveDefaultMaxTokens(),
+                      batchId: gBatchId,
+                      fileIndex: idx,
+                      redact: bcRedact,
+                      regexRedact: bcRegexRedact,
+                      onProgress,
+                      ensemble: bcUseEnsemble,
+                      maxBytes: bcBudgetBytes,
+                      modelOverride,
+                      outputDir
+                    });
+                    gRecentOutcomes.push(result.success);
+                    return result;
+                  } catch (err) {
+                    const classified = classifyError(err);
+                    if (classified.unrecoverable) {
+                      if (classified.serviceLevel) {
+                        gAborted = true;
+                        gAbortReason = `Unrecoverable service error on ${filePath}: ${classified.reason}`;
+                      }
+                      return { filePath, success: false, error: classified.reason };
+                    }
+                    if (attempt < 3) {
+                      const delayMs = Math.pow(3, attempt - 1) * 1e3;
+                      await new Promise((r) => setTimeout(r, delayMs));
+                      continue;
+                    }
+                    gRecentOutcomes.push(false);
+                    if (gRecentOutcomes.length >= 3 && gRecentOutcomes.slice(-3).every((v) => !v)) {
+                      gAborted = true;
+                      gAbortReason = `3 of the last 3 completions failed \u2014 possible connectivity or service issue. Last error: ${classified.reason}`;
+                    }
+                    return { filePath, success: false, error: `Failed after 3 retries: ${classified.reason}` };
+                  }
+                }
+                return { filePath, success: false, error: "Unexpected retry loop exit" };
               });
               const gAll = await rateLimitedParallel(gTasks, gRl.rps, gRl.maxInFlight, onProgress);
               const gSucceeded = gAll.filter((r) => r.success);
@@ -33200,6 +33250,11 @@ ${content}`);
                 reportSections.push(`## FAILED (${gFailed.length})
 
 ${gFailed.map((r) => `- ${r.filePath}: ${r.error}`).join("\n")}`);
+              }
+              if (gAborted) {
+                reportSections.push(`## BATCH ABORTED
+
+${gAbortReason}`);
               }
               if (reportSections.length > 0) {
                 const mergedContent = reportSections.join("\n\n---\n\n");
@@ -33398,7 +33453,13 @@ ${content}`);
           } catch (err) {
             return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
           }
-          if (!existsSync2(folder_path)) {
+          let sfFolderPath;
+          try {
+            sfFolderPath = sanitizeInputPath(folder_path);
+          } catch (err) {
+            return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+          }
+          if (!existsSync2(sfFolderPath)) {
             return {
               content: [
                 {
@@ -33409,7 +33470,7 @@ ${content}`);
               isError: true
             };
           }
-          if (!statSync2(folder_path).isDirectory()) {
+          if (!statSync2(sfFolderPath).isDirectory()) {
             return {
               content: [
                 { type: "text", text: `FAILED: Not a directory: ${folder_path}` }
@@ -33432,7 +33493,7 @@ ${content}`);
               isError: true
             };
           }
-          const files = walkDir(folder_path, {
+          const files = walkDir(sfFolderPath, {
             extensions,
             maxFiles: max_files ?? 2500,
             exclude: exclude_dirs,
@@ -33670,20 +33731,28 @@ ${content}`);
               isError: true
             };
           }
-          const folderPaths = Array.isArray(seiFolderPathRaw) ? seiFolderPathRaw.filter((p) => typeof p === "string" && p.trim()) : typeof seiFolderPathRaw === "string" && seiFolderPathRaw.trim() ? [seiFolderPathRaw] : [];
-          if (folderPaths.length === 0) {
+          const folderPathsRaw = Array.isArray(seiFolderPathRaw) ? seiFolderPathRaw.filter((p) => typeof p === "string" && p.trim()) : typeof seiFolderPathRaw === "string" && seiFolderPathRaw.trim() ? [seiFolderPathRaw] : [];
+          if (folderPathsRaw.length === 0) {
             return {
               content: [{ type: "text", text: "FAILED: folder_path is required (string or array of strings)." }],
               isError: true
             };
           }
-          for (const fp of folderPaths) {
+          const folderPaths = [];
+          for (const fpRaw of folderPathsRaw) {
+            let fp;
+            try {
+              fp = sanitizeInputPath(fpRaw);
+            } catch (err) {
+              return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+            }
             if (!existsSync2(fp)) {
-              return { content: [{ type: "text", text: `FAILED: Folder not found: ${fp}` }], isError: true };
+              return { content: [{ type: "text", text: `FAILED: Folder not found: ${fpRaw}` }], isError: true };
             }
             if (!statSync2(fp).isDirectory()) {
-              return { content: [{ type: "text", text: `FAILED: Not a directory: ${fp}` }], isError: true };
+              return { content: [{ type: "text", text: `FAILED: Not a directory: ${fpRaw}` }], isError: true };
             }
+            folderPaths.push(fp);
           }
           const sourceFiles = [];
           const sourceFilesCanonical = /* @__PURE__ */ new Set();
@@ -34168,9 +34237,16 @@ ${body}
           } = args;
           const cfBudgetBytes = (cfMaxPayloadKb ?? 400) * 1024;
           const cfUseEnsemble = currentBackend.type === "openrouter";
-          const comparePair = async (fA, fB, prompt) => {
-            if (!existsSync2(fA)) return { error: `File not found: ${fA}` };
-            if (!existsSync2(fB)) return { error: `File not found: ${fB}` };
+          const comparePair = async (fARaw, fBRaw, prompt) => {
+            let fA, fB;
+            try {
+              fA = sanitizeInputPath(fARaw);
+              fB = sanitizeInputPath(fBRaw);
+            } catch (err) {
+              return { error: err.message };
+            }
+            if (!existsSync2(fA)) return { error: `File not found: ${fARaw}` };
+            if (!existsSync2(fB)) return { error: `File not found: ${fBRaw}` };
             if (cfScan && !cfRedact) {
               const scanResult = scanFilesForSecrets([fA, fB]);
               if (scanResult.found) return { error: scanResult.report };
@@ -34226,12 +34302,18 @@ ${fence}${sourceBlocks}` }
           const cfPrompt = resolvePrompt(cfInstructions, cfInstructionsFilesPaths);
           if (cfGitRepo) {
             if (!cfFromRef) return { content: [{ type: "text", text: "FAILED: from_ref is required with git_repo." }], isError: true };
-            if (!existsSync2(cfGitRepo)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
+            let cfGitRepoSafe;
+            try {
+              cfGitRepoSafe = sanitizeInputPath(cfGitRepo);
+            } catch (err) {
+              return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+            }
+            if (!existsSync2(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
             const toRef = cfToRef || "HEAD";
             if (cfFromRef.startsWith("-") || toRef.startsWith("-")) {
               return { content: [{ type: "text", text: "FAILED: git refs must not start with '-'" }], isError: true };
             }
-            const nameResult = spawnSync("git", ["diff", "--name-only", cfFromRef, toRef], { cwd: cfGitRepo, encoding: "utf-8", timeout: 15e3 });
+            const nameResult = spawnSync("git", ["diff", "--name-only", cfFromRef, toRef], { cwd: cfGitRepoSafe, encoding: "utf-8", timeout: 15e3 });
             if (nameResult.status !== 0 && nameResult.status !== 1) {
               return { content: [{ type: "text", text: `FAILED: git diff --name-only failed: ${nameResult.stderr?.trim()}` }], isError: true };
             }
@@ -34274,7 +34356,7 @@ ${fence}${sourceBlocks}` }
               if (dg.files.length === 0) continue;
               const sections = [];
               for (const filePath of dg.files) {
-                const diff = gitDiffPair(cfGitRepo, cfFromRef, toRef, filePath);
+                const diff = gitDiffPair(cfGitRepoSafe, cfFromRef, toRef, filePath);
                 const fence = fenceBackticks(diff);
                 sections.push(`## ${filePath}
 
@@ -34284,7 +34366,7 @@ ${fence}`);
               }
               const reportContent = `# Git Diff: ${cfFromRef} \u2192 ${toRef}
 
-Repository: ${cfGitRepo}
+Repository: ${cfGitRepoSafe}
 Files changed: ${dg.files.length}
 
 ---
@@ -34294,7 +34376,7 @@ ${sections.join("\n\n---\n\n")}`;
               const rp = saveResponse("compare_files", reportContent, {
                 model: "git-diff (no LLM)",
                 task: `${cfFromRef} \u2192 ${toRef}`,
-                inputFile: join2(cfGitRepo, dg.files[0]),
+                inputFile: join2(cfGitRepoSafe, dg.files[0]),
                 groupId: gid
               });
               if (isGrouped) reportPaths.push(`[group:${dg.id}] ${rp}`);
@@ -34373,7 +34455,16 @@ ${result.content}`);
               isError: true
             };
           }
-          const [fileA, fileB] = cfNormalizedPaths;
+          let fileA, fileB;
+          try {
+            fileA = sanitizeInputPath(cfNormalizedPaths[0]);
+            fileB = sanitizeInputPath(cfNormalizedPaths[1]);
+          } catch (err) {
+            return {
+              content: [{ type: "text", text: `FAILED: ${err.message}` }],
+              isError: true
+            };
+          }
           if (!existsSync2(fileA)) {
             return {
               content: [
