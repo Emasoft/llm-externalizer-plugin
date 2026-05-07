@@ -290,11 +290,18 @@ def run_checks(repo_root: Path) -> bool:
     # require at runtime. Without an explicit rebuild step, the test suite
     # fails with "Could not locate the bindings file" — the lifecycle
     # script that builds the platform-specific .node was skipped.
-    # `npm rebuild` reruns ONLY the build hooks for the named package, so
+    #
+    # `npm rebuild <pkg>` only reruns build hooks for the named package, so
     # the supply-chain protection on every other dependency is preserved.
+    # `--no-ignore-scripts` is mandatory: phardener installs
+    # `ignore-scripts=true` into ~/.npmrc, and a global flag silently
+    # overrides `npm rebuild`'s default behaviour. Without the explicit
+    # override, the rebuild reports "rebuilt dependencies successfully"
+    # but never actually runs better-sqlite3's `prebuild-install`
+    # invocation — the .node file is missing afterward.
     if not _run_check(
         "rebuild-native",
-        ["npm", "rebuild", "better-sqlite3"],
+        ["npm", "rebuild", "better-sqlite3", "--no-ignore-scripts"],
         mcp_dir,
         repo_root,
     ):
