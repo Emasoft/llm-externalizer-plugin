@@ -1,6 +1,142 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.4.1] - 2026-05-07
+
+### Fixed
+
+- Fix(skill-references): drop redundant ## Contents blocks per CPV TOC rule
+
+CPV strict mode demands that SKILL.md embed the COMPLETE TOC of every
+referenced file verbatim immediately after the link. With four reference
+files and 13 combined entries, embedding the full TOCs would push SKILL.md
+past the 5,000-char Nixtla cap. The rule itself offers an out:
+"Either the content is worth discovering (embed the full TOC) or it is
+not (remove it from the reference file's TOC)."
+
+Each reference file is small enough that a TOC adds noise rather than
+discovery value (one is a flowchart, one is a single shell session, one
+is a fieldset format, one is a flat term list). Stripping the ## Contents
+blocks satisfies the rule without bloating SKILL.md and without removing
+any content from the references themselves.
+
+- Fix(skill): add concrete I/O examples to SKILL.md and TOC sections to references
+
+CPV strict-mode flagged:
+- MINOR: skill body had trigger phrases as 'examples' but no concrete
+  input/output. Added a code block showing a typical estimate + scout
+  call shape with their key output lines so a calling agent can pattern-
+  match before invoking. Skill body trimmed to 4,999 chars to stay
+  under the 5,000-char Nixtla cap (other sections condensed: Prerequisites,
+  Instructions, Error Handling, Resources).
+- NIT (×4): every reference file linked from SKILL.md should expose a
+  Table of Contents so progressive-disclosure consumers can jump to the
+  right section without reading the whole file. Added a `## Contents`
+  block to troubleshooting.md, worked-example.md, fieldsets.md, and
+  glossary.md.
+
+Verified: skill body 4,999 chars; CHANGELOG.md no longer leaks any
+private home-directory paths. Mass-scouting tests still pass.
+
+- Fix(changelog): scrub leaked /Users/<name>/ path before next publish
+
+The v9.4.0 release commit baked an absolute path into CHANGELOG.md
+because git-cliff renders raw commit-message bodies and the original
+fix message quoted the path it was scrubbing. CPV's `private path
+leaked` check trips on every subsequent publish run.
+
+cliff.toml's commit_preprocessors will keep this from regenerating in
+the next git-cliff run, but CPV runs BEFORE changelog regeneration in
+publish.py — so the existing CHANGELOG.md needs a one-shot manual
+scrub to clear the gate. After this commit, the regen produced by the
+next publish will preserve the redaction automatically.
+
+The descriptive intent ("we replaced an absolute path with a relative
+one in TRDD") is preserved; only the literal home-directory prefix
+becomes `<HOME>/`.
+
+- Fix(cliff): redact /Users/<name>/ and /home/<name>/ paths from CHANGELOG
+
+git-cliff regenerates CHANGELOG.md on every publish from raw commit
+messages. Earlier commit messages legitimately quoted a private
+absolute path (`/Users/<user>/Code/.../docs_dev/...`) when explaining
+that they were scrubbing such a path, and that quotation kept resurfacing
+in the changelog and tripping CPV's "private path leaked" critical
+check on the next publish run.
+
+Adding `commit_preprocessors` to cliff.toml replaces home-directory
+prefixes with `<HOME>/` before the changelog is rendered, in any
+future commit message too. The descriptive intent of the message is
+preserved; only the leaky prefix is anonymised.
+
+Verified by running git-cliff against this branch and grepping the
+output: no `emanuelesabetta` or `/Users/<lowercase-name>` remains.
+
+- Fix(mass-scouting): consistent error messages + token-efficiency guidance
+
+Three small but user-facing improvements:
+
+1. OPENROUTER_API_KEY missing — three call sites (scout / chain /
+   propose-fieldset) now print one identical, actionable message:
+   "Export it in your shell, set the plugin's userConfig.openrouter_api_key,
+   or add it to ~/.llm-externalizer/settings.yaml." The previous text
+   leaked an internal "pass via opts.apiKey (test path)" implementation
+   detail and was inconsistent across sites.
+
+2. body_get / get not-found errors now include the --db path and a
+   concrete next step ("Run jobs-list to confirm the right --db, or run
+   register first."). Previously a bare "no row with short_id=N" gave
+   the user no debugging hook.
+
+3. SKILL.md gets a Token-efficiency section (six bullets) that codifies
+   the path-passing pattern, bundled-fieldset preference, budget-gate
+   ordering, bucket scoping, search-vs-audit-sample tradeoff, and json+
+   limit guidance. Skill body stays under the 5,000-char Nixtla cap
+   (4,990 chars).
+
+Tests: 290 mass-scouting tests still pass; the OPENROUTER regex test
+predates this commit and matches the new wording verbatim.
+
+- Fix(docs): align README, slash commands, and MCP descriptions with v9.4.0 surface
+
+The mass-scouting work in v9.4.0 added 8 follow-on tools, a `bundled:`
+fieldset shorthand, --live-context, --git-diff, --no-gitignore, and MCP
+notifications/progress, but the user-facing docs were never updated to
+match. This commit walks every documentation surface and brings them
+current.
+
+README:
+- Features bullets: 27→31 MCP tools, accurate base count (15, was 11),
+  full mass-scout 16-tool list, accurate command count (17 = 9 base + 8
+  mass-scout). Added `change-model` and `benchmark` (omitted from the
+  Plugin commands table since 9.0.x).
+- Plugin commands: split into "Base (9)" and "Mass-scout (8)" tables with
+  the 8 MCP-only tools called out separately so users know they exist
+  even though no slash command wraps them.
+- Mass-scouting parameter notes: replaced the redundant 8-row repeat
+  with a flag highlights bullet list (--db, --fields-file bundled:NAME,
+  --budget-usd, --live-context, --no-smoke-test, --no-resume, --json,
+  filter syntax).
+
+Slash command docs:
+- mass-scout: documented --live-context; clarified --fields-file accepts
+  bundled:<name>.
+- mass-scout-estimate: documented --live-context; called out bundled
+  shorthand.
+- mass-scout-register: documented --git-diff <ref>, --no-gitignore, and
+  the gitignore-honouring default.
+
+MCP tool descriptions:
+- mass_scout_chain: BUG FIX. The description and `filter` parameter doc
+  listed operators as 'eq, ne, lt, lte, gt, gte, contains' but the
+  parser only accepts =, !=, >, >=, <, <=, LIKE. Aligned both with the
+  actual parseFilterToken ALLOWED set.
+- mass_scout_search_xjob: every input field had an empty description.
+  Added per-field help (query / regex / force_llm / force_regex /
+  filter / limit_per_job / limit_merged / json) so MCP clients show
+  meaningful tooltips.
+
+
 ## [9.4.0] - 2026-05-07
 
 ### Added
@@ -50,7 +186,7 @@ Three remediation passes for CPV strict-mode validation:
    "Trigger with ..." phrase to the description.
 
 2. TRDD: replaced the absolute path
-   `<HOME>/Code/llm-externalizer/docs_dev/...` with the
+   <HOME>/Code/llm-externalizer/docs_dev/... with the
    project-root-relative form. Two CRITICAL private-path leaks resolved.
 
 3. cli.test.ts security regression: the path-traversal test value

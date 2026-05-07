@@ -31640,7 +31640,7 @@ async function runScout(args, opts) {
   const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     return err(
-      "OPENROUTER_API_KEY missing. Export it or pass via opts.apiKey (test path)."
+      "OPENROUTER_API_KEY missing. Export it in your shell, set the plugin's userConfig.openrouter_api_key, or add it to ~/.llm-externalizer/settings.yaml."
     );
   }
   const fetchImpl = opts.fetchImpl ?? realFetch;
@@ -31818,7 +31818,9 @@ function runGet(args) {
   const row = reg.getByShortId(shortId);
   if (!row) {
     reg.close();
-    return err(`no row with short_id=${shortId}`);
+    return err(
+      `no row with short_id=${shortId} in ${JSON.stringify(dbPath)}. Run jobs-list to confirm the right --db, or run register first.`
+    );
   }
   let out = { ...row };
   if (flags["job-id"]) {
@@ -31887,7 +31889,7 @@ async function runProposeFieldset(args, opts) {
   const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     return err(
-      "OPENROUTER_API_KEY missing. Export it or pass via opts.apiKey (test path)."
+      "OPENROUTER_API_KEY missing. Export it in your shell, set the plugin's userConfig.openrouter_api_key, or add it to ~/.llm-externalizer/settings.yaml."
     );
   }
   const fetchImpl = opts.fetchImpl ?? realFetch;
@@ -32176,7 +32178,9 @@ async function runChain(args, opts) {
   if ("error" in pricing) return err(pricing.error);
   const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
-    return err("OPENROUTER_API_KEY missing.");
+    return err(
+      "OPENROUTER_API_KEY missing. Export it in your shell, set the plugin's userConfig.openrouter_api_key, or add it to ~/.llm-externalizer/settings.yaml."
+    );
   }
   const fetchImpl = opts.fetchImpl ?? realFetch;
   const reg = openRegistry({ path: dbPath });
@@ -32363,7 +32367,9 @@ function runBodyGet(args) {
   const body = reg.readBodyByShortId(shortId);
   reg.close();
   if (!body) {
-    return err(`no body cached for short_id=${shortId}`);
+    return err(
+      `no body cached for short_id=${shortId} in ${JSON.stringify(dbPath)}. The body cache is populated at register time \u2014 verify the short_id with mass_scout_get first.`
+    );
   }
   return ok(body.toString("utf-8"));
 }
@@ -32872,14 +32878,38 @@ var MASS_SCOUT_TOOLS = [
           items: { type: "string" },
           description: "Two or more job_ids to federate across."
         },
-        query: { type: "string" },
-        regex: { type: "string" },
-        force_llm: { type: "boolean" },
-        force_regex: { type: "boolean" },
-        filter: { type: "string" },
-        limit_per_job: { type: "number" },
-        limit_merged: { type: "number" },
-        json: { type: "boolean" }
+        query: {
+          type: "string",
+          description: "Free-text query \u2014 auto-routed to the regex bypass for patterns like 'all emails', 'urls of domain X', 'all ipv4'; otherwise interpreted as an FTS5 query over the per-job index."
+        },
+        regex: {
+          type: "string",
+          description: "Explicit regex executed over cached file bodies. Use to force the regex bypass when auto-routing wouldn't match."
+        },
+        force_llm: {
+          type: "boolean",
+          description: "Force the LLM-search path even if regex/FTS would normally handle the query. Costs the model."
+        },
+        force_regex: {
+          type: "boolean",
+          description: "Force the regex bypass \u2014 skip FTS / structured."
+        },
+        filter: {
+          type: "string",
+          description: "Comma-comma-separated structured filters using 'path:OP:value' (OP = =, !=, >, >=, <, <=, LIKE). Example: '$.is_async:=:true,,$.complexity:>=:5'."
+        },
+        limit_per_job: {
+          type: "number",
+          description: "Cap per source job before merging. Default 100."
+        },
+        limit_merged: {
+          type: "number",
+          description: "Cap on the final merged hit list. Default 200."
+        },
+        json: {
+          type: "boolean",
+          description: "Return JSON instead of human-readable text."
+        }
       },
       required: ["db_path", "job_ids"]
     }
@@ -33042,7 +33072,7 @@ var MASS_SCOUT_TOOLS = [
   },
   {
     name: "mass_scout_chain",
-    description: "Run a second scout pass on the subset of rows from a prior job that match a JSON-extract filter. Use to drill deeper into a high-value slice (e.g. files where job-A flagged severity='critical') without re-scouting the whole tree. The new job uses a fresh fieldset, so you can extract DIFFERENT fields from the matched subset. Filter syntax: '$.path:OP:value' (e.g. '$.severity:eq:critical', '$.score:gte:0.8').",
+    description: "Run a second scout pass on the subset of rows from a prior job that match a JSON-extract filter. Use to drill deeper into a high-value slice (e.g. files where job-A flagged severity='critical') without re-scouting the whole tree. The new job uses a fresh fieldset, so you can extract DIFFERENT fields from the matched subset. Filter syntax: '$.path:OP:value' where OP is one of =, !=, >, >=, <, <=, LIKE (e.g. '$.severity:=:critical', '$.score:>=:0.8', '$.summary:LIKE:auth%').",
     inputSchema: {
       type: "object",
       properties: {
@@ -33061,7 +33091,7 @@ var MASS_SCOUT_TOOLS = [
         },
         filter: {
           type: "string",
-          description: "JSON-extract filter using '$.path:OP:value' syntax. Operators: eq, ne, lt, lte, gt, gte, contains."
+          description: "JSON-extract filter using '$.path:OP:value' syntax. Operators: =, !=, >, >=, <, <=, LIKE."
         },
         model: {
           type: "string",
@@ -37362,7 +37392,7 @@ function buildTools() {
   return [...allTools, ...MASS_SCOUT_TOOLS];
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "9.4.0" },
+  { name: "llm-externalizer", version: "9.4.1" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {
