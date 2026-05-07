@@ -1454,15 +1454,20 @@ async function runChain(
   const eligible = reg2
     .listEligible({})
     .filter((r) => fingerprints.has(r.fingerprint));
-  let okCount = 0;
-  let failed = 0;
-  let costUsd = 0;
   const SENTINEL = `chain:${newJob}`;
   const originals = new Map<string, string>();
   for (const r of eligible) {
     originals.set(r.fingerprint, r.classifier_bucket);
     reg2.setClassifierBucketOnly(r.fingerprint, SENTINEL);
   }
+  // `okCount`, `failed`, `costUsd` are only read on the success path of
+  // the try block. If runScoutJob throws, the finally rethrows and the
+  // closing `return ok(...)` never runs — so initial values are dead and
+  // ESLint's `no-useless-assignment` rule trips. We therefore declare-
+  // and-assign in one statement inside the try.
+  let okCount: number;
+  let failed: number;
+  let costUsd: number;
   try {
     const res = await runScoutJob(
       reg2,

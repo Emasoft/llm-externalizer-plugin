@@ -18624,15 +18624,15 @@ async function runChain(args, opts) {
     });
   }
   const eligible = reg2.listEligible({}).filter((r) => fingerprints.has(r.fingerprint));
-  let okCount = 0;
-  let failed = 0;
-  let costUsd = 0;
   const SENTINEL = `chain:${newJob}`;
   const originals = /* @__PURE__ */ new Map();
   for (const r of eligible) {
     originals.set(r.fingerprint, r.classifier_bucket);
     reg2.setClassifierBucketOnly(r.fingerprint, SENTINEL);
   }
+  let okCount;
+  let failed;
+  let costUsd;
   try {
     const res = await runScoutJob(
       reg2,
