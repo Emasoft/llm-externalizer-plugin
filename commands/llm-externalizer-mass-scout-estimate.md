@@ -35,10 +35,14 @@ The output is small enough to return inline — no file is written.
 | `--input-price-per-m <usd>` | no | USD per 1M input tokens (overrides KNOWN_PRICING) |
 | `--output-price-per-m <usd>` | no | USD per 1M output tokens (overrides KNOWN_PRICING) |
 | `--context-window <tokens>` | no | Tokens (overrides KNOWN_PRICING) |
+| `--live-context` | no | Query OpenRouter for the active provider's real `context_length` and use it as the cap. Overrides KNOWN_PRICING.context_window. Recommended when you don't know whether your account routes to a smaller-cap endpoint. Requires `$OPENROUTER_API_KEY`. |
 
 If `--input-price-per-m` is set, all three pricing flags
 (`--input-price-per-m`, `--output-price-per-m`, `--context-window`) must
 be supplied together.
+
+`--fields-file` accepts an absolute path OR `bundled:<name>` (sets:
+`code-audit`, `skill-audit`, `security-audit`, `pr-review`).
 
 ## Output
 

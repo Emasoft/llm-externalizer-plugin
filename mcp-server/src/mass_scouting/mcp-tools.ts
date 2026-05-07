@@ -406,14 +406,48 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
           items: { type: "string" },
           description: "Two or more job_ids to federate across.",
         },
-        query: { type: "string" },
-        regex: { type: "string" },
-        force_llm: { type: "boolean" },
-        force_regex: { type: "boolean" },
-        filter: { type: "string" },
-        limit_per_job: { type: "number" },
-        limit_merged: { type: "number" },
-        json: { type: "boolean" },
+        query: {
+          type: "string",
+          description:
+            "Free-text query — auto-routed to the regex bypass for " +
+            "patterns like 'all emails', 'urls of domain X', 'all ipv4'; " +
+            "otherwise interpreted as an FTS5 query over the per-job index.",
+        },
+        regex: {
+          type: "string",
+          description:
+            "Explicit regex executed over cached file bodies. Use to " +
+            "force the regex bypass when auto-routing wouldn't match.",
+        },
+        force_llm: {
+          type: "boolean",
+          description:
+            "Force the LLM-search path even if regex/FTS would normally " +
+            "handle the query. Costs the model.",
+        },
+        force_regex: {
+          type: "boolean",
+          description: "Force the regex bypass — skip FTS / structured.",
+        },
+        filter: {
+          type: "string",
+          description:
+            "Comma-comma-separated structured filters using " +
+            "'path:OP:value' (OP = =, !=, >, >=, <, <=, LIKE). " +
+            "Example: '$.is_async:=:true,,$.complexity:>=:5'.",
+        },
+        limit_per_job: {
+          type: "number",
+          description: "Cap per source job before merging. Default 100.",
+        },
+        limit_merged: {
+          type: "number",
+          description: "Cap on the final merged hit list. Default 200.",
+        },
+        json: {
+          type: "boolean",
+          description: "Return JSON instead of human-readable text.",
+        },
       },
       required: ["db_path", "job_ids"],
     },
@@ -621,8 +655,10 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
       "high-value slice (e.g. files where job-A flagged severity=" +
       "'critical') without re-scouting the whole tree. The new job " +
       "uses a fresh fieldset, so you can extract DIFFERENT fields " +
-      "from the matched subset. Filter syntax: '$.path:OP:value' (e.g. " +
-      "'$.severity:eq:critical', '$.score:gte:0.8').",
+      "from the matched subset. Filter syntax: '$.path:OP:value' " +
+      "where OP is one of =, !=, >, >=, <, <=, LIKE (e.g. " +
+      "'$.severity:=:critical', '$.score:>=:0.8', " +
+      "'$.summary:LIKE:auth%').",
     inputSchema: {
       type: "object",
       properties: {
@@ -644,7 +680,7 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
           type: "string",
           description:
             "JSON-extract filter using '$.path:OP:value' syntax. " +
-            "Operators: eq, ne, lt, lte, gt, gte, contains.",
+            "Operators: =, !=, >, >=, <, <=, LIKE.",
         },
         model: {
           type: "string",

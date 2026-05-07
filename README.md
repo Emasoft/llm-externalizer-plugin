@@ -106,11 +106,11 @@ Keeping the fix half local means the expensive model only touches code when it a
 
 ## Features
 
-- **Scan externalization** — 15 MCP tools for code review, duplicate hunting, import/reference validation, and spec-compliance checks, all backed by a local or remote LLM you choose.
+- **Scan externalization** — 31 MCP tools for code review, duplicate hunting, import/reference validation, spec-compliance checks, and bulk LLM-driven structured-output extraction (mass-scouting), all backed by a local or remote LLM you choose.
 - **Fix loop stays local** — fixes are applied by your Claude Code Sonnet / Opus session, NOT by the external LLM. You get the ensemble's second opinion without giving up editorial control.
 - **False-positive-aware fixers** — every fixer subagent runs a verification pass (file-read + flow-trace) before editing. Empirically ~15–30% of ensemble findings are false positives; the fixer rejects them with a typed reason.
-- **7 plugin commands** — `/llm-externalizer:llm-externalizer-{discover, configure, search-existing-implementations, scan-and-fix, scan-and-fix-serially, fix-report, fix-found-bugs}`. Full list in [Plugin commands](#plugin-commands).
-- **15 MCP tools** — `chat`, `code_task`, `scan_folder`, `compare_files`, `check_references`, `check_imports`, `check_against_specs`, `search_existing_implementations`, `batch_check`, `discover`, `reset`, `get_settings`, `or_model_info{,_table,_json}`. Full list in [MCP tools](#mcp-tools).
+- **17 plugin commands** — 9 base (`discover`, `configure`, `change-model`, `benchmark`, `search-existing-implementations`, `scan-and-fix`, `scan-and-fix-serially`, `fix-report`, `fix-found-bugs`) + 8 mass-scout (`mass-scout-register`, `mass-scout-preclassify`, `mass-scout-estimate`, `mass-scout`, `mass-scout-search`, `mass-scout-search-xjob`, `mass-scout-get`, `mass-scout-export`). Full list in [Plugin commands](#plugin-commands).
+- **31 MCP tools** — 15 base (`chat`, `code_task`, `scan_folder`, `compare_files`, `check_references`, `check_imports`, `check_against_specs`, `search_existing_implementations`, `batch_check`, `discover`, `reset`, `get_settings`, `or_model_info`, `or_model_info_table`, `or_model_info_json`) + 16 mass-scout (`mass_scout_register`, `mass_scout_preclassify`, `mass_scout_estimate`, `mass_scout`, `mass_scout_search`, `mass_scout_search_xjob`, `mass_scout_get`, `mass_scout_export`, `mass_scout_jobs_list`, `mass_scout_audit_sample`, `mass_scout_body_get`, `mass_scout_build_fieldset`, `mass_scout_propose_fieldset`, `mass_scout_list_bundled_fieldsets`, `mass_scout_diff`, `mass_scout_chain`). Full list in [MCP tools](#mcp-tools).
 - **5 internal agents** — reviewer + 4 fixer variants (parallel/serial × Sonnet/Opus). Dispatched by commands, never invoked directly. See [Agents](#agents).
 - **3 backend modes** — `local` (sequential), `remote` (parallel, single model), `remote-ensemble` (parallel, three models → combined report).
 - **6 backend presets** — LM Studio, Ollama, vLLM, llama.cpp, generic local, OpenRouter.
@@ -304,15 +304,34 @@ The command will auto-discover your codebase, present the file list for confirma
 
 Commands are slash-invoked inside Claude Code. The format is `/llm-externalizer:llm-externalizer-<name>`.
 
+### Base commands (9)
+
 | Command | Purpose | Produces |
 |---|---|---|
 | `/llm-externalizer:llm-externalizer-discover` | Print active profile, model, auth, context window, health | Text summary |
 | `/llm-externalizer:llm-externalizer-configure` | Read-only profile inspector (edit `settings.yaml` to change) | Profile table |
+| `/llm-externalizer:llm-externalizer-change-model` | Switch the active profile's model | Confirmation + new active model |
+| `/llm-externalizer:llm-externalizer-benchmark` | Run the OpenRouter model-selection harness over your sample to compare candidates | Benchmark report |
 | `/llm-externalizer:llm-externalizer-search-existing-implementations` | PR duplicate-check — "is this feature already implemented anywhere?" | Exhaustive `NO` / `YES symbol=<name> lines=<a-b>` per file |
 | `/llm-externalizer:llm-externalizer-scan-and-fix` | Scan whole codebase → per-file reports → parallel fixer subagents (≤15 concurrent) → joined report | Per-file scan reports + fixer summaries + joined report |
 | `/llm-externalizer:llm-externalizer-scan-and-fix-serially` | Same scan; fixes bugs one at a time in a serial loop (safer when fixes touch shared state) | Per-file reports + canonical bug list + serial fixer summary |
 | `/llm-externalizer:llm-externalizer-fix-report` | Dispatch ONE fixer subagent on an already-generated scan report | One `.fixer.`-tagged summary |
 | `/llm-externalizer:llm-externalizer-fix-found-bugs` | Aggregate unfixed findings from all reports in `./reports/llm-externalizer/` and fix serially | Canonical bug list + serial summary |
+
+### Mass-scout commands (8)
+
+| Command | Purpose | Produces |
+|---|---|---|
+| `/llm-externalizer:llm-externalizer-mass-scout-register` | Walk a folder / take a file list and store every body in the SQLite cache (honors `.gitignore`; `--git-diff <ref>` for incremental) | Counter line `registered=N already=M skipped_too_big=K …` |
+| `/llm-externalizer:llm-externalizer-mass-scout-preclassify` | Script-only bucket tagger | Counter line per bucket |
+| `/llm-externalizer:llm-externalizer-mass-scout-estimate` | Cost / time / cap-skipped numbers for a fieldset; honors `--budget-usd`; `--live-context` queries OpenRouter for the real provider cap | Numbers + per-bucket breakdown |
+| `/llm-externalizer:llm-externalizer-mass-scout` | Run the LLM scout end-to-end; emits MCP `notifications/progress` per file | Markdown report under `reports/mass_scouting/` + counter line |
+| `/llm-externalizer:llm-externalizer-mass-scout-search` | Per-job search (regex bypass / FTS5 / structured / combined) | Hit list (text or `--json`) |
+| `/llm-externalizer:llm-externalizer-mass-scout-search-xjob` | Cross-job federated search | Merged hit list |
+| `/llm-externalizer:llm-externalizer-mass-scout-get` | Print one row by `short_id` (with optional per-job result) | JSON row |
+| `/llm-externalizer:llm-externalizer-mass-scout-export` | Dump every result row of a job to JSONL or CSV under `reports/mass_scouting/` | File path |
+
+**MCP-only mass-scout tools (8, no slash-command wrappers):** `mass_scout_jobs_list`, `mass_scout_audit_sample`, `mass_scout_body_get`, `mass_scout_build_fieldset`, `mass_scout_propose_fieldset`, `mass_scout_list_bundled_fieldsets`, `mass_scout_diff`, `mass_scout_chain`. Skills and agents address these directly via `mcp__plugin_llm-externalizer_llm-externalizer__<tool>`. The CLI also exposes them as `bin/llm-externalizer mass-scout <subcommand>` — see `--help` for the full flag list. Bundled fieldsets shipped with the plugin: `code-audit`, `skill-audit`, `security-audit`, `pr-review` (pass as `--fields-file bundled:<name>`).
 
 <details>
 <summary><b>Parameter reference — click to expand</b></summary>
@@ -362,24 +381,22 @@ Same parameters as `scan-and-fix`. Fix phase differs: one fixer subagent at a ti
 |---|---|---|---|---|
 | `@<merged-report.md>` or bare path | positional path | no | aggregate ALL reports in `./reports/llm-externalizer/` | If omitted, every report without a `.fixer.` sibling is aggregated into one canonical bug list |
 
-### Mass-scouting (8 sub-commands — bulk LLM extraction with dynamic JSON Schema)
+### Mass-scouting parameter notes
 
-The `mass-scout` family runs a cheap LLM (default: `qwen/qwen-2.5-7b-instruct`) over **hundreds-to-millions of files** to extract a SAME-shape structured payload defined per call. The output is a queryable SQLite registry with FTS5 search, JSON1 path filters, and a regex-bypass shortcut for trivial queries (emails, URLs, IPs, etc.).
+The `mass-scout` family runs a cheap LLM (default `qwen/qwen-2.5-7b-instruct`) over hundreds-to-millions of files and extracts a SAME-shape structured payload defined per call. Pipeline: **register → preclassify → estimate → scout → search**. See `skills/llm-externalizer-mass-scouting/SKILL.md` (and its `references/`) for the full walkthrough including the troubleshooting flowchart, worked example, fieldset dialect, and glossary.
 
-Pipeline: **register → preclassify → estimate → scout → search**. See the `llm-externalizer-mass-scouting` skill for the full walkthrough (it ships in `skills/llm-externalizer-mass-scouting/SKILL.md`).
+Common per-command flag highlights:
 
-| Slash command | Purpose | Effort |
-|---|---|---|
-| `/llm-externalizer:llm-externalizer-mass-scout-register` | Walk a folder (or take an explicit file list) and store every body in the SQLite cache | low |
-| `/llm-externalizer:llm-externalizer-mass-scout-preclassify` | Cheap script-only file-type bucket assignment | low |
-| `/llm-externalizer:llm-externalizer-mass-scout-estimate` | Cost / time / cap-skipped numbers for a fieldset; honors `--budget-usd` | low |
-| `/llm-externalizer:llm-externalizer-mass-scout` | Run the LLM scout end-to-end; writes a markdown report | high |
-| `/llm-externalizer:llm-externalizer-mass-scout-search` | Per-job search (regex bypass / FTS5 / structured / combined) | low |
-| `/llm-externalizer:llm-externalizer-mass-scout-search-xjob` | Cross-job federated search (same modes) | low |
-| `/llm-externalizer:llm-externalizer-mass-scout-get` | Print one row by short_id (with optional per-job result) | low |
-| `/llm-externalizer:llm-externalizer-mass-scout-export` | Dump every result row of a job to JSONL or CSV under `reports/mass_scouting/` | low |
+- `--db <path>` — required on every mass-scout sub-command. The same SQLite registry is shared across phases.
+- `--fields-file <path>` — accepts an absolute path OR a `bundled:<name>` shorthand (`code-audit`, `skill-audit`, `security-audit`, `pr-review`).
+- `--budget-usd <usd>` on `estimate` — hard gate; refuses to schedule when the projection exceeds the budget.
+- `--live-context` on `estimate` and `mass-scout` — queries OpenRouter for the active provider's real `context_length` and overrides KNOWN_PRICING (the architectural ceiling baked into KNOWN_PRICING is the model's MAX, not the provider's actual cap).
+- `--no-smoke-test` on `mass-scout` — skips the 5-file sequential pre-flight that aborts the run early on a broken fieldset.
+- `--no-resume` on `mass-scout` — re-process files even if they already have a result row for the `--job-id`.
+- `--json` on `search`, `search-xjob`, `get`, `jobs-list`, `audit-sample`, `diff`, `list-bundled-fieldsets` — structured output for downstream scripts.
+- Filter syntax for `search` / `search-xjob` / `chain`: `'$.path:OP:value'` where `OP ∈ {=, !=, >, >=, <, <=, LIKE}` (e.g. `'$.is_async:=:true'`, `'$.severity:LIKE:critical%'`).
 
-CLI equivalents are exposed as `bin/llm-externalizer mass-scout <subcommand>` (run with `--help` for every flag).
+CLI equivalents are exposed as `bin/llm-externalizer mass-scout <subcommand>` for every command — run any one with `--help` (or just `bin/llm-externalizer mass-scout --help`) for the full flag list.
 
 </details>
 

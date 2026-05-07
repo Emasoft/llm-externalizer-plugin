@@ -5,7 +5,7 @@ description: |-
   registry. Phase 1 of the mass-scouting pipeline.
 allowed-tools:
   - mcp__llm-externalizer__mass_scout_register
-argument-hint: "--db <path> --root <folder> | --files <a,b,c> [--extensions .ts,.md] [--exclude-dirs ...]"
+argument-hint: "--db <path> --root <folder> [--git-diff <ref>] [--no-gitignore] | --files <a,b,c> [--extensions .ts,.md] [--exclude-dirs ...]"
 effort: low
 ---
 
@@ -24,14 +24,19 @@ short_id.
 | `--db <path>` | yes | Absolute path to the SQLite registry (created if missing) |
 | `--root <folder>` | one of | Walk this folder (recursive) |
 | `--files <a,b,c>` | one of | Explicit comma-separated paths (mutually exclusive with `--root`) |
+| `--git-diff <ref>` | one of | Use `git diff --name-only --diff-filter=ACMR <ref>...HEAD` rooted at `--root` to register only added/modified files since `<ref>`. Incremental scouts. |
 | `--extensions <list>` | no | Filter the walk to these extensions (e.g. `.ts,.tsx,.md`) |
 | `--exclude-dirs <list>` | no | Extra dir names to skip beyond the built-ins |
+| `--no-gitignore` | no | Bypass `.gitignore` filtering. Default: gitignored files are skipped. |
 | `--model <id>` | no | Model id (default: qwen/qwen-2.5-7b-instruct) — controls the register cap |
 | `--max-context-pct-register <0..1>` | no | Override the default 50% cap |
 
 The walk skips: `.git`, `node_modules`, `.venv`, `dist`, `build`,
 `.idea`, `.vscode`, `tmp`, `vendor`, `__pycache__`, `target`,
-`.next`, `.cache`, `.turbo`, `out`.
+`.next`, `.cache`, `.turbo`, `out`. Gitignored paths are also skipped
+unless `--no-gitignore` is passed (the default uses
+`git ls-files --cached --others --exclude-standard` to honour the repo's
+own ignore rules).
 
 ## Output
 

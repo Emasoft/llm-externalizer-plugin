@@ -31,7 +31,7 @@ When all files are done, render a markdown report to
 | Flag | Required | Description |
 |---|---|---|
 | `--db <path>` | yes | The registry |
-| `--fields-file <json>` | yes | JSON fieldset describing what to extract |
+| `--fields-file <json>` | yes | JSON fieldset path OR `bundled:<name>` shorthand (`code-audit`, `skill-audit`, `security-audit`, `pr-review`) |
 | `--job-id <id>` | yes | Stable job identifier — re-run with the same id to resume |
 | `--source-root <path>` | yes | Original folder the files came from (recorded on the job) |
 | `--model <id>` | no | Default: qwen/qwen-2.5-7b-instruct |
@@ -41,6 +41,7 @@ When all files are done, render a markdown report to
 | `--no-smoke-test` | no | Skip the 5-file sequential smoke test |
 | `--no-resume` | no | Re-process files even if they already have a result row |
 | `--max-context-pct-scout <0..1>` | no | Override the default 40% scout cap |
+| `--live-context` | no | Query OpenRouter for the active provider's real `context_length` and override KNOWN_PRICING. Recommended when you don't know whether your account routes to a smaller-cap endpoint (e.g. 32K vs 128K). Requires `$OPENROUTER_API_KEY`. |
 
 ## Pre-flight
 
