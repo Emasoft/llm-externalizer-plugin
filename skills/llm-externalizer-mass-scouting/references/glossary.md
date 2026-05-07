@@ -1,5 +1,13 @@
 # Mass-scouting glossary
 
+## Contents
+
+- [Terms](#terms)
+- [Model selection guide](#model-selection-guide)
+- [Privacy](#privacy)
+
+## Terms
+
 - **fieldset** — JSON description of what to extract per file (fields[] with
   name + description + type).
 - **JSON Schema (compiled)** — what fieldset.ts emits at compile time; what

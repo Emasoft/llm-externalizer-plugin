@@ -1,5 +1,14 @@
 # Fieldsets — types, bundled sets, authoring
 
+## Contents
+
+- [Fieldset format](#fieldset-format)
+- [Bundled fieldsets (skip authoring entirely)](#bundled-fieldsets-skip-authoring-entirely)
+- [Build-fieldset shorthand](#build-fieldset-shorthand)
+- [Propose-fieldset (LLM authors the fieldset)](#propose-fieldset-llm-authors-the-fieldset)
+
+## Fieldset format
+
 A fieldset is a JSON file describing what the LLM should extract per file.
 Each field has `name`, `description`, and a `type`:
 

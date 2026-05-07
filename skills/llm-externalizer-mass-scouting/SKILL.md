@@ -26,37 +26,31 @@ free-form prose, use the `chat` tool instead.
 ## Prerequisites
 
 - `OPENROUTER_API_KEY` in env or via `userConfig.openrouter_api_key`.
-- A target folder (or `file_paths[]`) and a fieldset — author one with
+- A target folder (or `file_paths[]`) and a fieldset (author one with
   `mass_scout_build_fieldset` / `mass_scout_propose_fieldset`, or pass
-  `bundled:<name>` (sets: `code-audit`, `skill-audit`, `security-audit`,
-  `pr-review`). Run `mass_scout_list_bundled_fieldsets` for fields.
+  `bundled:<name>` — sets: `code-audit`, `skill-audit`, `security-audit`,
+  `pr-review`).
 - `reports/` and `reports_dev/` in `.gitignore`.
 
 ## Instructions
 
-Five phases, one MCP tool per phase, same code in
+Five phases, one MCP tool per phase, source in
 `mcp-server/src/mass_scouting/cli.ts`.
 
-1. **register** — `mass_scout_register` walks a folder (honors `.gitignore`
-   by default; `no_gitignore: true` to override) or takes `file_paths[]`,
-   hashes each body, caches it in SQLite. Idempotent.
-2. **preclassify** — `mass_scout_preclassify` script-tags every row with a
-   bucket (binary / sourcecode / config / documentation / log / rules /
-   unknown).
-3. **estimate** — `mass_scout_estimate` previews tokens, cost, eligible
-   files. `budget_usd` is a hard gate. `live_context: true` queries
-   OpenRouter for the active provider's real cap.
-4. **scout** — `mass_scout` compiles the fieldset to JSON Schema, fans
-   calls out, repairs envelopes, validates, persists. Emits MCP
-   `notifications/progress` per file.
+1. **register** — walks a folder (honors `.gitignore`; `no_gitignore: true`
+   to override) or takes `file_paths[]`; hashes + caches every body.
+2. **preclassify** — script-tags every row with a bucket (binary /
+   sourcecode / config / documentation / log / rules / unknown).
+3. **estimate** — previews tokens, cost, eligible files. `budget_usd` is
+   a hard gate. `live_context: true` queries OpenRouter for the real cap.
+4. **scout** — compiles fieldset → JSON Schema, fans LLM calls out,
+   repairs + validates, persists. Emits `notifications/progress` per file.
 5. **search** — `mass_scout_search` (per-job) / `mass_scout_search_xjob`
    (cross-job): regex bypass / FTS5 / structured JSON1 / combined.
 
-Follow-on tools: `mass_scout_jobs_list`, `mass_scout_audit_sample`,
-`mass_scout_body_get`, `mass_scout_build_fieldset`,
-`mass_scout_propose_fieldset`, `mass_scout_diff` (row-by-row two-job
-compare), `mass_scout_chain` (re-scout a filter-matched subset with a
-fresh fieldset).
+Follow-on tools: `jobs_list`, `audit_sample`, `body_get`,
+`build_fieldset`, `propose_fieldset`, `diff` (compare two jobs),
+`chain` (re-scout a filter-matched subset with a fresh fieldset).
 
 ## Output
 
@@ -82,24 +76,34 @@ re-print the report. Search/get/export emit JSON or JSONL/CSV.
 
 ## Error Handling
 
-- `HTTP 400 context length exceeded` → file > provider cap. Lower
+- `HTTP 400 context length exceeded` → file > cap. Lower
   `max_context_pct_scout` or set `live_context: true`.
-- `scout failed after N attempts` → recorded in `mass_scout_skipped` table.
-- `circuit_tripped=true` → too many consecutive failures (default 5).
-  Investigate before retrying.
-- Missing `OPENROUTER_API_KEY` → set the env var or
-  `userConfig.openrouter_api_key`.
+- `scout failed after N attempts` → see `mass_scout_skipped` table.
+- `circuit_tripped=true` → ≥5 consecutive failures; investigate first.
+- Missing `OPENROUTER_API_KEY` → set env / userConfig.
 
-Full flowchart: [troubleshooting](references/troubleshooting.md).
+Flowchart: [troubleshooting](references/troubleshooting.md).
 
 ## Examples
 
-- "audit every TypeScript file under mcp-server/src for complexity"
-- "scan all skills for missing triggers and weak descriptions"
-- "PR review every file changed since main"
-- "find every Python module that talks to a database"
+Trigger phrases: "audit every .ts file under src/ for complexity",
+"scan all skills for weak triggers", "PR review every changed file",
+"find every Python module that talks to a database".
 
-End-to-end walkthrough: [worked-example](references/worked-example.md).
+Concrete input → output:
+
+```
+mass_scout_estimate { db_path:/tmp/x.db, fields_file:bundled:code-audit,
+                      budget_usd:0.50 }
+  → files_eligible=50  est_cost_usd=$0.0015  budget_allowed=true
+
+mass_scout { db_path:/tmp/x.db, fields_file:bundled:code-audit,
+             job_id:audit-1, source_root:/path/src }
+  → files_ok=50  files_failed=0  cost_usd=$0.0014
+    report=<main-root>/reports/mass_scouting/<TS>-scout-audit-1.md
+```
+
+End-to-end: [worked-example](references/worked-example.md).
 
 ## Resources
 
@@ -107,4 +111,4 @@ End-to-end walkthrough: [worked-example](references/worked-example.md).
 - [worked-example](references/worked-example.md) — full walkthrough.
 - [fieldsets](references/fieldsets.md) — types, bundled sets, shorthand.
 - [glossary](references/glossary.md) — terms, model selection, privacy.
-- Source: `mcp-server/src/mass_scouting/`, fieldsets: `mcp-server/fieldsets/`.
+- Source: `mcp-server/src/mass_scouting/`, `mcp-server/fieldsets/`.
