@@ -26,6 +26,18 @@ footer = ""
 [git]
 conventional_commits = true
 filter_unconventional = false
+# Redact private absolute paths from commit messages BEFORE they are
+# rendered into CHANGELOG.md. Without this, any commit message that
+# includes a developer's home-directory path (e.g. when explaining a
+# fix that scrubbed such a path) would re-leak it in the published
+# changelog and fail the CPV "private path leaked" check on the very
+# next publish run. The replacement preserves the descriptive intent
+# without retaining the private prefix.
+commit_preprocessors = [
+    { pattern = "/Users/[A-Za-z0-9._-]+/", replace = "<HOME>/" },
+    { pattern = "/home/[A-Za-z0-9._-]+/", replace = "<HOME>/" },
+    { pattern = "C:\\\\Users\\\\[A-Za-z0-9._-]+\\\\", replace = "<HOME>\\" },
+]
 commit_parsers = [
     { message = "^feat", group = "Added" },
     { message = "^fix", group = "Fixed" },
