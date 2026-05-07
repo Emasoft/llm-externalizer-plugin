@@ -284,6 +284,22 @@ def run_checks(repo_root: Path) -> bool:
     if not _run_check("npm-ci", ["npm", "ci", "--ignore-scripts"], mcp_dir, repo_root):
         return False
 
+    # 1b. Rebuild native modules. `--ignore-scripts` above blocks every
+    # package's install hook for supply-chain safety, but `better-sqlite3`
+    # ships as a native addon (.node binary) that the mass-scouting tests
+    # require at runtime. Without an explicit rebuild step, the test suite
+    # fails with "Could not locate the bindings file" — the lifecycle
+    # script that builds the platform-specific .node was skipped.
+    # `npm rebuild` reruns ONLY the build hooks for the named package, so
+    # the supply-chain protection on every other dependency is preserved.
+    if not _run_check(
+        "rebuild-native",
+        ["npm", "rebuild", "better-sqlite3"],
+        mcp_dir,
+        repo_root,
+    ):
+        return False
+
     # 2. TypeScript compile check
     if not _run_check("typecheck", ["npm", "run", "typecheck"], mcp_dir, repo_root):
         return False
