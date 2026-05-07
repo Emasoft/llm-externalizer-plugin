@@ -50,7 +50,7 @@ Three remediation passes for CPV strict-mode validation:
    "Trigger with ..." phrase to the description.
 
 2. TRDD: replaced the absolute path
-   /Users/emanuelesabetta/Code/llm-externalizer/docs_dev/... with the
+   `<HOME>/Code/llm-externalizer/docs_dev/...` with the
    project-root-relative form. Two CRITICAL private-path leaks resolved.
 
 3. cli.test.ts security regression: the path-traversal test value
