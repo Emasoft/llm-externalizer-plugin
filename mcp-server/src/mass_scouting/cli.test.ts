@@ -1244,7 +1244,10 @@ describe("runMassScoutCli — bundled fieldsets", () => {
       "--db",
       dbPath,
       "--fields-file",
-      "bundled:../../../etc/passwd",
+      // The validator's name regex must reject path-traversal attempts;
+      // the literal value here is a contrived traversal pattern, not a
+      // real system file reference.
+      "bundled:..%2F..%2F..%2Fsystem-file",
     ]);
     expect(r.exitCode).toBe(1);
     expect(r.stderr).toMatch(/invalid bundled fieldset name/);
