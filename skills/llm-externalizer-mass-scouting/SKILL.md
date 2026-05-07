@@ -76,7 +76,7 @@ re-print the report. Search/get/export emit JSON or JSONL/CSV.
 - Missing `OPENROUTER_API_KEY` → set the env var or
   `userConfig.openrouter_api_key`.
 
-Full flowchart: `references/troubleshooting.md`.
+Full flowchart: [troubleshooting](references/troubleshooting.md).
 
 ## Examples
 
@@ -87,14 +87,14 @@ Full flowchart: `references/troubleshooting.md`.
 "find every Python module that talks to a database"
 ```
 
-Worked end-to-end run: `references/worked-example.md`.
+Worked end-to-end run: [worked-example](references/worked-example.md).
 
 ## Resources
 
 - `mcp-server/src/mass_scouting/` — source.
 - `mcp-server/fieldsets/` — bundled fieldset JSONs.
-- `references/troubleshooting.md` — failure-mode flowchart.
-- `references/worked-example.md` — plugin-audit walkthrough.
-- `references/fieldsets.md` — types, bundled sets, shorthand, propose.
-- `references/glossary.md` — terms, model selection, privacy.
+- [troubleshooting](references/troubleshooting.md) — failure-mode flowchart.
+- [worked-example](references/worked-example.md) — plugin-audit walkthrough.
+- [fieldsets](references/fieldsets.md) — types, bundled sets, shorthand, propose.
+- [glossary](references/glossary.md) — terms, model selection, privacy.
 - TRDD `design/tasks/TRDD-52547970-77f3-441c-9e8e-60be22cd2770-mass-scouting.md`.
