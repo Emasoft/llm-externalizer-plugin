@@ -1,11 +1,5 @@
 # Mass-scouting troubleshooting
 
-## Contents
-
-- [Symptom flowchart](#symptom-flowchart)
-- [Failure modes (quick reference)](#failure-modes-quick-reference)
-- [Resume](#resume)
-
 ## Symptom flowchart
 
 ```
