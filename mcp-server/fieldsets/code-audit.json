@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "fieldset_name": "code-audit",
+  "fields": [
+    {
+      "name": "summary",
+      "description": "One-sentence summary of what this file does.",
+      "type": { "kind": "string", "max_length": 200 }
+    },
+    {
+      "name": "language",
+      "description": "Programming language (typescript, python, rust, go, etc.).",
+      "type": { "kind": "string", "max_length": 32 }
+    },
+    {
+      "name": "has_tests",
+      "description": "True if this file contains test cases (it test, describe, pytest functions, #[test], etc.).",
+      "type": { "kind": "bool" }
+    },
+    {
+      "name": "complexity",
+      "description": "Estimated complexity: low, medium, high.",
+      "type": { "kind": "enum", "values": ["low", "medium", "high"] }
+    },
+    {
+      "name": "issues",
+      "description": "Up to 5 concrete code-quality issues (anti-patterns, bugs, smells). Each item is a short phrase, not a sentence.",
+      "type": { "kind": "array_string", "max_items": 5 }
+    },
+    {
+      "name": "external_deps",
+      "description": "Up to 10 names of imported / required external packages (skip stdlib).",
+      "type": { "kind": "array_string", "max_items": 10 }
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "fieldset_name": "skill-audit",
+  "fields": [
+    {
+      "name": "skill_name",
+      "description": "The name of the Claude Code skill defined in this file (from the YAML frontmatter or filename if missing).",
+      "type": { "kind": "string", "max_length": 80 }
+    },
+    {
+      "name": "has_frontmatter",
+      "description": "True if the file starts with a valid YAML frontmatter block (---...---).",
+      "type": { "kind": "bool" }
+    },
+    {
+      "name": "description_quality",
+      "description": "Quality of the skill description: clear (specific triggers, concrete use cases), vague (generic adjectives, no triggers), missing (no description field).",
+      "type": { "kind": "enum", "values": ["clear", "vague", "missing"] }
+    },
+    {
+      "name": "trigger_count",
+      "description": "How many distinct usage triggers the description hints at (0-5+). 0 = no triggers, 5 = many specific triggers.",
+      "type": { "kind": "int", "min": 0, "max": 10 }
+    },
+    {
+      "name": "has_examples",
+      "description": "True if the skill body includes at least one concrete usage example.",
+      "type": { "kind": "bool" }
+    },
+    {
+      "name": "issues",
+      "description": "Up to 5 issues that would prevent this skill from triggering reliably. Examples: missing triggers, unclear scope, conflicting with other skills.",
+      "type": { "kind": "array_string", "max_items": 5 }
+    }
+  ]
+}

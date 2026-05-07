@@ -985,13 +985,13 @@ var require_Collection = __commonJS({
 var require_stringifyComment = __commonJS({
   "node_modules/yaml/dist/stringify/stringifyComment.js"(exports) {
     "use strict";
-    var stringifyComment = (str) => str.replace(/^(?!$)(?: $)?/gm, "#");
+    var stringifyComment = (str2) => str2.replace(/^(?!$)(?: $)?/gm, "#");
     function indentComment(comment, indent) {
       if (/^\n+$/.test(comment))
         return comment.substring(1);
       return indent ? comment.replace(/^(?! *$)/gm, indent) : comment;
     }
-    var lineComment = (str, indent, comment) => str.endsWith("\n") ? indentComment(comment, indent) : comment.includes("\n") ? "\n" + indentComment(comment, indent) : (str.endsWith(" ") ? "" : " ") + comment;
+    var lineComment = (str2, indent, comment) => str2.endsWith("\n") ? indentComment(comment, indent) : comment.includes("\n") ? "\n" + indentComment(comment, indent) : (str2.endsWith(" ") ? "" : " ") + comment;
     exports.indentComment = indentComment;
     exports.lineComment = lineComment;
     exports.stringifyComment = stringifyComment;
@@ -1145,16 +1145,16 @@ var require_stringifyString = __commonJS({
       lineWidth: ctx.options.lineWidth,
       minContentWidth: ctx.options.minContentWidth
     });
-    var containsDocumentMarker = (str) => /^(%|---|\.\.\.)/m.test(str);
-    function lineLengthOverLimit(str, lineWidth, indentLength) {
+    var containsDocumentMarker = (str2) => /^(%|---|\.\.\.)/m.test(str2);
+    function lineLengthOverLimit(str2, lineWidth, indentLength) {
       if (!lineWidth || lineWidth < 0)
         return false;
       const limit = lineWidth - indentLength;
-      const strLen = str.length;
+      const strLen = str2.length;
       if (strLen <= limit)
         return false;
       for (let i = 0, start = 0; i < strLen; ++i) {
-        if (str[i] === "\n") {
+        if (str2[i] === "\n") {
           if (i - start > limit)
             return true;
           start = i + 1;
@@ -1171,11 +1171,11 @@ var require_stringifyString = __commonJS({
       const { implicitKey } = ctx;
       const minMultiLineLength = ctx.options.doubleQuotedMinMultiLineLength;
       const indent = ctx.indent || (containsDocumentMarker(value) ? "  " : "");
-      let str = "";
+      let str2 = "";
       let start = 0;
       for (let i = 0, ch = json2[i]; ch; ch = json2[++i]) {
         if (ch === " " && json2[i + 1] === "\\" && json2[i + 2] === "n") {
-          str += json2.slice(start, i) + "\\ ";
+          str2 += json2.slice(start, i) + "\\ ";
           i += 1;
           start = i;
           ch = "\\";
@@ -1184,38 +1184,38 @@ var require_stringifyString = __commonJS({
           switch (json2[i + 1]) {
             case "u":
               {
-                str += json2.slice(start, i);
+                str2 += json2.slice(start, i);
                 const code = json2.substr(i + 2, 4);
                 switch (code) {
                   case "0000":
-                    str += "\\0";
+                    str2 += "\\0";
                     break;
                   case "0007":
-                    str += "\\a";
+                    str2 += "\\a";
                     break;
                   case "000b":
-                    str += "\\v";
+                    str2 += "\\v";
                     break;
                   case "001b":
-                    str += "\\e";
+                    str2 += "\\e";
                     break;
                   case "0085":
-                    str += "\\N";
+                    str2 += "\\N";
                     break;
                   case "00a0":
-                    str += "\\_";
+                    str2 += "\\_";
                     break;
                   case "2028":
-                    str += "\\L";
+                    str2 += "\\L";
                     break;
                   case "2029":
-                    str += "\\P";
+                    str2 += "\\P";
                     break;
                   default:
                     if (code.substr(0, 2) === "00")
-                      str += "\\x" + code.substr(2);
+                      str2 += "\\x" + code.substr(2);
                     else
-                      str += json2.substr(i, 6);
+                      str2 += json2.substr(i, 6);
                 }
                 i += 5;
                 start = i + 1;
@@ -1225,14 +1225,14 @@ var require_stringifyString = __commonJS({
               if (implicitKey || json2[i + 2] === '"' || json2.length < minMultiLineLength) {
                 i += 1;
               } else {
-                str += json2.slice(start, i) + "\n\n";
+                str2 += json2.slice(start, i) + "\n\n";
                 while (json2[i + 2] === "\\" && json2[i + 3] === "n" && json2[i + 4] !== '"') {
-                  str += "\n";
+                  str2 += "\n";
                   i += 2;
                 }
-                str += indent;
+                str2 += indent;
                 if (json2[i + 2] === " ")
-                  str += "\\";
+                  str2 += "\\";
                 i += 1;
                 start = i + 1;
               }
@@ -1241,8 +1241,8 @@ var require_stringifyString = __commonJS({
               i += 1;
           }
       }
-      str = start ? str + json2.slice(start) : json2;
-      return implicitKey ? str : foldFlowLines.foldFlowLines(str, indent, foldFlowLines.FOLD_QUOTED, getFoldOptions(ctx, false));
+      str2 = start ? str2 + json2.slice(start) : json2;
+      return implicitKey ? str2 : foldFlowLines.foldFlowLines(str2, indent, foldFlowLines.FOLD_QUOTED, getFoldOptions(ctx, false));
     }
     function singleQuotedString(value, ctx) {
       if (ctx.options.singleQuote === false || ctx.implicitKey && value.includes("\n") || /[ \t]\n|\n[ \t]/.test(value))
@@ -1370,15 +1370,15 @@ ${indent}${start}${value}${end}`;
           return quotedString(value, ctx);
         }
       }
-      const str = value.replace(/\n+/g, `$&
+      const str2 = value.replace(/\n+/g, `$&
 ${indent}`);
       if (actualString) {
-        const test = (tag) => tag.default && tag.tag !== "tag:yaml.org,2002:str" && tag.test?.test(str);
+        const test = (tag) => tag.default && tag.tag !== "tag:yaml.org,2002:str" && tag.test?.test(str2);
         const { compat, tags } = ctx.doc.schema;
         if (tags.some(test) || compat?.some(test))
           return quotedString(value, ctx);
       }
-      return implicitKey ? str : foldFlowLines.foldFlowLines(str, indent, foldFlowLines.FOLD_FLOW, getFoldOptions(ctx, false));
+      return implicitKey ? str2 : foldFlowLines.foldFlowLines(str2, indent, foldFlowLines.FOLD_FLOW, getFoldOptions(ctx, false));
     }
     function stringifyString(item, ctx, onComment, onChompKeep) {
       const { implicitKey, inFlow } = ctx;
@@ -1529,11 +1529,11 @@ var require_stringify = __commonJS({
       const props = stringifyProps(node, tagObj, ctx);
       if (props.length > 0)
         ctx.indentAtStart = (ctx.indentAtStart ?? 0) + props.length + 1;
-      const str = typeof tagObj.stringify === "function" ? tagObj.stringify(node, ctx, onComment, onChompKeep) : identity.isScalar(node) ? stringifyString.stringifyString(node, ctx, onComment, onChompKeep) : node.toString(ctx, onComment, onChompKeep);
+      const str2 = typeof tagObj.stringify === "function" ? tagObj.stringify(node, ctx, onComment, onChompKeep) : identity.isScalar(node) ? stringifyString.stringifyString(node, ctx, onComment, onChompKeep) : node.toString(ctx, onComment, onChompKeep);
       if (!props)
-        return str;
-      return identity.isScalar(node) || str[0] === "{" || str[0] === "[" ? `${props} ${str}` : `${props}
-${ctx.indent}${str}`;
+        return str2;
+      return identity.isScalar(node) || str2[0] === "{" || str2[0] === "[" ? `${props} ${str2}` : `${props}
+${ctx.indent}${str2}`;
     }
     exports.createStringifyContext = createStringifyContext;
     exports.stringify = stringify;
@@ -1568,8 +1568,8 @@ var require_stringifyPair = __commonJS({
       });
       let keyCommentDone = false;
       let chompKeep = false;
-      let str = stringify.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
-      if (!explicitKey && !ctx.inFlow && str.length > 1024) {
+      let str2 = stringify.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
+      if (!explicitKey && !ctx.inFlow && str2.length > 1024) {
         if (simpleKeys)
           throw new Error("With simple keys, single line scalar must not span more than 1024 characters");
         explicitKey = true;
@@ -1578,27 +1578,27 @@ var require_stringifyPair = __commonJS({
         if (allNullValues || value == null) {
           if (keyCommentDone && onComment)
             onComment();
-          return str === "" ? "?" : explicitKey ? `? ${str}` : str;
+          return str2 === "" ? "?" : explicitKey ? `? ${str2}` : str2;
         }
       } else if (allNullValues && !simpleKeys || value == null && explicitKey) {
-        str = `? ${str}`;
+        str2 = `? ${str2}`;
         if (keyComment && !keyCommentDone) {
-          str += stringifyComment.lineComment(str, ctx.indent, commentString(keyComment));
+          str2 += stringifyComment.lineComment(str2, ctx.indent, commentString(keyComment));
         } else if (chompKeep && onChompKeep)
           onChompKeep();
-        return str;
+        return str2;
       }
       if (keyCommentDone)
         keyComment = null;
       if (explicitKey) {
         if (keyComment)
-          str += stringifyComment.lineComment(str, ctx.indent, commentString(keyComment));
-        str = `? ${str}
+          str2 += stringifyComment.lineComment(str2, ctx.indent, commentString(keyComment));
+        str2 = `? ${str2}
 ${indent}:`;
       } else {
-        str = `${str}:`;
+        str2 = `${str2}:`;
         if (keyComment)
-          str += stringifyComment.lineComment(str, ctx.indent, commentString(keyComment));
+          str2 += stringifyComment.lineComment(str2, ctx.indent, commentString(keyComment));
       }
       let vsb, vcb, valueComment;
       if (identity.isNode(value)) {
@@ -1614,7 +1614,7 @@ ${indent}:`;
       }
       ctx.implicitKey = false;
       if (!explicitKey && !keyComment && identity.isScalar(value))
-        ctx.indentAtStart = str.length + 1;
+        ctx.indentAtStart = str2.length + 1;
       chompKeep = false;
       if (!indentSeq && indentStep.length >= 2 && !ctx.inFlow && !explicitKey && identity.isSeq(value) && !value.flow && !value.tag && !value.anchor) {
         ctx.indent = ctx.indent.substring(2);
@@ -1658,16 +1658,16 @@ ${ctx.indent}`;
       } else if (valueStr === "" || valueStr[0] === "\n") {
         ws = "";
       }
-      str += ws + valueStr;
+      str2 += ws + valueStr;
       if (ctx.inFlow) {
         if (valueCommentDone && onComment)
           onComment();
       } else if (valueComment && !valueCommentDone) {
-        str += stringifyComment.lineComment(str, ctx.indent, commentString(valueComment));
+        str2 += stringifyComment.lineComment(str2, ctx.indent, commentString(valueComment));
       } else if (chompKeep && onChompKeep) {
         onChompKeep();
       }
-      return str;
+      return str2;
     }
     exports.stringifyPair = stringifyPair;
   }
@@ -1891,31 +1891,31 @@ var require_stringifyCollection = __commonJS({
           }
         }
         chompKeep = false;
-        let str2 = stringify.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
+        let str3 = stringify.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
         if (comment2)
-          str2 += stringifyComment.lineComment(str2, itemIndent, commentString(comment2));
+          str3 += stringifyComment.lineComment(str3, itemIndent, commentString(comment2));
         if (chompKeep && comment2)
           chompKeep = false;
-        lines.push(blockItemPrefix + str2);
+        lines.push(blockItemPrefix + str3);
       }
-      let str;
+      let str2;
       if (lines.length === 0) {
-        str = flowChars.start + flowChars.end;
+        str2 = flowChars.start + flowChars.end;
       } else {
-        str = lines[0];
+        str2 = lines[0];
         for (let i = 1; i < lines.length; ++i) {
           const line = lines[i];
-          str += line ? `
+          str2 += line ? `
 ${indent}${line}` : "\n";
         }
       }
       if (comment) {
-        str += "\n" + stringifyComment.indentComment(commentString(comment), indent);
+        str2 += "\n" + stringifyComment.indentComment(commentString(comment), indent);
         if (onComment)
           onComment();
       } else if (chompKeep && onChompKeep)
         onChompKeep();
-      return str;
+      return str2;
     }
     function stringifyFlowCollection({ items }, ctx, { flowChars, itemIndent }) {
       const { indent, indentStep, flowCollectionPadding: fcPadding, options: { commentString } } = ctx;
@@ -1958,14 +1958,14 @@ ${indent}${line}` : "\n";
         }
         if (comment)
           reqNewline = true;
-        let str = stringify.stringify(item, itemCtx, () => comment = null);
+        let str2 = stringify.stringify(item, itemCtx, () => comment = null);
         if (i < items.length - 1)
-          str += ",";
+          str2 += ",";
         if (comment)
-          str += stringifyComment.lineComment(str, itemIndent, commentString(comment));
-        if (!reqNewline && (lines.length > linesAtValue || str.includes("\n")))
+          str2 += stringifyComment.lineComment(str2, itemIndent, commentString(comment));
+        if (!reqNewline && (lines.length > linesAtValue || str2.includes("\n")))
           reqNewline = true;
-        lines.push(str);
+        lines.push(str2);
         linesAtValue = lines.length;
       }
       const { start, end } = flowChars;
@@ -1977,11 +1977,11 @@ ${indent}${line}` : "\n";
           reqNewline = ctx.options.lineWidth > 0 && len > ctx.options.lineWidth;
         }
         if (reqNewline) {
-          let str = start;
+          let str2 = start;
           for (const line of lines)
-            str += line ? `
+            str2 += line ? `
 ${indentStep}${indent}${line}` : "\n";
-          return `${str}
+          return `${str2}
 ${indent}${end}`;
         } else {
           return `${start}${fcPadding}${lines.join(" ")}${fcPadding}${end}`;
@@ -2313,7 +2313,7 @@ var require_string = __commonJS({
       identify: (value) => typeof value === "string",
       default: true,
       tag: "tag:yaml.org,2002:str",
-      resolve: (str) => str,
+      resolve: (str2) => str2,
       stringify(item, ctx, onComment, onChompKeep) {
         ctx = Object.assign({ actualString: true }, ctx);
         return stringifyString.stringifyString(item, ctx, onComment, onChompKeep);
@@ -2351,7 +2351,7 @@ var require_bool = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:bool",
       test: /^(?:[Tt]rue|TRUE|[Ff]alse|FALSE)$/,
-      resolve: (str) => new Scalar.Scalar(str[0] === "t" || str[0] === "T"),
+      resolve: (str2) => new Scalar.Scalar(str2[0] === "t" || str2[0] === "T"),
       stringify({ source, value }, ctx) {
         if (source && boolTag.test.test(source)) {
           const sv = source[0] === "t" || source[0] === "T";
@@ -2372,9 +2372,9 @@ var require_stringifyNumber = __commonJS({
     function stringifyNumber({ format, minFractionDigits, tag, value }) {
       if (typeof value === "bigint")
         return String(value);
-      const num = typeof value === "number" ? value : Number(value);
-      if (!isFinite(num))
-        return isNaN(num) ? ".nan" : num < 0 ? "-.inf" : ".inf";
+      const num2 = typeof value === "number" ? value : Number(value);
+      if (!isFinite(num2))
+        return isNaN(num2) ? ".nan" : num2 < 0 ? "-.inf" : ".inf";
       let n = Object.is(value, -0) ? "-0" : JSON.stringify(value);
       if (!format && minFractionDigits && (!tag || tag === "tag:yaml.org,2002:float") && /^\d/.test(n)) {
         let i = n.indexOf(".");
@@ -2403,7 +2403,7 @@ var require_float = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:float",
       test: /^(?:[-+]?\.(?:inf|Inf|INF)|\.nan|\.NaN|\.NAN)$/,
-      resolve: (str) => str.slice(-3).toLowerCase() === "nan" ? NaN : str[0] === "-" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
+      resolve: (str2) => str2.slice(-3).toLowerCase() === "nan" ? NaN : str2[0] === "-" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
       stringify: stringifyNumber.stringifyNumber
     };
     var floatExp = {
@@ -2412,10 +2412,10 @@ var require_float = __commonJS({
       tag: "tag:yaml.org,2002:float",
       format: "EXP",
       test: /^[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)[eE][-+]?[0-9]+$/,
-      resolve: (str) => parseFloat(str),
+      resolve: (str2) => parseFloat(str2),
       stringify(node) {
-        const num = Number(node.value);
-        return isFinite(num) ? num.toExponential() : stringifyNumber.stringifyNumber(node);
+        const num2 = Number(node.value);
+        return isFinite(num2) ? num2.toExponential() : stringifyNumber.stringifyNumber(node);
       }
     };
     var float = {
@@ -2423,11 +2423,11 @@ var require_float = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:float",
       test: /^[-+]?(?:\.[0-9]+|[0-9]+\.[0-9]*)$/,
-      resolve(str) {
-        const node = new Scalar.Scalar(parseFloat(str));
-        const dot = str.indexOf(".");
-        if (dot !== -1 && str[str.length - 1] === "0")
-          node.minFractionDigits = str.length - dot - 1;
+      resolve(str2) {
+        const node = new Scalar.Scalar(parseFloat(str2));
+        const dot = str2.indexOf(".");
+        if (dot !== -1 && str2[str2.length - 1] === "0")
+          node.minFractionDigits = str2.length - dot - 1;
         return node;
       },
       stringify: stringifyNumber.stringifyNumber
@@ -2444,7 +2444,7 @@ var require_int = __commonJS({
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
-    var intResolve = (str, offset, radix, { intAsBigInt }) => intAsBigInt ? BigInt(str) : parseInt(str.substring(offset), radix);
+    var intResolve = (str2, offset, radix, { intAsBigInt }) => intAsBigInt ? BigInt(str2) : parseInt(str2.substring(offset), radix);
     function intStringify(node, radix, prefix) {
       const { value } = node;
       if (intIdentify(value) && value >= 0)
@@ -2457,7 +2457,7 @@ var require_int = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "OCT",
       test: /^0o[0-7]+$/,
-      resolve: (str, _onError, opt) => intResolve(str, 2, 8, opt),
+      resolve: (str2, _onError, opt) => intResolve(str2, 2, 8, opt),
       stringify: (node) => intStringify(node, 8, "0o")
     };
     var int2 = {
@@ -2465,7 +2465,7 @@ var require_int = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:int",
       test: /^[-+]?[0-9]+$/,
-      resolve: (str, _onError, opt) => intResolve(str, 0, 10, opt),
+      resolve: (str2, _onError, opt) => intResolve(str2, 0, 10, opt),
       stringify: stringifyNumber.stringifyNumber
     };
     var intHex = {
@@ -2474,7 +2474,7 @@ var require_int = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "HEX",
       test: /^0x[0-9a-fA-F]+$/,
-      resolve: (str, _onError, opt) => intResolve(str, 2, 16, opt),
+      resolve: (str2, _onError, opt) => intResolve(str2, 2, 16, opt),
       stringify: (node) => intStringify(node, 16, "0x")
     };
     exports.int = int2;
@@ -2491,7 +2491,7 @@ var require_schema = __commonJS({
     var _null4 = require_null();
     var seq = require_seq();
     var string3 = require_string();
-    var bool = require_bool();
+    var bool2 = require_bool();
     var float = require_float();
     var int2 = require_int();
     var schema = [
@@ -2499,7 +2499,7 @@ var require_schema = __commonJS({
       seq.seq,
       string3.string,
       _null4.nullTag,
-      bool.boolTag,
+      bool2.boolTag,
       int2.intOct,
       int2.int,
       int2.intHex,
@@ -2527,7 +2527,7 @@ var require_schema2 = __commonJS({
         identify: (value) => typeof value === "string",
         default: true,
         tag: "tag:yaml.org,2002:str",
-        resolve: (str) => str,
+        resolve: (str2) => str2,
         stringify: stringifyJSON
       },
       {
@@ -2544,7 +2544,7 @@ var require_schema2 = __commonJS({
         default: true,
         tag: "tag:yaml.org,2002:bool",
         test: /^true$|^false$/,
-        resolve: (str) => str === "true",
+        resolve: (str2) => str2 === "true",
         stringify: stringifyJSON
       },
       {
@@ -2552,7 +2552,7 @@ var require_schema2 = __commonJS({
         default: true,
         tag: "tag:yaml.org,2002:int",
         test: /^-?(?:0|[1-9][0-9]*)$/,
-        resolve: (str, _onError, { intAsBigInt }) => intAsBigInt ? BigInt(str) : parseInt(str, 10),
+        resolve: (str2, _onError, { intAsBigInt }) => intAsBigInt ? BigInt(str2) : parseInt(str2, 10),
         stringify: ({ value }) => intIdentify(value) ? value.toString() : JSON.stringify(value)
       },
       {
@@ -2560,7 +2560,7 @@ var require_schema2 = __commonJS({
         default: true,
         tag: "tag:yaml.org,2002:float",
         test: /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]*)?(?:[eE][-+]?[0-9]+)?$/,
-        resolve: (str) => parseFloat(str),
+        resolve: (str2) => parseFloat(str2),
         stringify: stringifyJSON
       }
     ];
@@ -2568,9 +2568,9 @@ var require_schema2 = __commonJS({
       default: true,
       tag: "",
       test: /^/,
-      resolve(str, onError) {
-        onError(`Unresolved plain scalar ${JSON.stringify(str)}`);
-        return str;
+      resolve(str2, onError) {
+        onError(`Unresolved plain scalar ${JSON.stringify(str2)}`);
+        return str2;
       }
     };
     var schema = [map2.map, seq.seq].concat(jsonScalars, jsonError);
@@ -2602,10 +2602,10 @@ var require_binary = __commonJS({
         if (typeof node_buffer.Buffer === "function") {
           return node_buffer.Buffer.from(src, "base64");
         } else if (typeof atob === "function") {
-          const str = atob(src.replace(/[\n\r]/g, ""));
-          const buffer = new Uint8Array(str.length);
-          for (let i = 0; i < str.length; ++i)
-            buffer[i] = str.charCodeAt(i);
+          const str2 = atob(src.replace(/[\n\r]/g, ""));
+          const buffer = new Uint8Array(str2.length);
+          for (let i = 0; i < str2.length; ++i)
+            buffer[i] = str2.charCodeAt(i);
           return buffer;
         } else {
           onError("This environment does not support reading binary tags; either Buffer or atob is required");
@@ -2616,28 +2616,28 @@ var require_binary = __commonJS({
         if (!value)
           return "";
         const buf = value;
-        let str;
+        let str2;
         if (typeof node_buffer.Buffer === "function") {
-          str = buf instanceof node_buffer.Buffer ? buf.toString("base64") : node_buffer.Buffer.from(buf.buffer).toString("base64");
+          str2 = buf instanceof node_buffer.Buffer ? buf.toString("base64") : node_buffer.Buffer.from(buf.buffer).toString("base64");
         } else if (typeof btoa === "function") {
           let s = "";
           for (let i = 0; i < buf.length; ++i)
             s += String.fromCharCode(buf[i]);
-          str = btoa(s);
+          str2 = btoa(s);
         } else {
           throw new Error("This environment does not support writing binary tags; either Buffer or btoa is required");
         }
         type ?? (type = Scalar.Scalar.BLOCK_LITERAL);
         if (type !== Scalar.Scalar.QUOTE_DOUBLE) {
           const lineWidth = Math.max(ctx.options.lineWidth - ctx.indent.length, ctx.options.minContentWidth);
-          const n = Math.ceil(str.length / lineWidth);
+          const n = Math.ceil(str2.length / lineWidth);
           const lines = new Array(n);
           for (let i = 0, o = 0; i < n; ++i, o += lineWidth) {
-            lines[i] = str.substr(o, lineWidth);
+            lines[i] = str2.substr(o, lineWidth);
           }
-          str = lines.join(type === Scalar.Scalar.BLOCK_LITERAL ? "\n" : " ");
+          str2 = lines.join(type === Scalar.Scalar.BLOCK_LITERAL ? "\n" : " ");
         }
-        return stringifyString.stringifyString({ comment, type, value: str }, ctx, onComment, onChompKeep);
+        return stringifyString.stringifyString({ comment, type, value: str2 }, ctx, onComment, onChompKeep);
       }
     };
     exports.binary = binary;
@@ -2843,7 +2843,7 @@ var require_float2 = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:float",
       test: /^(?:[-+]?\.(?:inf|Inf|INF)|\.nan|\.NaN|\.NAN)$/,
-      resolve: (str) => str.slice(-3).toLowerCase() === "nan" ? NaN : str[0] === "-" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
+      resolve: (str2) => str2.slice(-3).toLowerCase() === "nan" ? NaN : str2[0] === "-" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
       stringify: stringifyNumber.stringifyNumber
     };
     var floatExp = {
@@ -2852,10 +2852,10 @@ var require_float2 = __commonJS({
       tag: "tag:yaml.org,2002:float",
       format: "EXP",
       test: /^[-+]?(?:[0-9][0-9_]*)?(?:\.[0-9_]*)?[eE][-+]?[0-9]+$/,
-      resolve: (str) => parseFloat(str.replace(/_/g, "")),
+      resolve: (str2) => parseFloat(str2.replace(/_/g, "")),
       stringify(node) {
-        const num = Number(node.value);
-        return isFinite(num) ? num.toExponential() : stringifyNumber.stringifyNumber(node);
+        const num2 = Number(node.value);
+        return isFinite(num2) ? num2.toExponential() : stringifyNumber.stringifyNumber(node);
       }
     };
     var float = {
@@ -2863,11 +2863,11 @@ var require_float2 = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:float",
       test: /^[-+]?(?:[0-9][0-9_]*)?\.[0-9_]*$/,
-      resolve(str) {
-        const node = new Scalar.Scalar(parseFloat(str.replace(/_/g, "")));
-        const dot = str.indexOf(".");
+      resolve(str2) {
+        const node = new Scalar.Scalar(parseFloat(str2.replace(/_/g, "")));
+        const dot = str2.indexOf(".");
         if (dot !== -1) {
-          const f = str.substring(dot + 1).replace(/_/g, "");
+          const f = str2.substring(dot + 1).replace(/_/g, "");
           if (f[f.length - 1] === "0")
             node.minFractionDigits = f.length;
         }
@@ -2887,34 +2887,34 @@ var require_int2 = __commonJS({
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
-    function intResolve(str, offset, radix, { intAsBigInt }) {
-      const sign = str[0];
+    function intResolve(str2, offset, radix, { intAsBigInt }) {
+      const sign = str2[0];
       if (sign === "-" || sign === "+")
         offset += 1;
-      str = str.substring(offset).replace(/_/g, "");
+      str2 = str2.substring(offset).replace(/_/g, "");
       if (intAsBigInt) {
         switch (radix) {
           case 2:
-            str = `0b${str}`;
+            str2 = `0b${str2}`;
             break;
           case 8:
-            str = `0o${str}`;
+            str2 = `0o${str2}`;
             break;
           case 16:
-            str = `0x${str}`;
+            str2 = `0x${str2}`;
             break;
         }
-        const n2 = BigInt(str);
+        const n2 = BigInt(str2);
         return sign === "-" ? BigInt(-1) * n2 : n2;
       }
-      const n = parseInt(str, radix);
+      const n = parseInt(str2, radix);
       return sign === "-" ? -1 * n : n;
     }
     function intStringify(node, radix, prefix) {
       const { value } = node;
       if (intIdentify(value)) {
-        const str = value.toString(radix);
-        return value < 0 ? "-" + prefix + str.substr(1) : prefix + str;
+        const str2 = value.toString(radix);
+        return value < 0 ? "-" + prefix + str2.substr(1) : prefix + str2;
       }
       return stringifyNumber.stringifyNumber(node);
     }
@@ -2924,7 +2924,7 @@ var require_int2 = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "BIN",
       test: /^[-+]?0b[0-1_]+$/,
-      resolve: (str, _onError, opt) => intResolve(str, 2, 2, opt),
+      resolve: (str2, _onError, opt) => intResolve(str2, 2, 2, opt),
       stringify: (node) => intStringify(node, 2, "0b")
     };
     var intOct = {
@@ -2933,7 +2933,7 @@ var require_int2 = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "OCT",
       test: /^[-+]?0[0-7_]+$/,
-      resolve: (str, _onError, opt) => intResolve(str, 1, 8, opt),
+      resolve: (str2, _onError, opt) => intResolve(str2, 1, 8, opt),
       stringify: (node) => intStringify(node, 8, "0")
     };
     var int2 = {
@@ -2941,7 +2941,7 @@ var require_int2 = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:int",
       test: /^[-+]?[0-9][0-9_]*$/,
-      resolve: (str, _onError, opt) => intResolve(str, 0, 10, opt),
+      resolve: (str2, _onError, opt) => intResolve(str2, 0, 10, opt),
       stringify: stringifyNumber.stringifyNumber
     };
     var intHex = {
@@ -2950,7 +2950,7 @@ var require_int2 = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "HEX",
       test: /^[-+]?0x[0-9a-fA-F_]+$/,
-      resolve: (str, _onError, opt) => intResolve(str, 2, 16, opt),
+      resolve: (str2, _onError, opt) => intResolve(str2, 2, 16, opt),
       stringify: (node) => intStringify(node, 16, "0x")
     };
     exports.int = int2;
@@ -3054,26 +3054,26 @@ var require_timestamp = __commonJS({
   "node_modules/yaml/dist/schema/yaml-1.1/timestamp.js"(exports) {
     "use strict";
     var stringifyNumber = require_stringifyNumber();
-    function parseSexagesimal(str, asBigInt) {
-      const sign = str[0];
-      const parts = sign === "-" || sign === "+" ? str.substring(1) : str;
-      const num = (n) => asBigInt ? BigInt(n) : Number(n);
-      const res = parts.replace(/_/g, "").split(":").reduce((res2, p) => res2 * num(60) + num(p), num(0));
-      return sign === "-" ? num(-1) * res : res;
+    function parseSexagesimal(str2, asBigInt) {
+      const sign = str2[0];
+      const parts = sign === "-" || sign === "+" ? str2.substring(1) : str2;
+      const num2 = (n) => asBigInt ? BigInt(n) : Number(n);
+      const res = parts.replace(/_/g, "").split(":").reduce((res2, p) => res2 * num2(60) + num2(p), num2(0));
+      return sign === "-" ? num2(-1) * res : res;
     }
     function stringifySexagesimal(node) {
       let { value } = node;
-      let num = (n) => n;
+      let num2 = (n) => n;
       if (typeof value === "bigint")
-        num = (n) => BigInt(n);
+        num2 = (n) => BigInt(n);
       else if (isNaN(value) || !isFinite(value))
         return stringifyNumber.stringifyNumber(node);
       let sign = "";
       if (value < 0) {
         sign = "-";
-        value *= num(-1);
+        value *= num2(-1);
       }
-      const _60 = num(60);
+      const _60 = num2(60);
       const parts = [value % _60];
       if (value < 60) {
         parts.unshift(0);
@@ -3093,7 +3093,7 @@ var require_timestamp = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "TIME",
       test: /^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+$/,
-      resolve: (str, _onError, { intAsBigInt }) => parseSexagesimal(str, intAsBigInt),
+      resolve: (str2, _onError, { intAsBigInt }) => parseSexagesimal(str2, intAsBigInt),
       stringify: stringifySexagesimal
     };
     var floatTime = {
@@ -3102,7 +3102,7 @@ var require_timestamp = __commonJS({
       tag: "tag:yaml.org,2002:float",
       format: "TIME",
       test: /^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*$/,
-      resolve: (str) => parseSexagesimal(str, false),
+      resolve: (str2) => parseSexagesimal(str2, false),
       stringify: stringifySexagesimal
     };
     var timestamp = {
@@ -3113,8 +3113,8 @@ var require_timestamp = __commonJS({
       // may be omitted altogether, resulting in a date format. In such a case, the time part is
       // assumed to be 00:00:00Z (start of day, UTC).
       test: RegExp("^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})(?:(?:t|T|[ \\t]+)([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2}(\\.[0-9]+)?)(?:[ \\t]*(Z|[-+][012]?[0-9](?::[0-9]{2})?))?)?$"),
-      resolve(str) {
-        const match = str.match(timestamp.test);
+      resolve(str2) {
+        const match = str2.match(timestamp.test);
         if (!match)
           throw new Error("!!timestamp expects a date, starting with yyyy-mm-dd");
         const [, year, month, day, hour, minute, second] = match.map(Number);
@@ -3146,7 +3146,7 @@ var require_schema3 = __commonJS({
     var seq = require_seq();
     var string3 = require_string();
     var binary = require_binary();
-    var bool = require_bool2();
+    var bool2 = require_bool2();
     var float = require_float2();
     var int2 = require_int2();
     var merge2 = require_merge();
@@ -3159,8 +3159,8 @@ var require_schema3 = __commonJS({
       seq.seq,
       string3.string,
       _null4.nullTag,
-      bool.trueTag,
-      bool.falseTag,
+      bool2.trueTag,
+      bool2.falseTag,
       int2.intBin,
       int2.intOct,
       int2.int,
@@ -3189,7 +3189,7 @@ var require_tags = __commonJS({
     var _null4 = require_null();
     var seq = require_seq();
     var string3 = require_string();
-    var bool = require_bool();
+    var bool2 = require_bool();
     var float = require_float();
     var int2 = require_int();
     var schema = require_schema();
@@ -3210,7 +3210,7 @@ var require_tags = __commonJS({
     ]);
     var tagsByName = {
       binary: binary.binary,
-      bool: bool.boolTag,
+      bool: bool2.boolTag,
       float: float.float,
       floatExp: float.floatExp,
       floatNaN: float.floatNaN,
@@ -4821,8 +4821,8 @@ var require_resolve_flow_scalar = __commonJS({
     };
     function parseCharCode(source, offset, length, onError) {
       const cc = source.substr(offset, length);
-      const ok = cc.length === length && /^[0-9a-fA-F]+$/.test(cc);
-      const code = ok ? parseInt(cc, 16) : NaN;
+      const ok2 = cc.length === length && /^[0-9a-fA-F]+$/.test(cc);
+      const code = ok2 ? parseInt(cc, 16) : NaN;
       if (isNaN(code)) {
         const raw = source.substr(offset - 2, length + 2);
         onError(offset - 2, "BAD_DQ_ESCAPE", `Invalid escape sequence ${raw}`);
@@ -7399,7 +7399,7 @@ var require_code = __commonJS({
     }
     exports._ = _;
     var plus = new _Code("+");
-    function str(strs, ...args) {
+    function str2(strs, ...args) {
       const expr = [safeStringify(strs[0])];
       let i = 0;
       while (i < args.length) {
@@ -7410,7 +7410,7 @@ var require_code = __commonJS({
       optimize(expr);
       return new _Code(expr);
     }
-    exports.str = str;
+    exports.str = str2;
     function addCodeArg(code, arg) {
       if (arg instanceof _Code)
         code.push(...arg._items);
@@ -7453,7 +7453,7 @@ var require_code = __commonJS({
       return;
     }
     function strConcat(c1, c2) {
-      return c2.emptyStr() ? c1 : c1.emptyStr() ? c2 : str`${c1}${c2}`;
+      return c2.emptyStr() ? c1 : c1.emptyStr() ? c2 : str2`${c1}${c2}`;
     }
     exports.strConcat = strConcat;
     function interpolate(x) {
@@ -8415,22 +8415,22 @@ var require_util = __commonJS({
       return (0, codegen_1._)`${topSchemaRef}${schemaPath}${(0, codegen_1.getProperty)(keyword)}`;
     }
     exports.schemaRefOrVal = schemaRefOrVal;
-    function unescapeFragment(str) {
-      return unescapeJsonPointer(decodeURIComponent(str));
+    function unescapeFragment(str2) {
+      return unescapeJsonPointer(decodeURIComponent(str2));
     }
     exports.unescapeFragment = unescapeFragment;
-    function escapeFragment(str) {
-      return encodeURIComponent(escapeJsonPointer(str));
+    function escapeFragment(str2) {
+      return encodeURIComponent(escapeJsonPointer(str2));
     }
     exports.escapeFragment = escapeFragment;
-    function escapeJsonPointer(str) {
-      if (typeof str == "number")
-        return `${str}`;
-      return str.replace(/~/g, "~0").replace(/\//g, "~1");
+    function escapeJsonPointer(str2) {
+      if (typeof str2 == "number")
+        return `${str2}`;
+      return str2.replace(/~/g, "~0").replace(/\//g, "~1");
     }
     exports.escapeJsonPointer = escapeJsonPointer;
-    function unescapeJsonPointer(str) {
-      return str.replace(/~1/g, "/").replace(/~0/g, "~");
+    function unescapeJsonPointer(str2) {
+      return str2.replace(/~1/g, "/").replace(/~0/g, "~");
     }
     exports.unescapeJsonPointer = unescapeJsonPointer;
     function eachItem(xs, f) {
@@ -8600,21 +8600,21 @@ var require_errors2 = __commonJS({
     function extendErrors({ gen, keyword, schemaValue, data, errsCount, it }) {
       if (errsCount === void 0)
         throw new Error("ajv implementation error");
-      const err = gen.name("err");
+      const err2 = gen.name("err");
       gen.forRange("i", errsCount, names_1.default.errors, (i) => {
-        gen.const(err, (0, codegen_1._)`${names_1.default.vErrors}[${i}]`);
-        gen.if((0, codegen_1._)`${err}.instancePath === undefined`, () => gen.assign((0, codegen_1._)`${err}.instancePath`, (0, codegen_1.strConcat)(names_1.default.instancePath, it.errorPath)));
-        gen.assign((0, codegen_1._)`${err}.schemaPath`, (0, codegen_1.str)`${it.errSchemaPath}/${keyword}`);
+        gen.const(err2, (0, codegen_1._)`${names_1.default.vErrors}[${i}]`);
+        gen.if((0, codegen_1._)`${err2}.instancePath === undefined`, () => gen.assign((0, codegen_1._)`${err2}.instancePath`, (0, codegen_1.strConcat)(names_1.default.instancePath, it.errorPath)));
+        gen.assign((0, codegen_1._)`${err2}.schemaPath`, (0, codegen_1.str)`${it.errSchemaPath}/${keyword}`);
         if (it.opts.verbose) {
-          gen.assign((0, codegen_1._)`${err}.schema`, schemaValue);
-          gen.assign((0, codegen_1._)`${err}.data`, data);
+          gen.assign((0, codegen_1._)`${err2}.schema`, schemaValue);
+          gen.assign((0, codegen_1._)`${err2}.data`, data);
         }
       });
     }
     exports.extendErrors = extendErrors;
     function addError(gen, errObj) {
-      const err = gen.const("err", errObj);
-      gen.if((0, codegen_1._)`${names_1.default.vErrors} === null`, () => gen.assign(names_1.default.vErrors, (0, codegen_1._)`[${err}]`), (0, codegen_1._)`${names_1.default.vErrors}.push(${err})`);
+      const err2 = gen.const("err", errObj);
+      gen.if((0, codegen_1._)`${names_1.default.vErrors} === null`, () => gen.assign(names_1.default.vErrors, (0, codegen_1._)`[${err2}]`), (0, codegen_1._)`${names_1.default.vErrors}.push(${err2})`);
       gen.code((0, codegen_1._)`${names_1.default.errors}++`);
     }
     function returnErrors(it, errs) {
@@ -9455,8 +9455,8 @@ var require_json_schema_traverse = __commonJS({
         post(schema, jsonPtr, rootSchema, parentJsonPtr, parentKeyword, parentSchema, keyIndex);
       }
     }
-    function escapeJsonPtr(str) {
-      return str.replace(/~/g, "~0").replace(/\//g, "~1");
+    function escapeJsonPtr(str2) {
+      return str2.replace(/~/g, "~0").replace(/\//g, "~1");
     }
   }
 });
@@ -10282,7 +10282,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve3.call(this, root, ref);
+      let _sch = resolve4.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a2 = root.localRefs) === null || _a2 === void 0 ? void 0 : _a2[ref];
         const { schemaId } = this.opts;
@@ -10309,7 +10309,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve3(root, ref) {
+    function resolve4(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -10517,10 +10517,10 @@ var require_utils = __commonJS({
         return { host, isIPV6: false };
       }
     }
-    function findToken(str, token) {
+    function findToken(str2, token) {
       let ind = 0;
-      for (let i = 0; i < str.length; i++) {
-        if (str[i] === token) ind++;
+      for (let i = 0; i < str2.length; i++) {
+        if (str2[i] === token) ind++;
       }
       return ind;
     }
@@ -10884,7 +10884,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve3(baseURI, relativeURI, options) {
+    function resolve4(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -11111,7 +11111,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve3,
+      resolve: resolve4,
       resolveComponent,
       equal,
       serialize,
@@ -11173,7 +11173,7 @@ var require_core = __commonJS({
     var util_1 = require_util();
     var $dataRefSchema = require_data();
     var uri_1 = require_uri();
-    var defaultRegExp = (str, flags) => new RegExp(str, flags);
+    var defaultRegExp = (str2, flags) => new RegExp(str2, flags);
     defaultRegExp.code = "new RegExp";
     var META_IGNORE_OPTIONS = ["removeAdditional", "useDefaults", "coerceTypes"];
     var EXT_SCOPE_NAMES = /* @__PURE__ */ new Set([
@@ -11968,16 +11968,16 @@ var require_ucs2length = __commonJS({
   "node_modules/ajv/dist/runtime/ucs2length.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    function ucs2length(str) {
-      const len = str.length;
+    function ucs2length(str2) {
+      const len = str2.length;
       let length = 0;
       let pos = 0;
       let value;
       while (pos < len) {
         length++;
-        value = str.charCodeAt(pos++);
+        value = str2.charCodeAt(pos++);
         if (value >= 55296 && value <= 56319 && pos < len) {
-          value = str.charCodeAt(pos);
+          value = str2.charCodeAt(pos);
           if ((value & 64512) === 56320)
             pos++;
         }
@@ -13860,8 +13860,8 @@ var require_formats = __commonJS({
     }
     var DATE = /^(\d\d\d\d)-(\d\d)-(\d\d)$/;
     var DAYS = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    function date4(str) {
-      const matches = DATE.exec(str);
+    function date4(str2) {
+      const matches = DATE.exec(str2);
       if (!matches)
         return false;
       const year = +matches[1];
@@ -13880,8 +13880,8 @@ var require_formats = __commonJS({
     }
     var TIME = /^(\d\d):(\d\d):(\d\d(?:\.\d+)?)(z|([+-])(\d\d)(?::?(\d\d))?)?$/i;
     function getTime(strictTimeZone) {
-      return function time3(str) {
-        const matches = TIME.exec(str);
+      return function time3(str2) {
+        const matches = TIME.exec(str2);
         if (!matches)
           return false;
         const hr = +matches[1];
@@ -13927,8 +13927,8 @@ var require_formats = __commonJS({
     var DATE_TIME_SEPARATOR = /t|\s/i;
     function getDateTime(strictTimeZone) {
       const time3 = getTime(strictTimeZone);
-      return function date_time(str) {
-        const dateTime = str.split(DATE_TIME_SEPARATOR);
+      return function date_time(str2) {
+        const dateTime = str2.split(DATE_TIME_SEPARATOR);
         return dateTime.length === 2 && date4(dateTime[0]) && time3(dateTime[1]);
       };
     }
@@ -13953,13 +13953,13 @@ var require_formats = __commonJS({
     }
     var NOT_URI_FRAGMENT = /\/|:/;
     var URI = /^(?:[a-z][a-z0-9+\-.]*:)(?:\/?\/(?:(?:[a-z0-9\-._~!$&'()*+,;=:]|%[0-9a-f]{2})*@)?(?:\[(?:(?:(?:(?:[0-9a-f]{1,4}:){6}|::(?:[0-9a-f]{1,4}:){5}|(?:[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){4}|(?:(?:[0-9a-f]{1,4}:){0,1}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){3}|(?:(?:[0-9a-f]{1,4}:){0,2}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){2}|(?:(?:[0-9a-f]{1,4}:){0,3}[0-9a-f]{1,4})?::[0-9a-f]{1,4}:|(?:(?:[0-9a-f]{1,4}:){0,4}[0-9a-f]{1,4})?::)(?:[0-9a-f]{1,4}:[0-9a-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?))|(?:(?:[0-9a-f]{1,4}:){0,5}[0-9a-f]{1,4})?::[0-9a-f]{1,4}|(?:(?:[0-9a-f]{1,4}:){0,6}[0-9a-f]{1,4})?::)|[Vv][0-9a-f]+\.[a-z0-9\-._~!$&'()*+,;=:]+)\]|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)|(?:[a-z0-9\-._~!$&'()*+,;=]|%[0-9a-f]{2})*)(?::\d*)?(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*|\/(?:(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)(?:\?(?:[a-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?(?:#(?:[a-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?$/i;
-    function uri(str) {
-      return NOT_URI_FRAGMENT.test(str) && URI.test(str);
+    function uri(str2) {
+      return NOT_URI_FRAGMENT.test(str2) && URI.test(str2);
     }
     var BYTE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/gm;
-    function byte(str) {
+    function byte(str2) {
       BYTE.lastIndex = 0;
-      return BYTE.test(str);
+      return BYTE.test(str2);
     }
     var MIN_INT32 = -(2 ** 31);
     var MAX_INT32 = 2 ** 31 - 1;
@@ -13973,11 +13973,11 @@ var require_formats = __commonJS({
       return true;
     }
     var Z_ANCHOR = /[^\\]\\Z/;
-    function regex(str) {
-      if (Z_ANCHOR.test(str))
+    function regex(str2) {
+      if (Z_ANCHOR.test(str2))
         return false;
       try {
-        new RegExp(str);
+        new RegExp(str2);
         return true;
       } catch (e) {
         return false;
@@ -14103,22 +14103,22 @@ var require_dist2 = __commonJS({
 // src/index.ts
 var import_yaml2 = __toESM(require_dist(), 1);
 import {
-  readFileSync as readFileSync2,
-  writeFileSync as writeFileSync2,
-  mkdirSync as mkdirSync2,
+  readFileSync as readFileSync4,
+  writeFileSync as writeFileSync3,
+  mkdirSync as mkdirSync4,
   existsSync as existsSync2,
   renameSync,
-  statSync as statSync2,
+  statSync as statSync3,
   lstatSync,
-  appendFileSync,
-  readdirSync,
+  appendFileSync as appendFileSync3,
+  readdirSync as readdirSync2,
   unlinkSync,
   realpathSync as realpathSync2,
   watchFile,
   unwatchFile
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { extname as extname2, join as join2, basename as basename2, dirname as dirname2, resolve as resolve2, isAbsolute } from "node:path";
+import { extname as extname4, join as join3, basename as basename4, dirname as dirname4, resolve as resolve3, isAbsolute as isAbsolute2 } from "node:path";
 import { randomUUID } from "node:crypto";
 
 // src/grouping.ts
@@ -14972,8 +14972,8 @@ var ZodType = class {
         } : {
           issues: ctx.common.issues
         };
-      } catch (err) {
-        if (err?.message?.toLowerCase()?.includes("encountered")) {
+      } catch (err2) {
+        if (err2?.message?.toLowerCase()?.includes("encountered")) {
           this["~standard"].async = true;
         }
         ctx.common = {
@@ -18495,14 +18495,14 @@ function promiseAllObject(promisesObj) {
 }
 function randomString(length = 10) {
   const chars = "abcdefghijklmnopqrstuvwxyz";
-  let str = "";
+  let str2 = "";
   for (let i = 0; i < length; i++) {
-    str += chars[Math.floor(Math.random() * chars.length)];
+    str2 += chars[Math.floor(Math.random() * chars.length)];
   }
-  return str;
+  return str2;
 }
-function esc(str) {
-  return JSON.stringify(str);
+function esc(str2) {
+  return JSON.stringify(str2);
 }
 function slugify(input) {
   return input.toLowerCase().trim().replace(/[^\w\s-]/g, "").replace(/[\s_-]+/g, "-").replace(/^-+|-+$/g, "");
@@ -18602,8 +18602,8 @@ var getParsedType2 = (data) => {
 };
 var propertyKeyTypes = /* @__PURE__ */ new Set(["string", "number", "symbol"]);
 var primitiveTypes = /* @__PURE__ */ new Set(["string", "number", "bigint", "boolean", "symbol", "undefined"]);
-function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function escapeRegex(str2) {
+  return str2.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function clone(inst, def, params) {
   const cl = new inst._zod.constr(def ?? inst._zod.def);
@@ -27121,7 +27121,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve3) => setTimeout(resolve3, pollInterval));
+        await new Promise((resolve4) => setTimeout(resolve4, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -27138,7 +27138,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve3, reject) => {
+    return new Promise((resolve4, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -27216,7 +27216,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve3(parseResult.data);
+            resolve4(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -27477,12 +27477,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve3, reject) => {
+    return new Promise((resolve4, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve3, interval);
+      const timeoutId = setTimeout(resolve4, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -28211,29 +28211,5163 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve3) => {
+    return new Promise((resolve4) => {
       const json2 = serializeMessage(message);
       if (this._stdout.write(json2)) {
-        resolve3();
+        resolve4();
       } else {
-        this._stdout.once("drain", resolve3);
+        this._stdout.once("drain", resolve4);
       }
     });
   }
 };
 
+// src/mass_scouting/cli.ts
+import { execSync } from "node:child_process";
+import {
+  appendFileSync as appendFileSync2,
+  mkdirSync as mkdirSync2,
+  readFileSync as readFileSync2,
+  readdirSync,
+  statSync as statSync2,
+  writeFileSync
+} from "node:fs";
+import { dirname as dirname3, extname as extname3, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// src/mass_scouting/fieldset.ts
+import { readFileSync } from "node:fs";
+var FIELD_NAME_RE = /^[a-z][a-z0-9_]{0,39}$/;
+var FIELDSET_NAME_RE = /^[a-z][a-z0-9_-]{0,63}$/;
+var DESCRIPTION_MIN = 5;
+var DESCRIPTION_MAX = 280;
+var NOTES_MAX = 1e3;
+var FIELDS_MAX = 64;
+var ENUM_VALUE_MAX = 60;
+var ARRAY_MAX_ITEMS_HARD = 64;
+var STRING_MAX_LENGTH_HARD = 4096;
+var FieldsetParseError = class extends Error {
+  constructor(message) {
+    super(`[fieldset] ${message}`);
+    this.name = "FieldsetParseError";
+  }
+};
+var VALID_KINDS = /* @__PURE__ */ new Set([
+  "bool",
+  "string",
+  "enum",
+  "array_string",
+  "array_enum",
+  "int",
+  "number",
+  "array_object"
+]);
+var VALID_INNER_KINDS = /* @__PURE__ */ new Set([
+  "bool",
+  "string",
+  "enum",
+  "array_string",
+  "array_enum",
+  "int",
+  "number"
+]);
+function isPlainObject3(v) {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+function parseFieldType(raw, fieldName) {
+  if (!isPlainObject3(raw)) {
+    throw new FieldsetParseError(
+      `field "${fieldName}".type must be an object`
+    );
+  }
+  const kind = raw.kind;
+  if (typeof kind !== "string" || !VALID_KINDS.has(kind)) {
+    throw new FieldsetParseError(
+      `field "${fieldName}".type.kind must be one of ${[...VALID_KINDS].join(", ")} (got ${JSON.stringify(kind)})`
+    );
+  }
+  switch (kind) {
+    case "bool":
+      return { kind };
+    case "string": {
+      const out = { kind };
+      if (raw.max_length !== void 0) {
+        if (typeof raw.max_length !== "number" || !Number.isInteger(raw.max_length) || raw.max_length < 1 || raw.max_length > STRING_MAX_LENGTH_HARD) {
+          throw new FieldsetParseError(
+            `field "${fieldName}".type.max_length must be an integer 1..${STRING_MAX_LENGTH_HARD}`
+          );
+        }
+        out.max_length = raw.max_length;
+      }
+      return out;
+    }
+    case "enum": {
+      const values = raw.values;
+      if (!Array.isArray(values) || values.length === 0) {
+        throw new FieldsetParseError(
+          `field "${fieldName}".type.values must be a non-empty array`
+        );
+      }
+      const seen = /* @__PURE__ */ new Set();
+      for (const v of values) {
+        if (typeof v !== "string" || v.length === 0 || v.length > ENUM_VALUE_MAX) {
+          throw new FieldsetParseError(
+            `field "${fieldName}".type.values entries must be 1..${ENUM_VALUE_MAX}-char strings`
+          );
+        }
+        if (seen.has(v)) {
+          throw new FieldsetParseError(
+            `field "${fieldName}".type.values has duplicate "${v}"`
+          );
+        }
+        seen.add(v);
+      }
+      return { kind, values: [...values] };
+    }
+    case "array_string": {
+      const out = { kind };
+      if (raw.max_items !== void 0) {
+        if (typeof raw.max_items !== "number" || !Number.isInteger(raw.max_items) || raw.max_items < 1 || raw.max_items > ARRAY_MAX_ITEMS_HARD) {
+          throw new FieldsetParseError(
+            `field "${fieldName}".type.max_items must be an integer 1..${ARRAY_MAX_ITEMS_HARD}`
+          );
+        }
+        out.max_items = raw.max_items;
+      }
+      return out;
+    }
+    case "array_enum": {
+      const values = raw.values;
+      if (!Array.isArray(values) || values.length === 0) {
+        throw new FieldsetParseError(
+          `field "${fieldName}".type.values must be a non-empty array`
+        );
+      }
+      const seen = /* @__PURE__ */ new Set();
+      for (const v of values) {
+        if (typeof v !== "string" || v.length === 0 || v.length > ENUM_VALUE_MAX) {
+          throw new FieldsetParseError(
+            `field "${fieldName}".type.values entries must be 1..${ENUM_VALUE_MAX}-char strings`
+          );
+        }
+        if (seen.has(v)) {
+          throw new FieldsetParseError(
+            `field "${fieldName}".type.values has duplicate "${v}"`
+          );
+        }
+        seen.add(v);
+      }
+      const out = { kind, values: [...values] };
+      if (raw.max_items !== void 0) {
+        if (typeof raw.max_items !== "number" || !Number.isInteger(raw.max_items) || raw.max_items < 1 || raw.max_items > ARRAY_MAX_ITEMS_HARD) {
+          throw new FieldsetParseError(
+            `field "${fieldName}".type.max_items must be an integer 1..${ARRAY_MAX_ITEMS_HARD}`
+          );
+        }
+        out.max_items = raw.max_items;
+      }
+      return out;
+    }
+    case "int": {
+      const out = { kind };
+      if (raw.min !== void 0) {
+        if (typeof raw.min !== "number" || !Number.isInteger(raw.min)) {
+          throw new FieldsetParseError(
+            `field "${fieldName}".type.min must be an integer`
+          );
+        }
+        out.min = raw.min;
+      }
+      if (raw.max !== void 0) {
+        if (typeof raw.max !== "number" || !Number.isInteger(raw.max)) {
+          throw new FieldsetParseError(
+            `field "${fieldName}".type.max must be an integer`
+          );
+        }
+        out.max = raw.max;
+      }
+      if (out.min !== void 0 && out.max !== void 0 && out.min > out.max) {
+        throw new FieldsetParseError(
+          `field "${fieldName}".type.min (${out.min}) > max (${out.max})`
+        );
+      }
+      return out;
+    }
+    case "number": {
+      const out = { kind };
+      if (raw.min !== void 0) {
+        if (typeof raw.min !== "number" || !Number.isFinite(raw.min)) {
+          throw new FieldsetParseError(
+            `field "${fieldName}".type.min must be a finite number`
+          );
+        }
+        out.min = raw.min;
+      }
+      if (raw.max !== void 0) {
+        if (typeof raw.max !== "number" || !Number.isFinite(raw.max)) {
+          throw new FieldsetParseError(
+            `field "${fieldName}".type.max must be a finite number`
+          );
+        }
+        out.max = raw.max;
+      }
+      if (out.min !== void 0 && out.max !== void 0 && out.min > out.max) {
+        throw new FieldsetParseError(
+          `field "${fieldName}".type.min (${out.min}) > max (${out.max})`
+        );
+      }
+      return out;
+    }
+    case "array_object": {
+      const itemFieldsRaw = raw.item_fields;
+      if (!Array.isArray(itemFieldsRaw) || itemFieldsRaw.length === 0) {
+        throw new FieldsetParseError(
+          `field "${fieldName}".type.item_fields must be a non-empty array of inner-field defs`
+        );
+      }
+      const seen = /* @__PURE__ */ new Set();
+      const itemFields = [];
+      for (let i = 0; i < itemFieldsRaw.length; i++) {
+        const f = itemFieldsRaw[i];
+        if (!isPlainObject3(f)) {
+          throw new FieldsetParseError(
+            `field "${fieldName}".type.item_fields[${i}] must be an object`
+          );
+        }
+        const subName = f.name;
+        if (typeof subName !== "string" || !FIELD_NAME_RE.test(subName)) {
+          throw new FieldsetParseError(
+            `field "${fieldName}".type.item_fields[${i}].name must match ${FIELD_NAME_RE}`
+          );
+        }
+        if (seen.has(subName)) {
+          throw new FieldsetParseError(
+            `field "${fieldName}".type.item_fields has duplicate name "${subName}"`
+          );
+        }
+        seen.add(subName);
+        if (typeof f.description !== "string") {
+          throw new FieldsetParseError(
+            `field "${fieldName}".type.item_fields[${i}].description must be a string`
+          );
+        }
+        const innerType = parseFieldType(f.type, `${fieldName}.${subName}`);
+        if (!VALID_INNER_KINDS.has(innerType.kind)) {
+          throw new FieldsetParseError(
+            `field "${fieldName}".type.item_fields[${i}] cannot be array_object (no nesting)`
+          );
+        }
+        itemFields.push({
+          name: subName,
+          description: f.description,
+          type: innerType,
+          required: f.required !== false
+        });
+      }
+      const out = { kind, item_fields: itemFields };
+      const intRange = (k) => {
+        const v = raw[k];
+        if (v === void 0) return;
+        if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > ARRAY_MAX_ITEMS_HARD) {
+          throw new FieldsetParseError(
+            `field "${fieldName}".type.${k} must be an integer 0..${ARRAY_MAX_ITEMS_HARD}`
+          );
+        }
+        out[k] = v;
+      };
+      intRange("min_items");
+      intRange("max_items");
+      intRange("exact_items");
+      if (out.min_items !== void 0 && out.max_items !== void 0 && out.min_items > out.max_items) {
+        throw new FieldsetParseError(
+          `field "${fieldName}".type.min_items > max_items`
+        );
+      }
+      if (out.exact_items !== void 0 && (out.min_items !== void 0 || out.max_items !== void 0)) {
+        throw new FieldsetParseError(
+          `field "${fieldName}".type.exact_items is mutually exclusive with min_items/max_items`
+        );
+      }
+      return out;
+    }
+    default:
+      throw new FieldsetParseError(
+        `field "${fieldName}".type.kind unhandled: ${kind}`
+      );
+  }
+}
+function parseFieldDef(raw, idx) {
+  if (!isPlainObject3(raw)) {
+    throw new FieldsetParseError(`fields[${idx}] must be an object`);
+  }
+  const name = raw.name;
+  if (typeof name !== "string" || !FIELD_NAME_RE.test(name)) {
+    throw new FieldsetParseError(
+      `fields[${idx}].name must match ${FIELD_NAME_RE} (got ${JSON.stringify(name)})`
+    );
+  }
+  const description = raw.description;
+  if (typeof description !== "string" || description.length < DESCRIPTION_MIN || description.length > DESCRIPTION_MAX) {
+    throw new FieldsetParseError(
+      `fields[${idx}].description must be a string of ${DESCRIPTION_MIN}..${DESCRIPTION_MAX} chars`
+    );
+  }
+  const type = parseFieldType(raw.type, name);
+  const out = { name, description, type };
+  if (raw.required !== void 0) {
+    if (typeof raw.required !== "boolean") {
+      throw new FieldsetParseError(
+        `fields[${idx}].required must be a boolean`
+      );
+    }
+    out.required = raw.required;
+  }
+  if (raw.examples !== void 0) {
+    if (!Array.isArray(raw.examples)) {
+      throw new FieldsetParseError(
+        `fields[${idx}].examples must be an array`
+      );
+    }
+    out.examples = [...raw.examples];
+  }
+  return out;
+}
+function parseFieldset(input) {
+  if (!isPlainObject3(input)) {
+    throw new FieldsetParseError("root must be a JSON object");
+  }
+  if (input.version !== 1) {
+    throw new FieldsetParseError(
+      `version must be 1 (got ${JSON.stringify(input.version)})`
+    );
+  }
+  const fsName = input.fieldset_name;
+  if (typeof fsName !== "string" || !FIELDSET_NAME_RE.test(fsName)) {
+    throw new FieldsetParseError(
+      `fieldset_name must match ${FIELDSET_NAME_RE} (got ${JSON.stringify(fsName)})`
+    );
+  }
+  if (input.notes !== void 0) {
+    if (typeof input.notes !== "string" || input.notes.length > NOTES_MAX) {
+      throw new FieldsetParseError(
+        `notes must be a string \u2264 ${NOTES_MAX} chars`
+      );
+    }
+  }
+  const rawFields = input.fields;
+  if (!Array.isArray(rawFields) || rawFields.length === 0) {
+    throw new FieldsetParseError("fields must be a non-empty array");
+  }
+  if (rawFields.length > FIELDS_MAX) {
+    throw new FieldsetParseError(
+      `fields length ${rawFields.length} exceeds limit ${FIELDS_MAX}`
+    );
+  }
+  const fields = [];
+  const seenNames = /* @__PURE__ */ new Set();
+  for (let i = 0; i < rawFields.length; i++) {
+    const f = parseFieldDef(rawFields[i], i);
+    if (seenNames.has(f.name)) {
+      throw new FieldsetParseError(`duplicate field name "${f.name}"`);
+    }
+    seenNames.add(f.name);
+    fields.push(f);
+  }
+  const out = { version: 1, fieldset_name: fsName, fields };
+  if (typeof input.notes === "string") out.notes = input.notes;
+  return out;
+}
+function fieldTypeToJsonSchemaProp(t, description) {
+  switch (t.kind) {
+    case "bool":
+      return { type: "boolean", description };
+    case "string": {
+      const p = { type: "string", description };
+      if (t.max_length !== void 0) p.maxLength = t.max_length;
+      return p;
+    }
+    case "enum":
+      return { type: "string", description, enum: [...t.values] };
+    case "array_string": {
+      const p = {
+        type: "array",
+        description,
+        items: { type: "string" }
+      };
+      if (t.max_items !== void 0) p.maxItems = t.max_items;
+      return p;
+    }
+    case "array_enum": {
+      const p = {
+        type: "array",
+        description,
+        items: { type: "string", enum: [...t.values] }
+      };
+      if (t.max_items !== void 0) p.maxItems = t.max_items;
+      return p;
+    }
+    case "int": {
+      const p = { type: "integer", description };
+      if (t.min !== void 0) p.minimum = t.min;
+      if (t.max !== void 0) p.maximum = t.max;
+      return p;
+    }
+    case "number": {
+      const p = { type: "number", description };
+      if (t.min !== void 0) p.minimum = t.min;
+      if (t.max !== void 0) p.maximum = t.max;
+      return p;
+    }
+    case "array_object": {
+      const properties = {};
+      const required2 = [];
+      for (const f of t.item_fields) {
+        properties[f.name] = fieldTypeToJsonSchemaProp(
+          f.type,
+          f.description
+        );
+        if (f.required !== false) required2.push(f.name);
+      }
+      const item = {
+        type: "object",
+        properties,
+        required: required2,
+        additionalProperties: false
+      };
+      const p = {
+        type: "array",
+        description,
+        items: item
+      };
+      const exact = t.exact_items;
+      if (exact !== void 0) {
+        p.minItems = exact;
+        p.maxItems = exact;
+      } else {
+        if (t.min_items !== void 0) p.minItems = t.min_items;
+        if (t.max_items !== void 0) p.maxItems = t.max_items;
+      }
+      return p;
+    }
+  }
+}
+function renderTypeForPrompt(t) {
+  switch (t.kind) {
+    case "bool":
+      return "boolean";
+    case "string":
+      return t.max_length ? `string \u2264 ${t.max_length} chars` : "string";
+    case "enum":
+      return `one of: ${t.values.map((v) => JSON.stringify(v)).join(", ")}`;
+    case "array_string":
+      return t.max_items ? `array of strings, max ${t.max_items} items` : "array of strings";
+    case "array_enum":
+      return t.max_items ? `array of strings (each one of: ${t.values.map((v) => JSON.stringify(v)).join(", ")}), max ${t.max_items} items` : `array of strings (each one of: ${t.values.map((v) => JSON.stringify(v)).join(", ")})`;
+    case "int": {
+      const range = t.min !== void 0 && t.max !== void 0 ? ` in [${t.min}, ${t.max}]` : t.min !== void 0 ? ` \u2265 ${t.min}` : t.max !== void 0 ? ` \u2264 ${t.max}` : "";
+      return `integer${range}`;
+    }
+    case "number": {
+      const range = t.min !== void 0 && t.max !== void 0 ? ` in [${t.min}, ${t.max}]` : t.min !== void 0 ? ` \u2265 ${t.min}` : t.max !== void 0 ? ` \u2264 ${t.max}` : "";
+      return `number${range}`;
+    }
+    case "array_object": {
+      const sub = t.item_fields.map((f) => `${f.name}:${renderTypeForPrompt(f.type)}`).join(", ");
+      const lengthHint = t.exact_items !== void 0 ? `, EXACTLY ${t.exact_items} items` : t.min_items !== void 0 && t.max_items !== void 0 ? `, ${t.min_items}..${t.max_items} items` : t.max_items !== void 0 ? `, max ${t.max_items} items` : "";
+      return `array of objects {${sub}}${lengthHint} \u2014 POSITIONAL (no dedup, original order preserved)`;
+    }
+  }
+}
+function renderSystemPrompt(fs) {
+  const lines = [];
+  lines.push(
+    "You inspect a single file and extract structured information.",
+    "",
+    "For the file body provided after FILE:, return a JSON object that EXACTLY",
+    "matches the schema below. Do not include any other keys. Do not omit",
+    "required keys. Output JSON only \u2014 no prose, no markdown fences.",
+    ""
+  );
+  if (fs.notes && fs.notes.trim().length > 0) {
+    lines.push("NOTES (from the user):", fs.notes.trim(), "");
+  }
+  lines.push("FIELDS TO EXTRACT:");
+  for (const f of fs.fields) {
+    lines.push(`- "${f.name}" (${renderTypeForPrompt(f.type)}): ${f.description}`);
+    if (f.examples && f.examples.length > 0) {
+      const ex = f.examples.slice(0, 2).map((e) => JSON.stringify(e)).join(", ");
+      lines.push(`    examples: ${ex}`);
+    }
+  }
+  lines.push(
+    "",
+    "If a field describes a property the file does not exhibit:",
+    "- bool fields: emit `false`.",
+    '- string fields: emit "" (empty string).',
+    "- array fields: emit [].",
+    "- enum fields: pick the listed value that best represents 'absent/none';",
+    "  if none exists, pick the most defensible value and lean conservative.",
+    "- int/number fields: emit the lowest legal value in range.",
+    "",
+    "Never invent facts. Read only the provided FILE body."
+  );
+  return lines.join("\n");
+}
+function userPromptFor(basename5, body) {
+  return `FILE: ${basename5}
+
+CONTENT:
+${body}`;
+}
+function jsonSchemaName(fsName) {
+  return `mass_scout_${fsName.replace(/-/g, "_")}`;
+}
+function makeRequiredKeysValidator(required2) {
+  return (parsed) => {
+    if (!isPlainObject3(parsed)) {
+      const got = parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed;
+      return { ok: false, reason: `expected object, got ${got}` };
+    }
+    const missing = required2.filter((k) => !(k in parsed));
+    if (missing.length > 0) {
+      return { ok: false, reason: `missing required keys: ${missing.join(", ")}` };
+    }
+    return { ok: true };
+  };
+}
+function isFiniteNumber(v) {
+  return typeof v === "number" && Number.isFinite(v);
+}
+function defaultForType(t) {
+  switch (t.kind) {
+    case "bool":
+      return false;
+    case "string":
+      return "";
+    case "enum":
+      return t.values[0];
+    case "array_string":
+    case "array_enum":
+      return [];
+    case "int":
+      return t.min ?? 0;
+    case "number":
+      return t.min ?? 0;
+    case "array_object":
+      return [];
+  }
+}
+function coerceBool(v) {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    if (["true", "yes", "1", "y"].includes(s)) return true;
+    if (["false", "no", "0", "n", ""].includes(s)) return false;
+  }
+  return void 0;
+}
+function truncateAtBoundary(s, maxLen) {
+  if (s.length <= maxLen) return s;
+  const cut = s.slice(0, maxLen);
+  const wsIdx = Math.max(cut.lastIndexOf(" "), cut.lastIndexOf("\n"));
+  return wsIdx > maxLen / 2 ? cut.slice(0, wsIdx) : cut;
+}
+function snapToEnum(v, values) {
+  if (values.includes(v)) return v;
+  const lc = v.toLowerCase();
+  for (const cand of values) {
+    if (cand.toLowerCase() === lc) return cand;
+  }
+  if (lc.length < 4) return void 0;
+  let best = null;
+  for (const cand of values) {
+    if (cand.length < 4) continue;
+    const d = levenshtein(lc, cand.toLowerCase());
+    if (d <= 2 && (!best || d < best.d)) best = { val: cand, d };
+  }
+  return best?.val;
+}
+function levenshtein(a, b) {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  const prev = new Array(b.length + 1);
+  const curr = new Array(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    for (let j = 0; j <= b.length; j++) prev[j] = curr[j];
+  }
+  return prev[b.length];
+}
+function repairOneField(raw, f, repairs) {
+  const t = f.type;
+  switch (t.kind) {
+    case "bool": {
+      const c = coerceBool(raw);
+      if (c === void 0) {
+        repairs.push(`${f.name}: not bool-coercible (${typeof raw}) \u2014 defaulting to false`);
+        return false;
+      }
+      if (typeof raw !== "boolean") {
+        repairs.push(`${f.name}: coerced ${JSON.stringify(raw)} \u2192 ${c}`);
+      }
+      return c;
+    }
+    case "string": {
+      let s;
+      if (typeof raw === "string") s = raw;
+      else if (raw == null) {
+        repairs.push(`${f.name}: null/undefined \u2192 ""`);
+        return "";
+      } else {
+        s = String(raw);
+        repairs.push(`${f.name}: coerced ${typeof raw} \u2192 string`);
+      }
+      if (t.max_length !== void 0 && s.length > t.max_length) {
+        const trimmed = truncateAtBoundary(s, t.max_length);
+        repairs.push(`${f.name}: truncated ${s.length} \u2192 ${trimmed.length} chars`);
+        return trimmed;
+      }
+      return s;
+    }
+    case "enum": {
+      if (typeof raw !== "string") {
+        repairs.push(`${f.name}: not a string \u2014 using "${t.values[0]}"`);
+        return t.values[0];
+      }
+      const snapped = snapToEnum(raw, t.values);
+      if (snapped === void 0) {
+        repairs.push(
+          `${f.name}: ${JSON.stringify(raw)} not in enum \u2014 using "${t.values[0]}"`
+        );
+        return t.values[0];
+      }
+      if (snapped !== raw) {
+        repairs.push(`${f.name}: snapped ${JSON.stringify(raw)} \u2192 "${snapped}"`);
+      }
+      return snapped;
+    }
+    case "array_string": {
+      if (!Array.isArray(raw)) {
+        repairs.push(`${f.name}: not an array \u2014 using []`);
+        return [];
+      }
+      const out = [];
+      for (const item of raw) {
+        if (typeof item === "string") out.push(item);
+        else {
+          repairs.push(`${f.name}: dropped non-string item`);
+        }
+      }
+      const seen = /* @__PURE__ */ new Set();
+      const deduped = out.filter((x) => seen.has(x) ? false : seen.add(x) && true);
+      if (deduped.length !== out.length) {
+        repairs.push(`${f.name}: removed ${out.length - deduped.length} duplicate(s)`);
+      }
+      if (t.max_items !== void 0 && deduped.length > t.max_items) {
+        const trimmed = deduped.slice(0, t.max_items);
+        repairs.push(
+          `${f.name}: trimmed array ${deduped.length} \u2192 ${trimmed.length} items`
+        );
+        return trimmed;
+      }
+      return deduped;
+    }
+    case "array_enum": {
+      if (!Array.isArray(raw)) {
+        repairs.push(`${f.name}: not an array \u2014 using []`);
+        return [];
+      }
+      const out = [];
+      for (const item of raw) {
+        if (typeof item !== "string") {
+          repairs.push(`${f.name}: dropped non-string item`);
+          continue;
+        }
+        const snapped = snapToEnum(item, t.values);
+        if (snapped === void 0) {
+          repairs.push(`${f.name}: dropped ${JSON.stringify(item)} (not in enum)`);
+          continue;
+        }
+        if (snapped !== item) {
+          repairs.push(
+            `${f.name}: snapped ${JSON.stringify(item)} \u2192 "${snapped}"`
+          );
+        }
+        out.push(snapped);
+      }
+      const seen = /* @__PURE__ */ new Set();
+      const deduped = out.filter((x) => seen.has(x) ? false : seen.add(x) && true);
+      if (deduped.length !== out.length) {
+        repairs.push(`${f.name}: removed ${out.length - deduped.length} duplicate(s)`);
+      }
+      if (t.max_items !== void 0 && deduped.length > t.max_items) {
+        const trimmed = deduped.slice(0, t.max_items);
+        repairs.push(
+          `${f.name}: trimmed array ${deduped.length} \u2192 ${trimmed.length} items`
+        );
+        return trimmed;
+      }
+      return deduped;
+    }
+    case "int": {
+      let n;
+      if (Number.isInteger(raw)) {
+        n = raw;
+      } else if (isFiniteNumber(raw)) {
+        n = Math.round(raw);
+        repairs.push(`${f.name}: rounded ${raw} \u2192 ${n}`);
+      } else if (typeof raw === "string" && /^-?\d+(\.\d+)?$/.test(raw.trim())) {
+        n = Math.round(Number(raw));
+        repairs.push(`${f.name}: parsed string ${JSON.stringify(raw)} \u2192 ${n}`);
+      } else {
+        const def = t.min ?? 0;
+        repairs.push(`${f.name}: not a number (${typeof raw}) \u2014 defaulting to ${def}`);
+        return def;
+      }
+      if (t.min !== void 0 && n < t.min) {
+        repairs.push(`${f.name}: clamped ${n} \u2192 ${t.min}`);
+        n = t.min;
+      }
+      if (t.max !== void 0 && n > t.max) {
+        repairs.push(`${f.name}: clamped ${n} \u2192 ${t.max}`);
+        n = t.max;
+      }
+      return n;
+    }
+    case "number": {
+      let n;
+      if (isFiniteNumber(raw)) {
+        n = raw;
+      } else if (typeof raw === "string" && /^-?\d+(\.\d+)?$/.test(raw.trim())) {
+        n = Number(raw);
+        repairs.push(`${f.name}: parsed string ${JSON.stringify(raw)} \u2192 ${n}`);
+      } else {
+        const def = t.min ?? 0;
+        repairs.push(`${f.name}: not a number (${typeof raw}) \u2014 defaulting to ${def}`);
+        return def;
+      }
+      if (t.min !== void 0 && n < t.min) {
+        repairs.push(`${f.name}: clamped ${n} \u2192 ${t.min}`);
+        n = t.min;
+      }
+      if (t.max !== void 0 && n > t.max) {
+        repairs.push(`${f.name}: clamped ${n} \u2192 ${t.max}`);
+        n = t.max;
+      }
+      return n;
+    }
+    case "array_object": {
+      if (!Array.isArray(raw)) {
+        repairs.push(`${f.name}: not an array \u2014 using []`);
+        return [];
+      }
+      const innerSubfields = t.item_fields.map((sf) => ({
+        name: sf.name,
+        description: sf.description,
+        type: sf.type,
+        required: sf.required !== false
+      }));
+      const items = [];
+      for (let i = 0; i < raw.length; i++) {
+        const itemRaw = raw[i];
+        const obj = isPlainObject3(itemRaw) ? itemRaw : {};
+        if (!isPlainObject3(itemRaw)) {
+          repairs.push(`${f.name}[${i}]: not an object \u2014 using {}`);
+        }
+        const repairedItem = {};
+        for (const sf of innerSubfields) {
+          if (!(sf.name in obj)) {
+            if (sf.required) {
+              const def = defaultForType(sf.type);
+              repairs.push(
+                `${f.name}[${i}].${sf.name}: missing \u2014 defaulting to ${JSON.stringify(def)}`
+              );
+              repairedItem[sf.name] = def;
+            }
+            continue;
+          }
+          repairedItem[sf.name] = repairOneField(obj[sf.name], sf, repairs);
+        }
+        items.push(repairedItem);
+      }
+      const exact = t.exact_items;
+      if (exact !== void 0) {
+        if (items.length > exact) {
+          repairs.push(`${f.name}: trimmed ${items.length} \u2192 ${exact} items`);
+          items.length = exact;
+        } else if (items.length < exact) {
+          const padCount = exact - items.length;
+          for (let i = 0; i < padCount; i++) {
+            const padItem = {};
+            for (const sf of innerSubfields) {
+              if (sf.required) padItem[sf.name] = defaultForType(sf.type);
+            }
+            items.push(padItem);
+          }
+          repairs.push(`${f.name}: padded ${items.length - padCount} \u2192 ${exact} with default items`);
+        }
+      } else {
+        if (t.max_items !== void 0 && items.length > t.max_items) {
+          repairs.push(
+            `${f.name}: trimmed ${items.length} \u2192 ${t.max_items} items`
+          );
+          items.length = t.max_items;
+        }
+      }
+      return items;
+    }
+  }
+}
+function makeRepair(fs) {
+  return (parsed) => {
+    const repairs = [];
+    const repaired = {};
+    const obj = isPlainObject3(parsed) ? parsed : {};
+    if (!isPlainObject3(parsed)) {
+      const got = parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed;
+      repairs.push(`top-level not an object (${got}) \u2014 treating as empty`);
+    }
+    const allowed = new Set(fs.fields.map((f) => f.name));
+    for (const k of Object.keys(obj)) {
+      if (!allowed.has(k)) {
+        repairs.push(`dropped unknown key "${k}"`);
+      }
+    }
+    for (const f of fs.fields) {
+      const required2 = f.required !== false;
+      if (!(f.name in obj)) {
+        if (required2) {
+          const def = defaultForType(f.type);
+          repairs.push(`${f.name}: missing \u2014 defaulting to ${JSON.stringify(def)}`);
+          repaired[f.name] = def;
+        }
+        continue;
+      }
+      repaired[f.name] = repairOneField(obj[f.name], f, repairs);
+    }
+    return { repaired, repairs };
+  };
+}
+function compileFieldset(fs) {
+  const properties = {};
+  const required2 = [];
+  for (const f of fs.fields) {
+    properties[f.name] = fieldTypeToJsonSchemaProp(f.type, f.description);
+    if (f.required !== false) required2.push(f.name);
+  }
+  const jsonSchema = {
+    name: jsonSchemaName(fs.fieldset_name),
+    strict: true,
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      required: required2,
+      properties
+    }
+  };
+  return {
+    fieldset: fs,
+    jsonSchema,
+    systemPrompt: renderSystemPrompt(fs),
+    userPromptFor,
+    validate: makeRequiredKeysValidator(required2),
+    repair: makeRepair(fs)
+  };
+}
+
+// src/mass_scouting/shorthand.ts
+var ShorthandParseError = class extends Error {
+  constructor(message) {
+    super(`[shorthand] ${message}`);
+    this.name = "ShorthandParseError";
+  }
+};
+function parseShorthand(input) {
+  if (typeof input !== "string" || input.length === 0) {
+    throw new ShorthandParseError("input must be a non-empty string");
+  }
+  const eqIdx = input.indexOf("=");
+  if (eqIdx < 0) {
+    throw new ShorthandParseError(
+      `missing "=" \u2014 expected "name:type=description" (got ${JSON.stringify(input)})`
+    );
+  }
+  const head = input.slice(0, eqIdx);
+  const description = input.slice(eqIdx + 1);
+  const colonIdx = head.indexOf(":");
+  if (colonIdx < 0) {
+    throw new ShorthandParseError(
+      `missing ":" in "${head}" \u2014 expected "name:type"`
+    );
+  }
+  const name = head.slice(0, colonIdx).trim();
+  const typeSpec = head.slice(colonIdx + 1).trim();
+  if (!FIELD_NAME_RE.test(name)) {
+    throw new ShorthandParseError(
+      `name "${name}" must match ${FIELD_NAME_RE}`
+    );
+  }
+  return {
+    name,
+    type: parseTypeSpec(typeSpec, name),
+    description
+  };
+}
+function tokeniseTypeSpec(spec, fieldName) {
+  const idMatch = spec.match(/^[a-z][a-z0-9_]*/);
+  if (!idMatch) {
+    throw new ShorthandParseError(
+      `field "${fieldName}": cannot parse type spec "${spec}"`
+    );
+  }
+  const kind = idMatch[0];
+  let rest = spec.slice(kind.length).trim();
+  const args = [];
+  while (rest.length > 0) {
+    if (rest[0] !== "(") {
+      throw new ShorthandParseError(
+        `field "${fieldName}": unexpected "${rest[0]}" after "${kind}" (expected "(" or end)`
+      );
+    }
+    const close = rest.indexOf(")");
+    if (close < 0) {
+      throw new ShorthandParseError(
+        `field "${fieldName}": unbalanced "(" in "${spec}"`
+      );
+    }
+    const inner = rest.slice(1, close);
+    args.push(inner.split(",").map((s) => s.trim()));
+    rest = rest.slice(close + 1).trim();
+  }
+  return { kind, args };
+}
+function parseRange(arg, fieldName, numeric) {
+  if (!arg.includes("-")) {
+    throw new ShorthandParseError(
+      `field "${fieldName}": range "${arg}" must contain "-" (e.g. "1-10")`
+    );
+  }
+  let sepIdx = -1;
+  for (let i = 1; i < arg.length; i++) {
+    if (arg[i] === "-") {
+      sepIdx = i;
+      break;
+    }
+  }
+  let lo;
+  let hi;
+  if (sepIdx < 0) {
+    lo = "";
+    hi = arg.slice(1);
+  } else {
+    lo = arg.slice(0, sepIdx);
+    hi = arg.slice(sepIdx + 1);
+  }
+  const out = {};
+  const isInt = numeric === "int";
+  if (lo.length > 0) {
+    const n = Number(lo);
+    if (!Number.isFinite(n) || isInt && !Number.isInteger(n)) {
+      throw new ShorthandParseError(
+        `field "${fieldName}": ${numeric}-range min "${lo}" not a valid ${numeric}`
+      );
+    }
+    out.min = n;
+  }
+  if (hi.length > 0) {
+    const n = Number(hi);
+    if (!Number.isFinite(n) || isInt && !Number.isInteger(n)) {
+      throw new ShorthandParseError(
+        `field "${fieldName}": ${numeric}-range max "${hi}" not a valid ${numeric}`
+      );
+    }
+    out.max = n;
+  }
+  if (out.min === void 0 && out.max === void 0) {
+    throw new ShorthandParseError(
+      `field "${fieldName}": ${numeric}-range "${arg}" has no bounds`
+    );
+  }
+  if (out.min !== void 0 && out.max !== void 0 && out.min > out.max) {
+    throw new ShorthandParseError(
+      `field "${fieldName}": ${numeric}-range min ${out.min} > max ${out.max}`
+    );
+  }
+  return out;
+}
+function parsePositiveInt(arg, fieldName, label) {
+  const n = Number(arg);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new ShorthandParseError(
+      `field "${fieldName}": ${label} "${arg}" must be a positive integer`
+    );
+  }
+  return n;
+}
+function parseTypeSpec(spec, fieldName) {
+  const tokens = tokeniseTypeSpec(spec, fieldName);
+  switch (tokens.kind) {
+    case "bool":
+      if (tokens.args.length > 0) {
+        throw new ShorthandParseError(
+          `field "${fieldName}": bool takes no args (got ${tokens.args.length})`
+        );
+      }
+      return { kind: "bool" };
+    case "string": {
+      if (tokens.args.length === 0) return { kind: "string" };
+      if (tokens.args.length !== 1 || tokens.args[0].length !== 1) {
+        throw new ShorthandParseError(
+          `field "${fieldName}": string takes either no args or (max_length)`
+        );
+      }
+      return {
+        kind: "string",
+        max_length: parsePositiveInt(tokens.args[0][0], fieldName, "max_length")
+      };
+    }
+    case "enum": {
+      if (tokens.args.length !== 1 || tokens.args[0].length === 0) {
+        throw new ShorthandParseError(
+          `field "${fieldName}": enum requires (v1,v2,...)`
+        );
+      }
+      const values = tokens.args[0].filter((v) => v.length > 0);
+      if (values.length === 0) {
+        throw new ShorthandParseError(
+          `field "${fieldName}": enum has no values`
+        );
+      }
+      return { kind: "enum", values };
+    }
+    case "array":
+    case "array_string": {
+      if (tokens.args.length === 0) return { kind: "array_string" };
+      if (tokens.args.length !== 1 || tokens.args[0].length !== 1) {
+        throw new ShorthandParseError(
+          `field "${fieldName}": array takes either no args or (max_items)`
+        );
+      }
+      return {
+        kind: "array_string",
+        max_items: parsePositiveInt(tokens.args[0][0], fieldName, "max_items")
+      };
+    }
+    case "array_enum": {
+      if (tokens.args.length < 1 || tokens.args.length > 2) {
+        throw new ShorthandParseError(
+          `field "${fieldName}": array_enum requires (v1,v2,...)[(max_items)]`
+        );
+      }
+      const values = tokens.args[0].filter((v) => v.length > 0);
+      if (values.length === 0) {
+        throw new ShorthandParseError(
+          `field "${fieldName}": array_enum has no values`
+        );
+      }
+      const out = { kind: "array_enum", values };
+      if (tokens.args.length === 2) {
+        if (tokens.args[1].length !== 1) {
+          throw new ShorthandParseError(
+            `field "${fieldName}": array_enum second arg must be a single max_items value`
+          );
+        }
+        out.max_items = parsePositiveInt(
+          tokens.args[1][0],
+          fieldName,
+          "max_items"
+        );
+      }
+      return out;
+    }
+    case "int": {
+      if (tokens.args.length === 0) return { kind: "int" };
+      if (tokens.args.length !== 1 || tokens.args[0].length !== 1) {
+        throw new ShorthandParseError(
+          `field "${fieldName}": int takes either no args or (min-max)`
+        );
+      }
+      return { kind: "int", ...parseRange(tokens.args[0][0], fieldName, "int") };
+    }
+    case "number": {
+      if (tokens.args.length === 0) return { kind: "number" };
+      if (tokens.args.length !== 1 || tokens.args[0].length !== 1) {
+        throw new ShorthandParseError(
+          `field "${fieldName}": number takes either no args or (min-max)`
+        );
+      }
+      return {
+        kind: "number",
+        ...parseRange(tokens.args[0][0], fieldName, "number")
+      };
+    }
+    default:
+      throw new ShorthandParseError(
+        `field "${fieldName}": unknown type "${tokens.kind}"`
+      );
+  }
+}
+
+// src/mass_scouting/cost-estimate.ts
+var BYTES_PER_TOKEN = 4;
+var DEFAULT_MAX_CONTEXT_PCT_SCOUT = 0.4;
+var DEFAULT_MAX_CONTEXT_PCT_REGISTER = 0.5;
+var KNOWN_PRICING = {
+  "qwen/qwen-2.5-7b-instruct": {
+    input_per_m_usd: 0.04,
+    output_per_m_usd: 0.1,
+    context_window: 32768
+  }
+};
+function estimateTokens(bytes) {
+  if (bytes <= 0) return 0;
+  return Math.ceil(bytes / BYTES_PER_TOKEN);
+}
+function estimateFileCost(args) {
+  const inputTokens = estimateTokens(args.body_bytes) + estimateTokens(args.prompt_overhead_bytes) + estimateTokens(args.schema_overhead_bytes);
+  const outputTokens = estimateTokens(args.expected_output_bytes);
+  const cost = inputTokens / 1e6 * args.pricing.input_per_m_usd + outputTokens / 1e6 * args.pricing.output_per_m_usd;
+  return {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    est_cost_usd: cost
+  };
+}
+function bytesCapFromPct(contextWindow, pct) {
+  if (contextWindow <= 0 || pct <= 0) return 0;
+  return Math.floor(contextWindow * pct * BYTES_PER_TOKEN);
+}
+function estimateJobCost(reg, opts) {
+  const scoutPct = opts.max_context_pct_scout ?? DEFAULT_MAX_CONTEXT_PCT_SCOUT;
+  const registerPct = opts.max_context_pct_register ?? DEFAULT_MAX_CONTEXT_PCT_REGISTER;
+  const scoutCap = bytesCapFromPct(opts.pricing.context_window, scoutPct);
+  const registerCap = bytesCapFromPct(
+    opts.pricing.context_window,
+    registerPct
+  );
+  const rows = reg.listEligible(
+    opts.bucket !== void 0 ? { bucket: opts.bucket } : {}
+  );
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let totalCost = 0;
+  let eligible = 0;
+  let skippedTooBig = 0;
+  let overRegisterCap = 0;
+  const buckets = /* @__PURE__ */ new Map();
+  const bumpBucket = (bucket, fc) => {
+    let b = buckets.get(bucket);
+    if (!b) {
+      b = {
+        bucket,
+        files: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cost_usd: 0
+      };
+      buckets.set(bucket, b);
+    }
+    b.files++;
+    b.input_tokens += fc.input_tokens;
+    b.output_tokens += fc.output_tokens;
+    b.cost_usd += fc.est_cost_usd;
+  };
+  for (const row of rows) {
+    const bytes = row.file_size_bytes;
+    if (bytes > registerCap) {
+      overRegisterCap++;
+      continue;
+    }
+    if (bytes > scoutCap) {
+      skippedTooBig++;
+      continue;
+    }
+    const fc = estimateFileCost({
+      body_bytes: bytes,
+      prompt_overhead_bytes: opts.prompt_overhead_bytes,
+      schema_overhead_bytes: opts.schema_overhead_bytes,
+      expected_output_bytes: opts.expected_output_bytes,
+      pricing: opts.pricing
+    });
+    totalInputTokens += fc.input_tokens;
+    totalOutputTokens += fc.output_tokens;
+    totalCost += fc.est_cost_usd;
+    eligible++;
+    bumpBucket(row.classifier_bucket ?? "unknown", fc);
+  }
+  const by_bucket = Array.from(buckets.values()).sort(
+    (a, b) => b.cost_usd - a.cost_usd
+  );
+  const workers = Math.max(1, opts.worker_count ?? 256);
+  const perCall = opts.per_call_seconds ?? 1;
+  const estSeconds = eligible === 0 ? 0 : Math.max(1, Math.ceil(eligible * perCall / workers));
+  return {
+    files_eligible: eligible,
+    files_skipped_too_big: skippedTooBig,
+    files_over_register_cap: overRegisterCap,
+    total_input_tokens: totalInputTokens,
+    total_output_tokens: totalOutputTokens,
+    est_cost_usd: totalCost,
+    est_seconds: estSeconds,
+    by_bucket
+  };
+}
+async function fetchProviderContext(modelId, apiKey, fetchImpl, baseUrl = "https://openrouter.ai/api/v1") {
+  if (!modelId || !apiKey) return null;
+  try {
+    const url2 = `${baseUrl}/models/${encodeURIComponent(modelId)}/endpoints`;
+    const res = await fetchImpl(url2, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${apiKey}` }
+    });
+    if (!res.ok) return null;
+    const payload = await res.json();
+    const endpoints = payload?.data?.endpoints ?? [];
+    let smallest = null;
+    for (const ep of endpoints) {
+      const c = ep.context_length;
+      if (typeof c !== "number" || !Number.isFinite(c) || c <= 0) continue;
+      if (smallest === null || c < smallest) smallest = c;
+    }
+    return smallest;
+  } catch {
+    return null;
+  }
+}
+function checkBudget(estCostUsd, budgetUsd) {
+  if (budgetUsd === null || budgetUsd === void 0) {
+    return { allowed: true };
+  }
+  if (!Number.isFinite(budgetUsd) || budgetUsd < 0) {
+    return {
+      allowed: false,
+      reason: `Invalid --budget-usd value ${budgetUsd}`
+    };
+  }
+  if (estCostUsd <= budgetUsd) return { allowed: true };
+  const over = estCostUsd - budgetUsd;
+  return {
+    allowed: false,
+    reason: `Estimated cost $${estCostUsd.toFixed(4)} exceeds budget $${budgetUsd.toFixed(4)} by $${over.toFixed(4)}`
+  };
+}
+
+// src/mass_scouting/registry.ts
+import Database from "better-sqlite3";
+import { createHash } from "node:crypto";
+import { basename as basename2 } from "node:path";
+var MIGRATIONS = [
+  {
+    version: 1,
+    sql: `
+      CREATE TABLE IF NOT EXISTS file_short_id (
+        short_id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        fingerprint           TEXT NOT NULL UNIQUE,
+        file_path             TEXT NOT NULL,
+        source_root           TEXT NOT NULL,
+        basename              TEXT NOT NULL,
+        classifier_bucket     TEXT NOT NULL DEFAULT 'unknown',
+        has_yaml_frontmatter  INTEGER,
+        detected_language     TEXT,
+        detected_format       TEXT,
+        file_size_bytes       INTEGER NOT NULL,
+        registered_via        TEXT NOT NULL CHECK(registered_via IN ('folder','explicit')),
+        created_at            TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_fsi_path   ON file_short_id(file_path);
+      CREATE INDEX IF NOT EXISTS idx_fsi_bucket ON file_short_id(classifier_bucket);
+
+      CREATE TABLE IF NOT EXISTS file_body_cache (
+        fingerprint  TEXT PRIMARY KEY,
+        body         BLOB NOT NULL,
+        body_bytes   INTEGER NOT NULL,
+        cached_at    TEXT NOT NULL,
+        FOREIGN KEY (fingerprint) REFERENCES file_short_id(fingerprint)
+      );
+
+      CREATE TABLE IF NOT EXISTS mass_scout_skipped (
+        rowid         INTEGER PRIMARY KEY AUTOINCREMENT,
+        short_id      INTEGER,
+        file_path     TEXT NOT NULL,
+        reason        TEXT NOT NULL,
+        phase         TEXT NOT NULL CHECK(phase IN ('register','preclassify','scout','sample')),
+        size_bytes    INTEGER,
+        context_pct   REAL,
+        recorded_at   TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_skipped_phase ON mass_scout_skipped(phase);
+      CREATE INDEX IF NOT EXISTS idx_skipped_path  ON mass_scout_skipped(file_path);
+
+      CREATE TABLE IF NOT EXISTS schema_version (
+        version    INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL
+      );
+    `
+  },
+  {
+    version: 2,
+    sql: `
+      CREATE TABLE IF NOT EXISTS mass_scout_jobs (
+        job_id          TEXT PRIMARY KEY,
+        fieldset_name   TEXT NOT NULL,
+        fieldset_json   TEXT NOT NULL,
+        json_schema     TEXT NOT NULL,
+        model           TEXT NOT NULL,
+        workers         INTEGER NOT NULL,
+        source_root     TEXT NOT NULL,
+        bucket_filter   TEXT,
+        started_at      TEXT NOT NULL,
+        ended_at        TEXT,
+        files_total     INTEGER,
+        files_ok        INTEGER,
+        files_failed    INTEGER,
+        retries         INTEGER,
+        cost_usd        REAL,
+        notes           TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_jobs_started ON mass_scout_jobs(started_at);
+
+      CREATE TABLE IF NOT EXISTS mass_scout_results (
+        job_id            TEXT NOT NULL,
+        file_fingerprint  TEXT NOT NULL,
+        short_id          INTEGER NOT NULL,
+        result_json       TEXT NOT NULL,
+        raw_response      TEXT,
+        repaired          INTEGER NOT NULL DEFAULT 0,
+        attempts          INTEGER NOT NULL DEFAULT 1,
+        cost_usd          REAL,
+        enriched_at       TEXT NOT NULL,
+        PRIMARY KEY (job_id, file_fingerprint),
+        FOREIGN KEY (short_id) REFERENCES file_short_id(short_id),
+        FOREIGN KEY (job_id)   REFERENCES mass_scout_jobs(job_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_results_short ON mass_scout_results(short_id);
+      CREATE INDEX IF NOT EXISTS idx_results_job   ON mass_scout_results(job_id);
+
+      -- Standalone FTS5 (blueprint pitfall #2 \u2014 never use content= link).
+      CREATE VIRTUAL TABLE IF NOT EXISTS mass_scout_results_fts USING fts5(
+        job_id           UNINDEXED,
+        file_fingerprint UNINDEXED,
+        short_id         UNINDEXED,
+        searchable_text,
+        tokenize='porter unicode61'
+      );
+    `
+  }
+];
+function applyMigrations(db) {
+  db.exec(
+    "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);"
+  );
+  const row = db.prepare("SELECT MAX(version) AS v FROM schema_version").get();
+  const current = row.v ?? 0;
+  for (const m of MIGRATIONS) {
+    if (m.version <= current) continue;
+    const tx = db.transaction(() => {
+      db.exec(m.sql);
+      db.prepare(
+        "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)"
+      ).run(m.version, (/* @__PURE__ */ new Date()).toISOString());
+    });
+    tx();
+  }
+}
+var Registry = class _Registry {
+  db;
+  // Prepared statements (cached for performance)
+  stmt;
+  constructor(db) {
+    this.db = db;
+    this.stmt = {
+      insertFile: db.prepare(
+        `INSERT INTO file_short_id
+         (fingerprint, file_path, source_root, basename, file_size_bytes, registered_via, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ),
+      findByFingerprint: db.prepare(
+        "SELECT * FROM file_short_id WHERE fingerprint = ?"
+      ),
+      findByShortId: db.prepare(
+        "SELECT * FROM file_short_id WHERE short_id = ?"
+      ),
+      findByPath: db.prepare(
+        "SELECT * FROM file_short_id WHERE file_path = ?"
+      ),
+      listEligible: db.prepare(
+        "SELECT * FROM file_short_id ORDER BY short_id LIMIT ?"
+      ),
+      listEligibleBucket: db.prepare(
+        "SELECT * FROM file_short_id WHERE classifier_bucket = ? ORDER BY short_id LIMIT ?"
+      ),
+      updateClassification: db.prepare(
+        `UPDATE file_short_id SET
+           classifier_bucket    = ?,
+           has_yaml_frontmatter = ?,
+           detected_language    = ?,
+           detected_format      = ?
+         WHERE fingerprint = ?`
+      ),
+      insertBody: db.prepare(
+        "INSERT OR REPLACE INTO file_body_cache (fingerprint, body, body_bytes, cached_at) VALUES (?, ?, ?, ?)"
+      ),
+      selectBody: db.prepare(
+        "SELECT body FROM file_body_cache WHERE fingerprint = ?"
+      ),
+      deleteBody: db.prepare(
+        "DELETE FROM file_body_cache WHERE fingerprint = ?"
+      ),
+      insertSkipped: db.prepare(
+        `INSERT INTO mass_scout_skipped
+         (short_id, file_path, reason, phase, size_bytes, context_pct, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ),
+      listSkipped: db.prepare(
+        "SELECT * FROM mass_scout_skipped WHERE phase = ? ORDER BY rowid"
+      ),
+      listSkippedAll: db.prepare(
+        "SELECT * FROM mass_scout_skipped ORDER BY rowid"
+      ),
+      countFiles: db.prepare("SELECT COUNT(*) AS n FROM file_short_id"),
+      countByBucket: db.prepare(
+        "SELECT classifier_bucket AS bucket, COUNT(*) AS n FROM file_short_id GROUP BY classifier_bucket"
+      ),
+      // ── v2 — jobs
+      insertJob: db.prepare(
+        `INSERT INTO mass_scout_jobs
+         (job_id, fieldset_name, fieldset_json, json_schema, model, workers,
+          source_root, bucket_filter, started_at, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ),
+      selectJob: db.prepare("SELECT * FROM mass_scout_jobs WHERE job_id = ?"),
+      listJobs: db.prepare(
+        "SELECT * FROM mass_scout_jobs ORDER BY started_at DESC"
+      ),
+      // COALESCE keeps prior values when a partial update arrives.
+      updateJobProgress: db.prepare(
+        `UPDATE mass_scout_jobs SET
+           files_total  = COALESCE(?, files_total),
+           files_ok     = COALESCE(?, files_ok),
+           files_failed = COALESCE(?, files_failed),
+           retries      = COALESCE(?, retries),
+           cost_usd     = COALESCE(?, cost_usd)
+         WHERE job_id = ?`
+      ),
+      finalizeJob: db.prepare(
+        `UPDATE mass_scout_jobs SET
+           ended_at     = ?,
+           files_total  = COALESCE(?, files_total),
+           files_ok     = COALESCE(?, files_ok),
+           files_failed = COALESCE(?, files_failed),
+           retries      = COALESCE(?, retries),
+           cost_usd     = COALESCE(?, cost_usd)
+         WHERE job_id = ?`
+      ),
+      deleteJob: db.prepare("DELETE FROM mass_scout_jobs WHERE job_id = ?"),
+      // ── v2 — results
+      insertResult: db.prepare(
+        `INSERT INTO mass_scout_results
+         (job_id, file_fingerprint, short_id, result_json, raw_response,
+          repaired, attempts, cost_usd, enriched_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ),
+      selectResult: db.prepare(
+        "SELECT * FROM mass_scout_results WHERE job_id = ? AND file_fingerprint = ?"
+      ),
+      listResultsByJob: db.prepare(
+        `SELECT * FROM mass_scout_results
+         WHERE job_id = ?
+         ORDER BY short_id
+         LIMIT ? OFFSET ?`
+      ),
+      countResultsByJob: db.prepare(
+        "SELECT COUNT(*) AS n FROM mass_scout_results WHERE job_id = ?"
+      ),
+      existingFingerprintsForJob: db.prepare(
+        "SELECT file_fingerprint FROM mass_scout_results WHERE job_id = ?"
+      ),
+      deleteResultsByJob: db.prepare(
+        "DELETE FROM mass_scout_results WHERE job_id = ?"
+      ),
+      // ── v2 — fts5
+      insertFts: db.prepare(
+        `INSERT INTO mass_scout_results_fts
+         (job_id, file_fingerprint, short_id, searchable_text)
+         VALUES (?, ?, ?, ?)`
+      ),
+      deleteFtsByJob: db.prepare(
+        "DELETE FROM mass_scout_results_fts WHERE job_id = ?"
+      ),
+      // bm25 ranks lower=better; pass the FTS5 MATCH query as ?
+      searchFtsByJob: db.prepare(
+        `SELECT short_id, file_fingerprint, bm25(mass_scout_results_fts) AS rank,
+                snippet(mass_scout_results_fts, 3, '[', ']', '\u2026', 8) AS snippet
+         FROM mass_scout_results_fts
+         WHERE job_id = ? AND searchable_text MATCH ?
+         ORDER BY rank
+         LIMIT ?`
+      )
+    };
+  }
+  /** Compute SHA1 fingerprint of a body. Stable across runs. */
+  static fingerprintOf(body) {
+    return createHash("sha1").update(body).digest("hex");
+  }
+  /**
+   * Register one file. Idempotent on (fingerprint): re-registering the same
+   * content returns the existing short_id with `already_registered: true`.
+   * Caches the body atomically with the registration in a transaction.
+   */
+  registerFile(input) {
+    const fp = _Registry.fingerprintOf(input.body);
+    const tx = this.db.transaction(() => {
+      const existing = this.stmt.findByFingerprint.get(fp);
+      if (existing) {
+        return {
+          short_id: existing.short_id,
+          fingerprint: fp,
+          already_registered: true
+        };
+      }
+      const result = this.stmt.insertFile.run(
+        fp,
+        input.file_path,
+        input.source_root,
+        basename2(input.file_path),
+        input.body.length,
+        input.registered_via,
+        (/* @__PURE__ */ new Date()).toISOString()
+      );
+      this.stmt.insertBody.run(
+        fp,
+        input.body,
+        input.body.length,
+        (/* @__PURE__ */ new Date()).toISOString()
+      );
+      return {
+        short_id: Number(result.lastInsertRowid),
+        fingerprint: fp,
+        already_registered: false
+      };
+    });
+    return tx();
+  }
+  /** Bulk register inside one transaction — much faster than N single calls. */
+  registerFiles(inputs) {
+    const tx = this.db.transaction(() => {
+      return inputs.map((i) => this.registerFile(i));
+    });
+    return tx();
+  }
+  /** Update bucket / language / format / frontmatter flag for a file. */
+  updateClassification(fingerprint, fields) {
+    this.stmt.updateClassification.run(
+      fields.classifier_bucket,
+      fields.has_yaml_frontmatter ?? null,
+      fields.detected_language ?? null,
+      fields.detected_format ?? null,
+      fingerprint
+    );
+  }
+  /**
+   * Update ONLY the classifier_bucket column. Used by `chain` to mark a
+   * subset of rows with a sentinel bucket and then restore them, without
+   * disturbing has_yaml_frontmatter / detected_language / detected_format
+   * (which `updateClassification` would force the caller to round-trip
+   * through `0 | 1 | undefined` typing).
+   */
+  setClassifierBucketOnly(fingerprint, bucket) {
+    this.db.prepare(
+      "UPDATE file_short_id SET classifier_bucket = ? WHERE fingerprint = ?"
+    ).run(bucket, fingerprint);
+  }
+  getByFingerprint(fp) {
+    return this.stmt.findByFingerprint.get(fp) ?? null;
+  }
+  getByShortId(id) {
+    return this.stmt.findByShortId.get(id) ?? null;
+  }
+  getByPath(path) {
+    return this.stmt.findByPath.get(path) ?? null;
+  }
+  /** List files for the scout / preclassify phases. */
+  listEligible(opts = {}) {
+    const limit = opts.limit ?? 1e6;
+    if (opts.bucket !== void 0) {
+      return this.stmt.listEligibleBucket.all(
+        opts.bucket,
+        limit
+      );
+    }
+    return this.stmt.listEligible.all(limit);
+  }
+  /** Read the cached file body (single-source-of-truth — never re-read disk). */
+  readBody(fp) {
+    const row = this.stmt.selectBody.get(fp);
+    return row ? row.body : null;
+  }
+  /** Replace or seed a body cache entry. Caller normally goes via registerFile. */
+  cacheBody(fp, body) {
+    this.stmt.insertBody.run(
+      fp,
+      body,
+      body.length,
+      (/* @__PURE__ */ new Date()).toISOString()
+    );
+  }
+  /** Remove a body from the cache (e.g. after final export, to reclaim space). */
+  deleteBody(fp) {
+    this.stmt.deleteBody.run(fp);
+  }
+  /** Append a skipped-file entry. */
+  recordSkipped(input) {
+    this.stmt.insertSkipped.run(
+      input.short_id ?? null,
+      input.file_path,
+      input.reason,
+      input.phase,
+      input.size_bytes ?? null,
+      input.context_pct ?? null,
+      (/* @__PURE__ */ new Date()).toISOString()
+    );
+  }
+  listSkipped(phase) {
+    if (phase) return this.stmt.listSkipped.all(phase);
+    return this.stmt.listSkippedAll.all();
+  }
+  /** Quick stats helpers — used by `mass_scout_estimate` and reports. */
+  countFiles() {
+    const row = this.stmt.countFiles.get();
+    return row.n;
+  }
+  countByBucket() {
+    const rows = this.stmt.countByBucket.all();
+    const out = {};
+    for (const r of rows) out[r.bucket] = r.n;
+    return out;
+  }
+  // ── v2 — jobs ────────────────────────────────────────────────────────
+  /**
+   * Create a new scout job. Throws on duplicate `job_id` (caller decides the
+   * id; collisions mean a logic bug, not a recoverable state).
+   */
+  createJob(input) {
+    this.stmt.insertJob.run(
+      input.job_id,
+      input.fieldset_name,
+      input.fieldset_json,
+      input.json_schema,
+      input.model,
+      input.workers,
+      input.source_root,
+      input.bucket_filter ?? null,
+      (/* @__PURE__ */ new Date()).toISOString(),
+      input.notes ?? null
+    );
+    const row = this.getJob(input.job_id);
+    if (!row) {
+      throw new Error(`createJob: row missing after insert (${input.job_id})`);
+    }
+    return row;
+  }
+  getJob(jobId) {
+    return this.stmt.selectJob.get(jobId) ?? null;
+  }
+  listJobs() {
+    return this.stmt.listJobs.all();
+  }
+  /**
+   * Pick `n` random rows from `mass_scout_results` for a given job.
+   * Used by the audit sub-command for human spot-checks. Uses `ORDER BY
+   * RANDOM() LIMIT n` — fine for jobs with < ~100K rows; for bigger jobs
+   * caller should use offset-based pagination.
+   */
+  sampleResultsByJob(jobId, n) {
+    if (n <= 0) return [];
+    return this.db.prepare(
+      "SELECT * FROM mass_scout_results WHERE job_id = ? ORDER BY RANDOM() LIMIT ?"
+    ).all(jobId, n);
+  }
+  /**
+   * Look up a cached body by `short_id` (the auto-incremented integer
+   * assigned at registration). The body is returned as a Buffer; callers
+   * that want a string call `.toString("utf-8")`.
+   */
+  readBodyByShortId(shortId) {
+    const row = this.db.prepare(
+      `SELECT b.body FROM file_body_cache b
+         JOIN file_short_id f ON f.fingerprint = b.fingerprint
+         WHERE f.short_id = ?`
+    ).get(shortId);
+    return row ? row.body : null;
+  }
+  /** Patch progress counters mid-run. `undefined` fields are left untouched. */
+  updateJobProgress(jobId, patch) {
+    this.stmt.updateJobProgress.run(
+      patch.files_total ?? null,
+      patch.files_ok ?? null,
+      patch.files_failed ?? null,
+      patch.retries ?? null,
+      patch.cost_usd ?? null,
+      jobId
+    );
+  }
+  /** Mark a job ended_at = now() and write any final progress fields. */
+  finalizeJob(jobId, patch = {}) {
+    this.stmt.finalizeJob.run(
+      (/* @__PURE__ */ new Date()).toISOString(),
+      patch.files_total ?? null,
+      patch.files_ok ?? null,
+      patch.files_failed ?? null,
+      patch.retries ?? null,
+      patch.cost_usd ?? null,
+      jobId
+    );
+  }
+  /**
+   * Drop a job AND its results AND its FTS rows in one transaction. Useful for
+   * tests, also for caller-driven `--clean-resume`.
+   */
+  deleteJobCascade(jobId) {
+    const tx = this.db.transaction(() => {
+      this.stmt.deleteFtsByJob.run(jobId);
+      this.stmt.deleteResultsByJob.run(jobId);
+      this.stmt.deleteJob.run(jobId);
+    });
+    tx();
+  }
+  // ── v2 — results ─────────────────────────────────────────────────────
+  /**
+   * Insert one extraction result + its FTS row in a single transaction. Caller
+   * passes pre-built `searchable_text` (concatenation of every string-typed
+   * field in the result, lowercased and joined by `\n`). The dynamic-schema
+   * design forces the caller to know which fields contribute, so we don't
+   * compute it here.
+   */
+  insertResult(input) {
+    const tx = this.db.transaction(() => {
+      this.stmt.insertResult.run(
+        input.job_id,
+        input.file_fingerprint,
+        input.short_id,
+        input.result_json,
+        input.raw_response ?? null,
+        input.repaired ?? 0,
+        input.attempts ?? 1,
+        input.cost_usd ?? null,
+        (/* @__PURE__ */ new Date()).toISOString()
+      );
+      this.stmt.insertFts.run(
+        input.job_id,
+        input.file_fingerprint,
+        input.short_id,
+        input.searchable_text
+      );
+    });
+    tx();
+  }
+  getResult(jobId, fingerprint) {
+    return this.stmt.selectResult.get(jobId, fingerprint) ?? null;
+  }
+  listResultsByJob(jobId, opts = {}) {
+    return this.stmt.listResultsByJob.all(
+      jobId,
+      opts.limit ?? 1e6,
+      opts.offset ?? 0
+    );
+  }
+  countResultsByJob(jobId) {
+    const row = this.stmt.countResultsByJob.get(jobId);
+    return row.n;
+  }
+  /**
+   * For `--resume`: list every fingerprint already processed for a job. Caller
+   * subtracts this set from the eligible-files set to find the to-do list.
+   */
+  existingFingerprintsForJob(jobId) {
+    const rows = this.stmt.existingFingerprintsForJob.all(jobId);
+    return new Set(rows.map((r) => r.file_fingerprint));
+  }
+  // ── v2 — search ──────────────────────────────────────────────────────
+  /**
+   * Run an FTS5 MATCH query scoped to one job. Pass an FTS5 query string
+   * (e.g. `"async AND testing"` or `"react NEAR/3 hooks"`); SQL injection is
+   * not an issue because the value is bound, not interpolated, but the FTS5
+   * grammar still applies.
+   */
+  searchFtsByJob(jobId, query, limit = 50) {
+    return this.stmt.searchFtsByJob.all(jobId, query, limit);
+  }
+  /**
+   * Run a structured filter against `result_json` using SQLite's JSON1 path
+   * extractor. `op` is one of `=`, `!=`, `>`, `>=`, `<`, `<=`, `LIKE`, `IN`.
+   * The path is used verbatim — caller must scope it (e.g. `$.is_async`).
+   *
+   * SECURITY: `op` is validated against an allowlist; `path` is validated
+   * against a strict regex. Values are always parameter-bound. This is the
+   * only place we assemble SQL from non-bound input; without this the caller
+   * couldn't run JSON1 path queries since path expressions can't be bound.
+   */
+  searchByJsonExtract(jobId, path, op, value, opts = {}) {
+    if (!/^\$(\.[A-Za-z_][A-Za-z0-9_]*)+(\[\d+\])?$/.test(path)) {
+      throw new Error(
+        `searchByJsonExtract: invalid JSON path ${JSON.stringify(path)}`
+      );
+    }
+    const ALLOWED_OPS = /* @__PURE__ */ new Set([">", ">=", "<", "<=", "=", "!=", "LIKE"]);
+    if (!ALLOWED_OPS.has(op)) {
+      throw new Error(`searchByJsonExtract: unsupported op ${op}`);
+    }
+    let bound = value;
+    if (typeof bound === "boolean") bound = bound ? 1 : 0;
+    const sql = `SELECT * FROM mass_scout_results
+                 WHERE job_id = ? AND json_extract(result_json, ?) ${op} ?
+                 ORDER BY short_id LIMIT ? OFFSET ?`;
+    const params = [
+      jobId,
+      path,
+      bound,
+      opts.limit ?? 1e6,
+      opts.offset ?? 0
+    ];
+    return this.db.prepare(sql).all(...params);
+  }
+  close() {
+    this.db.close();
+  }
+};
+function openRegistry(opts) {
+  const db = new Database(opts.path);
+  if (opts.walMode !== false && opts.path !== ":memory:") {
+    db.pragma("journal_mode = WAL");
+    db.pragma("synchronous = NORMAL");
+    db.pragma("temp_store = MEMORY");
+    db.pragma("busy_timeout = 30000");
+  }
+  applyMigrations(db);
+  return new Registry(db);
+}
+
+// src/mass_scouting/preclassify.ts
+import { basename as basename3, extname as extname2 } from "node:path";
+var HEAD_SAMPLE_BYTES = 4096;
+var BINARY_NULL_PROBE_BYTES = 8192;
+var RULES_BASENAMES = /* @__PURE__ */ new Set([
+  "CLAUDE.md",
+  "AGENTS.md",
+  ".cursorrules",
+  ".cursor.rules",
+  ".windsurfrules"
+]);
+var EXT_MAP = {
+  // Markdown family
+  ".md": { format: "markdown", bucketHint: "documentation" },
+  ".markdown": { format: "markdown", bucketHint: "documentation" },
+  ".mdx": { format: "markdown", bucketHint: "documentation" },
+  ".rst": { format: "rst", bucketHint: "documentation" },
+  ".txt": { format: "text", bucketHint: "documentation" },
+  // Configs
+  ".json": { format: "json", bucketHint: "config" },
+  ".jsonc": { format: "json", bucketHint: "config" },
+  ".json5": { format: "json", bucketHint: "config" },
+  ".yaml": { format: "yaml", bucketHint: "config" },
+  ".yml": { format: "yaml", bucketHint: "config" },
+  ".toml": { format: "toml", bucketHint: "config" },
+  ".ini": { format: "ini", bucketHint: "config" },
+  ".cfg": { format: "ini", bucketHint: "config" },
+  ".conf": { format: "ini", bucketHint: "config" },
+  ".env": { format: "ini", bucketHint: "config" },
+  // Logs
+  ".log": { format: "log", bucketHint: "log_to_classify" },
+  ".out": { format: "log", bucketHint: "log_to_classify" },
+  // TypeScript / JavaScript
+  ".ts": { format: "sourcecode", language: "typescript", bucketHint: "sourcecode" },
+  ".tsx": { format: "sourcecode", language: "typescript", bucketHint: "sourcecode" },
+  ".js": { format: "sourcecode", language: "javascript", bucketHint: "sourcecode" },
+  ".jsx": { format: "sourcecode", language: "javascript", bucketHint: "sourcecode" },
+  ".mjs": { format: "sourcecode", language: "javascript", bucketHint: "sourcecode" },
+  ".cjs": { format: "sourcecode", language: "javascript", bucketHint: "sourcecode" },
+  // Python
+  ".py": { format: "sourcecode", language: "python", bucketHint: "sourcecode" },
+  ".pyi": { format: "sourcecode", language: "python", bucketHint: "sourcecode" },
+  // Other languages
+  ".go": { format: "sourcecode", language: "go", bucketHint: "sourcecode" },
+  ".rs": { format: "sourcecode", language: "rust", bucketHint: "sourcecode" },
+  ".c": { format: "sourcecode", language: "c", bucketHint: "sourcecode" },
+  ".h": { format: "sourcecode", language: "c", bucketHint: "sourcecode" },
+  ".cpp": { format: "sourcecode", language: "cpp", bucketHint: "sourcecode" },
+  ".cc": { format: "sourcecode", language: "cpp", bucketHint: "sourcecode" },
+  ".hpp": { format: "sourcecode", language: "cpp", bucketHint: "sourcecode" },
+  ".java": { format: "sourcecode", language: "java", bucketHint: "sourcecode" },
+  ".kt": { format: "sourcecode", language: "kotlin", bucketHint: "sourcecode" },
+  ".rb": { format: "sourcecode", language: "ruby", bucketHint: "sourcecode" },
+  ".php": { format: "sourcecode", language: "php", bucketHint: "sourcecode" },
+  ".swift": { format: "sourcecode", language: "swift", bucketHint: "sourcecode" },
+  ".sh": { format: "sourcecode", language: "bash", bucketHint: "sourcecode" },
+  ".bash": { format: "sourcecode", language: "bash", bucketHint: "sourcecode" },
+  ".zsh": { format: "sourcecode", language: "zsh", bucketHint: "sourcecode" },
+  ".fish": { format: "sourcecode", language: "fish", bucketHint: "sourcecode" },
+  ".sql": { format: "sourcecode", language: "sql", bucketHint: "sourcecode" },
+  ".lua": { format: "sourcecode", language: "lua", bucketHint: "sourcecode" },
+  ".dart": { format: "sourcecode", language: "dart", bucketHint: "sourcecode" },
+  ".scala": { format: "sourcecode", language: "scala", bucketHint: "sourcecode" },
+  ".cs": { format: "sourcecode", language: "csharp", bucketHint: "sourcecode" }
+};
+function detectYamlFrontmatter(head, format) {
+  if (format !== "markdown") return 0;
+  let s = head.toString("utf-8", 0, Math.min(head.length, HEAD_SAMPLE_BYTES));
+  if (s.charCodeAt(0) === 65279) s = s.slice(1);
+  if (!s.startsWith("---\n") && !s.startsWith("---\r\n")) return 0;
+  const lines = s.split(/\r?\n/);
+  for (let i = 1; i < Math.min(lines.length, 200); i++) {
+    if (lines[i] === "---") return 1;
+  }
+  return 0;
+}
+function isBinary(head) {
+  const probe = head.subarray(0, Math.min(head.length, BINARY_NULL_PROBE_BYTES));
+  for (const b of probe) {
+    if (b === 0) return true;
+  }
+  return false;
+}
+function isRulesFile(path) {
+  const bn = basename3(path);
+  if (RULES_BASENAMES.has(bn)) return true;
+  return /[/\\]rules[/\\]/.test(path);
+}
+function classifyFile(path, head) {
+  if (isBinary(head)) {
+    return {
+      classifier_bucket: "binary",
+      has_yaml_frontmatter: 0,
+      detected_language: null,
+      detected_format: "binary"
+    };
+  }
+  if (isRulesFile(path)) {
+    const fm2 = detectYamlFrontmatter(head, "markdown");
+    return {
+      classifier_bucket: "rules_to_eval",
+      has_yaml_frontmatter: fm2,
+      detected_language: null,
+      detected_format: "markdown"
+    };
+  }
+  const bn = basename3(path).toLowerCase();
+  let meta3;
+  if (bn === ".env" || bn.startsWith(".env.")) {
+    meta3 = { format: "ini", bucketHint: "config" };
+  } else {
+    const ext = extname2(path).toLowerCase();
+    meta3 = EXT_MAP[ext];
+  }
+  if (!meta3) {
+    return {
+      classifier_bucket: "unknown",
+      has_yaml_frontmatter: 0,
+      detected_language: null,
+      detected_format: null
+    };
+  }
+  const fm = detectYamlFrontmatter(head, meta3.format);
+  let bucket = meta3.bucketHint ?? "unknown";
+  if (meta3.format === "markdown" && fm === 1) {
+    bucket = "has_frontmatter";
+  }
+  return {
+    classifier_bucket: bucket,
+    has_yaml_frontmatter: fm,
+    detected_language: meta3.language ?? null,
+    detected_format: meta3.format
+  };
+}
+function preclassifyAll(reg, opts = {}) {
+  const rows = reg.listEligible({ limit: opts.limit });
+  const out = {
+    total: rows.length,
+    classified: 0,
+    skipped_already: 0,
+    by_bucket: {},
+    no_body: 0
+  };
+  for (const row of rows) {
+    if (!opts.reclassify && row.classifier_bucket !== "unknown") {
+      out.skipped_already++;
+      continue;
+    }
+    const body = reg.readBody(row.fingerprint);
+    if (!body) {
+      out.no_body++;
+      continue;
+    }
+    const head = body.subarray(0, Math.min(body.length, HEAD_SAMPLE_BYTES));
+    const fields = classifyFile(row.file_path, head);
+    reg.updateClassification(row.fingerprint, fields);
+    out.classified++;
+    out.by_bucket[fields.classifier_bucket] = (out.by_bucket[fields.classifier_bucket] ?? 0) + 1;
+  }
+  return out;
+}
+
+// src/mass_scouting/scout.ts
+var OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+var SMOKE_TEST_SAMPLE = 5;
+function buildSearchableText(parsed, fieldset) {
+  const parts = [];
+  for (const f of fieldset.fields) {
+    const v = parsed[f.name];
+    if (v == null) continue;
+    if (f.type.kind === "string" || f.type.kind === "enum") {
+      if (typeof v === "string") parts.push(v);
+    } else if (f.type.kind === "array_string" || f.type.kind === "array_enum") {
+      if (Array.isArray(v)) {
+        for (const item of v) if (typeof item === "string") parts.push(item);
+      }
+    }
+  }
+  return parts.join("\n");
+}
+function computeCallCost(usage, pricing, fallbackInputBytes, fallbackOutputBytes) {
+  const inTok = usage?.prompt_tokens ?? Math.ceil(fallbackInputBytes / 4);
+  const outTok = usage?.completion_tokens ?? Math.ceil(fallbackOutputBytes / 4);
+  return inTok / 1e6 * pricing.input_per_m_usd + outTok / 1e6 * pricing.output_per_m_usd;
+}
+async function runWithLimit(items, limit, fn) {
+  if (items.length === 0) return;
+  const total = items.length;
+  let idx = 0;
+  const workerCount = Math.max(1, Math.min(limit, total));
+  const workers = [];
+  for (let w = 0; w < workerCount; w++) {
+    workers.push(
+      (async () => {
+        while (true) {
+          const myIdx = idx++;
+          if (myIdx >= total) break;
+          await fn(items[myIdx]);
+        }
+      })()
+    );
+  }
+  await Promise.all(workers);
+}
+async function runScoutJob(reg, opts, fetchImpl) {
+  const compiled = compileFieldset(opts.fieldset);
+  const workers = Math.max(1, opts.workers ?? 16);
+  const maxRetries = opts.maxRetries ?? 1;
+  const scoutPct = opts.maxContextPctScout ?? 0.4;
+  const cap = bytesCapFromPct(opts.pricing.context_window, scoutPct);
+  const apiUrl = opts.apiUrl ?? OPENROUTER_URL;
+  const smokeTest = opts.smokeTest !== false;
+  const resume = opts.resume !== false;
+  const failureLimit = opts.consecutiveFailureLimit ?? 5;
+  if (opts.budgetUsd !== void 0 && opts.budgetUsd !== null) {
+    const promptOverhead = Buffer.byteLength(compiled.systemPrompt, "utf-8");
+    const schemaOverhead = Buffer.byteLength(
+      JSON.stringify(compiled.jsonSchema),
+      "utf-8"
+    );
+    const estCost = opts.estCostUsd ?? estimateJobCost(reg, {
+      pricing: opts.pricing,
+      prompt_overhead_bytes: promptOverhead,
+      schema_overhead_bytes: schemaOverhead,
+      expected_output_bytes: 200,
+      bucket: opts.bucket,
+      max_context_pct_scout: scoutPct
+    }).est_cost_usd;
+    const gate = checkBudget(estCost, opts.budgetUsd);
+    if (!gate.allowed) {
+      throw new Error(
+        `mass-scouting budget gate refused job: ${gate.reason ?? "over budget"}`
+      );
+    }
+  }
+  if (!reg.getJob(opts.jobId)) {
+    reg.createJob({
+      job_id: opts.jobId,
+      fieldset_name: opts.fieldset.fieldset_name,
+      fieldset_json: JSON.stringify(opts.fieldset),
+      json_schema: JSON.stringify(compiled.jsonSchema),
+      model: opts.model,
+      workers,
+      source_root: opts.sourceRoot,
+      bucket_filter: opts.bucket ?? null
+    });
+  }
+  const allRows = reg.listEligible(
+    opts.bucket !== void 0 ? { bucket: opts.bucket } : {}
+  );
+  const sized = allRows.filter((r) => r.file_size_bytes <= cap);
+  const skippedTooBig = allRows.length - sized.length;
+  for (const row of allRows) {
+    if (row.file_size_bytes > cap) {
+      reg.recordSkipped({
+        short_id: row.short_id,
+        file_path: row.file_path,
+        reason: `body_bytes ${row.file_size_bytes} > scout cap ${cap} (${(scoutPct * 100).toFixed(0)}% of context)`,
+        phase: "scout",
+        size_bytes: row.file_size_bytes,
+        context_pct: row.file_size_bytes / (opts.pricing.context_window * 4)
+      });
+    }
+  }
+  const done = resume ? reg.existingFingerprintsForJob(opts.jobId) : /* @__PURE__ */ new Set();
+  const todo = sized.filter((r) => !done.has(r.fingerprint));
+  let filesOk = done.size;
+  let filesFailed = 0;
+  let totalRetries = 0;
+  let totalCost = 0;
+  const reportProgress = () => {
+    opts.onProgress?.(filesOk + filesFailed, sized.length);
+  };
+  const writeOk = (row, r) => {
+    reg.insertResult({
+      job_id: opts.jobId,
+      file_fingerprint: row.fingerprint,
+      short_id: row.short_id,
+      result_json: JSON.stringify(r.parsed),
+      raw_response: r.raw,
+      repaired: r.repaired,
+      attempts: r.attempts,
+      cost_usd: r.costUsd,
+      searchable_text: buildSearchableText(r.parsed, opts.fieldset)
+    });
+  };
+  if (smokeTest && todo.length > 0) {
+    const probeCount = Math.min(SMOKE_TEST_SAMPLE, todo.length);
+    for (let i = 0; i < probeCount; i++) {
+      const row = todo[i];
+      const r = await scoutOneFile(
+        reg,
+        row,
+        compiled,
+        opts,
+        fetchImpl,
+        apiUrl,
+        maxRetries
+      );
+      totalRetries += Math.max(0, r.attempts - 1);
+      totalCost += r.costUsd;
+      if (!r.ok) {
+        reg.finalizeJob(opts.jobId, {
+          files_total: allRows.length,
+          files_ok: filesOk,
+          files_failed: filesFailed + 1,
+          retries: totalRetries,
+          cost_usd: totalCost
+        });
+        throw new Error(
+          `mass-scouting smoke test failed on ${row.file_path}: ${r.error}`
+        );
+      }
+      writeOk(row, r);
+      filesOk++;
+      reportProgress();
+    }
+    todo.splice(0, probeCount);
+  }
+  let consecutiveFailures = 0;
+  let circuitTripped = false;
+  await runWithLimit(todo, workers, async (row) => {
+    if (circuitTripped) return;
+    const r = await scoutOneFile(
+      reg,
+      row,
+      compiled,
+      opts,
+      fetchImpl,
+      apiUrl,
+      maxRetries
+    );
+    totalRetries += Math.max(0, r.attempts - 1);
+    totalCost += r.costUsd;
+    if (r.ok) {
+      writeOk(row, r);
+      filesOk++;
+      consecutiveFailures = 0;
+    } else {
+      filesFailed++;
+      consecutiveFailures++;
+      reg.recordSkipped({
+        short_id: row.short_id,
+        file_path: row.file_path,
+        reason: `scout failed after ${r.attempts} attempt(s): ${r.error}`,
+        phase: "scout",
+        size_bytes: row.file_size_bytes
+      });
+      if (failureLimit > 0 && consecutiveFailures >= failureLimit) {
+        circuitTripped = true;
+      }
+    }
+    reportProgress();
+  });
+  reg.finalizeJob(opts.jobId, {
+    files_total: allRows.length,
+    files_ok: filesOk,
+    files_failed: filesFailed,
+    retries: totalRetries,
+    cost_usd: totalCost
+  });
+  return {
+    jobId: opts.jobId,
+    filesTotal: allRows.length,
+    filesOk,
+    filesFailed,
+    filesSkippedTooBig: skippedTooBig,
+    retries: totalRetries,
+    costUsd: totalCost,
+    circuitTripped
+  };
+}
+async function scoutOneFile(reg, row, compiled, opts, fetchImpl, apiUrl, maxRetries) {
+  const body = reg.readBody(row.fingerprint);
+  if (!body) {
+    return {
+      ok: false,
+      error: "no body cached in registry \u2014 cannot scout",
+      attempts: 0,
+      costUsd: 0
+    };
+  }
+  const bodyStr = body.toString("utf-8");
+  const baseUserMsg = compiled.userPromptFor(row.basename, bodyStr);
+  let attempts = 0;
+  let totalCost = 0;
+  let prevError = null;
+  while (attempts <= maxRetries) {
+    attempts++;
+    const userContent = prevError === null ? baseUserMsg : `${baseUserMsg}
+
+PREVIOUS RESPONSE FAILED VALIDATION:
+${prevError}
+
+Return a JSON object that satisfies the schema this time.`;
+    const reqBody = {
+      model: opts.model,
+      messages: [
+        { role: "system", content: compiled.systemPrompt },
+        { role: "user", content: userContent }
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: compiled.jsonSchema
+      },
+      temperature: 0.1
+    };
+    const perCallMs = opts.perCallTimeoutMs ?? 9e4;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), perCallMs);
+    let res;
+    try {
+      res = await fetchImpl(apiUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${opts.apiKey}`
+        },
+        body: JSON.stringify(reqBody),
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+    } catch (e) {
+      clearTimeout(timeoutId);
+      const err2 = e;
+      prevError = err2.name === "AbortError" ? `timeout after ${perCallMs}ms` : `network error: ${err2.message}`;
+      continue;
+    }
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      prevError = `HTTP ${res.status}: ${text.slice(0, 200)}`;
+      continue;
+    }
+    let respJson;
+    try {
+      respJson = await res.json();
+    } catch (e) {
+      prevError = `non-JSON response: ${e.message}`;
+      continue;
+    }
+    const content = respJson.choices?.[0]?.message?.content;
+    if (typeof content !== "string") {
+      prevError = "response had no message.content string";
+      continue;
+    }
+    const callCost = computeCallCost(
+      respJson.usage,
+      opts.pricing,
+      bodyStr.length,
+      content.length
+    );
+    totalCost += callCost;
+    let parsed;
+    try {
+      parsed = JSON.parse(content);
+    } catch (e) {
+      prevError = `JSON.parse failed: ${e.message}`;
+      continue;
+    }
+    const repairOutcome = compiled.repair(parsed);
+    const validation = compiled.validate(repairOutcome.repaired);
+    if (validation.ok) {
+      return {
+        ok: true,
+        parsed: repairOutcome.repaired,
+        raw: content,
+        attempts,
+        repaired: repairOutcome.repairs.length > 0 ? 1 : 0,
+        costUsd: totalCost
+      };
+    }
+    prevError = validation.reason ?? "validate failed (no reason given)";
+  }
+  return {
+    ok: false,
+    error: prevError ?? "max retries exhausted",
+    attempts,
+    costUsd: totalCost
+  };
+}
+
+// src/mass_scouting/search.ts
+function regexEscape(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+var NAMED_PATTERNS = [
+  {
+    name: "emails",
+    triggers: [/\ball\s+emails?\b/i, /\bfind\s+emails?\b/i, /\bemail\s+addresses?\b/i],
+    build: () => /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
+  },
+  {
+    name: "urls-of-domain",
+    triggers: [
+      /\b(?:urls?|links?)\s+(?:of|to|on|for)\s+(?:domain\s+)?(\S+)/i,
+      /\blinks?\s+(?:to|on)\s+(\S+)/i
+    ],
+    build: (query) => {
+      const m = query.match(
+        /\b(?:urls?|links?)\s+(?:of|to|on|for)\s+(?:domain\s+)?([\w.-]+)/i
+      ) ?? query.match(/\blinks?\s+(?:to|on)\s+([\w.-]+)/i);
+      const domain2 = m?.[1];
+      if (!domain2) return null;
+      const escaped = regexEscape(domain2.replace(/\.$/, ""));
+      return new RegExp(`https?://[^\\s'"<>]*${escaped}[^\\s'"<>]*`, "g");
+    }
+  },
+  {
+    name: "urls",
+    triggers: [/\ball\s+urls?\b/i, /\bfind\s+urls?\b/i, /\ball\s+links?\b/i],
+    build: () => /https?:\/\/[^\s'"<>]+/g
+  },
+  {
+    name: "ipv4",
+    triggers: [/\ball\s+ipv4\b/i, /\ball\s+ip\s+addresses?\b/i, /\bfind\s+ips?\b/i],
+    // Anchored on word boundaries — keeps `1.2.3.4.5` from being read as "1.2.3.4".
+    build: () => /\b(?:\d{1,3}\.){3}\d{1,3}\b/g
+  },
+  {
+    name: "phone",
+    triggers: [/\ball\s+phone\s+numbers?\b/i, /\bfind\s+phones?\b/i],
+    build: () => /\+?\d[\d\s().-]{6,}\d/g
+  },
+  {
+    name: "hex-colors",
+    triggers: [/\ball\s+hex\s+colou?rs?\b/i, /\bfind\s+hex\s+colou?rs?\b/i],
+    build: () => /#[0-9A-Fa-f]{3,8}\b/g
+  },
+  {
+    name: "semver",
+    triggers: [/\ball\s+semver\b/i, /\bversion\s+strings?\b/i],
+    build: () => /\bv?\d+\.\d+\.\d+(?:-[\w.]+)?\b/g
+  },
+  {
+    name: "github-repos",
+    triggers: [/\ball\s+github\s+repos?\b/i, /\bfind\s+github\s+repos?\b/i],
+    build: () => /\bgithub\.com\/[\w.-]+\/[\w.-]+\b/g
+  },
+  {
+    name: "aws-keys",
+    triggers: [/\ball\s+aws\s+keys?\b/i, /\bfind\s+aws\s+keys?\b/i],
+    build: () => /\bAKIA[0-9A-Z]{16}\b/g,
+    security: true
+  }
+];
+function detectNamedPattern(query) {
+  const normalised = query.replace(/\s+/g, " ").trim();
+  for (const np of NAMED_PATTERNS) {
+    if (np.triggers.some((t) => t.test(normalised))) {
+      const re = np.build(normalised);
+      if (re) {
+        return { pattern: re, name: np.name, security: np.security };
+      }
+    }
+  }
+  return null;
+}
+function regexOverBodies(reg, jobId, patternIn, limit) {
+  const flags = patternIn.flags.includes("g") ? patternIn.flags : `${patternIn.flags}g`;
+  const pattern = new RegExp(patternIn.source, flags);
+  const results = reg.listResultsByJob(jobId);
+  const hits = [];
+  let examined = 0;
+  for (const r of results) {
+    examined++;
+    if (hits.length >= limit) break;
+    const body = reg.readBody(r.file_fingerprint);
+    if (!body) continue;
+    const text = body.toString("utf-8");
+    const matches = collectRegexMatches(text, pattern);
+    if (matches.length === 0) continue;
+    const fileRow = reg.getByFingerprint(r.file_fingerprint);
+    if (!fileRow) continue;
+    hits.push({
+      short_id: r.short_id,
+      file_path: fileRow.file_path,
+      file_fingerprint: r.file_fingerprint,
+      mode: "regex",
+      regex_matches: matches,
+      result: parseResultJson(r.result_json)
+    });
+  }
+  return { hits, total_examined: examined };
+}
+function collectRegexMatches(text, pattern) {
+  const out = [];
+  for (const m of text.matchAll(pattern)) {
+    const offset = m.index ?? 0;
+    const matchStr = m[0];
+    let line = 1;
+    for (let i = 0; i < offset; i++) {
+      if (text.charCodeAt(i) === 10) line++;
+    }
+    const start = Math.max(0, offset - 40);
+    const end = Math.min(text.length, offset + matchStr.length + 40);
+    out.push({
+      line,
+      context: text.slice(start, end),
+      match: matchStr
+    });
+  }
+  return out;
+}
+function structuredOnly(reg, jobId, filters, limit, offset) {
+  if (filters.length === 0) {
+    const rows = reg.listResultsByJob(jobId, { limit, offset });
+    return {
+      hits: rows.map((r) => resultRowToHit(reg, r, "structured")),
+      total_examined: reg.countResultsByJob(jobId)
+    };
+  }
+  const [head, ...rest] = filters;
+  const candidates = reg.searchByJsonExtract(
+    jobId,
+    head.path,
+    head.op,
+    head.value,
+    { limit: limit + offset + 1e4, offset: 0 }
+  );
+  const matched = candidates.filter((r) => {
+    const parsed = parseResultJson(r.result_json);
+    return rest.every((f) => evaluateFilter(parsed, f));
+  });
+  const paginated = matched.slice(offset, offset + limit);
+  return {
+    hits: paginated.map((r) => resultRowToHit(reg, r, "structured")),
+    total_examined: candidates.length
+  };
+}
+function evaluateFilter(parsed, filter) {
+  if (parsed == null) return false;
+  const segments = filter.path.replace(/^\$\.?/, "").split(/\.|\[(\d+)\]/).filter(Boolean);
+  let cur = parsed;
+  for (const seg of segments) {
+    if (cur == null) return false;
+    if (/^\d+$/.test(seg)) {
+      if (!Array.isArray(cur)) return false;
+      cur = cur[Number(seg)];
+    } else if (typeof cur === "object") {
+      cur = cur[seg];
+    } else {
+      return false;
+    }
+  }
+  return compareValues(cur, filter.op, filter.value);
+}
+function compareValues(actual, op, expected) {
+  const a = typeof actual === "boolean" && typeof expected === "number" ? actual ? 1 : 0 : actual;
+  switch (op) {
+    case "=":
+      return a === expected;
+    case "!=":
+      return a !== expected;
+    case ">":
+      return typeof a === "number" && typeof expected === "number" && a > expected;
+    case ">=":
+      return typeof a === "number" && typeof expected === "number" && a >= expected;
+    case "<":
+      return typeof a === "number" && typeof expected === "number" && a < expected;
+    case "<=":
+      return typeof a === "number" && typeof expected === "number" && a <= expected;
+    case "LIKE": {
+      if (typeof a !== "string" || typeof expected !== "string") return false;
+      const re = new RegExp(
+        `^${expected.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/%/g, ".*").replace(/_/g, ".")}$`,
+        "i"
+      );
+      return re.test(a);
+    }
+  }
+}
+function ftsOnly(reg, jobId, query, limit) {
+  const ftsHits = reg.searchFtsByJob(jobId, query, limit);
+  const out = [];
+  for (const h of ftsHits) {
+    const fileRow = reg.getByFingerprint(h.file_fingerprint);
+    const result = reg.getResult(jobId, h.file_fingerprint);
+    if (!fileRow || !result) continue;
+    out.push({
+      short_id: h.short_id,
+      file_path: fileRow.file_path,
+      file_fingerprint: h.file_fingerprint,
+      mode: "fts",
+      rank: h.rank,
+      snippet: h.snippet,
+      result: parseResultJson(result.result_json)
+    });
+  }
+  return { hits: out, total_examined: ftsHits.length };
+}
+function combined(reg, jobId, query, filters, limit) {
+  const ftsCandidates = reg.searchFtsByJob(jobId, query, limit * 5);
+  const examined = ftsCandidates.length;
+  const out = [];
+  for (const h of ftsCandidates) {
+    if (out.length >= limit) break;
+    const result = reg.getResult(jobId, h.file_fingerprint);
+    if (!result) continue;
+    const parsed = parseResultJson(result.result_json);
+    if (!filters.every((f) => evaluateFilter(parsed, f))) continue;
+    const fileRow = reg.getByFingerprint(h.file_fingerprint);
+    if (!fileRow) continue;
+    out.push({
+      short_id: h.short_id,
+      file_path: fileRow.file_path,
+      file_fingerprint: h.file_fingerprint,
+      mode: "combined",
+      rank: h.rank,
+      snippet: h.snippet,
+      result: parsed
+    });
+  }
+  return { hits: out, total_examined: examined };
+}
+function parseResultJson(s) {
+  try {
+    const v = JSON.parse(s);
+    return v != null && typeof v === "object" ? v : {};
+  } catch {
+    return {};
+  }
+}
+function resultRowToHit(reg, r, mode) {
+  const fileRow = reg.getByFingerprint(r.file_fingerprint);
+  return {
+    short_id: r.short_id,
+    file_path: fileRow?.file_path ?? "(unknown)",
+    file_fingerprint: r.file_fingerprint,
+    mode,
+    result: parseResultJson(r.result_json)
+  };
+}
+function massScoutSearch(reg, q) {
+  const limit = q.limit ?? 50;
+  const offset = q.offset ?? 0;
+  if (q.regex !== void 0) {
+    let pattern;
+    try {
+      pattern = new RegExp(q.regex, "g");
+    } catch (e) {
+      throw new Error(
+        `mass_scout_search: invalid regex ${JSON.stringify(q.regex)}: ${e.message}`,
+        { cause: e }
+      );
+    }
+    const { hits: hits2, total_examined: total_examined2 } = regexOverBodies(
+      reg,
+      q.jobId,
+      pattern,
+      limit
+    );
+    return {
+      jobId: q.jobId,
+      mode: "regex",
+      query: q.query,
+      regex_pattern: q.regex,
+      regex_reason: q.forceRegex ? "force-with-pattern" : "explicit",
+      hits: hits2,
+      total_examined: total_examined2
+    };
+  }
+  if (q.forceRegex && q.query) {
+    const named = detectNamedPattern(q.query);
+    if (!named) {
+      throw new Error(
+        `mass_scout_search: forceRegex set but no regex provided and no named pattern matched query ${JSON.stringify(q.query)}`
+      );
+    }
+    const { hits: hits2, total_examined: total_examined2 } = regexOverBodies(
+      reg,
+      q.jobId,
+      named.pattern,
+      limit
+    );
+    return {
+      jobId: q.jobId,
+      mode: "regex",
+      query: q.query,
+      regex_pattern: named.pattern.source,
+      regex_reason: `named:${named.name}`,
+      hits: hits2,
+      total_examined: total_examined2
+    };
+  }
+  if (q.query && !q.forceLlm) {
+    const named = detectNamedPattern(q.query);
+    if (named) {
+      const { hits: hits2, total_examined: total_examined2 } = regexOverBodies(
+        reg,
+        q.jobId,
+        named.pattern,
+        limit
+      );
+      return {
+        jobId: q.jobId,
+        mode: "regex",
+        query: q.query,
+        regex_pattern: named.pattern.source,
+        regex_reason: `named:${named.name}`,
+        hits: hits2,
+        total_examined: total_examined2
+      };
+    }
+  }
+  if (q.query && q.filters && q.filters.length > 0) {
+    const { hits: hits2, total_examined: total_examined2 } = combined(
+      reg,
+      q.jobId,
+      q.query,
+      q.filters,
+      limit
+    );
+    return {
+      jobId: q.jobId,
+      mode: "combined",
+      query: q.query,
+      hits: hits2,
+      total_examined: total_examined2
+    };
+  }
+  if (q.filters && q.filters.length > 0) {
+    const { hits: hits2, total_examined: total_examined2 } = structuredOnly(
+      reg,
+      q.jobId,
+      q.filters,
+      limit,
+      offset
+    );
+    return {
+      jobId: q.jobId,
+      mode: "structured",
+      hits: hits2,
+      total_examined: total_examined2
+    };
+  }
+  if (q.query) {
+    const { hits: hits2, total_examined: total_examined2 } = ftsOnly(reg, q.jobId, q.query, limit);
+    return {
+      jobId: q.jobId,
+      mode: "fts",
+      query: q.query,
+      hits: hits2,
+      total_examined: total_examined2
+    };
+  }
+  const { hits, total_examined } = structuredOnly(
+    reg,
+    q.jobId,
+    [],
+    limit,
+    offset
+  );
+  return {
+    jobId: q.jobId,
+    mode: "structured",
+    hits,
+    total_examined
+  };
+}
+function massScoutSearchXjob(reg, q) {
+  if (q.jobIds.length === 0) {
+    throw new Error("massScoutSearchXjob: jobIds must not be empty");
+  }
+  const limitPerJob = q.limitPerJob ?? 50;
+  const limitMerged = q.limitMerged ?? 200;
+  const merged = [];
+  const perJob = {};
+  let unifiedRegexPattern;
+  let unifiedRegexReason;
+  const modesSeen = /* @__PURE__ */ new Set();
+  for (const jobId of q.jobIds) {
+    const sub = massScoutSearch(reg, {
+      jobId,
+      query: q.query,
+      regex: q.regex,
+      forceLlm: q.forceLlm,
+      forceRegex: q.forceRegex,
+      filters: q.filters,
+      limit: limitPerJob
+    });
+    perJob[jobId] = {
+      mode: sub.mode,
+      total_examined: sub.total_examined,
+      hits: sub.hits.length
+    };
+    modesSeen.add(sub.mode);
+    if (sub.regex_pattern && unifiedRegexPattern === void 0) {
+      unifiedRegexPattern = sub.regex_pattern;
+      unifiedRegexReason = sub.regex_reason;
+    }
+    for (const h of sub.hits) {
+      merged.push({ ...h, job_id: jobId });
+    }
+  }
+  merged.sort((a, b) => {
+    if (a.rank !== void 0 && b.rank !== void 0) return a.rank - b.rank;
+    if (a.rank !== void 0) return -1;
+    if (b.rank !== void 0) return 1;
+    return 0;
+  });
+  return {
+    jobIds: q.jobIds,
+    mode: pickUnifiedMode(modesSeen),
+    query: q.query,
+    regex_pattern: unifiedRegexPattern,
+    regex_reason: unifiedRegexReason,
+    hits: merged.slice(0, limitMerged),
+    per_job: perJob,
+    total_examined: Object.values(perJob).reduce(
+      (acc, v) => acc + v.total_examined,
+      0
+    )
+  };
+}
+function pickUnifiedMode(seen) {
+  if (seen.has("regex")) return "regex";
+  if (seen.has("combined")) return "combined";
+  if (seen.has("fts")) return "fts";
+  return "structured";
+}
+
+// src/mass_scouting/reports.ts
+import { appendFileSync, mkdirSync } from "node:fs";
+import { dirname as dirname2 } from "node:path";
+function tallyValues(values, cap = 25) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
+  return Array.from(counts.entries()).map(([value, count]) => ({ value, count })).sort((a, b) => b.count - a.count || a.value.localeCompare(b.value)).slice(0, cap);
+}
+function tallyBool(values) {
+  let t = 0;
+  let f = 0;
+  for (const v of values) {
+    if (v) t++;
+    else f++;
+  }
+  return [
+    { value: "true", count: t },
+    { value: "false", count: f }
+  ];
+}
+function tallyNumeric(values) {
+  if (values.length === 0) return void 0;
+  let min = values[0];
+  let max = values[0];
+  let sum = 0;
+  for (const v of values) {
+    if (v < min) min = v;
+    if (v > max) max = v;
+    sum += v;
+  }
+  return { min, max, avg: sum / values.length };
+}
+function aggregateField(fieldName, fieldType, rowsParsed) {
+  const values = [];
+  for (const r of rowsParsed) {
+    const v = r[fieldName];
+    if (v != null) values.push(v);
+  }
+  switch (fieldType.kind) {
+    case "bool": {
+      const bools = values.filter((v) => typeof v === "boolean");
+      return {
+        type: "bool",
+        total: bools.length,
+        by_value: tallyBool(bools)
+      };
+    }
+    case "string": {
+      const strs = values.filter((v) => typeof v === "string");
+      return {
+        type: "string",
+        total: strs.length,
+        by_value: tallyValues(strs)
+      };
+    }
+    case "enum": {
+      const strs = values.filter((v) => typeof v === "string");
+      return {
+        type: "enum",
+        total: strs.length,
+        by_value: tallyValues(strs, fieldType.values.length)
+      };
+    }
+    case "array_string":
+    case "array_enum": {
+      const flat = [];
+      for (const v of values) {
+        if (Array.isArray(v)) {
+          for (const item of v) {
+            if (typeof item === "string") flat.push(item);
+          }
+        }
+      }
+      return {
+        type: fieldType.kind,
+        total: values.length,
+        top_items: tallyValues(flat)
+      };
+    }
+    case "int":
+    case "number": {
+      const nums = values.filter(
+        (v) => typeof v === "number" && Number.isFinite(v)
+      );
+      return {
+        type: fieldType.kind,
+        total: nums.length,
+        numeric: tallyNumeric(nums)
+      };
+    }
+    default: {
+      return { type: "unknown", total: values.length };
+    }
+  }
+}
+function summariseJob(reg, jobId) {
+  const job = reg.getJob(jobId);
+  if (!job) {
+    throw new Error(`summariseJob: no job with id ${JSON.stringify(jobId)}`);
+  }
+  const results = reg.listResultsByJob(jobId);
+  const fieldset = JSON.parse(job.fieldset_json);
+  const parsed = results.map((r) => {
+    try {
+      return JSON.parse(r.result_json);
+    } catch {
+      return {};
+    }
+  });
+  const perField = {};
+  for (const f of fieldset.fields) {
+    perField[f.name] = aggregateField(f.name, f.type, parsed);
+  }
+  let durationMs = null;
+  if (job.ended_at) {
+    durationMs = new Date(job.ended_at).getTime() - new Date(job.started_at).getTime();
+  }
+  const skipped = reg.listSkipped("scout").map((s) => ({ file_path: s.file_path, reason: s.reason })).slice(0, 50);
+  return {
+    jobId,
+    fieldset_name: job.fieldset_name,
+    model: job.model,
+    source_root: job.source_root,
+    files_total: job.files_total ?? 0,
+    files_ok: job.files_ok ?? 0,
+    files_failed: job.files_failed ?? 0,
+    retries: job.retries ?? 0,
+    cost_usd: job.cost_usd ?? 0,
+    duration_ms: durationMs,
+    per_field: perField,
+    skipped
+  };
+}
+function renderMarkdownReport(s) {
+  const lines = [];
+  lines.push(`# Mass-scouting report \u2014 \`${s.jobId}\``);
+  lines.push("");
+  lines.push("## Run summary");
+  lines.push("");
+  lines.push(`- **Fieldset:** \`${s.fieldset_name}\``);
+  lines.push(`- **Model:** \`${s.model}\``);
+  lines.push(`- **Source root:** \`${s.source_root}\``);
+  lines.push(
+    `- **Files:** ${s.files_total} total / **${s.files_ok}** ok / **${s.files_failed}** failed`
+  );
+  lines.push(`- **Retries:** ${s.retries}`);
+  lines.push(`- **Cost:** $${s.cost_usd.toFixed(6)}`);
+  if (s.duration_ms != null) {
+    lines.push(`- **Duration:** ${(s.duration_ms / 1e3).toFixed(1)}s`);
+  }
+  lines.push("");
+  lines.push("## Per-field stats");
+  lines.push("");
+  for (const [name, stats] of Object.entries(s.per_field)) {
+    lines.push(`### \`${name}\` _(${stats.type}, n=${stats.total})_`);
+    lines.push("");
+    if (stats.by_value && stats.by_value.length > 0) {
+      lines.push("| Value | Count |");
+      lines.push("|---|---:|");
+      for (const v of stats.by_value) {
+        lines.push(`| \`${escapePipe(v.value)}\` | ${v.count} |`);
+      }
+      lines.push("");
+    }
+    if (stats.numeric) {
+      lines.push(
+        `min: **${stats.numeric.min}** \xB7 max: **${stats.numeric.max}** \xB7 avg: **${stats.numeric.avg.toFixed(2)}**`
+      );
+      lines.push("");
+    }
+    if (stats.top_items && stats.top_items.length > 0) {
+      lines.push("Top items:");
+      for (const v of stats.top_items.slice(0, 10)) {
+        lines.push(`- \`${escapePipe(v.value)}\` _(\xD7${v.count})_`);
+      }
+      lines.push("");
+    }
+  }
+  if (s.skipped.length > 0) {
+    lines.push("## Skipped files");
+    lines.push("");
+    for (const sk of s.skipped) {
+      lines.push(`- \`${sk.file_path}\` \u2014 ${sk.reason}`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+function escapePipe(v) {
+  return v.replace(/\|/g, "&#124;");
+}
+
+// src/mass_scouting/cli.ts
+var DEFAULT_SKIP_DIRS = /* @__PURE__ */ new Set([
+  ".git",
+  "node_modules",
+  ".venv",
+  "dist",
+  "build",
+  ".idea",
+  ".vscode",
+  "tmp",
+  "vendor",
+  ".next",
+  ".cache",
+  "__pycache__",
+  "target",
+  ".turbo",
+  "out"
+]);
+var DEFAULT_MODEL = "qwen/qwen-2.5-7b-instruct";
+function parseFlags(args) {
+  const flags = {};
+  const positional = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (!a.startsWith("--")) {
+      positional.push(a);
+      continue;
+    }
+    const eq = a.indexOf("=");
+    if (eq !== -1) {
+      flags[a.slice(2, eq)] = a.slice(eq + 1);
+      continue;
+    }
+    const key = a.slice(2);
+    const next = args[i + 1];
+    if (next !== void 0 && !next.startsWith("--")) {
+      flags[key] = next;
+      i++;
+    } else {
+      flags[key] = "true";
+    }
+  }
+  return { flags, positional };
+}
+function requireFlag(flags, name, hint = "") {
+  const v = flags[name];
+  if (v === void 0 || v === "" || v === "true") {
+    return { error: `--${name} is required${hint ? ` (${hint})` : ""}` };
+  }
+  return v;
+}
+function err(text) {
+  return { stdout: "", stderr: `Error: ${text}
+`, exitCode: 1 };
+}
+function ok(stdout) {
+  return { stdout: stdout.endsWith("\n") ? stdout : `${stdout}
+`, stderr: "", exitCode: 0 };
+}
+function defaultMainRoot() {
+  try {
+    const out = execSync("git worktree list", { encoding: "utf-8" }).split("\n")[0]?.trim().split(/\s+/)[0];
+    if (out) return out;
+  } catch {
+  }
+  return resolve(dirname3(fileURLToPath(import.meta.url)), "..", "..", "..");
+}
+function listGitChangedFiles(root, ref) {
+  if (!/^[A-Za-z0-9_./~^@{}-]+$/.test(ref) || ref.length > 200) {
+    return null;
+  }
+  try {
+    const out = execSync(
+      `git diff --name-only --diff-filter=ACMR -z ${JSON.stringify(ref)}...HEAD`,
+      { cwd: root, encoding: "buffer", stdio: ["ignore", "pipe", "ignore"] }
+    );
+    const rel = out.toString("utf-8").split("\0").filter((s) => s.length > 0);
+    return rel.map((p) => resolve(root, p));
+  } catch {
+    return null;
+  }
+}
+function listGitTrackedFiles(root) {
+  try {
+    const out = execSync(
+      "git ls-files --cached --others --exclude-standard -z",
+      { cwd: root, encoding: "buffer", stdio: ["ignore", "pipe", "ignore"] }
+    );
+    const rel = out.toString("utf-8").split("\0").filter((s) => s.length > 0);
+    return rel.map((p) => resolve(root, p));
+  } catch {
+    return null;
+  }
+}
+function walkFilesShouldSkip(absPath, extraSkip) {
+  const skip = /* @__PURE__ */ new Set([...DEFAULT_SKIP_DIRS, ...extraSkip ?? []]);
+  const segments = absPath.split(/[/\\]/);
+  for (const seg of segments) {
+    if (skip.has(seg)) return true;
+  }
+  return false;
+}
+function walkFiles(root, extensionFilter, extraSkipDirs) {
+  const skip = /* @__PURE__ */ new Set([...DEFAULT_SKIP_DIRS, ...extraSkipDirs ?? []]);
+  const out = [];
+  const stack = [root];
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      const full = join(dir, e);
+      let st;
+      try {
+        st = statSync2(full);
+      } catch {
+        continue;
+      }
+      if (st.isDirectory()) {
+        if (skip.has(e)) continue;
+        stack.push(full);
+      } else if (st.isFile()) {
+        if (extensionFilter && !extensionFilter.has(extname3(full).toLowerCase())) continue;
+        out.push(full);
+      }
+    }
+  }
+  out.sort();
+  return out;
+}
+function resolveBundledFieldset(arg) {
+  if (!arg.startsWith("bundled:")) return null;
+  const name = arg.slice("bundled:".length).trim();
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+    return {
+      error: `invalid bundled fieldset name ${JSON.stringify(name)}; allowed: [a-zA-Z0-9_-]`
+    };
+  }
+  const here = dirname3(fileURLToPath(import.meta.url));
+  const candidates = [
+    resolve(here, "..", "fieldsets", `${name}.json`),
+    resolve(here, "fieldsets", `${name}.json`),
+    resolve(here, "..", "..", "fieldsets", `${name}.json`)
+  ];
+  for (const p of candidates) {
+    try {
+      readFileSync2(p, "utf-8");
+      return { path: p };
+    } catch {
+    }
+  }
+  return {
+    error: `bundled fieldset ${JSON.stringify(name)} not found; tried: ${candidates.join(", ")}`
+  };
+}
+function loadFieldsetFromArg(path) {
+  const bundled = resolveBundledFieldset(path);
+  if (bundled !== null) {
+    if ("error" in bundled) return { error: bundled.error };
+    path = bundled.path;
+  }
+  let raw;
+  try {
+    raw = readFileSync2(path, "utf-8");
+  } catch (e) {
+    return { error: `cannot read --fields-file: ${e.message}` };
+  }
+  let json2;
+  try {
+    json2 = JSON.parse(raw);
+  } catch (e) {
+    return { error: `--fields-file is not valid JSON: ${e.message}` };
+  }
+  try {
+    return parseFieldset(json2);
+  } catch (e) {
+    return { error: `fieldset validation failed: ${e.message}` };
+  }
+}
+function resolvePricing(model, flags) {
+  const known = KNOWN_PRICING[model];
+  const inP = flags["input-price-per-m"];
+  const outP = flags["output-price-per-m"];
+  const ctx = flags["context-window"];
+  if (inP || outP || ctx) {
+    if (!inP || !outP || !ctx) {
+      return {
+        error: "--input-price-per-m, --output-price-per-m, and --context-window must all be supplied together"
+      };
+    }
+    const ip = Number(inP);
+    const op = Number(outP);
+    const cw = Number(ctx);
+    if (!Number.isFinite(ip) || !Number.isFinite(op) || !Number.isFinite(cw)) {
+      return { error: "pricing flags must be finite numbers" };
+    }
+    return {
+      input_per_m_usd: ip,
+      output_per_m_usd: op,
+      context_window: cw
+    };
+  }
+  if (!known) {
+    return {
+      error: `no pricing for model ${JSON.stringify(model)}. Pass --input-price-per-m, --output-price-per-m, --context-window.`
+    };
+  }
+  return known;
+}
+function parseFilterToken(token) {
+  const ALLOWED = /* @__PURE__ */ new Set([">=", "<=", "!=", "=", ">", "<", "LIKE"]);
+  const ops = [">=", "<=", "!=", "LIKE", "=", ">", "<"];
+  for (const op of ops) {
+    const sep = `:${op}:`;
+    const idx = token.indexOf(sep);
+    if (idx === -1) continue;
+    const path = token.slice(0, idx);
+    const valueStr = token.slice(idx + sep.length);
+    if (!ALLOWED.has(op)) continue;
+    let value;
+    if (valueStr === "true") value = true;
+    else if (valueStr === "false") value = false;
+    else if (valueStr === "null") value = null;
+    else if (/^-?\d+(\.\d+)?$/.test(valueStr)) value = Number(valueStr);
+    else value = valueStr;
+    return { path, op, value };
+  }
+  return {
+    error: `--filter ${JSON.stringify(token)} must look like '$.path:OP:value' where OP is one of =, !=, >, >=, <, <=, LIKE`
+  };
+}
+var realFetch = async (url2, init) => {
+  const res = await fetch(url2, init);
+  return {
+    ok: res.ok,
+    status: res.status,
+    json: () => res.json(),
+    text: () => res.text()
+  };
+};
+function adaptFetchForContext(impl) {
+  return (url2, init) => impl(url2, {
+    method: init.method,
+    headers: init.headers,
+    body: ""
+  });
+}
+function runRegister(args) {
+  const { flags } = parseFlags(args);
+  const dbPath = requireFlag(flags, "db");
+  if (typeof dbPath === "object") return err(dbPath.error);
+  const root = flags["root"];
+  const filesArg = flags["files"];
+  const gitDiff = flags["git-diff"];
+  if (!root && !filesArg) {
+    return err("either --root <folder> or --files <a,b,c> is required");
+  }
+  if (root && filesArg) {
+    return err("--root and --files are mutually exclusive");
+  }
+  if (gitDiff && !root) {
+    return err("--git-diff requires --root <folder> (the repo root)");
+  }
+  let paths;
+  if (filesArg) {
+    paths = filesArg.split(",").map((p) => p.trim()).filter(Boolean);
+  } else {
+    const extFilter = flags["extensions"] ? new Set(
+      flags["extensions"].split(",").map((s) => s.trim()).filter(Boolean).map((s) => s.startsWith(".") ? s : `.${s}`).map((s) => s.toLowerCase())
+    ) : void 0;
+    const extraSkip = flags["exclude-dirs"] ? new Set(flags["exclude-dirs"].split(",").map((s) => s.trim()).filter(Boolean)) : void 0;
+    const useGitignore = flags["no-gitignore"] !== "true";
+    let walked = walkFiles(root, extFilter, extraSkip);
+    if (gitDiff) {
+      const changed = listGitChangedFiles(root, gitDiff);
+      if (changed === null) {
+        return err(
+          `--git-diff ${JSON.stringify(gitDiff)} failed: not a git repo, or git not on PATH, or ref not found`
+        );
+      }
+      const changedSet = new Set(changed);
+      walked = walked.filter((p) => changedSet.has(p));
+      if (walked.length === 0 && changed.length > 0) {
+        walked = changed.filter(
+          (p) => (extFilter === void 0 || extFilter.has(extname3(p).toLowerCase())) && !walkFilesShouldSkip(p, extraSkip)
+        );
+      }
+    }
+    if (useGitignore) {
+      const tracked = listGitTrackedFiles(root);
+      if (tracked !== null) {
+        const trackedSet = new Set(tracked);
+        const dropped = walked.length;
+        walked = walked.filter((p) => trackedSet.has(p));
+        if (walked.length === 0 && tracked.length > 0 && dropped > 0) {
+          walked = tracked.filter(
+            (p) => (extFilter === void 0 || extFilter.has(extname3(p).toLowerCase())) && !walkFilesShouldSkip(p, extraSkip)
+          );
+        }
+      }
+    }
+    paths = walked;
+  }
+  if (paths.length === 0) {
+    return ok("registered=0  no files matched");
+  }
+  const model = flags["model"] ?? DEFAULT_MODEL;
+  const pricing = resolvePricing(model, flags);
+  if ("error" in pricing) return err(pricing.error);
+  const registerCap = bytesCapFromPct(
+    pricing.context_window,
+    Number(flags["max-context-pct-register"] ?? 0.5)
+  );
+  const reg = openRegistry({ path: dbPath });
+  let registered = 0;
+  let already = 0;
+  let skippedTooBig = 0;
+  let skippedRead = 0;
+  for (const p of paths) {
+    let body;
+    try {
+      body = readFileSync2(p);
+    } catch {
+      skippedRead++;
+      continue;
+    }
+    if (body.length > registerCap) {
+      reg.recordSkipped({
+        file_path: p,
+        reason: `body_bytes ${body.length} > register cap ${registerCap}`,
+        phase: "register",
+        size_bytes: body.length
+      });
+      skippedTooBig++;
+      continue;
+    }
+    const out = reg.registerFile({
+      file_path: isAbsolute(p) ? p : resolve(p),
+      source_root: root ?? dirname3(p),
+      body,
+      registered_via: filesArg ? "explicit" : "folder"
+    });
+    if (out.already_registered) already++;
+    else registered++;
+  }
+  reg.close();
+  return ok(
+    [
+      `db=${dbPath}`,
+      `registered=${registered}`,
+      `already_registered=${already}`,
+      `skipped_too_big=${skippedTooBig}`,
+      `skipped_read_error=${skippedRead}`,
+      `total_paths=${paths.length}`
+    ].join("  ")
+  );
+}
+function runPreclassify(args) {
+  const { flags } = parseFlags(args);
+  const dbPath = requireFlag(flags, "db");
+  if (typeof dbPath === "object") return err(dbPath.error);
+  const reg = openRegistry({ path: dbPath });
+  const result = preclassifyAll(reg, {
+    reclassify: flags["reclassify"] === "true",
+    limit: flags["limit"] ? Number(flags["limit"]) : void 0
+  });
+  reg.close();
+  const buckets = Object.entries(result.by_bucket).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k}=${n}`).join(", ");
+  return ok(
+    [
+      `total=${result.total}`,
+      `classified=${result.classified}`,
+      `skipped_already=${result.skipped_already}`,
+      `no_body=${result.no_body}`,
+      buckets ? `by_bucket: ${buckets}` : "by_bucket: (none)"
+    ].join("\n")
+  );
+}
+async function runEstimate(args, opts = {}) {
+  const { flags } = parseFlags(args);
+  const dbPath = requireFlag(flags, "db");
+  if (typeof dbPath === "object") return err(dbPath.error);
+  const fieldsFile = requireFlag(flags, "fields-file");
+  if (typeof fieldsFile === "object") return err(fieldsFile.error);
+  const fs = loadFieldsetFromArg(fieldsFile);
+  if ("error" in fs) return err(fs.error);
+  const model = flags["model"] ?? DEFAULT_MODEL;
+  const pricing = resolvePricing(model, flags);
+  if ("error" in pricing) return err(pricing.error);
+  if (flags["live-context"] === "true") {
+    const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      return err(
+        "--live-context requires OPENROUTER_API_KEY (export it or pass via opts.apiKey)."
+      );
+    }
+    const live = await fetchProviderContext(
+      model,
+      apiKey,
+      adaptFetchForContext(opts.fetchImpl ?? realFetch)
+    );
+    if (live === null) {
+      return err(
+        `--live-context: could not fetch context_length for model ${JSON.stringify(model)} from OpenRouter.`
+      );
+    }
+    pricing.context_window = live;
+  }
+  const compiled = compileFieldset(fs);
+  const promptBytes = Buffer.byteLength(compiled.systemPrompt, "utf-8");
+  const schemaBytes = Buffer.byteLength(JSON.stringify(compiled.jsonSchema), "utf-8");
+  const expectedOutputBytes = Number(flags["expected-output-bytes"] ?? 200);
+  const reg = openRegistry({ path: dbPath });
+  const est = estimateJobCost(reg, {
+    pricing,
+    prompt_overhead_bytes: promptBytes,
+    schema_overhead_bytes: schemaBytes,
+    expected_output_bytes: expectedOutputBytes,
+    bucket: flags["bucket"],
+    worker_count: flags["workers"] ? Number(flags["workers"]) : void 0,
+    per_call_seconds: flags["per-call-seconds"] ? Number(flags["per-call-seconds"]) : void 0,
+    max_context_pct_scout: flags["max-context-pct-scout"] ? Number(flags["max-context-pct-scout"]) : void 0,
+    max_context_pct_register: flags["max-context-pct-register"] ? Number(flags["max-context-pct-register"]) : void 0
+  });
+  reg.close();
+  const budgetStr = flags["budget-usd"];
+  const budget = budgetStr ? Number(budgetStr) : null;
+  const gate = checkBudget(est.est_cost_usd, budget);
+  const lines = [
+    `model=${model}  context_window=${pricing.context_window}`,
+    `files_eligible=${est.files_eligible}`,
+    `files_skipped_too_big=${est.files_skipped_too_big}`,
+    `files_over_register_cap=${est.files_over_register_cap}`,
+    `total_input_tokens=${est.total_input_tokens}`,
+    `total_output_tokens=${est.total_output_tokens}`,
+    `est_cost_usd=$${est.est_cost_usd.toFixed(6)}`,
+    `est_seconds=${est.est_seconds}`,
+    `budget_usd=${budget == null ? "(none)" : `$${budget.toFixed(4)}`}`,
+    `budget_allowed=${gate.allowed}`
+  ];
+  if (!gate.allowed && gate.reason) lines.push(`reason=${gate.reason}`);
+  if (est.by_bucket.length > 0) {
+    lines.push("by_bucket:");
+    for (const b of est.by_bucket) {
+      lines.push(
+        `  ${b.bucket}  files=${b.files}  in=${b.input_tokens}  out=${b.output_tokens}  cost=$${b.cost_usd.toFixed(6)}`
+      );
+    }
+  }
+  return ok(lines.join("\n"));
+}
+async function runScout(args, opts) {
+  const { flags } = parseFlags(args);
+  const dbPath = requireFlag(flags, "db");
+  if (typeof dbPath === "object") return err(dbPath.error);
+  const fieldsFile = requireFlag(flags, "fields-file");
+  if (typeof fieldsFile === "object") return err(fieldsFile.error);
+  const jobId = requireFlag(flags, "job-id");
+  if (typeof jobId === "object") return err(jobId.error);
+  const sourceRoot = requireFlag(flags, "source-root");
+  if (typeof sourceRoot === "object") return err(sourceRoot.error);
+  const fs = loadFieldsetFromArg(fieldsFile);
+  if ("error" in fs) return err(fs.error);
+  const model = flags["model"] ?? DEFAULT_MODEL;
+  const pricing = resolvePricing(model, flags);
+  if ("error" in pricing) return err(pricing.error);
+  const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
+  if (!apiKey) {
+    return err(
+      "OPENROUTER_API_KEY missing. Export it or pass via opts.apiKey (test path)."
+    );
+  }
+  const fetchImpl = opts.fetchImpl ?? realFetch;
+  if (flags["live-context"] === "true") {
+    const live = await fetchProviderContext(
+      model,
+      apiKey,
+      adaptFetchForContext(fetchImpl)
+    );
+    if (live === null) {
+      return err(
+        `--live-context: could not fetch context_length for model ${JSON.stringify(model)} from OpenRouter.`
+      );
+    }
+    pricing.context_window = live;
+  }
+  const reg = openRegistry({ path: dbPath });
+  let result;
+  try {
+    result = await runScoutJob(
+      reg,
+      {
+        jobId,
+        fieldset: fs,
+        pricing,
+        model,
+        apiKey,
+        workers: flags["workers"] ? Number(flags["workers"]) : void 0,
+        maxRetries: flags["max-retries"] ? Number(flags["max-retries"]) : void 0,
+        bucket: flags["bucket"],
+        smokeTest: flags["no-smoke-test"] !== "true",
+        resume: flags["no-resume"] !== "true",
+        sourceRoot,
+        maxContextPctScout: flags["max-context-pct-scout"] ? Number(flags["max-context-pct-scout"]) : void 0,
+        budgetUsd: flags["budget-usd"] ? Number(flags["budget-usd"]) : void 0,
+        consecutiveFailureLimit: flags["consecutive-failure-limit"] ? Number(flags["consecutive-failure-limit"]) : void 0,
+        perCallTimeoutMs: flags["per-call-timeout-ms"] ? Number(flags["per-call-timeout-ms"]) : void 0,
+        // Forward MCP progress callback when supplied. scout.ts already
+        // calls this per-file; the dispatcher in mcp-tools.ts passes a
+        // wrapper that fires `notifications/progress` to the MCP client.
+        onProgress: opts.onProgress ? (done, total) => opts.onProgress?.(
+          done,
+          total,
+          `scout: ${done}/${total} files`
+        ) : void 0
+      },
+      fetchImpl
+    );
+  } catch (e) {
+    reg.close();
+    return err(`scout failed: ${e.message}`);
+  }
+  const summary = summariseJob(reg, jobId);
+  const md = renderMarkdownReport(summary);
+  reg.close();
+  const mainRoot = opts.mainRoot ?? defaultMainRoot();
+  const reportDir = join(mainRoot, "reports", "mass_scouting");
+  mkdirSync2(reportDir, { recursive: true });
+  const stamp = isoTimestampLocal();
+  const reportPath = join(reportDir, `${stamp}-scout-${slugify2(jobId)}.md`);
+  writeFileSync(reportPath, md, "utf-8");
+  return ok(
+    [
+      `job_id=${jobId}`,
+      `files_total=${result.filesTotal}`,
+      `files_ok=${result.filesOk}`,
+      `files_failed=${result.filesFailed}`,
+      `files_skipped_too_big=${result.filesSkippedTooBig}`,
+      `retries=${result.retries}`,
+      `cost_usd=$${result.costUsd.toFixed(6)}`,
+      result.circuitTripped ? `circuit_tripped=true` : `circuit_tripped=false`,
+      `report=${reportPath}`
+    ].join("\n")
+  );
+}
+function runSearch(args) {
+  const { flags } = parseFlags(args);
+  const dbPath = requireFlag(flags, "db");
+  if (typeof dbPath === "object") return err(dbPath.error);
+  const jobId = requireFlag(flags, "job-id");
+  if (typeof jobId === "object") return err(jobId.error);
+  const filters = [];
+  const filterRaw = flags["filter"];
+  if (filterRaw) {
+    for (const tok of filterRaw.split(",,").map((s) => s.trim())) {
+      if (!tok) continue;
+      const f = parseFilterToken(tok);
+      if ("error" in f) return err(f.error);
+      filters.push(f);
+    }
+  }
+  const reg = openRegistry({ path: dbPath });
+  let res;
+  try {
+    res = massScoutSearch(reg, {
+      jobId,
+      query: flags["query"],
+      regex: flags["regex"],
+      forceLlm: flags["force-llm"] === "true",
+      forceRegex: flags["force-regex"] === "true",
+      filters,
+      limit: flags["limit"] ? Number(flags["limit"]) : void 0,
+      offset: flags["offset"] ? Number(flags["offset"]) : void 0
+    });
+  } catch (e) {
+    reg.close();
+    return err(e.message);
+  }
+  reg.close();
+  if (flags["json"] === "true") {
+    return ok(JSON.stringify(res, null, 2));
+  }
+  return ok(formatSearchTable(res));
+}
+function runSearchXjob(args) {
+  const { flags } = parseFlags(args);
+  const dbPath = requireFlag(flags, "db");
+  if (typeof dbPath === "object") return err(dbPath.error);
+  const jobIdsRaw = requireFlag(flags, "job-ids");
+  if (typeof jobIdsRaw === "object") return err(jobIdsRaw.error);
+  const jobIds = jobIdsRaw.split(",").map((s) => s.trim()).filter(Boolean);
+  if (jobIds.length === 0) return err("--job-ids must list at least one job");
+  const filters = [];
+  const filterRaw = flags["filter"];
+  if (filterRaw) {
+    for (const tok of filterRaw.split(",,").map((s) => s.trim())) {
+      if (!tok) continue;
+      const f = parseFilterToken(tok);
+      if ("error" in f) return err(f.error);
+      filters.push(f);
+    }
+  }
+  const reg = openRegistry({ path: dbPath });
+  let res;
+  try {
+    res = massScoutSearchXjob(reg, {
+      jobIds,
+      query: flags["query"],
+      regex: flags["regex"],
+      forceLlm: flags["force-llm"] === "true",
+      forceRegex: flags["force-regex"] === "true",
+      filters,
+      limitPerJob: flags["limit-per-job"] ? Number(flags["limit-per-job"]) : void 0,
+      limitMerged: flags["limit-merged"] ? Number(flags["limit-merged"]) : void 0
+    });
+  } catch (e) {
+    reg.close();
+    return err(e.message);
+  }
+  reg.close();
+  if (flags["json"] === "true") {
+    return ok(JSON.stringify(res, null, 2));
+  }
+  const lines = [
+    `mode=${res.mode}  jobs=${res.jobIds.join(",")}  total_examined=${res.total_examined}`,
+    `hits=${res.hits.length}`,
+    "",
+    ...res.hits.slice(0, 50).map(
+      (h) => `[${h.job_id}] ${h.short_id} ${h.file_path}` + (h.snippet ? ` :: ${h.snippet}` : "")
+    )
+  ];
+  return ok(lines.join("\n"));
+}
+function runGet(args) {
+  const { flags } = parseFlags(args);
+  const dbPath = requireFlag(flags, "db");
+  if (typeof dbPath === "object") return err(dbPath.error);
+  const shortIdStr = requireFlag(flags, "short-id");
+  if (typeof shortIdStr === "object") return err(shortIdStr.error);
+  const shortId = Number(shortIdStr);
+  if (!Number.isInteger(shortId) || shortId <= 0) {
+    return err("--short-id must be a positive integer");
+  }
+  const reg = openRegistry({ path: dbPath });
+  const row = reg.getByShortId(shortId);
+  if (!row) {
+    reg.close();
+    return err(`no row with short_id=${shortId}`);
+  }
+  let out = { ...row };
+  if (flags["job-id"]) {
+    const r = reg.getResult(flags["job-id"], row.fingerprint);
+    if (r) out = { ...out, result: r };
+  }
+  reg.close();
+  return ok(JSON.stringify(out, null, 2));
+}
+function runBuildFieldset(args) {
+  const { flags, positional: _positional } = parseFlags(args);
+  void _positional;
+  const name = requireFlag(flags, "name");
+  if (typeof name === "object") return err(name.error);
+  const fieldTokens = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--field") {
+      const v = args[i + 1];
+      if (v !== void 0 && !v.startsWith("--")) {
+        fieldTokens.push(v);
+        i++;
+      }
+    } else if (args[i].startsWith("--field=")) {
+      fieldTokens.push(args[i].slice("--field=".length));
+    }
+  }
+  if (fieldTokens.length === 0) {
+    return err(
+      "at least one --field 'NAME:TYPE=DESC' is required (e.g. --field 'is_async:bool=true if async/await')"
+    );
+  }
+  const fields = [];
+  for (const tok of fieldTokens) {
+    try {
+      fields.push(parseShorthand(tok));
+    } catch (e) {
+      return err(
+        `--field ${JSON.stringify(tok)} parse error: ${e.message}`
+      );
+    }
+  }
+  const fieldset = {
+    version: 1,
+    fieldset_name: name,
+    fields
+  };
+  try {
+    parseFieldset(fieldset);
+  } catch (e) {
+    return err(`fieldset validation failed: ${e.message}`);
+  }
+  const json2 = JSON.stringify(fieldset, null, 2);
+  const outPath = flags["out"];
+  if (outPath) {
+    writeFileSync(outPath, json2 + "\n", "utf-8");
+    return ok(`fieldset_name=${name}
+fields=${fields.length}
+path=${outPath}`);
+  }
+  return ok(json2);
+}
+async function runProposeFieldset(args, opts) {
+  const { flags } = parseFlags(args);
+  const goal = requireFlag(flags, "goal");
+  if (typeof goal === "object") return err(goal.error);
+  const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
+  if (!apiKey) {
+    return err(
+      "OPENROUTER_API_KEY missing. Export it or pass via opts.apiKey (test path)."
+    );
+  }
+  const fetchImpl = opts.fetchImpl ?? realFetch;
+  const model = flags["model"] ?? DEFAULT_MODEL;
+  const apiUrl = "https://openrouter.ai/api/v1/chat/completions";
+  const samples = [];
+  const samplesArg = flags["samples"];
+  if (samplesArg) {
+    for (const p of samplesArg.split(",").map((s) => s.trim()).filter(Boolean)) {
+      try {
+        const body = readFileSync2(p, "utf-8");
+        samples.push({ path: p, body: body.slice(0, 2e3) });
+      } catch {
+      }
+    }
+  }
+  const sysPrompt = [
+    "You design JSON fieldsets for the mass-scouting tool.",
+    "A fieldset describes structured metadata to extract from a single file.",
+    "Allowed field type kinds: bool, string, enum(values), array_string, array_enum(values), int(min/max), number(min/max), array_object(item_fields).",
+    "Field names match /^[a-z][a-z0-9_]*$/. Descriptions are 5..500 chars.",
+    "Return ONLY a JSON object matching the response schema \u2014 no commentary."
+  ].join(" ");
+  const userPrompt = [
+    `GOAL: ${goal}`,
+    "",
+    samples.length > 0 ? "SAMPLE FILES (excerpts):" : "",
+    ...samples.map((s) => `--- ${s.path} ---
+${s.body}
+`),
+    "",
+    "Return a JSON fieldset that, when applied to every file in the corpus,",
+    "would let the user achieve the GOAL by querying the resulting registry.",
+    "Prefer 3..7 fields. Use enum where the answer is one of a small set."
+  ].join("\n");
+  const responseSchema = {
+    name: "fieldset_proposal",
+    strict: true,
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["fieldset_name", "fields"],
+      properties: {
+        fieldset_name: { type: "string" },
+        notes: { type: "string" },
+        fields: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            additionalProperties: true,
+            required: ["name", "description", "type"],
+            properties: {
+              name: { type: "string" },
+              description: { type: "string" },
+              type: {
+                type: "object",
+                additionalProperties: true,
+                required: ["kind"],
+                properties: { kind: { type: "string" } }
+              }
+            }
+          }
+        }
+      }
+    }
+  };
+  let res;
+  try {
+    res = await fetchImpl(apiUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: sysPrompt },
+          { role: "user", content: userPrompt }
+        ],
+        response_format: { type: "json_schema", json_schema: responseSchema },
+        temperature: 0.2
+      })
+    });
+  } catch (e) {
+    return err(`propose-fieldset network error: ${e.message}`);
+  }
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    return err(`propose-fieldset HTTP ${res.status}: ${t.slice(0, 200)}`);
+  }
+  const payload = await res.json();
+  const content = payload.choices?.[0]?.message?.content;
+  if (typeof content !== "string") {
+    return err("propose-fieldset: response had no message.content");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(content);
+  } catch (e) {
+    return err(`propose-fieldset: JSON.parse failed: ${e.message}`);
+  }
+  const candidate = {
+    version: 1,
+    fieldset_name: parsed.fieldset_name ?? "proposed",
+    notes: parsed.notes,
+    fields: parsed.fields ?? []
+  };
+  try {
+    parseFieldset(candidate);
+  } catch (e) {
+    return err(
+      `propose-fieldset: model returned an invalid fieldset (${e.message}). Raw:
+${content.slice(0, 400)}`
+    );
+  }
+  const json2 = JSON.stringify(candidate, null, 2);
+  const outPath = flags["out"];
+  if (outPath) {
+    writeFileSync(outPath, json2 + "\n", "utf-8");
+    return ok(
+      `fieldset_name=${candidate.fieldset_name}
+fields=${candidate.fields.length}
+path=${outPath}`
+    );
+  }
+  return ok(json2);
+}
+function runListBundledFieldsets(args) {
+  const { flags } = parseFlags(args);
+  const here = dirname3(fileURLToPath(import.meta.url));
+  const candidates = [
+    resolve(here, "..", "fieldsets"),
+    resolve(here, "fieldsets"),
+    resolve(here, "..", "..", "fieldsets")
+  ];
+  let dir = null;
+  for (const c of candidates) {
+    try {
+      readdirSync(c);
+      dir = c;
+      break;
+    } catch {
+    }
+  }
+  if (!dir) {
+    return err(
+      `bundled fieldsets directory not found; tried: ${candidates.join(", ")}`
+    );
+  }
+  const entries = readdirSync(dir).filter((n) => n.endsWith(".json")).sort();
+  const sets = [];
+  for (const e of entries) {
+    const full = resolve(dir, e);
+    const name = e.replace(/\.json$/, "");
+    let fields = [];
+    try {
+      const parsed = JSON.parse(readFileSync2(full, "utf-8"));
+      fields = (parsed.fields ?? []).map((f) => f.name);
+    } catch {
+    }
+    sets.push({ name, path: full, fields });
+  }
+  if (flags["json"] === "true") {
+    return ok(JSON.stringify(sets, null, 2));
+  }
+  if (sets.length === 0) {
+    return ok("(no bundled fieldsets installed)");
+  }
+  const lines = [`Bundled fieldsets (dir=${dir}):`];
+  for (const s of sets) {
+    lines.push(
+      `  bundled:${s.name}  fields=[${s.fields.join(", ")}]`
+    );
+  }
+  return ok(lines.join("\n"));
+}
+function runDiff(args) {
+  const { flags } = parseFlags(args);
+  const dbPath = requireFlag(flags, "db");
+  if (typeof dbPath === "object") return err(dbPath.error);
+  const fromJob = requireFlag(flags, "from");
+  if (typeof fromJob === "object") return err(fromJob.error);
+  const toJob = requireFlag(flags, "to");
+  if (typeof toJob === "object") return err(toJob.error);
+  if (fromJob === toJob) {
+    return err("--from and --to must be different jobs");
+  }
+  const reg = openRegistry({ path: dbPath });
+  const a = reg.listResultsByJob(fromJob);
+  const b = reg.listResultsByJob(toJob);
+  const aMap = new Map(a.map((r) => [r.file_fingerprint, r]));
+  const bMap = new Map(b.map((r) => [r.file_fingerprint, r]));
+  const onlyInA = [];
+  const onlyInB = [];
+  const changed = [];
+  for (const [fp, ra] of aMap) {
+    const rb = bMap.get(fp);
+    const file2 = reg.getByFingerprint(fp);
+    const path = file2?.file_path ?? "(unknown)";
+    if (!rb) {
+      onlyInA.push({ short_id: ra.short_id, file_path: path });
+      continue;
+    }
+    let pa = {};
+    let pb = {};
+    try {
+      pa = JSON.parse(ra.result_json);
+    } catch {
+    }
+    try {
+      pb = JSON.parse(rb.result_json);
+    } catch {
+    }
+    const keys = /* @__PURE__ */ new Set([...Object.keys(pa), ...Object.keys(pb)]);
+    const changedKeys = [];
+    for (const k of keys) {
+      if (JSON.stringify(pa[k]) !== JSON.stringify(pb[k])) changedKeys.push(k);
+    }
+    if (changedKeys.length > 0) {
+      changed.push({ short_id: ra.short_id, file_path: path, changed_keys: changedKeys });
+    }
+  }
+  for (const [fp, rb] of bMap) {
+    if (aMap.has(fp)) continue;
+    const file2 = reg.getByFingerprint(fp);
+    onlyInB.push({
+      short_id: rb.short_id,
+      file_path: file2?.file_path ?? "(unknown)"
+    });
+  }
+  reg.close();
+  const summary = {
+    from: fromJob,
+    to: toJob,
+    only_in_a: onlyInA,
+    only_in_b: onlyInB,
+    changed,
+    counts: {
+      only_in_a: onlyInA.length,
+      only_in_b: onlyInB.length,
+      changed: changed.length,
+      identical: aMap.size - changed.length - onlyInA.length
+    }
+  };
+  if (flags["json"] === "true") {
+    return ok(JSON.stringify(summary, null, 2));
+  }
+  const lines = [
+    `from=${fromJob}  to=${toJob}`,
+    `only_in_a=${summary.counts.only_in_a}  only_in_b=${summary.counts.only_in_b}  changed=${summary.counts.changed}  identical=${summary.counts.identical}`
+  ];
+  if (changed.length > 0) {
+    lines.push("", "Changed files (first 50):");
+    for (const c of changed.slice(0, 50)) {
+      lines.push(
+        `  ${c.short_id}  ${c.file_path}  keys=${c.changed_keys.join(",")}`
+      );
+    }
+  }
+  return ok(lines.join("\n"));
+}
+async function runChain(args, opts) {
+  const { flags } = parseFlags(args);
+  const dbPath = requireFlag(flags, "db");
+  if (typeof dbPath === "object") return err(dbPath.error);
+  const sourceJob = requireFlag(flags, "source-job");
+  if (typeof sourceJob === "object") return err(sourceJob.error);
+  const newJob = requireFlag(flags, "new-job-id");
+  if (typeof newJob === "object") return err(newJob.error);
+  const fieldsFile = requireFlag(flags, "new-fields-file");
+  if (typeof fieldsFile === "object") return err(fieldsFile.error);
+  const filterRaw = flags["filter"];
+  if (!filterRaw) {
+    return err(
+      "--filter '$.x:OP:value' is required (or use mass_scout directly to scout everything)"
+    );
+  }
+  const f = parseFilterToken(filterRaw);
+  if ("error" in f) return err(f.error);
+  const fs = loadFieldsetFromArg(fieldsFile);
+  if ("error" in fs) return err(fs.error);
+  const model = flags["model"] ?? DEFAULT_MODEL;
+  const pricing = resolvePricing(model, flags);
+  if ("error" in pricing) return err(pricing.error);
+  const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
+  if (!apiKey) {
+    return err("OPENROUTER_API_KEY missing.");
+  }
+  const fetchImpl = opts.fetchImpl ?? realFetch;
+  const reg = openRegistry({ path: dbPath });
+  let sourceRows;
+  try {
+    sourceRows = reg.searchByJsonExtract(
+      sourceJob,
+      f.path,
+      f.op,
+      f.value,
+      { limit: 1e6 }
+    );
+  } catch (e) {
+    reg.close();
+    return err(`chain filter failed: ${e.message}`);
+  }
+  if (sourceRows.length === 0) {
+    reg.close();
+    return ok(
+      `source_job=${sourceJob}  matched=0  (filter matched nothing \u2014 nothing to chain)`
+    );
+  }
+  const fingerprints = new Set(sourceRows.map((r) => r.file_fingerprint));
+  reg.close();
+  const reg2 = openRegistry({ path: dbPath });
+  const compiled = compileFieldset(fs);
+  if (!reg2.getJob(newJob)) {
+    reg2.createJob({
+      job_id: newJob,
+      fieldset_name: fs.fieldset_name,
+      fieldset_json: JSON.stringify(fs),
+      json_schema: JSON.stringify(compiled.jsonSchema),
+      model,
+      workers: 1,
+      source_root: `chain:${sourceJob}`,
+      bucket_filter: null,
+      notes: `chained from ${sourceJob} via filter ${filterRaw}`
+    });
+  }
+  const eligible = reg2.listEligible({}).filter((r) => fingerprints.has(r.fingerprint));
+  let okCount = 0;
+  let failed = 0;
+  let costUsd = 0;
+  const SENTINEL = `chain:${newJob}`;
+  const originals = /* @__PURE__ */ new Map();
+  for (const r of eligible) {
+    originals.set(r.fingerprint, r.classifier_bucket);
+    reg2.setClassifierBucketOnly(r.fingerprint, SENTINEL);
+  }
+  try {
+    const res = await runScoutJob(
+      reg2,
+      {
+        jobId: newJob,
+        fieldset: fs,
+        pricing,
+        model,
+        apiKey,
+        workers: flags["workers"] ? Number(flags["workers"]) : 4,
+        maxRetries: flags["max-retries"] ? Number(flags["max-retries"]) : 1,
+        bucket: SENTINEL,
+        smokeTest: false,
+        resume: true,
+        sourceRoot: `chain:${sourceJob}`,
+        onProgress: opts.onProgress ? (done, total) => opts.onProgress?.(
+          done,
+          total,
+          `chain: ${done}/${total} files`
+        ) : void 0
+      },
+      fetchImpl
+    );
+    okCount = res.filesOk;
+    failed = res.filesFailed;
+    costUsd = res.costUsd;
+  } finally {
+    for (const [fp, bucket] of originals) {
+      reg2.setClassifierBucketOnly(fp, bucket);
+    }
+    reg2.close();
+  }
+  return ok(
+    [
+      `source_job=${sourceJob}`,
+      `new_job=${newJob}`,
+      `matched=${eligible.length}`,
+      `files_ok=${okCount}`,
+      `files_failed=${failed}`,
+      `cost_usd=$${costUsd.toFixed(6)}`
+    ].join("\n")
+  );
+}
+function runJobsList(args) {
+  const { flags } = parseFlags(args);
+  const dbPath = requireFlag(flags, "db");
+  if (typeof dbPath === "object") return err(dbPath.error);
+  const reg = openRegistry({ path: dbPath });
+  const jobs = reg.listJobs();
+  reg.close();
+  if (flags["json"] === "true") {
+    return ok(JSON.stringify(jobs, null, 2));
+  }
+  if (jobs.length === 0) return ok("(no jobs in this db)");
+  const lines = [
+    `total=${jobs.length}`,
+    "",
+    "job_id  fieldset  model  files_ok/total  cost  started_at",
+    "------  --------  -----  --------------  ----  ----------"
+  ];
+  for (const j of jobs) {
+    const totals = `${j.files_ok ?? 0}/${j.files_total ?? 0}`;
+    const cost = j.cost_usd != null ? `$${j.cost_usd.toFixed(6)}` : "\u2014";
+    lines.push(
+      `${j.job_id}  ${j.fieldset_name}  ${j.model}  ${totals}  ${cost}  ${j.started_at}`
+    );
+  }
+  return ok(lines.join("\n"));
+}
+function runAuditSample(args) {
+  const { flags } = parseFlags(args);
+  const dbPath = requireFlag(flags, "db");
+  if (typeof dbPath === "object") return err(dbPath.error);
+  const jobId = requireFlag(flags, "job-id");
+  if (typeof jobId === "object") return err(jobId.error);
+  const sampleN = flags["sample"] ? Number(flags["sample"]) : 5;
+  if (!Number.isFinite(sampleN) || sampleN <= 0) {
+    return err("--sample must be a positive integer (default 5)");
+  }
+  const bodyTruncate = flags["body-truncate"] ? Number(flags["body-truncate"]) : 1e3;
+  const reg = openRegistry({ path: dbPath });
+  const rows = reg.sampleResultsByJob(jobId, sampleN);
+  if (rows.length === 0) {
+    reg.close();
+    return ok(
+      `job_id=${jobId}
+sample=${sampleN}
+rows=0  (no results found \u2014 has the scout run?)`
+    );
+  }
+  const out = [];
+  for (const r of rows) {
+    const file2 = reg.getByFingerprint(r.file_fingerprint);
+    const body = reg.readBody(r.file_fingerprint);
+    const excerpt = body ? body.toString("utf-8").slice(0, bodyTruncate) : "(no body cached)";
+    let parsed;
+    try {
+      parsed = JSON.parse(r.result_json);
+    } catch {
+      parsed = r.result_json;
+    }
+    out.push({
+      short_id: r.short_id,
+      file_path: file2?.file_path ?? "(unknown)",
+      body_excerpt: excerpt,
+      result: parsed
+    });
+  }
+  reg.close();
+  if (flags["json"] === "true") {
+    return ok(JSON.stringify({ job_id: jobId, samples: out }, null, 2));
+  }
+  const lines = [`job_id=${jobId}  sample=${rows.length}`, ""];
+  for (const s of out) {
+    lines.push(`### short_id=${s.short_id}  ${s.file_path}`);
+    lines.push("--- BODY (excerpt) ---");
+    lines.push(s.body_excerpt);
+    lines.push("--- EXTRACTION ---");
+    lines.push(JSON.stringify(s.result, null, 2));
+    lines.push("");
+  }
+  return ok(lines.join("\n"));
+}
+function runBodyGet(args) {
+  const { flags } = parseFlags(args);
+  const dbPath = requireFlag(flags, "db");
+  if (typeof dbPath === "object") return err(dbPath.error);
+  const shortIdStr = requireFlag(flags, "short-id");
+  if (typeof shortIdStr === "object") return err(shortIdStr.error);
+  const shortId = Number(shortIdStr);
+  if (!Number.isInteger(shortId) || shortId <= 0) {
+    return err("--short-id must be a positive integer");
+  }
+  const reg = openRegistry({ path: dbPath });
+  const body = reg.readBodyByShortId(shortId);
+  reg.close();
+  if (!body) {
+    return err(`no body cached for short_id=${shortId}`);
+  }
+  return ok(body.toString("utf-8"));
+}
+function runExport(args, opts) {
+  const { flags } = parseFlags(args);
+  const dbPath = requireFlag(flags, "db");
+  if (typeof dbPath === "object") return err(dbPath.error);
+  const jobId = requireFlag(flags, "job-id");
+  if (typeof jobId === "object") return err(jobId.error);
+  const format = (flags["format"] ?? "jsonl").toLowerCase();
+  if (format !== "jsonl" && format !== "csv") {
+    return err("--format must be 'jsonl' or 'csv'");
+  }
+  const reg = openRegistry({ path: dbPath });
+  const rows = reg.listResultsByJob(jobId);
+  reg.close();
+  const mainRoot = opts.mainRoot ?? defaultMainRoot();
+  const reportDir = join(mainRoot, "reports", "mass_scouting");
+  mkdirSync2(reportDir, { recursive: true });
+  const stamp = isoTimestampLocal();
+  const filename = `${stamp}-export-${slugify2(jobId)}.${format}`;
+  const path = join(reportDir, filename);
+  if (format === "jsonl") {
+    for (const r of rows) {
+      appendFileSync2(path, JSON.stringify(r) + "\n", "utf-8");
+    }
+  } else {
+    const header = [
+      "job_id",
+      "file_fingerprint",
+      "short_id",
+      "result_json",
+      "repaired",
+      "attempts",
+      "cost_usd",
+      "enriched_at"
+    ].join(",");
+    appendFileSync2(path, header + "\n", "utf-8");
+    for (const r of rows) {
+      const row = [
+        csvEscape(r.job_id),
+        csvEscape(r.file_fingerprint),
+        String(r.short_id),
+        csvEscape(r.result_json),
+        String(r.repaired),
+        String(r.attempts),
+        r.cost_usd == null ? "" : String(r.cost_usd),
+        csvEscape(r.enriched_at)
+      ].join(",");
+      appendFileSync2(path, row + "\n", "utf-8");
+    }
+  }
+  return ok(
+    [`job_id=${jobId}`, `format=${format}`, `rows=${rows.length}`, `path=${path}`].join("\n")
+  );
+}
+function csvEscape(s) {
+  if (s.includes('"') || s.includes(",") || s.includes("\n")) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+function isoTimestampLocal() {
+  const now = /* @__PURE__ */ new Date();
+  const pad = (n, w = 2) => String(n).padStart(w, "0");
+  const tzMin = -now.getTimezoneOffset();
+  const tzSign = tzMin >= 0 ? "+" : "-";
+  const tzAbs = Math.abs(tzMin);
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${tzSign}${pad(Math.floor(tzAbs / 60))}${pad(tzAbs % 60)}`;
+}
+function slugify2(s) {
+  return s.replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 80);
+}
+function formatSearchTable(res) {
+  const lines = [
+    `mode=${res.mode}  total_examined=${res.total_examined}  hits=${res.hits.length}` + (res.regex_pattern ? `  regex_pattern=${res.regex_pattern}  regex_reason=${res.regex_reason ?? ""}` : ""),
+    ""
+  ];
+  for (const h of res.hits.slice(0, 100)) {
+    let line = `${h.short_id}  ${h.file_path}`;
+    if (h.snippet) line += `  :: ${h.snippet}`;
+    if (h.regex_matches && h.regex_matches.length > 0) {
+      const m = h.regex_matches[0];
+      line += `  L${m.line}: "${m.match}"`;
+      if (h.regex_matches.length > 1) line += ` (+${h.regex_matches.length - 1} more)`;
+    }
+    lines.push(line);
+  }
+  return lines.join("\n");
+}
+var HELP_TEXT = `mass-scout \u2014 bulk LLM-driven structured-output file analysis.
+
+Usage:
+  llm-externalizer mass-scout <subcommand> [flags]
+
+Subcommands:
+  register       Walk a folder (or take --files) and store every file
+                 in the SQLite registry.
+                 Required: --db <path>
+                 One of:   --root <folder>  |  --files <a,b,c>
+                 Optional: --extensions .ts,.md  --exclude-dirs node_modules,vendor
+                           --model <id>  --max-context-pct-register <0..1>
+
+  preclassify    Cheap script-only file-type classifier.
+                 Required: --db <path>
+                 Optional: --reclassify  --limit <n>
+
+  estimate       Per-fieldset cost / time estimate. Honors --budget-usd.
+                 Required: --db <path>  --fields-file <path>
+                 Optional: --model <id>  --bucket <name>  --workers <n>
+                           --per-call-seconds <s>  --budget-usd <usd>
+                           --expected-output-bytes <n>
+                           --max-context-pct-scout <0..1>
+                           --input-price-per-m <usd>  --output-price-per-m <usd>
+                           --context-window <tokens>
+                           --live-context   (query OpenRouter for the active
+                                            provider's real context_length;
+                                            requires OPENROUTER_API_KEY)
+
+  scout          Run the LLM scout end-to-end. Writes a markdown report.
+                 Required: --db <path>  --fields-file <path>  --job-id <id>
+                           --source-root <path>
+                 Optional: --model <id>  --workers <n>  --max-retries <n>
+                           --bucket <name>  --no-smoke-test  --no-resume
+                           --max-context-pct-scout <0..1>
+                           --live-context   (see estimate)
+                 Env:      OPENROUTER_API_KEY
+
+  search         Per-job search (FTS5 + structured + regex bypass).
+                 Required: --db <path>  --job-id <id>
+                 Optional: --query "..."  --regex "..."  --filter '$.x:=:val'
+                           --force-llm  --force-regex
+                           --limit <n>  --offset <n>  --json
+
+  search-xjob    Cross-job federated search.
+                 Required: --db <path>  --job-ids id1,id2,...
+                 Optional: same as search, plus --limit-per-job  --limit-merged
+
+  get            Print one row by short_id.
+                 Required: --db <path>  --short-id <n>
+                 Optional: --job-id <id>   (also prints the result row)
+
+  export         Dump every row of a job to JSONL or CSV under reports/.
+                 Required: --db <path>  --job-id <id>
+                 Optional: --format jsonl|csv  (default: jsonl)
+
+  jobs-list      List every scout job in the DB.
+                 Required: --db <path>
+                 Optional: --json
+
+  audit-sample   Pick N random results, print body + extraction for human spot-check.
+                 Required: --db <path>  --job-id <id>
+                 Optional: --sample <n> (default 5)  --body-truncate <chars>
+                           --json
+
+  body-get       Print the cached file body by short_id.
+                 Required: --db <path>  --short-id <n>
+
+  build-fieldset Compose a fieldset JSON from --field shorthand tokens.
+                 Required: --name <fieldset-name>  --field 'NAME:TYPE=DESC' ...
+                 Optional: --out <path>   (default: stdout)
+
+  propose-fieldset
+                 Ask the LLM to propose a fieldset for a natural-language goal.
+                 Required: --goal "<one-sentence intent>"
+                 Optional: --samples <a,b,c>   (sample files for context)
+                           --model <id>  --out <path>
+                 Env:      OPENROUTER_API_KEY
+
+  list-bundled-fieldsets
+                 Print the plugin-shipped fieldsets that --fields-file
+                 accepts as 'bundled:<name>'. Use --json for a structured
+                 dump (each entry has name + field-name list).
+
+  diff           Compare results of two jobs (only_in_a / only_in_b / changed).
+                 Required: --db <path>  --from <jobA>  --to <jobB>
+                 Optional: --json
+
+  chain          Scout a NEW fieldset against the subset of an existing job's
+                 results that matches a filter.
+                 Required: --db <path>  --source-job <jobA>  --new-job-id <jobB>
+                           --new-fields-file <path>  --filter '$.x:OP:value'
+                 Optional: --model <id>  --workers <n>  --max-retries <n>
+                 Env:      OPENROUTER_API_KEY
+
+Notes:
+  * --fields-file accepts EITHER an absolute path to a JSON file you
+    wrote, OR a 'bundled:<name>' shorthand. Run 'list-bundled-fieldsets'
+    to see what ships with the plugin (code-audit, skill-audit,
+    security-audit, pr-review).
+`;
+async function runMassScoutCli(args, opts = {}) {
+  const sub = args[0];
+  const rest = args.slice(1);
+  if (sub === void 0 || sub === "--help" || sub === "-h") {
+    return ok(HELP_TEXT);
+  }
+  switch (sub) {
+    case "register":
+      return runRegister(rest);
+    case "preclassify":
+      return runPreclassify(rest);
+    case "estimate":
+      return runEstimate(rest, opts);
+    case "scout":
+      return runScout(rest, opts);
+    case "search":
+      return runSearch(rest);
+    case "search-xjob":
+      return runSearchXjob(rest);
+    case "get":
+      return runGet(rest);
+    case "export":
+      return runExport(rest, opts);
+    case "jobs-list":
+      return runJobsList(rest);
+    case "audit-sample":
+      return runAuditSample(rest);
+    case "body-get":
+      return runBodyGet(rest);
+    case "build-fieldset":
+      return runBuildFieldset(rest);
+    case "propose-fieldset":
+      return runProposeFieldset(rest, opts);
+    case "list-bundled-fieldsets":
+      return runListBundledFieldsets(rest);
+    case "diff":
+      return runDiff(rest);
+    case "chain":
+      return runChain(rest, opts);
+    default:
+      return err(
+        `unknown sub-command ${JSON.stringify(sub)} \u2014 run 'llm-externalizer mass-scout --help'`
+      );
+  }
+}
+
+// src/mass_scouting/mcp-tools.ts
+function buildArgv(sub, flags) {
+  const out = [sub];
+  for (const [k, v] of Object.entries(flags)) {
+    if (v === void 0 || v === null) continue;
+    if (v === false) continue;
+    const flag = `--${k}`;
+    if (v === true) {
+      out.push(flag);
+    } else if (Array.isArray(v)) {
+      if (v.length === 0) continue;
+      out.push(flag, v.join(","));
+    } else {
+      out.push(flag, String(v));
+    }
+  }
+  return out;
+}
+function toMcp(r) {
+  const text = r.exitCode === 0 ? r.stdout : `${r.stdout}${r.stderr}`.trim();
+  const env = {
+    content: [{ type: "text", text: text || "(no output)" }]
+  };
+  if (r.exitCode !== 0) env.isError = true;
+  return env;
+}
+var dbPathProp = {
+  type: "string",
+  description: "Absolute path to the SQLite registry. Created if missing. All sub-commands of a single workflow must point at the same db."
+};
+var jobIdProp = {
+  type: "string",
+  description: "Stable job identifier (e.g. 'scout-2026-05-06-audit'). Re-running scout with the same id resumes from where it left off."
+};
+var MASS_SCOUT_TOOLS = [
+  {
+    name: "mass_scout_register",
+    description: "mass-scouting Phase 1: register every file under a folder (or a supplied file list) into the SQLite body cache. Files larger than the model's register cap (default 50% of context) are recorded as skipped. Idempotent \u2014 re-registering the same body returns the existing short_id.\n\nRETURNS: one-line counter summary (registered/already_registered/skipped_too_big/skipped_read_error).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        db_path: dbPathProp,
+        folder_path: {
+          type: "string",
+          description: "Absolute path to the folder to walk. Mutually exclusive with file_paths."
+        },
+        file_paths: {
+          type: "array",
+          items: { type: "string" },
+          description: "Explicit list of absolute file paths. Mutually exclusive with folder_path."
+        },
+        extensions: {
+          type: "array",
+          items: { type: "string" },
+          description: "Filter the walk to these extensions (e.g. ['.ts', '.md']). Only used with folder_path."
+        },
+        exclude_dirs: {
+          type: "array",
+          items: { type: "string" },
+          description: "Additional directory names to skip during the walk. Built-in skips: .git, node_modules, .venv, dist, build, .idea, .vscode, tmp, vendor, __pycache__, target, .next, .cache, .turbo, out."
+        },
+        model: {
+          type: "string",
+          description: "Model id (default: qwen/qwen-2.5-7b-instruct). Used to compute the register byte-cap."
+        },
+        max_context_pct_register: {
+          type: "number",
+          description: "Override the default 50% of context cap. 0..1 fraction."
+        },
+        git_diff: {
+          type: "string",
+          description: "Restrict registration to files changed since this git ref (uses `git diff --name-only <ref>...HEAD`). Requires folder_path. Use for incremental / PR-review scouting."
+        },
+        no_gitignore: {
+          type: "boolean",
+          description: "Bypass .gitignore filtering. Default: gitignored files are skipped."
+        }
+      },
+      required: ["db_path"]
+    }
+  },
+  {
+    name: "mass_scout_preclassify",
+    description: "mass-scouting Phase 2: cheap script-only classifier. Reads body bytes from the cache (no disk re-read), assigns each file a bucket \u2014 binary, rules_to_eval, has_frontmatter, documentation, sourcecode, config, log_to_classify, unknown \u2014 plus language and format tags.\n\nRETURNS: total / classified / skipped / by-bucket counts.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        db_path: dbPathProp,
+        reclassify: {
+          type: "boolean",
+          description: "Re-run the classifier on already-classified rows (default: false)."
+        },
+        limit: {
+          type: "number",
+          description: "Only process this many rows. Useful for incremental runs."
+        }
+      },
+      required: ["db_path"]
+    }
+  },
+  {
+    name: "mass_scout_estimate",
+    description: "mass-scouting Phase 3: cost / time estimate for a fieldset against the registered files. Honors the budget gate (--budget_usd). Pure \u2014 no LLM calls.\n\nRETURNS: files_eligible, files_skipped_too_big, total_input_tokens, total_output_tokens, est_cost_usd, est_seconds, budget_allowed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        db_path: dbPathProp,
+        fields_file: {
+          type: "string",
+          description: "Absolute path to the JSON fieldset file (see TRDD \xA75 for format)."
+        },
+        model: {
+          type: "string",
+          description: "Model id. Default: qwen/qwen-2.5-7b-instruct."
+        },
+        bucket: {
+          type: "string",
+          description: "Optional preclassifier bucket filter (e.g. 'sourcecode')."
+        },
+        workers: {
+          type: "number",
+          description: "Worker count for the ETA calculation. Default: 256."
+        },
+        per_call_seconds: {
+          type: "number",
+          description: "Avg seconds per LLM call for the ETA. Default: 1.0."
+        },
+        budget_usd: {
+          type: "number",
+          description: "If supplied, refuses to schedule when est_cost_usd exceeds this value."
+        },
+        expected_output_bytes: {
+          type: "number",
+          description: "Estimated output JSON size per file. Default: 200."
+        },
+        max_context_pct_scout: {
+          type: "number",
+          description: "Override the default 40% scout cap. 0..1 fraction."
+        },
+        max_context_pct_register: {
+          type: "number",
+          description: "Override the default 50% register cap. 0..1 fraction."
+        },
+        input_price_per_m: {
+          type: "number",
+          description: "USD per 1M input tokens (overrides KNOWN_PRICING). Must come with output_price_per_m + context_window."
+        },
+        output_price_per_m: {
+          type: "number",
+          description: "USD per 1M output tokens (overrides KNOWN_PRICING)."
+        },
+        context_window: {
+          type: "number",
+          description: "Tokens (overrides KNOWN_PRICING)."
+        },
+        live_context: {
+          type: "boolean",
+          description: "Query OpenRouter for the active provider's actual context_length and use it as the cap (overrides KNOWN_PRICING.context_window). Recommended when you don't know whether your account routes to a smaller-cap endpoint (e.g. 32K vs 128K). Requires OPENROUTER_API_KEY."
+        }
+      },
+      required: ["db_path", "fields_file"]
+    }
+  },
+  {
+    name: "mass_scout",
+    description: "mass-scouting Phase 4: actually call the LLM on every eligible file. Compiles the fieldset into a JSON Schema, fans calls out via the scout worker, applies fix_envelope repairs, runs the required-keys validator, persists results + FTS rows. Writes a markdown report under <main-repo-root>/reports/mass_scouting/.\n\nRETURNS: files_total/ok/failed/skipped_too_big, retries, cost_usd, report path.\n\nENV: $OPENROUTER_API_KEY must be set.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        db_path: dbPathProp,
+        fields_file: {
+          type: "string",
+          description: "Absolute path to the JSON fieldset file (see TRDD \xA75)."
+        },
+        job_id: jobIdProp,
+        source_root: {
+          type: "string",
+          description: "Original folder the files came from. Recorded on the job row for the report."
+        },
+        model: {
+          type: "string",
+          description: "Default: qwen/qwen-2.5-7b-instruct."
+        },
+        workers: {
+          type: "number",
+          description: "Concurrent OpenRouter calls. Default: 16."
+        },
+        max_retries: {
+          type: "number",
+          description: "Per-file retry budget (excluding first attempt). Default: 1."
+        },
+        bucket: {
+          type: "string",
+          description: "Optional preclassifier bucket filter."
+        },
+        no_smoke_test: {
+          type: "boolean",
+          description: "Skip the 5-file smoke test that runs sequentially before fan-out."
+        },
+        no_resume: {
+          type: "boolean",
+          description: "Re-process files even if they already have a result row for this job_id."
+        },
+        max_context_pct_scout: {
+          type: "number",
+          description: "Override the default 40% scout cap. 0..1."
+        },
+        live_context: {
+          type: "boolean",
+          description: "Query OpenRouter for the actual provider context_length and use it instead of KNOWN_PRICING.context_window. Same flag as mass_scout_estimate."
+        }
+      },
+      required: ["db_path", "fields_file", "job_id", "source_root"]
+    }
+  },
+  {
+    name: "mass_scout_search",
+    description: "mass-scouting Phase 5: per-job search. Three modes (auto-routed):\n  - regex   \u2014 explicit --regex OR a query that matches a built-in     pattern ('all emails', 'urls of domain X', 'all ipv4', etc.)\n  - fts     \u2014 FTS5 query against the per-job index\n  - structured \u2014 JSON1 path filters against result_json\n  - combined \u2014 fts + structured (intersected)\n\nFilters use 'path:OP:value' format (OP = =, !=, >, >=, <, <=, LIKE).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        db_path: dbPathProp,
+        job_id: jobIdProp,
+        query: {
+          type: "string",
+          description: "FTS5 query OR a natural-language query that may match a built-in regex pattern."
+        },
+        regex: {
+          type: "string",
+          description: "Explicit regex pattern. Forces regex mode regardless of query."
+        },
+        force_llm: {
+          type: "boolean",
+          description: "Suppress the regex bypass even on trivial queries."
+        },
+        force_regex: {
+          type: "boolean",
+          description: "Force regex mode. Requires either an explicit `regex` or a query that matches a named pattern."
+        },
+        filter: {
+          type: "string",
+          description: "Comma-comma-separated structured filters. Each one is 'path:OP:value'. Example: '$.is_async:=:true,,$.complexity:>=:5'."
+        },
+        limit: {
+          type: "number",
+          description: "Max hits returned. Default: 50."
+        },
+        offset: {
+          type: "number",
+          description: "Skip the first N hits (FTS / structured only)."
+        },
+        json: {
+          type: "boolean",
+          description: "Return results as JSON instead of a human-readable table."
+        }
+      },
+      required: ["db_path", "job_id"]
+    }
+  },
+  {
+    name: "mass_scout_search_xjob",
+    description: "Cross-job federated search. Same flags as mass_scout_search but takes job_ids (a list) and returns merged results tagged with the originating job. Per-job hits are bm25-ranked and capped by limit_per_job; the merged list is capped by limit_merged.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        db_path: dbPathProp,
+        job_ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "Two or more job_ids to federate across."
+        },
+        query: { type: "string" },
+        regex: { type: "string" },
+        force_llm: { type: "boolean" },
+        force_regex: { type: "boolean" },
+        filter: { type: "string" },
+        limit_per_job: { type: "number" },
+        limit_merged: { type: "number" },
+        json: { type: "boolean" }
+      },
+      required: ["db_path", "job_ids"]
+    }
+  },
+  {
+    name: "mass_scout_get",
+    description: "Retrieve one file row by short_id. Optionally include the result row for a specific job by passing job_id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        db_path: dbPathProp,
+        short_id: {
+          type: "number",
+          description: "Positive integer short_id from registerFile."
+        },
+        job_id: {
+          type: "string",
+          description: "Optional. When supplied, the result row from mass_scout_results is included."
+        }
+      },
+      required: ["db_path", "short_id"]
+    }
+  },
+  {
+    name: "mass_scout_export",
+    description: "Dump every result row of a job to JSONL or CSV under <main-repo-root>/reports/mass_scouting/. Useful for follow-up analysis in pandas, jq, etc.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        db_path: dbPathProp,
+        job_id: jobIdProp,
+        format: {
+          type: "string",
+          description: "'jsonl' (default) or 'csv'."
+        }
+      },
+      required: ["db_path", "job_id"]
+    }
+  },
+  {
+    name: "mass_scout_jobs_list",
+    description: "List every mass-scouting job in a DB with key metadata (fieldset, model, ok/total, cost, started_at). Use this to discover what work has already been done before starting a new scout.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        db_path: dbPathProp,
+        json: {
+          type: "boolean",
+          description: "Return as a JSON array instead of a table."
+        }
+      },
+      required: ["db_path"]
+    }
+  },
+  {
+    name: "mass_scout_audit_sample",
+    description: "Pick N random results from a finished job and print them ALONGSIDE the cached file body. The standard human-trust check: did the model actually understand the file? Returns a structured `samples` array in JSON mode for downstream review pipelines.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        db_path: dbPathProp,
+        job_id: jobIdProp,
+        sample: {
+          type: "number",
+          description: "How many random samples to pull. Default: 5."
+        },
+        body_truncate: {
+          type: "number",
+          description: "Per-body excerpt cap in chars. Default: 1000."
+        },
+        json: {
+          type: "boolean",
+          description: "Return JSON instead of human-readable markdown."
+        }
+      },
+      required: ["db_path", "job_id"]
+    }
+  },
+  {
+    name: "mass_scout_body_get",
+    description: "Print the cached file body for a given short_id. The body cache is the read-once-from-disk source of truth \u2014 exposing it here lets follow-up subagents re-analyse a file without touching the filesystem.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        db_path: dbPathProp,
+        short_id: {
+          type: "number",
+          description: "Positive integer short_id from mass_scout_register."
+        }
+      },
+      required: ["db_path", "short_id"]
+    }
+  },
+  {
+    name: "mass_scout_build_fieldset",
+    description: "Compose a JSON fieldset from --field shorthand tokens. Use this when you know the shape you want and prefer one-liner field defs over hand-writing JSON. Forms supported by the shorthand parser: `name:bool=desc`, `name:string(120)=desc`, `name:enum(a,b,c)=desc`, `name:array_string(8)=desc`, `name:int(1-10)=desc`, `name:number(0.0-1.0)=desc`.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "Fieldset name (lowercase identifier)."
+        },
+        field: {
+          type: "array",
+          items: { type: "string" },
+          description: "One or more shorthand tokens like 'is_async:bool=true if file uses async/await'."
+        },
+        out: {
+          type: "string",
+          description: "Optional path to write the JSON fieldset (otherwise stdout)."
+        }
+      },
+      required: ["name", "field"]
+    }
+  },
+  {
+    name: "mass_scout_propose_fieldset",
+    description: "Ask the LLM to propose a fieldset JSON for a natural-language goal, optionally seeded with sample files. The biggest UX cliff in mass-scouting is 'what fields do I write?' \u2014 this tool resolves it. Returns the validated fieldset JSON.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        goal: {
+          type: "string",
+          description: "One-sentence statement of what the user wants to find/extract."
+        },
+        samples: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional list of sample file paths to seed the model with real content."
+        },
+        model: {
+          type: "string",
+          description: "Model id used to compose the fieldset. Default: qwen/qwen-2.5-7b-instruct."
+        },
+        out: {
+          type: "string",
+          description: "Optional path to write the JSON fieldset (otherwise stdout)."
+        }
+      },
+      required: ["goal"]
+    }
+  },
+  {
+    name: "mass_scout_diff",
+    description: "Compare two scout jobs row-by-row and report which fingerprints are only in one, only in the other, identical, or have changed fields. Use to confirm that a re-scout (after a fieldset tweak, model swap, or partial re-register) actually changed the data you expected \u2014 and didn't silently regress other rows. Output is a human summary by default, JSON with `json: true`.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        db_path: { type: "string", description: "Path to the SQLite DB." },
+        from_job: { type: "string", description: "Baseline job_id." },
+        to_job: { type: "string", description: "Comparison job_id." },
+        json: {
+          type: "boolean",
+          description: "Return JSON instead of human-readable summary."
+        }
+      },
+      required: ["db_path", "from_job", "to_job"]
+    }
+  },
+  {
+    name: "mass_scout_chain",
+    description: "Run a second scout pass on the subset of rows from a prior job that match a JSON-extract filter. Use to drill deeper into a high-value slice (e.g. files where job-A flagged severity='critical') without re-scouting the whole tree. The new job uses a fresh fieldset, so you can extract DIFFERENT fields from the matched subset. Filter syntax: '$.path:OP:value' (e.g. '$.severity:eq:critical', '$.score:gte:0.8').",
+    inputSchema: {
+      type: "object",
+      properties: {
+        db_path: { type: "string", description: "Path to the SQLite DB." },
+        source_job: {
+          type: "string",
+          description: "Job to chain from (its results are the input set)."
+        },
+        new_job_id: {
+          type: "string",
+          description: "Job id for the new chained scout. Must not already exist."
+        },
+        new_fields_file: {
+          type: "string",
+          description: "Path to the new fieldset JSON for this job."
+        },
+        filter: {
+          type: "string",
+          description: "JSON-extract filter using '$.path:OP:value' syntax. Operators: eq, ne, lt, lte, gt, gte, contains."
+        },
+        model: {
+          type: "string",
+          description: "Model id to use for the new job."
+        },
+        workers: {
+          type: "number",
+          description: "Concurrency. Default 4."
+        },
+        max_retries: {
+          type: "number",
+          description: "Per-file retries. Default 1."
+        }
+      },
+      required: [
+        "db_path",
+        "source_job",
+        "new_job_id",
+        "new_fields_file",
+        "filter"
+      ]
+    }
+  },
+  {
+    name: "mass_scout_list_bundled_fieldsets",
+    description: "List the plugin-shipped fieldsets that other tools accept as fields_file: 'bundled:<name>'. The biggest UX cliff in mass-scouting is 'what fields do I write?' \u2014 these standard sets (code-audit, skill-audit, security-audit, pr-review) cover the common cases with no fieldset authoring required.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        json: {
+          type: "boolean",
+          description: "If true, return a JSON list of {name, path, fields[]} objects so a caller can pick the right one programmatically."
+        }
+      },
+      required: []
+    }
+  }
+];
+var MASS_SCOUT_TOOL_NAMES = new Set(
+  MASS_SCOUT_TOOLS.map((t) => t.name)
+);
+async function dispatchMassScoutTool(name, args, opts = {}) {
+  switch (name) {
+    case "mass_scout_register":
+      return toMcp(
+        await runMassScoutCli(
+          buildArgv("register", {
+            db: str(args.db_path),
+            root: str(args.folder_path),
+            files: arrJoin(args.file_paths),
+            extensions: arrJoin(args.extensions),
+            "exclude-dirs": arrJoin(args.exclude_dirs),
+            model: str(args.model),
+            "max-context-pct-register": num(args.max_context_pct_register),
+            "git-diff": str(args.git_diff),
+            "no-gitignore": bool(args.no_gitignore)
+          }),
+          opts
+        )
+      );
+    case "mass_scout_preclassify":
+      return toMcp(
+        await runMassScoutCli(
+          buildArgv("preclassify", {
+            db: str(args.db_path),
+            reclassify: bool(args.reclassify),
+            limit: num(args.limit)
+          }),
+          opts
+        )
+      );
+    case "mass_scout_estimate":
+      return toMcp(
+        await runMassScoutCli(
+          buildArgv("estimate", {
+            db: str(args.db_path),
+            "fields-file": str(args.fields_file),
+            model: str(args.model),
+            bucket: str(args.bucket),
+            workers: num(args.workers),
+            "per-call-seconds": num(args.per_call_seconds),
+            "budget-usd": num(args.budget_usd),
+            "expected-output-bytes": num(args.expected_output_bytes),
+            "max-context-pct-scout": num(args.max_context_pct_scout),
+            "max-context-pct-register": num(args.max_context_pct_register),
+            "input-price-per-m": num(args.input_price_per_m),
+            "output-price-per-m": num(args.output_price_per_m),
+            "context-window": num(args.context_window),
+            "live-context": bool(args.live_context)
+          }),
+          opts
+        )
+      );
+    case "mass_scout":
+      return toMcp(
+        await runMassScoutCli(
+          buildArgv("scout", {
+            db: str(args.db_path),
+            "fields-file": str(args.fields_file),
+            "job-id": str(args.job_id),
+            "source-root": str(args.source_root),
+            model: str(args.model),
+            workers: num(args.workers),
+            "max-retries": num(args.max_retries),
+            bucket: str(args.bucket),
+            "no-smoke-test": bool(args.no_smoke_test),
+            "no-resume": bool(args.no_resume),
+            "max-context-pct-scout": num(args.max_context_pct_scout),
+            "live-context": bool(args.live_context)
+          }),
+          opts
+        )
+      );
+    case "mass_scout_search":
+      return toMcp(
+        await runMassScoutCli(
+          buildArgv("search", {
+            db: str(args.db_path),
+            "job-id": str(args.job_id),
+            query: str(args.query),
+            regex: str(args.regex),
+            "force-llm": bool(args.force_llm),
+            "force-regex": bool(args.force_regex),
+            filter: str(args.filter),
+            limit: num(args.limit),
+            offset: num(args.offset),
+            json: bool(args.json)
+          }),
+          opts
+        )
+      );
+    case "mass_scout_search_xjob":
+      return toMcp(
+        await runMassScoutCli(
+          buildArgv("search-xjob", {
+            db: str(args.db_path),
+            "job-ids": arrJoin(args.job_ids),
+            query: str(args.query),
+            regex: str(args.regex),
+            "force-llm": bool(args.force_llm),
+            "force-regex": bool(args.force_regex),
+            filter: str(args.filter),
+            "limit-per-job": num(args.limit_per_job),
+            "limit-merged": num(args.limit_merged),
+            json: bool(args.json)
+          }),
+          opts
+        )
+      );
+    case "mass_scout_get":
+      return toMcp(
+        await runMassScoutCli(
+          buildArgv("get", {
+            db: str(args.db_path),
+            "short-id": num(args.short_id),
+            "job-id": str(args.job_id)
+          }),
+          opts
+        )
+      );
+    case "mass_scout_export":
+      return toMcp(
+        await runMassScoutCli(
+          buildArgv("export", {
+            db: str(args.db_path),
+            "job-id": str(args.job_id),
+            format: str(args.format)
+          }),
+          opts
+        )
+      );
+    case "mass_scout_jobs_list":
+      return toMcp(
+        await runMassScoutCli(
+          buildArgv("jobs-list", {
+            db: str(args.db_path),
+            json: bool(args.json)
+          }),
+          opts
+        )
+      );
+    case "mass_scout_audit_sample":
+      return toMcp(
+        await runMassScoutCli(
+          buildArgv("audit-sample", {
+            db: str(args.db_path),
+            "job-id": str(args.job_id),
+            sample: num(args.sample),
+            "body-truncate": num(args.body_truncate),
+            json: bool(args.json)
+          }),
+          opts
+        )
+      );
+    case "mass_scout_body_get":
+      return toMcp(
+        await runMassScoutCli(
+          buildArgv("body-get", {
+            db: str(args.db_path),
+            "short-id": num(args.short_id)
+          }),
+          opts
+        )
+      );
+    case "mass_scout_build_fieldset": {
+      const argv = ["build-fieldset"];
+      const name2 = str(args.name);
+      if (name2) argv.push("--name", name2);
+      if (Array.isArray(args.field)) {
+        for (const f of args.field) {
+          if (typeof f === "string" && f.length > 0) {
+            argv.push("--field", f);
+          }
+        }
+      }
+      const outPath = str(args.out);
+      if (outPath) argv.push("--out", outPath);
+      return toMcp(await runMassScoutCli(argv, opts));
+    }
+    case "mass_scout_propose_fieldset":
+      return toMcp(
+        await runMassScoutCli(
+          buildArgv("propose-fieldset", {
+            goal: str(args.goal),
+            samples: arrJoin(args.samples),
+            model: str(args.model),
+            out: str(args.out)
+          }),
+          opts
+        )
+      );
+    case "mass_scout_diff":
+      return toMcp(
+        await runMassScoutCli(
+          buildArgv("diff", {
+            db: str(args.db_path),
+            from: str(args.from_job),
+            to: str(args.to_job),
+            json: bool(args.json)
+          }),
+          opts
+        )
+      );
+    case "mass_scout_chain":
+      return toMcp(
+        await runMassScoutCli(
+          buildArgv("chain", {
+            db: str(args.db_path),
+            "source-job": str(args.source_job),
+            "new-job-id": str(args.new_job_id),
+            "new-fields-file": str(args.new_fields_file),
+            filter: str(args.filter),
+            model: str(args.model),
+            workers: num(args.workers),
+            "max-retries": num(args.max_retries)
+          }),
+          opts
+        )
+      );
+    case "mass_scout_list_bundled_fieldsets":
+      return toMcp(
+        await runMassScoutCli(
+          buildArgv("list-bundled-fieldsets", {
+            json: bool(args.json)
+          }),
+          opts
+        )
+      );
+    default:
+      return {
+        content: [
+          { type: "text", text: `unknown mass_scout tool: ${name}` }
+        ],
+        isError: true
+      };
+  }
+}
+function str(v) {
+  return typeof v === "string" && v.length > 0 ? v : void 0;
+}
+function num(v) {
+  return typeof v === "number" && Number.isFinite(v) ? v : void 0;
+}
+function bool(v) {
+  return v === true ? true : void 0;
+}
+function arrJoin(v) {
+  if (Array.isArray(v)) {
+    const items = v.filter((x) => typeof x === "string" && x.length > 0);
+    return items.length > 0 ? items.join(",") : void 0;
+  }
+  return void 0;
+}
+
 // src/config.ts
 var import_yaml = __toESM(require_dist(), 1);
 import {
   existsSync,
-  readFileSync,
-  writeFileSync,
-  mkdirSync,
+  readFileSync as readFileSync3,
+  writeFileSync as writeFileSync2,
+  mkdirSync as mkdirSync3,
   chmodSync,
   realpathSync
 } from "node:fs";
-import { resolve } from "node:path";
-import { join } from "node:path";
+import { resolve as resolve2 } from "node:path";
+import { join as join2 } from "node:path";
 import { homedir } from "node:os";
 var API_PRESETS = {
   // ── Local presets ─────────────────────────────────────────────────
@@ -28301,16 +33435,16 @@ var API_PRESETS = {
   }
 };
 function getConfigDir() {
-  const raw = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
+  const raw = resolve2(process.env.LLM_EXT_CONFIG_DIR || join2(homedir(), ".llm-externalizer"));
   function resolveDeepestExisting(p) {
     try {
       return realpathSync(p);
     } catch {
     }
-    const parent = join(p, "..");
+    const parent = join2(p, "..");
     if (parent === p) return p;
     const resolvedParent = resolveDeepestExisting(parent);
-    return join(resolvedParent, p.slice(parent.length + (parent.endsWith("/") || parent.endsWith("\\") ? 0 : 1)));
+    return join2(resolvedParent, p.slice(parent.length + (parent.endsWith("/") || parent.endsWith("\\") ? 0 : 1)));
   }
   const dir = resolveDeepestExisting(raw);
   const home = (() => {
@@ -28336,7 +33470,7 @@ function getConfigDir() {
   return dir;
 }
 function getSettingsPath() {
-  return join(getConfigDir(), "settings.yaml");
+  return join2(getConfigDir(), "settings.yaml");
 }
 var USER_CONFIG_ENV_MAP = {
   OPENROUTER_API_KEY: "CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY"
@@ -28362,16 +33496,16 @@ function loadSettings() {
   const settingsPath = getSettingsPath();
   try {
     if (!existsSync(settingsPath)) return null;
-    const raw = readFileSync(settingsPath, "utf-8");
+    const raw = readFileSync3(settingsPath, "utf-8");
     const parsed = JSON.parse(JSON.stringify((0, import_yaml.parse)(raw)));
     if (!parsed || typeof parsed !== "object") return null;
     return {
       active: parsed.active || "",
       profiles: parsed.profiles || {}
     };
-  } catch (err) {
+  } catch (err2) {
     process.stderr.write(
-      `[llm-externalizer] Warning: Failed to read ${settingsPath}: ${err instanceof Error ? err.message : String(err)}
+      `[llm-externalizer] Warning: Failed to read ${settingsPath}: ${err2 instanceof Error ? err2.message : String(err2)}
 `
     );
     return null;
@@ -28411,7 +33545,7 @@ function generateDefaultSettings() {
 function ensureSettingsExist() {
   const settingsPath = getSettingsPath();
   const configDir = getConfigDir();
-  const oldSettingsPath = join(configDir, "settings.yml");
+  const oldSettingsPath = join2(configDir, "settings.yml");
   if (existsSync(oldSettingsPath) && !existsSync(settingsPath)) {
     process.stderr.write(
       `[llm-externalizer] Found old settings.yml \u2014 the new format is settings.yaml with profiles.
@@ -28420,8 +33554,8 @@ function ensureSettingsExist() {
     );
   }
   if (!existsSync(settingsPath)) {
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(settingsPath, SETTINGS_TEMPLATE, "utf-8");
+    mkdirSync3(configDir, { recursive: true });
+    writeFileSync2(settingsPath, SETTINGS_TEMPLATE, "utf-8");
     try {
       chmodSync(settingsPath, 384);
     } catch {
@@ -28694,10 +33828,10 @@ async function fetchOpenRouterModelInfo(modelId, baseUrl, authToken, timeoutMs =
       headers: { Authorization: `Bearer ${authToken}` },
       signal: controller.signal
     });
-  } catch (err) {
+  } catch (err2) {
     clearTimeout(timeoutHandle);
-    const msg = err instanceof Error ? err.message : String(err);
-    if (err instanceof Error && err.name === "AbortError") {
+    const msg = err2 instanceof Error ? err2.message : String(err2);
+    if (err2 instanceof Error && err2.name === "AbortError") {
       return {
         ok: false,
         error: `OpenRouter request timed out after ${timeoutMs / 1e3}s`
@@ -28721,10 +33855,10 @@ async function fetchOpenRouterModelInfo(modelId, baseUrl, authToken, timeoutMs =
       payload.data.endpoints = [];
     }
     return { ok: true, data: payload.data };
-  } catch (err) {
+  } catch (err2) {
     return {
       ok: false,
-      error: `Failed to parse response: ${err instanceof Error ? err.message : String(err)}`
+      error: `Failed to parse response: ${err2 instanceof Error ? err2.message : String(err2)}`
     };
   }
 }
@@ -29218,13 +34352,13 @@ var SHEBANG_TO_LANG = {
   lua: "lua"
 };
 function detectLang(filePath) {
-  const ext = extname2(filePath).toLowerCase();
+  const ext = extname4(filePath).toLowerCase();
   if (EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
   try {
-    const head = readFileSync2(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
+    const head = readFileSync4(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
     const shebang = head.match(/^#!\s*(?:\/usr\/bin\/env\s+)?(\S+)/);
     if (shebang) {
-      const bin = basename2(shebang[1]);
+      const bin = basename4(shebang[1]);
       if (SHEBANG_TO_LANG[bin]) return SHEBANG_TO_LANG[bin];
     }
   } catch {
@@ -29251,9 +34385,9 @@ function assertFileExists(filePath) {
   }
 }
 function sanitizeInputPath(filePath) {
-  const resolved = resolve2(filePath);
-  const cwd = resolve2(process.cwd());
-  const home = resolve2(process.env.HOME || process.env.USERPROFILE || "/");
+  const resolved = resolve3(filePath);
+  const cwd = resolve3(process.cwd());
+  const home = resolve3(process.env.HOME || process.env.USERPROFILE || "/");
   if (!resolved.startsWith(cwd + "/") && !resolved.startsWith(home + "/") && !resolved.startsWith("/tmp/") && !resolved.startsWith("/private/tmp/") && resolved !== cwd) {
     throw new Error(
       `Path traversal blocked: ${filePath} resolves outside allowed directories`
@@ -29275,13 +34409,13 @@ function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexReda
   const limit = !Number.isFinite(rawLimit) || rawLimit <= 0 ? DEFAULT_MAX_PAYLOAD_BYTES : rawLimit;
   const safePath = sanitizeInputPath(filePath);
   assertFileExists(safePath);
-  const stats = statSync2(safePath);
+  const stats = statSync3(safePath);
   if (stats.size > limit) {
     throw new Error(
       `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
     );
   }
-  const raw = readFileSync2(safePath);
+  const raw = readFileSync4(safePath);
   if (raw.length > limit) {
     throw new Error(
       `File too large after read (${(raw.length / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
@@ -29379,7 +34513,7 @@ var BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
   ".lock"
 ]);
 function isBinaryExtension(filePath) {
-  return BINARY_EXTENSIONS.has(extname2(filePath).toLowerCase()) || basename2(filePath) === ".DS_Store";
+  return BINARY_EXTENSIONS.has(extname4(filePath).toLowerCase()) || basename4(filePath) === ".DS_Store";
 }
 var SECRET_PATTERNS = [
   [/AKIA[0-9A-Z]{16}/g, "AWS_KEY"],
@@ -29422,7 +34556,7 @@ function scanFilesForSecrets(filePaths) {
   for (const fp of filePaths) {
     if (!existsSync2(fp)) continue;
     try {
-      const content = readFileSync2(fp, "utf-8");
+      const content = readFileSync4(fp, "utf-8");
       const scan = scanForSecrets(content);
       if (scan.found) {
         for (const d of scan.details) {
@@ -29476,15 +34610,15 @@ Simplify the quantifiers to avoid ReDoS.`
   try {
     const regex = new RegExp(pattern, "g");
     return { regex, patternStr: pattern };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+  } catch (err2) {
+    const msg = err2 instanceof Error ? err2.message : String(err2);
     throw new Error(
       `Invalid redact_regex pattern: ${msg}
 
 Pattern received: ${pattern}
 
 Ensure it is a valid JavaScript regular expression.`,
-      { cause: err }
+      { cause: err2 }
     );
   }
 }
@@ -29512,7 +34646,7 @@ function resolvePrompt(instructions, instructionsFilesPaths) {
     const paths = Array.isArray(instructionsFilesPaths) ? instructionsFilesPaths : [instructionsFilesPaths];
     for (const fp of paths) {
       assertFileExists(fp);
-      const content = readFileSync2(fp, "utf-8");
+      const content = readFileSync4(fp, "utf-8");
       prompt = prompt ? `${prompt}
 
 ${content}` : content;
@@ -29520,7 +34654,7 @@ ${content}` : content;
   }
   return prompt;
 }
-function estimateTokens(text) {
+function estimateTokens2(text) {
   return Math.ceil(text.length / 4);
 }
 function resolveDefaultMaxTokens() {
@@ -29544,7 +34678,7 @@ function readAndGroupFiles(filePaths, promptBytes, redact, budgetBytes, regexRed
   const fileData = [];
   for (const fp of filePaths) {
     try {
-      const stats = statSync2(fp);
+      const stats = statSync3(fp);
       if (stats.size > totalBudget) {
         skipped.push(fp);
         continue;
@@ -29554,7 +34688,7 @@ function readAndGroupFiles(filePaths, promptBytes, redact, budgetBytes, regexRed
         skipped.push(fp);
         continue;
       }
-      fileData.push({ path: fp, block, tokens: estimateTokens(block) });
+      fileData.push({ path: fp, block, tokens: estimateTokens2(block) });
     } catch {
       skipped.push(fp);
     }
@@ -29651,7 +34785,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
     if (trackedResult.status === 0 && trackedResult.stdout) {
       for (const relPath of trackedResult.stdout.split("\n")) {
         if (!relPath.trim()) continue;
-        allFiles.add(join2(dirPath, relPath));
+        allFiles.add(join3(dirPath, relPath));
       }
     } else {
       const fallback = spawnSync(
@@ -29662,7 +34796,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
       if (fallback.status === 0 && fallback.stdout) {
         for (const relPath of fallback.stdout.split("\n")) {
           if (!relPath.trim()) continue;
-          allFiles.add(join2(dirPath, relPath));
+          allFiles.add(join3(dirPath, relPath));
         }
       }
     }
@@ -29674,7 +34808,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
     if (untrackedResult.status === 0 && untrackedResult.stdout) {
       for (const relPath of untrackedResult.stdout.split("\n")) {
         if (!relPath.trim()) continue;
-        allFiles.add(join2(dirPath, relPath));
+        allFiles.add(join3(dirPath, relPath));
       }
     }
   }
@@ -29683,7 +34817,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
       if (depth > 10) return;
       let entries;
       try {
-        entries = readdirSync(dir, { withFileTypes: true });
+        entries = readdirSync2(dir, { withFileTypes: true });
       } catch {
         return;
       }
@@ -29691,8 +34825,8 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
         if (!entry.isDirectory()) continue;
         if (entry.name === ".git" || entry.name === "node_modules") continue;
         if (entry.name.startsWith(".")) continue;
-        const subDir = join2(dir, entry.name);
-        const gitDir = join2(subDir, ".git");
+        const subDir = join3(dir, entry.name);
+        const gitDir = join3(subDir, ".git");
         let gitDirIsDir = false;
         try {
           gitDirIsDir = lstatSync(gitDir).isDirectory();
@@ -29717,7 +34851,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
       if (nestedResult.status === 0 && nestedResult.stdout) {
         for (const relPath of nestedResult.stdout.split("\n")) {
           if (!relPath.trim()) continue;
-          allFiles.add(join2(nestedRoot, relPath));
+          allFiles.add(join3(nestedRoot, relPath));
         }
       }
     }
@@ -29739,7 +34873,7 @@ function walkDir(dirPath, options) {
         if (results2.length >= maxFiles) break;
         if (skipBinary && isBinaryExtension(fullPath)) continue;
         if (extensions) {
-          const ext = extname2(fullPath).toLowerCase();
+          const ext = extname4(fullPath).toLowerCase();
           if (!extensions.includes(ext)) continue;
         }
         results2.push(fullPath);
@@ -29759,20 +34893,20 @@ function walkDir(dirPath, options) {
     if (results.length >= maxFiles) return;
     let entries;
     try {
-      entries = readdirSync(dir, { withFileTypes: true });
+      entries = readdirSync2(dir, { withFileTypes: true });
     } catch {
       return;
     }
     for (const entry of entries) {
       if (results.length >= maxFiles) return;
-      const fullPath = join2(dir, entry.name);
+      const fullPath = join3(dir, entry.name);
       if (entry.isSymbolicLink()) {
         if (!followSymlinks) continue;
         try {
           const realPath = realpathSync2(fullPath);
           if (visitedPaths.has(realPath)) continue;
           visitedPaths.add(realPath);
-          const targetStat = statSync2(realPath);
+          const targetStat = statSync3(realPath);
           if (targetStat.isDirectory() && recursive) {
             if (!entry.name.startsWith(".") && !exclude.has(entry.name)) {
               recurse(fullPath);
@@ -29780,7 +34914,7 @@ function walkDir(dirPath, options) {
           } else if (targetStat.isFile()) {
             if (skipBinary && isBinaryExtension(fullPath)) continue;
             if (extensions) {
-              const ext = extname2(entry.name).toLowerCase();
+              const ext = extname4(entry.name).toLowerCase();
               if (!extensions.includes(ext)) continue;
             }
             results.push(fullPath);
@@ -29805,7 +34939,7 @@ function walkDir(dirPath, options) {
       } else if (entry.isFile()) {
         if (skipBinary && isBinaryExtension(fullPath)) continue;
         if (extensions) {
-          const ext = extname2(entry.name).toLowerCase();
+          const ext = extname4(entry.name).toLowerCase();
           if (!extensions.includes(ext)) continue;
         }
         results.push(fullPath);
@@ -29816,7 +34950,7 @@ function walkDir(dirPath, options) {
   return results;
 }
 function extractLocalImports(filePath, sourceCode) {
-  const dir = dirname2(filePath);
+  const dir = dirname4(filePath);
   const lang = detectLang(filePath);
   const paths = [];
   const patterns = [];
@@ -29835,12 +34969,12 @@ function extractLocalImports(filePath, sourceCode) {
       if (lang === "python" && importPath.startsWith(".")) {
         const dotCount = importPath.match(/^\.+/)?.[0].length ?? 1;
         const modulePart = importPath.slice(dotCount);
-        const baseDir = dotCount === 1 ? dir : join2(dir, ...Array(dotCount - 1).fill(".."));
-        resolved = modulePart ? join2(baseDir, ...modulePart.split(".")) : baseDir;
+        const baseDir = dotCount === 1 ? dir : join3(dir, ...Array(dotCount - 1).fill(".."));
+        resolved = modulePart ? join3(baseDir, ...modulePart.split(".")) : baseDir;
       } else {
-        resolved = join2(dir, importPath);
+        resolved = join3(dir, importPath);
       }
-      if (!extname2(resolved)) {
+      if (!extname4(resolved)) {
         const tryExts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"];
         let found = false;
         for (const ext of tryExts) {
@@ -29859,7 +34993,7 @@ function extractLocalImports(filePath, sourceCode) {
             "__init__.py"
           ];
           for (const leaf of indexCandidates) {
-            const indexPath = join2(resolved, leaf);
+            const indexPath = join3(resolved, leaf);
             if (existsSync2(indexPath)) {
               resolved = indexPath;
               found = true;
@@ -29882,8 +35016,8 @@ var settingsError = "";
 var activeSettings = (() => {
   try {
     return ensureSettingsExist();
-  } catch (err) {
-    settingsError = `Failed to load settings: ${err instanceof Error ? err.message : String(err)}
+  } catch (err2) {
+    settingsError = `Failed to load settings: ${err2 instanceof Error ? err2.message : String(err2)}
 
 Settings file: ${SETTINGS_FILE}`;
     process.stderr.write(`[llm-externalizer] \u26A0 ${settingsError}
@@ -30059,7 +35193,7 @@ var _onSettingsReloaded = null;
 function reloadSettingsFromDisk() {
   let raw;
   try {
-    raw = readFileSync2(SETTINGS_FILE, "utf-8");
+    raw = readFileSync4(SETTINGS_FILE, "utf-8");
   } catch {
     return false;
   }
@@ -30112,7 +35246,7 @@ function reloadSettingsFromDisk() {
 }
 var _settingsLastMtimeMs = (() => {
   try {
-    return statSync2(SETTINGS_FILE).mtimeMs;
+    return statSync3(SETTINGS_FILE).mtimeMs;
   } catch {
     return 0;
   }
@@ -30331,28 +35465,28 @@ function trackRequestEnd() {
 }
 function waitForRequestsDrained(timeoutMs = 12e4) {
   if (_activeRequests === 0) return Promise.resolve();
-  return new Promise((resolve3) => {
+  return new Promise((resolve4) => {
     const timer = setTimeout(() => {
       _activeRequestsDrained = null;
-      resolve3();
+      resolve4();
     }, timeoutMs);
     _activeRequestsDrained = () => {
       clearTimeout(timer);
-      resolve3();
+      resolve4();
     };
   });
 }
 var SESSION_ID = randomUUID().slice(0, 8);
 var SESSION_START = /* @__PURE__ */ new Date();
-var LOG_DIR = join2(getConfigDir(), "logs");
-var LOG_FILE = join2(
+var LOG_DIR = join3(getConfigDir(), "logs");
+var LOG_FILE = join3(
   LOG_DIR,
   `session-${SESSION_ID}-${SESSION_START.toISOString().slice(0, 10)}.jsonl`
 );
 function writeLogEntry(entry) {
   try {
-    mkdirSync2(LOG_DIR, { recursive: true });
-    appendFileSync(LOG_FILE, JSON.stringify(entry) + "\n");
+    mkdirSync4(LOG_DIR, { recursive: true });
+    appendFileSync3(LOG_FILE, JSON.stringify(entry) + "\n");
   } catch {
     process.stderr.write(`[llm-externalizer] Failed to write log entry
 `);
@@ -30361,7 +35495,7 @@ function writeLogEntry(entry) {
 var STATS_FILE = "/tmp/claude/llm-externalizer-stats.json";
 function writeStatsFile() {
   try {
-    mkdirSync2("/tmp/claude", { recursive: true, mode: 448 });
+    mkdirSync4("/tmp/claude", { recursive: true, mode: 448 });
     const stats = {
       session_id: SESSION_ID,
       session_start: SESSION_START.toISOString(),
@@ -30375,7 +35509,7 @@ function writeStatsFile() {
       backend: currentBackend.type
     };
     const tmpStats = STATS_FILE + ".tmp";
-    writeFileSync2(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
+    writeFileSync3(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
     renameSync(tmpStats, STATS_FILE);
   } catch {
   }
@@ -30457,13 +35591,13 @@ async function fetchWithRetry429(url2, fetchOpts, timeout, startTime) {
     }
     try {
       lastRes = await fetchWithTimeout(url2, fetchOpts, Math.max(remaining, 1e3));
-    } catch (err) {
-      if (attempt >= RETRY_MAX_ATTEMPTS) throw err;
+    } catch (err2) {
+      if (attempt >= RETRY_MAX_ATTEMPTS) throw err2;
       const backoff2 = computeBackoffMs(attempt, 0);
       const waitRemaining2 = timeout - (Date.now() - startTime);
-      if (backoff2 > waitRemaining2) throw err;
+      if (backoff2 > waitRemaining2) throw err2;
       process.stderr.write(
-        `[llm-externalizer] Network error (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), retrying in ${(backoff2 / 1e3).toFixed(1)}s: ${err instanceof Error ? err.message : String(err)}
+        `[llm-externalizer] Network error (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), retrying in ${(backoff2 / 1e3).toFixed(1)}s: ${err2 instanceof Error ? err2.message : String(err2)}
 `
       );
       await new Promise((r) => setTimeout(r, backoff2));
@@ -30551,14 +35685,14 @@ async function detectLMStudio() {
         );
       }
     }
-  } catch (err) {
-    if (err instanceof Error && err.message.includes("LM Studio requires authentication"))
-      throw err;
+  } catch (err2) {
+    if (err2 instanceof Error && err2.message.includes("LM Studio requires authentication"))
+      throw err2;
     if (isLMStudioProvider) {
       throw new Error(
-        `LM Studio native API probe failed at ${currentBackend.baseUrl}/api/v1/models: ${err instanceof Error ? err.message : String(err)}
+        `LM Studio native API probe failed at ${currentBackend.baseUrl}/api/v1/models: ${err2 instanceof Error ? err2.message : String(err2)}
 Ensure LM Studio is running and a model is loaded. The lmstudio provider requires the native API endpoint.`,
-        { cause: err }
+        { cause: err2 }
       );
     }
   }
@@ -30907,7 +36041,7 @@ function formatFooter(resp, toolName, filePath) {
   }
   return "";
 }
-var OUTPUT_DIR = process.env.LLM_OUTPUT_DIR || join2(process.cwd(), "reports_dev", "llm_externalizer");
+var OUTPUT_DIR = process.env.LLM_OUTPUT_DIR || join3(process.cwd(), "reports_dev", "llm_externalizer");
 function canonicalTimestamp(date4 = /* @__PURE__ */ new Date()) {
   const pad = (n) => String(Math.abs(n)).padStart(2, "0");
   const Y = date4.getFullYear();
@@ -30924,14 +36058,14 @@ function canonicalTimestamp(date4 = /* @__PURE__ */ new Date()) {
 }
 function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir) {
   const dir = outputDir || OUTPUT_DIR;
-  mkdirSync2(dir, { recursive: true });
+  mkdirSync4(dir, { recursive: true });
   const now = /* @__PURE__ */ new Date();
   const ts = canonicalTimestamp(now);
   const shortId = randomUUID().slice(0, 6);
   const srcPart = meta3.inputFile ? `-${sanitizeFilename(meta3.inputFile).replace(/\.md$/, "")}` : "";
   const groupPart = meta3.groupId ? `-group-${meta3.groupId.replace(/[^a-zA-Z0-9_-]/g, "_")}` : "";
   const filename = overrideFilename || `${ts}-${toolName}${groupPart}${srcPart}-${shortId}.md`;
-  const filepath = join2(dir, filename);
+  const filepath = join3(dir, filename);
   const lines = [
     "# LLM Externalizer Response",
     "",
@@ -30945,16 +36079,16 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
   lines.push("", "---", "", responseText);
   const tmpPath = filepath + ".tmp";
   try {
-    writeFileSync2(tmpPath, lines.join("\n"), "utf-8");
+    writeFileSync3(tmpPath, lines.join("\n"), "utf-8");
     renameSync(tmpPath, filepath);
-  } catch (err) {
+  } catch (err2) {
     try {
       unlinkSync(tmpPath);
     } catch {
     }
     throw new Error(
-      `Failed to save response to ${filepath}: ${err instanceof Error ? err.message : String(err)}`,
-      { cause: err }
+      `Failed to save response to ${filepath}: ${err2 instanceof Error ? err2.message : String(err2)}`,
+      { cause: err2 }
     );
   }
   return filepath;
@@ -31108,7 +36242,7 @@ async function rateLimitedParallel(tasks, rps, maxInFlight = DEFAULT_MAX_IN_FLIG
   return results;
 }
 function sanitizeFilename(filePath) {
-  const base = basename2(filePath);
+  const base = basename4(filePath);
   if (!base || base === "/") return "unknown";
   return base.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
@@ -31154,8 +36288,8 @@ async function robustPerFileProcess(files, opts) {
           opts.onProgress(completed, files.length, `${opts.toolName}: ${completed}/${files.length} files done`);
         }
         return result;
-      } catch (err) {
-        const classified = classifyError(err);
+      } catch (err2) {
+        const classified = classifyError(err2);
         if (classified.unrecoverable) {
           if (classified.serviceLevel) {
             aborted2 = true;
@@ -31192,13 +36326,13 @@ function normalizePaths(raw) {
 function resolveFolderPath(folderPath, opts) {
   try {
     folderPath = sanitizeInputPath(folderPath);
-  } catch (err) {
-    return { files: [], error: `Invalid folder_path: ${err instanceof Error ? err.message : String(err)}` };
+  } catch (err2) {
+    return { files: [], error: `Invalid folder_path: ${err2 instanceof Error ? err2.message : String(err2)}` };
   }
   if (!existsSync2(folderPath)) {
     return { files: [], error: `folder_path not found: ${folderPath}` };
   }
-  if (!statSync2(folderPath).isDirectory()) {
+  if (!statSync3(folderPath).isDirectory()) {
     return { files: [], error: `Not a directory: ${folderPath}` };
   }
   const files = walkDir(folderPath, {
@@ -31282,8 +36416,8 @@ async function chatCompletionWithRetry(messages, options) {
     let resp;
     try {
       resp = await chatCompletionSimple(messages, options);
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
+    } catch (err2) {
+      const errMsg = err2 instanceof Error ? err2.message : String(err2);
       if (/API error 402\b/.test(errMsg) && currentBackend.type === "openrouter" && options.model !== FREE_MODEL_ID) {
         creditExhausted = true;
         invalidateBalanceCache();
@@ -31302,7 +36436,7 @@ async function chatCompletionWithRetry(messages, options) {
             `[llm-externalizer] Free-mode fallback also failed: ${freeMsg}
 `
           );
-          throw err;
+          throw err2;
         }
       }
       recordServiceFailure();
@@ -31323,7 +36457,7 @@ async function chatCompletionWithRetry(messages, options) {
         }
         continue;
       }
-      throw err;
+      throw err2;
     }
     if (resp.finishReason === "stop" && !resp.truncated && resp.content.trim().length > 0) {
       recordServiceSuccess();
@@ -31459,8 +36593,8 @@ async function ensembleStreaming(messages, options, ensemble, fileLineCount) {
           truncated: resp.truncated,
           error: false
         };
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
+      } catch (err2) {
+        const errMsg = err2 instanceof Error ? err2.message : String(err2);
         return {
           model: m.id,
           content: `ERROR: ${errMsg}`,
@@ -31493,7 +36627,7 @@ ${r.content}`);
 
 ${failed.map((r) => `- **${r.model}**: ${r.content}`).join("\n")}`);
   }
-  const combined = parts.join("\n\n---\n\n");
+  const combined2 = parts.join("\n\n---\n\n");
   const usage = {
     prompt_tokens: succeeded.reduce(
       (s, r) => s + (r.usage?.prompt_tokens ?? 0),
@@ -31508,7 +36642,7 @@ ${failed.map((r) => `- **${r.model}**: ${r.content}`).join("\n")}`);
   };
   const anyTruncated = succeeded.some((r) => r.truncated);
   return {
-    content: combined,
+    content: combined2,
     model: succeeded.map((r) => r.model).join(" + "),
     usage,
     finishReason: "stop",
@@ -32225,7 +37359,7 @@ function buildTools() {
       }
     }
   ];
-  return allTools;
+  return [...allTools, ...MASS_SCOUT_TOOLS];
 }
 var server = new Server(
   { name: "llm-externalizer", version: "9.3.0" },
@@ -32263,10 +37397,19 @@ Run the "discover" tool to see the current profile status.`
         isError: true
       };
     }
+    if (MASS_SCOUT_TOOL_NAMES.has(name)) {
+      return await dispatchMassScoutTool(
+        name,
+        args ?? {},
+        onProgress ? {
+          onProgress: (progress, total, message) => onProgress(progress, total, message)
+        } : {}
+      );
+    }
     const isLLMTool = LLM_TOOLS_SET.has(name);
     if (isLLMTool) trackRequestStart();
     const rawOutputDir = args?.output_dir;
-    const outputDir = typeof rawOutputDir === "string" && rawOutputDir.trim() ? resolve2(rawOutputDir.trim()) : void 0;
+    const outputDir = typeof rawOutputDir === "string" && rawOutputDir.trim() ? resolve3(rawOutputDir.trim()) : void 0;
     const freeRequested = args?.free === true;
     const modelOverride = await resolveModelOverride(freeRequested);
     if (modelOverride) {
@@ -32303,8 +37446,8 @@ Run the "discover" tool to see the current profile status.`
           let chatRegexRedact = null;
           try {
             chatRegexRedact = parseRedactRegex(chatRedactRegexRaw);
-          } catch (err) {
-            return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+          } catch (err2) {
+            return { content: [{ type: "text", text: `FAILED: ${err2.message}` }], isError: true };
           }
           const chatPrompt = resolvePrompt(
             instructions,
@@ -32581,8 +37724,8 @@ ${resp.content}${footer}`
           let ctRegexRedact = null;
           try {
             ctRegexRedact = parseRedactRegex(ctRedactRegexRaw);
-          } catch (err) {
-            return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+          } catch (err2) {
+            return { content: [{ type: "text", text: `FAILED: ${err2.message}` }], isError: true };
           }
           if (ctScan && !ctRedact) {
             const ctRealFiles = ctFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
@@ -32900,9 +38043,9 @@ API presets: ${Object.keys(API_PRESETS).join(", ")}`);
               );
             }
             parts.push(`Timeout: ${SOFT_TIMEOUT_MS / 1e3}s per call.`);
-          } catch (err) {
+          } catch (err2) {
             const ms = Date.now() - start;
-            const reason = err instanceof Error && err.name === "AbortError" ? `timed out after ${ms}ms` : err instanceof Error ? err.message : String(err);
+            const reason = err2 instanceof Error && err2.name === "AbortError" ? `timed out after ${ms}ms` : err2 instanceof Error ? err2.message : String(err2);
             parts.push(`Status: OFFLINE \u2014 ${reason}`);
             parts.push(
               "The service is not available. Do not attempt to delegate tasks."
@@ -32998,7 +38141,7 @@ Profiles: ${profileNames.join(", ")}`);
             const jsonText = formatModelInfoJson(result.data, infoModel);
             if (infoFilePath && typeof infoFilePath === "string" && infoFilePath.trim()) {
               const rawPath = infoFilePath.trim();
-              if (!isAbsolute(rawPath)) {
+              if (!isAbsolute2(rawPath)) {
                 return {
                   content: [
                     {
@@ -33009,15 +38152,15 @@ Profiles: ${profileNames.join(", ")}`);
                   isError: true
                 };
               }
-              const absPath = resolve2(rawPath);
+              const absPath = resolve3(rawPath);
               try {
-                writeFileSync2(absPath, jsonText, "utf-8");
-              } catch (err) {
+                writeFileSync3(absPath, jsonText, "utf-8");
+              } catch (err2) {
                 return {
                   content: [
                     {
                       type: "text",
-                      text: `FAILED: could not write JSON to '${absPath}': ${err instanceof Error ? err.message : String(err)}`
+                      text: `FAILED: could not write JSON to '${absPath}': ${err2 instanceof Error ? err2.message : String(err2)}`
                     }
                   ],
                   isError: true
@@ -33080,17 +38223,17 @@ Profiles: ${profileNames.join(", ")}`);
         }
         case "get_settings": {
           try {
-            const raw = readFileSync2(SETTINGS_FILE, "utf-8");
-            mkdirSync2(OUTPUT_DIR, { recursive: true });
-            const copyPath = join2(OUTPUT_DIR, "settings_edit.yaml");
-            writeFileSync2(copyPath, raw, "utf-8");
+            const raw = readFileSync4(SETTINGS_FILE, "utf-8");
+            mkdirSync4(OUTPUT_DIR, { recursive: true });
+            const copyPath = join3(OUTPUT_DIR, "settings_edit.yaml");
+            writeFileSync3(copyPath, raw, "utf-8");
             return { content: [{ type: "text", text: copyPath }] };
-          } catch (err) {
+          } catch (err2) {
             return {
               content: [
                 {
                   type: "text",
-                  text: `Failed to read ${SETTINGS_FILE}: ${err instanceof Error ? err.message : String(err)}`
+                  text: `Failed to read ${SETTINGS_FILE}: ${err2 instanceof Error ? err2.message : String(err2)}`
                 }
               ],
               isError: true
@@ -33122,8 +38265,8 @@ Profiles: ${profileNames.join(", ")}`);
           let bcRegexRedact = null;
           try {
             bcRegexRedact = parseRedactRegex(bcRedactRegexRaw);
-          } catch (err) {
-            return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+          } catch (err2) {
+            return { content: [{ type: "text", text: `FAILED: ${err2.message}` }], isError: true };
           }
           let bcNormalizedPaths = normalizePaths(bcInputPaths);
           if (bcFolderPath) {
@@ -33212,8 +38355,8 @@ Profiles: ${profileNames.join(", ")}`);
                     });
                     gRecentOutcomes.push(result.success);
                     return result;
-                  } catch (err) {
-                    const classified = classifyError(err);
+                  } catch (err2) {
+                    const classified = classifyError(err2);
                     if (classified.unrecoverable) {
                       if (classified.serviceLevel) {
                         gAborted = true;
@@ -33240,7 +38383,7 @@ Profiles: ${profileNames.join(", ")}`);
               const gSucceeded = gAll.filter((r) => r.success);
               const reportSections = [];
               for (const r of gSucceeded) {
-                const content = r.reportPath && existsSync2(r.reportPath) ? readFileSync2(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync2(r.reportPath) ? readFileSync4(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -33328,8 +38471,8 @@ ${gAbortReason}`);
                   );
                 }
                 return result;
-              } catch (err) {
-                const classified = classifyError(err);
+              } catch (err2) {
+                const classified = classifyError(err2);
                 if (classified.unrecoverable) {
                   if (classified.serviceLevel) {
                     aborted2 = true;
@@ -33375,7 +38518,7 @@ ${gAbortReason}`);
             } else {
               const reportSections = [];
               for (const r of succeeded) {
-                const content = r.reportPath && existsSync2(r.reportPath) ? readFileSync2(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync2(r.reportPath) ? readFileSync4(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -33450,14 +38593,14 @@ ${content}`);
           let sfRegexRedact = null;
           try {
             sfRegexRedact = parseRedactRegex(sfRedactRegexRaw);
-          } catch (err) {
-            return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+          } catch (err2) {
+            return { content: [{ type: "text", text: `FAILED: ${err2.message}` }], isError: true };
           }
           let sfFolderPath;
           try {
             sfFolderPath = sanitizeInputPath(folder_path);
-          } catch (err) {
-            return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+          } catch (err2) {
+            return { content: [{ type: "text", text: `FAILED: ${err2.message}` }], isError: true };
           }
           if (!existsSync2(sfFolderPath)) {
             return {
@@ -33470,7 +38613,7 @@ ${content}`);
               isError: true
             };
           }
-          if (!statSync2(sfFolderPath).isDirectory()) {
+          if (!statSync3(sfFolderPath).isDirectory()) {
             return {
               content: [
                 { type: "text", text: `FAILED: Not a directory: ${folder_path}` }
@@ -33561,8 +38704,8 @@ ${content}`);
                   );
                 }
                 return result;
-              } catch (err) {
-                const classified = classifyError(err);
+              } catch (err2) {
+                const classified = classifyError(err2);
                 if (classified.unrecoverable) {
                   if (classified.serviceLevel) {
                     aborted2 = true;
@@ -33607,7 +38750,7 @@ ${content}`);
           if (sfMode === 2 && succeeded.length > 0) {
             const sections = [];
             for (const r of succeeded) {
-              const content = r.reportPath && existsSync2(r.reportPath) ? readFileSync2(r.reportPath, "utf-8") : "";
+              const content = r.reportPath && existsSync2(r.reportPath) ? readFileSync4(r.reportPath, "utf-8") : "";
               sections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -33649,7 +38792,7 @@ ${content}`);
               for (const fp of fg.files) {
                 const r = pathToResult.get(fp);
                 if (!r) continue;
-                const content = r.reportPath && existsSync2(r.reportPath) ? readFileSync2(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync2(r.reportPath) ? readFileSync4(r.reportPath, "utf-8") : "";
                 sections.push(`## File: ${fp}
 
 ${content}`);
@@ -33743,13 +38886,13 @@ ${content}`);
             let fp;
             try {
               fp = sanitizeInputPath(fpRaw);
-            } catch (err) {
-              return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+            } catch (err2) {
+              return { content: [{ type: "text", text: `FAILED: ${err2.message}` }], isError: true };
             }
             if (!existsSync2(fp)) {
               return { content: [{ type: "text", text: `FAILED: Folder not found: ${fpRaw}` }], isError: true };
             }
-            if (!statSync2(fp).isDirectory()) {
+            if (!statSync3(fp).isDirectory()) {
               return { content: [{ type: "text", text: `FAILED: Not a directory: ${fpRaw}` }], isError: true };
             }
             folderPaths.push(fp);
@@ -33760,7 +38903,7 @@ ${content}`);
             const raw = Array.isArray(seiSourceFilesRaw) ? seiSourceFilesRaw : [seiSourceFilesRaw];
             for (const sf of raw) {
               if (typeof sf !== "string" || !sf.trim()) continue;
-              const resolved = resolve2(sf);
+              const resolved = resolve3(sf);
               if (!existsSync2(resolved)) {
                 return {
                   content: [{ type: "text", text: `FAILED: source_files entry not found: ${sf}` }],
@@ -33777,7 +38920,7 @@ ${content}`);
           }
           let diffPathResolved = void 0;
           if (typeof seiDiffPathRaw === "string" && seiDiffPathRaw.trim()) {
-            const r = resolve2(seiDiffPathRaw);
+            const r = resolve3(seiDiffPathRaw);
             if (!existsSync2(r)) {
               return {
                 content: [{ type: "text", text: `FAILED: diff_path not found: ${seiDiffPathRaw}` }],
@@ -33798,8 +38941,8 @@ ${content}`);
           let seiRegexRedact = null;
           try {
             seiRegexRedact = parseRedactRegex(seiRedactRegexRaw);
-          } catch (err) {
-            return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+          } catch (err2) {
+            return { content: [{ type: "text", text: `FAILED: ${err2.message}` }], isError: true };
           }
           const descTrimmed = feature_description.trim();
           const hasRef = sourceFiles.length > 0 || !!diffPathResolved;
@@ -33945,8 +39088,8 @@ ${fd.block}`;
                   `search_existing_implementations: batch ${gi + 1}/${seiGroups.length} done (${groupPaths.length} files)`
                 );
               }
-            } catch (err) {
-              const classified = classifyError(err);
+            } catch (err2) {
+              const classified = classifyError(err2);
               seiBatchResponses.push({
                 idx: gi,
                 filePaths: groupPaths,
@@ -34242,8 +39385,8 @@ ${body}
             try {
               fA = sanitizeInputPath(fARaw);
               fB = sanitizeInputPath(fBRaw);
-            } catch (err) {
-              return { error: err.message };
+            } catch (err2) {
+              return { error: err2.message };
             }
             if (!existsSync2(fA)) return { error: `File not found: ${fARaw}` };
             if (!existsSync2(fB)) return { error: `File not found: ${fBRaw}` };
@@ -34288,8 +39431,8 @@ ${fence}${sourceBlocks}` }
             let resp;
             try {
               resp = await ensembleStreaming(msgs, { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride }, cfUseEnsemble);
-            } catch (err) {
-              return { error: `LLM error: ${err instanceof Error ? err.message : String(err)}` };
+            } catch (err2) {
+              return { error: `LLM error: ${err2 instanceof Error ? err2.message : String(err2)}` };
             }
             if (!resp.content.trim()) return { error: "LLM returned empty response" };
             return { content: resp.content + formatFooter(resp, "compare_files", fA), model: resp.model };
@@ -34305,8 +39448,8 @@ ${fence}${sourceBlocks}` }
             let cfGitRepoSafe;
             try {
               cfGitRepoSafe = sanitizeInputPath(cfGitRepo);
-            } catch (err) {
-              return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+            } catch (err2) {
+              return { content: [{ type: "text", text: `FAILED: ${err2.message}` }], isError: true };
             }
             if (!existsSync2(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
             const toRef = cfToRef || "HEAD";
@@ -34376,7 +39519,7 @@ ${sections.join("\n\n---\n\n")}`;
               const rp = saveResponse("compare_files", reportContent, {
                 model: "git-diff (no LLM)",
                 task: `${cfFromRef} \u2192 ${toRef}`,
-                inputFile: join2(cfGitRepoSafe, dg.files[0]),
+                inputFile: join3(cfGitRepoSafe, dg.files[0]),
                 groupId: gid
               });
               if (isGrouped) reportPaths.push(`[group:${dg.id}] ${rp}`);
@@ -34459,9 +39602,9 @@ ${result.content}`);
           try {
             fileA = sanitizeInputPath(cfNormalizedPaths[0]);
             fileB = sanitizeInputPath(cfNormalizedPaths[1]);
-          } catch (err) {
+          } catch (err2) {
             return {
-              content: [{ type: "text", text: `FAILED: ${err.message}` }],
+              content: [{ type: "text", text: `FAILED: ${err2.message}` }],
               isError: true
             };
           }
@@ -34576,7 +39719,7 @@ ${diffFence}` + sourceFileBlocks
             cfResp.content + cfFooter,
             {
               model: cfResp.model,
-              task: `Compare ${basename2(fileA)} vs ${basename2(fileB)}`,
+              task: `Compare ${basename4(fileA)} vs ${basename4(fileB)}`,
               inputFile: fileA
             }
           );
@@ -34605,8 +39748,8 @@ ${diffFence}` + sourceFileBlocks
           let crRegexRedact = null;
           try {
             crRegexRedact = parseRedactRegex(crRedactRegexRaw);
-          } catch (err) {
-            return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+          } catch (err2) {
+            return { content: [{ type: "text", text: `FAILED: ${err2.message}` }], isError: true };
           }
           let crFilePathsAll = [...new Set(normalizePaths(crInputPathsRaw))];
           if (crFolderPath) {
@@ -34669,7 +39812,7 @@ ${diffFence}` + sourceFileBlocks
 FAILED: File not found.`);
                   continue;
                 }
-                const src = readFileSync2(filePath, "utf-8");
+                const src = readFileSync4(filePath, "utf-8");
                 const lang = detectLang(filePath);
                 const deps = extractLocalImports(filePath, src);
                 const depBlocks = [];
@@ -34729,7 +39872,7 @@ FAILED: File not found.`);
               crReportPaths.push("(skipped \u2014 file not found)");
               continue;
             }
-            const crSourceCode = readFileSync2(filePath, "utf-8");
+            const crSourceCode = readFileSync4(filePath, "utf-8");
             const crLang = detectLang(filePath);
             const depPaths = extractLocalImports(filePath, crSourceCode);
             const depBlocks = [];
@@ -34848,8 +39991,8 @@ ${crResp.content}${crFooter}`
           let ciRegexRedact = null;
           try {
             ciRegexRedact = parseRedactRegex(ciRedactRegexRaw);
-          } catch (err) {
-            return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+          } catch (err2) {
+            return { content: [{ type: "text", text: `FAILED: ${err2.message}` }], isError: true };
           }
           let ciFilePathsAll = [...new Set(normalizePaths(ciInputPathsRaw))];
           if (ciFolderPath) {
@@ -34913,7 +40056,7 @@ FAILED: File not found.`);
                   continue;
                 }
                 const ciLang = detectLang(filePath);
-                const fileDir = dirname2(filePath);
+                const fileDir = dirname4(filePath);
                 const ciResolveBase = project_root || fileDir;
                 const extractMessages = [
                   { role: "system", content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path inside a filename tag before the file-content tag \u2014 reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.` + FILE_FORMAT_EXAMPLE },
@@ -34935,13 +40078,13 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     continue;
                   }
                   const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-                  const resolvedBase = importPath.startsWith("/") ? resolve2(importPath) : join2(resolveDir, importPath);
+                  const resolvedBase = importPath.startsWith("/") ? resolve3(importPath) : join3(resolveDir, importPath);
                   if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                     packageImports.push(importPath);
                     continue;
                   }
-                  let found = existsSync2(resolvedBase) && statSync2(resolvedBase).isFile();
-                  if (!found && !extname2(resolvedBase)) {
+                  let found = existsSync2(resolvedBase) && statSync3(resolvedBase).isFile();
+                  if (!found && !extname4(resolvedBase)) {
                     for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".json"]) {
                       if (existsSync2(resolvedBase + ext)) {
                         found = true;
@@ -34950,7 +40093,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     }
                     if (!found) {
                       for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                        if (existsSync2(join2(resolvedBase, `index${ext}`))) {
+                        if (existsSync2(join3(resolvedBase, `index${ext}`))) {
                           found = true;
                           break;
                         }
@@ -34991,7 +40134,7 @@ FAILED: File not found.`);
               continue;
             }
             const ciLang = detectLang(filePath);
-            const fileDir = dirname2(filePath);
+            const fileDir = dirname4(filePath);
             const ciResolveBase = project_root || fileDir;
             const extractMessages = [
               {
@@ -35030,16 +40173,16 @@ FAILED: File not found.`);
                 continue;
               }
               const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-              const resolvedBase = importPath.startsWith("/") ? resolve2(importPath) : join2(resolveDir, importPath);
+              const resolvedBase = importPath.startsWith("/") ? resolve3(importPath) : join3(resolveDir, importPath);
               if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                 packageImports.push(importPath);
                 continue;
               }
               let found = false;
-              if (existsSync2(resolvedBase) && statSync2(resolvedBase).isFile()) {
+              if (existsSync2(resolvedBase) && statSync3(resolvedBase).isFile()) {
                 found = true;
               }
-              if (!found && !extname2(resolvedBase)) {
+              if (!found && !extname4(resolvedBase)) {
                 for (const ext of [
                   ".ts",
                   ".tsx",
@@ -35059,7 +40202,7 @@ FAILED: File not found.`);
                 }
                 if (!found) {
                   for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                    if (existsSync2(join2(resolvedBase, `index${ext}`))) {
+                    if (existsSync2(join3(resolvedBase, `index${ext}`))) {
                       found = true;
                       break;
                     }
@@ -35166,8 +40309,8 @@ FAILED: File not found.`);
           let csRegexRedact = null;
           try {
             csRegexRedact = parseRedactRegex(csRedactRegexRaw);
-          } catch (err) {
-            return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+          } catch (err2) {
+            return { content: [{ type: "text", text: `FAILED: ${err2.message}` }], isError: true };
           }
           if (!csSpecPath) {
             return {
@@ -35198,8 +40341,8 @@ FAILED: File not found.`);
           let csSpecBlock;
           try {
             csSpecBlock = readFileAsCodeBlock(csSpecPath, void 0, csRedact, csBudgetBytes, null, "specs-");
-          } catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err);
+          } catch (err2) {
+            const errMsg = err2 instanceof Error ? err2.message : String(err2);
             return {
               content: [{ type: "text", text: `FAILED: Cannot read spec file: ${errMsg}` }],
               isError: true
@@ -35244,8 +40387,8 @@ FAILED: File not found.`);
                 let fpBlock;
                 try {
                   fpBlock = readFileAsCodeBlock(fp, void 0, csRedact, csBudgetBytes, csRegexRedact);
-                } catch (err) {
-                  csPerFileResults.push(`FAILED: ${fp} \u2014 ${err instanceof Error ? err.message : String(err)}`);
+                } catch (err2) {
+                  csPerFileResults.push(`FAILED: ${fp} \u2014 ${err2 instanceof Error ? err2.message : String(err2)}`);
                   continue;
                 }
                 let fpUserContent = "## SPECIFICATION (source of truth)\n\n" + csSpecBlock + "\n\n";
@@ -35269,7 +40412,7 @@ FAILED: File not found.`);
                 const fpFooter = formatFooter(fpResp, "check_against_specs", fp);
                 const fpReportPath = saveResponse("check_against_specs", fpResp.content + fpFooter, {
                   model: ensembleModelLabel(csUseEnsemble),
-                  task: `Spec compliance: ${basename2(csSpecPath)} vs ${basename2(fp)}`,
+                  task: `Spec compliance: ${basename4(csSpecPath)} vs ${basename4(fp)}`,
                   inputFile: fp
                 }, void 0, outputDir);
                 csPerFileResults.push(fpReportPath);
@@ -35326,7 +40469,7 @@ ${csResp.content}${csFooter}`
             const csMergedModel = ensembleModelLabel(csUseEnsemble);
             const csReportPath = saveResponse("check_against_specs", csFinalContent, {
               model: csMergedModel,
-              task: `Spec compliance: ${basename2(csSpecPath)} vs ${fgPaths.length} file(s)`,
+              task: `Spec compliance: ${basename4(csSpecPath)} vs ${fgPaths.length} file(s)`,
               inputFile: fgPaths[0],
               groupId: fgId || void 0
             });

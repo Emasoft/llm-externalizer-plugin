@@ -63,6 +63,24 @@ describe('listTools', () => {
       'reset',
       'scan_folder',
       'search_existing_implementations',
+      // mass-scouting — 16 tools
+      // (8 base + 3 Phase B + 2 Phase C2 + 2 Phase C3 + 1 Phase F)
+      'mass_scout',
+      'mass_scout_audit_sample',
+      'mass_scout_body_get',
+      'mass_scout_build_fieldset',
+      'mass_scout_chain',
+      'mass_scout_diff',
+      'mass_scout_estimate',
+      'mass_scout_export',
+      'mass_scout_get',
+      'mass_scout_jobs_list',
+      'mass_scout_list_bundled_fieldsets',
+      'mass_scout_preclassify',
+      'mass_scout_propose_fieldset',
+      'mass_scout_register',
+      'mass_scout_search',
+      'mass_scout_search_xjob',
     ].sort();
 
     expect(toolNames).toEqual(expected);

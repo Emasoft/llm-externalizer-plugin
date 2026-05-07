@@ -600,6 +600,7 @@ Usage:
   llm-externalizer profile list                          # read-only profile inspector
   llm-externalizer model-info <model-id> [--markdown | --json [file]] [--no-color]
   llm-externalizer search-existing "<description>" [<src-files>...] --in <path> [--base <ref>] [--diff <path>] [--free]
+  llm-externalizer mass-scout <subcommand> [flags]       # bulk LLM-driven file analysis (use 'mass-scout --help' for sub-commands)
 
 Disabled (would change settings.yaml — do this manually instead):
   llm-externalizer profile add | select | edit | remove | rename
@@ -678,8 +679,23 @@ async function main(): Promise<void> {
     return;
   }
 
+  // ── mass-scout top-level command ────────────────────────────────
+  // Delegates to the self-contained dispatcher in mass_scouting/cli.ts.
+  // The sub-CLI returns a CliResult; we plumb it to stdout/stderr and
+  // set the exit code without ever calling process.exit ourselves
+  // (that lets the function be unit-tested cleanly).
+  if (args[0] === "mass-scout") {
+    const { runMassScoutCli } = await import("./mass_scouting/cli.js");
+    const result = await runMassScoutCli(args.slice(1));
+    if (result.stdout) process.stdout.write(result.stdout);
+    if (result.stderr) process.stderr.write(result.stderr);
+    process.exit(result.exitCode);
+  }
+
   if (args[0] !== "profile") {
-    die(`Unknown command '${args[0]}'. Use 'profile', 'model-info', or 'search-existing' subcommand, or --help.`);
+    die(
+      `Unknown command '${args[0]}'. Use 'profile', 'model-info', 'search-existing', or 'mass-scout' subcommand, or --help.`,
+    );
   }
 
   const subcommand = args[1];

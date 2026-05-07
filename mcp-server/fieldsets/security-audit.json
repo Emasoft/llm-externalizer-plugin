@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "fieldset_name": "security-audit",
+  "fields": [
+    {
+      "name": "has_secrets",
+      "description": "True if file contains hard-coded secrets, API keys, tokens, passwords, or credentials.",
+      "type": { "kind": "bool" }
+    },
+    {
+      "name": "uses_eval",
+      "description": "True if file uses dynamic code execution (eval, Function constructor, exec, system, shell-out with user input).",
+      "type": { "kind": "bool" }
+    },
+    {
+      "name": "input_validation",
+      "description": "Quality of input validation: strict (validates types, ranges, formats), partial (some checks), none (no input validation visible), n/a (file does not handle external input).",
+      "type": { "kind": "enum", "values": ["strict", "partial", "none", "n/a"] }
+    },
+    {
+      "name": "severity",
+      "description": "Highest-severity finding in this file. critical = exploitable now, high = likely exploitable, medium = needs review, low = code-smell, none = no concerns.",
+      "type": { "kind": "enum", "values": ["critical", "high", "medium", "low", "none"] }
+    },
+    {
+      "name": "vulnerabilities",
+      "description": "Up to 5 specific vulnerability findings. Each item is a short phrase: 'SQL injection at line 42', 'unsanitized URL fetched', 'cleartext password in log'.",
+      "type": { "kind": "array_string", "max_items": 5 }
+    },
+    {
+      "name": "cwe_categories",
+      "description": "Up to 5 CWE category names that apply (e.g. 'CWE-89 SQL Injection', 'CWE-22 Path Traversal'). Empty list if none.",
+      "type": { "kind": "array_string", "max_items": 5 }
+    }
+  ]
+}

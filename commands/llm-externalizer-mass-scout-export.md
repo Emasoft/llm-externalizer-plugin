@@ -1,0 +1,59 @@
+---
+name: llm-externalizer-mass-scout-export
+description: |-
+  Dump every result row of a mass-scouting job to JSONL or CSV under
+  reports/mass_scouting/. Useful for follow-up analysis in pandas, jq, etc.
+allowed-tools:
+  - mcp__llm-externalizer__mass_scout_export
+argument-hint: "--db <path> --job-id <id> [--format jsonl|csv]"
+effort: low
+---
+
+# Mass-scout — export
+
+Iterate every `mass_scout_results` row for a given `--job-id` and write
+them to a single JSONL or CSV file under
+`<main-repo-root>/reports/mass_scouting/`. The file path is returned to
+the caller so they can route it to the next stage of their workflow.
+
+## Inputs
+
+| Flag | Required | Description |
+|---|---|---|
+| `--db <path>` | yes | The registry |
+| `--job-id <id>` | yes | The job to export |
+| `--format jsonl\|csv` | no | Default: `jsonl` |
+
+## Output
+
+```
+job_id=<id>
+format=jsonl|csv
+rows=<N>
+path=<absolute path to the export file>
+```
+
+## JSONL format
+
+One JSON object per line — same shape as the SQLite `mass_scout_results`
+row:
+
+```json
+{"job_id":"...","file_fingerprint":"...","short_id":1,"result_json":"...","raw_response":"...","repaired":0,"attempts":1,"cost_usd":0.000_005,"enriched_at":"2026-05-06T..."}
+```
+
+## CSV format
+
+Columns:
+`job_id, file_fingerprint, short_id, result_json, repaired, attempts, cost_usd, enriched_at`
+
+`result_json` is the embedded JSON (already a string). Cells that
+contain commas, quotes, or newlines are quoted and double-escaped.
+
+## Tips
+
+- `jq -c '.result_json | fromjson | .is_async' <file>.jsonl` —
+  extract one field across all rows.
+- Pipe CSV into pandas: `pd.read_csv(...)` then `pd.json_normalize(...,
+  record_path=None, meta=...)` on `result_json` to expand the dynamic
+  fieldset into proper columns.

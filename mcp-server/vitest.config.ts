@@ -12,6 +12,23 @@ export default defineConfig({
     include: [
       'src/index.test.ts',
       'src/grouping.test.ts',
+      'src/mass_scouting/fieldset.test.ts',
+      'src/mass_scouting/shorthand.test.ts',
+      'src/mass_scouting/registry.test.ts',
+      'src/mass_scouting/preclassify.test.ts',
+      'src/mass_scouting/cost-estimate.test.ts',
+      'src/mass_scouting/scout.test.ts',
+      'src/mass_scouting/reports.test.ts',
+      'src/mass_scouting/search.test.ts',
+      'src/mass_scouting/cli.test.ts',
+      'src/mass_scouting/mcp-tools.test.ts',
+      // Live test — runs only when LIVE_TESTS=1 + OPENROUTER_API_KEY are set
+      // (gated via describe.skipIf inside the file). Default `npm test`
+      // reports it as skipped, runtime ~0ms.
+      'src/mass_scouting/live.test.ts',
+      // Calibration — runs only when CALIBRATE=1 + OPENROUTER_API_KEY are
+      // set. Generates a markdown report under reports/mass_scouting_calibration/.
+      'src/mass_scouting/calibrate-payload-size.test.ts',
     ],
   },
 });

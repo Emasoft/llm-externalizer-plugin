@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "fieldset_name": "pr-review",
+  "fields": [
+    {
+      "name": "summary",
+      "description": "One-sentence summary of what changes this file contains.",
+      "type": { "kind": "string", "max_length": 200 }
+    },
+    {
+      "name": "category",
+      "description": "Type of change: feature (new functionality), refactor (no behavior change), bugfix, test, docs, config, build, other.",
+      "type": { "kind": "enum", "values": ["feature", "refactor", "bugfix", "test", "docs", "config", "build", "other"] }
+    },
+    {
+      "name": "needs_review",
+      "description": "True if this file's changes warrant careful human review (non-trivial logic, security-sensitive code, public API change). False for cosmetic or auto-generated changes.",
+      "type": { "kind": "bool" }
+    },
+    {
+      "name": "breaks_api",
+      "description": "True if this change modifies a public function signature, removes an exported symbol, or changes a behavior contract that external callers may rely on.",
+      "type": { "kind": "bool" }
+    },
+    {
+      "name": "test_coverage",
+      "description": "How well-tested this change is: covered (tests exist for the new code), partial (some paths tested), none (no tests touch this), n/a (file is itself a test).",
+      "type": { "kind": "enum", "values": ["covered", "partial", "none", "n/a"] }
+    },
+    {
+      "name": "risks",
+      "description": "Up to 5 specific risks this change introduces. Each item is a short phrase: 'race condition between X and Y', 'silently swallows errors', 'changes default behavior'.",
+      "type": { "kind": "array_string", "max_items": 5 }
+    }
+  ]
+}

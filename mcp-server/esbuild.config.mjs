@@ -11,6 +11,13 @@ const nodeExternals = [
   ...builtinModules.map((m) => `node:${m}`),
 ];
 
+// Externalize native (C++) addons. esbuild can't bundle .node files, and
+// any code that does `require('better-sqlite3')` walks node_modules to
+// load the prebuilt binding for the current platform. Marking it external
+// keeps the bundled file portable across Node versions while letting
+// `npm install` (run by the plugin install path) fetch the right binary.
+const nativeExternals = ["better-sqlite3"];
+
 // CJS deps like yaml use require("process") internally. In ESM output,
 // esbuild wraps these in a __require shim that throws because `require`
 // is not available in ESM. Injecting createRequire provides a real
@@ -29,7 +36,7 @@ const shared = {
   target: "node18",
   format: "esm",
   sourcemap: true,
-  external: nodeExternals,
+  external: [...nodeExternals, ...nativeExternals],
   banner: { js: banner },
 };
 

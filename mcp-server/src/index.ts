@@ -41,6 +41,11 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import {
+  MASS_SCOUT_TOOLS,
+  MASS_SCOUT_TOOL_NAMES,
+  dispatchMassScoutTool,
+} from "./mass_scouting/mcp-tools.js";
 
 // ── File reading helpers ─────────────────────────────────────────────
 // The MCP reads files from disk so the calling agent never loads them into its context.
@@ -4950,7 +4955,11 @@ function buildTools() {
       },
     },
   ];
-  return allTools;
+  // Append the mass-scouting tool surface (8 tools — see TRDD §15).
+  // These are thin shims around the CLI dispatcher in mass_scouting/cli.ts;
+  // every tool corresponds 1:1 to a `bin/llm-externalizer mass-scout <sub>`
+  // CLI invocation.
+  return [...allTools, ...MASS_SCOUT_TOOLS];
 }
 
 // ── MCP Server ───────────────────────────────────────────────────────
@@ -5007,6 +5016,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ],
         isError: true,
       };
+    }
+
+    // mass-scouting tools are thin shims around the CLI dispatcher in
+    // mass_scouting/cli.ts. They don't go through the central LLM
+    // tracking / free-routing pipeline because scout.ts owns its own
+    // OpenRouter call + budget logic (TRDD §6.3, §15). Short-circuit
+    // before any of that machinery.
+    if (MASS_SCOUT_TOOL_NAMES.has(name)) {
+      // Forward the MCP progressToken so long-running mass-scout jobs
+      // (especially `mass_scout` and `mass_scout_chain`) emit
+      // notifications/progress events that keep the connection alive
+      // and let the client show real progress instead of a spinner.
+      return await dispatchMassScoutTool(
+        name,
+        (args ?? {}) as Record<string, unknown>,
+        onProgress
+          ? {
+              onProgress: (progress, total, message) =>
+                onProgress(progress, total, message),
+            }
+          : {},
+      );
     }
 
     // Track active LLM requests so `reset` can wait for them to drain
