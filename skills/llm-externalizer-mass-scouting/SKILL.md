@@ -43,10 +43,9 @@ Five phases, one MCP tool per phase, same code in
 2. **preclassify** — `mass_scout_preclassify` script-tags every row with a
    bucket (binary / sourcecode / config / documentation / log / rules /
    unknown).
-3. **estimate** — `mass_scout_estimate` previews tokens, dollars, eligible
+3. **estimate** — `mass_scout_estimate` previews tokens, cost, eligible
    files. `budget_usd` is a hard gate. `live_context: true` queries
-   OpenRouter for the provider's real cap (KNOWN_PRICING ceiling = model
-   MAX, not provider cap — they differ).
+   OpenRouter for the active provider's real cap.
 4. **scout** — `mass_scout` compiles the fieldset to JSON Schema, fans
    calls out, repairs envelopes, validates, persists. Emits MCP
    `notifications/progress` per file.
@@ -66,6 +65,21 @@ fresh fieldset).
 returns the file path plus counts. Hand the path to the user — never
 re-print the report. Search/get/export emit JSON or JSONL/CSV.
 
+## Token efficiency
+
+- Pass paths, never bodies. Every tool here takes paths; the registry
+  reads bodies once at register time and serves them from cache.
+- Prefer `bundled:<name>` over authoring JSON when one of the four
+  shipped sets covers the case.
+- `estimate` with `budget_usd` is a HARD gate — run it before `scout`.
+- Restrict by `bucket` (sourcecode / documentation / …) so scout skips
+  binaries automatically.
+- Use `mass_scout_search` (regex bypass / FTS5 / structured) instead of
+  `audit_sample` when you can — search returns matching rows only, not
+  bodies.
+- Pass `json: true` + `limit_per_job` / `limit_merged` on large queries
+  instead of letting the human rendering grow unbounded.
+
 ## Error Handling
 
 - `HTTP 400 context length exceeded` → file > provider cap. Lower
@@ -80,21 +94,17 @@ Full flowchart: [troubleshooting](references/troubleshooting.md).
 
 ## Examples
 
-```
-"audit every TypeScript file under mcp-server/src for complexity issues"
-"scan all skills for missing triggers and weak descriptions"
-"PR review every file changed since main"
-"find every Python module that talks to a database"
-```
+- "audit every TypeScript file under mcp-server/src for complexity"
+- "scan all skills for missing triggers and weak descriptions"
+- "PR review every file changed since main"
+- "find every Python module that talks to a database"
 
-Worked end-to-end run: [worked-example](references/worked-example.md).
+End-to-end walkthrough: [worked-example](references/worked-example.md).
 
 ## Resources
 
-- `mcp-server/src/mass_scouting/` — source.
-- `mcp-server/fieldsets/` — bundled fieldset JSONs.
-- [troubleshooting](references/troubleshooting.md) — failure-mode flowchart.
-- [worked-example](references/worked-example.md) — plugin-audit walkthrough.
-- [fieldsets](references/fieldsets.md) — types, bundled sets, shorthand, propose.
+- [troubleshooting](references/troubleshooting.md) — failure flowchart.
+- [worked-example](references/worked-example.md) — full walkthrough.
+- [fieldsets](references/fieldsets.md) — types, bundled sets, shorthand.
 - [glossary](references/glossary.md) — terms, model selection, privacy.
-- TRDD `design/tasks/TRDD-52547970-77f3-441c-9e8e-60be22cd2770-mass-scouting.md`.
+- Source: `mcp-server/src/mass_scouting/`, fieldsets: `mcp-server/fieldsets/`.

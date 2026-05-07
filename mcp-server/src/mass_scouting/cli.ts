@@ -746,7 +746,7 @@ async function runScout(
   const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     return err(
-      "OPENROUTER_API_KEY missing. Export it or pass via opts.apiKey (test path).",
+      "OPENROUTER_API_KEY missing. Export it in your shell, set the plugin's userConfig.openrouter_api_key, or add it to ~/.llm-externalizer/settings.yaml.",
     );
   }
   const fetchImpl = opts.fetchImpl ?? realFetch;
@@ -961,7 +961,10 @@ function runGet(args: string[]): CliResult {
   const row = reg.getByShortId(shortId);
   if (!row) {
     reg.close();
-    return err(`no row with short_id=${shortId}`);
+    return err(
+      `no row with short_id=${shortId} in ${JSON.stringify(dbPath)}. ` +
+        `Run jobs-list to confirm the right --db, or run register first.`,
+    );
   }
   let out: Record<string, unknown> = { ...row };
   if (flags["job-id"]) {
@@ -1049,7 +1052,7 @@ async function runProposeFieldset(
   const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     return err(
-      "OPENROUTER_API_KEY missing. Export it or pass via opts.apiKey (test path).",
+      "OPENROUTER_API_KEY missing. Export it in your shell, set the plugin's userConfig.openrouter_api_key, or add it to ~/.llm-externalizer/settings.yaml.",
     );
   }
   const fetchImpl = opts.fetchImpl ?? realFetch;
@@ -1393,7 +1396,9 @@ async function runChain(
 
   const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
-    return err("OPENROUTER_API_KEY missing.");
+    return err(
+      "OPENROUTER_API_KEY missing. Export it in your shell, set the plugin's userConfig.openrouter_api_key, or add it to ~/.llm-externalizer/settings.yaml.",
+    );
   }
   const fetchImpl = opts.fetchImpl ?? realFetch;
 
@@ -1632,7 +1637,11 @@ function runBodyGet(args: string[]): CliResult {
   const body = reg.readBodyByShortId(shortId);
   reg.close();
   if (!body) {
-    return err(`no body cached for short_id=${shortId}`);
+    return err(
+      `no body cached for short_id=${shortId} in ${JSON.stringify(dbPath)}. ` +
+        `The body cache is populated at register time — verify the short_id ` +
+        `with mass_scout_get first.`,
+    );
   }
   return ok(body.toString("utf-8"));
 }
