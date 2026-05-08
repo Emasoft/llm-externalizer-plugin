@@ -37392,7 +37392,7 @@ function buildTools() {
   return [...allTools, ...MASS_SCOUT_TOOLS];
 }
 var server = new Server(
-  { name: "llm-externalizer", version: "9.4.1" },
+  { name: "llm-externalizer", version: "9.4.2" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {

@@ -1,6 +1,53 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.4.2] - 2026-05-08
+
+### Fixed
+
+- Fix(hooks): disable shellcheck SC1091 for nvm.sh sourcing
+
+nvm.sh is provided by the user's nvm install, not this repo, so
+shellcheck cannot follow it. Add a per-line disable directive so
+the publish-pipeline gate stays green.
+
+- Fix(mcp): install native deps via SessionStart hook + symlink, not NODE_PATH
+
+v9.4.x added better-sqlite3 (a native Node module) which esbuild marks
+external. node_modules must be present at runtime, but `claude plugin
+install` does not run npm install. The previous `.mcp.json` change to
+set NODE_PATH does not work for ESM `import` of bare specifiers in
+modern Node (NODE_PATH is honored for CJS require() only) — verified
+empirically on Node 25.
+
+Solution (matches the pattern in
+https://code.claude.com/docs/en/plugins-reference#persistent-data-directory):
+  - hooks/hooks.json registers a SessionStart hook that runs
+    scripts/hooks/install-mcp-deps.sh.
+  - The script diffs the bundled package.json against a copy in
+    ${CLAUDE_PLUGIN_DATA}, runs npm install (or pnpm/bun/nvm/corepack
+    fallbacks) only when they differ, and symlinks
+    ${CLAUDE_PLUGIN_ROOT}/mcp-server/node_modules to
+    ${CLAUDE_PLUGIN_DATA}/node_modules so Node's natural upward module
+    walk finds them.
+  - mcp-server/launcher.mjs pre-flights the better-sqlite3 import and
+    emits a clear error with manual recovery steps if the hook hasn't
+    completed yet (race on first install).
+  - .mcp.json now invokes the launcher instead of dist/index.js
+    directly, and drops the no-op NODE_PATH env.
+  - mcp-server/esbuild.config.mjs comment corrected.
+
+The script forces NPM_CONFIG_IGNORE_SCRIPTS=false so users with
+ignore-scripts=true in ~/.npmrc still get better-sqlite3's prebuilt
+binary via prebuild-install. Falls back through pnpm, bun,
+nvm-shimmed npm, and corepack-shimmed pnpm. mkdir-based atomic lock
+serializes simultaneous SessionStart fires.
+
+Tested in isolation: 0.88 s fresh install (npm ci + native prebuild),
+9 ms idempotent re-run, friendly error on missing deps,
+clean handshake on populated install.
+
+
 ## [9.4.1] - 2026-05-07
 
 ### Fixed
