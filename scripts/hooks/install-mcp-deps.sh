@@ -137,6 +137,7 @@ fi
 # 4. nvm-shimmed npm (the user may have node via nvm only, with npm not on
 #    the PATH for non-interactive shells).
 if [[ -f "$HOME/.nvm/nvm.sh" ]]; then
+  # shellcheck disable=SC1091  # nvm.sh ships with the user's nvm install, not this repo
   if (set +u; . "$HOME/.nvm/nvm.sh"; nvm use default >/dev/null 2>&1 && \
         command -v npm >/dev/null 2>&1 && npm install --omit=dev --no-package-lock >/dev/null 2>&1); then
     echo "[llm-externalizer] deps installed via nvm-shimmed npm" >&2
