@@ -14,8 +14,10 @@ const nodeExternals = [
 // Externalize native (C++) addons. esbuild can't bundle .node files, and
 // any code that does `require('better-sqlite3')` walks node_modules to
 // load the prebuilt binding for the current platform. Marking it external
-// keeps the bundled file portable across Node versions while letting
-// `npm install` (run by the plugin install path) fetch the right binary.
+// keeps the bundled file portable across Node versions; the actual
+// node_modules/ is installed at runtime by the SessionStart hook into
+// ${CLAUDE_PLUGIN_DATA}/node_modules and resolved via NODE_PATH (see
+// hooks/hooks.json and scripts/hooks/install-mcp-deps.sh).
 const nativeExternals = ["better-sqlite3"];
 
 // CJS deps like yaml use require("process") internally. In ESM output,
