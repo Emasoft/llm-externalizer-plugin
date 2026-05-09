@@ -1,6 +1,48 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.5.0] - 2026-05-09
+
+### Added
+
+- Feat(statusline): migrate to multi-tier statusline + add /install-statusline command
+
+Replaces the old mcp-server/statusline.py with the richer
+scripts/statusline/statusline.py — width-aware tiering (1 line ≥184 cols
+to 6 lines <65 cols), per-section error isolation, full v2.1.138 spec
+coverage, and an OpenRouter remaining-credit panel for live budget
+tracking.
+
+New artefacts:
+- scripts/statusline/statusline.py — 678-line statusline (no deps,
+  pure stdlib, fixed F541 f-prefix on the 🧠 emoji line)
+- scripts/statusline/install.sh — bash installer (refreshInterval=3,
+  timestamped backups, atomic settings.json write)
+- scripts/statusline/README.md — feature matrix + width-tier table
+- commands/llm-externalizer-install-statusline.md — slash command
+  wrapper around scripts/install_statusline.py
+
+Updated:
+- scripts/install_statusline.py — rewritten as the cross-platform
+  Python equivalent of install.sh: same source path, same backup
+  scheme (.bak.<YYYYMMDD_HHMMSS+TZ>), same atomic settings.json
+  patch, same statusLine.refreshInterval default (3 s, override via
+  REFRESH_INTERVAL env). Content-aware skip when dest already
+  matches.
+- README.md — Optional: statusline section now mentions the slash
+  command, the multi-tier feature set, OPENROUTER_API_KEY shell
+  requirement for the 🏦 panel, and the bundled scripts/statusline/
+  reference.
+
+Removed:
+- mcp-server/statusline.py — superseded by the new scripts/statusline/
+  one. No live code referenced it; CHANGELOG history entries remain.
+
+All gates pass: tsc, eslint, build, vitest 341/341, ruff, shellcheck
+on both install.sh + install-mcp-deps.sh, plugin.json, claude plugin
+validate, cpv-remote-validate.
+
+
 ## [9.4.3] - 2026-05-09
 
 ### Miscellaneous
