@@ -1,6 +1,52 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.4.3] - 2026-05-09
+
+### Miscellaneous
+
+- Chore(cpv): clear all publish-blocker issues
+
+CPV validator now passes cleanly: SUMMARY: 0 CRITICAL, 0 MAJOR,
+0 MINOR, 0 NIT, 0 WARNING blocking the publish.
+
+Changes:
+- CHANGELOG.md: convert remaining `*` and `+` bullets to `-`
+  (markdownlint MD004), remove trailing blank lines (MD012),
+  collapse residual triple-newlines.
+- commands/llm-externalizer-scan-and-fix-serially.md: tighten
+  blockquote bullets to a single space after `>` (MD027).
+- skills/llm-externalizer-mass-scouting/references/*.md: add the
+  Table of Contents section to each progressive-discovery target
+  (troubleshooting, worked-example, fieldsets, glossary).
+- skills/llm-externalizer-mass-scouting/SKILL.md: embed verbatim
+  TOC heading lists for each reference link in the Resources
+  section so progressive discovery works. Trim Token efficiency
+  bullets and shorten parenthetical heading suffixes in the
+  reference files to keep SKILL.md under the 5000-char cap.
+- scripts/bump_version.py: move to scripts_dev/ (gitignored,
+  preserved on disk) — publish.py owns version bumping.
+
+All gates green: tsc, eslint, build, vitest 341/341, ruff, pyright,
+shellcheck, plugin.json, `claude plugin validate`, cpv-remote-validate.
+
+- Chore: post-scan-and-fix cleanup + CPV publish-blocker fixes
+
+Carry the verified-clean changes from the v9.4.2 scan-and-fix run plus
+small CPV publish-gate fixes:
+
+- Collapse extra blank lines in CHANGELOG (markdownlint MD012)
+- Convert remaining `*`/`+` bullets to dashes (markdownlint MD004/MD005)
+- Rephrase /etc/passwd docstring example to a generic placeholder
+  (MINOR absolute-path flag in scripts/check_references.py)
+- Add # pyright: ignore[reportMissingImports] on PEP 723 ruamel.yaml
+  imports in scripts/apply_ensemble_choice.py and read_ensemble_state.py
+  (uv resolves at runtime; Pyright doesn't read PEP 723 metadata)
+
+Verified: tsc/eslint/build clean, 341/341 vitest pass, ruff/pyright
+clean, all four ensemble + free OpenRouter models return PONG.
+
+
 ## [9.4.2] - 2026-05-08
 
 ### Fixed
@@ -46,6 +92,7 @@ serializes simultaneous SessionStart fires.
 Tested in isolation: 0.88 s fresh install (npm ci + native prebuild),
 9 ms idempotent re-run, friendly error on missing deps,
 clean handshake on populated install.
+
 
 ## [9.4.1] - 2026-05-07
 
@@ -182,6 +229,7 @@ MCP tool descriptions:
   filter / limit_per_job / limit_merged / json) so MCP clients show
   meaningful tooltips.
 
+
 ## [9.4.0] - 2026-05-07
 
 ### Added
@@ -193,25 +241,26 @@ commit. Adds the full TRDD-52547970 pipeline (register → preclassify →
 estimate → scout → search) plus eight follow-on tools that came out of the
 audit pass:
 
-- mass_scout_jobs_list / audit_sample / body_get — job introspection
-- mass_scout_build_fieldset / propose_fieldset / list_bundled_fieldsets —
+* mass_scout_jobs_list / audit_sample / body_get — job introspection
+* mass_scout_build_fieldset / propose_fieldset / list_bundled_fieldsets —
   fieldset authoring (shorthand parser, LLM-driven proposer, and 4
   plugin-shipped fieldsets: code-audit, skill-audit, security-audit,
   pr-review)
-- mass_scout_diff / chain — job-to-job operations (row-by-row diff and
+* mass_scout_diff / chain — job-to-job operations (row-by-row diff and
   filtered re-scout with a fresh fieldset)
 
 Other improvements:
 
-- --live-context flag wires fetchProviderContext into estimate/scout so
+* --live-context flag wires fetchProviderContext into estimate/scout so
   the real provider context_length overrides KNOWN_PRICING when the
   account routes to a smaller-cap endpoint
-- MCP notifications/progress events propagate through scout and chain
+* MCP notifications/progress events propagate through scout and chain
   so long-running jobs keep the connection alive and emit real progress
-- Skill rewrite (when-NOT-to-use, model selection, privacy, troubleshooting
+* Skill rewrite (when-NOT-to-use, model selection, privacy, troubleshooting
   flowchart, glossary, worked example, bundled fieldsets section)
 
 Tests: 341 passing (was 332).
+
 
 ### Fixed
 
@@ -277,6 +326,7 @@ return is only reachable on the success path, the initials never feed
 the read site. Switched to declare-without-init so the lint rule is
 satisfied without changing behaviour.
 
+
 ## [9.3.0] - 2026-04-22
 
 ### Added
@@ -331,6 +381,7 @@ New components:
 Python scripts use PEP 723 inline metadata to declare ruamel.yaml as
 a dep — `uv run` installs it on demand, no system pip touch.
 
+
 ## [9.2.0] - 2026-04-22
 
 ### Added
@@ -352,6 +403,7 @@ Typical use:
   /llm-externalizer:llm-externalizer-benchmark \
     --include google/gemini-3-flash-preview \
     --include x-ai/grok-4.1-fast
+
 
 ## [9.1.0] - 2026-04-22
 
@@ -399,6 +451,7 @@ Conclusion: stepfun/step-3.5-flash is the clear replacement for
 google/gemini-3-flash-preview — 10× cheaper output tokens, same
 accuracy on the benchmark, schema-compliant.
 
+
 ## [9.0.8] - 2026-04-22
 
 ### Changed
@@ -412,11 +465,13 @@ The mcp-server 'engines' field stays at '>=18.0.0' so end-users of
 the published plugin keep broad Node compatibility — only the CI
 workers bump.
 
+
 ## [9.0.7] - 2026-04-22
 
 ### Changed
 
 - Build: rebuild dist after index.ts sanitize/retry/imports fixes
+
 
 ### Fixed
 
@@ -466,6 +521,7 @@ Verification: tsc --noEmit clean, eslint --max-warnings 0 clean,
 ruff+mypy on all .py files clean, 82 vitest unit tests pass (index +
 grouping), bin/llm-ext discover E2E exits 0 with no orphans.
 
+
 ## [9.0.6] - 2026-04-21
 
 ### Fixed
@@ -488,6 +544,7 @@ Fix:
 CPV result after this change: 0 CRITICAL / 0 MAJOR / 0 MINOR / 0 NIT,
 1 WARNING (transient "dead URL" on github.com/Emasoft/emasoft-plugins
 which curl confirms returns 200 — false positive from the validator).
+
 
 ### Miscellaneous
 
@@ -512,6 +569,7 @@ This commit:
 
 After this, every future release will carry one version across all
 four files. No more "which number is real?".
+
 
 ## [9.0.5] - 2026-04-21
 
@@ -570,6 +628,7 @@ only when we're not inside a git working tree (e.g. sandbox runs).
 This matches the agent-reports-location rule verbatim: same rule,
 same folder, for everything — even the externalized LLM.
 
+
 ## [9.0.4] - 2026-04-20
 
 ### Changed
@@ -587,6 +646,7 @@ No intermediate relocation needed.
 - scripts/publish.py: remove archive_reports_to_dev() and the Step 0
   invocation + docstring entry. CPV no longer needs to re-scan the
   tree because gitignored paths are already outside its scope.
+
 
 ## [9.0.3] - 2026-04-20
 
@@ -617,6 +677,7 @@ New design:
   delete branches keep their audit trail in reports_dev/ on the
   maintainer's machine.
 
+
 ### Refactored
 
 - Refactor(publish): 1:1 mapping reports/ -> reports_dev/ (no timestamped subfolder)
@@ -631,6 +692,7 @@ New behavior: a file at `reports/llm-externalizer/foo.md` lands at
 Collisions overwrite (newer publish run wins — matches the "latest
 audit output" expectation for workflow agents). Same pairing applies
 to mcp-server/reports/ -> mcp-server/reports_dev/.
+
 
 ## [9.0.2] - 2026-04-20
 
@@ -683,11 +745,13 @@ The new format uses markdown-immune sentinels:
   instruction to ignore [REDACTED:ENV_SECRET]/[REDACTED:API_KEY]
   placeholders and to emit "No real defects." when clean.
 
+
 ### Changed
 
 - Build: rebuild dist after rescan-audit fixes
 
 - Build: rebuild dist after 40-file source audit fixes
+
 
 ### Documentation
 
@@ -712,6 +776,7 @@ The new format uses markdown-immune sentinels:
   (git config --local --unset core.hooksPath) and how to disable the
   owner-only workflows on a fork (gh workflow disable "Notify Marketplace"
   and "CI").
+
 
 ### Fixed
 
@@ -815,15 +880,18 @@ Confirmed real fixes:
 - scripts/validate_report.py: _LINE_RANGE_RE matches L12-L40 / lines 12-40
   / :12-40 / 12-40 formats; BOM handled.
 
+
 ### Miscellaneous
 
 - Chore(gitignore): exclude reports/ (local audit output, contains private paths)
+
 
 ## [9.0.1] - 2026-04-18
 
 ### Changed
 
 - Build: rebuild dist after redact_secrets fix
+
 
 ### Fixed
 
@@ -882,6 +950,7 @@ redact_secrets) still abort on detection — same behaviour as before.
 The new path activates only when both flags are true, which was
 previously broken / undocumented.
 
+
 ## [9.0.0] - 2026-04-18
 
 ### Added
@@ -918,7 +987,7 @@ Eight user-requested changes:
    No more "type y to continue" text prompts.
 
 3. Step 0 output trimmed: one line each for codebase root, file count
-   - top-level breakdown, included examples, excluded examples. Then
+   + top-level breakdown, included examples, excluded examples. Then
    the menu. No prose lectures before the scan.
 
 4. Pre-fix checkpoint step added to all four fix-touching commands
@@ -941,14 +1010,14 @@ Eight user-requested changes:
 
 7. LM Studio default switched from the old Llama-3.3-70B-GGUF to the
    recommended Qwen 3.5 27B with platform-split guidance:
-     - mlx-community/Qwen3.5-27B-Instruct-4bit   (macOS Apple Silicon)
-     - bartowski/Qwen3.5-27B-Instruct-GGUF       (Windows / Linux)
+     * mlx-community/Qwen3.5-27B-Instruct-4bit   (macOS Apple Silicon)
+     * bartowski/Qwen3.5-27B-Instruct-GGUF       (Windows / Linux)
    One comment line in the profile explains which to pick.
 
 8. Two new README sections:
-     - "Local (Ollama)" — full profile example, `ollama pull` hint,
+     * "Local (Ollama)" — full profile example, `ollama pull` hint,
        url override note.
-     - "## Troubleshooting" — 4 tables (OpenRouter / LM Studio /
+     * "## Troubleshooting" — 4 tables (OpenRouter / LM Studio /
        Ollama / General) covering the common symptoms users hit:
        missing env vars, 401/429 errors, model-not-found, timeouts,
        MLX-vs-GGUF pick on Mac, daemon not running, etc.
@@ -967,6 +1036,7 @@ the same guidance.
 
 Validation: all agents 100/100, all commands 100/100, plugin clean
 (only the pre-existing mcp-server/ directory WARNING, unchanged).
+
 
 ## [8.1.2] - 2026-04-18
 
@@ -1030,6 +1100,7 @@ run). Dev path is anchored at the bottom with the full fork-build-PR
 sequence. No duplicate Requirements list, no inside-Claude-slash-
 command install noise in Quick start.
 
+
 ## [8.1.1] - 2026-04-18
 
 ### Documentation
@@ -1064,16 +1135,16 @@ What's different:
    These render as coloured side-panels on GitHub / VS Code preview.
 
 5. Duplicated content removed:
-   - "Cost comparison" subsection (graph was already in the hero
+   * "Cost comparison" subsection (graph was already in the hero
      section one line below)
-   - "LLM Externalizer (external model analysis)" section — this
+   * "LLM Externalizer (external model analysis)" section — this
      was a pasted skill-prose block, not README material
-   - "Read-only by design — disabled tools" — historical noise
+   * "Read-only by design — disabled tools" — historical noise
      about dead code in the MCP server
-   - "Key constraints" and "Subagent access" sections — internal
+   * "Key constraints" and "Subagent access" sections — internal
      implementation detail, not user-facing
-   - "Naming" section — one-off cleanup commentary
-   - Duplicate "answer_mode" descriptions in 3 places condensed to
+   * "Naming" section — one-off cleanup commentary
+   * Duplicate "answer_mode" descriptions in 3 places condensed to
      one table
 
 6. Plugin structure tree collapsed into a <details> block — the
@@ -1088,6 +1159,7 @@ What's different:
 
 Score impact: validation stays clean (0 CRITICAL / 0 MAJOR / 0 MINOR
 / 0 NIT / 1 pre-existing unrelated WARNING about mcp-server/).
+
 
 ## [8.1.0] - 2026-04-18
 
@@ -1123,9 +1195,9 @@ answer_mode=1 (one report per group)") so the user knows why the
 output shape differs from the default.
 
 Downstream pipeline is unchanged:
-  - parallel-fixer dispatch (scan-and-fix): each group report -> one
+  * parallel-fixer dispatch (scan-and-fix): each group report -> one
     fixer. Same as per-file.
-  - aggregator (scan-and-fix-serially): walks every .md in the
+  * aggregator (scan-and-fix-serially): walks every .md in the
     reports dir. Group reports work the same as per-file reports.
 
 Constraint section updated: "answer_mode is hardcoded to 0" is now
@@ -1136,6 +1208,7 @@ README table entry for --file-list now explicitly states the
 auto-switch ("if the file contains at least one ---GROUP:<id>--- line,
 the command automatically uses answer_mode: 1 instead of the default
 answer_mode: 0").
+
 
 ## [8.0.2] - 2026-04-18
 
@@ -1153,50 +1226,51 @@ expanded "Meaning" prose covering the subtle cases a reader would
 otherwise miss:
 
 scan-and-fix / scan-and-fix-serially:
-  - [target] — default behaviour is DEFAULT-TO-SCANNING-THE-WHOLE-
+  * [target] — default behaviour is DEFAULT-TO-SCANNING-THE-WHOLE-
     CODEBASE (auto-discover tracked files, filter non-source, confirm
     with the user, treat as implicit --file-list). Explicit that the
     command does NOT silently hand a folder to scan_folder.
-  - --file-list — documented the ---GROUP:id--- marker semantics:
+  * --file-list — documented the ---GROUP:id--- marker semantics:
     lines between ---GROUP:id--- and ---/GROUP:id--- are packed into
     ONE LLM request and produce ONE report per group instead of one
     per file (basename carries _group-<id>_). Also: empty list
     aborts.
-  - --instructions — described what the DEFAULT rubric is (REAL
+  * --instructions — described what the DEFAULT rubric is (REAL
     bugs only, strict exclusions for style / try-except / null-
     checks / refactors).
-  - --specs — explicit that each batch sees source+spec, making
+  * --specs — explicit that each batch sees source+spec, making
     cross-reference validation trustworthy (unlike the default
     rubric's best-effort local-only check).
-  - --free — called out that it's LOWER quality than the ensemble
+  * --free — called out that it's LOWER quality than the ensemble
     and that the provider LOGS PROMPTS (don't use on proprietary
     code).
-  - --no-secrets — clarified that default behaviour ABORTS the run
+  * --no-secrets — clarified that default behaviour ABORTS the run
     if a secret is found (safety net, not silent redaction).
-  - --text — clarified that the default rubric has nothing useful
+  * --text — clarified that the default rubric has nothing useful
     to say about prose and should be paired with --instructions.
 
 search-existing-implementations:
-  - --base — explicit auto-detect chain (origin/HEAD → main →
+  * --base — explicit auto-detect chain (origin/HEAD → main →
     master).
-  - --max-files — default 10000 stated with the reason (designed
+  * --max-files — default 10000 stated with the reason (designed
     for massive PR-review scans).
-  - Added output spec (one line per file, exhaustive, answer_mode=2
+  * Added output spec (one line per file, exhaustive, answer_mode=2
     merged report).
 
 fix-report:
-  - Added explicit .fixer. / .final-report. basename rejection up
+  * Added explicit .fixer. / .final-report. basename rejection up
     front, relative-path resolution rule.
 
 fix-found-bugs:
-  - The DEFAULT when no arg is supplied is now explicit: aggregate
+  * The DEFAULT when no arg is supplied is now explicit: aggregate
     EVERY report in ./reports/llm-externalizer/, skip any with a
     .fixer. sibling.
-  - Stated the MAX_ITER formula and stuck-streak safety rail.
+  * Stated the MAX_ITER formula and stuck-streak safety rail.
 
 All tables now gain a Default column; tables that had no default
 (required positional only) still show "—" so the column is
 consistent across commands.
+
 
 ## [8.0.1] - 2026-04-18
 
@@ -1214,7 +1288,7 @@ Three changes:
      - llm-externalizer-discover  (no params)
      - llm-externalizer-configure (no params)
      - llm-externalizer-search-existing-implementations (2 positional
-       plus 5 flags)
+       + 5 flags)
      - llm-externalizer-scan-and-fix (target + 6 flags)
      - llm-externalizer-scan-and-fix-serially (cross-references the
        scan-and-fix table since the parameter set is byte-identical)
@@ -1232,12 +1306,13 @@ Three changes:
    should be synced together on future edits.
 
 3. The plugin-bundled rule file already reflects the v8.0.0 renames:
-     - Agent names: llm-ext-reviewer -> llm-externalizer-reviewer-agent
+     * Agent names: llm-ext-reviewer -> llm-externalizer-reviewer-agent
        (the rest are llm-externalizer-parallel-fixer-agent and
        llm-externalizer-serial-fixer-agent)
-     - Flag renames: --no-scan-secrets -> --no-secrets,
+     * Flag renames: --no-scan-secrets -> --no-secrets,
        --text-files -> --text
    So anyone installing v8.1.0 gets current docs out of the box.
+
 
 ## [8.0.0] - 2026-04-18
 
@@ -1270,6 +1345,7 @@ frontmatter — it's not in the plugin-shipped command allowed-fields
 set (CPV warning), and the command runs fine without it. scan-and-fix
 is already dispatched with the effort inherited from the model
 config, so the field was a no-op anyway.
+
 
 ## [7.1.2] - 2026-04-18
 
@@ -1312,6 +1388,7 @@ Outcome: a user reading the two commands sees the same scan pipeline
 end-to-end and can trust that switching between parallel and serial
 fix modes does not quietly change how the codebase is scanned.
 
+
 ## [7.1.1] - 2026-04-18
 
 ### Fixed
@@ -1344,6 +1421,7 @@ Also trimmed:
   [--text-files] entries (108 -> 83 chars; they're still documented
   in the Arguments section)
 
+
 ## [7.1.0] - 2026-04-18
 
 ### Added
@@ -1375,6 +1453,7 @@ README updates:
 - Commands table row added, describing the serial/stateful trade-off
 - Plugin structure tree includes the new commands/*.md entry
 
+
 ## [7.0.0] - 2026-04-18
 
 ### Added
@@ -1405,6 +1484,7 @@ command Task dispatches and descriptions, README features + commands
 table + plugin structure, scripts (fix_found_bugs_helper.py help text,
 validate_fixer_summary.py docstring). CHANGELOG entries are historical
 commit records and were left untouched.
+
 
 ## [6.0.0] - 2026-04-18
 
@@ -1457,6 +1537,7 @@ Files touched:
 - scripts/validate_fixer_summary.py docstring updated
 - README.md features, commands table, plugin structure updated
 
+
 ### Fixed
 
 - Fix(reviewer): upgrade model from haiku to sonnet
@@ -1471,6 +1552,7 @@ so this is a pure capability/cost upgrade, not a scope change.
   tree comment)
 - skills/llm-externalizer-scan/SKILL.md: "(Haiku, no Write/Edit)" ->
   "(Sonnet, no Write/Edit)"
+
 
 ## [5.2.1] - 2026-04-18
 
@@ -1495,6 +1577,7 @@ rather than from a scan report):
   path; a missing or multi-line return breaks diff-fixed parsing.
 - Rule 2 — add a pointer to SERENA replace_symbol_body (matches the
   tool-selection rule added earlier).
+
 
 ## [5.2.0] - 2026-04-18
 
@@ -1526,6 +1609,7 @@ drifts or when the function appears twice in the file. SERENA's
 symbol-scoped edit tools address both issues and are already in the
 agent's inherited tool surface.
 
+
 ### Fixed
 
 - Fix(agent): let llm-externalizer-bug-fixer inherit full tool surface
@@ -1543,6 +1627,7 @@ Also update the "Read the referenced code" rule to name Grepika
 (mcp__grepika__search / refs / outline) alongside SERENA and TLDR, so
 the agent explicitly knows which tools to reach for before Grep.
 
+
 ## [5.1.1] - 2026-04-18
 
 ### Documentation
@@ -1551,6 +1636,7 @@ the agent explicitly knows which tools to reach for before Grep.
 
 Mention the new llm-externalizer-bug-fixer agent and bump the
 slash-command count from 4 to 5 (added llm-externalizer-fix-found-bugs).
+
 
 ## [5.1.0] - 2026-04-18
 
@@ -1579,6 +1665,7 @@ The orchestrator never reads scan or fixer content, only paths.
   with keyword-based severity classification; --skip-if-fixer-exists skips
   reports already processed by scan-and-fix
 - README + CHANGELOG updated
+
 
 ## [5.0.0] - 2026-04-18
 
@@ -1661,6 +1748,7 @@ round-trip test from live-extended.test.ts.
 Gitignore: removed uv.lock (scripts are stdlib-only).
 Committing an empty lockfile so tooling has a pin reference.
 
+
 ## [4.1.5] - 2026-04-17
 
 ### Documentation
@@ -1676,12 +1764,12 @@ best-effort LOCAL only.
 
 For real cross-file validation, users must use:
 
-  - mcp__llm-externalizer__check_against_specs (or the --specs
+  * mcp__llm-externalizer__check_against_specs (or the --specs
     flag on /llm-externalizer:llm-externalizer-scan-and-fix): each
     batch includes the authoritative spec, so every reference is
     validated against it instead of against 'whatever the LLM
     thinks exists elsewhere'.
-  - mcp__llm-externalizer__search_existing_implementations
+  * mcp__llm-externalizer__search_existing_implementations
     (or the search-existing-implementations command): purpose-built
     for 'is this already implemented?' cross-codebase hunts,
     comparing each file against a REFERENCE description rather
@@ -1701,6 +1789,7 @@ Changes:
 Verified:
   CPV: 0 CRITICAL / 0 MAJOR / 0 MINOR (WARNING=6 all pre-existing)
   check_references.py --strict: 0 broken, 0 dynamic
+
 
 ## [4.1.4] - 2026-04-17
 
@@ -1735,6 +1824,7 @@ Verified:
   CPV: CRITICAL=0 MAJOR=0 MINOR=0 (WARNING=6 all pre-existing)
   check_references.py --strict: 0 broken, 0 dynamic
 
+
 ## [4.1.3] - 2026-04-17
 
 ### Documentation
@@ -1761,9 +1851,8 @@ Also trimmed the llm-externalizer-scan SKILL.md Examples block
 Resources descriptions to fit the budget.
 
 Verified:
-
-- CPV: 0 CRITICAL, 0 MAJOR (was 3 MAJOR)
-- check_references.py --strict: 0 broken
+  - CPV: 0 CRITICAL, 0 MAJOR (was 3 MAJOR)
+  - check_references.py --strict: 0 broken
 
 - Docs: propagate .md-exclusion + no-structural-validation rules to all scanners
 
@@ -1791,6 +1880,7 @@ Left untouched (no scanning behavior, rule doesn't apply):
   - skills/llm-externalizer-config/SKILL.md
   - skills/llm-externalizer-or-model-info/SKILL.md
 
+
 ### Fixed
 
 - Fix(cpv): satisfy progressive-disclosure TOC + shebang+exec warnings
@@ -1798,26 +1888,27 @@ Left untouched (no scanning behavior, rule doesn't apply):
 CPV blocked the v4.1.3 publish with MAJOR/MINOR on
 skills/llm-externalizer-scan/SKILL.md:
 
-  - TOC-coverage MINOR: my shortened Resources list matched only
+  * TOC-coverage MINOR: my shortened Resources list matched only
     1/19 (then 4/19) of the H2 headings in usage-patterns.md.
     Restored the full 19-item TOC using the EXACT heading
     strings from references/usage-patterns.md.
-  - 5000-char MAJOR (side-effect of the TOC restore): offset
+  * 5000-char MAJOR (side-effect of the TOC restore): offset
     by trimming the `.md files` rule block + `Batching` and
     `answer_mode` paragraphs. Final size 5029 bytes (CPV counts
     ~4950 chars — under the 5000 cap).
 
 Also addressed the shebang-without-executable warnings:
 
-  - chmod +x scripts/validate_report.py
-  - chmod +x scripts/validate_fixer_summary.py
-  - chmod +x scripts/check_references.py
+  * chmod +x scripts/validate_report.py
+  * chmod +x scripts/validate_fixer_summary.py
+  * chmod +x scripts/check_references.py
 
 CPV result: CRITICAL=0 MAJOR=0 MINOR=0 NIT=0 WARNING=6 (all
 remaining warnings are pre-existing / unrelated: mcp-server/
 dir name, 7/8 and 18/19 TOC coverage on other skills, .config/
 dotnet-tools.json backtick false-positive, uv.lock in .gitignore).
 check_references.py --strict -> 0 broken, 0 dynamic.
+
 
 ## [4.1.2] - 2026-04-17
 
@@ -1851,6 +1942,7 @@ and their own validation scripts.
 
 Verified: check_references.py --strict -> 0 broken, 0 dynamic.
 
+
 ## [4.1.1] - 2026-04-17
 
 ### Fixed
@@ -1874,10 +1966,10 @@ concretely what to check for, e.g.:
     /llm-externalizer:configure, /llm-externalizer:scan-and-fix,
     /llm-externalizer:search-existing-implementations and replace with
     the prefixed names /llm-externalizer:llm-externalizer-*."
-  - "Find references to the old agent names llm-ext-fixer or
+  * "Find references to the old agent names llm-ext-fixer or
     llm-ext-reviewer and update to llm-externalizer-fixer / reviewer."
-  - "Verify every skill description accurately reflects its tools."
-  - "Check argument-hints in command frontmatters match the
+  * "Verify every skill description accurately reflects its tools."
+  * "Check argument-hints in command frontmatters match the
     actual arguments the command parses."
 
 When --instructions provides such a rubric, auto-curation includes
@@ -1887,6 +1979,7 @@ instructions, they stay excluded.
 
 Verified: check_references.py --strict -> 31 refs, 0 broken, 0
 dynamic.
+
 
 ## [4.1.0] - 2026-04-17
 
@@ -1928,6 +2021,7 @@ Verified: check_references.py --strict -> 32 refs, 0 broken,
 comma-list rendered as one path — during the commit dance; fixed
 by punctuating.)
 
+
 ## [4.0.2] - 2026-04-17
 
 ### Fixed
@@ -1959,6 +2053,7 @@ Changes to commands/llm-externalizer-scan-and-fix.md:
 
 Verified: check_references.py --strict -> 0 broken, 0 dynamic.
 
+
 ## [4.0.1] - 2026-04-17
 
 ### Documentation
@@ -1972,9 +2067,9 @@ stale reference in the live tree.
 
 README.md:
   - Features list:
-      - `llm-ext-reviewer` -> `llm-externalizer-reviewer`
-      - Added `llm-externalizer-fixer` agent to the feature list
-      - "3 slash commands" -> "4 slash commands" with full prefixed names
+      * `llm-ext-reviewer` -> `llm-externalizer-reviewer`
+      * Added `llm-externalizer-fixer` agent to the feature list
+      * "3 slash commands" -> "4 slash commands" with full prefixed names
   - Verify section: /llm-externalizer:discover -> llm-externalizer-discover
   - Configuration section: /llm-externalizer:configure -> llm-externalizer-configure
   - Commands table: all 4 commands listed with fully prefixed names,
@@ -1993,6 +2088,7 @@ Verified via `python3 scripts/check_references.py --strict`
 (0 broken, 0 dynamic) and an exhaustive grep sweep across all .md /
 .yml / .yaml / .json / .toml / .py files in the live tree — zero
 remaining stale references.
+
 
 ## [4.0.0] - 2026-04-17
 
@@ -2036,6 +2132,7 @@ llm-ext-reviewer to llm-externalizer-fixer / llm-externalizer-reviewer.
 
 Verified: check_references.py --strict -> 29 refs, 0 broken, 0 dynamic.
 ruff check scripts/ -> clean.
+
 
 ## [3.16.0] - 2026-04-17
 
@@ -2085,6 +2182,7 @@ Fixer agent hardening:
     newly-discovered path.
   - Summary filename prefixed with sortable local-timezone
     ISO-8601 timestamp.
+
 
 ## [3.15.2] - 2026-04-15
 
@@ -2165,6 +2263,7 @@ Note: the original index.ts was ~10k lines with scattered helper
 definitions; extracting the grouping module also trims ~270 lines of
 duplicated code from the main file.
 
+
 ## [3.15.1] - 2026-04-15
 
 ### Fixed
@@ -2211,6 +2310,7 @@ Self-audit also verified (false alarms from the ensemble review):
   supplied with mode 0, matching pre-refactor behavior.
 
 Validation: typecheck ok, lint 0 warnings, build ok, 18/18 tests pass.
+
 
 ## [3.15.0] - 2026-04-15
 
@@ -2283,6 +2383,7 @@ Docs touched:
   now documents all three modes and ensemble-vs-free behavior.
 
 Validation: typecheck ok, lint 0, build ok, 18/18 tests pass.
+
 
 ## [3.14.2] - 2026-04-14
 
@@ -2441,6 +2542,7 @@ Verified:
 - npm test 18/18 ✓
 - CLI smoke tests: missing description / missing --in / --help all clean
 
+
 ## [3.14.1] - 2026-04-14
 
 ### Fixed
@@ -2525,6 +2627,7 @@ Verified:
   - npm run build ✓ (fully bundled dist/)
   - npm test 18/18 unit tests pass
 
+
 ## [3.14.0] - 2026-04-14
 
 ### Added
@@ -2583,6 +2686,7 @@ Verified: claude plugin validate . ✓, CPV remote validation ✓
 (CRITICAL=0 MAJOR=0 MINOR=0), npm run typecheck ✓, npm run lint ✓,
 npm run build ✓ (fully bundled dist/), npm test 18/18 ✓.
 
+
 ## [3.13.0] - 2026-04-14
 
 ### Added
@@ -2625,6 +2729,7 @@ now they just run `/search-existing-implementations "desc" src.py
 Verified: claude plugin validate . ✓, CPV remote validation ✓
 (CRITICAL=0 MAJOR=0 MINOR=0).
 
+
 ## [3.12.1] - 2026-04-14
 
 ### Refactored
@@ -2660,8 +2765,8 @@ Forwarded options (same as every other LLM Externalizer command):
 Architecture (unchanged):
   - instructions_files_paths carries sources + diff (server reads
     them once, orchestrator never loads file contents)
-  - input_files_paths is the filtered codebase list (Glob + dedupe,
-    excluding source files and non-code dirs)
+  - input_files_paths is the filtered codebase list (Glob + dedupe
+    + exclude source files + exclude non-code dirs)
   - Auto-batching by the server keeps request count low inside
     max_payload_kb
   - answer_mode: 0 → one .md report per input file, each report
@@ -2669,6 +2774,7 @@ Architecture (unchanged):
 
 Verified: claude plugin validate . ✓, CPV remote validation ✓
 (CRITICAL=0 MAJOR=0 MINOR=0).
+
 
 ## [3.12.0] - 2026-04-14
 
@@ -2714,6 +2820,7 @@ the orchestrator context window.
 Verified: claude plugin validate . ✓, CPV remote validation ✓
 (CRITICAL=0 MAJOR=0 MINOR=0).
 
+
 ## [3.11.0] - 2026-04-12
 
 ### Added
@@ -2753,6 +2860,7 @@ Verified:
 - npm test: 18/18 unit tests pass
 - npm run build: dist rebuilt cleanly with the config.ts changes
 
+
 ### Fixed
 
 - Fix(skill): restore CPV-required sections in scan skill body
@@ -2780,6 +2888,7 @@ Verified: CPV remote validation now reports CRITICAL=0 MAJOR=0
 MINOR=0 (5 pre-existing WARNINGs remain, all structural and
 non-blocking).
 
+
 ## [3.10.0] - 2026-04-12
 
 ### Added
@@ -2804,6 +2913,7 @@ Deferred (design discussion needed): userConfig keychain for
 OPENROUTER_API_KEY, git-subdir marketplace source, dedicated
 code-review agent, context:fork on scan skill.
 
+
 ## [3.9.85] - 2026-04-10
 
 ### Fixed
@@ -2822,6 +2932,7 @@ This replaces the .publish.lock file which was trivially spoofable
   updated docstrings to document ancestry-based verification
 - core.hooksPath set to .githooks (was defaulting to .git/hooks
   which had a broken symlink)
+
 
 ## [3.9.84] - 2026-04-10
 
@@ -2851,6 +2962,7 @@ full raw message regardless of parse success.
 Regenerated CHANGELOG.md for v3.9.83 so the entry now has the
 full 6-item change list, not just the subject. GitHub release
 notes for v3.9.83 updated to match.
+
 
 ### Refactored
 
@@ -2900,6 +3012,7 @@ Key changes from the old flow:
   the full check suite (validation is mandatory even in dry-run),
   then shows what WOULD be published with the auto-detected or
   flag-specified version, then exits without any file mutations.
+
 
 ## [3.9.83] - 2026-04-10
 
@@ -2967,6 +3080,7 @@ Verified: `python3 scripts/publish.py --check-only` now runs 9
 mandatory gates and passes all of them. Any failure in any gate
 aborts publish with a clear per-gate error log in reports_dev/publish/.
 
+
 ## [3.9.82] - 2026-04-10
 
 ### Changed
@@ -3012,6 +3126,7 @@ failure threshold is hit, so a persistent provider outage eventually
 aborts with a proper error instead of looping forever. That's the
 hard safety net.
 
+
 ## [3.9.81] - 2026-04-10
 
 ### Changed
@@ -3033,6 +3148,7 @@ reprints — it doesn't, and Claude Code's markdown renderer strips
 ESC bytes in every form (fenced, unfenced, with any language tag).
 The only rendering pipeline that processes ANSI is the Bash tool
 output pane itself, so we just let that pane do its job.
+
 
 ## [3.9.80] - 2026-04-10
 
@@ -3079,6 +3195,7 @@ New helpers in or-model-info.ts:
 
 Shared between the markdown formatter (formatModelInfoMarkdown)
 and the ANSI table renderer (formatModelInfoTable).
+
 
 ## [3.9.79] - 2026-04-10
 
@@ -3136,6 +3253,7 @@ Verified end-to-end:
 
 CPV: CRITICAL=0 MAJOR=0 MINOR=0.
 
+
 ## [3.9.78] - 2026-04-10
 
 ### Changed
@@ -3174,6 +3292,7 @@ Three OpenRouter model info tools on the MCP now:
   • or_model_info_table  — ANSI-colored Unicode-bordered table
   • or_model_info_json   — raw JSON (stdout or file)
 
+
 ## [3.9.77] - 2026-04-10
 
 ### Changed
@@ -3210,6 +3329,7 @@ CLI help updated:
 Skill SKILL.md lists --json / --raw as a recognized passthrough
 flag and shows the file-output variant in the Examples section.
 
+
 ## [3.9.76] - 2026-04-10
 
 ### Changed
@@ -3236,6 +3356,7 @@ Invocation examples:
   /llm-externalizer:llm-externalizer-or-model-info <model-id> --no-color
   /llm-externalizer:llm-externalizer-or-model-info <model-id> --markdown
 
+
 ## [3.9.75] - 2026-04-10
 
 ### Changed
@@ -3255,6 +3376,7 @@ the CLI with colors ON and reprints the output verbatim.
 Users viewing the rendered transcript see bright cyan borders, green
 capability flags, yellow/red latency percentiles, and the footer
 legend color key as intended.
+
 
 ## [3.9.74] - 2026-04-10
 
@@ -3283,6 +3405,7 @@ Two fixes to the skill instructions:
 
 Also shrunk the Prerequisites section from 6 lines to 2 to keep
 SKILL.md under the 5000-char CPV strict-mode limit.
+
 
 ## [3.9.73] - 2026-04-10
 
@@ -3315,6 +3438,7 @@ Three issues reported from a real skill invocation:
 Also shrunk SKILL.md from 5260 to 4719 chars to stay under CPV's
 5000-char strict-mode limit.
 
+
 ## [3.9.72] - 2026-04-10
 
 ### Changed
@@ -3342,6 +3466,7 @@ Row type updated to [string, string | string[]] — arrays are treated
 as multi-line cells, strings as single-line cells. The rendering loop
 walks the values array and emits a continuation row for each entry
 after the first.
+
 
 ## [3.9.71] - 2026-04-10
 
@@ -3375,6 +3500,7 @@ Verified on:
 - nvidia/nemotron-3-super-120b-a12b:free (reasoning yes)
 - meta-llama/llama-3.3-70b-instruct (reasoning no, 17 endpoints,
   some with null uptime — renders cleanly now)
+
 
 ## [3.9.70] - 2026-04-10
 
@@ -3415,6 +3541,7 @@ were overflowing the right border because the box width was computed
 from title/id only. The architecture line is now included in the
 width calculation.
 
+
 ## [3.9.69] - 2026-04-10
 
 ### Changed
@@ -3449,6 +3576,7 @@ a packed one-liner.
 
 The ModelEndpoint interface grew to cover `tag`, `supports_implicit_caching`,
 and `ModelEndpointPricing.discount`.
+
 
 ## [3.9.68] - 2026-04-10
 
@@ -3501,6 +3629,7 @@ invoke MCP tools from plugins, so the CLI is the portable path.
 The skill's examples show bash invocations, and the skill's
 references/example-output.md gained a new 'Percentiles explained'
 section with a concrete reading of Nemotron's p50/p75/p90/p99.
+
 
 ## [3.9.67] - 2026-04-10
 
@@ -3569,6 +3698,7 @@ Primary use cases:
 The results are live — no caching on the MCP side. Every call hits
 OpenRouter directly. Safe to call repeatedly.
 
+
 ## [3.9.66] - 2026-04-10
 
 ### Changed
@@ -3628,6 +3758,7 @@ for offline reference. Key sections:
   for Nemotron. Caveat: requires stream:true, which we removed, so it
   would need a temporary streaming branch to use for diagnosis.
 
+
 ## [3.9.65] - 2026-04-10
 
 ### Changed
@@ -3677,6 +3808,7 @@ Saved:
 These are the authoritative wire-format references for any future
 changes to the request/response parsing code.
 
+
 ## [3.9.64] - 2026-04-10
 
 ### Changed
@@ -3714,6 +3846,7 @@ The new registry handles the sampling-param differences cleanly.
 applyModelOverrides is wired into both chatCompletionSimple and
 chatCompletionJSON after baseBody construction.
 
+
 ## [3.9.63] - 2026-04-10
 
 ### Changed
@@ -3733,6 +3866,7 @@ scan_folder, compare_files, check_against_specs, check_references,
 check_imports AND the structured-output tools (fix_code, split_file,
 extract_paths). Previously the last group quietly ran without
 reasoning.
+
 
 ## [3.9.62] - 2026-04-10
 
@@ -3779,6 +3913,7 @@ Labeling fix:
   is present (older paths or a real network timeout), the footer still
   appears but with neutral wording.
 
+
 ## [3.9.61] - 2026-04-10
 
 ### Changed
@@ -3802,6 +3937,7 @@ Labeling fix:
   working tree. Added pre-flight working-tree-clean check. Lint output
   redirects to reports_dev/publish/.
 
+
 ## [3.9.60] - 2026-04-10
 
 ### Changed
@@ -3816,6 +3952,7 @@ Labeling fix:
 - All check output redirected to reports_dev/publish/<name>.log
 - reports_dev/ added to .gitignore
 
+
 ## [3.9.59] - 2026-04-10
 
 ### Changed
@@ -3827,11 +3964,13 @@ check_imports (both paths) were missing the format example.
 Now ALL file-handling tools show the LLM the expected XML
 wrapping format.
 
+
 ## [3.9.58] - 2026-04-10
 
 ### Changed
 
 - Fix FILE_FORMAT_EXAMPLE: use {BRACES} for placeholders, not angle brackets
+
 
 ## [3.9.57] - 2026-04-10
 
@@ -3844,6 +3983,7 @@ XML tags to avoid confusion with source files. readFileAsCodeBlock
 accepts a tagPrefix parameter (""|"specs-"). System prompt updated
 to document the spec-specific format.
 
+
 ## [3.9.56] - 2026-04-10
 
 ### Changed
@@ -3853,6 +3993,7 @@ to document the spec-specific format.
 Shows LLMs the exact <filename>/<file-content> wrapping format
 they'll receive, so they can parse multi-file batches reliably.
 Injected before BREVITY_RULES in all file-handling tools.
+
 
 ## [3.9.55] - 2026-04-10
 
@@ -3873,6 +4014,7 @@ Each file now wraps as:
 Cleaner separation of path and content, both unambiguously
 delimited by XML tags. No escaping needed.
 
+
 ## [3.9.54] - 2026-04-10
 
 ### Changed
@@ -3883,11 +4025,13 @@ Format: "File: /path/to/file.ts\n<file>\n```lang\n...\n```\n</file>"
 Path is visible and accessible without XML parsing. System prompts
 updated to reference "line before each file tag".
 
+
 ## [3.9.53] - 2026-04-10
 
 ### Changed
 
 - Simplify XML wrapping: use plain <file>...</file>, keep path in fence header
+
 
 ## [3.9.52] - 2026-04-10
 
@@ -3901,6 +4045,7 @@ batches unambiguously. Quad backticks (min 4, auto-escalate) already
 handle nested code fences safely. XML path attribute is escaped.
 Updated all system prompts to reference the new delimiter.
 
+
 ## [3.9.51] - 2026-04-10
 
 ### Changed
@@ -3910,6 +4055,7 @@ Updated all system prompts to reference the new delimiter.
 - tool-reference.md: remove "up to 120s" from reset description
 - config.ts: "two models" → "three models" in settings template comments
 - Synced tool-reference.md across all 3 skill copies
+
 
 ## [3.9.50] - 2026-04-10
 
@@ -3922,6 +4068,7 @@ non-streaming HTTP response. Prevents MCP inactivity timeout
 on long-running requests (reasoning models on large files).
 Cleared in finally block — no timer leaks.
 
+
 ## [3.9.49] - 2026-04-10
 
 ### Changed
@@ -3931,6 +4078,7 @@ Cleared in finally block — no timer leaks.
 Deleted chatCompletionStreaming (~180 lines), timedRead helper,
 READ_CHUNK_TIMEOUT_MS, reasoningDetected field. All LLM requests
 now use chatCompletionSimple (stream: false, single JSON response).
+
 
 ## [3.9.48] - 2026-04-10
 
@@ -3944,11 +4092,13 @@ token detection. Batch-level heartbeat keeps MCP connection alive.
 Removes reasoning timeout skip logic (dead code with non-streaming).
 chatCompletionStreaming is now unused (kept for reference, will remove).
 
+
 ## [3.9.47] - 2026-04-10
 
 ### Changed
 
 - Remove response_format: text — unsupported models would reject it
+
 
 ## [3.9.46] - 2026-04-10
 
@@ -3961,6 +4111,7 @@ single JSON response. Used automatically when modelOverride is
 set (free mode). No progress tracking, no SSE chunk parsing,
 no reasoning token detection needed. Simpler and more reliable.
 
+
 ## [3.9.45] - 2026-04-09
 
 ### Changed
@@ -3971,6 +4122,7 @@ Skill triggers on "free scan", "scan for free", "cheap scan", etc.
 Parses free-form prompt for path, extensions, exclude dirs, instructions.
 Includes quality warning and reference files.
 Removes the old command (superseded by skill).
+
 
 ## [3.9.44] - 2026-04-09
 
@@ -3984,6 +4136,7 @@ and LLM instructions. Examples:
   /free-scan /path/to/src .ts .py find dead code
   /free-scan skip tests find TODO comments
 
+
 ## [3.9.43] - 2026-04-09
 
 ### Changed
@@ -3992,6 +4145,7 @@ and LLM instructions. Examples:
 
 Uses the free Nemotron 3 Super model (no ensemble, no cost).
 Warns about lower quality and prompt logging.
+
 
 ## [3.9.42] - 2026-04-09
 
@@ -4002,6 +4156,7 @@ Warns about lower quality and prompt logging.
 Free mode uses a significantly weaker model — more false positives,
 missed bugs, shallow analysis. Updated tool description, README
 comparison table, and rules file to set correct expectations.
+
 
 ## [3.9.41] - 2026-04-09
 
@@ -4015,6 +4170,7 @@ comparison table, and rules file to set correct expectations.
 - Added third_model to ensemble profile template
 - Synced tool-reference.md to scan skill copy
 
+
 ## [3.9.40] - 2026-04-09
 
 ### Changed
@@ -4025,6 +4181,7 @@ No global state mutation. OUTPUT_DIR is now const. Per-request
 output_dir override is passed through ProcessOptions/RobustPerFileOpts
 to saveResponse, same pattern as modelOverride. Each Claude Code
 instance uses its own cwd for the default output path.
+
 
 ## [3.9.39] - 2026-04-09
 
@@ -4037,6 +4194,7 @@ passing. modelOverride flows through:
   handler → processFileCheck/robustPerFileProcess → ensembleStreaming
 ensembleStreaming checks modelOverride first, skips ensemble if set.
 No global state mutation for free mode.
+
 
 ## [3.9.38] - 2026-04-09
 
@@ -4052,6 +4210,7 @@ New 'free' parameter on all tools. When true:
 
 Added to KNOWN_MODEL_LIMITS, tool schemas, README with comparison table.
 
+
 ## [3.9.37] - 2026-04-09
 
 ### Changed
@@ -4061,11 +4220,13 @@ Added to KNOWN_MODEL_LIMITS, tool schemas, README with comparison table.
 Explains modes 0/1/2 with pros, cons, response format examples,
 and when to use each. Mode 0 (per-file) is the default.
 
+
 ## [3.9.36] - 2026-04-09
 
 ### Changed
 
 - Fix README: add missing extensions/exclude_dirs params, remove stale temperature ref
+
 
 ## [3.9.35] - 2026-04-09
 
@@ -4081,6 +4242,7 @@ and when to use each. Mode 0 (per-file) is the default.
 - Resolve output_dir to absolute path in tool handler
 - Sync scan skill reference copies from usage skill
 
+
 ## [3.9.34] - 2026-04-09
 
 ### Changed
@@ -4094,11 +4256,13 @@ and when to use each. Mode 0 (per-file) is the default.
 - Report filenames now include source filename for easy identification
 - Updated README, rules, and scan skill docs
 
+
 ## [3.9.33] - 2026-04-08
 
 ### Changed
 
 - Add 'Bug discovery statistics — coming soon' to cost chart
+
 
 ## [3.9.32] - 2026-04-08
 
@@ -4108,6 +4272,7 @@ and when to use each. Mode 0 (per-file) is the default.
 
 Shows savings vs Opus baseline: Sonnet 60%, Ensemble 8%.
 Badges show -40% and -92% savings. Tightened subtitle to one line.
+
 
 ## [3.9.31] - 2026-04-08
 
@@ -4120,6 +4285,7 @@ Previous chart only covered 8 .ts files. Now includes all 50 files
 Opus $4.26, Sonnet $2.56, Ensemble $0.35 (12x cheaper, actual
 OpenRouter billing).
 
+
 ## [3.9.30] - 2026-04-08
 
 ### Changed
@@ -4130,11 +4296,13 @@ Opus is $5/$25 on OpenRouter (not $15/$75 Anthropic direct).
 Chart now shows file count, total KB, and actual ensemble cost
 from OpenRouter billing. Moved chart to top of README under description.
 
+
 ## [3.9.29] - 2026-04-08
 
 ### Changed
 
 - Improve cost comparison chart: show project name, file stats, fix readability
+
 
 ## [3.9.28] - 2026-04-08
 
@@ -4143,6 +4311,7 @@ from OpenRouter billing. Moved chart to top of README under description.
 - Fix scan skill: add required sections, self-contained references
 
 Pass CPV validation: 0 MAJOR, 0 MINOR, 0 CRITICAL.
+
 
 ## [3.9.27] - 2026-04-08
 
@@ -4153,6 +4322,7 @@ Pass CPV validation: 0 MAJOR, 0 MINOR, 0 CRITICAL.
 Shows actual cost per project scan: Opus $2.53, Sonnet $0.51,
 Ensemble $0.08 (32x cheaper). Based on real session data
 scanning 8 TypeScript source files (88K input, 16K output tokens).
+
 
 ## [3.9.26] - 2026-04-08
 
@@ -4167,6 +4337,7 @@ scanning 8 TypeScript source files (88K input, 16K output tokens).
   (115s→600s timeout, 2-model→3-model ensemble, add Qwen pricing,
   fix scan_folder defaults, add model fallback docs).
 
+
 ## [3.9.24] - 2026-04-08
 
 ### Changed
@@ -4179,6 +4350,7 @@ scanning 8 TypeScript source files (88K input, 16K output tokens).
 - Fix timeout: 600s base, extended for reasoning models
 - Remove stale 115s/120s references
 
+
 ## [3.9.23] - 2026-04-08
 
 ### Changed
@@ -4187,6 +4359,7 @@ scanning 8 TypeScript source files (88K input, 16K output tokens).
 
 The free variant was deprecated by OpenRouter in April 2026.
 Remove from KNOWN_MODEL_LIMITS. Paid qwen/qwen3.6-plus remains.
+
 
 ## [3.9.22] - 2026-04-07
 
@@ -4199,6 +4372,7 @@ Add .idea, .vscode, tmp, temp, .gradle, .cargo, vendor, out,
 WALK_DEFAULT_EXCLUDE. These are non-project directories that
 should never be scanned by default.
 
+
 ## [3.9.21] - 2026-04-07
 
 ### Changed
@@ -4208,6 +4382,7 @@ should never be scanned by default.
 Reasoning models (Qwen 3.6 Plus, etc.) need extended thinking time.
 120s was too short — models would time out during the thinking phase.
 600s base timeout + dynamic extension when reasoning tokens are flowing.
+
 
 ## [3.9.20] - 2026-04-07
 
@@ -4222,6 +4397,7 @@ Reasoning models (Qwen 3.6 Plus, etc.) need extended thinking time.
 - Progress notifications show "Reasoning… Xs (model is thinking)" during thinking phase
 - Fixes Qwen 3.6 Plus truncation on large files (was timing out during thinking phase)
 
+
 ## [3.9.19] - 2026-04-07
 
 ### Changed
@@ -4233,6 +4409,7 @@ report findings, max 3 sentences per finding). Prevents
 verbose output that wastes tokens and causes truncation on
 weaker models like Qwen 3.6 Plus.
 
+
 ## [3.9.18] - 2026-04-07
 
 ### Changed
@@ -4242,11 +4419,13 @@ weaker models like Qwen 3.6 Plus.
 Rate limiting is now fully automatic — no max_concurrent,
 max_in_flight, or max_rps profile fields needed.
 
+
 ## [3.9.16] - 2026-04-07
 
 ### Fixed
 
 - Fix: llm-ext help — note absolute paths recommended, report save location
+
 
 ## [3.9.15] - 2026-04-07
 
@@ -4265,6 +4444,7 @@ Rewrote MCP communication from hardcoded timeouts to event-driven:
 
 Tested: --help, discover, chat (LLM round-trip), code_task (file analysis)
 
+
 ## [3.9.14] - 2026-04-07
 
 ### Fixed
@@ -4280,11 +4460,13 @@ Two bugs fixed:
 
 Tested: discover (utility) and chat (LLM round-trip) both work.
 
+
 ## [3.9.13] - 2026-04-07
 
 ### Documentation
 
 - Docs: add copy-paste snippet for enabling llm-ext in plugin agents
+
 
 ## [3.9.12] - 2026-04-07
 
@@ -4298,6 +4480,7 @@ Agents can self-discover available tools and parameters:
 
 Also: supports --key=value syntax, 10min timeout (not MCP-limited),
 JSON array/object parsing for complex parameters.
+
 
 ## [3.9.11] - 2026-04-07
 
@@ -4315,6 +4498,7 @@ any agent call LLM Externalizer tools via Bash:
 Spawns the MCP server as a subprocess, sends one JSON-RPC tool call,
 prints the result (file path), and exits. No config changes needed.
 
+
 ## [3.9.10] - 2026-04-07
 
 ### Added
@@ -4328,6 +4512,7 @@ frontmatter when the plugin's auto-started server is not available
 
 No npm publish needed — just point to the file via node.
 
+
 ## [3.9.9] - 2026-04-07
 
 ### Documentation
@@ -4339,11 +4524,13 @@ cannot use MCP servers (mcpServers frontmatter is stripped). Provide
 3 workarounds: copy to user agents, direct node invocation from
 plugin cache, or project .mcp.json registration.
 
+
 ## [3.9.8] - 2026-04-05
 
 ### Changed
 
 - Revert: remove ensemble deadline — user will extend MCP timeout instead
+
 
 ## [3.9.7] - 2026-04-05
 
@@ -4361,11 +4548,13 @@ any model hasn't responded by the deadline, the result includes
 the models that finished + a "(timed out)" note for the slow one.
 The caller always gets a response within the MCP timeout.
 
+
 ## [3.9.6] - 2026-04-05
 
 ### Fixed
 
 - Fix: add types:["node"] to tsconfig to resolve IDE false positives
+
 
 ## [3.9.5] - 2026-04-05
 
@@ -4380,6 +4569,7 @@ The caller always gets a response within the MCP timeout.
 - README: git-cliff now required, not optional
 - README: add uvx to requirements for CPV validation
 
+
 ## [3.9.4] - 2026-04-05
 
 ### Added
@@ -4393,11 +4583,13 @@ Version is always bumped (marketplace needs version change to
 detect updates). Validation runs on the bumped code. If any
 check fails, the uncommitted version bump is discarded.
 
+
 ## [3.9.3] - 2026-04-05
 
 ### Fixed
 
 - Fix: simplify lock file protocol — existence = validation passed
+
 
 ## [3.9.2] - 2026-04-05
 
@@ -4410,6 +4602,7 @@ check fails, the uncommitted version bump is discarded.
 - uvx/CPV validation is now REQUIRED (no skip if uvx missing)
 - Push is always blocked unless all checks pass with 0 issues
 
+
 ## [3.9.1] - 2026-04-05
 
 ### Added
@@ -4420,6 +4613,7 @@ publish.py gains --check-only flag that runs all validation
 (build, manifest, CPV) without publishing. The pre-push hook
 now delegates to publish.py --check-only instead of duplicating
 checks. Single source of truth for all quality gates.
+
 
 ## [3.9.0] - 2026-04-05
 
@@ -4440,11 +4634,13 @@ Extend ensemble from 2 models to N models:
 
 All commands now produce 3-model reports in ensemble mode.
 
+
 ### Fixed
 
 - Fix: cpv-remote-validate uses 'plugin' not 'cpv-validate'
 
 - Fix: use cpv-remote-validate for isolated CPV execution
+
 
 ## [3.8.8] - 2026-04-02
 
@@ -4459,6 +4655,7 @@ with only folder_path before the handler could process them.
 
 Changed to required: [] with validation inside handlers.
 Updated error messages to mention folder_path alternative.
+
 
 ## [3.8.7] - 2026-04-02
 
@@ -4484,6 +4681,7 @@ Other:
 - LLM_TOOLS_SET moved to module level (was recreated per request)
 - config.ts: settings.yaml gets chmod 0o600 + Windows path sep
 
+
 ## [3.8.6] - 2026-03-30
 
 ### Documentation
@@ -4501,9 +4699,11 @@ Other:
 - SKILL.md: updated examples and resource listing
 - discover.md: references setup.py
 
+
 ### Fixed
 
 - Fix: trim SKILL.md to <4000 chars, embed all 19 usage-patterns TOC headings
+
 
 ## [3.8.5] - 2026-03-30
 
@@ -4528,11 +4728,13 @@ NIT:
 - CC-P3-012: publish.py — use shlex.join for command logging
 - Remove unused os import from publish.py
 
+
 ## [3.8.4] - 2026-03-30
 
 ### Miscellaneous
 
 - Chore: remove old bash pre-push hook (replaced by .githooks/pre-push in Python)
+
 
 ## [3.8.3] - 2026-03-30
 
@@ -4556,6 +4758,7 @@ SHOULD-FIX:
 NIT:
 - CC-P2-017: remove leftover output_dir from compare_files type assertion
 
+
 ## [3.8.2] - 2026-03-30
 
 ### Fixed
@@ -4578,6 +4781,7 @@ SHOULD-FIX:
 - CC-019: add check_against_specs to LLM_TOOLS tracking set so reset
   waits for in-flight spec checks to complete
 
+
 ## [3.8.1] - 2026-03-30
 
 ### Fixed
@@ -4590,6 +4794,7 @@ SHOULD-FIX:
    --others (untracked) — these flags are incompatible in git
 3. Remove unused output_dir parameter from compare_files schema
    (was declared but never wired to saveResponse)
+
 
 ## [3.8.0] - 2026-03-30
 
@@ -4608,6 +4813,7 @@ Three comparison modes:
 All modes support per-group report saving. Git diff mode does
 not use LLM — pure git diff with structured output.
 
+
 ## [3.7.2] - 2026-03-30
 
 ### Added
@@ -4624,11 +4830,13 @@ Replace single git ls-files call with gitLsFilesMultiRepo() that:
 4. Deduplicates results across all repos
 5. Falls back to manual walk if no git repos found at all
 
+
 ## [3.7.1] - 2026-03-30
 
 ### Added
 
 - Feat: add folder_path support to batch_check (last tool missing it)
+
 
 ## [3.7.0] - 2026-03-30
 
@@ -4647,11 +4855,13 @@ Also adds recursive and follow_symlinks options to walkDir and all
 tools that use folder scanning. Symlink following uses realpath-based
 cycle detection to prevent infinite loops.
 
+
 ## [3.6.4] - 2026-03-30
 
 ### Fixed
 
 - Fix: scan_folder use_gitignore description said 'Default: false' but code defaults to true
+
 
 ## [3.6.3] - 2026-03-30
 
@@ -4659,11 +4869,13 @@ cycle detection to prevent infinite loops.
 
 - Fix: raise max_files default from 1000 to 2500
 
+
 ## [3.6.2] - 2026-03-28
 
 ### Fixed
 
 - Fix: explain WHY file grouping saves tokens in all tool descriptions
+
 
 ## [3.6.1] - 2026-03-28
 
@@ -4680,6 +4892,7 @@ Added to all 6 supported tools:
 - Tool description: FILE GROUPING section explaining the syntax
 - chat's input_files_paths: full example of marker syntax
 
+
 ## [3.6.0] - 2026-03-28
 
 ### Added
@@ -4695,13 +4908,16 @@ All scripts use Python stdlib only (no external dependencies).
 Works on macOS, Linux, and Windows without WSL/Cygwin.
 Old .sh files kept for backward compatibility.
 
+
 ### Fixed
 
 - Fix: update last setup.sh reference in README to setup.py
 
+
 ### Miscellaneous
 
 - Chore: remove bash scripts replaced by Python equivalents
+
 
 ## [3.5.3] - 2026-03-28
 
@@ -4725,6 +4941,7 @@ Old .sh files kept for backward compatibility.
 
 - Fix: CPV must pass with 0 issues to allow publish
 
+
 ## [3.5.2] - 2026-03-28
 
 ### Added
@@ -4741,9 +4958,11 @@ Step 1b runs CPV via uvx remote execution:
 
 No local CPV scripts needed — runs from GitHub repo directly.
 
+
 ### Fixed
 
 - Fix: parse CPV output for severity instead of relying on exit codes
+
 
 ## [3.5.1] - 2026-03-28
 
@@ -4759,6 +4978,7 @@ No local CPV scripts needed — runs from GitHub repo directly.
 - Update feature list with grouping, redact_regex, robust batch
 - Update skills description and plugin structure tree
 - Fix tool count (12 → 13)
+
 
 ## [3.5.0] - 2026-03-28
 
@@ -4777,6 +4997,7 @@ zero-padded placeholders for numeric-only matches.
   processFileCheck, and robustPerFileProcess
 - Available on: chat, code_task, batch_check, scan_folder,
   compare_files, check_references, check_imports, check_against_specs
+
 
 ## [3.4.0] - 2026-03-28
 
@@ -4800,9 +5021,11 @@ answer_mode=0, max_retries=3 for equivalent behavior.
 Also fixes: filter group markers from secret scans in chat,
 code_task, and check_against_specs handlers.
 
+
 ### Documentation
 
 - Docs: add max_retries to tool reference, mark batch_check as deprecated
+
 
 ## [3.3.1] - 2026-03-28
 
@@ -4818,6 +5041,7 @@ code_task, and check_against_specs handlers.
   could pass through to processFileCheck)
 - batch_check, check_references, check_imports already had this
   filtering from the initial implementation
+
 
 ## [3.3.0] - 2026-03-28
 
@@ -4838,6 +5062,7 @@ Output format: [group:id] /path/to/report.md (one line per group)
 Backward compatible: flat file lists without markers work unchanged.
 Groups apply only to input_files_paths, not instructions or spec files.
 
+
 ### Documentation
 
 - Docs: add file grouping documentation to skill references
@@ -4846,6 +5071,7 @@ Groups apply only to input_files_paths, not instructions or spec files.
   and supported tools list
 - usage-patterns: grouped file processing example with expected output
 - SKILL.md: updated resource listing
+
 
 ## [3.2.9] - 2026-03-28
 
@@ -4860,6 +5086,7 @@ Groups apply only to input_files_paths, not instructions or spec files.
   decision tree, and skill trigger list (was added in v3.2.8 but
   undocumented in skill files)
 
+
 ### Fixed
 
 - Fix: statusline mkdir race + docs inconsistencies
@@ -4870,6 +5097,7 @@ Groups apply only to input_files_paths, not instructions or spec files.
   scan_folder and check_against_specs, not scan_folder only
 - tool-reference: note check_against_specs uses spec_file_path
   instead of standard 4-field input pattern
+
 
 ## [3.2.8] - 2026-03-26
 
@@ -4892,6 +5120,7 @@ Key design decisions:
 - Spec file included as "source of truth" in every batch
 - Ensemble mode for dual-model analysis
 - Summary with total violation counts by severity
+
 
 ### Fixed
 
@@ -4919,6 +5148,7 @@ limitsBlock() and discover tool still mentioned max_tokens as
 user-configurable. Updated to reflect that output tokens are
 auto-managed (model maximum) and truncation is auto-retried.
 
+
 ### Refactored
 
 - Refactor: rename check_spec → check_against_specs + folder scanning
@@ -4936,6 +5166,7 @@ New parameters:
 
 Either input_files_paths OR folder_path is required (not both).
 No limit on number of files — the packing algorithm handles it.
+
 
 ## [3.2.7] - 2026-03-26
 
@@ -4975,11 +5206,13 @@ whether any model was still truncated after all retries.
 This ensures the output is never silently truncated. The retry logic
 is transparent: each retry is logged to stderr with attempt count.
 
+
 ### Miscellaneous
 
 - Chore: gitignore tldr session artifacts
 
 - Chore: add Serena project config, remove stale worktrees
+
 
 ### Refactored
 
@@ -5001,6 +5234,7 @@ Removed:
 
 The only user-configurable size parameter is max_payload_kb (default 400),
 which controls how files are packed into batches via FFD bin packing.
+
 
 ## [3.2.6] - 2026-03-23
 
@@ -5024,6 +5258,7 @@ Changes:
   via ProcessOptions.maxBytes and direct parameter passing
 - Token estimation: 1 token ≈ 4 bytes (prompt bytes subtracted
   from budget before grouping files)
+
 
 ### Fixed
 
@@ -5094,6 +5329,7 @@ Changes:
 - Token estimation: 1 token ≈ 4 bytes (so 800 KB ≈ 200K tokens)
 - chat + code_task callers report skipped files in output
 
+
 ## [3.2.5] - 2026-03-15
 
 ### Fixed
@@ -5106,6 +5342,7 @@ the old version (3.2.2) to MCP clients while all other files said 3.2.4.
 
 Now publish.py rebuilds dist as step 2b (after version sync, before
 commit) and stages the rebuilt dist files.
+
 
 ## [3.2.3] - 2026-03-15
 
@@ -5125,6 +5362,7 @@ can resolve require("process") in the ESM output.
 
 Build pipeline: tsc --noEmit (type-check) → esbuild (bundle)
 
+
 ## [3.2.2] - 2026-03-15
 
 ### Documentation
@@ -5133,6 +5371,7 @@ Build pipeline: tsc --noEmit (type-check) → esbuild (bundle)
 
 Add `claude plugin marketplace update` command to installation guide.
 Include note about refreshing local cache if plugin is not found.
+
 
 ### Fixed
 
@@ -5212,6 +5451,7 @@ Critical fixes found during audit:
 - publish.py: stage README.md in commit alongside plugin.json + CHANGELOG
 - Regenerate CHANGELOG.md with all 6 prior commits included
 
+
 ## [3.2.1] - 2026-03-15
 
 ### Changed
@@ -5277,4 +5517,6 @@ Components:
 - commands/configure.md: Profile management command
 - scripts/setup.sh: Build script (npm install + tsc)
 - scripts/install-statusline.sh: Optional statusline integration
+
+
 
