@@ -631,14 +631,28 @@ Set `model:` to whatever ID your server advertises at its `/v1/models` endpoint.
 
 ### Optional: statusline
 
-Adds model name, context usage, and cost to the Claude Code status bar.
+Adds a multi-tier status bar with: model name, context-window bar, **live OpenRouter credit balance**, MCP tokens & cost, git branch, and Claude Code 5-hour / 7-day usage limits. Width-aware (1 line at ≥ 184 cols → 6 lines under 65 cols), per-section error isolation, no external dependencies.
+
+Easiest way — invoke the bundled slash command from inside Claude Code:
+
+```text
+/llm-externalizer:llm-externalizer-install-statusline
+```
+
+Manual install (cross-platform Python):
 
 <details>
 <summary>macOS / Linux</summary>
 
 ```bash
-# Install the statusline integration
+# Default 3-second refresh cadence (re-tiers within 3 s of a terminal resize)
 python3 "$CLAUDE_PLUGIN_ROOT/scripts/install_statusline.py"
+
+# Or override the refresh cadence
+REFRESH_INTERVAL=5 python3 "$CLAUDE_PLUGIN_ROOT/scripts/install_statusline.py"
+
+# Bash-only equivalent (same behaviour, identical settings.json output)
+bash "$CLAUDE_PLUGIN_ROOT/scripts/statusline/install.sh"
 ```
 </details>
 
@@ -646,10 +660,14 @@ python3 "$CLAUDE_PLUGIN_ROOT/scripts/install_statusline.py"
 <summary>Windows (PowerShell)</summary>
 
 ```powershell
-# Install the statusline integration
 python3 "$env:CLAUDE_PLUGIN_ROOT\scripts\install_statusline.py"
 ```
 </details>
+
+> [!NOTE]
+> The OpenRouter remaining-credit panel (🏦) only renders when `OPENROUTER_API_KEY` is exported in your shell environment — the statusline runs as a fresh subprocess on every refresh and does not inherit the plugin's keychain-stored `userConfig.openrouter_api_key`. Add the key to your shell rc (zsh/bash/fish) if you want the budget panel.
+
+See `scripts/statusline/README.md` for the full feature matrix and width-tiering details.
 
 ---
 
