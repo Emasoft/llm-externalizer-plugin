@@ -203,13 +203,17 @@ Pick **one** of the following four options.
 <details open>
 <summary><b>A. OpenRouter (ensemble — recommended for best quality, paid)</b></summary>
 
-Set your OpenRouter key as an environment variable so the MCP server can read it.
+You have **three ways** to give the plugin your OpenRouter key. They are listed in order of preference — the first is **strongly recommended**.
+
+#### 1. Shell environment variable (recommended)
+
+Export `OPENROUTER_API_KEY` in your shell rc file. **Every** consumer in this plugin picks it up automatically: the MCP server, the statusline (🏦 remaining-credit panel), the `llm-externalizer` CLI, and any subprocess Claude Code spawns. Nothing else to configure.
 
 <details open>
-<summary>macOS / Linux (bash / zsh)</summary>
+<summary>macOS / Linux (bash / zsh / fish)</summary>
 
 ```bash
-# Put this in ~/.zshrc or ~/.bashrc so it persists across sessions
+# Put this in ~/.zshrc, ~/.bashrc, or ~/.config/fish/config.fish
 export OPENROUTER_API_KEY="sk-or-v1-..."
 ```
 </details>
@@ -231,14 +235,41 @@ setx OPENROUTER_API_KEY "sk-or-v1-..."
 ```
 </details>
 
-Alternatively, store it in the Claude Code keychain so it's managed per-plugin:
+#### 2. settings.yaml `api_key` field (supported, not recommended)
+
+You can hard-code the key (or a different env-var reference) in a profile inside `~/.llm-externalizer/settings.yaml`:
+
+```yaml
+profiles:
+  remote-ensemble-geminigrok:
+    mode: remote-ensemble
+    api: openrouter-remote
+    api_key: sk-or-v1-...        # literal — do NOT commit this file
+    # api_key: $MY_CUSTOM_VAR    # or a different env-var name
+```
+
+Why this is **not** recommended: the statusline and any other subprocess that does not parse settings.yaml (CLI calls, ad-hoc scripts) will not see the key, so the 🏦 remaining-credit panel stays blank. Also: a literal key in a YAML file is one careless `git add` away from a leak.
+
+#### 3. Claude Code plugin keychain (supported, not recommended)
+
+Store the key in the OS keychain via Claude Code:
 
 ```bash
 # Opens an interactive TUI; paste the key when prompted
 claude plugin configure llm-externalizer
 ```
 
-The default profile `remote-ensemble` works out of the box once the key is set.
+Claude Code exports the value to the MCP server as `CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY`; the server's `resolveEnvValue()` transparently maps it onto `OPENROUTER_API_KEY`. **But** that mapping only happens inside the MCP server process tree — the statusline subprocess and ad-hoc CLI calls run outside it and will not see the key, so the 🏦 panel stays blank.
+
+#### Auth precedence
+
+When more than one source is set, the resolution order is:
+
+1. Shell env `OPENROUTER_API_KEY` (or any env var the profile's `api_key` points at via `$VAR` syntax)
+2. Literal value in `settings.yaml::profiles.<name>.api_key`
+3. Claude Code keychain (`userConfig.openrouter_api_key`)
+
+The default profile `remote-ensemble-geminigrok` works out of the box once any one of these is set.
 </details>
 
 <details>
@@ -627,7 +658,7 @@ Set `model:` to whatever ID your server advertises at its `/v1/models` endpoint.
 | `VLLM_API_KEY` | `vllm-local` preset |
 
 > [!NOTE]
-> Auth is auto-detected from shell env at MCP-server startup. Profile fields `api_key` / `api_token` can override with `$OTHER_VAR` or a literal string. The plugin's `userConfig.openrouter_api_key` (set via `claude plugin configure llm-externalizer`) stores the key in the system keychain and transparently exports it as `OPENROUTER_API_KEY`.
+> The **shell environment variable is the recommended way** to provide every key listed above. Both the MCP server and the statusline subprocess inherit it automatically, and the `llm-externalizer` CLI sees the same value with no extra plumbing. Profile-level `api_key` / `api_token` fields and the Claude Code keychain (`userConfig.openrouter_api_key`) are supported as fallbacks but only the MCP server sees them — the statusline's 🏦 panel stays blank, and ad-hoc CLI calls won't pick the key up. See [First run § A. OpenRouter](#first-run) for the full precedence list and the trade-offs.
 
 ### Optional: statusline
 
@@ -665,7 +696,7 @@ python3 "$env:CLAUDE_PLUGIN_ROOT\scripts\install_statusline.py"
 </details>
 
 > [!NOTE]
-> The OpenRouter remaining-credit panel (🏦) only renders when `OPENROUTER_API_KEY` is exported in your shell environment — the statusline runs as a fresh subprocess on every refresh and does not inherit the plugin's keychain-stored `userConfig.openrouter_api_key`. Add the key to your shell rc (zsh/bash/fish) if you want the budget panel.
+> The OpenRouter remaining-credit panel (🏦) only renders when `OPENROUTER_API_KEY` is exported in your shell environment. The statusline runs as a fresh subprocess on every refresh, so the plugin's keychain (`userConfig.openrouter_api_key`) and the per-profile `api_key` field in `settings.yaml` are **not visible** to it — see [First run § A. OpenRouter](#first-run) for why the shell env is the only way to get every consumer (MCP, statusline, CLI) to share the same key.
 
 See `scripts/statusline/README.md` for the full feature matrix and width-tiering details.
 
