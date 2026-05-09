@@ -368,10 +368,13 @@ function compareValues(
     case "LIKE": {
       if (typeof a !== "string" || typeof expected !== "string") return false;
       // SQLite LIKE: % = any, _ = single. Approximate via a regex.
-      // The regex-meta escape excludes `%` and `_` so we can substitute them next.
+      // Must escape every regex meta-char EXCEPT `%` and `_` (which we
+      // substitute next). The class mirrors `regexEscape` at the top of
+      // this file — including `*` and `?` so a value like `"*test"` or
+      // `"a?b"` doesn't blow up `new RegExp` with "nothing to repeat".
       const re = new RegExp(
         `^${expected
-          .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+          .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
           .replace(/%/g, ".*")
           .replace(/_/g, ".")}$`,
         "i",
@@ -388,10 +391,15 @@ function ftsOnly(
   jobId: string,
   query: string,
   limit: number,
+  offset: number,
 ): { hits: SearchHit[]; total_examined: number } {
-  const ftsHits = reg.searchFtsByJob(jobId, query, limit);
+  // FTS5 returns rows in bm25 order. To honor `offset` we have to fetch
+  // `limit + offset` and slice — the registry's FTS helper has no native
+  // offset. Higher caps would require pushing OFFSET into the SQL prepare.
+  const ftsHits = reg.searchFtsByJob(jobId, query, limit + offset);
+  const paged = ftsHits.slice(offset, offset + limit);
   const out: SearchHit[] = [];
-  for (const h of ftsHits) {
+  for (const h of paged) {
     const fileRow = reg.getByFingerprint(h.file_fingerprint);
     const result = reg.getResult(jobId, h.file_fingerprint);
     if (!fileRow || !result) continue;
@@ -414,22 +422,24 @@ function combined(
   query: string,
   filters: SearchFilter[],
   limit: number,
+  offset: number,
 ): { hits: SearchHit[]; total_examined: number } {
   // FTS first to get a ranked candidate list, then narrow by structured
-  // filters in JS. Pull more candidates than `limit` because some will
-  // be dropped by the structured filter.
-  const ftsCandidates = reg.searchFtsByJob(jobId, query, limit * 5);
+  // filters in JS. Pull more candidates than `limit + offset` because some
+  // will be dropped by the structured filter; the 5x multiplier is the
+  // existing slack for the structured-filter dropout, scaled by the page
+  // window so `offset` works without mid-page truncation.
+  const ftsCandidates = reg.searchFtsByJob(jobId, query, (limit + offset) * 5);
   const examined = ftsCandidates.length;
-  const out: SearchHit[] = [];
+  const matched: SearchHit[] = [];
   for (const h of ftsCandidates) {
-    if (out.length >= limit) break;
     const result = reg.getResult(jobId, h.file_fingerprint);
     if (!result) continue;
     const parsed = parseResultJson(result.result_json);
     if (!filters.every((f) => evaluateFilter(parsed, f))) continue;
     const fileRow = reg.getByFingerprint(h.file_fingerprint);
     if (!fileRow) continue;
-    out.push({
+    matched.push({
       short_id: h.short_id,
       file_path: fileRow.file_path,
       file_fingerprint: h.file_fingerprint,
@@ -438,7 +448,9 @@ function combined(
       snippet: h.snippet,
       result: parsed,
     });
+    if (matched.length >= limit + offset) break;
   }
+  const out = matched.slice(offset, offset + limit);
   return { hits: out, total_examined: examined };
 }
 
@@ -476,6 +488,15 @@ export function massScoutSearch(
 ): SearchResponse {
   const limit = q.limit ?? 50;
   const offset = q.offset ?? 0;
+
+  // forceRegex contract: requires `regex` OR a `query` to attempt a named
+  // pattern match. Without either there is nothing to force — falling
+  // through to FTS / list-all would silently swallow the user's intent.
+  if (q.forceRegex && q.regex === undefined && !q.query) {
+    throw new Error(
+      "mass_scout_search: forceRegex set but no regex or query provided",
+    );
+  }
 
   // 1. Explicit regex (highest priority).
   if (q.regex !== undefined) {
@@ -562,6 +583,7 @@ export function massScoutSearch(
       q.query,
       q.filters,
       limit,
+      offset,
     );
     return {
       jobId: q.jobId,
@@ -591,7 +613,13 @@ export function massScoutSearch(
 
   // 6. FTS-only.
   if (q.query) {
-    const { hits, total_examined } = ftsOnly(reg, q.jobId, q.query, limit);
+    const { hits, total_examined } = ftsOnly(
+      reg,
+      q.jobId,
+      q.query,
+      limit,
+      offset,
+    );
     return {
       jobId: q.jobId,
       mode: "fts",

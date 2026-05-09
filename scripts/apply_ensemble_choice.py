@@ -44,7 +44,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
-from ruamel.yaml import YAML
+from ruamel.yaml import YAML  # pyright: ignore[reportMissingImports]  # PEP 723 inline dep — uv resolves at runtime
 
 CONFIG_DIR = Path.home() / ".llm-externalizer"
 SETTINGS_PATH = CONFIG_DIR / "settings.yaml"

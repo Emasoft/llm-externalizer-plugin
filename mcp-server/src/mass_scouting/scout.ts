@@ -340,7 +340,16 @@ export async function runScoutJob(
       totalRetries += Math.max(0, r.attempts - 1);
       totalCost += r.costUsd;
       if (!r.ok) {
-        // Smoke test failed — finalize with what we have and bail.
+        // Smoke test failed — record the skipped row so the registry stays
+        // consistent with the fan-out failure path, then finalize with what
+        // we have and bail.
+        reg.recordSkipped({
+          short_id: row.short_id,
+          file_path: row.file_path,
+          reason: `scout smoke-test failed after ${r.attempts} attempt(s): ${r.error}`,
+          phase: "scout",
+          size_bytes: row.file_size_bytes,
+        });
         reg.finalizeJob(opts.jobId, {
           files_total: allRows.length,
           files_ok: filesOk,

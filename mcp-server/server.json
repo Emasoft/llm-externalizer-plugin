@@ -8,11 +8,9 @@
       "registryType": "npm",
       "identifier": "llm-externalizer",
       "version": "9.4.2",
-      "transport": [
-        {
-          "type": "stdio"
-        }
-      ],
+      "transport": {
+        "type": "stdio"
+      },
       "environmentVariables": [
         {
           "name": "OPENROUTER_API_KEY",

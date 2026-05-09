@@ -14192,9 +14192,16 @@ function sanitizeGroupId(raw) {
   return cleaned.length > 0 ? cleaned.slice(0, 60) : "auto";
 }
 function uniqueGroupId(raw, counts) {
-  const n = counts.get(raw) ?? 0;
-  counts.set(raw, n + 1);
-  return n === 0 ? raw : `${raw}_${n + 1}`;
+  let n = counts.get(raw) ?? 0;
+  while (true) {
+    const candidate = n === 0 ? raw : `${raw}_${n + 1}`;
+    n += 1;
+    if (!counts.has(candidate)) {
+      counts.set(raw, n);
+      counts.set(candidate, 1);
+      return candidate;
+    }
+  }
 }
 function statFileForGrouping(p) {
   const parent = dirname(p);
@@ -28673,7 +28680,7 @@ function renderTypeForPrompt(t) {
     }
     case "array_object": {
       const sub = t.item_fields.map((f) => `${f.name}:${renderTypeForPrompt(f.type)}`).join(", ");
-      const lengthHint = t.exact_items !== void 0 ? `, EXACTLY ${t.exact_items} items` : t.min_items !== void 0 && t.max_items !== void 0 ? `, ${t.min_items}..${t.max_items} items` : t.max_items !== void 0 ? `, max ${t.max_items} items` : "";
+      const lengthHint = t.exact_items !== void 0 ? `, EXACTLY ${t.exact_items} items` : t.min_items !== void 0 && t.max_items !== void 0 ? `, ${t.min_items}..${t.max_items} items` : t.max_items !== void 0 ? `, max ${t.max_items} items` : t.min_items !== void 0 ? `, min ${t.min_items} items` : "";
       return `array of objects {${sub}}${lengthHint} \u2014 POSITIONAL (no dedup, original order preserved)`;
     }
   }
@@ -28750,9 +28757,11 @@ function defaultForType(t) {
     case "array_enum":
       return [];
     case "int":
-      return t.min ?? 0;
-    case "number":
-      return t.min ?? 0;
+    case "number": {
+      let def = t.min ?? 0;
+      if (t.max !== void 0 && def > t.max) def = t.max;
+      return def;
+    }
     case "array_object":
       return [];
   }
@@ -28927,7 +28936,7 @@ function repairOneField(raw, f, repairs) {
         n = Math.round(Number(raw));
         repairs.push(`${f.name}: parsed string ${JSON.stringify(raw)} \u2192 ${n}`);
       } else {
-        const def = t.min ?? 0;
+        const def = defaultForType(t);
         repairs.push(`${f.name}: not a number (${typeof raw}) \u2014 defaulting to ${def}`);
         return def;
       }
@@ -28949,7 +28958,7 @@ function repairOneField(raw, f, repairs) {
         n = Number(raw);
         repairs.push(`${f.name}: parsed string ${JSON.stringify(raw)} \u2192 ${n}`);
       } else {
-        const def = t.min ?? 0;
+        const def = defaultForType(t);
         repairs.push(`${f.name}: not a number (${typeof raw}) \u2014 defaulting to ${def}`);
         return def;
       }
@@ -29014,6 +29023,19 @@ function repairOneField(raw, f, repairs) {
           repairs.push(`${f.name}: padded ${items.length - padCount} \u2192 ${exact} with default items`);
         }
       } else {
+        if (t.min_items !== void 0 && items.length < t.min_items) {
+          const padCount = t.min_items - items.length;
+          for (let i = 0; i < padCount; i++) {
+            const padItem = {};
+            for (const sf of innerSubfields) {
+              if (sf.required) padItem[sf.name] = defaultForType(sf.type);
+            }
+            items.push(padItem);
+          }
+          repairs.push(
+            `${f.name}: padded ${items.length - padCount} \u2192 ${t.min_items} with default items`
+          );
+        }
         if (t.max_items !== void 0 && items.length > t.max_items) {
           repairs.push(
             `${f.name}: trimmed ${items.length} \u2192 ${t.max_items} items`
@@ -30056,7 +30078,7 @@ function openRegistry(opts) {
 
 // src/mass_scouting/preclassify.ts
 import { basename as basename3, extname as extname2 } from "node:path";
-var HEAD_SAMPLE_BYTES = 4096;
+var HEAD_SAMPLE_BYTES = 8192;
 var BINARY_NULL_PROBE_BYTES = 8192;
 var RULES_BASENAMES = /* @__PURE__ */ new Set([
   "CLAUDE.md",
@@ -30356,6 +30378,13 @@ async function runScoutJob(reg, opts, fetchImpl) {
       totalRetries += Math.max(0, r.attempts - 1);
       totalCost += r.costUsd;
       if (!r.ok) {
+        reg.recordSkipped({
+          short_id: row.short_id,
+          file_path: row.file_path,
+          reason: `scout smoke-test failed after ${r.attempts} attempt(s): ${r.error}`,
+          phase: "scout",
+          size_bytes: row.file_size_bytes
+        });
         reg.finalizeJob(opts.jobId, {
           files_total: allRows.length,
           files_ok: filesOk,
@@ -30718,17 +30747,18 @@ function compareValues(actual, op, expected) {
     case "LIKE": {
       if (typeof a !== "string" || typeof expected !== "string") return false;
       const re = new RegExp(
-        `^${expected.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/%/g, ".*").replace(/_/g, ".")}$`,
+        `^${expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/%/g, ".*").replace(/_/g, ".")}$`,
         "i"
       );
       return re.test(a);
     }
   }
 }
-function ftsOnly(reg, jobId, query, limit) {
-  const ftsHits = reg.searchFtsByJob(jobId, query, limit);
+function ftsOnly(reg, jobId, query, limit, offset) {
+  const ftsHits = reg.searchFtsByJob(jobId, query, limit + offset);
+  const paged = ftsHits.slice(offset, offset + limit);
   const out = [];
-  for (const h of ftsHits) {
+  for (const h of paged) {
     const fileRow = reg.getByFingerprint(h.file_fingerprint);
     const result = reg.getResult(jobId, h.file_fingerprint);
     if (!fileRow || !result) continue;
@@ -30744,19 +30774,18 @@ function ftsOnly(reg, jobId, query, limit) {
   }
   return { hits: out, total_examined: ftsHits.length };
 }
-function combined(reg, jobId, query, filters, limit) {
-  const ftsCandidates = reg.searchFtsByJob(jobId, query, limit * 5);
+function combined(reg, jobId, query, filters, limit, offset) {
+  const ftsCandidates = reg.searchFtsByJob(jobId, query, (limit + offset) * 5);
   const examined = ftsCandidates.length;
-  const out = [];
+  const matched = [];
   for (const h of ftsCandidates) {
-    if (out.length >= limit) break;
     const result = reg.getResult(jobId, h.file_fingerprint);
     if (!result) continue;
     const parsed = parseResultJson(result.result_json);
     if (!filters.every((f) => evaluateFilter(parsed, f))) continue;
     const fileRow = reg.getByFingerprint(h.file_fingerprint);
     if (!fileRow) continue;
-    out.push({
+    matched.push({
       short_id: h.short_id,
       file_path: fileRow.file_path,
       file_fingerprint: h.file_fingerprint,
@@ -30765,7 +30794,9 @@ function combined(reg, jobId, query, filters, limit) {
       snippet: h.snippet,
       result: parsed
     });
+    if (matched.length >= limit + offset) break;
   }
+  const out = matched.slice(offset, offset + limit);
   return { hits: out, total_examined: examined };
 }
 function parseResultJson(s) {
@@ -30789,6 +30820,11 @@ function resultRowToHit(reg, r, mode) {
 function massScoutSearch(reg, q) {
   const limit = q.limit ?? 50;
   const offset = q.offset ?? 0;
+  if (q.forceRegex && q.regex === void 0 && !q.query) {
+    throw new Error(
+      "mass_scout_search: forceRegex set but no regex or query provided"
+    );
+  }
   if (q.regex !== void 0) {
     let pattern;
     try {
@@ -30864,7 +30900,8 @@ function massScoutSearch(reg, q) {
       q.jobId,
       q.query,
       q.filters,
-      limit
+      limit,
+      offset
     );
     return {
       jobId: q.jobId,
@@ -30890,7 +30927,13 @@ function massScoutSearch(reg, q) {
     };
   }
   if (q.query) {
-    const { hits: hits2, total_examined: total_examined2 } = ftsOnly(reg, q.jobId, q.query, limit);
+    const { hits: hits2, total_examined: total_examined2 } = ftsOnly(
+      reg,
+      q.jobId,
+      q.query,
+      limit,
+      offset
+    );
     return {
       jobId: q.jobId,
       mode: "fts",
@@ -32207,6 +32250,7 @@ async function runChain(args, opts) {
   reg.close();
   const reg2 = openRegistry({ path: dbPath });
   const compiled = compileFieldset(fs);
+  const workers = flags["workers"] ? Number(flags["workers"]) : 4;
   if (!reg2.getJob(newJob)) {
     reg2.createJob({
       job_id: newJob,
@@ -32214,7 +32258,7 @@ async function runChain(args, opts) {
       fieldset_json: JSON.stringify(fs),
       json_schema: JSON.stringify(compiled.jsonSchema),
       model,
-      workers: 1,
+      workers,
       source_root: `chain:${sourceJob}`,
       bucket_filter: null,
       notes: `chained from ${sourceJob} via filter ${filterRaw}`
@@ -32239,7 +32283,7 @@ async function runChain(args, opts) {
         pricing,
         model,
         apiKey,
-        workers: flags["workers"] ? Number(flags["workers"]) : 4,
+        workers,
         maxRetries: flags["max-retries"] ? Number(flags["max-retries"]) : 1,
         bucket: SENTINEL,
         smokeTest: false,
@@ -32392,6 +32436,7 @@ function runExport(args, opts) {
   const stamp = isoTimestampLocal();
   const filename = `${stamp}-export-${slugify2(jobId)}.${format}`;
   const path = join(reportDir, filename);
+  writeFileSync(path, "", "utf-8");
   if (format === "jsonl") {
     for (const r of rows) {
       appendFileSync2(path, JSON.stringify(r) + "\n", "utf-8");
@@ -34898,6 +34943,7 @@ function walkDir(dirPath, options) {
   if (options?.useGitignore) {
     const gitResults = gitLsFilesMultiRepo(dirPath, recursive);
     if (gitResults !== null) {
+      const extraExcludeSet = new Set(options?.exclude ?? []);
       const results2 = [];
       for (const fullPath of gitResults) {
         if (results2.length >= maxFiles) break;
@@ -34905,6 +34951,12 @@ function walkDir(dirPath, options) {
         if (extensions) {
           const ext = extname4(fullPath).toLowerCase();
           if (!extensions.includes(ext)) continue;
+        }
+        if (extraExcludeSet.size > 0) {
+          const rel = fullPath.startsWith(dirPath) ? fullPath.slice(dirPath.length) : fullPath;
+          const segments = rel.split("/").filter((s) => s.length > 0);
+          const dirSegments = segments.slice(0, -1);
+          if (dirSegments.some((seg) => extraExcludeSet.has(seg))) continue;
         }
         results2.push(fullPath);
       }

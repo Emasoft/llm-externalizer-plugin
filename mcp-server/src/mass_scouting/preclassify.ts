@@ -22,7 +22,7 @@ import { basename, extname } from "node:path";
 import type { ClassifierFields, Registry, RegistryRow } from "./registry";
 
 /** Inspect this many bytes of the file head when classifying. */
-export const HEAD_SAMPLE_BYTES = 4_096;
+export const HEAD_SAMPLE_BYTES = 8_192;
 
 const BINARY_NULL_PROBE_BYTES = 8_192;
 

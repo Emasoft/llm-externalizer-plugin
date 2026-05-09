@@ -661,7 +661,9 @@ function renderTypeForPrompt(t: FieldType): string {
             ? `, ${t.min_items}..${t.max_items} items`
             : t.max_items !== undefined
               ? `, max ${t.max_items} items`
-              : "";
+              : t.min_items !== undefined
+                ? `, min ${t.min_items} items`
+                : "";
       return `array of objects {${sub}}${lengthHint} — POSITIONAL (no dedup, original order preserved)`;
     }
   }
@@ -754,9 +756,14 @@ function defaultForType(t: FieldType): unknown {
     case "array_enum":
       return [];
     case "int":
-      return t.min ?? 0;
-    case "number":
-      return t.min ?? 0;
+    case "number": {
+      // Prefer the lower bound (or 0 if unbounded below); but never exceed
+      // the upper bound — otherwise a fieldset with only a negative `max`
+      // would default outside its own schema range.
+      let def = t.min ?? 0;
+      if (t.max !== undefined && def > t.max) def = t.max;
+      return def;
+    }
     case "array_object":
       return [];
   }
@@ -942,7 +949,10 @@ function repairOneField(
         n = Math.round(Number(raw));
         repairs.push(`${f.name}: parsed string ${JSON.stringify(raw)} → ${n}`);
       } else {
-        const def = (t.min ?? 0) as number;
+        // Use defaultForType so the default also respects an upper bound when
+        // `min` is undefined and `max` is negative — otherwise we'd return 0
+        // and break the schema's own constraints.
+        const def = defaultForType(t) as number;
         repairs.push(`${f.name}: not a number (${typeof raw}) — defaulting to ${def}`);
         return def;
       }
@@ -964,7 +974,10 @@ function repairOneField(
         n = Number(raw);
         repairs.push(`${f.name}: parsed string ${JSON.stringify(raw)} → ${n}`);
       } else {
-        const def = (t.min ?? 0) as number;
+        // Use defaultForType so the default also respects an upper bound when
+        // `min` is undefined and `max` is negative — otherwise we'd return 0
+        // and break the schema's own constraints.
+        const def = defaultForType(t) as number;
         repairs.push(`${f.name}: not a number (${typeof raw}) — defaulting to ${def}`);
         return def;
       }
@@ -1033,6 +1046,21 @@ function repairOneField(
           repairs.push(`${f.name}: padded ${items.length - padCount} → ${exact} with default items`);
         }
       } else {
+        if (t.min_items !== undefined && items.length < t.min_items) {
+          // Pad with default items so the compiled `minItems` schema bound
+          // is satisfied. Mirrors the `exact_items` padding above.
+          const padCount = t.min_items - items.length;
+          for (let i = 0; i < padCount; i++) {
+            const padItem: Record<string, unknown> = {};
+            for (const sf of innerSubfields) {
+              if (sf.required) padItem[sf.name] = defaultForType(sf.type);
+            }
+            items.push(padItem);
+          }
+          repairs.push(
+            `${f.name}: padded ${items.length - padCount} → ${t.min_items} with default items`,
+          );
+        }
         if (t.max_items !== undefined && items.length > t.max_items) {
           repairs.push(
             `${f.name}: trimmed ${items.length} → ${t.max_items} items`,

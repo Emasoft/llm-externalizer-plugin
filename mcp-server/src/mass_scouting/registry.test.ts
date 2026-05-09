@@ -16,6 +16,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { openRegistry, Registry, SCHEMA_VERSION } from "./registry";
 
 let reg: Registry;
@@ -65,16 +68,34 @@ describe("openRegistry", () => {
   });
 
   it("is idempotent — running migrations a second time is a no-op", () => {
-    /** Re-opening an existing registry must not duplicate tables or rows. */
-    reg.close();
-    reg = openRegistry({ path: ":memory:" });
-    const reg2 = openRegistry({ path: ":memory:" });
-    const rows = reg2.db
-      .prepare("SELECT COUNT(*) AS n FROM schema_version")
-      .get() as { n: number };
-    // Each migration leaves exactly one row, regardless of how many opens.
-    expect(rows.n).toBe(SCHEMA_VERSION);
-    reg2.close();
+    /**
+     * Re-opening an existing registry must not duplicate tables or rows.
+     * `:memory:` databases are unique per connection, so we use a real
+     * temp file: open once to apply migrations, close, then re-open the
+     * same file to exercise the "already at SCHEMA_VERSION" branch in
+     * applyMigrations.
+     */
+    const dir = mkdtempSync(join(tmpdir(), "registry-idempotent-"));
+    const dbPath = join(dir, "reg.db");
+    try {
+      const first = openRegistry({ path: dbPath });
+      const firstRows = first.db
+        .prepare("SELECT COUNT(*) AS n FROM schema_version")
+        .get() as { n: number };
+      expect(firstRows.n).toBe(SCHEMA_VERSION);
+      first.close();
+
+      // Second open hits the SAME file — applyMigrations must skip every
+      // already-applied migration and leave the row count unchanged.
+      const second = openRegistry({ path: dbPath });
+      const secondRows = second.db
+        .prepare("SELECT COUNT(*) AS n FROM schema_version")
+        .get() as { n: number };
+      expect(secondRows.n).toBe(SCHEMA_VERSION);
+      second.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

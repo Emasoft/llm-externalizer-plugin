@@ -145,6 +145,23 @@ def _is_excluded(path: Path, root: Path) -> bool:
     return any(part in _EXCLUDE_PARTS for part in rel.parts)
 
 
+def _is_excluded_target(path: Path, root: Path) -> bool:
+    """True only when `path` resolves inside an excluded subdirectory of `root`.
+
+    Differs from `_is_excluded`: paths that resolve OUTSIDE `root` (e.g.
+    `../../../<sensitive-system-file>` traversal targets) return False here, so the caller
+    falls through to the existence/`_exists_within` check and the reference is
+    reported as BROKEN instead of being silently skipped.
+    """
+    try:
+        rel = path.resolve().relative_to(root)
+    except ValueError:
+        return False
+    if path.name in _EXCLUDE_FILE_BASENAMES:
+        return True
+    return any(part in _EXCLUDE_PARTS for part in rel.parts)
+
+
 def _iter_scan_files(root: Path):
     for path in root.rglob("*"):
         if not path.is_file():
@@ -200,21 +217,23 @@ def _extract_references(text: str, source_file: Path, root: Path) -> list[tuple[
 
     for m in _PLUGIN_ROOT_RE.finditer(text):
         raw = m.group(0)
-        target_rel = _strip_url_fragment(_strip_trailing_punct(m.group("path")))
+        # Strip URL fragment FIRST so that punctuation immediately before `#`/`?`
+        # (e.g. `scripts/foo.py.#anchor`) is then caught by the trailing-punct strip.
+        target_rel = _strip_trailing_punct(_strip_url_fragment(m.group("path")))
         if raw in seen:
             continue
         seen.add(raw)
         found.append((raw, target_rel, None, (root / target_rel)))
 
     for m in _KNOWN_DIR_RE.finditer(text):
-        raw = _strip_url_fragment(_strip_trailing_punct(m.group("path")))
+        raw = _strip_trailing_punct(_strip_url_fragment(m.group("path")))
         if raw in seen:
             continue
         seen.add(raw)
         found.append((raw, raw, (source_file.parent / raw), (root / raw)))
 
     for m in _MD_LINK_RE.finditer(text):
-        target = _strip_url_fragment(_strip_trailing_punct(m.group("target")))
+        target = _strip_trailing_punct(_strip_url_fragment(m.group("target")))
         if target.startswith("/"):
             continue
         if not target.lower().endswith(_KNOWN_LINK_SUFFIXES):
@@ -288,8 +307,8 @@ def main() -> int:
                 if args.verbose:
                     print(f"{rel_source}: '{raw}' DYNAMIC (unresolvable — reported as warning)")
                 continue
-            if (rel_file is not None and _is_excluded(rel_file, root)) or (
-                rel_root is not None and _is_excluded(rel_root, root)
+            if (rel_file is not None and _is_excluded_target(rel_file, root)) or (
+                rel_root is not None and _is_excluded_target(rel_root, root)
             ):
                 continue
             resolved: Path | None = None

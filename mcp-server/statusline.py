@@ -386,9 +386,8 @@ def main() -> None:
     # ── OpenRouter budget ──
     or_remain = fetch_openrouter_budget(cache_dir)
     if or_remain is not None:
-        if not mcp_data:
-            out += sep
-        out += f" 🏦 {CYAN}${or_remain:.2f}{RESET}"
+        out += sep
+        out += f"🏦 {CYAN}${or_remain:.2f}{RESET}"
 
     # ── Usage limits: prefer rate_limits from input JSON (v2.1.80+) ──
     usage_data = safe_jq(data, "rate_limits")

@@ -234,9 +234,9 @@ export async function runBenchmarkOnModel(
   }
 
   const cleaned = stripMarkdownFences(content);
-  let parsed: Record<string, unknown>;
+  let parsedRaw: unknown;
   try {
-    parsed = JSON.parse(cleaned) as Record<string, unknown>;
+    parsedRaw = JSON.parse(cleaned);
   } catch (err) {
     return {
       modelId: model.id,
@@ -246,6 +246,19 @@ export async function runBenchmarkOnModel(
       rawResponse: rawText,
     };
   }
+  // A bare `null`, primitive, or array passes JSON.parse but cannot
+  // satisfy the schema's `type: object` contract — capture as a
+  // RunError instead of letting takeStringArray throw on null deref.
+  if (parsedRaw === null || typeof parsedRaw !== "object" || Array.isArray(parsedRaw)) {
+    return {
+      modelId: model.id,
+      ok: false,
+      error: "model output was not a JSON object",
+      latencyMs,
+      rawResponse: rawText,
+    };
+  }
+  const parsed = parsedRaw as Record<string, unknown>;
 
   // Primary: exact schema field names. Fallback: short-name synonyms
   // — some models (qwen3.6-plus is the current offender) ignore the

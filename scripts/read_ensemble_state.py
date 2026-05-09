@@ -49,7 +49,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ruamel.yaml import YAML
+from ruamel.yaml import YAML  # pyright: ignore[reportMissingImports]  # PEP 723 inline dep — uv resolves at runtime
 
 CONFIG_DIR = Path.home() / ".llm-externalizer"
 SETTINGS_PATH = CONFIG_DIR / "settings.yaml"
@@ -138,7 +138,12 @@ def main() -> int:
         except Exception as exc:
             out["errors"].append(f"failed to read {BENCHMARK_CACHE_PATH}: {exc}")
 
-    json.dump(out, sys.stdout, indent=2)
+    # default=str coerces YAML scalars that round-trip through ruamel.yaml as
+    # native Python types (datetime.date / datetime.datetime / bytes) into
+    # their string form so json.dump never raises TypeError on user-typed
+    # YAML values like an unquoted `model: 2026-04-22`. The documented output
+    # schema treats these fields as strings, so str() coercion is correct.
+    json.dump(out, sys.stdout, indent=2, default=str)
     sys.stdout.write("\n")
     return 0
 

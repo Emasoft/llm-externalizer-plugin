@@ -484,6 +484,13 @@ describe("massScoutSearch", () => {
       offset: 2,
     });
     expect(res.hits.length).toBe(2);
+    // Assert the offset actually skipped rows 0 and 1 — without these
+    // checks, a bug that ignores `offset` and returns the first two
+    // matching rows would still pass `length === 2`.
+    expect(res.hits[0]!.file_path).toBe("/x/2");
+    expect(res.hits[1]!.file_path).toBe("/x/3");
+    expect(res.hits[0]!.result!["i"]).toBe(2);
+    expect(res.hits[1]!.result!["i"]).toBe(3);
   });
 });
 

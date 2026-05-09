@@ -43,8 +43,15 @@ mkdir -p "$DATA_DIR"
 
 # Serialize concurrent SessionStart fires (rare but possible when two Claude
 # Code sessions launch simultaneously). mkdir is the portable atomic lock.
+# We MUST own the lock before proceeding — without that, two processes could
+# run package managers concurrently against the same node_modules and corrupt
+# it. We also MUST only rmdir on EXIT if WE created the lock dir; otherwise
+# we'd steal a peer's lock when we exit and break serialization for them.
 LOCK_DIR="$DATA_DIR/.install-lock"
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+LOCK_OWNED=0
+if mkdir "$LOCK_DIR" 2>/dev/null; then
+  LOCK_OWNED=1
+else
   echo "[llm-externalizer] install-mcp-deps: another install in progress, waiting..." >&2
   for _ in $(seq 1 240); do
     [[ -d "$LOCK_DIR" ]] || break
@@ -54,8 +61,19 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   if diff -q "$SRC_PKG" "$DATA_DIR/package.json" >/dev/null 2>&1; then
     exit 0
   fi
+  # Peer either failed or installed a different manifest. Acquire the lock
+  # before doing any install work. If we still can't acquire after the wait,
+  # bail out fail-fast — proceeding without the lock risks node_modules
+  # corruption from concurrent package-manager runs.
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    LOCK_OWNED=1
+  else
+    echo "[llm-externalizer] install-mcp-deps: lock still held after 120s, refusing to install concurrently" >&2
+    exit 1
+  fi
 fi
-trap '[[ -d "$LOCK_DIR" ]] && rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+# Only release the lock on EXIT if WE own it.
+trap '[[ "$LOCK_OWNED" = "1" ]] && rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
 
 cd "$DATA_DIR"
 cp -f "$SRC_PKG" .
@@ -97,9 +115,14 @@ link_node_modules() {
   local src="$DATA_DIR/node_modules"
   local dst="$PLUGIN_ROOT/mcp-server/node_modules"
   [[ -d "$src" ]] || return 1
+  # Handle every prior shape of $dst: dangling symlink, valid symlink, real
+  # file, or real directory (created by the bind-copy fallback below on a
+  # previous run). `rm -rf` is the only thing that handles all four; `rm -f`
+  # silently no-ops on directories and `rmdir` fails on non-empty ones, which
+  # would leave the directory in place and cause `ln -sfn` to create a nested
+  # symlink at "$dst/node_modules" instead of replacing $dst.
   if [[ -L "$dst" || -e "$dst" ]]; then
-    rm -f "$dst" 2>/dev/null || true
-    rmdir "$dst" 2>/dev/null || true
+    rm -rf "$dst" 2>/dev/null || true
   fi
   ln -sfn "$src" "$dst" 2>/dev/null || {
     echo "[llm-externalizer] symlink failed, falling back to bind copy" >&2

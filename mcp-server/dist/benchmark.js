@@ -210909,7 +210909,8 @@ function qualify(m, criteria) {
   if (criteria.requireReasoning && !supportsReasoning) return null;
   const ctx = m.context_length ?? 0;
   if (ctx < criteria.minContextTokens) return null;
-  const maxOut = m.top_provider?.max_completion_tokens ?? 0;
+  const maxOutRaw = m.top_provider?.max_completion_tokens;
+  const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
   if (!maxOut || maxOut < criteria.minOutputTokens) return null;
   const promptPerToken = parseFloat(m.pricing?.prompt ?? "NaN");
   const completionPerToken = parseFloat(m.pricing?.completion ?? "NaN");
@@ -210933,9 +210934,10 @@ function qualify(m, criteria) {
 function buildBenchmarkRoster(candidatePool, criteria, includeIds, baselineLookupPool = candidatePool) {
   const candidates = filterModels(candidatePool, criteria);
   const inRoster = new Set(candidates.map((m) => m.id));
+  const seen = new Set(inRoster);
   const baselines = [];
   for (const id of includeIds) {
-    if (inRoster.has(id)) continue;
+    if (seen.has(id)) continue;
     const raw = baselineLookupPool.find((m) => m.id === id);
     if (!raw) {
       continue;
@@ -210943,17 +210945,21 @@ function buildBenchmarkRoster(candidatePool, criteria, includeIds, baselineLooku
     const params = new Set(raw.supported_parameters ?? []);
     const promptPerToken = parseFloat(raw.pricing?.prompt ?? "NaN");
     const completionPerToken = parseFloat(raw.pricing?.completion ?? "NaN");
+    const ctx = raw.context_length ?? 0;
+    const maxOutRaw = raw.top_provider?.max_completion_tokens;
+    const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
     baselines.push({
       id: raw.id,
       name: raw.name ?? raw.id,
-      contextTokens: raw.context_length ?? 0,
-      maxOutputTokens: raw.top_provider?.max_completion_tokens ?? 0,
+      contextTokens: ctx,
+      maxOutputTokens: maxOut,
       inputDollarsPerMillion: isFinite(promptPerToken) ? promptPerToken * 1e6 : Infinity,
       outputDollarsPerMillion: isFinite(completionPerToken) ? completionPerToken * 1e6 : Infinity,
       supportsStructured: params.has("structured_outputs") || params.has("response_format"),
       supportsReasoning: params.has("reasoning") || params.has("include_reasoning"),
       raw
     });
+    seen.add(raw.id);
   }
   return { candidates, baselines };
 }
@@ -211091,9 +211097,9 @@ async function runBenchmarkOnModel(model, keywords, fixtures, options) {
     };
   }
   const cleaned = stripMarkdownFences(content);
-  let parsed;
+  let parsedRaw;
   try {
-    parsed = JSON.parse(cleaned);
+    parsedRaw = JSON.parse(cleaned);
   } catch (err) {
     return {
       modelId: model.id,
@@ -211103,6 +211109,16 @@ async function runBenchmarkOnModel(model, keywords, fixtures, options) {
       rawResponse: rawText
     };
   }
+  if (parsedRaw === null || typeof parsedRaw !== "object" || Array.isArray(parsedRaw)) {
+    return {
+      modelId: model.id,
+      ok: false,
+      error: "model output was not a JSON object",
+      latencyMs,
+      rawResponse: rawText
+    };
+  }
+  const parsed = parsedRaw;
   const primary = [
     takeStringArray(parsed, "kw1_functions"),
     takeStringArray(parsed, "kw2_functions"),
@@ -211214,7 +211230,7 @@ function scoreSet(expectedArr, returnedArr) {
 var pct = (n) => `${(n * 100).toFixed(1)}%`;
 function usdCost(model, run) {
   const inUsd = run.inputTokens / 1e6 * model.inputDollarsPerMillion;
-  const outUsd = run.outputTokens / 1e6 * model.outputDollarsPerMillion;
+  const outUsd = (run.outputTokens + run.reasoningTokens) / 1e6 * model.outputDollarsPerMillion;
   return inUsd + outUsd;
 }
 function renderJson(input) {
@@ -211329,7 +211345,7 @@ function renderReport(input) {
         pct(score.meanF1),
         String(run.inputTokens),
         String(run.outputTokens),
-        String(run.reasoningTokens || "\u2013"),
+        String(run.reasoningTokens),
         `$${cost.toFixed(4)}`,
         `${run.latencyMs.toFixed(0)}ms`
       ].join(" | ") + " |"
@@ -211394,20 +211410,36 @@ function parseArgs(argv) {
     reasoningEffort: void 0,
     seed: void 0
   };
+  const takeValue = (flag, i) => {
+    const v = argv[i + 1];
+    if (v === void 0 || v.startsWith("--")) {
+      throw new Error(`${flag} requires a value`);
+    }
+    return v;
+  };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--include") opts.includeIds.push(argv[++i]);
-    else if (a === "--dry-run" || a === "-n") opts.dryRun = true;
-    else if (a === "--report") opts.reportPath = argv[++i];
-    else if (a === "--json") opts.jsonPath = argv[++i];
-    else if (a === "--reasoning") {
-      const eff = argv[++i];
+    if (a === "--include") {
+      opts.includeIds.push(takeValue(a, i));
+      i++;
+    } else if (a === "--dry-run" || a === "-n") opts.dryRun = true;
+    else if (a === "--report") {
+      opts.reportPath = takeValue(a, i);
+      i++;
+    } else if (a === "--json") {
+      opts.jsonPath = takeValue(a, i);
+      i++;
+    } else if (a === "--reasoning") {
+      const eff = takeValue(a, i);
+      i++;
       if (eff !== "low" && eff !== "medium" && eff !== "high") {
         throw new Error(`--reasoning must be low|medium|high, got ${eff}`);
       }
       opts.reasoningEffort = eff;
-    } else if (a === "--seed") opts.seed = parseInt(argv[++i], 10);
-    else if (a === "--help" || a === "-h") {
+    } else if (a === "--seed") {
+      opts.seed = parseInt(takeValue(a, i), 10);
+      i++;
+    } else if (a === "--help" || a === "-h") {
       printHelp();
       process.exit(0);
     } else {

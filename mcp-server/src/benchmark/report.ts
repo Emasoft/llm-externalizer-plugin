@@ -24,7 +24,7 @@ const pct = (n: number): string => `${(n * 100).toFixed(1)}%`;
 function usdCost(model: QualifiedModel, run: RunResult): number {
   // Reasoning tokens are charged as output tokens by OpenRouter.
   const inUsd = (run.inputTokens / 1_000_000) * model.inputDollarsPerMillion;
-  const outUsd = (run.outputTokens / 1_000_000) * model.outputDollarsPerMillion;
+  const outUsd = ((run.outputTokens + run.reasoningTokens) / 1_000_000) * model.outputDollarsPerMillion;
   return inUsd + outUsd;
 }
 
@@ -153,7 +153,7 @@ export function renderReport(input: ReportInput): string {
         pct(score.meanF1),
         String(run.inputTokens),
         String(run.outputTokens),
-        String(run.reasoningTokens || "–"),
+        String(run.reasoningTokens),
         `$${cost.toFixed(4)}`,
         `${run.latencyMs.toFixed(0)}ms`,
       ].join(" | ") + " |",

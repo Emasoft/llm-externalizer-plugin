@@ -119,7 +119,13 @@ export function qualify(m: OpenRouterModel, criteria: ModelCriteria): QualifiedM
   const ctx = m.context_length ?? 0;
   if (ctx < criteria.minContextTokens) return null;
 
-  const maxOut = m.top_provider?.max_completion_tokens ?? 0;
+  // OpenRouter convention: top_provider.max_completion_tokens === null means
+  // "no completion-token cap below context_length" — treat as ctx, not 0.
+  // (Treating null as 0 silently rejected models like z-ai/glm-5 that meet
+  // every other criterion.) Missing field (undefined) stays 0, since that
+  // means we have no information.
+  const maxOutRaw = m.top_provider?.max_completion_tokens;
+  const maxOut = maxOutRaw === null ? ctx : (maxOutRaw ?? 0);
   if (!maxOut || maxOut < criteria.minOutputTokens) return null;
 
   const promptPerToken = parseFloat(m.pricing?.prompt ?? "NaN");
@@ -167,9 +173,14 @@ export function buildBenchmarkRoster(
 ): { candidates: QualifiedModel[]; baselines: QualifiedModel[] } {
   const candidates = filterModels(candidatePool, criteria);
   const inRoster = new Set(candidates.map((m) => m.id));
+  // The docstring promises "no double-counting" — but a duplicate id in
+  // `includeIds` (e.g. ["openai/gpt-5", "openai/gpt-5"]) used to push the
+  // same baseline twice. Track baseline ids alongside candidate ids and
+  // skip duplicates regardless of which list they came from.
+  const seen = new Set(inRoster);
   const baselines: QualifiedModel[] = [];
   for (const id of includeIds) {
-    if (inRoster.has(id)) continue;
+    if (seen.has(id)) continue;
     const raw = baselineLookupPool.find((m) => m.id === id);
     if (!raw) {
       // Truly unknown — the runner will surface a clear error if the
@@ -179,17 +190,23 @@ export function buildBenchmarkRoster(
     const params = new Set(raw.supported_parameters ?? []);
     const promptPerToken = parseFloat(raw.pricing?.prompt ?? "NaN");
     const completionPerToken = parseFloat(raw.pricing?.completion ?? "NaN");
+    // Same null-as-context-length normalisation as qualify(): an
+    // explicit null means "no completion-token cap"; missing field stays 0.
+    const ctx = raw.context_length ?? 0;
+    const maxOutRaw = raw.top_provider?.max_completion_tokens;
+    const maxOut = maxOutRaw === null ? ctx : (maxOutRaw ?? 0);
     baselines.push({
       id: raw.id,
       name: raw.name ?? raw.id,
-      contextTokens: raw.context_length ?? 0,
-      maxOutputTokens: raw.top_provider?.max_completion_tokens ?? 0,
+      contextTokens: ctx,
+      maxOutputTokens: maxOut,
       inputDollarsPerMillion: isFinite(promptPerToken) ? promptPerToken * 1_000_000 : Infinity,
       outputDollarsPerMillion: isFinite(completionPerToken) ? completionPerToken * 1_000_000 : Infinity,
       supportsStructured: params.has("structured_outputs") || params.has("response_format"),
       supportsReasoning: params.has("reasoning") || params.has("include_reasoning"),
       raw,
     });
+    seen.add(raw.id);
   }
   return { candidates, baselines };
 }

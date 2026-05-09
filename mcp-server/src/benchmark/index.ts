@@ -50,20 +50,40 @@ function parseArgs(argv: readonly string[]): CliOptions {
     reasoningEffort: undefined,
     seed: undefined,
   };
+  // Consume the value that must follow a value-taking flag. If the flag is the
+  // last token, or the next token is itself a flag, fail fast — silently
+  // swallowing the trailing flag would push e.g. "--dry-run" into includeIds
+  // and never set dryRun, which is data corruption from the user's POV.
+  const takeValue = (flag: string, i: number): string => {
+    const v = argv[i + 1];
+    if (v === undefined || v.startsWith("--")) {
+      throw new Error(`${flag} requires a value`);
+    }
+    return v;
+  };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--include") opts.includeIds.push(argv[++i]);
-    else if (a === "--dry-run" || a === "-n") opts.dryRun = true;
-    else if (a === "--report") opts.reportPath = argv[++i];
-    else if (a === "--json") opts.jsonPath = argv[++i];
-    else if (a === "--reasoning") {
-      const eff = argv[++i];
+    if (a === "--include") {
+      opts.includeIds.push(takeValue(a, i));
+      i++;
+    } else if (a === "--dry-run" || a === "-n") opts.dryRun = true;
+    else if (a === "--report") {
+      opts.reportPath = takeValue(a, i);
+      i++;
+    } else if (a === "--json") {
+      opts.jsonPath = takeValue(a, i);
+      i++;
+    } else if (a === "--reasoning") {
+      const eff = takeValue(a, i);
+      i++;
       if (eff !== "low" && eff !== "medium" && eff !== "high") {
         throw new Error(`--reasoning must be low|medium|high, got ${eff}`);
       }
       opts.reasoningEffort = eff;
-    } else if (a === "--seed") opts.seed = parseInt(argv[++i], 10);
-    else if (a === "--help" || a === "-h") {
+    } else if (a === "--seed") {
+      opts.seed = parseInt(takeValue(a, i), 10);
+      i++;
+    } else if (a === "--help" || a === "-h") {
       printHelp();
       process.exit(0);
     } else {

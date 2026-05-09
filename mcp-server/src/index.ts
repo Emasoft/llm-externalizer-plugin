@@ -897,6 +897,10 @@ function walkDir(
   if (options?.useGitignore) {
     const gitResults = gitLsFilesMultiRepo(dirPath, recursive);
     if (gitResults !== null) {
+      // Apply caller's exclude_dirs to git results too: git already respects
+      // .gitignore, but the user's exclude_dirs is a documented contract that
+      // must be honored on every code path through walkDir.
+      const extraExcludeSet = new Set(options?.exclude ?? []);
       const results: string[] = [];
       for (const fullPath of gitResults) {
         if (results.length >= maxFiles) break;
@@ -904,6 +908,14 @@ function walkDir(
         if (extensions) {
           const ext = extname(fullPath).toLowerCase();
           if (!extensions.includes(ext)) continue;
+        }
+        if (extraExcludeSet.size > 0) {
+          // Skip if any path segment between dirPath and the file matches an excluded dir name.
+          const rel = fullPath.startsWith(dirPath) ? fullPath.slice(dirPath.length) : fullPath;
+          const segments = rel.split("/").filter((s) => s.length > 0);
+          // Last segment is the filename; only directory segments are matched against exclude.
+          const dirSegments = segments.slice(0, -1);
+          if (dirSegments.some((seg) => extraExcludeSet.has(seg))) continue;
         }
         results.push(fullPath);
       }

@@ -121,17 +121,20 @@ def walk_ancestry(expected: Path) -> tuple[bool, list[str]]:
         # (resolve(strict=True) on the extracted "publish.py" prefix would
         # succeed against the canonical publish.py that still exists alongside).
         for m in re.finditer(r'\S*publish\.py(?=\s|$)', argv):
-            # Reject matches that follow a long-option flag (e.g. --script
-            # /path/publish.py). Argv looks like "prog --flag /path/publish.py";
-            # the token immediately before the match start (after stripping
-            # trailing whitespace) would be "--flag" which starts with "--".
-            # Legitimate invocations have the interpreter or a subcommand
-            # (e.g. "python3", "uv run") before the script, none of which
-            # start with "--".
+            # Reject matches that follow a bare long-option flag (e.g.
+            # "--script /path/publish.py"), where publish.py would be the
+            # flag's value rather than the script being run. We only skip
+            # bare "--flag" tokens (no "="): a token like "--python=3.12"
+            # is self-contained — its value is embedded — so the next argv
+            # element ("scripts/publish.py" in `uv run --python=3.12
+            # scripts/publish.py`) IS the script being run and must not be
+            # skipped. Legitimate non-`=` invocations have the interpreter
+            # or a subcommand (e.g. "python3", "uv run") before the script,
+            # none of which start with "--".
             pre = argv[:m.start()].rstrip()
             if pre:
                 preceding_token = pre.rsplit(None, 1)[-1]
-                if preceding_token.startswith("--"):
+                if preceding_token.startswith("--") and "=" not in preceding_token:
                     continue
             candidate_str = m.group(0)
             # The regex only captures non-whitespace runs, so paths with spaces

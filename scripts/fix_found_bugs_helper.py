@@ -329,6 +329,11 @@ def _extract_findings_from_section(
         # Skip well-known non-finding ### headings emitted by the report format
         if title.lower() in {"findings", "issues", "bugs", "summary"}:
             continue
+        # Strip leading "N. " — when the source already uses canonical
+        # "### N. Title" numbering, that prefix is structural, not part of
+        # the title; otherwise cmd_aggregate_reports' re-numbering would
+        # produce "### 1. 1. Title".
+        title = re.sub(r"^\d+\.\s+", "", title)
         markers.append((m.start(), title, "h3"))
     for m in FINDING_NUM_RE.finditer(section):
         # Numbered items inside fenced code blocks would be false positives;

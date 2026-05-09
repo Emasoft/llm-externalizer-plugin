@@ -1435,6 +1435,11 @@ async function runChain(
   // Each result lives under new-job-id.
   const reg2 = openRegistry({ path: dbPath });
   const compiled = compileFieldset(fs);
+  // Resolve workers ONCE so the value persisted in the `jobs` table
+  // matches the value runScoutJob actually fans out with — otherwise the
+  // registry's job-history metadata diverges from reality (e.g. the run
+  // really used 8 workers but the row says 1).
+  const workers = flags["workers"] ? Number(flags["workers"]) : 4;
   if (!reg2.getJob(newJob)) {
     reg2.createJob({
       job_id: newJob,
@@ -1442,7 +1447,7 @@ async function runChain(
       fieldset_json: JSON.stringify(fs),
       json_schema: JSON.stringify(compiled.jsonSchema),
       model,
-      workers: 1,
+      workers,
       source_root: `chain:${sourceJob}`,
       bucket_filter: null,
       notes: `chained from ${sourceJob} via filter ${filterRaw}`,
@@ -1482,7 +1487,7 @@ async function runChain(
         pricing,
         model,
         apiKey,
-        workers: flags["workers"] ? Number(flags["workers"]) : 4,
+        workers,
         maxRetries: flags["max-retries"] ? Number(flags["max-retries"]) : 1,
         bucket: SENTINEL,
         smokeTest: false,
@@ -1668,6 +1673,11 @@ function runExport(args: string[], opts: CliRunOptions): CliResult {
   const filename = `${stamp}-export-${slugify(jobId)}.${format}`;
   const path = join(reportDir, filename);
 
+  // Truncate first so a re-run within the same wall-clock second (the
+  // timestamp's resolution) does not appendFileSync duplicate rows onto
+  // a stale export. Subsequent rows then use appendFileSync row-by-row
+  // so we don't have to buffer the entire export in memory.
+  writeFileSync(path, "", "utf-8");
   if (format === "jsonl") {
     for (const r of rows) {
       appendFileSync(path, JSON.stringify(r) + "\n", "utf-8");

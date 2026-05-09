@@ -1520,7 +1520,7 @@ describe("runMassScoutCli — Phase C3 chain", () => {
     // Bucket must be restored — i.e. the file's bucket is not the
     // sentinel "chain:second".
     const dump = execSync(
-      `sqlite3 ${dbPath} "SELECT classifier_bucket FROM file_short_id LIMIT 1"`,
+      `sqlite3 '${dbPath}' "SELECT classifier_bucket FROM file_short_id LIMIT 1"`,
     )
       .toString()
       .trim();

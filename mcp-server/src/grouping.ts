@@ -152,9 +152,23 @@ function sanitizeGroupId(raw: string): string {
 }
 
 function uniqueGroupId(raw: string, counts: Map<string, number>): string {
-  const n = counts.get(raw) ?? 0;
-  counts.set(raw, n + 1);
-  return n === 0 ? raw : `${raw}_${n + 1}`;
+  // Loop until we find an id that has never been issued. Without this, a
+  // raw input that happens to equal a previously-generated `${prev}_${k}`
+  // suffix would silently re-issue the same id (e.g. raw "foo" twice
+  // emits "foo" + "foo_2", then raw "foo_2" would also emit "foo_2"
+  // because counts.get("foo_2") is undefined). Every issued candidate is
+  // recorded in counts so future calls — including future calls with a
+  // different raw — see it as taken and skip past it.
+  let n = counts.get(raw) ?? 0;
+  while (true) {
+    const candidate = n === 0 ? raw : `${raw}_${n + 1}`;
+    n += 1;
+    if (!counts.has(candidate)) {
+      counts.set(raw, n);
+      counts.set(candidate, 1);
+      return candidate;
+    }
+  }
 }
 
 interface SizedFile {
