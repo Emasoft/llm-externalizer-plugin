@@ -1,6 +1,31 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.5.1] - 2026-05-09
+
+### Documentation
+
+- Docs(readme): clarify OpenRouter auth precedence (env > yaml > keychain)
+
+The README's First run § A. OpenRouter section now spells out three
+ways to supply the key, ranked by what works across all consumers:
+
+1. Shell env OPENROUTER_API_KEY — RECOMMENDED. Every consumer
+   (MCP server, statusline subprocess, llm-externalizer CLI, any
+   ad-hoc subprocess Claude Code spawns) inherits it automatically.
+2. settings.yaml profiles.<name>.api_key — supported, but only
+   the MCP server reads settings.yaml. The statusline 🏦 panel
+   stays blank; CLI calls outside the MCP process tree see nothing.
+3. Claude Code plugin keychain (userConfig.openrouter_api_key) —
+   supported, but Claude Code only exports the value to the MCP
+   server process tree (as CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY,
+   which the server maps to OPENROUTER_API_KEY internally). Same
+   trade-off as method 2: statusline + CLI stay blind.
+
+The Auth section further down and the statusline NOTE now both
+point back at this section instead of repeating the explanation.
+
+
 ## [9.5.0] - 2026-05-09
 
 ### Added
