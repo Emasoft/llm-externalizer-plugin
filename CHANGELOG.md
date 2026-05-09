@@ -1874,10 +1874,10 @@ concretely what to check for, e.g.:
     /llm-externalizer:configure, /llm-externalizer:scan-and-fix,
     /llm-externalizer:search-existing-implementations and replace with
     the prefixed names /llm-externalizer:llm-externalizer-*."
-  * "Find references to the old agent names llm-ext-fixer or
+  - "Find references to the old agent names llm-ext-fixer or
     llm-ext-reviewer and update to llm-externalizer-fixer / reviewer."
-  * "Verify every skill description accurately reflects its tools."
-  * "Check argument-hints in command frontmatters match the
+  - "Verify every skill description accurately reflects its tools."
+  - "Check argument-hints in command frontmatters match the
     actual arguments the command parses."
 
 When --instructions provides such a rubric, auto-curation includes
@@ -1972,9 +1972,9 @@ stale reference in the live tree.
 
 README.md:
   - Features list:
-      * `llm-ext-reviewer` -> `llm-externalizer-reviewer`
-      * Added `llm-externalizer-fixer` agent to the feature list
-      * "3 slash commands" -> "4 slash commands" with full prefixed names
+      - `llm-ext-reviewer` -> `llm-externalizer-reviewer`
+      - Added `llm-externalizer-fixer` agent to the feature list
+      - "3 slash commands" -> "4 slash commands" with full prefixed names
   - Verify section: /llm-externalizer:discover -> llm-externalizer-discover
   - Configuration section: /llm-externalizer:configure -> llm-externalizer-configure
   - Commands table: all 4 commands listed with fully prefixed names,
@@ -2660,8 +2660,8 @@ Forwarded options (same as every other LLM Externalizer command):
 Architecture (unchanged):
   - instructions_files_paths carries sources + diff (server reads
     them once, orchestrator never loads file contents)
-  - input_files_paths is the filtered codebase list (Glob + dedupe
-    + exclude source files + exclude non-code dirs)
+  - input_files_paths is the filtered codebase list (Glob + dedupe,
+    excluding source files and non-code dirs)
   - Auto-batching by the server keeps request count low inside
     max_payload_kb
   - answer_mode: 0 → one .md report per input file, each report
@@ -5277,5 +5277,4 @@ Components:
 - commands/configure.md: Profile management command
 - scripts/setup.sh: Build script (npm install + tsc)
 - scripts/install-statusline.sh: Optional statusline integration
-
 

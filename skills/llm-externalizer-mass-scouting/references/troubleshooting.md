@@ -1,5 +1,11 @@
 # Mass-scouting troubleshooting
 
+## Table of Contents
+
+- [Symptom flowchart](#symptom-flowchart)
+- [Failure modes](#failure-modes)
+- [Resume](#resume)
+
 ## Symptom flowchart
 
 ```
@@ -43,7 +49,7 @@ Something went wrong with mass_scout. Where?
     └── try `get` to confirm the row exists, then refine the filter
 ```
 
-## Failure modes (quick reference)
+## Failure modes
 
 - **`HTTP 400 context length exceeded`** — file is bigger than the provider's
   context. Lower `--max-context-pct-scout` or split the file. Use

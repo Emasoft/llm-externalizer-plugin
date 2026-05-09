@@ -61,18 +61,14 @@ re-print the report. Search/get/export emit JSON or JSONL/CSV.
 
 ## Token efficiency
 
-- Pass paths, never bodies. Every tool here takes paths; the registry
-  reads bodies once at register time and serves them from cache.
-- Prefer `bundled:<name>` over authoring JSON when one of the four
-  shipped sets covers the case.
-- `estimate` with `budget_usd` is a HARD gate — run it before `scout`.
+- Pass paths, never bodies. The registry reads bodies once at register
+  time and serves them from cache.
+- Prefer `bundled:<name>` over authoring JSON when a shipped set fits.
 - Restrict by `bucket` (sourcecode / documentation / …) so scout skips
   binaries automatically.
-- Use `mass_scout_search` (regex bypass / FTS5 / structured) instead of
-  `audit_sample` when you can — search returns matching rows only, not
-  bodies.
-- Pass `json: true` + `limit_per_job` / `limit_merged` on large queries
-  instead of letting the human rendering grow unbounded.
+- Use `mass_scout_search` (regex / FTS5 / structured) instead of
+  `audit_sample` when you can — search returns matching rows only.
+- Pass `json: true` + `limit_per_job` / `limit_merged` on large queries.
 
 ## Error Handling
 
@@ -107,8 +103,8 @@ End-to-end: [worked-example](references/worked-example.md).
 
 ## Resources
 
-- [troubleshooting](references/troubleshooting.md) — failure flowchart.
-- [worked-example](references/worked-example.md) — full walkthrough.
-- [fieldsets](references/fieldsets.md) — types, bundled sets, shorthand.
-- [glossary](references/glossary.md) — terms, model selection, privacy.
+- [troubleshooting](references/troubleshooting.md) — Symptom flowchart, Failure modes, Resume.
+- [worked-example](references/worked-example.md) — Pipeline run, Cost rules-of-thumb, Reading the report.
+- [fieldsets](references/fieldsets.md) — Fieldset format, Bundled fieldsets, Build-fieldset shorthand, Propose-fieldset.
+- [glossary](references/glossary.md) — Terms, Model selection guide, Privacy.
 - Source: `mcp-server/src/mass_scouting/`, `mcp-server/fieldsets/`.

@@ -1,5 +1,11 @@
 # Worked example: "audit-this-plugin" run
 
+## Table of Contents
+
+- [Pipeline run](#pipeline-run)
+- [Cost rules-of-thumb](#cost-rules-of-thumb)
+- [Reading the report](#reading-the-report)
+
 ## Pipeline run
 
 Goal: produce a per-file code review of a plugin's source.

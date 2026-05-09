@@ -1,5 +1,12 @@
 # Fieldsets — types, bundled sets, authoring
 
+## Table of Contents
+
+- [Fieldset format](#fieldset-format)
+- [Bundled fieldsets](#bundled-fieldsets)
+- [Build-fieldset shorthand](#build-fieldset-shorthand)
+- [Propose-fieldset](#propose-fieldset)
+
 ## Fieldset format
 
 A fieldset is a JSON file describing what the LLM should extract per file.
@@ -29,7 +36,7 @@ Supported `kind`s: `bool`, `string` (with `max_length`), `enum` (with
 `min_items`/`max_items`, **positional, no dedup** — use this when each item
 is a typed record), `int` (`min` / `max`), `number` (`min` / `max`).
 
-## Bundled fieldsets (skip authoring entirely)
+## Bundled fieldsets
 
 Pass `--fields-file bundled:<name>` to use a plugin-shipped fieldset:
 
@@ -68,7 +75,7 @@ Shorthand syntax (`NAME:TYPE=DESCRIPTION`):
 For `array_object` and `array_enum`, write the JSON by hand or use
 `propose-fieldset`.
 
-## Propose-fieldset (LLM authors the fieldset)
+## Propose-fieldset
 
 If you don't know what fields to capture, ask the LLM to propose them:
 

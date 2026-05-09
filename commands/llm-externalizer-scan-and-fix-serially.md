@@ -89,9 +89,9 @@ The agent — not a blind glob — curates the scan target. Humans cannot reliab
 
    > **Do NOT use this command to do structural validation of plugin files** — frontmatter schema, argument-hint consistency with the command body, skill description / tool coverage, plugin.json conformance, skill directory layout, agent.tools allowlist correctness, etc. Those checks are deterministic, cheap, and belong to dedicated validators:
    >
-   >   - **`claude-plugin-validation`** (CPV) — `cpv-validate-plugin`, `cpv-validate-skill`, `cpv-semantic-validation`, etc. — run thousands of rules in milliseconds, return reproducible errors.
-   >   - **`claude plugin validate .`** — the authoritative Claude Code CLI validator for plugin schema.
-   >   - **Project-local validation scripts** — AST / schema parsers give you O(file-size) deterministic answers.
+   > - **`claude-plugin-validation`** (CPV) — `cpv-validate-plugin`, `cpv-validate-skill`, `cpv-semantic-validation`, etc. — run thousands of rules in milliseconds, return reproducible errors.
+   > - **`claude plugin validate .`** — the authoritative Claude Code CLI validator for plugin schema.
+   > - **Project-local validation scripts** — AST / schema parsers give you O(file-size) deterministic answers.
    >
    > An LLM doing the same work is orders of magnitude more expensive, non-reproducible, and prone to hallucinated findings. Reserve LLM .md scans for things a validator literally cannot do: fuzzy reference hunting, semantic consistency checks, stale-snippet detection, and user-authored instruction sets.
 
