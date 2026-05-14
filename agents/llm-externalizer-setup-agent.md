@@ -2,7 +2,6 @@
 name: llm-externalizer-setup-agent
 description: Interactive setup wizard for the llm-externalizer plugin. Detects platform (OS, arch, RAM, GPU), finds installed local-model runners (Ollama, LM Studio, vLLM, llama.cpp, Jan), assists with installation when none are present, helps download Hugging Face models (installing the `hf` CLI if missing), runs five calibrated compatibility tests (smoke, structured output, code understanding, long context, output length), then generates a ready-to-paste settings.yaml profile snippet. Use when the user says "set up llm-externalizer", "configure my local model", "I can't get the externalizer to work", "which local model should I use", "test my model for compatibility", or invokes /llm-externalizer-setup.
 model: sonnet
-effort: medium
 skills:
   - huggingface-best
   - huggingface-local-models

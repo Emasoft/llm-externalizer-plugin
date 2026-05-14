@@ -362,23 +362,42 @@ fi
 
 Do NOT use `AskUserQuestion` here — checkpointing is always cheap and always safe; a menu would add a prompt for nothing. Just print the one-line result and move on.
 
-## Step 4b — Pick the fixer model
+## Step 4b — Pick the fixer model (auto-route big files to Opus)
 
-Ask via `AskUserQuestion`. Default (first option) is `Sonnet` so the user can press Enter:
+Per the per-file invariant: **one fixer agent handles exactly one report file** (= one source file's worth of findings). Never assign multiple reports to the same agent invocation — that's why Step 4c batches 15 separate `Task` calls rather than passing a list to one agent.
 
+Default to Sonnet. Promote individual reports to Opus when EITHER (a) the source file is large (>1000 lines or >50 KB) or (b) the report carries many findings (>5 `[[FINDING]]` blocks). This is per-report routing — a 250-file scan typically ends up with a mix of Sonnet and Opus subagents.
+
+```bash
+# Helpers for the dispatch loop below. Source files come from the report's
+# `**File:**` line; the report path itself is the dispatch input.
+agent_for_report() {
+  local report="$1"
+  # Extract the absolute source-file path from the report.
+  local src
+  src=$(awk '/^\*\*File:\*\*/ {print $2; exit}' "$report" 2>/dev/null \
+        | tr -d '`' | tr -d ' ' || true)
+  local big_source=0
+  if [[ -n "${src:-}" && -f "$src" ]]; then
+    local lines bytes
+    lines=$(wc -l < "$src" 2>/dev/null || echo 0)
+    bytes=$(wc -c < "$src" 2>/dev/null || echo 0)
+    if (( lines > 1000 || bytes > 50000 )); then
+      big_source=1
+    fi
+  fi
+  # Count findings as a second promotion trigger.
+  local finds
+  finds=$(grep -cF '[[FINDING]]' "$report" 2>/dev/null || echo 0)
+  if (( big_source == 1 || finds > 5 )); then
+    echo "llm-externalizer-parallel-fixer-opus-agent"
+  else
+    echo "llm-externalizer-parallel-fixer-sonnet-agent"
+  fi
+}
 ```
-question: "Which model should the fixers use?"
-options:
-  - label: "Sonnet"
-    description: "Faster, cheaper. Recommended default."
-  - label: "Opus"
-    description: "Slower, more thorough. Pick for high-stakes or subtle bugs."
-```
 
-Map the answer to the agent name:
-
-- `Sonnet` → `FIXER_AGENT="llm-externalizer-parallel-fixer-sonnet-agent"`
-- `Opus`   → `FIXER_AGENT="llm-externalizer-parallel-fixer-opus-agent"`
+Skip the `AskUserQuestion` menu — routing is automatic and per-report. If the user explicitly wants every report on Opus, they can set the environment variable `LLM_EXT_FORCE_OPUS=1` before running the command (handled in the dispatch loop in Step 4c).
 
 ## Step 4c — Dispatch fixer agents (max 15 concurrent, sourced from `$VALIDATED`)
 
@@ -393,14 +412,16 @@ sed -n '16,30p' "$VALIDATED"
 # … and so on until TOTAL
 ```
 
-For every path that batch returns, spawn one `$FIXER_AGENT` subagent via the `Task` tool. The prompt is EXACTLY the absolute report path (one line, nothing else).
+For every path that batch returns, call `agent_for_report "$path"` (Step 4b) to pick the right fixer variant per-report, then spawn ONE subagent of that variant via the `Task` tool. The prompt is EXACTLY the absolute report path (one line, nothing else). **One agent = one report = one source file.** Never list multiple reports in a single agent's prompt.
+
+Force-Opus override: if the env var `LLM_EXT_FORCE_OPUS=1` is set, every report routes to the Opus variant regardless of the per-file size check. Useful for high-stakes scans (production code, security audits) where the user wants maximum reasoning depth on every file.
 
 Batch rule:
 
 - **Up to 15 Task calls in a single assistant message** → they run concurrently.
 - If the batch size is > 15, emit 15 per message and wait for the batch to finish before sending the next. NEVER exceed 15 in flight at once.
 - Each `Task` call:
-  - `subagent_type: "$FIXER_AGENT"` (either `…-sonnet-agent` or `…-opus-agent`, depending on Step 4b)
+  - `subagent_type: "$(agent_for_report "$path")"` (either `…-sonnet-agent` or `…-opus-agent` per the Step 4b decision) — or the Opus variant if `$LLM_EXT_FORCE_OPUS == 1`
   - `description: "Fix report: <basename>"` (≤5 words)
   - `prompt: "<absolute report path>"` (nothing else)
 

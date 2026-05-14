@@ -160,22 +160,33 @@ else
 fi
 ```
 
-### Step 4c — Pick the fixer model (menu)
+### Step 4c — Pick the fixer model (auto-route per-iteration)
 
-Call `AskUserQuestion`. Default (first option) `Sonnet`:
+The serial-fixer agent is dispatched once per bug (the loop in Step 6). The model is chosen PER BUG rather than once-for-all, so a single run can mix Sonnet (small files) and Opus (large files / complex bugs).
 
+Within the loop in Step 6, before each dispatch, inspect the bug at the head of the queue and pick the variant:
+
+```bash
+# Parse the source-file path from the bug's `**File:**` line and the count of
+# `[[FINDING]]` blocks the same way scan-and-fix does. The serial fixer
+# always handles exactly ONE bug per invocation, so the heuristic is about
+# how big the file under repair is and how complex its surrounding context.
+NEXT_SRC=$(awk '/^\*\*File:\*\*/ {print $2; exit}' "$BUGS_TO_FIX" 2>/dev/null \
+           | tr -d '`' | tr -d ' ' || true)
+BIG_SOURCE=0
+if [[ -n "${NEXT_SRC:-}" && -f "$NEXT_SRC" ]]; then
+  L=$(wc -l < "$NEXT_SRC" 2>/dev/null || echo 0)
+  B=$(wc -c < "$NEXT_SRC" 2>/dev/null || echo 0)
+  if (( L > 1000 || B > 50000 )); then BIG_SOURCE=1; fi
+fi
+if [[ "${LLM_EXT_FORCE_OPUS:-0}" == "1" ]] || (( BIG_SOURCE == 1 )); then
+  FIXER_AGENT="llm-externalizer-serial-fixer-opus-agent"
+else
+  FIXER_AGENT="llm-externalizer-serial-fixer-sonnet-agent"
+fi
 ```
-question: "Which model should the serial fixer use?"
-options:
-  - label: "Sonnet"
-    description: "Faster, cheaper. Recommended default."
-  - label: "Opus"
-    description: "Slower, more thorough."
-```
 
-Map:
-- `Sonnet` → `FIXER_AGENT="llm-externalizer-serial-fixer-sonnet-agent"`
-- `Opus`   → `FIXER_AGENT="llm-externalizer-serial-fixer-opus-agent"`
+One bug = one fresh agent invocation. Never reuse the same agent across bugs.
 
 ### Step 5 — Pick subagent_type
 

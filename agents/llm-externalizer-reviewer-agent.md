@@ -2,7 +2,6 @@
 name: llm-externalizer-reviewer-agent
 description: Use for a fast code review from the LLM Externalizer ensemble without loading scan output into the main context. Accepts a file/folder/glob and returns only report paths. Trigger with "review this file", "llm-ext review", "audit these files", "scan for bugs".
 model: sonnet
-effort: medium
 # tools: intentionally omitted — the reviewer inherits the full tool surface so
 # it can use SERENA MCP, TLDR, Grepika, LSP diagnostics, etc. on top of the
 # externalizer MCP tools. A narrow allowlist was starving the agent of the

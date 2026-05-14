@@ -86,22 +86,28 @@ else
 fi
 ```
 
-### Step 2b — Pick the fixer model (menu)
+### Step 2b — Pick the fixer model (auto-route)
 
-Call `AskUserQuestion`. Default (first option) `Sonnet`:
+Route automatically per-report. Promote to Opus when EITHER (a) the report's source file is large (>1000 lines or >50 KB) or (b) the report carries many findings (>5 `[[FINDING]]` blocks).
 
+```bash
+SRC=$(awk '/^\*\*File:\*\*/ {print $2; exit}' "$REPORT_PATH" 2>/dev/null \
+      | tr -d '`' | tr -d ' ' || true)
+BIG_SOURCE=0
+if [[ -n "${SRC:-}" && -f "$SRC" ]]; then
+  LINES=$(wc -l < "$SRC" 2>/dev/null || echo 0)
+  BYTES=$(wc -c < "$SRC" 2>/dev/null || echo 0)
+  if (( LINES > 1000 || BYTES > 50000 )); then BIG_SOURCE=1; fi
+fi
+FINDINGS=$(grep -cF '[[FINDING]]' "$REPORT_PATH" 2>/dev/null || echo 0)
+if [[ "${LLM_EXT_FORCE_OPUS:-0}" == "1" ]] || (( BIG_SOURCE == 1 || FINDINGS > 5 )); then
+  FIXER_AGENT="llm-externalizer-parallel-fixer-opus-agent"
+else
+  FIXER_AGENT="llm-externalizer-parallel-fixer-sonnet-agent"
+fi
 ```
-question: "Which model should the fixer use?"
-options:
-  - label: "Sonnet"
-    description: "Faster, cheaper. Recommended default."
-  - label: "Opus"
-    description: "Slower, more thorough."
-```
 
-Map:
-- `Sonnet` → `FIXER_AGENT="llm-externalizer-parallel-fixer-sonnet-agent"`
-- `Opus`   → `FIXER_AGENT="llm-externalizer-parallel-fixer-opus-agent"`
+One report = one agent. Never pass multiple reports to the same agent — if the user wants to fix several reports, dispatch this command once per report (or use `/llm-externalizer:llm-externalizer-scan-and-fix` for batched runs).
 
 ### Step 2c — Verify the fixer agent exists
 

@@ -2,7 +2,6 @@
 name: llm-externalizer-serial-fixer-opus-agent
 description: Opus-model variant. Fix exactly ONE bug from a markdown bug list produced by llm-externalizer-fix-found-bugs. Reads the bug-file absolute path, picks the highest-severity unfixed entry, applies a minimal surgical fix, updates the bug file with a ` — FIXED` marker plus a short post-mortem, returns a single-line summary. Dispatched per-bug when the user picks "opus" on the model-menu prompt.
 model: opus
-effort: xhigh
 # tools: intentionally omitted — the bug-fixer inherits the full tool surface
 # so it can use SERENA MCP (symbol lookup, find_referencing_symbols,
 # replace_symbol_body), TLDR (tldr cfg / dfg / slice / impact), Grepika
