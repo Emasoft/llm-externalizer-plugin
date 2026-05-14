@@ -135,10 +135,21 @@ After all `Edit` calls:
 
 ### Step 4 — Write the `.fixer.` summary
 
-Write the summary with `Write` to:
+Resolve the canonical reports root first — the dispatching command writes scan reports under `$MAIN_ROOT/reports/llm-externalizer/`, and the post-flight validator below requires the summary to live under the same root. Inside a linked worktree `$CLAUDE_PROJECT_DIR` ≠ `$MAIN_ROOT`, so we MUST use the same resolver block the command uses:
+
+```bash
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  MAIN_ROOT="$(git worktree list | head -n1 | awk '{print $1}')"
+else
+  MAIN_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+fi
+REPORTS_DIR="$MAIN_ROOT/reports/llm-externalizer"
+```
+
+Then write the summary with `Write` to:
 
 ```
-<CLAUDE_PROJECT_DIR>/reports/llm-externalizer/<LOCAL-TIMESTAMP>.<sanitized-original-stem>.fixer.md
+<MAIN_ROOT>/reports/llm-externalizer/<LOCAL-TIMESTAMP>.<sanitized-original-stem>.fixer.md
 ```
 
 Where `<LOCAL-TIMESTAMP>` is `$(date +%Y%m%dT%H%M%S%z)` (local ISO-8601 basic, e.g. `20260417T142345+0200`, sortable — put it FIRST); `<sanitized-original-stem>` is the report's basename minus `.md`, non-`[A-Za-z0-9._-]` replaced via `tr -c 'A-Za-z0-9._-' '_'`; the tag is `.fixer.` literal (do NOT use `[FIXER]` — square brackets break shell glob character classes). Example: `20260417T142345+0200.report_auth_module.fixer.md`
@@ -187,7 +198,7 @@ Validate the summary mechanically before returning — MANDATORY:
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/validate_fixer_summary.py" \
   --summary "$SUMMARY_PATH" \
-  --reports-dir "$CLAUDE_PROJECT_DIR/reports/llm-externalizer"
+  --reports-dir "$REPORTS_DIR"
 ```
 
 The script verifies: file exists and non-empty, `.fixer.` in name, inside reports dir, has `# Fixer Summary` header, has required section markers. On non-zero exit, fix and re-run until `OK <path>`.

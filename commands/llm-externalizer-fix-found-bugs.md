@@ -147,9 +147,11 @@ cp "$INITIAL_STATE" "$SNAPSHOT"
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   if [ -n "$(git status --porcelain)" ]; then
     STAMP=$(date +%Y%m%dT%H%M%S%z)
-    git add -A \
-      && git commit -m "chore(checkpoint): pre-fix-found-bugs $STAMP" \
-      && echo "Checkpoint commit created. Revert with: git reset --soft HEAD~1"
+    # Stash (not commit). `git add -A && git commit` would stage untracked
+    # .env / reports/ and risk a leak on push. See llm-externalizer-fix-report
+    # .md for the same rationale across the four checkpoint blocks.
+    git stash push --include-untracked -m "pre-fix-found-bugs $STAMP" \
+      && echo "Checkpoint stash created. Restore with: git stash pop"
   else
     echo "Working tree clean — no checkpoint needed."
   fi

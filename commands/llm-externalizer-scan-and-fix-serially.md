@@ -100,7 +100,7 @@ The agent — not a blind glob — curates the scan target. Humans cannot reliab
 4. **Write the curated list to a tmp file.**
    ```bash
    RUN_TS=$(date +%Y%m%dT%H%M%S%z)
-   AUTO_LIST="/tmp/llm-externalizer-scan-and-fix.$RUN_TS.auto-filelist.txt"
+   AUTO_LIST="/tmp/llm-externalizer-scan-and-fix-serially.$RUN_TS.auto-filelist.txt"
    : > "$AUTO_LIST"
    # emit one absolute path per line via printf or a heredoc
    ```
@@ -296,9 +296,9 @@ The MCP response from Step 2 already contains every `<source> -> <report>` pair 
 
 ```bash
 RUN_TS=$(date +%Y%m%dT%H%M%S%z)
-EXTRACTED="/tmp/llm-externalizer-scan-and-fix.$RUN_TS.extracted.txt"
-VALIDATED="/tmp/llm-externalizer-scan-and-fix.$RUN_TS.validated.txt"
-REJECTED="/tmp/llm-externalizer-scan-and-fix.$RUN_TS.rejected.txt"
+EXTRACTED="/tmp/llm-externalizer-scan-and-fix-serially.$RUN_TS.extracted.txt"
+VALIDATED="/tmp/llm-externalizer-scan-and-fix-serially.$RUN_TS.validated.txt"
+REJECTED="/tmp/llm-externalizer-scan-and-fix-serially.$RUN_TS.rejected.txt"
 REPORTS_DIR="$MAIN_ROOT/reports/llm-externalizer"
 : > "$EXTRACTED"
 : > "$VALIDATED"
@@ -374,9 +374,10 @@ Before any fixer touches source, the working tree must be clean enough to revert
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   if [ -n "$(git status --porcelain)" ]; then
     STAMP=$(date +%Y%m%dT%H%M%S%z)
-    git add -A \
-      && git commit -m "chore(checkpoint): pre-scan-and-fix-serially $STAMP" \
-      && echo "Checkpoint commit created. Revert with: git reset --soft HEAD~1"
+    # Stash, not commit. `git add -A && git commit` would stage untracked
+    # .env / reports/ and risk a leak on push.
+    git stash push --include-untracked -m "pre-scan-and-fix-serially $STAMP" \
+      && echo "Checkpoint stash created. Restore with: git stash pop"
   else
     echo "Working tree clean — no checkpoint needed."
   fi

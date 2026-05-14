@@ -347,9 +347,11 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   if [ -n "$(git status --porcelain)" ]; then
     # Uncommitted work exists — create a checkpoint the user can diff against.
     STAMP=$(date +%Y%m%dT%H%M%S%z)
-    git add -A \
-      && git commit -m "chore(checkpoint): pre-scan-and-fix $STAMP" \
-      && echo "Checkpoint commit created. Revert with: git reset --soft HEAD~1"
+    # See llm-externalizer-fix-report.md for the rationale: stash, not commit.
+    # `git add -A && git commit` would stage untracked .env / reports/ and
+    # could leak secrets if the user later pushed.
+    git stash push --include-untracked -m "pre-scan-and-fix $STAMP" \
+      && echo "Checkpoint stash created. Restore with: git stash pop"
   else
     echo "Working tree clean — no checkpoint needed."
   fi

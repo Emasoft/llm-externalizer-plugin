@@ -72,9 +72,12 @@ Capture stdout as `$REPORT_PATH`.
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   if [ -n "$(git status --porcelain)" ]; then
     STAMP=$(date +%Y%m%dT%H%M%S%z)
-    git add -A \
-      && git commit -m "chore(checkpoint): pre-fix-report $STAMP" \
-      && echo "Checkpoint commit created. Revert with: git reset --soft HEAD~1"
+    # `git stash --include-untracked` instead of `git add -A && git commit`:
+    # the latter would stage every untracked file (incl. .env, reports/,
+    # local scratch) into a commit; if the user later pushed that commit,
+    # secrets would leak. The stash keeps everything off-history.
+    git stash push --include-untracked -m "pre-fix-report $STAMP" \
+      && echo "Checkpoint stash created. Restore with: git stash pop"
   else
     echo "Working tree clean — no checkpoint needed."
   fi
