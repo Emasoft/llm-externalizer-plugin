@@ -390,4 +390,33 @@ describe("splitPerFileSections", () => {
     const result = splitPerFileSections(content, [fileA]);
     expect(result.get(fileA)).toBe("Just one file.");
   });
+
+  it("recovers the path when the LLM appends inline markdown annotation", () => {
+    /** v9.10.0 audit T2.19: an LLM that splits a long batch can emit
+     * `## File: /foo.ts ## continued from batch 2`. The lazy `(.+?)`
+     * regex previously captured the whole rest of the line, so the
+     * path lookup failed and the section was silently dropped.
+     * We now truncate at the first inline `##` so the path side is
+     * just `/foo.ts`. */
+    const content =
+      `## File: ${fileA} ## continued from batch 2\n\n` +
+      `Body for auth.\n`;
+    const result = splitPerFileSections(content, [fileA, fileB]);
+    expect(result.get(fileA)).toBe("Body for auth.");
+  });
+
+  it("skips header lines whose path becomes empty after annotation trim", () => {
+    /** Defensive: a header line of just `## File: ## something` would
+     * yield an empty path after trim. Don't push it as a header at
+     * all — silently skipping a bogus header is better than indexing
+     * the next file's body under "". */
+    const content =
+      `## File: ## stray annotation\n\n` +
+      `Orphaned body.\n\n` +
+      `## File: ${fileA}\n\n` +
+      `Body for auth.`;
+    const result = splitPerFileSections(content, [fileA]);
+    expect(result.size).toBe(1);
+    expect(result.get(fileA)).toBe("Body for auth.");
+  });
 });

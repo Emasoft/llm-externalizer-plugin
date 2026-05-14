@@ -368,8 +368,22 @@ export function splitPerFileSections(
   const headers: { pathRaw: string; start: number; bodyStart: number }[] = [];
   let m: RegExpExecArray | null;
   while ((m = headerRe.exec(content)) !== null) {
+    // v9.10.0 audit T2.19: if the LLM emits a header line with trailing
+    // markdown annotation like `## File: /foo.ts ## continued from
+    // batch 2`, the lazy `(.+?)` captures the whole rest of the line and
+    // the path lookup fails silently. Truncate at the first inline `##`
+    // (which would be a second header marker on the same line) so the
+    // path side is just `/foo.ts` instead of `/foo.ts ## continued ...`.
+    // Filenames containing literal `##` are out of scope — markdown
+    // would render them as headers anyway.
+    let pathRaw = m[1].trim();
+    const inlineHashIdx = pathRaw.indexOf("##");
+    if (inlineHashIdx >= 0) {
+      pathRaw = pathRaw.slice(0, inlineHashIdx).trim();
+    }
+    if (!pathRaw) continue; // skip headers that turned out to be empty after trim
     headers.push({
-      pathRaw: m[1].trim(),
+      pathRaw,
       start: m.index,
       bodyStart: m.index + m[0].length,
     });
