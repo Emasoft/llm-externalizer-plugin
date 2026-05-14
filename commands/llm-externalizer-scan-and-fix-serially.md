@@ -393,12 +393,22 @@ No menu here — checkpointing is always cheap and always safe.
 Per-bug routing (one agent invocation = one bug, no batching). Inspect the next-up bug before dispatch and pick the variant. Big source files (>1000 lines or >50 KB) and `LLM_EXT_FORCE_OPUS=1` both promote to the Opus variant.
 
 ```bash
-NEXT_SRC=$(awk '/^\*\*File:\*\*/ {print $2; exit}' "$BUGS_TO_FIX" 2>/dev/null \
-           | tr -d '`' | tr -d ' ' || true)
+# Walk to the FIRST `### ` heading that does NOT contain FIXED, then read
+# its `**File:**` line. The naive `awk '/^\*\*File:\*\*/ {print $2; exit}'`
+# always returned the first File: line in the entire bug file, which after
+# iteration 1 belongs to a `-- FIXED` bug — routing decisions were made
+# against the wrong file (audit SR-P1-002).
+NEXT_SRC=$(awk '
+  /^### / { in_bug = ($0 !~ /FIXED/) ? 1 : 0 ; next }
+  in_bug && /^\*\*File:\*\*/ {
+    sub(/^\*\*File:\*\* +/,""); gsub(/`/,""); sub(/[[:space:]]+$/,"")
+    print; exit
+  }
+' "$BUGS_TO_FIX" 2>/dev/null || true)
 BIG_SOURCE=0
 if [[ -n "${NEXT_SRC:-}" && -f "$NEXT_SRC" ]]; then
-  L=$(wc -l < "$NEXT_SRC" 2>/dev/null || echo 0)
-  B=$(wc -c < "$NEXT_SRC" 2>/dev/null || echo 0)
+  L=$(wc -l < "$NEXT_SRC" | tr -d '[:space:]')
+  B=$(wc -c < "$NEXT_SRC" | tr -d '[:space:]')
   if (( L > 1000 || B > 50000 )); then BIG_SOURCE=1; fi
 fi
 if [[ "${LLM_EXT_FORCE_OPUS:-0}" == "1" ]] || (( BIG_SOURCE == 1 )); then

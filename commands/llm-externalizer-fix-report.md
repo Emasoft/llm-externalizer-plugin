@@ -91,12 +91,16 @@ fi
 Route automatically per-report. Promote to Opus when EITHER (a) the report's source file is large (>1000 lines or >50 KB) or (b) the report carries many findings (>5 `[[FINDING]]` blocks).
 
 ```bash
-SRC=$(awk '/^\*\*File:\*\*/ {print $2; exit}' "$REPORT_PATH" 2>/dev/null \
-      | tr -d '`' | tr -d ' ' || true)
+# Source-file extraction — matches all three MCP report header shapes
+# (## File: / **File:** / - **Input file**: `…`). Paths containing
+# spaces are preserved. Audit references: SR-P1-001, SR-P1-003, SR-P1-004.
+SRC=$(grep -m1 -E '^(## File:|\*\*File:\*\*|- \*\*Input file\*\*:)' "$REPORT_PATH" 2>/dev/null \
+      | sed -E 's/^(## File:|\*\*File:\*\*|- \*\*Input file\*\*:)[[:space:]]*`?([^`]*)`?[[:space:]]*$/\2/' \
+      | sed -E 's/[[:space:]]+$//' || true)
 BIG_SOURCE=0
 if [[ -n "${SRC:-}" && -f "$SRC" ]]; then
-  LINES=$(wc -l < "$SRC" 2>/dev/null || echo 0)
-  BYTES=$(wc -c < "$SRC" 2>/dev/null || echo 0)
+  LINES=$(wc -l < "$SRC" | tr -d '[:space:]')
+  BYTES=$(wc -c < "$SRC" | tr -d '[:space:]')
   if (( LINES > 1000 || BYTES > 50000 )); then BIG_SOURCE=1; fi
 fi
 FINDINGS=$(grep -cF '[[FINDING]]' "$REPORT_PATH" 2>/dev/null || echo 0)

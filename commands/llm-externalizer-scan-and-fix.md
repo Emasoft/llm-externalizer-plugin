@@ -370,18 +370,30 @@ Default to Sonnet. Promote individual reports to Opus when EITHER (a) the source
 
 ```bash
 # Helpers for the dispatch loop below. Source files come from the report's
-# `**File:**` line; the report path itself is the dispatch input.
+# header line — the MCP server emits one of three shapes depending on the
+# tool: `## File: <path>` (scan_folder, code_task per-file), `- **Input
+# file**: \`<path>\`` (compare_files, check_against_specs), or
+# `**File:** <path>` (aggregated bug lists from fix_found_bugs_helper.py).
+# We match all three. A misparse here was the root cause of v9.8.0's
+# auto-router silently routing every report to Sonnet (audit SR-P1-001).
 agent_for_report() {
   local report="$1"
-  # Extract the absolute source-file path from the report.
+  # Multi-pattern extraction. -m1 = first match only; -E = extended regex;
+  # the sed strips the leading marker and optional backticks. NEVER strip
+  # spaces from the path — paths under `/Users/John Doe/...` must survive
+  # (audit SR-P1-004).
   local src
-  src=$(awk '/^\*\*File:\*\*/ {print $2; exit}' "$report" 2>/dev/null \
-        | tr -d '`' | tr -d ' ' || true)
+  src=$(grep -m1 -E '^(## File:|\*\*File:\*\*|- \*\*Input file\*\*:)' "$report" 2>/dev/null \
+        | sed -E 's/^(## File:|\*\*File:\*\*|- \*\*Input file\*\*:)[[:space:]]*`?([^`]*)`?[[:space:]]*$/\2/' \
+        | sed -E 's/[[:space:]]+$//' || true)
   local big_source=0
+  # Existence check FIRST so we don't pass a missing path to `wc` (audit
+  # SR-P1-003 — the shell prints "no such file or directory" before wc
+  # runs, defeating the `2>/dev/null` on wc itself).
   if [[ -n "${src:-}" && -f "$src" ]]; then
     local lines bytes
-    lines=$(wc -l < "$src" 2>/dev/null || echo 0)
-    bytes=$(wc -c < "$src" 2>/dev/null || echo 0)
+    lines=$(wc -l < "$src" | tr -d '[:space:]')
+    bytes=$(wc -c < "$src" | tr -d '[:space:]')
     if (( lines > 1000 || bytes > 50000 )); then
       big_source=1
     fi
@@ -389,7 +401,7 @@ agent_for_report() {
   # Count findings as a second promotion trigger.
   local finds
   finds=$(grep -cF '[[FINDING]]' "$report" 2>/dev/null || echo 0)
-  if (( big_source == 1 || finds > 5 )); then
+  if [[ "${LLM_EXT_FORCE_OPUS:-0}" == "1" ]] || (( big_source == 1 || finds > 5 )); then
     echo "llm-externalizer-parallel-fixer-opus-agent"
   else
     echo "llm-externalizer-parallel-fixer-sonnet-agent"

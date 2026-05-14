@@ -167,16 +167,23 @@ The serial-fixer agent is dispatched once per bug (the loop in Step 6). The mode
 Within the loop in Step 6, before each dispatch, inspect the bug at the head of the queue and pick the variant:
 
 ```bash
-# Parse the source-file path from the bug's `**File:**` line and the count of
-# `[[FINDING]]` blocks the same way scan-and-fix does. The serial fixer
-# always handles exactly ONE bug per invocation, so the heuristic is about
-# how big the file under repair is and how complex its surrounding context.
-NEXT_SRC=$(awk '/^\*\*File:\*\*/ {print $2; exit}' "$BUGS_TO_FIX" 2>/dev/null \
-           | tr -d '`' | tr -d ' ' || true)
+# Walk to the FIRST `### ` heading that does NOT contain FIXED, then read
+# its `**File:**` line. Naive matching of the FIRST `**File:**` line in
+# the entire bug file always returned bug #1's path even after bug #1 was
+# already FIXED — routing decisions were made against the wrong file
+# (audit SR-P1-002). The state-machine variant below tracks the current
+# bug's FIXED status to find the next-up unfixed bug.
+NEXT_SRC=$(awk '
+  /^### / { in_bug = ($0 !~ /FIXED/) ? 1 : 0 ; next }
+  in_bug && /^\*\*File:\*\*/ {
+    sub(/^\*\*File:\*\* +/,""); gsub(/`/,""); sub(/[[:space:]]+$/,"")
+    print; exit
+  }
+' "$BUGS_TO_FIX" 2>/dev/null || true)
 BIG_SOURCE=0
 if [[ -n "${NEXT_SRC:-}" && -f "$NEXT_SRC" ]]; then
-  L=$(wc -l < "$NEXT_SRC" 2>/dev/null || echo 0)
-  B=$(wc -c < "$NEXT_SRC" 2>/dev/null || echo 0)
+  L=$(wc -l < "$NEXT_SRC" | tr -d '[:space:]')
+  B=$(wc -c < "$NEXT_SRC" | tr -d '[:space:]')
   if (( L > 1000 || B > 50000 )); then BIG_SOURCE=1; fi
 fi
 if [[ "${LLM_EXT_FORCE_OPUS:-0}" == "1" ]] || (( BIG_SOURCE == 1 )); then
