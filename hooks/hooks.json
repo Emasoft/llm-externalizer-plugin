@@ -1,16 +1,3 @@
 {
-  "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hooks/install-mcp-deps.sh"],
-            "timeout": 180
-          }
-        ]
-      }
-    ]
-  }
+  "hooks": {}
 }
