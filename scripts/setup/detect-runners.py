@@ -87,6 +87,21 @@ def run_cli(args: list[str], timeout: float = CMD_TIMEOUT) -> Optional[str]:
     return out.split("\n")[0] if out else None
 
 
+def _safe_model_names(payload: Optional[dict], key: str, name_field: str) -> list[str]:
+    """Extract model names from a /v1/models or /api/tags response, defensively.
+
+    Returns [] (not None, not crash) when: payload is None / wrong shape / the
+    list contains non-dict items or items missing the expected name field.
+    Without this guard, a single bad entry (e.g. an old / forked runner API)
+    raises KeyError inside the detector, which main()'s outer `except Exception`
+    converts into "runner not installed" — masking the actual issue.
+    """
+    items = (payload or {}).get(key, [])
+    if not isinstance(items, list):
+        return []
+    return [m[name_field] for m in items if isinstance(m, dict) and isinstance(m.get(name_field), str)]
+
+
 def detect_ollama() -> Optional[dict]:
     """Ollama: CLI `ollama`, port 11434, native /api/tags + OpenAI /v1/."""
     cli = shutil.which("ollama")
@@ -103,7 +118,7 @@ def detect_ollama() -> Optional[dict]:
         "version": version or "unknown",
         "port": 11434,
         "running": tags is not None,
-        "models": [m["name"] for m in (tags or {}).get("models", [])],
+        "models": _safe_model_names(tags, "models", "name"),
         "cli": cli,
     }
 
@@ -122,7 +137,7 @@ def detect_lmstudio() -> Optional[dict]:
         "version": version or "unknown",
         "port": 1234,
         "running": models_resp is not None,
-        "models": [m["id"] for m in (models_resp or {}).get("data", [])],
+        "models": _safe_model_names(models_resp, "data", "id"),
         "cli": cli,
     }
 
@@ -144,7 +159,7 @@ def detect_vllm() -> Optional[dict]:
         "version": version or "unknown",
         "port": 8000,
         "running": models_resp is not None,
-        "models": [m["id"] for m in (models_resp or {}).get("data", [])],
+        "models": _safe_model_names(models_resp, "data", "id"),
         "cli": None,  # vLLM is invoked as `python -m vllm.entrypoints.openai.api_server`
     }
 
@@ -163,7 +178,7 @@ def detect_llamacpp() -> Optional[dict]:
         "version": version or "unknown",
         "port": 8080,
         "running": models_resp is not None,
-        "models": [m["id"] for m in (models_resp or {}).get("data", [])],
+        "models": _safe_model_names(models_resp, "data", "id"),
         "cli": cli,
     }
 
@@ -180,7 +195,7 @@ def detect_jan() -> Optional[dict]:
         "version": "unknown",  # /v1/models does not expose Jan's version
         "port": 1337,
         "running": True,
-        "models": [m["id"] for m in models_resp.get("data", [])],
+        "models": _safe_model_names(models_resp, "data", "id"),
         "cli": shutil.which("jan"),
     }
 

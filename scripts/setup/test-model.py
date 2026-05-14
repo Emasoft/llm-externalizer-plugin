@@ -40,6 +40,7 @@ import sys
 import time
 from typing import Any, Optional
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 # ---------------------------------------------------------------------------
@@ -93,6 +94,21 @@ def call_chat(
         return {"error": f"transport: {e}"}
     except json.JSONDecodeError as e:
         return {"error": f"non-JSON response: {e}"}
+
+
+def _validate_local_url(url: str) -> str:
+    """Reject non-http(s) URLs and missing hosts.
+
+    SSRF guard. Without this, `--url file:///proc/self/environ` would dump the
+    wizard's environment (including HF_TOKEN / OPENROUTER_API_KEY) into the
+    test output, and `--url http://169.254.169.254/...` would probe cloud
+    metadata endpoints. urllib.request.urlopen silently accepts file://,
+    ftp://, and several other schemes; we restrict to http(s) only.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise SystemExit(f"--url must be an http(s) URL, got: {url!r}")
+    return url
 
 
 def extract_content(resp: dict[str, Any]) -> str:
@@ -356,6 +372,9 @@ TESTS = [
 
 PASS_AVG_THRESHOLD = 0.6
 PASS_STRUCTURED_THRESHOLD = 0.5  # structured_output is non-negotiable
+STRUCTURED_TEST_KEY = "structured_output"  # MUST match the TESTS entry above —
+# decoupling the verdict logic from a brittle string literal so renames stay
+# safe.
 
 
 def main() -> int:
@@ -369,6 +388,7 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=600.0,
                     help="Per-request timeout in seconds (default: 600)")
     args = ap.parse_args()
+    args.url = _validate_local_url(args.url)
 
     kw = {"api_key": args.api_key, "timeout": args.timeout}
 
@@ -384,7 +404,10 @@ def main() -> int:
         print(f"score={r['score']:.1f} ({r['duration_s']}s)", file=sys.stderr)
 
     avg = sum(r["score"] for r in results.values()) / len(results)
-    structured_score = results["structured_output"]["score"]
+    # .get() guards against TESTS being reordered/renamed without updating the
+    # verdict logic — a missing structured test scores 0 and fails the AND-gate
+    # rather than crashing with KeyError and producing no JSON.
+    structured_score = results.get(STRUCTURED_TEST_KEY, {"score": 0.0})["score"]
     passed = (avg >= PASS_AVG_THRESHOLD
               and structured_score >= PASS_STRUCTURED_THRESHOLD)
 

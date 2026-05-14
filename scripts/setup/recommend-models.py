@@ -61,6 +61,16 @@ from typing import Any, Iterable
 ONYX_SELF_HOSTED_URL = "https://onyx.app/self-hosted-llm-leaderboard"
 WHATCANIRUN_FEATURED_URL = "https://whatcani.run/api/v0/featured"
 SCRIPT_VERSION = "2.19.1-artifact-param-fix"
+# Plugin integration: schema version for the --json output shape. The setup
+# agent checks `payload.schema_version == RECOMMEND_MODELS_SCHEMA_VERSION` before
+# consuming the recommendations[] array; if upstream re-syncs change a field
+# name without bumping this version, the agent falls back to manual-name entry
+# rather than silently rendering "None" or zero scores.
+RECOMMEND_MODELS_SCHEMA_VERSION = 1
+# Plugin integration: cap on the body size of any single HTTP fetch. Without
+# this an attacker on the network path (or a compromised Onyx/whatcani.run
+# mirror) could return a multi-GB response and OOM-kill the wizard.
+MAX_FETCH_BODY_BYTES = 50 * 1024 * 1024  # Onyx HTML is ~1 MB; 50× is plenty.
 USER_AGENT = f"local-llm-coding-recommender/{SCRIPT_VERSION} (+https://openai.com)"
 # whatcani.run /api/v0/featured is a cached API route. The upstream
 # source currently accepts runtime/cpu/gpu/gpuCount/ramGb/osName/limit and
@@ -316,7 +326,17 @@ def fetch_text(
                 status = getattr(response, "status", 200)
                 if isinstance(status, int) and status >= 400:
                     raise urllib.error.HTTPError(url, status, f"HTTP {status}", response.headers, None)
-                text = response.read().decode(charset, errors="replace")
+                # Bounded read — read MAX_FETCH_BODY_BYTES + 1 to detect overrun
+                # without buffering the whole oversized body. Onyx HTML is ~1 MB,
+                # whatcani.run JSON is smaller; 50 MB ceiling is generous yet
+                # prevents a hostile mirror / MITM from OOM-killing the wizard.
+                raw = response.read(MAX_FETCH_BODY_BYTES + 1)
+                if len(raw) > MAX_FETCH_BODY_BYTES:
+                    raise RuntimeError(
+                        f"response from {url} exceeds {MAX_FETCH_BODY_BYTES} bytes "
+                        "(refusing to buffer oversized payload)"
+                    )
+                text = raw.decode(charset, errors="replace")
                 logging.info(
                     "fetch_success url=%s attempt=%d status=%s bytes=%d elapsed=%.2fs",
                     url,
@@ -400,7 +420,9 @@ def default_cache_dir() -> Path:
     # under setup/cache lets the agent's other state files (env.json,
     # runners.json, test-results.json) live in the same root and survive the
     # same lifecycle. Fall back to the upstream cache paths when run standalone.
-    plugin_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+    # Strip first — a whitespace-only env var is truthy in Python but Path(" ")
+    # resolves to a literal " " directory in CWD that the user can never find.
+    plugin_data = (os.environ.get("CLAUDE_PLUGIN_DATA") or "").strip()
     if plugin_data:
         return Path(plugin_data) / "setup" / "cache"
     if platform.system() == "Windows":
@@ -415,7 +437,7 @@ def default_log_path() -> str:
     # Plugin integration: when CLAUDE_PLUGIN_DATA is set, put the rotating log
     # under setup/logs/ (sibling to setup/cache/) so the agent's state tree is
     # discoverable as one subtree. Upstream default is preserved for standalone.
-    plugin_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+    plugin_data = (os.environ.get("CLAUDE_PLUGIN_DATA") or "").strip()
     if plugin_data:
         return str(Path(plugin_data) / "setup" / "logs" / "recommender.log")
     return str(default_cache_dir() / "last-run.log")
@@ -481,8 +503,55 @@ def setup_logging(log_path: str | None, max_bytes: int = DEFAULT_LOG_MAX_BYTES, 
     return None
 
 
+_SENSITIVE_KEY_SUBSTRINGS = (
+    "api_key", "apikey", "token", "secret", "password", "auth", "authorization",
+    "bearer", "credential",
+)
+
+
 def safe_args_for_log(args: argparse.Namespace) -> dict[str, Any]:
-    return {key: value for key, value in sorted(vars(args).items())}
+    """Return a copy of args with values for sensitive-named keys redacted.
+
+    Despite the name, the previous implementation was identical to vars(args)
+    — affirmatively misleading for future maintainers. If a future re-sync
+    from upstream adds e.g. --hf-token or --whatcanirun-api-key, this function
+    now redacts the value before it lands in the rotating diag log.
+    """
+    redacted: dict[str, Any] = {}
+    for key, value in sorted(vars(args).items()):
+        if any(substr in key.lower() for substr in _SENSITIVE_KEY_SUBSTRINGS):
+            redacted[key] = "[REDACTED]"
+        else:
+            redacted[key] = value
+    return redacted
+
+
+def safe_argv_for_log(argv: list[str]) -> list[str]:
+    """Return a copy of argv with values for sensitive-named flags redacted.
+
+    Handles both `--api-key VALUE` (two tokens) and `--api-key=VALUE` (one
+    token). Mirrors safe_args_for_log so direct sys.argv logging stays safe
+    if a future upstream re-sync adds secret-bearing flags.
+    """
+    cleaned: list[str] = []
+    mask_next = False
+    for token in argv:
+        if mask_next:
+            cleaned.append("[REDACTED]")
+            mask_next = False
+            continue
+        lower = token.lower()
+        if token.startswith("--") and "=" in token:
+            flag_name, _, _ = token.partition("=")
+            if any(substr in flag_name.lower() for substr in _SENSITIVE_KEY_SUBSTRINGS):
+                cleaned.append(f"{flag_name}=[REDACTED]")
+                continue
+        if token.startswith("--") and any(substr in lower for substr in _SENSITIVE_KEY_SUBSTRINGS):
+            cleaned.append(token)
+            mask_next = True
+            continue
+        cleaned.append(token)
+    return cleaned
 
 
 def write_success_diagnostic_log(
@@ -503,7 +572,7 @@ def write_success_diagnostic_log(
     logging.info("script_version=%s", SCRIPT_VERSION)
     logging.info("python=%s", sys.version.replace("\n", " "))
     logging.info("platform=%s", platform.platform())
-    logging.info("argv=%s", json.dumps(sys.argv, ensure_ascii=False))
+    logging.info("argv=%s", json.dumps(safe_argv_for_log(sys.argv), ensure_ascii=False))
     logging.info("options=%s", json.dumps(safe_args_for_log(args), ensure_ascii=False, sort_keys=True))
     logging.info("hardware=%s", json.dumps(dataclasses.asdict(hardware), ensure_ascii=False, sort_keys=True))
     logging.info("models_loaded=%d", len(models))
@@ -528,7 +597,7 @@ def write_error_diagnostic_log(*, args: argparse.Namespace, log_path: str, error
     logging.info("script_version=%s", SCRIPT_VERSION)
     logging.info("python=%s", sys.version.replace("\n", " "))
     logging.info("platform=%s", platform.platform())
-    logging.info("argv=%s", json.dumps(sys.argv, ensure_ascii=False))
+    logging.info("argv=%s", json.dumps(safe_argv_for_log(sys.argv), ensure_ascii=False))
     logging.info("options=%s", json.dumps(safe_args_for_log(args), ensure_ascii=False, sort_keys=True))
     logging.info("diagnostic_log=%s", os.path.abspath(log_path))
 
@@ -2677,7 +2746,7 @@ def main(argv: list[str]) -> int:
     log_path = None if args.no_log else (args.log_file or default_log_path())
     log_path = setup_logging(log_path, max_bytes=args.log_max_bytes, backup_count=args.log_backup_count)
     if log_path:
-        logging.info("argv=%s", json.dumps(sys.argv, ensure_ascii=False))
+        logging.info("argv=%s", json.dumps(safe_argv_for_log(sys.argv), ensure_ascii=False))
         logging.info("options=%s", json.dumps(safe_args_for_log(args), ensure_ascii=False, sort_keys=True))
     whatcanirun_source: str | None = None
     whatcanirun_error: str | None = None
@@ -2730,6 +2799,7 @@ def main(argv: list[str]) -> int:
 
     if args.json:
         payload = {
+            "schema_version": RECOMMEND_MODELS_SCHEMA_VERSION,
             "generated_at_unix": int(time.time()),
             "source": args.url,
             "whatcanirun_source": whatcanirun_source,

@@ -30,6 +30,10 @@ case "$OS_RAW" in
     OS_NORMALIZED="macos"
     if command -v sysctl >/dev/null 2>&1; then
       RAM_BYTES=$(sysctl -n hw.memsize 2>/dev/null || echo 0)
+      # Guard against empty / non-numeric output (sysctl exit==0 but no value,
+      # observed on some virtualised macOS guests). Without this, bash arithmetic
+      # aborts under `set -e` and the script emits no JSON.
+      [[ "$RAM_BYTES" =~ ^[0-9]+$ ]] || RAM_BYTES=0
       RAM_GB=$(( RAM_BYTES / 1024 / 1024 / 1024 ))
     fi
     # Apple Silicon → unified-memory Metal GPU. Intel Macs may have discrete
@@ -52,6 +56,9 @@ case "$OS_RAW" in
 
     if [[ -r /proc/meminfo ]]; then
       RAM_KB=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+      # Same guard as the macOS branch — empty/non-numeric awk output (corrupted
+      # /proc/meminfo, BSD-flavor procfs) would otherwise crash bash arithmetic.
+      [[ "$RAM_KB" =~ ^[0-9]+$ ]] || RAM_KB=0
       RAM_GB=$(( RAM_KB / 1024 / 1024 ))
     fi
 
@@ -60,7 +67,10 @@ case "$OS_RAW" in
     # all degrade to CPU when neither toolchain is present.
     if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
       GPU="nvidia"
-    elif command -v rocm-smi >/dev/null 2>&1; then
+    elif command -v rocm-smi >/dev/null 2>&1 && rocm-smi --showid >/dev/null 2>&1; then
+      # rocm-smi present without a real AMD card (e.g. user installed ROCm to
+      # build llama.cpp with HIP) would otherwise mis-tag the GPU. --showid
+      # exits non-zero when no AMD device is present.
       GPU="amd-rocm"
     fi
     ;;
@@ -76,7 +86,9 @@ case "$OS_RAW" in
       RAM_BYTES=$(wmic computersystem get TotalPhysicalMemory /value 2>/dev/null \
                   | tr -d '\r' \
                   | awk -F= '/TotalPhysicalMemory=/ {print $2}')
-      if [[ -n "${RAM_BYTES:-}" ]]; then
+      # Numeric guard — wmic on certain VMs emits `TotalPhysicalMemory=N/A`;
+      # the non-empty check alone would let that through and crash bash arith.
+      if [[ "${RAM_BYTES:-}" =~ ^[0-9]+$ ]]; then
         RAM_GB=$(( RAM_BYTES / 1024 / 1024 / 1024 ))
       fi
     fi

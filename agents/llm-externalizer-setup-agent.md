@@ -143,12 +143,16 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/recommend-models.py" \
 
 This call takes 5-30 s on a cold cache (network fetch) and < 1 s on a warm cache (TTL: 1 hour for whatcani.run; Onyx is parsed fresh each run unless `--from-cache` is passed). Both caches live under `$CLAUDE_PLUGIN_DATA/setup/cache/`; a rotating diagnostic log lives under `$CLAUDE_PLUGIN_DATA/setup/logs/recommender.log`.
 
-Parse the JSON. The relevant fields per recommendation:
+Parse the JSON. **Before consuming `recommendations[]`, verify `schema_version == 1`** — if the value differs (e.g. an upstream re-sync renamed fields without bumping the version, or the field is missing entirely), DO NOT trust the menu fields; fall back to the "Manually name a model" path below and surface a warning to the user ("recommender returned an unexpected JSON shape; using manual entry instead").
+
+The relevant fields per recommendation:
 
 | Field | Meaning |
 |---|---|
+| `schema_version` | MUST be `1`. Refuse to consume `recommendations[]` if absent or different. |
 | `recommendations[].model.name` | Display name (e.g. `Qwen2.5-Coder-7B-Instruct`) |
-| `recommendations[].model.params` | Parameter count (e.g. `7B`) |
+| `recommendations[].model.params` | Display string from the leaderboard (e.g. `7B`). May be `null` — fall back to `f"{recommendations[].model.params_b}B"` (the parsed numeric value, in billions of parameters). |
+| `recommendations[].model.params_b` | Parameter count as a float, in billions. More reliable than `params` which is the raw scraped string. |
 | `recommendations[].compatible` | Boolean — whether the model fits the user's memory budget |
 | `recommendations[].headroom_gb` | Free RAM/VRAM after loading (positive = room to spare) |
 | `recommendations[].coding_score` | Weighted code-benchmark score (0.0-1.0) |
@@ -274,7 +278,7 @@ Print the YAML block to the user in a fenced ```yaml block, then exact paste-her
 After the user confirms they have pasted and saved, call `mcp__llm-externalizer__discover` and report: active profile name, mode, api preset, model, auth status, service health. If `discover` returns the expected profile with `service_health: ok`, output one line: `Setup complete — try /llm-externalizer:llm-externalizer-discover any time to re-check health.`
 
 If `discover` does NOT see the new profile, walk the user through diagnostics:
-- Did the file get saved with valid YAML? (`python3 -c "import yaml; yaml.safe_load(open('~/.llm-externalizer/settings.yaml'.expanduser()))"`)
+- Did the file get saved with valid YAML? (`python3 -c "import yaml, os; yaml.safe_load(open(os.path.expanduser('~/.llm-externalizer/settings.yaml')))"`)
 - Is `active:` set correctly?
 - Did `reset` actually run (look for the reset confirmation)?
 
