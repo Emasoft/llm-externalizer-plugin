@@ -34,6 +34,7 @@ from __future__ import annotations
 import filecmp
 import json
 import os
+import shlex
 import shutil
 import sys
 import tempfile
@@ -150,10 +151,24 @@ def main() -> None:
         )
         sys.exit(2)
 
+    # Pick a usable Python interpreter at install time, NOT at every refresh.
+    # `python3` is unreliable: it doesn't exist on native Windows (where the
+    # canonical name is `py` or `python`), on NixOS (no /usr/bin/python3
+    # without an explicit nix-shell), or on PEP-668 systems where the bare
+    # `python3` symlink may point at Apple's CLT-stub that pops a Xcode prompt.
+    # shutil.which() returns an absolute path; fall back to sys.executable
+    # which is always the interpreter currently running this installer.
+    interp = shutil.which("python3") or shutil.which("python") or sys.executable
+    if not interp:
+        print("Error: cannot locate a Python interpreter for the statusline.", file=sys.stderr)
+        sys.exit(2)
+    # shlex.join handles paths containing spaces (~/Test User/.claude/statusline.py)
+    # which the old `python3 {dest}` interpolation broke into two arguments.
+    statusline_cmd = shlex.join([interp, str(dest)])
     # Replace the statusLine block (rewrite, not merge) so stale fields can't survive.
     data["statusLine"] = {
         "type": "command",
-        "command": f"python3 {dest}",
+        "command": statusline_cmd,
         "refreshInterval": refresh_interval,
     }
     _atomic_write_json(settings_path, data)

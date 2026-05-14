@@ -245,6 +245,16 @@ def fetch_usage_from_api(cache_dir: Path, claude_version: str) -> dict | None:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             cache_file.write_text(json.dumps(data), encoding="utf-8")
+            # 0o600 restrict mode — the response is derived from the
+            # user's OAuth bearer token and includes rate-limit /
+            # subscription-tier info that should not be world-readable
+            # on multi-tenant Linux hosts. The parent /tmp/claude dir is
+            # 0o700 but Path.write_text uses the process umask (typically
+            # 0o022 -> 0644), so we tighten explicitly.
+            try:
+                cache_file.chmod(0o600)
+            except OSError:
+                pass
             return data
     except Exception:
         # Fall back to stale cache
@@ -280,6 +290,11 @@ def fetch_openrouter_budget(cache_dir: Path) -> float | None:
                 data = json.loads(resp.read().decode("utf-8"))
                 if "data" in data:
                     cache_file.write_text(json.dumps(data), encoding="utf-8")
+                    try:
+                        cache_file.chmod(0o600)  # see Authorization-token
+                                                 # cache rationale above.
+                    except OSError:
+                        pass
                     total = data["data"].get("total_credits", 0)
                     used = data["data"].get("total_usage", 0)
                     return total - used

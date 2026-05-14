@@ -92,11 +92,21 @@ except json.JSONDecodeError as e:
     print(f"ERROR: $SETTINGS is not valid JSON: {e}", file=sys.stderr)
     sys.exit(2)
 
+# Pick the right interpreter at install time. The literal name python3 is unreliable: it
+# doesn't exist on native Windows, on NixOS without nix-shell, or on
+# PEP-668 macOS where the bare symlink points at Apple's CLT stub. Use
+# shlex.join to quote paths containing spaces.
+import shutil, shlex
+interp = shutil.which("python3") or shutil.which("python") or sys.executable
+if not interp:
+    print("ERROR: cannot locate a Python interpreter for the statusline.", file=sys.stderr)
+    sys.exit(2)
+statusline_cmd = shlex.join([interp, dest_path])
 # Replace the statusLine block. We deliberately rewrite (not merge) the
 # inner dict so a stale "args" or other obsolete field can't survive.
 data["statusLine"] = {
     "type": "command",
-    "command": f"python3 {dest_path}",
+    "command": statusline_cmd,
     "refreshInterval": refresh,
 }
 
