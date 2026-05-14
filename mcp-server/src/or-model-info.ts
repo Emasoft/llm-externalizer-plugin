@@ -164,6 +164,17 @@ export async function fetchOpenRouterModelInfo(
   const controller = new AbortController();
   const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
 
+  // Reject control characters in the bearer token — defense in depth against
+  // a multi-line api_key smuggling extra headers (CR/LF injection). The same
+  // guard exists in src/index.ts apiHeaders(); replicated here so this file's
+  // direct fetch is hardened too.
+  if (/[\x00-\x1f\x7f]/.test(authToken)) {
+    return {
+      ok: false,
+      error: "Refusing to send Authorization header containing control characters (CR/LF/etc.) — check your OPENROUTER_API_KEY for stray newlines.",
+    };
+  }
+
   let res: Response;
   try {
     res = await fetch(`${baseUrl}/v1/models/${modelId}/endpoints`, {

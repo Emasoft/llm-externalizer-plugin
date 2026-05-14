@@ -24,8 +24,9 @@ import {
 } from "node:fs";
 import { parse as yamlParse } from "yaml";
 import { spawnSync } from "node:child_process";
-import { extname, join, basename, dirname, resolve, isAbsolute } from "node:path";
+import { extname, join, basename, dirname, resolve, isAbsolute, sep } from "node:path";
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import {
   GROUP_HEADER_RE,
   GROUP_FOOTER_RE,
@@ -158,21 +159,42 @@ function assertFileExists(filePath: string): void {
 
 function sanitizeInputPath(filePath: string): string {
   const resolved = resolve(filePath);
-  const cwd = resolve(process.cwd());
-  const home = resolve(process.env.HOME || process.env.USERPROFILE || "/");
-  // Allow paths under cwd, home, or /tmp (for test fixtures)
+  // Canonicalise each whitelist root via realpathSync so /tmp -> /private/tmp
+  // on macOS is collapsed to a single comparable form. The previous
+  // implementation matched against the raw symlink path AND its target
+  // separately, which let an attacker craft `/tmp/../private/tmp/...` to
+  // skip the resolved-prefix check on the macOS realpath form.
+  const realpathSafe = (p: string): string => {
+    try { return realpathSync(p); } catch { return p; }
+  };
+  const cwdReal = realpathSafe(resolve(process.cwd()));
+  const homeReal = realpathSafe(
+    resolve(process.env.HOME || process.env.USERPROFILE || homedir()),
+  );
+  const tmpReal = realpathSafe(resolve("/tmp"));
+  // Canonicalise the candidate path BEFORE comparing — if the file exists
+  // and is a symlink we want the link target's identity to be checked. The
+  // leaf-symlink rejection below still applies, so this is defense in depth.
+  const resolvedReal = (() => {
+    try { return realpathSync(resolved); } catch { return resolved; }
+  })();
+  // Cross-platform sep handling — the previous version concatenated a
+  // forward-slash separator unconditionally, which made every path on
+  // Windows fail the prefix check (cwd uses `\` there).
+  const isUnder = (parent: string, child: string): boolean =>
+    child === parent || child.startsWith(parent + sep);
   if (
-    !resolved.startsWith(cwd + "/") &&
-    !resolved.startsWith(home + "/") &&
-    !resolved.startsWith("/tmp/") &&
-    !resolved.startsWith("/private/tmp/") &&
-    resolved !== cwd
+    !isUnder(cwdReal, resolvedReal) &&
+    !isUnder(homeReal, resolvedReal) &&
+    !isUnder(tmpReal, resolvedReal)
   ) {
     throw new Error(
       `Path traversal blocked: ${filePath} resolves outside allowed directories`,
     );
   }
-  // Reject symlinks (follow=false check)
+  // Reject symlinks (follow=false check) — keep this even after the realpath
+  // collapse above, so a symlink whose target is in-bounds is still refused
+  // when its leaf identity is a symlink (defense in depth).
   try {
     if (lstatSync(resolved).isSymbolicLink()) {
       throw new Error(`Symlink rejected for security: ${filePath}`);
@@ -2014,15 +2036,29 @@ function recordUsage(usage?: {
   writeStatsFile();
 }
 
+// Reject any header value containing control characters (CR, LF, NUL, etc.).
+// A multi-line api_key — e.g. accidentally pasted as a YAML `>-` block or
+// extracted from a PEM file via pbpaste — would otherwise smuggle additional
+// headers into outbound requests when interpolated below.
+function assertSafeHeaderValue(name: string, v: string): string {
+  if (/[\x00-\x1f\x7f]/.test(v)) {
+    throw new Error(
+      `Refusing to send ${name} containing control characters (CR/LF/etc.) — check your settings.yaml for a multi-line api_key.`,
+    );
+  }
+  return v;
+}
+
 function apiHeaders(): Record<string, string> {
   const h: Record<string, string> = { "Content-Type": "application/json" };
   if (currentBackend.apiKey)
-    h["Authorization"] = `Bearer ${currentBackend.apiKey}`;
+    h["Authorization"] = `Bearer ${assertSafeHeaderValue("Authorization", currentBackend.apiKey)}`;
   // OpenRouter requires HTTP-Referer and X-Title headers for ranking/attribution
   if (currentBackend.type === "openrouter") {
     if (activeResolved?.httpReferer)
-      h["HTTP-Referer"] = activeResolved.httpReferer;
-    if (activeResolved?.appName) h["X-Title"] = activeResolved.appName;
+      h["HTTP-Referer"] = assertSafeHeaderValue("HTTP-Referer", activeResolved.httpReferer);
+    if (activeResolved?.appName)
+      h["X-Title"] = assertSafeHeaderValue("X-Title", activeResolved.appName);
   }
   return h;
 }
@@ -4976,8 +5012,13 @@ function buildTools() {
 
 // ── MCP Server ───────────────────────────────────────────────────────
 
+// Version is hard-coded here AND in package.json. publish.py's release flow
+// keeps them in sync; if you bump one, bump the other in the same commit.
+// (A previous release skipped the index.ts side, leaving the MCP server
+// advertising 9.5.1 to clients while the plugin manifest reported 9.7.0 —
+// see commit history for the consolidation.)
 const server = new Server(
-  { name: "llm-externalizer", version: "9.5.1" },
+  { name: "llm-externalizer", version: "9.7.0" },
   { capabilities: { tools: { listChanged: true } } },
 );
 
@@ -5930,7 +5971,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 isError: true,
               };
             }
-            const absPath = resolve(rawPath);
+            let absPath: string;
+            try {
+              // Run the path through the same traversal guard as every other
+              // file-writing surface in this server. Without this an LLM that
+              // controls the tool call could overwrite arbitrary user-writable
+              // files outside the project / home / tmp roots.
+              absPath = sanitizeInputPath(rawPath);
+            } catch (err) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `FAILED: refusing to write JSON to ${rawPath}: ${err instanceof Error ? err.message : String(err)}`,
+                  },
+                ],
+                isError: true,
+              };
+            }
             try {
               writeFileSync(absPath, jsonText, "utf-8");
             } catch (err) {
