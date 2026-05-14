@@ -1,6 +1,167 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.7.0] - 2026-05-14
+
+### Added
+
+- Feat(setup): build-snippet.py — safe YAML profile-snippet generator
+
+New `scripts/setup/build-snippet.py` replaces the LLM-built f-string the
+setup wizard previously used for Step-6 settings.yaml generation. Every
+value is double-quoted via a stdlib-only `_yaml_dquote` helper so model
+IDs containing colons (`qwen2.5-coder:7b`), embedded quotes, or other
+YAML-special characters serialise correctly. Profile names are validated
+against `[A-Za-z][A-Za-z0-9._-]{0,63}` and unrecognised runners +
+`--context-window` values below 4096 are refused at argparse time.
+
+### Changed
+
+- Refactor(setup): audit-driven Tier-2/Tier-3 fixes (~37 items)
+
+A four-agent audit swarm (skeptical-reviewer, code-correctness, security,
+silent-failure-hunter) flagged 76 findings on the new setup wizard. Tier 1
+(security HIGH + critical correctness) landed in v9.6.0 via commit
+`d314c2d`. Tier 2 (UX + Windows-detection + agent flow) and Tier 3 (polish
++ skill cleanups) land here:
+
+**Cross-cutting hardening:**
+
+- Every `script > file.json` invocation in the agent now wraps in a
+  fail-fast `if !`/`exit "$rc"` check, surfaces the diagnostic-log path
+  on failure, and drops the partial file rather than letting the next
+  step parse stale content.
+- Catch-all `except Exception:` blocks in `test-model.py` and
+  `detect-runners.py` narrowed to the specific error classes — harness
+  bugs no longer collapse to "model failed" / "runner not installed".
+- `recommend-models.py` log helpers (`safe_args_for_log`,
+  `safe_argv_for_log`) tested at v9.6.0; this release adds cache-arg
+  path-traversal confinement under `$CLAUDE_PLUGIN_DATA/setup/cache/`,
+  HTTP-fetch charset allow-list, and bounded recursion in
+  `extract_featured_models`.
+
+**Windows detection (detect-environment.sh):**
+
+- RAM via PowerShell `Get-CimInstance Win32_ComputerSystem` (Win11
+  24H2+ compatible) with wmic + systeminfo fallback chain.
+- GPU via `Get-CimInstance Win32_VideoController` returns
+  nvidia / amd-rocm / none / unknown.
+
+**WSL2 (detect-runners.py + agent):**
+
+- New `--probe-host` / `--include-wsl2-host` flags. The agent passes
+  `--include-wsl2-host` when `env.json.os == "wsl2"` so LM Studio
+  installs bridged from the Windows host become visible.
+- Each runner result now carries a `host` field disambiguating
+  localhost from the Windows-host probe.
+- The agent's WSL2 corner-case section now recommends PowerShell
+  `Get-NetIPAddress` over the tamperable /etc/resolv.conf heuristic.
+
+**Runner detection (detect-runners.py):**
+
+- Jan port-1337 probe now requires BOTH `/v1/models` AND
+  `/api/version` to respond, defeating port-collision false
+  positives (any other dev tool on 1337 that returned valid JSON
+  would otherwise mis-tag as Jan).
+- vLLM `import vllm` failures discriminated via stderr inspection —
+  half-installed vLLM (mismatched CUDA, missing _C extension)
+  surfaces as `import_error: <reason>` instead of being mis-reported
+  as "not installed".
+
+**Compatibility test (test-model.py):**
+
+- `test_long_context` rewritten as needle-in-haystack: ~32K tokens
+  with a unique sentence at the 90 % depth, asks for verbatim recall.
+  The previous 1-token "fox" answer could be pattern-matched from
+  just the prompt prefix on a 16K-context model.
+- `err_body` sanitised — strip `sk-…`, `hf_…`, and `Bearer <token>`
+  patterns before including in the test JSON output.
+- `extract_content()` returns `(text, hint)` discriminating tool_call /
+  multimodal / malformed shapes so the user gets a real explanation
+  instead of "empty response".
+- `_err_from_call()` uses `isinstance(resp.get("error"), str)` instead
+  of `"error" in resp` — defeats false-positive on responses that
+  legitimately include `"error": null` alongside a successful
+  `choices` array.
+- Pre-flight stderr header tells the user the typical 30-90 s
+  duration; per-test progress lines (`[smoke] ...`) flushed in real
+  time.
+
+**Recommender (recommend-models.py):**
+
+- `WhatCanIRunEvidence.raw` set to None at extraction (was carrying
+  the entire upstream featured-model dict through to the agent's JSON
+  context — an indirect prompt-injection surface).
+- Cache-arg path-traversal confinement when CLAUDE_PLUGIN_DATA is set
+  (`--from-cache` / `--save-cache` / `--whatcanirun-*-cache` must
+  resolve under `default_cache_dir()`). Standalone CLI mode keeps
+  unrestricted paths.
+- `extract_featured_models()` recursion bounded to depth 64 —
+  attacker-controlled deeply-nested JSON no longer triggers
+  RecursionError.
+- Response charset pinned to a small allow-list (utf-8, ascii,
+  latin-1, iso-8859-1, windows-1252); exotic codecs no longer mangle
+  the content while parsing "successfully".
+- `safe_local_dir_name()` strips leading dots so a poisoned
+  `display_name = "..ssh"` cannot produce a `./models/..ssh` path.
+- `BRAND_PROVIDER_PREFIXES` matching requires a word-boundary after
+  the prefix — `phidias-xxx` no longer mis-matches `phi` as
+  Microsoft.
+- `--context-tokens` lower bound raised to 4096; `--limit` bounded
+  to 1-1000.
+- `setup_logging()` prints to stderr when both candidate log paths
+  fail instead of silently disabling logging.
+- `whatcanirun_cache_save_failure` raises when the user EXPLICITLY
+  passed `--save-whatcanirun-cache` (implicit auto-save failures
+  remain warning-only).
+
+**Agent prompt + slash command:**
+
+- New Step 0 reads the existing settings.yaml + calls `discover` to
+  show every already-configured profile. Asks whether the user is
+  adding / fixing / replacing before generating the snippet.
+- Sub-step 6a checks profile-name collisions against existing
+  profiles and suggests `<name>-2` / `-3` on conflict; the paste
+  instructions now lead with `cp settings.yaml settings.yaml.bak`
+  as the safety net for YAML-indent typos.
+- Step 6 now calls `scripts/setup/build-snippet.py` instead of an
+  LLM-built f-string.
+- hf install fallback chain is uv → pipx → pip-user → bootstrap-uv
+  (handles PEP 668 systems where bare `pip install --user` aborts).
+  Install command version-pinned to `huggingface-hub[cli]>=0.25,<1.0`.
+- `hf auth whoami` probe after install surfaces an info line about
+  gated Llama / Gemma / Mistral repos requiring a free token (does
+  NOT block — public models work without auth).
+- Verdict block surfaces explicit warnings on `output_length` /
+  `long_context` / `code_understanding` scores < 1.0 (with
+  per-runner --max-tokens hints).
+- New "Idempotency / resume" subsection — agent checks state-file
+  mtime (within last hour) and offers resume per-step.
+- `commands/llm-externalizer-setup.md`: OpenRouter redirect moved to
+  the top so impatient users see it before scrolling past the seven
+  steps.
+
+**Skills:**
+
+- `huggingface-mlx-models`: default port 8080 → 8082 so MLX and
+  llama-server can run side-by-side without colliding.
+- `huggingface-best`: all three `curl -H "Authorization: Bearer ..."`
+  blocks now use `hf auth token` (canonical, hf-CLI-managed) instead
+  of `cat ~/.cache/huggingface/token` (legacy `huggingface-cli` path
+  that the current `hf auth login` no longer writes to).
+
+Deferred-by-design (NOT applied, see TRDD-3ef94759 for rationale):
+
+- T3.8 (drop the 5-skill preload) — preload was an explicit user
+  decision in a prior session; reversing it without confirmation
+  was inappropriate.
+- T3.11 (TLS pin / --ca-bundle on recommend-models.py) — audit-marked
+  LOW + "accepted risk".
+
+Closes TRDD-3ef94759. All audit-flagged HIGH / MAJOR / CRITICAL findings
+addressed. Verified: ruff / pyright (0 errors) / shellcheck — all clean.
+
+
 ## [9.6.0] - 2026-05-14
 
 ### Added

@@ -4,8 +4,12 @@
 **Filename:** `design/tasks/TRDD-3ef94759-0b98-4f47-85a1-95087a742a20-setup-wizard-tier2-tier3.md`
 **Tracked in:** this repo (design/tasks/ is git-tracked)
 
-**Status:** Not started — proposed work, awaiting prioritisation in a future session
+**Status:** Done — all Tier 2 + Tier 3 items shipped in v9.7.0 (commits `c9606c0`, `b7aac6f`, `e192fee`). One item (T3.8 — drop the 5-skill preload) was deliberately NOT applied — see "Deferred-by-design" subsection below.
 **Origin commit:** `d314c2d fix(setup): audit-driven Tier-1 security + correctness fixes` (the audit reports themselves live in `reports/setup-agent-audit/` — gitignored, not in repo)
+**Closing commits:**
+- `c9606c0 fix(setup): Tier-2/3 script hardening (Windows + WSL2 + security)` — detect-environment.sh PowerShell, detect-runners.py WSL2 + Jan + vllm-discrim, test-model.py needle-in-haystack + sanitisation, recommend-models.py security hardening.
+- `b7aac6f feat(setup): build-snippet.py helper + agent flow overhauls (Tier-2/3)` — new YAML helper, agent.md Step 0 existing-profile preview, exit-code checks, hf install fallback chain, hf auth whoami probe, output-cap warning, idempotency state-mtime check, OpenRouter redirect at top of slash command.
+- `e192fee fix(skills): MLX default port 8082 + huggingface-best hf auth token` — port 8080→8082 collision fix, legacy token-path fix.
 **Related to:** the `/llm-externalizer-setup` wizard introduced in `e83814b`
 
 ## Background
@@ -13,8 +17,14 @@
 Four parallel audit agents (skeptical-reviewer, code-correctness, security, silent-failure-hunter) reviewed the new wizard. Findings were consolidated into 3 tiers:
 
 - **Tier 1** (10 surgical fixes, 142 LOC, security HIGH + critical correctness) — **DONE in commit `d314c2d`**.
-- **Tier 2** (15 items, UX + Windows-detection + agent-flow rework) — **deferred to this TRDD**.
-- **Tier 3** (~22 items, polish + skill cleanups + deferred upstream-coordination) — **deferred to this TRDD**.
+- **Tier 2** (15 items, UX + Windows-detection + agent-flow rework) — **DONE in commits `c9606c0` + `b7aac6f`**.
+- **Tier 3** (~22 items, polish + skill cleanups + deferred upstream-coordination) — **DONE in commits `c9606c0` + `b7aac6f` + `e192fee`** (modulo one deferred-by-design item, T3.8).
+
+## Deferred-by-design (skipped on purpose)
+
+- **T3.8 — drop the 5-skill preload.** The skeptical-reviewer suggested moving from frontmatter `skills:` preload to on-demand Skill-tool invocation to save ~20 KB of context budget. The user explicitly added the preload mechanism in an earlier session ("also read this to know how to add skills to the frontmatter of an agent: https://code.claude.com/docs/en/sub-agents.md") so reverting that decision without confirmation was inappropriate. The reviewer's "context budget" argument is also speculative — preload trades context tokens for deterministic skill access, and the wizard often hits at least 2 of the 5 skills anyway (huggingface-local-models or huggingface-mlx-models depending on platform). If this turns into a real problem (measured context exhaustion on Sonnet during a real run), revisit then.
+
+- **T3.11 — TLS pin / --ca-bundle on recommend-models.py.** Marked LOW security and "accepted risk" by the audit (trust-on-first-use is acceptable for these benchmark feeds, and corporate-MITM users can already override via system trust store). Cost-benefit doesn't justify the added complexity.
 
 The audit reports remain available locally under `reports/setup-agent-audit/` (gitignored). The consolidated report has the full per-finding tables with file:line evidence and suggested fix sketches.
 
