@@ -47,6 +47,10 @@ import {
   MASS_SCOUT_TOOL_NAMES,
   dispatchMassScoutTool,
 } from "./mass_scouting/mcp-tools.js";
+import {
+  safeReadText,
+  safeReadJson,
+} from "./safe-body.js";
 
 // ── File reading helpers ─────────────────────────────────────────────
 // The MCP reads files from disk so the calling agent never loads them into its context.
@@ -1381,11 +1385,11 @@ async function getModelSupportedParams(
       { headers: apiHeaders() },
     );
     if (!res.ok) return null;
-    const body = (await res.json()) as {
+    const body = await safeReadJson<{
       data?: {
         endpoints?: Array<{ supported_parameters?: string[] }>;
       };
-    };
+    }>(res);
     const endpoints = body.data?.endpoints;
     if (!Array.isArray(endpoints) || endpoints.length === 0) return null;
     const merged = new Set<string>();
@@ -1615,7 +1619,7 @@ async function fetchOpenRouterModels(): Promise<OpenRouterModelInfo[]> {
     headers: { Authorization: `Bearer ${activeResolved.authToken}` },
   });
   if (!res.ok) throw new Error(`OpenRouter /models returned ${res.status}`);
-  const data = (await res.json()) as { data?: unknown };
+  const data = await safeReadJson<{ data?: unknown }>(res);
   if (!Array.isArray(data.data)) {
     throw new Error(
       "OpenRouter /models returned unexpected shape (data is not an array)",
@@ -1743,9 +1747,9 @@ async function queryCreditsForRps(): Promise<number> {
       headers: { Authorization: `Bearer ${activeResolved.authToken}` },
     });
     if (res.ok) {
-      const body = (await res.json()) as {
+      const body = await safeReadJson<{
         data: { total_credits?: number; total_usage?: number };
-      };
+      }>(res);
       const credits = body.data?.total_credits ?? 0;
       const usage = body.data?.total_usage ?? 0;
       const balance = credits - usage;
@@ -2502,7 +2506,7 @@ async function chatCompletionNative(
 
     // If the reasoning parameter is rejected, retry without it
     if (!res.ok && body.reasoning) {
-      const errText = await res.text().catch(() => "");
+      const errText = await safeReadText(res).catch(() => "");
       if (errText.includes("does not support reasoning")) {
         process.stderr.write(
           "[llm-externalizer] Model does not support reasoning parameter, retrying without it\n",
@@ -2519,11 +2523,11 @@ async function chatCompletionNative(
     }
 
     if (!res.ok) {
-      const text = await res.text().catch(() => "");
+      const text = await safeReadText(res).catch(() => "");
       throw new Error(`LM Studio API error ${res.status}: ${text}`);
     }
 
-    const data = (await res.json()) as LMStudioChatResponse;
+    const data = await safeReadJson<LMStudioChatResponse>(res);
 
     // Extract message content from output array
     const messageContent = data.output
@@ -2659,7 +2663,7 @@ async function chatCompletionSimple(
       );
 
       if (!res.ok) {
-        const text = await res.text().catch(() => "");
+        const text = await safeReadText(res).catch(() => "");
         if (reasoning && isReasoningRejectionError(res.status, text)) {
           const effort = (reasoning as { effort?: string }).effort;
           process.stderr.write(
@@ -2676,7 +2680,7 @@ async function chatCompletionSimple(
         );
       }
 
-      const data = (await res.json()) as {
+      const data = await safeReadJson<{
         choices?: Array<{
           message?: { content?: string };
           finish_reason?: string;
@@ -2688,7 +2692,7 @@ async function chatCompletionSimple(
           total_tokens: number;
           cost?: number;
         };
-      };
+      }>(res);
 
       const content = data.choices?.[0]?.message?.content ?? "";
       const model = data.model ?? options.model ?? "unknown";
@@ -2863,7 +2867,7 @@ async function chatCompletionJSON(
       );
 
       if (!res.ok) {
-        const text = await res.text().catch(() => "");
+        const text = await safeReadText(res).catch(() => "");
         if (reasoning && isReasoningRejectionError(res.status, text)) {
           const effort = (reasoning as { effort?: string }).effort;
           process.stderr.write(
@@ -2880,14 +2884,14 @@ async function chatCompletionJSON(
         );
       }
 
-      const data = (await res.json()) as {
+      const data = await safeReadJson<{
         choices?: Array<{
           message?: { content?: string };
           finish_reason?: string;
         }>;
         model?: string;
         usage?: StreamingResult["usage"];
-      };
+      }>(res);
 
       rawContent = data.choices?.[0]?.message?.content ?? "";
       model = data.model ?? conn.model ?? "";
@@ -2936,7 +2940,7 @@ async function listModelsRaw(): Promise<ModelInfo[]> {
     headers: apiHeaders(),
   });
   if (!res.ok) throw new Error(`Failed to list models: ${res.status}`);
-  const data = (await res.json()) as { data: ModelInfo[] };
+  const data = await safeReadJson<{ data: ModelInfo[] }>(res);
   return data.data;
 }
 

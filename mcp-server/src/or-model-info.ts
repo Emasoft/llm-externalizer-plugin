@@ -10,6 +10,8 @@
  * percentiles, and throughput percentiles.
  */
 
+import { safeReadText, safeReadJson } from "./safe-body.js";
+
 export interface ModelEndpointPricing {
   prompt?: string;
   completion?: string;
@@ -197,13 +199,13 @@ export async function fetchOpenRouterModelInfo(
   clearTimeout(timeoutHandle);
 
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
+    const body = await safeReadText(res).catch(() => "");
     const truncated = body.length > 300 ? body.slice(0, 300) + "… (truncated)" : body;
     const error = truncated || `HTTP ${res.status} error`;
     return { ok: false, error, status: res.status };
   }
   try {
-    const payload = (await res.json()) as { data?: ModelInfoData };
+    const payload = await safeReadJson<{ data?: ModelInfoData }>(res);
     if (!payload.data) {
       return { ok: false, error: "OpenRouter returned no endpoints for this model" };
     }
