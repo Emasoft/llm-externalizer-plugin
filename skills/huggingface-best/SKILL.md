@@ -61,7 +61,7 @@ Examples: 16GB → 8B fp16 / 32B Q4 — 24GB VRAM → 12B fp16 / 48B Q4 — 8GB 
 Fetch the full list of official HF benchmarks:
 
 ```bash
-curl -s -H "Authorization: Bearer $(cat ~/.cache/huggingface/token)" \
+curl -s -H "Authorization: Bearer $(hf auth token 2>/dev/null || echo '')" \
   "https://huggingface.co/api/datasets?filter=benchmark:official&limit=500" | jq '[.[] | {id, tags, description}]'
 ```
 
@@ -74,7 +74,7 @@ Read the returned list and select the datasets most relevant to the user's task 
 For each selected benchmark dataset:
 
 ```bash
-curl -s -H "Authorization: Bearer $(cat ~/.cache/huggingface/token)" \
+curl -s -H "Authorization: Bearer $(hf auth token 2>/dev/null || echo '')" \
   "https://huggingface.co/api/datasets/<namespace>/<repo>/leaderboard" | jq '[.[:15] | .[] | {rank, modelId, value, verified}]'
 ```
 
@@ -88,7 +88,7 @@ For the top 10-15 candidate model IDs, get model infos.
 
 ```bash
 # REST API
-curl -s -H "Authorization: Bearer $(cat ~/.cache/huggingface/token)" \
+curl -s -H "Authorization: Bearer $(hf auth token 2>/dev/null || echo '')" \
   "https://huggingface.co/api/models/org/model1" | jq '{safetensors, tags, cardData}'
 
 # CLI (hf-cli)

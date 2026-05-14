@@ -83,16 +83,16 @@ Use **llama.cpp Metal** when:
    MLX repos are usually directories of safetensors shards, not single files — omit the per-file argument.
 6. **Run.** For the llm-externalizer plugin we want the OpenAI-compatible server:
    ```bash
-   mlx_lm.server --model ~/models/<short-name> --port 8080 --host 127.0.0.1
+   mlx_lm.server --model ~/models/<short-name> --port 8082 --host 127.0.0.1
    ```
-   The server exposes `http://127.0.0.1:8080/v1/chat/completions` and `http://127.0.0.1:8080/v1/models`.
+   The server exposes `http://127.0.0.1:8082/v1/chat/completions` and `http://127.0.0.1:8082/v1/models`. Port 8082 avoids the default-8080 collision with `llama-server` so a user with both runners can run them simultaneously.
 7. **Wire into settings.yaml.** Use the `generic-local` preset — MLX is its own server, not LM Studio. Snippet:
    ```yaml
    profiles:
      mlx-<model-short-name>:
        mode: local
        api: generic-local
-       url: "http://127.0.0.1:8080/v1"
+       url: "http://127.0.0.1:8082/v1"
        model: "<basename mlx_lm reports at /v1/models>"
        timeout: 600
        context_window: 32768
@@ -105,7 +105,7 @@ uv tool install mlx-lm
 hf download mlx-community/Qwen2.5-Coder-7B-Instruct-4bit \
     --local-dir ~/models/qwen2.5-coder-7b-mlx
 mlx_lm.server --model ~/models/qwen2.5-coder-7b-mlx \
-    --port 8080 --host 127.0.0.1
+    --port 8082 --host 127.0.0.1
 ```
 
 Add to `~/.llm-externalizer/settings.yaml` under `profiles:`:
@@ -114,7 +114,7 @@ Add to `~/.llm-externalizer/settings.yaml` under `profiles:`:
   mlx-qwen2.5-coder-7b:
     mode: local
     api: generic-local
-    url: "http://127.0.0.1:8080/v1"
+    url: "http://127.0.0.1:8082/v1"
     model: "qwen2.5-coder-7b-mlx"
     timeout: 600
     context_window: 32768
@@ -185,7 +185,7 @@ pre-built.
    ```
 4. **Tokenizer not registered**: if mlx-lm hasn't added support for a new tokenizer family, `mlx_lm.server` fails at load time with `mlx_lm: tokenizer not registered`. Pick a different repo (usually a slightly older / more popular family) or upgrade mlx-lm (`uv tool upgrade mlx-lm`).
 5. **Model name in settings.yaml**: `mlx_lm.server` reports the model name as the directory basename in its `/v1/models` response. Set the `model:` field in your llm-externalizer profile to match exactly, or the plugin's `discover` tool will report a name mismatch.
-6. **Port conflict with llama.cpp**: both `mlx_lm.server` and `llama-server` default to port 8080. If both are running, pick different ports explicitly with `--port`.
+6. **Port collision with llama.cpp**: `mlx_lm.server` defaults to port 8080, the same as `llama-server`. This skill's recipes pin MLX to 8082 to avoid the collision; if you override either, ensure they don't overlap.
 7. **Memory limit on 8 GB Macs**: an 8 GB Apple Silicon Mac with macOS, Chrome, and Claude Code already consumes ~5-6 GB. Only the smallest 4bit ≤3B models leave usable margin. Recommend OpenRouter remote mode (the llm-externalizer's `remote-ensemble` profile) instead.
 
 ## Related skills
