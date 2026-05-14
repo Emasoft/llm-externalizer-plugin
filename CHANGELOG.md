@@ -1,6 +1,176 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.8.0] - 2026-05-14
+
+### Changed
+
+- Refactor(audit): full-plugin audit Tier-1 + selected Tier-2 fixes
+
+A four-agent audit swarm (MCP TypeScript correctness, agents+commands+
+skills holistic, docs, platform/safety/diagnostics) flagged 90+ findings
+across 4 surfaces. v9.8.0 lands every CRITICAL item plus the highest-
+impact HIGH/MAJOR items. The full per-finding evidence remains in
+`reports/full-plugin-audit/` (gitignored, 4 per-domain reports + 1
+consolidated). Items deferred to v9.9.0 are tracked in
+`design/tasks/TRDD-<uuid>-full-plugin-audit-tier2-tier3.md`.
+
+**MCP server (TypeScript) hardening (T1.1, T1.2, T1.7, T1.9):**
+
+- `sanitizeInputPath` was Windows-broken (hardcoded `/` separator) and
+  macOS-realpath-vulnerable (the `/tmp` symlink to `/private/tmp` let
+  an attacker craft paths that passed the prefix check but resolved
+  outside the user's project). Now canonicalises cwd/home/tmp roots
+  via `realpathSync`, uses `path.sep`, and runs the candidate through
+  `realpathSync` before comparison. Defense-in-depth symlink rejection
+  preserved.
+- `apiHeaders()` rejects control characters in the bearer token via
+  `assertSafeHeaderValue()`. A multi-line `api_key` (PEM block, YAML
+  `>-` scalar, pbpaste with CRLF) would otherwise smuggle additional
+  headers into outbound requests.
+- `or-model-info.ts:fetchModelInfo()` replicates the CR/LF guard for
+  its direct fetch path.
+- `or_model_info_json` now routes its `file_path` arg through
+  `sanitizeInputPath()` so an LLM that controls the tool call cannot
+  overwrite arbitrary user-writable files.
+- Version sync — `mcp-server/package.json` and `src/index.ts` were
+  both stale at 9.5.1 while the plugin manifest read 9.7.0. The MCP
+  server was advertising 9.5.1 to every client. All three sources
+  now bump in lockstep to 9.8.0.
+- `engines.node` bumped from `>=18.0.0` to `>=20.0.0` (Node 18 EOL
+  was 2025-04-30).
+
+**Cross-platform launcher self-install (T1.3, T1.4):**
+
+- Replaced the SessionStart `bash`-only hook with an in-launcher
+  self-install path. On first cold start (or on package.json drift),
+  `mcp-server/launcher.mjs` runs `npm ci` / `pnpm install` / `bun
+  install` itself, links the resulting `node_modules` into the
+  plugin's mcp-server dir, and retries the import. Cross-platform
+  out of the box — native Windows users no longer hit `bash:
+  command not found`. The launcher's `linkNodeModules()` confines
+  the destination realpath to a path under SCRIPT_DIR before any
+  removal; symlinks are unlinked atomically and directories are
+  removed recursively only when their absolute path is under
+  SCRIPT_DIR.
+- `hooks/hooks.json` SessionStart entry removed.
+- `scripts/hooks/install-mcp-deps.sh` left in place as a manual
+  recovery tool, but no longer invoked by the plugin's automation.
+
+**Agents + commands worktree + checkpoint hygiene (T1.5, T1.6, T2.13,
+T2.15):**
+
+- Parallel-fixer agents (Opus + Sonnet variants) used to hardcode
+  `$CLAUDE_PROJECT_DIR/reports/llm-externalizer` for the summary
+  output while the dispatching `scan-and-fix` command writes scan
+  reports under `$MAIN_ROOT/reports/llm-externalizer/`. Inside a
+  linked worktree these paths diverge and the Step-5 join script
+  silently produces 0 fixed summaries. Both agents now use the same
+  `MAIN_ROOT` resolver block the commands use, and pass the resolved
+  `$REPORTS_DIR` to `validate_fixer_summary.py`.
+- `commands/llm-externalizer-{fix-report,fix-found-bugs,scan-and-fix,
+  scan-and-fix-serially}.md` no longer use `git add -A` in their
+  pre-fix checkpoint blocks. Per `~/.claude/rules/never-git-add-
+  all.md` that pattern stages every untracked file (incl. `.env`,
+  `reports/`) which would leak on push. All four now use
+  `git stash push --include-untracked -m "pre-<cmd> $STAMP"`.
+- Serial-fixer agents had two back-to-back `## Rules` sections with
+  overlapping/contradictory content. The second block is now
+  `## Hard constraints` with a back-reference to the existing
+  `## What NOT to do` block instead of duplicating its destructive-
+  ops bullet.
+- `scan-and-fix-serially.md` tmp-file prefix
+  `/tmp/llm-externalizer-scan-and-fix.<RUN_TS>.<role>.txt` now
+  namespaces per-command: `…-scan-and-fix-serially.<RUN_TS>.…` so
+  parallel and serial runs sharing a `$RUN_TS` no longer overwrite
+  each other's EXTRACTED/VALIDATED/REJECTED files.
+
+**Fixer dispatch policy + agent frontmatters (user directives):**
+
+- All four fixer-dispatching commands now AUTO-ROUTE the fixer
+  variant per-report (parallel) or per-bug (serial) based on a
+  size heuristic: route to Opus when EITHER the source file is
+  large (>1000 lines or >50 KB) OR the report carries many
+  findings (>5 `[[FINDING]]` blocks). The previous
+  `AskUserQuestion` Sonnet/Opus menu is removed. Override:
+  `LLM_EXT_FORCE_OPUS=1` forces Opus on every dispatch.
+- One agent = one report (parallel) / one bug (serial), documented
+  explicitly. Never pass multiple reports to the same agent.
+- All 6 agents now have only `model:` in their frontmatter — the
+  `effort:` field (medium/high/xhigh) was removed across reviewer,
+  setup-agent, and both serial-fixer variants. Claude decides the
+  reasoning depth based on context, not a fixed cap.
+
+**Skills polish (T2.11, T2.12, T2.14):**
+
+- `llm-externalizer-usage` trigger phrases tightened from generic
+  "analyze files / scan folder / check imports / compare files /
+  batch check" (which collide with built-in Read/Grep workflows)
+  to explicit externalization phrases.
+- All three llm-externalizer SKILLs that documented the server's
+  compiled-in default `reports_dev/llm_externalizer/` as the output
+  path now explain: pass an explicit `output_dir` matching the
+  user's `agent-reports-location.md` rule
+  (`<main-repo-root>/reports/llm-externalizer/`). The
+  `reports_dev/` default is developer scratch only.
+- `llm-externalizer-free-scan` SKILL no longer tells the agent to
+  read and summarise report content — that contradicts the "only
+  paths through orchestrator" invariant every other surface upholds.
+
+**Statusline + install scripts (T2.1, T2.5):**
+
+- `scripts/statusline/statusline.py` now `chmod 0o600`s every cache
+  file derived from the user's OAuth bearer token / OpenRouter API
+  key (statusline-usage-cache.json, openrouter-budget-cache.json).
+  The parent `/tmp/claude` dir is 0o700 on single-user hosts but
+  multi-tenant Linux boxes or pre-created /tmp/claude (CI runners)
+  would otherwise leak rate-limit / subscription-tier info across
+  uids.
+- `install_statusline.py` and `scripts/statusline/install.sh` no
+  longer hardcode `python3` in the patched statusLine.command.
+  The interpreter is resolved at install time via
+  `shutil.which("python3")` → `shutil.which("python")` →
+  `sys.executable`; the resulting command is `shlex.join`'d so
+  paths containing spaces no longer break. Fixes Windows + NixOS +
+  PEP-668 macOS where the literal `python3` either doesn't exist
+  or pops a Xcode CLT prompt every 3 s.
+
+**Documentation (T1.8 partial — C-1 to C-4):**
+
+- README version badge bumped from 9.5.1 to 9.7.0 / now 9.8.0;
+  Node badge from `>=18` to `>=20`.
+- Features bullet block updated: setup wizard now visible as a
+  lead bullet, `change-model` correctly described as a user-only
+  slash wrapper (the underlying MCP tool is disabled by design),
+  inventory counts corrected (19 commands / 6 agents), 5 preloaded
+  HF skills called out, batch_check deprecation note added.
+- Remaining README pass (First-run wizard section, plugin-structure
+  tree, agents table, troubleshooting for the wizard, Windows/WSL2
+  dual-path coverage, model-id verification, build-snippet.py
+  mention) deferred to v9.9.0 — tracked in the TRDD.
+
+Deferred to v9.9.0 (tracked in `design/tasks/TRDD-…-full-plugin-audit-
+tier2-tier3.md`):
+
+- MCP server MAJORs T2.6-T2.9, T2.16-T2.19: uncapped `res.text()`,
+  watchFile race, default-branch error envelope, fetchWithRetry429
+  body-consumed bug, SECRET_PATTERNS misses (LM_API_TOKEN,
+  JWT_SECRET, etc.), gitLsFilesMultiRepo sandboxing,
+  splitPerFileSections regex cross-match risk.
+- Pre-push T2.3, T2.4: ps fallback for minimal containers, regex
+  bypass via symlinked publish.py, MAX_ANCESTRY_DEPTH bump.
+- Statusline T2.2: /dev/tty timeout + git memoization, locale-stable
+  %p formatting, submodule git ls-files coverage, stale-cache TTL
+  ceiling.
+- README continuation (T1.8 remaining + T2.20).
+- 3 proposed diagnostic scripts (T3.D1-T3.D3): check-mcp-server.py,
+  check-statusline.py, dump-state.py.
+- All Tier-3 minor/NIT items from the audit.
+
+All gates green on the changes that landed: ruff / pyright (0 errors) /
+shellcheck. tsc --noEmit clean on mcp-server.
+
+
 ## [9.7.0] - 2026-05-14
 
 ### Added
