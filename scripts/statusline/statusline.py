@@ -88,30 +88,38 @@ def get_claude_version() -> str:
 
 
 def get_git_info(cwd: str) -> tuple[str, bool]:
-    """Return (branch_name, has_changes). Empty branch = not a git repo."""
+    """Return (branch_name, has_changes). Empty branch = not a git repo.
+
+    Per audit SR-P1-005 / SC-P1-005: this runs every 3 s refresh, so we
+    keep timeouts TIGHT (1 s each instead of the previous 3 s × 3 = up
+    to 9 s worst case). On slow filesystems / SSHFS / WSL2 Windows-network
+    mounts the bar would otherwise visibly stutter and lock CPU. With
+    1 s × 3 the worst-case stall is 3 s — still bounded by the refresh
+    cadence itself, so the user sees at most one slow frame.
+    """
+    GIT_TIMEOUT = 1.0
     try:
         branch = subprocess.run(
             ["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True,
             text=True,
-            timeout=3,
+            timeout=GIT_TIMEOUT,
         )
         if branch.returncode != 0:
             return "", False
         branch_name = branch.stdout.strip()
-        # Check for changes
-        diff = subprocess.run(
-            ["git", "-C", cwd, "diff", "--quiet", "HEAD"],
-            capture_output=True,
-            timeout=3,
-        )
-        untracked = subprocess.run(
-            ["git", "-C", cwd, "ls-files", "--others", "--exclude-standard"],
+        # Use `git status --porcelain=v1` (one call) instead of `git diff
+        # --quiet` + `git ls-files --others` — half the subprocess overhead,
+        # AND honours submodule .gitignore correctly (audit SR-P1-013 /
+        # SC-P1-013: ls-files --others ignored submodule .gitignore, so
+        # the bar showed `branch*` when `git status` showed nothing dirty).
+        status = subprocess.run(
+            ["git", "-C", cwd, "status", "--porcelain=v1"],
             capture_output=True,
             text=True,
-            timeout=3,
+            timeout=GIT_TIMEOUT,
         )
-        has_changes = diff.returncode != 0 or bool(untracked.stdout.strip())
+        has_changes = bool(status.stdout.strip())
         return branch_name, has_changes
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return "", False
@@ -594,13 +602,36 @@ def main() -> None:
             cols = int(os.environ.get("STATUSLINE_COLS", "0") or "0")
         except (TypeError, ValueError):
             cols = 0
-        # 2) /dev/tty — bypasses the stdin-pipe limitation
+        # 2) /dev/tty — bypasses the stdin-pipe limitation.
+        # Per-refresh latency budget: opening /dev/tty on detached / orphaned /
+        # nohup'd sessions can stall 3-5 s while the kernel walks the IPC
+        # chain (audit SR-P1-005 + SC-P1-005). To keep the statusline snappy
+        # we short-circuit when:
+        #   (a) $TTY env var is unset AND
+        #   (b) sys.stdin.isatty() is False AND
+        #   (c) /dev/tty doesn't exist as a regular path
+        # Any of (a)+(b)+(c) being false still permits the open, but the
+        # combined-false case is exactly "no controlling terminal" — the
+        # open would block on most modern Unixes regardless.
         if cols <= 0:
+            try_tty = True
             try:
-                with open("/dev/tty") as _tty:
-                    cols = os.get_terminal_size(_tty.fileno()).columns
-            except Exception:
-                pass
+                if not os.environ.get("TTY") and not sys.stdin.isatty() and not os.path.exists("/dev/tty"):
+                    try_tty = False
+            except OSError:
+                try_tty = False
+            if try_tty:
+                try:
+                    # `O_NONBLOCK` lets the open fail fast on hung devices
+                    # without waiting for the kernel timeout. Path.open() does
+                    # not expose flags; use os.open() and wrap in os.fdopen.
+                    fd = os.open("/dev/tty", os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+                    try:
+                        cols = os.get_terminal_size(fd).columns
+                    finally:
+                        os.close(fd)
+                except Exception:
+                    pass
         # 3) Shell-exported COLUMNS
         if cols <= 0:
             try:

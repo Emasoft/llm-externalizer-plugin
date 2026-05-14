@@ -18,7 +18,7 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, copyFileSync, statSync, readFileSync, symlinkSync, lstatSync, rmSync, cpSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -140,8 +140,12 @@ function linkNodeModules(dataDir) {
       } else if (lst.isDirectory()) {
         // Only rm if dst is the canonical path under the script dir AND
         // its realpath is also under the script dir. Both checks must hold.
+        // Normalise via resolve() on both ends and compare with the
+        // platform's path.sep (audit SR-P1-006: a Windows env-var-derived
+        // SCRIPT_DIR ending in `\` would otherwise double-slash on concat).
         const dstAbs = resolve(dst);
-        if (dstAbs.startsWith(SCRIPT_DIR + (process.platform === "win32" ? "\\" : "/"))) {
+        const scriptAbs = resolve(SCRIPT_DIR);
+        if (dstAbs === scriptAbs || dstAbs.startsWith(scriptAbs + sep)) {
           rmSync(dst, { recursive: true, force: true, maxRetries: 1 });
         } else {
           canReplace = false;
