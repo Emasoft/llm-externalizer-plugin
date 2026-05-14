@@ -39,17 +39,67 @@ import subprocess
 import sys
 from pathlib import Path
 
-MAX_ANCESTRY_DEPTH = 40
+MAX_ANCESTRY_DEPTH = int(os.environ.get("LLM_EXT_HOOK_MAX_DEPTH", "100"))
+
+# Interpreter whitelist for the "preceding token" check inside argv parsing.
+# A path like `/tmp/publish.py` should only match if the argv slot to its left
+# is one of these — that way an attacker cannot bypass the gate by stuffing
+# `git -c "core.editor=/tmp/publish.py" push` (the preceding `-c` flag is
+# not on the list).
+INTERPRETER_PREFIXES = (
+    "python", "python3", "python3.", "/usr/bin/python", "/usr/local/bin/python",
+    "/opt/homebrew/bin/python", "uv", "uvx", "pyenv", "poetry", "pipenv",
+    "/usr/bin/env",  # for `/usr/bin/env python …`
+)
 
 
-def ps_query(pid: int) -> tuple[int, str] | None:
-    """Return (ppid, full-argv-string) for pid, or None if unavailable."""
+def _is_interpreter_token(tok: str) -> bool:
+    """True if `tok` looks like a Python interpreter command name / abspath."""
+    base = os.path.basename(tok)
+    return any(base.startswith(p) or tok.startswith(p) for p in INTERPRETER_PREFIXES)
+
+
+def ps_query(pid: int) -> tuple[int, str] | None | str:
+    """Return (ppid, full-argv-string) for pid, "no-ps" if `ps` is missing
+    entirely, or None for other transient failures.
+
+    The "no-ps" sentinel lets the caller distinguish "ps refused to give us
+    an answer for this PID" (fail-closed, retry-able) from "ps does not exist
+    on this system" (fail-CLOSED with a clear message so the user installs
+    procps-ng rather than thinking the publish gate has a different bug).
+    """
     try:
         result = subprocess.run(
             ["ps", "-ww", "-o", "ppid=,args=", "-p", str(pid)],
             capture_output=True, text=True, errors="replace", check=False, timeout=10,
         )
-    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+    except FileNotFoundError:
+        # `ps` is not on PATH (Alpine slim, scratch + ko/buildah, minimal
+        # CI images). Try the Linux /proc fallback before returning the
+        # sentinel — many containers keep /proc even when procps is stripped.
+        proc_stat = Path(f"/proc/{pid}/stat")
+        if proc_stat.is_file():
+            try:
+                stat_line = proc_stat.read_text(errors="replace")
+                # stat format: "PID (comm) STATE PPID ..." — comm may contain
+                # spaces / parens. Find the trailing paren and split after it.
+                rparen = stat_line.rfind(")")
+                if rparen < 0:
+                    return None
+                after = stat_line[rparen + 2 :].split()
+                if len(after) < 2:
+                    return None
+                ppid_proc = int(after[1])
+                cmdline_path = Path(f"/proc/{pid}/cmdline")
+                cmdline = cmdline_path.read_bytes().replace(b"\x00", b" ").decode(
+                    "utf-8", errors="replace"
+                ).strip() if cmdline_path.is_file() else ""
+                if cmdline:
+                    return ppid_proc, cmdline
+            except (OSError, ValueError):
+                pass
+        return "no-ps"
+    except (OSError, subprocess.TimeoutExpired):
         return None
     line = result.stdout.strip()
     if not line:
@@ -106,10 +156,16 @@ def walk_ancestry(expected: Path) -> tuple[bool, list[str]]:
         if pid <= 1:
             break
         q = ps_query(pid)
+        if q == "no-ps":
+            chain.append(
+                f"  pid={pid}: ps command not available on this system. "
+                "Install procps-ng (apt install procps) or run from the host."
+            )
+            break
         if q is None:
             chain.append(f"  pid={pid}: (ps lookup failed)")
             break
-        ppid, argv = q
+        ppid, argv = q  # type: ignore[misc]
         # Truncate long argv for debug display, but scan the full string
         display = argv if len(argv) < 120 else argv[:117] + "..."
         chain.append(f"  pid={pid} ppid={ppid}: {display}")
@@ -135,6 +191,17 @@ def walk_ancestry(expected: Path) -> tuple[bool, list[str]]:
             if pre:
                 preceding_token = pre.rsplit(None, 1)[-1]
                 if preceding_token.startswith("--") and "=" not in preceding_token:
+                    continue
+                # Audit SR-P1-006 + audit SC-P1-006: require the preceding
+                # token to look like an actual Python interpreter. Without
+                # this, `git -c "core.editor=/tmp/publish.py" push` would
+                # match (the regex sees "/tmp/publish.py" preceded by the
+                # `-c` flag-value) and let a symlinked publish.py bypass
+                # the gate. The whitelist below covers every Python launcher
+                # / wrapper that legitimately invokes the canonical script;
+                # anything else (shell flags, options, sub-commands like
+                # `git`/`docker`) is rejected.
+                if not _is_interpreter_token(preceding_token):
                     continue
             candidate_str = m.group(0)
             # The regex only captures non-whitespace runs, so paths with spaces
