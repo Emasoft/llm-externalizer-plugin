@@ -47,8 +47,7 @@ Copy this checklist and track your progress:
 ```
 
 4. [ ] The tool returns one report path per file. List them for the user.
-5. [ ] Read and summarize key findings.
-6. [ ] Remind the user this is a low-quality free scan — suggest ensemble scan for thorough audit.
+5. [ ] Remind the user this is a low-quality free scan — suggest ensemble scan for thorough audit. **Do NOT read or summarise the report content** — only paths flow through the orchestrator (the same invariant every other llm-externalizer surface enforces). The user opens the reports themselves.
 
 ## Limitations
 
@@ -57,7 +56,7 @@ Copy this checklist and track your progress:
 
 ## Output
 
-One `.md` report per source file, saved in `reports_dev/llm_externalizer/`. Each report contains findings from the single free model. Report filenames include the source filename for easy identification.
+One `.md` report per source file. The plugin's policy is to write under `<main-repo-root>/reports/llm-externalizer/` (the canonical path used by every other component); always pass an explicit `output_dir` matching that location on the tool call. The MCP server's compiled-in default `reports_dev/llm_externalizer/` is **developer scratch**, not the home for findings. Report filenames include the source filename for easy identification.
 
 ## Error Handling
 

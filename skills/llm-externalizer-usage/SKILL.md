@@ -1,10 +1,9 @@
 ---
 name: llm-externalizer-usage
 description: |-
-  Use when offloading file analysis to external LLMs.
-  Trigger with "analyze files", "scan folder", "check imports", "compare files", "batch check".
+  Use when offloading bulk file analysis to external LLMs to save main-context tokens.
+  Trigger with "externalize this analysis", "offload to a cheap model", "run scan_folder on", "use llm-externalizer", "externalize file comparison", "check_imports via externalizer".
 argument-hint: "[task-description] [<file-or-folder-paths>...]"
-effort: medium
 ---
 
 # LLM Externalizer — Tool Usage
@@ -44,7 +43,7 @@ Use when you need to analyze files without consuming orchestrator context, scan 
 
 For cross-file analysis across a whole codebase use `search_existing_implementations` — each file is compared against a REFERENCE.
 
-Reports are `.md` files in `reports_dev/llm_externalizer/`.
+Reports are `.md` files. The plugin's policy is to write them under `<main-repo-root>/reports/llm-externalizer/`; always pass an explicit `output_dir` matching that location on every tool call. The MCP server's compiled-in default `reports_dev/llm_externalizer/` is developer scratch — do not rely on it.
 
 **answer_mode : 0** — ONE REPORT PER FILE. One `.md` per input file; MCP splits each batch response by `## File:` markers. Best for per-file fan-out.
 

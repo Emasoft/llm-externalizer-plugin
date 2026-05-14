@@ -47,7 +47,7 @@ Copy this checklist and track your progress:
 
 ## Output
 
-Reports under `<project>/reports_dev/llm_externalizer/`. Filenames embed the source filename or group id.
+Reports under `<main-repo-root>/reports/llm-externalizer/` when `output_dir` is set (recommended — always pass it). The MCP server's compiled-in default `reports_dev/llm_externalizer/` is developer scratch and should not be the home for findings. Filenames embed the source filename or group id.
 
 **answer_mode**: `0`=per-file (scan_folder default), `1`=per-group (subfolder/extension/basename, 1 MB cap), `2`=merged. Controls disk output only, not LLM visibility.
 
