@@ -375,7 +375,14 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
   [/Bearer\s+[A-Za-z0-9._\-/+=]{20,}/g, "BEARER_TOKEN"],
   // Key-value patterns in env/config files (must have at least 8 chars in the value)
   [
-    /(?:^|\n)\s*(?:PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|AUTH_TOKEN|ACCESS_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|DB_PASSWORD|DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|AWS_SECRET_ACCESS_KEY|GITHUB_TOKEN|NPM_TOKEN|DOCKER_PASSWORD)\s*[=:]\s*['"]?([^\s'"#\n]{8,})/gim,
+    // Common env-var-style secret names. Extended in v9.9.0 from a hand-
+    // curated list to a hybrid approach: explicit names for the most-common
+    // OAuth / vendor key shapes AND a wildcard for any *_KEY / *_TOKEN /
+    // *_SECRET / *_PASSWORD. Wildcards intentionally catch JWT_SECRET,
+    // LM_API_TOKEN (the plugin's own preset!), STRIPE_SECRET_KEY,
+    // SUPABASE_SERVICE_KEY, SLACK_BOT_TOKEN, and similar without needing
+    // per-vendor patches.
+    /(?:^|\n)\s*(?:(?:PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|AUTH|AUTH_TOKEN|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|DB_PASSWORD|DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|AWS_SESSION_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITLAB_TOKEN|BITBUCKET_TOKEN|NPM_TOKEN|DOCKER_PASSWORD|HF_TOKEN|HUGGINGFACE_TOKEN|LM_API_TOKEN|VLLM_API_KEY|JWT_SECRET|JWT_PRIVATE_KEY|STRIPE_SECRET_KEY|STRIPE_API_KEY|SUPABASE_SERVICE_KEY|SUPABASE_ANON_KEY|FIREBASE_TOKEN|SLACK_BOT_TOKEN|SLACK_TOKEN|DISCORD_TOKEN|TELEGRAM_BOT_TOKEN|TWILIO_AUTH_TOKEN|SENDGRID_API_KEY|MAILGUN_API_KEY|SENTRY_AUTH_TOKEN|PRIVATE)|[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_APIKEY|_API_KEY|_AUTH))\s*[=:]\s*['"]?([^\s'"#\n]{8,})/gim,
     "ENV_SECRET",
   ],
   // H7: Multi-line secret blocks (PEM private keys, certificates)
@@ -2138,6 +2145,12 @@ async function fetchWithRetry429(
   startTime: number,
 ): Promise<Response> {
   let lastRes: Response | undefined;
+  // Capture the error body text before draining it (the body stream is
+  // single-shot; if we drain to free the connection between retries and
+  // then exhaust retries, the caller's `await res.text()` would return ""
+  // and the surfaced HTTP error would have no server-supplied detail).
+  // Stored verbatim so the caller can re-attach via the rewrapper below.
+  let lastBodyText: string | undefined;
 
   for (let attempt = 0; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
     const elapsed = Date.now() - startTime;
@@ -2206,13 +2219,25 @@ async function fetchWithRetry429(
       `retrying in ${(backoff / 1000).toFixed(1)}s\n`,
     );
 
-    // Consume the error response body to free the connection
-    await lastRes.text().catch(() => {});
+    // Capture the body text BEFORE draining (replaces the previous
+    // discard-to-free-connection pattern that wiped server-supplied error
+    // detail before the caller could read it).
+    lastBodyText = await lastRes.text().catch(() => "");
     await new Promise((r) => setTimeout(r, backoff));
   }
 
-  // All retries exhausted — return the last response so the caller gets the error
-  if (lastRes) return lastRes;
+  // All retries exhausted — return a re-wrapped Response so the caller's
+  // `await res.text()` still sees the most-recent server-supplied error
+  // body. The previous version returned the original (already-consumed)
+  // Response, leaving callers to throw `API error 502: ` with no detail.
+  if (lastRes) {
+    if (lastBodyText === undefined) return lastRes;
+    return new Response(lastBodyText, {
+      status: lastRes.status,
+      statusText: lastRes.statusText,
+      headers: lastRes.headers,
+    });
+  }
   throw new Error("API request failed — all retries exhausted with no response");
 }
 
@@ -8758,7 +8783,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       default:
-        throw new Error(`Unknown tool: ${name}`);
+        // Return the same shape every other branch uses instead of throwing.
+        // Throwing falls into the outer try/catch which logs the unknown name
+        // as a service error and bumps the SERVICE_HEALTH error counter — that
+        // attribution is wrong for a typo'd tool name (no LLM call was made).
+        // The early return here keeps the session-error counter honest.
+        return {
+          content: [{ type: "text", text: `FAILED: Unknown tool '${name}'.` }],
+          isError: true,
+        };
     }
     } finally {
       // Release active request tracker so `reset` can proceed when all LLM calls finish
