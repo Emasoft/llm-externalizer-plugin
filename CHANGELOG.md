@@ -1,6 +1,118 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.6.0] - 2026-05-14
+
+### Added
+
+- Feat(setup): add `/llm-externalizer-setup` wizard agent + helper skills
+
+A new interactive wizard helps users get a local-model backend working
+end-to-end: detect platform (OS, arch, RAM, GPU), find installed runners
+(Ollama, LM Studio, vLLM, llama.cpp, Jan), suggest + offer to install one
+when none are present, help download a Hugging Face model (auto-installs
+the `hf` CLI when missing), run five calibrated compatibility tests on
+the selected model, then emit a ready-to-paste settings.yaml profile
+snippet. The agent NEVER writes to ~/.llm-externalizer/settings.yaml
+directly — user-only-configuration policy (the `set_settings` and
+`change_model` MCP tools remain disabled by design).
+
+New artefacts:
+
+- agents/llm-externalizer-setup-agent.md — Sonnet-tier 7-step wizard.
+  The five helper skills below are preloaded into the agent's context
+  at startup via the `skills:` frontmatter field (Claude Code sub-agent
+  skill-preload mechanism), so the wizard has deterministic access to
+  deep reference content without per-step Skill-tool roundtrips.
+- commands/llm-externalizer-setup.md — `/llm-externalizer-setup` slash
+  command that dispatches the agent.
+- scripts/setup/detect-environment.sh — OS / arch / RAM / GPU detector
+  emitting a JSON snapshot (WSL2 detected via /proc/version).
+- scripts/setup/detect-runners.py — stdlib-only probe for the five
+  supported runners. Returncode-strict version capture so ImportError
+  tracebacks no longer leak into the captured "version" field.
+- scripts/setup/test-model.py — five calibrated tests: `smoke`,
+  `structured_output` (the hard compatibility gate — response_format
+  json_schema), `code_understanding` (off-by-one bug detection,
+  strict-JSON output), `long_context` (~30 K tokens in, relevant
+  one-sentence summary out), `output_length` (≥4 K tokens before
+  stopping). Pass threshold: average ≥0.6 AND structured_output ≥0.5.
+- scripts/setup/recommend-models.py — vendored stdlib-only recommender
+  that queries the Onyx self-hosted-LLM leaderboard + whatcani.run
+  featured-artifact API to produce a ranked list of Hugging Face
+  models with crossplatform requirements and ready-to-run `hf`
+  download commands. Six surgical bug fixes were applied during
+  vendoring:
+  - Provider mis-attribution — `synthesize_model_from_artifacts` used
+    to set `provider=", ".join(creators)` from quantisation publishers
+    (unsloth, mlx-community, bartowski). Replaced with an
+    `infer_provider_from_name()` driven by a `BRAND_PROVIDER_PREFIXES`
+    map (Qwen→Alibaba, Gemma→Google, Llama→Meta, …); benchmark-template
+    provider is the secondary fallback; quantisation creators are
+    NEVER used as the model provider.
+  - Source-name parsing — display names like "Llama 3.2 3B Instruct
+    (4-bit)" used to split on `-` into "Llama 3.2 3B Instruct (4" and
+    "bit)" pieces, producing stray parentheses. Added
+    `normalize_source_name_for_parsing()` (strips whitespace + parens)
+    and changed the quant evidence path to prefer
+    `repo_leaf(hf_repo_id)` over `display_name`.
+  - DQ-prefix recognition — `is_quant_start_token` now recognises
+    MLX's `DQ<digit>` family (DQ3_K_M, DQ4plus) as a quant start
+    token.
+  - Compound-quant preservation — the fallback parser used to stop at
+    the rightmost non-descriptor and collapse `DQ3_K_M-q8` into just
+    `dq3_k_m`. Rewrote to extend the quant region leftward across
+    consecutive quant tokens, preserving compound schemes
+    (DQ3_K_M-Q8, MXFP4-Q8, 4bit-DWQ, mixed_3_4).
+  - Template-provider fallback order — `best_benchmark_template_for_artifact`
+    used to pick `DS-R1-Distill-Llama-70B` for any Llama quant via a
+    weak family-tokens fallback, surfacing "DeepSeek" as the provider
+    for genuine Meta-Llama variants. Re-ordered so
+    `infer_provider_from_name(model_name)` runs first; the template
+    provider is used only when name inference returns None.
+  - Cache reroute — `default_cache_dir()` writes to
+    `$CLAUDE_PLUGIN_DATA/setup/cache` when the plugin env var is set,
+    with the original `~/.cache/local-llm-coding-recommender` path
+    retained for standalone CLI use.
+
+  The script ships with an MIT SPDX header, upstream credit, and an
+  in-file re-sync procedure. The author retains copyright; no
+  third-party license attribution is required.
+
+- skills/huggingface-best/SKILL.md, skills/huggingface-local-models/SKILL.md,
+  skills/huggingface-mlx-models/SKILL.md, skills/hf-cli/SKILL.md,
+  skills/huggingface-community-evals/SKILL.md — five helper skills that
+  the setup wizard preloads via its `skills:` frontmatter list. All
+  five carry `user-invocable: false` so they don't appear in the
+  user's `/` menu but remain available to the agent's auto-invocation
+  path. Each skill carries an "Integration with the llm-externalizer
+  setup agent" block explaining where it slots into the 7-step flow:
+  - huggingface-best — leaderboard widening (secondary discovery path
+    when the recommender output is too narrow).
+  - huggingface-local-models — llama.cpp / GGUF / Ollama deep
+    reference.
+  - huggingface-mlx-models — Apple Silicon MLX reference +
+    mlx_lm.server + `generic-local` preset wiring. The local-models
+    skill explicitly does not cover MLX, so this skill fills that
+    gap.
+  - hf-cli — Hugging Face CLI primer (auth, download, search).
+  - huggingface-community-evals — rigorous inspect-ai / lighteval
+    paths the user can opt into AFTER the wizard's 5-test verdict,
+    for quality grading rather than compatibility gating.
+
+### Changed
+
+- Refactor(hooks): migrate SessionStart hook to exec form per Claude Code 2.1.139
+
+Replaces the legacy shell-form command
+`bash "${CLAUDE_PLUGIN_ROOT}/scripts/hooks/install-mcp-deps.sh"` with
+the exec-form pair (`command: "bash"`,
+`args: ["${CLAUDE_PLUGIN_ROOT}/scripts/hooks/install-mcp-deps.sh"]`).
+The exec form avoids shell quoting hazards on paths containing spaces
+and matches the canonical example in the Claude Code 2.1.139 hook
+reference. No runtime behaviour change.
+
+
 ## [9.5.1] - 2026-05-09
 
 ### Documentation
