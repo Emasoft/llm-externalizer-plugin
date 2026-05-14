@@ -193,8 +193,16 @@ def infer_provider_from_name(name: str | None) -> str | None:
     if not lowered:
         return None
     for prefix, brand in BRAND_PROVIDER_PREFIXES:
-        if lowered.startswith(prefix):
+        # Require a word-boundary after the prefix — bare `startswith` would
+        # match `phidias-xxx` against the `phi` prefix and mis-tag it as
+        # Microsoft. Acceptable boundaries: end-of-string, `-`, `_`, or a
+        # digit (so `phi3` still matches `phi`).
+        if lowered == prefix:
             return brand
+        if lowered.startswith(prefix):
+            next_char = lowered[len(prefix):len(prefix) + 1]
+            if next_char in {"-", "_", "/", "."} or next_char.isdigit():
+                return brand
     return None
 
 
@@ -249,7 +257,14 @@ class WhatCanIRunEvidence:
     minimum_distinct_devices: int | None
     minimum_runs_per_device: int | None
     priority: int | None
-    raw: dict[str, Any]
+    # raw used to hold the entire upstream featured-model dict for debug
+    # logging. That dict flowed through dataclasses.asdict() into the agent's
+    # JSON context — an indirect prompt-injection surface (any attacker-
+    # controllable field would land in the LLM's working prompt). The field
+    # is now retained only as a placeholder set to None at extraction time;
+    # downstream consumers (dataclasses.asdict in recommendation_to_dict)
+    # surface only the named parsed fields, not the raw upstream object.
+    raw: dict[str, Any] | None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -322,7 +337,16 @@ def fetch_text(
             logging.info("fetch_attempt url=%s attempt=%d/%d timeout=%s", url, attempt, attempts, timeout)
             request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/json;q=0.9,*/*;q=0.8"})
             with urllib.request.urlopen(request, timeout=timeout) as response:
-                charset = response.headers.get_content_charset() or "utf-8"
+                charset_header = response.headers.get_content_charset() or "utf-8"
+                # Pin to a small allow-list — an attacker-controlled
+                # Content-Type can request exotic codecs (`base64_codec`,
+                # `rot_13`, `hex_codec`) that mangle the content while still
+                # decoding "successfully". Anything outside this whitelist
+                # falls back to utf-8.
+                if charset_header.lower() in {"utf-8", "utf8", "ascii", "latin-1", "iso-8859-1", "windows-1252"}:
+                    charset = charset_header
+                else:
+                    charset = "utf-8"
                 status = getattr(response, "status", 200)
                 if isinstance(status, int) and status >= 400:
                     raise urllib.error.HTTPError(url, status, f"HTTP {status}", response.headers, None)
@@ -433,6 +457,35 @@ def default_cache_dir() -> Path:
     return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "local-llm-coding-recommender"
 
 
+def _validate_cache_path(value: str | None, *, option_name: str) -> None:
+    """Refuse cache-arg paths that escape the plugin's cache root.
+
+    When the plugin sets CLAUDE_PLUGIN_DATA, the wizard's cache lives under
+    `$CLAUDE_PLUGIN_DATA/setup/cache/`. Any other path passed via
+    `--from-cache`, `--save-cache`, `--whatcanirun-cache`,
+    `--whatcanirun-from-cache`, or `--save-whatcanirun-cache` would either
+    leak a JSON read of a sensitive file (e.g. `~/.ssh/id_rsa`) or overwrite
+    user-owned content (`~/.zshrc`). Plugin-mode users always go through the
+    agent; the agent always passes paths under `default_cache_dir()`.
+
+    Standalone CLI users (no CLAUDE_PLUGIN_DATA) keep the wide-open behaviour
+    so existing workflows don't break. Plugin mode wins on safety.
+    """
+    if not value:
+        return
+    if not (os.environ.get("CLAUDE_PLUGIN_DATA") or "").strip():
+        return  # standalone CLI — no confinement
+    allowed_root = default_cache_dir().resolve()
+    requested = expand_path(value).resolve()
+    try:
+        requested.relative_to(allowed_root)
+    except ValueError as exc:
+        raise ValueError(
+            f"{option_name}={value!s} escapes the plugin cache root "
+            f"({allowed_root!s}); path traversal refused"
+        ) from exc
+
+
 def default_log_path() -> str:
     # Plugin integration: when CLAUDE_PLUGIN_DATA is set, put the rotating log
     # under setup/logs/ (sibling to setup/cache/) so the agent's state tree is
@@ -498,6 +551,15 @@ def setup_logging(log_path: str | None, max_bytes: int = DEFAULT_LOG_MAX_BYTES, 
         except OSError as exc:
             last_error = exc
 
+    # Both candidate paths failed — logging is permanently disabled for this
+    # run. Surface the failure to stderr so the user can correct the path
+    # (writable cache dir, $CLAUDE_PLUGIN_DATA pointed at a read-only mount,
+    # etc.) instead of silently losing diagnostics they explicitly requested.
+    print(
+        f"warn: diagnostic logging disabled — could not open requested={requested_path!s} "
+        f"or fallback={fallback_path!s} (last error: {last_error!r})",
+        file=sys.stderr,
+    )
     root.addHandler(logging.NullHandler())
     root.setLevel(logging.CRITICAL + 1)
     return None
@@ -1217,6 +1279,9 @@ def string_list(value: Any) -> list[str]:
     return [text] if text else []
 
 
+MAX_EXTRACT_RECURSION_DEPTH = 64
+
+
 def extract_featured_models(payload: Any) -> list[WhatCanIRunEvidence]:
     """Extract whatcani.run featured model rows from current and older payload shapes.
 
@@ -1227,6 +1292,11 @@ def extract_featured_models(payload: Any) -> list[WhatCanIRunEvidence]:
 
     Older snapshots and future wrappers may nest these objects, so this function
     recursively searches for rows instead of assuming one top-level shape.
+
+    Depth-capped — the previous unbounded recursion was a RecursionError-DoS
+    vector if an attacker on the network path returned deeply-nested JSON.
+    The `seen_object_ids` guard is identity-based and a fresh nested chain
+    bypasses it; the depth cap closes that hole.
     """
     found: list[WhatCanIRunEvidence] = []
     seen_object_ids: set[int] = set()
@@ -1244,7 +1314,9 @@ def extract_featured_models(payload: Any) -> list[WhatCanIRunEvidence]:
             and field(value, "runtime", "runtimeName", "runtime_name")
         )
 
-    def visit(value: Any) -> None:
+    def visit(value: Any, depth: int = 0) -> None:
+        if depth > MAX_EXTRACT_RECURSION_DEPTH:
+            return
         object_id = id(value)
         if object_id in seen_object_ids:
             return
@@ -1267,15 +1339,22 @@ def extract_featured_models(payload: Any) -> list[WhatCanIRunEvidence]:
                         minimum_distinct_devices=safe_int(field(value, "minimumDistinctDevices", "minimum_distinct_devices")),
                         minimum_runs_per_device=safe_int(field(value, "minimumRunsPerDevice", "minimum_runs_per_device")),
                         priority=safe_int(field(value, "priority")),
-                        raw=value,
+                        # raw=value used to keep the entire upstream dict (for
+                        # debug logging). That dict flowed through
+                        # `recommendation_to_dict` into the agent's context as
+                        # JSON — an indirect prompt-injection surface since
+                        # any field whatcani.run sets can carry attacker text.
+                        # Set to None: per-row debug now uses only the named
+                        # parsed fields.
+                        raw=None,
                     )
                 )
             for child in value.values():
-                visit(child)
+                visit(child, depth + 1)
         elif isinstance(value, list):
             seen_object_ids.add(object_id)
             for child in value:
-                visit(child)
+                visit(child, depth + 1)
 
     visit(payload)
     deduped: dict[tuple[str | None, str | None, str | None, str | None], WhatCanIRunEvidence] = {}
@@ -1485,12 +1564,21 @@ def load_whatcanirun_evidence(args: argparse.Namespace, hardware: HardwareProfil
             logging.warning("whatcanirun_fallback_cache_failure path=%s error=%r", cache_path, exc)
 
     if network_payload_to_cache is not None and (args.save_whatcanirun_cache or mode in {"auto", "always"}):
+        save_target = args.save_whatcanirun_cache or cache_path
         try:
-            save_json(args.save_whatcanirun_cache or cache_path, network_payload_to_cache)
-            logging.info("whatcanirun_cache_saved path=%s source=%s", args.save_whatcanirun_cache or cache_path, network_payload_source)
+            save_json(save_target, network_payload_to_cache)
+            logging.info("whatcanirun_cache_saved path=%s source=%s", save_target, network_payload_source)
         except OSError as exc:
-            attempts.append({"url": "save-cache:" + (args.save_whatcanirun_cache or cache_path), "error": repr(exc)})
-            logging.warning("whatcanirun_cache_save_failure path=%s error=%r", args.save_whatcanirun_cache or cache_path, exc)
+            attempts.append({"url": "save-cache:" + save_target, "error": repr(exc)})
+            logging.warning("whatcanirun_cache_save_failure path=%s error=%r", save_target, exc)
+            # When the user EXPLICITLY passed --save-whatcanirun-cache, a save
+            # failure is fail-fast (the user is owed an error, not a silent
+            # "we tried and gave up"). Implicit auto-save failures keep the
+            # warning-only behaviour because the next run will try again.
+            if args.save_whatcanirun_cache:
+                raise RuntimeError(
+                    f"failed to write --save-whatcanirun-cache {save_target!s}: {exc}"
+                ) from exc
 
     combined = list(all_evidence_by_key.values())
     filtered = filter_whatcanirun_evidence(combined, hardware, runtime, args.whatcanirun_limit)
@@ -1949,6 +2037,11 @@ def safe_local_dir_name(value: str | None) -> str:
     result = "".join(cleaned).strip("-")
     while "--" in result:
         result = result.replace("--", "-")
+    # Strip leading dots — an evidence row with display_name "..ssh" would
+    # otherwise yield local_dir="..ssh" and a download path of `./models/..ssh`.
+    # Shell-quoting + the explicit `./models/` prefix already neutralise the
+    # worst, but a defence-in-depth strip is cheap.
+    result = result.lstrip(".")
     return result or "model"
 
 
@@ -2676,9 +2769,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
     """Fail early for invalid options instead of producing odd later behavior."""
     validations = [
-        (args.context_tokens > 0, "--context-tokens must be positive"),
+        # Plugin's hard requirement is context ≥32K; allow ≥4096 here for
+        # standalone CLI users who deliberately want to probe small-context
+        # models, but reject the previously-accepted "1" which produced
+        # meaningless recommendations.
+        (args.context_tokens >= 4096, "--context-tokens must be at least 4096"),
         (0.0 <= args.min_headroom <= 10.0, "--min-headroom must be between 0 and 10"),
-        (args.limit > 0, "--limit must be positive"),
+        (1 <= args.limit <= 1000, "--limit must be between 1 and 1000"),
         (args.network_timeout > 0, "--network-timeout must be positive"),
         (args.network_retries >= 1, "--network-retries must be at least 1"),
         (args.retry_delay >= 0, "--retry-delay cannot be negative"),
@@ -2696,6 +2793,14 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     try:
         validate_http_url(args.url, option_name="--url")
         validate_http_url(args.whatcanirun_featured_url, option_name="--whatcanirun-featured-url")
+        # T2.14: when running inside the plugin (CLAUDE_PLUGIN_DATA set), pin
+        # every cache-arg under the plugin's cache root. Standalone CLI users
+        # keep unrestricted paths.
+        _validate_cache_path(args.from_cache, option_name="--from-cache")
+        _validate_cache_path(args.save_cache, option_name="--save-cache")
+        _validate_cache_path(args.whatcanirun_cache, option_name="--whatcanirun-cache")
+        _validate_cache_path(args.whatcanirun_from_cache, option_name="--whatcanirun-from-cache")
+        _validate_cache_path(args.save_whatcanirun_cache, option_name="--save-whatcanirun-cache")
     except ValueError as exc:
         parser.error(str(exc))
 

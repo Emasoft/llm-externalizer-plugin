@@ -79,23 +79,68 @@ case "$OS_RAW" in
     # Native Windows running bash via Git-Bash / MSYS / Cygwin. WSL2 is
     # handled above (its uname returns Linux).
     OS_NORMALIZED="windows"
-    if command -v wmic >/dev/null 2>&1; then
-      # wmic is deprecated in Windows 11 but still ships everywhere bash
-      # would be installed. PowerShell would be cleaner but adds startup
-      # cost (~1s) we don't want here.
-      RAM_BYTES=$(wmic computersystem get TotalPhysicalMemory /value 2>/dev/null \
-                  | tr -d '\r' \
-                  | awk -F= '/TotalPhysicalMemory=/ {print $2}')
-      # Numeric guard — wmic on certain VMs emits `TotalPhysicalMemory=N/A`;
-      # the non-empty check alone would let that through and crash bash arith.
+
+    # RAM detection chain — wmic was removed in Windows 11 24H2+, so we try
+    # PowerShell first (works on every Win10+ install), wmic second (legacy
+    # path), and systeminfo as a last resort. Each falls through on empty /
+    # non-numeric output so the next fallback gets a turn.
+    if command -v powershell.exe >/dev/null 2>&1; then
+      # Get-CimInstance is the canonical successor to wmic for Win11. The
+      # `-NoProfile` flag bypasses the user's PowerShell profile which can
+      # add 1-2s of startup latency; `-Command` runs the literal expression.
+      RAM_BYTES=$(powershell.exe -NoProfile -Command \
+        "(Get-CimInstance -ClassName Win32_ComputerSystem).TotalPhysicalMemory" \
+        2>/dev/null | tr -d '\r\n ' || true)
       if [[ "${RAM_BYTES:-}" =~ ^[0-9]+$ ]]; then
         RAM_GB=$(( RAM_BYTES / 1024 / 1024 / 1024 ))
       fi
     fi
-    # GPU detection on Windows requires PowerShell or wmic; skip it here
-    # and let the agent ask the user. False "none" is fine — the agent
-    # always offers a runner that works on CPU as a fallback.
-    GPU="unknown"
+    if (( RAM_GB == 0 )) && command -v wmic >/dev/null 2>&1; then
+      # Legacy wmic path — kept as a fallback for Windows 10 ≤ 21H2 boxes
+      # where Get-CimInstance may not be present (very old systems).
+      RAM_BYTES=$(wmic computersystem get TotalPhysicalMemory /value 2>/dev/null \
+                  | tr -d '\r' \
+                  | awk -F= '/TotalPhysicalMemory=/ {print $2}')
+      if [[ "${RAM_BYTES:-}" =~ ^[0-9]+$ ]]; then
+        RAM_GB=$(( RAM_BYTES / 1024 / 1024 / 1024 ))
+      fi
+    fi
+    if (( RAM_GB == 0 )) && command -v systeminfo >/dev/null 2>&1; then
+      # systeminfo prints "Total Physical Memory: 16,384 MB" — parse MB
+      # value and convert. Slow (~2s) but available everywhere wmic was.
+      RAM_MB=$(systeminfo 2>/dev/null \
+               | tr -d '\r' \
+               | awk -F: '/Total Physical Memory/ {gsub(/[, MB]/,"",$2); print $2}')
+      if [[ "${RAM_MB:-}" =~ ^[0-9]+$ ]]; then
+        RAM_GB=$(( RAM_MB / 1024 ))
+      fi
+    fi
+
+    # GPU detection — PowerShell Win32_VideoController is the canonical path.
+    # The class lists every video adapter; we look for the strongest matched
+    # vendor (NVIDIA wins over AMD wins over Intel) so a laptop with both an
+    # integrated iGPU and a discrete dGPU reports the dGPU.
+    if command -v powershell.exe >/dev/null 2>&1; then
+      GPU_NAMES=$(powershell.exe -NoProfile -Command \
+        "(Get-CimInstance -ClassName Win32_VideoController | Select-Object -ExpandProperty Name) -join ';'" \
+        2>/dev/null | tr -d '\r' || true)
+      # Use case-insensitive grep on the joined adapter names. NVIDIA first
+      # so a hybrid-GPU box picks the better path.
+      if [[ -n "${GPU_NAMES:-}" ]]; then
+        if echo "$GPU_NAMES" | grep -qi "nvidia"; then
+          GPU="nvidia"
+        elif echo "$GPU_NAMES" | grep -qiE "amd|radeon"; then
+          GPU="amd-rocm"
+        else
+          GPU="none"
+        fi
+      else
+        GPU="unknown"
+      fi
+    else
+      # No PowerShell — fall back to "unknown" so the agent can ask the user.
+      GPU="unknown"
+    fi
     ;;
 
   *)

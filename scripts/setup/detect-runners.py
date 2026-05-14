@@ -35,17 +35,44 @@ has `requests` or `httpx` available. urllib + json + subprocess is enough.
 
 from __future__ import annotations
 
+import argparse
 import json
 import shutil
 import socket
 import subprocess
 import sys
+from pathlib import Path
 from typing import Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 HTTP_TIMEOUT = 2.0
 CMD_TIMEOUT = 5.0
+
+
+def wsl2_host_ip() -> Optional[str]:
+    """If running on WSL2, return the Windows host IP (else None).
+
+    WSL2 reports `Linux` from uname but `microsoft` appears in /proc/version.
+    /etc/resolv.conf's nameserver entry resolves to the Windows host on a
+    default WSL2 install. The agent can use this to probe both `localhost`
+    (Linux side) and the Windows host (where LM Studio commonly runs).
+    """
+    try:
+        version_text = Path("/proc/version").read_text(errors="replace")
+    except OSError:
+        return None
+    if "microsoft" not in version_text.lower() and "wsl" not in version_text.lower():
+        return None
+    try:
+        resolv = Path("/etc/resolv.conf").read_text(errors="replace")
+    except OSError:
+        return None
+    for line in resolv.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] == "nameserver":
+            return parts[1].strip()
+    return None
 
 
 def http_get_json(url: str, timeout: float = HTTP_TIMEOUT) -> Optional[dict]:
@@ -102,10 +129,10 @@ def _safe_model_names(payload: Optional[dict], key: str, name_field: str) -> lis
     return [m[name_field] for m in items if isinstance(m, dict) and isinstance(m.get(name_field), str)]
 
 
-def detect_ollama() -> Optional[dict]:
+def detect_ollama(probe_host: str = "localhost") -> Optional[dict]:
     """Ollama: CLI `ollama`, port 11434, native /api/tags + OpenAI /v1/."""
     cli = shutil.which("ollama")
-    tags = http_get_json("http://localhost:11434/api/tags")
+    tags = http_get_json(f"http://{probe_host}:11434/api/tags")
 
     # Skip silently if neither CLI nor server is present — Ollama is not
     # installed at all.
@@ -116,6 +143,7 @@ def detect_ollama() -> Optional[dict]:
     return {
         "name": "ollama",
         "version": version or "unknown",
+        "host": probe_host,
         "port": 11434,
         "running": tags is not None,
         "models": _safe_model_names(tags, "models", "name"),
@@ -123,10 +151,10 @@ def detect_ollama() -> Optional[dict]:
     }
 
 
-def detect_lmstudio() -> Optional[dict]:
+def detect_lmstudio(probe_host: str = "localhost") -> Optional[dict]:
     """LM Studio: CLI `lms`, port 1234, native + OpenAI compat /v1/."""
     cli = shutil.which("lms")
-    models_resp = http_get_json("http://localhost:1234/v1/models")
+    models_resp = http_get_json(f"http://{probe_host}:1234/v1/models")
 
     if cli is None and models_resp is None:
         return None
@@ -135,6 +163,7 @@ def detect_lmstudio() -> Optional[dict]:
     return {
         "name": "lmstudio",
         "version": version or "unknown",
+        "host": probe_host,
         "port": 1234,
         "running": models_resp is not None,
         "models": _safe_model_names(models_resp, "data", "id"),
@@ -142,32 +171,68 @@ def detect_lmstudio() -> Optional[dict]:
     }
 
 
-def detect_vllm() -> Optional[dict]:
-    """vLLM: python package `vllm`, port 8000, OpenAI compat /v1/."""
-    # vLLM is a Python package; we test by spawning the active interpreter.
-    # This is slow (~150ms) but the only reliable way: `pip show vllm` and
-    # `which vllm` both miss installs in venvs / conda envs that the agent
-    # cannot see from outside.
-    version = run_cli([sys.executable, "-c", "import vllm; print(vllm.__version__)"])
-    models_resp = http_get_json("http://localhost:8000/v1/models")
+def _vllm_import_probe() -> tuple[Optional[str], Optional[str]]:
+    """Probe `import vllm` and discriminate "not installed" from "half-installed".
 
-    if version is None and models_resp is None:
+    Returns (version, import_error):
+      - (version, None) — vllm imported cleanly
+      - (None, None)    — vllm not present at all (ModuleNotFoundError, FileNotFoundError)
+      - (None, msg)     — vllm IS present but the import crashes (e.g. mismatched
+                          CUDA, missing _C extension). The agent should surface
+                          this distinctly: "vLLM is installed but broken — fix
+                          your CUDA/Python pairing, don't reinstall vLLM".
+    """
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", "import vllm; print(vllm.__version__)"],
+            capture_output=True, text=True, timeout=CMD_TIMEOUT, check=False,
+        )
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        return None, None
+    if result.returncode == 0:
+        out = result.stdout.strip()
+        return (out.split("\n")[0] if out else None), None
+    # Non-zero. ModuleNotFoundError → not installed (None, None). Any other
+    # exception class (ImportError, OSError, RuntimeError, etc.) → installed
+    # but broken (None, msg). Inspect stderr to discriminate.
+    stderr = result.stderr.strip()
+    if "ModuleNotFoundError" in stderr:
+        return None, None
+    if "ImportError" in stderr or "OSError" in stderr or "RuntimeError" in stderr:
+        # Trim the message — full tracebacks would balloon the JSON. Last
+        # line of the traceback is typically the actual error class + message.
+        last_line = stderr.splitlines()[-1] if stderr else "unknown import failure"
+        return None, last_line[:200]
+    return None, None
+
+
+def detect_vllm(probe_host: str = "localhost") -> Optional[dict]:
+    """vLLM: python package `vllm`, port 8000, OpenAI compat /v1/."""
+    version, import_error = _vllm_import_probe()
+    models_resp = http_get_json(f"http://{probe_host}:8000/v1/models")
+
+    # Nothing detected at all — really not installed.
+    if version is None and import_error is None and models_resp is None:
         return None
 
     return {
         "name": "vllm",
-        "version": version or "unknown",
+        "version": version or ("broken" if import_error else "unknown"),
+        "host": probe_host,
         "port": 8000,
         "running": models_resp is not None,
         "models": _safe_model_names(models_resp, "data", "id"),
         "cli": None,  # vLLM is invoked as `python -m vllm.entrypoints.openai.api_server`
+        # Only present when the import crashed — agent uses this to tell the
+        # user "vLLM is installed but the import fails: <reason>".
+        "import_error": import_error,
     }
 
 
-def detect_llamacpp() -> Optional[dict]:
+def detect_llamacpp(probe_host: str = "localhost") -> Optional[dict]:
     """llama.cpp: CLI `llama-server`, port 8080, OpenAI compat /v1/."""
     cli = shutil.which("llama-server")
-    models_resp = http_get_json("http://localhost:8080/v1/models")
+    models_resp = http_get_json(f"http://{probe_host}:8080/v1/models")
 
     if cli is None and models_resp is None:
         return None
@@ -176,6 +241,7 @@ def detect_llamacpp() -> Optional[dict]:
     return {
         "name": "llamacpp",
         "version": version or "unknown",
+        "host": probe_host,
         "port": 8080,
         "running": models_resp is not None,
         "models": _safe_model_names(models_resp, "data", "id"),
@@ -183,16 +249,36 @@ def detect_llamacpp() -> Optional[dict]:
     }
 
 
-def detect_jan() -> Optional[dict]:
-    """Jan: no canonical CLI; port 1337, OpenAI compat /v1/."""
-    # Jan ships as a GUI app — `jan` may exist as a CLI on some platforms but
-    # is not the canonical detection path. Probe the port instead.
-    models_resp = http_get_json("http://localhost:1337/v1/models")
+def detect_jan(probe_host: str = "localhost") -> Optional[dict]:
+    """Jan: no canonical CLI; port 1337, OpenAI compat /v1/.
+
+    Port 1337 is a common dev port — anything bound there returning JSON
+    would otherwise be mis-tagged as Jan. We require BOTH `/v1/models`
+    (OpenAI compat) AND `/api/version` (Jan-specific) to respond before
+    claiming it's really Jan running.
+    """
+    models_resp = http_get_json(f"http://{probe_host}:1337/v1/models")
     if models_resp is None:
         return None
+    # Jan-specific endpoint check — defeats port-1337 collisions (any old
+    # tool, Hyper, dev webhook server) that happens to return valid JSON.
+    version_resp = http_get_json(f"http://{probe_host}:1337/api/version")
+    if version_resp is None:
+        # /v1/models responded but /api/version did not — likely NOT Jan.
+        # Skip to avoid a false positive.
+        return None
+    # /api/version typically returns {"version":"x.y.z"}. Even if it returns
+    # an unexpected shape, we now have two-endpoint corroboration that this
+    # is really Jan.
+    version = None
+    if isinstance(version_resp, dict):
+        raw_version = version_resp.get("version")
+        if isinstance(raw_version, str):
+            version = raw_version
     return {
         "name": "jan",
-        "version": "unknown",  # /v1/models does not expose Jan's version
+        "version": version or "unknown",
+        "host": probe_host,
         "port": 1337,
         "running": True,
         "models": _safe_model_names(models_resp, "data", "id"),
@@ -200,18 +286,48 @@ def detect_jan() -> Optional[dict]:
     }
 
 
+DETECTORS = (detect_ollama, detect_lmstudio, detect_vllm, detect_llamacpp, detect_jan)
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Find installed local-model runners.",
+    )
+    parser.add_argument(
+        "--probe-host", default=None,
+        help=("Hostname/IP to probe for runners (default: localhost). On WSL2 "
+              "the agent may pass the Windows host IP so LM Studio installs "
+              "running on the Windows side are visible."),
+    )
+    parser.add_argument(
+        "--include-wsl2-host", action="store_true",
+        help=("On WSL2, ALSO probe the Windows host IP (derived from "
+              "/etc/resolv.conf) and merge results. No effect off WSL2."),
+    )
+    args = parser.parse_args()
+
+    primary_host = args.probe_host or "localhost"
     runners = []
-    for fn in (detect_ollama, detect_lmstudio, detect_vllm, detect_llamacpp, detect_jan):
-        try:
-            r = fn()
-        except Exception as e:  # noqa: BLE001
-            # Detection of one runner must NEVER kill detection of the rest.
-            # Log to stderr and continue.
-            print(f"warn: {fn.__name__} crashed: {e}", file=sys.stderr)
-            continue
-        if r is not None:
-            runners.append(r)
+    hosts = [primary_host]
+    if args.include_wsl2_host:
+        wsl_host = wsl2_host_ip()
+        if wsl_host and wsl_host not in hosts:
+            hosts.append(wsl_host)
+
+    for host in hosts:
+        for fn in DETECTORS:
+            try:
+                r = fn(probe_host=host)
+            except (URLError, HTTPError, TimeoutError, socket.timeout, OSError, json.JSONDecodeError) as e:
+                # Narrow the catch — the previous bare `except Exception:`
+                # mapped genuine bugs to "warn: <fn> crashed" which the
+                # outer agent never read. The classes above cover the
+                # legitimate "service not present / unparseable response"
+                # cases per fail-fast: real bugs propagate to the user.
+                print(f"warn: {fn.__name__}@{host} crashed: {type(e).__name__}: {e}", file=sys.stderr)
+                continue
+            if r is not None:
+                runners.append(r)
 
     json.dump({"runners": runners}, sys.stdout, indent=2)
     sys.stdout.write("\n")

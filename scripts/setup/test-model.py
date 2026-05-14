@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import socket
 import sys
 import time
@@ -42,6 +43,21 @@ from typing import Any, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
+
+# Token shapes we redact from any user-visible error body. Defence-in-depth:
+# `call_chat` does NOT log or echo the bearer token itself, but an upstream
+# server that mis-handles auth could echo the user's own token back inside its
+# error response — at which point that body lands in the wizard's stdout JSON
+# unless we sanitise it. Covers OpenAI-style `sk-…`, Hugging Face `hf_…`, and
+# generic `Bearer <token>` patterns.
+_BEARER_REDACTION_PATTERN = re.compile(
+    r"(sk-[A-Za-z0-9_\-]{8,}|hf_[A-Za-z0-9]{8,}|Bearer\s+[A-Za-z0-9_\-]{8,})"
+)
+
+
+def _sanitise_error_body(body: str) -> str:
+    """Strip bearer-token-shaped substrings from an upstream error body."""
+    return _BEARER_REDACTION_PATTERN.sub("[REDACTED]", body)
 
 # ---------------------------------------------------------------------------
 # HTTP helper
@@ -85,11 +101,13 @@ def call_chat(
     except HTTPError as e:
         # Read the body if we can — error messages from llama.cpp / vLLM /
         # Ollama vary a lot and the body is usually the most informative.
+        # Narrow the inner catch: only OSError (socket reset reading body) and
+        # UnicodeDecodeError (binary-content error bodies) are expected.
         try:
             err_body = e.read().decode("utf-8", errors="replace")
-        except Exception:  # noqa: BLE001
+        except (OSError, UnicodeDecodeError, AttributeError):
             err_body = ""
-        return {"error": f"HTTP {e.code}: {err_body[:200]}"}
+        return {"error": f"HTTP {e.code}: {_sanitise_error_body(err_body)[:200]}"}
     except (URLError, TimeoutError, socket.timeout) as e:
         return {"error": f"transport: {e}"}
     except json.JSONDecodeError as e:
@@ -111,12 +129,50 @@ def _validate_local_url(url: str) -> str:
     return url
 
 
-def extract_content(resp: dict[str, Any]) -> str:
-    """Pull the assistant message content out of an OpenAI-style response."""
+def extract_content(resp: dict[str, Any]) -> tuple[str, str | None]:
+    """Return (text, hint) for an OpenAI-style chat response.
+
+    Discriminates:
+      - regular text reply: ("text", None)
+      - None content (model used tool_calls / function_call): ("", "model used tool_calls instead of text content — non-text responses are not testable")
+      - list content (multimodal parts): ("", "model returned a list of content parts (multimodal); only text replies can be scored")
+      - missing fields (malformed shape): ("", "unexpected response shape — no .choices[0].message.content present")
+
+    The previous implementation collapsed all non-text shapes to "" with no
+    hint, making it impossible to tell "model failed" from "model used a
+    different content shape we don't support".
+    """
     try:
-        return resp["choices"][0]["message"]["content"] or ""
+        msg = resp["choices"][0]["message"]
     except (KeyError, IndexError, TypeError):
-        return ""
+        return "", "unexpected response shape — no .choices[0].message present"
+    raw = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(raw, str):
+        return raw, None
+    if raw is None:
+        # Could be tool_calls / function_call. Surface the hint so the user
+        # knows their model is using a non-text return shape rather than
+        # "failing" the test.
+        if isinstance(msg, dict) and (msg.get("tool_calls") or msg.get("function_call")):
+            return "", "model used tool_calls / function_call instead of text content"
+        return "", "empty response (.choices[0].message.content was null)"
+    if isinstance(raw, list):
+        return "", "model returned a list of content parts (multimodal); only text replies can be scored"
+    return "", f"unexpected content type: {type(raw).__name__}"
+
+
+def _err_from_call(resp: dict[str, Any]) -> str | None:
+    """Return the call_chat sentinel error if present, else None.
+
+    Robust against OpenAI-compatible responses that legitimately include
+    `"error": null` alongside a successful `choices` array (common in
+    proxy servers and some llama.cpp builds). `if "error" in resp:` would
+    falsely treat such responses as failures.
+    """
+    err = resp.get("error")
+    if isinstance(err, str) and err:
+        return err
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -134,11 +190,13 @@ def test_smoke(url: str, model: str, **kw) -> dict[str, Any]:
     )
     duration = time.time() - t0
 
-    if "error" in resp:
-        return {"score": 0.0, "detail": resp["error"], "duration_s": round(duration, 2)}
-    content = extract_content(resp).strip()
+    err = _err_from_call(resp)
+    if err is not None:
+        return {"score": 0.0, "detail": err, "duration_s": round(duration, 2)}
+    content, hint = extract_content(resp)
+    content = content.strip()
     if not content:
-        return {"score": 0.0, "detail": "empty response", "duration_s": round(duration, 2)}
+        return {"score": 0.0, "detail": hint or "empty response", "duration_s": round(duration, 2)}
     return {
         "score": 1.0,
         "detail": f"got {len(content)} chars: {content[:50]!r}",
@@ -170,11 +228,13 @@ def test_structured_output(url: str, model: str, **kw) -> dict[str, Any]:
     )
     duration = time.time() - t0
 
-    if "error" in resp:
-        return {"score": 0.0, "detail": resp["error"], "duration_s": round(duration, 2)}
-    content = extract_content(resp).strip()
+    err = _err_from_call(resp)
+    if err is not None:
+        return {"score": 0.0, "detail": err, "duration_s": round(duration, 2)}
+    content, hint = extract_content(resp)
+    content = content.strip()
     if not content:
-        return {"score": 0.0, "detail": "empty response", "duration_s": round(duration, 2)}
+        return {"score": 0.0, "detail": hint or "empty response", "duration_s": round(duration, 2)}
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError:
@@ -233,9 +293,12 @@ def test_code_understanding(url: str, model: str, **kw) -> dict[str, Any]:
     )
     duration = time.time() - t0
 
-    if "error" in resp:
-        return {"score": 0.0, "detail": resp["error"], "duration_s": round(duration, 2)}
-    content = extract_content(resp)
+    err = _err_from_call(resp)
+    if err is not None:
+        return {"score": 0.0, "detail": err, "duration_s": round(duration, 2)}
+    content, hint = extract_content(resp)
+    if not content:
+        return {"score": 0.0, "detail": hint or "empty response", "duration_s": round(duration, 2)}
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError:
@@ -269,15 +332,41 @@ def test_code_understanding(url: str, model: str, **kw) -> dict[str, Any]:
 
 
 def test_long_context(url: str, model: str, **kw) -> dict[str, Any]:
-    """Inject ~30K tokens; ask for a relevant summary."""
-    # ~4 chars per token. We want ~30K tokens, so ~120K chars.
-    # The sentence below is 45 chars ≈ 11 tokens. Need ~2700 repetitions.
-    filler_sentence = "The quick brown fox jumps over the lazy dog. "  # 45 chars
-    filler = filler_sentence * 2700  # ~120K chars, ~30K tokens
+    """Inject ~32K tokens with a needle at ~90% depth; require verbatim recall.
+
+    The previous version used 30K filler tokens with a 1-token "fox" answer —
+    a model with a 16K context window could still pattern-match on just the
+    prompt prefix and score 1.0, so the test was effectively measuring
+    "model can echo a word from the prompt", not "model has 32K context".
+
+    Needle-in-a-haystack is the canonical content-grounded long-context probe:
+      - place a unique sentence at the 90 % depth of the input
+      - ask the model to return that sentence verbatim
+      - score by exact / partial match
+    """
+    needle = "The blue umbrella belongs to Captain Nemo and lives on the third shelf."
+    filler_sentence = "The quick brown fox jumps over the lazy dog. "  # 45 chars ≈ 11 tokens
+    # Target ~32K tokens (the plugin's hard requirement) = ~128 K chars at the
+    # 4-char-per-token rule of thumb. The needle sits at the 90 % mark so the
+    # model can't recover it from a short-context window of just the prompt
+    # head.
+    total_chars_target = 128 * 1024
+    needle_position_chars = int(total_chars_target * 0.9)
+    prefix_repetitions = needle_position_chars // len(filler_sentence)
+    prefix = filler_sentence * prefix_repetitions
+    suffix_target_chars = total_chars_target - len(prefix) - len(needle) - 32
+    suffix_repetitions = max(0, suffix_target_chars // len(filler_sentence))
+    suffix = filler_sentence * suffix_repetitions
+
     prompt = (
-        "The following text mentions a fox repeatedly. "
-        "In one short sentence, name the animal mentioned and what it does.\n\n"
-        + filler
+        "The text below contains exactly one unique 'special sentence' hidden "
+        "inside a wall of filler. Find it and return ONLY that sentence, "
+        "verbatim, with no extra commentary.\n\nThe text:\n\n"
+        + prefix
+        + "\nSPECIAL SENTENCE: "
+        + needle
+        + "\n\n"
+        + suffix
     )
 
     t0 = time.time()
@@ -288,29 +377,43 @@ def test_long_context(url: str, model: str, **kw) -> dict[str, Any]:
     )
     duration = time.time() - t0
 
-    if "error" in resp:
+    err = _err_from_call(resp)
+    if err is not None:
         return {
             "score": 0.0,
-            "detail": f"failed at ~30K-token input: {resp['error']}",
+            "detail": f"failed at ~32K-token input: {err}",
             "duration_s": round(duration, 2),
         }
-    content = extract_content(resp).strip().lower()
+    content, hint = extract_content(resp)
+    content = content.strip()
     if not content:
         return {
             "score": 0.0,
-            "detail": "empty response on long-context input",
+            "detail": hint or "empty response on long-context input",
             "duration_s": round(duration, 2),
         }
-    if "fox" in content:
+    lower = content.lower()
+    if needle.lower() in lower:
         return {
             "score": 1.0,
-            "detail": f"accepted ~30K-token input, named the animal correctly ({duration:.1f}s)",
+            "detail": f"recalled the needle verbatim from ~32K-token input ({duration:.1f}s)",
+            "duration_s": round(duration, 2),
+        }
+    # Distinctive tokens — "umbrella" / "nemo" / "captain" — show partial recall
+    # (model found the right region but paraphrased). Better than nothing but
+    # not the full ≥32K-context signal we need.
+    key_tokens = ("umbrella", "nemo", "captain")
+    if any(tok in lower for tok in key_tokens):
+        return {
+            "score": 0.5,
+            "detail": f"partial needle recall (paraphrased) at ~32K tokens "
+                      f"({duration:.1f}s): {content[:120]}",
             "duration_s": round(duration, 2),
         }
     return {
-        "score": 0.5,
-        "detail": f"accepted input but summary may be irrelevant "
-                  f"({duration:.1f}s): {content[:80]}",
+        "score": 0.2,
+        "detail": f"input accepted but needle NOT recovered — context window "
+                  f"may be smaller than 32K ({duration:.1f}s): {content[:120]}",
         "duration_s": round(duration, 2),
     }
 
@@ -332,9 +435,10 @@ def test_output_length(url: str, model: str, **kw) -> dict[str, Any]:
     )
     duration = time.time() - t0
 
-    if "error" in resp:
-        return {"score": 0.0, "detail": resp["error"], "duration_s": round(duration, 2)}
-    content = extract_content(resp)
+    err = _err_from_call(resp)
+    if err is not None:
+        return {"score": 0.0, "detail": err, "duration_s": round(duration, 2)}
+    content, _hint = extract_content(resp)
     char_count = len(content)
     # ~4 chars per token. 4096 tokens ≈ 16K chars target.
     if char_count >= 16000:
@@ -392,14 +496,25 @@ def main() -> int:
 
     kw = {"api_key": args.api_key, "timeout": args.timeout}
 
-    print(f"Testing {args.model} at {args.url}...", file=sys.stderr)
+    print(f"Testing {args.model} at {args.url}", file=sys.stderr)
+    print(f"  Running {len(TESTS)} calibrated tests (typical total: 30-90 s)...",
+          file=sys.stderr)
     results: dict[str, dict] = {}
     for name, fn in TESTS:
-        print(f"  Running {name}...", end=" ", file=sys.stderr, flush=True)
+        print(f"  [{name}] ...", end=" ", file=sys.stderr, flush=True)
         try:
             r = fn(args.url, args.model, **kw)
-        except Exception as e:  # noqa: BLE001
-            r = {"score": 0.0, "detail": f"test crashed: {e}", "duration_s": 0.0}
+        except (URLError, HTTPError, TimeoutError, socket.timeout, OSError,
+                json.JSONDecodeError, KeyError, IndexError, ValueError) as e:
+            # Narrow the catch per fail-fast — anything outside this set is a
+            # real bug in the test harness and should propagate as a Python
+            # traceback rather than masquerade as a model failure. The error
+            # class is included in the detail so the agent can distinguish
+            # transport (URLError) from harness bugs (KeyError) from model
+            # bugs (JSONDecodeError) when surfacing the failure.
+            r = {"score": 0.0,
+                 "detail": f"test crashed ({type(e).__name__}): {e}",
+                 "duration_s": 0.0}
         results[name] = r
         print(f"score={r['score']:.1f} ({r['duration_s']}s)", file=sys.stderr)
 
