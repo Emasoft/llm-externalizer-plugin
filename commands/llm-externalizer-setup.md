@@ -7,7 +7,9 @@ argument-hint: ""
 effort: medium
 ---
 
-Spawn the `llm-externalizer-setup-agent` via the Agent tool using `subagent_type: "llm-externalizer-setup-agent"`. The wizard walks the user through seven steps:
+**Quick redirect — if you just want OpenRouter (no local model), STOP and use `/llm-externalizer:llm-externalizer-configure` instead.** That command is a single-prompt API-key paste and takes ~30 seconds. This wizard is for LOCAL-backend setup (Ollama / LM Studio / vLLM / llama.cpp / Jan) and takes 2-10 minutes.
+
+Spawn the `llm-externalizer-setup-agent` via the Agent tool using `subagent_type: "llm-externalizer-setup-agent"`. The wizard walks the user through the following steps:
 
 1. **Platform detection** — OS family (macOS / Linux / WSL2 / Windows), architecture, RAM, GPU.
 2. **Runner detection** — scan for Ollama, LM Studio, vLLM, llama.cpp, Jan (CLI presence + listening port).
@@ -21,4 +23,4 @@ Spawn the `llm-externalizer-setup-agent` via the Agent tool using `subagent_type
 
 **State persistence.** Wizard state lives under `$CLAUDE_PLUGIN_DATA/setup/` (env.json, runners.json, selected.json, test-results.json, profile.yaml), so re-invoking the command resumes where it left off.
 
-**When to invoke instead of `/llm-externalizer:llm-externalizer-configure`.** This setup wizard is for first-time local-model setup or when a model is failing compatibility tests. For OpenRouter-only setup or to inspect an existing config, use `llm-externalizer-configure` instead — it is read-only and lighter weight.
+**When to invoke instead of `/llm-externalizer:llm-externalizer-configure`.** This setup wizard is for first-time **local-model** setup (Ollama / LM Studio / vLLM / llama.cpp / Jan) or when a local model is failing compatibility tests. For OpenRouter-only setup or to inspect an existing config, use `llm-externalizer-configure` instead — it is read-only and lighter weight. (Repeated here in case you scrolled past the top-of-doc redirect.)

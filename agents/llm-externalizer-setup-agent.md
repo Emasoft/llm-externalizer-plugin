@@ -49,22 +49,75 @@ Keep all wizard state under `$CLAUDE_PLUGIN_DATA/setup/` so a re-invocation can 
 
 `mkdir -p "$CLAUDE_PLUGIN_DATA/setup"` once at the start. Always write atomically (`> file.tmp && mv -f file.tmp file`) so a Ctrl-C mid-write does not leave a half-baked JSON file.
 
+### Idempotency / resume
+
+Before running each Step's command, check whether its output file already exists and is fresh (mtime within the last hour). If so, offer the user the choice:
+
+```
+$CLAUDE_PLUGIN_DATA/setup/env.json exists (written 12 min ago).
+Resume from Step 2 using cached environment? (Y/n)
+```
+
+Default: yes for env.json + runners.json (cheap to redo if wrong), yes for recommendations.json (5-30 s saved), no for test-results.json (the user usually re-runs because they changed something). The Read tool gives mtime via `os.stat`; surface this in-line so the user never wonders "why is it doing detection again?".
+
 ## Workflow
+
+### Step 0 — Inspect existing configuration (NEVER skip)
+
+Read the user's current settings before generating new content. This catches the most common support issue ("the wizard broke my existing OpenRouter profile") and gives the user a clear picture of what they already have.
+
+```bash
+mkdir -p "$CLAUDE_PLUGIN_DATA/setup"
+SETTINGS=~/.llm-externalizer/settings.yaml
+if [[ -f "$SETTINGS" ]]; then
+  cp -p "$SETTINGS" "$CLAUDE_PLUGIN_DATA/setup/settings.before.yaml"
+  echo "[setup] backed up existing settings to $CLAUDE_PLUGIN_DATA/setup/settings.before.yaml"
+fi
+```
+
+If `$SETTINGS` does not exist, the user is doing a fresh install — proceed to Step 1.
+
+If it DOES exist, also call `mcp__llm-externalizer__discover` so you can show the user a table of every profile already configured (name, mode, api preset, model, service health). Ask one explicit question:
+
+> "I see you already have these profiles. Are you (a) adding a NEW profile, (b) fixing an EXISTING profile, or (c) replacing the active default?"
+
+Carry the answer forward — the Step 6 snippet generation needs it (collision detection + active flip).
 
 ### Step 1 — Identify platform
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/setup/detect-environment.sh" \
-  > "$CLAUDE_PLUGIN_DATA/setup/env.json"
+# Always check the exit code — `> file.json` does NOT fail the pipeline when
+# the script exits non-zero; the next step would happily parse an empty or
+# partial JSON file and report misleading results. Surface the diagnostic
+# path so the user can read what went wrong instead of "no compatible models
+# found".
+if ! bash "${CLAUDE_PLUGIN_ROOT}/scripts/setup/detect-environment.sh" \
+     > "$CLAUDE_PLUGIN_DATA/setup/env.json.tmp"; then
+  echo "[setup] detect-environment.sh failed; rerun manually to see stderr." >&2
+  exit 2
+fi
+mv -f "$CLAUDE_PLUGIN_DATA/setup/env.json.tmp" "$CLAUDE_PLUGIN_DATA/setup/env.json"
 ```
 
 Read the JSON and tell the user one concise line: `Detected: <os> <arch>, <ram>GB RAM, GPU: <gpu>.`
 
+If `ram_gb` is 0, the platform-detection chain failed (most often on Win11 24H2+ with the wmic-removed-but-no-PowerShell-fallback scenario). Ask the user explicitly: "How much RAM does this machine have?" and overwrite `env.json.ram_gb` with their answer before proceeding to Step 2 — passing `ram_gb=0` to `recommend-models.py` would mark every model incompatible.
+
 ### Step 2 — Detect installed local-model runners
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/detect-runners.py" \
-  > "$CLAUDE_PLUGIN_DATA/setup/runners.json"
+# Pass --include-wsl2-host on WSL2 so the script also probes the Windows host IP
+# for LM Studio installs bridged from Windows. Off WSL2 the flag is a no-op.
+WSL_FLAG=""
+if [[ "$(jq -r .os "$CLAUDE_PLUGIN_DATA/setup/env.json" 2>/dev/null || true)" == "wsl2" ]]; then
+  WSL_FLAG="--include-wsl2-host"
+fi
+if ! python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/detect-runners.py" $WSL_FLAG \
+     > "$CLAUDE_PLUGIN_DATA/setup/runners.json.tmp"; then
+  echo "[setup] detect-runners.py failed; check stderr above for the trigger." >&2
+  exit 2
+fi
+mv -f "$CLAUDE_PLUGIN_DATA/setup/runners.json.tmp" "$CLAUDE_PLUGIN_DATA/setup/runners.json"
 ```
 
 Parse the JSON. Show a Unicode-bordered table:
@@ -119,27 +172,72 @@ Ask the user: "Use one of these models (1-N), download a new one (D), or pick fr
 
 #### If the user picks (R) or (D) and wants to download:
 
-First ensure `hf` CLI is installed:
+First ensure the `hf` CLI is installed, then verify it works AND check whether the user is authenticated (Llama / Gemma / Mistral gated repos need a free HF token):
 
 ```bash
+# Three-step install fallback to handle PEP 668 (externally-managed-environment)
+# systems where bare `pip install --user` aborts:
+#   1. uv — isolated tool install, recommended
+#   2. pipx — isolated per-app environment
+#   3. pip --user — legacy fallback (often blocked on Debian 12+, Ubuntu 23+,
+#                   Homebrew Python on macOS)
+# Version-pin defeats typosquat hazard. >=0.25,<1.0 is the current `hf`-namespace
+# CLI series — older versions used the deprecated `huggingface-cli` entry-point.
+HF_PKG='huggingface-hub[cli]>=0.25,<1.0'
 if ! command -v hf >/dev/null 2>&1; then
-  # Prefer uv if available — handles isolated envs cleanly
   if command -v uv >/dev/null 2>&1; then
-    uv tool install "huggingface-hub[cli]"
+    uv tool install "$HF_PKG"
+  elif command -v pipx >/dev/null 2>&1; then
+    pipx install "$HF_PKG"
+  elif pip install --user "$HF_PKG" 2>/dev/null; then
+    :   # pip --user worked
   else
-    pip install --user "huggingface-hub[cli]"
+    echo "[setup] All pip-based installs failed — bootstrapping uv (one-time)..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    "$HOME/.local/bin/uv" tool install "$HF_PKG"
+    export PATH="$HOME/.local/bin:$PATH"
   fi
 fi
-hf --version || { echo "hf CLI install failed — fall back to manual download"; }
+# Verify the install actually worked AND surface the failure explicitly.
+if ! hf --version >/dev/null 2>&1; then
+  echo "[setup] hf CLI install did not produce a working command on PATH." >&2
+  echo "  Manual fallback: download the model via your runner's UI (Ollama Pull, LM Studio Search)." >&2
+  exit 2
+fi
+
+# Surface authentication state — Llama / Gemma / Mistral gated repos require
+# a free HF token. Public models work without one; we do NOT block on missing
+# auth, only inform the user.
+if ! hf auth whoami >/dev/null 2>&1; then
+  echo "[setup] Note: you are not logged in to Hugging Face."
+  echo "  Public models work without auth. Gated repos (Llama, Gemma, Mistral)"
+  echo "  require a free token. Get one at https://huggingface.co/settings/tokens"
+  echo "  then run: hf auth login"
+fi
 ```
 
 Run the live recommender — it scrapes the Onyx self-hosted-LLM leaderboard and the whatcani.run featured API on every invocation, so the recommendations always reflect the current state of the open-weights ecosystem (models change weekly). The script's hardware detection covers NVIDIA, AMD ROCm, Apple Metal, and CPU-only paths, so the filtered list is already memory-budget-correct for the user's machine.
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/recommend-models.py" \
-  --json --limit 10 \
-  > "$CLAUDE_PLUGIN_DATA/setup/recommendations.json"
+if ! python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/recommend-models.py" \
+     --json --limit 10 \
+     > "$CLAUDE_PLUGIN_DATA/setup/recommendations.json.tmp"; then
+  rc=$?
+  # rc=2 typically means network failure (Onyx / whatcani.run unreachable).
+  # Diagnostic log lives at $CLAUDE_PLUGIN_DATA/setup/logs/recommender.log —
+  # surface its path so the user can share it if they ask for help. Continue
+  # via the fallback table below instead of pretending we got an empty list.
+  echo "[setup] recommend-models.py exited $rc — see fallback options below." >&2
+  echo "[setup] Diagnostic log: $CLAUDE_PLUGIN_DATA/setup/logs/recommender.log" >&2
+  # Drop the partial file so the next step does not parse stale content.
+  rm -f "$CLAUDE_PLUGIN_DATA/setup/recommendations.json.tmp"
+else
+  mv -f "$CLAUDE_PLUGIN_DATA/setup/recommendations.json.tmp" \
+        "$CLAUDE_PLUGIN_DATA/setup/recommendations.json"
+fi
 ```
+
+After the run, check `whatcanirun_error` in the JSON payload — if non-null, surface it verbatim to the user before showing the menu ("Warning: could not consult whatcani.run; using Onyx estimates only — recommendations may be incomplete").
 
 This call takes 5-30 s on a cold cache (network fetch) and < 1 s on a warm cache (TTL: 1 hour for whatcani.run; Onyx is parsed fresh each run unless `--from-cache` is passed). Both caches live under `$CLAUDE_PLUGIN_DATA/setup/cache/`; a rotating diagnostic log lives under `$CLAUDE_PLUGIN_DATA/setup/logs/recommender.log`.
 
@@ -189,7 +287,19 @@ Five plugin-internal skills are **preloaded into your context at startup** via t
 
 If the script exits non-zero with a network error (and no warm cache exists), it has already written a diagnostic log to `$CLAUDE_PLUGIN_DATA/setup/logs/recommender.log` — read it and surface the cause. Then offer the user three options:
 
-1. **Retry with the warm cache**: `--from-cache <previous-onyx.json> --whatcanirun-from-cache <previous-wcir.json>` if such files exist under `$CLAUDE_PLUGIN_DATA/setup/cache/`.
+1. **Retry with the warm cache** — resolve the most recent cached snapshots from `$CLAUDE_PLUGIN_DATA/setup/cache/` instead of asking the user to type paths:
+
+   ```bash
+   ONYX_CACHE=$(ls -t "$CLAUDE_PLUGIN_DATA/setup/cache/"onyx-*.json 2>/dev/null | head -1 || true)
+   WCIR_CACHE=$(ls -t "$CLAUDE_PLUGIN_DATA/setup/cache/"whatcanirun_featured.json 2>/dev/null | head -1 || true)
+   if [[ -n "$ONYX_CACHE" && -n "$WCIR_CACHE" ]]; then
+     python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/recommend-models.py" \
+       --json --limit 10 \
+       --from-cache "$ONYX_CACHE" \
+       --whatcanirun-from-cache "$WCIR_CACHE" \
+       > "$CLAUDE_PLUGIN_DATA/setup/recommendations.json"
+   fi
+   ```
 2. **Manually name a model**: skip the recommender entirely and ask the user to type a model id their runner already has installed (from Step 4's "currently installed" listing). Compatibility testing in Step 5 will catch incompatibilities.
 3. **Switch to OpenRouter**: `/llm-externalizer:llm-externalizer-configure` — no local model needed.
 
@@ -208,9 +318,23 @@ Resolve the test URL based on runner:
 Run:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/test-model.py" \
-  --url <url> --model <model-id> \
-  > "$CLAUDE_PLUGIN_DATA/setup/test-results.json"
+if ! python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/test-model.py" \
+     --url <url> --model <model-id> \
+     > "$CLAUDE_PLUGIN_DATA/setup/test-results.json.tmp"; then
+  rc=$?
+  # rc=1 is the script's EXPECTED failure code (model failed the test) — the
+  # JSON output is still valid and contains per-test scores. Treat it as
+  # "test ran, model failed" rather than a script crash. rc>=2 means the
+  # script itself crashed (transport-level error, bad URL, etc.) — surface
+  # the stderr and loop back to Step 4 without consuming the JSON.
+  if [[ $rc -ne 1 ]]; then
+    echo "[setup] test-model.py crashed with rc=$rc — likely a transport or argv issue." >&2
+    rm -f "$CLAUDE_PLUGIN_DATA/setup/test-results.json.tmp"
+    exit "$rc"
+  fi
+fi
+mv -f "$CLAUDE_PLUGIN_DATA/setup/test-results.json.tmp" \
+      "$CLAUDE_PLUGIN_DATA/setup/test-results.json"
 ```
 
 The script runs five tests, each scored 0.0–1.0:
@@ -240,37 +364,62 @@ Average: 0.8 — PASS (threshold 0.6, structured_output ≥ 0.5 required)
 
 - `structured_output` score < 0.5 → **FAIL**. The model is incompatible — explain WHY (transport error vs schema violation vs freeform-text response), suggest a JSON-capable alternative from `recommended-models.json` (look for `json_mode: true`), loop back to Step 4.
 - `smoke` score = 0.0 → transport issue. The runner is not listening, the model is not loaded, or the URL is wrong. Re-check Steps 2–4.
-- `average ≥ 0.6` AND `structured_output ≥ 0.5` → **PASS**. Proceed to Step 6.
+- `average ≥ 0.6` AND `structured_output ≥ 0.5` → **PASS**. Proceed to Step 6 — but:
+
+**Warnings the user must see on PASS (do not skip):**
+
+- `output_length.score < 1.0` → tell the user: *"This model passed overall but its output cap is too low for full reports (got ~N tokens, need ≥4096). Short-input scans will work; long reports may truncate. Consider raising the runner's `--max-tokens` (`-n` for llama.cpp, `num_predict` for Ollama, `--max-num-tokens` for vLLM) or picking a higher-cap model."*
+- `long_context.score < 1.0` → tell the user: *"This model accepted ~32 K input but did not recover the needle verbatim — its real context window is probably below 32 K. Long-file scans may give degraded results."*
+- `code_understanding.score < 1.0` → optional info: *"Model missed the seeded bug; weak code understanding may produce less useful reports."*
 
 ### Step 6 — Generate the profile snippet
 
-Build the YAML block from (runner, model, test results):
+The snippet MUST be generated by `scripts/setup/build-snippet.py` rather than built as an inline f-string. The helper handles safe YAML quoting (model IDs with colons, embedded quotes, etc.) and rejects profile names that would create invalid YAML or collide with shell-special characters.
 
-```yaml
-profiles:
-  <user-picked-profile-name>:
-    mode: local
-    api: <preset>                       # ollama-local | lmstudio-local | vllm-local | llamacpp-local | generic-local
-    model: "<model-id>"
-    url: "<endpoint-url>"               # ONLY if it differs from the preset default
-    timeout: 600                        # local models can be slow on first run
-    context_window: <tested-max>        # take from test-results.json
+**Sub-step 6a — Profile-name collision check.** Before invoking build-snippet.py, compare the proposed name against the existing profiles you saw in Step 0:
+
+```bash
+# Read existing profile names from the user's settings.yaml. Single-line grep
+# is robust enough for the YAML shape the plugin uses; if the user has a
+# pathologically complex file, ask them to type the next name manually.
+EXISTING=$(grep -E "^[[:space:]]{2}[A-Za-z][A-Za-z0-9._-]*:" ~/.llm-externalizer/settings.yaml 2>/dev/null \
+           | sed 's/^[[:space:]]*//' | sed 's/:.*//' || true)
 ```
 
-Suggest a profile name based on the runner + model short name (e.g. `ollama-qwen2.5-coder-7b`, `lmstudio-deepseek-coder-v2`). Ask the user to confirm or override.
+Suggest a profile name based on `<runner>-<short-model-name>` (e.g. `ollama-qwen2.5-coder-7b`, `lmstudio-deepseek-coder-v2`). If `$EXISTING` contains that exact name, suggest `<name>-2`, `<name>-3`, etc. — or ask the user whether to OVERWRITE the existing profile (a confirmed overwrite means deleting the old block before pasting the new one; tell the user this in plain words).
 
-Write the snippet to `$CLAUDE_PLUGIN_DATA/setup/profile.yaml` (scratch only, NOT the real settings.yaml).
+**Sub-step 6b — Generate the snippet via the helper.**
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/build-snippet.py" \
+  --profile-name "<chosen-name>" \
+  --runner "<runner>" \
+  --model "<model-id>" \
+  --url "<endpoint-url>" \
+  --context-window "$(jq -r .threshold_context "$CLAUDE_PLUGIN_DATA/setup/test-results.json" 2>/dev/null || echo 32768)" \
+  --mode local \
+  > "$CLAUDE_PLUGIN_DATA/setup/profile.yaml"
+```
+
+(For the OpenRouter fallback path, pass `--mode remote` and `--runner` per the `/llm-externalizer:llm-externalizer-configure` flow — but in practice that command handles its own snippet, so the wizard's role there is just to hand off.)
 
 **CRITICAL: NEVER write to `~/.llm-externalizer/settings.yaml` yourself.** Per the user-only configuration policy (`skills/llm-externalizer-config/SKILL.md`), profile changes are USER-ONLY. The `set_settings` MCP tool is disabled by design.
 
-Print the YAML block to the user in a fenced ```yaml block, then exact paste-here instructions:
+Read back `$CLAUDE_PLUGIN_DATA/setup/profile.yaml` and print it to the user inside a fenced ` ```yaml ` block, then the exact paste-here instructions:
 
 ```
-1. Open ~/.llm-externalizer/settings.yaml in your editor.
-2. Under the existing `profiles:` key, paste the block above (mind YAML indentation — 2 spaces).
-3. If you want this profile to be the default, set `active: <new-profile-name>` at the top of the file.
-4. Save the file.
-5. Call mcp__llm-externalizer__reset (or restart Claude Code) to reload settings.
+1. cp ~/.llm-externalizer/settings.yaml \\
+      ~/.llm-externalizer/settings.yaml.bak.$(date +%Y%m%d_%H%M%S)
+   (back up your existing config; a YAML indent typo will break every profile,
+    not just the new one — this is your safety net)
+2. Open ~/.llm-externalizer/settings.yaml in your editor.
+3. Under the existing `profiles:` key, paste the block above (mind YAML
+   indentation — 2 spaces).
+4. If you want this profile to be the default, set `active: <new-profile-name>`
+   at the top of the file.
+5. Save the file.
+6. Call mcp__llm-externalizer__reset (or restart Claude Code) to reload
+   settings.
 ```
 
 ### Step 7 — Verify
@@ -293,7 +442,9 @@ Suggest OpenRouter. It is a single API key in `OPENROUTER_API_KEY`, supports the
 The Windows-host LM Studio → WSL2 bridge is fragile. Required steps:
 
 1. LM Studio Developer tab → Settings → Network → enable "Serve on Local Network".
-2. In WSL2 find the Windows host IP: `cat /etc/resolv.conf | grep nameserver | awk '{print $2}'` (typical: `172.x.x.1`).
+2. In WSL2 find the Windows host IP. The `/etc/resolv.conf` heuristic works for default WSL2 networking but is tamperable (root can rewrite resolv.conf, hostile `wsl.conf` overlays can redirect the nameserver). Prefer the PowerShell call which queries Windows directly:
+   - `powershell.exe -NoProfile -Command "(Get-NetIPAddress -InterfaceAlias 'vEthernet (WSL*)' -AddressFamily IPv4).IPAddress"` (canonical)
+   - Fallback (less reliable): `cat /etc/resolv.conf | grep nameserver | awk '{print $2}'` — verify the IP makes sense before trusting it.
 3. Test from WSL2: `curl http://<windows-ip>:1234/v1/models`.
 
 If this fails (Windows firewall, Hyper-V network reset, WSL2 restart), recommend Ollama on the Linux side instead.
