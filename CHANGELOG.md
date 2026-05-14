@@ -1,6 +1,132 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.9.0] - 2026-05-14
+
+### Changed
+
+- Refactor(audit-followup): Tier-2 fixes + repaired v9.8.0 auto-router +
+  3 end-user diagnostic CLIs.
+
+A follow-up audit on the v9.8.0 commands surfaced two CRITICAL bugs in
+the auto-router patches themselves: the parallel-fix dispatcher's awk
+pattern matched a report shape (`**File:**`) that the MCP server has
+never actually produced (it emits `## File:`), and the per-bug serial
+router always re-read the FIRST file in the bug list instead of the
+next-up unfixed bug. Both are fixed; the fix is also more permissive,
+matching every report variant the MCP server has ever emitted.
+
+**MCP server (TypeScript) — Tier-2 hardening (bf6ada3):**
+
+- The default branch in `CallToolRequestSchema` now returns an
+  `isError: true` envelope instead of throwing. Throwing from the
+  handler-of-last-resort caused the MCP SDK to send a JSON-RPC error
+  response that some clients render as "connection lost", obscuring
+  the underlying "unknown tool" cause.
+- `fetchWithRetry429` now captures `lastBodyText` from the Response
+  body BEFORE draining and rewraps a fresh Response — previous code
+  drained the body for the 429 detector then handed an empty-body
+  Response to the caller, so the user got a generic "fetch failed"
+  with the actual error message thrown away.
+- `SECRET_PATTERNS` extended with a comprehensive wildcard regex
+  matching `*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*_API_KEY`
+  and the bare uppercase names (`PASSWORD`, `JWT_SECRET`, etc.) so
+  the secret-scanner catches custom env names like
+  `STRIPE_RESTRICTED_KEY` or `GH_ENTERPRISE_TOKEN` that v9.8.0's
+  pattern list missed.
+
+**Repair v9.8.0 auto-router (85f8417, audit SR-P1-001 + SR-P1-002):**
+
+- `commands/llm-externalizer-{scan-and-fix,fix-report,fix-found-bugs,
+  scan-and-fix-serially}.md` were matching scan reports against
+  `awk '/^\*\*File:\*\*/'` — a pattern the MCP server has NEVER
+  produced for `scan_folder` reports (which emit `## File:`). Every
+  auto-routed dispatch in v9.8.0 silently sent reports to Sonnet
+  regardless of file size. Replaced with a multi-pattern grep
+  matching `## File:` (current), `**File:**` (legacy), and
+  `- **Input file**:` (alternate). The new pattern also drops
+  `tr -d ' '` (which would otherwise strip spaces from
+  `/Users/Name Surname/...` paths — audit SR-P1-004).
+- The serial per-bug fixer's "find which bug to route" logic always
+  inspected the first `File:` line, regardless of whether that bug
+  was already ` — FIXED`. Replaced with an awk state machine that
+  scans entries top-to-bottom and stops on the first one that lacks
+  a fixed marker.
+- All four commands check `[[ -f "$report" ]]` before `wc -l` so
+  the dispatcher no longer emits stderr noise when the user passes
+  a stale report path (audit SR-P1-003).
+
+**Pre-push process-ancestry hardening (a10415b, T2.3 + T2.4):**
+
+- `.githooks/pre-push` now walks ancestry with a hard upper bound
+  via `MAX_ANCESTRY_DEPTH = int(os.environ.get(
+  "LLM_EXT_HOOK_MAX_DEPTH", "100"))`. A broken `/proc` mount or a
+  forked-bomb parent chain could previously have hung the hook
+  forever.
+- A defensive `INTERPRETER_PREFIXES` whitelist (`python`, `python3`,
+  `node`, `bash`, `sh`, `uv`) ensures `_is_interpreter_token()`
+  treats only known interpreters as "transparent" when extracting
+  the publish script name from `argv`. Previous code naively skipped
+  every argv[0] that started with `python`, so a publish script
+  named `python_helper.py` would have been skipped over.
+- `ps_query()` falls back to `/proc/<pid>/stat` on Linux when `ps`
+  itself fails (sandboxed containers, frozen procfs view). Returns
+  a `"no-ps"` sentinel so the publish-gate can distinguish "ps
+  failed" from "found a non-publish ancestor" — preserving the
+  "fail closed unless we positively identified the publish script"
+  invariant.
+
+**Cross-platform launcher + statusline polish (70de7b6, T2.2):**
+
+- `launcher.mjs:linkNodeModules` now resolves both `dst` and
+  `SCRIPT_DIR` via `path.resolve()` before the prefix check, then
+  compares with `path.sep` rather than a hardcoded `/`. On Windows,
+  a SCRIPT_DIR derived from `CLAUDE_PLUGIN_ROOT` ending in `\`
+  would otherwise produce double-slash paths that fail the safety
+  check, causing the launcher to refuse to install (audit SR-P1-006).
+- Statusline cache writes now `chmod 0o600` after the file is in
+  place (the previous order — chmod-then-rename — left a temp file
+  world-readable for the duration of the write).
+- Statusline `/dev/tty` open uses `O_NONBLOCK` to avoid hanging on
+  systems without a controlling tty, with a short-circuit to skip
+  the tty-detect path when `os.isatty()` already says false.
+- `get_git_info()` was making two separate calls (`git rev-parse`
+  + `git status --porcelain`). Now a single
+  `git status --porcelain=v1 --branch` covers both. Timeouts
+  reduced from 3 s to 1 s — long-running git operations were
+  blocking the statusline refresh.
+
+**End-user diagnostic CLIs (this release):**
+
+Three new scripts under `scripts/diagnostics/` so users can
+troubleshoot without spawning a Claude session:
+
+- `check-mcp-server.py` — verifies plugin root resolves, Node ≥20,
+  `better-sqlite3` resolves via `mcp-server/node_modules`,
+  `~/.llm-externalizer/settings.yaml` is structurally valid, and
+  (optionally) probes OpenRouter reachability. Prints a markdown
+  PASS/FAIL table; exits non-zero on any failure.
+- `check-statusline.py` — reads `~/.claude/settings.json`, parses
+  `statusLine.command` via `shlex`, resolves the interpreter on
+  PATH, pipes a minimal Claude Code JSON envelope to the statusline
+  command, and reports exit + first-line of stdout. `--fix` re-runs
+  `install_statusline.py` if the check fails.
+- `dump-state.py` — collects non-secret state for bug reports:
+  platform, plugin paths, settings.yaml (redacted via a SECRET_PATTERNS
+  approximation), the statusLine block from
+  `~/.claude/settings.json`, and the tail of
+  `/tmp/claude/statusline-error.log`. Single markdown report on
+  stdout (or `--out file`).
+
+### Notes
+
+- Items deferred to v9.10.0 are tracked in
+  `design/tasks/TRDD-480419e5-fbaf-4182-a52b-2ab18be61503-full-plugin-audit-tier2-tier3.md`.
+  Highlights: MCP SDK `Server` → `McpServer` migration (pre-existing
+  deprecation), uncapped `res.text/res.json` reads (T2.6), watchFile
+  race (T2.7), remaining README rewrites (T1.8 cont. + T2.20), and
+  the MINOR/NIT long-tail.
+
 ## [9.8.0] - 2026-05-14
 
 ### Changed

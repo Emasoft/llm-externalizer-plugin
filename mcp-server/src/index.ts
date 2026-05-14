@@ -5043,7 +5043,7 @@ function buildTools() {
 // advertising 9.5.1 to clients while the plugin manifest reported 9.7.0 —
 // see commit history for the consolidation.)
 const server = new Server(
-  { name: "llm-externalizer", version: "9.8.0" },
+  { name: "llm-externalizer", version: "9.9.0" },
   { capabilities: { tools: { listChanged: true } } },
 );
 
