@@ -1406,15 +1406,31 @@ async function getModelSupportedParams(
   }
 }
 
+// One-shot "we dropped <field> for <model>" log: per (model, field) pair,
+// emit a single stderr line the first time we filter that combo. This
+// addresses the v9.10.0 audit finding T2.16 — without it, a user whose
+// `temperature: 0.7` override silently goes nowhere had no way to tell.
+const FILTER_WARN_SEEN = new Set<string>();
+
 function filterBodyForSupportedParams(
   body: Record<string, unknown>,
   supported: Set<string> | null,
+  modelId?: string,
 ): Record<string, unknown> {
   if (!supported) return body;
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(body)) {
     if (FILTERABLE_REQUEST_FIELDS.has(key) && !supported.has(key)) {
       // Known filterable field, not supported by this model — drop it
+      if (modelId) {
+        const seenKey = `${modelId}|${key}`;
+        if (!FILTER_WARN_SEEN.has(seenKey)) {
+          FILTER_WARN_SEEN.add(seenKey);
+          process.stderr.write(
+            `[llm-externalizer] Dropping unsupported field '${key}' for model '${modelId}' (per OpenRouter supported_parameters). Override your profile if this was intentional.\n`,
+          );
+        }
+      }
       continue;
     }
     out[key] = value;
@@ -2629,7 +2645,7 @@ async function chatCompletionSimple(
       body = applyModelOverrides(body, conn.model);
       // Filter to only fields this model supports. Does nothing for
       // non-OpenRouter backends and for models with unknown metadata.
-      body = filterBodyForSupportedParams(body, supportedParams);
+      body = filterBodyForSupportedParams(body, supportedParams, conn.model);
 
       const res = await fetchWithRetry429(
         conn.url,
@@ -2833,7 +2849,7 @@ async function chatCompletionJSON(
       body = applyModelOverrides(body, conn.model);
       // Filter to only fields this model supports (Nemotron drops
       // frequency_penalty etc., other models may drop reasoning).
-      body = filterBodyForSupportedParams(body, supportedParams);
+      body = filterBodyForSupportedParams(body, supportedParams, conn.model);
 
       const res = await fetchWithRetry429(
         conn.url,

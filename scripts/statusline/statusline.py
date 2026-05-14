@@ -327,6 +327,19 @@ def _strftime_nopad(fmt: str) -> str:
     return fmt
 
 
+def _format_12h_ampm(local_dt: datetime) -> str:
+    """Format the hour/minute + am/pm portion of a datetime without relying
+    on the C library's %p, which is locale-dependent and emits the empty
+    string under e.g. German `de_DE.UTF-8`. v9.9.0 audit T2.25.
+    """
+    hour24 = local_dt.hour
+    hour12 = hour24 % 12
+    if hour12 == 0:
+        hour12 = 12
+    suffix = "am" if hour24 < 12 else "pm"
+    return f"{hour12}:{local_dt.minute:02d}{suffix}"
+
+
 def iso_to_local(iso_val: Any, style: str = "time") -> str:
     """Convert ISO 8601 string OR Unix-epoch int/float to compact local time string.
 
@@ -343,10 +356,15 @@ def iso_to_local(iso_val: Any, style: str = "time") -> str:
             # Parse ISO 8601 (handles Z, +00:00, fractional seconds)
             dt = datetime.fromisoformat(str(iso_val).replace("Z", "+00:00"))
             local_dt = dt.astimezone()
+        # _format_12h_ampm is locale-independent; the month-name portion
+        # (%b) and the day portion (%-d) use strftime. %b is locale-aware
+        # too but every Latin-script locale ships a 3-char abbreviation,
+        # so this is acceptable — it's am/pm that fails empty on de_DE.
+        ampm = _format_12h_ampm(local_dt)
         if style == "time":
-            return local_dt.strftime(_strftime_nopad("%-I:%M%p")).lower()
+            return ampm
         elif style == "datetime":
-            return local_dt.strftime(_strftime_nopad("%b %-d, %-I:%M%p")).lower()
+            return local_dt.strftime(_strftime_nopad("%b %-d, ")).lower() + ampm
         else:
             return local_dt.strftime(_strftime_nopad("%b %-d")).lower()
     except (ValueError, OSError):
@@ -386,6 +404,12 @@ def _log_exception(label: str, exc: BaseException) -> None:
     Per-section guard: when an upstream schema change or transient failure
     breaks a single section, we record it for diagnosis and continue
     rendering the rest of the bar. Logging itself must never raise.
+
+    v9.9.0 audit T2.21: secondary errors (ENOSPC, /tmp read-only on a
+    sandboxed container, hardened-write hook denying append) are now
+    surfaced once via stderr instead of being swallowed silently. Claude
+    Code merges statusline stderr into its main error log, so the user
+    has a path to discover that logging itself is broken.
     """
     import traceback
     try:
@@ -394,8 +418,26 @@ def _log_exception(label: str, exc: BaseException) -> None:
         with log_path.open("a") as f:
             f.write(f"\n=== {datetime.now().isoformat()} [{label}] ===\n")
             traceback.print_exception(type(exc), exc, exc.__traceback__, file=f)
+    except OSError as log_err:
+        # Disk full, perms revoked, mount switched read-only — emit a
+        # one-line breadcrumb to stderr so the failure is visible. We
+        # use a module-level dedup set so repeated failures during a
+        # single render don't flood stderr.
+        global _LOG_EXCEPTION_WARN_SEEN
+        if log_err.errno not in _LOG_EXCEPTION_WARN_SEEN:
+            _LOG_EXCEPTION_WARN_SEEN.add(log_err.errno)
+            sys.stderr.write(
+                f"[llm-externalizer statusline] cannot write error log "
+                f"(errno {log_err.errno}: {log_err.strerror}); "
+                f"primary error was [{label}]: {type(exc).__name__}\n"
+            )
     except Exception:
+        # Truly unexpected — we have nothing useful to say without
+        # risking another raise during the breadcrumb, so swallow.
         pass
+
+
+_LOG_EXCEPTION_WARN_SEEN: set[int | None] = set()
 
 
 def main() -> None:
