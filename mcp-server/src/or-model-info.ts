@@ -170,6 +170,7 @@ export async function fetchOpenRouterModelInfo(
   // a multi-line api_key smuggling extra headers (CR/LF injection). The same
   // guard exists in src/index.ts apiHeaders(); replicated here so this file's
   // direct fetch is hardened too.
+  // eslint-disable-next-line no-control-regex -- intentional: reject CR/LF/NUL etc. in the bearer token (header-smuggling defense, see comment above).
   if (/[\x00-\x1f\x7f]/.test(authToken)) {
     return {
       ok: false,

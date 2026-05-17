@@ -1,6 +1,97 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+
+## [9.10.0] - 2026-05-17
+
+### Security
+
+- **T2.7 — watchFile race fixed (MCP server).** `reloadSettingsFromDisk()`
+  in `mcp-server/src/index.ts` now builds the new `BackendConfig` fully in
+  a local variable then swaps `currentBackend` atomically in one
+  assignment. Every reader was converted to snapshot-then-use
+  (≈30 call sites) so a request mid-flight keeps reading the consistent
+  pre-swap state. Eliminates wrong-token auth + reasoning-ladder
+  downgrade desync when `~/.llm-externalizer/settings.yaml` is edited
+  during an in-flight request.
+- **T2.18 — `gitLsFilesMultiRepo` hardened (MCP server).** New
+  `validateGitCwd()` guard rejects paths outside the project root and
+  blocks system directories (`/etc`, `/usr`, `/bin`, `/sbin`, `/sys`,
+  `/proc`, `/dev`). `--recurse-submodules` removed (no more SSRF
+  surface via submodule URLs pointing at attacker hosts). Timeout
+  reduced from 30 s to 5 s with `killSignal: 'SIGKILL'` so orphaned
+  children die. `lstatSync()` now retries on `EAGAIN`/`EBUSY`.
+- **T2.23 — statusline cache TTL ceiling (statusline.py).** New
+  `CACHE_HARD_CEILING = 24 * 3600`. When the OpenRouter API is
+  unreachable for > 24 h, `fetch_usage_from_api` now returns a
+  `_stale_expired` sentinel instead of stale numbers; the statusline
+  renders `usage: stale (>24h, check API token)` so a revoked token no
+  longer hides behind ancient cached stats.
+- **T2.24 — v9.5→v9.10 migration hook (scripts/setup/migrate.py).**
+  New idempotent migration script wired into `scripts/launcher.mjs`
+  before `linkNodeModules`. Renames stale `~/.llm-externalizer/
+  settings.yml` → `settings.yaml`, removes `.publish.lock` older than
+  1 h, and clears dangling `mcp-server/node_modules` symlinks.
+
+### Changed
+
+- **MCP SDK migration: `Server` → `McpServer`.** All 31 tool handlers
+  migrated from the deprecated `setRequestHandler(CallToolRequestSchema, …)`
+  switch dispatcher to per-tool `server.registerTool(name, schema,
+  handler)` calls. Tool surface is unchanged; `vitest run` passes
+  351/353 (2 skipped). Behavior parity verified across every existing
+  test.
+
+### Added
+
+- **vllm-metal-setup + vmlx-setup skills (Phase 1, TRDD-65867b68).**
+  Two new user-invocable skills cover Apple-Silicon-only community
+  backends. Both expose OpenAI-compatible APIs on `:8000` and reuse
+  the `vllm-local` settings.yaml preset. The setup-agent now offers
+  an Apple-Silicon backend-choice table (LM Studio vs Ollama vs
+  vllm-metal vs vMLX) with honest trade-offs and invokes the new
+  skills on demand without bloating its 5-skill frontmatter preload.
+- **`scripts/setup/benchmark-models.py` + `_bench_helpers.py` (Phase 3).**
+  Per-candidate reliability suite (smoke / structured output / code
+  understanding / long context / output length) plus throughput +
+  TTFT measurement. Delegates perf numbers to `vmlx bench` when the
+  active runner is detected as vMLX. Aggregates to a ranked markdown
+  table + JSON results file. Default viability threshold:
+  passes-tests-1+2 AND ≥ 5 tok/s (configurable via `--min-tps`).
+- **`scripts/setup/vllm-cuda-autoconfig.py` (Phase 4).** Linux+NVIDIA
+  autoconfig that detects VRAM via `nvidia-smi` and emits a tuned
+  `vllm serve` command line. Tiered: ≥ 24 GB full bf16; 12-24 GB
+  fp8 KV-cache; 8-12 GB AWQ/GPTQ INT4 + fp8 KV-cache + max-len 16k;
+  < 8 GB INT4 + `--cpu-offload-gb` + `--swap-space` + max-len 8k.
+- **MLX runtime expansion (`huggingface-mlx-models` skill, Phase 5).**
+  New 3-runtime trade-off table (`mlx_lm.server` / vMLX / LM Studio
+  MLX runtime) plus a unified-memory quant-budget table for Apple
+  Silicon. Hands off to `vmlx-setup` and `vllm-metal-setup` skills.
+- **Python test harness (`tests/`, `pyproject.toml`).** First-class
+  pytest config; tests/conftest.py auto-imports `scripts/<subpkg>/`.
+  New tests: `test_benchmark_models.py` (25), `test_run_codex_scan.py`,
+  `test_statusline.py`, `test_migrate.py`, `test_cache_ttl_ceiling.py`,
+  `test_diagnostics.py`. New TS test: `mcp-server/src/safe-body.test.ts`
+  (32 MiB cap coverage that was missing despite the v9.9.0 T2.6 fix).
+
+### Fixed
+
+- README plugin-structure tree now matches disk reality (20 commands,
+  6 agents, 14 skills — previously claimed 7 / 5 / 5). New "0 · Run
+  the setup wizard (recommended)" sub-section added to First Run.
+  Plugin-commands tables, agents table, and troubleshooting sections
+  refreshed. Windows + WSL2 `~/.llm-externalizer/settings.yaml` paths
+  documented for every reference. `build-snippet.py` security note
+  added under Configuration.
+
+### Internal
+
+- `plugin.json` keywords expanded with `huggingface`, `setup-wizard`,
+  `mass-scouting`, `vllm`, `llama-cpp`, `vllm-metal`, `vmlx`, `mlx`.
+- `pyproject.toml` version bumped to `9.10.0` to match plugin.json.
+  Added `[project.optional-dependencies] test` section with
+  `pytest>=8.0` and `pytest-asyncio>=0.23`.
+
 ## [9.9.0] - 2026-05-14
 
 ### Changed

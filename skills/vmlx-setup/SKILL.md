@@ -106,10 +106,10 @@ vmlx info   <model-id>   # model metadata and config
 vmlx bench  <model-id>   # throughput / latency benchmark
 ```
 
-`vmlx doctor` + `vmlx bench` are the natural data source when the setup wizard
-needs reliability + performance numbers for a candidate model on this machine
-(see TRDD-65867b68 Phase 3). Surface their output to the user; do not
-re-implement what they already measure.
+`vmlx doctor` + `vmlx bench` are the canonical reliability + performance data
+source when the setup wizard needs to evaluate a candidate model on this
+machine. Surface their output to the user; do not re-implement what they
+already measure.
 
 ## Step 5 — Verify
 

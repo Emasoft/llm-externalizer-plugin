@@ -103,6 +103,39 @@ describe('listTools', () => {
       expect(tool.inputSchema.type).toBe('object');
     }
   });
+
+  it('chat tool inputSchema preserves named properties after Zod round-trip', async () => {
+    /**
+     * T2.MCP-SDK regression — after the McpServer migration, every tool's
+     * inputSchema is built via jsonSchemaToZod() and then re-serialized
+     * by the SDK for the wire. This test verifies the wire schema still
+     * lists the named properties the tool actually accepts.
+     */
+    const result = await client.listTools();
+    const chat = result.tools.find(t => t.name === 'chat');
+    expect(chat).toBeDefined();
+    const props = (chat!.inputSchema.properties ?? {}) as Record<string, unknown>;
+    // These are the properties chat ALWAYS exposes (verified against
+    // buildTools() in index.ts). If any one is missing from the wire
+    // schema, the Zod converter dropped it.
+    for (const key of ['instructions', 'input_files_paths', 'input_files_content', 'system', 'free']) {
+      expect(props[key], `chat tool inputSchema missing property "${key}"`).toBeDefined();
+    }
+  });
+
+  it('discover tool with no arguments is callable end-to-end', async () => {
+    /**
+     * T2.MCP-SDK regression — verifies the registerTool callback is wired
+     * correctly. A tool with an empty argument set should still dispatch
+     * through dispatchCallTool() and return a non-error result. discover
+     * is chosen because it makes no LLM call (won't burn credits).
+     */
+    const result = await client.callTool({ name: 'discover', arguments: {} });
+    expect(result.isError).not.toBe(true);
+    const content = (result.content as { type: string; text: string }[])[0];
+    expect(content.type).toBe('text');
+    expect(content.text).toMatch(/Active profile:/);
+  });
 });
 
 // ── discover tool ─────────────────────────────────────────────────────
@@ -478,7 +511,11 @@ describe('answer_mode dispatch', () => {
     });
     expect(result.isError).toBe(true);
     const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? '';
-    expect(text).toMatch(/not found|Folder not found/i);
+    // The operation must reject BEFORE any LLM call. Either "folder not
+    // found" (existence check) or the path-traversal allowlist rejection
+    // (when /tmp/ is outside the allowed directories under test env) both
+    // satisfy that — the point of the test is that no LLM call ran.
+    expect(text).toMatch(/not found|Folder not found|Path traversal|outside allowed/i);
   });
 
   it('chat: answer_mode=2 still works as the single-merged-report path', async () => {

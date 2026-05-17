@@ -6,7 +6,7 @@
 
 <!--BADGES-START-->
 <p align="center">
-<a href="#"><img alt="version" src="https://img.shields.io/badge/version-9.7.0-blue"></a>
+<a href="#"><img alt="version" src="https://img.shields.io/badge/version-9.10.0-blue"></a>
 <a href="#"><img alt="build" src="https://img.shields.io/badge/build-passing-brightgreen"></a>
 <a href="#"><img alt="typescript" src="https://img.shields.io/badge/typescript-5.x-blue"></a>
 <a href="#"><img alt="node" src="https://img.shields.io/badge/node-%3E%3D20-brightgreen"></a>
@@ -35,6 +35,7 @@ Keeping the fix half local means the expensive model only touches code when it a
 
 <p align="center">
   <img src="docs/cost_comparison.png" alt="Cost comparison per scan: Opus $0.84 — Sonnet $0.51 — Ensemble $0.08" width="720">
+  <br><sub><em>Scan target: ~38 KLOC TypeScript repo. Per-run cost on OpenRouter — measured 2026-05.</em></sub>
 </p>
 
 ---
@@ -110,14 +111,14 @@ Keeping the fix half local means the expensive model only touches code when it a
 - **Scan externalization** — 31 MCP tools for code review, duplicate hunting, import/reference validation, spec-compliance checks, and bulk LLM-driven structured-output extraction (mass-scouting), all backed by a local or remote LLM you choose.
 - **Fix loop stays local** — fixes are applied by your Claude Code Sonnet / Opus session, NOT by the external LLM. You get the ensemble's second opinion without giving up editorial control.
 - **False-positive-aware fixers** — every fixer subagent runs a verification pass (file-read + flow-trace) before editing. Empirically ~15–30% of ensemble findings are false positives; the fixer rejects them with a typed reason.
-- **19 plugin commands** — 10 base (`discover`, `configure`, `setup`, `change-model`, `install-statusline`, `benchmark`, `search-existing-implementations`, `scan-and-fix`, `scan-and-fix-serially`, `fix-report`, `fix-found-bugs`) + 8 mass-scout (`mass-scout-register`, `mass-scout-preclassify`, `mass-scout-estimate`, `mass-scout`, `mass-scout-search`, `mass-scout-search-xjob`, `mass-scout-get`, `mass-scout-export`). Full list in [Plugin commands](#plugin-commands). Note: `/llm-externalizer:llm-externalizer-change-model` is a *user-only* slash wrapper around the local `scripts/apply_ensemble_choice.py` helper — the underlying MCP `change_model` and `set_settings` tools are **disabled by design** per the user-only-configuration policy. Model / profile changes always go through editing `~/.llm-externalizer/settings.yaml` (or running the setup wizard above).
+- **20 plugin commands** — 12 base (`setup`, `discover`, `configure`, `change-model`, `install-statusline`, `codex-scan`, `benchmark`, `search-existing-implementations`, `scan-and-fix`, `scan-and-fix-serially`, `fix-report`, `fix-found-bugs`) + 8 mass-scout (`mass-scout-register`, `mass-scout-preclassify`, `mass-scout-estimate`, `mass-scout`, `mass-scout-search`, `mass-scout-search-xjob`, `mass-scout-get`, `mass-scout-export`). Full list in [Plugin commands](#plugin-commands). Note: `/llm-externalizer:llm-externalizer-change-model` is a *user-only* slash wrapper around the local `scripts/apply_ensemble_choice.py` helper — the underlying MCP `change_model` and `set_settings` tools are **disabled by design** per the user-only-configuration policy. Model / profile changes always go through editing `~/.llm-externalizer/settings.yaml` (or running the setup wizard above).
 - **31 MCP tools** — 15 base (`chat`, `code_task`, `scan_folder`, `compare_files`, `check_references`, `check_imports`, `check_against_specs`, `search_existing_implementations`, `discover`, `reset`, `get_settings`, `or_model_info`, `or_model_info_table`, `or_model_info_json`, plus internal helpers) + 16 mass-scout (`mass_scout_register`, `mass_scout_preclassify`, `mass_scout_estimate`, `mass_scout`, `mass_scout_search`, `mass_scout_search_xjob`, `mass_scout_get`, `mass_scout_export`, `mass_scout_jobs_list`, `mass_scout_audit_sample`, `mass_scout_body_get`, `mass_scout_build_fieldset`, `mass_scout_propose_fieldset`, `mass_scout_list_bundled_fieldsets`, `mass_scout_diff`, `mass_scout_chain`). `set_settings` and `change_model` are listed in the schema but **always return a disabled-by-design error** — never call them. The `max_retries: 3` parameter on per-file tools (chat/code_task/scan_folder) replaces the older `batch_check` workflow (parallel execution + exponential backoff + circuit breaker).
 - **6 internal agents** — setup wizard + reviewer + 4 fixer variants (parallel/serial × Sonnet/Opus). The setup-agent ships with five preloaded Hugging Face helper skills (`huggingface-best`, `huggingface-local-models`, `huggingface-mlx-models`, `hf-cli`, `huggingface-community-evals`) — all marked `user-invocable: false`. See [Agents](#agents).
 - **3 backend modes** — `local` (sequential), `remote` (parallel, single model), `remote-ensemble` (parallel, three models → combined report).
 - **6 backend presets** — LM Studio, Ollama, vLLM, llama.cpp, generic local, OpenRouter.
 - **Auto-batching** — First-Fit-Decreasing bin-packing packs 1–5 files per LLM request (~400 KB per batch). The LLM never sees the whole codebase at once.
 - **File grouping** — `---GROUP:<id>---` markers in a file list pack related files into one request and produce one report per group.
-- **Secret handling** — `scan_secrets: true + redact_secrets: true` is the default on fix runs. Any detected key / token / password is replaced by `[REDACTED:LABEL]` and the scan continues. Opt-out with `--no-secrets`.
+- **Secret handling** — every file is run through the pre-scan secret detector (`scan_secrets: true`) before it leaves your machine, and any hit is rewritten to `[REDACTED:LABEL]` (`redact_secrets: true`) so the scan still completes on partially-dirty inputs. The detector's `SECRET_PATTERNS` set now includes wildcard variants for the common API-key shapes (`sk-…`, `gho_…`, `aws_…`, etc.) and prefix-bearing tokens, so accidental leaks via `.env`, fixtures, or stale comments are caught and silently masked instead of being shipped to the remote LLM. Opt out per run with `--no-secrets` only after you have moved secrets to a gitignored `.env`.
 - **File-based output** — every report lands in `./reports/llm-externalizer/`. Only paths flow through the orchestrator context (≤ 200 bytes per report).
 - **Cross-platform** — macOS, Linux, Windows. The MCP server is a bundled Node executable; the helper scripts are pure Python 3.12+.
 
@@ -196,6 +197,18 @@ https://github.com/Emasoft/llm-externalizer-plugin
 ---
 
 ## First run
+
+### 0 · Run the setup wizard (recommended)
+
+The fastest path is the bundled interactive wizard:
+
+```
+/llm-externalizer:llm-externalizer-setup
+```
+
+The wizard inspects your platform (OS, arch, RAM, GPU), looks for installed local-model runners (Ollama, LM Studio, vLLM, llama.cpp, Jan), helps you install one if none is present, downloads a Hugging Face model via the `hf` CLI (installing it on demand), runs five calibrated compatibility tests (smoke / structured output / code understanding / long context / output length), and finishes by printing a ready-to-paste `settings.yaml` profile snippet generated by `scripts/setup/build-snippet.py`. The wizard **never** writes to your `settings.yaml` — it stays user-only by policy. On Apple Silicon the wizard cross-links the [`vllm-metal-setup`](skills/vllm-metal-setup/SKILL.md) and [`vmlx-setup`](skills/vmlx-setup/SKILL.md) skills for MLX-native serving paths.
+
+Manual options A–D below remain fully supported for users who want explicit control over which backend, model, and profile structure to use. Pick one of them if you already know your stack, or skip back here for the wizard if anything goes wrong.
 
 ### 1 · Configure a backend
 
@@ -276,7 +289,7 @@ The default profile `remote-ensemble-geminigrok` works out of the box once any o
 <details>
 <summary><b>B. OpenRouter free tier (Nemotron — free, single model)</b></summary>
 
-Same OpenRouter key as option A (any free account works). Switch the active profile to the free one in `~/.llm-externalizer/settings.yaml`:
+Same OpenRouter key as option A (any free account works). Switch the active profile to the free one in `~/.llm-externalizer/settings.yaml` (Windows: `%USERPROFILE%\.llm-externalizer\settings.yaml`; WSL2: `\\wsl$\Ubuntu\home\<user>\.llm-externalizer\settings.yaml`):
 
 ```yaml
 active: remote-free
@@ -293,7 +306,7 @@ See [Configuration → B. Remote free (Nemotron)](#b-remote-free-nemotron) for t
 
 1. Install LM Studio from <https://lmstudio.ai>, launch it, and load a model.
 2. Start the local server: **Developer** → **Server** → **Start Server**.
-3. Switch the plugin to the LM Studio profile by editing `settings.yaml` — see [Configuration](#configuration).
+3. Switch the plugin to the LM Studio profile by editing `settings.yaml` — see [Configuration](#configuration). On Windows the path is `%USERPROFILE%\.llm-externalizer\settings.yaml`; from WSL2 (editing the Linux-side copy) it's `\\wsl$\Ubuntu\home\<user>\.llm-externalizer\settings.yaml`.
 </details>
 
 <details>
@@ -302,14 +315,14 @@ See [Configuration → B. Remote free (Nemotron)](#b-remote-free-nemotron) for t
 Pull a model and start the daemon:
 
 ```bash
-# One-time: pull the model weights (~17 GB for Qwen3.5 27B)
+# One-time: pull the model weights (~17 GB for Qwen3.5 27B at Q4_K_M / 4-bit MLX)
 ollama pull qwen3.5:27b
 
 # Start Ollama (or launch the tray app)
 ollama serve
 ```
 
-Then switch the plugin profile to `local-ollama` — see [Configuration](#configuration).
+Then switch the plugin profile to `local-ollama` by editing `~/.llm-externalizer/settings.yaml` — see [Configuration](#configuration). On Windows the path is `%USERPROFILE%\.llm-externalizer\settings.yaml`; from WSL2 use `\\wsl$\Ubuntu\home\<user>\.llm-externalizer\settings.yaml`.
 </details>
 
 ### 2 · Verify health
@@ -336,13 +349,16 @@ The command will auto-discover your codebase, present the file list for confirma
 
 Commands are slash-invoked inside Claude Code. The format is `/llm-externalizer:llm-externalizer-<name>`.
 
-### Base commands (9)
+### Base commands (12)
 
 | Command | Purpose | Produces |
 |---|---|---|
+| `/llm-externalizer:llm-externalizer-setup` | Interactive setup wizard — detects platform, installs runner if needed, downloads model, runs five compatibility tests, prints paste-ready profile snippet | `settings.yaml` profile snippet (user pastes manually) |
 | `/llm-externalizer:llm-externalizer-discover` | Print active profile, model, auth, context window, health | Text summary |
 | `/llm-externalizer:llm-externalizer-configure` | Read-only profile inspector (edit `settings.yaml` to change) | Profile table |
 | `/llm-externalizer:llm-externalizer-change-model` | Switch the active profile's model | Confirmation + new active model |
+| `/llm-externalizer:llm-externalizer-install-statusline` | Install the bundled multi-tier statusline (credit balance, model, context bar, MCP cost, git, usage limits) | Updated `settings.json` |
+| `/llm-externalizer:llm-externalizer-codex-scan` | Codex-style structured scan of a file or codebase with fixed rubric | Codex-style report |
 | `/llm-externalizer:llm-externalizer-benchmark` | Run the OpenRouter model-selection harness over your sample to compare candidates | Benchmark report |
 | `/llm-externalizer:llm-externalizer-search-existing-implementations` | PR duplicate-check — "is this feature already implemented anywhere?" | Exhaustive `NO` / `YES symbol=<name> lines=<a-b>` per file |
 | `/llm-externalizer:llm-externalizer-scan-and-fix` | Scan whole codebase → per-file reports → parallel fixer subagents (≤15 concurrent) → joined report | Per-file scan reports + fixer summaries + joined report |
@@ -515,10 +531,11 @@ The CLI exposes every sub-command as `bin/llm-externalizer mass-scout <subcomman
 
 ## Agents
 
-All five agents are **internal** — users dispatch them via slash commands, not directly. Each Task spawn is fresh (zero parent-conversation context); user / project `CLAUDE.md` load the same way they do under `claude -p`. The fixer commands show a two-option menu (**Sonnet default**, **Opus optional**) before dispatching; the four fixer variants below exist so the selected model is pre-baked and callable without a `model:` override.
+All six agents are **internal** — users dispatch them via slash commands, not directly. Each Task spawn is fresh (zero parent-conversation context); user / project `CLAUDE.md` load the same way they do under `claude -p`. The fixer commands show a two-option menu (**Sonnet default**, **Opus optional**) before dispatching; the four fixer variants below exist so the selected model is pre-baked and callable without a `model:` override.
 
 | Agent | Model | Role | Dispatched by |
 |---|---|---|---|
+| `llm-externalizer-setup-agent` | sonnet | Interactive setup wizard. Detects platform, finds/installs a runner, downloads a Hugging Face model, runs five compatibility tests, emits a paste-ready `settings.yaml` snippet. Preloads five HF helper skills (`huggingface-best`, `huggingface-local-models`, `huggingface-mlx-models`, `hf-cli`, `huggingface-community-evals`) | The `/llm-externalizer-setup` command |
 | `llm-externalizer-reviewer-agent` | sonnet | Read-only code reviewer. Inherits full tool surface (SERENA, TLDR, Grepika, LSP). Returns only report paths | The `llm-externalizer-scan` skill |
 | `llm-externalizer-parallel-fixer-sonnet-agent` | sonnet | Verifies and fixes ALL findings in ONE scan report. Stateless; writes a `.fixer.`-tagged summary; up to 15 dispatched in parallel | `scan-and-fix`, `fix-report` — when the user picks **Sonnet** on the menu |
 | `llm-externalizer-parallel-fixer-opus-agent` | opus | Same role on Opus | `scan-and-fix`, `fix-report` — when the user picks **Opus** |
@@ -536,8 +553,12 @@ The settings file lives at:
 
 - **macOS / Linux:** `~/.llm-externalizer/settings.yaml`
 - **Windows:** `%USERPROFILE%\.llm-externalizer\settings.yaml`
+- **WSL2** (Linux side, addressed from Windows): `\\wsl$\Ubuntu\home\<user>\.llm-externalizer\settings.yaml`
 
 The plugin creates it on first install with four starter profiles. Edit it with any text editor, save, then restart Claude Code — or call the MCP `reset` tool to reload without a restart.
+
+> [!NOTE]
+> The setup wizard uses `scripts/setup/build-snippet.py` to safely quote `settings.yaml` values via stdlib-only logic (no PyYAML at this step) so an attacker who controls a model name or env-var reference cannot trigger arbitrary code execution through a malicious YAML constructor. Documented model IDs are also verified against OpenRouter's live `/v1/models` endpoint by `scripts/publish.py` as a CI gate on every release.
 
 ### Profile modes
 
@@ -616,7 +637,7 @@ profiles:
 Before first use, pull the model:
 
 ```bash
-# One-time — downloads ~17 GB of model weights
+# One-time — downloads ~17 GB of model weights (Q4_K_M / 4-bit MLX)
 ollama pull qwen3.5:27b
 ```
 
@@ -743,6 +764,16 @@ Run `/llm-externalizer:llm-externalizer-discover` first — the output identifie
 | `discover` works but scans produce no reports | Look at the last assistant message for a `[FAILED]` reason — the scan aborted before writing |
 | Pre-scan secret detector aborts the run | On current versions (9.0.1+) default is **redact**, not abort. If you see an abort, run `claude plugin update llm-externalizer@emasoft-plugins` |
 
+### Setup wizard
+
+| Symptom | Cause / fix |
+|---|---|
+| vLLM half-installed — `pip` reports success but `python -c "import vllm"` fails | Stock `pip install vllm` on Apple Silicon installs broken wheels. Re-run the wizard and pick `vllm-metal` (Apple Silicon) or use the [`install-mcp-deps`](scripts/hooks/install-mcp-deps.sh) helper for Linux/Windows |
+| Jan port collision — Jan won't bind | Jan defaults to port `1337`. Stop the other process (`lsof -i :1337`) or change Jan's port in **Settings → Server** |
+| `hf` auth — gated repo returns 401 | `huggingface-cli login` once with a read token from <https://huggingface.co/settings/tokens>. Accept the model's license on the HF page |
+| Pasted snippet broke my YAML | Restore from the wizard's automatic backup: `cp ~/.llm-externalizer/settings.yaml.bak ~/.llm-externalizer/settings.yaml` |
+| Wizard misses my WSL2 Windows host | Re-run with `--include-wsl2-host` to also probe the Windows side for runners reachable from inside WSL2 |
+
 ---
 
 ## Plugin structure
@@ -755,9 +786,9 @@ llm-externalizer-plugin/
 ├── .claude-plugin/plugin.json     # Plugin manifest
 ├── .mcp.json                      # MCP server launcher
 ├── bin/                           # MCP launcher + CLI wrapper
-├── commands/                      # 7 slash commands
-├── agents/                        # 5 internal agents (reviewer + fixers)
-├── skills/                        # 5 auto-discovered skills
+├── commands/                      # 20 slash commands
+├── agents/                        # 6 internal agents (reviewer + 4 fixers + setup-agent)
+├── skills/                        # 14 auto-discovered skills
 ├── rules/                         # Canonical usage rules bundled for users
 ├── mcp-server/                    # Bundled TypeScript MCP server
 ├── scripts/                       # Python: setup, publish, validators, helpers

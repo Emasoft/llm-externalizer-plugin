@@ -76,7 +76,7 @@ def cmd_output(args: list[str], timeout: float = 5.0) -> str:
 def collect() -> str:
     lines: list[str] = ["# llm-externalizer state dump"]
     lines.append("")
-    lines.append(f"Generated: {subprocess.run(['date', '+%Y-%m-%dT%H:%M:%S%z'], capture_output=True, text=True).stdout.strip()}")
+    lines.append(f"Generated: {subprocess.run(['date', '+%Y-%m-%dT%H:%M:%S%z'], capture_output=True, text=True, timeout=5).stdout.strip()}")
 
     lines.append(section("Platform"))
     lines.append(f"- OS: {platform.system()} {platform.release()}")

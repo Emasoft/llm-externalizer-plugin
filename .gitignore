@@ -71,3 +71,5 @@ llm_externalizer_output/
 # TLDR artifacts (added by rechecker)
 .tldr_session_*
 .publish.lock
+/reports/
+/reports_dev/

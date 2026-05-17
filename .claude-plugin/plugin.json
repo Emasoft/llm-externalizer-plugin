@@ -1,6 +1,6 @@
 {
   "name": "llm-externalizer",
-  "version": "9.9.0",
+  "version": "9.10.0",
   "description": "MCP server that offloads bounded LLM tasks from Claude Code to cheaper local (LM Studio, Ollama, vLLM, llama.cpp) or remote (OpenRouter) models. Profile-based configuration with ensemble mode.",
   "author": {
     "name": "Emasoft",
@@ -19,7 +19,15 @@
     "openrouter",
     "ensemble",
     "code-analysis",
-    "local-llm"
+    "local-llm",
+    "huggingface",
+    "setup-wizard",
+    "mass-scouting",
+    "vllm",
+    "llama-cpp",
+    "vllm-metal",
+    "vmlx",
+    "mlx"
   ],
   "userConfig": {
     "openrouter_api_key": {

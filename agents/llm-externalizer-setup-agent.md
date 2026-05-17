@@ -153,8 +153,8 @@ Branch on the result: zero → Step 3a, one → Step 4 with that one auto-select
 
 Pick a default based on `env.json`:
 
-- **macOS arm64 (Apple Silicon)** → default LM Studio (GUI, beginner-friendly). Alt: Ollama (CLI, fastest first run), or vLLM via the community `vllm-metal` plugin (power users who want vLLM's throughput + serving layer on a Mac — see the vLLM row note below; text-only models, community-maintained).
-- **macOS x86_64 (Intel)** → default LM Studio (GUI, beginner-friendly). Alt: Ollama (CLI, fastest first run). Do NOT offer vLLM — stock vLLM needs CUDA and `vllm-metal` is Apple-Silicon-only, so neither has a GPU path on Intel Macs.
+- **macOS arm64 (Apple Silicon)** → default LM Studio (GUI, beginner-friendly). Alt: Ollama (CLI, fastest first run), `vllm-metal` (vLLM-on-MLX for users who want vLLM's serving layer), or `vMLX` (lighter MLX-native server with built-in `doctor` + `bench`). See the Apple-Silicon backend-choice sub-step below before picking; for vllm-metal / vMLX delegate the install to the dedicated skills, not the inline table.
+- **macOS x86_64 (Intel)** → default LM Studio (GUI, beginner-friendly). Alt: Ollama (CLI, fastest first run). Do NOT offer vLLM — stock vLLM needs CUDA and `vllm-metal` is Apple-Silicon-only, so neither has a GPU path on Intel Macs. vMLX is also Apple-Silicon-only.
 - **Linux + NVIDIA GPU** → default vLLM (highest throughput). Alt: Ollama.
 - **Linux without GPU** → default Ollama. Alt: llama.cpp.
 - **WSL2** → default Ollama on the Linux side. AVOID LM Studio (the Windows-host bridge is fragile and Hyper-V network changes break it silently).
@@ -162,18 +162,40 @@ Pick a default based on `env.json`:
 
 Ask the user explicitly which to install (offer default, alt, and "skip — use OpenRouter instead").
 
+#### Apple-Silicon backend-choice sub-step (arm64 only — skip on every other platform)
+
+On Apple Silicon the user has four credible local-backend choices. Show this comparison table BEFORE the install table so the choice is informed; vllm-metal + vMLX are **community-maintained** and newer than LM Studio / Ollama, so they are *alternatives*, never the default.
+
+```
+┏━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Backend      ┃ Ease   ┃ MLX-native┃ OpenAI-compat ┃ Throughput tier ┃ Maturity ┃ Recommended for                              ┃
+┡━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ LM Studio    │ easy   │ via runtime│ yes (native)  │ medium          │ mature   │ Default. Beginners; GUI model browser/loader.│
+│ Ollama       │ easy   │ no (GGUF)  │ yes           │ medium          │ mature   │ CLI users; fastest single-line install.      │
+│ vllm-metal   │ medium │ yes (plug.)│ yes (:8000)   │ high            │ community│ Users who want vLLM semantics on Mac.        │
+│ vMLX         │ medium │ yes (native)│ yes (:8000)  │ high            │ community│ MLX-native serving + built-in doctor/bench.  │
+└──────────────┴────────┴───────────┴───────────────┴─────────────────┴──────────┴──────────────────────────────────────────────┘
+```
+
+Trade-off summary in plain words:
+
+- **LM Studio / Ollama** — battle-tested, broad model support, default first choice. Pick these unless the user has a specific reason.
+- **vllm-metal** — power-user choice when the user wants vLLM's serving features (continuous batching, vLLM ecosystem). Text-only models, community-maintained, newer.
+- **vMLX** — lighter MLX-native alternative with built-in `vmlx doctor` and `vmlx bench` (useful for Phase-3 candidate benchmarking). Community-maintained, Apache-2.0.
+
+If the user picks vllm-metal OR vMLX, **do NOT use the install table below** — invoke the dedicated skill (see the install-table rows for both) which walks them through preflight, install, serve, env-var tuning, and verification.
+
 **Install commands by runner — show, do NOT auto-execute:**
 
 | Runner | macOS | Linux / WSL2 | Windows |
 |---|---|---|---|
 | Ollama | `brew install ollama && ollama serve &` | `curl -fsSL https://ollama.com/install.sh \| sh && ollama serve &` | guided installer at `https://ollama.com/download/windows` |
 | LM Studio | guided installer at `https://lmstudio.ai/download` (then Developer tab → Start Server) | n/a (Windows GUI app) | guided installer at `https://lmstudio.ai/download` |
-| vLLM | Apple Silicon only — `curl -fsSL https://raw.githubusercontent.com/vllm-project/vllm-metal/main/install.sh \| bash`, then `source ~/.venv-vllm-metal/bin/activate && vllm serve <model> --port 8000`. Intel Macs have no GPU path — use LM Studio / Ollama instead. | `uv pip install vllm` then `vllm serve <model> --port 8000` | not officially supported on Windows native |
+| vLLM | Apple Silicon — invoke `Skill(skill: "vllm-metal-setup")` (community vllm-metal plugin: venv at `~/.venv-vllm-metal`, OpenAI-compatible on `:8000`, fits the `vllm-local` preset unchanged). Intel Macs have no GPU path — use LM Studio / Ollama instead. **When to invoke:** the user is on Apple Silicon AND picked vLLM in the backend-choice sub-step above, or asked for "vllm on my mac" / "set up vllm-metal". The skill handles preflight, install, serve, `VLLM_METAL_*` env tuning, and verification. | `uv pip install vllm` then `vllm serve <model> --port 8000` | not officially supported on Windows native |
+| vMLX | Apple Silicon only — invoke `Skill(skill: "vmlx-setup")` (PyPI `vmlx` via `uv tool install`, MLX-native, OpenAI-compatible on `:8000`, fits `vllm-local` / `generic-local`; ships built-in `vmlx doctor` + `vmlx bench`). **When to invoke:** the user is on Apple Silicon AND picked vMLX in the backend-choice sub-step above, or asked for "mlx-native inference", "vmlx", or "set up vmlx". The skill handles preflight, install, serve flags tuned for scan workloads (`--continuous-batching`, `--enable-prefix-cache`, `--enable-pld`, `--kv-cache-quantization`), and the built-in `doctor` / `bench` reliability + perf checks. | not supported (Apple-Silicon-only) | not supported (Apple-Silicon-only) |
 | llama.cpp | `brew install llama.cpp` then `llama-server -m <gguf> --port 8080 -c 32768` | `git clone https://github.com/ggerganov/llama.cpp && cd llama.cpp && cmake -B build && cmake --build build -j8` | use WSL2 |
 
-**vLLM on macOS — the `vllm-metal` plugin:** stock vLLM is a CUDA project; `uv pip install vllm` on Apple Silicon fails to build the GPU path or silently installs an unaccelerated CPU wheel. The `vllm-project/vllm-metal` plugin (community-maintained, currently text-only models) makes vLLM run on Apple Silicon via MLX. Its installer drops a venv at `~/.venv-vllm-metal`; once `vllm serve` is running it exposes the standard OpenAI-compatible API on `http://localhost:8000`, so the existing `vllm-local` profile preset works unchanged — no new preset needed. Reinstall/upgrade is `rm -rf ~/.venv-vllm-metal` then re-run the installer; uninstall is just deleting that directory. Treat it as an *alternative*, not the macOS default: it is newer and less battle-tested than LM Studio or Ollama.
-
-Print the command for the user, wait for them to confirm install + server start, then loop back to Step 2 to re-detect.
+Print the command for the user (or invoke the matching skill), wait for them to confirm install + server start, then loop back to Step 2 to re-detect.
 
 ### Step 3b — Multiple runners detected: let user choose
 

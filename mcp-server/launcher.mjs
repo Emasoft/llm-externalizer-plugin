@@ -179,6 +179,57 @@ async function tryImport() {
   return import("better-sqlite3");
 }
 
+// v9.10.0 audit T2.24 — startup migration hook. Cleans up artifacts left
+// behind by v9.5.x → v9.8.x upgrades: stale .publish.lock, settings.yml
+// (renamed to .yaml in v9.6.0), and dangling mcp-server/node_modules
+// symlinks left by the deprecated bash SessionStart hook. Idempotent;
+// the second run is a no-op. Runs BEFORE linkNodeModules() so a dangling
+// symlink is removed and rebuilt cleanly on the same launcher invocation.
+//
+// Synchronous spawn (not dynamic import): migrate.py is stdlib-only Python,
+// not Node. It must complete before the import() fast-path check, so we
+// block on it. The script is bounded — every check short-circuits on
+// missing inputs — so the wall-time cost on the warm path is <100 ms on
+// any reasonable machine.
+function runMigrate() {
+  const migrateScript = resolve(SCRIPT_DIR, "..", "scripts", "setup", "migrate.py");
+  if (!existsSync(migrateScript)) {
+    // Defensive: don't block server start if migrate.py is missing from a
+    // partial install. The user can run it manually if they hit issues.
+    log(`migrate.py not found at ${migrateScript} — skipping startup migration.`);
+    return;
+  }
+  // Pass the plugin root so the broken-symlink check looks at the right
+  // mcp-server/node_modules location, even if migrate.py is run from a
+  // dev checkout where the relative-path heuristic would land elsewhere.
+  const pluginRoot = resolve(SCRIPT_DIR, "..");
+  const env = { ...process.env, LLM_EXT_PLUGIN_ROOT: pluginRoot };
+  // Prefer python3, fall back to python. spawnSync timeout 10 s — the script
+  // is tiny but a corrupted FS could hang stat().
+  for (const pyBin of ["python3", "python"]) {
+    const probe = spawnSync(pyBin, ["--version"], { stdio: "ignore", timeout: 5_000 });
+    if (probe.status !== 0) continue;
+    const result = spawnSync(pyBin, [migrateScript, "--quiet"], {
+      stdio: ["ignore", "pipe", "inherit"],
+      timeout: 10_000,
+      env,
+    });
+    if (result.status !== 0) {
+      // Migration failure is NOT fatal — the server can still boot.
+      log(`startup migration (${pyBin} migrate.py) exited ${result.status}; continuing.`);
+    } else if (result.stdout && result.stdout.toString().trim()) {
+      // --quiet only prints when an action was taken; surface it.
+      log(`startup migration: ${result.stdout.toString().trim()}`);
+    }
+    return;
+  }
+  log("no python3/python interpreter found on PATH — skipping startup migration.");
+}
+
+try { runMigrate(); } catch (e) {
+  log(`startup migration crashed: ${e instanceof Error ? e.message : String(e)}; continuing.`);
+}
+
 let installed = false;
 
 try {

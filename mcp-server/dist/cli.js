@@ -15788,7 +15788,7 @@ function estimateJobCost(reg, opts) {
   const by_bucket = Array.from(buckets.values()).sort(
     (a, b) => b.cost_usd - a.cost_usd
   );
-  const workers = Math.max(1, opts.worker_count ?? 256);
+  const workers = Math.max(1, opts.worker_count ?? DEFAULT_SCOUT_WORKERS);
   const perCall = opts.per_call_seconds ?? 1;
   const estSeconds = eligible === 0 ? 0 : Math.max(1, Math.ceil(eligible * perCall / workers));
   return {
@@ -15805,7 +15805,8 @@ function estimateJobCost(reg, opts) {
 async function fetchProviderContext(modelId, apiKey, fetchImpl, baseUrl = "https://openrouter.ai/api/v1") {
   if (!modelId || !apiKey) return null;
   try {
-    const url2 = `${baseUrl}/models/${encodeURIComponent(modelId)}/endpoints`;
+    const encodedModel = modelId.split("/").map((seg) => encodeURIComponent(seg)).join("/");
+    const url2 = `${baseUrl}/models/${encodedModel}/endpoints`;
     const res = await fetchImpl(url2, {
       method: "GET",
       headers: { Authorization: `Bearer ${apiKey}` }
@@ -15841,13 +15842,14 @@ function checkBudget(estCostUsd, budgetUsd) {
     reason: `Estimated cost $${estCostUsd.toFixed(4)} exceeds budget $${budgetUsd.toFixed(4)} by $${over.toFixed(4)}`
   };
 }
-var BYTES_PER_TOKEN, DEFAULT_MAX_CONTEXT_PCT_SCOUT, DEFAULT_MAX_CONTEXT_PCT_REGISTER, KNOWN_PRICING;
+var BYTES_PER_TOKEN, DEFAULT_MAX_CONTEXT_PCT_SCOUT, DEFAULT_MAX_CONTEXT_PCT_REGISTER, DEFAULT_SCOUT_WORKERS, KNOWN_PRICING;
 var init_cost_estimate = __esm({
   "src/mass_scouting/cost-estimate.ts"() {
     "use strict";
     BYTES_PER_TOKEN = 4;
     DEFAULT_MAX_CONTEXT_PCT_SCOUT = 0.4;
     DEFAULT_MAX_CONTEXT_PCT_REGISTER = 0.5;
+    DEFAULT_SCOUT_WORKERS = 16;
     KNOWN_PRICING = {
       "qwen/qwen-2.5-7b-instruct": {
         input_per_m_usd: 0.04,
@@ -16669,7 +16671,7 @@ async function runWithLimit(items, limit, fn) {
 }
 async function runScoutJob(reg, opts, fetchImpl) {
   const compiled = compileFieldset(opts.fieldset);
-  const workers = Math.max(1, opts.workers ?? 16);
+  const workers = Math.max(1, opts.workers ?? DEFAULT_SCOUT_WORKERS);
   const maxRetries = opts.maxRetries ?? 1;
   const scoutPct = opts.maxContextPctScout ?? 0.4;
   const cap = bytesCapFromPct(opts.pricing.context_window, scoutPct);
@@ -17630,6 +17632,7 @@ __export(cli_exports, {
 import { execSync } from "node:child_process";
 import {
   appendFileSync as appendFileSync2,
+  existsSync as existsSync2,
   mkdirSync as mkdirSync3,
   readFileSync as readFileSync3,
   readdirSync,
@@ -17679,12 +17682,21 @@ function ok(stdout) {
 `, stderr: "", exitCode: 0 };
 }
 function defaultMainRoot() {
+  const projDir = process.env.CLAUDE_PROJECT_DIR;
+  if (projDir && existsSync2(projDir)) return projDir;
   try {
     const out = execSync("git worktree list", { encoding: "utf-8" }).split("\n")[0]?.trim().split(/\s+/)[0];
-    if (out) return out;
+    if (out && !out.includes("/.claude/plugins/")) return out;
   } catch {
   }
-  return resolve2(dirname2(fileURLToPath(import.meta.url)), "..", "..", "..");
+  return process.cwd();
+}
+function resolveReportDir(outputDirFlag, opts) {
+  if (outputDirFlag && outputDirFlag !== "true") {
+    return isAbsolute(outputDirFlag) ? outputDirFlag : resolve2(process.cwd(), outputDirFlag);
+  }
+  const mainRoot = opts.mainRoot ?? defaultMainRoot();
+  return join2(mainRoot, "reports", "mass_scouting");
 }
 function listGitChangedFiles(root, ref) {
   if (!/^[A-Za-z0-9_./~^@{}-]+$/.test(ref) || ref.length > 200) {
@@ -18139,8 +18151,7 @@ async function runScout(args, opts) {
   const summary = summariseJob(reg, jobId);
   const md = renderMarkdownReport(summary);
   reg.close();
-  const mainRoot = opts.mainRoot ?? defaultMainRoot();
-  const reportDir = join2(mainRoot, "reports", "mass_scouting");
+  const reportDir = resolveReportDir(flags["output-dir"], opts);
   mkdirSync3(reportDir, { recursive: true });
   const stamp = isoTimestampLocal();
   const reportPath = join2(reportDir, `${stamp}-scout-${slugify2(jobId)}.md`);
@@ -18830,8 +18841,7 @@ function runExport(args, opts) {
   const reg = openRegistry({ path: dbPath });
   const rows = reg.listResultsByJob(jobId);
   reg.close();
-  const mainRoot = opts.mainRoot ?? defaultMainRoot();
-  const reportDir = join2(mainRoot, "reports", "mass_scouting");
+  const reportDir = resolveReportDir(flags["output-dir"], opts);
   mkdirSync3(reportDir, { recursive: true });
   const stamp = isoTimestampLocal();
   const filename = `${stamp}-export-${slugify2(jobId)}.${format}`;
@@ -19024,6 +19034,8 @@ Subcommands:
                  Optional: --model <id>  --workers <n>  --max-retries <n>
                            --bucket <name>  --no-smoke-test  --no-resume
                            --max-context-pct-scout <0..1>
+                           --output-dir <path>   (report directory; default
+                                            <main-repo-root>/reports/mass_scouting/)
                            --live-context   (see estimate)
                  Env:      OPENROUTER_API_KEY
 
@@ -19044,6 +19056,8 @@ Subcommands:
   export         Dump every row of a job to JSONL or CSV under reports/.
                  Required: --db <path>  --job-id <id>
                  Optional: --format jsonl|csv  (default: jsonl)
+                           --output-dir <path>  (default
+                                            <main-repo-root>/reports/mass_scouting/)
 
   jobs-list      List every scout job in the DB.
                  Required: --db <path>
@@ -19367,6 +19381,61 @@ profiles:
 #   "direct-value"    Used as-is (no env lookup)
 `;
 
+// src/safe-body.ts
+var MAX_RESPONSE_BYTES = Number(
+  process.env.LLM_EXT_MAX_RESPONSE_BYTES ?? 32 * 1024 * 1024
+);
+async function safeReadText(res, maxBytes = MAX_RESPONSE_BYTES) {
+  const cl = res.headers.get("content-length");
+  if (cl !== null) {
+    const n = Number(cl);
+    if (Number.isFinite(n) && n > maxBytes) {
+      throw new Error(
+        `Response body Content-Length (${n} bytes) exceeds the ${maxBytes}-byte cap; refusing to load into memory. Override with LLM_EXT_MAX_RESPONSE_BYTES if your workload genuinely needs more.`
+      );
+    }
+  }
+  if (!res.body) {
+    const t = await res.text();
+    if (t.length > maxBytes) {
+      throw new Error(
+        `Response body (${t.length} bytes after read) exceeds the ${maxBytes}-byte cap. Override with LLM_EXT_MAX_RESPONSE_BYTES.`
+      );
+    }
+    return t;
+  }
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      try {
+        await reader.cancel();
+      } catch {
+      }
+      throw new Error(
+        `Response body exceeded ${maxBytes}-byte cap (saw ${total} bytes so far). Override with LLM_EXT_MAX_RESPONSE_BYTES if intentional.`
+      );
+    }
+    chunks.push(value);
+  }
+  const buf = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    buf.set(c, offset);
+    offset += c.byteLength;
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(buf);
+}
+async function safeReadJson(res, maxBytes = MAX_RESPONSE_BYTES) {
+  const text = await safeReadText(res, maxBytes);
+  return JSON.parse(text);
+}
+
 // src/or-model-info.ts
 function sortedPercentiles(obj) {
   if (!obj || typeof obj !== "object") return [];
@@ -19413,6 +19482,12 @@ async function fetchOpenRouterModelInfo(modelId, baseUrl, authToken, timeoutMs =
   }
   const controller = new AbortController();
   const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+  if (/[\x00-\x1f\x7f]/.test(authToken)) {
+    return {
+      ok: false,
+      error: "Refusing to send Authorization header containing control characters (CR/LF/etc.) \u2014 check your OPENROUTER_API_KEY for stray newlines."
+    };
+  }
   let res;
   try {
     res = await fetch(`${baseUrl}/v1/models/${modelId}/endpoints`, {
@@ -19432,13 +19507,13 @@ async function fetchOpenRouterModelInfo(modelId, baseUrl, authToken, timeoutMs =
   }
   clearTimeout(timeoutHandle);
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
+    const body = await safeReadText(res).catch(() => "");
     const truncated = body.length > 300 ? body.slice(0, 300) + "\u2026 (truncated)" : body;
     const error2 = truncated || `HTTP ${res.status} error`;
     return { ok: false, error: error2, status: res.status };
   }
   try {
-    const payload = await res.json();
+    const payload = await safeReadJson(res);
     if (!payload.data) {
       return { ok: false, error: "OpenRouter returned no endpoints for this model" };
     }
@@ -34076,7 +34151,7 @@ function isElectron() {
 }
 
 // src/cli.ts
-import { writeFileSync as writeFileSync3, existsSync as existsSync2, statSync as statSync2, unlinkSync } from "node:fs";
+import { writeFileSync as writeFileSync3, existsSync as existsSync3, statSync as statSync2, unlinkSync } from "node:fs";
 import { resolve as resolvePath, isAbsolute as isAbsolute2, join as join3, dirname as dirname3 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -34200,7 +34275,7 @@ function findServerScript() {
     // running from src/
   ];
   for (const c of candidates) {
-    if (existsSync2(c)) return c;
+    if (existsSync3(c)) return c;
   }
   die(
     `Cannot locate MCP server entry point. Looked for:
@@ -34363,7 +34438,7 @@ function parseSearchExistingArgs(args) {
   }
   for (const fp of folderPaths) {
     const abs = isAbsolute2(fp) ? fp : resolvePath(fp);
-    if (!existsSync2(abs)) die(`--in path not found: ${fp}`);
+    if (!existsSync3(abs)) die(`--in path not found: ${fp}`);
     let isDir;
     try {
       isDir = statSync2(abs).isDirectory();
@@ -34376,7 +34451,7 @@ function parseSearchExistingArgs(args) {
   }
   for (const sf of sourceFiles) {
     const abs = isAbsolute2(sf) ? sf : resolvePath(sf);
-    if (!existsSync2(abs)) die(`Source file not found: ${sf}`);
+    if (!existsSync3(abs)) die(`Source file not found: ${sf}`);
     if (statSync2(abs).isDirectory()) die(`Source file must be a file, not a directory: ${sf}`);
   }
   let timeoutMs = void 0;
@@ -34417,7 +34492,7 @@ async function cmdSearchExisting(rawArgs) {
     info(`Generated PR diff via git: ${diffPath}`);
   } else if (opts.diffPath) {
     const abs = isAbsolute2(opts.diffPath) ? opts.diffPath : resolvePath(opts.diffPath);
-    if (!existsSync2(abs)) die(`--diff file not found: ${opts.diffPath}`);
+    if (!existsSync3(abs)) die(`--diff file not found: ${opts.diffPath}`);
     diffPath = abs;
   }
   const toolArgs = {

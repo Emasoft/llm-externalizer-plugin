@@ -37,6 +37,14 @@ BAR_COLORS = {
     0: (GREEN, "\033[38;2;180;225;180m"),
 }
 
+# v9.10.0 audit T2.23 — upper bound on the "fall back to stale cache" path.
+# Without this, a user whose OAuth token was revoked (or whose OpenRouter key
+# expired) would see indefinitely stale numbers in the statusline, masking the
+# auth failure for days. After CACHE_HARD_CEILING seconds with no successful
+# refresh, the stale cache is treated as expired and the render path surfaces
+# a "stale (>24h, check API token)" hint instead of misleading numbers.
+CACHE_HARD_CEILING = 24 * 3600  # 24 hours, in seconds
+
 
 def format_tokens(num: int) -> str:
     if num >= 1_000_000:
@@ -219,6 +227,35 @@ def get_oauth_token() -> str:
     return ""
 
 
+def _stale_fallback(cache_file: Path) -> dict | None:
+    """Read a stale cache file, but only if it is younger than CACHE_HARD_CEILING.
+
+    Per v9.10.0 audit T2.23: when the API is unreachable, we fall back to the
+    last successful response so the bar still has SOMETHING to render — but
+    only up to 24 h. Past that point, the failure is almost certainly NOT
+    transient (token revoked, key expired, account suspended) and showing
+    multi-day-old "rate limit at 42%" numbers actively misleads the user.
+
+    Returns:
+      - dict with `_stale_expired=True` sentinel when the cache exists but is
+        older than CACHE_HARD_CEILING. The render path detects the sentinel
+        and shows "stale (>24h, check API token)" instead of the numbers.
+      - the parsed cache dict when within the ceiling.
+      - None when the cache file is absent.
+    """
+    if not cache_file.is_file():
+        return None
+    try:
+        age = time.time() - cache_file.stat().st_mtime
+    except OSError:
+        # Cannot stat — treat as expired (safer to surface "broken" than
+        # serve cached data we cannot age-check).
+        return {"_stale_expired": True}
+    if age > CACHE_HARD_CEILING:
+        return {"_stale_expired": True}
+    return read_json_file(cache_file)
+
+
 def fetch_usage_from_api(cache_dir: Path, claude_version: str) -> dict | None:
     """Fetch usage data from Anthropic API with caching."""
     cache_file = cache_dir / "statusline-usage-cache.json"
@@ -236,8 +273,8 @@ def fetch_usage_from_api(cache_dir: Path, claude_version: str) -> dict | None:
     # Fetch fresh data
     token = get_oauth_token()
     if not token:
-        # Fall back to stale cache
-        return read_json_file(cache_file) if cache_file.is_file() else None
+        # Fall back to stale cache (bounded by CACHE_HARD_CEILING per T2.23).
+        return _stale_fallback(cache_file)
 
     try:
         req = urllib.request.Request(
@@ -265,8 +302,8 @@ def fetch_usage_from_api(cache_dir: Path, claude_version: str) -> dict | None:
                 pass
             return data
     except Exception:
-        # Fall back to stale cache
-        return read_json_file(cache_file) if cache_file.is_file() else None
+        # Fall back to stale cache (bounded by CACHE_HARD_CEILING per T2.23).
+        return _stale_fallback(cache_file)
 
 
 def fetch_openrouter_budget(cache_dir: Path) -> float | None:
@@ -309,8 +346,20 @@ def fetch_openrouter_budget(cache_dir: Path) -> float | None:
         except Exception:
             pass
 
-    # Fall back to stale cache
+    # Fall back to stale cache, bounded by CACHE_HARD_CEILING (T2.23). A
+    # revoked OPENROUTER_API_KEY would otherwise keep showing the same
+    # "$70.00 remaining" forever, masking the auth failure. After 24 h with
+    # no successful refresh, we return None instead of stale numbers — the
+    # render path then drops the 🏦 segment entirely (it's optional). The
+    # next successful fetch repopulates the cache and the segment returns.
     if cache_file.is_file():
+        try:
+            age = time.time() - cache_file.stat().st_mtime
+        except OSError:
+            # Cannot stat — drop the segment (same as "expired").
+            return None
+        if age > CACHE_HARD_CEILING:
+            return None
         data = read_json_file(cache_file)
         if data and "data" in data:
             total = data["data"].get("total_credits", 0)
@@ -575,6 +624,15 @@ def main() -> None:
     except Exception as e:
         _log_exception("usage-fetch", e)
         usage_data = None
+
+    # v9.10.0 audit T2.23 — if the cache is past CACHE_HARD_CEILING and we
+    # could not refresh, _stale_fallback() returns {"_stale_expired": True}.
+    # Render a single explicit "auth probably broken" hint INSTEAD of the
+    # five-hour / seven-day / extra-usage segments. Showing 5-day-old
+    # numbers when the token is revoked actively misleads the user.
+    if isinstance(usage_data, dict) and usage_data.get("_stale_expired"):
+        out += f"{sep}⏱️ {RED}usage: stale (>24h, check API token){RESET}"
+        usage_data = None  # suppress per-window rendering below
 
     if usage_data and isinstance(usage_data, dict):
         bar_width = 6

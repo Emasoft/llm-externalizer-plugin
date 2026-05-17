@@ -12,6 +12,7 @@ export default defineConfig({
     include: [
       'src/index.test.ts',
       'src/grouping.test.ts',
+      'src/safe-body.test.ts',
       'src/mass_scouting/fieldset.test.ts',
       'src/mass_scouting/shorthand.test.ts',
       'src/mass_scouting/registry.test.ts',

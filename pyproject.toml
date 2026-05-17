@@ -1,8 +1,14 @@
 [project]
 name = "llm-externalizer-plugin"
-version = "9.5.1"
+version = "9.10.0"
 description = "Claude Code plugin: offload bounded LLM tasks to cheaper local or remote models via MCP"
 requires-python = ">=3.12"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
 
 [tool.ruff]
 line-length = 120
@@ -11,3 +17,18 @@ line-length = 120
 select = ["E", "F", "W", "I"]
 # E501 (line too long) excluded — 120 is plenty; some strings are intentionally long
 ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests that need a real local backend",
+]

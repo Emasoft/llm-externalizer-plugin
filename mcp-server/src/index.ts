@@ -36,12 +36,15 @@ import {
   splitPerFileSections,
 } from "./grouping.js";
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+// T2.MCP-SDK — Migrated from the deprecated `Server` constructor to
+// `McpServer`. The high-level surface (registerTool) auto-handles
+// ListTools and CallTool routing, validates inputs against per-tool
+// Zod schemas, and exposes the underlying Server via `mcpServer.server`
+// for advanced operations (notifications, request handlers we still
+// need). The behavior of the wire protocol is preserved exactly.
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 import {
   MASS_SCOUT_TOOLS,
   MASS_SCOUT_TOOL_NAMES,
@@ -603,9 +606,11 @@ function estimateTokens(text: string): number {
  * Falls back to context_length if max_completion_tokens is unavailable.
  */
 function resolveDefaultMaxTokens(): number {
-  if (currentBackend.type === "openrouter" && currentBackend.model) {
+  // T2.7 — snapshot once, read consistently
+  const backend = getCurrentBackend();
+  if (backend.type === "openrouter" && backend.model) {
     const match = openRouterModelCache.find(
-      (m) => m.id === currentBackend.model,
+      (m) => m.id === backend.model,
     );
     if (match?.top_provider?.max_completion_tokens)
       return match.top_provider.max_completion_tokens;
@@ -791,52 +796,178 @@ const WALK_DEFAULT_EXCLUDE = new Set([
   "vendor",
 ]);
 
+// T2.18 — Allow-list of cwd roots for git invocations. spawnSync(...,{cwd})
+// can target ANY readable directory if user input flows in unfiltered, so we
+// constrain dirPath to known-safe roots (the same ones sanitizeInputPath
+// trusts: process.cwd(), $HOME, /tmp), and explicitly refuse system
+// directories where running git would be both surprising and a privilege
+// escalation vector if the binary is later replaced.
+const FORBIDDEN_GIT_CWD_PREFIXES = [
+  "/etc",
+  "/usr",
+  "/bin",
+  "/sbin",
+  "/sys",
+  "/proc",
+  "/dev",
+  "/var/log",
+  "/var/db",
+  "/Library",
+  "/System",
+];
+
 /**
- * Run `git ls-files` across all git repos within a directory.
- * Handles: the main repo, git submodules (--recurse-submodules),
- * and independent nested git repos (separate .git directories).
- * Returns null if no git repos found at all.
+ * Reject git cwd values that escape the project sandbox.
+ * Throws on any path that resolves outside cwd/$HOME/tmp OR lands in a
+ * known-sensitive system path. Defense-in-depth for any callers that
+ * might pass user-controlled folder_path through without sanitization.
+ */
+function validateGitCwd(dirPath: string): void {
+  if (!dirPath || typeof dirPath !== "string") {
+    throw new Error("validateGitCwd: empty cwd not allowed");
+  }
+  // Block any ".." that survives a resolve()
+  if (dirPath.includes("..")) {
+    const trimmed = resolve(dirPath);
+    if (trimmed.includes("..")) {
+      throw new Error(`validateGitCwd: path contains parent refs: ${dirPath}`);
+    }
+  }
+  const resolved = resolve(dirPath);
+  const realpathSafe = (p: string): string => {
+    try { return realpathSync(p); } catch { return p; }
+  };
+  const resolvedReal = realpathSafe(resolved);
+  if (resolvedReal === "/" || resolvedReal === "") {
+    throw new Error(`validateGitCwd: filesystem root rejected: ${dirPath}`);
+  }
+  // Reject known-sensitive system roots. realpath() ensures /etc symlinks
+  // (e.g. macOS /etc -> /private/etc) cannot bypass the check.
+  for (const sys of FORBIDDEN_GIT_CWD_PREFIXES) {
+    const sysReal = realpathSafe(sys);
+    if (resolvedReal === sysReal || resolvedReal.startsWith(sysReal + sep)) {
+      throw new Error(`validateGitCwd: system path rejected: ${dirPath}`);
+    }
+  }
+  // The path must live under one of the allowed roots (cwd / $HOME / /tmp).
+  // Same allow-list as sanitizeInputPath() for consistency.
+  const cwdReal = realpathSafe(resolve(process.cwd()));
+  const homeReal = realpathSafe(
+    resolve(process.env.HOME || process.env.USERPROFILE || homedir()),
+  );
+  const tmpReal = realpathSafe(resolve("/tmp"));
+  const isUnder = (parent: string, child: string): boolean =>
+    child === parent || child.startsWith(parent + sep);
+  if (
+    !isUnder(cwdReal, resolvedReal) &&
+    !isUnder(homeReal, resolvedReal) &&
+    !isUnder(tmpReal, resolvedReal)
+  ) {
+    throw new Error(
+      `validateGitCwd: ${dirPath} resolves outside allowed roots (cwd/$HOME/tmp)`,
+    );
+  }
+}
+
+// One-shot cache: is `git` on PATH? Probed lazily on first git call.
+// `undefined` = not probed yet, `true` = available, `false` = missing.
+let _gitOnPath: boolean | undefined = undefined;
+function ensureGitOnPath(): boolean {
+  if (_gitOnPath !== undefined) return _gitOnPath;
+  // `git --version` is the cheapest "are you here" probe and is safe in
+  // any cwd. Short timeout so a wedged binary cannot stall startup.
+  const probe = spawnSync("git", ["--version"], {
+    encoding: "utf-8",
+    timeout: 2000,
+    killSignal: "SIGKILL",
+  });
+  _gitOnPath = probe.status === 0;
+  if (!_gitOnPath) {
+    process.stderr.write(
+      "[llm-externalizer] git not found on PATH — falling back to filesystem walk for directory scans\n",
+    );
+  }
+  return _gitOnPath;
+}
+
+/**
+ * lstatSync wrapper that retries up to 2 times on transient EAGAIN/EBUSY.
+ * Returns null when the path does not exist or after all retries fail —
+ * callers treat null as "not a directory" rather than throwing.
+ */
+function lstatSyncRetry(p: string): ReturnType<typeof lstatSync> | null {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return lstatSync(p);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EAGAIN" || code === "EBUSY") {
+        // Tight backoff — 50ms is enough for transient filesystem contention.
+        const deadline = Date.now() + 50;
+        while (Date.now() < deadline) { /* busy-wait 50ms */ }
+        continue;
+      }
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Run `git ls-files` across git repos within a directory.
+ * Handles: the main repo (tracked + untracked) and independent nested git
+ * repos (separate .git directories). Submodule traversal is intentionally
+ * disabled — see T2.18 — to avoid SSRF/network-fetch surface introduced by
+ * `--recurse-submodules`. Returns null if no git repo is rooted at dirPath
+ * (callers fall back to a manual filesystem walk).
  */
 function gitLsFilesMultiRepo(dirPath: string, recursive: boolean): string[] | null {
+  // T2.18 — gate on validated cwd + git availability BEFORE any spawn.
+  // validateGitCwd throws on rejection; we let it bubble so the caller sees
+  // an explicit error instead of a silent fallback to walkDir.
+  validateGitCwd(dirPath);
+  if (!ensureGitOnPath()) return null;
+
+  // Conservative timeouts: spawnSync blocks the Node event loop, so each
+  // call must return promptly or risk wedging the MCP server. 5s gives any
+  // sane local repo enough headroom; SIGKILL ensures hung children die.
+  const GIT_TIMEOUT_MS = 5000;
+  const gitOpts = {
+    encoding: "utf-8" as const,
+    timeout: GIT_TIMEOUT_MS,
+    killSignal: "SIGKILL" as const,
+  };
+
   const allFiles = new Set<string>();
 
-  // Find the git root for dirPath (if it's inside a git repo)
+  // Probe whether dirPath sits inside a git repo. Use rev-parse — cheapest.
   const topLevelResult = spawnSync(
     "git", ["rev-parse", "--show-toplevel"],
-    { cwd: dirPath, encoding: "utf-8", timeout: 5000 },
+    { cwd: dirPath, ...gitOpts },
   );
   const isInGitRepo = topLevelResult.status === 0 && topLevelResult.stdout.trim();
 
-  // Run git ls-files from dirPath (handles main repo + submodules)
   if (isInGitRepo) {
-    // Step 1: tracked files + submodules (--recurse-submodules is incompatible with --others)
+    // Step 1: tracked files. NOTE: --recurse-submodules removed intentionally
+    // (T2.18) — it would fetch from arbitrary submodule URLs at scan time,
+    // a network/SSRF surface that the scanner has no business opening. If
+    // submodule visibility is ever needed, add a separate opt-in flag with
+    // explicit user consent — never default-on.
     const trackedResult = spawnSync(
-      "git", ["ls-files", "--cached", "--recurse-submodules"],
-      { cwd: dirPath, encoding: "utf-8", timeout: 30000 },
+      "git", ["ls-files", "--cached"],
+      { cwd: dirPath, ...gitOpts },
     );
     if (trackedResult.status === 0 && trackedResult.stdout) {
       for (const relPath of trackedResult.stdout.split("\n")) {
         if (!relPath.trim()) continue;
         allFiles.add(join(dirPath, relPath));
       }
-    } else {
-      // --recurse-submodules may fail on older git — retry without it
-      const fallback = spawnSync(
-        "git", ["ls-files", "--cached"],
-        { cwd: dirPath, encoding: "utf-8", timeout: 15000 },
-      );
-      if (fallback.status === 0 && fallback.stdout) {
-        for (const relPath of fallback.stdout.split("\n")) {
-          if (!relPath.trim()) continue;
-          allFiles.add(join(dirPath, relPath));
-        }
-      }
     }
 
-    // Step 2: untracked files (not in submodules — --others doesn't support --recurse-submodules)
+    // Step 2: untracked files (respecting .gitignore via --exclude-standard).
     const untrackedResult = spawnSync(
       "git", ["ls-files", "--others", "--exclude-standard"],
-      { cwd: dirPath, encoding: "utf-8", timeout: 15000 },
+      { cwd: dirPath, ...gitOpts },
     );
     if (untrackedResult.status === 0 && untrackedResult.stdout) {
       for (const relPath of untrackedResult.stdout.split("\n")) {
@@ -861,12 +992,14 @@ function gitLsFilesMultiRepo(dirPath: string, recursive: boolean): string[] | nu
         const subDir = join(dir, entry.name);
         // Check if this subdirectory is an independent git repo
         const gitDir = join(subDir, ".git");
-        let gitDirIsDir = false;
-        try { gitDirIsDir = lstatSync(gitDir).isDirectory(); } catch { /* not present */ }
+        // lstatSyncRetry returns null on transient errors instead of throwing;
+        // a missing/inaccessible .git just means "no nested repo here".
+        const gitStat = lstatSyncRetry(gitDir);
+        const gitDirIsDir = gitStat ? gitStat.isDirectory() : false;
         if (gitDirIsDir) {
           // .git is a real directory → independent repo, not a submodule.
           // Submodules have .git as a FILE (containing a "gitdir:" pointer), so
-          // they are correctly excluded by the lstatSync().isDirectory() check above.
+          // they are correctly excluded by the .isDirectory() check above.
           nestedGitRoots.push(subDir);
           continue; // don't recurse further into this repo's subdirs for more git roots
         }
@@ -875,11 +1008,14 @@ function gitLsFilesMultiRepo(dirPath: string, recursive: boolean): string[] | nu
     }
     findNestedGitRoots(dirPath, 0);
 
-    // Run git ls-files in each nested git repo
+    // Run git ls-files in each nested git repo (validate cwd for each too —
+    // the path was discovered via readdir from a validated parent, but
+    // belt-and-braces).
     for (const nestedRoot of nestedGitRoots) {
+      try { validateGitCwd(nestedRoot); } catch { continue; }
       const nestedResult = spawnSync(
         "git", ["ls-files", "--cached", "--others", "--exclude-standard"],
-        { cwd: nestedRoot, encoding: "utf-8", timeout: 15000 },
+        { cwd: nestedRoot, ...gitOpts },
       );
       if (nestedResult.status === 0 && nestedResult.stdout) {
         for (const relPath of nestedResult.stdout.split("\n")) {
@@ -1363,7 +1499,9 @@ const FILTERABLE_REQUEST_FIELDS = new Set([
 async function getModelSupportedParams(
   modelId: string,
 ): Promise<Set<string> | null> {
-  if (!modelId || currentBackend.type !== "openrouter") return null;
+  // T2.7 — snapshot once
+  const backend = getCurrentBackend();
+  if (!modelId || backend.type !== "openrouter") return null;
   const now = Date.now();
   if (now - modelSupportedParamsCacheTime > MODEL_SUPPORTED_PARAMS_TTL_MS) {
     MODEL_SUPPORTED_PARAMS.clear();
@@ -1381,7 +1519,7 @@ async function getModelSupportedParams(
     // doesn't accept will either ignore it or return a 400, which the
     // reasoning ladder and retry loop already handle).
     const res = await fetchWithTimeout(
-      `${currentBackend.baseUrl}/v1/models/${modelId}/endpoints`,
+      `${backend.baseUrl}/v1/models/${modelId}/endpoints`,
       { headers: apiHeaders() },
     );
     if (!res.ok) return null;
@@ -1461,15 +1599,26 @@ function isReasoningRejectionError(status: number, bodyText: string): boolean {
 // Tracks which backend (local or OpenRouter) is currently active.
 // Built from the resolved profile. Mutable — profile switching updates this.
 
+// T2.7 — Snapshot-and-swap pattern. BackendConfig is treated as immutable
+// (readonly fields). On reload, a NEW BackendConfig object is built and the
+// module-level `currentBackend` reference is replaced in one synchronous
+// assignment (single assignment is atomic in JS). Handlers that read more
+// than one field MUST snapshot via `getCurrentBackend()` once at the top
+// of scope so a mid-flight reload cannot interleave fields from two
+// different backends in the same logical operation.
+//
+// `__version` is monotonic across the process lifetime. Loggers / audits
+// can use it to attribute requests to a specific reload generation.
 interface BackendConfig {
-  type: "local" | "openrouter";
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  // LM Studio native API support — auto-detected on first request
-  isLMStudio?: boolean;
-  lmStudioDetected?: boolean; // true once detection has run (even if negative)
+  readonly type: "local" | "openrouter";
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly model: string;
+  readonly __version: number;
 }
+
+// Monotonic reload counter. Incremented every time currentBackend is replaced.
+let RELOAD_VERSION = 0;
 
 /** Build a BackendConfig from the active resolved profile */
 function makeBackendFromProfile(
@@ -1482,15 +1631,42 @@ function makeBackendFromProfile(
     baseUrl: resolved.url,
     apiKey: resolved.authToken,
     model: modelOverride || resolved.model,
-    // LM Studio: undefined means "not yet probed", true/false means "probe complete"
-    isLMStudio: resolved.protocol === "lmstudio_api" ? undefined : false,
-    lmStudioDetected: resolved.protocol === "lmstudio_api" ? undefined : true,
+    __version: ++RELOAD_VERSION,
   };
 }
 
 let currentBackend: BackendConfig = activeResolved
   ? makeBackendFromProfile(activeResolved)
-  : { type: "local", baseUrl: "http://localhost:1234", apiKey: "", model: "" };
+  : { type: "local", baseUrl: "http://localhost:1234", apiKey: "", model: "", __version: ++RELOAD_VERSION };
+
+/**
+ * Snapshot accessor — returns the current backend reference in one read.
+ * Callers MUST destructure / capture via `const backend = getCurrentBackend()`
+ * at the top of any scope that touches multiple fields, so a mid-flight
+ * reload (watchFile callback) cannot interleave fields from two backends.
+ * The returned object is immutable (readonly fields).
+ */
+function getCurrentBackend(): BackendConfig {
+  return currentBackend;
+}
+
+// LM Studio native API detection cache. Keyed by baseUrl because detection
+// is per-endpoint (not per-backend-generation). Lives outside BackendConfig
+// so backend snapshots stay immutable — see T2.7.
+interface LMStudioProbeResult {
+  isLMStudio: boolean;
+  detected: boolean; // true once we have a definitive answer
+}
+const _lmStudioProbeCache = new Map<string, LMStudioProbeResult>();
+function getLMStudioProbe(baseUrl: string): LMStudioProbeResult {
+  return _lmStudioProbeCache.get(baseUrl) ?? { isLMStudio: false, detected: false };
+}
+function setLMStudioProbe(baseUrl: string, result: LMStudioProbeResult): void {
+  _lmStudioProbeCache.set(baseUrl, result);
+}
+function clearLMStudioProbeCache(): void {
+  _lmStudioProbeCache.clear();
+}
 
 // ── Settings file watcher — auto-reload on manual edits ─────────────
 // Polls settings.yaml every 5s. On change: validate → reload in memory.
@@ -1499,7 +1675,15 @@ let currentBackend: BackendConfig = activeResolved
 // Late-bound hook — assigned after the MCP server is created (see notifyToolsChanged)
 let _onSettingsReloaded: (() => void) | null = null;
 
-/** Reload settings from disk. Returns true if settings changed and were applied. */
+/**
+ * Reload settings from disk. Returns true if settings changed and were applied.
+ *
+ * T2.7 — All new backend state is built into LOCAL variables first, then
+ * applied via a single atomic assignment. Intermediate state is never
+ * exposed to other handlers. Any caller mid-flight that snapshotted
+ * `getCurrentBackend()` will keep its consistent view; new callers will
+ * see the new backend via the next `getCurrentBackend()` call.
+ */
 function reloadSettingsFromDisk(): boolean {
   let raw: string;
   try {
@@ -1539,23 +1723,45 @@ function reloadSettingsFromDisk(): boolean {
     }
   }
 
-  // Apply the new settings in memory
-  activeSettings = newSettings;
+  // T2.7 — Build all replacement state in LOCAL variables first.
+  // Nothing is published to module-level state until every value is ready.
+  let nextResolved: ResolvedProfile | null = null;
+  let nextBackend: BackendConfig | null = null;
+  let nextValid = false;
+  let nextErr = "";
+
   if (newSettings.active && newSettings.profiles[newSettings.active]) {
     const profile = newSettings.profiles[newSettings.active];
-    activeResolved = resolveProfile(newSettings.active, profile);
-    currentBackend = makeBackendFromProfile(activeResolved);
-    settingsValid = true;
-    settingsError = "";
+    nextResolved = resolveProfile(newSettings.active, profile);
+    nextBackend = makeBackendFromProfile(nextResolved);
+    nextValid = true;
+  } else {
+    nextErr = "No active profile configured";
+  }
+
+  // T2.7 — Atomic swap section. Each assignment is a single JS statement
+  // (atomic between event-loop ticks). The order matters: assign
+  // currentBackend LAST so a handler that just snapshotted via
+  // getCurrentBackend() and is about to read activeSettings sees a
+  // coherent pair.
+  activeSettings = newSettings;
+  activeResolved = nextResolved;
+  settingsValid = nextValid;
+  settingsError = nextErr;
+  if (nextValid) {
     cachedRateLimitConfig = null; rateLimitCacheTime = 0;
     openRouterCacheTime = 0;
-  } else {
-    settingsValid = false;
-    settingsError = "No active profile configured";
-    activeResolved = null;
+    // LM Studio detection cache is keyed by baseUrl — if the new backend
+    // points at a different baseUrl, the old cache entry is harmless; if
+    // it points at the SAME baseUrl, the cached probe result is still
+    // valid. We only clear when explicitly told to (via `reset`).
   }
-  SOFT_TIMEOUT_MS = (activeResolved?.timeout ?? 300) * 1000;
-  FALLBACK_CONTEXT_LENGTH = activeResolved?.contextWindow || 100000;
+  SOFT_TIMEOUT_MS = (nextResolved?.timeout ?? 300) * 1000;
+  FALLBACK_CONTEXT_LENGTH = nextResolved?.contextWindow || 100000;
+  // FINAL atomic publish — replace currentBackend in one synchronous statement.
+  // After this line, all new getCurrentBackend() calls see the new backend.
+  // In-flight callers that snapshotted before this line keep the old one.
+  if (nextBackend) currentBackend = nextBackend;
   // Notify MCP client that tool descriptions may have changed (backend switch)
   _onSettingsReloaded?.();
   return true;
@@ -1579,8 +1785,11 @@ watchFile(SETTINGS_FILE, { interval: 5000 }, (curr, _prev) => {
     `[llm-externalizer] settings.yaml changed on disk — reloading…\n`,
   );
   if (reloadSettingsFromDisk()) {
+    // Snapshot AFTER reload completes — getCurrentBackend() returns the
+    // post-reload generation. Two reads of the same snapshot are safe.
+    const postBackend = getCurrentBackend();
     const label = activeResolved
-      ? `${activeSettings.active} (${currentBackend.type}, ${currentBackend.model})`
+      ? `${activeSettings.active} (${postBackend.type}, ${postBackend.model}, v${postBackend.__version})`
       : "(no active profile)";
     process.stderr.write(`[llm-externalizer] Settings reloaded: ${label}\n`);
   }
@@ -1880,7 +2089,9 @@ async function resolveModelOverride(
   freeRequested: boolean,
 ): Promise<string | undefined> {
   if (freeRequested) return FREE_MODEL_ID;
-  if (currentBackend.type !== "openrouter") return undefined;
+  // T2.7 — single read but snapshot anyway for consistency
+  const backend = getCurrentBackend();
+  if (backend.type !== "openrouter") return undefined;
   if (creditExhausted) {
     process.stderr.write(
       "[llm-externalizer] Credit exhausted this session — routing through free model\n",
@@ -1986,6 +2197,8 @@ const STATS_FILE = "/tmp/claude/llm-externalizer-stats.json";
 function writeStatsFile(): void {
   try {
     mkdirSync("/tmp/claude", { recursive: true, mode: 0o700 });
+    // T2.7 — snapshot backend once for atomic (model, type) tuple
+    const backend = getCurrentBackend();
     const stats = {
       session_id: SESSION_ID,
       session_start: SESSION_START.toISOString(),
@@ -1995,8 +2208,8 @@ function writeStatsFile(): void {
       prompt_tokens: session.promptTokens,
       completion_tokens: session.completionTokens,
       total_cost: session.totalCost,
-      model: currentBackend.model ?? "",
-      backend: currentBackend.type,
+      model: backend.model ?? "",
+      backend: backend.type,
     };
     // Atomic write: temp file + rename to prevent partial reads
     const tmpStats = STATS_FILE + ".tmp";
@@ -2068,6 +2281,7 @@ function recordUsage(usage?: {
 // extracted from a PEM file via pbpaste — would otherwise smuggle additional
 // headers into outbound requests when interpolated below.
 function assertSafeHeaderValue(name: string, v: string): string {
+  // eslint-disable-next-line no-control-regex -- intentional: reject CR/LF/NUL etc. in header values (CR/LF injection defense, see comment above).
   if (/[\x00-\x1f\x7f]/.test(v)) {
     throw new Error(
       `Refusing to send ${name} containing control characters (CR/LF/etc.) — check your settings.yaml for a multi-line api_key.`,
@@ -2077,11 +2291,13 @@ function assertSafeHeaderValue(name: string, v: string): string {
 }
 
 function apiHeaders(): Record<string, string> {
+  // T2.7 — snapshot once. apiKey + type read consistently.
+  const backend = getCurrentBackend();
   const h: Record<string, string> = { "Content-Type": "application/json" };
-  if (currentBackend.apiKey)
-    h["Authorization"] = `Bearer ${assertSafeHeaderValue("Authorization", currentBackend.apiKey)}`;
+  if (backend.apiKey)
+    h["Authorization"] = `Bearer ${assertSafeHeaderValue("Authorization", backend.apiKey)}`;
   // OpenRouter requires HTTP-Referer and X-Title headers for ranking/attribution
-  if (currentBackend.type === "openrouter") {
+  if (backend.type === "openrouter") {
     if (activeResolved?.httpReferer)
       h["HTTP-Referer"] = assertSafeHeaderValue("HTTP-Referer", activeResolved.httpReferer);
     if (activeResolved?.appName)
@@ -2111,14 +2327,19 @@ interface ConnectionSetup {
 async function resolveConnection(options?: {
   model?: string;
 }): Promise<ConnectionSetup> {
-  const model = options?.model || currentBackend.model;
+  // T2.7 — snapshot once. detectLMStudio() is awaited, so a reload could
+  // race between this read and the post-detect URL build. Capturing
+  // `backend` here guarantees we serve a CONSISTENT (baseUrl, type, model)
+  // tuple for this single resolution.
+  const backend = getCurrentBackend();
+  const model = options?.model || backend.model;
   const headers = apiHeaders();
   const timeout = SOFT_TIMEOUT_MS;
 
   // Detect LM Studio native API (only for local backends)
-  if (currentBackend.type === "local" && (await detectLMStudio())) {
+  if (backend.type === "local" && (await detectLMStudio())) {
     return {
-      url: `${currentBackend.baseUrl}/api/v1/chat`,
+      url: `${backend.baseUrl}/api/v1/chat`,
       headers,
       model,
       isNative: true,
@@ -2127,7 +2348,7 @@ async function resolveConnection(options?: {
   }
 
   return {
-    url: `${currentBackend.baseUrl}/v1/chat/completions`,
+    url: `${backend.baseUrl}/v1/chat/completions`,
     headers,
     model,
     isNative: false,
@@ -2330,24 +2551,27 @@ async function fetchWithTimeout(
 
 /**
  * Probe whether the local backend is LM Studio by hitting its native endpoint.
- * Caches the result on the backend config so we only probe once.
+ * Caches the result in _lmStudioProbeCache (keyed by baseUrl) so we only
+ * probe once per endpoint. T2.7: the cache lives outside BackendConfig so
+ * backend snapshots stay immutable across reloads.
  */
 async function detectLMStudio(): Promise<boolean> {
-  if (currentBackend.type !== "local") return false;
-  if (currentBackend.lmStudioDetected !== undefined)
-    return currentBackend.isLMStudio ?? false;
+  // SNAPSHOT once at top of scope — see T2.7. Reads below MUST use `backend`.
+  const backend = getCurrentBackend();
+  if (backend.type !== "local") return false;
+  const probed = getLMStudioProbe(backend.baseUrl);
+  if (probed.detected) return probed.isLMStudio;
 
   const isLMStudioProvider = activeResolved?.protocol === "lmstudio_api";
 
   try {
     const res = await fetchWithTimeout(
-      `${currentBackend.baseUrl}/api/v1/models`,
+      `${backend.baseUrl}/api/v1/models`,
       { headers: apiHeaders() },
     );
     // LM Studio's native /api/v1/models returns a JSON array of model objects
     if (res.ok) {
-      currentBackend.isLMStudio = true;
-      currentBackend.lmStudioDetected = true;
+      setLMStudioProbe(backend.baseUrl, { isLMStudio: true, detected: true });
       process.stderr.write(
         "[llm-externalizer] Detected LM Studio native API\n",
       );
@@ -2355,7 +2579,7 @@ async function detectLMStudio(): Promise<boolean> {
     }
     // Auth failure on the native endpoint — if provider is explicitly lmstudio, fail hard
     if (res.status === 401 && isLMStudioProvider) {
-      if (currentBackend.apiKey) {
+      if (backend.apiKey) {
         // Token was provided but LM Studio rejected it
         throw new Error(
           "LM Studio rejected the API token (401 Unauthorized).\n" +
@@ -2381,15 +2605,14 @@ async function detectLMStudio(): Promise<boolean> {
     // If provider is explicitly lmstudio, don't silently fall back to OpenAI-compat
     if (isLMStudioProvider) {
       throw new Error(
-        `LM Studio native API probe failed at ${currentBackend.baseUrl}/api/v1/models: ${err instanceof Error ? err.message : String(err)}\n` +
+        `LM Studio native API probe failed at ${backend.baseUrl}/api/v1/models: ${err instanceof Error ? err.message : String(err)}\n` +
           "Ensure LM Studio is running and a model is loaded. The lmstudio provider requires the native API endpoint.",
         { cause: err },
       );
     }
     // Not LM Studio or endpoint not available — fall through (only for non-lmstudio providers)
   }
-  currentBackend.isLMStudio = false;
-  currentBackend.lmStudioDetected = true;
+  setLMStudioProbe(backend.baseUrl, { isLMStudio: false, detected: true });
   return false;
 }
 
@@ -2570,8 +2793,11 @@ function makeProgressFn(
 ): ProgressFn | undefined {
   if (progressToken === undefined) return undefined;
   return (progress: number, total: number, message?: string) => {
-    // Fire-and-forget — progress notifications must never block or throw
-    server
+    // Fire-and-forget — progress notifications must never block or throw.
+    // T2.MCP-SDK: use mcpServer.server.notification (low-level Server is
+    // exposed via the .server property of McpServer for exactly this kind
+    // of advanced operation).
+    mcpServer.server
       .notification({
         method: "notifications/progress" as const,
         params: {
@@ -2598,6 +2824,12 @@ async function chatCompletionSimple(
     onProgress?: ProgressFn;
   } = {},
 ): Promise<StreamingResult> {
+  // T2.7 — snapshot once at top of this LLM call. resolveConnection() also
+  // snapshots internally to make the URL+model+timeout tuple coherent; here
+  // we use the same generation for reasoning-ladder gating and error-msg
+  // backend-type labels. A mid-call reload that changes `currentBackend`
+  // cannot interleave fields between conn building and the request body.
+  const backend = getCurrentBackend();
   const conn = await resolveConnection(options);
 
   // LM Studio native API — delegate to native handler (different request format)
@@ -2616,7 +2848,7 @@ async function chatCompletionSimple(
   // Reasoning ladder: OpenRouter backend tries xhigh → high → none.
   // Other backends (ollama/vllm/llamacpp OpenAI-compat) get [null] — no reasoning field.
   const reasoningLadder =
-    currentBackend.type === "openrouter"
+    backend.type === "openrouter"
       ? reasoningLadderForModel(conn.model || "")
       : [null];
 
@@ -2671,12 +2903,12 @@ async function chatCompletionSimple(
           );
           recordReasoningRejection(conn.model || "", reasoning);
           lastError = new Error(
-            `API error ${res.status} (${currentBackend.type}): ${text}`,
+            `API error ${res.status} (${backend.type}): ${text}`,
           );
           continue;
         }
         throw new Error(
-          `API error ${res.status} (${currentBackend.type}): ${text}`,
+          `API error ${res.status} (${backend.type}): ${text}`,
         );
       }
 
@@ -2757,6 +2989,8 @@ async function chatCompletionJSON(
     onProgress?: ProgressFn;
   } = {},
 ): Promise<JSONCompletionResult> {
+  // T2.7 — snapshot once for consistent (type, model) across all branches
+  const backend = getCurrentBackend();
   const conn = await resolveConnection(options);
 
   // Route through LM Studio native API (no json_schema support,
@@ -2800,7 +3034,7 @@ async function chatCompletionJSON(
   if (conn.model) baseBody.model = conn.model;
 
   // Structured output: json_schema + response-healing (OpenRouter only)
-  if (options.jsonSchema && currentBackend.type === "openrouter") {
+  if (options.jsonSchema && backend.type === "openrouter") {
     baseBody.response_format = {
       type: "json_schema",
       json_schema: options.jsonSchema,
@@ -2815,7 +3049,7 @@ async function chatCompletionJSON(
   // reject reasoning + json_schema return 400 and the ladder downgrades
   // automatically.
   const reasoningLadder =
-    currentBackend.type === "openrouter"
+    backend.type === "openrouter"
       ? reasoningLadderForModel(conn.model || "")
       : [null];
 
@@ -2875,12 +3109,12 @@ async function chatCompletionJSON(
           );
           recordReasoningRejection(conn.model || "", reasoning);
           lastLadderError = new Error(
-            `API error ${res.status} (${currentBackend.type}): ${text}`,
+            `API error ${res.status} (${backend.type}): ${text}`,
           );
           continue;
         }
         throw new Error(
-          `API error ${res.status} (${currentBackend.type}): ${text}`,
+          `API error ${res.status} (${backend.type}): ${text}`,
         );
       }
 
@@ -2936,7 +3170,9 @@ async function chatCompletionJSON(
 }
 
 async function listModelsRaw(): Promise<ModelInfo[]> {
-  const res = await fetchWithTimeout(`${currentBackend.baseUrl}/v1/models`, {
+  // T2.7 — snapshot for atomic baseUrl read
+  const backend = getCurrentBackend();
+  const res = await fetchWithTimeout(`${backend.baseUrl}/v1/models`, {
     headers: apiHeaders(),
   });
   if (!res.ok) throw new Error(`Failed to list models: ${res.status}`);
@@ -3562,12 +3798,17 @@ async function chatCompletionWithRetry(
     onProgress?: ProgressFn;
   },
 ): Promise<StreamingResult> {
+  // T2.7 — snapshot ONCE per retry-loop invocation. The fallback-model
+  // path and the early-abort path BOTH read backend.model; if a reload
+  // raced between those reads we could attribute a model to the wrong
+  // backend label in error messages. One snapshot, used everywhere.
+  const backend = getCurrentBackend();
   // Check global service health before attempting
   const healthAbort = await checkServiceHealthOrWait();
   if (healthAbort) {
     return {
       content: healthAbort,
-      model: options.model || currentBackend.model,
+      model: options.model || backend.model,
       finishReason: "error",
       truncated: true,
     };
@@ -3594,7 +3835,7 @@ async function chatCompletionWithRetry(
       // This is the promised "never fail, switch to free" behavior.
       if (
         /API error 402\b/.test(errMsg) &&
-        currentBackend.type === "openrouter" &&
+        backend.type === "openrouter" &&
         options.model !== FREE_MODEL_ID
       ) {
         creditExhausted = true;
@@ -3628,7 +3869,7 @@ async function chatCompletionWithRetry(
         if (abort) {
           return {
             content: abort,
-            model: options.model || currentBackend.model,
+            model: options.model || backend.model,
             finishReason: "error",
             truncated: true,
           };
@@ -3684,7 +3925,7 @@ async function chatCompletionWithRetry(
     // provider has time to warm up between attempts. Non-empty failures
     // (finishReason=error, unknown values) keep the stricter MAX_TRUNCATION_RETRIES
     // budget since they're less likely to be transient.
-    const useEmptyBudget = isEmpty && currentBackend.type === "openrouter";
+    const useEmptyBudget = isEmpty && backend.type === "openrouter";
     if (useEmptyBudget) {
       emptyAttempts++;
     } else {
@@ -3769,6 +4010,8 @@ async function ensembleStreaming(
   ensemble: boolean,
   fileLineCount?: number,
 ): Promise<StreamingResult> {
+  // T2.7 — snapshot once for the type gating below
+  const backend = getCurrentBackend();
   // Model override: skip ensemble entirely, use the specified model
   if (options.modelOverride) {
     return chatCompletionWithRetry(messages, { ...options, model: options.modelOverride });
@@ -3777,7 +4020,7 @@ async function ensembleStreaming(
   const ensembleModels = getEnsembleModels();
   if (
     !ensemble ||
-    currentBackend.type !== "openrouter" ||
+    backend.type !== "openrouter" ||
     ensembleModels.length === 0
   ) {
     return chatCompletionWithRetry(messages, options);
@@ -3983,8 +4226,10 @@ async function processFileCheck(
 // Dynamic limits block appended to each task tool description.
 // Changes based on which backend is active (local = sequential, OpenRouter = parallel).
 function limitsBlock(): string {
+  // T2.7 — snapshot once for the type read (function returns a string)
+  const backend = getCurrentBackend();
   const throughput =
-    currentBackend.type === "openrouter"
+    backend.type === "openrouter"
       ? "• PARALLEL (answer_mode=0 + max_retries>1 only): rate-limited dispatch (RPS auto-detected from balance). Many requests in-flight simultaneously. Default (answer_mode=2 or max_retries=1): sequential batches."
       : "• SEQUENTIAL: 1 call at a time.";
   return (
@@ -4192,8 +4437,10 @@ const FREE_MODEL_ID = "nvidia/nemotron-3-super-120b-a12b:free";
 
 /** Build the display label for ensemble model name */
 function ensembleModelLabel(useEnsemble: boolean): string {
-  if (!useEnsemble || !activeResolved?.secondModel) return currentBackend.model;
-  const models = [currentBackend.model, activeResolved.secondModel];
+  // T2.7 — snapshot once for atomic .model read
+  const backend = getCurrentBackend();
+  if (!useEnsemble || !activeResolved?.secondModel) return backend.model;
+  const models = [backend.model, activeResolved.secondModel];
   if (activeResolved.thirdModel) models.push(activeResolved.thirdModel);
   return `ensemble: ${models.join(" + ")}`;
 }
@@ -5057,20 +5304,30 @@ function buildTools() {
 
 // ── MCP Server ───────────────────────────────────────────────────────
 
+// T2.MCP-SDK — migrated from `Server` to `McpServer`. McpServer enumerates
+// registered tools for ListTools requests; we register each tool (one
+// `registerTool` call per tool name) below the dispatch function.
+//
 // Version is hard-coded here AND in package.json. publish.py's release flow
 // keeps them in sync; if you bump one, bump the other in the same commit.
 // (A previous release skipped the index.ts side, leaving the MCP server
 // advertising 9.5.1 to clients while the plugin manifest reported 9.7.0 —
 // see commit history for the consolidation.)
-const server = new Server(
-  { name: "llm-externalizer", version: "9.9.0" },
+const mcpServer = new McpServer(
+  { name: "llm-externalizer", version: "9.10.0" },
   { capabilities: { tools: { listChanged: true } } },
 );
 
-// Notify the MCP client that our tool list may have changed (e.g. after profile switch).
-// The client will re-call ListTools to get fresh descriptions.
+// Notify the MCP client that our tool list may have changed (e.g. after
+// profile switch). The client will re-call ListTools to get fresh
+// descriptions. T2.MCP-SDK: notification() is on the underlying Server.
 function notifyToolsChanged(): void {
-  server
+  // First, update the description of every registered tool so the next
+  // ListTools call serves up the current backend's labels (limitsBlock
+  // text changes when local→remote or vice versa). Use the .update API
+  // exposed by the RegisteredTool returned from registerTool().
+  refreshAllToolDescriptions();
+  mcpServer.server
     .notification({
       method: "notifications/tools/list_changed" as const,
       params: {},
@@ -5083,16 +5340,122 @@ function notifyToolsChanged(): void {
 // Wire up the late-bound hook so reloadSettingsFromDisk() triggers tool list refresh
 _onSettingsReloaded = notifyToolsChanged;
 
-// buildTools() is called on each ListTools request so descriptions reflect the current backend
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: buildTools(),
-}));
+// ── JSON Schema → Zod converter ──────────────────────────────────────
+// T2.MCP-SDK — McpServer.registerTool only accepts Zod schemas. Our
+// buildTools() returns plain JSON Schema for backward compatibility with
+// the existing wire format. This converter handles ONLY the subset of
+// JSON Schema we actually use: primitives (string/number/boolean), array
+// of strings, object with properties + required, and `oneOf` unions of
+// (string | string[]). Anything outside this subset returns z.unknown()
+// so the SDK still accepts the value (validation is then deferred to
+// the tool handler itself, which always validated inputs anyway).
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+interface JsonSchemaSubset {
+  type?: string;
+  description?: string;
+  items?: JsonSchemaSubset;
+  properties?: Record<string, JsonSchemaSubset>;
+  required?: string[];
+  oneOf?: JsonSchemaSubset[];
+}
+
+function jsonSchemaPropToZod(s: JsonSchemaSubset): z.ZodType {
+  // Handle oneOf: [{type:"string"}, {type:"array", items:{type:"string"}}]
+  // → z.union([z.string(), z.array(z.string())])
+  if (Array.isArray(s.oneOf) && s.oneOf.length > 0) {
+    const variants = s.oneOf.map((v) => jsonSchemaPropToZod(v));
+    if (variants.length === 1) {
+      return s.description ? variants[0].describe(s.description) : variants[0];
+    }
+    // z.union requires at least 2 variants
+    const u = z.union(variants as [z.ZodType, z.ZodType, ...z.ZodType[]]);
+    return s.description ? u.describe(s.description) : u;
+  }
+  let base: z.ZodType;
+  switch (s.type) {
+    case "string":
+      base = z.string();
+      break;
+    case "number":
+      base = z.number();
+      break;
+    case "boolean":
+      base = z.boolean();
+      break;
+    case "array":
+      base = z.array(s.items ? jsonSchemaPropToZod(s.items) : z.unknown());
+      break;
+    case "object":
+      if (s.properties) {
+        base = jsonSchemaToZod(s);
+      } else {
+        base = z.record(z.string(), z.unknown());
+      }
+      break;
+    default:
+      base = z.unknown();
+  }
+  return s.description ? base.describe(s.description) : base;
+}
+
+/**
+ * Convert a JSON-Schema object (the kind buildTools() returns) into a
+ * Zod object schema. The returned schema is the COMPLETE input shape:
+ * every required field is required, every non-required field is optional.
+ */
+function jsonSchemaToZod(
+  s: JsonSchemaSubset,
+): z.ZodObject<Record<string, z.ZodType>> {
+  if (!s.properties) return z.object({});
+  const required = new Set(s.required ?? []);
+  const shape: Record<string, z.ZodType> = {};
+  for (const [key, prop] of Object.entries(s.properties)) {
+    const zodProp = jsonSchemaPropToZod(prop);
+    shape[key] = required.has(key) ? zodProp : zodProp.optional();
+  }
+  return z.object(shape);
+}
+
+// ── Registered tools registry ────────────────────────────────────────
+// T2.MCP-SDK — keep a handle to every RegisteredTool we install so we
+// can refresh their descriptions on settings reload (the backend label
+// and parallel/sequential note in limitsBlock() change when local→remote
+// switches happen). The SDK's `.update({description})` triggers the
+// tools/list_changed notification automatically.
+interface RegisteredToolHandle {
+  update(updates: { description?: string; enabled?: boolean }): void;
+}
+const registeredToolHandles = new Map<string, RegisteredToolHandle>();
+
+function refreshAllToolDescriptions(): void {
+  // Rebuild every tool's description from buildTools(). Only descriptions
+  // are dynamic — names and inputSchema are static at registration time.
+  const fresh = buildTools();
+  for (const t of fresh) {
+    const handle = registeredToolHandles.get(t.name);
+    if (handle) {
+      try { handle.update({ description: t.description }); } catch { /* best effort */ }
+    }
+  }
+}
+
+/**
+ * Dispatch a call to one of our tools. This is the body that used to live
+ * inside `setRequestHandler(CallToolRequestSchema, …)` — split out so
+ * each `registerTool` callback can route into the same logic.
+ *
+ * `extra` is the SDK's RequestHandlerExtra; we only need its `_meta`.
+ */
+interface DispatchExtra { _meta?: { progressToken?: string | number } }
+async function dispatchCallTool(
+  name: string,
+  rawArgs: Record<string, unknown> | undefined,
+  extra: DispatchExtra,
+): Promise<{ content: { type: "text"; text: string }[]; isError?: boolean; [k: string]: unknown }> {
+  const args = rawArgs;
   // Extract progress token — if the client supports it, we send periodic
   // progress notifications to keep the connection alive during long LLM calls.
-  const progressToken = request.params._meta?.progressToken;
+  const progressToken = extra._meta?.progressToken;
   const onProgress = makeProgressFn(progressToken);
 
   try {
@@ -5159,6 +5522,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         `[llm-externalizer] Routing through ${modelOverride}${freeRequested ? " (free requested)" : " (auto-fallback)"}\n`,
       );
     }
+    // T2.7 — Snapshot backend AFTER all pre-dispatch async work (settings
+    // gating + resolveModelOverride). All `currentBackend.X` reads inside
+    // the switch below MUST use this `backend` snapshot so a reload that
+    // fires mid-dispatch cannot interleave fields from two backends within
+    // a single tool call.
+    const backend = getCurrentBackend();
 
     try {
     switch (name) {
@@ -5203,7 +5572,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           max_files?: number;
         };
         // Ensemble always ON for remote backends, OFF for local
-        const useEnsemble = currentBackend.type === "openrouter";
+        const useEnsemble = backend.type === "openrouter";
         const chatBudgetBytes = (chatMaxPayloadKb ?? 400) * 1024;
 
         // Validate redact_regex upfront — fail fast on invalid patterns
@@ -5499,7 +5868,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           follow_symlinks?: boolean;
           max_files?: number;
         };
-        const ctUseEnsemble = currentBackend.type === "openrouter";
+        const ctUseEnsemble = backend.type === "openrouter";
         const ctBudgetBytes = (ctMaxPayloadKb ?? 400) * 1024;
         const ctMode = resolveAnswerMode(ctRawMode, 0);
         const ctTask = resolvePrompt(ctInstructions, ctInstructionsFilesPaths);
@@ -5843,9 +6212,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         try {
           let contextWindow = FALLBACK_CONTEXT_LENGTH;
 
-          if (currentBackend.type === "openrouter" && currentBackend.model) {
+          if (backend.type === "openrouter" && backend.model) {
             const models = await fetchOpenRouterModels();
-            const match = models.find((m) => m.id === currentBackend.model);
+            const match = models.find((m) => m.id === backend.model);
             if (match?.context_length) contextWindow = match.context_length;
             const ms = Date.now() - start;
             parts.push(`Status: ONLINE (${ms}ms)`);
@@ -5938,7 +6307,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             isError: true,
           };
         }
-        if (currentBackend.type !== "openrouter") {
+        if (backend.type !== "openrouter") {
           return {
             content: [
               {
@@ -5952,8 +6321,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const result = await fetchOpenRouterModelInfo(
           infoModel,
-          currentBackend.baseUrl,
-          currentBackend.apiKey,
+          backend.baseUrl,
+          backend.apiKey,
         );
         if (!result.ok) {
           // Friendly error messages per status code. OpenRouter uses
@@ -6077,22 +6446,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           await waitForRequestsDrained();
         }
 
-        // Full soft-restart: reload settings, clear all caches, reset session counters
+        // Full soft-restart: reload settings, clear all caches, reset session counters.
+        // Snapshot BEFORE reload — single read captures the "before" model atomically.
         const beforeProfile = activeSettings.active;
-        const beforeModel = currentBackend.model;
+        const beforeBackend = getCurrentBackend();
+        const beforeModel = beforeBackend.model;
 
         // 1. Reload settings from disk (validates before applying)
         reloadSettingsFromDisk();
 
-        // 2. Clear all caches
+        // 2. Clear all caches (after reload — reload may have already replaced backend)
         openRouterModelCache = [];
         openRouterCacheTime = 0;
         cachedRateLimitConfig = null; rateLimitCacheTime = 0;
-        // Reset LM Studio detection so it re-probes on next call
-        if (currentBackend.type === "local") {
-          currentBackend.isLMStudio = undefined;
-          currentBackend.lmStudioDetected = undefined;
-        }
+        // T2.7 — Reset LM Studio detection by clearing the EXTERNAL probe cache.
+        // BackendConfig is now immutable, so cache state lives in _lmStudioProbeCache.
+        clearLMStudioProbeCache();
 
         // 3. Reset session counters
         session.calls = 0;
@@ -6104,12 +6473,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // 4. Notify client to refresh tool list
         notifyToolsChanged();
 
+        // Snapshot the post-reload backend ONCE for the summary string —
+        // reads of multiple fields across multiple async-safe lines.
         const afterProfile = activeSettings.active;
-        const afterModel = currentBackend.model;
+        const afterBackend = getCurrentBackend();
+        const afterModel = afterBackend.model;
         const profileChanged = beforeProfile !== afterProfile || beforeModel !== afterModel;
         const summary = [
           "RESET COMPLETE",
-          `Profile: ${afterProfile} (${currentBackend.type}, ${currentBackend.model})`,
+          `Profile: ${afterProfile} (${afterBackend.type}, ${afterBackend.model})`,
           profileChanged ? `Changed from: ${beforeProfile} / ${beforeModel}` : "Profile unchanged",
           "Caches cleared: model list, concurrency, LM Studio detection",
           "Session counters reset to zero",
@@ -6178,7 +6550,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           follow_symlinks?: boolean;
           max_files?: number;
         };
-        const bcUseEnsemble = currentBackend.type === "openrouter";
+        const bcUseEnsemble = backend.type === "openrouter";
         const bcBudgetBytes = (bcMaxPayloadKb ?? 400) * 1024;
         const bcMode = resolveAnswerMode(bcRawMode, 0);
 
@@ -6328,7 +6700,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             if (reportSections.length > 0) {
               const mergedContent = reportSections.join("\n\n---\n\n");
               const mergedPath = saveResponse("batch_check", mergedContent, {
-                model: currentBackend.model, task: gTask,
+                model: backend.model, task: gTask,
                 inputFile: fg.files[0], groupId: gid,
               });
               bcGroupReports.push(`[group:${gid}] ${mergedPath}`);
@@ -6481,7 +6853,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             }
             const mergedContent = reportSections.join("\n\n---\n\n");
             const mergedPath = saveResponse("batch_check", mergedContent, {
-              model: currentBackend.model,
+              model: backend.model,
               task: resolvedTask,
               inputFile: uniqueFiles[0],
             });
@@ -6563,7 +6935,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           scan_secrets?: boolean;
           max_payload_kb?: number;
         };
-        const sfUseEnsemble = currentBackend.type === "openrouter";
+        const sfUseEnsemble = backend.type === "openrouter";
         const sfBudgetBytes = ((args as { max_payload_kb?: number }).max_payload_kb ?? 400) * 1024;
 
         // Validate redact_regex
@@ -6754,7 +7126,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             "scan_folder",
             sections.join("\n\n---\n\n"),
             {
-              model: currentBackend.model,
+              model: backend.model,
               task: sfPrompt,
               inputFile: folder_path,
             },
@@ -6812,7 +7184,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               "scan_folder",
               sections.join("\n\n---\n\n"),
               {
-                model: currentBackend.model,
+                model: backend.model,
                 task: sfPrompt,
                 inputFile: fg.files[0],
                 groupId: gid,
@@ -6892,7 +7264,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           scan_secrets?: boolean;
           max_payload_kb?: number;
         };
-        const seiUseEnsemble = currentBackend.type === "openrouter";
+        const seiUseEnsemble = backend.type === "openrouter";
         const seiBudgetBytes = ((args as { max_payload_kb?: number }).max_payload_kb ?? 400) * 1024;
 
         // Validate feature_description — mandatory
@@ -7228,7 +7600,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               idx: gi,
               filePaths: groupPaths,
               content: resp.content ?? "",
-              model: resp.model ?? currentBackend.model,
+              model: resp.model ?? backend.model,
             });
             if (onProgress) {
               onProgress(
@@ -7243,7 +7615,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               idx: gi,
               filePaths: groupPaths,
               content: "",
-              model: currentBackend.model,
+              model: backend.model,
               error: classified.reason,
             });
             if (classified.unrecoverable && classified.serviceLevel) {
@@ -7573,7 +7945,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           max_payload_kb?: number;
         };
         const cfBudgetBytes = (cfMaxPayloadKb ?? 400) * 1024;
-        const cfUseEnsemble = currentBackend.type === "openrouter";
+        const cfUseEnsemble = backend.type === "openrouter";
 
         // ── Helper: compare a single pair and return report content ──
         const comparePair = async (fARaw: string, fBRaw: string, prompt: string): Promise<{ content: string; model: string } | { error: string }> => {
@@ -7756,7 +8128,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             }
             const reportContent = sections.join("\n\n---\n\n");
             const gid = pg.id || undefined;
-            const model = currentBackend.model;
+            const model = backend.model;
             const rp = saveResponse("compare_files", reportContent, {
               model, task: `Batch compare: ${pg.pairs.length} pair(s)`,
               inputFile: pg.pairs[0][0], groupId: gid,
@@ -7962,7 +8334,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           follow_symlinks?: boolean;
           max_files?: number;
         };
-        const crUseEnsemble = currentBackend.type === "openrouter";
+        const crUseEnsemble = backend.type === "openrouter";
         const crBudgetBytes = (crMaxPayloadKb ?? 400) * 1024;
 
         let crRegexRedact: RegexRedactOpts | null = null;
@@ -8051,7 +8423,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             }
             if (gReports.length > 0) {
               const mergedPath = saveResponse("check_references", gReports.join("\n\n---\n\n"), {
-                model: currentBackend.model, task: "Check references", inputFile: fg.files[0], groupId: gid,
+                model: backend.model, task: "Check references", inputFile: fg.files[0], groupId: gid,
               });
               crGroupReports.push(`[group:${gid}] ${mergedPath}`);
             }
@@ -8174,7 +8546,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           "check_references",
           crReports.join("\n\n---\n\n"),
           {
-            model: currentBackend.model,
+            model: backend.model,
             task: "Check references",
             inputFile: crFilePaths[0],
           },
@@ -8219,7 +8591,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           max_files?: number;
         };
         // check_imports uses chatCompletionJSON directly (not ensembleStreaming),
-        // so currentBackend.type is not referenced here.
+        // so the backend type is not referenced in this case body (other than
+        // via the shared snapshot for the saveResponse() metadata).
         const ciBudgetBytes = (ciMaxPayloadKb ?? 400) * 1024;
 
         let ciRegexRedact: RegexRedactOpts | null = null;
@@ -8319,7 +8692,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             }
             if (gReports.length > 0) {
               const mergedPath = saveResponse("check_imports", gReports.join("\n\n---\n\n"), {
-                model: currentBackend.model, task: "Check imports", inputFile: fg.files[0], groupId: gid,
+                model: backend.model, task: "Check imports", inputFile: fg.files[0], groupId: gid,
               });
               ciGroupReports.push(`[group:${gid}] ${mergedPath}`);
             }
@@ -8521,7 +8894,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           "check_imports",
           ciReports.join("\n\n---\n\n"),
           {
-            model: currentBackend.model,
+            model: backend.model,
             task: "Check imports",
             inputFile: ciFilePaths[0],
           },
@@ -8559,7 +8932,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           answer_mode?: number;
           max_payload_kb?: number;
         };
-        const csUseEnsemble = currentBackend.type === "openrouter";
+        const csUseEnsemble = backend.type === "openrouter";
         const csBudgetBytes = (csMaxPayloadKb ?? 400) * 1024;
         const csMode = resolveAnswerMode(csRawMode, 0);
 
@@ -8819,10 +9192,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
+    // T2.7 — snapshot for atomic .model read in error log
+    const errBackend = getCurrentBackend();
     // Log errors to the session log file
     logRequest({
       tool: name,
-      model: currentBackend.model ?? "",
+      model: errBackend.model ?? "",
       status: "error",
       error: errMsg,
     });
@@ -8831,17 +9206,62 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       isError: true,
     };
   }
-});
+}
+
+// ── Tool registration loop (T2.MCP-SDK) ──────────────────────────────
+// Iterate over every tool definition from buildTools() AND every
+// mass-scouting tool, and register each one with the McpServer. The
+// SDK handles ListTools serving + per-call CallTool routing for us.
+// Every callback delegates into the shared dispatchCallTool() above so
+// the existing switch logic is preserved verbatim.
+//
+// We snapshot the descriptions at startup; refreshAllToolDescriptions()
+// updates them on every settings reload (the limitsBlock() text depends
+// on the current backend type).
+{
+  const initialTools = buildTools();
+  for (const def of initialTools) {
+    const toolName = def.name;
+    let inputZod: z.ZodTypeAny;
+    try {
+      inputZod = jsonSchemaToZod(
+        (def as { inputSchema?: JsonSchemaSubset }).inputSchema ?? { type: "object" },
+      );
+    } catch {
+      // Fallback: accept any object. The handler does its own validation.
+      inputZod = z.object({}).passthrough();
+    }
+    const handle = mcpServer.registerTool(
+      toolName,
+      {
+        description: def.description,
+        inputSchema: (inputZod as unknown as { shape: Record<string, z.ZodType> }).shape ?? {},
+      },
+      async (args: unknown, extra: { _meta?: { progressToken?: string | number } }) => {
+        return dispatchCallTool(
+          toolName,
+          (args ?? {}) as Record<string, unknown>,
+          extra,
+        );
+      },
+    );
+    // Stash the handle so refreshAllToolDescriptions can update it later.
+    registeredToolHandles.set(toolName, handle as unknown as RegisteredToolHandle);
+  }
+}
 
 async function main() {
   const transport = new StdioServerTransport();
-  await server.connect(transport);
+  await mcpServer.connect(transport);
   // Write initial stats file at startup so statusline can show MCP icons immediately
   writeStatsFile();
+  // T2.7 — snapshot for the banner. Strictly defense in depth (main runs once
+  // at startup, before any reload can race).
+  const bootBackend = getCurrentBackend();
   const backendLabel =
-    currentBackend.type === "openrouter"
-      ? `OpenRouter (${currentBackend.model})`
-      : `Local (${currentBackend.baseUrl}${currentBackend.model ? `, ${currentBackend.model}` : ""})`;
+    bootBackend.type === "openrouter"
+      ? `OpenRouter (${bootBackend.model})`
+      : `Local (${bootBackend.baseUrl}${bootBackend.model ? `, ${bootBackend.model}` : ""})`;
   process.stderr.write(
     `LLM Externalizer server running — backend: ${backendLabel}\n`,
   );
