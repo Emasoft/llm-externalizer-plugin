@@ -23,6 +23,7 @@ import type {
 import {
   bytesCapFromPct,
   checkBudget,
+  DEFAULT_SCOUT_WORKERS,
   estimateJobCost,
 } from "./cost-estimate";
 import type { Registry, RegistryRow } from "./registry";
@@ -67,7 +68,7 @@ export interface ScoutOpts {
   model: string;
   apiKey: string;
   apiUrl?: string;
-  /** Default 16. Set 1 for tests. */
+  /** Default `DEFAULT_SCOUT_WORKERS` (16). Set 1 for tests. */
   workers?: number;
   /** Default 1 (= up to 2 attempts per file). */
   maxRetries?: number;
@@ -224,7 +225,7 @@ export async function runScoutJob(
   fetchImpl: FetchImpl,
 ): Promise<ScoutResult> {
   const compiled = compileFieldset(opts.fieldset);
-  const workers = Math.max(1, opts.workers ?? 16);
+  const workers = Math.max(1, opts.workers ?? DEFAULT_SCOUT_WORKERS);
   const maxRetries = opts.maxRetries ?? 1;
   const scoutPct = opts.maxContextPctScout ?? 0.4;
   const cap = bytesCapFromPct(opts.pricing.context_window, scoutPct);

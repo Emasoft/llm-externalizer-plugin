@@ -1,11 +1,20 @@
 ---
 name: llm-externalizer-mass-scouting
 description: |-
-  Use when extracting the SAME structured metadata from many files with a
-  cheap LLM. Trigger with "mass scout", "scan many files for X", "extract
-  structured data from a folder", "classify all my files", "audit thousands
-  of files", "run a fieldset over a codebase", "audit my plugin", "PR review
-  all changed files", "security-scan this repo".
+  Search, classify, categorize, and triage many files at once. Runs a cheap
+  LLM over a folder / corpus / codebase and extracts the SAME structured
+  fields from every file into a queryable SQLite registry. THE tool for "I
+  have N files — which are about X, and what is each one?" at any scale
+  (hundreds to millions of files) — reach for it BEFORE hand-rolling grep /
+  regex filter scripts. Use to triage or inventory a big folder, bucket
+  files by type or topic, find the files relevant to a subject, or
+  audit / scan / PR-review many files. Trigger with "mass scout", "search
+  and categorize files", "triage this corpus", "categorize a folder",
+  "classify all my files", "which files are about X", "build an inventory
+  of a folder", "catalog these repos", "scan many files for X", "find the
+  relevant files among thousands", "extract structured data from a folder",
+  "audit thousands of files", "run a fieldset over a codebase", "audit my
+  plugin", "PR review all changed files", "security-scan this repo".
 argument-hint: "[register | preclassify | estimate | scout | search | search-xjob | get | export | jobs-list | audit-sample | body-get | build-fieldset | propose-fieldset | list-bundled-fieldsets | diff | chain]"
 effort: medium
 ---
@@ -13,6 +22,13 @@ effort: medium
 # LLM Externalizer — Mass Scouting
 
 ## Overview
+
+**This is the search-and-categorize tool for large file sets.** When you
+need to triage a corpus, classify a folder, build an inventory, or find
+which files match a topic — reach for mass-scouting instead of hand-rolling
+`grep` / `find` / regex filter scripts. A regex matches literal strings; the
+scout makes a real per-file classification judgement (e.g. "is this file
+actually about X?") that brittle keyword filters get wrong.
 
 Bulk LLM-driven structured-output file analysis. Point a cheap model
 (default `qwen/qwen-2.5-7b-instruct`) at hundreds-to-millions of files; get
@@ -58,6 +74,12 @@ Follow-on tools: `jobs_list`, `audit_sample`, `body_get`,
 `<main-repo-root>/reports/mass_scouting/<TIMESTAMP>-scout-<slug>.md` and
 returns the file path plus counts. Hand the path to the user — never
 re-print the report. Search/get/export emit JSON or JSONL/CSV.
+
+The main-repo root is resolved from `CLAUDE_PROJECT_DIR`, then the
+enclosing git worktree. When you call the MCP tool, pass an explicit
+`output_dir` (`mass_scout` and `mass_scout_export` both accept it) so the
+report lands in the project the user is working on — otherwise a packaged
+MCP server can fall back to a path outside the project.
 
 ## Token efficiency
 

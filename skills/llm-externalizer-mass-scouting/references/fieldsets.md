@@ -69,11 +69,17 @@ Shorthand syntax (`NAME:TYPE=DESCRIPTION`):
 - `name:string(120)=desc` — string with max_length
 - `name:enum(a,b,c)=desc` — enum with values
 - `name:array_string(8)=desc` — array of strings, max 8 items
+- `name:array_enum(a,b,c)=desc` — array of enum values
+- `name:array_enum(a,b,c)(8)=desc` — array of enum values, max 8 items
 - `name:int(1-10)=desc` — int with min..max
 - `name:number(0.0-1.0)=desc` — float with min..max
 
-For `array_object` and `array_enum`, write the JSON by hand or use
-`propose-fieldset`.
+Prefer `array_enum` over `array_string` for a fixed tag vocabulary (OS
+names, hardware tags, severity labels): `array_string` lets the model emit
+any string so values drift off your intended set, while `array_enum`
+constrains them to the listed values.
+
+For `array_object`, write the JSON by hand or use `propose-fieldset`.
 
 ## Propose-fieldset
 

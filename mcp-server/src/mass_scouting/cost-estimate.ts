@@ -40,6 +40,14 @@ export const DEFAULT_MAX_CONTEXT_PCT_SCOUT = 0.4;
 /** Default register-time max — also applied here for sanity. */
 export const DEFAULT_MAX_CONTEXT_PCT_REGISTER = 0.5;
 
+/**
+ * Default scout worker count. `runScoutJob` fans out this many concurrent
+ * OpenRouter calls; the estimator's ETA uses the SAME number so `est_seconds`
+ * predicts a real default run instead of an unreachably-parallel one.
+ * Override on either side with `--workers`.
+ */
+export const DEFAULT_SCOUT_WORKERS = 16;
+
 // ── Types ──────────────────────────────────────────────────────────────
 
 export interface ModelPricing {
@@ -83,7 +91,11 @@ export interface JobEstimateOptions {
   expected_output_bytes: number;
   /** Optional preclassifier bucket filter (matches `listEligible({bucket})`). */
   bucket?: string;
-  /** Number of OpenRouter workers (for ETA). Default 256 from blueprint §3.2. */
+  /**
+   * Number of OpenRouter workers (for the ETA). Defaults to
+   * `DEFAULT_SCOUT_WORKERS` so the estimate reflects the real default scout
+   * run; pass the same `--workers` value you intend to give `scout`.
+   */
   worker_count?: number;
   /**
    * Average wall-clock seconds per call when the worker is busy. Blueprint
@@ -284,7 +296,7 @@ export function estimateJobCost(
     (a, b) => b.cost_usd - a.cost_usd,
   );
 
-  const workers = Math.max(1, opts.worker_count ?? 256);
+  const workers = Math.max(1, opts.worker_count ?? DEFAULT_SCOUT_WORKERS);
   const perCall = opts.per_call_seconds ?? 1.0;
   // Floor at 1 if any work was scheduled — protects callers from rendering
   // "0 seconds" for tiny runs (which would also break ETA UIs).
@@ -327,7 +339,15 @@ export async function fetchProviderContext(
 ): Promise<number | null> {
   if (!modelId || !apiKey) return null;
   try {
-    const url = `${baseUrl}/models/${encodeURIComponent(modelId)}/endpoints`;
+    // OpenRouter's endpoints route is /models/:author/:slug/endpoints — the
+    // "/" inside a model id ("qwen/qwen-2.5-7b-instruct") is a path
+    // separator, not data. encodeURIComponent() would escape it to %2F and
+    // the route would 404. Encode each path segment individually instead.
+    const encodedModel = modelId
+      .split("/")
+      .map((seg) => encodeURIComponent(seg))
+      .join("/");
+    const url = `${baseUrl}/models/${encodedModel}/endpoints`;
     const res = await fetchImpl(url, {
       method: "GET",
       headers: { Authorization: `Bearer ${apiKey}` },

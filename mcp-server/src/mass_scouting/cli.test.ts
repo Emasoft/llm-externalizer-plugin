@@ -528,6 +528,48 @@ describe("runMassScoutCli — scout", () => {
     expect(md).toContain("cli-job-1");
   });
 
+  it("scout --output-dir overrides the default report directory", async () => {
+    /** Regression for F2: as an MCP server the default <main-repo-root>
+     *  resolved to the plugin's own install cache. --output-dir is the
+     *  explicit escape hatch — the report must land there, not under
+     *  mainRoot/reports/mass_scouting/. */
+    writeFiles({ "src/a.ts": "export const a = 1\n" });
+    writeFieldset();
+    await runMassScoutCli(["register", "--db", dbPath, "--root", sourceRoot]);
+    const customDir = join(mainRoot, "custom-report-out");
+    const opts: CliRunOptions = {
+      apiKey: "test-key",
+      fetchImpl: fakeFetch({ is_async: false, summary: "tiny" }),
+      mainRoot,
+    };
+    const r = await runMassScoutCli(
+      [
+        "scout",
+        "--db",
+        dbPath,
+        "--fields-file",
+        fieldsetPath,
+        "--job-id",
+        "cli-outdir-1",
+        "--source-root",
+        sourceRoot,
+        "--output-dir",
+        customDir,
+        "--workers",
+        "1",
+        "--no-smoke-test",
+      ],
+      opts,
+    );
+    expect(r.exitCode).toBe(0);
+    const m = r.stdout.match(/report=(\S+)/);
+    expect(m).not.toBeNull();
+    const reportPath = m![1]!;
+    expect(reportPath.startsWith(customDir)).toBe(true);
+    expect(reportPath).not.toContain(join("reports", "mass_scouting"));
+    expect(existsSync(reportPath)).toBe(true);
+  });
+
   it("missing OPENROUTER_API_KEY returns a clear error", async () => {
     /** No API key + no opts.apiKey = error before any work. */
     const oldKey = process.env.OPENROUTER_API_KEY;

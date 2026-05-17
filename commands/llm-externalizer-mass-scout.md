@@ -41,6 +41,7 @@ When all files are done, render a markdown report to
 | `--no-smoke-test` | no | Skip the 5-file sequential smoke test |
 | `--no-resume` | no | Re-process files even if they already have a result row |
 | `--max-context-pct-scout <0..1>` | no | Override the default 40% scout cap |
+| `--output-dir <path>` | no | Directory for the markdown report. Default `<main-repo-root>/reports/mass_scouting/`. Pass an explicit path when running as an MCP server so the report lands in the user's project, not the plugin install cache. |
 | `--live-context` | no | Query OpenRouter for the active provider's real `context_length` and override KNOWN_PRICING. Recommended when you don't know whether your account routes to a smaller-cap endpoint (e.g. 32K vs 128K). Requires `$OPENROUTER_API_KEY`. |
 
 ## Pre-flight

@@ -27,6 +27,7 @@
 import { execSync } from "node:child_process";
 import {
   appendFileSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -157,20 +158,58 @@ function ok(stdout: string): CliResult {
 }
 
 /**
- * Resolve the main repo root. Falls back through git → walking up from
- * this source file → cwd. Used to anchor reports/ directory writes.
+ * Resolve the main repo root used to anchor `reports/mass_scouting/` writes.
+ *
+ * Resolution order, designed so a packaged MCP server never writes reports
+ * into its own install cache:
+ *   1. `CLAUDE_PROJECT_DIR` — Claude Code 2.1.139+ sets this in the
+ *      MCP-stdio environment (officially documented in that release). It
+ *      is the only signal that points at the user's project rather than
+ *      the plugin install.
+ *   2. `git worktree list` — the enclosing repo, UNLESS that path is inside
+ *      a plugin install cache (`/.claude/plugins/`), which means we are the
+ *      packaged server with no project context.
+ *   3. `process.cwd()` — last resort for a direct CLI run outside a repo.
+ *
+ * The previous "walk up three dirs from this source file" fallback is gone:
+ * for an installed plugin it resolved straight into the plugin cache, which
+ * is exactly the bug this ordering fixes.
  */
 function defaultMainRoot(): string {
+  const projDir = process.env.CLAUDE_PROJECT_DIR;
+  if (projDir && existsSync(projDir)) return projDir;
+
   try {
     const out = execSync("git worktree list", { encoding: "utf-8" })
       .split("\n")[0]
       ?.trim()
       .split(/\s+/)[0];
-    if (out) return out;
+    if (out && !out.includes("/.claude/plugins/")) return out;
   } catch {
     // git not on PATH or not a repo — fall through.
   }
-  return resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+
+  return process.cwd();
+}
+
+/**
+ * Resolve the directory a report / export file is written to. An explicit
+ * `--output-dir` wins verbatim (a relative value resolves against cwd);
+ * otherwise the file lands under `<main-repo-root>/reports/mass_scouting/`.
+ * Callers running as an MCP server should pass `--output-dir` so the report
+ * lands inside the project the agent is actually working on.
+ */
+function resolveReportDir(
+  outputDirFlag: string | undefined,
+  opts: CliRunOptions,
+): string {
+  if (outputDirFlag && outputDirFlag !== "true") {
+    return isAbsolute(outputDirFlag)
+      ? outputDirFlag
+      : resolve(process.cwd(), outputDirFlag);
+  }
+  const mainRoot = opts.mainRoot ?? defaultMainRoot();
+  return join(mainRoot, "reports", "mass_scouting");
 }
 
 /**
@@ -819,8 +858,7 @@ async function runScout(
   const md = renderMarkdownReport(summary);
   reg.close();
 
-  const mainRoot = opts.mainRoot ?? defaultMainRoot();
-  const reportDir = join(mainRoot, "reports", "mass_scouting");
+  const reportDir = resolveReportDir(flags["output-dir"], opts);
   mkdirSync(reportDir, { recursive: true });
   const stamp = isoTimestampLocal();
   const reportPath = join(reportDir, `${stamp}-scout-${slugify(jobId)}.md`);
@@ -1666,8 +1704,7 @@ function runExport(args: string[], opts: CliRunOptions): CliResult {
   const rows = reg.listResultsByJob(jobId);
   reg.close();
 
-  const mainRoot = opts.mainRoot ?? defaultMainRoot();
-  const reportDir = join(mainRoot, "reports", "mass_scouting");
+  const reportDir = resolveReportDir(flags["output-dir"], opts);
   mkdirSync(reportDir, { recursive: true });
   const stamp = isoTimestampLocal();
   const filename = `${stamp}-export-${slugify(jobId)}.${format}`;
@@ -1800,6 +1837,8 @@ Subcommands:
                  Optional: --model <id>  --workers <n>  --max-retries <n>
                            --bucket <name>  --no-smoke-test  --no-resume
                            --max-context-pct-scout <0..1>
+                           --output-dir <path>   (report directory; default
+                                            <main-repo-root>/reports/mass_scouting/)
                            --live-context   (see estimate)
                  Env:      OPENROUTER_API_KEY
 
@@ -1820,6 +1859,8 @@ Subcommands:
   export         Dump every row of a job to JSONL or CSV under reports/.
                  Required: --db <path>  --job-id <id>
                  Optional: --format jsonl|csv  (default: jsonl)
+                           --output-dir <path>  (default
+                                            <main-repo-root>/reports/mass_scouting/)
 
   jobs-list      List every scout job in the DB.
                  Required: --db <path>

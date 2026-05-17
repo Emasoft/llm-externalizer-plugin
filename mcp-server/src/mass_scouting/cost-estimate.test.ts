@@ -15,12 +15,14 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   BYTES_PER_TOKEN,
   DEFAULT_MAX_CONTEXT_PCT_SCOUT,
+  DEFAULT_SCOUT_WORKERS,
   KNOWN_PRICING,
   bytesCapFromPct,
   checkBudget,
   estimateFileCost,
   estimateJobCost,
   estimateTokens,
+  fetchProviderContext,
   type ModelPricing,
 } from "./cost-estimate";
 import { openRegistry, Registry } from "./registry";
@@ -227,6 +229,23 @@ describe("estimateJobCost", () => {
     expect(out.est_seconds).toBe(10);
   });
 
+  it("defaults worker_count to DEFAULT_SCOUT_WORKERS so the ETA matches a real scout run", () => {
+    /** Regression: the ETA default was 256 while the scout phase fans out
+     *  DEFAULT_SCOUT_WORKERS (16), making est_seconds ~16x optimistic. The
+     *  estimate default must equal the scout default. */
+    for (let i = 0; i < 32; i++) seed(`/x/${i}.ts`, 100);
+    const out = estimateJobCost(reg, {
+      pricing: TEST_PRICING,
+      prompt_overhead_bytes: 0,
+      schema_overhead_bytes: 0,
+      expected_output_bytes: 80,
+      per_call_seconds: 1.0,
+    });
+    expect(DEFAULT_SCOUT_WORKERS).toBe(16);
+    // 32 files × 1.0s ÷ 16 workers = 2s (would be 1s at the old 256 default).
+    expect(out.est_seconds).toBe(2);
+  });
+
   it("never reports negative ETA for an empty registry", () => {
     /** Defensive: caller may run estimate before any file is registered. */
     const out = estimateJobCost(reg, {
@@ -284,5 +303,79 @@ describe("checkBudget", () => {
     expect(checkBudget(0.0, -0.5).allowed).toBe(false);
     expect(checkBudget(0.0, Number.POSITIVE_INFINITY).allowed).toBe(false);
     expect(checkBudget(0.0, Number.NaN).allowed).toBe(false);
+  });
+});
+
+// ── fetchProviderContext ───────────────────────────────────────────────
+
+describe("fetchProviderContext", () => {
+  it("keeps the '/' in the model id as a path separator, not %2F", async () => {
+    /** Regression: encodeURIComponent() escaped the author/slug slash to
+     *  %2F, so OpenRouter's /models/:author/:slug/endpoints route 404'd and
+     *  --live-context always failed. The slash must survive in the URL. */
+    let seenUrl = "";
+    const cap = await fetchProviderContext(
+      "qwen/qwen-2.5-7b-instruct",
+      "test-key",
+      async (url) => {
+        seenUrl = url;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: { endpoints: [{ context_length: 32_768 }] },
+          }),
+        };
+      },
+    );
+    expect(seenUrl).toBe(
+      "https://openrouter.ai/api/v1/models/qwen/qwen-2.5-7b-instruct/endpoints",
+    );
+    expect(seenUrl).not.toContain("%2F");
+    expect(cap).toBe(32_768);
+  });
+
+  it("returns the smallest context_length across endpoints", async () => {
+    /** The smallest endpoint cap is the one a real request will hit. */
+    const cap = await fetchProviderContext("x/y", "k", async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: {
+          endpoints: [
+            { context_length: 131_072 },
+            { context_length: 32_768 },
+            { context_length: 65_536 },
+          ],
+        },
+      }),
+    }));
+    expect(cap).toBe(32_768);
+  });
+
+  it("returns null when the HTTP response is not ok", async () => {
+    /** A 404 / 5xx must surface as null so the caller can fall back. */
+    const cap = await fetchProviderContext("x/y", "k", async () => ({
+      ok: false,
+      status: 404,
+      json: async () => ({}),
+    }));
+    expect(cap).toBeNull();
+  });
+
+  it("returns null without a network call when modelId or apiKey is empty", async () => {
+    /** No request should be attempted unless both inputs are present. */
+    let called = false;
+    const fetchImpl = async (): Promise<{
+      ok: boolean;
+      status: number;
+      json(): Promise<unknown>;
+    }> => {
+      called = true;
+      return { ok: true, status: 200, json: async () => ({}) };
+    };
+    expect(await fetchProviderContext("", "k", fetchImpl)).toBeNull();
+    expect(await fetchProviderContext("x/y", "", fetchImpl)).toBeNull();
+    expect(called).toBe(false);
   });
 });

@@ -216,7 +216,9 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
         },
         workers: {
           type: "number",
-          description: "Worker count for the ETA calculation. Default: 256.",
+          description:
+            "Worker count for the ETA calculation. Default: 16 — matches " +
+            "the scout phase's default so est_seconds reflects a real run.",
         },
         per_call_seconds: {
           type: "number",
@@ -274,7 +276,8 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
       "Compiles the fieldset into a JSON Schema, fans calls out via the " +
       "scout worker, applies fix_envelope repairs, runs the required-keys " +
       "validator, persists results + FTS rows. Writes a markdown report " +
-      "under <main-repo-root>/reports/mass_scouting/.\n\nRETURNS: " +
+      "under <main-repo-root>/reports/mass_scouting/ (override with " +
+      "output_dir).\n\nRETURNS: " +
       "files_total/ok/failed/skipped_too_big, retries, cost_usd, report path.\n\n" +
       "ENV: $OPENROUTER_API_KEY must be set.",
     inputSchema: {
@@ -322,6 +325,14 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
         max_context_pct_scout: {
           type: "number",
           description: "Override the default 40% scout cap. 0..1.",
+        },
+        output_dir: {
+          type: "string",
+          description:
+            "Absolute path for the markdown report directory. Defaults to " +
+            "<main-repo-root>/reports/mass_scouting/. Pass this when running " +
+            "as an MCP server so the report lands in the user's project " +
+            "rather than the plugin's install cache.",
         },
         live_context: {
           type: "boolean",
@@ -489,6 +500,12 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
           type: "string",
           description: "'jsonl' (default) or 'csv'.",
         },
+        output_dir: {
+          type: "string",
+          description:
+            "Absolute path for the export directory. Defaults to " +
+            "<main-repo-root>/reports/mass_scouting/.",
+        },
       },
       required: ["db_path", "job_id"],
     },
@@ -566,7 +583,10 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
       "when you know the shape you want and prefer one-liner field defs " +
       "over hand-writing JSON. Forms supported by the shorthand parser: " +
       "`name:bool=desc`, `name:string(120)=desc`, `name:enum(a,b,c)=desc`, " +
-      "`name:array_string(8)=desc`, `name:int(1-10)=desc`, `name:number(0.0-1.0)=desc`.",
+      "`name:array_string(8)=desc`, `name:array_enum(a,b,c)(8)=desc`, " +
+      "`name:int(1-10)=desc`, `name:number(0.0-1.0)=desc`. Use array_enum " +
+      "(not array_string) for a fixed tag vocabulary so the model cannot " +
+      "drift off your allowed values.",
     inputSchema: {
       type: "object",
       properties: {
@@ -810,6 +830,7 @@ export async function dispatchMassScoutTool(
             "no-smoke-test": bool(args.no_smoke_test),
             "no-resume": bool(args.no_resume),
             "max-context-pct-scout": num(args.max_context_pct_scout),
+            "output-dir": str(args.output_dir),
             "live-context": bool(args.live_context),
           }),
           opts,
@@ -869,6 +890,7 @@ export async function dispatchMassScoutTool(
             db: str(args.db_path),
             "job-id": str(args.job_id),
             format: str(args.format),
+            "output-dir": str(args.output_dir),
           }),
           opts,
         ),
