@@ -602,48 +602,111 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
         )
         print(f"  Synced version to {srv_json.relative_to(repo_root)}")
 
-    # Sync hardcoded version in MCP server source (index.ts Server constructor)
+    # Sync hardcoded version in MCP server source (index.ts Server constructor).
+    #
+    # No-op tolerance (canonical-pipeline pattern):
+    # `re.subn` returns (new_text, count). When count == 0 the regex did
+    # not match — but in this codebase that case has two distinct causes:
+    #   (a) the literal really is missing (build was edited; structural bug)
+    #   (b) the literal already shows new_version (republish, retry, or a
+    #       prior step bumped it ahead of us — perfectly legal idempotent
+    #       state)
+    # We can tell which by re-checking whether new_version is ALREADY in
+    # the file with the expected shape. If yes → idempotent skip. If no
+    # → real structural bug, abort.
     index_ts = repo_root / "mcp-server" / "src" / "index.ts"
     if index_ts.exists():
         src = index_ts.read_text(encoding="utf-8")
-        updated = re.sub(
-            r"""(\{\s*name:\s*["'`]llm-externalizer["'`],\s*version:\s*(["'`]))[^"'`]+\2""",
+        pattern = (
+            r"""(\{\s*name:\s*["'`]llm-externalizer["'`],\s*version:\s*(["'`]))[^"'`]+\2"""
+        )
+        updated, count = re.subn(
+            pattern,
             rf"\g<1>{new_version}\g<2>",
             src,
         )
-        if updated == src:
-            print("ERROR: regex failed to match version in index.ts Server constructor", file=sys.stderr)
-            sys.exit(1)
-        index_ts.write_text(updated, encoding="utf-8")
-        print(f"  Synced version to {index_ts.relative_to(repo_root)}")
+        if count == 0:
+            # No replacement happened. Check whether the file already
+            # carries new_version in the expected shape — if so this is
+            # a benign idempotent republish, not a structural bug.
+            already_at_target = re.search(
+                rf"""\{{\s*name:\s*["'`]llm-externalizer["'`],\s*version:\s*["'`]{re.escape(new_version)}["'`]""",
+                src,
+            )
+            if already_at_target:
+                print(
+                    f"  index.ts already at {new_version} — idempotent skip"
+                )
+            else:
+                print(
+                    "ERROR: regex failed to match version in index.ts "
+                    "Server constructor (and file is not already at "
+                    f"{new_version}). Likely the constructor literal was "
+                    "renamed or removed.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+        else:
+            index_ts.write_text(updated, encoding="utf-8")
+            print(f"  Synced version to {index_ts.relative_to(repo_root)}")
 
     # Sync version to pyproject.toml (project-level Python tooling package).
     # Must stay aligned with plugin.json so users don't see three disagreeing
     # numbers when inspecting the repo.
+    #
+    # No-op tolerance (canonical-pipeline pattern, see index.ts block above):
+    # `re.subn` distinguishes count==0 (no match) from count>=1 (replaced).
+    # On count==0 we re-check whether the file already carries new_version
+    # in the expected shape — if so the file is at target and the skip is
+    # benign (idempotent republish). If not, the field shape changed and
+    # we abort.
     pyproject = repo_root / "pyproject.toml"
     if pyproject.exists():
         src = pyproject.read_text(encoding="utf-8")
-        updated = re.sub(
+        updated, count = re.subn(
             r'(?m)^(version\s*=\s*")[^"]+(")',
             rf"\g<1>{new_version}\g<2>",
             src,
             count=1,
         )
-        if updated == src:
-            print("ERROR: regex failed to match version in pyproject.toml", file=sys.stderr)
-            sys.exit(1)
-        pyproject.write_text(updated, encoding="utf-8")
-        print(f"  Synced version to {pyproject.relative_to(repo_root)}")
+        wrote_pyproject = False
+        if count == 0:
+            already_at_target = re.search(
+                rf'(?m)^version\s*=\s*"{re.escape(new_version)}"',
+                src,
+            )
+            if already_at_target:
+                print(
+                    f"  pyproject.toml already at {new_version} — idempotent skip"
+                )
+            else:
+                print(
+                    "ERROR: regex failed to match version in pyproject.toml "
+                    f"(and file is not already at {new_version}). The "
+                    "`version = \"...\"` line was likely removed or moved.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+        else:
+            pyproject.write_text(updated, encoding="utf-8")
+            print(f"  Synced version to {pyproject.relative_to(repo_root)}")
+            wrote_pyproject = True
 
         # Regenerate uv.lock so its root-package version matches pyproject.toml.
         # `uv lock` is fast (no network if nothing changed) and deterministic.
+        # Run unconditionally when pyproject exists: even an idempotent skip
+        # benefits from `uv lock` because uv.lock may itself have drifted
+        # from a different cause (transitive dep churn since last lock).
         lock_result = run(["uv", "lock"], capture=True, check=False, cwd=str(repo_root))
         if lock_result.returncode != 0:
             print("ERROR: `uv lock` failed after pyproject.toml bump.", file=sys.stderr)
             if lock_result.stderr:
                 print(f"  {lock_result.stderr.strip()}", file=sys.stderr)
             sys.exit(1)
-        print("  Regenerated uv.lock")
+        if wrote_pyproject:
+            print("  Regenerated uv.lock")
+        else:
+            print("  uv.lock re-resolved (no-op if already current)")
     print()
 
     # ── 6. Rebuild dist (with new version) ──
