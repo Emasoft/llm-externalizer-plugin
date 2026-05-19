@@ -182,7 +182,7 @@ matching every report variant the MCP server has ever emitted.
   systems without a controlling tty, with a short-circuit to skip
   the tty-detect path when `os.isatty()` already says false.
 - `get_git_info()` was making two separate calls (`git rev-parse`
-  + `git status --porcelain`). Now a single
+  and `git status --porcelain`). Now a single
   `git status --porcelain=v1 --branch` covers both. Timeouts
   reduced from 3 s to 1 s — long-running git operations were
   blocking the statusline refresh.
@@ -387,7 +387,6 @@ tier2-tier3.md`):
 All gates green on the changes that landed: ruff / pyright (0 errors) /
 shellcheck. tsc --noEmit clean on mcp-server.
 
-
 ## [9.7.0] - 2026-05-14
 
 ### Added
@@ -408,9 +407,9 @@ against `[A-Za-z][A-Za-z0-9._-]{0,63}` and unrecognised runners +
 
 A four-agent audit swarm (skeptical-reviewer, code-correctness, security,
 silent-failure-hunter) flagged 76 findings on the new setup wizard. Tier 1
-(security HIGH + critical correctness) landed in v9.6.0 via commit
+(security HIGH and critical correctness) landed in v9.6.0 via commit
 `d314c2d`. Tier 2 (UX + Windows-detection + agent flow) and Tier 3 (polish
-+ skill cleanups) land here:
+and skill cleanups) land here:
 
 **Cross-cutting hardening:**
 
@@ -548,7 +547,6 @@ Deferred-by-design (NOT applied, see TRDD-3ef94759 for rationale):
 Closes TRDD-3ef94759. All audit-flagged HIGH / MAJOR / CRITICAL findings
 addressed. Verified: ruff / pyright (0 errors) / shellcheck — all clean.
 
-
 ## [9.6.0] - 2026-05-14
 
 ### Added
@@ -660,7 +658,6 @@ The exec form avoids shell quoting hazards on paths containing spaces
 and matches the canonical example in the Claude Code 2.1.139 hook
 reference. No runtime behaviour change.
 
-
 ## [9.5.1] - 2026-05-09
 
 ### Documentation
@@ -684,7 +681,6 @@ ways to supply the key, ranked by what works across all consumers:
 
 The Auth section further down and the statusline NOTE now both
 point back at this section instead of repeating the explanation.
-
 
 ## [9.5.0] - 2026-05-09
 
@@ -726,7 +722,6 @@ Removed:
 All gates pass: tsc, eslint, build, vitest 341/341, ruff, shellcheck
 on both install.sh + install-mcp-deps.sh, plugin.json, claude plugin
 validate, cpv-remote-validate.
-
 
 ## [9.4.3] - 2026-05-09
 
@@ -773,7 +768,6 @@ small CPV publish-gate fixes:
 Verified: tsc/eslint/build clean, 341/341 vitest pass, ruff/pyright
 clean, all four ensemble + free OpenRouter models return PONG.
 
-
 ## [9.4.2] - 2026-05-08
 
 ### Fixed
@@ -819,7 +813,6 @@ serializes simultaneous SessionStart fires.
 Tested in isolation: 0.88 s fresh install (npm ci + native prebuild),
 9 ms idempotent re-run, friendly error on missing deps,
 clean handshake on populated install.
-
 
 ## [9.4.1] - 2026-05-07
 
@@ -956,7 +949,6 @@ MCP tool descriptions:
   filter / limit_per_job / limit_merged / json) so MCP clients show
   meaningful tooltips.
 
-
 ## [9.4.0] - 2026-05-07
 
 ### Added
@@ -968,26 +960,25 @@ commit. Adds the full TRDD-52547970 pipeline (register → preclassify →
 estimate → scout → search) plus eight follow-on tools that came out of the
 audit pass:
 
-* mass_scout_jobs_list / audit_sample / body_get — job introspection
-* mass_scout_build_fieldset / propose_fieldset / list_bundled_fieldsets —
+- mass_scout_jobs_list / audit_sample / body_get — job introspection
+- mass_scout_build_fieldset / propose_fieldset / list_bundled_fieldsets —
   fieldset authoring (shorthand parser, LLM-driven proposer, and 4
   plugin-shipped fieldsets: code-audit, skill-audit, security-audit,
   pr-review)
-* mass_scout_diff / chain — job-to-job operations (row-by-row diff and
+- mass_scout_diff / chain — job-to-job operations (row-by-row diff and
   filtered re-scout with a fresh fieldset)
 
 Other improvements:
 
-* --live-context flag wires fetchProviderContext into estimate/scout so
+- --live-context flag wires fetchProviderContext into estimate/scout so
   the real provider context_length overrides KNOWN_PRICING when the
   account routes to a smaller-cap endpoint
-* MCP notifications/progress events propagate through scout and chain
+- MCP notifications/progress events propagate through scout and chain
   so long-running jobs keep the connection alive and emit real progress
-* Skill rewrite (when-NOT-to-use, model selection, privacy, troubleshooting
+- Skill rewrite (when-NOT-to-use, model selection, privacy, troubleshooting
   flowchart, glossary, worked example, bundled fieldsets section)
 
 Tests: 341 passing (was 332).
-
 
 ### Fixed
 
@@ -1053,7 +1044,6 @@ return is only reachable on the success path, the initials never feed
 the read site. Switched to declare-without-init so the lint rule is
 satisfied without changing behaviour.
 
-
 ## [9.3.0] - 2026-04-22
 
 ### Added
@@ -1107,7 +1097,6 @@ New components:
 
 Python scripts use PEP 723 inline metadata to declare ruamel.yaml as
 a dep — `uv run` installs it on demand, no system pip touch.
-
 
 ## [9.2.0] - 2026-04-22
 

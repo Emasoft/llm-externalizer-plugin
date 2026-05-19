@@ -2,14 +2,14 @@
 
 This document provides practical examples for **running evaluations locally** against Hugging Face Hub models.
 
-## Contents
+## Table of Contents
 
-- What this skill covers
-- What this skill does NOT cover
-- Setup
-- inspect-ai examples
-- lighteval examples
-- Hand-off to Hugging Face Jobs
+- [What this skill covers](#what-this-skill-covers)
+- [What this skill does NOT cover](#what-this-skill-does-not-cover)
+- [Setup](#setup)
+- [inspect-ai examples](#inspect-ai-examples)
+- [lighteval examples](#lighteval-examples)
+- [Hand-off to Hugging Face Jobs](#hand-off-to-hugging-face-jobs)
 
 ## What this skill covers
 

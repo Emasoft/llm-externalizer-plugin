@@ -6,174 +6,72 @@ user-invocable: false
 
 ## Overview
 
-Finds the best models for a task by querying official Hugging Face benchmark leaderboards, enriching results with model size data, filtering for what fits on the user's device, and returning a comparison table with benchmark scores. Acts as a secondary widening path beyond `scripts/setup/recommend-models.py`.
+Finds best models for a task by querying official HF benchmark leaderboards, enriching with model size data, filtering for device fit, and returning a comparison table with benchmark scores. Secondary widening path beyond `scripts/setup/recommend-models.py`.
 
 ## Prerequisites
 
-The setup wizard's primary model-selection source is
-`scripts/setup/recommend-models.py`. That script:
+The setup wizard's primary model-selection source is `scripts/setup/recommend-models.py`. That script:
 
 - Scrapes the Onyx self-hosted-LLM coding leaderboard on every invocation
-- Joins it with whatcani.run's featured-artifact API for live quantization
-  evidence
-- Filters by the user's detected RAM / VRAM (memory-budget aware)
-- Returns one JSON row per compatible model with `final_score`, `headroom_gb`,
-  and pre-built `download_command` lines for each quantized artifact
+- Joins it with whatcani.run's featured-artifact API for live quantization evidence
+- Filters by detected RAM/VRAM (memory-budget aware)
+- Returns one JSON row per compatible model with `final_score`, `headroom_gb`, and pre-built `download_command` lines
 
-**The wizard MUST try the recommender first.** This skill is consulted ONLY
-when both of the following are true:
-
+**The wizard MUST try the recommender first.** This skill is consulted ONLY when both:
 - The recommender returned no `compatible: true` row at the user's RAM tier
-- The user has explicitly asked to widen the search beyond Onyx, OR has
-  rejected the recommender's conservative output
+- The user has explicitly asked to widen the search beyond Onyx, OR has rejected the recommender's conservative output
 
-When this skill is invoked it reads the official HF benchmark leaderboards
-directly — slower than the recommender and without the RAM-aware filtering.
-After returning a candidate, the wizard MUST re-apply the memory-budget
-check from `recommend-models.py` (running it once with `--from-cache` plus a
-manual hardware override) before recommending the model to the user.
+When invoked, this skill reads HF leaderboards directly — slower than the recommender and without RAM-aware filtering. After returning a candidate, the wizard MUST re-apply the memory-budget check from `recommend-models.py` before recommending.
 
 External requirements:
-
-- `hf` CLI authenticated (`hf auth login`) for the HF API calls below
+- `hf` CLI authenticated (`hf auth login`)
 - `curl` and `jq` on PATH
 
 ## Instructions
 
-Follow these six steps in order.
+Follow six steps documented in [leaderboard-workflow.md](references/leaderboard-workflow.md):
 
-### Step 1: Parse the request
-
-Extract from the user's message:
-- **Task**: what they want the model to do (coding, math/reasoning, chat, OCR, RAG/retrieval, speech recognition, image classification, multimodal, agents, etc.)
-- **Device**: hardware constraints (MacBook M-series 8/16/32/64GB unified memory, RTX GPU with VRAM amount, CPU-only, cloud/no constraint, etc.)
-
-If device is not mentioned, skip filtering entirely and return the highest-performing models regardless of size. If the task is genuinely ambiguous, ask one clarifying question.
-
-### Device → max parameter budget
-
-When a device is specified, extract its available memory (unified RAM for Apple Silicon, VRAM for discrete GPUs) and apply:
-
-- **fp16 max params (B)** ≈ memory (GB) ÷ 2
-- **Q4 max params (B)** ≈ memory (GB) × 2
-
-Examples: 16GB → 8B fp16 / 32B Q4 — 24GB VRAM → 12B fp16 / 48B Q4 — 8GB → 4B fp16 / 16B Q4
-
----
-
-### Step 2: Find relevant benchmark datasets
-
-Fetch the full list of official HF benchmarks:
-
-```bash
-curl -s -H "Authorization: Bearer $(hf auth token 2>/dev/null || echo '')" \
-  "https://huggingface.co/api/datasets?filter=benchmark:official&limit=500" | jq '[.[] | {id, tags, description}]'
-```
-
-Read the returned list and select the datasets most relevant to the user's task — match on dataset id, tags, and description. Use your judgment; don't limit yourself to 2-3. Aim for comprehensive coverage: if 5 benchmarks clearly cover the task, use all 5.
-
----
-
-### Step 3: Fetch top models from leaderboards
-
-For each selected benchmark dataset:
-
-```bash
-curl -s -H "Authorization: Bearer $(hf auth token 2>/dev/null || echo '')" \
-  "https://huggingface.co/api/datasets/<namespace>/<repo>/leaderboard" | jq '[.[:15] | .[] | {rank, modelId, value, verified}]'
-```
-
-Collect model IDs and scores across all benchmarks. If a leaderboard returns an error (404, 401, etc.), skip it and note it in the output.
-
----
-
-### Step 4: Enrich with model metadata
-
-For the top 10-15 candidate model IDs, get model infos.
-
-```bash
-# REST API
-curl -s -H "Authorization: Bearer $(hf auth token 2>/dev/null || echo '')" \
-  "https://huggingface.co/api/models/org/model1" | jq '{safetensors, tags, cardData}'
-
-# CLI (hf-cli)
-hf models info org/model1 --json | jq '{safetensors, tags, cardData}'
-```
-
-Extract from each response:
-- **Parameters**: `safetensors.total` → convert to B (e.g., 7_241_748_480 → "7.2B")
-- **License**: from model card tags (look for `license:apache-2.0`, `license:mit`, etc.)
-- If `safetensors` is absent, parse size from the model name (look for "7b", "8b", "13b", "70b", "72b", etc.)
-
----
-
-### Step 5: Filter and rank
-
-**If a device was specified:**
-1. Remove models exceeding the fp16 parameter budget for the device
-2. Flag models that fit only with Q4 quantization (multiply budget by ~4 for Q4 capacity)
-3. If a highly-ranked model is slightly over budget, keep it with a "needs Q4" note — don't silently drop it
-
-**If no device was mentioned:** skip all size filtering — just rank by benchmark score.
-
-Then: rank by benchmark score (descending), keep top 5-8 models.
-
-Include proprietary models (GPT-4, Claude, Gemini) if they appear on leaderboards, but flag them as "API only / not self-hostable". If the user explicitly asked for local/open models only, exclude them.
-
----
-
-### Step 6: Output
+1. Parse the request (task + device → max parameter budget).
+2. Find relevant benchmark datasets via `/api/datasets?filter=benchmark:official`.
+3. Fetch top models from each leaderboard.
+4. Enrich with model metadata (`safetensors.total`, license).
+5. Filter by device budget and rank by benchmark score.
+6. Render comparison table + ask follow-up.
 
 ## Output
 
-Return the comparison table below to the user, with the recommended pick starred and per-device fit annotated.
-
-#### Comparison table
-
-```markdown
-| # | Model | Params | [Benchmark 1] | [Benchmark 2] | License | On device |
-|---|-------|--------|--------------|--------------|---------|-----------|
-| ⭐1 | [org/name](https://huggingface.co/org/name) | 7B | 85.2% | — | Apache 2.0 | Yes (fp16) |
-| 2 | [org/name](https://huggingface.co/org/name) | 13B | 83.1% | 71.5% | MIT | Q4 only |
-| 3 | [org/name](https://huggingface.co/org/name) | 70B | 90.0% | 81.0% | Llama | Too large |
-```
-
-- Link model names to `https://huggingface.co/<model_id>`
-- Use `—` for benchmarks where the model wasn't evaluated
-- Star the top recommended pick with ⭐
-- "On device" values: `Yes (fp16)`, `Q4 only`, `Too large`, `API only`
-
-#### Follow-up
-
-After presenting the table, ask the user: "Would you like to run **[top recommended model]**?"
-
-If they say yes, ask whether they'd prefer to:
-- **Run locally** — ask about their device if not already known, then give appropriate setup instructions
-- **Run on HF Jobs** — point them to the HF Jobs guide: https://huggingface.co/docs/huggingface_hub/en/guides/jobs
-
----
+Return the comparison table to the user with recommended pick starred and per-device fit annotated. See [leaderboard-workflow.md §Step 6](references/leaderboard-workflow.md) for the exact format.
 
 ## Error Handling
 
 - **Leaderboard not found**: skip, note "leaderboard unavailable" in output
 - **Model missing from hub_repo_details**: fall back to parsing size from model name
-- **No benchmarks found for task**: use the curated fallback table above, or try `hub_repo_search` with `filters=["<task>"]` sorted by `trendingScore`
-- **All leaderboards fail**: fall back to `hub_repo_search` for popular models tagged with the task, note that results are by popularity rather than benchmark score
+- **No benchmarks found for task**: try `hub_repo_search` with `filters=["<task>"]` sorted by `trendingScore`
+- **All leaderboards fail**: fall back to `hub_repo_search` for popular task-tagged models, flag results as popularity-ranked
 
 ## Examples
 
-**Example 1 — MacBook M2 16 GB, coding task:**
+**Input:** "best coding model for my M2 16 GB MacBook"
 
-Input: "best coding model for my M2 16 GB MacBook"
-Output: Comparison table ranking 5-8 candidates ≤ 8B fp16 / ≤ 32B Q4, scored across HumanEval + MBPP + MultiPL-E, with top pick starred.
+```bash
+curl -s "https://huggingface.co/api/datasets?filter=benchmark:official&limit=500" | jq '...'
+curl -s "https://huggingface.co/api/datasets/openai/humaneval/leaderboard" | jq '.[:15]'
+hf models info qwen/Qwen2.5-Coder-7B --json
+```
 
-**Example 2 — No device specified, math/reasoning:**
+**Output:**
 
-Input: "best open reasoning model for math"
-Output: Full leaderboard ranking across GSM8K + MATH benchmarks with proprietary models flagged "API only", no size filtering.
+```markdown
+| # | Model | Params | HumanEval | MBPP | License | On device |
+|---|-------|--------|-----------|------|---------|-----------|
+| ⭐1 | [qwen/Qwen2.5-Coder-7B](https://huggingface.co/qwen/Qwen2.5-Coder-7B) | 7B | 85.2% | 79.1% | Apache 2.0 | Yes (fp16) |
+| 2 | [deepseek-ai/deepseek-coder-13b](https://huggingface.co/deepseek-ai/deepseek-coder-13b) | 13B | 83.1% | 71.5% | MIT | Q4 only |
+```
 
 ## Resources
 
+- [leaderboard-workflow](references/leaderboard-workflow.md)
+  > Step 1: Parse the request · Step 2: Find relevant benchmark datasets · Step 3: Fetch top models from leaderboards · Step 4: Enrich with model metadata · Step 5: Filter and rank · Step 6: Output · Examples
 - HF benchmark datasets API: `https://huggingface.co/api/datasets?filter=benchmark:official`
 - HF model info API: `https://huggingface.co/api/models/<repo_id>`
 - HF Jobs guide: `https://huggingface.co/docs/huggingface_hub/en/guides/jobs`

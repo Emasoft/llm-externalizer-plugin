@@ -13,20 +13,11 @@ effort: medium
 
 ## Overview
 
-Run a per-file code scan through **OpenAI GPT-5.5 via the Codex CLI** instead of the MCP server's OpenRouter / local backends. Output is in the same shape as the existing `scan_folder` reports — per-batch markdown files under `$MAIN_ROOT/reports/llm-externalizer/` — so the existing parallel-fixer / serial-fixer agents work on the output without modification.
+Per-file code scan via OpenAI GPT-5.5 (Codex CLI) instead of OpenRouter/local. Output matches `scan_folder` shape — per-batch `.md` under `$MAIN_ROOT/reports/llm-externalizer/` — so existing fixers work unchanged.
 
-### When to trigger
+**Trigger when** user asks for Codex/GPT-5.5/"use my openai", wants to compare vs ensemble, or wants the loop-until-fixed workflow (TRDD-807c1e2d).
 
-- User explicitly asks for Codex / GPT-5.5 (the OpenAI model)
-- User says "use my codex quota" / "use my openai account"
-- User wants to compare GPT-5.5 findings against the OpenRouter ensemble or a local model
-- User wants the loop-until-fixed workflow (phase 2 — track TRDD-807c1e2d)
-
-### When NOT to trigger
-
-- User wants the OpenRouter ensemble or a local model → use the `llm-externalizer-scan` skill instead
-- User wants free / cheap scanning → use `--free` on the standard scan
-- User wants pure structural validation (no LLM) → use `claude plugin validate .`
+**Do NOT trigger** when user wants ensemble/local (→ `llm-externalizer-scan`), free scanning (→ `--free`), or structural validation (→ `claude plugin validate .`).
 
 ## Prerequisites
 
@@ -61,20 +52,9 @@ Each report is a sequence of `## File: <path>` sections matching the shape that 
 
 ## Error Handling
 
-### Limitations
+Limitations: prompts pinned in `scripts/codex/codex-scan-prompts.md` (don't edit); single-turn (no conversation state); heuristic rate-limit detection; phase 1 only (`--fix-loop` not implemented).
 
-- **GPT-5.5 prompts are pinned** in `scripts/codex/codex-scan-prompts.md`. Do NOT edit them — they are calibrated for OpenAI's response style and the wrapper's parser depends on the exact output shape. If you need a different prompt, write a new template file alongside this one.
-- **No conversation state.** Each Codex invocation is a single chat turn. Multi-turn refinement (clarifying questions, follow-ups) is not supported by this wrapper.
-- **Rate-limit detection is heuristic.** The wrapper greps Codex's stderr / stdout for known patterns (`rate limit`, `429`, `quota exceeded`, etc.). False positives trigger fallback (no real harm), false negatives leave the user with a cryptic Codex error.
-- **Phase 1 only.** Loop-until-fixed (`--fix-loop N`) is not yet implemented. Track TRDD-807c1e2d for the design.
-
-### Failure modes
-
-- **Codex not installed:** Wrapper prints installation instructions; aborts unless Opus fallback is enabled.
-- **Codex not authenticated:** Wrapper returns the Codex error verbatim. Tell the user to run `codex login`.
-- **`multi_agent` not in config:** Wrapper sets it automatically; logs the action to stderr.
-- **Codex rate-limited:** Wrapper falls back to Opus for the current batch and all remaining batches. Earlier batches that succeeded stay as Codex results — no rework.
-- **Both Codex and Opus fail:** Wrapper exits 2 with a stderr summary. No reports written for the failed batches.
+Failures: Codex not installed → installation instructions; not authenticated → `codex login`; `multi_agent` missing → wrapper sets it; rate-limited → Opus fallback for remaining batches; both fail → exit 2 with stderr.
 
 ## Examples
 

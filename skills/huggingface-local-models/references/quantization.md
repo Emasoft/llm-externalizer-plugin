@@ -2,18 +2,18 @@
 
 Complete guide to GGUF quantization formats and model conversion.
 
-## Contents
+## Table of Contents
 
-- Hub-first quant selection
-- Quantization Formats
-- Converting Models
-- K-Quantization Methods
-- Quality Testing
-- Use Case Guide
-- Model Size Scaling
-- Finding Pre-Quantized Models
-- Importance Matrices (`imatrix`)
-- Troubleshooting
+- [Hub-first quant selection](#hub-first-quant-selection)
+- [Quantization Formats](#quantization-formats)
+- [Converting Models](#converting-models)
+- [K-Quantization Methods](#k-quantization-methods)
+- [Quality Testing](#quality-testing)
+- [Use Case Guide](#use-case-guide)
+- [Model Size Scaling](#model-size-scaling)
+- [Finding Pre-Quantized Models](#finding-pre-quantized-models)
+- [Importance Matrices (`imatrix`)](#importance-matrices-imatrix)
+- [Troubleshooting](#troubleshooting)
 
 ## Hub-first quant selection
 

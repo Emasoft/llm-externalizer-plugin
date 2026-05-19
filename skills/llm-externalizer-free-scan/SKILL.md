@@ -25,34 +25,13 @@ Run a project scan using the **free** NVIDIA Nemotron 3 Super model (`nvidia/nem
 
 ## Instructions
 
-Copy this checklist and track your progress:
+1. Call `mcp__plugin_llm-externalizer_llm-externalizer__discover` to verify service online.
+2. Parse prompt for **folder_path** (default cwd), **extensions**, **exclude_dirs**, **instructions** (default: report real bugs only — logic, crashes, security exploits, data corruption, functionality mismatch; not missing error handling/null checks/validation/logging; cite functions + lines; terse).
+3. Call `mcp__plugin_llm-externalizer_llm-externalizer__scan_folder` with `free: true`, `use_gitignore: true`, plus parsed fields.
+4. Tool returns one report path per file. List them for the user.
+5. Remind user this is low-quality — suggest ensemble for thorough audit. Do NOT read/summarise reports.
 
-1. [ ] Call `mcp__plugin_llm-externalizer_llm-externalizer__discover` to verify service is online
-2. [ ] Parse the user's prompt for:
-   - **Folder path** — absolute path (starts with `/`), or use current working directory
-   - **File extensions** — e.g. `.ts`, `.py` → pass as `extensions`
-   - **Directories to skip** — e.g. "skip tests" → pass as `exclude_dirs`
-   - **Instructions** — everything else becomes the LLM task prompt
-3. [ ] Call `mcp__plugin_llm-externalizer_llm-externalizer__scan_folder` with:
-
-```json
-{
-  "folder_path": "<parsed path or cwd>",
-  "free": true,
-  "use_gitignore": true,
-  "extensions": "<if parsed from prompt>",
-  "exclude_dirs": "<if parsed from prompt>",
-  "instructions": "<parsed instructions or default: 'Report REAL bugs only — logic bugs, crashes, security vulnerabilities with exploit paths, data corruption, functionality mismatch. DO NOT report missing error handling / null checks / validation / logging (fail-fast is a valid style choice). Respect the source file coding style. Reference function names + line numbers. Be terse.'>"
-}
-```
-
-4. [ ] The tool returns one report path per file. List them for the user.
-5. [ ] Remind the user this is a low-quality free scan — suggest ensemble scan for thorough audit. **Do NOT read or summarise the report content** — only paths flow through the orchestrator (the same invariant every other llm-externalizer surface enforces). The user opens the reports themselves.
-
-## Limitations
-
-- `.md` files EXCLUDED by default — source-code rubric is wrong for prose. Pass `instructions` describing a semantic search to include them. Use CPV or `claude plugin validate .` for structural validation.
-- LLM sees only 1–5 files per request — CANNOT cross-check a ref in file A against file B. For cross-file API validation use `check_against_specs`. For "already implemented?" hunts use `search_existing_implementations`.
+Limitations: `.md` files EXCLUDED by default (pass `instructions` for semantic search). LLM sees only 1–5 files/request — no cross-file refs (`check_against_specs` or `search_existing_implementations`).
 
 ## Output
 

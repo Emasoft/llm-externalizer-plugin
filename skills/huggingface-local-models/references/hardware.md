@@ -1,11 +1,11 @@
 # Hardware Acceleration for llama.cpp
 
-## Contents
+## Table of Contents
 
-- Apple Silicon (Metal)
-- NVIDIA (CUDA)
-- AMD (ROCm)
-- CPU
+- [Apple Silicon (Metal)](#apple-silicon-metal)
+- [NVIDIA (CUDA)](#nvidia-cuda)
+- [AMD (ROCm)](#amd-rocm)
+- [CPU](#cpu)
 
 ## Hardware Acceleration
 

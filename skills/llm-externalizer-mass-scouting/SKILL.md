@@ -14,21 +14,9 @@ effort: medium
 
 ## Overview
 
-**This is the search-and-categorize tool for large file sets.** When you
-need to triage a corpus, classify a folder, build an inventory, or find
-which files match a topic — reach for mass-scouting instead of hand-rolling
-`grep` / `find` / regex filter scripts. A regex matches literal strings; the
-scout makes a real per-file classification judgement (e.g. "is this file
-actually about X?") that brittle keyword filters get wrong.
+Search-and-categorize for large file sets. Triage a corpus, classify a folder, build an inventory, or find which files match a topic. Reach for mass-scouting instead of hand-rolling `grep`/`find`/regex filters — the scout makes a per-file classification judgement that brittle keyword filters miss.
 
-Bulk LLM-driven structured-output file analysis. Point a cheap model
-(default `qwen/qwen-2.5-7b-instruct`) at hundreds-to-millions of files; get
-back a queryable SQLite registry of extractions defined by a per-call
-**dynamic JSON Schema**. Every response is forced through that schema via
-OpenRouter's `response_format: json_schema`.
-
-Use when the user wants the SAME shape of metadata from every file. For
-free-form prose, use the `chat` tool instead.
+Bulk LLM-driven structured-output analysis. Point a cheap model (default `qwen/qwen-2.5-7b-instruct`) at hundreds-to-millions of files; get back a queryable SQLite registry of extractions defined by a per-call **dynamic JSON Schema**. Use when the user wants the SAME shape of metadata from every file. For free-form prose, use the `chat` tool.
 
 ## Prerequisites
 
@@ -61,27 +49,9 @@ Follow-on tools: `jobs_list`, `audit_sample`, `body_get`,
 
 ## Output
 
-`mass_scout` writes ONE markdown report under
-`<main-repo-root>/reports/mass_scouting/<TIMESTAMP>-scout-<slug>.md` and
-returns the file path plus counts. Hand the path to the user — never
-re-print the report. Search/get/export emit JSON or JSONL/CSV.
+`mass_scout` writes ONE report under `<main-repo-root>/reports/mass_scouting/<TIMESTAMP>-scout-<slug>.md` and returns the path plus counts. Hand path to user; never re-print. Search/get/export emit JSON/JSONL/CSV. Pass `output_dir` explicitly to land in the user's project.
 
-The main-repo root is resolved from `CLAUDE_PROJECT_DIR`, then the
-enclosing git worktree. When you call the MCP tool, pass an explicit
-`output_dir` (`mass_scout` and `mass_scout_export` both accept it) so the
-report lands in the project the user is working on — otherwise a packaged
-MCP server can fall back to a path outside the project.
-
-## Token efficiency
-
-- Pass paths, never bodies. The registry reads bodies once at register
-  time and serves them from cache.
-- Prefer `bundled:<name>` over authoring JSON when a shipped set fits.
-- Restrict by `bucket` (sourcecode / documentation / …) so scout skips
-  binaries automatically.
-- Use `mass_scout_search` (regex / FTS5 / structured) instead of
-  `audit_sample` when you can — search returns matching rows only.
-- Pass `json: true` + `limit_per_job` / `limit_merged` on large queries.
+Token efficiency: pass paths not bodies; prefer `bundled:<name>` fieldsets; restrict by `bucket`; use `mass_scout_search` over `audit_sample`; pass `json: true` + `limit_*` on large queries.
 
 ## Error Handling
 

@@ -26,24 +26,15 @@ Codebase scan via the LLM Externalizer MCP server, active profile (default: `rem
 
 ## Instructions
 
-Copy this checklist and track your progress:
+1. Parse `$ARGUMENTS` for **target** (default `.`), **focus**, `free` flag.
+2. `mcp__llm-externalizer__discover`. Abort `[FAILED] — offline` if offline.
+3. Pick the tool: duplicate-check → `search_existing_implementations`; folder audit → `scan_folder` (`use_gitignore: true`, `answer_mode: 0`); ≤5 files → `code_task` (`answer_mode: 0`, `max_retries: 3`); glob → expand, then `code_task`.
+4. Call the tool. `free: true` only if asked (warn about prompt logging).
+5. Default rubric: bugs/crashes/security exploits/data corruption/local broken refs only. NOT missing error handling, null checks, validation, logging, style. Respect source style. Cite function names + lines.
+6. Collect report paths. Do NOT read/summarize.
+7. Return paths using Output format.
 
-1. [ ] Parse `$ARGUMENTS` for **target** (folder/file/glob, default `.`), **focus** (bugs/security/duplicate-check/etc.), **budget** (`free` flag if user asked).
-2. [ ] `mcp__llm-externalizer__discover`. Abort `[FAILED] — service offline` if offline.
-3. [ ] Pick the tool:
-   - **Duplicate check / "already implemented?"** → `search_existing_implementations` with `feature_description`, `folder_path`, and optional `source_files` / `diff_path`.
-   - **General audit on a folder** → `scan_folder` with `use_gitignore: true`, `answer_mode: 0`.
-   - **≤5 files** → `code_task` with `answer_mode: 0`, `max_retries: 3`.
-   - **Glob** → `Glob` to expand, then `code_task`.
-4. [ ] Call the tool. Pass `free: true` only if asked (warn about prompt logging first).
-5. [ ] Default rubric: *"Report REAL bugs only — logic errors, crashes, security with exploit paths, data corruption, functionality mismatch, local broken references. DO NOT report missing error handling / null checks / input validation / logging / style preferences / refactoring suggestions. Respect the source file's coding style. Cite function names + line numbers. Be terse."*
-6. [ ] Collect report paths. Do NOT read or summarize report contents.
-7. [ ] Return paths using the Output format below.
-
-## Limitations
-
-- `.md` files EXCLUDED by default. Pass `instructions` describing a semantic search to include them. Use CPV or `claude plugin validate .` for structural validation — not the LLM.
-- LLM sees only 1–5 files per request — CANNOT cross-check a ref in file A against file B. For cross-file API validation use `check_against_specs` with an explicit spec. For "already implemented?" hunts use `search_existing_implementations`.
+Limitations: `.md` files EXCLUDED by default (pass `instructions` for semantic search; structural validation → CPV). LLM sees only 1–5 files/request — no cross-file refs (use `check_against_specs` or `search_existing_implementations`).
 
 ## Output
 

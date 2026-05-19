@@ -39,19 +39,11 @@ Use when you need to analyze files without consuming orchestrator context, scan 
 
 ## Output
 
-**READ THIS — common misconception**: `answer_mode` controls how reports are written to disk, NOT how many files the LLM sees per request. The LLM **never** sees the whole set at once. Files are batched into requests of typically **1–5 files each** (FFD bin packing into ~400 KB batches, or one group per request when `---GROUP:id---` markers are supplied). In **ensemble** mode each file gets **3 responses** from 3 LLMs; in **free** and **local** mode each file gets **1 response**.
+`answer_mode` controls how reports are written to disk, NOT how many files the LLM sees. Files are batched 1–5 per request (FFD ~400 KB, or one group per request with `---GROUP:id---`). Ensemble = 3 responses/file; free + local = 1 response/file. Cross-file analysis across a whole codebase → `search_existing_implementations`.
 
-For cross-file analysis across a whole codebase use `search_existing_implementations` — each file is compared against a REFERENCE.
+Reports go under `<main-repo-root>/reports/llm-externalizer/` (always pass `output_dir`). Modes: `0`=per-file, `1`=per-group, `2`=merged. Defaults: `scan_folder`=0, others=2.
 
-Reports are `.md` files. The plugin's policy is to write them under `<main-repo-root>/reports/llm-externalizer/`; always pass an explicit `output_dir` matching that location on every tool call. The MCP server's compiled-in default `reports_dev/llm_externalizer/` is developer scratch — do not rely on it.
-
-**answer_mode : 0** — ONE REPORT PER FILE. One `.md` per input file; MCP splits each batch response by `## File:` markers. Best for per-file fan-out.
-
-**answer_mode : 1** — ONE REPORT PER GROUP. One `.md` per group. Without `---GROUP:id---` markers MCP auto-groups by subfolder → extension → namespace → basename → shared imports (max 1 MB per group). Best for per-module review.
-
-**answer_mode : 2** — SINGLE REPORT. Everything merged into one `.md`. Best for a top-level audit summary.
-
-Defaults: `scan_folder`=0, `chat` / `code_task` / `check_*`=2, `search_existing_implementations`=2.
+See [tool-reference.md](references/tool-reference.md) for the full answer_mode breakdown.
 
 ## Error Handling
 

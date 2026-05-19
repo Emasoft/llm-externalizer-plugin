@@ -2,15 +2,15 @@
 
 Use URL-only workflows first. Do not require `hf` or API clients just to find GGUF files, choose a quant, or build a `llama-server` command.
 
-## Contents
+## Table of Contents
 
-- Core URLs
-- Search for llama.cpp-compatible models
-- Use the local-app page for the recommended quant
-- Confirm exact files from the tree API
-- Build the command
-- Example: `unsloth/Qwen3.6-35B-A3B-GGUF`
-- Notes
+- [Core URLs](#core-urls)
+- [Search for llama.cpp-compatible models](#1-search-for-llamacpp-compatible-models)
+- [Use the local-app page for the recommended quant](#2-use-the-local-app-page-for-the-recommended-quant)
+- [Confirm exact files from the tree API](#3-confirm-exact-files-from-the-tree-api)
+- [Build the command](#4-build-the-command)
+- [Example: `unsloth/Qwen3.6-35B-A3B-GGUF`](#5-example-unsloth-qwen36-35b-a3b-gguf)
+- [Notes](#notes)
 
 ## Core URLs
 
