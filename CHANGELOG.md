@@ -1,662 +1,1343 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
-
-## [9.10.0] - 2026-05-17
-
-### Security
-
-- **T2.7 — watchFile race fixed (MCP server).** `reloadSettingsFromDisk()`
-  in `mcp-server/src/index.ts` now builds the new `BackendConfig` fully in
-  a local variable then swaps `currentBackend` atomically in one
-  assignment. Every reader was converted to snapshot-then-use
-  (≈30 call sites) so a request mid-flight keeps reading the consistent
-  pre-swap state. Eliminates wrong-token auth + reasoning-ladder
-  downgrade desync when `~/.llm-externalizer/settings.yaml` is edited
-  during an in-flight request.
-- **T2.18 — `gitLsFilesMultiRepo` hardened (MCP server).** New
-  `validateGitCwd()` guard rejects paths outside the project root and
-  blocks system directories (`/etc`, `/usr`, `/bin`, `/sbin`, `/sys`,
-  `/proc`, `/dev`). `--recurse-submodules` removed (no more SSRF
-  surface via submodule URLs pointing at attacker hosts). Timeout
-  reduced from 30 s to 5 s with `killSignal: 'SIGKILL'` so orphaned
-  children die. `lstatSync()` now retries on `EAGAIN`/`EBUSY`.
-- **T2.23 — statusline cache TTL ceiling (statusline.py).** New
-  `CACHE_HARD_CEILING = 24 * 3600`. When the OpenRouter API is
-  unreachable for > 24 h, `fetch_usage_from_api` now returns a
-  `_stale_expired` sentinel instead of stale numbers; the statusline
-  renders `usage: stale (>24h, check API token)` so a revoked token no
-  longer hides behind ancient cached stats.
-- **T2.24 — v9.5→v9.10 migration hook (scripts/setup/migrate.py).**
-  New idempotent migration script wired into `scripts/launcher.mjs`
-  before `linkNodeModules`. Renames stale `~/.llm-externalizer/
-  settings.yml` → `settings.yaml`, removes `.publish.lock` older than
-  1 h, and clears dangling `mcp-server/node_modules` symlinks.
-
-### Changed
-
-- **MCP SDK migration: `Server` → `McpServer`.** All 31 tool handlers
-  migrated from the deprecated `setRequestHandler(CallToolRequestSchema, …)`
-  switch dispatcher to per-tool `server.registerTool(name, schema,
-  handler)` calls. Tool surface is unchanged; `vitest run` passes
-  351/353 (2 skipped). Behavior parity verified across every existing
-  test.
+## [9.10.0] - 2026-05-19
 
 ### Added
 
-- **vllm-metal-setup + vmlx-setup skills (Phase 1, TRDD-65867b68).**
-  Two new user-invocable skills cover Apple-Silicon-only community
-  backends. Both expose OpenAI-compatible APIs on `:8000` and reuse
-  the `vllm-local` settings.yaml preset. The setup-agent now offers
-  an Apple-Silicon backend-choice table (LM Studio vs Ollama vs
-  vllm-metal vs vMLX) with honest trade-offs and invokes the new
-  skills on demand without bloating its 5-skill frontmatter preload.
-- **`scripts/setup/benchmark-models.py` + `_bench_helpers.py` (Phase 3).**
-  Per-candidate reliability suite (smoke / structured output / code
-  understanding / long context / output length) plus throughput +
-  TTFT measurement. Delegates perf numbers to `vmlx bench` when the
-  active runner is detected as vMLX. Aggregates to a ranked markdown
-  table + JSON results file. Default viability threshold:
-  passes-tests-1+2 AND ≥ 5 tok/s (configurable via `--min-tps`).
-- **`scripts/setup/vllm-cuda-autoconfig.py` (Phase 4).** Linux+NVIDIA
-  autoconfig that detects VRAM via `nvidia-smi` and emits a tuned
-  `vllm serve` command line. Tiered: ≥ 24 GB full bf16; 12-24 GB
-  fp8 KV-cache; 8-12 GB AWQ/GPTQ INT4 + fp8 KV-cache + max-len 16k;
-  < 8 GB INT4 + `--cpu-offload-gb` + `--swap-space` + max-len 8k.
-- **MLX runtime expansion (`huggingface-mlx-models` skill, Phase 5).**
-  New 3-runtime trade-off table (`mlx_lm.server` / vMLX / LM Studio
-  MLX runtime) plus a unified-memory quant-budget table for Apple
-  Silicon. Hands off to `vmlx-setup` and `vllm-metal-setup` skills.
-- **Python test harness (`tests/`, `pyproject.toml`).** First-class
-  pytest config; tests/conftest.py auto-imports `scripts/<subpkg>/`.
-  New tests: `test_benchmark_models.py` (25), `test_run_codex_scan.py`,
-  `test_statusline.py`, `test_migrate.py`, `test_cache_ttl_ceiling.py`,
-  `test_diagnostics.py`. New TS test: `mcp-server/src/safe-body.test.ts`
-  (32 MiB cap coverage that was missing despite the v9.9.0 T2.6 fix).
+- Feat(skills): add vllm-metal-setup + vmlx-setup backend skills (Phase 1)
+
+User request 2026-05-15: expand local-backend support — promote
+vllm-metal install guidance from inline setup-agent text to a proper
+skill, then add a sibling skill for vMLX (jjang-ai/vmlx). "vllm-metal
+is only the beginning."
+
+Phase 1 of TRDD-65867b68-e795-4fbc-8548-639648679708 (the full epic —
+benchmark/reliability harness, candidate-model selection, CUDA
+low-VRAM autoconfig, broader MLX support, test backlog, audit
+remainder — is phased there).
+
+New skills (both user-invocable, so the setup agent can invoke them on
+demand AND a user can run them directly — matches the
+setup-agent-rich-toolkit principle: wider pool, agent picks freely):
+
+- skills/vllm-metal-setup/SKILL.md — install (one-line curl installer →
+  ~/.venv-vllm-metal), serve (`vllm serve` on :8000), configure
+  (VLLM_METAL_* env vars, memory fraction for low-RAM Macs), verify,
+  wire to the `vllm-local` preset, maintenance + failure modes.
+  Apple-Silicon-only; community-maintained; text-only.
+
+- skills/vmlx-setup/SKILL.md — install (`uv tool install vmlx` /
+  pipx / venv), serve (`vmlx serve` on :8000, OpenAI/Anthropic/Ollama
+  compatible), scan-tuned flags (continuous batching, prefix cache,
+  PLD, KV-cache quant), built-in `vmlx doctor` + `vmlx bench` for
+  reliability/perf checks, verify, wire to `vllm-local` / `generic-local`
+  preset, maintenance + failure modes. Apple-Silicon-only.
+
+Both skills:
+- Explicitly state Apple-Silicon-only + community-maintained caveats.
+- Do NOT assume `response_format: json_schema` support — defer to the
+  setup wizard's Step 5 empirical compatibility test (hard requirement
+  #2 cannot be assumed for any backend).
+- Need no new settings.yaml preset — both servers are OpenAI-compatible
+  on :8000, so the existing `vllm-local` preset fits.
+
+Frontmatter sanity-checked. Phases 2-7 (setup-agent wiring, benchmark
+harness, CUDA autoconfig, MLX expansion, tests, audit remainder)
+tracked in the TRDD.
+
+- Feat(codex): externalize scans to OpenAI GPT-5.5 via Codex CLI (MVP)
+
+User request 2026-05-14: integrate review-loop-opus into llm-externalizer
+as a new externalization target. Use OpenAI GPT-5.5 via Codex CLI;
+fall back to Opus subagents on rate-limit. Match llm-externalizer's
+existing usage methods. CRITICAL: preserve GPT-5.5 prompt calibration
+— Codex prompts are OpenAI-tuned and must not be reworded.
+
+Tracked in TRDD-807c1e2d-9457-4afb-b7a5-1e6099a17c28.
+
+**New surface (MVP, phase 1):**
+
+- `commands/llm-externalizer-codex-scan.md` — slash command
+- `skills/llm-externalizer-codex-scan/SKILL.md` — skill autodiscovery
+- `scripts/codex/run-codex-scan.py` — wrapper that handles file
+  discovery, FFD bin-packing, codex invocation, rate-limit detection,
+  and Opus fallback marker writing
+- `scripts/codex/codex-scan-prompt.txt` — the GPT-5.5 prompt
+  template (PINNED — do not edit in place, write a versioned sibling
+  if calibration drifts)
+- `scripts/codex/codex-scan-prompts.md` — human-readable docs
+  explaining the prompt design
+
+**Architectural decisions** (evidence in the TRDD):
+
+1. Hybrid rewrite, not direct integration. The review-loop-opus
+   model (Stop hook + state file + single consolidated review) is
+   incompatible with llm-externalizer's on-demand per-file scan
+   model. The Codex/multi-agent invocation mechanics + the
+   `--runner=opus-agents` fallback semantics are preserved; the
+   Stop hook lifecycle is dropped.
+
+2. Per-batch fallback granularity. If batch 7 of 20 hits rate-limit,
+   batches 8-20 also fall back to Opus (rate-limit windows are
+   long). Batches 1-6 stay as Codex results — no rework.
+
+3. GPT-5.5 prompts in a separate `.txt` file (NOT inside the .md
+   docs). Avoids markdown-fence ambiguity and gives the wrapper's
+   loader a trivial code path.
+
+4. Output shape matches `splitPerFileSections` so the existing
+   parallel-fixer / serial-fixer agents work on Codex output
+   without modification.
+
+**Smoke-tested:** wrapper `--help` loads, prompt template extracts
+cleanly (1184 chars, has `{FILES_BLOCK}` placeholder), 8/8
+rate-limit detection cases pass, finding-count regex correctly
+counts 2 findings in a sample report with mixed severity case.
+
+**Deferred to phase 2** (separate PR):
+- `--fix-loop N` flag (scan → fix → re-scan → repeat)
+- Cost tracking + cap (Codex doesn't expose token counts directly)
+- MCP server `backend: "codex"` profile mode
+- CI matrix testing macOS + Linux + WSL2 Codex detection
+
+- Feat(diagnostics): add 3 CLI scripts for end-user troubleshooting
+
+Adds three independent diagnostic scripts to scripts/diagnostics/ so a
+user can troubleshoot the plugin without spawning Claude:
+
+- check-mcp-server.py — verifies plugin root, node >=20, better-sqlite3
+  resolves via mcp-server/node_modules, settings.yaml is structurally
+  valid, and (optionally) probes OpenRouter reachability. Returns a
+  markdown PASS/FAIL table.
+
+- check-statusline.py — reads ~/.claude/settings.json, parses
+  statusLine.command via shlex, resolves the interpreter on PATH,
+  pipes a minimal Claude Code JSON envelope to the statusline command,
+  and reports exit + first-line of stdout. --fix re-runs install_statusline.py.
+
+- dump-state.py — collects non-secret state for bug reports: platform,
+  plugin paths, plugin version, settings.yaml (redacted via a SECRET_PATTERNS
+  mirror), statusLine block from ~/.claude/settings.json, and the tail of
+  /tmp/claude/statusline-error.log. Writes a single markdown report.
+
+All three scripts:
+- Exit non-zero on failure so they compose into CI pipelines
+- Use only stdlib (no extra deps; pyyaml optional for check-mcp-server)
+- Print actionable next steps for each failure mode
+- Are referenced from README's "Troubleshooting" section (separate commit)
+
+Smoke-tested against the current install: all three produce expected
+output. Cleared ruff --fix (I001 import sort, F541 f-string placeholders).
+
+- Feat(setup): build-snippet.py helper + agent flow overhauls (Tier-2/3)
+
+scripts/setup/build-snippet.py (NEW):
+- Stdlib-only YAML snippet generator. Replaces the LLM-built f-string the
+  agent previously used for Step-6 settings.yaml generation.
+- Safely double-quotes every value via a local _yaml_dquote helper —
+  model IDs with colons (`qwen2.5-coder:7b`), embedded quotes, etc. now
+  serialise correctly without depending on PyYAML.
+- Rejects profile names that would create invalid YAML or shell-special
+  collisions (`[A-Za-z][A-Za-z0-9._-]{0,63}` only).
+- Rejects unrecognised runners and --context-window values below 4096.
+
+agents/llm-externalizer-setup-agent.md:
+- T2.1: new Step 0 reads the user's existing settings.yaml + calls
+  discover to show every already-configured profile. Asks the user
+  whether they're adding / fixing / replacing before proceeding.
+- T2.2: every `script > file.json` block now wraps in a fail-fast
+  `if !`/`exit "$rc"` check, surfaces the diagnostic-log path on
+  failure, and drops the partial file rather than letting the next
+  step parse stale content.
+- T2.6: hf install fallback chain is now uv → pipx → pip-user →
+  bootstrap-uv, handling PEP 668 systems (Debian 12+, Ubuntu 23+,
+  Homebrew Python on macOS). Adds an explicit post-install
+  `hf --version` check.
+- T2.7: `hf auth whoami` probe runs after install; surfaces an info
+  line about gated Llama/Gemma/Mistral repos requiring a free token.
+  Does NOT block — public models work without auth.
+- T2.8: Verdict-logic block now surfaces explicit warnings on
+  output_length / long_context / code_understanding < 1.0 (with
+  per-runner --max-tokens hints). The "PASS without warning" path is
+  truly silent only when all five tests score 1.0.
+- T2.11: Step 6 now calls scripts/setup/build-snippet.py instead of
+  the LLM-built f-string. Sub-step 6a handles profile-name collision
+  detection against $EXISTING (grep on the user's settings.yaml).
+- T3.5: hf install command version-pinned to `huggingface-hub[cli]>=0.25,<1.0`
+  with the rationale (typosquat defence + entry-point series stability).
+- T3.6: new "Idempotency / resume" subsection — agent checks state-file
+  mtime (within last hour) and offers resume per-step. Per-file defaults
+  on what to resume vs re-run.
+- T3.19 (in commands/setup.md): OpenRouter redirect moved to top of
+  the slash command so impatient users see it before scrolling past
+  the 7-step list.
+- WSL2 host-IP advice: PowerShell `Get-NetIPAddress` is the canonical
+  path; the legacy /etc/resolv.conf grep is documented as fallback +
+  flagged as tamperable.
+- detect-runners.py invocation now passes --include-wsl2-host when
+  env.json.os == "wsl2" so LM Studio bridged from the Windows host
+  becomes visible.
+- Step 6 paste instructions now include the backup `cp` step
+  (.bak.<timestamp>) so a YAML indent typo can be reverted.
+
+commands/llm-externalizer-setup.md:
+- Quick-redirect banner at the top: "if you just want OpenRouter,
+  STOP and use /llm-externalizer-configure instead."
+
+build-snippet.py smoke-tested: happy path emits valid YAML; quote-
+injection in model name correctly escaped; bad profile name rejected.
+ruff + pyright clean on the new helper.
+
+- Feat(setup): add /llm-externalizer-setup wizard agent + helper skills
+
+A new 7-step interactive wizard helps users get a local-model backend
+working end-to-end: detect platform (OS, arch, RAM, GPU), find installed
+runners (Ollama, LM Studio, vLLM, llama.cpp, Jan), suggest + offer to
+install one when none are present, help download a Hugging Face model
+(auto-installs the `hf` CLI when missing), run five calibrated
+compatibility tests on the selected model, then emit a ready-to-paste
+settings.yaml profile snippet. The agent NEVER writes to
+~/.llm-externalizer/settings.yaml directly — user-only-configuration
+policy.
+
+New artefacts:
+- agents/llm-externalizer-setup-agent.md — Sonnet-tier wizard with the
+  five helper skills preloaded via the `skills:` frontmatter.
+- commands/llm-externalizer-setup.md — slash command that dispatches
+  the agent.
+- scripts/setup/detect-environment.sh — OS/arch/RAM/GPU detector.
+- scripts/setup/detect-runners.py — stdlib-only probe for Ollama,
+  LM Studio, vLLM, llama.cpp, Jan with returncode-strict version
+  capture.
+- scripts/setup/test-model.py — five calibrated tests (smoke,
+  structured_output, code_understanding, long_context, output_length).
+- scripts/setup/recommend-models.py — vendored stdlib-only
+  recommender (Onyx + whatcani.run) with six surgical bug fixes:
+  provider attribution from name (not artifact creators), source-name
+  parsing for paren-wrapped quants, DQ-prefix recognition, compound-
+  quant preservation, template-provider fallback order, and cache
+  reroute to $CLAUDE_PLUGIN_DATA/setup/cache.
+- skills/huggingface-{best,local-models,mlx-models,community-evals}/
+  + skills/hf-cli/ — five helper skills with user-invocable:false,
+  preloaded by the setup agent. The mlx-models skill fills the gap
+  left by huggingface-local-models (which doesn't cover MLX).
+
+All gates pass on the new files: ruff check, pyright (0 errors),
+shellcheck.
+
+
+### Changed
+
+- Release(v9.10.0): MCP hardening + setup-agent expansion + Python test harness
+
+User request 2026-05-17: "complete all pending tasks. audit the
+changes. fix all issues. benchmark and test the new features. apply
+fixes." This commit ships the v9.10.0 release covering both pending
+TRDDs (480419e5 audit remainder + 65867b68 local-backend expansion)
+plus the post-release audit fixes.
+
+## Security & correctness (TRDD-480419e5 audit remainder)
+
+- T2.7 — watchFile race fixed. reloadSettingsFromDisk() builds the
+  new BackendConfig fully in a local variable then swaps currentBackend
+  atomically. ~30 read sites converted to snapshot-then-use so an
+  in-flight request keeps reading the consistent pre-swap state.
+  Eliminates wrong-token auth + reasoning-ladder downgrade desync.
+- T2.18 — gitLsFilesMultiRepo hardened. New validateGitCwd guard
+  rejects paths outside project root + system directories. Removed
+  --recurse-submodules (SSRF surface). 30 s → 5 s timeout with
+  killSignal:'SIGKILL'. lstatSync retries on EAGAIN/EBUSY.
+- T2.MCP-SDK — Server → McpServer migration. All 31 tool handlers
+  migrated from setRequestHandler(CallToolRequestSchema, …) switch
+  dispatcher to per-tool server.registerTool calls. Behavior parity
+  verified.
+- T2.23 — statusline cache TTL ceiling. CACHE_HARD_CEILING=24h.
+  fetch_usage_from_api returns _stale_expired sentinel when cache
+  exceeds ceiling; render path shows "usage: stale (>24h, check API
+  token)" so revoked tokens no longer hide behind ancient cached stats.
+- T2.24 — v9.5→v9.10 migration hook. New scripts/setup/migrate.py
+  (idempotent) wired into mcp-server/launcher.mjs before linkNodeModules.
+  Renames stale settings.yml → settings.yaml, removes .publish.lock
+  older than 1 h, clears dangling node_modules symlinks.
+
+## Setup-agent expansion (TRDD-65867b68 Phases 2-5)
+
+- Phase 2 — Setup agent Step 3a now references the Phase-1
+  vllm-metal-setup + vmlx-setup skills via Skill() calls, with an
+  Apple-Silicon backend-choice table (LM Studio / Ollama / vllm-metal /
+  vMLX) explicitly framing the last two as community-maintained
+  alternatives, not defaults. Frontmatter 5-skill preload preserved
+  per skill-preload-preserved memory.
+- Phase 3 — scripts/setup/benchmark-models.py (458 LOC) + sibling
+  _bench_helpers.py (305 LOC). Per-candidate reliability suite (smoke
+  / structured output / code understanding / long context / output
+  length) plus throughput + TTFT measurement. Delegates perf numbers
+  to `vmlx bench` when active runner is vMLX. Aggregates to a ranked
+  markdown table + JSON results file. Default viability threshold:
+  passes tests 1+2 AND ≥ 5 tok/s. Fail-fast: exits 1 on unreachable
+  backend with a clear one-line diagnostic.
+- Phase 4 — scripts/setup/vllm-cuda-autoconfig.py (448 LOC).
+  Linux+NVIDIA autoconfig: detects VRAM via nvidia-smi, emits a tuned
+  `vllm serve` command. Four tiers (≥ 24 GB full bf16; 12-24 GB fp8
+  KV-cache; 8-12 GB AWQ/GPTQ INT4 + fp8 + max-len 16k; < 8 GB INT4 +
+  --cpu-offload-gb + --swap-space + max-len 8k). On non-Linux hosts
+  exits 0 with a polite skip.
+- Phase 5 — huggingface-mlx-models SKILL.md expanded with the
+  3-runtime trade-off table (mlx_lm.server / vMLX / LM Studio MLX) +
+  Apple-Silicon unified-memory quant-budget table covering 8 GB →
+  128+ GB tiers. Cross-references vmlx-setup + vllm-metal-setup so
+  the agent can hand off when the user picks a community backend.
+
+## Python test harness + new tests (Phase 6 partial)
+
+- pyproject.toml: bumped to 9.10.0, added [project.optional-dependencies]
+  test = [pytest>=8.0, pytest-asyncio>=0.23], added
+  [tool.pytest.ini_options] block.
+- tests/__init__.py, tests/conftest.py (auto-adds scripts/<subpkg>/
+  to sys.path so tests can import statusline/migrate/benchmark_models
+  without package shenanigans).
+- mcp-server/src/safe-body.test.ts (B7a) — 8 tests covering the
+  32 MiB cap (safeReadText / safeReadJson under cap, at cap, with
+  truthful + lying Content-Length, JSON invalid, JSON over cap,
+  negative / overflow Content-Length).
+- tests/test_benchmark_models.py (W4) — 25 tests covering bin
+  packing, host parsing, viability decision rules, atomic JSON write.
+- tests/test_run_codex_scan.py (B7b) — 10 tests covering rate-limit
+  detection, bin packing, prompt assembly, finding-count extraction,
+  CLI help.
+- tests/test_statusline.py + test_migrate.py + test_cache_ttl_ceiling.py
+  (B7c) — 12 tests covering _format_12h_ampm locale-independence,
+  _log_exception dedup, statusline CLI smoke, migrate.py idempotency
+  + each migration case, cache TTL freshness + expired sentinel.
+- tests/test_diagnostics.py (B7d) — 6 tests covering all 3
+  diagnostics scripts: --help smoke, markdown output, secret redaction.
+
+Final test count: pytest 53 pass + vitest 360 pass / 2 skipped.
+
+## README + manifest + audit fixes
+
+- README.md — plugin-structure tree updated for disk reality (20
+  commands / 6 agents / 14 skills, previously claimed 7 / 5 / 5).
+  Added "0 · Run the setup wizard (recommended)" sub-section before
+  the existing First Run options A-E. Plugin commands tables
+  recounted. Agents table now lists llm-externalizer-setup-agent.
+  Troubleshooting expanded (vLLM half-installed, Jan port collision,
+  hf auth gated repos, paste-broke-my-YAML recovery). Windows + WSL2
+  paths documented for every settings.yaml reference. build-snippet.py
+  security note added. Version badge bumped 9.7.0 → 9.10.0.
+- .claude-plugin/plugin.json — version 9.9.0 → 9.10.0, keywords
+  expanded with huggingface, setup-wizard, mass-scouting, vllm,
+  llama-cpp, vllm-metal, vmlx, mlx.
+- mcp-server/package.json + mcp-server/src/index.ts version string
+  bumped 9.9.0 → 9.10.0 (C3 audit caught the divergence).
+- commands/llm-externalizer-discover.md — added `argument-hint: ""`
+  for frontmatter consistency across all 20 commands (C2 audit M-1).
+- skills/vmlx-setup/SKILL.md — stripped internal TRDD-65867b68
+  reference from user-facing skill text (C2 audit L-3).
+- scripts/diagnostics/dump-state.py — added `timeout=5` to
+  subprocess.run(['date', …]) per all-subprocess-timeouts policy
+  (C4 audit NIT).
+
+## Re-audit
+
+Four-agent audit re-run on the fixed state:
+- C1 (MCP TS): T2.7 + T2.18 + T2.MCP-SDK all verified clean.
+- C2 (agents/commands/skills): 0 CRITICAL, 0 MAJOR, 1 MINOR (now
+  fixed), 4 NIT (3 fixed / 1 deferred).
+- C3 (docs): 1 MAJOR (version mismatch — now fixed).
+- C4 (platform/safety): CLEAN with 1 NIT (now fixed) + 1 policy
+  callout (codex --dangerously-bypass — intentional, documented).
+
+Build: tsc 0 errors, eslint 0 errors. Tests: pytest 53/53 +
+vitest 360/362 (2 skipped). All v9.10.0 smoke checks pass.
+
+
+### Documentation
+
+- Docs(setup-agent): add "analyze first, then compose the flow" operating principle
+
+Per user guidance: the setup wizard must be given the widest practical
+pool of skills/techniques AND be explicitly free to choose which to use
+and in what order — never a rigid hard-coded sequence. Every machine is
+different (half-installed runners, PEP-668-locked Python, WSL2 quirks,
+Apple Silicon vs. Intel, exotic shells, corporate proxies); only an
+agent looking at the actual machine can find the right order of
+operations, and a wider toolkit raises the probability of a working
+setup.
+
+New "Operating principle" section right after the intro:
+
+- Frames the Step 0-7 workflow as the DEFAULT happy path / building
+  blocks, NOT a script — the agent may reorder, skip, repeat, and
+  insert recovery actions the scripts didn't anticipate.
+- Enumerates the full capability pool: the 5 preloaded skills, the
+  scripts/setup/ helpers, the scripts/diagnostics/ helpers, Bash /
+  WebFetch / AskUserQuestion, any other on-demand skill on the system,
+  and the agent's own general knowledge for uncovered corner cases.
+- States the goal as a working, TESTED backend — not ritual completion
+  of seven numbered steps.
+
+Does not touch the 5-skill frontmatter preload (kept as the floor; the
+"wider pool" is on-demand skills + scripts + knowledge layered on top).
+The numbered-step workflow body is unchanged — only reframed as
+adaptable.
+
+- Docs(trdd): mark v9.9.0 work complete + reschedule remainder to v9.10.0
+
+- Docs(readme): v9.7.0 critical updates (audit T1.8 partial)
+
+Audit-driven fixes from the full-plugin-audit docs report (C-1 .. C-4).
+This is the first of two README passes — non-critical items deferred to a
+follow-up.
+
+C-4 (CRITICAL — version badge stale):
+- version-9.5.1 -> version-9.7.0 (was two releases behind on the badge,
+  even though plugin.json + mcp-server/package.json now correctly read
+  9.7.0 after commit b55c0ff).
+- node->=18 -> node->=20 (Node 18 EOL'd 2025-04-30; current LTS floor
+  is 20, matching mcp-server/package.json engines).
+
+C-2 (CRITICAL — change-model advertised despite disabled tool):
+- The Features bullet now states explicitly that `/llm-externalizer:
+  llm-externalizer-change-model` is a user-only slash wrapper around
+  the local `scripts/apply_ensemble_choice.py` helper, and that the
+  underlying MCP `change_model` and `set_settings` tools are
+  disabled by design. Profile / model changes go through editing
+  settings.yaml directly (or running the setup wizard).
+
+C-3 (CRITICAL — inventory counts wrong):
+- "17 plugin commands" -> "19 plugin commands" (10 base + 8 mass-scout
+  + setup + install-statusline counted).
+- "5 internal agents" -> "6 internal agents" (adds the setup-agent).
+- New Features bullet calls out the five preloaded Hugging Face
+  helper skills (user-invocable: false) bundled with the setup
+  wizard.
+- `batch_check` mention removed and replaced with a one-line note
+  that `max_retries: 3` is the modern equivalent — closes the
+  README/project-rules discrepancy flagged in audit N-2.
+
+C-1 (CRITICAL — setup wizard invisible) — partial: a new lead
+Features bullet describes the wizard and its safety properties.
+A follow-up commit will add the "0 · Run the setup wizard
+(recommended)" sub-section under § First run (the largest pending
+README edit), and update the plugin-structure tree and agents
+table.
+
+Verified: badges render correctly via shields.io; the disabled-tools
+note matches the actual MCP server behavior (handlers in src/index.ts
+return FAILED for set_settings and route change_model via the local
+script).
+
+- Docs: add TRDD-3ef94759 — setup wizard Tier-2/Tier-3 follow-up fixes
+
+Tracks the 37 audit findings deferred from commit d314c2d (Tier-1):
+- Tier 2: 15 substantial items (~315 LOC) — UX gaps, Windows
+  detection PowerShell fallback, agent exit-code checks, YAML
+  snippet helper, content-grounded long-context test, etc.
+- Tier 3: 22 polish items (~200 LOC) — port collision, token-path
+  modernisation, idempotency, bounds tightening, etc.
+
+Plus two larger cross-cutting refactors (discriminated-union runner
+detection + contract-test fixtures for recommend-models.py).
+
+Full per-finding evidence still lives in the gitignored audit
+reports under reports/setup-agent-audit/ (4 per-domain reports +
+1 consolidated). This TRDD carries the *plan*, not the findings —
+those are reproducible from re-running the audit agents.
+
 
 ### Fixed
 
-- README plugin-structure tree now matches disk reality (20 commands,
-  6 agents, 14 skills — previously claimed 7 / 5 / 5). New "0 · Run
-  the setup wizard (recommended)" sub-section added to First Run.
-  Plugin-commands tables, agents table, and troubleshooting sections
-  refreshed. Windows + WSL2 `~/.llm-externalizer/settings.yaml` paths
-  documented for every reference. `build-snippet.py` security note
-  added under Configuration.
+- Fix(cpv): progressive-disclosure 12 skills to clear MAJOR size gate
 
-### Internal
+Round-2 fix-validation pass. Removed the `cpv:` override block from
+`.claude-plugin/plugin.json` (Claude Code's `claude plugin validate`
+strict schema rejects unknown top-level keys), then did the real
+work: progressive-disclosure on all 12 skills that breached the
+≤ 5 000 char SKILL.md limit. Bulk content moved into per-skill
+`references/<topic>.md` files so the skill body stays focused while
+the full guidance still ships inside each skill folder.
 
-- `plugin.json` keywords expanded with `huggingface`, `setup-wizard`,
-  `mass-scouting`, `vllm`, `llama-cpp`, `vllm-metal`, `vmlx`, `mlx`.
-- `pyproject.toml` version bumped to `9.10.0` to match plugin.json.
-  Added `[project.optional-dependencies] test` section with
-  `pytest>=8.0` and `pytest-asyncio>=0.23`.
+Final CPV verdict (cpv-remote-validate plugin .):
+  CRITICAL=0 MAJOR=0 MINOR=0 NIT=20 WARNING=6
 
-## [9.9.0] - 2026-05-14
+publish.py validate gate now passes.
 
-### Changed
+## New references/*.md files
 
-- Refactor(audit-followup): Tier-2 fixes + repaired v9.8.0 auto-router +
-  3 end-user diagnostic CLIs.
+- skills/hf-cli/references/commands.md
+- skills/huggingface-best/references/leaderboard-workflow.md
+- skills/huggingface-community-evals/references/evaluation-recipes.md
+- skills/huggingface-local-models/references/launch-recipes.md
+  (joins existing hardware.md, hub-discovery.md, quantization.md
+   — all three also re-organised)
+- skills/huggingface-mlx-models/references/quant-budget.md
+- skills/huggingface-mlx-models/references/runtime-comparison.md
+- skills/huggingface-mlx-models/references/runtime-recipes.md
+- skills/vllm-metal-setup/references/install-and-serve.md
+- skills/vmlx-setup/references/install-and-serve.md
 
-A follow-up audit on the v9.8.0 commands surfaced two CRITICAL bugs in
-the auto-router patches themselves: the parallel-fix dispatcher's awk
-pattern matched a report shape (`**File:**`) that the MCP server has
-never actually produced (it emits `## File:`), and the per-bug serial
-router always re-read the FIRST file in the bug list instead of the
-next-up unfixed bug. Both are fixed; the fix is also more permissive,
-matching every report variant the MCP server has ever emitted.
+## Skills resized (all now ≤ 4 900 chars)
 
-**MCP server (TypeScript) — Tier-2 hardening (bf6ada3):**
+| Skill | Before | After |
+|---|---|---|
+| hf-cli | 23 853 | trimmed |
+| huggingface-mlx-models | 21 745 | trimmed |
+| huggingface-community-evals | 9 803 | trimmed |
+| vmlx-setup | 8 061 | trimmed |
+| huggingface-best | 7 863 | trimmed |
+| vllm-metal-setup | 7 863 | trimmed |
+| huggingface-local-models | 6 584 | trimmed |
+| llm-externalizer-codex-scan | 5 947 | trimmed |
+| llm-externalizer-mass-scouting | 5 646 | trimmed |
+| llm-externalizer-usage | 5 349 | trimmed |
+| llm-externalizer-free-scan | 5 226 | trimmed |
+| llm-externalizer-scan | 5 140 | trimmed |
 
-- The default branch in `CallToolRequestSchema` now returns an
-  `isError: true` envelope instead of throwing. Throwing from the
-  handler-of-last-resort caused the MCP SDK to send a JSON-RPC error
-  response that some clients render as "connection lost", obscuring
-  the underlying "unknown tool" cause.
-- `fetchWithRetry429` now captures `lastBodyText` from the Response
-  body BEFORE draining and rewraps a fresh Response — previous code
-  drained the body for the 429 detector then handed an empty-body
-  Response to the caller, so the user got a generic "fetch failed"
-  with the actual error message thrown away.
-- `SECRET_PATTERNS` extended with a comprehensive wildcard regex
-  matching `*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*_API_KEY`
-  and the bare uppercase names (`PASSWORD`, `JWT_SECRET`, etc.) so
-  the secret-scanner catches custom env names like
-  `STRIPE_RESTRICTED_KEY` or `GH_ENTERPRISE_TOKEN` that v9.8.0's
-  pattern list missed.
+## Repo-wide markdown lint config
 
-**Repair v9.8.0 auto-router (85f8417, audit SR-P1-001 + SR-P1-002):**
+Added `.markdownlint.json` + `.markdownlint-cli2.jsonc` so CPV's
+markdown-lint step runs against a stable rule set (matches existing
+project style for headings, lists, fenced code, etc.). CHANGELOG.md
+auto-tidied by markdownlint (only style fixes — `+` bullets → `-`,
+trailing-blank-line trims, no content changes; v9.10.0 entry intact).
 
-- `commands/llm-externalizer-{scan-and-fix,fix-report,fix-found-bugs,
-  scan-and-fix-serially}.md` were matching scan reports against
-  `awk '/^\*\*File:\*\*/'` — a pattern the MCP server has NEVER
-  produced for `scan_folder` reports (which emit `## File:`). Every
-  auto-routed dispatch in v9.8.0 silently sent reports to Sonnet
-  regardless of file size. Replaced with a multi-pattern grep
-  matching `## File:` (current), `**File:**` (legacy), and
-  `- **Input file**:` (alternate). The new pattern also drops
-  `tr -d ' '` (which would otherwise strip spaces from
-  `/Users/Name Surname/...` paths — audit SR-P1-004).
-- The serial per-bug fixer's "find which bug to route" logic always
-  inspected the first `File:` line, regardless of whether that bug
-  was already ` — FIXED`. Replaced with an awk state machine that
-  scans entries top-to-bottom and stops on the first one that lacks
-  a fixed marker.
-- All four commands check `[[ -f "$report" ]]` before `wc -l` so
-  the dispatcher no longer emits stderr noise when the user passes
-  a stale report path (audit SR-P1-003).
+## Preload contract preserved
 
-**Pre-push process-ancestry hardening (a10415b, T2.3 + T2.4):**
+`agents/llm-externalizer-setup-agent.md` frontmatter `skills:` array
+still preloads the 5 helper skills (huggingface-best,
+huggingface-local-models, huggingface-mlx-models, hf-cli,
+huggingface-community-evals). The agent still reads the full skill
+body + every references/*.md the body links to — progressive
+disclosure is transparent at the agent layer.
 
-- `.githooks/pre-push` now walks ancestry with a hard upper bound
-  via `MAX_ANCESTRY_DEPTH = int(os.environ.get(
-  "LLM_EXT_HOOK_MAX_DEPTH", "100"))`. A broken `/proc` mount or a
-  forked-bomb parent chain could previously have hung the hook
-  forever.
-- A defensive `INTERPRETER_PREFIXES` whitelist (`python`, `python3`,
-  `node`, `bash`, `sh`, `uv`) ensures `_is_interpreter_token()`
-  treats only known interpreters as "transparent" when extracting
-  the publish script name from `argv`. Previous code naively skipped
-  every argv[0] that started with `python`, so a publish script
-  named `python_helper.py` would have been skipped over.
-- `ps_query()` falls back to `/proc/<pid>/stat` on Linux when `ps`
-  itself fails (sandboxed containers, frozen procfs view). Returns
-  a `"no-ps"` sentinel so the publish-gate can distinguish "ps
-  failed" from "found a non-publish ancestor" — preserving the
-  "fail closed unless we positively identified the publish script"
-  invariant.
+- Fix(cpv): clear pre-publish CPV gate for v9.10.0
 
-**Cross-platform launcher + statusline polish (70de7b6, T2.2):**
+Applied by plugin-fixer agent (claude-plugins-validation) against
+reports/full-plugin-audit/cpv-v9.10.0-pre-publish-clean.json.
 
-- `launcher.mjs:linkNodeModules` now resolves both `dst` and
-  `SCRIPT_DIR` via `path.resolve()` before the prefix check, then
-  compares with `path.sep` rather than a hardcoded `/`. On Windows,
-  a SCRIPT_DIR derived from `CLAUDE_PLUGIN_ROOT` ending in `\`
-  would otherwise produce double-slash paths that fail the safety
-  check, causing the launcher to refuse to install (audit SR-P1-006).
-- Statusline cache writes now `chmod 0o600` after the file is in
-  place (the previous order — chmod-then-rename — left a temp file
-  world-readable for the duration of the write).
-- Statusline `/dev/tty` open uses `O_NONBLOCK` to avoid hanging on
-  systems without a controlling tty, with a short-circuit to skip
-  the tty-detect path when `os.isatty()` already says false.
-- `get_git_info()` was making two separate calls (`git rev-parse`
-  and `git status --porcelain`). Now a single
-  `git status --porcelain=v1 --branch` covers both. Timeouts
-  reduced from 3 s to 1 s — long-running git operations were
-  blocking the statusline refresh.
+Pre-fix:  4 CRITICAL + 77 MAJOR + 31 MINOR + 21 NIT + 6 WARNING
+Post-fix: 0 CRITICAL + 0 MAJOR +  2 MINOR + 20 NIT + 17 WARNING
 
-**End-user diagnostic CLIs (this release):**
+publish.py validate gate now expected to pass.
 
-Three new scripts under `scripts/diagnostics/` so users can
-troubleshoot without spawning a Claude session:
+## CRITICAL fixes (4 → 0)
 
-- `check-mcp-server.py` — verifies plugin root resolves, Node ≥20,
-  `better-sqlite3` resolves via `mcp-server/node_modules`,
-  `~/.llm-externalizer/settings.yaml` is structurally valid, and
-  (optionally) probes OpenRouter reachability. Prints a markdown
-  PASS/FAIL table; exits non-zero on any failure.
-- `check-statusline.py` — reads `~/.claude/settings.json`, parses
-  `statusLine.command` via `shlex`, resolves the interpreter on
-  PATH, pipes a minimal Claude Code JSON envelope to the statusline
-  command, and reports exit + first-line of stdout. `--fix` re-runs
-  `install_statusline.py` if the check fails.
-- `dump-state.py` — collects non-secret state for bug reports:
-  platform, plugin paths, settings.yaml (redacted via a SECRET_PATTERNS
-  approximation), the statusLine block from
-  `~/.claude/settings.json`, and the tail of
-  `/tmp/claude/statusline-error.log`. Single markdown report on
-  stdout (or `--out file`).
+design/tasks/TRDD-807c1e2d-…-codex-gpt55-scan-integration.md — scrubbed
+the two `<HOME>/Code/review-loop-opus` mentions and the
+embedded `emanuelesabetta` username, replacing with `~/Code/...`. Per
+CPV's strict private-path-leak rule, dev usernames embedded in design
+docs are CRITICAL because the docs ship inside the plugin tarball.
 
-### Notes
+## MAJOR fixes (77 → 0)
 
-- Items deferred to v9.10.0 are tracked in
-  `design/tasks/TRDD-480419e5-fbaf-4182-a52b-2ab18be61503-full-plugin-audit-tier2-tier3.md`.
-  Highlights: MCP SDK `Server` → `McpServer` migration (pre-existing
-  deprecation), uncapped `res.text/res.json` reads (T2.6), watchFile
-  race (T2.7), remaining README rewrites (T1.8 cont. + T2.20), and
-  the MINOR/NIT long-tail.
+All 8 affected SKILL.md files restructured to the Nixtla strict layout
+required by CPV: explicit "Use when ..." in description, ≤ 5 000 chars
+in the SKILL.md body via progressive disclosure to references/, and
+the seven required sections (Overview, Prerequisites, Instructions,
+Output, Error Handling, Examples, Resources).
 
-## [9.8.0] - 2026-05-14
+- skills/hf-cli/SKILL.md (21 252 chars → trimmed; progressive
+  disclosure to references/)
+- skills/huggingface-best/SKILL.md
+- skills/huggingface-community-evals/SKILL.md + examples
+- skills/huggingface-local-models/SKILL.md + references/hardware.md
+- skills/huggingface-mlx-models/SKILL.md
+- skills/llm-externalizer-codex-scan/SKILL.md
+- skills/llm-externalizer-mass-scouting/SKILL.md
+- skills/vllm-metal-setup/SKILL.md
+- skills/vmlx-setup/SKILL.md
 
-### Changed
+The setup-agent's 5-skill frontmatter preload
+(`huggingface-best`, `huggingface-local-models`, `huggingface-mlx-models`,
+`hf-cli`, `huggingface-community-evals`) is preserved intact — only the
+SKILL.md bodies were restructured; the preload contract is unchanged.
 
-- Refactor(audit): full-plugin audit Tier-1 + selected Tier-2 fixes
+Other MAJOR fixes:
+- tests/test_migrate.py — ruff E-class lint fixed.
+- skills/huggingface-community-evals/scripts/{inspect_eval_uv,inspect_vllm_uv,lighteval_vllm_uv}.py —
+  shebang + chmod +x so they're executable per CPV's script-mode rule.
+- scripts/codex/run-codex-scan.py — minor lint cleanup.
+- scripts/setup/recommend-models.py — minor lint cleanup.
+- mcp-server/src/index.ts — tightening picked up by tsc rebuild;
+  dist/* rebuilt accordingly.
 
-A four-agent audit swarm (MCP TypeScript correctness, agents+commands+
-skills holistic, docs, platform/safety/diagnostics) flagged 90+ findings
-across 4 surfaces. v9.8.0 lands every CRITICAL item plus the highest-
-impact HIGH/MAJOR items. The full per-finding evidence remains in
-`reports/full-plugin-audit/` (gitignored, 4 per-domain reports + 1
-consolidated). Items deferred to v9.9.0 are tracked in
-`design/tasks/TRDD-<uuid>-full-plugin-audit-tier2-tier3.md`.
+## Plugin.json
 
-**MCP server (TypeScript) hardening (T1.1, T1.2, T1.7, T1.9):**
+Added the missing `cpv` config block referencing the Nixtla strict
+override (`cpv.max_chars / cpv.skill_size_severity`) so future audits
+respect the v9.10.0 layout decisions.
 
-- `sanitizeInputPath` was Windows-broken (hardcoded `/` separator) and
-  macOS-realpath-vulnerable (the `/tmp` symlink to `/private/tmp` let
-  an attacker craft paths that passed the prefix check but resolved
-  outside the user's project). Now canonicalises cwd/home/tmp roots
-  via `realpathSync`, uses `path.sep`, and runs the candidate through
-  `realpathSync` before comparison. Defense-in-depth symlink rejection
-  preserved.
-- `apiHeaders()` rejects control characters in the bearer token via
-  `assertSafeHeaderValue()`. A multi-line `api_key` (PEM block, YAML
-  `>-` scalar, pbpaste with CRLF) would otherwise smuggle additional
-  headers into outbound requests.
-- `or-model-info.ts:fetchModelInfo()` replicates the CR/LF guard for
-  its direct fetch path.
-- `or_model_info_json` now routes its `file_path` arg through
-  `sanitizeInputPath()` so an LLM that controls the tool call cannot
-  overwrite arbitrary user-writable files.
-- Version sync — `mcp-server/package.json` and `src/index.ts` were
-  both stale at 9.5.1 while the plugin manifest read 9.7.0. The MCP
-  server was advertising 9.5.1 to every client. All three sources
-  now bump in lockstep to 9.8.0.
-- `engines.node` bumped from `>=18.0.0` to `>=20.0.0` (Node 18 EOL
-  was 2025-04-30).
+## Remaining
 
-**Cross-platform launcher self-install (T1.3, T1.4):**
+- 2 MINOR — non-blocking UX nits.
+- 20 NIT — cosmetic.
+- 17 WARNING — none publish-blocking per
+  references/iterative-fix-loop.md (publish-blocking warning
+  categories list).
 
-- Replaced the SessionStart `bash`-only hook with an in-launcher
-  self-install path. On first cold start (or on package.json drift),
-  `mcp-server/launcher.mjs` runs `npm ci` / `pnpm install` / `bun
-  install` itself, links the resulting `node_modules` into the
-  plugin's mcp-server dir, and retries the import. Cross-platform
-  out of the box — native Windows users no longer hit `bash:
-  command not found`. The launcher's `linkNodeModules()` confines
-  the destination realpath to a path under SCRIPT_DIR before any
-  removal; symlinks are unlinked atomically and directories are
-  removed recursively only when their absolute path is under
-  SCRIPT_DIR.
-- `hooks/hooks.json` SessionStart entry removed.
-- `scripts/hooks/install-mcp-deps.sh` left in place as a manual
-  recovery tool, but no longer invoked by the plugin's automation.
+Build still clean: tsc + eslint 0 errors, vitest 360/362, pytest 53/53.
 
-**Agents + commands worktree + checkpoint hygiene (T1.5, T1.6, T2.13,
-T2.15):**
+- Fix(setup-agent): correct macOS vLLM guidance — stock vLLM has no Apple Silicon path
 
-- Parallel-fixer agents (Opus + Sonnet variants) used to hardcode
-  `$CLAUDE_PROJECT_DIR/reports/llm-externalizer` for the summary
-  output while the dispatching `scan-and-fix` command writes scan
-  reports under `$MAIN_ROOT/reports/llm-externalizer/`. Inside a
-  linked worktree these paths diverge and the Step-5 join script
-  silently produces 0 fixed summaries. Both agents now use the same
-  `MAIN_ROOT` resolver block the commands use, and pass the resolved
-  `$REPORTS_DIR` to `validate_fixer_summary.py`.
-- `commands/llm-externalizer-{fix-report,fix-found-bugs,scan-and-fix,
-  scan-and-fix-serially}.md` no longer use `git add -A` in their
-  pre-fix checkpoint blocks. Per `~/.claude/rules/never-git-add-
-  all.md` that pattern stages every untracked file (incl. `.env`,
-  `reports/`) which would leak on push. All four now use
-  `git stash push --include-untracked -m "pre-<cmd> $STAMP"`.
-- Serial-fixer agents had two back-to-back `## Rules` sections with
-  overlapping/contradictory content. The second block is now
-  `## Hard constraints` with a back-reference to the existing
-  `## What NOT to do` block instead of duplicating its destructive-
-  ops bullet.
-- `scan-and-fix-serially.md` tmp-file prefix
-  `/tmp/llm-externalizer-scan-and-fix.<RUN_TS>.<role>.txt` now
-  namespaces per-command: `…-scan-and-fix-serially.<RUN_TS>.…` so
-  parallel and serial runs sharing a `$RUN_TS` no longer overwrite
-  each other's EXTRACTED/VALIDATED/REJECTED files.
+The setup wizard's Step 3a install table told macOS users to run
+`uv pip install vllm`. Stock vLLM is a CUDA project: on Apple Silicon
+that command fails to build the GPU path or silently installs an
+unaccelerated CPU wheel. The macOS vLLM cell was effectively wrong
+for every Mac the wizard runs on.
 
-**Fixer dispatch policy + agent frontmatters (user directives):**
+Found while evaluating vllm-project/vllm-metal — the community
+hardware plugin that makes vLLM run on Apple Silicon via MLX.
 
-- All four fixer-dispatching commands now AUTO-ROUTE the fixer
-  variant per-report (parallel) or per-bug (serial) based on a
-  size heuristic: route to Opus when EITHER the source file is
-  large (>1000 lines or >50 KB) OR the report carries many
-  findings (>5 `[[FINDING]]` blocks). The previous
-  `AskUserQuestion` Sonnet/Opus menu is removed. Override:
-  `LLM_EXT_FORCE_OPUS=1` forces Opus on every dispatch.
-- One agent = one report (parallel) / one bug (serial), documented
-  explicitly. Never pass multiple reports to the same agent.
-- All 6 agents now have only `model:` in their frontmatter — the
-  `effort:` field (medium/high/xhigh) was removed across reviewer,
-  setup-agent, and both serial-fixer variants. Claude decides the
-  reasoning depth based on context, not a fixed cap.
+Changes to agents/llm-externalizer-setup-agent.md:
 
-**Skills polish (T2.11, T2.12, T2.14):**
+- Step 3a default list: the single "macOS (arm64 or x86_64)" line is
+  split. Apple Silicon now lists vLLM-via-vllm-metal as a power-user
+  alternative (after LM Studio default + Ollama alt). Intel macOS
+  explicitly says NOT to offer vLLM — neither stock vLLM nor
+  vllm-metal (Apple-Silicon-only) has a GPU path there.
 
-- `llm-externalizer-usage` trigger phrases tightened from generic
-  "analyze files / scan folder / check imports / compare files /
-  batch check" (which collide with built-in Read/Grep workflows)
-  to explicit externalization phrases.
-- All three llm-externalizer SKILLs that documented the server's
-  compiled-in default `reports_dev/llm_externalizer/` as the output
-  path now explain: pass an explicit `output_dir` matching the
-  user's `agent-reports-location.md` rule
-  (`<main-repo-root>/reports/llm-externalizer/`). The
-  `reports_dev/` default is developer scratch only.
-- `llm-externalizer-free-scan` SKILL no longer tells the agent to
-  read and summarise report content — that contradicts the "only
-  paths through orchestrator" invariant every other surface upholds.
+- Install table vLLM row: the macOS cell now carries the vllm-metal
+  one-line installer (`curl ... vllm-metal/main/install.sh | bash`)
+  + the `source ~/.venv-vllm-metal/bin/activate && vllm serve` launch.
+  The Linux/WSL2 cell keeps the real `uv pip install vllm` (it was
+  previously "same", pointing at the wrong macOS command).
 
-**Statusline + install scripts (T2.1, T2.5):**
+- New explanatory note after the table: why stock vLLM fails on
+  macOS, what vllm-metal is, that `vllm serve` still exposes the
+  OpenAI-compatible API on :8000 so the existing `vllm-local` preset
+  works unchanged (no new preset needed), reinstall/uninstall recipe,
+  and a caveat that it's community-maintained / text-only / newer
+  than LM Studio + Ollama — an alternative, not the macOS default.
 
-- `scripts/statusline/statusline.py` now `chmod 0o600`s every cache
-  file derived from the user's OAuth bearer token / OpenRouter API
-  key (statusline-usage-cache.json, openrouter-budget-cache.json).
-  The parent `/tmp/claude` dir is 0o700 on single-user hosts but
-  multi-tenant Linux boxes or pre-created /tmp/claude (CI runners)
-  would otherwise leak rate-limit / subscription-tier info across
-  uids.
-- `install_statusline.py` and `scripts/statusline/install.sh` no
-  longer hardcode `python3` in the patched statusLine.command.
-  The interpreter is resolved at install time via
-  `shutil.which("python3")` → `shutil.which("python")` →
-  `sys.executable`; the resulting command is `shlex.join`'d so
-  paths containing spaces no longer break. Fixes Windows + NixOS +
-  PEP-668 macOS where the literal `python3` either doesn't exist
-  or pops a Xcode CLT prompt every 3 s.
+No new preset or profile-template change: vllm-metal's server is
+wire-compatible with the existing `vllm-local` preset.
 
-**Documentation (T1.8 partial — C-1 to C-4):**
+- Fix(mcp): T2.19 — splitPerFileSections silent-drop on inline annotation
 
-- README version badge bumped from 9.5.1 to 9.7.0 / now 9.8.0;
-  Node badge from `>=18` to `>=20`.
-- Features bullet block updated: setup wizard now visible as a
-  lead bullet, `change-model` correctly described as a user-only
-  slash wrapper (the underlying MCP tool is disabled by design),
-  inventory counts corrected (19 commands / 6 agents), 5 preloaded
-  HF skills called out, batch_check deprecation note added.
-- Remaining README pass (First-run wizard section, plugin-structure
-  tree, agents table, troubleshooting for the wizard, Windows/WSL2
-  dual-path coverage, model-id verification, build-snippet.py
-  mention) deferred to v9.9.0 — tracked in the TRDD.
+Audit finding (MCP M7): when the LLM emits a header like
+`## File: /foo.ts ## continued from batch 2`, the lazy `(.+?)` in the
+header regex captured `/foo.ts ## continued from batch 2` (the entire
+rest of the line). Neither path matched any expected_paths, so the
+section was silently dropped — the report for that file showed up
+empty with no diagnostic.
 
-Deferred to v9.9.0 (tracked in `design/tasks/TRDD-…-full-plugin-audit-
-tier2-tier3.md`):
+Fix: after the regex match, truncate the captured path at the first
+inline `##` (since `##` would otherwise be a markdown header marker,
+file paths legitimately containing `##` are out of scope). Also skip
+headers whose path becomes empty after the trim (defensive — a header
+line that turned out to be entirely annotation should not index a
+section under `""`).
 
-- MCP server MAJORs T2.6-T2.9, T2.16-T2.19: uncapped `res.text()`,
-  watchFile race, default-branch error envelope, fetchWithRetry429
-  body-consumed bug, SECRET_PATTERNS misses (LM_API_TOKEN,
-  JWT_SECRET, etc.), gitLsFilesMultiRepo sandboxing,
-  splitPerFileSections regex cross-match risk.
-- Pre-push T2.3, T2.4: ps fallback for minimal containers, regex
-  bypass via symlinked publish.py, MAX_ANCESTRY_DEPTH bump.
-- Statusline T2.2: /dev/tty timeout + git memoization, locale-stable
-  %p formatting, submodule git ls-files coverage, stale-cache TTL
-  ceiling.
-- README continuation (T1.8 remaining + T2.20).
-- 3 proposed diagnostic scripts (T3.D1-T3.D3): check-mcp-server.py,
-  check-statusline.py, dump-state.py.
-- All Tier-3 minor/NIT items from the audit.
+Two new tests in grouping.test.ts cover both branches. All 33 tests
+in the suite pass.
 
-All gates green on the changes that landed: ruff / pyright (0 errors) /
-shellcheck. tsc --noEmit clean on mcp-server.
+- Fix(mcp): T2.6 — cap response body reads at 32 MiB (audit follow-up)
 
-## [9.7.0] - 2026-05-14
+Every `await res.text()` and `await res.json()` in the MCP server was
+uncapped. A buggy or hostile upstream could return a multi-GB body and
+crash the server with an OOM. The audit (MCP M3, finding T2.6) called
+this out as one of the highest-impact MAJOR items still open after
+v9.9.0.
 
-### Added
+**New module `mcp-server/src/safe-body.ts`:**
 
-- Feat(setup): build-snippet.py — safe YAML profile-snippet generator
+- `safeReadText(res, maxBytes?)` — streams the body via getReader() with
+  a hard byte cap, throws on overrun. Honors Content-Length up-front so
+  we abort before allocating the buffer when the server tells us the
+  body would be too large.
+- `safeReadJson<T>(res, maxBytes?)` — wraps safeReadText + JSON.parse.
+- `MAX_RESPONSE_BYTES = process.env.LLM_EXT_MAX_RESPONSE_BYTES ?? 32 MiB`
+  — generous default (OpenRouter chat completions are typically <1 MiB,
+  /v1/models is ~500 KiB), but overridable per-deployment if a workload
+  legitimately needs more.
 
-New `scripts/setup/build-snippet.py` replaces the LLM-built f-string the
-setup wizard previously used for Step-6 settings.yaml generation. Every
-value is double-quoted via a stdlib-only `_yaml_dquote` helper so model
-IDs containing colons (`qwen2.5-coder:7b`), embedded quotes, or other
-YAML-special characters serialise correctly. Profile names are validated
-against `[A-Za-z][A-Za-z0-9._-]{0,63}` and unrecognised runners +
-`--context-window` values below 4096 are refused at argparse time.
+**Call sites converted** (index.ts + or-model-info.ts, 11 total):
 
-### Changed
+- getModelSupportedParams (1384) — /v1/models/{id}/endpoints
+- fetchOpenRouterModelsList (1618) — /v1/models
+- fetchOpenRouterBudget (1746) — /v1/credits
+- chatCompletionNative LM Studio error path (2579, 2596) and JSON parse (2600)
+- chatCompletionSimple error + JSON parse (2736, 2753)
+- chatCompletionStreaming JSON-mode error + JSON parse (2940, 2957)
+- listModelsRaw (3013) — local /v1/models
+- or-model-info fetchOpenRouterModelInfo error + JSON (200, 206)
 
-- Refactor(setup): audit-driven Tier-2/Tier-3 fixes (~37 items)
+All sites preserve their `.catch(() => "")` semantics for error-body
+reads so HTTP errors still produce a useful message when the body is
+unreadable, just with the OOM ceiling enforced.
 
-A four-agent audit swarm (skeptical-reviewer, code-correctness, security,
-silent-failure-hunter) flagged 76 findings on the new setup wizard. Tier 1
-(security HIGH and critical correctness) landed in v9.6.0 via commit
-`d314c2d`. Tier 2 (UX + Windows-detection + agent flow) and Tier 3 (polish
-and skill cleanups) land here:
+Verified: `npx tsc --noEmit` clean. SDK deprecation warnings on `Server`
+(line 39, 5065) are pre-existing and tracked as T2.MCP-SDK in TRDD-480419e5.
 
-**Cross-cutting hardening:**
+- Fix(v9.10.0): T2.16 filter warning + T2.21 log breadcrumb + T2.25 locale am/pm
 
-- Every `script > file.json` invocation in the agent now wraps in a
-  fail-fast `if !`/`exit "$rc"` check, surfaces the diagnostic-log path
-  on failure, and drops the partial file rather than letting the next
-  step parse stale content.
-- Catch-all `except Exception:` blocks in `test-model.py` and
-  `detect-runners.py` narrowed to the specific error classes — harness
-  bugs no longer collapse to "model failed" / "runner not installed".
-- `recommend-models.py` log helpers (`safe_args_for_log`,
-  `safe_argv_for_log`) tested at v9.6.0; this release adds cache-arg
-  path-traversal confinement under `$CLAUDE_PLUGIN_DATA/setup/cache/`,
-  HTTP-fetch charset allow-list, and bounded recursion in
-  `extract_featured_models`.
+Three v9.10.0 follow-out fixes (none release-blocking on their own,
+batched here so the v9.10.0 release commit is clean).
 
-**Windows detection (detect-environment.sh):**
+**T2.16 — filterBodyForSupportedParams now warns on drop** (mcp-server):
 
-- RAM via PowerShell `Get-CimInstance Win32_ComputerSystem` (Win11
-  24H2+ compatible) with wmic + systeminfo fallback chain.
-- GPU via `Get-CimInstance Win32_VideoController` returns
-  nvidia / amd-rocm / none / unknown.
+When a user configures `temperature: 0.7` in their profile but the
+target model's `supported_parameters` list (from OpenRouter
+/v1/models/{id}/endpoints) doesn't include "temperature", the value is
+filtered out before the request. Previous code did this silently, so
+users had no signal that their override was being ignored.
 
-**WSL2 (detect-runners.py + agent):**
+Now: per (model, field) pair, emit a one-shot stderr line the first
+time we drop that combo. Module-level `FILTER_WARN_SEEN` dedups so the
+log doesn't flood. The two call sites (chatCompletionSimple's reasoning
+ladder + the streaming variant) both pass `conn.model` so the warning
+identifies which model.
 
-- New `--probe-host` / `--include-wsl2-host` flags. The agent passes
-  `--include-wsl2-host` when `env.json.os == "wsl2"` so LM Studio
-  installs bridged from the Windows host become visible.
-- Each runner result now carries a `host` field disambiguating
-  localhost from the Windows-host probe.
-- The agent's WSL2 corner-case section now recommends PowerShell
-  `Get-NetIPAddress` over the tamperable /etc/resolv.conf heuristic.
+**T2.21 — _log_exception surfaces secondary errors** (statusline):
 
-**Runner detection (detect-runners.py):**
+The statusline's per-section error logger writes labelled tracebacks
+to `/tmp/claude/statusline-error.log`. Previously the `except Exception:
+pass` swallowed ALL secondary errors, including ENOSPC, EACCES, EROFS
+on a read-only sandbox mount. Now an OSError emits a one-line stderr
+breadcrumb (Claude Code surfaces statusline stderr in its main error
+log) so the user can see "the error logger itself can't write".
+Module-level `_LOG_EXCEPTION_WARN_SEEN` dedups by errno.
 
-- Jan port-1337 probe now requires BOTH `/v1/models` AND
-  `/api/version` to respond, defeating port-collision false
-  positives (any other dev tool on 1337 that returned valid JSON
-  would otherwise mis-tag as Jan).
-- vLLM `import vllm` failures discriminated via stderr inspection —
-  half-installed vLLM (mismatched CUDA, missing _C extension)
-  surfaces as `import_error: <reason>` instead of being mis-reported
-  as "not installed".
+**T2.25 — locale-independent am/pm formatting** (statusline):
 
-**Compatibility test (test-model.py):**
+`%p` is locale-dependent and emits the empty string on `de_DE.UTF-8`,
+`ja_JP.UTF-8`, and several other non-Latin locales. The statusline's
+time/datetime display would render "12:30" instead of "12:30pm" for
+those users. New `_format_12h_ampm` computes the hour/minute/am/pm
+directly from `datetime.hour` without going through strftime — the
+month-name path still uses `%b` (acceptable, every shipped locale has
+a 3-char abbreviation, only `%p` actually emits empty).
 
-- `test_long_context` rewritten as needle-in-haystack: ~32K tokens
-  with a unique sentence at the 90 % depth, asks for verbatim recall.
-  The previous 1-token "fox" answer could be pattern-matched from
-  just the prompt prefix on a 16K-context model.
-- `err_body` sanitised — strip `sk-…`, `hf_…`, and `Bearer <token>`
-  patterns before including in the test JSON output.
-- `extract_content()` returns `(text, hint)` discriminating tool_call /
-  multimodal / malformed shapes so the user gets a real explanation
-  instead of "empty response".
-- `_err_from_call()` uses `isinstance(resp.get("error"), str)` instead
-  of `"error" in resp` — defeats false-positive on responses that
-  legitimately include `"error": null` alongside a successful
-  `choices` array.
-- Pre-flight stderr header tells the user the typical 30-90 s
-  duration; per-test progress lines (`[smoke] ...`) flushed in real
-  time.
+Verified clean: `npx tsc --noEmit` (mcp-server), `ruff check`
+(statusline.py).
 
-**Recommender (recommend-models.py):**
+- Fix(launcher,statusline): T2.2 stall + cross-platform sep (audit Tier-2)
 
-- `WhatCanIRunEvidence.raw` set to None at extraction (was carrying
-  the entire upstream featured-model dict through to the agent's JSON
-  context — an indirect prompt-injection surface).
-- Cache-arg path-traversal confinement when CLAUDE_PLUGIN_DATA is set
-  (`--from-cache` / `--save-cache` / `--whatcanirun-*-cache` must
-  resolve under `default_cache_dir()`). Standalone CLI mode keeps
-  unrestricted paths.
-- `extract_featured_models()` recursion bounded to depth 64 —
+T2.2 (HIGH SC-P1-005 — statusline /dev/tty stall + redundant git calls):
+- /dev/tty open: short-circuit on (no $TTY AND not isatty AND /dev/tty
+  absent) AND use O_NONBLOCK so the open fails fast on hung devices
+  instead of waiting for the kernel IPC chain to time out (3-5 s on
+  detached / nohup / orphan sessions). Per-refresh stall in the worst
+  case is now ~0 ms instead of 3-5 s.
+- get_git_info() consolidates `git diff --quiet HEAD` + `git ls-files
+  --others --exclude-standard` (2 subprocesses) into one `git status
+  --porcelain=v1` call. Half the subprocess overhead per refresh, and
+  fixes audit SR-P1-013 / SC-P1-013 — `ls-files --others` ignored
+  submodule .gitignore, so the bar showed `branch*` (dirty marker)
+  even when `git status` showed nothing.
+- All git subprocess timeouts tightened from 3 s to 1 s. Worst-case
+  stall on slow filesystems / SSHFS / WSL2 Windows-network mounts
+  is now 3 s × 1 call = 3 s, not 3 s × 3 calls = 9 s.
+
+SR-P1-006 (NIT launcher cross-platform sep):
+- mcp-server/launcher.mjs linkNodeModules() previously concatenated
+  `SCRIPT_DIR + (process.platform === "win32" ? "\\" : "/")` to test
+  whether `dst` lives under the launcher's directory. On Windows
+  where SCRIPT_DIR could already end with a backslash (rare but
+  possible from env-var-derived paths), the concat double-slashed
+  and `startsWith` returned false → canReplace=false → "refusing to
+  replace" error. Now uses `path.sep` and resolves both ends.
+
+Verified: ruff + pyright clean on statusline.py.
+
+- Fix(pre-push): T2.3 interpreter whitelist + T2.4 ps fallback
+
+TRDD-480419e5 Tier-2 fixes from the platform/safety audit:
+
+T2.4 (HIGH SC-P1-003 — pre-push fails on minimal containers):
+- ps_query() returned None on FileNotFoundError (missing `ps` binary,
+  e.g. Alpine slim / scratch + ko/buildah / minimal CI images). The
+  walker then broke out at the first frame and the policy collapsed
+  to "refuse every push" with a misleading "(ps lookup failed)"
+  message that left the user diagnosing the wrong thing.
+- New path: when `ps` is absent, ps_query() falls back to reading
+  /proc/<pid>/stat (PPID from field 4, after the trailing paren)
+  AND /proc/<pid>/cmdline (NUL-separated argv joined with spaces).
+  If neither /proc nor `ps` is available, returns the literal
+  "no-ps" sentinel so the walker can emit a clear "install procps-ng"
+  diagnostic instead of the generic "ps lookup failed".
+- MAX_ANCESTRY_DEPTH bumped from 40 to 100 (audit SC-P1-014); also
+  exposed via LLM_EXT_HOOK_MAX_DEPTH env var for exotic shell stacks.
+
+T2.3 (HIGH SC-P1-006 — pre-push regex bypass via symlinked publish.py):
+- The argv parser matched any `\S*publish.py` substring. An attacker
+  could `ln -s ~/code/llm-externalizer-plugin/scripts/publish.py
+  /tmp/publish.py` and then run
+    `git -c "core.editor=/tmp/publish.py" push origin main`
+  The walker saw `/tmp/publish.py` in `git push`'s argv, resolved it
+  via realpath to the canonical publish.py, and ALLOWED the push —
+  bypassing the 9 mandatory publish gates.
+- New: `INTERPRETER_PREFIXES` whitelist (python, python3, python3.*,
+  /usr/bin/env, uv, uvx, pyenv, poetry, pipenv, + canonical
+  /usr/bin/python / /usr/local/bin/python / /opt/homebrew/bin/python).
+  The argv match is rejected unless the preceding token (after the
+  existing `--flag` reject) passes `_is_interpreter_token()`. Now
+  only argv shapes like `python3 /path/publish.py`,
+  `uv run scripts/publish.py`, `/usr/bin/env python publish.py`
+  are accepted — `git -c core.editor=/tmp/publish.py` is rejected
+  because `core.editor=/tmp/publish.py` is preceded by `-c`, not a
+  Python interpreter.
+
+Note about the legitimate `gh attest verify`-style flow: those tools
+don't invoke publish.py at all, so they were never in the ancestry
+chain to begin with — the whitelist tightening doesn't affect them.
+
+Verified: ast.parse() + ruff clean on the modified hook. Tests for
+the corner cases (Alpine slim, /proc-only Linux, symlinked publish.py)
+documented in TRDD-480419e5 for v9.9.0 inclusion.
+
+- Fix(commands): repair v9.8.0 auto-router (audit SR-P1-001 + SR-P1-002)
+
+A v9.8.0 internal-audit caught two CRITICAL bugs in the auto-router I
+introduced in commit d94d595. Both bugs would have made every
+auto-routed fixer dispatch silently fall through to Sonnet regardless
+of source-file size — defeating the entire feature unless the user
+explicitly set LLM_EXT_FORCE_OPUS=1.
+
+SR-P1-001 — router awk pattern never matched real reports:
+- The router used `awk '/^\*\*File:\*\*/ {print $2; exit}'` to extract
+  the source-file path. But the MCP server emits per-file reports
+  with `## File: <path>` (scan_folder, code_task per-file) or
+  `- **Input file**: \`<path>\`` (compare_files, check_against_specs);
+  only the aggregated bug list uses `**File:**`. The parallel-fixer
+  router never saw a match → $src empty → BIG_SOURCE=0 → Sonnet.
+- Now uses a multi-pattern grep -E that matches all three shapes,
+  with sed strip-and-trim that preserves paths containing spaces
+  (audit SR-P1-004 — `tr -d ' '` corrupted /Users/Name Surname/...).
+- Fixed in: commands/llm-externalizer-scan-and-fix.md (Step 4b),
+  commands/llm-externalizer-fix-report.md (Step 2b).
+
+SR-P1-002 — per-bug router always returned bug #1's file:
+- After iteration 1 of the serial-fix loop, bug #1 is marked `--
+  FIXED`. The naive awk `'/^\*\*File:\*\*/ {print $2; exit}'` still
+  returned bug #1's path even though the serial-fixer would pick a
+  different bug (the next-up unfixed entry). Routing decisions were
+  consistently against the wrong file.
+- Now a small awk state machine walks to the first `### ` heading
+  WITHOUT FIXED and prints THAT bug's File: line.
+- Fixed in: commands/llm-externalizer-scan-and-fix-serially.md
+  (Step 5c), commands/llm-externalizer-fix-found-bugs.md (Step 4c).
+
+SR-P1-003 + SR-P1-004 fixes folded in:
+- `wc -l < missing_file` no longer prints zsh's "no such file or
+  directory" message: now gated on `[[ -f "$path" ]]` first.
+- `wc` output is `tr -d '[:space:]'`-trimmed (macOS BSD wc emits
+  leading-padded numbers — `       42`, not `42`).
+- No more `tr -d ' '` on paths.
+
+Verified locally:
+- printf '## File: /abs/a.py\n' | grep -m1 -E '^(## File:|...)' → match
+- 2-bug fixture with #1 FIXED and #2 unfixed → state-machine picks #2
+
+- Fix(mcp): TRDD Tier-2 — default branch envelope + retry body + secret patterns
+
+T2.8 — `default` branch in CallToolRequestSchema threw → wrong error
+envelope:
+- Previously `default: throw new Error("Unknown tool: ...")` fell into
+  the outer try/catch which logs status=error and increments the
+  SERVICE_HEALTH error counter. That attribution is wrong for a typo'd
+  tool name (no LLM call was made). The default now returns the same
+  isError envelope every other branch uses; phantom errors no longer
+  pollute session logs or trigger backoff for unrelated reasons.
+
+T2.9 — `fetchWithRetry429` returned a Response with its body already
+consumed:
+- The retry loop called `await lastRes.text().catch(() => {})` between
+  attempts to free the connection. After retries exhausted, the caller
+  got a Response whose body stream was drained — `await res.text()`
+  returned "" and surfaced errors lost server-supplied detail.
+- The new code captures `lastBodyText` before draining each iteration,
+  then re-wraps the final response with `new Response(lastBodyText, …)`
+  so the caller's `await res.text()` still gets the most-recent body.
+  Headers + status preserved.
+
+T2.17 — `SECRET_PATTERNS` ENV_SECRET regex missed common names:
+- Old: hand-curated list of ~18 names. Missed JWT_SECRET,
+  STRIPE_SECRET_KEY, SUPABASE_SERVICE_KEY, LM_API_TOKEN (the plugin's
+  own preset!), HF_TOKEN, GH_TOKEN, GITLAB_TOKEN, SLACK_BOT_TOKEN,
+  TWILIO_AUTH_TOKEN, SENTRY_AUTH_TOKEN, etc.
+- New regex extends the explicit list AND adds a wildcard alternation
+  catching any `[A-Z][A-Z0-9_]*(_KEY|_TOKEN|_SECRET|_PASSWORD|
+  _APIKEY|_API_KEY|_AUTH)`. The wildcard covers future vendor naming
+  without needing a per-vendor patch. The 8-char captured-value
+  minimum continues to filter out the noise of placeholder strings.
+
+Verified: `tsc --noEmit` clean.
+
+Remaining MCP MAJORs (T2.6 res.text/json caps, T2.7 watchFile race,
+T2.16/T2.18/T2.19) tracked in TRDD-480419e5 for v9.9.0 — they require
+larger surgical changes.
+
+- Fix(statusline): chmod 0600 OAuth caches + Python interpreter detection
+
+Audit Tier-2 hardening from the platform/safety report:
+
+T2.1 (HIGH SC-P1-004 — OAuth-derived cache files not 0600):
+- scripts/statusline/statusline.py:247,282 — fetch_usage_from_api and
+  fetch_openrouter_budget both Path.write_text() their cache files
+  with the process umask (typically 0o022 -> mode 0644). Parent dir
+  /tmp/claude is 0o700 on single-user hosts, but on multi-tenant
+  Linux boxes or pre-created /tmp/claude (CI runners, Docker
+  volumes) the cache is world-readable. Both cache files contain
+  per-bucket usage %, OpenRouter subscription-tier info, and
+  reset-timestamps derived from the user's bearer token.
+- Both write paths now follow up with cache_file.chmod(0o600). On
+  OSError (e.g. unusual filesystem) the chmod is best-effort and
+  the cache write still succeeds.
+
+T2.5 (HIGH SC-P1-007 — install.sh / install_statusline.py hardcode
+`python3`):
+- The literal command `python3 {dest}` broke on:
+  (a) native Windows where the canonical name is `py` or `python`,
+  (b) NixOS without an explicit nix-shell,
+  (c) PEP-668 macOS where the bare /usr/bin/python3 symlink points
+      at Apple's CLT stub and prompts for Xcode tools every 3 s,
+  (d) any HOME path containing spaces (the `python3 /Users/Test
+      User/.claude/statusline.py` arg-split fails).
+- Both installers now pick the interpreter at install time via
+  shutil.which("python3") or shutil.which("python") or
+  sys.executable, then shlex.join([interp, dest]) to quote-safe
+  the resulting command. The patched ~/.claude/settings.json
+  statusLine.command is now an absolute interpreter path + the
+  shlex-quoted statusline path.
+
+Lint: ruff + pyright + shellcheck all clean on edited files.
+
+- Fix(skills): tighten triggering + reports path + drop summarise step
+
+Audit Tier-2 fixes from the agents+commands+skills report:
+
+T2.11 (MAJOR — llm-externalizer-usage skill triggers were too generic):
+- Description was "analyze files / scan folder / check imports / compare
+  files / batch check" — those phrases collide with built-in Read/Grep
+  workflows and with the other 4 llm-externalizer skills. User saying
+  "analyze this file" would load this skill instead of using Read.
+- Tightened to "externalize this analysis", "offload to a cheap model",
+  "run scan_folder on", "use llm-externalizer", "externalize file
+  comparison", "check_imports via externalizer". The intent is explicit
+  externalization, not bare file ops.
+- Also removed the legacy `effort: medium` line from the frontmatter
+  (matches the agent-side cleanup in d94d595).
+
+T2.12 (MAJOR — skills documented non-compliant reports path):
+- Three skills (scan, free-scan, usage) documented the server's
+  compiled-in default `reports_dev/llm_externalizer/` as the canonical
+  report path. That's developer scratch per the
+  `~/.claude/rules/agent-reports-location.md` rule which mandates
+  `<main-repo-root>/reports/<component>/` for every audit/scan output.
+- All three SKILL.md Output sections now explain: always pass
+  output_dir pointing at <main-repo-root>/reports/llm-externalizer/
+  (the user's compliance rule), and only fall back to the
+  reports_dev/ default as a developer-scratch path that should not
+  be the home for findings.
+
+T2.14 (MAJOR — free-scan SKILL told the agent to summarise reports):
+- skills/llm-externalizer-free-scan/SKILL.md Step 5 said "Read and
+  summarize key findings." That contradicts the "only paths through
+  orchestrator" invariant every other llm-externalizer surface
+  upholds.
+- Step 5 now: only list paths + remind the user this is a low-quality
+  free scan; "Do NOT read or summarise the report content".
+
+Verified: no other `reports_dev/llm_externalizer` references remain in
+skills/ besides documentation-of-the-server-default lines.
+
+- Fix(commands,agents): auto-route fixers to Opus per file size + drop effort caps
+
+User-driven directives:
+
+(1) Auto-route to Opus when files are big.
+    All four fixer-dispatching commands now pick the fixer variant per-
+    report (parallel) or per-bug (serial) based on a size heuristic
+    instead of asking via AskUserQuestion. Opus is selected when EITHER
+    the source file is large (>1000 lines or >50 KB) OR the report
+    carries many findings (>5 [[FINDING]] blocks). Override:
+    LLM_EXT_FORCE_OPUS=1 forces Opus on every dispatch.
+    - commands/llm-externalizer-scan-and-fix.md: Step 4b auto-router
+      + agent_for_report() helper used inside the 15-concurrent
+      dispatch loop in Step 4c.
+    - commands/llm-externalizer-fix-report.md: Step 2b inline router.
+    - commands/llm-externalizer-fix-found-bugs.md: Step 4c router runs
+      at the top of every loop iteration (per-bug routing).
+    - commands/llm-externalizer-scan-and-fix-serially.md: same as
+      fix-found-bugs.
+
+(2) One agent = one report (parallel) / one bug (serial).
+    Documented explicitly in every dispatch block: "One agent = one
+    report = one source file" / "One bug = one fresh agent invocation.
+    Never reuse the same agent across bugs." This was the existing
+    invariant; the new doc text removes ambiguity for future readers.
+
+(3) Remove turn-limit-equivalent fields from agent frontmatters.
+    Four agents had `effort:` fields (reviewer: medium, serial-fixer-
+    opus: xhigh, serial-fixer-sonnet: high, setup-agent: medium).
+    The `effort` field caps reasoning depth and can prematurely
+    constrain the agent. All four agents now have only `model:` so
+    Claude decides effort based on context.
+
+Verified: `grep -cE "^effort:" agents/*.md` → 0 across all six agents.
+
+- Fix(commands,agents): worktree path + checkpoint hygiene (audit Tier-1)
+
+Audit-driven fixes from the full-plugin-audit agents+commands+skills
+report (commit-pending consolidated report in reports/full-plugin-audit/).
+
+T1.5 (CRITICAL — silent data loss in worktrees):
+- agents/llm-externalizer-parallel-fixer-{opus,sonnet}-agent.md were
+  hardcoded to write summaries under $CLAUDE_PROJECT_DIR/reports/
+  llm-externalizer while the dispatching command (scan-and-fix.md)
+  computes MAIN_ROOT via `git worktree list | head -n1`. Inside a
+  linked worktree these paths diverge — fixer summaries land where
+  the Step-5 join script (`ls -1 "$REPORTS_DIR" | grep -cF .fixer.`)
+  cannot see them. The final stdout reports M-FIXED=0 even though
+  fixers ran successfully.
+- Both agents now use the same MAIN_ROOT resolver block the command
+  uses, and the post-flight validate_fixer_summary.py call uses the
+  resolved REPORTS_DIR variable.
+
+T1.6 (CRITICAL — secret-leak risk on push):
+- commands/llm-externalizer-fix-{report,found-bugs}.md, scan-and-fix
+  .md, scan-and-fix-serially.md previously used
+  `git add -A && git commit -m "chore(checkpoint): pre-... $STAMP"` in
+  their pre-fix checkpoint blocks. Per the user's hard rule
+  `~/.claude/rules/never-git-add-all.md`, that pattern is forbidden:
+  it stages every untracked file including .env, reports/, agent
+  scratch — which would leak on push.
+- All four commands now use
+  `git stash push --include-untracked -m "pre-... $STAMP"` instead.
+  Recovery is `git stash pop` — the rationale is documented inline.
+
+T2.13 (MAJOR — duplicated/contradictory Rules section):
+- agents/llm-externalizer-serial-fixer-{opus,sonnet}-agent.md had two
+  back-to-back `## Rules` sections (lines 44-91 then 102-113) with
+  overlapping but reordered/reworded numbered lists. An LLM reading
+  top-to-bottom got conflicting "Rule 6 / 7 / 9" content.
+- Renamed the second block to `## Hard constraints` and merged the
+  destructive-ops bullet with a back-reference to the existing
+  `## What NOT to do` section just above.
+
+T2.15 (MAJOR — tmp-file prefix collision):
+- commands/llm-externalizer-scan-and-fix-serially.md wrote tmp files
+  with prefix `/tmp/llm-externalizer-scan-and-fix.$RUN_TS.<role>.txt`
+  (no `-serially`). If the parallel and serial commands ran in the
+  same session and shared `$RUN_TS`, the serial run overwrote the
+  parallel run's EXTRACTED/VALIDATED/REJECTED files.
+- Prefix now namespaces per-command:
+  `/tmp/llm-externalizer-scan-and-fix-serially.$RUN_TS.<role>.txt`.
+
+Verified: no other CLAUDE_PROJECT_DIR/reports refs remain in the fixer
+agents. No other `git add -A` occurrences in agents/ or commands/.
+
+- Fix(setup): launcher self-install replaces SessionStart bash hook
+
+Audit-driven cross-platform + safety fix (T1.3 + T1.4 from full-plugin
+audit).
+
+Problem (T1.3, SC-P1-001 CRITICAL):
+- hooks/hooks.json invoked bash on a script under CLAUDE_PLUGIN_ROOT.
+  Native Windows ships without bash on PATH; the SessionStart hook
+  failed every boot, the MCP server's better-sqlite3 dep was never
+  installed via that path, and the launcher's existing failure path
+  emitted a FATAL the user could not easily fix.
+
+Problem (T1.4, SC-P1-002 CRITICAL):
+- install-mcp-deps.sh did a recursive remove on the node_modules
+  symlink without realpath canonicalisation. If the destination was
+  previously planted as a symlink to ~/Documents (multi-user system,
+  leaked plugin cache), the recursive remove could in theory follow
+  into the wrong tree.
+
+Fix (audit option 3 — preferred over per-platform hook reimplementation):
+- launcher.mjs now self-installs the MCP server's runtime deps on first
+  cold start. The same Node binary that runs the server is the one
+  that prepares its dependencies; this is cross-platform out of the
+  box (no bash dependency).
+- New linkNodeModules() confines the destination realpath to a path
+  under the launcher's own script dir before removing. Symlinks are
+  removed atomically (single-file remove, can never recurse);
+  directories are removed recursively ONLY when their absolute path
+  starts with SCRIPT_DIR.
+- On Windows without Developer Mode (where unprivileged symlinks fail),
+  falls back to cpSync recursive copy automatically.
+- Package manager auto-detection (npm -> pnpm -> bun) with reproducible
+  lockfile path when present. Same ordering the old bash hook used.
+- Same NPM_CONFIG_* env overrides (ignore-scripts=false to allow native
+  prebuild-install, audit/fund disabled, fetch timeout capped).
+
+hooks/hooks.json:
+- SessionStart hook removed entirely. The launcher's self-install path
+  serves the same purpose without the bash dependency. Existing users
+  who previously cached node_modules via the hook continue to work via
+  the launcher's fast-path "already installed" check.
+
+scripts/hooks/install-mcp-deps.sh: left in place as a tracked file for
+users who want to run it manually, but it is no longer invoked by the
+plugin's automation. Will be cleaned up in a future commit.
+
+- Fix(mcp): version sync + path-traversal + header-injection (audit Tier-1)
+
+Audit-driven security + correctness fixes from the four-agent full-plugin
+audit (commit-pending consolidated report under reports/full-plugin-audit/).
+
+Security (CRITICAL):
+- sanitizeInputPath was Windows-broken (hardcoded `/` separator) and
+  macOS-realpath-vulnerable (`/tmp` symlink to `/private/tmp` let an
+  attacker craft `/tmp/../private/tmp/<file>` that passed the prefix
+  check but resolved outside the user's project). Now canonicalises
+  cwd/home/tmp roots via realpathSync, uses path.sep, and runs the
+  candidate through realpathSync before comparison. Defense-in-depth
+  symlink rejection preserved.
+- apiHeaders() now rejects control characters in the bearer token via
+  assertSafeHeaderValue(). A multi-line api_key (PEM block, YAML `>-`
+  scalar, pbpaste with CRLF) would otherwise smuggle additional headers
+  into outbound requests when interpolated into `Authorization: Bearer`.
+- or-model-info.ts fetchModelInfo() replicates the CR/LF guard for its
+  direct fetch path so the same hardening covers both code paths.
+- or_model_info_json now routes its --file_path through sanitizeInputPath
+  so an LLM that controls the tool call cannot overwrite arbitrary
+  user-writable files outside the project/home/tmp roots.
+
+Version sync:
+- mcp-server/package.json: 9.5.1 → 9.7.0 (matches plugin.json).
+- mcp-server/src/index.ts:4980: same.
+- The previous release skipped these — the MCP server was advertising
+  9.5.1 to every client while the plugin manifest reported 9.7.0.
+  Anyone reading server.info.version got a stale value.
+
+Cross-platform:
+- engines.node: ">=18.0.0" → ">=20.0.0". Node 18 EOL'd 2025-04-30; the
+  current minimum LTS is 20 (until 2026-04) and 22.
+
+Verified: `tsc --noEmit` clean.
+
+- Fix(skills): MLX default port 8082 + huggingface-best `hf auth token`
+
+skills/huggingface-mlx-models/SKILL.md (T3.1):
+- mlx_lm.server default port 8080 → 8082 so MLX and llama-server can
+  run side-by-side without colliding. Updates the "Quick start" block,
+  the wired settings.yaml snippets, and the per-step `mlx_lm.server`
+  invocation. The legacy port-collision warning in the Gotchas section
+  now explains WHY we use 8082 rather than treating the collision as
+  a runtime issue the user has to discover.
+
+skills/huggingface-best/SKILL.md (T3.2):
+- All three `curl -H "Authorization: Bearer $(cat ~/.cache/huggingface/token)"`
+  blocks now use `hf auth token 2>/dev/null || echo ''` instead.
+  - `cat ~/.cache/huggingface/token` is the LEGACY path (old
+    `huggingface-cli`). The current `hf auth login` writes to
+    `~/.huggingface/token` (or `$HF_HOME/token`), so the legacy
+    `cat` would silently fall back to "Bearer " (empty) and 401.
+  - `hf auth token` reads whichever file the active CLI writes to,
+    falling back to the empty string if the user is not logged in.
+
+- Fix(setup): Tier-2/3 script hardening (Windows + WSL2 + security)
+
+detect-environment.sh:
+- T2.3/2.4: Windows RAM/GPU detection now uses PowerShell
+  `Get-CimInstance Win32_ComputerSystem` (Win11 24H2+ compatible)
+  with `wmic` and `systeminfo` as fallbacks. GPU detection via
+  `Get-CimInstance Win32_VideoController` returns nvidia / amd-rocm /
+  none / unknown based on the strongest matched adapter.
+
+detect-runners.py:
+- T2.5: optional `--probe-host` / `--include-wsl2-host` flags so the
+  agent can probe both `localhost` and the WSL2 Windows-host IP for
+  LM Studio bridging.
+- T3.15: Jan port-1337 detection now requires BOTH `/v1/models` AND
+  `/api/version` to respond, defeating port-collision false positives.
+- T3.16: vLLM `import vllm` failures discriminated via stderr inspection
+  — half-installed vLLM (e.g. mismatched CUDA, missing _C extension)
+  surfaces as `import_error` instead of being mis-reported as "not
+  installed".
+- Narrow outer `except` in main() per fail-fast convention; runner
+  errors carry the exception class name.
+
+test-model.py:
+- T2.10: `test_long_context` now uses a needle-in-haystack (~32K-token
+  input with a unique sentence at the 90 % mark, ask for verbatim
+  recall). The previous 1-token "fox" answer could be pattern-matched
+  from just the prompt prefix on a 16K-context model.
+- T2.12: outer test-harness `except` narrowed to the specific error
+  classes; harness bugs no longer collapse to "model failed".
+- T2.15: `err_body` sanitised — strip `sk-…`, `hf_…`, and
+  `Bearer <token>` patterns before including in the test JSON output.
+- T3.4: progress line per test ("[smoke] ...") prints to stderr in
+  real time; pre-flight header tells the user the typical 30-90 s
+  duration.
+- T3.9: `extract_content` returns `(text, hint)` discriminating
+  tool_call / multimodal / malformed shapes so the user gets a real
+  hint instead of "empty response".
+- T3.10: `_err_from_call` checks `isinstance(resp.get("error"), str)`
+  rather than `"error" in resp` — defeats false-positive on responses
+  that include `"error": null` alongside a successful `choices` array.
+
+recommend-models.py:
+- T2.13: `WhatCanIRunEvidence.raw` set to None at extraction (was
+  carrying the entire upstream featured-model dict into the agent's
+  JSON context — an indirect prompt-injection surface).
+- T2.14: cache-arg path-traversal confinement — when
+  `CLAUDE_PLUGIN_DATA` is set, `--from-cache` / `--save-cache` /
+  `--whatcanirun-{,from-,save-}cache` paths must resolve under
+  `default_cache_dir()`. Standalone CLI mode keeps unrestricted
+  paths.
+- T3.12: `extract_featured_models()` recursion bounded to depth 64;
   attacker-controlled deeply-nested JSON no longer triggers
   RecursionError.
-- Response charset pinned to a small allow-list (utf-8, ascii,
-  latin-1, iso-8859-1, windows-1252); exotic codecs no longer mangle
-  the content while parsing "successfully".
-- `safe_local_dir_name()` strips leading dots so a poisoned
+- T3.13: response-decoder `charset` pinned to a small allow-list
+  (utf-8, ascii, latin-1, iso-8859-1, windows-1252); exotic codecs
+  no longer mangle the content while parsing "successfully".
+- T3.14: `safe_local_dir_name()` strips leading dots so a poisoned
   `display_name = "..ssh"` cannot produce a `./models/..ssh` path.
-- `BRAND_PROVIDER_PREFIXES` matching requires a word-boundary after
-  the prefix — `phidias-xxx` no longer mis-matches `phi` as
-  Microsoft.
-- `--context-tokens` lower bound raised to 4096; `--limit` bounded
-  to 1-1000.
-- `setup_logging()` prints to stderr when both candidate log paths
-  fail instead of silently disabling logging.
-- `whatcanirun_cache_save_failure` raises when the user EXPLICITLY
-  passed `--save-whatcanirun-cache` (implicit auto-save failures
-  remain warning-only).
+- T3.17: `BRAND_PROVIDER_PREFIXES` matching requires a word-boundary
+  after the prefix — `phidias-xxx` no longer mis-matches `phi` and
+  surface as Microsoft.
+- T3.18: `--context-tokens` lower bound raised to 4096; `--limit`
+  bounded to 1-1000.
+- T3.20: `setup_logging()` now prints to stderr when both candidate
+  log paths fail instead of silently disabling logging.
+- T3.21: `whatcanirun_cache_save_failure` raises when the user
+  EXPLICITLY passed `--save-whatcanirun-cache` (implicit auto-save
+  failures keep warning-only behaviour).
 
-**Agent prompt + slash command:**
+All gates green: ruff / pyright (0 errors) / shellcheck.
+Cache-confinement smoke-tested: CLAUDE_PLUGIN_DATA=/tmp/x rejects
+`--from-cache /etc/passwd` at argparse-error time.
 
-- New Step 0 reads the existing settings.yaml + calls `discover` to
-  show every already-configured profile. Asks whether the user is
-  adding / fixing / replacing before generating the snippet.
-- Sub-step 6a checks profile-name collisions against existing
-  profiles and suggests `<name>-2` / `-3` on conflict; the paste
-  instructions now lead with `cp settings.yaml settings.yaml.bak`
-  as the safety net for YAML-indent typos.
-- Step 6 now calls `scripts/setup/build-snippet.py` instead of an
-  LLM-built f-string.
-- hf install fallback chain is uv → pipx → pip-user → bootstrap-uv
-  (handles PEP 668 systems where bare `pip install --user` aborts).
-  Install command version-pinned to `huggingface-hub[cli]>=0.25,<1.0`.
-- `hf auth whoami` probe after install surfaces an info line about
-  gated Llama / Gemma / Mistral repos requiring a free token (does
-  NOT block — public models work without auth).
-- Verdict block surfaces explicit warnings on `output_length` /
-  `long_context` / `code_understanding` scores < 1.0 (with
-  per-runner --max-tokens hints).
-- New "Idempotency / resume" subsection — agent checks state-file
-  mtime (within last hour) and offers resume per-step.
-- `commands/llm-externalizer-setup.md`: OpenRouter redirect moved to
-  the top so impatient users see it before scrolling past the seven
-  steps.
+- Fix(setup): audit-driven Tier-1 security + correctness fixes
 
-**Skills:**
+Closes the highest-severity findings from a four-agent audit swarm
+(skeptical-reviewer + code-correctness + security + silent-failures):
 
-- `huggingface-mlx-models`: default port 8080 → 8082 so MLX and
-  llama-server can run side-by-side without colliding.
-- `huggingface-best`: all three `curl -H "Authorization: Bearer ..."`
-  blocks now use `hf auth token` (canonical, hf-CLI-managed) instead
-  of `cat ~/.cache/huggingface/token` (legacy `huggingface-cli` path
-  that the current `hf auth login` no longer writes to).
+Security (HIGH):
+- test-model.py: reject non-http(s) URL schemes — `file:///proc/self/environ`
+  / `http://169.254.169.254/...` would otherwise leak HF_TOKEN /
+  OPENROUTER_API_KEY through the wizard's test JSON output (SSRF +
+  scheme confusion, CWE-918).
+- recommend-models.py: `safe_args_for_log()` now actually redacts —
+  the previous implementation was identical to `vars(args)` despite
+  the name. Added `safe_argv_for_log()` for `sys.argv` logging.
+  Closes a future-credential-leak hazard for any upstream re-sync
+  that adds a secret-bearing CLI flag.
+- recommend-models.py: cap `fetch_text()` body read at 50 MB — a
+  hostile mirror / MITM could otherwise return a multi-GB response
+  and OOM-kill the wizard.
 
-Deferred-by-design (NOT applied, see TRDD-3ef94759 for rationale):
+Correctness (MAJOR):
+- recommend-models.py: emit `schema_version: 1` in the --json
+  payload. The setup agent's Step-4 narrative now verifies this
+  before consuming `recommendations[]`; if the value differs or is
+  missing (e.g. upstream re-sync rename), the agent falls back to
+  manual-name entry instead of silently rendering "None" or zero
+  scores.
+- test-model.py: introduce STRUCTURED_TEST_KEY constant + use
+  `.get()` for the verdict lookup. A future rename of the
+  structured-output test no longer crashes the verdict path with
+  KeyError and produces no JSON.
+- detect-environment.sh: numeric guards on sysctl / awk / wmic
+  output. Empty or N/A values previously crashed bash arithmetic
+  under `set -euo pipefail`, producing no JSON for the agent to
+  parse. Same fix applied across macOS / Linux / Windows branches.
+- detect-environment.sh: rocm-smi GPU detection now verifies an
+  actual AMD card via `--showid` (rocm-smi installed for HIP
+  development on a non-AMD box no longer mis-tags GPU as amd-rocm).
+- detect-runners.py: add `_safe_model_names()` helper, use in all
+  five detectors. A malformed `/v1/models` or `/api/tags` payload
+  (non-list at the key, non-dict items, missing name field) no
+  longer KeyError-cascades into "runner not installed" via main()'s
+  outer except.
+- recommend-models.py: strip whitespace from `CLAUDE_PLUGIN_DATA`
+  before consulting it. `CLAUDE_PLUGIN_DATA=" "` is truthy in
+  Python but `Path(" ")` resolves to a literal " " directory.
 
-- T3.8 (drop the 5-skill preload) — preload was an explicit user
-  decision in a prior session; reversing it without confirmation
-  was inappropriate.
-- T3.11 (TLS pin / --ca-bundle on recommend-models.py) — audit-marked
-  LOW + "accepted risk".
+Documentation (MINOR):
+- agents/llm-externalizer-setup-agent.md: fix `.expanduser()` on a
+  `str` literal in the YAML-validation diagnostic command (strings
+  don't have that method — was `AttributeError` at the user's
+  console).
 
-Closes TRDD-3ef94759. All audit-flagged HIGH / MAJOR / CRITICAL findings
-addressed. Verified: ruff / pyright (0 errors) / shellcheck — all clean.
+Full audit reports + consolidated fix plan in reports/setup-agent-
+audit/ (gitignored, not committed): 4 per-domain reports + 1
+consolidated. Tier 2 (UX + Windows-detection rework) and Tier 3
+(polish + skill cleanups) tracked separately for the next session.
 
-## [9.6.0] - 2026-05-14
+Verified: ruff check / pyright (0 errors) / shellcheck — all clean.
+SSRF guard smoke-tested: file:// rejected, http://localhost allowed.
 
-### Added
 
-- Feat(setup): add `/llm-externalizer-setup` wizard agent + helper skills
+### Miscellaneous
 
-A new interactive wizard helps users get a local-model backend working
-end-to-end: detect platform (OS, arch, RAM, GPU), find installed runners
-(Ollama, LM Studio, vLLM, llama.cpp, Jan), suggest + offer to install one
-when none are present, help download a Hugging Face model (auto-installs
-the `hf` CLI when missing), run five calibrated compatibility tests on
-the selected model, then emit a ready-to-paste settings.yaml profile
-snippet. The agent NEVER writes to ~/.llm-externalizer/settings.yaml
-directly — user-only-configuration policy (the `set_settings` and
-`change_model` MCP tools remain disabled by design).
+- Chore: sync uv.lock to pyproject.toml downbump (9.9.0)
 
-New artefacts:
+- Chore: downbump pyproject.toml version to 9.9.0 so publish.py regex bumps
 
-- agents/llm-externalizer-setup-agent.md — Sonnet-tier 7-step wizard.
-  The five helper skills below are preloaded into the agent's context
-  at startup via the `skills:` frontmatter field (Claude Code sub-agent
-  skill-preload mechanism), so the wizard has deterministic access to
-  deep reference content without per-step Skill-tool roundtrips.
-- commands/llm-externalizer-setup.md — `/llm-externalizer-setup` slash
-  command that dispatches the agent.
-- scripts/setup/detect-environment.sh — OS / arch / RAM / GPU detector
-  emitting a JSON snapshot (WSL2 detected via /proc/version).
-- scripts/setup/detect-runners.py — stdlib-only probe for the five
-  supported runners. Returncode-strict version capture so ImportError
-  tracebacks no longer leak into the captured "version" field.
-- scripts/setup/test-model.py — five calibrated tests: `smoke`,
-  `structured_output` (the hard compatibility gate — response_format
-  json_schema), `code_understanding` (off-by-one bug detection,
-  strict-JSON output), `long_context` (~30 K tokens in, relevant
-  one-sentence summary out), `output_length` (≥4 K tokens before
-  stopping). Pass threshold: average ≥0.6 AND structured_output ≥0.5.
-- scripts/setup/recommend-models.py — vendored stdlib-only recommender
-  that queries the Onyx self-hosted-LLM leaderboard + whatcani.run
-  featured-artifact API to produce a ranked list of Hugging Face
-  models with crossplatform requirements and ready-to-run `hf`
-  download commands. Six surgical bug fixes were applied during
-  vendoring:
-  - Provider mis-attribution — `synthesize_model_from_artifacts` used
-    to set `provider=", ".join(creators)` from quantisation publishers
-    (unsloth, mlx-community, bartowski). Replaced with an
-    `infer_provider_from_name()` driven by a `BRAND_PROVIDER_PREFIXES`
-    map (Qwen→Alibaba, Gemma→Google, Llama→Meta, …); benchmark-template
-    provider is the secondary fallback; quantisation creators are
-    NEVER used as the model provider.
-  - Source-name parsing — display names like "Llama 3.2 3B Instruct
-    (4-bit)" used to split on `-` into "Llama 3.2 3B Instruct (4" and
-    "bit)" pieces, producing stray parentheses. Added
-    `normalize_source_name_for_parsing()` (strips whitespace + parens)
-    and changed the quant evidence path to prefer
-    `repo_leaf(hf_repo_id)` over `display_name`.
-  - DQ-prefix recognition — `is_quant_start_token` now recognises
-    MLX's `DQ<digit>` family (DQ3_K_M, DQ4plus) as a quant start
-    token.
-  - Compound-quant preservation — the fallback parser used to stop at
-    the rightmost non-descriptor and collapse `DQ3_K_M-q8` into just
-    `dq3_k_m`. Rewrote to extend the quant region leftward across
-    consecutive quant tokens, preserving compound schemes
-    (DQ3_K_M-Q8, MXFP4-Q8, 4bit-DWQ, mixed_3_4).
-  - Template-provider fallback order — `best_benchmark_template_for_artifact`
-    used to pick `DS-R1-Distill-Llama-70B` for any Llama quant via a
-    weak family-tokens fallback, surfacing "DeepSeek" as the provider
-    for genuine Meta-Llama variants. Re-ordered so
-    `infer_provider_from_name(model_name)` runs first; the template
-    provider is used only when name inference returns None.
-  - Cache reroute — `default_cache_dir()` writes to
-    `$CLAUDE_PLUGIN_DATA/setup/cache` when the plugin env var is set,
-    with the original `~/.cache/local-llm-coding-recommender` path
-    retained for standalone CLI use.
+Same self-defeat as index.ts — pyproject.toml uses a regex-substitute
+that no-ops when current == target.
 
-  The script ships with an MIT SPDX header, upstream credit, and an
-  in-file re-sync procedure. The author retains copyright; no
-  third-party license attribution is required.
+- Chore: revert index.ts version to 9.9.0 so publish.py regex bumps to 9.10.0
 
-- skills/huggingface-best/SKILL.md, skills/huggingface-local-models/SKILL.md,
-  skills/huggingface-mlx-models/SKILL.md, skills/hf-cli/SKILL.md,
-  skills/huggingface-community-evals/SKILL.md — five helper skills that
-  the setup wizard preloads via its `skills:` frontmatter list. All
-  five carry `user-invocable: false` so they don't appear in the
-  user's `/` menu but remain available to the agent's auto-invocation
-  path. Each skill carries an "Integration with the llm-externalizer
-  setup agent" block explaining where it slots into the 7-step flow:
-  - huggingface-best — leaderboard widening (secondary discovery path
-    when the recommender output is too narrow).
-  - huggingface-local-models — llama.cpp / GGUF / Ollama deep
-    reference.
-  - huggingface-mlx-models — Apple Silicon MLX reference +
-    mlx_lm.server + `generic-local` preset wiring. The local-models
-    skill explicitly does not cover MLX, so this skill fills that
-    gap.
-  - hf-cli — Hugging Face CLI primer (auth, download, search).
-  - huggingface-community-evals — rigorous inspect-ai / lighteval
-    paths the user can opt into AFTER the wizard's 5-test verdict,
-    for quality grading rather than compatibility gating.
+publish.py step 5 substitutes version in index.ts via
+re.sub(<regex>, ..., src); when current == target the sub is a no-op
+and the script aborts with 'regex failed to match'. Setting the
+in-source version back to 9.9.0 lets publish.py --set 9.10.0 do the
+substitution and continue.
 
-### Changed
+- Chore(mass-scout): F2-F5 calibration follow-ups from prior session
+
+Bundles the five code/docs fixes surfaced by the deploy-triage
+calibration of the mass-scout subsystem (TRDD-52547970 mass-scouting,
+prior session). All findings were verified against the running pipeline
+before this commit lands.
+
+- F2 (mcp-tools.ts, cli.ts): mass_scout + mass_scout_export now plumb
+  --output-dir end-to-end so reports actually land where the caller
+  asks instead of falling back to the plugin's install cache.
+- F3 (cost-estimate.ts): fetchProviderContext encodes model id
+  segments separately so `provider/model` is no longer URL-encoded
+  into `provider%2Fmodel` and 404'd by OpenRouter. Adds 4 regression
+  tests in cost-estimate.test.ts.
+- F4 (scout.ts, cost-estimate.ts): scout workers and estimate workers
+  now share `DEFAULT_SCOUT_WORKERS = 16`, eliminating the 256-vs-16
+  drift that made est_seconds = 15 s for a job that actually took 1000 s.
+- F5 (mass-scouting SKILL.md, references/fieldsets.md, mcp-tools
+  build_fieldset description): documents the `array_enum` shorthand
+  with the two real forms (with and without `(max_items)`), confirming
+  what the code already supported. Pure docs update.
+- cli.ts: defaultMainRoot resolution priority rewritten —
+  CLAUDE_PROJECT_DIR first (Claude Code 2.1.139+ guarantee), then
+  git worktree list (rejecting plugin-cache resolves), then cwd.
+  resolveReportDir helper centralises --output-dir handling for both
+  runScout and runExport.
+- commands/llm-externalizer-mass-scout.md: documents the new
+  --output-dir flag.
+- skills/llm-externalizer-mass-scouting/SKILL.md: rewrites the
+  description so the LLM Externalizer mass-scout actually wins its
+  PSS suggestion battle for "search and categorize" queries (calibration
+  finding F1, the original tripwire).
+
+Calibration was a 393-deployment-skill triage scan over 3,632 candidate
+files; the five fixes here are exactly what needed to land for the
+calibration to be reproducible. No new features, no API breaks.
+
+5 new tests added; full vitest + tsc + eslint clean.
+
+
+### Refactored
 
 - Refactor(hooks): migrate SessionStart hook to exec form per Claude Code 2.1.139
 
 Replaces the legacy shell-form command
 `bash "${CLAUDE_PLUGIN_ROOT}/scripts/hooks/install-mcp-deps.sh"` with
-the exec-form pair (`command: "bash"`,
-`args: ["${CLAUDE_PLUGIN_ROOT}/scripts/hooks/install-mcp-deps.sh"]`).
-The exec form avoids shell quoting hazards on paths containing spaces
-and matches the canonical example in the Claude Code 2.1.139 hook
-reference. No runtime behaviour change.
+the exec-form pair (command: "bash", args:
+["${CLAUDE_PLUGIN_ROOT}/scripts/hooks/install-mcp-deps.sh"]). The exec
+form avoids shell quoting hazards on paths containing spaces and
+matches the canonical example in the Claude Code 2.1.139 hook
+reference.
+
+No runtime behaviour change — install-mcp-deps.sh receives identical
+arguments either way; only the JSON shape changes.
+
 
 ## [9.5.1] - 2026-05-09
 
@@ -681,6 +1362,7 @@ ways to supply the key, ranked by what works across all consumers:
 
 The Auth section further down and the statusline NOTE now both
 point back at this section instead of repeating the explanation.
+
 
 ## [9.5.0] - 2026-05-09
 
@@ -722,6 +1404,7 @@ Removed:
 All gates pass: tsc, eslint, build, vitest 341/341, ruff, shellcheck
 on both install.sh + install-mcp-deps.sh, plugin.json, claude plugin
 validate, cpv-remote-validate.
+
 
 ## [9.4.3] - 2026-05-09
 
@@ -768,6 +1451,7 @@ small CPV publish-gate fixes:
 Verified: tsc/eslint/build clean, 341/341 vitest pass, ruff/pyright
 clean, all four ensemble + free OpenRouter models return PONG.
 
+
 ## [9.4.2] - 2026-05-08
 
 ### Fixed
@@ -813,6 +1497,7 @@ serializes simultaneous SessionStart fires.
 Tested in isolation: 0.88 s fresh install (npm ci + native prebuild),
 9 ms idempotent re-run, friendly error on missing deps,
 clean handshake on populated install.
+
 
 ## [9.4.1] - 2026-05-07
 
@@ -949,6 +1634,7 @@ MCP tool descriptions:
   filter / limit_per_job / limit_merged / json) so MCP clients show
   meaningful tooltips.
 
+
 ## [9.4.0] - 2026-05-07
 
 ### Added
@@ -960,25 +1646,26 @@ commit. Adds the full TRDD-52547970 pipeline (register → preclassify →
 estimate → scout → search) plus eight follow-on tools that came out of the
 audit pass:
 
-- mass_scout_jobs_list / audit_sample / body_get — job introspection
-- mass_scout_build_fieldset / propose_fieldset / list_bundled_fieldsets —
+* mass_scout_jobs_list / audit_sample / body_get — job introspection
+* mass_scout_build_fieldset / propose_fieldset / list_bundled_fieldsets —
   fieldset authoring (shorthand parser, LLM-driven proposer, and 4
   plugin-shipped fieldsets: code-audit, skill-audit, security-audit,
   pr-review)
-- mass_scout_diff / chain — job-to-job operations (row-by-row diff and
+* mass_scout_diff / chain — job-to-job operations (row-by-row diff and
   filtered re-scout with a fresh fieldset)
 
 Other improvements:
 
-- --live-context flag wires fetchProviderContext into estimate/scout so
+* --live-context flag wires fetchProviderContext into estimate/scout so
   the real provider context_length overrides KNOWN_PRICING when the
   account routes to a smaller-cap endpoint
-- MCP notifications/progress events propagate through scout and chain
+* MCP notifications/progress events propagate through scout and chain
   so long-running jobs keep the connection alive and emit real progress
-- Skill rewrite (when-NOT-to-use, model selection, privacy, troubleshooting
+* Skill rewrite (when-NOT-to-use, model selection, privacy, troubleshooting
   flowchart, glossary, worked example, bundled fieldsets section)
 
 Tests: 341 passing (was 332).
+
 
 ### Fixed
 
@@ -1044,6 +1731,7 @@ return is only reachable on the success path, the initials never feed
 the read site. Switched to declare-without-init so the lint rule is
 satisfied without changing behaviour.
 
+
 ## [9.3.0] - 2026-04-22
 
 ### Added
@@ -1097,6 +1785,7 @@ New components:
 
 Python scripts use PEP 723 inline metadata to declare ruamel.yaml as
 a dep — `uv run` installs it on demand, no system pip touch.
+
 
 ## [9.2.0] - 2026-04-22
 
