@@ -1,6 +1,23 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.10.2] - 2026-05-19
+
+### Fixed
+
+- Fix: clear CPV ghost-dispatch + Zod 4 deprecation, add CLAUDE_PROJECT_DIR support
+
+- Rewrite 4 command dispatch blocks to expose literal sonnet/opus
+  subagent_type strings, clearing 8 CRITICAL RC-GHOST-DISPATCH-001.
+- Rephrase "Never reuse the same agent" -> "Each bug gets a brand-new
+  dispatch" in fix-found-bugs.md to clear MAJOR prose false positive
+  on the word "same".
+- Replace deprecated z.object({}).passthrough() with z.looseObject({})
+  per Zod 4 (transitive via @modelcontextprotocol/sdk ^1.26.0).
+- Respect CLAUDE_PROJECT_DIR for OUTPUT_DIR when set (CC 2.1.139+ MCP
+  stdio servers receive it as an env var).
+
+
 ## [9.10.1] - 2026-05-19
 
 ### Fixed
