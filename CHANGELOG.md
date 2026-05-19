@@ -1,6 +1,48 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.10.1] - 2026-05-19
+
+### Fixed
+
+- Fix(publish): make version-sync idempotent for current==target re-runs
+
+Step 5 of `scripts/publish.py` rewrites the version literal in
+`mcp-server/src/index.ts` and `pyproject.toml`. The OLD code used
+`re.sub` then `if updated == src: error()` to detect regex failure.
+That `==` check conflated TWO distinct conditions:
+
+  - regex didn't match anywhere (real structural bug)
+  - regex matched but produced identical text (current == target,
+    an idempotent no-op)
+
+When current == target the `[^"'`]+` group still matches "9.10.0"
+and substitutes with "9.10.0", emitting the same text. The script
+then aborted with `ERROR: regex failed to match version`.
+
+That failure mode prevented legitimate idempotent republishes — e.g.
+retrying after a network blip in step 10, or republishing the same
+version after a hand-fixed release artifact. The v9.10.0 publish
+hit it on index.ts AND pyproject.toml and shipped three throwaway
+downbump chore commits (e855105, 0453452, 301df78) as workaround.
+
+The fix switches to `re.subn` so we can distinguish "no match"
+(count==0) from "matched and substituted" (count>=1). The
+count>=1 path writes the file unconditionally — an idempotent no-op
+when current == target. The count==0 path checks whether the
+target is already present in a different file shape before
+declaring a structural bug.
+
+`uv lock` now runs unconditionally when pyproject.toml exists
+(transitive deps may have drifted since the last lock), and logs
+the action distinctly for "regenerated" versus "re-resolved".
+
+Regression covered by tests/test_publish_idempotent.py (9 tests):
+mirror functions exercise the exact regex patterns through all
+four states — replace, idempotent no-op, missing constructor,
+missing version line — including a v9.10.0 incident reproduction.
+
+
 ## [9.10.0] - 2026-05-19
 
 ### Added
