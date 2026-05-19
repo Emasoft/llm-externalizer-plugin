@@ -1,10 +1,14 @@
 ---
 name: huggingface-community-evals
-description: "Run rigorous evaluations against Hugging Face Hub models using inspect-ai or lighteval on local hardware. Covers backend selection (vLLM / Transformers / accelerate), local GPU evals, smoke tests, task selection, and backend fallback strategy. NOT for HF Jobs orchestration, model-card PRs, .eval_results publication, or community-evals automation."
+description: "Run rigorous evaluations against Hugging Face Hub models using inspect-ai or lighteval on local hardware. Covers backend selection (vLLM / Transformers / accelerate), local GPU evals, smoke tests, and task selection. Use when the user wants a deeper benchmark than the wizard's 5-test compatibility check. Loaded by llm-externalizer-setup-agent."
 user-invocable: false
 ---
 
-## Integration with the llm-externalizer setup agent
+## Overview
+
+Run rigorous evaluations against Hugging Face Hub models on local hardware via `inspect-ai` or `lighteval`. Use AFTER the model has passed the wizard's compatibility check, when the user explicitly asks for a deeper benchmark (MMLU, HumanEval, etc.). NOT for HF Jobs orchestration, model-card PRs, `.eval_results` publication, or community-evals automation.
+
+## Prerequisites
 
 The setup wizard's `scripts/setup/test-model.py` runs 5 fast calibrated tests
 on a selected model and serves as the wizard's pass/fail verdict:
@@ -32,7 +36,7 @@ The skill's output is INFORMATIONAL. The wizard's pass/fail verdict still
 comes from `test-model.py`, not from this skill — the eval suite is for
 quality grading, not compatibility gating.
 
-# Overview
+## Detailed scope
 
 This skill is for **running evaluations against models on the Hugging Face Hub on local hardware**.
 
@@ -54,18 +58,20 @@ If the user wants to **run the same eval remotely on Hugging Face Jobs**, hand o
 
 If the user wants to **publish results into the community evals workflow**, stop after generating the evaluation run and hand off that publishing step to `~/code/community-evals`.
 
-> All paths below are relative to the directory containing this `SKILL.md`.
+> All paths below are relative to the directory containing this skill file.
 
-# When To Use Which Script
+### When To Use Which Script
 
 | Use case | Script |
 |---|---|
-| Local `inspect-ai` eval on a Hub model via inference providers | `scripts/inspect_eval_uv.py` |
-| Local GPU eval with `inspect-ai` using `vllm` or Transformers | `scripts/inspect_vllm_uv.py` |
-| Local GPU eval with `lighteval` using `vllm` or `accelerate` | `scripts/lighteval_vllm_uv.py` |
-| Extra command patterns | `examples/USAGE_EXAMPLES.md` |
+| Local `inspect-ai` eval on a Hub model via inference providers | [inspect_eval_uv.py](scripts/inspect_eval_uv.py) |
+| Local GPU eval with `inspect-ai` using `vllm` or Transformers | [inspect_vllm_uv.py](scripts/inspect_vllm_uv.py) |
+| Local GPU eval with `lighteval` using `vllm` or `accelerate` | [lighteval_vllm_uv.py](scripts/lighteval_vllm_uv.py) |
+| Extra command patterns | [USAGE_EXAMPLES](examples/USAGE_EXAMPLES.md) |
 
-# Prerequisites
+USAGE_EXAMPLES sections: What this skill covers · What this skill does NOT cover · Setup · inspect-ai examples · lighteval examples · Hand-off to Hugging Face Jobs.
+
+### Tools required
 
 - Prefer `uv run` for local execution.
 - Set `HF_TOKEN` for gated/private models.
@@ -81,7 +87,9 @@ If `nvidia-smi` is unavailable, either:
 - use `scripts/inspect_eval_uv.py` for lighter provider-backed evaluation, or
 - hand off to the `hugging-face-jobs` skill if the user wants remote compute.
 
-# Core Workflow
+## Instructions
+
+### Core Workflow
 
 1. Choose the evaluation framework.
    - Use `inspect-ai` when you want explicit task control and inspect-native flows.
@@ -95,9 +103,9 @@ If `nvidia-smi` is unavailable, either:
 4. Scale up only after the smoke test passes.
 5. If the user wants remote execution, hand off to `hugging-face-jobs` with the same script + args.
 
-# Quick Start
+### Quick Start
 
-## Option A: inspect-ai with local inference providers path
+#### Option A: inspect-ai with local inference providers path
 
 Best when the model is already supported by Hugging Face Inference Providers and you want the lowest local setup overhead.
 
@@ -113,7 +121,7 @@ Use this path when:
 - you do not need direct GPU control
 - the task already exists in `inspect-evals`
 
-## Option B: inspect-ai on Local GPU
+#### Option B: inspect-ai on Local GPU
 
 Best when you need to load the Hub model directly, use `vllm`, or fall back to Transformers for unsupported architectures.
 
@@ -137,7 +145,7 @@ uv run scripts/inspect_vllm_uv.py \
   --limit 20
 ```
 
-## Option C: lighteval on Local GPU
+#### Option C: lighteval on Local GPU
 
 Best when the task is naturally expressed as a `lighteval` task string, especially Open LLM Leaderboard style benchmarks.
 
@@ -162,7 +170,7 @@ uv run scripts/lighteval_vllm_uv.py \
   --max-samples 20
 ```
 
-# Remote Execution Boundary
+### Remote Execution Boundary
 
 This skill intentionally stops at **local execution and backend selection**.
 
@@ -175,7 +183,7 @@ If the user wants to:
 
 then switch to the **`hugging-face-jobs`** skill and pass it one of these scripts plus the chosen arguments.
 
-# Task Selection
+### Task Selection
 
 `inspect-ai` examples:
 - `mmlu`
@@ -194,7 +202,7 @@ then switch to the **`hugging-face-jobs`** skill and pass it one of these script
 
 Multiple `lighteval` tasks can be comma-separated in `--tasks`.
 
-# Backend Selection
+### Backend Selection
 
 - Prefer `inspect_vllm_uv.py --backend vllm` for fast GPU inference on supported architectures.
 - Use `inspect_vllm_uv.py --backend hf` when `vllm` does not support the model.
@@ -202,7 +210,7 @@ Multiple `lighteval` tasks can be comma-separated in `--tasks`.
 - Use `lighteval_vllm_uv.py --backend accelerate` as the compatibility fallback.
 - Use `inspect_eval_uv.py` when Inference Providers already cover the model and you do not need direct GPU control.
 
-# Hardware Guidance
+### Hardware Guidance
 
 | Model size | Suggested local hardware |
 |---|---|
@@ -212,7 +220,11 @@ Multiple `lighteval` tasks can be comma-separated in `--tasks`.
 
 For smoke tests, prefer cheaper local runs plus `--limit` or `--max-samples`.
 
-# Troubleshooting
+## Output
+
+Return the evaluation results table (scored metric per task per model), with the smoke-test pass/fail clearly indicated, and the next-step recommendation (scale up locally / hand off to HF Jobs / try a different backend).
+
+## Error Handling
 
 - CUDA or vLLM OOM:
   - reduce `--batch-size`
@@ -227,10 +239,33 @@ For smoke tests, prefer cheaper local runs plus `--limit` or `--max-samples`.
 - Custom model code required:
   - add `--trust-remote-code`
 
-# Examples
+## Examples
 
-See:
-- `examples/USAGE_EXAMPLES.md` for local command patterns
-- `scripts/inspect_eval_uv.py`
-- `scripts/inspect_vllm_uv.py`
-- `scripts/lighteval_vllm_uv.py`
+See [USAGE_EXAMPLES](examples/USAGE_EXAMPLES.md) for local command patterns.
+
+```bash
+# Smoke test on a tiny model with mmlu via providers
+uv run scripts/inspect_eval_uv.py --model meta-llama/Llama-3.2-1B --task mmlu --limit 20
+
+# Local GPU vLLM run on gsm8k
+uv run scripts/inspect_vllm_uv.py --model meta-llama/Llama-3.2-1B --task gsm8k --limit 20
+
+# lighteval with accelerate fallback
+uv run scripts/lighteval_vllm_uv.py --model microsoft/phi-2 --tasks "leaderboard|mmlu|5" --backend accelerate --max-samples 20
+```
+
+## Resources
+
+- [inspect_eval_uv.py](scripts/inspect_eval_uv.py) — inspect-ai eval via Inference Providers
+- [inspect_vllm_uv.py](scripts/inspect_vllm_uv.py) — inspect-ai with local vLLM / HF backend
+- [lighteval_vllm_uv.py](scripts/lighteval_vllm_uv.py) — lighteval with vLLM / accelerate backend
+- [USAGE_EXAMPLES](examples/USAGE_EXAMPLES.md) — extra command patterns.
+  - What this skill covers
+  - What this skill does NOT cover
+  - Setup
+  - inspect-ai examples
+  - lighteval examples
+  - Hand-off to Hugging Face Jobs
+- inspect-ai: `https://github.com/UKGovernmentBEIS/inspect_ai`
+- lighteval: `https://github.com/huggingface/lighteval`
+- HF Inference Providers: `https://huggingface.co/docs/inference-providers`

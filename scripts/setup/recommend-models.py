@@ -975,7 +975,7 @@ def detect_total_ram_gb() -> float:
             ]
         status = MemoryStatusEx()
         status.dwLength = ctypes.sizeof(status)
-        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):  # pyright: ignore[reportAttributeAccessIssue]  # ctypes.windll is Windows-only; guarded above by platform.system() == "Windows"
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]  # ctypes.windll is Windows-only; guarded above by platform.system() == "Windows"
             return status.ullTotalPhys / 1024**3
     if platform.system() == "Darwin":
         sysctl = run_command(["sysctl", "-n", "hw.memsize"])

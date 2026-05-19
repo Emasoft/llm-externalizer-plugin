@@ -20,7 +20,7 @@
 
 ## Source plugin reviewed
 
-Path: `/Users/emanuelesabetta/Code/review-loop-opus` (local marketplace,
+Path: `~/Code/review-loop-opus` (local marketplace,
 not on GitHub — installed via `claude plugin marketplace add <path>`).
 
 Architecture summary:
@@ -162,7 +162,7 @@ as a new backend, not the review-after-task model.
 
 ## Notes
 
-- The user's marketplace plugin is local-only (`/Users/emanuelesabetta/Code/review-loop-opus`),
+- The user's marketplace plugin is local-only (`~/Code/review-loop-opus`),
   no GitHub repo. Do not assume it's installable from a public marketplace.
 - Per the cross-project rule, we do not modify review-loop-opus
   directly — we read its files for reference only.

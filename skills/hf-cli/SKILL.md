@@ -1,10 +1,14 @@
 ---
 name: hf-cli
-description: "Hugging Face Hub CLI (`hf`) reference for downloading, uploading, and managing models, datasets, and repos. Covers custom --local-dir placement, --include/--exclude file filters, --revision pinning, cache management (hf cache scan/delete), and `hf auth login` for gated repos. Replaces the deprecated huggingface-cli."
+description: "Hugging Face Hub CLI (`hf`) reference for downloading, uploading, and managing models, datasets, and repos. Covers custom --local-dir placement, --include/--exclude file filters, --revision pinning, cache management, and `hf auth login` for gated repos. Use when the setup wizard's pre-built download_command needs extension. Loaded by llm-externalizer-setup-agent."
 user-invocable: false
 ---
 
-## Integration with the llm-externalizer setup agent
+## Overview
+
+Reference for the Hugging Face Hub CLI (`hf` — replaces the deprecated `huggingface-cli`). Covers downloading, uploading, and managing models / datasets / Spaces, custom `--local-dir` placement, file-level filters via `--include` / `--exclude`, revision pinning, cache management (`hf cache scan`, `hf cache delete`), and authentication (`hf auth login`) for gated repos.
+
+## Prerequisites
 
 The setup wizard reads pre-built `download_command` strings from
 `scripts/setup/recommend-models.py` — they are already shell-quoted and safe
@@ -36,7 +40,18 @@ Use `hf --help` to view available functions. Note that auth commands are now all
 
 Generated with `huggingface_hub v1.14.0`. Run `hf skills add --force` to regenerate.
 
-## Commands
+## Instructions
+
+Follow the workflow below for any `hf` command extension the wizard cannot pre-build:
+
+1. Determine which sub-command the user needs (`download`, `upload`, `cache scan`, `auth login`, etc.).
+2. Look up the flags in the Commands section below.
+3. Compose the command — prefer `--local-dir` for predictable placement.
+4. For gated repos: run `hf auth login` once before downloading.
+5. Run the command. On failure, consult Error Handling below.
+6. Verify the artifact landed where expected with `ls` / `hf cache scan`.
+
+### Commands
 
 - `hf download REPO_ID` — Download files from the Hub. `[--type CHOICE --revision TEXT --include TEXT --exclude TEXT --cache-dir TEXT --local-dir TEXT --force-download --dry-run --max-workers INTEGER --format CHOICE]`
 - `hf env` — Print information about the environment. `[--format CHOICE]`
@@ -222,7 +237,7 @@ Generated with `huggingface_hub v1.14.0`. Run `hf skills add --force` to regener
 
 To mount Hub repositories or buckets as local filesystems — no download, no copy, no waiting — use `hf-mount`. Files are fetched on demand. GitHub: https://github.com/huggingface/hf-mount
 
-Install: `curl -fsSL https://raw.githubusercontent.com/huggingface/hf-mount/main/install.sh | sh`
+Install with Homebrew: `brew install hf-mount` (works on macOS and Linux). Or download a release from `https://github.com/huggingface/hf-mount/releases`. Or build from source with `cargo build --release --features nfs,fuse` (Rust 1.89+).
 
 Some command examples:
 - `hf-mount start repo openai-community/gpt2 /tmp/gpt2` — mount a repo (read-only)
@@ -234,3 +249,41 @@ Some command examples:
 - Use `hf <command> --help` for full options, descriptions, usage, and real-world examples
 - Authenticate with `HF_TOKEN` env var (recommended) or with `--token`
 - Update the CLI with `hf update` (uses the correct command for the detected install method)
+
+## Output
+
+Return the executed command + its stdout (or relevant error) to the caller. For downloads, also report the on-disk path the artifact landed at.
+
+## Error Handling
+
+- **Gated repo** (`Access denied`): run `hf auth login`, accept the license on the HF web UI, retry.
+- **Filename mismatch** when using shorthand `repo:QUANT`: drop down to `--hf-repo` + `--hf-file` form (see `huggingface-local-models`).
+- **Disk pressure / cache bloat**: run `hf cache scan` to see usage, then `hf cache delete <repo>` to free space.
+- **Network timeout**: retry; for very large repos use `--max-workers 8` to parallelize, or use `hf-mount` to defer fetching to on-demand.
+
+## Examples
+
+```bash
+# Download a single GGUF file to a custom dir
+hf download unsloth/Qwen3.6-35B-A3B-GGUF Qwen3.6-35B-A3B-UD-Q4_K_M.gguf --local-dir ~/models/qwen
+
+# Download an MLX repo (directory-shaped)
+hf download mlx-community/Llama-3.3-70B-Instruct-4bit --local-dir ~/models/l3-70b-4bit
+
+# Pin to a specific revision for reproducibility
+hf download org/model file.safetensors --revision abc1234 --local-dir ~/models/model
+
+# Scan and clean the cache
+hf cache scan
+hf cache delete org/old-model
+
+# Authenticate before pulling a gated repo
+hf auth login
+```
+
+## Resources
+
+- Official docs: `https://huggingface.co/docs/huggingface_hub/en/guides/cli`
+- `huggingface_hub` Python lib: `https://github.com/huggingface/huggingface_hub`
+- `hf-mount` (on-demand mounts): `https://github.com/huggingface/hf-mount`
+- `hf` install: `https://hf.co/cli/install.sh`

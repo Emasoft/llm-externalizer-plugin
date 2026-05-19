@@ -1,20 +1,11 @@
 ---
 name: llm-externalizer-mass-scouting
 description: |-
-  Search, classify, categorize, and triage many files at once. Runs a cheap
-  LLM over a folder / corpus / codebase and extracts the SAME structured
-  fields from every file into a queryable SQLite registry. THE tool for "I
-  have N files — which are about X, and what is each one?" at any scale
-  (hundreds to millions of files) — reach for it BEFORE hand-rolling grep /
-  regex filter scripts. Use to triage or inventory a big folder, bucket
-  files by type or topic, find the files relevant to a subject, or
-  audit / scan / PR-review many files. Trigger with "mass scout", "search
-  and categorize files", "triage this corpus", "categorize a folder",
-  "classify all my files", "which files are about X", "build an inventory
-  of a folder", "catalog these repos", "scan many files for X", "find the
-  relevant files among thousands", "extract structured data from a folder",
-  "audit thousands of files", "run a fieldset over a codebase", "audit my
-  plugin", "PR review all changed files", "security-scan this repo".
+  Search, classify, categorize, and triage many files via a cheap LLM into a
+  queryable SQLite registry. Use when you have N files and need to know which
+  are about X at any scale (hundreds to millions). Trigger with "mass scout",
+  "triage this corpus", "categorize a folder", "build an inventory", "audit
+  thousands of files", "PR review all changed files".
 argument-hint: "[register | preclassify | estimate | scout | search | search-xjob | get | export | jobs-list | audit-sample | body-get | build-fieldset | propose-fieldset | list-bundled-fieldsets | diff | chain]"
 effort: medium
 ---

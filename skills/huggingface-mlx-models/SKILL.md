@@ -1,10 +1,16 @@
 ---
 name: huggingface-mlx-models
-description: "Select MLX-quantized models from the Hugging Face Hub and serve them on Apple Silicon (arm64) via any of the three first-class MLX runtimes — `mlx_lm.server` (Python-native, official), vMLX (`vmlx serve`, MLX-native server with built-in `doctor` / `bench`), or LM Studio's built-in MLX runtime (GUI / `lms` CLI). Covers mxfp4 / nvfp4 / OptiQ-4bit / DQ3_K_M / DQ4plus / mixed_* quant interpretation, unified-memory quant-budget guidance (total RAM − 4 GB headroom), and the `generic-local` / `vllm-local` / `lmstudio-local` preset wiring. NOT for Intel Macs (use huggingface-local-models — llama.cpp Metal works on x86_64) or non-Apple platforms."
+description: "Select MLX-quantized models from the Hugging Face Hub and serve them on Apple Silicon (arm64) via mlx_lm.server, vMLX, or LM Studio's MLX runtime. Covers mxfp4 / OptiQ-4bit / DQ3_K_M quant interpretation and unified-memory quant-budget guidance. Use when the setup wizard picks MLX on arm64. Loaded by llm-externalizer-setup-agent."
 user-invocable: false
 ---
 
-## Integration with the llm-externalizer setup agent
+## Overview
+
+Select MLX-quantized models from the Hugging Face Hub and serve them on Apple Silicon (arm64). Covers three first-class MLX runtimes (mlx_lm.server, vMLX, LM Studio MLX), quant label interpretation, unified-memory budgeting, and preset wiring. NOT for Intel Macs (use `huggingface-local-models`) or non-Apple platforms.
+
+## Prerequisites
+
+### Integration with the llm-externalizer setup agent
 
 The setup wizard's `scripts/setup/recommend-models.py` already emits, for
 every recommended model, the list of MLX artifacts available on Hugging Face
@@ -33,7 +39,25 @@ The wizard does NOT call this skill on Intel Macs (`uname -m` reports
 `x86_64` even on macOS) — MLX requires arm64. Redirect to
 `huggingface-local-models` (llama.cpp Metal) on Intel.
 
-# Hugging Face MLX Models (Apple Silicon)
+### External requirements
+
+- Apple Silicon Mac (M1 / M2 / M3 / M4 — `uname -m` returns `arm64`)
+- Python 3.10+ for `mlx_lm.server`
+- `hf` CLI authenticated for gated repos
+- One of: `pip install mlx-lm`, `brew install vmlx`, or LM Studio installed (`lms` on PATH)
+
+## Instructions
+
+Follow these numbered steps in order:
+
+1. Decide whether MLX is right for this Mac (see "When to prefer MLX over llama.cpp Metal on a Mac" below).
+2. Pick a runtime — `mlx_lm.server`, vMLX, or LM Studio MLX runtime (see "The three first-class MLX runtimes").
+3. Compute the unified-memory quant budget (total RAM minus 4 GB headroom).
+4. Run the runtime-agnostic default workflow to locate, download, and serve a compatible MLX-quantized model.
+5. Apply the runtime-specific launch flags (Runtime 1 / 2 / 3 sub-sections).
+6. Verify with the `/v1/models` endpoint and wire into the matching settings.yaml preset.
+
+### Hugging Face MLX Models (Apple Silicon)
 
 Find MLX-quantized models on the Hub, pick a quantization that fits the
 unified-memory budget of the user's Mac, and serve via one of the three
@@ -298,7 +322,35 @@ support) — see `Skill(skill: "vmlx-setup")` for the details.
 7. **Memory limit on 8 GB Macs**: an 8 GB Apple Silicon Mac with macOS, Chrome, and Claude Code already consumes ~5-6 GB. Only the smallest 4bit ≤3B models leave usable margin. Recommend OpenRouter remote mode (the llm-externalizer's `remote-ensemble` profile) instead.
 8. **Structured output**: the llm-externalizer requires `response_format: { type: "json_schema" }`. All three runtimes claim OpenAI compatibility but per-model honoring of structured output must be verified empirically — run the setup wizard's Step 5 compatibility test before trusting a given model.
 
-## Related skills
+## Output
+
+Return: chosen runtime (mlx_lm.server / vMLX / LM Studio), downloaded MLX repo + quant, launch command, `/v1/models` model-id verified, and the settings.yaml profile fragment ready for paste.
+
+## Error Handling
+
+Handled in "Common gotchas" above. Key items: Intel Mac (refuse, redirect), unified-memory pressure (close apps, lower context), unsupported tokenizer (upgrade mlx-lm or pick different family), port collisions (set distinct ports per runtime), 8 GB Macs (recommend OpenRouter remote mode instead).
+
+## Examples
+
+**Example 1 — M2 Pro 32 GB, vMLX runtime, 13B Q4 model:**
+
+```bash
+hf download mlx-community/Qwen3.6-32B-Instruct-4bit --local-dir ~/models/qwen3.6-32b-4bit
+vmlx serve ~/models/qwen3.6-32b-4bit --port 8000
+```
+
+Settings.yaml fragment: `mode: local`, `api: vllm-local`, `model: "mlx-community/Qwen3.6-32B-Instruct-4bit"`, `url: http://localhost:8000`.
+
+**Example 2 — M3 Max 64 GB, mlx_lm.server, 70B 4bit:**
+
+```bash
+hf download mlx-community/Llama-3.3-70B-Instruct-4bit --local-dir ~/models/l3-70b-4bit
+mlx_lm.server --model ~/models/l3-70b-4bit --host 127.0.0.1 --port 8082
+```
+
+## Resources
+
+### Related skills
 
 - `Skill(skill: "vmlx-setup")` — full vMLX install / serve / `doctor` / `bench` guide. Invoke when the user picks vMLX or wants the OpenAI-compatible MLX-native server on `:8000`.
 - `Skill(skill: "vllm-metal-setup")` — vLLM-on-Apple-Silicon (community `vllm-metal` plugin). Invoke when the user specifically wants vLLM semantics on a Mac. Also lands on the `vllm-local` preset at `:8000`.
@@ -306,3 +358,11 @@ support) — see `Skill(skill: "vmlx-setup")` for the details.
 - `Skill(skill: "hf-cli")` — full reference for the `hf` command (download, upload, search, cache management). Required for any MLX setup since downloads happen via `hf download` (LM Studio's in-app downloader is an alternative for the LM Studio runtime only).
 - `Skill(skill: "huggingface-best")` — finds the highest-scoring model for a task within the user's memory budget, across the official HF leaderboards.
 - `Skill(skill: "huggingface-community-evals")` — runs benchmark evaluations against a chosen model (inspect-ai, lighteval). Use AFTER the model is downloaded and serving, if you want quantitative validation beyond the llm-externalizer's 5-test compatibility check.
+
+### External references
+
+- MLX: `https://github.com/ml-explore/mlx`
+- mlx-lm: `https://github.com/ml-explore/mlx-lm`
+- vMLX: `https://github.com/jjang-ai/vmlx`
+- LM Studio: `https://lmstudio.ai`
+- mlx-community HF org: `https://huggingface.co/mlx-community`

@@ -162,7 +162,7 @@ def discover_files(
                 capture_output=True, text=True, timeout=30, check=False,
             )
             if result.returncode == 0:
-                paths = []
+                git_paths: list[Path] = []
                 for rel in result.stdout.splitlines():
                     p = folder / rel
                     if not p.is_file():
@@ -171,8 +171,8 @@ def discover_files(
                         continue
                     if ext_set is not None and p.suffix.lower() not in ext_set:
                         continue
-                    paths.append(p)
-                return paths
+                    git_paths.append(p)
+                return git_paths
         except (subprocess.SubprocessError, OSError):
             pass
 

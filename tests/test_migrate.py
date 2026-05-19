@@ -21,8 +21,6 @@ import sys
 import time
 from pathlib import Path
 
-import pytest
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MIGRATE_PATH = PROJECT_ROOT / "scripts" / "setup" / "migrate.py"
 

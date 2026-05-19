@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# Run via: uv run --script inspect_vllm_uv.py
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [

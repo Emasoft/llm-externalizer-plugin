@@ -5,14 +5,16 @@ description: |-
   hardware plugin that runs vLLM on Apple Silicon Macs via MLX. Use when the
   user wants vLLM on an Apple Silicon Mac, says "set up vllm-metal", "run vllm
   on my mac", "vllm on apple silicon", "install vllm-metal", or the
-  llm-externalizer setup wizard picks vLLM as the macOS backend. Apple Silicon
-  (arm64) ONLY — not Intel Macs, not Linux/Windows (use stock vLLM there).
+  llm-externalizer setup wizard picks vLLM as the macOS backend. Trigger with
+  /vllm-metal-setup or "set up vllm-metal". Apple Silicon (arm64) ONLY — not
+  Intel Macs, not Linux/Windows (use stock vLLM there).
 argument-hint: "[model-id] [--with-vllm-rs]"
 effort: medium
 ---
 
-# vllm-metal — Apple Silicon vLLM backend setup
+## Overview
 
+vllm-metal — Apple Silicon vLLM backend setup.
 `vllm-project/vllm-metal` is a **community-maintained** hardware plugin that
 makes vLLM run on Apple Silicon Macs using MLX as the compute backend. Stock
 vLLM is a CUDA project — on Apple Silicon `uv pip install vllm` fails to build
@@ -23,7 +25,9 @@ Once installed and serving, it exposes the **standard OpenAI-compatible API on
 `http://localhost:8000`**, so the llm-externalizer `vllm-local` profile preset
 works against it unchanged — no new preset needed.
 
-## Scope and limits — read first
+## Prerequisites
+
+### Scope and limits — read first
 
 - **Apple Silicon (arm64) only.** M1/M2/M3/M4. Do NOT use on Intel Macs
   (no Metal GPU path) or on Linux/Windows (use stock vLLM: `uv pip install vllm`).
@@ -35,7 +39,25 @@ works against it unchanged — no new preset needed.
   vllm-metal honors it must be verified empirically — run the setup wizard's
   Step 5 compatibility test (or `/llm-externalizer-setup`) before trusting it.
 
-## Step 1 — Preflight
+### Tools required
+
+- Apple Silicon Mac (`uname -m` returns `arm64`)
+- `curl` on PATH for the installer
+- `hf` CLI authenticated for gated repos
+- Optional: Rust toolchain (`rustup`) for `--with-vllm-rs`
+
+## Instructions
+
+Follow these six steps in order.
+
+1. Run Step 1 (Preflight) — abort if not on Apple Silicon.
+2. Run Step 2 (Install) — let the user execute the piped-curl installer.
+3. Serve a model via Step 3.
+4. Tune env vars per Step 4 only if needed.
+5. Verify with Step 5.
+6. Wire into the llm-externalizer settings.yaml in Step 6.
+
+### Step 1 — Preflight
 
 ```bash
 # Must be Apple Silicon.
@@ -46,7 +68,7 @@ works against it unchanged — no new preset needed.
 If this fails, stop and tell the user to use stock vLLM (Linux/NVIDIA),
 LM Studio, or Ollama instead.
 
-## Step 2 — Install
+### Step 2 — Install
 
 The official installer creates a venv at `~/.venv-vllm-metal` containing the
 vllm-metal plugin, vLLM core, and dependencies. Show the command, let the user
@@ -67,7 +89,7 @@ curl -fsSL https://raw.githubusercontent.com/vllm-project/vllm-metal/main/instal
 The installer bootstraps `uv` if missing and pins specific versions
 (vLLM core + plugin wheel). Expect a multi-minute first run.
 
-## Step 3 — Serve a model
+### Step 3 — Serve a model
 
 ```bash
 source ~/.venv-vllm-metal/bin/activate
@@ -82,7 +104,7 @@ vllm serve <model-id> --port 8000 --max-model-len 32768
 - Leave the terminal running, or background it; the server holds the model
   in unified memory.
 
-## Step 4 — Configure (env vars, optional)
+### Step 4 — Configure (env vars, optional)
 
 vllm-metal is tuned entirely through `VLLM_METAL_*` environment variables set
 *before* `vllm serve`. The ones worth surfacing:
@@ -101,7 +123,7 @@ Example for a 16 GB Mac that struggles to load a 7B model:
 VLLM_METAL_MEMORY_FRACTION=0.7 vllm serve <model-id> --port 8000 --max-model-len 16384
 ```
 
-## Step 5 — Verify
+### Step 5 — Verify
 
 ```bash
 curl -s http://localhost:8000/v1/models | jq '.data[].id'
@@ -112,7 +134,7 @@ completion (or let the setup wizard's Step 5 do the five calibrated
 compatibility tests — smoke, structured output, code understanding, long
 context, output length).
 
-## Step 6 — Wire into llm-externalizer
+### Step 6 — Wire into llm-externalizer
 
 vllm-metal's server is wire-compatible with the **`vllm-local`** preset
 (OpenAI-compatible, default `http://localhost:8000`). No new preset:
@@ -130,14 +152,20 @@ Hand this snippet to the user to paste into `~/.llm-externalizer/settings.yaml`
 (the wizard / `build-snippet.py` does the safe YAML quoting). NEVER write that
 file directly — profile changes are user-only.
 
-## Maintenance
+## Output
+
+A running `vllm serve` process on `http://localhost:8000` plus a ready-to-paste settings.yaml profile fragment for the `vllm-local` preset.
+
+## Error Handling
+
+### Maintenance
 
 - **Upgrade / repair:** `rm -rf ~/.venv-vllm-metal` then re-run the installer.
 - **Uninstall:** just delete `~/.venv-vllm-metal`.
 - **Custom install dir:** the installer supports a non-default venv path —
   substitute it everywhere `~/.venv-vllm-metal` appears above.
 
-## Failure modes
+### Failure modes
 
 - **`uv pip install vllm` was run instead** → that's stock vLLM and it does
   not work on Apple Silicon. Remove that environment and use this skill's
@@ -151,9 +179,22 @@ file directly — profile changes are user-only.
 - **Symlink / Rust frontend fails** → `--with-vllm-rs` needs `cargo` +
   `rustup` on PATH; install Rust first or drop the flag.
 
-## Related
+## Examples
 
-- `vmlx-setup` skill — the MLX-native alternative (vMLX). If the user wants
-  MLX inference rather than vLLM-on-MLX, that backend is lighter-weight and
-  ships built-in `doctor` + `bench` commands.
-- `huggingface-mlx-models` skill — selecting MLX-quantized models.
+```bash
+# Full happy-path install + serve on M2 Pro 32 GB
+curl -fsSL https://raw.githubusercontent.com/vllm-project/vllm-metal/main/install.sh | bash
+source ~/.venv-vllm-metal/bin/activate
+vllm serve mlx-community/Qwen3.6-32B-Instruct-4bit --port 8000 --max-model-len 32768
+
+# Tight-memory variant on M2 16 GB
+VLLM_METAL_MEMORY_FRACTION=0.7 vllm serve mlx-community/Llama-3.2-3B-Instruct --port 8000 --max-model-len 16384
+```
+
+## Resources
+
+- vllm-metal repo: `https://github.com/vllm-project/vllm-metal`
+- vLLM upstream: `https://github.com/vllm-project/vllm`
+- MLX: `https://github.com/ml-explore/mlx`
+- Related: `vmlx-setup` skill — the MLX-native alternative (vMLX). If the user wants MLX inference rather than vLLM-on-MLX, that backend is lighter-weight and ships built-in `doctor` + `bench` commands.
+- Related: `huggingface-mlx-models` skill — selecting MLX-quantized models.

@@ -6,13 +6,15 @@ description: |-
   compatible API. Use when the user wants MLX-native serving on an Apple
   Silicon Mac, says "set up vmlx", "install vmlx", "mlx inference server",
   "run mlx-community models", or the llm-externalizer setup wizard picks vMLX
-  as the macOS backend. Apple Silicon (M1/M2/M3/M4) ONLY.
+  as the macOS backend. Trigger with /vmlx-setup or "set up vmlx". Apple
+  Silicon (M1/M2/M3/M4) ONLY.
 argument-hint: "[model-id] [--port N] [--api-key KEY]"
 effort: medium
 ---
 
-# vMLX — MLX-native inference server setup
+## Overview
 
+vMLX — MLX-native inference server setup.
 `jjang-ai/vmlx` is an **MLX-native inference server for Apple Silicon**. It
 serves LLMs/VLMs from the `mlx-community` Hugging Face org and exposes an
 **OpenAI + Anthropic + Ollama compatible HTTP API on `http://localhost:8000`**.
@@ -23,7 +25,9 @@ MLX-native end to end: lighter-weight, and it ships built-in `doctor`
 (diagnostics) and `bench` (performance) subcommands the setup wizard can use
 directly for reliability + benchmark checks.
 
-## Scope and limits — read first
+## Prerequisites
+
+### Scope and limits — read first
 
 - **Apple Silicon only.** M1/M2/M3/M4, Python 3.10+. Not Intel Macs, not
   Linux/Windows.
@@ -37,7 +41,24 @@ directly for reliability + benchmark checks.
 - **Community-maintained**, Apache-2.0. Treat as an alternative backend, not
   the default macOS choice.
 
-## Step 1 — Preflight
+### Tools required
+
+- Apple Silicon Mac (`uname -m` returns `arm64`), Python 3.10+
+- One of: `uv` (preferred), `pipx`, or a venv on PATH
+- `hf` CLI authenticated for gated repos
+
+## Instructions
+
+Follow these six steps in order:
+
+1. Run Step 1 (Preflight) — abort if not on Apple Silicon.
+2. Install via Step 2 (preferred: `uv tool install vmlx`).
+3. Serve a model with Step 3.
+4. Confirm health via Step 4's built-in `doctor` + `bench`.
+5. Verify with Step 5.
+6. Wire into llm-externalizer settings.yaml in Step 6.
+
+### Step 1 — Preflight
 
 ```bash
 [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]] \
@@ -46,7 +67,7 @@ directly for reliability + benchmark checks.
 
 If this fails, stop — vMLX has no path on Intel Macs or non-Apple platforms.
 
-## Step 2 — Install
+### Step 2 — Install
 
 vMLX is on PyPI as `vmlx`. macOS 14+ rejects bare `pip install`
 (externally-managed-environment) — use an isolated installer. Show the command;
@@ -67,7 +88,7 @@ Pick ONE. `uv tool install` is the cleanest — it puts `vmlx` on PATH without a
 venv to activate. For image generation the user additionally needs
 `vmlx[image]`.
 
-## Step 3 — Serve a model
+### Step 3 — Serve a model
 
 ```bash
 vmlx serve <model-id> --port 8000
@@ -96,7 +117,7 @@ vmlx serve mlx-community/Qwen3-8B-4bit --port 8000 \
   --enable-pld --kv-cache-quantization q8
 ```
 
-## Step 4 — Reliability + benchmark (built-in)
+### Step 4 — Reliability + benchmark (built-in)
 
 vMLX ships diagnostics and benchmarking — use these instead of hand-rolling:
 
@@ -111,7 +132,7 @@ source when the setup wizard needs to evaluate a candidate model on this
 machine. Surface their output to the user; do not re-implement what they
 already measure.
 
-## Step 5 — Verify
+### Step 5 — Verify
 
 ```bash
 curl -s http://localhost:8000/v1/models | jq '.data[].id'
@@ -121,7 +142,7 @@ Then a real completion, or let the setup wizard's Step 5 run the five
 calibrated compatibility tests (smoke, structured output, code understanding,
 long context, output length).
 
-## Step 6 — Wire into llm-externalizer
+### Step 6 — Wire into llm-externalizer
 
 vMLX's API is OpenAI-compatible on `:8000`, so the **`vllm-local`** preset
 (default `http://localhost:8000`) fits as-is; **`generic-local`** is the
@@ -141,7 +162,13 @@ Hand the snippet to the user to paste into `~/.llm-externalizer/settings.yaml`
 (the wizard / `build-snippet.py` handles safe YAML quoting). NEVER write that
 file directly — profile changes are user-only.
 
-## Maintenance
+## Output
+
+A running `vmlx serve` process on `http://localhost:8000`, plus a ready-to-paste settings.yaml profile fragment for the `vllm-local` preset (or `generic-local` if a custom port is in use).
+
+## Error Handling
+
+### Maintenance
 
 - **Upgrade:** `uv tool upgrade vmlx` (or `pipx upgrade vmlx`).
 - **Uninstall:** `uv tool uninstall vmlx` (or `pipx uninstall vmlx`, or delete
@@ -149,7 +176,7 @@ file directly — profile changes are user-only.
 - **Desktop alternative:** the project also ships "MLX Studio", a native macOS
   app — mention it for users who do not want a terminal server.
 
-## Failure modes
+### Failure modes
 
 - **`pip install vmlx` aborts (externally-managed-environment)** → use
   `uv tool install` or `pipx` per Step 2.
@@ -160,9 +187,24 @@ file directly — profile changes are user-only.
 - **`vmlx doctor` reports failures** → surface its output verbatim to the user
   before continuing; it is the authoritative health check.
 
-## Related
+## Examples
 
-- `vllm-metal-setup` skill — the vLLM-on-MLX alternative. Use vllm-metal when
-  the user specifically wants vLLM semantics; use vMLX for a lighter MLX-native
-  server with built-in `doctor` / `bench`.
-- `huggingface-mlx-models` skill — selecting MLX-quantized models from the Hub.
+```bash
+# Happy-path install + serve on M2 Pro 32 GB
+uv tool install vmlx
+vmlx serve mlx-community/Qwen3-8B-4bit --port 8000 \
+  --max-model-len 32768 --continuous-batching --enable-prefix-cache \
+  --enable-pld --kv-cache-quantization q8
+
+# Built-in diagnostics
+vmlx doctor mlx-community/Qwen3-8B-4bit
+vmlx bench  mlx-community/Qwen3-8B-4bit
+```
+
+## Resources
+
+- vMLX repo: `https://github.com/jjang-ai/vmlx`
+- MLX: `https://github.com/ml-explore/mlx`
+- mlx-community HF org: `https://huggingface.co/mlx-community`
+- Related: `vllm-metal-setup` skill — the vLLM-on-MLX alternative. Use vllm-metal when the user specifically wants vLLM semantics; use vMLX for a lighter MLX-native server with built-in `doctor` / `bench`.
+- Related: `huggingface-mlx-models` skill — selecting MLX-quantized models from the Hub.
