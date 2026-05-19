@@ -123,9 +123,13 @@ test -f "${CLAUDE_PLUGIN_ROOT}/agents/${FIXER_AGENT}.md" \
 
 ### Step 3 — Dispatch ONE Task call
 
-Exactly one `Task` call:
+Exactly one `Task` call. The `subagent_type` value comes from `$FIXER_AGENT` (Step 2b) and is exactly one of these two literal strings:
 
-- `subagent_type: "$FIXER_AGENT"` (either `…-sonnet-agent` or `…-opus-agent`, per Step 2b)
+- `subagent_type: "llm-externalizer-parallel-fixer-sonnet-agent"` (when Step 2b picked sonnet — the default)
+- `subagent_type: "llm-externalizer-parallel-fixer-opus-agent"` (when Step 2b promoted the call to opus)
+
+Plus the other fields:
+
 - `description: "Fix report: <basename>"` (≤5 words)
 - `prompt: "<REPORT_PATH>"` (bare absolute path, nothing else)
 

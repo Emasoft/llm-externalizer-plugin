@@ -193,7 +193,7 @@ else
 fi
 ```
 
-One bug = one fresh agent invocation. Never reuse the same agent across bugs.
+One bug = one fresh agent invocation. Each bug gets a brand-new dispatch.
 
 ### Step 5 — Pick subagent_type
 
@@ -206,7 +206,10 @@ else
 fi
 ```
 
-- `USE_CUSTOM=1` → `subagent_type: "$FIXER_AGENT"`, `prompt: "$BUGS_TO_FIX"` (bare absolute path, nothing else).
+- `USE_CUSTOM=1` → pick one of these two literal `subagent_type` strings (from `$FIXER_AGENT` per Step 4):
+  - `subagent_type: "llm-externalizer-serial-fixer-sonnet-agent"` (the default)
+  - `subagent_type: "llm-externalizer-serial-fixer-opus-agent"` (when promoted by Step 4)
+  - In both cases: `prompt: "$BUGS_TO_FIX"` (bare absolute path, nothing else).
 - `USE_CUSTOM=0` → `subagent_type: "general-purpose"`, `prompt: $($H print-fallback-prompt --file "$BUGS_TO_FIX")`.
 
 ### Step 6 — Loop for `i = 1 .. MAX_ITER`

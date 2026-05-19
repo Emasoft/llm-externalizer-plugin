@@ -433,7 +433,10 @@ else
 fi
 ```
 
-- `USE_CUSTOM=1` → `subagent_type: "$FIXER_AGENT"`, `prompt: "$BUGS_TO_FIX"` (bare absolute path, nothing else).
+- `USE_CUSTOM=1` → pick one of these two literal `subagent_type` strings (from `$FIXER_AGENT` per Step 5):
+  - `subagent_type: "llm-externalizer-serial-fixer-sonnet-agent"` (the default)
+  - `subagent_type: "llm-externalizer-serial-fixer-opus-agent"` (when promoted by Step 5)
+  - In both cases: `prompt: "$BUGS_TO_FIX"` (bare absolute path, nothing else).
 - `USE_CUSTOM=0` → `subagent_type: "general-purpose"`, `prompt: $($H print-fallback-prompt --file "$BUGS_TO_FIX")`.
 
 For `i = 1 .. MAX_ITER`, maintain `stuck_streak = 0`, `prev_unfixed`, `prev_total`:

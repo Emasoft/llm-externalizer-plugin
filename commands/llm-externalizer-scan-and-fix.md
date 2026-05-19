@@ -432,8 +432,10 @@ Batch rule:
 
 - **Up to 15 Task calls in a single assistant message** → they run concurrently.
 - If the batch size is > 15, emit 15 per message and wait for the batch to finish before sending the next. NEVER exceed 15 in flight at once.
-- Each `Task` call:
-  - `subagent_type: "$(agent_for_report "$path")"` (either `…-sonnet-agent` or `…-opus-agent` per the Step 4b decision) — or the Opus variant if `$LLM_EXT_FORCE_OPUS == 1`
+- Each `Task` call uses one of these two literal `subagent_type` strings (decided per-report by `agent_for_report` in Step 4b):
+  - `subagent_type: "llm-externalizer-parallel-fixer-sonnet-agent"` (the default per-report)
+  - `subagent_type: "llm-externalizer-parallel-fixer-opus-agent"` (when the per-report size check OR `LLM_EXT_FORCE_OPUS=1` promotes the call)
+- Each `Task` call also carries:
   - `description: "Fix report: <basename>"` (≤5 words)
   - `prompt: "<absolute report path>"` (nothing else)
 
@@ -494,7 +496,7 @@ On any error: `[FAILED] llm-externalizer-scan-and-fix — <one-line reason>`.
 - You MUST NOT `Read` any scan report, fixer summary, or the final joined report.
 - You MUST NOT summarize any report content. Only file paths flow through the orchestrator.
 - Fixer dispatch MUST be parallel (batches of ≤15). Sequential dispatch defeats the whole design.
-- Both fixer-agent variants (`llm-externalizer-parallel-fixer-sonnet-agent` and `…-opus-agent`) must exist in the plugin. If the variant the user picked in Step 4b is missing, abort with `[FAILED] llm-externalizer-scan-and-fix — <agent-name> not installed`.
+- Both fixer-agent variants (`llm-externalizer-parallel-fixer-sonnet-agent` and `llm-externalizer-parallel-fixer-opus-agent`) must exist in the plugin. If the variant the user picked in Step 4b is missing, abort with `[FAILED] llm-externalizer-scan-and-fix — <agent-name> not installed`.
 - Flags `--file-list` and the positional `[target-path]` are mutually exclusive in effect (the target-path is silently ignored when `--file-list` is set). Flags `--instructions` and `--specs` are NOT mutually exclusive — both can be supplied and are unioned into `instructions_files_paths`.
 
 ## Error handling

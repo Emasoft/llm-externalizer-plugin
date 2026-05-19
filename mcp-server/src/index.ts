@@ -3230,11 +3230,27 @@ function formatFooter(
 // ── Response file output ────────────────────────────────────────────
 // LLM responses are saved to timestamped .md files in reports_dev/llm_externalizer/
 // so the caller's context is never flooded with the response text.
-// The output dir defaults to process.cwd()/reports_dev/llm_externalizer but can be
-// overridden with LLM_OUTPUT_DIR env var or per-tool output_dir parameter.
+//
+// Default resolution (highest precedence first):
+//   1. LLM_OUTPUT_DIR  — explicit override; absolute path wins everything.
+//   2. CLAUDE_PROJECT_DIR — canonical project root provided by Claude Code
+//      ≥ 2.1.139 to MCP stdio servers in their environment. Same variable
+//      hooks already see. Anchors output at the project the user is working
+//      on, not wherever the MCP daemon happens to have its cwd.
+//   3. process.cwd() — fallback for older Claude Code versions and non-CC
+//      invocations (CLI tests, manual mcp-server runs, CI).
+//
+// Per-call `output_dir` parameter overrides this default unconditionally;
+// callers per ~/.claude/rules/use-llm-externalizer.md SHOULD always pass an
+// explicit `output_dir` under the main-repo `reports/` folder.
 
 const OUTPUT_DIR =
-  process.env.LLM_OUTPUT_DIR || join(process.cwd(), "reports_dev", "llm_externalizer");
+  process.env.LLM_OUTPUT_DIR ||
+  join(
+    process.env.CLAUDE_PROJECT_DIR || process.cwd(),
+    "reports_dev",
+    "llm_externalizer",
+  );
 
 // Canonical report-filename timestamp per the agent-reports-location rule:
 //   %Y%m%d_%H%M%S%z — local time, GMT offset appended as compact ±HHMM (no colon).
@@ -9233,7 +9249,8 @@ async function dispatchCallTool(
       );
     } catch {
       // Fallback: accept any object. The handler does its own validation.
-      inputZod = z.object({}).passthrough();
+      // Zod 4: `z.object({}).passthrough()` is deprecated; use `z.looseObject({})`.
+      inputZod = z.looseObject({});
     }
     const handle = mcpServer.registerTool(
       toolName,

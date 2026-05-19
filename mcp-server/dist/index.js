@@ -45660,7 +45660,11 @@ function formatFooter(resp, toolName, filePath) {
   }
   return "";
 }
-var OUTPUT_DIR = process.env.LLM_OUTPUT_DIR || join3(process.cwd(), "reports_dev", "llm_externalizer");
+var OUTPUT_DIR = process.env.LLM_OUTPUT_DIR || join3(
+  process.env.CLAUDE_PROJECT_DIR || process.cwd(),
+  "reports_dev",
+  "llm_externalizer"
+);
 function canonicalTimestamp(date5 = /* @__PURE__ */ new Date()) {
   const pad = (n) => String(Math.abs(n)).padStart(2, "0");
   const Y = date5.getFullYear();
@@ -50214,7 +50218,7 @@ ${csResp.content}${csFooter}`
         def.inputSchema ?? { type: "object" }
       );
     } catch {
-      inputZod = external_exports3.object({}).passthrough();
+      inputZod = external_exports3.looseObject({});
     }
     const handle = mcpServer.registerTool(
       toolName,
