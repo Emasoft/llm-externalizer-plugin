@@ -34,6 +34,7 @@ export default defineConfig({
       'src/cluster/jsonl.test.ts',
       'src/cluster/kmeans.test.ts',
       'src/cluster/unionfind.test.ts',
+      'src/cluster/checkpoint.test.ts',
     ],
   },
 });

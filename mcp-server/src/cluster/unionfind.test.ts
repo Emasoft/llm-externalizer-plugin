@@ -82,7 +82,7 @@ describe("UnionFind", () => {
     const part = uf.partition();
     // 3 clusters: {a,b}, {c,d}, {e}
     expect(part.size).toBe(3);
-    let sizes = Array.from(part.values()).map((arr) => arr.length).sort();
+    const sizes = Array.from(part.values()).map((arr) => arr.length).sort();
     expect(sizes).toEqual([1, 2, 2]);
   });
 
