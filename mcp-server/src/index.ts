@@ -4431,6 +4431,7 @@ const LLM_TOOLS_SET = new Set([
   "chat", "code_task", "batch_check", "scan_folder",
   "compare_files", "check_references", "check_imports",
   "check_against_specs", "search_existing_implementations",
+  "cluster_synonyms",
 ]);
 
 // Ensemble: run both models in parallel for thorough analysis, combine results.
@@ -5312,6 +5313,74 @@ function buildTools() {
           },
         },
         required: ["spec_file_path"],
+      },
+    },
+    {
+      name: "cluster_synonyms",
+      description:
+        "Cluster SENTENCES (or short labels treated as sentences) by full-sentence " +
+        "meaning equivalence. ZERO orchestrator tokens — file-in, file-out. The whole " +
+        "batch+verify+canonicalise loop runs inside the MCP server; you get only " +
+        "output paths back.\n\n" +
+        "PURPOSE: aggregate synonymous / equivalent-meaning items across a large term " +
+        "set (10k–1M items). Designed for taxonomy work, ontology cleanup, label " +
+        "canonicalisation. NOT a word-level synonym lookup — the unit of comparison is " +
+        "the full sentence/label.\n\n" +
+        "PIPELINE: Pre-flight model benchmark → Phase 0 setup (load JSONL, embeddings) " +
+        "→ Phase 1 embedding-clustered batching + per-batch grouping → Phase 2 cross- " +
+        "cluster verification with transitive-closure merge (>=3 distinct items from each " +
+        "cluster must co-occur in the same response) → Phase 3 canonical-label selection " +
+        "→ Phase 4 emit clusters.jsonl + clusters_summary.json + stats.json + " +
+        "checkpoint.sqlite.\n\n" +
+        "RESUMABLE: pass `resume_from` to a prior checkpoint.sqlite to continue.\n" +
+        "BUDGET-CAPPED: `policy.budget_max_llm_calls` aborts cleanly when hit.\n" +
+        "FAILURE-RECOVERY: each failed batch retries 3x, then splits in half and " +
+        "recurses (max depth 3 → 8 leaf sub-batches, 45-call hard cap per source batch).\n" +
+        "BACKEND-AGNOSTIC: uses the active profile's model selection.\n\n" +
+        "STATUS: not_implemented stub — schema and registration are stable; the " +
+        "internal workflow is being built per TRDD-220ea89f.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          input_file: {
+            type: "string",
+            description:
+              "Absolute path to a JSONL file. Each line is a JSON object with " +
+              "`id` (string) and `sentence` (string, the text to cluster); optional " +
+              "`context` (free-text disambiguator). Field `label` is accepted as an " +
+              "alias for `sentence`.",
+          },
+          output_dir: {
+            type: "string",
+            description:
+              "Absolute path to the output directory. Will be created if missing. " +
+              "Contains clusters.jsonl, clusters_summary.json, stats.json, checkpoint.sqlite.",
+          },
+          embeddings_file: {
+            type: "string",
+            description:
+              "Optional. Absolute path to a precomputed float32 memmap file " +
+              "(one row per input item, dimension D). Requires a sibling .meta.json " +
+              "with {shape:[N,D], dtype, model}. If absent, the tool computes its own " +
+              "embeddings via the Python sidecar (sentence-transformers/all-MiniLM-L6-v2).",
+          },
+          policy_file: {
+            type: "string",
+            description:
+              "Optional. Absolute path to a JSON file with policy knobs. See the " +
+              "TRDD for the full list — defaults apply per field if omitted. " +
+              "Backend / model / ensemble are NOT policy knobs — they come from the " +
+              "active llm-externalizer profile.",
+          },
+          resume_from: {
+            type: "string",
+            description:
+              "Optional. Absolute path to a prior checkpoint.sqlite from this tool. " +
+              "When set, the run resumes from where the prior invocation stopped " +
+              "(after the budget cap, an abort, or any other early termination).",
+          },
+        },
+        required: ["input_file", "output_dir"],
       },
     },
   ];
@@ -9193,6 +9262,26 @@ async function dispatchCallTool(
           return { content: [{ type: "text", text: csAllGroupReports.join("\n") }] };
         }
         return { content: [{ type: "text", text: "FAILED: LLM returned empty response." }], isError: true };
+      }
+
+      case "cluster_synonyms": {
+        // Stub handler — Phase A only registers the schema and reserves the
+        // tool name so CPV / MCP-client discovery is stable. The full
+        // workflow (Phases 0-4 + pre-flight benchmark + retry ladder)
+        // lands in Phase B / C per TRDD-220ea89f. Returning a clean
+        // not_implemented error keeps the contract honest.
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                "cluster_synonyms: not_implemented yet. The schema is " +
+                "stable and the tool is reserved; the workflow lands in a " +
+                "later release per TRDD-220ea89f.",
+            },
+          ],
+          isError: true,
+        };
       }
 
       default:

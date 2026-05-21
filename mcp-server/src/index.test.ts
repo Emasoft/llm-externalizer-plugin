@@ -63,6 +63,7 @@ describe('listTools', () => {
       'reset',
       'scan_folder',
       'search_existing_implementations',
+      'cluster_synonyms',
       // mass-scouting — 16 tools
       // (8 base + 3 Phase B + 2 Phase C2 + 2 Phase C3 + 1 Phase F)
       'mass_scout',
