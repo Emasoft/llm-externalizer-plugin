@@ -35,6 +35,7 @@ export default defineConfig({
       'src/cluster/kmeans.test.ts',
       'src/cluster/unionfind.test.ts',
       'src/cluster/checkpoint.test.ts',
+      'src/cluster/preflight_benchmark.test.ts',
     ],
   },
 });
