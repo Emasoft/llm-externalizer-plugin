@@ -3,7 +3,7 @@ trdd-id: 220ea89f-0af2-4eba-884d-367a986d27e7
 title: cluster_synonyms — zero-token batch synonym clustering MCP primitive
 status: not-started
 created: 2026-05-21T23:25:51+0200
-updated: 2026-05-21T23:25:51+0200
+updated: 2026-05-22T00:22:23+0200
 ---
 
 # TRDD-220ea89f — cluster_synonyms — zero-token batch synonym clustering MCP primitive
@@ -45,24 +45,26 @@ Full issue text including alternatives-considered table is preserved on GitHub (
 
 `chat` / `code_task` / `scan_folder` / `search_existing_implementations` all force every item through the orchestrator's prompt+response stream — fine for a few hundred files, ruinous for 1M taxonomy labels. `cluster_synonyms` moves the entire batch-cluster-verify-canonicalise loop INSIDE the MCP server and returns only file paths. The orchestrator stays under 1 KB of context for a run that the LLM backend handles tens of millions of tokens on. The downstream EMASOFT-SKILLS-MANAGER L2 refinement use case is the immediate driver but the primitive is general-purpose (ontology cleanup, label dedup, concept canonicalisation).
 
-## 2. Open questions (must resolve BEFORE Phase A starts)
+## 2. Open questions (all resolved 2026-05-22)
 
-These are the issue's open questions plus implementation-required additions:
+The issue's original open questions plus implementation-required additions. All 12 resolved as of 2026-05-22 (user accepted defaults for Q1–Q6, Q8–Q10; clarified Q7; added Q11 and Q12).
 
-| Q | Question | Default proposal | Resolution status |
+| Q | Question | Decision | Resolution status |
 |---|---|---|---|
-| Q1 | Tool name: `cluster_synonyms`, `group_by_meaning`, `dedup_concepts`, other? | `cluster_synonyms` (matches issue title; "synonyms" implies the IDENTICAL-meaning bar that Phase 2 enforces) | OPEN |
-| Q2 | Embedding computation: in-tool default vs. caller-only? | In-tool default ON via `sentence-transformers/all-MiniLM-L6-v2` (lightweight, no GPU). Caller can pass `embeddings_file` to skip. | OPEN |
-| Q3 | SQLite output: default emit vs. opt-in? | Default emit — checkpoint already needs sqlite, the extra cost is negligible. Add `policy.emit_sqlite_clusters: bool` knob (default true). | OPEN |
-| Q4 | Default `canonical_label_mode`: `heuristic` or `llm`? | `heuristic` (no extra LLM cost; cluster size is small enough that the user can re-run with `llm` if quality is insufficient) | OPEN |
-| Q5 | Bake `sentence-transformers` as a default dep? | Yes — opt-out via `policy.compute_embeddings: false`. ST is the de-facto default in the Python embedding world; alternative is `fastembed` (ONNX, no torch) — keep as a phase-B knob. | OPEN |
-| Q6 | Concurrency model for batch LLM calls (NEW) | Inherit the profile's existing concurrency (local = sequential, remote = up-to-200-in-flight). No new in-tool semaphore. | OPEN |
-| Q7 | Failure semantics inside a batch (NEW) | Per-batch retry up to `policy.max_retries_per_batch` (default 2). After exhaustion: log the batch as "unresolved", do NOT block the run, do NOT merge any pairs from the failed batch. Surface the count in `stats.json`. | OPEN |
-| Q8 | Input-format validation strictness (NEW) | Reject the whole run if `input_file` has zero valid rows or `id` collisions. Skip individual malformed lines with a warning entry in `stats.json`. | OPEN |
-| Q9 | Embedding model dimension drift (NEW) — what if the `.meta.json` model name does not match `policy.embedding_model`? | Hard error. The caller must pass a matching meta.json or omit `embeddings_file` so the tool recomputes. | OPEN |
-| Q10 | Output_dir conflict (NEW) — what if it already has `clusters.jsonl`? | If `resume_from` is set, allow it (we're continuing). Otherwise hard error unless `policy.overwrite_output: true`. | OPEN |
+| Q1 | Tool name: `cluster_synonyms`, `group_by_meaning`, `dedup_concepts`, other? | `cluster_synonyms` (matches issue title; "synonyms" implies the IDENTICAL-meaning bar that Phase 2 enforces) | RESOLVED 2026-05-22 |
+| Q2 | Embedding computation: in-tool default vs. caller-only? | In-tool default ON via `sentence-transformers/all-MiniLM-L6-v2` (lightweight, no GPU). Caller can pass `embeddings_file` to skip. | RESOLVED 2026-05-22 |
+| Q3 | SQLite output: default emit vs. opt-in? | Default emit — checkpoint already needs sqlite, the extra cost is negligible. Add `policy.emit_sqlite_clusters: bool` knob (default true). | RESOLVED 2026-05-22 |
+| Q4 | Default `canonical_label_mode`: `heuristic` or `llm`? | `heuristic` (no extra LLM cost; cluster size is small enough that the user can re-run with `llm` if quality is insufficient) | RESOLVED 2026-05-22 |
+| Q5 | Bake `sentence-transformers` as a default dep? | Yes — opt-out via `policy.compute_embeddings: false`. ST is the de-facto default in the Python embedding world; alternative is `fastembed` (ONNX, no torch) — keep as a phase-B knob. | RESOLVED 2026-05-22 |
+| Q6 | Concurrency model for batch LLM calls | Inherit the profile's existing concurrency (local = sequential, remote = up-to-200-in-flight). No new in-tool semaphore. | RESOLVED 2026-05-22 |
+| Q7 | Failure semantics inside a batch | **Recursive-split-and-retry ladder.** Each batch (at any size) gets up to `policy.max_retries_per_attempt` LLM attempts (default 3). On exhaustion of retries: split THAT failing batch into halves and recurse on each half independently with the same 3-retry budget. Maximum recursion depth `policy.max_split_depth` (default 3) — a single source batch can split at most 1 → 2 → 4 → 8 sub-batches. At depth 3, if a sub-batch is STILL failing after 3 retries, record its items in `stats.json.failed_groups` and continue the rest of the run. Hard cap per original source batch: 3 + 6 + 12 + 24 = 45 LLM calls worst case. Always respects the global `budget_max_llm_calls`. | RESOLVED 2026-05-22 |
+| Q8 | Input-format validation strictness | Reject the whole run if `input_file` has zero valid rows or `id` collisions. Skip individual malformed lines with a warning entry in `stats.json`. | RESOLVED 2026-05-22 |
+| Q9 | Embedding model dimension drift — what if the `.meta.json` model name does not match `policy.embedding_model`? | Hard error. The caller must pass a matching meta.json or omit `embeddings_file` so the tool recomputes. | RESOLVED 2026-05-22 |
+| Q10 | Output_dir conflict — what if it already has `clusters.jsonl`? | If `resume_from` is set, allow it (we're continuing). Otherwise hard error unless `policy.overwrite_output: true`. | RESOLVED 2026-05-22 |
+| Q11 | **Pre-flight model verification (NEW, user-requested)** | **Mandatory pre-flight benchmark gate before Phase 0.** Run the plugin's existing `llm-externalizer-benchmark` against the active profile and check that the model(s) produce valid structured-JSON output and pass the standard battery. If benchmark fails: hard-abort with a message pointing the user to fix their profile, do NOT proceed with clustering. This separates "model is broken" from "our prompts are wrong" when a run fails. Cached per-profile-per-day at `~/.llm-externalizer/cache/benchmark-<profile-hash>-<YYYY-MM-DD>.json`; subsequent same-day calls skip the benchmark if the cached result is PASS. `policy.skip_preflight_benchmark: true` opt-out for power users who know what they're doing. | RESOLVED 2026-05-22 |
+| Q12 | **Phase 2 merge rule (NEW, user-requested, transitive-closure logic)** | **≥3-element confidence floor on cluster overlap.** When a Phase 2 LLM response groups items together, examine the items' current cluster assignments. An A↔B cluster merge happens iff the SAME response-group contains ≥ `policy.merge_min_cross_count` (default 3) distinct items currently assigned to A AND ≥ `policy.merge_min_cross_count` items currently assigned to B. Single-overlap or 2-element-overlap responses do NOT trigger a merge — they're recorded in `stats.json.weak_overlap_evidence` for diagnostic purposes. Replaces the prior percentage-based `merge_threshold` knob entirely (removed from policy schema). Rationale: in union-find logic, any overlap formally proves clusters are the same — but LLM responses contain noise, so we require independent multi-element confirmation in the same response to filter out false positives. | RESOLVED 2026-05-22 |
 
-**Resolution protocol:** answer all 10 in the issue thread or in this TRDD (replace OPEN with a one-line decision + date) before Phase A starts. Do NOT start coding while any question is OPEN — the tool's public schema depends on them.
+**Resolution protocol:** all 12 questions are RESOLVED as of 2026-05-22; Phase A may now start.
 
 ## 3. Scope decisions made up-front
 
@@ -71,6 +73,7 @@ These are the issue's open questions plus implementation-required additions:
 - **Embeddings sidecar**: a tiny Python helper `mcp-server/scripts/compute_embeddings.py` invoked via `child_process.spawnSync` with `uv run`. JSON-in / float32-memmap-out. Keeps `sentence-transformers` out of the Node runtime.
 - **Checkpoint format**: SQLite. One table `clusters_uf(item_id TEXT PRIMARY KEY, parent_id TEXT)`, one `llm_calls(call_id TEXT PRIMARY KEY, phase INTEGER, batch_hash TEXT, response_path TEXT, status TEXT, ts INTEGER)`, one `meta(key TEXT PRIMARY KEY, value TEXT)`. WAL mode. The `response_path` field points to the on-disk LLM response — see §6.3.
 - **JSONL streaming**: line-by-line via Node's `readline` over a `createReadStream`. No full-file load. 1M items at ~50 chars = ~50 MB on disk, ~50 MB in memory after row parsing — acceptable. Items >1M trigger an in-tool warning suggesting future parquet support.
+- **Pre-flight model benchmark gate (Q11)**: BEFORE Phase 0 runs, the tool invokes the existing `llm-externalizer-benchmark` against the active profile. The benchmark must produce structured-JSON output for the standard test suite. A failure here aborts the cluster_synonyms run with a clear "fix your profile, then re-run" message — does NOT proceed silently. This sharply separates "model is misconfigured / broken" from "our prompts are wrong" in failure triage. Cached per-profile-per-day under `~/.llm-externalizer/cache/benchmark-<profile-hash>-<YYYY-MM-DD>.json`; subsequent same-day calls reuse a PASS verdict. Opt-out via `policy.skip_preflight_benchmark: true` (power users only).
 - **No PR for upstream first**: the user owns the plugin, so the implementation lands in this repo directly.
 
 ## 4. Files this TRDD will create / modify
@@ -85,17 +88,21 @@ Estimated file list (Phase A → D below maps each):
 - `mcp-server/src/cluster/kmeans.ts` — pure-TS mini-batch k-means over float32 vectors. ~100 LOC, no external dep.
 - `mcp-server/src/cluster/unionfind.ts` — union-find with path compression + union by rank, backed by SQLite for persistence.
 - `mcp-server/src/cluster/checkpoint.ts` — SQLite-backed run state, atomic snapshot every N LLM calls.
-- `mcp-server/src/cluster/phase1_batch.ts` — Phase 1 batch builder + LLM dispatch + union-find updates.
-- `mcp-server/src/cluster/phase2_verify.ts` — Phase 2 stratified rep batches + merge-or-not decision.
+- `mcp-server/src/cluster/preflight_benchmark.ts` — **(Q11)** pre-flight model-verification wrapper. Reads `~/.llm-externalizer/cache/benchmark-<profile-hash>-<YYYY-MM-DD>.json`; if missing or STALE, invokes `llm-externalizer-benchmark` against the active profile and writes the cache. Returns PASS/FAIL.
+- `mcp-server/src/cluster/retry_ladder.ts` — **(Q7)** the recursive-split-and-retry algorithm extracted as a standalone pure function `processBatchWithRetry(items, llmCallFn, validateFn, opts)` so it can be unit-tested with mock LLM calls. Both Phase 1 and Phase 2 dispatch through this.
+- `mcp-server/src/cluster/phase1_batch.ts` — Phase 1 batch builder + LLM dispatch (via `retry_ladder.ts`) + union-find updates.
+- `mcp-server/src/cluster/phase2_verify.ts` — Phase 2 stratified rep batches + **transitive-closure merge rule with ≥3-element floor (Q12)** + LLM dispatch via `retry_ladder.ts`.
 - `mcp-server/src/cluster/phase3_canonical.ts` — heuristic and LLM canonical-label selection.
 - `mcp-server/src/cluster/phase4_emit.ts` — flatten + write outputs.
-- `mcp-server/src/cluster/policy.ts` — Zod schema for `policy.json`; auto-scaling defaults.
+- `mcp-server/src/cluster/policy.ts` — Zod schema for `policy.json`; auto-scaling defaults. Includes new knobs `max_retries_per_attempt`, `max_split_depth`, `merge_min_cross_count`, `skip_preflight_benchmark`, `overwrite_output`, `emit_sqlite_clusters`.
 - `mcp-server/scripts/compute_embeddings.py` — Python sidecar. Reads JSONL from stdin, writes float32 memmap + `.meta.json` to caller-specified path. Uses `sentence-transformers` (CPU, no GPU dependency).
-- `mcp-server/tests/cluster/*.test.ts` — unit tests for k-means, union-find, jsonl, phase1, phase2, phase3 (one suite per module).
+- `mcp-server/tests/cluster/*.test.ts` — unit tests for jsonl, k-means, union-find, checkpoint, **preflight_benchmark**, **retry_ladder**, phase1, **phase2_merge** (one suite per module).
 - `mcp-server/tests/cluster/e2e.test.ts` — end-to-end on a synthetic 500-item synonym fixture with known clusters.
 - `mcp-server/tests/cluster/fixtures/synthetic_500.jsonl` — input fixture.
 - `mcp-server/tests/cluster/fixtures/synthetic_500.expected.json` — expected cluster IDs (used for cohesion assertion, NOT exact-equality).
 - `mcp-server/tests/cluster/fixtures/budget_exhaust.jsonl` — input for the budget-cap test.
+- `mcp-server/tests/cluster/fixtures/merge_3_floor.jsonl` — input for T15 (Phase 2 merge rule: 2-overlap vs 3-overlap behavior).
+- `mcp-server/tests/cluster/fixtures/broken_profile.yaml` — synthetic profile that deliberately fails the pre-flight benchmark, for T16.
 
 ### MODIFIED
 
@@ -130,45 +137,51 @@ Estimated file list (Phase A → D below maps each):
 | T12 | Schema gate | Tool invocation with the wrong field name (e.g. `inputFile` instead of `input_file`) | Zod validation error, no side effects |
 | T13 | output_dir collision | Existing `clusters.jsonl` in `output_dir`, no `resume_from`, `policy.overwrite_output: false` | Hard error |
 | T14 | output_dir overwrite OK | Same as T13 but with `policy.overwrite_output: true` | Run completes, overwrites prior files |
+| T15 | Phase 2 merge rule floor (Q12) | 4 clusters preseeded; response-group contains 2 items from A + 2 items from B (case X) vs. 3 items from A + 3 items from B (case Y), same one LLM call | Case X: NO merge, recorded in `stats.json.weak_overlap_evidence`. Case Y: merge happens, `clusters_summary.json` shows A and B as one cluster. |
+| T16 | Pre-flight benchmark gate (Q11) | Deliberately-broken profile fixture pointing at a non-existent LLM endpoint | Tool aborts BEFORE Phase 0 with a clear error message; no checkpoint written; no LLM calls billed. |
+| T17 | Recursive-split-and-retry ladder (Q7) | Mock LLM that fails the first N calls then succeeds — N varied from 0 to 50 | Depth-0 retry exhaustion triggers split at N≥3. Depth-1 exhaustion at N≥9. Depth-2 at N≥21. Depth-3 give-up at N≥45. `stats.json.failed_groups` populated only at depth-3 give-up. Verifies the 3+6+12+24=45 hard cap. |
 
-T11 is the only LLM-cost-intensive test — run on `free: true` (Nemotron 120B) for CI, on the active paid profile only for release sign-off. T1–T10 + T12–T14 can use a tiny `local` profile (LM Studio + 4B model) for ~30s total CI cost.
+T11 is the only LLM-cost-intensive test — run on `free: true` (Nemotron 120B) for CI, on the active paid profile only for release sign-off. T1–T10 + T12–T17 can use a tiny `local` profile (LM Studio + 4B model) for ~30s total CI cost. T17 uses a mock LLM (no external calls) so it runs on every test invocation.
 
 ## 6. Phased implementation plan
 
 ### Phase A — schema, fixtures, plumbing (no LLM calls)
 
-1. Lock answers to Q1–Q10. Update §2 with decisions.
+1. ~~Lock answers to Q1–Q10.~~ DONE — all 12 questions resolved on 2026-05-22.
 2. Create the `mcp-server/src/cluster/` directory + the Zod schema for input/policy.
 3. Add `better-sqlite3` to package.json; rebuild native via `publish.py G2`.
 4. Author the Python sidecar `compute_embeddings.py` + its `pyproject.toml` slot.
 5. Write fixtures `synthetic_500.jsonl` + `synthetic_500.expected.json` + `budget_exhaust.jsonl`.
-6. Unit tests for `jsonl.ts`, `kmeans.ts`, `unionfind.ts`, `checkpoint.ts`. All MUST pass before Phase B.
-7. Register the tool in `mcp-server/src/index.ts` with a STUB handler that throws `not_implemented`. Lets the schema + registration be validated by CPV before any logic lands.
-8. CPV `publish.py --check-only` must pass at the end of Phase A.
+6. Implement the pre-flight benchmark wrapper (Q11): `mcp-server/src/cluster/preflight_benchmark.ts` — checks the per-profile-per-day cache, runs `llm-externalizer-benchmark` if missing, writes the cache. Standalone unit-tested with mocked benchmark output.
+7. Unit tests for `jsonl.ts`, `kmeans.ts`, `unionfind.ts`, `checkpoint.ts`, `preflight_benchmark.ts`. All MUST pass before Phase B.
+8. Register the tool in `mcp-server/src/index.ts` with a STUB handler that throws `not_implemented`. Lets the schema + registration be validated by CPV before any logic lands.
+9. CPV `publish.py --check-only` must pass at the end of Phase A.
 
-**Exit gate**: T8, T12, T13, T14 pass against the stub. CPV clean. No LLM calls billed.
+**Exit gate**: T8, T12, T13, T14 pass against the stub. Pre-flight benchmark cache wiring tested. CPV clean. No clustering-LLM calls billed (benchmark calls don't count).
 
-### Phase B — Phase 1 (single-batch grouping)
+### Phase B — Phase 1 (single-batch grouping) + recursive-split-and-retry ladder
 
-1. Implement `phase1_batch.ts` — embedding-clustered batching using `kmeans.ts`.
-2. Wire `processBatch` from existing index.ts — reuse, do NOT fork.
-3. Per-batch prompt template (see §7) — strict JSON schema response.
-4. Union-find updates from batch responses.
-5. Checkpoint write every `policy.checkpoint_every` calls.
-6. T1, T2, T3, T6, T7, T11 (Phase 1 portion only — Phase 2 still no-op) pass.
-7. CPV `publish.py --check-only` clean.
+1. Wire the pre-flight benchmark check into the tool's entry point — abort cluster_synonyms before Phase 0 if the gate fails (Q11).
+2. Implement `phase1_batch.ts` — embedding-clustered batching using `kmeans.ts`.
+3. Wire `processBatch` from existing index.ts — reuse, do NOT fork.
+4. Per-batch prompt template (see §7) — strict JSON schema response.
+5. **Implement the recursive-split-and-retry ladder** (Q7): `mcp-server/src/cluster/retry_ladder.ts`. Pure function `processBatchWithRetry(items, depth=0)` → recurses on halves on exhaustion, max depth 3, max 45 LLM calls per source batch, records unresolved items in `stats.json.failed_groups`. Unit-tested with a deterministic-fail mock LLM to verify the ladder fires correctly at depths 0/1/2/3.
+6. Union-find updates from batch responses.
+7. Checkpoint write every `policy.checkpoint_every` calls.
+8. T1, T2, T3, T6, T7, T11 (Phase 1 portion only — Phase 2 still no-op) pass.
+9. CPV `publish.py --check-only` clean.
 
-**Exit gate**: T1/T2/T3/T6/T7 green. T11 Phase-1 portion completes in < 5 min on local profile.
+**Exit gate**: T1/T2/T3/T6/T7 green. T11 Phase-1 portion completes in < 5 min on local profile. Retry-ladder unit tests cover all 4 depth levels including the depth-3 give-up path.
 
 ### Phase C — Phase 2 verification + Phase 3 canonical labels + Phase 4 emit
 
-1. `phase2_verify.ts` — rep sampling, stratified cross-cluster batches, merge-or-not logic.
+1. `phase2_verify.ts` — rep sampling, stratified cross-cluster batches, **transitive-closure merge rule with ≥3-element floor** (Q12). For every response-group: count distinct (A-items, B-items) per (A,B) pair; merge A↔B iff both counts ≥ `policy.merge_min_cross_count` (default 3). Single/double overlap goes into `stats.json.weak_overlap_evidence` instead. Phase 2 also uses the recursive-split-and-retry ladder from Phase B for failure recovery.
 2. `phase3_canonical.ts` — heuristic (length-tiered) + LLM modes.
 3. `phase4_emit.ts` — atomic write of all 4 outputs to `output_dir`.
-4. Resume path: re-open checkpoint, restore union-find + LLM-calls history, skip already-completed batches.
-5. T4, T5, T9, T10 pass. T11 full pipeline completes.
+4. Resume path: re-open checkpoint, restore union-find + LLM-calls history, skip already-completed batches. Pre-flight benchmark cache is consulted but a fresh same-day PASS keeps the resume cheap.
+5. T4, T5, T9, T10 pass. T11 full pipeline completes. Add T15 (NEW): Phase 2 merge rule — synthetic test where 2 elements overlap (no merge) vs. 3 elements overlap (merge). Add T16 (NEW): Pre-flight benchmark — confirm a deliberately-broken-model profile is rejected before Phase 0 runs.
 
-**Exit gate**: all T1–T14 green. CPV clean. Stats.json matches the predicted call count within ±20%.
+**Exit gate**: all T1–T16 green. CPV clean. Stats.json matches the predicted call count within ±20%.
 
 ### Phase D — docs, rules, publish
 
@@ -199,7 +212,31 @@ Items:
 ... (up to batch_size items)
 ```
 
-Response strict-validated via Zod `z.object({ groups: z.array(z.array(z.number().int())) })`. On parse failure: retry once with a "reply with VALID JSON only" suffix. On second failure: mark batch unresolved.
+Response strict-validated via Zod `z.object({ groups: z.array(z.array(z.number().int())) })`.
+
+**Failure recovery — recursive-split-and-retry ladder (Q7):**
+
+```
+def processBatchWithRetry(items, depth=0):
+    for attempt in 1..policy.max_retries_per_attempt:   # default 3
+        try:
+            response = llm_call(items, prompt)
+            if validate(response): return response
+        except: continue
+    # All retries at this batch-size exhausted.
+    if depth < policy.max_split_depth and len(items) >= 2:   # default depth 3
+        mid = len(items) // 2
+        left  = processBatchWithRetry(items[:mid],  depth+1)
+        right = processBatchWithRetry(items[mid:], depth+1)
+        return merge_responses(left, right)
+    # At depth 3 OR can't split further (1-item batch). Give up.
+    record_in_failed_groups(items)
+    return empty_response
+```
+
+Worst case per original source batch: depth-0 (3 calls) + depth-1 (3×2 = 6) + depth-2 (3×4 = 12) + depth-3 (3×8 = 24) = **45 LLM calls**. The global `policy.budget_max_llm_calls` is checked before EVERY dispatch — when it trips, the run aborts cleanly with the partial checkpoint. Items at the leaf level that still fail land in `stats.json.failed_groups`; they are NOT merged with anything and do NOT block the rest of the run from completing.
+
+Both Phase 1 batches AND Phase 2 verification batches go through this same ladder.
 
 ### Phase 2 — cross-cluster verification
 
@@ -215,7 +252,28 @@ Items:
 ... (stratified so close clusters land in the same batch)
 ```
 
-Server-side merge rule: if ≥ `policy.merge_threshold` (default 0.6) of cluster A's representatives end up in the same response-group as ≥ `policy.merge_threshold` of cluster B's representatives, union A and B in the union-find.
+**Server-side merge rule (Q12 — transitive-closure with ≥3-element confidence floor):**
+
+For each response-group returned by the LLM, examine the items' CURRENT union-find cluster assignments. Count, per (cluster_a, cluster_b) pair, how many distinct items from each cluster co-occur in the SAME group.
+
+```
+for each response_group G in response:
+    by_cluster = group_items_by_current_cluster(G)       # {A: [x1,x2,x3,…], B: [y1,y2], …}
+    for each pair (A, B) where A != B and A < B:
+        crossCountA = len({items in G currently in A})
+        crossCountB = len({items in G currently in B})
+        if crossCountA >= policy.merge_min_cross_count   # default 3
+        and crossCountB >= policy.merge_min_cross_count:
+            union_find.merge(A, B)
+        else:
+            stats.weak_overlap_evidence.append({
+                response_id, A, B, crossCountA, crossCountB
+            })
+```
+
+**Why this rule, not a percentage threshold:** in union-find theory, two clusters that share even ONE element ARE the same cluster — the percentage threshold was a hack against LLM noise. By requiring ≥3 distinct items from BOTH sides in the SAME LLM response, we get independent multi-element confirmation that A and B are genuinely the same concept, not a hallucinated overlap. Single-overlap and 2-element-overlap responses still get LOGGED (in `weak_overlap_evidence`) so an operator can review them post-run, but they do NOT trigger an automatic merge.
+
+The prior percentage-based `merge_threshold` knob is REMOVED from the policy schema.
 
 ### Phase 3 — LLM canonical label (only when `canonical_label_mode: llm`)
 
@@ -254,12 +312,15 @@ Output: a JSON object {"canonical": "...", "rationale": "..."}.
 
 ## 10. Acceptance criteria
 
-- [ ] All 10 open questions resolved (§2)
-- [ ] All 14 test scenarios pass (§5)
+- [x] All 12 open questions resolved (§2) — done 2026-05-22
+- [ ] All 17 test scenarios pass (§5)
+- [ ] Pre-flight model benchmark gate hardens against broken profiles before Phase 0 runs
+- [ ] Recursive-split-and-retry ladder enforces the 45-call-per-source-batch hard cap and records final give-ups in `stats.json.failed_groups`
+- [ ] Phase 2 transitive-closure merge rule (≥3-element confidence floor) drives all cluster unions — single/double overlaps land in `stats.json.weak_overlap_evidence` not in the union-find
 - [ ] CPV `publish.py --check-only` clean (all 10 gates green)
 - [ ] Published as a minor version bump
-- [ ] Issue #4 closed with a comment linking the release tag
-- [ ] `~/.claude/rules/use-llm-externalizer.md` updated
+- [ ] Issue #4 closed with a comment linking the release tag, the answered open questions, and a usage example
+- [ ] `~/.claude/rules/use-llm-externalizer.md` updated with the new tool + its policy knobs
 - [ ] Plugin README updated
 - [ ] No regression: existing tools (`chat`, `code_task`, `scan_folder`, `search_existing_implementations`) untouched at the source-code level (the diff hits only the index registration block)
 
@@ -268,3 +329,4 @@ Output: a JSON object {"canonical": "...", "rationale": "..."}.
 | Date | Status change | Note |
 |---|---|---|
 | 2026-05-21T23:25:51+0200 | created → not-started | Drafted from issue #4. 10 open questions need user resolution before Phase A. |
+| 2026-05-22T00:22:23+0200 | Q1–Q12 all RESOLVED | User accepted defaults for Q1–Q6, Q8–Q10. Q7 replaced with recursive-split-and-retry ladder (max depth 3 → 1→2→4→8 sub-batches, 45 LLM calls hard cap per source batch). Added Q11 = mandatory pre-flight model benchmark gate (cached per-profile-per-day). Added Q12 = transitive-closure merge rule with ≥3-element floor (replaces percentage `merge_threshold` knob). Phase A may now start. |
