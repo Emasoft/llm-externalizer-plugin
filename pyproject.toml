@@ -9,6 +9,13 @@ test = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
 ]
+# cluster_synonyms embeddings sidecar (mcp-server/scripts/compute_embeddings.py).
+# Heavy deps (torch via sentence-transformers, ~1GB). Install only when you
+# plan to use the cluster_synonyms tool: `uv pip install -e '.[embeddings]'`.
+embeddings = [
+    "sentence-transformers>=3.0",
+    "numpy>=1.26",
+]
 
 [tool.ruff]
 line-length = 120
