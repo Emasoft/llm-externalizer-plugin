@@ -3,7 +3,7 @@ trdd-id: 220ea89f-0af2-4eba-884d-367a986d27e7
 title: cluster_synonyms — zero-token batch synonym clustering MCP primitive
 status: not-started
 created: 2026-05-21T23:25:51+0200
-updated: 2026-05-22T00:22:23+0200
+updated: 2026-05-22T00:26:35+0200
 ---
 
 # TRDD-220ea89f — cluster_synonyms — zero-token batch synonym clustering MCP primitive
@@ -44,6 +44,10 @@ Full issue text including alternatives-considered table is preserved on GitHub (
 ## 1. Why this matters (one-paragraph framing)
 
 `chat` / `code_task` / `scan_folder` / `search_existing_implementations` all force every item through the orchestrator's prompt+response stream — fine for a few hundred files, ruinous for 1M taxonomy labels. `cluster_synonyms` moves the entire batch-cluster-verify-canonicalise loop INSIDE the MCP server and returns only file paths. The orchestrator stays under 1 KB of context for a run that the LLM backend handles tens of millions of tokens on. The downstream EMASOFT-SKILLS-MANAGER L2 refinement use case is the immediate driver but the primitive is general-purpose (ontology cleanup, label dedup, concept canonicalisation).
+
+### Scope is SENTENCE-level meaning equivalence, NOT word-level synonymy
+
+Each `item` in the input JSONL is a short SENTENCE or LABEL (typically 1–50 words, sometimes a taxonomy path like `domain/programming/`). The tool clusters items by **full-sentence meaning equivalence** — the LLM judges whether the COMPLETE phrasing of two items conveys the same concept. Example: `"Compile the code with optimizations"` ≡ `"Build the project with optimizer flags"` cluster together (same intent), but `"Compile the code"` and `"Test the code"` do NOT — different intents. The tool does NOT attempt word-by-word synonym matching ("compile" vs "build" alone is not the question — the SENTENCE-level meaning is). This distinction must be reflected in every prompt (§7) and in the policy defaults: short single-word items still work, but the prompts always ask the LLM to compare full sentences.
 
 ## 2. Open questions (all resolved 2026-05-22)
 
@@ -195,21 +199,28 @@ T11 is the only LLM-cost-intensive test — run on `free: true` (Nemotron 120B) 
 
 ## 7. Prompt templates (locked once Phase B starts)
 
-### Phase 1 — group by identical meaning
+### Phase 1 — group by identical SENTENCE meaning
 
 ```
-You are given N items, each with a numeric id and a short label (optionally a context hint).
-Group items that have IDENTICAL or NEARLY-IDENTICAL meaning. Slight wording differences are OK;
-two items that refer to DIFFERENT concepts must NEVER be grouped.
+You are given N short SENTENCES (or short labels treated as sentences), each with a numeric id
+and a context hint (optional). Group sentences that have IDENTICAL or NEARLY-IDENTICAL
+overall meaning. Slight wording differences are OK; sentences that convey DIFFERENT concepts
+must NEVER be grouped together. You are NOT doing word-by-word synonym matching — you are
+comparing whole-sentence meaning. Examples:
+
+  "Compile the code with optimizations" ≡ "Build the project with optimizer flags"   → same group
+  "Compile the code"                    ≠ "Test the code"                            → different groups
+  "domain/programming/"                 ≡ "domain/coding/"                           → same group
+  "domain/programming/"                 ≠ "domain/testing/"                          → different groups
 
 Output: a JSON object {"groups": [[id, id, ...], [id], ...]}.
 Every input id MUST appear exactly once across all groups.
 Singletons stay as 1-element groups.
 
-Items:
-1. id=42  label="domain/programming/"  ctx="prog. languages, compilers"
-2. id=43  label="domain/coding/"
-... (up to batch_size items)
+Sentences:
+1. id=42  sentence="domain/programming/"  ctx="prog. languages, compilers"
+2. id=43  sentence="domain/coding/"
+... (up to batch_size sentences)
 ```
 
 Response strict-validated via Zod `z.object({ groups: z.array(z.array(z.number().int())) })`.
@@ -241,14 +252,16 @@ Both Phase 1 batches AND Phase 2 verification batches go through this same ladde
 ### Phase 2 — cross-cluster verification
 
 ```
-You are given M items drawn as representatives from K tentative clusters.
-For each item, the cluster_id is hidden — your job is to regroup them by meaning ONLY.
+You are given M short SENTENCES drawn as representatives from K tentative clusters.
+For each sentence, the cluster assignment is HIDDEN from you. Your job is to regroup these
+sentences purely by their full-sentence meaning equivalence — the same rule as Phase 1
+(whole-sentence meaning, NOT word-by-word synonym matching).
 
-Output: same {"groups": [[id, ...]]} format.
+Output: same {"groups": [[id, ...]]} format. Singletons stay as 1-element groups.
 
-Items:
-1. id=42 (from cluster A)  label="..."
-2. id=99 (from cluster B)  label="..."
+Sentences:
+1. id=42  sentence="..."
+2. id=99  sentence="..."
 ... (stratified so close clusters land in the same batch)
 ```
 
@@ -275,14 +288,15 @@ for each response_group G in response:
 
 The prior percentage-based `merge_threshold` knob is REMOVED from the policy schema.
 
-### Phase 3 — LLM canonical label (only when `canonical_label_mode: llm`)
+### Phase 3 — LLM canonical sentence (only when `canonical_label_mode: llm`)
 
 ```
-Given these synonymous labels for one concept, pick the single CLEANEST canonical form.
-Prefer: short (3-50 chars), no trailing punctuation, no version numbers, no abbreviations.
+Given these synonymous sentences/labels (all conveying the same overall meaning), pick the
+single CLEANEST canonical form. Prefer: short (3-50 chars when possible), no trailing
+punctuation, no version numbers, no abbreviations, complete enough to stand alone.
 If multiple are equally good, pick the first listed.
 
-Labels:
+Sentences:
 - domain/programming/
 - domain/coding/
 - domain/software-development/
@@ -330,3 +344,4 @@ Output: a JSON object {"canonical": "...", "rationale": "..."}.
 |---|---|---|
 | 2026-05-21T23:25:51+0200 | created → not-started | Drafted from issue #4. 10 open questions need user resolution before Phase A. |
 | 2026-05-22T00:22:23+0200 | Q1–Q12 all RESOLVED | User accepted defaults for Q1–Q6, Q8–Q10. Q7 replaced with recursive-split-and-retry ladder (max depth 3 → 1→2→4→8 sub-batches, 45 LLM calls hard cap per source batch). Added Q11 = mandatory pre-flight model benchmark gate (cached per-profile-per-day). Added Q12 = transitive-closure merge rule with ≥3-element floor (replaces percentage `merge_threshold` knob). Phase A may now start. |
+| 2026-05-22T00:26:35+0200 | scope clarification — SENTENCE-level meaning | User clarified: the tool clusters items by FULL-SENTENCE meaning equivalence, not word-level synonymy. §1 and all three §7 prompt templates updated to make this explicit with positive ("Compile the code with optimizations" ≡ "Build the project with optimizer flags") and negative ("Compile the code" ≠ "Test the code") examples in the system prompt. Algorithm unchanged. |
