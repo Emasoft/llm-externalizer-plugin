@@ -1,0 +1,18 @@
+# Pre-flight benchmark T16 fixture (TRDD-220ea89f §5).
+#
+# This profile is deliberately broken: it points the local-mode preset
+# at a port that nothing is listening on. Loading this profile and then
+# invoking cluster_synonyms must abort BEFORE Phase 0 with a clear "fix
+# your profile" message — no checkpoint written, no LLM billing.
+#
+# Used by the preflight-gate integration test in Phase B / C.
+
+active: broken-profile
+profiles:
+  broken-profile:
+    mode: local
+    api: lmstudio-local
+    model: "this-model-does-not-exist"
+    url: "http://127.0.0.1:1"        # nothing listens here
+    api_token: "dummy"
+    timeout: 5

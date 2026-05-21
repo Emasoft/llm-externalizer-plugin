@@ -1,0 +1,500 @@
+{"id":"s0001","sentence":"Compile the code"}
+{"id":"s0002","sentence":"Build the project"}
+{"id":"s0003","sentence":"Compile the source"}
+{"id":"s0004","sentence":"Compile the program"}
+{"id":"s0005","sentence":"Build the binary"}
+{"id":"s0006","sentence":"Compile the code (v1)"}
+{"id":"s0007","sentence":"Build the project (v1)"}
+{"id":"s0008","sentence":"Compile the source (v1)"}
+{"id":"s0009","sentence":"Compile the program (v1)"}
+{"id":"s0010","sentence":"Build the binary (v1)"}
+{"id":"s0011","sentence":"Compile the code (v2)"}
+{"id":"s0012","sentence":"Build the project (v2)"}
+{"id":"s0013","sentence":"Compile the source (v2)"}
+{"id":"s0014","sentence":"Compile the program (v2)"}
+{"id":"s0015","sentence":"Build the binary (v2)"}
+{"id":"s0016","sentence":"Compile the code (v3)"}
+{"id":"s0017","sentence":"Build the project (v3)"}
+{"id":"s0018","sentence":"Compile the source (v3)"}
+{"id":"s0019","sentence":"Compile the program (v3)"}
+{"id":"s0020","sentence":"Build the binary (v3)"}
+{"id":"s0021","sentence":"Run the tests"}
+{"id":"s0022","sentence":"Execute the test suite"}
+{"id":"s0023","sentence":"Run unit tests"}
+{"id":"s0024","sentence":"Run the testsuite"}
+{"id":"s0025","sentence":"Execute the tests"}
+{"id":"s0026","sentence":"Run the tests (v1)"}
+{"id":"s0027","sentence":"Execute the test suite (v1)"}
+{"id":"s0028","sentence":"Run unit tests (v1)"}
+{"id":"s0029","sentence":"Run the testsuite (v1)"}
+{"id":"s0030","sentence":"Execute the tests (v1)"}
+{"id":"s0031","sentence":"Run the tests (v2)"}
+{"id":"s0032","sentence":"Execute the test suite (v2)"}
+{"id":"s0033","sentence":"Run unit tests (v2)"}
+{"id":"s0034","sentence":"Run the testsuite (v2)"}
+{"id":"s0035","sentence":"Execute the tests (v2)"}
+{"id":"s0036","sentence":"Run the tests (v3)"}
+{"id":"s0037","sentence":"Execute the test suite (v3)"}
+{"id":"s0038","sentence":"Run unit tests (v3)"}
+{"id":"s0039","sentence":"Run the testsuite (v3)"}
+{"id":"s0040","sentence":"Execute the tests (v3)"}
+{"id":"s0041","sentence":"Deploy to production"}
+{"id":"s0042","sentence":"Ship to prod"}
+{"id":"s0043","sentence":"Deploy to live"}
+{"id":"s0044","sentence":"Push to production"}
+{"id":"s0045","sentence":"Release to prod"}
+{"id":"s0046","sentence":"Deploy to production (v1)"}
+{"id":"s0047","sentence":"Ship to prod (v1)"}
+{"id":"s0048","sentence":"Deploy to live (v1)"}
+{"id":"s0049","sentence":"Push to production (v1)"}
+{"id":"s0050","sentence":"Release to prod (v1)"}
+{"id":"s0051","sentence":"Deploy to production (v2)"}
+{"id":"s0052","sentence":"Ship to prod (v2)"}
+{"id":"s0053","sentence":"Deploy to live (v2)"}
+{"id":"s0054","sentence":"Push to production (v2)"}
+{"id":"s0055","sentence":"Release to prod (v2)"}
+{"id":"s0056","sentence":"Deploy to production (v3)"}
+{"id":"s0057","sentence":"Ship to prod (v3)"}
+{"id":"s0058","sentence":"Deploy to live (v3)"}
+{"id":"s0059","sentence":"Push to production (v3)"}
+{"id":"s0060","sentence":"Release to prod (v3)"}
+{"id":"s0061","sentence":"Open a pull request"}
+{"id":"s0062","sentence":"Submit a PR"}
+{"id":"s0063","sentence":"Open a code review"}
+{"id":"s0064","sentence":"Create a pull request"}
+{"id":"s0065","sentence":"Open a merge request"}
+{"id":"s0066","sentence":"Open a pull request (v1)"}
+{"id":"s0067","sentence":"Submit a PR (v1)"}
+{"id":"s0068","sentence":"Open a code review (v1)"}
+{"id":"s0069","sentence":"Create a pull request (v1)"}
+{"id":"s0070","sentence":"Open a merge request (v1)"}
+{"id":"s0071","sentence":"Open a pull request (v2)"}
+{"id":"s0072","sentence":"Submit a PR (v2)"}
+{"id":"s0073","sentence":"Open a code review (v2)"}
+{"id":"s0074","sentence":"Create a pull request (v2)"}
+{"id":"s0075","sentence":"Open a merge request (v2)"}
+{"id":"s0076","sentence":"Open a pull request (v3)"}
+{"id":"s0077","sentence":"Submit a PR (v3)"}
+{"id":"s0078","sentence":"Open a code review (v3)"}
+{"id":"s0079","sentence":"Create a pull request (v3)"}
+{"id":"s0080","sentence":"Open a merge request (v3)"}
+{"id":"s0081","sentence":"Commit the changes"}
+{"id":"s0082","sentence":"Save the changes"}
+{"id":"s0083","sentence":"Stage and commit"}
+{"id":"s0084","sentence":"Record the changes"}
+{"id":"s0085","sentence":"Make a commit"}
+{"id":"s0086","sentence":"Commit the changes (v1)"}
+{"id":"s0087","sentence":"Save the changes (v1)"}
+{"id":"s0088","sentence":"Stage and commit (v1)"}
+{"id":"s0089","sentence":"Record the changes (v1)"}
+{"id":"s0090","sentence":"Make a commit (v1)"}
+{"id":"s0091","sentence":"Commit the changes (v2)"}
+{"id":"s0092","sentence":"Save the changes (v2)"}
+{"id":"s0093","sentence":"Stage and commit (v2)"}
+{"id":"s0094","sentence":"Record the changes (v2)"}
+{"id":"s0095","sentence":"Make a commit (v2)"}
+{"id":"s0096","sentence":"Commit the changes (v3)"}
+{"id":"s0097","sentence":"Save the changes (v3)"}
+{"id":"s0098","sentence":"Stage and commit (v3)"}
+{"id":"s0099","sentence":"Record the changes (v3)"}
+{"id":"s0100","sentence":"Make a commit (v3)"}
+{"id":"s0101","sentence":"Lint the code"}
+{"id":"s0102","sentence":"Run linter"}
+{"id":"s0103","sentence":"Check style"}
+{"id":"s0104","sentence":"Style-check the code"}
+{"id":"s0105","sentence":"Run code quality checks"}
+{"id":"s0106","sentence":"Lint the code (v1)"}
+{"id":"s0107","sentence":"Run linter (v1)"}
+{"id":"s0108","sentence":"Check style (v1)"}
+{"id":"s0109","sentence":"Style-check the code (v1)"}
+{"id":"s0110","sentence":"Run code quality checks (v1)"}
+{"id":"s0111","sentence":"Lint the code (v2)"}
+{"id":"s0112","sentence":"Run linter (v2)"}
+{"id":"s0113","sentence":"Check style (v2)"}
+{"id":"s0114","sentence":"Style-check the code (v2)"}
+{"id":"s0115","sentence":"Run code quality checks (v2)"}
+{"id":"s0116","sentence":"Lint the code (v3)"}
+{"id":"s0117","sentence":"Run linter (v3)"}
+{"id":"s0118","sentence":"Check style (v3)"}
+{"id":"s0119","sentence":"Style-check the code (v3)"}
+{"id":"s0120","sentence":"Run code quality checks (v3)"}
+{"id":"s0121","sentence":"Format the code"}
+{"id":"s0122","sentence":"Auto-format"}
+{"id":"s0123","sentence":"Apply formatter"}
+{"id":"s0124","sentence":"Run prettier"}
+{"id":"s0125","sentence":"Beautify the code"}
+{"id":"s0126","sentence":"Format the code (v1)"}
+{"id":"s0127","sentence":"Auto-format (v1)"}
+{"id":"s0128","sentence":"Apply formatter (v1)"}
+{"id":"s0129","sentence":"Run prettier (v1)"}
+{"id":"s0130","sentence":"Beautify the code (v1)"}
+{"id":"s0131","sentence":"Format the code (v2)"}
+{"id":"s0132","sentence":"Auto-format (v2)"}
+{"id":"s0133","sentence":"Apply formatter (v2)"}
+{"id":"s0134","sentence":"Run prettier (v2)"}
+{"id":"s0135","sentence":"Beautify the code (v2)"}
+{"id":"s0136","sentence":"Format the code (v3)"}
+{"id":"s0137","sentence":"Auto-format (v3)"}
+{"id":"s0138","sentence":"Apply formatter (v3)"}
+{"id":"s0139","sentence":"Run prettier (v3)"}
+{"id":"s0140","sentence":"Beautify the code (v3)"}
+{"id":"s0141","sentence":"Profile performance"}
+{"id":"s0142","sentence":"Measure latency"}
+{"id":"s0143","sentence":"Benchmark performance"}
+{"id":"s0144","sentence":"Profile the runtime"}
+{"id":"s0145","sentence":"Measure speed"}
+{"id":"s0146","sentence":"Profile performance (v1)"}
+{"id":"s0147","sentence":"Measure latency (v1)"}
+{"id":"s0148","sentence":"Benchmark performance (v1)"}
+{"id":"s0149","sentence":"Profile the runtime (v1)"}
+{"id":"s0150","sentence":"Measure speed (v1)"}
+{"id":"s0151","sentence":"Profile performance (v2)"}
+{"id":"s0152","sentence":"Measure latency (v2)"}
+{"id":"s0153","sentence":"Benchmark performance (v2)"}
+{"id":"s0154","sentence":"Profile the runtime (v2)"}
+{"id":"s0155","sentence":"Measure speed (v2)"}
+{"id":"s0156","sentence":"Profile performance (v3)"}
+{"id":"s0157","sentence":"Measure latency (v3)"}
+{"id":"s0158","sentence":"Benchmark performance (v3)"}
+{"id":"s0159","sentence":"Profile the runtime (v3)"}
+{"id":"s0160","sentence":"Measure speed (v3)"}
+{"id":"s0161","sentence":"Refactor the function"}
+{"id":"s0162","sentence":"Clean up the function"}
+{"id":"s0163","sentence":"Restructure the function"}
+{"id":"s0164","sentence":"Simplify the function"}
+{"id":"s0165","sentence":"Rewrite the function"}
+{"id":"s0166","sentence":"Refactor the function (v1)"}
+{"id":"s0167","sentence":"Clean up the function (v1)"}
+{"id":"s0168","sentence":"Restructure the function (v1)"}
+{"id":"s0169","sentence":"Simplify the function (v1)"}
+{"id":"s0170","sentence":"Rewrite the function (v1)"}
+{"id":"s0171","sentence":"Refactor the function (v2)"}
+{"id":"s0172","sentence":"Clean up the function (v2)"}
+{"id":"s0173","sentence":"Restructure the function (v2)"}
+{"id":"s0174","sentence":"Simplify the function (v2)"}
+{"id":"s0175","sentence":"Rewrite the function (v2)"}
+{"id":"s0176","sentence":"Refactor the function (v3)"}
+{"id":"s0177","sentence":"Clean up the function (v3)"}
+{"id":"s0178","sentence":"Restructure the function (v3)"}
+{"id":"s0179","sentence":"Simplify the function (v3)"}
+{"id":"s0180","sentence":"Rewrite the function (v3)"}
+{"id":"s0181","sentence":"Add a comment"}
+{"id":"s0182","sentence":"Document the code"}
+{"id":"s0183","sentence":"Annotate the function"}
+{"id":"s0184","sentence":"Write inline docs"}
+{"id":"s0185","sentence":"Add doc-comments"}
+{"id":"s0186","sentence":"Add a comment (v1)"}
+{"id":"s0187","sentence":"Document the code (v1)"}
+{"id":"s0188","sentence":"Annotate the function (v1)"}
+{"id":"s0189","sentence":"Write inline docs (v1)"}
+{"id":"s0190","sentence":"Add doc-comments (v1)"}
+{"id":"s0191","sentence":"Add a comment (v2)"}
+{"id":"s0192","sentence":"Document the code (v2)"}
+{"id":"s0193","sentence":"Annotate the function (v2)"}
+{"id":"s0194","sentence":"Write inline docs (v2)"}
+{"id":"s0195","sentence":"Add doc-comments (v2)"}
+{"id":"s0196","sentence":"Add a comment (v3)"}
+{"id":"s0197","sentence":"Document the code (v3)"}
+{"id":"s0198","sentence":"Annotate the function (v3)"}
+{"id":"s0199","sentence":"Write inline docs (v3)"}
+{"id":"s0200","sentence":"Add doc-comments (v3)"}
+{"id":"s0201","sentence":"Configure the linter"}
+{"id":"s0202","sentence":"Set up linting rules"}
+{"id":"s0203","sentence":"Configure code style"}
+{"id":"s0204","sentence":"Tune the linter"}
+{"id":"s0205","sentence":"Update lint config"}
+{"id":"s0206","sentence":"Configure the linter (v1b)"}
+{"id":"s0207","sentence":"Set up linting rules (v1b)"}
+{"id":"s0208","sentence":"Configure code style (v1b)"}
+{"id":"s0209","sentence":"Tune the linter (v1b)"}
+{"id":"s0210","sentence":"Update lint config (v1b)"}
+{"id":"s0211","sentence":"Update dependencies"}
+{"id":"s0212","sentence":"Bump dependencies"}
+{"id":"s0213","sentence":"Upgrade deps"}
+{"id":"s0214","sentence":"Refresh dependencies"}
+{"id":"s0215","sentence":"Pull dep updates"}
+{"id":"s0216","sentence":"Update dependencies (v1b)"}
+{"id":"s0217","sentence":"Bump dependencies (v1b)"}
+{"id":"s0218","sentence":"Upgrade deps (v1b)"}
+{"id":"s0219","sentence":"Refresh dependencies (v1b)"}
+{"id":"s0220","sentence":"Pull dep updates (v1b)"}
+{"id":"s0221","sentence":"Resolve merge conflicts"}
+{"id":"s0222","sentence":"Fix merge conflicts"}
+{"id":"s0223","sentence":"Reconcile branches"}
+{"id":"s0224","sentence":"Sort out conflicts"}
+{"id":"s0225","sentence":"Resolve git conflicts"}
+{"id":"s0226","sentence":"Resolve merge conflicts (v1b)"}
+{"id":"s0227","sentence":"Fix merge conflicts (v1b)"}
+{"id":"s0228","sentence":"Reconcile branches (v1b)"}
+{"id":"s0229","sentence":"Sort out conflicts (v1b)"}
+{"id":"s0230","sentence":"Resolve git conflicts (v1b)"}
+{"id":"s0231","sentence":"Check the logs"}
+{"id":"s0232","sentence":"Read the logs"}
+{"id":"s0233","sentence":"Inspect log output"}
+{"id":"s0234","sentence":"Look at the logs"}
+{"id":"s0235","sentence":"Review the logs"}
+{"id":"s0236","sentence":"Check the logs (v1b)"}
+{"id":"s0237","sentence":"Read the logs (v1b)"}
+{"id":"s0238","sentence":"Inspect log output (v1b)"}
+{"id":"s0239","sentence":"Look at the logs (v1b)"}
+{"id":"s0240","sentence":"Review the logs (v1b)"}
+{"id":"s0241","sentence":"Open a terminal"}
+{"id":"s0242","sentence":"Start a shell"}
+{"id":"s0243","sentence":"Launch the terminal"}
+{"id":"s0244","sentence":"Spawn a shell"}
+{"id":"s0245","sentence":"Open a console"}
+{"id":"s0246","sentence":"Open a terminal (v1b)"}
+{"id":"s0247","sentence":"Start a shell (v1b)"}
+{"id":"s0248","sentence":"Launch the terminal (v1b)"}
+{"id":"s0249","sentence":"Spawn a shell (v1b)"}
+{"id":"s0250","sentence":"Open a console (v1b)"}
+{"id":"s0251","sentence":"Read the documentation"}
+{"id":"s0252","sentence":"Check the docs"}
+{"id":"s0253","sentence":"Look at the documentation"}
+{"id":"s0254","sentence":"Consult the docs"}
+{"id":"s0255","sentence":"Read the manual"}
+{"id":"s0256","sentence":"Read the documentation (v1b)"}
+{"id":"s0257","sentence":"Check the docs (v1b)"}
+{"id":"s0258","sentence":"Look at the documentation (v1b)"}
+{"id":"s0259","sentence":"Consult the docs (v1b)"}
+{"id":"s0260","sentence":"Read the manual (v1b)"}
+{"id":"s0261","sentence":"Write a test case"}
+{"id":"s0262","sentence":"Add a unit test"}
+{"id":"s0263","sentence":"Create a test"}
+{"id":"s0264","sentence":"Author a new test"}
+{"id":"s0265","sentence":"Add a test case"}
+{"id":"s0266","sentence":"Write a test case (v1b)"}
+{"id":"s0267","sentence":"Add a unit test (v1b)"}
+{"id":"s0268","sentence":"Create a test (v1b)"}
+{"id":"s0269","sentence":"Author a new test (v1b)"}
+{"id":"s0270","sentence":"Add a test case (v1b)"}
+{"id":"s0271","sentence":"Push the branch"}
+{"id":"s0272","sentence":"Push to remote"}
+{"id":"s0273","sentence":"Sync to origin"}
+{"id":"s0274","sentence":"Push commits up"}
+{"id":"s0275","sentence":"Push to upstream"}
+{"id":"s0276","sentence":"Push the branch (v1b)"}
+{"id":"s0277","sentence":"Push to remote (v1b)"}
+{"id":"s0278","sentence":"Sync to origin (v1b)"}
+{"id":"s0279","sentence":"Push commits up (v1b)"}
+{"id":"s0280","sentence":"Push to upstream (v1b)"}
+{"id":"s0281","sentence":"Pull the latest"}
+{"id":"s0282","sentence":"Pull from main"}
+{"id":"s0283","sentence":"Sync with upstream"}
+{"id":"s0284","sentence":"Fetch and merge"}
+{"id":"s0285","sentence":"Pull latest changes"}
+{"id":"s0286","sentence":"Pull the latest (v1b)"}
+{"id":"s0287","sentence":"Pull from main (v1b)"}
+{"id":"s0288","sentence":"Sync with upstream (v1b)"}
+{"id":"s0289","sentence":"Fetch and merge (v1b)"}
+{"id":"s0290","sentence":"Pull latest changes (v1b)"}
+{"id":"s0291","sentence":"Run the linter"}
+{"id":"s0292","sentence":"Lint check"}
+{"id":"s0293","sentence":"Check for lint"}
+{"id":"s0294","sentence":"Verify lint passes"}
+{"id":"s0295","sentence":"Run lint validation"}
+{"id":"s0296","sentence":"Run the linter (v1b)"}
+{"id":"s0297","sentence":"Lint check (v1b)"}
+{"id":"s0298","sentence":"Check for lint (v1b)"}
+{"id":"s0299","sentence":"Verify lint passes (v1b)"}
+{"id":"s0300","sentence":"Run lint validation (v1b)"}
+{"id":"s0301","sentence":"Compile the code"}
+{"id":"s0302","sentence":"Build the project"}
+{"id":"s0303","sentence":"Compile the source"}
+{"id":"s0304","sentence":"Compile the program"}
+{"id":"s0305","sentence":"Build the binary"}
+{"id":"s0306","sentence":"Compile the code (v1b)"}
+{"id":"s0307","sentence":"Build the project (v1b)"}
+{"id":"s0308","sentence":"Compile the source (v1b)"}
+{"id":"s0309","sentence":"Compile the program (v1b)"}
+{"id":"s0310","sentence":"Build the binary (v1b)"}
+{"id":"s0311","sentence":"Run the tests"}
+{"id":"s0312","sentence":"Execute the test suite"}
+{"id":"s0313","sentence":"Run unit tests"}
+{"id":"s0314","sentence":"Run the testsuite"}
+{"id":"s0315","sentence":"Execute the tests"}
+{"id":"s0316","sentence":"Run the tests (v1b)"}
+{"id":"s0317","sentence":"Execute the test suite (v1b)"}
+{"id":"s0318","sentence":"Run unit tests (v1b)"}
+{"id":"s0319","sentence":"Run the testsuite (v1b)"}
+{"id":"s0320","sentence":"Execute the tests (v1b)"}
+{"id":"s0321","sentence":"Deploy to production"}
+{"id":"s0322","sentence":"Ship to prod"}
+{"id":"s0323","sentence":"Deploy to live"}
+{"id":"s0324","sentence":"Push to production"}
+{"id":"s0325","sentence":"Release to prod"}
+{"id":"s0326","sentence":"Deploy to production (v1b)"}
+{"id":"s0327","sentence":"Ship to prod (v1b)"}
+{"id":"s0328","sentence":"Deploy to live (v1b)"}
+{"id":"s0329","sentence":"Push to production (v1b)"}
+{"id":"s0330","sentence":"Release to prod (v1b)"}
+{"id":"s0331","sentence":"Open a pull request"}
+{"id":"s0332","sentence":"Submit a PR"}
+{"id":"s0333","sentence":"Open a code review"}
+{"id":"s0334","sentence":"Create a pull request"}
+{"id":"s0335","sentence":"Open a merge request"}
+{"id":"s0336","sentence":"Open a pull request (v1b)"}
+{"id":"s0337","sentence":"Submit a PR (v1b)"}
+{"id":"s0338","sentence":"Open a code review (v1b)"}
+{"id":"s0339","sentence":"Create a pull request (v1b)"}
+{"id":"s0340","sentence":"Open a merge request (v1b)"}
+{"id":"s0341","sentence":"Commit the changes"}
+{"id":"s0342","sentence":"Save the changes"}
+{"id":"s0343","sentence":"Stage and commit"}
+{"id":"s0344","sentence":"Record the changes"}
+{"id":"s0345","sentence":"Make a commit"}
+{"id":"s0346","sentence":"Commit the changes (v1b)"}
+{"id":"s0347","sentence":"Save the changes (v1b)"}
+{"id":"s0348","sentence":"Stage and commit (v1b)"}
+{"id":"s0349","sentence":"Record the changes (v1b)"}
+{"id":"s0350","sentence":"Make a commit (v1b)"}
+{"id":"s0351","sentence":"Lint the code"}
+{"id":"s0352","sentence":"Run linter"}
+{"id":"s0353","sentence":"Check style"}
+{"id":"s0354","sentence":"Style-check the code"}
+{"id":"s0355","sentence":"Run code quality checks"}
+{"id":"s0356","sentence":"Lint the code (v1b)"}
+{"id":"s0357","sentence":"Run linter (v1b)"}
+{"id":"s0358","sentence":"Check style (v1b)"}
+{"id":"s0359","sentence":"Style-check the code (v1b)"}
+{"id":"s0360","sentence":"Run code quality checks (v1b)"}
+{"id":"s0361","sentence":"Format the code"}
+{"id":"s0362","sentence":"Auto-format"}
+{"id":"s0363","sentence":"Apply formatter"}
+{"id":"s0364","sentence":"Run prettier"}
+{"id":"s0365","sentence":"Beautify the code"}
+{"id":"s0366","sentence":"Format the code (v1b)"}
+{"id":"s0367","sentence":"Auto-format (v1b)"}
+{"id":"s0368","sentence":"Apply formatter (v1b)"}
+{"id":"s0369","sentence":"Run prettier (v1b)"}
+{"id":"s0370","sentence":"Beautify the code (v1b)"}
+{"id":"s0371","sentence":"Profile performance"}
+{"id":"s0372","sentence":"Measure latency"}
+{"id":"s0373","sentence":"Benchmark performance"}
+{"id":"s0374","sentence":"Profile the runtime"}
+{"id":"s0375","sentence":"Measure speed"}
+{"id":"s0376","sentence":"Profile performance (v1b)"}
+{"id":"s0377","sentence":"Measure latency (v1b)"}
+{"id":"s0378","sentence":"Benchmark performance (v1b)"}
+{"id":"s0379","sentence":"Profile the runtime (v1b)"}
+{"id":"s0380","sentence":"Measure speed (v1b)"}
+{"id":"s0381","sentence":"Refactor the function"}
+{"id":"s0382","sentence":"Clean up the function"}
+{"id":"s0383","sentence":"Restructure the function"}
+{"id":"s0384","sentence":"Simplify the function"}
+{"id":"s0385","sentence":"Rewrite the function"}
+{"id":"s0386","sentence":"Refactor the function (v1b)"}
+{"id":"s0387","sentence":"Clean up the function (v1b)"}
+{"id":"s0388","sentence":"Restructure the function (v1b)"}
+{"id":"s0389","sentence":"Simplify the function (v1b)"}
+{"id":"s0390","sentence":"Rewrite the function (v1b)"}
+{"id":"s0391","sentence":"Add a comment"}
+{"id":"s0392","sentence":"Document the code"}
+{"id":"s0393","sentence":"Annotate the function"}
+{"id":"s0394","sentence":"Write inline docs"}
+{"id":"s0395","sentence":"Add doc-comments"}
+{"id":"s0396","sentence":"Add a comment (v1b)"}
+{"id":"s0397","sentence":"Document the code (v1b)"}
+{"id":"s0398","sentence":"Annotate the function (v1b)"}
+{"id":"s0399","sentence":"Write inline docs (v1b)"}
+{"id":"s0400","sentence":"Add doc-comments (v1b)"}
+{"id":"s0401","sentence":"Singleton concept number 1: configure timeouts #1"}
+{"id":"s0402","sentence":"Singleton concept number 2: deprecated API note #1"}
+{"id":"s0403","sentence":"Singleton concept number 3: polling interval setup #1"}
+{"id":"s0404","sentence":"Singleton concept number 4: rate-limit budget review #1"}
+{"id":"s0405","sentence":"Singleton concept number 5: memory profile sample #1"}
+{"id":"s0406","sentence":"Singleton concept number 6: GPU benchmark trace #1"}
+{"id":"s0407","sentence":"Singleton concept number 7: shader compilation log #1"}
+{"id":"s0408","sentence":"Singleton concept number 8: JIT compile flag tuning #1"}
+{"id":"s0409","sentence":"Singleton concept number 9: circuit-breaker reset #1"}
+{"id":"s0410","sentence":"Singleton concept number 10: feature-flag rollout plan #1"}
+{"id":"s0411","sentence":"Singleton concept number 11: A/B test variant assignment #1"}
+{"id":"s0412","sentence":"Singleton concept number 12: configure timeouts #2"}
+{"id":"s0413","sentence":"Singleton concept number 13: deprecated API note #2"}
+{"id":"s0414","sentence":"Singleton concept number 14: polling interval setup #2"}
+{"id":"s0415","sentence":"Singleton concept number 15: rate-limit budget review #2"}
+{"id":"s0416","sentence":"Singleton concept number 16: memory profile sample #2"}
+{"id":"s0417","sentence":"Singleton concept number 17: GPU benchmark trace #2"}
+{"id":"s0418","sentence":"Singleton concept number 18: shader compilation log #2"}
+{"id":"s0419","sentence":"Singleton concept number 19: JIT compile flag tuning #2"}
+{"id":"s0420","sentence":"Singleton concept number 20: circuit-breaker reset #2"}
+{"id":"s0421","sentence":"Singleton concept number 21: feature-flag rollout plan #2"}
+{"id":"s0422","sentence":"Singleton concept number 22: A/B test variant assignment #2"}
+{"id":"s0423","sentence":"Singleton concept number 23: configure timeouts #3"}
+{"id":"s0424","sentence":"Singleton concept number 24: deprecated API note #3"}
+{"id":"s0425","sentence":"Singleton concept number 25: polling interval setup #3"}
+{"id":"s0426","sentence":"Singleton concept number 26: rate-limit budget review #3"}
+{"id":"s0427","sentence":"Singleton concept number 27: memory profile sample #3"}
+{"id":"s0428","sentence":"Singleton concept number 28: GPU benchmark trace #3"}
+{"id":"s0429","sentence":"Singleton concept number 29: shader compilation log #3"}
+{"id":"s0430","sentence":"Singleton concept number 30: JIT compile flag tuning #3"}
+{"id":"s0431","sentence":"Singleton concept number 31: circuit-breaker reset #3"}
+{"id":"s0432","sentence":"Singleton concept number 32: feature-flag rollout plan #3"}
+{"id":"s0433","sentence":"Singleton concept number 33: A/B test variant assignment #3"}
+{"id":"s0434","sentence":"Singleton concept number 34: configure timeouts #4"}
+{"id":"s0435","sentence":"Singleton concept number 35: deprecated API note #4"}
+{"id":"s0436","sentence":"Singleton concept number 36: polling interval setup #4"}
+{"id":"s0437","sentence":"Singleton concept number 37: rate-limit budget review #4"}
+{"id":"s0438","sentence":"Singleton concept number 38: memory profile sample #4"}
+{"id":"s0439","sentence":"Singleton concept number 39: GPU benchmark trace #4"}
+{"id":"s0440","sentence":"Singleton concept number 40: shader compilation log #4"}
+{"id":"s0441","sentence":"Singleton concept number 41: JIT compile flag tuning #4"}
+{"id":"s0442","sentence":"Singleton concept number 42: circuit-breaker reset #4"}
+{"id":"s0443","sentence":"Singleton concept number 43: feature-flag rollout plan #4"}
+{"id":"s0444","sentence":"Singleton concept number 44: A/B test variant assignment #4"}
+{"id":"s0445","sentence":"Singleton concept number 45: configure timeouts #5"}
+{"id":"s0446","sentence":"Singleton concept number 46: deprecated API note #5"}
+{"id":"s0447","sentence":"Singleton concept number 47: polling interval setup #5"}
+{"id":"s0448","sentence":"Singleton concept number 48: rate-limit budget review #5"}
+{"id":"s0449","sentence":"Singleton concept number 49: memory profile sample #5"}
+{"id":"s0450","sentence":"Singleton concept number 50: GPU benchmark trace #5"}
+{"id":"s0451","sentence":"Singleton concept number 51: shader compilation log #5"}
+{"id":"s0452","sentence":"Singleton concept number 52: JIT compile flag tuning #5"}
+{"id":"s0453","sentence":"Singleton concept number 53: circuit-breaker reset #5"}
+{"id":"s0454","sentence":"Singleton concept number 54: feature-flag rollout plan #5"}
+{"id":"s0455","sentence":"Singleton concept number 55: A/B test variant assignment #5"}
+{"id":"s0456","sentence":"Singleton concept number 56: configure timeouts #6"}
+{"id":"s0457","sentence":"Singleton concept number 57: deprecated API note #6"}
+{"id":"s0458","sentence":"Singleton concept number 58: polling interval setup #6"}
+{"id":"s0459","sentence":"Singleton concept number 59: rate-limit budget review #6"}
+{"id":"s0460","sentence":"Singleton concept number 60: memory profile sample #6"}
+{"id":"s0461","sentence":"Singleton concept number 61: GPU benchmark trace #6"}
+{"id":"s0462","sentence":"Singleton concept number 62: shader compilation log #6"}
+{"id":"s0463","sentence":"Singleton concept number 63: JIT compile flag tuning #6"}
+{"id":"s0464","sentence":"Singleton concept number 64: circuit-breaker reset #6"}
+{"id":"s0465","sentence":"Singleton concept number 65: feature-flag rollout plan #6"}
+{"id":"s0466","sentence":"Singleton concept number 66: A/B test variant assignment #6"}
+{"id":"s0467","sentence":"Singleton concept number 67: configure timeouts #7"}
+{"id":"s0468","sentence":"Singleton concept number 68: deprecated API note #7"}
+{"id":"s0469","sentence":"Singleton concept number 69: polling interval setup #7"}
+{"id":"s0470","sentence":"Singleton concept number 70: rate-limit budget review #7"}
+{"id":"s0471","sentence":"Singleton concept number 71: memory profile sample #7"}
+{"id":"s0472","sentence":"Singleton concept number 72: GPU benchmark trace #7"}
+{"id":"s0473","sentence":"Singleton concept number 73: shader compilation log #7"}
+{"id":"s0474","sentence":"Singleton concept number 74: JIT compile flag tuning #7"}
+{"id":"s0475","sentence":"Singleton concept number 75: circuit-breaker reset #7"}
+{"id":"s0476","sentence":"Singleton concept number 76: feature-flag rollout plan #7"}
+{"id":"s0477","sentence":"Singleton concept number 77: A/B test variant assignment #7"}
+{"id":"s0478","sentence":"Singleton concept number 78: configure timeouts #8"}
+{"id":"s0479","sentence":"Singleton concept number 79: deprecated API note #8"}
+{"id":"s0480","sentence":"Singleton concept number 80: polling interval setup #8"}
+{"id":"s0481","sentence":"Singleton concept number 81: rate-limit budget review #8"}
+{"id":"s0482","sentence":"Singleton concept number 82: memory profile sample #8"}
+{"id":"s0483","sentence":"Singleton concept number 83: GPU benchmark trace #8"}
+{"id":"s0484","sentence":"Singleton concept number 84: shader compilation log #8"}
+{"id":"s0485","sentence":"Singleton concept number 85: JIT compile flag tuning #8"}
+{"id":"s0486","sentence":"Singleton concept number 86: circuit-breaker reset #8"}
+{"id":"s0487","sentence":"Singleton concept number 87: feature-flag rollout plan #8"}
+{"id":"s0488","sentence":"Singleton concept number 88: A/B test variant assignment #8"}
+{"id":"s0489","sentence":"Singleton concept number 89: configure timeouts #9"}
+{"id":"s0490","sentence":"Singleton concept number 90: deprecated API note #9"}
+{"id":"s0491","sentence":"Singleton concept number 91: polling interval setup #9"}
+{"id":"s0492","sentence":"Singleton concept number 92: rate-limit budget review #9"}
+{"id":"s0493","sentence":"Singleton concept number 93: memory profile sample #9"}
+{"id":"s0494","sentence":"Singleton concept number 94: GPU benchmark trace #9"}
+{"id":"s0495","sentence":"Singleton concept number 95: shader compilation log #9"}
+{"id":"s0496","sentence":"Singleton concept number 96: JIT compile flag tuning #9"}
+{"id":"s0497","sentence":"Singleton concept number 97: circuit-breaker reset #9"}
+{"id":"s0498","sentence":"Singleton concept number 98: feature-flag rollout plan #9"}
+{"id":"s0499","sentence":"Singleton concept number 99: A/B test variant assignment #9"}
+{"id":"s0500","sentence":"Singleton concept number 100: configure timeouts #10"}
