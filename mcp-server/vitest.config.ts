@@ -30,6 +30,10 @@ export default defineConfig({
       // Calibration — runs only when CALIBRATE=1 + OPENROUTER_API_KEY are
       // set. Generates a markdown report under reports/mass_scouting_calibration/.
       'src/mass_scouting/calibrate-payload-size.test.ts',
+      // cluster_synonyms primitives — pure-TS unit tests (no LLM, no network).
+      'src/cluster/jsonl.test.ts',
+      'src/cluster/kmeans.test.ts',
+      'src/cluster/unionfind.test.ts',
     ],
   },
 });
