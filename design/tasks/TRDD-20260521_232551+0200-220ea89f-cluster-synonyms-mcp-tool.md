@@ -3,7 +3,7 @@ trdd-id: 220ea89f-0af2-4eba-884d-367a986d27e7
 title: cluster_synonyms — zero-token batch synonym clustering MCP primitive
 status: not-started
 created: 2026-05-21T23:25:51+0200
-updated: 2026-05-22T00:26:35+0200
+updated: 2026-05-22T03:45:14+0200
 ---
 
 # TRDD-220ea89f — cluster_synonyms — zero-token batch synonym clustering MCP primitive
@@ -345,3 +345,4 @@ Output: a JSON object {"canonical": "...", "rationale": "..."}.
 | 2026-05-21T23:25:51+0200 | created → not-started | Drafted from issue #4. 10 open questions need user resolution before Phase A. |
 | 2026-05-22T00:22:23+0200 | Q1–Q12 all RESOLVED | User accepted defaults for Q1–Q6, Q8–Q10. Q7 replaced with recursive-split-and-retry ladder (max depth 3 → 1→2→4→8 sub-batches, 45 LLM calls hard cap per source batch). Added Q11 = mandatory pre-flight model benchmark gate (cached per-profile-per-day). Added Q12 = transitive-closure merge rule with ≥3-element floor (replaces percentage `merge_threshold` knob). Phase A may now start. |
 | 2026-05-22T00:26:35+0200 | scope clarification — SENTENCE-level meaning | User clarified: the tool clusters items by FULL-SENTENCE meaning equivalence, not word-level synonymy. §1 and all three §7 prompt templates updated to make this explicit with positive ("Compile the code with optimizations" ≡ "Build the project with optimizer flags") and negative ("Compile the code" ≠ "Test the code") examples in the system prompt. Algorithm unchanged. |
+| 2026-05-22T03:45:14+0200 | Phase A implemented (A.1–A.7); A.8 blocked on upstream CPV | All 8 Phase-A files landed across commits 08cbb1d→9d204a2 (policy/types, jsonl/kmeans/unionfind, checkpoint, embeddings sidecar, preflight gate, fixtures). 53 cluster unit tests + full suite green; typecheck/lint/build clean. cluster_synonyms code is zero-CRITICAL after fixing 2 skillaudit backtick FPs in its own code (jsonl.ts:64, index.ts:5349). Phase A.8 exit gate ("CPV check-only clean") is BLOCKED by 16 PRE-EXISTING skillaudit false-positives in files unchanged since v9.10.2 (latest CPV v2.101.4 confirmed via uvx --refresh). Filed upstream as Emasoft/claude-plugins-validation#39 (5 FP classes: CRED_ENV_READ on own API-key reads, TOKEN_STEAL on the secret-redaction regex, CMD_INJECTION on hardcoded-argv subprocess + markdown fences, DESERIALIZATION on ruamel round-trip of own config, INDIRECT_PROMPT_INJECT on an agent's own prompt-injection-defense line). Publish deferred until #39 is resolved or a suppression key ships; feature work (Phase B) can proceed independently. |
