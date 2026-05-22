@@ -5332,8 +5332,8 @@ function buildTools() {
         "cluster must co-occur in the same response) → Phase 3 canonical-label selection " +
         "→ Phase 4 emit clusters.jsonl + clusters_summary.json + stats.json + " +
         "checkpoint.sqlite.\n\n" +
-        "RESUMABLE: pass `resume_from` to a prior checkpoint.sqlite to continue.\n" +
-        "BUDGET-CAPPED: `policy.budget_max_llm_calls` aborts cleanly when hit.\n" +
+        "RESUMABLE: pass resume_from to a prior checkpoint.sqlite to continue.\n" +
+        "BUDGET-CAPPED: policy.budget_max_llm_calls aborts cleanly when hit.\n" +
         "FAILURE-RECOVERY: each failed batch retries 3x, then splits in half and " +
         "recurses (max depth 3 → 8 leaf sub-batches, 45-call hard cap per source batch).\n" +
         "BACKEND-AGNOSTIC: uses the active profile's model selection.\n\n" +
@@ -5346,9 +5346,9 @@ function buildTools() {
             type: "string",
             description:
               "Absolute path to a JSONL file. Each line is a JSON object with " +
-              "`id` (string) and `sentence` (string, the text to cluster); optional " +
-              "`context` (free-text disambiguator). Field `label` is accepted as an " +
-              "alias for `sentence`.",
+              "an 'id' (string) and a 'sentence' (string, the text to cluster); optional " +
+              "'context' (free-text disambiguator). Field 'label' is accepted as an " +
+              "alias for 'sentence'.",
           },
           output_dir: {
             type: "string",
