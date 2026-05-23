@@ -54,6 +54,13 @@ import {
   safeReadText,
   safeReadJson,
 } from "./safe-body.js";
+import {
+  runClusterSynonyms,
+  type ClusterSynonymsHooks,
+  type ClusterSynonymsInvocation,
+} from "./cluster/cluster_synonyms_main.js";
+import type { Phase1RawLlmCall } from "./cluster/phase1_batch.js";
+import { fileURLToPath as fileUrlToPath_cs } from "node:url";
 
 // ── File reading helpers ─────────────────────────────────────────────
 // The MCP reads files from disk so the calling agent never loads them into its context.
@@ -5337,8 +5344,11 @@ function buildTools() {
         "FAILURE-RECOVERY: each failed batch retries 3x, then splits in half and " +
         "recurses (max depth 3 → 8 leaf sub-batches, 45-call hard cap per source batch).\n" +
         "BACKEND-AGNOSTIC: uses the active profile's model selection.\n\n" +
-        "STATUS: not_implemented stub — schema and registration are stable; the " +
-        "internal workflow is being built per TRDD-220ea89f.",
+        "STATUS: Phase 1 active — embedding-clustered batching + recursive-split- " +
+        "and-retry ladder are live. Phase 2 (cross-cluster verification) + Phase 3 " +
+        "(LLM canonical labels) ship in the next release per TRDD-220ea89f; until " +
+        "then clusters.jsonl reflects Phase 1 partitions only and canonical labels " +
+        "are picked by length heuristic.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -9265,23 +9275,95 @@ async function dispatchCallTool(
       }
 
       case "cluster_synonyms": {
-        // Stub handler — Phase A only registers the schema and reserves the
-        // tool name so CPV / MCP-client discovery is stable. The full
-        // workflow (Phases 0-4 + pre-flight benchmark + retry ladder)
-        // lands in Phase B / C per TRDD-220ea89f. Returning a clean
-        // not_implemented error keeps the contract honest.
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                "cluster_synonyms: not_implemented yet. The schema is " +
-                "stable and the tool is reserved; the workflow lands in a " +
-                "later release per TRDD-220ea89f.",
-            },
-          ],
-          isError: true,
+        // Phase B implementation — runClusterSynonyms orchestrates JSONL
+        // load → optional pre-flight → embeddings → Phase 1 grouping via
+        // retry-ladder → checkpoint write → emit four outputs. Phase 2
+        // verification + Phase 3 LLM canonical labels are still no-ops in
+        // this cut; clusters.jsonl reflects Phase 1 partitions alone.
+        const {
+          input_file: csInputFile,
+          output_dir: csOutputDir,
+          embeddings_file: csEmbeddingsFile,
+          policy_file: csPolicyFile,
+          resume_from: csResumeFrom,
+        } = args as {
+          input_file?: string;
+          output_dir?: string;
+          embeddings_file?: string;
+          policy_file?: string;
+          resume_from?: string;
         };
+        if (!csInputFile || !csOutputDir) {
+          return {
+            content: [{ type: "text", text: "FAILED: cluster_synonyms requires input_file and output_dir." }],
+            isError: true,
+          };
+        }
+        const csInvocation: ClusterSynonymsInvocation = {
+          input_file: csInputFile,
+          output_dir: csOutputDir,
+          ...(csEmbeddingsFile !== undefined ? { embeddings_file: csEmbeddingsFile } : {}),
+          ...(csPolicyFile !== undefined ? { policy_file: csPolicyFile } : {}),
+          ...(csResumeFrom !== undefined ? { resume_from: csResumeFrom } : {}),
+        };
+        // Wire the existing chatCompletionWithRetry as the rawLlmCall so
+        // the cluster orchestrator inherits rate-limiting / retry /
+        // model-fallback logic from the rest of the server.
+        const csRawLlmCall: Phase1RawLlmCall = async (prompt) => {
+          const messages: ChatMessage[] = [{ role: "user", content: prompt }];
+          const resp = await chatCompletionWithRetry(messages, {
+            temperature: 0.1,
+            maxTokens: 65535,
+          });
+          if (resp.finishReason === "error") {
+            throw new Error(`cluster_synonyms: LLM call failed: ${resp.content}`);
+          }
+          return resp.content;
+        };
+        // compute_embeddings.py lives alongside the built dist/ — resolve
+        // from this module's URL so the path follows the install layout.
+        const csModuleDir = dirname(fileUrlToPath_cs(import.meta.url));
+        const csEmbeddingsScript = join(csModuleDir, "..", "scripts", "compute_embeddings.py");
+        const csHooks: ClusterSynonymsHooks = {
+          rawLlmCall: csRawLlmCall,
+          embeddingsScriptPath: csEmbeddingsScript,
+          profileName: getCurrentBackend().model ?? "unknown",
+        };
+        try {
+          const csResult = await runClusterSynonyms(csInvocation, csHooks);
+          if (!csResult.ok) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `FAILED: ${csResult.errors.join("; ")}`,
+                },
+              ],
+              isError: true,
+            };
+          }
+          const csSummary =
+            `cluster_synonyms OK\n` +
+            `  items_in:        ${csResult.stats.items_in}\n` +
+            `  clusters_out:    ${csResult.stats.clusters_out}\n` +
+            `  reduction_pct:   ${csResult.stats.reduction_pct.toFixed(2)}%\n` +
+            `  llm_calls_total: ${csResult.stats.llm_calls_total}\n` +
+            `  walltime_s:      ${csResult.stats.walltime_seconds.toFixed(2)}\n` +
+            `  budget_exhausted: ${csResult.stats.budget_exhausted}\n` +
+            `  warnings:        ${csResult.stats.warnings.length}\n` +
+            `  outputs:\n` +
+            `    ${csResult.clusters_jsonl}\n` +
+            `    ${csResult.clusters_summary_json}\n` +
+            `    ${csResult.stats_json}\n` +
+            `    ${csResult.checkpoint_sqlite}\n`;
+          return { content: [{ type: "text", text: csSummary }] };
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          return {
+            content: [{ type: "text", text: `FAILED: cluster_synonyms threw: ${errMsg}` }],
+            isError: true,
+          };
+        }
       }
 
       default:

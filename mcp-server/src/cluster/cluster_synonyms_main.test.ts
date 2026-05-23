@@ -1,0 +1,368 @@
+// Orchestrator tests for cluster_synonyms (TRDD-220ea89f T1, T2, T3,
+// T6, T7, T8, T10, T13, T14). LLM call is mocked; pre-flight hook is
+// omitted; embeddings provider is the default (no embeddings_file +
+// compute_embeddings=false → random batching path, no Python invocation).
+
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { runClusterSynonyms, type ClusterSynonymsHooks } from "./cluster_synonyms_main.js";
+import type { Phase1RawLlmCall } from "./phase1_batch.js";
+
+let tmp = "";
+
+beforeEach(() => {
+  tmp = mkdtempSync(join(tmpdir(), "cs-main-"));
+});
+afterEach(() => {
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+function writeJsonl(rows: unknown[]): string {
+  const path = join(tmp, "in.jsonl");
+  writeFileSync(path, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  return path;
+}
+
+function items(n: number, prefix = "item"): { id: string; sentence: string }[] {
+  return Array.from({ length: n }, (_, i) => ({ id: `${prefix}-${i}`, sentence: `sentence ${i}` }));
+}
+
+/** LLM mock: every item is a singleton group. Result: no edges. */
+function singletonLlm(): Phase1RawLlmCall {
+  return async (prompt) => {
+    const ids = (prompt.match(/^\d+\. id=\d+/gm) ?? []).length;
+    return JSON.stringify({ groups: Array.from({ length: ids }, (_, i) => [i + 1]) });
+  };
+}
+
+/** LLM mock: groups consecutive pairs (1,2)(3,4)... */
+function pairGroupsLlm(): Phase1RawLlmCall {
+  return async (prompt) => {
+    const ids = (prompt.match(/^\d+\. id=\d+/gm) ?? []).length;
+    const groups: number[][] = [];
+    for (let i = 0; i < ids; i += 2) {
+      groups.push(i + 1 < ids ? [i + 1, i + 2] : [i + 1]);
+    }
+    return JSON.stringify({ groups });
+  };
+}
+
+/** LLM mock: one giant group containing every id. Result: union all. */
+function allOneGroupLlm(): Phase1RawLlmCall {
+  return async (prompt) => {
+    const ids = (prompt.match(/^\d+\. id=\d+/gm) ?? []).length;
+    return JSON.stringify({ groups: [Array.from({ length: ids }, (_, i) => i + 1)] });
+  };
+}
+
+function baseHooks(rawLlmCall: Phase1RawLlmCall): ClusterSynonymsHooks {
+  return {
+    rawLlmCall,
+    profileName: "test-profile",
+  };
+}
+
+// ────────────────────────────────────────────────────────────
+// T1 — identity clusters
+// ────────────────────────────────────────────────────────────
+
+describe("T1 — identity clusters", () => {
+  it("10 unique items, LLM says all singletons → 10 clusters, no merges", async () => {
+    const inputPath = writeJsonl(items(10));
+    const outDir = join(tmp, "out");
+    const policyPath = join(tmp, "policy.json");
+    writeFileSync(policyPath, JSON.stringify({ compute_embeddings: false, batch_size: 5 }));
+
+    const r = await runClusterSynonyms(
+      { input_file: inputPath, output_dir: outDir, policy_file: policyPath },
+      baseHooks(singletonLlm()),
+    );
+    expect(r.ok).toBe(true);
+    expect(r.stats.items_in).toBe(10);
+    expect(r.stats.clusters_out).toBe(10);
+    expect(r.stats.reduction_pct).toBe(0);
+    expect(r.errors).toEqual([]);
+    // Output files present.
+    expect(existsSync(r.clusters_jsonl)).toBe(true);
+    expect(existsSync(r.clusters_summary_json)).toBe(true);
+    expect(existsSync(r.stats_json)).toBe(true);
+    expect(existsSync(r.checkpoint_sqlite)).toBe(true);
+  });
+});
+
+// ────────────────────────────────────────────────────────────
+// T2 — pure synonyms (pair groups)
+// ────────────────────────────────────────────────────────────
+
+describe("T2 — pure synonyms", () => {
+  it("6 items, LLM pairs (1,2)(3,4)(5,6) → 3 clusters of size 2 each", async () => {
+    const inputPath = writeJsonl(items(6));
+    const outDir = join(tmp, "out");
+    const policyPath = join(tmp, "policy.json");
+    writeFileSync(policyPath, JSON.stringify({ compute_embeddings: false, batch_size: 100 }));
+
+    const r = await runClusterSynonyms(
+      { input_file: inputPath, output_dir: outDir, policy_file: policyPath },
+      baseHooks(pairGroupsLlm()),
+    );
+    expect(r.ok).toBe(true);
+    expect(r.stats.items_in).toBe(6);
+    expect(r.stats.clusters_out).toBe(3);
+    const summary = JSON.parse(readFileSync(r.clusters_summary_json, "utf-8"));
+    expect(summary.clusters).toHaveLength(3);
+    for (const c of summary.clusters) {
+      expect(c.size).toBe(2);
+      expect(c.canonical).toBeTypeOf("string");
+      expect(c.canonical.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+// ────────────────────────────────────────────────────────────
+// T7 — malformed JSONL lines are tolerated, logged in warnings
+// ────────────────────────────────────────────────────────────
+
+describe("T7 — malformed JSONL line tolerated", () => {
+  it("3 valid + 1 missing-sentence + 1 invalid JSON → 3 clusters, 2 warnings", async () => {
+    const inputPath = join(tmp, "in.jsonl");
+    writeFileSync(
+      inputPath,
+      [
+        JSON.stringify({ id: "a", sentence: "alpha" }),
+        JSON.stringify({ id: "b" }), // missing sentence
+        "this is not json",
+        JSON.stringify({ id: "c", sentence: "gamma" }),
+        JSON.stringify({ id: "d", sentence: "delta" }),
+      ].join("\n") + "\n",
+    );
+    const r = await runClusterSynonyms(
+      {
+        input_file: inputPath,
+        output_dir: join(tmp, "out"),
+        policy_file: writePolicy({ compute_embeddings: false, batch_size: 100 }),
+      },
+      baseHooks(singletonLlm()),
+    );
+    expect(r.ok).toBe(true);
+    expect(r.stats.items_in).toBe(3);
+    expect(r.stats.warnings.length).toBeGreaterThanOrEqual(2);
+    // At least one warning about missing sentence, one about invalid JSON.
+    const allWarnings = r.stats.warnings.join("\n");
+    expect(allWarnings).toMatch(/missing.+sentence|sentence.+missing|empty 'sentence'/i);
+  });
+});
+
+// ────────────────────────────────────────────────────────────
+// T8 — all-blank input → hard error
+// ────────────────────────────────────────────────────────────
+
+describe("T8 — all-blank input", () => {
+  it("empty file → ok=false, no LLM calls, error message records 'no valid input rows'", async () => {
+    const inputPath = join(tmp, "empty.jsonl");
+    writeFileSync(inputPath, "");
+    let llmCalls = 0;
+    const r = await runClusterSynonyms(
+      {
+        input_file: inputPath,
+        output_dir: join(tmp, "out"),
+      },
+      {
+        ...baseHooks(async () => {
+          llmCalls += 1;
+          return "{}";
+        }),
+      },
+    );
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => e.includes("no valid input rows"))).toBe(true);
+    expect(llmCalls).toBe(0);
+    expect(r.stats.llm_calls_total).toBe(0);
+  });
+});
+
+// ────────────────────────────────────────────────────────────
+// T6 — embedding mode skip → random batching path, warning
+// ────────────────────────────────────────────────────────────
+
+describe("T6 — embedding-mode skip", () => {
+  it("compute_embeddings=false with no embeddings_file → warning, completes", async () => {
+    const inputPath = writeJsonl(items(8));
+    const r = await runClusterSynonyms(
+      {
+        input_file: inputPath,
+        output_dir: join(tmp, "out"),
+        policy_file: writePolicy({ compute_embeddings: false, batch_size: 4 }),
+      },
+      baseHooks(singletonLlm()),
+    );
+    expect(r.ok).toBe(true);
+    expect(r.stats.warnings.some((w) => w.includes("random batching"))).toBe(true);
+  });
+});
+
+// ────────────────────────────────────────────────────────────
+// T13 / T14 — output_dir collision behavior
+// ────────────────────────────────────────────────────────────
+
+describe("T13 / T14 — output_dir collision", () => {
+  it("T13: existing clusters.jsonl in output_dir, overwrite_output=false → hard error", async () => {
+    const inputPath = writeJsonl(items(3));
+    const outDir = join(tmp, "out");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, "clusters.jsonl"), "{}\n");
+    const r = await runClusterSynonyms(
+      {
+        input_file: inputPath,
+        output_dir: outDir,
+        policy_file: writePolicy({ compute_embeddings: false, overwrite_output: false }),
+      },
+      baseHooks(singletonLlm()),
+    );
+    expect(r.ok).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/already contains|overwrite_output/);
+  });
+
+  it("T14: same collision but overwrite_output=true → run completes, overwrites prior files", async () => {
+    const inputPath = writeJsonl(items(3));
+    const outDir = join(tmp, "out");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, "clusters.jsonl"), "{stale}\n");
+    const r = await runClusterSynonyms(
+      {
+        input_file: inputPath,
+        output_dir: outDir,
+        policy_file: writePolicy({ compute_embeddings: false, overwrite_output: true }),
+      },
+      baseHooks(singletonLlm()),
+    );
+    expect(r.ok).toBe(true);
+    const clusters = readFileSync(r.clusters_jsonl, "utf-8");
+    expect(clusters).not.toContain("{stale}");
+    expect(clusters).toMatch(/cluster_id/);
+  });
+});
+
+// ────────────────────────────────────────────────────────────
+// Pre-flight gate (Q11) — hook fails → abort before any LLM call
+// ────────────────────────────────────────────────────────────
+
+describe("pre-flight gate (Q11)", () => {
+  it("when preflight returns {ok:false}, run aborts with no LLM calls", async () => {
+    const inputPath = writeJsonl(items(5));
+    let llmCalls = 0;
+    const r = await runClusterSynonyms(
+      { input_file: inputPath, output_dir: join(tmp, "out") },
+      {
+        ...baseHooks(async () => {
+          llmCalls += 1;
+          return "{}";
+        }),
+        preflight: async () => ({ ok: false, reason: "fake broken profile" }),
+      },
+    );
+    expect(r.ok).toBe(false);
+    expect(llmCalls).toBe(0);
+    expect(r.errors.join("\n")).toMatch(/pre-flight benchmark/);
+  });
+
+  it("when policy.skip_preflight_benchmark=true, the hook is NOT consulted even if provided", async () => {
+    const inputPath = writeJsonl(items(3));
+    let preflightCalls = 0;
+    const r = await runClusterSynonyms(
+      {
+        input_file: inputPath,
+        output_dir: join(tmp, "out"),
+        policy_file: writePolicy({ compute_embeddings: false, skip_preflight_benchmark: true }),
+      },
+      {
+        ...baseHooks(singletonLlm()),
+        preflight: async () => {
+          preflightCalls += 1;
+          return { ok: false, reason: "should not be called" };
+        },
+      },
+    );
+    expect(r.ok).toBe(true);
+    expect(preflightCalls).toBe(0);
+  });
+});
+
+// ────────────────────────────────────────────────────────────
+// Output shape — clusters.jsonl + clusters_summary.json contracts
+// ────────────────────────────────────────────────────────────
+
+describe("output shape", () => {
+  it("clusters.jsonl has one line per item with id+cluster_id+sentence", async () => {
+    const inputPath = writeJsonl(items(4));
+    const r = await runClusterSynonyms(
+      {
+        input_file: inputPath,
+        output_dir: join(tmp, "out"),
+        policy_file: writePolicy({ compute_embeddings: false, batch_size: 100 }),
+      },
+      baseHooks(allOneGroupLlm()),
+    );
+    expect(r.ok).toBe(true);
+    const lines = readFileSync(r.clusters_jsonl, "utf-8").trim().split("\n");
+    expect(lines).toHaveLength(4);
+    const parsed = lines.map((l) => JSON.parse(l));
+    expect(new Set(parsed.map((p) => p.cluster_id)).size).toBe(1); // all in one cluster
+    for (const p of parsed) {
+      expect(p).toMatchObject({ id: expect.any(String), cluster_id: expect.any(String), sentence: expect.any(String) });
+    }
+  });
+
+  it("stats.json reflects llm_calls_total and walltime_seconds; phase2/phase3 still zero (B-cut)", async () => {
+    const inputPath = writeJsonl(items(4));
+    const r = await runClusterSynonyms(
+      {
+        input_file: inputPath,
+        output_dir: join(tmp, "out"),
+        policy_file: writePolicy({ compute_embeddings: false, batch_size: 100 }),
+      },
+      baseHooks(singletonLlm()),
+    );
+    const stats = JSON.parse(readFileSync(r.stats_json, "utf-8"));
+    expect(stats.items_in).toBe(4);
+    expect(stats.llm_calls_total).toBeGreaterThanOrEqual(1);
+    expect(stats.llm_calls_by_phase.phase1).toBe(stats.llm_calls_total);
+    expect(stats.llm_calls_by_phase.phase2).toBe(0);
+    expect(stats.llm_calls_by_phase.phase3).toBe(0);
+    expect(stats.walltime_seconds).toBeGreaterThanOrEqual(0);
+    expect(stats.profile_name).toBe("test-profile");
+  });
+
+  it("T10 — idempotent re-run with same inputs / overwrite=true produces same cluster_ids", async () => {
+    const inputPath = writeJsonl(items(6));
+    const outDir1 = join(tmp, "out1");
+    const outDir2 = join(tmp, "out2");
+    const policyPath = writePolicy({ compute_embeddings: false, batch_size: 100 });
+    const r1 = await runClusterSynonyms(
+      { input_file: inputPath, output_dir: outDir1, policy_file: policyPath },
+      baseHooks(pairGroupsLlm()),
+    );
+    const r2 = await runClusterSynonyms(
+      { input_file: inputPath, output_dir: outDir2, policy_file: policyPath },
+      baseHooks(pairGroupsLlm()),
+    );
+    expect(r1.ok && r2.ok).toBe(true);
+    const s1 = JSON.parse(readFileSync(r1.clusters_summary_json, "utf-8"));
+    const s2 = JSON.parse(readFileSync(r2.clusters_summary_json, "utf-8"));
+    // Compare partitions (set-of-id-sets), independent of order.
+    const part = (s: typeof s1) =>
+      s.clusters
+        .map((c: { items: { id: string }[] }) => c.items.map((i) => i.id).sort().join(","))
+        .sort();
+    expect(part(s1)).toEqual(part(s2));
+  });
+});
+
+// Helper used by several tests above.
+function writePolicy(p: Record<string, unknown>): string {
+  const path = join(tmp, `policy-${Math.random().toString(36).slice(2)}.json`);
+  writeFileSync(path, JSON.stringify(p));
+  return path;
+}
