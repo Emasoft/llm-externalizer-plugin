@@ -360,6 +360,130 @@ describe("output shape", () => {
   });
 });
 
+// ────────────────────────────────────────────────────────────
+// T3 — mixed: 5 clusters of 5 + 25 singletons
+// ────────────────────────────────────────────────────────────
+
+describe("T3 — mixed clusters", () => {
+  it("50 items (5 clusters of 5 + 25 singletons): partition matches expectation when the LLM uses the id prefix as the synonym signal", async () => {
+    // Build the fixture: ids c0-i0..c0-i4 are synonyms of each other, same
+    // for c1..c4; ids s0..s24 are singletons.
+    const rows: { id: string; sentence: string }[] = [];
+    for (let c = 0; c < 5; c++) {
+      for (let i = 0; i < 5; i++) {
+        rows.push({ id: `c${c}-i${i}`, sentence: `concept ${c} phrasing ${i}` });
+      }
+    }
+    for (let s = 0; s < 25; s++) {
+      rows.push({ id: `s${s}`, sentence: `unique singleton ${s}` });
+    }
+    const inputPath = writeJsonl(rows);
+
+    // LLM that reads the per-batch id list, recovers each item's original
+    // string id from the prompt, groups items that share the "cX-" prefix,
+    // and lists the rest as singletons.
+    const smartLlm: Phase1RawLlmCall = async (prompt) => {
+      // Extract (numId, stringId, sentence) from the prompt block.
+      const re = /^(\d+)\. id=\1\s+sentence="(.+?)"/gm;
+      const tuples: { num: number; sent: string }[] = [];
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(prompt)) !== null) {
+        tuples.push({ num: Number(m[1]), sent: m[2] });
+      }
+      // Group by concept prefix derived from sentence "concept X phrasing Y"
+      // or fallback to per-item singleton for non-matching sentences.
+      const byConcept = new Map<string, number[]>();
+      const singletons: number[] = [];
+      for (const t of tuples) {
+        const cm = t.sent.match(/^concept (\d+) phrasing/);
+        if (cm) {
+          const k = `c${cm[1]}`;
+          const arr = byConcept.get(k) ?? [];
+          arr.push(t.num);
+          byConcept.set(k, arr);
+        } else {
+          singletons.push(t.num);
+        }
+      }
+      const groups: number[][] = [];
+      for (const arr of byConcept.values()) groups.push(arr);
+      for (const s of singletons) groups.push([s]);
+      return JSON.stringify({ groups });
+    };
+
+    const r = await runClusterSynonyms(
+      {
+        input_file: inputPath,
+        output_dir: join(tmp, "out"),
+        policy_file: writePolicy({ compute_embeddings: false, batch_size: 50 }),
+      },
+      baseHooks(smartLlm),
+    );
+    expect(r.ok).toBe(true);
+    expect(r.stats.items_in).toBe(50);
+    // 5 concept-clusters + 25 singletons = 30 clusters.
+    expect(r.stats.clusters_out).toBe(30);
+    expect(r.stats.failed_groups).toEqual([]);
+
+    // Each c-cluster has exactly 5 members.
+    const summary = JSON.parse(readFileSync(r.clusters_summary_json, "utf-8"));
+    const sized5 = summary.clusters.filter((c: { size: number }) => c.size === 5);
+    const sized1 = summary.clusters.filter((c: { size: number }) => c.size === 1);
+    expect(sized5).toHaveLength(5);
+    expect(sized1).toHaveLength(25);
+  });
+});
+
+// ────────────────────────────────────────────────────────────
+// T11-lite smoke: 100 items, partition matches the LLM's grouping,
+//                 completes in well under the 5-min Phase-B budget
+// ────────────────────────────────────────────────────────────
+
+describe("T11-lite smoke", () => {
+  it("100 items, 10 ground-truth clusters of 10 → completes in <2s, exact partition in a single batch", async () => {
+    // Single-batch (batch_size=100) so Phase 1 alone — without Phase 2
+    // cross-cluster merging — can still emit the 10 ground-truth clusters.
+    // Multi-batch coverage of the ground truth needs Phase 2 (TRDD §6.C).
+    const rows: { id: string; sentence: string }[] = [];
+    for (let c = 0; c < 10; c++) {
+      for (let i = 0; i < 10; i++) {
+        rows.push({ id: `c${c}-i${i}`, sentence: `category ${c}` });
+      }
+    }
+    const inputPath = writeJsonl(rows);
+
+    const llm: Phase1RawLlmCall = async (prompt) => {
+      const re = /^(\d+)\. id=\1\s+sentence="(.+?)"/gm;
+      const byCategory = new Map<string, number[]>();
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(prompt)) !== null) {
+        const num = Number(m[1]);
+        const sent = m[2];
+        const arr = byCategory.get(sent) ?? [];
+        arr.push(num);
+        byCategory.set(sent, arr);
+      }
+      const groups: number[][] = Array.from(byCategory.values());
+      return JSON.stringify({ groups });
+    };
+
+    const t0 = Date.now();
+    const r = await runClusterSynonyms(
+      {
+        input_file: inputPath,
+        output_dir: join(tmp, "out"),
+        policy_file: writePolicy({ compute_embeddings: false, batch_size: 100 }),
+      },
+      baseHooks(llm),
+    );
+    const elapsed = Date.now() - t0;
+    expect(r.ok).toBe(true);
+    expect(r.stats.items_in).toBe(100);
+    expect(r.stats.clusters_out).toBe(10);
+    expect(elapsed).toBeLessThan(2000);
+  });
+});
+
 // Helper used by several tests above.
 function writePolicy(p: Record<string, unknown>): string {
   const path = join(tmp, `policy-${Math.random().toString(36).slice(2)}.json`);
