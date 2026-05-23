@@ -315,7 +315,7 @@ describe("output shape", () => {
     }
   });
 
-  it("stats.json reflects llm_calls_total and walltime_seconds; phase2/phase3 still zero (B-cut)", async () => {
+  it("stats.json reflects per-phase llm calls; phase3 still zero (Phase 3 LLM canonical not yet wired)", async () => {
     const inputPath = writeJsonl(items(4));
     const r = await runClusterSynonyms(
       {
@@ -328,8 +328,12 @@ describe("output shape", () => {
     const stats = JSON.parse(readFileSync(r.stats_json, "utf-8"));
     expect(stats.items_in).toBe(4);
     expect(stats.llm_calls_total).toBeGreaterThanOrEqual(1);
-    expect(stats.llm_calls_by_phase.phase1).toBe(stats.llm_calls_total);
-    expect(stats.llm_calls_by_phase.phase2).toBe(0);
+    expect(stats.llm_calls_total).toBe(
+      stats.llm_calls_by_phase.phase1 + stats.llm_calls_by_phase.phase2 + stats.llm_calls_by_phase.phase3,
+    );
+    expect(stats.llm_calls_by_phase.phase1).toBeGreaterThanOrEqual(1);
+    // Phase 2 may or may not have fired (depends on cluster count after Phase 1).
+    expect(stats.llm_calls_by_phase.phase2).toBeGreaterThanOrEqual(0);
     expect(stats.llm_calls_by_phase.phase3).toBe(0);
     expect(stats.walltime_seconds).toBeGreaterThanOrEqual(0);
     expect(stats.profile_name).toBe("test-profile");
@@ -481,6 +485,73 @@ describe("T11-lite smoke", () => {
     expect(r.stats.items_in).toBe(100);
     expect(r.stats.clusters_out).toBe(10);
     expect(elapsed).toBeLessThan(2000);
+  });
+});
+
+// ────────────────────────────────────────────────────────────
+// T15 — Phase 2 merge rule floor (Q12)
+// ────────────────────────────────────────────────────────────
+
+describe("T15 — Phase 2 merge rule (Q12 ≥3-floor)", () => {
+  it("2+2 overlap stays as two clusters; 3+3 overlap merges them", async () => {
+    // Seed Phase 1 by splitting items across 2 batches so the items
+    // intended-to-be-same-concept land in different Phase 1 clusters.
+    // Then Phase 2's response groups them — only the 3+3 case merges.
+    // We control behaviour via the mock LLM:
+    //   - Phase 1 (batch_size=2): pair each batch as a singleton group
+    //     (no merge inside) so each pair becomes its own cluster.
+    //   - Phase 2: lumps all reps into one giant group.
+    // For the 2+2 case we use 2 items per concept → 2 clusters of 2 → Phase 2 sees 2+2 → NO merge.
+    // For the 3+3 case we use 3 items per concept → 2 clusters of 3 → Phase 2 sees 3+3 → MERGE.
+
+    async function runScenario(perConcept: number, expectMerge: boolean): Promise<void> {
+      const rows: { id: string; sentence: string }[] = [];
+      for (let i = 0; i < perConcept; i++) rows.push({ id: `A${i}`, sentence: `concept A item ${i}` });
+      for (let i = 0; i < perConcept; i++) rows.push({ id: `B${i}`, sentence: `concept B item ${i}` });
+      const inputPath = writeJsonl(rows);
+
+      // Phase 1 LLM: just emit singletons so every item becomes its own
+      // cluster. Then Phase 2 sees 1-item-per-cluster and STILL can't merge
+      // (the floor is 3 from each side). So singletons alone won't work —
+      // we need Phase 1 to group items by concept WITHIN each batch.
+      // Easier: bypass Phase 1 grouping and seed clusters via small batches.
+      // Use batch_size=perConcept so each Phase-1 batch is one concept →
+      // LLM lumps that batch into one group → each concept becomes a Phase-1
+      // cluster of `perConcept` items.
+      const llm: Phase1RawLlmCall = async (prompt) => {
+        const ids = (prompt.match(/^\d+\. id=\d+/gm) ?? []).length;
+        return JSON.stringify({ groups: [Array.from({ length: ids }, (_, i) => i + 1)] });
+      };
+
+      const r = await runClusterSynonyms(
+        {
+          input_file: inputPath,
+          output_dir: join(tmp, `out-${perConcept}-${expectMerge}`),
+          policy_file: writePolicy({
+            compute_embeddings: false,
+            batch_size: perConcept, // force 1 concept per Phase-1 batch
+            passes: 1,
+            merge_min_cross_count: 3,
+          }),
+        },
+        baseHooks(llm),
+      );
+      expect(r.ok).toBe(true);
+      if (expectMerge) {
+        expect(r.stats.clusters_out).toBe(1);
+        expect(r.stats.weak_overlap_evidence).toEqual([]);
+      } else {
+        expect(r.stats.clusters_out).toBe(2);
+        // 2+2 case logs a weak-overlap row (counts of 2 each, below the 3 floor).
+        expect(r.stats.weak_overlap_evidence.length).toBeGreaterThanOrEqual(1);
+        expect(r.stats.weak_overlap_evidence[0]).toMatchObject({
+          cross_count_a: 2, cross_count_b: 2,
+        });
+      }
+    }
+
+    await runScenario(2, false); // 2+2 → NO merge
+    await runScenario(3, true);  // 3+3 → MERGE
   });
 });
 

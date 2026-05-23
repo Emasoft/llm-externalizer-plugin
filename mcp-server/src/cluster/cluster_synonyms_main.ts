@@ -23,6 +23,7 @@ import { CheckpointDB } from "./checkpoint.js";
 import { computeEmbeddings, loadEmbeddings, type EmbeddingsBundle } from "./embeddings.js";
 import { readClusterJsonl } from "./jsonl.js";
 import { runPhase1, type Phase1RawLlmCall } from "./phase1_batch.js";
+import { runPhase2 } from "./phase2_verify.js";
 import { PolicySchema, resolvePolicy } from "./policy.js";
 import { type RetryBudget } from "./retry_ladder.js";
 import { UnionFind } from "./unionfind.js";
@@ -31,6 +32,7 @@ import type {
   ClusterPolicy,
   ClusterStats,
   FailedGroup,
+  WeakOverlapEvidence,
 } from "./types.js";
 
 export interface ClusterSynonymsInvocation {
@@ -339,28 +341,58 @@ export async function runClusterSynonyms(
   warnings.push(...phase1.warnings);
   for (const e of phase1.edges) uf.union(e.a, e.b);
 
-  // 8. Persist checkpoint.
+  // 8. Phase 2 — cross-cluster verification (Q12 ≥3-floor merge rule).
+  //    Only runs when the budget isn't already exhausted by Phase 1; T9
+  //    expects Phase 2 to abort cleanly in that case.
+  let weakOverlapEvidence: WeakOverlapEvidence[] = [];
+  let phase2Failed: FailedGroup[] = [];
+  let phase2Calls = 0;
+  let phase2Merges: Array<[string, string]> = [];
+  if (!phase1.budgetExhausted && items.length >= 2) {
+    const phase2 = await runPhase2(
+      {
+        items,
+        embeddings: bundle?.embeddings,
+        dim: bundle?.dim,
+        uf,
+        policy,
+        budget,
+      },
+      hooks.rawLlmCall,
+    );
+    warnings.push(...phase2.warnings);
+    weakOverlapEvidence = phase2.weakOverlapEvidence;
+    phase2Failed = phase2.failed;
+    phase2Calls = phase2.llmCallCount;
+    phase2Merges = phase2.mergedPairs;
+  } else if (phase1.budgetExhausted) {
+    warnings.push("phase2 skipped: budget exhausted in phase 1");
+  }
+
+  // 9. Persist checkpoint.
   ckpt.saveUnionFind(uf);
   ckpt.setMeta("profile_name", profileName);
   ckpt.setMeta("policy_json", JSON.stringify(policy));
   ckpt.setMeta("items_in", String(items.length));
   ckpt.setMeta("phase1_llm_calls", String(phase1.llmCallCount));
+  ckpt.setMeta("phase2_llm_calls", String(phase2Calls));
+  ckpt.setMeta("phase2_merges", String(phase2Merges.length));
   ckpt.close();
 
-  // 9. Stats.
-  const failed: FailedGroup[] = phase1.failed;
+  // 10. Stats.
+  const failed: FailedGroup[] = [...phase1.failed, ...phase2Failed];
   const stats: ClusterStats = {
     items_in: items.length,
     clusters_out: uf.numClusters(),
     reduction_pct: reductionPct(items.length, uf.numClusters()),
-    llm_calls_total: phase1.llmCallCount,
-    llm_calls_by_phase: { phase1: phase1.llmCallCount, phase2: 0, phase3: 0 },
-    tokens_total: 0, // populated by Phase C when the LLM transport reports tokens
+    llm_calls_total: phase1.llmCallCount + phase2Calls,
+    llm_calls_by_phase: { phase1: phase1.llmCallCount, phase2: phase2Calls, phase3: 0 },
+    tokens_total: 0, // populated when the LLM transport surfaces token usage
     walltime_seconds: (Date.now() - tStart) / 1000,
     profile_name: profileName,
-    budget_exhausted: phase1.budgetExhausted,
+    budget_exhausted: budget.remaining <= 0 || phase1.budgetExhausted,
     failed_groups: failed,
-    weak_overlap_evidence: [],
+    weak_overlap_evidence: weakOverlapEvidence,
     warnings,
   };
 
