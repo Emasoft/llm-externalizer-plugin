@@ -37,6 +37,7 @@ export default defineConfig({
       'src/cluster/checkpoint.test.ts',
       'src/cluster/preflight_benchmark.test.ts',
       'src/cluster/retry_ladder.test.ts',
+      'src/cluster/phase1_batch.test.ts',
     ],
   },
 });

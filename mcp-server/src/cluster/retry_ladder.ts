@@ -29,7 +29,13 @@ export interface RetryBudget {
 export type ValidateResult = { ok: true } | { ok: false; reason: string };
 
 export type LlmCallFn<I, R> = (items: I[], depth: number, attempt: number) => Promise<R>;
-export type ValidateFn<R> = (response: R) => ValidateResult;
+/**
+ * Validate the LLM response. Receives the response AND the items the
+ * response was supposed to cover — important when the ladder has split
+ * a batch and the validator's "expected size" must follow the current
+ * sub-slice, not the original source batch.
+ */
+export type ValidateFn<I, R> = (response: R, items: I[]) => ValidateResult;
 
 export interface RetryLeafSuccess<I, R> {
   items: I[];
@@ -62,7 +68,7 @@ export interface RetryResult<I, R> {
 export async function processBatchWithRetry<I, R>(
   items: I[],
   llmCall: LlmCallFn<I, R>,
-  validate: ValidateFn<R>,
+  validate: ValidateFn<I, R>,
   opts: RetryLadderOptions = DEFAULT_RETRY_OPTIONS,
   budget: RetryBudget = { remaining: Number.POSITIVE_INFINITY },
 ): Promise<RetryResult<I, R>> {
@@ -92,7 +98,7 @@ export async function processBatchWithRetry<I, R>(
       llmCallCount += 1;
       try {
         const response = await llmCall(slice, depth, attempt);
-        const v = validate(response);
+        const v = validate(response, slice);
         if (v.ok) {
           succeeded.push({ items: slice, response, depth, attempts });
           return;
