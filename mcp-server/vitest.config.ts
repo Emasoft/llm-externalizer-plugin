@@ -40,6 +40,7 @@ export default defineConfig({
       'src/cluster/phase1_batch.test.ts',
       'src/cluster/embeddings.test.ts',
       'src/cluster/cluster_synonyms_main.test.ts',
+      'src/benchmark/pick.test.ts',
     ],
   },
 });

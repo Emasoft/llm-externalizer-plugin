@@ -9,9 +9,18 @@
  *   - top_provider.max_completion_tokens >= 64K tokens
  *   - supported_parameters includes `structured_outputs` OR `response_format`
  *   - supported_parameters includes `reasoning` OR `include_reasoning`
- *   - pricing.prompt     <= $1.5 / 1M tokens
- *   - pricing.completion <= $2.0 / 1M tokens
+ *   - pricing.prompt     <  $1.0 / 1M tokens    (STRICTLY less — hard ceiling)
+ *   - pricing.completion <  $1.0 / 1M tokens    (STRICTLY less — hard ceiling)
  *   - `:free` tier excluded by default (opt in with allowFree)
+ *
+ * The $1/M ceiling is intentionally aggressive: ensemble runs touch
+ * three models per request, so a $2/M model triples the per-call cost.
+ * Models like gemini-3-flash-preview that just clear the bar at $0.60
+ * out remain in scope; gemini-3.1-flash-lite-preview at $1.50 out is
+ * excluded by this filter even though it's "cheap" relative to flagship
+ * frontier models. If the user wants such a model in the ensemble they
+ * can still --include it explicitly — the filter only governs the
+ * *auto-discovered* candidate pool.
  *
  * Models that are manually requested via `includeIds` bypass the
  * cost/capability filters — useful for benchmarking the current
@@ -50,8 +59,12 @@ export const DEFAULT_CRITERIA: ModelCriteria = {
   category: "programming",
   minContextTokens: 128_000,
   minOutputTokens: 64_000,
-  maxInputDollarsPerMillion: 1.5,
-  maxOutputDollarsPerMillion: 2.0,
+  // Hard caps for auto-selection: STRICTLY less than $1/M for both
+  // input AND output. Anything at or above is rejected from the
+  // candidate pool. The `qualify()` predicate enforces this with `<`
+  // (not `<=`) so $1.00 itself is out. Override only via --include.
+  maxInputDollarsPerMillion: 1.0,
+  maxOutputDollarsPerMillion: 1.0,
   requireStructuredOutputs: true,
   requireReasoning: true,
   allowFree: false,
@@ -134,8 +147,10 @@ export function qualify(m: OpenRouterModel, criteria: ModelCriteria): QualifiedM
 
   const inputDollarsPerMillion = promptPerToken * 1_000_000;
   const outputDollarsPerMillion = completionPerToken * 1_000_000;
-  if (inputDollarsPerMillion > criteria.maxInputDollarsPerMillion) return null;
-  if (outputDollarsPerMillion > criteria.maxOutputDollarsPerMillion) return null;
+  // STRICTLY less than the cap (>= rejects), per the auto-selection rule
+  // recorded in the llm-externalizer-ensemble-autoselect skill.
+  if (inputDollarsPerMillion >= criteria.maxInputDollarsPerMillion) return null;
+  if (outputDollarsPerMillion >= criteria.maxOutputDollarsPerMillion) return null;
 
   return {
     id: m.id,

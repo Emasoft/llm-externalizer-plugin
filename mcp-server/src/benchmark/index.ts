@@ -31,6 +31,14 @@ import {
 import { runBenchmarkOnModel, type RunOutcome } from "./runner.js";
 import { scoreRun, type ModelScore } from "./score.js";
 import { renderReport, renderJson } from "./report.js";
+import {
+  applyPicksToSettings,
+  loadCachedReport,
+  pickTopN,
+  renderEnsembleBlock,
+  type CachedResult,
+  type PickedModel,
+} from "./pick.js";
 
 interface CliOptions {
   includeIds: string[];
@@ -39,6 +47,20 @@ interface CliOptions {
   jsonPath: string | null;
   reasoningEffort: "low" | "medium" | "high" | undefined;
   seed: number | undefined;
+  /** Sort surviving results by meanF1 desc + cost asc, print top N. */
+  pickTopN: number | null;
+  /** After picking, mutate ~/.llm-externalizer/settings.yaml so this
+   *  profile name's `model`/`second_model`/`third_model` become the
+   *  three winners. Atomic write (tmp + rename); existing other profiles
+   *  preserved verbatim. */
+  applyProfile: string | null;
+  /** Don't run the benchmark — pick top-N from the most recent cached
+   *  results at ~/.llm-externalizer/benchmark-results.json. Useful for
+   *  re-applying a fresh selection without burning more API calls. */
+  fromCache: boolean;
+  /** Minimum meanF1 a model must hit to be eligible for top-N. Default
+   *  0.95 — anything lower indicates the keyword classifier flunked. */
+  minMeanF1: number;
 }
 
 function parseArgs(argv: readonly string[]): CliOptions {
@@ -49,6 +71,10 @@ function parseArgs(argv: readonly string[]): CliOptions {
     jsonPath: null,
     reasoningEffort: undefined,
     seed: undefined,
+    pickTopN: null,
+    applyProfile: null,
+    fromCache: false,
+    minMeanF1: 0.95,
   };
   // Consume the value that must follow a value-taking flag. If the flag is the
   // last token, or the next token is itself a flag, fail fast — silently
@@ -83,6 +109,25 @@ function parseArgs(argv: readonly string[]): CliOptions {
     } else if (a === "--seed") {
       opts.seed = parseInt(takeValue(a, i), 10);
       i++;
+    } else if (a === "--pick-top-n") {
+      const n = parseInt(takeValue(a, i), 10);
+      if (!Number.isInteger(n) || n < 1) {
+        throw new Error(`--pick-top-n must be a positive integer, got ${n}`);
+      }
+      opts.pickTopN = n;
+      i++;
+    } else if (a === "--apply-profile") {
+      opts.applyProfile = takeValue(a, i);
+      i++;
+    } else if (a === "--from-cache") {
+      opts.fromCache = true;
+    } else if (a === "--min-f1") {
+      const f = parseFloat(takeValue(a, i));
+      if (!Number.isFinite(f) || f < 0 || f > 1) {
+        throw new Error(`--min-f1 must be 0..1, got ${f}`);
+      }
+      opts.minMeanF1 = f;
+      i++;
     } else if (a === "--help" || a === "-h") {
       printHelp();
       process.exit(0);
@@ -111,6 +156,18 @@ function printHelp(): void {
       "                    Always also written to ~/.llm-externalizer/benchmark-results.json.",
       "  --reasoning EFF   Pass reasoning.effort to each model. Default: model default.",
       "  --seed N          Fixed seed (models that support it will respect it).",
+      "  --pick-top-n N    After scoring, sort survivors by meanF1 desc + total cost",
+      "                    asc and print the top N (typically 3) as a settings.yaml",
+      "                    ensemble block. Survivors must hit --min-f1 (default 0.95).",
+      "  --apply-profile P Mutate ~/.llm-externalizer/settings.yaml so profile P's",
+      "                    model/second_model/third_model are the top-N picks. Atomic",
+      "                    (tmp + rename); other profiles preserved verbatim. Requires",
+      "                    --pick-top-n.",
+      "  --from-cache      Skip benchmarking; pick straight from the cached results",
+      "                    at ~/.llm-externalizer/benchmark-results.json. Useful for",
+      "                    re-applying a fresh selection without burning more calls.",
+      "  --min-f1 F        Threshold a model must hit (default 0.95) to be eligible",
+      "                    for top-N. 0..1.",
       "",
       "Criteria applied to candidates (non-baseline):",
       `  - category = ${DEFAULT_CRITERIA.category}`,
@@ -118,8 +175,8 @@ function printHelp(): void {
       `  - max_completion_tokens >= ${DEFAULT_CRITERIA.minOutputTokens.toLocaleString()}`,
       `  - structured_outputs or response_format supported`,
       `  - reasoning or include_reasoning supported`,
-      `  - $/M in <= ${DEFAULT_CRITERIA.maxInputDollarsPerMillion.toFixed(2)}`,
-      `  - $/M out <= ${DEFAULT_CRITERIA.maxOutputDollarsPerMillion.toFixed(2)}`,
+      `  - $/M in <  ${DEFAULT_CRITERIA.maxInputDollarsPerMillion.toFixed(2)}   (strictly less)`,
+      `  - $/M out <  ${DEFAULT_CRITERIA.maxOutputDollarsPerMillion.toFixed(2)}   (strictly less)`,
       `  - :free tier excluded`,
       "",
       "API key resolution order: OPENROUTER_API_KEY env, then $CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY.",
@@ -166,6 +223,24 @@ function resolveMainRoot(): string {
 
 async function main(): Promise<number> {
   const opts = parseArgs(process.argv);
+  if (opts.applyProfile !== null && opts.pickTopN === null) {
+    throw new Error("--apply-profile requires --pick-top-n");
+  }
+
+  // --from-cache: skip the benchmark entirely, pick straight from the
+  // most recent JSON sidecar. The default cache lives at
+  // ~/.llm-externalizer/benchmark-results.json (always written by a
+  // fresh run, see step 9 below).
+  if (opts.fromCache) {
+    const cachePath = join(homedir(), ".llm-externalizer", "benchmark-results.json");
+    const cache = loadCachedReport(cachePath);
+    console.error(`[benchmark] --from-cache: using ${cachePath} (${cache.results.length} models, run at ${cache.timestamp}).`);
+    if (opts.pickTopN === null) {
+      throw new Error("--from-cache requires --pick-top-n (no point loading the cache otherwise).");
+    }
+    return runPickPhase(cache.results, opts);
+  }
+
   const fixturesDir = resolveFixturesDir();
   const truth = buildGroundTruth(fixturesDir, BENCHMARK_KEYWORDS);
 
@@ -279,6 +354,61 @@ async function main(): Promise<number> {
   // Summary for easy grep-ing
   const passers = [...results.values()].filter((r) => r.score?.pass).length;
   console.error(`[benchmark] ${passers}/${results.size} models passed.`);
+
+  // --pick-top-n (with optional --apply-profile) — re-uses the cached
+  // JSON we just wrote. Parse it instead of mirroring report.ts's
+  // renderJson shape inline; one source of truth.
+  if (opts.pickTopN !== null) {
+    const cache = loadCachedReport(cacheJsonPath);
+    return runPickPhase(cache.results, opts);
+  }
+  return 0;
+}
+
+/** Shared by --from-cache and the post-benchmark --pick-top-n branch. */
+function runPickPhase(results: readonly CachedResult[], opts: CliOptions): number {
+  const topN = opts.pickTopN;
+  if (topN === null) return 0;
+  let picks: PickedModel[];
+  try {
+    picks = pickTopN(results, { topN, minMeanF1: opts.minMeanF1, requireSchema: true });
+  } catch (err) {
+    console.error(`[benchmark] pick failed: ${(err as Error).message}`);
+    return 2;
+  }
+  console.error(`[benchmark] Top ${topN} survivors (sorted by meanF1 desc, then cost asc):`);
+  for (const p of picks) {
+    console.error(
+      `  ${p.modelId.padEnd(42)}  meanF1=${(p.meanF1 * 100).toFixed(1)}%  cost=$${p.actualCost.toFixed(4)}  ` +
+        `in/$M=$${p.inputDollarsPerMillion.toFixed(3)}  out/$M=$${p.outputDollarsPerMillion.toFixed(3)}  ` +
+        `lat=${p.latencyMs.toFixed(0)}ms`,
+    );
+  }
+  const profileName = opts.applyProfile ?? "remote-ensemble-autoselected";
+  const block = renderEnsembleBlock(profileName, picks);
+  console.error("");
+  console.error("# settings.yaml block (paste under `profiles:`):");
+  process.stdout.write(block);
+
+  if (opts.applyProfile !== null) {
+    const settingsPath = join(homedir(), ".llm-externalizer", "settings.yaml");
+    try {
+      const result = applyPicksToSettings(settingsPath, opts.applyProfile, picks);
+      console.error("");
+      console.error(`[benchmark] Applied to ${settingsPath}::${opts.applyProfile}:`);
+      console.error(`  model:        ${result.oldEnsemble.model}  →  ${result.newEnsemble.model}`);
+      if (result.newEnsemble.second_model || result.oldEnsemble.second_model) {
+        console.error(`  second_model: ${result.oldEnsemble.second_model ?? "—"}  →  ${result.newEnsemble.second_model ?? "—"}`);
+      }
+      if (result.newEnsemble.third_model || result.oldEnsemble.third_model) {
+        console.error(`  third_model:  ${result.oldEnsemble.third_model ?? "—"}  →  ${result.newEnsemble.third_model ?? "—"}`);
+      }
+      console.error("[benchmark] Run the `reset` MCP tool or restart Claude Code to pick up the new ensemble.");
+    } catch (err) {
+      console.error(`[benchmark] --apply-profile failed: ${(err as Error).message}`);
+      return 3;
+    }
+  }
   return 0;
 }
 
