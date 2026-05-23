@@ -36,6 +36,7 @@ export default defineConfig({
       'src/cluster/unionfind.test.ts',
       'src/cluster/checkpoint.test.ts',
       'src/cluster/preflight_benchmark.test.ts',
+      'src/cluster/retry_ladder.test.ts',
     ],
   },
 });
