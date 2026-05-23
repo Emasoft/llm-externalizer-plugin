@@ -36,5 +36,14 @@
       "description": "OpenRouter API key for remote and ensemble modes (https://openrouter.ai/keys). Stored in system keychain. If blank, falls back to $OPENROUTER_API_KEY from your shell environment — leave blank to keep existing shell-based setup.",
       "sensitive": true
     }
+  },
+  "cpv": {
+    "allow_pipeline_drift": [
+      "scripts/publish.py",
+      ".github/workflows/ci.yml",
+      ".github/workflows/notify-marketplace.yml",
+      "cliff.toml",
+      ".markdownlint.json"
+    ]
   }
 }
