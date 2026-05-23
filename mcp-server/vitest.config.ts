@@ -38,6 +38,7 @@ export default defineConfig({
       'src/cluster/preflight_benchmark.test.ts',
       'src/cluster/retry_ladder.test.ts',
       'src/cluster/phase1_batch.test.ts',
+      'src/cluster/embeddings.test.ts',
     ],
   },
 });
