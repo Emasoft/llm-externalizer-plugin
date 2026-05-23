@@ -41,6 +41,7 @@ export default defineConfig({
       'src/cluster/embeddings.test.ts',
       'src/cluster/cluster_synonyms_main.test.ts',
       'src/benchmark/pick.test.ts',
+      'src/default-output-dir.test.ts',
     ],
   },
 });

@@ -3235,29 +3235,71 @@ function formatFooter(
 }
 
 // ── Response file output ────────────────────────────────────────────
-// LLM responses are saved to timestamped .md files in reports_dev/llm_externalizer/
-// so the caller's context is never flooded with the response text.
+// LLM responses are saved to timestamped .md files. The default lives
+// under `<main-repo-root>/reports/llm-externalizer/` per the
+// agent-reports-location rule (hyphen, not underscore — that matches
+// the rule's `<component>` slug convention).
 //
 // Default resolution (highest precedence first):
-//   1. LLM_OUTPUT_DIR  — explicit override; absolute path wins everything.
-//   2. CLAUDE_PROJECT_DIR — canonical project root provided by Claude Code
-//      ≥ 2.1.139 to MCP stdio servers in their environment. Same variable
-//      hooks already see. Anchors output at the project the user is working
-//      on, not wherever the MCP daemon happens to have its cwd.
-//   3. process.cwd() — fallback for older Claude Code versions and non-CC
-//      invocations (CLI tests, manual mcp-server runs, CI).
+//   1. LLM_OUTPUT_DIR  — explicit env override; absolute path wins all.
+//   2. `<git-main-repo-root>/reports/llm-externalizer/` — discovered
+//      via `git -C $CLAUDE_PROJECT_DIR worktree list` so worktree-based
+//      sessions still anchor on the main checkout. Cached after the
+//      first lookup so we don't fork git for every call.
+//   3. `<CLAUDE_PROJECT_DIR>/reports/llm-externalizer/` — when the
+//      project dir isn't a git repo.
+//   4. `<process.cwd()>/reports/llm-externalizer/` — last-resort
+//      fallback for non-CC invocations (CLI tests, ad-hoc runs).
 //
-// Per-call `output_dir` parameter overrides this default unconditionally;
-// callers per ~/.claude/rules/use-llm-externalizer.md SHOULD always pass an
-// explicit `output_dir` under the main-repo `reports/` folder.
+// Per-call `output_dir` argument overrides this default unconditionally
+// — the saveResponse() callers MUST forward it; if any of them drop
+// the argument the override silently disappears (Issue #5 — fixed by
+// threading the param through every callsite).
 
-const OUTPUT_DIR =
-  process.env.LLM_OUTPUT_DIR ||
-  join(
-    process.env.CLAUDE_PROJECT_DIR || process.cwd(),
-    "reports_dev",
-    "llm_externalizer",
-  );
+let _cachedDefaultOutputDir: string | undefined;
+
+function defaultOutputDir(): string {
+  if (_cachedDefaultOutputDir) return _cachedDefaultOutputDir;
+  const envOverride = process.env.LLM_OUTPUT_DIR;
+  if (envOverride && envOverride.trim()) {
+    _cachedDefaultOutputDir = resolve(envOverride.trim());
+    return _cachedDefaultOutputDir;
+  }
+  const project = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  let root = project;
+  try {
+    const out = spawnSync("git", ["worktree", "list"], {
+      cwd: project,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (out.status === 0 && out.stdout) {
+      const first = out.stdout.trim().split("\n")[0];
+      if (first) {
+        const candidate = first.split(/\s+/)[0];
+        if (candidate) root = candidate;
+      }
+    }
+  } catch {
+    // not a git repo, git not available, or permission denied — use
+    // project as-is.
+  }
+  _cachedDefaultOutputDir = join(root, "reports", "llm-externalizer");
+  return _cachedDefaultOutputDir;
+}
+
+/** Test-only: reset the cached default so a test that sets
+ *  CLAUDE_PROJECT_DIR / LLM_OUTPUT_DIR mid-run gets the recomputed value. */
+export function _resetDefaultOutputDirCache(): void {
+  _cachedDefaultOutputDir = undefined;
+}
+
+/** Test-only re-export of the internal helper so default-output-dir.test.ts
+ *  can verify the env-override / git-root / fallback chain without
+ *  launching the full MCP server. */
+export function _testDefaultOutputDir(): string {
+  return defaultOutputDir();
+}
 
 // Canonical report-filename timestamp per the agent-reports-location rule:
 //   %Y%m%d_%H%M%S%z — local time, GMT offset appended as compact ±HHMM (no colon).
@@ -3286,7 +3328,12 @@ function saveResponse(
   overrideFilename?: string,
   outputDir?: string,
 ): string {
-  const dir = outputDir || OUTPUT_DIR;
+  // Per-call override wins; falls back to the lazily-computed
+  // <git-root>/reports/llm-externalizer/ default. Issue #5 traced
+  // many call sites that silently dropped outputDir — fix is to
+  // thread it through every saveResponse() in this file. This
+  // function itself just respects whatever it's given.
+  const dir = outputDir || defaultOutputDir();
   mkdirSync(dir, { recursive: true });
 
   const now = new Date();
@@ -4409,8 +4456,13 @@ const folderSchemaProps = {
     type: "string" as const,
     description:
       "Absolute path to a custom output directory for reports. " +
-      "Default: <project>/reports_dev/llm_externalizer/. " +
-      "Reports are always saved as .md files in this directory.",
+      "Default: <git-main-repo-root>/reports/llm-externalizer/ (discovered " +
+      "via `git worktree list` from $CLAUDE_PROJECT_DIR; falls back to " +
+      "$CLAUDE_PROJECT_DIR/reports/llm-externalizer/ when not in a git " +
+      "repo, then to $PWD/reports/llm-externalizer/). Per-call override " +
+      "wins unconditionally — pass an absolute path under your " +
+      "$MAIN_ROOT/reports/<component>/ to comply with the agent-reports- " +
+      "location rule.",
   },
   free: {
     type: "boolean" as const,
@@ -5779,10 +5831,13 @@ async function dispatchCallTool(
               isError: true,
             };
           }
-          const savedPath = saveResponse("chat", resp.content + footer, {
-            model: resp.model,
-            task: chatPrompt,
-          });
+          const savedPath = saveResponse(
+            "chat",
+            resp.content + footer,
+            { model: resp.model, task: chatPrompt },
+            undefined,
+            outputDir,
+          );
           return { content: [{ type: "text", text: savedPath }] };
         }
 
@@ -5901,12 +5956,13 @@ async function dispatchCallTool(
           if (batchResults.length === 0) continue; // skip empty groups
           const finalContent = batchResults.join("\n\n---\n\n");
           const chatMergedModel = ensembleModelLabel(useEnsemble);
-          const savedPath = saveResponse("chat", finalContent, {
-            model: chatMergedModel,
-            task: chatPrompt,
-            inputFile: fgPaths[0],
-            groupId: fgId || undefined,
-          });
+          const savedPath = saveResponse(
+            "chat",
+            finalContent,
+            { model: chatMergedModel, task: chatPrompt, inputFile: fgPaths[0], groupId: fgId || undefined },
+            undefined,
+            outputDir,
+          );
 
           if (chatEffectivelyGrouped) {
             const labelId = fgId || "auto";
@@ -6127,6 +6183,8 @@ async function dispatchCallTool(
             "code_task",
             codeResp.content + codeFooter,
             { model: codeResp.model, task: ctTask },
+            undefined,
+            outputDir,
           );
           return { content: [{ type: "text", text: savedPath }] };
         }
@@ -6235,10 +6293,13 @@ async function dispatchCallTool(
           if (ctBatchResults.length === 0) continue;
           const ctFinalContent = ctBatchResults.join("\n\n---\n\n");
           const ctMergedModel = ensembleModelLabel(ctUseEnsemble);
-          const savedPath = saveResponse("code_task", ctFinalContent, {
-            model: ctMergedModel, task: ctTask, inputFile: fgPaths[0],
-            groupId: fgId || undefined,
-          });
+          const savedPath = saveResponse(
+            "code_task",
+            ctFinalContent,
+            { model: ctMergedModel, task: ctTask, inputFile: fgPaths[0], groupId: fgId || undefined },
+            undefined,
+            outputDir,
+          );
 
           if (ctEffectivelyGrouped) {
             const labelId = fgId || "auto";
@@ -6593,11 +6654,13 @@ async function dispatchCallTool(
       }
 
       case "get_settings": {
-        // Copy settings.yaml to output dir and return only the path (saves context tokens)
+        // Copy settings.yaml to output dir and return only the path (saves context tokens).
+        // Per-call output_dir honored; otherwise default to <git-root>/reports/llm-externalizer/.
         try {
           const raw = readFileSync(SETTINGS_FILE, "utf-8");
-          mkdirSync(OUTPUT_DIR, { recursive: true });
-          const copyPath = join(OUTPUT_DIR, "settings_edit.yaml");
+          const targetDir = outputDir || defaultOutputDir();
+          mkdirSync(targetDir, { recursive: true });
+          const copyPath = join(targetDir, "settings_edit.yaml");
           writeFileSync(copyPath, raw, "utf-8");
           return { content: [{ type: "text", text: copyPath }] };
         } catch (err) {
@@ -6798,10 +6861,13 @@ async function dispatchCallTool(
             }
             if (reportSections.length > 0) {
               const mergedContent = reportSections.join("\n\n---\n\n");
-              const mergedPath = saveResponse("batch_check", mergedContent, {
-                model: backend.model, task: gTask,
-                inputFile: fg.files[0], groupId: gid,
-              });
+              const mergedPath = saveResponse(
+                "batch_check",
+                mergedContent,
+                { model: backend.model, task: gTask, inputFile: fg.files[0], groupId: gid },
+                undefined,
+                outputDir,
+              );
               bcGroupReports.push(`[group:${gid}] ${mergedPath}`);
             }
           }
@@ -6951,11 +7017,13 @@ async function dispatchCallTool(
               reportSections.push(`## File: ${r.filePath}\n\n${content}`);
             }
             const mergedContent = reportSections.join("\n\n---\n\n");
-            const mergedPath = saveResponse("batch_check", mergedContent, {
-              model: backend.model,
-              task: resolvedTask,
-              inputFile: uniqueFiles[0],
-            });
+            const mergedPath = saveResponse(
+              "batch_check",
+              mergedContent,
+              { model: backend.model, task: resolvedTask, inputFile: uniqueFiles[0] },
+              undefined,
+              outputDir,
+            );
             const bcSummary: string[] = [
               `BATCH CHECK COMPLETE — ${succeeded.length} succeeded (${uniqueFiles.length} total)`,
               `Batch UUID: ${batchId}`,
@@ -7224,11 +7292,9 @@ async function dispatchCallTool(
           const mergedPath = saveResponse(
             "scan_folder",
             sections.join("\n\n---\n\n"),
-            {
-              model: backend.model,
-              task: sfPrompt,
-              inputFile: folder_path,
-            },
+            { model: backend.model, task: sfPrompt, inputFile: folder_path },
+            undefined,
+            outputDir,
           );
           const summary = [
             `SCAN COMPLETE — ${succeeded.length} processed, ${failed.length} failed, ${skipped.length} skipped (${files.length} files found)`,
@@ -7282,12 +7348,9 @@ async function dispatchCallTool(
             const groupPath = saveResponse(
               "scan_folder",
               sections.join("\n\n---\n\n"),
-              {
-                model: backend.model,
-                task: sfPrompt,
-                inputFile: fg.files[0],
-                groupId: gid,
-              },
+              { model: backend.model, task: sfPrompt, inputFile: fg.files[0], groupId: gid },
+              undefined,
+              outputDir,
             );
             sfGroupReportPaths.push(`[group:${gid}] ${groupPath}`);
           }
@@ -8169,10 +8232,18 @@ async function dispatchCallTool(
             }
             const reportContent = `# Git Diff: ${cfFromRef} → ${toRef}\n\nRepository: ${cfGitRepoSafe}\nFiles changed: ${dg.files.length}\n\n---\n\n${sections.join("\n\n---\n\n")}`;
             const gid = dg.id || undefined;
-            const rp = saveResponse("compare_files", reportContent, {
-              model: "git-diff (no LLM)", task: `${cfFromRef} → ${toRef}`,
-              inputFile: join(cfGitRepoSafe, dg.files[0]), groupId: gid,
-            });
+            const rp = saveResponse(
+              "compare_files",
+              reportContent,
+              {
+                model: "git-diff (no LLM)",
+                task: `${cfFromRef} → ${toRef}`,
+                inputFile: join(cfGitRepoSafe, dg.files[0]),
+                groupId: gid,
+              },
+              undefined,
+              outputDir,
+            );
             if (isGrouped) reportPaths.push(`[group:${dg.id}] ${rp}`);
             else reportPaths.push(rp);
           }
@@ -8228,10 +8299,13 @@ async function dispatchCallTool(
             const reportContent = sections.join("\n\n---\n\n");
             const gid = pg.id || undefined;
             const model = backend.model;
-            const rp = saveResponse("compare_files", reportContent, {
-              model, task: `Batch compare: ${pg.pairs.length} pair(s)`,
-              inputFile: pg.pairs[0][0], groupId: gid,
-            });
+            const rp = saveResponse(
+              "compare_files",
+              reportContent,
+              { model, task: `Batch compare: ${pg.pairs.length} pair(s)`, inputFile: pg.pairs[0][0], groupId: gid },
+              undefined,
+              outputDir,
+            );
             if (isGrouped) reportPaths.push(`[group:${pg.id}] ${rp}`);
             else reportPaths.push(rp);
           }
@@ -8390,11 +8464,9 @@ async function dispatchCallTool(
         const cfReportPath = saveResponse(
           "compare_files",
           cfResp.content + cfFooter,
-          {
-            model: cfResp.model,
-            task: `Compare ${basename(fileA)} vs ${basename(fileB)}`,
-            inputFile: fileA,
-          },
+          { model: cfResp.model, task: `Compare ${basename(fileA)} vs ${basename(fileB)}`, inputFile: fileA },
+          undefined,
+          outputDir,
         );
         return { content: [{ type: "text", text: cfReportPath }] };
       }
@@ -8521,9 +8593,13 @@ async function dispatchCallTool(
               }
             }
             if (gReports.length > 0) {
-              const mergedPath = saveResponse("check_references", gReports.join("\n\n---\n\n"), {
-                model: backend.model, task: "Check references", inputFile: fg.files[0], groupId: gid,
-              });
+              const mergedPath = saveResponse(
+                "check_references",
+                gReports.join("\n\n---\n\n"),
+                { model: backend.model, task: "Check references", inputFile: fg.files[0], groupId: gid },
+                undefined,
+                outputDir,
+              );
               crGroupReports.push(`[group:${gid}] ${mergedPath}`);
             }
           }
@@ -8604,11 +8680,9 @@ async function dispatchCallTool(
               const rp = saveResponse(
                 "check_references",
                 crResp.content + crFooter + depInfo,
-                {
-                  model: crResp.model,
-                  task: "Check references",
-                  inputFile: filePath,
-                },
+                { model: crResp.model, task: "Check references", inputFile: filePath },
+                undefined,
+                outputDir,
               );
               crReportPaths.push(rp);
             } else {
@@ -8644,11 +8718,9 @@ async function dispatchCallTool(
         const crMergedPath = saveResponse(
           "check_references",
           crReports.join("\n\n---\n\n"),
-          {
-            model: backend.model,
-            task: "Check references",
-            inputFile: crFilePaths[0],
-          },
+          { model: backend.model, task: "Check references", inputFile: crFilePaths[0] },
+          undefined,
+          outputDir,
         );
         return { content: [{ type: "text", text: crMergedPath }] };
       }
@@ -8790,9 +8862,13 @@ async function dispatchCallTool(
               gReports.push(lines.join("\n"));
             }
             if (gReports.length > 0) {
-              const mergedPath = saveResponse("check_imports", gReports.join("\n\n---\n\n"), {
-                model: backend.model, task: "Check imports", inputFile: fg.files[0], groupId: gid,
-              });
+              const mergedPath = saveResponse(
+                "check_imports",
+                gReports.join("\n\n---\n\n"),
+                { model: backend.model, task: "Check imports", inputFile: fg.files[0], groupId: gid },
+                undefined,
+                outputDir,
+              );
               ciGroupReports.push(`[group:${gid}] ${mergedPath}`);
             }
           }
@@ -8959,11 +9035,13 @@ async function dispatchCallTool(
 
           const ciReportText = ciReportLines.join("\n");
           if (ciMode === 0) {
-            const rp = saveResponse("check_imports", ciReportText, {
-              model: extractResp.model,
-              task: "Check imports",
-              inputFile: filePath,
-            });
+            const rp = saveResponse(
+              "check_imports",
+              ciReportText,
+              { model: extractResp.model, task: "Check imports", inputFile: filePath },
+              undefined,
+              outputDir,
+            );
             ciReportPaths.push(rp);
           } else {
             ciReports.push(ciReportText);
@@ -8992,11 +9070,9 @@ async function dispatchCallTool(
         const ciMergedPath = saveResponse(
           "check_imports",
           ciReports.join("\n\n---\n\n"),
-          {
-            model: backend.model,
-            task: "Check imports",
-            inputFile: ciFilePaths[0],
-          },
+          { model: backend.model, task: "Check imports", inputFile: ciFilePaths[0] },
+          undefined,
+          outputDir,
         );
         return { content: [{ type: "text", text: ciMergedPath }] };
       }
@@ -9249,12 +9325,18 @@ async function dispatchCallTool(
           if (csBatchResults.length === 0) continue;
           const csFinalContent = csBatchResults.join("\n\n---\n\n");
           const csMergedModel = ensembleModelLabel(csUseEnsemble);
-          const csReportPath = saveResponse("check_against_specs", csFinalContent, {
-            model: csMergedModel,
-            task: `Spec compliance: ${basename(csSpecPath)} vs ${fgPaths.length} file(s)`,
-            inputFile: fgPaths[0],
-            groupId: fgId || undefined,
-          });
+          const csReportPath = saveResponse(
+            "check_against_specs",
+            csFinalContent,
+            {
+              model: csMergedModel,
+              task: `Spec compliance: ${basename(csSpecPath)} vs ${fgPaths.length} file(s)`,
+              inputFile: fgPaths[0],
+              groupId: fgId || undefined,
+            },
+            undefined,
+            outputDir,
+          );
 
           if (csEffectivelyGrouped) {
             const labelId = fgId || "auto";
