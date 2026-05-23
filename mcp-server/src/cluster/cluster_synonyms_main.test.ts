@@ -489,6 +489,91 @@ describe("T11-lite smoke", () => {
 });
 
 // ────────────────────────────────────────────────────────────
+// Phase 3 LLM canonical mode — orchestrator integration
+// ────────────────────────────────────────────────────────────
+
+describe("Phase 3 LLM canonical mode (orchestrator integration)", () => {
+  it("canonical_label_mode=llm: cluster of 2 distinct sentences gets the LLM-picked canonical", async () => {
+    const inputPath = writeJsonl([
+      { id: "a", sentence: "compile" },
+      { id: "b", sentence: "compile the project with optimisations" },
+    ]);
+    // Phase 1: lump together into one cluster.
+    // Phase 2: also dispatches but has only 1 cluster after phase 1, so no work.
+    // Phase 3: receives the cluster, calls LLM, picks "compile" (heuristic-equivalent).
+    const llm: Phase1RawLlmCall = async (prompt) => {
+      // Phase 1 prompt has "id=N sentence=..." lines
+      if (prompt.includes("id=1") && prompt.includes("sentence=")) {
+        const ids = (prompt.match(/^\d+\. id=\d+/gm) ?? []).length;
+        return JSON.stringify({ groups: [Array.from({ length: ids }, (_, i) => i + 1)] });
+      }
+      // Phase 3 prompt has "- sentence" lines and asks for canonical
+      if (prompt.includes('"canonical"')) {
+        // Pick the FIRST "- " line — the LLM's "pick the cleanest".
+        const m = prompt.match(/^- (.+)$/gm) ?? [];
+        return JSON.stringify({
+          canonical: m[0]?.slice(2) ?? "fallback",
+          rationale: "first listed",
+        });
+      }
+      // Default: empty groups so retry-ladder eventually moves on.
+      return JSON.stringify({ groups: [] });
+    };
+    const r = await runClusterSynonyms(
+      {
+        input_file: inputPath,
+        output_dir: join(tmp, "out"),
+        policy_file: writePolicy({
+          compute_embeddings: false,
+          batch_size: 100,
+          canonical_label_mode: "llm",
+        }),
+      },
+      baseHooks(llm),
+    );
+    expect(r.ok).toBe(true);
+    expect(r.stats.llm_calls_by_phase.phase3).toBeGreaterThanOrEqual(1);
+    const summary = JSON.parse(readFileSync(r.clusters_summary_json, "utf-8"));
+    expect(summary.clusters).toHaveLength(1);
+    // Canonical should be one of the inputs (the validator rejects hallucinations).
+    expect(["compile", "compile the project with optimisations"]).toContain(
+      summary.clusters[0].canonical,
+    );
+  });
+
+  it("canonical_label_mode=heuristic (default): NO Phase 3 LLM calls", async () => {
+    const inputPath = writeJsonl([
+      { id: "a", sentence: "short" },
+      { id: "b", sentence: "much longer sentence here" },
+    ]);
+    const llm: Phase1RawLlmCall = async (prompt) => {
+      if (prompt.includes('"canonical"')) {
+        throw new Error("Phase 3 LLM should NOT be called in heuristic mode");
+      }
+      const ids = (prompt.match(/^\d+\. id=\d+/gm) ?? []).length;
+      return JSON.stringify({ groups: [Array.from({ length: ids }, (_, i) => i + 1)] });
+    };
+    const r = await runClusterSynonyms(
+      {
+        input_file: inputPath,
+        output_dir: join(tmp, "out"),
+        policy_file: writePolicy({
+          compute_embeddings: false,
+          batch_size: 100,
+          canonical_label_mode: "heuristic",
+        }),
+      },
+      baseHooks(llm),
+    );
+    expect(r.ok).toBe(true);
+    expect(r.stats.llm_calls_by_phase.phase3).toBe(0);
+    const summary = JSON.parse(readFileSync(r.clusters_summary_json, "utf-8"));
+    // Heuristic picks the shortest sentence.
+    expect(summary.clusters[0].canonical).toBe("short");
+  });
+});
+
+// ────────────────────────────────────────────────────────────
 // T15 — Phase 2 merge rule floor (Q12)
 // ────────────────────────────────────────────────────────────
 

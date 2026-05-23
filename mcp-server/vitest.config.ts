@@ -43,6 +43,7 @@ export default defineConfig({
       'src/benchmark/pick.test.ts',
       'src/default-output-dir.test.ts',
       'src/cluster/phase2_verify.test.ts',
+      'src/cluster/phase3_canonical.test.ts',
     ],
   },
 });

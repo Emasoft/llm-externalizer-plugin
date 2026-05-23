@@ -24,6 +24,7 @@ import { computeEmbeddings, loadEmbeddings, type EmbeddingsBundle } from "./embe
 import { readClusterJsonl } from "./jsonl.js";
 import { runPhase1, type Phase1RawLlmCall } from "./phase1_batch.js";
 import { runPhase2 } from "./phase2_verify.js";
+import { runPhase3Llm } from "./phase3_canonical.js";
 import { PolicySchema, resolvePolicy } from "./policy.js";
 import { type RetryBudget } from "./retry_ladder.js";
 import { UnionFind } from "./unionfind.js";
@@ -237,6 +238,7 @@ function buildSummary(
   itemsById: Map<string, ClusterInputItem>,
   uf: UnionFind,
   profileName: string,
+  canonicalsOverride?: Map<string, string>,
 ): ClustersSummary {
   const partition = uf.partition();
   const clusters: ClusterEntry[] = [];
@@ -248,7 +250,12 @@ function buildSummary(
     const memberItems = members
       .map((id) => itemsById.get(id))
       .filter((it): it is ClusterInputItem => it !== undefined);
-    const canonical = pickHeuristicCanonical(memberItems.map((it) => it.sentence));
+    // Prefer the LLM-computed canonical when Phase 3 produced one;
+    // fall back to the heuristic for any cluster that wasn't sent to
+    // Phase 3 (singletons, all-identical, or budget-exhausted).
+    const overrideCanonical = canonicalsOverride?.get(clusterId);
+    const canonical = overrideCanonical
+      ?? pickHeuristicCanonical(memberItems.map((it) => it.sentence));
     clusters.push({
       cluster_id: clusterId,
       size: memberItems.length,
@@ -369,7 +376,33 @@ export async function runClusterSynonyms(
     warnings.push("phase2 skipped: budget exhausted in phase 1");
   }
 
-  // 9. Persist checkpoint.
+  // 9. Phase 3 — canonical labels. Heuristic mode is computed inline
+  //    by buildSummary; LLM mode runs one call per non-trivial cluster
+  //    (singletons + all-identical clusters skip the LLM) and the result
+  //    overrides the heuristic in the summary.
+  let phase3Calls = 0;
+  let canonicalsOverride: Map<string, string> | undefined;
+  if (policy.canonical_label_mode === "llm" && budget.remaining > 0) {
+    const partition = uf.partition();
+    const phase3Clusters = Array.from(partition.entries()).map(([_root, members]) => {
+      const clusterId = chooseClusterId(members.slice().sort());
+      const sentences = members
+        .map((id) => itemsById.get(id)?.sentence)
+        .filter((s): s is string => typeof s === "string");
+      return { clusterId, sentences };
+    });
+    const phase3 = await runPhase3Llm(
+      { clusters: phase3Clusters, policy, budget },
+      hooks.rawLlmCall,
+    );
+    phase3Calls = phase3.llmCallCount;
+    warnings.push(...phase3.warnings);
+    canonicalsOverride = phase3.canonicals;
+  } else if (policy.canonical_label_mode === "llm" && budget.remaining <= 0) {
+    warnings.push("phase3 skipped: budget exhausted before LLM canonical mode could run");
+  }
+
+  // 10. Persist checkpoint.
   ckpt.saveUnionFind(uf);
   ckpt.setMeta("profile_name", profileName);
   ckpt.setMeta("policy_json", JSON.stringify(policy));
@@ -377,16 +410,17 @@ export async function runClusterSynonyms(
   ckpt.setMeta("phase1_llm_calls", String(phase1.llmCallCount));
   ckpt.setMeta("phase2_llm_calls", String(phase2Calls));
   ckpt.setMeta("phase2_merges", String(phase2Merges.length));
+  ckpt.setMeta("phase3_llm_calls", String(phase3Calls));
   ckpt.close();
 
-  // 10. Stats.
+  // 11. Stats.
   const failed: FailedGroup[] = [...phase1.failed, ...phase2Failed];
   const stats: ClusterStats = {
     items_in: items.length,
     clusters_out: uf.numClusters(),
     reduction_pct: reductionPct(items.length, uf.numClusters()),
-    llm_calls_total: phase1.llmCallCount + phase2Calls,
-    llm_calls_by_phase: { phase1: phase1.llmCallCount, phase2: phase2Calls, phase3: 0 },
+    llm_calls_total: phase1.llmCallCount + phase2Calls + phase3Calls,
+    llm_calls_by_phase: { phase1: phase1.llmCallCount, phase2: phase2Calls, phase3: phase3Calls },
     tokens_total: 0, // populated when the LLM transport surfaces token usage
     walltime_seconds: (Date.now() - tStart) / 1000,
     profile_name: profileName,
@@ -396,12 +430,12 @@ export async function runClusterSynonyms(
     warnings,
   };
 
-  // 10. Emit outputs.
+  // 12. Emit outputs.
   const clustersPath = join(invocation.output_dir, OUTPUT_NAMES.clusters);
   const summaryPath = join(invocation.output_dir, OUTPUT_NAMES.summary);
   const statsPath = join(invocation.output_dir, OUTPUT_NAMES.stats);
   writeClustersJsonl(clustersPath, itemsById, uf);
-  writeJsonAtomic(summaryPath, buildSummary(itemsById, uf, profileName));
+  writeJsonAtomic(summaryPath, buildSummary(itemsById, uf, profileName, canonicalsOverride));
   writeJsonAtomic(statsPath, stats);
 
   return {
