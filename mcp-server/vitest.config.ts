@@ -59,6 +59,8 @@ export default defineConfig({
       'src/benchmark/security-triage/select.test.ts',
       // Real-model end-to-end smoke — self-skips unless OPENROUTER_API_KEY is set.
       'src/benchmark/security-triage/live.test.ts',
+      // Per-tool model-qualification registry (TRDD-f45eeaa0 framework core).
+      'src/model-qualification/registry.test.ts',
       'src/default-output-dir.test.ts',
       'src/cluster/phase2_verify.test.ts',
       'src/cluster/phase3_canonical.test.ts',

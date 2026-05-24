@@ -45,11 +45,17 @@ import {
   type TriageThresholds,
 } from "./score.js";
 import {
-  SECURITY_TRIAGE_CRITERIA,
   selectSecurityTriageModel,
   type CandidateAssessment,
   type SelectionResult,
 } from "./select.js";
+import { getToolDescriptor } from "../../model-qualification/registry.js";
+
+// This tool's model requirements come from the per-tool registry
+// (TRDD-f45eeaa0) — the single source of truth. The registry entry points at
+// SECURITY_TRIAGE_CRITERIA; reading it here routes the orchestrator's
+// auto-discovery + qualify checks through the registry.
+const SECURITY_TRIAGE_CRITERIA = getToolDescriptor("security_scan")!.requirements;
 
 const INCUMBENT_FALLBACK_PRICING: ModelPricing =
   KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32_768 };

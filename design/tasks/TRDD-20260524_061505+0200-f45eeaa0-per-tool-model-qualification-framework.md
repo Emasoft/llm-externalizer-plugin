@@ -1,9 +1,9 @@
 ---
 trdd-id: f45eeaa0-a36b-4d70-90c3-d39813960409
 title: Per-tool model qualification framework — each tool's benchmark gates its model selection
-status: not-started
+status: in-progress
 created: 2026-05-24T06:15:05+0200
-updated: 2026-05-24T06:15:05+0200
+updated: 2026-05-24T12:14:07+0200
 ---
 
 # TRDD-f45eeaa0 — Per-tool model qualification framework
@@ -117,3 +117,4 @@ extending the existing benchmark command. Cached per-model-per-tool-per-day.
 | Date | Status change | Note |
 |---|---|---|
 | 2026-05-24T06:15:05+0200 | created → not-started | Captured the user's generalization: per-tool benchmarks + requirements gate per-tool model selection; best same-cost passer wins. Framework is EXTRACTED FROM the security_scan instance (973a0265) to avoid premature abstraction — blocked-by 973a0265 (→ #9/#10 + #95). Reuses the existing benchmark/ machinery (ground-truth/score/runner/pick) + discover.ts::qualify for requirements. |
+| 2026-05-24T12:14:07+0200 | not-started → in-progress | FRAMEWORK CORE landed (mcp-server/src/model-qualification/registry.ts + registry.test.ts, 12 tests): the per-tool requirements registry — the single source of truth for every LLM tool's model requirements + benchmark pointer. Acceptance covered: registry of per-tool {requirements, benchmark} ✓ (all 11 LLM tools; pure-utility tools excluded); security_scan wired to its real triage benchmark (973a0265) ✓; mass_scout → existing keyword-classification ✓; qualifyModelForTool() requirements gate ✓; the security-triage orchestrator now reads security_scan's requirements FROM the registry (real runtime consumer, single source of truth). DELIBERATELY DEFERRED as incremental (NOT premature-abstracted from N=1, per §1 + the user's no-over-engineering rule): the per-tool BENCHMARK DATASETS for the other 9 tools (each is a labeled-golden-dataset research effort — fabricating shallow ones would violate the no-fake-tests rule), the settings.yaml per-tool model map (cross-cutting, every tool's model resolution), and a generalized cross-tool selection + assess-all command. Each lands as its tool gets a real benchmark. Status stays in-progress (NOT completed): the framework foundation is shipped, the per-tool benchmark instances are the remaining body of work. |
