@@ -1,6 +1,30 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.13.0] - 2026-05-24
+
+### Added
+
+- Feat: per-tool model-qualification registry (framework core, TRDD-f45eeaa0)
+
+The single source of truth for each LLM tool's model REQUIREMENTS + its
+benchmark pointer. model-qualification/registry.ts maps every LLM-using tool
+to {requirements: ModelCriteria, benchmark} and exposes qualifyModelForTool().
+security_scan → its real triage benchmark (973a0265); mass_scout → the
+existing keyword-classification benchmark; the rest carry requirements only
+(benchmark: null) until each gets a dataset. The security-triage orchestrator
+now reads security_scan's requirements from the registry (real consumer).
+
+Deliberately incremental (not premature-abstracted from N=1): per-tool
+benchmark DATASETS for the other tools, the settings.yaml per-tool model map,
+and generalized cross-tool selection land as each tool gets a real benchmark.
+
+
+### Changed
+
+- Build: regenerate dist for the model-qualification registry
+
+
 ## [9.12.0] - 2026-05-24
 
 ### Added
