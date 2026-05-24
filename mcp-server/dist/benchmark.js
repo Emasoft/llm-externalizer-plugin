@@ -218091,8 +218091,7 @@ import {
   chmodSync,
   realpathSync
 } from "node:fs";
-import { resolve } from "node:path";
-import { join } from "node:path";
+import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 
 // src/benchmark/discover.ts
@@ -218446,6 +218445,9 @@ var ctxStore = new AsyncLocalStorage();
 function newOpId() {
   return `op-${randomBytes(4).toString("hex")}`;
 }
+function getHistoryPath() {
+  return join3(getConfigDir(), "history.log");
+}
 function resolveProject() {
   const fromEnv = process.env.CLAUDE_PROJECT_DIR;
   if (typeof fromEnv === "string" && fromEnv.trim()) return fromEnv.trim();
@@ -218498,7 +218500,7 @@ function appendHistoryLine(line) {
   try {
     const dir = getConfigDir();
     mkdirSync2(dir, { recursive: true });
-    appendFileSync(join3(dir, "history.log"), line + "\n", { flag: "a" });
+    appendFileSync(getHistoryPath(), line + "\n", { flag: "a" });
   } catch {
   }
 }
@@ -220899,7 +220901,7 @@ async function main() {
     if (outcome.ok) {
       score = scoreRun(outcome, truth);
       console.error(
-        `[benchmark]   ${outcome.ok ? "OK" : "ERR"} \u2014 pass=${score.pass}  meanF1=${(score.meanF1 * 100).toFixed(1)}%  ${outcome.inputTokens} in / ${outcome.outputTokens} out tok  ${outcome.latencyMs.toFixed(0)}ms`
+        `[benchmark]   OK \u2014 pass=${score.pass}  meanF1=${(score.meanF1 * 100).toFixed(1)}%  ${outcome.inputTokens} in / ${outcome.outputTokens} out tok  ${outcome.latencyMs.toFixed(0)}ms`
       );
     } else {
       console.error(`[benchmark]   ERR \u2014 ${outcome.error}`);

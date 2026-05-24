@@ -18,8 +18,7 @@ import {
   chmodSync,
   realpathSync,
 } from "node:fs";
-import { resolve } from "node:path";
-import { join } from "node:path";
+import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 import { parse as yamlParse } from "yaml";
 import { registeredTools } from "./model-qualification/registry.js";

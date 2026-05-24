@@ -39545,8 +39545,7 @@ import {
   chmodSync,
   realpathSync
 } from "node:fs";
-import { resolve } from "node:path";
-import { join } from "node:path";
+import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 
 // src/benchmark/discover.ts
@@ -40933,6 +40932,9 @@ var ctxStore = new AsyncLocalStorage();
 function newOpId() {
   return `op-${randomBytes(4).toString("hex")}`;
 }
+function getHistoryPath() {
+  return join3(getConfigDir(), "history.log");
+}
 function resolveProject() {
   const fromEnv = process.env.CLAUDE_PROJECT_DIR;
   if (typeof fromEnv === "string" && fromEnv.trim()) return fromEnv.trim();
@@ -41030,7 +41032,7 @@ function appendHistoryLine(line) {
   try {
     const dir = getConfigDir();
     mkdirSync2(dir, { recursive: true });
-    appendFileSync(join3(dir, "history.log"), line + "\n", { flag: "a" });
+    appendFileSync(getHistoryPath(), line + "\n", { flag: "a" });
   } catch {
   }
 }
@@ -47316,11 +47318,11 @@ async function runPhase2(inputs, rawLlmCall) {
       if (budgetExhausted) break;
       const batch = batches[bi];
       const slice = [];
-      const perItemCluster = [];
+      const clusterById = /* @__PURE__ */ new Map();
       for (const cr of batch) {
         for (const r of cr.reps) {
           slice.push(r);
-          perItemCluster.push(cr.clusterId);
+          clusterById.set(r.id, cr.clusterId);
         }
       }
       batchesAttempted += 1;
@@ -47345,10 +47347,9 @@ async function runPhase2(inputs, rawLlmCall) {
       if (result.budgetExhausted) budgetExhausted = true;
       for (const leaf of result.succeeded) {
         batchesSucceeded += 1;
-        const leafPerCluster = leaf.items.map((it) => {
-          const idx = slice.findIndex((s) => s.id === it.id);
-          return idx >= 0 ? perItemCluster[idx] : "";
-        });
+        const leafPerCluster = leaf.items.map(
+          (it) => clusterById.get(it.id) ?? ""
+        );
         const responseIdPrefix = `pass${pass + 1}.b${bi + 1}.d${leaf.depth}`;
         for (let gi = 0; gi < leaf.response.groups.length; gi++) {
           const group = leaf.response.groups[gi];
@@ -52086,7 +52087,7 @@ ${fence}`;
             );
             const batchResults = [];
             if (chatSkipped.length > 0) {
-              const skipNote = `SKIPPED (exceeds 800 KB payload budget): ${chatSkipped.length} file(s)
+              const skipNote = `SKIPPED (exceeds ${chatBudgetBytes / 1024} KB payload budget): ${chatSkipped.length} file(s)
 ${chatSkipped.map((f) => `  - ${f}`).join("\n")}`;
               batchResults.push(skipNote);
             }

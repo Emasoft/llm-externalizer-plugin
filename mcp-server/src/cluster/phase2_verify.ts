@@ -327,11 +327,15 @@ export async function runPhase2(
       // Flatten reps for the LLM, preserving the per-item cluster mapping
       // for post-response analysis.
       const slice: ClusterInputItem[] = [];
-      const perItemCluster: string[] = [];
+      // id → clusterId lookup so leaf-to-cluster remapping after a ladder
+      // split is O(1) per item instead of O(slice.length) (findIndex). Reps
+      // are distinct ClusterInputItem objects across clusters, so ids are
+      // unique within a single phase-2 batch — last-write is a no-op here.
+      const clusterById = new Map<string, string>();
       for (const cr of batch) {
         for (const r of cr.reps) {
           slice.push(r);
-          perItemCluster.push(cr.clusterId);
+          clusterById.set(r.id, cr.clusterId);
         }
       }
       batchesAttempted += 1;
@@ -361,14 +365,10 @@ export async function runPhase2(
       for (const leaf of result.succeeded) {
         batchesSucceeded += 1;
         // The leaf may be a sub-slice after a ladder split — recompute
-        // perItemCluster for THIS leaf by mapping its items back to the
-        // original slice index.
-        const leafPerCluster: string[] = leaf.items.map((it) => {
-          // Items in `slice` are unique per phase 2 batch since reps are
-          // distinct ClusterInputItem objects across clusters. Find by id.
-          const idx = slice.findIndex((s) => s.id === it.id);
-          return idx >= 0 ? perItemCluster[idx] : "";
-        });
+        // the per-item cluster mapping for THIS leaf via the O(1) id map.
+        const leafPerCluster: string[] = leaf.items.map(
+          (it) => clusterById.get(it.id) ?? "",
+        );
         const responseIdPrefix = `pass${pass + 1}.b${bi + 1}.d${leaf.depth}`;
         for (let gi = 0; gi < leaf.response.groups.length; gi++) {
           const group = leaf.response.groups[gi];

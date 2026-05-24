@@ -1010,7 +1010,6 @@ function runGet(args: string[]): CliResult {
   return ok(JSON.stringify(out, null, 2));
 }
 
-/** export — dump all rows of a job to JSONL or CSV under reports/. */
 /**
  * build-fieldset — assemble a fieldset JSON from --field shorthand
  * tokens. Writes to stdout (or --out FILE). The shorthand parser

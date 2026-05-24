@@ -231,7 +231,9 @@ export function appendHistoryLine(line: string): void {
   try {
     const dir = getConfigDir();
     mkdirSync(dir, { recursive: true });
-    appendFileSync(join(dir, "history.log"), line + "\n", { flag: "a" });
+    // Reuse getHistoryPath() so the log filename lives in exactly one place
+    // (single source of truth) instead of being re-derived inline here.
+    appendFileSync(getHistoryPath(), line + "\n", { flag: "a" });
   } catch {
     // Fail-open on LOGGING only — never on the actual work.
   }

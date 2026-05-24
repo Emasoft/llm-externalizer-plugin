@@ -7473,8 +7473,7 @@ import {
   chmodSync,
   realpathSync
 } from "node:fs";
-import { resolve } from "node:path";
-import { join } from "node:path";
+import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 function getConfigDir() {
   const raw = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
@@ -8416,6 +8415,9 @@ import { join as join3 } from "node:path";
 function newOpId() {
   return `op-${randomBytes(4).toString("hex")}`;
 }
+function getHistoryPath() {
+  return join3(getConfigDir(), "history.log");
+}
 function resolveProject() {
   const fromEnv = process.env.CLAUDE_PROJECT_DIR;
   if (typeof fromEnv === "string" && fromEnv.trim()) return fromEnv.trim();
@@ -8512,7 +8514,7 @@ function appendHistoryLine(line) {
   try {
     const dir = getConfigDir();
     mkdirSync2(dir, { recursive: true });
-    appendFileSync(join3(dir, "history.log"), line + "\n", { flag: "a" });
+    appendFileSync(getHistoryPath(), line + "\n", { flag: "a" });
   } catch {
   }
 }

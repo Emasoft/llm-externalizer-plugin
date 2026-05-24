@@ -1352,9 +1352,11 @@ let activeResolved: ResolvedProfile | null = (() => {
 const DEFAULT_OPENROUTER_RPS = 5; // conservative default if balance can't be determined
 const DEFAULT_MAX_IN_FLIGHT_REMOTE = 200; // safety cap on total concurrent requests
 
-// When the caller doesn't specify max_tokens, we request the model's full context
-// window as the output budget. The API clamps this to the model's actual max output.
-// This ensures the LLM is never artificially truncated — truncation causes more harm
+// Fixed sampling temperature for all models (not user-configurable). Low value
+// keeps analysis deterministic and reduces hallucination on code-review tasks.
+// (Max-output-tokens fallback is handled separately in resolveDefaultMaxTokens(),
+// which requests the model's full context window so output is never artificially
+// truncated.)
 const DEFAULT_TEMPERATURE = 0.1;
 
 // Appended to ALL system prompts to prevent verbose output that wastes tokens and causes truncation.
@@ -5952,7 +5954,7 @@ async function dispatchCallToolInner(
           // Collect results for this file group (merged-per-group output)
           const batchResults: string[] = [];
           if (chatSkipped.length > 0) {
-            const skipNote = `SKIPPED (exceeds 800 KB payload budget): ${chatSkipped.length} file(s)\n${chatSkipped.map((f) => `  - ${f}`).join("\n")}`;
+            const skipNote = `SKIPPED (exceeds ${chatBudgetBytes / 1024} KB payload budget): ${chatSkipped.length} file(s)\n${chatSkipped.map((f) => `  - ${f}`).join("\n")}`;
             batchResults.push(skipNote);
           }
           for (let gi = 0; gi < groups.length; gi++) {

@@ -372,8 +372,9 @@ async function main(): Promise<number> {
     let score: ModelScore | null = null;
     if (outcome.ok) {
       score = scoreRun(outcome, truth);
+      // Inside the `if (outcome.ok)` branch, so the outcome is always OK here.
       console.error(
-        `[benchmark]   ${outcome.ok ? "OK" : "ERR"} — pass=${score.pass}  meanF1=${(score.meanF1 * 100).toFixed(1)}%  ${outcome.inputTokens} in / ${outcome.outputTokens} out tok  ${outcome.latencyMs.toFixed(0)}ms`,
+        `[benchmark]   OK — pass=${score.pass}  meanF1=${(score.meanF1 * 100).toFixed(1)}%  ${outcome.inputTokens} in / ${outcome.outputTokens} out tok  ${outcome.latencyMs.toFixed(0)}ms`,
       );
     } else {
       console.error(`[benchmark]   ERR — ${outcome.error}`);
