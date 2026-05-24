@@ -381,13 +381,18 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("error: --model is required (use --print-vram-only to skip)", file=sys.stderr)
         return 2
 
-    # FP8 KV-cache requires CUDA driver ≥ 535. Below that we silently drop
-    # the flag and warn the user; the rest of the tier config still applies.
-    fp8_kv_supported = gpu.driver_major == 0 or gpu.driver_major >= MIN_CUDA_DRIVER_FOR_FP8
+    # FP8 KV-cache requires CUDA driver ≥ 535. If the driver version is
+    # UNKNOWN (unparseable → driver_major == 0) we treat it as UNSUPPORTED:
+    # adding `--kv-cache-dtype fp8` to a driver that cannot run fp8 kernels
+    # makes vLLM fail to start, so "unknown" must be conservative (disable +
+    # warn), never optimistic.
+    fp8_kv_supported = gpu.driver_major >= MIN_CUDA_DRIVER_FOR_FP8
     if tier.kv_cache_dtype == "fp8" and not fp8_kv_supported:
+        driver_desc = gpu.driver_version.strip() or "unknown"
         print(
-            f"warning: CUDA driver {gpu.driver_version} < {MIN_CUDA_DRIVER_FOR_FP8} — "
-            "fp8 KV-cache disabled. Update your NVIDIA driver for ~30% VRAM savings.",
+            f"warning: CUDA driver {driver_desc} < {MIN_CUDA_DRIVER_FOR_FP8} "
+            "(or unparseable) — fp8 KV-cache disabled. Update your NVIDIA driver "
+            "for ~30% VRAM savings.",
             file=sys.stderr,
         )
 

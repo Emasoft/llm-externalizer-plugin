@@ -191,11 +191,35 @@ If the user picks vllm-metal OR vMLX, **do NOT use the install table below** —
 |---|---|---|---|
 | Ollama | `brew install ollama && ollama serve &` | `curl -fsSL https://ollama.com/install.sh \| sh && ollama serve &` | guided installer at `https://ollama.com/download/windows` |
 | LM Studio | guided installer at `https://lmstudio.ai/download` (then Developer tab → Start Server) | n/a (Windows GUI app) | guided installer at `https://lmstudio.ai/download` |
-| vLLM | Apple Silicon — invoke `Skill(skill: "vllm-metal-setup")` (community vllm-metal plugin: venv at `~/.venv-vllm-metal`, OpenAI-compatible on `:8000`, fits the `vllm-local` preset unchanged). Intel Macs have no GPU path — use LM Studio / Ollama instead. **When to invoke:** the user is on Apple Silicon AND picked vLLM in the backend-choice sub-step above, or asked for "vllm on my mac" / "set up vllm-metal". The skill handles preflight, install, serve, `VLLM_METAL_*` env tuning, and verification. | `uv pip install vllm` then `vllm serve <model> --port 8000` | not officially supported on Windows native |
+| vLLM | Apple Silicon — invoke `Skill(skill: "vllm-metal-setup")` (community vllm-metal plugin: venv at `~/.venv-vllm-metal`, OpenAI-compatible on `:8000`, fits the `vllm-local` preset unchanged). Intel Macs have no GPU path — use LM Studio / Ollama instead. **When to invoke:** the user is on Apple Silicon AND picked vLLM in the backend-choice sub-step above, or asked for "vllm on my mac" / "set up vllm-metal". The skill handles preflight, install, serve, `VLLM_METAL_*` env tuning, and verification. | Linux+NVIDIA: `uv pip install vllm`, then build the serve command with the VRAM autoconfig helper (see the **Linux + NVIDIA vLLM** consult note below) instead of a bare `vllm serve` | not officially supported on Windows native |
 | vMLX | Apple Silicon only — invoke `Skill(skill: "vmlx-setup")` (PyPI `vmlx` via `uv tool install`, MLX-native, OpenAI-compatible on `:8000`, fits `vllm-local` / `generic-local`; ships built-in `vmlx doctor` + `vmlx bench`). **When to invoke:** the user is on Apple Silicon AND picked vMLX in the backend-choice sub-step above, or asked for "mlx-native inference", "vmlx", or "set up vmlx". The skill handles preflight, install, serve flags tuned for scan workloads (`--continuous-batching`, `--enable-prefix-cache`, `--enable-pld`, `--kv-cache-quantization`), and the built-in `doctor` / `bench` reliability + perf checks. | not supported (Apple-Silicon-only) | not supported (Apple-Silicon-only) |
 | llama.cpp | `brew install llama.cpp` then `llama-server -m <gguf> --port 8080 -c 32768` | `git clone https://github.com/ggerganov/llama.cpp && cd llama.cpp && cmake -B build && cmake --build build -j8` | use WSL2 |
 
 Print the command for the user (or invoke the matching skill), wait for them to confirm install + server start, then loop back to Step 2 to re-detect.
+
+#### Linux + NVIDIA vLLM — consult the VRAM autoconfig helper
+
+When the chosen runner is vLLM on Linux + NVIDIA, do NOT hand the user a bare
+`vllm serve <model>` — low-VRAM consumer cards (8-12 GB) cannot load a mid-size
+model with vLLM defaults and need INT4 weights + fp8 KV-cache + cpu-offload +
+swap tuning that vLLM does not auto-pick. Run the bundled autoconfig helper to
+emit a VRAM-tiered command:
+
+```bash
+# Free VRAM / tier only (no model needed) — show the user what they're working with:
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/vllm-cuda-autoconfig.py" --print-vram-only
+# Once a model is chosen, get the tuned `vllm serve …` command + JSON rationale:
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/vllm-cuda-autoconfig.py" \
+  --model <model-or-local-dir> --output both
+```
+
+It tiers on detected free VRAM (≥24 / 12-24 / 8-12 / <8 GB) and sets
+`--gpu-memory-utilization`, `--max-model-len`, `--quantization`,
+`--kv-cache-dtype fp8` (only when the CUDA driver is confirmed ≥ 535 — unknown
+drivers are treated conservatively), `--enforce-eager`, `--cpu-offload-gb`, and
+`--swap-space` accordingly. Stdlib-only; on non-Linux it exits 0 with a skip
+message. Present the emitted command as the serve step; fall back to the plain
+`vllm serve <model> --port 8000` only if the helper skips.
 
 ### Step 3b — Multiple runners detected: let user choose
 
@@ -306,7 +330,7 @@ Once the user picks a model, find its `quantized_downloads[]` and pick a quant c
 | Ollama | (Ollama has its own registry — skip the recommender's HF download for this runner) | `ollama pull <model-tag>` — the agent should map the chosen `model.name` to the Ollama tag heuristically (e.g. `Qwen2.5-Coder-7B-Instruct` → `qwen2.5-coder:7b`) |
 | LM Studio | `runtime` ∈ {`llama.cpp`} and `format` = `GGUF` | the entry's `download_command` (pre-built `hf download …`), then load the GGUF inside LM Studio's Developer tab |
 | llama.cpp | `runtime` = `llama.cpp` and `format` = `GGUF` | the entry's `download_command`, then `llama-server -m <local-dir>/<file>.gguf --port 8080 -c 32768` |
-| vLLM | `runtime` ≠ `llama.cpp` (vLLM serves full HF repos, not single GGUF files) | `hf download <hf_repo_id> --local-dir ~/models/<short-name>`, then `vllm serve ~/models/<short-name> --port 8000 --max-model-len 32768` |
+| vLLM | `runtime` ≠ `llama.cpp` (vLLM serves full HF repos, not single GGUF files) | `hf download <hf_repo_id> --local-dir ~/models/<short-name>`, then on Linux+NVIDIA generate the VRAM-tuned serve command via `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/vllm-cuda-autoconfig.py" --model ~/models/<short-name> --output cmd` (see the Linux+NVIDIA consult note in Step 3a); otherwise `vllm serve ~/models/<short-name> --port 8000 --max-model-len 32768` |
 
 **Always show the user the exact command before running it.** The recommender's `download_command` field is already shell-quoted and safe to copy-paste.
 
