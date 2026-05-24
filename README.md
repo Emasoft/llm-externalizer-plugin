@@ -108,11 +108,11 @@ Keeping the fix half local means the expensive model only touches code when it a
 ## Features
 
 - **Interactive setup wizard** (`/llm-externalizer:llm-externalizer-setup`, since v9.6.0) — detects your platform (OS, arch, RAM, GPU), finds installed runners (Ollama, LM Studio, vLLM, llama.cpp, Jan), helps download a Hugging Face model with the `hf` CLI, runs five calibrated compatibility tests on the chosen model, and emits a paste-ready `settings.yaml` profile snippet via a stdlib-only generator (`scripts/setup/build-snippet.py`). The wizard NEVER writes to your `settings.yaml` — user-only-configuration policy.
-- **Scan externalization** — 33 MCP tools for code review, duplicate hunting, import/reference validation, spec-compliance checks, bulk LLM-driven structured-output extraction (mass-scouting), full-sentence meaning-equivalence clustering (`cluster_synonyms`), and injection-hardened security triage (`security_scan`), all backed by a local or remote LLM you choose.
+- **Scan externalization** — 35 MCP tools for code review, duplicate hunting, import/reference validation, spec-compliance checks, bulk LLM-driven structured-output extraction (mass-scouting), full-sentence meaning-equivalence clustering (`cluster_synonyms`), and injection-hardened security triage (`security_scan`), all backed by a local or remote LLM you choose.
 - **Fix loop stays local** — fixes are applied by your Claude Code Sonnet / Opus session, NOT by the external LLM. You get the ensemble's second opinion without giving up editorial control.
 - **False-positive-aware fixers** — every fixer subagent runs a verification pass (file-read + flow-trace) before editing. Empirically ~15–30% of ensemble findings are false positives; the fixer rejects them with a typed reason.
-- **22 plugin commands** — 13 base (`setup`, `discover`, `configure`, `change-model`, `install-statusline`, `codex-scan`, `benchmark`, `search-existing-implementations`, `cluster-synonyms`, `scan-and-fix`, `scan-and-fix-serially`, `fix-report`, `fix-found-bugs`) + 8 mass-scout (`mass-scout-register`, `mass-scout-preclassify`, `mass-scout-estimate`, `mass-scout`, `mass-scout-search`, `mass-scout-search-xjob`, `mass-scout-get`, `mass-scout-export`) + 1 dedicated security tool (`security-scan`). Full list in [Plugin commands](#plugin-commands). Note: `/llm-externalizer:llm-externalizer-change-model` is a *user-only* slash wrapper around the local `scripts/apply_ensemble_choice.py` helper — the underlying MCP `change_model` and `set_settings` tools are **disabled by design** per the user-only-configuration policy. Model / profile changes always go through editing `~/.llm-externalizer/settings.yaml` (or running the setup wizard above).
-- **33 MCP tools** — 16 base (`chat`, `code_task`, `scan_folder`, `compare_files`, `check_references`, `check_imports`, `check_against_specs`, `search_existing_implementations`, `cluster_synonyms`, `discover`, `reset`, `get_settings`, `or_model_info`, `or_model_info_table`, `or_model_info_json`, plus internal helpers) + 16 mass-scout (`mass_scout_register`, `mass_scout_preclassify`, `mass_scout_estimate`, `mass_scout`, `mass_scout_search`, `mass_scout_search_xjob`, `mass_scout_get`, `mass_scout_export`, `mass_scout_jobs_list`, `mass_scout_audit_sample`, `mass_scout_body_get`, `mass_scout_build_fieldset`, `mass_scout_propose_fieldset`, `mass_scout_list_bundled_fieldsets`, `mass_scout_diff`, `mass_scout_chain`) + 1 dedicated injection-hardened security tool (`security_scan`). `set_settings` and `change_model` are listed in the schema but **always return a disabled-by-design error** — never call them. The `max_retries: 3` parameter on per-file tools (chat/code_task/scan_folder) replaces the older `batch_check` workflow (parallel execution + exponential backoff + circuit breaker).
+- **24 plugin commands** — 15 base (`setup`, `discover`, `configure`, `change-model`, `install-statusline`, `codex-scan`, `benchmark`, `assess-model`, `security-triage-benchmark`, `search-existing-implementations`, `cluster-synonyms`, `scan-and-fix`, `scan-and-fix-serially`, `fix-report`, `fix-found-bugs`) + 8 mass-scout (`mass-scout-register`, `mass-scout-preclassify`, `mass-scout-estimate`, `mass-scout`, `mass-scout-search`, `mass-scout-search-xjob`, `mass-scout-get`, `mass-scout-export`) + 1 dedicated security tool (`security-scan`). Full list in [Plugin commands](#plugin-commands). Note: `/llm-externalizer:llm-externalizer-change-model` is a *user-only* slash wrapper around the local `scripts/apply_ensemble_choice.py` helper — there is no `change_model` or `set_settings` MCP tool (the server is read-only by design). Model / profile changes always go through editing `~/.llm-externalizer/settings.yaml` (or running the setup wizard above).
+- **35 MCP tools** — 16 core/utility (`chat`, `code_task`, `scan_folder`, `compare_files`, `check_references`, `check_imports`, `check_against_specs`, `search_existing_implementations`, `cluster_synonyms`, `batch_check`, `discover`, `reset`, `get_settings`, `or_model_info`, `or_model_info_table`, `or_model_info_json`) + 16 mass-scout (`mass_scout_register`, `mass_scout_preclassify`, `mass_scout_estimate`, `mass_scout`, `mass_scout_search`, `mass_scout_search_xjob`, `mass_scout_get`, `mass_scout_export`, `mass_scout_jobs_list`, `mass_scout_audit_sample`, `mass_scout_body_get`, `mass_scout_build_fieldset`, `mass_scout_propose_fieldset`, `mass_scout_list_bundled_fieldsets`, `mass_scout_diff`, `mass_scout_chain`) + 3 security / model-qualification (`security_scan`, `security_triage_benchmark`, `assess_model`). The MCP server is **read-only by design** — there are no `set_settings`, `change_model`, `fix_code`, `batch_fix`, `merge_files`, `split_file`, `revert_file`, or `custom_prompt` tools (configuration is user-only; `custom_prompt` was merged into `chat`). The `max_retries: 3` parameter on per-file tools (chat/code_task/scan_folder) replaces the older `batch_check` workflow (parallel execution + exponential backoff + circuit breaker); `batch_check` itself is DEPRECATED.
 - **6 internal agents** — setup wizard + reviewer + 4 fixer variants (parallel/serial × Sonnet/Opus). The setup-agent ships with five preloaded Hugging Face helper skills (`huggingface-best`, `huggingface-local-models`, `huggingface-mlx-models`, `hf-cli`, `huggingface-community-evals`) — all marked `user-invocable: false`. See [Agents](#agents).
 - **3 backend modes** — `local` (sequential), `remote` (parallel, single model), `remote-ensemble` (parallel, three models → combined report).
 - **6 backend presets** — LM Studio, Ollama, vLLM, llama.cpp, generic local, OpenRouter.
@@ -208,11 +208,11 @@ The fastest path is the bundled interactive wizard:
 
 The wizard inspects your platform (OS, arch, RAM, GPU), looks for installed local-model runners (Ollama, LM Studio, vLLM, llama.cpp, Jan), helps you install one if none is present, downloads a Hugging Face model via the `hf` CLI (installing it on demand), runs five calibrated compatibility tests (smoke / structured output / code understanding / long context / output length), and finishes by printing a ready-to-paste `settings.yaml` profile snippet generated by `scripts/setup/build-snippet.py`. The wizard **never** writes to your `settings.yaml` — it stays user-only by policy. On Apple Silicon the wizard cross-links the [`vllm-metal-setup`](skills/vllm-metal-setup/SKILL.md) and [`vmlx-setup`](skills/vmlx-setup/SKILL.md) skills for MLX-native serving paths.
 
-Manual options A–D below remain fully supported for users who want explicit control over which backend, model, and profile structure to use. Pick one of them if you already know your stack, or skip back here for the wizard if anything goes wrong.
+Manual options A–D below remain fully supported for users who want explicit control over which backend, model, and profile structure to use. Pick one of them if you already know your stack, or skip back here for the wizard if anything goes wrong. For the complete manual path — settings.yaml schema, the per-platform / per-GPU backend matrix, model sizing, and troubleshooting — see [`docs/setup-and-configuration.md`](docs/setup-and-configuration.md).
 
 ### 1 · Configure a backend
 
-Pick **one** of the following four options.
+Pick **one** of the following backends. The four most common are below; vLLM and llama.cpp follow the same shape — see [Configuration → E. Local — vLLM or llama.cpp](#configuration).
 
 <details open>
 <summary><b>A. OpenRouter (ensemble — recommended for best quality, paid)</b></summary>
@@ -349,17 +349,19 @@ The command will auto-discover your codebase, present the file list for confirma
 
 Commands are slash-invoked inside Claude Code. The format is `/llm-externalizer:llm-externalizer-<name>`.
 
-### Base commands (12)
+### Base commands (15)
 
 | Command | Purpose | Produces |
 |---|---|---|
 | `/llm-externalizer:llm-externalizer-setup` | Interactive setup wizard — detects platform, installs runner if needed, downloads model, runs five compatibility tests, prints paste-ready profile snippet | `settings.yaml` profile snippet (user pastes manually) |
 | `/llm-externalizer:llm-externalizer-discover` | Print active profile, model, auth, context window, health | Text summary |
 | `/llm-externalizer:llm-externalizer-configure` | Read-only profile inspector (edit `settings.yaml` to change) | Profile table |
-| `/llm-externalizer:llm-externalizer-change-model` | Switch the active profile's model | Confirmation + new active model |
+| `/llm-externalizer:llm-externalizer-change-model` | User-only config helper — prints a paste-ready `settings.yaml` edit (via `scripts/apply_ensemble_choice.py`) then guides you to save and call `reset`. There is no `change_model` MCP tool; the server is read-only | `settings.yaml` edit guidance |
 | `/llm-externalizer:llm-externalizer-install-statusline` | Install the bundled multi-tier statusline (credit balance, model, context bar, MCP cost, git, usage limits) | Updated `settings.json` |
 | `/llm-externalizer:llm-externalizer-codex-scan` | Codex-style structured scan of a file or codebase with fixed rubric | Codex-style report |
 | `/llm-externalizer:llm-externalizer-benchmark` | Run the OpenRouter model-selection harness over your sample to compare candidates | Benchmark report |
+| `/llm-externalizer:llm-externalizer-assess-model` | Assess one model against every LLM tool's per-tool requirements (free — no LLM call, just a public catalog fetch); shows per-tool `OK`/`NO` + which qualifying tools also need a benchmark pass | Per-tool requirements table |
+| `/llm-externalizer:llm-externalizer-security-triage-benchmark` | Qualify model(s) for `security_scan` against the labeled golden dataset via the real judge pipeline; recommends the best same-or-cheaper passer (never pricier) | Recommendation + JSON/markdown report |
 | `/llm-externalizer:llm-externalizer-search-existing-implementations` | PR duplicate-check — "is this feature already implemented anywhere?" | Exhaustive `NO` / `YES symbol=<name> lines=<a-b>` per file |
 | `/llm-externalizer:llm-externalizer-cluster-synonyms` | Cluster SENTENCES / short labels by full-sentence meaning equivalence (taxonomy / ontology / label canonicalisation, 10k–1M items). File-in, file-out, zero orchestrator tokens; resumable + budget-capped | `clusters.jsonl` + `clusters_summary.json` + `stats.json` + `checkpoint.sqlite` + counter line |
 | `/llm-externalizer:llm-externalizer-scan-and-fix` | Scan whole codebase → per-file reports → parallel fixer subagents (≤15 concurrent) → joined report | Per-file scan reports + fixer summaries + joined report |
@@ -431,6 +433,36 @@ Same parameters as `scan-and-fix`. Fix phase differs: one fixer subagent at a ti
 |---|---|---|---|---|
 | `@<merged-report.md>` or bare path | positional path | no | aggregate ALL reports in `./reports/llm-externalizer/` | If omitted, every report without a `.fixer.` sibling is aggregated into one canonical bug list |
 
+### `/llm-externalizer:llm-externalizer-setup`
+No parameters. Interactive wizard. WSL2 users may pass `--include-wsl2-host` to also probe the Windows side for reachable runners.
+
+### `/llm-externalizer:llm-externalizer-change-model`
+No parameters. User-only config helper — prints a paste-ready `settings.yaml` edit, then guides you to save and call MCP `reset`. There is no `change_model` MCP tool.
+
+### `/llm-externalizer:llm-externalizer-install-statusline`
+No parameters. Honors the `REFRESH_INTERVAL` env var (seconds; default `3`) when invoking the underlying installer.
+
+### `/llm-externalizer:llm-externalizer-codex-scan`
+Takes a file or folder path (auto-discovers the codebase when omitted). Same target/file-list conventions as `scan-and-fix`.
+
+### `/llm-externalizer:llm-externalizer-cluster-synonyms`
+Wraps the `cluster_synonyms` tool / `bin/llm-externalizer cluster-synonyms --input-json '<json>'`. Inputs: `input_file` (JSONL of `{id, sentence}`), `output_dir`, optional `embeddings_file`, `policy_file`, `resume_from`.
+
+### `/llm-externalizer:llm-externalizer-benchmark`
+Runs the OpenRouter model-selection harness (`llm-ext-benchmark`) over your sample. Use `--assess-model <id>` for the free requirements check, or `--security-triage [--model <id>]` for the judged `security_scan` benchmark.
+
+### `/llm-externalizer:llm-externalizer-assess-model`
+
+| Parameter | Kind | Required | Default | Meaning |
+|---|---|---|---|---|
+| `<model-id>` | positional string | yes | — | OpenRouter model id to assess against every LLM tool's per-tool requirements (free — no LLM call, no API key) |
+
+### `/llm-externalizer:llm-externalizer-security-triage-benchmark`
+
+| Parameter | Kind | Required | Default | Meaning |
+|---|---|---|---|---|
+| `--model <id>` | string | no | benchmark every candidate | Qualify one model for `security_scan` against the labeled golden dataset via the real judge pipeline. Needs `$OPENROUTER_API_KEY` |
+
 ### Mass-scouting parameter notes
 
 The `mass-scout` family runs a cheap LLM (default `qwen/qwen-2.5-7b-instruct`) over hundreds-to-millions of files and extracts a SAME-shape structured payload defined per call. Pipeline: **register → preclassify → estimate → scout → search**. See `skills/llm-externalizer-mass-scouting/SKILL.md` (and its `references/`) for the full walkthrough including the troubleshooting flowchart, worked example, fieldset dialect, and glossary.
@@ -456,6 +488,11 @@ CLI equivalents are exposed as `bin/llm-externalizer mass-scout <subcommand>` fo
 
 These are **direct MCP tool calls** — addressable by skills, custom agents, or scripts as `mcp__plugin_llm-externalizer_llm-externalizer__<tool>`. End users typically don't call these directly; they use the slash commands above. Tools are listed here for advanced users writing custom workflows.
 
+> **In-depth docs** (`docs/`, on-demand companions to the lean always-loaded `rules/use-llm-externalizer.md`):
+> - [`agent-usage-reference.md`](docs/agent-usage-reference.md) — full operational reference: per-tool tables, the batching model, the `answer_mode` explanation, the profile/auth/`tool_models` workflow, usage patterns, safety, constraints.
+> - [`tool-use-cases.md`](docs/tool-use-cases.md) — "which tool for which goal?" decision guide; when to pick each tool and what to use instead.
+> - [`setup-and-configuration.md`](docs/setup-and-configuration.md) — setup wizard + manual config, the settings.yaml schema, and the per-platform / per-GPU backend matrix (local & remote).
+
 ### Analysis tools
 
 | Tool | Purpose |
@@ -469,7 +506,7 @@ These are **direct MCP tool calls** — addressable by skills, custom agents, or
 | `check_against_specs` | Compare sources against a spec file; report deviations |
 | `search_existing_implementations` | FFD-batched duplicate hunt; exhaustive `NO` / `YES symbol=<name> lines=<a-b>` per file |
 | `cluster_synonyms` | Cluster SENTENCES / short labels by full-sentence meaning equivalence (NOT word-level). File-in, file-out, zero orchestrator tokens; the whole batch+verify+canonicalise loop runs in the server. For taxonomy / ontology / label canonicalisation over 10k–1M items. Resumable from a checkpoint; budget-capped. CLI: `bin/llm-externalizer cluster-synonyms --input-json '<json>'` |
-| `batch_check` | Multi-file sanity check wrapper |
+| `batch_check` | Multi-file sanity check wrapper (DEPRECATED — use `chat` / `code_task` with `answer_mode=0`, `max_retries=3`) |
 
 ### Mass-scouting tools (16)
 
@@ -478,7 +515,7 @@ The base 8-tool pipeline plus 8 follow-on tools for fieldset authoring, job intr
 | Tool | Purpose |
 |---|---|
 | `mass_scout_register` | Walk a folder / take explicit `file_paths`; cache every body in SQLite (idempotent). Honors `.gitignore` by default; `--git-diff <ref>` for incremental |
-| `mass_scout_preclassify` | Script-only bucket tagger (binary / sourcecode / config / docs / log / rules / unknown) |
+| `mass_scout_preclassify` | Script-only bucket tagger (binary / sourcecode / config / documentation / log_to_classify / rules_to_eval / has_frontmatter / unknown) |
 | `mass_scout_estimate` | Cost / time / cap-skipped numbers for a fieldset; honors `budget_usd`. `live_context` queries OpenRouter for the real provider cap |
 | `mass_scout` | Compile fieldset → JSON Schema → call LLM per file → repair + validate → persist; emits MCP `notifications/progress` per file |
 | `mass_scout_search` | Per-job search (regex bypass / FTS5 / structured / combined) |
@@ -493,9 +530,14 @@ The base 8-tool pipeline plus 8 follow-on tools for fieldset authoring, job intr
 | `mass_scout_list_bundled_fieldsets` | List the 4 plugin-shipped fieldsets accepted as `bundled:<name>`: code-audit, skill-audit, security-audit, pr-review |
 | `mass_scout_diff` | Compare two jobs row-by-row; counts only_in_a / only_in_b / changed (with changed_keys) |
 | `mass_scout_chain` | Re-scout the SUBSET of an existing job's results matching a JSON-extract filter, with a fresh fieldset |
-| `security_scan` | **Dedicated, injection-hardened** security triage for suspected-malicious code. NOT the mass_scout pipeline — a bespoke judge with a nonce-delimited untrusted-data envelope, hardened system prompt, strict json_schema output, in-band injection pre-scan, and fail-safe-to-`uncertain` on every error/deviation. Takes a batch of `targets[]` (inline snippet \| file_path+line+context_lines window \| path_glob) + per-category rubrics; emits per-item `{verdict: threat\|not_threat\|uncertain, confidence, reason, injection_observed}` to a JSON + markdown report. CLI: `bin/llm-externalizer security-scan --input-json '<json>'`. Env: `$OPENROUTER_API_KEY` (absent ⇒ all verdicts `uncertain`) |
 
 The CLI exposes every sub-command as `bin/llm-externalizer mass-scout <subcommand>`. The 8 slash commands listed above are 1:1 wrappers around the base 8 sub-commands; the remaining 8 are MCP-only and are addressed by skills/agents. The `llm-externalizer-mass-scouting` skill walks through the full pipeline including the bundled fieldsets, troubleshooting flowchart, and worked example.
+
+### Security tools
+
+| Tool | Purpose |
+|---|---|
+| `security_scan` | **Dedicated, injection-hardened** security triage for suspected-malicious code. NOT the mass_scout pipeline — a bespoke judge with a nonce-delimited untrusted-data envelope, hardened system prompt, strict json_schema output, in-band injection pre-scan, and fail-safe-to-`uncertain` on every error/deviation. Takes a batch of `targets[]` (inline snippet \| file_path+line+context_lines window \| path_glob) + per-category rubrics; emits per-item `{verdict: threat\|not_threat\|uncertain, confidence, reason, injection_observed}` to a JSON + markdown report. CLI: `bin/llm-externalizer security-scan --input-json '<json>'`. Env: `$OPENROUTER_API_KEY` (absent ⇒ all verdicts `uncertain`) |
 
 ### Utility tools
 
@@ -505,6 +547,18 @@ The CLI exposes every sub-command as `bin/llm-externalizer mass-scout <subcomman
 | `reset` | Soft-restart — waits for running requests, reloads `settings.yaml`, clears caches |
 | `get_settings` | Copy `settings.yaml` to the output dir for read-only inspection |
 | `or_model_info` / `or_model_info_table` / `or_model_info_json` | OpenRouter model params / pricing / latency / uptime — three formats |
+
+### Model-qualification tools
+
+Per-tool model selection (TRDD-f45eeaa0): each LLM tool declares its own
+requirements + (optionally) a benchmark; a model serves a tool only if it meets
+the requirements **and** passes that tool's benchmark. See
+[Configuration § F. Per-tool model overrides](#f-per-tool-model-overrides-advanced).
+
+| Tool | Purpose |
+|---|---|
+| `assess_model` | Assess ONE model against EVERY LLM tool's per-tool requirements — free: no LLM call, no token cost (just a public catalog fetch, no API key). Per-tool `OK` / `NO` + which qualifying tools also need a benchmark pass |
+| `security_triage_benchmark` | Qualify model(s) for `security_scan` against the labeled golden dataset, scored via the real judge pipeline; recommends the best same-or-cheaper PASSER (never a pricier model). Cached per-model-per-day. Env: `$OPENROUTER_API_KEY` |
 
 ### `answer_mode` (every multi-file analysis tool)
 
@@ -523,7 +577,7 @@ The CLI exposes every sub-command as `bin/llm-externalizer mass-scout <subcomman
 
 | Parameter | Default | Description |
 |---|---|---|
-| `output_dir` | `./reports/llm-externalizer/` | Absolute path for reports |
+| `output_dir` | `<project>/reports/llm-externalizer/` | Absolute path for reports. Default is anchored on `$CLAUDE_PROJECT_DIR` (cwd fallback) — never derived from git. Overridable here or via `$LLM_OUTPUT_DIR` |
 | `max_retries` | `1` | Per-file retries in mode 0. Set `3` for parallel + retry + circuit breaker |
 | `redact_regex` | — | JavaScript regex — matches become `[REDACTED:USER_PATTERN]` |
 | `scan_secrets` | `true` | Run the secret detector on every input file before sending to the LLM |
@@ -664,6 +718,62 @@ profiles:
 
 Set `model:` to whatever ID your server advertises at its `/v1/models` endpoint.
 
+### F. Per-tool model overrides (advanced)
+
+Every LLM-using tool normally runs on the active profile's `model`. You can
+override the model **per tool** with an optional `tool_models:` map on a profile.
+This lets one backend serve, say, `security_scan` with a cheap small model while
+`code_task` uses a stronger one — without juggling multiple active profiles.
+
+```yaml
+profiles:
+  remote-ensemble:
+    mode: remote-ensemble
+    api: openrouter-remote
+    model:        "google/gemini-2.5-flash"
+    second_model: "x-ai/grok-4.1-fast"
+    third_model:  "qwen/qwen3.6-plus"
+    api_key: $OPENROUTER_API_KEY
+    tool_models:                       # optional — absent ⇒ this profile's `model`
+      security_scan: "qwen/qwen-2.5-7b-instruct"
+      code_task:     "google/gemini-2.5-flash"
+```
+
+**Resolution order** for a given tool (first match wins):
+
+1. an explicit `model` passed in the tool call (e.g. `security_scan`'s `model` arg);
+2. `tool_models.<tool>` on the active profile;
+3. the tool's own built-in default (e.g. `security_scan` → `qwen/qwen-2.5-7b-instruct`);
+4. otherwise the profile's `model`.
+
+So a profile with no `tool_models` behaves exactly as before — this is fully
+back-compatible. Keys must be real LLM-tool names (the loader rejects typos like
+`securty_scan`); values are model ids your backend advertises.
+
+**Vet a model before you assign it.** Each tool declares its own requirements
+(cost ceiling, context, output, structured-output / reasoning support), and some
+tools additionally gate selection on a benchmark. Two helpers:
+
+```bash
+# Which tools can a model serve (requirements only — free, no LLM call, no API key)?
+llm-ext-benchmark --assess-model google/gemini-2.5-flash
+#   …or the slash command:  /llm-externalizer:llm-externalizer-assess-model
+
+# For a benchmarked tool (today: security_scan), confirm it actually PASSES:
+llm-ext-benchmark --security-triage --model google/gemini-2.5-flash
+#   …or:  /llm-externalizer:llm-externalizer-security-triage-benchmark
+```
+
+A model you put in `tool_models.<tool>` for a benchmarked tool **should pass that
+tool's benchmark first**. The standing rule holds throughout: the auto-selection
+gates never bump a tool to a *pricier* model than its incumbent.
+
+> [!NOTE]
+> Today exactly one tool (`security_scan`) ships a model-judgment benchmark
+> (`security-triage`); `mass_scout` reuses the keyword-classification benchmark.
+> The other tools are gated by **requirements only** until their golden dataset
+> lands — `--assess-model` shows, per tool, whether a benchmark gate also applies.
+
 ### Backend presets
 
 | Preset | Protocol | Default URL | Auth env var |
@@ -682,6 +792,9 @@ Set `model:` to whatever ID your server advertises at its `/v1/models` endpoint.
 | `OPENROUTER_API_KEY` | `openrouter-remote` preset |
 | `LM_API_TOKEN` | `lmstudio-local`, `generic-local` presets |
 | `VLLM_API_KEY` | `vllm-local` preset |
+| `LLM_EXT_CONFIG_DIR` | Settings + history-log directory (default `~/.llm-externalizer`) |
+| `LLM_OUTPUT_DIR` | Default report directory (overrides the per-call `output_dir` default) |
+| `LLM_EXT_INSTALL_RULE` | Set to `0` to opt out of auto-installing `rules/use-llm-externalizer.md` into `~/.claude/rules/` |
 
 > [!NOTE]
 > The **shell environment variable is the recommended way** to provide every key listed above. Both the MCP server and the statusline subprocess inherit it automatically, and the `llm-externalizer` CLI sees the same value with no extra plumbing. Profile-level `api_key` / `api_token` fields and the Claude Code keychain (`userConfig.openrouter_api_key`) are supported as fallbacks but only the MCP server sees them — the statusline's 🏦 panel stays blank, and ad-hoc CLI calls won't pick the key up. See [First run § A. OpenRouter](#first-run) for the full precedence list and the trade-offs.
@@ -816,13 +929,13 @@ llm-externalizer-plugin/
 ├── .claude-plugin/plugin.json     # Plugin manifest
 ├── .mcp.json                      # MCP server launcher
 ├── bin/                           # MCP launcher + CLI wrapper
-├── commands/                      # 20 slash commands
+├── commands/                      # 24 slash commands
 ├── agents/                        # 6 internal agents (reviewer + 4 fixers + setup-agent)
-├── skills/                        # 14 auto-discovered skills
-├── rules/                         # Canonical usage rules bundled for users
+├── skills/                        # 15 auto-discovered skills
+├── rules/                         # Lean always-loaded usage rule (auto-installed to ~/.claude/rules/)
 ├── mcp-server/                    # Bundled TypeScript MCP server
 ├── scripts/                       # Python: setup, publish, validators, helpers
-└── docs/                          # Banner, cost-comparison image, OpenRouter refs
+└── docs/                          # Banner, cost image, agent docs (usage-reference, tool-use-cases, setup-and-configuration), OpenRouter refs
 ```
 
 </details>

@@ -45,7 +45,8 @@ only if it meets the requirements AND passes that tool's benchmark.
    actually use it. Cached per-model-per-day.
 4. **Applies the selection gate** and recommends the best eligible model.
 5. **Writes a JSON + markdown report** to
-   `<main-repo-root>/reports/security-triage-benchmark/` and returns the
+   `<main-project-dir>/reports/security-triage-benchmark/` (anchored on
+   `$CLAUDE_PROJECT_DIR`, then cwd — never git) and returns the
    recommendation + paths.
 
 ## Inputs
@@ -54,7 +55,7 @@ only if it meets the requirements AND passes that tool's benchmark.
 |---|---|---|
 | `models` | no | Explicit OpenRouter model id(s) to assess. When omitted, auto-discover the same-or-cheaper candidate pool. |
 | `force` | no | Ignore the per-model-per-day cache and re-run every model. |
-| `output_dir` | no | Report directory. Default `<main-repo-root>/reports/security-triage-benchmark/`. |
+| `output_dir` | no | Report directory. Default `<main-project-dir>/reports/security-triage-benchmark/` (anchored on `$CLAUDE_PROJECT_DIR`, then cwd — never git). |
 
 ## The pass gate (how a model qualifies)
 
@@ -99,10 +100,11 @@ report=<absolute path to .md report>
 json=<absolute path to .json report>
 ```
 
-The recommended model is **surfaced for the operator to adopt** via the
-`security_scan` `model` parameter (the per-tool settings field is added by the
-framework extraction, [[TRDD-f45eeaa0]]). The benchmark does not auto-edit
-source.
+The recommended model is **surfaced for the operator to adopt** — either per
+call via the `security_scan` `model` parameter, or persistently via the
+`tool_models.security_scan` field on a settings.yaml profile ([[TRDD-f45eeaa0]];
+see README → Configuration § F. Per-tool model overrides). The benchmark does
+not auto-edit source.
 
 ## How to assess a new model
 

@@ -49,7 +49,20 @@ db=<path>  registered=<N>  already_registered=<R>  skipped_too_big=<K>  skipped_
 ## Next steps
 
 After register, run `/llm-externalizer:llm-externalizer-mass-scout-preclassify`
-to bucket the files, then `mass-scout-estimate` to preview cost, then
-`mass-scout` to run the LLM extraction.
+to bucket the files, then `/llm-externalizer:llm-externalizer-mass-scout-estimate`
+to preview cost, then `/llm-externalizer:llm-externalizer-mass-scout` to run
+the LLM extraction.
 
 See the `llm-externalizer-mass-scouting` skill for the full pipeline.
+
+## Example
+
+```
+/llm-externalizer:llm-externalizer-mass-scout-register --db /tmp/scout.db --root /path/to/repo/src --extensions .ts,.tsx,.md
+```
+
+Walks `/path/to/repo/src`, caches every `.ts`/`.tsx`/`.md` file body into
+`/tmp/scout.db` (skipping gitignored paths and the built-in vendor dirs),
+and prints the registered / skipped counters. For an incremental scout of
+just the files changed since `main`, use `--git-diff main` instead of a
+plain `--root` walk.

@@ -16,6 +16,11 @@ llm-externalizer mass-scout register --db /tmp/plugin.db \
   --root <project-root>/mcp-server/src \
   --extensions .ts
 
+# Script-tag each row with a bucket (sourcecode / config / documentation / …).
+# Lets the later steps scope with --bucket and skip binaries for free.
+llm-externalizer mass-scout preclassify --db /tmp/plugin.db
+# expect: total=50  classified=50  by_bucket: sourcecode=50
+
 # Trust the bundled code-audit fieldset.
 llm-externalizer mass-scout estimate --db /tmp/plugin.db \
   --fields-file bundled:code-audit \
@@ -57,7 +62,8 @@ For `qwen/qwen-2.5-7b-instruct` (current default):
 ## Reading the report
 
 The scout writes
-`<main-repo-root>/reports/mass_scouting/<TIMESTAMP>-scout-<job-slug>.md`
+`<main-project-dir>/reports/mass_scouting/<TIMESTAMP>-scout-<job-slug>.md`
+(anchored on `$CLAUDE_PROJECT_DIR`, cwd fallback — never derived from git)
 with:
 - Run summary (files_total/ok/failed, retries, cost, duration)
 - Per-field stats (top values for enums/strings, min/max/avg for ints,

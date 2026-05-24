@@ -14,8 +14,8 @@ effort: low
 
 Pure cost / time / eligibility estimator. Walks the registry, counts
 files that fit under the scout cap (default 40% of context), sums input
-+ output token counts at the model's per-million prices, and computes a
-wall-clock ETA at the worker count.
+plus output token counts at the model's per-million prices, and computes
+a wall-clock ETA at the worker count.
 
 The output is small enough to return inline — no file is written.
 
@@ -67,3 +67,14 @@ flips to `budget_allowed=false` with a reason. The downstream `scout`
 sub-command does NOT itself enforce the budget — it's the caller's
 responsibility to check the estimate first. The slash command for
 `mass-scout` always runs estimate beforehand.
+
+## Example
+
+```
+/llm-externalizer:llm-externalizer-mass-scout-estimate --db /tmp/scout.db --fields-file bundled:code-audit --budget-usd 0.50 --bucket sourcecode
+```
+
+Estimates the cost of running the bundled `code-audit` fieldset over the
+`sourcecode`-bucket files in the registry, and refuses (`budget_allowed=false`)
+if the projection exceeds $0.50. Run this before `mass-scout` so you know
+the cost and ETA up front.

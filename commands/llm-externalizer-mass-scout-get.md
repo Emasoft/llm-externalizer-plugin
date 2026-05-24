@@ -32,6 +32,16 @@ format, frontmatter flag, created_at). When `--job-id` is set, a nested
 `result` object is appended with `result_json`, `repaired`, `attempts`,
 `cost_usd`, `enriched_at` from `mass_scout_results`.
 
+## Example
+
+```
+/llm-externalizer:llm-externalizer-mass-scout-get --db /tmp/scout.db --short-id 42 --job-id job-2026-05-24
+```
+
+Prints the full file-metadata row for `short_id=42` plus the nested
+`result` object extracted by `job-2026-05-24`. Drop `--job-id` to see just
+the file metadata.
+
 ## Errors
 
 - Unknown short_id → exit 1 with `no row with short_id=<n>`

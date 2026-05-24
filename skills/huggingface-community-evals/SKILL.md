@@ -37,7 +37,7 @@ Follow the workflow in [evaluation-recipes.md](references/evaluation-recipes.md)
 2. Choose backend (vllm > hf > accelerate).
 3. Start with a smoke test (`--limit 10` or `--max-samples 10`).
 4. Scale up after smoke passes.
-5. Hand off to `hugging-face-jobs` for remote execution.
+5. For remote execution, run the same script + args on HF Jobs via the `hf jobs` CLI (see the `hf-cli` skill and https://huggingface.co/docs/huggingface_hub/en/guides/jobs).
 
 ## Output
 

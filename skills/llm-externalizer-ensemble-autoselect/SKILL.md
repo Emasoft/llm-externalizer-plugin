@@ -33,8 +33,9 @@ and takes the top three. The full filter/ranking rules live in Resources.
 ## Instructions
 
 Auto-trigger when **any** of these surface: an ensemble call returns
-`API error 404 (openrouter): {... "deprecated" ...}` (e.g. `x-ai/grok-4.1-fast`,
-2026-05-23 — OpenRouter retires models silently); a model returns a 4xx/5xx
+`API error 404 (openrouter): {... "deprecated" ...}` (OpenRouter retires
+models silently, so any configured model — including a current ensemble
+default — can start 404ing without notice); a model returns a 4xx/5xx
 **consistently** (3+ retries, same error class); the user types "rotate
 ensemble" / "swap broken model" / "auto-pick models" / "pick a better ensemble"
 / "the ensemble is broken"; or the user invokes
@@ -87,7 +88,9 @@ llm-ext-benchmark --from-cache --pick-top-n 3 --apply-profile remote-ensemble
 - If `--apply-profile` was used: the old → new model-id diff.
 - One line: "Run the `reset` MCP tool or restart Claude Code to reload."
 - Long benchmark reports are NOT pasted into chat — they live under
-  `<main-repo-root>/reports/llm-externalizer/`.
+  `<main-project-dir>/reports/llm-externalizer/` (anchored on
+  `$CLAUDE_PROJECT_DIR`, then cwd fallback — never derived from git;
+  override with the `output_dir` arg or `$LLM_OUTPUT_DIR`).
 
 ## Resources
 

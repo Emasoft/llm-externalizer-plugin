@@ -70,3 +70,13 @@ Default: human-readable table — one line per hit with `<short_id>
 <file_path> :: <snippet>`. With `--json`, returns the full
 `SearchResponse` envelope including per-hit `regex_matches` (line +
 context window) for regex hits.
+
+## Usage example
+
+```
+# Regex bypass — pull every email from a scouted job (never hits the LLM)
+/llm-externalizer:llm-externalizer-mass-scout-search --db ./scout.sqlite --job-id audit-1 --regex "all emails"
+
+# FTS5 keyword search narrowed by a structured predicate, as JSON
+/llm-externalizer:llm-externalizer-mass-scout-search --db ./scout.sqlite --job-id audit-1 --query "retry backoff" --filter '$.is_async:=:true' --json
+```

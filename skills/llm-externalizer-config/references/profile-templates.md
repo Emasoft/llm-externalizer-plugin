@@ -9,7 +9,7 @@
 - [Local generic](#local-generic-custom-url)
 - [Remote single model (OpenRouter)](#remote-single-model-openrouter)
 - [Remote single model (Claude)](#remote-single-model-claude)
-- [Remote ensemble](#remote-ensemble-two-models-in-parallel)
+- [Remote ensemble](#remote-ensemble-three-models-in-parallel)
 - [Complete settings.yaml example](#complete-settingsyaml-example)
 
 Ready-to-use YAML profile blocks. Copy into `~/.llm-externalizer/settings.yaml` under `profiles:`.
@@ -129,5 +129,6 @@ profiles:
     api: openrouter-remote
     model: "google/gemini-2.5-flash"
     second_model: "x-ai/grok-4.1-fast"
+    third_model: "qwen/qwen3.6-plus"
     api_key: $OPENROUTER_API_KEY
 ```

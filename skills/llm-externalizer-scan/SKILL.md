@@ -38,7 +38,7 @@ Limitations: `.md` files EXCLUDED by default (pass `instructions` for semantic s
 
 ## Output
 
-Reports under `<main-repo-root>/reports/llm-externalizer/` when `output_dir` is set (recommended — always pass it). The MCP server's compiled-in default `reports_dev/llm_externalizer/` is developer scratch and should not be the home for findings. Filenames embed the source filename or group id.
+Reports default to `<main-project-dir>/reports/llm-externalizer/` (the main project dir Claude Code is in); pass `output_dir` only for a custom location. Filenames embed the source filename or group id.
 
 **answer_mode**: `0`=per-file (scan_folder default), `1`=per-group (subfolder/extension/basename, 1 MB cap), `2`=merged. Controls disk output only, not LLM visibility.
 

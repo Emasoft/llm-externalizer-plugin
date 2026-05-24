@@ -18,6 +18,7 @@ on each job in turn and merges the results, sorted by FTS5 bm25 rank
 `job_id` so the caller can route follow-ups.
 
 Use cases:
+
 - "Across both my v1 and v2 scout runs of this codebase, find every
   async React file"
 - "Across all my scouts of different repos, find any AWS-key smell"
@@ -41,6 +42,7 @@ Use cases:
 ## Output
 
 Default: header line plus one entry per hit:
+
 ```
 mode=<mode>  jobs=<id1,id2>  total_examined=<N>
 hits=<K>
@@ -52,6 +54,16 @@ hits=<K>
 
 With `--json`, returns the full `XjobSearchResponse` envelope including
 `per_job` breakdown (`{<job_id>: {mode, total_examined, hits}}`).
+
+## Example
+
+```
+/llm-externalizer:llm-externalizer-mass-scout-search-xjob --db /tmp/scout.db --job-ids job-v1,job-v2 --query "async" --limit-merged 100
+```
+
+Searches both `job-v1` and `job-v2` for files matching `async`, merges the
+hits by bm25 rank (capped at 100), and tags each hit with the job it came
+from. Add `--json` to get the structured `per_job` breakdown for routing.
 
 ## Mode resolution
 

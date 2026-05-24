@@ -19,7 +19,7 @@ Spawn the `llm-externalizer-setup-agent` via the Agent tool using `subagent_type
 6. **Profile snippet** — generate a `settings.yaml` profile block with the tested context window, ready to paste.
 7. **Verification** — call `mcp__llm-externalizer__discover` after the user pastes and saves, to confirm the profile is active and the backend responds.
 
-**User-only configuration policy.** Per `skills/llm-externalizer-config/SKILL.md`, the wizard **never writes** to `~/.llm-externalizer/settings.yaml` directly — it generates the YAML snippet, shows the user where to paste it, and instructs them to call `mcp__llm-externalizer__reset` to reload. The `set_settings` MCP tool is disabled by design.
+**User-only configuration policy.** Per `skills/llm-externalizer-config/SKILL.md`, the wizard **never writes** to `~/.llm-externalizer/settings.yaml` directly — it generates the YAML snippet, shows the user where to paste it, and instructs them to call `mcp__llm-externalizer__reset` to reload. The MCP server is read-only by design: there is NO `set_settings` (or `change_model`) tool — configuration is user-only, edited by hand then reloaded with `reset`.
 
 **State persistence.** Wizard state lives under `$CLAUDE_PLUGIN_DATA/setup/` (env.json, runners.json, selected.json, test-results.json, profile.yaml), so re-invoking the command resumes where it left off.
 

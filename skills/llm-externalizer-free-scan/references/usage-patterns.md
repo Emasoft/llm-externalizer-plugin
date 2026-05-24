@@ -286,8 +286,8 @@ Alphanumeric matches become `[REDACTED:USER_PATTERN]`, numeric-only matches beco
 
 Returns one report per group:
 ```
-[group:auth] /path/to/reports_dev/llm_externalizer/code_task_group-auth_...md
-[group:api] /path/to/reports_dev/llm_externalizer/code_task_group-api_...md
+[group:auth] /path/to/reports/llm-externalizer/code_task_group-auth_...md
+[group:api] /path/to/reports/llm-externalizer/code_task_group-api_...md
 ```
 
 ## Code-optimized analysis

@@ -27,7 +27,7 @@ This command is deliberately minimal — no scan, no batching, no joining. It's 
 
 Parse `$ARGUMENTS`:
 
-- `@path/to/report.md` or `path/to/report.md` — absolute or relative path to a per-file LLM Externalizer scan report (typically `<MAIN_ROOT>/reports/llm-externalizer/<RUN_TS>.<stem>.md`).
+- `@path/to/report.md` or `path/to/report.md` — absolute or relative path to a per-file LLM Externalizer scan report (typically `<main-project-dir>/reports/llm-externalizer/<RUN_TS>.<stem>.md`, where the main project dir is `$CLAUDE_PROJECT_DIR`).
 
 **Abort rules** (`[FAILED] llm-externalizer-fix-report — <reason>`):
 
@@ -40,19 +40,16 @@ Parse `$ARGUMENTS`:
 
 ### Step 1 — Resolve and validate the report path
 
-Relative paths resolve against `$MAIN_ROOT` (the main-repo root), not `$CLAUDE_PROJECT_DIR` — when this command runs from inside a linked worktree, the report was written to the main checkout's `reports/` per the agent-reports-location rule.
+Relative paths resolve against the main project dir, which is `$CLAUDE_PROJECT_DIR` used verbatim (process cwd as fallback) — the SAME no-git resolver the MCP server uses to write reports under `<main-project-dir>/reports/llm-externalizer/`. Do NOT derive this from git: linked worktrees, monorepos whose subfolders each have their own git, and git-less roots would all resolve to the wrong directory.
 
 ```bash
-# Worktree-safe: MAIN_ROOT is the main checkout.
-if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  MAIN_ROOT="$(git worktree list | head -n1 | awk '{print $1}')"
-else
-  MAIN_ROOT="$CLAUDE_PROJECT_DIR"   # fallback for non-git trees
-fi
+# No-git: anchor relative report paths exactly where the MCP server wrote
+# them — $CLAUDE_PROJECT_DIR verbatim, else the process cwd. NEVER git.
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 RAW="${ARGUMENTS#@}"                      # strip leading @
 case "$RAW" in
   /*) REPORT_PATH="$RAW" ;;               # already absolute
-  *)  REPORT_PATH="$MAIN_ROOT/$RAW" ;;
+  *)  REPORT_PATH="$PROJECT_DIR/$RAW" ;;
 esac
 test -f "$REPORT_PATH" || { echo "[FAILED] llm-externalizer-fix-report — report not found: $REPORT_PATH"; exit 1; }
 test -s "$REPORT_PATH" || { echo "[FAILED] llm-externalizer-fix-report — report is empty: $REPORT_PATH"; exit 1; }

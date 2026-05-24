@@ -45,7 +45,8 @@ For each target it:
    A flagged snippet may never be auto-classified `not_threat` at high
    confidence unless the model explicitly explains benign provenance.
 5. **Report** — aggregates per-item rows + a summary, writes JSON + markdown
-   to `<main-repo-root>/reports/security_scan/`, and returns only the
+   to `<main-project-dir>/reports/security_scan/` (anchored on
+   `$CLAUDE_PROJECT_DIR`, then cwd — never git), and returns only the
    paths + a one-line counter.
 
 ## Inputs
@@ -56,10 +57,10 @@ For each target it:
 | `category_rubrics` | no | `{category: rubric}` map. Each rubric goes into the SYSTEM prompt (snippet content can never alter it), length-capped + delimiter-sanitized. |
 | `default_verdict_on_error` | no | Verdict on ANY error/deviation. Default `uncertain`. Never silently `not_threat`. |
 | `budget_usd` | no | Whole-job hard pre-flight gate (all-or-nothing). Refuses the entire job if the estimate exceeds it — never a silent partial scan. |
-| `model` | no | OpenRouter model id. Default `qwen/qwen-2.5-7b-instruct`. |
+| `model` | no | OpenRouter model id. Resolution order (TRDD-f45eeaa0): this `model` arg → `tool_models.security_scan` in your active settings.yaml profile → the built-in default `qwen/qwen-2.5-7b-instruct`. |
 | `git_diff_ref` | no | For `path_glob` targets, restrict to files changed since this git ref. Shape-validated against injection. |
 | `folder_root` | no | Root for relative `path_glob` / `git_diff_ref`. Default cwd. |
-| `output_dir` | no | Report directory. Default `<main-repo-root>/reports/security_scan/`. |
+| `output_dir` | no | Report directory. Default `<main-project-dir>/reports/security_scan/` (anchored on `$CLAUDE_PROJECT_DIR`, then cwd — never git). |
 | `workers` | no | Concurrent judge calls. Default 8. |
 | `max_retries` | no | Per-call validation retries. Default 1. |
 

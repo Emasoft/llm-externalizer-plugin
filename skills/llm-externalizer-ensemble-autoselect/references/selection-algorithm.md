@@ -55,7 +55,9 @@ search, or accept fewer than three models.
 
 1. Confirm the 404 is **persistent**, not transient (one model, 3+ retries
    all hit the same `400|404|410` with "deprecated" / "removed" / "not
-   available" in the body). If the error self-recovers, skip rotation.
+   available" in the body — OpenRouter retires models silently, so the
+   model that 404s today may be one of the current defaults). If the error
+   self-recovers, skip rotation.
 2. Read `~/.llm-externalizer/benchmark-results.json` — if it is fresher than
    24 hours and contains ≥ 3 qualifying survivors, jump to step 4.
 3. Run `llm-ext-benchmark` (no flags) to refresh the cache. The roster comes

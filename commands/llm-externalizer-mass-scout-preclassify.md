@@ -2,8 +2,9 @@
 name: llm-externalizer-mass-scout-preclassify
 description: |-
   Run the cheap script-only file classifier across registered files. Assigns
-  each file a bucket (binary / sourcecode / documentation / config / log /
-  rules_to_eval / has_frontmatter / unknown). Phase 2 of the pipeline.
+  each file a bucket (binary / sourcecode / documentation / config /
+  log_to_classify / rules_to_eval / has_frontmatter / unknown). Phase 2 of
+  the pipeline.
 allowed-tools:
   - mcp__llm-externalizer__mass_scout_preclassify
 argument-hint: "--db <path> [--reclassify] [--limit <n>]"
@@ -49,6 +50,16 @@ skipped_already=<S>
 no_body=<E>
 by_bucket: sourcecode=<a>, documentation=<b>, config=<c>, ...
 ```
+
+## Example
+
+```
+/llm-externalizer:llm-externalizer-mass-scout-preclassify --db /tmp/scout.db
+```
+
+Classifies every freshly-registered file in `/tmp/scout.db` into its
+bucket and prints the by-bucket breakdown. Add `--reclassify` to re-run
+over already-classified rows, or `--limit 500` to process incrementally.
 
 ## Token frugality
 

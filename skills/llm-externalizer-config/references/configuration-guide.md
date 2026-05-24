@@ -54,6 +54,7 @@ Each profile uses an `api` preset that bundles protocol + default connection set
 | `third_model` | Optional for `remote-ensemble` | Third model identifier |
 | `timeout` | No | Request timeout in seconds |
 | `context_window` | No | Context window override (0 = auto-detect) |
+| `tool_models` | No | Per-tool model map — run each LLM tool on a different model (keys are LLM-tool names, e.g. `security_scan`). Absent ⇒ the profile's `model` is used for every tool. |
 
 ## Auth Resolution
 
@@ -86,7 +87,9 @@ profiles:
     # second_model: "model-id"         # required for remote-ensemble
     # third_model: "model-id"          # optional for remote-ensemble
     # timeout: 300
-    # context_window: 100000
+    # context_window: 100000           # 0 = auto-detect
+    # tool_models:                     # optional per-tool model map
+    #   security_scan: "qwen/qwen-2.5-7b-instruct"
 ```
 
 **Step 3** — Save the file.
@@ -112,10 +115,10 @@ To recover: edit the file to fix the issue, save, and call `reset` (or restart C
 
 ## Ensemble Mode
 
-On OpenRouter with `remote-ensemble` mode, read-only content tools run on multiple models in parallel. Results are combined in one report with per-model sections.
+On OpenRouter with `remote-ensemble` mode, read-only content tools run on three models in parallel. The current default ensemble is `google/gemini-2.5-flash`, `x-ai/grok-4.1-fast`, and `qwen/qwen3.6-plus`. Results are combined in one report with per-model sections.
 
-- Per-model file size limits: grok skipped >20,000 lines, gemini skipped >50,000 lines
-- On local backends, ensemble is a no-op
+- Per-model file size limits: grok skipped >20,000 lines, qwen skipped >40,000 lines, gemini skipped >50,000 lines
+- On local backends, ensemble is a no-op (single model only)
 
 ## Environment Variables
 
@@ -125,7 +128,8 @@ On OpenRouter with `remote-ensemble` mode, read-only content tools run on multip
 | `LM_API_TOKEN` | LM Studio / generic-local auth token |
 | `VLLM_API_KEY` | vLLM auth token |
 | `LLM_EXT_CONFIG_DIR` | Override settings directory (default: `~/.llm-externalizer`) |
-| `LLM_OUTPUT_DIR` | Override output directory (default: `./reports_dev/llm_externalizer`) |
+| `LLM_OUTPUT_DIR` | Override output directory (default: `<main-project-dir>/reports/llm-externalizer/`, anchored on `$CLAUDE_PROJECT_DIR` verbatim — never git) |
+| `LLM_EXT_INSTALL_RULE` | Set to `0` to opt out of the auto-install of the `use-llm-externalizer` rule into `~/.claude/rules/` |
 
 ## Troubleshooting
 
@@ -134,7 +138,7 @@ On OpenRouter with `remote-ensemble` mode, read-only content tools run on multip
 | `discover` shows `(NOT SET)` for auth token | Env var missing from MCP server process | Add the env var to `.mcp.json` env block or export it in shell, then restart Claude Code |
 | Connection refused to local server | LM Studio / Ollama not running | Start the local server, verify URL and port |
 | Validation error on reload | Invalid profile config | Check validation rules above; ensure mode/api preset match |
-| Ensemble returns only one model's results | File exceeds size limit for one model | Normal behavior — grok limit is 20K lines, gemini 50K lines |
+| Ensemble returns only one model's results | File exceeds size limit for one model | Normal behavior — grok limit is 20K lines, qwen 40K lines, gemini 50K lines |
 | Tools return "not configured" | No active profile or settings.yaml missing | Open `~/.llm-externalizer/settings.yaml`, confirm `active:` points to a valid profile, save, call `reset` |
 | `set_settings` / `change_model` return DISABLED | Expected — tools are user-only | Edit `~/.llm-externalizer/settings.yaml` manually instead |
 | `npx llm-externalizer profile add/select/edit/remove/rename` errors out | Expected — CLI mutation is disabled | Edit `~/.llm-externalizer/settings.yaml` manually instead |

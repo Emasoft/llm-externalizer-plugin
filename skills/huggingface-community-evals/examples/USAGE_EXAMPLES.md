@@ -26,12 +26,12 @@ This document provides practical examples for **running evaluations locally** ag
 - model-card PR creation
 - Hugging Face Jobs orchestration
 
-If you want to run these same scripts remotely, use the `hugging-face-jobs` skill and pass one of the scripts in `scripts/`.
+If you want to run these same scripts remotely, submit one of the scripts in `scripts/` to HF Jobs via the `hf jobs` CLI (see the `hf-cli` skill).
 
 ## Setup
 
 ```bash
-cd skills/hugging-face-evaluation
+cd skills/huggingface-community-evals
 export HF_TOKEN=hf_xxx
 uv --version
 ```
@@ -107,4 +107,4 @@ uv run scripts/lighteval_vllm_uv.py \
 
 ## Hand-off to Hugging Face Jobs
 
-When local hardware is not enough, switch to the `hugging-face-jobs` skill and run one of these scripts remotely. Keep the script path and args; move the orchestration there.
+When local hardware is not enough, submit one of these scripts to HF Jobs via the `hf jobs` CLI (see the `hf-cli` skill) — e.g. `hf jobs uv run <script-url-or-path>`. Keep the script path and args; move the orchestration to HF Jobs. Guide: https://huggingface.co/docs/huggingface_hub/en/guides/jobs

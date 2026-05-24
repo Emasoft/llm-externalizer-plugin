@@ -41,7 +41,7 @@ Use when you need to analyze files without consuming orchestrator context, scan 
 
 `answer_mode` controls how reports are written to disk, NOT how many files the LLM sees. Files are batched 1–5 per request (FFD ~400 KB, or one group per request with `---GROUP:id---`). Ensemble = 3 responses/file; free + local = 1 response/file. Cross-file analysis across a whole codebase → `search_existing_implementations`.
 
-Reports go under `<main-repo-root>/reports/llm-externalizer/` (always pass `output_dir`). Modes: `0`=per-file, `1`=per-group, `2`=merged. Defaults: `scan_folder`=0, others=2.
+Reports go under `<main-project-dir>/reports/llm-externalizer/` (anchored on `$CLAUDE_PROJECT_DIR` verbatim, cwd fallback — never derived from git; override with `output_dir` or `$LLM_OUTPUT_DIR`). Modes: `0`=per-file, `1`=per-group, `2`=merged. Defaults: `scan_folder`=0, others=2.
 
 See [tool-reference.md](references/tool-reference.md) for the full answer_mode breakdown.
 

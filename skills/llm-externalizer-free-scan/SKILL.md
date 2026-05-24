@@ -21,7 +21,7 @@ Run a project scan using the **free** NVIDIA Nemotron 3 Super model (`nvidia/nem
 ## Prerequisites
 
 - LLM Externalizer MCP server running (auto-started by Claude Code plugin)
-- OpenRouter API key set (`$OPENROUTER_API_KEY`)
+- OpenRouter API key set via plugin `userConfig.openrouter_api_key` (keychain) OR `$OPENROUTER_API_KEY` shell env
 
 ## Instructions
 
@@ -35,14 +35,14 @@ Limitations: `.md` files EXCLUDED by default (pass `instructions` for semantic s
 
 ## Output
 
-One `.md` report per source file. The plugin's policy is to write under `<main-repo-root>/reports/llm-externalizer/` (the canonical path used by every other component); always pass an explicit `output_dir` matching that location on the tool call. The MCP server's compiled-in default `reports_dev/llm_externalizer/` is **developer scratch**, not the home for findings. Report filenames include the source filename for easy identification.
+One `.md` report per source file. Reports default to `<main-project-dir>/reports/llm-externalizer/` (the main project dir Claude Code is in); pass `output_dir` only for a custom location. Report filenames include the source filename for easy identification.
 
 ## Error Handling
 
 | Error | Cause | Resolution |
 |-------|-------|------------|
 | Service offline | MCP server not running | Restart Claude Code or run `/llm-externalizer:llm-externalizer-discover` |
-| Auth error | `$OPENROUTER_API_KEY` not set | Set the env var in `.claude/settings.json` or shell profile |
+| Auth error | OpenRouter key not set | Set plugin `userConfig.openrouter_api_key` (keychain) or export `$OPENROUTER_API_KEY` in your shell profile |
 | Empty response | Model timed out | May need simpler instructions or smaller files |
 | No files found | Wrong path or all files gitignored | Check `folder_path` is correct and `use_gitignore` setting |
 

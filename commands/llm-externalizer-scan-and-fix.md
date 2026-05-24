@@ -132,13 +132,13 @@ The agent — not a blind glob — curates the scan target. Humans cannot reliab
 
 Using `Bash`:
 
-1. Resolve the reports directory. `MAIN_ROOT` MUST be the **main-repo root**, not `$CLAUDE_PROJECT_DIR` — when this command runs inside a linked worktree, `CLAUDE_PROJECT_DIR` points to the worktree, and writing there would scatter audit output across short-lived branches. `git worktree list | head -n1` always names the main checkout first.
+1. Resolve the reports directory. `MAIN_ROOT` MUST match the MCP server's own report-root resolver (`mcp-server/src/project-root.ts`), which uses **NO git**: it is `$CLAUDE_PROJECT_DIR` when that exists on disk, else the current working dir. This is the single source of truth — git is deliberately NOT used (linked worktrees, monorepos whose subfolders each have their own git, and git-less roots all make a git-root climb pick the WRONG directory). Because this command passes `output_dir` explicitly to the scan tool, the orchestrator's `MAIN_ROOT` and the server's resolver must agree, or reports scatter.
    ```bash
-   # Worktree-safe: MAIN_ROOT is the main checkout, even when we're inside a linked worktree.
-   if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-     MAIN_ROOT="$(git worktree list | head -n1 | awk '{print $1}')"
+   # No git: mirror mcp-server/src/project-root.ts exactly.
+   if [ -n "$CLAUDE_PROJECT_DIR" ] && [ -d "$CLAUDE_PROJECT_DIR" ]; then
+     MAIN_ROOT="$CLAUDE_PROJECT_DIR"
    else
-     MAIN_ROOT="$CLAUDE_PROJECT_DIR"   # fallback for non-git trees
+     MAIN_ROOT="$(pwd)"   # last resort for a direct CLI run with no CLAUDE_PROJECT_DIR
    fi
    REPORTS_DIR="$MAIN_ROOT/reports/llm-externalizer"
    mkdir -p "$REPORTS_DIR"

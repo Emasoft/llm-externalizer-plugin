@@ -95,7 +95,7 @@ profiles:
     api: vllm-local            # OpenAI-compatible on :8000
     model: "<model-id>"        # same id you passed to `vmlx serve`
     # url defaults to http://localhost:8000 — override only on a custom port
-    # api_token: $LM_API_TOKEN # only if you started vmlx with --api-key
+    # api_token: $VLLM_API_KEY # only if you started vmlx with --api-key (vllm-local preset's default auth env)
 ```
 
 Hand snippet to user. NEVER write `~/.llm-externalizer/settings.yaml` directly.

@@ -13,8 +13,13 @@ effort: low
 
 Iterate every `mass_scout_results` row for a given `--job-id` and write
 them to a single JSONL or CSV file under
-`<main-repo-root>/reports/mass_scouting/`. The file path is returned to
-the caller so they can route it to the next stage of their workflow.
+`<main-project-dir>/reports/mass_scouting/`. The main project dir is
+`$CLAUDE_PROJECT_DIR` (the directory Claude Code is operating in), used
+verbatim; it falls back to the process cwd and is **never** derived from
+git. Override with `--output-dir <path>`. The written filename is
+`<TIMESTAMP>-export-<job-slug>.<format>`, and the absolute path is
+returned to the caller so they can route it to the next stage of their
+workflow.
 
 ## Inputs
 
@@ -23,6 +28,7 @@ the caller so they can route it to the next stage of their workflow.
 | `--db <path>` | yes | The registry |
 | `--job-id <id>` | yes | The job to export |
 | `--format jsonl\|csv` | no | Default: `jsonl` |
+| `--output-dir <path>` | no | Override the default `<main-project-dir>/reports/mass_scouting/` output directory (absolute, or relative to cwd) |
 
 ## Output
 
@@ -49,6 +55,16 @@ Columns:
 
 `result_json` is the embedded JSON (already a string). Cells that
 contain commas, quotes, or newlines are quoted and double-escaped.
+
+## Example
+
+```
+/llm-externalizer:llm-externalizer-mass-scout-export --db /tmp/scout.db --job-id job-2026-05-24 --format csv
+```
+
+Exports every result row of `job-2026-05-24` to a CSV under
+`<main-project-dir>/reports/mass_scouting/`, then returns the path so you
+can open it in pandas or a spreadsheet.
 
 ## Tips
 
