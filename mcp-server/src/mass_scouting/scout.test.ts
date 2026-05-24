@@ -16,6 +16,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import {
   buildSearchableText,
   computeCallCost,
@@ -27,6 +29,23 @@ import {
 import { parseFieldset } from "./fieldset";
 import { openRegistry, type Registry } from "./registry";
 import type { ModelPricing } from "./cost-estimate";
+
+// scout.ts now appends a usage-history line per LLM web request. Redirect the
+// history config dir to a throwaway /tmp dir for the whole suite so these
+// unit tests never write to the developer's real ~/.llm-externalizer/. /tmp is
+// used (not os.tmpdir) because getConfigDir() only permits $HOME or /tmp.
+let __histPrevCfg: string | undefined;
+let __histTmp: string;
+beforeEach(() => {
+  __histPrevCfg = process.env.LLM_EXT_CONFIG_DIR;
+  __histTmp = mkdtempSync(join("/tmp", "scout-test-hist-"));
+  process.env.LLM_EXT_CONFIG_DIR = __histTmp;
+});
+afterEach(() => {
+  if (__histPrevCfg === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
+  else process.env.LLM_EXT_CONFIG_DIR = __histPrevCfg;
+  rmSync(__histTmp, { recursive: true, force: true });
+});
 
 // ── Test fixtures ──────────────────────────────────────────────────────
 

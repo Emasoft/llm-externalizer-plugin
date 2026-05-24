@@ -15,6 +15,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { copyFileSync, existsSync, mkdtempSync } from "node:fs";
 import {
   type ResolvedProfile,
   validateSettings,
@@ -80,6 +81,18 @@ export async function createTestClient(
   const outputDir = `/tmp/__llm_ext_${config.testName}_output`;
   const timeoutMs = config.timeout * 1000;
 
+  // Isolate the spawned server's config dir so its usage-history.log (and any
+  // settings-edit side effects) land in a throwaway /tmp dir instead of the
+  // developer's real ~/.llm-externalizer/. We copy the real settings.yaml into
+  // the tmp dir first so the server still resolves the real backend the tests
+  // depend on. /tmp (not os.tmpdir) because getConfigDir() only permits $HOME
+  // or /tmp. Resolve the real settings path BEFORE overriding the env var.
+  const realSettingsPath = getSettingsPath();
+  const tmpConfigDir = mkdtempSync("/tmp/__llm_ext_cfg_");
+  if (existsSync(realSettingsPath)) {
+    copyFileSync(realSettingsPath, join(tmpConfigDir, "settings.yaml"));
+  }
+
   const transport = new StdioClientTransport({
     command: "node",
     args: [SERVER_SCRIPT],
@@ -87,6 +100,8 @@ export async function createTestClient(
       ...process.env,
       // Output .md files go to a temp dir so they don't accumulate
       LLM_OUTPUT_DIR: outputDir,
+      // History + settings-edit side effects stay in the throwaway dir.
+      LLM_EXT_CONFIG_DIR: tmpConfigDir,
     },
     stderr: "pipe",
   });

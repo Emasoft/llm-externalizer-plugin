@@ -21,6 +21,7 @@
 
 import type { Fixture } from "./ground-truth.js";
 import type { QualifiedModel } from "./discover.js";
+import { recordRequest } from "../usage-history.js";
 
 export interface RunResult {
   modelId: string;
@@ -130,6 +131,25 @@ function responseSchema(keywords: readonly string[]): Record<string, unknown> {
 }
 
 export async function runBenchmarkOnModel(
+  model: QualifiedModel,
+  keywords: readonly string[],
+  fixtures: readonly Fixture[],
+  options: RunnerOptions,
+): Promise<RunOutcome> {
+  // One benchmark OpenRouter call = one usage-history line. The runner returns
+  // (never throws) one RunOutcome per call carrying ok + latencyMs; record from
+  // it. Cost is $0.000000 — the benchmark requests token counts, not USD cost.
+  const outcome = await runBenchmarkOnModelInner(
+    model,
+    keywords,
+    fixtures,
+    options,
+  );
+  recordRequest({ ok: outcome.ok, durationMs: outcome.latencyMs, costUsd: 0 });
+  return outcome;
+}
+
+async function runBenchmarkOnModelInner(
   model: QualifiedModel,
   keywords: readonly string[],
   fixtures: readonly Fixture[],

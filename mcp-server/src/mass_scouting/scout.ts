@@ -27,6 +27,7 @@ import {
   estimateJobCost,
 } from "./cost-estimate";
 import type { Registry, RegistryRow } from "./registry";
+import { recordRequest } from "../usage-history";
 
 // ── Constants ──────────────────────────────────────────────────────────
 
@@ -492,6 +493,9 @@ async function scoutOneFile(
     const perCallMs = opts.perCallTimeoutMs ?? 90_000;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), perCallMs);
+    // One scout HTTP attempt = one usage-history line. Time each attempt so a
+    // retry produces its own line with its own ok/duration/cost.
+    const attemptStart = Date.now();
     let res: FetchResponse;
     try {
       res = await fetchImpl(apiUrl, {
@@ -506,6 +510,7 @@ async function scoutOneFile(
       clearTimeout(timeoutId);
     } catch (e) {
       clearTimeout(timeoutId);
+      recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
       const err = e as Error;
       prevError =
         err.name === "AbortError"
@@ -515,6 +520,7 @@ async function scoutOneFile(
     }
     if (!res.ok) {
       const text = await res.text().catch(() => "");
+      recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
       prevError = `HTTP ${res.status}: ${text.slice(0, 200)}`;
       continue;
     }
@@ -525,11 +531,13 @@ async function scoutOneFile(
     try {
       respJson = (await res.json()) as typeof respJson;
     } catch (e) {
+      recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
       prevError = `non-JSON response: ${(e as Error).message}`;
       continue;
     }
     const content = respJson.choices?.[0]?.message?.content;
     if (typeof content !== "string") {
+      recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
       prevError = "response had no message.content string";
       continue;
     }
@@ -540,6 +548,10 @@ async function scoutOneFile(
       content.length,
     );
     totalCost += callCost;
+    // The HTTP request itself succeeded (a parseable, billed response came
+    // back) — record it with this call's own cost, even if the content then
+    // fails JSON.parse/validation below (a content issue, not a failed request).
+    recordRequest({ ok: true, durationMs: Date.now() - attemptStart, costUsd: callCost });
 
     let parsed: unknown;
     try {

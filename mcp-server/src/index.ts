@@ -1285,6 +1285,11 @@ import {
   generateDefaultSettings,
 } from "./config.js";
 import {
+  withUsageContext,
+  recordRequest,
+  summarizeParams,
+} from "./usage-history.js";
+import {
   fetchOpenRouterModelInfo,
   formatModelInfoMarkdown,
   formatModelInfoTable,
@@ -2780,6 +2785,9 @@ async function chatCompletionNative(
         }
       : undefined;
 
+    // One completed LLM web request → one usage-history line. Local LM Studio
+    // returns no `cost` in usage, so this is $0.000000 (correct for local).
+    recordRequest({ ok: true, durationMs: Date.now() - startTime, costUsd: (usage as { cost?: number } | undefined)?.cost ?? 0 });
     return {
       content: messageContent,
       model: data.model_instance_id || conn.model,
@@ -2787,6 +2795,9 @@ async function chatCompletionNative(
       finishReason: "stop",
       truncated: false,
     };
+  } catch (e) {
+    recordRequest({ ok: false, durationMs: Date.now() - startTime, costUsd: 0 });
+    throw e;
   } finally {
     if (progressTimer) clearInterval(progressTimer);
   }
@@ -2942,10 +2953,20 @@ async function chatCompletionSimple(
       const finishReason = data.choices?.[0]?.finish_reason ?? "";
       const usage = data.usage;
 
+      // One completed LLM web request → one usage-history line (this call's own
+      // cost, not a running sum). Native delegation above is recorded inside
+      // chatCompletionNative, so this records ONLY the OpenAI-compat path.
+      recordRequest({ ok: true, durationMs: Date.now() - startTime, costUsd: usage?.cost ?? 0 });
       return { content, model, usage, finishReason, truncated: false };
     }
 
     throw lastError ?? new Error("Reasoning ladder exhausted with no response");
+  } catch (e) {
+    // Failed web request — record a FAIL line (cost 0, since no billed
+    // completion came back) then rethrow so the caller's retry/error logic is
+    // unchanged. Logging never alters control flow.
+    recordRequest({ ok: false, durationMs: Date.now() - startTime, costUsd: 0 });
+    throw e;
   } finally {
     if (heartbeat) clearInterval(heartbeat);
   }
@@ -3174,7 +3195,14 @@ async function chatCompletionJSON(
       );
     }
 
+    // One completed LLM web request → one usage-history line. The native
+    // branch above is recorded inside chatCompletionNative, so this records
+    // ONLY the OpenAI-compat structured-output path.
+    recordRequest({ ok: true, durationMs: Date.now() - jsonStartTime, costUsd: usage?.cost ?? 0 });
     return { parsed, model, usage, finishReason };
+  } catch (e) {
+    recordRequest({ ok: false, durationMs: Date.now() - jsonStartTime, costUsd: 0 });
+    throw e;
   } finally {
     if (progressTimer) clearInterval(progressTimer);
   }
@@ -5598,7 +5626,28 @@ function refreshAllToolDescriptions(): void {
  * `extra` is the SDK's RequestHandlerExtra; we only need its `_meta`.
  */
 interface DispatchExtra { _meta?: { progressToken?: string | number } }
+
+/**
+ * Public entry — installs a per-invocation usage-history context (tool name +
+ * compact redacted param summary + project dir + a fresh op-id) for the whole
+ * call, then delegates to the real dispatcher. Every `recordRequest()` fired by
+ * an LLM web request inside this call inherits this context and shares its
+ * op-id, so all of one invocation's request lines correlate. This wrapper sets
+ * context ONLY — it never writes a history line itself (the user wants one line
+ * per web request, not per invocation).
+ */
 async function dispatchCallTool(
+  name: string,
+  rawArgs: Record<string, unknown> | undefined,
+  extra: DispatchExtra,
+): Promise<{ content: { type: "text"; text: string }[]; isError?: boolean; [k: string]: unknown }> {
+  return withUsageContext(
+    { tool: name, params: summarizeParams(rawArgs) },
+    () => dispatchCallToolInner(name, rawArgs, extra),
+  );
+}
+
+async function dispatchCallToolInner(
   name: string,
   rawArgs: Record<string, unknown> | undefined,
   extra: DispatchExtra,

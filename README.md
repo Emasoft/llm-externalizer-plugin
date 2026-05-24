@@ -726,6 +726,32 @@ python3 "$env:CLAUDE_PLUGIN_ROOT\scripts\install_statusline.py"
 
 See `scripts/statusline/README.md` for the full feature matrix and width-tiering details.
 
+### Usage history
+
+Every LLM web request the plugin makes — from any MCP tool **or** the `llm-externalizer` CLI — appends one flat, human-readable line to `~/.llm-externalizer/history.log` (honors `LLM_EXT_CONFIG_DIR`; the file is created on first write, append-only, never truncated). One line per *web request* — a tool that makes several backend calls writes several lines, and a tool that makes none writes nothing. The log is for eyeballing and `grep`; the plugin ships no query/aggregation command for it.
+
+Each line has 7 ` - `-separated fields:
+
+```
+<TIMESTAMP> - <PROJECT-DIR> - <TOOL/COMMAND(params)> - <SUCCESS|FAIL> - <DURATION> - <COST> - <OP-ID>
+```
+
+- **TIMESTAMP** — local time + GMT offset, `YYYY-MM-DDTHH:MM:SS±HHMM` (sortable).
+- **PROJECT-DIR** — `CLAUDE_PROJECT_DIR` if set, else the git top-level of the working dir, else the working dir.
+- **TOOL/COMMAND(params)** — the originating tool/command plus a compact param summary (scalars inline, long strings truncated to ~80 chars, arrays as `name[N]`, **secrets redacted**; never a whole snippet or file body).
+- **SUCCESS|FAIL** — whether *that one* web request succeeded.
+- **DURATION** — wall-clock of that request, `<N>ms` (or `<N.N>s` once ≥ 1000 ms).
+- **COST** — USD of that request, `$0.000000` (6 dp); `$0.000000` for local / free / cached calls.
+- **OP-ID** — `op-<8hex>` shared by every request from the same tool/command invocation, so all the lines of one call can be correlated later with `grep <op-id> ~/.llm-externalizer/history.log`.
+
+Example:
+
+```
+2026-05-24T05:56:39+0200 - /home/me/proj - chat(instructions=Refactor the auth module…(120), input_files_paths=[2], free=true) - SUCCESS - 1.4s - $0.000007 - op-4047e633
+```
+
+Writing the log is strictly best-effort — a history-write failure never breaks or slows the actual tool call. The file lives in your home dir and may contain absolute paths; it is not committed anywhere.
+
 ---
 
 ## Troubleshooting

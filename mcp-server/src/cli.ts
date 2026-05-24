@@ -20,6 +20,7 @@ import {
   getSettingsPath,
   resolveProfile,
 } from "./config.js";
+import { withUsageContext, summarizeParams } from "./usage-history.js";
 import {
   fetchOpenRouterModelInfo,
   formatModelInfoTable,
@@ -846,6 +847,20 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  die(err instanceof Error ? err.message : String(err));
-});
+// Install a usage-history context for the whole CLI invocation so any LLM web
+// request made IN-PROCESS (the mass-scout / security-scan subcommands run
+// scout.ts / judge.ts here) is logged under this command + a shared op-id.
+// Subcommands that instead spawn the MCP server (search-existing,
+// cluster-synonyms) are logged by that child process via dispatchCallTool —
+// this parent context just stays empty for them (no in-process requests).
+const cliArgv = process.argv.slice(2);
+withUsageContext(
+  {
+    tool: `cli:${cliArgv[0] ?? "(none)"}`,
+    params: summarizeParams(cliArgv.slice(1)),
+  },
+  () =>
+    main().catch((err) => {
+      die(err instanceof Error ? err.message : String(err));
+    }),
+);
