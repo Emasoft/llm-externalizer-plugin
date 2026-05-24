@@ -124,6 +124,24 @@ which are window-insensitive; keep ≥60 for taint/provenance categories
 (path_traversal, ssrf, command_injection, sql_injection, env_injection,
 open_redirect).
 
+## Recommended model (accuracy vs. cost)
+
+The default `qwen/qwen-2.5-7b-instruct` ($0.04/M in, $0.10/M out) is the cheapest
+adequate model: it clears the mandatory safety floor (zero under-flags on
+judge-manipulation + visible-taint cases) but, being small, makes
+**safe-direction** edge-case errors — e.g. returning `uncertain` instead of
+`not_threat` on a detection/defensive snippet (issue #9), or guessing instead of
+abstaining when a value's origin is off-window (issue #10).
+
+For higher accuracy pass `model: "google/gemini-2.5-flash"` ($0.15/M in,
+$0.60/M out — ~5× the default). On the security-triage benchmark
+(`security_triage_benchmark`) it scores **0.909 with zero under-flags and zero
+critical under-flags** over the full golden dataset, handling the #9/#10 edge
+cases correctly. Per the standing same-cost rule the tool does NOT auto-bump to
+a pricier model — adopt it explicitly via `model` when the extra accuracy is
+worth the cost. Re-verify any candidate yourself with
+`llm-ext-benchmark --security-triage --model <id>`.
+
 ## CLI equivalent
 
 ```
