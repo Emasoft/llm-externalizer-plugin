@@ -1,0 +1,119 @@
+---
+trdd-id: f45eeaa0-a36b-4d70-90c3-d39813960409
+title: Per-tool model qualification framework — each tool's benchmark gates its model selection
+status: not-started
+created: 2026-05-24T06:15:05+0200
+updated: 2026-05-24T06:15:05+0200
+---
+
+# TRDD-f45eeaa0 — Per-tool model qualification framework
+
+**Filename:** `design/tasks/TRDD-20260524_061505+0200-f45eeaa0-per-tool-model-qualification-framework.md`
+**Tracked in:** this repo.
+
+## 0. User's request (verbatim intent)
+
+> each mcp tool has one (or more) specific benchmark and requirements. all
+> models must satisfy the requirement and pass the test/benchmark specific of
+> that tool to be used as new model for that tool.
+
+Generalize the per-model selection so it is **per-TOOL**: every LLM-using MCP
+tool declares its own capability **requirements** + one or more **benchmarks**;
+a model is eligible to serve a given tool ONLY if it (a) meets that tool's
+requirements AND (b) passes that tool's benchmark(s). Among eligible models of
+**equivalent (or lower) cost**, pick the best — never a pricier model
+(the standing same-cost rule).
+
+## 1. Build order — extract the framework FROM the first instance
+
+To avoid premature abstraction, the framework is **extracted from** the
+`security_scan` reference instance, not built ahead of it:
+1. [[TRDD-973a0265]] (security-triage benchmark + gate) lands first as the
+   concrete reference: dataset + scorer + runner + a single tool's selection gate.
+2. Once it works end-to-end, GENERALIZE its shape into the registry + per-tool
+   selection mechanism below.
+3. Then add each remaining tool's benchmark as an instance.
+
+So this TRDD is **blocked-by** 973a0265 (and transitively #9/#10 + #95).
+
+## 2. The framework
+
+### 2.1 Per-tool descriptor (a registry)
+Each LLM-using tool registers:
+```
+{
+  tool: "security_scan",
+  requirements: {              // hard eligibility (extends benchmark/discover.ts::qualify)
+    structured_output: true,   // response_format / json_schema
+    reasoning: true|false,
+    min_context: <tokens>,
+    cost_ceiling: "<$1/M in&out" // the standing rule
+  },
+  benchmarks: [ "<dataset+scorer+pass-threshold ref>" ]  // one or more
+}
+```
+Registry lives next to the tools (e.g. `mcp-server/src/model-qualification/registry.ts`),
+one entry per LLM-using tool: chat, code_task, scan_folder,
+search_existing_implementations, compare_files, check_references, check_imports,
+check_against_specs, cluster_synonyms, security_scan, mass_scout. (Pure-utility
+tools that make no LLM call — discover, reset, get_settings, or_model_info — have
+no descriptor.)
+
+### 2.2 Per-tool benchmarks (instances)
+Each is a golden dataset + scorer + pass-threshold, mirroring the existing
+`benchmark/` machinery (`ground-truth.ts`/`score.ts`/`runner.ts`):
+- `security_scan` → the triage benchmark ([[TRDD-973a0265]]).
+- `cluster_synonyms` → meaning-equivalence clustering accuracy (it already has a
+  pre-flight benchmark gate — fold it in).
+- `code_task` / `check_*` → code-understanding / validation accuracy.
+- `scan_folder` / `search_existing_implementations` → detection / duplicate-match
+  accuracy.
+- `mass_scout` → fieldset-extraction/classification accuracy (the existing
+  keyword-classification benchmark is the closest seed).
+- `chat` / `compare_files` → looser general-quality benchmarks.
+Datasets versioned; cases appended as issues surface.
+
+### 2.3 Per-tool model selection
+Generalize `benchmark/pick.ts`: for EACH tool, from the OpenRouter roster, keep
+models that pass that tool's `requirements` (qualify) AND its benchmark(s), then
+pick best-score → cost → latency among EQUIVALENT-cost passers. Result: a
+**per-tool model assignment** (not one global model).
+- settings.yaml gains an optional per-tool model map (default model + per-tool
+  overrides); absent → the active profile's model (back-compat).
+- A model that fails a tool's benchmark is NEVER assigned to that tool, even if
+  it's cheaper/faster.
+
+### 2.4 Re-runnable assessment ("assess a new model")
+One command runs ALL tool benchmarks against a candidate model and reports which
+tools it qualifies for (+ score per tool). 3 surfaces (MCP + CLI + slash),
+extending the existing benchmark command. Cached per-model-per-tool-per-day.
+
+## 3. Requirements per tool (first-pass capability map)
+| Tool | structured_output | reasoning | long-context | benchmark seed |
+|---|---|---|---|---|
+| security_scan | yes | yes | medium | triage (973a0265) |
+| cluster_synonyms | yes | yes | medium | meaning-equivalence (existing preflight) |
+| code_task | yes | yes | high | code-understanding |
+| scan_folder | yes | no | high | per-file detection |
+| search_existing_implementations | yes | yes | high | duplicate-match |
+| check_references/imports/against_specs | yes | no | medium | validation accuracy |
+| compare_files | yes | no | high | change-summary |
+| mass_scout | yes | no | medium | keyword-classification (existing) |
+| chat | no | no | medium | general (loose) |
+
+## 4. Acceptance
+- [ ] 973a0265 shipped as the reference instance.
+- [ ] Registry of per-tool {requirements, benchmarks}.
+- [ ] Per-tool selection: best same-cost model that PASSES that tool's gate; a
+      failing model is never assigned to that tool; pricier models never auto-
+      selected.
+- [ ] settings.yaml per-tool model map (default + overrides, back-compat).
+- [ ] One re-runnable "assess a new model across all tool benchmarks" command
+      (3 surfaces), cached.
+- [ ] Each LLM-using tool has at least one benchmark dataset + pass threshold.
+- [ ] Docs: how to add a tool's benchmark + how selection works.
+
+## 5. Status log
+| Date | Status change | Note |
+|---|---|---|
+| 2026-05-24T06:15:05+0200 | created → not-started | Captured the user's generalization: per-tool benchmarks + requirements gate per-tool model selection; best same-cost passer wins. Framework is EXTRACTED FROM the security_scan instance (973a0265) to avoid premature abstraction — blocked-by 973a0265 (→ #9/#10 + #95). Reuses the existing benchmark/ machinery (ground-truth/score/runner/pick) + discover.ts::qualify for requirements. |

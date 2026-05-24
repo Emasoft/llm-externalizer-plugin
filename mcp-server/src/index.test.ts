@@ -85,6 +85,9 @@ describe('listTools', () => {
       // security_scan — dedicated injection-hardened tool (TRDD-5bd98017),
       // registered in MASS_SCOUT_TOOLS so buildTools() picks it up.
       'security_scan',
+      // security_triage_benchmark — model qualification for the security_scan
+      // triage task (TRDD-973a0265), registered in the same array.
+      'security_triage_benchmark',
     ].sort();
 
     expect(toolNames).toEqual(expected);

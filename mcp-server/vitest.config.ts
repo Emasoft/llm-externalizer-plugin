@@ -13,6 +13,8 @@ export default defineConfig({
       'src/index.test.ts',
       'src/grouping.test.ts',
       'src/safe-body.test.ts',
+      // Global usage-history logger — one line per LLM web request.
+      'src/usage-history.test.ts',
       'src/mass_scouting/fieldset.test.ts',
       'src/mass_scouting/shorthand.test.ts',
       'src/mass_scouting/registry.test.ts',
@@ -50,6 +52,13 @@ export default defineConfig({
       // adapter (runClusterSynonymsCli). Mock rawLlmCall, no network.
       'src/cluster/wiring.test.ts',
       'src/benchmark/pick.test.ts',
+      // security-triage model benchmark — golden dataset loader, scorer, and
+      // the selection gate. Pure-TS unit tests (no LLM, no network).
+      'src/benchmark/security-triage/dataset.test.ts',
+      'src/benchmark/security-triage/score.test.ts',
+      'src/benchmark/security-triage/select.test.ts',
+      // Real-model end-to-end smoke — self-skips unless OPENROUTER_API_KEY is set.
+      'src/benchmark/security-triage/live.test.ts',
       'src/default-output-dir.test.ts',
       'src/cluster/phase2_verify.test.ts',
       'src/cluster/phase3_canonical.test.ts',

@@ -25,15 +25,17 @@ import {
 // ── Static shape checks ────────────────────────────────────────────────
 
 describe("MASS_SCOUT_TOOLS", () => {
-  it("has seventeen tools with the documented names", () => {
+  it("has eighteen tools with the documented names", () => {
     /** Phase B added 3 (jobs_list/audit_sample/body_get).
      *  Phase C2 added 2 (build_fieldset/propose_fieldset).
      *  Phase C3 added 2 (diff/chain).
      *  Phase F added 1 (list_bundled_fieldsets).
      *  TRDD-5bd98017 added 1 (security_scan — dedicated, not a mass_scout
      *  sub-command but registered in the same array so index.ts picks it up).
-     *  Total = 8 base + 5 + 2 + 1 + 1 = 17. */
-    expect(MASS_SCOUT_TOOLS.length).toBe(17);
+     *  TRDD-973a0265 added 1 (security_triage_benchmark — model qualification
+     *  for the security_scan triage task; DB-free, in-process orchestrator).
+     *  Total = 8 base + 5 + 2 + 1 + 1 + 1 = 18. */
+    expect(MASS_SCOUT_TOOLS.length).toBe(18);
     const names = MASS_SCOUT_TOOLS.map((t) => t.name).sort();
     expect(names).toEqual(
       [
@@ -54,6 +56,7 @@ describe("MASS_SCOUT_TOOLS", () => {
         "mass_scout_search",
         "mass_scout_search_xjob",
         "security_scan",
+        "security_triage_benchmark",
       ].sort(),
     );
   });
@@ -75,6 +78,7 @@ describe("MASS_SCOUT_TOOLS", () => {
       "mass_scout_propose_fieldset",
       "mass_scout_list_bundled_fieldsets",
       "security_scan",
+      "security_triage_benchmark",
     ]);
     for (const t of MASS_SCOUT_TOOLS) {
       if (NO_DB.has(t.name)) continue;

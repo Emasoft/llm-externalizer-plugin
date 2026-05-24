@@ -21,6 +21,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 
+import { withUsageContext } from "../usage-history.js";
 import { buildGroundTruth, BENCHMARK_KEYWORDS } from "./ground-truth.js";
 import {
   DEFAULT_CRITERIA,
@@ -39,6 +40,7 @@ import {
   type CachedResult,
   type PickedModel,
 } from "./pick.js";
+import { runSecurityTriageBenchmark } from "./security-triage/index.js";
 
 interface CliOptions {
   includeIds: string[];
@@ -61,6 +63,13 @@ interface CliOptions {
   /** Minimum meanF1 a model must hit to be eligible for top-N. Default
    *  0.95 — anything lower indicates the keyword classifier flunked. */
   minMeanF1: number;
+  /** Run the security_scan TRIAGE benchmark instead of the keyword task. */
+  securityTriage: boolean;
+  /** Explicit model id(s) to assess in --security-triage mode (repeatable).
+   *  When empty, the triage benchmark auto-discovers the candidate pool. */
+  triageModels: string[];
+  /** Ignore the per-model-per-day cache (currently only --security-triage). */
+  force: boolean;
 }
 
 function parseArgs(argv: readonly string[]): CliOptions {
@@ -75,6 +84,9 @@ function parseArgs(argv: readonly string[]): CliOptions {
     applyProfile: null,
     fromCache: false,
     minMeanF1: 0.95,
+    securityTriage: false,
+    triageModels: [],
+    force: false,
   };
   // Consume the value that must follow a value-taking flag. If the flag is the
   // last token, or the next token is itself a flag, fail fast — silently
@@ -128,6 +140,13 @@ function parseArgs(argv: readonly string[]): CliOptions {
       }
       opts.minMeanF1 = f;
       i++;
+    } else if (a === "--security-triage") {
+      opts.securityTriage = true;
+    } else if (a === "--model") {
+      opts.triageModels.push(takeValue(a, i));
+      i++;
+    } else if (a === "--force") {
+      opts.force = true;
     } else if (a === "--help" || a === "-h") {
       printHelp();
       process.exit(0);
@@ -168,6 +187,20 @@ function printHelp(): void {
       "                    re-applying a fresh selection without burning more calls.",
       "  --min-f1 F        Threshold a model must hit (default 0.95) to be eligible",
       "                    for top-N. 0..1.",
+      "",
+      "security_scan TRIAGE benchmark (separate task — verdict adjudication):",
+      "  --security-triage Run the security_scan triage benchmark instead of the",
+      "                    keyword task. Scores model(s) on the golden dataset via",
+      "                    the real judge pipeline and recommends the best",
+      "                    same-or-cheaper passer. Writes a report under",
+      "                    reports/security-triage-benchmark/.",
+      "  --model ID        Assess this specific model (repeatable). Without it the",
+      "                    triage benchmark auto-discovers same-or-cheaper candidates.",
+      "  --force           Ignore the per-model-per-day cache and re-run.",
+      "  Pass gate: zero under-flags on critical (judge-manipulation + visible-taint)",
+      "  cases AND aggregate score >= 0.5. Never auto-selects a pricier model.",
+      "  Fail-safe (error/timeout) cases are excluded from scoring; a run with",
+      "  >15% errored calls is INCONCLUSIVE (degraded provider) — re-run later.",
       "",
       "Criteria applied to candidates (non-baseline):",
       `  - category = ${DEFAULT_CRITERIA.category}`,
@@ -223,6 +256,14 @@ function resolveMainRoot(): string {
 
 async function main(): Promise<number> {
   const opts = parseArgs(process.argv);
+
+  // --security-triage routes to the security_scan triage benchmark — a wholly
+  // separate task (verdict adjudication, not keyword classification) that reuses
+  // the security_scan judge pipeline and gates auto-selection on a pass.
+  if (opts.securityTriage) {
+    return runSecurityTriagePhase(opts);
+  }
+
   if (opts.applyProfile !== null && opts.pickTopN === null) {
     throw new Error("--apply-profile requires --pick-top-n");
   }
@@ -365,6 +406,29 @@ async function main(): Promise<number> {
   return 0;
 }
 
+/**
+ * --security-triage phase: assess model(s) on the security_scan triage golden
+ * dataset and recommend the best same-or-cheaper passer. Writes its own JSON +
+ * markdown report under reports/security-triage-benchmark/.
+ */
+async function runSecurityTriagePhase(opts: CliOptions): Promise<number> {
+  console.error("[triage] security_scan triage model benchmark");
+  const result = await runSecurityTriageBenchmark({
+    models: opts.triageModels.length > 0 ? opts.triageModels : undefined,
+    force: opts.force,
+    onProgress: (m) => console.error(`[triage] ${m}`),
+  });
+  console.error("");
+  console.error(`[triage] ${result.summaryLine}`);
+  console.error(`[triage] recommended: ${result.recommendedModelId} (changed=${result.changed})`);
+  console.error(`[triage] spend: $${result.costUsd.toFixed(6)}`);
+  console.error(`[triage] report: ${result.mdReportPath}`);
+  console.error(`[triage] json:   ${result.jsonReportPath}`);
+  // stdout carries the machine-grep-able recommendation line.
+  process.stdout.write(`recommended_model=${result.recommendedModelId}\n`);
+  return 0;
+}
+
 /** Shared by --from-cache and the post-benchmark --pick-top-n branch. */
 function runPickPhase(results: readonly CachedResult[], opts: CliOptions): number {
   const topN = opts.pickTopN;
@@ -424,7 +488,11 @@ function buildReportPath(): string {
   return join(root, "reports", "benchmark", `${ts}-model-comparison.md`);
 }
 
-main().catch((err) => {
-  console.error("[benchmark] fatal:", err instanceof Error ? err.stack : String(err));
-  process.exit(1);
-});
+// Install a usage-history context so every per-model OpenRouter call made by
+// runBenchmarkOnModel is logged under `cli:benchmark` with a shared op-id.
+withUsageContext({ tool: "cli:benchmark", params: "" }, () =>
+  main().catch((err) => {
+    console.error("[benchmark] fatal:", err instanceof Error ? err.stack : String(err));
+    process.exit(1);
+  }),
+);

@@ -18,6 +18,7 @@
  */
 
 import { runMassScoutCli, type CliResult, type CliRunOptions } from "./cli";
+import { runSecurityTriageBenchmark } from "../benchmark/security-triage/index";
 
 // ── Public types (mirror the CLI flag set, MCP-flavoured) ─────────────
 
@@ -833,6 +834,42 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
       required: ["targets"],
     },
   },
+  {
+    name: "security_triage_benchmark",
+    description:
+      "Assess OpenRouter model(s) for the security_scan triage task against a " +
+      "labeled GOLDEN DATASET, scored via the REAL judge pipeline (same " +
+      "injection-hardened prompt + schema + clamp). Recommends the best " +
+      "SAME-OR-CHEAPER model that PASSES the benchmark (zero under-flags on " +
+      "critical judge-manipulation + visible-taint cases AND score >= 0.5); a " +
+      "pricier model is NEVER auto-selected. With no `models`, auto-discovers " +
+      "candidates that meet this tool's per-tool requirements and are not " +
+      "pricier than the incumbent default. RETURNS: recommendation + JSON/" +
+      "markdown report paths. Cached per-model-per-day. ENV: $OPENROUTER_API_KEY " +
+      "(required — a benchmark you cannot run is useless).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        models: {
+          type: "array",
+          description:
+            "Explicit OpenRouter model id(s) to assess. When omitted, " +
+            "auto-discover the same-or-cheaper candidate pool.",
+          items: { type: "string" },
+        },
+        force: {
+          type: "boolean",
+          description: "Ignore the per-model-per-day cache and re-run.",
+        },
+        output_dir: {
+          type: "string",
+          description:
+            "Report dir; defaults to <main-root>/reports/security-triage-benchmark/.",
+        },
+      },
+      required: [],
+    },
+  },
 ];
 
 /** Set of MCP tool names provided by mass-scouting. Used by index.ts's dispatcher. */
@@ -1119,6 +1156,31 @@ export async function dispatchMassScoutTool(
           opts,
         ),
       );
+    }
+    case "security_triage_benchmark": {
+      // In-process call to the triage orchestrator (NOT a CLI delegation — this
+      // is a distinct subsystem, not a mass_scout sub-command). Honors test
+      // injection (fetchImpl / apiKey / mainRoot) from CliRunOptions.
+      const models = Array.isArray(args.models)
+        ? (args.models.filter((m) => typeof m === "string" && m.length > 0) as string[])
+        : undefined;
+      const result = await runSecurityTriageBenchmark({
+        models: models && models.length > 0 ? models : undefined,
+        force: args.force === true,
+        outputDir: str(args.output_dir),
+        apiKey: opts.apiKey,
+        mainRoot: opts.mainRoot,
+        fetchImpl: opts.fetchImpl,
+      });
+      const text = [
+        result.summaryLine,
+        `recommended_model=${result.recommendedModelId}`,
+        `changed=${result.changed}`,
+        `spend=$${result.costUsd.toFixed(6)}`,
+        `report=${result.mdReportPath}`,
+        `json=${result.jsonReportPath}`,
+      ].join("\n");
+      return { content: [{ type: "text", text }], isError: false };
     }
     default:
       return {
