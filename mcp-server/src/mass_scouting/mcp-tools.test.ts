@@ -25,13 +25,15 @@ import {
 // ── Static shape checks ────────────────────────────────────────────────
 
 describe("MASS_SCOUT_TOOLS", () => {
-  it("has sixteen tools with the documented names", () => {
+  it("has seventeen tools with the documented names", () => {
     /** Phase B added 3 (jobs_list/audit_sample/body_get).
      *  Phase C2 added 2 (build_fieldset/propose_fieldset).
      *  Phase C3 added 2 (diff/chain).
      *  Phase F added 1 (list_bundled_fieldsets).
-     *  Total = 8 base + 5 + 2 + 1 = 16. */
-    expect(MASS_SCOUT_TOOLS.length).toBe(16);
+     *  TRDD-5bd98017 added 1 (security_scan — dedicated, not a mass_scout
+     *  sub-command but registered in the same array so index.ts picks it up).
+     *  Total = 8 base + 5 + 2 + 1 + 1 = 17. */
+    expect(MASS_SCOUT_TOOLS.length).toBe(17);
     const names = MASS_SCOUT_TOOLS.map((t) => t.name).sort();
     expect(names).toEqual(
       [
@@ -51,6 +53,7 @@ describe("MASS_SCOUT_TOOLS", () => {
         "mass_scout_register",
         "mass_scout_search",
         "mass_scout_search_xjob",
+        "security_scan",
       ].sort(),
     );
   });
@@ -65,11 +68,13 @@ describe("MASS_SCOUT_TOOLS", () => {
   it("every db-bound tool's inputSchema declares db_path as required", () => {
     /** Most sub-commands need the registry path. The fieldset-builders
      *  (mass_scout_build_fieldset, mass_scout_propose_fieldset) and
-     *  mass_scout_list_bundled_fieldsets operate without a DB. */
+     *  mass_scout_list_bundled_fieldsets operate without a DB. security_scan
+     *  is a dedicated tool with its own (DB-free) input shape (targets[]). */
     const NO_DB = new Set([
       "mass_scout_build_fieldset",
       "mass_scout_propose_fieldset",
       "mass_scout_list_bundled_fieldsets",
+      "security_scan",
     ]);
     for (const t of MASS_SCOUT_TOOLS) {
       if (NO_DB.has(t.name)) continue;

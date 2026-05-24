@@ -745,6 +745,94 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
       required: [],
     },
   },
+  {
+    name: "security_scan",
+    description:
+      "Dedicated, INJECTION-HARDENED security triage for suspected-malicious " +
+      "code. NOT the mass_scout pipeline — a bespoke judge with a " +
+      "nonce-delimited untrusted-data envelope, a hardened system prompt, " +
+      "strict json_schema output, an in-band injection pre-scan, and " +
+      "fail-safe-to-'uncertain' on EVERY error/deviation (never a silent " +
+      "not_threat). Adjudicates a batch of targets (inline snippet | " +
+      "file_path+line+context_lines window | path_glob) and emits per-item " +
+      "verdicts {verdict: threat|not_threat|uncertain, confidence, reason, " +
+      "injection_observed}. RETURNS: counts + JSON/markdown report paths. " +
+      "ENV: $OPENROUTER_API_KEY (absent ⇒ all verdicts 'uncertain').",
+    inputSchema: {
+      type: "object",
+      properties: {
+        targets: {
+          type: "array",
+          description:
+            "Work items. Each has id + category + EXACTLY ONE payload of: " +
+            "snippet (inline code) | file_path (+optional line, context_lines) | " +
+            "path_glob (expands to files). Optional per-item: language.",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              category: { type: "string" },
+              language: { type: "string" },
+              snippet: { type: "string" },
+              file_path: { type: "string" },
+              line: { type: "number" },
+              context_lines: { type: "number" },
+              path_glob: { type: "string" },
+            },
+            required: ["id", "category"],
+          },
+        },
+        category_rubrics: {
+          type: "object",
+          description:
+            "Per-category adjudication rubric, placed in the SYSTEM prompt " +
+            "(snippet content can never alter it). Keys = category names.",
+          additionalProperties: { type: "string" },
+        },
+        default_verdict_on_error: {
+          type: "string",
+          // F2 (aegis 2026-05-23): not_threat is intentionally NOT offered — the
+          // fail-safe must never fail open. The validator rejects it too.
+          enum: ["threat", "uncertain"],
+          description:
+            "Verdict on any error/deviation. Default 'uncertain'. May be " +
+            "'uncertain' or 'threat' only — never 'not_threat' (the fail-safe " +
+            "must never fail open).",
+        },
+        budget_usd: {
+          type: "number",
+          description:
+            "Whole-job hard pre-flight gate (all-or-nothing). Refuses the " +
+            "entire job if the estimate exceeds this; never a silent partial.",
+        },
+        model: {
+          type: "string",
+          description: "OpenRouter model id. Default qwen/qwen-2.5-7b-instruct.",
+        },
+        git_diff_ref: {
+          type: "string",
+          description:
+            "Incremental: for path_glob targets, only files changed since " +
+            "this git ref. Shape-validated against injection.",
+        },
+        folder_root: {
+          type: "string",
+          description: "Root for relative path_glob / git_diff_ref. Default cwd.",
+        },
+        output_dir: {
+          type: "string",
+          description:
+            "Report/export dir; defaults to <main-root>/reports/security_scan/.",
+        },
+        workers: { type: "number", description: "Concurrent judge calls. Default 8." },
+        max_retries: {
+          type: "number",
+          description: "Per-call validation retries. Default 1.",
+        },
+      },
+      required: ["targets"],
+    },
+  },
 ];
 
 /** Set of MCP tool names provided by mass-scouting. Used by index.ts's dispatcher. */
@@ -994,6 +1082,44 @@ export async function dispatchMassScoutTool(
           opts,
         ),
       );
+    case "security_scan": {
+      // The rich input (nested targets[] + category_rubrics) can't ride flat
+      // flags, so we JSON-encode the recognized fields into --input-json and
+      // forward to the security-scan subcommand (whose body calls our
+      // self-contained runSecurityScan, NOT the mass_scout pipeline — TRDD §2).
+      // We re-build the object (rather than passing args verbatim) so unknown
+      // keys are dropped and the downstream validator sees a clean shape.
+      const inputObj: Record<string, unknown> = {};
+      if (Array.isArray(args.targets)) inputObj.targets = args.targets;
+      if (
+        typeof args.category_rubrics === "object" &&
+        args.category_rubrics !== null
+      ) {
+        inputObj.category_rubrics = args.category_rubrics;
+      }
+      const dv = str(args.default_verdict_on_error);
+      if (dv) inputObj.default_verdict_on_error = dv;
+      const budget = num(args.budget_usd);
+      if (budget !== undefined) inputObj.budget_usd = budget;
+      const model = str(args.model);
+      if (model) inputObj.model = model;
+      const gitRef = str(args.git_diff_ref);
+      if (gitRef) inputObj.git_diff_ref = gitRef;
+      const folderRoot = str(args.folder_root);
+      if (folderRoot) inputObj.folder_root = folderRoot;
+      const outputDir = str(args.output_dir);
+      if (outputDir) inputObj.output_dir = outputDir;
+      const workers = num(args.workers);
+      if (workers !== undefined) inputObj.workers = workers;
+      const maxRetries = num(args.max_retries);
+      if (maxRetries !== undefined) inputObj.max_retries = maxRetries;
+      return toMcp(
+        await runMassScoutCli(
+          ["security-scan", "--input-json", JSON.stringify(inputObj)],
+          opts,
+        ),
+      );
+    }
     default:
       return {
         content: [

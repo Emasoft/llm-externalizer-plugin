@@ -82,6 +82,9 @@ describe('listTools', () => {
       'mass_scout_register',
       'mass_scout_search',
       'mass_scout_search_xjob',
+      // security_scan — dedicated injection-hardened tool (TRDD-5bd98017),
+      // registered in MASS_SCOUT_TOOLS so buildTools() picks it up.
+      'security_scan',
     ].sort();
 
     expect(toolNames).toEqual(expected);

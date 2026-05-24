@@ -58,6 +58,7 @@ import {
   type XjobSearchResponse,
 } from "./search";
 import { renderMarkdownReport, summariseJob } from "./reports";
+import { runSecurityScan } from "../security_scan/security_scan_main";
 
 // ── Public types ───────────────────────────────────────────────────────
 
@@ -1753,6 +1754,61 @@ function runExport(args: string[], opts: CliRunOptions): CliResult {
   );
 }
 
+// ── security-scan subcommand ─────────────────────────────────────────────
+
+/**
+ * Thin CLI adapter for the dedicated, injection-hardened `security_scan`
+ * module. This is NOT the mass_scout pipeline — it parses the rich tool input
+ * (which arrives JSON-encoded in `--input-json` because targets[] / rubrics
+ * are nested objects that don't map to flat flags) and forwards it to
+ * `runSecurityScan` together with the test-injection deps (fetchImpl / apiKey
+ * / mainRoot / onProgress). All real work — intake, prompt, judge, report —
+ * lives in src/security_scan/, fully under our control (TRDD §2).
+ */
+async function runSecurityScanCli(
+  args: string[],
+  opts: CliRunOptions,
+): Promise<CliResult> {
+  const { flags } = parseFlags(args);
+  const inputJson = requireFlag(
+    flags,
+    "input-json",
+    "JSON-encoded {targets, category_rubrics, ...}",
+  );
+  if (typeof inputJson === "object") return err(inputJson.error);
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(inputJson);
+  } catch (e) {
+    return err(`--input-json is not valid JSON: ${(e as Error).message}`);
+  }
+
+  // An explicit --output-dir flag wins over output_dir embedded in the JSON
+  // (the MCP dispatch passes output_dir both ways for belt-and-braces).
+  if (
+    flags["output-dir"] &&
+    flags["output-dir"] !== "true" &&
+    typeof parsed === "object" &&
+    parsed !== null &&
+    !Array.isArray(parsed)
+  ) {
+    (parsed as Record<string, unknown>).output_dir = flags["output-dir"];
+  }
+
+  const result = await runSecurityScan(parsed, {
+    fetchImpl: opts.fetchImpl,
+    apiKey: opts.apiKey,
+    mainRoot: opts.mainRoot,
+    onProgress: opts.onProgress,
+  });
+  return {
+    stdout: result.stdout,
+    stderr: result.stderr,
+    exitCode: result.exitCode,
+  };
+}
+
 // ── Output helpers ─────────────────────────────────────────────────────
 
 function csvEscape(s: string): string {
@@ -1842,6 +1898,15 @@ Subcommands:
                            --live-context   (see estimate)
                  Env:      OPENROUTER_API_KEY
 
+  security-scan  Dedicated injection-hardened security triage. Adjudicates a
+                 batch of suspected-malicious code snippets / file windows /
+                 globs with a cheap LLM behind a nonce-delimited untrusted-data
+                 envelope + strict json_schema + fail-safe-to-uncertain. NOT
+                 the mass_scout pipeline. Writes JSON + markdown reports.
+                 Required: --input-json '<{targets:[...], ...}>'
+                 Optional: --output-dir <path>   (overrides JSON output_dir)
+                 Env:      OPENROUTER_API_KEY (absent ⇒ all verdicts uncertain)
+
   search         Per-job search (FTS5 + structured + regex bypass).
                  Required: --db <path>  --job-id <id>
                  Optional: --query "..."  --regex "..."  --filter '$.x:=:val'
@@ -1928,6 +1993,8 @@ export async function runMassScoutCli(
       return runEstimate(rest, opts);
     case "scout":
       return runScout(rest, opts);
+    case "security-scan":
+      return runSecurityScanCli(rest, opts);
     case "search":
       return runSearch(rest);
     case "search-xjob":
@@ -1964,6 +2031,7 @@ export {
   parseFilterToken,
   parseFlags,
   resolvePricing,
+  runSecurityScanCli,
   walkFiles,
   type Registry,
 };

@@ -26,6 +26,7 @@ import {
   formatModelInfoMarkdown,
   formatModelInfoJson,
 } from "./or-model-info.js";
+import { parseClusterSynonymsInput } from "./cluster/cli.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { writeFileSync, existsSync, statSync, unlinkSync } from "node:fs";
@@ -589,6 +590,73 @@ async function cmdSearchExisting(rawArgs: string[]): Promise<void> {
   }
 }
 
+/**
+ * `cluster-synonyms` top-level verb. Parses the rich `--input-json` payload
+ * (shared parser in src/cluster/cli.ts — the SAME one the testable adapter
+ * uses, so the CLI and MCP surfaces stay shape-identical), then spawns the MCP
+ * server and calls the `cluster_synonyms` tool over stdio. We go through the
+ * server (rather than calling runClusterSynonyms directly here) because the
+ * real LLM transport — rate-limiting, retry, model-fallback — lives in the
+ * server's chatCompletionWithRetry, which the tool dispatch wires as the
+ * rawLlmCall before invoking the same runClusterSynonyms core. This mirrors
+ * cmdSearchExisting exactly; the result is the same core, one transport, zero
+ * duplication.
+ */
+async function cmdClusterSynonyms(rawArgs: string[]): Promise<void> {
+  const parsed = parseClusterSynonymsInput(rawArgs);
+  if ("error" in parsed) die(parsed.error);
+
+  // The parsed invocation IS the tool's argument shape (input_file, output_dir,
+  // and the optional embeddings_file / policy_file / resume_from). Forward it
+  // verbatim — undefined optionals are already omitted by the parser, so the
+  // server's schema defaults apply.
+  const toolArgs: Record<string, unknown> = { ...parsed };
+
+  const serverScript = findServerScript();
+  const transport = new StdioClientTransport({
+    command: "node",
+    args: [serverScript],
+    env: { ...process.env } as Record<string, string>,
+    stderr: "inherit",
+  });
+  const client = new Client(
+    { name: "llm-externalizer-cli", version: "1.0.0" },
+    { capabilities: {} },
+  );
+
+  // cluster_synonyms can run for a long time on large term sets. Reuse the
+  // generous search timeout budget; --timeout-hours overrides it (0 disables).
+  const flags = parseFlags(rawArgs);
+  let timeoutMs = DEFAULT_SEARCH_TIMEOUT_MS;
+  if (flags["timeout-hours"] && flags["timeout-hours"] !== "true") {
+    const hours = Number(flags["timeout-hours"]);
+    if (!Number.isFinite(hours) || hours < 0) {
+      die(`--timeout-hours must be a non-negative number (got '${flags["timeout-hours"]}')`);
+    }
+    timeoutMs = hours === 0 ? 0 : Math.round(hours * 60 * 60 * 1000);
+  }
+
+  try {
+    await client.connect(transport);
+    const result = await client.callTool(
+      { name: "cluster_synonyms", arguments: toolArgs },
+      undefined,
+      timeoutMs > 0 ? { timeout: timeoutMs } : { timeout: Number.MAX_SAFE_INTEGER },
+    );
+    const content = result.content as Array<{ type: string; text: string }>;
+    for (const c of content) {
+      if (c.type === "text") info(c.text);
+    }
+    if (result.isError) process.exit(1);
+  } finally {
+    try {
+      await transport.close();
+    } catch {
+      /* ignore cleanup errors */
+    }
+  }
+}
+
 function printUsage(): void {
   info(`LLM Externalizer — CLI
 
@@ -600,6 +668,8 @@ Usage:
   llm-externalizer profile list                          # read-only profile inspector
   llm-externalizer model-info <model-id> [--markdown | --json [file]] [--no-color]
   llm-externalizer search-existing "<description>" [<src-files>...] --in <path> [--base <ref>] [--diff <path>] [--free]
+  llm-externalizer cluster-synonyms --input-json '<{input_file,output_dir,...}>' [--output-dir <path>] [--timeout-hours <n>]
+  llm-externalizer security-scan --input-json '<{targets:[...],...}>' [--output-dir <path>]
   llm-externalizer mass-scout <subcommand> [flags]       # bulk LLM-driven file analysis (use 'mass-scout --help' for sub-commands)
 
 Disabled (would change settings.yaml — do this manually instead):
@@ -641,6 +711,20 @@ search-existing flags:
   --output-dir <path>    Custom reports directory.
   --timeout-hours <n>    Max wall time for the whole scan (default 4 hours).
                          Pass 0 to disable. Accepts fractional hours (e.g. 0.5 = 30 min).
+
+cluster-synonyms clusters SENTENCES (or short labels) by full-sentence meaning
+equivalence — file-in, file-out, zero orchestrator tokens. The whole
+batch+verify+canonicalise loop runs inside the MCP server; you get only output
+paths back. NOT a word-level synonym lookup. Designed for taxonomy / ontology
+cleanup / label canonicalisation over 10k–1M items.
+
+cluster-synonyms flags:
+  --input-json '<json>'  (MANDATORY) JSON object with: input_file (abs path to a
+                         JSONL of {id, sentence} rows), output_dir (abs path),
+                         and optional embeddings_file, policy_file, resume_from.
+  --output-dir <path>    Overrides the output_dir embedded in --input-json.
+  --timeout-hours <n>    Max wall time (default 4 hours). 0 disables. Fractional ok.
+  Env: backend / model / ensemble come from the active llm-externalizer profile.
 
 Settings file: ${getSettingsPath()}
 
@@ -692,9 +776,32 @@ async function main(): Promise<void> {
     process.exit(result.exitCode);
   }
 
+  // ── security-scan top-level shim ────────────────────────────────────
+  // Bare `llm-externalizer security-scan ...` is sugar for
+  // `llm-externalizer mass-scout security-scan ...`. The subcommand body
+  // calls the self-contained, injection-hardened runSecurityScan (NOT the
+  // mass_scout pipeline — TRDD §2).
+  if (args[0] === "security-scan") {
+    const { runMassScoutCli } = await import("./mass_scouting/cli.js");
+    const result = await runMassScoutCli(["security-scan", ...args.slice(1)]);
+    if (result.stdout) process.stdout.write(result.stdout);
+    if (result.stderr) process.stderr.write(result.stderr);
+    process.exit(result.exitCode);
+  }
+
+  // ── cluster-synonyms top-level command ──────────────────────────────
+  // Sentence-level meaning-equivalence clustering. NOT a mass-scout
+  // subcommand — it has its own core (src/cluster/cluster_synonyms_main.ts).
+  // Spawns the server + calls the cluster_synonyms tool (same core, real
+  // LLM transport). See cmdClusterSynonyms.
+  if (args[0] === "cluster-synonyms" || args[0] === "cluster_synonyms") {
+    await cmdClusterSynonyms(args.slice(1));
+    return;
+  }
+
   if (args[0] !== "profile") {
     die(
-      `Unknown command '${args[0]}'. Use 'profile', 'model-info', 'search-existing', or 'mass-scout' subcommand, or --help.`,
+      `Unknown command '${args[0]}'. Use 'profile', 'model-info', 'search-existing', 'cluster-synonyms', 'security-scan', or 'mass-scout' subcommand, or --help.`,
     );
   }
 

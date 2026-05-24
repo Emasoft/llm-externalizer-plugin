@@ -23,6 +23,12 @@ export default defineConfig({
       'src/mass_scouting/search.test.ts',
       'src/mass_scouting/cli.test.ts',
       'src/mass_scouting/mcp-tools.test.ts',
+      // security_scan — dedicated injection-hardened triage tool.
+      'src/security_scan/security_scan.test.ts',
+      'src/security_scan/wiring.test.ts',
+      // Live smoke (T10) — self-skips via describe.skipIf unless
+      // OPENROUTER_API_KEY is set. Default `npm test` reports it skipped.
+      'src/security_scan/security_scan_live.test.ts',
       // Live test — runs only when LIVE_TESTS=1 + OPENROUTER_API_KEY are set
       // (gated via describe.skipIf inside the file). Default `npm test`
       // reports it as skipped, runtime ~0ms.
@@ -40,6 +46,9 @@ export default defineConfig({
       'src/cluster/phase1_batch.test.ts',
       'src/cluster/embeddings.test.ts',
       'src/cluster/cluster_synonyms_main.test.ts',
+      // cluster_synonyms CLI surface — wiring test for the new third-surface
+      // adapter (runClusterSynonymsCli). Mock rawLlmCall, no network.
+      'src/cluster/wiring.test.ts',
       'src/benchmark/pick.test.ts',
       'src/default-output-dir.test.ts',
       'src/cluster/phase2_verify.test.ts',
