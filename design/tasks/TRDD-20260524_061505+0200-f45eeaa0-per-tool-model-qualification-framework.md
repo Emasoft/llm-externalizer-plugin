@@ -3,7 +3,7 @@ trdd-id: f45eeaa0-a36b-4d70-90c3-d39813960409
 title: Per-tool model qualification framework — each tool's benchmark gates its model selection
 status: in-progress
 created: 2026-05-24T06:15:05+0200
-updated: 2026-05-24T12:14:07+0200
+updated: 2026-05-24T20:07:15+0200
 ---
 
 # TRDD-f45eeaa0 — Per-tool model qualification framework
@@ -102,19 +102,32 @@ extending the existing benchmark command. Cached per-model-per-tool-per-day.
 | chat | no | no | medium | general (loose) |
 
 ## 4. Acceptance
-- [ ] 973a0265 shipped as the reference instance.
-- [ ] Registry of per-tool {requirements, benchmarks}.
-- [ ] Per-tool selection: best same-cost model that PASSES that tool's gate; a
-      failing model is never assigned to that tool; pricier models never auto-
-      selected.
-- [ ] settings.yaml per-tool model map (default + overrides, back-compat).
-- [ ] One re-runnable "assess a new model across all tool benchmarks" command
-      (3 surfaces), cached.
+- [x] 973a0265 shipped as the reference instance.
+- [x] Registry of per-tool {requirements, benchmarks}.
+- [x] Per-tool selection enforced for the benchmarked tool — security_scan's
+      selection gate is requirements + benchmark-PASS + never-pricier; a failing
+      model is never assigned, pricier models never auto-selected. (A generalized
+      cross-tool AUTO-selector awaits more per-tool benchmarks; today the
+      requirements half is exposed via `assess_model` and the one benchmark via
+      `security_triage_benchmark`.)
+- [x] settings.yaml per-tool model map — `tool_models` (Profile) +
+      `resolveModelForTool` (default + per-tool overrides, back-compat;
+      typo-guarded validation against `registeredTools()`); security_scan wired
+      as the reference consumer.
+- [x] Re-runnable "assess a new model" command, 3 surfaces (MCP `assess_model`
+      + CLI `--assess-model` + slash) — the FREE/offline REQUIREMENTS half across
+      ALL tools; the benchmark half runs per tool's own benchmark
+      (security-triage today, cached per-model-per-day).
 - [ ] Each LLM-using tool has at least one benchmark dataset + pass threshold.
-- [ ] Docs: how to add a tool's benchmark + how selection works.
+      (Incremental: security_scan ✓ + mass_scout ✓; the other 9 stay
+      requirements-only until their golden dataset lands — NOT fabricated, per §1
+      + the no-fake-tests rule.)
+- [x] Docs: how to add a tool's benchmark + how selection works (README §F +
+      slash-command docs + this TRDD).
 
 ## 5. Status log
 | Date | Status change | Note |
 |---|---|---|
 | 2026-05-24T06:15:05+0200 | created → not-started | Captured the user's generalization: per-tool benchmarks + requirements gate per-tool model selection; best same-cost passer wins. Framework is EXTRACTED FROM the security_scan instance (973a0265) to avoid premature abstraction — blocked-by 973a0265 (→ #9/#10 + #95). Reuses the existing benchmark/ machinery (ground-truth/score/runner/pick) + discover.ts::qualify for requirements. |
 | 2026-05-24T12:14:07+0200 | not-started → in-progress | FRAMEWORK CORE landed (mcp-server/src/model-qualification/registry.ts + registry.test.ts, 12 tests): the per-tool requirements registry — the single source of truth for every LLM tool's model requirements + benchmark pointer. Acceptance covered: registry of per-tool {requirements, benchmark} ✓ (all 11 LLM tools; pure-utility tools excluded); security_scan wired to its real triage benchmark (973a0265) ✓; mass_scout → existing keyword-classification ✓; qualifyModelForTool() requirements gate ✓; the security-triage orchestrator now reads security_scan's requirements FROM the registry (real runtime consumer, single source of truth). DELIBERATELY DEFERRED as incremental (NOT premature-abstracted from N=1, per §1 + the user's no-over-engineering rule): the per-tool BENCHMARK DATASETS for the other 9 tools (each is a labeled-golden-dataset research effort — fabricating shallow ones would violate the no-fake-tests rule), the settings.yaml per-tool model map (cross-cutting, every tool's model resolution), and a generalized cross-tool selection + assess-all command. Each lands as its tool gets a real benchmark. Status stays in-progress (NOT completed): the framework foundation is shipped, the per-tool benchmark instances are the remaining body of work. |
+| 2026-05-24T20:07:15+0200 | in-progress (more work landed) | PER-TOOL MODEL MAP + ASSESS SURFACE shipped (~13 files, 4 phases, all gates green). Phase 1 — config.ts: `Profile.tool_models` + `ResolvedProfile.toolModels` + `resolveModelForTool` (order: explicit call arg > `tool_models[tool]` > the tool's own default > `profile.model`) + typo-guarded validation (keys ∈ `registeredTools()`, non-empty model-id values) + SETTINGS_TEMPLATE example; new config.test.ts (14). Phase 2 — security_scan wired as the REFERENCE CONSUMER in runSecurityScanCli (best-effort settings read; back-compat: no `tool_models` ⇒ DEFAULT_MODEL exactly as before); wiring.test.ts +4 (asserts the model actually sent to the judge via a capturing FetchImpl). Phase 3 — discover.ts `disqualifyReason()` (qualify() now delegates the predicate to it → single source of truth) surfaced through `registry.qualifyModelForTool().disqualifyReason`; new assess.ts (`assessModelAcrossTools`/`assessModelById`/`renderAssessmentText`) + assess.test.ts (9); 3 surfaces — MCP `assess_model`, CLI `--assess-model`, slash `/llm-externalizer-assess-model` — all FREE + offline (catalog only, no LLM call); mcp-tools.test.ts + index.test.ts roster updated (tool count 18→19). Phase 4 — README §F "Per-tool model overrides" + "Model-qualification tools" + command-table rows (also added the previously-missing security-triage-benchmark rows) + the assess-model slash doc. STILL in-progress: per-tool BENCHMARK DATASETS for the remaining 9 tools — the genuinely-incremental body of work (not fabricated). |
