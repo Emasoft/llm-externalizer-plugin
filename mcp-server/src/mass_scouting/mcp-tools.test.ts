@@ -21,11 +21,12 @@ import {
   MASS_SCOUT_TOOL_NAMES,
   dispatchMassScoutTool,
 } from "./mcp-tools";
+import type { OpenRouterModel } from "../benchmark/discover";
 
 // ── Static shape checks ────────────────────────────────────────────────
 
 describe("MASS_SCOUT_TOOLS", () => {
-  it("has eighteen tools with the documented names", () => {
+  it("has nineteen tools with the documented names", () => {
     /** Phase B added 3 (jobs_list/audit_sample/body_get).
      *  Phase C2 added 2 (build_fieldset/propose_fieldset).
      *  Phase C3 added 2 (diff/chain).
@@ -34,11 +35,14 @@ describe("MASS_SCOUT_TOOLS", () => {
      *  sub-command but registered in the same array so index.ts picks it up).
      *  TRDD-973a0265 added 1 (security_triage_benchmark — model qualification
      *  for the security_scan triage task; DB-free, in-process orchestrator).
-     *  Total = 8 base + 5 + 2 + 1 + 1 + 1 = 18. */
-    expect(MASS_SCOUT_TOOLS.length).toBe(18);
+     *  TRDD-f45eeaa0 added 1 (assess_model — cross-tool requirements assessment;
+     *  DB-free, offline, in-process).
+     *  Total = 8 base + 5 + 2 + 1 + 1 + 1 + 1 = 19. */
+    expect(MASS_SCOUT_TOOLS.length).toBe(19);
     const names = MASS_SCOUT_TOOLS.map((t) => t.name).sort();
     expect(names).toEqual(
       [
+        "assess_model",
         "mass_scout",
         "mass_scout_audit_sample",
         "mass_scout_body_get",
@@ -79,6 +83,7 @@ describe("MASS_SCOUT_TOOLS", () => {
       "mass_scout_list_bundled_fieldsets",
       "security_scan",
       "security_triage_benchmark",
+      "assess_model",
     ]);
     for (const t of MASS_SCOUT_TOOLS) {
       if (NO_DB.has(t.name)) continue;
@@ -352,5 +357,53 @@ describe("dispatchMassScoutTool — diff / chain", () => {
     expect(names).toEqual(
       ["code-audit", "pr-review", "security-audit", "skill-audit"],
     );
+  });
+});
+
+describe("dispatchMassScoutTool — assess_model (TRDD-f45eeaa0)", () => {
+  // A cheap, big, reasoning+structured model qualifies for every tool. Injected
+  // so the dispatch never touches the network (pricing is per-TOKEN).
+  const catalog: OpenRouterModel[] = [
+    {
+      id: "google/gemini-2.5-flash",
+      name: "Gemini 2.5 Flash",
+      context_length: 1_000_000,
+      top_provider: { max_completion_tokens: 64_000 },
+      supported_parameters: ["response_format", "reasoning"],
+      pricing: { prompt: "0.00000015", completion: "0.0000006" }, // $0.15 / $0.60 per M
+    },
+  ];
+
+  it("assesses a model offline via the injected catalog and returns an OK/NO table", async () => {
+    const res = await dispatchMassScoutTool(
+      "assess_model",
+      { model: "google/gemini-2.5-flash" },
+      { modelCatalogFetch: async () => catalog },
+    );
+    expect(res.isError).toBeFalsy();
+    const text = res.content[0]!.text;
+    expect(text).toContain("google/gemini-2.5-flash");
+    expect(text).toContain("security_scan");
+    expect(text).toContain("benchmark: security-triage");
+  });
+
+  it("returns isError when 'model' is missing", async () => {
+    const res = await dispatchMassScoutTool(
+      "assess_model",
+      {},
+      { modelCatalogFetch: async () => catalog },
+    );
+    expect(res.isError).toBe(true);
+    expect(res.content[0]!.text).toMatch(/requires a 'model' id/);
+  });
+
+  it("returns isError when the model id is absent from the catalog", async () => {
+    const res = await dispatchMassScoutTool(
+      "assess_model",
+      { model: "nope/missing" },
+      { modelCatalogFetch: async () => catalog },
+    );
+    expect(res.isError).toBe(true);
+    expect(res.content[0]!.text).toMatch(/not found in the OpenRouter catalog/);
   });
 });

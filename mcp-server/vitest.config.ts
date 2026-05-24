@@ -13,6 +13,12 @@ export default defineConfig({
       'src/index.test.ts',
       'src/grouping.test.ts',
       'src/safe-body.test.ts',
+      // Per-tool model map (tool_models / resolveModelForTool) — TRDD-f45eeaa0.
+      'src/config.test.ts',
+      // Usage-rule installer (~/.claude/rules/use-llm-externalizer.md).
+      'src/rule-install.test.ts',
+      // Single-source project-root resolver (reports land inside the project).
+      'src/project-root.test.ts',
       // Global usage-history logger — one line per LLM web request.
       'src/usage-history.test.ts',
       'src/mass_scouting/fieldset.test.ts',
@@ -61,6 +67,8 @@ export default defineConfig({
       'src/benchmark/security-triage/live.test.ts',
       // Per-tool model-qualification registry (TRDD-f45eeaa0 framework core).
       'src/model-qualification/registry.test.ts',
+      // Cross-tool model assessment (requirements half of the per-tool gate).
+      'src/model-qualification/assess.test.ts',
       'src/default-output-dir.test.ts',
       'src/cluster/phase2_verify.test.ts',
       'src/cluster/phase3_canonical.test.ts',

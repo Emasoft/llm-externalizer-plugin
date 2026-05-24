@@ -20,9 +20,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import {
   buildBenchmarkRoster,
@@ -32,6 +31,7 @@ import {
   type QualifiedModel,
 } from "../discover.js";
 import { getConfigDir } from "../../config.js";
+import { resolveProjectMainRoot } from "../../project-root.js";
 import { KNOWN_PRICING, type ModelPricing } from "../../mass_scouting/cost-estimate.js";
 import type { FetchImpl } from "../../security_scan/judge.js";
 import { DEFAULT_MODEL } from "../../security_scan/types.js";
@@ -167,16 +167,8 @@ function resolveApiKey(override?: string): string {
 }
 
 function resolveMainRoot(override?: string): string {
-  if (override) return override;
-  try {
-    const out = execSync("git worktree list", {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    return out.trim().split("\n")[0].split(/\s+/)[0];
-  } catch {
-    return resolve(".");
-  }
+  // Single source of truth — see project-root.ts.
+  return resolveProjectMainRoot(override);
 }
 
 function today(): string {

@@ -3990,10 +3990,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep: sep2, value } = collItem;
+        const { start, key, sep: sep3, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep2?.[0],
+          next: key ?? sep3?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -4007,7 +4007,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep2) {
+          if (!keyProps.anchor && !keyProps.tag && !sep3) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map2.comment)
@@ -4031,7 +4031,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map2.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep2 ?? [], {
+        const valueProps = resolveProps.resolveProps(sep3 ?? [], {
           indicator: "map-value-ind",
           next: value,
           offset: keyNode.range[2],
@@ -4047,7 +4047,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep2, null, valueProps, onError);
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep3, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
           offset = valueNode.range[2];
@@ -4138,7 +4138,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep2 = "";
+        let sep3 = "";
         for (const token of end) {
           const { source, type } = token;
           switch (type) {
@@ -4152,13 +4152,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep2 + cb;
-              sep2 = "";
+                comment += sep3 + cb;
+              sep3 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep2 += source;
+                sep3 += source;
               hasSpace = true;
               break;
             default:
@@ -4201,18 +4201,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i = 0; i < fc.items.length; ++i) {
         const collItem = fc.items[i];
-        const { start, key, sep: sep2, value } = collItem;
+        const { start, key, sep: sep3, value } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep2?.[0],
+          next: key ?? sep3?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep2 && !value) {
+          if (!props.anchor && !props.tag && !sep3 && !value) {
             if (i === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i < fc.items.length - 1)
@@ -4266,8 +4266,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap && !sep2 && !props.found) {
-          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep2, null, props, onError);
+        if (!isMap && !sep3 && !props.found) {
+          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep3, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value))
@@ -4279,7 +4279,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep2 ?? [], {
+          const valueProps = resolveProps.resolveProps(sep3 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value,
@@ -4290,8 +4290,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap && !props.found && ctx.options.strict) {
-              if (sep2)
-                for (const st of sep2) {
+              if (sep3)
+                for (const st of sep3) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -4308,7 +4308,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep2, null, valueProps, onError) : null;
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep3, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -4488,7 +4488,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i + 1;
       }
       let value = "";
-      let sep2 = "";
+      let sep3 = "";
       let prevMoreIndented = false;
       for (let i = 0; i < contentStart; ++i)
         value += lines[i][0].slice(trimIndent) + "\n";
@@ -4505,24 +4505,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value += sep2 + indent.slice(trimIndent) + content;
-          sep2 = "\n";
+          value += sep3 + indent.slice(trimIndent) + content;
+          sep3 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep2 === " ")
-            sep2 = "\n";
-          else if (!prevMoreIndented && sep2 === "\n")
-            sep2 = "\n\n";
-          value += sep2 + indent.slice(trimIndent) + content;
-          sep2 = "\n";
+          if (sep3 === " ")
+            sep3 = "\n";
+          else if (!prevMoreIndented && sep3 === "\n")
+            sep3 = "\n\n";
+          value += sep3 + indent.slice(trimIndent) + content;
+          sep3 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep2 === "\n")
+          if (sep3 === "\n")
             value += "\n";
           else
-            sep2 = "\n";
+            sep3 = "\n";
         } else {
-          value += sep2 + content;
-          sep2 = " ";
+          value += sep3 + content;
+          sep3 = " ";
           prevMoreIndented = false;
         }
       }
@@ -4704,25 +4704,25 @@ var require_resolve_flow_scalar = __commonJS({
       if (!match)
         return source;
       let res = match[1];
-      let sep2 = " ";
+      let sep3 = " ";
       let pos = first.lastIndex;
       line.lastIndex = pos;
       while (match = line.exec(source)) {
         if (match[1] === "") {
-          if (sep2 === "\n")
-            res += sep2;
+          if (sep3 === "\n")
+            res += sep3;
           else
-            sep2 = "\n";
+            sep3 = "\n";
         } else {
-          res += sep2 + match[1];
-          sep2 = " ";
+          res += sep3 + match[1];
+          sep3 = " ";
         }
         pos = line.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match = last.exec(source);
-      return res + sep2 + (match?.[1] ?? "");
+      return res + sep3 + (match?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -5524,14 +5524,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep: sep2, value }) {
+    function stringifyItem({ start, key, sep: sep3, value }) {
       let res = "";
       for (const st of start)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep2)
-        for (const st of sep2)
+      if (sep3)
+        for (const st of sep3)
           res += st.source;
       if (value)
         res += stringifyToken(value);
@@ -6681,18 +6681,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start = getFirstKeyStartProps(prev);
-          let sep2;
+          let sep3;
           if (scalar.end) {
-            sep2 = scalar.end;
-            sep2.push(this.sourceToken);
+            sep3 = scalar.end;
+            sep3.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep2 = [this.sourceToken];
+            sep3 = [this.sourceToken];
           const map2 = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start, key: scalar, sep: sep2 }]
+            items: [{ start, key: scalar, sep: sep3 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map2;
@@ -6845,15 +6845,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep2 = it.sep;
-                  sep2.push(this.sourceToken);
+                  const sep3 = it.sep;
+                  sep3.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep: sep2 }]
+                    items: [{ start: start2, key, sep: sep3 }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -7047,13 +7047,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep2 = fc.end.splice(1, fc.end.length);
-            sep2.push(this.sourceToken);
+            const sep3 = fc.end.splice(1, fc.end.length);
+            sep3.push(this.sourceToken);
             const map2 = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start, key: fc, sep: sep2 }]
+              items: [{ start, key: fc, sep: sep3 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map2;
@@ -14103,24 +14103,24 @@ var require_dist2 = __commonJS({
 // src/index.ts
 var import_yaml2 = __toESM(require_dist(), 1);
 import {
-  readFileSync as readFileSync9,
-  writeFileSync as writeFileSync7,
-  mkdirSync as mkdirSync10,
+  readFileSync as readFileSync10,
+  writeFileSync as writeFileSync8,
+  mkdirSync as mkdirSync11,
   existsSync as existsSync8,
-  renameSync as renameSync3,
+  renameSync as renameSync4,
   statSync as statSync5,
   lstatSync,
   appendFileSync as appendFileSync4,
   readdirSync as readdirSync4,
   unlinkSync,
-  realpathSync as realpathSync2,
+  realpathSync as realpathSync3,
   watchFile,
   unwatchFile
 } from "node:fs";
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { extname as extname4, join as join10, basename as basename4, dirname as dirname7, resolve as resolve6, isAbsolute as isAbsolute4, sep } from "node:path";
+import { extname as extname4, join as join11, basename as basename4, dirname as dirname8, resolve as resolve6, isAbsolute as isAbsolute4, sep as sep2 } from "node:path";
 import { randomUUID } from "node:crypto";
-import { homedir as homedir2 } from "node:os";
+import { homedir as homedir3 } from "node:os";
 
 // src/grouping.ts
 import { statSync } from "node:fs";
@@ -37518,10 +37518,9 @@ var StdioServerTransport = class {
 };
 
 // src/mass_scouting/cli.ts
-import { execSync as execSync3 } from "node:child_process";
+import { execSync as execSync2 } from "node:child_process";
 import {
   appendFileSync as appendFileSync3,
-  existsSync as existsSync3,
   mkdirSync as mkdirSync5,
   readFileSync as readFileSync4,
   readdirSync as readdirSync2,
@@ -39549,6 +39548,304 @@ import {
 import { resolve } from "node:path";
 import { join } from "node:path";
 import { homedir } from "node:os";
+
+// src/benchmark/discover.ts
+var DEFAULT_CRITERIA = {
+  category: "programming",
+  minContextTokens: 128e3,
+  minOutputTokens: 64e3,
+  // Hard caps for auto-selection: STRICTLY less than $1/M for both
+  // input AND output. Anything at or above is rejected from the
+  // candidate pool. The `qualify()` predicate enforces this with `<`
+  // (not `<=`) so $1.00 itself is out. Override only via --include.
+  maxInputDollarsPerMillion: 1,
+  maxOutputDollarsPerMillion: 1,
+  requireStructuredOutputs: true,
+  requireReasoning: true,
+  allowFree: false
+};
+async function fetchProgrammingModels(category) {
+  const url2 = category ? `https://openrouter.ai/api/v1/models?category=${encodeURIComponent(category)}` : `https://openrouter.ai/api/v1/models`;
+  const resp = await fetch(url2);
+  if (!resp.ok) {
+    throw new Error(`OpenRouter model list fetch failed: ${resp.status} ${resp.statusText}`);
+  }
+  const body = await resp.json();
+  return body.data ?? [];
+}
+function filterModels(models, criteria2 = DEFAULT_CRITERIA) {
+  const out = [];
+  for (const m of models) {
+    const q = qualify(m, criteria2);
+    if (q) out.push(q);
+  }
+  return out;
+}
+function disqualifyReason(m, criteria2) {
+  if (!criteria2.allowFree && m.id.endsWith(":free")) return "free model not allowed (allowFree=false)";
+  const params = new Set(m.supported_parameters ?? []);
+  const supportsStructured = params.has("structured_outputs") || params.has("response_format");
+  const supportsReasoning = params.has("reasoning") || params.has("include_reasoning");
+  if (criteria2.requireStructuredOutputs && !supportsStructured) {
+    return "no structured-output support (needs response_format or structured_outputs)";
+  }
+  if (criteria2.requireReasoning && !supportsReasoning) return "no reasoning support";
+  const ctx = m.context_length ?? 0;
+  if (ctx < criteria2.minContextTokens) return `context ${ctx} < required ${criteria2.minContextTokens}`;
+  const maxOutRaw = m.top_provider?.max_completion_tokens;
+  const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
+  if (!maxOut || maxOut < criteria2.minOutputTokens) {
+    return `max output ${maxOut} < required ${criteria2.minOutputTokens}`;
+  }
+  const promptPerToken = parseFloat(m.pricing?.prompt ?? "NaN");
+  const completionPerToken = parseFloat(m.pricing?.completion ?? "NaN");
+  if (!isFinite(promptPerToken) || !isFinite(completionPerToken)) return "missing or invalid pricing";
+  const inputDollarsPerMillion = promptPerToken * 1e6;
+  const outputDollarsPerMillion = completionPerToken * 1e6;
+  if (inputDollarsPerMillion >= criteria2.maxInputDollarsPerMillion) {
+    return `input $${inputDollarsPerMillion.toFixed(3)}/M >= cap $${criteria2.maxInputDollarsPerMillion.toFixed(3)}/M`;
+  }
+  if (outputDollarsPerMillion >= criteria2.maxOutputDollarsPerMillion) {
+    return `output $${outputDollarsPerMillion.toFixed(3)}/M >= cap $${criteria2.maxOutputDollarsPerMillion.toFixed(3)}/M`;
+  }
+  return null;
+}
+function qualify(m, criteria2) {
+  if (disqualifyReason(m, criteria2) !== null) return null;
+  const params = new Set(m.supported_parameters ?? []);
+  const supportsStructured = params.has("structured_outputs") || params.has("response_format");
+  const supportsReasoning = params.has("reasoning") || params.has("include_reasoning");
+  const ctx = m.context_length ?? 0;
+  const maxOutRaw = m.top_provider?.max_completion_tokens;
+  const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
+  const inputDollarsPerMillion = parseFloat(m.pricing?.prompt ?? "NaN") * 1e6;
+  const outputDollarsPerMillion = parseFloat(m.pricing?.completion ?? "NaN") * 1e6;
+  return {
+    id: m.id,
+    name: m.name ?? m.id,
+    contextTokens: ctx,
+    maxOutputTokens: maxOut,
+    inputDollarsPerMillion,
+    outputDollarsPerMillion,
+    supportsStructured,
+    supportsReasoning,
+    raw: m
+  };
+}
+function buildBenchmarkRoster(candidatePool, criteria2, includeIds, baselineLookupPool = candidatePool) {
+  const candidates = filterModels(candidatePool, criteria2);
+  const inRoster = new Set(candidates.map((m) => m.id));
+  const seen = new Set(inRoster);
+  const baselines = [];
+  for (const id of includeIds) {
+    if (seen.has(id)) continue;
+    const raw = baselineLookupPool.find((m) => m.id === id);
+    if (!raw) {
+      continue;
+    }
+    const params = new Set(raw.supported_parameters ?? []);
+    const promptPerToken = parseFloat(raw.pricing?.prompt ?? "NaN");
+    const completionPerToken = parseFloat(raw.pricing?.completion ?? "NaN");
+    const ctx = raw.context_length ?? 0;
+    const maxOutRaw = raw.top_provider?.max_completion_tokens;
+    const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
+    baselines.push({
+      id: raw.id,
+      name: raw.name ?? raw.id,
+      contextTokens: ctx,
+      maxOutputTokens: maxOut,
+      inputDollarsPerMillion: isFinite(promptPerToken) ? promptPerToken * 1e6 : Infinity,
+      outputDollarsPerMillion: isFinite(completionPerToken) ? completionPerToken * 1e6 : Infinity,
+      supportsStructured: params.has("structured_outputs") || params.has("response_format"),
+      supportsReasoning: params.has("reasoning") || params.has("include_reasoning"),
+      raw
+    });
+    seen.add(raw.id);
+  }
+  return { candidates, baselines };
+}
+
+// src/benchmark/security-triage/select.ts
+var SECURITY_TRIAGE_CRITERIA = {
+  category: DEFAULT_CRITERIA.category,
+  // Snippet windows are at most a few KB; the judge prompt is small. 16K is
+  // plenty and keeps cheap small models (e.g. qwen-2.5-7b @ 32K) in the pool.
+  minContextTokens: 16e3,
+  // The verdict JSON is ~200 bytes. 1K completion headroom is ample.
+  minOutputTokens: 1e3,
+  maxInputDollarsPerMillion: DEFAULT_CRITERIA.maxInputDollarsPerMillion,
+  maxOutputDollarsPerMillion: DEFAULT_CRITERIA.maxOutputDollarsPerMillion,
+  requireStructuredOutputs: true,
+  // Triage does NOT need a reasoning model — the json_schema verdict is a
+  // direct classification. Requiring reasoning would wrongly exclude qwen-2.5-7b.
+  requireReasoning: false,
+  allowFree: false
+};
+var COST_EPSILON = 1e-9;
+function notPricier(candidate, inInc, outInc) {
+  return candidate.inputDollarsPerMillion <= inInc + COST_EPSILON && candidate.outputDollarsPerMillion <= outInc + COST_EPSILON;
+}
+function selectSecurityTriageModel(input) {
+  const { incumbentModelId, incumbentInputDollarsPerMillion: inInc, incumbentOutputDollarsPerMillion: outInc } = input;
+  const eligible = [];
+  const rejected = [];
+  for (const c of input.candidates) {
+    if (!c.qualified) {
+      rejected.push({
+        modelId: c.modelId,
+        reason: `does not meet security-triage requirements${c.disqualifyReason ? ` (${c.disqualifyReason})` : ""}`
+      });
+      continue;
+    }
+    if (!c.triage.pass) {
+      rejected.push({
+        modelId: c.modelId,
+        reason: `failed the triage benchmark: ${c.triage.failReasons.join("; ")}`
+      });
+      continue;
+    }
+    if (!notPricier(c, inInc, outInc)) {
+      rejected.push({
+        modelId: c.modelId,
+        reason: `pricier than the incumbent default (in $${c.inputDollarsPerMillion.toFixed(3)}/out $${c.outputDollarsPerMillion.toFixed(3)} vs incumbent in $${inInc.toFixed(3)}/out $${outInc.toFixed(3)}) \u2014 never auto-bump to a pricier model`
+      });
+      continue;
+    }
+    eligible.push(c);
+  }
+  eligible.sort((a, b) => {
+    if (b.triage.score !== a.triage.score) return b.triage.score - a.triage.score;
+    const aCost = a.inputDollarsPerMillion + a.outputDollarsPerMillion;
+    const bCost = b.inputDollarsPerMillion + b.outputDollarsPerMillion;
+    if (aCost !== bCost) return aCost - bCost;
+    return a.latencyMs - b.latencyMs;
+  });
+  if (eligible.length === 0) {
+    return {
+      recommendedModelId: incumbentModelId,
+      changed: false,
+      reason: "No eligible same-or-cheaper model passed the triage benchmark. Keeping the incumbent default.",
+      eligible,
+      rejected
+    };
+  }
+  const winner = eligible[0];
+  const changed = winner.modelId !== incumbentModelId;
+  return {
+    recommendedModelId: winner.modelId,
+    changed,
+    reason: changed ? `${winner.modelId} passed the triage benchmark (score ${winner.triage.score.toFixed(3)}) at no higher cost than the incumbent and scored best among eligible passers.` : `The incumbent ${winner.modelId} remains the best eligible passer (score ${winner.triage.score.toFixed(3)}).`,
+    eligible,
+    rejected
+  };
+}
+
+// src/model-qualification/registry.ts
+function criteria(overrides) {
+  return { ...DEFAULT_CRITERIA, ...overrides };
+}
+var TOOL_MODEL_REGISTRY = {
+  security_scan: {
+    tool: "security_scan",
+    // The reference instance. Structured output + a modest context; NO reasoning
+    // / 128K bar — triage snippets are small and the verdict is ~200 bytes.
+    requirements: SECURITY_TRIAGE_CRITERIA,
+    benchmark: "security-triage",
+    note: "Injection-hardened verdict adjudication. Gated by the security-triage golden dataset (TRDD-973a0265)."
+  },
+  mass_scout: {
+    tool: "mass_scout",
+    requirements: criteria({ requireReasoning: false }),
+    benchmark: "keyword-classification",
+    note: "Fieldset extraction / classification. Reuses the existing keyword-classification benchmark (benchmark/ground-truth.ts + pick.ts)."
+  },
+  cluster_synonyms: {
+    tool: "cluster_synonyms",
+    requirements: criteria({ requireReasoning: true }),
+    benchmark: null,
+    note: "Meaning-equivalence clustering. Has an in-tool pre-flight benchmark gate; a formal golden dataset is incremental."
+  },
+  code_task: {
+    tool: "code_task",
+    requirements: criteria({ requireReasoning: true, minContextTokens: 128e3 }),
+    benchmark: null,
+    note: "Code-optimized analysis. Code-understanding benchmark dataset is incremental."
+  },
+  scan_folder: {
+    tool: "scan_folder",
+    requirements: criteria({ requireReasoning: false, minContextTokens: 128e3 }),
+    benchmark: null,
+    note: "Per-file auto-discovery scan. Per-file detection benchmark dataset is incremental."
+  },
+  search_existing_implementations: {
+    tool: "search_existing_implementations",
+    requirements: criteria({ requireReasoning: true, minContextTokens: 128e3 }),
+    benchmark: null,
+    note: "Duplicate-implementation match across a codebase. Duplicate-match benchmark dataset is incremental."
+  },
+  check_references: {
+    tool: "check_references",
+    requirements: criteria({ requireReasoning: false }),
+    benchmark: null,
+    note: "Symbol-reference validation. Validation-accuracy benchmark dataset is incremental."
+  },
+  check_imports: {
+    tool: "check_imports",
+    requirements: criteria({ requireReasoning: false }),
+    benchmark: null,
+    note: "Import-path validation. Validation-accuracy benchmark dataset is incremental."
+  },
+  check_against_specs: {
+    tool: "check_against_specs",
+    requirements: criteria({ requireReasoning: false }),
+    benchmark: null,
+    note: "Source-vs-specification compliance. Validation-accuracy benchmark dataset is incremental."
+  },
+  compare_files: {
+    tool: "compare_files",
+    requirements: criteria({ requireReasoning: false, minContextTokens: 128e3 }),
+    benchmark: null,
+    note: "Two-file change summary. Change-summary benchmark dataset is incremental."
+  },
+  chat: {
+    tool: "chat",
+    // The loosest tool — general text. Structured output not required.
+    requirements: criteria({ requireStructuredOutputs: false, requireReasoning: false }),
+    benchmark: null,
+    note: "General-purpose text. A loose general-quality benchmark is incremental."
+  }
+};
+function getToolDescriptor(tool) {
+  return TOOL_MODEL_REGISTRY[tool];
+}
+function registeredTools() {
+  return Object.keys(TOOL_MODEL_REGISTRY);
+}
+function qualifyModelForTool(tool, model) {
+  const descriptor = getToolDescriptor(tool);
+  if (!descriptor) {
+    return {
+      tool,
+      meetsRequirements: false,
+      disqualifyReason: "unknown or non-LLM tool (no registry descriptor)",
+      qualified: null,
+      benchmark: null,
+      requirementsEligible: false
+    };
+  }
+  const qualified = qualify(model, descriptor.requirements);
+  const reason = qualified === null ? disqualifyReason(model, descriptor.requirements) : null;
+  return {
+    tool,
+    meetsRequirements: qualified !== null,
+    disqualifyReason: reason,
+    qualified,
+    benchmark: descriptor.benchmark,
+    requirementsEligible: qualified !== null
+  };
+}
+
+// src/config.ts
 var API_PRESETS = {
   // ── Local presets ─────────────────────────────────────────────────
   "lmstudio-local": {
@@ -39641,9 +39938,9 @@ function getConfigDir() {
       return "/tmp";
     }
   })();
-  const sep2 = process.platform === "win32" ? "\\" : "/";
-  const underHome = dir.startsWith(home + sep2) || dir === home;
-  const underTmp = dir.startsWith(tmpCanonical + sep2) || dir === tmpCanonical;
+  const sep3 = process.platform === "win32" ? "\\" : "/";
+  const underHome = dir.startsWith(home + sep3) || dir === home;
+  const underTmp = dir.startsWith(tmpCanonical + sep3) || dir === tmpCanonical;
   if (!underHome && !underTmp) {
     throw new Error(`Config directory '${dir}' is outside allowed paths (${home} or ${tmpCanonical})`);
   }
@@ -39839,6 +40136,30 @@ function validateProfile(name, profile) {
       errors.push(`Remote api '${profile.api}' requires 'api_key'${hint}`);
     }
   }
+  const rawToolModels = profile.tool_models;
+  if (rawToolModels !== void 0 && rawToolModels !== null) {
+    if (typeof rawToolModels !== "object" || Array.isArray(rawToolModels)) {
+      errors.push(
+        `Profile '${name}': tool_models must be a map of {tool: model}`
+      );
+    } else {
+      const known = new Set(registeredTools());
+      for (const [toolName, modelId] of Object.entries(
+        rawToolModels
+      )) {
+        if (!known.has(toolName)) {
+          errors.push(
+            `Profile '${name}': tool_models has unknown tool '${toolName}'. Known LLM tools: ${registeredTools().join(", ")}`
+          );
+        }
+        if (typeof modelId !== "string" || modelId.length === 0) {
+          errors.push(
+            `Profile '${name}': tool_models['${toolName}'] must be a non-empty model-id string`
+          );
+        }
+      }
+    }
+  }
   return { valid: errors.length === 0, errors };
 }
 function validateSettings(settings) {
@@ -39862,6 +40183,10 @@ function validateSettings(settings) {
   }
   return validateProfile(settings.active, profile);
 }
+function coerceToolModels(raw) {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  return { ...raw };
+}
 function resolveProfile(name, profile) {
   const preset = API_PRESETS[profile.api];
   if (!preset) {
@@ -39877,11 +40202,18 @@ function resolveProfile(name, profile) {
     authToken: resolveEnvValue(rawAuth),
     secondModel: profile.second_model || "",
     thirdModel: profile.third_model || "",
+    toolModels: coerceToolModels(profile.tool_models),
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
     appName: profile.app_name ?? preset.defaultAppName,
     httpReferer: profile.http_referer ?? preset.defaultHttpReferer
   };
+}
+function resolveModelForTool(resolved, tool, fallback) {
+  const override = resolved.toolModels[tool];
+  if (typeof override === "string" && override.length > 0) return override;
+  if (fallback !== void 0) return fallback;
+  return resolved.model;
 }
 var SETTINGS_TEMPLATE = `# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 # LLM Externalizer \u2014 Settings
@@ -39929,6 +40261,13 @@ profiles:
     model: "google/gemini-2.5-flash"
     second_model: "x-ai/grok-4.1-fast"
     api_key: $OPENROUTER_API_KEY
+    # Optional: per-tool model overrides (TRDD-f45eeaa0). Absent \u2192 this
+    # profile's \`model\` (back-compat). Keys must be LLM-using tool names;
+    # a model set here should pass that tool's benchmark \u2014 see the
+    # security-triage benchmark (/llm-externalizer-security-triage-benchmark).
+    # tool_models:
+    #   security_scan: "qwen/qwen-2.5-7b-instruct"
+    #   code_task: "google/gemini-2.5-flash"
 
 # \u2500\u2500 API Presets Reference \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 # Use with --api when creating profiles:
@@ -42456,18 +42795,21 @@ var realFetch = async (url2, init) => {
 };
 
 // src/security_scan/report.ts
-import { execSync as execSync2 } from "node:child_process";
-import { existsSync as existsSync2, mkdirSync as mkdirSync4, writeFileSync as writeFileSync2 } from "node:fs";
+import { mkdirSync as mkdirSync4, writeFileSync as writeFileSync2 } from "node:fs";
 import { isAbsolute as isAbsolute2, join as join4, resolve as resolve3 } from "node:path";
-function defaultMainRoot() {
+
+// src/project-root.ts
+import { existsSync as existsSync2 } from "node:fs";
+function resolveProjectMainRoot(override) {
+  if (override && override.length > 0) return override;
   const projDir = process.env.CLAUDE_PROJECT_DIR;
-  if (projDir && existsSync2(projDir)) return projDir;
-  try {
-    const out = execSync2("git worktree list", { encoding: "utf-8" }).split("\n")[0]?.trim().split(/\s+/)[0];
-    if (out && !out.includes("/.claude/plugins/")) return out;
-  } catch {
-  }
+  if (projDir && projDir.length > 0 && existsSync2(projDir)) return projDir;
   return process.cwd();
+}
+
+// src/security_scan/report.ts
+function defaultMainRoot() {
+  return resolveProjectMainRoot();
 }
 function resolveReportDir(outputDir, mainRoot) {
   if (outputDir && outputDir.length > 0) {
@@ -42844,14 +43186,7 @@ function ok(stdout) {
 `, stderr: "", exitCode: 0 };
 }
 function defaultMainRoot2() {
-  const projDir = process.env.CLAUDE_PROJECT_DIR;
-  if (projDir && existsSync3(projDir)) return projDir;
-  try {
-    const out = execSync3("git worktree list", { encoding: "utf-8" }).split("\n")[0]?.trim().split(/\s+/)[0];
-    if (out && !out.includes("/.claude/plugins/")) return out;
-  } catch {
-  }
-  return process.cwd();
+  return resolveProjectMainRoot();
 }
 function resolveReportDir2(outputDirFlag, opts) {
   if (outputDirFlag && outputDirFlag !== "true") {
@@ -42865,7 +43200,7 @@ function listGitChangedFiles(root, ref) {
     return null;
   }
   try {
-    const out = execSync3(
+    const out = execSync2(
       `git diff --name-only --diff-filter=ACMR -z ${JSON.stringify(ref)}...HEAD`,
       { cwd: root, encoding: "buffer", stdio: ["ignore", "pipe", "ignore"] }
     );
@@ -42877,7 +43212,7 @@ function listGitChangedFiles(root, ref) {
 }
 function listGitTrackedFiles(root) {
   try {
-    const out = execSync3(
+    const out = execSync2(
       "git ls-files --cached --others --exclude-standard -z",
       { cwd: root, encoding: "buffer", stdio: ["ignore", "pipe", "ignore"] }
     );
@@ -43010,11 +43345,11 @@ function parseFilterToken(token) {
   const ALLOWED = /* @__PURE__ */ new Set([">=", "<=", "!=", "=", ">", "<", "LIKE"]);
   const ops = [">=", "<=", "!=", "LIKE", "=", ">", "<"];
   for (const op of ops) {
-    const sep2 = `:${op}:`;
-    const idx = token.indexOf(sep2);
+    const sep3 = `:${op}:`;
+    const idx = token.indexOf(sep3);
     if (idx === -1) continue;
     const path = token.slice(0, idx);
-    const valueStr = token.slice(idx + sep2.length);
+    const valueStr = token.slice(idx + sep3.length);
     if (!ALLOWED.has(op)) continue;
     let value;
     if (valueStr === "true") value = true;
@@ -44069,6 +44404,18 @@ async function runSecurityScanCli(args, opts) {
   if (flags["output-dir"] && flags["output-dir"] !== "true" && typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
     parsed.output_dir = flags["output-dir"];
   }
+  if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && parsed.model === void 0) {
+    try {
+      const settings = loadSettings();
+      const active = settings?.active ? settings.profiles[settings.active] : void 0;
+      if (settings && active) {
+        const resolved = resolveProfile(settings.active, active);
+        const perTool = resolveModelForTool(resolved, "security_scan", "");
+        if (perTool) parsed.model = perTool;
+      }
+    } catch {
+    }
+  }
   const result = await runSecurityScan(parsed, {
     fetchImpl: opts.fetchImpl,
     apiKey: opts.apiKey,
@@ -44279,108 +44626,11 @@ async function runMassScoutCli(args, opts = {}) {
 
 // src/benchmark/security-triage/index.ts
 import { createHash as createHash3 } from "node:crypto";
-import { execSync as execSync4 } from "node:child_process";
-import { existsSync as existsSync5, mkdirSync as mkdirSync6, readFileSync as readFileSync6, renameSync, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join7, resolve as resolve5 } from "node:path";
-
-// src/benchmark/discover.ts
-var DEFAULT_CRITERIA = {
-  category: "programming",
-  minContextTokens: 128e3,
-  minOutputTokens: 64e3,
-  // Hard caps for auto-selection: STRICTLY less than $1/M for both
-  // input AND output. Anything at or above is rejected from the
-  // candidate pool. The `qualify()` predicate enforces this with `<`
-  // (not `<=`) so $1.00 itself is out. Override only via --include.
-  maxInputDollarsPerMillion: 1,
-  maxOutputDollarsPerMillion: 1,
-  requireStructuredOutputs: true,
-  requireReasoning: true,
-  allowFree: false
-};
-async function fetchProgrammingModels(category) {
-  const url2 = category ? `https://openrouter.ai/api/v1/models?category=${encodeURIComponent(category)}` : `https://openrouter.ai/api/v1/models`;
-  const resp = await fetch(url2);
-  if (!resp.ok) {
-    throw new Error(`OpenRouter model list fetch failed: ${resp.status} ${resp.statusText}`);
-  }
-  const body = await resp.json();
-  return body.data ?? [];
-}
-function filterModels(models, criteria2 = DEFAULT_CRITERIA) {
-  const out = [];
-  for (const m of models) {
-    const q = qualify(m, criteria2);
-    if (q) out.push(q);
-  }
-  return out;
-}
-function qualify(m, criteria2) {
-  if (!criteria2.allowFree && m.id.endsWith(":free")) return null;
-  const params = new Set(m.supported_parameters ?? []);
-  const supportsStructured = params.has("structured_outputs") || params.has("response_format");
-  const supportsReasoning = params.has("reasoning") || params.has("include_reasoning");
-  if (criteria2.requireStructuredOutputs && !supportsStructured) return null;
-  if (criteria2.requireReasoning && !supportsReasoning) return null;
-  const ctx = m.context_length ?? 0;
-  if (ctx < criteria2.minContextTokens) return null;
-  const maxOutRaw = m.top_provider?.max_completion_tokens;
-  const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
-  if (!maxOut || maxOut < criteria2.minOutputTokens) return null;
-  const promptPerToken = parseFloat(m.pricing?.prompt ?? "NaN");
-  const completionPerToken = parseFloat(m.pricing?.completion ?? "NaN");
-  if (!isFinite(promptPerToken) || !isFinite(completionPerToken)) return null;
-  const inputDollarsPerMillion = promptPerToken * 1e6;
-  const outputDollarsPerMillion = completionPerToken * 1e6;
-  if (inputDollarsPerMillion >= criteria2.maxInputDollarsPerMillion) return null;
-  if (outputDollarsPerMillion >= criteria2.maxOutputDollarsPerMillion) return null;
-  return {
-    id: m.id,
-    name: m.name ?? m.id,
-    contextTokens: ctx,
-    maxOutputTokens: maxOut,
-    inputDollarsPerMillion,
-    outputDollarsPerMillion,
-    supportsStructured,
-    supportsReasoning,
-    raw: m
-  };
-}
-function buildBenchmarkRoster(candidatePool, criteria2, includeIds, baselineLookupPool = candidatePool) {
-  const candidates = filterModels(candidatePool, criteria2);
-  const inRoster = new Set(candidates.map((m) => m.id));
-  const seen = new Set(inRoster);
-  const baselines = [];
-  for (const id of includeIds) {
-    if (seen.has(id)) continue;
-    const raw = baselineLookupPool.find((m) => m.id === id);
-    if (!raw) {
-      continue;
-    }
-    const params = new Set(raw.supported_parameters ?? []);
-    const promptPerToken = parseFloat(raw.pricing?.prompt ?? "NaN");
-    const completionPerToken = parseFloat(raw.pricing?.completion ?? "NaN");
-    const ctx = raw.context_length ?? 0;
-    const maxOutRaw = raw.top_provider?.max_completion_tokens;
-    const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
-    baselines.push({
-      id: raw.id,
-      name: raw.name ?? raw.id,
-      contextTokens: ctx,
-      maxOutputTokens: maxOut,
-      inputDollarsPerMillion: isFinite(promptPerToken) ? promptPerToken * 1e6 : Infinity,
-      outputDollarsPerMillion: isFinite(completionPerToken) ? completionPerToken * 1e6 : Infinity,
-      supportsStructured: params.has("structured_outputs") || params.has("response_format"),
-      supportsReasoning: params.has("reasoning") || params.has("include_reasoning"),
-      raw
-    });
-    seen.add(raw.id);
-  }
-  return { candidates, baselines };
-}
+import { existsSync as existsSync4, mkdirSync as mkdirSync6, readFileSync as readFileSync6, renameSync, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join7 } from "node:path";
 
 // src/benchmark/security-triage/dataset.ts
-import { existsSync as existsSync4, readFileSync as readFileSync5 } from "node:fs";
+import { existsSync as existsSync3, readFileSync as readFileSync5 } from "node:fs";
 import { dirname as dirname4, join as join6 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var BENCHMARK_RUBRICS = {
@@ -44403,7 +44653,7 @@ function resolveDatasetPath() {
     join6(here, "..", "..", "src", "benchmark", "security-triage", "dataset.jsonl")
   ];
   for (const c of candidates) {
-    if (existsSync4(c)) return c;
+    if (existsSync3(c)) return c;
   }
   throw new Error(
     `Could not locate the security-triage dataset. Tried:
@@ -44681,160 +44931,6 @@ function scoreTriage(modelId, cases, returned, thresholds = DEFAULT_TRIAGE_THRES
   };
 }
 
-// src/benchmark/security-triage/select.ts
-var SECURITY_TRIAGE_CRITERIA = {
-  category: DEFAULT_CRITERIA.category,
-  // Snippet windows are at most a few KB; the judge prompt is small. 16K is
-  // plenty and keeps cheap small models (e.g. qwen-2.5-7b @ 32K) in the pool.
-  minContextTokens: 16e3,
-  // The verdict JSON is ~200 bytes. 1K completion headroom is ample.
-  minOutputTokens: 1e3,
-  maxInputDollarsPerMillion: DEFAULT_CRITERIA.maxInputDollarsPerMillion,
-  maxOutputDollarsPerMillion: DEFAULT_CRITERIA.maxOutputDollarsPerMillion,
-  requireStructuredOutputs: true,
-  // Triage does NOT need a reasoning model — the json_schema verdict is a
-  // direct classification. Requiring reasoning would wrongly exclude qwen-2.5-7b.
-  requireReasoning: false,
-  allowFree: false
-};
-var COST_EPSILON = 1e-9;
-function notPricier(candidate, inInc, outInc) {
-  return candidate.inputDollarsPerMillion <= inInc + COST_EPSILON && candidate.outputDollarsPerMillion <= outInc + COST_EPSILON;
-}
-function selectSecurityTriageModel(input) {
-  const { incumbentModelId, incumbentInputDollarsPerMillion: inInc, incumbentOutputDollarsPerMillion: outInc } = input;
-  const eligible = [];
-  const rejected = [];
-  for (const c of input.candidates) {
-    if (!c.qualified) {
-      rejected.push({
-        modelId: c.modelId,
-        reason: `does not meet security-triage requirements${c.disqualifyReason ? ` (${c.disqualifyReason})` : ""}`
-      });
-      continue;
-    }
-    if (!c.triage.pass) {
-      rejected.push({
-        modelId: c.modelId,
-        reason: `failed the triage benchmark: ${c.triage.failReasons.join("; ")}`
-      });
-      continue;
-    }
-    if (!notPricier(c, inInc, outInc)) {
-      rejected.push({
-        modelId: c.modelId,
-        reason: `pricier than the incumbent default (in $${c.inputDollarsPerMillion.toFixed(3)}/out $${c.outputDollarsPerMillion.toFixed(3)} vs incumbent in $${inInc.toFixed(3)}/out $${outInc.toFixed(3)}) \u2014 never auto-bump to a pricier model`
-      });
-      continue;
-    }
-    eligible.push(c);
-  }
-  eligible.sort((a, b) => {
-    if (b.triage.score !== a.triage.score) return b.triage.score - a.triage.score;
-    const aCost = a.inputDollarsPerMillion + a.outputDollarsPerMillion;
-    const bCost = b.inputDollarsPerMillion + b.outputDollarsPerMillion;
-    if (aCost !== bCost) return aCost - bCost;
-    return a.latencyMs - b.latencyMs;
-  });
-  if (eligible.length === 0) {
-    return {
-      recommendedModelId: incumbentModelId,
-      changed: false,
-      reason: "No eligible same-or-cheaper model passed the triage benchmark. Keeping the incumbent default.",
-      eligible,
-      rejected
-    };
-  }
-  const winner = eligible[0];
-  const changed = winner.modelId !== incumbentModelId;
-  return {
-    recommendedModelId: winner.modelId,
-    changed,
-    reason: changed ? `${winner.modelId} passed the triage benchmark (score ${winner.triage.score.toFixed(3)}) at no higher cost than the incumbent and scored best among eligible passers.` : `The incumbent ${winner.modelId} remains the best eligible passer (score ${winner.triage.score.toFixed(3)}).`,
-    eligible,
-    rejected
-  };
-}
-
-// src/model-qualification/registry.ts
-function criteria(overrides) {
-  return { ...DEFAULT_CRITERIA, ...overrides };
-}
-var TOOL_MODEL_REGISTRY = {
-  security_scan: {
-    tool: "security_scan",
-    // The reference instance. Structured output + a modest context; NO reasoning
-    // / 128K bar — triage snippets are small and the verdict is ~200 bytes.
-    requirements: SECURITY_TRIAGE_CRITERIA,
-    benchmark: "security-triage",
-    note: "Injection-hardened verdict adjudication. Gated by the security-triage golden dataset (TRDD-973a0265)."
-  },
-  mass_scout: {
-    tool: "mass_scout",
-    requirements: criteria({ requireReasoning: false }),
-    benchmark: "keyword-classification",
-    note: "Fieldset extraction / classification. Reuses the existing keyword-classification benchmark (benchmark/ground-truth.ts + pick.ts)."
-  },
-  cluster_synonyms: {
-    tool: "cluster_synonyms",
-    requirements: criteria({ requireReasoning: true }),
-    benchmark: null,
-    note: "Meaning-equivalence clustering. Has an in-tool pre-flight benchmark gate; a formal golden dataset is incremental."
-  },
-  code_task: {
-    tool: "code_task",
-    requirements: criteria({ requireReasoning: true, minContextTokens: 128e3 }),
-    benchmark: null,
-    note: "Code-optimized analysis. Code-understanding benchmark dataset is incremental."
-  },
-  scan_folder: {
-    tool: "scan_folder",
-    requirements: criteria({ requireReasoning: false, minContextTokens: 128e3 }),
-    benchmark: null,
-    note: "Per-file auto-discovery scan. Per-file detection benchmark dataset is incremental."
-  },
-  search_existing_implementations: {
-    tool: "search_existing_implementations",
-    requirements: criteria({ requireReasoning: true, minContextTokens: 128e3 }),
-    benchmark: null,
-    note: "Duplicate-implementation match across a codebase. Duplicate-match benchmark dataset is incremental."
-  },
-  check_references: {
-    tool: "check_references",
-    requirements: criteria({ requireReasoning: false }),
-    benchmark: null,
-    note: "Symbol-reference validation. Validation-accuracy benchmark dataset is incremental."
-  },
-  check_imports: {
-    tool: "check_imports",
-    requirements: criteria({ requireReasoning: false }),
-    benchmark: null,
-    note: "Import-path validation. Validation-accuracy benchmark dataset is incremental."
-  },
-  check_against_specs: {
-    tool: "check_against_specs",
-    requirements: criteria({ requireReasoning: false }),
-    benchmark: null,
-    note: "Source-vs-specification compliance. Validation-accuracy benchmark dataset is incremental."
-  },
-  compare_files: {
-    tool: "compare_files",
-    requirements: criteria({ requireReasoning: false, minContextTokens: 128e3 }),
-    benchmark: null,
-    note: "Two-file change summary. Change-summary benchmark dataset is incremental."
-  },
-  chat: {
-    tool: "chat",
-    // The loosest tool — general text. Structured output not required.
-    requirements: criteria({ requireStructuredOutputs: false, requireReasoning: false }),
-    benchmark: null,
-    note: "General-purpose text. A loose general-quality benchmark is incremental."
-  }
-};
-function getToolDescriptor(tool) {
-  return TOOL_MODEL_REGISTRY[tool];
-}
-
 // src/benchmark/security-triage/index.ts
 var SECURITY_TRIAGE_CRITERIA2 = getToolDescriptor("security_scan").requirements;
 var INCUMBENT_FALLBACK_PRICING = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
@@ -44846,7 +44942,7 @@ function cacheKey(modelId, date5, datasetHash) {
 }
 function loadCache() {
   const p = cachePath();
-  if (!existsSync5(p)) return {};
+  if (!existsSync4(p)) return {};
   try {
     const parsed = JSON.parse(readFileSync6(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
@@ -44872,16 +44968,7 @@ function resolveApiKey(override) {
   return k;
 }
 function resolveMainRoot(override) {
-  if (override) return override;
-  try {
-    const out = execSync4("git worktree list", {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"]
-    });
-    return out.trim().split("\n")[0].split(/\s+/)[0];
-  } catch {
-    return resolve5(".");
-  }
+  return resolveProjectMainRoot(override);
 }
 function today() {
   return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
@@ -44939,8 +45026,8 @@ async function runSecurityTriageBenchmark(opts = {}) {
   const incumbentIn = incumbentDecorated && isFinite(incumbentDecorated.inputDollarsPerMillion) ? incumbentDecorated.inputDollarsPerMillion : INCUMBENT_FALLBACK_PRICING.input_per_m_usd;
   const incumbentOut = incumbentDecorated && isFinite(incumbentDecorated.outputDollarsPerMillion) ? incumbentDecorated.outputDollarsPerMillion : INCUMBENT_FALLBACK_PRICING.output_per_m_usd;
   const toAssess = /* @__PURE__ */ new Map();
-  const addModel = (model, qualified, disqualifyReason) => {
-    if (!toAssess.has(model.id)) toAssess.set(model.id, { model, qualified, disqualifyReason });
+  const addModel = (model, qualified, disqualifyReason2) => {
+    if (!toAssess.has(model.id)) toAssess.set(model.id, { model, qualified, disqualifyReason: disqualifyReason2 });
   };
   if (opts.models && opts.models.length > 0) {
     for (const id of opts.models) {
@@ -44998,7 +45085,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
   const assessments = [];
   const scores = [];
   let totalCost = 0;
-  for (const { model, qualified, disqualifyReason } of toAssess.values()) {
+  for (const { model, qualified, disqualifyReason: disqualifyReason2 } of toAssess.values()) {
     const key = cacheKey(model.id, today(), datasetHash);
     const cached2 = cache[key];
     let score;
@@ -45037,7 +45124,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
         inputDollarsPerMillion: model.inputDollarsPerMillion,
         outputDollarsPerMillion: model.outputDollarsPerMillion,
         qualified,
-        disqualifyReason
+        disqualifyReason: disqualifyReason2
       };
     }
     totalCost += costUsd;
@@ -45045,7 +45132,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
     assessments.push({
       modelId: model.id,
       qualified,
-      disqualifyReason,
+      disqualifyReason: disqualifyReason2,
       inputDollarsPerMillion: model.inputDollarsPerMillion,
       outputDollarsPerMillion: model.outputDollarsPerMillion,
       latencyMs,
@@ -45183,6 +45270,63 @@ function buildReportMarkdown(args) {
     "Re-run: `llm-externalizer benchmark --security-triage` (auto-discover) or `--security-triage --model <id>` (assess one). The recommended model is surfaced for the operator to adopt via the security_scan `model` parameter."
   );
   return lines.join("\n") + "\n";
+}
+
+// src/model-qualification/assess.ts
+function assessModelAcrossTools(model) {
+  const tools = [];
+  for (const tool of registeredTools()) {
+    const q = qualifyModelForTool(tool, model);
+    tools.push({
+      tool,
+      meetsRequirements: q.meetsRequirements,
+      disqualifyReason: q.disqualifyReason,
+      benchmark: q.benchmark,
+      note: getToolDescriptor(tool)?.note ?? ""
+    });
+  }
+  const qualifiedCount = tools.filter((t) => t.meetsRequirements).length;
+  const benchmarkGatedQualified = tools.filter((t) => t.meetsRequirements && t.benchmark !== null).map((t) => t.tool);
+  return {
+    modelId: model.id,
+    modelName: model.name ?? model.id,
+    tools,
+    qualifiedCount,
+    totalTools: tools.length,
+    benchmarkGatedQualified
+  };
+}
+async function assessModelById(modelId, opts = {}) {
+  const fetchModels = opts.fetchModels ?? (() => fetchProgrammingModels());
+  const models = await fetchModels();
+  const model = models.find((m) => m.id === modelId);
+  if (!model) {
+    throw new Error(
+      `Model '${modelId}' not found in the OpenRouter catalog. Check the id (e.g. 'google/gemini-2.5-flash').`
+    );
+  }
+  return assessModelAcrossTools(model);
+}
+function renderAssessmentText(a) {
+  const lines = [];
+  lines.push(`Model: ${a.modelId} (${a.modelName})`);
+  lines.push(
+    `Meets requirements for ${a.qualifiedCount}/${a.totalTools} LLM tools.`
+  );
+  lines.push("");
+  const toolWidth = Math.max(4, ...a.tools.map((t) => t.tool.length));
+  for (const t of a.tools) {
+    const status = t.meetsRequirements ? "OK" : "NO";
+    const tail = t.meetsRequirements ? t.benchmark ? `benchmark: ${t.benchmark} (run before assigning)` : "requirements-only" : t.disqualifyReason ?? "does not meet requirements";
+    lines.push(`  ${t.tool.padEnd(toolWidth)}  ${status}  ${tail}`);
+  }
+  if (a.benchmarkGatedQualified.length > 0) {
+    lines.push("");
+    lines.push(
+      `Note: ${a.benchmarkGatedQualified.join(", ")} ALSO require a benchmark pass before assignment \u2014 run that tool's benchmark (security_scan \u2192 /llm-externalizer-security-triage-benchmark).`
+    );
+  }
+  return lines.join("\n");
 }
 
 // src/mass_scouting/mcp-tools.ts
@@ -45350,7 +45494,7 @@ var MASS_SCOUT_TOOLS = [
   },
   {
     name: "mass_scout",
-    description: "mass-scouting Phase 4: actually call the LLM on every eligible file. Compiles the fieldset into a JSON Schema, fans calls out via the scout worker, applies fix_envelope repairs, runs the required-keys validator, persists results + FTS rows. Writes a markdown report under <main-repo-root>/reports/mass_scouting/ (override with output_dir).\n\nRETURNS: files_total/ok/failed/skipped_too_big, retries, cost_usd, report path.\n\nENV: $OPENROUTER_API_KEY must be set.",
+    description: "mass-scouting Phase 4: actually call the LLM on every eligible file. Compiles the fieldset into a JSON Schema, fans calls out via the scout worker, applies fix_envelope repairs, runs the required-keys validator, persists results + FTS rows. Writes a markdown report under <main-project-dir>/reports/mass_scouting/ (override with output_dir).\n\nRETURNS: files_total/ok/failed/skipped_too_big, retries, cost_usd, report path.\n\nENV: $OPENROUTER_API_KEY must be set.",
     inputSchema: {
       type: "object",
       properties: {
@@ -45394,7 +45538,7 @@ var MASS_SCOUT_TOOLS = [
         },
         output_dir: {
           type: "string",
-          description: "Absolute path for the markdown report directory. Defaults to <main-repo-root>/reports/mass_scouting/. Pass this when running as an MCP server so the report lands in the user's project rather than the plugin's install cache."
+          description: "Absolute path for the markdown report directory. Defaults to <main-project-dir>/reports/mass_scouting/. Pass this when running as an MCP server so the report lands in the user's project rather than the plugin's install cache."
         },
         live_context: {
           type: "boolean",
@@ -45517,7 +45661,7 @@ var MASS_SCOUT_TOOLS = [
   },
   {
     name: "mass_scout_export",
-    description: "Dump every result row of a job to JSONL or CSV under <main-repo-root>/reports/mass_scouting/. Useful for follow-up analysis in pandas, jq, etc.",
+    description: "Dump every result row of a job to JSONL or CSV under <main-project-dir>/reports/mass_scouting/. Useful for follow-up analysis in pandas, jq, etc.",
     inputSchema: {
       type: "object",
       properties: {
@@ -45529,7 +45673,7 @@ var MASS_SCOUT_TOOLS = [
         },
         output_dir: {
           type: "string",
-          description: "Absolute path for the export directory. Defaults to <main-repo-root>/reports/mass_scouting/."
+          description: "Absolute path for the export directory. Defaults to <main-project-dir>/reports/mass_scouting/."
         }
       },
       required: ["db_path", "job_id"]
@@ -45801,6 +45945,20 @@ var MASS_SCOUT_TOOLS = [
         }
       },
       required: []
+    }
+  },
+  {
+    name: "assess_model",
+    description: "Assess ONE OpenRouter model against EVERY LLM tool's per-tool REQUIREMENTS (TRDD-f45eeaa0) \u2014 FREE: makes NO LLM call (no token cost), only a public model-catalog fetch (no API key). Reports, per tool, whether the model meets that tool's hard requirements (cost/context/output/params) and whether the tool ALSO has a benchmark gate to run before assignment. Does NOT run any benchmark. RETURNS: a per-tool OK/NO table + which qualifying tools still need a benchmark pass.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        model: {
+          type: "string",
+          description: "OpenRouter model id, e.g. 'google/gemini-2.5-flash'."
+        }
+      },
+      required: ["model"]
     }
   }
 ];
@@ -46085,6 +46243,30 @@ async function dispatchMassScoutTool(name, args, opts = {}) {
       ].join("\n");
       return { content: [{ type: "text", text }], isError: false };
     }
+    case "assess_model": {
+      const modelId = str(args.model);
+      if (!modelId) {
+        return {
+          content: [{ type: "text", text: "assess_model requires a 'model' id" }],
+          isError: true
+        };
+      }
+      try {
+        const assessment = await assessModelById(
+          modelId,
+          opts.modelCatalogFetch ? { fetchModels: opts.modelCatalogFetch } : {}
+        );
+        return {
+          content: [{ type: "text", text: renderAssessmentText(assessment) }],
+          isError: false
+        };
+      } catch (e) {
+        return {
+          content: [{ type: "text", text: e.message }],
+          isError: true
+        };
+      }
+    }
     default:
       return {
         content: [
@@ -46172,7 +46354,7 @@ import {
   readFileSync as readFileSync8,
   readdirSync as readdirSync3,
   writeFileSync as writeFileSync6,
-  existsSync as existsSync7,
+  existsSync as existsSync6,
   renameSync as renameSync2
 } from "node:fs";
 import { join as join9 } from "node:path";
@@ -46424,7 +46606,7 @@ var CheckpointDB = class _CheckpointDB {
 // src/cluster/embeddings.ts
 import { spawnSync } from "node:child_process";
 import {
-  existsSync as existsSync6,
+  existsSync as existsSync5,
   mkdirSync as mkdirSync8,
   readFileSync as readFileSync7,
   writeFileSync as writeFileSync5,
@@ -46434,7 +46616,7 @@ import { dirname as dirname6, join as join8 } from "node:path";
 var F32_BYTES = 4;
 function readEmbeddingsMeta(path) {
   const metaPath = path + ".meta.json";
-  if (!existsSync6(metaPath)) {
+  if (!existsSync5(metaPath)) {
     throw new Error(`embeddings meta sidecar missing: ${metaPath}`);
   }
   const raw = readFileSync7(metaPath, "utf-8");
@@ -46456,7 +46638,7 @@ function readEmbeddingsMeta(path) {
   return meta3;
 }
 function loadEmbeddings(path, expectedN) {
-  if (!existsSync6(path)) throw new Error(`embeddings file missing: ${path}`);
+  if (!existsSync5(path)) throw new Error(`embeddings file missing: ${path}`);
   const meta3 = readEmbeddingsMeta(path);
   const [n, dim] = meta3.shape;
   if (meta3.dtype !== "float32") {
@@ -46482,7 +46664,7 @@ function loadEmbeddings(path, expectedN) {
 }
 function computeEmbeddings(items, opts) {
   if (items.length === 0) throw new Error("computeEmbeddings: empty items");
-  if (!existsSync6(opts.scriptPath)) {
+  if (!existsSync5(opts.scriptPath)) {
     throw new Error(`compute_embeddings.py not found: ${opts.scriptPath}`);
   }
   mkdirSync8(opts.outDir, { recursive: true });
@@ -47370,14 +47552,14 @@ var OUTPUT_NAMES = {
   checkpoint: "checkpoint.sqlite"
 };
 async function loadInputJsonl(path) {
-  if (!existsSync7(path)) {
+  if (!existsSync6(path)) {
     throw new Error(`input_file not found: ${path}`);
   }
   return readClusterJsonl(path);
 }
 function loadPolicy(policyFile) {
   if (!policyFile) return resolvePolicy(void 0);
-  if (!existsSync7(policyFile)) {
+  if (!existsSync6(policyFile)) {
     throw new Error(`policy_file not found: ${policyFile}`);
   }
   const raw = readFileSync8(policyFile, "utf-8");
@@ -47476,11 +47658,11 @@ function buildSummary(itemsById, uf, profileName, canonicalsOverride) {
     const clusterId = chooseClusterId(members);
     const memberItems = members.map((id) => itemsById.get(id)).filter((it) => it !== void 0);
     const overrideCanonical = canonicalsOverride?.get(clusterId);
-    const canonical = overrideCanonical ?? pickHeuristicCanonical2(memberItems.map((it) => it.sentence));
+    const canonical2 = overrideCanonical ?? pickHeuristicCanonical2(memberItems.map((it) => it.sentence));
     clusters.push({
       cluster_id: clusterId,
       size: memberItems.length,
-      canonical,
+      canonical: canonical2,
       items: memberItems.map((it) => ({ id: it.id, sentence: it.sentence }))
     });
   }
@@ -47660,6 +47842,109 @@ function buildEarlyAbort(invocation, errors, warnings, profileName, tStart) {
 
 // src/index.ts
 import { fileURLToPath as fileUrlToPath_cs } from "node:url";
+
+// src/rule-install.ts
+import {
+  existsSync as existsSync7,
+  mkdirSync as mkdirSync10,
+  readFileSync as readFileSync9,
+  writeFileSync as writeFileSync7,
+  renameSync as renameSync3,
+  realpathSync as realpathSync2
+} from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { dirname as dirname7, join as join10, resolve as resolve5, sep } from "node:path";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
+var RULE_FILENAME = "use-llm-externalizer.md";
+function resolveBundledRulePath() {
+  const candidates = [];
+  const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+  if (pluginRoot && pluginRoot.length > 0) {
+    candidates.push(join10(resolve5(pluginRoot), "rules", RULE_FILENAME));
+  }
+  try {
+    const here = dirname7(fileURLToPath3(import.meta.url));
+    candidates.push(resolve5(here, "..", "..", "rules", RULE_FILENAME));
+  } catch {
+  }
+  for (const c of candidates) {
+    if (existsSync7(c)) return c;
+  }
+  return null;
+}
+function resolveClaudeRulesDir() {
+  const cfg = process.env.CLAUDE_CONFIG_DIR;
+  const base = cfg && cfg.length > 0 ? resolve5(cfg) : join10(homedir2(), ".claude");
+  return join10(base, "rules");
+}
+function canonical(p) {
+  try {
+    return realpathSync2(p);
+  } catch {
+    const parent = dirname7(p);
+    if (parent === p) return p;
+    return join10(canonical(parent), p.slice(parent.length + (parent.endsWith(sep) ? 0 : 1)));
+  }
+}
+function underAllowedRoot(dir) {
+  const d = canonical(dir);
+  const roots = [];
+  try {
+    roots.push(realpathSync2(homedir2()));
+  } catch {
+    roots.push(homedir2());
+  }
+  if (process.env.CLAUDE_CONFIG_DIR && process.env.CLAUDE_CONFIG_DIR.length > 0) {
+    roots.push(canonical(resolve5(process.env.CLAUDE_CONFIG_DIR)));
+  }
+  try {
+    roots.push(realpathSync2("/tmp"));
+  } catch {
+    roots.push("/tmp");
+  }
+  return roots.some((r) => d === r || d.startsWith(r + sep));
+}
+function installUsageRule(opts = {}) {
+  const optOut = process.env.LLM_EXT_INSTALL_RULE;
+  if (optOut === "0" || optOut === "false") {
+    return { status: "skipped", dest: "", detail: "disabled via LLM_EXT_INSTALL_RULE" };
+  }
+  const source = opts.sourcePath ?? resolveBundledRulePath();
+  if (!source || !existsSync7(source)) {
+    return { status: "error", dest: "", detail: "bundled rule source not found" };
+  }
+  const rulesDir = opts.rulesDir ?? resolveClaudeRulesDir();
+  const dest = join10(rulesDir, RULE_FILENAME);
+  if (!underAllowedRoot(rulesDir)) {
+    return {
+      status: "error",
+      dest,
+      detail: `refusing to write outside home / CLAUDE_CONFIG_DIR / tmp: ${rulesDir}`
+    };
+  }
+  let desired;
+  try {
+    desired = readFileSync9(source, "utf-8");
+  } catch (e) {
+    return { status: "error", dest, detail: `cannot read source: ${e.message}` };
+  }
+  const existed = existsSync7(dest);
+  if (existed) {
+    try {
+      if (readFileSync9(dest, "utf-8") === desired) return { status: "unchanged", dest };
+    } catch {
+    }
+  }
+  try {
+    mkdirSync10(rulesDir, { recursive: true });
+    const tmp = dest + ".tmp." + process.pid;
+    writeFileSync7(tmp, desired, "utf-8");
+    renameSync3(tmp, dest);
+  } catch (e) {
+    return { status: "error", dest, detail: `write failed: ${e.message}` };
+  }
+  return { status: existed ? "updated" : "installed", dest };
+}
 
 // src/or-model-info.ts
 function sortedPercentiles(obj) {
@@ -48149,14 +48434,14 @@ function renderEndpointTable(ep, colors) {
   );
   const BORDER = ANSI.bcyan;
   const top = `\u250C${"\u2500".repeat(labelW + 2)}\u252C${"\u2500".repeat(valueW + 2)}\u2510`;
-  const sep2 = `\u251C${"\u2500".repeat(labelW + 2)}\u253C${"\u2500".repeat(valueW + 2)}\u2524`;
+  const sep3 = `\u251C${"\u2500".repeat(labelW + 2)}\u253C${"\u2500".repeat(valueW + 2)}\u2524`;
   const bot = `\u2514${"\u2500".repeat(labelW + 2)}\u2534${"\u2500".repeat(valueW + 2)}\u2518`;
   const lines = [];
   lines.push(paint(BORDER, top, colors));
   lines.push(
     paint(BORDER, "\u2502 ", colors) + padRight(paint(ANSI.bold + ANSI.cyan, "Endpoint", colors), labelW) + paint(BORDER, " \u2502 ", colors) + padRight(paint(ANSI.bold + ANSI.bwhite, provider, colors), valueW) + paint(BORDER, " \u2502", colors)
   );
-  lines.push(paint(BORDER, sep2, colors));
+  lines.push(paint(BORDER, sep3, colors));
   for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
     const [label, value] = rows[rowIdx];
     const values = Array.isArray(value) ? value : [value];
@@ -48169,7 +48454,7 @@ function renderEndpointTable(ep, colors) {
       );
     }
     if (rowIdx < rows.length - 1) {
-      lines.push(paint(BORDER, sep2, colors));
+      lines.push(paint(BORDER, sep3, colors));
     }
   }
   lines.push(paint(BORDER, bot, colors));
@@ -48246,7 +48531,7 @@ function detectLang(filePath) {
   const ext = extname4(filePath).toLowerCase();
   if (EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
   try {
-    const head = readFileSync9(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
+    const head = readFileSync10(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
     const shebang = head.match(/^#!\s*(?:\/usr\/bin\/env\s+)?(\S+)/);
     if (shebang) {
       const bin = basename4(shebang[1]);
@@ -48279,24 +48564,24 @@ function sanitizeInputPath(filePath) {
   const resolved = resolve6(filePath);
   const realpathSafe = (p) => {
     try {
-      return realpathSync2(p);
+      return realpathSync3(p);
     } catch {
       return p;
     }
   };
   const cwdReal = realpathSafe(resolve6(process.cwd()));
   const homeReal = realpathSafe(
-    resolve6(process.env.HOME || process.env.USERPROFILE || homedir2())
+    resolve6(process.env.HOME || process.env.USERPROFILE || homedir3())
   );
   const tmpReal = realpathSafe(resolve6("/tmp"));
   const resolvedReal = (() => {
     try {
-      return realpathSync2(resolved);
+      return realpathSync3(resolved);
     } catch {
       return resolved;
     }
   })();
-  const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep);
+  const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep2);
   if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
     throw new Error(
       `Path traversal blocked: ${filePath} resolves outside allowed directories`
@@ -48324,7 +48609,7 @@ function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexReda
       `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
     );
   }
-  const raw = readFileSync9(safePath);
+  const raw = readFileSync10(safePath);
   if (raw.length > limit) {
     throw new Error(
       `File too large after read (${(raw.length / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
@@ -48472,7 +48757,7 @@ function scanFilesForSecrets(filePaths) {
   for (const fp of filePaths) {
     if (!existsSync8(fp)) continue;
     try {
-      const content = readFileSync9(fp, "utf-8");
+      const content = readFileSync10(fp, "utf-8");
       const scan = scanForSecrets(content);
       if (scan.found) {
         for (const d of scan.details) {
@@ -48562,7 +48847,7 @@ function resolvePrompt(instructions, instructionsFilesPaths) {
     const paths = Array.isArray(instructionsFilesPaths) ? instructionsFilesPaths : [instructionsFilesPaths];
     for (const fp of paths) {
       assertFileExists(fp);
-      const content = readFileSync9(fp, "utf-8");
+      const content = readFileSync10(fp, "utf-8");
       prompt = prompt ? `${prompt}
 
 ${content}` : content;
@@ -48711,7 +48996,7 @@ function validateGitCwd(dirPath) {
   const resolved = resolve6(dirPath);
   const realpathSafe = (p) => {
     try {
-      return realpathSync2(p);
+      return realpathSync3(p);
     } catch {
       return p;
     }
@@ -48722,16 +49007,16 @@ function validateGitCwd(dirPath) {
   }
   for (const sys of FORBIDDEN_GIT_CWD_PREFIXES) {
     const sysReal = realpathSafe(sys);
-    if (resolvedReal === sysReal || resolvedReal.startsWith(sysReal + sep)) {
+    if (resolvedReal === sysReal || resolvedReal.startsWith(sysReal + sep2)) {
       throw new Error(`validateGitCwd: system path rejected: ${dirPath}`);
     }
   }
   const cwdReal = realpathSafe(resolve6(process.cwd()));
   const homeReal = realpathSafe(
-    resolve6(process.env.HOME || process.env.USERPROFILE || homedir2())
+    resolve6(process.env.HOME || process.env.USERPROFILE || homedir3())
   );
   const tmpReal = realpathSafe(resolve6("/tmp"));
-  const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep);
+  const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep2);
   if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
     throw new Error(
       `validateGitCwd: ${dirPath} resolves outside allowed roots (cwd/$HOME/tmp)`
@@ -48796,7 +49081,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
     if (trackedResult.status === 0 && trackedResult.stdout) {
       for (const relPath of trackedResult.stdout.split("\n")) {
         if (!relPath.trim()) continue;
-        allFiles.add(join10(dirPath, relPath));
+        allFiles.add(join11(dirPath, relPath));
       }
     }
     const untrackedResult = spawnSync2(
@@ -48807,7 +49092,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
     if (untrackedResult.status === 0 && untrackedResult.stdout) {
       for (const relPath of untrackedResult.stdout.split("\n")) {
         if (!relPath.trim()) continue;
-        allFiles.add(join10(dirPath, relPath));
+        allFiles.add(join11(dirPath, relPath));
       }
     }
   }
@@ -48824,8 +49109,8 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
         if (!entry.isDirectory()) continue;
         if (entry.name === ".git" || entry.name === "node_modules") continue;
         if (entry.name.startsWith(".")) continue;
-        const subDir = join10(dir, entry.name);
-        const gitDir = join10(subDir, ".git");
+        const subDir = join11(dir, entry.name);
+        const gitDir = join11(subDir, ".git");
         const gitStat = lstatSyncRetry(gitDir);
         const gitDirIsDir = gitStat ? gitStat.isDirectory() : false;
         if (gitDirIsDir) {
@@ -48852,7 +49137,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
       if (nestedResult.status === 0 && nestedResult.stdout) {
         for (const relPath of nestedResult.stdout.split("\n")) {
           if (!relPath.trim()) continue;
-          allFiles.add(join10(nestedRoot, relPath));
+          allFiles.add(join11(nestedRoot, relPath));
         }
       }
     }
@@ -48907,11 +49192,11 @@ function walkDir(dirPath, options) {
     }
     for (const entry of entries) {
       if (results.length >= maxFiles) return;
-      const fullPath = join10(dir, entry.name);
+      const fullPath = join11(dir, entry.name);
       if (entry.isSymbolicLink()) {
         if (!followSymlinks) continue;
         try {
-          const realPath = realpathSync2(fullPath);
+          const realPath = realpathSync3(fullPath);
           if (visitedPaths.has(realPath)) continue;
           visitedPaths.add(realPath);
           const targetStat = statSync5(realPath);
@@ -48937,7 +49222,7 @@ function walkDir(dirPath, options) {
         if (entry.name === ".git" || entry.name === ".svn" || entry.name === ".hg" || exclude.has(entry.name)) continue;
         if (entry.name.startsWith(".")) continue;
         try {
-          const dirRealPath = realpathSync2(fullPath);
+          const dirRealPath = realpathSync3(fullPath);
           if (visitedPaths.has(dirRealPath)) continue;
           visitedPaths.add(dirRealPath);
         } catch {
@@ -48958,7 +49243,7 @@ function walkDir(dirPath, options) {
   return results;
 }
 function extractLocalImports(filePath, sourceCode) {
-  const dir = dirname7(filePath);
+  const dir = dirname8(filePath);
   const lang = detectLang(filePath);
   const paths = [];
   const patterns = [];
@@ -48977,10 +49262,10 @@ function extractLocalImports(filePath, sourceCode) {
       if (lang === "python" && importPath.startsWith(".")) {
         const dotCount = importPath.match(/^\.+/)?.[0].length ?? 1;
         const modulePart = importPath.slice(dotCount);
-        const baseDir = dotCount === 1 ? dir : join10(dir, ...Array(dotCount - 1).fill(".."));
-        resolved = modulePart ? join10(baseDir, ...modulePart.split(".")) : baseDir;
+        const baseDir = dotCount === 1 ? dir : join11(dir, ...Array(dotCount - 1).fill(".."));
+        resolved = modulePart ? join11(baseDir, ...modulePart.split(".")) : baseDir;
       } else {
-        resolved = join10(dir, importPath);
+        resolved = join11(dir, importPath);
       }
       if (!extname4(resolved)) {
         const tryExts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"];
@@ -49001,7 +49286,7 @@ function extractLocalImports(filePath, sourceCode) {
             "__init__.py"
           ];
           for (const leaf of indexCandidates) {
-            const indexPath = join10(resolved, leaf);
+            const indexPath = join11(resolved, leaf);
             if (existsSync8(indexPath)) {
               resolved = indexPath;
               found = true;
@@ -49225,7 +49510,7 @@ var _onSettingsReloaded = null;
 function reloadSettingsFromDisk() {
   let raw;
   try {
-    raw = readFileSync9(SETTINGS_FILE, "utf-8");
+    raw = readFileSync10(SETTINGS_FILE, "utf-8");
   } catch {
     return false;
   }
@@ -49519,14 +49804,14 @@ function waitForRequestsDrained(timeoutMs = 12e4) {
 }
 var SESSION_ID = randomUUID().slice(0, 8);
 var SESSION_START = /* @__PURE__ */ new Date();
-var LOG_DIR = join10(getConfigDir(), "logs");
-var LOG_FILE = join10(
+var LOG_DIR = join11(getConfigDir(), "logs");
+var LOG_FILE = join11(
   LOG_DIR,
   `session-${SESSION_ID}-${SESSION_START.toISOString().slice(0, 10)}.jsonl`
 );
 function writeLogEntry(entry) {
   try {
-    mkdirSync10(LOG_DIR, { recursive: true });
+    mkdirSync11(LOG_DIR, { recursive: true });
     appendFileSync4(LOG_FILE, JSON.stringify(entry) + "\n");
   } catch {
     process.stderr.write(`[llm-externalizer] Failed to write log entry
@@ -49536,7 +49821,7 @@ function writeLogEntry(entry) {
 var STATS_FILE = "/tmp/claude/llm-externalizer-stats.json";
 function writeStatsFile() {
   try {
-    mkdirSync10("/tmp/claude", { recursive: true, mode: 448 });
+    mkdirSync11("/tmp/claude", { recursive: true, mode: 448 });
     const backend = getCurrentBackend();
     const stats = {
       session_id: SESSION_ID,
@@ -49551,8 +49836,8 @@ function writeStatsFile() {
       backend: backend.type
     };
     const tmpStats = STATS_FILE + ".tmp";
-    writeFileSync7(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
-    renameSync3(tmpStats, STATS_FILE);
+    writeFileSync8(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
+    renameSync4(tmpStats, STATS_FILE);
   } catch {
   }
 }
@@ -50123,24 +50408,7 @@ function defaultOutputDir() {
     _cachedDefaultOutputDir = resolve6(envOverride.trim());
     return _cachedDefaultOutputDir;
   }
-  const project = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  let root = project;
-  try {
-    const out = spawnSync2("git", ["worktree", "list"], {
-      cwd: project,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"]
-    });
-    if (out.status === 0 && out.stdout) {
-      const first = out.stdout.trim().split("\n")[0];
-      if (first) {
-        const candidate = first.split(/\s+/)[0];
-        if (candidate) root = candidate;
-      }
-    }
-  } catch {
-  }
-  _cachedDefaultOutputDir = join10(root, "reports", "llm-externalizer");
+  _cachedDefaultOutputDir = join11(resolveProjectMainRoot(), "reports", "llm-externalizer");
   return _cachedDefaultOutputDir;
 }
 function _resetDefaultOutputDirCache() {
@@ -50165,14 +50433,14 @@ function canonicalTimestamp(date5 = /* @__PURE__ */ new Date()) {
 }
 function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir) {
   const dir = outputDir || defaultOutputDir();
-  mkdirSync10(dir, { recursive: true });
+  mkdirSync11(dir, { recursive: true });
   const now = /* @__PURE__ */ new Date();
   const ts = canonicalTimestamp(now);
   const shortId = randomUUID().slice(0, 6);
   const srcPart = meta3.inputFile ? `-${sanitizeFilename(meta3.inputFile).replace(/\.md$/, "")}` : "";
   const groupPart = meta3.groupId ? `-group-${meta3.groupId.replace(/[^a-zA-Z0-9_-]/g, "_")}` : "";
   const filename = overrideFilename || `${ts}-${toolName}${groupPart}${srcPart}-${shortId}.md`;
-  const filepath = join10(dir, filename);
+  const filepath = join11(dir, filename);
   const lines = [
     "# LLM Externalizer Response",
     "",
@@ -50186,8 +50454,8 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
   lines.push("", "---", "", responseText);
   const tmpPath = filepath + ".tmp";
   try {
-    writeFileSync7(tmpPath, lines.join("\n"), "utf-8");
-    renameSync3(tmpPath, filepath);
+    writeFileSync8(tmpPath, lines.join("\n"), "utf-8");
+    renameSync4(tmpPath, filepath);
   } catch (err3) {
     try {
       unlinkSync(tmpPath);
@@ -50868,7 +51136,7 @@ var folderSchemaProps = {
   },
   output_dir: {
     type: "string",
-    description: "Absolute path to a custom output directory for reports. Default: <git-main-repo-root>/reports/llm-externalizer/ (discovered via `git worktree list` from $CLAUDE_PROJECT_DIR; falls back to $CLAUDE_PROJECT_DIR/reports/llm-externalizer/ when not in a git repo, then to $PWD/reports/llm-externalizer/). Per-call override wins unconditionally \u2014 pass an absolute path under your $MAIN_ROOT/reports/<component>/ to comply with the agent-reports- location rule."
+    description: "Absolute path to a custom output directory for reports. Default: <main-project-dir>/reports/llm-externalizer/, anchored on $CLAUDE_PROJECT_DIR VERBATIM (the dir Claude Code operates in), then falling back to $PWD/reports/llm-externalizer/. NEVER derived from git (no `git worktree list`, no git-root climb) \u2014 that picks the wrong dir in worktrees, per-subfolder-git monorepos, and git-less roots. Per-call override wins unconditionally; $LLM_OUTPUT_DIR also overrides the default."
   },
   free: {
     type: "boolean",
@@ -52379,7 +52647,7 @@ Profiles: ${profileNames.join(", ")}`);
                 };
               }
               try {
-                writeFileSync7(absPath, jsonText, "utf-8");
+                writeFileSync8(absPath, jsonText, "utf-8");
               } catch (err3) {
                 return {
                   content: [
@@ -52447,11 +52715,11 @@ Profiles: ${profileNames.join(", ")}`);
         }
         case "get_settings": {
           try {
-            const raw = readFileSync9(SETTINGS_FILE, "utf-8");
+            const raw = readFileSync10(SETTINGS_FILE, "utf-8");
             const targetDir = outputDir || defaultOutputDir();
-            mkdirSync10(targetDir, { recursive: true });
-            const copyPath = join10(targetDir, "settings_edit.yaml");
-            writeFileSync7(copyPath, raw, "utf-8");
+            mkdirSync11(targetDir, { recursive: true });
+            const copyPath = join11(targetDir, "settings_edit.yaml");
+            writeFileSync8(copyPath, raw, "utf-8");
             return { content: [{ type: "text", text: copyPath }] };
           } catch (err3) {
             return {
@@ -52608,7 +52876,7 @@ Profiles: ${profileNames.join(", ")}`);
               const gSucceeded = gAll.filter((r) => r.success);
               const reportSections = [];
               for (const r of gSucceeded) {
-                const content = r.reportPath && existsSync8(r.reportPath) ? readFileSync9(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync8(r.reportPath) ? readFileSync10(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -52744,7 +53012,7 @@ ${gAbortReason}`);
             } else {
               const reportSections = [];
               for (const r of succeeded) {
-                const content = r.reportPath && existsSync8(r.reportPath) ? readFileSync9(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync8(r.reportPath) ? readFileSync10(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -52978,7 +53246,7 @@ ${content}`);
           if (sfMode === 2 && succeeded.length > 0) {
             const sections = [];
             for (const r of succeeded) {
-              const content = r.reportPath && existsSync8(r.reportPath) ? readFileSync9(r.reportPath, "utf-8") : "";
+              const content = r.reportPath && existsSync8(r.reportPath) ? readFileSync10(r.reportPath, "utf-8") : "";
               sections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -53018,7 +53286,7 @@ ${content}`);
               for (const fp of fg.files) {
                 const r = pathToResult.get(fp);
                 if (!r) continue;
-                const content = r.reportPath && existsSync8(r.reportPath) ? readFileSync9(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync8(r.reportPath) ? readFileSync10(r.reportPath, "utf-8") : "";
                 sections.push(`## File: ${fp}
 
 ${content}`);
@@ -53136,7 +53404,7 @@ ${content}`);
               sourceFiles.push(resolved);
               sourceFilesCanonical.add(resolved);
               try {
-                sourceFilesCanonical.add(realpathSync2(resolved));
+                sourceFilesCanonical.add(realpathSync3(resolved));
               } catch {
               }
             }
@@ -53205,8 +53473,8 @@ ${content}`);
               continue;
             }
             try {
-              const canonical = realpathSync2(walked);
-              if (sourceFilesCanonical.has(canonical)) {
+              const canonical2 = realpathSync3(walked);
+              if (sourceFilesCanonical.has(canonical2)) {
                 fileSet.delete(walked);
               }
             } catch {
@@ -53745,7 +54013,7 @@ ${sections.join("\n\n---\n\n")}`;
                 {
                   model: "git-diff (no LLM)",
                   task: `${cfFromRef} \u2192 ${toRef}`,
-                  inputFile: join10(cfGitRepoSafe, dg.files[0]),
+                  inputFile: join11(cfGitRepoSafe, dg.files[0]),
                   groupId: gid
                 },
                 void 0,
@@ -54040,7 +54308,7 @@ ${diffFence}` + sourceFileBlocks
 FAILED: File not found.`);
                   continue;
                 }
-                const src = readFileSync9(filePath, "utf-8");
+                const src = readFileSync10(filePath, "utf-8");
                 const lang = detectLang(filePath);
                 const deps = extractLocalImports(filePath, src);
                 const depBlocks = [];
@@ -54101,7 +54369,7 @@ FAILED: File not found.`);
               crReportPaths.push("(skipped \u2014 file not found)");
               continue;
             }
-            const crSourceCode = readFileSync9(filePath, "utf-8");
+            const crSourceCode = readFileSync10(filePath, "utf-8");
             const crLang = detectLang(filePath);
             const depPaths = extractLocalImports(filePath, crSourceCode);
             const depBlocks = [];
@@ -54281,7 +54549,7 @@ FAILED: File not found.`);
                   continue;
                 }
                 const ciLang = detectLang(filePath);
-                const fileDir = dirname7(filePath);
+                const fileDir = dirname8(filePath);
                 const ciResolveBase = project_root || fileDir;
                 const extractMessages = [
                   { role: "system", content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path inside a filename tag before the file-content tag \u2014 reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.` + FILE_FORMAT_EXAMPLE },
@@ -54303,7 +54571,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     continue;
                   }
                   const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-                  const resolvedBase = importPath.startsWith("/") ? resolve6(importPath) : join10(resolveDir, importPath);
+                  const resolvedBase = importPath.startsWith("/") ? resolve6(importPath) : join11(resolveDir, importPath);
                   if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                     packageImports.push(importPath);
                     continue;
@@ -54318,7 +54586,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     }
                     if (!found) {
                       for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                        if (existsSync8(join10(resolvedBase, `index${ext}`))) {
+                        if (existsSync8(join11(resolvedBase, `index${ext}`))) {
                           found = true;
                           break;
                         }
@@ -54360,7 +54628,7 @@ FAILED: File not found.`);
               continue;
             }
             const ciLang = detectLang(filePath);
-            const fileDir = dirname7(filePath);
+            const fileDir = dirname8(filePath);
             const ciResolveBase = project_root || fileDir;
             const extractMessages = [
               {
@@ -54399,7 +54667,7 @@ FAILED: File not found.`);
                 continue;
               }
               const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-              const resolvedBase = importPath.startsWith("/") ? resolve6(importPath) : join10(resolveDir, importPath);
+              const resolvedBase = importPath.startsWith("/") ? resolve6(importPath) : join11(resolveDir, importPath);
               if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                 packageImports.push(importPath);
                 continue;
@@ -54428,7 +54696,7 @@ FAILED: File not found.`);
                 }
                 if (!found) {
                   for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                    if (existsSync8(join10(resolvedBase, `index${ext}`))) {
+                    if (existsSync8(join11(resolvedBase, `index${ext}`))) {
                       found = true;
                       break;
                     }
@@ -54752,8 +55020,8 @@ ${csResp.content}${csFooter}`
             }
             return resp.content;
           };
-          const csModuleDir = dirname7(fileUrlToPath_cs(import.meta.url));
-          const csEmbeddingsScript = join10(csModuleDir, "..", "scripts", "compute_embeddings.py");
+          const csModuleDir = dirname8(fileUrlToPath_cs(import.meta.url));
+          const csEmbeddingsScript = join11(csModuleDir, "..", "scripts", "compute_embeddings.py");
           const csHooks = {
             rawLlmCall: csRawLlmCall,
             embeddingsScriptPath: csEmbeddingsScript,
@@ -54852,6 +55120,25 @@ async function main() {
   const transport = new StdioServerTransport();
   await mcpServer.connect(transport);
   writeStatsFile();
+  try {
+    const ruleResult = installUsageRule();
+    if (ruleResult.status === "installed" || ruleResult.status === "updated") {
+      process.stderr.write(
+        `[llm-externalizer] Usage rule ${ruleResult.status}: ${ruleResult.dest}
+`
+      );
+    } else if (ruleResult.status === "error") {
+      process.stderr.write(
+        `[llm-externalizer] Usage-rule install skipped: ${ruleResult.detail ?? "unknown"}
+`
+      );
+    }
+  } catch (e) {
+    process.stderr.write(
+      `[llm-externalizer] Usage-rule install error (non-fatal): ${e instanceof Error ? e.message : String(e)}
+`
+    );
+  }
   const bootBackend = getCurrentBackend();
   const backendLabel = bootBackend.type === "openrouter" ? `OpenRouter (${bootBackend.model})` : `Local (${bootBackend.baseUrl}${bootBackend.model ? `, ${bootBackend.model}` : ""})`;
   process.stderr.write(

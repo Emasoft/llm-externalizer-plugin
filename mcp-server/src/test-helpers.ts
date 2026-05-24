@@ -102,6 +102,9 @@ export async function createTestClient(
       LLM_OUTPUT_DIR: outputDir,
       // History + settings-edit side effects stay in the throwaway dir.
       LLM_EXT_CONFIG_DIR: tmpConfigDir,
+      // Never let the spawned test server install the usage rule into the real
+      // ~/.claude/rules/ (the startup installer is opt-out via this var).
+      LLM_EXT_INSTALL_RULE: "0",
     },
     stderr: "pipe",
   });

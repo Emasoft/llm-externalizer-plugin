@@ -7334,6 +7334,136 @@ var require_dist = __commonJS({
   }
 });
 
+// src/benchmark/discover.ts
+var DEFAULT_CRITERIA;
+var init_discover = __esm({
+  "src/benchmark/discover.ts"() {
+    "use strict";
+    DEFAULT_CRITERIA = {
+      category: "programming",
+      minContextTokens: 128e3,
+      minOutputTokens: 64e3,
+      // Hard caps for auto-selection: STRICTLY less than $1/M for both
+      // input AND output. Anything at or above is rejected from the
+      // candidate pool. The `qualify()` predicate enforces this with `<`
+      // (not `<=`) so $1.00 itself is out. Override only via --include.
+      maxInputDollarsPerMillion: 1,
+      maxOutputDollarsPerMillion: 1,
+      requireStructuredOutputs: true,
+      requireReasoning: true,
+      allowFree: false
+    };
+  }
+});
+
+// src/benchmark/security-triage/select.ts
+var SECURITY_TRIAGE_CRITERIA;
+var init_select = __esm({
+  "src/benchmark/security-triage/select.ts"() {
+    "use strict";
+    init_discover();
+    SECURITY_TRIAGE_CRITERIA = {
+      category: DEFAULT_CRITERIA.category,
+      // Snippet windows are at most a few KB; the judge prompt is small. 16K is
+      // plenty and keeps cheap small models (e.g. qwen-2.5-7b @ 32K) in the pool.
+      minContextTokens: 16e3,
+      // The verdict JSON is ~200 bytes. 1K completion headroom is ample.
+      minOutputTokens: 1e3,
+      maxInputDollarsPerMillion: DEFAULT_CRITERIA.maxInputDollarsPerMillion,
+      maxOutputDollarsPerMillion: DEFAULT_CRITERIA.maxOutputDollarsPerMillion,
+      requireStructuredOutputs: true,
+      // Triage does NOT need a reasoning model — the json_schema verdict is a
+      // direct classification. Requiring reasoning would wrongly exclude qwen-2.5-7b.
+      requireReasoning: false,
+      allowFree: false
+    };
+  }
+});
+
+// src/model-qualification/registry.ts
+function criteria(overrides) {
+  return { ...DEFAULT_CRITERIA, ...overrides };
+}
+var TOOL_MODEL_REGISTRY;
+var init_registry = __esm({
+  "src/model-qualification/registry.ts"() {
+    "use strict";
+    init_discover();
+    init_select();
+    TOOL_MODEL_REGISTRY = {
+      security_scan: {
+        tool: "security_scan",
+        // The reference instance. Structured output + a modest context; NO reasoning
+        // / 128K bar — triage snippets are small and the verdict is ~200 bytes.
+        requirements: SECURITY_TRIAGE_CRITERIA,
+        benchmark: "security-triage",
+        note: "Injection-hardened verdict adjudication. Gated by the security-triage golden dataset (TRDD-973a0265)."
+      },
+      mass_scout: {
+        tool: "mass_scout",
+        requirements: criteria({ requireReasoning: false }),
+        benchmark: "keyword-classification",
+        note: "Fieldset extraction / classification. Reuses the existing keyword-classification benchmark (benchmark/ground-truth.ts + pick.ts)."
+      },
+      cluster_synonyms: {
+        tool: "cluster_synonyms",
+        requirements: criteria({ requireReasoning: true }),
+        benchmark: null,
+        note: "Meaning-equivalence clustering. Has an in-tool pre-flight benchmark gate; a formal golden dataset is incremental."
+      },
+      code_task: {
+        tool: "code_task",
+        requirements: criteria({ requireReasoning: true, minContextTokens: 128e3 }),
+        benchmark: null,
+        note: "Code-optimized analysis. Code-understanding benchmark dataset is incremental."
+      },
+      scan_folder: {
+        tool: "scan_folder",
+        requirements: criteria({ requireReasoning: false, minContextTokens: 128e3 }),
+        benchmark: null,
+        note: "Per-file auto-discovery scan. Per-file detection benchmark dataset is incremental."
+      },
+      search_existing_implementations: {
+        tool: "search_existing_implementations",
+        requirements: criteria({ requireReasoning: true, minContextTokens: 128e3 }),
+        benchmark: null,
+        note: "Duplicate-implementation match across a codebase. Duplicate-match benchmark dataset is incremental."
+      },
+      check_references: {
+        tool: "check_references",
+        requirements: criteria({ requireReasoning: false }),
+        benchmark: null,
+        note: "Symbol-reference validation. Validation-accuracy benchmark dataset is incremental."
+      },
+      check_imports: {
+        tool: "check_imports",
+        requirements: criteria({ requireReasoning: false }),
+        benchmark: null,
+        note: "Import-path validation. Validation-accuracy benchmark dataset is incremental."
+      },
+      check_against_specs: {
+        tool: "check_against_specs",
+        requirements: criteria({ requireReasoning: false }),
+        benchmark: null,
+        note: "Source-vs-specification compliance. Validation-accuracy benchmark dataset is incremental."
+      },
+      compare_files: {
+        tool: "compare_files",
+        requirements: criteria({ requireReasoning: false, minContextTokens: 128e3 }),
+        benchmark: null,
+        note: "Two-file change summary. Change-summary benchmark dataset is incremental."
+      },
+      chat: {
+        tool: "chat",
+        // The loosest tool — general text. Structured output not required.
+        requirements: criteria({ requireStructuredOutputs: false, requireReasoning: false }),
+        benchmark: null,
+        note: "General-purpose text. A loose general-quality benchmark is incremental."
+      }
+    };
+  }
+});
+
 // src/config.ts
 import {
   existsSync,
@@ -7445,6 +7575,10 @@ function ensureSettingsExist() {
   }
   return settings;
 }
+function coerceToolModels(raw) {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  return { ...raw };
+}
 function resolveProfile(name, profile) {
   const preset = API_PRESETS[profile.api];
   if (!preset) {
@@ -7460,17 +7594,25 @@ function resolveProfile(name, profile) {
     authToken: resolveEnvValue(rawAuth),
     secondModel: profile.second_model || "",
     thirdModel: profile.third_model || "",
+    toolModels: coerceToolModels(profile.tool_models),
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
     appName: profile.app_name ?? preset.defaultAppName,
     httpReferer: profile.http_referer ?? preset.defaultHttpReferer
   };
 }
+function resolveModelForTool(resolved, tool, fallback) {
+  const override = resolved.toolModels[tool];
+  if (typeof override === "string" && override.length > 0) return override;
+  if (fallback !== void 0) return fallback;
+  return resolved.model;
+}
 var import_yaml, API_PRESETS, USER_CONFIG_ENV_MAP, SETTINGS_TEMPLATE;
 var init_config = __esm({
   "src/config.ts"() {
     "use strict";
     import_yaml = __toESM(require_dist(), 1);
+    init_registry();
     API_PRESETS = {
       // ── Local presets ─────────────────────────────────────────────────
       "lmstudio-local": {
@@ -7585,6 +7727,13 @@ profiles:
     model: "google/gemini-2.5-flash"
     second_model: "x-ai/grok-4.1-fast"
     api_key: $OPENROUTER_API_KEY
+    # Optional: per-tool model overrides (TRDD-f45eeaa0). Absent \u2192 this
+    # profile's \`model\` (back-compat). Keys must be LLM-using tool names;
+    # a model set here should pass that tool's benchmark \u2014 see the
+    # security-triage benchmark (/llm-externalizer-security-triage-benchmark).
+    # tool_models:
+    #   security_scan: "qwen/qwen-2.5-7b-instruct"
+    #   code_task: "google/gemini-2.5-flash"
 
 # \u2500\u2500 API Presets Reference \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 # Use with --api when creating profiles:
@@ -16963,7 +17112,7 @@ function openRegistry(opts) {
   return new Registry(db);
 }
 var MIGRATIONS, Registry;
-var init_registry = __esm({
+var init_registry2 = __esm({
   "src/mass_scouting/registry.ts"() {
     "use strict";
     MIGRATIONS = [
@@ -19481,19 +19630,25 @@ var init_openrouter = __esm({
   }
 });
 
+// src/project-root.ts
+import { existsSync as existsSync4 } from "node:fs";
+function resolveProjectMainRoot(override) {
+  if (override && override.length > 0) return override;
+  const projDir = process.env.CLAUDE_PROJECT_DIR;
+  if (projDir && projDir.length > 0 && existsSync4(projDir)) return projDir;
+  return process.cwd();
+}
+var init_project_root = __esm({
+  "src/project-root.ts"() {
+    "use strict";
+  }
+});
+
 // src/security_scan/report.ts
-import { execSync as execSync2 } from "node:child_process";
-import { existsSync as existsSync4, mkdirSync as mkdirSync7, writeFileSync as writeFileSync4 } from "node:fs";
+import { mkdirSync as mkdirSync7, writeFileSync as writeFileSync4 } from "node:fs";
 import { isAbsolute as isAbsolute2, join as join6, resolve as resolve3 } from "node:path";
 function defaultMainRoot() {
-  const projDir = process.env.CLAUDE_PROJECT_DIR;
-  if (projDir && existsSync4(projDir)) return projDir;
-  try {
-    const out = execSync2("git worktree list", { encoding: "utf-8" }).split("\n")[0]?.trim().split(/\s+/)[0];
-    if (out && !out.includes("/.claude/plugins/")) return out;
-  } catch {
-  }
-  return process.cwd();
+  return resolveProjectMainRoot();
 }
 function resolveReportDir(outputDir, mainRoot) {
   if (outputDir && outputDir.length > 0) {
@@ -19647,6 +19802,7 @@ function writeReport(report, reportDir) {
 var init_report = __esm({
   "src/security_scan/report.ts"() {
     "use strict";
+    init_project_root();
     init_types();
   }
 });
@@ -19839,10 +19995,9 @@ __export(cli_exports, {
   runSecurityScanCli: () => runSecurityScanCli,
   walkFiles: () => walkFiles2
 });
-import { execSync as execSync3 } from "node:child_process";
+import { execSync as execSync2 } from "node:child_process";
 import {
   appendFileSync as appendFileSync3,
-  existsSync as existsSync5,
   mkdirSync as mkdirSync8,
   readFileSync as readFileSync6,
   readdirSync as readdirSync3,
@@ -19892,14 +20047,7 @@ function ok(stdout) {
 `, stderr: "", exitCode: 0 };
 }
 function defaultMainRoot2() {
-  const projDir = process.env.CLAUDE_PROJECT_DIR;
-  if (projDir && existsSync5(projDir)) return projDir;
-  try {
-    const out = execSync3("git worktree list", { encoding: "utf-8" }).split("\n")[0]?.trim().split(/\s+/)[0];
-    if (out && !out.includes("/.claude/plugins/")) return out;
-  } catch {
-  }
-  return process.cwd();
+  return resolveProjectMainRoot();
 }
 function resolveReportDir2(outputDirFlag, opts) {
   if (outputDirFlag && outputDirFlag !== "true") {
@@ -19913,7 +20061,7 @@ function listGitChangedFiles(root, ref) {
     return null;
   }
   try {
-    const out = execSync3(
+    const out = execSync2(
       `git diff --name-only --diff-filter=ACMR -z ${JSON.stringify(ref)}...HEAD`,
       { cwd: root, encoding: "buffer", stdio: ["ignore", "pipe", "ignore"] }
     );
@@ -19925,7 +20073,7 @@ function listGitChangedFiles(root, ref) {
 }
 function listGitTrackedFiles(root) {
   try {
-    const out = execSync3(
+    const out = execSync2(
       "git ls-files --cached --others --exclude-standard -z",
       { cwd: root, encoding: "buffer", stdio: ["ignore", "pipe", "ignore"] }
     );
@@ -21108,6 +21256,18 @@ async function runSecurityScanCli(args, opts) {
   if (flags["output-dir"] && flags["output-dir"] !== "true" && typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
     parsed.output_dir = flags["output-dir"];
   }
+  if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && parsed.model === void 0) {
+    try {
+      const settings = loadSettings();
+      const active = settings?.active ? settings.profiles[settings.active] : void 0;
+      if (settings && active) {
+        const resolved = resolveProfile(settings.active, active);
+        const perTool = resolveModelForTool(resolved, "security_scan", "");
+        if (perTool) parsed.model = perTool;
+      }
+    } catch {
+    }
+  }
   const result = await runSecurityScan(parsed, {
     fetchImpl: opts.fetchImpl,
     apiKey: opts.apiKey,
@@ -21208,12 +21368,14 @@ var init_cli = __esm({
     init_fieldset();
     init_shorthand();
     init_cost_estimate();
-    init_registry();
+    init_registry2();
     init_preclassify();
     init_scout();
     init_search();
     init_reports();
     init_security_scan_main();
+    init_config();
+    init_project_root();
     DEFAULT_SKIP_DIRS2 = /* @__PURE__ */ new Set([
       ".git",
       "node_modules",
@@ -43261,7 +43423,7 @@ function isElectron() {
 }
 
 // src/cli.ts
-import { writeFileSync as writeFileSync6, existsSync as existsSync6, statSync as statSync4, unlinkSync } from "node:fs";
+import { writeFileSync as writeFileSync6, existsSync as existsSync5, statSync as statSync4, unlinkSync } from "node:fs";
 import { resolve as resolvePath, isAbsolute as isAbsolute4, join as join8, dirname as dirname5 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { spawnSync as spawnSync2 } from "node:child_process";
@@ -43385,7 +43547,7 @@ function findServerScript() {
     // running from src/
   ];
   for (const c of candidates) {
-    if (existsSync6(c)) return c;
+    if (existsSync5(c)) return c;
   }
   die(
     `Cannot locate MCP server entry point. Looked for:
@@ -43548,7 +43710,7 @@ function parseSearchExistingArgs(args) {
   }
   for (const fp of folderPaths) {
     const abs = isAbsolute4(fp) ? fp : resolvePath(fp);
-    if (!existsSync6(abs)) die(`--in path not found: ${fp}`);
+    if (!existsSync5(abs)) die(`--in path not found: ${fp}`);
     let isDir;
     try {
       isDir = statSync4(abs).isDirectory();
@@ -43561,7 +43723,7 @@ function parseSearchExistingArgs(args) {
   }
   for (const sf of sourceFiles) {
     const abs = isAbsolute4(sf) ? sf : resolvePath(sf);
-    if (!existsSync6(abs)) die(`Source file not found: ${sf}`);
+    if (!existsSync5(abs)) die(`Source file not found: ${sf}`);
     if (statSync4(abs).isDirectory()) die(`Source file must be a file, not a directory: ${sf}`);
   }
   let timeoutMs = void 0;
@@ -43602,7 +43764,7 @@ async function cmdSearchExisting(rawArgs) {
     info(`Generated PR diff via git: ${diffPath}`);
   } else if (opts.diffPath) {
     const abs = isAbsolute4(opts.diffPath) ? opts.diffPath : resolvePath(opts.diffPath);
-    if (!existsSync6(abs)) die(`--diff file not found: ${opts.diffPath}`);
+    if (!existsSync5(abs)) die(`--diff file not found: ${opts.diffPath}`);
     diffPath = abs;
   }
   const toolArgs = {

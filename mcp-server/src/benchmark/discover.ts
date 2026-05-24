@@ -118,19 +118,25 @@ export function filterModels(
 }
 
 /**
- * Check one model against the criteria. Returns the decorated qualified
- * model when it passes, otherwise null.
+ * The qualification PREDICATE as a human-readable reason: returns the first
+ * failing criterion as a short string, or null when the model qualifies. This
+ * is the single source of truth for "does this model meet these criteria" —
+ * `qualify()` delegates the yes/no decision here so the predicate never drifts
+ * between the boolean path and the explain path (used by the per-tool assess
+ * command, TRDD-f45eeaa0).
  */
-export function qualify(m: OpenRouterModel, criteria: ModelCriteria): QualifiedModel | null {
-  if (!criteria.allowFree && m.id.endsWith(":free")) return null;
+export function disqualifyReason(m: OpenRouterModel, criteria: ModelCriteria): string | null {
+  if (!criteria.allowFree && m.id.endsWith(":free")) return "free model not allowed (allowFree=false)";
   const params = new Set(m.supported_parameters ?? []);
   const supportsStructured = params.has("structured_outputs") || params.has("response_format");
   const supportsReasoning = params.has("reasoning") || params.has("include_reasoning");
-  if (criteria.requireStructuredOutputs && !supportsStructured) return null;
-  if (criteria.requireReasoning && !supportsReasoning) return null;
+  if (criteria.requireStructuredOutputs && !supportsStructured) {
+    return "no structured-output support (needs response_format or structured_outputs)";
+  }
+  if (criteria.requireReasoning && !supportsReasoning) return "no reasoning support";
 
   const ctx = m.context_length ?? 0;
-  if (ctx < criteria.minContextTokens) return null;
+  if (ctx < criteria.minContextTokens) return `context ${ctx} < required ${criteria.minContextTokens}`;
 
   // OpenRouter convention: top_provider.max_completion_tokens === null means
   // "no completion-token cap below context_length" — treat as ctx, not 0.
@@ -139,18 +145,44 @@ export function qualify(m: OpenRouterModel, criteria: ModelCriteria): QualifiedM
   // means we have no information.
   const maxOutRaw = m.top_provider?.max_completion_tokens;
   const maxOut = maxOutRaw === null ? ctx : (maxOutRaw ?? 0);
-  if (!maxOut || maxOut < criteria.minOutputTokens) return null;
+  if (!maxOut || maxOut < criteria.minOutputTokens) {
+    return `max output ${maxOut} < required ${criteria.minOutputTokens}`;
+  }
 
   const promptPerToken = parseFloat(m.pricing?.prompt ?? "NaN");
   const completionPerToken = parseFloat(m.pricing?.completion ?? "NaN");
-  if (!isFinite(promptPerToken) || !isFinite(completionPerToken)) return null;
+  if (!isFinite(promptPerToken) || !isFinite(completionPerToken)) return "missing or invalid pricing";
 
   const inputDollarsPerMillion = promptPerToken * 1_000_000;
   const outputDollarsPerMillion = completionPerToken * 1_000_000;
   // STRICTLY less than the cap (>= rejects), per the auto-selection rule
   // recorded in the llm-externalizer-ensemble-autoselect skill.
-  if (inputDollarsPerMillion >= criteria.maxInputDollarsPerMillion) return null;
-  if (outputDollarsPerMillion >= criteria.maxOutputDollarsPerMillion) return null;
+  if (inputDollarsPerMillion >= criteria.maxInputDollarsPerMillion) {
+    return `input $${inputDollarsPerMillion.toFixed(3)}/M >= cap $${criteria.maxInputDollarsPerMillion.toFixed(3)}/M`;
+  }
+  if (outputDollarsPerMillion >= criteria.maxOutputDollarsPerMillion) {
+    return `output $${outputDollarsPerMillion.toFixed(3)}/M >= cap $${criteria.maxOutputDollarsPerMillion.toFixed(3)}/M`;
+  }
+  return null;
+}
+
+/**
+ * Check one model against the criteria. Returns the decorated qualified
+ * model when it passes, otherwise null. The pass/fail decision is delegated to
+ * `disqualifyReason()` so the predicate stays single-sourced.
+ */
+export function qualify(m: OpenRouterModel, criteria: ModelCriteria): QualifiedModel | null {
+  if (disqualifyReason(m, criteria) !== null) return null;
+
+  // All checks passed — recompute the decorated numeric fields for the result.
+  const params = new Set(m.supported_parameters ?? []);
+  const supportsStructured = params.has("structured_outputs") || params.has("response_format");
+  const supportsReasoning = params.has("reasoning") || params.has("include_reasoning");
+  const ctx = m.context_length ?? 0;
+  const maxOutRaw = m.top_provider?.max_completion_tokens;
+  const maxOut = maxOutRaw === null ? ctx : (maxOutRaw ?? 0);
+  const inputDollarsPerMillion = parseFloat(m.pricing?.prompt ?? "NaN") * 1_000_000;
+  const outputDollarsPerMillion = parseFloat(m.pricing?.completion ?? "NaN") * 1_000_000;
 
   return {
     id: m.id,

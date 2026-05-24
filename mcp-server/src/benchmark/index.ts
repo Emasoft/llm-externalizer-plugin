@@ -17,9 +17,8 @@
 
 import { mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execSync } from "node:child_process";
 
 import { withUsageContext } from "../usage-history.js";
 import { buildGroundTruth, BENCHMARK_KEYWORDS } from "./ground-truth.js";
@@ -41,6 +40,11 @@ import {
   type PickedModel,
 } from "./pick.js";
 import { runSecurityTriageBenchmark } from "./security-triage/index.js";
+import {
+  assessModelById,
+  renderAssessmentText,
+} from "../model-qualification/assess.js";
+import { resolveProjectMainRoot } from "../project-root.js";
 
 interface CliOptions {
   includeIds: string[];
@@ -70,6 +74,8 @@ interface CliOptions {
   triageModels: string[];
   /** Ignore the per-model-per-day cache (currently only --security-triage). */
   force: boolean;
+  /** Assess one model against EVERY tool's per-tool requirements (no LLM call). */
+  assessModel: string | null;
 }
 
 function parseArgs(argv: readonly string[]): CliOptions {
@@ -87,6 +93,7 @@ function parseArgs(argv: readonly string[]): CliOptions {
     securityTriage: false,
     triageModels: [],
     force: false,
+    assessModel: null,
   };
   // Consume the value that must follow a value-taking flag. If the flag is the
   // last token, or the next token is itself a flag, fail fast — silently
@@ -147,6 +154,9 @@ function parseArgs(argv: readonly string[]): CliOptions {
       i++;
     } else if (a === "--force") {
       opts.force = true;
+    } else if (a === "--assess-model") {
+      opts.assessModel = takeValue(a, i);
+      i++;
     } else if (a === "--help" || a === "-h") {
       printHelp();
       process.exit(0);
@@ -197,6 +207,14 @@ function printHelp(): void {
       "  --model ID        Assess this specific model (repeatable). Without it the",
       "                    triage benchmark auto-discovers same-or-cheaper candidates.",
       "  --force           Ignore the per-model-per-day cache and re-run.",
+      "",
+      "Cross-tool requirements assessment (free — no LLM call, no API key):",
+      "  --assess-model ID Report which LLM tools model ID meets the per-tool",
+      "                    REQUIREMENTS for (cost/context/output/params), and which",
+      "                    of those tools ALSO need a benchmark pass before",
+      "                    assignment. Makes one public OpenRouter catalog fetch.",
+      "                    Does NOT run any benchmark (use --security-triage for",
+      "                    security_scan's benchmark gate).",
       "  Pass gate: zero under-flags on critical (judge-manipulation + visible-taint)",
       "  cases AND aggregate score >= 0.5. Never auto-selects a pricier model.",
       "  Fail-safe (error/timeout) cases are excluded from scoring; a run with",
@@ -245,13 +263,9 @@ function resolveFixturesDir(): string {
 }
 
 function resolveMainRoot(): string {
-  try {
-    const out = execSync("git worktree list", { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
-    const first = out.trim().split("\n")[0];
-    return first.split(/\s+/)[0];
-  } catch {
-    return resolve(".");
-  }
+  // Single source of truth — see project-root.ts (CLAUDE_PROJECT_DIR verbatim →
+  // cwd; no git). Anchors benchmark reports in the main project dir.
+  return resolveProjectMainRoot();
 }
 
 async function main(): Promise<number> {
@@ -262,6 +276,12 @@ async function main(): Promise<number> {
   // the security_scan judge pipeline and gates auto-selection on a pass.
   if (opts.securityTriage) {
     return runSecurityTriagePhase(opts);
+  }
+
+  // --assess-model routes to the cross-tool requirements assessment — free (no
+  // LLM call / no token cost; only a public OpenRouter catalog fetch, no key).
+  if (opts.assessModel !== null) {
+    return runAssessModelPhase(opts.assessModel);
   }
 
   if (opts.applyProfile !== null && opts.pickTopN === null) {
@@ -426,6 +446,21 @@ async function runSecurityTriagePhase(opts: CliOptions): Promise<number> {
   console.error(`[triage] json:   ${result.jsonReportPath}`);
   // stdout carries the machine-grep-able recommendation line.
   process.stdout.write(`recommended_model=${result.recommendedModelId}\n`);
+  return 0;
+}
+
+/**
+ * --assess-model: report which LLM tools a candidate model meets the per-tool
+ * REQUIREMENTS for (TRDD-f45eeaa0). Free — no LLM call, no token cost; makes one
+ * public OpenRouter catalog fetch (no API key needed). Does NOT run any
+ * benchmark (that's each tool's own gate; for security_scan use --security-triage).
+ */
+async function runAssessModelPhase(modelId: string): Promise<number> {
+  console.error(
+    `[assess] assessing ${modelId} against every LLM tool's requirements …`,
+  );
+  const assessment = await assessModelById(modelId);
+  process.stdout.write(renderAssessmentText(assessment) + "\n");
   return 0;
 }
 

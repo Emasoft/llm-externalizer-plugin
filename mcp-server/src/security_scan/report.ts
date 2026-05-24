@@ -10,9 +10,9 @@
  * given.
  */
 
-import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import { resolveProjectMainRoot } from "../project-root";
 
 import type { GroupVerdict } from "./judge";
 import type { DedupGroup, SkippedRecord } from "./intake";
@@ -27,18 +27,8 @@ import {
 // ── Path helpers (local, agent-reports-location compliant) ───────────────
 
 function defaultMainRoot(): string {
-  const projDir = process.env.CLAUDE_PROJECT_DIR;
-  if (projDir && existsSync(projDir)) return projDir;
-  try {
-    const out = execSync("git worktree list", { encoding: "utf-8" })
-      .split("\n")[0]
-      ?.trim()
-      .split(/\s+/)[0];
-    if (out && !out.includes("/.claude/plugins/")) return out;
-  } catch {
-    // git not on PATH / not a repo — fall through.
-  }
-  return process.cwd();
+  // Single source of truth — see project-root.ts.
+  return resolveProjectMainRoot();
 }
 
 /** Resolve the report directory. Explicit output_dir wins; else <root>/reports/security_scan/. */

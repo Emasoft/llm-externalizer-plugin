@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "LLM Externalizer",
-  "description": "MCP server that connects Claude to local LLMs (LM Studio, Ollama) and remote models via OpenRouter. Persistent settings at ~/.llm-externalizer/settings.yaml. Dynamic model switching with fuzzy name matching.",
+  "description": "MCP server that connects Claude to local LLMs (LM Studio, Ollama, vLLM, llama.cpp) and remote models via OpenRouter. Read-only by design: persistent settings at ~/.llm-externalizer/settings.yaml are user-edited by hand, then reloaded via the reset tool.",
   "version": "9.13.1",
   "packages": [
     {
@@ -95,7 +95,7 @@
         },
         {
           "name": "LLM_OUTPUT_DIR",
-          "description": "Override the output directory for LLM response files (default: ./reports_dev/llm_externalizer)",
+          "description": "Override the output directory for LLM response files (default: <main-project-dir>/reports/llm-externalizer/, anchored on $CLAUDE_PROJECT_DIR verbatim)",
           "isRequired": false,
           "format": "string"
         }

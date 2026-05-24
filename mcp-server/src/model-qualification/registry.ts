@@ -23,6 +23,7 @@
 import {
   DEFAULT_CRITERIA,
   qualify,
+  disqualifyReason,
   type ModelCriteria,
   type OpenRouterModel,
   type QualifiedModel,
@@ -145,6 +146,8 @@ export interface ToolQualification {
   tool: string;
   /** Passed the tool's hard REQUIREMENTS (cost/context/output/params). */
   meetsRequirements: boolean;
+  /** First failing requirement as a short string, or null when it passed. */
+  disqualifyReason: string | null;
   /** The decorated model when it qualifies, else null. */
   qualified: QualifiedModel | null;
   /** Benchmark id that ALSO gates this tool, or null (requirements-only). */
@@ -175,15 +178,19 @@ export function qualifyModelForTool(
     return {
       tool,
       meetsRequirements: false,
+      disqualifyReason: "unknown or non-LLM tool (no registry descriptor)",
       qualified: null,
       benchmark: null,
       requirementsEligible: false,
     };
   }
   const qualified = qualify(model, descriptor.requirements);
+  const reason =
+    qualified === null ? disqualifyReason(model, descriptor.requirements) : null;
   return {
     tool,
     meetsRequirements: qualified !== null,
+    disqualifyReason: reason,
     qualified,
     benchmark: descriptor.benchmark,
     requirementsEligible: qualified !== null,

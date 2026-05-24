@@ -19,6 +19,7 @@
 
 import { runMassScoutCli, type CliResult, type CliRunOptions } from "./cli";
 import { runSecurityTriageBenchmark } from "../benchmark/security-triage/index";
+import { assessModelById, renderAssessmentText } from "../model-qualification/assess";
 
 // ── Public types (mirror the CLI flag set, MCP-flavoured) ─────────────
 
@@ -277,7 +278,7 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
       "Compiles the fieldset into a JSON Schema, fans calls out via the " +
       "scout worker, applies fix_envelope repairs, runs the required-keys " +
       "validator, persists results + FTS rows. Writes a markdown report " +
-      "under <main-repo-root>/reports/mass_scouting/ (override with " +
+      "under <main-project-dir>/reports/mass_scouting/ (override with " +
       "output_dir).\n\nRETURNS: " +
       "files_total/ok/failed/skipped_too_big, retries, cost_usd, report path.\n\n" +
       "ENV: $OPENROUTER_API_KEY must be set.",
@@ -331,7 +332,7 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
           type: "string",
           description:
             "Absolute path for the markdown report directory. Defaults to " +
-            "<main-repo-root>/reports/mass_scouting/. Pass this when running " +
+            "<main-project-dir>/reports/mass_scouting/. Pass this when running " +
             "as an MCP server so the report lands in the user's project " +
             "rather than the plugin's install cache.",
         },
@@ -490,7 +491,7 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
     name: "mass_scout_export",
     description:
       "Dump every result row of a job to JSONL or CSV under " +
-      "<main-repo-root>/reports/mass_scouting/. Useful for follow-up " +
+      "<main-project-dir>/reports/mass_scouting/. Useful for follow-up " +
       "analysis in pandas, jq, etc.",
     inputSchema: {
       type: "object",
@@ -505,7 +506,7 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
           type: "string",
           description:
             "Absolute path for the export directory. Defaults to " +
-            "<main-repo-root>/reports/mass_scouting/.",
+            "<main-project-dir>/reports/mass_scouting/.",
         },
       },
       required: ["db_path", "job_id"],
@@ -870,6 +871,28 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
       required: [],
     },
   },
+  {
+    name: "assess_model",
+    description:
+      "Assess ONE OpenRouter model against EVERY LLM tool's per-tool " +
+      "REQUIREMENTS (TRDD-f45eeaa0) — FREE: makes NO LLM call (no token cost), " +
+      "only a public model-catalog fetch (no API key). Reports, per tool, " +
+      "whether the model " +
+      "meets that tool's hard requirements (cost/context/output/params) and " +
+      "whether the tool ALSO has a benchmark gate to run before assignment. Does " +
+      "NOT run any benchmark. RETURNS: a per-tool OK/NO table + which qualifying " +
+      "tools still need a benchmark pass.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        model: {
+          type: "string",
+          description: "OpenRouter model id, e.g. 'google/gemini-2.5-flash'.",
+        },
+      },
+      required: ["model"],
+    },
+  },
 ];
 
 /** Set of MCP tool names provided by mass-scouting. Used by index.ts's dispatcher. */
@@ -1181,6 +1204,33 @@ export async function dispatchMassScoutTool(
         `json=${result.jsonReportPath}`,
       ].join("\n");
       return { content: [{ type: "text", text }], isError: false };
+    }
+    case "assess_model": {
+      // Free cross-tool requirements assessment (TRDD-f45eeaa0): no LLM call /
+      // no token cost — only a public OpenRouter catalog fetch (no API key).
+      // Tests inject opts.modelCatalogFetch so the dispatch stays network-free.
+      const modelId = str(args.model);
+      if (!modelId) {
+        return {
+          content: [{ type: "text", text: "assess_model requires a 'model' id" }],
+          isError: true,
+        };
+      }
+      try {
+        const assessment = await assessModelById(
+          modelId,
+          opts.modelCatalogFetch ? { fetchModels: opts.modelCatalogFetch } : {},
+        );
+        return {
+          content: [{ type: "text", text: renderAssessmentText(assessment) }],
+          isError: false,
+        };
+      } catch (e) {
+        return {
+          content: [{ type: "text", text: (e as Error).message }],
+          isError: true,
+        };
+      }
     }
     default:
       return {

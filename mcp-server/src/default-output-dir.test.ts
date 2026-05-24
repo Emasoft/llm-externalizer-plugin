@@ -1,10 +1,11 @@
-// Test for the report-output-dir resolution path added by Issue #5.
-// Covers the override env var, the git-worktree-list happy path, and
-// the fallback chain when the project dir isn't a git repo.
+// Test for the report-output-dir resolution path.
+// Covers the override env var, the CLAUDE_PROJECT_DIR-verbatim anchor
+// (no git climbing), and the fallback to cwd when CLAUDE_PROJECT_DIR
+// is unset. Reports always land in <main project dir>/reports/llm-externalizer.
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -65,12 +66,13 @@ describe("defaultOutputDir resolution (Issue #5)", () => {
     }
   });
 
-  it("uses git-main-repo-root + reports/llm-externalizer (not reports_dev/llm_externalizer) when CLAUDE_PROJECT_DIR is a git repo", async () => {
+  it("anchors on CLAUDE_PROJECT_DIR verbatim + reports/llm-externalizer (git presence at the root is ignored)", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "dod-git-"));
     try {
-      // Initialise a clean git repo so `git worktree list` works.
+      // Make tmp a git repo with a commit. The resolver must IGNORE git
+      // entirely and use CLAUDE_PROJECT_DIR verbatim — this case proves
+      // that a git repo at the project root does not change the answer.
       execSync("git init -q --initial-branch=main", { cwd: tmp });
-      // First commit so worktree list reports a root.
       writeFileSync(join(tmp, "x"), "");
       execSync(`git -c user.email=t@t -c user.name=t add x && git -c user.email=t@t -c user.name=t commit -q -m init`, { cwd: tmp });
       process.env.CLAUDE_PROJECT_DIR = tmp;
@@ -81,11 +83,26 @@ describe("defaultOutputDir resolution (Issue #5)", () => {
         got === join("/private" + tmp, "reports", "llm-externalizer"),
       ).toBe(true);
       expect(got.endsWith(`/reports/llm-externalizer`)).toBe(true);
-      // Negative: explicit confirmation of the hyphen (the bug used `llm_externalizer`).
       expect(got).not.toContain("llm_externalizer");
       expect(got).not.toContain("reports_dev");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("anchors on CLAUDE_PROJECT_DIR even when it's a SUBDIR of a git repo (does NOT climb to the git root)", async () => {
+    // Regression: reports must land in the project dir, never an ancestor repo.
+    const repo = mkdtempSync(join(tmpdir(), "dod-nested-"));
+    try {
+      execSync("git init -q --initial-branch=main", { cwd: repo });
+      const sub = join(repo, "packages", "app");
+      mkdirSync(sub, { recursive: true });
+      process.env.CLAUDE_PROJECT_DIR = sub;
+      const got = await resolveOnce();
+      // The subdir, NOT `repo`/reports/llm-externalizer.
+      expect(got).toBe(join(sub, "reports", "llm-externalizer"));
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
     }
   });
 

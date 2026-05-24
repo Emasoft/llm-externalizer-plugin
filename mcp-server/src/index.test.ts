@@ -88,6 +88,9 @@ describe('listTools', () => {
       // security_triage_benchmark — model qualification for the security_scan
       // triage task (TRDD-973a0265), registered in the same array.
       'security_triage_benchmark',
+      // assess_model — cross-tool requirements assessment (TRDD-f45eeaa0),
+      // registered in the same array; offline, no LLM call.
+      'assess_model',
     ].sort();
 
     expect(toolNames).toEqual(expected);

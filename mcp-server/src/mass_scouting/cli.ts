@@ -27,7 +27,6 @@
 import { execSync } from "node:child_process";
 import {
   appendFileSync,
-  existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -59,6 +58,9 @@ import {
 } from "./search";
 import { renderMarkdownReport, summariseJob } from "./reports";
 import { runSecurityScan } from "../security_scan/security_scan_main";
+import { loadSettings, resolveProfile, resolveModelForTool } from "../config";
+import type { OpenRouterModel } from "../benchmark/discover";
+import { resolveProjectMainRoot } from "../project-root";
 
 // ── Public types ───────────────────────────────────────────────────────
 
@@ -83,6 +85,11 @@ export interface CliRunOptions {
    * notifications/progress events that keep the connection alive.
    */
   onProgress?: (progress: number, total: number, message?: string) => void;
+  /**
+   * Override the OpenRouter model-catalog fetcher (tests inject a stub so the
+   * `assess_model` dispatch stays offline). Default hits the public catalog.
+   */
+  modelCatalogFetch?: () => Promise<OpenRouterModel[]>;
 }
 
 // ── Defaults ───────────────────────────────────────────────────────────
@@ -177,20 +184,9 @@ function ok(stdout: string): CliResult {
  * is exactly the bug this ordering fixes.
  */
 function defaultMainRoot(): string {
-  const projDir = process.env.CLAUDE_PROJECT_DIR;
-  if (projDir && existsSync(projDir)) return projDir;
-
-  try {
-    const out = execSync("git worktree list", { encoding: "utf-8" })
-      .split("\n")[0]
-      ?.trim()
-      .split(/\s+/)[0];
-    if (out && !out.includes("/.claude/plugins/")) return out;
-  } catch {
-    // git not on PATH or not a repo — fall through.
-  }
-
-  return process.cwd();
+  // Single source of truth — see project-root.ts (CLAUDE_PROJECT_DIR verbatim →
+  // cwd; no git).
+  return resolveProjectMainRoot();
 }
 
 /**
@@ -1794,6 +1790,35 @@ async function runSecurityScanCli(
     !Array.isArray(parsed)
   ) {
     (parsed as Record<string, unknown>).output_dir = flags["output-dir"];
+  }
+
+  // Per-tool model resolution (TRDD-f45eeaa0). When the caller did NOT pass an
+  // explicit `model`, honor a settings.yaml `tool_models.security_scan` override
+  // before the parser falls back to DEFAULT_MODEL. Resolution order:
+  //   explicit input.model  >  tool_models.security_scan  >  DEFAULT_MODEL.
+  // Best-effort: any settings problem (no file, bad preset, unset env) is
+  // non-fatal — we skip the override and let DEFAULT_MODEL apply, so a scan
+  // never fails just because settings could not be read. Only injects when the
+  // `model` key is absent (a null/empty value is left for the parser to reject).
+  if (
+    typeof parsed === "object" &&
+    parsed !== null &&
+    !Array.isArray(parsed) &&
+    (parsed as Record<string, unknown>).model === undefined
+  ) {
+    try {
+      const settings = loadSettings();
+      const active = settings?.active
+        ? settings.profiles[settings.active]
+        : undefined;
+      if (settings && active) {
+        const resolved = resolveProfile(settings.active, active);
+        const perTool = resolveModelForTool(resolved, "security_scan", "");
+        if (perTool) (parsed as Record<string, unknown>).model = perTool;
+      }
+    } catch {
+      // non-fatal — DEFAULT_MODEL applies downstream in parseSecurityScanInput.
+    }
   }
 
   const result = await runSecurityScan(parsed, {

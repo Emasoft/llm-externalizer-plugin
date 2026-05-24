@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,6 +20,7 @@ import {
 } from "../mass_scouting/mcp-tools";
 import { runMassScoutCli } from "../mass_scouting/cli";
 import type { FetchImpl } from "./judge";
+import { DEFAULT_MODEL } from "./types";
 
 function okFetch(content: string): FetchImpl {
   return (async () => ({
@@ -141,5 +142,143 @@ describe("wiring — CLI subcommand", () => {
     const res = await runMassScoutCli(["--help"]);
     expect(res.stdout).toContain("security-scan");
     expect(res.stdout.toLowerCase()).toContain("injection-hardened");
+  });
+});
+
+// captureFetch records each request body so a test can assert WHICH model the
+// judge was actually told to use — that's the observable result of per-tool
+// model resolution (TRDD-f45eeaa0).
+function captureFetch(content: string): { impl: FetchImpl; bodies: string[] } {
+  const bodies: string[] = [];
+  const impl = (async (_url: string, init: { body: string }) => {
+    bodies.push(init.body);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { content } }],
+        usage: { prompt_tokens: 50, completion_tokens: 20 },
+      }),
+      text: async () => content,
+    };
+  }) as FetchImpl;
+  return { impl, bodies };
+}
+
+// Pick the judge request (the one carrying a `model` + `messages`) out of every
+// captured body, so the assertion is robust to any non-judge request.
+function sentModel(bodies: string[]): string {
+  const judge = bodies
+    .map((b) => {
+      try {
+        return JSON.parse(b) as { model?: unknown; messages?: unknown };
+      } catch {
+        return null;
+      }
+    })
+    .find(
+      (o) => o !== null && typeof o.model === "string" && Array.isArray(o.messages),
+    );
+  expect(judge).toBeTruthy();
+  return (judge as { model: string }).model;
+}
+
+describe("wiring — per-tool model resolution (tool_models, TRDD-f45eeaa0)", () => {
+  const origCfgDir = process.env.LLM_EXT_CONFIG_DIR;
+  const cfgDirs: string[] = [];
+
+  // getConfigDir() only permits a config dir under $HOME or /tmp, so the test
+  // settings live in a /tmp dir (realpath /private/tmp on macOS passes the guard).
+  function useConfig(yaml: string): void {
+    const dir = mkdtempSync(join("/tmp", "secscan-cfg-"));
+    writeFileSync(join(dir, "settings.yaml"), yaml, "utf-8");
+    cfgDirs.push(dir);
+    process.env.LLM_EXT_CONFIG_DIR = dir;
+  }
+  // An existing dir with no settings.yaml → loadSettings() returns null.
+  function useEmptyConfig(): void {
+    const dir = mkdtempSync(join("/tmp", "secscan-cfg-"));
+    cfgDirs.push(dir);
+    process.env.LLM_EXT_CONFIG_DIR = dir;
+  }
+
+  const PROFILE_WITH_OVERRIDE =
+    "active: t\n" +
+    "profiles:\n" +
+    "  t:\n" +
+    "    mode: remote\n" +
+    "    api: openrouter-remote\n" +
+    "    model: profile/main-model\n" +
+    "    api_key: direct-key\n" +
+    "    tool_models:\n" +
+    "      security_scan: test/override-model\n";
+
+  const PROFILE_NO_OVERRIDE =
+    "active: t\n" +
+    "profiles:\n" +
+    "  t:\n" +
+    "    mode: remote\n" +
+    "    api: openrouter-remote\n" +
+    "    model: profile/main-model\n" +
+    "    api_key: direct-key\n";
+
+  function scanInput(extra: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      targets: [{ id: "c1", category: "c", snippet: "code" }],
+      output_dir: tmp,
+      ...extra,
+    });
+  }
+
+  afterEach(() => {
+    if (origCfgDir === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
+    else process.env.LLM_EXT_CONFIG_DIR = origCfgDir;
+    for (const d of cfgDirs.splice(0)) {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it("uses tool_models.security_scan when the caller passes no explicit model", async () => {
+    useConfig(PROFILE_WITH_OVERRIDE);
+    const { impl, bodies } = captureFetch(NOT_THREAT);
+    const res = await runMassScoutCli(
+      ["security-scan", "--input-json", scanInput()],
+      { fetchImpl: impl, apiKey: "k" },
+    );
+    expect(res.exitCode).toBe(0);
+    expect(sentModel(bodies)).toBe("test/override-model");
+  });
+
+  it("falls back to DEFAULT_MODEL when the active profile has no tool_models (back-compat)", async () => {
+    useConfig(PROFILE_NO_OVERRIDE);
+    const { impl, bodies } = captureFetch(NOT_THREAT);
+    const res = await runMassScoutCli(
+      ["security-scan", "--input-json", scanInput()],
+      { fetchImpl: impl, apiKey: "k" },
+    );
+    expect(res.exitCode).toBe(0);
+    expect(sentModel(bodies)).toBe(DEFAULT_MODEL);
+  });
+
+  it("falls back to DEFAULT_MODEL when there is no settings file at all", async () => {
+    useEmptyConfig();
+    const { impl, bodies } = captureFetch(NOT_THREAT);
+    const res = await runMassScoutCli(
+      ["security-scan", "--input-json", scanInput()],
+      { fetchImpl: impl, apiKey: "k" },
+    );
+    expect(res.exitCode).toBe(0);
+    expect(sentModel(bodies)).toBe(DEFAULT_MODEL);
+  });
+
+  it("an explicit input model overrides tool_models (highest precedence)", async () => {
+    useConfig(PROFILE_WITH_OVERRIDE);
+    const { impl, bodies } = captureFetch(NOT_THREAT);
+    const res = await runMassScoutCli(
+      ["security-scan", "--input-json", scanInput({ model: "explicit/model" })],
+      { fetchImpl: impl, apiKey: "k" },
+    );
+    expect(res.exitCode).toBe(0);
+    expect(sentModel(bodies)).toBe("explicit/model");
   });
 });

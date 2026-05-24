@@ -105,4 +105,14 @@ describe("qualifyModelForTool", () => {
     expect(q.qualified).toBeNull();
     expect(q.benchmark).toBeNull();
   });
+
+  it("populates disqualifyReason on failure and null on success", () => {
+    // Passes security_scan's relaxed requirements → no reason.
+    const small = model({ context_length: 32_000, supported_parameters: ["response_format"] });
+    expect(qualifyModelForTool("security_scan", small).disqualifyReason).toBeNull();
+    // Fails code_task on the reasoning requirement → that reason is surfaced.
+    expect(qualifyModelForTool("code_task", small).disqualifyReason).toMatch(/reasoning/);
+    // Unknown tool → descriptor reason.
+    expect(qualifyModelForTool("discover", model()).disqualifyReason).toMatch(/no registry descriptor/);
+  });
 });

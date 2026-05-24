@@ -131041,7 +131041,7 @@ ${lanes.join("\n")}
           }
         }
         function createImportCallExpressionAMD(arg, containsLexicalThis) {
-          const resolve5 = factory2.createUniqueName("resolve");
+          const resolve3 = factory2.createUniqueName("resolve");
           const reject = factory2.createUniqueName("reject");
           const parameters = [
             factory2.createParameterDeclaration(
@@ -131050,7 +131050,7 @@ ${lanes.join("\n")}
               /*dotDotDotToken*/
               void 0,
               /*name*/
-              resolve5
+              resolve3
             ),
             factory2.createParameterDeclaration(
               /*modifiers*/
@@ -131067,7 +131067,7 @@ ${lanes.join("\n")}
                 factory2.createIdentifier("require"),
                 /*typeArguments*/
                 void 0,
-                [factory2.createArrayLiteralExpression([arg || factory2.createOmittedExpression()]), resolve5, reject]
+                [factory2.createArrayLiteralExpression([arg || factory2.createOmittedExpression()]), resolve3, reject]
               )
             )
           ]);
@@ -217785,8 +217785,8 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
         installPackage(options) {
           this.packageInstallId++;
           const request = { kind: "installPackage", ...options, id: this.packageInstallId };
-          const promise = new Promise((resolve5, reject) => {
-            (this.packageInstalledPromise ?? (this.packageInstalledPromise = /* @__PURE__ */ new Map())).set(this.packageInstallId, { resolve: resolve5, reject });
+          const promise = new Promise((resolve3, reject) => {
+            (this.packageInstalledPromise ?? (this.packageInstalledPromise = /* @__PURE__ */ new Map())).set(this.packageInstallId, { resolve: resolve3, reject });
           });
           this.installer.send(request);
           return promise;
@@ -218069,11 +218069,10 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 });
 
 // src/benchmark/index.ts
-import { mkdirSync as mkdirSync4, writeFileSync as writeFileSync4, existsSync as existsSync5 } from "node:fs";
+import { mkdirSync as mkdirSync4, writeFileSync as writeFileSync4, existsSync as existsSync6 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname2, join as join7, resolve as resolve4 } from "node:path";
+import { dirname as dirname2, join as join7 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-import { execSync as execSync3 } from "node:child_process";
 
 // src/usage-history.ts
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -218095,6 +218094,304 @@ import {
 import { resolve } from "node:path";
 import { join } from "node:path";
 import { homedir } from "node:os";
+
+// src/benchmark/discover.ts
+var DEFAULT_CRITERIA = {
+  category: "programming",
+  minContextTokens: 128e3,
+  minOutputTokens: 64e3,
+  // Hard caps for auto-selection: STRICTLY less than $1/M for both
+  // input AND output. Anything at or above is rejected from the
+  // candidate pool. The `qualify()` predicate enforces this with `<`
+  // (not `<=`) so $1.00 itself is out. Override only via --include.
+  maxInputDollarsPerMillion: 1,
+  maxOutputDollarsPerMillion: 1,
+  requireStructuredOutputs: true,
+  requireReasoning: true,
+  allowFree: false
+};
+async function fetchProgrammingModels(category) {
+  const url = category ? `https://openrouter.ai/api/v1/models?category=${encodeURIComponent(category)}` : `https://openrouter.ai/api/v1/models`;
+  const resp = await fetch(url);
+  if (!resp.ok) {
+    throw new Error(`OpenRouter model list fetch failed: ${resp.status} ${resp.statusText}`);
+  }
+  const body = await resp.json();
+  return body.data ?? [];
+}
+function filterModels(models, criteria2 = DEFAULT_CRITERIA) {
+  const out = [];
+  for (const m of models) {
+    const q = qualify(m, criteria2);
+    if (q) out.push(q);
+  }
+  return out;
+}
+function disqualifyReason(m, criteria2) {
+  if (!criteria2.allowFree && m.id.endsWith(":free")) return "free model not allowed (allowFree=false)";
+  const params = new Set(m.supported_parameters ?? []);
+  const supportsStructured = params.has("structured_outputs") || params.has("response_format");
+  const supportsReasoning = params.has("reasoning") || params.has("include_reasoning");
+  if (criteria2.requireStructuredOutputs && !supportsStructured) {
+    return "no structured-output support (needs response_format or structured_outputs)";
+  }
+  if (criteria2.requireReasoning && !supportsReasoning) return "no reasoning support";
+  const ctx = m.context_length ?? 0;
+  if (ctx < criteria2.minContextTokens) return `context ${ctx} < required ${criteria2.minContextTokens}`;
+  const maxOutRaw = m.top_provider?.max_completion_tokens;
+  const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
+  if (!maxOut || maxOut < criteria2.minOutputTokens) {
+    return `max output ${maxOut} < required ${criteria2.minOutputTokens}`;
+  }
+  const promptPerToken = parseFloat(m.pricing?.prompt ?? "NaN");
+  const completionPerToken = parseFloat(m.pricing?.completion ?? "NaN");
+  if (!isFinite(promptPerToken) || !isFinite(completionPerToken)) return "missing or invalid pricing";
+  const inputDollarsPerMillion = promptPerToken * 1e6;
+  const outputDollarsPerMillion = completionPerToken * 1e6;
+  if (inputDollarsPerMillion >= criteria2.maxInputDollarsPerMillion) {
+    return `input $${inputDollarsPerMillion.toFixed(3)}/M >= cap $${criteria2.maxInputDollarsPerMillion.toFixed(3)}/M`;
+  }
+  if (outputDollarsPerMillion >= criteria2.maxOutputDollarsPerMillion) {
+    return `output $${outputDollarsPerMillion.toFixed(3)}/M >= cap $${criteria2.maxOutputDollarsPerMillion.toFixed(3)}/M`;
+  }
+  return null;
+}
+function qualify(m, criteria2) {
+  if (disqualifyReason(m, criteria2) !== null) return null;
+  const params = new Set(m.supported_parameters ?? []);
+  const supportsStructured = params.has("structured_outputs") || params.has("response_format");
+  const supportsReasoning = params.has("reasoning") || params.has("include_reasoning");
+  const ctx = m.context_length ?? 0;
+  const maxOutRaw = m.top_provider?.max_completion_tokens;
+  const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
+  const inputDollarsPerMillion = parseFloat(m.pricing?.prompt ?? "NaN") * 1e6;
+  const outputDollarsPerMillion = parseFloat(m.pricing?.completion ?? "NaN") * 1e6;
+  return {
+    id: m.id,
+    name: m.name ?? m.id,
+    contextTokens: ctx,
+    maxOutputTokens: maxOut,
+    inputDollarsPerMillion,
+    outputDollarsPerMillion,
+    supportsStructured,
+    supportsReasoning,
+    raw: m
+  };
+}
+function buildBenchmarkRoster(candidatePool, criteria2, includeIds, baselineLookupPool = candidatePool) {
+  const candidates = filterModels(candidatePool, criteria2);
+  const inRoster = new Set(candidates.map((m) => m.id));
+  const seen = new Set(inRoster);
+  const baselines = [];
+  for (const id of includeIds) {
+    if (seen.has(id)) continue;
+    const raw = baselineLookupPool.find((m) => m.id === id);
+    if (!raw) {
+      continue;
+    }
+    const params = new Set(raw.supported_parameters ?? []);
+    const promptPerToken = parseFloat(raw.pricing?.prompt ?? "NaN");
+    const completionPerToken = parseFloat(raw.pricing?.completion ?? "NaN");
+    const ctx = raw.context_length ?? 0;
+    const maxOutRaw = raw.top_provider?.max_completion_tokens;
+    const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
+    baselines.push({
+      id: raw.id,
+      name: raw.name ?? raw.id,
+      contextTokens: ctx,
+      maxOutputTokens: maxOut,
+      inputDollarsPerMillion: isFinite(promptPerToken) ? promptPerToken * 1e6 : Infinity,
+      outputDollarsPerMillion: isFinite(completionPerToken) ? completionPerToken * 1e6 : Infinity,
+      supportsStructured: params.has("structured_outputs") || params.has("response_format"),
+      supportsReasoning: params.has("reasoning") || params.has("include_reasoning"),
+      raw
+    });
+    seen.add(raw.id);
+  }
+  return { candidates, baselines };
+}
+
+// src/benchmark/security-triage/select.ts
+var SECURITY_TRIAGE_CRITERIA = {
+  category: DEFAULT_CRITERIA.category,
+  // Snippet windows are at most a few KB; the judge prompt is small. 16K is
+  // plenty and keeps cheap small models (e.g. qwen-2.5-7b @ 32K) in the pool.
+  minContextTokens: 16e3,
+  // The verdict JSON is ~200 bytes. 1K completion headroom is ample.
+  minOutputTokens: 1e3,
+  maxInputDollarsPerMillion: DEFAULT_CRITERIA.maxInputDollarsPerMillion,
+  maxOutputDollarsPerMillion: DEFAULT_CRITERIA.maxOutputDollarsPerMillion,
+  requireStructuredOutputs: true,
+  // Triage does NOT need a reasoning model — the json_schema verdict is a
+  // direct classification. Requiring reasoning would wrongly exclude qwen-2.5-7b.
+  requireReasoning: false,
+  allowFree: false
+};
+var COST_EPSILON = 1e-9;
+function notPricier(candidate, inInc, outInc) {
+  return candidate.inputDollarsPerMillion <= inInc + COST_EPSILON && candidate.outputDollarsPerMillion <= outInc + COST_EPSILON;
+}
+function selectSecurityTriageModel(input) {
+  const { incumbentModelId, incumbentInputDollarsPerMillion: inInc, incumbentOutputDollarsPerMillion: outInc } = input;
+  const eligible = [];
+  const rejected = [];
+  for (const c of input.candidates) {
+    if (!c.qualified) {
+      rejected.push({
+        modelId: c.modelId,
+        reason: `does not meet security-triage requirements${c.disqualifyReason ? ` (${c.disqualifyReason})` : ""}`
+      });
+      continue;
+    }
+    if (!c.triage.pass) {
+      rejected.push({
+        modelId: c.modelId,
+        reason: `failed the triage benchmark: ${c.triage.failReasons.join("; ")}`
+      });
+      continue;
+    }
+    if (!notPricier(c, inInc, outInc)) {
+      rejected.push({
+        modelId: c.modelId,
+        reason: `pricier than the incumbent default (in $${c.inputDollarsPerMillion.toFixed(3)}/out $${c.outputDollarsPerMillion.toFixed(3)} vs incumbent in $${inInc.toFixed(3)}/out $${outInc.toFixed(3)}) \u2014 never auto-bump to a pricier model`
+      });
+      continue;
+    }
+    eligible.push(c);
+  }
+  eligible.sort((a, b) => {
+    if (b.triage.score !== a.triage.score) return b.triage.score - a.triage.score;
+    const aCost = a.inputDollarsPerMillion + a.outputDollarsPerMillion;
+    const bCost = b.inputDollarsPerMillion + b.outputDollarsPerMillion;
+    if (aCost !== bCost) return aCost - bCost;
+    return a.latencyMs - b.latencyMs;
+  });
+  if (eligible.length === 0) {
+    return {
+      recommendedModelId: incumbentModelId,
+      changed: false,
+      reason: "No eligible same-or-cheaper model passed the triage benchmark. Keeping the incumbent default.",
+      eligible,
+      rejected
+    };
+  }
+  const winner = eligible[0];
+  const changed = winner.modelId !== incumbentModelId;
+  return {
+    recommendedModelId: winner.modelId,
+    changed,
+    reason: changed ? `${winner.modelId} passed the triage benchmark (score ${winner.triage.score.toFixed(3)}) at no higher cost than the incumbent and scored best among eligible passers.` : `The incumbent ${winner.modelId} remains the best eligible passer (score ${winner.triage.score.toFixed(3)}).`,
+    eligible,
+    rejected
+  };
+}
+
+// src/model-qualification/registry.ts
+function criteria(overrides) {
+  return { ...DEFAULT_CRITERIA, ...overrides };
+}
+var TOOL_MODEL_REGISTRY = {
+  security_scan: {
+    tool: "security_scan",
+    // The reference instance. Structured output + a modest context; NO reasoning
+    // / 128K bar — triage snippets are small and the verdict is ~200 bytes.
+    requirements: SECURITY_TRIAGE_CRITERIA,
+    benchmark: "security-triage",
+    note: "Injection-hardened verdict adjudication. Gated by the security-triage golden dataset (TRDD-973a0265)."
+  },
+  mass_scout: {
+    tool: "mass_scout",
+    requirements: criteria({ requireReasoning: false }),
+    benchmark: "keyword-classification",
+    note: "Fieldset extraction / classification. Reuses the existing keyword-classification benchmark (benchmark/ground-truth.ts + pick.ts)."
+  },
+  cluster_synonyms: {
+    tool: "cluster_synonyms",
+    requirements: criteria({ requireReasoning: true }),
+    benchmark: null,
+    note: "Meaning-equivalence clustering. Has an in-tool pre-flight benchmark gate; a formal golden dataset is incremental."
+  },
+  code_task: {
+    tool: "code_task",
+    requirements: criteria({ requireReasoning: true, minContextTokens: 128e3 }),
+    benchmark: null,
+    note: "Code-optimized analysis. Code-understanding benchmark dataset is incremental."
+  },
+  scan_folder: {
+    tool: "scan_folder",
+    requirements: criteria({ requireReasoning: false, minContextTokens: 128e3 }),
+    benchmark: null,
+    note: "Per-file auto-discovery scan. Per-file detection benchmark dataset is incremental."
+  },
+  search_existing_implementations: {
+    tool: "search_existing_implementations",
+    requirements: criteria({ requireReasoning: true, minContextTokens: 128e3 }),
+    benchmark: null,
+    note: "Duplicate-implementation match across a codebase. Duplicate-match benchmark dataset is incremental."
+  },
+  check_references: {
+    tool: "check_references",
+    requirements: criteria({ requireReasoning: false }),
+    benchmark: null,
+    note: "Symbol-reference validation. Validation-accuracy benchmark dataset is incremental."
+  },
+  check_imports: {
+    tool: "check_imports",
+    requirements: criteria({ requireReasoning: false }),
+    benchmark: null,
+    note: "Import-path validation. Validation-accuracy benchmark dataset is incremental."
+  },
+  check_against_specs: {
+    tool: "check_against_specs",
+    requirements: criteria({ requireReasoning: false }),
+    benchmark: null,
+    note: "Source-vs-specification compliance. Validation-accuracy benchmark dataset is incremental."
+  },
+  compare_files: {
+    tool: "compare_files",
+    requirements: criteria({ requireReasoning: false, minContextTokens: 128e3 }),
+    benchmark: null,
+    note: "Two-file change summary. Change-summary benchmark dataset is incremental."
+  },
+  chat: {
+    tool: "chat",
+    // The loosest tool — general text. Structured output not required.
+    requirements: criteria({ requireStructuredOutputs: false, requireReasoning: false }),
+    benchmark: null,
+    note: "General-purpose text. A loose general-quality benchmark is incremental."
+  }
+};
+function getToolDescriptor(tool) {
+  return TOOL_MODEL_REGISTRY[tool];
+}
+function registeredTools() {
+  return Object.keys(TOOL_MODEL_REGISTRY);
+}
+function qualifyModelForTool(tool, model) {
+  const descriptor = getToolDescriptor(tool);
+  if (!descriptor) {
+    return {
+      tool,
+      meetsRequirements: false,
+      disqualifyReason: "unknown or non-LLM tool (no registry descriptor)",
+      qualified: null,
+      benchmark: null,
+      requirementsEligible: false
+    };
+  }
+  const qualified = qualify(model, descriptor.requirements);
+  const reason = qualified === null ? disqualifyReason(model, descriptor.requirements) : null;
+  return {
+    tool,
+    meetsRequirements: qualified !== null,
+    disqualifyReason: reason,
+    qualified,
+    benchmark: descriptor.benchmark,
+    requirementsEligible: qualified !== null
+  };
+}
+
+// src/config.ts
 function getConfigDir() {
   const raw = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
   function resolveDeepestExisting(p) {
@@ -218316,102 +218613,6 @@ function extractNameAndBody(stmt, source) {
     }
   }
   return out;
-}
-
-// src/benchmark/discover.ts
-var DEFAULT_CRITERIA = {
-  category: "programming",
-  minContextTokens: 128e3,
-  minOutputTokens: 64e3,
-  // Hard caps for auto-selection: STRICTLY less than $1/M for both
-  // input AND output. Anything at or above is rejected from the
-  // candidate pool. The `qualify()` predicate enforces this with `<`
-  // (not `<=`) so $1.00 itself is out. Override only via --include.
-  maxInputDollarsPerMillion: 1,
-  maxOutputDollarsPerMillion: 1,
-  requireStructuredOutputs: true,
-  requireReasoning: true,
-  allowFree: false
-};
-async function fetchProgrammingModels(category) {
-  const url = category ? `https://openrouter.ai/api/v1/models?category=${encodeURIComponent(category)}` : `https://openrouter.ai/api/v1/models`;
-  const resp = await fetch(url);
-  if (!resp.ok) {
-    throw new Error(`OpenRouter model list fetch failed: ${resp.status} ${resp.statusText}`);
-  }
-  const body = await resp.json();
-  return body.data ?? [];
-}
-function filterModels(models, criteria2 = DEFAULT_CRITERIA) {
-  const out = [];
-  for (const m of models) {
-    const q = qualify(m, criteria2);
-    if (q) out.push(q);
-  }
-  return out;
-}
-function qualify(m, criteria2) {
-  if (!criteria2.allowFree && m.id.endsWith(":free")) return null;
-  const params = new Set(m.supported_parameters ?? []);
-  const supportsStructured = params.has("structured_outputs") || params.has("response_format");
-  const supportsReasoning = params.has("reasoning") || params.has("include_reasoning");
-  if (criteria2.requireStructuredOutputs && !supportsStructured) return null;
-  if (criteria2.requireReasoning && !supportsReasoning) return null;
-  const ctx = m.context_length ?? 0;
-  if (ctx < criteria2.minContextTokens) return null;
-  const maxOutRaw = m.top_provider?.max_completion_tokens;
-  const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
-  if (!maxOut || maxOut < criteria2.minOutputTokens) return null;
-  const promptPerToken = parseFloat(m.pricing?.prompt ?? "NaN");
-  const completionPerToken = parseFloat(m.pricing?.completion ?? "NaN");
-  if (!isFinite(promptPerToken) || !isFinite(completionPerToken)) return null;
-  const inputDollarsPerMillion = promptPerToken * 1e6;
-  const outputDollarsPerMillion = completionPerToken * 1e6;
-  if (inputDollarsPerMillion >= criteria2.maxInputDollarsPerMillion) return null;
-  if (outputDollarsPerMillion >= criteria2.maxOutputDollarsPerMillion) return null;
-  return {
-    id: m.id,
-    name: m.name ?? m.id,
-    contextTokens: ctx,
-    maxOutputTokens: maxOut,
-    inputDollarsPerMillion,
-    outputDollarsPerMillion,
-    supportsStructured,
-    supportsReasoning,
-    raw: m
-  };
-}
-function buildBenchmarkRoster(candidatePool, criteria2, includeIds, baselineLookupPool = candidatePool) {
-  const candidates = filterModels(candidatePool, criteria2);
-  const inRoster = new Set(candidates.map((m) => m.id));
-  const seen = new Set(inRoster);
-  const baselines = [];
-  for (const id of includeIds) {
-    if (seen.has(id)) continue;
-    const raw = baselineLookupPool.find((m) => m.id === id);
-    if (!raw) {
-      continue;
-    }
-    const params = new Set(raw.supported_parameters ?? []);
-    const promptPerToken = parseFloat(raw.pricing?.prompt ?? "NaN");
-    const completionPerToken = parseFloat(raw.pricing?.completion ?? "NaN");
-    const ctx = raw.context_length ?? 0;
-    const maxOutRaw = raw.top_provider?.max_completion_tokens;
-    const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
-    baselines.push({
-      id: raw.id,
-      name: raw.name ?? raw.id,
-      contextTokens: ctx,
-      maxOutputTokens: maxOut,
-      inputDollarsPerMillion: isFinite(promptPerToken) ? promptPerToken * 1e6 : Infinity,
-      outputDollarsPerMillion: isFinite(completionPerToken) ? completionPerToken * 1e6 : Infinity,
-      supportsStructured: params.has("structured_outputs") || params.has("response_format"),
-      supportsReasoning: params.has("reasoning") || params.has("include_reasoning"),
-      raw
-    });
-    seen.add(raw.id);
-  }
-  return { candidates, baselines };
 }
 
 // src/benchmark/runner.ts
@@ -218980,9 +219181,17 @@ function applyPicksToSettings(settingsPath, profileName, picks) {
 
 // src/benchmark/security-triage/index.ts
 import { createHash as createHash2 } from "node:crypto";
-import { execSync as execSync2 } from "node:child_process";
-import { existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync6, renameSync, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join6, resolve as resolve3 } from "node:path";
+import { existsSync as existsSync5, mkdirSync as mkdirSync3, readFileSync as readFileSync6, renameSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join6 } from "node:path";
+
+// src/project-root.ts
+import { existsSync as existsSync3 } from "node:fs";
+function resolveProjectMainRoot(override) {
+  if (override && override.length > 0) return override;
+  const projDir = process.env.CLAUDE_PROJECT_DIR;
+  if (projDir && projDir.length > 0 && existsSync3(projDir)) return projDir;
+  return process.cwd();
+}
 
 // src/mass_scouting/cost-estimate.ts
 var KNOWN_PRICING = {
@@ -218994,7 +219203,7 @@ var KNOWN_PRICING = {
 };
 
 // src/benchmark/security-triage/dataset.ts
-import { existsSync as existsSync3, readFileSync as readFileSync5 } from "node:fs";
+import { existsSync as existsSync4, readFileSync as readFileSync5 } from "node:fs";
 import { dirname, join as join5 } from "node:path";
 import { fileURLToPath } from "node:url";
 var BENCHMARK_RUBRICS = {
@@ -219017,7 +219226,7 @@ function resolveDatasetPath() {
     join5(here, "..", "..", "src", "benchmark", "security-triage", "dataset.jsonl")
   ];
   for (const c of candidates) {
-    if (existsSync3(c)) return c;
+    if (existsSync4(c)) return c;
   }
   throw new Error(
     `Could not locate the security-triage dataset. Tried:
@@ -220043,160 +220252,6 @@ function scoreTriage(modelId, cases, returned, thresholds = DEFAULT_TRIAGE_THRES
   };
 }
 
-// src/benchmark/security-triage/select.ts
-var SECURITY_TRIAGE_CRITERIA = {
-  category: DEFAULT_CRITERIA.category,
-  // Snippet windows are at most a few KB; the judge prompt is small. 16K is
-  // plenty and keeps cheap small models (e.g. qwen-2.5-7b @ 32K) in the pool.
-  minContextTokens: 16e3,
-  // The verdict JSON is ~200 bytes. 1K completion headroom is ample.
-  minOutputTokens: 1e3,
-  maxInputDollarsPerMillion: DEFAULT_CRITERIA.maxInputDollarsPerMillion,
-  maxOutputDollarsPerMillion: DEFAULT_CRITERIA.maxOutputDollarsPerMillion,
-  requireStructuredOutputs: true,
-  // Triage does NOT need a reasoning model — the json_schema verdict is a
-  // direct classification. Requiring reasoning would wrongly exclude qwen-2.5-7b.
-  requireReasoning: false,
-  allowFree: false
-};
-var COST_EPSILON = 1e-9;
-function notPricier(candidate, inInc, outInc) {
-  return candidate.inputDollarsPerMillion <= inInc + COST_EPSILON && candidate.outputDollarsPerMillion <= outInc + COST_EPSILON;
-}
-function selectSecurityTriageModel(input) {
-  const { incumbentModelId, incumbentInputDollarsPerMillion: inInc, incumbentOutputDollarsPerMillion: outInc } = input;
-  const eligible = [];
-  const rejected = [];
-  for (const c of input.candidates) {
-    if (!c.qualified) {
-      rejected.push({
-        modelId: c.modelId,
-        reason: `does not meet security-triage requirements${c.disqualifyReason ? ` (${c.disqualifyReason})` : ""}`
-      });
-      continue;
-    }
-    if (!c.triage.pass) {
-      rejected.push({
-        modelId: c.modelId,
-        reason: `failed the triage benchmark: ${c.triage.failReasons.join("; ")}`
-      });
-      continue;
-    }
-    if (!notPricier(c, inInc, outInc)) {
-      rejected.push({
-        modelId: c.modelId,
-        reason: `pricier than the incumbent default (in $${c.inputDollarsPerMillion.toFixed(3)}/out $${c.outputDollarsPerMillion.toFixed(3)} vs incumbent in $${inInc.toFixed(3)}/out $${outInc.toFixed(3)}) \u2014 never auto-bump to a pricier model`
-      });
-      continue;
-    }
-    eligible.push(c);
-  }
-  eligible.sort((a, b) => {
-    if (b.triage.score !== a.triage.score) return b.triage.score - a.triage.score;
-    const aCost = a.inputDollarsPerMillion + a.outputDollarsPerMillion;
-    const bCost = b.inputDollarsPerMillion + b.outputDollarsPerMillion;
-    if (aCost !== bCost) return aCost - bCost;
-    return a.latencyMs - b.latencyMs;
-  });
-  if (eligible.length === 0) {
-    return {
-      recommendedModelId: incumbentModelId,
-      changed: false,
-      reason: "No eligible same-or-cheaper model passed the triage benchmark. Keeping the incumbent default.",
-      eligible,
-      rejected
-    };
-  }
-  const winner = eligible[0];
-  const changed = winner.modelId !== incumbentModelId;
-  return {
-    recommendedModelId: winner.modelId,
-    changed,
-    reason: changed ? `${winner.modelId} passed the triage benchmark (score ${winner.triage.score.toFixed(3)}) at no higher cost than the incumbent and scored best among eligible passers.` : `The incumbent ${winner.modelId} remains the best eligible passer (score ${winner.triage.score.toFixed(3)}).`,
-    eligible,
-    rejected
-  };
-}
-
-// src/model-qualification/registry.ts
-function criteria(overrides) {
-  return { ...DEFAULT_CRITERIA, ...overrides };
-}
-var TOOL_MODEL_REGISTRY = {
-  security_scan: {
-    tool: "security_scan",
-    // The reference instance. Structured output + a modest context; NO reasoning
-    // / 128K bar — triage snippets are small and the verdict is ~200 bytes.
-    requirements: SECURITY_TRIAGE_CRITERIA,
-    benchmark: "security-triage",
-    note: "Injection-hardened verdict adjudication. Gated by the security-triage golden dataset (TRDD-973a0265)."
-  },
-  mass_scout: {
-    tool: "mass_scout",
-    requirements: criteria({ requireReasoning: false }),
-    benchmark: "keyword-classification",
-    note: "Fieldset extraction / classification. Reuses the existing keyword-classification benchmark (benchmark/ground-truth.ts + pick.ts)."
-  },
-  cluster_synonyms: {
-    tool: "cluster_synonyms",
-    requirements: criteria({ requireReasoning: true }),
-    benchmark: null,
-    note: "Meaning-equivalence clustering. Has an in-tool pre-flight benchmark gate; a formal golden dataset is incremental."
-  },
-  code_task: {
-    tool: "code_task",
-    requirements: criteria({ requireReasoning: true, minContextTokens: 128e3 }),
-    benchmark: null,
-    note: "Code-optimized analysis. Code-understanding benchmark dataset is incremental."
-  },
-  scan_folder: {
-    tool: "scan_folder",
-    requirements: criteria({ requireReasoning: false, minContextTokens: 128e3 }),
-    benchmark: null,
-    note: "Per-file auto-discovery scan. Per-file detection benchmark dataset is incremental."
-  },
-  search_existing_implementations: {
-    tool: "search_existing_implementations",
-    requirements: criteria({ requireReasoning: true, minContextTokens: 128e3 }),
-    benchmark: null,
-    note: "Duplicate-implementation match across a codebase. Duplicate-match benchmark dataset is incremental."
-  },
-  check_references: {
-    tool: "check_references",
-    requirements: criteria({ requireReasoning: false }),
-    benchmark: null,
-    note: "Symbol-reference validation. Validation-accuracy benchmark dataset is incremental."
-  },
-  check_imports: {
-    tool: "check_imports",
-    requirements: criteria({ requireReasoning: false }),
-    benchmark: null,
-    note: "Import-path validation. Validation-accuracy benchmark dataset is incremental."
-  },
-  check_against_specs: {
-    tool: "check_against_specs",
-    requirements: criteria({ requireReasoning: false }),
-    benchmark: null,
-    note: "Source-vs-specification compliance. Validation-accuracy benchmark dataset is incremental."
-  },
-  compare_files: {
-    tool: "compare_files",
-    requirements: criteria({ requireReasoning: false, minContextTokens: 128e3 }),
-    benchmark: null,
-    note: "Two-file change summary. Change-summary benchmark dataset is incremental."
-  },
-  chat: {
-    tool: "chat",
-    // The loosest tool — general text. Structured output not required.
-    requirements: criteria({ requireStructuredOutputs: false, requireReasoning: false }),
-    benchmark: null,
-    note: "General-purpose text. A loose general-quality benchmark is incremental."
-  }
-};
-function getToolDescriptor(tool) {
-  return TOOL_MODEL_REGISTRY[tool];
-}
-
 // src/benchmark/security-triage/index.ts
 var SECURITY_TRIAGE_CRITERIA2 = getToolDescriptor("security_scan").requirements;
 var INCUMBENT_FALLBACK_PRICING = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
@@ -220208,7 +220263,7 @@ function cacheKey(modelId, date, datasetHash) {
 }
 function loadCache() {
   const p = cachePath();
-  if (!existsSync4(p)) return {};
+  if (!existsSync5(p)) return {};
   try {
     const parsed = JSON.parse(readFileSync6(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
@@ -220234,16 +220289,7 @@ function resolveApiKey(override) {
   return k;
 }
 function resolveMainRoot(override) {
-  if (override) return override;
-  try {
-    const out = execSync2("git worktree list", {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"]
-    });
-    return out.trim().split("\n")[0].split(/\s+/)[0];
-  } catch {
-    return resolve3(".");
-  }
+  return resolveProjectMainRoot(override);
 }
 function today() {
   return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
@@ -220301,8 +220347,8 @@ async function runSecurityTriageBenchmark(opts = {}) {
   const incumbentIn = incumbentDecorated && isFinite(incumbentDecorated.inputDollarsPerMillion) ? incumbentDecorated.inputDollarsPerMillion : INCUMBENT_FALLBACK_PRICING.input_per_m_usd;
   const incumbentOut = incumbentDecorated && isFinite(incumbentDecorated.outputDollarsPerMillion) ? incumbentDecorated.outputDollarsPerMillion : INCUMBENT_FALLBACK_PRICING.output_per_m_usd;
   const toAssess = /* @__PURE__ */ new Map();
-  const addModel = (model, qualified, disqualifyReason) => {
-    if (!toAssess.has(model.id)) toAssess.set(model.id, { model, qualified, disqualifyReason });
+  const addModel = (model, qualified, disqualifyReason2) => {
+    if (!toAssess.has(model.id)) toAssess.set(model.id, { model, qualified, disqualifyReason: disqualifyReason2 });
   };
   if (opts.models && opts.models.length > 0) {
     for (const id of opts.models) {
@@ -220360,7 +220406,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
   const assessments = [];
   const scores = [];
   let totalCost = 0;
-  for (const { model, qualified, disqualifyReason } of toAssess.values()) {
+  for (const { model, qualified, disqualifyReason: disqualifyReason2 } of toAssess.values()) {
     const key = cacheKey(model.id, today(), datasetHash);
     const cached = cache[key];
     let score;
@@ -220399,7 +220445,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
         inputDollarsPerMillion: model.inputDollarsPerMillion,
         outputDollarsPerMillion: model.outputDollarsPerMillion,
         qualified,
-        disqualifyReason
+        disqualifyReason: disqualifyReason2
       };
     }
     totalCost += costUsd;
@@ -220407,7 +220453,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
     assessments.push({
       modelId: model.id,
       qualified,
-      disqualifyReason,
+      disqualifyReason: disqualifyReason2,
       inputDollarsPerMillion: model.inputDollarsPerMillion,
       outputDollarsPerMillion: model.outputDollarsPerMillion,
       latencyMs,
@@ -220547,6 +220593,63 @@ function buildReportMarkdown(args) {
   return lines.join("\n") + "\n";
 }
 
+// src/model-qualification/assess.ts
+function assessModelAcrossTools(model) {
+  const tools = [];
+  for (const tool of registeredTools()) {
+    const q = qualifyModelForTool(tool, model);
+    tools.push({
+      tool,
+      meetsRequirements: q.meetsRequirements,
+      disqualifyReason: q.disqualifyReason,
+      benchmark: q.benchmark,
+      note: getToolDescriptor(tool)?.note ?? ""
+    });
+  }
+  const qualifiedCount = tools.filter((t) => t.meetsRequirements).length;
+  const benchmarkGatedQualified = tools.filter((t) => t.meetsRequirements && t.benchmark !== null).map((t) => t.tool);
+  return {
+    modelId: model.id,
+    modelName: model.name ?? model.id,
+    tools,
+    qualifiedCount,
+    totalTools: tools.length,
+    benchmarkGatedQualified
+  };
+}
+async function assessModelById(modelId, opts = {}) {
+  const fetchModels = opts.fetchModels ?? (() => fetchProgrammingModels());
+  const models = await fetchModels();
+  const model = models.find((m) => m.id === modelId);
+  if (!model) {
+    throw new Error(
+      `Model '${modelId}' not found in the OpenRouter catalog. Check the id (e.g. 'google/gemini-2.5-flash').`
+    );
+  }
+  return assessModelAcrossTools(model);
+}
+function renderAssessmentText(a) {
+  const lines = [];
+  lines.push(`Model: ${a.modelId} (${a.modelName})`);
+  lines.push(
+    `Meets requirements for ${a.qualifiedCount}/${a.totalTools} LLM tools.`
+  );
+  lines.push("");
+  const toolWidth = Math.max(4, ...a.tools.map((t) => t.tool.length));
+  for (const t of a.tools) {
+    const status = t.meetsRequirements ? "OK" : "NO";
+    const tail = t.meetsRequirements ? t.benchmark ? `benchmark: ${t.benchmark} (run before assigning)` : "requirements-only" : t.disqualifyReason ?? "does not meet requirements";
+    lines.push(`  ${t.tool.padEnd(toolWidth)}  ${status}  ${tail}`);
+  }
+  if (a.benchmarkGatedQualified.length > 0) {
+    lines.push("");
+    lines.push(
+      `Note: ${a.benchmarkGatedQualified.join(", ")} ALSO require a benchmark pass before assignment \u2014 run that tool's benchmark (security_scan \u2192 /llm-externalizer-security-triage-benchmark).`
+    );
+  }
+  return lines.join("\n");
+}
+
 // src/benchmark/index.ts
 function parseArgs(argv) {
   const opts = {
@@ -220562,7 +220665,8 @@ function parseArgs(argv) {
     minMeanF1: 0.95,
     securityTriage: false,
     triageModels: [],
-    force: false
+    force: false,
+    assessModel: null
   };
   const takeValue = (flag, i) => {
     const v = argv[i + 1];
@@ -220619,6 +220723,9 @@ function parseArgs(argv) {
       i++;
     } else if (a === "--force") {
       opts.force = true;
+    } else if (a === "--assess-model") {
+      opts.assessModel = takeValue(a, i);
+      i++;
     } else if (a === "--help" || a === "-h") {
       printHelp();
       process.exit(0);
@@ -220668,6 +220775,14 @@ function printHelp() {
       "  --model ID        Assess this specific model (repeatable). Without it the",
       "                    triage benchmark auto-discovers same-or-cheaper candidates.",
       "  --force           Ignore the per-model-per-day cache and re-run.",
+      "",
+      "Cross-tool requirements assessment (free \u2014 no LLM call, no API key):",
+      "  --assess-model ID Report which LLM tools model ID meets the per-tool",
+      "                    REQUIREMENTS for (cost/context/output/params), and which",
+      "                    of those tools ALSO need a benchmark pass before",
+      "                    assignment. Makes one public OpenRouter catalog fetch.",
+      "                    Does NOT run any benchmark (use --security-triage for",
+      "                    security_scan's benchmark gate).",
       "  Pass gate: zero under-flags on critical (judge-manipulation + visible-taint)",
       "  cases AND aggregate score >= 0.5. Never auto-selects a pricier model.",
       "  Fail-safe (error/timeout) cases are excluded from scoring; a run with",
@@ -220704,24 +220819,21 @@ function resolveFixturesDir() {
     join7(here, "..", "..", "src", "benchmark", "fixtures")
   ];
   for (const c of candidates) {
-    if (existsSync5(join7(c, "file-01.ts"))) return c;
+    if (existsSync6(join7(c, "file-01.ts"))) return c;
   }
   throw new Error(`Could not locate benchmark fixtures. Tried:
   ${candidates.join("\n  ")}`);
 }
 function resolveMainRoot2() {
-  try {
-    const out = execSync3("git worktree list", { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
-    const first = out.trim().split("\n")[0];
-    return first.split(/\s+/)[0];
-  } catch {
-    return resolve4(".");
-  }
+  return resolveProjectMainRoot();
 }
 async function main() {
   const opts = parseArgs(process.argv);
   if (opts.securityTriage) {
     return runSecurityTriagePhase(opts);
+  }
+  if (opts.assessModel !== null) {
+    return runAssessModelPhase(opts.assessModel);
   }
   if (opts.applyProfile !== null && opts.pickTopN === null) {
     throw new Error("--apply-profile requires --pick-top-n");
@@ -220840,6 +220952,14 @@ async function runSecurityTriagePhase(opts) {
   console.error(`[triage] json:   ${result.jsonReportPath}`);
   process.stdout.write(`recommended_model=${result.recommendedModelId}
 `);
+  return 0;
+}
+async function runAssessModelPhase(modelId) {
+  console.error(
+    `[assess] assessing ${modelId} against every LLM tool's requirements \u2026`
+  );
+  const assessment = await assessModelById(modelId);
+  process.stdout.write(renderAssessmentText(assessment) + "\n");
   return 0;
 }
 function runPickPhase(results, opts) {

@@ -22,6 +22,7 @@ import { resolve } from "node:path";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { parse as yamlParse } from "yaml";
+import { registeredTools } from "./model-qualification/registry.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -63,6 +64,15 @@ export interface Profile {
   second_model?: string;
   /** Third model for remote-ensemble mode (optional) */
   third_model?: string;
+  /**
+   * Optional per-tool model overrides (TRDD-f45eeaa0). Keyed by LLM-using tool
+   * name (must be one of model-qualification/registry's registeredTools()). When
+   * a tool has an entry here, that model is used for the tool instead of this
+   * profile's `model`; when absent, the tool falls back to its own default
+   * (back-compat). A model assigned here SHOULD pass that tool's benchmark —
+   * see resolveModelForTool() and the security-triage benchmark.
+   */
+  tool_models?: Record<string, string>;
   /** Request timeout in seconds */
   timeout?: number;
   /** Context window override (0 = auto-detect) */
@@ -90,6 +100,8 @@ export interface ResolvedProfile {
   authToken: string;
   secondModel: string;
   thirdModel: string;
+  /** Per-tool model overrides (empty object when none). See resolveModelForTool. */
+  toolModels: Record<string, string>;
   timeout: number;
   contextWindow: number;
   appName: string;
@@ -499,6 +511,40 @@ export function validateProfile(
     }
   }
 
+  // ── Per-tool model overrides (tool_models) ────────────────────────
+  // Optional map {toolName: modelId} (TRDD-f45eeaa0). Validated as untrusted
+  // YAML: keys must be known LLM-using tools (the registry is the single source
+  // of truth), values must be non-empty model-id strings. Catches typos like
+  // `securty_scan:` that would otherwise silently never apply.
+  // `tool_models:` left blank in YAML parses to null — treat null (and
+  // undefined) as "no overrides", consistent with resolveProfile/coerceToolModels.
+  // A non-null non-map value (string / array / number) is still a real mistake.
+  const rawToolModels: unknown = profile.tool_models;
+  if (rawToolModels !== undefined && rawToolModels !== null) {
+    if (typeof rawToolModels !== "object" || Array.isArray(rawToolModels)) {
+      errors.push(
+        `Profile '${name}': tool_models must be a map of {tool: model}`,
+      );
+    } else {
+      const known = new Set(registeredTools());
+      for (const [toolName, modelId] of Object.entries(
+        rawToolModels as Record<string, unknown>,
+      )) {
+        if (!known.has(toolName)) {
+          errors.push(
+            `Profile '${name}': tool_models has unknown tool '${toolName}'. ` +
+              `Known LLM tools: ${registeredTools().join(", ")}`,
+          );
+        }
+        if (typeof modelId !== "string" || modelId.length === 0) {
+          errors.push(
+            `Profile '${name}': tool_models['${toolName}'] must be a non-empty model-id string`,
+          );
+        }
+      }
+    }
+  }
+
   return { valid: errors.length === 0, errors };
 }
 
@@ -532,6 +578,18 @@ export function validateSettings(settings: Settings): ValidationResult {
 // ── Profile resolution ──────────────────────────────────────────────
 
 /**
+ * Coerce an untrusted `tool_models` value into a plain string-map. null /
+ * undefined / arrays / non-objects (e.g. a stray scalar) all collapse to `{}`
+ * so resolution stays safe even on the best-effort settings-read paths that do
+ * NOT pre-validate (e.g. the security_scan model injection). validateProfile is
+ * what reports a malformed value to the user; this just never throws or mangles.
+ */
+function coerceToolModels(raw: unknown): Record<string, string> {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  return { ...(raw as Record<string, string>) };
+}
+
+/**
  * Resolve a profile to concrete connection values.
  * Merges profile overrides with preset defaults and resolves env var refs.
  */
@@ -559,11 +617,38 @@ export function resolveProfile(
     authToken: resolveEnvValue(rawAuth),
     secondModel: profile.second_model || "",
     thirdModel: profile.third_model || "",
+    toolModels: coerceToolModels(profile.tool_models),
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
     appName: profile.app_name ?? preset.defaultAppName,
     httpReferer: profile.http_referer ?? preset.defaultHttpReferer,
   };
+}
+
+/**
+ * Resolve the model a given LLM tool should use (TRDD-f45eeaa0 §2.3).
+ *
+ * Resolution order:
+ *   1. The profile's per-tool override `tool_models[tool]`, when set non-empty.
+ *   2. The caller-supplied `fallback` (a tool's OWN default, e.g. security_scan's
+ *      DEFAULT_MODEL) — pass `undefined` to fall through to step 3.
+ *   3. The profile's main `model`.
+ *
+ * Back-compat: a profile with no `tool_models` (the common case) and a caller
+ * that passes no `fallback` always returns `resolved.model` — identical to the
+ * pre-#97 behavior. A model assigned via `tool_models` is NEVER auto-selected;
+ * the operator sets it deliberately (and SHOULD confirm it passes that tool's
+ * benchmark — see the security-triage benchmark).
+ */
+export function resolveModelForTool(
+  resolved: ResolvedProfile,
+  tool: string,
+  fallback?: string,
+): string {
+  const override = resolved.toolModels[tool];
+  if (typeof override === "string" && override.length > 0) return override;
+  if (fallback !== undefined) return fallback;
+  return resolved.model;
 }
 
 // ── Settings template ───────────────────────────────────────────────
@@ -616,6 +701,13 @@ profiles:
     model: "google/gemini-2.5-flash"
     second_model: "x-ai/grok-4.1-fast"
     api_key: $OPENROUTER_API_KEY
+    # Optional: per-tool model overrides (TRDD-f45eeaa0). Absent → this
+    # profile's \`model\` (back-compat). Keys must be LLM-using tool names;
+    # a model set here should pass that tool's benchmark — see the
+    # security-triage benchmark (/llm-externalizer-security-triage-benchmark).
+    # tool_models:
+    #   security_scan: "qwen/qwen-2.5-7b-instruct"
+    #   code_task: "google/gemini-2.5-flash"
 
 # ── API Presets Reference ────────────────────────────────────────────
 # Use with --api when creating profiles:
