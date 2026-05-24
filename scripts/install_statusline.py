@@ -7,7 +7,7 @@ Behaviour mirrors install.sh exactly:
 - Source: ``scripts/statusline/statusline.py`` (the rich, width-tiered version
   with OpenRouter credit tracking, MCP token/cost panel, 5h/7d limits, etc.).
 - Destination: ``~/.claude/statusline.py`` (chmod 0o755).
-- Backups (only when content actually differs): ``.bak.<YYYYMMDD_HHMMSS+0000>``.
+- Backups (only when content actually differs): ``.bak.<YYYYMMDD_HHMMSS±HHMM>`` (local time + GMT offset, e.g. ``.bak.20260524_223512+0200``).
 - Patches ``~/.claude/settings.json`` with::
 
       {
