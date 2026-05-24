@@ -218342,33 +218342,33 @@ async function fetchProgrammingModels(category) {
   const body = await resp.json();
   return body.data ?? [];
 }
-function filterModels(models, criteria = DEFAULT_CRITERIA) {
+function filterModels(models, criteria2 = DEFAULT_CRITERIA) {
   const out = [];
   for (const m of models) {
-    const q = qualify(m, criteria);
+    const q = qualify(m, criteria2);
     if (q) out.push(q);
   }
   return out;
 }
-function qualify(m, criteria) {
-  if (!criteria.allowFree && m.id.endsWith(":free")) return null;
+function qualify(m, criteria2) {
+  if (!criteria2.allowFree && m.id.endsWith(":free")) return null;
   const params = new Set(m.supported_parameters ?? []);
   const supportsStructured = params.has("structured_outputs") || params.has("response_format");
   const supportsReasoning = params.has("reasoning") || params.has("include_reasoning");
-  if (criteria.requireStructuredOutputs && !supportsStructured) return null;
-  if (criteria.requireReasoning && !supportsReasoning) return null;
+  if (criteria2.requireStructuredOutputs && !supportsStructured) return null;
+  if (criteria2.requireReasoning && !supportsReasoning) return null;
   const ctx = m.context_length ?? 0;
-  if (ctx < criteria.minContextTokens) return null;
+  if (ctx < criteria2.minContextTokens) return null;
   const maxOutRaw = m.top_provider?.max_completion_tokens;
   const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
-  if (!maxOut || maxOut < criteria.minOutputTokens) return null;
+  if (!maxOut || maxOut < criteria2.minOutputTokens) return null;
   const promptPerToken = parseFloat(m.pricing?.prompt ?? "NaN");
   const completionPerToken = parseFloat(m.pricing?.completion ?? "NaN");
   if (!isFinite(promptPerToken) || !isFinite(completionPerToken)) return null;
   const inputDollarsPerMillion = promptPerToken * 1e6;
   const outputDollarsPerMillion = completionPerToken * 1e6;
-  if (inputDollarsPerMillion >= criteria.maxInputDollarsPerMillion) return null;
-  if (outputDollarsPerMillion >= criteria.maxOutputDollarsPerMillion) return null;
+  if (inputDollarsPerMillion >= criteria2.maxInputDollarsPerMillion) return null;
+  if (outputDollarsPerMillion >= criteria2.maxOutputDollarsPerMillion) return null;
   return {
     id: m.id,
     name: m.name ?? m.id,
@@ -218381,8 +218381,8 @@ function qualify(m, criteria) {
     raw: m
   };
 }
-function buildBenchmarkRoster(candidatePool, criteria, includeIds, baselineLookupPool = candidatePool) {
-  const candidates = filterModels(candidatePool, criteria);
+function buildBenchmarkRoster(candidatePool, criteria2, includeIds, baselineLookupPool = candidatePool) {
+  const candidates = filterModels(candidatePool, criteria2);
   const inRoster = new Set(candidates.map((m) => m.id));
   const seen = new Set(inRoster);
   const baselines = [];
@@ -220118,7 +220118,87 @@ function selectSecurityTriageModel(input) {
   };
 }
 
+// src/model-qualification/registry.ts
+function criteria(overrides) {
+  return { ...DEFAULT_CRITERIA, ...overrides };
+}
+var TOOL_MODEL_REGISTRY = {
+  security_scan: {
+    tool: "security_scan",
+    // The reference instance. Structured output + a modest context; NO reasoning
+    // / 128K bar — triage snippets are small and the verdict is ~200 bytes.
+    requirements: SECURITY_TRIAGE_CRITERIA,
+    benchmark: "security-triage",
+    note: "Injection-hardened verdict adjudication. Gated by the security-triage golden dataset (TRDD-973a0265)."
+  },
+  mass_scout: {
+    tool: "mass_scout",
+    requirements: criteria({ requireReasoning: false }),
+    benchmark: "keyword-classification",
+    note: "Fieldset extraction / classification. Reuses the existing keyword-classification benchmark (benchmark/ground-truth.ts + pick.ts)."
+  },
+  cluster_synonyms: {
+    tool: "cluster_synonyms",
+    requirements: criteria({ requireReasoning: true }),
+    benchmark: null,
+    note: "Meaning-equivalence clustering. Has an in-tool pre-flight benchmark gate; a formal golden dataset is incremental."
+  },
+  code_task: {
+    tool: "code_task",
+    requirements: criteria({ requireReasoning: true, minContextTokens: 128e3 }),
+    benchmark: null,
+    note: "Code-optimized analysis. Code-understanding benchmark dataset is incremental."
+  },
+  scan_folder: {
+    tool: "scan_folder",
+    requirements: criteria({ requireReasoning: false, minContextTokens: 128e3 }),
+    benchmark: null,
+    note: "Per-file auto-discovery scan. Per-file detection benchmark dataset is incremental."
+  },
+  search_existing_implementations: {
+    tool: "search_existing_implementations",
+    requirements: criteria({ requireReasoning: true, minContextTokens: 128e3 }),
+    benchmark: null,
+    note: "Duplicate-implementation match across a codebase. Duplicate-match benchmark dataset is incremental."
+  },
+  check_references: {
+    tool: "check_references",
+    requirements: criteria({ requireReasoning: false }),
+    benchmark: null,
+    note: "Symbol-reference validation. Validation-accuracy benchmark dataset is incremental."
+  },
+  check_imports: {
+    tool: "check_imports",
+    requirements: criteria({ requireReasoning: false }),
+    benchmark: null,
+    note: "Import-path validation. Validation-accuracy benchmark dataset is incremental."
+  },
+  check_against_specs: {
+    tool: "check_against_specs",
+    requirements: criteria({ requireReasoning: false }),
+    benchmark: null,
+    note: "Source-vs-specification compliance. Validation-accuracy benchmark dataset is incremental."
+  },
+  compare_files: {
+    tool: "compare_files",
+    requirements: criteria({ requireReasoning: false, minContextTokens: 128e3 }),
+    benchmark: null,
+    note: "Two-file change summary. Change-summary benchmark dataset is incremental."
+  },
+  chat: {
+    tool: "chat",
+    // The loosest tool — general text. Structured output not required.
+    requirements: criteria({ requireStructuredOutputs: false, requireReasoning: false }),
+    benchmark: null,
+    note: "General-purpose text. A loose general-quality benchmark is incremental."
+  }
+};
+function getToolDescriptor(tool) {
+  return TOOL_MODEL_REGISTRY[tool];
+}
+
 // src/benchmark/security-triage/index.ts
+var SECURITY_TRIAGE_CRITERIA2 = getToolDescriptor("security_scan").requirements;
 var INCUMBENT_FALLBACK_PRICING = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
 function cachePath() {
   return join6(getConfigDir(), "security-triage-results.json");
@@ -220228,7 +220308,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
     for (const id of opts.models) {
       const raw = byId.get(id);
       if (raw) {
-        const q = qualify(raw, SECURITY_TRIAGE_CRITERIA);
+        const q = qualify(raw, SECURITY_TRIAGE_CRITERIA2);
         addModel(q ?? decorate(raw), q !== null, q ? void 0 : "below this tool's requirements (cost/context/structured-output)");
       } else {
         const fp = KNOWN_PRICING[id] ?? INCUMBENT_FALLBACK_PRICING;
@@ -220250,13 +220330,13 @@ async function runSecurityTriageBenchmark(opts = {}) {
       }
     }
   } else {
-    const { candidates } = buildBenchmarkRoster(catalog, SECURITY_TRIAGE_CRITERIA, []);
+    const { candidates } = buildBenchmarkRoster(catalog, SECURITY_TRIAGE_CRITERIA2, []);
     const sameOrCheaper = candidates.filter((c) => c.inputDollarsPerMillion <= incumbentIn + 1e-9 && c.outputDollarsPerMillion <= incumbentOut + 1e-9).sort((a, b) => a.inputDollarsPerMillion + a.outputDollarsPerMillion - (b.inputDollarsPerMillion + b.outputDollarsPerMillion)).slice(0, opts.maxCandidates ?? 16);
     for (const c of sameOrCheaper) addModel(c, true);
   }
   if (!toAssess.has(incumbentId)) {
     if (incumbentDecorated) {
-      const q = qualify(incumbentDecorated.raw, SECURITY_TRIAGE_CRITERIA);
+      const q = qualify(incumbentDecorated.raw, SECURITY_TRIAGE_CRITERIA2);
       addModel(incumbentDecorated, q !== null, q ? void 0 : "below this tool's requirements");
     } else {
       addModel(
