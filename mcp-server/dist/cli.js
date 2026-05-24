@@ -7334,6 +7334,1076 @@ var require_dist = __commonJS({
   }
 });
 
+// src/config.ts
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  chmodSync,
+  realpathSync
+} from "node:fs";
+import { resolve } from "node:path";
+import { join } from "node:path";
+import { homedir } from "node:os";
+function getConfigDir() {
+  const raw = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
+  function resolveDeepestExisting(p) {
+    try {
+      return realpathSync(p);
+    } catch {
+    }
+    const parent = join(p, "..");
+    if (parent === p) return p;
+    const resolvedParent = resolveDeepestExisting(parent);
+    return join(resolvedParent, p.slice(parent.length + (parent.endsWith("/") || parent.endsWith("\\") ? 0 : 1)));
+  }
+  const dir = resolveDeepestExisting(raw);
+  const home = (() => {
+    try {
+      return realpathSync(homedir());
+    } catch {
+      return homedir();
+    }
+  })();
+  const tmpCanonical = (() => {
+    try {
+      return realpathSync("/tmp");
+    } catch {
+      return "/tmp";
+    }
+  })();
+  const sep = process.platform === "win32" ? "\\" : "/";
+  const underHome = dir.startsWith(home + sep) || dir === home;
+  const underTmp = dir.startsWith(tmpCanonical + sep) || dir === tmpCanonical;
+  if (!underHome && !underTmp) {
+    throw new Error(`Config directory '${dir}' is outside allowed paths (${home} or ${tmpCanonical})`);
+  }
+  return dir;
+}
+function getSettingsPath() {
+  return join(getConfigDir(), "settings.yaml");
+}
+function resolveEnvValue(value) {
+  if (!value) return "";
+  if (value.startsWith("$")) {
+    const name = value.slice(1).trim();
+    const userConfigVar = USER_CONFIG_ENV_MAP[name];
+    if (userConfigVar) {
+      const userConfigVal = process.env[userConfigVar];
+      if (userConfigVal && userConfigVal.length > 0) return userConfigVal;
+    }
+    return process.env[name] || "";
+  }
+  return value;
+}
+function loadSettings() {
+  const settingsPath = getSettingsPath();
+  try {
+    if (!existsSync(settingsPath)) return null;
+    const raw = readFileSync(settingsPath, "utf-8");
+    const parsed = JSON.parse(JSON.stringify((0, import_yaml.parse)(raw)));
+    if (!parsed || typeof parsed !== "object") return null;
+    return {
+      active: parsed.active || "",
+      profiles: parsed.profiles || {}
+    };
+  } catch (err3) {
+    process.stderr.write(
+      `[llm-externalizer] Warning: Failed to read ${settingsPath}: ${err3 instanceof Error ? err3.message : String(err3)}
+`
+    );
+    return null;
+  }
+}
+function ensureSettingsExist() {
+  const settingsPath = getSettingsPath();
+  const configDir = getConfigDir();
+  const oldSettingsPath = join(configDir, "settings.yml");
+  if (existsSync(oldSettingsPath) && !existsSync(settingsPath)) {
+    process.stderr.write(
+      `[llm-externalizer] Found old settings.yml \u2014 the new format is settings.yaml with profiles.
+[llm-externalizer] Generating new settings.yaml. Your old settings.yml is preserved but no longer read.
+`
+    );
+  }
+  if (!existsSync(settingsPath)) {
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(settingsPath, SETTINGS_TEMPLATE, "utf-8");
+    try {
+      chmodSync(settingsPath, 384);
+    } catch {
+    }
+    process.stderr.write(
+      `[llm-externalizer] Generated default settings at ${settingsPath}
+`
+    );
+  }
+  const settings = loadSettings();
+  if (!settings) {
+    throw new Error(`Failed to parse ${settingsPath}. Check YAML syntax.`);
+  }
+  return settings;
+}
+function resolveProfile(name, profile) {
+  const preset = API_PRESETS[profile.api];
+  if (!preset) {
+    throw new Error(`Unknown api preset '${profile.api}'`);
+  }
+  const rawAuth = preset.isLocal ? profile.api_token || profile.api_key || preset.defaultAuthEnv : profile.api_key || preset.defaultAuthEnv;
+  return {
+    name,
+    mode: profile.mode,
+    protocol: preset.protocol,
+    url: profile.url || preset.defaultUrl,
+    model: profile.model,
+    authToken: resolveEnvValue(rawAuth),
+    secondModel: profile.second_model || "",
+    thirdModel: profile.third_model || "",
+    timeout: profile.timeout ?? preset.defaultTimeout,
+    contextWindow: profile.context_window ?? preset.defaultContextWindow,
+    appName: profile.app_name ?? preset.defaultAppName,
+    httpReferer: profile.http_referer ?? preset.defaultHttpReferer
+  };
+}
+var import_yaml, API_PRESETS, USER_CONFIG_ENV_MAP, SETTINGS_TEMPLATE;
+var init_config = __esm({
+  "src/config.ts"() {
+    "use strict";
+    import_yaml = __toESM(require_dist(), 1);
+    API_PRESETS = {
+      // ── Local presets ─────────────────────────────────────────────────
+      "lmstudio-local": {
+        protocol: "lmstudio_api",
+        defaultUrl: "http://localhost:1234",
+        defaultAuthEnv: "$LM_API_TOKEN",
+        defaultTimeout: 300,
+        defaultAppName: "",
+        defaultHttpReferer: "",
+        defaultContextWindow: 0,
+        isLocal: true
+      },
+      "ollama-local": {
+        protocol: "openai_api",
+        defaultUrl: "http://localhost:11434",
+        defaultAuthEnv: "",
+        defaultTimeout: 300,
+        defaultAppName: "",
+        defaultHttpReferer: "",
+        defaultContextWindow: 0,
+        isLocal: true
+      },
+      "vllm-local": {
+        protocol: "openai_api",
+        defaultUrl: "http://localhost:8000",
+        defaultAuthEnv: "$VLLM_API_KEY",
+        defaultTimeout: 300,
+        defaultAppName: "",
+        defaultHttpReferer: "",
+        defaultContextWindow: 0,
+        isLocal: true
+      },
+      "llamacpp-local": {
+        protocol: "openai_api",
+        defaultUrl: "http://localhost:8080",
+        defaultAuthEnv: "",
+        defaultTimeout: 300,
+        defaultAppName: "",
+        defaultHttpReferer: "",
+        defaultContextWindow: 0,
+        isLocal: true
+      },
+      "generic-local": {
+        protocol: "openai_api",
+        defaultUrl: "",
+        defaultAuthEnv: "$LM_API_TOKEN",
+        defaultTimeout: 300,
+        defaultAppName: "",
+        defaultHttpReferer: "",
+        defaultContextWindow: 0,
+        isLocal: true
+      },
+      // ── Remote presets ────────────────────────────────────────────────
+      "openrouter-remote": {
+        protocol: "openrouter_api",
+        defaultUrl: "https://openrouter.ai/api",
+        defaultAuthEnv: "$OPENROUTER_API_KEY",
+        defaultTimeout: 600,
+        // 10 min — reasoning models (Qwen, etc.) need extended thinking time
+        defaultAppName: "llm-externalizer",
+        defaultHttpReferer: "",
+        defaultContextWindow: 0,
+        isLocal: false
+      }
+    };
+    USER_CONFIG_ENV_MAP = {
+      OPENROUTER_API_KEY: "CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY"
+    };
+    SETTINGS_TEMPLATE = `# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# LLM Externalizer \u2014 Settings
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# Profile-based configuration. Each profile defines a complete LLM
+# backend setup. Edit this file manually and either restart Claude Code
+# or call the MCP 'reset' tool to reload.
+#
+# Location: ~/.llm-externalizer/settings.yaml
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+# Active profile name
+active: local-lmstudio-qwen35
+
+# \u2500\u2500 Profiles \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+profiles:
+
+  # \u2500\u2500 Local: LM Studio with Qwen 3.5 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  local-lmstudio-qwen35:
+    mode: local
+    api: lmstudio-local
+    model: "thecluster/qwen3.5-27b-mlx"
+    # url: "http://localhost:1234"       # (default from lmstudio-local preset)
+    # api_token: $LM_API_TOKEN           # (default from lmstudio-local preset)
+    # timeout: 300                        # (default from lmstudio-local preset)
+
+  # \u2500\u2500 Local: Ollama with Qwen 3 14B \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  local-ollama-qwen314:
+    mode: local
+    api: ollama-local
+    model: "qwen3:14b"
+    # url: "http://localhost:11434"       # (default from ollama-local preset)
+
+  # \u2500\u2500 Remote: Single model via OpenRouter \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  remote-single-geminiflash:
+    mode: remote
+    api: openrouter-remote
+    model: "google/gemini-2.5-flash"
+    api_key: $OPENROUTER_API_KEY          # set this env var, or replace with direct key
+
+  # \u2500\u2500 Remote: Ensemble (three models in parallel) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  remote-ensemble-geminigrok:
+    mode: remote-ensemble
+    api: openrouter-remote
+    model: "google/gemini-2.5-flash"
+    second_model: "x-ai/grok-4.1-fast"
+    api_key: $OPENROUTER_API_KEY
+
+# \u2500\u2500 API Presets Reference \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# Use with --api when creating profiles:
+#
+# LOCAL PRESETS (mode: local):
+#   lmstudio-local    LM Studio native API     http://localhost:1234   auth: $LM_API_TOKEN
+#   ollama-local      Ollama OpenAI-compat     http://localhost:11434  auth: (none)
+#   vllm-local        vLLM OpenAI-compat       http://localhost:8000   auth: $VLLM_API_KEY
+#   llamacpp-local    llama.cpp OpenAI-compat   http://localhost:8080   auth: (none)
+#   generic-local     Any OpenAI-compat        (url required)          auth: $LM_API_TOKEN
+#
+# REMOTE PRESETS (mode: remote / remote-ensemble):
+#   openrouter-remote  OpenRouter              https://openrouter.ai   auth: $OPENROUTER_API_KEY
+#
+# All local backends must support structured output (response_format: json_schema).
+#
+# \u2500\u2500 Modes Reference \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+#   local             Sequential requests to a local server
+#   remote            Parallel requests, single model via OpenRouter
+#   remote-ensemble   Parallel requests, three models, combined report
+#
+# \u2500\u2500 Auth Values \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# Auth fields (api_key, api_token) accept either:
+#   $ENV_VAR_NAME     Resolved from process environment at runtime
+#   "direct-value"    Used as-is (no env lookup)
+`;
+  }
+});
+
+// src/security_scan/types.ts
+function isVerdict(v) {
+  return v === "threat" || v === "not_threat" || v === "uncertain";
+}
+function isPlainObject(v) {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+function validateTarget(raw, index) {
+  const errors = [];
+  const at = `targets[${index}]`;
+  if (!isPlainObject(raw)) {
+    return { ok: false, errors: [`${at} must be an object`] };
+  }
+  const id = raw.id;
+  const category = raw.category;
+  if (typeof id !== "string" || id.length === 0) {
+    errors.push(`${at}.id must be a non-empty string`);
+  }
+  if (typeof category !== "string" || category.length === 0) {
+    errors.push(`${at}.category must be a non-empty string`);
+  }
+  if (raw.language !== void 0 && typeof raw.language !== "string") {
+    errors.push(`${at}.language must be a string when present`);
+  }
+  const hasSnippet = typeof raw.snippet === "string";
+  const hasFile = typeof raw.file_path === "string";
+  const hasGlob = typeof raw.path_glob === "string";
+  const payloadCount = (hasSnippet ? 1 : 0) + (hasFile ? 1 : 0) + (hasGlob ? 1 : 0);
+  if (payloadCount === 0) {
+    errors.push(
+      `${at} must have exactly one of snippet, file_path, or path_glob`
+    );
+  } else if (payloadCount > 1) {
+    errors.push(
+      `${at} has ${payloadCount} payloads \u2014 exactly one of snippet, file_path, path_glob is allowed`
+    );
+  }
+  if (hasSnippet) {
+    const bytes = Buffer.byteLength(raw.snippet, "utf-8");
+    if (bytes > MAX_SNIPPET_BYTES) {
+      errors.push(
+        `${at}.snippet is ${bytes} bytes (> ${MAX_SNIPPET_BYTES} cap)`
+      );
+    }
+  }
+  if (raw.line !== void 0) {
+    if (typeof raw.line !== "number" || !Number.isInteger(raw.line) || raw.line < 1) {
+      errors.push(`${at}.line must be a positive integer (1-based)`);
+    }
+    if (!hasFile) {
+      errors.push(`${at}.line is only valid together with file_path`);
+    }
+  }
+  if (raw.context_lines !== void 0) {
+    if (typeof raw.context_lines !== "number" || !Number.isInteger(raw.context_lines) || raw.context_lines < 0) {
+      errors.push(`${at}.context_lines must be a non-negative integer`);
+    }
+  }
+  if (errors.length > 0) return { ok: false, errors };
+  const value = {
+    id,
+    category
+  };
+  if (typeof raw.language === "string") value.language = raw.language;
+  if (hasSnippet) value.snippet = raw.snippet;
+  if (hasFile) value.file_path = raw.file_path;
+  if (hasGlob) value.path_glob = raw.path_glob;
+  if (typeof raw.line === "number") value.line = raw.line;
+  if (typeof raw.context_lines === "number")
+    value.context_lines = raw.context_lines;
+  return { ok: true, value };
+}
+function validateInput(raw) {
+  const errors = [];
+  if (!isPlainObject(raw)) {
+    return { ok: false, errors: ["input must be a JSON object"] };
+  }
+  if (!Array.isArray(raw.targets)) {
+    return { ok: false, errors: ["targets must be a non-empty array"] };
+  }
+  if (raw.targets.length === 0) {
+    return { ok: false, errors: ["targets must contain at least one item"] };
+  }
+  if (raw.targets.length > MAX_TARGETS) {
+    return {
+      ok: false,
+      errors: [`targets has ${raw.targets.length} items (> ${MAX_TARGETS} cap)`]
+    };
+  }
+  const targets = [];
+  for (let i = 0; i < raw.targets.length; i++) {
+    const t = validateTarget(raw.targets[i], i);
+    if (t.ok) targets.push(t.value);
+    else errors.push(...t.errors);
+  }
+  const rubrics = {};
+  if (raw.category_rubrics !== void 0) {
+    if (!isPlainObject(raw.category_rubrics)) {
+      errors.push("category_rubrics must be an object of {category: rubric}");
+    } else {
+      for (const [k, v] of Object.entries(raw.category_rubrics)) {
+        if (typeof v !== "string") {
+          errors.push(`category_rubrics[${k}] must be a string`);
+          continue;
+        }
+        if (v.length > MAX_RUBRIC_LENGTH) {
+          errors.push(
+            `category_rubrics[${k}] is ${v.length} chars (> ${MAX_RUBRIC_LENGTH} cap)`
+          );
+          continue;
+        }
+        rubrics[k] = v;
+      }
+    }
+  }
+  let defaultVerdict = "uncertain";
+  if (raw.default_verdict_on_error !== void 0) {
+    if (!isVerdict(raw.default_verdict_on_error)) {
+      errors.push(
+        `default_verdict_on_error must be one of ${VERDICTS.join(", ")}`
+      );
+    } else if (raw.default_verdict_on_error === "not_threat") {
+      errors.push(
+        "default_verdict_on_error may not be not_threat (fail-safe must never fail open \u2014 use uncertain or threat)"
+      );
+    } else {
+      defaultVerdict = raw.default_verdict_on_error;
+    }
+  }
+  let budget = null;
+  if (raw.budget_usd !== void 0 && raw.budget_usd !== null) {
+    if (typeof raw.budget_usd !== "number" || !Number.isFinite(raw.budget_usd)) {
+      errors.push("budget_usd must be a finite number or null");
+    } else if (raw.budget_usd < 0) {
+      errors.push("budget_usd must be >= 0");
+    } else {
+      budget = raw.budget_usd;
+    }
+  }
+  let model = DEFAULT_MODEL;
+  if (raw.model !== void 0) {
+    if (typeof raw.model !== "string" || raw.model.length === 0) {
+      errors.push("model must be a non-empty string when present");
+    } else {
+      model = raw.model;
+    }
+  }
+  let gitRef;
+  if (raw.git_diff_ref !== void 0) {
+    if (typeof raw.git_diff_ref !== "string") {
+      errors.push("git_diff_ref must be a string");
+    } else if (raw.git_diff_ref.length > 200 || !GIT_REF_RE.test(raw.git_diff_ref)) {
+      errors.push(
+        "git_diff_ref has an illegal shape (anti-injection: only [A-Za-z0-9_./~^@{}-], <=200 chars)"
+      );
+    } else {
+      gitRef = raw.git_diff_ref;
+    }
+  }
+  let folderRoot;
+  if (raw.folder_root !== void 0) {
+    if (typeof raw.folder_root !== "string" || raw.folder_root.length === 0) {
+      errors.push("folder_root must be a non-empty string when present");
+    } else {
+      folderRoot = raw.folder_root;
+    }
+  }
+  let outputDir;
+  if (raw.output_dir !== void 0) {
+    if (typeof raw.output_dir !== "string" || raw.output_dir.length === 0) {
+      errors.push("output_dir must be a non-empty string when present");
+    } else {
+      outputDir = raw.output_dir;
+    }
+  }
+  const workers = numKnob(raw.workers, 8, 1, 256, "workers", errors);
+  const maxRetries = numKnob(raw.max_retries, 1, 0, 10, "max_retries", errors);
+  const perCallTimeout = numKnob(
+    raw.per_call_timeout_ms,
+    9e4,
+    1e3,
+    6e5,
+    "per_call_timeout_ms",
+    errors
+  );
+  const failureLimit = numKnob(
+    raw.consecutive_failure_limit,
+    5,
+    0,
+    1e3,
+    "consecutive_failure_limit",
+    errors
+  );
+  if (errors.length > 0) return { ok: false, errors };
+  return {
+    ok: true,
+    value: {
+      targets,
+      category_rubrics: rubrics,
+      default_verdict_on_error: defaultVerdict,
+      budget_usd: budget,
+      model,
+      git_diff_ref: gitRef,
+      folder_root: folderRoot,
+      output_dir: outputDir,
+      workers,
+      max_retries: maxRetries,
+      per_call_timeout_ms: perCallTimeout,
+      consecutive_failure_limit: failureLimit
+    }
+  };
+}
+function numKnob(raw, dflt, min, max, name, errors) {
+  if (raw === void 0) return dflt;
+  if (typeof raw !== "number" || !Number.isInteger(raw)) {
+    errors.push(`${name} must be an integer`);
+    return dflt;
+  }
+  if (raw < min || raw > max) {
+    errors.push(`${name} must be in [${min}, ${max}]`);
+    return dflt;
+  }
+  return raw;
+}
+var VERDICTS, DEFAULT_CONTEXT_LINES, MAX_RUBRIC_LENGTH, MAX_SNIPPET_BYTES, MAX_TARGETS, MAX_FILE_READ_BYTES, DEFAULT_MODEL, GIT_REF_RE;
+var init_types = __esm({
+  "src/security_scan/types.ts"() {
+    "use strict";
+    VERDICTS = [
+      "threat",
+      "not_threat",
+      "uncertain"
+    ];
+    DEFAULT_CONTEXT_LINES = 60;
+    MAX_RUBRIC_LENGTH = 2e3;
+    MAX_SNIPPET_BYTES = 2e5;
+    MAX_TARGETS = 5e3;
+    MAX_FILE_READ_BYTES = 16777216;
+    DEFAULT_MODEL = "qwen/qwen-2.5-7b-instruct";
+    GIT_REF_RE = /^[A-Za-z0-9_./~^@{}-]+$/;
+  }
+});
+
+// src/security_scan/intake.ts
+import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFileSync as readFileSync2, readdirSync, statSync } from "node:fs";
+import { isAbsolute, join as join2, resolve as resolve2 } from "node:path";
+function redactSecrets(content) {
+  let result = content;
+  let count = 0;
+  for (const [pattern, label] of SECRET_PATTERNS) {
+    pattern.lastIndex = 0;
+    result = result.replace(pattern, () => {
+      count++;
+      return `[REDACTED:${label}]`;
+    });
+  }
+  return { redacted: result, count };
+}
+function safeRedact(content, budgetMs = REDACTION_BUDGET_MS) {
+  const started = Date.now();
+  let out;
+  try {
+    out = redactSecrets(content);
+  } catch (e) {
+    return {
+      redacted: "",
+      count: 0,
+      ok: false,
+      reason: `redaction error: ${e.message}`
+    };
+  }
+  const elapsed = Date.now() - started;
+  if (elapsed > budgetMs) {
+    return {
+      redacted: out.redacted,
+      count: out.count,
+      ok: false,
+      reason: `redaction exceeded ${budgetMs}ms wall-clock budget (took ${elapsed}ms) \u2014 record skipped to avoid shipping un-redacted content`
+    };
+  }
+  return { redacted: out.redacted, count: out.count, ok: true };
+}
+function expandGlob(root, glob) {
+  const all = walkFiles(root);
+  const re = globToRegExp(glob);
+  return all.filter((abs) => {
+    const rel = relativeUnix(root, abs);
+    return re.test(rel);
+  });
+}
+function walkFiles(root) {
+  const out = [];
+  const stack = [root];
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      const full = join2(dir, e);
+      let st;
+      try {
+        st = statSync(full);
+      } catch {
+        continue;
+      }
+      if (st.isDirectory()) {
+        if (DEFAULT_SKIP_DIRS.has(e)) continue;
+        stack.push(full);
+      } else if (st.isFile()) {
+        out.push(full);
+      }
+    }
+  }
+  out.sort();
+  return out;
+}
+function relativeUnix(root, abs) {
+  const r = resolve2(root);
+  const a = resolve2(abs);
+  let rel = a.startsWith(r) ? a.slice(r.length) : a;
+  rel = rel.replace(/^[/\\]+/, "").replace(/\\/g, "/");
+  return rel;
+}
+function globToRegExp(glob) {
+  let re = "^";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === "*") {
+      if (glob[i + 1] === "*") {
+        i++;
+        if (glob[i + 1] === "/") {
+          i++;
+          re += "(?:.*/)?";
+        } else {
+          re += ".*";
+        }
+      } else {
+        re += "[^/]*";
+      }
+    } else if (c === "?") {
+      re += "[^/]";
+    } else if ("\\^$.|+()[]{}".includes(c)) {
+      re += "\\" + c;
+    } else {
+      re += c;
+    }
+  }
+  re += "$";
+  return new RegExp(re);
+}
+function gitChangedFiles(root, ref) {
+  if (!GIT_REF_RE.test(ref) || ref.length > 200) return null;
+  try {
+    const out = execSync(
+      `git diff --name-only --diff-filter=ACMR -z ${JSON.stringify(ref)}...HEAD`,
+      { cwd: root, encoding: "buffer", stdio: ["ignore", "pipe", "ignore"] }
+    );
+    return out.toString("utf-8").split("\0").filter((s) => s.length > 0).map((p) => resolve2(root, p));
+  } catch {
+    return null;
+  }
+}
+function gitTrackedFiles(root) {
+  try {
+    const out = execSync("git ls-files --cached --others --exclude-standard -z", {
+      cwd: root,
+      encoding: "buffer",
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    return out.toString("utf-8").split("\0").filter((s) => s.length > 0).map((p) => resolve2(root, p));
+  } catch {
+    return null;
+  }
+}
+function extractWindow(content, line, contextLines) {
+  const lines = content.split("\n");
+  if (line < 1 || line > lines.length) return null;
+  const start = Math.max(1, line - contextLines);
+  const end = Math.min(lines.length, line + contextLines);
+  const window = lines.slice(start - 1, end).join("\n");
+  return { window, startLine: start };
+}
+function intake(targets, opts = {}) {
+  const root = opts.folderRoot ? resolve2(opts.folderRoot) : process.cwd();
+  const honorGitignore = opts.honorGitignore !== false;
+  const byteCap = opts.byteCap && opts.byteCap > 0 ? opts.byteCap : MAX_SNIPPET_BYTES;
+  const records = [];
+  const skipped = [];
+  const tooBig = (id, category, fp, bytes) => {
+    skipped.push({
+      id,
+      category,
+      file_path: fp,
+      reason: `content ${bytes} bytes > cap ${byteCap}`
+    });
+  };
+  const statTooBig = (id, category, abs, cap = byteCap) => {
+    let size;
+    try {
+      size = statSync(abs).size;
+    } catch {
+      return false;
+    }
+    if (size > cap) {
+      tooBig(id, category, abs, size);
+      return true;
+    }
+    return false;
+  };
+  const pushRedacted = (rec) => {
+    const bytes = Buffer.byteLength(rec.content, "utf-8");
+    if (bytes > byteCap) {
+      tooBig(rec.id, rec.category, rec.file_path, bytes);
+      return;
+    }
+    const red = safeRedact(rec.content);
+    if (!red.ok) {
+      skipped.push({
+        id: rec.id,
+        category: rec.category,
+        file_path: rec.file_path,
+        reason: red.reason ?? "redaction failed \u2014 record skipped to avoid egress"
+      });
+      return;
+    }
+    rec.content = red.redacted;
+    records.push(rec);
+  };
+  for (const t of targets) {
+    if (typeof t.snippet === "string") {
+      pushRedacted({
+        id: t.id,
+        category: t.category,
+        language: t.language,
+        content: t.snippet
+      });
+      continue;
+    }
+    if (typeof t.file_path === "string") {
+      const abs = isAbsolute(t.file_path) ? t.file_path : resolve2(root, t.file_path);
+      const fileGate = typeof t.line === "number" ? MAX_FILE_READ_BYTES : byteCap;
+      if (statTooBig(t.id, t.category, abs, fileGate)) continue;
+      let content;
+      try {
+        content = readFileSync2(abs, "utf-8");
+      } catch (e) {
+        skipped.push({
+          id: t.id,
+          category: t.category,
+          file_path: abs,
+          reason: `read error: ${e.message}`
+        });
+        continue;
+      }
+      if (typeof t.line === "number") {
+        const ctx = t.context_lines ?? DEFAULT_CONTEXT_LINES;
+        const win = extractWindow(content, t.line, ctx);
+        if (!win) {
+          skipped.push({
+            id: t.id,
+            category: t.category,
+            file_path: abs,
+            reason: `line ${t.line} out of range (file has ${content.split("\n").length} lines)`
+          });
+          continue;
+        }
+        pushRedacted({
+          id: t.id,
+          category: t.category,
+          language: t.language,
+          content: win.window,
+          file_path: abs,
+          line: t.line
+        });
+      } else {
+        pushRedacted({
+          id: t.id,
+          category: t.category,
+          language: t.language,
+          content,
+          file_path: abs
+        });
+      }
+      continue;
+    }
+    if (typeof t.path_glob === "string") {
+      let matched = expandGlob(root, t.path_glob);
+      if (opts.gitDiffRef) {
+        const changed = gitChangedFiles(root, opts.gitDiffRef);
+        if (changed !== null) {
+          const changedSet = new Set(changed);
+          matched = matched.filter((p) => changedSet.has(p));
+        }
+      }
+      if (honorGitignore) {
+        const tracked = gitTrackedFiles(root);
+        if (tracked !== null && tracked.length > 0) {
+          const trackedSet = new Set(tracked);
+          const filtered = matched.filter((p) => trackedSet.has(p));
+          if (filtered.length > 0) matched = filtered;
+        }
+      }
+      if (matched.length === 0) {
+        skipped.push({
+          id: t.id,
+          category: t.category,
+          reason: `path_glob ${JSON.stringify(t.path_glob)} matched no files under ${root}`
+        });
+        continue;
+      }
+      for (const abs of matched) {
+        if (statTooBig(`${t.id}::${relativeUnix(root, abs)}`, t.category, abs)) {
+          continue;
+        }
+        let content;
+        try {
+          content = readFileSync2(abs, "utf-8");
+        } catch (e) {
+          skipped.push({
+            id: t.id,
+            category: t.category,
+            file_path: abs,
+            reason: `read error: ${e.message}`
+          });
+          continue;
+        }
+        pushRedacted({
+          // Glob fans into multiple files — make each id unique + traceable.
+          id: `${t.id}::${relativeUnix(root, abs)}`,
+          category: t.category,
+          language: t.language,
+          content,
+          file_path: abs
+        });
+      }
+      continue;
+    }
+    skipped.push({
+      id: t.id,
+      category: t.category,
+      reason: "target had no recognizable payload (snippet/file_path/path_glob)"
+    });
+  }
+  const byKey = /* @__PURE__ */ new Map();
+  for (const rec of records) {
+    const key = dedupKey(rec.content, rec.category);
+    let g = byKey.get(key);
+    if (!g) {
+      g = {
+        key,
+        category: rec.category,
+        language: rec.language,
+        content: rec.content,
+        file_path: rec.file_path,
+        line: rec.line,
+        members: []
+      };
+      byKey.set(key, g);
+    }
+    g.members.push(rec);
+  }
+  return {
+    groups: Array.from(byKey.values()),
+    skipped,
+    recordsTotal: records.length
+  };
+}
+function dedupKey(content, category) {
+  return createHash("sha1").update(content, "utf-8").update("\0").update(category, "utf-8").digest("hex");
+}
+var SECRET_PATTERNS, REDACTION_BUDGET_MS, DEFAULT_SKIP_DIRS;
+var init_intake = __esm({
+  "src/security_scan/intake.ts"() {
+    "use strict";
+    init_types();
+    SECRET_PATTERNS = [
+      [/AKIA[0-9A-Z]{16}/g, "AWS_KEY"],
+      [/(?:sk|pk)[-_](?:live|test|proj)[-_][A-Za-z0-9]{20,}/g, "API_KEY"],
+      // F3: classic OpenAI-style `sk-…` key with no infix (the sk-proj/sk-live
+      // shapes are caught by the rule above; this catches plain `sk-<base62>`).
+      // Single bounded class after the literal prefix → no backtracking.
+      [/sk-[A-Za-z0-9]{20,}/g, "API_KEY"],
+      // F3: Google API key — fixed 35-char tail, single bounded class.
+      [/AIza[0-9A-Za-z\-_]{35}/g, "GOOGLE_API_KEY"],
+      [/ghp_[A-Za-z0-9]{36}/g, "GITHUB_PAT"],
+      [/ghr_[A-Za-z0-9]{36}/g, "GITHUB_TOKEN"],
+      [/gho_[A-Za-z0-9]{36}/g, "GITHUB_OAUTH"],
+      [/github_pat_[A-Za-z0-9_]{82}/g, "GITHUB_PAT"],
+      [/glpat-[A-Za-z0-9\-_]{20,}/g, "GITLAB_TOKEN"],
+      [/xox[bpsar]-[A-Za-z0-9-]+/g, "SLACK_TOKEN"],
+      [/Bearer\s+[A-Za-z0-9._\-/+=]{20,}/g, "BEARER_TOKEN"],
+      // F3: raw JWT (header.payload.signature). Each segment is its own bounded
+      // class separated by a literal dot — disjoint classes, no backtracking.
+      [/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "JWT"],
+      // F3: connection string with inline credentials (scheme://user:pass@host).
+      // The `[^:@/\s]+` runs are disjoint from their `:`/`@` delimiters → linear.
+      [/:\/\/[^:@/\s]+:[^@/\s]+@/g, "CONN_STRING"],
+      // F1: ENV_SECRET — line-anchored via `[ \t]*` (intra-line horizontal
+      // whitespace only). NEVER `\s*` here: `\s` includes `\n`, which re-anchors at
+      // every newline and backtracks O(n²) over a hostile newline+whitespace blob.
+      [
+        /(?:^|\n)[ \t]*(?:(?:PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|AUTH|AUTH_TOKEN|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|DB_PASSWORD|DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|AWS_SESSION_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITLAB_TOKEN|BITBUCKET_TOKEN|NPM_TOKEN|DOCKER_PASSWORD|HF_TOKEN|HUGGINGFACE_TOKEN|LM_API_TOKEN|VLLM_API_KEY|JWT_SECRET|JWT_PRIVATE_KEY|STRIPE_SECRET_KEY|STRIPE_API_KEY|SUPABASE_SERVICE_KEY|SUPABASE_ANON_KEY|FIREBASE_TOKEN|SLACK_BOT_TOKEN|SLACK_TOKEN|DISCORD_TOKEN|TELEGRAM_BOT_TOKEN|TWILIO_AUTH_TOKEN|SENDGRID_API_KEY|MAILGUN_API_KEY|SENTRY_AUTH_TOKEN|PRIVATE)|[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_APIKEY|_API_KEY|_AUTH))[ \t]*[=:][ \t]*['"]?([^\s'"#\n]{8,})/gim,
+        "ENV_SECRET"
+      ],
+      // F3: case-insensitive catch for lowercase / mixed-case secret assignments
+      // (e.g. `password = "..."`, `token: ...`, `"apikey":"..."`). Matches the
+      // keyword + its `:`/`=` separator + value. `[ \t]*` keeps it line-local so
+      // the quantifiers cannot cross newlines → linear.
+      [
+        /(?:password|passwd|pwd|token|secret|apikey)["']?[ \t]*[:=][ \t]*['"]?([^\s'"#\n]{4,})/gi,
+        "SECRET_ASSIGNMENT"
+      ],
+      [
+        /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----/g,
+        "PEM_BLOCK"
+      ]
+    ];
+    REDACTION_BUDGET_MS = 500;
+    DEFAULT_SKIP_DIRS = /* @__PURE__ */ new Set([
+      ".git",
+      "node_modules",
+      ".venv",
+      "dist",
+      "build",
+      ".idea",
+      ".vscode",
+      "tmp",
+      "vendor",
+      ".next",
+      ".cache",
+      "__pycache__",
+      "target",
+      ".turbo",
+      "out"
+    ]);
+  }
+});
+
+// src/usage-history.ts
+import { AsyncLocalStorage } from "node:async_hooks";
+import { randomBytes } from "node:crypto";
+import { appendFileSync, mkdirSync as mkdirSync2 } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { join as join3 } from "node:path";
+function newOpId() {
+  return `op-${randomBytes(4).toString("hex")}`;
+}
+function resolveProject() {
+  const fromEnv = process.env.CLAUDE_PROJECT_DIR;
+  if (typeof fromEnv === "string" && fromEnv.trim()) return fromEnv.trim();
+  try {
+    const top = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: process.cwd(),
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim();
+    if (top) return top;
+  } catch {
+  }
+  return process.cwd();
+}
+function truncateValue(s) {
+  const flat = s.replace(/[\r\n\t]+/g, " ");
+  if (flat.length <= MAX_STR) return flat;
+  return `${flat.slice(0, MAX_STR)}\u2026(${flat.length})`;
+}
+function redactString(s) {
+  try {
+    return redactSecrets(s).redacted;
+  } catch {
+    return "[REDACTED]";
+  }
+}
+function summarizeValue(v) {
+  if (v === null) return "null";
+  if (v === void 0) return "undefined";
+  if (typeof v === "string") return truncateValue(redactString(v));
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  if (Array.isArray(v)) return `[${v.length}]`;
+  if (typeof v === "object") {
+    const keys = Object.keys(v);
+    if (keys.length === 0) return "{}";
+    const inner = keys.map((k) => `${k}=${summarizeScalarOnly(v[k])}`).join(",");
+    return truncateValue(`{${inner}}`);
+  }
+  return truncateValue(redactString(String(v)));
+}
+function summarizeScalarOnly(v) {
+  if (v === null) return "null";
+  if (v === void 0) return "undefined";
+  if (typeof v === "string") return truncateValue(redactString(v));
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  if (Array.isArray(v)) return `[${v.length}]`;
+  if (typeof v === "object") return "{\u2026}";
+  return truncateValue(redactString(String(v)));
+}
+function summarizeParams(args) {
+  if (args === null || args === void 0) return "";
+  if (typeof args !== "object" || Array.isArray(args)) {
+    return summarizeValue(args);
+  }
+  const entries = Object.entries(args);
+  if (entries.length === 0) return "";
+  return entries.map(([k, v]) => `${k}=${summarizeValue(v)}`).join(", ");
+}
+function localIsoTimestamp(d = /* @__PURE__ */ new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  const y = d.getFullYear();
+  const mo = pad(d.getMonth() + 1);
+  const da = pad(d.getDate());
+  const h = pad(d.getHours());
+  const mi = pad(d.getMinutes());
+  const s = pad(d.getSeconds());
+  const offMin = -d.getTimezoneOffset();
+  const sign = offMin >= 0 ? "+" : "-";
+  const abs = Math.abs(offMin);
+  return `${y}-${mo}-${da}T${h}:${mi}:${s}${sign}${pad(Math.floor(abs / 60))}${pad(abs % 60)}`;
+}
+function formatDuration(durationMs) {
+  const ms = Math.max(0, Math.round(durationMs));
+  if (ms < 1e3) return `${ms}ms`;
+  return `${(ms / 1e3).toFixed(1)}s`;
+}
+function formatCost(costUsd) {
+  const c = Number.isFinite(costUsd) && costUsd > 0 ? costUsd : 0;
+  return `$${c.toFixed(6)}`;
+}
+function formatHistoryLine(fields) {
+  const toolField = fields.params ? `${fields.tool}(${fields.params})` : `${fields.tool}()`;
+  return [
+    fields.timestamp,
+    fields.project,
+    toolField,
+    fields.ok ? "SUCCESS" : "FAIL",
+    formatDuration(fields.durationMs),
+    formatCost(fields.costUsd),
+    fields.opId
+  ].join(" - ");
+}
+function appendHistoryLine(line) {
+  try {
+    const dir = getConfigDir();
+    mkdirSync2(dir, { recursive: true });
+    appendFileSync(join3(dir, "history.log"), line + "\n", { flag: "a" });
+  } catch {
+  }
+}
+function recordRequest(req) {
+  try {
+    const ctx = ctxStore.getStore();
+    const line = formatHistoryLine({
+      timestamp: localIsoTimestamp(),
+      project: ctx?.project ?? resolveProject(),
+      tool: ctx?.tool ?? "(direct)",
+      params: ctx?.params ?? "",
+      ok: req.ok,
+      durationMs: req.durationMs,
+      costUsd: req.costUsd,
+      opId: ctx?.opId ?? newOpId()
+    });
+    appendHistoryLine(line);
+  } catch {
+  }
+}
+function withUsageContext(init, fn) {
+  const ctx = {
+    tool: init.tool,
+    params: init.params,
+    project: init.project ?? resolveProject(),
+    opId: newOpId()
+  };
+  return ctxStore.run(ctx, fn);
+}
+var ctxStore, MAX_STR;
+var init_usage_history = __esm({
+  "src/usage-history.ts"() {
+    "use strict";
+    init_config();
+    init_intake();
+    ctxStore = new AsyncLocalStorage();
+    MAX_STR = 80;
+  }
+});
+
 // node_modules/ajv/dist/compile/codegen/code.js
 var require_code = __commonJS({
   "node_modules/ajv/dist/compile/codegen/code.js"(exports) {
@@ -14601,12 +15671,12 @@ var require_cross_spawn = __commonJS({
 });
 
 // src/mass_scouting/fieldset.ts
-import { readFileSync as readFileSync4 } from "node:fs";
-function isPlainObject3(v) {
+import { readFileSync as readFileSync5 } from "node:fs";
+function isPlainObject4(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 function parseFieldType(raw, fieldName) {
-  if (!isPlainObject3(raw)) {
+  if (!isPlainObject4(raw)) {
     throw new FieldsetParseError(
       `field "${fieldName}".type must be an object`
     );
@@ -14760,7 +15830,7 @@ function parseFieldType(raw, fieldName) {
       const itemFields = [];
       for (let i = 0; i < itemFieldsRaw.length; i++) {
         const f = itemFieldsRaw[i];
-        if (!isPlainObject3(f)) {
+        if (!isPlainObject4(f)) {
           throw new FieldsetParseError(
             `field "${fieldName}".type.item_fields[${i}] must be an object`
           );
@@ -14828,7 +15898,7 @@ function parseFieldType(raw, fieldName) {
   }
 }
 function parseFieldDef(raw, idx) {
-  if (!isPlainObject3(raw)) {
+  if (!isPlainObject4(raw)) {
     throw new FieldsetParseError(`fields[${idx}] must be an object`);
   }
   const name = raw.name;
@@ -14864,7 +15934,7 @@ function parseFieldDef(raw, idx) {
   return out;
 }
 function parseFieldset(input) {
-  if (!isPlainObject3(input)) {
+  if (!isPlainObject4(input)) {
     throw new FieldsetParseError("root must be a JSON object");
   }
   if (input.version !== 1) {
@@ -15055,7 +16125,7 @@ function jsonSchemaName(fsName) {
 }
 function makeRequiredKeysValidator(required2) {
   return (parsed) => {
-    if (!isPlainObject3(parsed)) {
+    if (!isPlainObject4(parsed)) {
       const got = parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed;
       return { ok: false, reason: `expected object, got ${got}` };
     }
@@ -15310,8 +16380,8 @@ function repairOneField(raw, f, repairs) {
       const items = [];
       for (let i = 0; i < raw.length; i++) {
         const itemRaw = raw[i];
-        const obj = isPlainObject3(itemRaw) ? itemRaw : {};
-        if (!isPlainObject3(itemRaw)) {
+        const obj = isPlainObject4(itemRaw) ? itemRaw : {};
+        if (!isPlainObject4(itemRaw)) {
           repairs.push(`${f.name}[${i}]: not an object \u2014 using {}`);
         }
         const repairedItem = {};
@@ -15375,8 +16445,8 @@ function makeRepair(fs) {
   return (parsed) => {
     const repairs = [];
     const repaired = {};
-    const obj = isPlainObject3(parsed) ? parsed : {};
-    if (!isPlainObject3(parsed)) {
+    const obj = isPlainObject4(parsed) ? parsed : {};
+    if (!isPlainObject4(parsed)) {
       const got = parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed;
       repairs.push(`top-level not an object (${got}) \u2014 treating as empty`);
     }
@@ -15862,7 +16932,7 @@ var init_cost_estimate = __esm({
 
 // src/mass_scouting/registry.ts
 import Database2 from "better-sqlite3";
-import { createHash } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 import { basename } from "node:path";
 function applyMigrations(db) {
   db.exec(
@@ -16133,7 +17203,7 @@ var init_registry = __esm({
       }
       /** Compute SHA1 fingerprint of a body. Stable across runs. */
       static fingerprintOf(body) {
-        return createHash("sha1").update(body).digest("hex");
+        return createHash2("sha1").update(body).digest("hex");
       }
       /**
        * Register one file. Idempotent on (fingerprint): re-registering the same
@@ -16882,6 +17952,7 @@ Return a JSON object that satisfies the schema this time.`;
     const perCallMs = opts.perCallTimeoutMs ?? 9e4;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), perCallMs);
+    const attemptStart = Date.now();
     let res;
     try {
       res = await fetchImpl(apiUrl, {
@@ -16896,12 +17967,14 @@ Return a JSON object that satisfies the schema this time.`;
       clearTimeout(timeoutId);
     } catch (e) {
       clearTimeout(timeoutId);
+      recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
       const err3 = e;
       prevError = err3.name === "AbortError" ? `timeout after ${perCallMs}ms` : `network error: ${err3.message}`;
       continue;
     }
     if (!res.ok) {
       const text = await res.text().catch(() => "");
+      recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
       prevError = `HTTP ${res.status}: ${text.slice(0, 200)}`;
       continue;
     }
@@ -16909,11 +17982,13 @@ Return a JSON object that satisfies the schema this time.`;
     try {
       respJson = await res.json();
     } catch (e) {
+      recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
       prevError = `non-JSON response: ${e.message}`;
       continue;
     }
     const content = respJson.choices?.[0]?.message?.content;
     if (typeof content !== "string") {
+      recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
       prevError = "response had no message.content string";
       continue;
     }
@@ -16924,6 +17999,7 @@ Return a JSON object that satisfies the schema this time.`;
       content.length
     );
     totalCost += callCost;
+    recordRequest({ ok: true, durationMs: Date.now() - attemptStart, costUsd: callCost });
     let parsed;
     try {
       parsed = JSON.parse(content);
@@ -16958,6 +18034,7 @@ var init_scout = __esm({
     "use strict";
     init_fieldset();
     init_cost_estimate();
+    init_usage_history();
     OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
     SMOKE_TEST_SAMPLE = 5;
   }
@@ -17424,7 +18501,7 @@ var init_search = __esm({
 });
 
 // src/mass_scouting/reports.ts
-import { appendFileSync, mkdirSync as mkdirSync5 } from "node:fs";
+import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync6 } from "node:fs";
 import { dirname as dirname3 } from "node:path";
 function tallyValues(values, cap = 25) {
   const counts = /* @__PURE__ */ new Map();
@@ -17620,655 +18697,13 @@ var init_reports = __esm({
   }
 });
 
-// src/security_scan/types.ts
-function isVerdict(v) {
-  return v === "threat" || v === "not_threat" || v === "uncertain";
-}
-function isPlainObject4(v) {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-function validateTarget(raw, index) {
-  const errors = [];
-  const at = `targets[${index}]`;
-  if (!isPlainObject4(raw)) {
-    return { ok: false, errors: [`${at} must be an object`] };
-  }
-  const id = raw.id;
-  const category = raw.category;
-  if (typeof id !== "string" || id.length === 0) {
-    errors.push(`${at}.id must be a non-empty string`);
-  }
-  if (typeof category !== "string" || category.length === 0) {
-    errors.push(`${at}.category must be a non-empty string`);
-  }
-  if (raw.language !== void 0 && typeof raw.language !== "string") {
-    errors.push(`${at}.language must be a string when present`);
-  }
-  const hasSnippet = typeof raw.snippet === "string";
-  const hasFile = typeof raw.file_path === "string";
-  const hasGlob = typeof raw.path_glob === "string";
-  const payloadCount = (hasSnippet ? 1 : 0) + (hasFile ? 1 : 0) + (hasGlob ? 1 : 0);
-  if (payloadCount === 0) {
-    errors.push(
-      `${at} must have exactly one of snippet, file_path, or path_glob`
-    );
-  } else if (payloadCount > 1) {
-    errors.push(
-      `${at} has ${payloadCount} payloads \u2014 exactly one of snippet, file_path, path_glob is allowed`
-    );
-  }
-  if (hasSnippet) {
-    const bytes = Buffer.byteLength(raw.snippet, "utf-8");
-    if (bytes > MAX_SNIPPET_BYTES) {
-      errors.push(
-        `${at}.snippet is ${bytes} bytes (> ${MAX_SNIPPET_BYTES} cap)`
-      );
-    }
-  }
-  if (raw.line !== void 0) {
-    if (typeof raw.line !== "number" || !Number.isInteger(raw.line) || raw.line < 1) {
-      errors.push(`${at}.line must be a positive integer (1-based)`);
-    }
-    if (!hasFile) {
-      errors.push(`${at}.line is only valid together with file_path`);
-    }
-  }
-  if (raw.context_lines !== void 0) {
-    if (typeof raw.context_lines !== "number" || !Number.isInteger(raw.context_lines) || raw.context_lines < 0) {
-      errors.push(`${at}.context_lines must be a non-negative integer`);
-    }
-  }
-  if (errors.length > 0) return { ok: false, errors };
-  const value = {
-    id,
-    category
-  };
-  if (typeof raw.language === "string") value.language = raw.language;
-  if (hasSnippet) value.snippet = raw.snippet;
-  if (hasFile) value.file_path = raw.file_path;
-  if (hasGlob) value.path_glob = raw.path_glob;
-  if (typeof raw.line === "number") value.line = raw.line;
-  if (typeof raw.context_lines === "number")
-    value.context_lines = raw.context_lines;
-  return { ok: true, value };
-}
-function validateInput(raw) {
-  const errors = [];
-  if (!isPlainObject4(raw)) {
-    return { ok: false, errors: ["input must be a JSON object"] };
-  }
-  if (!Array.isArray(raw.targets)) {
-    return { ok: false, errors: ["targets must be a non-empty array"] };
-  }
-  if (raw.targets.length === 0) {
-    return { ok: false, errors: ["targets must contain at least one item"] };
-  }
-  if (raw.targets.length > MAX_TARGETS) {
-    return {
-      ok: false,
-      errors: [`targets has ${raw.targets.length} items (> ${MAX_TARGETS} cap)`]
-    };
-  }
-  const targets = [];
-  for (let i = 0; i < raw.targets.length; i++) {
-    const t = validateTarget(raw.targets[i], i);
-    if (t.ok) targets.push(t.value);
-    else errors.push(...t.errors);
-  }
-  const rubrics = {};
-  if (raw.category_rubrics !== void 0) {
-    if (!isPlainObject4(raw.category_rubrics)) {
-      errors.push("category_rubrics must be an object of {category: rubric}");
-    } else {
-      for (const [k, v] of Object.entries(raw.category_rubrics)) {
-        if (typeof v !== "string") {
-          errors.push(`category_rubrics[${k}] must be a string`);
-          continue;
-        }
-        if (v.length > MAX_RUBRIC_LENGTH) {
-          errors.push(
-            `category_rubrics[${k}] is ${v.length} chars (> ${MAX_RUBRIC_LENGTH} cap)`
-          );
-          continue;
-        }
-        rubrics[k] = v;
-      }
-    }
-  }
-  let defaultVerdict = "uncertain";
-  if (raw.default_verdict_on_error !== void 0) {
-    if (!isVerdict(raw.default_verdict_on_error)) {
-      errors.push(
-        `default_verdict_on_error must be one of ${VERDICTS.join(", ")}`
-      );
-    } else if (raw.default_verdict_on_error === "not_threat") {
-      errors.push(
-        "default_verdict_on_error may not be not_threat (fail-safe must never fail open \u2014 use uncertain or threat)"
-      );
-    } else {
-      defaultVerdict = raw.default_verdict_on_error;
-    }
-  }
-  let budget = null;
-  if (raw.budget_usd !== void 0 && raw.budget_usd !== null) {
-    if (typeof raw.budget_usd !== "number" || !Number.isFinite(raw.budget_usd)) {
-      errors.push("budget_usd must be a finite number or null");
-    } else if (raw.budget_usd < 0) {
-      errors.push("budget_usd must be >= 0");
-    } else {
-      budget = raw.budget_usd;
-    }
-  }
-  let model = DEFAULT_MODEL;
-  if (raw.model !== void 0) {
-    if (typeof raw.model !== "string" || raw.model.length === 0) {
-      errors.push("model must be a non-empty string when present");
-    } else {
-      model = raw.model;
-    }
-  }
-  let gitRef;
-  if (raw.git_diff_ref !== void 0) {
-    if (typeof raw.git_diff_ref !== "string") {
-      errors.push("git_diff_ref must be a string");
-    } else if (raw.git_diff_ref.length > 200 || !GIT_REF_RE.test(raw.git_diff_ref)) {
-      errors.push(
-        "git_diff_ref has an illegal shape (anti-injection: only [A-Za-z0-9_./~^@{}-], <=200 chars)"
-      );
-    } else {
-      gitRef = raw.git_diff_ref;
-    }
-  }
-  let folderRoot;
-  if (raw.folder_root !== void 0) {
-    if (typeof raw.folder_root !== "string" || raw.folder_root.length === 0) {
-      errors.push("folder_root must be a non-empty string when present");
-    } else {
-      folderRoot = raw.folder_root;
-    }
-  }
-  let outputDir;
-  if (raw.output_dir !== void 0) {
-    if (typeof raw.output_dir !== "string" || raw.output_dir.length === 0) {
-      errors.push("output_dir must be a non-empty string when present");
-    } else {
-      outputDir = raw.output_dir;
-    }
-  }
-  const workers = numKnob(raw.workers, 8, 1, 256, "workers", errors);
-  const maxRetries = numKnob(raw.max_retries, 1, 0, 10, "max_retries", errors);
-  const perCallTimeout = numKnob(
-    raw.per_call_timeout_ms,
-    9e4,
-    1e3,
-    6e5,
-    "per_call_timeout_ms",
-    errors
-  );
-  const failureLimit = numKnob(
-    raw.consecutive_failure_limit,
-    5,
-    0,
-    1e3,
-    "consecutive_failure_limit",
-    errors
-  );
-  if (errors.length > 0) return { ok: false, errors };
-  return {
-    ok: true,
-    value: {
-      targets,
-      category_rubrics: rubrics,
-      default_verdict_on_error: defaultVerdict,
-      budget_usd: budget,
-      model,
-      git_diff_ref: gitRef,
-      folder_root: folderRoot,
-      output_dir: outputDir,
-      workers,
-      max_retries: maxRetries,
-      per_call_timeout_ms: perCallTimeout,
-      consecutive_failure_limit: failureLimit
-    }
-  };
-}
-function numKnob(raw, dflt, min, max, name, errors) {
-  if (raw === void 0) return dflt;
-  if (typeof raw !== "number" || !Number.isInteger(raw)) {
-    errors.push(`${name} must be an integer`);
-    return dflt;
-  }
-  if (raw < min || raw > max) {
-    errors.push(`${name} must be in [${min}, ${max}]`);
-    return dflt;
-  }
-  return raw;
-}
-var VERDICTS, DEFAULT_CONTEXT_LINES, MAX_RUBRIC_LENGTH, MAX_SNIPPET_BYTES, MAX_TARGETS, DEFAULT_MODEL, GIT_REF_RE;
-var init_types = __esm({
-  "src/security_scan/types.ts"() {
-    "use strict";
-    VERDICTS = [
-      "threat",
-      "not_threat",
-      "uncertain"
-    ];
-    DEFAULT_CONTEXT_LINES = 8;
-    MAX_RUBRIC_LENGTH = 2e3;
-    MAX_SNIPPET_BYTES = 2e5;
-    MAX_TARGETS = 5e3;
-    DEFAULT_MODEL = "qwen/qwen-2.5-7b-instruct";
-    GIT_REF_RE = /^[A-Za-z0-9_./~^@{}-]+$/;
-  }
-});
-
-// src/security_scan/intake.ts
-import { execSync } from "node:child_process";
-import { createHash as createHash2 } from "node:crypto";
-import { readFileSync as readFileSync5, readdirSync as readdirSync2, statSync as statSync2 } from "node:fs";
-import { isAbsolute, join as join4, resolve as resolve2 } from "node:path";
-function redactSecrets(content) {
-  let result = content;
-  let count = 0;
-  for (const [pattern, label] of SECRET_PATTERNS) {
-    pattern.lastIndex = 0;
-    result = result.replace(pattern, () => {
-      count++;
-      return `[REDACTED:${label}]`;
-    });
-  }
-  return { redacted: result, count };
-}
-function safeRedact(content, budgetMs = REDACTION_BUDGET_MS) {
-  const started = Date.now();
-  let out;
-  try {
-    out = redactSecrets(content);
-  } catch (e) {
-    return {
-      redacted: "",
-      count: 0,
-      ok: false,
-      reason: `redaction error: ${e.message}`
-    };
-  }
-  const elapsed = Date.now() - started;
-  if (elapsed > budgetMs) {
-    return {
-      redacted: out.redacted,
-      count: out.count,
-      ok: false,
-      reason: `redaction exceeded ${budgetMs}ms wall-clock budget (took ${elapsed}ms) \u2014 record skipped to avoid shipping un-redacted content`
-    };
-  }
-  return { redacted: out.redacted, count: out.count, ok: true };
-}
-function expandGlob(root, glob) {
-  const all = walkFiles(root);
-  const re = globToRegExp(glob);
-  return all.filter((abs) => {
-    const rel = relativeUnix(root, abs);
-    return re.test(rel);
-  });
-}
-function walkFiles(root) {
-  const out = [];
-  const stack = [root];
-  while (stack.length > 0) {
-    const dir = stack.pop();
-    let entries;
-    try {
-      entries = readdirSync2(dir);
-    } catch {
-      continue;
-    }
-    for (const e of entries) {
-      const full = join4(dir, e);
-      let st;
-      try {
-        st = statSync2(full);
-      } catch {
-        continue;
-      }
-      if (st.isDirectory()) {
-        if (DEFAULT_SKIP_DIRS.has(e)) continue;
-        stack.push(full);
-      } else if (st.isFile()) {
-        out.push(full);
-      }
-    }
-  }
-  out.sort();
-  return out;
-}
-function relativeUnix(root, abs) {
-  const r = resolve2(root);
-  const a = resolve2(abs);
-  let rel = a.startsWith(r) ? a.slice(r.length) : a;
-  rel = rel.replace(/^[/\\]+/, "").replace(/\\/g, "/");
-  return rel;
-}
-function globToRegExp(glob) {
-  let re = "^";
-  for (let i = 0; i < glob.length; i++) {
-    const c = glob[i];
-    if (c === "*") {
-      if (glob[i + 1] === "*") {
-        i++;
-        if (glob[i + 1] === "/") {
-          i++;
-          re += "(?:.*/)?";
-        } else {
-          re += ".*";
-        }
-      } else {
-        re += "[^/]*";
-      }
-    } else if (c === "?") {
-      re += "[^/]";
-    } else if ("\\^$.|+()[]{}".includes(c)) {
-      re += "\\" + c;
-    } else {
-      re += c;
-    }
-  }
-  re += "$";
-  return new RegExp(re);
-}
-function gitChangedFiles(root, ref) {
-  if (!GIT_REF_RE.test(ref) || ref.length > 200) return null;
-  try {
-    const out = execSync(
-      `git diff --name-only --diff-filter=ACMR -z ${JSON.stringify(ref)}...HEAD`,
-      { cwd: root, encoding: "buffer", stdio: ["ignore", "pipe", "ignore"] }
-    );
-    return out.toString("utf-8").split("\0").filter((s) => s.length > 0).map((p) => resolve2(root, p));
-  } catch {
-    return null;
-  }
-}
-function gitTrackedFiles(root) {
-  try {
-    const out = execSync("git ls-files --cached --others --exclude-standard -z", {
-      cwd: root,
-      encoding: "buffer",
-      stdio: ["ignore", "pipe", "ignore"]
-    });
-    return out.toString("utf-8").split("\0").filter((s) => s.length > 0).map((p) => resolve2(root, p));
-  } catch {
-    return null;
-  }
-}
-function extractWindow(content, line, contextLines) {
-  const lines = content.split("\n");
-  if (line < 1 || line > lines.length) return null;
-  const start = Math.max(1, line - contextLines);
-  const end = Math.min(lines.length, line + contextLines);
-  const window = lines.slice(start - 1, end).join("\n");
-  return { window, startLine: start };
-}
-function intake(targets, opts = {}) {
-  const root = opts.folderRoot ? resolve2(opts.folderRoot) : process.cwd();
-  const honorGitignore = opts.honorGitignore !== false;
-  const byteCap = opts.byteCap && opts.byteCap > 0 ? opts.byteCap : MAX_SNIPPET_BYTES;
-  const records = [];
-  const skipped = [];
-  const tooBig = (id, category, fp, bytes) => {
-    skipped.push({
-      id,
-      category,
-      file_path: fp,
-      reason: `content ${bytes} bytes > cap ${byteCap}`
-    });
-  };
-  const statTooBig = (id, category, abs) => {
-    let size;
-    try {
-      size = statSync2(abs).size;
-    } catch {
-      return false;
-    }
-    if (size > byteCap) {
-      tooBig(id, category, abs, size);
-      return true;
-    }
-    return false;
-  };
-  const pushRedacted = (rec) => {
-    const bytes = Buffer.byteLength(rec.content, "utf-8");
-    if (bytes > byteCap) {
-      tooBig(rec.id, rec.category, rec.file_path, bytes);
-      return;
-    }
-    const red = safeRedact(rec.content);
-    if (!red.ok) {
-      skipped.push({
-        id: rec.id,
-        category: rec.category,
-        file_path: rec.file_path,
-        reason: red.reason ?? "redaction failed \u2014 record skipped to avoid egress"
-      });
-      return;
-    }
-    rec.content = red.redacted;
-    records.push(rec);
-  };
-  for (const t of targets) {
-    if (typeof t.snippet === "string") {
-      pushRedacted({
-        id: t.id,
-        category: t.category,
-        language: t.language,
-        content: t.snippet
-      });
-      continue;
-    }
-    if (typeof t.file_path === "string") {
-      const abs = isAbsolute(t.file_path) ? t.file_path : resolve2(root, t.file_path);
-      if (statTooBig(t.id, t.category, abs)) continue;
-      let content;
-      try {
-        content = readFileSync5(abs, "utf-8");
-      } catch (e) {
-        skipped.push({
-          id: t.id,
-          category: t.category,
-          file_path: abs,
-          reason: `read error: ${e.message}`
-        });
-        continue;
-      }
-      if (typeof t.line === "number") {
-        const ctx = t.context_lines ?? DEFAULT_CONTEXT_LINES;
-        const win = extractWindow(content, t.line, ctx);
-        if (!win) {
-          skipped.push({
-            id: t.id,
-            category: t.category,
-            file_path: abs,
-            reason: `line ${t.line} out of range (file has ${content.split("\n").length} lines)`
-          });
-          continue;
-        }
-        pushRedacted({
-          id: t.id,
-          category: t.category,
-          language: t.language,
-          content: win.window,
-          file_path: abs,
-          line: t.line
-        });
-      } else {
-        pushRedacted({
-          id: t.id,
-          category: t.category,
-          language: t.language,
-          content,
-          file_path: abs
-        });
-      }
-      continue;
-    }
-    if (typeof t.path_glob === "string") {
-      let matched = expandGlob(root, t.path_glob);
-      if (opts.gitDiffRef) {
-        const changed = gitChangedFiles(root, opts.gitDiffRef);
-        if (changed !== null) {
-          const changedSet = new Set(changed);
-          matched = matched.filter((p) => changedSet.has(p));
-        }
-      }
-      if (honorGitignore) {
-        const tracked = gitTrackedFiles(root);
-        if (tracked !== null && tracked.length > 0) {
-          const trackedSet = new Set(tracked);
-          const filtered = matched.filter((p) => trackedSet.has(p));
-          if (filtered.length > 0) matched = filtered;
-        }
-      }
-      if (matched.length === 0) {
-        skipped.push({
-          id: t.id,
-          category: t.category,
-          reason: `path_glob ${JSON.stringify(t.path_glob)} matched no files under ${root}`
-        });
-        continue;
-      }
-      for (const abs of matched) {
-        if (statTooBig(`${t.id}::${relativeUnix(root, abs)}`, t.category, abs)) {
-          continue;
-        }
-        let content;
-        try {
-          content = readFileSync5(abs, "utf-8");
-        } catch (e) {
-          skipped.push({
-            id: t.id,
-            category: t.category,
-            file_path: abs,
-            reason: `read error: ${e.message}`
-          });
-          continue;
-        }
-        pushRedacted({
-          // Glob fans into multiple files — make each id unique + traceable.
-          id: `${t.id}::${relativeUnix(root, abs)}`,
-          category: t.category,
-          language: t.language,
-          content,
-          file_path: abs
-        });
-      }
-      continue;
-    }
-    skipped.push({
-      id: t.id,
-      category: t.category,
-      reason: "target had no recognizable payload (snippet/file_path/path_glob)"
-    });
-  }
-  const byKey = /* @__PURE__ */ new Map();
-  for (const rec of records) {
-    const key = dedupKey(rec.content, rec.category);
-    let g = byKey.get(key);
-    if (!g) {
-      g = {
-        key,
-        category: rec.category,
-        language: rec.language,
-        content: rec.content,
-        file_path: rec.file_path,
-        line: rec.line,
-        members: []
-      };
-      byKey.set(key, g);
-    }
-    g.members.push(rec);
-  }
-  return {
-    groups: Array.from(byKey.values()),
-    skipped,
-    recordsTotal: records.length
-  };
-}
-function dedupKey(content, category) {
-  return createHash2("sha1").update(content, "utf-8").update("\0").update(category, "utf-8").digest("hex");
-}
-var SECRET_PATTERNS, REDACTION_BUDGET_MS, DEFAULT_SKIP_DIRS;
-var init_intake = __esm({
-  "src/security_scan/intake.ts"() {
-    "use strict";
-    init_types();
-    SECRET_PATTERNS = [
-      [/AKIA[0-9A-Z]{16}/g, "AWS_KEY"],
-      [/(?:sk|pk)[-_](?:live|test|proj)[-_][A-Za-z0-9]{20,}/g, "API_KEY"],
-      // F3: classic OpenAI-style `sk-…` key with no infix (the sk-proj/sk-live
-      // shapes are caught by the rule above; this catches plain `sk-<base62>`).
-      // Single bounded class after the literal prefix → no backtracking.
-      [/sk-[A-Za-z0-9]{20,}/g, "API_KEY"],
-      // F3: Google API key — fixed 35-char tail, single bounded class.
-      [/AIza[0-9A-Za-z\-_]{35}/g, "GOOGLE_API_KEY"],
-      [/ghp_[A-Za-z0-9]{36}/g, "GITHUB_PAT"],
-      [/ghr_[A-Za-z0-9]{36}/g, "GITHUB_TOKEN"],
-      [/gho_[A-Za-z0-9]{36}/g, "GITHUB_OAUTH"],
-      [/github_pat_[A-Za-z0-9_]{82}/g, "GITHUB_PAT"],
-      [/glpat-[A-Za-z0-9\-_]{20,}/g, "GITLAB_TOKEN"],
-      [/xox[bpsar]-[A-Za-z0-9-]+/g, "SLACK_TOKEN"],
-      [/Bearer\s+[A-Za-z0-9._\-/+=]{20,}/g, "BEARER_TOKEN"],
-      // F3: raw JWT (header.payload.signature). Each segment is its own bounded
-      // class separated by a literal dot — disjoint classes, no backtracking.
-      [/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "JWT"],
-      // F3: connection string with inline credentials (scheme://user:pass@host).
-      // The `[^:@/\s]+` runs are disjoint from their `:`/`@` delimiters → linear.
-      [/:\/\/[^:@/\s]+:[^@/\s]+@/g, "CONN_STRING"],
-      // F1: ENV_SECRET — line-anchored via `[ \t]*` (intra-line horizontal
-      // whitespace only). NEVER `\s*` here: `\s` includes `\n`, which re-anchors at
-      // every newline and backtracks O(n²) over a hostile newline+whitespace blob.
-      [
-        /(?:^|\n)[ \t]*(?:(?:PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|AUTH|AUTH_TOKEN|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|DB_PASSWORD|DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|AWS_SESSION_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITLAB_TOKEN|BITBUCKET_TOKEN|NPM_TOKEN|DOCKER_PASSWORD|HF_TOKEN|HUGGINGFACE_TOKEN|LM_API_TOKEN|VLLM_API_KEY|JWT_SECRET|JWT_PRIVATE_KEY|STRIPE_SECRET_KEY|STRIPE_API_KEY|SUPABASE_SERVICE_KEY|SUPABASE_ANON_KEY|FIREBASE_TOKEN|SLACK_BOT_TOKEN|SLACK_TOKEN|DISCORD_TOKEN|TELEGRAM_BOT_TOKEN|TWILIO_AUTH_TOKEN|SENDGRID_API_KEY|MAILGUN_API_KEY|SENTRY_AUTH_TOKEN|PRIVATE)|[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_APIKEY|_API_KEY|_AUTH))[ \t]*[=:][ \t]*['"]?([^\s'"#\n]{8,})/gim,
-        "ENV_SECRET"
-      ],
-      // F3: case-insensitive catch for lowercase / mixed-case secret assignments
-      // (e.g. `password = "..."`, `token: ...`, `"apikey":"..."`). Matches the
-      // keyword + its `:`/`=` separator + value. `[ \t]*` keeps it line-local so
-      // the quantifiers cannot cross newlines → linear.
-      [
-        /(?:password|passwd|pwd|token|secret|apikey)["']?[ \t]*[:=][ \t]*['"]?([^\s'"#\n]{4,})/gi,
-        "SECRET_ASSIGNMENT"
-      ],
-      [
-        /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----/g,
-        "PEM_BLOCK"
-      ]
-    ];
-    REDACTION_BUDGET_MS = 500;
-    DEFAULT_SKIP_DIRS = /* @__PURE__ */ new Set([
-      ".git",
-      "node_modules",
-      ".venv",
-      "dist",
-      "build",
-      ".idea",
-      ".vscode",
-      "tmp",
-      "vendor",
-      ".next",
-      ".cache",
-      "__pycache__",
-      "target",
-      ".turbo",
-      "out"
-    ]);
-  }
-});
-
 // src/security_scan/prompt.ts
-import { randomBytes } from "node:crypto";
+import { randomBytes as randomBytes2 } from "node:crypto";
 function schemaOverheadBytes() {
   return Buffer.byteLength(JSON.stringify(VERDICT_JSON_SCHEMA), "utf-8");
 }
 function makeNonce() {
-  return randomBytes(8).toString("hex");
+  return randomBytes2(8).toString("hex");
 }
 function openDelimiter(nonce) {
   return `<<<UNTRUSTED_CODE_${nonce}>>>`;
@@ -18293,15 +18728,70 @@ function foldConfusables(s) {
 function normalizeForScan(s) {
   return foldConfusables(s.normalize("NFKC"));
 }
+function isQuotedOrDefinitional(normalized, idx, len) {
+  const lineStart = normalized.lastIndexOf("\n", idx) + 1;
+  let lineEnd = normalized.indexOf("\n", idx + len);
+  if (lineEnd === -1) lineEnd = normalized.length;
+  const before = normalized.slice(lineStart, idx);
+  const after = normalized.slice(idx + len, lineEnd);
+  for (const q of ["'", '"', "`"]) {
+    const beforeCount = countChar(before, q);
+    if (beforeCount % 2 === 1 && after.includes(q)) return true;
+  }
+  if (/[[,][\s]{0,8}["'`][^"'`\n]{0,200}$/.test(before) && /^[^"'`\n]{0,200}["'`][\s]{0,8}[\],]/.test(after)) {
+    return true;
+  }
+  const prefix = normalized.slice(0, idx);
+  const fenceCount = countOccurrences(prefix, "```");
+  if (fenceCount % 2 === 1) return true;
+  return false;
+}
+function countChar(s, ch) {
+  let n = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === ch) n++;
+  }
+  return n;
+}
+function countOccurrences(haystack, needle) {
+  let n = 0;
+  let from = 0;
+  for (; ; ) {
+    const at = haystack.indexOf(needle, from);
+    if (at === -1) break;
+    n++;
+    from = at + needle.length;
+  }
+  return n;
+}
+function isDirectiveHit(normalized, re, label) {
+  if (JUDGE_MANIPULATION_MARKERS.has(label)) return true;
+  if (DEFENSIVE_FRAMING.test(normalized)) return false;
+  const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+  let m;
+  let sawAny = false;
+  while ((m = g.exec(normalized)) !== null) {
+    sawAny = true;
+    if (!isQuotedOrDefinitional(normalized, m.index, m[0].length)) {
+      return true;
+    }
+    if (m.index === g.lastIndex) g.lastIndex++;
+  }
+  return sawAny ? false : true;
+}
 function preScanInjection(snippet) {
   const found = /* @__PURE__ */ new Set();
+  const directive = /* @__PURE__ */ new Set();
   const normalized = normalizeForScan(snippet);
   for (const [re, label] of INJECTION_MARKERS) {
-    if (re.test(normalized)) found.add(label);
+    if (re.test(normalized)) {
+      found.add(label);
+      if (isDirectiveHit(normalized, re, label)) directive.add(label);
+    }
   }
   if (hasZeroWidth(snippet)) found.add("zero-width-char");
   if (BASE64_BLOB.test(normalized)) found.add("base64-blob");
-  return { markers: Array.from(found) };
+  return { markers: Array.from(found), directiveMarkers: Array.from(directive) };
 }
 function sanitizeRubric(rubric) {
   let r = normalizeForScan(rubric).slice(0, MAX_RUBRIC_LENGTH);
@@ -18371,6 +18861,26 @@ function buildSystemPrompt(args) {
     "- not_threat: no security concern; benign construct.",
     "- uncertain: genuinely ambiguous; needs a human. When unsure, prefer",
     "  uncertain over a confident not_threat.",
+    // Issue #10 (2026-05-24): PROVENANCE / data-flow reasoning, generic to ALL
+    // categories. The cheap default model over-flags surface tokens (a literal
+    // `../`, an md5/sha1 name, a URL, a shell word) without asking where the
+    // data CAME FROM. Force a taint judgement instead of a substring reaction,
+    // and ground it in the VISIBLE WINDOW only so "reason about provenance"
+    // never degrades into "guess provenance".
+    "",
+    "PROVENANCE / DATA-FLOW (applies to EVERY category \u2014 path traversal, SSRF,",
+    "command injection, insecure crypto, etc.): base the verdict on where the",
+    "data COMES FROM, not on the mere surface presence of a risky-looking token",
+    "(`../`, an md5/sha1 name, a URL, a shell word). A risky-looking construct",
+    "built ENTIRELY from static string literals fixed in the source \u2014 no",
+    "concatenation, interpolation, or variable derived from input \u2014 is",
+    "typically NOT a vulnerability; prefer not_threat (or low confidence) for a",
+    "value that is visibly a static literal. Only return threat when an",
+    "untrusted / external / user / request-derived source is VISIBLE flowing",
+    "into the dangerous sink. Ground this ONLY in what is shown in the envelope:",
+    "if a risky value derives from a variable or parameter whose ORIGIN is not",
+    "visible in the provided code (you cannot tell whether it is untrusted input",
+    "or a static constant), DO NOT GUESS \u2014 return uncertain.",
     "Set confidence honestly in [0,1]. Emit ONLY the JSON object."
   );
   return lines.join("\n");
@@ -18384,7 +18894,7 @@ function promptOverheadBytes(systemPrompt, nonce) {
   const envelopeOverhead = Buffer.byteLength(openDelimiter(nonce), "utf-8") + Buffer.byteLength(closeDelimiter(nonce), "utf-8") + 2;
   return Buffer.byteLength(systemPrompt, "utf-8") + envelopeOverhead;
 }
-var VERDICT_JSON_SCHEMA, INJECTION_MARKERS, ZERO_WIDTH_CODEPOINTS, BASE64_BLOB, CONFUSABLE_FOLD;
+var VERDICT_JSON_SCHEMA, INJECTION_MARKERS, SELF_REFERENCE_MARKERS, JUDGE_MANIPULATION_MARKERS, ZERO_WIDTH_CODEPOINTS, BASE64_BLOB, CONFUSABLE_FOLD, DEFENSIVE_FRAMING;
 var init_prompt = __esm({
   "src/security_scan/prompt.ts"() {
     "use strict";
@@ -18425,11 +18935,18 @@ var init_prompt = __esm({
       [/disregard\s+(?:all\s+|the\s+)?(?:above|prior|previous)/i, "disregard-prior"],
       [/forget\s+(?:everything|all|your)\s+(?:above|instructions|rules)/i, "forget-instructions"],
       [/you\s+are\s+now\s+(?:a|an|the)\b/i, "role-reassign"],
-      [/(?:^|\n)\s*system\s*:/i, "system-tag"],
+      // ReDoS fix (2026-05-24, issue #9/#10 work): the line-anchored role-tag
+      // markers must use HORIZONTAL whitespace `[ \t]*` between the `(?:^|\n)` start
+      // and the keyword — NOT `\s*`. With `\s*` (which includes `\n`) a snippet of
+      // N newlines makes every newline a fresh `(?:^|\n)` start whose `\s*` then
+      // re-consumes the whole remaining newline run, giving O(N²) scanning (~8.6s on
+      // 100k newlines). This mirrors the F6 fix already applied to
+      // `markdown-role-header` below; `system-tag` and `assistant-tag` were missed.
+      [/(?:^|\n)[ \t]*system[ \t]*:/i, "system-tag"],
       [/<\/?system>/i, "system-xml-tag"],
       [/<\|\s*(?:im_start|im_end|system|assistant|user)\s*\|>/i, "chatml-tag"],
       [/\[\/?INST\]/i, "inst-tag"],
-      [/(?:^|\n)\s*(?:assistant|ai)\s*:\s*/i, "assistant-tag"],
+      [/(?:^|\n)[ \t]*(?:assistant|ai)[ \t]*:[ \t]*/i, "assistant-tag"],
       [/return\s+(?:verdict\s*[=:]\s*)?["']?not[_\s]?threat/i, "force-not-threat"],
       [/(?:set\s+)?confidence\s*[=:]\s*1(?:\.0+)?\b/i, "force-confidence"],
       [/new\s+(?:instructions?|system\s+prompt|rules)\s*[:=]/i, "new-instructions"],
@@ -18439,8 +18956,65 @@ var init_prompt = __esm({
       // quantifier cannot cross newlines.
       [/(?:^|\n)#{1,6}[ \t]*(?:system|instruction|assistant)\b/i, "markdown-role-header"],
       // F6: bracket role markers, e.g. `[SYSTEM]`, `[assistant]`, `[INST]`.
-      [/\[(?:system|assistant|user|inst)\]/i, "bracket-role-tag"]
+      [/\[(?:system|assistant|user|inst)\]/i, "bracket-role-tag"],
+      // ── Issue #7 (2026-05-24): reviewer/judge-directed meta-instructions ─────
+      // A snippet that talks TO the adjudicating model ("disregard your rubric",
+      // "mark everything not_threat", "approved by the security team") is itself a
+      // prompt-injection vector. The pre-#7 set only caught "ignore previous
+      // instructions"-style phrasing, so these slipped through and the not_threat→
+      // uncertain clamp never fired (fail-open at conf 1.0). All HARD markers.
+      //
+      // Backtracking-free per the aegis F1 lesson: every inter-token gap is a
+      // BOUNDED whitespace run `[\s]{1,40}` (a fixed upper bound makes catastrophic
+      // backtracking impossible even across newlines) — never an unbounded `\s*`.
+      // disregard/ignore/override/forget/bypass + (your|the|its|all) + (system )?
+      // (rubric|prompt|instructions|guidelines|rules|criteria)
+      [
+        /(?:disregard|ignore|override|forget|bypass)[\s]{1,40}(?:your|the|its|all)[\s]{1,40}(?:system[\s]{1,40})?(?:rubric|prompt|instructions|guidelines|rules|criteria)/i,
+        "reviewer-rubric-override"
+      ],
+      // classify/mark/treat/rate/label/report + (everything|all|every <word>|this|
+      // it) + as? + (not_threat|safe|benign|approved|clean)
+      [
+        /(?:classify|mark|treat|rate|label|report)[\s]{1,40}(?:everything|all|every[\s]{1,40}[a-z]{1,20}|this|it)[\s]{1,40}(?:as[\s]{1,40})?(?:not[_\s]?threat|safe|benign|approved|clean)/i,
+        "force-benign-classification"
+      ],
+      // (already )?approved by (the )?(security|review|audit) team
+      [
+        /(?:already[\s]{1,40})?approved[\s]{1,40}by[\s]{1,40}(?:the[\s]{1,40})?(?:security|review|audit)[\s]{1,40}team/i,
+        "fake-approval"
+      ],
+      // note/message/instruction to (the )?(reviewer|reviewing ai|reviewing model)
+      [
+        /(?:note|message|instruction)[\s]{1,40}to[\s]{1,40}(?:the[\s]{1,40})?(?:reviewer|reviewing[\s]{1,40}(?:ai|model|llm|assistant))/i,
+        "addresses-reviewer"
+      ],
+      // reviewer/reviewing + (ai|model|llm|assistant) — content that names the judge
+      [
+        /(?:reviewer|reviewing)[\s]{1,40}(?:ai|model|llm|assistant)/i,
+        "addresses-reviewer"
+      ],
+      // you (must|should|will) ... (classify|mark|output|return) ...
+      // (not_threat|safe|benign). The two `[\s\S]{0,60}` gaps are BOUNDED (≤60),
+      // so even with `[\s\S]` (newline-spanning) the match is linear, not ReDoS.
+      [
+        /you[\s]{1,40}(?:must|should|will)[\s\S]{0,60}(?:classify|mark|output|return)[\s\S]{0,60}(?:not[_\s]?threat|safe|benign)/i,
+        "directed-verdict"
+      ]
     ];
+    SELF_REFERENCE_MARKERS = /* @__PURE__ */ new Set([
+      "addresses-reviewer",
+      "directed-verdict"
+    ]);
+    JUDGE_MANIPULATION_MARKERS = /* @__PURE__ */ new Set([
+      "force-not-threat",
+      "force-confidence",
+      "reviewer-rubric-override",
+      "force-benign-classification",
+      "fake-approval",
+      "addresses-reviewer",
+      "directed-verdict"
+    ]);
     ZERO_WIDTH_CODEPOINTS = /* @__PURE__ */ new Set([
       8203,
       8204,
@@ -18507,6 +19081,7 @@ var init_prompt = __esm({
       [935, "X"]
       // GREEK Χ
     ]);
+    DEFENSIVE_FRAMING = /(?:untrusted|do[\s]{1,8}not[\s]{1,8}comply|don't[\s]{1,8}comply|injection[\s]{1,8}attempt|injection[\s]{1,8}vector|treat[\s]{1,8}(?:it|this|them|as)[\s]{1,8}(?:as[\s]{1,8})?data|handled[\s]{1,8}as[\s]{1,8}data|never[\s]{1,8}execute|do[\s]{1,8}not[\s]{1,8}execute|detect|detector|detects|detecting|detection|classifier|classification|sanitiz|sanitis|\bblocklist\b|\bblock[\s]{1,8}(?:the[\s]{1,8})?(?:injection|attack|payload|input)|reject[\s]{1,8}(?:the[\s]{1,8})?(?:injection|attack|payload|input)|\bwarn(?:s|ing)?[\s]{1,8}against|defensive|guard[\s]{1,8}against|flag(?:s|ged)?[\s]{1,8}(?:as[\s]{1,8})?(?:malicious|injection|suspicious))/i;
   }
 });
 
@@ -18537,6 +19112,14 @@ var init_concurrency = __esm({
 });
 
 // src/security_scan/judge.ts
+function scanReasonTells(reason) {
+  const found = /* @__PURE__ */ new Set();
+  const normalized = normalizeForScan(reason);
+  for (const [re, label] of REASON_TELLS) {
+    if (re.test(normalized)) found.add(label);
+  }
+  return Array.from(found);
+}
 async function judgeGroups(groups, opts, fetchImpl) {
   const apiUrl = opts.apiUrl ?? OPENROUTER_URL2;
   const verdicts = new Array(groups.length);
@@ -18550,7 +19133,8 @@ async function judgeGroups(groups, opts, fetchImpl) {
     groups.map((g, i) => ({ g, i })),
     Math.max(1, opts.workers),
     async ({ g, i }) => {
-      const markers = preScanInjection(g.content).markers;
+      const preScan = preScanInjection(g.content);
+      const markers = preScan.markers;
       if (circuitTripped) {
         verdicts[i] = failSafeVerdict(g.key, markers, opts.defaultVerdictOnError);
         groupsFailSafe++;
@@ -18558,7 +19142,13 @@ async function judgeGroups(groups, opts, fetchImpl) {
         opts.onProgress?.(done, groups.length);
         return;
       }
-      const outcome = await judgeOneGroup(g, markers, opts, fetchImpl, apiUrl);
+      const outcome = await judgeOneGroup(
+        g,
+        preScan,
+        opts,
+        fetchImpl,
+        apiUrl
+      );
       totalCost += outcome.costUsd;
       verdicts[i] = outcome;
       if (outcome.failSafe) {
@@ -18612,13 +19202,16 @@ function failSafeVerdict(key, markers, defaultVerdict) {
     costUsd: 0
   };
 }
-async function judgeOneGroup(group, markers, opts, fetchImpl, apiUrl) {
+async function judgeOneGroup(group, preScan, opts, fetchImpl, apiUrl) {
+  const markers = preScan.markers;
   const nonce = makeNonce();
   const systemPrompt = buildSystemPrompt({
     nonce,
     category: group.category,
     rubric: opts.rubrics[group.category],
     language: group.language,
+    // The model sees ALL flagged markers as a hint (directive + quoted), so it
+    // can reason about each one and explain benign provenance where applicable.
     injectionMarkers: markers
   });
   const baseUserMsg = buildUserMessage(nonce, group.content);
@@ -18647,6 +19240,7 @@ async function judgeOneGroup(group, markers, opts, fetchImpl, apiUrl) {
       () => controller.abort(),
       opts.perCallTimeoutMs
     );
+    const attemptStart = Date.now();
     let res;
     try {
       res = await fetchImpl(apiUrl, {
@@ -18658,42 +19252,55 @@ async function judgeOneGroup(group, markers, opts, fetchImpl, apiUrl) {
         body: JSON.stringify(reqBody),
         signal: controller.signal
       });
-      clearTimeout(timeoutId);
     } catch (e) {
       clearTimeout(timeoutId);
+      recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
       const err3 = e;
       prevError = err3.name === "AbortError" ? `timeout after ${opts.perCallTimeoutMs}ms` : `network error: ${err3.message}`;
       continue;
     }
     if (!res.ok) {
       const text = await res.text().catch(() => "");
+      clearTimeout(timeoutId);
+      recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
       prevError = `HTTP ${res.status}: ${text.slice(0, 200)}`;
       continue;
     }
     let respJson;
     try {
       respJson = await res.json();
+      clearTimeout(timeoutId);
     } catch (e) {
-      prevError = `non-JSON HTTP body: ${e.message}`;
+      clearTimeout(timeoutId);
+      recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
+      const err3 = e;
+      prevError = err3.name === "AbortError" ? `timeout after ${opts.perCallTimeoutMs}ms (response body)` : `non-JSON HTTP body: ${err3.message}`;
       continue;
     }
     const content = respJson.choices?.[0]?.message?.content;
     if (typeof content !== "string") {
+      recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
       prevError = "response had no message.content string";
       continue;
     }
-    totalCost += computeCallCost2(
+    const callCost = computeCallCost2(
       respJson.usage,
       opts.pricing,
       Buffer.byteLength(group.content, "utf-8"),
       content.length
     );
+    totalCost += callCost;
+    recordRequest({ ok: true, durationMs: Date.now() - attemptStart, costUsd: callCost });
     const validated = validateVerdictResponse(content, nonce);
     if (!validated.ok) {
       prevError = validated.reason;
       continue;
     }
-    const clamped = applyInjectionClamp(validated.payload, markers);
+    const clamped = applyInjectionClamp(
+      validated.payload,
+      markers,
+      preScan.directiveMarkers
+    );
     return {
       key: group.key,
       payload: clamped,
@@ -18767,23 +19374,45 @@ function validateVerdictResponse(content, nonce) {
     }
   };
 }
-function applyInjectionClamp(payload, markers) {
-  const hardMarkers = markers.filter((m) => !SOFT_MARKERS.has(m));
-  if (hardMarkers.length === 0) return payload;
+function applyInjectionClamp(payload, markers, directiveMarkers) {
+  const directiveSet = new Set(directiveMarkers ?? markers);
+  const hardMarkers = markers.filter(
+    (m) => !SOFT_MARKERS.has(m) && directiveSet.has(m)
+  );
+  const reasonTells = scanReasonTells(payload.reason);
+  const selfReference = markers.some((m) => SELF_REFERENCE_MARKERS.has(m));
+  const forceObserved = markers.length > 0 || selfReference || reasonTells.length > 0;
   if (payload.verdict === "not_threat") {
-    const why = payload.injection_observed ? "the model acknowledged an injection attempt yet still returned not_threat (internally contradictory)" : "the model returned not_threat without acknowledging the flagged injection markers";
-    return {
-      verdict: "uncertain",
-      // Cap confidence — we are overriding the model, so we are not certain.
-      confidence: Math.min(payload.confidence, 0.5),
-      reason: `Clamped to uncertain: script pre-scan flagged injection markers (${hardMarkers.join(", ")}) and ${why}. Original reason: ${payload.reason}`.slice(
-        0,
-        600
-      ),
-      injection_observed: true
-    };
+    if (hardMarkers.length > 0 || reasonTells.length > 0) {
+      const reasons = [];
+      if (hardMarkers.length > 0) {
+        const why = payload.injection_observed ? "the model acknowledged an injection attempt yet still returned not_threat (internally contradictory)" : "the model returned not_threat without acknowledging the flagged injection markers";
+        reasons.push(
+          `script pre-scan flagged injection markers (${hardMarkers.join(", ")}) and ${why}`
+        );
+      }
+      if (reasonTells.length > 0) {
+        reasons.push(
+          `the model's own justification parrots the manipulation (${reasonTells.join(", ")})`
+        );
+      }
+      return {
+        verdict: "uncertain",
+        // Cap confidence — we are overriding the model, so we are not certain.
+        confidence: Math.min(payload.confidence, 0.5),
+        reason: `Clamped to uncertain: ${reasons.join("; ")}. Original reason: ${payload.reason}`.slice(
+          0,
+          600
+        ),
+        injection_observed: true
+      };
+    }
+    if (forceObserved && !payload.injection_observed) {
+      return { ...payload, injection_observed: true };
+    }
+    return payload;
   }
-  if (!payload.injection_observed) {
+  if (forceObserved && !payload.injection_observed) {
     return { ...payload, injection_observed: true };
   }
   return payload;
@@ -18793,15 +19422,44 @@ function computeCallCost2(usage, pricing, fallbackInputBytes, fallbackOutputByte
   const outTok = usage?.completion_tokens ?? Math.ceil(fallbackOutputBytes / 4);
   return inTok / 1e6 * pricing.input_per_m_usd + outTok / 1e6 * pricing.output_per_m_usd;
 }
-var OPENROUTER_URL2, SOFT_MARKERS;
+var OPENROUTER_URL2, SOFT_MARKERS, REASON_TELLS;
 var init_judge = __esm({
   "src/security_scan/judge.ts"() {
     "use strict";
     init_prompt();
     init_concurrency();
+    init_usage_history();
     init_types();
     OPENROUTER_URL2 = "https://openrouter.ai/api/v1/chat/completions";
     SOFT_MARKERS = /* @__PURE__ */ new Set(["base64-blob"]);
+    REASON_TELLS = [
+      // "the reviewing AI", "the reviewer", "to the reviewing model/llm/assistant"
+      [
+        /(?:reviewer|reviewing[\s]{1,40}(?:ai|model|llm|assistant))/i,
+        "reason-cites-reviewer"
+      ],
+      // "instructs the AI", "told the AI", "directs the assistant", "the AI to …"
+      [
+        /(?:instruct|tell|told|direct|ask|order)[a-z]{0,4}[\s]{1,40}(?:the[\s]{1,40})?(?:ai|model|llm|assistant|reviewer)/i,
+        "reason-cites-ai-instruction"
+      ],
+      // "(approved|cleared|signed off) by (the )?(security|review|audit) team"
+      [
+        /(?:approved|cleared|signed[\s]{1,40}off|sign[\s]{1,40}off|whitelisted|pre[\s-]?approved)[\s]{1,40}by[\s]{1,40}(?:the[\s]{1,40})?(?:security|review|audit)?[\s]{0,40}team/i,
+        "reason-cites-approval"
+      ],
+      // "disregard/ignore … (its|the|your) (own )?(security )?rubric/instructions"
+      [
+        /(?:disregard|ignore|override|bypass)[\s]{1,40}(?:its|the|your|my)[\s]{1,40}(?:own[\s]{1,40})?(?:security[\s]{1,40})?(?:rubric|prompt|instructions|guidelines|rules|criteria)/i,
+        "reason-cites-rubric-override"
+      ],
+      // "instructs … to classify … as not_threat/safe/benign" — the verdict was
+      // dictated to the model, and the model says so in its justification.
+      [
+        /(?:instruct|direct|tell|told|ask)[a-z]{0,4}[\s\S]{0,80}(?:classify|mark|treat|label)[a-z]{0,4}[\s\S]{0,80}(?:not[_\s]?threat|safe|benign)/i,
+        "reason-cites-directed-verdict"
+      ]
+    ];
   }
 });
 
@@ -18825,8 +19483,8 @@ var init_openrouter = __esm({
 
 // src/security_scan/report.ts
 import { execSync as execSync2 } from "node:child_process";
-import { existsSync as existsSync4, mkdirSync as mkdirSync6, writeFileSync as writeFileSync4 } from "node:fs";
-import { isAbsolute as isAbsolute2, join as join5, resolve as resolve3 } from "node:path";
+import { existsSync as existsSync4, mkdirSync as mkdirSync7, writeFileSync as writeFileSync4 } from "node:fs";
+import { isAbsolute as isAbsolute2, join as join6, resolve as resolve3 } from "node:path";
 function defaultMainRoot() {
   const projDir = process.env.CLAUDE_PROJECT_DIR;
   if (projDir && existsSync4(projDir)) return projDir;
@@ -18841,7 +19499,7 @@ function resolveReportDir(outputDir, mainRoot) {
   if (outputDir && outputDir.length > 0) {
     return isAbsolute2(outputDir) ? outputDir : resolve3(process.cwd(), outputDir);
   }
-  return join5(mainRoot ?? defaultMainRoot(), "reports", "security_scan");
+  return join6(mainRoot ?? defaultMainRoot(), "reports", "security_scan");
 }
 function isoTimestampLocal(now = /* @__PURE__ */ new Date()) {
   const pad = (n, w = 2) => String(n).padStart(w, "0");
@@ -18977,11 +19635,11 @@ function mdCell2(s) {
   return s.replace(/\|/g, "\\|").replace(/\n/g, " ").slice(0, 400);
 }
 function writeReport(report, reportDir) {
-  mkdirSync6(reportDir, { recursive: true });
+  mkdirSync7(reportDir, { recursive: true });
   const stamp = isoTimestampLocal();
   const base = `${stamp}-security-scan-${slugify2(report.job_id)}`;
-  const jsonPath = join5(reportDir, `${base}.json`);
-  const mdPath = join5(reportDir, `${base}.md`);
+  const jsonPath = join6(reportDir, `${base}.json`);
+  const mdPath = join6(reportDir, `${base}.md`);
   writeFileSync4(jsonPath, JSON.stringify(report, null, 2) + "\n", "utf-8");
   writeFileSync4(mdPath, renderMarkdown(report), "utf-8");
   return { jsonPath, mdPath };
@@ -19183,15 +19841,15 @@ __export(cli_exports, {
 });
 import { execSync as execSync3 } from "node:child_process";
 import {
-  appendFileSync as appendFileSync2,
+  appendFileSync as appendFileSync3,
   existsSync as existsSync5,
-  mkdirSync as mkdirSync7,
+  mkdirSync as mkdirSync8,
   readFileSync as readFileSync6,
   readdirSync as readdirSync3,
   statSync as statSync3,
   writeFileSync as writeFileSync5
 } from "node:fs";
-import { dirname as dirname4, extname as extname2, isAbsolute as isAbsolute3, join as join6, resolve as resolve4 } from "node:path";
+import { dirname as dirname4, extname as extname2, isAbsolute as isAbsolute3, join as join7, resolve as resolve4 } from "node:path";
 import { fileURLToPath } from "node:url";
 function parseFlags2(args) {
   const flags = {};
@@ -19248,7 +19906,7 @@ function resolveReportDir2(outputDirFlag, opts) {
     return isAbsolute3(outputDirFlag) ? outputDirFlag : resolve4(process.cwd(), outputDirFlag);
   }
   const mainRoot = opts.mainRoot ?? defaultMainRoot2();
-  return join6(mainRoot, "reports", "mass_scouting");
+  return join7(mainRoot, "reports", "mass_scouting");
 }
 function listGitChangedFiles(root, ref) {
   if (!/^[A-Za-z0-9_./~^@{}-]+$/.test(ref) || ref.length > 200) {
@@ -19298,7 +19956,7 @@ function walkFiles2(root, extensionFilter, extraSkipDirs) {
       continue;
     }
     for (const e of entries) {
-      const full = join6(dir, e);
+      const full = join7(dir, e);
       let st;
       try {
         st = statSync3(full);
@@ -19704,9 +20362,9 @@ async function runScout(args, opts) {
   const md = renderMarkdownReport(summary);
   reg.close();
   const reportDir = resolveReportDir2(flags["output-dir"], opts);
-  mkdirSync7(reportDir, { recursive: true });
+  mkdirSync8(reportDir, { recursive: true });
   const stamp = isoTimestampLocal2();
-  const reportPath = join6(reportDir, `${stamp}-scout-${slugify3(jobId)}.md`);
+  const reportPath = join7(reportDir, `${stamp}-scout-${slugify3(jobId)}.md`);
   writeFileSync5(reportPath, md, "utf-8");
   return ok(
     [
@@ -20394,14 +21052,14 @@ function runExport(args, opts) {
   const rows = reg.listResultsByJob(jobId);
   reg.close();
   const reportDir = resolveReportDir2(flags["output-dir"], opts);
-  mkdirSync7(reportDir, { recursive: true });
+  mkdirSync8(reportDir, { recursive: true });
   const stamp = isoTimestampLocal2();
   const filename = `${stamp}-export-${slugify3(jobId)}.${format}`;
-  const path = join6(reportDir, filename);
+  const path = join7(reportDir, filename);
   writeFileSync5(path, "", "utf-8");
   if (format === "jsonl") {
     for (const r of rows) {
-      appendFileSync2(path, JSON.stringify(r) + "\n", "utf-8");
+      appendFileSync3(path, JSON.stringify(r) + "\n", "utf-8");
     }
   } else {
     const header = [
@@ -20414,7 +21072,7 @@ function runExport(args, opts) {
       "cost_usd",
       "enriched_at"
     ].join(",");
-    appendFileSync2(path, header + "\n", "utf-8");
+    appendFileSync3(path, header + "\n", "utf-8");
     for (const r of rows) {
       const row = [
         csvEscape(r.job_id),
@@ -20426,7 +21084,7 @@ function runExport(args, opts) {
         r.cost_usd == null ? "" : String(r.cost_usd),
         csvEscape(r.enriched_at)
       ].join(",");
-      appendFileSync2(path, row + "\n", "utf-8");
+      appendFileSync3(path, row + "\n", "utf-8");
     }
   }
   return ok(
@@ -20700,279 +21358,9 @@ Notes:
   }
 });
 
-// src/config.ts
-var import_yaml = __toESM(require_dist(), 1);
-import {
-  existsSync,
-  readFileSync,
-  writeFileSync,
-  mkdirSync,
-  chmodSync,
-  realpathSync
-} from "node:fs";
-import { resolve } from "node:path";
-import { join } from "node:path";
-import { homedir } from "node:os";
-var API_PRESETS = {
-  // ── Local presets ─────────────────────────────────────────────────
-  "lmstudio-local": {
-    protocol: "lmstudio_api",
-    defaultUrl: "http://localhost:1234",
-    defaultAuthEnv: "$LM_API_TOKEN",
-    defaultTimeout: 300,
-    defaultAppName: "",
-    defaultHttpReferer: "",
-    defaultContextWindow: 0,
-    isLocal: true
-  },
-  "ollama-local": {
-    protocol: "openai_api",
-    defaultUrl: "http://localhost:11434",
-    defaultAuthEnv: "",
-    defaultTimeout: 300,
-    defaultAppName: "",
-    defaultHttpReferer: "",
-    defaultContextWindow: 0,
-    isLocal: true
-  },
-  "vllm-local": {
-    protocol: "openai_api",
-    defaultUrl: "http://localhost:8000",
-    defaultAuthEnv: "$VLLM_API_KEY",
-    defaultTimeout: 300,
-    defaultAppName: "",
-    defaultHttpReferer: "",
-    defaultContextWindow: 0,
-    isLocal: true
-  },
-  "llamacpp-local": {
-    protocol: "openai_api",
-    defaultUrl: "http://localhost:8080",
-    defaultAuthEnv: "",
-    defaultTimeout: 300,
-    defaultAppName: "",
-    defaultHttpReferer: "",
-    defaultContextWindow: 0,
-    isLocal: true
-  },
-  "generic-local": {
-    protocol: "openai_api",
-    defaultUrl: "",
-    defaultAuthEnv: "$LM_API_TOKEN",
-    defaultTimeout: 300,
-    defaultAppName: "",
-    defaultHttpReferer: "",
-    defaultContextWindow: 0,
-    isLocal: true
-  },
-  // ── Remote presets ────────────────────────────────────────────────
-  "openrouter-remote": {
-    protocol: "openrouter_api",
-    defaultUrl: "https://openrouter.ai/api",
-    defaultAuthEnv: "$OPENROUTER_API_KEY",
-    defaultTimeout: 600,
-    // 10 min — reasoning models (Qwen, etc.) need extended thinking time
-    defaultAppName: "llm-externalizer",
-    defaultHttpReferer: "",
-    defaultContextWindow: 0,
-    isLocal: false
-  }
-};
-function getConfigDir() {
-  const raw = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
-  function resolveDeepestExisting(p) {
-    try {
-      return realpathSync(p);
-    } catch {
-    }
-    const parent = join(p, "..");
-    if (parent === p) return p;
-    const resolvedParent = resolveDeepestExisting(parent);
-    return join(resolvedParent, p.slice(parent.length + (parent.endsWith("/") || parent.endsWith("\\") ? 0 : 1)));
-  }
-  const dir = resolveDeepestExisting(raw);
-  const home = (() => {
-    try {
-      return realpathSync(homedir());
-    } catch {
-      return homedir();
-    }
-  })();
-  const tmpCanonical = (() => {
-    try {
-      return realpathSync("/tmp");
-    } catch {
-      return "/tmp";
-    }
-  })();
-  const sep = process.platform === "win32" ? "\\" : "/";
-  const underHome = dir.startsWith(home + sep) || dir === home;
-  const underTmp = dir.startsWith(tmpCanonical + sep) || dir === tmpCanonical;
-  if (!underHome && !underTmp) {
-    throw new Error(`Config directory '${dir}' is outside allowed paths (${home} or ${tmpCanonical})`);
-  }
-  return dir;
-}
-function getSettingsPath() {
-  return join(getConfigDir(), "settings.yaml");
-}
-var USER_CONFIG_ENV_MAP = {
-  OPENROUTER_API_KEY: "CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY"
-};
-function resolveEnvValue(value) {
-  if (!value) return "";
-  if (value.startsWith("$")) {
-    const name = value.slice(1).trim();
-    const userConfigVar = USER_CONFIG_ENV_MAP[name];
-    if (userConfigVar) {
-      const userConfigVal = process.env[userConfigVar];
-      if (userConfigVal && userConfigVal.length > 0) return userConfigVal;
-    }
-    return process.env[name] || "";
-  }
-  return value;
-}
-function loadSettings() {
-  const settingsPath = getSettingsPath();
-  try {
-    if (!existsSync(settingsPath)) return null;
-    const raw = readFileSync(settingsPath, "utf-8");
-    const parsed = JSON.parse(JSON.stringify((0, import_yaml.parse)(raw)));
-    if (!parsed || typeof parsed !== "object") return null;
-    return {
-      active: parsed.active || "",
-      profiles: parsed.profiles || {}
-    };
-  } catch (err3) {
-    process.stderr.write(
-      `[llm-externalizer] Warning: Failed to read ${settingsPath}: ${err3 instanceof Error ? err3.message : String(err3)}
-`
-    );
-    return null;
-  }
-}
-function ensureSettingsExist() {
-  const settingsPath = getSettingsPath();
-  const configDir = getConfigDir();
-  const oldSettingsPath = join(configDir, "settings.yml");
-  if (existsSync(oldSettingsPath) && !existsSync(settingsPath)) {
-    process.stderr.write(
-      `[llm-externalizer] Found old settings.yml \u2014 the new format is settings.yaml with profiles.
-[llm-externalizer] Generating new settings.yaml. Your old settings.yml is preserved but no longer read.
-`
-    );
-  }
-  if (!existsSync(settingsPath)) {
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(settingsPath, SETTINGS_TEMPLATE, "utf-8");
-    try {
-      chmodSync(settingsPath, 384);
-    } catch {
-    }
-    process.stderr.write(
-      `[llm-externalizer] Generated default settings at ${settingsPath}
-`
-    );
-  }
-  const settings = loadSettings();
-  if (!settings) {
-    throw new Error(`Failed to parse ${settingsPath}. Check YAML syntax.`);
-  }
-  return settings;
-}
-function resolveProfile(name, profile) {
-  const preset = API_PRESETS[profile.api];
-  if (!preset) {
-    throw new Error(`Unknown api preset '${profile.api}'`);
-  }
-  const rawAuth = preset.isLocal ? profile.api_token || profile.api_key || preset.defaultAuthEnv : profile.api_key || preset.defaultAuthEnv;
-  return {
-    name,
-    mode: profile.mode,
-    protocol: preset.protocol,
-    url: profile.url || preset.defaultUrl,
-    model: profile.model,
-    authToken: resolveEnvValue(rawAuth),
-    secondModel: profile.second_model || "",
-    thirdModel: profile.third_model || "",
-    timeout: profile.timeout ?? preset.defaultTimeout,
-    contextWindow: profile.context_window ?? preset.defaultContextWindow,
-    appName: profile.app_name ?? preset.defaultAppName,
-    httpReferer: profile.http_referer ?? preset.defaultHttpReferer
-  };
-}
-var SETTINGS_TEMPLATE = `# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-# LLM Externalizer \u2014 Settings
-# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-# Profile-based configuration. Each profile defines a complete LLM
-# backend setup. Edit this file manually and either restart Claude Code
-# or call the MCP 'reset' tool to reload.
-#
-# Location: ~/.llm-externalizer/settings.yaml
-# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-
-# Active profile name
-active: local-lmstudio-qwen35
-
-# \u2500\u2500 Profiles \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-profiles:
-
-  # \u2500\u2500 Local: LM Studio with Qwen 3.5 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  local-lmstudio-qwen35:
-    mode: local
-    api: lmstudio-local
-    model: "thecluster/qwen3.5-27b-mlx"
-    # url: "http://localhost:1234"       # (default from lmstudio-local preset)
-    # api_token: $LM_API_TOKEN           # (default from lmstudio-local preset)
-    # timeout: 300                        # (default from lmstudio-local preset)
-
-  # \u2500\u2500 Local: Ollama with Qwen 3 14B \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  local-ollama-qwen314:
-    mode: local
-    api: ollama-local
-    model: "qwen3:14b"
-    # url: "http://localhost:11434"       # (default from ollama-local preset)
-
-  # \u2500\u2500 Remote: Single model via OpenRouter \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  remote-single-geminiflash:
-    mode: remote
-    api: openrouter-remote
-    model: "google/gemini-2.5-flash"
-    api_key: $OPENROUTER_API_KEY          # set this env var, or replace with direct key
-
-  # \u2500\u2500 Remote: Ensemble (three models in parallel) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  remote-ensemble-geminigrok:
-    mode: remote-ensemble
-    api: openrouter-remote
-    model: "google/gemini-2.5-flash"
-    second_model: "x-ai/grok-4.1-fast"
-    api_key: $OPENROUTER_API_KEY
-
-# \u2500\u2500 API Presets Reference \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-# Use with --api when creating profiles:
-#
-# LOCAL PRESETS (mode: local):
-#   lmstudio-local    LM Studio native API     http://localhost:1234   auth: $LM_API_TOKEN
-#   ollama-local      Ollama OpenAI-compat     http://localhost:11434  auth: (none)
-#   vllm-local        vLLM OpenAI-compat       http://localhost:8000   auth: $VLLM_API_KEY
-#   llamacpp-local    llama.cpp OpenAI-compat   http://localhost:8080   auth: (none)
-#   generic-local     Any OpenAI-compat        (url required)          auth: $LM_API_TOKEN
-#
-# REMOTE PRESETS (mode: remote / remote-ensemble):
-#   openrouter-remote  OpenRouter              https://openrouter.ai   auth: $OPENROUTER_API_KEY
-#
-# All local backends must support structured output (response_format: json_schema).
-#
-# \u2500\u2500 Modes Reference \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-#   local             Sequential requests to a local server
-#   remote            Parallel requests, single model via OpenRouter
-#   remote-ensemble   Parallel requests, three models, combined report
-#
-# \u2500\u2500 Auth Values \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-# Auth fields (api_key, api_token) accept either:
-#   $ENV_VAR_NAME     Resolved from process environment at runtime
-#   "direct-value"    Used as-is (no env lookup)
-`;
+// src/cli.ts
+init_config();
+init_usage_history();
 
 // src/safe-body.ts
 var MAX_RESPONSE_BYTES = Number(
@@ -21546,30 +21934,30 @@ function renderEndpointTable(ep, colors) {
 
 // src/cluster/cluster_synonyms_main.ts
 import {
-  mkdirSync as mkdirSync4,
-  readFileSync as readFileSync3,
-  readdirSync,
+  mkdirSync as mkdirSync5,
+  readFileSync as readFileSync4,
+  readdirSync as readdirSync2,
   writeFileSync as writeFileSync3,
   existsSync as existsSync3,
   renameSync
 } from "node:fs";
-import { join as join3 } from "node:path";
+import { join as join5 } from "node:path";
 
 // src/cluster/checkpoint.ts
 import Database from "better-sqlite3";
 import { dirname } from "node:path";
-import { mkdirSync as mkdirSync2 } from "node:fs";
+import { mkdirSync as mkdirSync3 } from "node:fs";
 
 // src/cluster/embeddings.ts
 import { spawnSync } from "node:child_process";
 import {
   existsSync as existsSync2,
-  mkdirSync as mkdirSync3,
-  readFileSync as readFileSync2,
+  mkdirSync as mkdirSync4,
+  readFileSync as readFileSync3,
   writeFileSync as writeFileSync2,
-  statSync
+  statSync as statSync2
 } from "node:fs";
-import { dirname as dirname2, join as join2 } from "node:path";
+import { dirname as dirname2, join as join4 } from "node:path";
 
 // src/cluster/jsonl.ts
 import { createReadStream, createWriteStream } from "node:fs";
@@ -22206,7 +22594,7 @@ __export(util_exports, {
   getSizableOrigin: () => getSizableOrigin,
   hexToUint8Array: () => hexToUint8Array,
   isObject: () => isObject,
-  isPlainObject: () => isPlainObject,
+  isPlainObject: () => isPlainObject2,
   issue: () => issue,
   joinValues: () => joinValues,
   jsonStringifyReplacer: () => jsonStringifyReplacer,
@@ -22390,7 +22778,7 @@ var allowsEval = cached(() => {
     return false;
   }
 });
-function isPlainObject(o) {
+function isPlainObject2(o) {
   if (isObject(o) === false)
     return false;
   const ctor = o.constructor;
@@ -22407,7 +22795,7 @@ function isPlainObject(o) {
   return true;
 }
 function shallowClone(o) {
-  if (isPlainObject(o))
+  if (isPlainObject2(o))
     return { ...o };
   if (Array.isArray(o))
     return [...o];
@@ -22600,7 +22988,7 @@ function omit(schema, mask) {
   return clone(schema, def);
 }
 function extend(schema, shape) {
-  if (!isPlainObject(shape)) {
+  if (!isPlainObject2(shape)) {
     throw new Error("Invalid input to extend: expected a plain object");
   }
   const checks = schema._zod.def.checks;
@@ -22623,7 +23011,7 @@ function extend(schema, shape) {
   return clone(schema, def);
 }
 function safeExtend(schema, shape) {
-  if (!isPlainObject(shape)) {
+  if (!isPlainObject2(shape)) {
     throw new Error("Invalid input to safeExtend: expected a plain object");
   }
   const def = mergeDefs(schema._zod.def, {
@@ -24898,7 +25286,7 @@ function mergeValues(a, b) {
   if (a instanceof Date && b instanceof Date && +a === +b) {
     return { valid: true, data: a };
   }
-  if (isPlainObject(a) && isPlainObject(b)) {
+  if (isPlainObject2(a) && isPlainObject2(b)) {
     const bKeys = Object.keys(b);
     const sharedKeys = Object.keys(a).filter((key) => bKeys.indexOf(key) !== -1);
     const newObj = { ...a, ...b };
@@ -25052,7 +25440,7 @@ var $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
   $ZodType.init(inst, def);
   inst._zod.parse = (payload, ctx) => {
     const input = payload.value;
-    if (!isPlainObject(input)) {
+    if (!isPlainObject2(input)) {
       payload.issues.push({
         expected: "record",
         code: "invalid_type",
@@ -41874,7 +42262,7 @@ var Protocol = class {
     };
   }
 };
-function isPlainObject2(value) {
+function isPlainObject3(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function mergeCapabilities(base, additional) {
@@ -41885,7 +42273,7 @@ function mergeCapabilities(base, additional) {
     if (addValue === void 0)
       continue;
     const baseValue = result[k];
-    if (isPlainObject2(baseValue) && isPlainObject2(addValue)) {
+    if (isPlainObject3(baseValue) && isPlainObject3(addValue)) {
       result[k] = { ...baseValue, ...addValue };
     } else {
       result[k] = addValue;
@@ -42874,7 +43262,7 @@ function isElectron() {
 
 // src/cli.ts
 import { writeFileSync as writeFileSync6, existsSync as existsSync6, statSync as statSync4, unlinkSync } from "node:fs";
-import { resolve as resolvePath, isAbsolute as isAbsolute4, join as join7, dirname as dirname5 } from "node:path";
+import { resolve as resolvePath, isAbsolute as isAbsolute4, join as join8, dirname as dirname5 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { spawnSync as spawnSync2 } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -42991,9 +43379,9 @@ var DEFAULT_SEARCH_TIMEOUT_MS = 4 * 60 * 60 * 1e3;
 function findServerScript() {
   const here = dirname5(fileURLToPath2(import.meta.url));
   const candidates = [
-    join7(here, "index.js"),
+    join8(here, "index.js"),
     // running from dist/
-    join7(here, "..", "dist", "index.js")
+    join8(here, "..", "dist", "index.js")
     // running from src/
   ];
   for (const c of candidates) {
@@ -43053,7 +43441,7 @@ function generateGitDiff(base, sourceFiles) {
       );
     }
   }
-  const outPath = join7(tmpdir(), `llm-ext-search-existing-diff-${Date.now()}.patch`);
+  const outPath = join8(tmpdir(), `llm-ext-search-existing-diff-${Date.now()}.patch`);
   const result = spawnSync2(
     "git",
     ["diff", `${base}...HEAD`, "--", ...sourceFiles],
@@ -43461,7 +43849,14 @@ async function main() {
       );
   }
 }
-main().catch((err3) => {
-  die(err3 instanceof Error ? err3.message : String(err3));
-});
+var cliArgv = process.argv.slice(2);
+withUsageContext(
+  {
+    tool: `cli:${cliArgv[0] ?? "(none)"}`,
+    params: summarizeParams(cliArgv.slice(1))
+  },
+  () => main().catch((err3) => {
+    die(err3 instanceof Error ? err3.message : String(err3));
+  })
+);
 //# sourceMappingURL=cli.js.map
