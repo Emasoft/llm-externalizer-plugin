@@ -29,6 +29,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import {
   DEFAULT_CONTEXT_LINES,
   GIT_REF_RE,
+  MAX_FILE_READ_BYTES,
   MAX_SNIPPET_BYTES,
   type SecurityScanTarget,
 } from "./types";
@@ -401,7 +402,12 @@ export function intake(
    * The skip reason reuses the `content … bytes > cap` prefix so it counts in the
    * items_skipped_too_big accounting, keeping that number honest for big files.
    */
-  const statTooBig = (id: string, category: string, abs: string): boolean => {
+  const statTooBig = (
+    id: string,
+    category: string,
+    abs: string,
+    cap: number = byteCap,
+  ): boolean => {
     let size: number;
     try {
       size = statSync(abs).size;
@@ -409,7 +415,7 @@ export function intake(
       // stat failed — let the readFileSync path surface the real read error.
       return false;
     }
-    if (size > byteCap) {
+    if (size > cap) {
       tooBig(id, category, abs, size);
       return true;
     }
@@ -454,8 +460,14 @@ export function intake(
       const abs = isAbsolute(t.file_path)
         ? t.file_path
         : resolve(root, t.file_path);
-      // F5: refuse over-cap files before reading them into memory.
-      if (statTooBig(t.id, t.category, abs)) continue;
+      // F5 + window-cap fix: refuse over-cap files before reading them into
+      // memory. For a WINDOW target (line set) the egress content is the
+      // extracted ±context window, NOT the whole file — so the whole-file gate
+      // must use the generous DoS read-guard, and the egress `byteCap` is then
+      // applied to the window by pushRedacted. For a WHOLE-FILE target the file
+      // itself is the egress content, so the egress cap applies up front.
+      const fileGate = typeof t.line === "number" ? MAX_FILE_READ_BYTES : byteCap;
+      if (statTooBig(t.id, t.category, abs, fileGate)) continue;
       let content: string;
       try {
         content = readFileSync(abs, "utf-8");

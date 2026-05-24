@@ -61,8 +61,19 @@ export interface SecurityScanTarget {
   path_glob?: string;
 }
 
-/** Default ± window when `line` is given without `context_lines` (TRDD §4). */
-export const DEFAULT_CONTEXT_LINES = 8;
+/**
+ * Default ± window when `line` is given without `context_lines`.
+ * Calibrated empirically (reports/security-scan-calibration/, 2026-05-24):
+ * verdict accuracy vs window is NON-MONOTONIC — cl=8 → 5.6% good, cl=20 → 0%
+ * (a dangerous partial-context "valley" with confident under-flags), cl=40 →
+ * 81%, cl=60/80/whole → 92% (cl=60 is the smallest fully-stable window). The
+ * cheap model rarely abstains (`uncertain`) when provenance is off-window — it
+ * GUESSES — so the mitigation is a window large enough to contain the data
+ * flow, NOT relying on abstention. 60 captures the enclosing function/scope for
+ * most code. Callers may LOWER it for surface-only checks (controls were
+ * window-insensitive) and MUST NOT use a partial value like 20.
+ */
+export const DEFAULT_CONTEXT_LINES = 60;
 
 // ── Tool input ───────────────────────────────────────────────────────────
 
@@ -186,6 +197,19 @@ export type ValidationResult = ValidationOk | ValidationErr;
 export const MAX_RUBRIC_LENGTH = 2000;
 export const MAX_SNIPPET_BYTES = 200_000;
 export const MAX_TARGETS = 5000;
+
+/**
+ * DoS read-guard for `file_path`+`line` WINDOW targets. The egress `byteCap`
+ * (the scout context cap, ~50KB) applies to the EXTRACTED WINDOW, not the whole
+ * file — so a window target into a large source file (e.g. a 400KB index.ts at
+ * line 3346, exactly CPV's use case) must NOT be skipped just because the file
+ * exceeds the egress cap. We still guard against reading a pathologically huge
+ * file into a JS string (the real DoS aegis-F5 warned about) with this generous
+ * ceiling, which comfortably covers every realistic source/bundle file while
+ * refusing multi-GB inputs. Whole-file and glob targets keep the egress cap
+ * (there the file IS the content sent to the model).
+ */
+export const MAX_FILE_READ_BYTES = 16_777_216; // 16 MiB
 
 /** Default OpenRouter model (matches mass_scouting's DEFAULT_MODEL). */
 export const DEFAULT_MODEL = "qwen/qwen-2.5-7b-instruct";

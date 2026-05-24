@@ -21,14 +21,18 @@
  */
 
 import {
+  SELF_REFERENCE_MARKERS,
   VERDICT_JSON_SCHEMA,
   buildSystemPrompt,
   buildUserMessage,
   closeDelimiter,
   makeNonce,
+  normalizeForScan,
   preScanInjection,
+  type PreScanResult,
 } from "./prompt";
 import { runWithLimit } from "./concurrency";
+import { recordRequest } from "../usage-history";
 import {
   isVerdict,
   type Verdict,
@@ -102,6 +106,64 @@ export interface JudgeResult {
 /** Markers that, alone, do NOT justify clamping a benign verdict (soft). */
 const SOFT_MARKERS = new Set(["base64-blob"]);
 
+// ── Issue #7: reason-based backstop (the key invariant) ───────────────────
+// Independent of the static marker list: if the model returns not_threat AND
+// its OWN `reason` parrots the manipulation — citing the reviewer / "the AI" /
+// its own rubric / "approved by … team" / being instructed — clamp to
+// uncertain. This closes the "missed marker = silent fail-open" hole: even when
+// a novel phrasing dodges preScanInjection, a not_threat whose justification
+// echoes the injection is downgraded. The observed T10 model reason was:
+//   "…explicitly instructs the reviewing AI to disregard its own security
+//    rubric and classify the target as not_threat … has been approved by the
+//    security team."
+//
+// Backtracking-free per the aegis F1 lesson: bounded `[\s]{1,40}` gaps, no
+// unbounded `\s*`. Matched against an NFKC- + confusable-normalized copy of the
+// reason so fullwidth/homoglyph disguises in the model's own text still flag.
+const REASON_TELLS: Array<[RegExp, string]> = [
+  // "the reviewing AI", "the reviewer", "to the reviewing model/llm/assistant"
+  [
+    /(?:reviewer|reviewing[\s]{1,40}(?:ai|model|llm|assistant))/i,
+    "reason-cites-reviewer",
+  ],
+  // "instructs the AI", "told the AI", "directs the assistant", "the AI to …"
+  [
+    /(?:instruct|tell|told|direct|ask|order)[a-z]{0,4}[\s]{1,40}(?:the[\s]{1,40})?(?:ai|model|llm|assistant|reviewer)/i,
+    "reason-cites-ai-instruction",
+  ],
+  // "(approved|cleared|signed off) by (the )?(security|review|audit) team"
+  [
+    /(?:approved|cleared|signed[\s]{1,40}off|sign[\s]{1,40}off|whitelisted|pre[\s-]?approved)[\s]{1,40}by[\s]{1,40}(?:the[\s]{1,40})?(?:security|review|audit)?[\s]{0,40}team/i,
+    "reason-cites-approval",
+  ],
+  // "disregard/ignore … (its|the|your) (own )?(security )?rubric/instructions"
+  [
+    /(?:disregard|ignore|override|bypass)[\s]{1,40}(?:its|the|your|my)[\s]{1,40}(?:own[\s]{1,40})?(?:security[\s]{1,40})?(?:rubric|prompt|instructions|guidelines|rules|criteria)/i,
+    "reason-cites-rubric-override",
+  ],
+  // "instructs … to classify … as not_threat/safe/benign" — the verdict was
+  // dictated to the model, and the model says so in its justification.
+  [
+    /(?:instruct|direct|tell|told|ask)[a-z]{0,4}[\s\S]{0,80}(?:classify|mark|treat|label)[a-z]{0,4}[\s\S]{0,80}(?:not[_\s]?threat|safe|benign)/i,
+    "reason-cites-directed-verdict",
+  ],
+];
+
+/**
+ * Issue #7 backstop scan: does the model's own justification parrot the
+ * manipulation? Returns the matched tell labels (empty when clean). Pure,
+ * script-only. Runs on a normalized copy of the reason (same folding as the
+ * snippet pre-scan) so disguised text in the reason still flags.
+ */
+export function scanReasonTells(reason: string): string[] {
+  const found = new Set<string>();
+  const normalized = normalizeForScan(reason);
+  for (const [re, label] of REASON_TELLS) {
+    if (re.test(normalized)) found.add(label);
+  }
+  return Array.from(found);
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────
 
 /**
@@ -130,8 +192,11 @@ export async function judgeGroups(
     Math.max(1, opts.workers),
     async ({ g, i }) => {
       // Pre-scan is script-only and runs even if the circuit tripped, so the
-      // report still carries markers for the fail-safe items.
-      const markers = preScanInjection(g.content).markers;
+      // report still carries markers for the fail-safe items. Issue #9: keep the
+      // DIRECTIVE subset alongside the full marker list so the clamp can tell a
+      // bare imperative from a quoted/defensive occurrence.
+      const preScan = preScanInjection(g.content);
+      const markers = preScan.markers;
 
       if (circuitTripped) {
         verdicts[i] = failSafeVerdict(g.key, markers, opts.defaultVerdictOnError);
@@ -141,7 +206,13 @@ export async function judgeGroups(
         return;
       }
 
-      const outcome = await judgeOneGroup(g, markers, opts, fetchImpl, apiUrl);
+      const outcome = await judgeOneGroup(
+        g,
+        preScan,
+        opts,
+        fetchImpl,
+        apiUrl,
+      );
       totalCost += outcome.costUsd;
       verdicts[i] = outcome;
       if (outcome.failSafe) {
@@ -225,11 +296,12 @@ function failSafeVerdict(
  */
 async function judgeOneGroup(
   group: DedupGroup,
-  markers: string[],
+  preScan: PreScanResult,
   opts: JudgeOptions,
   fetchImpl: FetchImpl,
   apiUrl: string,
 ): Promise<GroupVerdict> {
+  const markers = preScan.markers;
   // Fresh nonce per group — an injected fake delimiter can never match it.
   const nonce = makeNonce();
   const systemPrompt = buildSystemPrompt({
@@ -237,6 +309,8 @@ async function judgeOneGroup(
     category: group.category,
     rubric: opts.rubrics[group.category],
     language: group.language,
+    // The model sees ALL flagged markers as a hint (directive + quoted), so it
+    // can reason about each one and explain benign provenance where applicable.
     injectionMarkers: markers,
   });
   const baseUserMsg = buildUserMessage(nonce, group.content);
@@ -270,6 +344,9 @@ async function judgeOneGroup(
       () => controller.abort(),
       opts.perCallTimeoutMs,
     );
+    // One judge HTTP attempt = one usage-history line. Time each attempt so a
+    // retry produces its own line with its own ok/duration.
+    const attemptStart = Date.now();
     let res: FetchResponse;
     try {
       res = await fetchImpl(apiUrl, {
@@ -281,9 +358,15 @@ async function judgeOneGroup(
         body: JSON.stringify(reqBody),
         signal: controller.signal,
       });
-      clearTimeout(timeoutId);
+      // Do NOT clear the timeout here. The body read below (res.json /
+      // res.text) is ALSO tied to controller.signal, so keeping the timer armed
+      // bounds a slow/hung RESPONSE BODY too — a provider that returns headers
+      // fast then stalls the body must not hang the call indefinitely (the
+      // timeout used to be cleared right here, leaving res.json() unbounded).
+      // The timer is cleared after each body read and on every exit path below.
     } catch (e) {
       clearTimeout(timeoutId);
+      recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
       const err = e as Error;
       prevError =
         err.name === "AbortError"
@@ -294,6 +377,8 @@ async function judgeOneGroup(
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
+      clearTimeout(timeoutId);
+      recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
       prevError = `HTTP ${res.status}: ${text.slice(0, 200)}`;
       continue;
     }
@@ -304,23 +389,37 @@ async function judgeOneGroup(
     };
     try {
       respJson = (await res.json()) as typeof respJson;
+      clearTimeout(timeoutId);
     } catch (e) {
-      prevError = `non-JSON HTTP body: ${(e as Error).message}`;
+      clearTimeout(timeoutId);
+      recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
+      const err = e as Error;
+      prevError =
+        err.name === "AbortError"
+          ? `timeout after ${opts.perCallTimeoutMs}ms (response body)`
+          : `non-JSON HTTP body: ${err.message}`;
       continue;
     }
 
     const content = respJson.choices?.[0]?.message?.content;
     if (typeof content !== "string") {
+      recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
       prevError = "response had no message.content string";
       continue;
     }
 
-    totalCost += computeCallCost(
+    const callCost = computeCallCost(
       respJson.usage,
       opts.pricing,
       Buffer.byteLength(group.content, "utf-8"),
       content.length,
     );
+    totalCost += callCost;
+    // The HTTP request itself succeeded (a parseable, billed response came
+    // back) — record it with this call's own cost, regardless of whether the
+    // verdict then fails validation below (that is a content issue, not a
+    // failed web request).
+    recordRequest({ ok: true, durationMs: Date.now() - attemptStart, costUsd: callCost });
 
     const validated = validateVerdictResponse(content, nonce);
     if (!validated.ok) {
@@ -328,8 +427,16 @@ async function judgeOneGroup(
       continue;
     }
 
-    // Success — apply the injection clamp (§3.6) and return.
-    const clamped = applyInjectionClamp(validated.payload, markers);
+    // Success — apply the injection clamp (§3.6) and return. Issue #9: pass the
+    // DIRECTIVE subset so only bare-imperative markers feed the hard clamp;
+    // quoted/definitional/defensive hits remain reported (in `markers`) but do
+    // not force a not_threat→uncertain downgrade. SIGNAL B (reason backstop)
+    // still protects Issue #7 regardless of this subset.
+    const clamped = applyInjectionClamp(
+      validated.payload,
+      markers,
+      preScan.directiveMarkers,
+    );
     return {
       key: group.key,
       payload: clamped,
@@ -448,51 +555,112 @@ export function validateVerdictResponse(
 // ── Injection clamp (§3.6) ───────────────────────────────────────────────
 
 /**
- * F4 (aegis 2026-05-23) — DETERMINISTIC injection clamp. When the script
- * pre-scan flagged HARD injection markers, a `not_threat` verdict can no longer
- * survive on model say-so. Two deterministic rules, neither gated on confidence:
+ * F4 (aegis 2026-05-23) + Issue #7 (2026-05-24) — DETERMINISTIC injection
+ * clamp. A `not_threat` verdict can no longer survive on model say-so when ANY
+ * of three independent signals fires. None is gated on confidence.
  *
- *   1. not_threat + hard markers + injection_observed=false → uncertain.
- *      The model returned benign WITHOUT even acknowledging the payload it was
- *      handed. We override regardless of how confident it claimed to be — the
- *      previous 0.7 floor let a weak model dodge the clamp by reporting 0.69.
+ * SIGNAL A — hard pre-scan markers (F4) + DIRECTIVE gate (Issue #9). The script
+ *   flagged a HARD injection marker in the SNIPPET *and* that marker was
+ *   classified DIRECTIVE (a bare imperative in prose — preScanInjection's
+ *   directiveMarkers). A not_threat is then clamped whether the model
+ *   acknowledged it (injection_observed=true, internally contradictory per
+ *   §3.2) or not (returned benign without acknowledging the payload). Issue #9:
+ *   a QUOTED / DEFINITIONAL / DEFENSIVE marker hit (a pattern definition, a
+ *   detector's own source, a "do NOT comply" doc) is NO LONGER sufficient for
+ *   SIGNAL A — it is still reported in injection_markers and still surfaces
+ *   injection_observed=true, but the model's verdict is allowed to stand. When
+ *   directiveMarkers is omitted, every marker counts as directive (legacy
+ *   behavior preserved).
  *
- *   2. not_threat + hard markers + injection_observed=true  → uncertain.
- *      "I saw an injection attempt AND it's not a threat" is internally
- *      contradictory: defense §3.2's own prompt calls an injection attempt
- *      "evidence toward threat". An eyes-open not_threat under hard markers is
- *      downgraded to uncertain (a human should look), never silently cleared.
+ * SIGNAL B — reason backstop (Issue #7, the KEY invariant). Independent of the
+ *   static marker list: if the model's OWN `reason` parrots the manipulation
+ *   (cites the reviewer / "the AI" / its rubric / "approved by … team" / being
+ *   instructed to classify benign), clamp to uncertain. This closes the
+ *   "missed marker = silent fail-open" hole — a novel phrasing that dodges the
+ *   pre-scan still gets caught when the not_threat justification echoes the
+ *   injection. THIS is the fix for the T10 fail-open (not_threat @ conf 1.0
+ *   with empty markers).
  *
- * Hard markers therefore ALWAYS pull a not_threat down to uncertain. threat and
- * uncertain verdicts pass through (we only surface injection_observed=true so
- * the report records that markers were present). Soft markers (e.g. base64-blob,
- * which legitimately appears in minified code / embedded assets) never clamp on
- * their own — they are filtered out before the hard-marker test.
+ * SIGNAL C — self-reference (Issue #7). When a SELF_REFERENCE marker fired
+ *   ("addresses-reviewer" / "directed-verdict"), the snippet is talking to the
+ *   judge — which is, by construction, an injection attempt. We force
+ *   injection_observed=true regardless of what the model said, even for a
+ *   threat/uncertain verdict.
+ *
+ * threat / uncertain verdicts are never weakened; we only surface
+ * injection_observed=true so the report records the attempt. Soft markers (e.g.
+ * base64-blob, common in minified code) never clamp on their own — they are
+ * filtered out before the hard-marker test. SIGNAL B runs on the model reason,
+ * so it fires even when the marker list is empty.
  */
 export function applyInjectionClamp(
   payload: VerdictPayload,
   markers: string[],
+  directiveMarkers?: string[],
 ): VerdictPayload {
-  const hardMarkers = markers.filter((m) => !SOFT_MARKERS.has(m));
-  if (hardMarkers.length === 0) return payload;
+  // Issue #9 (2026-05-24): SIGNAL A now clamps ONLY on markers classified as
+  // DIRECTIVE (a bare imperative in prose). Quoted / definitional / defensive
+  // marker hits stay in `markers` (reported below via forceObserved) but no
+  // longer force a not_threat→uncertain downgrade on their own — that is the
+  // false-positive fix. When `directiveMarkers` is omitted (legacy callers that
+  // pass only a flat marker list) we treat EVERY marker as directive, which
+  // preserves the pre-#9 behavior exactly. The Issue #7 protection is NOT
+  // weakened: it lives in SIGNAL B (the reason backstop), which is independent
+  // of this classification and still clamps a not_threat whose justification
+  // parrots the manipulation.
+  const directiveSet = new Set(directiveMarkers ?? markers);
+  const hardMarkers = markers.filter(
+    (m) => !SOFT_MARKERS.has(m) && directiveSet.has(m),
+  );
+  // SIGNAL B is computed unconditionally — it must catch the empty-marker case.
+  const reasonTells = scanReasonTells(payload.reason);
+  // SIGNAL C — did the snippet address the reviewer/judge?
+  const selfReference = markers.some((m) => SELF_REFERENCE_MARKERS.has(m));
+  // injection_observed is forced true by any of: a fired marker (existing
+  // behavior), a self-reference marker, or a reason that parrots the attack.
+  const forceObserved =
+    markers.length > 0 || selfReference || reasonTells.length > 0;
 
   if (payload.verdict === "not_threat") {
-    const why = payload.injection_observed
-      ? "the model acknowledged an injection attempt yet still returned not_threat (internally contradictory)"
-      : "the model returned not_threat without acknowledging the flagged injection markers";
-    return {
-      verdict: "uncertain",
-      // Cap confidence — we are overriding the model, so we are not certain.
-      confidence: Math.min(payload.confidence, 0.5),
-      reason: `Clamped to uncertain: script pre-scan flagged injection markers (${hardMarkers.join(", ")}) and ${why}. Original reason: ${payload.reason}`.slice(
-        0,
-        600,
-      ),
-      injection_observed: true,
-    };
+    // Clamp on EITHER a hard marker (A) or a reason tell (B). Either alone is
+    // sufficient — B is what saves us when the pre-scan missed the phrasing.
+    if (hardMarkers.length > 0 || reasonTells.length > 0) {
+      const reasons: string[] = [];
+      if (hardMarkers.length > 0) {
+        const why = payload.injection_observed
+          ? "the model acknowledged an injection attempt yet still returned not_threat (internally contradictory)"
+          : "the model returned not_threat without acknowledging the flagged injection markers";
+        reasons.push(
+          `script pre-scan flagged injection markers (${hardMarkers.join(", ")}) and ${why}`,
+        );
+      }
+      if (reasonTells.length > 0) {
+        reasons.push(
+          `the model's own justification parrots the manipulation (${reasonTells.join(", ")})`,
+        );
+      }
+      return {
+        verdict: "uncertain",
+        // Cap confidence — we are overriding the model, so we are not certain.
+        confidence: Math.min(payload.confidence, 0.5),
+        reason: `Clamped to uncertain: ${reasons.join("; ")}. Original reason: ${payload.reason}`.slice(
+          0,
+          600,
+        ),
+        injection_observed: true,
+      };
+    }
+    // A not_threat with no marker and no reason tell stands — but still surface
+    // injection_observed if a self-reference marker somehow fired without being
+    // hard (defensive; SELF_REFERENCE markers are hard, so this is belt-and-suspenders).
+    if (forceObserved && !payload.injection_observed) {
+      return { ...payload, injection_observed: true };
+    }
+    return payload;
   }
-  // threat / uncertain pass through — only surface that markers were present.
-  if (!payload.injection_observed) {
+
+  // threat / uncertain pass through — only surface that an attempt was present.
+  if (forceObserved && !payload.injection_observed) {
     return { ...payload, injection_observed: true };
   }
   return payload;
