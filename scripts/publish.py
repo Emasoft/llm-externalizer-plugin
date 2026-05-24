@@ -385,6 +385,135 @@ def run_checks(repo_root: Path) -> bool:
     return True
 
 
+# ── CPV skillaudit-advisory bootstrap (upstream bug Emasoft/claude-plugins-validation#41) ──
+#
+# CPV's native skillaudit scanner emits KNOWN false positives that flag this
+# plugin's own benign pattern-source files (scanner test fixtures, rule
+# catalogs, security-scan helper strings) as CRITICAL/MAJOR. Issue #41 tracks
+# the upstream fix. Until it lands, a publish can OPT IN — via plugin.json's
+# `cpv.skillaudit_advisory: true` — to DOWNGRADE skillaudit-tagged
+# CRITICAL/MAJOR findings to advisory (printed, never hidden) so they no
+# longer block the release.
+#
+# This NEVER weakens the gate for a real finding: ANY non-skillaudit
+# CRITICAL/MAJOR still fails the publish, and with the opt-in absent the gate
+# behaves EXACTLY as before (strict, returncode-based).
+#
+# The skillaudit tag is identified from CPV's JSON `results[].message`, which
+# the native scanner prefixes with `[skillaudit:<category> <rule_id>]`
+# (validate_plugin.py:2355, cpv_skillaudit_native.py:2497). CPV's --json
+# emitter exposes only level/message/file/line per finding — there is no
+# separate rule/category field — so classification keys off the message tag.
+
+# Severities that block a publish (CPV exits non-zero on either).
+_CPV_BLOCKING_LEVELS = frozenset({"CRITICAL", "MAJOR"})
+
+
+def _is_skillaudit_finding(message: str) -> bool:
+    """True if a CPV finding message carries the skillaudit threat tag.
+
+    The native skillaudit scanner prefixes every finding's message with
+    ``[skillaudit:<category> <rule_id>]``. We match on the substring
+    ``skillaudit`` (case-insensitive) so a future tag-format tweak that
+    keeps the word still classifies correctly. Matching is deliberately
+    broad-but-anchored to the literal threat-domain token: a non-skillaudit
+    finding never contains it.
+    """
+    return "skillaudit" in (message or "").lower()
+
+
+def _extract_cpv_json(raw: str) -> str | None:
+    """Extract the trailing top-level JSON object from cpv-remote-validate --json.
+
+    The wrapper prints a human-readable lint preamble FIRST (a banner +
+    per-language file counts), then the JSON object, whose opening ``{`` sits
+    at column 0 on its own line. So ``json.loads(raw)`` fails on the preamble
+    ("Expecting value: line 2"). We slice from the first line-anchored ``{``
+    to EOF. Returns None when no line-anchored ``{`` exists, so the caller
+    falls back to the strict gate (never fail-open).
+    """
+    match = re.search(r"(?m)^\{", raw)
+    return raw[match.start() :] if match else None
+
+
+def classify_cpv_findings(
+    json_text: str, *, skillaudit_advisory: bool
+) -> tuple[bool, list[dict], list[dict]]:
+    """Pure parse/classify of CPV --json output. No I/O, no subprocess.
+
+    Returns ``(parse_ok, advisory, blocking)``:
+      * ``parse_ok``   — False if the JSON could not be parsed into the
+                         expected shape. The caller MUST then fall back to
+                         the strict returncode-based decision (fail-closed,
+                         never fail-open).
+      * ``advisory``   — skillaudit-tagged CRITICAL/MAJOR findings that the
+                         opt-in downgrades to advisory. Only populated when
+                         ``skillaudit_advisory`` is True; ALWAYS printed by
+                         the caller (never hidden).
+      * ``blocking``   — CRITICAL/MAJOR findings that still fail the publish.
+                         When the opt-in is False this is every CRITICAL/MAJOR
+                         (identical to today's behavior). When the opt-in is
+                         True it is every NON-skillaudit CRITICAL/MAJOR.
+
+    The pass/fail decision is simply ``not blocking`` — the caller computes
+    it so this stays a pure classifier that is trivially unit-testable.
+    """
+    extracted = _extract_cpv_json(json_text)
+    if extracted is None:
+        # No line-anchored JSON object in the output → fall back to strict.
+        return False, [], []
+    try:
+        data = json.loads(extracted)
+        results = data["results"]
+    except (json.JSONDecodeError, TypeError, KeyError):
+        # Malformed / unexpected shape → signal the caller to fall back to
+        # the strict returncode path. We do NOT decide pass/fail here.
+        return False, [], []
+    if not isinstance(results, list):
+        return False, [], []
+
+    advisory: list[dict] = []
+    blocking: list[dict] = []
+    for finding in results:
+        # Defensive: a non-dict entry means the shape drifted — bail to
+        # the strict fallback rather than silently mis-classifying.
+        if not isinstance(finding, dict):
+            return False, [], []
+        if finding.get("level") not in _CPV_BLOCKING_LEVELS:
+            continue
+        if skillaudit_advisory and _is_skillaudit_finding(finding.get("message", "")):
+            advisory.append(finding)
+        else:
+            blocking.append(finding)
+
+    return True, advisory, blocking
+
+
+def _read_skillaudit_advisory_optin(repo_root: Path) -> bool:
+    """Read plugin.json's ``cpv.skillaudit_advisory`` opt-in (default False).
+
+    Mirrors how the canon opt-out reads plugin.json's ``cpv`` block. Any
+    read/parse error or a non-bool value resolves to False — the opt-in must
+    be EXPLICITLY true to have any effect, so the gate defaults to strict.
+    """
+    plugin_json = repo_root / ".claude-plugin" / "plugin.json"
+    try:
+        manifest = json.loads(plugin_json.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, FileNotFoundError, OSError):
+        return False
+    cpv = manifest.get("cpv")
+    if not isinstance(cpv, dict):
+        return False
+    return cpv.get("skillaudit_advisory") is True
+
+
+def _format_finding(finding: dict) -> str:
+    """One-line human render of a CPV finding dict (level/message/file/line)."""
+    file_info = f" ({finding['file']})" if finding.get("file") else ""
+    line_info = f":{finding['line']}" if finding.get("line") else ""
+    return f"[{finding.get('level')}] {finding.get('message', '')}{file_info}{line_info}"
+
+
 def run_cpv_validation(repo_root: Path) -> bool:
     """Run CPV remote validation. Fail if any CRITICAL or MAJOR issue found.
 
@@ -392,33 +521,90 @@ def run_cpv_validation(repo_root: Path) -> bool:
     Code plugins. It enforces strict structural rules on skills / agents /
     hooks / commands. Publish aborts if CPV returns a non-zero exit code,
     which it does when CRITICAL or MAJOR issues are present.
+
+    Skillaudit-advisory bootstrap (upstream bug #41): when plugin.json sets
+    ``cpv.skillaudit_advisory: true``, KNOWN-FP skillaudit-tagged
+    CRITICAL/MAJOR findings are downgraded to advisory (printed, not
+    blocking). Any non-skillaudit CRITICAL/MAJOR still fails, and with the
+    opt-in absent the gate is byte-for-byte the strict behavior it always was.
+    If --json parsing fails for ANY reason we fall back to the strict
+    returncode decision — never fail open.
     """
-    # uvx is verified by require_tools() — this is mandatory.
-    cpv_result = run(
-        [
-            "uvx",
-            "--from",
-            "git+https://github.com/Emasoft/claude-plugins-validation",
-            "--with",
-            "pyyaml",
-            "cpv-remote-validate",
-            "plugin",
-            str(repo_root),
-        ],
-        capture=True,
-        check=False,
-    )
+    base_cmd = [
+        "uvx",
+        "--from",
+        "git+https://github.com/Emasoft/claude-plugins-validation",
+        "--with",
+        "pyyaml",
+        "cpv-remote-validate",
+        "plugin",
+        str(repo_root),
+    ]
+
+    # Run 1 — human-readable text, always written to reports/cpv.log exactly
+    # as before (the on-disk audit artifact is unchanged).
+    cpv_result = run(base_cmd, capture=True, check=False)
     report = _reports_dir(repo_root) / "cpv.log"
     output = (cpv_result.stdout or "") + (cpv_result.stderr or "")
     report.write_text(output, encoding="utf-8")
-    if cpv_result.returncode != 0:
+
+    # Clean run (CPV exit 0) — nothing to classify, pass exactly as today.
+    if cpv_result.returncode == 0:
+        print("  OK: cpv")
+        return True
+
+    skillaudit_advisory = _read_skillaudit_advisory_optin(repo_root)
+
+    # Opt-in absent → STRICT, byte-for-byte the original behavior. We don't
+    # even spend a second CPV invocation; any non-zero exit fails.
+    if not skillaudit_advisory:
+        return _cpv_strict_fail(report, cpv_result)
+
+    # Opt-in present → Run 2 with --json so we can classify findings. cpv's
+    # `plugin` validator forwards unknown args, so --json reaches it.
+    json_result = run([*base_cmd, "--json"], capture=True, check=False)
+    parse_ok, advisory, blocking = classify_cpv_findings(
+        json_result.stdout or "", skillaudit_advisory=skillaudit_advisory
+    )
+
+    # JSON parse failed → fall back to strict returncode behavior. NEVER
+    # fail open: a malformed JSON must not let a real finding through.
+    if not parse_ok:
+        print(
+            "  WARNING: CPV --json output could not be parsed; "
+            "falling back to strict gate.",
+            file=sys.stderr,
+        )
+        return _cpv_strict_fail(report, cpv_result)
+
+    # Always surface advisory findings — never hidden.
+    if advisory:
+        print(
+            f"  ADVISORY (skillaudit FP, #41): {len(advisory)} skillaudit "
+            f"finding(s) downgraded to advisory via cpv.skillaudit_advisory opt-in:"
+        )
+        for finding in advisory:
+            print(f"    {_format_finding(finding)}")
+
+    # Any non-skillaudit CRITICAL/MAJOR remains → FAIL, exactly as today.
+    if blocking:
         print("ERROR: CPV validation failed — see", report, file=sys.stderr)
-        if cpv_result.stdout:
-            for line in cpv_result.stdout.strip().split("\n")[-40:]:
-                print(f"  {line}", file=sys.stderr)
+        for finding in blocking:
+            print(f"  {_format_finding(finding)}", file=sys.stderr)
         return False
-    print("  OK: cpv")
+
+    # Only skillaudit FPs remained, opt-in active → PASS.
+    print("  OK: cpv (only skillaudit FPs remained — advisory, see #41)")
     return True
+
+
+def _cpv_strict_fail(report: Path, cpv_result: subprocess.CompletedProcess) -> bool:
+    """Strict, original CPV failure path: print tail of output, return False."""
+    print("ERROR: CPV validation failed — see", report, file=sys.stderr)
+    if cpv_result.stdout:
+        for line in cpv_result.stdout.strip().split("\n")[-40:]:
+            print(f"  {line}", file=sys.stderr)
+    return False
 
 
 def main():

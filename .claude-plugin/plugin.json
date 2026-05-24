@@ -44,6 +44,7 @@
       ".github/workflows/notify-marketplace.yml",
       "cliff.toml",
       ".markdownlint.json"
-    ]
+    ],
+    "skillaudit_advisory": true
   }
 }
