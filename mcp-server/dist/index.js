@@ -51504,7 +51504,7 @@ function buildTools() {
   return [...allTools, ...MASS_SCOUT_TOOLS];
 }
 var mcpServer = new McpServer(
-  { name: "llm-externalizer", version: "9.13.0" },
+  { name: "llm-externalizer", version: "9.13.1" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {

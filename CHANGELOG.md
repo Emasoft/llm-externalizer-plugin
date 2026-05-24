@@ -1,6 +1,23 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.13.1] - 2026-05-24
+
+### Documentation
+
+- Docs(security_scan): document gemini-2.5-flash as recommended triage model (#9/#10)
+
+A 3-model triage-benchmark assessment (qwen + gemini-2.5-flash + grok-4.1-fast)
+shows gemini-2.5-flash PASSES at 0.909 with zero under-flags / zero critical
+under-flags over the full golden dataset, correctly handling the #9 (detection/
+defensive over-clamp) and #10 (static-literal + off-window provenance) edge cases
+that the cheap qwen default mishandles in the safe direction. The prompt/rubric
+fixes are validated (a capable model following the same prompt nails them); the
+residual is purely the cheapest model's capacity. Default stays qwen per the
+same-cost rule; gemini-2.5-flash documented as the opt-in higher-accuracy model.
+Corpus updated with the assessment data point.
+
+
 ## [9.13.0] - 2026-05-24
 
 ### Added
