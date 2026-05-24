@@ -1,6 +1,63 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.12.0] - 2026-05-24
+
+### Added
+
+- Feat: security-triage model benchmark + auto-selection gate (#96, TRDD-973a0265)
+
+A re-runnable model-qualification gate for the security_scan triage task:
+- golden dataset (33 curated snippet cases) + per-category rubrics + per-tool
+  SECURITY_TRIAGE_CRITERIA (structured-output + modest ctx, no reasoning/128K).
+- scorer: +1 correct / -1 under-flag / 0 else; PASS = zero critical
+  under-flags AND score >= 0.5; fail-safe (timeout/error) cases EXCLUDED, a
+  run with >15% errored is INCONCLUSIVE (never falsely fails a model).
+- runner reuses the real judgeGroups pipeline (same hardened prompt+schema).
+- selection: requirements + benchmark-pass + never-pricier-than-incumbent,
+  best-of-equivalent-cost.
+- 3 surfaces: MCP security_triage_benchmark, CLI llm-ext-benchmark
+  --security-triage, slash command. Per-model-per-day cache.
+Reference instance for the per-tool framework (TRDD-f45eeaa0).
+
+- Feat: global usage-history log — one line per LLM web request (TRDD-44256ba2)
+
+Flat, append-only ~/.llm-externalizer/history.log written by every MCP tool
+and the CLI. 7 fields: TIMESTAMP - PROJECT-DIR - TOOL(params) - SUCCESS|FAIL
+- DURATION - COST - OP-ID. Best-effort (never breaks a call), secrets
+redacted, op-id correlates a single invocation's requests. No query surface.
+
+
+### Changed
+
+- Build: regenerate mcp-server dist bundle for v9.12.0
+
+
+### Documentation
+
+- Docs(trdd): mark security_scan + cluster_synonyms TRDDs completed (v9.11.0)
+
+Both features shipped in v9.11.0 — flip status in-progress→completed and
+log the release outcome (3 surfaces each, aegis-reviewed security_scan,
+issues #4/#6 closed).
+
+
+### Fixed
+
+- Fix(security_scan): harden #7/#8/#9/#10 + bound response-body read
+
+- #7: clamp reviewer-directed meta-instructions (markers + reason-backstop +
+  self-reference) — never not_threat@1.0.
+- #8: window targets use a generous read-guard; egress byteCap applies to the
+  extracted window, not the whole file.
+- #9: context-aware clamp (directive vs quoted/definitional/defensive markers).
+- #10: provenance/data-flow system prompt (static-literal vs tainted; uncertain
+  when origin off-window). DEFAULT_CONTEXT_LINES 8->60 (calibrated, #95).
+- slow-loris fix: keep the per-call abort timer armed through res.json()/
+  res.text() so a slow RESPONSE BODY can't hang the call (was unbounded once
+  headers resolved). Regression test added.
+
+
 ## [9.11.0] - 2026-05-24
 
 ### Added

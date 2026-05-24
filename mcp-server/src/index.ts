@@ -5493,7 +5493,7 @@ function buildTools() {
 // advertising 9.5.1 to clients while the plugin manifest reported 9.7.0 —
 // see commit history for the consolidation.)
 const mcpServer = new McpServer(
-  { name: "llm-externalizer", version: "9.11.0" },
+  { name: "llm-externalizer", version: "9.12.0" },
   { capabilities: { tools: { listChanged: true } } },
 );
 
