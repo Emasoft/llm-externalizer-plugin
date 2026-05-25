@@ -305,7 +305,7 @@ REPORTS_DIR="$MAIN_ROOT/reports/llm-externalizer"
 : > "$REJECTED"
 ```
 
-Then emit one `printf '%s\n' "<absolute-path>" >> "$EXTRACTED"` command per report path you parsed from the MCP response (or build the list inline with a heredoc). Exclude any line already containing `.fixer.`. Pass the same `$RUN_TS` through subsequent Bash steps so the filenames stay consistent (or capture them into your conversation state).
+Then emit one `printf '%s\n' "<absolute-path>" >> "$EXTRACTED"` command per report path you parsed from the MCP response (or build the list inline with a heredoc). Exclude any line whose name carries a fixer-sidecar tag — either `.fixer.` or `-fixer-` (both are canonical, matching `FIXER_MARKERS` in `fix_found_bugs_helper.py`). Pass the same `$RUN_TS` through subsequent Bash steps so the filenames stay consistent (or capture them into your conversation state).
 
 Abort with `[FAILED] llm-externalizer-scan-and-fix-serially — scan produced 0 reports` if `wc -l "$EXTRACTED"` shows zero.
 
@@ -350,7 +350,7 @@ eval "$H aggregate-reports \
 
 The aggregator handles per-file, ensemble (3 `## Response (Model: X)` sections per file), and merged report shapes transparently. Severity is assigned by keyword (security/crash/race/data-corruption → High; style/naming/readability/docstring → Low; everything else → Medium) — good enough to order the loop; the serial-fixer-agent re-classifies per finding.
 
-Do NOT pass `--skip-if-fixer-exists` here — the scan we just ran has no sibling `.fixer.` files (no parallel-fixer-agent was dispatched), so the flag is a no-op. Keep it out of the call to avoid misleading future readers.
+Do NOT pass `--skip-if-fixer-exists` here — the scan we just ran has no fixer-sidecar files (`.fixer.` or `-fixer-`; no parallel-fixer-agent was dispatched), so the flag is a no-op. Keep it out of the call to avoid misleading future readers.
 
 If the aggregator writes a file with 0 `### ` entries, stop with `Nothing to do — scan produced reports but no aggregatable findings.` and jump to Step 7.
 

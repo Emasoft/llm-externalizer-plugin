@@ -1,9 +1,9 @@
 ---
 trdd-id: 6e859d3c-3116-4169-90da-a24c1b747e96
 title: Part-D script-bug remediation — honor each helper's own contract, with TDD
-status: in-progress
+status: completed
 created: 2026-05-25T09:53:56+0200
-updated: 2026-05-25T09:53:56+0200
+updated: 2026-05-25T10:02:36+0200
 ---
 
 # TRDD-6e859d3c — Part-D script-bug remediation (honor-contract + TDD)
@@ -59,6 +59,30 @@ clean. Then ONE commit per logical item (or a single batch commit with a detaile
 changelog listing D1–D6) so any item is independently revertable. Update any
 docstring/usage text the fixes touch; update README/help only if a user-facing
 contract changed (none expected — these are internal helpers).
+
+## Outcome — DONE (2026-05-25)
+
+All six items fixed via parallel spark agents (each verified its own defect on
+real ground, wrote a failing test first, applied the minimal contract-honoring
+fix). Commits: f64b342 (D1), d514220 (D2), dc56d71 (D3), 4678a8a (D4), 52563d0
+(D5), 5512072 (D6) — one per item for independent revert.
+
+- Python suite: 81 → **126 tests, all green** (+45 new). `uv run ruff check
+  scripts/ tests/` clean (the project's E/F/W/I lint gate). TS untouched
+  (only `.py` changed) so the 883 vitest gate is unaffected.
+- Pyright "could not resolve pytest / unused-stub-arg" diagnostics are
+  venv-resolution noise / pre-existing line-shifted NITs — NOT flagged by ruff.
+- D1 chose exit-2 (print+SystemExit(2)) over downgrading the docstring, to
+  honor the documented exit-2 safety-guard contract and stay distinct from the
+  exit-1 arg guards + match argparse's own exit-2.
+- D5: `-fixer-` IS canonical (already in `SIDECAR_MARKERS`); the bug was two
+  sources of truth (skip-filter hardcoded `.fixer.` only). Unified via the new
+  `FIXER_MARKERS` subset.
+- Docs updated for the changed contracts: `commands/llm-externalizer-fix-found-bugs.md`
+  (skip-filter now both fixer shapes), `commands/llm-externalizer-scan-and-fix-serially.md`
+  (×2 fixer-tag refs), `agents/llm-externalizer-setup-agent.md` (reserved-name
+  rejection + exit codes). README/CHANGELOG need no change (build-snippet is
+  referenced only generically; CHANGELOG is git-cliff-generated).
 
 ## Out of scope (tracked elsewhere)
 

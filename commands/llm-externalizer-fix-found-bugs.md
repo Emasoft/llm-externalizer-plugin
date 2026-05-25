@@ -65,7 +65,7 @@ Example: `20260418T153045+0200.fix-found-bugs.summary.md`.
 
 Parse `$ARGUMENTS` into:
 
-- **(empty)** — default mode. Aggregate every report in `$MAIN_ROOT/reports/llm-externalizer/` and fix every finding. Skip reports that have a `.fixer.` sibling (those were already processed by `llm-externalizer-scan-and-fix`).
+- **(empty)** — default mode. Aggregate every report in `$MAIN_ROOT/reports/llm-externalizer/` and fix every finding. Skip reports that have a fixer-sidecar sibling — either the `.fixer.` or the `-fixer-` shape (both are canonical fixer tags; those reports were already processed by `llm-externalizer-scan-and-fix`).
 - **`@path/to/merged-report.md`** or **`path/to/merged-report.md`** — scoped mode. Aggregate ONLY this file's findings (must be a merged `answer_mode=2` report). All other reports in the directory are ignored.
 
 Abort with `[FAILED] llm-externalizer-fix-found-bugs — <one-line reason>` on any validation failure.
