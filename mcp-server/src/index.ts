@@ -2954,6 +2954,17 @@ async function chatCompletionSimple(
       // non-OpenRouter backends and for models with unknown metadata.
       body = filterBodyForSupportedParams(body, supportedParams, conn.model);
 
+      // Cost/observability audit: when LLM_EXT_DUMP_REQUESTS points at a file,
+      // append the exact wire payload (model + byte size + body) so a request can
+      // be inspected for unexpected prompt/file inflation. Off unless set.
+      if (process.env.LLM_EXT_DUMP_REQUESTS) {
+        const wire = JSON.stringify(body);
+        appendFileSync(
+          process.env.LLM_EXT_DUMP_REQUESTS,
+          `\n==== ${new Date().toISOString()} model=${conn.model} bytes=${wire.length} ====\n${wire}\n`,
+        );
+      }
+
       const res = await fetchWithRetry429(
         conn.url,
         {
@@ -3169,6 +3180,15 @@ async function chatCompletionJSON(
       // Filter to only fields this model supports (Nemotron drops
       // frequency_penalty etc., other models may drop reasoning).
       body = filterBodyForSupportedParams(body, supportedParams, conn.model);
+
+      // Cost/observability audit (see chatCompletionSimple) — structured-output path.
+      if (process.env.LLM_EXT_DUMP_REQUESTS) {
+        const wire = JSON.stringify(body);
+        appendFileSync(
+          process.env.LLM_EXT_DUMP_REQUESTS,
+          `\n==== ${new Date().toISOString()} model=${conn.model} bytes=${wire.length} (json) ====\n${wire}\n`,
+        );
+      }
 
       const res = await fetchWithRetry429(
         conn.url,

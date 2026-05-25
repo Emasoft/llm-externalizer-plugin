@@ -50733,6 +50733,16 @@ async function chatCompletionSimple(messages, options = {}) {
       if (reasoning) body.reasoning = reasoning;
       body = applyModelOverrides(body, conn.model);
       body = filterBodyForSupportedParams(body, supportedParams, conn.model);
+      if (process.env.LLM_EXT_DUMP_REQUESTS) {
+        const wire = JSON.stringify(body);
+        appendFileSync5(
+          process.env.LLM_EXT_DUMP_REQUESTS,
+          `
+==== ${(/* @__PURE__ */ new Date()).toISOString()} model=${conn.model} bytes=${wire.length} ====
+${wire}
+`
+        );
+      }
       const res = await fetchWithRetry429(
         conn.url,
         {
@@ -50862,6 +50872,16 @@ async function chatCompletionJSON(messages, options = {}) {
       if (reasoning) body.reasoning = reasoning;
       body = applyModelOverrides(body, conn.model);
       body = filterBodyForSupportedParams(body, supportedParams, conn.model);
+      if (process.env.LLM_EXT_DUMP_REQUESTS) {
+        const wire = JSON.stringify(body);
+        appendFileSync5(
+          process.env.LLM_EXT_DUMP_REQUESTS,
+          `
+==== ${(/* @__PURE__ */ new Date()).toISOString()} model=${conn.model} bytes=${wire.length} (json) ====
+${wire}
+`
+        );
+      }
       const res = await fetchWithRetry429(
         conn.url,
         {
