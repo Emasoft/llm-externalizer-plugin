@@ -77,6 +77,8 @@ export default defineConfig({
       'src/model-qualification/drift.test.ts',
       // New-model autodiscovery — catalog snapshot diff (TRDD-828238b5 A4).
       'src/model-qualification/new-arrivals.test.ts',
+      // Doc-consistency gate — README counts/names match the source (A5).
+      'src/doc-consistency.test.ts',
       'src/default-output-dir.test.ts',
       'src/cluster/phase2_verify.test.ts',
       'src/cluster/phase3_canonical.test.ts',

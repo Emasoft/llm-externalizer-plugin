@@ -3,7 +3,7 @@ trdd-id: 828238b5-42d7-478e-8fe7-44d74f812286
 title: Auto-* model management suite + deep-audit findings backlog
 status: in-progress
 created: 2026-05-24T22:56:20+0200
-updated: 2026-05-25T03:42:00+0200
+updated: 2026-05-25T03:49:00+0200
 ---
 
 # TRDD-828238b5 — Auto-* model management suite + deep-audit findings backlog
@@ -124,7 +124,7 @@ winners. CLI `--new-arrivals` + opt-in cron; report-only by default.
   reports candidates, A7 acts on them). Opt-in cron is a userland scheduling
   choice (the CLI `--new-arrivals` is the cron entry point), not shipped code.
 
-### A5 — [M] Doc/help/config regeneration gate (capability 7, PARTIAL)
+### A5 — [M] Doc/help/config regeneration gate (capability 7, PARTIAL) — DONE
 Single-source-of-truth generator: `registry.ts` (per-tool table) + `API_PRESETS`
 (config.ts:120, presets table) + `generateDefaultSettings` (config.ts:303,
 default model list) → splice into `<!-- BEGIN GENERATED: x -->…<!-- END -->`
@@ -133,6 +133,34 @@ rule file + command docs. Add `_gate_docs` to `publish.py --check` (fail CI if
 regeneration would change a tracked file). Ends the recurring doc-drift class
 this audit kept fixing. NOTE: `publish.py` already regenerates README badges
 (`update_readme_badges`) + CHANGELOG via git-cliff — extend that pattern.
+
+**What shipped (CHECK gate, not a templating regenerator — see decision):**
+- `doc-inventory.ts` — pure, side-effect-free EXTRACTORS that parse the
+  authoritative declarations straight from source as text (no server import,
+  because index.ts runs `main()` on import): core tool names (6-space-indent
+  `name:` regex on index.ts), mass-scout/model-qual tool names (4-space regex
+  on mcp-tools.ts), API-preset keys (config.ts), slash-command names
+  (commands/*.md frontmatter), agent names (agents/*.md).
+- `doc-consistency.test.ts` — asserts the README's hand-restated COUNTS
+  (`N MCP tools` ×2, `N plugin commands` + base/mass-scout/security split,
+  `N backend presets`, `N internal agents`, the core/utility + security/
+  model-qualification sub-counts) AND NAME LISTS (every tool backtick-wrapped,
+  every command present) match the extractors. 11 tests.
+
+**Decision: CHECK over GENERATE (documented, deliberate).**
+- The gate is a vitest test, so it runs inside `npm test`, which is ALREADY a
+  mandatory publish gate (`publish.py::run_checks` → `npm test`, line 324). No
+  `publish.py` edit, no new CI wiring — the "fail CI if docs drift" goal is met
+  for free. Add a tool/command and forget a README count → this test fails with
+  a clear message.
+- A full marker-splicing REGENERATOR was rejected: (a) the core tool list lives
+  inline in the 9.6k-line index.ts which runs `main()` on import (can't be
+  imported into a generator without a risky refactor); (b) rendering the README
+  PROSE lists exactly is brittle and a cosmetic mismatch would block publishes.
+  A check with a precise failure message is equally drift-proof and far safer —
+  same END (no drift ships) as the TRDD's gate, lower risk. Same judgment as A3.
+- NOT a fake test: it enforces a real invariant (docs match code) by parsing the
+  real source declarations, no mocks.
 
 ### A6 — [L] Per-tool tailored benchmarks (capability 4, PARTIAL)
 10 of 12 LLM tools have requirements (registry) but no benchmark dataset/scorer
