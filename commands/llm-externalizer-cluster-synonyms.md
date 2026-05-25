@@ -51,7 +51,7 @@ the loop itself.
 | `output_dir` | yes | Absolute output directory (created if missing). Receives `clusters.jsonl`, `clusters_summary.json`, `stats.json`, `checkpoint.sqlite`. |
 | `embeddings_file` | no | Absolute path to a precomputed float32 memmap (one row per item, dim D) with a sibling `.meta.json` `{shape:[N,D], dtype, model}`. If absent, the tool computes embeddings via the Python sidecar (sentence-transformers/all-MiniLM-L6-v2). |
 | `policy_file` | no | Absolute path to a JSON file of policy knobs (batch size, budget cap, thresholds, …). Defaults apply per field. Backend / model / ensemble are NOT policy knobs — they come from the active profile. |
-| `resume_from` | no | Absolute path to a prior `checkpoint.sqlite` from this tool. Resumes from where the previous run stopped (after a budget cap, abort, or any early termination). |
+| `resume_from` | no | Absolute path to a prior `checkpoint.sqlite` from this tool. Resumes from where the previous run stopped (after a budget cap, abort, or any early termination) — the prior union-find is rehydrated and completed batches are skipped. A path that does not exist is rejected with an error (the run fails fast rather than silently re-clustering from scratch over the output dir). |
 
 ## Output
 

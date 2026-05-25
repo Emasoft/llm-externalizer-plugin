@@ -1,9 +1,9 @@
 ---
 trdd-id: 66da2aa7-82b0-4c6f-8d77-53f62bb39405
 title: cluster_synonyms — honor resume_from (data-loss fix) + cache partition + stale-comment cleanup
-status: in-progress
+status: completed
 created: 2026-05-25T10:06:02+0200
-updated: 2026-05-25T10:06:02+0200
+updated: 2026-05-25T10:10:00+0200
 ---
 
 # TRDD-66da2aa7 — cluster_synonyms resume + perf
@@ -67,6 +67,15 @@ design/refactor items, deferred with verified facts.
   gap appears.
 - `npm run build` + full `npm test` (TS change → the 883-test suite must stay
   green); `tsc --noEmit` + eslint clean.
+
+## Outcome — DONE (2026-05-25, commit 8bee08a)
+
+B2 + B5 shipped together (one file, interdependent). B2 closes the data-loss
+footgun: `resume_from` now locates the checkpoint (load + continue), a missing
+path fails fast (no overwrite), and the stale "placeholders" comment is fixed.
+B5 computes `partition` once (byte-identical output). 3 new behavioral resume
+tests fill the gap `wiring.test.ts` left. Full suite 886 green; build + eslint +
+tsc clean. B1/B3/B4 remain deferred (below).
 
 ## Deferred (verified, NOT rushed — focused follow-up)
 
