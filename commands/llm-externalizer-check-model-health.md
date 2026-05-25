@@ -1,15 +1,13 @@
 ---
 name: llm-externalizer-check-model-health
 description: |-
-  Self-check the CONFIGURED model(s) of the active profile (TRDD-828238b5) —
-  free: makes NO LLM call (no token cost), only a public model-catalog fetch (no
-  API key). For the main / second / third model and every tool_models entry it
-  reports: (1) PRESENCE — is the id still in the OpenRouter catalog or
-  deprecated/removed; (2) COST DRIFT — has the price moved vs a seeded baseline;
-  (3) REQUIREMENTS REGRESSION — does it still meet the requirements of every tool
-  it serves. Advisory only — never changes settings (the server is read-only).
-  Trigger with "check model health", "is my model outdated", "did the price
-  change", "are my configured models still valid".
+  Self-check the configured model(s) of the active profile — free: NO LLM call,
+  only a public model-catalog fetch (no API key). For the main/second/third model
+  and every tool_models entry it reports PRESENCE (still in the OpenRouter catalog
+  vs deprecated/removed), COST DRIFT (price moved vs a seeded baseline), and
+  REQUIREMENTS REGRESSION (still meets every tool it serves). Advisory only —
+  never changes settings. Trigger with "check model health", "is my model
+  outdated", "did the price change", "are my configured models still valid".
 allowed-tools:
   - mcp__llm-externalizer__check_model_health
 argument-hint: ""

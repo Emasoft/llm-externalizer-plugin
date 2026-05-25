@@ -1,15 +1,14 @@
 ---
 name: llm-externalizer-security-triage-benchmark
 description: |-
-  Qualify OpenRouter model(s) for the security_scan triage task against a
-  labeled GOLDEN DATASET, scored through the REAL judge pipeline (the same
-  injection-hardened prompt + strict json_schema + clamp + fail-safe the tool
-  uses). Recommends the best SAME-OR-CHEAPER model that PASSES — zero under-flags
-  on the critical judge-manipulation + visible-taint cases AND an aggregate score
-  at or above the calibrated floor. A pricier model is NEVER auto-selected. Use
-  to re-qualify the security_scan model when models change, or to vet a specific
-  candidate. Trigger with "benchmark the triage model", "qualify a model for
-  security_scan", or "is model X good enough for security triage".
+  Qualify OpenRouter model(s) for the security_scan triage task against a labeled
+  GOLDEN DATASET, scored through the REAL judge pipeline (same injection-hardened
+  prompt, strict json_schema, clamp, fail-safe). Recommends the best
+  SAME-OR-CHEAPER model that PASSES — zero under-flags on the critical
+  judge-manipulation + visible-taint cases AND an aggregate at or above the
+  calibrated floor. A pricier model is NEVER auto-selected. Trigger with
+  "benchmark the triage model", "qualify a model for security_scan", or "is model
+  X good enough for security triage".
 allowed-tools:
   - mcp__llm-externalizer__security_triage_benchmark
 argument-hint: "[models=<id,[id...]>] [force] [output_dir=<abs path>]"

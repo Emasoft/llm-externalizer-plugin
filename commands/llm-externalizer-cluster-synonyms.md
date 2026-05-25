@@ -1,15 +1,14 @@
 ---
 name: llm-externalizer-cluster-synonyms
 description: |-
-  Cluster SENTENCES (or short labels treated as sentences) by full-sentence
-  meaning equivalence — file-in, file-out, ZERO orchestrator tokens. The whole
-  batch+verify+canonicalise loop runs inside the MCP server; you get back only
-  the output paths. NOT a word-level synonym lookup — the unit of comparison is
-  the full sentence/label. Built for taxonomy work, ontology cleanup, and label
-  canonicalisation over large term sets (10k–1M items). Resumable from a prior
-  checkpoint; budget-capped; backend-agnostic (uses the active profile's model).
-  Trigger with "cluster synonyms", "dedupe these labels by meaning", "canonicalise
-  this taxonomy", or "merge equivalent-meaning sentences".
+  Cluster SENTENCES (or short labels) by full-sentence meaning equivalence —
+  file-in, file-out, ZERO orchestrator tokens. The whole batch+verify+canonicalise
+  loop runs inside the MCP server; you get back only the output paths. NOT a
+  word-level synonym lookup — the unit of comparison is the full sentence/label.
+  Built for taxonomy work, ontology cleanup, and label canonicalisation over large
+  term sets (10k–1M items). Resumable, budget-capped, backend-agnostic. Trigger
+  with "cluster synonyms", "dedupe these labels by meaning", "canonicalise this
+  taxonomy", or "merge equivalent-meaning sentences".
 allowed-tools:
   - mcp__llm-externalizer__cluster_synonyms
 argument-hint: "input_file=<abs JSONL path> output_dir=<abs path> [embeddings_file=<path>] [policy_file=<path>] [resume_from=<checkpoint.sqlite>]"

@@ -2,7 +2,7 @@
   <img src="docs/banner.png" alt="LLM-Externalizer — Expand Your Reach" width="860">
 </p>
 
-<h1 align="center">llm-externalizer</h1>
+# llm-externalizer
 
 <!--BADGES-START-->
 <p align="center">
