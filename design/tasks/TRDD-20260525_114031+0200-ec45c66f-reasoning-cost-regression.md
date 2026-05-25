@@ -1,9 +1,9 @@
 ---
 trdd-id: ec45c66f-1ab9-4425-8515-8073dd8aa244
 title: Reasoning cost regression — cluster reasoning off, A3 cap revert, configurable effort
-status: in-progress
+status: completed
 created: 2026-05-25T11:40:31+0200
-updated: 2026-05-25T11:40:31+0200
+updated: 2026-05-25T11:47:13+0200
 ---
 
 # TRDD-ec45c66f — Reasoning cost regression remediation
@@ -111,6 +111,20 @@ TRDD-e82f2c49 (commit 31ce212).
   budget; security_scan path is UNCHANGED so no regression expected).
 - A6/A7.
 
-## Verification
-- tsc + eslint clean; full npm test green; manual code-read of the 4 call paths
-  (scout/judge clean; cluster off; ensemble high+32K).
+## Verification (done)
+- tsc + eslint clean; full `npm test` 895 passed / 4 skipped / 0 OpenRouter boots.
+- New offline tests: reasoning-ladder.test.ts (6) asserts default top rung is
+  "high" not "xhigh", per-call "off"⇒[null], medium/low/xhigh ladders;
+  ensemble-limits.test.ts updated to min-semantics (catalog clamped to calibrated
+  ceiling; the A3 65K-for-off-table-models case now clamps to 32K).
+- Manual code-read of the 4 call paths: scout (own fetch, no reasoning, clean);
+  judge/security_scan (own fetch, no reasoning, clean — calibration untouched);
+  cluster csRawLlmCall (reasoning:"off" + maxTokens:4096); ensemble/chat/code_task
+  (default effort "high" via reasoningLadderForModel, output clamped to 32K).
+- Docs: README env-var table + TESTING.md document LLM_EXT_REASONING_EFFORT.
+
+## Net effect on the per-call cost
+- Ensemble output ceiling: 65K → 32K (A3 reverted to min-semantics).
+- Ensemble reasoning effort: xhigh → high (configurable; dominant token saving).
+- cluster_synonyms: xhigh+65K → no-reasoning+4K (the egregious path the user named).
+- scout + security_scan: unchanged (already clean; security calibration preserved).

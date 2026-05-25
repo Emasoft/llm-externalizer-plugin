@@ -33,7 +33,9 @@ LIVE_TESTS=1 OPENROUTER_API_KEY=$KEY npx vitest run src/security_scan/security_s
 
 The live suites use your configured backend, so a 3-model ensemble with
 reasoning models will bill accordingly. Point your active profile at a cheap
-model before running them repeatedly.
+model before running them repeatedly, and/or set
+`LLM_EXT_REASONING_EFFORT=low` (or `off`) to cut the billed thinking-token
+cost — reasoning tokens dominate per-call spend on reasoning models.
 
 `CALIBRATE=1` similarly opts into the calibration suites under
 `src/mass_scouting/`.

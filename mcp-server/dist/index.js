@@ -48482,8 +48482,9 @@ var MIN_PLAUSIBLE_MAX_OUTPUT = 1024;
 function resolveEnsembleModelLimits(id, catalogMaxOutput, known = KNOWN_MODEL_LIMITS, fallback = DEFAULT_MODEL_LIMITS) {
   const knownEntry = known[id];
   const maxInputLines = knownEntry?.maxInputLines ?? fallback.maxInputLines;
+  const calibrated = knownEntry?.maxOutput ?? fallback.maxOutput;
   const liveMaxOutput = typeof catalogMaxOutput === "number" && Number.isFinite(catalogMaxOutput) && catalogMaxOutput >= MIN_PLAUSIBLE_MAX_OUTPUT ? Math.floor(catalogMaxOutput) : void 0;
-  const maxOutput = liveMaxOutput ?? knownEntry?.maxOutput ?? fallback.maxOutput;
+  const maxOutput = liveMaxOutput !== void 0 ? Math.min(liveMaxOutput, calibrated) : calibrated;
   return { maxOutput, maxInputLines };
 }
 
@@ -49899,12 +49900,20 @@ var SOFT_TIMEOUT_MS = (activeResolved?.timeout ?? 300) * 1e3;
 var FALLBACK_CONTEXT_LENGTH = activeResolved?.contextWindow || 1e5;
 var MODEL_CACHE_TTL_MS = 36e5;
 var MODEL_REASONING_CACHE = /* @__PURE__ */ new Map();
-function reasoningLadderForModel(modelId) {
+var VALID_REASONING_EFFORTS = ["off", "xhigh", "high", "medium", "low"];
+var DEFAULT_REASONING_EFFORT = (() => {
+  const raw = (process.env.LLM_EXT_REASONING_EFFORT ?? "high").toLowerCase();
+  return VALID_REASONING_EFFORTS.includes(raw) ? raw : "high";
+})();
+function reasoningLadderForModel(modelId, override) {
   if (!modelId) return [null];
+  const effort = override ?? DEFAULT_REASONING_EFFORT;
+  if (effort === "off") return [null];
   const cached2 = MODEL_REASONING_CACHE.get(modelId);
   if (cached2 === "none") return [null];
   if (cached2 === "high") return [{ effort: "high" }, null];
-  return [{ effort: "xhigh" }, { effort: "high" }, null];
+  if (effort === "xhigh") return [{ effort: "xhigh" }, { effort: "high" }, null];
+  return [{ effort }, null];
 }
 var MODEL_REQUEST_OVERRIDES = {
   // NVIDIA Nemotron 3 Super 120B (free tier). NVIDIA's documented
@@ -50019,9 +50028,9 @@ function recordReasoningRejection(modelId, failedReasoning) {
   if (effort === "xhigh") {
     MODEL_REASONING_CACHE.set(modelId, "high");
     appendModelEvent(modelId, "reasoning_downgrade", "xhigh\u2192high");
-  } else if (effort === "high") {
+  } else if (effort === "high" || effort === "medium" || effort === "low") {
     MODEL_REASONING_CACHE.set(modelId, "none");
-    appendModelEvent(modelId, "reasoning_downgrade", "high\u2192none");
+    appendModelEvent(modelId, "reasoning_downgrade", `${effort}\u2192none`);
   }
 }
 function isReasoningRejectionError(status, bodyText) {
@@ -50710,7 +50719,7 @@ async function chatCompletionSimple(messages, options = {}) {
     stream: false
   };
   if (conn.model) baseBody.model = conn.model;
-  const reasoningLadder = backend.type === "openrouter" ? reasoningLadderForModel(conn.model || "") : [null];
+  const reasoningLadder = backend.type === "openrouter" ? reasoningLadderForModel(conn.model || "", options.reasoning) : [null];
   const supportedParams = await getModelSupportedParams(conn.model || "");
   const startTime = Date.now();
   const heartbeat = options.onProgress ? setInterval(() => {
@@ -55552,7 +55561,8 @@ ${csResp.content}${csFooter}`
             const messages = [{ role: "user", content: prompt }];
             const resp = await chatCompletionWithRetry(messages, {
               temperature: 0.1,
-              maxTokens: 65535
+              maxTokens: 4096,
+              reasoning: "off"
             });
             if (resp.finishReason === "error") {
               throw new Error(`cluster_synonyms: LLM call failed: ${resp.content}`);
@@ -55707,6 +55717,7 @@ if (__isEntrypoint) {
 }
 export {
   _resetDefaultOutputDirCache,
-  _testDefaultOutputDir
+  _testDefaultOutputDir,
+  reasoningLadderForModel
 };
 //# sourceMappingURL=index.js.map

@@ -12,10 +12,18 @@ const KNOWN: Record<string, ModelLimits> = {
 };
 const FALLBACK: ModelLimits = { maxOutput: 32_000, maxInputLines: 30_000 };
 
-describe("resolveEnsembleModelLimits — maxOutput provenance (catalog-preferred)", () => {
-  it("prefers a valid live catalog maxOutput over the calibrated table value", () => {
+describe("resolveEnsembleModelLimits — maxOutput is a calibrated CEILING (catalog can only lower)", () => {
+  it("CLAMPS a high catalog maxOutput down to the calibrated table value", () => {
+    // Catalog 65_535 must NOT raise the budget above the table's 30_000 — a
+    // reasoning model would fill the extra budget with billed thinking tokens
+    // (TRDD-ec45c66f). The catalog can only LOWER, never raise.
     const r = resolveEnsembleModelLimits("vendor/known", 65_535, KNOWN, FALLBACK);
-    expect(r.maxOutput).toBe(65_535); // live wins over the table's 30_000
+    expect(r.maxOutput).toBe(30_000);
+  });
+
+  it("HONORS a catalog maxOutput below the calibrated value (provider tightened its cap)", () => {
+    const r = resolveEnsembleModelLimits("vendor/known", 8_000, KNOWN, FALLBACK);
+    expect(r.maxOutput).toBe(8_000); // min(8_000, 30_000)
   });
 
   it("falls back to the table maxOutput when the catalog value is absent (cold cache)", () => {
@@ -28,12 +36,19 @@ describe("resolveEnsembleModelLimits — maxOutput provenance (catalog-preferred
     expect(r.maxOutput).toBe(FALLBACK.maxOutput);
   });
 
-  it("uses live catalog maxOutput even for a model absent from the table", () => {
-    const r = resolveEnsembleModelLimits("vendor/unknown", 16_000, KNOWN, FALLBACK);
-    expect(r.maxOutput).toBe(16_000);
+  it("CLAMPS a high catalog to the default ceiling for a model absent from the table", () => {
+    // The A3 regression: deepseek/gpt-nano/gemini-flash-lite aren't in the table,
+    // so a 65K catalog used to DOUBLE their 32K default cap. Now clamped to 32K.
+    const r = resolveEnsembleModelLimits("vendor/unknown", 65_535, KNOWN, FALLBACK);
+    expect(r.maxOutput).toBe(FALLBACK.maxOutput); // 32_000, not 65_535
   });
 
-  it("floors a fractional catalog value", () => {
+  it("honors a catalog below the default ceiling for an off-table model", () => {
+    const r = resolveEnsembleModelLimits("vendor/unknown", 16_000, KNOWN, FALLBACK);
+    expect(r.maxOutput).toBe(16_000); // min(16_000, 32_000)
+  });
+
+  it("floors a fractional catalog value (still below the ceiling)", () => {
     const r = resolveEnsembleModelLimits("vendor/unknown", 8192.9, KNOWN, FALLBACK);
     expect(r.maxOutput).toBe(8192);
   });
@@ -94,9 +109,10 @@ describe("resolveEnsembleModelLimits — defaults wire to the real shipped table
     expect(r).toEqual(DEFAULT_MODEL_LIMITS);
   });
 
-  it("grok keeps its calibrated 20K input-line cap even with a huge live output cap", () => {
+  it("grok keeps its calibrated 20K input-line cap AND clamps a huge live output cap to its 30K ceiling", () => {
     const r = resolveEnsembleModelLimits("x-ai/grok-4.1-fast", 200_000);
     expect(r.maxInputLines).toBe(20_000);
-    expect(r.maxOutput).toBe(200_000);
+    // Catalog 200K is clamped to grok's calibrated 30K maxOutput (was 200K pre-fix).
+    expect(r.maxOutput).toBe(KNOWN_MODEL_LIMITS["x-ai/grok-4.1-fast"].maxOutput);
   });
 });

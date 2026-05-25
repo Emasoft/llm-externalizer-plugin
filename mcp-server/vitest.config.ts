@@ -25,8 +25,10 @@ export default defineConfig({
       'src/usage-history.test.ts',
       // Durable model-health event ledger (TRDD-828238b5 A1).
       'src/model-events.test.ts',
-      // Ensemble per-model limits — catalog-preferred maxOutput resolver (A3).
+      // Ensemble per-model limits — calibrated-ceiling maxOutput resolver (A3 + ec45c66f).
       'src/ensemble-limits.test.ts',
+      // Reasoning-effort cost guard — default "high", per-call "off" opt-out (ec45c66f).
+      'src/reasoning-ladder.test.ts',
       'src/mass_scouting/fieldset.test.ts',
       'src/mass_scouting/shorthand.test.ts',
       'src/mass_scouting/registry.test.ts',

@@ -1391,16 +1391,32 @@ let SOFT_TIMEOUT_MS = (activeResolved?.timeout ?? 300) * 1000;
 let FALLBACK_CONTEXT_LENGTH = activeResolved?.contextWindow || 100000;
 const MODEL_CACHE_TTL_MS = 3600_000; // 1 hour TTL for OpenRouter model list cache
 
-// ── Reasoning effort cache ──────────────────────────────────────────
-// OpenRouter's chat/completions accepts a `reasoning: { effort, exclude }`
-// field. Not every model supports it, and some only support certain effort
-// levels. We try xhigh first, fall back to high, then drop reasoning
-// entirely. Results are cached per model ID so we only probe once per
-// session. `exclude: true` suppresses the reasoning trace from the response
-// — we get the benefit of deeper thinking without paying to stream the chain.
-// Values stored: "xhigh" (unprobed or confirmed xhigh), "high" (downgraded),
-// "none" (reasoning rejected or unsupported).
+// ── Reasoning effort cache + configurable default ───────────────────
+// OpenRouter's chat/completions accepts a `reasoning: { effort }` field. Not
+// every model supports it, and some only support certain effort levels. We
+// send DEFAULT_REASONING_EFFORT first, fall back to "high", then drop reasoning
+// entirely. Results are cached per model ID so we only probe once per session.
+//
+// COST NOTE (TRDD-ec45c66f): reasoning tokens are BILLED even though we discard
+// the trace (we only read message.content). A reasoning model spends its whole
+// budget thinking, so "xhigh" can be ~10x the per-call cost of no reasoning.
+// The default is therefore "high" (strong reasoning, ~half the xhigh spend),
+// overridable via LLM_EXT_REASONING_EFFORT = xhigh|high|medium|low|off.
+// Values stored in the cache: "xhigh"/"high" (confirmed-working level after a
+// downgrade) or "none" (reasoning rejected or unsupported).
 const MODEL_REASONING_CACHE = new Map<string, "xhigh" | "high" | "none">();
+
+// Default reasoning effort, from env (default "high"). "off" disables reasoning
+// on every call. Invalid values fall back to "high". Per-call callers may still
+// pass `reasoning: "off"` to opt a specific path out (e.g. cluster_synonyms).
+const VALID_REASONING_EFFORTS = ["off", "xhigh", "high", "medium", "low"] as const;
+type ReasoningEffortSetting = (typeof VALID_REASONING_EFFORTS)[number];
+const DEFAULT_REASONING_EFFORT: ReasoningEffortSetting = (() => {
+  const raw = (process.env.LLM_EXT_REASONING_EFFORT ?? "high").toLowerCase();
+  return (VALID_REASONING_EFFORTS as readonly string[]).includes(raw)
+    ? (raw as ReasoningEffortSetting)
+    : "high";
+})();
 
 // OpenRouter's `ChatRequestReasoning` schema (chat/completions) has
 // ONLY two properties: `effort` and `summary`. There is no `exclude`,
@@ -1410,14 +1426,24 @@ const MODEL_REASONING_CACHE = new Map<string, "xhigh" | "high" | "none">();
 // OpenRouter silently dropped. The reasoning trace comes back in
 // `message.reasoning` / `message.reasoning_details`, which we ignore;
 // we only read `message.content`.
-function reasoningLadderForModel(
+// `override` lets a specific call path opt out of (or down from) the global
+// default — e.g. cluster_synonyms passes "off" so canonicalisation never pays
+// for thinking tokens. When omitted, the env-configured DEFAULT_REASONING_EFFORT
+// applies.
+export function reasoningLadderForModel(
   modelId: string,
+  override?: ReasoningEffortSetting,
 ): Array<Record<string, unknown> | null> {
   if (!modelId) return [null];
+  const effort = override ?? DEFAULT_REASONING_EFFORT;
+  if (effort === "off") return [null];
   const cached = MODEL_REASONING_CACHE.get(modelId);
   if (cached === "none") return [null];
   if (cached === "high") return [{ effort: "high" }, null];
-  return [{ effort: "xhigh" }, { effort: "high" }, null];
+  // "xhigh" is the only level above "high", so keep a high fallback for it.
+  if (effort === "xhigh") return [{ effort: "xhigh" }, { effort: "high" }, null];
+  // high / medium / low: send the configured level, then drop to no reasoning.
+  return [{ effort }, null];
 }
 
 // ── Per-model request body overrides ────────────────────────────────
@@ -1612,11 +1638,14 @@ function recordReasoningRejection(
   if (!modelId || !failedReasoning) return;
   const effort = (failedReasoning as { effort?: string }).effort;
   if (effort === "xhigh") {
+    // xhigh has a "high" fallback rung — record the partial downgrade.
     MODEL_REASONING_CACHE.set(modelId, "high");
     appendModelEvent(modelId, "reasoning_downgrade", "xhigh→high");
-  } else if (effort === "high") {
+  } else if (effort === "high" || effort === "medium" || effort === "low") {
+    // Any of these rejected → this model can't take that effort; drop reasoning
+    // entirely so future calls skip the (free but wasteful) re-probe.
     MODEL_REASONING_CACHE.set(modelId, "none");
-    appendModelEvent(modelId, "reasoning_downgrade", "high→none");
+    appendModelEvent(modelId, "reasoning_downgrade", `${effort}→none`);
   }
 }
 
@@ -2682,7 +2711,9 @@ async function chatCompletionNative(
   options: {
     temperature?: number;
     maxTokens?: number;
-    reasoning?: "off" | "low" | "medium" | "high" | "on";
+    // Accepts the canonical ReasoningEffortSetting plus LM Studio's "on".
+    // In practice only "off" (cluster_synonyms) is ever passed here.
+    reasoning?: ReasoningEffortSetting | "on";
     integrations?: Array<Record<string, unknown>>;
     onProgress?: ProgressFn;
   } = {},
@@ -2858,6 +2889,9 @@ async function chatCompletionSimple(
     maxTokens?: number;
     model?: string;
     onProgress?: ProgressFn;
+    /** Per-call reasoning override. "off" disables reasoning for this call
+     *  regardless of the global default (e.g. cluster_synonyms). */
+    reasoning?: ReasoningEffortSetting;
   } = {},
 ): Promise<StreamingResult> {
   // T2.7 — snapshot once at top of this LLM call. resolveConnection() also
@@ -2881,11 +2915,12 @@ async function chatCompletionSimple(
   };
   if (conn.model) baseBody.model = conn.model;
 
-  // Reasoning ladder: OpenRouter backend tries xhigh → high → none.
+  // Reasoning ladder: OpenRouter backend uses the configured effort (default
+  // "high"), unless this call passes a per-call override (e.g. "off").
   // Other backends (ollama/vllm/llamacpp OpenAI-compat) get [null] — no reasoning field.
   const reasoningLadder =
     backend.type === "openrouter"
-      ? reasoningLadderForModel(conn.model || "")
+      ? reasoningLadderForModel(conn.model || "", options.reasoning)
       : [null];
 
   // Dynamically look up which request-body fields this model accepts.
@@ -3891,6 +3926,8 @@ async function chatCompletionWithRetry(
     maxTokens?: number;
     model?: string;
     onProgress?: ProgressFn;
+    /** Per-call reasoning override, forwarded to chatCompletionSimple. */
+    reasoning?: ReasoningEffortSetting;
   },
 ): Promise<StreamingResult> {
   // T2.7 — snapshot ONCE per retry-loop invocation. The fallback-model
@@ -9427,9 +9464,15 @@ async function dispatchCallToolInner(
         // model-fallback logic from the rest of the server.
         const csRawLlmCall: Phase1RawLlmCall = async (prompt) => {
           const messages: ChatMessage[] = [{ role: "user", content: prompt }];
+          // Cost guard (TRDD-ec45c66f): synonym clustering/canonicalisation is a
+          // small classification — the model emits a short JSON object, not prose.
+          // It must NEVER reason (reasoning tokens are billed and would dwarf the
+          // answer on a reasoning primary like deepseek-v4-pro) and never needs a
+          // 65K output budget. reasoning:"off" + a 4K cap keep each call cheap.
           const resp = await chatCompletionWithRetry(messages, {
             temperature: 0.1,
-            maxTokens: 65535,
+            maxTokens: 4096,
+            reasoning: "off",
           });
           if (resp.finishReason === "error") {
             throw new Error(`cluster_synonyms: LLM call failed: ${resp.content}`);

@@ -811,6 +811,7 @@ gates never bump a tool to a *pricier* model than its incumbent.
 | `LLM_EXT_CONFIG_DIR` | Settings + history-log directory (default `~/.llm-externalizer`) |
 | `LLM_OUTPUT_DIR` | Default report directory (overrides the per-call `output_dir` default) |
 | `LLM_EXT_INSTALL_RULE` | Set to `0` to opt out of auto-installing `rules/use-llm-externalizer.md` into `~/.claude/rules/` |
+| `LLM_EXT_REASONING_EFFORT` | Reasoning effort sent to OpenRouter reasoning models: `xhigh`\|`high`\|`medium`\|`low`\|`off` (default `high`). **Reasoning tokens are billed even though the trace is discarded** — `xhigh` can be ~10× the per-call cost of no reasoning, so the default is `high`. `off` disables reasoning on every call. `mass_scout` and `cluster_synonyms` never reason regardless of this setting. |
 
 > [!NOTE]
 > The **shell environment variable is the recommended way** to provide every key listed above. Both the MCP server and the statusline subprocess inherit it automatically, and the `llm-externalizer` CLI sees the same value with no extra plumbing. Profile-level `api_key` / `api_token` fields and the Claude Code keychain (`userConfig.openrouter_api_key`) are supported as fallbacks but only the MCP server sees them — the statusline's 🏦 panel stays blank, and ad-hoc CLI calls won't pick the key up. See [First run § A. OpenRouter](#first-run) for the full precedence list and the trade-offs.
