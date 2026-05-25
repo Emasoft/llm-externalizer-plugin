@@ -91,6 +91,9 @@ describe('listTools', () => {
       // assess_model — cross-tool requirements assessment (TRDD-f45eeaa0),
       // registered in the same array; offline, no LLM call.
       'assess_model',
+      // check_model_health — configured-model self-check (TRDD-828238b5 A2),
+      // registered in the same array; offline (catalog fetch only), no LLM call.
+      'check_model_health',
     ].sort();
 
     expect(toolNames).toEqual(expected);

@@ -218069,9 +218069,9 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 });
 
 // src/benchmark/index.ts
-import { mkdirSync as mkdirSync4, writeFileSync as writeFileSync4, existsSync as existsSync6 } from "node:fs";
+import { mkdirSync as mkdirSync5, writeFileSync as writeFileSync5, existsSync as existsSync6 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname2, join as join7 } from "node:path";
+import { dirname as dirname2, join as join8 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/usage-history.ts
@@ -218391,6 +218391,71 @@ function qualifyModelForTool(tool, model) {
 }
 
 // src/config.ts
+var API_PRESETS = {
+  // ── Local presets ─────────────────────────────────────────────────
+  "lmstudio-local": {
+    protocol: "lmstudio_api",
+    defaultUrl: "http://localhost:1234",
+    defaultAuthEnv: "$LM_API_TOKEN",
+    defaultTimeout: 300,
+    defaultAppName: "",
+    defaultHttpReferer: "",
+    defaultContextWindow: 0,
+    isLocal: true
+  },
+  "ollama-local": {
+    protocol: "openai_api",
+    defaultUrl: "http://localhost:11434",
+    defaultAuthEnv: "",
+    defaultTimeout: 300,
+    defaultAppName: "",
+    defaultHttpReferer: "",
+    defaultContextWindow: 0,
+    isLocal: true
+  },
+  "vllm-local": {
+    protocol: "openai_api",
+    defaultUrl: "http://localhost:8000",
+    defaultAuthEnv: "$VLLM_API_KEY",
+    defaultTimeout: 300,
+    defaultAppName: "",
+    defaultHttpReferer: "",
+    defaultContextWindow: 0,
+    isLocal: true
+  },
+  "llamacpp-local": {
+    protocol: "openai_api",
+    defaultUrl: "http://localhost:8080",
+    defaultAuthEnv: "",
+    defaultTimeout: 300,
+    defaultAppName: "",
+    defaultHttpReferer: "",
+    defaultContextWindow: 0,
+    isLocal: true
+  },
+  "generic-local": {
+    protocol: "openai_api",
+    defaultUrl: "",
+    defaultAuthEnv: "$LM_API_TOKEN",
+    defaultTimeout: 300,
+    defaultAppName: "",
+    defaultHttpReferer: "",
+    defaultContextWindow: 0,
+    isLocal: true
+  },
+  // ── Remote presets ────────────────────────────────────────────────
+  "openrouter-remote": {
+    protocol: "openrouter_api",
+    defaultUrl: "https://openrouter.ai/api",
+    defaultAuthEnv: "$OPENROUTER_API_KEY",
+    defaultTimeout: 600,
+    // 10 min — reasoning models (Qwen, etc.) need extended thinking time
+    defaultAppName: "llm-externalizer",
+    defaultHttpReferer: "",
+    defaultContextWindow: 0,
+    isLocal: false
+  }
+};
 function getConfigDir() {
   const raw = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
   function resolveDeepestExisting(p) {
@@ -218425,6 +218490,70 @@ function getConfigDir() {
     throw new Error(`Config directory '${dir}' is outside allowed paths (${home} or ${tmpCanonical})`);
   }
   return dir;
+}
+function getSettingsPath() {
+  return join(getConfigDir(), "settings.yaml");
+}
+var USER_CONFIG_ENV_MAP = {
+  OPENROUTER_API_KEY: "CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY"
+};
+function resolveEnvValue(value) {
+  if (!value) return "";
+  if (value.startsWith("$")) {
+    const name = value.slice(1).trim();
+    const userConfigVar = USER_CONFIG_ENV_MAP[name];
+    if (userConfigVar) {
+      const userConfigVal = process.env[userConfigVar];
+      if (userConfigVal && userConfigVal.length > 0) return userConfigVal;
+    }
+    return process.env[name] || "";
+  }
+  return value;
+}
+function loadSettings() {
+  const settingsPath = getSettingsPath();
+  try {
+    if (!existsSync(settingsPath)) return null;
+    const raw = readFileSync(settingsPath, "utf-8");
+    const parsed = JSON.parse(JSON.stringify((0, import_yaml.parse)(raw)));
+    if (!parsed || typeof parsed !== "object") return null;
+    return {
+      active: parsed.active || "",
+      profiles: parsed.profiles || {}
+    };
+  } catch (err) {
+    process.stderr.write(
+      `[llm-externalizer] Warning: Failed to read ${settingsPath}: ${err instanceof Error ? err.message : String(err)}
+`
+    );
+    return null;
+  }
+}
+function coerceToolModels(raw) {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  return { ...raw };
+}
+function resolveProfile(name, profile) {
+  const preset = API_PRESETS[profile.api];
+  if (!preset) {
+    throw new Error(`Unknown api preset '${profile.api}'`);
+  }
+  const rawAuth = preset.isLocal ? profile.api_token || profile.api_key || preset.defaultAuthEnv : profile.api_key || preset.defaultAuthEnv;
+  return {
+    name,
+    mode: profile.mode,
+    protocol: preset.protocol,
+    url: profile.url || preset.defaultUrl,
+    model: profile.model,
+    authToken: resolveEnvValue(rawAuth),
+    secondModel: profile.second_model || "",
+    thirdModel: profile.third_model || "",
+    toolModels: coerceToolModels(profile.tool_models),
+    timeout: profile.timeout ?? preset.defaultTimeout,
+    contextWindow: profile.context_window ?? preset.defaultContextWindow,
+    appName: profile.app_name ?? preset.defaultAppName,
+    httpReferer: profile.http_referer ?? preset.defaultHttpReferer
+  };
 }
 
 // src/security_scan/intake.ts
@@ -220652,6 +220781,260 @@ function renderAssessmentText(a) {
   return lines.join("\n");
 }
 
+// src/model-qualification/drift.ts
+import { mkdirSync as mkdirSync4, readFileSync as readFileSync7, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join7 } from "node:path";
+function perMillion(s) {
+  if (s == null) return null;
+  const n = parseFloat(s);
+  if (!Number.isFinite(n)) return null;
+  return n * 1e6;
+}
+function buildConfiguredModels(profile, allTools = registeredTools()) {
+  const byModel = /* @__PURE__ */ new Map();
+  const ensure = (model) => {
+    let c = byModel.get(model);
+    if (!c) {
+      c = { model, roles: [], servedTools: [] };
+      byModel.set(model, c);
+    }
+    return c;
+  };
+  const addServed = (c, tool) => {
+    if (!c.servedTools.includes(tool)) c.servedTools.push(tool);
+  };
+  const overriddenTools = new Set(Object.keys(profile.toolModels ?? {}));
+  const defaultTools = allTools.filter((t) => !overriddenTools.has(t));
+  for (const [slot, id] of [
+    ["model", profile.model],
+    ["second_model", profile.secondModel],
+    ["third_model", profile.thirdModel]
+  ]) {
+    if (!id) continue;
+    const c = ensure(id);
+    if (!c.roles.includes(slot)) c.roles.push(slot);
+    for (const t of defaultTools) addServed(c, t);
+  }
+  for (const [tool, id] of Object.entries(profile.toolModels ?? {})) {
+    if (!id) continue;
+    const c = ensure(id);
+    const role = `tool_models.${tool}`;
+    if (!c.roles.includes(role)) c.roles.push(role);
+    addServed(c, tool);
+  }
+  return [...byModel.values()];
+}
+function computeModelHealth(configured, catalog, baseline, opts = {}) {
+  const warnFraction = opts.costIncreaseWarnFraction ?? 0.05;
+  const byId = new Map(catalog.map((m) => [m.id, m]));
+  const updatedBaseline = { ...baseline };
+  const findings = [];
+  for (const cfg of configured) {
+    const live = byId.get(cfg.model);
+    const notes = [];
+    let severity = "ok";
+    if (!live) {
+      findings.push({
+        model: cfg.model,
+        roles: cfg.roles,
+        present: false,
+        baselineInputPerM: baseline[cfg.model]?.inputPerM ?? null,
+        currentInputPerM: null,
+        baselineOutputPerM: baseline[cfg.model]?.outputPerM ?? null,
+        currentOutputPerM: null,
+        costChanged: false,
+        requirementsRegressions: [],
+        severity: "critical",
+        notes: [
+          "NOT in the OpenRouter catalog \u2014 deprecated/removed. Calls will fail; pick a replacement."
+        ]
+      });
+      continue;
+    }
+    const curIn = perMillion(live.pricing?.prompt);
+    const curOut = perMillion(live.pricing?.completion);
+    const base = baseline[cfg.model];
+    let costChanged = false;
+    if (base && curIn != null && base.inputPerM > 0) {
+      const delta = (curIn - base.inputPerM) / base.inputPerM;
+      if (delta > warnFraction) {
+        costChanged = true;
+        severity = "warn";
+        notes.push(
+          `input price up ${(delta * 100).toFixed(1)}% ($${base.inputPerM.toFixed(3)}\u2192$${curIn.toFixed(3)}/M)`
+        );
+      } else if (delta < -warnFraction) {
+        notes.push(
+          `input price down ${(Math.abs(delta) * 100).toFixed(1)}% ($${base.inputPerM.toFixed(3)}\u2192$${curIn.toFixed(3)}/M)`
+        );
+      }
+    }
+    if (base && curOut != null && base.outputPerM > 0) {
+      const delta = (curOut - base.outputPerM) / base.outputPerM;
+      if (delta > warnFraction) {
+        costChanged = true;
+        severity = "warn";
+        notes.push(
+          `output price up ${(delta * 100).toFixed(1)}% ($${base.outputPerM.toFixed(3)}\u2192$${curOut.toFixed(3)}/M)`
+        );
+      } else if (delta < -warnFraction) {
+        notes.push(
+          `output price down ${(Math.abs(delta) * 100).toFixed(1)}% ($${base.outputPerM.toFixed(3)}\u2192$${curOut.toFixed(3)}/M)`
+        );
+      }
+    }
+    const regressions = [];
+    for (const tool of cfg.servedTools) {
+      const q = qualifyModelForTool(tool, live);
+      if (!q.meetsRequirements && q.disqualifyReason !== "unknown or non-LLM tool (no registry descriptor)") {
+        regressions.push({ tool, reason: q.disqualifyReason ?? "fails requirements" });
+      }
+    }
+    if (regressions.length > 0) {
+      severity = "warn";
+      notes.push(
+        `fails requirements for ${regressions.length} served tool(s): ${regressions.map((r) => r.tool).join(", ")}`
+      );
+    }
+    if (curIn != null && curOut != null) {
+      updatedBaseline[cfg.model] = {
+        inputPerM: curIn,
+        outputPerM: curOut,
+        capturedAt: base?.capturedAt ?? localIsoTimestamp()
+      };
+    }
+    findings.push({
+      model: cfg.model,
+      roles: cfg.roles,
+      present: true,
+      baselineInputPerM: base?.inputPerM ?? null,
+      currentInputPerM: curIn,
+      baselineOutputPerM: base?.outputPerM ?? null,
+      currentOutputPerM: curOut,
+      costChanged,
+      requirementsRegressions: regressions,
+      severity,
+      notes: notes.length ? notes : ["healthy"]
+    });
+  }
+  return { findings, updatedBaseline };
+}
+function getBaselinePath() {
+  return join7(getConfigDir(), "model-baseline.json");
+}
+function loadBaseline(path = getBaselinePath()) {
+  try {
+    const raw = readFileSync7(path, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed;
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}
+function saveBaseline(baseline, path = getBaselinePath()) {
+  try {
+    mkdirSync4(getConfigDir(), { recursive: true });
+    const tmp = `${path}.tmp.${process.pid}`;
+    writeFileSync4(tmp, JSON.stringify(baseline, null, 2));
+    renameSync2(tmp, path);
+  } catch {
+  }
+}
+async function checkModelHealth(profile, opts = {}) {
+  const fetchModels = opts.fetchModels ?? (() => fetchProgrammingModels());
+  const baselinePath = opts.baselinePath ?? getBaselinePath();
+  const persist = opts.persistBaseline !== false;
+  const configured = buildConfiguredModels(profile);
+  const catalog = await fetchModels();
+  const baselineBefore = loadBaseline(baselinePath);
+  const baselineSeeded = Object.keys(baselineBefore).length === 0;
+  const { findings, updatedBaseline } = computeModelHealth(configured, catalog, baselineBefore, {
+    costIncreaseWarnFraction: opts.costIncreaseWarnFraction
+  });
+  if (persist) saveBaseline(updatedBaseline, baselinePath);
+  const summary = { total: findings.length, ok: 0, warn: 0, critical: 0 };
+  for (const f of findings) summary[f.severity] += 1;
+  return {
+    generatedAt: localIsoTimestamp(),
+    profile: profile.name,
+    baselineSeeded,
+    findings,
+    summary
+  };
+}
+function resolveActiveProfile() {
+  const settings = loadSettings();
+  if (!settings) {
+    throw new Error(
+      "LLM Externalizer is not configured (no settings.yaml). Run the setup wizard or /llm-externalizer:llm-externalizer-configure."
+    );
+  }
+  const profile = settings.profiles[settings.active];
+  if (!profile) {
+    throw new Error(`Active profile '${settings.active}' not found in settings.yaml.`);
+  }
+  return resolveProfile(settings.active, profile);
+}
+function compactStamp(d = /* @__PURE__ */ new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  const off = -d.getTimezoneOffset();
+  const sign = off >= 0 ? "+" : "-";
+  const ab = Math.abs(off);
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}${sign}${pad(Math.floor(ab / 60))}${pad(ab % 60)}`;
+}
+function renderModelHealthMarkdown(report) {
+  const lines = [];
+  lines.push(`# Model health \u2014 profile \`${report.profile}\``);
+  lines.push("");
+  lines.push(`Generated: ${report.generatedAt}`);
+  if (report.baselineSeeded) {
+    lines.push("");
+    lines.push("> First run \u2014 seeded the price baseline; cost-drift detection starts next run.");
+  }
+  const { total, ok, warn, critical } = report.summary;
+  lines.push("");
+  lines.push(`**${total} configured model(s):** ${ok} ok \xB7 ${warn} warn \xB7 ${critical} critical`);
+  lines.push("");
+  lines.push("| Model | Roles | Status | Notes |");
+  lines.push("|-------|-------|--------|-------|");
+  for (const f of report.findings) {
+    const status = f.severity === "critical" ? "CRITICAL" : f.severity === "warn" ? "WARN" : "ok";
+    lines.push(
+      `| \`${f.model}\` | ${f.roles.join(", ")} | ${status} | ${f.notes.join("; ")} |`
+    );
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+async function runCheckModelHealth(opts = {}) {
+  const profile = opts.profile ?? resolveActiveProfile();
+  const report = await checkModelHealth(profile, opts);
+  const dir = opts.outputDir ?? join7(resolveProjectMainRoot(), "reports", "model-health");
+  mkdirSync4(dir, { recursive: true });
+  const reportPath = join7(dir, `${compactStamp()}-model-health-${profile.name}.md`);
+  writeFileSync4(reportPath, renderModelHealthMarkdown(report));
+  return { report, reportPath };
+}
+function renderModelHealthText(report) {
+  const lines = [];
+  lines.push(`Model health \u2014 profile '${report.profile}' \u2014 ${report.generatedAt}`);
+  if (report.baselineSeeded) {
+    lines.push("(first run \u2014 seeded the price baseline; cost-drift starts next run)");
+  }
+  const { total, ok, warn, critical } = report.summary;
+  lines.push(`${total} configured model(s): ${ok} ok, ${warn} warn, ${critical} critical`);
+  lines.push("");
+  for (const f of report.findings) {
+    const mark = f.severity === "critical" ? "\u2717" : f.severity === "warn" ? "!" : "\u2713";
+    lines.push(`${mark} ${f.model}  [${f.roles.join(", ")}]`);
+    for (const n of f.notes) lines.push(`    - ${n}`);
+  }
+  return lines.join("\n");
+}
+
 // src/benchmark/index.ts
 function parseArgs(argv) {
   const opts = {
@@ -220668,7 +221051,8 @@ function parseArgs(argv) {
     securityTriage: false,
     triageModels: [],
     force: false,
-    assessModel: null
+    assessModel: null,
+    checkHealth: false
   };
   const takeValue = (flag, i) => {
     const v = argv[i + 1];
@@ -220728,6 +221112,8 @@ function parseArgs(argv) {
     } else if (a === "--assess-model") {
       opts.assessModel = takeValue(a, i);
       i++;
+    } else if (a === "--check-health") {
+      opts.checkHealth = true;
     } else if (a === "--help" || a === "-h") {
       printHelp();
       process.exit(0);
@@ -220779,6 +221165,10 @@ function printHelp() {
       "  --force           Ignore the per-model-per-day cache and re-run.",
       "",
       "Cross-tool requirements assessment (free \u2014 no LLM call, no API key):",
+      "  --check-health    Self-check the CONFIGURED model(s) of the active profile",
+      "                    for catalog presence / cost drift / requirements",
+      "                    regression. Free (no LLM call). Writes a report under",
+      "                    reports/model-health/. No benchmark is run.",
       "  --assess-model ID Report which LLM tools model ID meets the per-tool",
       "                    REQUIREMENTS for (cost/context/output/params), and which",
       "                    of those tools ALSO need a benchmark pass before",
@@ -220816,12 +221206,12 @@ function resolveApiKey2() {
 function resolveFixturesDir() {
   const here = dirname2(fileURLToPath2(import.meta.url));
   const candidates = [
-    join7(here, "fixtures"),
-    join7(here, "..", "src", "benchmark", "fixtures"),
-    join7(here, "..", "..", "src", "benchmark", "fixtures")
+    join8(here, "fixtures"),
+    join8(here, "..", "src", "benchmark", "fixtures"),
+    join8(here, "..", "..", "src", "benchmark", "fixtures")
   ];
   for (const c of candidates) {
-    if (existsSync6(join7(c, "file-01.ts"))) return c;
+    if (existsSync6(join8(c, "file-01.ts"))) return c;
   }
   throw new Error(`Could not locate benchmark fixtures. Tried:
   ${candidates.join("\n  ")}`);
@@ -220837,11 +221227,14 @@ async function main() {
   if (opts.assessModel !== null) {
     return runAssessModelPhase(opts.assessModel);
   }
+  if (opts.checkHealth) {
+    return runCheckHealthPhase();
+  }
   if (opts.applyProfile !== null && opts.pickTopN === null) {
     throw new Error("--apply-profile requires --pick-top-n");
   }
   if (opts.fromCache) {
-    const cachePath2 = join7(homedir2(), ".llm-externalizer", "benchmark-results.json");
+    const cachePath2 = join8(homedir2(), ".llm-externalizer", "benchmark-results.json");
     const cache = loadCachedReport(cachePath2);
     console.error(`[benchmark] --from-cache: using ${cachePath2} (${cache.results.length} models, run at ${cache.timestamp}).`);
     if (opts.pickTopN === null) {
@@ -220918,17 +221311,17 @@ async function main() {
     results
   };
   const markdown = renderReport(reportInput);
-  mkdirSync4(dirname2(reportPath), { recursive: true });
-  writeFileSync4(reportPath, markdown, "utf-8");
+  mkdirSync5(dirname2(reportPath), { recursive: true });
+  writeFileSync5(reportPath, markdown, "utf-8");
   console.error(`[benchmark] Report: ${reportPath}`);
   const json = renderJson(reportInput);
-  const cacheJsonPath = join7(homedir2(), ".llm-externalizer", "benchmark-results.json");
-  mkdirSync4(dirname2(cacheJsonPath), { recursive: true });
-  writeFileSync4(cacheJsonPath, json, "utf-8");
+  const cacheJsonPath = join8(homedir2(), ".llm-externalizer", "benchmark-results.json");
+  mkdirSync5(dirname2(cacheJsonPath), { recursive: true });
+  writeFileSync5(cacheJsonPath, json, "utf-8");
   console.error(`[benchmark] JSON cache: ${cacheJsonPath}`);
   if (opts.jsonPath) {
-    mkdirSync4(dirname2(opts.jsonPath), { recursive: true });
-    writeFileSync4(opts.jsonPath, json, "utf-8");
+    mkdirSync5(dirname2(opts.jsonPath), { recursive: true });
+    writeFileSync5(opts.jsonPath, json, "utf-8");
     console.error(`[benchmark] JSON (user-path): ${opts.jsonPath}`);
   }
   const passers = [...results.values()].filter((r) => r.score?.pass).length;
@@ -220964,6 +221357,15 @@ async function runAssessModelPhase(modelId) {
   process.stdout.write(renderAssessmentText(assessment) + "\n");
   return 0;
 }
+async function runCheckHealthPhase() {
+  console.error(`[check-health] checking the active profile's configured model(s) \u2026`);
+  const { report, reportPath } = await runCheckModelHealth();
+  process.stdout.write(renderModelHealthText(report) + "\n");
+  process.stdout.write(`
+Report: ${reportPath}
+`);
+  return report.summary.critical > 0 ? 1 : 0;
+}
 function runPickPhase(results, opts) {
   const topN = opts.pickTopN;
   if (topN === null) return 0;
@@ -220986,7 +221388,7 @@ function runPickPhase(results, opts) {
   console.error("# settings.yaml block (paste under `profiles:`):");
   process.stdout.write(block);
   if (opts.applyProfile !== null) {
-    const settingsPath = join7(homedir2(), ".llm-externalizer", "settings.yaml");
+    const settingsPath = join8(homedir2(), ".llm-externalizer", "settings.yaml");
     try {
       const result = applyPicksToSettings(settingsPath, opts.applyProfile, picks);
       console.error("");
@@ -221015,7 +221417,7 @@ function buildReportPath() {
   const offsetAbs = Math.abs(offsetMin);
   const tz = `${offsetSign}${pad(Math.floor(offsetAbs / 60))}${pad(offsetAbs % 60)}`;
   const ts2 = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${tz}`;
-  return join7(root, "reports", "benchmark", `${ts2}-model-comparison.md`);
+  return join8(root, "reports", "benchmark", `${ts2}-model-comparison.md`);
 }
 withUsageContext(
   { tool: "cli:benchmark", params: "" },

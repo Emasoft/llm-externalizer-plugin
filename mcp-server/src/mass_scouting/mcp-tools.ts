@@ -20,6 +20,7 @@
 import { runMassScoutCli, type CliResult, type CliRunOptions } from "./cli";
 import { runSecurityTriageBenchmark } from "../benchmark/security-triage/index";
 import { assessModelById, renderAssessmentText } from "../model-qualification/assess";
+import { runCheckModelHealth, renderModelHealthText } from "../model-qualification/drift";
 
 // ── Public types (mirror the CLI flag set, MCP-flavoured) ─────────────
 
@@ -893,6 +894,24 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
       required: ["model"],
     },
   },
+  {
+    name: "check_model_health",
+    description:
+      "Self-check the CONFIGURED model(s) of the active profile (TRDD-828238b5) " +
+      "— FREE: makes NO LLM call (no token cost), only a public model-catalog " +
+      "fetch (no API key). For the main / second / third model and every " +
+      "tool_models entry it reports: (1) PRESENCE — is the id still in the " +
+      "OpenRouter catalog or deprecated/removed; (2) COST DRIFT — has the price " +
+      "moved vs a seeded baseline; (3) REQUIREMENTS REGRESSION — does it still " +
+      "meet the requirements of every tool it serves. ADVISORY only — writes a " +
+      "report and returns its path; never changes settings (the server is " +
+      "read-only). Takes no arguments.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      required: [],
+    },
+  },
 ];
 
 /** Set of MCP tool names provided by mass-scouting. Used by index.ts's dispatcher. */
@@ -1224,6 +1243,27 @@ export async function dispatchMassScoutTool(
         return {
           content: [{ type: "text", text: renderAssessmentText(assessment) }],
           isError: false,
+        };
+      } catch (e) {
+        return {
+          content: [{ type: "text", text: (e as Error).message }],
+          isError: true,
+        };
+      }
+    }
+    case "check_model_health": {
+      // Free configured-model self-check (TRDD-828238b5 A2): no LLM call / no
+      // token cost — one public catalog fetch + a JSON diff vs the seeded
+      // baseline. Resolves the active profile internally; writes a report and
+      // returns its path. Tests inject opts.modelCatalogFetch (network-free).
+      try {
+        const { report, reportPath } = await runCheckModelHealth(
+          opts.modelCatalogFetch ? { fetchModels: opts.modelCatalogFetch } : {},
+        );
+        const text = `${renderModelHealthText(report)}\n\nReport: ${reportPath}`;
+        return {
+          content: [{ type: "text", text }],
+          isError: report.summary.critical > 0,
         };
       } catch (e) {
         return {

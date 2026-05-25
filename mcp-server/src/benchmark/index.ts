@@ -44,6 +44,10 @@ import {
   assessModelById,
   renderAssessmentText,
 } from "../model-qualification/assess.js";
+import {
+  runCheckModelHealth,
+  renderModelHealthText,
+} from "../model-qualification/drift.js";
 import { resolveProjectMainRoot } from "../project-root.js";
 
 interface CliOptions {
@@ -76,6 +80,8 @@ interface CliOptions {
   force: boolean;
   /** Assess one model against EVERY tool's per-tool requirements (no LLM call). */
   assessModel: string | null;
+  /** Self-check the CONFIGURED model(s) for presence/cost-drift/regression (no LLM call). */
+  checkHealth: boolean;
 }
 
 function parseArgs(argv: readonly string[]): CliOptions {
@@ -94,6 +100,7 @@ function parseArgs(argv: readonly string[]): CliOptions {
     triageModels: [],
     force: false,
     assessModel: null,
+    checkHealth: false,
   };
   // Consume the value that must follow a value-taking flag. If the flag is the
   // last token, or the next token is itself a flag, fail fast — silently
@@ -157,6 +164,8 @@ function parseArgs(argv: readonly string[]): CliOptions {
     } else if (a === "--assess-model") {
       opts.assessModel = takeValue(a, i);
       i++;
+    } else if (a === "--check-health") {
+      opts.checkHealth = true;
     } else if (a === "--help" || a === "-h") {
       printHelp();
       process.exit(0);
@@ -209,6 +218,10 @@ function printHelp(): void {
       "  --force           Ignore the per-model-per-day cache and re-run.",
       "",
       "Cross-tool requirements assessment (free — no LLM call, no API key):",
+      "  --check-health    Self-check the CONFIGURED model(s) of the active profile",
+      "                    for catalog presence / cost drift / requirements",
+      "                    regression. Free (no LLM call). Writes a report under",
+      "                    reports/model-health/. No benchmark is run.",
       "  --assess-model ID Report which LLM tools model ID meets the per-tool",
       "                    REQUIREMENTS for (cost/context/output/params), and which",
       "                    of those tools ALSO need a benchmark pass before",
@@ -282,6 +295,12 @@ async function main(): Promise<number> {
   // LLM call / no token cost; only a public OpenRouter catalog fetch, no key).
   if (opts.assessModel !== null) {
     return runAssessModelPhase(opts.assessModel);
+  }
+
+  // --check-health routes to the configured-model self-check — free (no LLM
+  // call; only a public catalog fetch + a JSON diff vs the seeded baseline).
+  if (opts.checkHealth) {
+    return runCheckHealthPhase();
   }
 
   if (opts.applyProfile !== null && opts.pickTopN === null) {
@@ -463,6 +482,21 @@ async function runAssessModelPhase(modelId: string): Promise<number> {
   const assessment = await assessModelById(modelId);
   process.stdout.write(renderAssessmentText(assessment) + "\n");
   return 0;
+}
+
+/**
+ * --check-health: self-check the CONFIGURED model(s) of the active profile for
+ * catalog presence, cost drift, and requirements regression (TRDD-828238b5 A2).
+ * Free — no LLM call; one public catalog fetch + a JSON diff vs the seeded
+ * baseline. Writes a report under reports/model-health/ and prints a summary.
+ * Exit 1 when any configured model is critical (deprecated/removed).
+ */
+async function runCheckHealthPhase(): Promise<number> {
+  console.error(`[check-health] checking the active profile's configured model(s) …`);
+  const { report, reportPath } = await runCheckModelHealth();
+  process.stdout.write(renderModelHealthText(report) + "\n");
+  process.stdout.write(`\nReport: ${reportPath}\n`);
+  return report.summary.critical > 0 ? 1 : 0;
 }
 
 /** Shared by --from-cache and the post-benchmark --pick-top-n branch. */

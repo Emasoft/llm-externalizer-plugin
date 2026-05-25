@@ -105,6 +105,7 @@ are grouped into LLM requests. See [answer_mode](#answer_mode) below.
 | Tool | Purpose |
 |------|---------|
 | `assess_model` | Assess ONE OpenRouter model against EVERY LLM tool's per-tool REQUIREMENTS (cost / context / output / structured-output / reasoning). FREE — no LLM call, no token cost; just a public catalog fetch (no API key). Reports per-tool `OK`/`NO` + which qualifying tools also need a benchmark pass. CLI: `llm-ext-benchmark --assess-model <id>`. |
+| `check_model_health` | Self-check the CONFIGURED model(s) of the ACTIVE profile (main / second / third + every `tool_models` entry). FREE — no LLM call, no token cost; one public catalog fetch (no API key). Reports presence (removed/deprecated = CRITICAL), cost drift vs a seeded baseline at `~/.llm-externalizer/model-baseline.json` (WARN), and per-served-tool requirements regression (WARN). Advisory only — never writes settings. Writes a report to `reports/model-health/`. CLI: `llm-ext-benchmark --check-health`. |
 | `security_triage_benchmark` | Qualify model(s) for `security_scan` against a labeled golden dataset, scored via the REAL judge pipeline; recommends the best SAME-OR-CHEAPER passer (never a pricier model). Cached per-model-per-day. Env `$OPENROUTER_API_KEY`. CLI: `llm-ext-benchmark --security-triage [--model <id>]`. |
 
 ### Per-tool model selection (`tool_models`)

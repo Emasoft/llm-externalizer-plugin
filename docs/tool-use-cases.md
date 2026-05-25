@@ -26,6 +26,7 @@ your context.
 | Extract the same structured fields from MANY files / a corpus | `mass_scout` (+ family) |
 | Canonicalize / dedupe 10k–1M short labels by meaning | `cluster_synonyms` |
 | Will model X work for tool Y? / pick a per-tool model | `assess_model`, `security_triage_benchmark` |
+| Are my CONFIGURED models still valid? (removed? price up? lost a capability?) | `check_model_health` |
 | Is the backend healthy? what model/profile is active? | `discover` |
 | I edited settings.yaml — reload it | `reset` |
 
@@ -139,6 +140,19 @@ Checks ONE OpenRouter model against EVERY LLM tool's per-tool requirements
 `OK` / `NO` + which qualifying tools also need a benchmark pass. **Use when**
 deciding whether a model can back a given tool, or before adding it to
 `tool_models`.
+
+### `check_model_health`
+**Free** (no LLM call, no token cost — one public catalog fetch, no API key).
+The mirror image of `assess_model`: instead of vetting a *candidate*, it
+self-checks the model(s) your active profile is **already configured** to use
+(main / second / third + every `tool_models` entry). Reports presence (removed /
+deprecated = **CRITICAL**), cost drift vs a seeded baseline at
+`~/.llm-externalizer/model-baseline.json` (**WARN**), and per-served-tool
+requirements regression (**WARN**). Advisory only — never writes settings; emits
+a report to `reports/model-health/`. **Use when** you want a periodic "are my
+configured models still good?" check — caught a removed model, a price hike, or a
+capability the model lost. Acting on findings is user-only (edit settings.yaml +
+`reset`).
 
 ### `security_triage_benchmark`
 Qualifies model(s) for `security_scan` against a labeled golden dataset, scored

@@ -32,8 +32,8 @@ refactor, or getting a second opinion.
 - Per-tool params/behavior → each tool's own MCP description: `chat`, `code_task`,
   `scan_folder`, `compare_files`, `check_references`, `check_imports`, `check_against_specs`,
   `search_existing_implementations`, `security_scan`, `cluster_synonyms`, `assess_model`,
-  `security_triage_benchmark`, `discover`, `get_settings` (read-only), `or_model_info*`,
-  `reset`.
+  `check_model_health`, `security_triage_benchmark`, `discover`, `get_settings` (read-only),
+  `or_model_info*`, `reset`.
 - Profiles, auth, ensemble, and per-tool model routing (`tool_models`) → `discover` for live
   status; config is **user-only** (edit `~/.llm-externalizer/settings.yaml` by hand, then
   `reset`) — there is no `set_settings`/`change_model` tool.

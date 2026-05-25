@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -37,12 +37,15 @@ describe("MASS_SCOUT_TOOLS", () => {
      *  for the security_scan triage task; DB-free, in-process orchestrator).
      *  TRDD-f45eeaa0 added 1 (assess_model — cross-tool requirements assessment;
      *  DB-free, offline, in-process).
-     *  Total = 8 base + 5 + 2 + 1 + 1 + 1 + 1 = 19. */
-    expect(MASS_SCOUT_TOOLS.length).toBe(19);
+     *  TRDD-828238b5 A2 added 1 (check_model_health — configured-model self-check;
+     *  DB-free, offline catalog fetch, in-process).
+     *  Total = 8 base + 5 + 2 + 1 + 1 + 1 + 1 + 1 = 20. */
+    expect(MASS_SCOUT_TOOLS.length).toBe(20);
     const names = MASS_SCOUT_TOOLS.map((t) => t.name).sort();
     expect(names).toEqual(
       [
         "assess_model",
+        "check_model_health",
         "mass_scout",
         "mass_scout_audit_sample",
         "mass_scout_body_get",
@@ -84,6 +87,7 @@ describe("MASS_SCOUT_TOOLS", () => {
       "security_scan",
       "security_triage_benchmark",
       "assess_model",
+      "check_model_health",
     ]);
     for (const t of MASS_SCOUT_TOOLS) {
       if (NO_DB.has(t.name)) continue;
@@ -405,5 +409,74 @@ describe("dispatchMassScoutTool — assess_model (TRDD-f45eeaa0)", () => {
     );
     expect(res.isError).toBe(true);
     expect(res.content[0]!.text).toMatch(/not found in the OpenRouter catalog/);
+  });
+});
+
+describe("dispatchMassScoutTool — check_model_health (TRDD-828238b5 A2)", () => {
+  // Hermetic: a tmp config dir holds settings.yaml + the seeded baseline; the
+  // report writes under a tmp CLAUDE_PROJECT_DIR. The catalog is injected so the
+  // dispatch never touches the network.
+  const ORIG_CFG = process.env.LLM_EXT_CONFIG_DIR;
+  const ORIG_PROJ = process.env.CLAUDE_PROJECT_DIR;
+  let tmp: string;
+
+  const catalog: OpenRouterModel[] = [
+    {
+      id: "google/gemini-2.5-flash",
+      name: "Gemini 2.5 Flash",
+      context_length: 1_000_000,
+      top_provider: { max_completion_tokens: 64_000 },
+      supported_parameters: ["response_format", "reasoning"],
+      pricing: { prompt: "0.00000015", completion: "0.0000006" },
+    },
+  ];
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join("/tmp", "cmh-dispatch-"));
+    process.env.LLM_EXT_CONFIG_DIR = tmp;
+    process.env.CLAUDE_PROJECT_DIR = tmp;
+    writeFileSync(
+      join(tmp, "settings.yaml"),
+      [
+        "active: t",
+        "profiles:",
+        "  t:",
+        "    mode: remote",
+        "    api: openrouter-remote",
+        "    model: google/gemini-2.5-flash",
+        "    api_key: sk-test-literal",
+        "",
+      ].join("\n"),
+    );
+  });
+  afterEach(() => {
+    if (ORIG_CFG !== undefined) process.env.LLM_EXT_CONFIG_DIR = ORIG_CFG;
+    else delete process.env.LLM_EXT_CONFIG_DIR;
+    if (ORIG_PROJ !== undefined) process.env.CLAUDE_PROJECT_DIR = ORIG_PROJ;
+    else delete process.env.CLAUDE_PROJECT_DIR;
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("checks the active profile's model offline and returns a summary + report path", async () => {
+    const res = await dispatchMassScoutTool(
+      "check_model_health",
+      {},
+      { modelCatalogFetch: async () => catalog },
+    );
+    expect(res.isError).toBeFalsy();
+    const text = res.content[0]!.text;
+    expect(text).toContain("google/gemini-2.5-flash");
+    expect(text).toContain("Report:");
+    expect(text).toContain("reports/model-health");
+  });
+
+  it("flags isError + critical when the configured model is absent from the catalog", async () => {
+    const res = await dispatchMassScoutTool(
+      "check_model_health",
+      {},
+      { modelCatalogFetch: async () => [] },
+    );
+    expect(res.isError).toBe(true);
+    expect(res.content[0]!.text).toContain("deprecated/removed");
   });
 });
