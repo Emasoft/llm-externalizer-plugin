@@ -7,7 +7,13 @@
 
 import { describe, it, expect } from "vitest";
 import { resolveProfile, validateProfile, type Profile } from "./config";
-import { selectFreeEnsembleModels, FREE_FLOOR_MIN_CONTEXT_TOKENS } from "./index";
+import {
+  selectFreeEnsembleModels,
+  filterFreeModels,
+  isModelUnavailableError,
+  callEnsembleSlotWithRotation,
+  FREE_FLOOR_MIN_CONTEXT_TOKENS,
+} from "./index";
 import { failedModelsFromCache } from "./benchmark/security-triage/index";
 
 const FREE = [
@@ -195,5 +201,176 @@ describe("failedModelsFromCache — proven-failing extraction (Phase 2)", () => 
 
   it("an empty cache flags nothing", () => {
     expect(failedModelsFromCache({}).size).toBe(0);
+  });
+});
+
+// ── Phase 3 — rate-limit / daily-limit fallback rotation (TRDD-8b6b3646) ──────
+// Free providers ALL cap requests per-day, so a slot whose model is daily-limited
+// must rotate to the next unused free model rather than fail. All pure + offline.
+
+describe("filterFreeModels — full filtered list feeds the fallback pool (Phase 3)", () => {
+  const big = FREE_FLOOR_MIN_CONTEXT_TOKENS + 1;
+  it("returns ALL passing free models (unsliced) so models 4+ can serve as fallbacks", () => {
+    const cat = new Map([
+      ["a:free", { id: "a:free", name: "a", context_length: big }],
+      ["b:free", { id: "b:free", name: "b", context_length: big }],
+      ["c:free", { id: "c:free", name: "c", context_length: big }],
+      ["d:free", { id: "d:free", name: "d", context_length: big }],
+      ["e:free", { id: "e:free", name: "e", context_length: big }],
+    ]);
+    // selectFreeEnsembleModels would slice to 3; filterFreeModels keeps all 5.
+    const all = filterFreeModels(["a:free", "b:free", "c:free", "d:free", "e:free"], cat);
+    expect(all).toEqual(["a:free", "b:free", "c:free", "d:free", "e:free"]);
+    expect(selectFreeEnsembleModels(["a:free", "b:free", "c:free", "d:free", "e:free"], cat)).toEqual([
+      "a:free",
+      "b:free",
+      "c:free",
+    ]);
+  });
+});
+
+describe("isModelUnavailableError — rotate ONLY on availability/quota errors", () => {
+  it("matches a generic 429 / rate-limit", () => {
+    expect(isModelUnavailableError("HTTP 429: Too Many Requests")).toBe(true);
+    expect(isModelUnavailableError("rate limit reached")).toBe(true);
+    expect(isModelUnavailableError("rate-limit hit")).toBe(true);
+  });
+
+  it("matches free-provider DAILY-limit phrasings (the Phase 3 raison d'être)", () => {
+    expect(isModelUnavailableError("Rate limit exceeded: free-models-per-day")).toBe(true);
+    expect(isModelUnavailableError("You have hit your daily limit")).toBe(true);
+    expect(isModelUnavailableError("per-day quota exhausted")).toBe(true);
+    expect(isModelUnavailableError("daily quota reached")).toBe(true);
+  });
+
+  it("matches provider-side unavailability (no endpoints, 404, 503, overloaded)", () => {
+    expect(isModelUnavailableError("No endpoints found for this model")).toBe(true);
+    expect(isModelUnavailableError("404 model not found")).toBe(true);
+    expect(isModelUnavailableError("503 Service Unavailable")).toBe(true);
+    expect(isModelUnavailableError("Provider is overloaded")).toBe(true);
+  });
+
+  it("does NOT match request-level errors that rotating would not fix", () => {
+    // Auth, malformed request, content-length — a different model would fail too.
+    expect(isModelUnavailableError("401 Unauthorized: invalid api key")).toBe(false);
+    expect(isModelUnavailableError("malformed JSON in request body")).toBe(false);
+    expect(isModelUnavailableError("authentication failed")).toBe(false);
+    expect(isModelUnavailableError("")).toBe(false);
+  });
+});
+
+describe("callEnsembleSlotWithRotation — free-model fallback rotation (Phase 3)", () => {
+  // Minimal StreamingResult-shaped builder (usage is optional on StreamingResult).
+  const sr = (model: string, content: string, finishReason: "stop" | "error") => ({
+    model,
+    content,
+    finishReason,
+    truncated: false,
+  });
+  const slot = (id: string) => ({ id, maxOutput: 1000 });
+
+  it("returns the primary result when it succeeds — no fallback claimed", async () => {
+    let claims = 0;
+    const callOne = async (model: string) => sr(model, "primary ok", "stop");
+    const r = await callEnsembleSlotWithRotation(
+      slot("p0:free"),
+      [slot("fb0:free")],
+      () => claims++,
+      callOne,
+    );
+    expect(r.error).toBe(false);
+    expect(r.model).toBe("p0:free");
+    expect(r.content).toBe("primary ok");
+    expect(claims).toBe(0); // never rotated
+  });
+
+  it("rotates to a fallback when the primary hits a DAILY limit", async () => {
+    let next = 0;
+    const callOne = async (model: string) =>
+      model === "p0:free"
+        ? sr(model, "Rate limit exceeded: free-models-per-day", "error")
+        : sr(model, "fallback ok", "stop");
+    const r = await callEnsembleSlotWithRotation(
+      slot("p0:free"),
+      [slot("fb0:free")],
+      () => next++,
+      callOne,
+    );
+    expect(r.error).toBe(false);
+    expect(r.model).toBe("fb0:free");
+  });
+
+  it("rotates through MULTIPLE fallbacks until one succeeds", async () => {
+    let next = 0;
+    const callOne = async (model: string) =>
+      model === "fb1:free" ? sr(model, "ok", "stop") : sr(model, "503 overloaded", "error");
+    const r = await callEnsembleSlotWithRotation(
+      slot("p0:free"),
+      [slot("fb0:free"), slot("fb1:free")],
+      () => next++,
+      callOne,
+    );
+    expect(r.error).toBe(false);
+    expect(r.model).toBe("fb1:free");
+  });
+
+  it("rotates when callOne THROWS a rate-limit error (not just an error result)", async () => {
+    let next = 0;
+    const callOne = async (model: string) => {
+      if (model === "p0:free") throw new Error("HTTP 429: too many requests");
+      return sr(model, "ok", "stop");
+    };
+    const r = await callEnsembleSlotWithRotation(
+      slot("p0:free"),
+      [slot("fb0:free")],
+      () => next++,
+      callOne,
+    );
+    expect(r.error).toBe(false);
+    expect(r.model).toBe("fb0:free");
+  });
+
+  it("does NOT rotate on a non-availability error — returns it immediately", async () => {
+    let claims = 0;
+    const callOne = async (model: string) => sr(model, "invalid api key", "error");
+    const r = await callEnsembleSlotWithRotation(
+      slot("p0:free"),
+      [slot("fb0:free")],
+      () => claims++,
+      callOne,
+    );
+    expect(r.error).toBe(true);
+    expect(r.model).toBe("p0:free"); // never rotated
+    expect(claims).toBe(0);
+  });
+
+  it("returns an error result when the WHOLE free pool is exhausted (bounded, no infinite loop)", async () => {
+    let next = 0;
+    const callOne = async (model: string) => sr(model, "429 rate limit", "error");
+    const r = await callEnsembleSlotWithRotation(
+      slot("p0:free"),
+      [slot("fb0:free")],
+      () => next++,
+      callOne,
+    );
+    expect(r.error).toBe(true);
+    expect(r.model).toBe("fb0:free"); // rotated once, then the pool ran out
+  });
+
+  it("a SHARED claimFallback stops two parallel slots grabbing the same fallback", async () => {
+    let next = 0;
+    const claim = () => next++; // shared atomic counter across both slots
+    const callOne = async (model: string) =>
+      model === "p0:free" || model === "p1:free"
+        ? sr(model, "429 too many requests", "error")
+        : sr(model, "ok", "stop");
+    const [a, b] = await Promise.all([
+      callEnsembleSlotWithRotation(slot("p0:free"), [slot("fb0:free"), slot("fb1:free")], claim, callOne),
+      callEnsembleSlotWithRotation(slot("p1:free"), [slot("fb0:free"), slot("fb1:free")], claim, callOne),
+    ]);
+    // Each slot landed on a DISTINCT fallback — no double-spend of one model's quota.
+    expect(new Set([a.model, b.model])).toEqual(new Set(["fb0:free", "fb1:free"]));
+    expect(a.error).toBe(false);
+    expect(b.error).toBe(false);
   });
 });

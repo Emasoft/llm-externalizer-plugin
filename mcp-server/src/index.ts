@@ -4201,8 +4201,36 @@ async function ensembleStreaming(
     return chatCompletionWithRetry(messages, options);
   }
 
-  // Single qualifying model — no need to combine
-  if (models.length === 1) {
+  // Free-only rate-limit fallback rotation (TRDD-8b6b3646 Phase 3). Free providers
+  // all impose a DAILY request cap, so when a slot's model is rate/daily-limited we
+  // rotate to the next FILTERED free model — the pool BEYOND the ensemble's top-3,
+  // file-size-aware — rather than failing the slot. A shared atomic counter stops
+  // two parallel slots grabbing the same fallback. Empty for non-free profiles.
+  const freeOnly = activeResolved?.freeOnly ?? false;
+  const fallbacks: Array<{ id: string; maxOutput: number; maxInputLines: number }> = [];
+  let nextFallback = 0;
+  const claimFallback = () => nextFallback++;
+  if (freeOnly && activeResolved) {
+    const catalogById = new Map(openRouterModelCache.map((cm) => [cm.id, cm]));
+    const primaryIds = new Set(models.map((m) => m.id));
+    for (const id of filterFreeModels(
+      activeResolved.freeModels,
+      catalogById,
+      benchmarkFailedModels(),
+    )) {
+      if (primaryIds.has(id)) continue; // already a primary slot
+      const limits = resolveEnsembleModelLimits(
+        id,
+        catalogById.get(id)?.top_provider?.max_completion_tokens,
+      );
+      if (!fileLineCount || fileLineCount <= limits.maxInputLines) {
+        fallbacks.push({ id, ...limits });
+      }
+    }
+  }
+
+  // Single qualifying model AND no fallbacks to rotate to — no need to combine.
+  if (models.length === 1 && fallbacks.length === 0) {
     return chatCompletionWithRetry(messages, {
       ...options,
       model: models[0].id,
@@ -4217,12 +4245,18 @@ async function ensembleStreaming(
   // The MCP timeout is configured by the user on the Claude Code side.
   const results = await Promise.all(
     models.map(async (m) => {
-      try {
-        const resp = await chatCompletionWithRetry(messages, {
+      const callOne = (model: string, maxOutput: number) =>
+        chatCompletionWithRetry(messages, {
           ...options,
-          model: m.id,
-          maxTokens: Math.min(options.maxTokens ?? m.maxOutput, m.maxOutput),
+          model,
+          maxTokens: Math.min(options.maxTokens ?? maxOutput, maxOutput),
         });
+      // Free-only: rotate to a fallback free model on a rate/daily-limit error.
+      if (freeOnly) {
+        return callEnsembleSlotWithRotation(m, fallbacks, claimFallback, callOne);
+      }
+      try {
+        const resp = await callOne(m.id, m.maxOutput);
         return {
           model: m.id,
           content: resp.content,
@@ -4634,12 +4668,12 @@ export const FREE_FLOOR_MIN_CONTEXT_TOKENS = 32_000;
  * cold catalog degrades to the raw top-3, never an empty ensemble. Pure +
  * offline-testable: pass an explicit catalog map and failed-set.
  */
-export function selectFreeEnsembleModels(
+export function filterFreeModels(
   freeModels: string[],
   catalogById: Map<string, OpenRouterModelInfo>,
   benchmarkFailed: ReadonlySet<string> = new Set(),
 ): string[] {
-  const kept = freeModels.filter((id) => {
+  return freeModels.filter((id) => {
     if (benchmarkFailed.has(id)) return false; // proven-failing benchmark — exclude
     const m = catalogById.get(id);
     if (!m) return true; // unknown to the catalog — keep (lenient on availability)
@@ -4647,7 +4681,103 @@ export function selectFreeEnsembleModels(
     if (ctx === 0) return true; // catalog has no context info — keep (lenient)
     return ctx >= FREE_FLOOR_MIN_CONTEXT_TOKENS;
   });
-  return kept.slice(0, 3);
+}
+
+/** The top-3 filtered free models (the ensemble). Phase 3's rotation uses the
+ *  FULL filtered list (filterFreeModels) so models 4+ serve as fallbacks. */
+export function selectFreeEnsembleModels(
+  freeModels: string[],
+  catalogById: Map<string, OpenRouterModelInfo>,
+  benchmarkFailed: ReadonlySet<string> = new Set(),
+): string[] {
+  return filterFreeModels(freeModels, catalogById, benchmarkFailed).slice(0, 3);
+}
+
+/**
+ * True when an error string indicates the model is UNAVAILABLE (now or for the
+ * rest of the day) and a DIFFERENT model should be tried — the free_only ensemble
+ * rotates on this (TRDD-8b6b3646 Phase 3). Free providers ALL impose a daily
+ * request cap, so daily-limit phrasing is explicitly covered: retrying the SAME
+ * model after a daily 429 would just fail until the quota resets. Also covers
+ * generic 429s, provider overload, and no-endpoints/404. PURE + offline-testable.
+ */
+export function isModelUnavailableError(detail: string): boolean {
+  const s = (detail || "").toLowerCase();
+  return (
+    s.includes("429") ||
+    s.includes("rate limit") ||
+    s.includes("rate-limit") ||
+    s.includes("rate_limit") ||
+    s.includes("ratelimit") ||
+    s.includes("too many requests") ||
+    s.includes("quota") ||
+    s.includes("daily limit") ||
+    s.includes("limit exceeded") ||
+    s.includes("exceeded your") ||
+    s.includes("per-day") ||
+    s.includes("per day") ||
+    s.includes("free-models-per-day") ||
+    s.includes("no endpoints") ||
+    s.includes("no allowed providers") ||
+    s.includes("not found") ||
+    s.includes("404") ||
+    s.includes("502") ||
+    s.includes("503") ||
+    s.includes("overloaded") ||
+    s.includes("temporarily unavailable")
+  );
+}
+
+/** One ensemble slot with free-model fallback rotation (TRDD-8b6b3646 Phase 3).
+ *  Tries `primary`; if the call fails with an unavailable/rate-limit/daily-limit
+ *  error, claims the next shared fallback and retries — until a model succeeds or
+ *  the fallback pool is exhausted. `claimFallback` is a shared atomic counter
+ *  (`idx = next++`, safe in single-threaded JS) so parallel slots never grab the
+ *  same fallback. Pure given `callOne` — offline-testable with a mock. */
+export async function callEnsembleSlotWithRotation(
+  primary: { id: string; maxOutput: number },
+  fallbacks: ReadonlyArray<{ id: string; maxOutput: number }>,
+  claimFallback: () => number,
+  callOne: (model: string, maxOutput: number) => Promise<StreamingResult>,
+): Promise<{
+  model: string;
+  content: string;
+  usage: StreamingResult["usage"];
+  truncated: boolean;
+  error: boolean;
+}> {
+  let cur = primary;
+  for (;;) {
+    try {
+      const resp = await callOne(cur.id, cur.maxOutput);
+      const isUnavail =
+        resp.finishReason === "error" && isModelUnavailableError(resp.content);
+      if (isUnavail) {
+        const idx = claimFallback();
+        if (idx >= 0 && idx < fallbacks.length) {
+          cur = fallbacks[idx];
+          continue;
+        }
+      }
+      return {
+        model: cur.id,
+        content: resp.content,
+        usage: resp.usage,
+        truncated: resp.truncated,
+        error: resp.finishReason === "error",
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (isModelUnavailableError(msg)) {
+        const idx = claimFallback();
+        if (idx >= 0 && idx < fallbacks.length) {
+          cur = fallbacks[idx];
+          continue;
+        }
+      }
+      return { model: cur.id, content: `ERROR: ${msg}`, usage: undefined, truncated: false, error: true };
+    }
+  }
 }
 
 function getEnsembleModels(): Array<{

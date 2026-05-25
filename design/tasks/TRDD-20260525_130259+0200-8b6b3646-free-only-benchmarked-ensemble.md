@@ -1,9 +1,9 @@
 ---
 trdd-id: 8b6b3646-0152-4077-8d2a-e888f17e0fc7
 title: Free-only switch — benchmark-filtered free ensemble (per-profile)
-status: in-progress
+status: completed
 created: 2026-05-25T13:02:59+0200
-updated: 2026-05-25T14:37:38+0200
+updated: 2026-05-25T14:49:27+0200
 ---
 
 # TRDD-8b6b3646 — Free-only benchmark-filtered ensemble
@@ -110,4 +110,37 @@ Design choices (confirmed via AskUserQuestion):
   cache → no-op (fresh install safe). Tests: failedModelsFromCache (5) +
   selectFreeEnsembleModels benchmark-drop (1). Docs: README B2 recipe. The only
   OpenRouter-dependent step is the benchmark RUN itself (the user's to trigger).
-- **Phase 3 — deferred** (rotation; needs live 429 testing).
+- **Phase 3 — DONE** (rotation; pure parts unit-tested offline, live 429
+  end-to-end still needs a funded run but the rotation logic is fully covered).
+  Shipped in `index.ts`: `isModelUnavailableError` (pure predicate — rotates on
+  429 / rate-limit / daily-limit / per-day / quota / no-endpoints / 404 / 502 /
+  503 / overloaded; does NOT rotate on auth/malformed errors a different model
+  would also fail); `filterFreeModels` (the FULL filtered list, so models 4+ are
+  the fallback pool) refactored out of `selectFreeEnsembleModels` (= `.slice(0,3)`);
+  `callEnsembleSlotWithRotation` (tries primary, on an unavailable error claims
+  the next shared fallback via an atomic `idx = next++` counter and retries —
+  bounded by pool size, no infinite loop). `ensembleStreaming` integration: when
+  `freeOnly`, build the file-size-aware `fallbacks` list (filtered pool minus the
+  top-3 primaries), share one `claimFallback` across all parallel slots so two
+  slots never grab the same model's daily quota, gate the single-model fast path
+  on `models.length === 1 && fallbacks.length === 0`, and route each slot through
+  `callEnsembleSlotWithRotation`. The non-free path is byte-for-byte unchanged.
+  Tests: `free-only.test.ts` +12 (filterFreeModels full-list, isModelUnavailableError
+  match/non-match incl. daily-limit phrasings, callEnsembleSlotWithRotation:
+  primary-success / daily-limit-rotate / multi-hop / throw-rotate / non-rotatable /
+  pool-exhausted / shared-counter-no-collision). Docs: README B2 "Daily-limit
+  rotation" paragraph. Full suite 927 passed / 4 skipped / 0 OpenRouter boots;
+  tsc + eslint clean.
+
+## Outcome — all three phases complete
+
+`free_only` ships end-to-end: a per-profile switch that runs a zero-spend
+ensemble of benchmark/requirements-qualified `:free` models with automatic
+daily-limit fallback rotation. Zero-spend is enforced at THREE layers —
+validation (rejects any non-`:free` entry), the benchmark/context filters (only
+ever evaluate `:free` candidates, and the benchmark RUN is `$0` on free models),
+and the rotation pool (free models only). The two remaining user-side steps are
+documented in README B2: paste the profile into `settings.yaml`, and (optionally)
+run one `$0` `security_triage_benchmark` on the free pool to populate the
+pass/fail cache. No new MCP surface was added — the existing
+`security_triage_benchmark` tool already accepts an explicit `models:` list.

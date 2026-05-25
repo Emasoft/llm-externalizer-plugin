@@ -331,6 +331,13 @@ Free models are heavily rate-limited; list several so the ensemble has fallbacks
 A context-window requirements floor drops obviously-unusable free models; the
 golden-dataset benchmark filter is the deeper quality gate.
 
+**Daily-limit rotation:** every free provider caps requests *per day*, so when an
+ensemble slot's model returns a rate-limit / daily-limit / no-endpoints error, the
+ensemble automatically rotates that slot to the next unused free model from the
+pool (the ones beyond the top-3) and retries. Parallel slots claim distinct
+fallbacks, so two slots never burn the same model's daily quota. List more
+`free_models` than the 3 ensemble slots to give the rotation room.
+
 **Benchmark-gate your free pool (`$0` — free models cost nothing to benchmark):**
 run the security-triage benchmark on your `free_models`, then the ensemble
 automatically excludes any that fail it (the pass/fail is cached in

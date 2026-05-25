@@ -51604,7 +51604,29 @@ async function ensembleStreaming(messages, options, ensemble, fileLineCount) {
   if (models.length === 0) {
     return chatCompletionWithRetry(messages, options);
   }
-  if (models.length === 1) {
+  const freeOnly = activeResolved?.freeOnly ?? false;
+  const fallbacks = [];
+  let nextFallback = 0;
+  const claimFallback = () => nextFallback++;
+  if (freeOnly && activeResolved) {
+    const catalogById = new Map(openRouterModelCache.map((cm) => [cm.id, cm]));
+    const primaryIds = new Set(models.map((m) => m.id));
+    for (const id of filterFreeModels(
+      activeResolved.freeModels,
+      catalogById,
+      benchmarkFailedModels()
+    )) {
+      if (primaryIds.has(id)) continue;
+      const limits = resolveEnsembleModelLimits(
+        id,
+        catalogById.get(id)?.top_provider?.max_completion_tokens
+      );
+      if (!fileLineCount || fileLineCount <= limits.maxInputLines) {
+        fallbacks.push({ id, ...limits });
+      }
+    }
+  }
+  if (models.length === 1 && fallbacks.length === 0) {
     return chatCompletionWithRetry(messages, {
       ...options,
       model: models[0].id,
@@ -51616,12 +51638,16 @@ async function ensembleStreaming(messages, options, ensemble, fileLineCount) {
   }
   const results = await Promise.all(
     models.map(async (m) => {
+      const callOne = (model, maxOutput) => chatCompletionWithRetry(messages, {
+        ...options,
+        model,
+        maxTokens: Math.min(options.maxTokens ?? maxOutput, maxOutput)
+      });
+      if (freeOnly) {
+        return callEnsembleSlotWithRotation(m, fallbacks, claimFallback, callOne);
+      }
       try {
-        const resp = await chatCompletionWithRetry(messages, {
-          ...options,
-          model: m.id,
-          maxTokens: Math.min(options.maxTokens ?? m.maxOutput, m.maxOutput)
-        });
+        const resp = await callOne(m.id, m.maxOutput);
         return {
           model: m.id,
           content: resp.content,
@@ -51827,8 +51853,8 @@ function ensembleModelLabel(useEnsemble) {
   return `ensemble: ${models.join(" + ")}`;
 }
 var FREE_FLOOR_MIN_CONTEXT_TOKENS = 32e3;
-function selectFreeEnsembleModels(freeModels, catalogById, benchmarkFailed = /* @__PURE__ */ new Set()) {
-  const kept = freeModels.filter((id) => {
+function filterFreeModels(freeModels, catalogById, benchmarkFailed = /* @__PURE__ */ new Set()) {
+  return freeModels.filter((id) => {
     if (benchmarkFailed.has(id)) return false;
     const m = catalogById.get(id);
     if (!m) return true;
@@ -51836,7 +51862,46 @@ function selectFreeEnsembleModels(freeModels, catalogById, benchmarkFailed = /* 
     if (ctx === 0) return true;
     return ctx >= FREE_FLOOR_MIN_CONTEXT_TOKENS;
   });
-  return kept.slice(0, 3);
+}
+function selectFreeEnsembleModels(freeModels, catalogById, benchmarkFailed = /* @__PURE__ */ new Set()) {
+  return filterFreeModels(freeModels, catalogById, benchmarkFailed).slice(0, 3);
+}
+function isModelUnavailableError(detail) {
+  const s = (detail || "").toLowerCase();
+  return s.includes("429") || s.includes("rate limit") || s.includes("rate-limit") || s.includes("rate_limit") || s.includes("ratelimit") || s.includes("too many requests") || s.includes("quota") || s.includes("daily limit") || s.includes("limit exceeded") || s.includes("exceeded your") || s.includes("per-day") || s.includes("per day") || s.includes("free-models-per-day") || s.includes("no endpoints") || s.includes("no allowed providers") || s.includes("not found") || s.includes("404") || s.includes("502") || s.includes("503") || s.includes("overloaded") || s.includes("temporarily unavailable");
+}
+async function callEnsembleSlotWithRotation(primary, fallbacks, claimFallback, callOne) {
+  let cur = primary;
+  for (; ; ) {
+    try {
+      const resp = await callOne(cur.id, cur.maxOutput);
+      const isUnavail = resp.finishReason === "error" && isModelUnavailableError(resp.content);
+      if (isUnavail) {
+        const idx = claimFallback();
+        if (idx >= 0 && idx < fallbacks.length) {
+          cur = fallbacks[idx];
+          continue;
+        }
+      }
+      return {
+        model: cur.id,
+        content: resp.content,
+        usage: resp.usage,
+        truncated: resp.truncated,
+        error: resp.finishReason === "error"
+      };
+    } catch (err3) {
+      const msg = err3 instanceof Error ? err3.message : String(err3);
+      if (isModelUnavailableError(msg)) {
+        const idx = claimFallback();
+        if (idx >= 0 && idx < fallbacks.length) {
+          cur = fallbacks[idx];
+          continue;
+        }
+      }
+      return { model: cur.id, content: `ERROR: ${msg}`, usage: void 0, truncated: false, error: true };
+    }
+  }
 }
 function getEnsembleModels() {
   if (!activeResolved || activeResolved.mode !== "remote-ensemble") return [];
@@ -55843,6 +55908,9 @@ export {
   FREE_FLOOR_MIN_CONTEXT_TOKENS,
   _resetDefaultOutputDirCache,
   _testDefaultOutputDir,
+  callEnsembleSlotWithRotation,
+  filterFreeModels,
+  isModelUnavailableError,
   reasoningLadderForModel,
   selectFreeEnsembleModels
 };
