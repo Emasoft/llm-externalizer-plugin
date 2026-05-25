@@ -4,10 +4,11 @@
 // open, Phase-1 dispatch (via phase1_batch.runPhase1), union-find
 // merge, and the final emission of the four output files.
 //
-// Phase 2 / Phase 3 / resume are placeholders in this Phase-B-only cut —
-// the function still emits a valid output bundle (clusters reflect
-// Phase 1 alone) and stats.json records that phase2/phase3 were skipped.
-// Phase C lights up the rest per TRDD §6 Phase C.
+// Phase 2 (cross-cluster verification) and Phase 3 (LLM canonical labels) are
+// fully implemented and run when the budget allows; resume honors `resume_from`
+// (loads and continues the checkpoint the caller points at — TRDD-66da2aa7).
+// clusters.jsonl reflects phase-1 grouping refined by phase-2 merges, with
+// phase-3 canonical labels surfaced in clusters_summary.json.
 
 import {
   mkdirSync,
@@ -27,7 +28,6 @@ import { runPhase2 } from "./phase2_verify.js";
 import { runPhase3Llm } from "./phase3_canonical.js";
 import { PolicySchema, resolvePolicy } from "./policy.js";
 import { type RetryBudget } from "./retry_ladder.js";
-import { UnionFind } from "./unionfind.js";
 import type {
   ClusterInputItem,
   ClusterPolicy,
@@ -216,9 +216,10 @@ function writeJsonAtomic(path: string, value: unknown): void {
 function writeClustersJsonl(
   path: string,
   itemsById: Map<string, ClusterInputItem>,
-  uf: UnionFind,
+  partition: Map<string, string[]>,
 ): void {
-  const partition = uf.partition();
+  // partition is computed ONCE by the caller (B5, TRDD-66da2aa7) and shared
+  // with buildSummary + the phase-3 branch — it used to be rebuilt here.
   const lines: string[] = [];
   // Stable iteration order: sort cluster ids, sort items inside each.
   const sortedRoots = Array.from(partition.keys()).sort();
@@ -236,11 +237,12 @@ function writeClustersJsonl(
 
 function buildSummary(
   itemsById: Map<string, ClusterInputItem>,
-  uf: UnionFind,
+  partition: Map<string, string[]>,
   profileName: string,
   canonicalsOverride?: Map<string, string>,
 ): ClustersSummary {
-  const partition = uf.partition();
+  // partition is computed ONCE by the caller (B5, TRDD-66da2aa7) — shared with
+  // writeClustersJsonl + the phase-3 branch instead of rebuilt per emit.
   const clusters: ClusterEntry[] = [];
   const sortedRoots = Array.from(partition.keys()).sort();
   for (const root of sortedRoots) {
@@ -286,7 +288,15 @@ export async function runClusterSynonyms(
 
   // 1. Policy + input gate.
   const policy = loadPolicy(invocation.policy_file);
-  const resuming = invocation.resume_from !== undefined;
+  const resumeFrom = invocation.resume_from;
+  const resuming = resumeFrom !== undefined;
+  // B2 (TRDD-66da2aa7): a resume run bypasses the output-dir non-empty guard,
+  // so a `resume_from` that doesn't exist must NOT fall through to a
+  // from-scratch run that then overwrites the output dir. Fail fast instead.
+  if (resumeFrom !== undefined && !existsSync(resumeFrom)) {
+    errors.push(`resume_from checkpoint not found: ${resumeFrom}`);
+    return buildEarlyAbort(invocation, errors, warnings, profileName, tStart);
+  }
 
   // 2. Load items (T7 — malformed-line tolerance).
   const { items, warnings: jsonlWarnings } = await loadInputJsonl(invocation.input_file);
@@ -327,8 +337,12 @@ export async function runClusterSynonyms(
     return buildEarlyAbort(invocation, errors, warnings, profileName, tStart);
   }
 
-  // 6. Checkpoint.
-  const checkpointPath = join(invocation.output_dir, OUTPUT_NAMES.checkpoint);
+  // 6. Checkpoint. B2 (TRDD-66da2aa7): when resuming, load (and continue
+  // writing) the checkpoint the caller pointed at via resume_from — its VALUE
+  // used to be ignored, so "resume" loaded an empty output_dir checkpoint and
+  // re-clustered from scratch over the existing outputs. Fresh runs still use
+  // output_dir/checkpoint.sqlite.
+  const checkpointPath = resumeFrom ?? join(invocation.output_dir, OUTPUT_NAMES.checkpoint);
   const ckpt = CheckpointDB.open(checkpointPath);
   const uf = ckpt.loadUnionFind();
   for (const it of items) uf.add(it.id);
@@ -376,6 +390,11 @@ export async function runClusterSynonyms(
     warnings.push("phase2 skipped: budget exhausted in phase 1");
   }
 
+  // uf is final here — phase-1 edges and phase-2 merges are all applied in
+  // place (runPhase2 unions merged pairs). Compute the partition ONCE and share
+  // it with phase 3 + both emitters (B5, TRDD-66da2aa7).
+  const partition = uf.partition();
+
   // 9. Phase 3 — canonical labels. Heuristic mode is computed inline
   //    by buildSummary; LLM mode runs one call per non-trivial cluster
   //    (singletons + all-identical clusters skip the LLM) and the result
@@ -383,7 +402,6 @@ export async function runClusterSynonyms(
   let phase3Calls = 0;
   let canonicalsOverride: Map<string, string> | undefined;
   if (policy.canonical_label_mode === "llm" && budget.remaining > 0) {
-    const partition = uf.partition();
     const phase3Clusters = Array.from(partition.entries()).map(([_root, members]) => {
       const clusterId = chooseClusterId(members.slice().sort());
       const sentences = members
@@ -434,8 +452,8 @@ export async function runClusterSynonyms(
   const clustersPath = join(invocation.output_dir, OUTPUT_NAMES.clusters);
   const summaryPath = join(invocation.output_dir, OUTPUT_NAMES.summary);
   const statsPath = join(invocation.output_dir, OUTPUT_NAMES.stats);
-  writeClustersJsonl(clustersPath, itemsById, uf);
-  writeJsonAtomic(summaryPath, buildSummary(itemsById, uf, profileName, canonicalsOverride));
+  writeClustersJsonl(clustersPath, itemsById, partition);
+  writeJsonAtomic(summaryPath, buildSummary(itemsById, partition, profileName, canonicalsOverride));
   writeJsonAtomic(statsPath, stats);
 
   return {

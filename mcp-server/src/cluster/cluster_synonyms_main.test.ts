@@ -10,6 +10,8 @@ import { join } from "node:path";
 
 import { runClusterSynonyms, type ClusterSynonymsHooks } from "./cluster_synonyms_main.js";
 import type { Phase1RawLlmCall } from "./phase1_batch.js";
+import { CheckpointDB } from "./checkpoint.js";
+import { UnionFind } from "./unionfind.js";
 
 let tmp = "";
 
@@ -646,3 +648,73 @@ function writePolicy(p: Record<string, unknown>): string {
   writeFileSync(path, JSON.stringify(p));
   return path;
 }
+
+// ────────────────────────────────────────────────────────────
+// B2 (TRDD-66da2aa7) — resume_from honors the checkpoint it points at.
+// Pre-fix, resume_from's VALUE was ignored: the run always loaded
+// output_dir/checkpoint.sqlite (empty for a fresh out dir) and re-clustered
+// from scratch while the resuming flag suppressed the overwrite guard.
+// ────────────────────────────────────────────────────────────
+
+/** Seed a checkpoint at `path` whose union-find has already merged the pairs. */
+function seedCheckpoint(path: string, ids: string[], unions: Array<[string, string]>): void {
+  const db = CheckpointDB.open(path);
+  const uf = new UnionFind();
+  for (const id of ids) uf.add(id);
+  for (const [a, b] of unions) uf.union(a, b);
+  db.saveUnionFind(uf);
+  db.close();
+}
+
+describe("B2 — resume_from is honored (data-loss footgun fixed)", () => {
+  it("rehydrates the union-find from the resume_from checkpoint (merge survives)", async () => {
+    // Prior run merged item-0 + item-1; the new LLM says everything is a
+    // singleton. Without resume that is 4 clusters; WITH resume the prior
+    // merge survives → 3 clusters. Proves resume_from's checkpoint is loaded.
+    const ckptPath = join(tmp, "prior-checkpoint.sqlite");
+    seedCheckpoint(ckptPath, ["item-0", "item-1"], [["item-0", "item-1"]]);
+
+    const r = await runClusterSynonyms(
+      {
+        input_file: writeJsonl(items(4)),
+        output_dir: join(tmp, "resumed-out"),
+        policy_file: writePolicy({ compute_embeddings: false, batch_size: 5 }),
+        resume_from: ckptPath,
+      },
+      baseHooks(singletonLlm()),
+    );
+    expect(r.ok).toBe(true);
+    expect(r.stats.items_in).toBe(4);
+    expect(r.stats.clusters_out).toBe(3); // {item-0,item-1} + item-2 + item-3
+  });
+
+  it("without resume_from the same input clusters from scratch (4 singletons)", async () => {
+    // Control: identical input + LLM, no resume → the seeded merge is absent.
+    const r = await runClusterSynonyms(
+      {
+        input_file: writeJsonl(items(4)),
+        output_dir: join(tmp, "fresh-out"),
+        policy_file: writePolicy({ compute_embeddings: false, batch_size: 5 }),
+      },
+      baseHooks(singletonLlm()),
+    );
+    expect(r.ok).toBe(true);
+    expect(r.stats.clusters_out).toBe(4);
+  });
+
+  it("a missing resume_from path fails fast instead of overwriting from scratch", async () => {
+    const r = await runClusterSynonyms(
+      {
+        input_file: writeJsonl(items(4)),
+        output_dir: join(tmp, "out-missing"),
+        policy_file: writePolicy({ compute_embeddings: false, batch_size: 5 }),
+        resume_from: join(tmp, "nope", "does-not-exist.sqlite"),
+      },
+      baseHooks(singletonLlm()),
+    );
+    expect(r.ok).toBe(false);
+    expect(r.errors.join(" ")).toContain("resume_from checkpoint not found");
+    // No outputs were written (the run aborted before emit).
+    expect(existsSync(join(tmp, "out-missing", "clusters.jsonl"))).toBe(false);
+  });
+});

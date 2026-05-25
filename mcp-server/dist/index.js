@@ -48116,8 +48116,7 @@ function writeJsonAtomic(path, value) {
   writeFileSync8(tmp, JSON.stringify(value, null, 2) + "\n", { encoding: "utf-8" });
   renameSync4(tmp, path);
 }
-function writeClustersJsonl(path, itemsById, uf) {
-  const partition = uf.partition();
+function writeClustersJsonl(path, itemsById, partition) {
   const lines = [];
   const sortedRoots = Array.from(partition.keys()).sort();
   for (const root of sortedRoots) {
@@ -48131,8 +48130,7 @@ function writeClustersJsonl(path, itemsById, uf) {
   }
   writeFileSync8(path, lines.join("\n") + (lines.length ? "\n" : ""), { encoding: "utf-8" });
 }
-function buildSummary(itemsById, uf, profileName, canonicalsOverride) {
-  const partition = uf.partition();
+function buildSummary(itemsById, partition, profileName, canonicalsOverride) {
   const clusters = [];
   const sortedRoots = Array.from(partition.keys()).sort();
   for (const root of sortedRoots) {
@@ -48165,7 +48163,12 @@ async function runClusterSynonyms(invocation, hooks) {
   const warnings = [];
   const profileName = hooks.profileName ?? "unknown";
   const policy = loadPolicy(invocation.policy_file);
-  const resuming = invocation.resume_from !== void 0;
+  const resumeFrom = invocation.resume_from;
+  const resuming = resumeFrom !== void 0;
+  if (resumeFrom !== void 0 && !existsSync6(resumeFrom)) {
+    errors.push(`resume_from checkpoint not found: ${resumeFrom}`);
+    return buildEarlyAbort(invocation, errors, warnings, profileName, tStart);
+  }
   const { items, warnings: jsonlWarnings } = await loadInputJsonl(invocation.input_file);
   warnings.push(...jsonlWarnings);
   if (items.length === 0) {
@@ -48194,7 +48197,7 @@ async function runClusterSynonyms(invocation, hooks) {
     errors.push(`embeddings: ${err3.message}`);
     return buildEarlyAbort(invocation, errors, warnings, profileName, tStart);
   }
-  const checkpointPath = join11(invocation.output_dir, OUTPUT_NAMES.checkpoint);
+  const checkpointPath = resumeFrom ?? join11(invocation.output_dir, OUTPUT_NAMES.checkpoint);
   const ckpt = CheckpointDB.open(checkpointPath);
   const uf = ckpt.loadUnionFind();
   for (const it of items) uf.add(it.id);
@@ -48235,10 +48238,10 @@ async function runClusterSynonyms(invocation, hooks) {
   } else if (phase1.budgetExhausted) {
     warnings.push("phase2 skipped: budget exhausted in phase 1");
   }
+  const partition = uf.partition();
   let phase3Calls = 0;
   let canonicalsOverride;
   if (policy.canonical_label_mode === "llm" && budget.remaining > 0) {
-    const partition = uf.partition();
     const phase3Clusters = Array.from(partition.entries()).map(([_root, members]) => {
       const clusterId = chooseClusterId(members.slice().sort());
       const sentences = members.map((id) => itemsById.get(id)?.sentence).filter((s) => typeof s === "string");
@@ -48282,8 +48285,8 @@ async function runClusterSynonyms(invocation, hooks) {
   const clustersPath = join11(invocation.output_dir, OUTPUT_NAMES.clusters);
   const summaryPath = join11(invocation.output_dir, OUTPUT_NAMES.summary);
   const statsPath = join11(invocation.output_dir, OUTPUT_NAMES.stats);
-  writeClustersJsonl(clustersPath, itemsById, uf);
-  writeJsonAtomic(summaryPath, buildSummary(itemsById, uf, profileName, canonicalsOverride));
+  writeClustersJsonl(clustersPath, itemsById, partition);
+  writeJsonAtomic(summaryPath, buildSummary(itemsById, partition, profileName, canonicalsOverride));
   writeJsonAtomic(statsPath, stats);
   return {
     ok: true,
