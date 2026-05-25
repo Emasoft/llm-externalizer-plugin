@@ -144,14 +144,34 @@ def measure_throughput(
     Failure returns the same shape with tokens_per_second=0.0 + an "error" key.
     """
     t0 = time.perf_counter()
-    resp = call_chat(
-        url, model,
-        [{"role": "user", "content": PERF_PROMPT}],
-        max_tokens=400, api_key=api_key, timeout=timeout,
-    )
+    # call_chat already returns an {error} dict for transport/parse failures,
+    # but the docstring promises THIS function never raises. Guard the call so
+    # an unexpected exception (a future call_chat variant, a backend that
+    # violates the contract) still yields the documented error-shaped result.
+    try:
+        resp = call_chat(
+            url, model,
+            [{"role": "user", "content": PERF_PROMPT}],
+            max_tokens=400, api_key=api_key, timeout=timeout,
+        )
+    except (URLError, HTTPError, TimeoutError, socket.timeout, OSError,
+            json.JSONDecodeError, ValueError) as e:
+        return {
+            "tokens_per_second": 0.0,
+            "ttft_s": 0.0,
+            "total_latency_s": round(time.perf_counter() - t0, 3),
+            "completion_tokens": 0,
+            "prompt_tokens": 0,
+            "source": "in-script",
+            "error": f"{type(e).__name__}: {e}",
+        }
     elapsed = time.perf_counter() - t0
 
-    if "error" in resp and isinstance(resp["error"], str) and resp["error"]:
+    # isinstance MUST precede the membership test: a non-dict resp (e.g. a bare
+    # string or list) would make `"error" in resp` do substring/element
+    # matching instead of a key lookup, silently mis-classifying the result.
+    if (isinstance(resp, dict) and isinstance(resp.get("error"), str)
+            and resp["error"]):
         return {
             "tokens_per_second": 0.0,
             "ttft_s": 0.0,
@@ -214,16 +234,32 @@ def run_vmlx_bench(model: str, timeout: float = 600.0) -> Optional[dict[str, Any
         return None
     if not isinstance(payload, dict):
         return None
+
+    # Coerce numbers defensively: a malformed payload (string where a number is
+    # expected, None, etc.) must NOT raise — the docstring promises None on any
+    # failure so the caller falls back to in-script timing.
+    def _as_float(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _as_int(value: Any, default: int = 0) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
     # vmlx reports TTFT in milliseconds; normalize to seconds for our schema.
     ttft_ms = payload.get("ttft_ms")
-    ttft_s = float(ttft_ms) / 1000.0 if isinstance(ttft_ms, (int, float)) else 0.0
+    ttft_s = _as_float(ttft_ms) / 1000.0 if isinstance(ttft_ms, (int, float)) else 0.0
     tps_raw = payload.get("tokens_per_second")
     return {
-        "tokens_per_second": float(tps_raw) if isinstance(tps_raw, (int, float)) else 0.0,
+        "tokens_per_second": _as_float(tps_raw) if isinstance(tps_raw, (int, float)) else 0.0,
         "ttft_s": round(ttft_s, 3),
-        "total_latency_s": round(float(payload.get("total_latency_s") or 0.0), 3),
-        "completion_tokens": int(payload.get("completion_tokens") or 0),
-        "prompt_tokens": int(payload.get("prompt_tokens") or 0),
+        "total_latency_s": round(_as_float(payload.get("total_latency_s")), 3),
+        "completion_tokens": _as_int(payload.get("completion_tokens")),
+        "prompt_tokens": _as_int(payload.get("prompt_tokens")),
         "source": "vmlx-bench",
     }
 
@@ -269,11 +305,27 @@ def benchmark_one_model(
 
     if not quiet:
         print("  [perf] ...", end=" ", file=sys.stderr, flush=True)
-    perf = None
-    if use_vmlx_bench:
-        perf = run_vmlx_bench(model, timeout=timeout)
-    if perf is None:
-        perf = measure_throughput(url, model, api_key=api_key, timeout=timeout)
+    # Guard the perf probe the same way the reliability loop above is guarded:
+    # a throughput failure must downgrade to a zero-tps perf record, not abort
+    # the whole model's benchmark. measure_throughput/run_vmlx_bench already
+    # honor their own never-raise contracts; this is the matching defense net.
+    try:
+        perf = None
+        if use_vmlx_bench:
+            perf = run_vmlx_bench(model, timeout=timeout)
+        if perf is None:
+            perf = measure_throughput(url, model, api_key=api_key, timeout=timeout)
+    except (URLError, HTTPError, TimeoutError, socket.timeout, OSError,
+            json.JSONDecodeError, KeyError, IndexError, ValueError) as e:
+        perf = {
+            "tokens_per_second": 0.0,
+            "ttft_s": 0.0,
+            "total_latency_s": 0.0,
+            "completion_tokens": 0,
+            "prompt_tokens": 0,
+            "source": "in-script",
+            "error": f"perf probe crashed ({type(e).__name__}): {e}",
+        }
     if not quiet:
         print(f"{perf['tokens_per_second']} tok/s ({perf['source']})",
               file=sys.stderr)

@@ -422,3 +422,73 @@ def test_render_markdown_includes_table_header() -> None:
     assert "qwen3-8b" in md
     # The decision rule should be documented somewhere in the output.
     assert "viable" in md.lower() or "min-tps" in md.lower() or "5" in md
+
+
+# ---------------------------------------------------------------------------
+# Never-raise contract (TRDD-6e859d3c item D3)
+# ---------------------------------------------------------------------------
+
+
+def test_measure_throughput_returns_error_dict_when_call_chat_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """measure_throughput honors its never-raise docstring when call_chat raises."""
+    mod = _load_bench_module()
+
+    def boom(*_a, **_kw):
+        raise OSError("simulated transport blow-up")
+
+    monkeypatch.setattr(mod, "call_chat", boom)
+    result = mod.measure_throughput("http://localhost:8000/v1", "any-model", timeout=1.0)
+    assert isinstance(result, dict)
+    assert result["tokens_per_second"] == 0.0
+    assert result["source"] == "in-script"
+    assert "error" in result and "OSError" in result["error"]
+
+
+def test_measure_throughput_handles_non_dict_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-dict call_chat response is handled via the isinstance guard, not crash."""
+    mod = _load_bench_module()
+    # A bare string would make `"error" in resp` do substring matching; the
+    # isinstance guard must prevent that and still return a well-formed dict.
+    monkeypatch.setattr(mod, "call_chat", lambda *a, **kw: "error: not a dict")
+    result = mod.measure_throughput("http://localhost:8000/v1", "any-model", timeout=1.0)
+    assert isinstance(result, dict)
+    assert result["source"] == "in-script"
+    assert set(result) >= {
+        "tokens_per_second", "ttft_s", "total_latency_s",
+        "completion_tokens", "prompt_tokens", "source",
+    }
+
+
+def test_run_vmlx_bench_returns_safe_values_on_unparseable_numbers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """run_vmlx_bench never raises on non-numeric fields — coerces to safe defaults."""
+    mod = _load_bench_module()
+
+    bad_payload = json.dumps({
+        "tokens_per_second": "not-a-number",
+        "ttft_ms": "also-bad",
+        "total_latency_s": "nope",
+        "completion_tokens": "x",
+        "prompt_tokens": "y",
+    })
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = bad_payload
+        stderr = ""
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: FakeCompleted())
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: "/usr/bin/vmlx")
+    perf = mod.run_vmlx_bench("any-model")
+    assert isinstance(perf, dict)
+    assert perf["tokens_per_second"] == 0.0
+    assert perf["ttft_s"] == 0.0
+    assert perf["total_latency_s"] == 0.0
+    assert perf["completion_tokens"] == 0
+    assert perf["prompt_tokens"] == 0
+    assert perf["source"] == "vmlx-bench"
