@@ -21,6 +21,7 @@ import { runMassScoutCli, type CliResult, type CliRunOptions } from "./cli";
 import { runSecurityTriageBenchmark } from "../benchmark/security-triage/index";
 import { assessModelById, renderAssessmentText } from "../model-qualification/assess";
 import { runCheckModelHealth, renderModelHealthText } from "../model-qualification/drift";
+import { runDiscoverNewArrivals, renderNewArrivalsText } from "../model-qualification/new-arrivals";
 
 // ── Public types (mirror the CLI flag set, MCP-flavoured) ─────────────
 
@@ -912,6 +913,30 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
       required: [],
     },
   },
+  {
+    name: "discover_new_models",
+    description:
+      "Autodiscover models that newly appeared in the OpenRouter catalog since " +
+      "the last run (TRDD-828238b5) — FREE: makes NO LLM call (no token cost), " +
+      "only a public model-catalog fetch (no API key). Diffs the live catalog " +
+      "against a seeded snapshot and, for each new id, assesses it against every " +
+      "per-tool requirements gate so you can see which arrivals are worth " +
+      "adopting. ADVISORY only — writes a report and returns its path; never " +
+      "changes settings (the server is read-only). First run seeds the snapshot " +
+      "and reports zero arrivals.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        qualifying_only: {
+          type: "boolean",
+          description:
+            "When true, report only arrivals that meet ≥1 tool's requirements. " +
+            "Default false (report every new model).",
+        },
+      },
+      required: [],
+    },
+  },
 ];
 
 /** Set of MCP tool names provided by mass-scouting. Used by index.ts's dispatcher. */
@@ -1264,6 +1289,28 @@ export async function dispatchMassScoutTool(
         return {
           content: [{ type: "text", text }],
           isError: report.summary.critical > 0,
+        };
+      } catch (e) {
+        return {
+          content: [{ type: "text", text: (e as Error).message }],
+          isError: true,
+        };
+      }
+    }
+    case "discover_new_models": {
+      // Free new-arrivals autodiscovery (TRDD-828238b5 A4): no LLM call / no
+      // token cost — one public catalog fetch diffed against the seeded
+      // snapshot. Writes a report and returns its path. Tests inject
+      // opts.modelCatalogFetch (network-free).
+      try {
+        const { report, reportPath } = await runDiscoverNewArrivals({
+          qualifyingOnly: bool(args.qualifying_only),
+          ...(opts.modelCatalogFetch ? { fetchModels: opts.modelCatalogFetch } : {}),
+        });
+        const text = `${renderNewArrivalsText(report)}\n\nReport: ${reportPath}`;
+        return {
+          content: [{ type: "text", text }],
+          isError: false,
         };
       } catch (e) {
         return {

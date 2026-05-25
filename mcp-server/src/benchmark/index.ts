@@ -48,6 +48,10 @@ import {
   runCheckModelHealth,
   renderModelHealthText,
 } from "../model-qualification/drift.js";
+import {
+  runDiscoverNewArrivals,
+  renderNewArrivalsText,
+} from "../model-qualification/new-arrivals.js";
 import { resolveProjectMainRoot } from "../project-root.js";
 
 interface CliOptions {
@@ -82,6 +86,10 @@ interface CliOptions {
   assessModel: string | null;
   /** Self-check the CONFIGURED model(s) for presence/cost-drift/regression (no LLM call). */
   checkHealth: boolean;
+  /** Autodiscover models that newly appeared in the catalog since last run (no LLM call). */
+  newArrivals: boolean;
+  /** With --new-arrivals, report only arrivals that meet ≥1 tool's requirements. */
+  qualifyingOnly: boolean;
 }
 
 function parseArgs(argv: readonly string[]): CliOptions {
@@ -101,6 +109,8 @@ function parseArgs(argv: readonly string[]): CliOptions {
     force: false,
     assessModel: null,
     checkHealth: false,
+    newArrivals: false,
+    qualifyingOnly: false,
   };
   // Consume the value that must follow a value-taking flag. If the flag is the
   // last token, or the next token is itself a flag, fail fast — silently
@@ -166,6 +176,10 @@ function parseArgs(argv: readonly string[]): CliOptions {
       i++;
     } else if (a === "--check-health") {
       opts.checkHealth = true;
+    } else if (a === "--new-arrivals") {
+      opts.newArrivals = true;
+    } else if (a === "--qualifying-only") {
+      opts.qualifyingOnly = true;
     } else if (a === "--help" || a === "-h") {
       printHelp();
       process.exit(0);
@@ -228,6 +242,11 @@ function printHelp(): void {
       "                    assignment. Makes one public OpenRouter catalog fetch.",
       "                    Does NOT run any benchmark (use --security-triage for",
       "                    security_scan's benchmark gate).",
+      "  --new-arrivals    Autodiscover models that newly appeared in the catalog",
+      "                    since the last run, each assessed against every tool's",
+      "                    requirements. Free (no LLM call). Writes a report under",
+      "                    reports/model-arrivals/. Add --qualifying-only to list",
+      "                    only arrivals that fit >=1 tool.",
       "  Pass gate: zero under-flags on critical (judge-manipulation + visible-taint)",
       "  cases AND aggregate score >= 0.5. Never auto-selects a pricier model.",
       "  Fail-safe (error/timeout) cases are excluded from scoring; a run with",
@@ -301,6 +320,12 @@ async function main(): Promise<number> {
   // call; only a public catalog fetch + a JSON diff vs the seeded baseline).
   if (opts.checkHealth) {
     return runCheckHealthPhase();
+  }
+
+  // --new-arrivals routes to catalog new-model autodiscovery — free (no LLM
+  // call; one public catalog fetch diffed against the seeded snapshot).
+  if (opts.newArrivals) {
+    return runNewArrivalsPhase(opts);
   }
 
   if (opts.applyProfile !== null && opts.pickTopN === null) {
@@ -497,6 +522,23 @@ async function runCheckHealthPhase(): Promise<number> {
   process.stdout.write(renderModelHealthText(report) + "\n");
   process.stdout.write(`\nReport: ${reportPath}\n`);
   return report.summary.critical > 0 ? 1 : 0;
+}
+
+/**
+ * --new-arrivals: autodiscover models that newly appeared in the OpenRouter
+ * catalog since the last run (TRDD-828238b5 A4). Free — no LLM call; one public
+ * catalog fetch diffed against the seeded snapshot, each new id assessed against
+ * every per-tool requirements gate. Writes a report under reports/model-arrivals/
+ * and prints a summary. Report-only — always exit 0 (informational).
+ */
+async function runNewArrivalsPhase(opts: CliOptions): Promise<number> {
+  console.error(`[new-arrivals] diffing the live catalog against the last snapshot …`);
+  const { report, reportPath } = await runDiscoverNewArrivals({
+    qualifyingOnly: opts.qualifyingOnly,
+  });
+  process.stdout.write(renderNewArrivalsText(report) + "\n");
+  process.stdout.write(`\nReport: ${reportPath}\n`);
+  return 0;
 }
 
 /** Shared by --from-cache and the post-benchmark --pick-top-n branch. */

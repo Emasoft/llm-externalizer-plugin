@@ -3,7 +3,7 @@ trdd-id: 828238b5-42d7-478e-8fe7-44d74f812286
 title: Auto-* model management suite + deep-audit findings backlog
 status: in-progress
 created: 2026-05-24T22:56:20+0200
-updated: 2026-05-25T03:31:11+0200
+updated: 2026-05-25T03:42:00+0200
 ---
 
 # TRDD-828238b5 — Auto-* model management suite + deep-audit findings backlog
@@ -95,12 +95,34 @@ kind was de-hardcoded:
   its `?? {…}` — it is a legitimate guard for a future `DEFAULT_MODEL` change,
   not dead under the project's index-access typing.
 
-### A4 — [M] New-arrivals autodiscovery (capability 3, PARTIAL)
+### A4 — [M] New-arrivals autodiscovery (capability 3, PARTIAL) — DONE
 New `model-qualification/new-arrivals.ts`: persist a catalog snapshot
 (`getConfigDir()/catalog-snapshot.json`, shared with A3), diff live vs snapshot
 on `created` (field already parsed at `discover.ts:44`), feed new qualifying ids
 into the existing benchmarks (`pickTopN` / `selectSecurityTriageModel`), report
 winners. CLI `--new-arrivals` + opt-in cron; report-only by default.
+
+**What shipped:**
+- `model-qualification/new-arrivals.ts` — pure core (`diffNewArrivals`,
+  `createdToIso`) + IO (`discoverNewArrivals`, snapshot load/save atomic) + 3
+  surfaces (`runDiscoverNewArrivals` orchestrator, markdown + text renderers).
+  Each new id is assessed via `assessModelAcrossTools` (registry requirements);
+  report shows qualified-tool count + which are benchmark-gated. First run seeds
+  the snapshot and reports zero (mirrors A2's baseline seeding). `qualifyingOnly`
+  filters to fits-≥1-tool.
+- 3 surfaces: MCP tool `discover_new_models` (mass_scouting/mcp-tools.ts), CLI
+  `--new-arrivals [--qualifying-only]` (benchmark/index.ts), slash command
+  `llm-externalizer-discover-new-models`.
+- 18 new-arrivals unit tests + 2 hermetic dispatch tests; roster (index.test.ts,
+  mcp-tools.test.ts count 20→21) + docs (README 36→37 tools / 25→26 commands /
+  16→17 base, model-qual tables, rule inventory, tool-use-cases) updated.
+- Snapshot at `getConfigDir()/catalog-snapshot.json` (the A3-shared snapshot the
+  original plan referenced; A3 itself used the in-memory 1h cache, so A4 owns
+  this on-disk snapshot). Report-only — adoption stays user-only.
+- DEFERRED to A7: auto-feeding qualifying arrivals into `pickTopN` /
+  `selectSecurityTriageBenchmark` (that's the auto-replacement loop's job; A4
+  reports candidates, A7 acts on them). Opt-in cron is a userland scheduling
+  choice (the CLI `--new-arrivals` is the cron entry point), not shipped code.
 
 ### A5 — [M] Doc/help/config regeneration gate (capability 7, PARTIAL)
 Single-source-of-truth generator: `registry.ts` (per-tool table) + `API_PRESETS`

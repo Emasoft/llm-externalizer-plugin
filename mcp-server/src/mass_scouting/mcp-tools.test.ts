@@ -39,13 +39,16 @@ describe("MASS_SCOUT_TOOLS", () => {
      *  DB-free, offline, in-process).
      *  TRDD-828238b5 A2 added 1 (check_model_health — configured-model self-check;
      *  DB-free, offline catalog fetch, in-process).
-     *  Total = 8 base + 5 + 2 + 1 + 1 + 1 + 1 + 1 = 20. */
-    expect(MASS_SCOUT_TOOLS.length).toBe(20);
+     *  TRDD-828238b5 A4 added 1 (discover_new_models — new-arrivals autodiscovery;
+     *  DB-free, offline catalog fetch, in-process).
+     *  Total = 8 base + 5 + 2 + 1 + 1 + 1 + 1 + 1 + 1 = 21. */
+    expect(MASS_SCOUT_TOOLS.length).toBe(21);
     const names = MASS_SCOUT_TOOLS.map((t) => t.name).sort();
     expect(names).toEqual(
       [
         "assess_model",
         "check_model_health",
+        "discover_new_models",
         "mass_scout",
         "mass_scout_audit_sample",
         "mass_scout_body_get",
@@ -88,6 +91,7 @@ describe("MASS_SCOUT_TOOLS", () => {
       "security_triage_benchmark",
       "assess_model",
       "check_model_health",
+      "discover_new_models",
     ]);
     for (const t of MASS_SCOUT_TOOLS) {
       if (NO_DB.has(t.name)) continue;
@@ -478,5 +482,63 @@ describe("dispatchMassScoutTool — check_model_health (TRDD-828238b5 A2)", () =
     );
     expect(res.isError).toBe(true);
     expect(res.content[0]!.text).toContain("deprecated/removed");
+  });
+});
+
+describe("dispatchMassScoutTool — discover_new_models (TRDD-828238b5 A4)", () => {
+  // Hermetic: a tmp config dir holds the catalog snapshot; the report writes
+  // under a tmp CLAUDE_PROJECT_DIR. The catalog is injected so the dispatch
+  // never touches the network. No settings.yaml needed (profile-independent).
+  const ORIG_CFG = process.env.LLM_EXT_CONFIG_DIR;
+  const ORIG_PROJ = process.env.CLAUDE_PROJECT_DIR;
+  let tmp: string;
+
+  const model = (id: string): OpenRouterModel => ({
+    id,
+    name: id,
+    context_length: 1_000_000,
+    top_provider: { max_completion_tokens: 64_000 },
+    supported_parameters: ["response_format", "reasoning"],
+    pricing: { prompt: "0.00000001", completion: "0.00000001" },
+  });
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join("/tmp", "dnm-dispatch-"));
+    process.env.LLM_EXT_CONFIG_DIR = tmp;
+    process.env.CLAUDE_PROJECT_DIR = tmp;
+  });
+  afterEach(() => {
+    if (ORIG_CFG !== undefined) process.env.LLM_EXT_CONFIG_DIR = ORIG_CFG;
+    else delete process.env.LLM_EXT_CONFIG_DIR;
+    if (ORIG_PROJ !== undefined) process.env.CLAUDE_PROJECT_DIR = ORIG_PROJ;
+    else delete process.env.CLAUDE_PROJECT_DIR;
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("first run seeds the snapshot and returns a report path", async () => {
+    const res = await dispatchMassScoutTool(
+      "discover_new_models",
+      {},
+      { modelCatalogFetch: async () => [model("vendor/a")] },
+    );
+    expect(res.isError).toBeFalsy();
+    const text = res.content[0]!.text;
+    expect(text).toContain("seeded the snapshot");
+    expect(text).toContain("reports/model-arrivals");
+  });
+
+  it("second run reports the genuinely-new model offline", async () => {
+    await dispatchMassScoutTool(
+      "discover_new_models",
+      {},
+      { modelCatalogFetch: async () => [model("vendor/a")] },
+    );
+    const res = await dispatchMassScoutTool(
+      "discover_new_models",
+      {},
+      { modelCatalogFetch: async () => [model("vendor/a"), model("vendor/b")] },
+    );
+    expect(res.isError).toBeFalsy();
+    expect(res.content[0]!.text).toContain("vendor/b");
   });
 });

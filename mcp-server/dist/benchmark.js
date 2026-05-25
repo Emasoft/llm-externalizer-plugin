@@ -218069,9 +218069,9 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 });
 
 // src/benchmark/index.ts
-import { mkdirSync as mkdirSync5, writeFileSync as writeFileSync5, existsSync as existsSync6 } from "node:fs";
+import { mkdirSync as mkdirSync6, writeFileSync as writeFileSync6, existsSync as existsSync6 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname2, join as join8 } from "node:path";
+import { dirname as dirname2, join as join9 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/usage-history.ts
@@ -221035,6 +221035,173 @@ function renderModelHealthText(report) {
   return lines.join("\n");
 }
 
+// src/model-qualification/new-arrivals.ts
+import { mkdirSync as mkdirSync5, readFileSync as readFileSync8, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join8 } from "node:path";
+function createdToIso(created) {
+  if (created === null || !Number.isFinite(created) || created <= 0) return null;
+  return new Date(created * 1e3).toISOString();
+}
+function diffNewArrivals(catalog, snapshot) {
+  const known = snapshot.models;
+  const arrivals = [];
+  const updatedModels = {};
+  for (const m of catalog) {
+    const created = typeof m.created === "number" && Number.isFinite(m.created) ? m.created : null;
+    updatedModels[m.id] = { created };
+    if (!(m.id in known)) {
+      const a = assessModelAcrossTools(m);
+      arrivals.push({
+        id: m.id,
+        name: m.name ?? m.id,
+        created,
+        createdIso: createdToIso(created),
+        qualifiedCount: a.qualifiedCount,
+        totalTools: a.totalTools,
+        qualifiesForAnyTool: a.qualifiedCount > 0,
+        benchmarkGatedQualified: a.benchmarkGatedQualified
+      });
+    }
+  }
+  arrivals.sort((x, y) => {
+    if (x.created !== null && y.created !== null) {
+      if (y.created !== x.created) return y.created - x.created;
+    } else if (x.created !== null) {
+      return -1;
+    } else if (y.created !== null) {
+      return 1;
+    }
+    return x.id < y.id ? -1 : x.id > y.id ? 1 : 0;
+  });
+  return {
+    arrivals,
+    updatedSnapshot: { generatedAt: localIsoTimestamp(), models: updatedModels }
+  };
+}
+function getCatalogSnapshotPath() {
+  return join8(getConfigDir(), "catalog-snapshot.json");
+}
+function loadSnapshot(path = getCatalogSnapshotPath()) {
+  try {
+    const raw = readFileSync8(path, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const obj = parsed;
+      if (obj.models && typeof obj.models === "object" && !Array.isArray(obj.models)) {
+        return {
+          generatedAt: typeof obj.generatedAt === "string" ? obj.generatedAt : "",
+          models: obj.models
+        };
+      }
+    }
+    return { generatedAt: "", models: {} };
+  } catch {
+    return { generatedAt: "", models: {} };
+  }
+}
+function saveSnapshot(snapshot, path = getCatalogSnapshotPath()) {
+  try {
+    mkdirSync5(getConfigDir(), { recursive: true });
+    const tmp = `${path}.tmp.${process.pid}`;
+    writeFileSync5(tmp, JSON.stringify(snapshot, null, 2));
+    renameSync3(tmp, path);
+  } catch {
+  }
+}
+async function discoverNewArrivals(opts = {}) {
+  const fetchModels = opts.fetchModels ?? (() => fetchProgrammingModels());
+  const snapshotPath = opts.snapshotPath ?? getCatalogSnapshotPath();
+  const persist = opts.persistSnapshot !== false;
+  const catalog = await fetchModels();
+  const prior = loadSnapshot(snapshotPath);
+  const seeded = Object.keys(prior.models).length === 0;
+  const { arrivals, updatedSnapshot } = diffNewArrivals(catalog, prior);
+  if (persist) saveSnapshot(updatedSnapshot, snapshotPath);
+  const reported = seeded ? [] : opts.qualifyingOnly ? arrivals.filter((a) => a.qualifiesForAnyTool) : arrivals;
+  return {
+    generatedAt: localIsoTimestamp(),
+    snapshotSeeded: seeded,
+    catalogSize: catalog.length,
+    arrivals: reported,
+    summary: {
+      total: reported.length,
+      qualifying: reported.filter((a) => a.qualifiesForAnyTool).length
+    }
+  };
+}
+function renderNewArrivalsMarkdown(report) {
+  const lines = [];
+  lines.push("# New OpenRouter model arrivals");
+  lines.push("");
+  lines.push(`Generated: ${report.generatedAt}`);
+  lines.push(`Catalog size: ${report.catalogSize} models`);
+  if (report.snapshotSeeded) {
+    lines.push("");
+    lines.push(
+      "> First run \u2014 seeded the catalog snapshot; new-arrival detection starts next run."
+    );
+    lines.push("");
+    return lines.join("\n");
+  }
+  lines.push("");
+  lines.push(
+    `**${report.summary.total} new model(s)** since the last snapshot \xB7 ${report.summary.qualifying} qualify for \u22651 tool.`
+  );
+  lines.push("");
+  if (report.arrivals.length === 0) {
+    lines.push("_No new models since the last snapshot._");
+    lines.push("");
+    return lines.join("\n");
+  }
+  lines.push("| Model | Created | Qualifies | Benchmark-gated |");
+  lines.push("|-------|---------|-----------|-----------------|");
+  for (const a of report.arrivals) {
+    const created = a.createdIso ? a.createdIso.slice(0, 10) : "\u2014";
+    const qual = a.qualifiesForAnyTool ? `${a.qualifiedCount}/${a.totalTools}` : "no";
+    const gated = a.benchmarkGatedQualified.length ? a.benchmarkGatedQualified.join(", ") : "\u2014";
+    lines.push(`| \`${a.id}\` | ${created} | ${qual} | ${gated} |`);
+  }
+  lines.push("");
+  lines.push(
+    "Acting on an arrival is user-only: vet it with `/llm-externalizer-assess-model` (and the tool's benchmark for benchmark-gated tools), then edit `~/.llm-externalizer/settings.yaml` and `reset`."
+  );
+  lines.push("");
+  return lines.join("\n");
+}
+var TEXT_ARRIVALS_CAP = 25;
+function renderNewArrivalsText(report) {
+  const lines = [];
+  lines.push(`New model arrivals \u2014 ${report.generatedAt}`);
+  if (report.snapshotSeeded) {
+    lines.push(
+      `Catalog size: ${report.catalogSize}. First run \u2014 seeded the snapshot; detection starts next run.`
+    );
+    return lines.join("\n");
+  }
+  lines.push(
+    `${report.summary.total} new since last snapshot (${report.summary.qualifying} qualify for \u22651 tool); catalog size ${report.catalogSize}.`
+  );
+  const shown = report.arrivals.slice(0, TEXT_ARRIVALS_CAP);
+  for (const a of shown) {
+    const created = a.createdIso ? a.createdIso.slice(0, 10) : "????-??-??";
+    const qual = a.qualifiesForAnyTool ? `qualifies ${a.qualifiedCount}/${a.totalTools}` : "no fit";
+    const gated = a.benchmarkGatedQualified.length ? ` (benchmark: ${a.benchmarkGatedQualified.join(", ")})` : "";
+    lines.push(`  ${created}  ${a.id}  \u2014 ${qual}${gated}`);
+  }
+  if (report.arrivals.length > shown.length) {
+    lines.push(`  \u2026 and ${report.arrivals.length - shown.length} more (see the report).`);
+  }
+  return lines.join("\n");
+}
+async function runDiscoverNewArrivals(opts = {}) {
+  const report = await discoverNewArrivals(opts);
+  const dir = opts.outputDir ?? join8(resolveProjectMainRoot(), "reports", "model-arrivals");
+  mkdirSync5(dir, { recursive: true });
+  const reportPath = join8(dir, `${compactStamp()}-new-arrivals.md`);
+  writeFileSync5(reportPath, renderNewArrivalsMarkdown(report));
+  return { report, reportPath };
+}
+
 // src/benchmark/index.ts
 function parseArgs(argv) {
   const opts = {
@@ -221052,7 +221219,9 @@ function parseArgs(argv) {
     triageModels: [],
     force: false,
     assessModel: null,
-    checkHealth: false
+    checkHealth: false,
+    newArrivals: false,
+    qualifyingOnly: false
   };
   const takeValue = (flag, i) => {
     const v = argv[i + 1];
@@ -221114,6 +221283,10 @@ function parseArgs(argv) {
       i++;
     } else if (a === "--check-health") {
       opts.checkHealth = true;
+    } else if (a === "--new-arrivals") {
+      opts.newArrivals = true;
+    } else if (a === "--qualifying-only") {
+      opts.qualifyingOnly = true;
     } else if (a === "--help" || a === "-h") {
       printHelp();
       process.exit(0);
@@ -221175,6 +221348,11 @@ function printHelp() {
       "                    assignment. Makes one public OpenRouter catalog fetch.",
       "                    Does NOT run any benchmark (use --security-triage for",
       "                    security_scan's benchmark gate).",
+      "  --new-arrivals    Autodiscover models that newly appeared in the catalog",
+      "                    since the last run, each assessed against every tool's",
+      "                    requirements. Free (no LLM call). Writes a report under",
+      "                    reports/model-arrivals/. Add --qualifying-only to list",
+      "                    only arrivals that fit >=1 tool.",
       "  Pass gate: zero under-flags on critical (judge-manipulation + visible-taint)",
       "  cases AND aggregate score >= 0.5. Never auto-selects a pricier model.",
       "  Fail-safe (error/timeout) cases are excluded from scoring; a run with",
@@ -221206,12 +221384,12 @@ function resolveApiKey2() {
 function resolveFixturesDir() {
   const here = dirname2(fileURLToPath2(import.meta.url));
   const candidates = [
-    join8(here, "fixtures"),
-    join8(here, "..", "src", "benchmark", "fixtures"),
-    join8(here, "..", "..", "src", "benchmark", "fixtures")
+    join9(here, "fixtures"),
+    join9(here, "..", "src", "benchmark", "fixtures"),
+    join9(here, "..", "..", "src", "benchmark", "fixtures")
   ];
   for (const c of candidates) {
-    if (existsSync6(join8(c, "file-01.ts"))) return c;
+    if (existsSync6(join9(c, "file-01.ts"))) return c;
   }
   throw new Error(`Could not locate benchmark fixtures. Tried:
   ${candidates.join("\n  ")}`);
@@ -221230,11 +221408,14 @@ async function main() {
   if (opts.checkHealth) {
     return runCheckHealthPhase();
   }
+  if (opts.newArrivals) {
+    return runNewArrivalsPhase(opts);
+  }
   if (opts.applyProfile !== null && opts.pickTopN === null) {
     throw new Error("--apply-profile requires --pick-top-n");
   }
   if (opts.fromCache) {
-    const cachePath2 = join8(homedir2(), ".llm-externalizer", "benchmark-results.json");
+    const cachePath2 = join9(homedir2(), ".llm-externalizer", "benchmark-results.json");
     const cache = loadCachedReport(cachePath2);
     console.error(`[benchmark] --from-cache: using ${cachePath2} (${cache.results.length} models, run at ${cache.timestamp}).`);
     if (opts.pickTopN === null) {
@@ -221311,17 +221492,17 @@ async function main() {
     results
   };
   const markdown = renderReport(reportInput);
-  mkdirSync5(dirname2(reportPath), { recursive: true });
-  writeFileSync5(reportPath, markdown, "utf-8");
+  mkdirSync6(dirname2(reportPath), { recursive: true });
+  writeFileSync6(reportPath, markdown, "utf-8");
   console.error(`[benchmark] Report: ${reportPath}`);
   const json = renderJson(reportInput);
-  const cacheJsonPath = join8(homedir2(), ".llm-externalizer", "benchmark-results.json");
-  mkdirSync5(dirname2(cacheJsonPath), { recursive: true });
-  writeFileSync5(cacheJsonPath, json, "utf-8");
+  const cacheJsonPath = join9(homedir2(), ".llm-externalizer", "benchmark-results.json");
+  mkdirSync6(dirname2(cacheJsonPath), { recursive: true });
+  writeFileSync6(cacheJsonPath, json, "utf-8");
   console.error(`[benchmark] JSON cache: ${cacheJsonPath}`);
   if (opts.jsonPath) {
-    mkdirSync5(dirname2(opts.jsonPath), { recursive: true });
-    writeFileSync5(opts.jsonPath, json, "utf-8");
+    mkdirSync6(dirname2(opts.jsonPath), { recursive: true });
+    writeFileSync6(opts.jsonPath, json, "utf-8");
     console.error(`[benchmark] JSON (user-path): ${opts.jsonPath}`);
   }
   const passers = [...results.values()].filter((r) => r.score?.pass).length;
@@ -221366,6 +221547,17 @@ Report: ${reportPath}
 `);
   return report.summary.critical > 0 ? 1 : 0;
 }
+async function runNewArrivalsPhase(opts) {
+  console.error(`[new-arrivals] diffing the live catalog against the last snapshot \u2026`);
+  const { report, reportPath } = await runDiscoverNewArrivals({
+    qualifyingOnly: opts.qualifyingOnly
+  });
+  process.stdout.write(renderNewArrivalsText(report) + "\n");
+  process.stdout.write(`
+Report: ${reportPath}
+`);
+  return 0;
+}
 function runPickPhase(results, opts) {
   const topN = opts.pickTopN;
   if (topN === null) return 0;
@@ -221388,7 +221580,7 @@ function runPickPhase(results, opts) {
   console.error("# settings.yaml block (paste under `profiles:`):");
   process.stdout.write(block);
   if (opts.applyProfile !== null) {
-    const settingsPath = join8(homedir2(), ".llm-externalizer", "settings.yaml");
+    const settingsPath = join9(homedir2(), ".llm-externalizer", "settings.yaml");
     try {
       const result = applyPicksToSettings(settingsPath, opts.applyProfile, picks);
       console.error("");
@@ -221417,7 +221609,7 @@ function buildReportPath() {
   const offsetAbs = Math.abs(offsetMin);
   const tz = `${offsetSign}${pad(Math.floor(offsetAbs / 60))}${pad(offsetAbs % 60)}`;
   const ts2 = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${tz}`;
-  return join8(root, "reports", "benchmark", `${ts2}-model-comparison.md`);
+  return join9(root, "reports", "benchmark", `${ts2}-model-comparison.md`);
 }
 withUsageContext(
   { tool: "cli:benchmark", params: "" },

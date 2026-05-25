@@ -94,6 +94,9 @@ describe('listTools', () => {
       // check_model_health — configured-model self-check (TRDD-828238b5 A2),
       // registered in the same array; offline (catalog fetch only), no LLM call.
       'check_model_health',
+      // discover_new_models — new-arrivals autodiscovery (TRDD-828238b5 A4),
+      // registered in the same array; offline (catalog fetch only), no LLM call.
+      'discover_new_models',
     ].sort();
 
     expect(toolNames).toEqual(expected);

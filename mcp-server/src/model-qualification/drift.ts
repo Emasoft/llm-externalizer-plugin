@@ -354,7 +354,7 @@ export function resolveActiveProfile(): ResolvedProfile {
 }
 
 /** Compact, filesystem-safe local timestamp: `YYYYMMDD_HHMMSS±HHMM`. */
-function compactStamp(d: Date = new Date()): string {
+export function compactStamp(d: Date = new Date()): string {
   const pad = (n: number): string => String(n).padStart(2, "0");
   const off = -d.getTimezoneOffset();
   const sign = off >= 0 ? "+" : "-";

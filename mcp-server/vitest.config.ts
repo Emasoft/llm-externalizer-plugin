@@ -75,6 +75,8 @@ export default defineConfig({
       'src/model-qualification/assess.test.ts',
       // check_model_health drift detection (TRDD-828238b5 A2).
       'src/model-qualification/drift.test.ts',
+      // New-model autodiscovery — catalog snapshot diff (TRDD-828238b5 A4).
+      'src/model-qualification/new-arrivals.test.ts',
       'src/default-output-dir.test.ts',
       'src/cluster/phase2_verify.test.ts',
       'src/cluster/phase3_canonical.test.ts',

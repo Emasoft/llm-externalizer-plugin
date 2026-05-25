@@ -27,6 +27,7 @@ your context.
 | Canonicalize / dedupe 10k–1M short labels by meaning | `cluster_synonyms` |
 | Will model X work for tool Y? / pick a per-tool model | `assess_model`, `security_triage_benchmark` |
 | Are my CONFIGURED models still valid? (removed? price up? lost a capability?) | `check_model_health` |
+| Are there NEW models I should consider? (newer / cheaper arrivals) | `discover_new_models` |
 | Is the backend healthy? what model/profile is active? | `discover` |
 | I edited settings.yaml — reload it | `reset` |
 
@@ -153,6 +154,18 @@ a report to `reports/model-health/`. **Use when** you want a periodic "are my
 configured models still good?" check — caught a removed model, a price hike, or a
 capability the model lost. Acting on findings is user-only (edit settings.yaml +
 `reset`).
+
+### `discover_new_models`
+**Free** (no LLM call, no token cost — one public catalog fetch, no API key).
+The forward-looking sibling of `check_model_health`: instead of checking the
+models you already use, it surfaces models that NEWLY appeared in the OpenRouter
+catalog since the last run, each assessed against every tool's requirements so
+you can spot a newer/cheaper candidate worth adopting. Diffs the live catalog
+against a seeded snapshot at `~/.llm-externalizer/catalog-snapshot.json`; first
+run seeds and reports zero. Add `qualifying-only` to hide arrivals that fit no
+tool. Report-only — adopting an arrival is user-only (vet with `assess_model` +
+the tool's benchmark, then edit settings.yaml + `reset`). **Use when** you want
+a periodic "anything new I should switch to?" sweep.
 
 ### `security_triage_benchmark`
 Qualifies model(s) for `security_scan` against a labeled golden dataset, scored
