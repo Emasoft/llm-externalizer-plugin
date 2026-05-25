@@ -59,7 +59,13 @@ import {
 import { renderMarkdownReport, summariseJob } from "./reports";
 import { runSecurityScan } from "../security_scan/security_scan_main";
 import { DEFAULT_MODEL } from "../security_scan/types";
-import { loadSettings, resolveProfile, resolveModelForTool } from "../config";
+import {
+  loadSettings,
+  resolveProfile,
+  resolveModelForTool,
+  assertFreeOnlyModel,
+  getActiveFreeOnly,
+} from "../config";
 import type { OpenRouterModel } from "../benchmark/discover";
 import { resolveProjectMainRoot } from "../project-root";
 
@@ -141,6 +147,29 @@ function parseFlags(args: string[]): { flags: Record<string, string>; positional
     }
   }
   return { flags, positional };
+}
+
+/**
+ * The model a mass_scout CLI command should use. free_only (TRDD-97ef8b63)
+ * overrides EVERY customized choice: under a free_only active profile the free
+ * pool's top model wins over `--model` and DEFAULT_MODEL, so mass_scout actually
+ * RUNS on a free model instead of throwing at the cost-safety guard. Non-free
+ * profiles keep the exact prior behaviour (`--model` else DEFAULT_MODEL).
+ */
+function resolveCliModel(flags: Record<string, string>): string {
+  if (getActiveFreeOnly()) {
+    try {
+      const s = loadSettings();
+      const active = s?.profiles[s.active];
+      if (s && active) {
+        const r = resolveProfile(s.active, active);
+        if (r.model) return r.model; // free_models[0] (validated ':free')
+      }
+    } catch {
+      /* settings unreadable — fall through; the guard still blocks paid spend */
+    }
+  }
+  return flags["model"] ?? DEFAULT_MODEL;
 }
 
 function requireFlag(
@@ -567,7 +596,7 @@ function runRegister(args: string[]): CliResult {
   }
 
   // Resolve per-file size cap from optional --model.
-  const model = flags["model"] ?? DEFAULT_MODEL;
+  const model = resolveCliModel(flags);
   const pricing = resolvePricing(model, flags);
   if ("error" in pricing) return err(pricing.error);
   const registerCap = bytesCapFromPct(
@@ -675,7 +704,7 @@ async function runEstimate(
   const fs = loadFieldsetFromArg(fieldsFile);
   if ("error" in fs) return err(fs.error);
 
-  const model = flags["model"] ?? DEFAULT_MODEL;
+  const model = resolveCliModel(flags);
   const pricing = resolvePricing(model, flags);
   if ("error" in pricing) return err(pricing.error);
 
@@ -773,7 +802,7 @@ async function runScout(
   const fs = loadFieldsetFromArg(fieldsFile);
   if ("error" in fs) return err(fs.error);
 
-  const model = flags["model"] ?? DEFAULT_MODEL;
+  const model = resolveCliModel(flags);
   const pricing = resolvePricing(model, flags);
   if ("error" in pricing) return err(pricing.error);
 
@@ -1088,7 +1117,10 @@ async function runProposeFieldset(
     );
   }
   const fetchImpl = opts.fetchImpl ?? realFetch;
-  const model = flags["model"] ?? DEFAULT_MODEL;
+  const model = resolveCliModel(flags);
+  // Airtight free_only cost-safety (TRDD-97ef8b63). propose-fieldset makes its own
+  // OpenRouter call; under free_only a non-':free' model throws BEFORE the request.
+  assertFreeOnlyModel(getActiveFreeOnly(), "openrouter", model);
   const apiUrl = "https://openrouter.ai/api/v1/chat/completions";
 
   // Read sample files (if any) so the LLM can see actual content.
@@ -1422,7 +1454,7 @@ async function runChain(
   const fs = loadFieldsetFromArg(fieldsFile);
   if ("error" in fs) return err(fs.error);
 
-  const model = flags["model"] ?? DEFAULT_MODEL;
+  const model = resolveCliModel(flags);
   const pricing = resolvePricing(model, flags);
   if ("error" in pricing) return err(pricing.error);
 

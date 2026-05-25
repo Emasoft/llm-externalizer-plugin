@@ -1283,6 +1283,8 @@ import {
   getSettingsPath,
   getConfigDir,
   generateDefaultSettings,
+  assertFreeOnlyModel,
+  setActiveFreeOnly,
 } from "./config.js";
 import {
   withUsageContext,
@@ -1349,6 +1351,9 @@ let activeResolved: ResolvedProfile | null = (() => {
       );
     }
   }
+  // Publish free_only to config.ts so the pure subsystem spend sites
+  // (judge/scout/benchmark) enforce the cost-safety guard (TRDD-97ef8b63).
+  setActiveFreeOnly(resolved.freeOnly);
   return resolved;
 })();
 
@@ -1829,6 +1834,9 @@ function reloadSettingsFromDisk(): boolean {
   // coherent pair.
   activeSettings = newSettings;
   activeResolved = nextResolved;
+  // Re-publish free_only on every reload so the subsystem guard tracks the live
+  // profile (TRDD-97ef8b63). null resolved (invalid settings) → not free_only.
+  setActiveFreeOnly(nextResolved?.freeOnly ?? false);
   settingsValid = nextValid;
   settingsError = nextErr;
   if (nextValid) {
@@ -2416,6 +2424,13 @@ async function resolveConnection(options?: {
   // tuple for this single resolution.
   const backend = getCurrentBackend();
   const model = options?.model || backend.model;
+  // Airtight cost-safety (TRDD-97ef8b63): under a free_only profile, refuse any
+  // non-':free' model BEFORE it reaches the wire. resolveConnection is the SINGLE
+  // point every request's model flows through (every OpenRouter fetch sends
+  // conn.model), so this one check covers every tool, ensemble slot, rotation
+  // fallback, modelOverride, and the 402→free fallback. A leak fails fast — it
+  // never bills.
+  assertFreeOnlyModel(activeResolved?.freeOnly ?? false, backend.type, model);
   const headers = apiHeaders();
   const timeout = SOFT_TIMEOUT_MS;
 

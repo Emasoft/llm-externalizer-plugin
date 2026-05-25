@@ -17,6 +17,20 @@ refactor, or getting a second opinion.
 **Don't use it for:** surgical edits (Read+Edit), multi-step logic needing tool access
 (git/fs/web), reasoning only Opus can handle, or applying fixes (write tools are inactive).
 
+**Cost safety — free mode (zero spend, ALL tools):** to guarantee not a single cent is spent
+on OpenRouter, set `free_only: true` on the active profile in
+`~/.llm-externalizer/settings.yaml` with a `free_models:` pool of `:free` model ids (then
+`reset`). Under `free_only` the free pool **OVERRIDES every per-tool choice** — every tool
+(`chat`, `code_task`, `scan_folder`, `security_scan`, `cluster_synonyms`, `mass_scout`,
+`check_*`, `compare_files`, …), every ensemble slot, every rate-limit fallback, and even a
+`tool_models:` override or a credit-exhaustion fallback uses ONLY `:free` models. The server
+**refuses (throws, before the request) to send any non-`:free` model** while free mode is on,
+so a misconfiguration fails fast instead of billing. If a task must be zero-cost and the
+active profile is a paid one, **switch to a `free_only` profile FIRST** — verify with
+`discover` / `get_settings` (active profile + free mode shown). Free models are heavily
+rate-limited (daily caps) but cost $0; the ensemble rotates across the pool on a daily-limit
+hit. Full recipe: README "B2. OpenRouter free-only ensemble".
+
 **Gotchas worth remembering:**
 1. Pass file **paths** (`input_files_paths`), never file contents — the server reads from
    disk; pasting content wastes your tokens.

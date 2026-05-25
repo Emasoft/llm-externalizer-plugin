@@ -310,6 +310,15 @@ models that clear the requirements floor form the ensemble; the rest are the
 rate-limit fallback pool. **Every `free_models` entry MUST end with `:free`** —
 the validator rejects the profile otherwise, so it can never bill.
 
+**Free mode overrides EVERY tool.** Under `free_only`, the free pool wins over
+every per-tool choice — `tool_models:` overrides, each tool's own default, the
+ensemble, the rotation fallback, and even the credit-exhaustion fallback all use
+only `:free` models. As a hard floor, the server **refuses to send any
+non-`:free` model to OpenRouter while free mode is on** (it throws before the
+request rather than spend), so a misconfiguration fails fast instead of billing.
+This makes `free_only` a reliable zero-spend switch for every session that shares
+this `settings.yaml`.
+
 ```yaml
 active: remote-free-ensemble
 profiles:

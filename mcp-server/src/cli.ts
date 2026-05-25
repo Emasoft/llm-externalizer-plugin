@@ -19,6 +19,8 @@ import {
   ensureSettingsExist,
   getSettingsPath,
   resolveProfile,
+  loadSettings,
+  setActiveFreeOnly,
 } from "./config.js";
 import { withUsageContext, summarizeParams } from "./usage-history.js";
 import {
@@ -745,6 +747,19 @@ async function main(): Promise<void> {
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
     printUsage();
     process.exit(0);
+  }
+
+  // Airtight free_only cost-safety (TRDD-97ef8b63). This CLI runs as a SEPARATE
+  // process from the MCP server, so it publishes the active profile's free_only
+  // to config.ts itself — the subsystem spend guards (scout/judge/benchmark) then
+  // refuse any non-':free' model here too. Best-effort: invalid/missing settings
+  // leave the flag false and the subcommand surfaces the real config error.
+  try {
+    const s = loadSettings();
+    const active = s?.profiles[s.active];
+    if (s && active) setActiveFreeOnly(resolveProfile(s.active, active).freeOnly);
+  } catch {
+    /* settings not loadable yet — leave flag false; subcommand reports the error */
   }
 
   // ── model-info top-level command ────────────────────────────────

@@ -40241,7 +40241,11 @@ function resolveProfile(name, profile) {
     thirdModel,
     freeOnly,
     freeModels,
-    toolModels: coerceToolModels(profile.tool_models),
+    // Under free_only the free pool overrides EVERY per-tool choice (TRDD-97ef8b63):
+    // the resolved profile carries NO active per-tool overrides so resolveModelForTool,
+    // get_settings, and drift all agree that free models win. The user's settings.yaml
+    // tool_models are left intact on disk — they reactivate when free_only is off.
+    toolModels: freeOnly ? {} : coerceToolModels(profile.tool_models),
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
     appName: profile.app_name ?? preset.defaultAppName,
@@ -40249,10 +40253,25 @@ function resolveProfile(name, profile) {
   };
 }
 function resolveModelForTool(resolved, tool, fallback) {
+  if (resolved.freeOnly) return resolved.model;
   const override = resolved.toolModels[tool];
   if (typeof override === "string" && override.length > 0) return override;
   if (fallback !== void 0) return fallback;
   return resolved.model;
+}
+var _activeFreeOnly = false;
+function setActiveFreeOnly(freeOnly) {
+  _activeFreeOnly = freeOnly;
+}
+function getActiveFreeOnly() {
+  return _activeFreeOnly;
+}
+function assertFreeOnlyModel(freeOnly, backendType, model) {
+  if (freeOnly && backendType === "openrouter" && !model.endsWith(":free")) {
+    throw new Error(
+      `free_only cost-safety: refusing to send non-free model '${model}' to OpenRouter. Under a free_only profile every tool MUST use a ':free' model \u2014 this is a bug, please report it.`
+    );
+  }
 }
 var SETTINGS_TEMPLATE = `# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 # LLM Externalizer \u2014 Settings
@@ -41165,6 +41184,7 @@ async function runWithLimit(items, limit, fn) {
   await Promise.all(workers);
 }
 async function runScoutJob(reg, opts, fetchImpl) {
+  assertFreeOnlyModel(getActiveFreeOnly(), "openrouter", opts.model);
   const compiled = compileFieldset(opts.fieldset);
   const workers = Math.max(1, opts.workers ?? DEFAULT_SCOUT_WORKERS);
   const maxRetries = opts.maxRetries ?? 1;
@@ -42542,6 +42562,7 @@ function scanReasonTells(reason) {
   return Array.from(found);
 }
 async function judgeGroups(groups, opts, fetchImpl) {
+  assertFreeOnlyModel(getActiveFreeOnly(), "openrouter", opts.model);
   const apiUrl = opts.apiUrl ?? OPENROUTER_URL2;
   const verdicts = new Array(groups.length);
   let totalCost = 0;
@@ -43230,6 +43251,20 @@ function parseFlags(args) {
   }
   return { flags, positional };
 }
+function resolveCliModel(flags) {
+  if (getActiveFreeOnly()) {
+    try {
+      const s = loadSettings();
+      const active = s?.profiles[s.active];
+      if (s && active) {
+        const r = resolveProfile(s.active, active);
+        if (r.model) return r.model;
+      }
+    } catch {
+    }
+  }
+  return flags["model"] ?? DEFAULT_MODEL;
+}
 function requireFlag(flags, name, hint = "") {
   const v = flags[name];
   if (v === void 0 || v === "" || v === "true") {
@@ -43498,7 +43533,7 @@ function runRegister(args) {
   if (paths.length === 0) {
     return ok("registered=0  no files matched");
   }
-  const model = flags["model"] ?? DEFAULT_MODEL;
+  const model = resolveCliModel(flags);
   const pricing = resolvePricing2(model, flags);
   if ("error" in pricing) return err2(pricing.error);
   const registerCap = bytesCapFromPct(
@@ -43578,7 +43613,7 @@ async function runEstimate(args, opts = {}) {
   if (typeof fieldsFile === "object") return err2(fieldsFile.error);
   const fs = loadFieldsetFromArg(fieldsFile);
   if ("error" in fs) return err2(fs.error);
-  const model = flags["model"] ?? DEFAULT_MODEL;
+  const model = resolveCliModel(flags);
   const pricing = resolvePricing2(model, flags);
   if ("error" in pricing) return err2(pricing.error);
   if (flags["live-context"] === "true") {
@@ -43655,7 +43690,7 @@ async function runScout(args, opts) {
   if (typeof sourceRoot === "object") return err2(sourceRoot.error);
   const fs = loadFieldsetFromArg(fieldsFile);
   if ("error" in fs) return err2(fs.error);
-  const model = flags["model"] ?? DEFAULT_MODEL;
+  const model = resolveCliModel(flags);
   const pricing = resolvePricing2(model, flags);
   if ("error" in pricing) return err2(pricing.error);
   const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
@@ -43913,7 +43948,8 @@ async function runProposeFieldset(args, opts) {
     );
   }
   const fetchImpl = opts.fetchImpl ?? realFetch2;
-  const model = flags["model"] ?? DEFAULT_MODEL;
+  const model = resolveCliModel(flags);
+  assertFreeOnlyModel(getActiveFreeOnly(), "openrouter", model);
   const apiUrl = "https://openrouter.ai/api/v1/chat/completions";
   const samples = [];
   const samplesArg = flags["samples"];
@@ -44193,7 +44229,7 @@ async function runChain(args, opts) {
   if ("error" in f) return err2(f.error);
   const fs = loadFieldsetFromArg(fieldsFile);
   if ("error" in fs) return err2(fs.error);
-  const model = flags["model"] ?? DEFAULT_MODEL;
+  const model = resolveCliModel(flags);
   const pricing = resolvePricing2(model, flags);
   if ("error" in pricing) return err2(pricing.error);
   const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
@@ -49970,6 +50006,7 @@ Settings file: ${SETTINGS_FILE}`;
       );
     }
   }
+  setActiveFreeOnly(resolved.freeOnly);
   return resolved;
 })();
 var DEFAULT_OPENROUTER_RPS = 5;
@@ -50212,6 +50249,7 @@ function reloadSettingsFromDisk() {
   }
   activeSettings = newSettings;
   activeResolved = nextResolved;
+  setActiveFreeOnly(nextResolved?.freeOnly ?? false);
   settingsValid = nextValid;
   settingsError = nextErr;
   if (nextValid) {
@@ -50553,6 +50591,7 @@ function apiHeaders() {
 async function resolveConnection(options) {
   const backend = getCurrentBackend();
   const model = options?.model || backend.model;
+  assertFreeOnlyModel(activeResolved?.freeOnly ?? false, backend.type, model);
   const headers = apiHeaders();
   const timeout = SOFT_TIMEOUT_MS;
   if (backend.type === "local" && await detectLMStudio()) {

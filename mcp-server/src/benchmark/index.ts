@@ -53,6 +53,7 @@ import {
   renderNewArrivalsText,
 } from "../model-qualification/new-arrivals.js";
 import { resolveProjectMainRoot } from "../project-root.js";
+import { loadSettings, resolveProfile, setActiveFreeOnly } from "../config.js";
 
 interface CliOptions {
   includeIds: string[];
@@ -302,6 +303,19 @@ function resolveMainRoot(): string {
 
 async function main(): Promise<number> {
   const opts = parseArgs(process.argv);
+
+  // Airtight free_only cost-safety (TRDD-97ef8b63). The benchmark CLI runs as a
+  // SEPARATE process from the MCP server, so it publishes the active profile's
+  // free_only to config.ts itself — the runner then skips (records, never bills)
+  // any non-':free' model. Free mode benchmarks the user's free pool ($0); to
+  // benchmark a paid model, switch off free_only. Best-effort on bad settings.
+  try {
+    const s = loadSettings();
+    const active = s?.profiles[s.active];
+    if (s && active) setActiveFreeOnly(resolveProfile(s.active, active).freeOnly);
+  } catch {
+    /* settings not loadable — leave flag false; the phase reports any real error */
+  }
 
   // --security-triage routes to the security_scan triage benchmark — a wholly
   // separate task (verdict adjudication, not keyword classification) that reuses

@@ -218559,12 +218559,30 @@ function resolveProfile(name, profile) {
     thirdModel,
     freeOnly,
     freeModels,
-    toolModels: coerceToolModels(profile.tool_models),
+    // Under free_only the free pool overrides EVERY per-tool choice (TRDD-97ef8b63):
+    // the resolved profile carries NO active per-tool overrides so resolveModelForTool,
+    // get_settings, and drift all agree that free models win. The user's settings.yaml
+    // tool_models are left intact on disk — they reactivate when free_only is off.
+    toolModels: freeOnly ? {} : coerceToolModels(profile.tool_models),
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
     appName: profile.app_name ?? preset.defaultAppName,
     httpReferer: profile.http_referer ?? preset.defaultHttpReferer
   };
+}
+var _activeFreeOnly = false;
+function setActiveFreeOnly(freeOnly) {
+  _activeFreeOnly = freeOnly;
+}
+function getActiveFreeOnly() {
+  return _activeFreeOnly;
+}
+function assertFreeOnlyModel(freeOnly, backendType, model) {
+  if (freeOnly && backendType === "openrouter" && !model.endsWith(":free")) {
+    throw new Error(
+      `free_only cost-safety: refusing to send non-free model '${model}' to OpenRouter. Under a free_only profile every tool MUST use a ':free' model \u2014 this is a bug, please report it.`
+    );
+  }
 }
 
 // src/security_scan/intake.ts
@@ -218822,6 +218840,14 @@ async function runBenchmarkOnModel(model, keywords, fixtures, options) {
 }
 async function runBenchmarkOnModelInner(model, keywords, fixtures, options) {
   const t0 = performance.now();
+  if (getActiveFreeOnly() && !model.id.endsWith(":free")) {
+    return {
+      modelId: model.id,
+      ok: false,
+      error: `free_only cost-safety: skipped non-free model '${model.id}' (free mode benchmarks only ':free' models)`,
+      latencyMs: performance.now() - t0
+    };
+  }
   const timeoutMs = options.timeoutMs ?? 6e5;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort("benchmark timeout"), timeoutMs);
@@ -219906,6 +219932,7 @@ function scanReasonTells(reason) {
   return Array.from(found);
 }
 async function judgeGroups(groups, opts, fetchImpl) {
+  assertFreeOnlyModel(getActiveFreeOnly(), "openrouter", opts.model);
   const apiUrl = opts.apiUrl ?? OPENROUTER_URL;
   const verdicts = new Array(groups.length);
   let totalCost = 0;
@@ -221410,6 +221437,12 @@ function resolveMainRoot2() {
 }
 async function main() {
   const opts = parseArgs(process.argv);
+  try {
+    const s = loadSettings();
+    const active = s?.profiles[s.active];
+    if (s && active) setActiveFreeOnly(resolveProfile(s.active, active).freeOnly);
+  } catch {
+  }
   if (opts.securityTriage) {
     return runSecurityTriagePhase(opts);
   }

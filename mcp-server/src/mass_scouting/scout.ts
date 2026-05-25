@@ -28,6 +28,7 @@ import {
 } from "./cost-estimate";
 import type { Registry, RegistryRow } from "./registry";
 import { recordRequest } from "../usage-history";
+import { assertFreeOnlyModel, getActiveFreeOnly } from "../config";
 
 // ── Constants ──────────────────────────────────────────────────────────
 
@@ -225,6 +226,11 @@ export async function runScoutJob(
   opts: ScoutOpts,
   fetchImpl: FetchImpl,
 ): Promise<ScoutResult> {
+  // Airtight free_only cost-safety (TRDD-97ef8b63). The scout fan-out fetches
+  // OpenRouter directly; under a free_only profile a non-':free' scout model
+  // throws BEFORE any of the per-file requests fire. opts.model is constant for
+  // the whole job, so one check here covers every fanned-out file call.
+  assertFreeOnlyModel(getActiveFreeOnly(), "openrouter", opts.model);
   const compiled = compileFieldset(opts.fieldset);
   const workers = Math.max(1, opts.workers ?? DEFAULT_SCOUT_WORKERS);
   const maxRetries = opts.maxRetries ?? 1;

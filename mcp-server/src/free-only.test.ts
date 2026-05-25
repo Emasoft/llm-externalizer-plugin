@@ -6,7 +6,15 @@
 // stops it booting the server.
 
 import { describe, it, expect } from "vitest";
-import { resolveProfile, validateProfile, type Profile } from "./config";
+import {
+  resolveProfile,
+  validateProfile,
+  resolveModelForTool,
+  assertFreeOnlyModel,
+  setActiveFreeOnly,
+  getActiveFreeOnly,
+  type Profile,
+} from "./config";
 import {
   selectFreeEnsembleModels,
   filterFreeModels,
@@ -14,6 +22,8 @@ import {
   callEnsembleSlotWithRotation,
   FREE_FLOOR_MIN_CONTEXT_TOKENS,
 } from "./index";
+import { runBenchmarkOnModel } from "./benchmark/runner";
+import type { QualifiedModel } from "./benchmark/discover";
 import { failedModelsFromCache } from "./benchmark/security-triage/index";
 
 const FREE = [
@@ -372,5 +382,112 @@ describe("callEnsembleSlotWithRotation — free-model fallback rotation (Phase 3
     expect(new Set([a.model, b.model])).toEqual(new Set(["fb0:free", "fb1:free"]));
     expect(a.error).toBe(false);
     expect(b.error).toBe(false);
+  });
+});
+
+// ── Airtight free_only enforcement — overrides EVERY tool (TRDD-97ef8b63) ─────
+// The chokepoint guard + resolveModelForTool override together guarantee a paid
+// model is unreachable under free_only. All pure + offline.
+
+describe("assertFreeOnlyModel — airtight chokepoint guard (TRDD-97ef8b63)", () => {
+  it("THROWS on a non-':free' model under free_only + openrouter (cost-safety)", () => {
+    expect(() => assertFreeOnlyModel(true, "openrouter", "deepseek/deepseek-v4-pro")).toThrow(/cost-safety/);
+    expect(() => assertFreeOnlyModel(true, "openrouter", "openai/gpt-5.4-nano")).toThrow(/non-free model/);
+  });
+
+  it("ALLOWS a ':free' model under free_only", () => {
+    expect(() => assertFreeOnlyModel(true, "openrouter", "qwen/qwen3-coder:free")).not.toThrow();
+    expect(() => assertFreeOnlyModel(true, "openrouter", "nvidia/nemotron-3-super-120b-a12b:free")).not.toThrow();
+  });
+
+  it("is a NO-OP when free_only is off (paid model allowed on a paid profile)", () => {
+    expect(() => assertFreeOnlyModel(false, "openrouter", "deepseek/deepseek-v4-pro")).not.toThrow();
+  });
+
+  it("is a NO-OP for local backends (':free' is OpenRouter-only; local is $0)", () => {
+    expect(() => assertFreeOnlyModel(true, "local", "qwen3:14b")).not.toThrow();
+  });
+});
+
+describe("resolveModelForTool — free_only overrides every per-tool choice (TRDD-97ef8b63)", () => {
+  it("ignores tool_models AND the caller fallback — the top free model wins", () => {
+    const r = resolveProfile(
+      "free",
+      freeProfile({ tool_models: { security_scan: "openai/gpt-5.4-nano" } as Record<string, string> }),
+    );
+    // Even a PAID tool_models override AND a PAID caller fallback are overridden:
+    expect(resolveModelForTool(r, "security_scan", "deepseek/deepseek-v4-pro")).toBe(FREE[0]);
+    expect(resolveModelForTool(r, "chat")).toBe(FREE[0]);
+  });
+
+  it("clears resolved toolModels under free_only (no active per-tool overrides)", () => {
+    const r = resolveProfile(
+      "free",
+      freeProfile({ tool_models: { security_scan: "openai/gpt-5.4-nano" } as Record<string, string> }),
+    );
+    expect(r.toolModels).toEqual({}); // the file keeps tool_models; the RESOLVED profile drops them
+  });
+
+  it("a NON-free profile still honours tool_models + fallback (behaviour unchanged)", () => {
+    const r = resolveProfile("p", {
+      mode: "remote-ensemble",
+      api: "openrouter-remote",
+      model: "main/model",
+      second_model: "second/model",
+      api_key: "test-key-direct-value",
+      tool_models: { security_scan: "tuned/model" },
+    } as Profile);
+    expect(resolveModelForTool(r, "security_scan")).toBe("tuned/model"); // override honoured
+    expect(resolveModelForTool(r, "chat", "fb/model")).toBe("fb/model"); // fallback honoured
+    expect(resolveModelForTool(r, "chat")).toBe("main/model"); // falls to main model
+  });
+});
+
+describe("setActiveFreeOnly / getActiveFreeOnly — process free-only flag (TRDD-97ef8b63)", () => {
+  it("round-trips so the pure subsystem spend sites can read the live state", () => {
+    const orig = getActiveFreeOnly();
+    try {
+      setActiveFreeOnly(true);
+      expect(getActiveFreeOnly()).toBe(true);
+      setActiveFreeOnly(false);
+      expect(getActiveFreeOnly()).toBe(false);
+    } finally {
+      setActiveFreeOnly(orig); // never leak the flag into other tests
+    }
+  });
+});
+
+describe("benchmark runner — free_only enforcement at the real spend site (TRDD-97ef8b63)", () => {
+  // Minimal QualifiedModel — the guard only reads `.id`, returning a RunError
+  // BEFORE any fetch, so the rest of the shape can be a stub.
+  const paid = (id: string) =>
+    ({
+      id,
+      name: id,
+      contextTokens: 1,
+      maxOutputTokens: 1,
+      inputDollarsPerMillion: 1,
+      outputDollarsPerMillion: 1,
+      supportsStructured: true,
+      supportsReasoning: false,
+      raw: {},
+    }) as unknown as QualifiedModel;
+
+  it("SKIPS a non-':free' model under free_only — RunError, never reaches the network", async () => {
+    setActiveFreeOnly(true);
+    try {
+      // apiKey is deliberately bogus: if the guard FAILED to short-circuit, the
+      // real fetch would run and this test would hang/network-error instead of
+      // returning a clean cost-safety RunError.
+      const out = await runBenchmarkOnModel(paid("openai/gpt-5.4-nano"), ["a", "b", "c"], [], {
+        apiKey: "unused-because-guard-skips-before-fetch",
+        timeoutMs: 2000,
+      });
+      expect(out.ok).toBe(false);
+      expect((out as { error: string }).error).toMatch(/cost-safety/);
+      expect((out as { error: string }).error).toMatch(/gpt-5\.4-nano/);
+    } finally {
+      setActiveFreeOnly(false); // reset global so later tests are unaffected
+    }
   });
 });

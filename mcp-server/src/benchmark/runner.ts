@@ -22,6 +22,7 @@
 import type { Fixture } from "./ground-truth.js";
 import type { QualifiedModel } from "./discover.js";
 import { recordRequest } from "../usage-history.js";
+import { getActiveFreeOnly } from "../config.js";
 
 export interface RunResult {
   modelId: string;
@@ -156,6 +157,20 @@ async function runBenchmarkOnModelInner(
   options: RunnerOptions,
 ): Promise<RunOutcome> {
   const t0 = performance.now();
+  // Airtight free_only cost-safety (TRDD-97ef8b63). The benchmark fetches
+  // OpenRouter directly. Under a free_only profile, refuse to benchmark a
+  // non-':free' model — return a RunError (honouring the runner's never-throw
+  // contract) so the sweep records the skip and continues instead of billing.
+  // Free mode benchmarks the user's free pool ($0); to benchmark a paid model,
+  // switch off free_only first.
+  if (getActiveFreeOnly() && !model.id.endsWith(":free")) {
+    return {
+      modelId: model.id,
+      ok: false,
+      error: `free_only cost-safety: skipped non-free model '${model.id}' (free mode benchmarks only ':free' models)`,
+      latencyMs: performance.now() - t0,
+    };
+  }
   const timeoutMs = options.timeoutMs ?? 600_000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort("benchmark timeout"), timeoutMs);

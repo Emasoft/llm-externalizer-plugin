@@ -703,7 +703,11 @@ export function resolveProfile(
     thirdModel,
     freeOnly,
     freeModels,
-    toolModels: coerceToolModels(profile.tool_models),
+    // Under free_only the free pool overrides EVERY per-tool choice (TRDD-97ef8b63):
+    // the resolved profile carries NO active per-tool overrides so resolveModelForTool,
+    // get_settings, and drift all agree that free models win. The user's settings.yaml
+    // tool_models are left intact on disk — they reactivate when free_only is off.
+    toolModels: freeOnly ? {} : coerceToolModels(profile.tool_models),
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
     appName: profile.app_name ?? preset.defaultAppName,
@@ -725,16 +729,75 @@ export function resolveProfile(
  * pre-#97 behavior. A model assigned via `tool_models` is NEVER auto-selected;
  * the operator sets it deliberately (and SHOULD confirm it passes that tool's
  * benchmark — see the security-triage benchmark).
+ *
+ * free_only override (TRDD-97ef8b63): when the profile is free_only, the free
+ * pool overrides EVERY per-tool choice — `tool_models` AND any caller `fallback`
+ * are ignored, and the top free model (`resolved.model` = free_models[0]) wins
+ * for single-model resolution. This is the "free models override every
+ * customized choice of the tools" guarantee; combined with the resolveConnection
+ * chokepoint guard it makes a paid model unreachable under free_only.
  */
 export function resolveModelForTool(
   resolved: ResolvedProfile,
   tool: string,
   fallback?: string,
 ): string {
+  if (resolved.freeOnly) return resolved.model; // free overrides tool_models + fallback
   const override = resolved.toolModels[tool];
   if (typeof override === "string" && override.length > 0) return override;
   if (fallback !== undefined) return fallback;
   return resolved.model;
+}
+
+// ── Process-wide free_only flag (TRDD-97ef8b63) ────────────────────────────
+// The pure subsystem modules (security_scan/judge.ts, mass_scouting/scout.ts,
+// benchmark/runner.ts) each fetch OpenRouter directly and cannot import
+// index.ts's `activeResolved` (cycle + they are intentionally pure). They read
+// the active free_only state through this one accessor instead. The owner of the
+// active profile (index.ts on load/reload; the standalone CLIs in their main())
+// calls setActiveFreeOnly() right where it resolves the profile, so there is a
+// SINGLE write point per process and the flag never drifts from the live profile.
+// Defaults false, so unit tests that never set it (and any non-free profile) are
+// completely unaffected.
+let _activeFreeOnly = false;
+
+/** Record whether the active profile is free_only. Call wherever the active
+ *  profile is resolved (index.ts load/reload; CLI main()). */
+export function setActiveFreeOnly(freeOnly: boolean): void {
+  _activeFreeOnly = freeOnly;
+}
+
+/** True iff the active profile is free_only. Read by the subsystem spend sites. */
+export function getActiveFreeOnly(): boolean {
+  return _activeFreeOnly;
+}
+
+/**
+ * Airtight free_only cost-safety gate (TRDD-97ef8b63). Under a free_only profile
+ * EVERY OpenRouter request — across EVERY subsystem (the main chat/scan path via
+ * resolveConnection, the security_scan judge, the mass_scout fan-out, the
+ * security-triage / keyword benchmark) — MUST target a ':free' model. Each
+ * subsystem fetches OpenRouter independently, so each calls this guard right
+ * before its request: a non-':free' id throws BEFORE the fetch, so a config or
+ * logic leak fails fast instead of billing. No-op when free_only is off, and for
+ * local backends (':free' is an OpenRouter concept; local is always $0). PURE —
+ * `freeOnly` is passed in (callers pass getActiveFreeOnly(), or an explicit value
+ * in tests) so every call site is offline-testable.
+ *
+ * Lives in config.ts (a leaf module) so index.ts AND the pure subsystem modules
+ * (judge.ts, scout.ts, benchmark/runner.ts) can all import it with no cycle.
+ */
+export function assertFreeOnlyModel(
+  freeOnly: boolean,
+  backendType: "local" | "openrouter",
+  model: string,
+): void {
+  if (freeOnly && backendType === "openrouter" && !model.endsWith(":free")) {
+    throw new Error(
+      `free_only cost-safety: refusing to send non-free model '${model}' to OpenRouter. ` +
+        `Under a free_only profile every tool MUST use a ':free' model — this is a bug, please report it.`,
+    );
+  }
 }
 
 // ── Settings template ───────────────────────────────────────────────

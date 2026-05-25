@@ -40,6 +40,7 @@ import {
 } from "./types";
 import type { DedupGroup } from "./intake";
 import type { ModelPricing } from "../mass_scouting/cost-estimate";
+import { assertFreeOnlyModel, getActiveFreeOnly } from "../config";
 
 // ── Constants ────────────────────────────────────────────────────────────
 
@@ -178,6 +179,10 @@ export async function judgeGroups(
   opts: JudgeOptions,
   fetchImpl: FetchImpl,
 ): Promise<JudgeResult> {
+  // Airtight free_only cost-safety (TRDD-97ef8b63). The judge fetches OpenRouter
+  // directly (not via resolveConnection), so it enforces the guard itself: under
+  // a free_only profile a non-':free' judge model throws BEFORE any request.
+  assertFreeOnlyModel(getActiveFreeOnly(), "openrouter", opts.model);
   const apiUrl = opts.apiUrl ?? OPENROUTER_URL;
   const verdicts: GroupVerdict[] = new Array(groups.length);
   let totalCost = 0;
