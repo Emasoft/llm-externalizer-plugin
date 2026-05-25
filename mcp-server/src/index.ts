@@ -9597,7 +9597,24 @@ async function main() {
   process.stderr.write(`Session log: ${LOG_FILE}\n`);
 }
 
-main().catch((error) => {
-  process.stderr.write(`Fatal error: ${error}\n`);
-  process.exit(1);
-});
+// Boot ONLY when this module is the process entry point. Importing it (tests
+// that pull _testDefaultOutputDir / _resetDefaultOutputDirCache, or any future
+// consumer) must NEVER boot the server or contact a backend — cost-safety
+// (TRDD-e82f2c49). The spawned `node dist/index.js` MCP server still boots
+// because there argv[1] === this module's path.
+const __isEntrypoint = (() => {
+  try {
+    const entry = process.argv[1];
+    if (!entry) return false;
+    return realpathSync(entry) === realpathSync(fileUrlToPath_cs(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
+
+if (__isEntrypoint) {
+  main().catch((error) => {
+    process.stderr.write(`Fatal error: ${error}\n`);
+    process.exit(1);
+  });
+}

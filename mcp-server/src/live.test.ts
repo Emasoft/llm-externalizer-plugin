@@ -19,9 +19,19 @@ const TMP_DIR = '/tmp/__llm_ext_live_test';
 
 afterAll(() => rmSync(TMP_DIR, { recursive: true, force: true }));
 
-// Resolve live test config from real settings.yaml.
-// Uses whatever the user configured. timeout: 300s for reasoning models.
-const testConfig = resolveTestConfig({ testName: 'live', timeout: 300 });
+// COST-SAFETY (TRDD-e82f2c49): every test here makes REAL LLM calls. Require an
+// explicit LIVE_TESTS=1 + OPENROUTER_API_KEY opt-in so neither the default suite
+// (which excludes this file) nor an accidental `npx vitest run src/live.test.ts`
+// can spend. Run deliberately with:
+//   LIVE_TESTS=1 OPENROUTER_API_KEY=$KEY npx vitest run src/live.test.ts
+const LIVE =
+  process.env.LIVE_TESTS === '1' &&
+  typeof process.env.OPENROUTER_API_KEY === 'string' &&
+  process.env.OPENROUTER_API_KEY.length > 0;
+
+// requireLiveBackend opts into the user's configured backend (the cost-safety
+// default is a local, unreachable one). timeout: 300s for reasoning models.
+const testConfig = resolveTestConfig({ testName: 'live', timeout: 300, requireLiveBackend: true });
 
 async function createClient(): Promise<{ client: Client; transport: StdioClientTransport }> {
   return createTestClient(testConfig, 'live-test-client');
@@ -29,7 +39,7 @@ async function createClient(): Promise<{ client: Client; transport: StdioClientT
 
 // ── Pre-flight check ─────────────────────────────────────────────────
 
-describe('pre-flight', () => {
+describe.skipIf(!LIVE)('pre-flight', () => {
   let client: Client;
   let transport: StdioClientTransport;
 
@@ -55,7 +65,7 @@ describe('pre-flight', () => {
 
 // ── chat tool — real LLM round-trip ──────────────────────────────────
 
-describe('chat (live)', () => {
+describe.skipIf(!LIVE)('chat (live)', () => {
   let client: Client;
   let transport: StdioClientTransport;
 
@@ -152,7 +162,7 @@ describe('chat (live)', () => {
 
 // ── code_task tool — real LLM round-trip ─────────────────────────────
 
-describe('code_task (live)', () => {
+describe.skipIf(!LIVE)('code_task (live)', () => {
   let client: Client;
   let transport: StdioClientTransport;
 
@@ -204,7 +214,7 @@ describe('code_task (live)', () => {
 
 // ── compare_files tool — real LLM round-trip ─────────────────────────
 
-describe('compare_files (live)', () => {
+describe.skipIf(!LIVE)('compare_files (live)', () => {
   let client: Client;
   let transport: StdioClientTransport;
 
@@ -251,7 +261,7 @@ describe('compare_files (live)', () => {
 
 // ── batch_check tool — real LLM round-trip ───────────────────────────
 
-describe('batch_check (live)', () => {
+describe.skipIf(!LIVE)('batch_check (live)', () => {
   let client: Client;
   let transport: StdioClientTransport;
 

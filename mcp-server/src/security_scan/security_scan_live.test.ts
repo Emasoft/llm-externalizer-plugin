@@ -3,9 +3,12 @@
  * this hits OpenRouter directly with the cheap default model and asserts the
  * pipeline returns structured, schema-valid verdicts end-to-end.
  *
- * Gated on OPENROUTER_API_KEY: when the key is absent the whole suite is
- * skipped (reported as skipped, ~0ms) so `npm test` stays green offline. When
- * the key is present (it is in this dev environment), the test runs for real.
+ * COST-SAFETY (TRDD-e82f2c49): this makes a REAL OpenRouter call, so it is gated
+ * on BOTH `LIVE_TESTS=1` AND `OPENROUTER_API_KEY` — matching every other live
+ * suite (`mass_scouting/live.test.ts`, `benchmark/security-triage/live.test.ts`).
+ * A bare HAS_KEY gate used to fire this on EVERY `npm test` whenever a key was
+ * present, silently billing the user. Default `npm test` now skips it (~0ms).
+ * Run it deliberately with:  LIVE_TESTS=1 npx vitest run src/security_scan/security_scan_live.test.ts
  *
  * It is intentionally NOT in vitest.config.ts's default `include` list pattern
  * via a `live`-named file the way scout's live.test.ts works — instead it is
@@ -21,7 +24,9 @@ import { join } from "node:path";
 import { runSecurityScan } from "./security_scan_main";
 import { VERDICTS } from "./types";
 
-const HAS_KEY =
+// Requires BOTH the opt-in flag AND a key — real call, real cost.
+const LIVE =
+  process.env.LIVE_TESTS === "1" &&
   typeof process.env.OPENROUTER_API_KEY === "string" &&
   process.env.OPENROUTER_API_KEY.length > 0;
 
@@ -33,7 +38,7 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-describe.skipIf(!HAS_KEY)("T10 real-model smoke (cheap model, no mocking)", () => {
+describe.skipIf(!LIVE)("T10 real-model smoke (cheap model, no mocking)", () => {
   it(
     "returns structured verdicts for a small mixed batch end-to-end",
     async () => {

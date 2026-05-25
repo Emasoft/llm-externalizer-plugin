@@ -1153,6 +1153,8 @@ python3 scripts/publish.py --check-only
 
 `publish.py` runs **9 mandatory validation gates** before any tag or push: `npm ci`, `npm run typecheck`, `npm run lint`, `npm run build`, `npm test`, `ruff check`, `shellcheck`, `plugin.json` schema, `claude plugin validate`. All must pass with zero errors.
 
+`npm test` is **offline and free** — it never makes a real LLM call. Real-LLM (live) tests are opt-in behind `LIVE_TESTS=1` + `OPENROUTER_API_KEY`. See [`mcp-server/TESTING.md`](mcp-server/TESTING.md).
+
 ---
 
 ## License

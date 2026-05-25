@@ -19,8 +19,18 @@ afterAll(() => {
   rmSync(TMP_DIR, { recursive: true, force: true });
 });
 
-// Resolve live test config from real settings.yaml.
-const testConfig = resolveTestConfig({ testName: 'extended', timeout: 300 });
+// COST-SAFETY (TRDD-e82f2c49): every test here makes REAL LLM calls. Require an
+// explicit LIVE_TESTS=1 + OPENROUTER_API_KEY opt-in so neither the default suite
+// (which excludes this file) nor an accidental manual run can spend. Run with:
+//   LIVE_TESTS=1 OPENROUTER_API_KEY=$KEY npx vitest run src/live-extended.test.ts
+const LIVE =
+  process.env.LIVE_TESTS === '1' &&
+  typeof process.env.OPENROUTER_API_KEY === 'string' &&
+  process.env.OPENROUTER_API_KEY.length > 0;
+
+// requireLiveBackend opts into the user's configured backend (cost-safety
+// default is a local, unreachable one).
+const testConfig = resolveTestConfig({ testName: 'extended', timeout: 300, requireLiveBackend: true });
 
 async function createClient(): Promise<{ client: Client; transport: StdioClientTransport }> {
   return createTestClient(testConfig, 'extended-test-client');
@@ -39,7 +49,7 @@ function getText(result: unknown): string {
 
 // ── chat: multi-file input ───────────────────────────────────────────
 
-describe('chat: multi-file input', () => {
+describe.skipIf(!LIVE)('chat: multi-file input', () => {
   let client: Client;
   let transport: StdioClientTransport;
 
@@ -78,7 +88,7 @@ describe('chat: multi-file input', () => {
 
 // ── chat: system prompt via instructions_files_paths ──────────────────
 
-describe('chat: instructions from file', () => {
+describe.skipIf(!LIVE)('chat: instructions from file', () => {
   let client: Client;
   let transport: StdioClientTransport;
 
@@ -117,7 +127,7 @@ describe('chat: instructions from file', () => {
 
 // ── scan_folder ──────────────────────────────────────────────────────
 
-describe('scan_folder (live)', () => {
+describe.skipIf(!LIVE)('scan_folder (live)', () => {
   let client: Client;
   let transport: StdioClientTransport;
 
@@ -162,7 +172,7 @@ describe('scan_folder (live)', () => {
 // tight — batch_check with 2 files already passes in live.test.ts,
 // this stresses with 3 distinct code patterns + progress validation.
 
-describe('batch_check stress: 3 files', () => {
+describe.skipIf(!LIVE)('batch_check stress: 3 files', () => {
   let client: Client;
   let transport: StdioClientTransport;
 
@@ -226,7 +236,7 @@ describe('batch_check stress: 3 files', () => {
 
 // ── check_imports ────────────────────────────────────────────────────
 
-describe('check_imports (live)', () => {
+describe.skipIf(!LIVE)('check_imports (live)', () => {
   let client: Client;
   let transport: StdioClientTransport;
 
@@ -275,7 +285,7 @@ describe('check_imports (live)', () => {
 
 // ── check_references ─────────────────────────────────────────────────
 
-describe('check_references (live)', () => {
+describe.skipIf(!LIVE)('check_references (live)', () => {
   let client: Client;
   let transport: StdioClientTransport;
 
@@ -329,7 +339,7 @@ describe('check_references (live)', () => {
 // Tests the ability to compare source code against API documentation
 // to find deprecated usage patterns.
 
-describe('API deprecation check (live)', () => {
+describe.skipIf(!LIVE)('API deprecation check (live)', () => {
   let client: Client;
   let transport: StdioClientTransport;
 
@@ -551,7 +561,7 @@ describe('API deprecation check (live)', () => {
 
 // ── scan_secrets validation ──────────────────────────────────────────
 
-describe('scan_secrets (live)', () => {
+describe.skipIf(!LIVE)('scan_secrets (live)', () => {
   let client: Client;
   let transport: StdioClientTransport;
 

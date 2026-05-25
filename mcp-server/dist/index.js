@@ -55689,11 +55689,22 @@ async function main() {
   process.stderr.write(`Session log: ${LOG_FILE}
 `);
 }
-main().catch((error48) => {
-  process.stderr.write(`Fatal error: ${error48}
+var __isEntrypoint = (() => {
+  try {
+    const entry = process.argv[1];
+    if (!entry) return false;
+    return realpathSync3(entry) === realpathSync3(fileUrlToPath_cs(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
+if (__isEntrypoint) {
+  main().catch((error48) => {
+    process.stderr.write(`Fatal error: ${error48}
 `);
-  process.exit(1);
-});
+    process.exit(1);
+  });
+}
 export {
   _resetDefaultOutputDirCache,
   _testDefaultOutputDir

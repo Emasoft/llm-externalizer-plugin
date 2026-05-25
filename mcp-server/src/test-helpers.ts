@@ -1,21 +1,26 @@
 /**
  * Shared test infrastructure for LLM Externalizer MCP server tests.
  *
- * Uses the real ~/.llm-externalizer/settings.yaml — the same file the
- * server uses. Tests exercise the real config pipeline with the real
- * backend configured by the user.
+ * COST-SAFETY (TRDD-e82f2c49): by DEFAULT the spawned server is configured with
+ * a synthetic LOCAL, unreachable backend, so the default `npm test` / publish
+ * gate makes ZERO OpenRouter calls — tool calls fail-fast on ECONNREFUSED, which
+ * is exactly what the integration tests assert ("does not crash"). Reading the
+ * user's REAL backend (which costs money) is opt-in via `requireLiveBackend`,
+ * and MUST only be used by `LIVE_TESTS`-gated suites.
  *
- * Usage:
- *   import { resolveTestConfig, createTestClient } from './test-helpers';
+ * Usage (default — free, offline):
  *   const config = resolveTestConfig({ testName: 'unit' });
  *   const { client, transport } = await createTestClient(config);
+ *
+ * Usage (LIVE — real backend, costs money; gate the suite on LIVE_TESTS=1):
+ *   const config = resolveTestConfig({ testName: 'live', requireLiveBackend: true });
  */
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { copyFileSync, existsSync, mkdtempSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import {
   type ResolvedProfile,
   validateSettings,
@@ -40,6 +45,14 @@ export interface TestConfig {
   timeout: number;
   /** Unique test suite name — used for output dir naming */
   testName: string;
+  /**
+   * When true, the spawned server uses the user's REAL active backend (read
+   * from ~/.llm-externalizer/settings.yaml). When false (the DEFAULT), it uses
+   * a synthetic LOCAL, unreachable backend that can never bill OpenRouter —
+   * cost-safety (TRDD-e82f2c49). Only deliberately-LIVE, `LIVE_TESTS`-gated
+   * suites set this true.
+   */
+  liveBackend: boolean;
 }
 
 export interface TestConfigOptions {
@@ -47,13 +60,70 @@ export interface TestConfigOptions {
   testName: string;
   /** Override timeout in seconds */
   timeout?: number;
+  /**
+   * Opt into the user's REAL backend (costs money). DEFAULT false → a local,
+   * unreachable backend so the default `npm test` / publish gate makes ZERO
+   * OpenRouter calls (TRDD-e82f2c49). Set true ONLY in a `LIVE_TESTS`-gated suite.
+   */
+  requireLiveBackend?: boolean;
+}
+
+// ── Cost-safety: the default test backend (TRDD-e82f2c49) ────────────────
+// A LOCAL profile NEVER contacts openrouter.ai (local mode → local URL), and
+// port 1 is always connection-refused, so the default integration tests
+// fail-fast on ECONNREFUSED — free, no billing, regardless of the user's real
+// active profile. This restores index.test.ts's documented design ("connection
+// refused to localhost:1234") which had drifted to billing the real backend.
+const LOCAL_TEST_PROFILE_NAME = "test-local-unreachable";
+const LOCAL_TEST_URL = "http://127.0.0.1:1";
+const LOCAL_TEST_SETTINGS_YAML = [
+  `active: ${LOCAL_TEST_PROFILE_NAME}`,
+  "profiles:",
+  `  ${LOCAL_TEST_PROFILE_NAME}:`,
+  "    mode: local",
+  "    api: generic-local",
+  "    model: test-model",
+  `    url: ${LOCAL_TEST_URL}`,
+  "",
+].join("\n");
+
+function localTestResolvedProfile(timeoutSec: number): ResolvedProfile {
+  return {
+    name: LOCAL_TEST_PROFILE_NAME,
+    mode: "local",
+    protocol: "openai_api",
+    url: LOCAL_TEST_URL,
+    model: "test-model",
+    authToken: "",
+    secondModel: "",
+    thirdModel: "",
+    toolModels: {},
+    timeout: timeoutSec,
+    contextWindow: 0,
+    appName: "",
+    httpReferer: "",
+  };
 }
 
 /**
- * Reads the real settings.yaml (same file the server uses) and resolves
- * the active profile. Tests use the real configuration — no temp configs.
+ * Resolve a backend for tests. DEFAULT: a synthetic LOCAL, unreachable backend
+ * that can never bill OpenRouter (cost-safety, TRDD-e82f2c49). Only when
+ * `requireLiveBackend` is true does it read the real ~/.llm-externalizer/
+ * settings.yaml and resolve the user's active profile — that path MUST be used
+ * solely by `LIVE_TESTS`-gated suites, because it spends real money.
  */
 export function resolveTestConfig(options: TestConfigOptions): TestConfig {
+  if (!options.requireLiveBackend) {
+    const timeout = options.timeout ?? 120;
+    return {
+      activeProfile: LOCAL_TEST_PROFILE_NAME,
+      resolved: localTestResolvedProfile(timeout),
+      timeout,
+      testName: options.testName,
+      liveBackend: false,
+    };
+  }
+
   const settings = ensureSettingsExist();
   const validation = validateSettings(settings);
   if (!validation.valid) {
@@ -67,7 +137,7 @@ export function resolveTestConfig(options: TestConfigOptions): TestConfig {
   const resolved = resolveProfile(settings.active, profile);
   const timeout = options.timeout ?? resolved.timeout;
 
-  return { activeProfile: settings.active, resolved, timeout, testName: options.testName };
+  return { activeProfile: settings.active, resolved, timeout, testName: options.testName, liveBackend: true };
 }
 
 /**
@@ -83,14 +153,22 @@ export async function createTestClient(
 
   // Isolate the spawned server's config dir so its usage-history.log (and any
   // settings-edit side effects) land in a throwaway /tmp dir instead of the
-  // developer's real ~/.llm-externalizer/. We copy the real settings.yaml into
-  // the tmp dir first so the server still resolves the real backend the tests
-  // depend on. /tmp (not os.tmpdir) because getConfigDir() only permits $HOME
-  // or /tmp. Resolve the real settings path BEFORE overriding the env var.
-  const realSettingsPath = getSettingsPath();
+  // developer's real ~/.llm-externalizer/. /tmp (not os.tmpdir) because
+  // getConfigDir() only permits $HOME or /tmp.
+  //
+  // COST-SAFETY (TRDD-e82f2c49): by DEFAULT write a synthetic LOCAL, unreachable
+  // settings.yaml so the spawned server can NEVER bill OpenRouter — the previous
+  // behavior (copy the real settings.yaml) made every integration-test tool call
+  // hit the user's real, possibly premium, remote backend. Only LIVE-gated
+  // suites (config.liveBackend === true) get the real backend.
   const tmpConfigDir = mkdtempSync("/tmp/__llm_ext_cfg_");
-  if (existsSync(realSettingsPath)) {
-    copyFileSync(realSettingsPath, join(tmpConfigDir, "settings.yaml"));
+  if (config.liveBackend) {
+    const realSettingsPath = getSettingsPath();
+    if (existsSync(realSettingsPath)) {
+      copyFileSync(realSettingsPath, join(tmpConfigDir, "settings.yaml"));
+    }
+  } else {
+    writeFileSync(join(tmpConfigDir, "settings.yaml"), LOCAL_TEST_SETTINGS_YAML, "utf-8");
   }
 
   const transport = new StdioClientTransport({

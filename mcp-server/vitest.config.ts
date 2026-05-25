@@ -11,6 +11,8 @@ export default defineConfig({
     // Run live tests explicitly: npx vitest run src/live.test.ts
     include: [
       'src/index.test.ts',
+      // Cost-safety guard — default test backend must never bill (TRDD-e82f2c49).
+      'src/test-helpers.test.ts',
       'src/grouping.test.ts',
       'src/safe-body.test.ts',
       // Per-tool model map (tool_models / resolveModelForTool) — TRDD-f45eeaa0.

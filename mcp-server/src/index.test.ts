@@ -16,8 +16,16 @@ import { join } from 'node:path';
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { resolveTestConfig, createTestClient } from './test-helpers';
 
-// Uses the real ~/.llm-externalizer/settings.yaml — tests exercise the real pipeline.
+// COST-SAFETY (TRDD-e82f2c49): default resolveTestConfig now spawns the server
+// with a LOCAL, unreachable backend (127.0.0.1:1), so these integration tests
+// make ZERO OpenRouter calls — every LLM tool call fails fast on ECONNREFUSED,
+// which is exactly what they assert ("server didn't crash"). NO requireLiveBackend.
 const testConfig = resolveTestConfig({ testName: 'unit' });
+
+// The LLM backend is deliberately unreachable, so a real-call test only needs
+// to wait long enough for the call to fail (the server's retry-ladder backoff),
+// not the full production timeout. Short timeout keeps the suite fast AND free.
+const UNREACHABLE_CALL_TIMEOUT_MS = 10_000;
 
 async function createClient(): Promise<{ client: Client; transport: StdioClientTransport }> {
   return createTestClient(testConfig, 'test-client');
@@ -364,7 +372,7 @@ describe('progress notifications', () => {
         {
           onprogress: () => {},
           // Short timeout since the LLM backend is unreachable — it will fail on connect
-          timeout: 120_000,
+          timeout: UNREACHABLE_CALL_TIMEOUT_MS,
         },
       );
     } catch {
@@ -391,7 +399,7 @@ describe('progress notifications', () => {
         undefined,
         {
           onprogress: () => {},
-          timeout: 120_000,
+          timeout: UNREACHABLE_CALL_TIMEOUT_MS,
         },
       );
     } catch {
@@ -457,7 +465,7 @@ describe('answer_mode dispatch', () => {
           },
         },
         undefined,
-        { timeout: 60_000 },
+        { timeout: UNREACHABLE_CALL_TIMEOUT_MS },
       );
     } catch {
       // LLM unreachable or timed out mid-call — both acceptable.
@@ -500,7 +508,7 @@ describe('answer_mode dispatch', () => {
           },
         },
         undefined,
-        { timeout: 60_000 },
+        { timeout: UNREACHABLE_CALL_TIMEOUT_MS },
       );
     } catch {
       // LLM unreachable
@@ -548,7 +556,7 @@ describe('answer_mode dispatch', () => {
           },
         },
         undefined,
-        { timeout: 60_000 },
+        { timeout: UNREACHABLE_CALL_TIMEOUT_MS },
       );
     } catch {
       // LLM unreachable
