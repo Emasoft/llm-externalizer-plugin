@@ -218539,15 +218539,22 @@ function resolveProfile(name, profile) {
     throw new Error(`Unknown api preset '${profile.api}'`);
   }
   const rawAuth = preset.isLocal ? profile.api_token || profile.api_key || preset.defaultAuthEnv : profile.api_key || preset.defaultAuthEnv;
+  const freeOnly = profile.free_only === true;
+  const freeModels = freeOnly ? [...profile.free_models ?? []] : [];
+  const model = freeOnly ? freeModels[0] ?? "" : profile.model;
+  const secondModel = freeOnly ? freeModels[1] ?? "" : profile.second_model || "";
+  const thirdModel = freeOnly ? freeModels[2] ?? "" : profile.third_model || "";
   return {
     name,
     mode: profile.mode,
     protocol: preset.protocol,
     url: profile.url || preset.defaultUrl,
-    model: profile.model,
+    model,
     authToken: resolveEnvValue(rawAuth),
-    secondModel: profile.second_model || "",
-    thirdModel: profile.third_model || "",
+    secondModel,
+    thirdModel,
+    freeOnly,
+    freeModels,
     toolModels: coerceToolModels(profile.tool_models),
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,

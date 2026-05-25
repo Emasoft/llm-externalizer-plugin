@@ -29,6 +29,8 @@ export default defineConfig({
       'src/ensemble-limits.test.ts',
       // Reasoning-effort cost guard — default "high", per-call "off" opt-out (ec45c66f).
       'src/reasoning-ladder.test.ts',
+      // Free-only switch — config core + context-floor filter (TRDD-8b6b3646).
+      'src/free-only.test.ts',
       'src/mass_scouting/fieldset.test.ts',
       'src/mass_scouting/shorthand.test.ts',
       'src/mass_scouting/registry.test.ts',

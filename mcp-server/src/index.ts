@@ -4591,18 +4591,63 @@ function ensembleModelLabel(useEnsemble: boolean): string {
 }
 
 /** Build ensemble model list from the active profile's model + second_model + third_model */
+/**
+ * Minimum context window (tokens) for a free model to enter the ensemble. A
+ * lenient floor that drops only obviously-unusable (tiny-context) free models;
+ * the real quality gate is the golden-dataset benchmark (Phase 2, TRDD-8b6b3646).
+ * Deliberately NOT the 128K premium bar — free models cluster at 32K-256K and a
+ * 128K floor would empty most pools.
+ */
+export const FREE_FLOOR_MIN_CONTEXT_TOKENS = 32_000;
+
+/**
+ * Free-only ensemble selection (TRDD-8b6b3646). Phase 1 = a zero-spend
+ * REQUIREMENTS pre-filter: drop free models the catalog POSITIVELY reports as
+ * below the context floor, preserve the user's preference order, take the top 3.
+ *
+ * The premium qualification framework (qualifyModelForTool) can't be reused here:
+ * its criteria set allowFree:false, so it rejects every ':free' model by design.
+ * The golden-dataset BENCHMARK filter (which IS free-model-aware, and costs $0 on
+ * ':free' models) layers on in Phase 2.
+ *
+ * Lenient on availability: a model absent from the catalog, or whose catalog
+ * entry carries no context info, is KEPT (can't assess → don't penalise) — so a
+ * cold catalog degrades to the raw top-3, never an empty ensemble. Pure +
+ * offline-testable: pass an explicit catalog map.
+ */
+export function selectFreeEnsembleModels(
+  freeModels: string[],
+  catalogById: Map<string, OpenRouterModelInfo>,
+): string[] {
+  const kept = freeModels.filter((id) => {
+    const m = catalogById.get(id);
+    if (!m) return true; // unknown to the catalog — keep (lenient on availability)
+    const ctx = m.context_length ?? m.top_provider?.context_length ?? 0;
+    if (ctx === 0) return true; // catalog has no context info — keep (lenient)
+    return ctx >= FREE_FLOOR_MIN_CONTEXT_TOKENS;
+  });
+  return kept.slice(0, 3);
+}
+
 function getEnsembleModels(): Array<{
   id: string;
   maxOutput: number;
   maxInputLines: number;
 }> {
   if (!activeResolved || activeResolved.mode !== "remote-ensemble") return [];
-  const models = [activeResolved.model];
-  if (activeResolved.secondModel) models.push(activeResolved.secondModel);
-  if (activeResolved.thirdModel) models.push(activeResolved.thirdModel);
   // Read the warm 1h-TTL catalog cache synchronously — empty when cold, in which
   // case resolveEnsembleModelLimits falls back to the calibrated table.
   const catalogById = new Map(openRouterModelCache.map((m) => [m.id, m]));
+  let models: string[];
+  if (activeResolved.freeOnly) {
+    // Free-only: pick the top-3 benchmark/requirements-qualified free models from
+    // the pool (never the configured premium model/second/third).
+    models = selectFreeEnsembleModels(activeResolved.freeModels, catalogById);
+  } else {
+    models = [activeResolved.model];
+    if (activeResolved.secondModel) models.push(activeResolved.secondModel);
+    if (activeResolved.thirdModel) models.push(activeResolved.thirdModel);
+  }
   return models.map((id) => {
     const catalogMaxOutput =
       catalogById.get(id)?.top_provider?.max_completion_tokens;

@@ -40059,7 +40059,7 @@ function validateProfile(name, profile) {
   if (!profile.api) {
     errors.push(`Profile '${name}': missing required field: api`);
   }
-  if (!profile.model) {
+  if (!profile.model && !profile.free_only) {
     errors.push(`Profile '${name}': missing required field: model`);
   }
   const preset = profile.api ? API_PRESETS[profile.api] : void 0;
@@ -40082,7 +40082,31 @@ function validateProfile(name, profile) {
       `Mode '${profile.mode}' requires a -remote api preset, got '${profile.api}'`
     );
   }
-  if (profile.mode === "remote-ensemble" && !profile.second_model) {
+  if (profile.free_only) {
+    if (preset.isLocal) {
+      errors.push(
+        `Profile '${name}': free_only requires a remote (OpenRouter) api preset \u2014 ':free' models are an OpenRouter concept. Got local preset '${profile.api}'.`
+      );
+    }
+    const pool = profile.free_models ?? [];
+    if (pool.length === 0) {
+      errors.push(
+        `Profile '${name}': free_only requires a non-empty 'free_models' list.`
+      );
+    }
+    const nonFree = pool.filter((m) => !m.endsWith(":free"));
+    if (nonFree.length > 0) {
+      errors.push(
+        `Profile '${name}': free_only forbids non-':free' models \u2014 every free_models entry MUST end with ':free'. Offending: ${nonFree.join(", ")}`
+      );
+    }
+    if (profile.mode === "remote-ensemble" && pool.length < 2) {
+      errors.push(
+        `Profile '${name}': free_only + mode 'remote-ensemble' needs at least 2 free_models (the ensemble fans out to the top models). Use mode 'remote' for a single free model.`
+      );
+    }
+  }
+  if (profile.mode === "remote-ensemble" && !profile.second_model && !profile.free_only) {
     errors.push("Mode 'remote-ensemble' requires 'second_model'");
   }
   if (profile.mode === "local" && profile.second_model) {
@@ -40192,15 +40216,22 @@ function resolveProfile(name, profile) {
     throw new Error(`Unknown api preset '${profile.api}'`);
   }
   const rawAuth = preset.isLocal ? profile.api_token || profile.api_key || preset.defaultAuthEnv : profile.api_key || preset.defaultAuthEnv;
+  const freeOnly = profile.free_only === true;
+  const freeModels = freeOnly ? [...profile.free_models ?? []] : [];
+  const model = freeOnly ? freeModels[0] ?? "" : profile.model;
+  const secondModel = freeOnly ? freeModels[1] ?? "" : profile.second_model || "";
+  const thirdModel = freeOnly ? freeModels[2] ?? "" : profile.third_model || "";
   return {
     name,
     mode: profile.mode,
     protocol: preset.protocol,
     url: profile.url || preset.defaultUrl,
-    model: profile.model,
+    model,
     authToken: resolveEnvValue(rawAuth),
-    secondModel: profile.second_model || "",
-    thirdModel: profile.third_model || "",
+    secondModel,
+    thirdModel,
+    freeOnly,
+    freeModels,
     toolModels: coerceToolModels(profile.tool_models),
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
@@ -40267,6 +40298,25 @@ profiles:
     # tool_models:
     #   security_scan: "qwen/qwen-2.5-7b-instruct"
     #   code_task: "google/gemini-2.5-flash"
+
+  # \u2500\u2500 Remote: FREE-ONLY ensemble (zero spend) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  # free_only ignores model/second_model/third_model and uses ONLY the
+  # free_models pool. The top free models that clear the requirements
+  # floor form the ensemble; the rest are the rate-limit fallback pool.
+  # EVERY free_models entry MUST end with ':free' \u2014 the validator rejects
+  # the profile otherwise, so this profile can NEVER bill.
+  remote-free-ensemble:
+    mode: remote-ensemble
+    api: openrouter-remote
+    free_only: true
+    api_key: $OPENROUTER_API_KEY            # free models still need the key (rate-limited, but $0)
+    free_models:
+      - "deepseek/deepseek-v4-flash:free"
+      - "qwen/qwen3-next-80b-a3b-instruct:free"
+      - "openai/gpt-oss-120b:free"
+      - "z-ai/glm-4.5-air:free"
+      - "meta-llama/llama-3.3-70b-instruct:free"
+      - "nvidia/nemotron-3-super-120b-a12b:free"
 
 # \u2500\u2500 API Presets Reference \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 # Use with --api when creating profiles:
@@ -51743,12 +51793,28 @@ function ensembleModelLabel(useEnsemble) {
   if (activeResolved.thirdModel) models.push(activeResolved.thirdModel);
   return `ensemble: ${models.join(" + ")}`;
 }
+var FREE_FLOOR_MIN_CONTEXT_TOKENS = 32e3;
+function selectFreeEnsembleModels(freeModels, catalogById) {
+  const kept = freeModels.filter((id) => {
+    const m = catalogById.get(id);
+    if (!m) return true;
+    const ctx = m.context_length ?? m.top_provider?.context_length ?? 0;
+    if (ctx === 0) return true;
+    return ctx >= FREE_FLOOR_MIN_CONTEXT_TOKENS;
+  });
+  return kept.slice(0, 3);
+}
 function getEnsembleModels() {
   if (!activeResolved || activeResolved.mode !== "remote-ensemble") return [];
-  const models = [activeResolved.model];
-  if (activeResolved.secondModel) models.push(activeResolved.secondModel);
-  if (activeResolved.thirdModel) models.push(activeResolved.thirdModel);
   const catalogById = new Map(openRouterModelCache.map((m) => [m.id, m]));
+  let models;
+  if (activeResolved.freeOnly) {
+    models = selectFreeEnsembleModels(activeResolved.freeModels, catalogById);
+  } else {
+    models = [activeResolved.model];
+    if (activeResolved.secondModel) models.push(activeResolved.secondModel);
+    if (activeResolved.thirdModel) models.push(activeResolved.thirdModel);
+  }
   return models.map((id) => {
     const catalogMaxOutput = catalogById.get(id)?.top_provider?.max_completion_tokens;
     const limits = resolveEnsembleModelLimits(id, catalogMaxOutput);
@@ -55736,8 +55802,10 @@ if (__isEntrypoint) {
   });
 }
 export {
+  FREE_FLOOR_MIN_CONTEXT_TOKENS,
   _resetDefaultOutputDirCache,
   _testDefaultOutputDir,
-  reasoningLadderForModel
+  reasoningLadderForModel,
+  selectFreeEnsembleModels
 };
 //# sourceMappingURL=index.js.map

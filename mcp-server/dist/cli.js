@@ -7584,15 +7584,22 @@ function resolveProfile(name, profile) {
     throw new Error(`Unknown api preset '${profile.api}'`);
   }
   const rawAuth = preset.isLocal ? profile.api_token || profile.api_key || preset.defaultAuthEnv : profile.api_key || preset.defaultAuthEnv;
+  const freeOnly = profile.free_only === true;
+  const freeModels = freeOnly ? [...profile.free_models ?? []] : [];
+  const model = freeOnly ? freeModels[0] ?? "" : profile.model;
+  const secondModel = freeOnly ? freeModels[1] ?? "" : profile.second_model || "";
+  const thirdModel = freeOnly ? freeModels[2] ?? "" : profile.third_model || "";
   return {
     name,
     mode: profile.mode,
     protocol: preset.protocol,
     url: profile.url || preset.defaultUrl,
-    model: profile.model,
+    model,
     authToken: resolveEnvValue(rawAuth),
-    secondModel: profile.second_model || "",
-    thirdModel: profile.third_model || "",
+    secondModel,
+    thirdModel,
+    freeOnly,
+    freeModels,
     toolModels: coerceToolModels(profile.tool_models),
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
@@ -7733,6 +7740,25 @@ profiles:
     # tool_models:
     #   security_scan: "qwen/qwen-2.5-7b-instruct"
     #   code_task: "google/gemini-2.5-flash"
+
+  # \u2500\u2500 Remote: FREE-ONLY ensemble (zero spend) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  # free_only ignores model/second_model/third_model and uses ONLY the
+  # free_models pool. The top free models that clear the requirements
+  # floor form the ensemble; the rest are the rate-limit fallback pool.
+  # EVERY free_models entry MUST end with ':free' \u2014 the validator rejects
+  # the profile otherwise, so this profile can NEVER bill.
+  remote-free-ensemble:
+    mode: remote-ensemble
+    api: openrouter-remote
+    free_only: true
+    api_key: $OPENROUTER_API_KEY            # free models still need the key (rate-limited, but $0)
+    free_models:
+      - "deepseek/deepseek-v4-flash:free"
+      - "qwen/qwen3-next-80b-a3b-instruct:free"
+      - "openai/gpt-oss-120b:free"
+      - "z-ai/glm-4.5-air:free"
+      - "meta-llama/llama-3.3-70b-instruct:free"
+      - "nvidia/nemotron-3-super-120b-a12b:free"
 
 # \u2500\u2500 API Presets Reference \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 # Use with --api when creating profiles:

@@ -302,6 +302,41 @@ See [Configuration → B. Remote free (Nemotron)](#b-remote-free-nemotron) for t
 </details>
 
 <details>
+<summary><b>B2. OpenRouter free-only ensemble (zero spend, multiple free models)</b></summary>
+
+Set `free_only: true` on a profile to use ONLY a pool of `:free` models — the
+configured `model` / `second_model` / `third_model` are ignored. The top free
+models that clear the requirements floor form the ensemble; the rest are the
+rate-limit fallback pool. **Every `free_models` entry MUST end with `:free`** —
+the validator rejects the profile otherwise, so it can never bill.
+
+```yaml
+active: remote-free-ensemble
+profiles:
+  remote-free-ensemble:
+    mode: remote-ensemble
+    api: openrouter-remote
+    free_only: true
+    api_key: $OPENROUTER_API_KEY     # free models still need the key (rate-limited, but $0)
+    free_models:
+      - "deepseek/deepseek-v4-flash:free"
+      - "qwen/qwen3-next-80b-a3b-instruct:free"
+      - "openai/gpt-oss-120b:free"
+      - "z-ai/glm-4.5-air:free"
+      - "meta-llama/llama-3.3-70b-instruct:free"
+      - "nvidia/nemotron-3-super-120b-a12b:free"
+```
+
+Free models are heavily rate-limited; list several so the ensemble has fallbacks.
+A context-window requirements floor drops obviously-unusable free models; the
+golden-dataset benchmark filter (run on the free pool at `$0`) is the deeper
+quality gate.
+
+> [!WARNING]
+> Free providers log your prompts. Use only on open-source code.
+</details>
+
+<details>
 <summary><b>C. LM Studio (local — free, offline)</b></summary>
 
 1. Install LM Studio from <https://lmstudio.ai>, launch it, and load a model.

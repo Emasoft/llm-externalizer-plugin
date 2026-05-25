@@ -64,6 +64,16 @@ export interface Profile {
   /** Third model for remote-ensemble mode (optional) */
   third_model?: string;
   /**
+   * Free-only switch (TRDD-8b6b3646). When true, this profile uses ONLY the
+   * `free_models` pool — `model` / `second_model` / `third_model` are ignored.
+   * The top free models (benchmark-filtered) form the ensemble; the rest are the
+   * rate-limit fallback pool. EVERY `free_models` entry MUST end with `:free`
+   * (validateProfile enforces this) so the profile can never bill.
+   */
+  free_only?: boolean;
+  /** Free-model pool for `free_only`, in preference order (all must be `:free`). */
+  free_models?: string[];
+  /**
    * Optional per-tool model overrides (TRDD-f45eeaa0). Keyed by LLM-using tool
    * name (must be one of model-qualification/registry's registeredTools()). When
    * a tool has an entry here, that model is used for the tool instead of this
@@ -99,6 +109,10 @@ export interface ResolvedProfile {
   authToken: string;
   secondModel: string;
   thirdModel: string;
+  /** Free-only mode active (TRDD-8b6b3646). When true, freeModels is the source of truth. */
+  freeOnly: boolean;
+  /** Free-model pool in preference order (empty unless freeOnly). All entries end `:free`. */
+  freeModels: string[];
   /** Per-tool model overrides (empty object when none). See resolveModelForTool. */
   toolModels: Record<string, string>;
   timeout: number;
@@ -395,7 +409,9 @@ export function validateProfile(
     errors.push(`Profile '${name}': missing required field: api`);
   }
 
-  if (!profile.model) {
+  // Under free_only the `model` field is supplied by free_models[0], so it is
+  // optional here (the free_only block below validates free_models instead).
+  if (!profile.model && !profile.free_only) {
     errors.push(`Profile '${name}': missing required field: model`);
   }
 
@@ -428,8 +444,41 @@ export function validateProfile(
     );
   }
 
+  // ── free_only rules (TRDD-8b6b3646) ───────────────────────────────
+  // The switch can NEVER cause spend, so the constraints here are strict.
+  if (profile.free_only) {
+    if (preset.isLocal) {
+      errors.push(
+        `Profile '${name}': free_only requires a remote (OpenRouter) api preset — ':free' models are an OpenRouter concept. Got local preset '${profile.api}'.`,
+      );
+    }
+    const pool = profile.free_models ?? [];
+    if (pool.length === 0) {
+      errors.push(
+        `Profile '${name}': free_only requires a non-empty 'free_models' list.`,
+      );
+    }
+    const nonFree = pool.filter((m) => !m.endsWith(":free"));
+    if (nonFree.length > 0) {
+      errors.push(
+        `Profile '${name}': free_only forbids non-':free' models — every free_models entry MUST end with ':free'. Offending: ${nonFree.join(", ")}`,
+      );
+    }
+    if (profile.mode === "remote-ensemble" && pool.length < 2) {
+      errors.push(
+        `Profile '${name}': free_only + mode 'remote-ensemble' needs at least 2 free_models (the ensemble fans out to the top models). Use mode 'remote' for a single free model.`,
+      );
+    }
+  }
+
   // ── second_model / third_model rules ──────────────────────────────
-  if (profile.mode === "remote-ensemble" && !profile.second_model) {
+  // Under free_only the ensemble models come from free_models, so second_model
+  // is not required (and is ignored if set).
+  if (
+    profile.mode === "remote-ensemble" &&
+    !profile.second_model &&
+    !profile.free_only
+  ) {
     errors.push("Mode 'remote-ensemble' requires 'second_model'");
   }
   if (profile.mode === "local" && profile.second_model) {
@@ -607,15 +656,33 @@ export function resolveProfile(
     ? profile.api_token || profile.api_key || preset.defaultAuthEnv
     : profile.api_key || preset.defaultAuthEnv;
 
+  // Free-only (TRDD-8b6b3646): the free_models pool is the source of truth — the
+  // top three become model / secondModel / thirdModel, so the existing ensemble
+  // machinery (getEnsembleModels, which reads these) runs the free top-3 with no
+  // hot-path change. The configured model/second_model/third_model are ignored.
+  // (Benchmark/requirements filtering of the pool happens downstream in
+  // getEnsembleModels, where the catalog is available.)
+  const freeOnly = profile.free_only === true;
+  const freeModels = freeOnly ? [...(profile.free_models ?? [])] : [];
+  const model = freeOnly ? (freeModels[0] ?? "") : profile.model;
+  const secondModel = freeOnly
+    ? (freeModels[1] ?? "")
+    : profile.second_model || "";
+  const thirdModel = freeOnly
+    ? (freeModels[2] ?? "")
+    : profile.third_model || "";
+
   return {
     name,
     mode: profile.mode,
     protocol: preset.protocol,
     url: profile.url || preset.defaultUrl,
-    model: profile.model,
+    model,
     authToken: resolveEnvValue(rawAuth),
-    secondModel: profile.second_model || "",
-    thirdModel: profile.third_model || "",
+    secondModel,
+    thirdModel,
+    freeOnly,
+    freeModels,
     toolModels: coerceToolModels(profile.tool_models),
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
@@ -707,6 +774,25 @@ profiles:
     # tool_models:
     #   security_scan: "qwen/qwen-2.5-7b-instruct"
     #   code_task: "google/gemini-2.5-flash"
+
+  # ── Remote: FREE-ONLY ensemble (zero spend) ───────────────────────
+  # free_only ignores model/second_model/third_model and uses ONLY the
+  # free_models pool. The top free models that clear the requirements
+  # floor form the ensemble; the rest are the rate-limit fallback pool.
+  # EVERY free_models entry MUST end with ':free' — the validator rejects
+  # the profile otherwise, so this profile can NEVER bill.
+  remote-free-ensemble:
+    mode: remote-ensemble
+    api: openrouter-remote
+    free_only: true
+    api_key: $OPENROUTER_API_KEY            # free models still need the key (rate-limited, but $0)
+    free_models:
+      - "deepseek/deepseek-v4-flash:free"
+      - "qwen/qwen3-next-80b-a3b-instruct:free"
+      - "openai/gpt-oss-120b:free"
+      - "z-ai/glm-4.5-air:free"
+      - "meta-llama/llama-3.3-70b-instruct:free"
+      - "nvidia/nemotron-3-super-120b-a12b:free"
 
 # ── API Presets Reference ────────────────────────────────────────────
 # Use with --api when creating profiles:

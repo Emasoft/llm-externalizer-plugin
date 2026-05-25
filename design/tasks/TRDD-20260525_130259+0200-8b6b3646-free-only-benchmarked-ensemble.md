@@ -3,7 +3,7 @@ trdd-id: 8b6b3646-0152-4077-8d2a-e888f17e0fc7
 title: Free-only switch — benchmark-filtered free ensemble (per-profile)
 status: in-progress
 created: 2026-05-25T13:02:59+0200
-updated: 2026-05-25T13:02:59+0200
+updated: 2026-05-25T13:14:37+0200
 ---
 
 # TRDD-8b6b3646 — Free-only benchmark-filtered ensemble
@@ -90,4 +90,17 @@ Design choices (confirmed via AskUserQuestion):
 - security_scan / scout keep their own clean call paths (unchanged).
 
 ## Status
-Phase 1 in progress.
+- **Phase 1 — DONE** (commit pending). Shipped: `Profile.free_only`/`free_models`,
+  `ResolvedProfile.freeOnly`/`freeModels`, `resolveProfile` (ensemble from the
+  pool), `validateProfile` (all `:free`, non-empty, remote, ≥2 for ensemble,
+  model/second optional), `selectFreeEnsembleModels` (context-floor requirements
+  pre-filter, zero-spend). Tests: `free-only.test.ts` (12). Docs: settings
+  template + README B2. Full suite 907 passed / 4 skipped / 0 OpenRouter boots;
+  tsc + eslint clean.
+  - NOTE: the premium qualification framework sets `allowFree:false`, so it
+    CANNOT gate free models — Phase 1 uses a dedicated context-floor instead.
+- **Phase 2 — BLOCKED on OpenRouter re-enable.** The golden-dataset benchmark
+  filter must RUN the benchmark on the free pool. That is `$0` (free models) but
+  IS OpenRouter API usage, which the user paused. Implement the cache + filter
+  CODE offline; activate the run when OpenRouter is back.
+- **Phase 3 — deferred** (rotation; needs live 429 testing).

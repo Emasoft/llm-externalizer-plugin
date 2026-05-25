@@ -97,6 +97,8 @@ function localTestResolvedProfile(timeoutSec: number): ResolvedProfile {
     authToken: "",
     secondModel: "",
     thirdModel: "",
+    freeOnly: false,
+    freeModels: [],
     toolModels: {},
     timeout: timeoutSec,
     contextWindow: 0,
