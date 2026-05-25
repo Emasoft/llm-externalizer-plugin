@@ -1,6 +1,549 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [9.14.0] - 2026-05-25
+
+### Added
+
+- Feat(free-only): airtight cost-safety — free models override EVERY tool (TRDD-97ef8b63)
+
+User requirement: "when free mode is set, the free models OVERRIDE every
+customized choice of the tools" + "prevent other claude code sessions from
+using llm-externalizer without free mode enabled and working for all tools."
+
+The free_only ensemble path (TRDD-8b6b3646) only covered the main ensemble.
+Audit found 5 INDEPENDENT OpenRouter spend sites across 3 subsystems, each
+fetching directly. Now every one enforces free_only — a non-':free' model
+throws/skips BEFORE the request, so a leak fails fast instead of billing.
+
+Spend sites + guards (1:1, grep-verified):
+- index.ts resolveConnection (chat/code_task/scan_folder/cluster_synonyms/
+  check_*/compare_files/search_existing_implementations)
+- security_scan/judge.ts judgeGroups (security_scan runtime + triage benchmark)
+- mass_scouting/scout.ts runScoutJob (mass_scout fan-out)
+- mass_scouting/cli.ts runProposeFieldset (propose-fieldset LLM call)
+- benchmark/runner.ts (keyword benchmark — returns RunError, honours never-throw)
+
+Mechanism:
+- config.ts: assertFreeOnlyModel(freeOnly, backendType, model) PURE guard
+  (throws on non-':free' under free_only+openrouter; no-op off free_only / local).
+  Process-global setActiveFreeOnly()/getActiveFreeOnly() so the pure subsystem
+  modules read live free_only state without importing index.ts (no cycle).
+- resolveModelForTool: free_only short-circuits — returns the free model,
+  ignoring tool_models AND any caller fallback ("free overrides every tool").
+- resolveProfile: under free_only, resolved toolModels = {} (file untouched).
+- index.ts sets the flag at both activeResolved sync points (load + reload) —
+  covers every in-process MCP tool (what other sessions use).
+- cli.ts + benchmark/index.ts main() set the flag for the standalone CLIs.
+- mass_scouting resolveCliModel(): under free_only returns the active free
+  model so mass_scout RUNS on free instead of failing the guard; non-free
+  profiles keep exact prior behaviour.
+
+Tests: free-only.test.ts +10 — assertFreeOnlyModel (throw/allow/no-op),
+resolveModelForTool free_only override (tool_models + fallback ignored),
+resolveProfile toolModels cleared, setActiveFreeOnly/getActiveFreeOnly round-trip,
+benchmark runner real-spend-site enforcement (RunError, never hits network).
+Full suite 936 passed / 4 skipped / 0 OpenRouter boots; tsc + eslint clean.
+
+Docs: README B2 "Free mode overrides EVERY tool"; rules/use-llm-externalizer.md
+"Cost safety — free mode (zero spend, ALL tools)".
+
+- Feat(free-only): daily-limit fallback rotation — Phase 3 (TRDD-8b6b3646)
+
+Free providers all cap requests PER DAY, so an ensemble slot whose free
+model is daily-limited must rotate to a different free model rather than
+fail. Completes the free-only feature end-to-end.
+
+index.ts:
+- isModelUnavailableError(detail): pure predicate — true on 429 / rate-limit
+  / daily-limit / per-day / quota / no-endpoints / 404 / 502 / 503 /
+  overloaded; false on auth/malformed errors a different model would also
+  fail (rotating wouldn't help).
+- filterFreeModels(): the FULL benchmark+context-filtered list, refactored
+  out of selectFreeEnsembleModels (= .slice(0,3)). Models 4+ become the
+  fallback pool.
+- callEnsembleSlotWithRotation(primary, fallbacks, claimFallback, callOne):
+  tries primary; on an unavailable error claims the next shared fallback via
+  an atomic idx=next++ counter and retries. Bounded by pool size (the shared
+  monotonic counter guarantees termination — no infinite loop). Returns the
+  same {model,content,usage,truncated,error} shape as the non-free path.
+- ensembleStreaming: when freeOnly, build a file-size-aware fallbacks list
+  (filtered pool minus the top-3 primaries), share ONE claimFallback across
+  all parallel slots so two slots never burn the same model's daily quota,
+  gate the single-model fast path on models.length===1 && fallbacks.length===0,
+  and route each slot through callEnsembleSlotWithRotation. Non-free path
+  byte-for-byte unchanged.
+
+Tests: free-only.test.ts +12 — filterFreeModels full-list; isModelUnavailableError
+match (429/daily-limit/no-endpoints/503) and non-match (auth/malformed/empty);
+callEnsembleSlotWithRotation primary-success / daily-limit-rotate / multi-hop /
+throw-rotate / non-rotatable-immediate / pool-exhausted-bounded /
+shared-counter-no-collision. Full suite 927 passed / 4 skipped / 0 OpenRouter
+boots; tsc + eslint clean.
+
+Docs: README B2 "Daily-limit rotation" paragraph. TRDD-8b6b3646 → completed.
+
+Zero-spend invariant intact at all three layers (validation rejects non-:free,
+filters only evaluate :free, rotation pool is free-only). Live 429 end-to-end
+still needs a funded run; the rotation logic itself is fully unit-covered offline.
+
+- Feat(config): free-only benchmark filter — Phase 2 (TRDD-8b6b3646)
+
+The free-only ensemble now drops models with a RECORDED failing security-triage
+benchmark, reusing the EXISTING per-model cache
+(~/.llm-externalizer/security-triage-results.json) rather than a new store.
+
+- security-triage/index.ts: failedModelsFromCache(cache) — PURE, latest-wins per
+  model, flags only CONCLUSIVE non-passes (an inconclusive/flaky run is NOT a
+  failure, so a free model is never excluded on weak evidence).
+  benchmarkFailedModels() reads the real cache.
+- index.ts: selectFreeEnsembleModels gains a benchmarkFailed set — applied BEFORE
+  the context floor; getEnsembleModels passes benchmarkFailedModels(). Empty
+  cache → no-op (fresh-install safe).
+
+How to populate (the only OpenRouter-dependent step — $0 on :free models, the
+user triggers it): the existing `security_triage_benchmark` tool already accepts
+an explicit `models:` list and benchmarks unqualified models (incl. :free), so
+one run on the free pool fills the cache; the filter then excludes any failures.
+
+Tests: +6 (failedModelsFromCache: pass/fail/inconclusive/latest-wins/empty;
+selectFreeEnsembleModels drops a benchmark-failed model). Docs: README B2 recipe.
+Full npm test 915 passed / 4 skipped / 0 OpenRouter boots; tsc + eslint clean.
+
+- Feat(config): free_only switch — benchmark/requirements-filtered free ensemble, Phase 1 (TRDD-8b6b3646)
+
+Per-profile free_only switch: when true, the profile uses ONLY the free_models
+pool (the configured model/second_model/third_model are ignored). The top free
+models that clear the requirements floor form the ensemble; the rest are the
+rate-limit fallback pool (Phase 3).
+
+Zero-spend by construction: validateProfile rejects the profile unless EVERY
+free_models entry ends with ':free' (plus: non-empty, remote/OpenRouter preset,
+>=2 entries for remote-ensemble; model/second_model become optional since
+free_models supplies them).
+
+- config.ts: Profile.free_only/free_models; ResolvedProfile.freeOnly/freeModels;
+  resolveProfile derives model/secondModel/thirdModel from free_models[0..2] so
+  the existing ensemble machinery runs the free top-3 with no hot-path change;
+  validateProfile free_only rules; SETTINGS_TEMPLATE free-only example.
+- index.ts: selectFreeEnsembleModels — a zero-spend context-floor requirements
+  pre-filter (drops free models the catalog reports below 32K context; lenient on
+  cold cache). getEnsembleModels uses it under free_only. NOTE: the premium
+  qualification framework sets allowFree:false so it can't gate free models —
+  hence the dedicated floor here; the golden-dataset benchmark filter is Phase 2.
+- test-helpers.ts: freeOnly/freeModels on the local test profile.
+- free-only.test.ts (NEW, 12): resolveProfile derivation, validateProfile
+  invariants (incl. rejecting non-:free entries), selectFreeEnsembleModels filter.
+- Docs: README "B2. free-only ensemble" + settings template.
+
+Phase 2 (golden-dataset benchmark filter + result cache) is BLOCKED on
+re-enabling OpenRouter — benchmarking the free pool is $0 but still OpenRouter API
+usage, which is currently paused. Phase 3 (fallback rotation) needs live 429s.
+
+Verified: full npm test 907 passed / 4 skipped / 0 OpenRouter boots; tsc + eslint
+clean; all three dist bundles rebuilt (config.ts is shared).
+
+- Feat(observability): LLM_EXT_DUMP_REQUESTS — audit the exact wire payload
+
+Adds an env-gated request-audit hook: set LLM_EXT_DUMP_REQUESTS=<file> to append
+the exact JSON body (model + byte size + full body) of every chat/code_task/
+ensemble request (chatCompletionSimple) and structured-output request
+(chatCompletionJSON) to that file. Off unless the env var is set.
+
+Motivation: verify there is no unexpected prompt/file inflation in requests.
+Used it to confirm exactly that — index.test.ts-class inputs produce ~600-token
+bodies (829-2372 bytes captured), with no duplicated files, no hidden template:
+system prompt ~33 tok + pre-instructions ~175 tok + instructions + file content.
+ensembleStreaming sends the SAME messages to each of the 3 models (per-model
+body == single-model body), so the high spike-hour prompt size was real
+large-file content × ensemble fan-out, not request inflation.
+
+Documented in the README env-var table (flagged that the dumped body contains
+prompt + file content and should be treated as sensitive).
+
+Verified: full npm test 895 passed / 4 skipped / 0 OpenRouter boots; tsc + eslint
+clean; dist rebuilt.
+
+- Feat(A5): doc-consistency gate — README counts/names match source (TRDD-828238b5)
+
+Ends the doc-drift class the deep audit kept fixing: add a tool/command and
+forget to bump a README count, and the gate fails with a clear message.
+
+- doc-inventory.ts: pure, side-effect-free extractors that parse the
+  authoritative declarations from source as text (core tool names, mass-scout
+  /model-qual tool names, API-preset keys, command names, agent names). No
+  server import (index.ts runs main() on import).
+- doc-consistency.test.ts (11 tests): asserts README counts (N MCP tools,
+  N plugin commands + splits, N backend presets, N internal agents, the
+  core/utility + security/model-qual sub-counts) and name membership match.
+- Runs inside `npm test`, which publish.py::run_checks already invokes as a
+  mandatory gate (line 324) — "fail CI on doc drift" with zero publish.py edits.
+
+Decision: a CHECK gate (not a marker-splicing regenerator) — the core tool
+list is inline in the 9.6k-line index.ts that runs main() on import (can't be
+imported by a generator without a risky refactor) and rendering README prose
+exactly is brittle. A precise-failure check is equally drift-proof, far safer,
+same end. Full suite 883 green.
+
+- Feat(A4): discover_new_models — new-arrivals autodiscovery (TRDD-828238b5)
+
+Surface models that newly appeared in the OpenRouter catalog since the last
+run, each assessed against every per-tool requirements gate so the operator
+can spot a newer/cheaper candidate. Free (public catalog fetch, no LLM call).
+Report-only — adoption stays user-only.
+
+- model-qualification/new-arrivals.ts: pure diff (diffNewArrivals) + atomic
+  snapshot at getConfigDir()/catalog-snapshot.json + IO orchestrator + markdown
+  /text renderers. First run seeds the snapshot, reports zero (mirrors A2).
+- 3 surfaces: MCP tool discover_new_models, CLI --new-arrivals
+  [--qualifying-only], slash command llm-externalizer-discover-new-models
+- export compactStamp from drift.ts for reuse (DRY)
+- 18 unit tests + 2 hermetic dispatch tests; roster 20→21; full suite 872 green
+- docs: README 36→37 tools / 25→26 commands / 16→17 base, model-qual tables,
+  rule inventory, tool-use-cases
+
+- Feat(A3): de-hardcode catalog-authoritative limits + dedupe DEFAULT_MODEL (TRDD-828238b5)
+
+- dedupe DEFAULT_MODEL: mass_scouting/cli.ts imports the canonical constant
+  from security_scan/types.ts instead of redeclaring the literal (single
+  source of truth; the mass_scouting → security_scan dep already exists)
+- extract ensemble per-model limits to a pure, unit-tested ensemble-limits.ts:
+  maxOutput is now catalog-preferred (live top_provider.max_completion_tokens
+  from the warm 1h-TTL cache, with a plausibility floor + calibrated fallback)
+- maxInputLines and KNOWN_PRICING.context_window stay hand-calibrated by design
+  (empirical quality / provider-endpoint caps the catalog does NOT carry) —
+  documented inline so they are not naively de-hardcoded into a regression
+- 16 new ensemble-limits tests; full suite 852 passing, build clean
+
+- Feat(A2): check_model_health configured-model self-check (TRDD-828238b5)
+
+Free advisory self-check for the active profile's configured models
+(main/second/third + every tool_models entry): presence (removed =
+CRITICAL), cost drift vs a seeded baseline (WARN), and per-served-tool
+requirements regression (WARN). Read-only — writes a report, never
+mutates settings.
+
+- model-qualification/drift.ts: pure core (buildConfiguredModels,
+  computeModelHealth) + IO orchestrator (checkModelHealth,
+  runCheckModelHealth) + baseline load/save + markdown/text renderers
+- 3 surfaces: MCP tool (check_model_health), CLI (--check-health),
+  slash command (llm-externalizer-check-model-health)
+- 17 drift unit tests + 1 hermetic dispatch test; index roster updated
+- docs: README counts 35→36 tools / 24→25 commands / 15→16 base,
+  model-qualification tables, lean rule inventory, tool-use-cases
+
+- Feat(A1): durable model-health event ledger (TRDD-828238b5)
+
+New model-events.ts: append-only per-model health event log (sibling of
+history.log, honors LLM_EXT_CONFIG_DIR) + a PURE reader/aggregator that rolls a
+window of events into per-model health summaries with an advisory `degraded`
+flag (non-retryable failures / empty responses / schema-heal instability
+thresholds). Best-effort writes never break the LLM call.
+
+Wired the two safe one-shot mitigation signals in index.ts: param_drop (gated by
+the existing FILTER_WARN_SEEN one-shot set) and reasoning_downgrade (inside
+recordReasoningRejection). Failure-signal emission (429/empty/non-retryable with
+model threading) lands with A7's degraded-detection.
+
+16 new unit tests; 817 total pass; build clean. Foundation for A2 + A7.
+
+- Feat(setup): wire vllm-cuda-autoconfig into the setup-agent + fix FP8 driver gate
+
+- setup-agent now consults scripts/setup/vllm-cuda-autoconfig.py on the
+  Linux+NVIDIA vLLM path (Step 3a consult note + Step 3a/Step 4 serve rows) to
+  emit a VRAM-tiered `vllm serve` command instead of a bare default — completes
+  TRDD-65867b68 Phase 4 ("Setup-agent Linux+NVIDIA branch consults it")
+- fix FP8 driver gate: an unknown/unparseable CUDA driver (driver_major == 0)
+  was treated as FP8-capable; now conservative (disabled + warn), since adding
+  --kv-cache-dtype fp8 to an unsupported driver makes vLLM fail to start
+- verified: dry-run/print-vram-only run; FP8 logic correct for unknown/530/535/550
+
+
+### Documentation
+
+- Docs: add TRDD-8b6b3646 — free-only benchmark-filtered ensemble
+
+- Docs: add TRDD-ec45c66f — reasoning cost regression remediation
+
+- Docs: add TRDD-e82f2c49 — test cost-safety (zero-dime default test gate)
+
+- Docs(828238b5): mark B2/B5 done in the master backlog (cross-ref TRDD-66da2aa7)
+
+- Docs(B2): document cluster resume_from rehydrate + fail-fast; mark TRDD-66da2aa7 done
+
+- Docs: add TRDD-66da2aa7 — cluster_synonyms resume_from fix + partition caching
+
+- Docs(D1/D5): align command + setup-agent docs with the fixed contracts (TRDD-6e859d3c)
+
+- fix-found-bugs.md / scan-and-fix-serially.md: --skip-if-fixer-exists and the
+  inline exclusion now describe BOTH canonical fixer-sidecar shapes (.fixer. AND
+  -fixer-), matching the unified FIXER_MARKERS from D5
+- setup-agent.md: build-snippet now documented to reject YAML-reserved profile
+  names + exit-2 on safety-guard violations (D1)
+- mark TRDD-6e859d3c completed with the per-item commit map + outcome
+
+- Docs: add TRDD-6e859d3c — Part-D script-bug remediation (honor-contract + TDD)
+
+- Docs(TRDD-828238b5): scope A6/A7 — A1-A5 shipped, A6 needs a focused session
+
+A6 scoping pass findings recorded: search_existing_implementations (structured
+YES/NO output) should lead over code_task (free-form prose needs an LLM-judge),
+but its real pipeline is embedded in index.ts (runs main() on import) so a
+faithful in-process runner is blocked on a B1 monolith-extraction increment.
+Real golden-dataset curation deferred rather than faked (hard no-fakes rule).
+A7 is genuinely blocked on A6. Build order + next-session plan captured.
+
+- Docs(design): TRDD-828238b5 — auto-* model-management roadmap + deep-audit backlog
+
+Durable record of the whole-plugin deep audit (raw agent reports are gitignored):
+- 7 auto-* capabilities with grounded status (1 exists/5 partial/1 missing),
+  read-only design guardrail, and a value-to-effort build order (A1→A7)
+- architectural findings (index.ts 9599-line split; cluster resume-stub +
+  in-memory load + unwired preflight)
+- hardcoded model/cost table inventory (de-hardcode targets)
+- live-script bug backlog with file:line
+- dead-script removal pending RULE-0 approval; test-coverage gaps
+
+- Docs: fix stale change-model cross-reference + install_statusline backup-format docstring
+
+- README change-model rows no longer claim a scripts/apply_ensemble_choice.py
+  wrapper — the command is a pure user-only redirect (discover/get_settings/reset);
+  apply_ensemble_choice.py is orphaned (removal pending review per RULE 0)
+- install_statusline.py docstring: backup suffix is local time + GMT offset
+
+- Docs(design): update TRDD-f45eeaa0 status + security-triage benchmark cases
+
+- Docs: whole-plugin correctness audit + lean rule + on-demand reference docs
+
+- rules/use-llm-externalizer.md trimmed 572→43 lines (always-loaded); detail
+  moved to docs/agent-usage-reference.md, docs/tool-use-cases.md,
+  docs/setup-and-configuration.md
+- remove phantom set_settings/change_model (config is user-only, read-only server)
+- fix counts (35 tools, 24 commands, 15 skills, 6 agents), preclassify bucket
+  names, stale git/reports_dev report-location claims across README/commands/skills/agents
+- add assess-model command; complete missing usage examples + help
+
+
+### Fixed
+
+- Fix(cpv): clear CPV 2.106.0 publish blockers — README md-title + tighten 3 command descriptions
+
+The updated CPV (2.106.0) enforces stricter checks than the version 9.13.1 was
+published under:
+- README needs a markdown '# ' heading (HTML <h1> didn't count) → converted the
+  centered <h1> to a markdown title under the banner.
+- command 'description' must be ≤200 tokens → tightened check-model-health (214),
+  security-triage-benchmark (211), cluster-synonyms (201); trigger phrases kept,
+  verbose parentheticals trimmed.
+
+No functional change — docs/frontmatter only. Unblocks the 9.14.0 publish.
+
+- Fix(robustness): self-review fixes — best-effort request dump + free_models coercion
+
+Two issues found in a verification pass over this session's changes:
+
+1. LLM_EXT_DUMP_REQUESTS appendFileSync was unwrapped — a bad dump path (or full
+   disk) would THROW and break the real LLM call. A debug/audit hook must never
+   break the call. Extracted dumpRequestBody(): wrapped best-effort (try/catch +
+   stderr warning), reused at both dump sites (chatCompletionSimple +
+   chatCompletionJSON).
+
+2. free_models comes from YAML (untyped at runtime). A scalar instead of a list
+   would crash resolveProfile (`[...string]` spreads into single characters) and
+   validateProfile (`.filter` on a non-array). Added coerceFreeModels() mirroring
+   coerceToolModels(): resolveProfile coerces to []; validateProfile flags a
+   non-list explicitly ("free_models must be a YAML list").
+
+Tests: +2 (malformed free_models → clear error, no crash, no char-spread).
+Full npm test 909 passed / 4 skipped / 0 OpenRouter boots; tsc + eslint clean.
+
+- Fix(cost): cluster reasoning off, A3 cap revert, default effort xhigh→high (TRDD-ec45c66f)
+
+Per-call cost (not test count) had grown ~10x. Three git-confirmed inflators,
+all fixed; the two already-clean paths (scout, security_scan) untouched.
+
+1. cluster_synonyms forced reasoning:xhigh + max_tokens:65535 (csRawLlmCall →
+   chatCompletionWithRetry → reasoning ladder). Clustering emits a tiny JSON
+   verdict — it must never reason (reasoning tokens are billed and dwarf the
+   answer on a reasoning primary). Now reasoning:"off" + maxTokens:4096.
+
+2. A3 (commit 0eed8d2, today) made the catalog the authority for ensemble
+   maxOutput, raising it 32K→65K for models absent from the table (the user's
+   deepseek/gpt-nano/gemini-flash-lite ensemble). resolveEnsembleModelLimits now
+   uses min-semantics: the calibrated value is the CEILING; the catalog can only
+   LOWER it, never raise. The "models self-limit, so a high cap is harmless"
+   premise is false for reasoning models — corrected the module note.
+
+3. Reasoning effort is now configurable via LLM_EXT_REASONING_EFFORT
+   (xhigh|high|medium|low|off), default lowered xhigh→high — strong reasoning at
+   roughly half the billed thinking-token cost. Per-call override added so
+   cluster passes "off". reasoningLadderForModel exported for tests.
+
+Untouched (verified already clean — no forced reasoning, no max_tokens):
+- mass_scout (scout.ts own fetch): qwen-2.5-7b, 0 reasoning tokens in the logs.
+- security_scan (judge.ts own fetch): independent of the index.ts ladder, so the
+  calibrated detection (#90/#93/#94/#95/#96) is preserved. Hard rule honored:
+  never relax security quality.
+
+Net per-call effect: ensemble ceiling 65K→32K; ensemble effort xhigh→high;
+cluster xhigh+65K→none+4K.
+
+Tests (offline, zero spend): reasoning-ladder.test.ts (6) + ensemble-limits
+min-semantics. Full npm test 895 passed / 4 skipped / 0 OpenRouter boots; tsc +
+eslint clean. dist rebuilt. Docs: README env table + TESTING.md.
+
+- Fix(tests): zero-spend test suite — default to local-unreachable backend (TRDD-e82f2c49)
+
+The OpenRouter balance drained because the test suite was silently running
+the user's premium 3-model ensemble. Confirmed by the OpenRouter activity
+export: $26.46 over 2 days, $17.67 (67%) in the single hour `npm test` ran
+~10×; 244 ensemble ops/hr across deepseek-v4-pro + gpt-5.4-nano +
+gemini-3.1-flash-lite-preview; cost driver = reasoning tokens (gemini-flash-lite
+alone 6.5M reasoning tok = $10.44 in that hour).
+
+Root cause: test-helpers.ts copied the real ~/.llm-externalizer/settings.yaml
+into the spawned test server, so index.test.ts's ~23 real tool-calls/run hit
+the premium ensemble. The local ledger only showed $0.12 because tests log to
+throwaway /tmp config dirs.
+
+Changes:
+- test-helpers.ts: resolveTestConfig() defaults to a synthetic LOCAL,
+  unreachable backend (http://127.0.0.1:1, single model, no ensemble) that can
+  never bill. Real backend only via explicit requireLiveBackend:true.
+  createTestClient writes the local settings.yaml by default; copies real
+  settings only when liveBackend is set.
+- index.test.ts: default→local config; UNREACHABLE_CALL_TIMEOUT_MS=10s so
+  ECONNREFUSED tests fail fast (suite 63s, not 433s). All real-call tests
+  already tolerate connection-refused.
+- live.test.ts / live-extended.test.ts / security_scan_live.test.ts: gate on
+  LIVE_TESTS=1 (+ OPENROUTER_API_KEY) via describe.skipIf; live suites pass
+  requireLiveBackend:true. Default npm test reports them skipped.
+- index.ts: entry-point guard on main() — importing the module (e.g.
+  default-output-dir.test.ts) no longer boots the server / contacts a backend.
+  Spawned `node dist/index.js` still boots (argv[1] matches import.meta.url).
+- test-helpers.test.ts (NEW): free regression guard — fails if the default
+  test backend ever resolves to a billing/remote backend, or silently degrades
+  the requireLiveBackend path to the free local one.
+- vitest.config.ts: register the guard test.
+- TESTING.md (NEW) + README pointer: document offline-default / LIVE_TESTS opt-in.
+- dist/index.js rebuilt.
+
+Verified (no API key): 887 passed / 4 skipped; ZERO `backend: OpenRouter`
+boot lines (6 Local-unreachable); tsc + eslint clean. npm test now bills $0.00.
+No hidden auto-spend elsewhere: discover / check_model_health (drift) /
+discover_new_models (new-arrivals) use only the free /v1/models catalog
+endpoint; the only setInterval usages are in-flight progress timers.
+
+- Fix(B2/B5): cluster_synonyms honor resume_from + compute partition once (TRDD-66da2aa7)
+
+B2 (data-loss footgun, HIGH): resume_from's VALUE was ignored — the checkpoint
+path was hardcoded to output_dir/checkpoint.sqlite, so passing resume_from only
+bypassed the output-dir overwrite guard and the run re-clustered from scratch
+over the existing outputs. Now the checkpoint is loaded from resume_from when
+given (the rehydrate + phase-1 skip machinery already existed), and a missing
+resume_from path fails fast instead of silently overwriting. Stale module
+comment ('Phase 2/3/resume are placeholders') corrected — all three are live.
+
+B5 (perf): uf.partition() (O(n) Map rebuild) was recomputed at emit by
+writeClustersJsonl AND buildSummary, plus the phase-3 branch. uf is final after
+phase-2 merges; compute partition once and pass it to all three. Output is
+byte-identical (the two helpers now take the partition instead of the uf).
+
+3 new behavioral resume tests (the gap wiring.test.ts left): rehydrated merge
+survives (3 vs 4 clusters), fresh-run control, missing-path fail-fast.
+Full suite 886 green; build + eslint + tsc clean.
+
+- Fix(D6): statusline fetchers log instead of silently swallowing (TRDD-6e859d3c)
+
+fetch_usage_from_api + fetch_openrouter_budget used bare except Exception that
+hid every cause (network, schema, real bugs). Narrowed to (OSError, ValueError)
+— covers urllib URLError/HTTPError/timeouts + JSON/UTF-8 decode — and log via
+the existing _log_exception before the stale-cache fallback. Genuine bugs
+(KeyError/AttributeError/TypeError) now surface to main()'s per-section guard;
+fail-soft VISUAL return values unchanged. tests/test_statusline.py extended.
+
+- Fix(D5): fix_found_bugs_helper.py skip-filter matches canonical fixer naming (TRDD-6e859d3c)
+
+--skip-if-fixer-exists matched only '.fixer.' siblings, but the canonical
+fixer sidecar also uses the '-fixer-' shape that _is_sidecar recognizes → the
+skip silently never fired and already-fixed reports were re-aggregated. Added
+FIXER_MARKERS=('.fixer.','-fixer-') as the single source of truth and keyed the
+skip-filter off it (both separator shapes). Canonical naming confirmed from
+validate_fixer_summary.py/join_fixer_reports.py. tests/test_fix_found_bugs_helper.py (new).
+
+- Fix(D4): detect-runners.py non-dict guard + broader vLLM probe (TRDD-6e859d3c)
+
+- _safe_model_names: isinstance(payload, dict) guard so a JSON list payload
+  yields [] (per docstring) instead of AttributeError that main()'s outer
+  except masked as "not installed"
+- _vllm_import_probe: ANY non-ModuleNotFoundError nonzero exit is now reported
+  installed-but-broken; enumerating ImportError/OSError/RuntimeError dropped
+  the long tail (AttributeError/TypeError/C-abort) into "not installed"
+- tests/test_detect_runners.py (new)
+
+- Fix(D3): benchmark-models.py honors never-raise contract (TRDD-6e859d3c)
+
+- measure_throughput wraps call_chat → returns the documented error-shape dict
+  instead of letting exceptions escape
+- isinstance(resp, dict) precedes the "error" in resp test (a non-dict resp
+  would otherwise do substring/element matching)
+- run_vmlx_bench coerces numbers via _as_float/_as_int (no ValueError on a
+  malformed payload) per its None-on-failure contract
+- benchmark_one_model guards the perf probe like the reliability loop →
+  zero-tps record, never aborts the model's benchmark
+- tests/test_benchmark_models.py extended
+
+- Fix(D2): _bench_helpers.py batch resilience — .get over direct indexing (TRDD-6e859d3c)
+
+_avg_test_score/rank_models/render_markdown direct-indexed record["tests"]/
+r["perf"] → KeyError crashed the whole rank/render even though _is_viable
+already uses .get(...,{}). Switched to .get with safe defaults so one
+malformed record no longer kills the batch. tests/test_bench_helpers.py (new).
+
+- Fix(D1): truthful build-snippet.py contract — reject YAML-reserved names, exit-2 safety guards (TRDD-6e859d3c)
+
+- _yaml_dquote: docstring now states control chars (incl \n/\r) are REJECTED,
+  not escaped; removed the two unreachable .replace("\n")/.replace("\r")
+  calls (the control-char guard rejects them first); kept the \t escape
+- safety-guard violations now print to stderr + raise SystemExit(2) to honor
+  the module's documented exit-2 contract (bare SystemExit(str) exits 1)
+- _validate_profile_name now rejects YAML-reserved tokens (null/true/false/
+  yes/no/on/off/~, case-insensitive) — they were emitted UNQUOTED as mapping
+  keys and would parse as bool/null, despite the comment promising rejection
+- module docstring exit-code table aligned with real behavior
+- tests/test_build_snippet.py (new, 28 tests)
+
+- Fix(server): unify report output on $CLAUDE_PROJECT_DIR (no git), add rule installer + per-tool model surfaces
+
+- project-root.ts: single resolver, CLAUDE_PROJECT_DIR verbatim → cwd, never git
+  (worktrees / monorepo subfolder-gits / git-less roots all made git wrong)
+- rule-install.ts: server installs/updates ~/.claude/rules/use-llm-externalizer.md
+  on every start (atomic, guarded, opt-out LLM_EXT_INSTALL_RULE=0)
+- assess_model surface + tool_models per-tool routing (TRDD-f45eeaa0)
+- server.json: correct LLM_OUTPUT_DIR default + read-only description
+- rebuild dist; vitest config; +4 test files
+
+
+### Miscellaneous
+
+- Chore: remove orphaned ensemble-choice scripts
+
+apply_ensemble_choice.py + read_ensemble_state.py are unreferenced (superseded by
+the user-only manual settings.yaml config flow). Verified zero callers across
+commands/skills/hooks/ts/scripts. Recoverable from git history. User-authorized.
+
+
+### Refactored
+
+- Refactor: safe local cleanups from deep code audit
+
+Conservative, signature-preserving fixes found by the parallel module audit
+(index, mass_scouting, benchmark, cluster, shared): remove confirmed-unused
+imports/locals, fix a phase2_verify O(n^2) cluster lookup (Map-based), and minor
+local corrections. Build clean, 801 tests pass. Larger/cross-file findings are
+tracked separately for triage.
+
+
 ## [9.13.1] - 2026-05-24
 
 ### Documentation
