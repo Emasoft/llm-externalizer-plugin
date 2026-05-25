@@ -329,8 +329,19 @@ profiles:
 
 Free models are heavily rate-limited; list several so the ensemble has fallbacks.
 A context-window requirements floor drops obviously-unusable free models; the
-golden-dataset benchmark filter (run on the free pool at `$0`) is the deeper
-quality gate.
+golden-dataset benchmark filter is the deeper quality gate.
+
+**Benchmark-gate your free pool (`$0` — free models cost nothing to benchmark):**
+run the security-triage benchmark on your `free_models`, then the ensemble
+automatically excludes any that fail it (the pass/fail is cached in
+`~/.llm-externalizer/security-triage-results.json`):
+
+```text
+security_triage_benchmark   models: ["deepseek/deepseek-v4-flash:free", "openai/gpt-oss-120b:free", ...]
+```
+
+Models never benchmarked stay in (unverified, not excluded); only a *recorded
+failure* drops a model.
 
 > [!WARNING]
 > Free providers log your prompts. Use only on open-source code.

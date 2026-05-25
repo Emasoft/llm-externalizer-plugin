@@ -151,6 +151,48 @@ function saveCache(cache: CacheFile): void {
   renameSync(tmp, p);
 }
 
+// ── Free-ensemble benchmark filter readers (TRDD-8b6b3646 Phase 2) ─────────
+// The free-only ensemble drops models that have a RECORDED failing benchmark.
+// These read the same per-model cache the benchmark run writes above, so once a
+// (free, $0) benchmark run has populated it, the ensemble filter excludes the
+// proven-weak free models. No LLM calls here — pure cache reads.
+
+/**
+ * Latest-wins extraction of proven-FAILING models from a benchmark cache (PURE,
+ * testable). The cache key is `modelId::date::datasetHash`; for each model we
+ * take the most-recent entry by date and flag it failed when the verdict is a
+ * CONCLUSIVE non-pass (inconclusive runs — empty/errored — are NOT a failure, so
+ * a flaky free model is never excluded on inconclusive evidence). Loosely typed
+ * so tests can pass synthetic verdicts without importing CacheEntry.
+ */
+export function failedModelsFromCache(
+  cache: Record<string, { date: string; score: { pass: boolean; inconclusive: boolean } }>,
+): Set<string> {
+  const latest = new Map<string, { date: string; pass: boolean; inconclusive: boolean }>();
+  for (const [key, entry] of Object.entries(cache)) {
+    const modelId = key.split("::")[0];
+    if (!modelId) continue;
+    const prev = latest.get(modelId);
+    if (!prev || entry.date > prev.date) {
+      latest.set(modelId, {
+        date: entry.date,
+        pass: entry.score.pass,
+        inconclusive: entry.score.inconclusive,
+      });
+    }
+  }
+  const failed = new Set<string>();
+  for (const [modelId, v] of latest) {
+    if (!v.inconclusive && !v.pass) failed.add(modelId);
+  }
+  return failed;
+}
+
+/** Models with a recorded FAILING security-triage benchmark (reads the real cache). */
+export function benchmarkFailedModels(): Set<string> {
+  return failedModelsFromCache(loadCache());
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function resolveApiKey(override?: string): string {

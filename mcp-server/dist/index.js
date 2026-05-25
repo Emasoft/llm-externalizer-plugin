@@ -45018,6 +45018,29 @@ function saveCache(cache) {
   writeFileSync4(tmp, JSON.stringify(cache, null, 2), "utf-8");
   renameSync(tmp, p);
 }
+function failedModelsFromCache(cache) {
+  const latest = /* @__PURE__ */ new Map();
+  for (const [key, entry] of Object.entries(cache)) {
+    const modelId = key.split("::")[0];
+    if (!modelId) continue;
+    const prev = latest.get(modelId);
+    if (!prev || entry.date > prev.date) {
+      latest.set(modelId, {
+        date: entry.date,
+        pass: entry.score.pass,
+        inconclusive: entry.score.inconclusive
+      });
+    }
+  }
+  const failed = /* @__PURE__ */ new Set();
+  for (const [modelId, v] of latest) {
+    if (!v.inconclusive && !v.pass) failed.add(modelId);
+  }
+  return failed;
+}
+function benchmarkFailedModels() {
+  return failedModelsFromCache(loadCache());
+}
 function resolveApiKey(override) {
   const k = override || process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
   if (!k) {
@@ -51804,8 +51827,9 @@ function ensembleModelLabel(useEnsemble) {
   return `ensemble: ${models.join(" + ")}`;
 }
 var FREE_FLOOR_MIN_CONTEXT_TOKENS = 32e3;
-function selectFreeEnsembleModels(freeModels, catalogById) {
+function selectFreeEnsembleModels(freeModels, catalogById, benchmarkFailed = /* @__PURE__ */ new Set()) {
   const kept = freeModels.filter((id) => {
+    if (benchmarkFailed.has(id)) return false;
     const m = catalogById.get(id);
     if (!m) return true;
     const ctx = m.context_length ?? m.top_provider?.context_length ?? 0;
@@ -51819,7 +51843,11 @@ function getEnsembleModels() {
   const catalogById = new Map(openRouterModelCache.map((m) => [m.id, m]));
   let models;
   if (activeResolved.freeOnly) {
-    models = selectFreeEnsembleModels(activeResolved.freeModels, catalogById);
+    models = selectFreeEnsembleModels(
+      activeResolved.freeModels,
+      catalogById,
+      benchmarkFailedModels()
+    );
   } else {
     models = [activeResolved.model];
     if (activeResolved.secondModel) models.push(activeResolved.secondModel);

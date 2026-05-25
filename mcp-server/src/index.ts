@@ -1293,6 +1293,7 @@ import { installUsageRule } from "./rule-install.js";
 import { resolveProjectMainRoot } from "./project-root.js";
 import { appendModelEvent } from "./model-events.js";
 import { resolveEnsembleModelLimits } from "./ensemble-limits.js";
+import { benchmarkFailedModels } from "./benchmark/security-triage/index.js";
 import {
   fetchOpenRouterModelInfo,
   formatModelInfoMarkdown,
@@ -4614,25 +4615,32 @@ function ensembleModelLabel(useEnsemble: boolean): string {
 export const FREE_FLOOR_MIN_CONTEXT_TOKENS = 32_000;
 
 /**
- * Free-only ensemble selection (TRDD-8b6b3646). Phase 1 = a zero-spend
- * REQUIREMENTS pre-filter: drop free models the catalog POSITIVELY reports as
- * below the context floor, preserve the user's preference order, take the top 3.
+ * Free-only ensemble selection (TRDD-8b6b3646). Two zero-spend filters, then the
+ * top 3 in the user's preference order:
  *
- * The premium qualification framework (qualifyModelForTool) can't be reused here:
- * its criteria set allowFree:false, so it rejects every ':free' model by design.
- * The golden-dataset BENCHMARK filter (which IS free-model-aware, and costs $0 on
- * ':free' models) layers on in Phase 2.
+ *   1. BENCHMARK (Phase 2) — drop any free model with a RECORDED failing
+ *      security-triage benchmark (`benchmarkFailed`). Populated by a deliberate
+ *      ($0, free-model) benchmark run; empty until then, so this is a no-op on a
+ *      fresh install. A model never benchmarked is NOT dropped here.
+ *   2. REQUIREMENTS (Phase 1) — drop free models the catalog POSITIVELY reports
+ *      below the context floor.
+ *
+ * The premium qualification framework (qualifyModelForTool) can't be reused for
+ * (2): its criteria set allowFree:false, so it rejects every ':free' model by
+ * design — hence the dedicated context floor.
  *
  * Lenient on availability: a model absent from the catalog, or whose catalog
  * entry carries no context info, is KEPT (can't assess → don't penalise) — so a
  * cold catalog degrades to the raw top-3, never an empty ensemble. Pure +
- * offline-testable: pass an explicit catalog map.
+ * offline-testable: pass an explicit catalog map and failed-set.
  */
 export function selectFreeEnsembleModels(
   freeModels: string[],
   catalogById: Map<string, OpenRouterModelInfo>,
+  benchmarkFailed: ReadonlySet<string> = new Set(),
 ): string[] {
   const kept = freeModels.filter((id) => {
+    if (benchmarkFailed.has(id)) return false; // proven-failing benchmark — exclude
     const m = catalogById.get(id);
     if (!m) return true; // unknown to the catalog — keep (lenient on availability)
     const ctx = m.context_length ?? m.top_provider?.context_length ?? 0;
@@ -4654,8 +4662,13 @@ function getEnsembleModels(): Array<{
   let models: string[];
   if (activeResolved.freeOnly) {
     // Free-only: pick the top-3 benchmark/requirements-qualified free models from
-    // the pool (never the configured premium model/second/third).
-    models = selectFreeEnsembleModels(activeResolved.freeModels, catalogById);
+    // the pool (never the configured premium model/second/third). benchmarkFailed
+    // is empty until a ($0) benchmark run populates the cache.
+    models = selectFreeEnsembleModels(
+      activeResolved.freeModels,
+      catalogById,
+      benchmarkFailedModels(),
+    );
   } else {
     models = [activeResolved.model];
     if (activeResolved.secondModel) models.push(activeResolved.secondModel);

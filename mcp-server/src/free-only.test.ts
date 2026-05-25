@@ -8,6 +8,7 @@
 import { describe, it, expect } from "vitest";
 import { resolveProfile, validateProfile, type Profile } from "./config";
 import { selectFreeEnsembleModels, FREE_FLOOR_MIN_CONTEXT_TOKENS } from "./index";
+import { failedModelsFromCache } from "./benchmark/security-triage/index";
 
 const FREE = [
   "poolside/laguna-m.1:free",
@@ -144,5 +145,55 @@ describe("selectFreeEnsembleModels — context-floor requirements pre-filter", (
       "b:free",
       "c:free",
     ]);
+  });
+
+  it("Phase 2: drops a benchmark-FAILED free model even if it clears the context floor", () => {
+    const cat = new Map([
+      ["a:free", { id: "a:free", name: "a", context_length: big }],
+      ["b:free", { id: "b:free", name: "b", context_length: big }], // benchmark-failed
+      ["c:free", { id: "c:free", name: "c", context_length: big }],
+      ["d:free", { id: "d:free", name: "d", context_length: big }],
+    ]);
+    const failed = new Set(["b:free"]);
+    expect(selectFreeEnsembleModels(["a:free", "b:free", "c:free", "d:free"], cat, failed)).toEqual([
+      "a:free",
+      "c:free",
+      "d:free",
+    ]);
+  });
+});
+
+describe("failedModelsFromCache — proven-failing extraction (Phase 2)", () => {
+  it("flags a model whose latest entry is a CONCLUSIVE non-pass", () => {
+    const cache = {
+      "x/m:free::2026-05-20::h1": { date: "2026-05-20", score: { pass: false, inconclusive: false } },
+    };
+    expect(failedModelsFromCache(cache).has("x/m:free")).toBe(true);
+  });
+
+  it("does NOT flag a passing model", () => {
+    const cache = {
+      "x/m:free::2026-05-20::h1": { date: "2026-05-20", score: { pass: true, inconclusive: false } },
+    };
+    expect(failedModelsFromCache(cache).has("x/m:free")).toBe(false);
+  });
+
+  it("does NOT flag an INCONCLUSIVE run (flaky/empty is not a failure)", () => {
+    const cache = {
+      "x/m:free::2026-05-20::h1": { date: "2026-05-20", score: { pass: false, inconclusive: true } },
+    };
+    expect(failedModelsFromCache(cache).has("x/m:free")).toBe(false);
+  });
+
+  it("latest-wins: a newer PASS overrides an older FAIL", () => {
+    const cache = {
+      "x/m:free::2026-05-10::h1": { date: "2026-05-10", score: { pass: false, inconclusive: false } },
+      "x/m:free::2026-05-25::h2": { date: "2026-05-25", score: { pass: true, inconclusive: false } },
+    };
+    expect(failedModelsFromCache(cache).has("x/m:free")).toBe(false);
+  });
+
+  it("an empty cache flags nothing", () => {
+    expect(failedModelsFromCache({}).size).toBe(0);
   });
 });

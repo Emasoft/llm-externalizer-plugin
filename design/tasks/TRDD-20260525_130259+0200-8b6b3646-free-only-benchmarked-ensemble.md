@@ -3,7 +3,7 @@ trdd-id: 8b6b3646-0152-4077-8d2a-e888f17e0fc7
 title: Free-only switch — benchmark-filtered free ensemble (per-profile)
 status: in-progress
 created: 2026-05-25T13:02:59+0200
-updated: 2026-05-25T13:14:37+0200
+updated: 2026-05-25T14:37:38+0200
 ---
 
 # TRDD-8b6b3646 — Free-only benchmark-filtered ensemble
@@ -99,8 +99,15 @@ Design choices (confirmed via AskUserQuestion):
   tsc + eslint clean.
   - NOTE: the premium qualification framework sets `allowFree:false`, so it
     CANNOT gate free models — Phase 1 uses a dedicated context-floor instead.
-- **Phase 2 — BLOCKED on OpenRouter re-enable.** The golden-dataset benchmark
-  filter must RUN the benchmark on the free pool. That is `$0` (free models) but
-  IS OpenRouter API usage, which the user paused. Implement the cache + filter
-  CODE offline; activate the run when OpenRouter is back.
+- **Phase 2 — CODE DONE; cache population needs an OpenRouter run.** The filter
+  reuses the EXISTING benchmark cache (`~/.llm-externalizer/security-triage-results.json`)
+  rather than a new store. `failedModelsFromCache` (pure, latest-wins,
+  conclusive-fail-only) + `benchmarkFailedModels()` in security-triage/index.ts;
+  `selectFreeEnsembleModels` drops proven-failing free models BEFORE the context
+  floor. The existing `security_triage_benchmark` tool already accepts an explicit
+  `models:` list and benchmarks unqualified (incl. `:free`) models, so the user
+  populates the cache with one `$0` run on the free pool — no new surface. Empty
+  cache → no-op (fresh install safe). Tests: failedModelsFromCache (5) +
+  selectFreeEnsembleModels benchmark-drop (1). Docs: README B2 recipe. The only
+  OpenRouter-dependent step is the benchmark RUN itself (the user's to trigger).
 - **Phase 3 — deferred** (rotation; needs live 429 testing).
