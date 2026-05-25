@@ -15,7 +15,7 @@ Typical orchestration:
         --output /abs/path/reports/llm-externalizer/<RUN_TS>.fix-found-bugs.bugs-to-fix.md
 
     # Otherwise, scan the default reports dir for per-file reports that still
-    # contain unfixed bugs (i.e. no '.fixer.' sibling indicating prior success),
+    # contain unfixed bugs (i.e. no '.fixer.'/'-fixer-' sibling indicating prior success),
     # aggregate findings across all auditors (ensemble responses) for each
     # source file, and emit a canonical fix-bugs list:
     fix_found_bugs_helper.py aggregate-reports \\
@@ -133,6 +133,12 @@ SIDECAR_MARKERS = (
     "-bugs-to-fix.",
     "-fix-found-bugs-",
 )
+# The subset of SIDECAR_MARKERS that specifically tags a *fixer* sidecar (the
+# artefact scan-and-fix writes next to a report once its bugs are fixed). Both
+# canonical separator shapes are listed. `--skip-if-fixer-exists` keys off this
+# constant so its notion of "fixer sibling" stays identical to what
+# `_is_sidecar` treats as a fixer artefact — single source of truth.
+FIXER_MARKERS = (".fixer.", "-fixer-")
 
 # ── Severity keyword tables ──────────────────────────────────────────────────
 
@@ -417,18 +423,37 @@ def _find_report_files(reports_dir: Path, skip_if_fixer_exists: bool) -> list[Pa
     candidates = [p for p in candidates if not _is_sidecar(p.name)]
     if not skip_if_fixer_exists:
         return sorted(candidates)
-    # Filter: skip any report whose stem prefix matches a '.fixer.' sibling
+    # Filter: skip any report that has a fixer sibling (i.e. was already
+    # processed by scan-and-fix). The fixer tag has two canonical shapes —
+    # the dot-separated `.fixer.` and the hyphen-separated `-fixer-` — both
+    # of which `_is_sidecar` recognizes via FIXER_MARKERS. We MUST iterate
+    # over that same constant rather than a second hardcoded `.fixer.`
+    # literal: a `-fixer-` sibling left behind by a hyphen-shape run would
+    # otherwise never match, silently disabling the skip and re-aggregating
+    # an already-fixed report. Single source of truth = FIXER_MARKERS.
     fixer_prefixes: set[str] = set()
     for p in reports_dir.iterdir():
-        if p.is_file() and ".fixer." in p.name.lower():
-            # prefix = everything up to the '.fixer.' marker (lowercased for
-            # case-insensitive matching against candidate names)
-            idx = p.name.lower().find(".fixer.")
+        if not p.is_file():
+            continue
+        lower = p.name.lower()
+        for marker in FIXER_MARKERS:
+            idx = lower.find(marker)
             if idx > 0:
-                fixer_prefixes.add(p.name.lower()[:idx])
+                # prefix = everything up to the fixer marker (lowercased for
+                # case-insensitive matching against candidate names)
+                fixer_prefixes.add(lower[:idx])
+                break
     kept: list[Path] = []
     for p in candidates:
-        if any(p.name.lower().startswith(prefix + ".") for prefix in fixer_prefixes):
+        lower = p.name.lower()
+        # A candidate is "already fixed" if its name starts with a known
+        # fixer prefix followed by either separator shape (`.` or `-`), so a
+        # report and its `<prefix>-fixer-...` / `<prefix>.fixer.` sidecar pair
+        # match regardless of which separator the run used.
+        if any(
+            lower.startswith(prefix + ".") or lower.startswith(prefix + "-")
+            for prefix in fixer_prefixes
+        ):
             continue
         kept.append(p)
     return sorted(kept)
@@ -748,7 +773,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--skip-if-fixer-exists",
         action="store_true",
-        help="When scanning a directory, skip any report that has a '.fixer.' sibling (i.e. was already processed by scan-and-fix).",
+        help="When scanning a directory, skip any report that has a fixer sibling ('.fixer.' or '-fixer-' shape, i.e. was already processed by scan-and-fix).",
     )
     p.add_argument(
         "--output",
