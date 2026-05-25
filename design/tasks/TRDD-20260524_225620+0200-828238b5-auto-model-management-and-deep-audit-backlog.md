@@ -1,9 +1,9 @@
 ---
 trdd-id: 828238b5-42d7-478e-8fe7-44d74f812286
 title: Auto-* model management suite + deep-audit findings backlog
-status: not-started
+status: in-progress
 created: 2026-05-24T22:56:20+0200
-updated: 2026-05-24T22:56:20+0200
+updated: 2026-05-25T03:31:11+0200
 ---
 
 # TRDD-828238b5 — Auto-* model management suite + deep-audit findings backlog
@@ -41,14 +41,14 @@ Robust and complete — DO NOT rebuild; build ON it:
 - Truncated-response retry + JSON-healing (~3009/3072/3185).
 GAP: all per-session/in-memory; nothing persisted → can't drive durable decisions.
 
-### A1 — [S] Persist runtime mitigation/health events (foundation)
+### A1 — [S] Persist runtime mitigation/health events (foundation) — DONE (commit a307759)
 Append model-health events (param drops, reasoning downgrades, 429 streaks,
 schema heals, non-retryable failures) keyed by model id, reusing
 `usage-history.ts`'s append-only sink (or a sibling `model-events.log`). Pure
 add of structured event lines + a reader. Unlocks A2. Real tests on the
 reader/aggregator (no LLM calls needed).
 
-### A2 — [M] `check_model_health` self-check (capability 1, MISSING)
+### A2 — [M] `check_model_health` self-check (capability 1, MISSING) — DONE (commit 5eb4998)
 For the *configured* model(s) (main/second/third + every `tool_models` entry):
 - **Presence:** id ∈ live catalog (`benchmark/discover.ts::fetchProgrammingModels`)?
   Absent ⇒ deprecated/removed finding.
@@ -59,10 +59,41 @@ New module `model-qualification/drift.ts`; 3 surfaces (MCP tool + CLI
 `--check-health` + slash command); report to `reports/model-health/`.
 No LLM cost. Directly answers "is my model outdated / did the price change".
 
-### A3 — [M] De-hardcode the catalog tables (capability 5, PARTIAL)
+### A3 — [M] De-hardcode the catalog tables (capability 5, PARTIAL) — DONE
 Replace the load-bearing hardcoded tables with live/cached catalog lookups
 (fetch plumbing already exists; reuse the 1h-TTL cache pattern). See the
 hardcoded inventory in Part C. Dedupe the two `DEFAULT_MODEL` literals.
+
+**What shipped:**
+1. `DEFAULT_MODEL` deduped — `mass_scouting/cli.ts` now imports the canonical
+   `DEFAULT_MODEL` from `security_scan/types.ts` (already a pure leaf, already
+   the source mass_scouting → security_scan dep direction at cli.ts:60) instead
+   of redeclaring the literal. The real single-source-of-truth win from Part C.
+2. Ensemble per-model limits extracted to a new pure, unit-tested module
+   `ensemble-limits.ts` (`resolveEnsembleModelLimits` + 16 tests). `maxOutput`
+   is now CATALOG-PREFERRED: `getEnsembleModels()` reads the warm 1h-TTL catalog
+   cache (`openRouterModelCache`, sync-readable) for each model's live
+   `top_provider.max_completion_tokens`, with a plausibility floor and fallback
+   to the calibrated table when the cache is cold or the model is absent.
+
+**Calibration boundary (verified, deliberate — do NOT "fix" further):**
+The KNOWN_* tables MIX two kinds of value and only the catalog-authoritative
+kind was de-hardcoded:
+- `maxOutput` (ensemble) and `pricing.{prompt,completion}` (KNOWN_PRICING) ARE
+  catalog-authoritative → catalog-preferred (maxOutput now; pricing already
+  injectable by callers + drift-detected by A2's `check_model_health`).
+- `maxInputLines` (ensemble) and `KNOWN_PRICING.context_window` (32_768) are
+  EMPIRICAL calibration the catalog does NOT carry — deliberately far below the
+  models' architectural limits (grok 20K lines; qwen provider endpoint cap
+  32_768 < architectural 128K). Auto-deriving them from `context_length` would
+  REGRESS quality / trigger HTTP-400s. They stay hand-calibrated, now documented
+  inline in `ensemble-limits.ts` and `cost-estimate.ts` so a future maintainer
+  does not naively "de-hardcode" them.
+- `cost-estimate.ts` stays a PURE module (callers inject live `ModelPricing`);
+  price drift is detected by A2, so no live-fetch was wired into the estimator.
+- `INCUMBENT_FALLBACK_PRICING` (`benchmark/security-triage/index.ts:61`) keeps
+  its `?? {…}` — it is a legitimate guard for a future `DEFAULT_MODEL` change,
+  not dead under the project's index-access typing.
 
 ### A4 — [M] New-arrivals autodiscovery (capability 3, PARTIAL)
 New `model-qualification/new-arrivals.ts`: persist a catalog snapshot

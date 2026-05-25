@@ -58,6 +58,7 @@ import {
 } from "./search";
 import { renderMarkdownReport, summariseJob } from "./reports";
 import { runSecurityScan } from "../security_scan/security_scan_main";
+import { DEFAULT_MODEL } from "../security_scan/types";
 import { loadSettings, resolveProfile, resolveModelForTool } from "../config";
 import type { OpenRouterModel } from "../benchmark/discover";
 import { resolveProjectMainRoot } from "../project-root";
@@ -112,9 +113,6 @@ const DEFAULT_SKIP_DIRS = new Set([
   ".turbo",
   "out",
 ]);
-
-/** Default model when --model isn't supplied. */
-const DEFAULT_MODEL = "qwen/qwen-2.5-7b-instruct";
 
 // ── Helpers ────────────────────────────────────────────────────────────
 

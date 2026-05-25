@@ -211,7 +211,11 @@ export const MAX_TARGETS = 5000;
  */
 export const MAX_FILE_READ_BYTES = 16_777_216; // 16 MiB
 
-/** Default OpenRouter model (matches mass_scouting's DEFAULT_MODEL). */
+/**
+ * Default OpenRouter model — the single source of truth for the cheap default
+ * shared by `security_scan` and `mass_scouting`. `mass_scouting/cli.ts` imports
+ * this constant rather than redeclaring it (de-duped in A3, TRDD-828238b5).
+ */
 export const DEFAULT_MODEL = "qwen/qwen-2.5-7b-instruct";
 
 /** git-ref shape guard — mirrors cli.ts:225 (anti shell-injection). */

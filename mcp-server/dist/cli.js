@@ -20292,7 +20292,7 @@ function runRegister(args) {
   if (paths.length === 0) {
     return ok("registered=0  no files matched");
   }
-  const model = flags["model"] ?? DEFAULT_MODEL2;
+  const model = flags["model"] ?? DEFAULT_MODEL;
   const pricing = resolvePricing2(model, flags);
   if ("error" in pricing) return err2(pricing.error);
   const registerCap = bytesCapFromPct(
@@ -20372,7 +20372,7 @@ async function runEstimate(args, opts = {}) {
   if (typeof fieldsFile === "object") return err2(fieldsFile.error);
   const fs = loadFieldsetFromArg(fieldsFile);
   if ("error" in fs) return err2(fs.error);
-  const model = flags["model"] ?? DEFAULT_MODEL2;
+  const model = flags["model"] ?? DEFAULT_MODEL;
   const pricing = resolvePricing2(model, flags);
   if ("error" in pricing) return err2(pricing.error);
   if (flags["live-context"] === "true") {
@@ -20449,7 +20449,7 @@ async function runScout(args, opts) {
   if (typeof sourceRoot === "object") return err2(sourceRoot.error);
   const fs = loadFieldsetFromArg(fieldsFile);
   if ("error" in fs) return err2(fs.error);
-  const model = flags["model"] ?? DEFAULT_MODEL2;
+  const model = flags["model"] ?? DEFAULT_MODEL;
   const pricing = resolvePricing2(model, flags);
   if ("error" in pricing) return err2(pricing.error);
   const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
@@ -20707,7 +20707,7 @@ async function runProposeFieldset(args, opts) {
     );
   }
   const fetchImpl = opts.fetchImpl ?? realFetch2;
-  const model = flags["model"] ?? DEFAULT_MODEL2;
+  const model = flags["model"] ?? DEFAULT_MODEL;
   const apiUrl = "https://openrouter.ai/api/v1/chat/completions";
   const samples = [];
   const samplesArg = flags["samples"];
@@ -20987,7 +20987,7 @@ async function runChain(args, opts) {
   if ("error" in f) return err2(f.error);
   const fs = loadFieldsetFromArg(fieldsFile);
   if ("error" in fs) return err2(fs.error);
-  const model = flags["model"] ?? DEFAULT_MODEL2;
+  const model = flags["model"] ?? DEFAULT_MODEL;
   const pricing = resolvePricing2(model, flags);
   if ("error" in pricing) return err2(pricing.error);
   const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
@@ -21363,7 +21363,7 @@ async function runMassScoutCli(args, opts = {}) {
       );
   }
 }
-var DEFAULT_SKIP_DIRS2, DEFAULT_MODEL2, realFetch2, HELP_TEXT;
+var DEFAULT_SKIP_DIRS2, realFetch2, HELP_TEXT;
 var init_cli = __esm({
   "src/mass_scouting/cli.ts"() {
     "use strict";
@@ -21376,6 +21376,7 @@ var init_cli = __esm({
     init_search();
     init_reports();
     init_security_scan_main();
+    init_types();
     init_config();
     init_project_root();
     DEFAULT_SKIP_DIRS2 = /* @__PURE__ */ new Set([
@@ -21395,7 +21396,6 @@ var init_cli = __esm({
       ".turbo",
       "out"
     ]);
-    DEFAULT_MODEL2 = "qwen/qwen-2.5-7b-instruct";
     realFetch2 = async (url2, init) => {
       const res = await fetch(url2, init);
       return {

@@ -1292,6 +1292,7 @@ import {
 import { installUsageRule } from "./rule-install.js";
 import { resolveProjectMainRoot } from "./project-root.js";
 import { appendModelEvent } from "./model-events.js";
+import { resolveEnsembleModelLimits } from "./ensemble-limits.js";
 import {
   fetchOpenRouterModelInfo,
   formatModelInfoMarkdown,
@@ -4515,21 +4516,8 @@ const LLM_TOOLS_SET = new Set([
 
 // Ensemble: run both models in parallel for thorough analysis, combine results.
 // In remote-ensemble mode, model + second_model from the active profile are used.
-// Each model entry has output/input limits for safety.
-// Known model limits — used for input filtering and output budget.
-const KNOWN_MODEL_LIMITS: Record<
-  string,
-  { maxOutput: number; maxInputLines: number }
-> = {
-  "x-ai/grok-4.1-fast": { maxOutput: 30_000, maxInputLines: 20_000 },
-  "google/gemini-2.5-flash": { maxOutput: 65_535, maxInputLines: 50_000 },
-  // Qwen 3.6 Plus: 1M context, 65K max output. Free variant deprecated 2026-04.
-  "qwen/qwen3.6-plus": { maxOutput: 65_535, maxInputLines: 40_000 },
-  // Nemotron 3 Super: 262K context, 262K max output, free on OpenRouter.
-  // Conservative limits: 40K lines input, 65K output (avoid quality degradation on long contexts).
-  "nvidia/nemotron-3-super-120b-a12b:free": { maxOutput: 65_535, maxInputLines: 40_000 },
-};
-const DEFAULT_MODEL_LIMITS = { maxOutput: 32_000, maxInputLines: 30_000 };
+// Per-model limits (maxOutput catalog-preferred, maxInputLines calibrated) live
+// in ./ensemble-limits.ts — see resolveEnsembleModelLimits + getEnsembleModels.
 
 // Free mode model — used when `free: true` parameter is set on any tool.
 // Single model, no ensemble, no cost. Prompts are logged by provider.
@@ -4555,8 +4543,13 @@ function getEnsembleModels(): Array<{
   const models = [activeResolved.model];
   if (activeResolved.secondModel) models.push(activeResolved.secondModel);
   if (activeResolved.thirdModel) models.push(activeResolved.thirdModel);
+  // Read the warm 1h-TTL catalog cache synchronously — empty when cold, in which
+  // case resolveEnsembleModelLimits falls back to the calibrated table.
+  const catalogById = new Map(openRouterModelCache.map((m) => [m.id, m]));
   return models.map((id) => {
-    const limits = KNOWN_MODEL_LIMITS[id] || DEFAULT_MODEL_LIMITS;
+    const catalogMaxOutput =
+      catalogById.get(id)?.top_provider?.max_completion_tokens;
+    const limits = resolveEnsembleModelLimits(id, catalogMaxOutput);
     return { id, ...limits };
   });
 }

@@ -43146,7 +43146,6 @@ var DEFAULT_SKIP_DIRS2 = /* @__PURE__ */ new Set([
   ".turbo",
   "out"
 ]);
-var DEFAULT_MODEL2 = "qwen/qwen-2.5-7b-instruct";
 function parseFlags(args) {
   const flags = {};
   const positional = [];
@@ -43440,7 +43439,7 @@ function runRegister(args) {
   if (paths.length === 0) {
     return ok("registered=0  no files matched");
   }
-  const model = flags["model"] ?? DEFAULT_MODEL2;
+  const model = flags["model"] ?? DEFAULT_MODEL;
   const pricing = resolvePricing2(model, flags);
   if ("error" in pricing) return err2(pricing.error);
   const registerCap = bytesCapFromPct(
@@ -43520,7 +43519,7 @@ async function runEstimate(args, opts = {}) {
   if (typeof fieldsFile === "object") return err2(fieldsFile.error);
   const fs = loadFieldsetFromArg(fieldsFile);
   if ("error" in fs) return err2(fs.error);
-  const model = flags["model"] ?? DEFAULT_MODEL2;
+  const model = flags["model"] ?? DEFAULT_MODEL;
   const pricing = resolvePricing2(model, flags);
   if ("error" in pricing) return err2(pricing.error);
   if (flags["live-context"] === "true") {
@@ -43597,7 +43596,7 @@ async function runScout(args, opts) {
   if (typeof sourceRoot === "object") return err2(sourceRoot.error);
   const fs = loadFieldsetFromArg(fieldsFile);
   if ("error" in fs) return err2(fs.error);
-  const model = flags["model"] ?? DEFAULT_MODEL2;
+  const model = flags["model"] ?? DEFAULT_MODEL;
   const pricing = resolvePricing2(model, flags);
   if ("error" in pricing) return err2(pricing.error);
   const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
@@ -43855,7 +43854,7 @@ async function runProposeFieldset(args, opts) {
     );
   }
   const fetchImpl = opts.fetchImpl ?? realFetch2;
-  const model = flags["model"] ?? DEFAULT_MODEL2;
+  const model = flags["model"] ?? DEFAULT_MODEL;
   const apiUrl = "https://openrouter.ai/api/v1/chat/completions";
   const samples = [];
   const samplesArg = flags["samples"];
@@ -44135,7 +44134,7 @@ async function runChain(args, opts) {
   if ("error" in f) return err2(f.error);
   const fs = loadFieldsetFromArg(fieldsFile);
   if ("error" in fs) return err2(fs.error);
-  const model = flags["model"] ?? DEFAULT_MODEL2;
+  const model = flags["model"] ?? DEFAULT_MODEL;
   const pricing = resolvePricing2(model, flags);
   if ("error" in pricing) return err2(pricing.error);
   const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
@@ -48264,6 +48263,26 @@ function appendModelEvent(model, kind, detail = "") {
   }
 }
 
+// src/ensemble-limits.ts
+var KNOWN_MODEL_LIMITS = {
+  "x-ai/grok-4.1-fast": { maxOutput: 3e4, maxInputLines: 2e4 },
+  "google/gemini-2.5-flash": { maxOutput: 65535, maxInputLines: 5e4 },
+  // Qwen 3.6 Plus: 1M context, 65K max output.
+  "qwen/qwen3.6-plus": { maxOutput: 65535, maxInputLines: 4e4 },
+  // Nemotron 3 Super: 262K context, free on OpenRouter. Conservative 40K-line
+  // input cap to avoid quality degradation on very long contexts.
+  "nvidia/nemotron-3-super-120b-a12b:free": { maxOutput: 65535, maxInputLines: 4e4 }
+};
+var DEFAULT_MODEL_LIMITS = { maxOutput: 32e3, maxInputLines: 3e4 };
+var MIN_PLAUSIBLE_MAX_OUTPUT = 1024;
+function resolveEnsembleModelLimits(id, catalogMaxOutput, known = KNOWN_MODEL_LIMITS, fallback = DEFAULT_MODEL_LIMITS) {
+  const knownEntry = known[id];
+  const maxInputLines = knownEntry?.maxInputLines ?? fallback.maxInputLines;
+  const liveMaxOutput = typeof catalogMaxOutput === "number" && Number.isFinite(catalogMaxOutput) && catalogMaxOutput >= MIN_PLAUSIBLE_MAX_OUTPUT ? Math.floor(catalogMaxOutput) : void 0;
+  const maxOutput = liveMaxOutput ?? knownEntry?.maxOutput ?? fallback.maxOutput;
+  return { maxOutput, maxInputLines };
+}
+
 // src/or-model-info.ts
 function sortedPercentiles(obj) {
   if (!obj || typeof obj !== "object") return [];
@@ -51483,16 +51502,6 @@ var LLM_TOOLS_SET = /* @__PURE__ */ new Set([
   "search_existing_implementations",
   "cluster_synonyms"
 ]);
-var KNOWN_MODEL_LIMITS = {
-  "x-ai/grok-4.1-fast": { maxOutput: 3e4, maxInputLines: 2e4 },
-  "google/gemini-2.5-flash": { maxOutput: 65535, maxInputLines: 5e4 },
-  // Qwen 3.6 Plus: 1M context, 65K max output. Free variant deprecated 2026-04.
-  "qwen/qwen3.6-plus": { maxOutput: 65535, maxInputLines: 4e4 },
-  // Nemotron 3 Super: 262K context, 262K max output, free on OpenRouter.
-  // Conservative limits: 40K lines input, 65K output (avoid quality degradation on long contexts).
-  "nvidia/nemotron-3-super-120b-a12b:free": { maxOutput: 65535, maxInputLines: 4e4 }
-};
-var DEFAULT_MODEL_LIMITS = { maxOutput: 32e3, maxInputLines: 3e4 };
 var FREE_MODEL_ID = "nvidia/nemotron-3-super-120b-a12b:free";
 function ensembleModelLabel(useEnsemble) {
   const backend = getCurrentBackend();
@@ -51506,8 +51515,10 @@ function getEnsembleModels() {
   const models = [activeResolved.model];
   if (activeResolved.secondModel) models.push(activeResolved.secondModel);
   if (activeResolved.thirdModel) models.push(activeResolved.thirdModel);
+  const catalogById = new Map(openRouterModelCache.map((m) => [m.id, m]));
   return models.map((id) => {
-    const limits = KNOWN_MODEL_LIMITS[id] || DEFAULT_MODEL_LIMITS;
+    const catalogMaxOutput = catalogById.get(id)?.top_provider?.max_completion_tokens;
+    const limits = resolveEnsembleModelLimits(id, catalogMaxOutput);
     return { id, ...limits };
   });
 }
