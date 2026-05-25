@@ -14103,14 +14103,14 @@ var require_dist2 = __commonJS({
 // src/index.ts
 var import_yaml2 = __toESM(require_dist(), 1);
 import {
-  readFileSync as readFileSync10,
+  readFileSync as readFileSync11,
   writeFileSync as writeFileSync8,
-  mkdirSync as mkdirSync11,
+  mkdirSync as mkdirSync12,
   existsSync as existsSync8,
   renameSync as renameSync4,
   statSync as statSync5,
   lstatSync,
-  appendFileSync as appendFileSync4,
+  appendFileSync as appendFileSync5,
   readdirSync as readdirSync4,
   unlinkSync,
   realpathSync as realpathSync3,
@@ -14118,7 +14118,7 @@ import {
   unwatchFile
 } from "node:fs";
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { extname as extname4, join as join11, basename as basename4, dirname as dirname8, resolve as resolve6, isAbsolute as isAbsolute4, sep as sep2 } from "node:path";
+import { extname as extname4, join as join12, basename as basename4, dirname as dirname8, resolve as resolve6, isAbsolute as isAbsolute4, sep as sep2 } from "node:path";
 import { randomUUID } from "node:crypto";
 import { homedir as homedir3 } from "node:os";
 
@@ -47947,6 +47947,41 @@ function installUsageRule(opts = {}) {
   return { status: existed ? "updated" : "installed", dest };
 }
 
+// src/model-events.ts
+import { appendFileSync as appendFileSync4, mkdirSync as mkdirSync11, readFileSync as readFileSync10 } from "node:fs";
+import { join as join11 } from "node:path";
+var MODEL_EVENT_KINDS = [
+  "param_drop",
+  "reasoning_downgrade",
+  "rate_limit_429",
+  "schema_heal",
+  "truncation_retry",
+  "empty_response",
+  "non_retryable_failure"
+];
+var KIND_SET = new Set(MODEL_EVENT_KINDS);
+var MAX_DETAIL = 160;
+function getModelEventsPath() {
+  return join11(getConfigDir(), "model-events.log");
+}
+function sanitizeField(s) {
+  return s.replace(/ - /g, " | ").replace(/[\r\n]+/g, " ").trim();
+}
+function appendModelEvent(model, kind, detail = "") {
+  try {
+    const safeModel = sanitizeField(String(model || "unknown"));
+    let safeDetail = redactSecrets(String(detail ?? "")).redacted.replace(/[\r\n]+/g, " ").trim();
+    if (safeDetail.length > MAX_DETAIL) {
+      safeDetail = safeDetail.slice(0, MAX_DETAIL - 1) + "\u2026";
+    }
+    const line = `${localIsoTimestamp()} - ${safeModel} - ${kind} - ${safeDetail}`;
+    const dir = getConfigDir();
+    mkdirSync11(dir, { recursive: true });
+    appendFileSync4(getModelEventsPath(), line + "\n", { flag: "a" });
+  } catch {
+  }
+}
+
 // src/or-model-info.ts
 function sortedPercentiles(obj) {
   if (!obj || typeof obj !== "object") return [];
@@ -48532,7 +48567,7 @@ function detectLang(filePath) {
   const ext = extname4(filePath).toLowerCase();
   if (EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
   try {
-    const head = readFileSync10(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
+    const head = readFileSync11(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
     const shebang = head.match(/^#!\s*(?:\/usr\/bin\/env\s+)?(\S+)/);
     if (shebang) {
       const bin = basename4(shebang[1]);
@@ -48610,7 +48645,7 @@ function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexReda
       `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
     );
   }
-  const raw = readFileSync10(safePath);
+  const raw = readFileSync11(safePath);
   if (raw.length > limit) {
     throw new Error(
       `File too large after read (${(raw.length / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
@@ -48758,7 +48793,7 @@ function scanFilesForSecrets(filePaths) {
   for (const fp of filePaths) {
     if (!existsSync8(fp)) continue;
     try {
-      const content = readFileSync10(fp, "utf-8");
+      const content = readFileSync11(fp, "utf-8");
       const scan = scanForSecrets(content);
       if (scan.found) {
         for (const d of scan.details) {
@@ -48848,7 +48883,7 @@ function resolvePrompt(instructions, instructionsFilesPaths) {
     const paths = Array.isArray(instructionsFilesPaths) ? instructionsFilesPaths : [instructionsFilesPaths];
     for (const fp of paths) {
       assertFileExists(fp);
-      const content = readFileSync10(fp, "utf-8");
+      const content = readFileSync11(fp, "utf-8");
       prompt = prompt ? `${prompt}
 
 ${content}` : content;
@@ -49082,7 +49117,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
     if (trackedResult.status === 0 && trackedResult.stdout) {
       for (const relPath of trackedResult.stdout.split("\n")) {
         if (!relPath.trim()) continue;
-        allFiles.add(join11(dirPath, relPath));
+        allFiles.add(join12(dirPath, relPath));
       }
     }
     const untrackedResult = spawnSync2(
@@ -49093,7 +49128,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
     if (untrackedResult.status === 0 && untrackedResult.stdout) {
       for (const relPath of untrackedResult.stdout.split("\n")) {
         if (!relPath.trim()) continue;
-        allFiles.add(join11(dirPath, relPath));
+        allFiles.add(join12(dirPath, relPath));
       }
     }
   }
@@ -49110,8 +49145,8 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
         if (!entry.isDirectory()) continue;
         if (entry.name === ".git" || entry.name === "node_modules") continue;
         if (entry.name.startsWith(".")) continue;
-        const subDir = join11(dir, entry.name);
-        const gitDir = join11(subDir, ".git");
+        const subDir = join12(dir, entry.name);
+        const gitDir = join12(subDir, ".git");
         const gitStat = lstatSyncRetry(gitDir);
         const gitDirIsDir = gitStat ? gitStat.isDirectory() : false;
         if (gitDirIsDir) {
@@ -49138,7 +49173,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
       if (nestedResult.status === 0 && nestedResult.stdout) {
         for (const relPath of nestedResult.stdout.split("\n")) {
           if (!relPath.trim()) continue;
-          allFiles.add(join11(nestedRoot, relPath));
+          allFiles.add(join12(nestedRoot, relPath));
         }
       }
     }
@@ -49193,7 +49228,7 @@ function walkDir(dirPath, options) {
     }
     for (const entry of entries) {
       if (results.length >= maxFiles) return;
-      const fullPath = join11(dir, entry.name);
+      const fullPath = join12(dir, entry.name);
       if (entry.isSymbolicLink()) {
         if (!followSymlinks) continue;
         try {
@@ -49263,10 +49298,10 @@ function extractLocalImports(filePath, sourceCode) {
       if (lang === "python" && importPath.startsWith(".")) {
         const dotCount = importPath.match(/^\.+/)?.[0].length ?? 1;
         const modulePart = importPath.slice(dotCount);
-        const baseDir = dotCount === 1 ? dir : join11(dir, ...Array(dotCount - 1).fill(".."));
-        resolved = modulePart ? join11(baseDir, ...modulePart.split(".")) : baseDir;
+        const baseDir = dotCount === 1 ? dir : join12(dir, ...Array(dotCount - 1).fill(".."));
+        resolved = modulePart ? join12(baseDir, ...modulePart.split(".")) : baseDir;
       } else {
-        resolved = join11(dir, importPath);
+        resolved = join12(dir, importPath);
       }
       if (!extname4(resolved)) {
         const tryExts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"];
@@ -49287,7 +49322,7 @@ function extractLocalImports(filePath, sourceCode) {
             "__init__.py"
           ];
           for (const leaf of indexCandidates) {
-            const indexPath = join11(resolved, leaf);
+            const indexPath = join12(resolved, leaf);
             if (existsSync8(indexPath)) {
               resolved = indexPath;
               found = true;
@@ -49464,6 +49499,7 @@ function filterBodyForSupportedParams(body, supported, modelId) {
             `[llm-externalizer] Dropping unsupported field '${key}' for model '${modelId}' (per OpenRouter supported_parameters). Override your profile if this was intentional.
 `
           );
+          appendModelEvent(modelId, "param_drop", `dropped '${key}'`);
         }
       }
       continue;
@@ -49475,8 +49511,13 @@ function filterBodyForSupportedParams(body, supported, modelId) {
 function recordReasoningRejection(modelId, failedReasoning) {
   if (!modelId || !failedReasoning) return;
   const effort = failedReasoning.effort;
-  if (effort === "xhigh") MODEL_REASONING_CACHE.set(modelId, "high");
-  else if (effort === "high") MODEL_REASONING_CACHE.set(modelId, "none");
+  if (effort === "xhigh") {
+    MODEL_REASONING_CACHE.set(modelId, "high");
+    appendModelEvent(modelId, "reasoning_downgrade", "xhigh\u2192high");
+  } else if (effort === "high") {
+    MODEL_REASONING_CACHE.set(modelId, "none");
+    appendModelEvent(modelId, "reasoning_downgrade", "high\u2192none");
+  }
 }
 function isReasoningRejectionError(status, bodyText) {
   if (status !== 400 && status !== 422) return false;
@@ -49511,7 +49552,7 @@ var _onSettingsReloaded = null;
 function reloadSettingsFromDisk() {
   let raw;
   try {
-    raw = readFileSync10(SETTINGS_FILE, "utf-8");
+    raw = readFileSync11(SETTINGS_FILE, "utf-8");
   } catch {
     return false;
   }
@@ -49805,15 +49846,15 @@ function waitForRequestsDrained(timeoutMs = 12e4) {
 }
 var SESSION_ID = randomUUID().slice(0, 8);
 var SESSION_START = /* @__PURE__ */ new Date();
-var LOG_DIR = join11(getConfigDir(), "logs");
-var LOG_FILE = join11(
+var LOG_DIR = join12(getConfigDir(), "logs");
+var LOG_FILE = join12(
   LOG_DIR,
   `session-${SESSION_ID}-${SESSION_START.toISOString().slice(0, 10)}.jsonl`
 );
 function writeLogEntry(entry) {
   try {
-    mkdirSync11(LOG_DIR, { recursive: true });
-    appendFileSync4(LOG_FILE, JSON.stringify(entry) + "\n");
+    mkdirSync12(LOG_DIR, { recursive: true });
+    appendFileSync5(LOG_FILE, JSON.stringify(entry) + "\n");
   } catch {
     process.stderr.write(`[llm-externalizer] Failed to write log entry
 `);
@@ -49822,7 +49863,7 @@ function writeLogEntry(entry) {
 var STATS_FILE = "/tmp/claude/llm-externalizer-stats.json";
 function writeStatsFile() {
   try {
-    mkdirSync11("/tmp/claude", { recursive: true, mode: 448 });
+    mkdirSync12("/tmp/claude", { recursive: true, mode: 448 });
     const backend = getCurrentBackend();
     const stats = {
       session_id: SESSION_ID,
@@ -50409,7 +50450,7 @@ function defaultOutputDir() {
     _cachedDefaultOutputDir = resolve6(envOverride.trim());
     return _cachedDefaultOutputDir;
   }
-  _cachedDefaultOutputDir = join11(resolveProjectMainRoot(), "reports", "llm-externalizer");
+  _cachedDefaultOutputDir = join12(resolveProjectMainRoot(), "reports", "llm-externalizer");
   return _cachedDefaultOutputDir;
 }
 function _resetDefaultOutputDirCache() {
@@ -50434,14 +50475,14 @@ function canonicalTimestamp(date5 = /* @__PURE__ */ new Date()) {
 }
 function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir) {
   const dir = outputDir || defaultOutputDir();
-  mkdirSync11(dir, { recursive: true });
+  mkdirSync12(dir, { recursive: true });
   const now = /* @__PURE__ */ new Date();
   const ts = canonicalTimestamp(now);
   const shortId = randomUUID().slice(0, 6);
   const srcPart = meta3.inputFile ? `-${sanitizeFilename(meta3.inputFile).replace(/\.md$/, "")}` : "";
   const groupPart = meta3.groupId ? `-group-${meta3.groupId.replace(/[^a-zA-Z0-9_-]/g, "_")}` : "";
   const filename = overrideFilename || `${ts}-${toolName}${groupPart}${srcPart}-${shortId}.md`;
-  const filepath = join11(dir, filename);
+  const filepath = join12(dir, filename);
   const lines = [
     "# LLM Externalizer Response",
     "",
@@ -52716,10 +52757,10 @@ Profiles: ${profileNames.join(", ")}`);
         }
         case "get_settings": {
           try {
-            const raw = readFileSync10(SETTINGS_FILE, "utf-8");
+            const raw = readFileSync11(SETTINGS_FILE, "utf-8");
             const targetDir = outputDir || defaultOutputDir();
-            mkdirSync11(targetDir, { recursive: true });
-            const copyPath = join11(targetDir, "settings_edit.yaml");
+            mkdirSync12(targetDir, { recursive: true });
+            const copyPath = join12(targetDir, "settings_edit.yaml");
             writeFileSync8(copyPath, raw, "utf-8");
             return { content: [{ type: "text", text: copyPath }] };
           } catch (err3) {
@@ -52877,7 +52918,7 @@ Profiles: ${profileNames.join(", ")}`);
               const gSucceeded = gAll.filter((r) => r.success);
               const reportSections = [];
               for (const r of gSucceeded) {
-                const content = r.reportPath && existsSync8(r.reportPath) ? readFileSync10(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync8(r.reportPath) ? readFileSync11(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -53013,7 +53054,7 @@ ${gAbortReason}`);
             } else {
               const reportSections = [];
               for (const r of succeeded) {
-                const content = r.reportPath && existsSync8(r.reportPath) ? readFileSync10(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync8(r.reportPath) ? readFileSync11(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -53247,7 +53288,7 @@ ${content}`);
           if (sfMode === 2 && succeeded.length > 0) {
             const sections = [];
             for (const r of succeeded) {
-              const content = r.reportPath && existsSync8(r.reportPath) ? readFileSync10(r.reportPath, "utf-8") : "";
+              const content = r.reportPath && existsSync8(r.reportPath) ? readFileSync11(r.reportPath, "utf-8") : "";
               sections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -53287,7 +53328,7 @@ ${content}`);
               for (const fp of fg.files) {
                 const r = pathToResult.get(fp);
                 if (!r) continue;
-                const content = r.reportPath && existsSync8(r.reportPath) ? readFileSync10(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync8(r.reportPath) ? readFileSync11(r.reportPath, "utf-8") : "";
                 sections.push(`## File: ${fp}
 
 ${content}`);
@@ -54014,7 +54055,7 @@ ${sections.join("\n\n---\n\n")}`;
                 {
                   model: "git-diff (no LLM)",
                   task: `${cfFromRef} \u2192 ${toRef}`,
-                  inputFile: join11(cfGitRepoSafe, dg.files[0]),
+                  inputFile: join12(cfGitRepoSafe, dg.files[0]),
                   groupId: gid
                 },
                 void 0,
@@ -54309,7 +54350,7 @@ ${diffFence}` + sourceFileBlocks
 FAILED: File not found.`);
                   continue;
                 }
-                const src = readFileSync10(filePath, "utf-8");
+                const src = readFileSync11(filePath, "utf-8");
                 const lang = detectLang(filePath);
                 const deps = extractLocalImports(filePath, src);
                 const depBlocks = [];
@@ -54370,7 +54411,7 @@ FAILED: File not found.`);
               crReportPaths.push("(skipped \u2014 file not found)");
               continue;
             }
-            const crSourceCode = readFileSync10(filePath, "utf-8");
+            const crSourceCode = readFileSync11(filePath, "utf-8");
             const crLang = detectLang(filePath);
             const depPaths = extractLocalImports(filePath, crSourceCode);
             const depBlocks = [];
@@ -54572,7 +54613,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     continue;
                   }
                   const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-                  const resolvedBase = importPath.startsWith("/") ? resolve6(importPath) : join11(resolveDir, importPath);
+                  const resolvedBase = importPath.startsWith("/") ? resolve6(importPath) : join12(resolveDir, importPath);
                   if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                     packageImports.push(importPath);
                     continue;
@@ -54587,7 +54628,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     }
                     if (!found) {
                       for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                        if (existsSync8(join11(resolvedBase, `index${ext}`))) {
+                        if (existsSync8(join12(resolvedBase, `index${ext}`))) {
                           found = true;
                           break;
                         }
@@ -54668,7 +54709,7 @@ FAILED: File not found.`);
                 continue;
               }
               const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-              const resolvedBase = importPath.startsWith("/") ? resolve6(importPath) : join11(resolveDir, importPath);
+              const resolvedBase = importPath.startsWith("/") ? resolve6(importPath) : join12(resolveDir, importPath);
               if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                 packageImports.push(importPath);
                 continue;
@@ -54697,7 +54738,7 @@ FAILED: File not found.`);
                 }
                 if (!found) {
                   for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                    if (existsSync8(join11(resolvedBase, `index${ext}`))) {
+                    if (existsSync8(join12(resolvedBase, `index${ext}`))) {
                       found = true;
                       break;
                     }
@@ -55022,7 +55063,7 @@ ${csResp.content}${csFooter}`
             return resp.content;
           };
           const csModuleDir = dirname8(fileUrlToPath_cs(import.meta.url));
-          const csEmbeddingsScript = join11(csModuleDir, "..", "scripts", "compute_embeddings.py");
+          const csEmbeddingsScript = join12(csModuleDir, "..", "scripts", "compute_embeddings.py");
           const csHooks = {
             rawLlmCall: csRawLlmCall,
             embeddingsScriptPath: csEmbeddingsScript,

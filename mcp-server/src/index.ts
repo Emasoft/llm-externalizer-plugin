@@ -1291,6 +1291,7 @@ import {
 } from "./usage-history.js";
 import { installUsageRule } from "./rule-install.js";
 import { resolveProjectMainRoot } from "./project-root.js";
+import { appendModelEvent } from "./model-events.js";
 import {
   fetchOpenRouterModelInfo,
   formatModelInfoMarkdown,
@@ -1591,6 +1592,9 @@ function filterBodyForSupportedParams(
           process.stderr.write(
             `[llm-externalizer] Dropping unsupported field '${key}' for model '${modelId}' (per OpenRouter supported_parameters). Override your profile if this was intentional.\n`,
           );
+          // Persist the mitigation as a durable per-model health event (A1),
+          // once per model+field (gated by the same FILTER_WARN_SEEN set).
+          appendModelEvent(modelId, "param_drop", `dropped '${key}'`);
         }
       }
       continue;
@@ -1606,8 +1610,13 @@ function recordReasoningRejection(
 ): void {
   if (!modelId || !failedReasoning) return;
   const effort = (failedReasoning as { effort?: string }).effort;
-  if (effort === "xhigh") MODEL_REASONING_CACHE.set(modelId, "high");
-  else if (effort === "high") MODEL_REASONING_CACHE.set(modelId, "none");
+  if (effort === "xhigh") {
+    MODEL_REASONING_CACHE.set(modelId, "high");
+    appendModelEvent(modelId, "reasoning_downgrade", "xhigh→high");
+  } else if (effort === "high") {
+    MODEL_REASONING_CACHE.set(modelId, "none");
+    appendModelEvent(modelId, "reasoning_downgrade", "high→none");
+  }
 }
 
 function isReasoningRejectionError(status: number, bodyText: string): boolean {

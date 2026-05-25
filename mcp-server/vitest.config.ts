@@ -21,6 +21,8 @@ export default defineConfig({
       'src/project-root.test.ts',
       // Global usage-history logger — one line per LLM web request.
       'src/usage-history.test.ts',
+      // Durable model-health event ledger (TRDD-828238b5 A1).
+      'src/model-events.test.ts',
       'src/mass_scouting/fieldset.test.ts',
       'src/mass_scouting/shorthand.test.ts',
       'src/mass_scouting/registry.test.ts',
