@@ -28,6 +28,7 @@ import json
 import locale
 import subprocess
 import sys
+import urllib.error
 from datetime import datetime
 from pathlib import Path
 
@@ -208,3 +209,121 @@ def test_statusline_cli_smoke_minimal_envelope_exits_0(tmp_path: Path) -> None:
     # stdout is the rendered bar — must contain SOMETHING (model name
     # falls through to "opus" from our envelope).
     assert r.stdout, f"empty stdout; stderr={r.stderr.decode(errors='replace')!r}"
+
+
+# ---------------------------------------------------------------------------
+# D6 — fetchers LOG the cause instead of silently swallowing (TRDD-6e859d3c)
+#
+# Before D6 both fetchers used a bare `except Exception: ...` that dropped the
+# error with no diagnostic. These tests fail on that old code (no _log_exception
+# call) and pass after the fix, while confirming the happy path still parses.
+# ---------------------------------------------------------------------------
+
+
+def _fake_urlopen_returning(body: dict):
+    """Build a urlopen replacement that yields `body` as a JSON HTTP response.
+
+    The real urllib.request.urlopen returns a context manager whose .read()
+    gives raw bytes; we mimic exactly that minimal surface the fetchers use.
+    """
+    payload = json.dumps(body).encode("utf-8")
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return payload
+
+    def _urlopen(req, timeout=None):  # noqa: ARG001 — signature match only
+        return _Resp()
+
+    return _urlopen
+
+
+def _fake_urlopen_raising(exc: BaseException):
+    """Build a urlopen replacement that always raises `exc` (network failure)."""
+
+    def _urlopen(req, timeout=None):  # noqa: ARG001 — signature match only
+        raise exc
+
+    return _urlopen
+
+
+def test_fetch_usage_logs_on_network_error_and_returns_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the usage fetch's urlopen raises URLError, fetch_usage_from_api
+    returns the fail-soft fallback (None, no cache) AND logs the cause."""
+    mod = _load_statusline_module()
+    monkeypatch.setattr(mod, "get_oauth_token", lambda: "tok")  # force a fetch
+    monkeypatch.setattr(
+        mod.urllib.request,
+        "urlopen",
+        _fake_urlopen_raising(urllib.error.URLError("boom")),
+    )
+    logged: list[str] = []
+    monkeypatch.setattr(mod, "_log_exception", lambda label, exc: logged.append(label))
+
+    result = mod.fetch_usage_from_api(tmp_path, "1.2.3")
+
+    assert result is None  # fail-soft: no stale cache → None
+    assert logged, "network error was swallowed without logging (D6 regression)"
+
+
+def test_fetch_usage_happy_path_returns_parsed_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A successful usage fetch returns the parsed JSON dict (no regression)."""
+    mod = _load_statusline_module()
+    monkeypatch.setattr(mod, "get_oauth_token", lambda: "tok")
+    monkeypatch.setattr(
+        mod.urllib.request,
+        "urlopen",
+        _fake_urlopen_returning({"rate_limits": {"five_hour": {}}}),
+    )
+
+    result = mod.fetch_usage_from_api(tmp_path, "1.2.3")
+
+    assert result == {"rate_limits": {"five_hour": {}}}
+
+
+def test_fetch_openrouter_logs_on_network_error_and_returns_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the OpenRouter fetch's urlopen raises URLError, the function logs
+    the cause and returns the fail-soft fallback (None, no stale cache)."""
+    mod = _load_statusline_module()
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")
+    monkeypatch.setattr(
+        mod.urllib.request,
+        "urlopen",
+        _fake_urlopen_raising(urllib.error.URLError("boom")),
+    )
+    logged: list[str] = []
+    monkeypatch.setattr(mod, "_log_exception", lambda label, exc: logged.append(label))
+
+    result = mod.fetch_openrouter_budget(tmp_path)
+
+    assert result is None  # fail-soft: no stale cache → drop the 🏦 segment
+    assert logged, "network error was swallowed without logging (D6 regression)"
+
+
+def test_fetch_openrouter_happy_path_returns_remaining_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A successful OpenRouter fetch returns total_credits - total_usage."""
+    mod = _load_statusline_module()
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")
+    monkeypatch.setattr(
+        mod.urllib.request,
+        "urlopen",
+        _fake_urlopen_returning({"data": {"total_credits": 70.0, "total_usage": 5.5}}),
+    )
+
+    result = mod.fetch_openrouter_budget(tmp_path)
+
+    assert result == pytest.approx(64.5)

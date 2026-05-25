@@ -301,8 +301,17 @@ def fetch_usage_from_api(cache_dir: Path, claude_version: str) -> dict | None:
             except OSError:
                 pass
             return data
-    except Exception:
-        # Fall back to stale cache (bounded by CACHE_HARD_CEILING per T2.23).
+    except (OSError, ValueError) as e:
+        # OSError covers urllib.error.URLError/HTTPError (both OSError
+        # subclasses), socket timeouts and connection/DNS failures;
+        # ValueError covers json.JSONDecodeError and UnicodeDecodeError on a
+        # malformed/non-UTF-8 body. These are the EXPECTED transient/upstream
+        # failures, so we log the cause (no silent swallow — D6) and fall back
+        # to the stale cache (bounded by CACHE_HARD_CEILING per T2.23). A
+        # genuine bug (KeyError/AttributeError/TypeError) is deliberately NOT
+        # caught here so it surfaces; main()'s per-section guard then logs it
+        # under "usage-fetch" and keeps the bar rendering (fail-soft VISUAL).
+        _log_exception("usage-fetch-api", e)
         return _stale_fallback(cache_file)
 
 
@@ -343,8 +352,14 @@ def fetch_openrouter_budget(cache_dir: Path) -> float | None:
                     total = data["data"].get("total_credits", 0)
                     used = data["data"].get("total_usage", 0)
                     return total - used
-        except Exception:
-            pass
+        except (OSError, ValueError) as e:
+            # Same narrowing rationale as fetch_usage_from_api: OSError covers
+            # urllib URLError/HTTPError/timeouts, ValueError covers JSON/UTF-8
+            # decode failures. Log the cause (D6 — no silent swallow), then
+            # fall through to the stale-cache block below. A genuine bug is not
+            # caught here; main()'s "openrouter-budget" guard logs it and drops
+            # only this optional segment (fail-soft VISUAL preserved).
+            _log_exception("openrouter-budget-api", e)
 
     # Fall back to stale cache, bounded by CACHE_HARD_CEILING (T2.23). A
     # revoked OPENROUTER_API_KEY would otherwise keep showing the same
