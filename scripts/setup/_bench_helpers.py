@@ -182,7 +182,10 @@ VIABILITY_THRESHOLD = 0.5  # matches test-model.py PASS_STRUCTURED_THRESHOLD
 
 def _avg_test_score(record: dict[str, Any]) -> float:
     """Average across all 5 reliability tests."""
-    scores = [t["score"] for t in record["tests"].values()
+    # Batch-resilience contract (same as _is_viable): a record missing the
+    # "tests" key must score 0.0, not raise — one malformed record must not
+    # kill the whole rank/render batch.
+    scores = [t["score"] for t in record.get("tests", {}).values()
               if isinstance(t, dict) and isinstance(t.get("score"), (int, float))]
     return sum(scores) / len(scores) if scores else 0.0
 
@@ -215,7 +218,9 @@ def rank_models(records: list[dict[str, Any]], min_tps: float) -> list[dict[str,
         key=lambda r: (
             0 if r["viable"] else 1,
             -r["average_score"],
-            -r["perf"].get("tokens_per_second", 0.0),
+            # Batch-resilience: a record missing "perf" sorts as 0 tok/s
+            # rather than crashing the whole sort with a KeyError.
+            -r.get("perf", {}).get("tokens_per_second", 0.0),
         )
     )
     return annotated
@@ -241,8 +246,10 @@ def render_markdown(ranked: list[dict[str, Any]], min_tps: float) -> str:
         "-------|--------|------|---------|--------|-------------|",
     ]
     for r in ranked:
-        t = r["tests"]
-        perf = r["perf"]
+        # Batch-resilience: a record missing "tests"/"perf" renders with
+        # n/a-equivalent defaults (0.0 / "?") rather than crashing the table.
+        t = r.get("tests", {})
+        perf = r.get("perf", {})
         lines.append(
             f"| `{r['model']}` "
             f"| {'YES' if r['viable'] else 'no'} "
@@ -262,7 +269,7 @@ def render_markdown(ranked: list[dict[str, Any]], min_tps: float) -> str:
         lines.append(
             f"**Recommended:** `{viable_top['model']}` — "
             f"avg {viable_top['average_score']:.2f}, "
-            f"{viable_top['perf'].get('tokens_per_second', 0.0):.1f} tok/s."
+            f"{viable_top.get('perf', {}).get('tokens_per_second', 0.0):.1f} tok/s."
         )
     else:
         lines.append(
