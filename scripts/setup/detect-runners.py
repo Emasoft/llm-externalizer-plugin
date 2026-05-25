@@ -123,7 +123,13 @@ def _safe_model_names(payload: Optional[dict], key: str, name_field: str) -> lis
     raises KeyError inside the detector, which main()'s outer `except Exception`
     converts into "runner not installed" — masking the actual issue.
     """
-    items = (payload or {}).get(key, [])
+    # A truthy non-dict payload (e.g. a JSON list returned by a forked runner
+    # API) would survive `payload or {}` and then blow up on `.get`. Guard on
+    # the type so "wrong shape" yields [] per the docstring instead of raising
+    # AttributeError that main()'s outer except would mask as "not installed".
+    if not isinstance(payload, dict):
+        return []
+    items = payload.get(key, [])
     if not isinstance(items, list):
         return []
     return [m[name_field] for m in items if isinstance(m, dict) and isinstance(m.get(name_field), str)]
@@ -192,18 +198,21 @@ def _vllm_import_probe() -> tuple[Optional[str], Optional[str]]:
     if result.returncode == 0:
         out = result.stdout.strip()
         return (out.split("\n")[0] if out else None), None
-    # Non-zero. ModuleNotFoundError → not installed (None, None). Any other
-    # exception class (ImportError, OSError, RuntimeError, etc.) → installed
-    # but broken (None, msg). Inspect stderr to discriminate.
+    # Non-zero. ModuleNotFoundError → not installed (None, None). EVERY other
+    # non-zero exit means vLLM IS present but importing it crashed → installed
+    # but broken (None, msg). Enumerating specific exception classes
+    # (ImportError/OSError/RuntimeError) silently dropped the long tail —
+    # AttributeError, TypeError, ValueError, AssertionError, bare SystemExit,
+    # C-extension aborts with no recognisable class name — into the "not
+    # installed" bucket, the opposite of this function's intent. A broken
+    # install is anything that isn't cleanly "the module isn't there".
     stderr = result.stderr.strip()
     if "ModuleNotFoundError" in stderr:
         return None, None
-    if "ImportError" in stderr or "OSError" in stderr or "RuntimeError" in stderr:
-        # Trim the message — full tracebacks would balloon the JSON. Last
-        # line of the traceback is typically the actual error class + message.
-        last_line = stderr.splitlines()[-1] if stderr else "unknown import failure"
-        return None, last_line[:200]
-    return None, None
+    # Trim the message — full tracebacks would balloon the JSON. Last line of
+    # the traceback is typically the actual error class + message.
+    last_line = stderr.splitlines()[-1] if stderr else "unknown import failure"
+    return None, last_line[:200]
 
 
 def detect_vllm(probe_host: str = "localhost") -> Optional[dict]:
