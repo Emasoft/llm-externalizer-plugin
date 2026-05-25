@@ -3,7 +3,7 @@ trdd-id: 828238b5-42d7-478e-8fe7-44d74f812286
 title: Auto-* model management suite + deep-audit findings backlog
 status: in-progress
 created: 2026-05-24T22:56:20+0200
-updated: 2026-05-25T03:49:00+0200
+updated: 2026-05-25T03:54:00+0200
 ---
 
 # TRDD-828238b5 — Auto-* model management suite + deep-audit findings backlog
@@ -162,7 +162,7 @@ this audit kept fixing. NOTE: `publish.py` already regenerates README badges
 - NOT a fake test: it enforces a real invariant (docs match code) by parsing the
   real source declarations, no mocks.
 
-### A6 — [L] Per-tool tailored benchmarks (capability 4, PARTIAL)
+### A6 — [L] Per-tool tailored benchmarks (capability 4, PARTIAL) — NOT STARTED (scoped; needs a focused session)
 10 of 12 LLM tools have requirements (registry) but no benchmark dataset/scorer
 (the registry header explicitly marks them incremental; `benchmark: null`).
 Only `security_scan` (→ `benchmark/security-triage/`) and the generic keyword
@@ -173,11 +173,60 @@ same-or-cheaper gate from `security-triage/select.ts` once the 2nd dataset
 lands — DRY), wire registry `benchmark` pointer. Prioritize `code_task` →
 `scan_folder` → `search_existing_implementations`. Real golden datasets, no fakes.
 
-### A7 — [L] Auto-replacement loop (capability 2 "replacement" half, PARTIAL)
+**Findings from the A6 scoping pass (2026-05-25) — why this is a focused
+follow-up, not a quick port:**
+1. **Scoring substrate differs per tool.** `security_scan` was benchmarkable
+   because its output is a STRUCTURED verdict (threat/not_threat/uncertain) →
+   deterministic scoring. `code_task` / `scan_folder` emit FREE-FORM review
+   prose → objective scoring needs an LLM-JUDGE calibration (a sub-project like
+   security-triage's `judgeGroups`), not a mechanical port. The first
+   deterministically-scorable target is **`search_existing_implementations`**
+   (per-file YES/NO + symbol/lines — binary classification, like the triage
+   verdict), so it should lead, ahead of the TRDD's original code_task-first
+   order.
+2. **The real pipeline is NOT importable.** `security-triage/runner.ts` could
+   reuse `judgeGroups` because it was a standalone module. The
+   `search_existing_implementations` pipeline lives INSIDE `index.ts`'s dispatch
+   (`case "search_existing_implementations"`, ~7434) and `index.ts` runs
+   `main()` on import — so a faithful in-process runner is blocked on extracting
+   that core into an importable module (part of **B1**, the monolith split:
+   "Large, risky; do incrementally"). The alternative — a runner that spawns the
+   server over stdio (as `cli.ts::cmdSearchExisting` does) — works but is
+   heavyweight + live-only.
+3. **Real golden dataset = real curation.** A `search_existing` dataset is a
+   small REAL fixture codebase whose feature locations are KNOWN (because we
+   author the fixture) + `(feature_description → expected_yes files)` cases.
+   That is genuine curation; rushing it produces a shallow/fake dataset, which
+   violates the hard "Real golden datasets, no fakes" rule — worse than none.
+
+**Recommended A6 plan (next session):** (a) extract the
+`search_existing_implementations` core from `index.ts` into an importable module
+(B1 increment, guarded by the 883-test suite); (b) build `benchmark/search-existing/`
+(real fixture + dataset + deterministic precision/recall scorer + in-process
+runner) mirroring `security-triage/`; (c) THEN extract the shared
+same-or-cheaper gate into `benchmark/select-common.ts` (now justified by the 2nd
+consumer — premature before that, per YAGNI); (d) wire registry
+`benchmark: "search-existing"`; (e) only after a structured-output tool lands,
+tackle the free-form tools (`code_task`/`scan_folder`) via an LLM-judge scorer.
+DEFERRED deliberately rather than faked.
+
+### A7 — [L] Auto-replacement loop (capability 2 "replacement" half, PARTIAL) — BLOCKED on A6
 Capstone. Wire durable health ledger (A1) → tool flagged degraded → run that
 tool's benchmark (A6) → surface best same-or-cheaper passer → opt-in per-tool
 `tool_models` write (extend `--apply-profile` to per-tool; CLI/cron only, never
 silent MCP). Depends on A1 + A6.
+
+A7 is genuinely blocked on A6: the "run that tool's benchmark" step has nothing
+to run until a 2nd real per-tool benchmark exists (A6). A1's foundation (durable
+health ledger) and A4's candidate-surfacing (`discover_new_models`) are in place;
+A7 also subsumes A1's deferred failure-signal emission (429/empty/non-retryable
+events threaded with the model id at the index.ts error classifier) and A4's
+deferred "auto-feed qualifying arrivals into the benchmark" step. Build A7 only
+after A6 lands at least one structured-output benchmark.
+
+**Status (2026-05-25):** A1–A5 SHIPPED (commits a307759, 5eb4998, 0eed8d2,
+f2dde4c, 4f684af). A6 scoped (see above) + A7 blocked on A6 — both are a focused
+follow-up session, not faked here.
 
 **Recommended build order:** A1 → A2 → A3 → A4 → A5 → A6 (tool-by-tool) → A7.
 
