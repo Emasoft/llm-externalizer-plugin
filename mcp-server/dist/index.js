@@ -40088,7 +40088,12 @@ function validateProfile(name, profile) {
         `Profile '${name}': free_only requires a remote (OpenRouter) api preset \u2014 ':free' models are an OpenRouter concept. Got local preset '${profile.api}'.`
       );
     }
-    const pool = profile.free_models ?? [];
+    if (profile.free_models !== void 0 && !Array.isArray(profile.free_models)) {
+      errors.push(
+        `Profile '${name}': free_models must be a YAML list of ':free' model ids.`
+      );
+    }
+    const pool = coerceFreeModels(profile.free_models);
     if (pool.length === 0) {
       errors.push(
         `Profile '${name}': free_only requires a non-empty 'free_models' list.`
@@ -40210,6 +40215,10 @@ function coerceToolModels(raw) {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
   return { ...raw };
 }
+function coerceFreeModels(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((m) => typeof m === "string");
+}
 function resolveProfile(name, profile) {
   const preset = API_PRESETS[profile.api];
   if (!preset) {
@@ -40217,7 +40226,7 @@ function resolveProfile(name, profile) {
   }
   const rawAuth = preset.isLocal ? profile.api_token || profile.api_key || preset.defaultAuthEnv : profile.api_key || preset.defaultAuthEnv;
   const freeOnly = profile.free_only === true;
-  const freeModels = freeOnly ? [...profile.free_models ?? []] : [];
+  const freeModels = freeOnly ? coerceFreeModels(profile.free_models) : [];
   const model = freeOnly ? freeModels[0] ?? "" : profile.model;
   const secondModel = freeOnly ? freeModels[1] ?? "" : profile.second_model || "";
   const thirdModel = freeOnly ? freeModels[2] ?? "" : profile.third_model || "";
@@ -49965,6 +49974,25 @@ function reasoningLadderForModel(modelId, override) {
   if (effort === "xhigh") return [{ effort: "xhigh" }, { effort: "high" }, null];
   return [{ effort }, null];
 }
+function dumpRequestBody(body, model) {
+  const dest = process.env.LLM_EXT_DUMP_REQUESTS;
+  if (!dest) return;
+  try {
+    const wire = JSON.stringify(body);
+    appendFileSync5(
+      dest,
+      `
+==== ${(/* @__PURE__ */ new Date()).toISOString()} model=${model} bytes=${wire.length} ====
+${wire}
+`
+    );
+  } catch (e) {
+    process.stderr.write(
+      `[llm-externalizer] LLM_EXT_DUMP_REQUESTS write failed (non-fatal): ${e instanceof Error ? e.message : String(e)}
+`
+    );
+  }
+}
 var MODEL_REQUEST_OVERRIDES = {
   // NVIDIA Nemotron 3 Super 120B (free tier). NVIDIA's documented
   // sampling recommendation: temperature=1.0, top_p=0.95. The earlier
@@ -50783,16 +50811,7 @@ async function chatCompletionSimple(messages, options = {}) {
       if (reasoning) body.reasoning = reasoning;
       body = applyModelOverrides(body, conn.model);
       body = filterBodyForSupportedParams(body, supportedParams, conn.model);
-      if (process.env.LLM_EXT_DUMP_REQUESTS) {
-        const wire = JSON.stringify(body);
-        appendFileSync5(
-          process.env.LLM_EXT_DUMP_REQUESTS,
-          `
-==== ${(/* @__PURE__ */ new Date()).toISOString()} model=${conn.model} bytes=${wire.length} ====
-${wire}
-`
-        );
-      }
+      dumpRequestBody(body, conn.model);
       const res = await fetchWithRetry429(
         conn.url,
         {
@@ -50922,16 +50941,7 @@ async function chatCompletionJSON(messages, options = {}) {
       if (reasoning) body.reasoning = reasoning;
       body = applyModelOverrides(body, conn.model);
       body = filterBodyForSupportedParams(body, supportedParams, conn.model);
-      if (process.env.LLM_EXT_DUMP_REQUESTS) {
-        const wire = JSON.stringify(body);
-        appendFileSync5(
-          process.env.LLM_EXT_DUMP_REQUESTS,
-          `
-==== ${(/* @__PURE__ */ new Date()).toISOString()} model=${conn.model} bytes=${wire.length} (json) ====
-${wire}
-`
-        );
-      }
+      dumpRequestBody(body, conn.model);
       const res = await fetchWithRetry429(
         conn.url,
         {

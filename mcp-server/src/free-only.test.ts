@@ -95,6 +95,22 @@ describe("validateProfile — free_only zero-spend invariants", () => {
     const r = validateProfile("free", freeProfile({ mode: "remote", free_models: ["qwen/qwen3-coder:free"] }));
     expect(r.valid).toBe(true);
   });
+
+  it("does NOT crash on a malformed (non-list) free_models, reports a clear error", () => {
+    // YAML scalar instead of a list — the runtime value is a string. Must be
+    // reported, not throw (and must not spread into single characters).
+    const bad = { ...freeProfile(), free_models: "qwen/qwen3-coder:free" as unknown as string[] };
+    const r = validateProfile("free", bad);
+    expect(r.valid).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/free_models must be a YAML list/);
+  });
+
+  it("resolveProfile coerces a malformed free_models to [] (no char-spread, no throw)", () => {
+    const bad = { ...freeProfile(), free_models: "qwen/qwen3-coder:free" as unknown as string[] };
+    const r = resolveProfile("free", bad);
+    expect(r.freeModels).toEqual([]); // NOT ['q','w','e','n', ...]
+    expect(r.model).toBe(""); // no free_models[0] to derive from
+  });
 });
 
 describe("selectFreeEnsembleModels — context-floor requirements pre-filter", () => {

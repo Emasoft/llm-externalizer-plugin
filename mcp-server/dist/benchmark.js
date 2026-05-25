@@ -218533,6 +218533,10 @@ function coerceToolModels(raw) {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
   return { ...raw };
 }
+function coerceFreeModels(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((m) => typeof m === "string");
+}
 function resolveProfile(name, profile) {
   const preset = API_PRESETS[profile.api];
   if (!preset) {
@@ -218540,7 +218544,7 @@ function resolveProfile(name, profile) {
   }
   const rawAuth = preset.isLocal ? profile.api_token || profile.api_key || preset.defaultAuthEnv : profile.api_key || preset.defaultAuthEnv;
   const freeOnly = profile.free_only === true;
-  const freeModels = freeOnly ? [...profile.free_models ?? []] : [];
+  const freeModels = freeOnly ? coerceFreeModels(profile.free_models) : [];
   const model = freeOnly ? freeModels[0] ?? "" : profile.model;
   const secondModel = freeOnly ? freeModels[1] ?? "" : profile.second_model || "";
   const thirdModel = freeOnly ? freeModels[2] ?? "" : profile.third_model || "";

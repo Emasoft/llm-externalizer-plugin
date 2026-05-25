@@ -1446,6 +1446,29 @@ export function reasoningLadderForModel(
   return [{ effort }, null];
 }
 
+/**
+ * Cost/observability audit hook. When LLM_EXT_DUMP_REQUESTS points at a file,
+ * append the exact wire payload (timestamp + model + byte size + full JSON body)
+ * so a request can be inspected for unexpected prompt/file inflation. Off unless
+ * the env var is set. BEST-EFFORT: a write failure (bad path, full disk, etc.)
+ * is logged to stderr and swallowed — it MUST NEVER break the actual LLM call.
+ */
+function dumpRequestBody(body: Record<string, unknown>, model: string | undefined): void {
+  const dest = process.env.LLM_EXT_DUMP_REQUESTS;
+  if (!dest) return;
+  try {
+    const wire = JSON.stringify(body);
+    appendFileSync(
+      dest,
+      `\n==== ${new Date().toISOString()} model=${model} bytes=${wire.length} ====\n${wire}\n`,
+    );
+  } catch (e) {
+    process.stderr.write(
+      `[llm-externalizer] LLM_EXT_DUMP_REQUESTS write failed (non-fatal): ${e instanceof Error ? e.message : String(e)}\n`,
+    );
+  }
+}
+
 // ── Per-model request body overrides ────────────────────────────────
 // Some models need sampling parameters that differ from our defaults.
 // This registry keeps the model-specific knobs out of the main code
@@ -2957,13 +2980,9 @@ async function chatCompletionSimple(
       // Cost/observability audit: when LLM_EXT_DUMP_REQUESTS points at a file,
       // append the exact wire payload (model + byte size + body) so a request can
       // be inspected for unexpected prompt/file inflation. Off unless set.
-      if (process.env.LLM_EXT_DUMP_REQUESTS) {
-        const wire = JSON.stringify(body);
-        appendFileSync(
-          process.env.LLM_EXT_DUMP_REQUESTS,
-          `\n==== ${new Date().toISOString()} model=${conn.model} bytes=${wire.length} ====\n${wire}\n`,
-        );
-      }
+      // Best-effort: a dump-write failure (bad path, full disk) must NEVER break
+      // the actual LLM call.
+      dumpRequestBody(body, conn.model);
 
       const res = await fetchWithRetry429(
         conn.url,
@@ -3182,13 +3201,7 @@ async function chatCompletionJSON(
       body = filterBodyForSupportedParams(body, supportedParams, conn.model);
 
       // Cost/observability audit (see chatCompletionSimple) — structured-output path.
-      if (process.env.LLM_EXT_DUMP_REQUESTS) {
-        const wire = JSON.stringify(body);
-        appendFileSync(
-          process.env.LLM_EXT_DUMP_REQUESTS,
-          `\n==== ${new Date().toISOString()} model=${conn.model} bytes=${wire.length} (json) ====\n${wire}\n`,
-        );
-      }
+      dumpRequestBody(body, conn.model);
 
       const res = await fetchWithRetry429(
         conn.url,

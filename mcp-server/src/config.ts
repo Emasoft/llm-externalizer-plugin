@@ -452,7 +452,14 @@ export function validateProfile(
         `Profile '${name}': free_only requires a remote (OpenRouter) api preset — ':free' models are an OpenRouter concept. Got local preset '${profile.api}'.`,
       );
     }
-    const pool = profile.free_models ?? [];
+    // free_models comes from YAML (untyped at runtime) — a scalar would crash the
+    // checks below, so flag a non-list explicitly and coerce for the rest.
+    if (profile.free_models !== undefined && !Array.isArray(profile.free_models)) {
+      errors.push(
+        `Profile '${name}': free_models must be a YAML list of ':free' model ids.`,
+      );
+    }
+    const pool = coerceFreeModels(profile.free_models);
     if (pool.length === 0) {
       errors.push(
         `Profile '${name}': free_only requires a non-empty 'free_models' list.`,
@@ -638,6 +645,19 @@ function coerceToolModels(raw: unknown): Record<string, string> {
 }
 
 /**
+ * Coerce an untrusted `free_models` value (from YAML) into a clean string[].
+ * A scalar / object / null collapses to [] and non-string entries are dropped,
+ * so neither resolveProfile (which spreads the value) nor validateProfile (which
+ * filters it) can throw on a malformed settings.yaml. validateProfile reports a
+ * bad value to the user; this just never throws or mangles (e.g. it must NOT let
+ * a stray string spread into an array of single characters).
+ */
+function coerceFreeModels(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((m): m is string => typeof m === "string");
+}
+
+/**
  * Resolve a profile to concrete connection values.
  * Merges profile overrides with preset defaults and resolves env var refs.
  */
@@ -663,7 +683,7 @@ export function resolveProfile(
   // (Benchmark/requirements filtering of the pool happens downstream in
   // getEnsembleModels, where the catalog is available.)
   const freeOnly = profile.free_only === true;
-  const freeModels = freeOnly ? [...(profile.free_models ?? [])] : [];
+  const freeModels = freeOnly ? coerceFreeModels(profile.free_models) : [];
   const model = freeOnly ? (freeModels[0] ?? "") : profile.model;
   const secondModel = freeOnly
     ? (freeModels[1] ?? "")
