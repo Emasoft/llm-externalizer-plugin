@@ -3,7 +3,7 @@ trdd-id: 828238b5-42d7-478e-8fe7-44d74f812286
 title: Auto-* model management suite + deep-audit findings backlog
 status: in-progress
 created: 2026-05-24T22:56:20+0200
-updated: 2026-05-25T03:54:00+0200
+updated: 2026-05-25T10:12:00+0200
 ---
 
 # TRDD-828238b5 — Auto-* model management suite + deep-audit findings backlog
@@ -243,13 +243,15 @@ follow-up session, not faked here.
 - **B2 [HIGH] cluster resume is a half-wired stub** that silently overwrites
   outputs (`cluster/` — `resume_from` accepted but not honored end-to-end).
   Either implement real resume (checkpoint.sqlite exists) or remove the param +
-  doc. Silent-overwrite is a data-loss footgun.
+  doc. Silent-overwrite is a data-loss footgun. — **DONE** (implemented real
+  resume; [[TRDD-66da2aa7]], commit 8bee08a).
 - **B3 [HIGH] cluster whole-corpus in-memory load** contradicts the documented
   10k–1M-item streaming contract (`cluster_synonyms_main.ts` / `phase1_batch.ts`).
   Stream from the JSONL + checkpoint instead of loading all items.
 - **B4 [MEDIUM] cluster preflight benchmark never wired** into the entry path
   (`cluster/preflight_benchmark.ts` exists, unused). Wire it or remove.
 - **B5 [MEDIUM] cluster `partition()` recomputed 3–4× at emit** — cache once.
+  — **DONE** (computed once after phase-2; [[TRDD-66da2aa7]], commit 8bee08a).
 
 ---
 
