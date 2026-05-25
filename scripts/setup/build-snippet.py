@@ -28,8 +28,12 @@ The user then nests this under `profiles:` in
 
 Exit codes:
   0 — snippet emitted on stdout
-  1 — invalid argument (runner not in the supported set, etc.)
-  2 — input violated a safety guard (e.g. profile name with newline)
+  1 — invalid argument value rejected by an in-function guard
+      (runner/mode not in the supported set, context-window too low)
+  2 — input violated a safety guard (control char / newline in a value,
+      bad or YAML-reserved profile name) AND argparse usage errors
+      (unknown flag, --runner/--mode outside `choices`); argparse
+      always exits 2, so safety-guard raises use code 2 to match.
 """
 
 from __future__ import annotations
@@ -57,39 +61,65 @@ SUPPORTED_MODES = ("local", "remote", "remote-ensemble")
 # `ollama-qwen2.5-coder-7b` which are already safe.
 _PROFILE_NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9._-]{0,63}$")
 
+# YAML 1.1 boolean/null plain scalars: emitted UNQUOTED as a mapping key
+# (`f"{name}:"`) a lenient reader would parse as a bool/null instead of a
+# string. The regex above happily accepts the alphabetic ones, so reject
+# them explicitly here. Compared case-insensitively (YAML treats `Yes`,
+# `YES`, `yes` alike). `~` (null) can't match the regex, but list it for
+# documentation completeness.
+_YAML_RESERVED_NAMES = frozenset(
+    {"null", "true", "false", "yes", "no", "on", "off", "~"}
+)
+
 
 def _yaml_dquote(value: str) -> str:
     """Return the value as a YAML double-quoted scalar.
 
     YAML double-quoted scalars support `\\` and `\"` escapes; we use that to
     safely embed any printable character without depending on PyYAML.
-    Newlines are escaped as `\\n` (preserves single-line layout). Control
-    characters (< 0x20 except tab) are NUL-rejected via SystemExit because
-    the wizard should never propagate them.
+    Control characters (< 0x20, e.g. `\\n` and `\\r`) are REJECTED via
+    SystemExit(2) — the wizard emits single-line YAML scalars and must never
+    propagate them. Tab (the one allowed control char) is escaped as `\\t`.
     """
     for ch in value:
         code = ord(ch)
         if code < 0x20 and ch not in ("\t",):
-            raise SystemExit(
+            # Safety-guard violation → exit 2 (per the module docstring). A
+            # bare SystemExit("...") would exit 1, so print the diagnostic
+            # explicitly and raise the int code.
+            print(
                 f"refusing to serialise value containing control char "
-                f"0x{code:02x} ({value!r})"
+                f"0x{code:02x} ({value!r})",
+                file=sys.stderr,
             )
-    # Backslash MUST be escaped first, then double-quote, then newline.
+            raise SystemExit(2)
+    # Backslash MUST be escaped first, then double-quote, then tab. Newlines
+    # and carriage returns never reach here — the guard above rejects them.
     escaped = (value
                .replace("\\", "\\\\")
                .replace('"', '\\"')
-               .replace("\n", "\\n")
-               .replace("\r", "\\r")
                .replace("\t", "\\t"))
     return f'"{escaped}"'
 
 
 def _validate_profile_name(name: str) -> str:
+    # Both rejections are safety-guard violations → exit 2 (per the module
+    # docstring). Use print()+SystemExit(2): a bare SystemExit("...") exits 1.
     if not _PROFILE_NAME_PATTERN.match(name):
-        raise SystemExit(
+        print(
             f"--profile-name {name!r} must match [A-Za-z][A-Za-z0-9._-]"
-            "{0,63} (the agent's heuristic produces names that satisfy this)"
+            "{0,63} (the agent's heuristic produces names that satisfy this)",
+            file=sys.stderr,
         )
+        raise SystemExit(2)
+    if name.lower() in _YAML_RESERVED_NAMES:
+        print(
+            f"--profile-name {name!r} is a YAML-reserved token; emitted "
+            "unquoted as a mapping key it would parse as a boolean/null. "
+            "Pick a name like `ollama-qwen2.5-coder-7b`.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
     return name
 
 
