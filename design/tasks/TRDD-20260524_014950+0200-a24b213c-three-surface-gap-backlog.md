@@ -1,9 +1,9 @@
 ---
 trdd-id: a24b213c-4061-4d4f-9405-3162d1914eea
 title: Three-surface compliance backlog — close the remaining MCP/CLI/slash gaps
-status: not-started
+status: in-progress
 created: 2026-05-24T01:49:50+0200
-updated: 2026-05-24T01:49:50+0200
+updated: 2026-05-26T21:33:32+0200
 ---
 
 # TRDD-a24b213c — Three-surface compliance backlog
@@ -108,3 +108,4 @@ a synthetic MCP/CLI surface:
 | Date | Status change | Note |
 |---|---|---|
 | 2026-05-24T01:49:50+0200 | created → not-started | Captured the 19 deferred gaps from the 3-surface audit so they survive the current release (which completes only GAP-1 cluster_synonyms + ships security_scan compliant). Dispositions: 2 need MCP design (benchmark/ensemble), 9 mechanical slash commands, 7 recommend-exempt orchestration, plus 2 doc/consistency fixes. |
+| 2026-05-26T21:33:32+0200 | not-started → in-progress | **Phase 1 shipped.** All 9 mechanical slash commands authored (GAP-4 ×8 mass-scout + GAP-7 reset): `mass-scout-jobs-list`, `mass-scout-audit-sample`, `mass-scout-body-get`, `mass-scout-build-fieldset`, `mass-scout-propose-fieldset`, `mass-scout-diff`, `mass-scout-chain`, `mass-scout-list-bundled-fieldsets`, `reset`. Each is a thin frontmatter+body wrapper over the existing MCP tool — no behavior change. README counts bumped (26→35 commands, 17→18 base, 8→16 mass-scout) and the "MCP-only mass-scout tools (8, no slash-command wrappers)" paragraph removed (no longer true). `mcp-server/src/doc-consistency.test.ts` auto-discovers `commands/*.md` and now enforces the new counts; full 936-test suite green. Remaining: Phase 2 (GAP-2/3 benchmark+ensemble MCP wrapper — design decision), Phase 3 (GAP-8..14 by-design exemption docs), Phase 4 (bin/llm-ext catalog policy), Phase 5 (user-global rule fix — needs user confirmation). |
