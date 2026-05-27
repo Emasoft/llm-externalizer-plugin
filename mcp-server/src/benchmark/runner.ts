@@ -206,7 +206,6 @@ async function runBenchmarkOnModelInner(
   let resp: Response;
   let rawText: string;
   let attempt = 0;
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
       resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
