@@ -1,6 +1,58 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+
+## [Unreleased]
+
+### Added
+
+- Feat(free-pool): `--bench-free-pool` + auto-bench on `free_only` switch (TRDD-f1510055)
+
+  Single-flag entry that scores every model in the active profile's
+  `free_models` (or the bundled `FREE_POOL_SEED` if unpinned) without
+  hand-typing N `--include` flags. The MCP server fires the same sweep
+  automatically when `free_only` flips ON and the benchmark cache holds
+  no `:free` entries, so users get an empirically-scored pool without
+  remembering to run a CLI command. Three-guard cost-safety chain keeps
+  it $0 by construction: CLI argument validator + runner `getActiveFreeOnly()`
+  chokepoint + OpenRouter's per-model `:free` billing. Opt-out via
+  `LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH=1`.
+
+  Surfaces (per the standing three-surface rule):
+  - CLI: `node dist/benchmark.js --bench-free-pool`
+  - Slash command: `/llm-externalizer:llm-externalizer-bench-free-pool`
+  - Auto-trigger (MCP-equivalent fourth surface): fires on server boot +
+    settings reload. No MCP tool by design — a 10-30 min sweep is the
+    wrong shape for a tool call (would let any orchestrator agent burn
+    half an hour).
+
+  Runtime: 429 retry loop in `benchmark/runner.ts` (3 retries, exponential
+  backoff, 60s cap, honors `Retry-After`) so free-tier transient
+  throttling no longer marks a model permanently ERR.
+
+  Empirical: first sweep across the 15 seed ids surfaced 2 PASSing free
+  models on the security-triage golden dataset — `z-ai/glm-4.5-air:free`
+  (0.906) and `poolside/laguna-m.1:free` (0.966, top scorer). Total
+  spend: $0.000000.
+
+### Changed
+
+- 15-model `FREE_POOL_SEED` constant + matching `remote-free-ensemble`
+  settings template (`mcp-server/src/config.ts`). Bumped from the prior
+  6-model placeholder.
+
+### Documentation
+
+- README: bumped "35 plugin commands" → 36 (added `bench-free-pool`),
+  "18 base" → 19.
+- Three-Surface Gap Backlog (TRDD-a24b213c) phases 2/3/4 closed:
+  - GAP-2/3 benchmark + ensemble-autoselect: documented as by-design
+    no-MCP-tool with rationale in `commands/llm-externalizer-benchmark.md`.
+  - GAP-8..14 (7 commands): added explicit "Three-surface compliance:
+    by-design slash-only (GAP-N)" sections to each.
+  - `bin/llm-ext` TOOL_CATALOG expanded 11 → 37 entries so every
+    registered MCP tool is reachable via the agent-facing shim.
+
 ## [9.14.0] - 2026-05-25
 
 ### Added
