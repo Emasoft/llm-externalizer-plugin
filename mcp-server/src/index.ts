@@ -1302,6 +1302,7 @@ import {
   formatModelInfoTable,
   formatModelInfoJson,
 } from "./or-model-info.js";
+import { maybeTriggerFreePoolBench } from "./free-pool-auto-bench.js";
 
 // Settings path (cross-platform, see config.ts)
 const SETTINGS_FILE = getSettingsPath();
@@ -1354,6 +1355,19 @@ let activeResolved: ResolvedProfile | null = (() => {
   // Publish free_only to config.ts so the pure subsystem spend sites
   // (judge/scout/benchmark) enforce the cost-safety guard (TRDD-97ef8b63).
   setActiveFreeOnly(resolved.freeOnly);
+  // Auto-bench the free pool when free_only is ON and the cache lacks
+  // :free entries (TRDD-f1510055). Fire-and-forget — never blocks server
+  // boot; the detached child writes to ~/.llm-externalizer/free-pool-bench.log.
+  // Cost-safety: --bench-free-pool + the runner's free_only guard reject
+  // any non-:free model, so this is zero-spend by construction.
+  // At startup we don't know the *prior* free_only state, so pass null —
+  // the helper treats null as "fire if active and cache is empty".
+  maybeTriggerFreePoolBench({
+    activeProfile: activeSettings.active,
+    freeOnlyActive: resolved.freeOnly,
+    freeOnlyWasOn: null,
+    log: (msg) => process.stderr.write(msg),
+  });
   return resolved;
 })();
 
@@ -1832,11 +1846,23 @@ function reloadSettingsFromDisk(): boolean {
   // currentBackend LAST so a handler that just snapshotted via
   // getCurrentBackend() and is about to read activeSettings sees a
   // coherent pair.
+  // Snapshot the *previous* free_only state BEFORE overwriting it so the
+  // auto-bench helper can detect a real OFF→ON transition (TRDD-f1510055).
+  const priorFreeOnly = activeResolved?.freeOnly ?? false;
   activeSettings = newSettings;
   activeResolved = nextResolved;
   // Re-publish free_only on every reload so the subsystem guard tracks the live
   // profile (TRDD-97ef8b63). null resolved (invalid settings) → not free_only.
   setActiveFreeOnly(nextResolved?.freeOnly ?? false);
+  // Auto-bench the free pool on an OFF→ON transition with an empty cache
+  // (TRDD-f1510055). Helper is fire-and-forget and short-circuits on every
+  // skip condition (already-on, cache populated, lock held, opt-out env).
+  maybeTriggerFreePoolBench({
+    activeProfile: newSettings.active,
+    freeOnlyActive: nextResolved?.freeOnly ?? false,
+    freeOnlyWasOn: priorFreeOnly,
+    log: (msg) => process.stderr.write(msg),
+  });
   settingsValid = nextValid;
   settingsError = nextErr;
   if (nextValid) {

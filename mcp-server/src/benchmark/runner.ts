@@ -196,7 +196,7 @@ async function runBenchmarkOnModelInner(
   if (options.httpReferer) headers["HTTP-Referer"] = options.httpReferer;
   if (options.xTitle) headers["X-Title"] = options.xTitle;
 
-  // Free-tier 429 retry (TRDD-2a9e1f47). The benchmark used to record a 429 as
+  // Free-tier 429 retry (TRDD-f1510055). The benchmark used to record a 429 as
   // ERR on first try, which made auto-benchmarking the free pool useless — the
   // free tier rate-limits per-model-per-account and one prior call can bump the
   // next 60s. Retry on 429 with exponential backoff capped at MAX_429_RETRIES.

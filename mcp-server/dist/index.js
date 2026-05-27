@@ -14103,10 +14103,10 @@ var require_dist2 = __commonJS({
 // src/index.ts
 var import_yaml2 = __toESM(require_dist(), 1);
 import {
-  readFileSync as readFileSync13,
-  writeFileSync as writeFileSync10,
-  mkdirSync as mkdirSync14,
-  existsSync as existsSync8,
+  readFileSync as readFileSync14,
+  writeFileSync as writeFileSync11,
+  mkdirSync as mkdirSync15,
+  existsSync as existsSync9,
   renameSync as renameSync6,
   statSync as statSync5,
   lstatSync,
@@ -14118,9 +14118,9 @@ import {
   unwatchFile
 } from "node:fs";
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { extname as extname4, join as join14, basename as basename4, dirname as dirname8, resolve as resolve6, isAbsolute as isAbsolute4, sep as sep2 } from "node:path";
+import { extname as extname4, join as join15, basename as basename4, dirname as dirname9, resolve as resolve6, isAbsolute as isAbsolute4, sep as sep2 } from "node:path";
 import { randomUUID } from "node:crypto";
-import { homedir as homedir3 } from "node:os";
+import { homedir as homedir4 } from "node:os";
 
 // src/grouping.ts
 import { statSync } from "node:fs";
@@ -40352,7 +40352,7 @@ profiles:
   # the profile otherwise, so this profile can NEVER bill.
   #
   # The 15-model seed list below matches FREE_POOL_SEED in config.ts and
-  # is the canonical default. The auto-benchmark trigger (TRDD-2a9e1f47)
+  # is the canonical default. The auto-benchmark trigger (TRDD-f1510055)
   # scores this pool when the profile is first activated (free_only=true
   # + empty :free cache) and writes results to:
   #   ~/.llm-externalizer/benchmark-results.json (keyword task)
@@ -49155,6 +49155,140 @@ function renderEndpointTable(ep, colors) {
   return lines.join("\n");
 }
 
+// src/free-pool-auto-bench.ts
+import {
+  existsSync as existsSync8,
+  mkdirSync as mkdirSync14,
+  openSync,
+  readFileSync as readFileSync13,
+  writeFileSync as writeFileSync10
+} from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { dirname as dirname8, join as join14, resolve as pathResolve } from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath as fileURLToPath4 } from "node:url";
+var LLM_EXT_HOME = join14(homedir3(), ".llm-externalizer");
+var BENCH_CACHE = join14(LLM_EXT_HOME, "benchmark-results.json");
+var BENCH_LOCK = join14(LLM_EXT_HOME, "free-pool-bench.lock");
+var BENCH_LOG = join14(LLM_EXT_HOME, "free-pool-bench.log");
+var DISABLE_ENV = "LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH";
+function resolveBenchmarkScriptPath() {
+  const here = dirname8(fileURLToPath4(import.meta.url));
+  const bundled = pathResolve(here, "benchmark.js");
+  if (existsSync8(bundled)) return bundled;
+  const fromSrc = pathResolve(here, "..", "dist", "benchmark.js");
+  return fromSrc;
+}
+function benchCacheHasFreeEntries(cachePath2 = BENCH_CACHE) {
+  try {
+    const raw = readFileSync13(cachePath2, "utf-8");
+    const data = JSON.parse(raw);
+    if (!Array.isArray(data?.results)) return false;
+    return data.results.some(
+      (r) => typeof r?.modelId === "string" && r.modelId.endsWith(":free")
+    );
+  } catch {
+    return false;
+  }
+}
+function lockHoldsLivePid(lockPath = BENCH_LOCK) {
+  if (!existsSync8(lockPath)) return false;
+  try {
+    const pid = parseInt(readFileSync13(lockPath, "utf-8").trim(), 10);
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (e) {
+      if (e.code === "EPERM") return true;
+      return false;
+    }
+  } catch {
+    return false;
+  }
+}
+function maybeTriggerFreePoolBench(opts) {
+  const {
+    activeProfile,
+    freeOnlyActive,
+    freeOnlyWasOn,
+    log,
+    cachePath: cachePath2 = BENCH_CACHE,
+    lockPath = BENCH_LOCK,
+    logPath = BENCH_LOG,
+    scriptPath = resolveBenchmarkScriptPath(),
+    env = process.env
+  } = opts;
+  if (!freeOnlyActive) {
+    return { outcome: "skipped", reason: "free_only not active", pid: null };
+  }
+  if (env[DISABLE_ENV] === "1") {
+    log(
+      `[llm-externalizer] free-pool auto-bench: ${DISABLE_ENV}=1 \u2014 skipped by opt-out.
+`
+    );
+    return { outcome: "skipped", reason: "disabled via env", pid: null };
+  }
+  if (benchCacheHasFreeEntries(cachePath2)) {
+    return {
+      outcome: "skipped",
+      reason: "cache already has :free entries",
+      pid: null
+    };
+  }
+  if (lockHoldsLivePid(lockPath)) {
+    log(
+      `[llm-externalizer] free-pool auto-bench: another run is already in progress (see ${lockPath}).
+`
+    );
+    return {
+      outcome: "skipped",
+      reason: "lock holds live pid",
+      pid: null
+    };
+  }
+  if (freeOnlyWasOn === true) {
+    return {
+      outcome: "skipped",
+      reason: "not a free_only transition",
+      pid: null
+    };
+  }
+  try {
+    mkdirSync14(LLM_EXT_HOME, { recursive: true });
+  } catch {
+  }
+  let logFd;
+  try {
+    logFd = openSync(logPath, "a");
+  } catch (e) {
+    log(
+      `[llm-externalizer] free-pool auto-bench: could not open log ${logPath}: ${e.message}
+`
+    );
+    return { outcome: "skipped", reason: "cannot open log file", pid: null };
+  }
+  const child = spawn(
+    process.execPath,
+    [scriptPath, "--bench-free-pool", "--min-f1", "0.5"],
+    {
+      detached: true,
+      stdio: ["ignore", logFd, logFd],
+      env: { ...env, LLM_EXT_AUTO_BENCH_REASON: `free_only_transition:${activeProfile}` }
+    }
+  );
+  child.unref();
+  try {
+    writeFileSync10(lockPath, String(child.pid ?? ""), "utf-8");
+  } catch {
+  }
+  log(
+    `[llm-externalizer] free_only transition for profile '${activeProfile}' + no :free entries in cache \u2192 spawned auto-bench (pid ${child.pid}). Log: ${logPath}
+`
+  );
+  return { outcome: "spawned", reason: null, pid: child.pid ?? null };
+}
+
 // src/index.ts
 var EXT_TO_LANG = {
   ".ts": "typescript",
@@ -49225,7 +49359,7 @@ function detectLang(filePath) {
   const ext = extname4(filePath).toLowerCase();
   if (EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
   try {
-    const head = readFileSync13(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
+    const head = readFileSync14(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
     const shebang = head.match(/^#!\s*(?:\/usr\/bin\/env\s+)?(\S+)/);
     if (shebang) {
       const bin = basename4(shebang[1]);
@@ -49250,7 +49384,7 @@ function fenceBackticks(content) {
   return "`".repeat(needed);
 }
 function assertFileExists(filePath) {
-  if (!existsSync8(filePath)) {
+  if (!existsSync9(filePath)) {
     throw new Error(`File not found: ${filePath}`);
   }
 }
@@ -49265,7 +49399,7 @@ function sanitizeInputPath(filePath) {
   };
   const cwdReal = realpathSafe(resolve6(process.cwd()));
   const homeReal = realpathSafe(
-    resolve6(process.env.HOME || process.env.USERPROFILE || homedir3())
+    resolve6(process.env.HOME || process.env.USERPROFILE || homedir4())
   );
   const tmpReal = realpathSafe(resolve6("/tmp"));
   const resolvedReal = (() => {
@@ -49303,7 +49437,7 @@ function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexReda
       `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
     );
   }
-  const raw = readFileSync13(safePath);
+  const raw = readFileSync14(safePath);
   if (raw.length > limit) {
     throw new Error(
       `File too large after read (${(raw.length / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
@@ -49449,9 +49583,9 @@ function scanForSecrets(content) {
 function scanFilesForSecrets(filePaths) {
   const allDetails = [];
   for (const fp of filePaths) {
-    if (!existsSync8(fp)) continue;
+    if (!existsSync9(fp)) continue;
     try {
-      const content = readFileSync13(fp, "utf-8");
+      const content = readFileSync14(fp, "utf-8");
       const scan = scanForSecrets(content);
       if (scan.found) {
         for (const d of scan.details) {
@@ -49541,7 +49675,7 @@ function resolvePrompt(instructions, instructionsFilesPaths) {
     const paths = Array.isArray(instructionsFilesPaths) ? instructionsFilesPaths : [instructionsFilesPaths];
     for (const fp of paths) {
       assertFileExists(fp);
-      const content = readFileSync13(fp, "utf-8");
+      const content = readFileSync14(fp, "utf-8");
       prompt = prompt ? `${prompt}
 
 ${content}` : content;
@@ -49707,7 +49841,7 @@ function validateGitCwd(dirPath) {
   }
   const cwdReal = realpathSafe(resolve6(process.cwd()));
   const homeReal = realpathSafe(
-    resolve6(process.env.HOME || process.env.USERPROFILE || homedir3())
+    resolve6(process.env.HOME || process.env.USERPROFILE || homedir4())
   );
   const tmpReal = realpathSafe(resolve6("/tmp"));
   const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep2);
@@ -49775,7 +49909,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
     if (trackedResult.status === 0 && trackedResult.stdout) {
       for (const relPath of trackedResult.stdout.split("\n")) {
         if (!relPath.trim()) continue;
-        allFiles.add(join14(dirPath, relPath));
+        allFiles.add(join15(dirPath, relPath));
       }
     }
     const untrackedResult = spawnSync2(
@@ -49786,7 +49920,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
     if (untrackedResult.status === 0 && untrackedResult.stdout) {
       for (const relPath of untrackedResult.stdout.split("\n")) {
         if (!relPath.trim()) continue;
-        allFiles.add(join14(dirPath, relPath));
+        allFiles.add(join15(dirPath, relPath));
       }
     }
   }
@@ -49803,8 +49937,8 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
         if (!entry.isDirectory()) continue;
         if (entry.name === ".git" || entry.name === "node_modules") continue;
         if (entry.name.startsWith(".")) continue;
-        const subDir = join14(dir, entry.name);
-        const gitDir = join14(subDir, ".git");
+        const subDir = join15(dir, entry.name);
+        const gitDir = join15(subDir, ".git");
         const gitStat = lstatSyncRetry(gitDir);
         const gitDirIsDir = gitStat ? gitStat.isDirectory() : false;
         if (gitDirIsDir) {
@@ -49831,7 +49965,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
       if (nestedResult.status === 0 && nestedResult.stdout) {
         for (const relPath of nestedResult.stdout.split("\n")) {
           if (!relPath.trim()) continue;
-          allFiles.add(join14(nestedRoot, relPath));
+          allFiles.add(join15(nestedRoot, relPath));
         }
       }
     }
@@ -49886,7 +50020,7 @@ function walkDir(dirPath, options) {
     }
     for (const entry of entries) {
       if (results.length >= maxFiles) return;
-      const fullPath = join14(dir, entry.name);
+      const fullPath = join15(dir, entry.name);
       if (entry.isSymbolicLink()) {
         if (!followSymlinks) continue;
         try {
@@ -49937,7 +50071,7 @@ function walkDir(dirPath, options) {
   return results;
 }
 function extractLocalImports(filePath, sourceCode) {
-  const dir = dirname8(filePath);
+  const dir = dirname9(filePath);
   const lang = detectLang(filePath);
   const paths = [];
   const patterns = [];
@@ -49956,16 +50090,16 @@ function extractLocalImports(filePath, sourceCode) {
       if (lang === "python" && importPath.startsWith(".")) {
         const dotCount = importPath.match(/^\.+/)?.[0].length ?? 1;
         const modulePart = importPath.slice(dotCount);
-        const baseDir = dotCount === 1 ? dir : join14(dir, ...Array(dotCount - 1).fill(".."));
-        resolved = modulePart ? join14(baseDir, ...modulePart.split(".")) : baseDir;
+        const baseDir = dotCount === 1 ? dir : join15(dir, ...Array(dotCount - 1).fill(".."));
+        resolved = modulePart ? join15(baseDir, ...modulePart.split(".")) : baseDir;
       } else {
-        resolved = join14(dir, importPath);
+        resolved = join15(dir, importPath);
       }
       if (!extname4(resolved)) {
         const tryExts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"];
         let found = false;
         for (const ext of tryExts) {
-          if (existsSync8(resolved + ext)) {
+          if (existsSync9(resolved + ext)) {
             resolved = resolved + ext;
             found = true;
             break;
@@ -49980,8 +50114,8 @@ function extractLocalImports(filePath, sourceCode) {
             "__init__.py"
           ];
           for (const leaf of indexCandidates) {
-            const indexPath = join14(resolved, leaf);
-            if (existsSync8(indexPath)) {
+            const indexPath = join15(resolved, leaf);
+            if (existsSync9(indexPath)) {
               resolved = indexPath;
               found = true;
               break;
@@ -49989,7 +50123,7 @@ function extractLocalImports(filePath, sourceCode) {
           }
         }
         if (!found) continue;
-      } else if (!existsSync8(resolved)) {
+      } else if (!existsSync9(resolved)) {
         continue;
       }
       paths.push(resolved);
@@ -50041,6 +50175,12 @@ Settings file: ${SETTINGS_FILE}`;
     }
   }
   setActiveFreeOnly(resolved.freeOnly);
+  maybeTriggerFreePoolBench({
+    activeProfile: activeSettings.active,
+    freeOnlyActive: resolved.freeOnly,
+    freeOnlyWasOn: null,
+    log: (msg) => process.stderr.write(msg)
+  });
   return resolved;
 })();
 var DEFAULT_OPENROUTER_RPS = 5;
@@ -50238,7 +50378,7 @@ var _onSettingsReloaded = null;
 function reloadSettingsFromDisk() {
   let raw;
   try {
-    raw = readFileSync13(SETTINGS_FILE, "utf-8");
+    raw = readFileSync14(SETTINGS_FILE, "utf-8");
   } catch {
     return false;
   }
@@ -50281,9 +50421,16 @@ function reloadSettingsFromDisk() {
   } else {
     nextErr = "No active profile configured";
   }
+  const priorFreeOnly = activeResolved?.freeOnly ?? false;
   activeSettings = newSettings;
   activeResolved = nextResolved;
   setActiveFreeOnly(nextResolved?.freeOnly ?? false);
+  maybeTriggerFreePoolBench({
+    activeProfile: newSettings.active,
+    freeOnlyActive: nextResolved?.freeOnly ?? false,
+    freeOnlyWasOn: priorFreeOnly,
+    log: (msg) => process.stderr.write(msg)
+  });
   settingsValid = nextValid;
   settingsError = nextErr;
   if (nextValid) {
@@ -50533,14 +50680,14 @@ function waitForRequestsDrained(timeoutMs = 12e4) {
 }
 var SESSION_ID = randomUUID().slice(0, 8);
 var SESSION_START = /* @__PURE__ */ new Date();
-var LOG_DIR = join14(getConfigDir(), "logs");
-var LOG_FILE = join14(
+var LOG_DIR = join15(getConfigDir(), "logs");
+var LOG_FILE = join15(
   LOG_DIR,
   `session-${SESSION_ID}-${SESSION_START.toISOString().slice(0, 10)}.jsonl`
 );
 function writeLogEntry(entry) {
   try {
-    mkdirSync14(LOG_DIR, { recursive: true });
+    mkdirSync15(LOG_DIR, { recursive: true });
     appendFileSync5(LOG_FILE, JSON.stringify(entry) + "\n");
   } catch {
     process.stderr.write(`[llm-externalizer] Failed to write log entry
@@ -50550,7 +50697,7 @@ function writeLogEntry(entry) {
 var STATS_FILE = "/tmp/claude/llm-externalizer-stats.json";
 function writeStatsFile() {
   try {
-    mkdirSync14("/tmp/claude", { recursive: true, mode: 448 });
+    mkdirSync15("/tmp/claude", { recursive: true, mode: 448 });
     const backend = getCurrentBackend();
     const stats = {
       session_id: SESSION_ID,
@@ -50565,7 +50712,7 @@ function writeStatsFile() {
       backend: backend.type
     };
     const tmpStats = STATS_FILE + ".tmp";
-    writeFileSync10(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
+    writeFileSync11(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
     renameSync6(tmpStats, STATS_FILE);
   } catch {
   }
@@ -51140,7 +51287,7 @@ function defaultOutputDir() {
     _cachedDefaultOutputDir = resolve6(envOverride.trim());
     return _cachedDefaultOutputDir;
   }
-  _cachedDefaultOutputDir = join14(resolveProjectMainRoot(), "reports", "llm-externalizer");
+  _cachedDefaultOutputDir = join15(resolveProjectMainRoot(), "reports", "llm-externalizer");
   return _cachedDefaultOutputDir;
 }
 function _resetDefaultOutputDirCache() {
@@ -51165,14 +51312,14 @@ function canonicalTimestamp(date5 = /* @__PURE__ */ new Date()) {
 }
 function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir) {
   const dir = outputDir || defaultOutputDir();
-  mkdirSync14(dir, { recursive: true });
+  mkdirSync15(dir, { recursive: true });
   const now = /* @__PURE__ */ new Date();
   const ts = canonicalTimestamp(now);
   const shortId = randomUUID().slice(0, 6);
   const srcPart = meta3.inputFile ? `-${sanitizeFilename(meta3.inputFile).replace(/\.md$/, "")}` : "";
   const groupPart = meta3.groupId ? `-group-${meta3.groupId.replace(/[^a-zA-Z0-9_-]/g, "_")}` : "";
   const filename = overrideFilename || `${ts}-${toolName}${groupPart}${srcPart}-${shortId}.md`;
-  const filepath = join14(dir, filename);
+  const filepath = join15(dir, filename);
   const lines = [
     "# LLM Externalizer Response",
     "",
@@ -51186,7 +51333,7 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
   lines.push("", "---", "", responseText);
   const tmpPath = filepath + ".tmp";
   try {
-    writeFileSync10(tmpPath, lines.join("\n"), "utf-8");
+    writeFileSync11(tmpPath, lines.join("\n"), "utf-8");
     renameSync6(tmpPath, filepath);
   } catch (err3) {
     try {
@@ -51436,7 +51583,7 @@ function resolveFolderPath(folderPath, opts) {
   } catch (err3) {
     return { files: [], error: `Invalid folder_path: ${err3 instanceof Error ? err3.message : String(err3)}` };
   }
-  if (!existsSync8(folderPath)) {
+  if (!existsSync9(folderPath)) {
     return { files: [], error: `folder_path not found: ${folderPath}` };
   }
   if (!statSync5(folderPath).isDirectory()) {
@@ -51785,7 +51932,7 @@ ${failed.map((r) => `- **${r.model}**: ${r.content}`).join("\n")}`);
   };
 }
 async function processFileCheck(filePath, task, options = {}) {
-  if (!existsSync8(filePath)) {
+  if (!existsSync9(filePath)) {
     return { filePath, success: false, error: `File not found: ${filePath}` };
   }
   const codeBlock = readFileAsCodeBlock(
@@ -53457,7 +53604,7 @@ Profiles: ${profileNames.join(", ")}`);
                 };
               }
               try {
-                writeFileSync10(absPath, jsonText, "utf-8");
+                writeFileSync11(absPath, jsonText, "utf-8");
               } catch (err3) {
                 return {
                   content: [
@@ -53525,11 +53672,11 @@ Profiles: ${profileNames.join(", ")}`);
         }
         case "get_settings": {
           try {
-            const raw = readFileSync13(SETTINGS_FILE, "utf-8");
+            const raw = readFileSync14(SETTINGS_FILE, "utf-8");
             const targetDir = outputDir || defaultOutputDir();
-            mkdirSync14(targetDir, { recursive: true });
-            const copyPath = join14(targetDir, "settings_edit.yaml");
-            writeFileSync10(copyPath, raw, "utf-8");
+            mkdirSync15(targetDir, { recursive: true });
+            const copyPath = join15(targetDir, "settings_edit.yaml");
+            writeFileSync11(copyPath, raw, "utf-8");
             return { content: [{ type: "text", text: copyPath }] };
           } catch (err3) {
             return {
@@ -53686,7 +53833,7 @@ Profiles: ${profileNames.join(", ")}`);
               const gSucceeded = gAll.filter((r) => r.success);
               const reportSections = [];
               for (const r of gSucceeded) {
-                const content = r.reportPath && existsSync8(r.reportPath) ? readFileSync13(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync9(r.reportPath) ? readFileSync14(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -53822,7 +53969,7 @@ ${gAbortReason}`);
             } else {
               const reportSections = [];
               for (const r of succeeded) {
-                const content = r.reportPath && existsSync8(r.reportPath) ? readFileSync13(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync9(r.reportPath) ? readFileSync14(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -53908,7 +54055,7 @@ ${content}`);
           } catch (err3) {
             return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
           }
-          if (!existsSync8(sfFolderPath)) {
+          if (!existsSync9(sfFolderPath)) {
             return {
               content: [
                 {
@@ -54056,7 +54203,7 @@ ${content}`);
           if (sfMode === 2 && succeeded.length > 0) {
             const sections = [];
             for (const r of succeeded) {
-              const content = r.reportPath && existsSync8(r.reportPath) ? readFileSync13(r.reportPath, "utf-8") : "";
+              const content = r.reportPath && existsSync9(r.reportPath) ? readFileSync14(r.reportPath, "utf-8") : "";
               sections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -54096,7 +54243,7 @@ ${content}`);
               for (const fp of fg.files) {
                 const r = pathToResult.get(fp);
                 if (!r) continue;
-                const content = r.reportPath && existsSync8(r.reportPath) ? readFileSync13(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync9(r.reportPath) ? readFileSync14(r.reportPath, "utf-8") : "";
                 sections.push(`## File: ${fp}
 
 ${content}`);
@@ -54190,7 +54337,7 @@ ${content}`);
             } catch (err3) {
               return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
             }
-            if (!existsSync8(fp)) {
+            if (!existsSync9(fp)) {
               return { content: [{ type: "text", text: `FAILED: Folder not found: ${fpRaw}` }], isError: true };
             }
             if (!statSync5(fp).isDirectory()) {
@@ -54205,7 +54352,7 @@ ${content}`);
             for (const sf of raw) {
               if (typeof sf !== "string" || !sf.trim()) continue;
               const resolved = resolve6(sf);
-              if (!existsSync8(resolved)) {
+              if (!existsSync9(resolved)) {
                 return {
                   content: [{ type: "text", text: `FAILED: source_files entry not found: ${sf}` }],
                   isError: true
@@ -54222,7 +54369,7 @@ ${content}`);
           let diffPathResolved = void 0;
           if (typeof seiDiffPathRaw === "string" && seiDiffPathRaw.trim()) {
             const r = resolve6(seiDiffPathRaw);
-            if (!existsSync8(r)) {
+            if (!existsSync9(r)) {
               return {
                 content: [{ type: "text", text: `FAILED: diff_path not found: ${seiDiffPathRaw}` }],
                 isError: true
@@ -54689,8 +54836,8 @@ ${body}
             } catch (err3) {
               return { error: err3.message };
             }
-            if (!existsSync8(fA)) return { error: `File not found: ${fARaw}` };
-            if (!existsSync8(fB)) return { error: `File not found: ${fBRaw}` };
+            if (!existsSync9(fA)) return { error: `File not found: ${fARaw}` };
+            if (!existsSync9(fB)) return { error: `File not found: ${fBRaw}` };
             if (cfScan && !cfRedact) {
               const scanResult = scanFilesForSecrets([fA, fB]);
               if (scanResult.found) return { error: scanResult.report };
@@ -54752,7 +54899,7 @@ ${fence}${sourceBlocks}` }
             } catch (err3) {
               return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
             }
-            if (!existsSync8(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
+            if (!existsSync9(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
             const toRef = cfToRef || "HEAD";
             if (cfFromRef.startsWith("-") || toRef.startsWith("-")) {
               return { content: [{ type: "text", text: "FAILED: git refs must not start with '-'" }], isError: true };
@@ -54823,7 +54970,7 @@ ${sections.join("\n\n---\n\n")}`;
                 {
                   model: "git-diff (no LLM)",
                   task: `${cfFromRef} \u2192 ${toRef}`,
-                  inputFile: join14(cfGitRepoSafe, dg.files[0]),
+                  inputFile: join15(cfGitRepoSafe, dg.files[0]),
                   groupId: gid
                 },
                 void 0,
@@ -54916,7 +55063,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync8(fileA)) {
+          if (!existsSync9(fileA)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileA}` }
@@ -54924,7 +55071,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync8(fileB)) {
+          if (!existsSync9(fileB)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileB}` }
@@ -55112,13 +55259,13 @@ ${diffFence}` + sourceFileBlocks
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync8(filePath)) {
+                if (!existsSync9(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
                   continue;
                 }
-                const src = readFileSync13(filePath, "utf-8");
+                const src = readFileSync14(filePath, "utf-8");
                 const lang = detectLang(filePath);
                 const deps = extractLocalImports(filePath, src);
                 const depBlocks = [];
@@ -55172,14 +55319,14 @@ ${resp.content}${footer}`);
           const crReports = [];
           const crReportPaths = [];
           for (const filePath of crFilePaths) {
-            if (!existsSync8(filePath)) {
+            if (!existsSync9(filePath)) {
               crReports.push(`## ${filePath}
 
 FAILED: File not found.`);
               crReportPaths.push("(skipped \u2014 file not found)");
               continue;
             }
-            const crSourceCode = readFileSync13(filePath, "utf-8");
+            const crSourceCode = readFileSync14(filePath, "utf-8");
             const crLang = detectLang(filePath);
             const depPaths = extractLocalImports(filePath, crSourceCode);
             const depBlocks = [];
@@ -55352,14 +55499,14 @@ ${crResp.content}${crFooter}`
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync8(filePath)) {
+                if (!existsSync9(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
                   continue;
                 }
                 const ciLang = detectLang(filePath);
-                const fileDir = dirname8(filePath);
+                const fileDir = dirname9(filePath);
                 const ciResolveBase = project_root || fileDir;
                 const extractMessages = [
                   { role: "system", content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path inside a filename tag before the file-content tag \u2014 reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.` + FILE_FORMAT_EXAMPLE },
@@ -55381,22 +55528,22 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     continue;
                   }
                   const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-                  const resolvedBase = importPath.startsWith("/") ? resolve6(importPath) : join14(resolveDir, importPath);
+                  const resolvedBase = importPath.startsWith("/") ? resolve6(importPath) : join15(resolveDir, importPath);
                   if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                     packageImports.push(importPath);
                     continue;
                   }
-                  let found = existsSync8(resolvedBase) && statSync5(resolvedBase).isFile();
+                  let found = existsSync9(resolvedBase) && statSync5(resolvedBase).isFile();
                   if (!found && !extname4(resolvedBase)) {
                     for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".json"]) {
-                      if (existsSync8(resolvedBase + ext)) {
+                      if (existsSync9(resolvedBase + ext)) {
                         found = true;
                         break;
                       }
                     }
                     if (!found) {
                       for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                        if (existsSync8(join14(resolvedBase, `index${ext}`))) {
+                        if (existsSync9(join15(resolvedBase, `index${ext}`))) {
                           found = true;
                           break;
                         }
@@ -55430,7 +55577,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
           const ciReports = [];
           const ciReportPaths = [];
           for (const filePath of ciFilePaths) {
-            if (!existsSync8(filePath)) {
+            if (!existsSync9(filePath)) {
               ciReports.push(`## ${filePath}
 
 FAILED: File not found.`);
@@ -55438,7 +55585,7 @@ FAILED: File not found.`);
               continue;
             }
             const ciLang = detectLang(filePath);
-            const fileDir = dirname8(filePath);
+            const fileDir = dirname9(filePath);
             const ciResolveBase = project_root || fileDir;
             const extractMessages = [
               {
@@ -55477,13 +55624,13 @@ FAILED: File not found.`);
                 continue;
               }
               const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-              const resolvedBase = importPath.startsWith("/") ? resolve6(importPath) : join14(resolveDir, importPath);
+              const resolvedBase = importPath.startsWith("/") ? resolve6(importPath) : join15(resolveDir, importPath);
               if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                 packageImports.push(importPath);
                 continue;
               }
               let found = false;
-              if (existsSync8(resolvedBase) && statSync5(resolvedBase).isFile()) {
+              if (existsSync9(resolvedBase) && statSync5(resolvedBase).isFile()) {
                 found = true;
               }
               if (!found && !extname4(resolvedBase)) {
@@ -55499,14 +55646,14 @@ FAILED: File not found.`);
                   ".rs",
                   ".json"
                 ]) {
-                  if (existsSync8(resolvedBase + ext)) {
+                  if (existsSync9(resolvedBase + ext)) {
                     found = true;
                     break;
                   }
                 }
                 if (!found) {
                   for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                    if (existsSync8(join14(resolvedBase, `index${ext}`))) {
+                    if (existsSync9(join15(resolvedBase, `index${ext}`))) {
                       found = true;
                       break;
                     }
@@ -55684,7 +55831,7 @@ FAILED: File not found.`);
             if (csMode === 0 && !csEffectivelyGrouped) {
               const csPerFileResults = [];
               for (const fp of fgPaths) {
-                if (!existsSync8(fp)) {
+                if (!existsSync9(fp)) {
                   csPerFileResults.push(`FAILED: ${fp} \u2014 File not found`);
                   continue;
                 }
@@ -55831,8 +55978,8 @@ ${csResp.content}${csFooter}`
             }
             return resp.content;
           };
-          const csModuleDir = dirname8(fileUrlToPath_cs(import.meta.url));
-          const csEmbeddingsScript = join14(csModuleDir, "..", "scripts", "compute_embeddings.py");
+          const csModuleDir = dirname9(fileUrlToPath_cs(import.meta.url));
+          const csEmbeddingsScript = join15(csModuleDir, "..", "scripts", "compute_embeddings.py");
           const csHooks = {
             rawLlmCall: csRawLlmCall,
             embeddingsScriptPath: csEmbeddingsScript,

@@ -221287,7 +221287,8 @@ function parseArgs(argv) {
     assessModel: null,
     checkHealth: false,
     newArrivals: false,
-    qualifyingOnly: false
+    qualifyingOnly: false,
+    benchFreePool: false
   };
   const takeValue = (flag, i) => {
     const v = argv[i + 1];
@@ -221353,6 +221354,8 @@ function parseArgs(argv) {
       opts.newArrivals = true;
     } else if (a === "--qualifying-only") {
       opts.qualifyingOnly = true;
+    } else if (a === "--bench-free-pool") {
+      opts.benchFreePool = true;
     } else if (a === "--help" || a === "-h") {
       printHelp();
       process.exit(0);
@@ -221392,6 +221395,14 @@ function printHelp() {
       "                    re-applying a fresh selection without burning more calls.",
       "  --min-f1 F        Threshold a model must hit (default 0.95) to be eligible",
       "                    for top-N. 0..1.",
+      "",
+      "Free-pool sweep (TRDD-f1510055):",
+      "  --bench-free-pool Auto-fill the candidate set from the active profile's",
+      "                    free_models list (or the bundled FREE_POOL_SEED if the",
+      "                    profile doesn't pin one). Equivalent to repeating --include",
+      "                    once per pool entry. Refuses to run if any pool id is not",
+      "                    a ':free' model \u2014 the flag is a cost-safety chokepoint.",
+      "                    Composes with --security-triage (fills --model instead).",
       "",
       "security_scan TRIAGE benchmark (separate task \u2014 verdict adjudication):",
       "  --security-triage Run the security_scan triage benchmark instead of the",
@@ -221465,11 +221476,36 @@ function resolveMainRoot2() {
 }
 async function main() {
   const opts = parseArgs(process.argv);
+  let activeFreeModels = [];
   try {
     const s = loadSettings();
     const active = s?.profiles[s.active];
-    if (s && active) setActiveFreeOnly(resolveProfile(s.active, active).freeOnly);
+    if (s && active) {
+      const resolved = resolveProfile(s.active, active);
+      setActiveFreeOnly(resolved.freeOnly);
+      activeFreeModels = resolved.freeModels;
+    }
   } catch {
+  }
+  if (opts.benchFreePool) {
+    const pool = activeFreeModels.length > 0 ? activeFreeModels : FREE_POOL_SEED;
+    const nonFree = pool.filter((id) => !id.endsWith(":free"));
+    if (nonFree.length > 0) {
+      throw new Error(
+        `--bench-free-pool refuses to run: pool contains non-':free' ids ${JSON.stringify(nonFree)}. Every entry MUST end with ':free'. Fix the active profile's free_models list.`
+      );
+    }
+    const source = activeFreeModels.length > 0 ? `active profile's free_models (${pool.length})` : `FREE_POOL_SEED constant (${pool.length})`;
+    console.error(`[benchmark] --bench-free-pool: pool from ${source}.`);
+    if (opts.securityTriage) {
+      for (const id of pool) {
+        if (!opts.triageModels.includes(id)) opts.triageModels.push(id);
+      }
+    } else {
+      for (const id of pool) {
+        if (!opts.includeIds.includes(id)) opts.includeIds.push(id);
+      }
+    }
   }
   if (opts.securityTriage) {
     return runSecurityTriagePhase(opts);

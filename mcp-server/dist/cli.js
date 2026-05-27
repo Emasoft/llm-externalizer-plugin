@@ -7789,7 +7789,7 @@ profiles:
   # the profile otherwise, so this profile can NEVER bill.
   #
   # The 15-model seed list below matches FREE_POOL_SEED in config.ts and
-  # is the canonical default. The auto-benchmark trigger (TRDD-2a9e1f47)
+  # is the canonical default. The auto-benchmark trigger (TRDD-f1510055)
   # scores this pool when the profile is first activated (free_only=true
   # + empty :free cache) and writes results to:
   #   ~/.llm-externalizer/benchmark-results.json (keyword task)

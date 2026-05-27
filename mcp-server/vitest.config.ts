@@ -31,6 +31,8 @@ export default defineConfig({
       'src/reasoning-ladder.test.ts',
       // Free-only switch — config core + context-floor filter (TRDD-8b6b3646).
       'src/free-only.test.ts',
+      // Free-pool auto-bench trigger — fire-and-forget detached child (TRDD-f1510055).
+      'src/free-pool-auto-bench.test.ts',
       'src/mass_scouting/fieldset.test.ts',
       'src/mass_scouting/shorthand.test.ts',
       'src/mass_scouting/registry.test.ts',
