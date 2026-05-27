@@ -484,6 +484,12 @@ Print the summary's absolute path to the user. Also mention: bugs fixed this run
 - No commits.
 - All output files live under `./reports/llm-externalizer/` with a `<RUN_TS>.fix-found-bugs.*` prefix.
 
+## Three-surface compliance: by-design slash-only (GAP-12)
+
+This command is multi-agent orchestration with serial scheduling: scan with one MCP batch, aggregate findings into a canonical bug list, then dispatch one serial-fixer subagent per bug in a loop. It shares the multi-agent orchestration shape with `/llm-externalizer:llm-externalizer-scan-and-fix`, differing only in serial-vs-parallel scheduling — neither shape is a single callable unit because both compose MCP tools with N subagent dispatches across multiple turns.
+
+Per TRDD-a24b213c §C, this is a documented exemption from the "every capability has MCP tool + CLI command + slash command" invariant — not a gap waiting to be filled. A single MCP or CLI surface would have to spawn subagents itself (which only the orchestrator can do via the Task tool), so this capability is inherently slash-only.
+
 ## Error handling
 
 | Error | Resolution |

@@ -132,6 +132,12 @@ To fix the findings, run:
 
 The fix-report command will dispatch a parallel fixer agent on each report.
 
+## Three-surface compliance: by-design slash-only (GAP-8)
+
+This command wraps an EXTERNAL `codex` CLI binary that the user installs separately (`npm install -g @openai/codex`); there is no in-process MCP tool to wrap because the entire backend lives outside the plugin. A parallel CLI surface would have to reinvent the same shell wrapper around `codex exec` that this slash command already provides.
+
+Per TRDD-a24b213c §C, this is a documented exemption from the "every capability has MCP tool + CLI command + slash command" invariant — not a gap waiting to be filled. Closing GAP-8 would require either bundling the Codex client (out of scope) or wrapping the third-party binary in an MCP server tool, both of which add maintenance burden without a meaningful capability gain.
+
 ## Phase 2 — `--fix-loop N` (NOT IMPLEMENTED YET)
 
 Tracked in TRDD-807c1e2d-9457-4afb-b7a5-1e6099a17c28. When this flag lands:

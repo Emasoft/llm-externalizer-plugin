@@ -24,3 +24,9 @@ Spawn the `llm-externalizer-setup-agent` via the Agent tool using `subagent_type
 **State persistence.** Wizard state lives under `$CLAUDE_PLUGIN_DATA/setup/` (env.json, runners.json, selected.json, test-results.json, profile.yaml), so re-invoking the command resumes where it left off.
 
 **When to invoke instead of `/llm-externalizer:llm-externalizer-configure`.** This setup wizard is for first-time **local-model** setup (Ollama / LM Studio / vLLM / llama.cpp / Jan) or when a local model is failing compatibility tests. For OpenRouter-only setup or to inspect an existing config, use `llm-externalizer-configure` instead — it is read-only and lighter weight. (Repeated here in case you scrolled past the top-of-doc redirect.)
+
+## Three-surface compliance: by-design slash-only (GAP-13)
+
+This command is an interactive wizard: it detects OS/arch/RAM/GPU, prompts the user through model selection (multiple multi-choice menus), helps download a Hugging Face model, runs five calibrated compatibility tests, and generates a paste-ready `settings.yaml` snippet. It is stateful (resumable via `$CLAUDE_PLUGIN_DATA/setup/`) and conversational — not a one-shot tool call.
+
+Per TRDD-a24b213c §C, this is a documented exemption from the "every capability has MCP tool + CLI command + slash command" invariant — not a gap waiting to be filled. The MCP server is read-only by design (no `set_settings`), so a programmatic surface cannot write the user's config; a CLI verb would have to re-implement the interactive menus and loses the value of conversational state, which the slash command's subagent already handles.

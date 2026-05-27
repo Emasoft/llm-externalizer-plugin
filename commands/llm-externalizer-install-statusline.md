@@ -61,6 +61,12 @@ Width tiering (1 line ≥ 184 cols → 6 lines < 65 cols) is automatic — the b
 
 4. Mention that the OpenRouter balance (🏦) only renders when `OPENROUTER_API_KEY` is in the user's shell environment. The plugin's `userConfig.openrouter_api_key` exports the key to the MCP server but **not** to the statusline subprocess; for the budget panel the user must also have it in their shell rc (zsh/bash/fish) — the keychain copy alone is insufficient.
 
+## Three-surface compliance: by-design slash-only (GAP-14)
+
+This command is a one-shot file installer: it writes the statusline script to `~/.claude/statusline.py` and atomically patches `~/.claude/settings.json` — both OUTSIDE the project tree, in the user's global Claude Code config. A `llm-externalizer install-statusline` CLI verb could be added (the underlying installer is already `scripts/install_statusline.py`, a standalone Python script), but the slash command is one-line trivial so the dual-CLI work is low-priority.
+
+Per TRDD-a24b213c §C, this is a documented exemption from the "every capability has MCP tool + CLI command + slash command" invariant — not a gap waiting to be filled. An MCP tool is ruled out because the server is read-only and cannot write to the user's home directory. A future CLI verb is feasible but not blocking; closing GAP-14 fully would mean adding the verb to `bin/llm-ext` for shell-script callers, while the slash command remains the canonical interactive surface.
+
 ## Failure modes
 
 - `Error: statusline source not found` → plugin install did not pull `scripts/statusline/statusline.py`. Run `scripts/setup.py` or reinstall the plugin.

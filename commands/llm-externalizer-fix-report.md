@@ -145,6 +145,12 @@ The agent returns ONE line — its `.fixer.`-summary path, or `[FAILED] <agent-n
 - The orchestrator MUST NOT `Read` the report, the source files, or the fixer summary. Only `Bash` validation + one `Task` call + one user-facing line.
 - No commits, no pushes. The user reviews the diff and commits themselves.
 
+## Three-surface compliance: by-design slash-only (GAP-9)
+
+This command dispatches a subagent that APPLIES fixes to source files (Edit / Write). The MCP server's file-write tools (`fix_code`, `batch_fix`, `merge_files`, `split_file`, `revert_file`) were deliberately removed because the server is read-only by design — only the orchestrator and its subagents may mutate the user's working tree.
+
+Per TRDD-a24b213c §C, this is a documented exemption from the "every capability has MCP tool + CLI command + slash command" invariant — not a gap waiting to be filled. Re-enabling MCP file-write tools would close GAP-9 but violate the read-only-server design.
+
 ## Error handling
 
 | Error | Resolution |

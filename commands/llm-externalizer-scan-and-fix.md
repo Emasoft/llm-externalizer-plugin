@@ -499,6 +499,12 @@ On any error: `[FAILED] llm-externalizer-scan-and-fix — <one-line reason>`.
 - Both fixer-agent variants (`llm-externalizer-parallel-fixer-sonnet-agent` and `llm-externalizer-parallel-fixer-opus-agent`) must exist in the plugin. If the variant the user picked in Step 4b is missing, abort with `[FAILED] llm-externalizer-scan-and-fix — <agent-name> not installed`.
 - Flags `--file-list` and the positional `[target-path]` are mutually exclusive in effect (the target-path is silently ignored when `--file-list` is set). Flags `--instructions` and `--specs` are NOT mutually exclusive — both can be supplied and are unioned into `instructions_files_paths`.
 
+## Three-surface compliance: by-design slash-only (GAP-11)
+
+This command is multi-agent orchestration: scan with one MCP batch, fan out up to 15 parallel fixer subagents (one per report) via the Task tool, then run a join script. It is not a single callable unit — it composes an MCP scan tool with N subagent dispatches and a Python join script across multiple turns of orchestrator control flow.
+
+Per TRDD-a24b213c §C, this is a documented exemption from the "every capability has MCP tool + CLI command + slash command" invariant — not a gap waiting to be filled. A single MCP or CLI surface would have to spawn subagents itself (which only the orchestrator can do via the Task tool), so this capability is inherently slash-only.
+
 ## Error handling
 
 | Error                                | Resolution                                                                 |

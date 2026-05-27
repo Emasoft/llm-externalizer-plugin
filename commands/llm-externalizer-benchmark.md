@@ -63,6 +63,34 @@ Do NOT `Read` the report. Its content is the user's output, not the orchestrator
 | Sweep plus current production ensemble as baselines | `/llm-externalizer:llm-externalizer-benchmark --include google/gemini-3-flash-preview --include x-ai/grok-4.1-fast` |
 | Force reasoning-heavy runs for sensitivity testing | `/llm-externalizer:llm-externalizer-benchmark --reasoning high` |
 
+## Three-surface compliance: by-design no MCP tool (GAP-2)
+
+The benchmark is **CLI + slash command**, with **no MCP tool** — by
+design. Rationale documented in TRDD-f1510055 §"Why no MCP tool":
+
+- A sweep takes 10–30 minutes (15 models × ~60s each for the keyword
+  task, more for `--security-triage`). Every other MCP tool the
+  plugin exposes completes in seconds to a few minutes.
+- Exposing it as a tool would let any orchestrator agent trigger a
+  half-hour blocking operation on the user's account.
+- It writes a cache the WHOLE plugin reads (`~/.llm-externalizer/benchmark-results.json`),
+  not a per-call artifact — closer to a build step than a tool call.
+
+The MCP-equivalent fourth surface is the **auto-trigger** wired into
+the MCP server's startup + settings-reload paths (see
+`/llm-externalizer:llm-externalizer-bench-free-pool` and TRDD-f1510055).
+When `free_only` flips ON and the cache lacks `:free` entries, the
+server spawns a detached bench process. This delivers the
+"capability available without leaving the MCP layer" property
+without the agent-triggered half-hour-block hazard.
+
+`pickTopN` + `--apply-profile` (the GAP-3 "ensemble-autoselect"
+capability) is exposed as a CLI mode of this same binary
+(`--pick-top-n N --apply-profile <name>`) rather than a separate
+MCP tool — its core (`benchmark/pick.ts`) reads the same cache the
+benchmark writes, so a "rotate" call without a prior benchmark would
+be a no-op or stale-pick footgun.
+
 ## Error handling
 
 | Error | Resolution |

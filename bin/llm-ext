@@ -122,6 +122,277 @@ const TOOL_CATALOG = {
   // manually. File-write tools (fix_code / batch_fix / merge_files /
   // split_file / revert_file) are also disabled — apply fixes via the
   // llm-externalizer-scan-and-fix plugin command instead.
+
+  // ── Codebase scan ────────────────────────────────────────────────────
+  search_existing_implementations: {
+    desc: "Search a codebase for an existing implementation of a specified feature (PR dedupe / 'does this already exist?').",
+    params: {
+      feature_description: "One-sentence description of the feature (REQUIRED)",
+      folder_path: "Absolute path(s) to the codebase folder(s). String or JSON array (REQUIRED)",
+      source_files: "Optional PR source file path(s); shipped as reference and excluded from scan",
+      diff_path: "Optional path to a unified-diff file showing the PR's new lines",
+      extensions: 'File extensions filter, e.g. \'[".ts",".py"]\'',
+      exclude_dirs: 'Dirs to skip, e.g. \'["tests"]\'',
+      use_gitignore: "Respect .gitignore rules (default: true)",
+      max_files: "Max files to walk (default: 10000)",
+      answer_mode: "0=per-file, 1=per-batch, 2=merged (default)",
+      max_payload_kb: "Max batch payload in KB (default: 400)",
+      output_dir: "Custom output directory for the report",
+    },
+  },
+
+  // ── Sentence/label clustering ────────────────────────────────────────
+  cluster_synonyms: {
+    desc: "Cluster JSONL sentences/labels by full-sentence meaning equivalence (ZERO orchestrator tokens — file-in, file-out).",
+    params: {
+      input_file: "Absolute path to a JSONL file ({id,sentence,[context]} per line) (REQUIRED)",
+      output_dir: "Absolute output directory for clusters/checkpoint/stats (REQUIRED)",
+      embeddings_file: "Optional precomputed float32 memmap (+ sibling .meta.json)",
+      policy_file: "Optional JSON policy knobs (see TRDD)",
+      resume_from: "Optional prior checkpoint.sqlite to resume from",
+    },
+  },
+
+  // ── OpenRouter model info ────────────────────────────────────────────
+  or_model_info: {
+    desc: "Query OpenRouter for detailed metadata, pricing, params, latency for a model id (returns structured text).",
+    params: {
+      model: "Exact OpenRouter model id, case-sensitive (REQUIRED)",
+    },
+  },
+  or_model_info_table: {
+    desc: "Same as or_model_info but renders as a Unicode/ANSI table (for terminal display).",
+    params: {
+      model: "Exact OpenRouter model id, case-sensitive (REQUIRED)",
+    },
+  },
+  or_model_info_json: {
+    desc: "Same as or_model_info but returns raw JSON; optionally writes it to a file.",
+    params: {
+      model: "Exact OpenRouter model id, case-sensitive (REQUIRED)",
+      file_path: "Optional absolute path to write the JSON to (returns the path instead of inline JSON)",
+    },
+  },
+
+  // ── Mass-scout family ────────────────────────────────────────────────
+  mass_scout_register: {
+    desc: "Mass-scout Phase 1: register files into the SQLite body cache. Idempotent.",
+    params: {
+      db_path: "Absolute path to the SQLite DB (REQUIRED)",
+      folder_path: "Folder to walk (mutually exclusive with file_paths)",
+      file_paths: "Explicit list of absolute file paths (mutually exclusive with folder_path)",
+      extensions: "Extensions filter when walking a folder",
+      exclude_dirs: "Extra directory names to skip during the walk",
+      model: "Model id used to compute the register byte-cap",
+      max_context_pct_register: "Override the default 50% cap (0..1 fraction)",
+      git_diff: "Restrict to files changed since this git ref (folder_path only)",
+      no_gitignore: "Bypass .gitignore filtering",
+    },
+  },
+  mass_scout_preclassify: {
+    desc: "Mass-scout Phase 2: cheap script-only classifier — buckets, language, format tags. No LLM.",
+    params: {
+      db_path: "Absolute path to the SQLite DB (REQUIRED)",
+      reclassify: "Re-run on already-classified rows (default: false)",
+      limit: "Only process this many rows (for incremental runs)",
+    },
+  },
+  mass_scout_estimate: {
+    desc: "Mass-scout Phase 3: cost/time estimate for a fieldset over registered files. Honors --budget_usd. No LLM.",
+    params: {
+      db_path: "Absolute path to the SQLite DB (REQUIRED)",
+      fields_file: "Absolute path to the JSON fieldset file (REQUIRED)",
+      model: "Model id (default: qwen/qwen-2.5-7b-instruct)",
+      bucket: "Optional preclassifier bucket filter",
+      workers: "Worker count for the ETA (default: 16)",
+      per_call_seconds: "Avg seconds per LLM call for the ETA (default: 1.0)",
+      budget_usd: "Refuse to schedule if estimate exceeds this USD value",
+      expected_output_bytes: "Estimated output JSON size per file (default: 200)",
+      max_context_pct_scout: "Override the default 40% scout cap (0..1)",
+      max_context_pct_register: "Override the default 50% register cap (0..1)",
+      input_price_per_m: "USD per 1M input tokens (overrides KNOWN_PRICING)",
+      output_price_per_m: "USD per 1M output tokens (overrides KNOWN_PRICING)",
+      context_window: "Tokens (overrides KNOWN_PRICING)",
+      live_context: "Query OpenRouter for the provider's actual context_length",
+    },
+  },
+  mass_scout: {
+    desc: "Mass-scout Phase 4: call the LLM on every eligible file; emit per-file JSON + markdown report.",
+    params: {
+      db_path: "Absolute path to the SQLite DB (REQUIRED)",
+      fields_file: "Absolute path to the JSON fieldset file (REQUIRED)",
+      job_id: "Stable job identifier — resumes if re-run (REQUIRED)",
+      source_root: "Original folder the files came from (recorded on the job row) (REQUIRED)",
+      model: "Default: qwen/qwen-2.5-7b-instruct",
+      workers: "Concurrent OpenRouter calls (default: 16)",
+      max_retries: "Per-file retry budget (default: 1)",
+      bucket: "Optional preclassifier bucket filter",
+      no_smoke_test: "Skip the 5-file sequential smoke test before fan-out",
+      no_resume: "Re-process files even if a result row already exists for this job_id",
+      max_context_pct_scout: "Override the default 40% scout cap (0..1)",
+      output_dir: "Custom output directory for the markdown report",
+      live_context: "Query OpenRouter for the provider's actual context_length",
+    },
+  },
+  mass_scout_search: {
+    desc: "Mass-scout Phase 5: per-job search (regex / fts / structured / combined). Auto-routed.",
+    params: {
+      db_path: "Absolute path to the SQLite DB (REQUIRED)",
+      job_id: "Job identifier (REQUIRED)",
+      query: "FTS5 query OR natural-language matching a built-in regex pattern",
+      regex: "Explicit regex pattern — forces regex mode",
+      force_llm: "Suppress the regex bypass even on trivial queries",
+      force_regex: "Force regex mode",
+      filter: 'Structured filters: \'$.path:OP:value,,$.path2:OP:value\' (OP = =,!=,>,>=,<,<=,LIKE)',
+      limit: "Max hits returned (default: 50)",
+      offset: "Skip the first N hits (FTS / structured only)",
+      json: "Return results as JSON instead of human-readable table",
+    },
+  },
+  mass_scout_search_xjob: {
+    desc: "Cross-job federated search. Same flags as mass_scout_search but takes job_ids (list).",
+    params: {
+      db_path: "Absolute path to the SQLite DB (REQUIRED)",
+      job_ids: "Two or more job_ids to federate across (REQUIRED, JSON array)",
+      query: "Free-text query — auto-routed to regex/FTS",
+      regex: "Explicit regex over cached file bodies",
+      force_llm: "Force the LLM-search path",
+      force_regex: "Force the regex bypass",
+      filter: 'Structured filters: \'$.path:OP:value,,...\'',
+      limit_per_job: "Cap per source job before merging (default: 100)",
+      limit_merged: "Cap on the final merged hit list (default: 200)",
+      json: "Return JSON instead of human-readable text",
+    },
+  },
+  mass_scout_get: {
+    desc: "Retrieve one file row by short_id. Optionally include result row for a job_id.",
+    params: {
+      db_path: "Absolute path to the SQLite DB (REQUIRED)",
+      short_id: "Positive integer short_id from registerFile (REQUIRED)",
+      job_id: "Optional — when set, includes the result row for that job",
+    },
+  },
+  mass_scout_export: {
+    desc: "Dump every result row of a job to JSONL or CSV.",
+    params: {
+      db_path: "Absolute path to the SQLite DB (REQUIRED)",
+      job_id: "Job identifier (REQUIRED)",
+      format: "'jsonl' (default) or 'csv'",
+      output_dir: "Absolute output directory for the export",
+    },
+  },
+  mass_scout_jobs_list: {
+    desc: "List every mass-scout job in a DB with metadata (fieldset, model, ok/total, cost, started_at).",
+    params: {
+      db_path: "Absolute path to the SQLite DB (REQUIRED)",
+      json: "Return as a JSON array instead of a table",
+    },
+  },
+  mass_scout_audit_sample: {
+    desc: "Pick N random results from a finished job and show them alongside cached file body (human trust check).",
+    params: {
+      db_path: "Absolute path to the SQLite DB (REQUIRED)",
+      job_id: "Job identifier (REQUIRED)",
+      sample: "How many random samples to pull (default: 5)",
+      body_truncate: "Per-body excerpt cap in chars (default: 1000)",
+      json: "Return JSON instead of human-readable markdown",
+    },
+  },
+  mass_scout_body_get: {
+    desc: "Print the cached file body for a given short_id (re-analyse without touching the filesystem).",
+    params: {
+      db_path: "Absolute path to the SQLite DB (REQUIRED)",
+      short_id: "Positive integer short_id from mass_scout_register (REQUIRED)",
+    },
+  },
+  mass_scout_build_fieldset: {
+    desc: "Compose a JSON fieldset from --field shorthand tokens (e.g. 'is_async:bool=desc').",
+    params: {
+      name: "Fieldset name (lowercase identifier) (REQUIRED)",
+      field: "One or more shorthand tokens (JSON array of strings) (REQUIRED)",
+      out: "Optional path to write the JSON fieldset (else stdout)",
+    },
+  },
+  mass_scout_propose_fieldset: {
+    desc: "Ask the LLM to propose a fieldset JSON for a natural-language goal, optionally seeded with sample files.",
+    params: {
+      goal: "One-sentence statement of what to find/extract (REQUIRED)",
+      samples: "Optional list of sample file paths to seed the model",
+      model: "Model id used to compose the fieldset",
+      out: "Optional path to write the JSON fieldset (else stdout)",
+    },
+  },
+  mass_scout_list_bundled_fieldsets: {
+    desc: "List plugin-shipped fieldsets accepted as fields_file='bundled:<name>' (code-audit, skill-audit, etc.).",
+    params: {
+      json: "Return as JSON list of {name,path,fields[]} objects",
+    },
+  },
+  mass_scout_diff: {
+    desc: "Compare two scout jobs row-by-row; report only-in-A / only-in-B / identical / changed-fields.",
+    params: {
+      db_path: "Absolute path to the SQLite DB (REQUIRED)",
+      from_job: "Baseline job_id (REQUIRED)",
+      to_job: "Comparison job_id (REQUIRED)",
+      json: "Return JSON instead of human-readable summary",
+    },
+  },
+  mass_scout_chain: {
+    desc: "Run a second scout pass on the subset of rows from a prior job matching a JSON-extract filter.",
+    params: {
+      db_path: "Absolute path to the SQLite DB (REQUIRED)",
+      source_job: "Job to chain from (its results are the input set) (REQUIRED)",
+      new_job_id: "Job id for the new chained scout (must not already exist) (REQUIRED)",
+      new_fields_file: "Path to the new fieldset JSON for this job (REQUIRED)",
+      filter: '$.path:OP:value JSON-extract filter (REQUIRED)',
+      model: "Model id to use for the new job",
+      workers: "Concurrency (default: 4)",
+      max_retries: "Per-file retries (default: 1)",
+    },
+  },
+
+  // ── Security triage ──────────────────────────────────────────────────
+  security_scan: {
+    desc: "Injection-hardened security triage for suspected-malicious code. Fail-safe-to-'uncertain' on every error.",
+    params: {
+      targets: "Work items array: id + category + exactly one of snippet|file_path|path_glob (REQUIRED, JSON)",
+      category_rubrics: "Per-category adjudication rubric (JSON object keyed by category)",
+      default_verdict_on_error: "'uncertain' (default) or 'threat' — NEVER 'not_threat' (no fail-open)",
+      budget_usd: "All-or-nothing pre-flight budget cap",
+      model: "OpenRouter model id (default: qwen/qwen-2.5-7b-instruct)",
+      git_diff_ref: "Incremental: limit path_glob targets to files changed since this ref",
+      folder_root: "Root for relative path_glob / git_diff_ref (default: cwd)",
+      output_dir: "Report/export directory",
+      workers: "Concurrent judge calls (default: 8)",
+      max_retries: "Per-call validation retries (default: 1)",
+    },
+  },
+
+  // ── Model qualification & autodiscovery ──────────────────────────────
+  security_triage_benchmark: {
+    desc: "Benchmark OpenRouter model(s) on the security_scan triage task; recommends best same-or-cheaper PASS.",
+    params: {
+      models: "Explicit model id(s) to assess (JSON array); omit to auto-discover candidates",
+      force: "Ignore the per-model-per-day cache and re-run",
+      output_dir: "Report directory",
+    },
+  },
+  assess_model: {
+    desc: "Assess ONE model against EVERY LLM tool's per-tool requirements. FREE — no LLM call.",
+    params: {
+      model: "OpenRouter model id (REQUIRED)",
+    },
+  },
+  check_model_health: {
+    desc: "Self-check the active profile's configured models: presence, cost drift, requirements regression. FREE.",
+    params: {},
+  },
+  discover_new_models: {
+    desc: "Diff the live OpenRouter catalog vs a seeded snapshot; assess each new id against per-tool requirements. FREE.",
+    params: {
+      qualifying_only: "When true, report only arrivals meeting ≥1 tool's requirements (default: false)",
+    },
+  },
 };
 
 // ── Help output ──────────────────────────────────────────────────────
