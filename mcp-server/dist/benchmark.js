@@ -218570,6 +218570,23 @@ function resolveProfile(name, profile) {
     httpReferer: profile.http_referer ?? preset.defaultHttpReferer
   };
 }
+var FREE_POOL_SEED = Object.freeze([
+  "poolside/laguna-m.1:free",
+  "deepseek/deepseek-v4-flash:free",
+  "google/gemma-4-26b-a4b-it:free",
+  "google/gemma-4-31b-it:free",
+  "arcee-ai/trinity-large-thinking:free",
+  "nvidia/nemotron-3-super-120b-a12b:free",
+  "nvidia/nemotron-3-nano-30b-a3b:free",
+  "minimax/minimax-m2.5:free",
+  "qwen/qwen3-next-80b-a3b-instruct:free",
+  "openai/gpt-oss-120b:free",
+  "openai/gpt-oss-20b:free",
+  "qwen/qwen3-coder:free",
+  "z-ai/glm-4.5-air:free",
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "nousresearch/hermes-3-llama-3.1-405b:free"
+]);
 var _activeFreeOnly = false;
 function setActiveFreeOnly(freeOnly) {
   _activeFreeOnly = freeOnly;
@@ -218870,27 +218887,38 @@ async function runBenchmarkOnModelInner(model, keywords, fixtures, options) {
   };
   if (options.httpReferer) headers["HTTP-Referer"] = options.httpReferer;
   if (options.xTitle) headers["X-Title"] = options.xTitle;
+  const MAX_429_RETRIES = 3;
   let resp;
   let rawText;
-  try {
-    resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers,
-      body: JSON.stringify(requestBody),
-      signal: controller.signal
-    });
-    rawText = await resp.text();
-  } catch (err) {
-    clearTimeout(timer);
-    return {
-      modelId: model.id,
-      ok: false,
-      error: `network error: ${err instanceof Error ? err.message : String(err)}`,
-      latencyMs: performance.now() - t0
-    };
-  } finally {
-    clearTimeout(timer);
+  let attempt = 0;
+  while (true) {
+    try {
+      resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(requestBody),
+        signal: controller.signal
+      });
+      rawText = await resp.text();
+    } catch (err) {
+      clearTimeout(timer);
+      return {
+        modelId: model.id,
+        ok: false,
+        error: `network error: ${err instanceof Error ? err.message : String(err)}`,
+        latencyMs: performance.now() - t0
+      };
+    }
+    if (resp.status !== 429 || attempt >= MAX_429_RETRIES) break;
+    const retryAfter = Number(resp.headers.get("retry-after") ?? "0");
+    const backoffMs = Math.min(
+      Math.max(retryAfter * 1e3, 5e3 * 2 ** attempt),
+      6e4
+    );
+    await new Promise((r) => setTimeout(r, backoffMs));
+    attempt++;
   }
+  clearTimeout(timer);
   const latencyMs = performance.now() - t0;
   if (!resp.ok) {
     return {

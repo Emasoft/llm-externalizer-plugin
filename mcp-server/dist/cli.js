@@ -7635,7 +7635,7 @@ function assertFreeOnlyModel(freeOnly, backendType, model) {
     );
   }
 }
-var import_yaml, API_PRESETS, USER_CONFIG_ENV_MAP, _activeFreeOnly, SETTINGS_TEMPLATE;
+var import_yaml, API_PRESETS, USER_CONFIG_ENV_MAP, FREE_POOL_SEED, _activeFreeOnly, SETTINGS_TEMPLATE;
 var init_config = __esm({
   "src/config.ts"() {
     "use strict";
@@ -7709,6 +7709,23 @@ var init_config = __esm({
     USER_CONFIG_ENV_MAP = {
       OPENROUTER_API_KEY: "CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY"
     };
+    FREE_POOL_SEED = Object.freeze([
+      "poolside/laguna-m.1:free",
+      "deepseek/deepseek-v4-flash:free",
+      "google/gemma-4-26b-a4b-it:free",
+      "google/gemma-4-31b-it:free",
+      "arcee-ai/trinity-large-thinking:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "nvidia/nemotron-3-nano-30b-a3b:free",
+      "minimax/minimax-m2.5:free",
+      "qwen/qwen3-next-80b-a3b-instruct:free",
+      "openai/gpt-oss-120b:free",
+      "openai/gpt-oss-20b:free",
+      "qwen/qwen3-coder:free",
+      "z-ai/glm-4.5-air:free",
+      "meta-llama/llama-3.3-70b-instruct:free",
+      "nousresearch/hermes-3-llama-3.1-405b:free"
+    ]);
     _activeFreeOnly = false;
     SETTINGS_TEMPLATE = `# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 # LLM Externalizer \u2014 Settings
@@ -7770,18 +7787,35 @@ profiles:
   # floor form the ensemble; the rest are the rate-limit fallback pool.
   # EVERY free_models entry MUST end with ':free' \u2014 the validator rejects
   # the profile otherwise, so this profile can NEVER bill.
+  #
+  # The 15-model seed list below matches FREE_POOL_SEED in config.ts and
+  # is the canonical default. The auto-benchmark trigger (TRDD-2a9e1f47)
+  # scores this pool when the profile is first activated (free_only=true
+  # + empty :free cache) and writes results to:
+  #   ~/.llm-externalizer/benchmark-results.json (keyword task)
+  #   ~/.llm-externalizer/security-triage-results.json (security_scan)
+  # Run it manually with: /llm-externalizer:llm-externalizer-bench-free-pool
   remote-free-ensemble:
     mode: remote-ensemble
     api: openrouter-remote
     free_only: true
     api_key: $OPENROUTER_API_KEY            # free models still need the key (rate-limited, but $0)
     free_models:
+      - "poolside/laguna-m.1:free"
       - "deepseek/deepseek-v4-flash:free"
+      - "google/gemma-4-26b-a4b-it:free"
+      - "google/gemma-4-31b-it:free"
+      - "arcee-ai/trinity-large-thinking:free"
+      - "nvidia/nemotron-3-super-120b-a12b:free"
+      - "nvidia/nemotron-3-nano-30b-a3b:free"
+      - "minimax/minimax-m2.5:free"
       - "qwen/qwen3-next-80b-a3b-instruct:free"
       - "openai/gpt-oss-120b:free"
+      - "openai/gpt-oss-20b:free"
+      - "qwen/qwen3-coder:free"
       - "z-ai/glm-4.5-air:free"
       - "meta-llama/llama-3.3-70b-instruct:free"
-      - "nvidia/nemotron-3-super-120b-a12b:free"
+      - "nousresearch/hermes-3-llama-3.1-405b:free"
 
 # \u2500\u2500 API Presets Reference \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 # Use with --api when creating profiles:

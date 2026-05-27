@@ -196,27 +196,48 @@ async function runBenchmarkOnModelInner(
   if (options.httpReferer) headers["HTTP-Referer"] = options.httpReferer;
   if (options.xTitle) headers["X-Title"] = options.xTitle;
 
+  // Free-tier 429 retry (TRDD-2a9e1f47). The benchmark used to record a 429 as
+  // ERR on first try, which made auto-benchmarking the free pool useless — the
+  // free tier rate-limits per-model-per-account and one prior call can bump the
+  // next 60s. Retry on 429 with exponential backoff capped at MAX_429_RETRIES.
+  // The chokepoint guard above still applies, so this only burns wall-clock,
+  // never $. Non-429 HTTP errors (4xx/5xx) skip the retry and return ERR.
+  const MAX_429_RETRIES = 3;
   let resp: Response;
   let rawText: string;
-  try {
-    resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers,
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    });
-    rawText = await resp.text();
-  } catch (err) {
-    clearTimeout(timer);
-    return {
-      modelId: model.id,
-      ok: false,
-      error: `network error: ${err instanceof Error ? err.message : String(err)}`,
-      latencyMs: performance.now() - t0,
-    };
-  } finally {
-    clearTimeout(timer);
+  let attempt = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      });
+      rawText = await resp.text();
+    } catch (err) {
+      clearTimeout(timer);
+      return {
+        modelId: model.id,
+        ok: false,
+        error: `network error: ${err instanceof Error ? err.message : String(err)}`,
+        latencyMs: performance.now() - t0,
+      };
+    }
+    if (resp.status !== 429 || attempt >= MAX_429_RETRIES) break;
+    const retryAfter = Number(resp.headers.get("retry-after") ?? "0");
+    // Cap backoff at 60s: free-tier 429s are usually 30-60s buckets, and a
+    // long benchmark sweep amortizes the cost across 15 models — we'd rather
+    // wait once than fail-fast and have to manually re-run.
+    const backoffMs = Math.min(
+      Math.max(retryAfter * 1000, 5_000 * 2 ** attempt),
+      60_000,
+    );
+    await new Promise((r) => setTimeout(r, backoffMs));
+    attempt++;
   }
+  clearTimeout(timer);
 
   const latencyMs = performance.now() - t0;
 
