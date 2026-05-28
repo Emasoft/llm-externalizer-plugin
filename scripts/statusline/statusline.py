@@ -518,8 +518,10 @@ def main() -> None:
 
     # ── Extract data (spec: code.claude.com/docs/en/statusline.md) ──
     model_name = safe_jq(data, "model", "display_name", default="Claude")
-    # Compact display: "Opus 4.7 (1M context)" → "Opus 4.7 (1M)"
+    # Compact display: "Opus 4.8 (1M context)" → "Opus 4.8 (1M)"
     # Same for "(200K context)" → "(200K)". Saves ~8 chars in the header.
+    # Version-agnostic: the regex strips " context)" from any display_name,
+    # so new flagship names (Opus 4.8, 4.9, …) compact automatically.
     model_name = re.sub(r"\s+context\)", ")", str(model_name))
     size = safe_jq(data, "context_window", "context_window_size", default=200000)
     if not size:

@@ -31,8 +31,8 @@ register.
 
 | Section | Source | Notes |
 |---|---|---|
-| 🤖 model | `model.display_name` | "Opus 4.7 (1M context)" → "Opus 4.7 (1M)" |
-| `v2.1.138` | `claude --version` | cached 1h on disk |
+| 🤖 model | `model.display_name` | "Opus 4.8 (1M context)" → "Opus 4.8 (1M)" |
+| `v2.1.154` | `claude --version` | cached 1h on disk |
 | `·max` | `effort.level` | only when model supports the param |
 | 🧠 | `thinking.enabled` | only when extended thinking on |
 | 📁 dir | `workspace.current_dir` (preferred) → `cwd` | basename only |
