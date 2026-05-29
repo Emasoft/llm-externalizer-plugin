@@ -1,9 +1,9 @@
 ---
 trdd-id: 542bdbef-bd20-4775-8708-c4feafbbf7be
 title: Auto-engage free mode when OpenRouter balance drops below $1 — fix agents-refuse bug
-status: in-progress
+status: completed
 created: 2026-05-29T10:19:19+0200
-updated: 2026-05-29T11:12:00+0200
+updated: 2026-05-29T11:14:00+0200
 ---
 
 # TRDD-542bdbef-bd20-4775-8708-c4feafbbf7be — Auto-engage free mode when OpenRouter balance drops below $1
