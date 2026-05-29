@@ -51110,12 +51110,12 @@ async function chatCompletionSimple(messages, options = {}) {
           );
           recordReasoningRejection(conn.model || "", reasoning);
           lastError = new Error(
-            `API error ${res.status} (${backend.type}): ${text}`
+            `API error ${res.status} (${backend.type}): ${sanitizeProviderError(text)}`
           );
           continue;
         }
         throw new Error(
-          `API error ${res.status} (${backend.type}): ${text}`
+          `API error ${res.status} (${backend.type}): ${sanitizeProviderError(text)}`
         );
       }
       const data = await safeReadJson(res);
@@ -51240,12 +51240,12 @@ async function chatCompletionJSON(messages, options = {}) {
           );
           recordReasoningRejection(conn.model || "", reasoning);
           lastLadderError = new Error(
-            `API error ${res.status} (${backend.type}): ${text}`
+            `API error ${res.status} (${backend.type}): ${sanitizeProviderError(text)}`
           );
           continue;
         }
         throw new Error(
-          `API error ${res.status} (${backend.type}): ${text}`
+          `API error ${res.status} (${backend.type}): ${sanitizeProviderError(text)}`
         );
       }
       const data = await safeReadJson(res);
@@ -51381,6 +51381,29 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
     );
   }
   return filepath;
+}
+function sanitizeProviderError(raw, maxLen = 200) {
+  const stripTokens = (s) => s.replace(/"?user_?id"?\s*[:=]\s*"?[\w.-]+"?/gi, "").replace(/\bsk-[A-Za-z0-9_-]{8,}/g, "sk-***").replace(/\s+/g, " ").trim();
+  if (!raw || !raw.trim()) return "(no response body)";
+  let reason;
+  try {
+    const parsed = JSON.parse(raw);
+    const errObj = parsed.error ?? parsed;
+    const msg = typeof errObj?.message === "string" ? errObj.message.trim() : "";
+    const meta3 = parsed.error?.metadata;
+    const detail = typeof meta3?.raw === "string" ? meta3.raw.trim() : "";
+    const provider = typeof meta3?.provider_name === "string" ? meta3.provider_name.trim() : "";
+    reason = msg;
+    if (provider) reason = reason ? `${reason} [${provider}]` : provider;
+    if (detail && !detail.startsWith(msg)) {
+      reason = reason ? `${reason}: ${detail}` : detail;
+    }
+  } catch {
+    reason = raw;
+  }
+  reason = stripTokens(reason || raw);
+  if (reason.length > maxLen) reason = reason.slice(0, maxLen - 1) + "\u2026";
+  return reason || "(unparseable error body)";
 }
 function classifyError(error48) {
   const msg = error48 instanceof Error ? error48.message : String(error48);
@@ -56198,6 +56221,7 @@ export {
   resolveAutoFreePool,
   resolveFreeModelId,
   resolveSubsystemFreeModel,
+  sanitizeProviderError,
   selectFreeEnsembleModels
 };
 //# sourceMappingURL=index.js.map

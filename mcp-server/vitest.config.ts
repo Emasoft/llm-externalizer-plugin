@@ -35,6 +35,8 @@ export default defineConfig({
       'src/free-pool-auto-bench.test.ts',
       // Auto-free on low balance (<$1) — threshold/model/pool helpers (TRDD-542bdbef).
       'src/auto-free.test.ts',
+      // Provider-error sanitizer — strips user_id + JSON noise from logs/reports (TRDD-54f508a4).
+      'src/provider-error-sanitize.test.ts',
       'src/mass_scouting/fieldset.test.ts',
       'src/mass_scouting/shorthand.test.ts',
       'src/mass_scouting/registry.test.ts',
