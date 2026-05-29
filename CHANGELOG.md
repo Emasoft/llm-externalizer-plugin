@@ -1,86 +1,454 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
-
-## [Unreleased]
+## [9.15.0] - 2026-05-29
 
 ### Added
 
-- Feat(free): auto-engage free mode when the OpenRouter balance drops below $1 (TRDD-542bdbef)
+- Feat(free): Phase 2 — auto-free covers security_scan + mass_scout via global chokepoint (TRDD-542bdbef)
 
-  Fixes the "agents refuse to use llm-externalizer even though free mode is
-  available" bug. On a paid profile with a near-empty wallet, every call hit
-  the paid ensemble → OpenRouter 403 "Budget limit exceeded" → the tool errored
-  → agents gave up. Three root causes: the auto-fallback fired only below $0.05
-  (balance was $0.10), the fallback model was a dead one
-  (`nvidia/nemotron-3-super-120b-a12b:free`, returns empty content), and it was
-  a single fragile model with no rotation.
+Phase 1 fixed the main-dispatch tools. Phase 2 extends auto-free to the
+subsystem path (security_scan, mass_scout) that short-circuits before
+resolveModelOverride and resolves its model purely from args.model.
 
-  Now: when the balance is below **$1.00** (configurable via
-  `LLM_EXT_FREE_BELOW_USD`) or a 402 fires, the server auto-engages free mode
-  for the whole session. The main-dispatch ensemble (chat / code_task /
-  scan_folder / compare_files / check_* / search_existing_implementations /
-  cluster) routes through the rotating free pool (the profile's `free_models`
-  if pinned, else the bundled `FREE_POOL_SEED`), and the subsystem path
-  (`security_scan`, `mass_scout`) is covered too via the global free_only
-  chokepoint plus a `:free`-model substitution — so every tool succeeds at $0
-  instead of 403'ing. Verified live on a dead wallet ($0.10): a `code_task`
-  call auto-engaged, rotated past a 429'd free model, and returned a correct
-  report from `poolside/laguna-m.1:free + gemma-4-26b:free`, $0 spent.
+- engageAutoFree now flips the global setActiveFreeOnly(true) — the airtight
+  TRDD-97ef8b63 chokepoint — so the spend sites in judge.ts / scout.ts that
+  read getActiveFreeOnly() also enforce ':free'.
+- The balance decision is extracted to a shared ensureAutoFreeDecided(),
+  called by both the main dispatch (resolveModelOverride) and the
+  security_scan / mass_scout short-circuit, so every entry point agrees on
+  when free mode engages (idempotent, 60s balance cache).
+- The short-circuit substitutes a ':free' model into args.model under free
+  mode (resolveSubsystemFreeModel — pure, exported, 6 new unit tests) so the
+  chokepoint assertion is SATISFIED, not thrown. Picks the active pool's first
+  model (profile free_models if pinned, else autoFreePool / FREE_POOL_SEED).
+- Latent bug also fixed: security_scan defaults to qwen/qwen-2.5-7b-instruct
+  (PAID) and asserts ':free' — so under an EXPLICIT free_only profile it would
+  throw too unless the caller passed a free model. It now self-selects a free
+  model under any free mode (profile free_only OR auto-free).
+- Reload-preserve: reloadSettingsFromDisk now keeps a live auto-free
+  engagement across a settings edit ((freeOnly || autoFreeEngaged)) — an empty
+  wallet stays free mid-session; cleared only on restart.
 
-  Also: the single-model fallback (`free: true` flag + 402 single-retry) is now
-  `LLM_EXT_FREE_MODEL_ID`, default `poolside/laguna-m.1:free` (the most-available
-  validated free model + top security-triage score), replacing the dead nvidia
-  default. A non-`:free` override is rejected (cost-safety). Fixes a latent bug
-  where `security_scan` defaulted to a paid model and would throw under an
-  explicit `free_only` profile too.
+Verification: build + lint clean; full suite 970/974 (4 live-skips; +6 Phase 2
+tests). free-only.test.ts already proves assertFreeOnlyModel(true, openrouter,
+'<x>:free') does not throw, and resolveSubsystemFreeModel always returns a
+':free' id under free mode — so inject-':free' → assert-passes by composition.
+Live security_scan smoke deferred: single-model subsystem (no rotation) +
+free-tier 429 contention from the just-finished benchmark would make it flaky;
+Phase 1's live smoke already proved the shared engagement path end-to-end.
 
-- Feat(free-pool): `--bench-free-pool` + auto-bench on `free_only` switch (TRDD-f1510055)
+TRDD-542bdbef Phase 1 + Phase 2 now both complete. Takes effect on MCP server
+restart.
 
-  Single-flag entry that scores every model in the active profile's
-  `free_models` (or the bundled `FREE_POOL_SEED` if unpinned) without
-  hand-typing N `--include` flags. The MCP server fires the same sweep
-  automatically when `free_only` flips ON and the benchmark cache holds
-  no `:free` entries, so users get an empirically-scored pool without
-  remembering to run a CLI command. Three-guard cost-safety chain keeps
-  it $0 by construction: CLI argument validator + runner `getActiveFreeOnly()`
-  chokepoint + OpenRouter's per-model `:free` billing. Opt-out via
-  `LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH=1`.
+- Feat(free): tune FREE_MODEL_ID default to poolside/laguna-m.1:free + verify live (TRDD-542bdbef)
 
-  Surfaces (per the standing three-surface rule):
-  - CLI: `node dist/benchmark.js --bench-free-pool`
-  - Slash command: `/llm-externalizer:llm-externalizer-bench-free-pool`
-  - Auto-trigger (MCP-equivalent fourth surface): fires on server boot +
-    settings reload. No MCP tool by design — a 10-30 min sweep is the
-    wrong shape for a tool call (would let any orchestrator agent burn
-    half an hour).
+Benchmark v4 (re-run, user ask #1) + cross-run analysis: poolside/laguna-m.1:free
+returned valid output in ALL 4 free-pool runs (the most reliably AVAILABLE
+free model) and holds the top security-triage PASS (0.966). z-ai/glm-4.5-air
+scores higher on the keyword task (100%/98.2%) but timed out on 429 contention
+in v4. For the single-model fallback paths (free:true flag + 402 single-retry)
+there is no rotation safety net, so availability wins → default switched
+z-ai → poolside. Both remain configurable via LLM_EXT_FREE_MODEL_ID; the
+ensemble paths still use the rotating free POOL regardless.
 
-  Runtime: 429 retry loop in `benchmark/runner.ts` (3 retries, exponential
-  backoff, 60s cap, honors `Retry-After`) so free-tier transient
-  throttling no longer marks a model permanently ERR.
+LIVE END-TO-END SMOKE (the definitive proof the agents-refuse bug is fixed):
+ran `node bin/llm-ext code_task` on the dead wallet ($0.10 remaining, paid
+profile remote-ensemble-geminigrok) with the freshly-built binary —
 
-  Empirical: first sweep across the 15 seed ids surfaced 2 PASSing free
-  models on the security-triage golden dataset — `z-ai/glm-4.5-air:free`
-  (0.906) and `poolside/laguna-m.1:free` (0.966, top scorer). Total
-  spend: $0.000000.
+  [llm-externalizer] Auto-free engaged (balance $0.1021 < $1.00) — main-dispatch
+    ensemble now routes through the free pool (15 models, rotation on rate-limit).
+  [llm-externalizer] Ensemble model unavailable: deepseek-v4-flash:free — 429.
+    Continuing with 2 model(s).
+  → exit 0, report written, Model: poolside/laguna-m.1:free + gemma-4-26b:free,
+    both correctly returned the answer. $0 spent. Paid ensemble + dead nvidia
+    model never touched.
 
-### Changed
+Before this fix the same call 403'd ("Budget limit exceeded") and the agent
+gave up. Now it succeeds at $0.
 
-- 15-model `FREE_POOL_SEED` constant + matching `remote-free-ensemble`
-  settings template (`mcp-server/src/config.ts`). Bumped from the prior
-  6-model placeholder.
+benchmark v4 free-model results recorded in reports/free-bench/keyword-v4.*
+(gitignored). 15 auto-free unit tests updated for the new default; build +
+lint clean. TRDD-542bdbef Phase 1 acceptance criteria all met.
+
+To go live in the running session: restart Claude Code (the MCP server still
+holds the pre-fix binary). Phase 2 (security_scan/mass_scout free-pool routing
++ global chokepoint) is a tracked follow-up.
+
+- Feat(free): auto-engage free mode when OpenRouter balance < $1 (TRDD-542bdbef)
+
+Fixes the live "agents refuse to use llm-externalizer even though free mode
+is available" bug. Diagnosis (balance $0.10, paid profile
+remote-ensemble-geminigrok, no free_only): three compounding root causes —
+
+  1. Threshold too low: the auto-fallback fired at < $0.05, but the balance
+     is $0.10, so paid ensemble calls were attempted and 403'd ("Budget
+     limit exceeded") → tool errored → agents bailed.
+  2. Dead fallback model: FREE_MODEL_ID = "nvidia/nemotron-3-super-120b-a12b:free"
+     — the exact model the free-pool benchmark (TRDD-f1510055) showed returns
+     EMPTY content. Even when the fallback fired it routed to a broken model.
+  3. Single model, no rotation: free models rate-limit constantly (~12/15
+     429 per run), so one hardcoded free model is inherently fragile.
+
+Phase 1 (main dispatch — chat / code_task / scan_folder / compare_files /
+check_* / search_existing_implementations / cluster, i.e. what agents call):
+
+- Threshold raised $0.05 → $1.00, configurable via LLM_EXT_FREE_BELOW_USD
+  (non-finite/≤0 → $1.00). Balance $0.10 < $1 now engages auto-free.
+- FREE_MODEL_ID is now resolveFreeModelId(): default z-ai/glm-4.5-air:free
+  (benchmark winner — 100% keyword F1, security-triage PASS 0.906),
+  configurable via LLM_EXT_FREE_MODEL_ID, non-':free' override rejected.
+  Used for the `free:true` flag + the 402 single-retry.
+- New autoFreeEngaged + autoFreePool process state + engageAutoFree(reason),
+  engaged from resolveModelOverride (low balance) and both 402 sites. While
+  engaged, getEnsembleModels routes the ensemble through the free pool
+  (profile free_models if pinned, else FREE_POOL_SEED) via the existing
+  selectFreeEnsembleModels + rate-limit rotation (TRDD-8b6b3646 Phase 3) —
+  so the fallback is a rotating pool, not one fragile model.
+- Cost-safety: getEnsembleModels asserts every model is ':free' under free
+  mode (fail-fast); env-parsing extracted to pure exported helpers
+  (parseFreeBelowUsd / resolveFreeModelId / resolveAutoFreePool) with 15 unit
+  tests in src/auto-free.test.ts.
+
+Phase 1 deliberately does NOT flip the global setActiveFreeOnly: security_scan
+(judge.ts) and mass_scout assert ':free' on a model they don't self-select,
+so flipping the global flag without routing their model selection to the pool
+would turn a 402 into a hard throw. Phase 2 (follow-up) covers those subsystems
+then engages the global chokepoint. Phase 1 is a strict improvement — nothing
+regresses; the common agent tools now succeed at $0 instead of 403'ing.
+
+Verification: npm run build clean, npm run lint clean, full suite 964/968
+(4 skips are live API-key-gated tests; +15 new). Live end-to-end smoke
+deferred until the in-flight free-pool benchmark finishes (free-tier
+contention). NOTE: takes effect on MCP server restart — the running server
+still has the pre-fix binary.
+
+TRDD-542bdbef documents the full diagnosis + the two-phase design.
+
+- Feat(free-pool): --bench-free-pool + auto-bench on free_only switch (TRDD-f1510055)
+
+User-visible
+- New slash command /llm-externalizer:llm-externalizer-bench-free-pool
+- New CLI flag node dist/benchmark.js --bench-free-pool
+- Auto-bench fires on MCP server boot (or settings reload) when
+  free_only is ON and the benchmark cache has no :free entries.
+  The detached child logs to ~/.llm-externalizer/free-pool-bench.log
+  and records its PID in ~/.llm-externalizer/free-pool-bench.lock.
+
+Surfaces (TRDD-a24b213c compliance: CLI + slash command + auto-trigger;
+no MCP tool by design — a 10-30 min benchmark from a tool call would
+violate the MCP server's read-only character)
+- CLI: --bench-free-pool resolves the candidate set from the active
+  profile's free_models (or FREE_POOL_SEED if unpinned), refuses any
+  non-:free id, feeds the pool into --include (keyword) or --model
+  (security-triage). Composes with --security-triage.
+- Slash command: thin wrapper, identical pattern to existing
+  /llm-externalizer-benchmark. Documents --dry-run skip-auth path
+  and the composition rule.
+
+Cost-safety chain (belt + suspenders + belt)
+- --bench-free-pool argument validator throws on any non-:free id at
+  CLI parse time (before any fetch).
+- Runner's getActiveFreeOnly() guard (TRDD-97ef8b63) rejects any
+  non-:free model at request build time.
+- OpenRouter's per-model billing: :free models are $0 regardless of
+  count or reasoning. Three independent guards must all fail for a
+  paid call to leak.
+- LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH=1 disables auto-spawn entirely.
+
+Module split
+- free-pool-auto-bench.ts: pure helper (modulo spawn()), 5 skip
+  conditions evaluated in order. Detached child with stdio piped to
+  the log file. Live-PID detection via process.kill(pid, 0).
+- index.ts: wired into the startup IIFE (line ~1357) and the
+  settings-reload path (line ~1849). Prior free_only state captured
+  before atomic swap so OFF→ON transitions are detectable.
+- benchmark/index.ts: --bench-free-pool parser branch + resolver in
+  main() between profile resolution and the keyword/security-triage
+  routing. Help text + slash command authored.
+
+Tests: 13 new unit tests in src/free-pool-auto-bench.test.ts covering
+every skip path, transition path, robustness against garbage
+cache/lock files. Full suite green (949/953, 4 skips are live tests
+gated on OPENROUTER_API_KEY). Doc-consistency confirms 19 base
+commands / 36 total / new name appears in README.
+
+Empirical findings from the in-flight first sweep (15 free models):
+- poolside/laguna-m.1:free returns valid output (~88-89% F1, below
+  the default 95% pass gate but enough to register in the cache).
+- ~12 models hit free-tier daily rate limits (429 after 3 retries) —
+  the retry loop helps with transient bursts, not full-day quota.
+  Recommendation in TRDD: split the sweep across multiple days /
+  accounts.
+- nvidia/nemotron-3-super-120b-a12b:free returns empty content;
+  nvidia/nemotron-3-nano-30b-a3b:free returns wrong schema. The
+  bench correctly records both as ERR rather than fake-pass.
+
+TRDD-f1510055 documents the full design, acceptance criteria, the
+in-flight sweep results, and the three-surfaces decision (why no
+MCP tool).
+
+- Feat(free-pool): 15-model seed list + 429 retry for the benchmark runner
+
+User-facing context: the free-only feature shipped in v9.14.0 (TRDD-8b6b3646 +
+TRDD-97ef8b63) wired the runtime plumbing (filter + chokepoint guard + rate-
+limit fallback rotation) but two gaps prevented "flip the switch and get a
+real free-pool ranking" from actually working:
+
+  1. The `remote-free-ensemble` profile template's `free_models:` list was a
+     6-model placeholder, not the user's curated free pool.
+  2. The benchmark runner failed every free-tier 429 on first try, so the
+     keyword + security-triage benchmarks couldn't actually score most
+     `:free` models — they'd just produce ERR rows.
+
+This commit fixes both:
+
+(1) Add `FREE_POOL_SEED` in config.ts — a `Object.freeze`d 15-id list curated
+    against OpenRouter's `:free` tier criteria (context >= 128K, max_output
+    >= 8K, structured_outputs or response_format, reasoning or
+    include_reasoning, non-zero uptime). Single source of truth: the same 15
+    ids are now copied verbatim into the SETTINGS_TEMPLATE's
+    `remote-free-ensemble.free_models` block.
+
+(2) Add 429 retry to `runBenchmarkOnModelInner` in benchmark/runner.ts. On
+    HTTP 429, the runner now waits `max(retry-after * 1000, 5000 * 2^attempt)`
+    capped at 60s and retries up to MAX_429_RETRIES=3. Non-429 HTTP errors
+    skip the retry and return ERR (the runner's never-throw contract is
+    preserved). The chokepoint guard above still rejects non-`:free` models
+    under `free_only`, so retry burns only wall-clock — never $.
+
+The 15-model seed:
+  poolside/laguna-m.1:free, deepseek/deepseek-v4-flash:free,
+  google/gemma-4-26b-a4b-it:free, google/gemma-4-31b-it:free,
+  arcee-ai/trinity-large-thinking:free, nvidia/nemotron-3-super-120b-a12b:free,
+  nvidia/nemotron-3-nano-30b-a3b:free, minimax/minimax-m2.5:free,
+  qwen/qwen3-next-80b-a3b-instruct:free, openai/gpt-oss-120b:free,
+  openai/gpt-oss-20b:free, qwen/qwen3-coder:free, z-ai/glm-4.5-air:free,
+  meta-llama/llama-3.3-70b-instruct:free, nousresearch/hermes-3-llama-3.1-405b:free
+
+Verification:
+  * `npm run build` clean
+  * `npm test` — 936/940 passed (4 skipped live-only suite)
+  * 429 retry: empirically verified — the no-retry run had 3 google/deepseek
+    models 429 on first try and was forever marked ERR; the retry-enabled
+    run is currently in flight and recovering them as expected.
+
+Next: a dedicated `--bench-free-pool` CLI mode + slash command that runs the
+keyword + security-triage benchmarks against the free pool in a single
+invocation and writes a unified report (TRDD-2a9e1f47 follow-up).
+
+No push — staying local per the /go-on-yourself "Do not push" rule.
+
+- Feat(3-surfaces): Phase 1 — close 9 of the 19 backlog gaps (TRDD-a24b213c)
+
+Ships the 9 mechanical slash commands flagged by the three-surface
+compliance audit (TRDD-a24b213c): every existing MCP tool now has the
+required `/llm-externalizer:*` slash entry-point. No new code paths,
+just frontmatter+body wrappers over already-shipped tool implementations.
+
+New slash commands (commands/llm-externalizer-*.md):
+
+  GAP-4 — 8 mass-scout wrappers
+    • mass-scout-jobs-list             → mass_scout_jobs_list
+    • mass-scout-audit-sample          → mass_scout_audit_sample
+    • mass-scout-body-get              → mass_scout_body_get
+    • mass-scout-build-fieldset        → mass_scout_build_fieldset
+    • mass-scout-propose-fieldset      → mass_scout_propose_fieldset
+    • mass-scout-diff                  → mass_scout_diff
+    • mass-scout-chain                 → mass_scout_chain
+    • mass-scout-list-bundled-fieldsets → mass_scout_list_bundled_fieldsets
+
+  GAP-7 — soft-restart entry-point
+    • reset                            → reset
+
+Each file follows the existing mass-scout pattern: frontmatter
+(`name`, `description`, `allowed-tools`, `argument-hint`, `effort`)
+plus a body that lists flags (snake_case schema → kebab-case slash),
+shows an example invocation, and documents the error modes. No
+behavior change — these are pure UX wrappers letting users invoke the
+tools by typing `/llm-externalizer:llm-externalizer-<name>` in Claude
+Code instead of authoring an MCP tool call by hand.
+
+README updates (top bullet + Plugin commands section):
+  • "26 plugin commands" → "35 plugin commands"
+  • "17 base" → "18 base" (added `reset`)
+  • "8 mass-scout" → "16 mass-scout" (added the 8 new wrappers)
+  • Section heading "Base commands (15)" → "Base commands (18)"
+    (the (15) was stale — table already had 17 rows; now 18 with reset)
+  • Section heading "Mass-scout commands (8)" → "Mass-scout commands (16)"
+  • Added one table row per new command (Purpose + Produces)
+  • Removed the "MCP-only mass-scout tools (8, no slash-command
+    wrappers)" paragraph — the statement is no longer true; bundled-
+    fieldsets note + CLI cross-link preserved in flowing prose
+
+TRDD-a24b213c bumped from `not-started` → `in-progress` with a
+detailed Phase 1 status-log entry. Remaining phases (Phase 2
+benchmark/ensemble MCP wrapper, Phase 3 by-design exemption docs,
+Phase 4 bin/llm-ext catalog policy, Phase 5 user-global rule fix)
+stay deferred per the TRDD's suggested execution order.
+
+Verification:
+  • `npm run build` clean
+  • `npx tsc --noEmit` clean
+  • `npm test` — 936 / 940 passed (4 skipped are the live-only suite
+    --exclude'd by default); the auto-discovering doc-consistency.test.ts
+    (A5 gate) picks up the new commands automatically and asserts the
+    new README counts + name presence
+  • `commands/*.md` count: 26 → 35 (verified)
+
+No push — staying local per the /go-on-yourself "Do not push. Wait
+for my approval first." rule.
+
 
 ### Documentation
 
-- README: bumped "35 plugin commands" → 36 (added `bench-free-pool`),
-  "18 base" → 19.
-- Three-Surface Gap Backlog (TRDD-a24b213c) phases 2/3/4 closed:
-  - GAP-2/3 benchmark + ensemble-autoselect: documented as by-design
-    no-MCP-tool with rationale in `commands/llm-externalizer-benchmark.md`.
-  - GAP-8..14 (7 commands): added explicit "Three-surface compliance:
-    by-design slash-only (GAP-N)" sections to each.
-  - `bin/llm-ext` TOOL_CATALOG expanded 11 → 37 entries so every
-    registered MCP tool is reachable via the agent-facing shim.
+- Docs(free): document auto-free env vars + tell agents not to refuse on low balance (TRDD-542bdbef)
+
+- docs/setup-and-configuration.md: add LLM_EXT_FREE_BELOW_USD, LLM_EXT_FREE_MODEL_ID,
+  LLM_EXT_REASONING_EFFORT, LLM_EXT_INSTALL_RULE, LLM_EXT_DUMP_REQUESTS to the canonical
+  'Relevant environment variables' table (it was missing all five; README already had them).
+- rules/use-llm-externalizer.md: add an 'Auto-free on low balance' paragraph so agents know
+  free mode auto-engages below $1 (or on a 402) and routes every tool through the free pool
+  at $0 — a near-empty wallet is never a reason to refuse the tool or do the work themselves.
+  Closes the doc/rule half of the 'agents refuse to use it' bug (TRDD-542bdbef).
+
+- Docs(trdd): mark TRDD-542bdbef completed (auto-free Phase 1 + Phase 2 shipped)
+
+- Docs(free): document auto-free-on-low-balance + LLM_EXT_FREE_BELOW_USD / LLM_EXT_FREE_MODEL_ID (TRDD-542bdbef)
+
+- README B2: new "Automatic free mode on low balance" subsection — every tool
+  (incl. security_scan / mass_scout) routes through the free pool when balance
+  < $1 or on a 402, no config needed; funded profile reactivates on restart.
+- README env-var table: LLM_EXT_FREE_BELOW_USD (default 1.00) +
+  LLM_EXT_FREE_MODEL_ID (default poolside/laguna-m.1:free, non-:free rejected).
+- CHANGELOG [Unreleased]: full feature entry with the diagnosis, the fix, and
+  the live verification.
+
+doc-consistency test green.
+
+- Docs(statusline): refresh model/version examples to Opus 4.8 / v2.1.154
+
+Claude Code v2.1.154 ships Opus 4.8 as the new flagship. The statusline
+is already fully compatible — model.display_name is read live and the
+" context)" → ")" compaction regex is version-agnostic — so only the
+illustrative examples were stale:
+
+- statusline.py: comment example "Opus 4.7" → "Opus 4.8"; added an
+  explicit note that the compaction is version-agnostic (4.8/4.9/… all
+  compact automatically) so future readers don't think the example is
+  load-bearing.
+- README.md: model-row example "Opus 4.7 (1M context)" → "Opus 4.8
+  (1M context)"; cached-version example v2.1.138 → v2.1.154.
+
+Verified end-to-end: piping an "Opus 4.8 (1M context)" fixture through
+statusline.py renders "🤖 Opus 4.8 (1M) ·max" correctly, and
+check-statusline.py still PASSes (636 bytes, exit 0).
+
+Audit scope: examined the full v2.1.123→2.1.154 changelog against the
+plugin. Every other platform change is N/A or already-current:
+- no hooks shipped (hooks.json is {}) → all hook-capability items N/A
+  (args exec form, continueOnBlock, MessageDisplay, reloadSkills,
+  sessionTitle, terminalSequence, $CLAUDE_EFFORT/effort.level)
+- plugin.json has no themes/monitors/statusLine top-level keys
+  → v2.1.129 "move under experimental" warning N/A
+- MCP server is named "llm-externalizer", not the now-reserved
+  "workspace" (v2.1.128) → N/A
+- no deprecated env vars shipped (CLAUDE_CODE_OPUS_4_6_FAST_MODE_OVERRIDE)
+- statusline already consumes the v2.1.132+ pre-calculated
+  context_window.total_input_tokens / used_percentage fields and reads
+  $COLUMNS + workspace.current_dir/git_worktree
+- uses the default skills/ dir (no skills: file-vs-dir validate issue),
+  no stray root SKILL.md
+
+- Docs(changelog): add [Unreleased] section for free-pool feature
+
+Captures everything since 9.14.0 in one block so the next publish
+picks it up cleanly:
+- --bench-free-pool CLI flag + matching slash command (TRDD-f1510055)
+- Auto-bench trigger on free_only OFF→ON transition (MCP-equivalent
+  fourth surface — no MCP tool, by design)
+- 15-model FREE_POOL_SEED + matching remote-free-ensemble template
+- 429 retry in benchmark/runner.ts (3 retries, exp backoff, 60s cap)
+- TRDD-a24b213c phases 2/3/4: GAP-8..14 exemptions + bin/llm-ext
+  catalog 11→37 + benchmark MCP-tool exemption rationale
+
+No version bump — publish.py owns that.
+
+- Docs(three-surfaces): close Phases 2/3/4 of TRDD-a24b213c
+
+Phase 2 (GAP-2/3 — benchmark + ensemble-autoselect)
+- Design decision closed by TRDD-f1510055: NO MCP tool.
+- Sweep takes 10-30 min; exposing as MCP would let any orchestrator
+  agent trigger a half-hour blocking operation.
+- Auto-trigger on free_only flip is the MCP-equivalent fourth
+  surface (covers "available without leaving MCP" without the
+  agent-trigger hazard).
+- Exemption rationale documented in
+  commands/llm-externalizer-benchmark.md §"Three-surface compliance".
+
+Phase 3 (GAP-8..14 — by-design slash-only exemptions, 7 commands)
+- codex-scan (GAP-8): wraps external `codex` CLI; no in-process
+  capability to wrap.
+- fix-report (GAP-9), fix-found-bugs (GAP-10): apply fixes via
+  subagents; MCP file-write tools intentionally disabled
+  (read-only-by-design).
+- scan-and-fix (GAP-11), scan-and-fix-serially (GAP-12):
+  multi-agent orchestration, not a single callable unit.
+- setup (GAP-13): stateful + conversational interactive wizard.
+- install-statusline (GAP-14): one-shot ~/.claude/settings.json
+  installer (a CLI verb COULD be added but the slash-only path is
+  trivial).
+- Each command now carries an explicit
+  "## Three-surface compliance: by-design slash-only (GAP-N)"
+  section per the audit's standing invariant.
+
+Phase 4 (bin/llm-ext catalog policy — expand)
+- bin/llm-ext TOOL_CATALOG: 11 → 37 entries (+26).
+- Added: search_existing_implementations, cluster_synonyms,
+  or_model_info{,_table,_json}, 16 mass_scout_* family,
+  security_scan, security_triage_benchmark, assess_model,
+  check_model_health, discover_new_models.
+- Parameter descriptions extracted from each tool's Zod schema
+  in mcp-server/src/index.ts and src/mass_scouting/mcp-tools.ts.
+- `node bin/llm-ext --help` now lists 37 tools; per-tool help
+  works for every new entry (verified mass_scout_register).
+
+Phase 5 (user-global rule file fix) — DEFERRED (requires explicit
+user confirmation per the TRDD).
+
+Verification
+- npm run build: clean.
+- npm test: 949/953 pass (4 skips are live tests gated on
+  OPENROUTER_API_KEY). No regressions.
+- TRDD-a24b213c status log updated with Phase 2/3/4 entries.
+- Spark-agent reports under reports/three-surface-phase{3,4}/.
+
+
+### Miscellaneous
+
+- Chore(lint): drop unused eslint-disable in benchmark/runner.ts 429-retry loop
+
+Modern eslint.config.mjs already permits `while (true)` so the
+no-constant-condition disable directive is dead. `npm run lint` was
+failing on the unused-directive warning (--max-warnings 0).
+
+Build artifacts re-emitted to stay in sync.
+
+- Chore(deps): bump better-sqlite3 12.9.0 → 12.10.0
+
+Incidental dev-env fix surfaced while running the test suite on Node
+v26 — the prebuilt native binary for 12.9.0 was compiled against
+NODE_MODULE_VERSION 141 and could not load on Node v26 (147), failing
+161 tests in mass_scouting/* with NODE_MODULE_VERSION mismatch.
+
+12.10.0 ships the matching prebuild + builds cleanly from source via
+node-gyp on Node v26 (verified locally — 936/940 tests green after the
+bump; the 4 skipped are the live-only suite that's `--exclude`d by
+default).
+
+Patch-version bump within the existing `^12.9.0` semver range; no
+behavior change.
+
 
 ## [9.14.0] - 2026-05-25
 
