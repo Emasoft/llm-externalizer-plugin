@@ -359,6 +359,25 @@ security_triage_benchmark   models: ["deepseek/deepseek-v4-flash:free", "openai/
 Models never benchmarked stay in (unverified, not excluded); only a *recorded
 failure* drops a model.
 
+**Automatic free mode on low balance (no config needed).** Even on a *paid*
+profile, when the OpenRouter balance drops below **$1.00** (or a `402` fires
+mid-call), the server auto-engages free mode for the rest of the session: every
+tool — `chat`, `code_task`, `scan_folder`, `check_*`, `compare_files`,
+`cluster_synonyms`, `search_existing_implementations`, **and** `security_scan` /
+`mass_scout` — routes through the bundled free pool (the same
+requirements-filtered, rate-limit-rotating ensemble), so calls succeed at `$0`
+instead of failing with "Budget limit exceeded" (which made agents abandon the
+tool). The funded profile's models reactivate on the next server restart once
+the wallet is topped up. Tune via:
+
+| Env var | Effect |
+|---|---|
+| `LLM_EXT_FREE_BELOW_USD` | Balance threshold (USD) that triggers auto-free. Default `1.00`; non-finite/≤0 → `1.00`. |
+| `LLM_EXT_FREE_MODEL_ID` | The single free model for the `free: true` flag + the 402 single-retry (the ensemble paths use the rotating pool). Default `poolside/laguna-m.1:free` (most-available + best security-triage of the validated pool). A non-`:free` value is rejected. |
+
+An explicit `free_only` profile is still the way to *force* free regardless of
+balance; auto-free is the safety net for the low-balance case.
+
 > [!WARNING]
 > Free providers log your prompts. Use only on open-source code.
 </details>
@@ -883,6 +902,8 @@ gates never bump a tool to a *pricier* model than its incumbent.
 | `LLM_EXT_CONFIG_DIR` | Settings + history-log directory (default `~/.llm-externalizer`) |
 | `LLM_OUTPUT_DIR` | Default report directory (overrides the per-call `output_dir` default) |
 | `LLM_EXT_INSTALL_RULE` | Set to `0` to opt out of auto-installing `rules/use-llm-externalizer.md` into `~/.claude/rules/` |
+| `LLM_EXT_FREE_BELOW_USD` | OpenRouter balance (USD) below which the server auto-engages free mode for every tool (default `1.00`; non-finite/≤0 → `1.00`). See "B2. OpenRouter free-only ensemble". |
+| `LLM_EXT_FREE_MODEL_ID` | Single `:free` model for the `free: true` flag + the 402 single-retry (default `poolside/laguna-m.1:free`). A non-`:free` value is rejected. The ensemble paths use the rotating free pool. |
 | `LLM_EXT_REASONING_EFFORT` | Reasoning effort sent to OpenRouter reasoning models: `xhigh`\|`high`\|`medium`\|`low`\|`off` (default `high`). **Reasoning tokens are billed even though the trace is discarded** — `xhigh` can be ~10× the per-call cost of no reasoning, so the default is `high`. `off` disables reasoning on every call. `mass_scout` and `cluster_synonyms` never reason regardless of this setting. |
 | `LLM_EXT_DUMP_REQUESTS` | Cost-audit hook. Set to a file path to append the **exact wire payload** (model + byte size + full JSON body) of every chat/code_task/ensemble request to that file, so you can verify there is no unexpected prompt/file inflation. Off unless set. The dumped body contains your prompt + file content — treat the file as sensitive. |
 

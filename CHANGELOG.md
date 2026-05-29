@@ -6,6 +6,35 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Feat(free): auto-engage free mode when the OpenRouter balance drops below $1 (TRDD-542bdbef)
+
+  Fixes the "agents refuse to use llm-externalizer even though free mode is
+  available" bug. On a paid profile with a near-empty wallet, every call hit
+  the paid ensemble → OpenRouter 403 "Budget limit exceeded" → the tool errored
+  → agents gave up. Three root causes: the auto-fallback fired only below $0.05
+  (balance was $0.10), the fallback model was a dead one
+  (`nvidia/nemotron-3-super-120b-a12b:free`, returns empty content), and it was
+  a single fragile model with no rotation.
+
+  Now: when the balance is below **$1.00** (configurable via
+  `LLM_EXT_FREE_BELOW_USD`) or a 402 fires, the server auto-engages free mode
+  for the whole session. The main-dispatch ensemble (chat / code_task /
+  scan_folder / compare_files / check_* / search_existing_implementations /
+  cluster) routes through the rotating free pool (the profile's `free_models`
+  if pinned, else the bundled `FREE_POOL_SEED`), and the subsystem path
+  (`security_scan`, `mass_scout`) is covered too via the global free_only
+  chokepoint plus a `:free`-model substitution — so every tool succeeds at $0
+  instead of 403'ing. Verified live on a dead wallet ($0.10): a `code_task`
+  call auto-engaged, rotated past a 429'd free model, and returned a correct
+  report from `poolside/laguna-m.1:free + gemma-4-26b:free`, $0 spent.
+
+  Also: the single-model fallback (`free: true` flag + 402 single-retry) is now
+  `LLM_EXT_FREE_MODEL_ID`, default `poolside/laguna-m.1:free` (the most-available
+  validated free model + top security-triage score), replacing the dead nvidia
+  default. A non-`:free` override is rejected (cost-safety). Fixes a latent bug
+  where `security_scan` defaulted to a paid model and would throw under an
+  explicit `free_only` profile too.
+
 - Feat(free-pool): `--bench-free-pool` + auto-bench on `free_only` switch (TRDD-f1510055)
 
   Single-flag entry that scores every model in the active profile's
