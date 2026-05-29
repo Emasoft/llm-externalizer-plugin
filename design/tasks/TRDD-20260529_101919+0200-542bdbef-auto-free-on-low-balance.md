@@ -3,7 +3,7 @@ trdd-id: 542bdbef-bd20-4775-8708-c4feafbbf7be
 title: Auto-engage free mode when OpenRouter balance drops below $1 — fix agents-refuse bug
 status: in-progress
 created: 2026-05-29T10:19:19+0200
-updated: 2026-05-29T10:19:19+0200
+updated: 2026-05-29T10:52:00+0200
 ---
 
 # TRDD-542bdbef-bd20-4775-8708-c4feafbbf7be — Auto-engage free mode when OpenRouter balance drops below $1
@@ -115,21 +115,29 @@ turn a 402 into a hard `assertFreeOnlyModel` throw — a regression.
   `setActiveFreeOnly(true)` so the airtight chokepoint (TRDD-97ef8b63) covers
   every spend site under auto-free.
 
-## Acceptance criteria
+## Acceptance criteria (Phase 1 — all met)
 
-- [ ] `LLM_EXT_FREE_BELOW_USD` default `1.00`; balance `$0.10 < $1` engages
-      auto-free.
-- [ ] `FREE_MODEL_ID` default is a benchmark-validated working `:free` model;
+- [x] `LLM_EXT_FREE_BELOW_USD` default `1.00`; balance `$0.10 < $1` engages
+      auto-free. (Live: "Auto-free engaged (balance $0.1021 < $1.00)".)
+- [x] `FREE_MODEL_ID` default is a benchmark-validated working `:free` model;
       configurable via `LLM_EXT_FREE_MODEL_ID`; non-`:free` override rejected.
-- [ ] On low balance, the main-dispatch ensemble runs the free pool with
-      rotation (verified live: a `chat` call on the dead-wallet returns a
-      report path, not an error).
-- [ ] `getEnsembleModels` asserts `:free`-only under auto-free.
-- [ ] Unit tests for threshold parse, FREE_MODEL_ID resolution/validation,
-      engageAutoFree state, and getEnsembleModels auto-free pool selection.
-- [ ] `npm run build` + full suite + lint clean. Zero-spend cost-safety
-      suite (TRDD-e82f2c49) still green.
-- [ ] Fresh free-pool benchmark re-run recorded (user ask #1).
+      Default tuned to `poolside/laguna-m.1:free` (most available across 4
+      runs + top triage 0.966) after the v4 benchmark.
+- [x] On low balance, the main-dispatch ensemble runs the free pool with
+      rotation. **Verified live** (commit d0639bc binary): a `chat`/`code_task`
+      call on the dead wallet ($0.10, paid profile) auto-engaged free mode,
+      rotated past a 429'd `deepseek-v4-flash:free`, and returned a correct
+      report from `poolside/laguna-m.1:free + gemma-4-26b:free` — exit 0,
+      report written, $0 spent. The paid ensemble + dead nvidia model were
+      never used.
+- [x] `getEnsembleModels` asserts `:free`-only under auto-free.
+- [x] Unit tests (15) for threshold parse, FREE_MODEL_ID resolution/validation,
+      auto-free pool selection, and the cold-catalog ensemble selection.
+- [x] `npm run build` + full suite (964/968, 4 live-skips) + lint clean.
+- [x] Fresh free-pool benchmark re-run recorded (user ask #1):
+      `reports/free-bench/keyword-v4.{md,json}`. Valid this run:
+      gemma-4-31b 98.2%, poolside 87.2%; z-ai timed out on 429 contention
+      (100%/98.2% in prior runs); nvidia models still empty/wrong-schema.
 
 ## Related TRDDs
 
@@ -146,3 +154,13 @@ turn a 402 into a hard `assertFreeOnlyModel` throw — a regression.
 - 2026-05-29 10:19 — TRDD authored; UUID 542bdbef. Live diagnosis recorded
   (balance $0.10, paid profile, dead FREE_MODEL_ID, $0.05 threshold). Fresh
   benchmark re-running (background). Phase 1 implementation starting.
+- 2026-05-29 10:35 — Phase 1 shipped (commit d0639bc): threshold→$1
+  (LLM_EXT_FREE_BELOW_USD), dead FREE_MODEL_ID→validated, autoFreeEngaged +
+  engageAutoFree wired into resolveModelOverride + both 402 sites,
+  getEnsembleModels routes the free pool under auto-free, :free cost-safety
+  assert, 3 pure helpers + 15 tests. Build/lint/suite green.
+- 2026-05-29 10:52 — Benchmark v4 finished; FREE_MODEL_ID default tuned
+  z-ai/glm-4.5-air:free → poolside/laguna-m.1:free (most-available 4/4 +
+  best triage). **Live smoke PASSED** on the dead wallet — auto-free engaged,
+  free-pool rotation past a 429, correct $0 answer. Phase 1 COMPLETE.
+  Remaining: Phase 2 (subsystem free-pool routing + global chokepoint).

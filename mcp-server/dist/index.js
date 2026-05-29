@@ -50592,7 +50592,7 @@ function resolveFreeModelId(raw) {
   if (typeof raw === "string" && raw.trim().endsWith(":free")) {
     return raw.trim();
   }
-  return "z-ai/glm-4.5-air:free";
+  return "poolside/laguna-m.1:free";
 }
 function resolveAutoFreePool(profileFreeModels) {
   return profileFreeModels.length > 0 ? [...profileFreeModels] : [...FREE_POOL_SEED];

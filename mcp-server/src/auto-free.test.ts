@@ -40,8 +40,10 @@ describe("parseFreeBelowUsd — low-balance threshold (TRDD-542bdbef)", () => {
 });
 
 describe("resolveFreeModelId — single working free model (TRDD-542bdbef)", () => {
-  it("defaults to the benchmark winner z-ai/glm-4.5-air:free", () => {
-    expect(resolveFreeModelId(undefined)).toBe("z-ai/glm-4.5-air:free");
+  // Default is the most-available validated free model across 4 benchmark runs
+  // (valid output 4/4 + top security-triage PASS 0.966).
+  it("defaults to poolside/laguna-m.1:free (most available + best triage)", () => {
+    expect(resolveFreeModelId(undefined)).toBe("poolside/laguna-m.1:free");
   });
 
   it("never returns the broken nvidia default the bug shipped", () => {
@@ -54,19 +56,19 @@ describe("resolveFreeModelId — single working free model (TRDD-542bdbef)", () 
     expect(resolveFreeModelId("qwen/qwen3-coder:free")).toBe(
       "qwen/qwen3-coder:free",
     );
-    expect(resolveFreeModelId("  poolside/laguna-m.1:free  ")).toBe(
-      "poolside/laguna-m.1:free",
+    expect(resolveFreeModelId("  z-ai/glm-4.5-air:free  ")).toBe(
+      "z-ai/glm-4.5-air:free",
     );
   });
 
   it("rejects a non-':free' override (cost-safety) → default", () => {
     expect(resolveFreeModelId("deepseek/deepseek-v4-pro")).toBe(
-      "z-ai/glm-4.5-air:free",
+      "poolside/laguna-m.1:free",
     );
     expect(resolveFreeModelId("openai/gpt-5.4-nano")).toBe(
-      "z-ai/glm-4.5-air:free",
+      "poolside/laguna-m.1:free",
     );
-    expect(resolveFreeModelId("")).toBe("z-ai/glm-4.5-air:free");
+    expect(resolveFreeModelId("")).toBe("poolside/laguna-m.1:free");
   });
 });
 

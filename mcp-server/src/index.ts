@@ -2127,13 +2127,18 @@ export function parseFreeBelowUsd(raw: string | undefined): number {
 }
 
 /** Resolve the single working free model (LLM_EXT_FREE_MODEL_ID) for the
- *  `free: true` flag + 402 single-retry. Default z-ai/glm-4.5-air:free
- *  (benchmark winner). A non-':free' override is rejected (cost-safety). */
+ *  `free: true` flag + 402 single-retry. Default poolside/laguna-m.1:free —
+ *  across 4 free-pool benchmark runs (TRDD-f1510055) it was the ONLY model to
+ *  return valid output every time (the others 429'd or emitted empty content)
+ *  AND it scored the top security-triage PASS (0.966). Availability matters
+ *  most for a single-model path with no rotation. A non-':free' override is
+ *  rejected (cost-safety). The ensemble paths use the rotating free POOL, so
+ *  this single id is only the narrow fallback. */
 export function resolveFreeModelId(raw: string | undefined): string {
   if (typeof raw === "string" && raw.trim().endsWith(":free")) {
     return raw.trim();
   }
-  return "z-ai/glm-4.5-air:free";
+  return "poolside/laguna-m.1:free";
 }
 
 /** The free pool to route through when auto-free engages on a paid profile:
