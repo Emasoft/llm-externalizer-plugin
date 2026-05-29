@@ -219,6 +219,11 @@ after reload. Back up before editing; one indent typo breaks every profile.
 | `VLLM_API_KEY` | vLLM auth |
 | `LLM_EXT_CONFIG_DIR` | Override settings dir (default `~/.llm-externalizer`) |
 | `LLM_OUTPUT_DIR` | Override report output dir (default `<main-project-dir>/reports/llm-externalizer/`, anchored on `$CLAUDE_PROJECT_DIR` verbatim) |
+| `LLM_EXT_FREE_BELOW_USD` | OpenRouter balance (USD) below which the server auto-engages free mode for **every** tool (default `1.00`; non-finite/≤0 → `1.00`). See "B2. OpenRouter free-only ensemble" in the README. |
+| `LLM_EXT_FREE_MODEL_ID` | Single `:free` model for the `free: true` flag + the 402 single-retry (default `poolside/laguna-m.1:free`). A non-`:free` value is rejected; the ensemble paths use the rotating free pool. |
+| `LLM_EXT_REASONING_EFFORT` | Reasoning effort for OpenRouter reasoning models: `xhigh`\|`high`\|`medium`\|`low`\|`off` (default `high`). Reasoning tokens are billed even though the trace is discarded; `mass_scout` / `cluster_synonyms` never reason. |
+| `LLM_EXT_INSTALL_RULE` | Set to `0` to opt out of auto-installing `rules/use-llm-externalizer.md` into `~/.claude/rules/`. |
+| `LLM_EXT_DUMP_REQUESTS` | Cost-audit hook: set to a file path to append the exact wire payload (model + byte size + full JSON body) of every request, for prompt/file-inflation auditing. Off unless set; the file holds your prompt + file content — treat as sensitive. |
 
 ---
 

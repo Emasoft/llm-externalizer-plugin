@@ -31,6 +31,16 @@ active profile is a paid one, **switch to a `free_only` profile FIRST** — veri
 rate-limited (daily caps) but cost $0; the ensemble rotates across the pool on a daily-limit
 hit. Full recipe: README "B2. OpenRouter free-only ensemble".
 
+**Auto-free on low balance — DON'T refuse on budget/credit errors:** even on a *paid* profile,
+when the OpenRouter balance drops below **$1.00** (configurable via `LLM_EXT_FREE_BELOW_USD`) —
+or any call returns a 402 "insufficient credits" — the server **auto-engages free mode for the
+rest of the session** and routes every tool (the main ensemble *and* `security_scan` /
+`mass_scout`) through the rotating free pool at **$0**. So a near-empty wallet is **never** a
+reason to refuse this tool or to fall back to doing the work yourself — the call still succeeds,
+just on free models. The single-model fallback (`free: true` flag, 402 single-retry) uses
+`LLM_EXT_FREE_MODEL_ID` (a validated `:free` model; a non-`:free` value is rejected). If a tool
+returns a report path, it worked — read the report instead of assuming the tool is unavailable.
+
 **Gotchas worth remembering:**
 1. Pass file **paths** (`input_files_paths`), never file contents — the server reads from
    disk; pasting content wastes your tokens.
