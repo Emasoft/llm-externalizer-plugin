@@ -7,6 +7,7 @@ import {
   parseFreeBelowUsd,
   resolveFreeModelId,
   resolveAutoFreePool,
+  resolveSubsystemFreeModel,
   FREE_FLOOR_MIN_CONTEXT_TOKENS,
   selectFreeEnsembleModels,
 } from "./index";
@@ -94,6 +95,59 @@ describe("resolveAutoFreePool — engaged pool (TRDD-542bdbef)", () => {
     const pool = resolveAutoFreePool([]);
     expect(pool.every((id) => id.endsWith(":free"))).toBe(true);
     expect(pool.length).toBeGreaterThan(0);
+  });
+});
+
+describe("resolveSubsystemFreeModel — security_scan / mass_scout free routing (Phase 2)", () => {
+  const POOL = ["poolside/laguna-m.1:free", "z-ai/glm-4.5-air:free"];
+
+  it("leaves the caller's model untouched when free mode is OFF", () => {
+    expect(
+      resolveSubsystemFreeModel(false, POOL, "qwen/qwen-2.5-7b-instruct"),
+    ).toBeUndefined();
+    expect(resolveSubsystemFreeModel(false, POOL, "")).toBeUndefined();
+  });
+
+  it("substitutes the pool's first model when free + caller's model is unset", () => {
+    expect(resolveSubsystemFreeModel(true, POOL, "")).toBe(
+      "poolside/laguna-m.1:free",
+    );
+  });
+
+  it("substitutes when free + caller passed a PAID model (cost-safety)", () => {
+    // The latent bug: security_scan defaults to qwen/qwen-2.5-7b-instruct (paid)
+    // and would throw under free mode. Now it's replaced with a ':free' model.
+    expect(
+      resolveSubsystemFreeModel(true, POOL, "qwen/qwen-2.5-7b-instruct"),
+    ).toBe("poolside/laguna-m.1:free");
+    expect(resolveSubsystemFreeModel(true, POOL, "deepseek/deepseek-v4-pro")).toBe(
+      "poolside/laguna-m.1:free",
+    );
+  });
+
+  it("keeps the caller's model when it is already ':free'", () => {
+    expect(
+      resolveSubsystemFreeModel(true, POOL, "z-ai/glm-4.5-air:free"),
+    ).toBeUndefined();
+    expect(
+      resolveSubsystemFreeModel(true, POOL, "  qwen/qwen3-coder:free  "),
+    ).toBeUndefined();
+  });
+
+  it("falls back to the validated default when the pool is empty", () => {
+    expect(resolveSubsystemFreeModel(true, [], "")).toBe(
+      "poolside/laguna-m.1:free",
+    );
+    expect(resolveSubsystemFreeModel(true, [], "deepseek/deepseek-v4-pro")).toBe(
+      "poolside/laguna-m.1:free",
+    );
+  });
+
+  it("never returns a non-':free' model under free mode", () => {
+    for (const req of ["", "paid/model", "x/y:free", "qwen/qwen-2.5-7b-instruct"]) {
+      const out = resolveSubsystemFreeModel(true, POOL, req);
+      if (out !== undefined) expect(out.endsWith(":free")).toBe(true);
+    }
   });
 });
 

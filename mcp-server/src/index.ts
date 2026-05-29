@@ -1854,7 +1854,11 @@ function reloadSettingsFromDisk(): boolean {
   activeResolved = nextResolved;
   // Re-publish free_only on every reload so the subsystem guard tracks the live
   // profile (TRDD-97ef8b63). null resolved (invalid settings) → not free_only.
-  setActiveFreeOnly(nextResolved?.freeOnly ?? false);
+  // Preserve a live auto-free engagement across the reload (TRDD-542bdbef): a
+  // low-balance session stays free even if the user edits an unrelated part of
+  // settings.yaml — the wallet is still empty, so don't un-protect the spend
+  // sites. (Cleared only on process restart.)
+  setActiveFreeOnly((nextResolved?.freeOnly ?? false) || autoFreeEngaged);
   // Auto-bench the free pool on an OFF→ON transition with an empty cache
   // (TRDD-f1510055). Helper is fire-and-forget and short-circuits on every
   // skip condition (already-on, cache populated, lock held, opt-out env).
@@ -2152,6 +2156,22 @@ export function resolveAutoFreePool(
     : [...FREE_POOL_SEED];
 }
 
+/** Which model to force for a single-model subsystem (security_scan /
+ *  mass_scout) under free mode (TRDD-542bdbef Phase 2). Those tools default to
+ *  a PAID model and assert ':free' on it (getActiveFreeOnly), so under free
+ *  mode an unset or paid `model` arg must be replaced with a ':free' one.
+ *  Returns undefined to leave the caller's choice untouched (free mode off, or
+ *  the caller already passed a ':free' model). Pure + offline-testable. */
+export function resolveSubsystemFreeModel(
+  freeActive: boolean,
+  freePool: readonly string[],
+  requestedModel: string,
+): string | undefined {
+  if (!freeActive) return undefined; // paid mode — caller's model stands
+  if (requestedModel.trim().endsWith(":free")) return undefined; // already free
+  return freePool[0] ?? resolveFreeModelId(undefined);
+}
+
 // Minimum balance (USD) to attempt a PAID ensemble call. Below this the
 // server auto-engages free mode (TRDD-542bdbef): the main-dispatch ensemble
 // routes through the validated free pool (with rate-limit rotation) instead
@@ -2171,17 +2191,22 @@ const MIN_BALANCE_FOR_PAID_USD: number = parseFreeBelowUsd(
 let autoFreeEngaged = false;
 let autoFreePool: string[] = [];
 
-/** Engage auto-free: route the main-dispatch ensemble through the free pool.
- *  Idempotent — safe to call on every low-balance / 402 check. Does NOT flip
- *  the global setActiveFreeOnly (that would make security_scan / mass_scout
- *  assert-throw, since they don't self-select a free model — Phase 2 covers
- *  them). */
+/** Engage auto-free: route EVERY spend site through the free pool.
+ *  Idempotent — safe to call on every low-balance / 402 check. Sets the global
+ *  free_only flag (TRDD-97ef8b63 chokepoint) so security_scan / mass_scout also
+ *  go free (Phase 2); the dispatch site injects a ':free' model into those
+ *  subsystems so the chokepoint assertion is satisfied rather than thrown. The
+ *  main-dispatch ensemble picks up autoFreePool via getEnsembleModels. */
 function engageAutoFree(reason: string): void {
   if (autoFreeEngaged) return;
   autoFreeEngaged = true;
   autoFreePool = resolveAutoFreePool(activeResolved?.freeModels ?? []);
+  // Engage the airtight chokepoint so the subsystem spend sites (judge.ts,
+  // scout.ts) that read getActiveFreeOnly() also enforce ':free'. Safe because
+  // the dispatch site now substitutes a ':free' model for those tools.
+  setActiveFreeOnly(true);
   process.stderr.write(
-    `[llm-externalizer] Auto-free engaged (${reason}) — main-dispatch ensemble now routes through the free pool (${autoFreePool.length} models, rotation on rate-limit). Funded-profile choices reactivate on restart.\n`,
+    `[llm-externalizer] Auto-free engaged (${reason}) — ALL tools now route through the free pool (${autoFreePool.length} models, rotation on rate-limit). Funded-profile choices reactivate on restart.\n`,
   );
 }
 
@@ -2271,30 +2296,34 @@ async function resolveModelOverride(
   // T2.7 — single read but snapshot anyway for consistency
   const backend = getCurrentBackend();
   if (backend.type !== "openrouter") return undefined;
+  await ensureAutoFreeDecided();
+  if (!autoFreeEngaged) return undefined; // funded → normal paid ensemble
   // Auto-free (TRDD-542bdbef): an ensemble profile routes through the free
   // pool (getEnsembleModels) — return undefined so the free ensemble runs with
   // rotation; a single-model (remote) profile has no ensemble, so use the one
   // validated free model.
-  const ensembleMode = activeResolved?.mode === "remote-ensemble";
-  if (creditExhausted || autoFreeEngaged) {
+  return activeResolved?.mode === "remote-ensemble" ? undefined : FREE_MODEL_ID;
+}
+
+/** Decide whether to engage auto-free (TRDD-542bdbef): engage on a prior 402
+ *  (creditExhausted) or when the OpenRouter balance is below the threshold.
+ *  Idempotent + cached (60s balance cache). Shared by the main dispatch and the
+ *  security_scan / mass_scout short-circuit so every entry point agrees. */
+async function ensureAutoFreeDecided(): Promise<void> {
+  if (autoFreeEngaged) return;
+  if (getCurrentBackend().type !== "openrouter") return;
+  if (creditExhausted) {
     engageAutoFree("credit-exhausted session");
-    if (ensembleMode) return undefined;
-    process.stderr.write(
-      "[llm-externalizer] Credit exhausted this session — routing through free model\n",
-    );
-    return FREE_MODEL_ID;
+    return;
   }
   const balance = await getOpenRouterBalance();
-  if (!isFinite(balance)) return undefined; // unknown → proceed normally
+  if (!isFinite(balance)) return; // unknown → proceed normally (treat as paid)
   if (balance < MIN_BALANCE_FOR_PAID_USD) {
     creditExhausted = true; // lock the session so we don't re-probe
     engageAutoFree(
       `balance $${balance.toFixed(4)} < $${MIN_BALANCE_FOR_PAID_USD.toFixed(2)}`,
     );
-    if (ensembleMode) return undefined;
-    return FREE_MODEL_ID;
   }
-  return undefined;
 }
 
 /** Invalidate the cached balance so the next check hits the API fresh. */
@@ -6061,13 +6090,37 @@ async function dispatchCallToolInner(
     // OpenRouter call + budget logic (TRDD §6.3, §15). Short-circuit
     // before any of that machinery.
     if (MASS_SCOUT_TOOL_NAMES.has(name)) {
+      // Free-mode coverage for the subsystem path (TRDD-542bdbef Phase 2).
+      // security_scan / mass_scout default to a PAID model and assert ':free'
+      // (getActiveFreeOnly) — so under free mode (profile free_only OR auto-free
+      // on low balance) an unset/paid `model` arg would throw. Decide auto-free
+      // first, then substitute a ':free' model from the active pool. This also
+      // fixes a latent gap: security_scan never self-selected a free model even
+      // under an explicit free_only profile.
+      const scoutArgs = { ...((args ?? {}) as Record<string, unknown>) };
+      await ensureAutoFreeDecided();
+      const freeActive = (activeResolved?.freeOnly ?? false) || autoFreeEngaged;
+      const freePool = activeResolved?.freeOnly
+        ? activeResolved.freeModels
+        : autoFreePool;
+      const inject = resolveSubsystemFreeModel(
+        freeActive,
+        freePool,
+        typeof scoutArgs.model === "string" ? scoutArgs.model : "",
+      );
+      if (inject) {
+        scoutArgs.model = inject;
+        process.stderr.write(
+          `[llm-externalizer] Free mode: routing ${name} through ${inject}\n`,
+        );
+      }
       // Forward the MCP progressToken so long-running mass-scout jobs
       // (especially `mass_scout` and `mass_scout_chain`) emit
       // notifications/progress events that keep the connection alive
       // and let the client show real progress instead of a spinner.
       return await dispatchMassScoutTool(
         name,
-        (args ?? {}) as Record<string, unknown>,
+        scoutArgs,
         onProgress
           ? {
               onProgress: (progress, total, message) =>

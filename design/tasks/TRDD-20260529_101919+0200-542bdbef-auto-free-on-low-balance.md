@@ -3,7 +3,7 @@ trdd-id: 542bdbef-bd20-4775-8708-c4feafbbf7be
 title: Auto-engage free mode when OpenRouter balance drops below $1 — fix agents-refuse bug
 status: in-progress
 created: 2026-05-29T10:19:19+0200
-updated: 2026-05-29T10:52:00+0200
+updated: 2026-05-29T11:12:00+0200
 ---
 
 # TRDD-542bdbef-bd20-4775-8708-c4feafbbf7be — Auto-engage free mode when OpenRouter balance drops below $1
@@ -163,4 +163,18 @@ turn a 402 into a hard `assertFreeOnlyModel` throw — a regression.
   z-ai/glm-4.5-air:free → poolside/laguna-m.1:free (most-available 4/4 +
   best triage). **Live smoke PASSED** on the dead wallet — auto-free engaged,
   free-pool rotation past a 429, correct $0 answer. Phase 1 COMPLETE.
-  Remaining: Phase 2 (subsystem free-pool routing + global chokepoint).
+- 2026-05-29 11:12 — **Phase 2 COMPLETE.** Auto-free now covers EVERY tool:
+  engageAutoFree flips the global setActiveFreeOnly(true) (TRDD-97ef8b63
+  chokepoint), the balance decision is extracted to a shared
+  ensureAutoFreeDecided() called by both the main dispatch and the
+  security_scan / mass_scout short-circuit, and that short-circuit substitutes
+  a ':free' model (resolveSubsystemFreeModel — pure, 6 new tests) so the
+  chokepoint assertion is satisfied rather than thrown. Also fixes a LATENT
+  bug: security_scan defaulted to a PAID model (qwen-2.5-7b-instruct) and would
+  throw under an explicit free_only profile too — now it self-selects a free
+  model under any free mode. Reload-preserve: a settings reload keeps a live
+  auto-free engagement (empty wallet stays free). Full suite 970/974, lint
+  clean. Live security_scan smoke deferred (single-model subsystem + free-tier
+  429 contention from the benchmark; Phase 1 already proved the engagement
+  path end-to-end and the inject-':free' / assert-accepts-':free' composition
+  is unit-covered).

@@ -50424,7 +50424,7 @@ function reloadSettingsFromDisk() {
   const priorFreeOnly = activeResolved?.freeOnly ?? false;
   activeSettings = newSettings;
   activeResolved = nextResolved;
-  setActiveFreeOnly(nextResolved?.freeOnly ?? false);
+  setActiveFreeOnly((nextResolved?.freeOnly ?? false) || autoFreeEngaged);
   maybeTriggerFreePoolBench({
     activeProfile: newSettings.active,
     freeOnlyActive: nextResolved?.freeOnly ?? false,
@@ -50597,6 +50597,11 @@ function resolveFreeModelId(raw) {
 function resolveAutoFreePool(profileFreeModels) {
   return profileFreeModels.length > 0 ? [...profileFreeModels] : [...FREE_POOL_SEED];
 }
+function resolveSubsystemFreeModel(freeActive, freePool, requestedModel) {
+  if (!freeActive) return void 0;
+  if (requestedModel.trim().endsWith(":free")) return void 0;
+  return freePool[0] ?? resolveFreeModelId(void 0);
+}
 var MIN_BALANCE_FOR_PAID_USD = parseFreeBelowUsd(
   process.env.LLM_EXT_FREE_BELOW_USD
 );
@@ -50606,8 +50611,9 @@ function engageAutoFree(reason) {
   if (autoFreeEngaged) return;
   autoFreeEngaged = true;
   autoFreePool = resolveAutoFreePool(activeResolved?.freeModels ?? []);
+  setActiveFreeOnly(true);
   process.stderr.write(
-    `[llm-externalizer] Auto-free engaged (${reason}) \u2014 main-dispatch ensemble now routes through the free pool (${autoFreePool.length} models, rotation on rate-limit). Funded-profile choices reactivate on restart.
+    `[llm-externalizer] Auto-free engaged (${reason}) \u2014 ALL tools now route through the free pool (${autoFreePool.length} models, rotation on rate-limit). Funded-profile choices reactivate on restart.
 `
   );
 }
@@ -50658,26 +50664,25 @@ async function resolveModelOverride(freeRequested) {
   if (freeRequested) return FREE_MODEL_ID;
   const backend = getCurrentBackend();
   if (backend.type !== "openrouter") return void 0;
-  const ensembleMode = activeResolved?.mode === "remote-ensemble";
-  if (creditExhausted || autoFreeEngaged) {
+  await ensureAutoFreeDecided();
+  if (!autoFreeEngaged) return void 0;
+  return activeResolved?.mode === "remote-ensemble" ? void 0 : FREE_MODEL_ID;
+}
+async function ensureAutoFreeDecided() {
+  if (autoFreeEngaged) return;
+  if (getCurrentBackend().type !== "openrouter") return;
+  if (creditExhausted) {
     engageAutoFree("credit-exhausted session");
-    if (ensembleMode) return void 0;
-    process.stderr.write(
-      "[llm-externalizer] Credit exhausted this session \u2014 routing through free model\n"
-    );
-    return FREE_MODEL_ID;
+    return;
   }
   const balance = await getOpenRouterBalance();
-  if (!isFinite(balance)) return void 0;
+  if (!isFinite(balance)) return;
   if (balance < MIN_BALANCE_FOR_PAID_USD) {
     creditExhausted = true;
     engageAutoFree(
       `balance $${balance.toFixed(4)} < $${MIN_BALANCE_FOR_PAID_USD.toFixed(2)}`
     );
-    if (ensembleMode) return void 0;
-    return FREE_MODEL_ID;
   }
-  return void 0;
 }
 function invalidateBalanceCache() {
   cachedBalanceUsd = null;
@@ -52868,9 +52873,25 @@ Run the "discover" tool to see the current profile status.`
       };
     }
     if (MASS_SCOUT_TOOL_NAMES.has(name)) {
+      const scoutArgs = { ...args ?? {} };
+      await ensureAutoFreeDecided();
+      const freeActive = (activeResolved?.freeOnly ?? false) || autoFreeEngaged;
+      const freePool = activeResolved?.freeOnly ? activeResolved.freeModels : autoFreePool;
+      const inject = resolveSubsystemFreeModel(
+        freeActive,
+        freePool,
+        typeof scoutArgs.model === "string" ? scoutArgs.model : ""
+      );
+      if (inject) {
+        scoutArgs.model = inject;
+        process.stderr.write(
+          `[llm-externalizer] Free mode: routing ${name} through ${inject}
+`
+        );
+      }
       return await dispatchMassScoutTool(
         name,
-        args ?? {},
+        scoutArgs,
         onProgress ? {
           onProgress: (progress, total, message) => onProgress(progress, total, message)
         } : {}
@@ -56176,6 +56197,7 @@ export {
   reasoningLadderForModel,
   resolveAutoFreePool,
   resolveFreeModelId,
+  resolveSubsystemFreeModel,
   selectFreeEnsembleModels
 };
 //# sourceMappingURL=index.js.map
