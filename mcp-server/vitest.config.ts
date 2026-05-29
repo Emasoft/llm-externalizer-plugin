@@ -33,6 +33,8 @@ export default defineConfig({
       'src/free-only.test.ts',
       // Free-pool auto-bench trigger — fire-and-forget detached child (TRDD-f1510055).
       'src/free-pool-auto-bench.test.ts',
+      // Auto-free on low balance (<$1) — threshold/model/pool helpers (TRDD-542bdbef).
+      'src/auto-free.test.ts',
       'src/mass_scouting/fieldset.test.ts',
       'src/mass_scouting/shorthand.test.ts',
       'src/mass_scouting/registry.test.ts',

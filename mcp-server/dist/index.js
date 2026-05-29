@@ -50583,7 +50583,34 @@ var session = {
   // Cumulative cost in USD from OpenRouter usage.cost
 };
 var creditExhausted = false;
-var MIN_BALANCE_FOR_PAID_USD = 0.05;
+function parseFreeBelowUsd(raw) {
+  if (raw === void 0) return 1;
+  const v = Number(raw);
+  return Number.isFinite(v) && v > 0 ? v : 1;
+}
+function resolveFreeModelId(raw) {
+  if (typeof raw === "string" && raw.trim().endsWith(":free")) {
+    return raw.trim();
+  }
+  return "z-ai/glm-4.5-air:free";
+}
+function resolveAutoFreePool(profileFreeModels) {
+  return profileFreeModels.length > 0 ? [...profileFreeModels] : [...FREE_POOL_SEED];
+}
+var MIN_BALANCE_FOR_PAID_USD = parseFreeBelowUsd(
+  process.env.LLM_EXT_FREE_BELOW_USD
+);
+var autoFreeEngaged = false;
+var autoFreePool = [];
+function engageAutoFree(reason) {
+  if (autoFreeEngaged) return;
+  autoFreeEngaged = true;
+  autoFreePool = resolveAutoFreePool(activeResolved?.freeModels ?? []);
+  process.stderr.write(
+    `[llm-externalizer] Auto-free engaged (${reason}) \u2014 main-dispatch ensemble now routes through the free pool (${autoFreePool.length} models, rotation on rate-limit). Funded-profile choices reactivate on restart.
+`
+  );
+}
 var cachedBalanceUsd = null;
 var balanceCacheTime = 0;
 var BALANCE_CACHE_TTL_MS = 6e4;
@@ -50631,7 +50658,10 @@ async function resolveModelOverride(freeRequested) {
   if (freeRequested) return FREE_MODEL_ID;
   const backend = getCurrentBackend();
   if (backend.type !== "openrouter") return void 0;
-  if (creditExhausted) {
+  const ensembleMode = activeResolved?.mode === "remote-ensemble";
+  if (creditExhausted || autoFreeEngaged) {
+    engageAutoFree("credit-exhausted session");
+    if (ensembleMode) return void 0;
     process.stderr.write(
       "[llm-externalizer] Credit exhausted this session \u2014 routing through free model\n"
     );
@@ -50640,11 +50670,11 @@ async function resolveModelOverride(freeRequested) {
   const balance = await getOpenRouterBalance();
   if (!isFinite(balance)) return void 0;
   if (balance < MIN_BALANCE_FOR_PAID_USD) {
-    process.stderr.write(
-      `[llm-externalizer] Low balance ($${balance.toFixed(4)} < $${MIN_BALANCE_FOR_PAID_USD}) \u2014 auto-falling back to free model
-`
-    );
     creditExhausted = true;
+    engageAutoFree(
+      `balance $${balance.toFixed(4)} < $${MIN_BALANCE_FOR_PAID_USD.toFixed(2)}`
+    );
+    if (ensembleMode) return void 0;
     return FREE_MODEL_ID;
   }
   return void 0;
@@ -51358,6 +51388,7 @@ function classifyError(error48) {
   if (/API error 402\b/.test(msg)) {
     creditExhausted = true;
     invalidateBalanceCache();
+    engageAutoFree("402 (batch classifier)");
     return {
       unrecoverable: false,
       serviceLevel: false,
@@ -51676,6 +51707,7 @@ async function chatCompletionWithRetry(messages, options) {
       if (/API error 402\b/.test(errMsg) && backend.type === "openrouter" && options.model !== FREE_MODEL_ID) {
         creditExhausted = true;
         invalidateBalanceCache();
+        engageAutoFree("402 mid-flight");
         process.stderr.write(
           `[llm-externalizer] Credit exhausted (402) \u2014 retrying call with free model (${FREE_MODEL_ID})
 `
@@ -52064,7 +52096,9 @@ var LLM_TOOLS_SET = /* @__PURE__ */ new Set([
   "search_existing_implementations",
   "cluster_synonyms"
 ]);
-var FREE_MODEL_ID = "nvidia/nemotron-3-super-120b-a12b:free";
+var FREE_MODEL_ID = resolveFreeModelId(
+  process.env.LLM_EXT_FREE_MODEL_ID
+);
 function ensembleModelLabel(useEnsemble) {
   const backend = getCurrentBackend();
   if (!useEnsemble || !activeResolved?.secondModel) return backend.model;
@@ -52127,12 +52161,19 @@ function getEnsembleModels() {
   if (!activeResolved || activeResolved.mode !== "remote-ensemble") return [];
   const catalogById = new Map(openRouterModelCache.map((m) => [m.id, m]));
   let models;
-  if (activeResolved.freeOnly) {
+  if (activeResolved.freeOnly || autoFreeEngaged) {
+    const pool = activeResolved.freeOnly ? activeResolved.freeModels : autoFreePool;
     models = selectFreeEnsembleModels(
-      activeResolved.freeModels,
+      pool,
       catalogById,
       benchmarkFailedModels()
     );
+    const paid = models.filter((id) => !id.endsWith(":free"));
+    if (paid.length > 0) {
+      throw new Error(
+        `free-mode cost-safety: non-':free' model(s) in the free ensemble: ${paid.join(", ")}`
+      );
+    }
   } else {
     models = [activeResolved.model];
     if (activeResolved.secondModel) models.push(activeResolved.secondModel);
@@ -56131,7 +56172,10 @@ export {
   callEnsembleSlotWithRotation,
   filterFreeModels,
   isModelUnavailableError,
+  parseFreeBelowUsd,
   reasoningLadderForModel,
+  resolveAutoFreePool,
+  resolveFreeModelId,
   selectFreeEnsembleModels
 };
 //# sourceMappingURL=index.js.map

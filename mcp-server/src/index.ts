@@ -1285,6 +1285,7 @@ import {
   generateDefaultSettings,
   assertFreeOnlyModel,
   setActiveFreeOnly,
+  FREE_POOL_SEED,
 } from "./config.js";
 import {
   withUsageContext,
@@ -2115,13 +2116,69 @@ const session = {
 // cleared on process restart — no point probing a dead wallet repeatedly.
 let creditExhausted = false;
 
-// Minimum balance required to attempt an ensemble call without falling
-// back to free mode. An ensemble pass runs 3 models on one prompt; the
-// cheapest of our three (Gemini 2.5 Flash at $0.15 in / $0.60 out) can
-// still easily cost a couple of cents per file on larger inputs. $0.05
-// is a floor that guarantees at least one small ensemble call can clear
-// without a mid-flight 402.
-const MIN_BALANCE_FOR_PAID_USD = 0.05;
+// ── Auto-free pure helpers (TRDD-542bdbef) — exported for unit tests ──
+
+/** Parse the low-balance auto-free threshold (USD) from LLM_EXT_FREE_BELOW_USD.
+ *  Default $1.00; a non-finite or ≤0 value falls back to $1.00. */
+export function parseFreeBelowUsd(raw: string | undefined): number {
+  if (raw === undefined) return 1.0;
+  const v = Number(raw);
+  return Number.isFinite(v) && v > 0 ? v : 1.0;
+}
+
+/** Resolve the single working free model (LLM_EXT_FREE_MODEL_ID) for the
+ *  `free: true` flag + 402 single-retry. Default z-ai/glm-4.5-air:free
+ *  (benchmark winner). A non-':free' override is rejected (cost-safety). */
+export function resolveFreeModelId(raw: string | undefined): string {
+  if (typeof raw === "string" && raw.trim().endsWith(":free")) {
+    return raw.trim();
+  }
+  return "z-ai/glm-4.5-air:free";
+}
+
+/** The free pool to route through when auto-free engages on a paid profile:
+ *  the profile's pinned free_models if any, else the bundled FREE_POOL_SEED.
+ *  Always a fresh mutable copy. */
+export function resolveAutoFreePool(
+  profileFreeModels: readonly string[],
+): string[] {
+  return profileFreeModels.length > 0
+    ? [...profileFreeModels]
+    : [...FREE_POOL_SEED];
+}
+
+// Minimum balance (USD) to attempt a PAID ensemble call. Below this the
+// server auto-engages free mode (TRDD-542bdbef): the main-dispatch ensemble
+// routes through the validated free pool (with rate-limit rotation) instead
+// of 402'ing on the paid ensemble — which was making agents refuse the tool.
+// Default $1.00 (a balance this low can't reliably clear even one ensemble
+// pass). Override via LLM_EXT_FREE_BELOW_USD; non-finite/≤0 → $1.00.
+const MIN_BALANCE_FOR_PAID_USD: number = parseFreeBelowUsd(
+  process.env.LLM_EXT_FREE_BELOW_USD,
+);
+
+// Auto-free engagement (TRDD-542bdbef). Flips true the first time the balance
+// is seen below MIN_BALANCE_FOR_PAID_USD, or a 402 fires. While engaged, the
+// main-dispatch ensemble (getEnsembleModels) routes through autoFreePool — the
+// active profile's free_models if it pins any, else the bundled FREE_POOL_SEED
+// — using the existing rate-limit rotation (TRDD-8b6b3646 Phase 3). Cleared
+// only on process restart (no point re-probing a dead wallet every call).
+let autoFreeEngaged = false;
+let autoFreePool: string[] = [];
+
+/** Engage auto-free: route the main-dispatch ensemble through the free pool.
+ *  Idempotent — safe to call on every low-balance / 402 check. Does NOT flip
+ *  the global setActiveFreeOnly (that would make security_scan / mass_scout
+ *  assert-throw, since they don't self-select a free model — Phase 2 covers
+ *  them). */
+function engageAutoFree(reason: string): void {
+  if (autoFreeEngaged) return;
+  autoFreeEngaged = true;
+  autoFreePool = resolveAutoFreePool(activeResolved?.freeModels ?? []);
+  process.stderr.write(
+    `[llm-externalizer] Auto-free engaged (${reason}) — main-dispatch ensemble now routes through the free pool (${autoFreePool.length} models, rotation on rate-limit). Funded-profile choices reactivate on restart.\n`,
+  );
+}
 
 // Balance query cache: fresh for 60s so we don't hammer /v1/credits
 // every time a tool is invoked. Still queried on demand when the cache
@@ -2209,7 +2266,14 @@ async function resolveModelOverride(
   // T2.7 — single read but snapshot anyway for consistency
   const backend = getCurrentBackend();
   if (backend.type !== "openrouter") return undefined;
-  if (creditExhausted) {
+  // Auto-free (TRDD-542bdbef): an ensemble profile routes through the free
+  // pool (getEnsembleModels) — return undefined so the free ensemble runs with
+  // rotation; a single-model (remote) profile has no ensemble, so use the one
+  // validated free model.
+  const ensembleMode = activeResolved?.mode === "remote-ensemble";
+  if (creditExhausted || autoFreeEngaged) {
+    engageAutoFree("credit-exhausted session");
+    if (ensembleMode) return undefined;
     process.stderr.write(
       "[llm-externalizer] Credit exhausted this session — routing through free model\n",
     );
@@ -2218,10 +2282,11 @@ async function resolveModelOverride(
   const balance = await getOpenRouterBalance();
   if (!isFinite(balance)) return undefined; // unknown → proceed normally
   if (balance < MIN_BALANCE_FOR_PAID_USD) {
-    process.stderr.write(
-      `[llm-externalizer] Low balance ($${balance.toFixed(4)} < $${MIN_BALANCE_FOR_PAID_USD}) — auto-falling back to free model\n`,
-    );
     creditExhausted = true; // lock the session so we don't re-probe
+    engageAutoFree(
+      `balance $${balance.toFixed(4)} < $${MIN_BALANCE_FOR_PAID_USD.toFixed(2)}`,
+    );
+    if (ensembleMode) return undefined;
     return FREE_MODEL_ID;
   }
   return undefined;
@@ -3535,6 +3600,7 @@ function classifyError(error: unknown): {
     // caller, and the free-mode fallback is logged separately.
     creditExhausted = true;
     invalidateBalanceCache();
+    engageAutoFree("402 (batch classifier)"); // route later ensemble calls through the free pool
     return {
       unrecoverable: false,
       serviceLevel: false,
@@ -4047,6 +4113,7 @@ async function chatCompletionWithRetry(
       ) {
         creditExhausted = true;
         invalidateBalanceCache();
+        engageAutoFree("402 mid-flight"); // route later ensemble calls through the free pool
         process.stderr.write(
           `[llm-externalizer] Credit exhausted (402) — retrying call with free model (${FREE_MODEL_ID})\n`,
         );
@@ -4665,9 +4732,15 @@ const LLM_TOOLS_SET = new Set([
 // Per-model limits (maxOutput catalog-preferred, maxInputLines calibrated) live
 // in ./ensemble-limits.ts — see resolveEnsembleModelLimits + getEnsembleModels.
 
-// Free mode model — used when `free: true` parameter is set on any tool.
-// Single model, no ensemble, no cost. Prompts are logged by provider.
-const FREE_MODEL_ID = "nvidia/nemotron-3-super-120b-a12b:free";
+// Single working free model for the `free: true` per-call flag and the 402
+// single-retry (the ensemble paths use the rotating free pool instead).
+// Benchmark-validated default (TRDD-f1510055: z-ai/glm-4.5-air scored 100%
+// keyword F1 + a security-triage PASS at 0.906; the prior nvidia default
+// returned empty content and broke the fallback). Override via
+// LLM_EXT_FREE_MODEL_ID; a non-':free' override is rejected (cost-safety).
+const FREE_MODEL_ID: string = resolveFreeModelId(
+  process.env.LLM_EXT_FREE_MODEL_ID,
+);
 
 /** Build the display label for ensemble model name */
 function ensembleModelLabel(useEnsemble: boolean): string {
@@ -4831,15 +4904,29 @@ function getEnsembleModels(): Array<{
   // case resolveEnsembleModelLimits falls back to the calibrated table.
   const catalogById = new Map(openRouterModelCache.map((m) => [m.id, m]));
   let models: string[];
-  if (activeResolved.freeOnly) {
-    // Free-only: pick the top-3 benchmark/requirements-qualified free models from
-    // the pool (never the configured premium model/second/third). benchmarkFailed
-    // is empty until a ($0) benchmark run populates the cache.
+  if (activeResolved.freeOnly || autoFreeEngaged) {
+    // Free pool: a free_only profile uses its pinned free_models; auto-free on
+    // a paid profile (TRDD-542bdbef, low balance / 402) uses the engaged pool
+    // (the profile's free_models if any, else FREE_POOL_SEED). Either way
+    // selectFreeEnsembleModels applies the requirements + benchmark filters and
+    // takes the top 3; the FULL pool stays as rotation fallbacks downstream.
+    const pool = activeResolved.freeOnly
+      ? activeResolved.freeModels
+      : autoFreePool;
     models = selectFreeEnsembleModels(
-      activeResolved.freeModels,
+      pool,
       catalogById,
       benchmarkFailedModels(),
     );
+    // Cost-safety (TRDD-542bdbef): under free mode every ensemble model MUST be
+    // ':free'. FREE_POOL_SEED and validated free_models are all ':free', so this
+    // only fires on a future regression — fail fast rather than bill.
+    const paid = models.filter((id) => !id.endsWith(":free"));
+    if (paid.length > 0) {
+      throw new Error(
+        `free-mode cost-safety: non-':free' model(s) in the free ensemble: ${paid.join(", ")}`,
+      );
+    }
   } else {
     models = [activeResolved.model];
     if (activeResolved.secondModel) models.push(activeResolved.secondModel);
