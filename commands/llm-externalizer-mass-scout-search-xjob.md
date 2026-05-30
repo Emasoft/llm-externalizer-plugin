@@ -35,7 +35,7 @@ Use cases:
 | `--force-llm` | no | Suppress the regex bypass |
 | `--force-regex` | no | Force regex mode |
 | `--filter '...'` | no | Structured filter (same syntax as mass-scout-search) |
-| `--limit-per-job <n>` | no | Per-job hit cap before merging. Default: 50 |
+| `--limit-per-job <n>` | no | Per-job hit cap before merging. Default: 100 |
 | `--limit-merged <n>` | no | Final cap on the merged hit list. Default: 200 |
 | `--json` | no | Return results as JSON instead of a table |
 

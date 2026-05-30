@@ -1,15 +1,15 @@
 ---
 name: llm-externalizer-ensemble-autoselect
 description: |-
-  Use when an ensemble model has 404'd / been deprecated / is misbehaving,
-  or the user asks to "rotate the ensemble", "swap a broken model", "pick a
-  better ensemble", "auto-pick models", or LLM Externalizer request errors
-  show consistent failures on one configured model. Encodes the cost rule
-  (input AND output both strictly < $1/M) and the F1-then-cost selection
-  algorithm. Trigger with /llm-externalizer-ensemble-autoselect or
-  "rotate the ensemble".
+  Reference for rotating the OpenRouter ensemble when a model has 404'd / been
+  deprecated / is misbehaving. Encodes the cost rule (input AND output both
+  strictly < $1/M) and the F1-then-cost selection algorithm. Real invocation
+  path is the benchmark command's CLI mode `llm-ext-benchmark --pick-top-n 3
+  [--apply-profile <name>]`; this skill is loaded as background reference for
+  that, not a standalone slash command.
 argument-hint: "[--apply | --dry-run] [--profile <name>]"
 effort: medium
+user-invocable: false
 ---
 
 # LLM Externalizer — Ensemble Auto-Selection
@@ -36,11 +36,12 @@ Auto-trigger when **any** of these surface: an ensemble call returns
 `API error 404 (openrouter): {... "deprecated" ...}` (OpenRouter retires
 models silently, so any configured model — including a current ensemble
 default — can start 404ing without notice); a model returns a 4xx/5xx
-**consistently** (3+ retries, same error class); the user types "rotate
+**consistently** (3+ retries, same error class); or the user asks to "rotate
 ensemble" / "swap broken model" / "auto-pick models" / "pick a better ensemble"
-/ "the ensemble is broken"; or the user invokes
-`/llm-externalizer-ensemble-autoselect`. Do **not** auto-rotate on transient
-5xx-bursts that recover on retry — rotation is for permanent drift only.
+/ "the ensemble is broken". This skill is reference for the benchmark command's
+`--pick-top-n` / `--apply-profile` CLI mode — there is no standalone slash
+command. Do **not** auto-rotate on transient 5xx-bursts that recover on retry —
+rotation is for permanent drift only.
 
 Then run these steps:
 

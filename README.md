@@ -1040,9 +1040,9 @@ llm-externalizer-plugin/
 ├── .claude-plugin/plugin.json     # Plugin manifest
 ├── .mcp.json                      # MCP server launcher
 ├── bin/                           # MCP launcher + CLI wrapper
-├── commands/                      # 24 slash commands
+├── commands/                      # 36 slash commands
 ├── agents/                        # 6 internal agents (reviewer + 4 fixers + setup-agent)
-├── skills/                        # 15 auto-discovered skills
+├── skills/                        # 16 auto-discovered skills
 ├── rules/                         # Lean always-loaded usage rule (auto-installed to ~/.claude/rules/)
 ├── mcp-server/                    # Bundled TypeScript MCP server
 ├── scripts/                       # Python: setup, publish, validators, helpers

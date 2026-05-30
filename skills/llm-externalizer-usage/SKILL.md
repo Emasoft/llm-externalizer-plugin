@@ -1,9 +1,13 @@
 ---
 name: llm-externalizer-usage
 description: |-
-  Use when offloading bulk file analysis to external LLMs to save main-context tokens.
-  Trigger with "externalize this analysis", "offload to a cheap model", "run scan_folder on", "use llm-externalizer", "externalize file comparison", "check_imports via externalizer".
+  Loaded as a usage reference for offloading bulk file analysis to external LLMs
+  to save main-context tokens. Covers tool choice, `input_files_paths`/`folder_path`,
+  answer_mode, and report locations. Real invocation path is the `mcp__llm-externalizer__*`
+  MCP tools directly (e.g. code_task, compare_files, check_imports); this is background
+  reference, not a standalone slash command.
 argument-hint: "[task-description] [<file-or-folder-paths>...]"
+user-invocable: false
 ---
 
 # LLM Externalizer — Tool Usage

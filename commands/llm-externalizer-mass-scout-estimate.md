@@ -27,7 +27,7 @@ The output is small enough to return inline — no file is written.
 | `--fields-file <json>` | yes | JSON fieldset describing what to extract (see skill) |
 | `--budget-usd <usd>` | no | Refuses to schedule if `est_cost_usd > budget_usd` |
 | `--bucket <name>` | no | Only count files in this preclassifier bucket |
-| `--workers <n>` | no | Worker count for ETA math (default: 256) |
+| `--workers <n>` | no | Worker count for ETA math (default: 16) |
 | `--per-call-seconds <s>` | no | Avg per-call wall time for ETA (default: 1.0) |
 | `--expected-output-bytes <n>` | no | Predicted output JSON size per file (default: 200) |
 | `--max-context-pct-scout <0..1>` | no | Override the default 40% scout cap |

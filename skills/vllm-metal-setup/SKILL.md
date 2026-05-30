@@ -2,14 +2,13 @@
 name: vllm-metal-setup
 description: |-
   Install, set up, and configure the vllm-metal backend — the community vLLM
-  hardware plugin that runs vLLM on Apple Silicon Macs via MLX. Use when the
-  user wants vLLM on an Apple Silicon Mac, says "set up vllm-metal", "run vllm
-  on my mac", "vllm on apple silicon", "install vllm-metal", or the
-  llm-externalizer setup wizard picks vLLM as the macOS backend. Trigger with
-  /vllm-metal-setup or "set up vllm-metal". Apple Silicon (arm64) ONLY — not
-  Intel Macs, not Linux/Windows (use stock vLLM there).
+  hardware plugin that runs vLLM on Apple Silicon Macs via MLX. Loaded by
+  llm-externalizer-setup-agent when the user wants vLLM on an Apple Silicon Mac
+  or the setup wizard picks vLLM as the macOS backend. Apple Silicon (arm64)
+  ONLY — not Intel Macs, not Linux/Windows (use stock vLLM there).
 argument-hint: "[model-id] [--with-vllm-rs]"
 effort: medium
+user-invocable: false
 ---
 
 ## Overview

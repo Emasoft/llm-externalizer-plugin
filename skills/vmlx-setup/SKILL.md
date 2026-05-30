@@ -3,13 +3,12 @@ name: vmlx-setup
 description: |-
   Install, set up, and configure the vMLX backend — an MLX-native inference
   server for Apple Silicon (jjang-ai/vmlx) exposing an OpenAI/Anthropic/Ollama
-  compatible API. Use when the user wants MLX-native serving on an Apple
-  Silicon Mac, says "set up vmlx", "install vmlx", "mlx inference server",
-  "run mlx-community models", or the llm-externalizer setup wizard picks vMLX
-  as the macOS backend. Trigger with /vmlx-setup or "set up vmlx". Apple
-  Silicon (M1/M2/M3/M4) ONLY.
+  compatible API. Loaded by the llm-externalizer setup wizard when it picks vMLX
+  as the macOS backend, or when the user wants MLX-native serving on an Apple
+  Silicon Mac. Apple Silicon (M1/M2/M3/M4) ONLY.
 argument-hint: "[model-id] [--port N] [--api-key KEY]"
 effort: medium
+user-invocable: false
 ---
 
 ## Overview
@@ -40,7 +39,11 @@ Follow six steps in [install-and-serve.md](references/install-and-serve.md):
 3. **Serve** with `vmlx serve <model-id> --port 8000` plus scan-workload flags.
 4. **Diagnostics** via `vmlx doctor` + `vmlx bench` (built-in).
 5. **Verify** with `curl /v1/models`.
-6. **Wire** into settings.yaml using `vllm-local` preset.
+6. **Wire** into settings.yaml using `vllm-local` preset. The `vllm-local`
+   preset is correct even though vMLX is MLX-native, not vLLM — the preset name
+   only encodes the transport (an OpenAI-compatible API on `:8000`), which vMLX
+   serves; product ≠ preset name. Use `generic-local` instead if you ran vMLX on
+   a custom port.
 
 ## Output
 

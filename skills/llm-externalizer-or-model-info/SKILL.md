@@ -1,11 +1,13 @@
 ---
 name: llm-externalizer-or-model-info
 description: |-
-  Use when asking for OpenRouter model details — supported params, pricing, latency,
-  uptime, quantization. Trigger with "openrouter model info", "or-model-info",
-  "what params does X support", "show pricing for", "check model support".
+  Reference for querying OpenRouter model details — supported params, pricing,
+  latency, uptime, quantization. Real invocation path is the `or_model_info` MCP
+  tool or the `llm-externalizer model-info <id>` CLI; this skill is loaded as
+  background reference for those, not a standalone slash command.
 argument-hint: "<model-id>"
 effort: low
+user-invocable: false
 ---
 
 # LLM Externalizer — OpenRouter Model Info
