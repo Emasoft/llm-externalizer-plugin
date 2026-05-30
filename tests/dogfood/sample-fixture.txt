@@ -1,0 +1,7 @@
+// Tiny fixture for the opt-in DOGFOOD_LIVE free-pool smoke.
+// One trivial function so chat/code_task have something concrete to name.
+// Kept deliberately small so the live (free-pool, $0) call stays fast and cheap.
+
+function addNumbers(a, b) {
+  return a + b;
+}
