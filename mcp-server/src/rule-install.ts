@@ -16,7 +16,8 @@
  *     repeated server starts cause zero churn after the first sync.
  *   - ATOMIC: tmp-file + rename, so a crash mid-write never leaves a partial.
  *   - GUARDED: refuses to write anywhere except under $HOME, an explicit
- *     $CLAUDE_CONFIG_DIR, or /tmp (the test sandbox) — never an arbitrary path.
+ *     $CLAUDE_CONFIG_DIR, or the OS temp dir (os.tmpdir(), the test sandbox) —
+ *     never an arbitrary path.
  *   - OPT-OUT: set LLM_EXT_INSTALL_RULE=0 (or "false") to disable entirely.
  */
 
@@ -27,8 +28,10 @@ import {
   writeFileSync,
   renameSync,
   realpathSync,
+  unlinkSync,
 } from "node:fs";
-import { homedir } from "node:os";
+import { randomBytes } from "node:crypto";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -86,7 +89,7 @@ function canonical(p: string): string {
 }
 
 /** True iff `dir` sits under one of the allowed write roots (home / explicit
- *  CLAUDE_CONFIG_DIR / /tmp). Compared on canonical paths. */
+ *  CLAUDE_CONFIG_DIR / os.tmpdir()). Compared on canonical paths. */
 function underAllowedRoot(dir: string): boolean {
   const d = canonical(dir);
   const roots: string[] = [];
@@ -98,10 +101,13 @@ function underAllowedRoot(dir: string): boolean {
   if (process.env.CLAUDE_CONFIG_DIR && process.env.CLAUDE_CONFIG_DIR.length > 0) {
     roots.push(canonical(resolve(process.env.CLAUDE_CONFIG_DIR)));
   }
+  // os.tmpdir() instead of a literal "/tmp" so the test-sandbox root resolves
+  // correctly on every platform (e.g. Windows %TEMP%, where "/tmp" doesn't exist).
+  const tmp = tmpdir();
   try {
-    roots.push(realpathSync("/tmp"));
+    roots.push(realpathSync(tmp));
   } catch {
-    roots.push("/tmp");
+    roots.push(tmp);
   }
   return roots.some((r) => d === r || d.startsWith(r + sep));
 }
@@ -149,12 +155,20 @@ export function installUsageRule(
     }
   }
 
+  // Random suffix on top of the pid so concurrent installUsageRule() calls in the
+  // SAME process never collide on the tmp name (pid alone is identical for both).
+  const tmp = dest + ".tmp." + process.pid + "." + randomBytes(4).toString("hex");
   try {
     mkdirSync(rulesDir, { recursive: true });
-    const tmp = dest + ".tmp." + process.pid;
     writeFileSync(tmp, desired, "utf-8");
     renameSync(tmp, dest);
   } catch (e) {
+    // Best-effort cleanup so a failed rename never leaves an orphan .tmp file.
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* tmp may not exist (write itself failed) — nothing to clean up. */
+    }
     return { status: "error", dest, detail: `write failed: ${(e as Error).message}` };
   }
   return { status: existed ? "updated" : "installed", dest };

@@ -37,6 +37,8 @@ export default defineConfig({
       'src/auto-free.test.ts',
       // Provider-error sanitizer — strips user_id + JSON noise from logs/reports (TRDD-54f508a4).
       'src/provider-error-sanitize.test.ts',
+      // CLI success-banner helpers — pure path-pick + banner format (TRDD-54f508a4 Issue 4).
+      'src/cli.banner.test.ts',
       'src/mass_scouting/fieldset.test.ts',
       'src/mass_scouting/shorthand.test.ts',
       'src/mass_scouting/registry.test.ts',

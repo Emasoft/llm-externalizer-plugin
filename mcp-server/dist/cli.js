@@ -36126,6 +36126,15 @@ function parseClusterSynonymsInput(args) {
   };
 }
 
+// src/cli-banner.ts
+function pickReportPath(resultText) {
+  return resultText.split("\n").map((l) => l.trim()).find((l) => l.length > 0);
+}
+function formatSuccessBanner(tool, resultText) {
+  const reportPath = pickReportPath(resultText);
+  return reportPath ? `\u2713 ${tool} complete \u2014 report: ${reportPath}` : void 0;
+}
+
 // node_modules/zod/v3/helpers/util.js
 var util;
 (function(util2) {
@@ -43541,6 +43550,14 @@ function info(msg) {
   process.stdout.write(`${msg}
 `);
 }
+function infoErr(msg) {
+  process.stderr.write(`${msg}
+`);
+}
+function successBanner(tool, resultText) {
+  const line = formatSuccessBanner(tool, resultText);
+  if (line) infoErr(line);
+}
 function parseFlags3(args) {
   const flags = {};
   for (let i = 0; i < args.length; i++) {
@@ -43912,6 +43929,10 @@ async function cmdSearchExisting(rawArgs) {
     if (result.isError) {
       process.exit(1);
     }
+    successBanner(
+      "search_existing_implementations",
+      content.map((c) => c.text).join("\n")
+    );
   } finally {
     try {
       await transport.close();
@@ -43961,6 +43982,7 @@ async function cmdClusterSynonyms(rawArgs) {
       if (c.type === "text") info(c.text);
     }
     if (result.isError) process.exit(1);
+    successBanner("cluster_synonyms", content.map((c) => c.text).join("\n"));
   } finally {
     try {
       await transport.close();

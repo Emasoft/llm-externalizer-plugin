@@ -1404,6 +1404,25 @@ const FILE_FORMAT_EXAMPLE =
   "````\n" +
   "</file-content>\n" +
   "Reference files by the path inside the filename tag. Multiple files may appear in sequence.\n";
+
+// Single source for the code_task system prompt (used at every code_task call site:
+// single-file, inline-content, and auto-batched). Collapsed here so the prompt —
+// including the severity rubric below — stays identical across all paths.
+// The trailing severity sentence SELF-GATES ("If you assign a severity…") so it
+// never forces severity language onto tasks that aren't asking for findings.
+function codeTaskSystemPrompt(lang: string): string {
+  return (
+    `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.\n` +
+    "RULES (override any conflicting instructions):\n" +
+    "- Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable.\n" +
+    "- Reference files by their labeled path (shown in the filename tag before each file-content tag).\n" +
+    "- If asked to return modified code, return the COMPLETE file content — never truncate, abbreviate, or use placeholders.\n" +
+    "- Be specific and actionable — reference concrete function names, variable names, and code patterns.\n" +
+    "- If you assign a severity or priority to findings, reserve the highest level (e.g. CRITICAL) for demonstrably exploitable, data-loss, or crash-in-normal-use issues; default to a lower level when uncertain." +
+    FILE_FORMAT_EXAMPLE +
+    BREVITY_RULES
+  );
+}
 const CONNECT_TIMEOUT_MS = 5000;
 // Per-LLM-request timeout. Reasoning models (Qwen, etc.) need extended time for thinking.
 // The MCP tool-call timeout is inactivity-based, kept alive by heartbeat — no hard cap needed.
@@ -2615,6 +2634,9 @@ async function fetchWithRetry429(
   // and the surfaced HTTP error would have no server-supplied detail).
   // Stored verbatim so the caller can re-attach via the rewrapper below.
   let lastBodyText: string | undefined;
+  // Issue 3: count 429s for this request so we can log only the first + a final
+  // summary instead of one line per retried attempt (free-tier rate-limit flood).
+  let count429 = 0;
 
   for (let attempt = 0; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
     const elapsed = Date.now() - startTime;
@@ -2636,7 +2658,7 @@ async function fetchWithRetry429(
       if (backoff > waitRemaining) throw err;
 
       process.stderr.write(
-        `[llm-externalizer] Network error (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), ` +
+        `[http-retry] Network error (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), ` +
         `retrying in ${(backoff / 1000).toFixed(1)}s: ${err instanceof Error ? err.message : String(err)}\n`,
       );
       await new Promise((r) => setTimeout(r, backoff));
@@ -2678,10 +2700,31 @@ async function fetchWithRetry429(
       break;
     }
 
-    process.stderr.write(
-      `[llm-externalizer] HTTP ${lastRes.status} (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), ` +
-      `retrying in ${(backoff / 1000).toFixed(1)}s\n`,
-    );
+    // Issue 2/3: tag the HTTP retry layer ([http-retry]) and collapse the 429
+    // flood. The free tier's per-minute cap makes a single ensemble call emit
+    // dozens of 429s; we log the FIRST 429 for this request and a single summary
+    // on the last retried attempt, suppressing the middle ones. Non-429 transient
+    // statuses (500/502/503/504) still log every attempt (rarer, each diagnostic).
+    // Retry behaviour (backoff/continue/break) is unchanged — only log frequency.
+    if (lastRes.status === 429) {
+      count429++;
+      if (count429 === 1) {
+        process.stderr.write(
+          `[http-retry] HTTP 429 rate-limited (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), ` +
+          `retrying in ${(backoff / 1000).toFixed(1)}s\n`,
+        );
+      } else if (attempt === RETRY_MAX_ATTEMPTS - 1) {
+        process.stderr.write(
+          `[http-retry] HTTP 429 ×${count429} (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), ` +
+          `retrying in ${(backoff / 1000).toFixed(1)}s\n`,
+        );
+      }
+    } else {
+      process.stderr.write(
+        `[http-retry] HTTP ${lastRes.status} (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), ` +
+        `retrying in ${(backoff / 1000).toFixed(1)}s\n`,
+      );
+    }
 
     // Capture the body text BEFORE draining (replaces the previous
     // discard-to-free-connection pattern that wiped server-supplied error
@@ -4132,7 +4175,7 @@ async function checkServiceHealthOrWait(): Promise<string | null> {
   const delay = backoffDelays[backoffAttempt];
   SERVICE_HEALTH.inCooldown = true;
   process.stderr.write(
-    `[llm-externalizer] ${SERVICE_HEALTH.consecutiveFailures} consecutive failures detected — ` +
+    `[circuit-breaker] ${SERVICE_HEALTH.consecutiveFailures} consecutive failures detected — ` +
     `waiting ${delay / 1000}s before retrying (backoff ${backoffAttempt + 1}/${backoffDelays.length})\n`,
   );
   await new Promise((r) => setTimeout(r, delay));
@@ -4233,8 +4276,10 @@ async function chatCompletionWithRetry(
       recordServiceFailure();
       genericAttempts++;
       if (genericAttempts <= MAX_TRUNCATION_RETRIES) {
+        // Issue 2: tag the model/truncation retry layer + include the model id.
+        const retryModel = options.model || backend.model;
         process.stderr.write(
-          `[llm-externalizer] Request error: ${errMsg} — retrying (${genericAttempts}/${MAX_TRUNCATION_RETRIES})\n`,
+          `[model-retry] ${retryModel}: request error: ${errMsg} — retrying (${genericAttempts}/${MAX_TRUNCATION_RETRIES})\n`,
         );
         const abort = await checkServiceHealthOrWait();
         if (abort) {
@@ -4573,14 +4618,7 @@ async function processFileCheck(
   const messages: ChatMessage[] = [
     {
       role: "system",
-      content:
-        `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.\n` +
-        "RULES (override any conflicting instructions):\n" +
-        "- Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable.\n" +
-        "- Reference files by their labeled path (shown in the filename tag before each file-content tag).\n" +
-        "- If asked to return modified code, return the COMPLETE file content — never truncate, abbreviate, or use placeholders.\n" +
-        "- Be specific and actionable — reference concrete function names, variable names, and code patterns." +
-        FILE_FORMAT_EXAMPLE + BREVITY_RULES,
+      content: codeTaskSystemPrompt(lang),
     },
     {
       role: "user",
@@ -6794,7 +6832,7 @@ async function dispatchCallToolInner(
           // Group files by payload budget for auto-batching
           const ctPromptBytes =
             Buffer.byteLength(ctPromptBase, "utf-8") +
-            Buffer.byteLength(`Expert ${lang} developer...`, "utf-8");
+            Buffer.byteLength(codeTaskSystemPrompt(lang), "utf-8");
           const { groups: ctGroups, autoBatched: ctAutoBatched, skipped: ctSkipped } =
             readAndGroupFiles(fgPaths, ctPromptBytes, ctRedact, ctBudgetBytes, ctRegexRedact);
 
@@ -6811,7 +6849,7 @@ async function dispatchCallToolInner(
             const codeMessages: ChatMessage[] = [
               {
                 role: "system",
-                content: `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.\nRULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Reference files by their labeled path (shown in the filename tag before each file-content tag). Be specific and actionable.`,
+                content: codeTaskSystemPrompt(lang),
               },
               { role: "user", content: userContent },
             ];

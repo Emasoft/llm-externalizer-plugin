@@ -30,6 +30,7 @@ import {
   formatModelInfoJson,
 } from "./or-model-info.js";
 import { parseClusterSynonymsInput } from "./cluster/cli.js";
+import { formatSuccessBanner } from "./cli-banner.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { writeFileSync, existsSync, statSync, unlinkSync } from "node:fs";
@@ -47,6 +48,21 @@ function die(msg: string): never {
 
 function info(msg: string): void {
   process.stdout.write(`${msg}\n`);
+}
+
+/** Write a line to STDERR (status/banner channel). Keeps the machine-readable
+ *  report path on STDOUT clean for piping while still giving the human a clear
+ *  success signal that stands out from the retry/error noise on stderr. */
+function infoErr(msg: string): void {
+  process.stderr.write(`${msg}\n`);
+}
+
+/** Emit the Issue-4 success banner to STDERR after a tool call produced a
+ *  report path. No-op when the result is empty (nothing to point at). The
+ *  banner string is built by the pure, separately-tested formatSuccessBanner. */
+function successBanner(tool: string, resultText: string): void {
+  const line = formatSuccessBanner(tool, resultText);
+  if (line) infoErr(line);
 }
 
 /** Parse --key value pairs from argv into a Record */
@@ -577,6 +593,11 @@ async function cmdSearchExisting(rawArgs: string[]): Promise<void> {
     if (result.isError) {
       process.exit(1);
     }
+    // Issue 4: clear success banner on STDERR (stdout keeps the raw report path).
+    successBanner(
+      "search_existing_implementations",
+      content.map((c) => c.text).join("\n"),
+    );
   } finally {
     try {
       await transport.close();
@@ -651,6 +672,8 @@ async function cmdClusterSynonyms(rawArgs: string[]): Promise<void> {
       if (c.type === "text") info(c.text);
     }
     if (result.isError) process.exit(1);
+    // Issue 4: clear success banner on STDERR (stdout keeps the raw report path).
+    successBanner("cluster_synonyms", content.map((c) => c.text).join("\n"));
   } finally {
     try {
       await transport.close();

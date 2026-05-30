@@ -1,9 +1,9 @@
 ---
 trdd-id: 54f508a4-266c-4838-979b-cea5b82823c3
 title: LLM Externalizer usability + output-quality fixes — surfaced by a live code_task test
-status: in-progress
+status: completed
 created: 2026-05-29T17:10:35+0200
-updated: 2026-05-30T01:53:21+0200
+updated: 2026-05-30T08:26:58+0200
 ---
 
 # TRDD-54f508a4 — LLM Externalizer usability + output-quality fixes
@@ -177,3 +177,13 @@ Each phase: build + lint + full test suite (zero-spend) + commit. **No push** un
   970; +10), zero regressions (classifyError-dependent suites still green →
   the `API error <status>` prefix is preserved outside the sanitized body).
   Remaining: Issues 5, 4, 2/3, and the rule-install.ts bonus (7-9).
+- 2026-05-30 08:27 — **ALL issues COMPLETE.** Issues 5/4/2/3/7/8/9 implemented
+  (spark agent, reviewed via git diff before commit):
+  - #5: `codeTaskSystemPrompt(lang)` single-source across the 3 divergent sites +
+    a self-gating severity rubric ("If you assign a severity…").
+  - #4: `cli-banner.ts` + `✓ <tool> complete — report: <path>` to stderr.
+  - #2: retry loggers tagged `[http-retry]`/`[model-retry]`/`[circuit-breaker]` (+model id).
+  - #3: 429 flood collapsed to first + summary (retry behaviour unchanged).
+  - #7/8/9: rule-install.ts — orphan-tmp unlink on rename failure, `/tmp`→`os.tmpdir()`,
+    random tmp-name suffix; +2 tests.
+  build + lint clean; full suite 989/993 (+9). status → completed.

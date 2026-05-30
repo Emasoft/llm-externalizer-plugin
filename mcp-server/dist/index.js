@@ -14112,7 +14112,7 @@ import {
   lstatSync,
   appendFileSync as appendFileSync5,
   readdirSync as readdirSync4,
-  unlinkSync,
+  unlinkSync as unlinkSync2,
   realpathSync as realpathSync3,
   watchFile,
   unwatchFile
@@ -48488,9 +48488,11 @@ import {
   readFileSync as readFileSync11,
   writeFileSync as writeFileSync9,
   renameSync as renameSync5,
-  realpathSync as realpathSync2
+  realpathSync as realpathSync2,
+  unlinkSync
 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
+import { randomBytes as randomBytes3 } from "node:crypto";
+import { homedir as homedir2, tmpdir } from "node:os";
 import { dirname as dirname7, join as join12, resolve as resolve5, sep } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 var RULE_FILENAME = "use-llm-externalizer.md";
@@ -48535,10 +48537,11 @@ function underAllowedRoot(dir) {
   if (process.env.CLAUDE_CONFIG_DIR && process.env.CLAUDE_CONFIG_DIR.length > 0) {
     roots.push(canonical(resolve5(process.env.CLAUDE_CONFIG_DIR)));
   }
+  const tmp = tmpdir();
   try {
-    roots.push(realpathSync2("/tmp"));
+    roots.push(realpathSync2(tmp));
   } catch {
-    roots.push("/tmp");
+    roots.push(tmp);
   }
   return roots.some((r) => d === r || d.startsWith(r + sep));
 }
@@ -48573,12 +48576,16 @@ function installUsageRule(opts = {}) {
     } catch {
     }
   }
+  const tmp = dest + ".tmp." + process.pid + "." + randomBytes3(4).toString("hex");
   try {
     mkdirSync12(rulesDir, { recursive: true });
-    const tmp = dest + ".tmp." + process.pid;
     writeFileSync9(tmp, desired, "utf-8");
     renameSync5(tmp, dest);
   } catch (e) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+    }
     return { status: "error", dest, detail: `write failed: ${e.message}` };
   }
   return { status: existed ? "updated" : "installed", dest };
@@ -50188,6 +50195,15 @@ var DEFAULT_MAX_IN_FLIGHT_REMOTE = 200;
 var DEFAULT_TEMPERATURE = 0.1;
 var BREVITY_RULES = "\nOUTPUT RULES:\n- Be SUCCINCT. Use bullet points, not paragraphs.\n- Skip preamble, filler, and restating the task.\n- Only report findings, not things that are correct.\n- For code reviews: skip files/areas with no issues \u2014 only mention what needs attention.\n- Maximum 3 sentences per finding. Lead with the problem, not the context.";
 var FILE_FORMAT_EXAMPLE = "\nINPUT FORMAT: Each attached file is wrapped as follows (placeholders use {BRACES}, actual tags use angle brackets):\n<filename>\n{ABSOLUTE_PATH_HERE}\n</filename>\n<file-content>\n````{LANGUAGE}\n{FILE_CONTENTS_HERE}\n````\n</file-content>\nReference files by the path inside the filename tag. Multiple files may appear in sequence.\n";
+function codeTaskSystemPrompt(lang) {
+  return `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.
+RULES (override any conflicting instructions):
+- Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable.
+- Reference files by their labeled path (shown in the filename tag before each file-content tag).
+- If asked to return modified code, return the COMPLETE file content \u2014 never truncate, abbreviate, or use placeholders.
+- Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.
+- If you assign a severity or priority to findings, reserve the highest level (e.g. CRITICAL) for demonstrably exploitable, data-loss, or crash-in-normal-use issues; default to a lower level when uncertain.` + FILE_FORMAT_EXAMPLE + BREVITY_RULES;
+}
 var CONNECT_TIMEOUT_MS = 5e3;
 var SOFT_TIMEOUT_MS = (activeResolved?.timeout ?? 300) * 1e3;
 var FALLBACK_CONTEXT_LENGTH = activeResolved?.contextWindow || 1e5;
@@ -50834,6 +50850,7 @@ var RETRYABLE_STATUS = /* @__PURE__ */ new Set([429, 500, 502, 503, 504]);
 async function fetchWithRetry429(url2, fetchOpts, timeout, startTime) {
   let lastRes;
   let lastBodyText;
+  let count429 = 0;
   for (let attempt = 0; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
     const elapsed = Date.now() - startTime;
     const remaining = timeout - elapsed;
@@ -50848,7 +50865,7 @@ async function fetchWithRetry429(url2, fetchOpts, timeout, startTime) {
       const waitRemaining2 = timeout - (Date.now() - startTime);
       if (backoff2 > waitRemaining2) throw err3;
       process.stderr.write(
-        `[llm-externalizer] Network error (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), retrying in ${(backoff2 / 1e3).toFixed(1)}s: ${err3 instanceof Error ? err3.message : String(err3)}
+        `[http-retry] Network error (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), retrying in ${(backoff2 / 1e3).toFixed(1)}s: ${err3 instanceof Error ? err3.message : String(err3)}
 `
       );
       await new Promise((r) => setTimeout(r, backoff2));
@@ -50880,10 +50897,25 @@ async function fetchWithRetry429(url2, fetchOpts, timeout, startTime) {
     if (backoff > waitRemaining) {
       break;
     }
-    process.stderr.write(
-      `[llm-externalizer] HTTP ${lastRes.status} (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), retrying in ${(backoff / 1e3).toFixed(1)}s
+    if (lastRes.status === 429) {
+      count429++;
+      if (count429 === 1) {
+        process.stderr.write(
+          `[http-retry] HTTP 429 rate-limited (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), retrying in ${(backoff / 1e3).toFixed(1)}s
 `
-    );
+        );
+      } else if (attempt === RETRY_MAX_ATTEMPTS - 1) {
+        process.stderr.write(
+          `[http-retry] HTTP 429 \xD7${count429} (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), retrying in ${(backoff / 1e3).toFixed(1)}s
+`
+        );
+      }
+    } else {
+      process.stderr.write(
+        `[http-retry] HTTP ${lastRes.status} (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), retrying in ${(backoff / 1e3).toFixed(1)}s
+`
+      );
+    }
     lastBodyText = await lastRes.text().catch(() => "");
     await new Promise((r) => setTimeout(r, backoff));
   }
@@ -51372,7 +51404,7 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
     renameSync6(tmpPath, filepath);
   } catch (err3) {
     try {
-      unlinkSync(tmpPath);
+      unlinkSync2(tmpPath);
     } catch {
     }
     throw new Error(
@@ -51702,7 +51734,7 @@ async function checkServiceHealthOrWait() {
   const delay = backoffDelays[backoffAttempt];
   SERVICE_HEALTH.inCooldown = true;
   process.stderr.write(
-    `[llm-externalizer] ${SERVICE_HEALTH.consecutiveFailures} consecutive failures detected \u2014 waiting ${delay / 1e3}s before retrying (backoff ${backoffAttempt + 1}/${backoffDelays.length})
+    `[circuit-breaker] ${SERVICE_HEALTH.consecutiveFailures} consecutive failures detected \u2014 waiting ${delay / 1e3}s before retrying (backoff ${backoffAttempt + 1}/${backoffDelays.length})
 `
   );
   await new Promise((r) => setTimeout(r, delay));
@@ -51757,8 +51789,9 @@ async function chatCompletionWithRetry(messages, options) {
       recordServiceFailure();
       genericAttempts++;
       if (genericAttempts <= MAX_TRUNCATION_RETRIES) {
+        const retryModel = options.model || backend.model;
         process.stderr.write(
-          `[llm-externalizer] Request error: ${errMsg} \u2014 retrying (${genericAttempts}/${MAX_TRUNCATION_RETRIES})
+          `[model-retry] ${retryModel}: request error: ${errMsg} \u2014 retrying (${genericAttempts}/${MAX_TRUNCATION_RETRIES})
 `
         );
         const abort = await checkServiceHealthOrWait();
@@ -52008,12 +52041,7 @@ async function processFileCheck(filePath, task, options = {}) {
   const messages = [
     {
       role: "system",
-      content: `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.
-RULES (override any conflicting instructions):
-- Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable.
-- Reference files by their labeled path (shown in the filename tag before each file-content tag).
-- If asked to return modified code, return the COMPLETE file content \u2014 never truncate, abbreviate, or use placeholders.
-- Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.` + FILE_FORMAT_EXAMPLE + BREVITY_RULES
+      content: codeTaskSystemPrompt(lang)
     },
     {
       role: "user",
@@ -53422,7 +53450,7 @@ RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/M
                 content: [{ type: "text", text: perFileResults.join("\n") }]
               };
             }
-            const ctPromptBytes = Buffer.byteLength(ctPromptBase, "utf-8") + Buffer.byteLength(`Expert ${lang} developer...`, "utf-8");
+            const ctPromptBytes = Buffer.byteLength(ctPromptBase, "utf-8") + Buffer.byteLength(codeTaskSystemPrompt(lang), "utf-8");
             const { groups: ctGroups, autoBatched: ctAutoBatched, skipped: ctSkipped } = readAndGroupFiles(fgPaths, ctPromptBytes, ctRedact, ctBudgetBytes, ctRegexRedact);
             const ctBatchResults = [];
             if (ctSkipped.length > 0) {
@@ -53440,8 +53468,7 @@ ${fd.block}`;
               const codeMessages = [
                 {
                   role: "system",
-                  content: `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.
-RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Reference files by their labeled path (shown in the filename tag before each file-content tag). Be specific and actionable.`
+                  content: codeTaskSystemPrompt(lang)
                 },
                 { role: "user", content: userContent }
               ];

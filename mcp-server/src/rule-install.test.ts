@@ -3,7 +3,16 @@
 // + destination are tmp dirs under /tmp (an allowed write root), env saved/restored.
 
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  rmSync,
+  readdirSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
@@ -22,7 +31,9 @@ const savedEnv: Record<string, string | undefined> = {
 };
 
 function mkTmp(prefix: string): string {
-  const d = mkdtempSync(join("/tmp", prefix));
+  // os.tmpdir(), not a literal "/tmp" — matches the installer's allowed-root
+  // logic and works on every platform (Windows %TEMP%, macOS /var/folders, …).
+  const d = mkdtempSync(join(tmpdir(), prefix));
   tmpDirs.push(d);
   return d;
 }
@@ -87,13 +98,44 @@ describe("installUsageRule", () => {
 
   it("refuses to write outside home / CLAUDE_CONFIG_DIR / tmp", () => {
     const sourcePath = mkSource(SRC_V1);
-    // A root-level path that is under neither $HOME nor /tmp.
+    // A root-level path that is under neither $HOME nor the OS temp dir.
     const res = installUsageRule({
       sourcePath,
       rulesDir: "/llm-ext-forbidden-root-xyz/rules",
     });
     expect(res.status).toBe("error");
     expect(res.detail).toMatch(/refusing to write/);
+  });
+
+  it("accepts the OS temp dir (os.tmpdir()) as an allowed write root", () => {
+    // The sandbox dirs come from os.tmpdir(); a successful install there proves
+    // tmpdir() is treated as an allowed root on this platform (Issue 8).
+    const sourcePath = mkSource(SRC_V1);
+    const rulesDir = mkTmp("llm-ext-rule-dst-");
+    expect(rulesDir.startsWith(tmpdir())).toBe(true);
+    const res = installUsageRule({ sourcePath, rulesDir });
+    expect(res.status).toBe("installed");
+    expect(readFileSync(res.dest, "utf-8")).toBe(SRC_V1);
+  });
+
+  it("leaves no orphan .tmp file when the rename fails (Issue 7)", () => {
+    const sourcePath = mkSource(SRC_V1);
+    const rulesDir = mkTmp("llm-ext-rule-dst-");
+    // Make the destination a NON-EMPTY directory so renameSync(tmp, dest) throws
+    // (a file cannot replace a non-empty directory). The tmp file IS written
+    // first, so the rename then fails — exercising the catch's cleanup branch.
+    const dest = join(rulesDir, RULE_FILENAME);
+    mkdirSync(dest, { recursive: true });
+    writeFileSync(join(dest, "blocker"), "x", "utf-8");
+
+    const res = installUsageRule({ sourcePath, rulesDir });
+    expect(res.status).toBe("error");
+    expect(res.detail).toMatch(/write failed/);
+    // No leftover "<RULE_FILENAME>.tmp.*" file remains in the rules dir.
+    const orphans = readdirSync(rulesDir).filter((n) =>
+      n.startsWith(RULE_FILENAME + ".tmp."),
+    );
+    expect(orphans).toEqual([]);
   });
 });
 
