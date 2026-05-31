@@ -1,10 +1,18 @@
 ---
 trdd-id: 8de4e9f2-2cb9-44f4-bc80-95dcb5d758ad
 title: URGENT — Codex externalization feature security review re reported Codex-poisons-Claude-Code-plugins threat
-status: not-started
+status: superseded
 created: 2026-05-31T21:49:14+0200
-updated: 2026-05-31T21:49:14+0200
+updated: 2026-05-31T22:11:01+0200
+superseded-by: [TRDD-1e2b87cb]
 ---
+
+> **SUPERSEDED by TRDD-1e2b87cb** (remove-codex-integration). This triage had the
+> threat mechanism WRONG — it claimed the default codex sandbox was read-only, but
+> the runner actually invokes `codex --dangerously-bypass-approvals-and-sandbox`,
+> and the real reported harm is codex clobbering `CLAUDE_PLUGIN_DATA` (breaking all
+> CC plugins) plus writing `~/.codex/config.toml`. The user ordered outright
+> removal; see TRDD-1e2b87cb for the authoritative plan.
 
 # TRDD-8de4e9f2 — Codex externalization security review (poisoning threat)
 
