@@ -1,9 +1,9 @@
 ---
 trdd-id: 1e2b87cb-9b3e-4031-a1c7-7cc7bde54ac7
 title: Remove the Codex externalization integration entirely — Codex breaks all Claude Code plugins
-status: in-progress
+status: completed
 created: 2026-05-31T22:11:01+0200
-updated: 2026-05-31T22:11:01+0200
+updated: 2026-05-31T23:12:33+0200
 ---
 
 # TRDD-1e2b87cb — Remove the Codex externalization integration entirely
@@ -111,3 +111,22 @@ never invoked from this plugin again.
   Blast radius mapped (6 feature files, 6 referencing files), all targets
   git-tracked + recoverable. Removal to be done by a focused agent, diff
   reviewed + committed by the orchestrator. No push.
+- 2026-05-31 23:12 — **COMPLETE.** 6 feature files git-rm'd
+  (commands/llm-externalizer-codex-scan.md, skills/llm-externalizer-codex-scan/,
+  scripts/codex/{run-codex-scan.py,codex-scan-prompt.txt,codex-scan-prompts.md},
+  tests/test_run_codex_scan.py); empty scripts/codex/ dir removed. References
+  cleaned: conftest.py (dropped "codex" subdir), test_fix_found_bugs_helper.py
+  (comment), dogfood_test.py (comments), README.md (removed command section +
+  table row + base-command inline mention; counts 36→35 commands, 19→18 base,
+  16→15 skills, tree comments 36→35 / 16→15), docs/openrouter/responses-api.md
+  (gpt-5.3-codex MODEL-name mentions left — OpenAI Responses-API model, not the
+  codex CLI). Added guard test mcp-server/src/no-codex-invocation.test.ts (wired
+  into vitest include) that fails if any shipped file reintroduces a codex
+  invocation (/codex exec/, /--dangerously-bypass.../, /subprocess.*codex/,
+  /shutil.which("codex")/); prose excluded. The orchestrator's first agent
+  corrupted README; orchestrator reverted README to HEAD and re-did the edits
+  cleanly + independently verified. GATES (verified): npm build 0, lint 0, vitest
+  990 passed/4 skipped (doc-consistency green), pytest 116 passed, dogfood exit 0
+  (96 PASS/0 FAIL/1 skip, 35 cmds + 15 skills). `git grep` for codex INVOCATION
+  over commands/scripts/skills/mcp-server-src/bin = EMPTY. Codex can no longer be
+  called from Claude Code via this plugin. No push.

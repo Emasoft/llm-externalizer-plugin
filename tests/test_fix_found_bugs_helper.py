@@ -12,8 +12,8 @@ both separator shapes match — single source of truth.
 The SUT helper `_find_report_files` is invoked directly against a tmp dir
 populated with real on-disk filenames; no services are mocked. The module
 name uses underscores so it is importable by name, but it is loaded via
-importlib.util pointing at the exact script path (same pattern as
-tests/test_run_codex_scan.py) so the test does not depend on sys.path.
+importlib.util pointing at the exact script path so the test does not
+depend on sys.path.
 """
 
 from __future__ import annotations

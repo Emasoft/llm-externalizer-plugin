@@ -649,7 +649,7 @@ def resolve_command_tool(fm: dict[str, object], body: str, catalog: set[str]) ->
        documented by-design shape, GAP-2).
     3. Orchestration / installer wrapper — `allowed-tools` includes `Task`
        or `Agent` (subagent dispatch), or is `Bash`-only wrapping an external
-       CLI / file installer (codex, statusline). Deliberately slash-only with
+       CLI / file installer (statusline). Deliberately slash-only with
        no single MCP verb (documented GAP-8..14).
 
     Returns (status, detail). status is PASS or FAIL.
@@ -675,7 +675,7 @@ def resolve_command_tool(fm: dict[str, object], body: str, catalog: set[str]) ->
     # Shape 3 — orchestration wrapper (Task/Agent subagent dispatch).
     if "Task" in tools or "Agent" in tools:
         return PASS, "orchestration wrapper (Task/Agent dispatch; by-design slash-only)"
-    # Bash-only installer / external-CLI wrapper (codex, statusline) — a
+    # Bash-only installer / external-CLI wrapper (statusline) — a
     # documented by-design exemption with no in-process MCP verb.
     if "Bash" in tools:
         return PASS, "Bash wrapper (external CLI / installer; by-design slash-only)"

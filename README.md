@@ -111,7 +111,7 @@ Keeping the fix half local means the expensive model only touches code when it a
 - **Scan externalization** — 37 MCP tools for code review, duplicate hunting, import/reference validation, spec-compliance checks, bulk LLM-driven structured-output extraction (mass-scouting), full-sentence meaning-equivalence clustering (`cluster_synonyms`), and injection-hardened security triage (`security_scan`), all backed by a local or remote LLM you choose.
 - **Fix loop stays local** — fixes are applied by your Claude Code Sonnet / Opus session, NOT by the external LLM. You get the ensemble's second opinion without giving up editorial control.
 - **False-positive-aware fixers** — every fixer subagent runs a verification pass (file-read + flow-trace) before editing. Empirically ~15–30% of ensemble findings are false positives; the fixer rejects them with a typed reason.
-- **36 plugin commands** — 19 base (`setup`, `discover`, `reset`, `configure`, `change-model`, `install-statusline`, `codex-scan`, `benchmark`, `bench-free-pool`, `assess-model`, `check-model-health`, `discover-new-models`, `security-triage-benchmark`, `search-existing-implementations`, `cluster-synonyms`, `scan-and-fix`, `scan-and-fix-serially`, `fix-report`, `fix-found-bugs`) + 16 mass-scout (`mass-scout-register`, `mass-scout-preclassify`, `mass-scout-estimate`, `mass-scout`, `mass-scout-search`, `mass-scout-search-xjob`, `mass-scout-get`, `mass-scout-export`, `mass-scout-jobs-list`, `mass-scout-audit-sample`, `mass-scout-body-get`, `mass-scout-build-fieldset`, `mass-scout-propose-fieldset`, `mass-scout-list-bundled-fieldsets`, `mass-scout-diff`, `mass-scout-chain`) + 1 dedicated security tool (`security-scan`). Full list in [Plugin commands](#plugin-commands). Note: `/llm-externalizer:llm-externalizer-change-model` is a *user-only* redirect — it shows your current config (`discover`/`get_settings`) and guides you to edit `~/.llm-externalizer/settings.yaml` by hand, then reload via `reset`. There is no `change_model` or `set_settings` MCP tool (the server is read-only by design). Model / profile changes always go through editing `~/.llm-externalizer/settings.yaml` (or running the setup wizard above).
+- **35 plugin commands** — 18 base (`setup`, `discover`, `reset`, `configure`, `change-model`, `install-statusline`, `benchmark`, `bench-free-pool`, `assess-model`, `check-model-health`, `discover-new-models`, `security-triage-benchmark`, `search-existing-implementations`, `cluster-synonyms`, `scan-and-fix`, `scan-and-fix-serially`, `fix-report`, `fix-found-bugs`) + 16 mass-scout (`mass-scout-register`, `mass-scout-preclassify`, `mass-scout-estimate`, `mass-scout`, `mass-scout-search`, `mass-scout-search-xjob`, `mass-scout-get`, `mass-scout-export`, `mass-scout-jobs-list`, `mass-scout-audit-sample`, `mass-scout-body-get`, `mass-scout-build-fieldset`, `mass-scout-propose-fieldset`, `mass-scout-list-bundled-fieldsets`, `mass-scout-diff`, `mass-scout-chain`) + 1 dedicated security tool (`security-scan`). Full list in [Plugin commands](#plugin-commands). Note: `/llm-externalizer:llm-externalizer-change-model` is a *user-only* redirect — it shows your current config (`discover`/`get_settings`) and guides you to edit `~/.llm-externalizer/settings.yaml` by hand, then reload via `reset`. There is no `change_model` or `set_settings` MCP tool (the server is read-only by design). Model / profile changes always go through editing `~/.llm-externalizer/settings.yaml` (or running the setup wizard above).
 - **37 MCP tools** — 16 core/utility (`chat`, `code_task`, `scan_folder`, `compare_files`, `check_references`, `check_imports`, `check_against_specs`, `search_existing_implementations`, `cluster_synonyms`, `batch_check`, `discover`, `reset`, `get_settings`, `or_model_info`, `or_model_info_table`, `or_model_info_json`) + 16 mass-scout (`mass_scout_register`, `mass_scout_preclassify`, `mass_scout_estimate`, `mass_scout`, `mass_scout_search`, `mass_scout_search_xjob`, `mass_scout_get`, `mass_scout_export`, `mass_scout_jobs_list`, `mass_scout_audit_sample`, `mass_scout_body_get`, `mass_scout_build_fieldset`, `mass_scout_propose_fieldset`, `mass_scout_list_bundled_fieldsets`, `mass_scout_diff`, `mass_scout_chain`) + 5 security / model-qualification (`security_scan`, `security_triage_benchmark`, `assess_model`, `check_model_health`, `discover_new_models`). The MCP server is **read-only by design** — there are no `set_settings`, `change_model`, `fix_code`, `batch_fix`, `merge_files`, `split_file`, `revert_file`, or `custom_prompt` tools (configuration is user-only; `custom_prompt` was merged into `chat`). The `max_retries: 3` parameter on per-file tools (chat/code_task/scan_folder) replaces the older `batch_check` workflow (parallel execution + exponential backoff + circuit breaker); `batch_check` itself is DEPRECATED.
 - **6 internal agents** — setup wizard + reviewer + 4 fixer variants (parallel/serial × Sonnet/Opus). The setup-agent ships with five preloaded Hugging Face helper skills (`huggingface-best`, `huggingface-local-models`, `huggingface-mlx-models`, `hf-cli`, `huggingface-community-evals`) — all marked `user-invocable: false`. See [Agents](#agents).
 - **3 backend modes** — `local` (sequential), `remote` (parallel, single model), `remote-ensemble` (parallel, three models → combined report).
@@ -430,7 +430,7 @@ The command will auto-discover your codebase, present the file list for confirma
 
 Commands are slash-invoked inside Claude Code. The format is `/llm-externalizer:llm-externalizer-<name>`.
 
-### Base commands (19)
+### Base commands (18)
 
 | Command | Purpose | Produces |
 |---|---|---|
@@ -440,7 +440,6 @@ Commands are slash-invoked inside Claude Code. The format is `/llm-externalizer:
 | `/llm-externalizer:llm-externalizer-configure` | Read-only profile inspector (edit `settings.yaml` to change) | Profile table |
 | `/llm-externalizer:llm-externalizer-change-model` | User-only redirect — shows the current config (`discover`/`get_settings`), then guides you to edit `~/.llm-externalizer/settings.yaml` by hand and reload via `reset`. There is no `change_model` MCP tool; the server is read-only | `settings.yaml` edit guidance |
 | `/llm-externalizer:llm-externalizer-install-statusline` | Install the bundled multi-tier statusline (credit balance, model, context bar, MCP cost, git, usage limits) | Updated `settings.json` |
-| `/llm-externalizer:llm-externalizer-codex-scan` | Codex-style structured scan of a file or codebase with fixed rubric | Codex-style report |
 | `/llm-externalizer:llm-externalizer-benchmark` | Run the OpenRouter model-selection harness over your sample to compare candidates | Benchmark report |
 | `/llm-externalizer:llm-externalizer-bench-free-pool` | Auto-fill the benchmark candidate set from the active profile's `free_models` (or the bundled `FREE_POOL_SEED`) — one flag instead of N `--include`s; refuses to run on any non-`:free` id (cost-safety chokepoint). Composes with `--security-triage`. The same sweep runs automatically when `free_only` flips ON and the cache has no `:free` entries (TRDD-f1510055) | Benchmark report (zero-cost) |
 | `/llm-externalizer:llm-externalizer-assess-model` | Assess one model against every LLM tool's per-tool requirements (free — no LLM call, just a public catalog fetch); shows per-tool `OK`/`NO` + which qualifying tools also need a benchmark pass | Per-tool requirements table |
@@ -534,9 +533,6 @@ No parameters. User-only config helper — prints a paste-ready `settings.yaml` 
 
 ### `/llm-externalizer:llm-externalizer-install-statusline`
 No parameters. Honors the `REFRESH_INTERVAL` env var (seconds; default `3`) when invoking the underlying installer.
-
-### `/llm-externalizer:llm-externalizer-codex-scan`
-Takes a file or folder path (auto-discovers the codebase when omitted). Same target/file-list conventions as `scan-and-fix`.
 
 ### `/llm-externalizer:llm-externalizer-cluster-synonyms`
 Wraps the `cluster_synonyms` tool / `bin/llm-externalizer cluster-synonyms --input-json '<json>'`. Inputs: `input_file` (JSONL of `{id, sentence}`), `output_dir`, optional `embeddings_file`, `policy_file`, `resume_from`.
@@ -1040,9 +1036,9 @@ llm-externalizer-plugin/
 ├── .claude-plugin/plugin.json     # Plugin manifest
 ├── .mcp.json                      # MCP server launcher
 ├── bin/                           # MCP launcher + CLI wrapper
-├── commands/                      # 36 slash commands
+├── commands/                      # 35 slash commands
 ├── agents/                        # 6 internal agents (reviewer + 4 fixers + setup-agent)
-├── skills/                        # 16 auto-discovered skills
+├── skills/                        # 15 auto-discovered skills
 ├── rules/                         # Lean always-loaded usage rule (auto-installed to ~/.claude/rules/)
 ├── mcp-server/                    # Bundled TypeScript MCP server
 ├── scripts/                       # Python: setup, publish, validators, helpers

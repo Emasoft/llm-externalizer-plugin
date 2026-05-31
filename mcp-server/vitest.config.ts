@@ -93,6 +93,8 @@ export default defineConfig({
       'src/model-qualification/new-arrivals.test.ts',
       // Doc-consistency gate — README counts/names match the source (A5).
       'src/doc-consistency.test.ts',
+      // Codex-removal guard — shipped tree must never invoke the codex CLI (TRDD-1e2b87cb).
+      'src/no-codex-invocation.test.ts',
       'src/default-output-dir.test.ts',
       'src/cluster/phase2_verify.test.ts',
       'src/cluster/phase3_canonical.test.ts',
