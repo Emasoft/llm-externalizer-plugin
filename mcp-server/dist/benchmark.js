@@ -218248,6 +218248,72 @@ function buildBenchmarkRoster(candidatePool, criteria2, includeIds, baselineLook
   return { candidates, baselines };
 }
 
+// src/benchmark/select-common.ts
+var COST_EPSILON = 1e-9;
+function notPricier(candidate, inInc, outInc) {
+  return candidate.inputDollarsPerMillion <= inInc + COST_EPSILON && candidate.outputDollarsPerMillion <= outInc + COST_EPSILON;
+}
+function selectSameOrCheaper(input) {
+  const {
+    incumbentModelId,
+    incumbentInputDollarsPerMillion: inInc,
+    incumbentOutputDollarsPerMillion: outInc,
+    requirementsLabel,
+    benchmarkLabel
+  } = input;
+  const eligible = [];
+  const rejected = [];
+  for (const c of input.candidates) {
+    if (!c.qualified) {
+      rejected.push({
+        modelId: c.modelId,
+        reason: `does not meet ${requirementsLabel}${c.disqualifyReason ? ` (${c.disqualifyReason})` : ""}`
+      });
+      continue;
+    }
+    if (!c.benchmarkPass) {
+      rejected.push({
+        modelId: c.modelId,
+        reason: `failed ${benchmarkLabel}: ${c.benchmarkFailReasons.join("; ")}`
+      });
+      continue;
+    }
+    if (!notPricier(c, inInc, outInc)) {
+      rejected.push({
+        modelId: c.modelId,
+        reason: `pricier than the incumbent default (in $${c.inputDollarsPerMillion.toFixed(3)}/out $${c.outputDollarsPerMillion.toFixed(3)} vs incumbent in $${inInc.toFixed(3)}/out $${outInc.toFixed(3)}) \u2014 never auto-bump to a pricier model`
+      });
+      continue;
+    }
+    eligible.push(c);
+  }
+  eligible.sort((a, b) => {
+    if (b.benchmarkScore !== a.benchmarkScore) return b.benchmarkScore - a.benchmarkScore;
+    const aCost = a.inputDollarsPerMillion + a.outputDollarsPerMillion;
+    const bCost = b.inputDollarsPerMillion + b.outputDollarsPerMillion;
+    if (aCost !== bCost) return aCost - bCost;
+    return a.latencyMs - b.latencyMs;
+  });
+  if (eligible.length === 0) {
+    return {
+      recommendedModelId: incumbentModelId,
+      changed: false,
+      reason: `No eligible same-or-cheaper model passed ${benchmarkLabel}. Keeping the incumbent default.`,
+      eligible,
+      rejected
+    };
+  }
+  const winner = eligible[0];
+  const changed = winner.modelId !== incumbentModelId;
+  return {
+    recommendedModelId: winner.modelId,
+    changed,
+    reason: changed ? `${winner.modelId} passed ${benchmarkLabel} (score ${winner.benchmarkScore.toFixed(3)}) at no higher cost than the incumbent and scored best among eligible passers.` : `The incumbent ${winner.modelId} remains the best eligible passer (score ${winner.benchmarkScore.toFixed(3)}).`,
+    eligible,
+    rejected
+  };
+}
+
 // src/benchmark/security-triage/select.ts
 var SECURITY_TRIAGE_CRITERIA = {
   category: DEFAULT_CRITERIA.category,
@@ -218264,62 +218330,39 @@ var SECURITY_TRIAGE_CRITERIA = {
   requireReasoning: false,
   allowFree: false
 };
-var COST_EPSILON = 1e-9;
-function notPricier(candidate, inInc, outInc) {
-  return candidate.inputDollarsPerMillion <= inInc + COST_EPSILON && candidate.outputDollarsPerMillion <= outInc + COST_EPSILON;
+function toGeneric(c) {
+  return {
+    modelId: c.modelId,
+    qualified: c.qualified,
+    disqualifyReason: c.disqualifyReason,
+    inputDollarsPerMillion: c.inputDollarsPerMillion,
+    outputDollarsPerMillion: c.outputDollarsPerMillion,
+    latencyMs: c.latencyMs,
+    benchmarkPass: c.triage.pass,
+    benchmarkScore: c.triage.score,
+    benchmarkFailReasons: c.triage.failReasons
+  };
 }
 function selectSecurityTriageModel(input) {
-  const { incumbentModelId, incumbentInputDollarsPerMillion: inInc, incumbentOutputDollarsPerMillion: outInc } = input;
-  const eligible = [];
-  const rejected = [];
-  for (const c of input.candidates) {
-    if (!c.qualified) {
-      rejected.push({
-        modelId: c.modelId,
-        reason: `does not meet security-triage requirements${c.disqualifyReason ? ` (${c.disqualifyReason})` : ""}`
-      });
-      continue;
-    }
-    if (!c.triage.pass) {
-      rejected.push({
-        modelId: c.modelId,
-        reason: `failed the triage benchmark: ${c.triage.failReasons.join("; ")}`
-      });
-      continue;
-    }
-    if (!notPricier(c, inInc, outInc)) {
-      rejected.push({
-        modelId: c.modelId,
-        reason: `pricier than the incumbent default (in $${c.inputDollarsPerMillion.toFixed(3)}/out $${c.outputDollarsPerMillion.toFixed(3)} vs incumbent in $${inInc.toFixed(3)}/out $${outInc.toFixed(3)}) \u2014 never auto-bump to a pricier model`
-      });
-      continue;
-    }
-    eligible.push(c);
-  }
-  eligible.sort((a, b) => {
-    if (b.triage.score !== a.triage.score) return b.triage.score - a.triage.score;
-    const aCost = a.inputDollarsPerMillion + a.outputDollarsPerMillion;
-    const bCost = b.inputDollarsPerMillion + b.outputDollarsPerMillion;
-    if (aCost !== bCost) return aCost - bCost;
-    return a.latencyMs - b.latencyMs;
+  const byModelId = new Map(
+    input.candidates.map((c) => [c.modelId, c])
+  );
+  const generic = selectSameOrCheaper({
+    candidates: input.candidates.map(toGeneric),
+    incumbentModelId: input.incumbentModelId,
+    incumbentInputDollarsPerMillion: input.incumbentInputDollarsPerMillion,
+    incumbentOutputDollarsPerMillion: input.incumbentOutputDollarsPerMillion,
+    requirementsLabel: "security-triage requirements",
+    benchmarkLabel: "the triage benchmark"
   });
-  if (eligible.length === 0) {
-    return {
-      recommendedModelId: incumbentModelId,
-      changed: false,
-      reason: "No eligible same-or-cheaper model passed the triage benchmark. Keeping the incumbent default.",
-      eligible,
-      rejected
-    };
-  }
-  const winner = eligible[0];
-  const changed = winner.modelId !== incumbentModelId;
   return {
-    recommendedModelId: winner.modelId,
-    changed,
-    reason: changed ? `${winner.modelId} passed the triage benchmark (score ${winner.triage.score.toFixed(3)}) at no higher cost than the incumbent and scored best among eligible passers.` : `The incumbent ${winner.modelId} remains the best eligible passer (score ${winner.triage.score.toFixed(3)}).`,
-    eligible,
-    rejected
+    recommendedModelId: generic.recommendedModelId,
+    changed: generic.changed,
+    reason: generic.reason,
+    // Reorder the original assessments by the gate's eligible ordering. Every
+    // eligible modelId came from input.candidates, so the lookup never misses.
+    eligible: generic.eligible.map((g) => byModelId.get(g.modelId)),
+    rejected: generic.rejected
   };
 }
 
@@ -218363,8 +218406,8 @@ var TOOL_MODEL_REGISTRY = {
   search_existing_implementations: {
     tool: "search_existing_implementations",
     requirements: criteria({ requireReasoning: true, minContextTokens: 128e3 }),
-    benchmark: null,
-    note: "Duplicate-implementation match across a codebase. Duplicate-match benchmark dataset is incremental."
+    benchmark: "search-existing",
+    note: "Duplicate-implementation match across a codebase. Gated by the search-existing fixture benchmark (TRDD-828238b5 A6)."
   },
   check_references: {
     tool: "check_references",

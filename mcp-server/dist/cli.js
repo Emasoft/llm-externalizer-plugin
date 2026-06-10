@@ -7394,12 +7394,20 @@ var init_discover = __esm({
   }
 });
 
+// src/benchmark/select-common.ts
+var init_select_common = __esm({
+  "src/benchmark/select-common.ts"() {
+    "use strict";
+  }
+});
+
 // src/benchmark/security-triage/select.ts
 var SECURITY_TRIAGE_CRITERIA;
 var init_select = __esm({
   "src/benchmark/security-triage/select.ts"() {
     "use strict";
     init_discover();
+    init_select_common();
     SECURITY_TRIAGE_CRITERIA = {
       category: DEFAULT_CRITERIA.category,
       // Snippet windows are at most a few KB; the judge prompt is small. 16K is
@@ -7464,8 +7472,8 @@ var init_registry = __esm({
       search_existing_implementations: {
         tool: "search_existing_implementations",
         requirements: criteria({ requireReasoning: true, minContextTokens: 128e3 }),
-        benchmark: null,
-        note: "Duplicate-implementation match across a codebase. Duplicate-match benchmark dataset is incremental."
+        benchmark: "search-existing",
+        note: "Duplicate-implementation match across a codebase. Gated by the search-existing fixture benchmark (TRDD-828238b5 A6)."
       },
       check_references: {
         tool: "check_references",
