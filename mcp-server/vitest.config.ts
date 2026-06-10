@@ -83,6 +83,10 @@ export default defineConfig({
       'src/benchmark/security-triage/select.test.ts',
       // Real-model end-to-end smoke — self-skips unless OPENROUTER_API_KEY is set.
       'src/benchmark/security-triage/live.test.ts',
+      // search-existing per-tool benchmark (TRDD-828238b5 A6) — fixture-backed
+      // golden dataset + deterministic precision/recall scorer. No LLM, no network.
+      'src/benchmark/search-existing/dataset.test.ts',
+      'src/benchmark/search-existing/score.test.ts',
       // Per-tool model-qualification registry (TRDD-f45eeaa0 framework core).
       'src/model-qualification/registry.test.ts',
       // Cross-tool model assessment (requirements half of the per-tool gate).

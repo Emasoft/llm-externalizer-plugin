@@ -1,0 +1,12 @@
+{
+  "_comment": "IDE-only config. These fixture files are intentionally OUTSIDE the package tsconfig (mcp-server/tsconfig.json includes src/**/* only) so the benchmark corpus is never compiled, linted, or tested by the toolchain. This file just gives editors node typings so the fixtures don't show phantom 'Cannot find name Buffer/process' diagnostics.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts"]
+}
