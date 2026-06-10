@@ -10320,7 +10320,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve7.call(this, root, ref);
+      let _sch = resolve9.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a2 = root.localRefs) === null || _a2 === void 0 ? void 0 : _a2[ref];
         const { schemaId } = this.opts;
@@ -10347,7 +10347,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve7(root, ref) {
+    function resolve9(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -10978,7 +10978,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve7(baseURI, relativeURI, options) {
+    function resolve9(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -11236,7 +11236,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve7,
+      resolve: resolve9,
       resolveComponent,
       equal,
       serialize,
@@ -14228,24 +14228,21 @@ var require_dist2 = __commonJS({
 // src/index.ts
 var import_yaml2 = __toESM(require_dist(), 1);
 import {
-  readFileSync as readFileSync14,
+  readFileSync as readFileSync15,
   writeFileSync as writeFileSync11,
   mkdirSync as mkdirSync15,
-  existsSync as existsSync9,
+  existsSync as existsSync11,
   renameSync as renameSync6,
-  statSync as statSync5,
-  lstatSync,
+  statSync as statSync7,
   appendFileSync as appendFileSync5,
-  readdirSync as readdirSync4,
   unlinkSync as unlinkSync2,
-  realpathSync as realpathSync3,
+  realpathSync as realpathSync5,
   watchFile,
   unwatchFile
 } from "node:fs";
-import { spawnSync as spawnSync2 } from "node:child_process";
-import { extname as extname4, join as join15, basename as basename4, dirname as dirname9, resolve as resolve6, isAbsolute as isAbsolute4, sep as sep2 } from "node:path";
-import { randomUUID } from "node:crypto";
-import { homedir as homedir4 } from "node:os";
+import { spawnSync as spawnSync3 } from "node:child_process";
+import { extname as extname5, join as join16, basename as basename5, dirname as dirname10, resolve as resolve8, isAbsolute as isAbsolute4 } from "node:path";
+import { randomUUID as randomUUID2 } from "node:crypto";
 
 // src/grouping.ts
 import { statSync } from "node:fs";
@@ -35668,7 +35665,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve7) => setTimeout(resolve7, pollInterval));
+        await new Promise((resolve9) => setTimeout(resolve9, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error48) {
@@ -35685,7 +35682,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve7, reject) => {
+    return new Promise((resolve9, reject) => {
       const earlyReject = (error48) => {
         reject(error48);
       };
@@ -35763,7 +35760,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve7(parseResult.data);
+            resolve9(parseResult.data);
           }
         } catch (error48) {
           reject(error48);
@@ -36024,12 +36021,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve7, reject) => {
+    return new Promise((resolve9, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve7, interval);
+      const timeoutId = setTimeout(resolve9, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -36988,7 +36985,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve7) => setTimeout(resolve7, pollInterval));
+      await new Promise((resolve9) => setTimeout(resolve9, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -37631,12 +37628,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve7) => {
+    return new Promise((resolve9) => {
       const json2 = serializeMessage(message);
       if (this._stdout.write(json2)) {
-        resolve7();
+        resolve9();
       } else {
-        this._stdout.once("drain", resolve7);
+        this._stdout.once("drain", resolve9);
       }
     });
   }
@@ -38133,8 +38130,8 @@ function renderSystemPrompt(fs) {
   );
   return lines.join("\n");
 }
-function userPromptFor(basename5, body) {
-  return `FILE: ${basename5}
+function userPromptFor(basename6, body) {
+  return `FILE: ${basename6}
 
 CONTENT:
 ${body}`;
@@ -48606,69 +48603,1420 @@ function buildEarlyAbort(invocation, errors, warnings, profileName, tStart) {
 // src/index.ts
 import { fileURLToPath as fileUrlToPath_cs } from "node:url";
 
+// src/scan-pipeline.ts
+import {
+  readFileSync as readFileSync11,
+  existsSync as existsSync7,
+  statSync as statSync5,
+  lstatSync,
+  readdirSync as readdirSync4,
+  realpathSync as realpathSync2
+} from "node:fs";
+import { extname as extname4, join as join12, basename as basename4, dirname as dirname7, resolve as resolve5, sep } from "node:path";
+import { homedir as homedir2 } from "node:os";
+import { spawnSync as spawnSync2 } from "node:child_process";
+var EXT_TO_LANG = {
+  ".ts": "typescript",
+  ".tsx": "typescript",
+  ".mts": "typescript",
+  ".cts": "typescript",
+  ".js": "javascript",
+  ".jsx": "javascript",
+  ".mjs": "javascript",
+  ".cjs": "javascript",
+  ".py": "python",
+  ".rs": "rust",
+  ".go": "go",
+  ".java": "java",
+  ".kt": "kotlin",
+  ".c": "c",
+  ".h": "c",
+  ".cpp": "cpp",
+  ".hpp": "cpp",
+  ".cc": "cpp",
+  ".cs": "csharp",
+  ".rb": "ruby",
+  ".php": "php",
+  ".swift": "swift",
+  ".sh": "bash",
+  ".bash": "bash",
+  ".zsh": "zsh",
+  ".fish": "fish",
+  ".sql": "sql",
+  ".html": "html",
+  ".css": "css",
+  ".scss": "scss",
+  ".less": "less",
+  ".json": "json",
+  ".yaml": "yaml",
+  ".yml": "yaml",
+  ".toml": "toml",
+  ".xml": "xml",
+  ".md": "markdown",
+  ".mdx": "mdx",
+  ".tex": "latex",
+  ".lua": "lua",
+  ".r": "r",
+  ".R": "r",
+  ".dart": "dart",
+  ".ex": "elixir",
+  ".exs": "elixir",
+  ".zig": "zig",
+  ".nim": "nim",
+  ".jl": "julia",
+  ".sol": "solidity",
+  ".vue": "vue",
+  ".svelte": "svelte"
+};
+var SHEBANG_TO_LANG = {
+  python: "python",
+  python3: "python",
+  node: "javascript",
+  bash: "bash",
+  sh: "bash",
+  zsh: "zsh",
+  ruby: "ruby",
+  perl: "perl",
+  php: "php",
+  lua: "lua"
+};
+function detectLang(filePath) {
+  const ext = extname4(filePath).toLowerCase();
+  if (EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
+  try {
+    const head = readFileSync11(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
+    const shebang = head.match(/^#!\s*(?:\/usr\/bin\/env\s+)?(\S+)/);
+    if (shebang) {
+      const bin = basename4(shebang[1]);
+      if (SHEBANG_TO_LANG[bin]) return SHEBANG_TO_LANG[bin];
+    }
+  } catch {
+  }
+  return "text";
+}
+function fenceBackticks(content) {
+  let maxRun = 0;
+  let current = 0;
+  for (const ch of content) {
+    if (ch === "`") {
+      current++;
+      if (current > maxRun) maxRun = current;
+    } else {
+      current = 0;
+    }
+  }
+  const needed = Math.max(4, maxRun + 1);
+  return "`".repeat(needed);
+}
+function assertFileExists(filePath) {
+  if (!existsSync7(filePath)) {
+    throw new Error(`File not found: ${filePath}`);
+  }
+}
+function sanitizeInputPath(filePath) {
+  const resolved = resolve5(filePath);
+  const realpathSafe = (p) => {
+    try {
+      return realpathSync2(p);
+    } catch {
+      return p;
+    }
+  };
+  const cwdReal = realpathSafe(resolve5(process.cwd()));
+  const homeReal = realpathSafe(
+    resolve5(process.env.HOME || process.env.USERPROFILE || homedir2())
+  );
+  const tmpReal = realpathSafe(resolve5("/tmp"));
+  const resolvedReal = (() => {
+    try {
+      return realpathSync2(resolved);
+    } catch {
+      return resolved;
+    }
+  })();
+  const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep);
+  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
+    throw new Error(
+      `Path traversal blocked: ${filePath} resolves outside allowed directories`
+    );
+  }
+  try {
+    if (lstatSync(resolved).isSymbolicLink()) {
+      throw new Error(`Symlink rejected for security: ${filePath}`);
+    }
+  } catch (e) {
+    if (e.code === "ENOENT") return resolved;
+    throw e;
+  }
+  return resolved;
+}
+var DEFAULT_MAX_PAYLOAD_BYTES = 400 * 1024;
+function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexRedact, tagPrefix = "") {
+  const rawLimit = maxBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
+  const limit = !Number.isFinite(rawLimit) || rawLimit <= 0 ? DEFAULT_MAX_PAYLOAD_BYTES : rawLimit;
+  const safePath = sanitizeInputPath(filePath);
+  assertFileExists(safePath);
+  const stats = statSync5(safePath);
+  if (stats.size > limit) {
+    throw new Error(
+      `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
+    );
+  }
+  const raw = readFileSync11(safePath);
+  if (raw.length > limit) {
+    throw new Error(
+      `File too large after read (${(raw.length / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
+    );
+  }
+  const scanLen = Math.min(raw.length, 65536);
+  for (let i = 0; i < scanLen; i++) {
+    if (raw[i] === 0) throw new Error(`File appears to be binary: ${filePath}`);
+  }
+  let content = raw.toString("utf-8");
+  if (content.length === 0) {
+    content = `(empty file \u2014 0 bytes)`;
+  }
+  if (redact) {
+    const result = redactSecrets2(content);
+    content = result.redacted;
+  }
+  if (regexRedact) {
+    const result = applyRegexRedaction(content, regexRedact);
+    content = result.redacted;
+  }
+  const lang = langOverride || detectLang(filePath);
+  const fence = fenceBackticks(content);
+  const nameTag = `${tagPrefix}filename`;
+  const contentTag = `${tagPrefix}file-content`;
+  return `<${nameTag}>
+${filePath}
+</${nameTag}>
+<${contentTag}>
+${fence}${lang}
+${content}
+${fence}
+</${contentTag}>`;
+}
+var BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".bmp",
+  ".ico",
+  ".webp",
+  ".avif",
+  ".tiff",
+  ".tif",
+  ".mp3",
+  ".mp4",
+  ".wav",
+  ".ogg",
+  ".webm",
+  ".avi",
+  ".mov",
+  ".flac",
+  ".aac",
+  ".m4a",
+  ".pdf",
+  ".doc",
+  ".docx",
+  ".xls",
+  ".xlsx",
+  ".ppt",
+  ".pptx",
+  ".zip",
+  ".tar",
+  ".gz",
+  ".bz2",
+  ".xz",
+  ".7z",
+  ".rar",
+  ".dmg",
+  ".iso",
+  ".jar",
+  ".exe",
+  ".dll",
+  ".so",
+  ".dylib",
+  ".o",
+  ".a",
+  ".lib",
+  ".class",
+  ".pyc",
+  ".pyo",
+  ".wasm",
+  ".bin",
+  ".dat",
+  ".db",
+  ".sqlite",
+  ".sqlite3",
+  ".ttf",
+  ".otf",
+  ".woff",
+  ".woff2",
+  ".eot",
+  ".DS_Store",
+  ".lock"
+]);
+function isBinaryExtension(filePath) {
+  return BINARY_EXTENSIONS.has(extname4(filePath).toLowerCase()) || basename4(filePath) === ".DS_Store";
+}
+var SECRET_PATTERNS2 = [
+  [/AKIA[0-9A-Z]{16}/g, "AWS_KEY"],
+  [/(?:sk|pk)[-_](?:live|test|proj)[-_][A-Za-z0-9]{20,}/g, "API_KEY"],
+  [/ghp_[A-Za-z0-9]{36}/g, "GITHUB_PAT"],
+  [/ghr_[A-Za-z0-9]{36}/g, "GITHUB_TOKEN"],
+  [/gho_[A-Za-z0-9]{36}/g, "GITHUB_OAUTH"],
+  [/github_pat_[A-Za-z0-9_]{82}/g, "GITHUB_PAT"],
+  [/glpat-[A-Za-z0-9\-_]{20,}/g, "GITLAB_TOKEN"],
+  [/xox[bpsar]-[A-Za-z0-9-]+/g, "SLACK_TOKEN"],
+  [/Bearer\s+[A-Za-z0-9._\-/+=]{20,}/g, "BEARER_TOKEN"],
+  // Key-value patterns in env/config files (must have at least 8 chars in the value)
+  [
+    // Common env-var-style secret names. Extended in v9.9.0 from a hand-
+    // curated list to a hybrid approach: explicit names for the most-common
+    // OAuth / vendor key shapes AND a wildcard for any *_KEY / *_TOKEN /
+    // *_SECRET / *_PASSWORD. Wildcards intentionally catch JWT_SECRET,
+    // LM_API_TOKEN (the plugin's own preset!), STRIPE_SECRET_KEY,
+    // SUPABASE_SERVICE_KEY, SLACK_BOT_TOKEN, and similar without needing
+    // per-vendor patches.
+    /(?:^|\n)\s*(?:(?:PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|AUTH|AUTH_TOKEN|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|DB_PASSWORD|DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|AWS_SESSION_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITLAB_TOKEN|BITBUCKET_TOKEN|NPM_TOKEN|DOCKER_PASSWORD|HF_TOKEN|HUGGINGFACE_TOKEN|LM_API_TOKEN|VLLM_API_KEY|JWT_SECRET|JWT_PRIVATE_KEY|STRIPE_SECRET_KEY|STRIPE_API_KEY|SUPABASE_SERVICE_KEY|SUPABASE_ANON_KEY|FIREBASE_TOKEN|SLACK_BOT_TOKEN|SLACK_TOKEN|DISCORD_TOKEN|TELEGRAM_BOT_TOKEN|TWILIO_AUTH_TOKEN|SENDGRID_API_KEY|MAILGUN_API_KEY|SENTRY_AUTH_TOKEN|PRIVATE)|[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_APIKEY|_API_KEY|_AUTH))\s*[=:]\s*['"]?([^\s'"#\n]{8,})/gim,
+    "ENV_SECRET"
+  ],
+  // H7: Multi-line secret blocks (PEM private keys, certificates)
+  [
+    /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----/g,
+    "PEM_BLOCK"
+  ]
+];
+function scanForSecrets(content) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const [pattern, label] of SECRET_PATTERNS2) {
+    pattern.lastIndex = 0;
+    const matches = content.match(pattern);
+    if (matches && matches.length > 0) {
+      counts.set(label, (counts.get(label) ?? 0) + matches.length);
+    }
+  }
+  const details = Array.from(counts.entries()).map(([label, count]) => ({
+    label,
+    count
+  }));
+  return { found: details.length > 0, details };
+}
+function scanFilesForSecrets(filePaths) {
+  const allDetails = [];
+  for (const fp of filePaths) {
+    if (!existsSync7(fp)) continue;
+    try {
+      const content = readFileSync11(fp, "utf-8");
+      const scan = scanForSecrets(content);
+      if (scan.found) {
+        for (const d of scan.details) {
+          allDetails.push({ file: fp, ...d });
+        }
+      }
+    } catch {
+    }
+  }
+  if (allDetails.length === 0) return { found: false, report: "" };
+  const lines = [
+    "SECRETS DETECTED \u2014 operation aborted.",
+    "",
+    "Best practice: Move secrets to .env files (gitignored) and reference them via environment variables.",
+    "Claude Code cannot read .env files, ensuring secrets stay out of LLM context.",
+    "",
+    "Findings:"
+  ];
+  for (const d of allDetails) {
+    lines.push(`  ${d.file}: ${d.count}\xD7 ${d.label}`);
+  }
+  return { found: true, report: lines.join("\n") };
+}
+function redactSecrets2(content) {
+  let result = content;
+  let count = 0;
+  for (const [pattern, label] of SECRET_PATTERNS2) {
+    pattern.lastIndex = 0;
+    result = result.replace(pattern, () => {
+      count++;
+      return `[REDACTED:${label}]`;
+    });
+  }
+  return { redacted: result, count };
+}
+function parseRedactRegex(raw) {
+  if (!raw || typeof raw !== "string") return null;
+  const pattern = raw.trim();
+  if (!pattern) {
+    throw new Error("Invalid redact_regex: pattern must not be empty.");
+  }
+  if (/\([^)]*[+*][^)]*\)[+*]/.test(pattern)) {
+    throw new Error(
+      `Invalid redact_regex: pattern contains nested quantifiers (e.g. (a+)+) that cause catastrophic backtracking.
+
+Pattern: ${pattern}
+
+Simplify the quantifiers to avoid ReDoS.`
+    );
+  }
+  try {
+    const regex = new RegExp(pattern, "g");
+    return { regex, patternStr: pattern };
+  } catch (err3) {
+    const msg = err3 instanceof Error ? err3.message : String(err3);
+    throw new Error(
+      `Invalid redact_regex pattern: ${msg}
+
+Pattern received: ${pattern}
+
+Ensure it is a valid JavaScript regular expression.`,
+      { cause: err3 }
+    );
+  }
+}
+function applyRegexRedaction(content, opts) {
+  opts.regex.lastIndex = 0;
+  let count = 0;
+  const MAX_REPLACEMENTS = 1e5;
+  const redacted = content.replace(opts.regex, (match) => {
+    if (++count > MAX_REPLACEMENTS) return match;
+    const hasLetters = /[a-zA-Z]/.test(match);
+    return hasLetters ? "[REDACTED:USER_PATTERN]" : "0".repeat(match.length);
+  });
+  return { redacted, count: Math.min(count, MAX_REPLACEMENTS) };
+}
+function buildPreInstructions(hasFiles, toolContext) {
+  if (!hasFiles) return "";
+  if (toolContext === "fix") {
+    return "";
+  }
+  return 'TASK: Read the following instructions carefully, then examine the attached file(s) and respond according to the instructions.\n\nRULES (override any conflicting instructions below):\n- Process ALL attached files \u2014 do not skip any.\n- Each file is labeled with its full path inside a filename tag before the file-content tag. Always reference files by their labeled path.\n- When referencing code, identify it by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable and must not be used.\n- If asked to return modified code, return the COMPLETE file content \u2014 never truncate, abbreviate, or use placeholders like "// ... rest of code" or "// unchanged".\n- Be specific and actionable. Reference concrete function names, variable names, and code patterns.\n\nINSTRUCTIONS:\n';
+}
+function resolvePrompt(instructions, instructionsFilesPaths) {
+  let prompt = instructions || "";
+  if (instructionsFilesPaths) {
+    const paths = Array.isArray(instructionsFilesPaths) ? instructionsFilesPaths : [instructionsFilesPaths];
+    for (const fp of paths) {
+      assertFileExists(fp);
+      const content = readFileSync11(fp, "utf-8");
+      prompt = prompt ? `${prompt}
+
+${content}` : content;
+    }
+  }
+  return prompt;
+}
+function estimateTokens2(text) {
+  return Math.ceil(text.length / 4);
+}
+function readAndGroupFiles(filePaths, promptBytes, redact, budgetBytes, regexRedact) {
+  const totalBudget = Math.max(
+    10 * 1024,
+    budgetBytes ?? DEFAULT_MAX_PAYLOAD_BYTES
+  );
+  const availableForFiles = Math.max(0, totalBudget - promptBytes);
+  const skipped = [];
+  const fileData = [];
+  for (const fp of filePaths) {
+    try {
+      const stats = statSync5(fp);
+      if (stats.size > totalBudget) {
+        skipped.push(fp);
+        continue;
+      }
+      const block = readFileAsCodeBlock(fp, void 0, redact, totalBudget, regexRedact);
+      if (block.length > availableForFiles) {
+        skipped.push(fp);
+        continue;
+      }
+      fileData.push({ path: fp, block, tokens: estimateTokens2(block) });
+    } catch {
+      skipped.push(fp);
+    }
+  }
+  if (fileData.length === 0) {
+    return { groups: [], autoBatched: false, skipped };
+  }
+  const totalFileBytes = fileData.reduce((sum, fd) => sum + fd.block.length, 0);
+  if (totalFileBytes <= availableForFiles) {
+    return { groups: [fileData], autoBatched: false, skipped };
+  }
+  const sorted = [...fileData].sort((a, b) => b.block.length - a.block.length);
+  const bins = [];
+  for (const fd of sorted) {
+    let placed = false;
+    for (const bin of bins) {
+      if (bin.used + fd.block.length <= availableForFiles) {
+        bin.items.push(fd);
+        bin.used += fd.block.length;
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      bins.push({ items: [fd], used: fd.block.length });
+    }
+  }
+  const groups = bins.map((bin) => bin.items);
+  return { groups, autoBatched: groups.length > 1, skipped };
+}
+function resolveAnswerMode(raw, defaultMode) {
+  if (raw === 0 || raw === 1 || raw === 2) return raw;
+  return defaultMode;
+}
+function buildPerFileSectionPrompt(filePaths) {
+  if (filePaths.length <= 1) return "";
+  return "\n\nOUTPUT FORMAT: You are receiving " + filePaths.length + " input files. Produce a SEPARATE report section for each file, using this exact format:\n\n## File: <absolute-file-path>\n\n<your analysis/report for this file>\n\n---\n\nProduce exactly " + filePaths.length + " sections, one for each input file, in the order they appear. Do NOT merge or combine sections. Each file must have its own complete, independent section.\n";
+}
+var WALK_DEFAULT_EXCLUDE = /* @__PURE__ */ new Set([
+  // Version control
+  ".git",
+  // Package managers / dependencies
+  "node_modules",
+  "bower_components",
+  ".pnpm-store",
+  // Python
+  "__pycache__",
+  ".venv",
+  "venv",
+  ".tox",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".eggs",
+  "*.egg-info",
+  // Build outputs
+  "dist",
+  "build",
+  "out",
+  ".next",
+  ".nuxt",
+  ".output",
+  "target",
+  // Caches / temp
+  ".cache",
+  ".turbo",
+  "coverage",
+  "tmp",
+  "temp",
+  ".temp",
+  ".tmp",
+  // IDE / editor
+  ".idea",
+  ".vscode",
+  // Other
+  ".gradle",
+  ".cargo",
+  ".nx",
+  "vendor"
+]);
+var FORBIDDEN_GIT_CWD_PREFIXES = [
+  "/etc",
+  "/usr",
+  "/bin",
+  "/sbin",
+  "/sys",
+  "/proc",
+  "/dev",
+  "/var/log",
+  "/var/db",
+  "/Library",
+  "/System"
+];
+function validateGitCwd(dirPath) {
+  if (!dirPath || typeof dirPath !== "string") {
+    throw new Error("validateGitCwd: empty cwd not allowed");
+  }
+  if (dirPath.includes("..")) {
+    const trimmed = resolve5(dirPath);
+    if (trimmed.includes("..")) {
+      throw new Error(`validateGitCwd: path contains parent refs: ${dirPath}`);
+    }
+  }
+  const resolved = resolve5(dirPath);
+  const realpathSafe = (p) => {
+    try {
+      return realpathSync2(p);
+    } catch {
+      return p;
+    }
+  };
+  const resolvedReal = realpathSafe(resolved);
+  if (resolvedReal === "/" || resolvedReal === "") {
+    throw new Error(`validateGitCwd: filesystem root rejected: ${dirPath}`);
+  }
+  for (const sys of FORBIDDEN_GIT_CWD_PREFIXES) {
+    const sysReal = realpathSafe(sys);
+    if (resolvedReal === sysReal || resolvedReal.startsWith(sysReal + sep)) {
+      throw new Error(`validateGitCwd: system path rejected: ${dirPath}`);
+    }
+  }
+  const cwdReal = realpathSafe(resolve5(process.cwd()));
+  const homeReal = realpathSafe(
+    resolve5(process.env.HOME || process.env.USERPROFILE || homedir2())
+  );
+  const tmpReal = realpathSafe(resolve5("/tmp"));
+  const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep);
+  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
+    throw new Error(
+      `validateGitCwd: ${dirPath} resolves outside allowed roots (cwd/$HOME/tmp)`
+    );
+  }
+}
+var _gitOnPath = void 0;
+function ensureGitOnPath() {
+  if (_gitOnPath !== void 0) return _gitOnPath;
+  const probe = spawnSync2("git", ["--version"], {
+    encoding: "utf-8",
+    timeout: 2e3,
+    killSignal: "SIGKILL"
+  });
+  _gitOnPath = probe.status === 0;
+  if (!_gitOnPath) {
+    process.stderr.write(
+      "[llm-externalizer] git not found on PATH \u2014 falling back to filesystem walk for directory scans\n"
+    );
+  }
+  return _gitOnPath;
+}
+function lstatSyncRetry(p) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return lstatSync(p);
+    } catch (err3) {
+      const code = err3.code;
+      if (code === "EAGAIN" || code === "EBUSY") {
+        const deadline = Date.now() + 50;
+        while (Date.now() < deadline) {
+        }
+        continue;
+      }
+      return null;
+    }
+  }
+  return null;
+}
+function gitLsFilesMultiRepo(dirPath, recursive) {
+  validateGitCwd(dirPath);
+  if (!ensureGitOnPath()) return null;
+  const GIT_TIMEOUT_MS = 5e3;
+  const gitOpts = {
+    encoding: "utf-8",
+    timeout: GIT_TIMEOUT_MS,
+    killSignal: "SIGKILL"
+  };
+  const allFiles = /* @__PURE__ */ new Set();
+  const topLevelResult = spawnSync2(
+    "git",
+    ["rev-parse", "--show-toplevel"],
+    { cwd: dirPath, ...gitOpts }
+  );
+  const isInGitRepo = topLevelResult.status === 0 && topLevelResult.stdout.trim();
+  if (isInGitRepo) {
+    const trackedResult = spawnSync2(
+      "git",
+      ["ls-files", "--cached"],
+      { cwd: dirPath, ...gitOpts }
+    );
+    if (trackedResult.status === 0 && trackedResult.stdout) {
+      for (const relPath of trackedResult.stdout.split("\n")) {
+        if (!relPath.trim()) continue;
+        allFiles.add(join12(dirPath, relPath));
+      }
+    }
+    const untrackedResult = spawnSync2(
+      "git",
+      ["ls-files", "--others", "--exclude-standard"],
+      { cwd: dirPath, ...gitOpts }
+    );
+    if (untrackedResult.status === 0 && untrackedResult.stdout) {
+      for (const relPath of untrackedResult.stdout.split("\n")) {
+        if (!relPath.trim()) continue;
+        allFiles.add(join12(dirPath, relPath));
+      }
+    }
+  }
+  if (recursive) {
+    let findNestedGitRoots2 = function(dir, depth) {
+      if (depth > 10) return;
+      let entries;
+      try {
+        entries = readdirSync4(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (entry.name === ".git" || entry.name === "node_modules") continue;
+        if (entry.name.startsWith(".")) continue;
+        const subDir = join12(dir, entry.name);
+        const gitDir = join12(subDir, ".git");
+        const gitStat = lstatSyncRetry(gitDir);
+        const gitDirIsDir = gitStat ? gitStat.isDirectory() : false;
+        if (gitDirIsDir) {
+          nestedGitRoots.push(subDir);
+          continue;
+        }
+        findNestedGitRoots2(subDir, depth + 1);
+      }
+    };
+    var findNestedGitRoots = findNestedGitRoots2;
+    const nestedGitRoots = [];
+    findNestedGitRoots2(dirPath, 0);
+    for (const nestedRoot of nestedGitRoots) {
+      try {
+        validateGitCwd(nestedRoot);
+      } catch {
+        continue;
+      }
+      const nestedResult = spawnSync2(
+        "git",
+        ["ls-files", "--cached", "--others", "--exclude-standard"],
+        { cwd: nestedRoot, ...gitOpts }
+      );
+      if (nestedResult.status === 0 && nestedResult.stdout) {
+        for (const relPath of nestedResult.stdout.split("\n")) {
+          if (!relPath.trim()) continue;
+          allFiles.add(join12(nestedRoot, relPath));
+        }
+      }
+    }
+  }
+  if (!isInGitRepo) return null;
+  return [...allFiles];
+}
+function walkDir(dirPath, options) {
+  const maxFiles = options?.maxFiles ?? 1e4;
+  const extensions = options?.extensions;
+  const skipBinary = !options?.includeBinary;
+  const recursive = options?.recursive !== false;
+  const followSymlinks = options?.followSymlinks !== false;
+  if (options?.useGitignore) {
+    const gitResults = gitLsFilesMultiRepo(dirPath, recursive);
+    if (gitResults !== null) {
+      const extraExcludeSet = new Set(options?.exclude ?? []);
+      const results2 = [];
+      for (const fullPath of gitResults) {
+        if (results2.length >= maxFiles) break;
+        if (skipBinary && isBinaryExtension(fullPath)) continue;
+        if (extensions) {
+          const ext = extname4(fullPath).toLowerCase();
+          if (!extensions.includes(ext)) continue;
+        }
+        if (extraExcludeSet.size > 0) {
+          const rel = fullPath.startsWith(dirPath) ? fullPath.slice(dirPath.length) : fullPath;
+          const segments = rel.split("/").filter((s) => s.length > 0);
+          const dirSegments = segments.slice(0, -1);
+          if (dirSegments.some((seg) => extraExcludeSet.has(seg))) continue;
+        }
+        results2.push(fullPath);
+      }
+      return results2;
+    }
+    process.stderr.write(
+      `[llm-externalizer] No git repo found in ${dirPath}, falling back to manual walk
+`
+    );
+  }
+  const results = [];
+  const extraExclude = options?.exclude ?? [];
+  const exclude = /* @__PURE__ */ new Set([...WALK_DEFAULT_EXCLUDE, ...extraExclude]);
+  const visitedPaths = /* @__PURE__ */ new Set();
+  function recurse(dir) {
+    if (results.length >= maxFiles) return;
+    let entries;
+    try {
+      entries = readdirSync4(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (results.length >= maxFiles) return;
+      const fullPath = join12(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        if (!followSymlinks) continue;
+        try {
+          const realPath = realpathSync2(fullPath);
+          if (visitedPaths.has(realPath)) continue;
+          visitedPaths.add(realPath);
+          const targetStat = statSync5(realPath);
+          if (targetStat.isDirectory() && recursive) {
+            if (!entry.name.startsWith(".") && !exclude.has(entry.name)) {
+              recurse(fullPath);
+            }
+          } else if (targetStat.isFile()) {
+            if (skipBinary && isBinaryExtension(fullPath)) continue;
+            if (extensions) {
+              const ext = extname4(entry.name).toLowerCase();
+              if (!extensions.includes(ext)) continue;
+            }
+            results.push(fullPath);
+          }
+        } catch {
+          continue;
+        }
+        continue;
+      }
+      if (entry.isDirectory()) {
+        if (!recursive) continue;
+        if (entry.name === ".git" || entry.name === ".svn" || entry.name === ".hg" || exclude.has(entry.name)) continue;
+        if (entry.name.startsWith(".")) continue;
+        try {
+          const dirRealPath = realpathSync2(fullPath);
+          if (visitedPaths.has(dirRealPath)) continue;
+          visitedPaths.add(dirRealPath);
+        } catch {
+          continue;
+        }
+        recurse(fullPath);
+      } else if (entry.isFile()) {
+        if (skipBinary && isBinaryExtension(fullPath)) continue;
+        if (extensions) {
+          const ext = extname4(entry.name).toLowerCase();
+          if (!extensions.includes(ext)) continue;
+        }
+        results.push(fullPath);
+      }
+    }
+  }
+  recurse(dirPath);
+  return results;
+}
+function extractLocalImports(filePath, sourceCode) {
+  const dir = dirname7(filePath);
+  const lang = detectLang(filePath);
+  const paths = [];
+  const patterns = [];
+  if (lang === "typescript" || lang === "javascript") {
+    patterns.push(/(?:import|export)\s+.*?from\s+['"](\.[^'"]+)['"]/g);
+    patterns.push(/require\(\s*['"](\.[^'"]+)['"]\s*\)/g);
+  } else if (lang === "python") {
+    patterns.push(/from\s+(\.[\w.]*)\s+import/g);
+  }
+  for (const pattern of patterns) {
+    pattern.lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(sourceCode)) !== null) {
+      const importPath = match[1];
+      let resolved;
+      if (lang === "python" && importPath.startsWith(".")) {
+        const dotCount = importPath.match(/^\.+/)?.[0].length ?? 1;
+        const modulePart = importPath.slice(dotCount);
+        const baseDir = dotCount === 1 ? dir : join12(dir, ...Array(dotCount - 1).fill(".."));
+        resolved = modulePart ? join12(baseDir, ...modulePart.split(".")) : baseDir;
+      } else {
+        resolved = join12(dir, importPath);
+      }
+      if (!extname4(resolved)) {
+        const tryExts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"];
+        let found = false;
+        for (const ext of tryExts) {
+          if (existsSync7(resolved + ext)) {
+            resolved = resolved + ext;
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          const indexCandidates = [
+            "index.ts",
+            "index.tsx",
+            "index.js",
+            "index.jsx",
+            "__init__.py"
+          ];
+          for (const leaf of indexCandidates) {
+            const indexPath = join12(resolved, leaf);
+            if (existsSync7(indexPath)) {
+              resolved = indexPath;
+              found = true;
+              break;
+            }
+          }
+        }
+        if (!found) continue;
+      } else if (!existsSync7(resolved)) {
+        continue;
+      }
+      paths.push(resolved);
+    }
+  }
+  return [...new Set(paths)];
+}
+
+// src/search-existing/core.ts
+import { randomUUID } from "node:crypto";
+import { existsSync as existsSync8, statSync as statSync6, realpathSync as realpathSync3 } from "node:fs";
+import { resolve as resolve6 } from "node:path";
+async function runSearchExistingImplementations(args, deps) {
+  const {
+    feature_description,
+    folder_path: seiFolderPathRaw,
+    source_files: seiSourceFilesRaw,
+    diff_path: seiDiffPathRaw,
+    extensions: seiExtensions,
+    exclude_dirs: seiExcludeDirs,
+    max_files: seiMaxFiles,
+    redact_secrets: seiRedact,
+    redact_regex: seiRedactRegexRaw,
+    answer_mode: seiRawMode,
+    use_gitignore: seiUseGitignore,
+    scan_secrets: seiScan
+  } = args;
+  const seiUseEnsemble = deps.useEnsemble;
+  const seiBudgetBytes = (args.max_payload_kb ?? 400) * 1024;
+  if (typeof feature_description !== "string" || !feature_description.trim()) {
+    return {
+      content: [{ type: "text", text: "FAILED: feature_description is required (non-empty string)." }],
+      isError: true
+    };
+  }
+  const folderPathsRaw = Array.isArray(seiFolderPathRaw) ? seiFolderPathRaw.filter((p) => typeof p === "string" && p.trim()) : typeof seiFolderPathRaw === "string" && seiFolderPathRaw.trim() ? [seiFolderPathRaw] : [];
+  if (folderPathsRaw.length === 0) {
+    return {
+      content: [{ type: "text", text: "FAILED: folder_path is required (string or array of strings)." }],
+      isError: true
+    };
+  }
+  const folderPaths = [];
+  for (const fpRaw of folderPathsRaw) {
+    let fp;
+    try {
+      fp = sanitizeInputPath(fpRaw);
+    } catch (err3) {
+      return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
+    }
+    if (!existsSync8(fp)) {
+      return { content: [{ type: "text", text: `FAILED: Folder not found: ${fpRaw}` }], isError: true };
+    }
+    if (!statSync6(fp).isDirectory()) {
+      return { content: [{ type: "text", text: `FAILED: Not a directory: ${fpRaw}` }], isError: true };
+    }
+    folderPaths.push(fp);
+  }
+  const sourceFiles = [];
+  const sourceFilesCanonical = /* @__PURE__ */ new Set();
+  if (seiSourceFilesRaw !== void 0 && seiSourceFilesRaw !== null) {
+    const raw = Array.isArray(seiSourceFilesRaw) ? seiSourceFilesRaw : [seiSourceFilesRaw];
+    for (const sf of raw) {
+      if (typeof sf !== "string" || !sf.trim()) continue;
+      const resolved = resolve6(sf);
+      if (!existsSync8(resolved)) {
+        return {
+          content: [{ type: "text", text: `FAILED: source_files entry not found: ${sf}` }],
+          isError: true
+        };
+      }
+      sourceFiles.push(resolved);
+      sourceFilesCanonical.add(resolved);
+      try {
+        sourceFilesCanonical.add(realpathSync3(resolved));
+      } catch {
+      }
+    }
+  }
+  let diffPathResolved = void 0;
+  if (typeof seiDiffPathRaw === "string" && seiDiffPathRaw.trim()) {
+    const r = resolve6(seiDiffPathRaw);
+    if (!existsSync8(r)) {
+      return {
+        content: [{ type: "text", text: `FAILED: diff_path not found: ${seiDiffPathRaw}` }],
+        isError: true
+      };
+    }
+    diffPathResolved = r;
+  }
+  let seiEffectiveExts = seiExtensions;
+  if ((!seiEffectiveExts || seiEffectiveExts.length === 0) && sourceFiles.length > 0) {
+    const extSet = /* @__PURE__ */ new Set();
+    for (const sf of sourceFiles) {
+      const m = /\.[^./\\]+$/.exec(sf);
+      if (m) extSet.add(m[0]);
+    }
+    if (extSet.size > 0) seiEffectiveExts = Array.from(extSet);
+  }
+  let seiRegexRedact;
+  try {
+    seiRegexRedact = parseRedactRegex(seiRedactRegexRaw);
+  } catch (err3) {
+    return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
+  }
+  const descTrimmed = feature_description.trim();
+  const hasRef = sourceFiles.length > 0 || !!diffPathResolved;
+  const refBlock = hasRef ? "The reference implementation from the PR is appended to these instructions as " + (sourceFiles.length > 0 ? "one or more source files" : "context") + (diffPathResolved ? ", followed by a unified diff showing the EXACT new lines (prefixed with '+'). Focus on the new lines when reasoning about what the PR adds. " : ". ") + "The source files may contain many unrelated functions \u2014 only the one matching the description above is relevant.\n\n" : "No reference source files were provided \u2014 rely purely on the feature description above when reasoning about semantic equivalence.\n\n";
+  const seiBasePrompt = `You are checking every file in this batch for an existing implementation of this feature (or a helper that could be trivially composed to achieve it):
+
+    ${descTrimmed}
+
+` + refBlock + "For EACH file in the batch, answer SEMANTIC equivalence: the same goal achieved by different code still counts. Ignore naming differences and surface-level style.\n\nOutput format: each file gets its own section in the response, separated by '---'. Per-file answer is one line per finding, no preamble, no explanation.\n\nSection template:\n\n## File: <absolute-file-path>\n\n<one line per finding>\n\n---\n\nPer-finding line format:\n    NO\n  or\n    YES symbol=<function-or-class-name> lines=<start-end>\n\nEXHAUSTIVE: If a file contains MULTIPLE matches, output ALL of them as successive YES lines. Do NOT cap the count. Do NOT keep only the most relevant. The reviewer may want to delete EVERY existing copy and leave only the PR's new one, so every occurrence MUST be listed.\n\nSpecial case: if a file IS the reference (you recognize the PR code itself), output:\n    NO (self-reference)\n\nProduce exactly one section per input file, in the order they appear in the batch, separated by '---'. Do NOT merge sections. Do NOT write rationale. Do NOT quote code. Do NOT explain. One line per match per file. Nothing else.";
+  const seiInstrFiles = [...sourceFiles];
+  if (diffPathResolved) seiInstrFiles.push(diffPathResolved);
+  const seiBasePromptWithRef = resolvePrompt(
+    seiBasePrompt,
+    seiInstrFiles.length > 0 ? seiInstrFiles : void 0
+  );
+  if (!seiBasePromptWithRef.trim()) {
+    return {
+      content: [{ type: "text", text: "FAILED: specialized prompt came out empty (internal error)." }],
+      isError: true
+    };
+  }
+  const fileSet = /* @__PURE__ */ new Set();
+  const seiMaxFilesEffective = seiMaxFiles ?? 1e4;
+  for (const fp of folderPaths) {
+    const walked = walkDir(fp, {
+      extensions: seiEffectiveExts,
+      maxFiles: seiMaxFilesEffective,
+      exclude: seiExcludeDirs,
+      useGitignore: seiUseGitignore !== false
+      // default true
+    });
+    for (const f of walked) fileSet.add(f);
+  }
+  for (const walked of Array.from(fileSet)) {
+    if (sourceFilesCanonical.has(walked)) {
+      fileSet.delete(walked);
+      continue;
+    }
+    try {
+      const canonical2 = realpathSync3(walked);
+      if (sourceFilesCanonical.has(canonical2)) {
+        fileSet.delete(walked);
+      }
+    } catch {
+    }
+  }
+  const files = Array.from(fileSet);
+  if (files.length === 0) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `No matching files found after filtering. Folders: ${folderPaths.join(", ")}` + (seiEffectiveExts?.length ? `; extensions: ${seiEffectiveExts.join(", ")}` : "") + (sourceFiles.length ? `; excluded source_files: ${sourceFiles.length}` : "")
+        }
+      ]
+    };
+  }
+  if (files.length > seiMaxFilesEffective) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `FAILED: ${files.length} files matched, exceeding max_files=${seiMaxFilesEffective}. Narrow folder_path, pass extensions, or raise max_files.`
+        }
+      ],
+      isError: true
+    };
+  }
+  if (seiScan && !seiRedact) {
+    const scanResult = scanFilesForSecrets(files);
+    if (scanResult.found)
+      return {
+        content: [{ type: "text", text: scanResult.report }],
+        isError: true
+      };
+  }
+  const seiSystemMessage = "You are a code reviewer checking for duplicate implementations. Output per-file NO/YES answers in the exact format specified in the user prompt. Be terse \u2014 no rationale, no code quotes, no explanation. Identify matches by function/class/method NAME, never by line number in prose.";
+  const seiSystemBytes = Buffer.byteLength(seiSystemMessage, "utf-8");
+  const seiBaseBytes = Buffer.byteLength(seiBasePromptWithRef, "utf-8");
+  const seiPromptBytes = seiSystemBytes + seiBaseBytes + 2048;
+  const { groups: seiGroups, autoBatched: seiAutoBatched, skipped: seiSkipped } = readAndGroupFiles(files, seiPromptBytes, seiRedact, seiBudgetBytes, seiRegexRedact);
+  if (seiGroups.length === 0) {
+    const reasons = [];
+    if (seiSkipped.length > 0) {
+      reasons.push(
+        `${seiSkipped.length} file(s) exceeded the payload budget and were skipped`
+      );
+    } else {
+      reasons.push("no files fit within the payload budget");
+    }
+    return {
+      content: [
+        {
+          type: "text",
+          text: `FAILED: no batches could be formed. ${reasons.join("; ")}. Raise max_payload_kb (current: ${Math.round(seiBudgetBytes / 1024)} KB) or narrow folder_path to smaller files.`
+        }
+      ],
+      isError: true
+    };
+  }
+  const seiMode = resolveAnswerMode(seiRawMode, 2);
+  const seiBatchId = randomUUID();
+  const seiBatchResponses = [];
+  let seiAborted = false;
+  let seiAbortReason = "";
+  for (let gi = 0; gi < seiGroups.length; gi++) {
+    if (seiAborted) break;
+    const group = seiGroups[gi];
+    const groupPaths = group.map((fd) => fd.path);
+    let userContent = seiBasePromptWithRef;
+    userContent += buildPerFileSectionPrompt(groupPaths);
+    for (const fd of group) {
+      userContent += `
+
+${fd.block}`;
+    }
+    const messages = [
+      { role: "system", content: seiSystemMessage },
+      { role: "user", content: userContent }
+    ];
+    try {
+      const resp = await deps.callModel(messages);
+      seiBatchResponses.push({
+        idx: gi,
+        filePaths: groupPaths,
+        content: resp.content ?? "",
+        model: resp.model ?? deps.backendModel
+      });
+      if (deps.onProgress) {
+        deps.onProgress(
+          gi + 1,
+          seiGroups.length,
+          `search_existing_implementations: batch ${gi + 1}/${seiGroups.length} done (${groupPaths.length} files)`
+        );
+      }
+    } catch (err3) {
+      const classified = deps.classifyError(err3);
+      seiBatchResponses.push({
+        idx: gi,
+        filePaths: groupPaths,
+        content: "",
+        model: deps.backendModel,
+        error: classified.reason
+      });
+      if (classified.unrecoverable && classified.serviceLevel) {
+        seiAborted = true;
+        seiAbortReason = `Unrecoverable: ${classified.reason}`;
+      }
+    }
+  }
+  const seiBatchOk = seiBatchResponses.filter((r) => !r.error && r.content.trim().length > 0);
+  const seiBatchFailed = seiBatchResponses.filter((r) => r.error || !r.content.trim());
+  if (seiBatchOk.length === 0) {
+    const reason = seiAborted ? seiAbortReason : seiBatchFailed.length > 0 ? `all ${seiBatchFailed.length} batch(es) failed or returned empty: ${seiBatchFailed[0].error ?? "empty response"}` : "no batches produced output";
+    const failLines = [
+      `FAILED: search_existing_implementations produced zero usable output (${seiBatchOk.length}/${seiGroups.length} batches succeeded, ${files.length} files discovered)`,
+      `Reason: ${reason}`,
+      `Folders: ${folderPaths.join(", ")}`,
+      sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
+      diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
+      `Batch UUID: ${seiBatchId}`
+    ];
+    if (seiBatchFailed.length > 0) {
+      failLines.push("", "PER-BATCH FAILURES:");
+      for (const r of seiBatchFailed) {
+        failLines.push(
+          `  Batch ${r.idx + 1}/${seiGroups.length} (${r.filePaths.length} files): ${r.error ?? "empty response"}`
+        );
+      }
+    }
+    if (seiSkipped.length > 0) {
+      failLines.push("", `SKIPPED (exceeded payload budget, ${seiSkipped.length}):`);
+      for (const s of seiSkipped) failLines.push(`  ${s}`);
+    }
+    return {
+      content: [{ type: "text", text: failLines.join("\n") }],
+      isError: true
+    };
+  }
+  if (seiMode === 2) {
+    const sections = [];
+    sections.push(`# LLM Externalizer \u2014 search_existing_implementations`);
+    sections.push("");
+    sections.push(`**Feature**: ${descTrimmed}`);
+    sections.push(`**Folders**: ${folderPaths.join(", ")}`);
+    sections.push(`**Files scanned**: ${files.length}`);
+    sections.push(`**Batches**: ${seiGroups.length} (FFD bin-packed, ${seiAutoBatched ? "auto-batched" : "single batch"})`);
+    if (sourceFiles.length > 0) sections.push(`**Reference source files**: ${sourceFiles.length}`);
+    if (diffPathResolved) sections.push(`**Diff**: ${diffPathResolved}`);
+    if (seiSkipped.length > 0) {
+      sections.push("");
+      sections.push(`**SKIPPED** (exceeded payload budget): ${seiSkipped.length}`);
+      for (const s of seiSkipped) sections.push(`  - ${s}`);
+    }
+    sections.push("");
+    for (const r of seiBatchOk) {
+      sections.push(`---
+
+## Batch ${r.idx + 1}/${seiGroups.length} \u2014 ${r.filePaths.length} files`);
+      sections.push("");
+      sections.push(r.content.trim());
+      sections.push("");
+    }
+    if (seiBatchFailed.length > 0) {
+      sections.push("---\n\n## FAILED BATCHES");
+      sections.push("");
+      for (const r of seiBatchFailed) {
+        sections.push(`### Batch ${r.idx + 1}/${seiGroups.length} \u2014 ${r.filePaths.length} files`);
+        sections.push(`Error: ${r.error ?? "empty response"}`);
+        sections.push("Files:");
+        for (const fp of r.filePaths) sections.push(`  - ${fp}`);
+        sections.push("");
+      }
+    }
+    const mergedPath = deps.saveResponse(
+      "search_existing_implementations",
+      sections.join("\n"),
+      {
+        model: deps.ensembleModelLabel(seiUseEnsemble),
+        task: descTrimmed,
+        inputFile: folderPaths[0]
+      },
+      void 0,
+      deps.outputDir
+    );
+    const summary = [
+      `SEARCH COMPLETE \u2014 ${seiBatchOk.length}/${seiGroups.length} batches processed, ${files.length} files scanned, ${seiSkipped.length} skipped`,
+      `Folders: ${folderPaths.join(", ")}`,
+      sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
+      diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
+      `Batch UUID: ${seiBatchId}`,
+      `MERGED REPORT: ${mergedPath}`
+    ];
+    if (seiBatchFailed.length > 0) {
+      summary.push("", `FAILED BATCHES: ${seiBatchFailed.length} (see merged report for details)`);
+    }
+    if (seiAborted) summary.push("", `ABORTED: ${seiAbortReason}`);
+    return {
+      content: [{ type: "text", text: summary.join("\n") }],
+      isError: seiAborted
+    };
+  }
+  if (seiMode === 0) {
+    const seiPerFileReports = [];
+    const seiPerFileMissing = [];
+    for (const r of seiBatchOk) {
+      const sections = splitPerFileSections(r.content, r.filePaths);
+      for (const fp of r.filePaths) {
+        const body = sections.get(fp);
+        if (!body || !body.trim()) {
+          seiPerFileMissing.push({ inputPath: fp, batchIdx: r.idx });
+          continue;
+        }
+        const header = `# search_existing_implementations \u2014 ${fp}
+
+**Feature**: ${descTrimmed}
+**Source file**: ${fp}
+**Batch**: ${r.idx + 1}/${seiGroups.length}
+**Model**: ${r.model}
+
+---
+
+`;
+        const reportPath = deps.saveResponse(
+          "search_existing_implementations",
+          header + body.trim(),
+          {
+            model: r.model,
+            task: descTrimmed,
+            inputFile: fp
+          },
+          void 0,
+          deps.outputDir
+        );
+        seiPerFileReports.push({ inputPath: fp, reportPath });
+      }
+    }
+    const seiModeZeroLines = [
+      `SEARCH COMPLETE \u2014 ${seiBatchOk.length}/${seiGroups.length} batches processed, ${files.length} files scanned, ${seiSkipped.length} skipped`,
+      `Folders: ${folderPaths.join(", ")}`,
+      sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
+      diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
+      `Batch UUID: ${seiBatchId}`,
+      ""
+    ];
+    if (seiPerFileReports.length > 0) {
+      seiModeZeroLines.push(`REPORTS (one per input file, ${seiPerFileReports.length} total):`);
+      for (const p of seiPerFileReports) {
+        seiModeZeroLines.push(`  ${p.inputPath} -> ${p.reportPath}`);
+      }
+    }
+    if (seiPerFileMissing.length > 0) {
+      seiModeZeroLines.push(
+        "",
+        `MISSING SECTIONS (${seiPerFileMissing.length} files had no per-file section in the LLM response \u2014 raw batch content preserved in batch reports):`
+      );
+      for (const m of seiPerFileMissing) {
+        seiModeZeroLines.push(`  ${m.inputPath} (batch ${m.batchIdx + 1}/${seiGroups.length})`);
+      }
+    }
+    if (seiSkipped.length > 0) {
+      seiModeZeroLines.push("", `SKIPPED (exceeded payload budget, ${seiSkipped.length}):`);
+      for (const s of seiSkipped) seiModeZeroLines.push(`  ${s}`);
+    }
+    if (seiBatchFailed.length > 0) {
+      seiModeZeroLines.push("", `FAILED BATCHES (${seiBatchFailed.length}):`);
+      for (const r of seiBatchFailed) {
+        seiModeZeroLines.push(
+          `  Batch ${r.idx + 1}/${seiGroups.length} (${r.filePaths.length} files): ${r.error ?? "empty response"}`
+        );
+      }
+    }
+    if (seiAborted) seiModeZeroLines.push("", `ABORTED: ${seiAbortReason}`);
+    return {
+      content: [{ type: "text", text: seiModeZeroLines.join("\n") }],
+      isError: seiAborted
+    };
+  }
+  const seiAutoGroups = autoGroupByHeuristic(files);
+  const seiSectionByPath = /* @__PURE__ */ new Map();
+  const seiModelByPath = /* @__PURE__ */ new Map();
+  const seiBatchIdxByPath = /* @__PURE__ */ new Map();
+  for (const r of seiBatchOk) {
+    const sections = splitPerFileSections(r.content, r.filePaths);
+    for (const fp of r.filePaths) {
+      const body = sections.get(fp);
+      if (body && body.trim().length > 0) {
+        seiSectionByPath.set(fp, body.trim());
+        seiModelByPath.set(fp, r.model);
+        seiBatchIdxByPath.set(fp, r.idx);
+      }
+    }
+  }
+  const seiGroupReportPaths = [];
+  const seiGroupMissing = [];
+  for (const fg of seiAutoGroups) {
+    if (fg.files.length === 0) continue;
+    const gid = fg.id || "auto";
+    const sections = [];
+    sections.push(
+      `# search_existing_implementations \u2014 group ${gid}
+
+**Feature**: ${descTrimmed}
+**Files in group**: ${fg.files.length}
+
+` + fg.files.map((fp) => `  - ${fp}`).join("\n") + "\n\n---\n"
+    );
+    let anyBody = false;
+    for (const fp of fg.files) {
+      const body = seiSectionByPath.get(fp);
+      if (!body) {
+        seiGroupMissing.push(fp);
+        continue;
+      }
+      anyBody = true;
+      sections.push(`## File: ${fp}
+
+${body}
+`);
+    }
+    if (!anyBody) continue;
+    const reportPath = deps.saveResponse(
+      "search_existing_implementations",
+      sections.join("\n"),
+      {
+        model: deps.ensembleModelLabel(seiUseEnsemble),
+        task: descTrimmed,
+        inputFile: fg.files[0],
+        groupId: gid
+      },
+      void 0,
+      deps.outputDir
+    );
+    seiGroupReportPaths.push(`[group:${gid}] ${reportPath}`);
+  }
+  const seiSummaryLines = [
+    `SEARCH COMPLETE \u2014 ${seiBatchOk.length}/${seiGroups.length} batches processed, ${files.length} files scanned, ${seiSkipped.length} skipped`,
+    `Folders: ${folderPaths.join(", ")}`,
+    sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
+    diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
+    `Batch UUID: ${seiBatchId}`,
+    ""
+  ];
+  if (seiGroupReportPaths.length > 0) {
+    seiSummaryLines.push(`GROUP REPORTS (one per auto-group, ${seiGroupReportPaths.length} total):`);
+    for (const p of seiGroupReportPaths) seiSummaryLines.push(`  ${p}`);
+  }
+  if (seiGroupMissing.length > 0) {
+    seiSummaryLines.push(
+      "",
+      `MISSING SECTIONS (${seiGroupMissing.length} files had no per-file section in the LLM response):`
+    );
+    for (const p of seiGroupMissing) seiSummaryLines.push(`  ${p}`);
+  }
+  if (seiSkipped.length > 0) {
+    seiSummaryLines.push("", `SKIPPED (exceeded payload budget, ${seiSkipped.length}):`);
+    for (const s of seiSkipped) seiSummaryLines.push(`  ${s}`);
+  }
+  if (seiBatchFailed.length > 0) {
+    seiSummaryLines.push("", `FAILED BATCHES (${seiBatchFailed.length}):`);
+    for (const r of seiBatchFailed) {
+      seiSummaryLines.push(
+        `  Batch ${r.idx + 1}/${seiGroups.length} (${r.filePaths.length} files): ${r.error ?? "empty response"}`
+      );
+    }
+  }
+  if (seiAborted) seiSummaryLines.push("", `ABORTED: ${seiAbortReason}`);
+  return {
+    content: [{ type: "text", text: seiSummaryLines.join("\n") }],
+    isError: seiAborted
+  };
+}
+
 // src/rule-install.ts
 import {
-  existsSync as existsSync7,
+  existsSync as existsSync9,
   mkdirSync as mkdirSync12,
-  readFileSync as readFileSync11,
+  readFileSync as readFileSync12,
   writeFileSync as writeFileSync9,
   renameSync as renameSync5,
-  realpathSync as realpathSync2,
+  realpathSync as realpathSync4,
   unlinkSync
 } from "node:fs";
 import { randomBytes as randomBytes3 } from "node:crypto";
-import { homedir as homedir2, tmpdir } from "node:os";
-import { dirname as dirname7, join as join12, resolve as resolve5, sep } from "node:path";
+import { homedir as homedir3, tmpdir } from "node:os";
+import { dirname as dirname8, join as join13, resolve as resolve7, sep as sep2 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 var RULE_FILENAME = "use-llm-externalizer.md";
 function resolveBundledRulePath() {
   const candidates = [];
   const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   if (pluginRoot && pluginRoot.length > 0) {
-    candidates.push(join12(resolve5(pluginRoot), "rules", RULE_FILENAME));
+    candidates.push(join13(resolve7(pluginRoot), "rules", RULE_FILENAME));
   }
   try {
-    const here = dirname7(fileURLToPath3(import.meta.url));
-    candidates.push(resolve5(here, "..", "..", "rules", RULE_FILENAME));
+    const here = dirname8(fileURLToPath3(import.meta.url));
+    candidates.push(resolve7(here, "..", "..", "rules", RULE_FILENAME));
   } catch {
   }
   for (const c of candidates) {
-    if (existsSync7(c)) return c;
+    if (existsSync9(c)) return c;
   }
   return null;
 }
 function resolveClaudeRulesDir() {
   const cfg = process.env.CLAUDE_CONFIG_DIR;
-  const base = cfg && cfg.length > 0 ? resolve5(cfg) : join12(homedir2(), ".claude");
-  return join12(base, "rules");
+  const base = cfg && cfg.length > 0 ? resolve7(cfg) : join13(homedir3(), ".claude");
+  return join13(base, "rules");
 }
 function canonical(p) {
   try {
-    return realpathSync2(p);
+    return realpathSync4(p);
   } catch {
-    const parent = dirname7(p);
+    const parent = dirname8(p);
     if (parent === p) return p;
-    return join12(canonical(parent), p.slice(parent.length + (parent.endsWith(sep) ? 0 : 1)));
+    return join13(canonical(parent), p.slice(parent.length + (parent.endsWith(sep2) ? 0 : 1)));
   }
 }
 function underAllowedRoot(dir) {
   const d = canonical(dir);
   const roots = [];
   try {
-    roots.push(realpathSync2(homedir2()));
+    roots.push(realpathSync4(homedir3()));
   } catch {
-    roots.push(homedir2());
+    roots.push(homedir3());
   }
   if (process.env.CLAUDE_CONFIG_DIR && process.env.CLAUDE_CONFIG_DIR.length > 0) {
-    roots.push(canonical(resolve5(process.env.CLAUDE_CONFIG_DIR)));
+    roots.push(canonical(resolve7(process.env.CLAUDE_CONFIG_DIR)));
   }
   const tmp = tmpdir();
   try {
-    roots.push(realpathSync2(tmp));
+    roots.push(realpathSync4(tmp));
   } catch {
     roots.push(tmp);
   }
-  return roots.some((r) => d === r || d.startsWith(r + sep));
+  return roots.some((r) => d === r || d.startsWith(r + sep2));
 }
 function installUsageRule(opts = {}) {
   const optOut = process.env.LLM_EXT_INSTALL_RULE;
@@ -48676,11 +50024,11 @@ function installUsageRule(opts = {}) {
     return { status: "skipped", dest: "", detail: "disabled via LLM_EXT_INSTALL_RULE" };
   }
   const source = opts.sourcePath ?? resolveBundledRulePath();
-  if (!source || !existsSync7(source)) {
+  if (!source || !existsSync9(source)) {
     return { status: "error", dest: "", detail: "bundled rule source not found" };
   }
   const rulesDir = opts.rulesDir ?? resolveClaudeRulesDir();
-  const dest = join12(rulesDir, RULE_FILENAME);
+  const dest = join13(rulesDir, RULE_FILENAME);
   if (!underAllowedRoot(rulesDir)) {
     return {
       status: "error",
@@ -48690,14 +50038,14 @@ function installUsageRule(opts = {}) {
   }
   let desired;
   try {
-    desired = readFileSync11(source, "utf-8");
+    desired = readFileSync12(source, "utf-8");
   } catch (e) {
     return { status: "error", dest, detail: `cannot read source: ${e.message}` };
   }
-  const existed = existsSync7(dest);
+  const existed = existsSync9(dest);
   if (existed) {
     try {
-      if (readFileSync11(dest, "utf-8") === desired) return { status: "unchanged", dest };
+      if (readFileSync12(dest, "utf-8") === desired) return { status: "unchanged", dest };
     } catch {
     }
   }
@@ -48717,8 +50065,8 @@ function installUsageRule(opts = {}) {
 }
 
 // src/model-events.ts
-import { appendFileSync as appendFileSync4, mkdirSync as mkdirSync13, readFileSync as readFileSync12 } from "node:fs";
-import { join as join13 } from "node:path";
+import { appendFileSync as appendFileSync4, mkdirSync as mkdirSync13, readFileSync as readFileSync13 } from "node:fs";
+import { join as join14 } from "node:path";
 var MODEL_EVENT_KINDS = [
   "param_drop",
   "reasoning_downgrade",
@@ -48731,7 +50079,7 @@ var MODEL_EVENT_KINDS = [
 var KIND_SET = new Set(MODEL_EVENT_KINDS);
 var MAX_DETAIL = 160;
 function getModelEventsPath() {
-  return join13(getConfigDir(), "model-events.log");
+  return join14(getConfigDir(), "model-events.log");
 }
 function sanitizeField(s) {
   return s.replace(/ - /g, " | ").replace(/[\r\n]+/g, " ").trim();
@@ -49289,31 +50637,31 @@ function renderEndpointTable(ep, colors) {
 
 // src/free-pool-auto-bench.ts
 import {
-  existsSync as existsSync8,
+  existsSync as existsSync10,
   mkdirSync as mkdirSync14,
   openSync,
-  readFileSync as readFileSync13,
+  readFileSync as readFileSync14,
   writeFileSync as writeFileSync10
 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { dirname as dirname8, join as join14, resolve as pathResolve } from "node:path";
+import { homedir as homedir4 } from "node:os";
+import { dirname as dirname9, join as join15, resolve as pathResolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
-var LLM_EXT_HOME = join14(homedir3(), ".llm-externalizer");
-var BENCH_CACHE = join14(LLM_EXT_HOME, "benchmark-results.json");
-var BENCH_LOCK = join14(LLM_EXT_HOME, "free-pool-bench.lock");
-var BENCH_LOG = join14(LLM_EXT_HOME, "free-pool-bench.log");
+var LLM_EXT_HOME = join15(homedir4(), ".llm-externalizer");
+var BENCH_CACHE = join15(LLM_EXT_HOME, "benchmark-results.json");
+var BENCH_LOCK = join15(LLM_EXT_HOME, "free-pool-bench.lock");
+var BENCH_LOG = join15(LLM_EXT_HOME, "free-pool-bench.log");
 var DISABLE_ENV = "LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH";
 function resolveBenchmarkScriptPath() {
-  const here = dirname8(fileURLToPath4(import.meta.url));
+  const here = dirname9(fileURLToPath4(import.meta.url));
   const bundled = pathResolve(here, "benchmark.js");
-  if (existsSync8(bundled)) return bundled;
+  if (existsSync10(bundled)) return bundled;
   const fromSrc = pathResolve(here, "..", "dist", "benchmark.js");
   return fromSrc;
 }
 function benchCacheHasFreeEntries(cachePath2 = BENCH_CACHE) {
   try {
-    const raw = readFileSync13(cachePath2, "utf-8");
+    const raw = readFileSync14(cachePath2, "utf-8");
     const data = JSON.parse(raw);
     if (!Array.isArray(data?.results)) return false;
     return data.results.some(
@@ -49324,9 +50672,9 @@ function benchCacheHasFreeEntries(cachePath2 = BENCH_CACHE) {
   }
 }
 function lockHoldsLivePid(lockPath = BENCH_LOCK) {
-  if (!existsSync8(lockPath)) return false;
+  if (!existsSync10(lockPath)) return false;
   try {
-    const pid = parseInt(readFileSync13(lockPath, "utf-8").trim(), 10);
+    const pid = parseInt(readFileSync14(lockPath, "utf-8").trim(), 10);
     if (!Number.isInteger(pid) || pid <= 0) return false;
     try {
       process.kill(pid, 0);
@@ -49422,402 +50770,6 @@ function maybeTriggerFreePoolBench(opts) {
 }
 
 // src/index.ts
-var EXT_TO_LANG = {
-  ".ts": "typescript",
-  ".tsx": "typescript",
-  ".mts": "typescript",
-  ".cts": "typescript",
-  ".js": "javascript",
-  ".jsx": "javascript",
-  ".mjs": "javascript",
-  ".cjs": "javascript",
-  ".py": "python",
-  ".rs": "rust",
-  ".go": "go",
-  ".java": "java",
-  ".kt": "kotlin",
-  ".c": "c",
-  ".h": "c",
-  ".cpp": "cpp",
-  ".hpp": "cpp",
-  ".cc": "cpp",
-  ".cs": "csharp",
-  ".rb": "ruby",
-  ".php": "php",
-  ".swift": "swift",
-  ".sh": "bash",
-  ".bash": "bash",
-  ".zsh": "zsh",
-  ".fish": "fish",
-  ".sql": "sql",
-  ".html": "html",
-  ".css": "css",
-  ".scss": "scss",
-  ".less": "less",
-  ".json": "json",
-  ".yaml": "yaml",
-  ".yml": "yaml",
-  ".toml": "toml",
-  ".xml": "xml",
-  ".md": "markdown",
-  ".mdx": "mdx",
-  ".tex": "latex",
-  ".lua": "lua",
-  ".r": "r",
-  ".R": "r",
-  ".dart": "dart",
-  ".ex": "elixir",
-  ".exs": "elixir",
-  ".zig": "zig",
-  ".nim": "nim",
-  ".jl": "julia",
-  ".sol": "solidity",
-  ".vue": "vue",
-  ".svelte": "svelte"
-};
-var SHEBANG_TO_LANG = {
-  python: "python",
-  python3: "python",
-  node: "javascript",
-  bash: "bash",
-  sh: "bash",
-  zsh: "zsh",
-  ruby: "ruby",
-  perl: "perl",
-  php: "php",
-  lua: "lua"
-};
-function detectLang(filePath) {
-  const ext = extname4(filePath).toLowerCase();
-  if (EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
-  try {
-    const head = readFileSync14(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
-    const shebang = head.match(/^#!\s*(?:\/usr\/bin\/env\s+)?(\S+)/);
-    if (shebang) {
-      const bin = basename4(shebang[1]);
-      if (SHEBANG_TO_LANG[bin]) return SHEBANG_TO_LANG[bin];
-    }
-  } catch {
-  }
-  return "text";
-}
-function fenceBackticks(content) {
-  let maxRun = 0;
-  let current = 0;
-  for (const ch of content) {
-    if (ch === "`") {
-      current++;
-      if (current > maxRun) maxRun = current;
-    } else {
-      current = 0;
-    }
-  }
-  const needed = Math.max(4, maxRun + 1);
-  return "`".repeat(needed);
-}
-function assertFileExists(filePath) {
-  if (!existsSync9(filePath)) {
-    throw new Error(`File not found: ${filePath}`);
-  }
-}
-function sanitizeInputPath(filePath) {
-  const resolved = resolve6(filePath);
-  const realpathSafe = (p) => {
-    try {
-      return realpathSync3(p);
-    } catch {
-      return p;
-    }
-  };
-  const cwdReal = realpathSafe(resolve6(process.cwd()));
-  const homeReal = realpathSafe(
-    resolve6(process.env.HOME || process.env.USERPROFILE || homedir4())
-  );
-  const tmpReal = realpathSafe(resolve6("/tmp"));
-  const resolvedReal = (() => {
-    try {
-      return realpathSync3(resolved);
-    } catch {
-      return resolved;
-    }
-  })();
-  const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep2);
-  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
-    throw new Error(
-      `Path traversal blocked: ${filePath} resolves outside allowed directories`
-    );
-  }
-  try {
-    if (lstatSync(resolved).isSymbolicLink()) {
-      throw new Error(`Symlink rejected for security: ${filePath}`);
-    }
-  } catch (e) {
-    if (e.code === "ENOENT") return resolved;
-    throw e;
-  }
-  return resolved;
-}
-var DEFAULT_MAX_PAYLOAD_BYTES = 400 * 1024;
-function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexRedact, tagPrefix = "") {
-  const rawLimit = maxBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
-  const limit = !Number.isFinite(rawLimit) || rawLimit <= 0 ? DEFAULT_MAX_PAYLOAD_BYTES : rawLimit;
-  const safePath = sanitizeInputPath(filePath);
-  assertFileExists(safePath);
-  const stats = statSync5(safePath);
-  if (stats.size > limit) {
-    throw new Error(
-      `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
-    );
-  }
-  const raw = readFileSync14(safePath);
-  if (raw.length > limit) {
-    throw new Error(
-      `File too large after read (${(raw.length / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
-    );
-  }
-  const scanLen = Math.min(raw.length, 65536);
-  for (let i = 0; i < scanLen; i++) {
-    if (raw[i] === 0) throw new Error(`File appears to be binary: ${filePath}`);
-  }
-  let content = raw.toString("utf-8");
-  if (content.length === 0) {
-    content = `(empty file \u2014 0 bytes)`;
-  }
-  if (redact) {
-    const result = redactSecrets2(content);
-    content = result.redacted;
-  }
-  if (regexRedact) {
-    const result = applyRegexRedaction(content, regexRedact);
-    content = result.redacted;
-  }
-  const lang = langOverride || detectLang(filePath);
-  const fence = fenceBackticks(content);
-  const nameTag = `${tagPrefix}filename`;
-  const contentTag = `${tagPrefix}file-content`;
-  return `<${nameTag}>
-${filePath}
-</${nameTag}>
-<${contentTag}>
-${fence}${lang}
-${content}
-${fence}
-</${contentTag}>`;
-}
-var BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".gif",
-  ".bmp",
-  ".ico",
-  ".webp",
-  ".avif",
-  ".tiff",
-  ".tif",
-  ".mp3",
-  ".mp4",
-  ".wav",
-  ".ogg",
-  ".webm",
-  ".avi",
-  ".mov",
-  ".flac",
-  ".aac",
-  ".m4a",
-  ".pdf",
-  ".doc",
-  ".docx",
-  ".xls",
-  ".xlsx",
-  ".ppt",
-  ".pptx",
-  ".zip",
-  ".tar",
-  ".gz",
-  ".bz2",
-  ".xz",
-  ".7z",
-  ".rar",
-  ".dmg",
-  ".iso",
-  ".jar",
-  ".exe",
-  ".dll",
-  ".so",
-  ".dylib",
-  ".o",
-  ".a",
-  ".lib",
-  ".class",
-  ".pyc",
-  ".pyo",
-  ".wasm",
-  ".bin",
-  ".dat",
-  ".db",
-  ".sqlite",
-  ".sqlite3",
-  ".ttf",
-  ".otf",
-  ".woff",
-  ".woff2",
-  ".eot",
-  ".DS_Store",
-  ".lock"
-]);
-function isBinaryExtension(filePath) {
-  return BINARY_EXTENSIONS.has(extname4(filePath).toLowerCase()) || basename4(filePath) === ".DS_Store";
-}
-var SECRET_PATTERNS2 = [
-  [/AKIA[0-9A-Z]{16}/g, "AWS_KEY"],
-  [/(?:sk|pk)[-_](?:live|test|proj)[-_][A-Za-z0-9]{20,}/g, "API_KEY"],
-  [/ghp_[A-Za-z0-9]{36}/g, "GITHUB_PAT"],
-  [/ghr_[A-Za-z0-9]{36}/g, "GITHUB_TOKEN"],
-  [/gho_[A-Za-z0-9]{36}/g, "GITHUB_OAUTH"],
-  [/github_pat_[A-Za-z0-9_]{82}/g, "GITHUB_PAT"],
-  [/glpat-[A-Za-z0-9\-_]{20,}/g, "GITLAB_TOKEN"],
-  [/xox[bpsar]-[A-Za-z0-9-]+/g, "SLACK_TOKEN"],
-  [/Bearer\s+[A-Za-z0-9._\-/+=]{20,}/g, "BEARER_TOKEN"],
-  // Key-value patterns in env/config files (must have at least 8 chars in the value)
-  [
-    // Common env-var-style secret names. Extended in v9.9.0 from a hand-
-    // curated list to a hybrid approach: explicit names for the most-common
-    // OAuth / vendor key shapes AND a wildcard for any *_KEY / *_TOKEN /
-    // *_SECRET / *_PASSWORD. Wildcards intentionally catch JWT_SECRET,
-    // LM_API_TOKEN (the plugin's own preset!), STRIPE_SECRET_KEY,
-    // SUPABASE_SERVICE_KEY, SLACK_BOT_TOKEN, and similar without needing
-    // per-vendor patches.
-    /(?:^|\n)\s*(?:(?:PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|AUTH|AUTH_TOKEN|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|DB_PASSWORD|DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|AWS_SESSION_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITLAB_TOKEN|BITBUCKET_TOKEN|NPM_TOKEN|DOCKER_PASSWORD|HF_TOKEN|HUGGINGFACE_TOKEN|LM_API_TOKEN|VLLM_API_KEY|JWT_SECRET|JWT_PRIVATE_KEY|STRIPE_SECRET_KEY|STRIPE_API_KEY|SUPABASE_SERVICE_KEY|SUPABASE_ANON_KEY|FIREBASE_TOKEN|SLACK_BOT_TOKEN|SLACK_TOKEN|DISCORD_TOKEN|TELEGRAM_BOT_TOKEN|TWILIO_AUTH_TOKEN|SENDGRID_API_KEY|MAILGUN_API_KEY|SENTRY_AUTH_TOKEN|PRIVATE)|[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_APIKEY|_API_KEY|_AUTH))\s*[=:]\s*['"]?([^\s'"#\n]{8,})/gim,
-    "ENV_SECRET"
-  ],
-  // H7: Multi-line secret blocks (PEM private keys, certificates)
-  [
-    /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----/g,
-    "PEM_BLOCK"
-  ]
-];
-function scanForSecrets(content) {
-  const counts = /* @__PURE__ */ new Map();
-  for (const [pattern, label] of SECRET_PATTERNS2) {
-    pattern.lastIndex = 0;
-    const matches = content.match(pattern);
-    if (matches && matches.length > 0) {
-      counts.set(label, (counts.get(label) ?? 0) + matches.length);
-    }
-  }
-  const details = Array.from(counts.entries()).map(([label, count]) => ({
-    label,
-    count
-  }));
-  return { found: details.length > 0, details };
-}
-function scanFilesForSecrets(filePaths) {
-  const allDetails = [];
-  for (const fp of filePaths) {
-    if (!existsSync9(fp)) continue;
-    try {
-      const content = readFileSync14(fp, "utf-8");
-      const scan = scanForSecrets(content);
-      if (scan.found) {
-        for (const d of scan.details) {
-          allDetails.push({ file: fp, ...d });
-        }
-      }
-    } catch {
-    }
-  }
-  if (allDetails.length === 0) return { found: false, report: "" };
-  const lines = [
-    "SECRETS DETECTED \u2014 operation aborted.",
-    "",
-    "Best practice: Move secrets to .env files (gitignored) and reference them via environment variables.",
-    "Claude Code cannot read .env files, ensuring secrets stay out of LLM context.",
-    "",
-    "Findings:"
-  ];
-  for (const d of allDetails) {
-    lines.push(`  ${d.file}: ${d.count}\xD7 ${d.label}`);
-  }
-  return { found: true, report: lines.join("\n") };
-}
-function redactSecrets2(content) {
-  let result = content;
-  let count = 0;
-  for (const [pattern, label] of SECRET_PATTERNS2) {
-    pattern.lastIndex = 0;
-    result = result.replace(pattern, () => {
-      count++;
-      return `[REDACTED:${label}]`;
-    });
-  }
-  return { redacted: result, count };
-}
-function parseRedactRegex(raw) {
-  if (!raw || typeof raw !== "string") return null;
-  const pattern = raw.trim();
-  if (!pattern) {
-    throw new Error("Invalid redact_regex: pattern must not be empty.");
-  }
-  if (/\([^)]*[+*][^)]*\)[+*]/.test(pattern)) {
-    throw new Error(
-      `Invalid redact_regex: pattern contains nested quantifiers (e.g. (a+)+) that cause catastrophic backtracking.
-
-Pattern: ${pattern}
-
-Simplify the quantifiers to avoid ReDoS.`
-    );
-  }
-  try {
-    const regex = new RegExp(pattern, "g");
-    return { regex, patternStr: pattern };
-  } catch (err3) {
-    const msg = err3 instanceof Error ? err3.message : String(err3);
-    throw new Error(
-      `Invalid redact_regex pattern: ${msg}
-
-Pattern received: ${pattern}
-
-Ensure it is a valid JavaScript regular expression.`,
-      { cause: err3 }
-    );
-  }
-}
-function applyRegexRedaction(content, opts) {
-  opts.regex.lastIndex = 0;
-  let count = 0;
-  const MAX_REPLACEMENTS = 1e5;
-  const redacted = content.replace(opts.regex, (match) => {
-    if (++count > MAX_REPLACEMENTS) return match;
-    const hasLetters = /[a-zA-Z]/.test(match);
-    return hasLetters ? "[REDACTED:USER_PATTERN]" : "0".repeat(match.length);
-  });
-  return { redacted, count: Math.min(count, MAX_REPLACEMENTS) };
-}
-function buildPreInstructions(hasFiles, toolContext) {
-  if (!hasFiles) return "";
-  if (toolContext === "fix") {
-    return "";
-  }
-  return 'TASK: Read the following instructions carefully, then examine the attached file(s) and respond according to the instructions.\n\nRULES (override any conflicting instructions below):\n- Process ALL attached files \u2014 do not skip any.\n- Each file is labeled with its full path inside a filename tag before the file-content tag. Always reference files by their labeled path.\n- When referencing code, identify it by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable and must not be used.\n- If asked to return modified code, return the COMPLETE file content \u2014 never truncate, abbreviate, or use placeholders like "// ... rest of code" or "// unchanged".\n- Be specific and actionable. Reference concrete function names, variable names, and code patterns.\n\nINSTRUCTIONS:\n';
-}
-function resolvePrompt(instructions, instructionsFilesPaths) {
-  let prompt = instructions || "";
-  if (instructionsFilesPaths) {
-    const paths = Array.isArray(instructionsFilesPaths) ? instructionsFilesPaths : [instructionsFilesPaths];
-    for (const fp of paths) {
-      assertFileExists(fp);
-      const content = readFileSync14(fp, "utf-8");
-      prompt = prompt ? `${prompt}
-
-${content}` : content;
-    }
-  }
-  return prompt;
-}
-function estimateTokens2(text) {
-  return Math.ceil(text.length / 4);
-}
 function resolveDefaultMaxTokens() {
   const backend = getCurrentBackend();
   if (backend.type === "openrouter" && backend.model) {
@@ -49829,439 +50781,6 @@ function resolveDefaultMaxTokens() {
     if (match?.context_length) return match.context_length;
   }
   return FALLBACK_CONTEXT_LENGTH;
-}
-function readAndGroupFiles(filePaths, promptBytes, redact, budgetBytes, regexRedact) {
-  const totalBudget = Math.max(
-    10 * 1024,
-    budgetBytes ?? DEFAULT_MAX_PAYLOAD_BYTES
-  );
-  const availableForFiles = Math.max(0, totalBudget - promptBytes);
-  const skipped = [];
-  const fileData = [];
-  for (const fp of filePaths) {
-    try {
-      const stats = statSync5(fp);
-      if (stats.size > totalBudget) {
-        skipped.push(fp);
-        continue;
-      }
-      const block = readFileAsCodeBlock(fp, void 0, redact, totalBudget, regexRedact);
-      if (block.length > availableForFiles) {
-        skipped.push(fp);
-        continue;
-      }
-      fileData.push({ path: fp, block, tokens: estimateTokens2(block) });
-    } catch {
-      skipped.push(fp);
-    }
-  }
-  if (fileData.length === 0) {
-    return { groups: [], autoBatched: false, skipped };
-  }
-  const totalFileBytes = fileData.reduce((sum, fd) => sum + fd.block.length, 0);
-  if (totalFileBytes <= availableForFiles) {
-    return { groups: [fileData], autoBatched: false, skipped };
-  }
-  const sorted = [...fileData].sort((a, b) => b.block.length - a.block.length);
-  const bins = [];
-  for (const fd of sorted) {
-    let placed = false;
-    for (const bin of bins) {
-      if (bin.used + fd.block.length <= availableForFiles) {
-        bin.items.push(fd);
-        bin.used += fd.block.length;
-        placed = true;
-        break;
-      }
-    }
-    if (!placed) {
-      bins.push({ items: [fd], used: fd.block.length });
-    }
-  }
-  const groups = bins.map((bin) => bin.items);
-  return { groups, autoBatched: groups.length > 1, skipped };
-}
-function resolveAnswerMode(raw, defaultMode) {
-  if (raw === 0 || raw === 1 || raw === 2) return raw;
-  return defaultMode;
-}
-function buildPerFileSectionPrompt(filePaths) {
-  if (filePaths.length <= 1) return "";
-  return "\n\nOUTPUT FORMAT: You are receiving " + filePaths.length + " input files. Produce a SEPARATE report section for each file, using this exact format:\n\n## File: <absolute-file-path>\n\n<your analysis/report for this file>\n\n---\n\nProduce exactly " + filePaths.length + " sections, one for each input file, in the order they appear. Do NOT merge or combine sections. Each file must have its own complete, independent section.\n";
-}
-var WALK_DEFAULT_EXCLUDE = /* @__PURE__ */ new Set([
-  // Version control
-  ".git",
-  // Package managers / dependencies
-  "node_modules",
-  "bower_components",
-  ".pnpm-store",
-  // Python
-  "__pycache__",
-  ".venv",
-  "venv",
-  ".tox",
-  ".mypy_cache",
-  ".pytest_cache",
-  ".eggs",
-  "*.egg-info",
-  // Build outputs
-  "dist",
-  "build",
-  "out",
-  ".next",
-  ".nuxt",
-  ".output",
-  "target",
-  // Caches / temp
-  ".cache",
-  ".turbo",
-  "coverage",
-  "tmp",
-  "temp",
-  ".temp",
-  ".tmp",
-  // IDE / editor
-  ".idea",
-  ".vscode",
-  // Other
-  ".gradle",
-  ".cargo",
-  ".nx",
-  "vendor"
-]);
-var FORBIDDEN_GIT_CWD_PREFIXES = [
-  "/etc",
-  "/usr",
-  "/bin",
-  "/sbin",
-  "/sys",
-  "/proc",
-  "/dev",
-  "/var/log",
-  "/var/db",
-  "/Library",
-  "/System"
-];
-function validateGitCwd(dirPath) {
-  if (!dirPath || typeof dirPath !== "string") {
-    throw new Error("validateGitCwd: empty cwd not allowed");
-  }
-  if (dirPath.includes("..")) {
-    const trimmed = resolve6(dirPath);
-    if (trimmed.includes("..")) {
-      throw new Error(`validateGitCwd: path contains parent refs: ${dirPath}`);
-    }
-  }
-  const resolved = resolve6(dirPath);
-  const realpathSafe = (p) => {
-    try {
-      return realpathSync3(p);
-    } catch {
-      return p;
-    }
-  };
-  const resolvedReal = realpathSafe(resolved);
-  if (resolvedReal === "/" || resolvedReal === "") {
-    throw new Error(`validateGitCwd: filesystem root rejected: ${dirPath}`);
-  }
-  for (const sys of FORBIDDEN_GIT_CWD_PREFIXES) {
-    const sysReal = realpathSafe(sys);
-    if (resolvedReal === sysReal || resolvedReal.startsWith(sysReal + sep2)) {
-      throw new Error(`validateGitCwd: system path rejected: ${dirPath}`);
-    }
-  }
-  const cwdReal = realpathSafe(resolve6(process.cwd()));
-  const homeReal = realpathSafe(
-    resolve6(process.env.HOME || process.env.USERPROFILE || homedir4())
-  );
-  const tmpReal = realpathSafe(resolve6("/tmp"));
-  const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep2);
-  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
-    throw new Error(
-      `validateGitCwd: ${dirPath} resolves outside allowed roots (cwd/$HOME/tmp)`
-    );
-  }
-}
-var _gitOnPath = void 0;
-function ensureGitOnPath() {
-  if (_gitOnPath !== void 0) return _gitOnPath;
-  const probe = spawnSync2("git", ["--version"], {
-    encoding: "utf-8",
-    timeout: 2e3,
-    killSignal: "SIGKILL"
-  });
-  _gitOnPath = probe.status === 0;
-  if (!_gitOnPath) {
-    process.stderr.write(
-      "[llm-externalizer] git not found on PATH \u2014 falling back to filesystem walk for directory scans\n"
-    );
-  }
-  return _gitOnPath;
-}
-function lstatSyncRetry(p) {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      return lstatSync(p);
-    } catch (err3) {
-      const code = err3.code;
-      if (code === "EAGAIN" || code === "EBUSY") {
-        const deadline = Date.now() + 50;
-        while (Date.now() < deadline) {
-        }
-        continue;
-      }
-      return null;
-    }
-  }
-  return null;
-}
-function gitLsFilesMultiRepo(dirPath, recursive) {
-  validateGitCwd(dirPath);
-  if (!ensureGitOnPath()) return null;
-  const GIT_TIMEOUT_MS = 5e3;
-  const gitOpts = {
-    encoding: "utf-8",
-    timeout: GIT_TIMEOUT_MS,
-    killSignal: "SIGKILL"
-  };
-  const allFiles = /* @__PURE__ */ new Set();
-  const topLevelResult = spawnSync2(
-    "git",
-    ["rev-parse", "--show-toplevel"],
-    { cwd: dirPath, ...gitOpts }
-  );
-  const isInGitRepo = topLevelResult.status === 0 && topLevelResult.stdout.trim();
-  if (isInGitRepo) {
-    const trackedResult = spawnSync2(
-      "git",
-      ["ls-files", "--cached"],
-      { cwd: dirPath, ...gitOpts }
-    );
-    if (trackedResult.status === 0 && trackedResult.stdout) {
-      for (const relPath of trackedResult.stdout.split("\n")) {
-        if (!relPath.trim()) continue;
-        allFiles.add(join15(dirPath, relPath));
-      }
-    }
-    const untrackedResult = spawnSync2(
-      "git",
-      ["ls-files", "--others", "--exclude-standard"],
-      { cwd: dirPath, ...gitOpts }
-    );
-    if (untrackedResult.status === 0 && untrackedResult.stdout) {
-      for (const relPath of untrackedResult.stdout.split("\n")) {
-        if (!relPath.trim()) continue;
-        allFiles.add(join15(dirPath, relPath));
-      }
-    }
-  }
-  if (recursive) {
-    let findNestedGitRoots2 = function(dir, depth) {
-      if (depth > 10) return;
-      let entries;
-      try {
-        entries = readdirSync4(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        if (entry.name === ".git" || entry.name === "node_modules") continue;
-        if (entry.name.startsWith(".")) continue;
-        const subDir = join15(dir, entry.name);
-        const gitDir = join15(subDir, ".git");
-        const gitStat = lstatSyncRetry(gitDir);
-        const gitDirIsDir = gitStat ? gitStat.isDirectory() : false;
-        if (gitDirIsDir) {
-          nestedGitRoots.push(subDir);
-          continue;
-        }
-        findNestedGitRoots2(subDir, depth + 1);
-      }
-    };
-    var findNestedGitRoots = findNestedGitRoots2;
-    const nestedGitRoots = [];
-    findNestedGitRoots2(dirPath, 0);
-    for (const nestedRoot of nestedGitRoots) {
-      try {
-        validateGitCwd(nestedRoot);
-      } catch {
-        continue;
-      }
-      const nestedResult = spawnSync2(
-        "git",
-        ["ls-files", "--cached", "--others", "--exclude-standard"],
-        { cwd: nestedRoot, ...gitOpts }
-      );
-      if (nestedResult.status === 0 && nestedResult.stdout) {
-        for (const relPath of nestedResult.stdout.split("\n")) {
-          if (!relPath.trim()) continue;
-          allFiles.add(join15(nestedRoot, relPath));
-        }
-      }
-    }
-  }
-  if (!isInGitRepo) return null;
-  return [...allFiles];
-}
-function walkDir(dirPath, options) {
-  const maxFiles = options?.maxFiles ?? 1e4;
-  const extensions = options?.extensions;
-  const skipBinary = !options?.includeBinary;
-  const recursive = options?.recursive !== false;
-  const followSymlinks = options?.followSymlinks !== false;
-  if (options?.useGitignore) {
-    const gitResults = gitLsFilesMultiRepo(dirPath, recursive);
-    if (gitResults !== null) {
-      const extraExcludeSet = new Set(options?.exclude ?? []);
-      const results2 = [];
-      for (const fullPath of gitResults) {
-        if (results2.length >= maxFiles) break;
-        if (skipBinary && isBinaryExtension(fullPath)) continue;
-        if (extensions) {
-          const ext = extname4(fullPath).toLowerCase();
-          if (!extensions.includes(ext)) continue;
-        }
-        if (extraExcludeSet.size > 0) {
-          const rel = fullPath.startsWith(dirPath) ? fullPath.slice(dirPath.length) : fullPath;
-          const segments = rel.split("/").filter((s) => s.length > 0);
-          const dirSegments = segments.slice(0, -1);
-          if (dirSegments.some((seg) => extraExcludeSet.has(seg))) continue;
-        }
-        results2.push(fullPath);
-      }
-      return results2;
-    }
-    process.stderr.write(
-      `[llm-externalizer] No git repo found in ${dirPath}, falling back to manual walk
-`
-    );
-  }
-  const results = [];
-  const extraExclude = options?.exclude ?? [];
-  const exclude = /* @__PURE__ */ new Set([...WALK_DEFAULT_EXCLUDE, ...extraExclude]);
-  const visitedPaths = /* @__PURE__ */ new Set();
-  function recurse(dir) {
-    if (results.length >= maxFiles) return;
-    let entries;
-    try {
-      entries = readdirSync4(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (results.length >= maxFiles) return;
-      const fullPath = join15(dir, entry.name);
-      if (entry.isSymbolicLink()) {
-        if (!followSymlinks) continue;
-        try {
-          const realPath = realpathSync3(fullPath);
-          if (visitedPaths.has(realPath)) continue;
-          visitedPaths.add(realPath);
-          const targetStat = statSync5(realPath);
-          if (targetStat.isDirectory() && recursive) {
-            if (!entry.name.startsWith(".") && !exclude.has(entry.name)) {
-              recurse(fullPath);
-            }
-          } else if (targetStat.isFile()) {
-            if (skipBinary && isBinaryExtension(fullPath)) continue;
-            if (extensions) {
-              const ext = extname4(entry.name).toLowerCase();
-              if (!extensions.includes(ext)) continue;
-            }
-            results.push(fullPath);
-          }
-        } catch {
-          continue;
-        }
-        continue;
-      }
-      if (entry.isDirectory()) {
-        if (!recursive) continue;
-        if (entry.name === ".git" || entry.name === ".svn" || entry.name === ".hg" || exclude.has(entry.name)) continue;
-        if (entry.name.startsWith(".")) continue;
-        try {
-          const dirRealPath = realpathSync3(fullPath);
-          if (visitedPaths.has(dirRealPath)) continue;
-          visitedPaths.add(dirRealPath);
-        } catch {
-          continue;
-        }
-        recurse(fullPath);
-      } else if (entry.isFile()) {
-        if (skipBinary && isBinaryExtension(fullPath)) continue;
-        if (extensions) {
-          const ext = extname4(entry.name).toLowerCase();
-          if (!extensions.includes(ext)) continue;
-        }
-        results.push(fullPath);
-      }
-    }
-  }
-  recurse(dirPath);
-  return results;
-}
-function extractLocalImports(filePath, sourceCode) {
-  const dir = dirname9(filePath);
-  const lang = detectLang(filePath);
-  const paths = [];
-  const patterns = [];
-  if (lang === "typescript" || lang === "javascript") {
-    patterns.push(/(?:import|export)\s+.*?from\s+['"](\.[^'"]+)['"]/g);
-    patterns.push(/require\(\s*['"](\.[^'"]+)['"]\s*\)/g);
-  } else if (lang === "python") {
-    patterns.push(/from\s+(\.[\w.]*)\s+import/g);
-  }
-  for (const pattern of patterns) {
-    pattern.lastIndex = 0;
-    let match;
-    while ((match = pattern.exec(sourceCode)) !== null) {
-      const importPath = match[1];
-      let resolved;
-      if (lang === "python" && importPath.startsWith(".")) {
-        const dotCount = importPath.match(/^\.+/)?.[0].length ?? 1;
-        const modulePart = importPath.slice(dotCount);
-        const baseDir = dotCount === 1 ? dir : join15(dir, ...Array(dotCount - 1).fill(".."));
-        resolved = modulePart ? join15(baseDir, ...modulePart.split(".")) : baseDir;
-      } else {
-        resolved = join15(dir, importPath);
-      }
-      if (!extname4(resolved)) {
-        const tryExts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"];
-        let found = false;
-        for (const ext of tryExts) {
-          if (existsSync9(resolved + ext)) {
-            resolved = resolved + ext;
-            found = true;
-            break;
-          }
-        }
-        if (!found) {
-          const indexCandidates = [
-            "index.ts",
-            "index.tsx",
-            "index.js",
-            "index.jsx",
-            "__init__.py"
-          ];
-          for (const leaf of indexCandidates) {
-            const indexPath = join15(resolved, leaf);
-            if (existsSync9(indexPath)) {
-              resolved = indexPath;
-              found = true;
-              break;
-            }
-          }
-        }
-        if (!found) continue;
-      } else if (!existsSync9(resolved)) {
-        continue;
-      }
-      paths.push(resolved);
-    }
-  }
-  return [...new Set(paths)];
 }
 var SETTINGS_FILE = getSettingsPath();
 var settingsValid = false;
@@ -50519,7 +51038,7 @@ var _onSettingsReloaded = null;
 function reloadSettingsFromDisk() {
   let raw;
   try {
-    raw = readFileSync14(SETTINGS_FILE, "utf-8");
+    raw = readFileSync15(SETTINGS_FILE, "utf-8");
   } catch {
     return false;
   }
@@ -50587,7 +51106,7 @@ function reloadSettingsFromDisk() {
 }
 var _settingsLastMtimeMs = (() => {
   try {
-    return statSync5(SETTINGS_FILE).mtimeMs;
+    return statSync7(SETTINGS_FILE).mtimeMs;
   } catch {
     return 0;
   }
@@ -50843,21 +51362,21 @@ function trackRequestEnd() {
 }
 function waitForRequestsDrained(timeoutMs = 12e4) {
   if (_activeRequests === 0) return Promise.resolve();
-  return new Promise((resolve7) => {
+  return new Promise((resolve9) => {
     const timer = setTimeout(() => {
       _activeRequestsDrained = null;
-      resolve7();
+      resolve9();
     }, timeoutMs);
     _activeRequestsDrained = () => {
       clearTimeout(timer);
-      resolve7();
+      resolve9();
     };
   });
 }
-var SESSION_ID = randomUUID().slice(0, 8);
+var SESSION_ID = randomUUID2().slice(0, 8);
 var SESSION_START = /* @__PURE__ */ new Date();
-var LOG_DIR = join15(getConfigDir(), "logs");
-var LOG_FILE = join15(
+var LOG_DIR = join16(getConfigDir(), "logs");
+var LOG_FILE = join16(
   LOG_DIR,
   `session-${SESSION_ID}-${SESSION_START.toISOString().slice(0, 10)}.jsonl`
 );
@@ -51476,10 +51995,10 @@ function defaultOutputDir() {
   if (_cachedDefaultOutputDir) return _cachedDefaultOutputDir;
   const envOverride = process.env.LLM_OUTPUT_DIR;
   if (envOverride && envOverride.trim()) {
-    _cachedDefaultOutputDir = resolve6(envOverride.trim());
+    _cachedDefaultOutputDir = resolve8(envOverride.trim());
     return _cachedDefaultOutputDir;
   }
-  _cachedDefaultOutputDir = join15(resolveProjectMainRoot(), "reports", "llm-externalizer");
+  _cachedDefaultOutputDir = join16(resolveProjectMainRoot(), "reports", "llm-externalizer");
   return _cachedDefaultOutputDir;
 }
 function _resetDefaultOutputDirCache() {
@@ -51507,11 +52026,11 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
   mkdirSync15(dir, { recursive: true });
   const now = /* @__PURE__ */ new Date();
   const ts = canonicalTimestamp(now);
-  const shortId = randomUUID().slice(0, 6);
+  const shortId = randomUUID2().slice(0, 6);
   const srcPart = meta3.inputFile ? `-${sanitizeFilename(meta3.inputFile).replace(/\.md$/, "")}` : "";
   const groupPart = meta3.groupId ? `-group-${meta3.groupId.replace(/[^a-zA-Z0-9_-]/g, "_")}` : "";
   const filename = overrideFilename || `${ts}-${toolName}${groupPart}${srcPart}-${shortId}.md`;
-  const filepath = join15(dir, filename);
+  const filepath = join16(dir, filename);
   const lines = [
     "# LLM Externalizer Response",
     "",
@@ -51712,12 +52231,12 @@ async function rateLimitedParallel(tasks, rps, maxInFlight = DEFAULT_MAX_IN_FLIG
   return results;
 }
 function sanitizeFilename(filePath) {
-  const base = basename4(filePath);
+  const base = basename5(filePath);
   if (!base || base === "/") return "unknown";
   return base.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 async function robustPerFileProcess(files, opts) {
-  const batchId = opts.batchId || randomUUID();
+  const batchId = opts.batchId || randomUUID2();
   const rlConfig = await getRateLimitConfig();
   const recentOutcomes = [];
   let aborted2 = false;
@@ -51799,10 +52318,10 @@ function resolveFolderPath(folderPath, opts) {
   } catch (err3) {
     return { files: [], error: `Invalid folder_path: ${err3 instanceof Error ? err3.message : String(err3)}` };
   }
-  if (!existsSync9(folderPath)) {
+  if (!existsSync11(folderPath)) {
     return { files: [], error: `folder_path not found: ${folderPath}` };
   }
-  if (!statSync5(folderPath).isDirectory()) {
+  if (!statSync7(folderPath).isDirectory()) {
     return { files: [], error: `Not a directory: ${folderPath}` };
   }
   const files = walkDir(folderPath, {
@@ -51824,7 +52343,7 @@ function resolveFolderPath(folderPath, opts) {
 }
 function batchReportFilename(toolName, _batchId, filePath, _fileIndex) {
   const ts = canonicalTimestamp();
-  const shortId = randomUUID().slice(0, 6);
+  const shortId = randomUUID2().slice(0, 6);
   const srcName = sanitizeFilename(filePath).replace(/\.md$/, "");
   return `${ts}-${toolName}-${srcName}-${shortId}.md`;
 }
@@ -52150,7 +52669,7 @@ ${failed.map((r) => `- **${r.model}**: ${r.content}`).join("\n")}`);
   };
 }
 async function processFileCheck(filePath, task, options = {}) {
-  if (!existsSync9(filePath)) {
+  if (!existsSync11(filePath)) {
     return { filePath, success: false, error: `File not found: ${filePath}` };
   }
   const codeBlock = readFileAsCodeBlock(
@@ -53076,7 +53595,7 @@ Run the "discover" tool to see the current profile status.`
     const isLLMTool = LLM_TOOLS_SET.has(name);
     if (isLLMTool) trackRequestStart();
     const rawOutputDir = args?.output_dir;
-    const outputDir = typeof rawOutputDir === "string" && rawOutputDir.trim() ? resolve6(rawOutputDir.trim()) : void 0;
+    const outputDir = typeof rawOutputDir === "string" && rawOutputDir.trim() ? resolve8(rawOutputDir.trim()) : void 0;
     const freeRequested = args?.free === true;
     const modelOverride = await resolveModelOverride(freeRequested);
     if (modelOverride) {
@@ -53909,10 +54428,10 @@ Profiles: ${profileNames.join(", ")}`);
         }
         case "get_settings": {
           try {
-            const raw = readFileSync14(SETTINGS_FILE, "utf-8");
+            const raw = readFileSync15(SETTINGS_FILE, "utf-8");
             const targetDir = outputDir || defaultOutputDir();
             mkdirSync15(targetDir, { recursive: true });
-            const copyPath = join15(targetDir, "settings_edit.yaml");
+            const copyPath = join16(targetDir, "settings_edit.yaml");
             writeFileSync11(copyPath, raw, "utf-8");
             return { content: [{ type: "text", text: copyPath }] };
           } catch (err3) {
@@ -54007,7 +54526,7 @@ Profiles: ${profileNames.join(", ")}`);
             for (const fg of bcFileGroups) {
               if (fg.files.length === 0) continue;
               const gid = fg.id || "auto";
-              const gBatchId = randomUUID();
+              const gBatchId = randomUUID2();
               const gTask = resolvePrompt(bcInstructions, bcInstructionsFilesPaths).trim() || "Find all bugs, type errors, logic errors, security vulnerabilities, and potential runtime failures.";
               const gRl = await getRateLimitConfig();
               const gRecentOutcomes = [];
@@ -54070,7 +54589,7 @@ Profiles: ${profileNames.join(", ")}`);
               const gSucceeded = gAll.filter((r) => r.success);
               const reportSections = [];
               for (const r of gSucceeded) {
-                const content = r.reportPath && existsSync9(r.reportPath) ? readFileSync14(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync11(r.reportPath) ? readFileSync15(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -54103,7 +54622,7 @@ ${gAbortReason}`);
             }
             return { content: [{ type: "text", text: bcGroupReports.join("\n") }] };
           }
-          const batchId = randomUUID();
+          const batchId = randomUUID2();
           const defaultTask = "Find all bugs, type errors, logic errors, security vulnerabilities, and potential runtime failures. Be specific \u2014 reference line numbers and function names.";
           const bcPrompt = resolvePrompt(
             bcInstructions,
@@ -54206,7 +54725,7 @@ ${gAbortReason}`);
             } else {
               const reportSections = [];
               for (const r of succeeded) {
-                const content = r.reportPath && existsSync9(r.reportPath) ? readFileSync14(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync11(r.reportPath) ? readFileSync15(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -54292,7 +54811,7 @@ ${content}`);
           } catch (err3) {
             return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
           }
-          if (!existsSync9(sfFolderPath)) {
+          if (!existsSync11(sfFolderPath)) {
             return {
               content: [
                 {
@@ -54303,7 +54822,7 @@ ${content}`);
               isError: true
             };
           }
-          if (!statSync5(sfFolderPath).isDirectory()) {
+          if (!statSync7(sfFolderPath).isDirectory()) {
             return {
               content: [
                 { type: "text", text: `FAILED: Not a directory: ${folder_path}` }
@@ -54352,7 +54871,7 @@ ${content}`);
               };
           }
           const sfMode = resolveAnswerMode(sfRawMode, 0);
-          const batchId = randomUUID();
+          const batchId = randomUUID2();
           const sfRl = await getRateLimitConfig();
           const recentOutcomes = [];
           let aborted2 = false;
@@ -54440,7 +54959,7 @@ ${content}`);
           if (sfMode === 2 && succeeded.length > 0) {
             const sections = [];
             for (const r of succeeded) {
-              const content = r.reportPath && existsSync9(r.reportPath) ? readFileSync14(r.reportPath, "utf-8") : "";
+              const content = r.reportPath && existsSync11(r.reportPath) ? readFileSync15(r.reportPath, "utf-8") : "";
               sections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -54480,7 +54999,7 @@ ${content}`);
               for (const fp of fg.files) {
                 const r = pathToResult.get(fp);
                 if (!r) continue;
-                const content = r.reportPath && existsSync9(r.reportPath) ? readFileSync14(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync11(r.reportPath) ? readFileSync15(r.reportPath, "utf-8") : "";
                 sections.push(`## File: ${fp}
 
 ${content}`);
@@ -54537,518 +55056,30 @@ ${content}`);
           };
         }
         case "search_existing_implementations": {
-          const {
-            feature_description,
-            folder_path: seiFolderPathRaw,
-            source_files: seiSourceFilesRaw,
-            diff_path: seiDiffPathRaw,
-            extensions: seiExtensions,
-            exclude_dirs: seiExcludeDirs,
-            max_files: seiMaxFiles,
-            redact_secrets: seiRedact,
-            redact_regex: seiRedactRegexRaw,
-            answer_mode: seiRawMode,
-            use_gitignore: seiUseGitignore,
-            scan_secrets: seiScan
-          } = args;
-          const seiUseEnsemble = backend.type === "openrouter";
-          const seiBudgetBytes = (args.max_payload_kb ?? 400) * 1024;
-          if (typeof feature_description !== "string" || !feature_description.trim()) {
-            return {
-              content: [{ type: "text", text: "FAILED: feature_description is required (non-empty string)." }],
-              isError: true
-            };
-          }
-          const folderPathsRaw = Array.isArray(seiFolderPathRaw) ? seiFolderPathRaw.filter((p) => typeof p === "string" && p.trim()) : typeof seiFolderPathRaw === "string" && seiFolderPathRaw.trim() ? [seiFolderPathRaw] : [];
-          if (folderPathsRaw.length === 0) {
-            return {
-              content: [{ type: "text", text: "FAILED: folder_path is required (string or array of strings)." }],
-              isError: true
-            };
-          }
-          const folderPaths = [];
-          for (const fpRaw of folderPathsRaw) {
-            let fp;
-            try {
-              fp = sanitizeInputPath(fpRaw);
-            } catch (err3) {
-              return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
-            }
-            if (!existsSync9(fp)) {
-              return { content: [{ type: "text", text: `FAILED: Folder not found: ${fpRaw}` }], isError: true };
-            }
-            if (!statSync5(fp).isDirectory()) {
-              return { content: [{ type: "text", text: `FAILED: Not a directory: ${fpRaw}` }], isError: true };
-            }
-            folderPaths.push(fp);
-          }
-          const sourceFiles = [];
-          const sourceFilesCanonical = /* @__PURE__ */ new Set();
-          if (seiSourceFilesRaw !== void 0 && seiSourceFilesRaw !== null) {
-            const raw = Array.isArray(seiSourceFilesRaw) ? seiSourceFilesRaw : [seiSourceFilesRaw];
-            for (const sf of raw) {
-              if (typeof sf !== "string" || !sf.trim()) continue;
-              const resolved = resolve6(sf);
-              if (!existsSync9(resolved)) {
-                return {
-                  content: [{ type: "text", text: `FAILED: source_files entry not found: ${sf}` }],
-                  isError: true
-                };
-              }
-              sourceFiles.push(resolved);
-              sourceFilesCanonical.add(resolved);
-              try {
-                sourceFilesCanonical.add(realpathSync3(resolved));
-              } catch {
-              }
-            }
-          }
-          let diffPathResolved = void 0;
-          if (typeof seiDiffPathRaw === "string" && seiDiffPathRaw.trim()) {
-            const r = resolve6(seiDiffPathRaw);
-            if (!existsSync9(r)) {
-              return {
-                content: [{ type: "text", text: `FAILED: diff_path not found: ${seiDiffPathRaw}` }],
-                isError: true
-              };
-            }
-            diffPathResolved = r;
-          }
-          let seiEffectiveExts = seiExtensions;
-          if ((!seiEffectiveExts || seiEffectiveExts.length === 0) && sourceFiles.length > 0) {
-            const extSet = /* @__PURE__ */ new Set();
-            for (const sf of sourceFiles) {
-              const m = /\.[^./\\]+$/.exec(sf);
-              if (m) extSet.add(m[0]);
-            }
-            if (extSet.size > 0) seiEffectiveExts = Array.from(extSet);
-          }
-          let seiRegexRedact = null;
-          try {
-            seiRegexRedact = parseRedactRegex(seiRedactRegexRaw);
-          } catch (err3) {
-            return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
-          }
-          const descTrimmed = feature_description.trim();
-          const hasRef = sourceFiles.length > 0 || !!diffPathResolved;
-          const refBlock = hasRef ? "The reference implementation from the PR is appended to these instructions as " + (sourceFiles.length > 0 ? "one or more source files" : "context") + (diffPathResolved ? ", followed by a unified diff showing the EXACT new lines (prefixed with '+'). Focus on the new lines when reasoning about what the PR adds. " : ". ") + "The source files may contain many unrelated functions \u2014 only the one matching the description above is relevant.\n\n" : "No reference source files were provided \u2014 rely purely on the feature description above when reasoning about semantic equivalence.\n\n";
-          const seiBasePrompt = `You are checking every file in this batch for an existing implementation of this feature (or a helper that could be trivially composed to achieve it):
-
-    ${descTrimmed}
-
-` + refBlock + "For EACH file in the batch, answer SEMANTIC equivalence: the same goal achieved by different code still counts. Ignore naming differences and surface-level style.\n\nOutput format: each file gets its own section in the response, separated by '---'. Per-file answer is one line per finding, no preamble, no explanation.\n\nSection template:\n\n## File: <absolute-file-path>\n\n<one line per finding>\n\n---\n\nPer-finding line format:\n    NO\n  or\n    YES symbol=<function-or-class-name> lines=<start-end>\n\nEXHAUSTIVE: If a file contains MULTIPLE matches, output ALL of them as successive YES lines. Do NOT cap the count. Do NOT keep only the most relevant. The reviewer may want to delete EVERY existing copy and leave only the PR's new one, so every occurrence MUST be listed.\n\nSpecial case: if a file IS the reference (you recognize the PR code itself), output:\n    NO (self-reference)\n\nProduce exactly one section per input file, in the order they appear in the batch, separated by '---'. Do NOT merge sections. Do NOT write rationale. Do NOT quote code. Do NOT explain. One line per match per file. Nothing else.";
-          const seiInstrFiles = [...sourceFiles];
-          if (diffPathResolved) seiInstrFiles.push(diffPathResolved);
-          const seiBasePromptWithRef = resolvePrompt(
-            seiBasePrompt,
-            seiInstrFiles.length > 0 ? seiInstrFiles : void 0
-          );
-          if (!seiBasePromptWithRef.trim()) {
-            return {
-              content: [{ type: "text", text: "FAILED: specialized prompt came out empty (internal error)." }],
-              isError: true
-            };
-          }
-          const fileSet = /* @__PURE__ */ new Set();
-          const seiMaxFilesEffective = seiMaxFiles ?? 1e4;
-          for (const fp of folderPaths) {
-            const walked = walkDir(fp, {
-              extensions: seiEffectiveExts,
-              maxFiles: seiMaxFilesEffective,
-              exclude: seiExcludeDirs,
-              useGitignore: seiUseGitignore !== false
-              // default true
-            });
-            for (const f of walked) fileSet.add(f);
-          }
-          for (const walked of Array.from(fileSet)) {
-            if (sourceFilesCanonical.has(walked)) {
-              fileSet.delete(walked);
-              continue;
-            }
-            try {
-              const canonical2 = realpathSync3(walked);
-              if (sourceFilesCanonical.has(canonical2)) {
-                fileSet.delete(walked);
-              }
-            } catch {
-            }
-          }
-          const files = Array.from(fileSet);
-          if (files.length === 0) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No matching files found after filtering. Folders: ${folderPaths.join(", ")}` + (seiEffectiveExts?.length ? `; extensions: ${seiEffectiveExts.join(", ")}` : "") + (sourceFiles.length ? `; excluded source_files: ${sourceFiles.length}` : "")
-                }
-              ]
-            };
-          }
-          if (files.length > seiMaxFilesEffective) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `FAILED: ${files.length} files matched, exceeding max_files=${seiMaxFilesEffective}. Narrow folder_path, pass extensions, or raise max_files.`
-                }
-              ],
-              isError: true
-            };
-          }
-          if (seiScan && !seiRedact) {
-            const scanResult = scanFilesForSecrets(files);
-            if (scanResult.found)
-              return {
-                content: [{ type: "text", text: scanResult.report }],
-                isError: true
-              };
-          }
-          const seiSystemMessage = "You are a code reviewer checking for duplicate implementations. Output per-file NO/YES answers in the exact format specified in the user prompt. Be terse \u2014 no rationale, no code quotes, no explanation. Identify matches by function/class/method NAME, never by line number in prose.";
-          const seiSystemBytes = Buffer.byteLength(seiSystemMessage, "utf-8");
-          const seiBaseBytes = Buffer.byteLength(seiBasePromptWithRef, "utf-8");
-          const seiPromptBytes = seiSystemBytes + seiBaseBytes + 2048;
-          const { groups: seiGroups, autoBatched: seiAutoBatched, skipped: seiSkipped } = readAndGroupFiles(files, seiPromptBytes, seiRedact, seiBudgetBytes, seiRegexRedact);
-          if (seiGroups.length === 0) {
-            const reasons = [];
-            if (seiSkipped.length > 0) {
-              reasons.push(
-                `${seiSkipped.length} file(s) exceeded the payload budget and were skipped`
-              );
-            } else {
-              reasons.push("no files fit within the payload budget");
-            }
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `FAILED: no batches could be formed. ${reasons.join("; ")}. Raise max_payload_kb (current: ${Math.round(seiBudgetBytes / 1024)} KB) or narrow folder_path to smaller files.`
-                }
-              ],
-              isError: true
-            };
-          }
-          const seiMode = resolveAnswerMode(seiRawMode, 2);
-          const seiBatchId = randomUUID();
-          const seiBatchResponses = [];
-          let seiAborted = false;
-          let seiAbortReason = "";
-          for (let gi = 0; gi < seiGroups.length; gi++) {
-            if (seiAborted) break;
-            const group = seiGroups[gi];
-            const groupPaths = group.map((fd) => fd.path);
-            let userContent = seiBasePromptWithRef;
-            userContent += buildPerFileSectionPrompt(groupPaths);
-            for (const fd of group) {
-              userContent += `
-
-${fd.block}`;
-            }
-            const messages = [
-              { role: "system", content: seiSystemMessage },
-              { role: "user", content: userContent }
-            ];
-            try {
-              const resp = await ensembleStreaming(
-                messages,
-                {
-                  temperature: DEFAULT_TEMPERATURE,
-                  maxTokens: resolveDefaultMaxTokens(),
-                  onProgress,
-                  modelOverride
-                  // honours --free and credit-exhausted auto-fallback
-                },
-                seiUseEnsemble
-              );
-              seiBatchResponses.push({
-                idx: gi,
-                filePaths: groupPaths,
-                content: resp.content ?? "",
-                model: resp.model ?? backend.model
-              });
-              if (onProgress) {
-                onProgress(
-                  gi + 1,
-                  seiGroups.length,
-                  `search_existing_implementations: batch ${gi + 1}/${seiGroups.length} done (${groupPaths.length} files)`
-                );
-              }
-            } catch (err3) {
-              const classified = classifyError(err3);
-              seiBatchResponses.push({
-                idx: gi,
-                filePaths: groupPaths,
-                content: "",
-                model: backend.model,
-                error: classified.reason
-              });
-              if (classified.unrecoverable && classified.serviceLevel) {
-                seiAborted = true;
-                seiAbortReason = `Unrecoverable: ${classified.reason}`;
-              }
-            }
-          }
-          const seiBatchOk = seiBatchResponses.filter((r) => !r.error && r.content.trim().length > 0);
-          const seiBatchFailed = seiBatchResponses.filter((r) => r.error || !r.content.trim());
-          if (seiBatchOk.length === 0) {
-            const reason = seiAborted ? seiAbortReason : seiBatchFailed.length > 0 ? `all ${seiBatchFailed.length} batch(es) failed or returned empty: ${seiBatchFailed[0].error ?? "empty response"}` : "no batches produced output";
-            const failLines = [
-              `FAILED: search_existing_implementations produced zero usable output (${seiBatchOk.length}/${seiGroups.length} batches succeeded, ${files.length} files discovered)`,
-              `Reason: ${reason}`,
-              `Folders: ${folderPaths.join(", ")}`,
-              sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
-              diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
-              `Batch UUID: ${seiBatchId}`
-            ];
-            if (seiBatchFailed.length > 0) {
-              failLines.push("", "PER-BATCH FAILURES:");
-              for (const r of seiBatchFailed) {
-                failLines.push(
-                  `  Batch ${r.idx + 1}/${seiGroups.length} (${r.filePaths.length} files): ${r.error ?? "empty response"}`
-                );
-              }
-            }
-            if (seiSkipped.length > 0) {
-              failLines.push("", `SKIPPED (exceeded payload budget, ${seiSkipped.length}):`);
-              for (const s of seiSkipped) failLines.push(`  ${s}`);
-            }
-            return {
-              content: [{ type: "text", text: failLines.join("\n") }],
-              isError: true
-            };
-          }
-          if (seiMode === 2) {
-            const sections = [];
-            sections.push(`# LLM Externalizer \u2014 search_existing_implementations`);
-            sections.push("");
-            sections.push(`**Feature**: ${descTrimmed}`);
-            sections.push(`**Folders**: ${folderPaths.join(", ")}`);
-            sections.push(`**Files scanned**: ${files.length}`);
-            sections.push(`**Batches**: ${seiGroups.length} (FFD bin-packed, ${seiAutoBatched ? "auto-batched" : "single batch"})`);
-            if (sourceFiles.length > 0) sections.push(`**Reference source files**: ${sourceFiles.length}`);
-            if (diffPathResolved) sections.push(`**Diff**: ${diffPathResolved}`);
-            if (seiSkipped.length > 0) {
-              sections.push("");
-              sections.push(`**SKIPPED** (exceeded payload budget): ${seiSkipped.length}`);
-              for (const s of seiSkipped) sections.push(`  - ${s}`);
-            }
-            sections.push("");
-            for (const r of seiBatchOk) {
-              sections.push(`---
-
-## Batch ${r.idx + 1}/${seiGroups.length} \u2014 ${r.filePaths.length} files`);
-              sections.push("");
-              sections.push(r.content.trim());
-              sections.push("");
-            }
-            if (seiBatchFailed.length > 0) {
-              sections.push("---\n\n## FAILED BATCHES");
-              sections.push("");
-              for (const r of seiBatchFailed) {
-                sections.push(`### Batch ${r.idx + 1}/${seiGroups.length} \u2014 ${r.filePaths.length} files`);
-                sections.push(`Error: ${r.error ?? "empty response"}`);
-                sections.push("Files:");
-                for (const fp of r.filePaths) sections.push(`  - ${fp}`);
-                sections.push("");
-              }
-            }
-            const mergedPath = saveResponse(
-              "search_existing_implementations",
-              sections.join("\n"),
+          const seiDeps = {
+            useEnsemble: backend.type === "openrouter",
+            backendModel: backend.model,
+            callModel: async (messages) => ensembleStreaming(
+              messages,
               {
-                model: ensembleModelLabel(seiUseEnsemble),
-                task: descTrimmed,
-                inputFile: folderPaths[0]
+                temperature: DEFAULT_TEMPERATURE,
+                maxTokens: resolveDefaultMaxTokens(),
+                onProgress,
+                modelOverride
+                // honours --free and credit-exhausted auto-fallback
               },
-              void 0,
-              outputDir
-            );
-            const summary = [
-              `SEARCH COMPLETE \u2014 ${seiBatchOk.length}/${seiGroups.length} batches processed, ${files.length} files scanned, ${seiSkipped.length} skipped`,
-              `Folders: ${folderPaths.join(", ")}`,
-              sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
-              diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
-              `Batch UUID: ${seiBatchId}`,
-              `MERGED REPORT: ${mergedPath}`
-            ];
-            if (seiBatchFailed.length > 0) {
-              summary.push("", `FAILED BATCHES: ${seiBatchFailed.length} (see merged report for details)`);
-            }
-            if (seiAborted) summary.push("", `ABORTED: ${seiAbortReason}`);
-            return {
-              content: [{ type: "text", text: summary.join("\n") }],
-              isError: seiAborted
-            };
-          }
-          if (seiMode === 0) {
-            const seiPerFileReports = [];
-            const seiPerFileMissing = [];
-            for (const r of seiBatchOk) {
-              const sections = splitPerFileSections(r.content, r.filePaths);
-              for (const fp of r.filePaths) {
-                const body = sections.get(fp);
-                if (!body || !body.trim()) {
-                  seiPerFileMissing.push({ inputPath: fp, batchIdx: r.idx });
-                  continue;
-                }
-                const header = `# search_existing_implementations \u2014 ${fp}
-
-**Feature**: ${descTrimmed}
-**Source file**: ${fp}
-**Batch**: ${r.idx + 1}/${seiGroups.length}
-**Model**: ${r.model}
-
----
-
-`;
-                const reportPath = saveResponse(
-                  "search_existing_implementations",
-                  header + body.trim(),
-                  {
-                    model: r.model,
-                    task: descTrimmed,
-                    inputFile: fp
-                  },
-                  void 0,
-                  outputDir
-                );
-                seiPerFileReports.push({ inputPath: fp, reportPath });
-              }
-            }
-            const seiModeZeroLines = [
-              `SEARCH COMPLETE \u2014 ${seiBatchOk.length}/${seiGroups.length} batches processed, ${files.length} files scanned, ${seiSkipped.length} skipped`,
-              `Folders: ${folderPaths.join(", ")}`,
-              sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
-              diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
-              `Batch UUID: ${seiBatchId}`,
-              ""
-            ];
-            if (seiPerFileReports.length > 0) {
-              seiModeZeroLines.push(`REPORTS (one per input file, ${seiPerFileReports.length} total):`);
-              for (const p of seiPerFileReports) {
-                seiModeZeroLines.push(`  ${p.inputPath} -> ${p.reportPath}`);
-              }
-            }
-            if (seiPerFileMissing.length > 0) {
-              seiModeZeroLines.push(
-                "",
-                `MISSING SECTIONS (${seiPerFileMissing.length} files had no per-file section in the LLM response \u2014 raw batch content preserved in batch reports):`
-              );
-              for (const m of seiPerFileMissing) {
-                seiModeZeroLines.push(`  ${m.inputPath} (batch ${m.batchIdx + 1}/${seiGroups.length})`);
-              }
-            }
-            if (seiSkipped.length > 0) {
-              seiModeZeroLines.push("", `SKIPPED (exceeded payload budget, ${seiSkipped.length}):`);
-              for (const s of seiSkipped) seiModeZeroLines.push(`  ${s}`);
-            }
-            if (seiBatchFailed.length > 0) {
-              seiModeZeroLines.push("", `FAILED BATCHES (${seiBatchFailed.length}):`);
-              for (const r of seiBatchFailed) {
-                seiModeZeroLines.push(
-                  `  Batch ${r.idx + 1}/${seiGroups.length} (${r.filePaths.length} files): ${r.error ?? "empty response"}`
-                );
-              }
-            }
-            if (seiAborted) seiModeZeroLines.push("", `ABORTED: ${seiAbortReason}`);
-            return {
-              content: [{ type: "text", text: seiModeZeroLines.join("\n") }],
-              isError: seiAborted
-            };
-          }
-          const seiAutoGroups = autoGroupByHeuristic(files);
-          const seiSectionByPath = /* @__PURE__ */ new Map();
-          const seiModelByPath = /* @__PURE__ */ new Map();
-          const seiBatchIdxByPath = /* @__PURE__ */ new Map();
-          for (const r of seiBatchOk) {
-            const sections = splitPerFileSections(r.content, r.filePaths);
-            for (const fp of r.filePaths) {
-              const body = sections.get(fp);
-              if (body && body.trim().length > 0) {
-                seiSectionByPath.set(fp, body.trim());
-                seiModelByPath.set(fp, r.model);
-                seiBatchIdxByPath.set(fp, r.idx);
-              }
-            }
-          }
-          const seiGroupReportPaths = [];
-          const seiGroupMissing = [];
-          for (const fg of seiAutoGroups) {
-            if (fg.files.length === 0) continue;
-            const gid = fg.id || "auto";
-            const sections = [];
-            sections.push(
-              `# search_existing_implementations \u2014 group ${gid}
-
-**Feature**: ${descTrimmed}
-**Files in group**: ${fg.files.length}
-
-` + fg.files.map((fp) => `  - ${fp}`).join("\n") + "\n\n---\n"
-            );
-            let anyBody = false;
-            for (const fp of fg.files) {
-              const body = seiSectionByPath.get(fp);
-              if (!body) {
-                seiGroupMissing.push(fp);
-                continue;
-              }
-              anyBody = true;
-              sections.push(`## File: ${fp}
-
-${body}
-`);
-            }
-            if (!anyBody) continue;
-            const reportPath = saveResponse(
-              "search_existing_implementations",
-              sections.join("\n"),
-              {
-                model: ensembleModelLabel(seiUseEnsemble),
-                task: descTrimmed,
-                inputFile: fg.files[0],
-                groupId: gid
-              },
-              void 0,
-              outputDir
-            );
-            seiGroupReportPaths.push(`[group:${gid}] ${reportPath}`);
-          }
-          const seiSummaryLines = [
-            `SEARCH COMPLETE \u2014 ${seiBatchOk.length}/${seiGroups.length} batches processed, ${files.length} files scanned, ${seiSkipped.length} skipped`,
-            `Folders: ${folderPaths.join(", ")}`,
-            sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
-            diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
-            `Batch UUID: ${seiBatchId}`,
-            ""
-          ];
-          if (seiGroupReportPaths.length > 0) {
-            seiSummaryLines.push(`GROUP REPORTS (one per auto-group, ${seiGroupReportPaths.length} total):`);
-            for (const p of seiGroupReportPaths) seiSummaryLines.push(`  ${p}`);
-          }
-          if (seiGroupMissing.length > 0) {
-            seiSummaryLines.push(
-              "",
-              `MISSING SECTIONS (${seiGroupMissing.length} files had no per-file section in the LLM response):`
-            );
-            for (const p of seiGroupMissing) seiSummaryLines.push(`  ${p}`);
-          }
-          if (seiSkipped.length > 0) {
-            seiSummaryLines.push("", `SKIPPED (exceeded payload budget, ${seiSkipped.length}):`);
-            for (const s of seiSkipped) seiSummaryLines.push(`  ${s}`);
-          }
-          if (seiBatchFailed.length > 0) {
-            seiSummaryLines.push("", `FAILED BATCHES (${seiBatchFailed.length}):`);
-            for (const r of seiBatchFailed) {
-              seiSummaryLines.push(
-                `  Batch ${r.idx + 1}/${seiGroups.length} (${r.filePaths.length} files): ${r.error ?? "empty response"}`
-              );
-            }
-          }
-          if (seiAborted) seiSummaryLines.push("", `ABORTED: ${seiAbortReason}`);
-          return {
-            content: [{ type: "text", text: seiSummaryLines.join("\n") }],
-            isError: seiAborted
+              backend.type === "openrouter"
+            ),
+            classifyError,
+            saveResponse,
+            ensembleModelLabel,
+            onProgress,
+            outputDir
           };
+          return await runSearchExistingImplementations(
+            args,
+            seiDeps
+          );
         }
         case "compare_files": {
           const {
@@ -55073,13 +55104,13 @@ ${body}
             } catch (err3) {
               return { error: err3.message };
             }
-            if (!existsSync9(fA)) return { error: `File not found: ${fARaw}` };
-            if (!existsSync9(fB)) return { error: `File not found: ${fBRaw}` };
+            if (!existsSync11(fA)) return { error: `File not found: ${fARaw}` };
+            if (!existsSync11(fB)) return { error: `File not found: ${fBRaw}` };
             if (cfScan && !cfRedact) {
               const scanResult = scanFilesForSecrets([fA, fB]);
               if (scanResult.found) return { error: scanResult.report };
             }
-            const diffResult2 = spawnSync2("diff", ["-u", "--label", fA, "--label", fB, "--", fA, fB], { encoding: "utf-8", timeout: 3e4 });
+            const diffResult2 = spawnSync3("diff", ["-u", "--label", fA, "--label", fB, "--", fA, fB], { encoding: "utf-8", timeout: 3e4 });
             if (diffResult2.status === 2 || diffResult2.error) return { error: `diff error: ${diffResult2.error?.message || diffResult2.stderr}` };
             let diffOutput2 = diffResult2.stdout?.trim() ? diffResult2.stdout : "(files are identical)";
             if (diffOutput2.length > 2e5) {
@@ -55123,7 +55154,7 @@ ${fence}${sourceBlocks}` }
             return { content: resp.content + formatFooter(resp, "compare_files", fA), model: resp.model };
           };
           const gitDiffPair = (repo, fromRef, toRef, filePath) => {
-            const result = spawnSync2("git", ["diff", fromRef, toRef, "--", filePath], { cwd: repo, encoding: "utf-8", timeout: 3e4 });
+            const result = spawnSync3("git", ["diff", fromRef, toRef, "--", filePath], { cwd: repo, encoding: "utf-8", timeout: 3e4 });
             if (result.status !== 0 && result.status !== 1) return `(git diff failed: ${result.stderr?.trim() || "unknown error"})`;
             return result.stdout?.trim() || "(no differences)";
           };
@@ -55136,12 +55167,12 @@ ${fence}${sourceBlocks}` }
             } catch (err3) {
               return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
             }
-            if (!existsSync9(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
+            if (!existsSync11(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
             const toRef = cfToRef || "HEAD";
             if (cfFromRef.startsWith("-") || toRef.startsWith("-")) {
               return { content: [{ type: "text", text: "FAILED: git refs must not start with '-'" }], isError: true };
             }
-            const nameResult = spawnSync2("git", ["diff", "--name-only", cfFromRef, toRef], { cwd: cfGitRepoSafe, encoding: "utf-8", timeout: 15e3 });
+            const nameResult = spawnSync3("git", ["diff", "--name-only", cfFromRef, toRef], { cwd: cfGitRepoSafe, encoding: "utf-8", timeout: 15e3 });
             if (nameResult.status !== 0 && nameResult.status !== 1) {
               return { content: [{ type: "text", text: `FAILED: git diff --name-only failed: ${nameResult.stderr?.trim()}` }], isError: true };
             }
@@ -55207,7 +55238,7 @@ ${sections.join("\n\n---\n\n")}`;
                 {
                   model: "git-diff (no LLM)",
                   task: `${cfFromRef} \u2192 ${toRef}`,
-                  inputFile: join15(cfGitRepoSafe, dg.files[0]),
+                  inputFile: join16(cfGitRepoSafe, dg.files[0]),
                   groupId: gid
                 },
                 void 0,
@@ -55300,7 +55331,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync9(fileA)) {
+          if (!existsSync11(fileA)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileA}` }
@@ -55308,7 +55339,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync9(fileB)) {
+          if (!existsSync11(fileB)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileB}` }
@@ -55324,7 +55355,7 @@ ${result.content}`);
                 isError: true
               };
           }
-          const diffResult = spawnSync2(
+          const diffResult = spawnSync3(
             "diff",
             ["-u", "--label", fileA, "--label", fileB, "--", fileA, fileB],
             {
@@ -55409,7 +55440,7 @@ ${diffFence}` + sourceFileBlocks
           const cfReportPath = saveResponse(
             "compare_files",
             cfResp.content + cfFooter,
-            { model: cfResp.model, task: `Compare ${basename4(fileA)} vs ${basename4(fileB)}`, inputFile: fileA },
+            { model: cfResp.model, task: `Compare ${basename5(fileA)} vs ${basename5(fileB)}`, inputFile: fileA },
             void 0,
             outputDir
           );
@@ -55496,13 +55527,13 @@ ${diffFence}` + sourceFileBlocks
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync9(filePath)) {
+                if (!existsSync11(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
                   continue;
                 }
-                const src = readFileSync14(filePath, "utf-8");
+                const src = readFileSync15(filePath, "utf-8");
                 const lang = detectLang(filePath);
                 const deps = extractLocalImports(filePath, src);
                 const depBlocks = [];
@@ -55556,14 +55587,14 @@ ${resp.content}${footer}`);
           const crReports = [];
           const crReportPaths = [];
           for (const filePath of crFilePaths) {
-            if (!existsSync9(filePath)) {
+            if (!existsSync11(filePath)) {
               crReports.push(`## ${filePath}
 
 FAILED: File not found.`);
               crReportPaths.push("(skipped \u2014 file not found)");
               continue;
             }
-            const crSourceCode = readFileSync14(filePath, "utf-8");
+            const crSourceCode = readFileSync15(filePath, "utf-8");
             const crLang = detectLang(filePath);
             const depPaths = extractLocalImports(filePath, crSourceCode);
             const depBlocks = [];
@@ -55736,14 +55767,14 @@ ${crResp.content}${crFooter}`
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync9(filePath)) {
+                if (!existsSync11(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
                   continue;
                 }
                 const ciLang = detectLang(filePath);
-                const fileDir = dirname9(filePath);
+                const fileDir = dirname10(filePath);
                 const ciResolveBase = project_root || fileDir;
                 const extractMessages = [
                   { role: "system", content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path inside a filename tag before the file-content tag \u2014 reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.` + FILE_FORMAT_EXAMPLE },
@@ -55765,22 +55796,22 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     continue;
                   }
                   const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-                  const resolvedBase = importPath.startsWith("/") ? resolve6(importPath) : join15(resolveDir, importPath);
+                  const resolvedBase = importPath.startsWith("/") ? resolve8(importPath) : join16(resolveDir, importPath);
                   if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                     packageImports.push(importPath);
                     continue;
                   }
-                  let found = existsSync9(resolvedBase) && statSync5(resolvedBase).isFile();
-                  if (!found && !extname4(resolvedBase)) {
+                  let found = existsSync11(resolvedBase) && statSync7(resolvedBase).isFile();
+                  if (!found && !extname5(resolvedBase)) {
                     for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".json"]) {
-                      if (existsSync9(resolvedBase + ext)) {
+                      if (existsSync11(resolvedBase + ext)) {
                         found = true;
                         break;
                       }
                     }
                     if (!found) {
                       for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                        if (existsSync9(join15(resolvedBase, `index${ext}`))) {
+                        if (existsSync11(join16(resolvedBase, `index${ext}`))) {
                           found = true;
                           break;
                         }
@@ -55814,7 +55845,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
           const ciReports = [];
           const ciReportPaths = [];
           for (const filePath of ciFilePaths) {
-            if (!existsSync9(filePath)) {
+            if (!existsSync11(filePath)) {
               ciReports.push(`## ${filePath}
 
 FAILED: File not found.`);
@@ -55822,7 +55853,7 @@ FAILED: File not found.`);
               continue;
             }
             const ciLang = detectLang(filePath);
-            const fileDir = dirname9(filePath);
+            const fileDir = dirname10(filePath);
             const ciResolveBase = project_root || fileDir;
             const extractMessages = [
               {
@@ -55861,16 +55892,16 @@ FAILED: File not found.`);
                 continue;
               }
               const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-              const resolvedBase = importPath.startsWith("/") ? resolve6(importPath) : join15(resolveDir, importPath);
+              const resolvedBase = importPath.startsWith("/") ? resolve8(importPath) : join16(resolveDir, importPath);
               if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                 packageImports.push(importPath);
                 continue;
               }
               let found = false;
-              if (existsSync9(resolvedBase) && statSync5(resolvedBase).isFile()) {
+              if (existsSync11(resolvedBase) && statSync7(resolvedBase).isFile()) {
                 found = true;
               }
-              if (!found && !extname4(resolvedBase)) {
+              if (!found && !extname5(resolvedBase)) {
                 for (const ext of [
                   ".ts",
                   ".tsx",
@@ -55883,14 +55914,14 @@ FAILED: File not found.`);
                   ".rs",
                   ".json"
                 ]) {
-                  if (existsSync9(resolvedBase + ext)) {
+                  if (existsSync11(resolvedBase + ext)) {
                     found = true;
                     break;
                   }
                 }
                 if (!found) {
                   for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                    if (existsSync9(join15(resolvedBase, `index${ext}`))) {
+                    if (existsSync11(join16(resolvedBase, `index${ext}`))) {
                       found = true;
                       break;
                     }
@@ -56068,7 +56099,7 @@ FAILED: File not found.`);
             if (csMode === 0 && !csEffectivelyGrouped) {
               const csPerFileResults = [];
               for (const fp of fgPaths) {
-                if (!existsSync9(fp)) {
+                if (!existsSync11(fp)) {
                   csPerFileResults.push(`FAILED: ${fp} \u2014 File not found`);
                   continue;
                 }
@@ -56100,7 +56131,7 @@ FAILED: File not found.`);
                 const fpFooter = formatFooter(fpResp, "check_against_specs", fp);
                 const fpReportPath = saveResponse("check_against_specs", fpResp.content + fpFooter, {
                   model: ensembleModelLabel(csUseEnsemble),
-                  task: `Spec compliance: ${basename4(csSpecPath)} vs ${basename4(fp)}`,
+                  task: `Spec compliance: ${basename5(csSpecPath)} vs ${basename5(fp)}`,
                   inputFile: fp
                 }, void 0, outputDir);
                 csPerFileResults.push(fpReportPath);
@@ -56160,7 +56191,7 @@ ${csResp.content}${csFooter}`
               csFinalContent,
               {
                 model: csMergedModel,
-                task: `Spec compliance: ${basename4(csSpecPath)} vs ${fgPaths.length} file(s)`,
+                task: `Spec compliance: ${basename5(csSpecPath)} vs ${fgPaths.length} file(s)`,
                 inputFile: fgPaths[0],
                 groupId: fgId || void 0
               },
@@ -56215,8 +56246,8 @@ ${csResp.content}${csFooter}`
             }
             return resp.content;
           };
-          const csModuleDir = dirname9(fileUrlToPath_cs(import.meta.url));
-          const csEmbeddingsScript = join15(csModuleDir, "..", "scripts", "compute_embeddings.py");
+          const csModuleDir = dirname10(fileUrlToPath_cs(import.meta.url));
+          const csEmbeddingsScript = join16(csModuleDir, "..", "scripts", "compute_embeddings.py");
           const csHooks = {
             rawLlmCall: csRawLlmCall,
             embeddingsScriptPath: csEmbeddingsScript,
@@ -56349,7 +56380,7 @@ var __isEntrypoint = (() => {
   try {
     const entry = process.argv[1];
     if (!entry) return false;
-    return realpathSync3(entry) === realpathSync3(fileUrlToPath_cs(import.meta.url));
+    return realpathSync5(entry) === realpathSync5(fileUrlToPath_cs(import.meta.url));
   } catch {
     return false;
   }
