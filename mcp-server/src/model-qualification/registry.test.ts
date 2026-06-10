@@ -38,6 +38,15 @@ describe("TOOL_MODEL_REGISTRY", () => {
     expect(getToolDescriptor("mass_scout")!.benchmark).toBe("keyword-classification");
   });
 
+  it("registers search_existing_implementations against the search-existing fixture benchmark (A6)", () => {
+    const d = getToolDescriptor("search_existing_implementations");
+    expect(d).toBeDefined();
+    expect(d!.benchmark).toBe("search-existing");
+    // Duplicate-match needs a reasoning + long-context model.
+    expect(d!.requirements.requireReasoning).toBe(true);
+    expect(d!.requirements.minContextTokens).toBe(128_000);
+  });
+
   it("carries requirements-only descriptors (benchmark:null) for tools without a dataset yet", () => {
     for (const t of ["code_task", "scan_folder", "check_imports", "compare_files", "chat", "cluster_synonyms"]) {
       const d = getToolDescriptor(t);

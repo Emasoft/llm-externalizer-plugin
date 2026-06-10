@@ -83,10 +83,18 @@ export default defineConfig({
       'src/benchmark/security-triage/select.test.ts',
       // Real-model end-to-end smoke — self-skips unless OPENROUTER_API_KEY is set.
       'src/benchmark/security-triage/live.test.ts',
+      // Shared same-or-cheaper selection gate (TRDD-828238b5 A6) — generic
+      // three-gate math reused by every per-tool selector. No LLM, no network.
+      'src/benchmark/select-common.test.ts',
       // search-existing per-tool benchmark (TRDD-828238b5 A6) — fixture-backed
       // golden dataset + deterministic precision/recall scorer. No LLM, no network.
       'src/benchmark/search-existing/dataset.test.ts',
       'src/benchmark/search-existing/score.test.ts',
+      // search-existing in-process runner — HERMETIC (fake FetchImpl seam only,
+      // real pipeline + real scorer). No network, no module mocking.
+      'src/benchmark/search-existing/runner.test.ts',
+      // search-existing selection gate — criteria identity + winner/incumbent paths.
+      'src/benchmark/search-existing/select.test.ts',
       // Per-tool model-qualification registry (TRDD-f45eeaa0 framework core).
       'src/model-qualification/registry.test.ts',
       // Cross-tool model assessment (requirements half of the per-tool gate).

@@ -22,6 +22,10 @@ import {
   DEFAULT_CRITERIA,
   type ModelCriteria,
 } from "../discover.js";
+import {
+  selectSameOrCheaper,
+  type GenericCandidate,
+} from "../select-common.js";
 import type { TriageScore } from "./score.js";
 
 /**
@@ -47,9 +51,6 @@ export const SECURITY_TRIAGE_CRITERIA: ModelCriteria = {
   requireReasoning: false,
   allowFree: false,
 };
-
-/** Tiny tolerance for float pricing noise when comparing $/M values. */
-const COST_EPSILON = 1e-9;
 
 export interface CandidateAssessment {
   modelId: string;
@@ -90,84 +91,59 @@ export interface SelectionResult {
   rejected: RejectedCandidate[];
 }
 
-/** Is `candidate` NOT pricier than the incumbent on either axis? */
-function notPricier(
-  candidate: CandidateAssessment,
-  inInc: number,
-  outInc: number,
-): boolean {
-  return (
-    candidate.inputDollarsPerMillion <= inInc + COST_EPSILON &&
-    candidate.outputDollarsPerMillion <= outInc + COST_EPSILON
-  );
+/**
+ * Map a triage CandidateAssessment onto the tool-agnostic GenericCandidate the
+ * shared gate consumes. The triage SCORE (not pass) is what ranks eligible
+ * passers, so it is carried as `benchmarkScore`.
+ */
+function toGeneric(c: CandidateAssessment): GenericCandidate {
+  return {
+    modelId: c.modelId,
+    qualified: c.qualified,
+    disqualifyReason: c.disqualifyReason,
+    inputDollarsPerMillion: c.inputDollarsPerMillion,
+    outputDollarsPerMillion: c.outputDollarsPerMillion,
+    latencyMs: c.latencyMs,
+    benchmarkPass: c.triage.pass,
+    benchmarkScore: c.triage.score,
+    benchmarkFailReasons: c.triage.failReasons,
+  };
 }
 
 /**
  * Apply the three gates and pick the winner. Deterministic, pure.
+ *
+ * Delegates to the shared same-or-cheaper gate (select-common.ts), passing the
+ * security-triage labels so the rejection / recommendation wording is unchanged
+ * ("security-triage requirements" / "the triage benchmark"). The result's
+ * `eligible` is mapped back to the original CandidateAssessment objects in the
+ * gate's sort order, preserving the public API.
  *
  * If no eligible same-or-cheaper passer exists, the incumbent is kept
  * (changed=false) — the benchmark NEVER recommends a pricier model and never
  * leaves the tool without a default.
  */
 export function selectSecurityTriageModel(input: SelectionInput): SelectionResult {
-  const { incumbentModelId, incumbentInputDollarsPerMillion: inInc, incumbentOutputDollarsPerMillion: outInc } = input;
+  const byModelId = new Map<string, CandidateAssessment>(
+    input.candidates.map((c) => [c.modelId, c]),
+  );
 
-  const eligible: CandidateAssessment[] = [];
-  const rejected: RejectedCandidate[] = [];
-
-  for (const c of input.candidates) {
-    if (!c.qualified) {
-      rejected.push({
-        modelId: c.modelId,
-        reason: `does not meet security-triage requirements${c.disqualifyReason ? ` (${c.disqualifyReason})` : ""}`,
-      });
-      continue;
-    }
-    if (!c.triage.pass) {
-      rejected.push({
-        modelId: c.modelId,
-        reason: `failed the triage benchmark: ${c.triage.failReasons.join("; ")}`,
-      });
-      continue;
-    }
-    if (!notPricier(c, inInc, outInc)) {
-      rejected.push({
-        modelId: c.modelId,
-        reason: `pricier than the incumbent default (in $${c.inputDollarsPerMillion.toFixed(3)}/out $${c.outputDollarsPerMillion.toFixed(3)} vs incumbent in $${inInc.toFixed(3)}/out $${outInc.toFixed(3)}) — never auto-bump to a pricier model`,
-      });
-      continue;
-    }
-    eligible.push(c);
-  }
-
-  eligible.sort((a, b) => {
-    if (b.triage.score !== a.triage.score) return b.triage.score - a.triage.score;
-    const aCost = a.inputDollarsPerMillion + a.outputDollarsPerMillion;
-    const bCost = b.inputDollarsPerMillion + b.outputDollarsPerMillion;
-    if (aCost !== bCost) return aCost - bCost;
-    return a.latencyMs - b.latencyMs;
+  const generic = selectSameOrCheaper({
+    candidates: input.candidates.map(toGeneric),
+    incumbentModelId: input.incumbentModelId,
+    incumbentInputDollarsPerMillion: input.incumbentInputDollarsPerMillion,
+    incumbentOutputDollarsPerMillion: input.incumbentOutputDollarsPerMillion,
+    requirementsLabel: "security-triage requirements",
+    benchmarkLabel: "the triage benchmark",
   });
 
-  if (eligible.length === 0) {
-    return {
-      recommendedModelId: incumbentModelId,
-      changed: false,
-      reason:
-        "No eligible same-or-cheaper model passed the triage benchmark. Keeping the incumbent default.",
-      eligible,
-      rejected,
-    };
-  }
-
-  const winner = eligible[0];
-  const changed = winner.modelId !== incumbentModelId;
   return {
-    recommendedModelId: winner.modelId,
-    changed,
-    reason: changed
-      ? `${winner.modelId} passed the triage benchmark (score ${winner.triage.score.toFixed(3)}) at no higher cost than the incumbent and scored best among eligible passers.`
-      : `The incumbent ${winner.modelId} remains the best eligible passer (score ${winner.triage.score.toFixed(3)}).`,
-    eligible,
-    rejected,
+    recommendedModelId: generic.recommendedModelId,
+    changed: generic.changed,
+    reason: generic.reason,
+    // Reorder the original assessments by the gate's eligible ordering. Every
+    // eligible modelId came from input.candidates, so the lookup never misses.
+    eligible: generic.eligible.map((g) => byModelId.get(g.modelId)!),
+    rejected: generic.rejected,
   };
 }

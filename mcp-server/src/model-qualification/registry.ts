@@ -96,8 +96,8 @@ export const TOOL_MODEL_REGISTRY: Record<string, ToolModelDescriptor> = {
   search_existing_implementations: {
     tool: "search_existing_implementations",
     requirements: criteria({ requireReasoning: true, minContextTokens: 128_000 }),
-    benchmark: null,
-    note: "Duplicate-implementation match across a codebase. Duplicate-match benchmark dataset is incremental.",
+    benchmark: "search-existing",
+    note: "Duplicate-implementation match across a codebase. Gated by the search-existing fixture benchmark (TRDD-828238b5 A6).",
   },
   check_references: {
     tool: "check_references",
