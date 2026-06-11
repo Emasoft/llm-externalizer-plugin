@@ -56,6 +56,7 @@ import {
   type ClusterSynonymsInvocation,
 } from "./cluster/cluster_synonyms_main.js";
 import type { Phase1RawLlmCall } from "./cluster/phase1_batch.js";
+import { makePreflightHook } from "./cluster/preflight_benchmark.js";
 import { fileURLToPath as fileUrlToPath_cs } from "node:url";
 
 // ── File reading / grouping / scanning helpers ───────────────────────
@@ -8256,10 +8257,21 @@ async function dispatchCallToolInner(
         // from this module's URL so the path follows the install layout.
         const csModuleDir = dirname(fileUrlToPath_cs(import.meta.url));
         const csEmbeddingsScript = join(csModuleDir, "..", "scripts", "compute_embeddings.py");
+        // Wire the pre-flight benchmark gate (TRDD-828238b5 B4): before an
+        // expensive clustering run, prove the configured model can do
+        // meaning-equivalence clustering on 3 sentences. makePreflightHook wraps
+        // runPreflightBenchmark, which caches the verdict per-model-per-day, so
+        // this is at most one tiny call/day; an LLM-call failure becomes
+        // {ok:false} → the core early-aborts (fail-closed gate). Users opt out
+        // via the policy's skip_preflight_benchmark flag (the core honors it).
+        const csPreflightModel = getCurrentBackend().model ?? "unknown";
         const csHooks: ClusterSynonymsHooks = {
           rawLlmCall: csRawLlmCall,
           embeddingsScriptPath: csEmbeddingsScript,
-          profileName: getCurrentBackend().model ?? "unknown",
+          profileName: csPreflightModel,
+          preflight: makePreflightHook(csPreflightModel, (prompt) =>
+            csRawLlmCall(prompt),
+          ),
         };
         try {
           const csResult = await runClusterSynonyms(csInvocation, csHooks);

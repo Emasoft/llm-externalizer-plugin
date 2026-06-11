@@ -232,3 +232,24 @@ export async function runPreflightBenchmark(
   }
   return { pass: false, cached: false, cache_path: cp, reason: v.reason, raw_response: raw };
 }
+
+/** The shape the cluster core's `preflight` hook expects (a pass/fail gate). */
+export type PreflightHookResult = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Adapter (TRDD-828238b5 B4): build the cluster core's `preflight` hook from a
+ * model fingerprint + raw LLM call. Runs runPreflightBenchmark (daily-cached)
+ * and maps its detailed {pass,reason} result to the core's {ok,reason} gate
+ * shape. Kept here (not inline at the call site) so the mapping is unit-tested.
+ * Typed structurally to avoid a circular import on cluster_synonyms_main.
+ */
+export function makePreflightHook(
+  profileFingerprint: string,
+  llmCall: PreflightLlmFn,
+  opts: PreflightOpts = {},
+): () => Promise<PreflightHookResult> {
+  return async () => {
+    const pf = await runPreflightBenchmark(profileFingerprint, llmCall, opts);
+    return pf.pass ? { ok: true } : { ok: false, reason: pf.reason };
+  };
+}

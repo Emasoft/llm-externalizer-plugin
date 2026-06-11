@@ -14228,11 +14228,11 @@ var require_dist2 = __commonJS({
 // src/index.ts
 var import_yaml2 = __toESM(require_dist(), 1);
 import {
-  readFileSync as readFileSync16,
-  writeFileSync as writeFileSync13,
-  mkdirSync as mkdirSync17,
-  existsSync as existsSync13,
-  renameSync as renameSync7,
+  readFileSync as readFileSync17,
+  writeFileSync as writeFileSync14,
+  mkdirSync as mkdirSync18,
+  existsSync as existsSync14,
+  renameSync as renameSync8,
   statSync as statSync8,
   appendFileSync as appendFileSync5,
   unlinkSync as unlinkSync2,
@@ -14241,7 +14241,7 @@ import {
   unwatchFile
 } from "node:fs";
 import { spawnSync as spawnSync3 } from "node:child_process";
-import { extname as extname5, join as join19, basename as basename5, dirname as dirname10, resolve as resolve10, isAbsolute as isAbsolute4 } from "node:path";
+import { extname as extname5, join as join20, basename as basename5, dirname as dirname11, resolve as resolve10, isAbsolute as isAbsolute4 } from "node:path";
 import { randomUUID as randomUUID2 } from "node:crypto";
 
 // src/grouping.ts
@@ -51167,61 +51167,214 @@ function buildEarlyAbort(invocation, errors, warnings, profileName, tStart) {
   };
 }
 
+// src/cluster/preflight_benchmark.ts
+import { createHash as createHash5 } from "node:crypto";
+import { mkdirSync as mkdirSync15, readFileSync as readFileSync14, writeFileSync as writeFileSync11, existsSync as existsSync11, renameSync as renameSync6 } from "node:fs";
+import { join as join17, dirname as dirname8 } from "node:path";
+import { homedir as homedir3 } from "node:os";
+var DEFAULT_PREFLIGHT_PROMPT = `You are given 3 short sentences with numeric ids. Group sentences that have IDENTICAL or NEARLY-IDENTICAL overall meaning (full-sentence meaning equivalence, NOT word-by-word synonym matching).
+
+Output: a JSON object {"groups": [[id, id, ...], [id], ...]}.
+Every input id MUST appear exactly once across all groups.
+
+Sentences:
+1. id=1 sentence="The cat sat on the mat"
+2. id=2 sentence="A feline rested on the rug"
+3. id=3 sentence="The sun is bright today"`;
+var ResponseSchema = external_exports3.object({
+  groups: external_exports3.array(external_exports3.array(external_exports3.number().int()))
+});
+function profileHash(profileFingerprint) {
+  return createHash5("sha256").update(profileFingerprint).digest("hex").slice(0, 16);
+}
+function defaultCacheDir() {
+  return join17(homedir3(), ".llm-externalizer", "cache");
+}
+function todayLocalISO() {
+  const d = /* @__PURE__ */ new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function cachePathFor(profileHashStr, date5, cacheDir) {
+  const dir = cacheDir ?? defaultCacheDir();
+  return join17(dir, `benchmark-${profileHashStr}-${date5}.json`);
+}
+function readCache(path) {
+  if (!existsSync11(path)) return null;
+  try {
+    const raw = readFileSync14(path, "utf8");
+    const parsed = JSON.parse(raw);
+    if (parsed.version !== 1) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+function writeCache(path, rec) {
+  mkdirSync15(dirname8(path), { recursive: true });
+  const tmp = `${path}.tmp.${process.pid}`;
+  writeFileSync11(tmp, JSON.stringify(rec, null, 2) + "\n", "utf8");
+  renameSync6(tmp, path);
+}
+function validatePreflightResponse(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err3) {
+    return {
+      pass: false,
+      reason: `response is not valid JSON: ${err3 instanceof Error ? err3.message : String(err3)}`
+    };
+  }
+  const result = ResponseSchema.safeParse(parsed);
+  if (!result.success) {
+    return {
+      pass: false,
+      reason: `response does not match required {groups: number[][]} schema: ${result.error.message}`
+    };
+  }
+  const seen = /* @__PURE__ */ new Set();
+  let total = 0;
+  for (const grp of result.data.groups) {
+    for (const id of grp) {
+      seen.add(id);
+      total++;
+    }
+  }
+  if (seen.size !== 3 || total !== 3) {
+    return {
+      pass: false,
+      reason: `response groups must contain each of ids 1,2,3 exactly once (got ${total} entries, ${seen.size} unique)`
+    };
+  }
+  if (!seen.has(1) || !seen.has(2) || !seen.has(3)) {
+    return { pass: false, reason: "response groups missing one of the expected ids 1,2,3" };
+  }
+  return { pass: true };
+}
+async function runPreflightBenchmark(profileFingerprint, llmCall, opts = {}) {
+  const ph = profileHash(profileFingerprint);
+  const date5 = opts.today ?? todayLocalISO();
+  const cp = cachePathFor(ph, date5, opts.cacheDir);
+  if (!opts.force) {
+    const cached2 = readCache(cp);
+    if (cached2 && cached2.date === date5 && cached2.profile_hash === ph) {
+      if (cached2.pass) {
+        return {
+          pass: true,
+          cached: true,
+          cache_path: cp,
+          date: date5,
+          timestamp: cached2.timestamp
+        };
+      }
+      return {
+        pass: false,
+        cached: true,
+        cache_path: cp,
+        reason: cached2.reason ?? "(cached failure with no reason)",
+        raw_response: cached2.raw_response ?? void 0
+      };
+    }
+  }
+  let raw;
+  try {
+    raw = await llmCall(DEFAULT_PREFLIGHT_PROMPT);
+  } catch (err3) {
+    const reason = `LLM call failed: ${err3 instanceof Error ? err3.message : String(err3)}`;
+    const rec2 = {
+      version: 1,
+      profile_hash: ph,
+      date: date5,
+      timestamp: Date.now(),
+      pass: false,
+      reason,
+      raw_response: null
+    };
+    writeCache(cp, rec2);
+    return { pass: false, cached: false, cache_path: cp, reason };
+  }
+  const v = validatePreflightResponse(raw);
+  const ts = Date.now();
+  const rec = {
+    version: 1,
+    profile_hash: ph,
+    date: date5,
+    timestamp: ts,
+    pass: v.pass,
+    reason: v.pass ? null : v.reason,
+    raw_response: v.pass ? null : raw
+  };
+  writeCache(cp, rec);
+  if (v.pass) {
+    return { pass: true, cached: false, cache_path: cp, date: date5, timestamp: ts };
+  }
+  return { pass: false, cached: false, cache_path: cp, reason: v.reason, raw_response: raw };
+}
+function makePreflightHook(profileFingerprint, llmCall, opts = {}) {
+  return async () => {
+    const pf = await runPreflightBenchmark(profileFingerprint, llmCall, opts);
+    return pf.pass ? { ok: true } : { ok: false, reason: pf.reason };
+  };
+}
+
 // src/index.ts
 import { fileURLToPath as fileUrlToPath_cs } from "node:url";
 
 // src/rule-install.ts
 import {
-  existsSync as existsSync11,
-  mkdirSync as mkdirSync15,
-  readFileSync as readFileSync14,
-  writeFileSync as writeFileSync11,
-  renameSync as renameSync6,
+  existsSync as existsSync12,
+  mkdirSync as mkdirSync16,
+  readFileSync as readFileSync15,
+  writeFileSync as writeFileSync12,
+  renameSync as renameSync7,
   realpathSync as realpathSync4,
   unlinkSync
 } from "node:fs";
 import { randomBytes as randomBytes3 } from "node:crypto";
-import { homedir as homedir3, tmpdir } from "node:os";
-import { dirname as dirname8, join as join17, resolve as resolve9, sep as sep2 } from "node:path";
+import { homedir as homedir4, tmpdir } from "node:os";
+import { dirname as dirname9, join as join18, resolve as resolve9, sep as sep2 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 var RULE_FILENAME = "use-llm-externalizer.md";
 function resolveBundledRulePath() {
   const candidates = [];
   const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   if (pluginRoot && pluginRoot.length > 0) {
-    candidates.push(join17(resolve9(pluginRoot), "rules", RULE_FILENAME));
+    candidates.push(join18(resolve9(pluginRoot), "rules", RULE_FILENAME));
   }
   try {
-    const here = dirname8(fileURLToPath4(import.meta.url));
+    const here = dirname9(fileURLToPath4(import.meta.url));
     candidates.push(resolve9(here, "..", "..", "rules", RULE_FILENAME));
   } catch {
   }
   for (const c of candidates) {
-    if (existsSync11(c)) return c;
+    if (existsSync12(c)) return c;
   }
   return null;
 }
 function resolveClaudeRulesDir() {
   const cfg = process.env.CLAUDE_CONFIG_DIR;
-  const base = cfg && cfg.length > 0 ? resolve9(cfg) : join17(homedir3(), ".claude");
-  return join17(base, "rules");
+  const base = cfg && cfg.length > 0 ? resolve9(cfg) : join18(homedir4(), ".claude");
+  return join18(base, "rules");
 }
 function canonical(p) {
   try {
     return realpathSync4(p);
   } catch {
-    const parent = dirname8(p);
+    const parent = dirname9(p);
     if (parent === p) return p;
-    return join17(canonical(parent), p.slice(parent.length + (parent.endsWith(sep2) ? 0 : 1)));
+    return join18(canonical(parent), p.slice(parent.length + (parent.endsWith(sep2) ? 0 : 1)));
   }
 }
 function underAllowedRoot(dir) {
   const d = canonical(dir);
   const roots = [];
   try {
-    roots.push(realpathSync4(homedir3()));
+    roots.push(realpathSync4(homedir4()));
   } catch {
-    roots.push(homedir3());
+    roots.push(homedir4());
   }
   if (process.env.CLAUDE_CONFIG_DIR && process.env.CLAUDE_CONFIG_DIR.length > 0) {
     roots.push(canonical(resolve9(process.env.CLAUDE_CONFIG_DIR)));
@@ -51240,11 +51393,11 @@ function installUsageRule(opts = {}) {
     return { status: "skipped", dest: "", detail: "disabled via LLM_EXT_INSTALL_RULE" };
   }
   const source = opts.sourcePath ?? resolveBundledRulePath();
-  if (!source || !existsSync11(source)) {
+  if (!source || !existsSync12(source)) {
     return { status: "error", dest: "", detail: "bundled rule source not found" };
   }
   const rulesDir = opts.rulesDir ?? resolveClaudeRulesDir();
-  const dest = join17(rulesDir, RULE_FILENAME);
+  const dest = join18(rulesDir, RULE_FILENAME);
   if (!underAllowedRoot(rulesDir)) {
     return {
       status: "error",
@@ -51254,22 +51407,22 @@ function installUsageRule(opts = {}) {
   }
   let desired;
   try {
-    desired = readFileSync14(source, "utf-8");
+    desired = readFileSync15(source, "utf-8");
   } catch (e) {
     return { status: "error", dest, detail: `cannot read source: ${e.message}` };
   }
-  const existed = existsSync11(dest);
+  const existed = existsSync12(dest);
   if (existed) {
     try {
-      if (readFileSync14(dest, "utf-8") === desired) return { status: "unchanged", dest };
+      if (readFileSync15(dest, "utf-8") === desired) return { status: "unchanged", dest };
     } catch {
     }
   }
   const tmp = dest + ".tmp." + process.pid + "." + randomBytes3(4).toString("hex");
   try {
-    mkdirSync15(rulesDir, { recursive: true });
-    writeFileSync11(tmp, desired, "utf-8");
-    renameSync6(tmp, dest);
+    mkdirSync16(rulesDir, { recursive: true });
+    writeFileSync12(tmp, desired, "utf-8");
+    renameSync7(tmp, dest);
   } catch (e) {
     try {
       unlinkSync(tmp);
@@ -51818,31 +51971,31 @@ function renderEndpointTable(ep, colors) {
 
 // src/free-pool-auto-bench.ts
 import {
-  existsSync as existsSync12,
-  mkdirSync as mkdirSync16,
+  existsSync as existsSync13,
+  mkdirSync as mkdirSync17,
   openSync,
-  readFileSync as readFileSync15,
-  writeFileSync as writeFileSync12
+  readFileSync as readFileSync16,
+  writeFileSync as writeFileSync13
 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
-import { dirname as dirname9, join as join18, resolve as pathResolve } from "node:path";
+import { homedir as homedir5 } from "node:os";
+import { dirname as dirname10, join as join19, resolve as pathResolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
-var LLM_EXT_HOME = join18(homedir4(), ".llm-externalizer");
-var BENCH_CACHE = join18(LLM_EXT_HOME, "benchmark-results.json");
-var BENCH_LOCK = join18(LLM_EXT_HOME, "free-pool-bench.lock");
-var BENCH_LOG = join18(LLM_EXT_HOME, "free-pool-bench.log");
+var LLM_EXT_HOME = join19(homedir5(), ".llm-externalizer");
+var BENCH_CACHE = join19(LLM_EXT_HOME, "benchmark-results.json");
+var BENCH_LOCK = join19(LLM_EXT_HOME, "free-pool-bench.lock");
+var BENCH_LOG = join19(LLM_EXT_HOME, "free-pool-bench.log");
 var DISABLE_ENV = "LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH";
 function resolveBenchmarkScriptPath() {
-  const here = dirname9(fileURLToPath5(import.meta.url));
+  const here = dirname10(fileURLToPath5(import.meta.url));
   const bundled = pathResolve(here, "benchmark.js");
-  if (existsSync12(bundled)) return bundled;
+  if (existsSync13(bundled)) return bundled;
   const fromSrc = pathResolve(here, "..", "dist", "benchmark.js");
   return fromSrc;
 }
 function benchCacheHasFreeEntries(cachePath3 = BENCH_CACHE) {
   try {
-    const raw = readFileSync15(cachePath3, "utf-8");
+    const raw = readFileSync16(cachePath3, "utf-8");
     const data = JSON.parse(raw);
     if (!Array.isArray(data?.results)) return false;
     return data.results.some(
@@ -51853,9 +52006,9 @@ function benchCacheHasFreeEntries(cachePath3 = BENCH_CACHE) {
   }
 }
 function lockHoldsLivePid(lockPath = BENCH_LOCK) {
-  if (!existsSync12(lockPath)) return false;
+  if (!existsSync13(lockPath)) return false;
   try {
-    const pid = parseInt(readFileSync15(lockPath, "utf-8").trim(), 10);
+    const pid = parseInt(readFileSync16(lockPath, "utf-8").trim(), 10);
     if (!Number.isInteger(pid) || pid <= 0) return false;
     try {
       process.kill(pid, 0);
@@ -51916,7 +52069,7 @@ function maybeTriggerFreePoolBench(opts) {
     };
   }
   try {
-    mkdirSync16(LLM_EXT_HOME, { recursive: true });
+    mkdirSync17(LLM_EXT_HOME, { recursive: true });
   } catch {
   }
   let logFd;
@@ -51940,7 +52093,7 @@ function maybeTriggerFreePoolBench(opts) {
   );
   child.unref();
   try {
-    writeFileSync12(lockPath, String(child.pid ?? ""), "utf-8");
+    writeFileSync13(lockPath, String(child.pid ?? ""), "utf-8");
   } catch {
   }
   log(
@@ -52219,7 +52372,7 @@ var _onSettingsReloaded = null;
 function reloadSettingsFromDisk() {
   let raw;
   try {
-    raw = readFileSync16(SETTINGS_FILE, "utf-8");
+    raw = readFileSync17(SETTINGS_FILE, "utf-8");
   } catch {
     return false;
   }
@@ -52556,14 +52709,14 @@ function waitForRequestsDrained(timeoutMs = 12e4) {
 }
 var SESSION_ID = randomUUID2().slice(0, 8);
 var SESSION_START = /* @__PURE__ */ new Date();
-var LOG_DIR = join19(getConfigDir(), "logs");
-var LOG_FILE = join19(
+var LOG_DIR = join20(getConfigDir(), "logs");
+var LOG_FILE = join20(
   LOG_DIR,
   `session-${SESSION_ID}-${SESSION_START.toISOString().slice(0, 10)}.jsonl`
 );
 function writeLogEntry(entry) {
   try {
-    mkdirSync17(LOG_DIR, { recursive: true });
+    mkdirSync18(LOG_DIR, { recursive: true });
     appendFileSync5(LOG_FILE, JSON.stringify(entry) + "\n");
   } catch {
     process.stderr.write(`[llm-externalizer] Failed to write log entry
@@ -52573,7 +52726,7 @@ function writeLogEntry(entry) {
 var STATS_FILE = "/tmp/claude/llm-externalizer-stats.json";
 function writeStatsFile() {
   try {
-    mkdirSync17("/tmp/claude", { recursive: true, mode: 448 });
+    mkdirSync18("/tmp/claude", { recursive: true, mode: 448 });
     const backend = getCurrentBackend();
     const stats = {
       session_id: SESSION_ID,
@@ -52588,8 +52741,8 @@ function writeStatsFile() {
       backend: backend.type
     };
     const tmpStats = STATS_FILE + ".tmp";
-    writeFileSync13(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
-    renameSync7(tmpStats, STATS_FILE);
+    writeFileSync14(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
+    renameSync8(tmpStats, STATS_FILE);
   } catch {
   }
 }
@@ -53209,7 +53362,7 @@ function defaultOutputDir() {
     _cachedDefaultOutputDir = resolve10(envOverride.trim());
     return _cachedDefaultOutputDir;
   }
-  _cachedDefaultOutputDir = join19(resolveProjectMainRoot(), "reports", "llm-externalizer");
+  _cachedDefaultOutputDir = join20(resolveProjectMainRoot(), "reports", "llm-externalizer");
   return _cachedDefaultOutputDir;
 }
 function _resetDefaultOutputDirCache() {
@@ -53234,14 +53387,14 @@ function canonicalTimestamp(date5 = /* @__PURE__ */ new Date()) {
 }
 function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir) {
   const dir = outputDir || defaultOutputDir();
-  mkdirSync17(dir, { recursive: true });
+  mkdirSync18(dir, { recursive: true });
   const now = /* @__PURE__ */ new Date();
   const ts = canonicalTimestamp(now);
   const shortId = randomUUID2().slice(0, 6);
   const srcPart = meta3.inputFile ? `-${sanitizeFilename(meta3.inputFile).replace(/\.md$/, "")}` : "";
   const groupPart = meta3.groupId ? `-group-${meta3.groupId.replace(/[^a-zA-Z0-9_-]/g, "_")}` : "";
   const filename = overrideFilename || `${ts}-${toolName}${groupPart}${srcPart}-${shortId}.md`;
-  const filepath = join19(dir, filename);
+  const filepath = join20(dir, filename);
   const lines = [
     "# LLM Externalizer Response",
     "",
@@ -53255,8 +53408,8 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
   lines.push("", "---", "", responseText);
   const tmpPath = filepath + ".tmp";
   try {
-    writeFileSync13(tmpPath, lines.join("\n"), "utf-8");
-    renameSync7(tmpPath, filepath);
+    writeFileSync14(tmpPath, lines.join("\n"), "utf-8");
+    renameSync8(tmpPath, filepath);
   } catch (err3) {
     try {
       unlinkSync2(tmpPath);
@@ -53529,7 +53682,7 @@ function resolveFolderPath(folderPath, opts) {
   } catch (err3) {
     return { files: [], error: `Invalid folder_path: ${err3 instanceof Error ? err3.message : String(err3)}` };
   }
-  if (!existsSync13(folderPath)) {
+  if (!existsSync14(folderPath)) {
     return { files: [], error: `folder_path not found: ${folderPath}` };
   }
   if (!statSync8(folderPath).isDirectory()) {
@@ -53889,7 +54042,7 @@ ${failed.map((r) => `- **${r.model}**: ${r.content}`).join("\n")}`);
   };
 }
 async function processFileCheck(filePath, task, options = {}) {
-  if (!existsSync13(filePath)) {
+  if (!existsSync14(filePath)) {
     return { filePath, success: false, error: `File not found: ${filePath}` };
   }
   const codeBlock = readFileAsCodeBlock(
@@ -55580,7 +55733,7 @@ Profiles: ${profileNames.join(", ")}`);
                 };
               }
               try {
-                writeFileSync13(absPath, jsonText, "utf-8");
+                writeFileSync14(absPath, jsonText, "utf-8");
               } catch (err3) {
                 return {
                   content: [
@@ -55648,11 +55801,11 @@ Profiles: ${profileNames.join(", ")}`);
         }
         case "get_settings": {
           try {
-            const raw = readFileSync16(SETTINGS_FILE, "utf-8");
+            const raw = readFileSync17(SETTINGS_FILE, "utf-8");
             const targetDir = outputDir || defaultOutputDir();
-            mkdirSync17(targetDir, { recursive: true });
-            const copyPath = join19(targetDir, "settings_edit.yaml");
-            writeFileSync13(copyPath, raw, "utf-8");
+            mkdirSync18(targetDir, { recursive: true });
+            const copyPath = join20(targetDir, "settings_edit.yaml");
+            writeFileSync14(copyPath, raw, "utf-8");
             return { content: [{ type: "text", text: copyPath }] };
           } catch (err3) {
             return {
@@ -55809,7 +55962,7 @@ Profiles: ${profileNames.join(", ")}`);
               const gSucceeded = gAll.filter((r) => r.success);
               const reportSections = [];
               for (const r of gSucceeded) {
-                const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync16(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync14(r.reportPath) ? readFileSync17(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -55945,7 +56098,7 @@ ${gAbortReason}`);
             } else {
               const reportSections = [];
               for (const r of succeeded) {
-                const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync16(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync14(r.reportPath) ? readFileSync17(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -56031,7 +56184,7 @@ ${content}`);
           } catch (err3) {
             return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
           }
-          if (!existsSync13(sfFolderPath)) {
+          if (!existsSync14(sfFolderPath)) {
             return {
               content: [
                 {
@@ -56179,7 +56332,7 @@ ${content}`);
           if (sfMode === 2 && succeeded.length > 0) {
             const sections = [];
             for (const r of succeeded) {
-              const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync16(r.reportPath, "utf-8") : "";
+              const content = r.reportPath && existsSync14(r.reportPath) ? readFileSync17(r.reportPath, "utf-8") : "";
               sections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -56219,7 +56372,7 @@ ${content}`);
               for (const fp of fg.files) {
                 const r = pathToResult.get(fp);
                 if (!r) continue;
-                const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync16(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync14(r.reportPath) ? readFileSync17(r.reportPath, "utf-8") : "";
                 sections.push(`## File: ${fp}
 
 ${content}`);
@@ -56324,8 +56477,8 @@ ${content}`);
             } catch (err3) {
               return { error: err3.message };
             }
-            if (!existsSync13(fA)) return { error: `File not found: ${fARaw}` };
-            if (!existsSync13(fB)) return { error: `File not found: ${fBRaw}` };
+            if (!existsSync14(fA)) return { error: `File not found: ${fARaw}` };
+            if (!existsSync14(fB)) return { error: `File not found: ${fBRaw}` };
             if (cfScan && !cfRedact) {
               const scanResult = scanFilesForSecrets([fA, fB]);
               if (scanResult.found) return { error: scanResult.report };
@@ -56387,7 +56540,7 @@ ${fence}${sourceBlocks}` }
             } catch (err3) {
               return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
             }
-            if (!existsSync13(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
+            if (!existsSync14(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
             const toRef = cfToRef || "HEAD";
             if (cfFromRef.startsWith("-") || toRef.startsWith("-")) {
               return { content: [{ type: "text", text: "FAILED: git refs must not start with '-'" }], isError: true };
@@ -56458,7 +56611,7 @@ ${sections.join("\n\n---\n\n")}`;
                 {
                   model: "git-diff (no LLM)",
                   task: `${cfFromRef} \u2192 ${toRef}`,
-                  inputFile: join19(cfGitRepoSafe, dg.files[0]),
+                  inputFile: join20(cfGitRepoSafe, dg.files[0]),
                   groupId: gid
                 },
                 void 0,
@@ -56551,7 +56704,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync13(fileA)) {
+          if (!existsSync14(fileA)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileA}` }
@@ -56559,7 +56712,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync13(fileB)) {
+          if (!existsSync14(fileB)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileB}` }
@@ -56747,13 +56900,13 @@ ${diffFence}` + sourceFileBlocks
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync13(filePath)) {
+                if (!existsSync14(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
                   continue;
                 }
-                const src = readFileSync16(filePath, "utf-8");
+                const src = readFileSync17(filePath, "utf-8");
                 const lang = detectLang(filePath);
                 const deps = extractLocalImports(filePath, src);
                 const depBlocks = [];
@@ -56807,14 +56960,14 @@ ${resp.content}${footer}`);
           const crReports = [];
           const crReportPaths = [];
           for (const filePath of crFilePaths) {
-            if (!existsSync13(filePath)) {
+            if (!existsSync14(filePath)) {
               crReports.push(`## ${filePath}
 
 FAILED: File not found.`);
               crReportPaths.push("(skipped \u2014 file not found)");
               continue;
             }
-            const crSourceCode = readFileSync16(filePath, "utf-8");
+            const crSourceCode = readFileSync17(filePath, "utf-8");
             const crLang = detectLang(filePath);
             const depPaths = extractLocalImports(filePath, crSourceCode);
             const depBlocks = [];
@@ -56987,14 +57140,14 @@ ${crResp.content}${crFooter}`
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync13(filePath)) {
+                if (!existsSync14(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
                   continue;
                 }
                 const ciLang = detectLang(filePath);
-                const fileDir = dirname10(filePath);
+                const fileDir = dirname11(filePath);
                 const ciResolveBase = project_root || fileDir;
                 const extractMessages = [
                   { role: "system", content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path inside a filename tag before the file-content tag \u2014 reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.` + FILE_FORMAT_EXAMPLE },
@@ -57016,22 +57169,22 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     continue;
                   }
                   const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-                  const resolvedBase = importPath.startsWith("/") ? resolve10(importPath) : join19(resolveDir, importPath);
+                  const resolvedBase = importPath.startsWith("/") ? resolve10(importPath) : join20(resolveDir, importPath);
                   if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                     packageImports.push(importPath);
                     continue;
                   }
-                  let found = existsSync13(resolvedBase) && statSync8(resolvedBase).isFile();
+                  let found = existsSync14(resolvedBase) && statSync8(resolvedBase).isFile();
                   if (!found && !extname5(resolvedBase)) {
                     for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".json"]) {
-                      if (existsSync13(resolvedBase + ext)) {
+                      if (existsSync14(resolvedBase + ext)) {
                         found = true;
                         break;
                       }
                     }
                     if (!found) {
                       for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                        if (existsSync13(join19(resolvedBase, `index${ext}`))) {
+                        if (existsSync14(join20(resolvedBase, `index${ext}`))) {
                           found = true;
                           break;
                         }
@@ -57065,7 +57218,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
           const ciReports = [];
           const ciReportPaths = [];
           for (const filePath of ciFilePaths) {
-            if (!existsSync13(filePath)) {
+            if (!existsSync14(filePath)) {
               ciReports.push(`## ${filePath}
 
 FAILED: File not found.`);
@@ -57073,7 +57226,7 @@ FAILED: File not found.`);
               continue;
             }
             const ciLang = detectLang(filePath);
-            const fileDir = dirname10(filePath);
+            const fileDir = dirname11(filePath);
             const ciResolveBase = project_root || fileDir;
             const extractMessages = [
               {
@@ -57112,13 +57265,13 @@ FAILED: File not found.`);
                 continue;
               }
               const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-              const resolvedBase = importPath.startsWith("/") ? resolve10(importPath) : join19(resolveDir, importPath);
+              const resolvedBase = importPath.startsWith("/") ? resolve10(importPath) : join20(resolveDir, importPath);
               if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                 packageImports.push(importPath);
                 continue;
               }
               let found = false;
-              if (existsSync13(resolvedBase) && statSync8(resolvedBase).isFile()) {
+              if (existsSync14(resolvedBase) && statSync8(resolvedBase).isFile()) {
                 found = true;
               }
               if (!found && !extname5(resolvedBase)) {
@@ -57134,14 +57287,14 @@ FAILED: File not found.`);
                   ".rs",
                   ".json"
                 ]) {
-                  if (existsSync13(resolvedBase + ext)) {
+                  if (existsSync14(resolvedBase + ext)) {
                     found = true;
                     break;
                   }
                 }
                 if (!found) {
                   for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                    if (existsSync13(join19(resolvedBase, `index${ext}`))) {
+                    if (existsSync14(join20(resolvedBase, `index${ext}`))) {
                       found = true;
                       break;
                     }
@@ -57319,7 +57472,7 @@ FAILED: File not found.`);
             if (csMode === 0 && !csEffectivelyGrouped) {
               const csPerFileResults = [];
               for (const fp of fgPaths) {
-                if (!existsSync13(fp)) {
+                if (!existsSync14(fp)) {
                   csPerFileResults.push(`FAILED: ${fp} \u2014 File not found`);
                   continue;
                 }
@@ -57466,12 +57619,17 @@ ${csResp.content}${csFooter}`
             }
             return resp.content;
           };
-          const csModuleDir = dirname10(fileUrlToPath_cs(import.meta.url));
-          const csEmbeddingsScript = join19(csModuleDir, "..", "scripts", "compute_embeddings.py");
+          const csModuleDir = dirname11(fileUrlToPath_cs(import.meta.url));
+          const csEmbeddingsScript = join20(csModuleDir, "..", "scripts", "compute_embeddings.py");
+          const csPreflightModel = getCurrentBackend().model ?? "unknown";
           const csHooks = {
             rawLlmCall: csRawLlmCall,
             embeddingsScriptPath: csEmbeddingsScript,
-            profileName: getCurrentBackend().model ?? "unknown"
+            profileName: csPreflightModel,
+            preflight: makePreflightHook(
+              csPreflightModel,
+              (prompt) => csRawLlmCall(prompt)
+            )
           };
           try {
             const csResult = await runClusterSynonyms(csInvocation, csHooks);

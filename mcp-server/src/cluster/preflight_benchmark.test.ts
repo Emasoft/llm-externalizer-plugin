@@ -7,10 +7,13 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   cachePathFor,
+  makePreflightHook,
   profileHash,
   runPreflightBenchmark,
   validatePreflightResponse,
 } from "./preflight_benchmark.js";
+
+const GOOD_PREFLIGHT = JSON.stringify({ groups: [[1, 2], [3]] });
 
 describe("preflight_benchmark", () => {
   let cacheDir: string;
@@ -176,6 +179,54 @@ describe("preflight_benchmark", () => {
       });
       expect(calls).toBe(1);
       expect(r.pass).toBe(true);
+    });
+  });
+
+  // TRDD-828238b5 B4 — the adapter that bridges runPreflightBenchmark's
+  // {pass,reason} result to the cluster core's {ok,reason} gate hook.
+  describe("makePreflightHook", () => {
+    it("maps a passing benchmark to { ok: true }", async () => {
+      const hook = makePreflightHook("model-a", async () => GOOD_PREFLIGHT, {
+        cacheDir,
+      });
+      await expect(hook()).resolves.toEqual({ ok: true });
+    });
+
+    it("maps a failing benchmark to { ok: false, reason }", async () => {
+      const hook = makePreflightHook("model-b", async () => "not even close", {
+        cacheDir,
+      });
+      const r = await hook();
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toMatch(/not valid JSON/);
+    });
+
+    it("maps an LLM-call throw to { ok: false } (fail-closed gate)", async () => {
+      const hook = makePreflightHook(
+        "model-c",
+        async () => {
+          throw new Error("network down");
+        },
+        { cacheDir },
+      );
+      const r = await hook();
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toMatch(/network down/);
+    });
+
+    it("returns a healthy gate from the daily cache on the second call (one LLM call)", async () => {
+      let calls = 0;
+      const hook = makePreflightHook(
+        "model-d",
+        async () => {
+          calls++;
+          return GOOD_PREFLIGHT;
+        },
+        { cacheDir },
+      );
+      await expect(hook()).resolves.toEqual({ ok: true });
+      await expect(hook()).resolves.toEqual({ ok: true });
+      expect(calls).toBe(1);
     });
   });
 });

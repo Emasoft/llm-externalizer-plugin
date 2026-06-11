@@ -3,7 +3,7 @@ trdd-id: 828238b5-42d7-478e-8fe7-44d74f812286
 title: Auto-* model management suite + deep-audit findings backlog
 status: in-progress
 created: 2026-05-24T22:56:20+0200
-updated: 2026-06-11T20:48:22+0200
+updated: 2026-06-12T01:26:30+0200
 ---
 
 # TRDD-828238b5 — Auto-* model management suite + deep-audit findings backlog
@@ -350,6 +350,14 @@ FAIL / 1 SKIP.
   Stream from the JSONL + checkpoint instead of loading all items.
 - **B4 [MEDIUM] cluster preflight benchmark never wired** into the entry path
   (`cluster/preflight_benchmark.ts` exists, unused). Wire it or remove.
+  — **DONE (wired)** 2026-06-12. The MCP `cluster_synonyms` dispatch (the sole
+  production hooks site — the CLI routes through the server) now supplies a
+  `preflight` hook via the new `makePreflightHook` adapter, which wraps
+  `runPreflightBenchmark` (daily per-model cache) and maps its `{pass,reason}`
+  to the core's `{ok,reason}` gate. Preflight runs by default (policy default
+  `skip_preflight_benchmark:false`); a model that can't cluster 3 sentences
+  fails the gate before an expensive run, and an LLM-call failure fails closed.
+  Opt out via the policy flag. 4 adapter tests added.
 - **B5 [MEDIUM] cluster `partition()` recomputed 3–4× at emit** — cache once.
   — **DONE** (computed once after phase-2; [[TRDD-66da2aa7]], commit 8bee08a).
 
