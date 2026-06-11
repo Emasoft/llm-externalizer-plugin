@@ -3999,10 +3999,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep, value } = collItem;
+        const { start, key, sep: sep2, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep?.[0],
+          next: key ?? sep2?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -4016,7 +4016,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep) {
+          if (!keyProps.anchor && !keyProps.tag && !sep2) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map.comment)
@@ -4040,7 +4040,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep ?? [], {
+        const valueProps = resolveProps.resolveProps(sep2 ?? [], {
           indicator: "map-value-ind",
           next: value,
           offset: keyNode.range[2],
@@ -4056,7 +4056,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep, null, valueProps, onError);
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep2, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
           offset = valueNode.range[2];
@@ -4147,7 +4147,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep = "";
+        let sep2 = "";
         for (const token of end) {
           const { source, type } = token;
           switch (type) {
@@ -4161,13 +4161,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep + cb;
-              sep = "";
+                comment += sep2 + cb;
+              sep2 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep += source;
+                sep2 += source;
               hasSpace = true;
               break;
             default:
@@ -4210,18 +4210,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i = 0; i < fc.items.length; ++i) {
         const collItem = fc.items[i];
-        const { start, key, sep, value } = collItem;
+        const { start, key, sep: sep2, value } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep?.[0],
+          next: key ?? sep2?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep && !value) {
+          if (!props.anchor && !props.tag && !sep2 && !value) {
             if (i === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i < fc.items.length - 1)
@@ -4275,8 +4275,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap && !sep && !props.found) {
-          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep, null, props, onError);
+        if (!isMap && !sep2 && !props.found) {
+          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep2, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value))
@@ -4288,7 +4288,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep ?? [], {
+          const valueProps = resolveProps.resolveProps(sep2 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value,
@@ -4299,8 +4299,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap && !props.found && ctx.options.strict) {
-              if (sep)
-                for (const st of sep) {
+              if (sep2)
+                for (const st of sep2) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -4317,7 +4317,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep, null, valueProps, onError) : null;
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep2, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -4497,7 +4497,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i + 1;
       }
       let value = "";
-      let sep = "";
+      let sep2 = "";
       let prevMoreIndented = false;
       for (let i = 0; i < contentStart; ++i)
         value += lines[i][0].slice(trimIndent) + "\n";
@@ -4514,24 +4514,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value += sep + indent.slice(trimIndent) + content;
-          sep = "\n";
+          value += sep2 + indent.slice(trimIndent) + content;
+          sep2 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep === " ")
-            sep = "\n";
-          else if (!prevMoreIndented && sep === "\n")
-            sep = "\n\n";
-          value += sep + indent.slice(trimIndent) + content;
-          sep = "\n";
+          if (sep2 === " ")
+            sep2 = "\n";
+          else if (!prevMoreIndented && sep2 === "\n")
+            sep2 = "\n\n";
+          value += sep2 + indent.slice(trimIndent) + content;
+          sep2 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep === "\n")
+          if (sep2 === "\n")
             value += "\n";
           else
-            sep = "\n";
+            sep2 = "\n";
         } else {
-          value += sep + content;
-          sep = " ";
+          value += sep2 + content;
+          sep2 = " ";
           prevMoreIndented = false;
         }
       }
@@ -4713,25 +4713,25 @@ var require_resolve_flow_scalar = __commonJS({
       if (!match)
         return source;
       let res = match[1];
-      let sep = " ";
+      let sep2 = " ";
       let pos = first.lastIndex;
       line.lastIndex = pos;
       while (match = line.exec(source)) {
         if (match[1] === "") {
-          if (sep === "\n")
-            res += sep;
+          if (sep2 === "\n")
+            res += sep2;
           else
-            sep = "\n";
+            sep2 = "\n";
         } else {
-          res += sep + match[1];
-          sep = " ";
+          res += sep2 + match[1];
+          sep2 = " ";
         }
         pos = line.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match = last.exec(source);
-      return res + sep + (match?.[1] ?? "");
+      return res + sep2 + (match?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -5541,14 +5541,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep, value }) {
+    function stringifyItem({ start, key, sep: sep2, value }) {
       let res = "";
       for (const st of start)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep)
-        for (const st of sep)
+      if (sep2)
+        for (const st of sep2)
           res += st.source;
       if (value)
         res += stringifyToken(value);
@@ -6715,18 +6715,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start = getFirstKeyStartProps(prev);
-          let sep;
+          let sep2;
           if (scalar.end) {
-            sep = scalar.end;
-            sep.push(this.sourceToken);
+            sep2 = scalar.end;
+            sep2.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep = [this.sourceToken];
+            sep2 = [this.sourceToken];
           const map = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start, key: scalar, sep }]
+            items: [{ start, key: scalar, sep: sep2 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map;
@@ -6879,15 +6879,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep = it.sep;
-                  sep.push(this.sourceToken);
+                  const sep2 = it.sep;
+                  sep2.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep }]
+                    items: [{ start: start2, key, sep: sep2 }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -7081,13 +7081,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep = fc.end.splice(1, fc.end.length);
-            sep.push(this.sourceToken);
+            const sep2 = fc.end.splice(1, fc.end.length);
+            sep2.push(this.sourceToken);
             const map = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start, key: fc, sep }]
+              items: [{ start, key: fc, sep: sep2 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map;
@@ -16004,7 +16004,7 @@ ${lanes.join("\n")}
               return process.memoryUsage().heapUsed;
             },
             getFileSize(path) {
-              const stat = statSync2(path);
+              const stat = statSync6(path);
               if (stat == null ? void 0 : stat.isFile()) {
                 return stat.size;
               }
@@ -16048,7 +16048,7 @@ ${lanes.join("\n")}
             }
           };
           return nodeSystem;
-          function statSync2(path) {
+          function statSync6(path) {
             try {
               return _fs.statSync(path, statSyncOptions);
             } catch {
@@ -16107,7 +16107,7 @@ ${lanes.join("\n")}
               activeSession.post("Profiler.stop", (err, { profile }) => {
                 var _a;
                 if (!err) {
-                  if ((_a = statSync2(profilePath)) == null ? void 0 : _a.isDirectory()) {
+                  if ((_a = statSync6(profilePath)) == null ? void 0 : _a.isDirectory()) {
                     profilePath = _path.join(profilePath, `${(/* @__PURE__ */ new Date()).toISOString().replace(/:/g, "-")}+P${process.pid}.cpuprofile`);
                   }
                   try {
@@ -16227,7 +16227,7 @@ ${lanes.join("\n")}
                 let stat;
                 if (typeof dirent === "string" || dirent.isSymbolicLink()) {
                   const name = combinePaths(path, entry);
-                  stat = statSync2(name);
+                  stat = statSync6(name);
                   if (!stat) {
                     continue;
                   }
@@ -16251,7 +16251,7 @@ ${lanes.join("\n")}
             return matchFiles(path, extensions, excludes, includes, useCaseSensitiveFileNames2, process.cwd(), depth, getAccessibleFileSystemEntries, realpath);
           }
           function fileSystemEntryExists(path, entryKind) {
-            const stat = statSync2(path);
+            const stat = statSync6(path);
             if (!stat) {
               return false;
             }
@@ -16293,7 +16293,7 @@ ${lanes.join("\n")}
           }
           function getModifiedTime3(path) {
             var _a;
-            return (_a = statSync2(path)) == null ? void 0 : _a.mtime;
+            return (_a = statSync6(path)) == null ? void 0 : _a.mtime;
           }
           function setModifiedTime(path, time) {
             try {
@@ -55330,11 +55330,11 @@ ${lanes.join("\n")}
             if (i < rootLength) {
               return void 0;
             }
-            const sep = directory.lastIndexOf(directorySeparator, i - 1);
-            if (sep === -1) {
+            const sep2 = directory.lastIndexOf(directorySeparator, i - 1);
+            if (sep2 === -1) {
               return void 0;
             }
-            return directory.substr(0, Math.max(sep, rootLength));
+            return directory.substr(0, Math.max(sep2, rootLength));
           }
         }
       }
@@ -69109,9 +69109,9 @@ ${lanes.join("\n")}
             const originalModuleSpecifier = canHaveModuleSpecifier(enclosingDeclaration) ? tryGetModuleSpecifierFromDeclaration(enclosingDeclaration) : void 0;
             const contextFile = context.enclosingFile;
             const resolutionMode = overrideImportMode || originalModuleSpecifier && host.getModeForUsageLocation(contextFile, originalModuleSpecifier) || contextFile && host.getDefaultResolutionModeForFile(contextFile);
-            const cacheKey2 = createModeAwareCacheKey(contextFile.path, resolutionMode);
+            const cacheKey3 = createModeAwareCacheKey(contextFile.path, resolutionMode);
             const links = getSymbolLinks(symbol);
-            let specifier = links.specifierCache && links.specifierCache.get(cacheKey2);
+            let specifier = links.specifierCache && links.specifierCache.get(cacheKey3);
             if (!specifier) {
               const isBundle2 = !!compilerOptions.outFile;
               const { moduleResolverHost } = context.tracker;
@@ -69129,7 +69129,7 @@ ${lanes.join("\n")}
                 { overrideImportMode }
               ));
               links.specifierCache ?? (links.specifierCache = /* @__PURE__ */ new Map());
-              links.specifierCache.set(cacheKey2, specifier);
+              links.specifierCache.set(cacheKey3, specifier);
             }
             return specifier;
           }
@@ -85343,12 +85343,12 @@ ${lanes.join("\n")}
           );
         }
         function inferTypeForHomomorphicMappedType(source, target, constraint) {
-          const cacheKey2 = source.id + "," + target.id + "," + constraint.id;
-          if (reverseHomomorphicMappedCache.has(cacheKey2)) {
-            return reverseHomomorphicMappedCache.get(cacheKey2);
+          const cacheKey3 = source.id + "," + target.id + "," + constraint.id;
+          if (reverseHomomorphicMappedCache.has(cacheKey3)) {
+            return reverseHomomorphicMappedCache.get(cacheKey3);
           }
           const type = createReverseMappedType(source, target, constraint);
-          reverseHomomorphicMappedCache.set(cacheKey2, type);
+          reverseHomomorphicMappedCache.set(cacheKey3, type);
           return type;
         }
         function isPartiallyInferableType(type) {
@@ -85398,9 +85398,9 @@ ${lanes.join("\n")}
           return getTypeFromInference(inference) || unknownType;
         }
         function inferReverseMappedType(source, target, constraint) {
-          const cacheKey2 = source.id + "," + target.id + "," + constraint.id;
-          if (reverseMappedCache.has(cacheKey2)) {
-            return reverseMappedCache.get(cacheKey2) || unknownType;
+          const cacheKey3 = source.id + "," + target.id + "," + constraint.id;
+          if (reverseMappedCache.has(cacheKey3)) {
+            return reverseMappedCache.get(cacheKey3) || unknownType;
           }
           reverseMappedSourceStack.push(source);
           reverseMappedTargetStack.push(target);
@@ -85414,7 +85414,7 @@ ${lanes.join("\n")}
           reverseMappedSourceStack.pop();
           reverseMappedTargetStack.pop();
           reverseExpandingFlags = saveExpandingFlags;
-          reverseMappedCache.set(cacheKey2, type);
+          reverseMappedCache.set(cacheKey3, type);
           return type;
         }
         function* getUnmatchedProperties(source, target, requireOptionalProperties, matchDiscriminantProperties) {
@@ -102239,11 +102239,11 @@ ${lanes.join("\n")}
           }
           return noIterationTypes;
         }
-        function getCachedIterationTypes(type, cacheKey2) {
-          return type[cacheKey2];
+        function getCachedIterationTypes(type, cacheKey3) {
+          return type[cacheKey3];
         }
-        function setCachedIterationTypes(type, cacheKey2, cachedTypes2) {
-          return type[cacheKey2] = cachedTypes2;
+        function setCachedIterationTypes(type, cacheKey3, cachedTypes2) {
+          return type[cacheKey3] = cachedTypes2;
         }
         function getIterationTypesOfIterable(type, use, errorNode) {
           var _a, _b;
@@ -102271,8 +102271,8 @@ ${lanes.join("\n")}
             }
             return iterationTypes2;
           }
-          const cacheKey2 = use & 2 ? "iterationTypesOfAsyncIterable" : "iterationTypesOfIterable";
-          const cachedTypes2 = getCachedIterationTypes(type, cacheKey2);
+          const cacheKey3 = use & 2 ? "iterationTypesOfAsyncIterable" : "iterationTypesOfIterable";
+          const cachedTypes2 = getCachedIterationTypes(type, cacheKey3);
           if (cachedTypes2) return cachedTypes2 === noIterationTypes ? void 0 : cachedTypes2;
           let allIterationTypes;
           for (const constituent of type.types) {
@@ -102285,7 +102285,7 @@ ${lanes.join("\n")}
                   addRelatedInfo(rootDiag, ...errorOutputContainer.errors);
                 }
               }
-              setCachedIterationTypes(type, cacheKey2, noIterationTypes);
+              setCachedIterationTypes(type, cacheKey3, noIterationTypes);
               return void 0;
             } else if ((_b = errorOutputContainer == null ? void 0 : errorOutputContainer.errors) == null ? void 0 : _b.length) {
               for (const diag2 of errorOutputContainer.errors) {
@@ -102295,7 +102295,7 @@ ${lanes.join("\n")}
             allIterationTypes = append(allIterationTypes, iterationTypes2);
           }
           const iterationTypes = allIterationTypes ? combineIterationTypes(allIterationTypes) : noIterationTypes;
-          setCachedIterationTypes(type, cacheKey2, iterationTypes);
+          setCachedIterationTypes(type, cacheKey3, iterationTypes);
           return iterationTypes === noIterationTypes ? void 0 : iterationTypes;
         }
         function getAsyncFromSyncIterationTypes(iterationTypes, errorNode) {
@@ -117897,8 +117897,8 @@ ${lanes.join("\n")}
             /*allowSourceMaps*/
             true
           );
-          const decorate2 = emitHelpers().createDecorateHelper(decoratorExpressions, localName);
-          const expression = factory2.createAssignment(localName, classAlias ? factory2.createAssignment(classAlias, decorate2) : decorate2);
+          const decorate3 = emitHelpers().createDecorateHelper(decoratorExpressions, localName);
+          const expression = factory2.createAssignment(localName, classAlias ? factory2.createAssignment(classAlias, decorate3) : decorate3);
           setEmitFlags(
             expression,
             3072
@@ -131079,7 +131079,7 @@ ${lanes.join("\n")}
           }
         }
         function createImportCallExpressionAMD(arg, containsLexicalThis) {
-          const resolve3 = factory2.createUniqueName("resolve");
+          const resolve7 = factory2.createUniqueName("resolve");
           const reject = factory2.createUniqueName("reject");
           const parameters = [
             factory2.createParameterDeclaration(
@@ -131088,7 +131088,7 @@ ${lanes.join("\n")}
               /*dotDotDotToken*/
               void 0,
               /*name*/
-              resolve3
+              resolve7
             ),
             factory2.createParameterDeclaration(
               /*modifiers*/
@@ -131105,7 +131105,7 @@ ${lanes.join("\n")}
                 factory2.createIdentifier("require"),
                 /*typeArguments*/
                 void 0,
-                [factory2.createArrayLiteralExpression([arg || factory2.createOmittedExpression()]), resolve3, reject]
+                [factory2.createArrayLiteralExpression([arg || factory2.createOmittedExpression()]), resolve7, reject]
               )
             )
           ]);
@@ -143915,9 +143915,9 @@ ${lanes.join("\n")}
             /*ignoreCase*/
             false
           )) {
-            const basename = getBaseFileName(a.fileName);
-            if (basename === "lib.d.ts" || basename === "lib.es6.d.ts") return 0;
-            const name = removeSuffix(removePrefix(basename, "lib."), ".d.ts");
+            const basename3 = getBaseFileName(a.fileName);
+            if (basename3 === "lib.d.ts" || basename3 === "lib.es6.d.ts") return 0;
+            const name = removeSuffix(removePrefix(basename3, "lib."), ".d.ts");
             const index = libs.indexOf(name);
             if (index !== -1) return index + 1;
           }
@@ -205351,16 +205351,16 @@ ${options.prefix}` : "\n" : options.prefix
         isEnabled: () => false,
         writeLine: noop
       };
-      function typingToFileName(cachePath2, packageName, installTypingHost, log) {
+      function typingToFileName(cachePath3, packageName, installTypingHost, log) {
         try {
-          const result = resolveModuleName(packageName, combinePaths(cachePath2, "index.d.ts"), {
+          const result = resolveModuleName(packageName, combinePaths(cachePath3, "index.d.ts"), {
             moduleResolution: 2
             /* Node10 */
           }, installTypingHost);
           return result.resolvedModule && result.resolvedModule.resolvedFileName;
         } catch (e) {
           if (log.isEnabled()) {
-            log.writeLine(`Failed to resolve ${packageName} in folder '${cachePath2}': ${e.message}`);
+            log.writeLine(`Failed to resolve ${packageName} in folder '${cachePath3}': ${e.message}`);
           }
           return void 0;
         }
@@ -205632,7 +205632,7 @@ ${options.prefix}` : "\n" : options.prefix
             this.installTypingHost.writeFile(npmConfigPath, '{ "private": true }');
           }
         }
-        installTypings(req, cachePath2, currentlyCachedTypings, typingsToInstall) {
+        installTypings(req, cachePath3, currentlyCachedTypings, typingsToInstall) {
           if (this.log.isEnabled()) {
             this.log.writeLine(`Installing typings ${JSON.stringify(typingsToInstall)}`);
           }
@@ -205644,7 +205644,7 @@ ${options.prefix}` : "\n" : options.prefix
             this.sendResponse(this.createSetTypings(req, currentlyCachedTypings));
             return;
           }
-          this.ensurePackageDirectoryExists(cachePath2);
+          this.ensurePackageDirectoryExists(cachePath3);
           const requestId = this.installRunCount;
           this.installRunCount++;
           this.sendResponse({
@@ -205654,7 +205654,7 @@ ${options.prefix}` : "\n" : options.prefix
             projectName: req.projectName
           });
           const scopedTypings = filteredTypings.map(typingsName);
-          this.installTypingsAsync(requestId, scopedTypings, cachePath2, (ok) => {
+          this.installTypingsAsync(requestId, scopedTypings, cachePath3, (ok) => {
             try {
               if (!ok) {
                 if (this.log.isEnabled()) {
@@ -205670,7 +205670,7 @@ ${options.prefix}` : "\n" : options.prefix
               }
               const installedTypingFiles = [];
               for (const packageName of filteredTypings) {
-                const typingFile = typingToFileName(cachePath2, packageName, this.installTypingHost, this.log);
+                const typingFile = typingToFileName(cachePath3, packageName, this.installTypingHost, this.log);
                 if (!typingFile) {
                   this.missingTypingsSet.add(packageName);
                   continue;
@@ -205764,7 +205764,7 @@ ${options.prefix}` : "\n" : options.prefix
         Msg2["Perf"] = "Perf";
         return Msg2;
       })(Msg || {});
-      function createInstallTypingsRequest(project, typeAcquisition, unresolvedImports, cachePath2) {
+      function createInstallTypingsRequest(project, typeAcquisition, unresolvedImports, cachePath3) {
         return {
           projectName: project.getProjectName(),
           fileNames: project.getFileNames(
@@ -205777,7 +205777,7 @@ ${options.prefix}` : "\n" : options.prefix
           typeAcquisition,
           unresolvedImports,
           projectRootPath: project.getCurrentDirectory(),
-          cachePath: cachePath2,
+          cachePath: cachePath3,
           kind: "discover"
         };
       }
@@ -207663,8 +207663,8 @@ ${options.prefix}` : "\n" : options.prefix
             }
           };
           for (const file of files) {
-            const basename = getBaseFileName(file);
-            if (basename === "package.json" || basename === "bower.json") {
+            const basename3 = getBaseFileName(file);
+            if (basename3 === "package.json" || basename3 === "bower.json") {
               createProjectWatcher(
                 file,
                 "FileWatcher"
@@ -211336,8 +211336,8 @@ All files are: ${JSON.stringify(names)}`,
               var _a;
               const fileOrDirectoryPath = removeIgnoredPath(this.toPath(fileOrDirectory));
               if (!fileOrDirectoryPath) return;
-              const basename = getBaseFileName(fileOrDirectoryPath);
-              if (((_a = result.affectedModuleSpecifierCacheProjects) == null ? void 0 : _a.size) && (basename === "package.json" || basename === "node_modules")) {
+              const basename3 = getBaseFileName(fileOrDirectoryPath);
+              if (((_a = result.affectedModuleSpecifierCacheProjects) == null ? void 0 : _a.size) && (basename3 === "package.json" || basename3 === "node_modules")) {
                 result.affectedModuleSpecifierCacheProjects.forEach((project) => {
                   var _a2;
                   (_a2 = project.getModuleSpecifierCache()) == null ? void 0 : _a2.clear();
@@ -217823,8 +217823,8 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
         installPackage(options) {
           this.packageInstallId++;
           const request = { kind: "installPackage", ...options, id: this.packageInstallId };
-          const promise = new Promise((resolve3, reject) => {
-            (this.packageInstalledPromise ?? (this.packageInstalledPromise = /* @__PURE__ */ new Map())).set(this.packageInstallId, { resolve: resolve3, reject });
+          const promise = new Promise((resolve7, reject) => {
+            (this.packageInstalledPromise ?? (this.packageInstalledPromise = /* @__PURE__ */ new Map())).set(this.packageInstallId, { resolve: resolve7, reject });
           });
           this.installer.send(request);
           return promise;
@@ -218107,10 +218107,10 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 });
 
 // src/benchmark/index.ts
-import { mkdirSync as mkdirSync6, writeFileSync as writeFileSync6, existsSync as existsSync6 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { dirname as dirname2, join as join9 } from "node:path";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
+import { mkdirSync as mkdirSync7, writeFileSync as writeFileSync7, existsSync as existsSync10 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { dirname as dirname4, join as join12 } from "node:path";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // src/usage-history.ts
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -218564,9 +218564,9 @@ function getConfigDir() {
       return "/tmp";
     }
   })();
-  const sep = process.platform === "win32" ? "\\" : "/";
-  const underHome = dir.startsWith(home + sep) || dir === home;
-  const underTmp = dir.startsWith(tmpCanonical + sep) || dir === tmpCanonical;
+  const sep2 = process.platform === "win32" ? "\\" : "/";
+  const underHome = dir.startsWith(home + sep2) || dir === home;
+  const underTmp = dir.startsWith(tmpCanonical + sep2) || dir === tmpCanonical;
   if (!underHome && !underTmp) {
     throw new Error(`Config directory '${dir}' is outside allowed paths (${home} or ${tmpCanonical})`);
   }
@@ -218728,8 +218728,8 @@ function localIsoTimestamp(d = /* @__PURE__ */ new Date()) {
   const s = pad(d.getSeconds());
   const offMin = -d.getTimezoneOffset();
   const sign = offMin >= 0 ? "+" : "-";
-  const abs = Math.abs(offMin);
-  return `${y}-${mo}-${da}T${h}:${mi}:${s}${sign}${pad(Math.floor(abs / 60))}${pad(abs % 60)}`;
+  const abs2 = Math.abs(offMin);
+  return `${y}-${mo}-${da}T${h}:${mi}:${s}${sign}${pad(Math.floor(abs2 / 60))}${pad(abs2 % 60)}`;
 }
 function formatDuration(durationMs) {
   const ms = Math.max(0, Math.round(durationMs));
@@ -220871,6 +220871,2228 @@ function buildReportMarkdown(args) {
   return lines.join("\n") + "\n";
 }
 
+// src/benchmark/search-existing/index.ts
+import { createHash as createHash3 } from "node:crypto";
+import { existsSync as existsSync9, mkdirSync as mkdirSync4, readFileSync as readFileSync8, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join9 } from "node:path";
+
+// src/benchmark/search-existing/dataset.ts
+import { existsSync as existsSync6, readdirSync as readdirSync3, statSync as statSync2 } from "node:fs";
+import { join as join7, resolve as resolve3 } from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+function resolveFixtureRoot() {
+  const here = fileURLToPath2(new URL(".", import.meta.url));
+  const candidates = [
+    resolve3(here, "../../../benchmark-fixtures/search-existing"),
+    // dist/ bundle layout: dist/<bundle>.js → one level less deep.
+    resolve3(here, "../../benchmark-fixtures/search-existing"),
+    resolve3(here, "../benchmark-fixtures/search-existing")
+  ];
+  for (const c of candidates) {
+    if (existsSync6(c) && statSync2(c).isDirectory()) return c;
+  }
+  throw new Error(
+    `search-existing fixture root not found near ${here} \u2014 looked at:
+` + candidates.map((c) => `  ${c}`).join("\n")
+  );
+}
+function listFixtureFiles(root = resolveFixtureRoot()) {
+  const out = [];
+  const walk = (dir, rel) => {
+    for (const entry of readdirSync3(dir, { withFileTypes: true })) {
+      const abs2 = join7(dir, entry.name);
+      const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(abs2, relPath);
+      } else if (entry.isFile() && entry.name !== "tsconfig.json") {
+        out.push(relPath);
+      }
+    }
+  };
+  walk(root, "");
+  return out.sort();
+}
+var SEARCH_EXISTING_CASES = [
+  {
+    id: "retry-backoff-ts",
+    featureDescription: "Retry a failing async operation with exponential backoff between attempts, rethrowing the last error when the attempts are exhausted.",
+    expectedYes: ["src/http/retry.ts", "src/http/client.ts"],
+    extensions: [".ts"],
+    rationale: "retry.ts is the canonical wrapper; client.ts re-implements the same semantics inline (while-loop, doubling delay) \u2014 the EXHAUSTIVE rule requires both. No other .ts fixture retries anything."
+  },
+  {
+    id: "retry-backoff-cross-language",
+    featureDescription: "Retry a failing operation with exponential backoff between attempts, rethrowing the last error when the attempts are exhausted.",
+    expectedYes: [
+      "src/http/retry.ts",
+      "src/http/client.ts",
+      "src/legacy/retry_old.py"
+    ],
+    extensions: [".ts", ".py"],
+    rationale: "Same truth as retry-backoff-ts plus the Python port \u2014 semantic equivalence must cross languages when .py is scanned."
+  },
+  {
+    id: "retry-self-reference-exclusion",
+    featureDescription: "Retry a failing async operation with exponential backoff between attempts, rethrowing the last error when the attempts are exhausted.",
+    expectedYes: ["src/http/client.ts"],
+    extensions: [".ts"],
+    sourceFiles: ["src/http/retry.ts"],
+    rationale: "retry.ts is supplied as the PR reference (source_files) so the pipeline excludes it from the scan; the only remaining duplicate is client.ts."
+  },
+  {
+    id: "lru-cache",
+    featureDescription: "An in-memory least-recently-used (LRU) cache with a maximum size that evicts the least recently used entry when full.",
+    expectedYes: ["src/cache/lru.ts"],
+    extensions: [".ts"],
+    rationale: "memo.ts is unbounded with no eviction policy at all, so it cannot be the LRU feature nor trivially composed into one (the fixture headers encode this disambiguation)."
+  },
+  {
+    id: "memoization",
+    featureDescription: "Wrap a pure function so repeated calls with the same arguments return a cached result instead of recomputing, keyed by the call arguments.",
+    expectedYes: ["src/cache/memo.ts"],
+    extensions: [".ts"],
+    rationale: "lru.ts is a bare data structure with get/set only \u2014 no get-or-compute wrapper exists, so memoizing with it still requires writing the whole wrap-and-key logic (not 'trivially composed')."
+  },
+  {
+    id: "slugify",
+    featureDescription: "Generate a URL-safe slug from an arbitrary string: lowercase it, strip accents, and collapse non-alphanumeric runs into single hyphens.",
+    expectedYes: ["src/util/slug.ts"],
+    extensions: [".ts"],
+    rationale: "Only slug.ts manipulates strings into slugs."
+  },
+  {
+    id: "debounce",
+    featureDescription: "A debounce utility that delays invoking a function until a quiet period has elapsed, where only the last call within the window executes.",
+    expectedYes: ["src/util/debounce.ts"],
+    extensions: [".ts"],
+    rationale: "Only debounce.ts schedules/cancels delayed invocations."
+  },
+  {
+    id: "hmac-token",
+    featureDescription: "Create and verify HMAC-signed tokens, with constant-time signature comparison on the verify path.",
+    expectedYes: ["src/auth/token.ts"],
+    extensions: [".ts"],
+    rationale: "Only token.ts touches crypto/signing."
+  },
+  {
+    id: "leveled-logger",
+    featureDescription: "A leveled logger (debug/info/warn/error) that drops messages below a configurable minimum level.",
+    expectedYes: ["src/log/logger.ts"],
+    extensions: [".ts"],
+    rationale: "Only logger.ts implements log levels and filtering."
+  },
+  {
+    id: "absent-feature-websocket-pool",
+    featureDescription: "A WebSocket connection pool that reuses open sockets per origin and enforces a maximum number of concurrent connections.",
+    expectedYes: [],
+    extensions: [".ts"],
+    rationale: "Nothing in the fixture opens sockets \u2014 every YES is a false positive. Measures hallucination resistance."
+  }
+];
+
+// src/benchmark/search-existing/runner.ts
+import { resolve as resolve6 } from "node:path";
+
+// src/grouping.ts
+import { statSync as statSync3 } from "node:fs";
+import { basename, dirname as dirname2, extname } from "node:path";
+var GROUP_HEADER_RE = /^---GROUP:(.+)---$/;
+var GROUP_FOOTER_RE = /^---\/GROUP:(.+)---$/;
+var AUTO_GROUP_DEFAULT_MAX_BYTES = 1024 * 1024;
+function sanitizeGroupId(raw) {
+  const cleaned = raw.replace(/[^a-zA-Z0-9._-]/g, "_");
+  return cleaned.length > 0 ? cleaned.slice(0, 60) : "auto";
+}
+function uniqueGroupId(raw, counts) {
+  let n = counts.get(raw) ?? 0;
+  while (true) {
+    const candidate = n === 0 ? raw : `${raw}_${n + 1}`;
+    n += 1;
+    if (!counts.has(candidate)) {
+      counts.set(raw, n);
+      counts.set(candidate, 1);
+      return candidate;
+    }
+  }
+}
+function statFileForGrouping(p) {
+  const parent = dirname2(p);
+  const extWithDot = extname(p);
+  const ext = extWithDot ? extWithDot.slice(1).toLowerCase() : "noext";
+  const base = basename(p);
+  const stem = base.slice(0, base.length - extWithDot.length);
+  const st = statSync3(p);
+  const size = st.isFile() ? st.size : 0;
+  return { path: p, parent, ext, base, stem, size };
+}
+function splitBucketBySize(bucket, maxBytes) {
+  const sorted = [...bucket].sort((a, b) => b.size - a.size);
+  const parts = [];
+  const partTotals = [];
+  for (const fi of sorted) {
+    let placed = false;
+    for (let i = 0; i < parts.length; i++) {
+      if (partTotals[i] + fi.size <= maxBytes) {
+        parts[i].push(fi);
+        partTotals[i] += fi.size;
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      parts.push([fi]);
+      partTotals.push(fi.size);
+    }
+  }
+  return parts;
+}
+function splitBucketByBasenamePrefix(bucket, maxBytes) {
+  if (bucket.length < 2) return [bucket];
+  const byPrefix = /* @__PURE__ */ new Map();
+  for (const fi of bucket) {
+    const prefix = fi.stem.slice(0, 3).toLowerCase() || "zz";
+    const arr = byPrefix.get(prefix) ?? [];
+    arr.push(fi);
+    byPrefix.set(prefix, arr);
+  }
+  if (byPrefix.size <= 1) return splitBucketBySize(bucket, maxBytes);
+  const out = [];
+  for (const arr of byPrefix.values()) {
+    const total = arr.reduce((s, f) => s + f.size, 0);
+    if (total <= maxBytes) out.push(arr);
+    else out.push(...splitBucketBySize(arr, maxBytes));
+  }
+  return out;
+}
+function autoGroupByHeuristic(paths, maxGroupBytes = AUTO_GROUP_DEFAULT_MAX_BYTES) {
+  const filtered = paths.filter(
+    (p) => typeof p === "string" && !GROUP_HEADER_RE.test(p) && !GROUP_FOOTER_RE.test(p)
+  );
+  if (filtered.length === 0) return [];
+  const primaryBuckets = /* @__PURE__ */ new Map();
+  for (const p of filtered) {
+    const fi = statFileForGrouping(p);
+    const key = `${fi.parent}||${fi.ext}`;
+    const bucket = primaryBuckets.get(key) ?? [];
+    bucket.push(fi);
+    primaryBuckets.set(key, bucket);
+  }
+  const out = [];
+  const idCounts = /* @__PURE__ */ new Map();
+  for (const [, bucket] of primaryBuckets) {
+    const sample = bucket[0];
+    const lastDir = basename(sample.parent) || "root";
+    const rawIdBase = `${lastDir}-${sample.ext}`;
+    const totalSize = bucket.reduce((s, f) => s + f.size, 0);
+    if (totalSize <= maxGroupBytes) {
+      const id = uniqueGroupId(sanitizeGroupId(rawIdBase), idCounts);
+      out.push({ id, files: bucket.map((f) => f.path) });
+      continue;
+    }
+    const parts = splitBucketByBasenamePrefix(bucket, maxGroupBytes);
+    if (parts.length === 1) {
+      const fallback = splitBucketBySize(parts[0], maxGroupBytes);
+      for (let i = 0; i < fallback.length; i++) {
+        const id = uniqueGroupId(
+          sanitizeGroupId(`${rawIdBase}-p${i + 1}`),
+          idCounts
+        );
+        out.push({ id, files: fallback[i].map((f) => f.path) });
+      }
+      continue;
+    }
+    for (let i = 0; i < parts.length; i++) {
+      const suffix = parts.length > 1 ? `-p${i + 1}` : "";
+      const id = uniqueGroupId(
+        sanitizeGroupId(`${rawIdBase}${suffix}`),
+        idCounts
+      );
+      out.push({ id, files: parts[i].map((f) => f.path) });
+    }
+  }
+  return out;
+}
+function isPathSuffix(haystack, needle) {
+  if (haystack === needle) return true;
+  if (!haystack.endsWith(needle)) return false;
+  const boundary = haystack[haystack.length - needle.length - 1];
+  return boundary === "/" || boundary === "\\";
+}
+function splitPerFileSections(content, expectedPaths) {
+  const result = /* @__PURE__ */ new Map();
+  if (!content || !expectedPaths || expectedPaths.length === 0) return result;
+  const headerRe = /^\s*#{1,6}\s*File:\s*[`"']?(.+?)[`"']?\s*$/gm;
+  const headers = [];
+  let m;
+  while ((m = headerRe.exec(content)) !== null) {
+    let pathRaw = m[1].trim();
+    const inlineHashIdx = pathRaw.indexOf("##");
+    if (inlineHashIdx >= 0) {
+      pathRaw = pathRaw.slice(0, inlineHashIdx).trim();
+    }
+    if (!pathRaw) continue;
+    headers.push({
+      pathRaw,
+      start: m.index,
+      bodyStart: m.index + m[0].length
+    });
+  }
+  if (headers.length === 0) return result;
+  const byExact = /* @__PURE__ */ new Map();
+  const byBasename = /* @__PURE__ */ new Map();
+  for (const fp of expectedPaths) {
+    byExact.set(fp, fp);
+    const base = basename(fp) || fp;
+    const bucket = byBasename.get(base) ?? [];
+    bucket.push(fp);
+    byBasename.set(base, bucket);
+  }
+  for (let i = 0; i < headers.length; i++) {
+    const h = headers[i];
+    const bodyEnd = i + 1 < headers.length ? headers[i + 1].start : content.length;
+    let body = content.slice(h.bodyStart, bodyEnd);
+    body = body.replace(/\n\s*---\s*$/, "").trim();
+    let matched;
+    if (byExact.has(h.pathRaw)) {
+      matched = h.pathRaw;
+    } else {
+      const headerBase = basename(h.pathRaw) || h.pathRaw;
+      const basenameBucket = byBasename.get(headerBase);
+      if (basenameBucket && basenameBucket.length === 1) {
+        matched = basenameBucket[0];
+      } else {
+        const suffixMatches = [];
+        for (const fp of expectedPaths) {
+          if (isPathSuffix(h.pathRaw, fp) || isPathSuffix(fp, h.pathRaw)) {
+            suffixMatches.push(fp);
+          }
+        }
+        if (suffixMatches.length === 1) {
+          matched = suffixMatches[0];
+        }
+      }
+    }
+    if (matched && !result.has(matched)) {
+      result.set(matched, body);
+    }
+  }
+  return result;
+}
+
+// src/search-existing/core.ts
+import { randomUUID } from "node:crypto";
+import { existsSync as existsSync8, statSync as statSync5, realpathSync as realpathSync3 } from "node:fs";
+import { resolve as resolve5 } from "node:path";
+
+// src/scan-pipeline.ts
+import {
+  readFileSync as readFileSync7,
+  existsSync as existsSync7,
+  statSync as statSync4,
+  lstatSync,
+  readdirSync as readdirSync4,
+  realpathSync as realpathSync2
+} from "node:fs";
+import { extname as extname2, join as join8, basename as basename2, dirname as dirname3, resolve as resolve4, sep } from "node:path";
+import { homedir as homedir2 } from "node:os";
+import { spawnSync } from "node:child_process";
+var EXT_TO_LANG = {
+  ".ts": "typescript",
+  ".tsx": "typescript",
+  ".mts": "typescript",
+  ".cts": "typescript",
+  ".js": "javascript",
+  ".jsx": "javascript",
+  ".mjs": "javascript",
+  ".cjs": "javascript",
+  ".py": "python",
+  ".rs": "rust",
+  ".go": "go",
+  ".java": "java",
+  ".kt": "kotlin",
+  ".c": "c",
+  ".h": "c",
+  ".cpp": "cpp",
+  ".hpp": "cpp",
+  ".cc": "cpp",
+  ".cs": "csharp",
+  ".rb": "ruby",
+  ".php": "php",
+  ".swift": "swift",
+  ".sh": "bash",
+  ".bash": "bash",
+  ".zsh": "zsh",
+  ".fish": "fish",
+  ".sql": "sql",
+  ".html": "html",
+  ".css": "css",
+  ".scss": "scss",
+  ".less": "less",
+  ".json": "json",
+  ".yaml": "yaml",
+  ".yml": "yaml",
+  ".toml": "toml",
+  ".xml": "xml",
+  ".md": "markdown",
+  ".mdx": "mdx",
+  ".tex": "latex",
+  ".lua": "lua",
+  ".r": "r",
+  ".R": "r",
+  ".dart": "dart",
+  ".ex": "elixir",
+  ".exs": "elixir",
+  ".zig": "zig",
+  ".nim": "nim",
+  ".jl": "julia",
+  ".sol": "solidity",
+  ".vue": "vue",
+  ".svelte": "svelte"
+};
+var SHEBANG_TO_LANG = {
+  python: "python",
+  python3: "python",
+  node: "javascript",
+  bash: "bash",
+  sh: "bash",
+  zsh: "zsh",
+  ruby: "ruby",
+  perl: "perl",
+  php: "php",
+  lua: "lua"
+};
+function detectLang(filePath) {
+  const ext = extname2(filePath).toLowerCase();
+  if (EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
+  try {
+    const head = readFileSync7(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
+    const shebang = head.match(/^#!\s*(?:\/usr\/bin\/env\s+)?(\S+)/);
+    if (shebang) {
+      const bin = basename2(shebang[1]);
+      if (SHEBANG_TO_LANG[bin]) return SHEBANG_TO_LANG[bin];
+    }
+  } catch {
+  }
+  return "text";
+}
+function fenceBackticks(content) {
+  let maxRun = 0;
+  let current = 0;
+  for (const ch of content) {
+    if (ch === "`") {
+      current++;
+      if (current > maxRun) maxRun = current;
+    } else {
+      current = 0;
+    }
+  }
+  const needed = Math.max(4, maxRun + 1);
+  return "`".repeat(needed);
+}
+function assertFileExists(filePath) {
+  if (!existsSync7(filePath)) {
+    throw new Error(`File not found: ${filePath}`);
+  }
+}
+function sanitizeInputPath(filePath) {
+  const resolved = resolve4(filePath);
+  const realpathSafe = (p) => {
+    try {
+      return realpathSync2(p);
+    } catch {
+      return p;
+    }
+  };
+  const cwdReal = realpathSafe(resolve4(process.cwd()));
+  const homeReal = realpathSafe(
+    resolve4(process.env.HOME || process.env.USERPROFILE || homedir2())
+  );
+  const tmpReal = realpathSafe(resolve4("/tmp"));
+  const resolvedReal = (() => {
+    try {
+      return realpathSync2(resolved);
+    } catch {
+      return resolved;
+    }
+  })();
+  const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep);
+  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
+    throw new Error(
+      `Path traversal blocked: ${filePath} resolves outside allowed directories`
+    );
+  }
+  try {
+    if (lstatSync(resolved).isSymbolicLink()) {
+      throw new Error(`Symlink rejected for security: ${filePath}`);
+    }
+  } catch (e) {
+    if (e.code === "ENOENT") return resolved;
+    throw e;
+  }
+  return resolved;
+}
+var DEFAULT_MAX_PAYLOAD_BYTES = 400 * 1024;
+function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexRedact, tagPrefix = "") {
+  const rawLimit = maxBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
+  const limit = !Number.isFinite(rawLimit) || rawLimit <= 0 ? DEFAULT_MAX_PAYLOAD_BYTES : rawLimit;
+  const safePath = sanitizeInputPath(filePath);
+  assertFileExists(safePath);
+  const stats = statSync4(safePath);
+  if (stats.size > limit) {
+    throw new Error(
+      `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
+    );
+  }
+  const raw = readFileSync7(safePath);
+  if (raw.length > limit) {
+    throw new Error(
+      `File too large after read (${(raw.length / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
+    );
+  }
+  const scanLen = Math.min(raw.length, 65536);
+  for (let i = 0; i < scanLen; i++) {
+    if (raw[i] === 0) throw new Error(`File appears to be binary: ${filePath}`);
+  }
+  let content = raw.toString("utf-8");
+  if (content.length === 0) {
+    content = `(empty file \u2014 0 bytes)`;
+  }
+  if (redact) {
+    const result = redactSecrets2(content);
+    content = result.redacted;
+  }
+  if (regexRedact) {
+    const result = applyRegexRedaction(content, regexRedact);
+    content = result.redacted;
+  }
+  const lang = langOverride || detectLang(filePath);
+  const fence = fenceBackticks(content);
+  const nameTag = `${tagPrefix}filename`;
+  const contentTag = `${tagPrefix}file-content`;
+  return `<${nameTag}>
+${filePath}
+</${nameTag}>
+<${contentTag}>
+${fence}${lang}
+${content}
+${fence}
+</${contentTag}>`;
+}
+var BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".bmp",
+  ".ico",
+  ".webp",
+  ".avif",
+  ".tiff",
+  ".tif",
+  ".mp3",
+  ".mp4",
+  ".wav",
+  ".ogg",
+  ".webm",
+  ".avi",
+  ".mov",
+  ".flac",
+  ".aac",
+  ".m4a",
+  ".pdf",
+  ".doc",
+  ".docx",
+  ".xls",
+  ".xlsx",
+  ".ppt",
+  ".pptx",
+  ".zip",
+  ".tar",
+  ".gz",
+  ".bz2",
+  ".xz",
+  ".7z",
+  ".rar",
+  ".dmg",
+  ".iso",
+  ".jar",
+  ".exe",
+  ".dll",
+  ".so",
+  ".dylib",
+  ".o",
+  ".a",
+  ".lib",
+  ".class",
+  ".pyc",
+  ".pyo",
+  ".wasm",
+  ".bin",
+  ".dat",
+  ".db",
+  ".sqlite",
+  ".sqlite3",
+  ".ttf",
+  ".otf",
+  ".woff",
+  ".woff2",
+  ".eot",
+  ".DS_Store",
+  ".lock"
+]);
+function isBinaryExtension(filePath) {
+  return BINARY_EXTENSIONS.has(extname2(filePath).toLowerCase()) || basename2(filePath) === ".DS_Store";
+}
+var SECRET_PATTERNS = [
+  [/AKIA[0-9A-Z]{16}/g, "AWS_KEY"],
+  [/(?:sk|pk)[-_](?:live|test|proj)[-_][A-Za-z0-9]{20,}/g, "API_KEY"],
+  [/ghp_[A-Za-z0-9]{36}/g, "GITHUB_PAT"],
+  [/ghr_[A-Za-z0-9]{36}/g, "GITHUB_TOKEN"],
+  [/gho_[A-Za-z0-9]{36}/g, "GITHUB_OAUTH"],
+  [/github_pat_[A-Za-z0-9_]{82}/g, "GITHUB_PAT"],
+  [/glpat-[A-Za-z0-9\-_]{20,}/g, "GITLAB_TOKEN"],
+  [/xox[bpsar]-[A-Za-z0-9-]+/g, "SLACK_TOKEN"],
+  [/Bearer\s+[A-Za-z0-9._\-/+=]{20,}/g, "BEARER_TOKEN"],
+  // Key-value patterns in env/config files (must have at least 8 chars in the value)
+  [
+    // Common env-var-style secret names. Extended in v9.9.0 from a hand-
+    // curated list to a hybrid approach: explicit names for the most-common
+    // OAuth / vendor key shapes AND a wildcard for any *_KEY / *_TOKEN /
+    // *_SECRET / *_PASSWORD. Wildcards intentionally catch JWT_SECRET,
+    // LM_API_TOKEN (the plugin's own preset!), STRIPE_SECRET_KEY,
+    // SUPABASE_SERVICE_KEY, SLACK_BOT_TOKEN, and similar without needing
+    // per-vendor patches.
+    /(?:^|\n)\s*(?:(?:PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|AUTH|AUTH_TOKEN|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|DB_PASSWORD|DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|AWS_SESSION_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITLAB_TOKEN|BITBUCKET_TOKEN|NPM_TOKEN|DOCKER_PASSWORD|HF_TOKEN|HUGGINGFACE_TOKEN|LM_API_TOKEN|VLLM_API_KEY|JWT_SECRET|JWT_PRIVATE_KEY|STRIPE_SECRET_KEY|STRIPE_API_KEY|SUPABASE_SERVICE_KEY|SUPABASE_ANON_KEY|FIREBASE_TOKEN|SLACK_BOT_TOKEN|SLACK_TOKEN|DISCORD_TOKEN|TELEGRAM_BOT_TOKEN|TWILIO_AUTH_TOKEN|SENDGRID_API_KEY|MAILGUN_API_KEY|SENTRY_AUTH_TOKEN|PRIVATE)|[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_APIKEY|_API_KEY|_AUTH))\s*[=:]\s*['"]?([^\s'"#\n]{8,})/gim,
+    "ENV_SECRET"
+  ],
+  // H7: Multi-line secret blocks (PEM private keys, certificates)
+  [
+    /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----/g,
+    "PEM_BLOCK"
+  ]
+];
+function scanForSecrets(content) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const [pattern, label] of SECRET_PATTERNS) {
+    pattern.lastIndex = 0;
+    const matches = content.match(pattern);
+    if (matches && matches.length > 0) {
+      counts.set(label, (counts.get(label) ?? 0) + matches.length);
+    }
+  }
+  const details = Array.from(counts.entries()).map(([label, count]) => ({
+    label,
+    count
+  }));
+  return { found: details.length > 0, details };
+}
+function scanFilesForSecrets(filePaths) {
+  const allDetails = [];
+  for (const fp of filePaths) {
+    if (!existsSync7(fp)) continue;
+    try {
+      const content = readFileSync7(fp, "utf-8");
+      const scan = scanForSecrets(content);
+      if (scan.found) {
+        for (const d of scan.details) {
+          allDetails.push({ file: fp, ...d });
+        }
+      }
+    } catch {
+    }
+  }
+  if (allDetails.length === 0) return { found: false, report: "" };
+  const lines = [
+    "SECRETS DETECTED \u2014 operation aborted.",
+    "",
+    "Best practice: Move secrets to .env files (gitignored) and reference them via environment variables.",
+    "Claude Code cannot read .env files, ensuring secrets stay out of LLM context.",
+    "",
+    "Findings:"
+  ];
+  for (const d of allDetails) {
+    lines.push(`  ${d.file}: ${d.count}\xD7 ${d.label}`);
+  }
+  return { found: true, report: lines.join("\n") };
+}
+function redactSecrets2(content) {
+  let result = content;
+  let count = 0;
+  for (const [pattern, label] of SECRET_PATTERNS) {
+    pattern.lastIndex = 0;
+    result = result.replace(pattern, () => {
+      count++;
+      return `[REDACTED:${label}]`;
+    });
+  }
+  return { redacted: result, count };
+}
+function parseRedactRegex(raw) {
+  if (!raw || typeof raw !== "string") return null;
+  const pattern = raw.trim();
+  if (!pattern) {
+    throw new Error("Invalid redact_regex: pattern must not be empty.");
+  }
+  if (/\([^)]*[+*][^)]*\)[+*]/.test(pattern)) {
+    throw new Error(
+      `Invalid redact_regex: pattern contains nested quantifiers (e.g. (a+)+) that cause catastrophic backtracking.
+
+Pattern: ${pattern}
+
+Simplify the quantifiers to avoid ReDoS.`
+    );
+  }
+  try {
+    const regex = new RegExp(pattern, "g");
+    return { regex, patternStr: pattern };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Invalid redact_regex pattern: ${msg}
+
+Pattern received: ${pattern}
+
+Ensure it is a valid JavaScript regular expression.`,
+      { cause: err }
+    );
+  }
+}
+function applyRegexRedaction(content, opts) {
+  opts.regex.lastIndex = 0;
+  let count = 0;
+  const MAX_REPLACEMENTS = 1e5;
+  const redacted = content.replace(opts.regex, (match) => {
+    if (++count > MAX_REPLACEMENTS) return match;
+    const hasLetters = /[a-zA-Z]/.test(match);
+    return hasLetters ? "[REDACTED:USER_PATTERN]" : "0".repeat(match.length);
+  });
+  return { redacted, count: Math.min(count, MAX_REPLACEMENTS) };
+}
+function resolvePrompt(instructions, instructionsFilesPaths) {
+  let prompt = instructions || "";
+  if (instructionsFilesPaths) {
+    const paths = Array.isArray(instructionsFilesPaths) ? instructionsFilesPaths : [instructionsFilesPaths];
+    for (const fp of paths) {
+      assertFileExists(fp);
+      const content = readFileSync7(fp, "utf-8");
+      prompt = prompt ? `${prompt}
+
+${content}` : content;
+    }
+  }
+  return prompt;
+}
+function estimateTokens(text) {
+  return Math.ceil(text.length / 4);
+}
+function readAndGroupFiles(filePaths, promptBytes, redact, budgetBytes, regexRedact) {
+  const totalBudget = Math.max(
+    10 * 1024,
+    budgetBytes ?? DEFAULT_MAX_PAYLOAD_BYTES
+  );
+  const availableForFiles = Math.max(0, totalBudget - promptBytes);
+  const skipped = [];
+  const fileData = [];
+  for (const fp of filePaths) {
+    try {
+      const stats = statSync4(fp);
+      if (stats.size > totalBudget) {
+        skipped.push(fp);
+        continue;
+      }
+      const block = readFileAsCodeBlock(fp, void 0, redact, totalBudget, regexRedact);
+      if (block.length > availableForFiles) {
+        skipped.push(fp);
+        continue;
+      }
+      fileData.push({ path: fp, block, tokens: estimateTokens(block) });
+    } catch {
+      skipped.push(fp);
+    }
+  }
+  if (fileData.length === 0) {
+    return { groups: [], autoBatched: false, skipped };
+  }
+  const totalFileBytes = fileData.reduce((sum, fd) => sum + fd.block.length, 0);
+  if (totalFileBytes <= availableForFiles) {
+    return { groups: [fileData], autoBatched: false, skipped };
+  }
+  const sorted = [...fileData].sort((a, b) => b.block.length - a.block.length);
+  const bins = [];
+  for (const fd of sorted) {
+    let placed = false;
+    for (const bin of bins) {
+      if (bin.used + fd.block.length <= availableForFiles) {
+        bin.items.push(fd);
+        bin.used += fd.block.length;
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      bins.push({ items: [fd], used: fd.block.length });
+    }
+  }
+  const groups = bins.map((bin) => bin.items);
+  return { groups, autoBatched: groups.length > 1, skipped };
+}
+function resolveAnswerMode(raw, defaultMode) {
+  if (raw === 0 || raw === 1 || raw === 2) return raw;
+  return defaultMode;
+}
+function buildPerFileSectionPrompt(filePaths) {
+  if (filePaths.length <= 1) return "";
+  return "\n\nOUTPUT FORMAT: You are receiving " + filePaths.length + " input files. Produce a SEPARATE report section for each file, using this exact format:\n\n## File: <absolute-file-path>\n\n<your analysis/report for this file>\n\n---\n\nProduce exactly " + filePaths.length + " sections, one for each input file, in the order they appear. Do NOT merge or combine sections. Each file must have its own complete, independent section.\n";
+}
+var WALK_DEFAULT_EXCLUDE = /* @__PURE__ */ new Set([
+  // Version control
+  ".git",
+  // Package managers / dependencies
+  "node_modules",
+  "bower_components",
+  ".pnpm-store",
+  // Python
+  "__pycache__",
+  ".venv",
+  "venv",
+  ".tox",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".eggs",
+  "*.egg-info",
+  // Build outputs
+  "dist",
+  "build",
+  "out",
+  ".next",
+  ".nuxt",
+  ".output",
+  "target",
+  // Caches / temp
+  ".cache",
+  ".turbo",
+  "coverage",
+  "tmp",
+  "temp",
+  ".temp",
+  ".tmp",
+  // IDE / editor
+  ".idea",
+  ".vscode",
+  // Other
+  ".gradle",
+  ".cargo",
+  ".nx",
+  "vendor"
+]);
+var FORBIDDEN_GIT_CWD_PREFIXES = [
+  "/etc",
+  "/usr",
+  "/bin",
+  "/sbin",
+  "/sys",
+  "/proc",
+  "/dev",
+  "/var/log",
+  "/var/db",
+  "/Library",
+  "/System"
+];
+function validateGitCwd(dirPath) {
+  if (!dirPath || typeof dirPath !== "string") {
+    throw new Error("validateGitCwd: empty cwd not allowed");
+  }
+  if (dirPath.includes("..")) {
+    const trimmed = resolve4(dirPath);
+    if (trimmed.includes("..")) {
+      throw new Error(`validateGitCwd: path contains parent refs: ${dirPath}`);
+    }
+  }
+  const resolved = resolve4(dirPath);
+  const realpathSafe = (p) => {
+    try {
+      return realpathSync2(p);
+    } catch {
+      return p;
+    }
+  };
+  const resolvedReal = realpathSafe(resolved);
+  if (resolvedReal === "/" || resolvedReal === "") {
+    throw new Error(`validateGitCwd: filesystem root rejected: ${dirPath}`);
+  }
+  for (const sys of FORBIDDEN_GIT_CWD_PREFIXES) {
+    const sysReal = realpathSafe(sys);
+    if (resolvedReal === sysReal || resolvedReal.startsWith(sysReal + sep)) {
+      throw new Error(`validateGitCwd: system path rejected: ${dirPath}`);
+    }
+  }
+  const cwdReal = realpathSafe(resolve4(process.cwd()));
+  const homeReal = realpathSafe(
+    resolve4(process.env.HOME || process.env.USERPROFILE || homedir2())
+  );
+  const tmpReal = realpathSafe(resolve4("/tmp"));
+  const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep);
+  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
+    throw new Error(
+      `validateGitCwd: ${dirPath} resolves outside allowed roots (cwd/$HOME/tmp)`
+    );
+  }
+}
+var _gitOnPath = void 0;
+function ensureGitOnPath() {
+  if (_gitOnPath !== void 0) return _gitOnPath;
+  const probe = spawnSync("git", ["--version"], {
+    encoding: "utf-8",
+    timeout: 2e3,
+    killSignal: "SIGKILL"
+  });
+  _gitOnPath = probe.status === 0;
+  if (!_gitOnPath) {
+    process.stderr.write(
+      "[llm-externalizer] git not found on PATH \u2014 falling back to filesystem walk for directory scans\n"
+    );
+  }
+  return _gitOnPath;
+}
+function lstatSyncRetry(p) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return lstatSync(p);
+    } catch (err) {
+      const code = err.code;
+      if (code === "EAGAIN" || code === "EBUSY") {
+        const deadline = Date.now() + 50;
+        while (Date.now() < deadline) {
+        }
+        continue;
+      }
+      return null;
+    }
+  }
+  return null;
+}
+function gitLsFilesMultiRepo(dirPath, recursive) {
+  validateGitCwd(dirPath);
+  if (!ensureGitOnPath()) return null;
+  const GIT_TIMEOUT_MS = 5e3;
+  const gitOpts = {
+    encoding: "utf-8",
+    timeout: GIT_TIMEOUT_MS,
+    killSignal: "SIGKILL"
+  };
+  const allFiles = /* @__PURE__ */ new Set();
+  const topLevelResult = spawnSync(
+    "git",
+    ["rev-parse", "--show-toplevel"],
+    { cwd: dirPath, ...gitOpts }
+  );
+  const isInGitRepo = topLevelResult.status === 0 && topLevelResult.stdout.trim();
+  if (isInGitRepo) {
+    const trackedResult = spawnSync(
+      "git",
+      ["ls-files", "--cached"],
+      { cwd: dirPath, ...gitOpts }
+    );
+    if (trackedResult.status === 0 && trackedResult.stdout) {
+      for (const relPath of trackedResult.stdout.split("\n")) {
+        if (!relPath.trim()) continue;
+        allFiles.add(join8(dirPath, relPath));
+      }
+    }
+    const untrackedResult = spawnSync(
+      "git",
+      ["ls-files", "--others", "--exclude-standard"],
+      { cwd: dirPath, ...gitOpts }
+    );
+    if (untrackedResult.status === 0 && untrackedResult.stdout) {
+      for (const relPath of untrackedResult.stdout.split("\n")) {
+        if (!relPath.trim()) continue;
+        allFiles.add(join8(dirPath, relPath));
+      }
+    }
+  }
+  if (recursive) {
+    let findNestedGitRoots2 = function(dir, depth) {
+      if (depth > 10) return;
+      let entries;
+      try {
+        entries = readdirSync4(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (entry.name === ".git" || entry.name === "node_modules") continue;
+        if (entry.name.startsWith(".")) continue;
+        const subDir = join8(dir, entry.name);
+        const gitDir = join8(subDir, ".git");
+        const gitStat = lstatSyncRetry(gitDir);
+        const gitDirIsDir = gitStat ? gitStat.isDirectory() : false;
+        if (gitDirIsDir) {
+          nestedGitRoots.push(subDir);
+          continue;
+        }
+        findNestedGitRoots2(subDir, depth + 1);
+      }
+    };
+    var findNestedGitRoots = findNestedGitRoots2;
+    const nestedGitRoots = [];
+    findNestedGitRoots2(dirPath, 0);
+    for (const nestedRoot of nestedGitRoots) {
+      try {
+        validateGitCwd(nestedRoot);
+      } catch {
+        continue;
+      }
+      const nestedResult = spawnSync(
+        "git",
+        ["ls-files", "--cached", "--others", "--exclude-standard"],
+        { cwd: nestedRoot, ...gitOpts }
+      );
+      if (nestedResult.status === 0 && nestedResult.stdout) {
+        for (const relPath of nestedResult.stdout.split("\n")) {
+          if (!relPath.trim()) continue;
+          allFiles.add(join8(nestedRoot, relPath));
+        }
+      }
+    }
+  }
+  if (!isInGitRepo) return null;
+  return [...allFiles];
+}
+function walkDir(dirPath, options) {
+  const maxFiles = options?.maxFiles ?? 1e4;
+  const extensions = options?.extensions;
+  const skipBinary = !options?.includeBinary;
+  const recursive = options?.recursive !== false;
+  const followSymlinks = options?.followSymlinks !== false;
+  if (options?.useGitignore) {
+    const gitResults = gitLsFilesMultiRepo(dirPath, recursive);
+    if (gitResults !== null) {
+      const extraExcludeSet = new Set(options?.exclude ?? []);
+      const results2 = [];
+      for (const fullPath of gitResults) {
+        if (results2.length >= maxFiles) break;
+        if (skipBinary && isBinaryExtension(fullPath)) continue;
+        if (extensions) {
+          const ext = extname2(fullPath).toLowerCase();
+          if (!extensions.includes(ext)) continue;
+        }
+        if (extraExcludeSet.size > 0) {
+          const rel = fullPath.startsWith(dirPath) ? fullPath.slice(dirPath.length) : fullPath;
+          const segments = rel.split("/").filter((s) => s.length > 0);
+          const dirSegments = segments.slice(0, -1);
+          if (dirSegments.some((seg) => extraExcludeSet.has(seg))) continue;
+        }
+        results2.push(fullPath);
+      }
+      return results2;
+    }
+    process.stderr.write(
+      `[llm-externalizer] No git repo found in ${dirPath}, falling back to manual walk
+`
+    );
+  }
+  const results = [];
+  const extraExclude = options?.exclude ?? [];
+  const exclude = /* @__PURE__ */ new Set([...WALK_DEFAULT_EXCLUDE, ...extraExclude]);
+  const visitedPaths = /* @__PURE__ */ new Set();
+  function recurse(dir) {
+    if (results.length >= maxFiles) return;
+    let entries;
+    try {
+      entries = readdirSync4(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (results.length >= maxFiles) return;
+      const fullPath = join8(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        if (!followSymlinks) continue;
+        try {
+          const realPath = realpathSync2(fullPath);
+          if (visitedPaths.has(realPath)) continue;
+          visitedPaths.add(realPath);
+          const targetStat = statSync4(realPath);
+          if (targetStat.isDirectory() && recursive) {
+            if (!entry.name.startsWith(".") && !exclude.has(entry.name)) {
+              recurse(fullPath);
+            }
+          } else if (targetStat.isFile()) {
+            if (skipBinary && isBinaryExtension(fullPath)) continue;
+            if (extensions) {
+              const ext = extname2(entry.name).toLowerCase();
+              if (!extensions.includes(ext)) continue;
+            }
+            results.push(fullPath);
+          }
+        } catch {
+          continue;
+        }
+        continue;
+      }
+      if (entry.isDirectory()) {
+        if (!recursive) continue;
+        if (entry.name === ".git" || entry.name === ".svn" || entry.name === ".hg" || exclude.has(entry.name)) continue;
+        if (entry.name.startsWith(".")) continue;
+        try {
+          const dirRealPath = realpathSync2(fullPath);
+          if (visitedPaths.has(dirRealPath)) continue;
+          visitedPaths.add(dirRealPath);
+        } catch {
+          continue;
+        }
+        recurse(fullPath);
+      } else if (entry.isFile()) {
+        if (skipBinary && isBinaryExtension(fullPath)) continue;
+        if (extensions) {
+          const ext = extname2(entry.name).toLowerCase();
+          if (!extensions.includes(ext)) continue;
+        }
+        results.push(fullPath);
+      }
+    }
+  }
+  recurse(dirPath);
+  return results;
+}
+
+// src/search-existing/core.ts
+async function runSearchExistingImplementations(args, deps) {
+  const {
+    feature_description,
+    folder_path: seiFolderPathRaw,
+    source_files: seiSourceFilesRaw,
+    diff_path: seiDiffPathRaw,
+    extensions: seiExtensions,
+    exclude_dirs: seiExcludeDirs,
+    max_files: seiMaxFiles,
+    redact_secrets: seiRedact,
+    redact_regex: seiRedactRegexRaw,
+    answer_mode: seiRawMode,
+    use_gitignore: seiUseGitignore,
+    scan_secrets: seiScan
+  } = args;
+  const seiUseEnsemble = deps.useEnsemble;
+  const seiBudgetBytes = (args.max_payload_kb ?? 400) * 1024;
+  if (typeof feature_description !== "string" || !feature_description.trim()) {
+    return {
+      content: [{ type: "text", text: "FAILED: feature_description is required (non-empty string)." }],
+      isError: true
+    };
+  }
+  const folderPathsRaw = Array.isArray(seiFolderPathRaw) ? seiFolderPathRaw.filter((p) => typeof p === "string" && p.trim()) : typeof seiFolderPathRaw === "string" && seiFolderPathRaw.trim() ? [seiFolderPathRaw] : [];
+  if (folderPathsRaw.length === 0) {
+    return {
+      content: [{ type: "text", text: "FAILED: folder_path is required (string or array of strings)." }],
+      isError: true
+    };
+  }
+  const folderPaths = [];
+  for (const fpRaw of folderPathsRaw) {
+    let fp;
+    try {
+      fp = sanitizeInputPath(fpRaw);
+    } catch (err) {
+      return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+    }
+    if (!existsSync8(fp)) {
+      return { content: [{ type: "text", text: `FAILED: Folder not found: ${fpRaw}` }], isError: true };
+    }
+    if (!statSync5(fp).isDirectory()) {
+      return { content: [{ type: "text", text: `FAILED: Not a directory: ${fpRaw}` }], isError: true };
+    }
+    folderPaths.push(fp);
+  }
+  const sourceFiles = [];
+  const sourceFilesCanonical = /* @__PURE__ */ new Set();
+  if (seiSourceFilesRaw !== void 0 && seiSourceFilesRaw !== null) {
+    const raw = Array.isArray(seiSourceFilesRaw) ? seiSourceFilesRaw : [seiSourceFilesRaw];
+    for (const sf of raw) {
+      if (typeof sf !== "string" || !sf.trim()) continue;
+      const resolved = resolve5(sf);
+      if (!existsSync8(resolved)) {
+        return {
+          content: [{ type: "text", text: `FAILED: source_files entry not found: ${sf}` }],
+          isError: true
+        };
+      }
+      sourceFiles.push(resolved);
+      sourceFilesCanonical.add(resolved);
+      try {
+        sourceFilesCanonical.add(realpathSync3(resolved));
+      } catch {
+      }
+    }
+  }
+  let diffPathResolved = void 0;
+  if (typeof seiDiffPathRaw === "string" && seiDiffPathRaw.trim()) {
+    const r = resolve5(seiDiffPathRaw);
+    if (!existsSync8(r)) {
+      return {
+        content: [{ type: "text", text: `FAILED: diff_path not found: ${seiDiffPathRaw}` }],
+        isError: true
+      };
+    }
+    diffPathResolved = r;
+  }
+  let seiEffectiveExts = seiExtensions;
+  if ((!seiEffectiveExts || seiEffectiveExts.length === 0) && sourceFiles.length > 0) {
+    const extSet = /* @__PURE__ */ new Set();
+    for (const sf of sourceFiles) {
+      const m = /\.[^./\\]+$/.exec(sf);
+      if (m) extSet.add(m[0]);
+    }
+    if (extSet.size > 0) seiEffectiveExts = Array.from(extSet);
+  }
+  let seiRegexRedact;
+  try {
+    seiRegexRedact = parseRedactRegex(seiRedactRegexRaw);
+  } catch (err) {
+    return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+  }
+  const descTrimmed = feature_description.trim();
+  const hasRef = sourceFiles.length > 0 || !!diffPathResolved;
+  const refBlock = hasRef ? "The reference implementation from the PR is appended to these instructions as " + (sourceFiles.length > 0 ? "one or more source files" : "context") + (diffPathResolved ? ", followed by a unified diff showing the EXACT new lines (prefixed with '+'). Focus on the new lines when reasoning about what the PR adds. " : ". ") + "The source files may contain many unrelated functions \u2014 only the one matching the description above is relevant.\n\n" : "No reference source files were provided \u2014 rely purely on the feature description above when reasoning about semantic equivalence.\n\n";
+  const seiBasePrompt = `You are checking every file in this batch for an existing implementation of this feature (or a helper that could be trivially composed to achieve it):
+
+    ${descTrimmed}
+
+` + refBlock + "For EACH file in the batch, answer SEMANTIC equivalence: the same goal achieved by different code still counts. Ignore naming differences and surface-level style.\n\nOutput format: each file gets its own section in the response, separated by '---'. Per-file answer is one line per finding, no preamble, no explanation.\n\nSection template:\n\n## File: <absolute-file-path>\n\n<one line per finding>\n\n---\n\nPer-finding line format:\n    NO\n  or\n    YES symbol=<function-or-class-name> lines=<start-end>\n\nEXHAUSTIVE: If a file contains MULTIPLE matches, output ALL of them as successive YES lines. Do NOT cap the count. Do NOT keep only the most relevant. The reviewer may want to delete EVERY existing copy and leave only the PR's new one, so every occurrence MUST be listed.\n\nSpecial case: if a file IS the reference (you recognize the PR code itself), output:\n    NO (self-reference)\n\nProduce exactly one section per input file, in the order they appear in the batch, separated by '---'. Do NOT merge sections. Do NOT write rationale. Do NOT quote code. Do NOT explain. One line per match per file. Nothing else.";
+  const seiInstrFiles = [...sourceFiles];
+  if (diffPathResolved) seiInstrFiles.push(diffPathResolved);
+  const seiBasePromptWithRef = resolvePrompt(
+    seiBasePrompt,
+    seiInstrFiles.length > 0 ? seiInstrFiles : void 0
+  );
+  if (!seiBasePromptWithRef.trim()) {
+    return {
+      content: [{ type: "text", text: "FAILED: specialized prompt came out empty (internal error)." }],
+      isError: true
+    };
+  }
+  const fileSet = /* @__PURE__ */ new Set();
+  const seiMaxFilesEffective = seiMaxFiles ?? 1e4;
+  for (const fp of folderPaths) {
+    const walked = walkDir(fp, {
+      extensions: seiEffectiveExts,
+      maxFiles: seiMaxFilesEffective,
+      exclude: seiExcludeDirs,
+      useGitignore: seiUseGitignore !== false
+      // default true
+    });
+    for (const f of walked) fileSet.add(f);
+  }
+  for (const walked of Array.from(fileSet)) {
+    if (sourceFilesCanonical.has(walked)) {
+      fileSet.delete(walked);
+      continue;
+    }
+    try {
+      const canonical = realpathSync3(walked);
+      if (sourceFilesCanonical.has(canonical)) {
+        fileSet.delete(walked);
+      }
+    } catch {
+    }
+  }
+  const files = Array.from(fileSet);
+  if (files.length === 0) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `No matching files found after filtering. Folders: ${folderPaths.join(", ")}` + (seiEffectiveExts?.length ? `; extensions: ${seiEffectiveExts.join(", ")}` : "") + (sourceFiles.length ? `; excluded source_files: ${sourceFiles.length}` : "")
+        }
+      ]
+    };
+  }
+  if (files.length > seiMaxFilesEffective) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `FAILED: ${files.length} files matched, exceeding max_files=${seiMaxFilesEffective}. Narrow folder_path, pass extensions, or raise max_files.`
+        }
+      ],
+      isError: true
+    };
+  }
+  if (seiScan && !seiRedact) {
+    const scanResult = scanFilesForSecrets(files);
+    if (scanResult.found)
+      return {
+        content: [{ type: "text", text: scanResult.report }],
+        isError: true
+      };
+  }
+  const seiSystemMessage = "You are a code reviewer checking for duplicate implementations. Output per-file NO/YES answers in the exact format specified in the user prompt. Be terse \u2014 no rationale, no code quotes, no explanation. Identify matches by function/class/method NAME, never by line number in prose.";
+  const seiSystemBytes = Buffer.byteLength(seiSystemMessage, "utf-8");
+  const seiBaseBytes = Buffer.byteLength(seiBasePromptWithRef, "utf-8");
+  const seiPromptBytes = seiSystemBytes + seiBaseBytes + 2048;
+  const { groups: seiGroups, autoBatched: seiAutoBatched, skipped: seiSkipped } = readAndGroupFiles(files, seiPromptBytes, seiRedact, seiBudgetBytes, seiRegexRedact);
+  if (seiGroups.length === 0) {
+    const reasons = [];
+    if (seiSkipped.length > 0) {
+      reasons.push(
+        `${seiSkipped.length} file(s) exceeded the payload budget and were skipped`
+      );
+    } else {
+      reasons.push("no files fit within the payload budget");
+    }
+    return {
+      content: [
+        {
+          type: "text",
+          text: `FAILED: no batches could be formed. ${reasons.join("; ")}. Raise max_payload_kb (current: ${Math.round(seiBudgetBytes / 1024)} KB) or narrow folder_path to smaller files.`
+        }
+      ],
+      isError: true
+    };
+  }
+  const seiMode = resolveAnswerMode(seiRawMode, 2);
+  const seiBatchId = randomUUID();
+  const seiBatchResponses = [];
+  let seiAborted = false;
+  let seiAbortReason = "";
+  for (let gi = 0; gi < seiGroups.length; gi++) {
+    if (seiAborted) break;
+    const group = seiGroups[gi];
+    const groupPaths = group.map((fd) => fd.path);
+    let userContent = seiBasePromptWithRef;
+    userContent += buildPerFileSectionPrompt(groupPaths);
+    for (const fd of group) {
+      userContent += `
+
+${fd.block}`;
+    }
+    const messages = [
+      { role: "system", content: seiSystemMessage },
+      { role: "user", content: userContent }
+    ];
+    try {
+      const resp = await deps.callModel(messages);
+      seiBatchResponses.push({
+        idx: gi,
+        filePaths: groupPaths,
+        content: resp.content ?? "",
+        model: resp.model ?? deps.backendModel
+      });
+      if (deps.onProgress) {
+        deps.onProgress(
+          gi + 1,
+          seiGroups.length,
+          `search_existing_implementations: batch ${gi + 1}/${seiGroups.length} done (${groupPaths.length} files)`
+        );
+      }
+    } catch (err) {
+      const classified = deps.classifyError(err);
+      seiBatchResponses.push({
+        idx: gi,
+        filePaths: groupPaths,
+        content: "",
+        model: deps.backendModel,
+        error: classified.reason
+      });
+      if (classified.unrecoverable && classified.serviceLevel) {
+        seiAborted = true;
+        seiAbortReason = `Unrecoverable: ${classified.reason}`;
+      }
+    }
+  }
+  const seiBatchOk = seiBatchResponses.filter((r) => !r.error && r.content.trim().length > 0);
+  const seiBatchFailed = seiBatchResponses.filter((r) => r.error || !r.content.trim());
+  if (seiBatchOk.length === 0) {
+    const reason = seiAborted ? seiAbortReason : seiBatchFailed.length > 0 ? `all ${seiBatchFailed.length} batch(es) failed or returned empty: ${seiBatchFailed[0].error ?? "empty response"}` : "no batches produced output";
+    const failLines = [
+      `FAILED: search_existing_implementations produced zero usable output (${seiBatchOk.length}/${seiGroups.length} batches succeeded, ${files.length} files discovered)`,
+      `Reason: ${reason}`,
+      `Folders: ${folderPaths.join(", ")}`,
+      sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
+      diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
+      `Batch UUID: ${seiBatchId}`
+    ];
+    if (seiBatchFailed.length > 0) {
+      failLines.push("", "PER-BATCH FAILURES:");
+      for (const r of seiBatchFailed) {
+        failLines.push(
+          `  Batch ${r.idx + 1}/${seiGroups.length} (${r.filePaths.length} files): ${r.error ?? "empty response"}`
+        );
+      }
+    }
+    if (seiSkipped.length > 0) {
+      failLines.push("", `SKIPPED (exceeded payload budget, ${seiSkipped.length}):`);
+      for (const s of seiSkipped) failLines.push(`  ${s}`);
+    }
+    return {
+      content: [{ type: "text", text: failLines.join("\n") }],
+      isError: true
+    };
+  }
+  if (seiMode === 2) {
+    const sections = [];
+    sections.push(`# LLM Externalizer \u2014 search_existing_implementations`);
+    sections.push("");
+    sections.push(`**Feature**: ${descTrimmed}`);
+    sections.push(`**Folders**: ${folderPaths.join(", ")}`);
+    sections.push(`**Files scanned**: ${files.length}`);
+    sections.push(`**Batches**: ${seiGroups.length} (FFD bin-packed, ${seiAutoBatched ? "auto-batched" : "single batch"})`);
+    if (sourceFiles.length > 0) sections.push(`**Reference source files**: ${sourceFiles.length}`);
+    if (diffPathResolved) sections.push(`**Diff**: ${diffPathResolved}`);
+    if (seiSkipped.length > 0) {
+      sections.push("");
+      sections.push(`**SKIPPED** (exceeded payload budget): ${seiSkipped.length}`);
+      for (const s of seiSkipped) sections.push(`  - ${s}`);
+    }
+    sections.push("");
+    for (const r of seiBatchOk) {
+      sections.push(`---
+
+## Batch ${r.idx + 1}/${seiGroups.length} \u2014 ${r.filePaths.length} files`);
+      sections.push("");
+      sections.push(r.content.trim());
+      sections.push("");
+    }
+    if (seiBatchFailed.length > 0) {
+      sections.push("---\n\n## FAILED BATCHES");
+      sections.push("");
+      for (const r of seiBatchFailed) {
+        sections.push(`### Batch ${r.idx + 1}/${seiGroups.length} \u2014 ${r.filePaths.length} files`);
+        sections.push(`Error: ${r.error ?? "empty response"}`);
+        sections.push("Files:");
+        for (const fp of r.filePaths) sections.push(`  - ${fp}`);
+        sections.push("");
+      }
+    }
+    const mergedPath = deps.saveResponse(
+      "search_existing_implementations",
+      sections.join("\n"),
+      {
+        model: deps.ensembleModelLabel(seiUseEnsemble),
+        task: descTrimmed,
+        inputFile: folderPaths[0]
+      },
+      void 0,
+      deps.outputDir
+    );
+    const summary = [
+      `SEARCH COMPLETE \u2014 ${seiBatchOk.length}/${seiGroups.length} batches processed, ${files.length} files scanned, ${seiSkipped.length} skipped`,
+      `Folders: ${folderPaths.join(", ")}`,
+      sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
+      diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
+      `Batch UUID: ${seiBatchId}`,
+      `MERGED REPORT: ${mergedPath}`
+    ];
+    if (seiBatchFailed.length > 0) {
+      summary.push("", `FAILED BATCHES: ${seiBatchFailed.length} (see merged report for details)`);
+    }
+    if (seiAborted) summary.push("", `ABORTED: ${seiAbortReason}`);
+    return {
+      content: [{ type: "text", text: summary.join("\n") }],
+      isError: seiAborted
+    };
+  }
+  if (seiMode === 0) {
+    const seiPerFileReports = [];
+    const seiPerFileMissing = [];
+    for (const r of seiBatchOk) {
+      const sections = splitPerFileSections(r.content, r.filePaths);
+      for (const fp of r.filePaths) {
+        const body = sections.get(fp);
+        if (!body || !body.trim()) {
+          seiPerFileMissing.push({ inputPath: fp, batchIdx: r.idx });
+          continue;
+        }
+        const header = `# search_existing_implementations \u2014 ${fp}
+
+**Feature**: ${descTrimmed}
+**Source file**: ${fp}
+**Batch**: ${r.idx + 1}/${seiGroups.length}
+**Model**: ${r.model}
+
+---
+
+`;
+        const reportPath = deps.saveResponse(
+          "search_existing_implementations",
+          header + body.trim(),
+          {
+            model: r.model,
+            task: descTrimmed,
+            inputFile: fp
+          },
+          void 0,
+          deps.outputDir
+        );
+        seiPerFileReports.push({ inputPath: fp, reportPath });
+      }
+    }
+    const seiModeZeroLines = [
+      `SEARCH COMPLETE \u2014 ${seiBatchOk.length}/${seiGroups.length} batches processed, ${files.length} files scanned, ${seiSkipped.length} skipped`,
+      `Folders: ${folderPaths.join(", ")}`,
+      sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
+      diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
+      `Batch UUID: ${seiBatchId}`,
+      ""
+    ];
+    if (seiPerFileReports.length > 0) {
+      seiModeZeroLines.push(`REPORTS (one per input file, ${seiPerFileReports.length} total):`);
+      for (const p of seiPerFileReports) {
+        seiModeZeroLines.push(`  ${p.inputPath} -> ${p.reportPath}`);
+      }
+    }
+    if (seiPerFileMissing.length > 0) {
+      seiModeZeroLines.push(
+        "",
+        `MISSING SECTIONS (${seiPerFileMissing.length} files had no per-file section in the LLM response \u2014 raw batch content preserved in batch reports):`
+      );
+      for (const m of seiPerFileMissing) {
+        seiModeZeroLines.push(`  ${m.inputPath} (batch ${m.batchIdx + 1}/${seiGroups.length})`);
+      }
+    }
+    if (seiSkipped.length > 0) {
+      seiModeZeroLines.push("", `SKIPPED (exceeded payload budget, ${seiSkipped.length}):`);
+      for (const s of seiSkipped) seiModeZeroLines.push(`  ${s}`);
+    }
+    if (seiBatchFailed.length > 0) {
+      seiModeZeroLines.push("", `FAILED BATCHES (${seiBatchFailed.length}):`);
+      for (const r of seiBatchFailed) {
+        seiModeZeroLines.push(
+          `  Batch ${r.idx + 1}/${seiGroups.length} (${r.filePaths.length} files): ${r.error ?? "empty response"}`
+        );
+      }
+    }
+    if (seiAborted) seiModeZeroLines.push("", `ABORTED: ${seiAbortReason}`);
+    return {
+      content: [{ type: "text", text: seiModeZeroLines.join("\n") }],
+      isError: seiAborted
+    };
+  }
+  const seiAutoGroups = autoGroupByHeuristic(files);
+  const seiSectionByPath = /* @__PURE__ */ new Map();
+  const seiModelByPath = /* @__PURE__ */ new Map();
+  const seiBatchIdxByPath = /* @__PURE__ */ new Map();
+  for (const r of seiBatchOk) {
+    const sections = splitPerFileSections(r.content, r.filePaths);
+    for (const fp of r.filePaths) {
+      const body = sections.get(fp);
+      if (body && body.trim().length > 0) {
+        seiSectionByPath.set(fp, body.trim());
+        seiModelByPath.set(fp, r.model);
+        seiBatchIdxByPath.set(fp, r.idx);
+      }
+    }
+  }
+  const seiGroupReportPaths = [];
+  const seiGroupMissing = [];
+  for (const fg of seiAutoGroups) {
+    if (fg.files.length === 0) continue;
+    const gid = fg.id || "auto";
+    const sections = [];
+    sections.push(
+      `# search_existing_implementations \u2014 group ${gid}
+
+**Feature**: ${descTrimmed}
+**Files in group**: ${fg.files.length}
+
+` + fg.files.map((fp) => `  - ${fp}`).join("\n") + "\n\n---\n"
+    );
+    let anyBody = false;
+    for (const fp of fg.files) {
+      const body = seiSectionByPath.get(fp);
+      if (!body) {
+        seiGroupMissing.push(fp);
+        continue;
+      }
+      anyBody = true;
+      sections.push(`## File: ${fp}
+
+${body}
+`);
+    }
+    if (!anyBody) continue;
+    const reportPath = deps.saveResponse(
+      "search_existing_implementations",
+      sections.join("\n"),
+      {
+        model: deps.ensembleModelLabel(seiUseEnsemble),
+        task: descTrimmed,
+        inputFile: fg.files[0],
+        groupId: gid
+      },
+      void 0,
+      deps.outputDir
+    );
+    seiGroupReportPaths.push(`[group:${gid}] ${reportPath}`);
+  }
+  const seiSummaryLines = [
+    `SEARCH COMPLETE \u2014 ${seiBatchOk.length}/${seiGroups.length} batches processed, ${files.length} files scanned, ${seiSkipped.length} skipped`,
+    `Folders: ${folderPaths.join(", ")}`,
+    sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
+    diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
+    `Batch UUID: ${seiBatchId}`,
+    ""
+  ];
+  if (seiGroupReportPaths.length > 0) {
+    seiSummaryLines.push(`GROUP REPORTS (one per auto-group, ${seiGroupReportPaths.length} total):`);
+    for (const p of seiGroupReportPaths) seiSummaryLines.push(`  ${p}`);
+  }
+  if (seiGroupMissing.length > 0) {
+    seiSummaryLines.push(
+      "",
+      `MISSING SECTIONS (${seiGroupMissing.length} files had no per-file section in the LLM response):`
+    );
+    for (const p of seiGroupMissing) seiSummaryLines.push(`  ${p}`);
+  }
+  if (seiSkipped.length > 0) {
+    seiSummaryLines.push("", `SKIPPED (exceeded payload budget, ${seiSkipped.length}):`);
+    for (const s of seiSkipped) seiSummaryLines.push(`  ${s}`);
+  }
+  if (seiBatchFailed.length > 0) {
+    seiSummaryLines.push("", `FAILED BATCHES (${seiBatchFailed.length}):`);
+    for (const r of seiBatchFailed) {
+      seiSummaryLines.push(
+        `  Batch ${r.idx + 1}/${seiGroups.length} (${r.filePaths.length} files): ${r.error ?? "empty response"}`
+      );
+    }
+  }
+  if (seiAborted) seiSummaryLines.push("", `ABORTED: ${seiAbortReason}`);
+  return {
+    content: [{ type: "text", text: seiSummaryLines.join("\n") }],
+    isError: seiAborted
+  };
+}
+
+// src/benchmark/search-existing/score.ts
+function parseSectionVerdict(body) {
+  let sawNo = false;
+  for (const raw of body.split("\n")) {
+    const line = raw.trim();
+    if (!line || line === "---") continue;
+    if (/^YES\b/.test(line)) return "yes";
+    if (/^NO\b/.test(line)) {
+      sawNo = true;
+      continue;
+    }
+  }
+  return sawNo ? "no" : "unparseable";
+}
+function safePrecision(tp, fp) {
+  return tp + fp === 0 ? 1 : tp / (tp + fp);
+}
+function safeRecall(tp, fn) {
+  return tp + fn === 0 ? 1 : tp / (tp + fn);
+}
+function f1Of(precision, recall) {
+  return precision + recall === 0 ? 0 : 2 * precision * recall / (precision + recall);
+}
+function scoreCase(caseId, scannedFiles, expectedYes, verdicts) {
+  let tp = 0;
+  let fp = 0;
+  let fn = 0;
+  let tn = 0;
+  let unscored = 0;
+  for (const file of scannedFiles) {
+    const verdict = verdicts.get(file);
+    const expectYes = expectedYes.has(file);
+    if (verdict === "yes") {
+      if (expectYes) tp++;
+      else fp++;
+    } else if (verdict === "no") {
+      if (expectYes) fn++;
+      else tn++;
+    } else {
+      unscored++;
+      if (expectYes) fn++;
+    }
+  }
+  const precision = safePrecision(tp, fp);
+  const recall = safeRecall(tp, fn);
+  return {
+    caseId,
+    truePositives: tp,
+    falsePositives: fp,
+    falseNegatives: fn,
+    trueNegatives: tn,
+    unscored,
+    scannedFiles: scannedFiles.length,
+    precision,
+    recall,
+    f1: f1Of(precision, recall)
+  };
+}
+function aggregateScores(cases) {
+  let tp = 0;
+  let fp = 0;
+  let fn = 0;
+  let unscored = 0;
+  let scanned = 0;
+  for (const c of cases) {
+    tp += c.truePositives;
+    fp += c.falsePositives;
+    fn += c.falseNegatives;
+    unscored += c.unscored;
+    scanned += c.scannedFiles;
+  }
+  const microPrecision = safePrecision(tp, fp);
+  const microRecall = safeRecall(tp, fn);
+  return {
+    cases: [...cases],
+    microPrecision,
+    microRecall,
+    microF1: f1Of(microPrecision, microRecall),
+    macroF1: cases.length === 0 ? 0 : cases.reduce((sum, c) => sum + c.f1, 0) / cases.length,
+    coverage: scanned === 0 ? 0 : (scanned - unscored) / scanned
+  };
+}
+var DEFAULT_SEARCH_EXISTING_THRESHOLDS = {
+  minMicroF1: 0.85,
+  minMicroRecall: 0.85,
+  minCoverage: 0.9
+};
+function passesThresholds(score, thresholds = DEFAULT_SEARCH_EXISTING_THRESHOLDS) {
+  const failures = [];
+  if (score.microF1 < thresholds.minMicroF1) {
+    failures.push(
+      `micro-F1 ${score.microF1.toFixed(3)} < ${thresholds.minMicroF1}`
+    );
+  }
+  if (score.microRecall < thresholds.minMicroRecall) {
+    failures.push(
+      `micro-recall ${score.microRecall.toFixed(3)} < ${thresholds.minMicroRecall}`
+    );
+  }
+  if (score.coverage < thresholds.minCoverage) {
+    failures.push(
+      `coverage ${score.coverage.toFixed(3)} < ${thresholds.minCoverage}`
+    );
+  }
+  return { pass: failures.length === 0, failures };
+}
+
+// src/benchmark/search-existing/runner.ts
+var DEFAULT_API_URL = "https://openrouter.ai/api/v1/chat/completions";
+function abs(root, rel) {
+  return resolve6(root, rel);
+}
+async function runSearchExistingBenchmarkOnModel(modelId, cases = SEARCH_EXISTING_CASES, opts = { apiKey: "", pricing: { input_per_m_usd: 0, output_per_m_usd: 0, context_window: 0 } }, fetchImpl = realFetch) {
+  const fixtureRoot = resolveFixtureRoot();
+  const allFixtureRel = listFixtureFiles(fixtureRoot);
+  const apiUrl = opts.apiUrl ?? DEFAULT_API_URL;
+  const maxTokens = opts.maxTokens ?? 8192;
+  const temperature = opts.temperature ?? 0.1;
+  const perCallTimeoutMs = opts.perCallTimeoutMs ?? 6e5;
+  let costUsd = 0;
+  let latencyTotalMs = 0;
+  let callCount = 0;
+  const caseScores = [];
+  const failures = [];
+  for (let ci = 0; ci < cases.length; ci++) {
+    const c = cases[ci];
+    const sourceRel = new Set(c.sourceFiles ?? []);
+    const scannedAbs = allFixtureRel.filter((rel) => c.extensions.some((ext) => rel.endsWith(ext))).filter((rel) => !sourceRel.has(rel)).map((rel) => abs(fixtureRoot, rel));
+    const expectedYesAbs = new Set(c.expectedYes.map((rel) => abs(fixtureRoot, rel)));
+    let capturedMergedReport = "";
+    const saveResponse = (_tool, content) => {
+      capturedMergedReport = content;
+      return `memory://case/${c.id}`;
+    };
+    const callModel = async (messages) => {
+      const started = Date.now();
+      let res;
+      try {
+        res = await fetchImpl(apiUrl, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${opts.apiKey}`
+          },
+          body: JSON.stringify({
+            model: modelId,
+            messages,
+            temperature,
+            max_tokens: maxTokens
+          }),
+          signal: AbortSignal.timeout(perCallTimeoutMs)
+        });
+      } finally {
+        latencyTotalMs += Date.now() - started;
+        callCount++;
+      }
+      if (!res.ok) {
+        const bodyText = await res.text().catch(() => "");
+        throw new Error(`API error ${res.status}: ${bodyText.slice(0, 500)}`);
+      }
+      const json = await res.json();
+      const usage = json.usage;
+      if (usage) {
+        costUsd += (usage.prompt_tokens ?? 0) / 1e6 * opts.pricing.input_per_m_usd + (usage.completion_tokens ?? 0) / 1e6 * opts.pricing.output_per_m_usd;
+      }
+      const content = json.choices?.[0]?.message?.content ?? "";
+      return { content, model: modelId };
+    };
+    const deps = {
+      useEnsemble: false,
+      backendModel: modelId,
+      callModel,
+      // Never abort the sweep: every error is recoverable + non-service-level,
+      // so the pipeline records it as a per-batch error and continues. A whole
+      // case that produces zero usable output still returns isError (handled
+      // below), but a single bad batch within a multi-batch case does not stop.
+      classifyError: () => ({ reason: "benchmark batch error", unrecoverable: false, serviceLevel: false }),
+      saveResponse,
+      ensembleModelLabel: () => modelId
+      // No onProgress / outputDir for the in-memory benchmark.
+    };
+    const args = {
+      feature_description: c.featureDescription,
+      folder_path: fixtureRoot,
+      extensions: c.extensions,
+      answer_mode: 2,
+      use_gitignore: false,
+      scan_secrets: false,
+      redact_secrets: false
+    };
+    if (c.sourceFiles && c.sourceFiles.length > 0) {
+      args.source_files = c.sourceFiles.map((rel) => abs(fixtureRoot, rel));
+    }
+    const result = await runSearchExistingImplementations(args, deps);
+    if (result.isError) {
+      const reason = result.content.map((p) => p.text).join("\n").split("\n")[0] ?? "pipeline FAILED";
+      failures.push({ caseId: c.id, reason });
+      caseScores.push(scoreCase(c.id, scannedAbs, expectedYesAbs, /* @__PURE__ */ new Map()));
+      if (opts.onProgress) opts.onProgress(ci + 1, cases.length);
+      continue;
+    }
+    const sections = splitPerFileSections(capturedMergedReport, scannedAbs);
+    const verdicts = /* @__PURE__ */ new Map();
+    for (const [path, body] of sections) {
+      verdicts.set(path, parseSectionVerdict(body));
+    }
+    caseScores.push(scoreCase(c.id, scannedAbs, expectedYesAbs, verdicts));
+    if (opts.onProgress) opts.onProgress(ci + 1, cases.length);
+  }
+  const aggregate = aggregateScores(caseScores);
+  return {
+    modelId,
+    caseScores,
+    aggregate,
+    pass: passesThresholds(aggregate).pass,
+    costUsd,
+    meanLatencyMs: callCount === 0 ? 0 : latencyTotalMs / callCount,
+    failures
+  };
+}
+
+// src/benchmark/search-existing/select.ts
+var SEARCH_EXISTING_CRITERIA = TOOL_MODEL_REGISTRY.search_existing_implementations.requirements;
+function toGeneric2(c) {
+  const thr = passesThresholds(c.score);
+  return {
+    modelId: c.modelId,
+    qualified: c.qualified,
+    disqualifyReason: c.disqualifyReason,
+    inputDollarsPerMillion: c.inputDollarsPerMillion,
+    outputDollarsPerMillion: c.outputDollarsPerMillion,
+    latencyMs: c.latencyMs,
+    benchmarkPass: thr.pass,
+    benchmarkScore: c.score.microF1,
+    benchmarkFailReasons: thr.failures
+  };
+}
+function selectSearchExistingModel(input) {
+  const byModelId = new Map(
+    input.candidates.map((c) => [c.modelId, c])
+  );
+  const generic = selectSameOrCheaper({
+    candidates: input.candidates.map(toGeneric2),
+    incumbentModelId: input.incumbentModelId,
+    incumbentInputDollarsPerMillion: input.incumbentInputDollarsPerMillion,
+    incumbentOutputDollarsPerMillion: input.incumbentOutputDollarsPerMillion,
+    requirementsLabel: "search-existing requirements",
+    benchmarkLabel: "the search-existing benchmark"
+  });
+  return {
+    recommendedModelId: generic.recommendedModelId,
+    changed: generic.changed,
+    reason: generic.reason,
+    eligible: generic.eligible.map((g) => byModelId.get(g.modelId)),
+    rejected: generic.rejected
+  };
+}
+
+// src/benchmark/search-existing/index.ts
+var INCUMBENT_FALLBACK_PRICING2 = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
+function cachePath2() {
+  return join9(getConfigDir(), "search-existing-results.json");
+}
+function cacheKey2(modelId, date, datasetHash) {
+  return `${modelId}::${date}::${datasetHash}`;
+}
+function loadCache2() {
+  const p = cachePath2();
+  if (!existsSync9(p)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync8(p, "utf-8"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+  } catch {
+  }
+  return {};
+}
+function saveCache2(cache) {
+  const dir = getConfigDir();
+  mkdirSync4(dir, { recursive: true });
+  const p = cachePath2();
+  const tmp = `${p}.tmp.${process.pid}`;
+  writeFileSync4(tmp, JSON.stringify(cache, null, 2), "utf-8");
+  renameSync2(tmp, p);
+}
+function resolveApiKey2(override) {
+  const k = override || process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
+  if (!k) {
+    throw new Error(
+      "OPENROUTER_API_KEY not set. Export it in your shell, or set the plugin option 'openrouter_api_key' via Claude Code's /plugin configure."
+    );
+  }
+  return k;
+}
+function resolveMainRoot2(override) {
+  return resolveProjectMainRoot(override);
+}
+function today2() {
+  return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+}
+function reportStamp2() {
+  const d = /* @__PURE__ */ new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  const off = -d.getTimezoneOffset();
+  const sign = off >= 0 ? "+" : "-";
+  const oh = p(Math.floor(Math.abs(off) / 60));
+  const om = p(Math.abs(off) % 60);
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}${sign}${oh}${om}`;
+}
+function pricingFromModel2(m) {
+  return {
+    input_per_m_usd: m.inputDollarsPerMillion,
+    output_per_m_usd: m.outputDollarsPerMillion,
+    context_window: m.contextTokens
+  };
+}
+function decorate2(raw) {
+  const ctx = raw.context_length ?? 0;
+  const maxOutRaw = raw.top_provider?.max_completion_tokens;
+  const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
+  const promptPerToken = parseFloat(raw.pricing?.prompt ?? "NaN");
+  const completionPerToken = parseFloat(raw.pricing?.completion ?? "NaN");
+  const params = new Set(raw.supported_parameters ?? []);
+  return {
+    id: raw.id,
+    name: raw.name ?? raw.id,
+    contextTokens: ctx,
+    maxOutputTokens: maxOut,
+    inputDollarsPerMillion: isFinite(promptPerToken) ? promptPerToken * 1e6 : Infinity,
+    outputDollarsPerMillion: isFinite(completionPerToken) ? completionPerToken * 1e6 : Infinity,
+    supportsStructured: params.has("structured_outputs") || params.has("response_format"),
+    supportsReasoning: params.has("reasoning") || params.has("include_reasoning"),
+    raw
+  };
+}
+async function runSearchExistingBenchmark(opts = {}) {
+  const apiKey = resolveApiKey2(opts.apiKey);
+  const cases = SEARCH_EXISTING_CASES;
+  const datasetHash = createHash3("sha1").update(JSON.stringify(cases)).digest("hex").slice(0, 12);
+  const thresholds = opts.thresholds ?? DEFAULT_SEARCH_EXISTING_THRESHOLDS;
+  const incumbentId = opts.incumbentModelId ?? DEFAULT_MODEL;
+  const progress = opts.onProgress ?? (() => {
+  });
+  const freeOnly = getActiveFreeOnly();
+  progress(`Loaded ${cases.length} golden cases (dataset ${datasetHash}).`);
+  progress("Fetching OpenRouter model catalog\u2026");
+  const catalog = await fetchProgrammingModels();
+  const byId = new Map(catalog.map((m) => [m.id, m]));
+  const incumbentRaw = byId.get(incumbentId);
+  const incumbentDecorated = incumbentRaw ? decorate2(incumbentRaw) : null;
+  const incumbentIn = incumbentDecorated && isFinite(incumbentDecorated.inputDollarsPerMillion) ? incumbentDecorated.inputDollarsPerMillion : INCUMBENT_FALLBACK_PRICING2.input_per_m_usd;
+  const incumbentOut = incumbentDecorated && isFinite(incumbentDecorated.outputDollarsPerMillion) ? incumbentDecorated.outputDollarsPerMillion : INCUMBENT_FALLBACK_PRICING2.output_per_m_usd;
+  const toAssess = /* @__PURE__ */ new Map();
+  const addModel = (model, qualified, disqualifyReason2) => {
+    if (!toAssess.has(model.id)) toAssess.set(model.id, { model, qualified, disqualifyReason: disqualifyReason2 });
+  };
+  if (opts.models && opts.models.length > 0) {
+    for (const id of opts.models) {
+      const raw = byId.get(id);
+      if (raw) {
+        const q = qualify(raw, SEARCH_EXISTING_CRITERIA);
+        addModel(
+          q ?? decorate2(raw),
+          q !== null,
+          q ? void 0 : "below search-existing requirements (cost/context/structured-output/reasoning)"
+        );
+      } else {
+        const fp = KNOWN_PRICING[id] ?? INCUMBENT_FALLBACK_PRICING2;
+        addModel(
+          {
+            id,
+            name: id,
+            contextTokens: fp.context_window,
+            maxOutputTokens: fp.context_window,
+            inputDollarsPerMillion: fp.input_per_m_usd,
+            outputDollarsPerMillion: fp.output_per_m_usd,
+            supportsStructured: false,
+            supportsReasoning: false,
+            raw: { id }
+          },
+          false,
+          "not found in the OpenRouter catalog"
+        );
+      }
+    }
+  } else {
+    const { candidates } = buildBenchmarkRoster(catalog, SEARCH_EXISTING_CRITERIA, []);
+    const sameOrCheaper = candidates.filter((c) => c.inputDollarsPerMillion <= incumbentIn + 1e-9 && c.outputDollarsPerMillion <= incumbentOut + 1e-9).sort((a, b) => a.inputDollarsPerMillion + a.outputDollarsPerMillion - (b.inputDollarsPerMillion + b.outputDollarsPerMillion)).slice(0, opts.qualifyingTopN ?? 16);
+    for (const c of sameOrCheaper) addModel(c, true);
+  }
+  if (!toAssess.has(incumbentId)) {
+    if (incumbentDecorated) {
+      const q = qualify(incumbentDecorated.raw, SEARCH_EXISTING_CRITERIA);
+      addModel(incumbentDecorated, q !== null, q ? void 0 : "below search-existing requirements");
+    } else {
+      addModel(
+        {
+          id: incumbentId,
+          name: incumbentId,
+          contextTokens: INCUMBENT_FALLBACK_PRICING2.context_window,
+          maxOutputTokens: INCUMBENT_FALLBACK_PRICING2.context_window,
+          inputDollarsPerMillion: incumbentIn,
+          outputDollarsPerMillion: incumbentOut,
+          supportsStructured: true,
+          supportsReasoning: true,
+          raw: { id: incumbentId }
+        },
+        true
+      );
+    }
+  }
+  progress(`Assessing ${toAssess.size} model(s) over ${cases.length} cases\u2026`);
+  const cache = loadCache2();
+  const assessments = [];
+  let totalCost = 0;
+  for (const { model, qualified, disqualifyReason: disqualifyReason2 } of toAssess.values()) {
+    if (freeOnly && !model.id.endsWith(":free")) {
+      progress(`  ${model.id}: skipped (free_only \u2014 non-':free' model).`);
+      const emptyAggregate = aggregateScores([]);
+      assessments.push({
+        modelId: model.id,
+        qualified: false,
+        disqualifyReason: "free_only active \u2014 non-':free' model not benchmarked",
+        inputDollarsPerMillion: model.inputDollarsPerMillion,
+        outputDollarsPerMillion: model.outputDollarsPerMillion,
+        latencyMs: 0,
+        score: emptyAggregate,
+        failureReasons: [],
+        costUsd: 0
+      });
+      continue;
+    }
+    const key = cacheKey2(model.id, today2(), datasetHash);
+    const cached = cache[key];
+    let score;
+    let costUsd;
+    let latencyMs;
+    let failureReasons;
+    if (cached && !opts.force) {
+      progress(`  ${model.id}: cache hit (${today2()}).`);
+      score = cached.score;
+      costUsd = cached.costUsd;
+      latencyMs = cached.latencyMs;
+      failureReasons = cached.failureReasons;
+    } else {
+      progress(`  ${model.id}: running\u2026`);
+      const run = await runSearchExistingBenchmarkOnModel(
+        model.id,
+        cases,
+        {
+          apiKey,
+          pricing: pricingFromModel2(model),
+          perCallTimeoutMs: opts.perCallTimeoutMs ?? 12e4
+        },
+        opts.fetchImpl
+      );
+      score = run.aggregate;
+      costUsd = run.costUsd;
+      latencyMs = Math.round(run.meanLatencyMs);
+      failureReasons = run.failures.map((f) => `${f.caseId}: ${f.reason}`);
+      cache[key] = {
+        date: today2(),
+        datasetHash,
+        score,
+        costUsd,
+        latencyMs,
+        inputDollarsPerMillion: model.inputDollarsPerMillion,
+        outputDollarsPerMillion: model.outputDollarsPerMillion,
+        qualified,
+        disqualifyReason: disqualifyReason2,
+        failureReasons
+      };
+    }
+    totalCost += costUsd;
+    assessments.push({
+      modelId: model.id,
+      qualified,
+      disqualifyReason: disqualifyReason2,
+      inputDollarsPerMillion: model.inputDollarsPerMillion,
+      outputDollarsPerMillion: model.outputDollarsPerMillion,
+      latencyMs,
+      score,
+      failureReasons,
+      costUsd
+    });
+    const thr = passesThresholds(score, thresholds);
+    progress(
+      `    ${model.id}: ${thr.pass ? "PASS" : "FAIL"} microF1=${score.microF1.toFixed(3)} microR=${score.microRecall.toFixed(3)} cov=${score.coverage.toFixed(3)} fail=${failureReasons.length}`
+    );
+  }
+  saveCache2(cache);
+  const selection = selectSearchExistingModel({
+    candidates: assessments,
+    incumbentModelId: incumbentId,
+    incumbentInputDollarsPerMillion: incumbentIn,
+    incumbentOutputDollarsPerMillion: incumbentOut
+  });
+  const mainRoot = resolveMainRoot2(opts.mainRoot);
+  const reportDir = opts.outputDir ?? join9(mainRoot, "reports", "search-existing-benchmark");
+  mkdirSync4(reportDir, { recursive: true });
+  const stamp = reportStamp2();
+  const jsonReportPath = join9(reportDir, `${stamp}-search-existing-benchmark.json`);
+  const reportPath = join9(reportDir, `${stamp}-search-existing-benchmark.md`);
+  const jsonPayload = {
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    datasetHash,
+    caseCount: cases.length,
+    thresholds,
+    incumbent: { modelId: incumbentId, inputDollarsPerMillion: incumbentIn, outputDollarsPerMillion: incumbentOut },
+    recommendedModelId: selection.recommendedModelId,
+    changed: selection.changed,
+    reason: selection.reason,
+    costUsd: totalCost,
+    assessments: assessments.map((a) => {
+      const thr = passesThresholds(a.score, thresholds);
+      return {
+        modelId: a.modelId,
+        qualified: a.qualified,
+        disqualifyReason: a.disqualifyReason,
+        inputDollarsPerMillion: a.inputDollarsPerMillion,
+        outputDollarsPerMillion: a.outputDollarsPerMillion,
+        latencyMs: a.latencyMs,
+        pass: thr.pass,
+        failures: thr.failures,
+        microPrecision: a.score.microPrecision,
+        microRecall: a.score.microRecall,
+        microF1: a.score.microF1,
+        macroF1: a.score.macroF1,
+        coverage: a.score.coverage,
+        failureReasons: a.failureReasons,
+        costUsd: a.costUsd
+      };
+    }),
+    rejected: selection.rejected,
+    perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
+  };
+  const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
+  writeFileSync4(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync2(jtmp, jsonReportPath);
+  const md = buildReportMarkdown2({
+    cases,
+    datasetHash,
+    incumbentId,
+    incumbentIn,
+    incumbentOut,
+    thresholds,
+    assessments,
+    selection,
+    totalCost
+  });
+  const mtmp = `${reportPath}.tmp.${process.pid}`;
+  writeFileSync4(mtmp, md, "utf-8");
+  renameSync2(mtmp, reportPath);
+  const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
+  return {
+    recommendedModelId: selection.recommendedModelId,
+    changed: selection.changed,
+    selection,
+    results: assessments,
+    costUsd: totalCost,
+    reportPath,
+    jsonReportPath,
+    summaryLine
+  };
+}
+function buildReportMarkdown2(args) {
+  const lines = [];
+  lines.push("# search_existing_implementations \u2014 model benchmark");
+  lines.push("");
+  lines.push(`**Run:** ${(/* @__PURE__ */ new Date()).toISOString()}`);
+  lines.push(`**Dataset:** ${args.cases.length} golden fixture cases (hash ${args.datasetHash})`);
+  lines.push(`**Incumbent default:** \`${args.incumbentId}\` (in $${args.incumbentIn.toFixed(3)}/M, out $${args.incumbentOut.toFixed(3)}/M)`);
+  lines.push(
+    `**Pass gate:** micro-F1 \u2265 ${args.thresholds.minMicroF1.toFixed(2)} AND micro-recall \u2265 ${args.thresholds.minMicroRecall.toFixed(2)} AND coverage \u2265 ${args.thresholds.minCoverage.toFixed(2)}`
+  );
+  lines.push(`**Total LLM spend:** $${args.totalCost.toFixed(6)}`);
+  lines.push("");
+  lines.push(`## Recommendation`);
+  lines.push("");
+  lines.push(`**${args.selection.changed ? "SWITCH" : "KEEP"} \u2192 \`${args.selection.recommendedModelId}\`**`);
+  lines.push("");
+  lines.push(args.selection.reason);
+  lines.push("");
+  lines.push(`## Assessed models`);
+  lines.push("");
+  lines.push("| Model | Req | Bench | micro-P | micro-R | micro-F1 | macro-F1 | Cov | Fail | in $/M | out $/M | lat ms |");
+  lines.push("|---|---|---|---|---|---|---|---|---|---|---|---|");
+  const sorted = [...args.assessments].sort((a, b) => b.score.microF1 - a.score.microF1);
+  for (const a of sorted) {
+    const thr = passesThresholds(a.score, args.thresholds);
+    lines.push(
+      `| \`${a.modelId}\` | ${a.qualified ? "ok" : "no"} | ${thr.pass ? "PASS" : "FAIL"} | ${a.score.microPrecision.toFixed(3)} | ${a.score.microRecall.toFixed(3)} | ${a.score.microF1.toFixed(3)} | ${a.score.macroF1.toFixed(3)} | ${(a.score.coverage * 100).toFixed(0)}% | ${a.failureReasons.length} | ${a.inputDollarsPerMillion.toFixed(3)} | ${a.outputDollarsPerMillion.toFixed(3)} | ${a.latencyMs} |`
+    );
+  }
+  lines.push("");
+  if (args.selection.rejected.length > 0) {
+    lines.push(`## Rejected (and why)`);
+    lines.push("");
+    for (const r of args.selection.rejected) {
+      lines.push(`- \`${r.modelId}\` \u2014 ${r.reason}`);
+    }
+    lines.push("");
+  }
+  const rec = args.assessments.find((a) => a.modelId === args.selection.recommendedModelId);
+  if (rec) {
+    lines.push(`## Per-case breakdown \u2014 \`${rec.modelId}\``);
+    lines.push("");
+    lines.push("| Case | TP | FP | FN | TN | Unscored | Precision | Recall | F1 |");
+    lines.push("|---|---|---|---|---|---|---|---|---|");
+    for (const c of rec.score.cases) {
+      lines.push(
+        `| ${c.caseId} | ${c.truePositives} | ${c.falsePositives} | ${c.falseNegatives} | ${c.trueNegatives} | ${c.unscored} | ${c.precision.toFixed(3)} | ${c.recall.toFixed(3)} | ${c.f1.toFixed(3)} |`
+      );
+    }
+    lines.push("");
+    if (rec.failureReasons.length > 0) {
+      lines.push(`### Pipeline failures for \`${rec.modelId}\``);
+      lines.push("");
+      for (const f of rec.failureReasons) lines.push(`- ${f}`);
+      lines.push("");
+    }
+  }
+  lines.push("---");
+  lines.push("");
+  lines.push(
+    "Re-run: `llm-externalizer benchmark --search-existing` (auto-discover) or `--search-existing <id> [<id>...]` (assess specific models). ADVISORY only \u2014 the recommended model is surfaced for the operator to adopt via the `tool_models.search_existing_implementations` field on a settings.yaml profile; the benchmark never edits config."
+  );
+  return lines.join("\n") + "\n";
+}
+
 // src/model-qualification/assess.ts
 function assessModelAcrossTools(model) {
   const tools = [];
@@ -220929,8 +223151,8 @@ function renderAssessmentText(a) {
 }
 
 // src/model-qualification/drift.ts
-import { mkdirSync as mkdirSync4, readFileSync as readFileSync7, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join7 } from "node:path";
+import { mkdirSync as mkdirSync5, readFileSync as readFileSync9, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join10 } from "node:path";
 function perMillion(s) {
   if (s == null) return null;
   const n = parseFloat(s);
@@ -221067,11 +223289,11 @@ function computeModelHealth(configured, catalog, baseline, opts = {}) {
   return { findings, updatedBaseline };
 }
 function getBaselinePath() {
-  return join7(getConfigDir(), "model-baseline.json");
+  return join10(getConfigDir(), "model-baseline.json");
 }
 function loadBaseline(path = getBaselinePath()) {
   try {
-    const raw = readFileSync7(path, "utf-8");
+    const raw = readFileSync9(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed;
@@ -221083,10 +223305,10 @@ function loadBaseline(path = getBaselinePath()) {
 }
 function saveBaseline(baseline, path = getBaselinePath()) {
   try {
-    mkdirSync4(getConfigDir(), { recursive: true });
+    mkdirSync5(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync4(tmp, JSON.stringify(baseline, null, 2));
-    renameSync2(tmp, path);
+    writeFileSync5(tmp, JSON.stringify(baseline, null, 2));
+    renameSync3(tmp, path);
   } catch {
   }
 }
@@ -221159,10 +223381,10 @@ function renderModelHealthMarkdown(report) {
 async function runCheckModelHealth(opts = {}) {
   const profile = opts.profile ?? resolveActiveProfile();
   const report = await checkModelHealth(profile, opts);
-  const dir = opts.outputDir ?? join7(resolveProjectMainRoot(), "reports", "model-health");
-  mkdirSync4(dir, { recursive: true });
-  const reportPath = join7(dir, `${compactStamp()}-model-health-${profile.name}.md`);
-  writeFileSync4(reportPath, renderModelHealthMarkdown(report));
+  const dir = opts.outputDir ?? join10(resolveProjectMainRoot(), "reports", "model-health");
+  mkdirSync5(dir, { recursive: true });
+  const reportPath = join10(dir, `${compactStamp()}-model-health-${profile.name}.md`);
+  writeFileSync5(reportPath, renderModelHealthMarkdown(report));
   return { report, reportPath };
 }
 function renderModelHealthText(report) {
@@ -221183,8 +223405,8 @@ function renderModelHealthText(report) {
 }
 
 // src/model-qualification/new-arrivals.ts
-import { mkdirSync as mkdirSync5, readFileSync as readFileSync8, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
-import { join as join8 } from "node:path";
+import { mkdirSync as mkdirSync6, readFileSync as readFileSync10, renameSync as renameSync4, writeFileSync as writeFileSync6 } from "node:fs";
+import { join as join11 } from "node:path";
 function createdToIso(created) {
   if (created === null || !Number.isFinite(created) || created <= 0) return null;
   return new Date(created * 1e3).toISOString();
@@ -221226,11 +223448,11 @@ function diffNewArrivals(catalog, snapshot) {
   };
 }
 function getCatalogSnapshotPath() {
-  return join8(getConfigDir(), "catalog-snapshot.json");
+  return join11(getConfigDir(), "catalog-snapshot.json");
 }
 function loadSnapshot(path = getCatalogSnapshotPath()) {
   try {
-    const raw = readFileSync8(path, "utf-8");
+    const raw = readFileSync10(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const obj = parsed;
@@ -221248,10 +223470,10 @@ function loadSnapshot(path = getCatalogSnapshotPath()) {
 }
 function saveSnapshot(snapshot, path = getCatalogSnapshotPath()) {
   try {
-    mkdirSync5(getConfigDir(), { recursive: true });
+    mkdirSync6(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync5(tmp, JSON.stringify(snapshot, null, 2));
-    renameSync3(tmp, path);
+    writeFileSync6(tmp, JSON.stringify(snapshot, null, 2));
+    renameSync4(tmp, path);
   } catch {
   }
 }
@@ -221342,10 +223564,10 @@ function renderNewArrivalsText(report) {
 }
 async function runDiscoverNewArrivals(opts = {}) {
   const report = await discoverNewArrivals(opts);
-  const dir = opts.outputDir ?? join8(resolveProjectMainRoot(), "reports", "model-arrivals");
-  mkdirSync5(dir, { recursive: true });
-  const reportPath = join8(dir, `${compactStamp()}-new-arrivals.md`);
-  writeFileSync5(reportPath, renderNewArrivalsMarkdown(report));
+  const dir = opts.outputDir ?? join11(resolveProjectMainRoot(), "reports", "model-arrivals");
+  mkdirSync6(dir, { recursive: true });
+  const reportPath = join11(dir, `${compactStamp()}-new-arrivals.md`);
+  writeFileSync6(reportPath, renderNewArrivalsMarkdown(report));
   return { report, reportPath };
 }
 
@@ -221364,6 +223586,8 @@ function parseArgs(argv) {
     minMeanF1: 0.95,
     securityTriage: false,
     triageModels: [],
+    searchExisting: false,
+    searchExistingModels: [],
     force: false,
     assessModel: null,
     checkHealth: false,
@@ -221421,6 +223645,12 @@ function parseArgs(argv) {
       i++;
     } else if (a === "--security-triage") {
       opts.securityTriage = true;
+    } else if (a === "--search-existing") {
+      opts.searchExisting = true;
+      while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
+        opts.searchExistingModels.push(argv[i + 1]);
+        i++;
+      }
     } else if (a === "--model") {
       opts.triageModels.push(takeValue(a, i));
       i++;
@@ -221495,6 +223725,20 @@ function printHelp() {
       "                    triage benchmark auto-discovers same-or-cheaper candidates.",
       "  --force           Ignore the per-model-per-day cache and re-run.",
       "",
+      "search_existing_implementations benchmark (separate task \u2014 duplicate-impl match):",
+      "  --search-existing [ID...]",
+      "                    Run the search_existing_implementations benchmark instead",
+      "                    of the keyword task. Drives the REAL search-existing",
+      "                    pipeline over a golden fixture codebase and scores it",
+      "                    DETERMINISTICALLY (micro precision/recall/F1 over the known",
+      "                    duplicate locations \u2014 no LLM judge), recommending the best",
+      "                    same-or-cheaper passer. Pass explicit model id(s) after the",
+      "                    flag to assess exactly those; with none, auto-discovers the",
+      "                    same-or-cheaper candidate pool. Writes a report under",
+      "                    reports/search-existing-benchmark/. Composes with --force.",
+      "  Pass gate: micro-F1 >= 0.85 AND micro-recall >= 0.85 AND coverage >= 0.90.",
+      "  Never auto-selects a pricier model. ADVISORY only \u2014 never edits config.",
+      "",
       "Cross-tool requirements assessment (free \u2014 no LLM call, no API key):",
       "  --check-health    Self-check the CONFIGURED model(s) of the active profile",
       "                    for catalog presence / cost drift / requirements",
@@ -221530,7 +223774,7 @@ function printHelp() {
     ].join("\n")
   );
 }
-function resolveApiKey2() {
+function resolveApiKey3() {
   const k = process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
   if (!k) {
     throw new Error(
@@ -221540,19 +223784,19 @@ function resolveApiKey2() {
   return k;
 }
 function resolveFixturesDir() {
-  const here = dirname2(fileURLToPath2(import.meta.url));
+  const here = dirname4(fileURLToPath3(import.meta.url));
   const candidates = [
-    join9(here, "fixtures"),
-    join9(here, "..", "src", "benchmark", "fixtures"),
-    join9(here, "..", "..", "src", "benchmark", "fixtures")
+    join12(here, "fixtures"),
+    join12(here, "..", "src", "benchmark", "fixtures"),
+    join12(here, "..", "..", "src", "benchmark", "fixtures")
   ];
   for (const c of candidates) {
-    if (existsSync6(join9(c, "file-01.ts"))) return c;
+    if (existsSync10(join12(c, "file-01.ts"))) return c;
   }
   throw new Error(`Could not locate benchmark fixtures. Tried:
   ${candidates.join("\n  ")}`);
 }
-function resolveMainRoot2() {
+function resolveMainRoot3() {
   return resolveProjectMainRoot();
 }
 async function main() {
@@ -221582,6 +223826,10 @@ async function main() {
       for (const id of pool) {
         if (!opts.triageModels.includes(id)) opts.triageModels.push(id);
       }
+    } else if (opts.searchExisting) {
+      for (const id of pool) {
+        if (!opts.searchExistingModels.includes(id)) opts.searchExistingModels.push(id);
+      }
     } else {
       for (const id of pool) {
         if (!opts.includeIds.includes(id)) opts.includeIds.push(id);
@@ -221590,6 +223838,9 @@ async function main() {
   }
   if (opts.securityTriage) {
     return runSecurityTriagePhase(opts);
+  }
+  if (opts.searchExisting) {
+    return runSearchExistingPhase(opts);
   }
   if (opts.assessModel !== null) {
     return runAssessModelPhase(opts.assessModel);
@@ -221604,9 +223855,9 @@ async function main() {
     throw new Error("--apply-profile requires --pick-top-n");
   }
   if (opts.fromCache) {
-    const cachePath2 = join9(homedir2(), ".llm-externalizer", "benchmark-results.json");
-    const cache = loadCachedReport(cachePath2);
-    console.error(`[benchmark] --from-cache: using ${cachePath2} (${cache.results.length} models, run at ${cache.timestamp}).`);
+    const cachePath3 = join12(homedir3(), ".llm-externalizer", "benchmark-results.json");
+    const cache = loadCachedReport(cachePath3);
+    console.error(`[benchmark] --from-cache: using ${cachePath3} (${cache.results.length} models, run at ${cache.timestamp}).`);
     if (opts.pickTopN === null) {
       throw new Error("--from-cache requires --pick-top-n (no point loading the cache otherwise).");
     }
@@ -221645,7 +223896,7 @@ async function main() {
     console.error("[benchmark] --dry-run: roster only, exiting before any API call.");
     return 0;
   }
-  const apiKey = resolveApiKey2();
+  const apiKey = resolveApiKey3();
   const roster = [
     ...candidates.map((m) => ({ model: m, isBaseline: false })),
     ...baselines.map((m) => ({ model: m, isBaseline: true }))
@@ -221681,17 +223932,17 @@ async function main() {
     results
   };
   const markdown = renderReport(reportInput);
-  mkdirSync6(dirname2(reportPath), { recursive: true });
-  writeFileSync6(reportPath, markdown, "utf-8");
+  mkdirSync7(dirname4(reportPath), { recursive: true });
+  writeFileSync7(reportPath, markdown, "utf-8");
   console.error(`[benchmark] Report: ${reportPath}`);
   const json = renderJson(reportInput);
-  const cacheJsonPath = join9(homedir2(), ".llm-externalizer", "benchmark-results.json");
-  mkdirSync6(dirname2(cacheJsonPath), { recursive: true });
-  writeFileSync6(cacheJsonPath, json, "utf-8");
+  const cacheJsonPath = join12(homedir3(), ".llm-externalizer", "benchmark-results.json");
+  mkdirSync7(dirname4(cacheJsonPath), { recursive: true });
+  writeFileSync7(cacheJsonPath, json, "utf-8");
   console.error(`[benchmark] JSON cache: ${cacheJsonPath}`);
   if (opts.jsonPath) {
-    mkdirSync6(dirname2(opts.jsonPath), { recursive: true });
-    writeFileSync6(opts.jsonPath, json, "utf-8");
+    mkdirSync7(dirname4(opts.jsonPath), { recursive: true });
+    writeFileSync7(opts.jsonPath, json, "utf-8");
     console.error(`[benchmark] JSON (user-path): ${opts.jsonPath}`);
   }
   const passers = [...results.values()].filter((r) => r.score?.pass).length;
@@ -221715,6 +223966,23 @@ async function runSecurityTriagePhase(opts) {
   console.error(`[triage] spend: $${result.costUsd.toFixed(6)}`);
   console.error(`[triage] report: ${result.mdReportPath}`);
   console.error(`[triage] json:   ${result.jsonReportPath}`);
+  process.stdout.write(`recommended_model=${result.recommendedModelId}
+`);
+  return 0;
+}
+async function runSearchExistingPhase(opts) {
+  console.error("[search-existing] search_existing_implementations model benchmark");
+  const result = await runSearchExistingBenchmark({
+    models: opts.searchExistingModels.length > 0 ? opts.searchExistingModels : void 0,
+    force: opts.force,
+    onProgress: (m) => console.error(`[search-existing] ${m}`)
+  });
+  console.error("");
+  console.error(`[search-existing] ${result.summaryLine}`);
+  console.error(`[search-existing] recommended: ${result.recommendedModelId} (changed=${result.changed})`);
+  console.error(`[search-existing] spend: $${result.costUsd.toFixed(6)}`);
+  console.error(`[search-existing] report: ${result.reportPath}`);
+  console.error(`[search-existing] json:   ${result.jsonReportPath}`);
   process.stdout.write(`recommended_model=${result.recommendedModelId}
 `);
   return 0;
@@ -221769,7 +224037,7 @@ function runPickPhase(results, opts) {
   console.error("# settings.yaml block (paste under `profiles:`):");
   process.stdout.write(block);
   if (opts.applyProfile !== null) {
-    const settingsPath = join9(homedir2(), ".llm-externalizer", "settings.yaml");
+    const settingsPath = join12(homedir3(), ".llm-externalizer", "settings.yaml");
     try {
       const result = applyPicksToSettings(settingsPath, opts.applyProfile, picks);
       console.error("");
@@ -221790,7 +224058,7 @@ function runPickPhase(results, opts) {
   return 0;
 }
 function buildReportPath() {
-  const root = resolveMainRoot2();
+  const root = resolveMainRoot3();
   const now = /* @__PURE__ */ new Date();
   const pad = (n) => String(n).padStart(2, "0");
   const offsetMin = -now.getTimezoneOffset();
@@ -221798,7 +224066,7 @@ function buildReportPath() {
   const offsetAbs = Math.abs(offsetMin);
   const tz = `${offsetSign}${pad(Math.floor(offsetAbs / 60))}${pad(offsetAbs % 60)}`;
   const ts2 = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${tz}`;
-  return join9(root, "reports", "benchmark", `${ts2}-model-comparison.md`);
+  return join12(root, "reports", "benchmark", `${ts2}-model-comparison.md`);
 }
 withUsageContext(
   { tool: "cli:benchmark", params: "" },

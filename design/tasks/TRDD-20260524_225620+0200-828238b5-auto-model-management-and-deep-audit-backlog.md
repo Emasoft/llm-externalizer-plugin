@@ -3,7 +3,7 @@ trdd-id: 828238b5-42d7-478e-8fe7-44d74f812286
 title: Auto-* model management suite + deep-audit findings backlog
 status: in-progress
 created: 2026-05-24T22:56:20+0200
-updated: 2026-05-25T10:12:00+0200
+updated: 2026-06-11T19:58:18+0200
 ---
 
 # TRDD-828238b5 — Auto-* model management suite + deep-audit findings backlog
@@ -162,7 +162,7 @@ this audit kept fixing. NOTE: `publish.py` already regenerates README badges
 - NOT a fake test: it enforces a real invariant (docs match code) by parsing the
   real source declarations, no mocks.
 
-### A6 — [L] Per-tool tailored benchmarks (capability 4, PARTIAL) — NOT STARTED (scoped; needs a focused session)
+### A6 — [L] Per-tool tailored benchmarks (capability 4, PARTIAL) — PARTIALLY DONE (search-existing shipped 2026-06-10; free-form code_task/scan_folder deferred)
 10 of 12 LLM tools have requirements (registry) but no benchmark dataset/scorer
 (the registry header explicitly marks them incremental; `benchmark: null`).
 Only `security_scan` (→ `benchmark/security-triage/`) and the generic keyword
@@ -210,23 +210,62 @@ consumer — premature before that, per YAGNI); (d) wire registry
 tackle the free-form tools (`code_task`/`scan_folder`) via an LLM-judge scorer.
 DEFERRED deliberately rather than faked.
 
-### A7 — [L] Auto-replacement loop (capability 2 "replacement" half, PARTIAL) — BLOCKED on A6
+**What shipped (2026-06-10) — `search_existing_implementations` benchmark:**
+- **Scan-pipeline + core extraction (B1 increment).** The
+  `search_existing_implementations` core was extracted from `index.ts`'s dispatch
+  into an importable module (`runSearchExistingImplementations`), guarded by the
+  existing test suite — so the benchmark drives the REAL pipeline (same FFD
+  bin-packed batching, same per-file-section prompt contract, same merged-report
+  assembly), not a re-implementation.
+- **Fixture corpus + golden dataset + deterministic scorer.** A real hand-authored
+  mini-codebase under `mcp-server/benchmark-fixtures/search-existing/` (retry,
+  LRU cache, memoization, slugify, debounce, HMAC tokens, leveled logger, plus an
+  absent-feature case that measures hallucination resistance). Every case states
+  the exact files a correct run must answer YES for; scoring is purely MECHANICAL
+  (precision/recall/F1 over the known duplicate locations — NO LLM judge).
+- **In-process runner via SeiDeps/FetchImpl.** The runner injects dependencies so
+  the pipeline runs in-process against a controllable fetch, measuring the model
+  the way the tool will actually use it.
+- **`select-common` extraction with security-triage refactored onto it.** The
+  shared same-or-cheaper selection gate was lifted into
+  `benchmark/select-common.ts` (now justified by the 2nd consumer per YAGNI), and
+  `security-triage/select.ts` was refactored onto it — DRY.
+- **Registry benchmark pointer flipped** to `search-existing` for
+  `search_existing_implementations`.
+- **3 surfaces.** MCP tool `search_existing_benchmark`, CLI flag
+  `llm-ext-benchmark --search-existing`, and slash command
+  `/llm-externalizer:llm-externalizer-search-existing-benchmark` — same core logic.
+
+Still deferred: the free-form tools (`code_task` / `scan_folder`) need an
+LLM-judge scorer (a sub-project like security-triage's `judgeGroups`), not a
+mechanical port — left for a follow-up rather than faked.
+
+### A7 — [L] Auto-replacement loop (capability 2 "replacement" half, PARTIAL) — UNBLOCKED for search_existing_implementations (its benchmark exists); broader rollout still pending
 Capstone. Wire durable health ledger (A1) → tool flagged degraded → run that
 tool's benchmark (A6) → surface best same-or-cheaper passer → opt-in per-tool
 `tool_models` write (extend `--apply-profile` to per-tool; CLI/cron only, never
 silent MCP). Depends on A1 + A6.
 
-A7 is genuinely blocked on A6: the "run that tool's benchmark" step has nothing
-to run until a 2nd real per-tool benchmark exists (A6). A1's foundation (durable
-health ledger) and A4's candidate-surfacing (`discover_new_models`) are in place;
-A7 also subsumes A1's deferred failure-signal emission (429/empty/non-retryable
-events threaded with the model id at the index.ts error classifier) and A4's
-deferred "auto-feed qualifying arrivals into the benchmark" step. Build A7 only
-after A6 lands at least one structured-output benchmark.
+A7 is now UNBLOCKED for `search_existing_implementations`: the "run that tool's
+benchmark" step has something real to run (the `search-existing` benchmark
+shipped 2026-06-10), so the auto-replacement loop can be built for that tool
+end-to-end. The BROADER rollout across the remaining tools still pends their
+benchmarks (the free-form `code_task` / `scan_folder` LLM-judge scorers, A6's
+deferred half). A1's foundation (durable health ledger) and A4's
+candidate-surfacing (`discover_new_models`) are in place; A7 also subsumes A1's
+deferred failure-signal emission (429/empty/non-retryable events threaded with
+the model id at the index.ts error classifier) and A4's deferred "auto-feed
+qualifying arrivals into the benchmark" step. Build the broader A7 only as each
+remaining tool's benchmark lands.
 
-**Status (2026-05-25):** A1–A5 SHIPPED (commits a307759, 5eb4998, 0eed8d2,
-f2dde4c, 4f684af). A6 scoped (see above) + A7 blocked on A6 — both are a focused
-follow-up session, not faked here.
+**Status (2026-06-10):** A1–A5 SHIPPED (commits a307759, 5eb4998, 0eed8d2,
+f2dde4c, 4f684af). A6 PARTIALLY DONE — the `search_existing_implementations`
+benchmark shipped (real fixture corpus + deterministic P/R/F1 scorer + in-process
+runner + `select-common` extraction + registry pointer + 3 surfaces); the
+free-form `code_task` / `scan_folder` benchmarks (LLM-judge scorer) remain
+deferred. A7 is now UNBLOCKED for `search_existing_implementations` (a 2nd real
+per-tool benchmark exists); the broader auto-replacement rollout across the
+remaining tools is still pending the free-form benchmarks.
 
 **Recommended build order:** A1 → A2 → A3 → A4 → A5 → A6 (tool-by-tool) → A7.
 

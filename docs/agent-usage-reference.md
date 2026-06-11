@@ -108,6 +108,7 @@ are grouped into LLM requests. See [answer_mode](#answer_mode) below.
 | `check_model_health` | Self-check the CONFIGURED model(s) of the ACTIVE profile (main / second / third + every `tool_models` entry). FREE — no LLM call, no token cost; one public catalog fetch (no API key). Reports presence (removed/deprecated = CRITICAL), cost drift vs a seeded baseline at `~/.llm-externalizer/model-baseline.json` (WARN), and per-served-tool requirements regression (WARN). Advisory only — never writes settings. Writes a report to `reports/model-health/`. CLI: `llm-ext-benchmark --check-health`. |
 | `discover_new_models` | Autodiscover models that newly appeared in the OpenRouter catalog since the last run. FREE — no LLM call, no token cost; one public catalog fetch (no API key). Diffs the live catalog against a seeded snapshot at `~/.llm-externalizer/catalog-snapshot.json` and assesses each new id against every tool's requirements. Advisory only — never writes settings. Writes a report to `reports/model-arrivals/`. CLI: `llm-ext-benchmark --new-arrivals [--qualifying-only]`. |
 | `security_triage_benchmark` | Qualify model(s) for `security_scan` against a labeled golden dataset, scored via the REAL judge pipeline; recommends the best SAME-OR-CHEAPER passer (never a pricier model). Cached per-model-per-day. Env `$OPENROUTER_API_KEY`. CLI: `llm-ext-benchmark --security-triage [--model <id>]`. |
+| `search_existing_benchmark` | Qualify model(s) for `search_existing_implementations` against a labeled golden-fixture codebase, scored DETERMINISTICALLY (precision/recall/F1 over the known duplicate locations — NO LLM judge) by driving the REAL search-existing pipeline in-process; recommends the best SAME-OR-CHEAPER passer (never a pricier model). Cached per-model-per-day. Env `$OPENROUTER_API_KEY`. CLI: `llm-ext-benchmark --search-existing [<id>...] [--force]`. |
 
 ### Per-tool model selection (`tool_models`)
 
@@ -122,7 +123,8 @@ optional `tool_models:` map; a tool resolves its model in this order:
 Absent `tool_models` ⇒ the profile's `model` (fully back-compatible). Keys must
 be real LLM-tool names (the loader rejects typos). A model placed here for a
 benchmarked tool SHOULD first pass that tool's gate — use `assess_model` for the
-requirements check and `security_triage_benchmark` for `security_scan`. The
+requirements check, `security_triage_benchmark` for `security_scan`, and
+`search_existing_benchmark` for `search_existing_implementations`. The
 auto-selection gates never bump a tool to a pricier model than its incumbent.
 
 ```yaml

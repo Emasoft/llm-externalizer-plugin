@@ -377,6 +377,15 @@ const TOOL_CATALOG = {
       output_dir: "Report directory",
     },
   },
+  search_existing_benchmark: {
+    desc: "Benchmark OpenRouter model(s) on the search_existing_implementations task (deterministic P/R/F1, no LLM judge); recommends best same-or-cheaper PASS.",
+    params: {
+      models: "Explicit model id(s) to assess (JSON array); omit to auto-discover candidates",
+      qualifying_top_n: "Cap the auto-discovered candidate pool (cheapest-first); default 16",
+      force: "Ignore the per-model-per-day cache and re-run",
+      output_dir: "Report directory",
+    },
+  },
   assess_model: {
     desc: "Assess ONE model against EVERY LLM tool's per-tool requirements. FREE — no LLM call.",
     params: {

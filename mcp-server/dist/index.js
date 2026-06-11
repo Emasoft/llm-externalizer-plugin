@@ -10320,7 +10320,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve9.call(this, root, ref);
+      let _sch = resolve11.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a2 = root.localRefs) === null || _a2 === void 0 ? void 0 : _a2[ref];
         const { schemaId } = this.opts;
@@ -10347,7 +10347,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve9(root, ref) {
+    function resolve11(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -10978,7 +10978,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve9(baseURI, relativeURI, options) {
+    function resolve11(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -11236,7 +11236,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve9,
+      resolve: resolve11,
       resolveComponent,
       equal,
       serialize,
@@ -11574,8 +11574,8 @@ var require_core = __commonJS({
             return this;
           }
           case "object": {
-            const cacheKey2 = schemaKeyRef;
-            this._cache.delete(cacheKey2);
+            const cacheKey3 = schemaKeyRef;
+            this._cache.delete(cacheKey3);
             let id = schemaKeyRef[this.opts.schemaId];
             if (id) {
               id = (0, resolve_1.normalizeId)(id);
@@ -14228,12 +14228,12 @@ var require_dist2 = __commonJS({
 // src/index.ts
 var import_yaml2 = __toESM(require_dist(), 1);
 import {
-  readFileSync as readFileSync15,
-  writeFileSync as writeFileSync11,
-  mkdirSync as mkdirSync15,
-  existsSync as existsSync11,
-  renameSync as renameSync6,
-  statSync as statSync7,
+  readFileSync as readFileSync16,
+  writeFileSync as writeFileSync12,
+  mkdirSync as mkdirSync16,
+  existsSync as existsSync13,
+  renameSync as renameSync7,
+  statSync as statSync8,
   appendFileSync as appendFileSync5,
   unlinkSync as unlinkSync2,
   realpathSync as realpathSync5,
@@ -14241,7 +14241,7 @@ import {
   unwatchFile
 } from "node:fs";
 import { spawnSync as spawnSync3 } from "node:child_process";
-import { extname as extname5, join as join16, basename as basename5, dirname as dirname10, resolve as resolve8, isAbsolute as isAbsolute4 } from "node:path";
+import { extname as extname5, join as join18, basename as basename5, dirname as dirname10, resolve as resolve10, isAbsolute as isAbsolute4 } from "node:path";
 import { randomUUID as randomUUID2 } from "node:crypto";
 
 // src/grouping.ts
@@ -25361,9 +25361,9 @@ var capitalizeFirstCharacter = (text) => {
   return text.charAt(0).toUpperCase() + text.slice(1);
 };
 function getUnitTypeFromNumber(number4) {
-  const abs = Math.abs(number4);
-  const last = abs % 10;
-  const last2 = abs % 100;
+  const abs2 = Math.abs(number4);
+  const last = abs2 % 10;
+  const last2 = abs2 % 100;
   if (last2 >= 11 && last2 <= 19 || last === 0)
     return "many";
   if (last === 1)
@@ -35665,7 +35665,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve9) => setTimeout(resolve9, pollInterval));
+        await new Promise((resolve11) => setTimeout(resolve11, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error48) {
@@ -35682,7 +35682,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve9, reject) => {
+    return new Promise((resolve11, reject) => {
       const earlyReject = (error48) => {
         reject(error48);
       };
@@ -35760,7 +35760,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve9(parseResult.data);
+            resolve11(parseResult.data);
           }
         } catch (error48) {
           reject(error48);
@@ -36021,12 +36021,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve9, reject) => {
+    return new Promise((resolve11, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve9, interval);
+      const timeoutId = setTimeout(resolve11, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -36985,7 +36985,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve9) => setTimeout(resolve9, pollInterval));
+      await new Promise((resolve11) => setTimeout(resolve11, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -37628,12 +37628,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve9) => {
+    return new Promise((resolve11) => {
       const json2 = serializeMessage(message);
       if (this._stdout.write(json2)) {
-        resolve9();
+        resolve11();
       } else {
-        this._stdout.once("drain", resolve9);
+        this._stdout.once("drain", resolve11);
       }
     });
   }
@@ -40914,8 +40914,8 @@ var DEFAULT_SKIP_DIRS = /* @__PURE__ */ new Set([
 function expandGlob(root, glob) {
   const all = walkFiles(root);
   const re = globToRegExp(glob);
-  return all.filter((abs) => {
-    const rel = relativeUnix(root, abs);
+  return all.filter((abs2) => {
+    const rel = relativeUnix(root, abs2);
     return re.test(rel);
   });
 }
@@ -40949,9 +40949,9 @@ function walkFiles(root) {
   out.sort();
   return out;
 }
-function relativeUnix(root, abs) {
+function relativeUnix(root, abs2) {
   const r = resolve2(root);
-  const a = resolve2(abs);
+  const a = resolve2(abs2);
   let rel = a.startsWith(r) ? a.slice(r.length) : a;
   rel = rel.replace(/^[/\\]+/, "").replace(/\\/g, "/");
   return rel;
@@ -41029,15 +41029,15 @@ function intake(targets, opts = {}) {
       reason: `content ${bytes} bytes > cap ${byteCap}`
     });
   };
-  const statTooBig = (id, category, abs, cap = byteCap) => {
+  const statTooBig = (id, category, abs2, cap = byteCap) => {
     let size;
     try {
-      size = statSync2(abs).size;
+      size = statSync2(abs2).size;
     } catch {
       return false;
     }
     if (size > cap) {
-      tooBig(id, category, abs, size);
+      tooBig(id, category, abs2, size);
       return true;
     }
     return false;
@@ -41072,17 +41072,17 @@ function intake(targets, opts = {}) {
       continue;
     }
     if (typeof t.file_path === "string") {
-      const abs = isAbsolute(t.file_path) ? t.file_path : resolve2(root, t.file_path);
+      const abs2 = isAbsolute(t.file_path) ? t.file_path : resolve2(root, t.file_path);
       const fileGate = typeof t.line === "number" ? MAX_FILE_READ_BYTES : byteCap;
-      if (statTooBig(t.id, t.category, abs, fileGate)) continue;
+      if (statTooBig(t.id, t.category, abs2, fileGate)) continue;
       let content;
       try {
-        content = readFileSync3(abs, "utf-8");
+        content = readFileSync3(abs2, "utf-8");
       } catch (e) {
         skipped.push({
           id: t.id,
           category: t.category,
-          file_path: abs,
+          file_path: abs2,
           reason: `read error: ${e.message}`
         });
         continue;
@@ -41094,7 +41094,7 @@ function intake(targets, opts = {}) {
           skipped.push({
             id: t.id,
             category: t.category,
-            file_path: abs,
+            file_path: abs2,
             reason: `line ${t.line} out of range (file has ${content.split("\n").length} lines)`
           });
           continue;
@@ -41104,7 +41104,7 @@ function intake(targets, opts = {}) {
           category: t.category,
           language: t.language,
           content: win.window,
-          file_path: abs,
+          file_path: abs2,
           line: t.line
         });
       } else {
@@ -41113,7 +41113,7 @@ function intake(targets, opts = {}) {
           category: t.category,
           language: t.language,
           content,
-          file_path: abs
+          file_path: abs2
         });
       }
       continue;
@@ -41143,29 +41143,29 @@ function intake(targets, opts = {}) {
         });
         continue;
       }
-      for (const abs of matched) {
-        if (statTooBig(`${t.id}::${relativeUnix(root, abs)}`, t.category, abs)) {
+      for (const abs2 of matched) {
+        if (statTooBig(`${t.id}::${relativeUnix(root, abs2)}`, t.category, abs2)) {
           continue;
         }
         let content;
         try {
-          content = readFileSync3(abs, "utf-8");
+          content = readFileSync3(abs2, "utf-8");
         } catch (e) {
           skipped.push({
             id: t.id,
             category: t.category,
-            file_path: abs,
+            file_path: abs2,
             reason: `read error: ${e.message}`
           });
           continue;
         }
         pushRedacted({
           // Glob fans into multiple files — make each id unique + traceable.
-          id: `${t.id}::${relativeUnix(root, abs)}`,
+          id: `${t.id}::${relativeUnix(root, abs2)}`,
           category: t.category,
           language: t.language,
           content,
-          file_path: abs
+          file_path: abs2
         });
       }
       continue;
@@ -41281,8 +41281,8 @@ function localIsoTimestamp(d = /* @__PURE__ */ new Date()) {
   const s = pad(d.getSeconds());
   const offMin = -d.getTimezoneOffset();
   const sign = offMin >= 0 ? "+" : "-";
-  const abs = Math.abs(offMin);
-  return `${y}-${mo}-${da}T${h}:${mi}:${s}${sign}${pad(Math.floor(abs / 60))}${pad(abs % 60)}`;
+  const abs2 = Math.abs(offMin);
+  return `${y}-${mo}-${da}T${h}:${mi}:${s}${sign}${pad(Math.floor(abs2 / 60))}${pad(abs2 % 60)}`;
 }
 function formatDuration(durationMs) {
   const ms = Math.max(0, Math.round(durationMs));
@@ -45590,6 +45590,2110 @@ function buildReportMarkdown(args) {
   return lines.join("\n") + "\n";
 }
 
+// src/benchmark/search-existing/index.ts
+import { createHash as createHash4 } from "node:crypto";
+import { existsSync as existsSync8, mkdirSync as mkdirSync7, readFileSync as readFileSync8, renameSync as renameSync2, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join10 } from "node:path";
+
+// src/benchmark/search-existing/dataset.ts
+import { existsSync as existsSync5, readdirSync as readdirSync3, statSync as statSync4 } from "node:fs";
+import { join as join8, resolve as resolve5 } from "node:path";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
+function resolveFixtureRoot() {
+  const here = fileURLToPath3(new URL(".", import.meta.url));
+  const candidates = [
+    resolve5(here, "../../../benchmark-fixtures/search-existing"),
+    // dist/ bundle layout: dist/<bundle>.js → one level less deep.
+    resolve5(here, "../../benchmark-fixtures/search-existing"),
+    resolve5(here, "../benchmark-fixtures/search-existing")
+  ];
+  for (const c of candidates) {
+    if (existsSync5(c) && statSync4(c).isDirectory()) return c;
+  }
+  throw new Error(
+    `search-existing fixture root not found near ${here} \u2014 looked at:
+` + candidates.map((c) => `  ${c}`).join("\n")
+  );
+}
+function listFixtureFiles(root = resolveFixtureRoot()) {
+  const out = [];
+  const walk = (dir, rel) => {
+    for (const entry of readdirSync3(dir, { withFileTypes: true })) {
+      const abs2 = join8(dir, entry.name);
+      const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(abs2, relPath);
+      } else if (entry.isFile() && entry.name !== "tsconfig.json") {
+        out.push(relPath);
+      }
+    }
+  };
+  walk(root, "");
+  return out.sort();
+}
+var SEARCH_EXISTING_CASES = [
+  {
+    id: "retry-backoff-ts",
+    featureDescription: "Retry a failing async operation with exponential backoff between attempts, rethrowing the last error when the attempts are exhausted.",
+    expectedYes: ["src/http/retry.ts", "src/http/client.ts"],
+    extensions: [".ts"],
+    rationale: "retry.ts is the canonical wrapper; client.ts re-implements the same semantics inline (while-loop, doubling delay) \u2014 the EXHAUSTIVE rule requires both. No other .ts fixture retries anything."
+  },
+  {
+    id: "retry-backoff-cross-language",
+    featureDescription: "Retry a failing operation with exponential backoff between attempts, rethrowing the last error when the attempts are exhausted.",
+    expectedYes: [
+      "src/http/retry.ts",
+      "src/http/client.ts",
+      "src/legacy/retry_old.py"
+    ],
+    extensions: [".ts", ".py"],
+    rationale: "Same truth as retry-backoff-ts plus the Python port \u2014 semantic equivalence must cross languages when .py is scanned."
+  },
+  {
+    id: "retry-self-reference-exclusion",
+    featureDescription: "Retry a failing async operation with exponential backoff between attempts, rethrowing the last error when the attempts are exhausted.",
+    expectedYes: ["src/http/client.ts"],
+    extensions: [".ts"],
+    sourceFiles: ["src/http/retry.ts"],
+    rationale: "retry.ts is supplied as the PR reference (source_files) so the pipeline excludes it from the scan; the only remaining duplicate is client.ts."
+  },
+  {
+    id: "lru-cache",
+    featureDescription: "An in-memory least-recently-used (LRU) cache with a maximum size that evicts the least recently used entry when full.",
+    expectedYes: ["src/cache/lru.ts"],
+    extensions: [".ts"],
+    rationale: "memo.ts is unbounded with no eviction policy at all, so it cannot be the LRU feature nor trivially composed into one (the fixture headers encode this disambiguation)."
+  },
+  {
+    id: "memoization",
+    featureDescription: "Wrap a pure function so repeated calls with the same arguments return a cached result instead of recomputing, keyed by the call arguments.",
+    expectedYes: ["src/cache/memo.ts"],
+    extensions: [".ts"],
+    rationale: "lru.ts is a bare data structure with get/set only \u2014 no get-or-compute wrapper exists, so memoizing with it still requires writing the whole wrap-and-key logic (not 'trivially composed')."
+  },
+  {
+    id: "slugify",
+    featureDescription: "Generate a URL-safe slug from an arbitrary string: lowercase it, strip accents, and collapse non-alphanumeric runs into single hyphens.",
+    expectedYes: ["src/util/slug.ts"],
+    extensions: [".ts"],
+    rationale: "Only slug.ts manipulates strings into slugs."
+  },
+  {
+    id: "debounce",
+    featureDescription: "A debounce utility that delays invoking a function until a quiet period has elapsed, where only the last call within the window executes.",
+    expectedYes: ["src/util/debounce.ts"],
+    extensions: [".ts"],
+    rationale: "Only debounce.ts schedules/cancels delayed invocations."
+  },
+  {
+    id: "hmac-token",
+    featureDescription: "Create and verify HMAC-signed tokens, with constant-time signature comparison on the verify path.",
+    expectedYes: ["src/auth/token.ts"],
+    extensions: [".ts"],
+    rationale: "Only token.ts touches crypto/signing."
+  },
+  {
+    id: "leveled-logger",
+    featureDescription: "A leveled logger (debug/info/warn/error) that drops messages below a configurable minimum level.",
+    expectedYes: ["src/log/logger.ts"],
+    extensions: [".ts"],
+    rationale: "Only logger.ts implements log levels and filtering."
+  },
+  {
+    id: "absent-feature-websocket-pool",
+    featureDescription: "A WebSocket connection pool that reuses open sockets per origin and enforces a maximum number of concurrent connections.",
+    expectedYes: [],
+    extensions: [".ts"],
+    rationale: "Nothing in the fixture opens sockets \u2014 every YES is a false positive. Measures hallucination resistance."
+  }
+];
+
+// src/benchmark/search-existing/runner.ts
+import { resolve as resolve8 } from "node:path";
+
+// src/search-existing/core.ts
+import { randomUUID } from "node:crypto";
+import { existsSync as existsSync7, statSync as statSync6, realpathSync as realpathSync3 } from "node:fs";
+import { resolve as resolve7 } from "node:path";
+
+// src/scan-pipeline.ts
+import {
+  readFileSync as readFileSync7,
+  existsSync as existsSync6,
+  statSync as statSync5,
+  lstatSync,
+  readdirSync as readdirSync4,
+  realpathSync as realpathSync2
+} from "node:fs";
+import { extname as extname4, join as join9, basename as basename4, dirname as dirname5, resolve as resolve6, sep } from "node:path";
+import { homedir as homedir2 } from "node:os";
+import { spawnSync } from "node:child_process";
+var EXT_TO_LANG = {
+  ".ts": "typescript",
+  ".tsx": "typescript",
+  ".mts": "typescript",
+  ".cts": "typescript",
+  ".js": "javascript",
+  ".jsx": "javascript",
+  ".mjs": "javascript",
+  ".cjs": "javascript",
+  ".py": "python",
+  ".rs": "rust",
+  ".go": "go",
+  ".java": "java",
+  ".kt": "kotlin",
+  ".c": "c",
+  ".h": "c",
+  ".cpp": "cpp",
+  ".hpp": "cpp",
+  ".cc": "cpp",
+  ".cs": "csharp",
+  ".rb": "ruby",
+  ".php": "php",
+  ".swift": "swift",
+  ".sh": "bash",
+  ".bash": "bash",
+  ".zsh": "zsh",
+  ".fish": "fish",
+  ".sql": "sql",
+  ".html": "html",
+  ".css": "css",
+  ".scss": "scss",
+  ".less": "less",
+  ".json": "json",
+  ".yaml": "yaml",
+  ".yml": "yaml",
+  ".toml": "toml",
+  ".xml": "xml",
+  ".md": "markdown",
+  ".mdx": "mdx",
+  ".tex": "latex",
+  ".lua": "lua",
+  ".r": "r",
+  ".R": "r",
+  ".dart": "dart",
+  ".ex": "elixir",
+  ".exs": "elixir",
+  ".zig": "zig",
+  ".nim": "nim",
+  ".jl": "julia",
+  ".sol": "solidity",
+  ".vue": "vue",
+  ".svelte": "svelte"
+};
+var SHEBANG_TO_LANG = {
+  python: "python",
+  python3: "python",
+  node: "javascript",
+  bash: "bash",
+  sh: "bash",
+  zsh: "zsh",
+  ruby: "ruby",
+  perl: "perl",
+  php: "php",
+  lua: "lua"
+};
+function detectLang(filePath) {
+  const ext = extname4(filePath).toLowerCase();
+  if (EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
+  try {
+    const head = readFileSync7(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
+    const shebang = head.match(/^#!\s*(?:\/usr\/bin\/env\s+)?(\S+)/);
+    if (shebang) {
+      const bin = basename4(shebang[1]);
+      if (SHEBANG_TO_LANG[bin]) return SHEBANG_TO_LANG[bin];
+    }
+  } catch {
+  }
+  return "text";
+}
+function fenceBackticks(content) {
+  let maxRun = 0;
+  let current = 0;
+  for (const ch of content) {
+    if (ch === "`") {
+      current++;
+      if (current > maxRun) maxRun = current;
+    } else {
+      current = 0;
+    }
+  }
+  const needed = Math.max(4, maxRun + 1);
+  return "`".repeat(needed);
+}
+function assertFileExists(filePath) {
+  if (!existsSync6(filePath)) {
+    throw new Error(`File not found: ${filePath}`);
+  }
+}
+function sanitizeInputPath(filePath) {
+  const resolved = resolve6(filePath);
+  const realpathSafe = (p) => {
+    try {
+      return realpathSync2(p);
+    } catch {
+      return p;
+    }
+  };
+  const cwdReal = realpathSafe(resolve6(process.cwd()));
+  const homeReal = realpathSafe(
+    resolve6(process.env.HOME || process.env.USERPROFILE || homedir2())
+  );
+  const tmpReal = realpathSafe(resolve6("/tmp"));
+  const resolvedReal = (() => {
+    try {
+      return realpathSync2(resolved);
+    } catch {
+      return resolved;
+    }
+  })();
+  const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep);
+  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
+    throw new Error(
+      `Path traversal blocked: ${filePath} resolves outside allowed directories`
+    );
+  }
+  try {
+    if (lstatSync(resolved).isSymbolicLink()) {
+      throw new Error(`Symlink rejected for security: ${filePath}`);
+    }
+  } catch (e) {
+    if (e.code === "ENOENT") return resolved;
+    throw e;
+  }
+  return resolved;
+}
+var DEFAULT_MAX_PAYLOAD_BYTES = 400 * 1024;
+function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexRedact, tagPrefix = "") {
+  const rawLimit = maxBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
+  const limit = !Number.isFinite(rawLimit) || rawLimit <= 0 ? DEFAULT_MAX_PAYLOAD_BYTES : rawLimit;
+  const safePath = sanitizeInputPath(filePath);
+  assertFileExists(safePath);
+  const stats = statSync5(safePath);
+  if (stats.size > limit) {
+    throw new Error(
+      `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
+    );
+  }
+  const raw = readFileSync7(safePath);
+  if (raw.length > limit) {
+    throw new Error(
+      `File too large after read (${(raw.length / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
+    );
+  }
+  const scanLen = Math.min(raw.length, 65536);
+  for (let i = 0; i < scanLen; i++) {
+    if (raw[i] === 0) throw new Error(`File appears to be binary: ${filePath}`);
+  }
+  let content = raw.toString("utf-8");
+  if (content.length === 0) {
+    content = `(empty file \u2014 0 bytes)`;
+  }
+  if (redact) {
+    const result = redactSecrets2(content);
+    content = result.redacted;
+  }
+  if (regexRedact) {
+    const result = applyRegexRedaction(content, regexRedact);
+    content = result.redacted;
+  }
+  const lang = langOverride || detectLang(filePath);
+  const fence = fenceBackticks(content);
+  const nameTag = `${tagPrefix}filename`;
+  const contentTag = `${tagPrefix}file-content`;
+  return `<${nameTag}>
+${filePath}
+</${nameTag}>
+<${contentTag}>
+${fence}${lang}
+${content}
+${fence}
+</${contentTag}>`;
+}
+var BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".bmp",
+  ".ico",
+  ".webp",
+  ".avif",
+  ".tiff",
+  ".tif",
+  ".mp3",
+  ".mp4",
+  ".wav",
+  ".ogg",
+  ".webm",
+  ".avi",
+  ".mov",
+  ".flac",
+  ".aac",
+  ".m4a",
+  ".pdf",
+  ".doc",
+  ".docx",
+  ".xls",
+  ".xlsx",
+  ".ppt",
+  ".pptx",
+  ".zip",
+  ".tar",
+  ".gz",
+  ".bz2",
+  ".xz",
+  ".7z",
+  ".rar",
+  ".dmg",
+  ".iso",
+  ".jar",
+  ".exe",
+  ".dll",
+  ".so",
+  ".dylib",
+  ".o",
+  ".a",
+  ".lib",
+  ".class",
+  ".pyc",
+  ".pyo",
+  ".wasm",
+  ".bin",
+  ".dat",
+  ".db",
+  ".sqlite",
+  ".sqlite3",
+  ".ttf",
+  ".otf",
+  ".woff",
+  ".woff2",
+  ".eot",
+  ".DS_Store",
+  ".lock"
+]);
+function isBinaryExtension(filePath) {
+  return BINARY_EXTENSIONS.has(extname4(filePath).toLowerCase()) || basename4(filePath) === ".DS_Store";
+}
+var SECRET_PATTERNS2 = [
+  [/AKIA[0-9A-Z]{16}/g, "AWS_KEY"],
+  [/(?:sk|pk)[-_](?:live|test|proj)[-_][A-Za-z0-9]{20,}/g, "API_KEY"],
+  [/ghp_[A-Za-z0-9]{36}/g, "GITHUB_PAT"],
+  [/ghr_[A-Za-z0-9]{36}/g, "GITHUB_TOKEN"],
+  [/gho_[A-Za-z0-9]{36}/g, "GITHUB_OAUTH"],
+  [/github_pat_[A-Za-z0-9_]{82}/g, "GITHUB_PAT"],
+  [/glpat-[A-Za-z0-9\-_]{20,}/g, "GITLAB_TOKEN"],
+  [/xox[bpsar]-[A-Za-z0-9-]+/g, "SLACK_TOKEN"],
+  [/Bearer\s+[A-Za-z0-9._\-/+=]{20,}/g, "BEARER_TOKEN"],
+  // Key-value patterns in env/config files (must have at least 8 chars in the value)
+  [
+    // Common env-var-style secret names. Extended in v9.9.0 from a hand-
+    // curated list to a hybrid approach: explicit names for the most-common
+    // OAuth / vendor key shapes AND a wildcard for any *_KEY / *_TOKEN /
+    // *_SECRET / *_PASSWORD. Wildcards intentionally catch JWT_SECRET,
+    // LM_API_TOKEN (the plugin's own preset!), STRIPE_SECRET_KEY,
+    // SUPABASE_SERVICE_KEY, SLACK_BOT_TOKEN, and similar without needing
+    // per-vendor patches.
+    /(?:^|\n)\s*(?:(?:PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|AUTH|AUTH_TOKEN|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|DB_PASSWORD|DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|AWS_SESSION_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITLAB_TOKEN|BITBUCKET_TOKEN|NPM_TOKEN|DOCKER_PASSWORD|HF_TOKEN|HUGGINGFACE_TOKEN|LM_API_TOKEN|VLLM_API_KEY|JWT_SECRET|JWT_PRIVATE_KEY|STRIPE_SECRET_KEY|STRIPE_API_KEY|SUPABASE_SERVICE_KEY|SUPABASE_ANON_KEY|FIREBASE_TOKEN|SLACK_BOT_TOKEN|SLACK_TOKEN|DISCORD_TOKEN|TELEGRAM_BOT_TOKEN|TWILIO_AUTH_TOKEN|SENDGRID_API_KEY|MAILGUN_API_KEY|SENTRY_AUTH_TOKEN|PRIVATE)|[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_APIKEY|_API_KEY|_AUTH))\s*[=:]\s*['"]?([^\s'"#\n]{8,})/gim,
+    "ENV_SECRET"
+  ],
+  // H7: Multi-line secret blocks (PEM private keys, certificates)
+  [
+    /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----/g,
+    "PEM_BLOCK"
+  ]
+];
+function scanForSecrets(content) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const [pattern, label] of SECRET_PATTERNS2) {
+    pattern.lastIndex = 0;
+    const matches = content.match(pattern);
+    if (matches && matches.length > 0) {
+      counts.set(label, (counts.get(label) ?? 0) + matches.length);
+    }
+  }
+  const details = Array.from(counts.entries()).map(([label, count]) => ({
+    label,
+    count
+  }));
+  return { found: details.length > 0, details };
+}
+function scanFilesForSecrets(filePaths) {
+  const allDetails = [];
+  for (const fp of filePaths) {
+    if (!existsSync6(fp)) continue;
+    try {
+      const content = readFileSync7(fp, "utf-8");
+      const scan = scanForSecrets(content);
+      if (scan.found) {
+        for (const d of scan.details) {
+          allDetails.push({ file: fp, ...d });
+        }
+      }
+    } catch {
+    }
+  }
+  if (allDetails.length === 0) return { found: false, report: "" };
+  const lines = [
+    "SECRETS DETECTED \u2014 operation aborted.",
+    "",
+    "Best practice: Move secrets to .env files (gitignored) and reference them via environment variables.",
+    "Claude Code cannot read .env files, ensuring secrets stay out of LLM context.",
+    "",
+    "Findings:"
+  ];
+  for (const d of allDetails) {
+    lines.push(`  ${d.file}: ${d.count}\xD7 ${d.label}`);
+  }
+  return { found: true, report: lines.join("\n") };
+}
+function redactSecrets2(content) {
+  let result = content;
+  let count = 0;
+  for (const [pattern, label] of SECRET_PATTERNS2) {
+    pattern.lastIndex = 0;
+    result = result.replace(pattern, () => {
+      count++;
+      return `[REDACTED:${label}]`;
+    });
+  }
+  return { redacted: result, count };
+}
+function parseRedactRegex(raw) {
+  if (!raw || typeof raw !== "string") return null;
+  const pattern = raw.trim();
+  if (!pattern) {
+    throw new Error("Invalid redact_regex: pattern must not be empty.");
+  }
+  if (/\([^)]*[+*][^)]*\)[+*]/.test(pattern)) {
+    throw new Error(
+      `Invalid redact_regex: pattern contains nested quantifiers (e.g. (a+)+) that cause catastrophic backtracking.
+
+Pattern: ${pattern}
+
+Simplify the quantifiers to avoid ReDoS.`
+    );
+  }
+  try {
+    const regex = new RegExp(pattern, "g");
+    return { regex, patternStr: pattern };
+  } catch (err3) {
+    const msg = err3 instanceof Error ? err3.message : String(err3);
+    throw new Error(
+      `Invalid redact_regex pattern: ${msg}
+
+Pattern received: ${pattern}
+
+Ensure it is a valid JavaScript regular expression.`,
+      { cause: err3 }
+    );
+  }
+}
+function applyRegexRedaction(content, opts) {
+  opts.regex.lastIndex = 0;
+  let count = 0;
+  const MAX_REPLACEMENTS = 1e5;
+  const redacted = content.replace(opts.regex, (match) => {
+    if (++count > MAX_REPLACEMENTS) return match;
+    const hasLetters = /[a-zA-Z]/.test(match);
+    return hasLetters ? "[REDACTED:USER_PATTERN]" : "0".repeat(match.length);
+  });
+  return { redacted, count: Math.min(count, MAX_REPLACEMENTS) };
+}
+function buildPreInstructions(hasFiles, toolContext) {
+  if (!hasFiles) return "";
+  if (toolContext === "fix") {
+    return "";
+  }
+  return 'TASK: Read the following instructions carefully, then examine the attached file(s) and respond according to the instructions.\n\nRULES (override any conflicting instructions below):\n- Process ALL attached files \u2014 do not skip any.\n- Each file is labeled with its full path inside a filename tag before the file-content tag. Always reference files by their labeled path.\n- When referencing code, identify it by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable and must not be used.\n- If asked to return modified code, return the COMPLETE file content \u2014 never truncate, abbreviate, or use placeholders like "// ... rest of code" or "// unchanged".\n- Be specific and actionable. Reference concrete function names, variable names, and code patterns.\n\nINSTRUCTIONS:\n';
+}
+function resolvePrompt(instructions, instructionsFilesPaths) {
+  let prompt = instructions || "";
+  if (instructionsFilesPaths) {
+    const paths = Array.isArray(instructionsFilesPaths) ? instructionsFilesPaths : [instructionsFilesPaths];
+    for (const fp of paths) {
+      assertFileExists(fp);
+      const content = readFileSync7(fp, "utf-8");
+      prompt = prompt ? `${prompt}
+
+${content}` : content;
+    }
+  }
+  return prompt;
+}
+function estimateTokens2(text) {
+  return Math.ceil(text.length / 4);
+}
+function readAndGroupFiles(filePaths, promptBytes, redact, budgetBytes, regexRedact) {
+  const totalBudget = Math.max(
+    10 * 1024,
+    budgetBytes ?? DEFAULT_MAX_PAYLOAD_BYTES
+  );
+  const availableForFiles = Math.max(0, totalBudget - promptBytes);
+  const skipped = [];
+  const fileData = [];
+  for (const fp of filePaths) {
+    try {
+      const stats = statSync5(fp);
+      if (stats.size > totalBudget) {
+        skipped.push(fp);
+        continue;
+      }
+      const block = readFileAsCodeBlock(fp, void 0, redact, totalBudget, regexRedact);
+      if (block.length > availableForFiles) {
+        skipped.push(fp);
+        continue;
+      }
+      fileData.push({ path: fp, block, tokens: estimateTokens2(block) });
+    } catch {
+      skipped.push(fp);
+    }
+  }
+  if (fileData.length === 0) {
+    return { groups: [], autoBatched: false, skipped };
+  }
+  const totalFileBytes = fileData.reduce((sum, fd) => sum + fd.block.length, 0);
+  if (totalFileBytes <= availableForFiles) {
+    return { groups: [fileData], autoBatched: false, skipped };
+  }
+  const sorted = [...fileData].sort((a, b) => b.block.length - a.block.length);
+  const bins = [];
+  for (const fd of sorted) {
+    let placed = false;
+    for (const bin of bins) {
+      if (bin.used + fd.block.length <= availableForFiles) {
+        bin.items.push(fd);
+        bin.used += fd.block.length;
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      bins.push({ items: [fd], used: fd.block.length });
+    }
+  }
+  const groups = bins.map((bin) => bin.items);
+  return { groups, autoBatched: groups.length > 1, skipped };
+}
+function resolveAnswerMode(raw, defaultMode) {
+  if (raw === 0 || raw === 1 || raw === 2) return raw;
+  return defaultMode;
+}
+function buildPerFileSectionPrompt(filePaths) {
+  if (filePaths.length <= 1) return "";
+  return "\n\nOUTPUT FORMAT: You are receiving " + filePaths.length + " input files. Produce a SEPARATE report section for each file, using this exact format:\n\n## File: <absolute-file-path>\n\n<your analysis/report for this file>\n\n---\n\nProduce exactly " + filePaths.length + " sections, one for each input file, in the order they appear. Do NOT merge or combine sections. Each file must have its own complete, independent section.\n";
+}
+var WALK_DEFAULT_EXCLUDE = /* @__PURE__ */ new Set([
+  // Version control
+  ".git",
+  // Package managers / dependencies
+  "node_modules",
+  "bower_components",
+  ".pnpm-store",
+  // Python
+  "__pycache__",
+  ".venv",
+  "venv",
+  ".tox",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".eggs",
+  "*.egg-info",
+  // Build outputs
+  "dist",
+  "build",
+  "out",
+  ".next",
+  ".nuxt",
+  ".output",
+  "target",
+  // Caches / temp
+  ".cache",
+  ".turbo",
+  "coverage",
+  "tmp",
+  "temp",
+  ".temp",
+  ".tmp",
+  // IDE / editor
+  ".idea",
+  ".vscode",
+  // Other
+  ".gradle",
+  ".cargo",
+  ".nx",
+  "vendor"
+]);
+var FORBIDDEN_GIT_CWD_PREFIXES = [
+  "/etc",
+  "/usr",
+  "/bin",
+  "/sbin",
+  "/sys",
+  "/proc",
+  "/dev",
+  "/var/log",
+  "/var/db",
+  "/Library",
+  "/System"
+];
+function validateGitCwd(dirPath) {
+  if (!dirPath || typeof dirPath !== "string") {
+    throw new Error("validateGitCwd: empty cwd not allowed");
+  }
+  if (dirPath.includes("..")) {
+    const trimmed = resolve6(dirPath);
+    if (trimmed.includes("..")) {
+      throw new Error(`validateGitCwd: path contains parent refs: ${dirPath}`);
+    }
+  }
+  const resolved = resolve6(dirPath);
+  const realpathSafe = (p) => {
+    try {
+      return realpathSync2(p);
+    } catch {
+      return p;
+    }
+  };
+  const resolvedReal = realpathSafe(resolved);
+  if (resolvedReal === "/" || resolvedReal === "") {
+    throw new Error(`validateGitCwd: filesystem root rejected: ${dirPath}`);
+  }
+  for (const sys of FORBIDDEN_GIT_CWD_PREFIXES) {
+    const sysReal = realpathSafe(sys);
+    if (resolvedReal === sysReal || resolvedReal.startsWith(sysReal + sep)) {
+      throw new Error(`validateGitCwd: system path rejected: ${dirPath}`);
+    }
+  }
+  const cwdReal = realpathSafe(resolve6(process.cwd()));
+  const homeReal = realpathSafe(
+    resolve6(process.env.HOME || process.env.USERPROFILE || homedir2())
+  );
+  const tmpReal = realpathSafe(resolve6("/tmp"));
+  const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep);
+  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
+    throw new Error(
+      `validateGitCwd: ${dirPath} resolves outside allowed roots (cwd/$HOME/tmp)`
+    );
+  }
+}
+var _gitOnPath = void 0;
+function ensureGitOnPath() {
+  if (_gitOnPath !== void 0) return _gitOnPath;
+  const probe = spawnSync("git", ["--version"], {
+    encoding: "utf-8",
+    timeout: 2e3,
+    killSignal: "SIGKILL"
+  });
+  _gitOnPath = probe.status === 0;
+  if (!_gitOnPath) {
+    process.stderr.write(
+      "[llm-externalizer] git not found on PATH \u2014 falling back to filesystem walk for directory scans\n"
+    );
+  }
+  return _gitOnPath;
+}
+function lstatSyncRetry(p) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return lstatSync(p);
+    } catch (err3) {
+      const code = err3.code;
+      if (code === "EAGAIN" || code === "EBUSY") {
+        const deadline = Date.now() + 50;
+        while (Date.now() < deadline) {
+        }
+        continue;
+      }
+      return null;
+    }
+  }
+  return null;
+}
+function gitLsFilesMultiRepo(dirPath, recursive) {
+  validateGitCwd(dirPath);
+  if (!ensureGitOnPath()) return null;
+  const GIT_TIMEOUT_MS = 5e3;
+  const gitOpts = {
+    encoding: "utf-8",
+    timeout: GIT_TIMEOUT_MS,
+    killSignal: "SIGKILL"
+  };
+  const allFiles = /* @__PURE__ */ new Set();
+  const topLevelResult = spawnSync(
+    "git",
+    ["rev-parse", "--show-toplevel"],
+    { cwd: dirPath, ...gitOpts }
+  );
+  const isInGitRepo = topLevelResult.status === 0 && topLevelResult.stdout.trim();
+  if (isInGitRepo) {
+    const trackedResult = spawnSync(
+      "git",
+      ["ls-files", "--cached"],
+      { cwd: dirPath, ...gitOpts }
+    );
+    if (trackedResult.status === 0 && trackedResult.stdout) {
+      for (const relPath of trackedResult.stdout.split("\n")) {
+        if (!relPath.trim()) continue;
+        allFiles.add(join9(dirPath, relPath));
+      }
+    }
+    const untrackedResult = spawnSync(
+      "git",
+      ["ls-files", "--others", "--exclude-standard"],
+      { cwd: dirPath, ...gitOpts }
+    );
+    if (untrackedResult.status === 0 && untrackedResult.stdout) {
+      for (const relPath of untrackedResult.stdout.split("\n")) {
+        if (!relPath.trim()) continue;
+        allFiles.add(join9(dirPath, relPath));
+      }
+    }
+  }
+  if (recursive) {
+    let findNestedGitRoots2 = function(dir, depth) {
+      if (depth > 10) return;
+      let entries;
+      try {
+        entries = readdirSync4(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (entry.name === ".git" || entry.name === "node_modules") continue;
+        if (entry.name.startsWith(".")) continue;
+        const subDir = join9(dir, entry.name);
+        const gitDir = join9(subDir, ".git");
+        const gitStat = lstatSyncRetry(gitDir);
+        const gitDirIsDir = gitStat ? gitStat.isDirectory() : false;
+        if (gitDirIsDir) {
+          nestedGitRoots.push(subDir);
+          continue;
+        }
+        findNestedGitRoots2(subDir, depth + 1);
+      }
+    };
+    var findNestedGitRoots = findNestedGitRoots2;
+    const nestedGitRoots = [];
+    findNestedGitRoots2(dirPath, 0);
+    for (const nestedRoot of nestedGitRoots) {
+      try {
+        validateGitCwd(nestedRoot);
+      } catch {
+        continue;
+      }
+      const nestedResult = spawnSync(
+        "git",
+        ["ls-files", "--cached", "--others", "--exclude-standard"],
+        { cwd: nestedRoot, ...gitOpts }
+      );
+      if (nestedResult.status === 0 && nestedResult.stdout) {
+        for (const relPath of nestedResult.stdout.split("\n")) {
+          if (!relPath.trim()) continue;
+          allFiles.add(join9(nestedRoot, relPath));
+        }
+      }
+    }
+  }
+  if (!isInGitRepo) return null;
+  return [...allFiles];
+}
+function walkDir(dirPath, options) {
+  const maxFiles = options?.maxFiles ?? 1e4;
+  const extensions = options?.extensions;
+  const skipBinary = !options?.includeBinary;
+  const recursive = options?.recursive !== false;
+  const followSymlinks = options?.followSymlinks !== false;
+  if (options?.useGitignore) {
+    const gitResults = gitLsFilesMultiRepo(dirPath, recursive);
+    if (gitResults !== null) {
+      const extraExcludeSet = new Set(options?.exclude ?? []);
+      const results2 = [];
+      for (const fullPath of gitResults) {
+        if (results2.length >= maxFiles) break;
+        if (skipBinary && isBinaryExtension(fullPath)) continue;
+        if (extensions) {
+          const ext = extname4(fullPath).toLowerCase();
+          if (!extensions.includes(ext)) continue;
+        }
+        if (extraExcludeSet.size > 0) {
+          const rel = fullPath.startsWith(dirPath) ? fullPath.slice(dirPath.length) : fullPath;
+          const segments = rel.split("/").filter((s) => s.length > 0);
+          const dirSegments = segments.slice(0, -1);
+          if (dirSegments.some((seg) => extraExcludeSet.has(seg))) continue;
+        }
+        results2.push(fullPath);
+      }
+      return results2;
+    }
+    process.stderr.write(
+      `[llm-externalizer] No git repo found in ${dirPath}, falling back to manual walk
+`
+    );
+  }
+  const results = [];
+  const extraExclude = options?.exclude ?? [];
+  const exclude = /* @__PURE__ */ new Set([...WALK_DEFAULT_EXCLUDE, ...extraExclude]);
+  const visitedPaths = /* @__PURE__ */ new Set();
+  function recurse(dir) {
+    if (results.length >= maxFiles) return;
+    let entries;
+    try {
+      entries = readdirSync4(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (results.length >= maxFiles) return;
+      const fullPath = join9(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        if (!followSymlinks) continue;
+        try {
+          const realPath = realpathSync2(fullPath);
+          if (visitedPaths.has(realPath)) continue;
+          visitedPaths.add(realPath);
+          const targetStat = statSync5(realPath);
+          if (targetStat.isDirectory() && recursive) {
+            if (!entry.name.startsWith(".") && !exclude.has(entry.name)) {
+              recurse(fullPath);
+            }
+          } else if (targetStat.isFile()) {
+            if (skipBinary && isBinaryExtension(fullPath)) continue;
+            if (extensions) {
+              const ext = extname4(entry.name).toLowerCase();
+              if (!extensions.includes(ext)) continue;
+            }
+            results.push(fullPath);
+          }
+        } catch {
+          continue;
+        }
+        continue;
+      }
+      if (entry.isDirectory()) {
+        if (!recursive) continue;
+        if (entry.name === ".git" || entry.name === ".svn" || entry.name === ".hg" || exclude.has(entry.name)) continue;
+        if (entry.name.startsWith(".")) continue;
+        try {
+          const dirRealPath = realpathSync2(fullPath);
+          if (visitedPaths.has(dirRealPath)) continue;
+          visitedPaths.add(dirRealPath);
+        } catch {
+          continue;
+        }
+        recurse(fullPath);
+      } else if (entry.isFile()) {
+        if (skipBinary && isBinaryExtension(fullPath)) continue;
+        if (extensions) {
+          const ext = extname4(entry.name).toLowerCase();
+          if (!extensions.includes(ext)) continue;
+        }
+        results.push(fullPath);
+      }
+    }
+  }
+  recurse(dirPath);
+  return results;
+}
+function extractLocalImports(filePath, sourceCode) {
+  const dir = dirname5(filePath);
+  const lang = detectLang(filePath);
+  const paths = [];
+  const patterns = [];
+  if (lang === "typescript" || lang === "javascript") {
+    patterns.push(/(?:import|export)\s+.*?from\s+['"](\.[^'"]+)['"]/g);
+    patterns.push(/require\(\s*['"](\.[^'"]+)['"]\s*\)/g);
+  } else if (lang === "python") {
+    patterns.push(/from\s+(\.[\w.]*)\s+import/g);
+  }
+  for (const pattern of patterns) {
+    pattern.lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(sourceCode)) !== null) {
+      const importPath = match[1];
+      let resolved;
+      if (lang === "python" && importPath.startsWith(".")) {
+        const dotCount = importPath.match(/^\.+/)?.[0].length ?? 1;
+        const modulePart = importPath.slice(dotCount);
+        const baseDir = dotCount === 1 ? dir : join9(dir, ...Array(dotCount - 1).fill(".."));
+        resolved = modulePart ? join9(baseDir, ...modulePart.split(".")) : baseDir;
+      } else {
+        resolved = join9(dir, importPath);
+      }
+      if (!extname4(resolved)) {
+        const tryExts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"];
+        let found = false;
+        for (const ext of tryExts) {
+          if (existsSync6(resolved + ext)) {
+            resolved = resolved + ext;
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          const indexCandidates = [
+            "index.ts",
+            "index.tsx",
+            "index.js",
+            "index.jsx",
+            "__init__.py"
+          ];
+          for (const leaf of indexCandidates) {
+            const indexPath = join9(resolved, leaf);
+            if (existsSync6(indexPath)) {
+              resolved = indexPath;
+              found = true;
+              break;
+            }
+          }
+        }
+        if (!found) continue;
+      } else if (!existsSync6(resolved)) {
+        continue;
+      }
+      paths.push(resolved);
+    }
+  }
+  return [...new Set(paths)];
+}
+
+// src/search-existing/core.ts
+async function runSearchExistingImplementations(args, deps) {
+  const {
+    feature_description,
+    folder_path: seiFolderPathRaw,
+    source_files: seiSourceFilesRaw,
+    diff_path: seiDiffPathRaw,
+    extensions: seiExtensions,
+    exclude_dirs: seiExcludeDirs,
+    max_files: seiMaxFiles,
+    redact_secrets: seiRedact,
+    redact_regex: seiRedactRegexRaw,
+    answer_mode: seiRawMode,
+    use_gitignore: seiUseGitignore,
+    scan_secrets: seiScan
+  } = args;
+  const seiUseEnsemble = deps.useEnsemble;
+  const seiBudgetBytes = (args.max_payload_kb ?? 400) * 1024;
+  if (typeof feature_description !== "string" || !feature_description.trim()) {
+    return {
+      content: [{ type: "text", text: "FAILED: feature_description is required (non-empty string)." }],
+      isError: true
+    };
+  }
+  const folderPathsRaw = Array.isArray(seiFolderPathRaw) ? seiFolderPathRaw.filter((p) => typeof p === "string" && p.trim()) : typeof seiFolderPathRaw === "string" && seiFolderPathRaw.trim() ? [seiFolderPathRaw] : [];
+  if (folderPathsRaw.length === 0) {
+    return {
+      content: [{ type: "text", text: "FAILED: folder_path is required (string or array of strings)." }],
+      isError: true
+    };
+  }
+  const folderPaths = [];
+  for (const fpRaw of folderPathsRaw) {
+    let fp;
+    try {
+      fp = sanitizeInputPath(fpRaw);
+    } catch (err3) {
+      return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
+    }
+    if (!existsSync7(fp)) {
+      return { content: [{ type: "text", text: `FAILED: Folder not found: ${fpRaw}` }], isError: true };
+    }
+    if (!statSync6(fp).isDirectory()) {
+      return { content: [{ type: "text", text: `FAILED: Not a directory: ${fpRaw}` }], isError: true };
+    }
+    folderPaths.push(fp);
+  }
+  const sourceFiles = [];
+  const sourceFilesCanonical = /* @__PURE__ */ new Set();
+  if (seiSourceFilesRaw !== void 0 && seiSourceFilesRaw !== null) {
+    const raw = Array.isArray(seiSourceFilesRaw) ? seiSourceFilesRaw : [seiSourceFilesRaw];
+    for (const sf of raw) {
+      if (typeof sf !== "string" || !sf.trim()) continue;
+      const resolved = resolve7(sf);
+      if (!existsSync7(resolved)) {
+        return {
+          content: [{ type: "text", text: `FAILED: source_files entry not found: ${sf}` }],
+          isError: true
+        };
+      }
+      sourceFiles.push(resolved);
+      sourceFilesCanonical.add(resolved);
+      try {
+        sourceFilesCanonical.add(realpathSync3(resolved));
+      } catch {
+      }
+    }
+  }
+  let diffPathResolved = void 0;
+  if (typeof seiDiffPathRaw === "string" && seiDiffPathRaw.trim()) {
+    const r = resolve7(seiDiffPathRaw);
+    if (!existsSync7(r)) {
+      return {
+        content: [{ type: "text", text: `FAILED: diff_path not found: ${seiDiffPathRaw}` }],
+        isError: true
+      };
+    }
+    diffPathResolved = r;
+  }
+  let seiEffectiveExts = seiExtensions;
+  if ((!seiEffectiveExts || seiEffectiveExts.length === 0) && sourceFiles.length > 0) {
+    const extSet = /* @__PURE__ */ new Set();
+    for (const sf of sourceFiles) {
+      const m = /\.[^./\\]+$/.exec(sf);
+      if (m) extSet.add(m[0]);
+    }
+    if (extSet.size > 0) seiEffectiveExts = Array.from(extSet);
+  }
+  let seiRegexRedact;
+  try {
+    seiRegexRedact = parseRedactRegex(seiRedactRegexRaw);
+  } catch (err3) {
+    return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
+  }
+  const descTrimmed = feature_description.trim();
+  const hasRef = sourceFiles.length > 0 || !!diffPathResolved;
+  const refBlock = hasRef ? "The reference implementation from the PR is appended to these instructions as " + (sourceFiles.length > 0 ? "one or more source files" : "context") + (diffPathResolved ? ", followed by a unified diff showing the EXACT new lines (prefixed with '+'). Focus on the new lines when reasoning about what the PR adds. " : ". ") + "The source files may contain many unrelated functions \u2014 only the one matching the description above is relevant.\n\n" : "No reference source files were provided \u2014 rely purely on the feature description above when reasoning about semantic equivalence.\n\n";
+  const seiBasePrompt = `You are checking every file in this batch for an existing implementation of this feature (or a helper that could be trivially composed to achieve it):
+
+    ${descTrimmed}
+
+` + refBlock + "For EACH file in the batch, answer SEMANTIC equivalence: the same goal achieved by different code still counts. Ignore naming differences and surface-level style.\n\nOutput format: each file gets its own section in the response, separated by '---'. Per-file answer is one line per finding, no preamble, no explanation.\n\nSection template:\n\n## File: <absolute-file-path>\n\n<one line per finding>\n\n---\n\nPer-finding line format:\n    NO\n  or\n    YES symbol=<function-or-class-name> lines=<start-end>\n\nEXHAUSTIVE: If a file contains MULTIPLE matches, output ALL of them as successive YES lines. Do NOT cap the count. Do NOT keep only the most relevant. The reviewer may want to delete EVERY existing copy and leave only the PR's new one, so every occurrence MUST be listed.\n\nSpecial case: if a file IS the reference (you recognize the PR code itself), output:\n    NO (self-reference)\n\nProduce exactly one section per input file, in the order they appear in the batch, separated by '---'. Do NOT merge sections. Do NOT write rationale. Do NOT quote code. Do NOT explain. One line per match per file. Nothing else.";
+  const seiInstrFiles = [...sourceFiles];
+  if (diffPathResolved) seiInstrFiles.push(diffPathResolved);
+  const seiBasePromptWithRef = resolvePrompt(
+    seiBasePrompt,
+    seiInstrFiles.length > 0 ? seiInstrFiles : void 0
+  );
+  if (!seiBasePromptWithRef.trim()) {
+    return {
+      content: [{ type: "text", text: "FAILED: specialized prompt came out empty (internal error)." }],
+      isError: true
+    };
+  }
+  const fileSet = /* @__PURE__ */ new Set();
+  const seiMaxFilesEffective = seiMaxFiles ?? 1e4;
+  for (const fp of folderPaths) {
+    const walked = walkDir(fp, {
+      extensions: seiEffectiveExts,
+      maxFiles: seiMaxFilesEffective,
+      exclude: seiExcludeDirs,
+      useGitignore: seiUseGitignore !== false
+      // default true
+    });
+    for (const f of walked) fileSet.add(f);
+  }
+  for (const walked of Array.from(fileSet)) {
+    if (sourceFilesCanonical.has(walked)) {
+      fileSet.delete(walked);
+      continue;
+    }
+    try {
+      const canonical2 = realpathSync3(walked);
+      if (sourceFilesCanonical.has(canonical2)) {
+        fileSet.delete(walked);
+      }
+    } catch {
+    }
+  }
+  const files = Array.from(fileSet);
+  if (files.length === 0) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `No matching files found after filtering. Folders: ${folderPaths.join(", ")}` + (seiEffectiveExts?.length ? `; extensions: ${seiEffectiveExts.join(", ")}` : "") + (sourceFiles.length ? `; excluded source_files: ${sourceFiles.length}` : "")
+        }
+      ]
+    };
+  }
+  if (files.length > seiMaxFilesEffective) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `FAILED: ${files.length} files matched, exceeding max_files=${seiMaxFilesEffective}. Narrow folder_path, pass extensions, or raise max_files.`
+        }
+      ],
+      isError: true
+    };
+  }
+  if (seiScan && !seiRedact) {
+    const scanResult = scanFilesForSecrets(files);
+    if (scanResult.found)
+      return {
+        content: [{ type: "text", text: scanResult.report }],
+        isError: true
+      };
+  }
+  const seiSystemMessage = "You are a code reviewer checking for duplicate implementations. Output per-file NO/YES answers in the exact format specified in the user prompt. Be terse \u2014 no rationale, no code quotes, no explanation. Identify matches by function/class/method NAME, never by line number in prose.";
+  const seiSystemBytes = Buffer.byteLength(seiSystemMessage, "utf-8");
+  const seiBaseBytes = Buffer.byteLength(seiBasePromptWithRef, "utf-8");
+  const seiPromptBytes = seiSystemBytes + seiBaseBytes + 2048;
+  const { groups: seiGroups, autoBatched: seiAutoBatched, skipped: seiSkipped } = readAndGroupFiles(files, seiPromptBytes, seiRedact, seiBudgetBytes, seiRegexRedact);
+  if (seiGroups.length === 0) {
+    const reasons = [];
+    if (seiSkipped.length > 0) {
+      reasons.push(
+        `${seiSkipped.length} file(s) exceeded the payload budget and were skipped`
+      );
+    } else {
+      reasons.push("no files fit within the payload budget");
+    }
+    return {
+      content: [
+        {
+          type: "text",
+          text: `FAILED: no batches could be formed. ${reasons.join("; ")}. Raise max_payload_kb (current: ${Math.round(seiBudgetBytes / 1024)} KB) or narrow folder_path to smaller files.`
+        }
+      ],
+      isError: true
+    };
+  }
+  const seiMode = resolveAnswerMode(seiRawMode, 2);
+  const seiBatchId = randomUUID();
+  const seiBatchResponses = [];
+  let seiAborted = false;
+  let seiAbortReason = "";
+  for (let gi = 0; gi < seiGroups.length; gi++) {
+    if (seiAborted) break;
+    const group = seiGroups[gi];
+    const groupPaths = group.map((fd) => fd.path);
+    let userContent = seiBasePromptWithRef;
+    userContent += buildPerFileSectionPrompt(groupPaths);
+    for (const fd of group) {
+      userContent += `
+
+${fd.block}`;
+    }
+    const messages = [
+      { role: "system", content: seiSystemMessage },
+      { role: "user", content: userContent }
+    ];
+    try {
+      const resp = await deps.callModel(messages);
+      seiBatchResponses.push({
+        idx: gi,
+        filePaths: groupPaths,
+        content: resp.content ?? "",
+        model: resp.model ?? deps.backendModel
+      });
+      if (deps.onProgress) {
+        deps.onProgress(
+          gi + 1,
+          seiGroups.length,
+          `search_existing_implementations: batch ${gi + 1}/${seiGroups.length} done (${groupPaths.length} files)`
+        );
+      }
+    } catch (err3) {
+      const classified = deps.classifyError(err3);
+      seiBatchResponses.push({
+        idx: gi,
+        filePaths: groupPaths,
+        content: "",
+        model: deps.backendModel,
+        error: classified.reason
+      });
+      if (classified.unrecoverable && classified.serviceLevel) {
+        seiAborted = true;
+        seiAbortReason = `Unrecoverable: ${classified.reason}`;
+      }
+    }
+  }
+  const seiBatchOk = seiBatchResponses.filter((r) => !r.error && r.content.trim().length > 0);
+  const seiBatchFailed = seiBatchResponses.filter((r) => r.error || !r.content.trim());
+  if (seiBatchOk.length === 0) {
+    const reason = seiAborted ? seiAbortReason : seiBatchFailed.length > 0 ? `all ${seiBatchFailed.length} batch(es) failed or returned empty: ${seiBatchFailed[0].error ?? "empty response"}` : "no batches produced output";
+    const failLines = [
+      `FAILED: search_existing_implementations produced zero usable output (${seiBatchOk.length}/${seiGroups.length} batches succeeded, ${files.length} files discovered)`,
+      `Reason: ${reason}`,
+      `Folders: ${folderPaths.join(", ")}`,
+      sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
+      diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
+      `Batch UUID: ${seiBatchId}`
+    ];
+    if (seiBatchFailed.length > 0) {
+      failLines.push("", "PER-BATCH FAILURES:");
+      for (const r of seiBatchFailed) {
+        failLines.push(
+          `  Batch ${r.idx + 1}/${seiGroups.length} (${r.filePaths.length} files): ${r.error ?? "empty response"}`
+        );
+      }
+    }
+    if (seiSkipped.length > 0) {
+      failLines.push("", `SKIPPED (exceeded payload budget, ${seiSkipped.length}):`);
+      for (const s of seiSkipped) failLines.push(`  ${s}`);
+    }
+    return {
+      content: [{ type: "text", text: failLines.join("\n") }],
+      isError: true
+    };
+  }
+  if (seiMode === 2) {
+    const sections = [];
+    sections.push(`# LLM Externalizer \u2014 search_existing_implementations`);
+    sections.push("");
+    sections.push(`**Feature**: ${descTrimmed}`);
+    sections.push(`**Folders**: ${folderPaths.join(", ")}`);
+    sections.push(`**Files scanned**: ${files.length}`);
+    sections.push(`**Batches**: ${seiGroups.length} (FFD bin-packed, ${seiAutoBatched ? "auto-batched" : "single batch"})`);
+    if (sourceFiles.length > 0) sections.push(`**Reference source files**: ${sourceFiles.length}`);
+    if (diffPathResolved) sections.push(`**Diff**: ${diffPathResolved}`);
+    if (seiSkipped.length > 0) {
+      sections.push("");
+      sections.push(`**SKIPPED** (exceeded payload budget): ${seiSkipped.length}`);
+      for (const s of seiSkipped) sections.push(`  - ${s}`);
+    }
+    sections.push("");
+    for (const r of seiBatchOk) {
+      sections.push(`---
+
+## Batch ${r.idx + 1}/${seiGroups.length} \u2014 ${r.filePaths.length} files`);
+      sections.push("");
+      sections.push(r.content.trim());
+      sections.push("");
+    }
+    if (seiBatchFailed.length > 0) {
+      sections.push("---\n\n## FAILED BATCHES");
+      sections.push("");
+      for (const r of seiBatchFailed) {
+        sections.push(`### Batch ${r.idx + 1}/${seiGroups.length} \u2014 ${r.filePaths.length} files`);
+        sections.push(`Error: ${r.error ?? "empty response"}`);
+        sections.push("Files:");
+        for (const fp of r.filePaths) sections.push(`  - ${fp}`);
+        sections.push("");
+      }
+    }
+    const mergedPath = deps.saveResponse(
+      "search_existing_implementations",
+      sections.join("\n"),
+      {
+        model: deps.ensembleModelLabel(seiUseEnsemble),
+        task: descTrimmed,
+        inputFile: folderPaths[0]
+      },
+      void 0,
+      deps.outputDir
+    );
+    const summary = [
+      `SEARCH COMPLETE \u2014 ${seiBatchOk.length}/${seiGroups.length} batches processed, ${files.length} files scanned, ${seiSkipped.length} skipped`,
+      `Folders: ${folderPaths.join(", ")}`,
+      sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
+      diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
+      `Batch UUID: ${seiBatchId}`,
+      `MERGED REPORT: ${mergedPath}`
+    ];
+    if (seiBatchFailed.length > 0) {
+      summary.push("", `FAILED BATCHES: ${seiBatchFailed.length} (see merged report for details)`);
+    }
+    if (seiAborted) summary.push("", `ABORTED: ${seiAbortReason}`);
+    return {
+      content: [{ type: "text", text: summary.join("\n") }],
+      isError: seiAborted
+    };
+  }
+  if (seiMode === 0) {
+    const seiPerFileReports = [];
+    const seiPerFileMissing = [];
+    for (const r of seiBatchOk) {
+      const sections = splitPerFileSections(r.content, r.filePaths);
+      for (const fp of r.filePaths) {
+        const body = sections.get(fp);
+        if (!body || !body.trim()) {
+          seiPerFileMissing.push({ inputPath: fp, batchIdx: r.idx });
+          continue;
+        }
+        const header = `# search_existing_implementations \u2014 ${fp}
+
+**Feature**: ${descTrimmed}
+**Source file**: ${fp}
+**Batch**: ${r.idx + 1}/${seiGroups.length}
+**Model**: ${r.model}
+
+---
+
+`;
+        const reportPath = deps.saveResponse(
+          "search_existing_implementations",
+          header + body.trim(),
+          {
+            model: r.model,
+            task: descTrimmed,
+            inputFile: fp
+          },
+          void 0,
+          deps.outputDir
+        );
+        seiPerFileReports.push({ inputPath: fp, reportPath });
+      }
+    }
+    const seiModeZeroLines = [
+      `SEARCH COMPLETE \u2014 ${seiBatchOk.length}/${seiGroups.length} batches processed, ${files.length} files scanned, ${seiSkipped.length} skipped`,
+      `Folders: ${folderPaths.join(", ")}`,
+      sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
+      diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
+      `Batch UUID: ${seiBatchId}`,
+      ""
+    ];
+    if (seiPerFileReports.length > 0) {
+      seiModeZeroLines.push(`REPORTS (one per input file, ${seiPerFileReports.length} total):`);
+      for (const p of seiPerFileReports) {
+        seiModeZeroLines.push(`  ${p.inputPath} -> ${p.reportPath}`);
+      }
+    }
+    if (seiPerFileMissing.length > 0) {
+      seiModeZeroLines.push(
+        "",
+        `MISSING SECTIONS (${seiPerFileMissing.length} files had no per-file section in the LLM response \u2014 raw batch content preserved in batch reports):`
+      );
+      for (const m of seiPerFileMissing) {
+        seiModeZeroLines.push(`  ${m.inputPath} (batch ${m.batchIdx + 1}/${seiGroups.length})`);
+      }
+    }
+    if (seiSkipped.length > 0) {
+      seiModeZeroLines.push("", `SKIPPED (exceeded payload budget, ${seiSkipped.length}):`);
+      for (const s of seiSkipped) seiModeZeroLines.push(`  ${s}`);
+    }
+    if (seiBatchFailed.length > 0) {
+      seiModeZeroLines.push("", `FAILED BATCHES (${seiBatchFailed.length}):`);
+      for (const r of seiBatchFailed) {
+        seiModeZeroLines.push(
+          `  Batch ${r.idx + 1}/${seiGroups.length} (${r.filePaths.length} files): ${r.error ?? "empty response"}`
+        );
+      }
+    }
+    if (seiAborted) seiModeZeroLines.push("", `ABORTED: ${seiAbortReason}`);
+    return {
+      content: [{ type: "text", text: seiModeZeroLines.join("\n") }],
+      isError: seiAborted
+    };
+  }
+  const seiAutoGroups = autoGroupByHeuristic(files);
+  const seiSectionByPath = /* @__PURE__ */ new Map();
+  const seiModelByPath = /* @__PURE__ */ new Map();
+  const seiBatchIdxByPath = /* @__PURE__ */ new Map();
+  for (const r of seiBatchOk) {
+    const sections = splitPerFileSections(r.content, r.filePaths);
+    for (const fp of r.filePaths) {
+      const body = sections.get(fp);
+      if (body && body.trim().length > 0) {
+        seiSectionByPath.set(fp, body.trim());
+        seiModelByPath.set(fp, r.model);
+        seiBatchIdxByPath.set(fp, r.idx);
+      }
+    }
+  }
+  const seiGroupReportPaths = [];
+  const seiGroupMissing = [];
+  for (const fg of seiAutoGroups) {
+    if (fg.files.length === 0) continue;
+    const gid = fg.id || "auto";
+    const sections = [];
+    sections.push(
+      `# search_existing_implementations \u2014 group ${gid}
+
+**Feature**: ${descTrimmed}
+**Files in group**: ${fg.files.length}
+
+` + fg.files.map((fp) => `  - ${fp}`).join("\n") + "\n\n---\n"
+    );
+    let anyBody = false;
+    for (const fp of fg.files) {
+      const body = seiSectionByPath.get(fp);
+      if (!body) {
+        seiGroupMissing.push(fp);
+        continue;
+      }
+      anyBody = true;
+      sections.push(`## File: ${fp}
+
+${body}
+`);
+    }
+    if (!anyBody) continue;
+    const reportPath = deps.saveResponse(
+      "search_existing_implementations",
+      sections.join("\n"),
+      {
+        model: deps.ensembleModelLabel(seiUseEnsemble),
+        task: descTrimmed,
+        inputFile: fg.files[0],
+        groupId: gid
+      },
+      void 0,
+      deps.outputDir
+    );
+    seiGroupReportPaths.push(`[group:${gid}] ${reportPath}`);
+  }
+  const seiSummaryLines = [
+    `SEARCH COMPLETE \u2014 ${seiBatchOk.length}/${seiGroups.length} batches processed, ${files.length} files scanned, ${seiSkipped.length} skipped`,
+    `Folders: ${folderPaths.join(", ")}`,
+    sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
+    diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
+    `Batch UUID: ${seiBatchId}`,
+    ""
+  ];
+  if (seiGroupReportPaths.length > 0) {
+    seiSummaryLines.push(`GROUP REPORTS (one per auto-group, ${seiGroupReportPaths.length} total):`);
+    for (const p of seiGroupReportPaths) seiSummaryLines.push(`  ${p}`);
+  }
+  if (seiGroupMissing.length > 0) {
+    seiSummaryLines.push(
+      "",
+      `MISSING SECTIONS (${seiGroupMissing.length} files had no per-file section in the LLM response):`
+    );
+    for (const p of seiGroupMissing) seiSummaryLines.push(`  ${p}`);
+  }
+  if (seiSkipped.length > 0) {
+    seiSummaryLines.push("", `SKIPPED (exceeded payload budget, ${seiSkipped.length}):`);
+    for (const s of seiSkipped) seiSummaryLines.push(`  ${s}`);
+  }
+  if (seiBatchFailed.length > 0) {
+    seiSummaryLines.push("", `FAILED BATCHES (${seiBatchFailed.length}):`);
+    for (const r of seiBatchFailed) {
+      seiSummaryLines.push(
+        `  Batch ${r.idx + 1}/${seiGroups.length} (${r.filePaths.length} files): ${r.error ?? "empty response"}`
+      );
+    }
+  }
+  if (seiAborted) seiSummaryLines.push("", `ABORTED: ${seiAbortReason}`);
+  return {
+    content: [{ type: "text", text: seiSummaryLines.join("\n") }],
+    isError: seiAborted
+  };
+}
+
+// src/benchmark/search-existing/score.ts
+function parseSectionVerdict(body) {
+  let sawNo = false;
+  for (const raw of body.split("\n")) {
+    const line = raw.trim();
+    if (!line || line === "---") continue;
+    if (/^YES\b/.test(line)) return "yes";
+    if (/^NO\b/.test(line)) {
+      sawNo = true;
+      continue;
+    }
+  }
+  return sawNo ? "no" : "unparseable";
+}
+function safePrecision(tp, fp) {
+  return tp + fp === 0 ? 1 : tp / (tp + fp);
+}
+function safeRecall(tp, fn) {
+  return tp + fn === 0 ? 1 : tp / (tp + fn);
+}
+function f1Of(precision, recall) {
+  return precision + recall === 0 ? 0 : 2 * precision * recall / (precision + recall);
+}
+function scoreCase(caseId, scannedFiles, expectedYes, verdicts) {
+  let tp = 0;
+  let fp = 0;
+  let fn = 0;
+  let tn = 0;
+  let unscored = 0;
+  for (const file2 of scannedFiles) {
+    const verdict = verdicts.get(file2);
+    const expectYes = expectedYes.has(file2);
+    if (verdict === "yes") {
+      if (expectYes) tp++;
+      else fp++;
+    } else if (verdict === "no") {
+      if (expectYes) fn++;
+      else tn++;
+    } else {
+      unscored++;
+      if (expectYes) fn++;
+    }
+  }
+  const precision = safePrecision(tp, fp);
+  const recall = safeRecall(tp, fn);
+  return {
+    caseId,
+    truePositives: tp,
+    falsePositives: fp,
+    falseNegatives: fn,
+    trueNegatives: tn,
+    unscored,
+    scannedFiles: scannedFiles.length,
+    precision,
+    recall,
+    f1: f1Of(precision, recall)
+  };
+}
+function aggregateScores(cases) {
+  let tp = 0;
+  let fp = 0;
+  let fn = 0;
+  let unscored = 0;
+  let scanned = 0;
+  for (const c of cases) {
+    tp += c.truePositives;
+    fp += c.falsePositives;
+    fn += c.falseNegatives;
+    unscored += c.unscored;
+    scanned += c.scannedFiles;
+  }
+  const microPrecision = safePrecision(tp, fp);
+  const microRecall = safeRecall(tp, fn);
+  return {
+    cases: [...cases],
+    microPrecision,
+    microRecall,
+    microF1: f1Of(microPrecision, microRecall),
+    macroF1: cases.length === 0 ? 0 : cases.reduce((sum, c) => sum + c.f1, 0) / cases.length,
+    coverage: scanned === 0 ? 0 : (scanned - unscored) / scanned
+  };
+}
+var DEFAULT_SEARCH_EXISTING_THRESHOLDS = {
+  minMicroF1: 0.85,
+  minMicroRecall: 0.85,
+  minCoverage: 0.9
+};
+function passesThresholds(score, thresholds = DEFAULT_SEARCH_EXISTING_THRESHOLDS) {
+  const failures = [];
+  if (score.microF1 < thresholds.minMicroF1) {
+    failures.push(
+      `micro-F1 ${score.microF1.toFixed(3)} < ${thresholds.minMicroF1}`
+    );
+  }
+  if (score.microRecall < thresholds.minMicroRecall) {
+    failures.push(
+      `micro-recall ${score.microRecall.toFixed(3)} < ${thresholds.minMicroRecall}`
+    );
+  }
+  if (score.coverage < thresholds.minCoverage) {
+    failures.push(
+      `coverage ${score.coverage.toFixed(3)} < ${thresholds.minCoverage}`
+    );
+  }
+  return { pass: failures.length === 0, failures };
+}
+
+// src/benchmark/search-existing/runner.ts
+var DEFAULT_API_URL = "https://openrouter.ai/api/v1/chat/completions";
+function abs(root, rel) {
+  return resolve8(root, rel);
+}
+async function runSearchExistingBenchmarkOnModel(modelId, cases = SEARCH_EXISTING_CASES, opts = { apiKey: "", pricing: { input_per_m_usd: 0, output_per_m_usd: 0, context_window: 0 } }, fetchImpl = realFetch) {
+  const fixtureRoot = resolveFixtureRoot();
+  const allFixtureRel = listFixtureFiles(fixtureRoot);
+  const apiUrl = opts.apiUrl ?? DEFAULT_API_URL;
+  const maxTokens = opts.maxTokens ?? 8192;
+  const temperature = opts.temperature ?? 0.1;
+  const perCallTimeoutMs = opts.perCallTimeoutMs ?? 6e5;
+  let costUsd = 0;
+  let latencyTotalMs = 0;
+  let callCount = 0;
+  const caseScores = [];
+  const failures = [];
+  for (let ci = 0; ci < cases.length; ci++) {
+    const c = cases[ci];
+    const sourceRel = new Set(c.sourceFiles ?? []);
+    const scannedAbs = allFixtureRel.filter((rel) => c.extensions.some((ext) => rel.endsWith(ext))).filter((rel) => !sourceRel.has(rel)).map((rel) => abs(fixtureRoot, rel));
+    const expectedYesAbs = new Set(c.expectedYes.map((rel) => abs(fixtureRoot, rel)));
+    let capturedMergedReport = "";
+    const saveResponse2 = (_tool, content) => {
+      capturedMergedReport = content;
+      return `memory://case/${c.id}`;
+    };
+    const callModel = async (messages) => {
+      const started = Date.now();
+      let res;
+      try {
+        res = await fetchImpl(apiUrl, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${opts.apiKey}`
+          },
+          body: JSON.stringify({
+            model: modelId,
+            messages,
+            temperature,
+            max_tokens: maxTokens
+          }),
+          signal: AbortSignal.timeout(perCallTimeoutMs)
+        });
+      } finally {
+        latencyTotalMs += Date.now() - started;
+        callCount++;
+      }
+      if (!res.ok) {
+        const bodyText = await res.text().catch(() => "");
+        throw new Error(`API error ${res.status}: ${bodyText.slice(0, 500)}`);
+      }
+      const json2 = await res.json();
+      const usage = json2.usage;
+      if (usage) {
+        costUsd += (usage.prompt_tokens ?? 0) / 1e6 * opts.pricing.input_per_m_usd + (usage.completion_tokens ?? 0) / 1e6 * opts.pricing.output_per_m_usd;
+      }
+      const content = json2.choices?.[0]?.message?.content ?? "";
+      return { content, model: modelId };
+    };
+    const deps = {
+      useEnsemble: false,
+      backendModel: modelId,
+      callModel,
+      // Never abort the sweep: every error is recoverable + non-service-level,
+      // so the pipeline records it as a per-batch error and continues. A whole
+      // case that produces zero usable output still returns isError (handled
+      // below), but a single bad batch within a multi-batch case does not stop.
+      classifyError: () => ({ reason: "benchmark batch error", unrecoverable: false, serviceLevel: false }),
+      saveResponse: saveResponse2,
+      ensembleModelLabel: () => modelId
+      // No onProgress / outputDir for the in-memory benchmark.
+    };
+    const args = {
+      feature_description: c.featureDescription,
+      folder_path: fixtureRoot,
+      extensions: c.extensions,
+      answer_mode: 2,
+      use_gitignore: false,
+      scan_secrets: false,
+      redact_secrets: false
+    };
+    if (c.sourceFiles && c.sourceFiles.length > 0) {
+      args.source_files = c.sourceFiles.map((rel) => abs(fixtureRoot, rel));
+    }
+    const result = await runSearchExistingImplementations(args, deps);
+    if (result.isError) {
+      const reason = result.content.map((p) => p.text).join("\n").split("\n")[0] ?? "pipeline FAILED";
+      failures.push({ caseId: c.id, reason });
+      caseScores.push(scoreCase(c.id, scannedAbs, expectedYesAbs, /* @__PURE__ */ new Map()));
+      if (opts.onProgress) opts.onProgress(ci + 1, cases.length);
+      continue;
+    }
+    const sections = splitPerFileSections(capturedMergedReport, scannedAbs);
+    const verdicts = /* @__PURE__ */ new Map();
+    for (const [path, body] of sections) {
+      verdicts.set(path, parseSectionVerdict(body));
+    }
+    caseScores.push(scoreCase(c.id, scannedAbs, expectedYesAbs, verdicts));
+    if (opts.onProgress) opts.onProgress(ci + 1, cases.length);
+  }
+  const aggregate2 = aggregateScores(caseScores);
+  return {
+    modelId,
+    caseScores,
+    aggregate: aggregate2,
+    pass: passesThresholds(aggregate2).pass,
+    costUsd,
+    meanLatencyMs: callCount === 0 ? 0 : latencyTotalMs / callCount,
+    failures
+  };
+}
+
+// src/benchmark/search-existing/select.ts
+var SEARCH_EXISTING_CRITERIA = TOOL_MODEL_REGISTRY.search_existing_implementations.requirements;
+function toGeneric2(c) {
+  const thr = passesThresholds(c.score);
+  return {
+    modelId: c.modelId,
+    qualified: c.qualified,
+    disqualifyReason: c.disqualifyReason,
+    inputDollarsPerMillion: c.inputDollarsPerMillion,
+    outputDollarsPerMillion: c.outputDollarsPerMillion,
+    latencyMs: c.latencyMs,
+    benchmarkPass: thr.pass,
+    benchmarkScore: c.score.microF1,
+    benchmarkFailReasons: thr.failures
+  };
+}
+function selectSearchExistingModel(input) {
+  const byModelId = new Map(
+    input.candidates.map((c) => [c.modelId, c])
+  );
+  const generic = selectSameOrCheaper({
+    candidates: input.candidates.map(toGeneric2),
+    incumbentModelId: input.incumbentModelId,
+    incumbentInputDollarsPerMillion: input.incumbentInputDollarsPerMillion,
+    incumbentOutputDollarsPerMillion: input.incumbentOutputDollarsPerMillion,
+    requirementsLabel: "search-existing requirements",
+    benchmarkLabel: "the search-existing benchmark"
+  });
+  return {
+    recommendedModelId: generic.recommendedModelId,
+    changed: generic.changed,
+    reason: generic.reason,
+    eligible: generic.eligible.map((g) => byModelId.get(g.modelId)),
+    rejected: generic.rejected
+  };
+}
+
+// src/benchmark/search-existing/index.ts
+var INCUMBENT_FALLBACK_PRICING2 = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
+function cachePath2() {
+  return join10(getConfigDir(), "search-existing-results.json");
+}
+function cacheKey2(modelId, date5, datasetHash) {
+  return `${modelId}::${date5}::${datasetHash}`;
+}
+function loadCache2() {
+  const p = cachePath2();
+  if (!existsSync8(p)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync8(p, "utf-8"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+  } catch {
+  }
+  return {};
+}
+function saveCache2(cache) {
+  const dir = getConfigDir();
+  mkdirSync7(dir, { recursive: true });
+  const p = cachePath2();
+  const tmp = `${p}.tmp.${process.pid}`;
+  writeFileSync5(tmp, JSON.stringify(cache, null, 2), "utf-8");
+  renameSync2(tmp, p);
+}
+function resolveApiKey2(override) {
+  const k = override || process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
+  if (!k) {
+    throw new Error(
+      "OPENROUTER_API_KEY not set. Export it in your shell, or set the plugin option 'openrouter_api_key' via Claude Code's /plugin configure."
+    );
+  }
+  return k;
+}
+function resolveMainRoot2(override) {
+  return resolveProjectMainRoot(override);
+}
+function today2() {
+  return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+}
+function reportStamp2() {
+  const d = /* @__PURE__ */ new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  const off = -d.getTimezoneOffset();
+  const sign = off >= 0 ? "+" : "-";
+  const oh = p(Math.floor(Math.abs(off) / 60));
+  const om = p(Math.abs(off) % 60);
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}${sign}${oh}${om}`;
+}
+function pricingFromModel2(m) {
+  return {
+    input_per_m_usd: m.inputDollarsPerMillion,
+    output_per_m_usd: m.outputDollarsPerMillion,
+    context_window: m.contextTokens
+  };
+}
+function decorate2(raw) {
+  const ctx = raw.context_length ?? 0;
+  const maxOutRaw = raw.top_provider?.max_completion_tokens;
+  const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
+  const promptPerToken = parseFloat(raw.pricing?.prompt ?? "NaN");
+  const completionPerToken = parseFloat(raw.pricing?.completion ?? "NaN");
+  const params = new Set(raw.supported_parameters ?? []);
+  return {
+    id: raw.id,
+    name: raw.name ?? raw.id,
+    contextTokens: ctx,
+    maxOutputTokens: maxOut,
+    inputDollarsPerMillion: isFinite(promptPerToken) ? promptPerToken * 1e6 : Infinity,
+    outputDollarsPerMillion: isFinite(completionPerToken) ? completionPerToken * 1e6 : Infinity,
+    supportsStructured: params.has("structured_outputs") || params.has("response_format"),
+    supportsReasoning: params.has("reasoning") || params.has("include_reasoning"),
+    raw
+  };
+}
+async function runSearchExistingBenchmark(opts = {}) {
+  const apiKey = resolveApiKey2(opts.apiKey);
+  const cases = SEARCH_EXISTING_CASES;
+  const datasetHash = createHash4("sha1").update(JSON.stringify(cases)).digest("hex").slice(0, 12);
+  const thresholds = opts.thresholds ?? DEFAULT_SEARCH_EXISTING_THRESHOLDS;
+  const incumbentId = opts.incumbentModelId ?? DEFAULT_MODEL;
+  const progress = opts.onProgress ?? (() => {
+  });
+  const freeOnly = getActiveFreeOnly();
+  progress(`Loaded ${cases.length} golden cases (dataset ${datasetHash}).`);
+  progress("Fetching OpenRouter model catalog\u2026");
+  const catalog = await fetchProgrammingModels();
+  const byId = new Map(catalog.map((m) => [m.id, m]));
+  const incumbentRaw = byId.get(incumbentId);
+  const incumbentDecorated = incumbentRaw ? decorate2(incumbentRaw) : null;
+  const incumbentIn = incumbentDecorated && isFinite(incumbentDecorated.inputDollarsPerMillion) ? incumbentDecorated.inputDollarsPerMillion : INCUMBENT_FALLBACK_PRICING2.input_per_m_usd;
+  const incumbentOut = incumbentDecorated && isFinite(incumbentDecorated.outputDollarsPerMillion) ? incumbentDecorated.outputDollarsPerMillion : INCUMBENT_FALLBACK_PRICING2.output_per_m_usd;
+  const toAssess = /* @__PURE__ */ new Map();
+  const addModel = (model, qualified, disqualifyReason2) => {
+    if (!toAssess.has(model.id)) toAssess.set(model.id, { model, qualified, disqualifyReason: disqualifyReason2 });
+  };
+  if (opts.models && opts.models.length > 0) {
+    for (const id of opts.models) {
+      const raw = byId.get(id);
+      if (raw) {
+        const q = qualify(raw, SEARCH_EXISTING_CRITERIA);
+        addModel(
+          q ?? decorate2(raw),
+          q !== null,
+          q ? void 0 : "below search-existing requirements (cost/context/structured-output/reasoning)"
+        );
+      } else {
+        const fp = KNOWN_PRICING[id] ?? INCUMBENT_FALLBACK_PRICING2;
+        addModel(
+          {
+            id,
+            name: id,
+            contextTokens: fp.context_window,
+            maxOutputTokens: fp.context_window,
+            inputDollarsPerMillion: fp.input_per_m_usd,
+            outputDollarsPerMillion: fp.output_per_m_usd,
+            supportsStructured: false,
+            supportsReasoning: false,
+            raw: { id }
+          },
+          false,
+          "not found in the OpenRouter catalog"
+        );
+      }
+    }
+  } else {
+    const { candidates } = buildBenchmarkRoster(catalog, SEARCH_EXISTING_CRITERIA, []);
+    const sameOrCheaper = candidates.filter((c) => c.inputDollarsPerMillion <= incumbentIn + 1e-9 && c.outputDollarsPerMillion <= incumbentOut + 1e-9).sort((a, b) => a.inputDollarsPerMillion + a.outputDollarsPerMillion - (b.inputDollarsPerMillion + b.outputDollarsPerMillion)).slice(0, opts.qualifyingTopN ?? 16);
+    for (const c of sameOrCheaper) addModel(c, true);
+  }
+  if (!toAssess.has(incumbentId)) {
+    if (incumbentDecorated) {
+      const q = qualify(incumbentDecorated.raw, SEARCH_EXISTING_CRITERIA);
+      addModel(incumbentDecorated, q !== null, q ? void 0 : "below search-existing requirements");
+    } else {
+      addModel(
+        {
+          id: incumbentId,
+          name: incumbentId,
+          contextTokens: INCUMBENT_FALLBACK_PRICING2.context_window,
+          maxOutputTokens: INCUMBENT_FALLBACK_PRICING2.context_window,
+          inputDollarsPerMillion: incumbentIn,
+          outputDollarsPerMillion: incumbentOut,
+          supportsStructured: true,
+          supportsReasoning: true,
+          raw: { id: incumbentId }
+        },
+        true
+      );
+    }
+  }
+  progress(`Assessing ${toAssess.size} model(s) over ${cases.length} cases\u2026`);
+  const cache = loadCache2();
+  const assessments = [];
+  let totalCost = 0;
+  for (const { model, qualified, disqualifyReason: disqualifyReason2 } of toAssess.values()) {
+    if (freeOnly && !model.id.endsWith(":free")) {
+      progress(`  ${model.id}: skipped (free_only \u2014 non-':free' model).`);
+      const emptyAggregate = aggregateScores([]);
+      assessments.push({
+        modelId: model.id,
+        qualified: false,
+        disqualifyReason: "free_only active \u2014 non-':free' model not benchmarked",
+        inputDollarsPerMillion: model.inputDollarsPerMillion,
+        outputDollarsPerMillion: model.outputDollarsPerMillion,
+        latencyMs: 0,
+        score: emptyAggregate,
+        failureReasons: [],
+        costUsd: 0
+      });
+      continue;
+    }
+    const key = cacheKey2(model.id, today2(), datasetHash);
+    const cached2 = cache[key];
+    let score;
+    let costUsd;
+    let latencyMs;
+    let failureReasons;
+    if (cached2 && !opts.force) {
+      progress(`  ${model.id}: cache hit (${today2()}).`);
+      score = cached2.score;
+      costUsd = cached2.costUsd;
+      latencyMs = cached2.latencyMs;
+      failureReasons = cached2.failureReasons;
+    } else {
+      progress(`  ${model.id}: running\u2026`);
+      const run = await runSearchExistingBenchmarkOnModel(
+        model.id,
+        cases,
+        {
+          apiKey,
+          pricing: pricingFromModel2(model),
+          perCallTimeoutMs: opts.perCallTimeoutMs ?? 12e4
+        },
+        opts.fetchImpl
+      );
+      score = run.aggregate;
+      costUsd = run.costUsd;
+      latencyMs = Math.round(run.meanLatencyMs);
+      failureReasons = run.failures.map((f) => `${f.caseId}: ${f.reason}`);
+      cache[key] = {
+        date: today2(),
+        datasetHash,
+        score,
+        costUsd,
+        latencyMs,
+        inputDollarsPerMillion: model.inputDollarsPerMillion,
+        outputDollarsPerMillion: model.outputDollarsPerMillion,
+        qualified,
+        disqualifyReason: disqualifyReason2,
+        failureReasons
+      };
+    }
+    totalCost += costUsd;
+    assessments.push({
+      modelId: model.id,
+      qualified,
+      disqualifyReason: disqualifyReason2,
+      inputDollarsPerMillion: model.inputDollarsPerMillion,
+      outputDollarsPerMillion: model.outputDollarsPerMillion,
+      latencyMs,
+      score,
+      failureReasons,
+      costUsd
+    });
+    const thr = passesThresholds(score, thresholds);
+    progress(
+      `    ${model.id}: ${thr.pass ? "PASS" : "FAIL"} microF1=${score.microF1.toFixed(3)} microR=${score.microRecall.toFixed(3)} cov=${score.coverage.toFixed(3)} fail=${failureReasons.length}`
+    );
+  }
+  saveCache2(cache);
+  const selection = selectSearchExistingModel({
+    candidates: assessments,
+    incumbentModelId: incumbentId,
+    incumbentInputDollarsPerMillion: incumbentIn,
+    incumbentOutputDollarsPerMillion: incumbentOut
+  });
+  const mainRoot = resolveMainRoot2(opts.mainRoot);
+  const reportDir = opts.outputDir ?? join10(mainRoot, "reports", "search-existing-benchmark");
+  mkdirSync7(reportDir, { recursive: true });
+  const stamp = reportStamp2();
+  const jsonReportPath = join10(reportDir, `${stamp}-search-existing-benchmark.json`);
+  const reportPath = join10(reportDir, `${stamp}-search-existing-benchmark.md`);
+  const jsonPayload = {
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    datasetHash,
+    caseCount: cases.length,
+    thresholds,
+    incumbent: { modelId: incumbentId, inputDollarsPerMillion: incumbentIn, outputDollarsPerMillion: incumbentOut },
+    recommendedModelId: selection.recommendedModelId,
+    changed: selection.changed,
+    reason: selection.reason,
+    costUsd: totalCost,
+    assessments: assessments.map((a) => {
+      const thr = passesThresholds(a.score, thresholds);
+      return {
+        modelId: a.modelId,
+        qualified: a.qualified,
+        disqualifyReason: a.disqualifyReason,
+        inputDollarsPerMillion: a.inputDollarsPerMillion,
+        outputDollarsPerMillion: a.outputDollarsPerMillion,
+        latencyMs: a.latencyMs,
+        pass: thr.pass,
+        failures: thr.failures,
+        microPrecision: a.score.microPrecision,
+        microRecall: a.score.microRecall,
+        microF1: a.score.microF1,
+        macroF1: a.score.macroF1,
+        coverage: a.score.coverage,
+        failureReasons: a.failureReasons,
+        costUsd: a.costUsd
+      };
+    }),
+    rejected: selection.rejected,
+    perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
+  };
+  const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
+  writeFileSync5(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync2(jtmp, jsonReportPath);
+  const md = buildReportMarkdown2({
+    cases,
+    datasetHash,
+    incumbentId,
+    incumbentIn,
+    incumbentOut,
+    thresholds,
+    assessments,
+    selection,
+    totalCost
+  });
+  const mtmp = `${reportPath}.tmp.${process.pid}`;
+  writeFileSync5(mtmp, md, "utf-8");
+  renameSync2(mtmp, reportPath);
+  const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
+  return {
+    recommendedModelId: selection.recommendedModelId,
+    changed: selection.changed,
+    selection,
+    results: assessments,
+    costUsd: totalCost,
+    reportPath,
+    jsonReportPath,
+    summaryLine
+  };
+}
+function buildReportMarkdown2(args) {
+  const lines = [];
+  lines.push("# search_existing_implementations \u2014 model benchmark");
+  lines.push("");
+  lines.push(`**Run:** ${(/* @__PURE__ */ new Date()).toISOString()}`);
+  lines.push(`**Dataset:** ${args.cases.length} golden fixture cases (hash ${args.datasetHash})`);
+  lines.push(`**Incumbent default:** \`${args.incumbentId}\` (in $${args.incumbentIn.toFixed(3)}/M, out $${args.incumbentOut.toFixed(3)}/M)`);
+  lines.push(
+    `**Pass gate:** micro-F1 \u2265 ${args.thresholds.minMicroF1.toFixed(2)} AND micro-recall \u2265 ${args.thresholds.minMicroRecall.toFixed(2)} AND coverage \u2265 ${args.thresholds.minCoverage.toFixed(2)}`
+  );
+  lines.push(`**Total LLM spend:** $${args.totalCost.toFixed(6)}`);
+  lines.push("");
+  lines.push(`## Recommendation`);
+  lines.push("");
+  lines.push(`**${args.selection.changed ? "SWITCH" : "KEEP"} \u2192 \`${args.selection.recommendedModelId}\`**`);
+  lines.push("");
+  lines.push(args.selection.reason);
+  lines.push("");
+  lines.push(`## Assessed models`);
+  lines.push("");
+  lines.push("| Model | Req | Bench | micro-P | micro-R | micro-F1 | macro-F1 | Cov | Fail | in $/M | out $/M | lat ms |");
+  lines.push("|---|---|---|---|---|---|---|---|---|---|---|---|");
+  const sorted = [...args.assessments].sort((a, b) => b.score.microF1 - a.score.microF1);
+  for (const a of sorted) {
+    const thr = passesThresholds(a.score, args.thresholds);
+    lines.push(
+      `| \`${a.modelId}\` | ${a.qualified ? "ok" : "no"} | ${thr.pass ? "PASS" : "FAIL"} | ${a.score.microPrecision.toFixed(3)} | ${a.score.microRecall.toFixed(3)} | ${a.score.microF1.toFixed(3)} | ${a.score.macroF1.toFixed(3)} | ${(a.score.coverage * 100).toFixed(0)}% | ${a.failureReasons.length} | ${a.inputDollarsPerMillion.toFixed(3)} | ${a.outputDollarsPerMillion.toFixed(3)} | ${a.latencyMs} |`
+    );
+  }
+  lines.push("");
+  if (args.selection.rejected.length > 0) {
+    lines.push(`## Rejected (and why)`);
+    lines.push("");
+    for (const r of args.selection.rejected) {
+      lines.push(`- \`${r.modelId}\` \u2014 ${r.reason}`);
+    }
+    lines.push("");
+  }
+  const rec = args.assessments.find((a) => a.modelId === args.selection.recommendedModelId);
+  if (rec) {
+    lines.push(`## Per-case breakdown \u2014 \`${rec.modelId}\``);
+    lines.push("");
+    lines.push("| Case | TP | FP | FN | TN | Unscored | Precision | Recall | F1 |");
+    lines.push("|---|---|---|---|---|---|---|---|---|");
+    for (const c of rec.score.cases) {
+      lines.push(
+        `| ${c.caseId} | ${c.truePositives} | ${c.falsePositives} | ${c.falseNegatives} | ${c.trueNegatives} | ${c.unscored} | ${c.precision.toFixed(3)} | ${c.recall.toFixed(3)} | ${c.f1.toFixed(3)} |`
+      );
+    }
+    lines.push("");
+    if (rec.failureReasons.length > 0) {
+      lines.push(`### Pipeline failures for \`${rec.modelId}\``);
+      lines.push("");
+      for (const f of rec.failureReasons) lines.push(`- ${f}`);
+      lines.push("");
+    }
+  }
+  lines.push("---");
+  lines.push("");
+  lines.push(
+    "Re-run: `llm-externalizer benchmark --search-existing` (auto-discover) or `--search-existing <id> [<id>...]` (assess specific models). ADVISORY only \u2014 the recommended model is surfaced for the operator to adopt via the `tool_models.search_existing_implementations` field on a settings.yaml profile; the benchmark never edits config."
+  );
+  return lines.join("\n") + "\n";
+}
+
 // src/model-qualification/assess.ts
 function assessModelAcrossTools(model) {
   const tools = [];
@@ -45648,8 +47752,8 @@ function renderAssessmentText(a) {
 }
 
 // src/model-qualification/drift.ts
-import { mkdirSync as mkdirSync7, readFileSync as readFileSync7, renameSync as renameSync2, writeFileSync as writeFileSync5 } from "node:fs";
-import { join as join8 } from "node:path";
+import { mkdirSync as mkdirSync8, readFileSync as readFileSync9, renameSync as renameSync3, writeFileSync as writeFileSync6 } from "node:fs";
+import { join as join11 } from "node:path";
 function perMillion(s) {
   if (s == null) return null;
   const n = parseFloat(s);
@@ -45786,11 +47890,11 @@ function computeModelHealth(configured, catalog, baseline, opts = {}) {
   return { findings, updatedBaseline };
 }
 function getBaselinePath() {
-  return join8(getConfigDir(), "model-baseline.json");
+  return join11(getConfigDir(), "model-baseline.json");
 }
 function loadBaseline(path = getBaselinePath()) {
   try {
-    const raw = readFileSync7(path, "utf-8");
+    const raw = readFileSync9(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed;
@@ -45802,10 +47906,10 @@ function loadBaseline(path = getBaselinePath()) {
 }
 function saveBaseline(baseline, path = getBaselinePath()) {
   try {
-    mkdirSync7(getConfigDir(), { recursive: true });
+    mkdirSync8(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync5(tmp, JSON.stringify(baseline, null, 2));
-    renameSync2(tmp, path);
+    writeFileSync6(tmp, JSON.stringify(baseline, null, 2));
+    renameSync3(tmp, path);
   } catch {
   }
 }
@@ -45878,10 +47982,10 @@ function renderModelHealthMarkdown(report) {
 async function runCheckModelHealth(opts = {}) {
   const profile = opts.profile ?? resolveActiveProfile();
   const report = await checkModelHealth(profile, opts);
-  const dir = opts.outputDir ?? join8(resolveProjectMainRoot(), "reports", "model-health");
-  mkdirSync7(dir, { recursive: true });
-  const reportPath = join8(dir, `${compactStamp()}-model-health-${profile.name}.md`);
-  writeFileSync5(reportPath, renderModelHealthMarkdown(report));
+  const dir = opts.outputDir ?? join11(resolveProjectMainRoot(), "reports", "model-health");
+  mkdirSync8(dir, { recursive: true });
+  const reportPath = join11(dir, `${compactStamp()}-model-health-${profile.name}.md`);
+  writeFileSync6(reportPath, renderModelHealthMarkdown(report));
   return { report, reportPath };
 }
 function renderModelHealthText(report) {
@@ -45902,8 +48006,8 @@ function renderModelHealthText(report) {
 }
 
 // src/model-qualification/new-arrivals.ts
-import { mkdirSync as mkdirSync8, readFileSync as readFileSync8, renameSync as renameSync3, writeFileSync as writeFileSync6 } from "node:fs";
-import { join as join9 } from "node:path";
+import { mkdirSync as mkdirSync9, readFileSync as readFileSync10, renameSync as renameSync4, writeFileSync as writeFileSync7 } from "node:fs";
+import { join as join12 } from "node:path";
 function createdToIso(created) {
   if (created === null || !Number.isFinite(created) || created <= 0) return null;
   return new Date(created * 1e3).toISOString();
@@ -45945,11 +48049,11 @@ function diffNewArrivals(catalog, snapshot) {
   };
 }
 function getCatalogSnapshotPath() {
-  return join9(getConfigDir(), "catalog-snapshot.json");
+  return join12(getConfigDir(), "catalog-snapshot.json");
 }
 function loadSnapshot(path = getCatalogSnapshotPath()) {
   try {
-    const raw = readFileSync8(path, "utf-8");
+    const raw = readFileSync10(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const obj = parsed;
@@ -45967,10 +48071,10 @@ function loadSnapshot(path = getCatalogSnapshotPath()) {
 }
 function saveSnapshot(snapshot, path = getCatalogSnapshotPath()) {
   try {
-    mkdirSync8(getConfigDir(), { recursive: true });
+    mkdirSync9(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync6(tmp, JSON.stringify(snapshot, null, 2));
-    renameSync3(tmp, path);
+    writeFileSync7(tmp, JSON.stringify(snapshot, null, 2));
+    renameSync4(tmp, path);
   } catch {
   }
 }
@@ -46061,10 +48165,10 @@ function renderNewArrivalsText(report) {
 }
 async function runDiscoverNewArrivals(opts = {}) {
   const report = await discoverNewArrivals(opts);
-  const dir = opts.outputDir ?? join9(resolveProjectMainRoot(), "reports", "model-arrivals");
-  mkdirSync8(dir, { recursive: true });
-  const reportPath = join9(dir, `${compactStamp()}-new-arrivals.md`);
-  writeFileSync6(reportPath, renderNewArrivalsMarkdown(report));
+  const dir = opts.outputDir ?? join12(resolveProjectMainRoot(), "reports", "model-arrivals");
+  mkdirSync9(dir, { recursive: true });
+  const reportPath = join12(dir, `${compactStamp()}-new-arrivals.md`);
+  writeFileSync7(reportPath, renderNewArrivalsMarkdown(report));
   return { report, reportPath };
 }
 
@@ -46687,6 +48791,33 @@ var MASS_SCOUT_TOOLS = [
     }
   },
   {
+    name: "search_existing_benchmark",
+    description: "Assess OpenRouter model(s) for the search_existing_implementations task against a labeled GOLDEN FIXTURE codebase, scored DETERMINISTICALLY (precision/recall/F1 over the known duplicate locations \u2014 NO LLM judge) by driving the REAL search-existing pipeline in-process. Recommends the best SAME-OR-CHEAPER model that PASSES the benchmark (micro-F1 + micro-recall + coverage floors); a pricier model is NEVER auto-selected. With no `models`, auto-discovers candidates that meet this tool's per-tool requirements and are not pricier than the incumbent default. ADVISORY only \u2014 writes JSON/markdown reports + returns their paths; never changes config. Cached per-model-per-day. ENV: $OPENROUTER_API_KEY (required \u2014 a benchmark you cannot run is useless).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        models: {
+          type: "array",
+          description: "Explicit OpenRouter model id(s) to assess. When omitted, auto-discover the same-or-cheaper candidate pool.",
+          items: { type: "string" }
+        },
+        qualifying_top_n: {
+          type: "number",
+          description: "Cap the auto-discovered candidate pool (cheapest-first). Default 16."
+        },
+        force: {
+          type: "boolean",
+          description: "Ignore the per-model-per-day cache and re-run."
+        },
+        output_dir: {
+          type: "string",
+          description: "Report dir; defaults to <main-root>/reports/search-existing-benchmark/."
+        }
+      },
+      required: []
+    }
+  },
+  {
     name: "assess_model",
     description: "Assess ONE OpenRouter model against EVERY LLM tool's per-tool REQUIREMENTS (TRDD-f45eeaa0) \u2014 FREE: makes NO LLM call (no token cost), only a public model-catalog fetch (no API key). Reports, per tool, whether the model meets that tool's hard requirements (cost/context/output/params) and whether the tool ALSO has a benchmark gate to run before assignment. Does NOT run any benchmark. RETURNS: a per-tool OK/NO table + which qualifying tools still need a benchmark pass.",
     inputSchema: {
@@ -47005,6 +49136,27 @@ async function dispatchMassScoutTool(name, args, opts = {}) {
       ].join("\n");
       return { content: [{ type: "text", text }], isError: false };
     }
+    case "search_existing_benchmark": {
+      const models = Array.isArray(args.models) ? args.models.filter((m) => typeof m === "string" && m.length > 0) : void 0;
+      const result = await runSearchExistingBenchmark({
+        models: models && models.length > 0 ? models : void 0,
+        qualifyingTopN: num(args.qualifying_top_n),
+        force: args.force === true,
+        outputDir: str(args.output_dir),
+        apiKey: opts.apiKey,
+        mainRoot: opts.mainRoot,
+        fetchImpl: opts.fetchImpl
+      });
+      const text = [
+        result.summaryLine,
+        `recommended_model=${result.recommendedModelId}`,
+        `changed=${result.changed}`,
+        `spend=$${result.costUsd.toFixed(6)}`,
+        `report=${result.reportPath}`,
+        `json=${result.jsonReportPath}`
+      ].join("\n");
+      return { content: [{ type: "text", text }], isError: false };
+    }
     case "assess_model": {
       const modelId = str(args.model);
       if (!modelId) {
@@ -47151,14 +49303,14 @@ async function safeReadJson(res, maxBytes = MAX_RESPONSE_BYTES) {
 
 // src/cluster/cluster_synonyms_main.ts
 import {
-  mkdirSync as mkdirSync11,
-  readFileSync as readFileSync10,
-  readdirSync as readdirSync3,
-  writeFileSync as writeFileSync8,
-  existsSync as existsSync6,
-  renameSync as renameSync4
+  mkdirSync as mkdirSync12,
+  readFileSync as readFileSync12,
+  readdirSync as readdirSync5,
+  writeFileSync as writeFileSync9,
+  existsSync as existsSync10,
+  renameSync as renameSync5
 } from "node:fs";
-import { join as join11 } from "node:path";
+import { join as join14 } from "node:path";
 
 // src/cluster/checkpoint.ts
 import Database2 from "better-sqlite3";
@@ -47289,8 +49441,8 @@ var UnionFind = class _UnionFind {
 };
 
 // src/cluster/checkpoint.ts
-import { dirname as dirname5 } from "node:path";
-import { mkdirSync as mkdirSync9 } from "node:fs";
+import { dirname as dirname6 } from "node:path";
+import { mkdirSync as mkdirSync10 } from "node:fs";
 var SCHEMA = `
 CREATE TABLE IF NOT EXISTS clusters_uf (
   item_id   TEXT PRIMARY KEY,
@@ -47317,7 +49469,7 @@ var CheckpointDB = class _CheckpointDB {
     this.db = db;
   }
   static open(path) {
-    mkdirSync9(dirname5(path), { recursive: true });
+    mkdirSync10(dirname6(path), { recursive: true });
     const db = new Database2(path);
     db.pragma("journal_mode = WAL");
     db.pragma("synchronous = NORMAL");
@@ -47405,22 +49557,22 @@ var CheckpointDB = class _CheckpointDB {
 };
 
 // src/cluster/embeddings.ts
-import { spawnSync } from "node:child_process";
+import { spawnSync as spawnSync2 } from "node:child_process";
 import {
-  existsSync as existsSync5,
-  mkdirSync as mkdirSync10,
-  readFileSync as readFileSync9,
-  writeFileSync as writeFileSync7,
-  statSync as statSync4
+  existsSync as existsSync9,
+  mkdirSync as mkdirSync11,
+  readFileSync as readFileSync11,
+  writeFileSync as writeFileSync8,
+  statSync as statSync7
 } from "node:fs";
-import { dirname as dirname6, join as join10 } from "node:path";
+import { dirname as dirname7, join as join13 } from "node:path";
 var F32_BYTES = 4;
 function readEmbeddingsMeta(path) {
   const metaPath = path + ".meta.json";
-  if (!existsSync5(metaPath)) {
+  if (!existsSync9(metaPath)) {
     throw new Error(`embeddings meta sidecar missing: ${metaPath}`);
   }
-  const raw = readFileSync9(metaPath, "utf-8");
+  const raw = readFileSync11(metaPath, "utf-8");
   let meta3;
   try {
     meta3 = JSON.parse(raw);
@@ -47439,7 +49591,7 @@ function readEmbeddingsMeta(path) {
   return meta3;
 }
 function loadEmbeddings(path, expectedN) {
-  if (!existsSync5(path)) throw new Error(`embeddings file missing: ${path}`);
+  if (!existsSync9(path)) throw new Error(`embeddings file missing: ${path}`);
   const meta3 = readEmbeddingsMeta(path);
   const [n, dim] = meta3.shape;
   if (meta3.dtype !== "float32") {
@@ -47452,34 +49604,34 @@ function loadEmbeddings(path, expectedN) {
     throw new Error(`embeddings N mismatch: meta says ${n}, caller expected ${expectedN}`);
   }
   const expectedBytes = n * dim * F32_BYTES;
-  const stat = statSync4(path);
+  const stat = statSync7(path);
   if (stat.size !== expectedBytes) {
     throw new Error(
       `embeddings file size mismatch: ${path} is ${stat.size} bytes, expected ${expectedBytes} = N(${n}) \xD7 D(${dim}) \xD7 ${F32_BYTES}`
     );
   }
-  const buf = readFileSync9(path);
+  const buf = readFileSync11(path);
   const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
   const embeddings = new Float32Array(ab);
   return { embeddings, dim, model: meta3.model, source: "loaded", path };
 }
 function computeEmbeddings(items, opts) {
   if (items.length === 0) throw new Error("computeEmbeddings: empty items");
-  if (!existsSync5(opts.scriptPath)) {
+  if (!existsSync9(opts.scriptPath)) {
     throw new Error(`compute_embeddings.py not found: ${opts.scriptPath}`);
   }
-  mkdirSync10(opts.outDir, { recursive: true });
-  const inputPath = join10(opts.outDir, "_embedding_sentences.txt");
-  const outputPath = join10(opts.outDir, "embeddings.f32");
+  mkdirSync11(opts.outDir, { recursive: true });
+  const inputPath = join13(opts.outDir, "_embedding_sentences.txt");
+  const outputPath = join13(opts.outDir, "embeddings.f32");
   const clean = opts.sentenceClean ?? defaultSentenceClean;
-  writeFileSync7(
+  writeFileSync8(
     inputPath,
     items.map((it) => clean(it.sentence)).join("\n") + "\n",
     { encoding: "utf-8" }
   );
   const runner = opts.pythonRunner ?? "uv";
   const argv = ["run", opts.scriptPath, "--input", inputPath, "--output", outputPath, "--model", opts.model];
-  const result = spawnSync(runner, argv, {
+  const result = spawnSync2(runner, argv, {
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -48352,17 +50504,17 @@ var OUTPUT_NAMES = {
   checkpoint: "checkpoint.sqlite"
 };
 async function loadInputJsonl(path) {
-  if (!existsSync6(path)) {
+  if (!existsSync10(path)) {
     throw new Error(`input_file not found: ${path}`);
   }
   return readClusterJsonl(path);
 }
 function loadPolicy(policyFile) {
   if (!policyFile) return resolvePolicy(void 0);
-  if (!existsSync6(policyFile)) {
+  if (!existsSync10(policyFile)) {
     throw new Error(`policy_file not found: ${policyFile}`);
   }
-  const raw = readFileSync10(policyFile, "utf-8");
+  const raw = readFileSync12(policyFile, "utf-8");
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -48373,9 +50525,9 @@ function loadPolicy(policyFile) {
   return resolvePolicy(valid);
 }
 function gateOutputDir(outputDir, policy, resuming) {
-  mkdirSync11(outputDir, { recursive: true });
+  mkdirSync12(outputDir, { recursive: true });
   if (resuming) return;
-  const existing = readdirSync3(outputDir).filter((n) => !n.startsWith("."));
+  const existing = readdirSync5(outputDir).filter((n) => !n.startsWith("."));
   const collisions = existing.filter(
     (n) => Object.values(OUTPUT_NAMES).includes(n)
   );
@@ -48430,8 +50582,8 @@ function reductionPct(itemsIn, clustersOut) {
 }
 function writeJsonAtomic(path, value) {
   const tmp = path + ".tmp";
-  writeFileSync8(tmp, JSON.stringify(value, null, 2) + "\n", { encoding: "utf-8" });
-  renameSync4(tmp, path);
+  writeFileSync9(tmp, JSON.stringify(value, null, 2) + "\n", { encoding: "utf-8" });
+  renameSync5(tmp, path);
 }
 function writeClustersJsonl(path, itemsById, partition) {
   const lines = [];
@@ -48445,7 +50597,7 @@ function writeClustersJsonl(path, itemsById, partition) {
       lines.push(JSON.stringify({ id: it.id, cluster_id: clusterId, sentence: it.sentence }));
     }
   }
-  writeFileSync8(path, lines.join("\n") + (lines.length ? "\n" : ""), { encoding: "utf-8" });
+  writeFileSync9(path, lines.join("\n") + (lines.length ? "\n" : ""), { encoding: "utf-8" });
 }
 function buildSummary(itemsById, partition, profileName, canonicalsOverride) {
   const clusters = [];
@@ -48482,7 +50634,7 @@ async function runClusterSynonyms(invocation, hooks) {
   const policy = loadPolicy(invocation.policy_file);
   const resumeFrom = invocation.resume_from;
   const resuming = resumeFrom !== void 0;
-  if (resumeFrom !== void 0 && !existsSync6(resumeFrom)) {
+  if (resumeFrom !== void 0 && !existsSync10(resumeFrom)) {
     errors.push(`resume_from checkpoint not found: ${resumeFrom}`);
     return buildEarlyAbort(invocation, errors, warnings, profileName, tStart);
   }
@@ -48514,7 +50666,7 @@ async function runClusterSynonyms(invocation, hooks) {
     errors.push(`embeddings: ${err3.message}`);
     return buildEarlyAbort(invocation, errors, warnings, profileName, tStart);
   }
-  const checkpointPath = resumeFrom ?? join11(invocation.output_dir, OUTPUT_NAMES.checkpoint);
+  const checkpointPath = resumeFrom ?? join14(invocation.output_dir, OUTPUT_NAMES.checkpoint);
   const ckpt = CheckpointDB.open(checkpointPath);
   const uf = ckpt.loadUnionFind();
   for (const it of items) uf.add(it.id);
@@ -48599,9 +50751,9 @@ async function runClusterSynonyms(invocation, hooks) {
     weak_overlap_evidence: weakOverlapEvidence,
     warnings
   };
-  const clustersPath = join11(invocation.output_dir, OUTPUT_NAMES.clusters);
-  const summaryPath = join11(invocation.output_dir, OUTPUT_NAMES.summary);
-  const statsPath = join11(invocation.output_dir, OUTPUT_NAMES.stats);
+  const clustersPath = join14(invocation.output_dir, OUTPUT_NAMES.clusters);
+  const summaryPath = join14(invocation.output_dir, OUTPUT_NAMES.summary);
+  const statsPath = join14(invocation.output_dir, OUTPUT_NAMES.stats);
   writeClustersJsonl(clustersPath, itemsById, partition);
   writeJsonAtomic(summaryPath, buildSummary(itemsById, partition, profileName, canonicalsOverride));
   writeJsonAtomic(statsPath, stats);
@@ -48646,1392 +50798,41 @@ function buildEarlyAbort(invocation, errors, warnings, profileName, tStart) {
 // src/index.ts
 import { fileURLToPath as fileUrlToPath_cs } from "node:url";
 
-// src/scan-pipeline.ts
-import {
-  readFileSync as readFileSync11,
-  existsSync as existsSync7,
-  statSync as statSync5,
-  lstatSync,
-  readdirSync as readdirSync4,
-  realpathSync as realpathSync2
-} from "node:fs";
-import { extname as extname4, join as join12, basename as basename4, dirname as dirname7, resolve as resolve5, sep } from "node:path";
-import { homedir as homedir2 } from "node:os";
-import { spawnSync as spawnSync2 } from "node:child_process";
-var EXT_TO_LANG = {
-  ".ts": "typescript",
-  ".tsx": "typescript",
-  ".mts": "typescript",
-  ".cts": "typescript",
-  ".js": "javascript",
-  ".jsx": "javascript",
-  ".mjs": "javascript",
-  ".cjs": "javascript",
-  ".py": "python",
-  ".rs": "rust",
-  ".go": "go",
-  ".java": "java",
-  ".kt": "kotlin",
-  ".c": "c",
-  ".h": "c",
-  ".cpp": "cpp",
-  ".hpp": "cpp",
-  ".cc": "cpp",
-  ".cs": "csharp",
-  ".rb": "ruby",
-  ".php": "php",
-  ".swift": "swift",
-  ".sh": "bash",
-  ".bash": "bash",
-  ".zsh": "zsh",
-  ".fish": "fish",
-  ".sql": "sql",
-  ".html": "html",
-  ".css": "css",
-  ".scss": "scss",
-  ".less": "less",
-  ".json": "json",
-  ".yaml": "yaml",
-  ".yml": "yaml",
-  ".toml": "toml",
-  ".xml": "xml",
-  ".md": "markdown",
-  ".mdx": "mdx",
-  ".tex": "latex",
-  ".lua": "lua",
-  ".r": "r",
-  ".R": "r",
-  ".dart": "dart",
-  ".ex": "elixir",
-  ".exs": "elixir",
-  ".zig": "zig",
-  ".nim": "nim",
-  ".jl": "julia",
-  ".sol": "solidity",
-  ".vue": "vue",
-  ".svelte": "svelte"
-};
-var SHEBANG_TO_LANG = {
-  python: "python",
-  python3: "python",
-  node: "javascript",
-  bash: "bash",
-  sh: "bash",
-  zsh: "zsh",
-  ruby: "ruby",
-  perl: "perl",
-  php: "php",
-  lua: "lua"
-};
-function detectLang(filePath) {
-  const ext = extname4(filePath).toLowerCase();
-  if (EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
-  try {
-    const head = readFileSync11(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
-    const shebang = head.match(/^#!\s*(?:\/usr\/bin\/env\s+)?(\S+)/);
-    if (shebang) {
-      const bin = basename4(shebang[1]);
-      if (SHEBANG_TO_LANG[bin]) return SHEBANG_TO_LANG[bin];
-    }
-  } catch {
-  }
-  return "text";
-}
-function fenceBackticks(content) {
-  let maxRun = 0;
-  let current = 0;
-  for (const ch of content) {
-    if (ch === "`") {
-      current++;
-      if (current > maxRun) maxRun = current;
-    } else {
-      current = 0;
-    }
-  }
-  const needed = Math.max(4, maxRun + 1);
-  return "`".repeat(needed);
-}
-function assertFileExists(filePath) {
-  if (!existsSync7(filePath)) {
-    throw new Error(`File not found: ${filePath}`);
-  }
-}
-function sanitizeInputPath(filePath) {
-  const resolved = resolve5(filePath);
-  const realpathSafe = (p) => {
-    try {
-      return realpathSync2(p);
-    } catch {
-      return p;
-    }
-  };
-  const cwdReal = realpathSafe(resolve5(process.cwd()));
-  const homeReal = realpathSafe(
-    resolve5(process.env.HOME || process.env.USERPROFILE || homedir2())
-  );
-  const tmpReal = realpathSafe(resolve5("/tmp"));
-  const resolvedReal = (() => {
-    try {
-      return realpathSync2(resolved);
-    } catch {
-      return resolved;
-    }
-  })();
-  const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep);
-  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
-    throw new Error(
-      `Path traversal blocked: ${filePath} resolves outside allowed directories`
-    );
-  }
-  try {
-    if (lstatSync(resolved).isSymbolicLink()) {
-      throw new Error(`Symlink rejected for security: ${filePath}`);
-    }
-  } catch (e) {
-    if (e.code === "ENOENT") return resolved;
-    throw e;
-  }
-  return resolved;
-}
-var DEFAULT_MAX_PAYLOAD_BYTES = 400 * 1024;
-function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexRedact, tagPrefix = "") {
-  const rawLimit = maxBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
-  const limit = !Number.isFinite(rawLimit) || rawLimit <= 0 ? DEFAULT_MAX_PAYLOAD_BYTES : rawLimit;
-  const safePath = sanitizeInputPath(filePath);
-  assertFileExists(safePath);
-  const stats = statSync5(safePath);
-  if (stats.size > limit) {
-    throw new Error(
-      `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
-    );
-  }
-  const raw = readFileSync11(safePath);
-  if (raw.length > limit) {
-    throw new Error(
-      `File too large after read (${(raw.length / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
-    );
-  }
-  const scanLen = Math.min(raw.length, 65536);
-  for (let i = 0; i < scanLen; i++) {
-    if (raw[i] === 0) throw new Error(`File appears to be binary: ${filePath}`);
-  }
-  let content = raw.toString("utf-8");
-  if (content.length === 0) {
-    content = `(empty file \u2014 0 bytes)`;
-  }
-  if (redact) {
-    const result = redactSecrets2(content);
-    content = result.redacted;
-  }
-  if (regexRedact) {
-    const result = applyRegexRedaction(content, regexRedact);
-    content = result.redacted;
-  }
-  const lang = langOverride || detectLang(filePath);
-  const fence = fenceBackticks(content);
-  const nameTag = `${tagPrefix}filename`;
-  const contentTag = `${tagPrefix}file-content`;
-  return `<${nameTag}>
-${filePath}
-</${nameTag}>
-<${contentTag}>
-${fence}${lang}
-${content}
-${fence}
-</${contentTag}>`;
-}
-var BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".gif",
-  ".bmp",
-  ".ico",
-  ".webp",
-  ".avif",
-  ".tiff",
-  ".tif",
-  ".mp3",
-  ".mp4",
-  ".wav",
-  ".ogg",
-  ".webm",
-  ".avi",
-  ".mov",
-  ".flac",
-  ".aac",
-  ".m4a",
-  ".pdf",
-  ".doc",
-  ".docx",
-  ".xls",
-  ".xlsx",
-  ".ppt",
-  ".pptx",
-  ".zip",
-  ".tar",
-  ".gz",
-  ".bz2",
-  ".xz",
-  ".7z",
-  ".rar",
-  ".dmg",
-  ".iso",
-  ".jar",
-  ".exe",
-  ".dll",
-  ".so",
-  ".dylib",
-  ".o",
-  ".a",
-  ".lib",
-  ".class",
-  ".pyc",
-  ".pyo",
-  ".wasm",
-  ".bin",
-  ".dat",
-  ".db",
-  ".sqlite",
-  ".sqlite3",
-  ".ttf",
-  ".otf",
-  ".woff",
-  ".woff2",
-  ".eot",
-  ".DS_Store",
-  ".lock"
-]);
-function isBinaryExtension(filePath) {
-  return BINARY_EXTENSIONS.has(extname4(filePath).toLowerCase()) || basename4(filePath) === ".DS_Store";
-}
-var SECRET_PATTERNS2 = [
-  [/AKIA[0-9A-Z]{16}/g, "AWS_KEY"],
-  [/(?:sk|pk)[-_](?:live|test|proj)[-_][A-Za-z0-9]{20,}/g, "API_KEY"],
-  [/ghp_[A-Za-z0-9]{36}/g, "GITHUB_PAT"],
-  [/ghr_[A-Za-z0-9]{36}/g, "GITHUB_TOKEN"],
-  [/gho_[A-Za-z0-9]{36}/g, "GITHUB_OAUTH"],
-  [/github_pat_[A-Za-z0-9_]{82}/g, "GITHUB_PAT"],
-  [/glpat-[A-Za-z0-9\-_]{20,}/g, "GITLAB_TOKEN"],
-  [/xox[bpsar]-[A-Za-z0-9-]+/g, "SLACK_TOKEN"],
-  [/Bearer\s+[A-Za-z0-9._\-/+=]{20,}/g, "BEARER_TOKEN"],
-  // Key-value patterns in env/config files (must have at least 8 chars in the value)
-  [
-    // Common env-var-style secret names. Extended in v9.9.0 from a hand-
-    // curated list to a hybrid approach: explicit names for the most-common
-    // OAuth / vendor key shapes AND a wildcard for any *_KEY / *_TOKEN /
-    // *_SECRET / *_PASSWORD. Wildcards intentionally catch JWT_SECRET,
-    // LM_API_TOKEN (the plugin's own preset!), STRIPE_SECRET_KEY,
-    // SUPABASE_SERVICE_KEY, SLACK_BOT_TOKEN, and similar without needing
-    // per-vendor patches.
-    /(?:^|\n)\s*(?:(?:PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|AUTH|AUTH_TOKEN|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|DB_PASSWORD|DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|AWS_SESSION_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITLAB_TOKEN|BITBUCKET_TOKEN|NPM_TOKEN|DOCKER_PASSWORD|HF_TOKEN|HUGGINGFACE_TOKEN|LM_API_TOKEN|VLLM_API_KEY|JWT_SECRET|JWT_PRIVATE_KEY|STRIPE_SECRET_KEY|STRIPE_API_KEY|SUPABASE_SERVICE_KEY|SUPABASE_ANON_KEY|FIREBASE_TOKEN|SLACK_BOT_TOKEN|SLACK_TOKEN|DISCORD_TOKEN|TELEGRAM_BOT_TOKEN|TWILIO_AUTH_TOKEN|SENDGRID_API_KEY|MAILGUN_API_KEY|SENTRY_AUTH_TOKEN|PRIVATE)|[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_APIKEY|_API_KEY|_AUTH))\s*[=:]\s*['"]?([^\s'"#\n]{8,})/gim,
-    "ENV_SECRET"
-  ],
-  // H7: Multi-line secret blocks (PEM private keys, certificates)
-  [
-    /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----/g,
-    "PEM_BLOCK"
-  ]
-];
-function scanForSecrets(content) {
-  const counts = /* @__PURE__ */ new Map();
-  for (const [pattern, label] of SECRET_PATTERNS2) {
-    pattern.lastIndex = 0;
-    const matches = content.match(pattern);
-    if (matches && matches.length > 0) {
-      counts.set(label, (counts.get(label) ?? 0) + matches.length);
-    }
-  }
-  const details = Array.from(counts.entries()).map(([label, count]) => ({
-    label,
-    count
-  }));
-  return { found: details.length > 0, details };
-}
-function scanFilesForSecrets(filePaths) {
-  const allDetails = [];
-  for (const fp of filePaths) {
-    if (!existsSync7(fp)) continue;
-    try {
-      const content = readFileSync11(fp, "utf-8");
-      const scan = scanForSecrets(content);
-      if (scan.found) {
-        for (const d of scan.details) {
-          allDetails.push({ file: fp, ...d });
-        }
-      }
-    } catch {
-    }
-  }
-  if (allDetails.length === 0) return { found: false, report: "" };
-  const lines = [
-    "SECRETS DETECTED \u2014 operation aborted.",
-    "",
-    "Best practice: Move secrets to .env files (gitignored) and reference them via environment variables.",
-    "Claude Code cannot read .env files, ensuring secrets stay out of LLM context.",
-    "",
-    "Findings:"
-  ];
-  for (const d of allDetails) {
-    lines.push(`  ${d.file}: ${d.count}\xD7 ${d.label}`);
-  }
-  return { found: true, report: lines.join("\n") };
-}
-function redactSecrets2(content) {
-  let result = content;
-  let count = 0;
-  for (const [pattern, label] of SECRET_PATTERNS2) {
-    pattern.lastIndex = 0;
-    result = result.replace(pattern, () => {
-      count++;
-      return `[REDACTED:${label}]`;
-    });
-  }
-  return { redacted: result, count };
-}
-function parseRedactRegex(raw) {
-  if (!raw || typeof raw !== "string") return null;
-  const pattern = raw.trim();
-  if (!pattern) {
-    throw new Error("Invalid redact_regex: pattern must not be empty.");
-  }
-  if (/\([^)]*[+*][^)]*\)[+*]/.test(pattern)) {
-    throw new Error(
-      `Invalid redact_regex: pattern contains nested quantifiers (e.g. (a+)+) that cause catastrophic backtracking.
-
-Pattern: ${pattern}
-
-Simplify the quantifiers to avoid ReDoS.`
-    );
-  }
-  try {
-    const regex = new RegExp(pattern, "g");
-    return { regex, patternStr: pattern };
-  } catch (err3) {
-    const msg = err3 instanceof Error ? err3.message : String(err3);
-    throw new Error(
-      `Invalid redact_regex pattern: ${msg}
-
-Pattern received: ${pattern}
-
-Ensure it is a valid JavaScript regular expression.`,
-      { cause: err3 }
-    );
-  }
-}
-function applyRegexRedaction(content, opts) {
-  opts.regex.lastIndex = 0;
-  let count = 0;
-  const MAX_REPLACEMENTS = 1e5;
-  const redacted = content.replace(opts.regex, (match) => {
-    if (++count > MAX_REPLACEMENTS) return match;
-    const hasLetters = /[a-zA-Z]/.test(match);
-    return hasLetters ? "[REDACTED:USER_PATTERN]" : "0".repeat(match.length);
-  });
-  return { redacted, count: Math.min(count, MAX_REPLACEMENTS) };
-}
-function buildPreInstructions(hasFiles, toolContext) {
-  if (!hasFiles) return "";
-  if (toolContext === "fix") {
-    return "";
-  }
-  return 'TASK: Read the following instructions carefully, then examine the attached file(s) and respond according to the instructions.\n\nRULES (override any conflicting instructions below):\n- Process ALL attached files \u2014 do not skip any.\n- Each file is labeled with its full path inside a filename tag before the file-content tag. Always reference files by their labeled path.\n- When referencing code, identify it by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable and must not be used.\n- If asked to return modified code, return the COMPLETE file content \u2014 never truncate, abbreviate, or use placeholders like "// ... rest of code" or "// unchanged".\n- Be specific and actionable. Reference concrete function names, variable names, and code patterns.\n\nINSTRUCTIONS:\n';
-}
-function resolvePrompt(instructions, instructionsFilesPaths) {
-  let prompt = instructions || "";
-  if (instructionsFilesPaths) {
-    const paths = Array.isArray(instructionsFilesPaths) ? instructionsFilesPaths : [instructionsFilesPaths];
-    for (const fp of paths) {
-      assertFileExists(fp);
-      const content = readFileSync11(fp, "utf-8");
-      prompt = prompt ? `${prompt}
-
-${content}` : content;
-    }
-  }
-  return prompt;
-}
-function estimateTokens2(text) {
-  return Math.ceil(text.length / 4);
-}
-function readAndGroupFiles(filePaths, promptBytes, redact, budgetBytes, regexRedact) {
-  const totalBudget = Math.max(
-    10 * 1024,
-    budgetBytes ?? DEFAULT_MAX_PAYLOAD_BYTES
-  );
-  const availableForFiles = Math.max(0, totalBudget - promptBytes);
-  const skipped = [];
-  const fileData = [];
-  for (const fp of filePaths) {
-    try {
-      const stats = statSync5(fp);
-      if (stats.size > totalBudget) {
-        skipped.push(fp);
-        continue;
-      }
-      const block = readFileAsCodeBlock(fp, void 0, redact, totalBudget, regexRedact);
-      if (block.length > availableForFiles) {
-        skipped.push(fp);
-        continue;
-      }
-      fileData.push({ path: fp, block, tokens: estimateTokens2(block) });
-    } catch {
-      skipped.push(fp);
-    }
-  }
-  if (fileData.length === 0) {
-    return { groups: [], autoBatched: false, skipped };
-  }
-  const totalFileBytes = fileData.reduce((sum, fd) => sum + fd.block.length, 0);
-  if (totalFileBytes <= availableForFiles) {
-    return { groups: [fileData], autoBatched: false, skipped };
-  }
-  const sorted = [...fileData].sort((a, b) => b.block.length - a.block.length);
-  const bins = [];
-  for (const fd of sorted) {
-    let placed = false;
-    for (const bin of bins) {
-      if (bin.used + fd.block.length <= availableForFiles) {
-        bin.items.push(fd);
-        bin.used += fd.block.length;
-        placed = true;
-        break;
-      }
-    }
-    if (!placed) {
-      bins.push({ items: [fd], used: fd.block.length });
-    }
-  }
-  const groups = bins.map((bin) => bin.items);
-  return { groups, autoBatched: groups.length > 1, skipped };
-}
-function resolveAnswerMode(raw, defaultMode) {
-  if (raw === 0 || raw === 1 || raw === 2) return raw;
-  return defaultMode;
-}
-function buildPerFileSectionPrompt(filePaths) {
-  if (filePaths.length <= 1) return "";
-  return "\n\nOUTPUT FORMAT: You are receiving " + filePaths.length + " input files. Produce a SEPARATE report section for each file, using this exact format:\n\n## File: <absolute-file-path>\n\n<your analysis/report for this file>\n\n---\n\nProduce exactly " + filePaths.length + " sections, one for each input file, in the order they appear. Do NOT merge or combine sections. Each file must have its own complete, independent section.\n";
-}
-var WALK_DEFAULT_EXCLUDE = /* @__PURE__ */ new Set([
-  // Version control
-  ".git",
-  // Package managers / dependencies
-  "node_modules",
-  "bower_components",
-  ".pnpm-store",
-  // Python
-  "__pycache__",
-  ".venv",
-  "venv",
-  ".tox",
-  ".mypy_cache",
-  ".pytest_cache",
-  ".eggs",
-  "*.egg-info",
-  // Build outputs
-  "dist",
-  "build",
-  "out",
-  ".next",
-  ".nuxt",
-  ".output",
-  "target",
-  // Caches / temp
-  ".cache",
-  ".turbo",
-  "coverage",
-  "tmp",
-  "temp",
-  ".temp",
-  ".tmp",
-  // IDE / editor
-  ".idea",
-  ".vscode",
-  // Other
-  ".gradle",
-  ".cargo",
-  ".nx",
-  "vendor"
-]);
-var FORBIDDEN_GIT_CWD_PREFIXES = [
-  "/etc",
-  "/usr",
-  "/bin",
-  "/sbin",
-  "/sys",
-  "/proc",
-  "/dev",
-  "/var/log",
-  "/var/db",
-  "/Library",
-  "/System"
-];
-function validateGitCwd(dirPath) {
-  if (!dirPath || typeof dirPath !== "string") {
-    throw new Error("validateGitCwd: empty cwd not allowed");
-  }
-  if (dirPath.includes("..")) {
-    const trimmed = resolve5(dirPath);
-    if (trimmed.includes("..")) {
-      throw new Error(`validateGitCwd: path contains parent refs: ${dirPath}`);
-    }
-  }
-  const resolved = resolve5(dirPath);
-  const realpathSafe = (p) => {
-    try {
-      return realpathSync2(p);
-    } catch {
-      return p;
-    }
-  };
-  const resolvedReal = realpathSafe(resolved);
-  if (resolvedReal === "/" || resolvedReal === "") {
-    throw new Error(`validateGitCwd: filesystem root rejected: ${dirPath}`);
-  }
-  for (const sys of FORBIDDEN_GIT_CWD_PREFIXES) {
-    const sysReal = realpathSafe(sys);
-    if (resolvedReal === sysReal || resolvedReal.startsWith(sysReal + sep)) {
-      throw new Error(`validateGitCwd: system path rejected: ${dirPath}`);
-    }
-  }
-  const cwdReal = realpathSafe(resolve5(process.cwd()));
-  const homeReal = realpathSafe(
-    resolve5(process.env.HOME || process.env.USERPROFILE || homedir2())
-  );
-  const tmpReal = realpathSafe(resolve5("/tmp"));
-  const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep);
-  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
-    throw new Error(
-      `validateGitCwd: ${dirPath} resolves outside allowed roots (cwd/$HOME/tmp)`
-    );
-  }
-}
-var _gitOnPath = void 0;
-function ensureGitOnPath() {
-  if (_gitOnPath !== void 0) return _gitOnPath;
-  const probe = spawnSync2("git", ["--version"], {
-    encoding: "utf-8",
-    timeout: 2e3,
-    killSignal: "SIGKILL"
-  });
-  _gitOnPath = probe.status === 0;
-  if (!_gitOnPath) {
-    process.stderr.write(
-      "[llm-externalizer] git not found on PATH \u2014 falling back to filesystem walk for directory scans\n"
-    );
-  }
-  return _gitOnPath;
-}
-function lstatSyncRetry(p) {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      return lstatSync(p);
-    } catch (err3) {
-      const code = err3.code;
-      if (code === "EAGAIN" || code === "EBUSY") {
-        const deadline = Date.now() + 50;
-        while (Date.now() < deadline) {
-        }
-        continue;
-      }
-      return null;
-    }
-  }
-  return null;
-}
-function gitLsFilesMultiRepo(dirPath, recursive) {
-  validateGitCwd(dirPath);
-  if (!ensureGitOnPath()) return null;
-  const GIT_TIMEOUT_MS = 5e3;
-  const gitOpts = {
-    encoding: "utf-8",
-    timeout: GIT_TIMEOUT_MS,
-    killSignal: "SIGKILL"
-  };
-  const allFiles = /* @__PURE__ */ new Set();
-  const topLevelResult = spawnSync2(
-    "git",
-    ["rev-parse", "--show-toplevel"],
-    { cwd: dirPath, ...gitOpts }
-  );
-  const isInGitRepo = topLevelResult.status === 0 && topLevelResult.stdout.trim();
-  if (isInGitRepo) {
-    const trackedResult = spawnSync2(
-      "git",
-      ["ls-files", "--cached"],
-      { cwd: dirPath, ...gitOpts }
-    );
-    if (trackedResult.status === 0 && trackedResult.stdout) {
-      for (const relPath of trackedResult.stdout.split("\n")) {
-        if (!relPath.trim()) continue;
-        allFiles.add(join12(dirPath, relPath));
-      }
-    }
-    const untrackedResult = spawnSync2(
-      "git",
-      ["ls-files", "--others", "--exclude-standard"],
-      { cwd: dirPath, ...gitOpts }
-    );
-    if (untrackedResult.status === 0 && untrackedResult.stdout) {
-      for (const relPath of untrackedResult.stdout.split("\n")) {
-        if (!relPath.trim()) continue;
-        allFiles.add(join12(dirPath, relPath));
-      }
-    }
-  }
-  if (recursive) {
-    let findNestedGitRoots2 = function(dir, depth) {
-      if (depth > 10) return;
-      let entries;
-      try {
-        entries = readdirSync4(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        if (entry.name === ".git" || entry.name === "node_modules") continue;
-        if (entry.name.startsWith(".")) continue;
-        const subDir = join12(dir, entry.name);
-        const gitDir = join12(subDir, ".git");
-        const gitStat = lstatSyncRetry(gitDir);
-        const gitDirIsDir = gitStat ? gitStat.isDirectory() : false;
-        if (gitDirIsDir) {
-          nestedGitRoots.push(subDir);
-          continue;
-        }
-        findNestedGitRoots2(subDir, depth + 1);
-      }
-    };
-    var findNestedGitRoots = findNestedGitRoots2;
-    const nestedGitRoots = [];
-    findNestedGitRoots2(dirPath, 0);
-    for (const nestedRoot of nestedGitRoots) {
-      try {
-        validateGitCwd(nestedRoot);
-      } catch {
-        continue;
-      }
-      const nestedResult = spawnSync2(
-        "git",
-        ["ls-files", "--cached", "--others", "--exclude-standard"],
-        { cwd: nestedRoot, ...gitOpts }
-      );
-      if (nestedResult.status === 0 && nestedResult.stdout) {
-        for (const relPath of nestedResult.stdout.split("\n")) {
-          if (!relPath.trim()) continue;
-          allFiles.add(join12(nestedRoot, relPath));
-        }
-      }
-    }
-  }
-  if (!isInGitRepo) return null;
-  return [...allFiles];
-}
-function walkDir(dirPath, options) {
-  const maxFiles = options?.maxFiles ?? 1e4;
-  const extensions = options?.extensions;
-  const skipBinary = !options?.includeBinary;
-  const recursive = options?.recursive !== false;
-  const followSymlinks = options?.followSymlinks !== false;
-  if (options?.useGitignore) {
-    const gitResults = gitLsFilesMultiRepo(dirPath, recursive);
-    if (gitResults !== null) {
-      const extraExcludeSet = new Set(options?.exclude ?? []);
-      const results2 = [];
-      for (const fullPath of gitResults) {
-        if (results2.length >= maxFiles) break;
-        if (skipBinary && isBinaryExtension(fullPath)) continue;
-        if (extensions) {
-          const ext = extname4(fullPath).toLowerCase();
-          if (!extensions.includes(ext)) continue;
-        }
-        if (extraExcludeSet.size > 0) {
-          const rel = fullPath.startsWith(dirPath) ? fullPath.slice(dirPath.length) : fullPath;
-          const segments = rel.split("/").filter((s) => s.length > 0);
-          const dirSegments = segments.slice(0, -1);
-          if (dirSegments.some((seg) => extraExcludeSet.has(seg))) continue;
-        }
-        results2.push(fullPath);
-      }
-      return results2;
-    }
-    process.stderr.write(
-      `[llm-externalizer] No git repo found in ${dirPath}, falling back to manual walk
-`
-    );
-  }
-  const results = [];
-  const extraExclude = options?.exclude ?? [];
-  const exclude = /* @__PURE__ */ new Set([...WALK_DEFAULT_EXCLUDE, ...extraExclude]);
-  const visitedPaths = /* @__PURE__ */ new Set();
-  function recurse(dir) {
-    if (results.length >= maxFiles) return;
-    let entries;
-    try {
-      entries = readdirSync4(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (results.length >= maxFiles) return;
-      const fullPath = join12(dir, entry.name);
-      if (entry.isSymbolicLink()) {
-        if (!followSymlinks) continue;
-        try {
-          const realPath = realpathSync2(fullPath);
-          if (visitedPaths.has(realPath)) continue;
-          visitedPaths.add(realPath);
-          const targetStat = statSync5(realPath);
-          if (targetStat.isDirectory() && recursive) {
-            if (!entry.name.startsWith(".") && !exclude.has(entry.name)) {
-              recurse(fullPath);
-            }
-          } else if (targetStat.isFile()) {
-            if (skipBinary && isBinaryExtension(fullPath)) continue;
-            if (extensions) {
-              const ext = extname4(entry.name).toLowerCase();
-              if (!extensions.includes(ext)) continue;
-            }
-            results.push(fullPath);
-          }
-        } catch {
-          continue;
-        }
-        continue;
-      }
-      if (entry.isDirectory()) {
-        if (!recursive) continue;
-        if (entry.name === ".git" || entry.name === ".svn" || entry.name === ".hg" || exclude.has(entry.name)) continue;
-        if (entry.name.startsWith(".")) continue;
-        try {
-          const dirRealPath = realpathSync2(fullPath);
-          if (visitedPaths.has(dirRealPath)) continue;
-          visitedPaths.add(dirRealPath);
-        } catch {
-          continue;
-        }
-        recurse(fullPath);
-      } else if (entry.isFile()) {
-        if (skipBinary && isBinaryExtension(fullPath)) continue;
-        if (extensions) {
-          const ext = extname4(entry.name).toLowerCase();
-          if (!extensions.includes(ext)) continue;
-        }
-        results.push(fullPath);
-      }
-    }
-  }
-  recurse(dirPath);
-  return results;
-}
-function extractLocalImports(filePath, sourceCode) {
-  const dir = dirname7(filePath);
-  const lang = detectLang(filePath);
-  const paths = [];
-  const patterns = [];
-  if (lang === "typescript" || lang === "javascript") {
-    patterns.push(/(?:import|export)\s+.*?from\s+['"](\.[^'"]+)['"]/g);
-    patterns.push(/require\(\s*['"](\.[^'"]+)['"]\s*\)/g);
-  } else if (lang === "python") {
-    patterns.push(/from\s+(\.[\w.]*)\s+import/g);
-  }
-  for (const pattern of patterns) {
-    pattern.lastIndex = 0;
-    let match;
-    while ((match = pattern.exec(sourceCode)) !== null) {
-      const importPath = match[1];
-      let resolved;
-      if (lang === "python" && importPath.startsWith(".")) {
-        const dotCount = importPath.match(/^\.+/)?.[0].length ?? 1;
-        const modulePart = importPath.slice(dotCount);
-        const baseDir = dotCount === 1 ? dir : join12(dir, ...Array(dotCount - 1).fill(".."));
-        resolved = modulePart ? join12(baseDir, ...modulePart.split(".")) : baseDir;
-      } else {
-        resolved = join12(dir, importPath);
-      }
-      if (!extname4(resolved)) {
-        const tryExts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"];
-        let found = false;
-        for (const ext of tryExts) {
-          if (existsSync7(resolved + ext)) {
-            resolved = resolved + ext;
-            found = true;
-            break;
-          }
-        }
-        if (!found) {
-          const indexCandidates = [
-            "index.ts",
-            "index.tsx",
-            "index.js",
-            "index.jsx",
-            "__init__.py"
-          ];
-          for (const leaf of indexCandidates) {
-            const indexPath = join12(resolved, leaf);
-            if (existsSync7(indexPath)) {
-              resolved = indexPath;
-              found = true;
-              break;
-            }
-          }
-        }
-        if (!found) continue;
-      } else if (!existsSync7(resolved)) {
-        continue;
-      }
-      paths.push(resolved);
-    }
-  }
-  return [...new Set(paths)];
-}
-
-// src/search-existing/core.ts
-import { randomUUID } from "node:crypto";
-import { existsSync as existsSync8, statSync as statSync6, realpathSync as realpathSync3 } from "node:fs";
-import { resolve as resolve6 } from "node:path";
-async function runSearchExistingImplementations(args, deps) {
-  const {
-    feature_description,
-    folder_path: seiFolderPathRaw,
-    source_files: seiSourceFilesRaw,
-    diff_path: seiDiffPathRaw,
-    extensions: seiExtensions,
-    exclude_dirs: seiExcludeDirs,
-    max_files: seiMaxFiles,
-    redact_secrets: seiRedact,
-    redact_regex: seiRedactRegexRaw,
-    answer_mode: seiRawMode,
-    use_gitignore: seiUseGitignore,
-    scan_secrets: seiScan
-  } = args;
-  const seiUseEnsemble = deps.useEnsemble;
-  const seiBudgetBytes = (args.max_payload_kb ?? 400) * 1024;
-  if (typeof feature_description !== "string" || !feature_description.trim()) {
-    return {
-      content: [{ type: "text", text: "FAILED: feature_description is required (non-empty string)." }],
-      isError: true
-    };
-  }
-  const folderPathsRaw = Array.isArray(seiFolderPathRaw) ? seiFolderPathRaw.filter((p) => typeof p === "string" && p.trim()) : typeof seiFolderPathRaw === "string" && seiFolderPathRaw.trim() ? [seiFolderPathRaw] : [];
-  if (folderPathsRaw.length === 0) {
-    return {
-      content: [{ type: "text", text: "FAILED: folder_path is required (string or array of strings)." }],
-      isError: true
-    };
-  }
-  const folderPaths = [];
-  for (const fpRaw of folderPathsRaw) {
-    let fp;
-    try {
-      fp = sanitizeInputPath(fpRaw);
-    } catch (err3) {
-      return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
-    }
-    if (!existsSync8(fp)) {
-      return { content: [{ type: "text", text: `FAILED: Folder not found: ${fpRaw}` }], isError: true };
-    }
-    if (!statSync6(fp).isDirectory()) {
-      return { content: [{ type: "text", text: `FAILED: Not a directory: ${fpRaw}` }], isError: true };
-    }
-    folderPaths.push(fp);
-  }
-  const sourceFiles = [];
-  const sourceFilesCanonical = /* @__PURE__ */ new Set();
-  if (seiSourceFilesRaw !== void 0 && seiSourceFilesRaw !== null) {
-    const raw = Array.isArray(seiSourceFilesRaw) ? seiSourceFilesRaw : [seiSourceFilesRaw];
-    for (const sf of raw) {
-      if (typeof sf !== "string" || !sf.trim()) continue;
-      const resolved = resolve6(sf);
-      if (!existsSync8(resolved)) {
-        return {
-          content: [{ type: "text", text: `FAILED: source_files entry not found: ${sf}` }],
-          isError: true
-        };
-      }
-      sourceFiles.push(resolved);
-      sourceFilesCanonical.add(resolved);
-      try {
-        sourceFilesCanonical.add(realpathSync3(resolved));
-      } catch {
-      }
-    }
-  }
-  let diffPathResolved = void 0;
-  if (typeof seiDiffPathRaw === "string" && seiDiffPathRaw.trim()) {
-    const r = resolve6(seiDiffPathRaw);
-    if (!existsSync8(r)) {
-      return {
-        content: [{ type: "text", text: `FAILED: diff_path not found: ${seiDiffPathRaw}` }],
-        isError: true
-      };
-    }
-    diffPathResolved = r;
-  }
-  let seiEffectiveExts = seiExtensions;
-  if ((!seiEffectiveExts || seiEffectiveExts.length === 0) && sourceFiles.length > 0) {
-    const extSet = /* @__PURE__ */ new Set();
-    for (const sf of sourceFiles) {
-      const m = /\.[^./\\]+$/.exec(sf);
-      if (m) extSet.add(m[0]);
-    }
-    if (extSet.size > 0) seiEffectiveExts = Array.from(extSet);
-  }
-  let seiRegexRedact;
-  try {
-    seiRegexRedact = parseRedactRegex(seiRedactRegexRaw);
-  } catch (err3) {
-    return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
-  }
-  const descTrimmed = feature_description.trim();
-  const hasRef = sourceFiles.length > 0 || !!diffPathResolved;
-  const refBlock = hasRef ? "The reference implementation from the PR is appended to these instructions as " + (sourceFiles.length > 0 ? "one or more source files" : "context") + (diffPathResolved ? ", followed by a unified diff showing the EXACT new lines (prefixed with '+'). Focus on the new lines when reasoning about what the PR adds. " : ". ") + "The source files may contain many unrelated functions \u2014 only the one matching the description above is relevant.\n\n" : "No reference source files were provided \u2014 rely purely on the feature description above when reasoning about semantic equivalence.\n\n";
-  const seiBasePrompt = `You are checking every file in this batch for an existing implementation of this feature (or a helper that could be trivially composed to achieve it):
-
-    ${descTrimmed}
-
-` + refBlock + "For EACH file in the batch, answer SEMANTIC equivalence: the same goal achieved by different code still counts. Ignore naming differences and surface-level style.\n\nOutput format: each file gets its own section in the response, separated by '---'. Per-file answer is one line per finding, no preamble, no explanation.\n\nSection template:\n\n## File: <absolute-file-path>\n\n<one line per finding>\n\n---\n\nPer-finding line format:\n    NO\n  or\n    YES symbol=<function-or-class-name> lines=<start-end>\n\nEXHAUSTIVE: If a file contains MULTIPLE matches, output ALL of them as successive YES lines. Do NOT cap the count. Do NOT keep only the most relevant. The reviewer may want to delete EVERY existing copy and leave only the PR's new one, so every occurrence MUST be listed.\n\nSpecial case: if a file IS the reference (you recognize the PR code itself), output:\n    NO (self-reference)\n\nProduce exactly one section per input file, in the order they appear in the batch, separated by '---'. Do NOT merge sections. Do NOT write rationale. Do NOT quote code. Do NOT explain. One line per match per file. Nothing else.";
-  const seiInstrFiles = [...sourceFiles];
-  if (diffPathResolved) seiInstrFiles.push(diffPathResolved);
-  const seiBasePromptWithRef = resolvePrompt(
-    seiBasePrompt,
-    seiInstrFiles.length > 0 ? seiInstrFiles : void 0
-  );
-  if (!seiBasePromptWithRef.trim()) {
-    return {
-      content: [{ type: "text", text: "FAILED: specialized prompt came out empty (internal error)." }],
-      isError: true
-    };
-  }
-  const fileSet = /* @__PURE__ */ new Set();
-  const seiMaxFilesEffective = seiMaxFiles ?? 1e4;
-  for (const fp of folderPaths) {
-    const walked = walkDir(fp, {
-      extensions: seiEffectiveExts,
-      maxFiles: seiMaxFilesEffective,
-      exclude: seiExcludeDirs,
-      useGitignore: seiUseGitignore !== false
-      // default true
-    });
-    for (const f of walked) fileSet.add(f);
-  }
-  for (const walked of Array.from(fileSet)) {
-    if (sourceFilesCanonical.has(walked)) {
-      fileSet.delete(walked);
-      continue;
-    }
-    try {
-      const canonical2 = realpathSync3(walked);
-      if (sourceFilesCanonical.has(canonical2)) {
-        fileSet.delete(walked);
-      }
-    } catch {
-    }
-  }
-  const files = Array.from(fileSet);
-  if (files.length === 0) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: `No matching files found after filtering. Folders: ${folderPaths.join(", ")}` + (seiEffectiveExts?.length ? `; extensions: ${seiEffectiveExts.join(", ")}` : "") + (sourceFiles.length ? `; excluded source_files: ${sourceFiles.length}` : "")
-        }
-      ]
-    };
-  }
-  if (files.length > seiMaxFilesEffective) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: `FAILED: ${files.length} files matched, exceeding max_files=${seiMaxFilesEffective}. Narrow folder_path, pass extensions, or raise max_files.`
-        }
-      ],
-      isError: true
-    };
-  }
-  if (seiScan && !seiRedact) {
-    const scanResult = scanFilesForSecrets(files);
-    if (scanResult.found)
-      return {
-        content: [{ type: "text", text: scanResult.report }],
-        isError: true
-      };
-  }
-  const seiSystemMessage = "You are a code reviewer checking for duplicate implementations. Output per-file NO/YES answers in the exact format specified in the user prompt. Be terse \u2014 no rationale, no code quotes, no explanation. Identify matches by function/class/method NAME, never by line number in prose.";
-  const seiSystemBytes = Buffer.byteLength(seiSystemMessage, "utf-8");
-  const seiBaseBytes = Buffer.byteLength(seiBasePromptWithRef, "utf-8");
-  const seiPromptBytes = seiSystemBytes + seiBaseBytes + 2048;
-  const { groups: seiGroups, autoBatched: seiAutoBatched, skipped: seiSkipped } = readAndGroupFiles(files, seiPromptBytes, seiRedact, seiBudgetBytes, seiRegexRedact);
-  if (seiGroups.length === 0) {
-    const reasons = [];
-    if (seiSkipped.length > 0) {
-      reasons.push(
-        `${seiSkipped.length} file(s) exceeded the payload budget and were skipped`
-      );
-    } else {
-      reasons.push("no files fit within the payload budget");
-    }
-    return {
-      content: [
-        {
-          type: "text",
-          text: `FAILED: no batches could be formed. ${reasons.join("; ")}. Raise max_payload_kb (current: ${Math.round(seiBudgetBytes / 1024)} KB) or narrow folder_path to smaller files.`
-        }
-      ],
-      isError: true
-    };
-  }
-  const seiMode = resolveAnswerMode(seiRawMode, 2);
-  const seiBatchId = randomUUID();
-  const seiBatchResponses = [];
-  let seiAborted = false;
-  let seiAbortReason = "";
-  for (let gi = 0; gi < seiGroups.length; gi++) {
-    if (seiAborted) break;
-    const group = seiGroups[gi];
-    const groupPaths = group.map((fd) => fd.path);
-    let userContent = seiBasePromptWithRef;
-    userContent += buildPerFileSectionPrompt(groupPaths);
-    for (const fd of group) {
-      userContent += `
-
-${fd.block}`;
-    }
-    const messages = [
-      { role: "system", content: seiSystemMessage },
-      { role: "user", content: userContent }
-    ];
-    try {
-      const resp = await deps.callModel(messages);
-      seiBatchResponses.push({
-        idx: gi,
-        filePaths: groupPaths,
-        content: resp.content ?? "",
-        model: resp.model ?? deps.backendModel
-      });
-      if (deps.onProgress) {
-        deps.onProgress(
-          gi + 1,
-          seiGroups.length,
-          `search_existing_implementations: batch ${gi + 1}/${seiGroups.length} done (${groupPaths.length} files)`
-        );
-      }
-    } catch (err3) {
-      const classified = deps.classifyError(err3);
-      seiBatchResponses.push({
-        idx: gi,
-        filePaths: groupPaths,
-        content: "",
-        model: deps.backendModel,
-        error: classified.reason
-      });
-      if (classified.unrecoverable && classified.serviceLevel) {
-        seiAborted = true;
-        seiAbortReason = `Unrecoverable: ${classified.reason}`;
-      }
-    }
-  }
-  const seiBatchOk = seiBatchResponses.filter((r) => !r.error && r.content.trim().length > 0);
-  const seiBatchFailed = seiBatchResponses.filter((r) => r.error || !r.content.trim());
-  if (seiBatchOk.length === 0) {
-    const reason = seiAborted ? seiAbortReason : seiBatchFailed.length > 0 ? `all ${seiBatchFailed.length} batch(es) failed or returned empty: ${seiBatchFailed[0].error ?? "empty response"}` : "no batches produced output";
-    const failLines = [
-      `FAILED: search_existing_implementations produced zero usable output (${seiBatchOk.length}/${seiGroups.length} batches succeeded, ${files.length} files discovered)`,
-      `Reason: ${reason}`,
-      `Folders: ${folderPaths.join(", ")}`,
-      sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
-      diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
-      `Batch UUID: ${seiBatchId}`
-    ];
-    if (seiBatchFailed.length > 0) {
-      failLines.push("", "PER-BATCH FAILURES:");
-      for (const r of seiBatchFailed) {
-        failLines.push(
-          `  Batch ${r.idx + 1}/${seiGroups.length} (${r.filePaths.length} files): ${r.error ?? "empty response"}`
-        );
-      }
-    }
-    if (seiSkipped.length > 0) {
-      failLines.push("", `SKIPPED (exceeded payload budget, ${seiSkipped.length}):`);
-      for (const s of seiSkipped) failLines.push(`  ${s}`);
-    }
-    return {
-      content: [{ type: "text", text: failLines.join("\n") }],
-      isError: true
-    };
-  }
-  if (seiMode === 2) {
-    const sections = [];
-    sections.push(`# LLM Externalizer \u2014 search_existing_implementations`);
-    sections.push("");
-    sections.push(`**Feature**: ${descTrimmed}`);
-    sections.push(`**Folders**: ${folderPaths.join(", ")}`);
-    sections.push(`**Files scanned**: ${files.length}`);
-    sections.push(`**Batches**: ${seiGroups.length} (FFD bin-packed, ${seiAutoBatched ? "auto-batched" : "single batch"})`);
-    if (sourceFiles.length > 0) sections.push(`**Reference source files**: ${sourceFiles.length}`);
-    if (diffPathResolved) sections.push(`**Diff**: ${diffPathResolved}`);
-    if (seiSkipped.length > 0) {
-      sections.push("");
-      sections.push(`**SKIPPED** (exceeded payload budget): ${seiSkipped.length}`);
-      for (const s of seiSkipped) sections.push(`  - ${s}`);
-    }
-    sections.push("");
-    for (const r of seiBatchOk) {
-      sections.push(`---
-
-## Batch ${r.idx + 1}/${seiGroups.length} \u2014 ${r.filePaths.length} files`);
-      sections.push("");
-      sections.push(r.content.trim());
-      sections.push("");
-    }
-    if (seiBatchFailed.length > 0) {
-      sections.push("---\n\n## FAILED BATCHES");
-      sections.push("");
-      for (const r of seiBatchFailed) {
-        sections.push(`### Batch ${r.idx + 1}/${seiGroups.length} \u2014 ${r.filePaths.length} files`);
-        sections.push(`Error: ${r.error ?? "empty response"}`);
-        sections.push("Files:");
-        for (const fp of r.filePaths) sections.push(`  - ${fp}`);
-        sections.push("");
-      }
-    }
-    const mergedPath = deps.saveResponse(
-      "search_existing_implementations",
-      sections.join("\n"),
-      {
-        model: deps.ensembleModelLabel(seiUseEnsemble),
-        task: descTrimmed,
-        inputFile: folderPaths[0]
-      },
-      void 0,
-      deps.outputDir
-    );
-    const summary = [
-      `SEARCH COMPLETE \u2014 ${seiBatchOk.length}/${seiGroups.length} batches processed, ${files.length} files scanned, ${seiSkipped.length} skipped`,
-      `Folders: ${folderPaths.join(", ")}`,
-      sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
-      diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
-      `Batch UUID: ${seiBatchId}`,
-      `MERGED REPORT: ${mergedPath}`
-    ];
-    if (seiBatchFailed.length > 0) {
-      summary.push("", `FAILED BATCHES: ${seiBatchFailed.length} (see merged report for details)`);
-    }
-    if (seiAborted) summary.push("", `ABORTED: ${seiAbortReason}`);
-    return {
-      content: [{ type: "text", text: summary.join("\n") }],
-      isError: seiAborted
-    };
-  }
-  if (seiMode === 0) {
-    const seiPerFileReports = [];
-    const seiPerFileMissing = [];
-    for (const r of seiBatchOk) {
-      const sections = splitPerFileSections(r.content, r.filePaths);
-      for (const fp of r.filePaths) {
-        const body = sections.get(fp);
-        if (!body || !body.trim()) {
-          seiPerFileMissing.push({ inputPath: fp, batchIdx: r.idx });
-          continue;
-        }
-        const header = `# search_existing_implementations \u2014 ${fp}
-
-**Feature**: ${descTrimmed}
-**Source file**: ${fp}
-**Batch**: ${r.idx + 1}/${seiGroups.length}
-**Model**: ${r.model}
-
----
-
-`;
-        const reportPath = deps.saveResponse(
-          "search_existing_implementations",
-          header + body.trim(),
-          {
-            model: r.model,
-            task: descTrimmed,
-            inputFile: fp
-          },
-          void 0,
-          deps.outputDir
-        );
-        seiPerFileReports.push({ inputPath: fp, reportPath });
-      }
-    }
-    const seiModeZeroLines = [
-      `SEARCH COMPLETE \u2014 ${seiBatchOk.length}/${seiGroups.length} batches processed, ${files.length} files scanned, ${seiSkipped.length} skipped`,
-      `Folders: ${folderPaths.join(", ")}`,
-      sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
-      diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
-      `Batch UUID: ${seiBatchId}`,
-      ""
-    ];
-    if (seiPerFileReports.length > 0) {
-      seiModeZeroLines.push(`REPORTS (one per input file, ${seiPerFileReports.length} total):`);
-      for (const p of seiPerFileReports) {
-        seiModeZeroLines.push(`  ${p.inputPath} -> ${p.reportPath}`);
-      }
-    }
-    if (seiPerFileMissing.length > 0) {
-      seiModeZeroLines.push(
-        "",
-        `MISSING SECTIONS (${seiPerFileMissing.length} files had no per-file section in the LLM response \u2014 raw batch content preserved in batch reports):`
-      );
-      for (const m of seiPerFileMissing) {
-        seiModeZeroLines.push(`  ${m.inputPath} (batch ${m.batchIdx + 1}/${seiGroups.length})`);
-      }
-    }
-    if (seiSkipped.length > 0) {
-      seiModeZeroLines.push("", `SKIPPED (exceeded payload budget, ${seiSkipped.length}):`);
-      for (const s of seiSkipped) seiModeZeroLines.push(`  ${s}`);
-    }
-    if (seiBatchFailed.length > 0) {
-      seiModeZeroLines.push("", `FAILED BATCHES (${seiBatchFailed.length}):`);
-      for (const r of seiBatchFailed) {
-        seiModeZeroLines.push(
-          `  Batch ${r.idx + 1}/${seiGroups.length} (${r.filePaths.length} files): ${r.error ?? "empty response"}`
-        );
-      }
-    }
-    if (seiAborted) seiModeZeroLines.push("", `ABORTED: ${seiAbortReason}`);
-    return {
-      content: [{ type: "text", text: seiModeZeroLines.join("\n") }],
-      isError: seiAborted
-    };
-  }
-  const seiAutoGroups = autoGroupByHeuristic(files);
-  const seiSectionByPath = /* @__PURE__ */ new Map();
-  const seiModelByPath = /* @__PURE__ */ new Map();
-  const seiBatchIdxByPath = /* @__PURE__ */ new Map();
-  for (const r of seiBatchOk) {
-    const sections = splitPerFileSections(r.content, r.filePaths);
-    for (const fp of r.filePaths) {
-      const body = sections.get(fp);
-      if (body && body.trim().length > 0) {
-        seiSectionByPath.set(fp, body.trim());
-        seiModelByPath.set(fp, r.model);
-        seiBatchIdxByPath.set(fp, r.idx);
-      }
-    }
-  }
-  const seiGroupReportPaths = [];
-  const seiGroupMissing = [];
-  for (const fg of seiAutoGroups) {
-    if (fg.files.length === 0) continue;
-    const gid = fg.id || "auto";
-    const sections = [];
-    sections.push(
-      `# search_existing_implementations \u2014 group ${gid}
-
-**Feature**: ${descTrimmed}
-**Files in group**: ${fg.files.length}
-
-` + fg.files.map((fp) => `  - ${fp}`).join("\n") + "\n\n---\n"
-    );
-    let anyBody = false;
-    for (const fp of fg.files) {
-      const body = seiSectionByPath.get(fp);
-      if (!body) {
-        seiGroupMissing.push(fp);
-        continue;
-      }
-      anyBody = true;
-      sections.push(`## File: ${fp}
-
-${body}
-`);
-    }
-    if (!anyBody) continue;
-    const reportPath = deps.saveResponse(
-      "search_existing_implementations",
-      sections.join("\n"),
-      {
-        model: deps.ensembleModelLabel(seiUseEnsemble),
-        task: descTrimmed,
-        inputFile: fg.files[0],
-        groupId: gid
-      },
-      void 0,
-      deps.outputDir
-    );
-    seiGroupReportPaths.push(`[group:${gid}] ${reportPath}`);
-  }
-  const seiSummaryLines = [
-    `SEARCH COMPLETE \u2014 ${seiBatchOk.length}/${seiGroups.length} batches processed, ${files.length} files scanned, ${seiSkipped.length} skipped`,
-    `Folders: ${folderPaths.join(", ")}`,
-    sourceFiles.length ? `Reference source files: ${sourceFiles.length}` : `No reference source files`,
-    diffPathResolved ? `Diff: ${diffPathResolved}` : `No diff`,
-    `Batch UUID: ${seiBatchId}`,
-    ""
-  ];
-  if (seiGroupReportPaths.length > 0) {
-    seiSummaryLines.push(`GROUP REPORTS (one per auto-group, ${seiGroupReportPaths.length} total):`);
-    for (const p of seiGroupReportPaths) seiSummaryLines.push(`  ${p}`);
-  }
-  if (seiGroupMissing.length > 0) {
-    seiSummaryLines.push(
-      "",
-      `MISSING SECTIONS (${seiGroupMissing.length} files had no per-file section in the LLM response):`
-    );
-    for (const p of seiGroupMissing) seiSummaryLines.push(`  ${p}`);
-  }
-  if (seiSkipped.length > 0) {
-    seiSummaryLines.push("", `SKIPPED (exceeded payload budget, ${seiSkipped.length}):`);
-    for (const s of seiSkipped) seiSummaryLines.push(`  ${s}`);
-  }
-  if (seiBatchFailed.length > 0) {
-    seiSummaryLines.push("", `FAILED BATCHES (${seiBatchFailed.length}):`);
-    for (const r of seiBatchFailed) {
-      seiSummaryLines.push(
-        `  Batch ${r.idx + 1}/${seiGroups.length} (${r.filePaths.length} files): ${r.error ?? "empty response"}`
-      );
-    }
-  }
-  if (seiAborted) seiSummaryLines.push("", `ABORTED: ${seiAbortReason}`);
-  return {
-    content: [{ type: "text", text: seiSummaryLines.join("\n") }],
-    isError: seiAborted
-  };
-}
-
 // src/rule-install.ts
 import {
-  existsSync as existsSync9,
-  mkdirSync as mkdirSync12,
-  readFileSync as readFileSync12,
-  writeFileSync as writeFileSync9,
-  renameSync as renameSync5,
+  existsSync as existsSync11,
+  mkdirSync as mkdirSync13,
+  readFileSync as readFileSync13,
+  writeFileSync as writeFileSync10,
+  renameSync as renameSync6,
   realpathSync as realpathSync4,
   unlinkSync
 } from "node:fs";
 import { randomBytes as randomBytes3 } from "node:crypto";
 import { homedir as homedir3, tmpdir } from "node:os";
-import { dirname as dirname8, join as join13, resolve as resolve7, sep as sep2 } from "node:path";
-import { fileURLToPath as fileURLToPath3 } from "node:url";
+import { dirname as dirname8, join as join15, resolve as resolve9, sep as sep2 } from "node:path";
+import { fileURLToPath as fileURLToPath4 } from "node:url";
 var RULE_FILENAME = "use-llm-externalizer.md";
 function resolveBundledRulePath() {
   const candidates = [];
   const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   if (pluginRoot && pluginRoot.length > 0) {
-    candidates.push(join13(resolve7(pluginRoot), "rules", RULE_FILENAME));
+    candidates.push(join15(resolve9(pluginRoot), "rules", RULE_FILENAME));
   }
   try {
-    const here = dirname8(fileURLToPath3(import.meta.url));
-    candidates.push(resolve7(here, "..", "..", "rules", RULE_FILENAME));
+    const here = dirname8(fileURLToPath4(import.meta.url));
+    candidates.push(resolve9(here, "..", "..", "rules", RULE_FILENAME));
   } catch {
   }
   for (const c of candidates) {
-    if (existsSync9(c)) return c;
+    if (existsSync11(c)) return c;
   }
   return null;
 }
 function resolveClaudeRulesDir() {
   const cfg = process.env.CLAUDE_CONFIG_DIR;
-  const base = cfg && cfg.length > 0 ? resolve7(cfg) : join13(homedir3(), ".claude");
-  return join13(base, "rules");
+  const base = cfg && cfg.length > 0 ? resolve9(cfg) : join15(homedir3(), ".claude");
+  return join15(base, "rules");
 }
 function canonical(p) {
   try {
@@ -50039,7 +50840,7 @@ function canonical(p) {
   } catch {
     const parent = dirname8(p);
     if (parent === p) return p;
-    return join13(canonical(parent), p.slice(parent.length + (parent.endsWith(sep2) ? 0 : 1)));
+    return join15(canonical(parent), p.slice(parent.length + (parent.endsWith(sep2) ? 0 : 1)));
   }
 }
 function underAllowedRoot(dir) {
@@ -50051,7 +50852,7 @@ function underAllowedRoot(dir) {
     roots.push(homedir3());
   }
   if (process.env.CLAUDE_CONFIG_DIR && process.env.CLAUDE_CONFIG_DIR.length > 0) {
-    roots.push(canonical(resolve7(process.env.CLAUDE_CONFIG_DIR)));
+    roots.push(canonical(resolve9(process.env.CLAUDE_CONFIG_DIR)));
   }
   const tmp = tmpdir();
   try {
@@ -50067,11 +50868,11 @@ function installUsageRule(opts = {}) {
     return { status: "skipped", dest: "", detail: "disabled via LLM_EXT_INSTALL_RULE" };
   }
   const source = opts.sourcePath ?? resolveBundledRulePath();
-  if (!source || !existsSync9(source)) {
+  if (!source || !existsSync11(source)) {
     return { status: "error", dest: "", detail: "bundled rule source not found" };
   }
   const rulesDir = opts.rulesDir ?? resolveClaudeRulesDir();
-  const dest = join13(rulesDir, RULE_FILENAME);
+  const dest = join15(rulesDir, RULE_FILENAME);
   if (!underAllowedRoot(rulesDir)) {
     return {
       status: "error",
@@ -50081,22 +50882,22 @@ function installUsageRule(opts = {}) {
   }
   let desired;
   try {
-    desired = readFileSync12(source, "utf-8");
+    desired = readFileSync13(source, "utf-8");
   } catch (e) {
     return { status: "error", dest, detail: `cannot read source: ${e.message}` };
   }
-  const existed = existsSync9(dest);
+  const existed = existsSync11(dest);
   if (existed) {
     try {
-      if (readFileSync12(dest, "utf-8") === desired) return { status: "unchanged", dest };
+      if (readFileSync13(dest, "utf-8") === desired) return { status: "unchanged", dest };
     } catch {
     }
   }
   const tmp = dest + ".tmp." + process.pid + "." + randomBytes3(4).toString("hex");
   try {
-    mkdirSync12(rulesDir, { recursive: true });
-    writeFileSync9(tmp, desired, "utf-8");
-    renameSync5(tmp, dest);
+    mkdirSync13(rulesDir, { recursive: true });
+    writeFileSync10(tmp, desired, "utf-8");
+    renameSync6(tmp, dest);
   } catch (e) {
     try {
       unlinkSync(tmp);
@@ -50108,8 +50909,8 @@ function installUsageRule(opts = {}) {
 }
 
 // src/model-events.ts
-import { appendFileSync as appendFileSync4, mkdirSync as mkdirSync13, readFileSync as readFileSync13 } from "node:fs";
-import { join as join14 } from "node:path";
+import { appendFileSync as appendFileSync4, mkdirSync as mkdirSync14, readFileSync as readFileSync14 } from "node:fs";
+import { join as join16 } from "node:path";
 var MODEL_EVENT_KINDS = [
   "param_drop",
   "reasoning_downgrade",
@@ -50122,7 +50923,7 @@ var MODEL_EVENT_KINDS = [
 var KIND_SET = new Set(MODEL_EVENT_KINDS);
 var MAX_DETAIL = 160;
 function getModelEventsPath() {
-  return join14(getConfigDir(), "model-events.log");
+  return join16(getConfigDir(), "model-events.log");
 }
 function sanitizeField(s) {
   return s.replace(/ - /g, " | ").replace(/[\r\n]+/g, " ").trim();
@@ -50136,7 +50937,7 @@ function appendModelEvent(model, kind, detail = "") {
     }
     const line = `${localIsoTimestamp()} - ${safeModel} - ${kind} - ${safeDetail}`;
     const dir = getConfigDir();
-    mkdirSync13(dir, { recursive: true });
+    mkdirSync14(dir, { recursive: true });
     appendFileSync4(getModelEventsPath(), line + "\n", { flag: "a" });
   } catch {
   }
@@ -50680,31 +51481,31 @@ function renderEndpointTable(ep, colors) {
 
 // src/free-pool-auto-bench.ts
 import {
-  existsSync as existsSync10,
-  mkdirSync as mkdirSync14,
+  existsSync as existsSync12,
+  mkdirSync as mkdirSync15,
   openSync,
-  readFileSync as readFileSync14,
-  writeFileSync as writeFileSync10
+  readFileSync as readFileSync15,
+  writeFileSync as writeFileSync11
 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { dirname as dirname9, join as join15, resolve as pathResolve } from "node:path";
+import { dirname as dirname9, join as join17, resolve as pathResolve } from "node:path";
 import { spawn } from "node:child_process";
-import { fileURLToPath as fileURLToPath4 } from "node:url";
-var LLM_EXT_HOME = join15(homedir4(), ".llm-externalizer");
-var BENCH_CACHE = join15(LLM_EXT_HOME, "benchmark-results.json");
-var BENCH_LOCK = join15(LLM_EXT_HOME, "free-pool-bench.lock");
-var BENCH_LOG = join15(LLM_EXT_HOME, "free-pool-bench.log");
+import { fileURLToPath as fileURLToPath5 } from "node:url";
+var LLM_EXT_HOME = join17(homedir4(), ".llm-externalizer");
+var BENCH_CACHE = join17(LLM_EXT_HOME, "benchmark-results.json");
+var BENCH_LOCK = join17(LLM_EXT_HOME, "free-pool-bench.lock");
+var BENCH_LOG = join17(LLM_EXT_HOME, "free-pool-bench.log");
 var DISABLE_ENV = "LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH";
 function resolveBenchmarkScriptPath() {
-  const here = dirname9(fileURLToPath4(import.meta.url));
+  const here = dirname9(fileURLToPath5(import.meta.url));
   const bundled = pathResolve(here, "benchmark.js");
-  if (existsSync10(bundled)) return bundled;
+  if (existsSync12(bundled)) return bundled;
   const fromSrc = pathResolve(here, "..", "dist", "benchmark.js");
   return fromSrc;
 }
-function benchCacheHasFreeEntries(cachePath2 = BENCH_CACHE) {
+function benchCacheHasFreeEntries(cachePath3 = BENCH_CACHE) {
   try {
-    const raw = readFileSync14(cachePath2, "utf-8");
+    const raw = readFileSync15(cachePath3, "utf-8");
     const data = JSON.parse(raw);
     if (!Array.isArray(data?.results)) return false;
     return data.results.some(
@@ -50715,9 +51516,9 @@ function benchCacheHasFreeEntries(cachePath2 = BENCH_CACHE) {
   }
 }
 function lockHoldsLivePid(lockPath = BENCH_LOCK) {
-  if (!existsSync10(lockPath)) return false;
+  if (!existsSync12(lockPath)) return false;
   try {
-    const pid = parseInt(readFileSync14(lockPath, "utf-8").trim(), 10);
+    const pid = parseInt(readFileSync15(lockPath, "utf-8").trim(), 10);
     if (!Number.isInteger(pid) || pid <= 0) return false;
     try {
       process.kill(pid, 0);
@@ -50736,7 +51537,7 @@ function maybeTriggerFreePoolBench(opts) {
     freeOnlyActive,
     freeOnlyWasOn,
     log,
-    cachePath: cachePath2 = BENCH_CACHE,
+    cachePath: cachePath3 = BENCH_CACHE,
     lockPath = BENCH_LOCK,
     logPath = BENCH_LOG,
     scriptPath = resolveBenchmarkScriptPath(),
@@ -50752,7 +51553,7 @@ function maybeTriggerFreePoolBench(opts) {
     );
     return { outcome: "skipped", reason: "disabled via env", pid: null };
   }
-  if (benchCacheHasFreeEntries(cachePath2)) {
+  if (benchCacheHasFreeEntries(cachePath3)) {
     return {
       outcome: "skipped",
       reason: "cache already has :free entries",
@@ -50778,7 +51579,7 @@ function maybeTriggerFreePoolBench(opts) {
     };
   }
   try {
-    mkdirSync14(LLM_EXT_HOME, { recursive: true });
+    mkdirSync15(LLM_EXT_HOME, { recursive: true });
   } catch {
   }
   let logFd;
@@ -50802,7 +51603,7 @@ function maybeTriggerFreePoolBench(opts) {
   );
   child.unref();
   try {
-    writeFileSync10(lockPath, String(child.pid ?? ""), "utf-8");
+    writeFileSync11(lockPath, String(child.pid ?? ""), "utf-8");
   } catch {
   }
   log(
@@ -51081,7 +51882,7 @@ var _onSettingsReloaded = null;
 function reloadSettingsFromDisk() {
   let raw;
   try {
-    raw = readFileSync15(SETTINGS_FILE, "utf-8");
+    raw = readFileSync16(SETTINGS_FILE, "utf-8");
   } catch {
     return false;
   }
@@ -51149,7 +51950,7 @@ function reloadSettingsFromDisk() {
 }
 var _settingsLastMtimeMs = (() => {
   try {
-    return statSync7(SETTINGS_FILE).mtimeMs;
+    return statSync8(SETTINGS_FILE).mtimeMs;
   } catch {
     return 0;
   }
@@ -51405,27 +52206,27 @@ function trackRequestEnd() {
 }
 function waitForRequestsDrained(timeoutMs = 12e4) {
   if (_activeRequests === 0) return Promise.resolve();
-  return new Promise((resolve9) => {
+  return new Promise((resolve11) => {
     const timer = setTimeout(() => {
       _activeRequestsDrained = null;
-      resolve9();
+      resolve11();
     }, timeoutMs);
     _activeRequestsDrained = () => {
       clearTimeout(timer);
-      resolve9();
+      resolve11();
     };
   });
 }
 var SESSION_ID = randomUUID2().slice(0, 8);
 var SESSION_START = /* @__PURE__ */ new Date();
-var LOG_DIR = join16(getConfigDir(), "logs");
-var LOG_FILE = join16(
+var LOG_DIR = join18(getConfigDir(), "logs");
+var LOG_FILE = join18(
   LOG_DIR,
   `session-${SESSION_ID}-${SESSION_START.toISOString().slice(0, 10)}.jsonl`
 );
 function writeLogEntry(entry) {
   try {
-    mkdirSync15(LOG_DIR, { recursive: true });
+    mkdirSync16(LOG_DIR, { recursive: true });
     appendFileSync5(LOG_FILE, JSON.stringify(entry) + "\n");
   } catch {
     process.stderr.write(`[llm-externalizer] Failed to write log entry
@@ -51435,7 +52236,7 @@ function writeLogEntry(entry) {
 var STATS_FILE = "/tmp/claude/llm-externalizer-stats.json";
 function writeStatsFile() {
   try {
-    mkdirSync15("/tmp/claude", { recursive: true, mode: 448 });
+    mkdirSync16("/tmp/claude", { recursive: true, mode: 448 });
     const backend = getCurrentBackend();
     const stats = {
       session_id: SESSION_ID,
@@ -51450,8 +52251,8 @@ function writeStatsFile() {
       backend: backend.type
     };
     const tmpStats = STATS_FILE + ".tmp";
-    writeFileSync11(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
-    renameSync6(tmpStats, STATS_FILE);
+    writeFileSync12(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
+    renameSync7(tmpStats, STATS_FILE);
   } catch {
   }
 }
@@ -52038,10 +52839,10 @@ function defaultOutputDir() {
   if (_cachedDefaultOutputDir) return _cachedDefaultOutputDir;
   const envOverride = process.env.LLM_OUTPUT_DIR;
   if (envOverride && envOverride.trim()) {
-    _cachedDefaultOutputDir = resolve8(envOverride.trim());
+    _cachedDefaultOutputDir = resolve10(envOverride.trim());
     return _cachedDefaultOutputDir;
   }
-  _cachedDefaultOutputDir = join16(resolveProjectMainRoot(), "reports", "llm-externalizer");
+  _cachedDefaultOutputDir = join18(resolveProjectMainRoot(), "reports", "llm-externalizer");
   return _cachedDefaultOutputDir;
 }
 function _resetDefaultOutputDirCache() {
@@ -52066,14 +52867,14 @@ function canonicalTimestamp(date5 = /* @__PURE__ */ new Date()) {
 }
 function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir) {
   const dir = outputDir || defaultOutputDir();
-  mkdirSync15(dir, { recursive: true });
+  mkdirSync16(dir, { recursive: true });
   const now = /* @__PURE__ */ new Date();
   const ts = canonicalTimestamp(now);
   const shortId = randomUUID2().slice(0, 6);
   const srcPart = meta3.inputFile ? `-${sanitizeFilename(meta3.inputFile).replace(/\.md$/, "")}` : "";
   const groupPart = meta3.groupId ? `-group-${meta3.groupId.replace(/[^a-zA-Z0-9_-]/g, "_")}` : "";
   const filename = overrideFilename || `${ts}-${toolName}${groupPart}${srcPart}-${shortId}.md`;
-  const filepath = join16(dir, filename);
+  const filepath = join18(dir, filename);
   const lines = [
     "# LLM Externalizer Response",
     "",
@@ -52087,8 +52888,8 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
   lines.push("", "---", "", responseText);
   const tmpPath = filepath + ".tmp";
   try {
-    writeFileSync11(tmpPath, lines.join("\n"), "utf-8");
-    renameSync6(tmpPath, filepath);
+    writeFileSync12(tmpPath, lines.join("\n"), "utf-8");
+    renameSync7(tmpPath, filepath);
   } catch (err3) {
     try {
       unlinkSync2(tmpPath);
@@ -52361,10 +53162,10 @@ function resolveFolderPath(folderPath, opts) {
   } catch (err3) {
     return { files: [], error: `Invalid folder_path: ${err3 instanceof Error ? err3.message : String(err3)}` };
   }
-  if (!existsSync11(folderPath)) {
+  if (!existsSync13(folderPath)) {
     return { files: [], error: `folder_path not found: ${folderPath}` };
   }
-  if (!statSync7(folderPath).isDirectory()) {
+  if (!statSync8(folderPath).isDirectory()) {
     return { files: [], error: `Not a directory: ${folderPath}` };
   }
   const files = walkDir(folderPath, {
@@ -52712,7 +53513,7 @@ ${failed.map((r) => `- **${r.model}**: ${r.content}`).join("\n")}`);
   };
 }
 async function processFileCheck(filePath, task, options = {}) {
-  if (!existsSync11(filePath)) {
+  if (!existsSync13(filePath)) {
     return { filePath, success: false, error: `File not found: ${filePath}` };
   }
   const codeBlock = readFileAsCodeBlock(
@@ -53638,7 +54439,7 @@ Run the "discover" tool to see the current profile status.`
     const isLLMTool = LLM_TOOLS_SET.has(name);
     if (isLLMTool) trackRequestStart();
     const rawOutputDir = args?.output_dir;
-    const outputDir = typeof rawOutputDir === "string" && rawOutputDir.trim() ? resolve8(rawOutputDir.trim()) : void 0;
+    const outputDir = typeof rawOutputDir === "string" && rawOutputDir.trim() ? resolve10(rawOutputDir.trim()) : void 0;
     const freeRequested = args?.free === true;
     const modelOverride = await resolveModelOverride(freeRequested);
     if (modelOverride) {
@@ -54403,7 +55204,7 @@ Profiles: ${profileNames.join(", ")}`);
                 };
               }
               try {
-                writeFileSync11(absPath, jsonText, "utf-8");
+                writeFileSync12(absPath, jsonText, "utf-8");
               } catch (err3) {
                 return {
                   content: [
@@ -54471,11 +55272,11 @@ Profiles: ${profileNames.join(", ")}`);
         }
         case "get_settings": {
           try {
-            const raw = readFileSync15(SETTINGS_FILE, "utf-8");
+            const raw = readFileSync16(SETTINGS_FILE, "utf-8");
             const targetDir = outputDir || defaultOutputDir();
-            mkdirSync15(targetDir, { recursive: true });
-            const copyPath = join16(targetDir, "settings_edit.yaml");
-            writeFileSync11(copyPath, raw, "utf-8");
+            mkdirSync16(targetDir, { recursive: true });
+            const copyPath = join18(targetDir, "settings_edit.yaml");
+            writeFileSync12(copyPath, raw, "utf-8");
             return { content: [{ type: "text", text: copyPath }] };
           } catch (err3) {
             return {
@@ -54632,7 +55433,7 @@ Profiles: ${profileNames.join(", ")}`);
               const gSucceeded = gAll.filter((r) => r.success);
               const reportSections = [];
               for (const r of gSucceeded) {
-                const content = r.reportPath && existsSync11(r.reportPath) ? readFileSync15(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync16(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -54768,7 +55569,7 @@ ${gAbortReason}`);
             } else {
               const reportSections = [];
               for (const r of succeeded) {
-                const content = r.reportPath && existsSync11(r.reportPath) ? readFileSync15(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync16(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -54854,7 +55655,7 @@ ${content}`);
           } catch (err3) {
             return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
           }
-          if (!existsSync11(sfFolderPath)) {
+          if (!existsSync13(sfFolderPath)) {
             return {
               content: [
                 {
@@ -54865,7 +55666,7 @@ ${content}`);
               isError: true
             };
           }
-          if (!statSync7(sfFolderPath).isDirectory()) {
+          if (!statSync8(sfFolderPath).isDirectory()) {
             return {
               content: [
                 { type: "text", text: `FAILED: Not a directory: ${folder_path}` }
@@ -55002,7 +55803,7 @@ ${content}`);
           if (sfMode === 2 && succeeded.length > 0) {
             const sections = [];
             for (const r of succeeded) {
-              const content = r.reportPath && existsSync11(r.reportPath) ? readFileSync15(r.reportPath, "utf-8") : "";
+              const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync16(r.reportPath, "utf-8") : "";
               sections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -55042,7 +55843,7 @@ ${content}`);
               for (const fp of fg.files) {
                 const r = pathToResult.get(fp);
                 if (!r) continue;
-                const content = r.reportPath && existsSync11(r.reportPath) ? readFileSync15(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync16(r.reportPath, "utf-8") : "";
                 sections.push(`## File: ${fp}
 
 ${content}`);
@@ -55147,8 +55948,8 @@ ${content}`);
             } catch (err3) {
               return { error: err3.message };
             }
-            if (!existsSync11(fA)) return { error: `File not found: ${fARaw}` };
-            if (!existsSync11(fB)) return { error: `File not found: ${fBRaw}` };
+            if (!existsSync13(fA)) return { error: `File not found: ${fARaw}` };
+            if (!existsSync13(fB)) return { error: `File not found: ${fBRaw}` };
             if (cfScan && !cfRedact) {
               const scanResult = scanFilesForSecrets([fA, fB]);
               if (scanResult.found) return { error: scanResult.report };
@@ -55210,7 +56011,7 @@ ${fence}${sourceBlocks}` }
             } catch (err3) {
               return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
             }
-            if (!existsSync11(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
+            if (!existsSync13(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
             const toRef = cfToRef || "HEAD";
             if (cfFromRef.startsWith("-") || toRef.startsWith("-")) {
               return { content: [{ type: "text", text: "FAILED: git refs must not start with '-'" }], isError: true };
@@ -55281,7 +56082,7 @@ ${sections.join("\n\n---\n\n")}`;
                 {
                   model: "git-diff (no LLM)",
                   task: `${cfFromRef} \u2192 ${toRef}`,
-                  inputFile: join16(cfGitRepoSafe, dg.files[0]),
+                  inputFile: join18(cfGitRepoSafe, dg.files[0]),
                   groupId: gid
                 },
                 void 0,
@@ -55374,7 +56175,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync11(fileA)) {
+          if (!existsSync13(fileA)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileA}` }
@@ -55382,7 +56183,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync11(fileB)) {
+          if (!existsSync13(fileB)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileB}` }
@@ -55570,13 +56371,13 @@ ${diffFence}` + sourceFileBlocks
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync11(filePath)) {
+                if (!existsSync13(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
                   continue;
                 }
-                const src = readFileSync15(filePath, "utf-8");
+                const src = readFileSync16(filePath, "utf-8");
                 const lang = detectLang(filePath);
                 const deps = extractLocalImports(filePath, src);
                 const depBlocks = [];
@@ -55630,14 +56431,14 @@ ${resp.content}${footer}`);
           const crReports = [];
           const crReportPaths = [];
           for (const filePath of crFilePaths) {
-            if (!existsSync11(filePath)) {
+            if (!existsSync13(filePath)) {
               crReports.push(`## ${filePath}
 
 FAILED: File not found.`);
               crReportPaths.push("(skipped \u2014 file not found)");
               continue;
             }
-            const crSourceCode = readFileSync15(filePath, "utf-8");
+            const crSourceCode = readFileSync16(filePath, "utf-8");
             const crLang = detectLang(filePath);
             const depPaths = extractLocalImports(filePath, crSourceCode);
             const depBlocks = [];
@@ -55810,7 +56611,7 @@ ${crResp.content}${crFooter}`
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync11(filePath)) {
+                if (!existsSync13(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
@@ -55839,22 +56640,22 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     continue;
                   }
                   const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-                  const resolvedBase = importPath.startsWith("/") ? resolve8(importPath) : join16(resolveDir, importPath);
+                  const resolvedBase = importPath.startsWith("/") ? resolve10(importPath) : join18(resolveDir, importPath);
                   if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                     packageImports.push(importPath);
                     continue;
                   }
-                  let found = existsSync11(resolvedBase) && statSync7(resolvedBase).isFile();
+                  let found = existsSync13(resolvedBase) && statSync8(resolvedBase).isFile();
                   if (!found && !extname5(resolvedBase)) {
                     for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".json"]) {
-                      if (existsSync11(resolvedBase + ext)) {
+                      if (existsSync13(resolvedBase + ext)) {
                         found = true;
                         break;
                       }
                     }
                     if (!found) {
                       for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                        if (existsSync11(join16(resolvedBase, `index${ext}`))) {
+                        if (existsSync13(join18(resolvedBase, `index${ext}`))) {
                           found = true;
                           break;
                         }
@@ -55888,7 +56689,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
           const ciReports = [];
           const ciReportPaths = [];
           for (const filePath of ciFilePaths) {
-            if (!existsSync11(filePath)) {
+            if (!existsSync13(filePath)) {
               ciReports.push(`## ${filePath}
 
 FAILED: File not found.`);
@@ -55935,13 +56736,13 @@ FAILED: File not found.`);
                 continue;
               }
               const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-              const resolvedBase = importPath.startsWith("/") ? resolve8(importPath) : join16(resolveDir, importPath);
+              const resolvedBase = importPath.startsWith("/") ? resolve10(importPath) : join18(resolveDir, importPath);
               if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                 packageImports.push(importPath);
                 continue;
               }
               let found = false;
-              if (existsSync11(resolvedBase) && statSync7(resolvedBase).isFile()) {
+              if (existsSync13(resolvedBase) && statSync8(resolvedBase).isFile()) {
                 found = true;
               }
               if (!found && !extname5(resolvedBase)) {
@@ -55957,14 +56758,14 @@ FAILED: File not found.`);
                   ".rs",
                   ".json"
                 ]) {
-                  if (existsSync11(resolvedBase + ext)) {
+                  if (existsSync13(resolvedBase + ext)) {
                     found = true;
                     break;
                   }
                 }
                 if (!found) {
                   for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                    if (existsSync11(join16(resolvedBase, `index${ext}`))) {
+                    if (existsSync13(join18(resolvedBase, `index${ext}`))) {
                       found = true;
                       break;
                     }
@@ -56142,7 +56943,7 @@ FAILED: File not found.`);
             if (csMode === 0 && !csEffectivelyGrouped) {
               const csPerFileResults = [];
               for (const fp of fgPaths) {
-                if (!existsSync11(fp)) {
+                if (!existsSync13(fp)) {
                   csPerFileResults.push(`FAILED: ${fp} \u2014 File not found`);
                   continue;
                 }
@@ -56290,7 +57091,7 @@ ${csResp.content}${csFooter}`
             return resp.content;
           };
           const csModuleDir = dirname10(fileUrlToPath_cs(import.meta.url));
-          const csEmbeddingsScript = join16(csModuleDir, "..", "scripts", "compute_embeddings.py");
+          const csEmbeddingsScript = join18(csModuleDir, "..", "scripts", "compute_embeddings.py");
           const csHooks = {
             rawLlmCall: csRawLlmCall,
             embeddingsScriptPath: csEmbeddingsScript,

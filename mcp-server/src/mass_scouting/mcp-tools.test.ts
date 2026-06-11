@@ -26,7 +26,7 @@ import type { OpenRouterModel } from "../benchmark/discover";
 // ── Static shape checks ────────────────────────────────────────────────
 
 describe("MASS_SCOUT_TOOLS", () => {
-  it("has nineteen tools with the documented names", () => {
+  it("has twenty-two tools with the documented names", () => {
     /** Phase B added 3 (jobs_list/audit_sample/body_get).
      *  Phase C2 added 2 (build_fieldset/propose_fieldset).
      *  Phase C3 added 2 (diff/chain).
@@ -41,8 +41,10 @@ describe("MASS_SCOUT_TOOLS", () => {
      *  DB-free, offline catalog fetch, in-process).
      *  TRDD-828238b5 A4 added 1 (discover_new_models — new-arrivals autodiscovery;
      *  DB-free, offline catalog fetch, in-process).
-     *  Total = 8 base + 5 + 2 + 1 + 1 + 1 + 1 + 1 + 1 = 21. */
-    expect(MASS_SCOUT_TOOLS.length).toBe(21);
+     *  TRDD-828238b5 A6 added 1 (search_existing_benchmark — model qualification
+     *  for the search_existing_implementations task; DB-free, in-process orchestrator).
+     *  Total = 8 base + 5 + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1 = 22. */
+    expect(MASS_SCOUT_TOOLS.length).toBe(22);
     const names = MASS_SCOUT_TOOLS.map((t) => t.name).sort();
     expect(names).toEqual(
       [
@@ -65,6 +67,7 @@ describe("MASS_SCOUT_TOOLS", () => {
         "mass_scout_register",
         "mass_scout_search",
         "mass_scout_search_xjob",
+        "search_existing_benchmark",
         "security_scan",
         "security_triage_benchmark",
       ].sort(),
@@ -89,6 +92,7 @@ describe("MASS_SCOUT_TOOLS", () => {
       "mass_scout_list_bundled_fieldsets",
       "security_scan",
       "security_triage_benchmark",
+      "search_existing_benchmark",
       "assess_model",
       "check_model_health",
       "discover_new_models",

@@ -25,7 +25,7 @@ your context.
 | Triage suspected-malicious code (is this a threat?) | `security_scan` |
 | Extract the same structured fields from MANY files / a corpus | `mass_scout` (+ family) |
 | Canonicalize / dedupe 10k–1M short labels by meaning | `cluster_synonyms` |
-| Will model X work for tool Y? / pick a per-tool model | `assess_model`, `security_triage_benchmark` |
+| Will model X work for tool Y? / pick a per-tool model | `assess_model`, `security_triage_benchmark`, `search_existing_benchmark` |
 | Are my CONFIGURED models still valid? (removed? price up? lost a capability?) | `check_model_health` |
 | Are there NEW models I should consider? (newer / cheaper arrivals) | `discover_new_models` |
 | Is the backend healthy? what model/profile is active? | `discover` |
@@ -172,6 +172,15 @@ Qualifies model(s) for `security_scan` against a labeled golden dataset, scored
 via the real judge pipeline; recommends the best **same-or-cheaper** passer
 (never a pricier model). Cached per-model-per-day. **Use when** you want to swap
 the `security_scan` model and need proof it actually performs.
+
+### `search_existing_benchmark`
+Qualifies model(s) for `search_existing_implementations` against a labeled
+golden-fixture codebase, scored **deterministically** (precision/recall/F1 over
+the known duplicate locations — no LLM judge) by driving the real search-existing
+pipeline in-process; recommends the best **same-or-cheaper** passer (never a
+pricier model). Cached per-model-per-day. **Use when** you want to swap the
+`search_existing_implementations` model and need proof it catches duplicates
+without over-flagging.
 
 ---
 

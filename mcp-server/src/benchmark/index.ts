@@ -40,6 +40,7 @@ import {
   type PickedModel,
 } from "./pick.js";
 import { runSecurityTriageBenchmark } from "./security-triage/index.js";
+import { runSearchExistingBenchmark } from "./search-existing/index.js";
 import {
   assessModelById,
   renderAssessmentText,
@@ -86,6 +87,12 @@ interface CliOptions {
   /** Explicit model id(s) to assess in --security-triage mode (repeatable).
    *  When empty, the triage benchmark auto-discovers the candidate pool. */
   triageModels: string[];
+  /** Run the search_existing_implementations benchmark instead of the keyword task. */
+  searchExisting: boolean;
+  /** Explicit model id(s) to assess in --search-existing mode (variadic — any
+   *  non-flag tokens following the flag). When empty, the benchmark
+   *  auto-discovers the same-or-cheaper candidate pool. */
+  searchExistingModels: string[];
   /** Ignore the per-model-per-day cache (currently only --security-triage). */
   force: boolean;
   /** Assess one model against EVERY tool's per-tool requirements (no LLM call). */
@@ -118,6 +125,8 @@ function parseArgs(argv: readonly string[]): CliOptions {
     minMeanF1: 0.95,
     securityTriage: false,
     triageModels: [],
+    searchExisting: false,
+    searchExistingModels: [],
     force: false,
     assessModel: null,
     checkHealth: false,
@@ -179,6 +188,15 @@ function parseArgs(argv: readonly string[]): CliOptions {
       i++;
     } else if (a === "--security-triage") {
       opts.securityTriage = true;
+    } else if (a === "--search-existing") {
+      // Variadic: consume every following non-flag token as a model id, so
+      // `--search-existing a/b c/d` assesses exactly those two; with no trailing
+      // tokens the benchmark auto-discovers the same-or-cheaper candidate pool.
+      opts.searchExisting = true;
+      while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
+        opts.searchExistingModels.push(argv[i + 1]);
+        i++;
+      }
     } else if (a === "--model") {
       opts.triageModels.push(takeValue(a, i));
       i++;
@@ -253,6 +271,20 @@ function printHelp(): void {
       "  --model ID        Assess this specific model (repeatable). Without it the",
       "                    triage benchmark auto-discovers same-or-cheaper candidates.",
       "  --force           Ignore the per-model-per-day cache and re-run.",
+      "",
+      "search_existing_implementations benchmark (separate task — duplicate-impl match):",
+      "  --search-existing [ID...]",
+      "                    Run the search_existing_implementations benchmark instead",
+      "                    of the keyword task. Drives the REAL search-existing",
+      "                    pipeline over a golden fixture codebase and scores it",
+      "                    DETERMINISTICALLY (micro precision/recall/F1 over the known",
+      "                    duplicate locations — no LLM judge), recommending the best",
+      "                    same-or-cheaper passer. Pass explicit model id(s) after the",
+      "                    flag to assess exactly those; with none, auto-discovers the",
+      "                    same-or-cheaper candidate pool. Writes a report under",
+      "                    reports/search-existing-benchmark/. Composes with --force.",
+      "  Pass gate: micro-F1 >= 0.85 AND micro-recall >= 0.85 AND coverage >= 0.90.",
+      "  Never auto-selects a pricier model. ADVISORY only — never edits config.",
       "",
       "Cross-tool requirements assessment (free — no LLM call, no API key):",
       "  --check-health    Self-check the CONFIGURED model(s) of the active profile",
@@ -371,6 +403,11 @@ async function main(): Promise<number> {
       for (const id of pool) {
         if (!opts.triageModels.includes(id)) opts.triageModels.push(id);
       }
+    } else if (opts.searchExisting) {
+      // Append (preserve any explicit ids the user passed after --search-existing).
+      for (const id of pool) {
+        if (!opts.searchExistingModels.includes(id)) opts.searchExistingModels.push(id);
+      }
     } else {
       // Append to includeIds — bypasses the cost filter so :free models are
       // benchmarked even though the default ':free tier excluded' rule applies.
@@ -385,6 +422,13 @@ async function main(): Promise<number> {
   // the security_scan judge pipeline and gates auto-selection on a pass.
   if (opts.securityTriage) {
     return runSecurityTriagePhase(opts);
+  }
+
+  // --search-existing routes to the search_existing_implementations benchmark —
+  // a wholly separate task (duplicate-implementation match, not keyword
+  // classification) scored deterministically against a golden fixture codebase.
+  if (opts.searchExisting) {
+    return runSearchExistingPhase(opts);
   }
 
   // --assess-model routes to the cross-tool requirements assessment — free (no
@@ -566,6 +610,31 @@ async function runSecurityTriagePhase(opts: CliOptions): Promise<number> {
   console.error(`[triage] spend: $${result.costUsd.toFixed(6)}`);
   console.error(`[triage] report: ${result.mdReportPath}`);
   console.error(`[triage] json:   ${result.jsonReportPath}`);
+  // stdout carries the machine-grep-able recommendation line.
+  process.stdout.write(`recommended_model=${result.recommendedModelId}\n`);
+  return 0;
+}
+
+/**
+ * --search-existing phase: assess model(s) on the search_existing_implementations
+ * golden fixture dataset and recommend the best same-or-cheaper passer. Scored
+ * DETERMINISTICALLY (precision/recall/F1 over the known duplicate locations — no
+ * LLM judge). Writes its own JSON + markdown report under
+ * reports/search-existing-benchmark/. ADVISORY only — never edits config.
+ */
+async function runSearchExistingPhase(opts: CliOptions): Promise<number> {
+  console.error("[search-existing] search_existing_implementations model benchmark");
+  const result = await runSearchExistingBenchmark({
+    models: opts.searchExistingModels.length > 0 ? opts.searchExistingModels : undefined,
+    force: opts.force,
+    onProgress: (m) => console.error(`[search-existing] ${m}`),
+  });
+  console.error("");
+  console.error(`[search-existing] ${result.summaryLine}`);
+  console.error(`[search-existing] recommended: ${result.recommendedModelId} (changed=${result.changed})`);
+  console.error(`[search-existing] spend: $${result.costUsd.toFixed(6)}`);
+  console.error(`[search-existing] report: ${result.reportPath}`);
+  console.error(`[search-existing] json:   ${result.jsonReportPath}`);
   // stdout carries the machine-grep-able recommendation line.
   process.stdout.write(`recommended_model=${result.recommendedModelId}\n`);
   return 0;

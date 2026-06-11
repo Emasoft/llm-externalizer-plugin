@@ -19,6 +19,7 @@
 
 import { runMassScoutCli, type CliResult, type CliRunOptions } from "./cli";
 import { runSecurityTriageBenchmark } from "../benchmark/security-triage/index";
+import { runSearchExistingBenchmark } from "../benchmark/search-existing/index";
 import { assessModelById, renderAssessmentText } from "../model-qualification/assess";
 import { runCheckModelHealth, renderModelHealthText } from "../model-qualification/drift";
 import { runDiscoverNewArrivals, renderNewArrivalsText } from "../model-qualification/new-arrivals";
@@ -874,6 +875,48 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
     },
   },
   {
+    name: "search_existing_benchmark",
+    description:
+      "Assess OpenRouter model(s) for the search_existing_implementations task " +
+      "against a labeled GOLDEN FIXTURE codebase, scored DETERMINISTICALLY " +
+      "(precision/recall/F1 over the known duplicate locations — NO LLM judge) " +
+      "by driving the REAL search-existing pipeline in-process. Recommends the " +
+      "best SAME-OR-CHEAPER model that PASSES the benchmark (micro-F1 + " +
+      "micro-recall + coverage floors); a pricier model is NEVER auto-selected. " +
+      "With no `models`, auto-discovers candidates that meet this tool's per-tool " +
+      "requirements and are not pricier than the incumbent default. ADVISORY only " +
+      "— writes JSON/markdown reports + returns their paths; never changes config. " +
+      "Cached per-model-per-day. ENV: $OPENROUTER_API_KEY (required — a benchmark " +
+      "you cannot run is useless).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        models: {
+          type: "array",
+          description:
+            "Explicit OpenRouter model id(s) to assess. When omitted, " +
+            "auto-discover the same-or-cheaper candidate pool.",
+          items: { type: "string" },
+        },
+        qualifying_top_n: {
+          type: "number",
+          description:
+            "Cap the auto-discovered candidate pool (cheapest-first). Default 16.",
+        },
+        force: {
+          type: "boolean",
+          description: "Ignore the per-model-per-day cache and re-run.",
+        },
+        output_dir: {
+          type: "string",
+          description:
+            "Report dir; defaults to <main-root>/reports/search-existing-benchmark/.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
     name: "assess_model",
     description:
       "Assess ONE OpenRouter model against EVERY LLM tool's per-tool " +
@@ -1245,6 +1288,32 @@ export async function dispatchMassScoutTool(
         `changed=${result.changed}`,
         `spend=$${result.costUsd.toFixed(6)}`,
         `report=${result.mdReportPath}`,
+        `json=${result.jsonReportPath}`,
+      ].join("\n");
+      return { content: [{ type: "text", text }], isError: false };
+    }
+    case "search_existing_benchmark": {
+      // In-process call to the search-existing orchestrator (NOT a CLI
+      // delegation — a distinct subsystem, not a mass_scout sub-command). Honors
+      // test injection (fetchImpl / apiKey / mainRoot) from CliRunOptions.
+      const models = Array.isArray(args.models)
+        ? (args.models.filter((m) => typeof m === "string" && m.length > 0) as string[])
+        : undefined;
+      const result = await runSearchExistingBenchmark({
+        models: models && models.length > 0 ? models : undefined,
+        qualifyingTopN: num(args.qualifying_top_n),
+        force: args.force === true,
+        outputDir: str(args.output_dir),
+        apiKey: opts.apiKey,
+        mainRoot: opts.mainRoot,
+        fetchImpl: opts.fetchImpl,
+      });
+      const text = [
+        result.summaryLine,
+        `recommended_model=${result.recommendedModelId}`,
+        `changed=${result.changed}`,
+        `spend=$${result.costUsd.toFixed(6)}`,
+        `report=${result.reportPath}`,
         `json=${result.jsonReportPath}`,
       ].join("\n");
       return { content: [{ type: "text", text }], isError: false };
