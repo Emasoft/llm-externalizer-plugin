@@ -402,6 +402,14 @@ const TOOL_CATALOG = {
       qualifying_only: "When true, report only arrivals meeting ≥1 tool's requirements (default: false)",
     },
   },
+  check_tool_replacements: {
+    desc: "READ-ONLY advisory auto-replacement planner: per benchmarked tool, check incumbent ledger health and (when degraded or forced) recommend the best same-or-cheaper replacement. Never writes settings — adopt via `llm-ext-benchmark --auto-replace --apply`.",
+    params: {
+      models: "Explicit candidate model id(s) forwarded to each benchmark that runs (JSON array); omit to auto-discover",
+      force: "Run every benchmarked tool's benchmark even when its incumbent is NOT degraded (default: false)",
+      output_dir: "Report directory (default: <main-root>/reports/auto-replace/)",
+    },
+  },
 };
 
 // ── Help output ──────────────────────────────────────────────────────

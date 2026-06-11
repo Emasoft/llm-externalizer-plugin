@@ -218651,6 +218651,13 @@ function resolveProfile(name, profile) {
     httpReferer: profile.http_referer ?? preset.defaultHttpReferer
   };
 }
+function resolveModelForTool(resolved, tool, fallback) {
+  if (resolved.freeOnly) return resolved.model;
+  const override = resolved.toolModels[tool];
+  if (typeof override === "string" && override.length > 0) return override;
+  if (fallback !== void 0) return fallback;
+  return resolved.model;
+}
 var FREE_POOL_SEED = Object.freeze([
   "poolside/laguna-m.1:free",
   "deepseek/deepseek-v4-flash:free",
@@ -219511,6 +219518,49 @@ function applyPicksToSettings(settingsPath, profileName, picks) {
     }
   };
 }
+function applyToolModelToSettings(settingsPath, profileName, tool, modelId) {
+  if (typeof modelId !== "string" || modelId.length === 0) {
+    throw new Error("applyToolModelToSettings: modelId must be a non-empty string");
+  }
+  const known = registeredTools();
+  if (!known.includes(tool)) {
+    throw new Error(
+      `applyToolModelToSettings: unknown tool '${tool}'. Registered LLM-using tools: ${known.join(", ")}.`
+    );
+  }
+  if (!existsSync2(settingsPath)) {
+    throw new Error(`settings.yaml not found at ${settingsPath}`);
+  }
+  const raw = readFileSync4(settingsPath, "utf-8");
+  let doc;
+  try {
+    doc = (0, import_yaml2.parse)(raw);
+  } catch (err) {
+    throw new Error(`settings.yaml at ${settingsPath} is not valid YAML: ${err.message}`, { cause: err });
+  }
+  if (typeof doc !== "object" || doc === null) {
+    throw new Error(`settings.yaml at ${settingsPath} must be a YAML object at the top level.`);
+  }
+  const root = doc;
+  if (!root.profiles || typeof root.profiles !== "object") {
+    throw new Error(`settings.yaml at ${settingsPath} missing 'profiles' map.`);
+  }
+  const profile = root.profiles[profileName];
+  if (!profile || typeof profile !== "object") {
+    throw new Error(
+      `settings.yaml at ${settingsPath} has no profile named '${profileName}'. Existing profiles: ${Object.keys(root.profiles).join(", ")}.`
+    );
+  }
+  const existing = profile.tool_models;
+  const oldToolModels = existing && typeof existing === "object" && !Array.isArray(existing) ? { ...existing } : {};
+  const oldModelId = typeof oldToolModels[tool] === "string" ? oldToolModels[tool] : "";
+  profile.tool_models = { ...oldToolModels, [tool]: modelId };
+  const newRaw = (0, import_yaml2.stringify)(root, { indent: 2 });
+  const tmp = settingsPath + ".tmp." + process.pid;
+  writeFileSync2(tmp, newRaw, "utf-8");
+  renameSyncCb(tmp, settingsPath);
+  return { profileName, tool, oldModelId, newModelId: modelId };
+}
 
 // src/benchmark/security-triage/index.ts
 import { createHash as createHash2 } from "node:crypto";
@@ -220090,6 +220140,74 @@ function appendModelEvent(model, kind, detail = "") {
     appendFileSync2(getModelEventsPath(), line + "\n", { flag: "a" });
   } catch {
   }
+}
+function parseModelEventLine(line) {
+  const stripped = line.replace(/[\r\n]+$/, "");
+  if (!stripped.trim()) return null;
+  const parts = stripped.split(" - ");
+  if (parts.length < 3) return null;
+  const [timestamp, model, kind] = parts;
+  if (!timestamp || !model || !KIND_SET.has(kind)) return null;
+  return {
+    timestamp,
+    model,
+    kind,
+    detail: parts.slice(3).join(" - ")
+  };
+}
+function readModelEvents(opts = {}) {
+  let raw;
+  try {
+    raw = readFileSync6(opts.path ?? getModelEventsPath(), "utf-8");
+  } catch {
+    return [];
+  }
+  const events = [];
+  for (const line of raw.split("\n")) {
+    const ev = parseModelEventLine(line);
+    if (ev) events.push(ev);
+  }
+  if (typeof opts.limit === "number" && opts.limit >= 0 && events.length > opts.limit) {
+    return events.slice(events.length - opts.limit);
+  }
+  return events;
+}
+function zeroByKind() {
+  const r = {};
+  for (const k of MODEL_EVENT_KINDS) r[k] = 0;
+  return r;
+}
+function aggregateModelHealth(events, opts = {}) {
+  const nonRetryableMax = opts.nonRetryableFailureThreshold ?? 3;
+  const emptyMax = opts.emptyResponseThreshold ?? 3;
+  const schemaHealMax = opts.schemaHealThreshold ?? 5;
+  const byModel = /* @__PURE__ */ new Map();
+  for (const ev of events) {
+    let s = byModel.get(ev.model);
+    if (!s) {
+      s = { model: ev.model, total: 0, byKind: zeroByKind(), degraded: false, reasons: [] };
+      byModel.set(ev.model, s);
+    }
+    s.total += 1;
+    s.byKind[ev.kind] += 1;
+  }
+  for (const s of byModel.values()) {
+    if (s.byKind.non_retryable_failure >= nonRetryableMax) {
+      s.reasons.push(
+        `${s.byKind.non_retryable_failure} non-retryable failures (\u2265 ${nonRetryableMax})`
+      );
+    }
+    if (s.byKind.empty_response >= emptyMax) {
+      s.reasons.push(`${s.byKind.empty_response} empty responses (\u2265 ${emptyMax})`);
+    }
+    if (s.byKind.schema_heal >= schemaHealMax) {
+      s.reasons.push(
+        `${s.byKind.schema_heal} schema heals (\u2265 ${schemaHealMax}) \u2014 structured-output instability`
+      );
+    }
+    s.degraded = s.reasons.length > 0;
+  }
+  return byModel;
 }
 
 // src/security_scan/judge.ts
@@ -223202,6 +223320,201 @@ function buildReportMarkdown2(args) {
   return lines.join("\n") + "\n";
 }
 
+// src/model-qualification/auto-replace.ts
+function defaultSettingsReader(profileNameOverride) {
+  const settings = loadSettings();
+  if (!settings || !settings.active) {
+    return {
+      profileName: profileNameOverride ?? "(unconfigured)",
+      toolModel: () => DEFAULT_MODEL
+    };
+  }
+  const profileName = profileNameOverride ?? settings.active;
+  const profile = settings.profiles[profileName];
+  if (!profile) {
+    return {
+      profileName,
+      toolModel: () => DEFAULT_MODEL
+    };
+  }
+  const resolved = resolveProfile(profileName, profile);
+  return {
+    profileName,
+    // Each per-tool benchmark anchors on DEFAULT_MODEL as the shared baseline
+    // incumbent (security-triage and search-existing both default their
+    // incumbent to DEFAULT_MODEL), so a tool with no per-tool override resolves
+    // to DEFAULT_MODEL here too — keeping the planner's incumbent and the
+    // benchmark's incumbent identical.
+    toolModel: (tool) => resolveModelForTool(resolved, tool, DEFAULT_MODEL)
+  };
+}
+async function defaultBenchmarkRunner(tool, benchmark, incumbentModelId, candidates, apiKey, onProgress) {
+  if (benchmark === "security-triage") {
+    const r = await runSecurityTriageBenchmark({
+      apiKey,
+      models: candidates,
+      incumbentModelId,
+      onProgress
+    });
+    return {
+      recommendedModelId: r.recommendedModelId,
+      changed: r.changed,
+      reason: r.selection.reason,
+      rejected: r.selection.rejected
+    };
+  }
+  if (benchmark === "search-existing") {
+    const r = await runSearchExistingBenchmark({
+      apiKey,
+      models: candidates,
+      incumbentModelId,
+      onProgress
+    });
+    return {
+      recommendedModelId: r.recommendedModelId,
+      changed: r.changed,
+      reason: r.selection.reason,
+      rejected: r.selection.rejected
+    };
+  }
+  throw new Error(
+    `defaultBenchmarkRunner: no orchestrator wired for benchmark '${benchmark}' (tool '${tool}'). The model-qualification registry declared a benchmark the auto-replace dispatcher does not know \u2014 add a case here when a new per-tool benchmark ships.`
+  );
+}
+function benchmarkedTools() {
+  const out = [];
+  for (const [tool, descriptor] of Object.entries(TOOL_MODEL_REGISTRY)) {
+    if (descriptor.benchmark === "security-triage" || descriptor.benchmark === "search-existing") {
+      out.push({ tool, benchmark: descriptor.benchmark });
+    }
+  }
+  return out;
+}
+async function planToolReplacements(opts = {}) {
+  const progress = opts.onProgress ?? (() => {
+  });
+  const reader = (opts.settingsReader ?? (() => defaultSettingsReader(opts.profileName)))();
+  const runBenchmark = opts.benchmarkRunner ?? ((tool, benchmark, incumbent, candidates, apiKey) => defaultBenchmarkRunner(tool, benchmark, incumbent, candidates, apiKey, progress));
+  const events = readModelEvents({ path: opts.eventsPath });
+  const healthByModel = aggregateModelHealth(events, opts.aggregate);
+  const findings = [];
+  for (const { tool, benchmark } of benchmarkedTools()) {
+    const incumbentModelId = reader.toolModel(tool);
+    const health = healthByModel.get(incumbentModelId) ?? {
+      model: incumbentModelId,
+      total: 0,
+      byKind: {
+        param_drop: 0,
+        reasoning_downgrade: 0,
+        rate_limit_429: 0,
+        schema_heal: 0,
+        truncation_retry: 0,
+        empty_response: 0,
+        non_retryable_failure: 0
+      },
+      degraded: false,
+      reasons: []
+    };
+    if (!health.degraded && !opts.force) {
+      progress(`${tool}: incumbent ${incumbentModelId} healthy \u2014 no benchmark run.`);
+      findings.push({
+        tool,
+        benchmark,
+        incumbentModelId,
+        health,
+        degraded: false,
+        ranBenchmark: false,
+        recommendedModelId: incumbentModelId,
+        changed: false,
+        reason: "model healthy \u2014 no benchmark run"
+      });
+      continue;
+    }
+    const trigger = health.degraded ? "degraded incumbent" : "forced audit";
+    progress(`${tool}: ${trigger} \u2014 running ${benchmark} benchmark for ${incumbentModelId}\u2026`);
+    const outcome = await runBenchmark(
+      tool,
+      benchmark,
+      incumbentModelId,
+      opts.candidateModels,
+      opts.apiKey
+    );
+    findings.push({
+      tool,
+      benchmark,
+      incumbentModelId,
+      health,
+      degraded: health.degraded,
+      ranBenchmark: true,
+      recommendedModelId: outcome.recommendedModelId,
+      changed: outcome.changed,
+      reason: outcome.reason,
+      rejected: outcome.rejected
+    });
+  }
+  const reportMarkdown = renderReport2(reader.profileName, !!opts.force, findings);
+  return { findings, reportMarkdown };
+}
+function renderReport2(profileName, force, findings) {
+  const lines = [];
+  lines.push("# Auto-replacement plan \u2014 per-tool model health");
+  lines.push("");
+  lines.push(`**Run:** ${(/* @__PURE__ */ new Date()).toISOString()}`);
+  lines.push(`**Profile:** \`${profileName}\``);
+  lines.push(`**Mode:** ${force ? "forced audit (benchmark every tool)" : "ledger-triggered (benchmark only degraded tools)"}`);
+  lines.push("");
+  lines.push(
+    "ADVISORY ONLY \u2014 this plan never changes your config. Adopt a recommendation by setting the tool's `tool_models` entry on your active profile (CLI / cron only)."
+  );
+  lines.push("");
+  const changed = findings.filter((f) => f.changed);
+  const benchmarked = findings.filter((f) => f.ranBenchmark);
+  lines.push("## Summary");
+  lines.push("");
+  if (findings.length === 0) {
+    lines.push("No benchmarked tools are registered \u2014 nothing to plan.");
+  } else if (changed.length > 0) {
+    lines.push(
+      `${changed.length} of ${findings.length} tool(s) have a recommended replacement (${benchmarked.length} benchmark run(s)).`
+    );
+  } else if (benchmarked.length > 0) {
+    lines.push(
+      `${benchmarked.length} benchmark run(s); no eligible same-or-cheaper model beat any incumbent. Keeping every current model.`
+    );
+  } else {
+    lines.push(
+      "Every incumbent model is healthy on the ledger and no audit was forced \u2014 no benchmark was run and no change is recommended."
+    );
+  }
+  lines.push("");
+  for (const f of findings) {
+    lines.push(`## ${f.tool} (benchmark: ${f.benchmark})`);
+    lines.push("");
+    lines.push(`- **Incumbent:** \`${f.incumbentModelId}\``);
+    lines.push(
+      `- **Ledger health:** ${f.degraded ? "DEGRADED" : "healthy"} (${f.health.total} event(s) in window)`
+    );
+    if (f.health.reasons.length > 0) {
+      for (const r of f.health.reasons) lines.push(`  - ${r}`);
+    }
+    lines.push(`- **Benchmark run:** ${f.ranBenchmark ? "yes" : "no"}`);
+    if (f.ranBenchmark) {
+      lines.push(
+        `- **Recommendation:** ${f.changed ? "SWITCH" : "KEEP"} \u2192 \`${f.recommendedModelId}\``
+      );
+      lines.push(`- **Reason:** ${f.reason}`);
+      if (f.rejected && f.rejected.length > 0) {
+        lines.push(`- **Rejected candidates:**`);
+        for (const rej of f.rejected) lines.push(`  - \`${rej.modelId}\` \u2014 ${rej.reason}`);
+      }
+    } else {
+      lines.push(`- **Recommendation:** KEEP \u2192 \`${f.recommendedModelId}\` (${f.reason})`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
 // src/model-qualification/assess.ts
 function assessModelAcrossTools(model) {
   const tools = [];
@@ -223702,7 +224015,9 @@ function parseArgs(argv) {
     checkHealth: false,
     newArrivals: false,
     qualifyingOnly: false,
-    benchFreePool: false
+    benchFreePool: false,
+    autoReplace: false,
+    apply: false
   };
   const takeValue = (flag, i) => {
     const v = argv[i + 1];
@@ -223776,6 +224091,10 @@ function parseArgs(argv) {
       opts.qualifyingOnly = true;
     } else if (a === "--bench-free-pool") {
       opts.benchFreePool = true;
+    } else if (a === "--auto-replace") {
+      opts.autoReplace = true;
+    } else if (a === "--apply") {
+      opts.apply = true;
     } else if (a === "--help" || a === "-h") {
       printHelp();
       process.exit(0);
@@ -223847,6 +224166,24 @@ function printHelp() {
       "                    reports/search-existing-benchmark/. Composes with --force.",
       "  Pass gate: micro-F1 >= 0.85 AND micro-recall >= 0.85 AND coverage >= 0.90.",
       "  Never auto-selects a pricier model. ADVISORY only \u2014 never edits config.",
+      "",
+      "Cross-tool auto-replacement (TRDD-828238b5 A7 \u2014 the writer path):",
+      "  --auto-replace    For every benchmarked tool (security_scan,",
+      "                    search_existing_implementations), check its incumbent",
+      "                    model's health against the durable ledger and, when",
+      "                    degraded (or with --force), run that tool's benchmark to",
+      "                    surface the best same-or-cheaper replacement. On a",
+      "                    healthy ledger no benchmark runs. ADVISORY by default \u2014",
+      "                    prints + writes a report under reports/auto-replace/,",
+      "                    changes NOTHING.",
+      "  --apply           With --auto-replace, ACTUALLY adopt each changed",
+      "                    recommendation by writing the per-tool `tool_models`",
+      "                    entry to ~/.llm-externalizer/settings.yaml (atomic). This",
+      "                    is the SOLE writer path \u2014 the MCP `check_tool_replacements`",
+      "                    tool is read-only and never writes. Requires",
+      "                    --auto-replace. Run `reset` afterwards to pick up the",
+      "                    change. --force re-runs benchmarks even on a healthy",
+      "                    ledger. Honors free_only (zero-spend on the free pool).",
       "",
       "Cross-tool requirements assessment (free \u2014 no LLM call, no API key):",
       "  --check-health    Self-check the CONFIGURED model(s) of the active profile",
@@ -223935,7 +224272,7 @@ async function main() {
       for (const id of pool) {
         if (!opts.triageModels.includes(id)) opts.triageModels.push(id);
       }
-    } else if (opts.searchExisting) {
+    } else if (opts.searchExisting || opts.autoReplace) {
       for (const id of pool) {
         if (!opts.searchExistingModels.includes(id)) opts.searchExistingModels.push(id);
       }
@@ -223950,6 +224287,12 @@ async function main() {
   }
   if (opts.searchExisting) {
     return runSearchExistingPhase(opts);
+  }
+  if (opts.apply && !opts.autoReplace) {
+    throw new Error("--apply requires --auto-replace");
+  }
+  if (opts.autoReplace) {
+    return runAutoReplacePhase(opts);
   }
   if (opts.assessModel !== null) {
     return runAssessModelPhase(opts.assessModel);
@@ -224093,6 +224436,69 @@ async function runSearchExistingPhase(opts) {
   console.error(`[search-existing] report: ${result.reportPath}`);
   console.error(`[search-existing] json:   ${result.jsonReportPath}`);
   process.stdout.write(`recommended_model=${result.recommendedModelId}
+`);
+  return 0;
+}
+async function runAutoReplacePhase(opts) {
+  console.error("[auto-replace] cross-tool auto-replacement planner");
+  const { findings, reportMarkdown } = await planToolReplacements({
+    candidateModels: opts.searchExistingModels.length > 0 ? opts.searchExistingModels : void 0,
+    force: opts.force,
+    onProgress: (m) => console.error(`[auto-replace] ${m}`)
+  });
+  const reportPath = join13(resolveProjectMainRoot(), "reports", "auto-replace", `${compactStamp()}-auto-replace.md`);
+  mkdirSync8(dirname4(reportPath), { recursive: true });
+  writeFileSync7(reportPath, reportMarkdown, "utf-8");
+  console.error("");
+  for (const f of findings) {
+    const verdict = !f.ranBenchmark ? "healthy \u2014 no benchmark" : f.changed ? `RECOMMEND ${f.incumbentModelId} -> ${f.recommendedModelId}` : `keep ${f.incumbentModelId}`;
+    console.error(`[auto-replace] ${f.tool} (${f.benchmark}): ${verdict}`);
+  }
+  const recommended = findings.filter((f) => f.changed);
+  console.error(
+    `[auto-replace] ${findings.length} tool(s) checked, ${findings.filter((f) => f.degraded).length} degraded, ${recommended.length} replacement(s) recommended.`
+  );
+  console.error(`[auto-replace] report: ${reportPath}`);
+  if (!opts.apply) {
+    console.error(
+      "[auto-replace] ADVISORY only \u2014 nothing written. Re-run with --apply to adopt the recommendation(s)."
+    );
+    process.stdout.write(`recommended_replacements=${recommended.length}
+`);
+    return 0;
+  }
+  const settingsPath = join13(homedir3(), ".llm-externalizer", "settings.yaml");
+  let profileName;
+  try {
+    const settings = loadSettings();
+    if (!settings || !settings.active) {
+      throw new Error(
+        "--apply needs an active profile in ~/.llm-externalizer/settings.yaml, but none is configured."
+      );
+    }
+    profileName = settings.active;
+  } catch (err) {
+    console.error(`[auto-replace] --apply failed: ${err.message}`);
+    return 3;
+  }
+  if (recommended.length === 0) {
+    console.error("[auto-replace] --apply: no changed recommendation to adopt \u2014 nothing written.");
+    return 0;
+  }
+  console.error("");
+  for (const f of recommended) {
+    try {
+      const r = applyToolModelToSettings(settingsPath, profileName, f.tool, f.recommendedModelId);
+      console.error(
+        `[auto-replace] applied ${profileName}::tool_models.${f.tool}: ${r.oldModelId || "\u2014"}  \u2192  ${r.newModelId}`
+      );
+    } catch (err) {
+      console.error(`[auto-replace] --apply failed on ${f.tool}: ${err.message}`);
+      return 3;
+    }
+  }
+  console.error("[auto-replace] Run the `reset` MCP tool or restart Claude Code to pick up the new tool model(s).");
+  process.stdout.write(`applied_replacements=${recommended.length}
 `);
   return 0;
 }

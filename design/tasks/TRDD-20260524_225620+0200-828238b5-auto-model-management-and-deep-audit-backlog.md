@@ -3,7 +3,7 @@ trdd-id: 828238b5-42d7-478e-8fe7-44d74f812286
 title: Auto-* model management suite + deep-audit findings backlog
 status: in-progress
 created: 2026-05-24T22:56:20+0200
-updated: 2026-06-11T19:58:18+0200
+updated: 2026-06-11T20:48:22+0200
 ---
 
 # TRDD-828238b5 — Auto-* model management suite + deep-audit findings backlog
@@ -240,7 +240,7 @@ Still deferred: the free-form tools (`code_task` / `scan_folder`) need an
 LLM-judge scorer (a sub-project like security-triage's `judgeGroups`), not a
 mechanical port — left for a follow-up rather than faked.
 
-### A7 — [L] Auto-replacement loop (capability 2 "replacement" half, PARTIAL) — UNBLOCKED for search_existing_implementations (its benchmark exists); broader rollout still pending
+### A7 — [L] Auto-replacement loop (capability 2 "replacement" half) — DONE for security_scan + search_existing_implementations (2026-06-11); broader rollout follows each new per-tool benchmark
 Capstone. Wire durable health ledger (A1) → tool flagged degraded → run that
 tool's benchmark (A6) → surface best same-or-cheaper passer → opt-in per-tool
 `tool_models` write (extend `--apply-profile` to per-tool; CLI/cron only, never
@@ -258,14 +258,75 @@ the model id at the index.ts error classifier) and A4's deferred "auto-feed
 qualifying arrivals into the benchmark" step. Build the broader A7 only as each
 remaining tool's benchmark lands.
 
-**Status (2026-06-10):** A1–A5 SHIPPED (commits a307759, 5eb4998, 0eed8d2,
+**What shipped (2026-06-11) — A7 across its 3 build slices:**
+
+- **A7-P1 — health-signal emission (the ledger's input).** The five mitigation
+  failure kinds (`rate_limit_429`, `truncation_retry`, `schema_heal`,
+  `empty_response`, `non_retryable_failure`) are now emitted with the model id at
+  the hot-path sites (the index.ts error classifier / retry ladder), so A1's
+  durable ledger actually accumulates the events A7 aggregates. Tests:
+  `src/model-events-emission.test.ts`.
+- **A7-P2 — the loop CORE (advisory planner + CLI-only writer), split for the
+  read-only-MCP guardrail.**
+  - `src/model-qualification/auto-replace.ts::planToolReplacements` — the
+    ADVISORY orchestrator. For every benchmarked tool it resolves the incumbent,
+    aggregates that incumbent's ledger window, and (only when degraded, or on an
+    explicit `force` audit) runs that tool's benchmark to surface the best
+    same-or-cheaper passer. Returns `{ findings, reportMarkdown }` and NEVER
+    writes config. Healthy/empty ledger ⇒ zero benchmarks, zero false positives.
+    IO seams injected (settingsReader / benchmarkRunner / eventsPath) so the
+    whole planner is unit-tested without network. Tests:
+    `src/model-qualification/auto-replace.test.ts`.
+  - `src/benchmark/pick.ts::applyToolModelToSettings` — the CLI/cron-ONLY writer
+    that atomically writes one `tool_models.<tool>` entry, behind a
+    READ-ONLY-MCP GUARDRAIL banner. Tests:
+    `src/benchmark/apply-tool-model.test.ts`.
+- **A7-P3 — the 3 surfaces (this slice).**
+  - **MCP — `check_tool_replacements` (READ-ONLY, the 21st model-mgmt tool /
+    39th MCP tool overall).** Registered in `MASS_SCOUT_TOOLS`; dispatch calls
+    ONLY `planToolReplacements`, writes the advisory report under
+    `reports/auto-replace/`, returns the report path + a one-line summary. The
+    handler deliberately does NOT import `applyToolModelToSettings` (inline
+    guardrail comment) — the MCP surface can never rewrite settings.
+  - **CLI — `llm-ext-benchmark --auto-replace [--apply]` (the SOLE writer
+    path).** `--auto-replace` runs the planner + writes the report (advisory);
+    `--apply` (gated: requires `--auto-replace`) adopts every `changed=true`
+    finding via `applyToolModelToSettings`, printing `old → new` per tool and
+    telling the user to run `reset`; exit 3 on write failure; honors `free_only`.
+    Tests: `src/benchmark/auto-replace-cli.test.ts` (hermetic spawn of
+    `dist/benchmark.js` on a healthy ledger — no network).
+  - **Slash command — `commands/llm-externalizer-auto-replace.md`** (cloned from
+    the search-existing-benchmark command) wraps the read-only MCP tool and
+    documents that applying requires the CLI `--apply`.
+  - Docs synced: README MCP-tool count 38→39 + model-qualification bucket 6→7 +
+    plugin-commands 36→37 (base 19→20) + tool table row; `bin/llm-ext`
+    TOOL_CATALOG entry; `docs/agent-usage-reference.md`,
+    `docs/tool-use-cases.md`, `rules/use-llm-externalizer.md`. Roster tests
+    bumped (`src/index.test.ts`, `src/mass_scouting/mcp-tools.test.ts` 22→23);
+    `doc-consistency` gate green.
+
+**The read-only-MCP guardrail is upheld:** the MCP `check_tool_replacements`
+tool REPORTS (writes a markdown report, returns its path) and recommends — it
+never mutates `settings.yaml`. The ONLY path that writes a `tool_models` entry is
+the human-run CLI `llm-ext-benchmark --auto-replace --apply`. The split keeps the
+server incapable of self-rewriting its own config (the standing invariant) while
+a deliberate CLI / scheduled cron can adopt a recommendation.
+
+**Status (2026-06-11):** A1–A5 SHIPPED (commits a307759, 5eb4998, 0eed8d2,
 f2dde4c, 4f684af). A6 PARTIALLY DONE — the `search_existing_implementations`
 benchmark shipped (real fixture corpus + deterministic P/R/F1 scorer + in-process
 runner + `select-common` extraction + registry pointer + 3 surfaces); the
 free-form `code_task` / `scan_folder` benchmarks (LLM-judge scorer) remain
-deferred. A7 is now UNBLOCKED for `search_existing_implementations` (a 2nd real
-per-tool benchmark exists); the broader auto-replacement rollout across the
-remaining tools is still pending the free-form benchmarks.
+deferred. A7 DONE (P1+P2+P3) for the two tools that have a per-tool benchmark —
+`security_scan` and `search_existing_implementations`: the auto-replacement loop
+runs end-to-end (ledger → degraded verdict → benchmark → recommend → CLI-only
+adopt), surfaced on all 3 surfaces with the read-only-MCP guardrail upheld. The
+BROADER rollout across the remaining tools follows automatically as each new
+per-tool benchmark lands (the planner already iterates every registry tool whose
+`.benchmark` the default runner can dispatch) — it pends only the free-form
+`code_task` / `scan_folder` LLM-judge benchmarks (A6's deferred half). Verified:
+build + lint green; 1067/1067 tests pass (4 live skipped); dogfood 100 PASS / 0
+FAIL / 1 SKIP.
 
 **Recommended build order:** A1 → A2 → A3 → A4 → A5 → A6 (tool-by-tool) → A7.
 

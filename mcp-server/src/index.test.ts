@@ -109,6 +109,10 @@ describe('listTools', () => {
       // discover_new_models — new-arrivals autodiscovery (TRDD-828238b5 A4),
       // registered in the same array; offline (catalog fetch only), no LLM call.
       'discover_new_models',
+      // check_tool_replacements — READ-ONLY advisory auto-replacement planner
+      // (TRDD-828238b5 A7-P3), registered in the same array; in-process, NEVER
+      // writes settings (the MCP surface cannot self-rewrite its own config).
+      'check_tool_replacements',
     ].sort();
 
     expect(toolNames).toEqual(expected);

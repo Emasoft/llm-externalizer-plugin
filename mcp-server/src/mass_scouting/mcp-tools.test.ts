@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -26,7 +26,7 @@ import type { OpenRouterModel } from "../benchmark/discover";
 // ── Static shape checks ────────────────────────────────────────────────
 
 describe("MASS_SCOUT_TOOLS", () => {
-  it("has twenty-two tools with the documented names", () => {
+  it("has twenty-three tools with the documented names", () => {
     /** Phase B added 3 (jobs_list/audit_sample/body_get).
      *  Phase C2 added 2 (build_fieldset/propose_fieldset).
      *  Phase C3 added 2 (diff/chain).
@@ -43,13 +43,16 @@ describe("MASS_SCOUT_TOOLS", () => {
      *  DB-free, offline catalog fetch, in-process).
      *  TRDD-828238b5 A6 added 1 (search_existing_benchmark — model qualification
      *  for the search_existing_implementations task; DB-free, in-process orchestrator).
-     *  Total = 8 base + 5 + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1 = 22. */
-    expect(MASS_SCOUT_TOOLS.length).toBe(22);
+     *  TRDD-828238b5 A7-P3 added 1 (check_tool_replacements — READ-ONLY advisory
+     *  auto-replacement planner; DB-free, in-process, NEVER writes settings).
+     *  Total = 8 base + 5 + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 = 23. */
+    expect(MASS_SCOUT_TOOLS.length).toBe(23);
     const names = MASS_SCOUT_TOOLS.map((t) => t.name).sort();
     expect(names).toEqual(
       [
         "assess_model",
         "check_model_health",
+        "check_tool_replacements",
         "discover_new_models",
         "mass_scout",
         "mass_scout_audit_sample",
@@ -96,6 +99,7 @@ describe("MASS_SCOUT_TOOLS", () => {
       "assess_model",
       "check_model_health",
       "discover_new_models",
+      "check_tool_replacements",
     ]);
     for (const t of MASS_SCOUT_TOOLS) {
       if (NO_DB.has(t.name)) continue;
@@ -544,5 +548,67 @@ describe("dispatchMassScoutTool — discover_new_models (TRDD-828238b5 A4)", () 
     );
     expect(res.isError).toBeFalsy();
     expect(res.content[0]!.text).toContain("vendor/b");
+  });
+});
+
+describe("dispatchMassScoutTool — check_tool_replacements (TRDD-828238b5 A7-P3)", () => {
+  // READ-ONLY advisory planner. Hermetic by construction: an EMPTY ledger means
+  // every incumbent is healthy → planToolReplacements runs ZERO benchmarks (no
+  // network), and force is not passed. The report writes under a tmp main-root
+  // (mainRoot injection). A settings.yaml is provided so the incumbent resolver
+  // reads a real profile rather than falling back. The dispatch must NEVER write
+  // settings — it only computes findings + a markdown report file.
+  const ORIG_CFG = process.env.LLM_EXT_CONFIG_DIR;
+  let tmp = "";
+  let root = "";
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join("/tmp", "ctr-dispatch-"));
+    root = mkdtempSync(join("/tmp", "ctr-root-"));
+    process.env.LLM_EXT_CONFIG_DIR = tmp;
+    writeFileSync(
+      join(tmp, "settings.yaml"),
+      [
+        "active: t",
+        "profiles:",
+        "  t:",
+        "    mode: remote",
+        "    api: openrouter-remote",
+        "    model: google/gemini-2.5-flash",
+        "    api_key: sk-test-literal",
+        "",
+      ].join("\n"),
+    );
+  });
+  afterEach(() => {
+    if (ORIG_CFG !== undefined) process.env.LLM_EXT_CONFIG_DIR = ORIG_CFG;
+    else delete process.env.LLM_EXT_CONFIG_DIR;
+    rmSync(tmp, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("runs no benchmark on a healthy ledger, writes a report, returns its path", async () => {
+    const res = await dispatchMassScoutTool(
+      "check_tool_replacements",
+      {},
+      { mainRoot: root },
+    );
+    expect(res.isError).toBeFalsy();
+    const text = res.content[0]!.text;
+    // Summary mentions the advisory posture + the report path under the tmp root.
+    expect(text).toContain("advisory");
+    expect(text).toContain("Report:");
+    expect(text).toContain("reports/auto-replace");
+    // The report file was actually written.
+    const reportLine = text.split("\n").find((l) => l.startsWith("Report:"));
+    expect(reportLine).toBeDefined();
+    const reportPath = reportLine!.slice("Report:".length).trim();
+    expect(existsSync(reportPath)).toBe(true);
+    const md = readFileSync(reportPath, "utf-8");
+    expect(md).toContain("Auto-replacement plan");
+    expect(md).toContain("ADVISORY ONLY");
+    // The advisory MCP surface MUST NOT have mutated settings.yaml.
+    const settingsAfter = readFileSync(join(tmp, "settings.yaml"), "utf-8");
+    expect(settingsAfter).not.toContain("tool_models");
   });
 });

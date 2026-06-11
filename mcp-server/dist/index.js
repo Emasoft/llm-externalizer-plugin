@@ -14229,8 +14229,8 @@ var require_dist2 = __commonJS({
 var import_yaml2 = __toESM(require_dist(), 1);
 import {
   readFileSync as readFileSync16,
-  writeFileSync as writeFileSync12,
-  mkdirSync as mkdirSync16,
+  writeFileSync as writeFileSync13,
+  mkdirSync as mkdirSync17,
   existsSync as existsSync13,
   renameSync as renameSync7,
   statSync as statSync8,
@@ -14241,7 +14241,7 @@ import {
   unwatchFile
 } from "node:fs";
 import { spawnSync as spawnSync3 } from "node:child_process";
-import { extname as extname5, join as join18, basename as basename5, dirname as dirname10, resolve as resolve10, isAbsolute as isAbsolute4 } from "node:path";
+import { extname as extname5, join as join19, basename as basename5, dirname as dirname10, resolve as resolve10, isAbsolute as isAbsolute4 } from "node:path";
 import { randomUUID as randomUUID2 } from "node:crypto";
 
 // src/grouping.ts
@@ -37639,6 +37639,10 @@ var StdioServerTransport = class {
   }
 };
 
+// src/mass_scouting/mcp-tools.ts
+import { mkdirSync as mkdirSync11, writeFileSync as writeFileSync8 } from "node:fs";
+import { join as join14 } from "node:path";
+
 // src/mass_scouting/cli.ts
 import { execSync as execSync2 } from "node:child_process";
 import {
@@ -42754,6 +42758,74 @@ function appendModelEvent(model, kind, detail = "") {
     appendFileSync3(getModelEventsPath(), line + "\n", { flag: "a" });
   } catch {
   }
+}
+function parseModelEventLine(line) {
+  const stripped = line.replace(/[\r\n]+$/, "");
+  if (!stripped.trim()) return null;
+  const parts = stripped.split(" - ");
+  if (parts.length < 3) return null;
+  const [timestamp, model, kind] = parts;
+  if (!timestamp || !model || !KIND_SET.has(kind)) return null;
+  return {
+    timestamp,
+    model,
+    kind,
+    detail: parts.slice(3).join(" - ")
+  };
+}
+function readModelEvents(opts = {}) {
+  let raw;
+  try {
+    raw = readFileSync4(opts.path ?? getModelEventsPath(), "utf-8");
+  } catch {
+    return [];
+  }
+  const events = [];
+  for (const line of raw.split("\n")) {
+    const ev = parseModelEventLine(line);
+    if (ev) events.push(ev);
+  }
+  if (typeof opts.limit === "number" && opts.limit >= 0 && events.length > opts.limit) {
+    return events.slice(events.length - opts.limit);
+  }
+  return events;
+}
+function zeroByKind() {
+  const r = {};
+  for (const k of MODEL_EVENT_KINDS) r[k] = 0;
+  return r;
+}
+function aggregateModelHealth(events, opts = {}) {
+  const nonRetryableMax = opts.nonRetryableFailureThreshold ?? 3;
+  const emptyMax = opts.emptyResponseThreshold ?? 3;
+  const schemaHealMax = opts.schemaHealThreshold ?? 5;
+  const byModel = /* @__PURE__ */ new Map();
+  for (const ev of events) {
+    let s = byModel.get(ev.model);
+    if (!s) {
+      s = { model: ev.model, total: 0, byKind: zeroByKind(), degraded: false, reasons: [] };
+      byModel.set(ev.model, s);
+    }
+    s.total += 1;
+    s.byKind[ev.kind] += 1;
+  }
+  for (const s of byModel.values()) {
+    if (s.byKind.non_retryable_failure >= nonRetryableMax) {
+      s.reasons.push(
+        `${s.byKind.non_retryable_failure} non-retryable failures (\u2265 ${nonRetryableMax})`
+      );
+    }
+    if (s.byKind.empty_response >= emptyMax) {
+      s.reasons.push(`${s.byKind.empty_response} empty responses (\u2265 ${emptyMax})`);
+    }
+    if (s.byKind.schema_heal >= schemaHealMax) {
+      s.reasons.push(
+        `${s.byKind.schema_heal} schema heals (\u2265 ${schemaHealMax}) \u2014 structured-output instability`
+      );
+    }
+    s.degraded = s.reasons.length > 0;
+  }
+  return byModel;
 }
 
 // src/security_scan/judge.ts
@@ -48225,6 +48297,201 @@ async function runDiscoverNewArrivals(opts = {}) {
   return { report, reportPath };
 }
 
+// src/model-qualification/auto-replace.ts
+function defaultSettingsReader(profileNameOverride) {
+  const settings = loadSettings();
+  if (!settings || !settings.active) {
+    return {
+      profileName: profileNameOverride ?? "(unconfigured)",
+      toolModel: () => DEFAULT_MODEL
+    };
+  }
+  const profileName = profileNameOverride ?? settings.active;
+  const profile = settings.profiles[profileName];
+  if (!profile) {
+    return {
+      profileName,
+      toolModel: () => DEFAULT_MODEL
+    };
+  }
+  const resolved = resolveProfile(profileName, profile);
+  return {
+    profileName,
+    // Each per-tool benchmark anchors on DEFAULT_MODEL as the shared baseline
+    // incumbent (security-triage and search-existing both default their
+    // incumbent to DEFAULT_MODEL), so a tool with no per-tool override resolves
+    // to DEFAULT_MODEL here too — keeping the planner's incumbent and the
+    // benchmark's incumbent identical.
+    toolModel: (tool) => resolveModelForTool(resolved, tool, DEFAULT_MODEL)
+  };
+}
+async function defaultBenchmarkRunner(tool, benchmark, incumbentModelId, candidates, apiKey, onProgress) {
+  if (benchmark === "security-triage") {
+    const r = await runSecurityTriageBenchmark({
+      apiKey,
+      models: candidates,
+      incumbentModelId,
+      onProgress
+    });
+    return {
+      recommendedModelId: r.recommendedModelId,
+      changed: r.changed,
+      reason: r.selection.reason,
+      rejected: r.selection.rejected
+    };
+  }
+  if (benchmark === "search-existing") {
+    const r = await runSearchExistingBenchmark({
+      apiKey,
+      models: candidates,
+      incumbentModelId,
+      onProgress
+    });
+    return {
+      recommendedModelId: r.recommendedModelId,
+      changed: r.changed,
+      reason: r.selection.reason,
+      rejected: r.selection.rejected
+    };
+  }
+  throw new Error(
+    `defaultBenchmarkRunner: no orchestrator wired for benchmark '${benchmark}' (tool '${tool}'). The model-qualification registry declared a benchmark the auto-replace dispatcher does not know \u2014 add a case here when a new per-tool benchmark ships.`
+  );
+}
+function benchmarkedTools() {
+  const out = [];
+  for (const [tool, descriptor] of Object.entries(TOOL_MODEL_REGISTRY)) {
+    if (descriptor.benchmark === "security-triage" || descriptor.benchmark === "search-existing") {
+      out.push({ tool, benchmark: descriptor.benchmark });
+    }
+  }
+  return out;
+}
+async function planToolReplacements(opts = {}) {
+  const progress = opts.onProgress ?? (() => {
+  });
+  const reader = (opts.settingsReader ?? (() => defaultSettingsReader(opts.profileName)))();
+  const runBenchmark = opts.benchmarkRunner ?? ((tool, benchmark, incumbent, candidates, apiKey) => defaultBenchmarkRunner(tool, benchmark, incumbent, candidates, apiKey, progress));
+  const events = readModelEvents({ path: opts.eventsPath });
+  const healthByModel = aggregateModelHealth(events, opts.aggregate);
+  const findings = [];
+  for (const { tool, benchmark } of benchmarkedTools()) {
+    const incumbentModelId = reader.toolModel(tool);
+    const health = healthByModel.get(incumbentModelId) ?? {
+      model: incumbentModelId,
+      total: 0,
+      byKind: {
+        param_drop: 0,
+        reasoning_downgrade: 0,
+        rate_limit_429: 0,
+        schema_heal: 0,
+        truncation_retry: 0,
+        empty_response: 0,
+        non_retryable_failure: 0
+      },
+      degraded: false,
+      reasons: []
+    };
+    if (!health.degraded && !opts.force) {
+      progress(`${tool}: incumbent ${incumbentModelId} healthy \u2014 no benchmark run.`);
+      findings.push({
+        tool,
+        benchmark,
+        incumbentModelId,
+        health,
+        degraded: false,
+        ranBenchmark: false,
+        recommendedModelId: incumbentModelId,
+        changed: false,
+        reason: "model healthy \u2014 no benchmark run"
+      });
+      continue;
+    }
+    const trigger = health.degraded ? "degraded incumbent" : "forced audit";
+    progress(`${tool}: ${trigger} \u2014 running ${benchmark} benchmark for ${incumbentModelId}\u2026`);
+    const outcome = await runBenchmark(
+      tool,
+      benchmark,
+      incumbentModelId,
+      opts.candidateModels,
+      opts.apiKey
+    );
+    findings.push({
+      tool,
+      benchmark,
+      incumbentModelId,
+      health,
+      degraded: health.degraded,
+      ranBenchmark: true,
+      recommendedModelId: outcome.recommendedModelId,
+      changed: outcome.changed,
+      reason: outcome.reason,
+      rejected: outcome.rejected
+    });
+  }
+  const reportMarkdown = renderReport(reader.profileName, !!opts.force, findings);
+  return { findings, reportMarkdown };
+}
+function renderReport(profileName, force, findings) {
+  const lines = [];
+  lines.push("# Auto-replacement plan \u2014 per-tool model health");
+  lines.push("");
+  lines.push(`**Run:** ${(/* @__PURE__ */ new Date()).toISOString()}`);
+  lines.push(`**Profile:** \`${profileName}\``);
+  lines.push(`**Mode:** ${force ? "forced audit (benchmark every tool)" : "ledger-triggered (benchmark only degraded tools)"}`);
+  lines.push("");
+  lines.push(
+    "ADVISORY ONLY \u2014 this plan never changes your config. Adopt a recommendation by setting the tool's `tool_models` entry on your active profile (CLI / cron only)."
+  );
+  lines.push("");
+  const changed = findings.filter((f) => f.changed);
+  const benchmarked = findings.filter((f) => f.ranBenchmark);
+  lines.push("## Summary");
+  lines.push("");
+  if (findings.length === 0) {
+    lines.push("No benchmarked tools are registered \u2014 nothing to plan.");
+  } else if (changed.length > 0) {
+    lines.push(
+      `${changed.length} of ${findings.length} tool(s) have a recommended replacement (${benchmarked.length} benchmark run(s)).`
+    );
+  } else if (benchmarked.length > 0) {
+    lines.push(
+      `${benchmarked.length} benchmark run(s); no eligible same-or-cheaper model beat any incumbent. Keeping every current model.`
+    );
+  } else {
+    lines.push(
+      "Every incumbent model is healthy on the ledger and no audit was forced \u2014 no benchmark was run and no change is recommended."
+    );
+  }
+  lines.push("");
+  for (const f of findings) {
+    lines.push(`## ${f.tool} (benchmark: ${f.benchmark})`);
+    lines.push("");
+    lines.push(`- **Incumbent:** \`${f.incumbentModelId}\``);
+    lines.push(
+      `- **Ledger health:** ${f.degraded ? "DEGRADED" : "healthy"} (${f.health.total} event(s) in window)`
+    );
+    if (f.health.reasons.length > 0) {
+      for (const r of f.health.reasons) lines.push(`  - ${r}`);
+    }
+    lines.push(`- **Benchmark run:** ${f.ranBenchmark ? "yes" : "no"}`);
+    if (f.ranBenchmark) {
+      lines.push(
+        `- **Recommendation:** ${f.changed ? "SWITCH" : "KEEP"} \u2192 \`${f.recommendedModelId}\``
+      );
+      lines.push(`- **Reason:** ${f.reason}`);
+      if (f.rejected && f.rejected.length > 0) {
+        lines.push(`- **Rejected candidates:**`);
+        for (const rej of f.rejected) lines.push(`  - \`${rej.modelId}\` \u2014 ${rej.reason}`);
+      }
+    } else {
+      lines.push(`- **Recommendation:** KEEP \u2192 \`${f.recommendedModelId}\` (${f.reason})`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
 // src/mass_scouting/mcp-tools.ts
 function buildArgv(sub, flags) {
   const out = [sub];
@@ -48906,6 +49173,29 @@ var MASS_SCOUT_TOOLS = [
       },
       required: []
     }
+  },
+  {
+    name: "check_tool_replacements",
+    description: "READ-ONLY advisory auto-replacement planner (TRDD-828238b5 A7) \u2014 for every LLM tool that HAS a per-tool benchmark (security_scan, search_existing_implementations), asks 'is its incumbent model degraded?' by aggregating the durable model-health ledger, and (only when degraded, or when `force` is set) runs that tool's ADVISORY benchmark to surface the best SAME-OR-CHEAPER replacement. On a healthy/empty ledger it runs NO benchmark and recommends keeping every incumbent (zero false positives). ADVISORY ONLY \u2014 writes a markdown report + returns its path; it NEVER rewrites settings. To actually adopt a recommendation, run the CLI `llm-ext-benchmark --auto-replace --apply` (the sole writer path; the MCP server is read-only by design and cannot mutate its own config).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        models: {
+          type: "array",
+          description: "Explicit candidate model id(s) forwarded to each benchmark that runs. When omitted, each benchmark auto-discovers the same-or-cheaper candidate pool.",
+          items: { type: "string" }
+        },
+        force: {
+          type: "boolean",
+          description: "Run every benchmarked tool's benchmark even when its incumbent is NOT degraded \u2014 an explicit operator audit. Default false."
+        },
+        output_dir: {
+          type: "string",
+          description: "Report dir; defaults to <main-root>/reports/auto-replace/."
+        }
+      },
+      required: []
+    }
   }
 ];
 var MASS_SCOUT_TOOL_NAMES = new Set(
@@ -49273,6 +49563,35 @@ Report: ${reportPath}`;
         };
       }
     }
+    case "check_tool_replacements": {
+      try {
+        const models = Array.isArray(args.models) ? args.models.filter((m) => typeof m === "string" && m.length > 0) : void 0;
+        const { findings, reportMarkdown } = await planToolReplacements({
+          candidateModels: models && models.length > 0 ? models : void 0,
+          force: args.force === true,
+          apiKey: opts.apiKey
+        });
+        const root = opts.mainRoot ?? resolveProjectMainRoot();
+        const dir = str(args.output_dir) ?? join14(root, "reports", "auto-replace");
+        mkdirSync11(dir, { recursive: true });
+        const reportPath = join14(dir, `${compactStamp()}-auto-replace.md`);
+        writeFileSync8(reportPath, reportMarkdown);
+        const degraded = findings.filter((f) => f.degraded).length;
+        const recommended = findings.filter((f) => f.changed).length;
+        const summary = `${findings.length} tool(s) checked, ${degraded} degraded, ${recommended} replacement(s) recommended (advisory \u2014 apply via the CLI \`llm-ext-benchmark --auto-replace --apply\`).`;
+        return {
+          content: [{ type: "text", text: `${summary}
+
+Report: ${reportPath}` }],
+          isError: false
+        };
+      } catch (e) {
+        return {
+          content: [{ type: "text", text: e.message }],
+          isError: true
+        };
+      }
+    }
     default:
       return {
         content: [
@@ -49356,14 +49675,14 @@ async function safeReadJson(res, maxBytes = MAX_RESPONSE_BYTES) {
 
 // src/cluster/cluster_synonyms_main.ts
 import {
-  mkdirSync as mkdirSync13,
+  mkdirSync as mkdirSync14,
   readFileSync as readFileSync13,
   readdirSync as readdirSync5,
-  writeFileSync as writeFileSync9,
+  writeFileSync as writeFileSync10,
   existsSync as existsSync10,
   renameSync as renameSync5
 } from "node:fs";
-import { join as join15 } from "node:path";
+import { join as join16 } from "node:path";
 
 // src/cluster/checkpoint.ts
 import Database2 from "better-sqlite3";
@@ -49495,7 +49814,7 @@ var UnionFind = class _UnionFind {
 
 // src/cluster/checkpoint.ts
 import { dirname as dirname6 } from "node:path";
-import { mkdirSync as mkdirSync11 } from "node:fs";
+import { mkdirSync as mkdirSync12 } from "node:fs";
 var SCHEMA = `
 CREATE TABLE IF NOT EXISTS clusters_uf (
   item_id   TEXT PRIMARY KEY,
@@ -49522,7 +49841,7 @@ var CheckpointDB = class _CheckpointDB {
     this.db = db;
   }
   static open(path) {
-    mkdirSync11(dirname6(path), { recursive: true });
+    mkdirSync12(dirname6(path), { recursive: true });
     const db = new Database2(path);
     db.pragma("journal_mode = WAL");
     db.pragma("synchronous = NORMAL");
@@ -49613,12 +49932,12 @@ var CheckpointDB = class _CheckpointDB {
 import { spawnSync as spawnSync2 } from "node:child_process";
 import {
   existsSync as existsSync9,
-  mkdirSync as mkdirSync12,
+  mkdirSync as mkdirSync13,
   readFileSync as readFileSync12,
-  writeFileSync as writeFileSync8,
+  writeFileSync as writeFileSync9,
   statSync as statSync7
 } from "node:fs";
-import { dirname as dirname7, join as join14 } from "node:path";
+import { dirname as dirname7, join as join15 } from "node:path";
 var F32_BYTES = 4;
 function readEmbeddingsMeta(path) {
   const metaPath = path + ".meta.json";
@@ -49673,11 +49992,11 @@ function computeEmbeddings(items, opts) {
   if (!existsSync9(opts.scriptPath)) {
     throw new Error(`compute_embeddings.py not found: ${opts.scriptPath}`);
   }
-  mkdirSync12(opts.outDir, { recursive: true });
-  const inputPath = join14(opts.outDir, "_embedding_sentences.txt");
-  const outputPath = join14(opts.outDir, "embeddings.f32");
+  mkdirSync13(opts.outDir, { recursive: true });
+  const inputPath = join15(opts.outDir, "_embedding_sentences.txt");
+  const outputPath = join15(opts.outDir, "embeddings.f32");
   const clean = opts.sentenceClean ?? defaultSentenceClean;
-  writeFileSync8(
+  writeFileSync9(
     inputPath,
     items.map((it) => clean(it.sentence)).join("\n") + "\n",
     { encoding: "utf-8" }
@@ -50578,7 +50897,7 @@ function loadPolicy(policyFile) {
   return resolvePolicy(valid);
 }
 function gateOutputDir(outputDir, policy, resuming) {
-  mkdirSync13(outputDir, { recursive: true });
+  mkdirSync14(outputDir, { recursive: true });
   if (resuming) return;
   const existing = readdirSync5(outputDir).filter((n) => !n.startsWith("."));
   const collisions = existing.filter(
@@ -50635,7 +50954,7 @@ function reductionPct(itemsIn, clustersOut) {
 }
 function writeJsonAtomic(path, value) {
   const tmp = path + ".tmp";
-  writeFileSync9(tmp, JSON.stringify(value, null, 2) + "\n", { encoding: "utf-8" });
+  writeFileSync10(tmp, JSON.stringify(value, null, 2) + "\n", { encoding: "utf-8" });
   renameSync5(tmp, path);
 }
 function writeClustersJsonl(path, itemsById, partition) {
@@ -50650,7 +50969,7 @@ function writeClustersJsonl(path, itemsById, partition) {
       lines.push(JSON.stringify({ id: it.id, cluster_id: clusterId, sentence: it.sentence }));
     }
   }
-  writeFileSync9(path, lines.join("\n") + (lines.length ? "\n" : ""), { encoding: "utf-8" });
+  writeFileSync10(path, lines.join("\n") + (lines.length ? "\n" : ""), { encoding: "utf-8" });
 }
 function buildSummary(itemsById, partition, profileName, canonicalsOverride) {
   const clusters = [];
@@ -50719,7 +51038,7 @@ async function runClusterSynonyms(invocation, hooks) {
     errors.push(`embeddings: ${err3.message}`);
     return buildEarlyAbort(invocation, errors, warnings, profileName, tStart);
   }
-  const checkpointPath = resumeFrom ?? join15(invocation.output_dir, OUTPUT_NAMES.checkpoint);
+  const checkpointPath = resumeFrom ?? join16(invocation.output_dir, OUTPUT_NAMES.checkpoint);
   const ckpt = CheckpointDB.open(checkpointPath);
   const uf = ckpt.loadUnionFind();
   for (const it of items) uf.add(it.id);
@@ -50804,9 +51123,9 @@ async function runClusterSynonyms(invocation, hooks) {
     weak_overlap_evidence: weakOverlapEvidence,
     warnings
   };
-  const clustersPath = join15(invocation.output_dir, OUTPUT_NAMES.clusters);
-  const summaryPath = join15(invocation.output_dir, OUTPUT_NAMES.summary);
-  const statsPath = join15(invocation.output_dir, OUTPUT_NAMES.stats);
+  const clustersPath = join16(invocation.output_dir, OUTPUT_NAMES.clusters);
+  const summaryPath = join16(invocation.output_dir, OUTPUT_NAMES.summary);
+  const statsPath = join16(invocation.output_dir, OUTPUT_NAMES.stats);
   writeClustersJsonl(clustersPath, itemsById, partition);
   writeJsonAtomic(summaryPath, buildSummary(itemsById, partition, profileName, canonicalsOverride));
   writeJsonAtomic(statsPath, stats);
@@ -50854,23 +51173,23 @@ import { fileURLToPath as fileUrlToPath_cs } from "node:url";
 // src/rule-install.ts
 import {
   existsSync as existsSync11,
-  mkdirSync as mkdirSync14,
+  mkdirSync as mkdirSync15,
   readFileSync as readFileSync14,
-  writeFileSync as writeFileSync10,
+  writeFileSync as writeFileSync11,
   renameSync as renameSync6,
   realpathSync as realpathSync4,
   unlinkSync
 } from "node:fs";
 import { randomBytes as randomBytes3 } from "node:crypto";
 import { homedir as homedir3, tmpdir } from "node:os";
-import { dirname as dirname8, join as join16, resolve as resolve9, sep as sep2 } from "node:path";
+import { dirname as dirname8, join as join17, resolve as resolve9, sep as sep2 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 var RULE_FILENAME = "use-llm-externalizer.md";
 function resolveBundledRulePath() {
   const candidates = [];
   const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   if (pluginRoot && pluginRoot.length > 0) {
-    candidates.push(join16(resolve9(pluginRoot), "rules", RULE_FILENAME));
+    candidates.push(join17(resolve9(pluginRoot), "rules", RULE_FILENAME));
   }
   try {
     const here = dirname8(fileURLToPath4(import.meta.url));
@@ -50884,8 +51203,8 @@ function resolveBundledRulePath() {
 }
 function resolveClaudeRulesDir() {
   const cfg = process.env.CLAUDE_CONFIG_DIR;
-  const base = cfg && cfg.length > 0 ? resolve9(cfg) : join16(homedir3(), ".claude");
-  return join16(base, "rules");
+  const base = cfg && cfg.length > 0 ? resolve9(cfg) : join17(homedir3(), ".claude");
+  return join17(base, "rules");
 }
 function canonical(p) {
   try {
@@ -50893,7 +51212,7 @@ function canonical(p) {
   } catch {
     const parent = dirname8(p);
     if (parent === p) return p;
-    return join16(canonical(parent), p.slice(parent.length + (parent.endsWith(sep2) ? 0 : 1)));
+    return join17(canonical(parent), p.slice(parent.length + (parent.endsWith(sep2) ? 0 : 1)));
   }
 }
 function underAllowedRoot(dir) {
@@ -50925,7 +51244,7 @@ function installUsageRule(opts = {}) {
     return { status: "error", dest: "", detail: "bundled rule source not found" };
   }
   const rulesDir = opts.rulesDir ?? resolveClaudeRulesDir();
-  const dest = join16(rulesDir, RULE_FILENAME);
+  const dest = join17(rulesDir, RULE_FILENAME);
   if (!underAllowedRoot(rulesDir)) {
     return {
       status: "error",
@@ -50948,8 +51267,8 @@ function installUsageRule(opts = {}) {
   }
   const tmp = dest + ".tmp." + process.pid + "." + randomBytes3(4).toString("hex");
   try {
-    mkdirSync14(rulesDir, { recursive: true });
-    writeFileSync10(tmp, desired, "utf-8");
+    mkdirSync15(rulesDir, { recursive: true });
+    writeFileSync11(tmp, desired, "utf-8");
     renameSync6(tmp, dest);
   } catch (e) {
     try {
@@ -51500,19 +51819,19 @@ function renderEndpointTable(ep, colors) {
 // src/free-pool-auto-bench.ts
 import {
   existsSync as existsSync12,
-  mkdirSync as mkdirSync15,
+  mkdirSync as mkdirSync16,
   openSync,
   readFileSync as readFileSync15,
-  writeFileSync as writeFileSync11
+  writeFileSync as writeFileSync12
 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { dirname as dirname9, join as join17, resolve as pathResolve } from "node:path";
+import { dirname as dirname9, join as join18, resolve as pathResolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
-var LLM_EXT_HOME = join17(homedir4(), ".llm-externalizer");
-var BENCH_CACHE = join17(LLM_EXT_HOME, "benchmark-results.json");
-var BENCH_LOCK = join17(LLM_EXT_HOME, "free-pool-bench.lock");
-var BENCH_LOG = join17(LLM_EXT_HOME, "free-pool-bench.log");
+var LLM_EXT_HOME = join18(homedir4(), ".llm-externalizer");
+var BENCH_CACHE = join18(LLM_EXT_HOME, "benchmark-results.json");
+var BENCH_LOCK = join18(LLM_EXT_HOME, "free-pool-bench.lock");
+var BENCH_LOG = join18(LLM_EXT_HOME, "free-pool-bench.log");
 var DISABLE_ENV = "LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH";
 function resolveBenchmarkScriptPath() {
   const here = dirname9(fileURLToPath5(import.meta.url));
@@ -51597,7 +51916,7 @@ function maybeTriggerFreePoolBench(opts) {
     };
   }
   try {
-    mkdirSync15(LLM_EXT_HOME, { recursive: true });
+    mkdirSync16(LLM_EXT_HOME, { recursive: true });
   } catch {
   }
   let logFd;
@@ -51621,7 +51940,7 @@ function maybeTriggerFreePoolBench(opts) {
   );
   child.unref();
   try {
-    writeFileSync11(lockPath, String(child.pid ?? ""), "utf-8");
+    writeFileSync12(lockPath, String(child.pid ?? ""), "utf-8");
   } catch {
   }
   log(
@@ -52237,14 +52556,14 @@ function waitForRequestsDrained(timeoutMs = 12e4) {
 }
 var SESSION_ID = randomUUID2().slice(0, 8);
 var SESSION_START = /* @__PURE__ */ new Date();
-var LOG_DIR = join18(getConfigDir(), "logs");
-var LOG_FILE = join18(
+var LOG_DIR = join19(getConfigDir(), "logs");
+var LOG_FILE = join19(
   LOG_DIR,
   `session-${SESSION_ID}-${SESSION_START.toISOString().slice(0, 10)}.jsonl`
 );
 function writeLogEntry(entry) {
   try {
-    mkdirSync16(LOG_DIR, { recursive: true });
+    mkdirSync17(LOG_DIR, { recursive: true });
     appendFileSync5(LOG_FILE, JSON.stringify(entry) + "\n");
   } catch {
     process.stderr.write(`[llm-externalizer] Failed to write log entry
@@ -52254,7 +52573,7 @@ function writeLogEntry(entry) {
 var STATS_FILE = "/tmp/claude/llm-externalizer-stats.json";
 function writeStatsFile() {
   try {
-    mkdirSync16("/tmp/claude", { recursive: true, mode: 448 });
+    mkdirSync17("/tmp/claude", { recursive: true, mode: 448 });
     const backend = getCurrentBackend();
     const stats = {
       session_id: SESSION_ID,
@@ -52269,7 +52588,7 @@ function writeStatsFile() {
       backend: backend.type
     };
     const tmpStats = STATS_FILE + ".tmp";
-    writeFileSync12(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
+    writeFileSync13(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
     renameSync7(tmpStats, STATS_FILE);
   } catch {
   }
@@ -52890,7 +53209,7 @@ function defaultOutputDir() {
     _cachedDefaultOutputDir = resolve10(envOverride.trim());
     return _cachedDefaultOutputDir;
   }
-  _cachedDefaultOutputDir = join18(resolveProjectMainRoot(), "reports", "llm-externalizer");
+  _cachedDefaultOutputDir = join19(resolveProjectMainRoot(), "reports", "llm-externalizer");
   return _cachedDefaultOutputDir;
 }
 function _resetDefaultOutputDirCache() {
@@ -52915,14 +53234,14 @@ function canonicalTimestamp(date5 = /* @__PURE__ */ new Date()) {
 }
 function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir) {
   const dir = outputDir || defaultOutputDir();
-  mkdirSync16(dir, { recursive: true });
+  mkdirSync17(dir, { recursive: true });
   const now = /* @__PURE__ */ new Date();
   const ts = canonicalTimestamp(now);
   const shortId = randomUUID2().slice(0, 6);
   const srcPart = meta3.inputFile ? `-${sanitizeFilename(meta3.inputFile).replace(/\.md$/, "")}` : "";
   const groupPart = meta3.groupId ? `-group-${meta3.groupId.replace(/[^a-zA-Z0-9_-]/g, "_")}` : "";
   const filename = overrideFilename || `${ts}-${toolName}${groupPart}${srcPart}-${shortId}.md`;
-  const filepath = join18(dir, filename);
+  const filepath = join19(dir, filename);
   const lines = [
     "# LLM Externalizer Response",
     "",
@@ -52936,7 +53255,7 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
   lines.push("", "---", "", responseText);
   const tmpPath = filepath + ".tmp";
   try {
-    writeFileSync12(tmpPath, lines.join("\n"), "utf-8");
+    writeFileSync13(tmpPath, lines.join("\n"), "utf-8");
     renameSync7(tmpPath, filepath);
   } catch (err3) {
     try {
@@ -55261,7 +55580,7 @@ Profiles: ${profileNames.join(", ")}`);
                 };
               }
               try {
-                writeFileSync12(absPath, jsonText, "utf-8");
+                writeFileSync13(absPath, jsonText, "utf-8");
               } catch (err3) {
                 return {
                   content: [
@@ -55331,9 +55650,9 @@ Profiles: ${profileNames.join(", ")}`);
           try {
             const raw = readFileSync16(SETTINGS_FILE, "utf-8");
             const targetDir = outputDir || defaultOutputDir();
-            mkdirSync16(targetDir, { recursive: true });
-            const copyPath = join18(targetDir, "settings_edit.yaml");
-            writeFileSync12(copyPath, raw, "utf-8");
+            mkdirSync17(targetDir, { recursive: true });
+            const copyPath = join19(targetDir, "settings_edit.yaml");
+            writeFileSync13(copyPath, raw, "utf-8");
             return { content: [{ type: "text", text: copyPath }] };
           } catch (err3) {
             return {
@@ -56139,7 +56458,7 @@ ${sections.join("\n\n---\n\n")}`;
                 {
                   model: "git-diff (no LLM)",
                   task: `${cfFromRef} \u2192 ${toRef}`,
-                  inputFile: join18(cfGitRepoSafe, dg.files[0]),
+                  inputFile: join19(cfGitRepoSafe, dg.files[0]),
                   groupId: gid
                 },
                 void 0,
@@ -56697,7 +57016,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     continue;
                   }
                   const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-                  const resolvedBase = importPath.startsWith("/") ? resolve10(importPath) : join18(resolveDir, importPath);
+                  const resolvedBase = importPath.startsWith("/") ? resolve10(importPath) : join19(resolveDir, importPath);
                   if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                     packageImports.push(importPath);
                     continue;
@@ -56712,7 +57031,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     }
                     if (!found) {
                       for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                        if (existsSync13(join18(resolvedBase, `index${ext}`))) {
+                        if (existsSync13(join19(resolvedBase, `index${ext}`))) {
                           found = true;
                           break;
                         }
@@ -56793,7 +57112,7 @@ FAILED: File not found.`);
                 continue;
               }
               const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-              const resolvedBase = importPath.startsWith("/") ? resolve10(importPath) : join18(resolveDir, importPath);
+              const resolvedBase = importPath.startsWith("/") ? resolve10(importPath) : join19(resolveDir, importPath);
               if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                 packageImports.push(importPath);
                 continue;
@@ -56822,7 +57141,7 @@ FAILED: File not found.`);
                 }
                 if (!found) {
                   for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                    if (existsSync13(join18(resolvedBase, `index${ext}`))) {
+                    if (existsSync13(join19(resolvedBase, `index${ext}`))) {
                       found = true;
                       break;
                     }
@@ -57148,7 +57467,7 @@ ${csResp.content}${csFooter}`
             return resp.content;
           };
           const csModuleDir = dirname10(fileUrlToPath_cs(import.meta.url));
-          const csEmbeddingsScript = join18(csModuleDir, "..", "scripts", "compute_embeddings.py");
+          const csEmbeddingsScript = join19(csModuleDir, "..", "scripts", "compute_embeddings.py");
           const csHooks = {
             rawLlmCall: csRawLlmCall,
             embeddingsScriptPath: csEmbeddingsScript,

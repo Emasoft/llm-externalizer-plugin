@@ -27,6 +27,7 @@ your context.
 | Canonicalize / dedupe 10k–1M short labels by meaning | `cluster_synonyms` |
 | Will model X work for tool Y? / pick a per-tool model | `assess_model`, `security_triage_benchmark`, `search_existing_benchmark` |
 | Are my CONFIGURED models still valid? (removed? price up? lost a capability?) | `check_model_health` |
+| Has a tool's model DEGRADED? recommend a replacement (advisory) | `check_tool_replacements` |
 | Are there NEW models I should consider? (newer / cheaper arrivals) | `discover_new_models` |
 | Is the backend healthy? what model/profile is active? | `discover` |
 | I edited settings.yaml — reload it | `reset` |
@@ -166,6 +167,23 @@ run seeds and reports zero. Add `qualifying-only` to hide arrivals that fit no
 tool. Report-only — adopting an arrival is user-only (vet with `assess_model` +
 the tool's benchmark, then edit settings.yaml + `reset`). **Use when** you want
 a periodic "anything new I should switch to?" sweep.
+
+### `check_tool_replacements`
+**READ-ONLY advisory** auto-replacement planner. Joins the durable model-health
+ledger to the per-tool benchmarks: for every tool that HAS a benchmark
+(`security_scan`, `search_existing_implementations`), it checks whether that
+tool's configured model has DEGRADED (param-drops, reasoning-downgrades,
+rate-limits, empty responses, non-retryable failures accumulating in the ledger)
+and, only when it has — or when you pass `force` for an explicit audit — runs that
+tool's benchmark to recommend the best SAME-OR-CHEAPER replacement. On a
+healthy/empty ledger NO benchmark runs and every recommendation is "keep the
+incumbent" (zero false positives, zero spend). Writes a report to
+`reports/auto-replace/` and NEVER touches settings — the MCP surface is read-only
+and cannot rewrite its own config. **To adopt a recommendation** run the CLI
+writer (the sole writer path): `llm-ext-benchmark --auto-replace --apply`
+(`--apply` requires `--auto-replace`; run `reset` afterwards; honors `free_only`).
+**Use when** you want a "has any tool's model gone bad? what should replace it?"
+sweep — and let the operator decide whether to apply.
 
 ### `security_triage_benchmark`
 Qualifies model(s) for `security_scan` against a labeled golden dataset, scored

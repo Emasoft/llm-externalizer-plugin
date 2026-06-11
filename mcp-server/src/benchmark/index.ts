@@ -33,6 +33,7 @@ import { scoreRun, type ModelScore } from "./score.js";
 import { renderReport, renderJson } from "./report.js";
 import {
   applyPicksToSettings,
+  applyToolModelToSettings,
   loadCachedReport,
   pickTopN,
   renderEnsembleBlock,
@@ -41,6 +42,7 @@ import {
 } from "./pick.js";
 import { runSecurityTriageBenchmark } from "./security-triage/index.js";
 import { runSearchExistingBenchmark } from "./search-existing/index.js";
+import { planToolReplacements } from "../model-qualification/auto-replace.js";
 import {
   assessModelById,
   renderAssessmentText,
@@ -48,6 +50,7 @@ import {
 import {
   runCheckModelHealth,
   renderModelHealthText,
+  compactStamp,
 } from "../model-qualification/drift.js";
 import {
   runDiscoverNewArrivals,
@@ -109,6 +112,15 @@ interface CliOptions {
    *  `triageModels` (security-triage mode). Lets the user benchmark the free
    *  pool with one flag instead of N `--include` invocations. */
   benchFreePool: boolean;
+  /** Run the cross-tool auto-replacement planner (TRDD-828238b5 A7): for every
+   *  benchmarked tool, check the ledger health of its incumbent and (when degraded
+   *  or --force) run that tool's benchmark to surface the best same-or-cheaper
+   *  replacement. ADVISORY by default — prints + writes a report, writes nothing. */
+  autoReplace: boolean;
+  /** With --auto-replace, ACTUALLY adopt each changed recommendation by writing
+   *  the per-tool `tool_models` entry to ~/.llm-externalizer/settings.yaml (the
+   *  SOLE writer path; the MCP surface never writes). Requires --auto-replace. */
+  apply: boolean;
 }
 
 function parseArgs(argv: readonly string[]): CliOptions {
@@ -133,6 +145,8 @@ function parseArgs(argv: readonly string[]): CliOptions {
     newArrivals: false,
     qualifyingOnly: false,
     benchFreePool: false,
+    autoReplace: false,
+    apply: false,
   };
   // Consume the value that must follow a value-taking flag. If the flag is the
   // last token, or the next token is itself a flag, fail fast — silently
@@ -213,6 +227,10 @@ function parseArgs(argv: readonly string[]): CliOptions {
       opts.qualifyingOnly = true;
     } else if (a === "--bench-free-pool") {
       opts.benchFreePool = true;
+    } else if (a === "--auto-replace") {
+      opts.autoReplace = true;
+    } else if (a === "--apply") {
+      opts.apply = true;
     } else if (a === "--help" || a === "-h") {
       printHelp();
       process.exit(0);
@@ -285,6 +303,24 @@ function printHelp(): void {
       "                    reports/search-existing-benchmark/. Composes with --force.",
       "  Pass gate: micro-F1 >= 0.85 AND micro-recall >= 0.85 AND coverage >= 0.90.",
       "  Never auto-selects a pricier model. ADVISORY only — never edits config.",
+      "",
+      "Cross-tool auto-replacement (TRDD-828238b5 A7 — the writer path):",
+      "  --auto-replace    For every benchmarked tool (security_scan,",
+      "                    search_existing_implementations), check its incumbent",
+      "                    model's health against the durable ledger and, when",
+      "                    degraded (or with --force), run that tool's benchmark to",
+      "                    surface the best same-or-cheaper replacement. On a",
+      "                    healthy ledger no benchmark runs. ADVISORY by default —",
+      "                    prints + writes a report under reports/auto-replace/,",
+      "                    changes NOTHING.",
+      "  --apply           With --auto-replace, ACTUALLY adopt each changed",
+      "                    recommendation by writing the per-tool `tool_models`",
+      "                    entry to ~/.llm-externalizer/settings.yaml (atomic). This",
+      "                    is the SOLE writer path — the MCP `check_tool_replacements`",
+      "                    tool is read-only and never writes. Requires",
+      "                    --auto-replace. Run `reset` afterwards to pick up the",
+      "                    change. --force re-runs benchmarks even on a healthy",
+      "                    ledger. Honors free_only (zero-spend on the free pool).",
       "",
       "Cross-tool requirements assessment (free — no LLM call, no API key):",
       "  --check-health    Self-check the CONFIGURED model(s) of the active profile",
@@ -403,8 +439,10 @@ async function main(): Promise<number> {
       for (const id of pool) {
         if (!opts.triageModels.includes(id)) opts.triageModels.push(id);
       }
-    } else if (opts.searchExisting) {
+    } else if (opts.searchExisting || opts.autoReplace) {
       // Append (preserve any explicit ids the user passed after --search-existing).
+      // --auto-replace forwards opts.searchExistingModels as its candidate pool,
+      // so the same fill applies — benchmarking the free pool with one flag.
       for (const id of pool) {
         if (!opts.searchExistingModels.includes(id)) opts.searchExistingModels.push(id);
       }
@@ -429,6 +467,21 @@ async function main(): Promise<number> {
   // classification) scored deterministically against a golden fixture codebase.
   if (opts.searchExisting) {
     return runSearchExistingPhase(opts);
+  }
+
+  // --apply is meaningless on its own — it is the writer toggle for the
+  // --auto-replace planner. Gate it exactly like --apply-profile gates on
+  // --pick-top-n: fail fast rather than silently no-op'ing.
+  if (opts.apply && !opts.autoReplace) {
+    throw new Error("--apply requires --auto-replace");
+  }
+
+  // --auto-replace routes to the cross-tool auto-replacement planner — for every
+  // benchmarked tool it checks the incumbent's ledger health and (when degraded
+  // or --force) runs that tool's benchmark to recommend the best same-or-cheaper
+  // replacement. ADVISORY unless --apply is also passed (the sole writer path).
+  if (opts.autoReplace) {
+    return runAutoReplacePhase(opts);
   }
 
   // --assess-model routes to the cross-tool requirements assessment — free (no
@@ -637,6 +690,100 @@ async function runSearchExistingPhase(opts: CliOptions): Promise<number> {
   console.error(`[search-existing] json:   ${result.jsonReportPath}`);
   // stdout carries the machine-grep-able recommendation line.
   process.stdout.write(`recommended_model=${result.recommendedModelId}\n`);
+  return 0;
+}
+
+/**
+ * --auto-replace phase: the cross-tool auto-replacement planner (TRDD-828238b5
+ * A7). For every benchmarked tool it aggregates the durable model-health ledger
+ * for that tool's incumbent and — when degraded, or when --force is set — runs
+ * the tool's (advisory) benchmark to recommend the best same-or-cheaper passer.
+ * On a healthy/empty ledger NO benchmark runs and every recommendation is "keep
+ * the incumbent".
+ *
+ * Writes the advisory markdown report under reports/auto-replace/. This is the
+ * ONLY surface that may WRITE the recommendation back: with --apply, each
+ * changed=true finding is adopted by writing the per-tool `tool_models` entry to
+ * ~/.llm-externalizer/settings.yaml via applyToolModelToSettings (the CLI/cron-
+ * only writer behind the read-only-MCP guardrail). Exit 3 on any write failure.
+ */
+async function runAutoReplacePhase(opts: CliOptions): Promise<number> {
+  console.error("[auto-replace] cross-tool auto-replacement planner");
+  const { findings, reportMarkdown } = await planToolReplacements({
+    candidateModels: opts.searchExistingModels.length > 0 ? opts.searchExistingModels : undefined,
+    force: opts.force,
+    onProgress: (m) => console.error(`[auto-replace] ${m}`),
+  });
+
+  // Persist the advisory report (always — same posture as every other phase).
+  const reportPath = join(resolveProjectMainRoot(), "reports", "auto-replace", `${compactStamp()}-auto-replace.md`);
+  mkdirSync(dirname(reportPath), { recursive: true });
+  writeFileSync(reportPath, reportMarkdown, "utf-8");
+
+  console.error("");
+  for (const f of findings) {
+    const verdict = !f.ranBenchmark
+      ? "healthy — no benchmark"
+      : f.changed
+        ? `RECOMMEND ${f.incumbentModelId} -> ${f.recommendedModelId}`
+        : `keep ${f.incumbentModelId}`;
+    console.error(`[auto-replace] ${f.tool} (${f.benchmark}): ${verdict}`);
+  }
+  const recommended = findings.filter((f) => f.changed);
+  console.error(
+    `[auto-replace] ${findings.length} tool(s) checked, ` +
+      `${findings.filter((f) => f.degraded).length} degraded, ` +
+      `${recommended.length} replacement(s) recommended.`,
+  );
+  console.error(`[auto-replace] report: ${reportPath}`);
+
+  if (!opts.apply) {
+    // ADVISORY default — surfaced for the operator to adopt deliberately.
+    console.error(
+      "[auto-replace] ADVISORY only — nothing written. Re-run with --apply to adopt the recommendation(s).",
+    );
+    process.stdout.write(`recommended_replacements=${recommended.length}\n`);
+    return 0;
+  }
+
+  // --apply: adopt every changed recommendation. The incumbent profile name is
+  // the active profile (the planner resolved incumbents from it). Resolve it
+  // here so the writer targets the same profile the health verdict came from.
+  const settingsPath = join(homedir(), ".llm-externalizer", "settings.yaml");
+  let profileName: string;
+  try {
+    const settings = loadSettings();
+    if (!settings || !settings.active) {
+      throw new Error(
+        "--apply needs an active profile in ~/.llm-externalizer/settings.yaml, but none is configured.",
+      );
+    }
+    profileName = settings.active;
+  } catch (err) {
+    console.error(`[auto-replace] --apply failed: ${(err as Error).message}`);
+    return 3;
+  }
+
+  if (recommended.length === 0) {
+    console.error("[auto-replace] --apply: no changed recommendation to adopt — nothing written.");
+    return 0;
+  }
+
+  console.error("");
+  for (const f of recommended) {
+    try {
+      const r = applyToolModelToSettings(settingsPath, profileName, f.tool, f.recommendedModelId);
+      console.error(
+        `[auto-replace] applied ${profileName}::tool_models.${f.tool}: ` +
+          `${r.oldModelId || "—"}  →  ${r.newModelId}`,
+      );
+    } catch (err) {
+      console.error(`[auto-replace] --apply failed on ${f.tool}: ${(err as Error).message}`);
+      return 3;
+    }
+  }
+  console.error("[auto-replace] Run the `reset` MCP tool or restart Claude Code to pick up the new tool model(s).");
+  process.stdout.write(`applied_replacements=${recommended.length}\n`);
   return 0;
 }
 

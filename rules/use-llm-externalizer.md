@@ -57,7 +57,7 @@ returns a report path, it worked — read the report instead of assuming the too
   `scan_folder`, `compare_files`, `check_references`, `check_imports`, `check_against_specs`,
   `search_existing_implementations`, `security_scan`, `cluster_synonyms`, `assess_model`,
   `check_model_health`, `discover_new_models`, `security_triage_benchmark`,
-  `search_existing_benchmark`, `discover`,
+  `search_existing_benchmark`, `check_tool_replacements`, `discover`,
   `get_settings` (read-only), `or_model_info*`, `reset`.
 - Profiles, auth, ensemble, and per-tool model routing (`tool_models`) → `discover` for live
   status; config is **user-only** (edit `~/.llm-externalizer/settings.yaml` by hand, then

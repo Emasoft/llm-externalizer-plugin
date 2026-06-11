@@ -81,6 +81,9 @@ export default defineConfig({
       // Per-tool model writer (applyToolModelToSettings) — CLI/cron-only,
       // read-only-MCP-guarded (TRDD-828238b5 A7-P2).
       'src/benchmark/apply-tool-model.test.ts',
+      // --auto-replace / --apply CLI surface — hermetic spawn of dist/benchmark.js
+      // on a healthy ledger (no network); the writer path (TRDD-828238b5 A7-P3).
+      'src/benchmark/auto-replace-cli.test.ts',
       // security-triage model benchmark — golden dataset loader, scorer, and
       // the selection gate. Pure-TS unit tests (no LLM, no network).
       'src/benchmark/security-triage/dataset.test.ts',

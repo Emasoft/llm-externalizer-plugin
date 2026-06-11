@@ -17,12 +17,24 @@
  * - The MCP layer is intentionally minimal — it just builds argv strings.
  */
 
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { runMassScoutCli, type CliResult, type CliRunOptions } from "./cli";
 import { runSecurityTriageBenchmark } from "../benchmark/security-triage/index";
 import { runSearchExistingBenchmark } from "../benchmark/search-existing/index";
 import { assessModelById, renderAssessmentText } from "../model-qualification/assess";
 import { runCheckModelHealth, renderModelHealthText } from "../model-qualification/drift";
+import { compactStamp } from "../model-qualification/drift";
 import { runDiscoverNewArrivals, renderNewArrivalsText } from "../model-qualification/new-arrivals";
+// READ-ONLY-MCP GUARDRAIL (TRDD-828238b5 A7): this surface imports ONLY the
+// ADVISORY planner `planToolReplacements` — which never writes config. It MUST
+// NOT import `applyToolModelToSettings` (the CLI/cron-only writer in
+// benchmark/pick.ts); the MCP server is read-only by design and can never
+// rewrite its own settings. Adoption of a recommendation goes through the CLI
+// (`llm-ext-benchmark --auto-replace --apply`), never through any MCP tool.
+import { planToolReplacements } from "../model-qualification/auto-replace";
+import { resolveProjectMainRoot } from "../project-root";
 
 // ── Public types (mirror the CLI flag set, MCP-flavoured) ─────────────
 
@@ -980,6 +992,46 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
       required: [],
     },
   },
+  {
+    name: "check_tool_replacements",
+    description:
+      "READ-ONLY advisory auto-replacement planner (TRDD-828238b5 A7) — for " +
+      "every LLM tool that HAS a per-tool benchmark (security_scan, " +
+      "search_existing_implementations), asks 'is its incumbent model degraded?' " +
+      "by aggregating the durable model-health ledger, and (only when degraded, " +
+      "or when `force` is set) runs that tool's ADVISORY benchmark to surface the " +
+      "best SAME-OR-CHEAPER replacement. On a healthy/empty ledger it runs NO " +
+      "benchmark and recommends keeping every incumbent (zero false positives). " +
+      "ADVISORY ONLY — writes a markdown report + returns its path; it NEVER " +
+      "rewrites settings. To actually adopt a recommendation, run the CLI " +
+      "`llm-ext-benchmark --auto-replace --apply` (the sole writer path; the MCP " +
+      "server is read-only by design and cannot mutate its own config).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        models: {
+          type: "array",
+          description:
+            "Explicit candidate model id(s) forwarded to each benchmark that " +
+            "runs. When omitted, each benchmark auto-discovers the same-or-cheaper " +
+            "candidate pool.",
+          items: { type: "string" },
+        },
+        force: {
+          type: "boolean",
+          description:
+            "Run every benchmarked tool's benchmark even when its incumbent is " +
+            "NOT degraded — an explicit operator audit. Default false.",
+        },
+        output_dir: {
+          type: "string",
+          description:
+            "Report dir; defaults to <main-root>/reports/auto-replace/.",
+        },
+      },
+      required: [],
+    },
+  },
 ];
 
 /** Set of MCP tool names provided by mass-scouting. Used by index.ts's dispatcher. */
@@ -1379,6 +1431,51 @@ export async function dispatchMassScoutTool(
         const text = `${renderNewArrivalsText(report)}\n\nReport: ${reportPath}`;
         return {
           content: [{ type: "text", text }],
+          isError: false,
+        };
+      } catch (e) {
+        return {
+          content: [{ type: "text", text: (e as Error).message }],
+          isError: true,
+        };
+      }
+    }
+    case "check_tool_replacements": {
+      // READ-ONLY advisory auto-replacement planner (TRDD-828238b5 A7-P3).
+      //
+      // GUARDRAIL: this handler calls ONLY `planToolReplacements` — the advisory
+      // half that NEVER mutates settings. It deliberately does NOT import or call
+      // `applyToolModelToSettings` (the writer in benchmark/pick.ts): the MCP
+      // server is read-only by design and can never rewrite its own config. The
+      // recommendation it surfaces is adopted by the operator via the CLI
+      // (`llm-ext-benchmark --auto-replace --apply`), never through any MCP tool.
+      //
+      // Hermetic in tests: on a healthy/empty ledger with force=false, NO
+      // benchmark runs (no network). The report writes under the injectable
+      // main-root (opts.mainRoot) so tests stay offline + self-contained.
+      try {
+        const models = Array.isArray(args.models)
+          ? (args.models.filter((m) => typeof m === "string" && m.length > 0) as string[])
+          : undefined;
+        const { findings, reportMarkdown } = await planToolReplacements({
+          candidateModels: models && models.length > 0 ? models : undefined,
+          force: args.force === true,
+          apiKey: opts.apiKey,
+        });
+        const root = opts.mainRoot ?? resolveProjectMainRoot();
+        const dir = str(args.output_dir) ?? join(root, "reports", "auto-replace");
+        mkdirSync(dir, { recursive: true });
+        const reportPath = join(dir, `${compactStamp()}-auto-replace.md`);
+        writeFileSync(reportPath, reportMarkdown);
+
+        const degraded = findings.filter((f) => f.degraded).length;
+        const recommended = findings.filter((f) => f.changed).length;
+        const summary =
+          `${findings.length} tool(s) checked, ${degraded} degraded, ` +
+          `${recommended} replacement(s) recommended (advisory — apply via the CLI ` +
+          `\`llm-ext-benchmark --auto-replace --apply\`).`;
+        return {
+          content: [{ type: "text", text: `${summary}\n\nReport: ${reportPath}` }],
           isError: false,
         };
       } catch (e) {
