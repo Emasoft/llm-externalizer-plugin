@@ -37642,14 +37642,14 @@ var StdioServerTransport = class {
 // src/mass_scouting/cli.ts
 import { execSync as execSync2 } from "node:child_process";
 import {
-  appendFileSync as appendFileSync3,
-  mkdirSync as mkdirSync5,
-  readFileSync as readFileSync4,
+  appendFileSync as appendFileSync4,
+  mkdirSync as mkdirSync6,
+  readFileSync as readFileSync5,
   readdirSync as readdirSync2,
   statSync as statSync3,
   writeFileSync as writeFileSync3
 } from "node:fs";
-import { dirname as dirname3, extname as extname3, isAbsolute as isAbsolute3, join as join5, resolve as resolve4 } from "node:path";
+import { dirname as dirname3, extname as extname3, isAbsolute as isAbsolute3, join as join6, resolve as resolve4 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/mass_scouting/fieldset.ts
@@ -42721,6 +42721,41 @@ async function runWithLimit2(items, limit, fn) {
   await Promise.all(workers);
 }
 
+// src/model-events.ts
+import { appendFileSync as appendFileSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync4 } from "node:fs";
+import { join as join4 } from "node:path";
+var MODEL_EVENT_KINDS = [
+  "param_drop",
+  "reasoning_downgrade",
+  "rate_limit_429",
+  "schema_heal",
+  "truncation_retry",
+  "empty_response",
+  "non_retryable_failure"
+];
+var KIND_SET = new Set(MODEL_EVENT_KINDS);
+var MAX_DETAIL = 160;
+function getModelEventsPath() {
+  return join4(getConfigDir(), "model-events.log");
+}
+function sanitizeField(s) {
+  return s.replace(/ - /g, " | ").replace(/[\r\n]+/g, " ").trim();
+}
+function appendModelEvent(model, kind, detail = "") {
+  try {
+    const safeModel = sanitizeField(String(model || "unknown"));
+    let safeDetail = redactSecrets(String(detail ?? "")).redacted.replace(/[\r\n]+/g, " ").trim();
+    if (safeDetail.length > MAX_DETAIL) {
+      safeDetail = safeDetail.slice(0, MAX_DETAIL - 1) + "\u2026";
+    }
+    const line = `${localIsoTimestamp()} - ${safeModel} - ${kind} - ${safeDetail}`;
+    const dir = getConfigDir();
+    mkdirSync4(dir, { recursive: true });
+    appendFileSync3(getModelEventsPath(), line + "\n", { flag: "a" });
+  } catch {
+  }
+}
+
 // src/security_scan/judge.ts
 var OPENROUTER_URL2 = "https://openrouter.ai/api/v1/chat/completions";
 var SOFT_MARKERS = /* @__PURE__ */ new Set(["base64-blob"]);
@@ -42859,6 +42894,9 @@ async function judgeOneGroup(group, preScan, opts, fetchImpl, apiUrl) {
   let attempts = 0;
   let totalCost = 0;
   let prevError = null;
+  let emitted429 = false;
+  let emittedNonRetryable = false;
+  let emittedEmpty = false;
   while (attempts <= opts.maxRetries) {
     attempts++;
     const userContent = prevError === null ? baseUserMsg : `${baseUserMsg}
@@ -42904,6 +42942,17 @@ async function judgeOneGroup(group, preScan, opts, fetchImpl, apiUrl) {
       const text = await res.text().catch(() => "");
       clearTimeout(timeoutId);
       recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
+      if (res.status === 429) {
+        if (!emitted429) {
+          emitted429 = true;
+          appendModelEvent(opts.model, "rate_limit_429", "429 during judge call");
+        }
+      } else if (res.status >= 400 && res.status < 500) {
+        if (!emittedNonRetryable) {
+          emittedNonRetryable = true;
+          appendModelEvent(opts.model, "non_retryable_failure", `HTTP ${res.status} (judge)`);
+        }
+      }
       prevError = `HTTP ${res.status}: ${text.slice(0, 200)}`;
       continue;
     }
@@ -42921,6 +42970,10 @@ async function judgeOneGroup(group, preScan, opts, fetchImpl, apiUrl) {
     const content = respJson.choices?.[0]?.message?.content;
     if (typeof content !== "string") {
       recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
+      if (!emittedEmpty) {
+        emittedEmpty = true;
+        appendModelEvent(opts.model, "empty_response", "no message.content (judge)");
+      }
       prevError = "response had no message.content string";
       continue;
     }
@@ -43076,8 +43129,8 @@ var realFetch = async (url2, init) => {
 };
 
 // src/security_scan/report.ts
-import { mkdirSync as mkdirSync4, writeFileSync as writeFileSync2 } from "node:fs";
-import { isAbsolute as isAbsolute2, join as join4, resolve as resolve3 } from "node:path";
+import { mkdirSync as mkdirSync5, writeFileSync as writeFileSync2 } from "node:fs";
+import { isAbsolute as isAbsolute2, join as join5, resolve as resolve3 } from "node:path";
 
 // src/project-root.ts
 import { existsSync as existsSync2 } from "node:fs";
@@ -43096,7 +43149,7 @@ function resolveReportDir(outputDir, mainRoot) {
   if (outputDir && outputDir.length > 0) {
     return isAbsolute2(outputDir) ? outputDir : resolve3(process.cwd(), outputDir);
   }
-  return join4(mainRoot ?? defaultMainRoot(), "reports", "security_scan");
+  return join5(mainRoot ?? defaultMainRoot(), "reports", "security_scan");
 }
 function isoTimestampLocal(now = /* @__PURE__ */ new Date()) {
   const pad = (n, w = 2) => String(n).padStart(w, "0");
@@ -43232,11 +43285,11 @@ function mdCell(s) {
   return s.replace(/\|/g, "\\|").replace(/\n/g, " ").slice(0, 400);
 }
 function writeReport(report, reportDir) {
-  mkdirSync4(reportDir, { recursive: true });
+  mkdirSync5(reportDir, { recursive: true });
   const stamp = isoTimestampLocal();
   const base = `${stamp}-security-scan-${slugify2(report.job_id)}`;
-  const jsonPath = join4(reportDir, `${base}.json`);
-  const mdPath = join4(reportDir, `${base}.md`);
+  const jsonPath = join5(reportDir, `${base}.json`);
+  const mdPath = join5(reportDir, `${base}.md`);
   writeFileSync2(jsonPath, JSON.stringify(report, null, 2) + "\n", "utf-8");
   writeFileSync2(mdPath, renderMarkdown(report), "utf-8");
   return { jsonPath, mdPath };
@@ -43487,7 +43540,7 @@ function resolveReportDir2(outputDirFlag, opts) {
     return isAbsolute3(outputDirFlag) ? outputDirFlag : resolve4(process.cwd(), outputDirFlag);
   }
   const mainRoot = opts.mainRoot ?? defaultMainRoot2();
-  return join5(mainRoot, "reports", "mass_scouting");
+  return join6(mainRoot, "reports", "mass_scouting");
 }
 function listGitChangedFiles(root, ref) {
   if (!/^[A-Za-z0-9_./~^@{}-]+$/.test(ref) || ref.length > 200) {
@@ -43537,7 +43590,7 @@ function walkFiles2(root, extensionFilter, extraSkipDirs) {
       continue;
     }
     for (const e of entries) {
-      const full = join5(dir, e);
+      const full = join6(dir, e);
       let st;
       try {
         st = statSync3(full);
@@ -43572,7 +43625,7 @@ function resolveBundledFieldset(arg) {
   ];
   for (const p of candidates) {
     try {
-      readFileSync4(p, "utf-8");
+      readFileSync5(p, "utf-8");
       return { path: p };
     } catch {
     }
@@ -43589,7 +43642,7 @@ function loadFieldsetFromArg(path) {
   }
   let raw;
   try {
-    raw = readFileSync4(path, "utf-8");
+    raw = readFileSync5(path, "utf-8");
   } catch (e) {
     return { error: `cannot read --fields-file: ${e.message}` };
   }
@@ -43747,7 +43800,7 @@ function runRegister(args) {
   for (const p of paths) {
     let body;
     try {
-      body = readFileSync4(p);
+      body = readFileSync5(p);
     } catch {
       skippedRead++;
       continue;
@@ -43952,9 +44005,9 @@ async function runScout(args, opts) {
   const md = renderMarkdownReport(summary);
   reg.close();
   const reportDir = resolveReportDir2(flags["output-dir"], opts);
-  mkdirSync5(reportDir, { recursive: true });
+  mkdirSync6(reportDir, { recursive: true });
   const stamp = isoTimestampLocal2();
-  const reportPath = join5(reportDir, `${stamp}-scout-${slugify3(jobId)}.md`);
+  const reportPath = join6(reportDir, `${stamp}-scout-${slugify3(jobId)}.md`);
   writeFileSync3(reportPath, md, "utf-8");
   return ok(
     [
@@ -44155,7 +44208,7 @@ async function runProposeFieldset(args, opts) {
   if (samplesArg) {
     for (const p of samplesArg.split(",").map((s) => s.trim()).filter(Boolean)) {
       try {
-        const body = readFileSync4(p, "utf-8");
+        const body = readFileSync5(p, "utf-8");
         samples.push({ path: p, body: body.slice(0, 2e3) });
       } catch {
       }
@@ -44303,7 +44356,7 @@ function runListBundledFieldsets(args) {
     const name = e.replace(/\.json$/, "");
     let fields = [];
     try {
-      const parsed = JSON.parse(readFileSync4(full, "utf-8"));
+      const parsed = JSON.parse(readFileSync5(full, "utf-8"));
       fields = (parsed.fields ?? []).map((f) => f.name);
     } catch {
     }
@@ -44643,14 +44696,14 @@ function runExport(args, opts) {
   const rows = reg.listResultsByJob(jobId);
   reg.close();
   const reportDir = resolveReportDir2(flags["output-dir"], opts);
-  mkdirSync5(reportDir, { recursive: true });
+  mkdirSync6(reportDir, { recursive: true });
   const stamp = isoTimestampLocal2();
   const filename = `${stamp}-export-${slugify3(jobId)}.${format}`;
-  const path = join5(reportDir, filename);
+  const path = join6(reportDir, filename);
   writeFileSync3(path, "", "utf-8");
   if (format === "jsonl") {
     for (const r of rows) {
-      appendFileSync3(path, JSON.stringify(r) + "\n", "utf-8");
+      appendFileSync4(path, JSON.stringify(r) + "\n", "utf-8");
     }
   } else {
     const header = [
@@ -44663,7 +44716,7 @@ function runExport(args, opts) {
       "cost_usd",
       "enriched_at"
     ].join(",");
-    appendFileSync3(path, header + "\n", "utf-8");
+    appendFileSync4(path, header + "\n", "utf-8");
     for (const r of rows) {
       const row = [
         csvEscape(r.job_id),
@@ -44675,7 +44728,7 @@ function runExport(args, opts) {
         r.cost_usd == null ? "" : String(r.cost_usd),
         csvEscape(r.enriched_at)
       ].join(",");
-      appendFileSync3(path, row + "\n", "utf-8");
+      appendFileSync4(path, row + "\n", "utf-8");
     }
   }
   return ok(
@@ -44921,12 +44974,12 @@ async function runMassScoutCli(args, opts = {}) {
 
 // src/benchmark/security-triage/index.ts
 import { createHash as createHash3 } from "node:crypto";
-import { existsSync as existsSync4, mkdirSync as mkdirSync6, readFileSync as readFileSync6, renameSync, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join7 } from "node:path";
+import { existsSync as existsSync4, mkdirSync as mkdirSync7, readFileSync as readFileSync7, renameSync, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join8 } from "node:path";
 
 // src/benchmark/security-triage/dataset.ts
-import { existsSync as existsSync3, readFileSync as readFileSync5 } from "node:fs";
-import { dirname as dirname4, join as join6 } from "node:path";
+import { existsSync as existsSync3, readFileSync as readFileSync6 } from "node:fs";
+import { dirname as dirname4, join as join7 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var BENCHMARK_RUBRICS = {
   prompt_injection: "THREAT when prose/comments instruct an agent or LLM to ignore prior instructions, exfiltrate secrets, perform destructive actions, or dictate the reviewer's verdict. NOT_THREAT when DEFENSIVE/detection code that QUOTES or PATTERN-DEFINES an attack in order to detect or warn about it (a detector's own rule list, a 'do NOT comply' doc). UNCERTAIN otherwise.",
@@ -44943,9 +44996,9 @@ var BENCHMARK_RUBRICS = {
 function resolveDatasetPath() {
   const here = dirname4(fileURLToPath2(import.meta.url));
   const candidates = [
-    join6(here, "dataset.jsonl"),
-    join6(here, "..", "src", "benchmark", "security-triage", "dataset.jsonl"),
-    join6(here, "..", "..", "src", "benchmark", "security-triage", "dataset.jsonl")
+    join7(here, "dataset.jsonl"),
+    join7(here, "..", "src", "benchmark", "security-triage", "dataset.jsonl"),
+    join7(here, "..", "..", "src", "benchmark", "security-triage", "dataset.jsonl")
   ];
   for (const c of candidates) {
     if (existsSync3(c)) return c;
@@ -44956,7 +45009,7 @@ function resolveDatasetPath() {
   );
 }
 function loadDataset(path = resolveDatasetPath()) {
-  const raw = readFileSync5(path, "utf-8");
+  const raw = readFileSync6(path, "utf-8");
   const cases = [];
   const seenIds = /* @__PURE__ */ new Set();
   const lines = raw.split("\n");
@@ -45230,7 +45283,7 @@ function scoreTriage(modelId, cases, returned, thresholds = DEFAULT_TRIAGE_THRES
 var SECURITY_TRIAGE_CRITERIA2 = getToolDescriptor("security_scan").requirements;
 var INCUMBENT_FALLBACK_PRICING = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
 function cachePath() {
-  return join7(getConfigDir(), "security-triage-results.json");
+  return join8(getConfigDir(), "security-triage-results.json");
 }
 function cacheKey(modelId, date5, datasetHash) {
   return `${modelId}::${date5}::${datasetHash}`;
@@ -45239,7 +45292,7 @@ function loadCache() {
   const p = cachePath();
   if (!existsSync4(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync6(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync7(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
@@ -45247,7 +45300,7 @@ function loadCache() {
 }
 function saveCache(cache) {
   const dir = getConfigDir();
-  mkdirSync6(dir, { recursive: true });
+  mkdirSync7(dir, { recursive: true });
   const p = cachePath();
   const tmp = `${p}.tmp.${process.pid}`;
   writeFileSync4(tmp, JSON.stringify(cache, null, 2), "utf-8");
@@ -45330,7 +45383,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
   const apiKey = resolveApiKey(opts.apiKey);
   const datasetPath = opts.datasetPath ?? resolveDatasetPath();
   const cases = loadDataset(datasetPath);
-  const datasetHash = createHash3("sha1").update(readFileSync6(datasetPath, "utf-8")).digest("hex").slice(0, 12);
+  const datasetHash = createHash3("sha1").update(readFileSync7(datasetPath, "utf-8")).digest("hex").slice(0, 12);
   const thresholds = opts.thresholds ?? DEFAULT_TRIAGE_THRESHOLDS;
   const incumbentId = opts.incumbentModelId ?? DEFAULT_MODEL;
   const progress = opts.onProgress ?? (() => {
@@ -45468,11 +45521,11 @@ async function runSecurityTriageBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const mainRoot = resolveMainRoot(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join7(mainRoot, "reports", "security-triage-benchmark");
-  mkdirSync6(reportDir, { recursive: true });
+  const reportDir = opts.outputDir ?? join8(mainRoot, "reports", "security-triage-benchmark");
+  mkdirSync7(reportDir, { recursive: true });
   const stamp = reportStamp();
-  const jsonReportPath = join7(reportDir, `${stamp}-security-triage-benchmark.json`);
-  const mdReportPath = join7(reportDir, `${stamp}-security-triage-benchmark.md`);
+  const jsonReportPath = join8(reportDir, `${stamp}-security-triage-benchmark.json`);
+  const mdReportPath = join8(reportDir, `${stamp}-security-triage-benchmark.md`);
   const jsonPayload = {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     datasetPath,
@@ -45592,12 +45645,12 @@ function buildReportMarkdown(args) {
 
 // src/benchmark/search-existing/index.ts
 import { createHash as createHash4 } from "node:crypto";
-import { existsSync as existsSync8, mkdirSync as mkdirSync7, readFileSync as readFileSync8, renameSync as renameSync2, writeFileSync as writeFileSync5 } from "node:fs";
-import { join as join10 } from "node:path";
+import { existsSync as existsSync8, mkdirSync as mkdirSync8, readFileSync as readFileSync9, renameSync as renameSync2, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join11 } from "node:path";
 
 // src/benchmark/search-existing/dataset.ts
 import { existsSync as existsSync5, readdirSync as readdirSync3, statSync as statSync4 } from "node:fs";
-import { join as join8, resolve as resolve5 } from "node:path";
+import { join as join9, resolve as resolve5 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 function resolveFixtureRoot() {
   const here = fileURLToPath3(new URL(".", import.meta.url));
@@ -45619,7 +45672,7 @@ function listFixtureFiles(root = resolveFixtureRoot()) {
   const out = [];
   const walk = (dir, rel) => {
     for (const entry of readdirSync3(dir, { withFileTypes: true })) {
-      const abs2 = join8(dir, entry.name);
+      const abs2 = join9(dir, entry.name);
       const relPath = rel ? `${rel}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
         walk(abs2, relPath);
@@ -45719,14 +45772,14 @@ import { resolve as resolve7 } from "node:path";
 
 // src/scan-pipeline.ts
 import {
-  readFileSync as readFileSync7,
+  readFileSync as readFileSync8,
   existsSync as existsSync6,
   statSync as statSync5,
   lstatSync,
   readdirSync as readdirSync4,
   realpathSync as realpathSync2
 } from "node:fs";
-import { extname as extname4, join as join9, basename as basename4, dirname as dirname5, resolve as resolve6, sep } from "node:path";
+import { extname as extname4, join as join10, basename as basename4, dirname as dirname5, resolve as resolve6, sep } from "node:path";
 import { homedir as homedir2 } from "node:os";
 import { spawnSync } from "node:child_process";
 var EXT_TO_LANG = {
@@ -45798,7 +45851,7 @@ function detectLang(filePath) {
   const ext = extname4(filePath).toLowerCase();
   if (EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
   try {
-    const head = readFileSync7(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
+    const head = readFileSync8(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
     const shebang = head.match(/^#!\s*(?:\/usr\/bin\/env\s+)?(\S+)/);
     if (shebang) {
       const bin = basename4(shebang[1]);
@@ -45876,7 +45929,7 @@ function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexReda
       `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
     );
   }
-  const raw = readFileSync7(safePath);
+  const raw = readFileSync8(safePath);
   if (raw.length > limit) {
     throw new Error(
       `File too large after read (${(raw.length / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
@@ -46024,7 +46077,7 @@ function scanFilesForSecrets(filePaths) {
   for (const fp of filePaths) {
     if (!existsSync6(fp)) continue;
     try {
-      const content = readFileSync7(fp, "utf-8");
+      const content = readFileSync8(fp, "utf-8");
       const scan = scanForSecrets(content);
       if (scan.found) {
         for (const d of scan.details) {
@@ -46114,7 +46167,7 @@ function resolvePrompt(instructions, instructionsFilesPaths) {
     const paths = Array.isArray(instructionsFilesPaths) ? instructionsFilesPaths : [instructionsFilesPaths];
     for (const fp of paths) {
       assertFileExists(fp);
-      const content = readFileSync7(fp, "utf-8");
+      const content = readFileSync8(fp, "utf-8");
       prompt = prompt ? `${prompt}
 
 ${content}` : content;
@@ -46336,7 +46389,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
     if (trackedResult.status === 0 && trackedResult.stdout) {
       for (const relPath of trackedResult.stdout.split("\n")) {
         if (!relPath.trim()) continue;
-        allFiles.add(join9(dirPath, relPath));
+        allFiles.add(join10(dirPath, relPath));
       }
     }
     const untrackedResult = spawnSync(
@@ -46347,7 +46400,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
     if (untrackedResult.status === 0 && untrackedResult.stdout) {
       for (const relPath of untrackedResult.stdout.split("\n")) {
         if (!relPath.trim()) continue;
-        allFiles.add(join9(dirPath, relPath));
+        allFiles.add(join10(dirPath, relPath));
       }
     }
   }
@@ -46364,8 +46417,8 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
         if (!entry.isDirectory()) continue;
         if (entry.name === ".git" || entry.name === "node_modules") continue;
         if (entry.name.startsWith(".")) continue;
-        const subDir = join9(dir, entry.name);
-        const gitDir = join9(subDir, ".git");
+        const subDir = join10(dir, entry.name);
+        const gitDir = join10(subDir, ".git");
         const gitStat = lstatSyncRetry(gitDir);
         const gitDirIsDir = gitStat ? gitStat.isDirectory() : false;
         if (gitDirIsDir) {
@@ -46392,7 +46445,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
       if (nestedResult.status === 0 && nestedResult.stdout) {
         for (const relPath of nestedResult.stdout.split("\n")) {
           if (!relPath.trim()) continue;
-          allFiles.add(join9(nestedRoot, relPath));
+          allFiles.add(join10(nestedRoot, relPath));
         }
       }
     }
@@ -46447,7 +46500,7 @@ function walkDir(dirPath, options) {
     }
     for (const entry of entries) {
       if (results.length >= maxFiles) return;
-      const fullPath = join9(dir, entry.name);
+      const fullPath = join10(dir, entry.name);
       if (entry.isSymbolicLink()) {
         if (!followSymlinks) continue;
         try {
@@ -46517,10 +46570,10 @@ function extractLocalImports(filePath, sourceCode) {
       if (lang === "python" && importPath.startsWith(".")) {
         const dotCount = importPath.match(/^\.+/)?.[0].length ?? 1;
         const modulePart = importPath.slice(dotCount);
-        const baseDir = dotCount === 1 ? dir : join9(dir, ...Array(dotCount - 1).fill(".."));
-        resolved = modulePart ? join9(baseDir, ...modulePart.split(".")) : baseDir;
+        const baseDir = dotCount === 1 ? dir : join10(dir, ...Array(dotCount - 1).fill(".."));
+        resolved = modulePart ? join10(baseDir, ...modulePart.split(".")) : baseDir;
       } else {
-        resolved = join9(dir, importPath);
+        resolved = join10(dir, importPath);
       }
       if (!extname4(resolved)) {
         const tryExts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"];
@@ -46541,7 +46594,7 @@ function extractLocalImports(filePath, sourceCode) {
             "__init__.py"
           ];
           for (const leaf of indexCandidates) {
-            const indexPath = join9(resolved, leaf);
+            const indexPath = join10(resolved, leaf);
             if (existsSync6(indexPath)) {
               resolved = indexPath;
               found = true;
@@ -47326,7 +47379,7 @@ function selectSearchExistingModel(input) {
 // src/benchmark/search-existing/index.ts
 var INCUMBENT_FALLBACK_PRICING2 = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
 function cachePath2() {
-  return join10(getConfigDir(), "search-existing-results.json");
+  return join11(getConfigDir(), "search-existing-results.json");
 }
 function cacheKey2(modelId, date5, datasetHash) {
   return `${modelId}::${date5}::${datasetHash}`;
@@ -47335,7 +47388,7 @@ function loadCache2() {
   const p = cachePath2();
   if (!existsSync8(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync8(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync9(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
@@ -47343,7 +47396,7 @@ function loadCache2() {
 }
 function saveCache2(cache) {
   const dir = getConfigDir();
-  mkdirSync7(dir, { recursive: true });
+  mkdirSync8(dir, { recursive: true });
   const p = cachePath2();
   const tmp = `${p}.tmp.${process.pid}`;
   writeFileSync5(tmp, JSON.stringify(cache, null, 2), "utf-8");
@@ -47562,11 +47615,11 @@ async function runSearchExistingBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const mainRoot = resolveMainRoot2(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join10(mainRoot, "reports", "search-existing-benchmark");
-  mkdirSync7(reportDir, { recursive: true });
+  const reportDir = opts.outputDir ?? join11(mainRoot, "reports", "search-existing-benchmark");
+  mkdirSync8(reportDir, { recursive: true });
   const stamp = reportStamp2();
-  const jsonReportPath = join10(reportDir, `${stamp}-search-existing-benchmark.json`);
-  const reportPath = join10(reportDir, `${stamp}-search-existing-benchmark.md`);
+  const jsonReportPath = join11(reportDir, `${stamp}-search-existing-benchmark.json`);
+  const reportPath = join11(reportDir, `${stamp}-search-existing-benchmark.md`);
   const jsonPayload = {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     datasetHash,
@@ -47752,8 +47805,8 @@ function renderAssessmentText(a) {
 }
 
 // src/model-qualification/drift.ts
-import { mkdirSync as mkdirSync8, readFileSync as readFileSync9, renameSync as renameSync3, writeFileSync as writeFileSync6 } from "node:fs";
-import { join as join11 } from "node:path";
+import { mkdirSync as mkdirSync9, readFileSync as readFileSync10, renameSync as renameSync3, writeFileSync as writeFileSync6 } from "node:fs";
+import { join as join12 } from "node:path";
 function perMillion(s) {
   if (s == null) return null;
   const n = parseFloat(s);
@@ -47890,11 +47943,11 @@ function computeModelHealth(configured, catalog, baseline, opts = {}) {
   return { findings, updatedBaseline };
 }
 function getBaselinePath() {
-  return join11(getConfigDir(), "model-baseline.json");
+  return join12(getConfigDir(), "model-baseline.json");
 }
 function loadBaseline(path = getBaselinePath()) {
   try {
-    const raw = readFileSync9(path, "utf-8");
+    const raw = readFileSync10(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed;
@@ -47906,7 +47959,7 @@ function loadBaseline(path = getBaselinePath()) {
 }
 function saveBaseline(baseline, path = getBaselinePath()) {
   try {
-    mkdirSync8(getConfigDir(), { recursive: true });
+    mkdirSync9(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
     writeFileSync6(tmp, JSON.stringify(baseline, null, 2));
     renameSync3(tmp, path);
@@ -47982,9 +48035,9 @@ function renderModelHealthMarkdown(report) {
 async function runCheckModelHealth(opts = {}) {
   const profile = opts.profile ?? resolveActiveProfile();
   const report = await checkModelHealth(profile, opts);
-  const dir = opts.outputDir ?? join11(resolveProjectMainRoot(), "reports", "model-health");
-  mkdirSync8(dir, { recursive: true });
-  const reportPath = join11(dir, `${compactStamp()}-model-health-${profile.name}.md`);
+  const dir = opts.outputDir ?? join12(resolveProjectMainRoot(), "reports", "model-health");
+  mkdirSync9(dir, { recursive: true });
+  const reportPath = join12(dir, `${compactStamp()}-model-health-${profile.name}.md`);
   writeFileSync6(reportPath, renderModelHealthMarkdown(report));
   return { report, reportPath };
 }
@@ -48006,8 +48059,8 @@ function renderModelHealthText(report) {
 }
 
 // src/model-qualification/new-arrivals.ts
-import { mkdirSync as mkdirSync9, readFileSync as readFileSync10, renameSync as renameSync4, writeFileSync as writeFileSync7 } from "node:fs";
-import { join as join12 } from "node:path";
+import { mkdirSync as mkdirSync10, readFileSync as readFileSync11, renameSync as renameSync4, writeFileSync as writeFileSync7 } from "node:fs";
+import { join as join13 } from "node:path";
 function createdToIso(created) {
   if (created === null || !Number.isFinite(created) || created <= 0) return null;
   return new Date(created * 1e3).toISOString();
@@ -48049,11 +48102,11 @@ function diffNewArrivals(catalog, snapshot) {
   };
 }
 function getCatalogSnapshotPath() {
-  return join12(getConfigDir(), "catalog-snapshot.json");
+  return join13(getConfigDir(), "catalog-snapshot.json");
 }
 function loadSnapshot(path = getCatalogSnapshotPath()) {
   try {
-    const raw = readFileSync10(path, "utf-8");
+    const raw = readFileSync11(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const obj = parsed;
@@ -48071,7 +48124,7 @@ function loadSnapshot(path = getCatalogSnapshotPath()) {
 }
 function saveSnapshot(snapshot, path = getCatalogSnapshotPath()) {
   try {
-    mkdirSync9(getConfigDir(), { recursive: true });
+    mkdirSync10(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
     writeFileSync7(tmp, JSON.stringify(snapshot, null, 2));
     renameSync4(tmp, path);
@@ -48165,9 +48218,9 @@ function renderNewArrivalsText(report) {
 }
 async function runDiscoverNewArrivals(opts = {}) {
   const report = await discoverNewArrivals(opts);
-  const dir = opts.outputDir ?? join12(resolveProjectMainRoot(), "reports", "model-arrivals");
-  mkdirSync9(dir, { recursive: true });
-  const reportPath = join12(dir, `${compactStamp()}-new-arrivals.md`);
+  const dir = opts.outputDir ?? join13(resolveProjectMainRoot(), "reports", "model-arrivals");
+  mkdirSync10(dir, { recursive: true });
+  const reportPath = join13(dir, `${compactStamp()}-new-arrivals.md`);
   writeFileSync7(reportPath, renderNewArrivalsMarkdown(report));
   return { report, reportPath };
 }
@@ -49303,14 +49356,14 @@ async function safeReadJson(res, maxBytes = MAX_RESPONSE_BYTES) {
 
 // src/cluster/cluster_synonyms_main.ts
 import {
-  mkdirSync as mkdirSync12,
-  readFileSync as readFileSync12,
+  mkdirSync as mkdirSync13,
+  readFileSync as readFileSync13,
   readdirSync as readdirSync5,
   writeFileSync as writeFileSync9,
   existsSync as existsSync10,
   renameSync as renameSync5
 } from "node:fs";
-import { join as join14 } from "node:path";
+import { join as join15 } from "node:path";
 
 // src/cluster/checkpoint.ts
 import Database2 from "better-sqlite3";
@@ -49442,7 +49495,7 @@ var UnionFind = class _UnionFind {
 
 // src/cluster/checkpoint.ts
 import { dirname as dirname6 } from "node:path";
-import { mkdirSync as mkdirSync10 } from "node:fs";
+import { mkdirSync as mkdirSync11 } from "node:fs";
 var SCHEMA = `
 CREATE TABLE IF NOT EXISTS clusters_uf (
   item_id   TEXT PRIMARY KEY,
@@ -49469,7 +49522,7 @@ var CheckpointDB = class _CheckpointDB {
     this.db = db;
   }
   static open(path) {
-    mkdirSync10(dirname6(path), { recursive: true });
+    mkdirSync11(dirname6(path), { recursive: true });
     const db = new Database2(path);
     db.pragma("journal_mode = WAL");
     db.pragma("synchronous = NORMAL");
@@ -49560,19 +49613,19 @@ var CheckpointDB = class _CheckpointDB {
 import { spawnSync as spawnSync2 } from "node:child_process";
 import {
   existsSync as existsSync9,
-  mkdirSync as mkdirSync11,
-  readFileSync as readFileSync11,
+  mkdirSync as mkdirSync12,
+  readFileSync as readFileSync12,
   writeFileSync as writeFileSync8,
   statSync as statSync7
 } from "node:fs";
-import { dirname as dirname7, join as join13 } from "node:path";
+import { dirname as dirname7, join as join14 } from "node:path";
 var F32_BYTES = 4;
 function readEmbeddingsMeta(path) {
   const metaPath = path + ".meta.json";
   if (!existsSync9(metaPath)) {
     throw new Error(`embeddings meta sidecar missing: ${metaPath}`);
   }
-  const raw = readFileSync11(metaPath, "utf-8");
+  const raw = readFileSync12(metaPath, "utf-8");
   let meta3;
   try {
     meta3 = JSON.parse(raw);
@@ -49610,7 +49663,7 @@ function loadEmbeddings(path, expectedN) {
       `embeddings file size mismatch: ${path} is ${stat.size} bytes, expected ${expectedBytes} = N(${n}) \xD7 D(${dim}) \xD7 ${F32_BYTES}`
     );
   }
-  const buf = readFileSync11(path);
+  const buf = readFileSync12(path);
   const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
   const embeddings = new Float32Array(ab);
   return { embeddings, dim, model: meta3.model, source: "loaded", path };
@@ -49620,9 +49673,9 @@ function computeEmbeddings(items, opts) {
   if (!existsSync9(opts.scriptPath)) {
     throw new Error(`compute_embeddings.py not found: ${opts.scriptPath}`);
   }
-  mkdirSync11(opts.outDir, { recursive: true });
-  const inputPath = join13(opts.outDir, "_embedding_sentences.txt");
-  const outputPath = join13(opts.outDir, "embeddings.f32");
+  mkdirSync12(opts.outDir, { recursive: true });
+  const inputPath = join14(opts.outDir, "_embedding_sentences.txt");
+  const outputPath = join14(opts.outDir, "embeddings.f32");
   const clean = opts.sentenceClean ?? defaultSentenceClean;
   writeFileSync8(
     inputPath,
@@ -50514,7 +50567,7 @@ function loadPolicy(policyFile) {
   if (!existsSync10(policyFile)) {
     throw new Error(`policy_file not found: ${policyFile}`);
   }
-  const raw = readFileSync12(policyFile, "utf-8");
+  const raw = readFileSync13(policyFile, "utf-8");
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -50525,7 +50578,7 @@ function loadPolicy(policyFile) {
   return resolvePolicy(valid);
 }
 function gateOutputDir(outputDir, policy, resuming) {
-  mkdirSync12(outputDir, { recursive: true });
+  mkdirSync13(outputDir, { recursive: true });
   if (resuming) return;
   const existing = readdirSync5(outputDir).filter((n) => !n.startsWith("."));
   const collisions = existing.filter(
@@ -50666,7 +50719,7 @@ async function runClusterSynonyms(invocation, hooks) {
     errors.push(`embeddings: ${err3.message}`);
     return buildEarlyAbort(invocation, errors, warnings, profileName, tStart);
   }
-  const checkpointPath = resumeFrom ?? join14(invocation.output_dir, OUTPUT_NAMES.checkpoint);
+  const checkpointPath = resumeFrom ?? join15(invocation.output_dir, OUTPUT_NAMES.checkpoint);
   const ckpt = CheckpointDB.open(checkpointPath);
   const uf = ckpt.loadUnionFind();
   for (const it of items) uf.add(it.id);
@@ -50751,9 +50804,9 @@ async function runClusterSynonyms(invocation, hooks) {
     weak_overlap_evidence: weakOverlapEvidence,
     warnings
   };
-  const clustersPath = join14(invocation.output_dir, OUTPUT_NAMES.clusters);
-  const summaryPath = join14(invocation.output_dir, OUTPUT_NAMES.summary);
-  const statsPath = join14(invocation.output_dir, OUTPUT_NAMES.stats);
+  const clustersPath = join15(invocation.output_dir, OUTPUT_NAMES.clusters);
+  const summaryPath = join15(invocation.output_dir, OUTPUT_NAMES.summary);
+  const statsPath = join15(invocation.output_dir, OUTPUT_NAMES.stats);
   writeClustersJsonl(clustersPath, itemsById, partition);
   writeJsonAtomic(summaryPath, buildSummary(itemsById, partition, profileName, canonicalsOverride));
   writeJsonAtomic(statsPath, stats);
@@ -50801,8 +50854,8 @@ import { fileURLToPath as fileUrlToPath_cs } from "node:url";
 // src/rule-install.ts
 import {
   existsSync as existsSync11,
-  mkdirSync as mkdirSync13,
-  readFileSync as readFileSync13,
+  mkdirSync as mkdirSync14,
+  readFileSync as readFileSync14,
   writeFileSync as writeFileSync10,
   renameSync as renameSync6,
   realpathSync as realpathSync4,
@@ -50810,14 +50863,14 @@ import {
 } from "node:fs";
 import { randomBytes as randomBytes3 } from "node:crypto";
 import { homedir as homedir3, tmpdir } from "node:os";
-import { dirname as dirname8, join as join15, resolve as resolve9, sep as sep2 } from "node:path";
+import { dirname as dirname8, join as join16, resolve as resolve9, sep as sep2 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 var RULE_FILENAME = "use-llm-externalizer.md";
 function resolveBundledRulePath() {
   const candidates = [];
   const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   if (pluginRoot && pluginRoot.length > 0) {
-    candidates.push(join15(resolve9(pluginRoot), "rules", RULE_FILENAME));
+    candidates.push(join16(resolve9(pluginRoot), "rules", RULE_FILENAME));
   }
   try {
     const here = dirname8(fileURLToPath4(import.meta.url));
@@ -50831,8 +50884,8 @@ function resolveBundledRulePath() {
 }
 function resolveClaudeRulesDir() {
   const cfg = process.env.CLAUDE_CONFIG_DIR;
-  const base = cfg && cfg.length > 0 ? resolve9(cfg) : join15(homedir3(), ".claude");
-  return join15(base, "rules");
+  const base = cfg && cfg.length > 0 ? resolve9(cfg) : join16(homedir3(), ".claude");
+  return join16(base, "rules");
 }
 function canonical(p) {
   try {
@@ -50840,7 +50893,7 @@ function canonical(p) {
   } catch {
     const parent = dirname8(p);
     if (parent === p) return p;
-    return join15(canonical(parent), p.slice(parent.length + (parent.endsWith(sep2) ? 0 : 1)));
+    return join16(canonical(parent), p.slice(parent.length + (parent.endsWith(sep2) ? 0 : 1)));
   }
 }
 function underAllowedRoot(dir) {
@@ -50872,7 +50925,7 @@ function installUsageRule(opts = {}) {
     return { status: "error", dest: "", detail: "bundled rule source not found" };
   }
   const rulesDir = opts.rulesDir ?? resolveClaudeRulesDir();
-  const dest = join15(rulesDir, RULE_FILENAME);
+  const dest = join16(rulesDir, RULE_FILENAME);
   if (!underAllowedRoot(rulesDir)) {
     return {
       status: "error",
@@ -50882,20 +50935,20 @@ function installUsageRule(opts = {}) {
   }
   let desired;
   try {
-    desired = readFileSync13(source, "utf-8");
+    desired = readFileSync14(source, "utf-8");
   } catch (e) {
     return { status: "error", dest, detail: `cannot read source: ${e.message}` };
   }
   const existed = existsSync11(dest);
   if (existed) {
     try {
-      if (readFileSync13(dest, "utf-8") === desired) return { status: "unchanged", dest };
+      if (readFileSync14(dest, "utf-8") === desired) return { status: "unchanged", dest };
     } catch {
     }
   }
   const tmp = dest + ".tmp." + process.pid + "." + randomBytes3(4).toString("hex");
   try {
-    mkdirSync13(rulesDir, { recursive: true });
+    mkdirSync14(rulesDir, { recursive: true });
     writeFileSync10(tmp, desired, "utf-8");
     renameSync6(tmp, dest);
   } catch (e) {
@@ -50906,41 +50959,6 @@ function installUsageRule(opts = {}) {
     return { status: "error", dest, detail: `write failed: ${e.message}` };
   }
   return { status: existed ? "updated" : "installed", dest };
-}
-
-// src/model-events.ts
-import { appendFileSync as appendFileSync4, mkdirSync as mkdirSync14, readFileSync as readFileSync14 } from "node:fs";
-import { join as join16 } from "node:path";
-var MODEL_EVENT_KINDS = [
-  "param_drop",
-  "reasoning_downgrade",
-  "rate_limit_429",
-  "schema_heal",
-  "truncation_retry",
-  "empty_response",
-  "non_retryable_failure"
-];
-var KIND_SET = new Set(MODEL_EVENT_KINDS);
-var MAX_DETAIL = 160;
-function getModelEventsPath() {
-  return join16(getConfigDir(), "model-events.log");
-}
-function sanitizeField(s) {
-  return s.replace(/ - /g, " | ").replace(/[\r\n]+/g, " ").trim();
-}
-function appendModelEvent(model, kind, detail = "") {
-  try {
-    const safeModel = sanitizeField(String(model || "unknown"));
-    let safeDetail = redactSecrets(String(detail ?? "")).redacted.replace(/[\r\n]+/g, " ").trim();
-    if (safeDetail.length > MAX_DETAIL) {
-      safeDetail = safeDetail.slice(0, MAX_DETAIL - 1) + "\u2026";
-    }
-    const line = `${localIsoTimestamp()} - ${safeModel} - ${kind} - ${safeDetail}`;
-    const dir = getConfigDir();
-    mkdirSync14(dir, { recursive: true });
-    appendFileSync4(getModelEventsPath(), line + "\n", { flag: "a" });
-  } catch {
-  }
 }
 
 // src/ensemble-limits.ts
@@ -52335,7 +52353,7 @@ var RETRY_MAX_ATTEMPTS = 5;
 var RETRY_BASE_DELAY_MS = 1e3;
 var RETRY_MAX_DELAY_MS = 3e4;
 var RETRYABLE_STATUS = /* @__PURE__ */ new Set([429, 500, 502, 503, 504]);
-async function fetchWithRetry429(url2, fetchOpts, timeout, startTime) {
+async function fetchWithRetry429(url2, fetchOpts, timeout, startTime, out) {
   let lastRes;
   let lastBodyText;
   let count429 = 0;
@@ -52387,6 +52405,7 @@ async function fetchWithRetry429(url2, fetchOpts, timeout, startTime) {
     }
     if (lastRes.status === 429) {
       count429++;
+      if (out) out.saw429 = true;
       if (count429 === 1) {
         process.stderr.write(
           `[http-retry] HTTP 429 rate-limited (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), retrying in ${(backoff / 1e3).toFixed(1)}s
@@ -52604,12 +52623,14 @@ async function chatCompletionSimple(messages, options = {}) {
   }, HEARTBEAT_INTERVAL_MS) : null;
   try {
     let lastError = null;
+    let emitted429 = false;
     for (const reasoning of reasoningLadder) {
       let body = { ...baseBody };
       if (reasoning) body.reasoning = reasoning;
       body = applyModelOverrides(body, conn.model);
       body = filterBodyForSupportedParams(body, supportedParams, conn.model);
       dumpRequestBody(body, conn.model);
+      const rl429 = { saw429: false };
       const res = await fetchWithRetry429(
         conn.url,
         {
@@ -52618,8 +52639,13 @@ async function chatCompletionSimple(messages, options = {}) {
           body: JSON.stringify(body)
         },
         conn.timeout,
-        startTime
+        startTime,
+        rl429
       );
+      if ((rl429.saw429 || res.status === 429) && !emitted429) {
+        emitted429 = true;
+        appendModelEvent(conn.model || "unknown", "rate_limit_429", "429 during call");
+      }
       if (!res.ok) {
         const text = await safeReadText(res).catch(() => "");
         if (reasoning && isReasoningRejectionError(res.status, text)) {
@@ -52633,6 +52659,9 @@ async function chatCompletionSimple(messages, options = {}) {
             `API error ${res.status} (${backend.type}): ${sanitizeProviderError(text)}`
           );
           continue;
+        }
+        if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+          appendModelEvent(conn.model || "unknown", "non_retryable_failure", `HTTP ${res.status}`);
         }
         throw new Error(
           `API error ${res.status} (${backend.type}): ${sanitizeProviderError(text)}`
@@ -52676,7 +52705,9 @@ async function chatCompletionJSON(messages, options = {}) {
   if (conn.isNative) {
     const nativeResult = await chatCompletionNative(conn, messages, options);
     const rawContent = nativeResult.content;
+    const nativeModel = nativeResult.model || conn.model || "unknown";
     if (!rawContent.trim()) {
+      appendModelEvent(nativeModel, "empty_response", "blank JSON body (native)");
       throw new Error(
         "LLM returned empty response (expected JSON). Model may not support structured output."
       );
@@ -52685,6 +52716,9 @@ async function chatCompletionJSON(messages, options = {}) {
     try {
       const cleaned = rawContent.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
       parsed = JSON.parse(cleaned);
+      if (cleaned !== rawContent.trim()) {
+        appendModelEvent(nativeModel, "schema_heal", "fence-stripped JSON (native)");
+      }
     } catch {
       throw new Error(
         `LLM returned non-JSON response: ${rawContent.substring(0, 200)}`
@@ -52734,12 +52768,14 @@ async function chatCompletionJSON(messages, options = {}) {
     let usage;
     let finishReason = "";
     let gotResponse = false;
+    let emitted429 = false;
     for (const reasoning of reasoningLadder) {
       let body = { ...baseBody };
       if (reasoning) body.reasoning = reasoning;
       body = applyModelOverrides(body, conn.model);
       body = filterBodyForSupportedParams(body, supportedParams, conn.model);
       dumpRequestBody(body, conn.model);
+      const rl429 = { saw429: false };
       const res = await fetchWithRetry429(
         conn.url,
         {
@@ -52748,8 +52784,13 @@ async function chatCompletionJSON(messages, options = {}) {
           body: JSON.stringify(body)
         },
         conn.timeout,
-        jsonStartTime
+        jsonStartTime,
+        rl429
       );
+      if ((rl429.saw429 || res.status === 429) && !emitted429) {
+        emitted429 = true;
+        appendModelEvent(conn.model || "unknown", "rate_limit_429", "429 during call (JSON mode)");
+      }
       if (!res.ok) {
         const text = await safeReadText(res).catch(() => "");
         if (reasoning && isReasoningRejectionError(res.status, text)) {
@@ -52763,6 +52804,9 @@ async function chatCompletionJSON(messages, options = {}) {
             `API error ${res.status} (${backend.type}): ${sanitizeProviderError(text)}`
           );
           continue;
+        }
+        if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+          appendModelEvent(conn.model || "unknown", "non_retryable_failure", `HTTP ${res.status} (JSON mode)`);
         }
         throw new Error(
           `API error ${res.status} (${backend.type}): ${sanitizeProviderError(text)}`
@@ -52780,6 +52824,7 @@ async function chatCompletionJSON(messages, options = {}) {
       throw lastLadderError ?? new Error("Reasoning ladder exhausted with no response");
     }
     if (!rawContent.trim()) {
+      appendModelEvent(model || conn.model || "unknown", "empty_response", "blank JSON body");
       throw new Error(
         "LLM returned empty response (expected JSON). Model may not support structured output."
       );
@@ -52788,6 +52833,9 @@ async function chatCompletionJSON(messages, options = {}) {
     try {
       const cleaned = rawContent.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
       parsed = JSON.parse(cleaned);
+      if (cleaned !== rawContent.trim()) {
+        appendModelEvent(model || conn.model || "unknown", "schema_heal", "fence-stripped JSON");
+      }
     } catch (e) {
       throw new Error(
         `LLM returned malformed JSON: ${e instanceof Error ? e.message : String(e)}. Raw (first 200 chars): ${rawContent.slice(0, 200)}`,
@@ -53246,6 +53294,7 @@ async function chatCompletionWithRetry(messages, options) {
   }
   let genericAttempts = 0;
   let emptyAttempts = 0;
+  let emittedTruncationRetry = false;
   while (true) {
     let resp;
     try {
@@ -53347,6 +53396,14 @@ async function chatCompletionWithRetry(messages, options) {
       }
     }
     if (currentAttempt <= limit) {
+      if (!emittedTruncationRetry) {
+        emittedTruncationRetry = true;
+        appendModelEvent(
+          options.model || backend.model || "unknown",
+          "truncation_retry",
+          `finish_reason=${reasonLabel}`
+        );
+      }
       process.stderr.write(
         `[llm-externalizer] ${useEmptyBudget ? "Empty" : "Invalid"} response (finish_reason=${reasonLabel}) \u2014 retrying (${currentAttempt}/${limit})
 `

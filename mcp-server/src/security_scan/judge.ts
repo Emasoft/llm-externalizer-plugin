@@ -33,6 +33,7 @@ import {
 } from "./prompt";
 import { runWithLimit } from "./concurrency";
 import { recordRequest } from "../usage-history";
+import { appendModelEvent } from "../model-events";
 import {
   isVerdict,
   type Verdict,
@@ -323,6 +324,12 @@ async function judgeOneGroup(
   let attempts = 0;
   let totalCost = 0;
   let prevError: string | null = null;
+  // A1/A7 model-health: emit each degradation kind AT MOST ONCE per group call
+  // (across this group's retry attempts), mirroring the main-path 429-flood
+  // collapse. Logging-only — never alters the retry loop / fail-safe.
+  let emitted429 = false;
+  let emittedNonRetryable = false;
+  let emittedEmpty = false;
 
   while (attempts <= opts.maxRetries) {
     attempts++;
@@ -384,6 +391,21 @@ async function judgeOneGroup(
       const text = await res.text().catch(() => "");
       clearTimeout(timeoutId);
       recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
+      // A1/A7 model-health (judge path knows opts.model): classify the HTTP
+      // failure once per group call. 429 → rate_limit_429 (the security_scan
+      // judge has its own fetch+retry, distinct from the main path). A 4xx
+      // (non-429) → non_retryable_failure. Logging-only; control flow unchanged.
+      if (res.status === 429) {
+        if (!emitted429) {
+          emitted429 = true;
+          appendModelEvent(opts.model, "rate_limit_429", "429 during judge call");
+        }
+      } else if (res.status >= 400 && res.status < 500) {
+        if (!emittedNonRetryable) {
+          emittedNonRetryable = true;
+          appendModelEvent(opts.model, "non_retryable_failure", `HTTP ${res.status} (judge)`);
+        }
+      }
       prevError = `HTTP ${res.status}: ${text.slice(0, 200)}`;
       continue;
     }
@@ -409,6 +431,12 @@ async function judgeOneGroup(
     const content = respJson.choices?.[0]?.message?.content;
     if (typeof content !== "string") {
       recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
+      // A1/A7: the model returned a parseable reply with no message content —
+      // an empty_response degradation signal. Once per group call. Logging-only.
+      if (!emittedEmpty) {
+        emittedEmpty = true;
+        appendModelEvent(opts.model, "empty_response", "no message.content (judge)");
+      }
       prevError = "response had no message.content string";
       continue;
     }

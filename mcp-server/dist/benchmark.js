@@ -218107,9 +218107,9 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 });
 
 // src/benchmark/index.ts
-import { mkdirSync as mkdirSync7, writeFileSync as writeFileSync7, existsSync as existsSync10 } from "node:fs";
+import { mkdirSync as mkdirSync8, writeFileSync as writeFileSync7, existsSync as existsSync10 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { dirname as dirname4, join as join12 } from "node:path";
+import { dirname as dirname4, join as join13 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // src/usage-history.ts
@@ -218695,6 +218695,62 @@ function isVerdict(v) {
 }
 var MAX_RUBRIC_LENGTH = 2e3;
 var DEFAULT_MODEL = "qwen/qwen-2.5-7b-instruct";
+
+// src/security_scan/intake.ts
+var SECRET_PATTERNS = [
+  [/AKIA[0-9A-Z]{16}/g, "AWS_KEY"],
+  [/(?:sk|pk)[-_](?:live|test|proj)[-_][A-Za-z0-9]{20,}/g, "API_KEY"],
+  // F3: classic OpenAI-style `sk-…` key with no infix (the sk-proj/sk-live
+  // shapes are caught by the rule above; this catches plain `sk-<base62>`).
+  // Single bounded class after the literal prefix → no backtracking.
+  [/sk-[A-Za-z0-9]{20,}/g, "API_KEY"],
+  // F3: Google API key — fixed 35-char tail, single bounded class.
+  [/AIza[0-9A-Za-z\-_]{35}/g, "GOOGLE_API_KEY"],
+  [/ghp_[A-Za-z0-9]{36}/g, "GITHUB_PAT"],
+  [/ghr_[A-Za-z0-9]{36}/g, "GITHUB_TOKEN"],
+  [/gho_[A-Za-z0-9]{36}/g, "GITHUB_OAUTH"],
+  [/github_pat_[A-Za-z0-9_]{82}/g, "GITHUB_PAT"],
+  [/glpat-[A-Za-z0-9\-_]{20,}/g, "GITLAB_TOKEN"],
+  [/xox[bpsar]-[A-Za-z0-9-]+/g, "SLACK_TOKEN"],
+  [/Bearer\s+[A-Za-z0-9._\-/+=]{20,}/g, "BEARER_TOKEN"],
+  // F3: raw JWT (header.payload.signature). Each segment is its own bounded
+  // class separated by a literal dot — disjoint classes, no backtracking.
+  [/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "JWT"],
+  // F3: connection string with inline credentials (scheme://user:pass@host).
+  // The `[^:@/\s]+` runs are disjoint from their `:`/`@` delimiters → linear.
+  [/:\/\/[^:@/\s]+:[^@/\s]+@/g, "CONN_STRING"],
+  // F1: ENV_SECRET — line-anchored via `[ \t]*` (intra-line horizontal
+  // whitespace only). NEVER `\s*` here: `\s` includes `\n`, which re-anchors at
+  // every newline and backtracks O(n²) over a hostile newline+whitespace blob.
+  [
+    /(?:^|\n)[ \t]*(?:(?:PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|AUTH|AUTH_TOKEN|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|DB_PASSWORD|DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|AWS_SESSION_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITLAB_TOKEN|BITBUCKET_TOKEN|NPM_TOKEN|DOCKER_PASSWORD|HF_TOKEN|HUGGINGFACE_TOKEN|LM_API_TOKEN|VLLM_API_KEY|JWT_SECRET|JWT_PRIVATE_KEY|STRIPE_SECRET_KEY|STRIPE_API_KEY|SUPABASE_SERVICE_KEY|SUPABASE_ANON_KEY|FIREBASE_TOKEN|SLACK_BOT_TOKEN|SLACK_TOKEN|DISCORD_TOKEN|TELEGRAM_BOT_TOKEN|TWILIO_AUTH_TOKEN|SENDGRID_API_KEY|MAILGUN_API_KEY|SENTRY_AUTH_TOKEN|PRIVATE)|[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_APIKEY|_API_KEY|_AUTH))[ \t]*[=:][ \t]*['"]?([^\s'"#\n]{8,})/gim,
+    "ENV_SECRET"
+  ],
+  // F3: case-insensitive catch for lowercase / mixed-case secret assignments
+  // (e.g. `password = "..."`, `token: ...`, `"apikey":"..."`). Matches the
+  // keyword + its `:`/`=` separator + value. `[ \t]*` keeps it line-local so
+  // the quantifiers cannot cross newlines → linear.
+  [
+    /(?:password|passwd|pwd|token|secret|apikey)["']?[ \t]*[:=][ \t]*['"]?([^\s'"#\n]{4,})/gi,
+    "SECRET_ASSIGNMENT"
+  ],
+  [
+    /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----/g,
+    "PEM_BLOCK"
+  ]
+];
+function redactSecrets(content) {
+  let result = content;
+  let count = 0;
+  for (const [pattern, label] of SECRET_PATTERNS) {
+    pattern.lastIndex = 0;
+    result = result.replace(pattern, () => {
+      count++;
+      return `[REDACTED:${label}]`;
+    });
+  }
+  return { redacted: result, count };
+}
 
 // src/usage-history.ts
 var ctxStore = new AsyncLocalStorage();
@@ -219458,8 +219514,8 @@ function applyPicksToSettings(settingsPath, profileName, picks) {
 
 // src/benchmark/security-triage/index.ts
 import { createHash as createHash2 } from "node:crypto";
-import { existsSync as existsSync5, mkdirSync as mkdirSync3, readFileSync as readFileSync6, renameSync, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join6 } from "node:path";
+import { existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync7, renameSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join7 } from "node:path";
 
 // src/project-root.ts
 import { existsSync as existsSync3 } from "node:fs";
@@ -220001,6 +220057,41 @@ async function runWithLimit(items, limit, fn) {
   await Promise.all(workers);
 }
 
+// src/model-events.ts
+import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync6 } from "node:fs";
+import { join as join6 } from "node:path";
+var MODEL_EVENT_KINDS = [
+  "param_drop",
+  "reasoning_downgrade",
+  "rate_limit_429",
+  "schema_heal",
+  "truncation_retry",
+  "empty_response",
+  "non_retryable_failure"
+];
+var KIND_SET = new Set(MODEL_EVENT_KINDS);
+var MAX_DETAIL = 160;
+function getModelEventsPath() {
+  return join6(getConfigDir(), "model-events.log");
+}
+function sanitizeField(s) {
+  return s.replace(/ - /g, " | ").replace(/[\r\n]+/g, " ").trim();
+}
+function appendModelEvent(model, kind, detail = "") {
+  try {
+    const safeModel = sanitizeField(String(model || "unknown"));
+    let safeDetail = redactSecrets(String(detail ?? "")).redacted.replace(/[\r\n]+/g, " ").trim();
+    if (safeDetail.length > MAX_DETAIL) {
+      safeDetail = safeDetail.slice(0, MAX_DETAIL - 1) + "\u2026";
+    }
+    const line = `${localIsoTimestamp()} - ${safeModel} - ${kind} - ${safeDetail}`;
+    const dir = getConfigDir();
+    mkdirSync3(dir, { recursive: true });
+    appendFileSync2(getModelEventsPath(), line + "\n", { flag: "a" });
+  } catch {
+  }
+}
+
 // src/security_scan/judge.ts
 var OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 var SOFT_MARKERS = /* @__PURE__ */ new Set(["base64-blob"]);
@@ -220139,6 +220230,9 @@ async function judgeOneGroup(group, preScan, opts, fetchImpl, apiUrl) {
   let attempts = 0;
   let totalCost = 0;
   let prevError = null;
+  let emitted429 = false;
+  let emittedNonRetryable = false;
+  let emittedEmpty = false;
   while (attempts <= opts.maxRetries) {
     attempts++;
     const userContent = prevError === null ? baseUserMsg : `${baseUserMsg}
@@ -220184,6 +220278,17 @@ async function judgeOneGroup(group, preScan, opts, fetchImpl, apiUrl) {
       const text = await res.text().catch(() => "");
       clearTimeout(timeoutId);
       recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
+      if (res.status === 429) {
+        if (!emitted429) {
+          emitted429 = true;
+          appendModelEvent(opts.model, "rate_limit_429", "429 during judge call");
+        }
+      } else if (res.status >= 400 && res.status < 500) {
+        if (!emittedNonRetryable) {
+          emittedNonRetryable = true;
+          appendModelEvent(opts.model, "non_retryable_failure", `HTTP ${res.status} (judge)`);
+        }
+      }
       prevError = `HTTP ${res.status}: ${text.slice(0, 200)}`;
       continue;
     }
@@ -220201,6 +220306,10 @@ async function judgeOneGroup(group, preScan, opts, fetchImpl, apiUrl) {
     const content = respJson.choices?.[0]?.message?.content;
     if (typeof content !== "string") {
       recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
+      if (!emittedEmpty) {
+        emittedEmpty = true;
+        appendModelEvent(opts.model, "empty_response", "no message.content (judge)");
+      }
       prevError = "response had no message.content string";
       continue;
     }
@@ -220534,7 +220643,7 @@ function scoreTriage(modelId, cases, returned, thresholds = DEFAULT_TRIAGE_THRES
 var SECURITY_TRIAGE_CRITERIA2 = getToolDescriptor("security_scan").requirements;
 var INCUMBENT_FALLBACK_PRICING = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
 function cachePath() {
-  return join6(getConfigDir(), "security-triage-results.json");
+  return join7(getConfigDir(), "security-triage-results.json");
 }
 function cacheKey(modelId, date, datasetHash) {
   return `${modelId}::${date}::${datasetHash}`;
@@ -220543,7 +220652,7 @@ function loadCache() {
   const p = cachePath();
   if (!existsSync5(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync6(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync7(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
@@ -220551,7 +220660,7 @@ function loadCache() {
 }
 function saveCache(cache) {
   const dir = getConfigDir();
-  mkdirSync3(dir, { recursive: true });
+  mkdirSync4(dir, { recursive: true });
   const p = cachePath();
   const tmp = `${p}.tmp.${process.pid}`;
   writeFileSync3(tmp, JSON.stringify(cache, null, 2), "utf-8");
@@ -220611,7 +220720,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
   const apiKey = resolveApiKey(opts.apiKey);
   const datasetPath = opts.datasetPath ?? resolveDatasetPath();
   const cases = loadDataset(datasetPath);
-  const datasetHash = createHash2("sha1").update(readFileSync6(datasetPath, "utf-8")).digest("hex").slice(0, 12);
+  const datasetHash = createHash2("sha1").update(readFileSync7(datasetPath, "utf-8")).digest("hex").slice(0, 12);
   const thresholds = opts.thresholds ?? DEFAULT_TRIAGE_THRESHOLDS;
   const incumbentId = opts.incumbentModelId ?? DEFAULT_MODEL;
   const progress = opts.onProgress ?? (() => {
@@ -220749,11 +220858,11 @@ async function runSecurityTriageBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const mainRoot = resolveMainRoot(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join6(mainRoot, "reports", "security-triage-benchmark");
-  mkdirSync3(reportDir, { recursive: true });
+  const reportDir = opts.outputDir ?? join7(mainRoot, "reports", "security-triage-benchmark");
+  mkdirSync4(reportDir, { recursive: true });
   const stamp = reportStamp();
-  const jsonReportPath = join6(reportDir, `${stamp}-security-triage-benchmark.json`);
-  const mdReportPath = join6(reportDir, `${stamp}-security-triage-benchmark.md`);
+  const jsonReportPath = join7(reportDir, `${stamp}-security-triage-benchmark.json`);
+  const mdReportPath = join7(reportDir, `${stamp}-security-triage-benchmark.md`);
   const jsonPayload = {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     datasetPath,
@@ -220873,12 +220982,12 @@ function buildReportMarkdown(args) {
 
 // src/benchmark/search-existing/index.ts
 import { createHash as createHash3 } from "node:crypto";
-import { existsSync as existsSync9, mkdirSync as mkdirSync4, readFileSync as readFileSync8, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join9 } from "node:path";
+import { existsSync as existsSync9, mkdirSync as mkdirSync5, readFileSync as readFileSync9, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join10 } from "node:path";
 
 // src/benchmark/search-existing/dataset.ts
 import { existsSync as existsSync6, readdirSync as readdirSync3, statSync as statSync2 } from "node:fs";
-import { join as join7, resolve as resolve3 } from "node:path";
+import { join as join8, resolve as resolve3 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function resolveFixtureRoot() {
   const here = fileURLToPath2(new URL(".", import.meta.url));
@@ -220900,7 +221009,7 @@ function listFixtureFiles(root = resolveFixtureRoot()) {
   const out = [];
   const walk = (dir, rel) => {
     for (const entry of readdirSync3(dir, { withFileTypes: true })) {
-      const abs2 = join7(dir, entry.name);
+      const abs2 = join8(dir, entry.name);
       const relPath = rel ? `${rel}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
         walk(abs2, relPath);
@@ -221186,14 +221295,14 @@ import { resolve as resolve5 } from "node:path";
 
 // src/scan-pipeline.ts
 import {
-  readFileSync as readFileSync7,
+  readFileSync as readFileSync8,
   existsSync as existsSync7,
   statSync as statSync4,
   lstatSync,
   readdirSync as readdirSync4,
   realpathSync as realpathSync2
 } from "node:fs";
-import { extname as extname2, join as join8, basename as basename2, dirname as dirname3, resolve as resolve4, sep } from "node:path";
+import { extname as extname2, join as join9, basename as basename2, dirname as dirname3, resolve as resolve4, sep } from "node:path";
 import { homedir as homedir2 } from "node:os";
 import { spawnSync } from "node:child_process";
 var EXT_TO_LANG = {
@@ -221265,7 +221374,7 @@ function detectLang(filePath) {
   const ext = extname2(filePath).toLowerCase();
   if (EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
   try {
-    const head = readFileSync7(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
+    const head = readFileSync8(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
     const shebang = head.match(/^#!\s*(?:\/usr\/bin\/env\s+)?(\S+)/);
     if (shebang) {
       const bin = basename2(shebang[1]);
@@ -221343,7 +221452,7 @@ function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexReda
       `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
     );
   }
-  const raw = readFileSync7(safePath);
+  const raw = readFileSync8(safePath);
   if (raw.length > limit) {
     throw new Error(
       `File too large after read (${(raw.length / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
@@ -221443,7 +221552,7 @@ var BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
 function isBinaryExtension(filePath) {
   return BINARY_EXTENSIONS.has(extname2(filePath).toLowerCase()) || basename2(filePath) === ".DS_Store";
 }
-var SECRET_PATTERNS = [
+var SECRET_PATTERNS2 = [
   [/AKIA[0-9A-Z]{16}/g, "AWS_KEY"],
   [/(?:sk|pk)[-_](?:live|test|proj)[-_][A-Za-z0-9]{20,}/g, "API_KEY"],
   [/ghp_[A-Za-z0-9]{36}/g, "GITHUB_PAT"],
@@ -221473,7 +221582,7 @@ var SECRET_PATTERNS = [
 ];
 function scanForSecrets(content) {
   const counts = /* @__PURE__ */ new Map();
-  for (const [pattern, label] of SECRET_PATTERNS) {
+  for (const [pattern, label] of SECRET_PATTERNS2) {
     pattern.lastIndex = 0;
     const matches = content.match(pattern);
     if (matches && matches.length > 0) {
@@ -221491,7 +221600,7 @@ function scanFilesForSecrets(filePaths) {
   for (const fp of filePaths) {
     if (!existsSync7(fp)) continue;
     try {
-      const content = readFileSync7(fp, "utf-8");
+      const content = readFileSync8(fp, "utf-8");
       const scan = scanForSecrets(content);
       if (scan.found) {
         for (const d of scan.details) {
@@ -221518,7 +221627,7 @@ function scanFilesForSecrets(filePaths) {
 function redactSecrets2(content) {
   let result = content;
   let count = 0;
-  for (const [pattern, label] of SECRET_PATTERNS) {
+  for (const [pattern, label] of SECRET_PATTERNS2) {
     pattern.lastIndex = 0;
     result = result.replace(pattern, () => {
       count++;
@@ -221574,7 +221683,7 @@ function resolvePrompt(instructions, instructionsFilesPaths) {
     const paths = Array.isArray(instructionsFilesPaths) ? instructionsFilesPaths : [instructionsFilesPaths];
     for (const fp of paths) {
       assertFileExists(fp);
-      const content = readFileSync7(fp, "utf-8");
+      const content = readFileSync8(fp, "utf-8");
       prompt = prompt ? `${prompt}
 
 ${content}` : content;
@@ -221796,7 +221905,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
     if (trackedResult.status === 0 && trackedResult.stdout) {
       for (const relPath of trackedResult.stdout.split("\n")) {
         if (!relPath.trim()) continue;
-        allFiles.add(join8(dirPath, relPath));
+        allFiles.add(join9(dirPath, relPath));
       }
     }
     const untrackedResult = spawnSync(
@@ -221807,7 +221916,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
     if (untrackedResult.status === 0 && untrackedResult.stdout) {
       for (const relPath of untrackedResult.stdout.split("\n")) {
         if (!relPath.trim()) continue;
-        allFiles.add(join8(dirPath, relPath));
+        allFiles.add(join9(dirPath, relPath));
       }
     }
   }
@@ -221824,8 +221933,8 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
         if (!entry.isDirectory()) continue;
         if (entry.name === ".git" || entry.name === "node_modules") continue;
         if (entry.name.startsWith(".")) continue;
-        const subDir = join8(dir, entry.name);
-        const gitDir = join8(subDir, ".git");
+        const subDir = join9(dir, entry.name);
+        const gitDir = join9(subDir, ".git");
         const gitStat = lstatSyncRetry(gitDir);
         const gitDirIsDir = gitStat ? gitStat.isDirectory() : false;
         if (gitDirIsDir) {
@@ -221852,7 +221961,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
       if (nestedResult.status === 0 && nestedResult.stdout) {
         for (const relPath of nestedResult.stdout.split("\n")) {
           if (!relPath.trim()) continue;
-          allFiles.add(join8(nestedRoot, relPath));
+          allFiles.add(join9(nestedRoot, relPath));
         }
       }
     }
@@ -221907,7 +222016,7 @@ function walkDir(dirPath, options) {
     }
     for (const entry of entries) {
       if (results.length >= maxFiles) return;
-      const fullPath = join8(dir, entry.name);
+      const fullPath = join9(dir, entry.name);
       if (entry.isSymbolicLink()) {
         if (!followSymlinks) continue;
         try {
@@ -222725,7 +222834,7 @@ function selectSearchExistingModel(input) {
 // src/benchmark/search-existing/index.ts
 var INCUMBENT_FALLBACK_PRICING2 = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
 function cachePath2() {
-  return join9(getConfigDir(), "search-existing-results.json");
+  return join10(getConfigDir(), "search-existing-results.json");
 }
 function cacheKey2(modelId, date, datasetHash) {
   return `${modelId}::${date}::${datasetHash}`;
@@ -222734,7 +222843,7 @@ function loadCache2() {
   const p = cachePath2();
   if (!existsSync9(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync8(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync9(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
@@ -222742,7 +222851,7 @@ function loadCache2() {
 }
 function saveCache2(cache) {
   const dir = getConfigDir();
-  mkdirSync4(dir, { recursive: true });
+  mkdirSync5(dir, { recursive: true });
   const p = cachePath2();
   const tmp = `${p}.tmp.${process.pid}`;
   writeFileSync4(tmp, JSON.stringify(cache, null, 2), "utf-8");
@@ -222961,11 +223070,11 @@ async function runSearchExistingBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const mainRoot = resolveMainRoot2(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join9(mainRoot, "reports", "search-existing-benchmark");
-  mkdirSync4(reportDir, { recursive: true });
+  const reportDir = opts.outputDir ?? join10(mainRoot, "reports", "search-existing-benchmark");
+  mkdirSync5(reportDir, { recursive: true });
   const stamp = reportStamp2();
-  const jsonReportPath = join9(reportDir, `${stamp}-search-existing-benchmark.json`);
-  const reportPath = join9(reportDir, `${stamp}-search-existing-benchmark.md`);
+  const jsonReportPath = join10(reportDir, `${stamp}-search-existing-benchmark.json`);
+  const reportPath = join10(reportDir, `${stamp}-search-existing-benchmark.md`);
   const jsonPayload = {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     datasetHash,
@@ -223151,8 +223260,8 @@ function renderAssessmentText(a) {
 }
 
 // src/model-qualification/drift.ts
-import { mkdirSync as mkdirSync5, readFileSync as readFileSync9, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
-import { join as join10 } from "node:path";
+import { mkdirSync as mkdirSync6, readFileSync as readFileSync10, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join11 } from "node:path";
 function perMillion(s) {
   if (s == null) return null;
   const n = parseFloat(s);
@@ -223289,11 +223398,11 @@ function computeModelHealth(configured, catalog, baseline, opts = {}) {
   return { findings, updatedBaseline };
 }
 function getBaselinePath() {
-  return join10(getConfigDir(), "model-baseline.json");
+  return join11(getConfigDir(), "model-baseline.json");
 }
 function loadBaseline(path = getBaselinePath()) {
   try {
-    const raw = readFileSync9(path, "utf-8");
+    const raw = readFileSync10(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed;
@@ -223305,7 +223414,7 @@ function loadBaseline(path = getBaselinePath()) {
 }
 function saveBaseline(baseline, path = getBaselinePath()) {
   try {
-    mkdirSync5(getConfigDir(), { recursive: true });
+    mkdirSync6(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
     writeFileSync5(tmp, JSON.stringify(baseline, null, 2));
     renameSync3(tmp, path);
@@ -223381,9 +223490,9 @@ function renderModelHealthMarkdown(report) {
 async function runCheckModelHealth(opts = {}) {
   const profile = opts.profile ?? resolveActiveProfile();
   const report = await checkModelHealth(profile, opts);
-  const dir = opts.outputDir ?? join10(resolveProjectMainRoot(), "reports", "model-health");
-  mkdirSync5(dir, { recursive: true });
-  const reportPath = join10(dir, `${compactStamp()}-model-health-${profile.name}.md`);
+  const dir = opts.outputDir ?? join11(resolveProjectMainRoot(), "reports", "model-health");
+  mkdirSync6(dir, { recursive: true });
+  const reportPath = join11(dir, `${compactStamp()}-model-health-${profile.name}.md`);
   writeFileSync5(reportPath, renderModelHealthMarkdown(report));
   return { report, reportPath };
 }
@@ -223405,8 +223514,8 @@ function renderModelHealthText(report) {
 }
 
 // src/model-qualification/new-arrivals.ts
-import { mkdirSync as mkdirSync6, readFileSync as readFileSync10, renameSync as renameSync4, writeFileSync as writeFileSync6 } from "node:fs";
-import { join as join11 } from "node:path";
+import { mkdirSync as mkdirSync7, readFileSync as readFileSync11, renameSync as renameSync4, writeFileSync as writeFileSync6 } from "node:fs";
+import { join as join12 } from "node:path";
 function createdToIso(created) {
   if (created === null || !Number.isFinite(created) || created <= 0) return null;
   return new Date(created * 1e3).toISOString();
@@ -223448,11 +223557,11 @@ function diffNewArrivals(catalog, snapshot) {
   };
 }
 function getCatalogSnapshotPath() {
-  return join11(getConfigDir(), "catalog-snapshot.json");
+  return join12(getConfigDir(), "catalog-snapshot.json");
 }
 function loadSnapshot(path = getCatalogSnapshotPath()) {
   try {
-    const raw = readFileSync10(path, "utf-8");
+    const raw = readFileSync11(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const obj = parsed;
@@ -223470,7 +223579,7 @@ function loadSnapshot(path = getCatalogSnapshotPath()) {
 }
 function saveSnapshot(snapshot, path = getCatalogSnapshotPath()) {
   try {
-    mkdirSync6(getConfigDir(), { recursive: true });
+    mkdirSync7(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
     writeFileSync6(tmp, JSON.stringify(snapshot, null, 2));
     renameSync4(tmp, path);
@@ -223564,9 +223673,9 @@ function renderNewArrivalsText(report) {
 }
 async function runDiscoverNewArrivals(opts = {}) {
   const report = await discoverNewArrivals(opts);
-  const dir = opts.outputDir ?? join11(resolveProjectMainRoot(), "reports", "model-arrivals");
-  mkdirSync6(dir, { recursive: true });
-  const reportPath = join11(dir, `${compactStamp()}-new-arrivals.md`);
+  const dir = opts.outputDir ?? join12(resolveProjectMainRoot(), "reports", "model-arrivals");
+  mkdirSync7(dir, { recursive: true });
+  const reportPath = join12(dir, `${compactStamp()}-new-arrivals.md`);
   writeFileSync6(reportPath, renderNewArrivalsMarkdown(report));
   return { report, reportPath };
 }
@@ -223786,12 +223895,12 @@ function resolveApiKey3() {
 function resolveFixturesDir() {
   const here = dirname4(fileURLToPath3(import.meta.url));
   const candidates = [
-    join12(here, "fixtures"),
-    join12(here, "..", "src", "benchmark", "fixtures"),
-    join12(here, "..", "..", "src", "benchmark", "fixtures")
+    join13(here, "fixtures"),
+    join13(here, "..", "src", "benchmark", "fixtures"),
+    join13(here, "..", "..", "src", "benchmark", "fixtures")
   ];
   for (const c of candidates) {
-    if (existsSync10(join12(c, "file-01.ts"))) return c;
+    if (existsSync10(join13(c, "file-01.ts"))) return c;
   }
   throw new Error(`Could not locate benchmark fixtures. Tried:
   ${candidates.join("\n  ")}`);
@@ -223855,7 +223964,7 @@ async function main() {
     throw new Error("--apply-profile requires --pick-top-n");
   }
   if (opts.fromCache) {
-    const cachePath3 = join12(homedir3(), ".llm-externalizer", "benchmark-results.json");
+    const cachePath3 = join13(homedir3(), ".llm-externalizer", "benchmark-results.json");
     const cache = loadCachedReport(cachePath3);
     console.error(`[benchmark] --from-cache: using ${cachePath3} (${cache.results.length} models, run at ${cache.timestamp}).`);
     if (opts.pickTopN === null) {
@@ -223932,16 +224041,16 @@ async function main() {
     results
   };
   const markdown = renderReport(reportInput);
-  mkdirSync7(dirname4(reportPath), { recursive: true });
+  mkdirSync8(dirname4(reportPath), { recursive: true });
   writeFileSync7(reportPath, markdown, "utf-8");
   console.error(`[benchmark] Report: ${reportPath}`);
   const json = renderJson(reportInput);
-  const cacheJsonPath = join12(homedir3(), ".llm-externalizer", "benchmark-results.json");
-  mkdirSync7(dirname4(cacheJsonPath), { recursive: true });
+  const cacheJsonPath = join13(homedir3(), ".llm-externalizer", "benchmark-results.json");
+  mkdirSync8(dirname4(cacheJsonPath), { recursive: true });
   writeFileSync7(cacheJsonPath, json, "utf-8");
   console.error(`[benchmark] JSON cache: ${cacheJsonPath}`);
   if (opts.jsonPath) {
-    mkdirSync7(dirname4(opts.jsonPath), { recursive: true });
+    mkdirSync8(dirname4(opts.jsonPath), { recursive: true });
     writeFileSync7(opts.jsonPath, json, "utf-8");
     console.error(`[benchmark] JSON (user-path): ${opts.jsonPath}`);
   }
@@ -224037,7 +224146,7 @@ function runPickPhase(results, opts) {
   console.error("# settings.yaml block (paste under `profiles:`):");
   process.stdout.write(block);
   if (opts.applyProfile !== null) {
-    const settingsPath = join12(homedir3(), ".llm-externalizer", "settings.yaml");
+    const settingsPath = join13(homedir3(), ".llm-externalizer", "settings.yaml");
     try {
       const result = applyPicksToSettings(settingsPath, opts.applyProfile, picks);
       console.error("");
@@ -224066,7 +224175,7 @@ function buildReportPath() {
   const offsetAbs = Math.abs(offsetMin);
   const tz = `${offsetSign}${pad(Math.floor(offsetAbs / 60))}${pad(offsetAbs % 60)}`;
   const ts2 = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${tz}`;
-  return join12(root, "reports", "benchmark", `${ts2}-model-comparison.md`);
+  return join13(root, "reports", "benchmark", `${ts2}-model-comparison.md`);
 }
 withUsageContext(
   { tool: "cli:benchmark", params: "" },

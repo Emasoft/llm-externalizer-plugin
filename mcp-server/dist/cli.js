@@ -19480,6 +19480,50 @@ var init_concurrency = __esm({
   }
 });
 
+// src/model-events.ts
+import { appendFileSync as appendFileSync3, mkdirSync as mkdirSync7, readFileSync as readFileSync6 } from "node:fs";
+import { join as join6 } from "node:path";
+function getModelEventsPath() {
+  return join6(getConfigDir(), "model-events.log");
+}
+function sanitizeField(s) {
+  return s.replace(/ - /g, " | ").replace(/[\r\n]+/g, " ").trim();
+}
+function appendModelEvent(model, kind, detail = "") {
+  try {
+    const safeModel = sanitizeField(String(model || "unknown"));
+    let safeDetail = redactSecrets(String(detail ?? "")).redacted.replace(/[\r\n]+/g, " ").trim();
+    if (safeDetail.length > MAX_DETAIL) {
+      safeDetail = safeDetail.slice(0, MAX_DETAIL - 1) + "\u2026";
+    }
+    const line = `${localIsoTimestamp()} - ${safeModel} - ${kind} - ${safeDetail}`;
+    const dir = getConfigDir();
+    mkdirSync7(dir, { recursive: true });
+    appendFileSync3(getModelEventsPath(), line + "\n", { flag: "a" });
+  } catch {
+  }
+}
+var MODEL_EVENT_KINDS, KIND_SET, MAX_DETAIL;
+var init_model_events = __esm({
+  "src/model-events.ts"() {
+    "use strict";
+    init_config();
+    init_intake();
+    init_usage_history();
+    MODEL_EVENT_KINDS = [
+      "param_drop",
+      "reasoning_downgrade",
+      "rate_limit_429",
+      "schema_heal",
+      "truncation_retry",
+      "empty_response",
+      "non_retryable_failure"
+    ];
+    KIND_SET = new Set(MODEL_EVENT_KINDS);
+    MAX_DETAIL = 160;
+  }
+});
+
 // src/security_scan/judge.ts
 function scanReasonTells(reason) {
   const found = /* @__PURE__ */ new Set();
@@ -19588,6 +19632,9 @@ async function judgeOneGroup(group, preScan, opts, fetchImpl, apiUrl) {
   let attempts = 0;
   let totalCost = 0;
   let prevError = null;
+  let emitted429 = false;
+  let emittedNonRetryable = false;
+  let emittedEmpty = false;
   while (attempts <= opts.maxRetries) {
     attempts++;
     const userContent = prevError === null ? baseUserMsg : `${baseUserMsg}
@@ -19633,6 +19680,17 @@ async function judgeOneGroup(group, preScan, opts, fetchImpl, apiUrl) {
       const text = await res.text().catch(() => "");
       clearTimeout(timeoutId);
       recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
+      if (res.status === 429) {
+        if (!emitted429) {
+          emitted429 = true;
+          appendModelEvent(opts.model, "rate_limit_429", "429 during judge call");
+        }
+      } else if (res.status >= 400 && res.status < 500) {
+        if (!emittedNonRetryable) {
+          emittedNonRetryable = true;
+          appendModelEvent(opts.model, "non_retryable_failure", `HTTP ${res.status} (judge)`);
+        }
+      }
       prevError = `HTTP ${res.status}: ${text.slice(0, 200)}`;
       continue;
     }
@@ -19650,6 +19708,10 @@ async function judgeOneGroup(group, preScan, opts, fetchImpl, apiUrl) {
     const content = respJson.choices?.[0]?.message?.content;
     if (typeof content !== "string") {
       recordRequest({ ok: false, durationMs: Date.now() - attemptStart, costUsd: 0 });
+      if (!emittedEmpty) {
+        emittedEmpty = true;
+        appendModelEvent(opts.model, "empty_response", "no message.content (judge)");
+      }
       prevError = "response had no message.content string";
       continue;
     }
@@ -19799,6 +19861,7 @@ var init_judge = __esm({
     init_prompt();
     init_concurrency();
     init_usage_history();
+    init_model_events();
     init_types();
     init_config();
     OPENROUTER_URL2 = "https://openrouter.ai/api/v1/chat/completions";
@@ -19867,8 +19930,8 @@ var init_project_root = __esm({
 });
 
 // src/security_scan/report.ts
-import { mkdirSync as mkdirSync7, writeFileSync as writeFileSync4 } from "node:fs";
-import { isAbsolute as isAbsolute2, join as join6, resolve as resolve3 } from "node:path";
+import { mkdirSync as mkdirSync8, writeFileSync as writeFileSync4 } from "node:fs";
+import { isAbsolute as isAbsolute2, join as join7, resolve as resolve3 } from "node:path";
 function defaultMainRoot() {
   return resolveProjectMainRoot();
 }
@@ -19876,7 +19939,7 @@ function resolveReportDir(outputDir, mainRoot) {
   if (outputDir && outputDir.length > 0) {
     return isAbsolute2(outputDir) ? outputDir : resolve3(process.cwd(), outputDir);
   }
-  return join6(mainRoot ?? defaultMainRoot(), "reports", "security_scan");
+  return join7(mainRoot ?? defaultMainRoot(), "reports", "security_scan");
 }
 function isoTimestampLocal(now = /* @__PURE__ */ new Date()) {
   const pad = (n, w = 2) => String(n).padStart(w, "0");
@@ -20012,11 +20075,11 @@ function mdCell2(s) {
   return s.replace(/\|/g, "\\|").replace(/\n/g, " ").slice(0, 400);
 }
 function writeReport(report, reportDir) {
-  mkdirSync7(reportDir, { recursive: true });
+  mkdirSync8(reportDir, { recursive: true });
   const stamp = isoTimestampLocal();
   const base = `${stamp}-security-scan-${slugify2(report.job_id)}`;
-  const jsonPath = join6(reportDir, `${base}.json`);
-  const mdPath = join6(reportDir, `${base}.md`);
+  const jsonPath = join7(reportDir, `${base}.json`);
+  const mdPath = join7(reportDir, `${base}.md`);
   writeFileSync4(jsonPath, JSON.stringify(report, null, 2) + "\n", "utf-8");
   writeFileSync4(mdPath, renderMarkdown(report), "utf-8");
   return { jsonPath, mdPath };
@@ -20219,14 +20282,14 @@ __export(cli_exports, {
 });
 import { execSync as execSync2 } from "node:child_process";
 import {
-  appendFileSync as appendFileSync3,
-  mkdirSync as mkdirSync8,
-  readFileSync as readFileSync6,
+  appendFileSync as appendFileSync4,
+  mkdirSync as mkdirSync9,
+  readFileSync as readFileSync7,
   readdirSync as readdirSync3,
   statSync as statSync3,
   writeFileSync as writeFileSync5
 } from "node:fs";
-import { dirname as dirname4, extname as extname2, isAbsolute as isAbsolute3, join as join7, resolve as resolve4 } from "node:path";
+import { dirname as dirname4, extname as extname2, isAbsolute as isAbsolute3, join as join8, resolve as resolve4 } from "node:path";
 import { fileURLToPath } from "node:url";
 function parseFlags2(args) {
   const flags = {};
@@ -20290,7 +20353,7 @@ function resolveReportDir2(outputDirFlag, opts) {
     return isAbsolute3(outputDirFlag) ? outputDirFlag : resolve4(process.cwd(), outputDirFlag);
   }
   const mainRoot = opts.mainRoot ?? defaultMainRoot2();
-  return join7(mainRoot, "reports", "mass_scouting");
+  return join8(mainRoot, "reports", "mass_scouting");
 }
 function listGitChangedFiles(root, ref) {
   if (!/^[A-Za-z0-9_./~^@{}-]+$/.test(ref) || ref.length > 200) {
@@ -20340,7 +20403,7 @@ function walkFiles2(root, extensionFilter, extraSkipDirs) {
       continue;
     }
     for (const e of entries) {
-      const full = join7(dir, e);
+      const full = join8(dir, e);
       let st;
       try {
         st = statSync3(full);
@@ -20375,7 +20438,7 @@ function resolveBundledFieldset(arg) {
   ];
   for (const p of candidates) {
     try {
-      readFileSync6(p, "utf-8");
+      readFileSync7(p, "utf-8");
       return { path: p };
     } catch {
     }
@@ -20392,7 +20455,7 @@ function loadFieldsetFromArg(path) {
   }
   let raw;
   try {
-    raw = readFileSync6(path, "utf-8");
+    raw = readFileSync7(path, "utf-8");
   } catch (e) {
     return { error: `cannot read --fields-file: ${e.message}` };
   }
@@ -20541,7 +20604,7 @@ function runRegister(args) {
   for (const p of paths) {
     let body;
     try {
-      body = readFileSync6(p);
+      body = readFileSync7(p);
     } catch {
       skippedRead++;
       continue;
@@ -20746,9 +20809,9 @@ async function runScout(args, opts) {
   const md = renderMarkdownReport(summary);
   reg.close();
   const reportDir = resolveReportDir2(flags["output-dir"], opts);
-  mkdirSync8(reportDir, { recursive: true });
+  mkdirSync9(reportDir, { recursive: true });
   const stamp = isoTimestampLocal2();
-  const reportPath = join7(reportDir, `${stamp}-scout-${slugify3(jobId)}.md`);
+  const reportPath = join8(reportDir, `${stamp}-scout-${slugify3(jobId)}.md`);
   writeFileSync5(reportPath, md, "utf-8");
   return ok(
     [
@@ -20949,7 +21012,7 @@ async function runProposeFieldset(args, opts) {
   if (samplesArg) {
     for (const p of samplesArg.split(",").map((s) => s.trim()).filter(Boolean)) {
       try {
-        const body = readFileSync6(p, "utf-8");
+        const body = readFileSync7(p, "utf-8");
         samples.push({ path: p, body: body.slice(0, 2e3) });
       } catch {
       }
@@ -21097,7 +21160,7 @@ function runListBundledFieldsets(args) {
     const name = e.replace(/\.json$/, "");
     let fields = [];
     try {
-      const parsed = JSON.parse(readFileSync6(full, "utf-8"));
+      const parsed = JSON.parse(readFileSync7(full, "utf-8"));
       fields = (parsed.fields ?? []).map((f) => f.name);
     } catch {
     }
@@ -21437,14 +21500,14 @@ function runExport(args, opts) {
   const rows = reg.listResultsByJob(jobId);
   reg.close();
   const reportDir = resolveReportDir2(flags["output-dir"], opts);
-  mkdirSync8(reportDir, { recursive: true });
+  mkdirSync9(reportDir, { recursive: true });
   const stamp = isoTimestampLocal2();
   const filename = `${stamp}-export-${slugify3(jobId)}.${format}`;
-  const path = join7(reportDir, filename);
+  const path = join8(reportDir, filename);
   writeFileSync5(path, "", "utf-8");
   if (format === "jsonl") {
     for (const r of rows) {
-      appendFileSync3(path, JSON.stringify(r) + "\n", "utf-8");
+      appendFileSync4(path, JSON.stringify(r) + "\n", "utf-8");
     }
   } else {
     const header = [
@@ -21457,7 +21520,7 @@ function runExport(args, opts) {
       "cost_usd",
       "enriched_at"
     ].join(",");
-    appendFileSync3(path, header + "\n", "utf-8");
+    appendFileSync4(path, header + "\n", "utf-8");
     for (const r of rows) {
       const row = [
         csvEscape(r.job_id),
@@ -21469,7 +21532,7 @@ function runExport(args, opts) {
         r.cost_usd == null ? "" : String(r.cost_usd),
         csvEscape(r.enriched_at)
       ].join(",");
-      appendFileSync3(path, row + "\n", "utf-8");
+      appendFileSync4(path, row + "\n", "utf-8");
     }
   }
   return ok(
@@ -43670,7 +43733,7 @@ function isElectron() {
 
 // src/cli.ts
 import { writeFileSync as writeFileSync6, existsSync as existsSync5, statSync as statSync4, unlinkSync } from "node:fs";
-import { resolve as resolvePath, isAbsolute as isAbsolute4, join as join8, dirname as dirname5 } from "node:path";
+import { resolve as resolvePath, isAbsolute as isAbsolute4, join as join9, dirname as dirname5 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { spawnSync as spawnSync2 } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -43795,9 +43858,9 @@ var DEFAULT_SEARCH_TIMEOUT_MS = 4 * 60 * 60 * 1e3;
 function findServerScript() {
   const here = dirname5(fileURLToPath2(import.meta.url));
   const candidates = [
-    join8(here, "index.js"),
+    join9(here, "index.js"),
     // running from dist/
-    join8(here, "..", "dist", "index.js")
+    join9(here, "..", "dist", "index.js")
     // running from src/
   ];
   for (const c of candidates) {
@@ -43857,7 +43920,7 @@ function generateGitDiff(base, sourceFiles) {
       );
     }
   }
-  const outPath = join8(tmpdir(), `llm-ext-search-existing-diff-${Date.now()}.patch`);
+  const outPath = join9(tmpdir(), `llm-ext-search-existing-diff-${Date.now()}.patch`);
   const result = spawnSync2(
     "git",
     ["diff", `${base}...HEAD`, "--", ...sourceFiles],

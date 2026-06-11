@@ -1467,6 +1467,12 @@ async function fetchWithRetry429(
   fetchOpts: RequestInit,
   timeout: number,
   startTime: number,
+  // A1/A7 model-health: optional accumulator so the model-aware CALLER (which
+  // knows the model id this helper lacks) can emit a single durable
+  // `rate_limit_429` event PER CALL that hit ≥1 429. Set-only here; reading +
+  // emission happen at the caller. Purely observational — never alters
+  // retry/backoff/return behaviour.
+  out?: { saw429: boolean },
 ): Promise<Response> {
   let lastRes: Response | undefined;
   // Capture the error body text before draining it (the body stream is
@@ -1549,6 +1555,9 @@ async function fetchWithRetry429(
     // Retry behaviour (backoff/continue/break) is unchanged — only log frequency.
     if (lastRes.status === 429) {
       count429++;
+      // Record (set-only, idempotent) that this CALL hit a 429 so the caller can
+      // emit ONE durable rate_limit_429 event for the call — not one per attempt.
+      if (out) out.saw429 = true;
       if (count429 === 1) {
         process.stderr.write(
           `[http-retry] HTTP 429 rate-limited (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), ` +
@@ -1991,6 +2000,11 @@ async function chatCompletionSimple(
 
   try {
     let lastError: Error | null = null;
+    // A1/A7 model-health: emit each degradation kind AT MOST ONCE per logical
+    // call (this whole chatCompletionSimple invocation), even across reasoning
+    // ladder rungs. Set-and-guard booleans keep the ledger at "this model X'd on
+    // this call", mirroring the existing 429-flood collapse. Logging-only.
+    let emitted429 = false;
 
     for (const reasoning of reasoningLadder) {
       let body: Record<string, unknown> = { ...baseBody };
@@ -2009,6 +2023,7 @@ async function chatCompletionSimple(
       // the actual LLM call.
       dumpRequestBody(body, conn.model);
 
+      const rl429 = { saw429: false };
       const res = await fetchWithRetry429(
         conn.url,
         {
@@ -2018,7 +2033,16 @@ async function chatCompletionSimple(
         },
         conn.timeout,
         startTime,
+        rl429,
       );
+
+      // A1/A7: one durable rate_limit_429 per call that hit ≥1 429 (the retry
+      // helper collapses the per-attempt flood; the final-attempt 429 that
+      // exhausted retries is caught via res.status here). Logging-only.
+      if ((rl429.saw429 || res.status === 429) && !emitted429) {
+        emitted429 = true;
+        appendModelEvent(conn.model || "unknown", "rate_limit_429", "429 during call");
+      }
 
       if (!res.ok) {
         const text = await safeReadText(res).catch(() => "");
@@ -2032,6 +2056,12 @@ async function chatCompletionSimple(
             `API error ${res.status} (${backend.type}): ${sanitizeProviderError(text)}`,
           );
           continue;
+        }
+        // A1/A7: a 4xx (non-429) is an unrecoverable model-side failure
+        // (bad request, model gone, forbidden). Record it before throwing so
+        // the throw path is unchanged. 429 is recorded above, not here.
+        if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+          appendModelEvent(conn.model || "unknown", "non_retryable_failure", `HTTP ${res.status}`);
         }
         throw new Error(
           `API error ${res.status} (${backend.type}): ${sanitizeProviderError(text)}`,
@@ -2134,7 +2164,10 @@ async function chatCompletionJSON(
   if (conn.isNative) {
     const nativeResult = await chatCompletionNative(conn, messages, options);
     const rawContent = nativeResult.content;
+    const nativeModel = nativeResult.model || conn.model || "unknown";
     if (!rawContent.trim()) {
+      // A1/A7: blank structured-output body on the native path. Record then throw.
+      appendModelEvent(nativeModel, "empty_response", "blank JSON body (native)");
       throw new Error(
         "LLM returned empty response (expected JSON). Model may not support structured output.",
       );
@@ -2147,6 +2180,10 @@ async function chatCompletionJSON(
         .replace(/\n?```\s*$/i, "")
         .trim();
       parsed = JSON.parse(cleaned);
+      // A1/A7: a heal fired only if fence/junk stripping changed the content.
+      if (cleaned !== rawContent.trim()) {
+        appendModelEvent(nativeModel, "schema_heal", "fence-stripped JSON (native)");
+      }
     } catch {
       throw new Error(
         `LLM returned non-JSON response: ${rawContent.substring(0, 200)}`,
@@ -2215,6 +2252,9 @@ async function chatCompletionJSON(
     let usage: StreamingResult["usage"] | undefined;
     let finishReason = "";
     let gotResponse = false;
+    // A1/A7 model-health: emit rate_limit_429 at most once per logical call
+    // (across ladder rungs). Same set-and-guard pattern as chatCompletionSimple.
+    let emitted429 = false;
 
     for (const reasoning of reasoningLadder) {
       let body: Record<string, unknown> = { ...baseBody };
@@ -2228,6 +2268,7 @@ async function chatCompletionJSON(
       // Cost/observability audit (see chatCompletionSimple) — structured-output path.
       dumpRequestBody(body, conn.model);
 
+      const rl429 = { saw429: false };
       const res = await fetchWithRetry429(
         conn.url,
         {
@@ -2237,7 +2278,14 @@ async function chatCompletionJSON(
         },
         conn.timeout,
         jsonStartTime,
+        rl429,
       );
+
+      // A1/A7: one durable rate_limit_429 per call that hit ≥1 429. Logging-only.
+      if ((rl429.saw429 || res.status === 429) && !emitted429) {
+        emitted429 = true;
+        appendModelEvent(conn.model || "unknown", "rate_limit_429", "429 during call (JSON mode)");
+      }
 
       if (!res.ok) {
         const text = await safeReadText(res).catch(() => "");
@@ -2251,6 +2299,11 @@ async function chatCompletionJSON(
             `API error ${res.status} (${backend.type}): ${sanitizeProviderError(text)}`,
           );
           continue;
+        }
+        // A1/A7: a 4xx (non-429) is an unrecoverable model-side failure.
+        // Record before throwing — the throw path is unchanged.
+        if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+          appendModelEvent(conn.model || "unknown", "non_retryable_failure", `HTTP ${res.status} (JSON mode)`);
         }
         throw new Error(
           `API error ${res.status} (${backend.type}): ${sanitizeProviderError(text)}`,
@@ -2280,6 +2333,9 @@ async function chatCompletionJSON(
 
     // Parse the JSON response — guard against empty/whitespace-only content
     if (!rawContent.trim()) {
+      // A1/A7: the model returned a structured-output reply with no body — a
+      // degradation signal (record before throwing; throw path unchanged).
+      appendModelEvent(model || conn.model || "unknown", "empty_response", "blank JSON body");
       throw new Error(
         "LLM returned empty response (expected JSON). Model may not support structured output.",
       );
@@ -2294,6 +2350,13 @@ async function chatCompletionJSON(
         .replace(/\n?```\s*$/i, "")
         .trim();
       parsed = JSON.parse(cleaned) as Record<string, unknown>;
+      // A1/A7: if the raw reply was NOT already clean JSON but the fence/junk
+      // strip made it parse, we just HEALED a non-conforming structured-output
+      // reply. Recording only the heals that actually fired (cleaned ≠ raw)
+      // keeps this a true degradation signal, not noise on every call.
+      if (cleaned !== rawContent.trim()) {
+        appendModelEvent(model || conn.model || "unknown", "schema_heal", "fence-stripped JSON");
+      }
     } catch (e) {
       // LLM may wrap JSON in code fences, include trailing text, or produce malformed JSON
       throw new Error(
@@ -3074,6 +3137,10 @@ async function chatCompletionWithRetry(
   // and a retry is the documented workaround.
   let genericAttempts = 0;
   let emptyAttempts = 0;
+  // A1/A7 model-health: emit ONE truncation_retry per logical call the first
+  // time an incomplete/truncated response forces a continuation retry — not one
+  // per retry attempt. Logging-only; never alters the retry/backoff loop.
+  let emittedTruncationRetry = false;
 
   while (true) {
     let resp: StreamingResult;
@@ -3209,6 +3276,18 @@ async function chatCompletionWithRetry(
     }
 
     if (currentAttempt <= limit) {
+      // A1/A7: one durable truncation_retry per call — the first time an
+      // incomplete/truncated/empty response forces a continuation retry on this
+      // model. Set-and-guard so the ledger gets "this model needed a
+      // truncation retry on this call", not one line per attempt.
+      if (!emittedTruncationRetry) {
+        emittedTruncationRetry = true;
+        appendModelEvent(
+          options.model || backend.model || "unknown",
+          "truncation_retry",
+          `finish_reason=${reasonLabel}`,
+        );
+      }
       process.stderr.write(
         `[llm-externalizer] ${useEmptyBudget ? "Empty" : "Invalid"} response (finish_reason=${reasonLabel}) — retrying (${currentAttempt}/${limit})\n`,
       );
