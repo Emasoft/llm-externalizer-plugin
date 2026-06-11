@@ -78,6 +78,9 @@ export default defineConfig({
       // adapter (runClusterSynonymsCli). Mock rawLlmCall, no network.
       'src/cluster/wiring.test.ts',
       'src/benchmark/pick.test.ts',
+      // Per-tool model writer (applyToolModelToSettings) — CLI/cron-only,
+      // read-only-MCP-guarded (TRDD-828238b5 A7-P2).
+      'src/benchmark/apply-tool-model.test.ts',
       // security-triage model benchmark — golden dataset loader, scorer, and
       // the selection gate. Pure-TS unit tests (no LLM, no network).
       'src/benchmark/security-triage/dataset.test.ts',
@@ -103,6 +106,9 @@ export default defineConfig({
       'src/model-qualification/assess.test.ts',
       // check_model_health drift detection (TRDD-828238b5 A2).
       'src/model-qualification/drift.test.ts',
+      // Auto-replacement loop CORE — ledger-triggered per-tool benchmark planner
+      // (TRDD-828238b5 A7-P2). Injected seams, no network.
+      'src/model-qualification/auto-replace.test.ts',
       // New-model autodiscovery — catalog snapshot diff (TRDD-828238b5 A4).
       'src/model-qualification/new-arrivals.test.ts',
       // Doc-consistency gate — README counts/names match the source (A5).

@@ -23,6 +23,8 @@
 import { readFileSync, writeFileSync, renameSync as renameSyncCb, existsSync } from "node:fs";
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
 
+import { registeredTools } from "../model-qualification/registry.js";
+
 export interface CachedResult {
   modelId: string;
   name: string;
@@ -225,4 +227,95 @@ export function applyPicksToSettings(
       ...(picks.length >= 3 ? { third_model: picks[2].modelId } : {}),
     },
   };
+}
+
+// ── Per-tool model writer (TRDD-828238b5 A7-P2) ──────────────────────────────
+//
+// READ-ONLY-MCP GUARDRAIL: this function MUTATES settings.yaml and MUST NEVER be
+// called from an MCP tool handler. The MCP surface stays incapable of rewriting
+// its own config; only a human-run CLI command or a scheduled cron may adopt the
+// auto-replace planner's advisory recommendation by calling this. The advisory
+// half (model-qualification/auto-replace.ts) computes the recommendation but
+// never writes — this is the deliberate write step kept out of the server.
+
+/** Result of writing a per-tool model override (mirrors YamlMutationResult). */
+export interface ToolModelMutationResult {
+  profileName: string;
+  tool: string;
+  /** The tool's previous model in tool_models (empty string when unset). */
+  oldModelId: string;
+  newModelId: string;
+}
+
+/**
+ * Atomically set ONE tool's `tool_models[tool]` entry on a named profile.
+ * Copies applyPicksToSettings's safety pattern exactly: existsSync guard →
+ * yamlParse with a clear error → top-level-object guard → profiles-map guard →
+ * named-profile guard → tmp+rename atomic write. Every OTHER key on the profile
+ * (mode, api, model, api_key, …) and every OTHER tool_models entry is preserved
+ * by-key — the YAML library re-emits anything we didn't touch.
+ *
+ * Validates that `tool` is a registered LLM-using tool (registeredTools()) and
+ * that `modelId` is a non-empty string, throwing otherwise — a typo'd tool name
+ * or an empty model would silently break per-tool resolution, so it fails fast.
+ */
+export function applyToolModelToSettings(
+  settingsPath: string,
+  profileName: string,
+  tool: string,
+  modelId: string,
+): ToolModelMutationResult {
+  if (typeof modelId !== "string" || modelId.length === 0) {
+    throw new Error("applyToolModelToSettings: modelId must be a non-empty string");
+  }
+  const known = registeredTools();
+  if (!known.includes(tool)) {
+    throw new Error(
+      `applyToolModelToSettings: unknown tool '${tool}'. ` +
+        `Registered LLM-using tools: ${known.join(", ")}.`,
+    );
+  }
+  if (!existsSync(settingsPath)) {
+    throw new Error(`settings.yaml not found at ${settingsPath}`);
+  }
+  const raw = readFileSync(settingsPath, "utf-8");
+  let doc: unknown;
+  try {
+    doc = yamlParse(raw);
+  } catch (err) {
+    throw new Error(`settings.yaml at ${settingsPath} is not valid YAML: ${(err as Error).message}`, { cause: err });
+  }
+  if (typeof doc !== "object" || doc === null) {
+    throw new Error(`settings.yaml at ${settingsPath} must be a YAML object at the top level.`);
+  }
+  const root = doc as { profiles?: Record<string, Record<string, unknown>> };
+  if (!root.profiles || typeof root.profiles !== "object") {
+    throw new Error(`settings.yaml at ${settingsPath} missing 'profiles' map.`);
+  }
+  const profile = root.profiles[profileName];
+  if (!profile || typeof profile !== "object") {
+    throw new Error(
+      `settings.yaml at ${settingsPath} has no profile named '${profileName}'. ` +
+        `Existing profiles: ${Object.keys(root.profiles).join(", ")}.`,
+    );
+  }
+  // Read the existing tool_models map defensively: a malformed value (null, a
+  // scalar, an array) must NOT crash — treat it as empty so we still write a
+  // valid map. Preserve every existing tool entry by spreading the old object.
+  const existing = profile.tool_models;
+  const oldToolModels: Record<string, string> =
+    existing && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, string>) }
+      : {};
+  const oldModelId = typeof oldToolModels[tool] === "string" ? oldToolModels[tool] : "";
+
+  profile.tool_models = { ...oldToolModels, [tool]: modelId };
+
+  const newRaw = yamlStringify(root, { indent: 2 });
+  const tmp = settingsPath + ".tmp." + process.pid;
+  writeFileSync(tmp, newRaw, "utf-8");
+  // rename is atomic on POSIX. On Windows it's also atomic when both paths sit on
+  // the same volume — which they always do here (tmp lives in the target's dir).
+  renameSyncCb(tmp, settingsPath);
+  return { profileName, tool, oldModelId, newModelId: modelId };
 }
