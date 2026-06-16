@@ -38,13 +38,6 @@
     }
   },
   "cpv": {
-    "allow_pipeline_drift": [
-      "scripts/publish.py",
-      ".github/workflows/ci.yml",
-      ".github/workflows/notify-marketplace.yml",
-      "cliff.toml",
-      ".markdownlint.json"
-    ],
     "skillaudit_advisory": true
   }
 }

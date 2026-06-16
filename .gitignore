@@ -31,6 +31,9 @@ mcp-server/reports/
 # Build artifacts
 dist/
 !mcp-server/dist/
+# …but never the source maps: debug-only, not needed at runtime, and they trip
+# CPV's RC-70 security heuristic (esbuild config sets sourcemap:false anyway).
+mcp-server/dist/*.map
 build/
 
 # macOS

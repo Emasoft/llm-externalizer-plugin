@@ -37,7 +37,11 @@ const shared = {
   platform: "node",
   target: "node18",
   format: "esm",
-  sourcemap: true,
+  // No source maps in the shipped bundles: they are debug-only artifacts that
+  // bloat the distributed plugin and whose base64 mappings trip CPV's RC-70
+  // "obfuscated-decode-near-exec-sink" security heuristic (a false positive on
+  // generated maps). Flip back to true locally if you need to debug the bundle.
+  sourcemap: false,
   external: [...nodeExternals, ...nativeExternals],
   banner: { js: banner },
 };

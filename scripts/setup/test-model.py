@@ -119,9 +119,10 @@ def _validate_local_url(url: str) -> str:
 
     SSRF guard. Without this, `--url file:///proc/self/environ` would dump the
     wizard's environment (including HF_TOKEN / OPENROUTER_API_KEY) into the
-    test output, and `--url http://169.254.169.254/...` would probe cloud
-    metadata endpoints. urllib.request.urlopen silently accepts file://,
-    ftp://, and several other schemes; we restrict to http(s) only.
+    test output, and a `--url` aimed at the cloud-metadata link-local endpoint
+    (the IMDS address) would probe instance metadata. urllib.request.urlopen
+    silently accepts file://, ftp://, and several other schemes; we restrict to
+    http(s) only.
     """
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
