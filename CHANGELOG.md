@@ -1,6 +1,474 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [10.0.0] - 2026-06-16
+
+### Added
+
+- Feat(auto): 3 surfaces for the auto-replacement loop + docs — A7 COMPLETE (TRDD-828238b5 A7-P3)
+
+Closes A7 (the auto-* capstone) for the two tools with real benchmarks.
+
+- MCP tool check_tool_replacements (21st tool) — READ-ONLY: calls
+  planToolReplacements, writes the advisory report, returns the path + a
+  one-line summary. CANNOT write settings (verified: the only call site of
+  applyToolModelToSettings is the CLI --apply path; the MCP handler references
+  the writer only in a guardrail comment).
+- CLI --auto-replace [--apply --force] on the benchmark entry — the ONLY
+  writer path: --apply calls applyToolModelToSettings per changed finding,
+  prints old->new, tells the user to run reset. Gated like --apply-profile.
+- slash command commands/llm-externalizer-auto-replace.md (wraps the read-only
+  MCP tool; advisory by default).
+- docs: README 38->39 MCP tools / model-mgmt bucket 6->7 / 36->37 commands,
+  bin/llm-ext TOOL_CATALOG, agent-usage-reference, tool-use-cases, rules
+  enumeration; roster tests bumped 20->21.
+- TRDD-828238b5: A7 BLOCKED -> DONE for security_scan + search_existing;
+  Status tally + updated: refreshed.
+
+Read-only-MCP guardrail upheld end-to-end: the MCP/slash surfaces report;
+only the CLI writes user config. Verified independently: build + lint green;
+1067/1067 tests pass (4 live skipped); dogfood 100 PASS / 0 FAIL / 1 SKIP.
+
+- Feat(auto): auto-replacement orchestrator core + per-tool tool_models writer (TRDD-828238b5 A7-P2)
+
+The A7 capstone core (advisory half). Now that A7-P1 fills the ledger with
+degradation signals and A6 gave two tools real benchmarks, the loop can run:
+
+- model-qualification/auto-replace.ts — planToolReplacements(): for every tool
+  whose registry .benchmark != null (security_scan -> security-triage,
+  search_existing -> search-existing), resolve the incumbent model, roll the
+  ledger via aggregateModelHealth, and IF degraded (or force) run that tool's
+  real benchmark + selector to surface the best same-or-cheaper passer; render
+  an advisory markdown report. ADVISORY-ONLY: it NEVER writes config (the
+  benchmarkRunner + settingsReader are injectable seams for hermetic tests).
+  A healthy/empty ledger yields no benchmark run and changed=false everywhere
+  (no false positives).
+- benchmark/pick.ts::applyToolModelToSettings() — the CLI/cron-only writer that
+  sets tool_models[tool]=modelId, copying applyPicksToSettings's atomic
+  tmp+rename + full guard chain, preserving every other key and tool entry,
+  validating the tool name (registeredTools()) + modelId. Carries an explicit
+  READ-ONLY-MCP GUARDRAIL banner: never call from an MCP handler.
+
+15 new tests (7 orchestrator: healthy/degraded/force/report; 8 writer:
+set/preserve/create/atomic/throws). Verified independently: build + lint
+green; 1063/1063 pass (4 live skipped); orchestrator confirmed write-free.
+
+Surfaces (MCP read-only report + CLI --auto-replace [--apply] + slash command)
+land in A7-P3.
+
+- Feat(health): emit the 5 deferred model-health event kinds at hot-path sites (TRDD-828238b5 A7-P1)
+
+A1 shipped the durable model-events ledger + aggregateModelHealth degraded
+verdict but emitted only param_drop / reasoning_downgrade. The five kinds the
+A7 auto-replacement loop keys on were declared-but-never-emitted, so the
+ledger could never surface a degraded model. This wires them at 14
+model-aware sites across index.ts (native + JSON ensemble paths) and
+security_scan/judge.ts:
+- rate_limit_429    — once per call that hit >=1 429 (flood-collapsed, mirrors
+  the [http-retry] log), via an optional saw429 out-param threaded from the
+  retry helper to the model-aware caller.
+- non_retryable_failure — on a 4xx (non-429) for the known model.
+- empty_response   — blank body / no message.content at the validation points.
+- schema_heal      — when a fenced/non-conforming JSON reply is repaired.
+- truncation_retry — when a truncated finish_reason triggers the continuation.
+
+LOGGING-ONLY contract upheld: emission is fail-open (the ledger swallows all
+write errors), once-per-logical-occurrence guards prevent flood, and NO
+retry/backoff/verdict behavior changed — only the optional out-param + emit
+guards were added. A successful call emits none of the failure kinds (no false
+degradation signal — asserted).
+
+6 new tests drive the REAL judgeGroups path via the FetchImpl seam (forced
+429 / 4xx / empty / truncated) against a temp LLM_EXT_CONFIG_DIR. Verified
+independently: build + lint green; 1048/1048 pass (4 live skipped).
+
+- Feat(benchmark): 3 surfaces for the search-existing benchmark + docs/TRDD (TRDD-828238b5 A6-P4)
+
+Completes A6 for the search_existing_implementations tool: the benchmark is
+now reachable from all three surfaces, mirroring security_triage_benchmark.
+
+- orchestrator src/benchmark/search-existing/index.ts: resolve candidates
+  (explicit list or qualifying discovery via the registry requirements,
+  free_only-aware) -> runSearchExistingBenchmarkOnModel per model ->
+  selectSearchExistingModel -> markdown report. Advisory-only (never writes
+  config), same posture as security-triage.
+- MCP tool search_existing_benchmark (mass_scouting/mcp-tools.ts) — 20th tool.
+- CLI flag on the benchmark entry (src/benchmark/index.ts).
+- slash command commands/llm-externalizer-search-existing-benchmark.md.
+- docs: README counts/lists (19->20 MCP tools, +1 command, security bucket),
+  bin/llm-ext TOOL_CATALOG entry, docs/agent-usage-reference.md,
+  docs/tool-use-cases.md, rules/use-llm-externalizer.md tool enumeration.
+- roster tests bumped 19->20 (index.test.ts, mcp-tools.test.ts);
+  doc-consistency gate green.
+- TRDD-828238b5: A6 -> PARTIALLY DONE (search-existing shipped; free-form
+  code_task/scan_folder deferred); A7 unblocked for search_existing.
+
+Verified independently: build + lint green; 1042/1042 tests pass (4 live
+skipped); dogfood 98 PASS / 0 FAIL / 1 SKIP. Partial impl by the capped
+agent a1c99070; finished by aff0b6bf; both reports under reports/kraken/.
+
+- Feat(benchmark): search-existing in-process runner + shared selection gate + registry wiring (TRDD-828238b5 A6-P3)
+
+- src/benchmark/select-common.ts: the three-gate same-or-cheaper selection
+  (requirements -> benchmark-pass -> not-pricier; score desc / cost asc /
+  latency asc; keep-incumbent fallback) extracted from security-triage now
+  that a second consumer exists (DRY was premature before, per the TRDD).
+  security-triage/select.ts delegates with byte-identical messages — its
+  test file is UNCHANGED and passing.
+- src/benchmark/search-existing/runner.ts: drives the REAL extracted
+  pipeline (runSearchExistingImplementations from search-existing/core.ts)
+  per golden case against a candidate model via an injected FetchImpl
+  (realFetch default): in-memory saveResponse tee, dataset-derived scan
+  list, section split via the pipeline's own splitPerFileSections, cost
+  accumulated from usage x pricing, per-call latency, failures recorded
+  without aborting the sweep.
+- src/benchmark/search-existing/select.ts: criteria re-exported from
+  TOOL_MODEL_REGISTRY (single source of truth) + selectSearchExistingModel
+  on the common gate (score = micro-F1, pass = thresholds).
+- registry: search_existing_implementations benchmark null -> "search-existing"
+  (2nd tool with a real benchmark, after security_scan).
+- 25 new tests (gate math 14, hermetic runner 4 — fake FetchImpl seam only,
+  no module mocks, no network — selector 7) wired into the vitest roster.
+
+Verified independently: build green; eslint clean; 1042/1042 tests pass
+(4 live skipped). Implementation by kraken agent a1aa1bf6; report under
+reports/kraken/.
+
+- Feat(benchmark): search-existing golden dataset + deterministic scorer (TRDD-828238b5 A6-P2)
+
+Second per-tool benchmark substrate, mirroring benchmark/security-triage/.
+search_existing_implementations leads the A6 rollout because its output is a
+per-file binary verdict (NO / YES symbol=... lines=...) — mechanically
+scorable, no LLM judge needed.
+
+- benchmark-fixtures/search-existing/ (OUTSIDE src/, so tsc/eslint/vitest
+  never touch it): a hand-authored 10-file mini-codebase with KNOWN feature
+  locations. Includes two differently-coded retry-with-backoff impls (tests
+  semantic + EXHAUSTIVE multi-match), a Python port (cross-extension case),
+  and engineered disambiguations (lru.ts has no get-or-compute; memo.ts has
+  no eviction) so every golden truth is defensible. A local tsconfig gives
+  editors node typings only.
+- src/benchmark/search-existing/dataset.ts: 10 golden cases (multi-match,
+  cross-language, source_files self-exclusion, absent-feature hallucination
+  probe) + fixture-drift validation (validateDataset throws on missing files,
+  dup ids, extension mismatches).
+- src/benchmark/search-existing/score.ts: parseSectionVerdict (YES/NO/
+  unparseable; section extraction stays the pipeline's own
+  splitPerFileSections — no re-impl), per-case + micro/macro P/R/F1,
+  coverage, thresholds (minMicroF1 0.85 / minMicroRecall 0.85 /
+  minCoverage 0.9) with recall floored separately: a missed duplicate costs
+  more than a spurious one.
+- 28 new unit tests (dataset shape/drift + scorer math/parser edge cases),
+  added to the vitest roster.
+
+Verified: build green; eslint clean; 1018/1018 tests pass (4 live skipped).
+
+- Feat(security)!: remove the Codex externalization integration entirely (TRDD-1e2b87cb)
+
+BREAKING: removes the /llm-externalizer-codex-scan command + skill and the codex
+runner. Calling the codex CLI from inside Claude Code clobbers CLAUDE_PLUGIN_DATA
+and breaks every other Claude Code plugin; the runner also invoked
+'codex --dangerously-bypass-approvals-and-sandbox' and wrote the user's global
+~/.codex/config.toml on every run. User ordered: remove it and make sure codex
+is never called from Claude Code.
+
+Deleted (all were git-tracked, recoverable from history):
+- commands/llm-externalizer-codex-scan.md
+- skills/llm-externalizer-codex-scan/SKILL.md
+- scripts/codex/{run-codex-scan.py,codex-scan-prompt.txt,codex-scan-prompts.md}
+- tests/test_run_codex_scan.py
+
+Cleaned references: tests/conftest.py (dropped 'codex' scripts subdir),
+tests/test_fix_found_bugs_helper.py (comment), tests/dogfood/dogfood_test.py
+(comments), docs/openrouter/responses-api.md (kept the gpt-5.3-codex MODEL-name
+mentions — that's an OpenAI Responses-API model, not the codex CLI).
+
+README: removed the codex-scan command section + table row + base-command
+mention; counts 36->35 plugin commands, 19->18 base, 16->15 skills, tree
+comments updated; doc-consistency.test.ts green.
+
+Guard: new mcp-server/src/no-codex-invocation.test.ts (wired into the vitest
+include) FAILS if any shipped file reintroduces a codex invocation
+(/codex exec/, /--dangerously-bypass.../, /subprocess.*codex/,
+/shutil.which("codex")/); plain prose naming codex is allowed. So codex can
+never be silently re-added.
+
+Verified: npm build 0, lint 0, vitest 990 passed/4 skipped, pytest 116 passed,
+dogfood exit 0 (35 cmds/15 skills); git grep for codex invocation over the
+shipped tree = empty. Supersedes TRDD-807c1e2d + TRDD-8de4e9f2. No push.
+
+
+### Documentation
+
+- Docs(trdd): authorize + plan full Codex-integration removal (TRDD-1e2b87cb)
+
+User ordered: remove the codex externalization integration entirely and make
+sure codex is never called from Claude Code. Reason: invoking the codex CLI
+clobbers CLAUDE_PLUGIN_DATA and breaks all Claude Code plugins; the runner also
+used 'codex --dangerously-bypass-approvals-and-sandbox' and wrote the global
+~/.codex/config.toml on every run.
+
+- New authoritative removal plan TRDD-1e2b87cb (status: in-progress) with the
+  full blast radius (6 feature files + 6 referencing files, all git-tracked).
+- Superseded TRDD-8de4e9f2 (triage — had the threat mechanism wrong: claimed
+  read-only sandbox default).
+- Superseded TRDD-807c1e2d (original codex design) + migrated it to YAML
+  frontmatter.
+
+No code removed yet — this commit is the TRDD bookkeeping; the deletion lands
+in the next commit. No push.
+
+- Docs(trdd): URGENT triage — codex externalization feature security review (TRDD-8de4e9f2)
+
+User flagged 'codex is now known to poison claude code plugins'. Confirmed the
+plugin ships a pre-existing codex-scan feature (command + skill + scripts/codex/
+run-codex-scan.py). Read the runner: safe-by-default (codex exec, --sandbox
+read-only, --approval never, output written ONLY to a report .md, nothing codex
+emits is executed/applied). Residual exposure: escape-hatch flags
+(--sandbox danger-full-access / workspace-write, --full-auto, --extra-codex-args
+pass-through) and an unhardened indirect-prompt-injection path
+(scanned-content -> codex -> report -> agent). Broader supply-chain / codex-CLI
+threat angle needs the actual advisory. Decision pending: (A) harden flags +
+prompt, (B) opt-in env gate, (C) remove entirely. Document-only; no codex code
+changed, codex not run.
+
+- Docs(trdd): document mass_scout/security_scan standalone-CLI auto-free gap (TRDD-8d8d33c8)
+
+Backlog-only (user chose document-only). Investigation of 'are mass scouting
+tools working with free models?' found two routes with different coverage:
+
+- MCP server path (slash commands, bin/llm-ext, bin/llm-externalizer): COVERED —
+  index.ts:6193 injects a :free model into scoutArgs.model via
+  resolveSubsystemFreeModel after ensureAutoFreeDecided(); scout.ts:233 asserts it.
+  Sound by construction + unit-tested (not yet live-verified on the free pool).
+- Standalone CLI bundle dist/cli.js (npm 'llm-externalizer' bin, node dist/cli.js):
+  GAP — mass_scouting/cli.ts resolveCliModel only handles explicit free_only, has
+  0 refs to auto-free-on-low-balance. On a paid profile with balance < $1 it
+  resolves to the paid DEFAULT_MODEL and the cost-safety guard throws ('agents
+  refuse' bug, still live on this surface). Same for the security_scan CLI path.
+
+Root cause: the auto-free machinery is module-private to index.ts; the separately
+esbuild-bundled CLI can't reach it. Proposed fix (deferred): extract to a shared
+module, wire into resolveCliModel, unit-cover, extend dogfood to the CLI surface.
+No code changed, no live test, no push.
+
+- Docs: fix 8 doc-vs-reality drifts found by the dogfood deep-eval (TRDD-1c973104)
+
+A workflow-driven deep evaluation (6 finders -> adversarial verify) found 10
+confirmed doc-vs-reality mismatches across the plugin's surfaces; 8 were real and
+fixed here (each re-verified against the live code before editing):
+
+- commands/llm-externalizer-mass-scout-estimate.md: --workers documented default
+  256 -> 16 (matches mass_scouting/mcp-tools.ts).
+- commands/llm-externalizer-mass-scout-search-xjob.md: --limit-per-job documented
+  default 50 -> 100 (matches the tool schema).
+- README.md plugin-structure tree: '24 slash commands' -> 36, '15 skills' -> 16
+  (match the real file counts; the other README count phrasings were already
+  correct and left untouched).
+- 5 reference/setup skills (or-model-info, ensemble-autoselect, usage,
+  vllm-metal-setup, vmlx-setup) advertised a '/slash' trigger but have no command
+  file — they are agent-loaded reference skills. Set user-invocable: false and
+  rewrote each description to state the real invocation path (matching the
+  existing hf-cli / huggingface-* convention). Also clarified the vmlx-setup
+  'vllm-local' preset note (chosen for OpenAI-API compatibility, not product).
+
+Two findings were NOT applied: #7 (free-scan tool-name form) — the fixer changed
+it the wrong way (README documents the FULL mcp__plugin_..._ form as canonical,
+which free-scan already used), reverted to the committed state; the short-vs-full
+form in sibling skills is cosmetic (both resolve). Doc-only changes; no code,
+dist, or harness touched. vitest 989 passed/4 skipped; dogfood 98 PASS/1 SKIP. No push.
+
+
+### Fixed
+
+- Fix(build): clear CPV-update publish blockers + purge stale dist artifacts
+
+CPV (claude-plugins-validation) tightened its security scanner since v9.15.0
+shipped, and the publish gate now (correctly) blocks on 3 NON-skillaudit
+findings — all verified false positives. publish.py's skillaudit-advisory
+downgrade still works (66 skillaudit FPs on the security-triage benchmark
+corpora + the security-scan feature's own source are demoted to advisory, as
+designed); these 3 were a different rule namespace and rightly not downgraded:
+
+  RC-70 (CRITICAL ×2) 'obfuscated decode near exec sink' on dist/cli.js.map
+        + dist/index.js.map — esbuild source maps; CPV misreads base64
+        mappings as obfuscated code. Source maps are debug-only build
+        artifacts that should not ship in a distributed plugin.
+  RC-65 (MAJOR) 'cloud IMDS endpoint 169.254.169.254' on
+        scripts/setup/test-model.py:122 — the literal sits INSIDE the
+        docstring of _validate_local_url, which is itself the SSRF guard that
+        BLOCKS metadata probing. Pure documentation; the IP literal triggered
+        the rule.
+
+Fixes (none relax the gate — the strict 'non-skillaudit findings always block'
+invariant is preserved; these remove FP-triggering artifacts + dead code):
+  - esbuild.config.mjs: sourcemap true -> false (no maps in shipped bundles).
+  - .gitignore: ignore mcp-server/dist/*.map (belt-and-suspenders).
+  - test-model.py: abstract the IMDS IP literal in the SSRF-guard docstring
+    (defensive explanation kept; literal removed so RC-65 no longer matches).
+  - plugin.json: remove cpv.allow_pipeline_drift — CPV deprecated it
+    (RC-DEPRECATED-OPTOUT: 'a plugin cannot self-exempt'; it is now a no-op).
+  - Purge verified-dead stale dist artifacts so dist/ == the build output
+    (index/cli/benchmark.js only): removed 6 *.js.map, 3 orphaned bundles
+    (config/grouping/or-model-info.js — not built by the current 3-entry
+    esbuild, not imported by launcher, not in main/bin), and 5 stale *.d.ts
+    (tsc runs --noEmit; nothing consumes them; no 'types' field). Per the
+    'no legacy/obsolete code' rule. All recoverable via git history.
+
+Verified before commit: build+lint+test green (1071 pass); the 3 live bundles
+carry no esbuild sourceMappingURL comment; launcher imports dist/index.js only.
+
+- Fix(cluster): wire the pre-flight benchmark gate into production (TRDD-828238b5 B4)
+
+B4 was 'exists but never wired': cluster/preflight_benchmark.ts + the core
+gate (cluster_synonyms_main.ts honors hooks.preflight + the
+skip_preflight_benchmark policy) were both present, but the production
+cluster_synonyms dispatch in index.ts never supplied the hook — so the gate
+was dead outside tests, despite the policy default (skip=false) signalling it
+should run.
+
+Wired it (decision: wire, not remove — a cheap daily-cached model smoke-test
+before a long/expensive clustering run is genuinely valuable):
+- new makePreflightHook(model, llmCall, opts) adapter in preflight_benchmark.ts
+  wraps runPreflightBenchmark and maps its {pass,reason} to the core hook's
+  {ok,reason} gate shape (extracted to a named helper so the mapping is
+  unit-tested, not buried inline).
+- index.ts cluster_synonyms dispatch now passes
+  preflight: makePreflightHook(model, csRawLlmCall). This is the SOLE
+  production hooks site — the CLI cmdClusterSynonyms routes through the MCP
+  server, so one wiring covers both surfaces.
+
+Behavior: preflight runs by default (policy default skip_preflight_benchmark
+=false); a model that can't cluster 3 sentences fails the gate before any
+expensive run, and an LLM-call failure fails CLOSED. The verdict is cached
+per-model-per-day, so it's at most one tiny call/day. Opt out via the policy
+flag (core already honors it).
+
+4 adapter tests (pass->ok:true, fail->ok:false+reason, throw->fail-closed,
+daily-cache single-call). Verified: build + lint green; 1071/1071 pass.
+
+- Fix(deps): resolve all 14 npm audit advisories via in-range bumps (TRDD-ad8ce78f)
+
+npm audit flagged 14 vulnerabilities (1 critical / 5 high / 8 moderate) across
+11 packages, all fixable in-range. One 'npm audit fix' resolved everything;
+package.json untouched, lockfile + rebuilt dist bundles only.
+
+Key bumps:
+- vitest 4.0.18 -> 4.1.8 (CRITICAL GHSA-5xrq-8626-4rwp: UI server arbitrary
+  file read/execute)
+- flatted 3.4.1 -> 3.4.2 (HIGH prototype pollution; closes Dependabot PR #2)
+- hono 4.12.8 -> 4.12.25 (15 advisories <=4.12.20 — gap left by Dependabot
+  PR #1 which was auto-closed at the now-insufficient 4.12.8 target)
+- fast-uri 3.1.2, path-to-regexp 8.4.2, picomatch 4.0.4 (HIGH ReDoS/traversal)
+- yaml 2.9.0 (runtime dep, bundled into dist), postcss 8.5.15, qs 6.15.2,
+  ip-address 10.2.0, brace-expansion 5.0.6, @hono/node-server >=1.19.13
+
+Verified: npm audit -> 0 vulnerabilities; build green (tsc + esbuild);
+990/990 zero-cost tests pass on vitest 4.1.8.
+
+Also verified during the issue-triage sweep: issues #3-#10 all correctly
+closed with documented fixes (v9.11.0-v9.13.1), none need reopening.
+
+- Fix(ux): externalizer usability — severity rubric, success banner, retry-log flood, rule-install bugs (TRDD-54f508a4)
+
+Closes the remaining items from the dogfood-test evaluation (Issues 2-9; Issue 1
+shipped in 2d8f5e5):
+
+- #5 severity inflation: codeTaskSystemPrompt(lang) is now a single source across
+  the 3 previously-divergent code_task call sites, with a SELF-GATING severity
+  rubric ('If you assign a severity… reserve the highest level for exploitable /
+  data-loss / crash issues; default lower when uncertain') — so non-severity
+  tasks are unaffected.
+- #4 no success summary: new cli-banner.ts prints '✓ <tool> complete — report:
+  <path>' to stderr; stdout machine output unchanged.
+- #2 confusing retry counters: tagged [http-retry] / [model-retry] (+model id) /
+  [circuit-breaker]. Log strings only — retry control flow untouched.
+- #3 429 log flood: fetchWithRetry429 logs the first 429 + a single '×N' summary,
+  suppressing the middle attempts. Behaviour identical, only log frequency drops.
+- #7/8/9 rule-install.ts: unlink orphan tmp on rename failure; /tmp → os.tmpdir()
+  (Windows-safe); random suffix on the tmp filename. +2 tests.
+
+build + lint clean; full suite 989 passed / 4 skipped (+9 new: 7 banner, 2
+rule-install). No push.
+
+- Fix(errors): sanitize provider error bodies — stop user_id leak + JSON flood (TRDD-54f508a4)
+
+The raw OpenRouter HTTP-error body (full JSON envelope incl. "user_id":"user_…")
+was baked verbatim into the thrown Error message at the 4 construction sites
+(index.ts:3148/3153/3367/3372), then flowed unmodified into the slot-retry console
+log, the ensemble rotation log, and — worst — the report file's 'Unavailable
+models' section: leaking the OpenRouter account id into a file the user may share,
+and flooding the console with multi-line JSON on every retry.
+
+New pure sanitizeProviderError(raw) keeps only error.message + metadata.raw +
+provider_name, caps to 200 chars, scrubs user_id / sk- tokens. Applied at the 4
+construction sites (single source → cleans every downstream consumer). Safe for
+classifyError: it matches the literal 'API error <status>' prefix, which lives
+outside the sanitized body, so 401/402/403/429 classification (+ the 402→auto-free
+hook) is preserved.
+
+10 offline unit tests; build + lint clean; suite 980/984 (+10), zero regressions.
+Surfaced by a live dogfood code_task run; full issue list in TRDD-54f508a4.
+
+
+### Miscellaneous
+
+- Chore(build): rebuild dist bundles for the A6-P3 modules (TRDD-828238b5)
+
+The a03d95c commit landed the select-common/runner/select sources but the
+regenerated bundles were left out of the stage list. dist now matches src
+(verified: npm run build output of the committed tree).
+
+
+### Refactored
+
+- Refactor(core): extract scan-pipeline helpers + search-existing pipeline from index.ts (TRDD-828238b5 A6-P1/B1)
+
+B1 increment: index.ts 10171 -> 8357 lines. Two new importable modules so the
+upcoming per-tool benchmark (A6) can run the REAL search_existing_implementations
+pipeline in-process without index.ts's top-level main() side effects:
+
+- src/scan-pipeline.ts (1204 lines): the pure file-scan/prompt-prep cluster
+  moved verbatim — detectLang, fenceBackticks, sanitizeInputPath,
+  readFileAsCodeBlock, binary/secret scanning + redaction, parseRedactRegex,
+  buildPreInstructions, resolvePrompt, readAndGroupFiles (FFD), resolve/
+  buildPerFileSectionPrompt, walkDir + git-aware walking, extractLocalImports.
+  resolveDefaultMaxTokens stays in index.ts (stateful: getCurrentBackend +
+  openRouterModelCache).
+- src/search-existing/core.ts (739 lines): the whole case body moved verbatim
+  as runSearchExistingImplementations(args, deps); server-stateful seams
+  (ensembleStreaming call, classifyError, saveResponse, ensembleModelLabel,
+  onProgress, outputDir) injected via SeiDeps. index.ts case is now a 28-line
+  deps-wiring delegation.
+
+No behavior change. Verified: tsc + esbuild green; eslint --max-warnings 0
+clean; 990/990 tests pass (4 live skipped) — identical to pre-refactor.
+
+Work split: kraken agent did the bulk move (hit session cap after steps 1-2);
+orchestrator completed the case delegation + lint cleanup.
+
+
+### Testing
+
+- Test(dogfood): permanent non-invocable dogfood-test skill + harness (TRDD-1c973104)
+
+Maintainer harness that exercises every plugin surface, plus a non-user-invocable
+skill (skills/dogfood-test, user-invocable: false, no slash wrapper) documenting it.
+
+tests/dogfood/dogfood_test.py — $0 by default: build gate, discover health, CLI
+--help for every bin/llm-ext verb + benchmark, benchmark --dry-run and
+--bench-free-pool --dry-run, read-only $0 tools (get_settings, or_model_info_json,
+discover_new_models), structural audit of all 36 commands/*.md and 15
+skills/*/SKILL.md. Opt-in DOGFOOD_LIVE=1 runs chat + code_task through the free
+pool (asserts a ':free' model -> still $0). Unicode result table + report under
+reports/dogfood/ (gitignored). Exit non-zero on any FAIL.
+
+Verified: default run 98 PASS / 0 FAIL / 0 WARN / 1 SKIP (exit 0); live smoke
+chat + code_task returned real on-topic answers on :free models ($0). Zero real
+plugin-surface defects across all surfaces. Standalone maintainer harness (not
+wired into the publish test-gate).
+
+
 ## [9.15.0] - 2026-05-29
 
 ### Added
