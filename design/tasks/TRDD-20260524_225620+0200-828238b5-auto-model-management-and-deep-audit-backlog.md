@@ -3,7 +3,7 @@ trdd-id: 828238b5-42d7-478e-8fe7-44d74f812286
 title: Auto-* model management suite + deep-audit findings backlog
 status: in-progress
 created: 2026-05-24T22:56:20+0200
-updated: 2026-06-12T01:26:30+0200
+updated: 2026-06-18T01:22:56+0200
 ---
 
 # TRDD-828238b5 — Auto-* model management suite + deep-audit findings backlog
@@ -345,9 +345,45 @@ FAIL / 1 SKIP.
   Either implement real resume (checkpoint.sqlite exists) or remove the param +
   doc. Silent-overwrite is a data-loss footgun. — **DONE** (implemented real
   resume; [[TRDD-66da2aa7]], commit 8bee08a).
-- **B3 [HIGH] cluster whole-corpus in-memory load** contradicts the documented
-  10k–1M-item streaming contract (`cluster_synonyms_main.ts` / `phase1_batch.ts`).
-  Stream from the JSONL + checkpoint instead of loading all items.
+- **B3 [HIGH→RE-SCOPED] cluster whole-corpus in-memory load** — original finding:
+  "in-memory load contradicts the documented 10k–1M streaming contract; stream
+  from the JSONL + checkpoint instead." **2026-06-18 source re-verification found
+  the original fix MIS-TARGETED — do NOT implement "stream from the JSONL" as
+  written, it would not unlock 1M-item runs.** Facts (all VERIFIED from source):
+  - The corpus IS held in memory, multiple times: `runClusterSynonyms`
+    (`cluster_synonyms_main.ts:302`) drains the JSONL into `items[]` via
+    `readClusterJsonl` (`jsonl.ts:93-97`), then builds `itemsById` Map (`:309`),
+    `uf.add` over all ids (`:347-348`), and `partition` over all ids (`:396`).
+  - BUT the §3 design contract of [[TRDD-220ea89f]] (line 79) explicitly SANCTIONS
+    the row accumulator: "no full-file load; 1M items at ~50 chars ≈ 50 MB on disk,
+    ~50 MB in memory after row parsing — acceptable." The code already streams the
+    FILE (no `readFileSync` blob; `streamJsonl` = `createReadStream`+`readline`).
+    So "stream from the JSONL" targets the ONE part the design already accepted.
+  - That §3 math is INCOMPLETE: it counts only parsed rows. The real high-N
+    consumer is the **embeddings bundle** — `compute_embeddings:true` by default
+    (`policy.ts:19`, model `all-MiniLM-L6-v2` 384-dim, `:18`), computed for ALL
+    items at once (`:330-334`) and passed to phase1/phase2 (`:355`,`:376`). Est.
+    1M × 384 × 4 B ≈ **1.5 GB** (arithmetic), plus uf+partition+itemsById (~300 MB)
+    → ~2 GB on the default path, beyond a typical Node heap. The true default-path
+    ceiling is embeddings-dominated, order-of-100k not 1M (UNMEASURED — needs a
+    growth-curve run to pin the OOM point).
+  - Net: streaming the JSONL saves the ~50 MB the contract already accepted and
+    leaves the GB-scale embeddings/uf/partition materialized. Real 1M streaming
+    needs out-of-core embeddings + disk-backed union-find/partition — a LARGE,
+    multi-session rewrite with real clustering-correctness risk, NOT scoped by the
+    §3 contract (which only addressed the file read).
+  - **Re-scoped options (PRODUCT-DIRECTION DECISION — pending USER):**
+    **(B)** near-term, low-risk: add a fail-fast guard that estimates the in-memory
+    footprint (items + embeddings@dim + uf/partition) and EXITS with a clear,
+    actionable error above a measured ceiling (honors the hard fail-fast rule;
+    today a 1M run silently OOMs mid-flight AFTER spending phase-2/3 LLM budget),
+    and correct the tool description's unbacked "10k–1M" (`index.ts:4840`) to the
+    real tested ceiling. **(A)** full out-of-core/streaming rewrite to actually
+    honor the 1M contract (embeddings mmap/disk-backed, disk-backed uf/partition).
+    Recommendation: **B** unless real million-item runs are required — A is the
+    speculative capability ("don't build for imaginary scenarios"); B fixes the
+    silent-failure footgun now. The "stream from the JSONL" phrasing of the
+    original finding is RETIRED (mis-diagnosed). Decision belongs to the user.
 - **B4 [MEDIUM] cluster preflight benchmark never wired** into the entry path
   (`cluster/preflight_benchmark.ts` exists, unused). Wire it or remove.
   — **DONE (wired)** 2026-06-12. The MCP `cluster_synonyms` dispatch (the sole
