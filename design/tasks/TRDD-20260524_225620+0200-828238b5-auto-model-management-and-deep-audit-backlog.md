@@ -3,7 +3,7 @@ trdd-id: 828238b5-42d7-478e-8fe7-44d74f812286
 title: Auto-* model management suite + deep-audit findings backlog
 status: in-progress
 created: 2026-05-24T22:56:20+0200
-updated: 2026-06-18T02:40:21+0200
+updated: 2026-06-18T05:29:48+0200
 ---
 
 # TRDD-828238b5 — Auto-* model management suite + deep-audit findings backlog
@@ -485,11 +485,36 @@ folder, per RULE 0.
 
 ## Part F — Test-coverage gaps (from scripts-tests audit)
 
-10 TS source modules + 14 Python scripts lack a matching test. Full list is in
-`reports/deep-audit/20260524_221551+0200-scripts-tests.md`. When implementing any
-A1–A7 item, add real tests for the touched modules (no mocks of the unit under
-test, per project rule). Prioritize tests for: the new drift/new-arrivals
-modules, the de-hardcoded catalog lookups, and the build-snippet.py fixes (D1).
+**Re-audited 2026-06-18** — the original "10 TS + 14 Python" figure and the
+ephemeral `reports/deep-audit/…scripts-tests.md` are STALE: the D1–D6 work already
+added `test_build_snippet` / `test_detect_runners` / `test_benchmark_models` /
+`test_fix_found_bugs_helper` / `test_statusline`, and the codebase grew. Fresh
+sweep (co-located `*.test.ts` for TS; `tests/test_*.py` for Python):
+
+- **TS** (`mcp-server/src`): 31 of 77 modules lack a sibling test, but ~11 are
+  non-candidates — `benchmark/fixtures/file-0*.ts` (5 test fixtures), pure-type
+  files (`cluster/types.ts`, `security_scan/types.ts`), and thin CLI entry
+  wrappers (`cli.ts`, `cluster/cli.ts`, `benchmark/index.ts`, `cli-banner.ts`).
+  **Genuine candidates (~20):** the `security_scan/*` logic modules (concurrency,
+  intake, judge, openrouter, prompt, report, security_scan_main), `benchmark/*`
+  (discover, ground-truth, report, runner, score, search-existing/index,
+  security-triage/index+runner), `doc-inventory.ts`, `scan-pipeline.ts`,
+  `search-existing/core.ts`, plus borderline `cluster/policy.ts` (resolvePolicy).
+  Several may already be integration-/benchmark-covered — confirm per-module
+  before writing (the D2 lesson: verify the gap is real first).
+- **Python** (`scripts/`): 20 scripts, 11 test files. The 3 `diagnostics/*`
+  scripts ARE covered (`test_diagnostics.py`); `publish.py` is partially covered
+  (`test_publish_cpv_skillaudit` + `test_publish_idempotent`). **Genuine
+  candidates:** `check_references.py`, `join_fixer_reports.py`, `setup.py`,
+  `setup/recommend-models.py`, `setup/test-model.py` (has the SSRF
+  `_validate_local_url` guard — worth a unit test), `validate_fixer_summary.py`,
+  `validate_report.py`, possibly `install_statusline.py`.
+  (`setup/vllm-cuda-autoconfig.py` is the orphaned Part-E item — wire or remove,
+  don't backfill tests for dead code.)
+
+Rule when adding tests: real tests only, NO mocks of the unit under test. This is
+a CANDIDATE list, not a committed work order — writing the suite is a phased
+effort (touches >5 files) that needs prioritization, not an unattended task.
 
 ---
 
