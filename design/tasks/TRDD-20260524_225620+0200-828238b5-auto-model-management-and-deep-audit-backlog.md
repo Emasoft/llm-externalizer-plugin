@@ -3,7 +3,7 @@ trdd-id: 828238b5-42d7-478e-8fe7-44d74f812286
 title: Auto-* model management suite + deep-audit findings backlog
 status: in-progress
 created: 2026-05-24T22:56:20+0200
-updated: 2026-06-18T01:22:56+0200
+updated: 2026-06-18T02:40:21+0200
 ---
 
 # TRDD-828238b5 — Auto-* model management suite + deep-audit findings backlog
@@ -423,6 +423,15 @@ These are robustness/correctness defects in live Python helpers. Where a
 function's docstring PROMISES "never raise / return error dict" (batch-loop
 resilience), honoring that contract is correct and is NOT a fail-fast violation.
 Where there is no such contract, prefer fail-fast.
+
+**STATUS — ALL DONE (2026-06-18 verified).** D1–D6 were fully remediated under
+[[TRDD-6e859d3c]] (honor-contract + TDD) and merely never marked here: D1
+`f64b342`, D2 `d514220`, D3 `dc56d71`, D4 `4678a8a`, D5 `52563d0`, D6 `5512072`,
+docs-align `53babb6`. Verified this session by READING the source for D2
+(`_bench_helpers.py` now uses `.get(...)` defaults end-to-end with explicit
+batch-resilience comments + dedicated guards in `tests/test_bench_helpers.py`)
+and corroborating D1/D3/D4/D5/D6 via their per-item fix commits + the remediation
+TRDD. The per-item findings below are retained as history.
 
 - **D1 `scripts/setup/build-snippet.py` (LIVE — setup-agent uses it):**
   `_yaml_dquote` rejects `\n`/`\r` as control chars BEFORE the `.replace("\n","\\n")`
