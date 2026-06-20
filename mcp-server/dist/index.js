@@ -51386,6 +51386,31 @@ function makePreflightHook(profileFingerprint, llmCall, opts = {}) {
   };
 }
 
+// src/request-overrides.ts
+var MODEL_REQUEST_OVERRIDES = {
+  // NVIDIA Nemotron 3 Super 120B (free tier). NVIDIA's documented sampling
+  // recommendation: temperature=1.0, top_p=0.95. The earlier empty-response
+  // failures were caused by our ensemble default of temperature=0.1, which is
+  // far below what this model tolerates — the sampling floor collapsed the
+  // output distribution to empty on large inputs. OpenRouter reports
+  // supports_reasoning=true for this model, so the reasoning.effort field from
+  // the ladder is still sent and translated to the vLLM enable_thinking flag
+  // internally.
+  "nvidia/nemotron-3-super-120b-a12b:free": {
+    temperature: 1,
+    top_p: 0.95
+  }
+};
+function applyModelOverrides(body, modelId) {
+  if (!modelId) return body;
+  const override = MODEL_REQUEST_OVERRIDES[modelId];
+  if (!override) return body;
+  const out = { ...body };
+  if (override.temperature !== void 0) out.temperature = override.temperature;
+  if (override.top_p !== void 0) out.top_p = override.top_p;
+  return out;
+}
+
 // src/index.ts
 import { fileURLToPath as fileUrlToPath_cs } from "node:url";
 
@@ -52286,29 +52311,6 @@ ${wire}
 `
     );
   }
-}
-var MODEL_REQUEST_OVERRIDES = {
-  // NVIDIA Nemotron 3 Super 120B (free tier). NVIDIA's documented
-  // sampling recommendation: temperature=1.0, top_p=0.95. The earlier
-  // empty-response failures were caused by our ensemble default of
-  // temperature=0.1, which is far below what this model tolerates —
-  // the sampling floor collapsed the output distribution to empty on
-  // large inputs. OpenRouter reports supports_reasoning=true for this
-  // model, so the reasoning.effort field from the ladder is still
-  // sent and translated to the vLLM enable_thinking flag internally.
-  "nvidia/nemotron-3-super-120b-a12b:free": {
-    temperature: 1,
-    top_p: 0.95
-  }
-};
-function applyModelOverrides(body, modelId) {
-  if (!modelId) return body;
-  const override = MODEL_REQUEST_OVERRIDES[modelId];
-  if (!override) return body;
-  const out = { ...body };
-  if (override.temperature !== void 0) out.temperature = override.temperature;
-  if (override.top_p !== void 0) out.top_p = override.top_p;
-  return out;
 }
 var MODEL_SUPPORTED_PARAMS = /* @__PURE__ */ new Map();
 var modelSupportedParamsCacheTime = 0;

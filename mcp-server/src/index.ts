@@ -57,6 +57,7 @@ import {
 } from "./cluster/cluster_synonyms_main.js";
 import type { Phase1RawLlmCall } from "./cluster/phase1_batch.js";
 import { makePreflightHook } from "./cluster/preflight_benchmark.js";
+import { applyModelOverrides } from "./request-overrides.js";
 import { fileURLToPath as fileUrlToPath_cs } from "node:url";
 
 // ── File reading / grouping / scanning helpers ───────────────────────
@@ -352,58 +353,9 @@ function dumpRequestBody(body: Record<string, unknown>, model: string | undefine
 }
 
 // ── Per-model request body overrides ────────────────────────────────
-// Some models need sampling parameters that differ from our defaults.
-// This registry keeps the model-specific knobs out of the main code
-// paths — every entry is optional and unset fields fall back to the
-// caller's defaults.
-//
-// IMPORTANT — what OpenRouter can and can't forward:
-//   There is NO generic pass-through for vendor-specific parameters in
-//   either /chat/completions or /responses. Both `provider` objects
-//   have fixed schemas. OpenRouter only forwards known vendor fields
-//   (safe_prompt for Mistral, raw_mode for Hyperbolic, etc.) that are
-//   explicitly mapped in its routing layer. Sending unknown top-level
-//   fields like vLLM's `chat_template_kwargs` results in them being
-//   silently dropped. See docs/openrouter/chat-completions-api.md and
-//   docs/openrouter/responses-api.md for the raw OpenAPI specs.
-//
-//   For models that need thinking enabled, the only supported path is
-//   `reasoning.effort` — OpenRouter's internal routing translates this
-//   into whatever provider-specific flag the backend expects, based on
-//   the model's `supports_reasoning` metadata. Our ladder sends this
-//   automatically.
-interface ModelRequestOverrides {
-  temperature?: number;
-  top_p?: number;
-}
-
-const MODEL_REQUEST_OVERRIDES: Record<string, ModelRequestOverrides> = {
-  // NVIDIA Nemotron 3 Super 120B (free tier). NVIDIA's documented
-  // sampling recommendation: temperature=1.0, top_p=0.95. The earlier
-  // empty-response failures were caused by our ensemble default of
-  // temperature=0.1, which is far below what this model tolerates —
-  // the sampling floor collapsed the output distribution to empty on
-  // large inputs. OpenRouter reports supports_reasoning=true for this
-  // model, so the reasoning.effort field from the ladder is still
-  // sent and translated to the vLLM enable_thinking flag internally.
-  "nvidia/nemotron-3-super-120b-a12b:free": {
-    temperature: 1.0,
-    top_p: 0.95,
-  },
-};
-
-function applyModelOverrides(
-  body: Record<string, unknown>,
-  modelId: string | undefined,
-): Record<string, unknown> {
-  if (!modelId) return body;
-  const override = MODEL_REQUEST_OVERRIDES[modelId];
-  if (!override) return body;
-  const out = { ...body };
-  if (override.temperature !== undefined) out.temperature = override.temperature;
-  if (override.top_p !== undefined) out.top_p = override.top_p;
-  return out;
-}
+// Moved to ./request-overrides.ts (B1 Phase 1, TRDD-63314265) — pure, so it
+// imports without index.ts's main()-on-import side effect. `applyModelOverrides`
+// is imported at the top; the table + its rationale live in that module.
 
 // ── Dynamic per-model supported_parameters filter ────────────────────
 // OpenRouter's /v1/models endpoint reports each model's

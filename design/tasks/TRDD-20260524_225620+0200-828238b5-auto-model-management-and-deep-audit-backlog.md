@@ -3,7 +3,7 @@ trdd-id: 828238b5-42d7-478e-8fe7-44d74f812286
 title: Auto-* model management suite + deep-audit findings backlog
 status: in-progress
 created: 2026-05-24T22:56:20+0200
-updated: 2026-06-20T19:50:00+0200
+updated: 2026-06-20T20:00:00+0200
 ---
 
 # TRDD-828238b5 — Auto-* model management suite + deep-audit findings backlog
@@ -334,12 +334,22 @@ FAIL / 1 SKIP.
 
 ## Part B — Architectural findings (from the code-audit swarm)
 
-- **B1 [MAJOR] index.ts is 9599 lines** — single-file monolith holding server
+- **B1 [MAJOR] index.ts monolith** — single-file monolith holding server
   entry + buildTools() + the full dispatch switch + all runtime mitigation. Split
   along natural boundaries (rate-limiter, retry/backoff, model-param filtering,
   reasoning ladder, tool dispatch, OpenRouter client) into modules. Large, risky;
-  do incrementally with the 801-test suite as the guard. Pre-req that makes A1–A7
+  do incrementally with the test suite as the guard. Pre-req that makes A1–A7
   edits to index.ts safer.
+  — **DEDICATED PLAN + Phase 1 (2026-06-20): see [[TRDD-63314265]].** index.ts is
+  now **8457 lines** (the "9599" was stale — the A6 search-existing extraction
+  already shrank it). A deep investigation found NO clean co-located block for a
+  quick safe extraction (every candidate is tiny+scattered+interleaved OR
+  large+heavily-coupled), so the boundaries/deps/phase-order are mapped in
+  TRDD-63314265. **Phase 1 DONE:** extracted the PURE `request-overrides` helper
+  (`applyModelOverrides` + table) to `mcp-server/src/request-overrides.ts` + 5
+  unit tests; build+1138 tests+lint green. Phases 2-5 (incl. the dispatch-core
+  extraction that UNBLOCKS A6) are gated behind phased execution + review per the
+  global multi-file-refactor directive.
 - **B2 [HIGH] cluster resume is a half-wired stub** that silently overwrites
   outputs (`cluster/` — `resume_from` accepted but not honored end-to-end).
   Either implement real resume (checkpoint.sqlite exists) or remove the param +

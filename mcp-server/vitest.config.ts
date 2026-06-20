@@ -31,6 +31,8 @@ export default defineConfig({
       'src/ensemble-limits.test.ts',
       // Reasoning-effort cost guard — default "high", per-call "off" opt-out (ec45c66f).
       'src/reasoning-ladder.test.ts',
+      // Per-model request body overrides — extracted from index.ts (B1 Phase 1, TRDD-63314265).
+      'src/request-overrides.test.ts',
       // Free-only switch — config core + context-floor filter (TRDD-8b6b3646).
       'src/free-only.test.ts',
       // Free-pool auto-bench trigger — fire-and-forget detached child (TRDD-f1510055).
