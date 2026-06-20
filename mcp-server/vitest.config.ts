@@ -129,6 +129,11 @@ export default defineConfig({
       // seam only, real rateLimitedParallel + real report assembly). No network,
       // no module mocking (B1 Phase 3, TRDD-63314265).
       'src/benchmark/scan-folder/runner.test.ts',
+      // code_task in-process pipeline core — HERMETIC (fake processFileCheck +
+      // ensembleStreaming seams only, real readAndGroupFiles + grouping + report
+      // assembly). Covers single/inline/batch modes. No network, no module
+      // mocking (B1 Phase 3, TRDD-63314265).
+      'src/benchmark/code-task/runner.test.ts',
       // Per-tool model-qualification registry (TRDD-f45eeaa0 framework core).
       'src/model-qualification/registry.test.ts',
       // Cross-tool model assessment (requirements half of the per-tool gate).

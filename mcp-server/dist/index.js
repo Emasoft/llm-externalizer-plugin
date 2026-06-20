@@ -52451,6 +52451,301 @@ ${content}`);
   };
 }
 
+// src/code-task/core.ts
+async function runCodeTask(args, deps) {
+  const {
+    instructions: ctInstructions,
+    instructions_files_paths: ctInstructionsFilesPaths,
+    input_files_paths: ctInputPathsRaw,
+    input_files_content: ctInputContent,
+    language,
+    answer_mode: ctRawMode,
+    scan_secrets: ctScan,
+    redact_secrets: ctRedact,
+    max_payload_kb: ctMaxPayloadKb,
+    max_retries: ctMaxRetries,
+    redact_regex: ctRedactRegexRaw,
+    folder_path: ctFolderPath,
+    extensions: ctExtensions,
+    exclude_dirs: ctExcludeDirs,
+    use_gitignore: ctUseGitignore,
+    recursive: ctRecursive,
+    follow_symlinks: ctFollowSymlinks,
+    max_files: ctMaxFiles
+  } = args;
+  const ctUseEnsemble = deps.useEnsemble;
+  const ctBudgetBytes = (ctMaxPayloadKb ?? 400) * 1024;
+  const ctMode = resolveAnswerMode(ctRawMode, 0);
+  const ctTask = resolvePrompt(ctInstructions, ctInstructionsFilesPaths);
+  if (!ctTask.trim()) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: "FAILED: Either instructions or instructions_files_paths must be provided."
+        }
+      ],
+      isError: true
+    };
+  }
+  let ctFilePaths = deps.normalizePaths(ctInputPathsRaw);
+  if (ctFolderPath) {
+    const folderResult = deps.resolveFolderPath(ctFolderPath, {
+      extensions: ctExtensions,
+      excludeDirs: ctExcludeDirs,
+      useGitignore: ctUseGitignore,
+      recursive: ctRecursive,
+      followSymlinks: ctFollowSymlinks,
+      maxFiles: ctMaxFiles
+    });
+    if (folderResult.error && folderResult.files.length === 0 && ctFilePaths.length === 0) {
+      return { content: [{ type: "text", text: `FAILED: ${folderResult.error}` }], isError: true };
+    }
+    ctFilePaths = [...ctFilePaths, ...folderResult.files];
+  }
+  let ctRegexRedact;
+  try {
+    ctRegexRedact = parseRedactRegex(ctRedactRegexRaw);
+  } catch (err3) {
+    return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
+  }
+  if (ctScan && !ctRedact) {
+    const ctRealFiles = ctFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
+    if (ctRealFiles.length > 0) {
+      const scanResult = scanFilesForSecrets(ctRealFiles);
+      if (scanResult.found)
+        return {
+          content: [{ type: "text", text: scanResult.report }],
+          isError: true
+        };
+    }
+    if (ctInputContent) {
+      const inlineScan = scanForSecrets(ctInputContent);
+      if (inlineScan.found) {
+        const details = inlineScan.details.map((d) => `  - ${d.label}: ${d.count} occurrence(s)`).join("\n");
+        return {
+          content: [
+            {
+              type: "text",
+              text: `ABORTED: Secrets detected in input_files_content:
+${details}
+
+Remove secrets before sending to remote LLM.`
+            }
+          ],
+          isError: true
+        };
+      }
+    }
+  }
+  if (ctFilePaths.length === 1 && !ctInputContent && !GROUP_HEADER_RE.test(ctFilePaths[0]) && !GROUP_FOOTER_RE.test(ctFilePaths[0])) {
+    const result = await deps.processFileCheck(ctFilePaths[0], ctTask, {
+      language,
+      maxTokens: deps.resolveDefaultMaxTokens(),
+      redact: ctRedact,
+      regexRedact: ctRegexRedact,
+      onProgress: deps.onProgress,
+      ensemble: ctUseEnsemble,
+      maxBytes: ctBudgetBytes,
+      modelOverride: deps.modelOverride
+    });
+    if (!result.success) {
+      return {
+        content: [{ type: "text", text: `FAILED: ${result.error}` }],
+        isError: true
+      };
+    }
+    if (!result.reportPath) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "FAILED: processFileCheck returned success but no report path."
+          }
+        ],
+        isError: true
+      };
+    }
+    return { content: [{ type: "text", text: result.reportPath }] };
+  }
+  const lang = language || "unknown";
+  const ctHasFiles = ctFilePaths.length > 0 || !!ctInputContent;
+  let ctPromptBase = buildPreInstructions(ctHasFiles, "read") + ctTask;
+  if (ctInputContent) {
+    let ctInline = ctInputContent;
+    if (ctRedact) ctInline = redactSecrets2(ctInline).redacted;
+    const fence = fenceBackticks(ctInline);
+    ctPromptBase += `
+
+${fence}${lang}
+${ctInline}
+${fence}`;
+  }
+  if (ctFilePaths.length === 0 && !ctInputContent) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: "FAILED: input_files_paths or input_files_content is required."
+        }
+      ],
+      isError: true
+    };
+  }
+  if (ctFilePaths.length === 0) {
+    const codeMessages = [
+      {
+        role: "system",
+        content: `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.
+RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Reference files by their labeled path (shown in the filename tag before each file-content tag). Be specific and actionable.`
+      },
+      { role: "user", content: ctPromptBase }
+    ];
+    const codeResp = await deps.ensembleStreaming(
+      codeMessages,
+      {
+        temperature: deps.defaultTemperature,
+        maxTokens: deps.resolveDefaultMaxTokens(),
+        onProgress: deps.onProgress,
+        modelOverride: deps.modelOverride
+      },
+      ctUseEnsemble
+    );
+    const codeFooter = deps.formatFooter(codeResp, "code_task");
+    if (codeResp.content.trim().length === 0) {
+      return {
+        content: [
+          { type: "text", text: "FAILED: LLM returned empty response." }
+        ],
+        isError: true
+      };
+    }
+    const savedPath = deps.saveResponse(
+      "code_task",
+      codeResp.content + codeFooter,
+      { model: codeResp.model, task: ctTask },
+      void 0,
+      deps.outputDir
+    );
+    return { content: [{ type: "text", text: savedPath }] };
+  }
+  let ctFileGroups = parseFileGroups(ctFilePaths);
+  let ctEffectivelyGrouped = hasNamedGroups(ctFileGroups);
+  if (ctMode === 1 && !ctEffectivelyGrouped) {
+    const autoGroups = autoGroupByHeuristic(ctFilePaths);
+    if (autoGroups.length > 0) {
+      ctFileGroups = autoGroups;
+      ctEffectivelyGrouped = true;
+    }
+  }
+  const ctAllGroupReports = [];
+  for (const fg of ctFileGroups) {
+    const fgPaths = fg.files;
+    if (fgPaths.length === 0) continue;
+    const fgId = fg.id;
+    if (ctMode === 0 && !ctEffectivelyGrouped) {
+      const ctRetries = ctMaxRetries ?? 1;
+      if (ctRetries > 1) {
+        const rpResult = await deps.robustPerFileProcess(fgPaths, {
+          task: ctTask,
+          maxRetries: ctRetries,
+          language,
+          redact: ctRedact,
+          regexRedact: ctRegexRedact,
+          onProgress: deps.onProgress,
+          ensemble: ctUseEnsemble,
+          budgetBytes: ctBudgetBytes,
+          toolName: "code_task",
+          modelOverride: deps.modelOverride,
+          outputDir: deps.outputDir
+        });
+        const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
+        if (rpResult.failed.length > 0) lines.push("", "FAILED:", ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
+        if (rpResult.aborted) lines.push("", `ABORTED: ${rpResult.abortReason}`);
+        return { content: [{ type: "text", text: lines.join("\n") }], isError: rpResult.aborted };
+      }
+      const perFileResults = [];
+      for (const fp of fgPaths) {
+        const result = await deps.processFileCheck(fp, ctTask, {
+          language,
+          maxTokens: deps.resolveDefaultMaxTokens(),
+          redact: ctRedact,
+          regexRedact: ctRegexRedact,
+          onProgress: deps.onProgress,
+          ensemble: ctUseEnsemble,
+          maxBytes: ctBudgetBytes,
+          modelOverride: deps.modelOverride,
+          outputDir: deps.outputDir
+        });
+        perFileResults.push(
+          result.success && result.reportPath ? result.reportPath : `FAILED: ${fp} \u2014 ${result.error}`
+        );
+      }
+      return {
+        content: [{ type: "text", text: perFileResults.join("\n") }]
+      };
+    }
+    const ctPromptBytes = Buffer.byteLength(ctPromptBase, "utf-8") + Buffer.byteLength(deps.codeTaskSystemPrompt(lang), "utf-8");
+    const { groups: ctGroups, autoBatched: ctAutoBatched, skipped: ctSkipped } = readAndGroupFiles(fgPaths, ctPromptBytes, ctRedact, ctBudgetBytes, ctRegexRedact);
+    const ctBatchResults = [];
+    if (ctSkipped.length > 0) {
+      ctBatchResults.push(`SKIPPED (exceeds payload budget): ${ctSkipped.length} file(s)
+${ctSkipped.map((f) => `  - ${f}`).join("\n")}`);
+    }
+    for (let gi = 0; gi < ctGroups.length; gi++) {
+      const group = ctGroups[gi];
+      let userContent = ctPromptBase;
+      for (const fd of group) {
+        userContent += `
+
+${fd.block}`;
+      }
+      const codeMessages = [
+        {
+          role: "system",
+          content: deps.codeTaskSystemPrompt(lang)
+        },
+        { role: "user", content: userContent }
+      ];
+      const codeResp = await deps.ensembleStreaming(
+        codeMessages,
+        { temperature: deps.defaultTemperature, maxTokens: deps.resolveDefaultMaxTokens(), onProgress: deps.onProgress, modelOverride: deps.modelOverride },
+        ctUseEnsemble
+      );
+      const codeFooter = deps.formatFooter(codeResp, "code_task", group[0]?.path);
+      if (codeResp.content.trim().length > 0) {
+        ctBatchResults.push(
+          ctAutoBatched ? `## Batch ${gi + 1}/${ctGroups.length}
+
+Files: ${group.map((fd) => fd.path).join(", ")}
+
+${codeResp.content}${codeFooter}` : codeResp.content + codeFooter
+        );
+      }
+    }
+    if (ctBatchResults.length === 0) continue;
+    const ctFinalContent = ctBatchResults.join("\n\n---\n\n");
+    const ctMergedModel = deps.ensembleModelLabel(ctUseEnsemble);
+    const savedPath = deps.saveResponse(
+      "code_task",
+      ctFinalContent,
+      { model: ctMergedModel, task: ctTask, inputFile: fgPaths[0], groupId: fgId || void 0 },
+      void 0,
+      deps.outputDir
+    );
+    if (ctEffectivelyGrouped) {
+      const labelId = fgId || "auto";
+      ctAllGroupReports.push(`[group:${labelId}] ${savedPath}`);
+    } else {
+      return { content: [{ type: "text", text: savedPath }] };
+    }
+  }
+  if (ctAllGroupReports.length === 0) {
+    return { content: [{ type: "text", text: "FAILED: LLM returned empty response for all groups." }], isError: true };
+  }
+  return { content: [{ type: "text", text: ctAllGroupReports.join("\n") }] };
+}
+
 // src/rule-install.ts
 import {
   existsSync as existsSync13,
@@ -55589,297 +55884,25 @@ ${resp.content}${footer}`
           return { content: [{ type: "text", text: allGroupReports.join("\n") }] };
         }
         case "code_task": {
-          const {
-            instructions: ctInstructions,
-            instructions_files_paths: ctInstructionsFilesPaths,
-            input_files_paths: ctInputPathsRaw,
-            input_files_content: ctInputContent,
-            language,
-            answer_mode: ctRawMode,
-            scan_secrets: ctScan,
-            redact_secrets: ctRedact,
-            max_payload_kb: ctMaxPayloadKb,
-            max_retries: ctMaxRetries,
-            redact_regex: ctRedactRegexRaw,
-            folder_path: ctFolderPath,
-            extensions: ctExtensions,
-            exclude_dirs: ctExcludeDirs,
-            use_gitignore: ctUseGitignore,
-            recursive: ctRecursive,
-            follow_symlinks: ctFollowSymlinks,
-            max_files: ctMaxFiles
-          } = args;
-          const ctUseEnsemble = backend.type === "openrouter";
-          const ctBudgetBytes = (ctMaxPayloadKb ?? 400) * 1024;
-          const ctMode = resolveAnswerMode(ctRawMode, 0);
-          const ctTask = resolvePrompt(ctInstructions, ctInstructionsFilesPaths);
-          if (!ctTask.trim()) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "FAILED: Either instructions or instructions_files_paths must be provided."
-                }
-              ],
-              isError: true
-            };
-          }
-          let ctFilePaths = normalizePaths(ctInputPathsRaw);
-          if (ctFolderPath) {
-            const folderResult = resolveFolderPath(ctFolderPath, {
-              extensions: ctExtensions,
-              excludeDirs: ctExcludeDirs,
-              useGitignore: ctUseGitignore,
-              recursive: ctRecursive,
-              followSymlinks: ctFollowSymlinks,
-              maxFiles: ctMaxFiles
-            });
-            if (folderResult.error && folderResult.files.length === 0 && ctFilePaths.length === 0) {
-              return { content: [{ type: "text", text: `FAILED: ${folderResult.error}` }], isError: true };
-            }
-            ctFilePaths = [...ctFilePaths, ...folderResult.files];
-          }
-          let ctRegexRedact = null;
-          try {
-            ctRegexRedact = parseRedactRegex(ctRedactRegexRaw);
-          } catch (err3) {
-            return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
-          }
-          if (ctScan && !ctRedact) {
-            const ctRealFiles = ctFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
-            if (ctRealFiles.length > 0) {
-              const scanResult = scanFilesForSecrets(ctRealFiles);
-              if (scanResult.found)
-                return {
-                  content: [{ type: "text", text: scanResult.report }],
-                  isError: true
-                };
-            }
-            if (ctInputContent) {
-              const inlineScan = scanForSecrets(ctInputContent);
-              if (inlineScan.found) {
-                const details = inlineScan.details.map((d) => `  - ${d.label}: ${d.count} occurrence(s)`).join("\n");
-                return {
-                  content: [
-                    {
-                      type: "text",
-                      text: `ABORTED: Secrets detected in input_files_content:
-${details}
-
-Remove secrets before sending to remote LLM.`
-                    }
-                  ],
-                  isError: true
-                };
-              }
-            }
-          }
-          if (ctFilePaths.length === 1 && !ctInputContent && !GROUP_HEADER_RE.test(ctFilePaths[0]) && !GROUP_FOOTER_RE.test(ctFilePaths[0])) {
-            const result = await processFileCheck(ctFilePaths[0], ctTask, {
-              language,
-              maxTokens: resolveDefaultMaxTokens(),
-              redact: ctRedact,
-              regexRedact: ctRegexRedact,
-              onProgress,
-              ensemble: ctUseEnsemble,
-              maxBytes: ctBudgetBytes,
-              modelOverride
-            });
-            if (!result.success) {
-              return {
-                content: [{ type: "text", text: `FAILED: ${result.error}` }],
-                isError: true
-              };
-            }
-            if (!result.reportPath) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "FAILED: processFileCheck returned success but no report path."
-                  }
-                ],
-                isError: true
-              };
-            }
-            return { content: [{ type: "text", text: result.reportPath }] };
-          }
-          const lang = language || "unknown";
-          const ctHasFiles = ctFilePaths.length > 0 || !!ctInputContent;
-          let ctPromptBase = buildPreInstructions(ctHasFiles, "read") + ctTask;
-          if (ctInputContent) {
-            let ctInline = ctInputContent;
-            if (ctRedact) ctInline = redactSecrets2(ctInline).redacted;
-            const fence = fenceBackticks(ctInline);
-            ctPromptBase += `
-
-${fence}${lang}
-${ctInline}
-${fence}`;
-          }
-          if (ctFilePaths.length === 0 && !ctInputContent) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "FAILED: input_files_paths or input_files_content is required."
-                }
-              ],
-              isError: true
-            };
-          }
-          if (ctFilePaths.length === 0) {
-            const codeMessages = [
-              {
-                role: "system",
-                content: `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.
-RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Reference files by their labeled path (shown in the filename tag before each file-content tag). Be specific and actionable.`
-              },
-              { role: "user", content: ctPromptBase }
-            ];
-            const codeResp = await ensembleStreaming(
-              codeMessages,
-              {
-                temperature: DEFAULT_TEMPERATURE,
-                maxTokens: resolveDefaultMaxTokens(),
-                onProgress,
-                modelOverride
-              },
-              ctUseEnsemble
-            );
-            const codeFooter = formatFooter(codeResp, "code_task");
-            if (codeResp.content.trim().length === 0) {
-              return {
-                content: [
-                  { type: "text", text: "FAILED: LLM returned empty response." }
-                ],
-                isError: true
-              };
-            }
-            const savedPath = saveResponse(
-              "code_task",
-              codeResp.content + codeFooter,
-              { model: codeResp.model, task: ctTask },
-              void 0,
-              outputDir
-            );
-            return { content: [{ type: "text", text: savedPath }] };
-          }
-          let ctFileGroups = parseFileGroups(ctFilePaths);
-          let ctEffectivelyGrouped = hasNamedGroups(ctFileGroups);
-          if (ctMode === 1 && !ctEffectivelyGrouped) {
-            const autoGroups = autoGroupByHeuristic(ctFilePaths);
-            if (autoGroups.length > 0) {
-              ctFileGroups = autoGroups;
-              ctEffectivelyGrouped = true;
-            }
-          }
-          const ctAllGroupReports = [];
-          for (const fg of ctFileGroups) {
-            const fgPaths = fg.files;
-            if (fgPaths.length === 0) continue;
-            const fgId = fg.id;
-            if (ctMode === 0 && !ctEffectivelyGrouped) {
-              const ctRetries = ctMaxRetries ?? 1;
-              if (ctRetries > 1) {
-                const rpResult = await robustPerFileProcess(fgPaths, {
-                  task: ctTask,
-                  maxRetries: ctRetries,
-                  language,
-                  redact: ctRedact,
-                  regexRedact: ctRegexRedact,
-                  onProgress,
-                  ensemble: ctUseEnsemble,
-                  budgetBytes: ctBudgetBytes,
-                  toolName: "code_task",
-                  modelOverride,
-                  outputDir
-                });
-                const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
-                if (rpResult.failed.length > 0) lines.push("", "FAILED:", ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
-                if (rpResult.aborted) lines.push("", `ABORTED: ${rpResult.abortReason}`);
-                return { content: [{ type: "text", text: lines.join("\n") }], isError: rpResult.aborted };
-              }
-              const perFileResults = [];
-              for (const fp of fgPaths) {
-                const result = await processFileCheck(fp, ctTask, {
-                  language,
-                  maxTokens: resolveDefaultMaxTokens(),
-                  redact: ctRedact,
-                  regexRedact: ctRegexRedact,
-                  onProgress,
-                  ensemble: ctUseEnsemble,
-                  maxBytes: ctBudgetBytes,
-                  modelOverride,
-                  outputDir
-                });
-                perFileResults.push(
-                  result.success && result.reportPath ? result.reportPath : `FAILED: ${fp} \u2014 ${result.error}`
-                );
-              }
-              return {
-                content: [{ type: "text", text: perFileResults.join("\n") }]
-              };
-            }
-            const ctPromptBytes = Buffer.byteLength(ctPromptBase, "utf-8") + Buffer.byteLength(codeTaskSystemPrompt(lang), "utf-8");
-            const { groups: ctGroups, autoBatched: ctAutoBatched, skipped: ctSkipped } = readAndGroupFiles(fgPaths, ctPromptBytes, ctRedact, ctBudgetBytes, ctRegexRedact);
-            const ctBatchResults = [];
-            if (ctSkipped.length > 0) {
-              ctBatchResults.push(`SKIPPED (exceeds payload budget): ${ctSkipped.length} file(s)
-${ctSkipped.map((f) => `  - ${f}`).join("\n")}`);
-            }
-            for (let gi = 0; gi < ctGroups.length; gi++) {
-              const group = ctGroups[gi];
-              let userContent = ctPromptBase;
-              for (const fd of group) {
-                userContent += `
-
-${fd.block}`;
-              }
-              const codeMessages = [
-                {
-                  role: "system",
-                  content: codeTaskSystemPrompt(lang)
-                },
-                { role: "user", content: userContent }
-              ];
-              const codeResp = await ensembleStreaming(
-                codeMessages,
-                { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride },
-                ctUseEnsemble
-              );
-              const codeFooter = formatFooter(codeResp, "code_task", group[0]?.path);
-              if (codeResp.content.trim().length > 0) {
-                ctBatchResults.push(
-                  ctAutoBatched ? `## Batch ${gi + 1}/${ctGroups.length}
-
-Files: ${group.map((fd) => fd.path).join(", ")}
-
-${codeResp.content}${codeFooter}` : codeResp.content + codeFooter
-                );
-              }
-            }
-            if (ctBatchResults.length === 0) continue;
-            const ctFinalContent = ctBatchResults.join("\n\n---\n\n");
-            const ctMergedModel = ensembleModelLabel(ctUseEnsemble);
-            const savedPath = saveResponse(
-              "code_task",
-              ctFinalContent,
-              { model: ctMergedModel, task: ctTask, inputFile: fgPaths[0], groupId: fgId || void 0 },
-              void 0,
-              outputDir
-            );
-            if (ctEffectivelyGrouped) {
-              const labelId = fgId || "auto";
-              ctAllGroupReports.push(`[group:${labelId}] ${savedPath}`);
-            } else {
-              return { content: [{ type: "text", text: savedPath }] };
-            }
-          }
-          if (ctAllGroupReports.length === 0) {
-            return { content: [{ type: "text", text: "FAILED: LLM returned empty response for all groups." }], isError: true };
-          }
-          return { content: [{ type: "text", text: ctAllGroupReports.join("\n") }] };
+          const ctDeps = {
+            useEnsemble: backend.type === "openrouter",
+            defaultTemperature: DEFAULT_TEMPERATURE,
+            normalizePaths,
+            resolveFolderPath,
+            processFileCheck,
+            ensembleStreaming: (messages, options, ensemble) => ensembleStreaming(messages, options, ensemble),
+            formatFooter,
+            saveResponse,
+            robustPerFileProcess,
+            codeTaskSystemPrompt,
+            ensembleModelLabel,
+            resolveDefaultMaxTokens,
+            onProgress,
+            outputDir,
+            modelOverride
+            // honours --free and credit-exhausted auto-fallback
+          };
+          return await runCodeTask(args, ctDeps);
         }
         case "discover": {
           const parts = [];

@@ -97,6 +97,10 @@ import {
   runScanFolder,
   type ScanFolderDeps,
 } from "./scan-folder/core.js";
+import {
+  runCodeTask,
+  type CodeTaskDeps,
+} from "./code-task/core.js";
 
 /**
  * Resolve max output tokens for the current model.
@@ -4223,336 +4227,32 @@ async function dispatchCallToolInner(
       }
 
       case "code_task": {
-        const {
-          instructions: ctInstructions,
-          instructions_files_paths: ctInstructionsFilesPaths,
-          input_files_paths: ctInputPathsRaw,
-          input_files_content: ctInputContent,
-          language,
-          answer_mode: ctRawMode,
-          scan_secrets: ctScan,
-          redact_secrets: ctRedact,
-          max_payload_kb: ctMaxPayloadKb,
-          max_retries: ctMaxRetries,
-          redact_regex: ctRedactRegexRaw,
-          folder_path: ctFolderPath,
-          extensions: ctExtensions,
-          exclude_dirs: ctExcludeDirs,
-          use_gitignore: ctUseGitignore,
-          recursive: ctRecursive,
-          follow_symlinks: ctFollowSymlinks,
-          max_files: ctMaxFiles,
-        } = args as {
-          instructions?: string;
-          instructions_files_paths?: string | string[];
-          input_files_paths?: string | string[];
-          input_files_content?: string;
-          language?: string;
-          answer_mode?: number;
-          scan_secrets?: boolean;
-          redact_secrets?: boolean;
-          max_payload_kb?: number;
-          max_retries?: number;
-          redact_regex?: string;
-          folder_path?: string;
-          extensions?: string[];
-          exclude_dirs?: string[];
-          use_gitignore?: boolean;
-          recursive?: boolean;
-          follow_symlinks?: boolean;
-          max_files?: number;
+        // Pipeline body extracted to code-task/core.ts (B1 Phase 3,
+        // TRDD-63314265), mirroring the scan_folder / search_existing
+        // extractions so the REAL pipeline (BOTH the single/inline path and the
+        // multi-file FFD-batched path) can run in-process from a benchmark
+        // runner; this case only wires the server-stateful deps. processFileCheck
+        // and ensembleStreaming are the per-file-call and multi-model seams;
+        // robustPerFileProcess carries the parallel+retry+circuit-breaker path.
+        const ctDeps: CodeTaskDeps = {
+          useEnsemble: backend.type === "openrouter",
+          defaultTemperature: DEFAULT_TEMPERATURE,
+          normalizePaths,
+          resolveFolderPath,
+          processFileCheck,
+          ensembleStreaming: (messages, options, ensemble) =>
+            ensembleStreaming(messages as ChatMessage[], options, ensemble),
+          formatFooter,
+          saveResponse,
+          robustPerFileProcess,
+          codeTaskSystemPrompt,
+          ensembleModelLabel,
+          resolveDefaultMaxTokens,
+          onProgress,
+          outputDir,
+          modelOverride, // honours --free and credit-exhausted auto-fallback
         };
-        const ctUseEnsemble = backend.type === "openrouter";
-        const ctBudgetBytes = (ctMaxPayloadKb ?? 400) * 1024;
-        const ctMode = resolveAnswerMode(ctRawMode, 0);
-        const ctTask = resolvePrompt(ctInstructions, ctInstructionsFilesPaths);
-        if (!ctTask.trim()) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: "FAILED: Either instructions or instructions_files_paths must be provided.",
-              },
-            ],
-            isError: true,
-          };
-        }
-        // Resolve file paths: folder_path OR input_files_paths (or both)
-        let ctFilePaths = normalizePaths(ctInputPathsRaw);
-        if (ctFolderPath) {
-          const folderResult = resolveFolderPath(ctFolderPath, {
-            extensions: ctExtensions,
-            excludeDirs: ctExcludeDirs,
-            useGitignore: ctUseGitignore,
-            recursive: ctRecursive,
-            followSymlinks: ctFollowSymlinks,
-            maxFiles: ctMaxFiles,
-          });
-          if (folderResult.error && folderResult.files.length === 0 && ctFilePaths.length === 0) {
-            return { content: [{ type: "text", text: `FAILED: ${folderResult.error}` }], isError: true };
-          }
-          ctFilePaths = [...ctFilePaths, ...folderResult.files];
-        }
-
-        // Validate redact_regex upfront
-        let ctRegexRedact: RegexRedactOpts | null = null;
-        try {
-          ctRegexRedact = parseRedactRegex(ctRedactRegexRaw);
-        } catch (err) {
-          return { content: [{ type: "text", text: `FAILED: ${(err as Error).message}` }], isError: true };
-        }
-
-        // scan_secrets: abort if any secrets are found in input files or inline content.
-        // When redact_secrets is also true, skip the abort — downstream redaction handles it.
-        if (ctScan && !ctRedact) {
-          // Filter out group markers before scanning — they are delimiters, not file paths
-          const ctRealFiles = ctFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
-          if (ctRealFiles.length > 0) {
-            const scanResult = scanFilesForSecrets(ctRealFiles);
-            if (scanResult.found)
-              return {
-                content: [{ type: "text", text: scanResult.report }],
-                isError: true,
-              };
-          }
-          if (ctInputContent) {
-            const inlineScan = scanForSecrets(ctInputContent);
-            if (inlineScan.found) {
-              const details = inlineScan.details
-                .map((d) => `  - ${d.label}: ${d.count} occurrence(s)`)
-                .join("\n");
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `ABORTED: Secrets detected in input_files_content:\n${details}\n\nRemove secrets before sending to remote LLM.`,
-                  },
-                ],
-                isError: true,
-              };
-            }
-          }
-        }
-
-        // Single file path — delegate to processFileCheck (existing optimized path)
-        if (ctFilePaths.length === 1 && !ctInputContent && !GROUP_HEADER_RE.test(ctFilePaths[0]) && !GROUP_FOOTER_RE.test(ctFilePaths[0])) {
-          const result = await processFileCheck(ctFilePaths[0], ctTask, {
-            language,
-            maxTokens: resolveDefaultMaxTokens(),
-            redact: ctRedact,
-            regexRedact: ctRegexRedact,
-            onProgress,
-            ensemble: ctUseEnsemble,
-            maxBytes: ctBudgetBytes,
-            modelOverride,
-          });
-          if (!result.success) {
-            return {
-              content: [{ type: "text", text: `FAILED: ${result.error}` }],
-              isError: true,
-            };
-          }
-          if (!result.reportPath) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "FAILED: processFileCheck returned success but no report path.",
-                },
-              ],
-              isError: true,
-            };
-          }
-          return { content: [{ type: "text", text: result.reportPath }] };
-        }
-
-        // Multiple files or inline content — use auto-batching via chat-style approach
-        const lang = language || "unknown";
-        const ctHasFiles = ctFilePaths.length > 0 || !!ctInputContent;
-        let ctPromptBase = buildPreInstructions(ctHasFiles, "read") + ctTask;
-        // Fenced inline content
-        if (ctInputContent) {
-          let ctInline = ctInputContent;
-          if (ctRedact) ctInline = redactSecrets(ctInline).redacted;
-          const fence = fenceBackticks(ctInline);
-          ctPromptBase += `\n\n${fence}${lang}\n${ctInline}\n${fence}`;
-        }
-
-        if (ctFilePaths.length === 0 && !ctInputContent) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: "FAILED: input_files_paths or input_files_content is required.",
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        // No input_files_paths — inline content only (answer_mode irrelevant)
-        if (ctFilePaths.length === 0) {
-          const codeMessages: ChatMessage[] = [
-            {
-              role: "system",
-              content: `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.\nRULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Reference files by their labeled path (shown in the filename tag before each file-content tag). Be specific and actionable.`,
-            },
-            { role: "user", content: ctPromptBase },
-          ];
-          const codeResp = await ensembleStreaming(
-            codeMessages,
-            {
-              temperature: DEFAULT_TEMPERATURE,
-              maxTokens: resolveDefaultMaxTokens(),
-              onProgress,
-              modelOverride,
-            },
-            ctUseEnsemble,
-          );
-          const codeFooter = formatFooter(codeResp, "code_task");
-          if (codeResp.content.trim().length === 0) {
-            return {
-              content: [
-                { type: "text", text: "FAILED: LLM returned empty response." },
-              ],
-              isError: true,
-            };
-          }
-          const savedPath = saveResponse(
-            "code_task",
-            codeResp.content + codeFooter,
-            { model: codeResp.model, task: ctTask },
-            undefined,
-            outputDir,
-          );
-          return { content: [{ type: "text", text: savedPath }] };
-        }
-
-        // ── Group-aware processing ──
-        // answer_mode=1 means "one report per group". See chat handler for
-        // the full rationale. Auto-groups are generated when the caller
-        // asks for mode 1 without supplying ---GROUP:id--- markers.
-        let ctFileGroups = parseFileGroups(ctFilePaths);
-        let ctEffectivelyGrouped = hasNamedGroups(ctFileGroups);
-        if (ctMode === 1 && !ctEffectivelyGrouped) {
-          const autoGroups = autoGroupByHeuristic(ctFilePaths);
-          if (autoGroups.length > 0) {
-            ctFileGroups = autoGroups;
-            ctEffectivelyGrouped = true;
-          }
-        }
-        const ctAllGroupReports: string[] = [];
-
-        for (const fg of ctFileGroups) {
-          const fgPaths = fg.files;
-          if (fgPaths.length === 0) continue;
-          const fgId = fg.id;
-
-          // Mode 0 (non-grouped only): one output per input file
-          if (ctMode === 0 && !ctEffectivelyGrouped) {
-            const ctRetries = ctMaxRetries ?? 1;
-            if (ctRetries > 1) {
-              // Robust path: parallel + retry + circuit breaker
-              const rpResult = await robustPerFileProcess(fgPaths, {
-                task: ctTask, maxRetries: ctRetries, language,
-                redact: ctRedact, regexRedact: ctRegexRedact,
-                onProgress, ensemble: ctUseEnsemble,
-                budgetBytes: ctBudgetBytes, toolName: "code_task",
-                modelOverride, outputDir,
-              });
-              const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
-              if (rpResult.failed.length > 0) lines.push("", "FAILED:", ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
-              if (rpResult.aborted) lines.push("", `ABORTED: ${rpResult.abortReason}`);
-              return { content: [{ type: "text", text: lines.join("\n") }], isError: rpResult.aborted };
-            }
-            // Simple sequential path (max_retries=1, no retry)
-            const perFileResults: string[] = [];
-            for (const fp of fgPaths) {
-              const result = await processFileCheck(fp, ctTask, {
-                language,
-                maxTokens: resolveDefaultMaxTokens(),
-                redact: ctRedact,
-                regexRedact: ctRegexRedact,
-                onProgress,
-                ensemble: ctUseEnsemble,
-                maxBytes: ctBudgetBytes,
-                modelOverride, outputDir,
-              });
-              perFileResults.push(
-                result.success && result.reportPath
-                  ? result.reportPath
-                  : `FAILED: ${fp} — ${result.error}`,
-              );
-            }
-            return {
-              content: [{ type: "text", text: perFileResults.join("\n") }],
-            };
-          }
-
-          // Group files by payload budget for auto-batching
-          const ctPromptBytes =
-            Buffer.byteLength(ctPromptBase, "utf-8") +
-            Buffer.byteLength(codeTaskSystemPrompt(lang), "utf-8");
-          const { groups: ctGroups, autoBatched: ctAutoBatched, skipped: ctSkipped } =
-            readAndGroupFiles(fgPaths, ctPromptBytes, ctRedact, ctBudgetBytes, ctRegexRedact);
-
-          const ctBatchResults: string[] = [];
-          if (ctSkipped.length > 0) {
-            ctBatchResults.push(`SKIPPED (exceeds payload budget): ${ctSkipped.length} file(s)\n${ctSkipped.map((f) => `  - ${f}`).join("\n")}`);
-          }
-          for (let gi = 0; gi < ctGroups.length; gi++) {
-            const group = ctGroups[gi];
-            let userContent = ctPromptBase;
-            for (const fd of group) {
-              userContent += `\n\n${fd.block}`;
-            }
-            const codeMessages: ChatMessage[] = [
-              {
-                role: "system",
-                content: codeTaskSystemPrompt(lang),
-              },
-              { role: "user", content: userContent },
-            ];
-            const codeResp = await ensembleStreaming(
-              codeMessages,
-              { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride },
-              ctUseEnsemble,
-            );
-            const codeFooter = formatFooter(codeResp, "code_task", group[0]?.path);
-            if (codeResp.content.trim().length > 0) {
-              ctBatchResults.push(
-                ctAutoBatched
-                  ? `## Batch ${gi + 1}/${ctGroups.length}\n\nFiles: ${group.map((fd) => fd.path).join(", ")}\n\n${codeResp.content}${codeFooter}`
-                  : codeResp.content + codeFooter,
-              );
-            }
-          }
-
-          // Merge batch results into one report for this group
-          if (ctBatchResults.length === 0) continue;
-          const ctFinalContent = ctBatchResults.join("\n\n---\n\n");
-          const ctMergedModel = ensembleModelLabel(ctUseEnsemble);
-          const savedPath = saveResponse(
-            "code_task",
-            ctFinalContent,
-            { model: ctMergedModel, task: ctTask, inputFile: fgPaths[0], groupId: fgId || undefined },
-            undefined,
-            outputDir,
-          );
-
-          if (ctEffectivelyGrouped) {
-            const labelId = fgId || "auto";
-            ctAllGroupReports.push(`[group:${labelId}] ${savedPath}`);
-          } else {
-            return { content: [{ type: "text", text: savedPath }] };
-          }
-        }
-
-        // Grouped: return all per-group report paths
-        if (ctAllGroupReports.length === 0) {
-          return { content: [{ type: "text", text: "FAILED: LLM returned empty response for all groups." }], isError: true };
-        }
-        return { content: [{ type: "text", text: ctAllGroupReports.join("\n") }] };
+        return await runCodeTask(args as Record<string, unknown>, ctDeps);
       }
 
       case "discover": {

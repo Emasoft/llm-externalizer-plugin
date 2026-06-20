@@ -3,7 +3,7 @@ trdd-id: 828238b5-42d7-478e-8fe7-44d74f812286
 title: Auto-* model management suite + deep-audit findings backlog
 status: in-progress
 created: 2026-05-24T22:56:20+0200
-updated: 2026-06-20T21:30:00+0200
+updated: 2026-06-20T22:39:55+0200
 ---
 
 # TRDD-828238b5 — Auto-* model management suite + deep-audit findings backlog
@@ -162,7 +162,17 @@ this audit kept fixing. NOTE: `publish.py` already regenerates README badges
 - NOT a fake test: it enforces a real invariant (docs match code) by parsing the
   real source declarations, no mocks.
 
-### A6 — [L] Per-tool tailored benchmarks (capability 4, PARTIAL) — PARTIALLY DONE (search-existing shipped 2026-06-10; free-form code_task/scan_folder deferred)
+### A6 — [L] Per-tool tailored benchmarks (capability 4, PARTIAL) — PARTIALLY DONE (search-existing shipped 2026-06-10; code_task/scan_folder UNBLOCKED 2026-06-20 — B1 Phase 3 extracted their cores; now needs golden datasets + scorer)
+
+> **UNBLOCKED 2026-06-20:** B1 Phase 3 ([[TRDD-63314265]]) extracted `runCodeTask`
+> (`code-task/core.ts`) and `runScanFolder` (`scan-folder/core.ts`) as importable,
+> hermetically-testable cores (fake LLM seam, zero index.ts import — they load without
+> `main()`). So a benchmark `runner.ts` can now drive each tool's REAL pipeline in-process,
+> exactly like `benchmark/search-existing/runner.test.ts` does. What REMAINS for A6 is the
+> non-code part the no-fakes rule gates: a REAL hand-curated golden dataset per tool
+> (`dataset.ts`) + a scorer (`score.ts`, likely an LLM-judge for free-form code_task output)
+> + the registry `benchmark` pointer. Do NOT fabricate datasets — that needs the user or a
+> careful curation pass.
 10 of 12 LLM tools have requirements (registry) but no benchmark dataset/scorer
 (the registry header explicitly marks them incremental; `benchmark: null`).
 Only `security_scan` (→ `benchmark/security-triage/`) and the generic keyword
@@ -345,11 +355,14 @@ FAIL / 1 SKIP.
   already shrank it). A deep investigation found NO clean co-located block for a
   quick safe extraction (every candidate is tiny+scattered+interleaved OR
   large+heavily-coupled), so the boundaries/deps/phase-order are mapped in
-  TRDD-63314265. **Phase 1 DONE:** extracted the PURE `request-overrides` helper
-  (`applyModelOverrides` + table) to `mcp-server/src/request-overrides.ts` + 5
-  unit tests; build+1138 tests+lint green. Phases 2-5 (incl. the dispatch-core
-  extraction that UNBLOCKS A6) are gated behind phased execution + review per the
-  global multi-file-refactor directive.
+  TRDD-63314265. **Phases 1/2/2b/4/3 DONE (2026-06-20):** extracted request-overrides
+  (P1) + the whole rate-limiter module (P2/P2b) + tools/definitions `buildTools` (P4) +
+  the `scan-folder` AND `code-task` dispatch cores (P3) — index.ts **8457 → 6587 lines
+  (−1870, ~22% smaller)**, full suite 1196 pass, build+lint green at each step. Both
+  dispatch cores (`runScanFolder`/`runCodeTask`) are hermetically testable (fake LLM
+  seam, real pipeline) and import ZERO from index.ts, so **A6 is now UNBLOCKED**.
+  Remaining: Phase 5 (completion/connection layers) + the deferred P4b ensemble helpers —
+  the two giant blocks (tool-defs 1332 + dispatch 3321) are now BOTH broken up.
 - **B2 [HIGH] cluster resume is a half-wired stub** that silently overwrites
   outputs (`cluster/` — `resume_from` accepted but not honored end-to-end).
   Either implement real resume (checkpoint.sqlite exists) or remove the param +
