@@ -84,6 +84,9 @@ export default defineConfig({
       // Pre-flight in-memory footprint guard (TRDD-828238b5 B3) — fail-fast
       // before any LLM spend when the corpus+embeddings would OOM. Pure math.
       'src/cluster/memory_guard.test.ts',
+      // Cluster policy resolver (resolvePolicy / DEFAULT_POLICY / PolicySchema) —
+      // pure config merge + zod validation (TRDD-828238b5 Part F wave 3).
+      'src/cluster/policy.test.ts',
       // cluster_synonyms CLI surface — wiring test for the new third-surface
       // adapter (runClusterSynonymsCli). Mock rawLlmCall, no network.
       'src/cluster/wiring.test.ts',
@@ -101,12 +104,18 @@ export default defineConfig({
       'src/benchmark/security-triage/select.test.ts',
       // Real-model end-to-end smoke — self-skips unless OPENROUTER_API_KEY is set.
       'src/benchmark/security-triage/live.test.ts',
+      // security-triage casesToGroups — pure cases→DedupGroup transform (Part F wave 3).
+      'src/benchmark/security-triage/runner.test.ts',
       // Shared same-or-cheaper selection gate (TRDD-828238b5 A6) — generic
       // three-gate math reused by every per-tool selector. No LLM, no network.
       'src/benchmark/select-common.test.ts',
       // Benchmark report rendering + ground-truth handling (TRDD-828238b5 Part F).
       'src/benchmark/report.test.ts',
       'src/benchmark/ground-truth.test.ts',
+      // Model-discovery pure logic (filter/disqualify/qualify/roster) + run scorer
+      // (scoreRun) — TRDD-828238b5 Part F wave 3. No network (fetchProgrammingModels excluded).
+      'src/benchmark/discover.test.ts',
+      'src/benchmark/score.test.ts',
       // search-existing per-tool benchmark (TRDD-828238b5 A6) — fixture-backed
       // golden dataset + deterministic precision/recall scorer. No LLM, no network.
       'src/benchmark/search-existing/dataset.test.ts',

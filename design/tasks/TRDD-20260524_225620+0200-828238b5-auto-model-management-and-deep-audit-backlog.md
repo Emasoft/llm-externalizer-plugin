@@ -3,7 +3,7 @@ trdd-id: 828238b5-42d7-478e-8fe7-44d74f812286
 title: Auto-* model management suite + deep-audit findings backlog
 status: in-progress
 created: 2026-05-24T22:56:20+0200
-updated: 2026-06-20T20:00:00+0200
+updated: 2026-06-20T21:30:00+0200
 ---
 
 # TRDD-828238b5 — Auto-* model management suite + deep-audit findings backlog
@@ -580,8 +580,23 @@ their target (transiently edited the source, then restored — orchestrator veri
 both scripts byte-identical to HEAD afterward). Verified: TS test 1133 + lint green;
 Python pytest 187 + ruff green.
 
-**Part F status:** 97 tests this session across 12 confirmed-uncovered modules
-(Wave 1 + Wave 2). The remaining flagged candidate `install_statusline.py` (188 LOC)
+**Wave 3 shipped (2026-06-20) — 31 more TS tests** across 4 genuinely-uncovered
+pure-logic modules (per-module gap re-verified extension-agnostic FIRST — each
+target's exported fns had 0 test-CALL sites, not just 0 imports). Written by 4
+parallel js-test-writer agents (real tests, no mocks of the unit; network fns
+excluded; orchestrator did registration + the full suite + git): `cluster/policy.ts`
+`resolvePolicy`/DEFAULT_POLICY/PolicySchema (8), `benchmark/discover.ts`
+filter/disqualify/qualify/roster (11 — `fetchProgrammingModels` network EXCLUDED),
+`benchmark/score.ts` `scoreRun` (7), `benchmark/security-triage/runner.ts`
+`casesToGroups` (5 — `runTriageBenchmarkOnModel` network EXCLUDED). Verified: TS suite
+1185 pass + lint green. The network-heavy orchestrators that remain
+(`search-existing/core.ts` 740 LOC, the `benchmark/*/index.ts` runners,
+`security_scan/openrouter.ts` fetch wrapper) are DEFERRED — a real unit test needs
+seam injection (à la the search-existing runner test), not unit mocks; do them with
+the user available, not unattended.
+
+**Part F status:** 128 tests this session across 16 confirmed-uncovered modules
+(Waves 1+2+3). The remaining flagged candidate `install_statusline.py` (188 LOC)
 is DEFERRED — it is a side-effecting filesystem installer (writes ~/.claude config)
 with little pure logic; a real test would be mostly fs-mock scaffolding, low value
 per "don't over-engineer". Re-open if its logic grows.
