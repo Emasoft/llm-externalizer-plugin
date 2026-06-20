@@ -3,7 +3,7 @@ trdd-id: 828238b5-42d7-478e-8fe7-44d74f812286
 title: Auto-* model management suite + deep-audit findings backlog
 status: in-progress
 created: 2026-05-24T22:56:20+0200
-updated: 2026-06-20T19:30:00+0200
+updated: 2026-06-20T19:50:00+0200
 ---
 
 # TRDD-828238b5 — Auto-* model management suite + deep-audit findings backlog
@@ -559,10 +559,22 @@ no mocks of the unit; orchestrator did all integration + git):
 - Python: `setup/test-model.py` (10 — incl. the `_validate_local_url` SSRF guard,
   accept + reject sides), `check_references.py` (10), `validate_report.py` (9).
 Verified: TS build + test (1118 pass) + lint green; Python pytest (163 pass) + ruff
-green. Remaining confirmed-uncovered candidates for Wave 2: TS
-`security_scan/report.ts`, `security_scan/concurrency.ts`; Python
-`validate_fixer_summary.py`, `join_fixer_reports.py`, `setup/recommend-models.py`
-(pure core only), `install_statusline.py` (IO-heavy — lower priority).
+green.
+
+**Wave 2 shipped (2026-06-20) — 39 more tests:** TS `security_scan/report.ts` (9),
+`security_scan/concurrency.ts` (6 — bounded-concurrency limit/order/error-propagation
+exercised with real deferred promises); Python `validate_fixer_summary.py` (7),
+`join_fixer_reports.py` (7), `setup/recommend-models.py` (10 — pure ranking /
+hardware-fit core only, not the 2937-LOC whole). Two python agents mutation-tested
+their target (transiently edited the source, then restored — orchestrator verified
+both scripts byte-identical to HEAD afterward). Verified: TS test 1133 + lint green;
+Python pytest 187 + ruff green.
+
+**Part F status:** 97 tests this session across 12 confirmed-uncovered modules
+(Wave 1 + Wave 2). The remaining flagged candidate `install_statusline.py` (188 LOC)
+is DEFERRED — it is a side-effecting filesystem installer (writes ~/.claude config)
+with little pure logic; a real test would be mostly fs-mock scaffolding, low value
+per "don't over-engineer". Re-open if its logic grows.
 
 ---
 

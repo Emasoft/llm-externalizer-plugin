@@ -54,6 +54,9 @@ export default defineConfig({
       // security_scan — dedicated injection-hardened triage tool.
       'src/security_scan/security_scan.test.ts',
       'src/security_scan/wiring.test.ts',
+      // Report rendering + bounded-concurrency primitive (TRDD-828238b5 Part F wave 2).
+      'src/security_scan/report.test.ts',
+      'src/security_scan/concurrency.test.ts',
       // Live smoke (T10) — self-skips via describe.skipIf unless
       // OPENROUTER_API_KEY is set. Default `npm test` reports it skipped.
       'src/security_scan/security_scan_live.test.ts',
