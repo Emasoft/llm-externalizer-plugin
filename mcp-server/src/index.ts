@@ -3463,7 +3463,6 @@ function ensembleModelLabel(useEnsemble: boolean): string {
   return `ensemble: ${models.join(" + ")}`;
 }
 
-/** Build ensemble model list from the active profile's model + second_model + third_model */
 /**
  * Minimum context window (tokens) for a free model to enter the ensemble. A
  * lenient floor that drops only obviously-unusable (tiny-context) free models;
@@ -3605,6 +3604,7 @@ export async function callEnsembleSlotWithRotation(
   }
 }
 
+/** Build ensemble model list from the active profile's model + second_model + third_model */
 function getEnsembleModels(): Array<{
   id: string;
   maxOutput: number;
