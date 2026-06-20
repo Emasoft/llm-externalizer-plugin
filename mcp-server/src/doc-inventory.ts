@@ -17,12 +17,16 @@ export function repoRoot(): string {
 }
 
 /**
- * Core/utility MCP tool names — declared inline in index.ts buildTools()'s
- * `allTools` array, each as a 6-space-indented `name: "x",`. The 6-space anchor
- * excludes the 2-space-indented JSON-schema `name:` fields elsewhere in the file.
+ * Core/utility MCP tool names — declared inline in buildTools()'s `allTools`
+ * array (extracted to tools/definitions.ts in B1 Phase 4, TRDD-63314265),
+ * each as a 6-space-indented `name: "x",`. The 6-space anchor excludes the
+ * 2-space-indented JSON-schema `name:` fields elsewhere in the file.
  */
 export function readCoreToolNames(root: string = repoRoot()): string[] {
-  const src = readFileSync(join(root, "mcp-server", "src", "index.ts"), "utf-8");
+  const src = readFileSync(
+    join(root, "mcp-server", "src", "tools", "definitions.ts"),
+    "utf-8",
+  );
   return matchAll(src, /^ {6}name: "([a-z0-9_]+)",$/gm);
 }
 
