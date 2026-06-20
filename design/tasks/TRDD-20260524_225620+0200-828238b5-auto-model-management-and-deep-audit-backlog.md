@@ -3,7 +3,7 @@ trdd-id: 828238b5-42d7-478e-8fe7-44d74f812286
 title: Auto-* model management suite + deep-audit findings backlog
 status: in-progress
 created: 2026-05-24T22:56:20+0200
-updated: 2026-06-20T19:05:00+0200
+updated: 2026-06-20T19:30:00+0200
 ---
 
 # TRDD-828238b5 — Auto-* model management suite + deep-audit findings backlog
@@ -546,6 +546,23 @@ sweep (co-located `*.test.ts` for TS; `tests/test_*.py` for Python):
 Rule when adding tests: real tests only, NO mocks of the unit under test. This is
 a CANDIDATE list, not a committed work order — writing the suite is a phased
 effort (touches >5 files) that needs prioritization, not an unattended task.
+
+**Wave 1 shipped (2026-06-20) — 58 tests across 6 genuinely-uncovered modules.**
+Per-module gap re-verified FIRST (D2): the original list had false positives — a
+`.js`-suffix-only grep missed extensionless same-dir imports, so
+`security_scan/{prompt,intake,judge,security_scan_main}` are actually COVERED (via
+`security_scan.test.ts` et al.), as is `setup.py` (7 test refs). Confirmed-uncovered
+modules tested by parallel js-test-writer / python-test-writer agents (real tests,
+no mocks of the unit; orchestrator did all integration + git):
+- TS: `scan-pipeline.ts` (14 — FFD bin-packing/batching), `benchmark/report.ts` (8),
+  `benchmark/ground-truth.ts` (7) — registered in vitest.config.ts.
+- Python: `setup/test-model.py` (10 — incl. the `_validate_local_url` SSRF guard,
+  accept + reject sides), `check_references.py` (10), `validate_report.py` (9).
+Verified: TS build + test (1118 pass) + lint green; Python pytest (163 pass) + ruff
+green. Remaining confirmed-uncovered candidates for Wave 2: TS
+`security_scan/report.ts`, `security_scan/concurrency.ts`; Python
+`validate_fixer_summary.py`, `join_fixer_reports.py`, `setup/recommend-models.py`
+(pure core only), `install_statusline.py` (IO-heavy — lower priority).
 
 ---
 

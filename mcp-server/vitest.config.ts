@@ -97,6 +97,9 @@ export default defineConfig({
       // Shared same-or-cheaper selection gate (TRDD-828238b5 A6) — generic
       // three-gate math reused by every per-tool selector. No LLM, no network.
       'src/benchmark/select-common.test.ts',
+      // Benchmark report rendering + ground-truth handling (TRDD-828238b5 Part F).
+      'src/benchmark/report.test.ts',
+      'src/benchmark/ground-truth.test.ts',
       // search-existing per-tool benchmark (TRDD-828238b5 A6) — fixture-backed
       // golden dataset + deterministic precision/recall scorer. No LLM, no network.
       'src/benchmark/search-existing/dataset.test.ts',
@@ -122,6 +125,8 @@ export default defineConfig({
       // Codex-removal guard — shipped tree must never invoke the codex CLI (TRDD-1e2b87cb).
       'src/no-codex-invocation.test.ts',
       'src/default-output-dir.test.ts',
+      // File-walking + FFD bin-packed batching engine (TRDD-828238b5 Part F).
+      'src/scan-pipeline.test.ts',
       'src/cluster/phase2_verify.test.ts',
       'src/cluster/phase3_canonical.test.ts',
     ],
