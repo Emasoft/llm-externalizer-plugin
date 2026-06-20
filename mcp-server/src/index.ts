@@ -58,7 +58,13 @@ import {
 import type { Phase1RawLlmCall } from "./cluster/phase1_batch.js";
 import { makePreflightHook } from "./cluster/preflight_benchmark.js";
 import { applyModelOverrides } from "./request-overrides.js";
-import { AdaptiveRateLimiter } from "./rate-limiter.js";
+import {
+  rateLimitedParallel,
+  signalRateLimitHit,
+  signalSuccess,
+  HEARTBEAT_INTERVAL_MS,
+  type ProgressFn,
+} from "./rate-limiter.js";
 import { fileURLToPath as fileUrlToPath_cs } from "node:url";
 
 // ── File reading / grouping / scanning helpers ───────────────────────
@@ -1864,7 +1870,8 @@ async function chatCompletionNative(
 // long-running LLM calls, preventing the default 60s MCP request timeout.
 // The progressToken comes from request.params._meta?.progressToken.
 
-type ProgressFn = (progress: number, total: number, message?: string) => void;
+// ProgressFn type moved to ./rate-limiter.ts (B1 Phase 2b, TRDD-63314265) —
+// imported above; it lives with the rateLimitedParallel executor that consumes it.
 
 function makeProgressFn(
   progressToken: string | number | undefined,
@@ -2620,85 +2627,21 @@ function classifyError(error: unknown): {
     return { unrecoverable: false, serviceLevel: false, reason: msg };
   // 429 rate limit — signal AIMD to halve RPS
   if (/API error 429\b/.test(msg) || /rate.?limit/i.test(msg)) {
-    if (adaptiveRateLimiter) adaptiveRateLimiter.onRateLimit();
+    signalRateLimitHit();
     return { unrecoverable: false, serviceLevel: false, reason: msg };
   }
   // Everything else is recoverable (timeouts, 5xx, malformed responses)
   return { unrecoverable: false, serviceLevel: false, reason: msg };
 }
 
-// ── Adaptive rate limiter (AIMD) ─────────────────────────────────────
-// The AdaptiveRateLimiter class moved to ./rate-limiter.ts (B1 Phase 2,
-// TRDD-63314265) — self-contained, imports without index.ts's main()-on-import.
-// The module-level singleton + factory stay here so ALL tool calls share state.
-
-// Module-level singleton — shared across all tool calls
-let adaptiveRateLimiter: AdaptiveRateLimiter | null = null;
-
-function getAdaptiveRateLimiter(rps: number): AdaptiveRateLimiter {
-  if (!adaptiveRateLimiter || adaptiveRateLimiter.rps !== rps) {
-    adaptiveRateLimiter = new AdaptiveRateLimiter(rps);
-  }
-  return adaptiveRateLimiter;
-}
-
-// ── Rate-limited parallel executor ───────────────────────────────────
-// Dispatches tasks respecting two independent limits:
-//   1. RPS (rate): max N new tasks started per second (adaptive token bucket)
-//   2. maxInFlight: max N tasks running simultaneously (safety cap)
-// Workers grab the next task, wait for a rate-limit token, then execute.
-// Results are returned in original order.
-//
-// No wall-clock deadline: Claude Code's MCP timeout is an INACTIVITY timeout
-// (no progress for 1800s), not a hard deadline. As long as progress notifications
-// keep flowing, the tool call can run indefinitely. A heartbeat timer sends
-// progress every 30s to keep the connection alive even during slow LLM calls.
-
-const DEFAULT_MAX_IN_FLIGHT = 200;
-const HEARTBEAT_INTERVAL_MS = 30_000; // 30s — well under 1800s inactivity timeout
-
-async function rateLimitedParallel<T>(
-  tasks: (() => Promise<T>)[],
-  rps: number,
-  maxInFlight: number = DEFAULT_MAX_IN_FLIGHT,
-  onProgress?: ProgressFn,
-): Promise<T[]> {
-  if (tasks.length === 0) return [];
-  const results: T[] = new Array(tasks.length);
-  const limiter = getAdaptiveRateLimiter(rps);
-  let nextIndex = 0;
-  let completedCount = 0;
-
-  // Heartbeat: send progress notifications every 30s to prevent inactivity timeout
-  const heartbeat = onProgress
-    ? setInterval(() => {
-        onProgress(completedCount, tasks.length, `Processing: ${completedCount}/${tasks.length} done (${limiter.rps} RPS)`);
-      }, HEARTBEAT_INTERVAL_MS)
-    : null;
-
-  try {
-    async function worker() {
-      while (true) {
-        const i = nextIndex;
-        if (i >= tasks.length) return;
-        nextIndex++;
-        await limiter.acquire();
-        results[i] = await tasks[i]();
-        completedCount++;
-        // Notify on each completion too (supplements heartbeat)
-        if (onProgress) {
-          onProgress(completedCount, tasks.length, `Done: ${completedCount}/${tasks.length}`);
-        }
-      }
-    }
-
-    const workerCount = Math.min(Math.max(1, maxInFlight), tasks.length);
-    await Promise.all(Array.from({ length: workerCount }, () => worker()));
-  } finally {
-    if (heartbeat) clearInterval(heartbeat);
-  }
-  return results;
-}
+// ── Adaptive rate limiter (AIMD) + parallel executor ─────────────────
+// The AIMD limiter class, its shared module-level singleton + factory, the
+// rate-limited parallel executor (rateLimitedParallel), and the ProgressFn
+// type all live in ./rate-limiter.ts (B1 Phase 2b, TRDD-63314265) so ALL
+// rate-limiting is one cohesive module. index.ts imports rateLimitedParallel
+// + ProgressFn (above) and signals the shared singleton via the
+// signalSuccess() / signalRateLimitHit() accessors. The singleton stays a TRUE
+// singleton: it is a single module-level binding inside rate-limiter.ts.
 
 
 // ── Batch helpers ───────────────────────────────────────────────────
@@ -2791,7 +2734,7 @@ async function robustPerFileProcess(
           outputDir: opts.outputDir,
         });
         recentOutcomes.push(result.success);
-        if (result.success && adaptiveRateLimiter) adaptiveRateLimiter.onSuccess();
+        if (result.success) signalSuccess();
         if (opts.onProgress) {
           const completed = recentOutcomes.length;
           opts.onProgress(completed, files.length, `${opts.toolName}: ${completed}/${files.length} files done`);

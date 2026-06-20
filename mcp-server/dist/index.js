@@ -51486,6 +51486,51 @@ var AdaptiveRateLimiter = class {
     this.lastRefill = Date.now();
   }
 };
+var adaptiveRateLimiter = null;
+function getAdaptiveRateLimiter(rps) {
+  if (!adaptiveRateLimiter || adaptiveRateLimiter.rps !== rps) {
+    adaptiveRateLimiter = new AdaptiveRateLimiter(rps);
+  }
+  return adaptiveRateLimiter;
+}
+function signalRateLimitHit() {
+  if (adaptiveRateLimiter) adaptiveRateLimiter.onRateLimit();
+}
+function signalSuccess() {
+  if (adaptiveRateLimiter) adaptiveRateLimiter.onSuccess();
+}
+var DEFAULT_MAX_IN_FLIGHT = 200;
+var HEARTBEAT_INTERVAL_MS = 3e4;
+async function rateLimitedParallel(tasks, rps, maxInFlight = DEFAULT_MAX_IN_FLIGHT, onProgress) {
+  if (tasks.length === 0) return [];
+  const results = new Array(tasks.length);
+  const limiter = getAdaptiveRateLimiter(rps);
+  let nextIndex = 0;
+  let completedCount = 0;
+  const heartbeat = onProgress ? setInterval(() => {
+    onProgress(completedCount, tasks.length, `Processing: ${completedCount}/${tasks.length} done (${limiter.rps} RPS)`);
+  }, HEARTBEAT_INTERVAL_MS) : null;
+  try {
+    async function worker() {
+      while (true) {
+        const i = nextIndex;
+        if (i >= tasks.length) return;
+        nextIndex++;
+        await limiter.acquire();
+        results[i] = await tasks[i]();
+        completedCount++;
+        if (onProgress) {
+          onProgress(completedCount, tasks.length, `Done: ${completedCount}/${tasks.length}`);
+        }
+      }
+    }
+    const workerCount = Math.min(Math.max(1, maxInFlight), tasks.length);
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+  }
+  return results;
+}
 
 // src/index.ts
 import { fileURLToPath as fileUrlToPath_cs } from "node:url";
@@ -53620,49 +53665,10 @@ function classifyError(error48) {
   if (msg.includes("currently being processed"))
     return { unrecoverable: false, serviceLevel: false, reason: msg };
   if (/API error 429\b/.test(msg) || /rate.?limit/i.test(msg)) {
-    if (adaptiveRateLimiter) adaptiveRateLimiter.onRateLimit();
+    signalRateLimitHit();
     return { unrecoverable: false, serviceLevel: false, reason: msg };
   }
   return { unrecoverable: false, serviceLevel: false, reason: msg };
-}
-var adaptiveRateLimiter = null;
-function getAdaptiveRateLimiter(rps) {
-  if (!adaptiveRateLimiter || adaptiveRateLimiter.rps !== rps) {
-    adaptiveRateLimiter = new AdaptiveRateLimiter(rps);
-  }
-  return adaptiveRateLimiter;
-}
-var DEFAULT_MAX_IN_FLIGHT = 200;
-var HEARTBEAT_INTERVAL_MS = 3e4;
-async function rateLimitedParallel(tasks, rps, maxInFlight = DEFAULT_MAX_IN_FLIGHT, onProgress) {
-  if (tasks.length === 0) return [];
-  const results = new Array(tasks.length);
-  const limiter = getAdaptiveRateLimiter(rps);
-  let nextIndex = 0;
-  let completedCount = 0;
-  const heartbeat = onProgress ? setInterval(() => {
-    onProgress(completedCount, tasks.length, `Processing: ${completedCount}/${tasks.length} done (${limiter.rps} RPS)`);
-  }, HEARTBEAT_INTERVAL_MS) : null;
-  try {
-    async function worker() {
-      while (true) {
-        const i = nextIndex;
-        if (i >= tasks.length) return;
-        nextIndex++;
-        await limiter.acquire();
-        results[i] = await tasks[i]();
-        completedCount++;
-        if (onProgress) {
-          onProgress(completedCount, tasks.length, `Done: ${completedCount}/${tasks.length}`);
-        }
-      }
-    }
-    const workerCount = Math.min(Math.max(1, maxInFlight), tasks.length);
-    await Promise.all(Array.from({ length: workerCount }, () => worker()));
-  } finally {
-    if (heartbeat) clearInterval(heartbeat);
-  }
-  return results;
 }
 function sanitizeFilename(filePath) {
   const base = basename5(filePath);
@@ -53705,7 +53711,7 @@ async function robustPerFileProcess(files, opts) {
           outputDir: opts.outputDir
         });
         recentOutcomes.push(result.success);
-        if (result.success && adaptiveRateLimiter) adaptiveRateLimiter.onSuccess();
+        if (result.success) signalSuccess();
         if (opts.onProgress) {
           const completed = recentOutcomes.length;
           opts.onProgress(completed, files.length, `${opts.toolName}: ${completed}/${files.length} files done`);

@@ -3,7 +3,12 @@
 // timing is exercised lightly. No network, no LLM.
 
 import { describe, it, expect } from "vitest";
-import { AdaptiveRateLimiter } from "./rate-limiter.js";
+import {
+  AdaptiveRateLimiter,
+  rateLimitedParallel,
+  signalRateLimitHit,
+  signalSuccess,
+} from "./rate-limiter.js";
 
 describe("AdaptiveRateLimiter", () => {
   it("starts at the requested RPS", () => {
@@ -72,5 +77,64 @@ describe("AdaptiveRateLimiter", () => {
   it("acquire() resolves and consumes a token when capacity is available", async () => {
     const rl = new AdaptiveRateLimiter(100);
     await expect(rl.acquire()).resolves.toBeUndefined();
+  });
+});
+
+describe("rateLimitedParallel (B1 Phase 2b extraction)", () => {
+  it("returns an empty array for no tasks", async () => {
+    expect(await rateLimitedParallel([], 10)).toEqual([]);
+  });
+
+  it("preserves result order regardless of completion order", async () => {
+    // Task 0 is the SLOWEST (finishes last) yet results[0] must be its value —
+    // proving results are keyed by original index, not completion order.
+    const tasks: (() => Promise<number>)[] = [
+      () => new Promise((r) => setTimeout(() => r(1), 15)),
+      () => new Promise((r) => setTimeout(() => r(2), 1)),
+      () => new Promise((r) => setTimeout(() => r(3), 8)),
+    ];
+    expect(await rateLimitedParallel(tasks, 100, 10)).toEqual([1, 2, 3]);
+  });
+
+  it("runs every task exactly once", async () => {
+    let calls = 0;
+    const tasks = Array.from({ length: 12 }, () => async () => {
+      calls++;
+      return calls;
+    });
+    const results = await rateLimitedParallel(tasks, 100, 5);
+    expect(calls).toBe(12);
+    expect(results).toHaveLength(12);
+  });
+
+  it("never exceeds maxInFlight concurrent tasks (but does run in parallel)", async () => {
+    let active = 0;
+    let maxActive = 0;
+    const makeTask = () => async () => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((r) => setTimeout(r, 5));
+      active--;
+      return 0;
+    };
+    const tasks = Array.from({ length: 20 }, makeTask);
+    await rateLimitedParallel(tasks, 1000, 3); // high RPS so maxInFlight is the binding cap
+    expect(maxActive).toBeLessThanOrEqual(3);
+    expect(maxActive).toBeGreaterThan(1); // genuinely concurrent, not serialized
+  });
+
+  it("reports progress, reaching the total on completion", async () => {
+    const seen: number[] = [];
+    const tasks = Array.from({ length: 4 }, () => async () => 0);
+    await rateLimitedParallel(tasks, 100, 4, (done) => seen.push(done));
+    expect(Math.max(...seen)).toBe(4);
+  });
+
+  it("signalRateLimitHit() and signalSuccess() never throw (guarded delegators)", () => {
+    // They no-op until the shared singleton exists and delegate to it once it
+    // does — either way they must never throw, preserving the old
+    // `if (adaptiveRateLimiter)` guard that index.ts used to inline.
+    expect(() => signalRateLimitHit()).not.toThrow();
+    expect(() => signalSuccess()).not.toThrow();
   });
 });
