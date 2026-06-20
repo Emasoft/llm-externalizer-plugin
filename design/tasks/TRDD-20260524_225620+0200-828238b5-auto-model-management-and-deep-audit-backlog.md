@@ -3,7 +3,7 @@ trdd-id: 828238b5-42d7-478e-8fe7-44d74f812286
 title: Auto-* model management suite + deep-audit findings backlog
 status: in-progress
 created: 2026-05-24T22:56:20+0200
-updated: 2026-06-20T18:54:00+0200
+updated: 2026-06-20T19:05:00+0200
 ---
 
 # TRDD-828238b5 — Auto-* model management suite + deep-audit findings backlog
@@ -485,20 +485,32 @@ TRDD. The per-item findings below are retained as history.
 
 ---
 
-## Part E — Dead code (REMOVAL PENDING USER APPROVAL — RULE 0)
+## Part E — Dead code / orphans — RESOLVED (2026-06-20)
 
-These are git-tracked (committed before this session), so RULE 0 forbids deleting
-them without explicit user approval. Verified orphaned (no caller in
-commands/skills/hooks/ts/scripts; only CHANGELOG history + their own usage strings):
-- `scripts/apply_ensemble_choice.py` (202 LOC) — superseded by user-only manual config.
-- `scripts/read_ensemble_state.py` (152 LOC) — same era, unreferenced.
-- `scripts/setup/vllm-cuda-autoconfig.py` (448 LOC) — orphaned FEATURE (CUDA
-  auto-config for vLLM) never wired into the setup flow. Decision: wire it into
-  the setup-agent (it has a real FP8-KV bug at ~375, F7) OR remove. It is an
-  "unimplemented/never-wired" item, not just dead code.
+**RESOLVED (2026-06-20).** A whole-tree re-verification (claim-verification rule)
+found this section was STALE: every item was already handled by prior work that
+never updated this TRDD, and one "orphan" was actually WIRED — deleting it would
+have regressed the setup-agent. **No file was deleted this session.**
 
-Action: ask the user → `git rm` (recoverable via history) or move to a `_dev`
-folder, per RULE 0.
+- `scripts/apply_ensemble_choice.py` + `scripts/read_ensemble_state.py` —
+  ALREADY REMOVED in commit `cb7dfaf` ("chore: remove orphaned ensemble-choice
+  scripts"); recoverable via git history. Nothing to do (both confirmed MISSING
+  from the tree; only this TRDD's own list still referenced them).
+- `scripts/setup/vllm-cuda-autoconfig.py` (453 LOC) — **NOT orphaned.** The
+  "no caller" claim was wrong: it is wired into
+  `agents/llm-externalizer-setup-agent.md` (the Linux+NVIDIA VRAM-tuner, invoked
+  at lines 210/212/333) by commit `4685031`, which ALSO already fixed the F7
+  FP8-KV gate (`driver_major == 0 or … >= 535` → `… >= 535`, so an unknown /
+  unparseable driver is conservatively treated as fp8-UNSUPPORTED instead of
+  optimistically emitting `--kv-cache-dtype fp8`, which crashes vLLM on a driver
+  that can't run fp8 kernels). Per go-on-yourself ("prefer integrating over
+  deleting") the wired state IS the correct outcome — no removal.
+- **Gap closed this session:** the wired script + its just-fixed F7 gate had ZERO
+  test coverage. Added `tests/test_vllm_cuda_autoconfig.py` — 18 real unit tests
+  exercising the pure logic (driver parsing, tier selection, quantization,
+  command assembly) AND regression-guarding F7 through the REAL `main()` fp8 gate
+  (monkeypatching only the platform check + nvidia-smi probe: unknown/old driver →
+  no fp8 flag, driver ≥535 → fp8 enabled). Full Python suite: 134 pass.
 
 ---
 
@@ -528,8 +540,8 @@ sweep (co-located `*.test.ts` for TS; `tests/test_*.py` for Python):
   `setup/recommend-models.py`, `setup/test-model.py` (has the SSRF
   `_validate_local_url` guard — worth a unit test), `validate_fixer_summary.py`,
   `validate_report.py`, possibly `install_statusline.py`.
-  (`setup/vllm-cuda-autoconfig.py` is the orphaned Part-E item — wire or remove,
-  don't backfill tests for dead code.)
+  (`setup/vllm-cuda-autoconfig.py` is wired into the setup-agent + now tested —
+  see Part E (2026-06-20); no longer a Part-F gap.)
 
 Rule when adding tests: real tests only, NO mocks of the unit under test. This is
 a CANDIDATE list, not a committed work order — writing the suite is a phased
