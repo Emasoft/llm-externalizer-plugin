@@ -33,6 +33,8 @@ export default defineConfig({
       'src/reasoning-ladder.test.ts',
       // Per-model request body overrides — extracted from index.ts (B1 Phase 1, TRDD-63314265).
       'src/request-overrides.test.ts',
+      // Adaptive AIMD rate limiter — extracted from index.ts (B1 Phase 2, TRDD-63314265).
+      'src/rate-limiter.test.ts',
       // Free-only switch — config core + context-floor filter (TRDD-8b6b3646).
       'src/free-only.test.ts',
       // Free-pool auto-bench trigger — fire-and-forget detached child (TRDD-f1510055).

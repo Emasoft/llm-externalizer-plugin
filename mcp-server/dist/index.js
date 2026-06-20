@@ -51411,6 +51411,82 @@ function applyModelOverrides(body, modelId) {
   return out;
 }
 
+// src/rate-limiter.ts
+var AdaptiveRateLimiter = class {
+  tokens;
+  lastRefill;
+  currentRps;
+  initialRps;
+  minRps = 1;
+  refillPerMs;
+  consecutiveSuccesses = 0;
+  constructor(rps) {
+    this.initialRps = Math.max(1, rps);
+    this.currentRps = this.initialRps;
+    this.tokens = this.currentRps;
+    this.refillPerMs = this.currentRps / 1e3;
+    this.lastRefill = Date.now();
+  }
+  get rps() {
+    return this.currentRps;
+  }
+  refill() {
+    const now = Date.now();
+    const elapsed = now - this.lastRefill;
+    if (elapsed > 0) {
+      this.tokens = Math.min(this.currentRps, this.tokens + elapsed * this.refillPerMs);
+      this.lastRefill = now;
+    }
+  }
+  updateRate(newRps) {
+    this.currentRps = Math.max(this.minRps, Math.min(this.initialRps, newRps));
+    this.refillPerMs = this.currentRps / 1e3;
+  }
+  /** Wait until a token is available, then consume it. */
+  async acquire() {
+    this.refill();
+    if (this.tokens >= 1) {
+      this.tokens -= 1;
+      return;
+    }
+    const waitMs = Math.ceil((1 - this.tokens) / this.refillPerMs);
+    await new Promise((r) => setTimeout(r, Math.max(1, waitMs)));
+    this.refill();
+    this.tokens = Math.max(0, this.tokens - 1);
+  }
+  /** Call after a successful request — additive increase */
+  onSuccess() {
+    this.consecutiveSuccesses++;
+    if (this.consecutiveSuccesses >= 10 && this.currentRps < this.initialRps) {
+      this.updateRate(this.currentRps + 1);
+      this.consecutiveSuccesses = 0;
+      process.stderr.write(`[llm-externalizer] AIMD: RPS increased to ${this.currentRps}
+`);
+    }
+  }
+  /** Call after a 429 rate-limit error — multiplicative decrease */
+  onRateLimit() {
+    this.consecutiveSuccesses = 0;
+    const newRps = Math.floor(this.currentRps / 2);
+    if (newRps !== this.currentRps) {
+      this.updateRate(newRps);
+      process.stderr.write(`[llm-externalizer] AIMD: 429 detected, RPS halved to ${this.currentRps}
+`);
+    }
+  }
+  /** Reset to initial RPS (e.g., after profile switch) */
+  reset(newInitialRps) {
+    if (newInitialRps !== void 0) {
+      this.initialRps = Math.max(1, newInitialRps);
+    }
+    this.currentRps = this.initialRps;
+    this.refillPerMs = this.currentRps / 1e3;
+    this.tokens = this.currentRps;
+    this.consecutiveSuccesses = 0;
+    this.lastRefill = Date.now();
+  }
+};
+
 // src/index.ts
 import { fileURLToPath as fileUrlToPath_cs } from "node:url";
 
@@ -53549,80 +53625,6 @@ function classifyError(error48) {
   }
   return { unrecoverable: false, serviceLevel: false, reason: msg };
 }
-var AdaptiveRateLimiter = class {
-  tokens;
-  lastRefill;
-  currentRps;
-  initialRps;
-  minRps = 1;
-  refillPerMs;
-  consecutiveSuccesses = 0;
-  constructor(rps) {
-    this.initialRps = Math.max(1, rps);
-    this.currentRps = this.initialRps;
-    this.tokens = this.currentRps;
-    this.refillPerMs = this.currentRps / 1e3;
-    this.lastRefill = Date.now();
-  }
-  get rps() {
-    return this.currentRps;
-  }
-  refill() {
-    const now = Date.now();
-    const elapsed = now - this.lastRefill;
-    if (elapsed > 0) {
-      this.tokens = Math.min(this.currentRps, this.tokens + elapsed * this.refillPerMs);
-      this.lastRefill = now;
-    }
-  }
-  updateRate(newRps) {
-    this.currentRps = Math.max(this.minRps, Math.min(this.initialRps, newRps));
-    this.refillPerMs = this.currentRps / 1e3;
-  }
-  /** Wait until a token is available, then consume it. */
-  async acquire() {
-    this.refill();
-    if (this.tokens >= 1) {
-      this.tokens -= 1;
-      return;
-    }
-    const waitMs = Math.ceil((1 - this.tokens) / this.refillPerMs);
-    await new Promise((r) => setTimeout(r, Math.max(1, waitMs)));
-    this.refill();
-    this.tokens = Math.max(0, this.tokens - 1);
-  }
-  /** Call after a successful request — additive increase */
-  onSuccess() {
-    this.consecutiveSuccesses++;
-    if (this.consecutiveSuccesses >= 10 && this.currentRps < this.initialRps) {
-      this.updateRate(this.currentRps + 1);
-      this.consecutiveSuccesses = 0;
-      process.stderr.write(`[llm-externalizer] AIMD: RPS increased to ${this.currentRps}
-`);
-    }
-  }
-  /** Call after a 429 rate-limit error — multiplicative decrease */
-  onRateLimit() {
-    this.consecutiveSuccesses = 0;
-    const newRps = Math.floor(this.currentRps / 2);
-    if (newRps !== this.currentRps) {
-      this.updateRate(newRps);
-      process.stderr.write(`[llm-externalizer] AIMD: 429 detected, RPS halved to ${this.currentRps}
-`);
-    }
-  }
-  /** Reset to initial RPS (e.g., after profile switch) */
-  reset(newInitialRps) {
-    if (newInitialRps !== void 0) {
-      this.initialRps = Math.max(1, newInitialRps);
-    }
-    this.currentRps = this.initialRps;
-    this.refillPerMs = this.currentRps / 1e3;
-    this.tokens = this.currentRps;
-    this.consecutiveSuccesses = 0;
-    this.lastRefill = Date.now();
-  }
-};
 var adaptiveRateLimiter = null;
 function getAdaptiveRateLimiter(rps) {
   if (!adaptiveRateLimiter || adaptiveRateLimiter.rps !== rps) {
