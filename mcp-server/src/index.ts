@@ -93,6 +93,10 @@ import {
   runSearchExistingImplementations,
   type SeiDeps,
 } from "./search-existing/core.js";
+import {
+  runScanFolder,
+  type ScanFolderDeps,
+} from "./scan-folder/core.js";
 
 /**
  * Resolve max output tokens for the current model.
@@ -5311,325 +5315,25 @@ async function dispatchCallToolInner(
       // ── Specialized Operations ──────────────────────────────────────
 
       case "scan_folder": {
-        const {
-          folder_path,
-          extensions,
-          exclude_dirs,
-          max_files,
-          instructions: sfInstructions,
-          instructions_files_paths: sfInstructionsFilesPaths,
-          redact_secrets: sfRedact,
-          redact_regex: sfRedactRegexRaw,
-          answer_mode: sfRawMode,
-          use_gitignore: sfUseGitignore,
-          scan_secrets: sfScan,
-        } = args as {
-          folder_path: string;
-          extensions?: string[];
-          exclude_dirs?: string[];
-          max_files?: number;
-          instructions?: string;
-          instructions_files_paths?: string | string[];
-          redact_secrets?: boolean;
-          redact_regex?: string;
-          answer_mode?: number;
-          use_gitignore?: boolean;
-          scan_secrets?: boolean;
-          max_payload_kb?: number;
+        // Pipeline body extracted to scan-folder/core.ts (B1 Phase 3,
+        // TRDD-63314265), mirroring the search_existing_implementations
+        // extraction so the REAL pipeline can run in-process from a benchmark
+        // runner; this case only wires the server-stateful deps. processFileCheck
+        // is injected as the per-file-call seam (the scan_folder analogue of
+        // search_existing's callModel).
+        const sfDeps: ScanFolderDeps = {
+          useEnsemble: backend.type === "openrouter",
+          backendModel: backend.model,
+          processFileCheck,
+          classifyError,
+          saveResponse,
+          getRateLimitConfig,
+          resolveDefaultMaxTokens,
+          onProgress,
+          outputDir,
+          modelOverride, // honours --free and credit-exhausted auto-fallback
         };
-        const sfUseEnsemble = backend.type === "openrouter";
-        const sfBudgetBytes = ((args as { max_payload_kb?: number }).max_payload_kb ?? 400) * 1024;
-
-        // Validate redact_regex
-        let sfRegexRedact: RegexRedactOpts | null = null;
-        try {
-          sfRegexRedact = parseRedactRegex(sfRedactRegexRaw);
-        } catch (err) {
-          return { content: [{ type: "text", text: `FAILED: ${(err as Error).message}` }], isError: true };
-        }
-
-        // C1+H2: Sanitize folder_path (traversal + symlink protection)
-        let sfFolderPath: string;
-        try {
-          sfFolderPath = sanitizeInputPath(folder_path);
-        } catch (err) {
-          return { content: [{ type: "text", text: `FAILED: ${(err as Error).message}` }], isError: true };
-        }
-
-        if (!existsSync(sfFolderPath)) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `FAILED: Folder not found: ${folder_path}`,
-              },
-            ],
-            isError: true,
-          };
-        }
-        // Validate it's a directory, not a file
-        if (!statSync(sfFolderPath).isDirectory()) {
-          return {
-            content: [
-              { type: "text", text: `FAILED: Not a directory: ${folder_path}` },
-            ],
-            isError: true,
-          };
-        }
-        const sfPrompt = resolvePrompt(
-          sfInstructions,
-          sfInstructionsFilesPaths,
-        );
-        if (!sfPrompt.trim()) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: "FAILED: instructions or instructions_files_paths is required.",
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        // walkDir auto-skips binary extensions, hidden dirs, node_modules, .git, etc.
-        // When use_gitignore is true, uses git ls-files to respect .gitignore rules.
-        const files = walkDir(sfFolderPath, {
-          extensions,
-          maxFiles: max_files ?? 2500,
-          exclude: exclude_dirs,
-          useGitignore: sfUseGitignore !== false, // default true
-        });
-        if (files.length === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `No files found in ${folder_path} matching the criteria.`,
-              },
-            ],
-          };
-        }
-
-        // scan_secrets: abort if any secrets are found in discovered files.
-        // When redact_secrets is also true, skip the abort — downstream redaction handles it.
-        if (sfScan && !sfRedact) {
-          const scanResult = scanFilesForSecrets(files);
-          if (scanResult.found)
-            return {
-              content: [{ type: "text", text: scanResult.report }],
-              isError: true,
-            };
-        }
-
-        const sfMode = resolveAnswerMode(sfRawMode, 0);
-        const batchId = randomUUID();
-        const sfRl = await getRateLimitConfig();
-        const recentOutcomes: boolean[] = [];
-        let aborted = false;
-        let abortReason = "";
-
-        const tasks = files.map((filePath, idx) => async () => {
-          if (aborted)
-            return {
-              filePath,
-              success: false,
-              error: "Batch aborted",
-            } as FileProcessResult;
-          for (let attempt = 1; attempt <= 3; attempt++) {
-            if (aborted)
-              return {
-                filePath,
-                success: false,
-                error: "Batch aborted",
-              } as FileProcessResult;
-            try {
-              const result = await processFileCheck(filePath, sfPrompt, {
-                maxTokens: resolveDefaultMaxTokens(),
-                batchId,
-                fileIndex: idx,
-                redact: sfRedact,
-                regexRedact: sfRegexRedact,
-                onProgress,
-                ensemble: sfUseEnsemble,
-                maxBytes: sfBudgetBytes,
-                modelOverride, outputDir,
-              });
-              recentOutcomes.push(result.success);
-              // Report per-file batch progress
-              if (onProgress) {
-                const completed = recentOutcomes.length;
-                onProgress(
-                  completed,
-                  files.length,
-                  `scan_folder: ${completed}/${files.length} files done`,
-                );
-              }
-              return result;
-            } catch (err) {
-              const classified = classifyError(err);
-              if (classified.unrecoverable) {
-                if (classified.serviceLevel) {
-                  aborted = true;
-                  abortReason = `Unrecoverable: ${classified.reason}`;
-                }
-                return {
-                  filePath,
-                  success: false,
-                  error: classified.reason,
-                } as FileProcessResult;
-              }
-              if (attempt < 3) {
-                await new Promise((r) =>
-                  setTimeout(r, Math.pow(3, attempt - 1) * 1000),
-                );
-                continue;
-              }
-              recentOutcomes.push(false);
-              if (
-                recentOutcomes.length >= 3 &&
-                recentOutcomes.slice(-3).every((v) => !v)
-              ) {
-                aborted = true;
-                abortReason = `3 consecutive failures. Last: ${classified.reason}`;
-              }
-              return {
-                filePath,
-                success: false,
-                error: `Failed after 3 retries: ${classified.reason}`,
-              } as FileProcessResult;
-            }
-          }
-          return {
-            filePath,
-            success: false,
-            error: "Unexpected retry loop exit",
-          } as FileProcessResult;
-        });
-
-        const batchResults = await rateLimitedParallel(tasks, sfRl.rps, sfRl.maxInFlight, onProgress);
-        const succeeded = batchResults.filter((r) => r.success);
-        const failed = batchResults.filter(
-          (r) => !r.success && r.error !== "Batch aborted",
-        );
-        const skipped = batchResults.filter((r) => r.error === "Batch aborted");
-
-        if (sfMode === 2 && succeeded.length > 0) {
-          // Mode 2 — single merged report containing every file's per-file output.
-          const sections: string[] = [];
-          for (const r of succeeded) {
-            const content =
-              r.reportPath && existsSync(r.reportPath)
-                ? readFileSync(r.reportPath, "utf-8")
-                : "";
-            sections.push(`## File: ${r.filePath}\n\n${content}`);
-          }
-          const mergedPath = saveResponse(
-            "scan_folder",
-            sections.join("\n\n---\n\n"),
-            { model: backend.model, task: sfPrompt, inputFile: folder_path },
-            undefined,
-            outputDir,
-          );
-          const summary = [
-            `SCAN COMPLETE — ${succeeded.length} processed, ${failed.length} failed, ${skipped.length} skipped (${files.length} files found)`,
-            `Folder: ${folder_path}`,
-            `Batch UUID: ${batchId}`,
-            `MERGED REPORT: ${mergedPath}`,
-          ];
-          if (failed.length > 0) {
-            summary.push("", "FAILED:");
-            for (const r of failed) summary.push(`  ${r.filePath}: ${r.error}`);
-          }
-          if (aborted) summary.push("", `ABORTED: ${abortReason}`);
-          return {
-            content: [{ type: "text", text: summary.join("\n") }],
-            isError: aborted,
-          };
-        }
-
-        if (sfMode === 1 && succeeded.length > 0) {
-          // Mode 1 — one merged report per auto-group (by subfolder/ext/basename).
-          //
-          // scan_folder is inherently per-file: every file already got its
-          // own LLM call and its own intermediate per-file report. Mode 1
-          // therefore performs POST-HOC output grouping — we cluster the
-          // finished per-file reports by autoGroupByHeuristic() and merge
-          // each cluster into one group-level .md. This contrasts with
-          // chat / code_task / check_* where auto-grouping happens BEFORE
-          // the LLM call so batches can share cross-file context. The
-          // scan_folder design is a deliberate trade-off: per-file LLM calls
-          // give every file its own focused audit, and mode 1 keeps the disk
-          // output organised by directory without changing what the LLM saw.
-          const succeededPaths = succeeded.map((r) => r.filePath);
-          const sfAutoGroups = autoGroupByHeuristic(succeededPaths);
-          const pathToResult = new Map<string, FileProcessResult>();
-          for (const r of succeeded) pathToResult.set(r.filePath, r);
-          const sfGroupReportPaths: string[] = [];
-          for (const fg of sfAutoGroups) {
-            if (fg.files.length === 0) continue;
-            const sections: string[] = [];
-            for (const fp of fg.files) {
-              const r = pathToResult.get(fp);
-              if (!r) continue;
-              const content =
-                r.reportPath && existsSync(r.reportPath)
-                  ? readFileSync(r.reportPath, "utf-8")
-                  : "";
-              sections.push(`## File: ${fp}\n\n${content}`);
-            }
-            if (sections.length === 0) continue;
-            const gid = fg.id || "auto";
-            const groupPath = saveResponse(
-              "scan_folder",
-              sections.join("\n\n---\n\n"),
-              { model: backend.model, task: sfPrompt, inputFile: fg.files[0], groupId: gid },
-              undefined,
-              outputDir,
-            );
-            sfGroupReportPaths.push(`[group:${gid}] ${groupPath}`);
-          }
-          const summary = [
-            `SCAN COMPLETE — ${succeeded.length} processed, ${failed.length} failed, ${skipped.length} skipped (${files.length} files found)`,
-            `Folder: ${folder_path}`,
-            `Batch UUID: ${batchId}`,
-          ];
-          if (sfGroupReportPaths.length > 0) {
-            summary.push("", `GROUP REPORTS (${sfGroupReportPaths.length}):`);
-            for (const line of sfGroupReportPaths) summary.push(`  ${line}`);
-          }
-          if (failed.length > 0) {
-            summary.push("", "FAILED:");
-            for (const r of failed) summary.push(`  ${r.filePath}: ${r.error}`);
-          }
-          if (aborted) summary.push("", `ABORTED: ${abortReason}`);
-          return {
-            content: [{ type: "text", text: summary.join("\n") }],
-            isError: aborted,
-          };
-        }
-
-        // Mode 0: list individual reports
-        const sfSummaryLines = [
-          `SCAN COMPLETE — ${succeeded.length} processed, ${failed.length} failed, ${skipped.length} skipped (${files.length} files found)`,
-          `Folder: ${folder_path}`,
-          `Batch UUID: ${batchId}`,
-          "",
-        ];
-        if (succeeded.length > 0) {
-          sfSummaryLines.push("REPORTS:");
-          for (const r of succeeded) sfSummaryLines.push(`  ${r.reportPath}`);
-        }
-        if (failed.length > 0) {
-          sfSummaryLines.push("", "FAILED:");
-          for (const r of failed)
-            sfSummaryLines.push(`  ${r.filePath}: ${r.error}`);
-        }
-        if (aborted) sfSummaryLines.push("", `ABORTED: ${abortReason}`);
-        return {
-          content: [{ type: "text", text: sfSummaryLines.join("\n") }],
-          isError: aborted,
-        };
+        return await runScanFolder(args as Record<string, unknown>, sfDeps);
       }
 
       case "search_existing_implementations": {

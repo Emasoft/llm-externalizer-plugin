@@ -14228,12 +14228,12 @@ var require_dist2 = __commonJS({
 // src/index.ts
 var import_yaml2 = __toESM(require_dist(), 1);
 import {
-  readFileSync as readFileSync17,
+  readFileSync as readFileSync18,
   writeFileSync as writeFileSync14,
   mkdirSync as mkdirSync18,
-  existsSync as existsSync14,
+  existsSync as existsSync15,
   renameSync as renameSync8,
-  statSync as statSync8,
+  statSync as statSync9,
   appendFileSync as appendFileSync5,
   unlinkSync as unlinkSync2,
   realpathSync as realpathSync5,
@@ -14242,7 +14242,7 @@ import {
 } from "node:fs";
 import { spawnSync as spawnSync3 } from "node:child_process";
 import { extname as extname5, join as join20, basename as basename5, dirname as dirname11, resolve as resolve10, isAbsolute as isAbsolute4 } from "node:path";
-import { randomUUID as randomUUID2 } from "node:crypto";
+import { randomUUID as randomUUID3 } from "node:crypto";
 
 // src/grouping.ts
 import { statSync } from "node:fs";
@@ -52175,11 +52175,287 @@ async function rateLimitedParallel(tasks, rps, maxInFlight = DEFAULT_MAX_IN_FLIG
 // src/index.ts
 import { fileURLToPath as fileUrlToPath_cs } from "node:url";
 
+// src/scan-folder/core.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
+import { existsSync as existsSync12, statSync as statSync8, readFileSync as readFileSync15 } from "node:fs";
+async function runScanFolder(args, deps) {
+  const {
+    folder_path,
+    extensions,
+    exclude_dirs,
+    max_files,
+    instructions: sfInstructions,
+    instructions_files_paths: sfInstructionsFilesPaths,
+    redact_secrets: sfRedact,
+    redact_regex: sfRedactRegexRaw,
+    answer_mode: sfRawMode,
+    use_gitignore: sfUseGitignore,
+    scan_secrets: sfScan
+  } = args;
+  const sfUseEnsemble = deps.useEnsemble;
+  const sfBudgetBytes = (args.max_payload_kb ?? 400) * 1024;
+  let sfRegexRedact = null;
+  try {
+    sfRegexRedact = parseRedactRegex(sfRedactRegexRaw);
+  } catch (err3) {
+    return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
+  }
+  let sfFolderPath;
+  try {
+    sfFolderPath = sanitizeInputPath(folder_path);
+  } catch (err3) {
+    return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
+  }
+  if (!existsSync12(sfFolderPath)) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `FAILED: Folder not found: ${folder_path}`
+        }
+      ],
+      isError: true
+    };
+  }
+  if (!statSync8(sfFolderPath).isDirectory()) {
+    return {
+      content: [
+        { type: "text", text: `FAILED: Not a directory: ${folder_path}` }
+      ],
+      isError: true
+    };
+  }
+  const sfPrompt = resolvePrompt(
+    sfInstructions,
+    sfInstructionsFilesPaths
+  );
+  if (!sfPrompt.trim()) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: "FAILED: instructions or instructions_files_paths is required."
+        }
+      ],
+      isError: true
+    };
+  }
+  const files = walkDir(sfFolderPath, {
+    extensions,
+    maxFiles: max_files ?? 2500,
+    exclude: exclude_dirs,
+    useGitignore: sfUseGitignore !== false
+    // default true
+  });
+  if (files.length === 0) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `No files found in ${folder_path} matching the criteria.`
+        }
+      ]
+    };
+  }
+  if (sfScan && !sfRedact) {
+    const scanResult = scanFilesForSecrets(files);
+    if (scanResult.found)
+      return {
+        content: [{ type: "text", text: scanResult.report }],
+        isError: true
+      };
+  }
+  const sfMode = resolveAnswerMode(sfRawMode, 0);
+  const batchId = randomUUID2();
+  const sfRl = await deps.getRateLimitConfig();
+  const recentOutcomes = [];
+  let aborted2 = false;
+  let abortReason = "";
+  const tasks = files.map((filePath, idx) => async () => {
+    if (aborted2)
+      return {
+        filePath,
+        success: false,
+        error: "Batch aborted"
+      };
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      if (aborted2)
+        return {
+          filePath,
+          success: false,
+          error: "Batch aborted"
+        };
+      try {
+        const result = await deps.processFileCheck(filePath, sfPrompt, {
+          maxTokens: deps.resolveDefaultMaxTokens(),
+          batchId,
+          fileIndex: idx,
+          redact: sfRedact,
+          regexRedact: sfRegexRedact,
+          onProgress: deps.onProgress,
+          ensemble: sfUseEnsemble,
+          maxBytes: sfBudgetBytes,
+          modelOverride: deps.modelOverride,
+          outputDir: deps.outputDir
+        });
+        recentOutcomes.push(result.success);
+        if (deps.onProgress) {
+          const completed = recentOutcomes.length;
+          deps.onProgress(
+            completed,
+            files.length,
+            `scan_folder: ${completed}/${files.length} files done`
+          );
+        }
+        return result;
+      } catch (err3) {
+        const classified = deps.classifyError(err3);
+        if (classified.unrecoverable) {
+          if (classified.serviceLevel) {
+            aborted2 = true;
+            abortReason = `Unrecoverable: ${classified.reason}`;
+          }
+          return {
+            filePath,
+            success: false,
+            error: classified.reason
+          };
+        }
+        if (attempt < 3) {
+          await new Promise(
+            (r) => setTimeout(r, Math.pow(3, attempt - 1) * 1e3)
+          );
+          continue;
+        }
+        recentOutcomes.push(false);
+        if (recentOutcomes.length >= 3 && recentOutcomes.slice(-3).every((v) => !v)) {
+          aborted2 = true;
+          abortReason = `3 consecutive failures. Last: ${classified.reason}`;
+        }
+        return {
+          filePath,
+          success: false,
+          error: `Failed after 3 retries: ${classified.reason}`
+        };
+      }
+    }
+    return {
+      filePath,
+      success: false,
+      error: "Unexpected retry loop exit"
+    };
+  });
+  const batchResults = await rateLimitedParallel(tasks, sfRl.rps, sfRl.maxInFlight, deps.onProgress);
+  const succeeded = batchResults.filter((r) => r.success);
+  const failed = batchResults.filter(
+    (r) => !r.success && r.error !== "Batch aborted"
+  );
+  const skipped = batchResults.filter((r) => r.error === "Batch aborted");
+  if (sfMode === 2 && succeeded.length > 0) {
+    const sections = [];
+    for (const r of succeeded) {
+      const content = r.reportPath && existsSync12(r.reportPath) ? readFileSync15(r.reportPath, "utf-8") : "";
+      sections.push(`## File: ${r.filePath}
+
+${content}`);
+    }
+    const mergedPath = deps.saveResponse(
+      "scan_folder",
+      sections.join("\n\n---\n\n"),
+      { model: deps.backendModel, task: sfPrompt, inputFile: folder_path },
+      void 0,
+      deps.outputDir
+    );
+    const summary = [
+      `SCAN COMPLETE \u2014 ${succeeded.length} processed, ${failed.length} failed, ${skipped.length} skipped (${files.length} files found)`,
+      `Folder: ${folder_path}`,
+      `Batch UUID: ${batchId}`,
+      `MERGED REPORT: ${mergedPath}`
+    ];
+    if (failed.length > 0) {
+      summary.push("", "FAILED:");
+      for (const r of failed) summary.push(`  ${r.filePath}: ${r.error}`);
+    }
+    if (aborted2) summary.push("", `ABORTED: ${abortReason}`);
+    return {
+      content: [{ type: "text", text: summary.join("\n") }],
+      isError: aborted2
+    };
+  }
+  if (sfMode === 1 && succeeded.length > 0) {
+    const succeededPaths = succeeded.map((r) => r.filePath);
+    const sfAutoGroups = autoGroupByHeuristic(succeededPaths);
+    const pathToResult = /* @__PURE__ */ new Map();
+    for (const r of succeeded) pathToResult.set(r.filePath, r);
+    const sfGroupReportPaths = [];
+    for (const fg of sfAutoGroups) {
+      if (fg.files.length === 0) continue;
+      const sections = [];
+      for (const fp of fg.files) {
+        const r = pathToResult.get(fp);
+        if (!r) continue;
+        const content = r.reportPath && existsSync12(r.reportPath) ? readFileSync15(r.reportPath, "utf-8") : "";
+        sections.push(`## File: ${fp}
+
+${content}`);
+      }
+      if (sections.length === 0) continue;
+      const gid = fg.id || "auto";
+      const groupPath = deps.saveResponse(
+        "scan_folder",
+        sections.join("\n\n---\n\n"),
+        { model: deps.backendModel, task: sfPrompt, inputFile: fg.files[0], groupId: gid },
+        void 0,
+        deps.outputDir
+      );
+      sfGroupReportPaths.push(`[group:${gid}] ${groupPath}`);
+    }
+    const summary = [
+      `SCAN COMPLETE \u2014 ${succeeded.length} processed, ${failed.length} failed, ${skipped.length} skipped (${files.length} files found)`,
+      `Folder: ${folder_path}`,
+      `Batch UUID: ${batchId}`
+    ];
+    if (sfGroupReportPaths.length > 0) {
+      summary.push("", `GROUP REPORTS (${sfGroupReportPaths.length}):`);
+      for (const line of sfGroupReportPaths) summary.push(`  ${line}`);
+    }
+    if (failed.length > 0) {
+      summary.push("", "FAILED:");
+      for (const r of failed) summary.push(`  ${r.filePath}: ${r.error}`);
+    }
+    if (aborted2) summary.push("", `ABORTED: ${abortReason}`);
+    return {
+      content: [{ type: "text", text: summary.join("\n") }],
+      isError: aborted2
+    };
+  }
+  const sfSummaryLines = [
+    `SCAN COMPLETE \u2014 ${succeeded.length} processed, ${failed.length} failed, ${skipped.length} skipped (${files.length} files found)`,
+    `Folder: ${folder_path}`,
+    `Batch UUID: ${batchId}`,
+    ""
+  ];
+  if (succeeded.length > 0) {
+    sfSummaryLines.push("REPORTS:");
+    for (const r of succeeded) sfSummaryLines.push(`  ${r.reportPath}`);
+  }
+  if (failed.length > 0) {
+    sfSummaryLines.push("", "FAILED:");
+    for (const r of failed)
+      sfSummaryLines.push(`  ${r.filePath}: ${r.error}`);
+  }
+  if (aborted2) sfSummaryLines.push("", `ABORTED: ${abortReason}`);
+  return {
+    content: [{ type: "text", text: sfSummaryLines.join("\n") }],
+    isError: aborted2
+  };
+}
+
 // src/rule-install.ts
 import {
-  existsSync as existsSync12,
+  existsSync as existsSync13,
   mkdirSync as mkdirSync16,
-  readFileSync as readFileSync15,
+  readFileSync as readFileSync16,
   writeFileSync as writeFileSync12,
   renameSync as renameSync7,
   realpathSync as realpathSync4,
@@ -52202,7 +52478,7 @@ function resolveBundledRulePath() {
   } catch {
   }
   for (const c of candidates) {
-    if (existsSync12(c)) return c;
+    if (existsSync13(c)) return c;
   }
   return null;
 }
@@ -52245,7 +52521,7 @@ function installUsageRule(opts = {}) {
     return { status: "skipped", dest: "", detail: "disabled via LLM_EXT_INSTALL_RULE" };
   }
   const source = opts.sourcePath ?? resolveBundledRulePath();
-  if (!source || !existsSync12(source)) {
+  if (!source || !existsSync13(source)) {
     return { status: "error", dest: "", detail: "bundled rule source not found" };
   }
   const rulesDir = opts.rulesDir ?? resolveClaudeRulesDir();
@@ -52259,14 +52535,14 @@ function installUsageRule(opts = {}) {
   }
   let desired;
   try {
-    desired = readFileSync15(source, "utf-8");
+    desired = readFileSync16(source, "utf-8");
   } catch (e) {
     return { status: "error", dest, detail: `cannot read source: ${e.message}` };
   }
-  const existed = existsSync12(dest);
+  const existed = existsSync13(dest);
   if (existed) {
     try {
-      if (readFileSync15(dest, "utf-8") === desired) return { status: "unchanged", dest };
+      if (readFileSync16(dest, "utf-8") === desired) return { status: "unchanged", dest };
     } catch {
     }
   }
@@ -52823,10 +53099,10 @@ function renderEndpointTable(ep, colors) {
 
 // src/free-pool-auto-bench.ts
 import {
-  existsSync as existsSync13,
+  existsSync as existsSync14,
   mkdirSync as mkdirSync17,
   openSync,
-  readFileSync as readFileSync16,
+  readFileSync as readFileSync17,
   writeFileSync as writeFileSync13
 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
@@ -52841,13 +53117,13 @@ var DISABLE_ENV = "LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH";
 function resolveBenchmarkScriptPath() {
   const here = dirname10(fileURLToPath5(import.meta.url));
   const bundled = pathResolve(here, "benchmark.js");
-  if (existsSync13(bundled)) return bundled;
+  if (existsSync14(bundled)) return bundled;
   const fromSrc = pathResolve(here, "..", "dist", "benchmark.js");
   return fromSrc;
 }
 function benchCacheHasFreeEntries(cachePath3 = BENCH_CACHE) {
   try {
-    const raw = readFileSync16(cachePath3, "utf-8");
+    const raw = readFileSync17(cachePath3, "utf-8");
     const data = JSON.parse(raw);
     if (!Array.isArray(data?.results)) return false;
     return data.results.some(
@@ -52858,9 +53134,9 @@ function benchCacheHasFreeEntries(cachePath3 = BENCH_CACHE) {
   }
 }
 function lockHoldsLivePid(lockPath = BENCH_LOCK) {
-  if (!existsSync13(lockPath)) return false;
+  if (!existsSync14(lockPath)) return false;
   try {
-    const pid = parseInt(readFileSync16(lockPath, "utf-8").trim(), 10);
+    const pid = parseInt(readFileSync17(lockPath, "utf-8").trim(), 10);
     if (!Number.isInteger(pid) || pid <= 0) return false;
     try {
       process.kill(pid, 0);
@@ -53201,7 +53477,7 @@ var _onSettingsReloaded = null;
 function reloadSettingsFromDisk() {
   let raw;
   try {
-    raw = readFileSync17(SETTINGS_FILE, "utf-8");
+    raw = readFileSync18(SETTINGS_FILE, "utf-8");
   } catch {
     return false;
   }
@@ -53269,7 +53545,7 @@ function reloadSettingsFromDisk() {
 }
 var _settingsLastMtimeMs = (() => {
   try {
-    return statSync8(SETTINGS_FILE).mtimeMs;
+    return statSync9(SETTINGS_FILE).mtimeMs;
   } catch {
     return 0;
   }
@@ -53536,7 +53812,7 @@ function waitForRequestsDrained(timeoutMs = 12e4) {
     };
   });
 }
-var SESSION_ID = randomUUID2().slice(0, 8);
+var SESSION_ID = randomUUID3().slice(0, 8);
 var SESSION_START = /* @__PURE__ */ new Date();
 var LOG_DIR = join20(getConfigDir(), "logs");
 var LOG_FILE = join20(
@@ -54219,7 +54495,7 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
   mkdirSync18(dir, { recursive: true });
   const now = /* @__PURE__ */ new Date();
   const ts = canonicalTimestamp(now);
-  const shortId = randomUUID2().slice(0, 6);
+  const shortId = randomUUID3().slice(0, 6);
   const srcPart = meta3.inputFile ? `-${sanitizeFilename(meta3.inputFile).replace(/\.md$/, "")}` : "";
   const groupPart = meta3.groupId ? `-group-${meta3.groupId.replace(/[^a-zA-Z0-9_-]/g, "_")}` : "";
   const filename = overrideFilename || `${ts}-${toolName}${groupPart}${srcPart}-${shortId}.md`;
@@ -54316,7 +54592,7 @@ function sanitizeFilename(filePath) {
   return base.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 async function robustPerFileProcess(files, opts) {
-  const batchId = opts.batchId || randomUUID2();
+  const batchId = opts.batchId || randomUUID3();
   const rlConfig = await getRateLimitConfig();
   const recentOutcomes = [];
   let aborted2 = false;
@@ -54398,10 +54674,10 @@ function resolveFolderPath(folderPath, opts) {
   } catch (err3) {
     return { files: [], error: `Invalid folder_path: ${err3 instanceof Error ? err3.message : String(err3)}` };
   }
-  if (!existsSync14(folderPath)) {
+  if (!existsSync15(folderPath)) {
     return { files: [], error: `folder_path not found: ${folderPath}` };
   }
-  if (!statSync8(folderPath).isDirectory()) {
+  if (!statSync9(folderPath).isDirectory()) {
     return { files: [], error: `Not a directory: ${folderPath}` };
   }
   const files = walkDir(folderPath, {
@@ -54423,7 +54699,7 @@ function resolveFolderPath(folderPath, opts) {
 }
 function batchReportFilename(toolName, _batchId, filePath, _fileIndex) {
   const ts = canonicalTimestamp();
-  const shortId = randomUUID2().slice(0, 6);
+  const shortId = randomUUID3().slice(0, 6);
   const srcName = sanitizeFilename(filePath).replace(/\.md$/, "");
   return `${ts}-${toolName}-${srcName}-${shortId}.md`;
 }
@@ -54758,7 +55034,7 @@ ${failed.map((r) => `- **${r.model}**: ${r.content}`).join("\n")}`);
   };
 }
 async function processFileCheck(filePath, task, options = {}) {
-  if (!existsSync14(filePath)) {
+  if (!existsSync15(filePath)) {
     return { filePath, success: false, error: `File not found: ${filePath}` };
   }
   const codeBlock = readFileAsCodeBlock(
@@ -55879,7 +56155,7 @@ Profiles: ${profileNames.join(", ")}`);
         }
         case "get_settings": {
           try {
-            const raw = readFileSync17(SETTINGS_FILE, "utf-8");
+            const raw = readFileSync18(SETTINGS_FILE, "utf-8");
             const targetDir = outputDir || defaultOutputDir();
             mkdirSync18(targetDir, { recursive: true });
             const copyPath = join20(targetDir, "settings_edit.yaml");
@@ -55977,7 +56253,7 @@ Profiles: ${profileNames.join(", ")}`);
             for (const fg of bcFileGroups) {
               if (fg.files.length === 0) continue;
               const gid = fg.id || "auto";
-              const gBatchId = randomUUID2();
+              const gBatchId = randomUUID3();
               const gTask = resolvePrompt(bcInstructions, bcInstructionsFilesPaths).trim() || "Find all bugs, type errors, logic errors, security vulnerabilities, and potential runtime failures.";
               const gRl = await getRateLimitConfig();
               const gRecentOutcomes = [];
@@ -56040,7 +56316,7 @@ Profiles: ${profileNames.join(", ")}`);
               const gSucceeded = gAll.filter((r) => r.success);
               const reportSections = [];
               for (const r of gSucceeded) {
-                const content = r.reportPath && existsSync14(r.reportPath) ? readFileSync17(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync15(r.reportPath) ? readFileSync18(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -56073,7 +56349,7 @@ ${gAbortReason}`);
             }
             return { content: [{ type: "text", text: bcGroupReports.join("\n") }] };
           }
-          const batchId = randomUUID2();
+          const batchId = randomUUID3();
           const defaultTask = "Find all bugs, type errors, logic errors, security vulnerabilities, and potential runtime failures. Be specific \u2014 reference line numbers and function names.";
           const bcPrompt = resolvePrompt(
             bcInstructions,
@@ -56176,7 +56452,7 @@ ${gAbortReason}`);
             } else {
               const reportSections = [];
               for (const r of succeeded) {
-                const content = r.reportPath && existsSync14(r.reportPath) ? readFileSync17(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync15(r.reportPath) ? readFileSync18(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -56235,276 +56511,20 @@ ${content}`);
         }
         // ── Specialized Operations ──────────────────────────────────────
         case "scan_folder": {
-          const {
-            folder_path,
-            extensions,
-            exclude_dirs,
-            max_files,
-            instructions: sfInstructions,
-            instructions_files_paths: sfInstructionsFilesPaths,
-            redact_secrets: sfRedact,
-            redact_regex: sfRedactRegexRaw,
-            answer_mode: sfRawMode,
-            use_gitignore: sfUseGitignore,
-            scan_secrets: sfScan
-          } = args;
-          const sfUseEnsemble = backend.type === "openrouter";
-          const sfBudgetBytes = (args.max_payload_kb ?? 400) * 1024;
-          let sfRegexRedact = null;
-          try {
-            sfRegexRedact = parseRedactRegex(sfRedactRegexRaw);
-          } catch (err3) {
-            return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
-          }
-          let sfFolderPath;
-          try {
-            sfFolderPath = sanitizeInputPath(folder_path);
-          } catch (err3) {
-            return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
-          }
-          if (!existsSync14(sfFolderPath)) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `FAILED: Folder not found: ${folder_path}`
-                }
-              ],
-              isError: true
-            };
-          }
-          if (!statSync8(sfFolderPath).isDirectory()) {
-            return {
-              content: [
-                { type: "text", text: `FAILED: Not a directory: ${folder_path}` }
-              ],
-              isError: true
-            };
-          }
-          const sfPrompt = resolvePrompt(
-            sfInstructions,
-            sfInstructionsFilesPaths
-          );
-          if (!sfPrompt.trim()) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "FAILED: instructions or instructions_files_paths is required."
-                }
-              ],
-              isError: true
-            };
-          }
-          const files = walkDir(sfFolderPath, {
-            extensions,
-            maxFiles: max_files ?? 2500,
-            exclude: exclude_dirs,
-            useGitignore: sfUseGitignore !== false
-            // default true
-          });
-          if (files.length === 0) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No files found in ${folder_path} matching the criteria.`
-                }
-              ]
-            };
-          }
-          if (sfScan && !sfRedact) {
-            const scanResult = scanFilesForSecrets(files);
-            if (scanResult.found)
-              return {
-                content: [{ type: "text", text: scanResult.report }],
-                isError: true
-              };
-          }
-          const sfMode = resolveAnswerMode(sfRawMode, 0);
-          const batchId = randomUUID2();
-          const sfRl = await getRateLimitConfig();
-          const recentOutcomes = [];
-          let aborted2 = false;
-          let abortReason = "";
-          const tasks = files.map((filePath, idx) => async () => {
-            if (aborted2)
-              return {
-                filePath,
-                success: false,
-                error: "Batch aborted"
-              };
-            for (let attempt = 1; attempt <= 3; attempt++) {
-              if (aborted2)
-                return {
-                  filePath,
-                  success: false,
-                  error: "Batch aborted"
-                };
-              try {
-                const result = await processFileCheck(filePath, sfPrompt, {
-                  maxTokens: resolveDefaultMaxTokens(),
-                  batchId,
-                  fileIndex: idx,
-                  redact: sfRedact,
-                  regexRedact: sfRegexRedact,
-                  onProgress,
-                  ensemble: sfUseEnsemble,
-                  maxBytes: sfBudgetBytes,
-                  modelOverride,
-                  outputDir
-                });
-                recentOutcomes.push(result.success);
-                if (onProgress) {
-                  const completed = recentOutcomes.length;
-                  onProgress(
-                    completed,
-                    files.length,
-                    `scan_folder: ${completed}/${files.length} files done`
-                  );
-                }
-                return result;
-              } catch (err3) {
-                const classified = classifyError(err3);
-                if (classified.unrecoverable) {
-                  if (classified.serviceLevel) {
-                    aborted2 = true;
-                    abortReason = `Unrecoverable: ${classified.reason}`;
-                  }
-                  return {
-                    filePath,
-                    success: false,
-                    error: classified.reason
-                  };
-                }
-                if (attempt < 3) {
-                  await new Promise(
-                    (r) => setTimeout(r, Math.pow(3, attempt - 1) * 1e3)
-                  );
-                  continue;
-                }
-                recentOutcomes.push(false);
-                if (recentOutcomes.length >= 3 && recentOutcomes.slice(-3).every((v) => !v)) {
-                  aborted2 = true;
-                  abortReason = `3 consecutive failures. Last: ${classified.reason}`;
-                }
-                return {
-                  filePath,
-                  success: false,
-                  error: `Failed after 3 retries: ${classified.reason}`
-                };
-              }
-            }
-            return {
-              filePath,
-              success: false,
-              error: "Unexpected retry loop exit"
-            };
-          });
-          const batchResults = await rateLimitedParallel(tasks, sfRl.rps, sfRl.maxInFlight, onProgress);
-          const succeeded = batchResults.filter((r) => r.success);
-          const failed = batchResults.filter(
-            (r) => !r.success && r.error !== "Batch aborted"
-          );
-          const skipped = batchResults.filter((r) => r.error === "Batch aborted");
-          if (sfMode === 2 && succeeded.length > 0) {
-            const sections = [];
-            for (const r of succeeded) {
-              const content = r.reportPath && existsSync14(r.reportPath) ? readFileSync17(r.reportPath, "utf-8") : "";
-              sections.push(`## File: ${r.filePath}
-
-${content}`);
-            }
-            const mergedPath = saveResponse(
-              "scan_folder",
-              sections.join("\n\n---\n\n"),
-              { model: backend.model, task: sfPrompt, inputFile: folder_path },
-              void 0,
-              outputDir
-            );
-            const summary = [
-              `SCAN COMPLETE \u2014 ${succeeded.length} processed, ${failed.length} failed, ${skipped.length} skipped (${files.length} files found)`,
-              `Folder: ${folder_path}`,
-              `Batch UUID: ${batchId}`,
-              `MERGED REPORT: ${mergedPath}`
-            ];
-            if (failed.length > 0) {
-              summary.push("", "FAILED:");
-              for (const r of failed) summary.push(`  ${r.filePath}: ${r.error}`);
-            }
-            if (aborted2) summary.push("", `ABORTED: ${abortReason}`);
-            return {
-              content: [{ type: "text", text: summary.join("\n") }],
-              isError: aborted2
-            };
-          }
-          if (sfMode === 1 && succeeded.length > 0) {
-            const succeededPaths = succeeded.map((r) => r.filePath);
-            const sfAutoGroups = autoGroupByHeuristic(succeededPaths);
-            const pathToResult = /* @__PURE__ */ new Map();
-            for (const r of succeeded) pathToResult.set(r.filePath, r);
-            const sfGroupReportPaths = [];
-            for (const fg of sfAutoGroups) {
-              if (fg.files.length === 0) continue;
-              const sections = [];
-              for (const fp of fg.files) {
-                const r = pathToResult.get(fp);
-                if (!r) continue;
-                const content = r.reportPath && existsSync14(r.reportPath) ? readFileSync17(r.reportPath, "utf-8") : "";
-                sections.push(`## File: ${fp}
-
-${content}`);
-              }
-              if (sections.length === 0) continue;
-              const gid = fg.id || "auto";
-              const groupPath = saveResponse(
-                "scan_folder",
-                sections.join("\n\n---\n\n"),
-                { model: backend.model, task: sfPrompt, inputFile: fg.files[0], groupId: gid },
-                void 0,
-                outputDir
-              );
-              sfGroupReportPaths.push(`[group:${gid}] ${groupPath}`);
-            }
-            const summary = [
-              `SCAN COMPLETE \u2014 ${succeeded.length} processed, ${failed.length} failed, ${skipped.length} skipped (${files.length} files found)`,
-              `Folder: ${folder_path}`,
-              `Batch UUID: ${batchId}`
-            ];
-            if (sfGroupReportPaths.length > 0) {
-              summary.push("", `GROUP REPORTS (${sfGroupReportPaths.length}):`);
-              for (const line of sfGroupReportPaths) summary.push(`  ${line}`);
-            }
-            if (failed.length > 0) {
-              summary.push("", "FAILED:");
-              for (const r of failed) summary.push(`  ${r.filePath}: ${r.error}`);
-            }
-            if (aborted2) summary.push("", `ABORTED: ${abortReason}`);
-            return {
-              content: [{ type: "text", text: summary.join("\n") }],
-              isError: aborted2
-            };
-          }
-          const sfSummaryLines = [
-            `SCAN COMPLETE \u2014 ${succeeded.length} processed, ${failed.length} failed, ${skipped.length} skipped (${files.length} files found)`,
-            `Folder: ${folder_path}`,
-            `Batch UUID: ${batchId}`,
-            ""
-          ];
-          if (succeeded.length > 0) {
-            sfSummaryLines.push("REPORTS:");
-            for (const r of succeeded) sfSummaryLines.push(`  ${r.reportPath}`);
-          }
-          if (failed.length > 0) {
-            sfSummaryLines.push("", "FAILED:");
-            for (const r of failed)
-              sfSummaryLines.push(`  ${r.filePath}: ${r.error}`);
-          }
-          if (aborted2) sfSummaryLines.push("", `ABORTED: ${abortReason}`);
-          return {
-            content: [{ type: "text", text: sfSummaryLines.join("\n") }],
-            isError: aborted2
+          const sfDeps = {
+            useEnsemble: backend.type === "openrouter",
+            backendModel: backend.model,
+            processFileCheck,
+            classifyError,
+            saveResponse,
+            getRateLimitConfig,
+            resolveDefaultMaxTokens,
+            onProgress,
+            outputDir,
+            modelOverride
+            // honours --free and credit-exhausted auto-fallback
           };
+          return await runScanFolder(args, sfDeps);
         }
         case "search_existing_implementations": {
           const seiDeps = {
@@ -56555,8 +56575,8 @@ ${content}`);
             } catch (err3) {
               return { error: err3.message };
             }
-            if (!existsSync14(fA)) return { error: `File not found: ${fARaw}` };
-            if (!existsSync14(fB)) return { error: `File not found: ${fBRaw}` };
+            if (!existsSync15(fA)) return { error: `File not found: ${fARaw}` };
+            if (!existsSync15(fB)) return { error: `File not found: ${fBRaw}` };
             if (cfScan && !cfRedact) {
               const scanResult = scanFilesForSecrets([fA, fB]);
               if (scanResult.found) return { error: scanResult.report };
@@ -56618,7 +56638,7 @@ ${fence}${sourceBlocks}` }
             } catch (err3) {
               return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
             }
-            if (!existsSync14(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
+            if (!existsSync15(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
             const toRef = cfToRef || "HEAD";
             if (cfFromRef.startsWith("-") || toRef.startsWith("-")) {
               return { content: [{ type: "text", text: "FAILED: git refs must not start with '-'" }], isError: true };
@@ -56782,7 +56802,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync14(fileA)) {
+          if (!existsSync15(fileA)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileA}` }
@@ -56790,7 +56810,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync14(fileB)) {
+          if (!existsSync15(fileB)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileB}` }
@@ -56978,13 +56998,13 @@ ${diffFence}` + sourceFileBlocks
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync14(filePath)) {
+                if (!existsSync15(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
                   continue;
                 }
-                const src = readFileSync17(filePath, "utf-8");
+                const src = readFileSync18(filePath, "utf-8");
                 const lang = detectLang(filePath);
                 const deps = extractLocalImports(filePath, src);
                 const depBlocks = [];
@@ -57038,14 +57058,14 @@ ${resp.content}${footer}`);
           const crReports = [];
           const crReportPaths = [];
           for (const filePath of crFilePaths) {
-            if (!existsSync14(filePath)) {
+            if (!existsSync15(filePath)) {
               crReports.push(`## ${filePath}
 
 FAILED: File not found.`);
               crReportPaths.push("(skipped \u2014 file not found)");
               continue;
             }
-            const crSourceCode = readFileSync17(filePath, "utf-8");
+            const crSourceCode = readFileSync18(filePath, "utf-8");
             const crLang = detectLang(filePath);
             const depPaths = extractLocalImports(filePath, crSourceCode);
             const depBlocks = [];
@@ -57218,7 +57238,7 @@ ${crResp.content}${crFooter}`
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync14(filePath)) {
+                if (!existsSync15(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
@@ -57252,17 +57272,17 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     packageImports.push(importPath);
                     continue;
                   }
-                  let found = existsSync14(resolvedBase) && statSync8(resolvedBase).isFile();
+                  let found = existsSync15(resolvedBase) && statSync9(resolvedBase).isFile();
                   if (!found && !extname5(resolvedBase)) {
                     for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".json"]) {
-                      if (existsSync14(resolvedBase + ext)) {
+                      if (existsSync15(resolvedBase + ext)) {
                         found = true;
                         break;
                       }
                     }
                     if (!found) {
                       for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                        if (existsSync14(join20(resolvedBase, `index${ext}`))) {
+                        if (existsSync15(join20(resolvedBase, `index${ext}`))) {
                           found = true;
                           break;
                         }
@@ -57296,7 +57316,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
           const ciReports = [];
           const ciReportPaths = [];
           for (const filePath of ciFilePaths) {
-            if (!existsSync14(filePath)) {
+            if (!existsSync15(filePath)) {
               ciReports.push(`## ${filePath}
 
 FAILED: File not found.`);
@@ -57349,7 +57369,7 @@ FAILED: File not found.`);
                 continue;
               }
               let found = false;
-              if (existsSync14(resolvedBase) && statSync8(resolvedBase).isFile()) {
+              if (existsSync15(resolvedBase) && statSync9(resolvedBase).isFile()) {
                 found = true;
               }
               if (!found && !extname5(resolvedBase)) {
@@ -57365,14 +57385,14 @@ FAILED: File not found.`);
                   ".rs",
                   ".json"
                 ]) {
-                  if (existsSync14(resolvedBase + ext)) {
+                  if (existsSync15(resolvedBase + ext)) {
                     found = true;
                     break;
                   }
                 }
                 if (!found) {
                   for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                    if (existsSync14(join20(resolvedBase, `index${ext}`))) {
+                    if (existsSync15(join20(resolvedBase, `index${ext}`))) {
                       found = true;
                       break;
                     }
@@ -57550,7 +57570,7 @@ FAILED: File not found.`);
             if (csMode === 0 && !csEffectivelyGrouped) {
               const csPerFileResults = [];
               for (const fp of fgPaths) {
-                if (!existsSync14(fp)) {
+                if (!existsSync15(fp)) {
                   csPerFileResults.push(`FAILED: ${fp} \u2014 File not found`);
                   continue;
                 }
