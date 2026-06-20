@@ -4837,9 +4837,16 @@ function buildTools() {
         "batch+verify+canonicalise loop runs inside the MCP server; you get only " +
         "output paths back.\n\n" +
         "PURPOSE: aggregate synonymous / equivalent-meaning items across a large term " +
-        "set (10k–1M items). Designed for taxonomy work, ontology cleanup, label " +
-        "canonicalisation. NOT a word-level synonym lookup — the unit of comparison is " +
-        "the full sentence/label.\n\n" +
+        "set. Designed for taxonomy work, ontology cleanup, label canonicalisation. " +
+        "NOT a word-level synonym lookup — the unit of comparison is the full " +
+        "sentence/label.\n\n" +
+        "SCALE: the whole corpus and its embeddings are held in memory, so the " +
+        "practical ceiling is heap-bound — tens-of-thousands to low-hundreds-of- " +
+        "thousands of items on a typical Node heap with the default 384-dim " +
+        "embeddings, more with policy.compute_embeddings=false. A pre-flight guard " +
+        "estimates the footprint and FAILS FAST with guidance (raise " +
+        "--max-old-space-size, disable embeddings, split the corpus, or set " +
+        "policy.skip_memory_guard) instead of OOM-ing mid-run.\n\n" +
         "PIPELINE: Pre-flight model benchmark → Phase 0 setup (load JSONL, embeddings) " +
         "→ Phase 1 embedding-clustered batching + per-batch grouping → Phase 2 cross- " +
         "cluster verification with transitive-closure merge (>=3 distinct items from each " +
@@ -4851,11 +4858,13 @@ function buildTools() {
         "FAILURE-RECOVERY: each failed batch retries 3x, then splits in half and " +
         "recurses (max depth 3 → 8 leaf sub-batches, 45-call hard cap per source batch).\n" +
         "BACKEND-AGNOSTIC: uses the active profile's model selection.\n\n" +
-        "STATUS: Phase 1 active — embedding-clustered batching + recursive-split- " +
-        "and-retry ladder are live. Phase 2 (cross-cluster verification) + Phase 3 " +
-        "(LLM canonical labels) ship in the next release per TRDD-220ea89f; until " +
-        "then clusters.jsonl reflects Phase 1 partitions only and canonical labels " +
-        "are picked by length heuristic.",
+        "STATUS: all phases live — embedding-clustered batching + recursive-split- " +
+        "and-retry ladder (Phase 1), cross-cluster transitive-closure verification " +
+        "(Phase 2), and canonical-label selection (Phase 3 — LLM mode when " +
+        "policy.canonical_label_mode=llm, else a length heuristic). Phases 2-3 run " +
+        "when the LLM budget allows; clusters.jsonl reflects Phase-1 grouping refined " +
+        "by Phase-2 merges, with Phase-3 canonical labels surfaced in " +
+        "clusters_summary.json (TRDD-220ea89f).",
       inputSchema: {
         type: "object" as const,
         properties: {

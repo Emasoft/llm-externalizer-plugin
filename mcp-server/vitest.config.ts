@@ -74,6 +74,9 @@ export default defineConfig({
       'src/cluster/phase1_batch.test.ts',
       'src/cluster/embeddings.test.ts',
       'src/cluster/cluster_synonyms_main.test.ts',
+      // Pre-flight in-memory footprint guard (TRDD-828238b5 B3) — fail-fast
+      // before any LLM spend when the corpus+embeddings would OOM. Pure math.
+      'src/cluster/memory_guard.test.ts',
       // cluster_synonyms CLI surface — wiring test for the new third-surface
       // adapter (runClusterSynonymsCli). Mock rawLlmCall, no network.
       'src/cluster/wiring.test.ts',

@@ -25,6 +25,7 @@ export const DEFAULT_POLICY: ClusterPolicy = {
   merge_min_cross_count: 3,
   overwrite_output: false,
   emit_sqlite_clusters: true,
+  skip_memory_guard: false,
 };
 
 export const PolicySchema = z.looseObject({
@@ -43,6 +44,7 @@ export const PolicySchema = z.looseObject({
   merge_min_cross_count: z.number().int().min(1).optional(),
   overwrite_output: z.boolean().optional(),
   emit_sqlite_clusters: z.boolean().optional(),
+  skip_memory_guard: z.boolean().optional(),
 });
 
 export type PolicyInput = z.infer<typeof PolicySchema>;
@@ -65,5 +67,6 @@ export function resolvePolicy(raw: PolicyInput | undefined): ClusterPolicy {
     merge_min_cross_count: r.merge_min_cross_count ?? DEFAULT_POLICY.merge_min_cross_count,
     overwrite_output: r.overwrite_output ?? DEFAULT_POLICY.overwrite_output,
     emit_sqlite_clusters: r.emit_sqlite_clusters ?? DEFAULT_POLICY.emit_sqlite_clusters,
+    skip_memory_guard: r.skip_memory_guard ?? DEFAULT_POLICY.skip_memory_guard,
   };
 }

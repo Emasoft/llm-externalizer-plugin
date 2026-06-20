@@ -46,6 +46,12 @@ export interface ClusterPolicy {
   // Output / Q10
   overwrite_output: boolean;
   emit_sqlite_clusters: boolean;     // Q3 default true
+
+  // B3 (TRDD-828238b5) — pre-flight in-memory footprint guard. When false
+  // (default) the run aborts cleanly before any LLM spend if the estimated
+  // heap footprint (items + embeddings + union-find) would exceed a safe
+  // fraction of the V8 heap limit. Set true to bypass the guard.
+  skip_memory_guard: boolean;
 }
 
 export interface ClusterResult {

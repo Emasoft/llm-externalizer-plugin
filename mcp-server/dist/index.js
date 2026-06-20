@@ -50100,6 +50100,60 @@ async function readClusterJsonl(filePath) {
   return { items, warnings };
 }
 
+// src/cluster/memory_guard.ts
+import { getHeapStatistics } from "node:v8";
+var BASE_BYTES_PER_ITEM = 512;
+var BYTES_PER_EMBEDDING_COMPONENT = 4;
+var HEAP_SAFETY_FRACTION = 0.7;
+var DEFAULT_EMBEDDING_DIM = 768;
+var KNOWN_EMBEDDING_DIMS = {
+  "sentence-transformers/all-minilm-l6-v2": 384,
+  "sentence-transformers/all-minilm-l12-v2": 384,
+  "sentence-transformers/all-mpnet-base-v2": 768,
+  "sentence-transformers/paraphrase-multilingual-minilm-l12-v2": 384,
+  "baai/bge-small-en-v1.5": 384,
+  "baai/bge-base-en-v1.5": 768,
+  "baai/bge-large-en-v1.5": 1024
+};
+function knownEmbeddingDim(model) {
+  return KNOWN_EMBEDDING_DIMS[model.trim().toLowerCase()];
+}
+function resolveEmbeddingDim(policy, hasEmbeddingsFile) {
+  if (!hasEmbeddingsFile && !policy.compute_embeddings) return 0;
+  return knownEmbeddingDim(policy.embedding_model) ?? DEFAULT_EMBEDDING_DIM;
+}
+function estimateClusterFootprintBytes(itemCount, embeddingDim) {
+  const n = Math.max(0, itemCount);
+  const base = n * BASE_BYTES_PER_ITEM;
+  const embeddings = n * Math.max(0, embeddingDim) * BYTES_PER_EMBEDDING_COMPONENT;
+  return base + embeddings;
+}
+function resolveHeapLimitBytes() {
+  return getHeapStatistics().heap_size_limit;
+}
+function mb(bytes) {
+  return Math.round(bytes / (1024 * 1024));
+}
+function checkClusterMemoryBudget(input) {
+  if (input.policy.skip_memory_guard) return { ok: true };
+  const dim = resolveEmbeddingDim(input.policy, input.hasEmbeddingsFile);
+  const estimate = estimateClusterFootprintBytes(input.itemCount, dim);
+  const heapLimit = input.heapLimitBytes ?? resolveHeapLimitBytes();
+  const budget = heapLimit * HEAP_SAFETY_FRACTION;
+  if (estimate <= budget) return { ok: true };
+  const embeddingsBytes = input.itemCount * dim * BYTES_PER_EMBEDDING_COMPONENT;
+  const recommendedHeapMb = Math.ceil(estimate / HEAP_SAFETY_FRACTION / (1024 * 1024));
+  const lines = [
+    `cluster_synonyms: estimated in-memory footprint ~${mb(estimate)} MB for ${input.itemCount} items` + (dim > 0 ? ` (embeddings dim ${dim} \u2248 ${mb(embeddingsBytes)} MB + ~${BASE_BYTES_PER_ITEM} B/item structures)` : ` (no embeddings; in-memory structures only)`) + ` exceeds the safe budget ~${mb(budget)} MB (${Math.round(HEAP_SAFETY_FRACTION * 100)}% of this process's ${mb(heapLimit)} MB V8 heap limit).`,
+    `The run would OOM mid-flight AFTER spending LLM budget. To proceed, pick one:`,
+    `  \u2022 raise the heap: run Node with --max-old-space-size=${recommendedHeapMb} (MB) or higher;`,
+    dim > 0 ? `  \u2022 set policy.compute_embeddings=false (drops ~${mb(embeddingsBytes)} MB; uses random batching instead of embedding-clustered batching);` : null,
+    `  \u2022 reduce or pre-split the input corpus;`,
+    `  \u2022 set policy.skip_memory_guard=true to override (you accept the OOM risk).`
+  ];
+  return { ok: false, reason: lines.filter((l) => l !== null).join("\n") };
+}
+
 // src/cluster/kmeans.ts
 function mulberry32(seed) {
   let s = seed >>> 0;
@@ -50828,7 +50882,8 @@ var DEFAULT_POLICY = {
   skip_preflight_benchmark: false,
   merge_min_cross_count: 3,
   overwrite_output: false,
-  emit_sqlite_clusters: true
+  emit_sqlite_clusters: true,
+  skip_memory_guard: false
 };
 var PolicySchema = external_exports3.looseObject({
   batch_size: external_exports3.number().int().positive().optional(),
@@ -50845,7 +50900,8 @@ var PolicySchema = external_exports3.looseObject({
   skip_preflight_benchmark: external_exports3.boolean().optional(),
   merge_min_cross_count: external_exports3.number().int().min(1).optional(),
   overwrite_output: external_exports3.boolean().optional(),
-  emit_sqlite_clusters: external_exports3.boolean().optional()
+  emit_sqlite_clusters: external_exports3.boolean().optional(),
+  skip_memory_guard: external_exports3.boolean().optional()
 });
 function resolvePolicy(raw) {
   const r = raw ?? {};
@@ -50864,7 +50920,8 @@ function resolvePolicy(raw) {
     skip_preflight_benchmark: r.skip_preflight_benchmark ?? DEFAULT_POLICY.skip_preflight_benchmark,
     merge_min_cross_count: r.merge_min_cross_count ?? DEFAULT_POLICY.merge_min_cross_count,
     overwrite_output: r.overwrite_output ?? DEFAULT_POLICY.overwrite_output,
-    emit_sqlite_clusters: r.emit_sqlite_clusters ?? DEFAULT_POLICY.emit_sqlite_clusters
+    emit_sqlite_clusters: r.emit_sqlite_clusters ?? DEFAULT_POLICY.emit_sqlite_clusters,
+    skip_memory_guard: r.skip_memory_guard ?? DEFAULT_POLICY.skip_memory_guard
   };
 }
 
@@ -51018,6 +51075,15 @@ async function runClusterSynonyms(invocation, hooks) {
   }
   const itemsById = /* @__PURE__ */ new Map();
   for (const it of items) itemsById.set(it.id, it);
+  const memVerdict = checkClusterMemoryBudget({
+    itemCount: items.length,
+    policy,
+    hasEmbeddingsFile: invocation.embeddings_file !== void 0
+  });
+  if (!memVerdict.ok) {
+    errors.push(memVerdict.reason);
+    return buildEarlyAbort(invocation, errors, warnings, profileName, tStart);
+  }
   try {
     gateOutputDir(invocation.output_dir, policy, resuming);
   } catch (err3) {
@@ -54811,7 +54877,7 @@ function buildTools() {
     },
     {
       name: "cluster_synonyms",
-      description: "Cluster SENTENCES (or short labels treated as sentences) by full-sentence meaning equivalence. ZERO orchestrator tokens \u2014 file-in, file-out. The whole batch+verify+canonicalise loop runs inside the MCP server; you get only output paths back.\n\nPURPOSE: aggregate synonymous / equivalent-meaning items across a large term set (10k\u20131M items). Designed for taxonomy work, ontology cleanup, label canonicalisation. NOT a word-level synonym lookup \u2014 the unit of comparison is the full sentence/label.\n\nPIPELINE: Pre-flight model benchmark \u2192 Phase 0 setup (load JSONL, embeddings) \u2192 Phase 1 embedding-clustered batching + per-batch grouping \u2192 Phase 2 cross- cluster verification with transitive-closure merge (>=3 distinct items from each cluster must co-occur in the same response) \u2192 Phase 3 canonical-label selection \u2192 Phase 4 emit clusters.jsonl + clusters_summary.json + stats.json + checkpoint.sqlite.\n\nRESUMABLE: pass resume_from to a prior checkpoint.sqlite to continue.\nBUDGET-CAPPED: policy.budget_max_llm_calls aborts cleanly when hit.\nFAILURE-RECOVERY: each failed batch retries 3x, then splits in half and recurses (max depth 3 \u2192 8 leaf sub-batches, 45-call hard cap per source batch).\nBACKEND-AGNOSTIC: uses the active profile's model selection.\n\nSTATUS: Phase 1 active \u2014 embedding-clustered batching + recursive-split- and-retry ladder are live. Phase 2 (cross-cluster verification) + Phase 3 (LLM canonical labels) ship in the next release per TRDD-220ea89f; until then clusters.jsonl reflects Phase 1 partitions only and canonical labels are picked by length heuristic.",
+      description: "Cluster SENTENCES (or short labels treated as sentences) by full-sentence meaning equivalence. ZERO orchestrator tokens \u2014 file-in, file-out. The whole batch+verify+canonicalise loop runs inside the MCP server; you get only output paths back.\n\nPURPOSE: aggregate synonymous / equivalent-meaning items across a large term set. Designed for taxonomy work, ontology cleanup, label canonicalisation. NOT a word-level synonym lookup \u2014 the unit of comparison is the full sentence/label.\n\nSCALE: the whole corpus and its embeddings are held in memory, so the practical ceiling is heap-bound \u2014 tens-of-thousands to low-hundreds-of- thousands of items on a typical Node heap with the default 384-dim embeddings, more with policy.compute_embeddings=false. A pre-flight guard estimates the footprint and FAILS FAST with guidance (raise --max-old-space-size, disable embeddings, split the corpus, or set policy.skip_memory_guard) instead of OOM-ing mid-run.\n\nPIPELINE: Pre-flight model benchmark \u2192 Phase 0 setup (load JSONL, embeddings) \u2192 Phase 1 embedding-clustered batching + per-batch grouping \u2192 Phase 2 cross- cluster verification with transitive-closure merge (>=3 distinct items from each cluster must co-occur in the same response) \u2192 Phase 3 canonical-label selection \u2192 Phase 4 emit clusters.jsonl + clusters_summary.json + stats.json + checkpoint.sqlite.\n\nRESUMABLE: pass resume_from to a prior checkpoint.sqlite to continue.\nBUDGET-CAPPED: policy.budget_max_llm_calls aborts cleanly when hit.\nFAILURE-RECOVERY: each failed batch retries 3x, then splits in half and recurses (max depth 3 \u2192 8 leaf sub-batches, 45-call hard cap per source batch).\nBACKEND-AGNOSTIC: uses the active profile's model selection.\n\nSTATUS: all phases live \u2014 embedding-clustered batching + recursive-split- and-retry ladder (Phase 1), cross-cluster transitive-closure verification (Phase 2), and canonical-label selection (Phase 3 \u2014 LLM mode when policy.canonical_label_mode=llm, else a length heuristic). Phases 2-3 run when the LLM budget allows; clusters.jsonl reflects Phase-1 grouping refined by Phase-2 merges, with Phase-3 canonical labels surfaced in clusters_summary.json (TRDD-220ea89f).",
       inputSchema: {
         type: "object",
         properties: {

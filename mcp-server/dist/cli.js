@@ -22426,6 +22426,9 @@ import { createReadStream, createWriteStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { open } from "node:fs/promises";
 
+// src/cluster/memory_guard.ts
+import { getHeapStatistics } from "node:v8";
+
 // node_modules/zod/v4/classic/external.js
 var external_exports = {};
 __export(external_exports, {
@@ -36249,7 +36252,8 @@ var PolicySchema = external_exports.looseObject({
   skip_preflight_benchmark: external_exports.boolean().optional(),
   merge_min_cross_count: external_exports.number().int().min(1).optional(),
   overwrite_output: external_exports.boolean().optional(),
-  emit_sqlite_clusters: external_exports.boolean().optional()
+  emit_sqlite_clusters: external_exports.boolean().optional(),
+  skip_memory_guard: external_exports.boolean().optional()
 });
 
 // src/cluster/cli.ts

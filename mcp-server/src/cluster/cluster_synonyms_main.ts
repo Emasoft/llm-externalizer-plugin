@@ -23,6 +23,7 @@ import { join } from "node:path";
 import { CheckpointDB } from "./checkpoint.js";
 import { computeEmbeddings, loadEmbeddings, type EmbeddingsBundle } from "./embeddings.js";
 import { readClusterJsonl } from "./jsonl.js";
+import { checkClusterMemoryBudget } from "./memory_guard.js";
 import { runPhase1, type Phase1RawLlmCall } from "./phase1_batch.js";
 import { runPhase2 } from "./phase2_verify.js";
 import { runPhase3Llm } from "./phase3_canonical.js";
@@ -308,6 +309,23 @@ export async function runClusterSynonyms(
   }
   const itemsById = new Map<string, ClusterInputItem>();
   for (const it of items) itemsById.set(it.id, it);
+
+  // 2b. B3 (TRDD-828238b5): fail-fast in-memory footprint guard. The whole
+  // corpus AND its embeddings are materialised in the heap (items + itemsById +
+  // union-find + partition + the N×dim×4-byte embeddings bundle — see
+  // memory_guard.ts). A too-large run used to OOM MID-FLIGHT, AFTER the
+  // pre-flight benchmark and Phase-1/2 LLM budget had already been spent.
+  // Estimate the footprint and abort cleanly BEFORE any spend (and before the
+  // output dir is touched). Opt out with policy.skip_memory_guard=true.
+  const memVerdict = checkClusterMemoryBudget({
+    itemCount: items.length,
+    policy,
+    hasEmbeddingsFile: invocation.embeddings_file !== undefined,
+  });
+  if (!memVerdict.ok) {
+    errors.push(memVerdict.reason);
+    return buildEarlyAbort(invocation, errors, warnings, profileName, tStart);
+  }
 
   // 3. T13 / T14 — output-dir gate.
   try {

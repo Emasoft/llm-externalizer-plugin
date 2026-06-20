@@ -3,7 +3,7 @@ trdd-id: 828238b5-42d7-478e-8fe7-44d74f812286
 title: Auto-* model management suite + deep-audit findings backlog
 status: in-progress
 created: 2026-05-24T22:56:20+0200
-updated: 2026-06-18T05:29:48+0200
+updated: 2026-06-20T18:54:00+0200
 ---
 
 # TRDD-828238b5 — Auto-* model management suite + deep-audit findings backlog
@@ -345,7 +345,7 @@ FAIL / 1 SKIP.
   Either implement real resume (checkpoint.sqlite exists) or remove the param +
   doc. Silent-overwrite is a data-loss footgun. — **DONE** (implemented real
   resume; [[TRDD-66da2aa7]], commit 8bee08a).
-- **B3 [HIGH→RE-SCOPED] cluster whole-corpus in-memory load** — original finding:
+- **B3 [HIGH→RE-SCOPED→DONE (option B, 2026-06-20)] cluster whole-corpus in-memory load** — original finding:
   "in-memory load contradicts the documented 10k–1M streaming contract; stream
   from the JSONL + checkpoint instead." **2026-06-18 source re-verification found
   the original fix MIS-TARGETED — do NOT implement "stream from the JSONL" as
@@ -384,6 +384,25 @@ FAIL / 1 SKIP.
     speculative capability ("don't build for imaginary scenarios"); B fixes the
     silent-failure footgun now. The "stream from the JSONL" phrasing of the
     original finding is RETIRED (mis-diagnosed). Decision belongs to the user.
+  - **DONE (2026-06-20) — option B shipped** under the user's "complete all
+    pending tasks" directive (A stays a speculative, unrequested capability —
+    "don't build for imaginary scenarios"). New PURE module
+    `cluster/memory_guard.ts`: estimates the peak heap footprint (items +
+    itemsById + union-find + partition at a conservative ~512 B/item, PLUS the
+    dominant N×dim×4-byte Float32 embeddings bundle) and FAILS FAST with an
+    actionable message — raise `--max-old-space-size`, set
+    `compute_embeddings=false`, split the corpus, or set the new
+    `policy.skip_memory_guard` — when the estimate exceeds 70% of THIS process's
+    live V8 heap limit (so the ceiling auto-adapts to the heap; no fake fixed
+    number). Wired into `runClusterSynonyms` step 2b — BEFORE the pre-flight
+    benchmark and Phase-1/2/3 LLM spend, so a doomed run aborts before billing
+    instead of OOM-ing mid-flight (the exact footgun B3 named). The unbacked
+    "10k–1M items" tool description (`index.ts`) was corrected to the heap-bound
+    reality; a STALE "Phase 2/3 ship next release" status line in the same
+    description (they ARE live) was fixed in passing. 18 pure unit tests
+    (`memory_guard.test.ts`; no LLM/network); `skip_memory_guard` added to
+    ClusterPolicy / DEFAULT_POLICY / PolicySchema / resolvePolicy. Verified:
+    build + lint clean, 1089 tests pass (4 live skipped).
 - **B4 [MEDIUM] cluster preflight benchmark never wired** into the entry path
   (`cluster/preflight_benchmark.ts` exists, unused). Wire it or remove.
   — **DONE (wired)** 2026-06-12. The MCP `cluster_synonyms` dispatch (the sole
