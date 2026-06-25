@@ -70,6 +70,24 @@ const TOOL_CATALOG = {
       max_files: "Max files (default: 2500)",
     },
   },
+  high_quality_scan: {
+    desc: "Like scan_folder but ONE strong remote model (default z-ai/glm-5.2) at max reasoning + cache, not the cheap ensemble. Paid + OpenRouter-only (fails fast on local/free_only/no-credit).",
+    params: {
+      folder_path: "Folder to scan (REQUIRED)",
+      instructions: "What to check in each file",
+      instructions_files_paths: "File(s) containing instructions (alternative to instructions)",
+      extensions: 'File extensions, e.g. \'[".ts",".py"]\'',
+      exclude_dirs: 'Dirs to skip, e.g. \'["tests","fixtures"]\'',
+      use_gitignore: "Respect .gitignore (default: true)",
+      max_files: "Max files (default: 2500)",
+      max_payload_kb: "Max file size in KB per file (default: 400)",
+      answer_mode: "0=per-file (default), 1=per-group, 2=merged",
+      redact_regex: "JS regex to redact matching strings before sending to LLM",
+      scan_secrets: "true to abort if API keys/tokens found in files",
+      redact_secrets: "true to redact secrets before sending",
+      output_dir: "Custom output directory for reports",
+    },
+  },
   compare_files: {
     desc: "Compare files. 3 modes: pair (2 files), batch (file_pairs), git diff.",
     params: {
