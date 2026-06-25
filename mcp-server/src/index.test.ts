@@ -70,6 +70,7 @@ describe('listTools', () => {
       'or_model_info_table',
       'reset',
       'scan_folder',
+      'high_quality_scan',
       'search_existing_implementations',
       'cluster_synonyms',
       // mass-scouting — 16 tools
@@ -253,6 +254,19 @@ describe('input validation', () => {
     expect(result.isError).toBe(true);
     const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
     expect(text).toMatch(/input_files_paths/i);
+  });
+
+  it('high_quality_scan: fails fast on a non-OpenRouter backend (TRDD-DBUSM55E)', async () => {
+    /** high_quality_scan runs a PAID model and must refuse, not silently
+     *  downgrade, when the backend cannot run it. The cost-safe test backend is
+     *  LOCAL, so the paid-model gate refuses before any file is scanned. */
+    const result = await client.callTool({
+      name: 'high_quality_scan',
+      arguments: { folder_path: '/tmp', instructions: 'find bugs' },
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
+    expect(text).toMatch(/OpenRouter backend/i);
   });
 
   it('compare_files: fails with fewer than 2 files', async () => {

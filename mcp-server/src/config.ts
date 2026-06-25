@@ -900,6 +900,62 @@ export function resolveHighQualityModel(raw: unknown): ResolvedHighQualityModel 
 }
 
 /**
+ * Build the OpenRouter `provider` routing block for a high_quality_scan request
+ * from a resolved high-quality model (TRDD-DBUSM55E). `allow_fallbacks` is always
+ * present; `order` (the preferred provider, e.g. gmicloud/fp8) and `quantizations`
+ * (the fp8+ whitelist) are included only when non-empty, so we never send an empty
+ * array. The result is attached as the request's `provider` control field, which
+ * survives the supported-params filter to the wire.
+ */
+export function buildHighQualityProvider(
+  hq: ResolvedHighQualityModel,
+): Record<string, unknown> {
+  const provider: Record<string, unknown> = {
+    allow_fallbacks: hq.allowFallbacks,
+  };
+  if (hq.providerOrder.length > 0) provider.order = hq.providerOrder;
+  if (hq.quantizations.length > 0) provider.quantizations = hq.quantizations;
+  return provider;
+}
+
+/**
+ * Fail-fast gate for high_quality_scan (TRDD-DBUSM55E). The tool runs a PAID
+ * high-quality model, so it must refuse (never silently downgrade) when the
+ * backend cannot deliver it: a non-OpenRouter backend can't reach the remote
+ * model, free_only mode forbids any non-':free' model, and exhausted credit
+ * would 402 every file and fall back to the free pool — defeating the quality
+ * promise. Returns the user-facing refusal message, or null when allowed.
+ */
+export function highQualityScanRefusal(
+  backendType: string,
+  freeOnly: boolean,
+  creditExhausted: boolean,
+): string | null {
+  if (backendType !== "openrouter") {
+    return (
+      `high_quality_scan requires the OpenRouter backend (it runs a remote ` +
+      `high-quality model); the active backend is ${backendType}. Switch to a ` +
+      `remote profile, or use scan_folder for the local backend.`
+    );
+  }
+  if (freeOnly) {
+    return (
+      `high_quality_scan uses a paid high-quality model and cannot run under ` +
+      `free_only mode. Disable free_only in your profile, or use scan_folder ` +
+      `(which honours the free pool).`
+    );
+  }
+  if (creditExhausted) {
+    return (
+      `high_quality_scan needs OpenRouter credit for its paid high-quality model, ` +
+      `but credit is exhausted (a 402 was seen this session). Add credit, or use ` +
+      `scan_folder.`
+    );
+  }
+  return null;
+}
+
+/**
  * Resolve a profile to concrete connection values.
  * Merges profile overrides with preset defaults and resolves env var refs.
  */

@@ -218472,6 +218472,34 @@ function qualifyModelForTool(tool, model) {
 }
 
 // src/config.ts
+var QUANT_TIERS = Object.freeze([
+  "int4",
+  "fp4",
+  "int8",
+  "fp6",
+  "fp8",
+  "fp16",
+  "bf16",
+  "fp32"
+]);
+var HIGH_QUALITY_MODEL_DEFAULTS = {
+  id: "z-ai/glm-5.2",
+  reasoningEffort: "xhigh",
+  // "max" maps here — the real OpenRouter ceiling
+  cache: true,
+  providerOrder: ["gmicloud/fp8"],
+  quantizations: ["fp8", "fp16", "bf16", "fp32"],
+  // fp8-or-higher
+  allowFallbacks: false
+};
+var VALID_HQ_REASONING = /* @__PURE__ */ new Set([
+  "off",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max"
+]);
 var API_PRESETS = {
   // ── Local presets ─────────────────────────────────────────────────
   "lmstudio-local": {
@@ -218618,6 +218646,35 @@ function coerceFreeModels(raw) {
   if (!Array.isArray(raw)) return [];
   return raw.filter((m) => typeof m === "string");
 }
+function mapReasoningEffort(raw) {
+  if (typeof raw !== "string") return HIGH_QUALITY_MODEL_DEFAULTS.reasoningEffort;
+  const v = raw.toLowerCase();
+  if (v === "max") return "xhigh";
+  return VALID_HQ_REASONING.has(v) ? v : HIGH_QUALITY_MODEL_DEFAULTS.reasoningEffort;
+}
+function expandMinQuantization(raw) {
+  if (typeof raw !== "string")
+    return [...HIGH_QUALITY_MODEL_DEFAULTS.quantizations];
+  const idx = QUANT_TIERS.indexOf(raw.toLowerCase());
+  if (idx < 0) return [...HIGH_QUALITY_MODEL_DEFAULTS.quantizations];
+  return QUANT_TIERS.slice(idx);
+}
+function resolveHighQualityModel(raw) {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { ...HIGH_QUALITY_MODEL_DEFAULTS };
+  }
+  const hq = raw;
+  const id = typeof hq.id === "string" && hq.id.length > 0 ? hq.id : HIGH_QUALITY_MODEL_DEFAULTS.id;
+  const provider = typeof hq.provider === "string" && hq.provider.length > 0 ? hq.provider : HIGH_QUALITY_MODEL_DEFAULTS.providerOrder[0];
+  return {
+    id,
+    reasoningEffort: mapReasoningEffort(hq.reasoning_effort),
+    cache: typeof hq.cache === "boolean" ? hq.cache : HIGH_QUALITY_MODEL_DEFAULTS.cache,
+    providerOrder: [provider],
+    quantizations: expandMinQuantization(hq.min_quantization),
+    allowFallbacks: typeof hq.allow_fallbacks === "boolean" ? hq.allow_fallbacks : HIGH_QUALITY_MODEL_DEFAULTS.allowFallbacks
+  };
+}
 function resolveProfile(name, profile) {
   const preset = API_PRESETS[profile.api];
   if (!preset) {
@@ -218648,7 +218705,10 @@ function resolveProfile(name, profile) {
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
     appName: profile.app_name ?? preset.defaultAppName,
-    httpReferer: profile.http_referer ?? preset.defaultHttpReferer
+    httpReferer: profile.http_referer ?? preset.defaultHttpReferer,
+    // High-quality-scan model (TRDD-DBUSM55E): always resolved (defaults filled),
+    // independent of mode — the high_quality_scan tool reads it; other tools ignore it.
+    highQualityModel: resolveHighQualityModel(profile.high_quality_model)
   };
 }
 function resolveModelForTool(resolved, tool, fallback) {

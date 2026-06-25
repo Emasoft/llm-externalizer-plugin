@@ -17,6 +17,8 @@ export default defineConfig({
       'src/safe-body.test.ts',
       // Per-tool model map (tool_models / resolveModelForTool) — TRDD-f45eeaa0.
       'src/config.test.ts',
+      // high_quality_scan prompt-cache wire transform (TRDD-DBUSM55E).
+      'src/high-quality-scan.test.ts',
       // Usage-rule installer (~/.claude/rules/use-llm-externalizer.md).
       'src/rule-install.test.ts',
       // Single-source project-root resolver (reports land inside the project).

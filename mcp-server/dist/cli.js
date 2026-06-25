@@ -7628,6 +7628,35 @@ function coerceFreeModels(raw) {
   if (!Array.isArray(raw)) return [];
   return raw.filter((m) => typeof m === "string");
 }
+function mapReasoningEffort(raw) {
+  if (typeof raw !== "string") return HIGH_QUALITY_MODEL_DEFAULTS.reasoningEffort;
+  const v = raw.toLowerCase();
+  if (v === "max") return "xhigh";
+  return VALID_HQ_REASONING.has(v) ? v : HIGH_QUALITY_MODEL_DEFAULTS.reasoningEffort;
+}
+function expandMinQuantization(raw) {
+  if (typeof raw !== "string")
+    return [...HIGH_QUALITY_MODEL_DEFAULTS.quantizations];
+  const idx = QUANT_TIERS.indexOf(raw.toLowerCase());
+  if (idx < 0) return [...HIGH_QUALITY_MODEL_DEFAULTS.quantizations];
+  return QUANT_TIERS.slice(idx);
+}
+function resolveHighQualityModel(raw) {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { ...HIGH_QUALITY_MODEL_DEFAULTS };
+  }
+  const hq = raw;
+  const id = typeof hq.id === "string" && hq.id.length > 0 ? hq.id : HIGH_QUALITY_MODEL_DEFAULTS.id;
+  const provider = typeof hq.provider === "string" && hq.provider.length > 0 ? hq.provider : HIGH_QUALITY_MODEL_DEFAULTS.providerOrder[0];
+  return {
+    id,
+    reasoningEffort: mapReasoningEffort(hq.reasoning_effort),
+    cache: typeof hq.cache === "boolean" ? hq.cache : HIGH_QUALITY_MODEL_DEFAULTS.cache,
+    providerOrder: [provider],
+    quantizations: expandMinQuantization(hq.min_quantization),
+    allowFallbacks: typeof hq.allow_fallbacks === "boolean" ? hq.allow_fallbacks : HIGH_QUALITY_MODEL_DEFAULTS.allowFallbacks
+  };
+}
 function resolveProfile(name, profile) {
   const preset = API_PRESETS[profile.api];
   if (!preset) {
@@ -7658,7 +7687,10 @@ function resolveProfile(name, profile) {
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
     appName: profile.app_name ?? preset.defaultAppName,
-    httpReferer: profile.http_referer ?? preset.defaultHttpReferer
+    httpReferer: profile.http_referer ?? preset.defaultHttpReferer,
+    // High-quality-scan model (TRDD-DBUSM55E): always resolved (defaults filled),
+    // independent of mode — the high_quality_scan tool reads it; other tools ignore it.
+    highQualityModel: resolveHighQualityModel(profile.high_quality_model)
   };
 }
 function resolveModelForTool(resolved, tool, fallback) {
@@ -7681,12 +7713,40 @@ function assertFreeOnlyModel(freeOnly, backendType, model) {
     );
   }
 }
-var import_yaml, API_PRESETS, USER_CONFIG_ENV_MAP, FREE_POOL_SEED, _activeFreeOnly, SETTINGS_TEMPLATE;
+var import_yaml, QUANT_TIERS, HIGH_QUALITY_MODEL_DEFAULTS, VALID_HQ_REASONING, API_PRESETS, USER_CONFIG_ENV_MAP, FREE_POOL_SEED, _activeFreeOnly, SETTINGS_TEMPLATE;
 var init_config = __esm({
   "src/config.ts"() {
     "use strict";
     import_yaml = __toESM(require_dist(), 1);
     init_registry();
+    QUANT_TIERS = Object.freeze([
+      "int4",
+      "fp4",
+      "int8",
+      "fp6",
+      "fp8",
+      "fp16",
+      "bf16",
+      "fp32"
+    ]);
+    HIGH_QUALITY_MODEL_DEFAULTS = {
+      id: "z-ai/glm-5.2",
+      reasoningEffort: "xhigh",
+      // "max" maps here — the real OpenRouter ceiling
+      cache: true,
+      providerOrder: ["gmicloud/fp8"],
+      quantizations: ["fp8", "fp16", "bf16", "fp32"],
+      // fp8-or-higher
+      allowFallbacks: false
+    };
+    VALID_HQ_REASONING = /* @__PURE__ */ new Set([
+      "off",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]);
     API_PRESETS = {
       // ── Local presets ─────────────────────────────────────────────────
       "lmstudio-local": {
@@ -7811,6 +7871,17 @@ profiles:
     api: openrouter-remote
     model: "google/gemini-2.5-flash"
     api_key: $OPENROUTER_API_KEY          # set this env var, or replace with direct key
+    # Optional: high-quality scan model (TRDD-DBUSM55E). Drives high_quality_scan \u2014
+    # ONE strong model at max reasoning instead of the cheap 3-model ensemble.
+    # Absent \u2192 these exact defaults are used automatically. Needs an OpenRouter
+    # (remote) profile; NOT available under free_only (it is a paid model).
+    # high_quality_model:
+    #   id: "z-ai/glm-5.2"            # default high-quality model
+    #   reasoning_effort: max          # max -> OpenRouter "xhigh" (the real ceiling)
+    #   cache: true                    # prompt-cache the system prompt across files
+    #   min_quantization: fp8          # accept fp8-or-higher precision endpoints only
+    #   provider: "gmicloud/fp8"       # preferred provider (provider.order[0])
+    #   allow_fallbacks: false         # pin the preferred provider
 
   # \u2500\u2500 Remote: Ensemble (three models in parallel) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   remote-ensemble-geminigrok:

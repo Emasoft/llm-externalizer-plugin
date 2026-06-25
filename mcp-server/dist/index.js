@@ -40014,6 +40014,34 @@ function qualifyModelForTool(tool, model) {
 }
 
 // src/config.ts
+var QUANT_TIERS = Object.freeze([
+  "int4",
+  "fp4",
+  "int8",
+  "fp6",
+  "fp8",
+  "fp16",
+  "bf16",
+  "fp32"
+]);
+var HIGH_QUALITY_MODEL_DEFAULTS = {
+  id: "z-ai/glm-5.2",
+  reasoningEffort: "xhigh",
+  // "max" maps here — the real OpenRouter ceiling
+  cache: true,
+  providerOrder: ["gmicloud/fp8"],
+  quantizations: ["fp8", "fp16", "bf16", "fp32"],
+  // fp8-or-higher
+  allowFallbacks: false
+};
+var VALID_HQ_REASONING = /* @__PURE__ */ new Set([
+  "off",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max"
+]);
 var API_PRESETS = {
   // ── Local presets ─────────────────────────────────────────────────
   "lmstudio-local": {
@@ -40357,6 +40385,46 @@ function validateProfile(name, profile) {
       }
     }
   }
+  const rawHq = profile.high_quality_model;
+  if (rawHq !== void 0 && rawHq !== null) {
+    if (typeof rawHq !== "object" || Array.isArray(rawHq)) {
+      errors.push(
+        `Profile '${name}': high_quality_model must be a map of {id, reasoning_effort, cache, min_quantization, provider, allow_fallbacks}`
+      );
+    } else {
+      const hq = rawHq;
+      if (hq.id !== void 0 && (typeof hq.id !== "string" || hq.id.length === 0)) {
+        errors.push(
+          `Profile '${name}': high_quality_model.id must be a non-empty model-id string`
+        );
+      }
+      if (hq.reasoning_effort !== void 0 && (typeof hq.reasoning_effort !== "string" || !VALID_HQ_REASONING.has(hq.reasoning_effort.toLowerCase()))) {
+        errors.push(
+          `Profile '${name}': high_quality_model.reasoning_effort must be one of off|low|medium|high|xhigh|max`
+        );
+      }
+      if (hq.cache !== void 0 && typeof hq.cache !== "boolean") {
+        errors.push(
+          `Profile '${name}': high_quality_model.cache must be a boolean`
+        );
+      }
+      if (hq.min_quantization !== void 0 && (typeof hq.min_quantization !== "string" || !QUANT_TIERS.includes(hq.min_quantization.toLowerCase()))) {
+        errors.push(
+          `Profile '${name}': high_quality_model.min_quantization must be one of ${QUANT_TIERS.join("|")}`
+        );
+      }
+      if (hq.provider !== void 0 && (typeof hq.provider !== "string" || hq.provider.length === 0)) {
+        errors.push(
+          `Profile '${name}': high_quality_model.provider must be a non-empty provider slug string`
+        );
+      }
+      if (hq.allow_fallbacks !== void 0 && typeof hq.allow_fallbacks !== "boolean") {
+        errors.push(
+          `Profile '${name}': high_quality_model.allow_fallbacks must be a boolean`
+        );
+      }
+    }
+  }
   return { valid: errors.length === 0, errors };
 }
 function validateSettings(settings) {
@@ -40388,6 +40456,55 @@ function coerceFreeModels(raw) {
   if (!Array.isArray(raw)) return [];
   return raw.filter((m) => typeof m === "string");
 }
+function mapReasoningEffort(raw) {
+  if (typeof raw !== "string") return HIGH_QUALITY_MODEL_DEFAULTS.reasoningEffort;
+  const v = raw.toLowerCase();
+  if (v === "max") return "xhigh";
+  return VALID_HQ_REASONING.has(v) ? v : HIGH_QUALITY_MODEL_DEFAULTS.reasoningEffort;
+}
+function expandMinQuantization(raw) {
+  if (typeof raw !== "string")
+    return [...HIGH_QUALITY_MODEL_DEFAULTS.quantizations];
+  const idx = QUANT_TIERS.indexOf(raw.toLowerCase());
+  if (idx < 0) return [...HIGH_QUALITY_MODEL_DEFAULTS.quantizations];
+  return QUANT_TIERS.slice(idx);
+}
+function resolveHighQualityModel(raw) {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { ...HIGH_QUALITY_MODEL_DEFAULTS };
+  }
+  const hq = raw;
+  const id = typeof hq.id === "string" && hq.id.length > 0 ? hq.id : HIGH_QUALITY_MODEL_DEFAULTS.id;
+  const provider = typeof hq.provider === "string" && hq.provider.length > 0 ? hq.provider : HIGH_QUALITY_MODEL_DEFAULTS.providerOrder[0];
+  return {
+    id,
+    reasoningEffort: mapReasoningEffort(hq.reasoning_effort),
+    cache: typeof hq.cache === "boolean" ? hq.cache : HIGH_QUALITY_MODEL_DEFAULTS.cache,
+    providerOrder: [provider],
+    quantizations: expandMinQuantization(hq.min_quantization),
+    allowFallbacks: typeof hq.allow_fallbacks === "boolean" ? hq.allow_fallbacks : HIGH_QUALITY_MODEL_DEFAULTS.allowFallbacks
+  };
+}
+function buildHighQualityProvider(hq) {
+  const provider = {
+    allow_fallbacks: hq.allowFallbacks
+  };
+  if (hq.providerOrder.length > 0) provider.order = hq.providerOrder;
+  if (hq.quantizations.length > 0) provider.quantizations = hq.quantizations;
+  return provider;
+}
+function highQualityScanRefusal(backendType, freeOnly, creditExhausted2) {
+  if (backendType !== "openrouter") {
+    return `high_quality_scan requires the OpenRouter backend (it runs a remote high-quality model); the active backend is ${backendType}. Switch to a remote profile, or use scan_folder for the local backend.`;
+  }
+  if (freeOnly) {
+    return `high_quality_scan uses a paid high-quality model and cannot run under free_only mode. Disable free_only in your profile, or use scan_folder (which honours the free pool).`;
+  }
+  if (creditExhausted2) {
+    return `high_quality_scan needs OpenRouter credit for its paid high-quality model, but credit is exhausted (a 402 was seen this session). Add credit, or use scan_folder.`;
+  }
+  return null;
+}
 function resolveProfile(name, profile) {
   const preset = API_PRESETS[profile.api];
   if (!preset) {
@@ -40418,7 +40535,10 @@ function resolveProfile(name, profile) {
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
     appName: profile.app_name ?? preset.defaultAppName,
-    httpReferer: profile.http_referer ?? preset.defaultHttpReferer
+    httpReferer: profile.http_referer ?? preset.defaultHttpReferer,
+    // High-quality-scan model (TRDD-DBUSM55E): always resolved (defaults filled),
+    // independent of mode — the high_quality_scan tool reads it; other tools ignore it.
+    highQualityModel: resolveHighQualityModel(profile.high_quality_model)
   };
 }
 function resolveModelForTool(resolved, tool, fallback) {
@@ -40497,6 +40617,17 @@ profiles:
     api: openrouter-remote
     model: "google/gemini-2.5-flash"
     api_key: $OPENROUTER_API_KEY          # set this env var, or replace with direct key
+    # Optional: high-quality scan model (TRDD-DBUSM55E). Drives high_quality_scan \u2014
+    # ONE strong model at max reasoning instead of the cheap 3-model ensemble.
+    # Absent \u2192 these exact defaults are used automatically. Needs an OpenRouter
+    # (remote) profile; NOT available under free_only (it is a paid model).
+    # high_quality_model:
+    #   id: "z-ai/glm-5.2"            # default high-quality model
+    #   reasoning_effort: max          # max -> OpenRouter "xhigh" (the real ceiling)
+    #   cache: true                    # prompt-cache the system prompt across files
+    #   min_quantization: fp8          # accept fp8-or-higher precision endpoints only
+    #   provider: "gmicloud/fp8"       # preferred provider (provider.order[0])
+    #   allow_fallbacks: false         # pin the preferred provider
 
   # \u2500\u2500 Remote: Ensemble (three models in parallel) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   remote-ensemble-geminigrok:
@@ -49673,6 +49804,55 @@ var redactRegexSchema = {
   type: "string",
   description: "JavaScript regex pattern to redact matching strings from file content before sending to LLM. Applied after secret redaction. Alphanumeric matches \u2192 [REDACTED:USER_PATTERN], numeric-only matches \u2192 zero-padded placeholder. Invalid regex returns an error with details."
 };
+var scanFolderSchemaProps = {
+  folder_path: {
+    type: "string",
+    description: "Absolute path to the folder to scan recursively."
+  },
+  extensions: {
+    type: "array",
+    items: { type: "string" },
+    description: 'File extensions to include (e.g. [".ts", ".py"]). If omitted, includes all files.'
+  },
+  exclude_dirs: {
+    type: "array",
+    items: { type: "string" },
+    description: "Additional directory names to skip (hidden dirs, node_modules, .git are always skipped)."
+  },
+  max_files: {
+    type: "number",
+    description: "Maximum number of files to process (default: 2500). Safety limit to prevent runaway scans."
+  },
+  instructions: {
+    type: "string",
+    description: "What to look for or do with each file."
+  },
+  instructions_files_paths: {
+    oneOf: [
+      { type: "string" },
+      { type: "array", items: { type: "string" } }
+    ],
+    description: "File(s) containing instructions."
+  },
+  scan_secrets: {
+    type: "boolean",
+    description: "Scan input files for secrets and ABORT if any are found. Best practice: move secrets to .env (gitignored)."
+  },
+  redact_secrets: {
+    type: "boolean",
+    description: "Redact secrets before sending to LLM. DISCOURAGED: prefer moving secrets to .env files (gitignored)."
+  },
+  use_gitignore: {
+    type: "boolean",
+    description: "Use .gitignore rules to filter files (via git ls-files). When true, only files not ignored by git are included. Falls back to manual walk if not in a git repo. Default: true."
+  },
+  answer_mode: answerModeSchema,
+  redact_regex: redactRegexSchema,
+  max_payload_kb: {
+    type: "number",
+    description: "Max file size in KB per file. Default: 400. Files exceeding this are skipped and reported."
+  }
+};
 function buildTools(limitsText) {
   const allTools = [
     {
@@ -49894,55 +50074,16 @@ function buildTools(limitsText) {
       description: "Auto-discover files from a directory tree and run the given instructions against each. Filters by extension, skips hidden dirs/node_modules/.git/dist/build.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context." + BATCHING_NOTE + limitsText,
       inputSchema: {
         type: "object",
-        properties: {
-          folder_path: {
-            type: "string",
-            description: "Absolute path to the folder to scan recursively."
-          },
-          extensions: {
-            type: "array",
-            items: { type: "string" },
-            description: 'File extensions to include (e.g. [".ts", ".py"]). If omitted, includes all files.'
-          },
-          exclude_dirs: {
-            type: "array",
-            items: { type: "string" },
-            description: "Additional directory names to skip (hidden dirs, node_modules, .git are always skipped)."
-          },
-          max_files: {
-            type: "number",
-            description: "Maximum number of files to process (default: 2500). Safety limit to prevent runaway scans."
-          },
-          instructions: {
-            type: "string",
-            description: "What to look for or do with each file."
-          },
-          instructions_files_paths: {
-            oneOf: [
-              { type: "string" },
-              { type: "array", items: { type: "string" } }
-            ],
-            description: "File(s) containing instructions."
-          },
-          scan_secrets: {
-            type: "boolean",
-            description: "Scan input files for secrets and ABORT if any are found. Best practice: move secrets to .env (gitignored)."
-          },
-          redact_secrets: {
-            type: "boolean",
-            description: "Redact secrets before sending to LLM. DISCOURAGED: prefer moving secrets to .env files (gitignored)."
-          },
-          use_gitignore: {
-            type: "boolean",
-            description: "Use .gitignore rules to filter files (via git ls-files). When true, only files not ignored by git are included. Falls back to manual walk if not in a git repo. Default: true."
-          },
-          answer_mode: answerModeSchema,
-          redact_regex: redactRegexSchema,
-          max_payload_kb: {
-            type: "number",
-            description: "Max file size in KB per file. Default: 400. Files exceeding this are skipped and reported."
-          }
-        },
+        properties: scanFolderSchemaProps,
+        required: ["folder_path"]
+      }
+    },
+    {
+      name: "high_quality_scan",
+      description: "HIGH-QUALITY single-model variant of scan_folder. Runs the given instructions against each discovered file using ONE strong remote model (default z-ai/glm-5.2) at maximum reasoning effort with prompt caching \u2014 NOT the 3-model cheap ensemble. Use when review QUALITY matters more than cost: deep audits, security review, subtle-bug hunts.\n\nRequires the OpenRouter backend with available credit: the high-quality model is PAID by design, so this tool FAIL-FASTS (it does NOT silently downgrade) under a local backend, free_only mode, or exhausted credit \u2014 use scan_folder for those. Configure the model via `high_quality_model` in settings.yaml (id, reasoning_effort, cache, min_quantization, provider).\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context." + BATCHING_NOTE + limitsText,
+      inputSchema: {
+        type: "object",
+        properties: scanFolderSchemaProps,
         required: ["folder_path"]
       }
     },
@@ -52296,7 +52437,8 @@ async function runScanFolder(args, deps) {
           ensemble: sfUseEnsemble,
           maxBytes: sfBudgetBytes,
           modelOverride: deps.modelOverride,
-          outputDir: deps.outputDir
+          outputDir: deps.outputDir,
+          hqRequest: deps.hqRequest
         });
         recentOutcomes.push(result.success);
         if (deps.onProgress) {
@@ -54473,6 +54615,20 @@ function makeProgressFn(progressToken) {
     });
   };
 }
+function withSystemCacheBreakpoint(messages) {
+  return messages.map(
+    (m) => m.role === "system" && typeof m.content === "string" ? {
+      role: "system",
+      content: [
+        {
+          type: "text",
+          text: m.content,
+          cache_control: { type: "ephemeral" }
+        }
+      ]
+    } : m
+  );
+}
 async function chatCompletionSimple(messages, options = {}) {
   const backend = getCurrentBackend();
   const conn = await resolveConnection(options);
@@ -54486,6 +54642,10 @@ async function chatCompletionSimple(messages, options = {}) {
     stream: false
   };
   if (conn.model) baseBody.model = conn.model;
+  if (backend.type === "openrouter") {
+    if (options.provider) baseBody.provider = options.provider;
+    if (options.cache) baseBody.messages = withSystemCacheBreakpoint(messages);
+  }
   const reasoningLadder = backend.type === "openrouter" ? reasoningLadderForModel(conn.model || "", options.reasoning) : [null];
   const supportedParams = await getModelSupportedParams(conn.model || "");
   const startTime = Date.now();
@@ -55360,7 +55520,14 @@ ${codeBlock}`
       temperature: DEFAULT_TEMPERATURE,
       maxTokens: options.maxTokens ?? resolveDefaultMaxTokens(),
       onProgress: options.onProgress,
-      modelOverride: options.modelOverride
+      modelOverride: options.modelOverride,
+      // High-quality-scan knobs (TRDD-DBUSM55E). Only the high_quality_scan tool
+      // sets options.hqRequest; for every other scan these are undefined → the
+      // request is unchanged. reasoning is the validated config wire-string, cast
+      // to the effort union here at the index.ts boundary (core.ts uses string).
+      provider: options.hqRequest?.provider,
+      cache: options.hqRequest?.cache,
+      reasoning: options.hqRequest?.reasoning
     },
     useEnsemble,
     fileLineCount
@@ -55395,6 +55562,7 @@ var LLM_TOOLS_SET = /* @__PURE__ */ new Set([
   "code_task",
   "batch_check",
   "scan_folder",
+  "high_quality_scan",
   "compare_files",
   "check_references",
   "check_imports",
@@ -56548,6 +56716,36 @@ ${content}`);
             // honours --free and credit-exhausted auto-fallback
           };
           return await runScanFolder(args, sfDeps);
+        }
+        case "high_quality_scan": {
+          const hqRefusal = highQualityScanRefusal(
+            backend.type,
+            activeResolved?.freeOnly ?? false,
+            creditExhausted
+          );
+          if (hqRefusal) throw new Error(hqRefusal);
+          const hq = activeResolved?.highQualityModel ?? HIGH_QUALITY_MODEL_DEFAULTS;
+          const hqDeps = {
+            useEnsemble: false,
+            // single high-quality model, never the cheap ensemble
+            backendModel: hq.id,
+            // label reports with the high-quality model
+            processFileCheck,
+            classifyError,
+            saveResponse,
+            getRateLimitConfig,
+            resolveDefaultMaxTokens,
+            onProgress,
+            outputDir,
+            modelOverride: hq.id,
+            // forces ensembleStreaming's single-model branch
+            hqRequest: {
+              provider: buildHighQualityProvider(hq),
+              reasoning: hq.reasoningEffort,
+              cache: hq.cache
+            }
+          };
+          return await runScanFolder(args, hqDeps);
         }
         case "search_existing_implementations": {
           const seiDeps = {
@@ -57904,5 +58102,6 @@ export {
   resolveFreeModelId,
   resolveSubsystemFreeModel,
   sanitizeProviderError,
-  selectFreeEnsembleModels
+  selectFreeEnsembleModels,
+  withSystemCacheBreakpoint
 };

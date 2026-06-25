@@ -144,6 +144,9 @@ import {
   assertFreeOnlyModel,
   setActiveFreeOnly,
   FREE_POOL_SEED,
+  HIGH_QUALITY_MODEL_DEFAULTS,
+  buildHighQualityProvider,
+  highQualityScanRefusal,
   type HighQualityRequest,
 } from "./config.js";
 import {
@@ -1912,7 +1915,7 @@ function makeProgressFn(
 // per-file code block lives in the user message and is NOT cacheable). Non-system
 // or non-string messages pass through untouched. OpenRouter normalizes/strips the
 // annotation for providers that don't support it.
-function withSystemCacheBreakpoint(messages: ChatMessage[]): unknown[] {
+export function withSystemCacheBreakpoint(messages: ChatMessage[]): unknown[] {
   return messages.map((m) =>
     m.role === "system" && typeof m.content === "string"
       ? {
@@ -3494,7 +3497,7 @@ function limitsBlock(): string {
 // Keep the implementation code intact — re-enable when a model with sufficient output capacity appears.
 // Track which tools make LLM calls — used by `reset` to wait for in-flight requests
 const LLM_TOOLS_SET = new Set([
-  "chat", "code_task", "batch_check", "scan_folder",
+  "chat", "code_task", "batch_check", "scan_folder", "high_quality_scan",
   "compare_files", "check_references", "check_imports",
   "check_against_specs", "search_existing_implementations",
   "cluster_synonyms",
@@ -5096,6 +5099,39 @@ async function dispatchCallToolInner(
           modelOverride, // honours --free and credit-exhausted auto-fallback
         };
         return await runScanFolder(args as Record<string, unknown>, sfDeps);
+      }
+
+      case "high_quality_scan": {
+        // high_quality_scan (TRDD-DBUSM55E): scan_folder driven by ONE strong
+        // remote model (default z-ai/glm-5.2) at max reasoning + prompt cache,
+        // NOT the cheap 3-model ensemble. The model is PAID by design, so the
+        // gate REFUSES (never silently downgrades) when the backend can't run it
+        // — wrong backend, free_only, or exhausted credit (gate is unit-tested).
+        const hqRefusal = highQualityScanRefusal(
+          backend.type,
+          activeResolved?.freeOnly ?? false,
+          creditExhausted,
+        );
+        if (hqRefusal) throw new Error(hqRefusal);
+        const hq = activeResolved?.highQualityModel ?? HIGH_QUALITY_MODEL_DEFAULTS;
+        const hqDeps: ScanFolderDeps = {
+          useEnsemble: false, // single high-quality model, never the cheap ensemble
+          backendModel: hq.id, // label reports with the high-quality model
+          processFileCheck,
+          classifyError,
+          saveResponse,
+          getRateLimitConfig,
+          resolveDefaultMaxTokens,
+          onProgress,
+          outputDir,
+          modelOverride: hq.id, // forces ensembleStreaming's single-model branch
+          hqRequest: {
+            provider: buildHighQualityProvider(hq),
+            reasoning: hq.reasoningEffort,
+            cache: hq.cache,
+          },
+        };
+        return await runScanFolder(args as Record<string, unknown>, hqDeps);
       }
 
       case "search_existing_implementations": {

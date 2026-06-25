@@ -177,6 +177,67 @@ const redactRegexSchema = {
     "numeric-only matches → zero-padded placeholder. Invalid regex returns an error with details.",
 };
 
+// Shared input properties for the folder-scanning tools — scan_folder and
+// high_quality_scan (TRDD-DBUSM55E) take the IDENTICAL inputs, so the schema
+// lives in one const and the two can never drift. `as const` on each type
+// literal keeps the JSON-schema field types narrow (matching folderSchemaProps).
+const scanFolderSchemaProps = {
+  folder_path: {
+    type: "string" as const,
+    description: "Absolute path to the folder to scan recursively.",
+  },
+  extensions: {
+    type: "array" as const,
+    items: { type: "string" as const },
+    description:
+      'File extensions to include (e.g. [".ts", ".py"]). If omitted, includes all files.',
+  },
+  exclude_dirs: {
+    type: "array" as const,
+    items: { type: "string" as const },
+    description:
+      "Additional directory names to skip (hidden dirs, node_modules, .git are always skipped).",
+  },
+  max_files: {
+    type: "number" as const,
+    description:
+      "Maximum number of files to process (default: 2500). Safety limit to prevent runaway scans.",
+  },
+  instructions: {
+    type: "string" as const,
+    description: "What to look for or do with each file.",
+  },
+  instructions_files_paths: {
+    oneOf: [
+      { type: "string" as const },
+      { type: "array" as const, items: { type: "string" as const } },
+    ],
+    description: "File(s) containing instructions.",
+  },
+  scan_secrets: {
+    type: "boolean" as const,
+    description:
+      "Scan input files for secrets and ABORT if any are found. Best practice: move secrets to .env (gitignored).",
+  },
+  redact_secrets: {
+    type: "boolean" as const,
+    description:
+      "Redact secrets before sending to LLM. DISCOURAGED: prefer moving secrets to .env files (gitignored).",
+  },
+  use_gitignore: {
+    type: "boolean" as const,
+    description:
+      "Use .gitignore rules to filter files (via git ls-files). When true, only files not ignored by git are included. Falls back to manual walk if not in a git repo. Default: true.",
+  },
+  answer_mode: answerModeSchema,
+  redact_regex: redactRegexSchema,
+  max_payload_kb: {
+    type: "number" as const,
+    description:
+      "Max file size in KB per file. Default: 400. Files exceeding this are skipped and reported.",
+  },
+};
+
 export function buildTools(limitsText: string) {
   const allTools = [
     {
@@ -526,62 +587,29 @@ export function buildTools(limitsText: string) {
         limitsText,
       inputSchema: {
         type: "object" as const,
-        properties: {
-          folder_path: {
-            type: "string",
-            description: "Absolute path to the folder to scan recursively.",
-          },
-          extensions: {
-            type: "array",
-            items: { type: "string" },
-            description:
-              'File extensions to include (e.g. [".ts", ".py"]). If omitted, includes all files.',
-          },
-          exclude_dirs: {
-            type: "array",
-            items: { type: "string" },
-            description:
-              "Additional directory names to skip (hidden dirs, node_modules, .git are always skipped).",
-          },
-          max_files: {
-            type: "number",
-            description:
-              "Maximum number of files to process (default: 2500). Safety limit to prevent runaway scans.",
-          },
-          instructions: {
-            type: "string",
-            description: "What to look for or do with each file.",
-          },
-          instructions_files_paths: {
-            oneOf: [
-              { type: "string" },
-              { type: "array", items: { type: "string" } },
-            ],
-            description: "File(s) containing instructions.",
-          },
-          scan_secrets: {
-            type: "boolean",
-            description:
-              "Scan input files for secrets and ABORT if any are found. Best practice: move secrets to .env (gitignored).",
-          },
-          redact_secrets: {
-            type: "boolean",
-            description:
-              "Redact secrets before sending to LLM. DISCOURAGED: prefer moving secrets to .env files (gitignored).",
-          },
-          use_gitignore: {
-            type: "boolean",
-            description:
-              "Use .gitignore rules to filter files (via git ls-files). When true, only files not ignored by git are included. Falls back to manual walk if not in a git repo. Default: true.",
-          },
-          answer_mode: answerModeSchema,
-          redact_regex: redactRegexSchema,
-          max_payload_kb: {
-            type: "number",
-            description:
-              "Max file size in KB per file. Default: 400. Files exceeding this are skipped and reported.",
-          },
-        },
+        properties: scanFolderSchemaProps,
+        required: ["folder_path"],
+      },
+    },
+    {
+      name: "high_quality_scan",
+      description:
+        "HIGH-QUALITY single-model variant of scan_folder. Runs the given " +
+        "instructions against each discovered file using ONE strong remote model " +
+        "(default z-ai/glm-5.2) at maximum reasoning effort with prompt caching — " +
+        "NOT the 3-model cheap ensemble. Use when review QUALITY matters more than " +
+        "cost: deep audits, security review, subtle-bug hunts.\n\n" +
+        "Requires the OpenRouter backend with available credit: the high-quality " +
+        "model is PAID by design, so this tool FAIL-FASTS (it does NOT silently " +
+        "downgrade) under a local backend, free_only mode, or exhausted credit — " +
+        "use scan_folder for those. Configure the model via `high_quality_model` " +
+        "in settings.yaml (id, reasoning_effort, cache, min_quantization, provider).\n\n" +
+        "CONTEXT WARNING: Remote LLM has ZERO project context — include brief context." +
+        BATCHING_NOTE +
+        limitsText,
+      inputSchema: {
+        type: "object" as const,
+        properties: scanFolderSchemaProps,
         required: ["folder_path"],
       },
     },

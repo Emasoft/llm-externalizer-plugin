@@ -12,6 +12,8 @@ import {
   validateProfile,
   resolveHighQualityModel,
   HIGH_QUALITY_MODEL_DEFAULTS,
+  buildHighQualityProvider,
+  highQualityScanRefusal,
   type Profile,
   type ResolvedProfile,
 } from "./config.js";
@@ -346,5 +348,74 @@ describe("resolveProfile + validateProfile high_quality_model (TRDD-DBUSM55E)", 
       },
     });
     expect(res.valid).toBe(true);
+  });
+});
+
+describe("buildHighQualityProvider (TRDD-DBUSM55E)", () => {
+  it("builds the full provider block from the resolved defaults", () => {
+    expect(buildHighQualityProvider(HIGH_QUALITY_MODEL_DEFAULTS)).toEqual({
+      allow_fallbacks: false,
+      order: ["gmicloud/fp8"],
+      quantizations: ["fp8", "fp16", "bf16", "fp32"],
+    });
+  });
+
+  it("omits an empty provider order (never sends an empty array)", () => {
+    const provider = buildHighQualityProvider({
+      ...HIGH_QUALITY_MODEL_DEFAULTS,
+      providerOrder: [],
+    });
+    expect(provider).not.toHaveProperty("order");
+    expect(provider).toHaveProperty("quantizations");
+  });
+
+  it("omits empty quantizations (never sends an empty array)", () => {
+    const provider = buildHighQualityProvider({
+      ...HIGH_QUALITY_MODEL_DEFAULTS,
+      quantizations: [],
+    });
+    expect(provider).not.toHaveProperty("quantizations");
+    expect(provider).toHaveProperty("order");
+  });
+
+  it("carries allow_fallbacks through verbatim", () => {
+    expect(
+      buildHighQualityProvider({
+        ...HIGH_QUALITY_MODEL_DEFAULTS,
+        allowFallbacks: true,
+      }),
+    ).toMatchObject({ allow_fallbacks: true });
+  });
+});
+
+describe("highQualityScanRefusal (paid-model fail-fast gate, TRDD-DBUSM55E)", () => {
+  it("allows an OpenRouter backend that is not free_only and has credit", () => {
+    expect(highQualityScanRefusal("openrouter", false, false)).toBeNull();
+  });
+
+  it("refuses a non-OpenRouter backend", () => {
+    expect(highQualityScanRefusal("local", false, false)).toContain(
+      "OpenRouter backend",
+    );
+  });
+
+  it("refuses free_only mode (the model is paid)", () => {
+    expect(highQualityScanRefusal("openrouter", true, false)).toContain(
+      "free_only",
+    );
+  });
+
+  it("refuses when credit is exhausted", () => {
+    expect(highQualityScanRefusal("openrouter", false, true)).toContain(
+      "credit",
+    );
+  });
+
+  it("checks the backend first when several conditions fail", () => {
+    // Backend takes precedence — a local + free_only + no-credit profile still
+    // reports the backend problem (the most fundamental blocker).
+    expect(highQualityScanRefusal("local", true, true)).toContain(
+      "OpenRouter backend",
+    );
   });
 });
