@@ -3,7 +3,7 @@ name: llm-externalizer-benchmark
 description: Benchmark OpenRouter programming-category models against a TypeScript classification task. Filters by cost + capability, scores each candidate against 71 fixture functions + 3 literal keywords, writes a markdown comparison report. Use this to pick the cheapest model that still passes the real workload.
 allowed-tools:
   - Bash
-argument-hint: "[--include MODEL_ID]... [--dry-run] [--report PATH] [--reasoning low|medium|high] [--seed N]"
+argument-hint: "[--include MODEL_ID]... [--dry-run] [--report PATH] [--reasoning low|medium|high] [--seed N] [--qualifying-top-n N]"
 effort: medium
 ---
 
@@ -12,10 +12,11 @@ Runs the `llm-ext-benchmark` CLI bundled with the plugin. Forwards `$ARGUMENTS` 
 ## What the benchmark does
 
 1. Queries `https://openrouter.ai/api/v1/models?category=programming`.
-2. Filters to models with context ≥ 128K, max output ≥ 64K, structured outputs + reasoning supported, input ≤ $1.5/M tokens, output ≤ $2.0/M tokens, excluding `:free` tier.
-3. For each qualifying candidate (plus any `--include MODEL_ID` baselines, which bypass the cost filter), sends the 5 fixture TypeScript files (71 top-level functions) and asks the model — under a strict JSON schema — to list every function whose body contains each of three literal substrings: `JSON.parse(`, `new URLSearchParams`, `performance.now()`.
-4. Compares the returned arrays against the ground truth (derived at runtime from the fixtures via the TypeScript compiler API). PASS = all 3 arrays exact match; partial-credit F1 is reported for failures.
-5. Writes a markdown report to `$MAIN_ROOT/reports/benchmark/<ts±tz>-model-comparison.md`.
+2. Filters to models with context ≥ 128K, max output ≥ 64K, structured outputs + reasoning supported, input ≤ $1.5/M tokens, output ≤ $2.0/M tokens, excluding `:free` tier. Models priced at exactly $0 without a `:free` suffix (e.g. `openrouter/owl-alpha`) are valid candidates — $0 passes the cost cap.
+3. Pre-ranks candidates using two credit-free quality indexes read from the same public endpoint (no API key, $0): the **codex index score** (`benchmarks.artificial_analysis.coding_index`, 0–100) and the **design arena code-categories ELO** (the `benchmarks.design_arena[]` entry where `arena=="models"` and `category=="codecategories"`, its `.elo`). Scores are min–max normalized and composited; scored models rank above unscored; cheapest breaks ties. A missing index = UNKNOWN, never a disqualifier. If `--qualifying-top-n N` is set, only the top N pre-ranked candidates proceed to paid runs — use this to cap spend without excluding explicit `--include` baselines, which are never capped.
+4. For each qualifying candidate (plus any `--include MODEL_ID` baselines, which bypass the cost filter), sends the 5 fixture TypeScript files (71 top-level functions) and asks the model — under a strict JSON schema — to list every function whose body contains each of three literal substrings: `JSON.parse(`, `new URLSearchParams`, `performance.now()`.
+5. Compares the returned arrays against the ground truth (derived at runtime from the fixtures via the TypeScript compiler API). PASS = all 3 arrays exact match; partial-credit F1 is reported for failures.
+6. Writes a markdown report to `$MAIN_ROOT/reports/benchmark/<ts±tz>-model-comparison.md`.
 
 No agents. No MCP tools. No retry loops beyond what the CLI itself implements. Deterministic (`temperature=0`, optional `--seed`).
 
@@ -62,6 +63,7 @@ Do NOT `Read` the report. Its content is the user's output, not the orchestrator
 | Full sweep (candidates only) | `/llm-externalizer:llm-externalizer-benchmark` |
 | Sweep plus current production ensemble as baselines | `/llm-externalizer:llm-externalizer-benchmark --include google/gemini-3-flash-preview --include x-ai/grok-4.1-fast` |
 | Force reasoning-heavy runs for sensitivity testing | `/llm-externalizer:llm-externalizer-benchmark --reasoning high` |
+| Cap paid runs to the top 5 pre-ranked candidates | `/llm-externalizer:llm-externalizer-benchmark --qualifying-top-n 5` |
 
 ## Three-surface compliance: by-design no MCP tool (GAP-2)
 

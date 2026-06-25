@@ -38,7 +38,11 @@ only if it meets the requirements AND passes that tool's benchmark.
    auto-discovered set of OpenRouter models that (a) meet this tool's per-tool
    requirements (structured output, a modest context — NOT the ensemble's
    128K/reasoning bar) and (b) are **not pricier than the incumbent default**
-   (no budget is spent benchmarking a model the cost gate would reject).
+   (no budget is spent benchmarking a model the cost gate would reject). Before the
+   top-N cap, the auto-discovered pool is **quality-ranked** at zero cost using two
+   public OpenRouter indexes: the codex coding-quality score (0–100) and the
+   design-arena code-categories ELO. Only the top-quality candidates enter the paid
+   benchmark; models with missing scores rank below scored ones, with cheapest as tiebreak.
 3. **Scores each model via the REAL judge** — `judgeGroups`, the exact
    security_scan pipeline, so the benchmark measures the model as the tool will
    actually use it. Cached per-model-per-day.

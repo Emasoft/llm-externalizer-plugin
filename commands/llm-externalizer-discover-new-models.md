@@ -38,6 +38,18 @@ read-only by design — model/profile changes are user-only, see
    it qualifies for and which of those also carry a benchmark gate.
 4. **Refreshes** the snapshot so the next run only shows what is new since now.
 
+The same public catalog fetch also exposes two credit-free quality indexes — the
+**codex index score** (`benchmarks.artificial_analysis.coding_index`, 0–100) and the
+**design arena code-categories ELO** (the `benchmarks.design_arena[]` entry where
+`arena=="models"` and `category=="codecategories"`, field `.elo`). The benchmark
+commands (`/llm-externalizer-benchmark` and the ensemble autoselect) use these to
+pre-rank candidates and cap paid runs via `--qualifying-top-n`; coverage is partial
+(~60/339 carry a codex score, ~94/339 an ELO) and a missing index is UNKNOWN, never a
+disqualifier. A model OpenRouter prices at exactly `$0` with no `:free` suffix (e.g.
+`openrouter/owl-alpha`, an open-beta "free for now" model) is recognized as free — it
+competes as a `$0` candidate, and `/llm-externalizer-bench-free-pool` auto-discovers it
+into the free benchmark after the catalog confirms the price is `$0`.
+
 ## Inputs
 
 - `qualifying-only` (optional) — when present, report only arrivals that meet at

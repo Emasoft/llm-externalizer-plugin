@@ -24,6 +24,28 @@ benchmark the `llm-ext-benchmark` CLI uses (`mcp-server/src/benchmark/`),
 scores each qualifying model with a `meanF1` in 0..1, sorts the survivors,
 and takes the top three. The full filter/ranking rules live in Resources.
 
+**Credit-free pre-ranking.** Before any paid benchmark, candidates are
+ranked by two indexes read from the public OpenRouter models endpoint
+(`GET https://openrouter.ai/api/v1/models` — no API key, $0): the
+*codex index score* (`benchmarks.artificial_analysis.coding_index`,
+0–100) and the *design arena code categories ELO*
+(`benchmarks.design_arena[arena=="models", category=="codecategories"].elo`).
+Coverage is partial (~60/339 models have a codex score, ~94/339 have an
+ELO); a missing index means UNKNOWN — an unscored model is **never**
+dropped for lacking one. Each index is min–max normalized over models
+that report it; scored models rank above unscored; cheapest is the final
+tiebreak. Use `--qualifying-top-n N` to cap how many top-ranked
+candidates are actually benchmarked (N paid runs instead of the whole
+pool). This flag is distinct from `--pick-top-n` (which caps results
+after the run); explicit `--include` baselines are never capped by it.
+
+**Zero-cost non-`:free` models.** A model OpenRouter prices at exactly
+$0 with no `:free` suffix (e.g. `openrouter/owl-alpha`, an open-beta
+"free for now" model) passes the `<$1/M` cost cap and competes as a
+normal ensemble candidate ranked by its indexes. The runtime free-mode
+guard is now semantic: free-eligible if and only if the model id ends
+`:free` OR the catalog price is exactly $0.
+
 ## Prerequisites
 
 - An active `remote-ensemble` profile in `~/.llm-externalizer/settings.yaml`.
@@ -79,6 +101,9 @@ llm-ext-benchmark --pick-top-n 3 --apply-profile remote-ensemble
 
 # Cache: re-pick from benchmark-results.json without new API calls
 llm-ext-benchmark --from-cache --pick-top-n 3 --apply-profile remote-ensemble
+
+# Pre-filter: benchmark only the top 20 index-ranked candidates (saves credits)
+llm-ext-benchmark --qualifying-top-n 20 --pick-top-n 3 --apply-profile remote-ensemble
 ```
 
 ## Output

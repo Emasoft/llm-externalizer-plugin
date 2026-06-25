@@ -43,7 +43,12 @@ tool's benchmark.
    auto-discovered set of OpenRouter models that (a) meet this tool's per-tool
    requirements (structured output + reasoning + a 128K context) and (b) are
    **not pricier than the incumbent default** (no budget is spent benchmarking a
-   model the cost gate would reject).
+   model the cost gate would reject). Affordable candidates are then
+   **quality-ranked** using two credit-free indexes from the public OpenRouter
+   catalog (`benchmarks.artificial_analysis.coding_index` and the Design Arena
+   code-category ELO), so higher-scoring models are benchmarked first; a missing
+   index means UNKNOWN, not penalized. The `qualifying_top_n` cap is applied after
+   this ranking — restricting the paid benchmark to the likeliest passers.
 3. **Scores each model via the REAL pipeline** — drives
    `runSearchExistingImplementations` in-process (same FFD bin-packed batching,
    same per-file-section prompt contract, same merged-report assembly), so the
@@ -61,7 +66,7 @@ tool's benchmark.
 | Field | Required | Description |
 |---|---|---|
 | `models` | no | Explicit OpenRouter model id(s) to assess. When omitted, auto-discover the same-or-cheaper candidate pool. |
-| `qualifying_top_n` | no | Cap the auto-discovered candidate pool (cheapest-first). Default 16. |
+| `qualifying_top_n` | no | Cap the auto-discovered candidate pool after quality ranking (highest-scored first; cheapest tiebreak). Default 16. |
 | `force` | no | Ignore the per-model-per-day cache and re-run every model. |
 | `output_dir` | no | Report directory. Default `<main-project-dir>/reports/search-existing-benchmark/` (anchored on `$CLAUDE_PROJECT_DIR`, then cwd — never git). |
 

@@ -1,6 +1,6 @@
 ---
 name: llm-externalizer-bench-free-pool
-description: Benchmark every model in the active profile's free pool (or the bundled FREE_POOL_SEED if none is pinned) with one invocation. Same scoring as /llm-externalizer-benchmark but auto-fills the candidate set from the free-model list and refuses to run if any entry is not a ':free' model. Use this after switching free_only on, or to evaluate which free model best replaces a paid model.
+description: Benchmark every model in the active profile's free pool (or the bundled FREE_POOL_SEED if none is pinned) with one invocation. Same scoring as /llm-externalizer-benchmark but auto-fills the candidate set from the free-model list, verifies each candidate against the live OpenRouter catalog (fails fast if any configured entry is priced), and auto-discovers additional zero-cost open-beta models the catalog lists. Use this after switching free_only on, or to evaluate which free model best replaces a paid model.
 allowed-tools:
   - Bash
 argument-hint: "[--dry-run] [--report PATH] [--security-triage] [--force]"
@@ -13,12 +13,12 @@ Runs the bundled `llm-ext-benchmark` CLI with `--bench-free-pool` so the candida
 
 1. Loads the active profile via the plugin's settings.yaml resolver.
 2. If the profile pins `free_models`, uses that list; otherwise falls back to the bundled `FREE_POOL_SEED` constant (the 15 seed ids the plugin ships — `poolside/laguna-m.1:free`, `deepseek/deepseek-v4-flash:free`, the two `google/gemma-4-*:free` variants, the two `nvidia/nemotron-3-*:free` variants, `minimax/minimax-m2.5:free`, `qwen/qwen3-next-80b-a3b-instruct:free`, `openai/gpt-oss-{120b,20b}:free`, `qwen/qwen3-coder:free`, `z-ai/glm-4.5-air:free`, `meta-llama/llama-3.3-70b-instruct:free`, `nousresearch/hermes-3-llama-3.1-405b:free`).
-3. Refuses to run if any entry is missing the `:free` suffix — the flag is a cost-safety chokepoint, not a generic auto-include.
+3. Resolves the pool against the live OpenRouter catalog (public endpoint, no API key required, zero cost). A configured non-`:free` id is admitted only when the catalog prices it at exactly $0; if it is priced or absent from the catalog the command **fails fast before any API run**. `:free` ids are admitted as-is. Then auto-discovers every additional catalog-listed zero-cost model — including open-beta "free for now" models without a `:free` suffix (e.g. `openrouter/owl-alpha`) — that meets the structural bar (structured output, reasoning, context, output length), ranked by the free quality indexes (codex `coding_index` + design-arena code ELO) and capped at `--qualifying-top-n`.
 4. Hands the resolved ids to the existing benchmark pipeline (`--include` slots in keyword mode, `--model` slots in `--security-triage` mode).
 5. Each model receives the same scoring as `/llm-externalizer-benchmark`: 71 fixture functions × 3 literal keywords, F1 against ground truth, strict JSON schema enforced.
 6. Writes the markdown report to `$MAIN_ROOT/reports/benchmark/<ts±tz>-model-comparison.md` (or `reports/security-triage-benchmark/` for triage mode).
 
-Zero $ by construction — the runner's airtight free-only chokepoint (TRDD-97ef8b63) rejects any non-`:free` model that somehow leaks through. Free-tier rate limits do apply; the runner retries 429s up to 3× with exponential backoff (cap 60s).
+Zero $ by construction — the catalog price-verification step (step 3) is the primary guard when `--bench-free-pool` runs outside a `free_only` profile, since the runtime free-mode guard only fires under `free_only`. The runtime guard itself is now semantic: a model is free-eligible iff its id ends `:free` OR the live catalog prices it at exactly $0. Free-tier rate limits do apply; the runner retries 429s up to 3× with exponential backoff (cap 60s).
 
 ## Step 1 — Check prerequisites
 
@@ -49,7 +49,7 @@ Do NOT `Read` the report. Its content is the user's output, not the orchestrator
 
 ## Constraints
 
-- Cost-safety: the pool MUST contain only `:free`-suffixed ids. The CLI throws if not.
+- Cost-safety: configured non-`:free` ids are admitted only when the live catalog confirms a price of exactly $0; the CLI fails fast before any run if an entry is priced or absent from the catalog. `:free` ids are always admitted as-is.
 - Composes with `--security-triage`: when both are set, the pool feeds `--model` slots instead of `--include`, and the security_scan TRIAGE benchmark runs.
 - Free-tier rate limits are per-account-per-day. Models that 429 even after 3 retries are recorded as ERR — re-run later, or split the sweep across two days.
 
@@ -68,6 +68,6 @@ Do NOT `Read` the report. Its content is the user's output, not the orchestrator
 |-------|------------|
 | CLI binary not bundled | Abort `[FAILED] — CLI not found at $CLAUDE_PLUGIN_ROOT/bin/llm-ext-benchmark`. The plugin build is incomplete. |
 | Auth missing | Abort `[FAILED] — OPENROUTER_API_KEY not set`. Tell user to export it or set the plugin userConfig. |
-| Pool contains a non-`:free` id | Abort `[FAILED] — pool contains non-':free' ids`. Fix the active profile's `free_models` list. |
+| Configured non-`:free` id is priced or absent from catalog | Abort `[FAILED] — pool contains priced or unlisted id`. Replace with a `:free`-suffixed id or one the catalog confirms at $0; the command will not run if any entry would cost money. |
 | Every model 429s after retries | Re-run later; free-tier rate limits are per-day. |
 | CLI exits non-zero | Surface the last stderr line in the `[FAILED]` message. Do NOT retry. |
