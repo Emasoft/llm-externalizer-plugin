@@ -144,6 +144,7 @@ import {
   assertFreeOnlyModel,
   setActiveFreeOnly,
   FREE_POOL_SEED,
+  type HighQualityRequest,
 } from "./config.js";
 import {
   withUsageContext,
@@ -1904,6 +1905,30 @@ function makeProgressFn(
   };
 }
 
+// High-quality-scan prompt cache (TRDD-DBUSM55E): wrap the system message's text
+// in OpenRouter's array-of-parts form with a cache_control:{type:"ephemeral"}
+// breakpoint, so the stable per-file scan system prefix is cached across the many
+// per-file requests of a folder scan. Only the system message is wrapped (the
+// per-file code block lives in the user message and is NOT cacheable). Non-system
+// or non-string messages pass through untouched. OpenRouter normalizes/strips the
+// annotation for providers that don't support it.
+function withSystemCacheBreakpoint(messages: ChatMessage[]): unknown[] {
+  return messages.map((m) =>
+    m.role === "system" && typeof m.content === "string"
+      ? {
+          role: "system",
+          content: [
+            {
+              type: "text",
+              text: m.content,
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+        }
+      : m,
+  );
+}
+
 // ── Non-streaming text completion ────────────────────────────────────
 // All LLM requests use this. stream=false, single JSON response.
 // Batch-level heartbeat in rateLimitedParallel keeps MCP connection alive.
@@ -1918,6 +1943,13 @@ async function chatCompletionSimple(
     /** Per-call reasoning override. "off" disables reasoning for this call
      *  regardless of the global default (e.g. cluster_synonyms). */
     reasoning?: ReasoningEffortSetting;
+    /** High-quality-scan OpenRouter provider-routing block (TRDD-DBUSM55E). A
+     *  control field outside FILTERABLE_REQUEST_FIELDS, so it survives the
+     *  supported-params filter to the wire. Undefined → no provider routing. */
+    provider?: Record<string, unknown>;
+    /** High-quality-scan prompt cache (TRDD-DBUSM55E). When true, the system
+     *  prompt gets a cache_control breakpoint. Undefined/false → no cache. */
+    cache?: boolean;
   } = {},
 ): Promise<StreamingResult> {
   // T2.7 — snapshot once at top of this LLM call. resolveConnection() also
@@ -1940,6 +1972,18 @@ async function chatCompletionSimple(
     stream: false,
   };
   if (conn.model) baseBody.model = conn.model;
+
+  // High-quality-scan routing (TRDD-DBUSM55E). Both only apply for OpenRouter and
+  // only when the high_quality_scan caller opts in; every other call leaves the
+  // body byte-for-byte unchanged (the options default to undefined).
+  if (backend.type === "openrouter") {
+    // `provider` is a CONTROL field (not in FILTERABLE_REQUEST_FIELDS) so it
+    // survives filterBodyForSupportedParams to the wire untouched.
+    if (options.provider) baseBody.provider = options.provider;
+    // Prompt cache: a cache_control breakpoint on the (stable) system prompt so
+    // the repeated per-file scan prefix is cached across the folder's files.
+    if (options.cache) baseBody.messages = withSystemCacheBreakpoint(messages);
+  }
 
   // Reasoning ladder: OpenRouter backend uses the configured effort (default
   // "high"), unless this call passes a per-call override (e.g. "off").
@@ -2934,6 +2978,9 @@ async function chatCompletionWithRetry(
     onProgress?: ProgressFn;
     /** Per-call reasoning override, forwarded to chatCompletionSimple. */
     reasoning?: ReasoningEffortSetting;
+    /** High-quality-scan knobs (TRDD-DBUSM55E), forwarded to chatCompletionSimple. */
+    provider?: Record<string, unknown>;
+    cache?: boolean;
   },
 ): Promise<StreamingResult> {
   // T2.7 — snapshot ONCE per retry-loop invocation. The fallback-model
@@ -3163,6 +3210,13 @@ async function ensembleStreaming(
     maxTokens?: number;
     onProgress?: ProgressFn;
     modelOverride?: string; // skip ensemble, use this specific model
+    // High-quality-scan knobs (TRDD-DBUSM55E). Forwarded via the {...options}
+    // spread to the single-model path (modelOverride / no-ensemble branches);
+    // the 3-model ensemble path also spreads them but high_quality_scan always
+    // takes the modelOverride branch, so the ensemble is never affected.
+    provider?: Record<string, unknown>;
+    cache?: boolean;
+    reasoning?: ReasoningEffortSetting;
   },
   ensemble: boolean,
   fileLineCount?: number,
@@ -3334,6 +3388,7 @@ interface ProcessOptions {
   maxBytes?: number; // max file size in bytes (default: DEFAULT_MAX_PAYLOAD_BYTES)
   modelOverride?: string; // skip ensemble, use this specific model (e.g. free mode)
   outputDir?: string; // custom output directory for reports
+  hqRequest?: HighQualityRequest; // high_quality_scan provider/reasoning/cache (TRDD-DBUSM55E)
 }
 
 async function processFileCheck(
@@ -3374,6 +3429,13 @@ async function processFileCheck(
       maxTokens: options.maxTokens ?? resolveDefaultMaxTokens(),
       onProgress: options.onProgress,
       modelOverride: options.modelOverride,
+      // High-quality-scan knobs (TRDD-DBUSM55E). Only the high_quality_scan tool
+      // sets options.hqRequest; for every other scan these are undefined → the
+      // request is unchanged. reasoning is the validated config wire-string, cast
+      // to the effort union here at the index.ts boundary (core.ts uses string).
+      provider: options.hqRequest?.provider,
+      cache: options.hqRequest?.cache,
+      reasoning: options.hqRequest?.reasoning as ReasoningEffortSetting | undefined,
     },
     useEnsemble,
     fileLineCount,

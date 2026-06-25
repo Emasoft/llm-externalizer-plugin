@@ -34,6 +34,7 @@ import {
 } from "../scan-pipeline.js";
 import { autoGroupByHeuristic } from "../grouping.js";
 import { rateLimitedParallel, type ProgressFn } from "../rate-limiter.js";
+import { type HighQualityRequest } from "../config.js";
 
 export type ScanFolderToolResult = {
   content: { type: "text"; text: string }[];
@@ -71,6 +72,7 @@ export interface ScanFolderProcessOptions {
   maxBytes?: number;
   modelOverride?: string;
   outputDir?: string;
+  hqRequest?: HighQualityRequest;
 }
 
 export interface ScanFolderDeps {
@@ -105,6 +107,9 @@ export interface ScanFolderDeps {
   outputDir?: string;
   /** Specific model override (e.g. free mode) forwarded to processFileCheck. */
   modelOverride?: string;
+  /** High-quality-scan provider/reasoning/cache knobs (TRDD-DBUSM55E) forwarded
+   *  to processFileCheck. Set only by the high_quality_scan tool. */
+  hqRequest?: HighQualityRequest;
 }
 
 export async function runScanFolder(
@@ -255,6 +260,7 @@ export async function runScanFolder(
                 maxBytes: sfBudgetBytes,
                 modelOverride: deps.modelOverride,
                 outputDir: deps.outputDir,
+                hqRequest: deps.hqRequest,
               });
               recentOutcomes.push(result.success);
               // Report per-file batch progress

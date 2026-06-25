@@ -219,6 +219,24 @@ const VALID_HQ_REASONING: ReadonlySet<string> = new Set([
   "max",
 ]);
 
+/**
+ * Ready-to-apply high-quality-scan request knobs, derived from a
+ * ResolvedHighQualityModel at the high_quality_scan dispatch site and threaded
+ * down the single-model scan path (ScanFolderDeps → processFileCheck →
+ * ensembleStreaming → chatCompletionSimple). Defined in this leaf module so both
+ * index.ts and scan-folder/core.ts can share ONE type (core.ts must not import
+ * from index.ts). All fields optional → a no-op for every non-high_quality_scan
+ * caller. `provider` is the OpenRouter provider-routing block (a control field
+ * that survives the supported-params filter); `reasoning` is the wire effort
+ * string ("xhigh" etc., cast to the effort union inside index.ts); `cache`
+ * toggles the system-prompt cache_control breakpoint.
+ */
+export interface HighQualityRequest {
+  provider?: Record<string, unknown>;
+  reasoning?: string;
+  cache?: boolean;
+}
+
 export interface ValidationResult {
   valid: boolean;
   errors: string[];
