@@ -193,6 +193,24 @@ Local presets require `mode: local`; `openrouter-remote` requires `remote` or
 | `timeout` | no | request timeout (seconds) |
 | `context_window` | no | override; `0` = auto-detect |
 | `tool_models` | no | per-tool model routing map, e.g. `{ security_scan: "qwen/qwen-2.5-7b-instruct" }` |
+| `high_quality_model` | no | config for the `high_quality_scan` tool — one strong model instead of the cheap ensemble (paid + OpenRouter-only). Sub-keys: `id` (default `z-ai/glm-5.2`), `reasoning_effort` (`off`/`low`/`medium`/`high`/`xhigh`/`max`; default `max` = `xhigh`), `cache` (default `true`), `min_quantization` (default `fp8`, expanded to fp8-or-higher), `provider` (slug, default `gmicloud/fp8`), `allow_fallbacks` (default `false`) |
+
+The `high_quality_model` block (read only by the `high_quality_scan` tool) sits inside any
+OpenRouter `remote` / `remote-ensemble` profile:
+
+```yaml
+    high_quality_model:
+      id: "z-ai/glm-5.2"          # the single strong model the HQ scan uses
+      reasoning_effort: "max"     # → OpenRouter xhigh (the real ceiling; no literal "max" on the wire)
+      cache: true                 # cache_control breakpoint on the stable system prompt
+      min_quantization: "fp8"     # accept fp8 / fp16 / bf16 / fp32 only
+      provider: "gmicloud/fp8"    # preferred OpenRouter provider (provider.order[0])
+      allow_fallbacks: false      # pin the preferred provider
+```
+
+Every sub-key is optional and falls back to the default above, so an empty / absent block
+runs the documented GLM-5.2 setup. `high_quality_scan` is paid and **fails fast** (never
+silently downgrades) on a local backend, in `free_only` mode, or when credit is exhausted.
 
 ### Auth resolution
 `api_key` / `api_token` accept `$ENV_VAR_NAME` (resolved from the server's
