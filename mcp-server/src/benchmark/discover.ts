@@ -42,6 +42,30 @@ export interface OpenRouterModel {
   };
   supported_parameters?: string[];
   created?: number;
+  /**
+   * Third-party benchmark rankings OpenRouter ships inline on the public
+   * `/api/v1/models` catalog (the key is omitted entirely when a model has no
+   * data). Two sub-shapes are used as credit-free quality pre-filters
+   * (TRDD-WJND1N2W):
+   *   - `artificial_analysis.coding_index` — the user's "codex index" (0-100;
+   *     live but under-documented, so always parse defensively).
+   *   - `design_arena[]` — per (arena, category) ELO rows; the code signal is
+   *     the `arena="models", category="codecategories"` entry's `elo`.
+   */
+  benchmarks?: {
+    artificial_analysis?: {
+      coding_index?: number;
+      intelligence_index?: number;
+      agentic_index?: number;
+    };
+    design_arena?: Array<{
+      arena?: string;
+      category?: string;
+      elo?: number;
+      win_rate?: number;
+      rank?: number;
+    }>;
+  };
 }
 
 export interface ModelCriteria {
@@ -79,7 +103,42 @@ export interface QualifiedModel {
   outputDollarsPerMillion: number;
   supportsStructured: boolean;
   supportsReasoning: boolean;
+  // Credit-free quality indexes parsed from the catalog `benchmarks` object
+  // (TRDD-WJND1N2W). `undefined` means "OpenRouter has no such score for this
+  // model" — coverage is partial (~60/339 codex, ~94/339 ELO), so a consumer
+  // MUST treat undefined as UNKNOWN, never as "bad" (never drop an unscored
+  // model on the strength of a missing index).
+  codexIndex?: number;
+  designArenaElo?: number;
   raw: OpenRouterModel;
+}
+
+/**
+ * The Artificial Analysis "Coding Index" (0-100) OpenRouter reports inline as
+ * `benchmarks.artificial_analysis.coding_index` — the user's "codex index
+ * score". Returns undefined when absent or non-finite. This field is live but
+ * NOT in OpenRouter's documented Benchmarks schema, so it is parsed defensively
+ * (a future shape change degrades to "unknown", never throws).
+ */
+export function extractCodexIndex(m: OpenRouterModel): number | undefined {
+  const v = m.benchmarks?.artificial_analysis?.coding_index;
+  return typeof v === "number" && isFinite(v) ? v : undefined;
+}
+
+/**
+ * The Design Arena ELO for the code arena — the `benchmarks.design_arena[]` row
+ * with `arena === "models"` and `category === "codecategories"`, its `elo`.
+ * This is the user's "design arena code categories ELO". Returns undefined when
+ * the model has no such row or the elo is non-finite. ELO is computed only
+ * among OpenRouter-listed models, so it is comparable cross-model within one
+ * catalog snapshot.
+ */
+export function extractDesignArenaCodeElo(m: OpenRouterModel): number | undefined {
+  const row = (m.benchmarks?.design_arena ?? []).find(
+    (e) => e.arena === "models" && e.category === "codecategories",
+  );
+  const v = row?.elo;
+  return typeof v === "number" && isFinite(v) ? v : undefined;
 }
 
 /**
@@ -193,6 +252,8 @@ export function qualify(m: OpenRouterModel, criteria: ModelCriteria): QualifiedM
     outputDollarsPerMillion,
     supportsStructured,
     supportsReasoning,
+    codexIndex: extractCodexIndex(m),
+    designArenaElo: extractDesignArenaCodeElo(m),
     raw: m,
   };
 }
@@ -251,6 +312,8 @@ export function buildBenchmarkRoster(
       outputDollarsPerMillion: isFinite(completionPerToken) ? completionPerToken * 1_000_000 : Infinity,
       supportsStructured: params.has("structured_outputs") || params.has("response_format"),
       supportsReasoning: params.has("reasoning") || params.has("include_reasoning"),
+      codexIndex: extractCodexIndex(raw),
+      designArenaElo: extractDesignArenaCodeElo(raw),
       raw,
     });
     seen.add(raw.id);

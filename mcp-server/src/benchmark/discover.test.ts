@@ -23,6 +23,8 @@ import {
   disqualifyReason,
   qualify,
   buildBenchmarkRoster,
+  extractCodexIndex,
+  extractDesignArenaCodeElo,
   DEFAULT_CRITERIA,
   type OpenRouterModel,
 } from "./discover.js";
@@ -41,6 +43,10 @@ function makeModel(overrides: Partial<OpenRouterModel> = {}): OpenRouterModel {
     top_provider: overrides.top_provider ?? { context_length: 200_000, max_completion_tokens: 64_000 },
     supported_parameters: overrides.supported_parameters ?? ["structured_outputs", "reasoning"],
     created: overrides.created ?? 1_700_000_000,
+    // Propagated so quality-index tests can attach a realistic `benchmarks`
+    // object. Defaults to undefined → existing tests' decorated models carry
+    // codexIndex/designArenaElo: undefined, which `toEqual` ignores.
+    benchmarks: overrides.benchmarks,
   };
 }
 
@@ -234,5 +240,93 @@ describe("benchmark/discover filters", () => {
     );
     expect(candidates.map((m) => m.id)).toEqual(["vendor/shared"]);
     expect(baselines.map((m) => m.id)).toEqual(["vendor/extra-baseline"]);
+  });
+});
+
+describe("benchmark/discover quality indexes (codex + design-arena, TRDD-WJND1N2W)", () => {
+  // Realistic benchmarks object from the LIVE z-ai/glm-5.2 catalog entry
+  // (research report 20260625_214644): coding_index 68.8, and a design_arena
+  // list whose models/codecategories row has elo 1363. The other rows
+  // (agents/fullstack, models/website) MUST be ignored by the code-ELO extractor.
+  function withBenchmarks(overrides: Partial<OpenRouterModel> = {}): OpenRouterModel {
+    return makeModel({
+      id: "z-ai/glm-5.2",
+      benchmarks: {
+        artificial_analysis: { intelligence_index: 51.1, coding_index: 68.8, agentic_index: 43.1 },
+        design_arena: [
+          { arena: "agents", category: "fullstack", elo: 1301, win_rate: 64.7, rank: 3 },
+          { arena: "models", category: "codecategories", elo: 1363, win_rate: 62.2, rank: 1 },
+          { arena: "models", category: "website", elo: 1357, win_rate: 61.5, rank: 1 },
+        ],
+      },
+      ...overrides,
+    });
+  }
+
+  // ── extractCodexIndex ───────────────────────────────────────────────
+  it("extractCodexIndex returns artificial_analysis.coding_index when present", () => {
+    expect(extractCodexIndex(withBenchmarks())).toBe(68.8);
+  });
+
+  it("extractCodexIndex returns undefined for every absent shape (no benchmarks / no AA / no field)", () => {
+    expect(extractCodexIndex(makeModel())).toBeUndefined(); // no benchmarks key — the common case (most models)
+    expect(extractCodexIndex(makeModel({ benchmarks: {} }))).toBeUndefined();
+    expect(extractCodexIndex(makeModel({ benchmarks: { artificial_analysis: {} } }))).toBeUndefined();
+  });
+
+  it("extractCodexIndex returns undefined for a non-finite score (defensive against the under-documented field)", () => {
+    expect(extractCodexIndex(makeModel({ benchmarks: { artificial_analysis: { coding_index: NaN } } }))).toBeUndefined();
+    expect(
+      extractCodexIndex(makeModel({ benchmarks: { artificial_analysis: { coding_index: Infinity } } })),
+    ).toBeUndefined();
+  });
+
+  // ── extractDesignArenaCodeElo ───────────────────────────────────────
+  it("extractDesignArenaCodeElo returns the models/codecategories row elo, ignoring all other rows", () => {
+    // Must pick 1363 (models/codecategories), NOT 1301 (agents/fullstack) nor 1357 (models/website).
+    expect(extractDesignArenaCodeElo(withBenchmarks())).toBe(1363);
+  });
+
+  it("extractDesignArenaCodeElo returns undefined unless an exact models+codecategories row exists", () => {
+    expect(extractDesignArenaCodeElo(makeModel())).toBeUndefined(); // no benchmarks
+    expect(extractDesignArenaCodeElo(makeModel({ benchmarks: { design_arena: [] } }))).toBeUndefined();
+    // Right category but wrong arena ("agents", not "models") → not a match.
+    expect(
+      extractDesignArenaCodeElo(
+        makeModel({ benchmarks: { design_arena: [{ arena: "agents", category: "codecategories", elo: 1300 }] } }),
+      ),
+    ).toBeUndefined();
+    // Right arena but a different category → not a match.
+    expect(
+      extractDesignArenaCodeElo(
+        makeModel({ benchmarks: { design_arena: [{ arena: "models", category: "website", elo: 1357 }] } }),
+      ),
+    ).toBeUndefined();
+  });
+
+  // ── decoration into QualifiedModel ──────────────────────────────────
+  it("qualify decorates codexIndex + designArenaElo from the benchmarks object", () => {
+    const q = qualify(withBenchmarks(), DEFAULT_CRITERIA);
+    expect(q).not.toBeNull();
+    expect(q!.codexIndex).toBe(68.8);
+    expect(q!.designArenaElo).toBe(1363);
+  });
+
+  it("qualify leaves codexIndex/designArenaElo undefined for an unscored model (partial coverage is normal)", () => {
+    const q = qualify(makeModel(), DEFAULT_CRITERIA);
+    expect(q).not.toBeNull();
+    expect(q!.codexIndex).toBeUndefined();
+    expect(q!.designArenaElo).toBeUndefined();
+  });
+
+  it("buildBenchmarkRoster decorates requested baselines with the quality indexes too", () => {
+    const scoredBaseline = withBenchmarks({
+      pricing: { prompt: "0.00000125", completion: "0.00001" }, // over the $1/M budget → baseline-only
+    });
+    const { candidates, baselines } = buildBenchmarkRoster([scoredBaseline], DEFAULT_CRITERIA, ["z-ai/glm-5.2"]);
+    expect(candidates).toEqual([]); // over budget → not an auto-candidate
+    expect(baselines).toHaveLength(1);
+    expect(baselines[0].codexIndex).toBe(68.8);
+    expect(baselines[0].designArenaElo).toBe(1363);
   });
 });
