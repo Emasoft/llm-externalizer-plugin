@@ -142,7 +142,7 @@ On any error: `[FAILED] llm-externalizer-high-quality-scan-and-fix — <one-line
 - Fixers are ALWAYS Opus — never Sonnet. Do NOT route by file size.
 - You MUST NOT `Read` any scan report, fixer summary, or the final joined report; only file paths flow through the orchestrator.
 - Fixer dispatch MUST be parallel (batches of ≤15). Sequential dispatch defeats the design.
-- For cross-file reference validation, use `mcp__llm-externalizer__check_against_specs` (pass `--specs`) — the LLM sees only 1–5 files per batch and cannot validate references against files outside the batch.
+- For cross-file reference validation, use the `check_against_specs` tool (pass `--specs`) — the LLM sees only 1–5 files per batch and cannot validate references against files outside the batch.
 
 ## Three-surface compliance: by-design slash-only (GAP-11)
 

@@ -5,7 +5,7 @@ allowed-tools:
   - mcp__llm-externalizer__discover
   - mcp__llm-externalizer__high_quality_scan
   - Bash
-argument-hint: '<folder> --instructions "<task>" [--extensions a,b] [--exclude-dirs a,b] [--max-files N] [--answer-mode N] [--output-dir path]'
+argument-hint: '<folder> --instructions "<task>" [scan flags]'
 effort: medium
 ---
 
@@ -63,7 +63,7 @@ The tool returns a text body with the per-file report paths (or a merged-report 
 
 - The backend is local or `free_only`, or you have no OpenRouter credit → it will fail fast; use `/llm-externalizer:llm-externalizer-scan-and-fix` (cheap/free) instead.
 - You want the findings AUTO-FIXED in the same run → use `/llm-externalizer:llm-externalizer-high-quality-scan-and-fix` (scan + Opus verify-then-fix).
-- You need cross-file reference validation → use `mcp__llm-externalizer__check_against_specs` or `mcp__llm-externalizer__search_existing_implementations` (the LLM sees only 1–5 files per batch and cannot validate references against files outside the batch).
+- You need cross-file reference validation → use the `check_against_specs` or `search_existing_implementations` tools (the LLM sees only 1–5 files per batch and cannot validate references against files outside the batch).
 
 ## Constraints
 
