@@ -411,3 +411,89 @@ export function isFreeModeEligible(
 ): boolean {
   return id.endsWith(":free") || isZeroCostPriced(inputDollarsPerMillion, outputDollarsPerMillion);
 }
+
+export interface FreePoolResolution {
+  /** The verified zero-cost pool: configured ids that passed + auto-discovered, deduped. */
+  pool: string[];
+  /** The ids auto-discovery ADDED (for logging) — a subset of `pool`. */
+  autoDiscovered: string[];
+  /** Configured non-`:free` ids that the catalog does NOT price at $0 — the caller MUST fail fast. */
+  rejected: string[];
+}
+
+/**
+ * Resolve a dedicated free-pool id list against the LIVE catalog into a set that
+ * is provably zero-cost, and optionally AUTO-DISCOVER every other zero-cost model
+ * (TRDD-WJND1N2W P3b — the "do this automatically for all models" ask).
+ *
+ * WHY this verifies price here instead of trusting the runtime chokepoint: the
+ * `runner.ts` free_only guard only fires when a free_only profile is ACTIVE, but
+ * `--bench-free-pool` can run without one — so this resolution is the only thing
+ * standing between a mis-listed PAID model and a real charge. A configured
+ * non-`:free` id is therefore admitted ONLY when the catalog prices it at exactly
+ * $0 (both axes); anything priced, or absent from the catalog, lands in `rejected`
+ * and the caller fails fast BEFORE any benchmark runs. `:free` ids are admitted
+ * as-is (the suffix is OpenRouter's own free-tier marker).
+ *
+ * Auto-discovery applies the SAME structural bar as candidate selection (structured
+ * output, reasoning, context, output length) minus the price cap and the `:free`
+ * exclusion — a model that cannot do structured output would fail the benchmark
+ * anyway — then keeps only the zero-cost survivors, ranks them by the free quality
+ * indexes (so the BEST free models benchmark first), and caps at `autoDiscoverTopN`.
+ * This is what admits open-beta no-suffix models like `openrouter/owl-alpha`.
+ */
+export function resolveFreePool(
+  configuredIds: readonly string[],
+  catalog: readonly OpenRouterModel[],
+  opts: { autoDiscover: boolean; autoDiscoverTopN: number },
+): FreePoolResolution {
+  const pricePerMillion = (m: OpenRouterModel): { input: number; output: number } => ({
+    input: parseFloat(m.pricing?.prompt ?? "NaN") * 1_000_000,
+    output: parseFloat(m.pricing?.completion ?? "NaN") * 1_000_000,
+  });
+  const priceById = new Map<string, { input: number; output: number }>();
+  for (const m of catalog) priceById.set(m.id, pricePerMillion(m));
+
+  const pool: string[] = [];
+  const seen = new Set<string>();
+  const add = (id: string): void => {
+    if (!seen.has(id)) {
+      seen.add(id);
+      pool.push(id);
+    }
+  };
+
+  // 1) Configured pool — :free as-is; a non-:free id ONLY if the catalog proves $0.
+  const rejected: string[] = [];
+  for (const id of configuredIds) {
+    if (id.endsWith(":free")) {
+      add(id);
+      continue;
+    }
+    const p = priceById.get(id);
+    if (p && isZeroCostPriced(p.input, p.output)) add(id);
+    else rejected.push(id); // priced, or absent from the catalog → fail-safe reject
+  }
+
+  // 2) Auto-discovery — structurally-qualified, zero-cost catalog models, best-first.
+  const autoDiscovered: string[] = [];
+  if (opts.autoDiscover) {
+    const freeCriteria: ModelCriteria = {
+      ...DEFAULT_CRITERIA,
+      allowFree: true,
+      maxInputDollarsPerMillion: Infinity,
+      maxOutputDollarsPerMillion: Infinity,
+    };
+    const zeroCost = filterModels(catalog, freeCriteria).filter((q) =>
+      isZeroCostPriced(q.inputDollarsPerMillion, q.outputDollarsPerMillion),
+    );
+    for (const q of rankByQualityIndex(zeroCost).slice(0, opts.autoDiscoverTopN)) {
+      if (!seen.has(q.id)) {
+        add(q.id);
+        autoDiscovered.push(q.id);
+      }
+    }
+  }
+
+  return { pool, autoDiscovered, rejected };
+}

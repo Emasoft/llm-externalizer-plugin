@@ -26,6 +26,7 @@ import {
   DEFAULT_CRITERIA,
   buildBenchmarkRoster,
   rankByQualityIndex,
+  resolveFreePool,
   fetchProgrammingModels,
   type QualifiedModel,
 } from "./discover.js";
@@ -434,28 +435,42 @@ async function main(): Promise<number> {
     /* settings not loadable — leave flag false; the phase reports any real error */
   }
 
-  // --bench-free-pool (TRDD-f1510055): single-flag convenience that auto-fills
-  // the candidate set from the active profile's free pool (or FREE_POOL_SEED).
-  // Resolves once here and feeds the resulting ids into the existing pipeline:
-  // keyword mode → opts.includeIds (bypasses cost filter, adds as baselines);
-  // security-triage mode → opts.triageModels (explicit per-model assessment).
-  // Either way, only ':free'-suffixed ids reach the wire — the runner's
-  // free_only chokepoint guard (TRDD-97ef8b63) rejects any non-:free entry,
-  // so this is genuinely zero-spend by construction.
+  // --bench-free-pool (TRDD-f1510055; semantic + auto-discovering in TRDD-WJND1N2W P3b):
+  // single-flag convenience that fills the candidate set from the active profile's free
+  // pool (or FREE_POOL_SEED), RESOLVED against the live catalog so it is provably
+  // zero-cost. A configured non-':free' id is admitted only when the catalog prices it
+  // at exactly $0 — else it FAILS FAST here, before any run, because --bench-free-pool
+  // can run WITHOUT a free_only profile, so the runtime chokepoint cannot be the only
+  // guard. Auto-discovery then adds every structurally-qualified zero-cost model (incl.
+  // no-suffix open-beta models like owl-alpha), ranked by the free quality indexes. The
+  // resolved ids feed the existing pipeline: keyword → opts.includeIds (baselines);
+  // security-triage → opts.triageModels; search-existing/auto-replace → searchExistingModels.
   if (opts.benchFreePool) {
-    const pool =
+    const configured =
       activeFreeModels.length > 0 ? activeFreeModels : FREE_POOL_SEED;
-    const nonFree = pool.filter((id) => !id.endsWith(":free"));
-    if (nonFree.length > 0) {
-      throw new Error(
-        `--bench-free-pool refuses to run: pool contains non-':free' ids ${JSON.stringify(nonFree)}. Every entry MUST end with ':free'. Fix the active profile's free_models list.`,
-      );
-    }
     const source =
       activeFreeModels.length > 0
-        ? `active profile's free_models (${pool.length})`
-        : `FREE_POOL_SEED constant (${pool.length})`;
-    console.error(`[benchmark] --bench-free-pool: pool from ${source}.`);
+        ? `active profile's free_models (${configured.length})`
+        : `FREE_POOL_SEED constant (${configured.length})`;
+    // The catalog is the public, no-auth, $0 endpoint; fetch the FULL list (a
+    // price-0 model may sit in any category) to verify + auto-discover.
+    const freePoolCatalog = await fetchProgrammingModels();
+    const { pool, autoDiscovered, rejected } = resolveFreePool(configured, freePoolCatalog, {
+      autoDiscover: true,
+      autoDiscoverTopN: opts.qualifyingTopN ?? 16,
+    });
+    if (rejected.length > 0) {
+      throw new Error(
+        `--bench-free-pool refuses to run: configured non-':free' id(s) ${JSON.stringify(rejected)} are NOT priced at $0 by the catalog (they would cost money) or are absent from it. A non-':free' free-pool entry must be a model OpenRouter currently prices at exactly $0. Fix the active profile's free_models list.`,
+      );
+    }
+    console.error(
+      `[benchmark] --bench-free-pool: ${pool.length} zero-cost model(s) from ${source}` +
+        (autoDiscovered.length > 0
+          ? ` + ${autoDiscovered.length} auto-discovered price-0 model(s) (e.g. ${autoDiscovered.slice(0, 3).join(", ")})`
+          : "") +
+        ".",
+    );
     if (opts.securityTriage) {
       // Append (preserve any explicit --model the user passed alongside).
       for (const id of pool) {
@@ -469,8 +484,9 @@ async function main(): Promise<number> {
         if (!opts.searchExistingModels.includes(id)) opts.searchExistingModels.push(id);
       }
     } else {
-      // Append to includeIds — bypasses the cost filter so :free models are
-      // benchmarked even though the default ':free tier excluded' rule applies.
+      // Append to includeIds — bypasses the cost filter so zero-cost models are
+      // benchmarked even though the default cost / ':free'-excluded candidate
+      // rules would otherwise drop them.
       for (const id of pool) {
         if (!opts.includeIds.includes(id)) opts.includeIds.push(id);
       }

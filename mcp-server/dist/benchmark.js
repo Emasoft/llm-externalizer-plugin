@@ -218295,6 +218295,51 @@ function isZeroCostPriced(inputDollarsPerMillion, outputDollarsPerMillion) {
 function isFreeModeEligible(id, inputDollarsPerMillion, outputDollarsPerMillion) {
   return id.endsWith(":free") || isZeroCostPriced(inputDollarsPerMillion, outputDollarsPerMillion);
 }
+function resolveFreePool(configuredIds, catalog, opts) {
+  const pricePerMillion = (m) => ({
+    input: parseFloat(m.pricing?.prompt ?? "NaN") * 1e6,
+    output: parseFloat(m.pricing?.completion ?? "NaN") * 1e6
+  });
+  const priceById = /* @__PURE__ */ new Map();
+  for (const m of catalog) priceById.set(m.id, pricePerMillion(m));
+  const pool = [];
+  const seen = /* @__PURE__ */ new Set();
+  const add = (id) => {
+    if (!seen.has(id)) {
+      seen.add(id);
+      pool.push(id);
+    }
+  };
+  const rejected = [];
+  for (const id of configuredIds) {
+    if (id.endsWith(":free")) {
+      add(id);
+      continue;
+    }
+    const p = priceById.get(id);
+    if (p && isZeroCostPriced(p.input, p.output)) add(id);
+    else rejected.push(id);
+  }
+  const autoDiscovered = [];
+  if (opts.autoDiscover) {
+    const freeCriteria = {
+      ...DEFAULT_CRITERIA,
+      allowFree: true,
+      maxInputDollarsPerMillion: Infinity,
+      maxOutputDollarsPerMillion: Infinity
+    };
+    const zeroCost = filterModels(catalog, freeCriteria).filter(
+      (q) => isZeroCostPriced(q.inputDollarsPerMillion, q.outputDollarsPerMillion)
+    );
+    for (const q of rankByQualityIndex(zeroCost).slice(0, opts.autoDiscoverTopN)) {
+      if (!seen.has(q.id)) {
+        add(q.id);
+        autoDiscovered.push(q.id);
+      }
+    }
+  }
+  return { pool, autoDiscovered, rejected };
+}
 
 // src/benchmark/select-common.ts
 var COST_EPSILON = 1e-9;
@@ -224387,15 +224432,21 @@ async function main() {
   } catch {
   }
   if (opts.benchFreePool) {
-    const pool = activeFreeModels.length > 0 ? activeFreeModels : FREE_POOL_SEED;
-    const nonFree = pool.filter((id) => !id.endsWith(":free"));
-    if (nonFree.length > 0) {
+    const configured = activeFreeModels.length > 0 ? activeFreeModels : FREE_POOL_SEED;
+    const source = activeFreeModels.length > 0 ? `active profile's free_models (${configured.length})` : `FREE_POOL_SEED constant (${configured.length})`;
+    const freePoolCatalog = await fetchProgrammingModels();
+    const { pool, autoDiscovered, rejected } = resolveFreePool(configured, freePoolCatalog, {
+      autoDiscover: true,
+      autoDiscoverTopN: opts.qualifyingTopN ?? 16
+    });
+    if (rejected.length > 0) {
       throw new Error(
-        `--bench-free-pool refuses to run: pool contains non-':free' ids ${JSON.stringify(nonFree)}. Every entry MUST end with ':free'. Fix the active profile's free_models list.`
+        `--bench-free-pool refuses to run: configured non-':free' id(s) ${JSON.stringify(rejected)} are NOT priced at $0 by the catalog (they would cost money) or are absent from it. A non-':free' free-pool entry must be a model OpenRouter currently prices at exactly $0. Fix the active profile's free_models list.`
       );
     }
-    const source = activeFreeModels.length > 0 ? `active profile's free_models (${pool.length})` : `FREE_POOL_SEED constant (${pool.length})`;
-    console.error(`[benchmark] --bench-free-pool: pool from ${source}.`);
+    console.error(
+      `[benchmark] --bench-free-pool: ${pool.length} zero-cost model(s) from ${source}` + (autoDiscovered.length > 0 ? ` + ${autoDiscovered.length} auto-discovered price-0 model(s) (e.g. ${autoDiscovered.slice(0, 3).join(", ")})` : "") + "."
+    );
     if (opts.securityTriage) {
       for (const id of pool) {
         if (!opts.triageModels.includes(id)) opts.triageModels.push(id);

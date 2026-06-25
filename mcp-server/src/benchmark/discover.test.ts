@@ -26,6 +26,7 @@ import {
   rankByQualityIndex,
   isZeroCostPriced,
   isFreeModeEligible,
+  resolveFreePool,
   extractCodexIndex,
   extractDesignArenaCodeElo,
   DEFAULT_CRITERIA,
@@ -443,5 +444,52 @@ describe("benchmark/discover zero-cost predicates (free-mode eligibility, TRDD-W
     expect(isFreeModeEligible("vendor/pricey", 5, 10)).toBe(false);
     // A baseline with no catalog price (Infinity) must also be rejected.
     expect(isFreeModeEligible("vendor/unknown-price", Infinity, Infinity)).toBe(false);
+  });
+});
+
+describe("benchmark/discover resolveFreePool (free-pool verify + auto-discovery, TRDD-WJND1N2W P3b)", () => {
+  const free = makeModel({ id: "vendor/x:free", pricing: { prompt: "0", completion: "0" } });
+  const owl = makeModel({ id: "openrouter/owl-alpha", pricing: { prompt: "0", completion: "0" } });
+  const paid = makeModel({ id: "vendor/paid", pricing: { prompt: "0.0000005", completion: "0.0000006" } });
+  const freeNoStruct = makeModel({
+    id: "vendor/free-nostruct",
+    pricing: { prompt: "0", completion: "0" },
+    supported_parameters: ["reasoning"], // no structured_outputs → fails the structural bar
+  });
+  const catalog = [free, owl, paid, freeNoStruct];
+
+  it("admits a configured :free id + a configured price-0 no-suffix id; REJECTS a priced or absent non-:free id", () => {
+    const r = resolveFreePool(
+      ["vendor/x:free", "openrouter/owl-alpha", "vendor/paid", "vendor/ghost"],
+      catalog,
+      { autoDiscover: false, autoDiscoverTopN: 16 },
+    );
+    expect(r.pool).toContain("vendor/x:free"); // :free admitted as-is
+    expect(r.pool).toContain("openrouter/owl-alpha"); // price-0 no-suffix proven by the catalog
+    expect(r.rejected).toContain("vendor/paid"); // priced → rejected (would cost money)
+    expect(r.rejected).toContain("vendor/ghost"); // absent from the catalog → rejected (fail-safe)
+    expect(r.pool).not.toContain("vendor/paid");
+    expect(r.pool).not.toContain("vendor/ghost");
+    expect(r.autoDiscovered).toEqual([]); // autoDiscover off
+  });
+
+  it("auto-discovers structurally-qualified zero-cost models (incl. no-suffix owl-alpha); excludes priced / unqualified", () => {
+    const r = resolveFreePool([], catalog, { autoDiscover: true, autoDiscoverTopN: 16 });
+    expect(r.autoDiscovered).toContain("openrouter/owl-alpha"); // price-0 + qualified
+    expect(r.autoDiscovered).toContain("vendor/x:free"); // :free + price-0 + qualified
+    expect(r.autoDiscovered).not.toContain("vendor/paid"); // priced → excluded
+    expect(r.autoDiscovered).not.toContain("vendor/free-nostruct"); // no structured output → excluded
+    for (const id of r.autoDiscovered) expect(r.pool).toContain(id); // everything discovered is in the pool
+  });
+
+  it("respects autoDiscoverTopN and never duplicates a configured id it also discovers", () => {
+    const capped = resolveFreePool([], catalog, { autoDiscover: true, autoDiscoverTopN: 1 });
+    expect(capped.autoDiscovered.length).toBe(1); // cap honored
+    const both = resolveFreePool(["openrouter/owl-alpha"], catalog, {
+      autoDiscover: true,
+      autoDiscoverTopN: 16,
+    });
+    expect(both.pool.filter((id) => id === "openrouter/owl-alpha")).toEqual(["openrouter/owl-alpha"]); // once
+    expect(both.autoDiscovered).not.toContain("openrouter/owl-alpha"); // already counted as configured
   });
 });
