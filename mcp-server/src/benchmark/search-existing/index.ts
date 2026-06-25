@@ -39,6 +39,7 @@ import { join } from "node:path";
 
 import {
   buildBenchmarkRoster,
+  rankByQualityIndex,
   fetchProgrammingModels,
   qualify,
   type OpenRouterModel,
@@ -320,10 +321,13 @@ export async function runSearchExistingBenchmark(
     // security-triage orchestrator uses, via buildBenchmarkRoster +
     // SEARCH_EXISTING_CRITERIA), pre-filtered to NOT pricier than the incumbent.
     const { candidates } = buildBenchmarkRoster(catalog, SEARCH_EXISTING_CRITERIA, []);
-    const sameOrCheaper = candidates
-      .filter((c) => c.inputDollarsPerMillion <= incumbentIn + 1e-9 && c.outputDollarsPerMillion <= incumbentOut + 1e-9)
-      .sort((a, b) => a.inputDollarsPerMillion + a.outputDollarsPerMillion - (b.inputDollarsPerMillion + b.outputDollarsPerMillion))
-      .slice(0, opts.qualifyingTopN ?? 16);
+    const affordable = candidates.filter(
+      (c) => c.inputDollarsPerMillion <= incumbentIn + 1e-9 && c.outputDollarsPerMillion <= incumbentOut + 1e-9,
+    );
+    // Quality-rank the affordable candidates (codex coding_index + design-arena
+    // code ELO) before the top-N cap, so the paid set is the most-promising
+    // affordable models, not merely the cheapest (TRDD-WJND1N2W P2).
+    const sameOrCheaper = rankByQualityIndex(affordable).slice(0, opts.qualifyingTopN ?? 16);
     for (const c of sameOrCheaper) addModel(c, true);
   }
 

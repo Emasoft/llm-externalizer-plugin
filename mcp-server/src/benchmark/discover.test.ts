@@ -23,10 +23,12 @@ import {
   disqualifyReason,
   qualify,
   buildBenchmarkRoster,
+  rankByQualityIndex,
   extractCodexIndex,
   extractDesignArenaCodeElo,
   DEFAULT_CRITERIA,
   type OpenRouterModel,
+  type QualifiedModel,
 } from "./discover.js";
 
 // ── realistic builder ─────────────────────────────────────────────────
@@ -328,5 +330,80 @@ describe("benchmark/discover quality indexes (codex + design-arena, TRDD-WJND1N2
     expect(baselines).toHaveLength(1);
     expect(baselines[0].codexIndex).toBe(68.8);
     expect(baselines[0].designArenaElo).toBe(1363);
+  });
+
+  // ── rankByQualityIndex ──────────────────────────────────────────────
+  // Build a QualifiedModel via the real qualify() path with chosen indexes +
+  // prices ($/M). All pass DEFAULT_CRITERIA; only the index/price axes vary.
+  function qm(
+    id: string,
+    opts: { codex?: number; elo?: number; in?: number; out?: number } = {},
+  ): QualifiedModel {
+    const benchmarks: OpenRouterModel["benchmarks"] = {};
+    if (opts.codex !== undefined) benchmarks.artificial_analysis = { coding_index: opts.codex };
+    if (opts.elo !== undefined) {
+      benchmarks.design_arena = [{ arena: "models", category: "codecategories", elo: opts.elo }];
+    }
+    const m = makeModel({
+      id,
+      pricing: {
+        prompt: String((opts.in ?? 0.5) / 1_000_000),
+        completion: String((opts.out ?? 0.5) / 1_000_000),
+      },
+      benchmarks: Object.keys(benchmarks).length > 0 ? benchmarks : undefined,
+    });
+    const q = qualify(m, DEFAULT_CRITERIA);
+    if (!q) throw new Error(`test setup error: ${id} did not qualify`);
+    return q;
+  }
+
+  it("rankByQualityIndex puts scored models above unscored ones, regardless of price", () => {
+    // A missing index is UNKNOWN, not bad — but a model WITH evidence of quality
+    // outranks an unscored one even when the unscored one is far cheaper.
+    const cheapUnscored = qm("vendor/cheap-unscored", { in: 0.01, out: 0.01 });
+    const scoredPricier = qm("vendor/scored", { codex: 50, elo: 1300, in: 0.9, out: 0.9 });
+    expect(rankByQualityIndex([cheapUnscored, scoredPricier]).map((m) => m.id)).toEqual([
+      "vendor/scored",
+      "vendor/cheap-unscored",
+    ]);
+  });
+
+  it("rankByQualityIndex orders scored models by higher composite quality first", () => {
+    const lo = qm("vendor/lo", { codex: 40, elo: 1250 });
+    const hi = qm("vendor/hi", { codex: 90, elo: 1400 });
+    const mid = qm("vendor/mid", { codex: 65, elo: 1325 });
+    expect(rankByQualityIndex([lo, hi, mid]).map((m) => m.id)).toEqual([
+      "vendor/hi",
+      "vendor/mid",
+      "vendor/lo",
+    ]);
+  });
+
+  it("rankByQualityIndex judges a one-axis model on the axis it has (not penalised for the missing one)", () => {
+    // Each is the sole holder of its single axis → both normalise to 1.0 on that
+    // axis → tie on composite score → the cheaper one wins the tiebreak.
+    const codexOnly = qm("vendor/codex-only", { codex: 95, in: 0.8, out: 0.8 });
+    const eloOnly = qm("vendor/elo-only", { elo: 1410, in: 0.2, out: 0.2 });
+    expect(rankByQualityIndex([codexOnly, eloOnly]).map((m) => m.id)).toEqual([
+      "vendor/elo-only",
+      "vendor/codex-only",
+    ]);
+  });
+
+  it("rankByQualityIndex breaks ties by cheapest and orders an all-unscored set purely by price", () => {
+    const a = qm("vendor/a", { in: 0.5, out: 0.5 });
+    const b = qm("vendor/b", { in: 0.1, out: 0.1 });
+    const c = qm("vendor/c", { in: 0.3, out: 0.3 });
+    // No indexes anywhere → all unscored → pure cheapest-first (prior behaviour preserved).
+    expect(rankByQualityIndex([a, b, c]).map((m) => m.id)).toEqual(["vendor/b", "vendor/c", "vendor/a"]);
+  });
+
+  it("rankByQualityIndex is pure (no input mutation) and handles empty + singleton", () => {
+    const input = [qm("vendor/x", { codex: 70 }), qm("vendor/y", { codex: 40 })];
+    const before = input.map((m) => m.id);
+    rankByQualityIndex(input);
+    expect(input.map((m) => m.id)).toEqual(before); // input order untouched
+    expect(rankByQualityIndex([])).toEqual([]);
+    expect(rankByQualityIndex([input[0]]).map((m) => m.id)).toEqual(["vendor/x"]);
   });
 });

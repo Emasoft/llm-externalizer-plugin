@@ -25,6 +25,7 @@ import { buildGroundTruth, BENCHMARK_KEYWORDS } from "./ground-truth.js";
 import {
   DEFAULT_CRITERIA,
   buildBenchmarkRoster,
+  rankByQualityIndex,
   fetchProgrammingModels,
   type QualifiedModel,
 } from "./discover.js";
@@ -73,6 +74,13 @@ interface CliOptions {
   seed: number | undefined;
   /** Sort surviving results by meanF1 desc + cost asc, print top N. */
   pickTopN: number | null;
+  /** PRE-benchmark candidate cap: after quality-ranking the auto-discovered
+   *  candidates by their catalog codex/design-arena indexes, benchmark only the
+   *  top N (credit-saver — TRDD-WJND1N2W P2). null = no cap (benchmark all,
+   *  still quality-ordered). Distinct from pickTopN, which caps RESULTS after
+   *  the paid run; this caps the paid run's INPUT. Explicit --include baselines
+   *  are never capped. */
+  qualifyingTopN: number | null;
   /** After picking, mutate ~/.llm-externalizer/settings.yaml so this
    *  profile name's `model`/`second_model`/`third_model` become the
    *  three winners. Atomic write (tmp + rename); existing other profiles
@@ -132,6 +140,7 @@ function parseArgs(argv: readonly string[]): CliOptions {
     reasoningEffort: undefined,
     seed: undefined,
     pickTopN: null,
+    qualifyingTopN: null,
     applyProfile: null,
     fromCache: false,
     minMeanF1: 0.95,
@@ -187,6 +196,13 @@ function parseArgs(argv: readonly string[]): CliOptions {
         throw new Error(`--pick-top-n must be a positive integer, got ${n}`);
       }
       opts.pickTopN = n;
+      i++;
+    } else if (a === "--qualifying-top-n") {
+      const n = parseInt(takeValue(a, i), 10);
+      if (!Number.isInteger(n) || n < 1) {
+        throw new Error(`--qualifying-top-n must be a positive integer, got ${n}`);
+      }
+      opts.qualifyingTopN = n;
       i++;
     } else if (a === "--apply-profile") {
       opts.applyProfile = takeValue(a, i);
@@ -262,6 +278,12 @@ function printHelp(): void {
       "  --pick-top-n N    After scoring, sort survivors by meanF1 desc + total cost",
       "                    asc and print the top N (typically 3) as a settings.yaml",
       "                    ensemble block. Survivors must hit --min-f1 (default 0.95).",
+      "  --qualifying-top-n N",
+      "                    BEFORE benchmarking, quality-rank the auto-discovered",
+      "                    candidates by their OpenRouter codex + design-arena code",
+      "                    indexes and benchmark only the top N (credit-saver; caps the",
+      "                    paid run's INPUT, vs --pick-top-n which caps the OUTPUT).",
+      "                    --include baselines are never capped.",
       "  --apply-profile P Mutate ~/.llm-externalizer/settings.yaml so profile P's",
       "                    model/second_model/third_model are the top-N picks. Atomic",
       "                    (tmp + rename); other profiles preserved verbatim. Requires",
@@ -546,12 +568,19 @@ async function main(): Promise<number> {
   // buildBenchmarkRoster filters the candidate pool and looks up
   // baselines in the baseline pool (which may be broader).
   const baselineLookup = allModels.length > 0 ? allModels : categoryModels;
-  const { candidates, baselines } = buildBenchmarkRoster(
+  const { candidates: discovered, baselines } = buildBenchmarkRoster(
     categoryModels,
     DEFAULT_CRITERIA,
     opts.includeIds,
     baselineLookup,
   );
+  // Quality-rank the auto-discovered candidates by their catalog codex/design-
+  // arena indexes (best first), then optionally restrict to --qualifying-top-n,
+  // so the paid keyword benchmark spends its budget on the most-promising
+  // candidates first (TRDD-WJND1N2W P2). Baselines (explicit --include) are
+  // never reordered or capped — the user asked for those by name.
+  const ranked = rankByQualityIndex(discovered);
+  const candidates = opts.qualifyingTopN !== null ? ranked.slice(0, opts.qualifyingTopN) : ranked;
   console.error(`[benchmark] Roster: ${candidates.length} candidate(s), ${baselines.length} baseline(s).`);
   for (const m of candidates) {
     console.error(`  CAND  ${m.id.padEnd(40)} ctx=${m.contextTokens}  in=$${m.inputDollarsPerMillion.toFixed(3)}  out=$${m.outputDollarsPerMillion.toFixed(3)}`);

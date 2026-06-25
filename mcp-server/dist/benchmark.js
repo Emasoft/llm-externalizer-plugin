@@ -218147,6 +218147,17 @@ var DEFAULT_CRITERIA = {
   requireReasoning: true,
   allowFree: false
 };
+function extractCodexIndex(m) {
+  const v = m.benchmarks?.artificial_analysis?.coding_index;
+  return typeof v === "number" && isFinite(v) ? v : void 0;
+}
+function extractDesignArenaCodeElo(m) {
+  const row = (m.benchmarks?.design_arena ?? []).find(
+    (e) => e.arena === "models" && e.category === "codecategories"
+  );
+  const v = row?.elo;
+  return typeof v === "number" && isFinite(v) ? v : void 0;
+}
 async function fetchProgrammingModels(category) {
   const url = category ? `https://openrouter.ai/api/v1/models?category=${encodeURIComponent(category)}` : `https://openrouter.ai/api/v1/models`;
   const resp = await fetch(url);
@@ -218212,6 +218223,8 @@ function qualify(m, criteria2) {
     outputDollarsPerMillion,
     supportsStructured,
     supportsReasoning,
+    codexIndex: extractCodexIndex(m),
+    designArenaElo: extractDesignArenaCodeElo(m),
     raw: m
   };
 }
@@ -218241,11 +218254,40 @@ function buildBenchmarkRoster(candidatePool, criteria2, includeIds, baselineLook
       outputDollarsPerMillion: isFinite(completionPerToken) ? completionPerToken * 1e6 : Infinity,
       supportsStructured: params.has("structured_outputs") || params.has("response_format"),
       supportsReasoning: params.has("reasoning") || params.has("include_reasoning"),
+      codexIndex: extractCodexIndex(raw),
+      designArenaElo: extractDesignArenaCodeElo(raw),
       raw
     });
     seen.add(raw.id);
   }
   return { candidates, baselines };
+}
+function rankByQualityIndex(models) {
+  const codexVals = models.map((m) => m.codexIndex).filter((v) => v !== void 0);
+  const eloVals = models.map((m) => m.designArenaElo).filter((v) => v !== void 0);
+  const normalise = (v, pool) => {
+    if (v === void 0 || pool.length === 0) return void 0;
+    const lo = Math.min(...pool);
+    const hi = Math.max(...pool);
+    return hi === lo ? 1 : (v - lo) / (hi - lo);
+  };
+  const qualityScore = (m) => {
+    const axes = [normalise(m.codexIndex, codexVals), normalise(m.designArenaElo, eloVals)].filter(
+      (v) => v !== void 0
+    );
+    return axes.length === 0 ? void 0 : axes.reduce((a, b) => a + b, 0) / axes.length;
+  };
+  const cheapness = (m) => m.inputDollarsPerMillion + m.outputDollarsPerMillion;
+  return [...models].sort((a, b) => {
+    const sa = qualityScore(a);
+    const sb = qualityScore(b);
+    if (sa === void 0 !== (sb === void 0)) return sa === void 0 ? 1 : -1;
+    if (sa !== void 0 && sb !== void 0 && sa !== sb) return sb - sa;
+    const ca = cheapness(a);
+    const cb = cheapness(b);
+    if (ca !== cb) return ca - cb;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
 }
 
 // src/benchmark/select-common.ts
@@ -220942,7 +220984,10 @@ async function runSecurityTriageBenchmark(opts = {}) {
     }
   } else {
     const { candidates } = buildBenchmarkRoster(catalog, SECURITY_TRIAGE_CRITERIA2, []);
-    const sameOrCheaper = candidates.filter((c) => c.inputDollarsPerMillion <= incumbentIn + 1e-9 && c.outputDollarsPerMillion <= incumbentOut + 1e-9).sort((a, b) => a.inputDollarsPerMillion + a.outputDollarsPerMillion - (b.inputDollarsPerMillion + b.outputDollarsPerMillion)).slice(0, opts.maxCandidates ?? 16);
+    const affordable = candidates.filter(
+      (c) => c.inputDollarsPerMillion <= incumbentIn + 1e-9 && c.outputDollarsPerMillion <= incumbentOut + 1e-9
+    );
+    const sameOrCheaper = rankByQualityIndex(affordable).slice(0, opts.maxCandidates ?? 16);
     for (const c of sameOrCheaper) addModel(c, true);
   }
   if (!toAssess.has(incumbentId)) {
@@ -223137,7 +223182,10 @@ async function runSearchExistingBenchmark(opts = {}) {
     }
   } else {
     const { candidates } = buildBenchmarkRoster(catalog, SEARCH_EXISTING_CRITERIA, []);
-    const sameOrCheaper = candidates.filter((c) => c.inputDollarsPerMillion <= incumbentIn + 1e-9 && c.outputDollarsPerMillion <= incumbentOut + 1e-9).sort((a, b) => a.inputDollarsPerMillion + a.outputDollarsPerMillion - (b.inputDollarsPerMillion + b.outputDollarsPerMillion)).slice(0, opts.qualifyingTopN ?? 16);
+    const affordable = candidates.filter(
+      (c) => c.inputDollarsPerMillion <= incumbentIn + 1e-9 && c.outputDollarsPerMillion <= incumbentOut + 1e-9
+    );
+    const sameOrCheaper = rankByQualityIndex(affordable).slice(0, opts.qualifyingTopN ?? 16);
     for (const c of sameOrCheaper) addModel(c, true);
   }
   if (!toAssess.has(incumbentId)) {
@@ -224063,6 +224111,7 @@ function parseArgs(argv) {
     reasoningEffort: void 0,
     seed: void 0,
     pickTopN: null,
+    qualifyingTopN: null,
     applyProfile: null,
     fromCache: false,
     minMeanF1: 0.95,
@@ -224114,6 +224163,13 @@ function parseArgs(argv) {
         throw new Error(`--pick-top-n must be a positive integer, got ${n}`);
       }
       opts.pickTopN = n;
+      i++;
+    } else if (a === "--qualifying-top-n") {
+      const n = parseInt(takeValue(a, i), 10);
+      if (!Number.isInteger(n) || n < 1) {
+        throw new Error(`--qualifying-top-n must be a positive integer, got ${n}`);
+      }
+      opts.qualifyingTopN = n;
       i++;
     } else if (a === "--apply-profile") {
       opts.applyProfile = takeValue(a, i);
@@ -224185,6 +224241,12 @@ function printHelp() {
       "  --pick-top-n N    After scoring, sort survivors by meanF1 desc + total cost",
       "                    asc and print the top N (typically 3) as a settings.yaml",
       "                    ensemble block. Survivors must hit --min-f1 (default 0.95).",
+      "  --qualifying-top-n N",
+      "                    BEFORE benchmarking, quality-rank the auto-discovered",
+      "                    candidates by their OpenRouter codex + design-arena code",
+      "                    indexes and benchmark only the top N (credit-saver; caps the",
+      "                    paid run's INPUT, vs --pick-top-n which caps the OUTPUT).",
+      "                    --include baselines are never capped.",
       "  --apply-profile P Mutate ~/.llm-externalizer/settings.yaml so profile P's",
       "                    model/second_model/third_model are the top-N picks. Atomic",
       "                    (tmp + rename); other profiles preserved verbatim. Requires",
@@ -224391,12 +224453,14 @@ async function main() {
     `[benchmark] ${categoryModels.length} models in category=${DEFAULT_CRITERIA.category}` + (allModels.length > 0 ? `; ${allModels.length} total for baseline lookup` : "")
   );
   const baselineLookup = allModels.length > 0 ? allModels : categoryModels;
-  const { candidates, baselines } = buildBenchmarkRoster(
+  const { candidates: discovered, baselines } = buildBenchmarkRoster(
     categoryModels,
     DEFAULT_CRITERIA,
     opts.includeIds,
     baselineLookup
   );
+  const ranked = rankByQualityIndex(discovered);
+  const candidates = opts.qualifyingTopN !== null ? ranked.slice(0, opts.qualifyingTopN) : ranked;
   console.error(`[benchmark] Roster: ${candidates.length} candidate(s), ${baselines.length} baseline(s).`);
   for (const m of candidates) {
     console.error(`  CAND  ${m.id.padEnd(40)} ctx=${m.contextTokens}  in=$${m.inputDollarsPerMillion.toFixed(3)}  out=$${m.outputDollarsPerMillion.toFixed(3)}`);

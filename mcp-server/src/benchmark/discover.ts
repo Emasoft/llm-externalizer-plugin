@@ -320,3 +320,57 @@ export function buildBenchmarkRoster(
   }
   return { candidates, baselines };
 }
+
+/**
+ * Rank qualified candidates by their catalog quality indexes (codex coding_index
+ * + design-arena code ELO), BEST FIRST, so a credit-bounded benchmark spends its
+ * budget on the most-promising candidates rather than an arbitrary subset
+ * (TRDD-WJND1N2W P2 — "use the indexes to restrict candidates before the paid
+ * benchmark and consuming tokens").
+ *
+ * Order, by priority:
+ *   1. A model with AT LEAST ONE index ranks ABOVE a model with neither. A
+ *      missing index means UNKNOWN, not bad (coverage is only ~18-28% of the
+ *      catalog), so unscored models are only DEPRIORITISED, never dropped — they
+ *      stay reachable via a larger top-N or an explicit include.
+ *   2. Among scored models, higher composite quality first. codex (0-100) and ELO
+ *      (~1200-1420) live on different scales, so each PRESENT axis is min-max
+ *      normalised to [0,1] WITHIN this candidate set and the score is the MEAN of
+ *      the present axes (a one-axis model is judged on that axis, not penalised
+ *      for the absent one).
+ *   3. Cheapest (input+output $/M) breaks quality ties — keeps "best CHEAP model"
+ *      intact and orders the entire unscored tier by price (the prior behaviour
+ *      of the cheapest-first candidate sort).
+ *   4. id ascending is the final deterministic tiebreak (stable across runs).
+ *
+ * Pure + non-mutating: returns a new array; the input is untouched.
+ */
+export function rankByQualityIndex(models: readonly QualifiedModel[]): QualifiedModel[] {
+  const codexVals = models.map((m) => m.codexIndex).filter((v): v is number => v !== undefined);
+  const eloVals = models.map((m) => m.designArenaElo).filter((v): v is number => v !== undefined);
+  const normalise = (v: number | undefined, pool: number[]): number | undefined => {
+    if (v === undefined || pool.length === 0) return undefined;
+    const lo = Math.min(...pool);
+    const hi = Math.max(...pool);
+    // All-equal pool (incl. a single scored model) → 1: they tie at the top of
+    // that axis, so the OTHER axis / cheapness decides the order (no div-by-zero).
+    return hi === lo ? 1 : (v - lo) / (hi - lo);
+  };
+  const qualityScore = (m: QualifiedModel): number | undefined => {
+    const axes = [normalise(m.codexIndex, codexVals), normalise(m.designArenaElo, eloVals)].filter(
+      (v): v is number => v !== undefined,
+    );
+    return axes.length === 0 ? undefined : axes.reduce((a, b) => a + b, 0) / axes.length;
+  };
+  const cheapness = (m: QualifiedModel): number => m.inputDollarsPerMillion + m.outputDollarsPerMillion;
+  return [...models].sort((a, b) => {
+    const sa = qualityScore(a);
+    const sb = qualityScore(b);
+    if ((sa === undefined) !== (sb === undefined)) return sa === undefined ? 1 : -1; // scored before unscored
+    if (sa !== undefined && sb !== undefined && sa !== sb) return sb - sa; // higher score first
+    const ca = cheapness(a);
+    const cb = cheapness(b);
+    if (ca !== cb) return ca - cb; // cheaper first
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; // deterministic
+  });
+}
