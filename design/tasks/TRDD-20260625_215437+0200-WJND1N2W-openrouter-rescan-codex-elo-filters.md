@@ -1,9 +1,9 @@
 ---
 trdd-id: WJND1N2W
 title: OpenRouter model rescan — codex/design-arena pre-filters, free-no-suffix inclusion, skills update
-column: design
+column: dev
 created: 2026-06-25T21:54:37+0200
-updated: 2026-06-25T21:54:37+0200
+updated: 2026-06-25T22:02:32+0200
 current-owner: claude-llm-externalizer
 assignee: claude-llm-externalizer
 priority: 3
@@ -26,8 +26,8 @@ runtime-targets: [macos, linux]
 impacts: [config-schema, public-api]
 attempts: 0
 test-failures: 0
-last-test-result: not-run
-implementation-commits: []
+last-test-result: pass
+implementation-commits: [2ca844b]
 external-refs: ["https://openrouter.ai/api/v1/models"]
 ---
 
@@ -49,8 +49,10 @@ model that can be used: `codex index score`, and `design arena code categories E
 you can find them, and use them to restrict the candidates before running the actual benchmark
 and consuming tokens."
 
-**Current state (2026-06-25):** PLANNING / design column. Research DONE (2 parallel agents).
-Implementation NOT started. No paid run will happen without an explicit pre-filter + user OK.
+**Current state (2026-06-25):** P1 (data layer) DONE + committed (2ca844b). The two indexes are
+parsed from the catalog `benchmarks` object via defensive pure extractors and decorated onto
+`QualifiedModel` (no behavior change yet); +9 unit tests, discover 19/19 green, typecheck + lint
+clean. P2-P5 pending. No paid run will happen without explicit user OK ($20 budget).
 
 **FEASIBILITY — VERIFIED (the load-bearing research win):** Both indexes are exposed as
 structured JSON on the UNAUTHENTICATED, $0 `GET https://openrouter.ai/api/v1/models`:
@@ -96,8 +98,12 @@ structured JSON on the UNAUTHENTICATED, $0 `GET https://openrouter.ai/api/v1/mod
    model-update commands/skills (discover-new-models, bench-free-pool, benchmark,
    search-existing-benchmark, ensemble-autoselect).
 
-**NEXT ACTION:** present the plan + the Phase-3 design fork (decision #2) to the USER, then build
-Phase 1 (data layer). The actual paid RESCAN run waits for explicit user OK (only $20 budget).
+**NEXT ACTION:** build P2 — pre-rank candidates by codex/ELO + top-N restrict ($0 pure ranking):
+a `rankByQualityIndex(models)` in discover.ts (indexed-above-unindexed, higher index first,
+cheapest tiebreak) + a `qualifyingTopN` cap applied to the candidate pool before the benchmark
+roster. Then P3 (semantic-free owl-alpha — modifies the `free_only` chokepoint; MUST preserve
+zero-spend via a runtime price re-check; document the safety reasoning), P4 (skills/docs +
+dogfood + full suite), P5 (GATED paid rescan — user OK only).
 
 **PHASES:**
 - **P1 — data layer (no behavior change, fully unit-testable, $0):** extend `OpenRouterModel`
