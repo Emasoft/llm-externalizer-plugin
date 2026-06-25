@@ -1,9 +1,9 @@
 ---
 trdd-id: DBUSM55E
 title: high_quality_scan + high_quality_scan_and_fix — single good model, configurable, Opus verify-fix
-column: dev
+column: complete
 created: 2026-06-25T19:37:20+0200
-updated: 2026-06-25T21:13:26+0200
+updated: 2026-06-25T21:36:16+0200
 current-owner: claude-llm-externalizer
 assignee: claude-llm-externalizer
 priority: 2
@@ -26,8 +26,8 @@ runtime-targets: [macos, linux]
 impacts: [config-schema, public-api]
 attempts: 0
 test-failures: 0
-last-test-result: not-run
-implementation-commits: []
+last-test-result: pass
+implementation-commits: [7c8ec92, a9fccb1, 604fffc, e5d9f71, 698774b, fffa29b, 2e1fb25]
 external-refs: []
 ---
 
@@ -43,7 +43,7 @@ the same turn. The high-quality model is configurable in the YAML, default **GLM
 (`z-ai/glm-5.2`) at **max reasoning effort** (→ OpenRouter `xhigh`), **cache enabled**,
 **FP8-or-higher quantization**, preferred provider **GMICloud** (`gmicloud/fp8`).
 
-**Current state (2026-06-25):** Phases 1-3 DONE + committed, all green.
+**Current state (2026-06-25):** ALL 6 phases DONE + committed. Feature COMPLETE, all gates green.
 - P1 config (7c8ec92): `HighQualityModel`/`ResolvedHighQualityModel` types + `resolveHighQualityModel`;
   per-profile `high_quality_model` (default z-ai/glm-5.2, xhigh, cache, fp8+ quants, gmicloud/fp8);
   SETTINGS_TEMPLATE example. 15 config tests.
@@ -56,16 +56,27 @@ the same turn. The high-quality model is configurable in the YAML, default **GLM
   on non-openrouter / free_only / creditExhausted, never downgrades); `useEnsemble:false`,
   `modelOverride=hq.id`, `hqRequest` from config. LLM_TOOLS_SET + README count 39→40 / 16→17 + table row.
   Tests: 4+5+5 unit + 1 fail-fast integration + listTools; doc-consistency green.
+- P4 CLI — TWO surfaces: (a) friendly `llm-externalizer high-quality-scan` subcommand (e5d9f71,
+  cli.ts on bin/llm-externalizer), (b) CANONICAL `high_quality_scan` entry in the bin/llm-ext generic
+  tool catalog (fffa29b) — the surface every tool has (parallel to scan_folder), auto-tested by the
+  dogfood per-verb-help. `llm-ext high_quality_scan --folder_path X --instructions Y` works.
+- P5 slash commands (698774b): `/llm-externalizer-high-quality-scan` (thin MCP wrapper) +
+  `/llm-externalizer-high-quality-scan-and-fix` (HQ scan + always-Opus verify-then-fix; reuses
+  validate_report.py + join_fixer_reports.py + the opus parallel-fixer; GAP-11 slash-only). README
+  37→39 commands / 22 base + 2 rows. CPV advisories on both commands cleared (2e1fb25).
+- P6 verification: full suite **1226 passed / 4 skipped** (zero regressions); dogfood **103 PASS / 0 FAIL**
+  (incl. the auto per-verb-help test of `llm-ext high_quality_scan`); both commands validate 0/0/0; CPV
+  pre-publish has zero NEW blocking findings (the 31C/35M are all pre-existing skillaudit-tagged →
+  advisory under the publish's skillaudit_advisory config; my command files = 0/0/0).
 - DEVIATION: NO `model-qualification/registry.ts` entry — the HQ model is FIXED/user-configured, not
   benchmark-qualified (the registry is only for auto-selected/swappable tools). Intentional.
 
-**NEXT ACTION:** Phase 4 — CLI. Add a `high-quality-scan` subcommand to `mcp-server/src/cli.ts`
-mirroring the `scan-folder` CLI command (same args), routing to the same `runScanFolder` core with
-the HQ deps (modelOverride=hq.id + hqRequest + the `highQualityScanRefusal` gate). Then `npm run
-build && lint && test`. Phase 5 = slash commands (pure `high-quality-scan` completes the 3 surfaces;
-`_and_fix` = slash-only, reuse the existing opus parallel-fixer, force `LLM_EXT_FORCE_OPUS=1`).
-Phase 6 = docs (bump README line ~114 command counts when P5 adds commands) + dogfood + final
-full-suite + commit.
+**NEXT ACTION:** DONE — feature complete (column=complete). The 3 standard surfaces (MCP tool +
+bin/llm-ext CLI + slash command) are all in place + tested, plus the friendly bin/llm-externalizer
+subcommand and the `_and_fix` slash command. NOT yet shipped: `release-via: publish` is gated on the
+user's explicit push approval ("Do not push. Wait for my approval first."). When approved, ship via
+`scripts/publish.py` (the only pusher; 9 gates). Next backlog task: #165 (OpenRouter model rescan,
+credit-safe — pre-filter candidates by codex-index / design-arena-ELO before any paid benchmark).
 
 **Load-bearing VERIFIED facts (do not re-derive):**
 - Single-model dispatch already exists: `ensembleStreaming` (index.ts:3159) has a `modelOverride`
