@@ -683,6 +683,123 @@ async function cmdClusterSynonyms(rawArgs: string[]): Promise<void> {
   }
 }
 
+/**
+ * `high-quality-scan` top-level verb (TRDD-DBUSM55E). The CLI surface of the
+ * high_quality_scan MCP tool: a scan_folder-shaped folder scan driven by ONE
+ * strong remote model (default z-ai/glm-5.2) at max reasoning + prompt cache,
+ * NOT the cheap 3-model ensemble. Like cmdSearchExisting / cmdClusterSynonyms it
+ * parses its flags into the tool's argument shape and calls the tool over the
+ * spawned MCP server, so the real LLM transport — retry, provider routing,
+ * cache, AND the paid-model fail-fast gate (highQualityScanRefusal) — all live
+ * in the server. A wrong backend / free_only / no-credit therefore surfaces here
+ * as an isError result and exit 1, never a silent downgrade.
+ */
+async function cmdHighQualityScan(rawArgs: string[]): Promise<void> {
+  const flags = parseFlags(rawArgs);
+  const folder = flags["folder"] ?? flags["folder-path"];
+  if (!folder || folder === "true") {
+    die("high-quality-scan requires --folder <path> (the directory to scan).");
+  }
+  const toolArgs: Record<string, unknown> = {
+    folder_path: isAbsolute(folder) ? folder : resolvePath(folder),
+  };
+
+  if (flags["instructions"] && flags["instructions"] !== "true") {
+    toolArgs.instructions = flags["instructions"];
+  }
+  const instructionsFiles = collectListFlag(rawArgs, "instructions-file");
+  if (instructionsFiles.length > 0) {
+    toolArgs.instructions_files_paths =
+      instructionsFiles.length === 1 ? instructionsFiles[0] : instructionsFiles;
+  }
+  if (toolArgs.instructions === undefined && instructionsFiles.length === 0) {
+    die(
+      "high-quality-scan requires --instructions <text> or --instructions-file <path>.",
+    );
+  }
+
+  const extensions = collectListFlag(rawArgs, "extensions");
+  if (extensions.length > 0) toolArgs.extensions = extensions;
+  const excludeDirs = collectListFlag(rawArgs, "exclude-dirs");
+  if (excludeDirs.length > 0) toolArgs.exclude_dirs = excludeDirs;
+
+  const numericFlag = (name: string): number | undefined => {
+    const raw = flags[name];
+    if (raw === undefined || raw === "true") return undefined;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) die(`--${name} must be a number (got '${raw}').`);
+    return n;
+  };
+  const maxFiles = numericFlag("max-files");
+  if (maxFiles !== undefined) {
+    if (maxFiles <= 0) die("--max-files must be a positive number.");
+    toolArgs.max_files = maxFiles;
+  }
+  const maxPayloadKb = numericFlag("max-payload-kb");
+  if (maxPayloadKb !== undefined) {
+    if (maxPayloadKb <= 0) die("--max-payload-kb must be a positive number.");
+    toolArgs.max_payload_kb = maxPayloadKb;
+  }
+  const answerMode = numericFlag("answer-mode");
+  if (answerMode !== undefined) {
+    if (![0, 1, 2].includes(answerMode)) die("--answer-mode must be 0, 1, or 2.");
+    toolArgs.answer_mode = answerMode;
+  }
+
+  if (flags["redact-regex"] && flags["redact-regex"] !== "true") {
+    toolArgs.redact_regex = flags["redact-regex"];
+  }
+  if (flags["scan-secrets"] === "true") toolArgs.scan_secrets = true;
+  if (flags["redact-secrets"] === "true") toolArgs.redact_secrets = true;
+  if (flags["no-gitignore"] === "true") toolArgs.use_gitignore = false;
+  if (flags["output-dir"] && flags["output-dir"] !== "true") {
+    toolArgs.output_dir = flags["output-dir"];
+  }
+
+  // Reuse the generous search timeout budget; --timeout-hours overrides (0 = none).
+  let timeoutMs = DEFAULT_SEARCH_TIMEOUT_MS;
+  if (flags["timeout-hours"] && flags["timeout-hours"] !== "true") {
+    const hours = Number(flags["timeout-hours"]);
+    if (!Number.isFinite(hours) || hours < 0) {
+      die(`--timeout-hours must be a non-negative number (got '${flags["timeout-hours"]}')`);
+    }
+    timeoutMs = hours === 0 ? 0 : Math.round(hours * 60 * 60 * 1000);
+  }
+
+  const serverScript = findServerScript();
+  const transport = new StdioClientTransport({
+    command: "node",
+    args: [serverScript],
+    env: { ...process.env } as Record<string, string>,
+    stderr: "inherit",
+  });
+  const client = new Client(
+    { name: "llm-externalizer-cli", version: "1.0.0" },
+    { capabilities: {} },
+  );
+
+  try {
+    await client.connect(transport);
+    const result = await client.callTool(
+      { name: "high_quality_scan", arguments: toolArgs },
+      undefined,
+      timeoutMs > 0 ? { timeout: timeoutMs } : { timeout: Number.MAX_SAFE_INTEGER },
+    );
+    const content = result.content as Array<{ type: string; text: string }>;
+    for (const c of content) {
+      if (c.type === "text") info(c.text);
+    }
+    if (result.isError) process.exit(1);
+    successBanner("high_quality_scan", content.map((c) => c.text).join("\n"));
+  } finally {
+    try {
+      await transport.close();
+    } catch {
+      /* ignore cleanup errors */
+    }
+  }
+}
+
 function printUsage(): void {
   info(`LLM Externalizer — CLI
 
@@ -697,6 +814,7 @@ Usage:
   llm-externalizer cluster-synonyms --input-json '<{input_file,output_dir,...}>' [--output-dir <path>] [--timeout-hours <n>]
   llm-externalizer security-scan --input-json '<{targets:[...],...}>' [--output-dir <path>]
   llm-externalizer mass-scout <subcommand> [flags]       # bulk LLM-driven file analysis (use 'mass-scout --help' for sub-commands)
+  llm-externalizer high-quality-scan --folder <path> --instructions "<task>" [scan flags]   # one strong model, max reasoning + cache (paid, OpenRouter-only)
 
 Disabled (would change settings.yaml — do this manually instead):
   llm-externalizer profile add | select | edit | remove | rename
@@ -751,6 +869,30 @@ cluster-synonyms flags:
   --output-dir <path>    Overrides the output_dir embedded in --input-json.
   --timeout-hours <n>    Max wall time (default 4 hours). 0 disables. Fractional ok.
   Env: backend / model / ensemble come from the active llm-externalizer profile.
+
+high-quality-scan runs the SAME folder scan as the scan_folder MCP tool, but with
+ONE strong remote model (default z-ai/glm-5.2) at max reasoning effort + prompt
+cache instead of the 3-model ensemble. It is PAID by design and OpenRouter-only:
+it fails fast (never silently downgrades) on a local backend, free_only mode, or
+exhausted credit. Configure the model via the 'high_quality_model' block in your
+settings.yaml.
+
+high-quality-scan flags:
+  --folder <path>          (MANDATORY) Directory to scan recursively.
+  --instructions "<task>"  What to look for or do with each file. Required unless
+                           --instructions-file is given.
+  --instructions-file <p>  File(s) containing instructions. Repeat or comma-separate.
+  --extensions <a,b>       File extensions to include (e.g. .ts,.py).
+  --exclude-dirs <a,b>     Extra directory names to skip.
+  --max-files <n>          Max files to process (default 2500).
+  --max-payload-kb <n>     Max file size in KB per file (default 400).
+  --answer-mode <n>        Output organization — see the answer_mode table above.
+  --redact-regex <pat>     Custom JS regex to redact matching tokens before sending.
+  --scan-secrets           Abort if any secret is found in the input files.
+  --redact-secrets         Redact secrets before sending (prefer .env files instead).
+  --no-gitignore           Disable .gitignore filtering (default: enabled).
+  --output-dir <path>      Custom reports directory.
+  --timeout-hours <n>      Max wall time (default 4 hours). 0 disables. Fractional ok.
 
 Settings file: ${getSettingsPath()}
 
@@ -838,9 +980,18 @@ async function main(): Promise<void> {
     return;
   }
 
+  // ── high-quality-scan top-level command (TRDD-DBUSM55E) ──────────────
+  // CLI surface of the high_quality_scan MCP tool — ONE strong remote model at
+  // max reasoning + cache, not the cheap ensemble. Spawns the server + calls the
+  // tool (the paid-model fail-fast gate lives server-side). See cmdHighQualityScan.
+  if (args[0] === "high-quality-scan" || args[0] === "high_quality_scan") {
+    await cmdHighQualityScan(args.slice(1));
+    return;
+  }
+
   if (args[0] !== "profile") {
     die(
-      `Unknown command '${args[0]}'. Use 'profile', 'model-info', 'search-existing', 'cluster-synonyms', 'security-scan', or 'mass-scout' subcommand, or --help.`,
+      `Unknown command '${args[0]}'. Use 'profile', 'model-info', 'search-existing', 'cluster-synonyms', 'high-quality-scan', 'security-scan', or 'mass-scout' subcommand, or --help.`,
     );
   }
 

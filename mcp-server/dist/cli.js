@@ -44261,6 +44261,101 @@ async function cmdClusterSynonyms(rawArgs) {
     }
   }
 }
+async function cmdHighQualityScan(rawArgs) {
+  const flags = parseFlags3(rawArgs);
+  const folder = flags["folder"] ?? flags["folder-path"];
+  if (!folder || folder === "true") {
+    die("high-quality-scan requires --folder <path> (the directory to scan).");
+  }
+  const toolArgs = {
+    folder_path: isAbsolute4(folder) ? folder : resolvePath(folder)
+  };
+  if (flags["instructions"] && flags["instructions"] !== "true") {
+    toolArgs.instructions = flags["instructions"];
+  }
+  const instructionsFiles = collectListFlag(rawArgs, "instructions-file");
+  if (instructionsFiles.length > 0) {
+    toolArgs.instructions_files_paths = instructionsFiles.length === 1 ? instructionsFiles[0] : instructionsFiles;
+  }
+  if (toolArgs.instructions === void 0 && instructionsFiles.length === 0) {
+    die(
+      "high-quality-scan requires --instructions <text> or --instructions-file <path>."
+    );
+  }
+  const extensions = collectListFlag(rawArgs, "extensions");
+  if (extensions.length > 0) toolArgs.extensions = extensions;
+  const excludeDirs = collectListFlag(rawArgs, "exclude-dirs");
+  if (excludeDirs.length > 0) toolArgs.exclude_dirs = excludeDirs;
+  const numericFlag = (name) => {
+    const raw = flags[name];
+    if (raw === void 0 || raw === "true") return void 0;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) die(`--${name} must be a number (got '${raw}').`);
+    return n;
+  };
+  const maxFiles = numericFlag("max-files");
+  if (maxFiles !== void 0) {
+    if (maxFiles <= 0) die("--max-files must be a positive number.");
+    toolArgs.max_files = maxFiles;
+  }
+  const maxPayloadKb = numericFlag("max-payload-kb");
+  if (maxPayloadKb !== void 0) {
+    if (maxPayloadKb <= 0) die("--max-payload-kb must be a positive number.");
+    toolArgs.max_payload_kb = maxPayloadKb;
+  }
+  const answerMode = numericFlag("answer-mode");
+  if (answerMode !== void 0) {
+    if (![0, 1, 2].includes(answerMode)) die("--answer-mode must be 0, 1, or 2.");
+    toolArgs.answer_mode = answerMode;
+  }
+  if (flags["redact-regex"] && flags["redact-regex"] !== "true") {
+    toolArgs.redact_regex = flags["redact-regex"];
+  }
+  if (flags["scan-secrets"] === "true") toolArgs.scan_secrets = true;
+  if (flags["redact-secrets"] === "true") toolArgs.redact_secrets = true;
+  if (flags["no-gitignore"] === "true") toolArgs.use_gitignore = false;
+  if (flags["output-dir"] && flags["output-dir"] !== "true") {
+    toolArgs.output_dir = flags["output-dir"];
+  }
+  let timeoutMs = DEFAULT_SEARCH_TIMEOUT_MS;
+  if (flags["timeout-hours"] && flags["timeout-hours"] !== "true") {
+    const hours = Number(flags["timeout-hours"]);
+    if (!Number.isFinite(hours) || hours < 0) {
+      die(`--timeout-hours must be a non-negative number (got '${flags["timeout-hours"]}')`);
+    }
+    timeoutMs = hours === 0 ? 0 : Math.round(hours * 60 * 60 * 1e3);
+  }
+  const serverScript = findServerScript();
+  const transport = new StdioClientTransport({
+    command: "node",
+    args: [serverScript],
+    env: { ...process.env },
+    stderr: "inherit"
+  });
+  const client = new Client(
+    { name: "llm-externalizer-cli", version: "1.0.0" },
+    { capabilities: {} }
+  );
+  try {
+    await client.connect(transport);
+    const result = await client.callTool(
+      { name: "high_quality_scan", arguments: toolArgs },
+      void 0,
+      timeoutMs > 0 ? { timeout: timeoutMs } : { timeout: Number.MAX_SAFE_INTEGER }
+    );
+    const content = result.content;
+    for (const c of content) {
+      if (c.type === "text") info(c.text);
+    }
+    if (result.isError) process.exit(1);
+    successBanner("high_quality_scan", content.map((c) => c.text).join("\n"));
+  } finally {
+    try {
+      await transport.close();
+    } catch {
+    }
+  }
+}
 function printUsage() {
   info(`LLM Externalizer \u2014 CLI
 
@@ -44275,6 +44370,7 @@ Usage:
   llm-externalizer cluster-synonyms --input-json '<{input_file,output_dir,...}>' [--output-dir <path>] [--timeout-hours <n>]
   llm-externalizer security-scan --input-json '<{targets:[...],...}>' [--output-dir <path>]
   llm-externalizer mass-scout <subcommand> [flags]       # bulk LLM-driven file analysis (use 'mass-scout --help' for sub-commands)
+  llm-externalizer high-quality-scan --folder <path> --instructions "<task>" [scan flags]   # one strong model, max reasoning + cache (paid, OpenRouter-only)
 
 Disabled (would change settings.yaml \u2014 do this manually instead):
   llm-externalizer profile add | select | edit | remove | rename
@@ -44330,6 +44426,30 @@ cluster-synonyms flags:
   --timeout-hours <n>    Max wall time (default 4 hours). 0 disables. Fractional ok.
   Env: backend / model / ensemble come from the active llm-externalizer profile.
 
+high-quality-scan runs the SAME folder scan as the scan_folder MCP tool, but with
+ONE strong remote model (default z-ai/glm-5.2) at max reasoning effort + prompt
+cache instead of the 3-model ensemble. It is PAID by design and OpenRouter-only:
+it fails fast (never silently downgrades) on a local backend, free_only mode, or
+exhausted credit. Configure the model via the 'high_quality_model' block in your
+settings.yaml.
+
+high-quality-scan flags:
+  --folder <path>          (MANDATORY) Directory to scan recursively.
+  --instructions "<task>"  What to look for or do with each file. Required unless
+                           --instructions-file is given.
+  --instructions-file <p>  File(s) containing instructions. Repeat or comma-separate.
+  --extensions <a,b>       File extensions to include (e.g. .ts,.py).
+  --exclude-dirs <a,b>     Extra directory names to skip.
+  --max-files <n>          Max files to process (default 2500).
+  --max-payload-kb <n>     Max file size in KB per file (default 400).
+  --answer-mode <n>        Output organization \u2014 see the answer_mode table above.
+  --redact-regex <pat>     Custom JS regex to redact matching tokens before sending.
+  --scan-secrets           Abort if any secret is found in the input files.
+  --redact-secrets         Redact secrets before sending (prefer .env files instead).
+  --no-gitignore           Disable .gitignore filtering (default: enabled).
+  --output-dir <path>      Custom reports directory.
+  --timeout-hours <n>      Max wall time (default 4 hours). 0 disables. Fractional ok.
+
 Settings file: ${getSettingsPath()}
 
 To change models, profiles, API keys, URLs, timeouts, or the active profile:
@@ -44382,9 +44502,13 @@ async function main() {
     await cmdClusterSynonyms(args.slice(1));
     return;
   }
+  if (args[0] === "high-quality-scan" || args[0] === "high_quality_scan") {
+    await cmdHighQualityScan(args.slice(1));
+    return;
+  }
   if (args[0] !== "profile") {
     die(
-      `Unknown command '${args[0]}'. Use 'profile', 'model-info', 'search-existing', 'cluster-synonyms', 'security-scan', or 'mass-scout' subcommand, or --help.`
+      `Unknown command '${args[0]}'. Use 'profile', 'model-info', 'search-existing', 'cluster-synonyms', 'high-quality-scan', 'security-scan', or 'mass-scout' subcommand, or --help.`
     );
   }
   const subcommand = args[1];
