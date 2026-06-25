@@ -218289,6 +218289,12 @@ function rankByQualityIndex(models) {
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
 }
+function isZeroCostPriced(inputDollarsPerMillion, outputDollarsPerMillion) {
+  return inputDollarsPerMillion === 0 && outputDollarsPerMillion === 0;
+}
+function isFreeModeEligible(id, inputDollarsPerMillion, outputDollarsPerMillion) {
+  return id.endsWith(":free") || isZeroCostPriced(inputDollarsPerMillion, outputDollarsPerMillion);
+}
 
 // src/benchmark/select-common.ts
 var COST_EPSILON = 1e-9;
@@ -219103,11 +219109,11 @@ async function runBenchmarkOnModel(model, keywords, fixtures, options) {
 }
 async function runBenchmarkOnModelInner(model, keywords, fixtures, options) {
   const t0 = performance.now();
-  if (getActiveFreeOnly() && !model.id.endsWith(":free")) {
+  if (getActiveFreeOnly() && !isFreeModeEligible(model.id, model.inputDollarsPerMillion, model.outputDollarsPerMillion)) {
     return {
       modelId: model.id,
       ok: false,
-      error: `free_only cost-safety: skipped non-free model '${model.id}' (free mode benchmarks only ':free' models)`,
+      error: `free_only cost-safety: skipped non-free model '${model.id}' (free mode benchmarks only zero-cost models \u2014 a ':free' id, or catalog price exactly $0)`,
       latencyMs: performance.now() - t0
     };
   }

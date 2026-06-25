@@ -374,3 +374,40 @@ export function rankByQualityIndex(models: readonly QualifiedModel[]): Qualified
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; // deterministic
   });
 }
+
+/**
+ * True iff a model's catalog pricing is exactly zero on BOTH axes — i.e. it is
+ * genuinely free to call right now, REGARDLESS of a `:free` id suffix. This is
+ * the SEMANTIC zero-cost test that admits open-beta "free for now" models (e.g.
+ * `openrouter/owl-alpha`, which has NO `:free` suffix) into free-mode use
+ * WITHOUT surrendering the zero-spend guarantee: OpenRouter bills per the SAME
+ * catalog price these numbers are parsed from, so price-0 = $0 for the call, and
+ * if a beta model ever flips to paid its re-read price is non-zero → not free →
+ * rejected (fail-safe). `NaN` / `Infinity` (missing or unparseable pricing — e.g.
+ * a baseline with no catalog entry) are not `=== 0`, so they also fail to "not
+ * free", never silently billing. (TRDD-WJND1N2W P3.)
+ */
+export function isZeroCostPriced(
+  inputDollarsPerMillion: number,
+  outputDollarsPerMillion: number,
+): boolean {
+  return inputDollarsPerMillion === 0 && outputDollarsPerMillion === 0;
+}
+
+/**
+ * The single predicate the runtime `free_only` cost-safety chokepoint enforces
+ * (runner.ts): a model may be called/benchmarked under a free_only profile iff
+ * it is zero-cost — a `:free` id (the historical syntactic guarantee) OR catalog
+ * price exactly 0 (the semantic guarantee that admits open-beta no-suffix models
+ * like `openrouter/owl-alpha`). Replacing the bare `endsWith(":free")` check with
+ * this preserves "zero-spend by construction" — anything not provably free
+ * (positive price, or NaN/Infinity from missing pricing) returns false and is
+ * rejected, never billed. (TRDD-WJND1N2W P3.)
+ */
+export function isFreeModeEligible(
+  id: string,
+  inputDollarsPerMillion: number,
+  outputDollarsPerMillion: number,
+): boolean {
+  return id.endsWith(":free") || isZeroCostPriced(inputDollarsPerMillion, outputDollarsPerMillion);
+}

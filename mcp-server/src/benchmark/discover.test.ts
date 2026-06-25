@@ -24,6 +24,8 @@ import {
   qualify,
   buildBenchmarkRoster,
   rankByQualityIndex,
+  isZeroCostPriced,
+  isFreeModeEligible,
   extractCodexIndex,
   extractDesignArenaCodeElo,
   DEFAULT_CRITERIA,
@@ -405,5 +407,41 @@ describe("benchmark/discover quality indexes (codex + design-arena, TRDD-WJND1N2
     expect(input.map((m) => m.id)).toEqual(before); // input order untouched
     expect(rankByQualityIndex([])).toEqual([]);
     expect(rankByQualityIndex([input[0]]).map((m) => m.id)).toEqual(["vendor/x"]);
+  });
+});
+
+describe("benchmark/discover zero-cost predicates (free-mode eligibility, TRDD-WJND1N2W P3)", () => {
+  it("isZeroCostPriced is true ONLY when both axes are exactly 0", () => {
+    expect(isZeroCostPriced(0, 0)).toBe(true);
+    expect(isZeroCostPriced(0.1, 0)).toBe(false);
+    expect(isZeroCostPriced(0, 0.1)).toBe(false);
+    expect(isZeroCostPriced(0.1, 0.1)).toBe(false);
+  });
+
+  it("isZeroCostPriced treats NaN / Infinity (missing or unparseable pricing) as NOT free — fail-safe", () => {
+    expect(isZeroCostPriced(NaN, 0)).toBe(false);
+    expect(isZeroCostPriced(0, NaN)).toBe(false);
+    expect(isZeroCostPriced(Infinity, 0)).toBe(false);
+    expect(isZeroCostPriced(Infinity, Infinity)).toBe(false);
+  });
+
+  it("isFreeModeEligible admits a :free id regardless of its catalog price", () => {
+    // A ':free' suffix is the historical guarantee — eligible even if the parsed
+    // price is non-zero or unknown (the suffix IS OpenRouter's free-tier marker).
+    expect(isFreeModeEligible("deepseek/deepseek-r1:free", 5, 5)).toBe(true);
+    expect(isFreeModeEligible("x/y:free", NaN, NaN)).toBe(true);
+  });
+
+  it("isFreeModeEligible admits a price-0 model that LACKS the :free suffix (the owl-alpha case)", () => {
+    expect(isFreeModeEligible("openrouter/owl-alpha", 0, 0)).toBe(true);
+  });
+
+  it("isFreeModeEligible REJECTS a priced no-suffix model — the critical zero-spend safety case", () => {
+    // The whole point: a non-':free' model that costs money must NEVER pass the
+    // free_only chokepoint, or free mode would silently bill.
+    expect(isFreeModeEligible("vendor/cheap-but-paid", 0.01, 0.01)).toBe(false);
+    expect(isFreeModeEligible("vendor/pricey", 5, 10)).toBe(false);
+    // A baseline with no catalog price (Infinity) must also be rejected.
+    expect(isFreeModeEligible("vendor/unknown-price", Infinity, Infinity)).toBe(false);
   });
 });

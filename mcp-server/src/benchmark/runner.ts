@@ -21,6 +21,7 @@
 
 import type { Fixture } from "./ground-truth.js";
 import type { QualifiedModel } from "./discover.js";
+import { isFreeModeEligible } from "./discover.js";
 import { recordRequest } from "../usage-history.js";
 import { getActiveFreeOnly } from "../config.js";
 
@@ -157,17 +158,22 @@ async function runBenchmarkOnModelInner(
   options: RunnerOptions,
 ): Promise<RunOutcome> {
   const t0 = performance.now();
-  // Airtight free_only cost-safety (TRDD-97ef8b63). The benchmark fetches
-  // OpenRouter directly. Under a free_only profile, refuse to benchmark a
-  // non-':free' model — return a RunError (honouring the runner's never-throw
-  // contract) so the sweep records the skip and continues instead of billing.
-  // Free mode benchmarks the user's free pool ($0); to benchmark a paid model,
-  // switch off free_only first.
-  if (getActiveFreeOnly() && !model.id.endsWith(":free")) {
+  // Airtight free_only cost-safety (TRDD-97ef8b63; made SEMANTIC in TRDD-WJND1N2W).
+  // The benchmark fetches OpenRouter directly. Under a free_only profile, refuse
+  // to benchmark anything that is not ZERO-COST — a ':free' id OR a model whose
+  // catalog price is exactly $0 (the latter admits open-beta no-suffix models like
+  // owl-alpha; OpenRouter bills per that same catalog price, so price-0 = $0, and a
+  // flip-to-paid re-reads non-zero → not eligible → skipped). Return a RunError
+  // (honouring the runner's never-throw contract) so the sweep records the skip and
+  // continues instead of billing. To benchmark a PAID model, switch off free_only.
+  if (
+    getActiveFreeOnly() &&
+    !isFreeModeEligible(model.id, model.inputDollarsPerMillion, model.outputDollarsPerMillion)
+  ) {
     return {
       modelId: model.id,
       ok: false,
-      error: `free_only cost-safety: skipped non-free model '${model.id}' (free mode benchmarks only ':free' models)`,
+      error: `free_only cost-safety: skipped non-free model '${model.id}' (free mode benchmarks only zero-cost models — a ':free' id, or catalog price exactly $0)`,
       latencyMs: performance.now() - t0,
     };
   }
