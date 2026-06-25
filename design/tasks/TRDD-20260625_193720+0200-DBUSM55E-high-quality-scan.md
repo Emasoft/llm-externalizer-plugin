@@ -3,7 +3,7 @@ trdd-id: DBUSM55E
 title: high_quality_scan + high_quality_scan_and_fix — single good model, configurable, Opus verify-fix
 column: dev
 created: 2026-06-25T19:37:20+0200
-updated: 2026-06-25T19:37:20+0200
+updated: 2026-06-25T21:13:26+0200
 current-owner: claude-llm-externalizer
 assignee: claude-llm-externalizer
 priority: 2
@@ -43,15 +43,29 @@ the same turn. The high-quality model is configurable in the YAML, default **GLM
 (`z-ai/glm-5.2`) at **max reasoning effort** (→ OpenRouter `xhigh`), **cache enabled**,
 **FP8-or-higher quantization**, preferred provider **GMICloud** (`gmicloud/fp8`).
 
-**Current state:** TRDD authored; architecture fully mapped + verified (3 exploration reports
-in `reports_dev/high-quality-scan/`, OpenRouter schema verified against openrouter.ai docs).
-NO code written yet.
+**Current state (2026-06-25):** Phases 1-3 DONE + committed, all green.
+- P1 config (7c8ec92): `HighQualityModel`/`ResolvedHighQualityModel` types + `resolveHighQualityModel`;
+  per-profile `high_quality_model` (default z-ai/glm-5.2, xhigh, cache, fp8+ quants, gmicloud/fp8);
+  SETTINGS_TEMPLATE example. 15 config tests.
+- P2 request plumbing (a9fccb1): opt-in `HighQualityRequest` {provider,reasoning,cache} threaded
+  ScanFolderDeps→processFileCheck→ensembleStreaming→chatCompletionSimple (single-model path ONLY;
+  provider survives the param filter; cache_control breakpoint on the system prompt; reasoning rides
+  the ladder). Non-HQ calls byte-identical. Full suite 1211 green.
+- P3 MCP tool (604fffc): `high_quality_scan` tool (scan_folder schema shared via `scanFolderSchemaProps`);
+  dispatch uses `buildHighQualityProvider` + `highQualityScanRefusal` (paid-model fail-fast: refuses
+  on non-openrouter / free_only / creditExhausted, never downgrades); `useEnsemble:false`,
+  `modelOverride=hq.id`, `hqRequest` from config. LLM_TOOLS_SET + README count 39→40 / 16→17 + table row.
+  Tests: 4+5+5 unit + 1 fail-fast integration + listTools; doc-consistency green.
+- DEVIATION: NO `model-qualification/registry.ts` entry — the HQ model is FIXED/user-configured, not
+  benchmark-qualified (the registry is only for auto-selected/swappable tools). Intentional.
 
-**NEXT ACTION:** Phase 1 — config. Add the per-profile `high_quality_model` block to
-`mcp-server/src/config.ts` (interface + Profile field + ResolvedProfile + validation +
-resolveProfile + defaults in BOTH `generateDefaultSettings()` and `SETTINGS_TEMPLATE`), plus a
-`high_quality_scan` entry in `model-qualification/registry.ts`. Then `npm run build && lint &&
-test` in `mcp-server/`.
+**NEXT ACTION:** Phase 4 — CLI. Add a `high-quality-scan` subcommand to `mcp-server/src/cli.ts`
+mirroring the `scan-folder` CLI command (same args), routing to the same `runScanFolder` core with
+the HQ deps (modelOverride=hq.id + hqRequest + the `highQualityScanRefusal` gate). Then `npm run
+build && lint && test`. Phase 5 = slash commands (pure `high-quality-scan` completes the 3 surfaces;
+`_and_fix` = slash-only, reuse the existing opus parallel-fixer, force `LLM_EXT_FORCE_OPUS=1`).
+Phase 6 = docs (bump README line ~114 command counts when P5 adds commands) + dogfood + final
+full-suite + commit.
 
 **Load-bearing VERIFIED facts (do not re-derive):**
 - Single-model dispatch already exists: `ensembleStreaming` (index.ts:3159) has a `modelOverride`
