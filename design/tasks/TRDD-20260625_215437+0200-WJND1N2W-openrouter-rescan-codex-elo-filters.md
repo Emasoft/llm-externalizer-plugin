@@ -3,7 +3,7 @@ trdd-id: WJND1N2W
 title: OpenRouter model rescan — codex/design-arena pre-filters, free-no-suffix inclusion, skills update
 column: dev
 created: 2026-06-25T21:54:37+0200
-updated: 2026-06-25T22:32:45+0200
+updated: 2026-06-25T22:54:33+0200
 current-owner: claude-llm-externalizer
 assignee: claude-llm-externalizer
 priority: 3
@@ -27,7 +27,7 @@ impacts: [config-schema, public-api]
 attempts: 0
 test-failures: 0
 last-test-result: pass
-implementation-commits: [2ca844b, 582affc, 09c1f64]
+implementation-commits: [2ca844b, 582affc, 09c1f64, 59fb4b3]
 external-refs: ["https://openrouter.ai/api/v1/models"]
 ---
 
@@ -63,9 +63,16 @@ and consuming tokens."
   (pure `isZeroCostPriced` + `isFreeModeEligible`); +5 tests incl. priced-no-suffix→REJECTED and
   NaN/Infinity→REJECTED; 183 benchmark tests green. **owl-alpha now passes the free-mode chokepoint**,
   so it is benchmarked in free_only ENSEMBLE runs — the core "use it if it passes" path is covered.
-P3b/P4/P5 pending. No paid run without explicit user OK ($20 budget).
+- P3b (free-pool verify + auto-discovery, 59fb4b3): pure `resolveFreePool` resolves `--bench-free-pool`
+  against the LIVE catalog — a configured non-`:free` id is admitted only when the catalog prices it $0
+  (else fail-fast BEFORE any run, since --bench-free-pool can run without a free_only profile, so the
+  chokepoint is not the only guard), and auto-discovery adds every structurally-qualified zero-cost
+  catalog model (incl. no-suffix owl-alpha), ranked by the P2 indexes, capped at `--qualifying-top-n`.
+  +3 tests; **full suite 1247 green**. **owl-alpha is now in BOTH the ensemble AND the dedicated free
+  benchmark, automatically — the user's full intent.**
+P4/P5 pending. No paid run without explicit user OK ($20 budget).
 
-**P3 DESIGN (chokepoint DONE in 09c1f64; P3b = pool relax + free-pool auto-discovery remains):** The free
+**P3 DESIGN (P3 COMPLETE — chokepoint 09c1f64 + free-pool resolve/auto-discover 59fb4b3):** The free
 pool is "zero-spend by construction" (TRDD-97ef8b63) via the `:free` SUFFIX at three sites — the
 runtime chokepoint `runner.ts:166`, and the load-time validators `benchmark/index.ts:426` +
 `config.ts:584`. To admit owl-alpha (price-0, no `:free`) into the FREE-pool benchmark WITHOUT
@@ -126,13 +133,15 @@ structured JSON on the UNAUTHENTICATED, $0 `GET https://openrouter.ai/api/v1/mod
    model-update commands/skills (discover-new-models, bench-free-pool, benchmark,
    search-existing-benchmark, ensemble-autoselect).
 
-**NEXT ACTION (resume here — all $0 until P5):** P3b — admit price-0 no-suffix models into the
-DEDICATED free-pool benchmark: relax the `--bench-free-pool` `:free`-only throw (benchmark/index.ts
-~448) so the resolved pool may contain zero-cost ids (the now-SEMANTIC chokepoint guards spend),
-and OPTIONALLY auto-discover catalog price-0 models there (the "automatically for all models" ask;
-needs a catalog fetch in that block). Keep `config.ts:584` (manual `free_models`) `:free`-only —
-conservative, no user-facing relaxation. Then P4 (the 5 model-update skills/commands + README/docs
-+ dogfood + full suite), P5 (GATED paid rescan — user OK only; pre-filter spends minimally on $20).
+**NEXT ACTION (resume here — all $0 until P5):** P4 — fold the two new rules into the model-update docs
+(commands: bench-free-pool, benchmark, discover-new-models, search-existing-benchmark,
+security-triage-benchmark; skill: ensemble-autoselect): (1) the credit-FREE codex / design-arena code-ELO
+pre-rank + `--qualifying-top-n` cap that restricts candidates BEFORE the paid benchmark; (2) zero-cost
+no-suffix models (e.g. owl-alpha) are auto-included in the ensemble ($0 candidate) and the free benchmark
+(catalog-price-verified + auto-discovered). Then README/docs, dogfood, full suite. P5 = GATED paid rescan
+(user OK only; the pre-filter lands first so it spends minimally on the $20 budget).
+Note: `config.ts:584` (manual `free_models`) kept `:free`-only by design — conservative; FREE_POOL_SEED +
+auto-discovery are the price-0 inclusion paths, so no user-facing config relaxation was needed.
 
 **PHASES:**
 - **P1 — data layer (no behavior change, fully unit-testable, $0):** extend `OpenRouterModel`
