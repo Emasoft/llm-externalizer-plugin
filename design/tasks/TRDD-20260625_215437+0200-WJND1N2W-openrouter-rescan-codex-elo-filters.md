@@ -3,7 +3,7 @@ trdd-id: WJND1N2W
 title: OpenRouter model rescan — codex/design-arena pre-filters, free-no-suffix inclusion, skills update
 column: dev
 created: 2026-06-25T21:54:37+0200
-updated: 2026-06-25T22:02:32+0200
+updated: 2026-06-25T22:14:23+0200
 current-owner: claude-llm-externalizer
 assignee: claude-llm-externalizer
 priority: 3
@@ -27,7 +27,7 @@ impacts: [config-schema, public-api]
 attempts: 0
 test-failures: 0
 last-test-result: pass
-implementation-commits: [2ca844b]
+implementation-commits: [2ca844b, 582affc]
 external-refs: ["https://openrouter.ai/api/v1/models"]
 ---
 
@@ -49,10 +49,34 @@ model that can be used: `codex index score`, and `design arena code categories E
 you can find them, and use them to restrict the candidates before running the actual benchmark
 and consuming tokens."
 
-**Current state (2026-06-25):** P1 (data layer) DONE + committed (2ca844b). The two indexes are
-parsed from the catalog `benchmarks` object via defensive pure extractors and decorated onto
-`QualifiedModel` (no behavior change yet); +9 unit tests, discover 19/19 green, typecheck + lint
-clean. P2-P5 pending. No paid run will happen without explicit user OK ($20 budget).
+**Current state (2026-06-25):** P1 + P2 DONE + committed (2ca844b, 582affc).
+- P1 (data layer): both indexes parsed from the catalog `benchmarks` object via defensive pure
+  extractors + decorated onto `QualifiedModel`; +9 tests.
+- P2 (quality pre-filter): pure `rankByQualityIndex` (scored>unscored; composite of min-max-
+  normalised codex + design-arena code ELO over PRESENT axes; cheapest tiebreak). Wired into all
+  3 candidate paths — keyword/ensemble ranks best-first + honours a NEW `--qualifying-top-n N`
+  pre-benchmark cap (vs `--pick-top-n` = post-run result cap; `--include` baselines never capped);
+  search-existing + security-triage swap cheapest-sort → quality-rank before their top-16 cap.
+  +5 tests; 178 benchmark tests green, typecheck/lint/build clean. **owl-alpha already competes in
+  the ENSEMBLE via P1+P2** (it qualifies at $0 and gets ranked by its indexes).
+P3-P5 pending. No paid run without explicit user OK ($20 budget).
+
+**P3 DESIGN (locked — paused for user nod; modifies the credit-safety chokepoint):** The free
+pool is "zero-spend by construction" (TRDD-97ef8b63) via the `:free` SUFFIX at three sites — the
+runtime chokepoint `runner.ts:166`, and the load-time validators `benchmark/index.ts:426` +
+`config.ts:584`. To admit owl-alpha (price-0, no `:free`) into the FREE-pool benchmark WITHOUT
+weakening zero-spend, make the guarantee SEMANTIC, not syntactic:
+- **Chokepoint (the airtight guard, `runner.ts:166`):** allow in free mode iff `id.endsWith(":free")
+  OR (inputDollarsPerMillion === 0 && outputDollarsPerMillion === 0)`. The `QualifiedModel` already
+  carries the parsed catalog prices, so this needs NO new fetch. Sound because OpenRouter BILLS per
+  the same catalog price → price-0 = $0 for the call; if a beta model flips to paid the re-read
+  price is non-zero → rejected (fail-safe). This is the single source of zero-spend truth.
+- **Validators (`index.ts:426`, `config.ts:584`):** relax the `:free`-only string check to accept a
+  non-`:free` id, deferring the zero-cost verification to catalog-resolution + the chokepoint
+  (config-load is synchronous and has no catalog). They were belt-and-suspenders on top of the
+  chokepoint; with a price-aware chokepoint they relax to match without losing the guarantee.
+- Tests MUST include: `:free` admitted, price-0-no-suffix admitted, **price>0-no-suffix REJECTED**
+  (the critical safety case), flip-to-paid rejected.
 
 **FEASIBILITY — VERIFIED (the load-bearing research win):** Both indexes are exposed as
 structured JSON on the UNAUTHENTICATED, $0 `GET https://openrouter.ai/api/v1/models`:
@@ -98,12 +122,10 @@ structured JSON on the UNAUTHENTICATED, $0 `GET https://openrouter.ai/api/v1/mod
    model-update commands/skills (discover-new-models, bench-free-pool, benchmark,
    search-existing-benchmark, ensemble-autoselect).
 
-**NEXT ACTION:** build P2 — pre-rank candidates by codex/ELO + top-N restrict ($0 pure ranking):
-a `rankByQualityIndex(models)` in discover.ts (indexed-above-unindexed, higher index first,
-cheapest tiebreak) + a `qualifyingTopN` cap applied to the candidate pool before the benchmark
-roster. Then P3 (semantic-free owl-alpha — modifies the `free_only` chokepoint; MUST preserve
-zero-spend via a runtime price re-check; document the safety reasoning), P4 (skills/docs +
-dogfood + full suite), P5 (GATED paid rescan — user OK only).
+**NEXT ACTION:** await user nod on the P3 chokepoint change (design locked above), then implement
+P3 (3 sites + the 4 safety tests). Then P4 (update the 5 model-update skills/commands with the
+codex/ELO pre-filter + free-no-suffix rules; README/docs; dogfood; full suite), P5 (GATED paid
+rescan — user OK only; pre-filter lands first so it spends minimally on the $20 budget).
 
 **PHASES:**
 - **P1 — data layer (no behavior change, fully unit-testable, $0):** extend `OpenRouterModel`
