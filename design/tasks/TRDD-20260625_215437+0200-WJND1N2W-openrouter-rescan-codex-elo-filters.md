@@ -3,7 +3,7 @@ trdd-id: WJND1N2W
 title: OpenRouter model rescan — codex/design-arena pre-filters, free-no-suffix inclusion, skills update
 column: dev
 created: 2026-06-25T21:54:37+0200
-updated: 2026-06-25T22:54:33+0200
+updated: 2026-06-25T23:06:16+0200
 current-owner: claude-llm-externalizer
 assignee: claude-llm-externalizer
 priority: 3
@@ -27,7 +27,7 @@ impacts: [config-schema, public-api]
 attempts: 0
 test-failures: 0
 last-test-result: pass
-implementation-commits: [2ca844b, 582affc, 09c1f64, 59fb4b3]
+implementation-commits: [2ca844b, 582affc, 09c1f64, 59fb4b3, d133001, eb676fc]
 external-refs: ["https://openrouter.ai/api/v1/models"]
 ---
 
@@ -70,7 +70,15 @@ and consuming tokens."
   catalog model (incl. no-suffix owl-alpha), ranked by the P2 indexes, capped at `--qualifying-top-n`.
   +3 tests; **full suite 1247 green**. **owl-alpha is now in BOTH the ensemble AND the dedicated free
   benchmark, automatically — the user's full intent.**
-P4/P5 pending. No paid run without explicit user OK ($20 budget).
+- P4 (docs, d133001 + eb676fc): the codex/ELO pre-filter + zero-cost-no-suffix rules folded into all 6
+  model-update docs (ensemble-autoselect skill + benchmark / bench-free-pool / discover-new-models /
+  search-existing-benchmark / security-triage-benchmark commands) + README. The discover-new-models draft
+  was CORRECTED — it overclaimed that the --new-arrivals phase ranks by the indexes; verified
+  rankByQualityIndex lives ONLY in the benchmark candidate paths (index.ts:598, search-existing:330,
+  security-triage:338), so the doc now attributes the pre-rank to the benchmark commands. Dogfood
+  103 PASS/0 FAIL; doc-consistency + full suite green.
+**Feature work P1–P4 COMPLETE** (built, tested 1247-green, documented, dogfooded). Only P5 remains, and
+P5 (the paid rescan) + the push are BOTH gated on the user. No paid run without explicit OK ($20 budget).
 
 **P3 DESIGN (P3 COMPLETE — chokepoint 09c1f64 + free-pool resolve/auto-discover 59fb4b3):** The free
 pool is "zero-spend by construction" (TRDD-97ef8b63) via the `:free` SUFFIX at three sites — the
@@ -133,15 +141,13 @@ structured JSON on the UNAUTHENTICATED, $0 `GET https://openrouter.ai/api/v1/mod
    model-update commands/skills (discover-new-models, bench-free-pool, benchmark,
    search-existing-benchmark, ensemble-autoselect).
 
-**NEXT ACTION (resume here — all $0 until P5):** P4 — fold the two new rules into the model-update docs
-(commands: bench-free-pool, benchmark, discover-new-models, search-existing-benchmark,
-security-triage-benchmark; skill: ensemble-autoselect): (1) the credit-FREE codex / design-arena code-ELO
-pre-rank + `--qualifying-top-n` cap that restricts candidates BEFORE the paid benchmark; (2) zero-cost
-no-suffix models (e.g. owl-alpha) are auto-included in the ensemble ($0 candidate) and the free benchmark
-(catalog-price-verified + auto-discovered). Then README/docs, dogfood, full suite. P5 = GATED paid rescan
-(user OK only; the pre-filter lands first so it spends minimally on the $20 budget).
+**NEXT ACTION — P5 is GATED on the user (paid; the $20 OpenRouter budget):** run the actual rescan via
+`llm-ext-benchmark` (discover → codex/ELO pre-rank → `--qualifying-top-n` cap → benchmark), then report the
+recommended 3-best-cheap ensemble + any qualifying free models (incl. owl-alpha if it passes). The pre-filter
+now bounds spend — pick a small `--qualifying-top-n` (e.g. 5–8) to cap paid runs. DO NOT run without explicit
+user OK. The 39 local commits also remain gated ("Do not push. Wait for my approval first.").
 Note: `config.ts:584` (manual `free_models`) kept `:free`-only by design — conservative; FREE_POOL_SEED +
-auto-discovery are the price-0 inclusion paths, so no user-facing config relaxation was needed.
+P3b auto-discovery are the price-0 inclusion paths, so no user-facing config relaxation was needed.
 
 **PHASES:**
 - **P1 — data layer (no behavior change, fully unit-testable, $0):** extend `OpenRouterModel`
