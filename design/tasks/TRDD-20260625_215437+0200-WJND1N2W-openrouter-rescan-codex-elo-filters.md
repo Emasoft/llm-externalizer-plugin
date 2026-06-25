@@ -3,7 +3,7 @@ trdd-id: WJND1N2W
 title: OpenRouter model rescan — codex/design-arena pre-filters, free-no-suffix inclusion, skills update
 column: dev
 created: 2026-06-25T21:54:37+0200
-updated: 2026-06-25T22:14:23+0200
+updated: 2026-06-25T22:32:45+0200
 current-owner: claude-llm-externalizer
 assignee: claude-llm-externalizer
 priority: 3
@@ -27,7 +27,7 @@ impacts: [config-schema, public-api]
 attempts: 0
 test-failures: 0
 last-test-result: pass
-implementation-commits: [2ca844b, 582affc]
+implementation-commits: [2ca844b, 582affc, 09c1f64]
 external-refs: ["https://openrouter.ai/api/v1/models"]
 ---
 
@@ -59,9 +59,13 @@ and consuming tokens."
   search-existing + security-triage swap cheapest-sort → quality-rank before their top-16 cap.
   +5 tests; 178 benchmark tests green, typecheck/lint/build clean. **owl-alpha already competes in
   the ENSEMBLE via P1+P2** (it qualifies at $0 and gets ranked by its indexes).
-P3-P5 pending. No paid run without explicit user OK ($20 budget).
+- P3a (semantic chokepoint, 09c1f64): the runtime free_only guard is now `:free OR catalog-price-0`
+  (pure `isZeroCostPriced` + `isFreeModeEligible`); +5 tests incl. priced-no-suffix→REJECTED and
+  NaN/Infinity→REJECTED; 183 benchmark tests green. **owl-alpha now passes the free-mode chokepoint**,
+  so it is benchmarked in free_only ENSEMBLE runs — the core "use it if it passes" path is covered.
+P3b/P4/P5 pending. No paid run without explicit user OK ($20 budget).
 
-**P3 DESIGN (locked — paused for user nod; modifies the credit-safety chokepoint):** The free
+**P3 DESIGN (chokepoint DONE in 09c1f64; P3b = pool relax + free-pool auto-discovery remains):** The free
 pool is "zero-spend by construction" (TRDD-97ef8b63) via the `:free` SUFFIX at three sites — the
 runtime chokepoint `runner.ts:166`, and the load-time validators `benchmark/index.ts:426` +
 `config.ts:584`. To admit owl-alpha (price-0, no `:free`) into the FREE-pool benchmark WITHOUT
@@ -122,10 +126,13 @@ structured JSON on the UNAUTHENTICATED, $0 `GET https://openrouter.ai/api/v1/mod
    model-update commands/skills (discover-new-models, bench-free-pool, benchmark,
    search-existing-benchmark, ensemble-autoselect).
 
-**NEXT ACTION:** await user nod on the P3 chokepoint change (design locked above), then implement
-P3 (3 sites + the 4 safety tests). Then P4 (update the 5 model-update skills/commands with the
-codex/ELO pre-filter + free-no-suffix rules; README/docs; dogfood; full suite), P5 (GATED paid
-rescan — user OK only; pre-filter lands first so it spends minimally on the $20 budget).
+**NEXT ACTION (resume here — all $0 until P5):** P3b — admit price-0 no-suffix models into the
+DEDICATED free-pool benchmark: relax the `--bench-free-pool` `:free`-only throw (benchmark/index.ts
+~448) so the resolved pool may contain zero-cost ids (the now-SEMANTIC chokepoint guards spend),
+and OPTIONALLY auto-discover catalog price-0 models there (the "automatically for all models" ask;
+needs a catalog fetch in that block). Keep `config.ts:584` (manual `free_models`) `:free`-only —
+conservative, no user-facing relaxation. Then P4 (the 5 model-update skills/commands + README/docs
++ dogfood + full suite), P5 (GATED paid rescan — user OK only; pre-filter spends minimally on $20).
 
 **PHASES:**
 - **P1 — data layer (no behavior change, fully unit-testable, $0):** extend `OpenRouterModel`
