@@ -10,6 +10,8 @@ import {
   resolveModelForTool,
   resolveProfile,
   validateProfile,
+  resolveHighQualityModel,
+  HIGH_QUALITY_MODEL_DEFAULTS,
   type Profile,
   type ResolvedProfile,
 } from "./config.js";
@@ -25,11 +27,14 @@ function mkResolved(overrides: Partial<ResolvedProfile> = {}): ResolvedProfile {
     authToken: "tok",
     secondModel: "",
     thirdModel: "",
+    freeOnly: false,
+    freeModels: [],
     toolModels: {},
     timeout: 600,
     contextWindow: 0,
     appName: "",
     httpReferer: "",
+    highQualityModel: HIGH_QUALITY_MODEL_DEFAULTS,
     ...overrides,
   };
 }
@@ -196,5 +201,150 @@ describe("validateProfile tool_models validation", () => {
     });
     expect(res.valid).toBe(false);
     expect(res.errors.some((e) => e.includes("must be a map"))).toBe(true);
+  });
+});
+
+describe("resolveHighQualityModel (high-quality scan model, TRDD-DBUSM55E)", () => {
+  it("returns built-in defaults for an absent block", () => {
+    expect(resolveHighQualityModel(undefined)).toEqual(HIGH_QUALITY_MODEL_DEFAULTS);
+  });
+
+  it("returns built-in defaults for null / non-object (untrusted YAML)", () => {
+    expect(resolveHighQualityModel(null)).toEqual(HIGH_QUALITY_MODEL_DEFAULTS);
+    expect(resolveHighQualityModel("z-ai/glm-5.2")).toEqual(
+      HIGH_QUALITY_MODEL_DEFAULTS,
+    );
+    expect(resolveHighQualityModel([1, 2])).toEqual(HIGH_QUALITY_MODEL_DEFAULTS);
+  });
+
+  it("maps reasoning_effort 'max' to the wire ceiling 'xhigh' (case-insensitive)", () => {
+    expect(resolveHighQualityModel({ reasoning_effort: "max" }).reasoningEffort).toBe(
+      "xhigh",
+    );
+    expect(resolveHighQualityModel({ reasoning_effort: "MAX" }).reasoningEffort).toBe(
+      "xhigh",
+    );
+  });
+
+  it("passes a valid explicit effort and defaults an unknown one to xhigh", () => {
+    expect(
+      resolveHighQualityModel({ reasoning_effort: "medium" }).reasoningEffort,
+    ).toBe("medium");
+    expect(
+      resolveHighQualityModel({ reasoning_effort: "ludicrous" }).reasoningEffort,
+    ).toBe("xhigh");
+  });
+
+  it("expands min_quantization to the this-precision-or-higher whitelist", () => {
+    expect(resolveHighQualityModel({ min_quantization: "fp8" }).quantizations).toEqual(
+      ["fp8", "fp16", "bf16", "fp32"],
+    );
+    expect(
+      resolveHighQualityModel({ min_quantization: "bf16" }).quantizations,
+    ).toEqual(["bf16", "fp32"]);
+    expect(
+      resolveHighQualityModel({ min_quantization: "int8" }).quantizations,
+    ).toEqual(["int8", "fp6", "fp8", "fp16", "bf16", "fp32"]);
+  });
+
+  it("pins the provider into provider.order and honors allow_fallbacks", () => {
+    const r = resolveHighQualityModel({
+      provider: "deepinfra/fp8",
+      allow_fallbacks: true,
+    });
+    expect(r.providerOrder).toEqual(["deepinfra/fp8"]);
+    expect(r.allowFallbacks).toBe(true);
+  });
+
+  it("overrides only the provided fields, keeping defaults for the rest", () => {
+    const r = resolveHighQualityModel({ id: "z-ai/glm-5.2", cache: false });
+    expect(r.id).toBe("z-ai/glm-5.2");
+    expect(r.cache).toBe(false);
+    expect(r.reasoningEffort).toBe("xhigh");
+    expect(r.providerOrder).toEqual(["gmicloud/fp8"]);
+  });
+
+  it("ignores an empty id and falls back to the default", () => {
+    expect(resolveHighQualityModel({ id: "" }).id).toBe(
+      HIGH_QUALITY_MODEL_DEFAULTS.id,
+    );
+  });
+});
+
+describe("resolveProfile + validateProfile high_quality_model (TRDD-DBUSM55E)", () => {
+  // Direct (non-$) api_key so validation never depends on a live env var.
+  const baseRemote: Profile = {
+    mode: "remote",
+    api: "openrouter-remote",
+    model: "google/gemini-2.5-flash",
+    api_key: "sk-or-test-direct",
+  };
+
+  it("resolveProfile fills highQualityModel with defaults when absent", () => {
+    expect(resolveProfile("p", baseRemote).highQualityModel).toEqual(
+      HIGH_QUALITY_MODEL_DEFAULTS,
+    );
+  });
+
+  it("resolveProfile resolves a custom high_quality_model block", () => {
+    const r = resolveProfile("p", {
+      ...baseRemote,
+      high_quality_model: {
+        id: "x-ai/grok-4.1",
+        reasoning_effort: "high",
+        cache: false,
+      },
+    });
+    expect(r.highQualityModel.id).toBe("x-ai/grok-4.1");
+    expect(r.highQualityModel.reasoningEffort).toBe("high");
+    expect(r.highQualityModel.cache).toBe(false);
+  });
+
+  it("validateProfile accepts an absent high_quality_model", () => {
+    expect(validateProfile("p", baseRemote).valid).toBe(true);
+  });
+
+  it("validateProfile treats a null high_quality_model as absent (blank YAML key)", () => {
+    const p: Profile = { ...baseRemote };
+    (p as { high_quality_model: unknown }).high_quality_model = null;
+    expect(validateProfile("p", p).valid).toBe(true);
+  });
+
+  it("validateProfile rejects a non-object high_quality_model", () => {
+    const p: Profile = { ...baseRemote };
+    (p as { high_quality_model: unknown }).high_quality_model = "z-ai/glm-5.2";
+    const res = validateProfile("p", p);
+    expect(res.valid).toBe(false);
+    expect(
+      res.errors.some((e) => e.includes("high_quality_model must be a map")),
+    ).toBe(true);
+  });
+
+  it("validateProfile rejects a bad reasoning_effort and a bad min_quantization", () => {
+    const res = validateProfile("p", {
+      ...baseRemote,
+      high_quality_model: {
+        reasoning_effort: "turbo",
+        min_quantization: "fp99",
+      },
+    });
+    expect(res.valid).toBe(false);
+    expect(res.errors.some((e) => e.includes("reasoning_effort"))).toBe(true);
+    expect(res.errors.some((e) => e.includes("min_quantization"))).toBe(true);
+  });
+
+  it("validateProfile accepts a fully-specified valid high_quality_model", () => {
+    const res = validateProfile("p", {
+      ...baseRemote,
+      high_quality_model: {
+        id: "z-ai/glm-5.2",
+        reasoning_effort: "max",
+        cache: true,
+        min_quantization: "fp8",
+        provider: "gmicloud/fp8",
+        allow_fallbacks: false,
+      },
+    });
+    expect(res.valid).toBe(true);
   });
 });

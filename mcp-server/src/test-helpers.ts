@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { copyFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import {
   type ResolvedProfile,
+  HIGH_QUALITY_MODEL_DEFAULTS,
   validateSettings,
   resolveProfile,
   ensureSettingsExist,
@@ -104,6 +105,7 @@ function localTestResolvedProfile(timeoutSec: number): ResolvedProfile {
     contextWindow: 0,
     appName: "",
     httpReferer: "",
+    highQualityModel: HIGH_QUALITY_MODEL_DEFAULTS,
   };
 }
 

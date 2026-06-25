@@ -82,6 +82,13 @@ export interface Profile {
    * see resolveModelForTool() and the security-triage benchmark.
    */
   tool_models?: Record<string, string>;
+  /**
+   * Optional high-quality-scan model config (TRDD-DBUSM55E). Absent → built-in
+   * defaults (GLM 5.2 @ xhigh reasoning, cache on, fp8+ quant, GMICloud). The
+   * `high_quality_scan` tool reads this to run ONE strong model instead of the
+   * cheap 3-model ensemble. See HighQualityModel.
+   */
+  high_quality_model?: HighQualityModel;
   /** Request timeout in seconds */
   timeout?: number;
   /** Context window override (0 = auto-detect) */
@@ -119,7 +126,98 @@ export interface ResolvedProfile {
   contextWindow: number;
   appName: string;
   httpReferer: string;
+  /** Resolved high-quality-scan model config (TRDD-DBUSM55E; defaults filled). */
+  highQualityModel: ResolvedHighQualityModel;
 }
+
+/**
+ * Optional per-profile "high-quality model" config (TRDD-DBUSM55E). Drives the
+ * `high_quality_scan` tool: ONE strong model run at max reasoning instead of the
+ * cheap 3-model ensemble, with deterministic OpenRouter provider/quantization
+ * routing and prompt caching. Every sub-field is optional — an absent block (or
+ * absent field) falls back to HIGH_QUALITY_MODEL_DEFAULTS, so `high_quality_scan`
+ * works out-of-the-box on any OpenRouter profile.
+ */
+export interface HighQualityModel {
+  /** OpenRouter model id. Default "z-ai/glm-5.2". */
+  id?: string;
+  /**
+   * Reasoning effort: off|low|medium|high|xhigh|max. "max" is an alias for the
+   * real OpenRouter ceiling "xhigh" (there is no literal "max" wire value).
+   * Default "max".
+   */
+  reasoning_effort?: string;
+  /** Enable prompt caching (cache_control breakpoint on the system prompt). Default true. */
+  cache?: boolean;
+  /**
+   * Minimum acceptable quantization, expanded to "this precision or higher" for
+   * OpenRouter's provider.quantizations filter. Default "fp8".
+   */
+  min_quantization?: string;
+  /**
+   * Preferred OpenRouter provider slug (may carry a quant variant suffix, e.g.
+   * "gmicloud/fp8"), used as provider.order[0]. Default "gmicloud/fp8".
+   */
+  provider?: string;
+  /**
+   * Allow OpenRouter to fall back to other providers if the preferred one is
+   * unavailable. Default false (pin the preferred provider).
+   */
+  allow_fallbacks?: boolean;
+}
+
+/**
+ * Fully resolved high-quality-model config: defaults filled, "max"→"xhigh",
+ * min_quantization expanded to the fp8-or-higher whitelist. Always present on a
+ * ResolvedProfile (resolveHighQualityModel never returns null).
+ */
+export interface ResolvedHighQualityModel {
+  id: string;
+  /** One of off|xhigh|high|medium|low (the "max" alias already mapped to xhigh). */
+  reasoningEffort: string;
+  cache: boolean;
+  /** OpenRouter provider.order list (the preferred provider slug). */
+  providerOrder: string[];
+  /** OpenRouter provider.quantizations whitelist (min_quantization expanded). */
+  quantizations: string[];
+  /** OpenRouter provider.allow_fallbacks. */
+  allowFallbacks: boolean;
+}
+
+// ── High-quality model constants (TRDD-DBUSM55E) ────────────────────────────
+// Quantization precision tiers, low → high. "fp8 or higher" = fp8 and every tier
+// to its right. "unknown" is intentionally excluded (we want a KNOWN high-precision
+// endpoint). Mirrors OpenRouter's provider.quantizations values.
+const QUANT_TIERS: readonly string[] = Object.freeze([
+  "int4",
+  "fp4",
+  "int8",
+  "fp6",
+  "fp8",
+  "fp16",
+  "bf16",
+  "fp32",
+]);
+
+/** Built-in defaults for the high-quality scan model (the spec asked for). */
+export const HIGH_QUALITY_MODEL_DEFAULTS: ResolvedHighQualityModel = {
+  id: "z-ai/glm-5.2",
+  reasoningEffort: "xhigh", // "max" maps here — the real OpenRouter ceiling
+  cache: true,
+  providerOrder: ["gmicloud/fp8"],
+  quantizations: ["fp8", "fp16", "bf16", "fp32"], // fp8-or-higher
+  allowFallbacks: false,
+};
+
+/** Accepted reasoning_effort tokens in YAML ("max" is an alias for "xhigh"). */
+const VALID_HQ_REASONING: ReadonlySet<string> = new Set([
+  "off",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
 
 export interface ValidationResult {
   valid: boolean;
@@ -600,6 +698,68 @@ export function validateProfile(
     }
   }
 
+  // ── High-quality-scan model (high_quality_model) (TRDD-DBUSM55E) ──
+  // Optional block; blank YAML key → null → "no override, use defaults". A
+  // non-null non-object is a real mistake. Sub-fields are validated when present;
+  // resolveHighQualityModel still fills defaults for any field omitted or wrong.
+  const rawHq: unknown = profile.high_quality_model;
+  if (rawHq !== undefined && rawHq !== null) {
+    if (typeof rawHq !== "object" || Array.isArray(rawHq)) {
+      errors.push(
+        `Profile '${name}': high_quality_model must be a map of {id, reasoning_effort, cache, min_quantization, provider, allow_fallbacks}`,
+      );
+    } else {
+      const hq = rawHq as Record<string, unknown>;
+      if (
+        hq.id !== undefined &&
+        (typeof hq.id !== "string" || hq.id.length === 0)
+      ) {
+        errors.push(
+          `Profile '${name}': high_quality_model.id must be a non-empty model-id string`,
+        );
+      }
+      if (
+        hq.reasoning_effort !== undefined &&
+        (typeof hq.reasoning_effort !== "string" ||
+          !VALID_HQ_REASONING.has(hq.reasoning_effort.toLowerCase()))
+      ) {
+        errors.push(
+          `Profile '${name}': high_quality_model.reasoning_effort must be one of off|low|medium|high|xhigh|max`,
+        );
+      }
+      if (hq.cache !== undefined && typeof hq.cache !== "boolean") {
+        errors.push(
+          `Profile '${name}': high_quality_model.cache must be a boolean`,
+        );
+      }
+      if (
+        hq.min_quantization !== undefined &&
+        (typeof hq.min_quantization !== "string" ||
+          !QUANT_TIERS.includes(hq.min_quantization.toLowerCase()))
+      ) {
+        errors.push(
+          `Profile '${name}': high_quality_model.min_quantization must be one of ${QUANT_TIERS.join("|")}`,
+        );
+      }
+      if (
+        hq.provider !== undefined &&
+        (typeof hq.provider !== "string" || hq.provider.length === 0)
+      ) {
+        errors.push(
+          `Profile '${name}': high_quality_model.provider must be a non-empty provider slug string`,
+        );
+      }
+      if (
+        hq.allow_fallbacks !== undefined &&
+        typeof hq.allow_fallbacks !== "boolean"
+      ) {
+        errors.push(
+          `Profile '${name}': high_quality_model.allow_fallbacks must be a boolean`,
+        );
+      }
+    }
+  }
+
   return { valid: errors.length === 0, errors };
 }
 
@@ -657,6 +817,70 @@ function coerceFreeModels(raw: unknown): string[] {
   return raw.filter((m): m is string => typeof m === "string");
 }
 
+// ── High-quality model resolution (TRDD-DBUSM55E) ───────────────────────────
+
+/**
+ * Map a config reasoning_effort token to the wire value ("max" → "xhigh"). An
+ * unrecognized value falls back to the default (validateProfile reports it).
+ */
+function mapReasoningEffort(raw: string | undefined): string {
+  if (typeof raw !== "string") return HIGH_QUALITY_MODEL_DEFAULTS.reasoningEffort;
+  const v = raw.toLowerCase();
+  if (v === "max") return "xhigh";
+  return VALID_HQ_REASONING.has(v)
+    ? v
+    : HIGH_QUALITY_MODEL_DEFAULTS.reasoningEffort;
+}
+
+/**
+ * Expand a min_quantization into the "this-precision-or-higher" whitelist for
+ * OpenRouter's provider.quantizations filter. An unknown value falls back to the
+ * default fp8+ set (validateProfile reports the bad value; this never throws).
+ */
+function expandMinQuantization(raw: string | undefined): string[] {
+  if (typeof raw !== "string")
+    return [...HIGH_QUALITY_MODEL_DEFAULTS.quantizations];
+  const idx = QUANT_TIERS.indexOf(raw.toLowerCase());
+  if (idx < 0) return [...HIGH_QUALITY_MODEL_DEFAULTS.quantizations];
+  return QUANT_TIERS.slice(idx);
+}
+
+/**
+ * Resolve a (possibly absent / partial / null) high_quality_model block into a
+ * fully-defaulted ResolvedHighQualityModel. Untrusted YAML: a non-object collapses
+ * to all-defaults; each field falls back to HIGH_QUALITY_MODEL_DEFAULTS when
+ * omitted or the wrong type (validateProfile is what reports a malformed value to
+ * the user; this just never throws or mangles).
+ */
+export function resolveHighQualityModel(raw: unknown): ResolvedHighQualityModel {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { ...HIGH_QUALITY_MODEL_DEFAULTS };
+  }
+  const hq = raw as HighQualityModel;
+  const id =
+    typeof hq.id === "string" && hq.id.length > 0
+      ? hq.id
+      : HIGH_QUALITY_MODEL_DEFAULTS.id;
+  const provider =
+    typeof hq.provider === "string" && hq.provider.length > 0
+      ? hq.provider
+      : HIGH_QUALITY_MODEL_DEFAULTS.providerOrder[0];
+  return {
+    id,
+    reasoningEffort: mapReasoningEffort(hq.reasoning_effort),
+    cache:
+      typeof hq.cache === "boolean"
+        ? hq.cache
+        : HIGH_QUALITY_MODEL_DEFAULTS.cache,
+    providerOrder: [provider],
+    quantizations: expandMinQuantization(hq.min_quantization),
+    allowFallbacks:
+      typeof hq.allow_fallbacks === "boolean"
+        ? hq.allow_fallbacks
+        : HIGH_QUALITY_MODEL_DEFAULTS.allowFallbacks,
+  };
+}
+
 /**
  * Resolve a profile to concrete connection values.
  * Merges profile overrides with preset defaults and resolves env var refs.
@@ -712,6 +936,9 @@ export function resolveProfile(
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
     appName: profile.app_name ?? preset.defaultAppName,
     httpReferer: profile.http_referer ?? preset.defaultHttpReferer,
+    // High-quality-scan model (TRDD-DBUSM55E): always resolved (defaults filled),
+    // independent of mode — the high_quality_scan tool reads it; other tools ignore it.
+    highQualityModel: resolveHighQualityModel(profile.high_quality_model),
   };
 }
 
@@ -875,6 +1102,17 @@ profiles:
     api: openrouter-remote
     model: "google/gemini-2.5-flash"
     api_key: $OPENROUTER_API_KEY          # set this env var, or replace with direct key
+    # Optional: high-quality scan model (TRDD-DBUSM55E). Drives high_quality_scan —
+    # ONE strong model at max reasoning instead of the cheap 3-model ensemble.
+    # Absent → these exact defaults are used automatically. Needs an OpenRouter
+    # (remote) profile; NOT available under free_only (it is a paid model).
+    # high_quality_model:
+    #   id: "z-ai/glm-5.2"            # default high-quality model
+    #   reasoning_effort: max          # max -> OpenRouter "xhigh" (the real ceiling)
+    #   cache: true                    # prompt-cache the system prompt across files
+    #   min_quantization: fp8          # accept fp8-or-higher precision endpoints only
+    #   provider: "gmicloud/fp8"       # preferred provider (provider.order[0])
+    #   allow_fallbacks: false         # pin the preferred provider
 
   # ── Remote: Ensemble (three models in parallel) ────────────────────
   remote-ensemble-geminigrok:
