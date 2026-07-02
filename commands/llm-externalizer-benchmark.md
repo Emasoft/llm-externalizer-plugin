@@ -1,6 +1,6 @@
 ---
 name: llm-externalizer-benchmark
-description: Benchmark OpenRouter programming-category models against a TypeScript classification task. Filters by cost + capability, scores each candidate against 71 fixture functions + 3 literal keywords, writes a markdown comparison report. Use this to pick the cheapest model that still passes the real workload.
+description: Benchmark OpenRouter programming-category models against a TypeScript classification task. Filters by cost + capability, scores each candidate against 71 fixture functions + 3 literal keywords, writes a markdown comparison report. Use this to pick the cheapest model that still passes the real workload. Trigger with "rescan models", "update the models", "update/refresh the model ensemble", "find better or cheaper models", "run a full model rescan", "auto-pick the ensemble", "is there a better model now". This ONE command IS the whole rescan/benchmark/pick procedure — route here instead of hand-rolling a per-model loop.
 allowed-tools:
   - Bash
 argument-hint: "[--include MODEL_ID]... [--dry-run] [--report PATH] [--reasoning low|medium|high] [--seed N] [--qualifying-top-n N]"
@@ -35,13 +35,19 @@ Using `Bash`:
 
 ## Step 2 — Run the benchmark
 
+Run it as ONE Bash call. The CLI does all discovery/filter/rank/benchmark/pick/settings-write inside the Node process — **nothing touches your context**. NEVER re-implement any of that with a per-model loop over `chat` / `code_task` / `or_model_info`: that costs real OpenRouter $ per call AND re-sends the whole transcript every turn — the exact 30–40M-token failure mode this command exists to prevent.
+
+The sweep takes **10–30 minutes** (≈60s/model), so:
+- If `$ARGUMENTS` has no `--qualifying-top-n` and the user did NOT ask for an *exhaustive* sweep, add `--qualifying-top-n 15` — bounds both spend and runtime.
+- Launch it with `run_in_background: true` (or an explicit ≥20-minute Bash timeout). Do NOT block the session on a foreground half-hour call; you'll be notified on completion, then surface the report path.
+
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/llm-ext-benchmark" $ARGUMENTS
 ```
 
 The CLI streams progress to stderr as `[benchmark] ...` lines (one per model), then prints the final report path and pass count. Propagate the exit code.
 
-Typical cost for a default sweep is well under $0.10 (≈$0.005–$0.02 per candidate depending on reasoning token usage). `--dry-run` makes zero API calls.
+Typical cost for a bounded sweep is well under $0.10 (≈$0.005–$0.02 per candidate depending on reasoning token usage). `--dry-run` makes zero API calls — when no `--qualifying-top-n` is given, run `--dry-run` FIRST to surface the candidate count before spending.
 
 ## Step 3 — Return
 
@@ -59,8 +65,9 @@ Do NOT `Read` the report. Its content is the user's output, not the orchestrator
 
 | Goal | Invocation |
 |---|---|
-| Show the qualifying roster without spending anything | `/llm-externalizer:llm-externalizer-benchmark --dry-run` |
-| Full sweep (candidates only) | `/llm-externalizer:llm-externalizer-benchmark` |
+| Preview the qualifying roster + count, $0 (do this FIRST when no cap is set) | `/llm-externalizer:llm-externalizer-benchmark --dry-run` |
+| Default bounded sweep (top-15 pre-ranked candidates) | `/llm-externalizer:llm-externalizer-benchmark --qualifying-top-n 15` |
+| Exhaustive sweep — every qualifying candidate (slow, costs more; opt-in only) | `/llm-externalizer:llm-externalizer-benchmark` |
 | Sweep plus current production ensemble as baselines | `/llm-externalizer:llm-externalizer-benchmark --include google/gemini-3-flash-preview --include x-ai/grok-4.1-fast` |
 | Force reasoning-heavy runs for sensitivity testing | `/llm-externalizer:llm-externalizer-benchmark --reasoning high` |
 | Cap paid runs to the top 5 pre-ranked candidates | `/llm-externalizer:llm-externalizer-benchmark --qualifying-top-n 5` |
