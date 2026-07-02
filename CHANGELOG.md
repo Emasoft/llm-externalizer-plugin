@@ -1,6 +1,692 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [10.1.0] - 2026-07-02
+
+### Added
+
+- Feat(benchmark): --bench-free-pool admits + auto-discovers zero-cost models (P3b, TRDD-WJND1N2W)
+
+Completes owl-alpha's free-pool inclusion. The dedicated free-pool benchmark previously
+threw on any non-':free' id, so open-beta 'free for now' models (openrouter/owl-alpha — no
+':free' suffix) could not be benchmarked as free models. New pure resolveFreePool() resolves
+the pool against the LIVE catalog: a configured non-':free' id is admitted ONLY when the
+catalog prices it at exactly $0 (else it lands in 'rejected' and the caller fails fast BEFORE
+any run), and auto-discovery adds every structurally-qualified zero-cost catalog model (incl.
+no-suffix ones), ranked by the P2 quality indexes and capped at --qualifying-top-n.
+
+CRITICAL safety reason this verifies price HERE rather than trusting the runtime chokepoint:
+--bench-free-pool can run WITHOUT a free_only profile, and the runner chokepoint only fires
+when free_only is active — so this resolution is the only guard against a mis-listed PAID
+model billing. A priced or catalog-absent non-':free' id is rejected fail-safe. +3 unit tests
+(configured admit/reject, auto-discovery include/exclude, cap + no-dup); full suite 1247
+passed, typecheck/lint/build clean. owl-alpha is now in BOTH the ensemble (P1+P2) and the
+dedicated free benchmark, automatically — the user's full intent.
+
+- Feat(benchmark): make the free_only chokepoint SEMANTIC — :free OR price-0 (P3a, TRDD-WJND1N2W)
+
+The free pool's zero-spend was 'by construction' via the :free SUFFIX (runner.ts chokepoint,
+TRDD-97ef8b63). That syntactic check excludes open-beta 'free for now' models with no :free
+suffix (e.g. openrouter/owl-alpha). Replace it with a SEMANTIC zero-cost test that PRESERVES
+the guarantee: new pure isZeroCostPriced() (both axes exactly 0) + isFreeModeEligible() (:free
+OR price-0). OpenRouter bills per the same catalog price the QualifiedModel already carries, so
+price-0 = $0 for the call; a flip-to-paid re-reads non-zero → rejected; NaN/Infinity (missing
+pricing, e.g. a baseline) → rejected. So nothing that costs money can pass — anything not
+PROVABLY free is skipped, never billed. This lets owl-alpha (price-0) be benchmarked in
+free_only ENSEMBLE runs (it already qualifies as a candidate via P1+P2). +5 unit tests incl.
+the critical priced-no-suffix→REJECTED case; 183 benchmark tests green, typecheck/lint/build
+clean. Pool-config relaxation + free-pool auto-discovery (the dedicated --bench-free-pool path)
+follow in P3b.
+
+- Feat(benchmark): quality-rank candidates by codex/ELO before the paid run (P2, TRDD-WJND1N2W)
+
+Uses the catalog indexes (parsed in P1) to RESTRICT which candidates reach the paid benchmark
+— the user's "use them to restrict candidates before benchmarking and consuming tokens" on a
+$20 budget. New pure rankByQualityIndex(): scored-above-unscored (a missing index = UNKNOWN,
+never dropped); among scored, higher composite of min-max-normalised codex + design-arena code
+ELO (mean of PRESENT axes, so a one-axis model isn't penalised); cheapest $/M as tiebreak
+(keeps "best CHEAP model" + preserves the prior cheapest-first order for an all-unscored pool).
+
+Wired into all 3 candidate paths: the keyword/ensemble benchmark now ranks candidates best-first
+and honours a NEW --qualifying-top-n N pre-benchmark cap (distinct from --pick-top-n, which caps
+RESULTS; --include baselines never capped); search-existing + security-triage swap their
+cheapest-only sort for the quality rank before their existing top-16 cap. +5 unit tests; 178
+benchmark tests pass, typecheck + lint clean, build OK. dist rebuilt.
+
+- Feat(benchmark): parse OpenRouter codex-index + design-arena code-ELO (P1, TRDD-WJND1N2W)
+
+Data layer only — no behavior change yet. OpenRouter ships two per-model quality indexes
+inline on the public, unauthenticated $0 GET /api/v1/models (research verified):
+  - codex index = benchmarks.artificial_analysis.coding_index (0-100, under-documented)
+  - design-arena code ELO = benchmarks.design_arena[arena=models,category=codecategories].elo
+Extended OpenRouterModel with the optional benchmarks shape; added two defensive pure
+extractors (extractCodexIndex / extractDesignArenaCodeElo — return undefined on absent or
+non-finite, never throw); decorated QualifiedModel with optional codexIndex/designArenaElo
+and populated them in both qualify() and buildBenchmarkRoster()'s baseline path. Coverage is
+partial (~60/339 codex, ~94/339 ELO) so undefined means UNKNOWN, never 'bad' — P2 will rank,
+not hard-disqualify, on these. +9 unit tests (real z-ai/glm-5.2 shape); discover 19/19 green,
+typecheck + lint clean.
+
+- Feat(cli): register high_quality_scan in the bin/llm-ext tool catalog (TRDD-DBUSM55E)
+
+Phase 4 (canonical CLI). bin/llm-ext is the generic per-tool CLI every MCP tool is
+surfaced through (the dogfood's per-verb-help tests `llm-ext <tool> --help` for each
+catalog entry). high_quality_scan was missing — added it next to scan_folder with the same
+folder-scan params, so `llm-ext high_quality_scan --folder_path X --instructions Y` works
+exactly like scan_folder. This is the canonical CLI surface (the friendly hyphenated
+`llm-externalizer high-quality-scan` subcommand added earlier is an additional surface, like
+search-existing). Dogfood now auto-covers it: 103 PASS / 0 FAIL (the new cli-help row tests
+`llm-ext high_quality_scan --help`).
+
+- Feat(commands): add high-quality-scan + high-quality-scan-and-fix slash commands (TRDD-DBUSM55E)
+
+Phase 5 of high_quality_scan — the slash-command surfaces.
+- high-quality-scan: thin wrapper over the high_quality_scan MCP tool (completes the
+  three-surface set: MCP tool + CLI command + slash command). Parses scan_folder-shaped
+  flags, calls the tool, returns report paths; warns when the backend can't run the
+  paid model.
+- high-quality-scan-and-fix: the high-quality twin of scan-and-fix — strong single-model
+  scan via high_quality_scan, then ALWAYS-Opus parallel fixer subagents (≤15) that
+  verify-then-fix each finding in the same run. Self-contained but reuses the existing
+  validate_report.py / join_fixer_reports.py scripts and the llm-externalizer-parallel-
+  fixer-opus-agent; explicit-target-only to stay concise. Slash-only by the documented
+  GAP-11 exemption (multi-agent orchestration can't live in a single MCP/CLI surface).
+README command count 37->39 / 22 base + two table rows. doc-consistency gate green (11/11).
+
+- Feat(cli): add high-quality-scan CLI command (TRDD-DBUSM55E)
+
+Phase 4 of high_quality_scan. New 'llm-externalizer high-quality-scan' verb — the CLI
+surface of the high_quality_scan MCP tool. Like search-existing / cluster-synonyms it parses
+scan_folder-shaped flags (--folder, --instructions[-file], --extensions, --exclude-dirs,
+--max-files, --max-payload-kb, --answer-mode, --redact-regex, --scan-secrets, --redact-secrets,
+--no-gitignore, --output-dir, --timeout-hours) into the tool's arg shape and calls it over the
+spawned MCP server, so the LLM transport AND the paid-model fail-fast gate all live server-side
+(a wrong backend / free_only / no-credit surfaces as isError -> exit 1, never a silent
+downgrade). Wired into the top-level dispatch + the unknown-command list; printUsage gains a
+usage line and a flags section. Validation smoke-tested (no-folder/no-instructions/--help all
+correct); end-to-end CLI coverage rides the dogfood harness (Phase 6), matching the existing
+CLI-command test precedent (parseSearchExistingArgs is likewise dogfood-covered).
+
+- Feat(mcp): add high_quality_scan tool — single strong model, paid, fail-fast (TRDD-DBUSM55E)
+
+Phase 3 of high_quality_scan. New MCP tool: scan_folder semantics but driven by ONE
+strong remote model (default z-ai/glm-5.2) at max reasoning + prompt cache via the
+single-model (modelOverride) path, NOT the cheap 3-model ensemble. Two pure helpers in
+config.ts make the logic unit-testable: buildHighQualityProvider() (the OpenRouter
+provider block, empty arrays omitted) and highQualityScanRefusal() (the paid-model gate
+— refuses, never silently downgrades, on a non-OpenRouter backend / free_only / exhausted
+credit). The dispatch builds ScanFolderDeps with useEnsemble:false, modelOverride=hq.id,
+and the hqRequest knobs. definitions.ts extracts scan_folder's inline schema into a shared
+scanFolderSchemaProps so the two tools never drift. README tool count 39->40 / core 16->17
++ a tool-table row (doc-consistency gate). Tests: 4 buildHighQualityProvider + 5
+highQualityScanRefusal + 5 withSystemCacheBreakpoint + 1 fail-fast integration + listTools;
+typecheck + lint + doc-consistency all green.
+
+- Feat(scan): plumb high_quality_scan request knobs through the single-model path (TRDD-DBUSM55E)
+
+Phase 2 of high_quality_scan. Adds an opt-in HighQualityRequest (provider/reasoning/
+cache, defined in the leaf config.ts so index.ts + scan-folder/core.ts share one type)
+threaded ScanFolderDeps -> processFileCheck -> ensembleStreaming -> chatCompletionSimple.
+chatCompletionSimple now (OpenRouter only, opt-in only) attaches the OpenRouter provider-
+routing block (a control field that survives the supported-params filter) and a
+cache_control:{ephemeral} breakpoint on the system prompt; reasoning rides the existing
+ladder. The HQ scan always takes ensembleStreaming's modelOverride branch, so the 3-model
+ensemble is never touched and every non-HQ call is byte-for-byte unchanged. typecheck +
+lint + full suite (1211 pass / 4 skip) green.
+
+- Feat(config): add per-profile high_quality_model block (TRDD-DBUSM55E)
+
+Phase 1 of high_quality_scan. New HighQualityModel/ResolvedHighQualityModel types +
+resolveHighQualityModel(): a per-profile, fully-defaulted config for the upcoming
+high_quality_scan tool — one strong model (default z-ai/glm-5.2) at max reasoning
+("max"->xhigh, the real OpenRouter ceiling), prompt cache on, fp8+ quant expanded to a
+provider.quantizations whitelist, preferred provider GMICloud. Defaults live in code so
+the tool works out-of-the-box on any OpenRouter profile; a commented example is added to
+SETTINGS_TEMPLATE for discoverability. ResolvedProfile.highQualityModel is required, so
+the two full-literal test helpers were completed (and mkResolved's pre-existing missing
+freeOnly/freeModels filled). 15 new config tests; typecheck+lint+32 config tests green.
+
+- Feat(cluster): fail-fast memory guard + honest tool-desc (TRDD-828238b5 B3)
+
+B3 option B. cluster_synonyms materialises the whole corpus in the JS heap
+several times — items + itemsById + union-find + partition, and the dominant
+N×dim×4-byte Float32 embeddings bundle (~1.5 GB at 1M items, 384-dim). A
+too-large run used to OOM MID-FLIGHT, after the pre-flight benchmark and
+Phase-1/2 LLM budget had already been spent, and the tool's "10k-1M items"
+claim was unbacked.
+
+WHY option B (guard) over A (out-of-core rewrite): A is a large, multi-session
+rewrite with real clustering-correctness risk to honor a 1M contract nobody has
+asked for ("don't build for imaginary scenarios"); B fixes the silent-OOM
+footgun now and is fully reversible. Selected under the user's "complete all
+pending tasks" directive (the TRDD left the call to the user).
+
+- New pure module cluster/memory_guard.ts: estimates the peak heap footprint
+  and returns a fail-fast verdict when it exceeds 70% of THIS process's live V8
+  heap limit (ceiling auto-adapts to --max-old-space-size; no fake fixed
+  number). The reason names the numbers and the four ways to proceed.
+- Wired into runClusterSynonyms step 2b — BEFORE the pre-flight benchmark and
+  all phase LLM spend — so a doomed run aborts cleanly before billing.
+- New policy.skip_memory_guard knob (ClusterPolicy/DEFAULT_POLICY/PolicySchema/
+  resolvePolicy) is the explicit escape hatch.
+- index.ts tool description: replaced the unbacked "10k-1M items" with the
+  heap-bound reality + the guard's guidance; also corrected a STALE
+  "Phase 2/3 ship next release" status line (both phases are live).
+- 18 pure unit tests (memory_guard.test.ts; no LLM/network), registered in
+  vitest.config.ts. dist/ bundles rebuilt.
+
+Verified: tsc + esbuild build clean, eslint --max-warnings 0 clean,
+1089 tests pass (4 live skipped).
+
+
+### Documentation
+
+- Docs(trdd): WJND1N2W P5 DONE - ensemble updated to deepseek-v4-pro + mimo-v2.5 + mimo-v2.5-pro
+
+- Docs(benchmark): guard rawResponse non-serialization + record token-audit TRDD-WJND1N2W
+
+- Docs(bench-free-pool): complete FREE_POOL_SEED enumeration — add arcee-ai/trinity-large-thinking:free (was 14/15) + source pointer (TRDD-WJND1N2W)
+
+The command body said '15 seed ids the plugin ships' but listed only 14 — arcee-ai/trinity-large-thinking:free (FREE_POOL_SEED entry 5 in config.ts) was missing, likely added to the constant after the doc was written. Verified against the live constant (15 ids); added it in code order + a pointer to the authoritative FREE_POOL_SEED in mcp-server/src/config.ts to curb future enumeration drift.
+
+- Docs(benchmark): correct stale cost-cap claim — < $1/M both axes, not ≤ $1.5/$2.0 (TRDD-WJND1N2W)
+
+benchmark.md step 2 claimed 'input ≤ $1.5/M, output ≤ $2.0/M' — stale on both value and
+operator. The benchmark filters with DEFAULT_CRITERIA, which is STRICTLY < $1.00/M for BOTH
+axes (discover.ts:90-91, qualify() uses < not <=, so $1.00 itself is rejected). Verified
+against the code + the command's own dry-run output (index.ts:375-376 prints '< 1.00 (strictly
+less)'). The 1.5/2.0 literals elsewhere in the tree are test fixtures, not caps. Isolated to
+this one line; matches the ensemble-autoselect skill's '< $1/M' statement now.
+
+- Docs(trdd): WJND1N2W P4 COMPLETE (docs d133001 + readme eb676fc) — feature P1-P4 done; only gated P5 remains
+
+All credit-safe filter + owl-alpha inclusion work built, tested (1247 green), documented,
+dogfooded (103 PASS). P5 (the actual paid rescan) + the 39-commit push are both user-gated.
+
+- Docs(readme): correct bench-free-pool (catalog-verify + auto-discover, not :free-only) + note benchmark pre-rank/--qualifying-top-n (P4, TRDD-WJND1N2W)
+
+The command-table row still claimed bench-free-pool 'refuses to run on any non-:free id' —
+stale after P3b. Now: resolves the pool against the live catalog (non-:free admitted only at
+catalog-$0, fail-fast otherwise) and auto-discovers zero-cost open-beta models (owl-alpha).
+Also added the codex/design-arena $0 pre-rank + --qualifying-top-n spend cap to the benchmark
+section. Dogfood 103 PASS/0 FAIL; doc-consistency green.
+
+- Docs(benchmark): fold codex/ELO pre-filter + zero-cost-no-suffix rules into the 6 model-update docs (P4, TRDD-WJND1N2W)
+
+Documents the shipped behavior in every model-update surface, per the user's ask to add
+these instructions to the skills that update the remote models:
+- ensemble-autoselect (skill), benchmark, bench-free-pool, discover-new-models,
+  search-existing-benchmark, security-triage-benchmark.
+- The credit-FREE codex (coding_index) + design-arena code-ELO pre-rank and the new
+  --qualifying-top-n cap that restricts candidates BEFORE any paid run.
+- Zero-cost no-suffix models (owl-alpha) as /bin/zsh ensemble candidates + auto-discovered into
+  --bench-free-pool (catalog price-verified, fail-fast on a priced entry, semantic guard).
+
+Authored by 6 parallel sonnet agents, then reviewed by me against the code: I CORRECTED the
+discover-new-models draft, which overclaimed that the --new-arrivals phase itself ranks by the
+indexes — verified rankByQualityIndex lives only in the benchmark candidate paths
+(index.ts:598, search-existing:330, security-triage:338), so the doc now attributes the
+pre-rank to the benchmark commands, not new-arrivals. doc-consistency green.
+
+- Docs(trdd): WJND1N2W P3 COMPLETE (chokepoint 09c1f64 + free-pool 59fb4b3); P4 docs next
+
+owl-alpha now in both the ensemble (P1+P2) and the dedicated free benchmark (P3a+P3b),
+automatically. NEXT ACTION records the P4 doc targets + the two rules to fold in.
+
+- Docs(trdd): WJND1N2W P3a done (09c1f64) — semantic chokepoint; P3b resume point recorded
+
+owl-alpha now passes the free-mode chokepoint (the core 'use it if it passes' path via the
+ensemble). STATE + NEXT ACTION record the precise P3b resume: relax --bench-free-pool, optional
+free-pool auto-discovery, keep config.ts:584 conservative. Then P4 docs, P5 gated paid run.
+
+- Docs(trdd): WJND1N2W P2 done (582affc); P3 chokepoint design locked
+
+P1+P2 committed. STATE records the quality pre-filter + that owl-alpha already competes in the
+ensemble via P1+P2. P3 design locked in detail (semantic price-aware chokepoint as the airtight
+zero-spend guard, validators relaxed to match, 4 mandatory safety tests) and PAUSED for user nod
+before modifying the credit-safety chokepoint. P5 paid rescan remains user-gated.
+
+- Docs(trdd): WJND1N2W P1 done — data layer committed (2ca844b)
+
+column dev; last-test-result pass; implementation-commits [2ca844b]. STATE: P1 (codex/ELO
+parsing) done + tested; NEXT ACTION P2 (rank + top-N restrict). P3 safety note retained
+(free_only chokepoint + runtime price guard). P5 paid rescan remains user-gated.
+
+- Docs(trdd): add TRDD-WJND1N2W — OpenRouter rescan w/ codex/design-arena pre-filters (#165)
+
+Plans the credit-safe model-rescan upgrade. Research (2 parallel agents) verified BOTH
+benchmark indexes are free/API-available on GET /api/v1/models (codex =
+benchmarks.artificial_analysis.coding_index; design-arena code ELO =
+benchmarks.design_arena[arena=models,category=codecategories].elo). discover.ts mapped +
+read whole: disqualifyReason() is the filter SSOT; the free pool's zero-spend is structural
+via the :free suffix. Captures the 5-phase plan and the one design fork (admitting price-0
+no-suffix beta models like owl-alpha into the free pool without breaking the zero-spend
+guarantee — semantic detection + runtime price guard). column: design; no paid run until
+user OK.
+
+- Docs(config): document the high_quality_model settings block (TRDD-DBUSM55E)
+
+The user required the high-quality scan model to be 'configurable in the yaml file as usual',
+but the new high_quality_model profile block was undocumented in README/docs. Added a Profile-
+fields row + a concise YAML example to docs/setup-and-configuration.md covering every sub-key
+(id, reasoning_effort, cache, min_quantization, provider, allow_fallbacks) with its default
+(z-ai/glm-5.2 / max=xhigh / cache / fp8+ / gmicloud/fp8 / no-fallback), and the paid +
+fail-fast-on-local/free_only/no-credit semantics. Keys verified against the HighQualityModel
+interface + resolveHighQualityModel. doc-consistency 11/11 green.
+
+- Docs(trdd): finalize TRDD-DBUSM55E — high_quality_scan feature complete
+
+All 6 phases done + committed. column: dev → complete; last-test-result → pass;
+implementation-commits recorded (7c8ec92 a9fccb1 604fffc e5d9f71 698774b fffa29b 2e1fb25).
+STATE block: P4 now records BOTH CLI surfaces (canonical bin/llm-ext catalog entry +
+friendly bin/llm-externalizer subcommand), P5/P6 results, and the final gate evidence
+(suite 1226 green, dogfood 103 PASS, commands 0/0/0, CPV new-findings 0). NEXT ACTION =
+DONE; shipping gated on user push approval. Not shipped (release-via: publish).
+
+- Docs(commands): clear CPV advisories on the two high-quality-scan commands (TRDD-DBUSM55E)
+
+CPV pre-publish validation flagged 3 non-blocking advisories on the new command files:
+a 126-char argument-hint (MINOR, may truncate in the UI) and two 'prose mentions of a
+tool not in allowed-tools' WARNINGs (the cross-reference lines naming check_against_specs /
+search_existing_implementations in the `mcp__llm-externalizer__…` form). Shortened the hint
+to '<folder> --instructions "<task>" [scan flags]' (the body documents every flag), and
+rewrote the cross-references to the plain tool names so they read as documentation, not a
+runtime grant. Both files now validate CRITICAL/MAJOR/MINOR=0 ([OK] Command validation
+passed). No behavior change.
+
+- Docs(trdd): mark high_quality_scan Phases 1-3 done, Phase 4 (CLI) next (TRDD-DBUSM55E)
+
+- Docs(trdd): add TRDD-DBUSM55E — high_quality_scan + _and_fix plan
+
+Single configurable good model (default z-ai/glm-5.2, xhigh reasoning, fp8+ quant,
+GMICloud provider, prompt cache) instead of the 3-model ensemble; MCP+CLI+slash for
+the pure scan, slash-only Opus verify-then-fix for the _and_fix variant. Architecture
+verified against source + OpenRouter docs before planning.
+
+- Docs(trdd): B1 — record P4b deferral + correct the main()-guard fact
+
+- P4b (free-ensemble helper extraction) investigated 2026-06-20 and DEFERRED:
+  the cluster (FREE_FLOOR_MIN_CONTEXT_TOKENS, filterFreeModels,
+  selectFreeEnsembleModels, isModelUnavailableError) is pure but ALREADY fully
+  unit-tested (free-only.test.ts + auto-free.test.ts) and index.ts is already
+  testable via its entry-point guard — so extraction adds zero coverage and is
+  marginal churn on shipped v10.0.0. Not done, per "only what is strictly
+  necessary".
+- Corrected a stale load-bearing fact in the STATE block: index.ts's main() is
+  ENTRY-GUARDED (`if (__isEntrypoint) main()` at ~6583), NOT run on a plain
+  import — free-only.test.ts importing index.ts internals (without spawning the
+  server) is the proof. The old "runs main() on import" drove an over-cautious
+  belief that index.ts couldn't be imported for testing.
+- Recorded the doc-drift fix d77cf60 (getEnsembleModels' orphaned docstring
+  restored) that the investigation surfaced.
+
+- Docs(index): restore getEnsembleModels' orphaned docstring
+
+The `/** Build ensemble model list from the active profile's model +
+second_model + third_model */` JSDoc had drifted ~140 lines from its
+function: it sat stranded after ensembleModelLabel() and ABOVE the
+FREE_FLOOR_MIN_CONTEXT_TOKENS docstring (documenting nothing), while
+getEnsembleModels() — the function it actually describes — had no header
+doc. A prior refactor inserted the free-ensemble cluster +
+callEnsembleSlotWithRotation between the comment and its function.
+Relocated it back to getEnsembleModels().
+
+Source-only: esbuild strips JSDoc, so dist/ is byte-identical (verified —
+no dist diff). No logic change; the 62 free-only + auto-free ensemble
+tests pass.
+
+Found while investigating a candidate free-ensemble extraction
+(B1/TRDD-63314265). That extraction is DEFERRED: the cluster is already
+fully unit-tested (free-only.test.ts, auto-free.test.ts) and index.ts is
+already testable via its entry-point guard (realpathSync(entry) ===
+import.meta.url), so extracting it would be marginal churn with no
+coverage gain — counter to "only what is strictly necessary".
+
+- Docs(trdd): scope B1 Phase 3 — code_task/scan_folder handler ranges + seam-injection plan (TRDD-63314265)
+
+Records the concrete dispatch-handler line ranges (code_task 4221-5312, scan_folder
+5313-5634; switch at index.ts:3919) and the reference pattern (search_existing's thin
+case -> runSearchExistingImplementations + its hermetic FetchImpl-seam runner test) so
+the next burst executes Phase 3 informed. Phase 3 is a DESIGN+extraction of live-dispatch
+handlers (not a mechanical move) — enumerate every seam before cutting; deferred to a
+fresh-context burst per the phased-execution + don't-rush discipline.
+
+- Docs(trdd-828238b5): re-audit Part F test gaps — correct stale list, classify genuine candidates
+
+The 2026-05-24 '10 TS + 14 Python' figure was stale (D1-D6 added 5 script test
+files; codebase grew; the referenced ephemeral report is gone). Fresh read-only
+sweep:
+- TS: 31/77 modules lack a co-located *.test.ts, but ~11 are non-candidates
+  (5 benchmark fixtures, pure-type files, thin CLI wrappers); ~20 genuine
+  candidates (security_scan/*, benchmark/*, doc-inventory, scan-pipeline,
+  search-existing/core, borderline cluster/policy).
+- Python: diagnostics/* ARE covered (test_diagnostics.py); ~8 genuine candidates
+  (check_references, join_fixer_reports, setup.py, recommend-models, test-model,
+  validate_fixer_summary, validate_report, maybe install_statusline).
+Flagged that some TS candidates may be integration-covered (confirm per-module,
+per the D2 lesson) and that the suite is a phased effort needing prioritization,
+not an unattended task. No code change. Not pushed.
+
+- Docs(trdd-828238b5): mark Part D (D1-D6) DONE — already remediated under TRDD-6e859d3c
+
+Resumed the Part D bug backlog autonomously; verify-first revealed all six items
+were already fixed (the 828238b5 backlog was simply never updated):
+- D1 f64b342, D2 d514220, D3 dc56d71, D4 4678a8a, D5 52563d0, D6 5512072,
+  docs-align 53babb6 — all under TRDD-6e859d3c (honor-contract + TDD).
+- Deep-verified D2 by reading _bench_helpers.py: .get() defaults end-to-end with
+  batch-resilience comments + dedicated guards in tests/test_bench_helpers.py.
+  Corroborated D1/D3/D4/D5/D6 via their per-item fix commits + the remediation TRDD.
+
+Prevents a future session from re-investigating completed work. No code change.
+Genuinely-open in 828238b5 now: B1 (index.ts monolith split — large/incremental),
+B3 (re-scoped, product decision), A6 deferred code_task/scan_folder benchmarks,
+Part E dead-code (RULE 0, needs user approval), Part F test gaps (need a
+verify-first re-audit — the 2026-05-24 audit is stale). Not pushed.
+
+- Docs(trdd-828238b5): re-scope B3 after source re-verification — original fix is mis-targeted
+
+Verified the cluster_synonyms memory behavior directly against source (not the
+summary). Findings that overturn B3 as written:
+
+- The whole corpus IS held in memory (cluster_synonyms_main.ts:302 items[],
+  :309 itemsById, :347-348 union-find, :396 partition) — VERIFIED.
+- But TRDD-220ea89f §3 (line 79) explicitly sanctions the ~50 MB row accumulator
+  ('no full-file load; 1M items ~= 50 MB in memory — acceptable'), and the code
+  already streams the FILE (streamJsonl = createReadStream+readline, no blob load).
+  So B3's proposed 'stream from the JSONL' fix targets the one part the design
+  already accepted.
+- The real high-N consumer is the embeddings bundle (compute_embeddings:true
+  default, policy.ts:19; all-MiniLM-L6-v2 384-dim, :18), held for ALL items at
+  once (:330-334) — est. ~1.5 GB at 1M, the dominant cost. Streaming the JSONL
+  does nothing about it.
+- Re-scoped to a product-direction decision (pending USER): (B) fail-fast guard
+  at the measured ceiling + honest doc of the real limit [recommended near-term,
+  fixes the silent-OOM footgun] vs (A) full out-of-core rewrite [large, deferred].
+  Retired the mis-diagnosed 'stream from the JSONL' phrasing.
+
+No code change; prevents a future session from implementing a mis-targeted rewrite.
+Not pushed (doc edit; awaits user A-vs-B decision).
+
+
+### Fixed
+
+- Fix(ensemble-autoselect): add proactive-rescan triggers routing to the one-shot CLI (TRDD-WJND1N2W)
+
+WHY: the skill's auto-trigger list was reactive-only (404/breakage), so a proactive 'rescan/update models' ask matched nothing and Claude hand-rolled a per-model loop (the 30-40M-token sink). Now both reactive and proactive asks resolve to the same single CLI call (--qualifying-top-n 15 --pick-top-n 3, backgrounded), with the anti-loop failure mode named inline.
+
+- Fix(benchmark-cmd): route proactive rescans to the one-shot CLI + bound spend/runtime (TRDD-WJND1N2W)
+
+WHY: the OpenRouter model-rescan procedure burned 30-40M orchestrator tokens/run. Root cause (audit: reports/model-update-audit/audit.md) is NOT the code — the llm-ext-benchmark CLI is already single-call + report-to-file. It was routing: a proactive 'update/rescan models' request matched no trigger, so Claude hand-rolled a per-model loop (or_model_info/chat x ~50-150 candidates) = O(N^2) transcript blowup. Fix: (1) broad trigger phrases so proactive asks land on the CLI; (2) Step 2 mandates --qualifying-top-n 15 default + run_in_background + an explicit 'never hand-loop per model' anti-pattern naming the exact failure mode; (3) examples reordered dry-run-first -> bounded -> exhaustive-opt-in so the first copied invocation is the safe one.
+
+
+### Refactored
+
+- Refactor(mcp): extract code_task dispatch core to code-task/core.ts (B1 Phase 3 complete, TRDD-63314265)
+
+Second + final dispatch-core extraction — completes B1 Phase 3 (scan_folder landed in
+cd31f02). The `case "code_task"` handler body (~1091 LOC, the most complex tool: a
+single/inline path AND a multi-file FFD-batched path with two batch modes) ->
+`runCodeTask(args, deps: CodeTaskDeps)` in a new src/code-task/core.ts. The case shrinks
+1091 -> ~26 lines. index.ts 6887 -> 6587 lines (8457 -> 6587 across the session, -22%).
+
+Why this shape (same as scan_folder / search_existing):
+- The core imports ZERO from index.ts (only ../grouping, ../rate-limiter, ../scan-pipeline
+  + node builtins), so it loads WITHOUT triggering index.ts's main()-on-import — which is
+  what makes it benchmarkable in-process (the A6 gate) and hermetically testable.
+- CodeTaskDeps (14 seams) extends the ScanFolderDeps shape with code_task's real extras:
+  ensembleStreaming (multi-model inline+batch seam), formatFooter, robustPerFileProcess
+  (the mode-0 max_retries>1 parallel+retry+circuit-breaker path), codeTaskSystemPrompt,
+  ensembleModelLabel, normalizePaths, resolveFolderPath, defaultTemperature. It omits
+  backendModel / classifyError / getRateLimitConfig (those are used only inside the
+  injected helpers, not by runCodeTask directly).
+- Every server-stateful dep is injected, never read as a module global -> behavior-identical
+  (the thin case wires the same real functions/state).
+
+Verification: new src/benchmark/code-task/runner.test.ts = 6 HERMETIC tests covering single
++ inline + batch-mode2 + batch-mode0-sequential + batch-mode0-robust + validation-error
+(fake LLM seam, real pipeline). Build (tsc+esbuild) green; full suite 1190 -> 1196 pass
+(4 skipped); ESLint green; index roster + doc-consistency unchanged. dist/index.js rebuilt.
+
+Phase 3 COMPLETE -> A6 (free-form code_task/scan_folder benchmarks) is now UNBLOCKED: a
+benchmark runner can import runCodeTask/runScanFolder and drive the real pipeline. A6's
+remaining work is the no-fakes part (real golden datasets + scorer), tracked in both TRDDs.
+
+- Refactor(mcp): extract scan_folder dispatch core to scan-folder/core.ts (B1 Phase 3 pilot, TRDD-63314265)
+
+First dispatch-core extraction — the Phase 3 pilot on the smaller of the two tools
+(scan_folder, 321 LOC) to prove the seam-injection pattern before tackling code_task
+(1091 LOC). Mirrors the proven search_existing_implementations extraction.
+
+What moved: the `case "scan_folder"` handler body -> `runScanFolder(args, deps:
+ScanFolderDeps)` in a new src/scan-folder/core.ts. The case shrinks 321 -> 21 lines
+(it now only builds the deps bundle from server state and calls the core). index.ts
+6887 lines (from 7183).
+
+Why this shape:
+- The core imports ZERO from index.ts (only scan-pipeline / grouping / rate-limiter +
+  node builtins), so it loads WITHOUT triggering index.ts's main()-on-import — that is
+  what makes it benchmarkable in-process (the A6 gate) and hermetically testable.
+- ScanFolderDeps mirrors search-existing's SeiDeps but with scan_folder's real seams:
+  processFileCheck (the per-file LLM-call seam, scan_folder's analogue of callModel),
+  classifyError, saveResponse, getRateLimitConfig, resolveDefaultMaxTokens, onProgress,
+  outputDir, modelOverride, useEnsemble, backendModel. It omits SeiDeps.ensembleModelLabel
+  because scan_folder labels reports with backendModel directly (genuinely unused).
+- Every server-stateful dependency is injected, never read as a module global, so the
+  extraction is behavior-identical (the thin case wires the same real functions/state).
+
+Verification: new src/benchmark/scan-folder/runner.test.ts = 5 HERMETIC tests (fake
+processFileCheck seam, real rateLimitedParallel + real report assembly — no network, no
+mocking of the unit), mirroring benchmark/search-existing/runner.test.ts. Build
+(tsc+esbuild) green; full suite 1185 -> 1190 pass (4 skipped); ESLint green; index roster
++ doc-consistency unchanged. dist/index.js rebuilt. No behavior change, no compat shims.
+
+- Refactor(mcp): extract buildTools + tool schemas to tools/definitions.ts (B1 Phase 4, TRDD-63314265)
+
+Moves buildTools() (~919 lines) + its 5 EXCLUSIVE schema helpers (BATCHING_NOTE,
+answerModeSchema, maxRetriesSchema, folderSchemaProps, redactRegexSchema) out of the
+index.ts monolith into a new tools/definitions.ts. index.ts 8268 -> 7183 lines (-1085).
+
+Why this shape:
+- buildTools' ONLY external deps were limitsBlock() + those 5 helpers (verified by a
+  full module-level dependency scan; the helpers have zero use outside buildTools, so
+  they move with it and stay module-internal — only buildTools is exported).
+- limitsBlock() reads backend module state, so it STAYS in index.ts; instead of
+  importing it into definitions.ts (which would create an index<->definitions cycle),
+  its text is injected as a `limitsText` parameter. The 8 internal limitsBlock() calls
+  become limitsText — behavior-identical because limitsBlock() is deterministic within
+  one buildTools() call. index.ts's 2 call sites now pass buildTools(limitsBlock()).
+- Derived fix: doc-inventory.ts::readCoreToolNames parses the tool-name array BY FILE
+  PATH (6-space-indent regex), so it had to repoint from index.ts to tools/definitions.ts.
+  The regex + indentation are unchanged, so the doc-consistency gate still matches.
+
+Verified: build (tsc+esbuild) green, full suite 1185 pass (unchanged — zero behavior
+drift), doc-consistency + index roster 33/33 (tool names/count/descriptions identical),
+lint green. dist/index.js rebuilt. Pure move + limitsBlock->limitsText injection.
+
+The ensemble helpers (selectFreeEnsembleModels, FREE_FLOOR_MIN_CONTEXT_TOKENS) were NOT
+moved — they are not buildTools deps; deferred to a later phase.
+
+- Refactor(mcp): consolidate ALL rate-limiting into rate-limiter.ts (B1 Phase 2b, TRDD-63314265)
+
+Phase 2b of the index.ts monolith split. Phase 2 had extracted only the
+AdaptiveRateLimiter class; the shared singleton, the getAdaptiveRateLimiter
+factory, the rateLimitedParallel executor, the ProgressFn type, and
+HEARTBEAT_INTERVAL_MS were left behind in index.ts. This moves all of them into
+rate-limiter.ts so it is the SOLE home of rate-limiting and index.ts holds zero
+rate-limiting state.
+
+Why this shape:
+- The singleton must stay SHARED across all tool calls (a 429 from any call backs
+  off all of them). ESM modules are singletons, so a module-level `let` in
+  rate-limiter.ts preserves that invariant exactly — verified by build + full suite.
+- classifyError (the 429 path) and the per-file completion site used to reach into
+  the `adaptiveRateLimiter` binding directly. They now call exported guarded
+  accessors signalRateLimitHit() / signalSuccess() that no-op until the singleton
+  exists — preserving the prior `if (adaptiveRateLimiter)` guard verbatim.
+- HEARTBEAT_INTERVAL_MS is also used by chatCompletionSimple's per-request heartbeat,
+  so it is EXPORTED (single source of truth for the 30s MCP keep-alive) rather than
+  duplicated — caught by tsc when the first move left that use dangling.
+
+index.ts 8326 -> 8268 lines. +6 tests (executor order / concurrency-cap /
+completeness / progress + accessor no-throw); 1148 -> 1154 TS tests. Build + lint
+green. dist/index.js rebuilt. Pure code-location refactor, no behavior change.
+
+- Refactor(index): B1 Phase 2 — extract AdaptiveRateLimiter (TRDD-63314265)
+
+Second clean phase of the index.ts split. The AIMD AdaptiveRateLimiter class is
+fully self-contained (depends only on Date/setTimeout/Math/stderr — zero index.ts
+module-state deps) and had no external importers, so the extraction is low-risk.
+
+- Moved the class to mcp-server/src/rate-limiter.ts (exported). index.ts keeps the
+  module-level singleton `adaptiveRateLimiter` + the getAdaptiveRateLimiter()
+  factory (they hold shared state) and imports the class; the `new
+  AdaptiveRateLimiter(rps)` site + all instance refs resolve to the import.
+- Added rate-limiter.test.ts (10 tests): the deterministic AIMD state logic —
+  multiplicative-decrease halving, additive-increase after 10 successes, the
+  min-1/initial-ceiling clamps, success-streak reset on a 429, reset()/reset(n),
+  and an acquire() smoke. No time-mocking needed for the rate-state assertions.
+- Plan TRDD-63314265 STATE updated: Phases 1 & 2 done; NEXT is the high-risk
+  Phase 3 (dispatch-core extraction that unblocks A6). The rate-limited parallel
+  executor was deliberately left for a later phase (it has more coupling).
+
+Verified: tsc + esbuild build clean, npm test 1148 pass (+10), eslint clean.
+
+- Refactor(index): B1 plan + Phase 1 — extract request-overrides (TRDD-63314265)
+
+B1 is the index.ts monolith split (TRDD-828238b5 Part B). A deep investigation
+this session established that index.ts (8457 lines — the "9599" figure was stale)
+has NO clean, co-located, low-coupling block for a quick safe extraction: every
+candidate is either tiny + scattered + interleaved with impure module state, or a
+large block heavily coupled to shared state (rate limiter, backend config, fetch
+helpers, auto-free flags, catalog cache). Per the global multi-file-refactor
+directive (phased execution + review) the deliverable is a phased PLAN, not a
+rushed entangled extraction on the shipped v10.0.0 server.
+
+- New dedicated plan TRDD-63314265: section map (line ranges + per-section
+  coupling), the 5-phase extraction order, per-phase scope/guard/risk, and the
+  Phase-3 dispatch-core extraction that UNBLOCKS A6 (free-form benchmarks).
+- Phase 1 executed (lowest risk): the PURE per-model request-body override
+  (applyModelOverrides + MODEL_REQUEST_OVERRIDES) had ZERO external importers
+  (only index.ts internal, 2 call sites) — extracted to
+  mcp-server/src/request-overrides.ts (pure, so it imports without index.ts's
+  main()-on-import side effect) + 5 unit tests. index.ts keeps a breadcrumb
+  comment + imports applyModelOverrides; the 2 call sites resolve to the import.
+- TRDD-828238b5 B1 entry updated to point at the plan + record Phase 1.
+
+WHY stop here: the directive gates Phase 2 behind review, and the meaningful bulk
+(buildTools 1332 LOC + dispatch 3321 LOC) is the high-coupling part that must be
+done phase-by-phase with verification — not rushed unattended on shipped code.
+
+Verified: tsc + esbuild build clean, npm test 1138 pass (+5), eslint clean.
+
+
+### Testing
+
+- Test(mcp): cover 4 genuinely-uncovered pure modules (TRDD-828238b5 Part F wave 3)
+
++31 real unit tests, no mocks of the unit, for the pure exports that a fresh
+extension-agnostic coverage sweep confirmed had ZERO test-call sites:
+- cluster/policy.ts        resolvePolicy / DEFAULT_POLICY / PolicySchema (8)
+- benchmark/discover.ts    filterModels / disqualifyReason / qualify / buildBenchmarkRoster (11)
+- benchmark/score.ts       scoreRun (7)
+- benchmark/security-triage/runner.ts  casesToGroups (5)
+
+Why these and not the rest of the Part F candidate list: the D2 lesson says verify
+the gap is REAL first. A `.js`-suffix-only grep over-reports gaps (it misses
+extensionless same-dir imports), so I checked each candidate's EXPORTED-FUNCTION
+call sites in *.test.ts, not just imports. The four above had 0 — genuinely
+uncovered. The network-heavy orchestrators (search-existing/core.ts,
+benchmark/*/index.ts runners, security_scan/openrouter.ts) were EXCLUDED: a real
+test for them needs seam injection (like the search-existing runner test), not unit
+mocks, so they are deferred to an attended pass rather than rushed unattended.
+
+Each module's network functions (fetchProgrammingModels, runTriageBenchmarkOnModel)
+were deliberately NOT tested — pure-logic targets only, so no fetch mocking.
+
+Written by 4 parallel js-test-writer agents (each self-verified via a throwaway
+config, no git access); orchestrator did the vitest.config.ts registration + the
+full-suite verification. TS suite 1154 -> 1185 pass, 4 skipped; lint green. Tests
+only — no source/dist change.
+
+- Test: Part F wave 2 — 39 tests for 5 more uncovered modules (TRDD-828238b5)
+
+Second wave of the Part F coverage campaign; brings the session total to 97 tests
+across 12 confirmed-uncovered modules.
+
+- TS: security_scan/report.ts (9 — pure threat-finding → markdown rendering),
+  security_scan/concurrency.ts (6 — bounded-concurrency primitive: limit is actually
+  respected, input order preserved, error propagation, empty input; exercised with
+  real deferred promises, no fake timers). Registered in vitest.config.ts.
+- Python: validate_fixer_summary.py (7 — exit-code-specific rejection paths),
+  join_fixer_reports.py (7 — real sidecar merge/recognition), setup/recommend-models.py
+  (10 — pure ranking/hardware-fit core only; the 2937-LOC file was NOT fully covered,
+  by design — "don't over-engineer").
+
+Two python agents mutation-tested their target (transiently edited the source to
+confirm the tests catch regressions, then restored it). Orchestrator VERIFIED both
+scripts are byte-identical to HEAD afterward (git diff empty) — no source changed.
+Removed an unused `import pytest` flagged by ruff F401 in test_validate_fixer_summary.
+
+install_statusline.py deferred (IO-heavy fs installer, little pure logic).
+
+Verified: TS build + npm test (1133 pass, +15) + eslint clean; Python pytest
+(187 pass, +24) + ruff clean. Additive tests only — no source modified.
+
+- Test: Part F wave 1 — 58 tests for 6 uncovered modules (TRDD-828238b5)
+
+Closes the highest-value confirmed-uncovered coverage gaps from the Part F audit.
+
+WHY a re-verification first (D2 lesson): the original candidate list had false
+positives. A `.js`-suffix-only grep missed extensionless same-dir imports, so
+security_scan/{prompt,intake,judge,security_scan_main} are actually COVERED
+(security_scan.test.ts imports runSecurityScan from ./security_scan_main and
+exercises it 10+ times), and setup.py has 7 test refs. Testing those would have
+duplicated coverage. Re-scanned with an extension-agnostic import check before
+dispatching any agent.
+
+Confirmed-uncovered modules, tested by parallel js-test-writer / python-test-writer
+agents (real tests only, no mocks of the unit under test; orchestrator owned all
+integration + git to avoid concurrent-edit/git conflicts):
+- TS: scan-pipeline.ts (14 — FFD bin-packed batching: empty/oversized/exact-fit
+  boundaries, largest-first determinism, prompt-byte budgeting), benchmark/report.ts
+  (8 — pure rendering), benchmark/ground-truth.ts (7). Registered in vitest.config.ts.
+- Python: setup/test-model.py (10 — incl. the _validate_local_url SSRF guard,
+  asserting both accept of loopback and reject of external/metadata-IP/bad-scheme
+  vectors), check_references.py (10 — real broken/valid reference trees),
+  validate_report.py (9).
+
+Verified: TS build + npm test (1118 pass, +29) + eslint --max-warnings 0 clean;
+Python pytest (163 pass, +29) + ruff clean. No source changed — additive tests only.
+
+- Test(setup): regression-guard vllm-cuda-autoconfig F7 + reconcile Part E (TRDD-828238b5)
+
+Part E was STALE. A whole-tree re-verification (claim-verification rule) found
+every item already handled by prior unrecorded work — and one "orphan" was
+actually WIRED, so the TRDD's "git rm" action would have regressed the setup-agent.
+
+WHY no deletion:
+- apply_ensemble_choice.py + read_ensemble_state.py were already removed in
+  cb7dfaf (recoverable via history) — both confirmed absent from the tree.
+- vllm-cuda-autoconfig.py is NOT orphaned: it is wired into the setup-agent
+  (Linux+NVIDIA VRAM-tuner, agents/llm-externalizer-setup-agent.md:210/212/333)
+  by 4685031, which also already fixed the F7 fp8 gate. go-on-yourself says
+  prefer integrating over deleting; the wired state is the correct outcome.
+
+The one real gap: that wired script + its just-fixed F7 gate had ZERO tests.
+- New tests/test_vllm_cuda_autoconfig.py (18 tests). It regression-guards F7 by
+  driving the REAL main() fp8 gate — monkeypatching ONLY the environment
+  boundaries (platform.system + detect_nvidia_gpu), never the logic under test —
+  and asserting: unknown/unparseable driver (major 0) and driver <535 emit NO
+  --kv-cache-dtype fp8, while driver >=535 does. The pre-fix `== 0 or` form
+  would enable fp8 on an unknown driver (crashing vLLM); a revert now fails this
+  test. Also covers driver parsing, tier boundaries, quantization resolution,
+  and command assembly; plus --dry-run + --print-vram-only smoke.
+- No source change (monkeypatch approach), so zero regression risk.
+
+TRDD Part E marked RESOLVED; the stale Part F note about this file corrected.
+Verified: full Python suite 134 pass (was 116).
+
+
 ## [10.0.0] - 2026-06-16
 
 ### Added
