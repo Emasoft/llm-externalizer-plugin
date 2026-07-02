@@ -58,9 +58,15 @@ Auto-trigger when **any** of these surface: an ensemble call returns
 `API error 404 (openrouter): {... "deprecated" ...}` (OpenRouter retires
 models silently, so any configured model — including a current ensemble
 default — can start 404ing without notice); a model returns a 4xx/5xx
-**consistently** (3+ retries, same error class); or the user asks to "rotate
-ensemble" / "swap broken model" / "auto-pick models" / "pick a better ensemble"
-/ "the ensemble is broken". This skill is reference for the benchmark command's
+**consistently** (3+ retries, same error class); or the user asks — reactively —
+to "rotate ensemble" / "swap broken model" / "auto-pick models" / "pick a better
+ensemble" / "the ensemble is broken", OR — proactively — to "rescan models" /
+"update the models" / "refresh the ensemble" / "check for better or cheaper
+models" / "run a model rescan". In EVERY case the action is the SAME single
+CLI call (`llm-ext-benchmark --qualifying-top-n 15 --pick-top-n 3
+[--apply-profile <name>]`, run in background) — NEVER hand-roll a per-model loop
+over `chat`/`code_task`/`or_model_info` (that is the 30-40M-token failure mode).
+This skill is reference for the benchmark command's
 `--pick-top-n` / `--apply-profile` CLI mode — there is no standalone slash
 command. Do **not** auto-rotate on transient 5xx-bursts that recover on retry —
 rotation is for permanent drift only.
