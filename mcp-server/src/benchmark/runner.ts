@@ -36,6 +36,15 @@ export interface RunResult {
   reasoningTokens: number;
   latencyMs: number;
   providerFinishReason: string | null;
+  /**
+   * The full raw response body, kept ONLY for post-hoc inspection by the
+   * runner/score step. INVARIANT: never serialize this into a report
+   * (report.ts), the picks (pick.ts), or the benchmark-results.json cache.
+   * It can be tens of KB per model; letting it reach an orchestrator's
+   * context re-inflates every subsequent turn — the exact per-turn-context
+   * blow-up the one-shot-CLI routing fix (TRDD-WJND1N2W) exists to prevent.
+   * Extract the parsed arrays + token counts, then drop it.
+   */
   rawResponse: string;
   /**
    * True when the model used the exact schema field names

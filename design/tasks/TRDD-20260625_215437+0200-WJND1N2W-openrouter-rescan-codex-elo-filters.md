@@ -3,7 +3,7 @@ trdd-id: WJND1N2W
 title: OpenRouter model rescan — codex/design-arena pre-filters, free-no-suffix inclusion, skills update
 column: dev
 created: 2026-06-25T21:54:37+0200
-updated: 2026-06-25T23:06:16+0200
+updated: 2026-07-02T05:15:00+0200
 current-owner: claude-llm-externalizer
 assignee: claude-llm-externalizer
 priority: 3
@@ -27,13 +27,57 @@ impacts: [config-schema, public-api]
 attempts: 0
 test-failures: 0
 last-test-result: pass
-implementation-commits: [2ca844b, 582affc, 09c1f64, 59fb4b3, d133001, eb676fc]
+implementation-commits: [2ca844b, 582affc, 09c1f64, 59fb4b3, d133001, eb676fc, e96faba, a3cf340]
 external-refs: ["https://openrouter.ai/api/v1/models"]
 ---
 
 # OpenRouter model rescan — codex/design-arena pre-filters + free-no-suffix inclusion
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-06-25
+
+### UPDATE 2026-07-02 — token-cost audit + procedure token-fix (P-A/P-B done; P5 still gated)
+
+**User escalation (verbatim, 2026-07-02):** "you need to update the models, but you also need to
+make the procedure less token consuming. it should be pretty much all automatable via scripts.
+yet it got 30-40 million tokens each time. audit the whole system and improve it." + standing:
+"All the operations you do must have a token cap. you must be token aware."
+
+**Root cause (audit → `reports/model-update-audit/audit.md`, gitignored):** the 30–40M burn is a
+ROUTING gap, NOT a code gap. The `llm-ext-benchmark` CLI already does discover→filter→credit-free
+pre-rank→cap→paid-benchmark→score→pick→atomic-settings-write→report-to-file entirely inside the
+Node process (nothing touches Claude context). The burn came from the orchestrator hand-rolling a
+per-model loop over `chat`/`code_task`/`or_model_info` (~50–150 candidates), re-sending the growing
+transcript each turn = O(N²). Fix = route every rescan to the ONE CLI call; forbid the per-model loop.
+
+**P-A DONE + committed** (the actual token fix):
+- `commands/llm-externalizer-benchmark.md` (e96faba): added proactive-rescan trigger phrases
+  ("rescan models"/"update the models"/…); Step 2 mandates ONE Bash call, forbids the per-model
+  loop (names it as the 30–40M failure mode), adds default `--qualifying-top-n 15` when uncapped,
+  `run_in_background: true`, `--dry-run` FIRST when uncapped; examples reordered dry-run→bounded→exhaustive.
+- `skills/llm-externalizer-ensemble-autoselect/SKILL.md` (a3cf340): trigger list extended from
+  reactive-only (404/breakage) to ALSO proactive rescans; both resolve to the SAME single CLI call.
+
+**P-B DONE** (credit-safety hardening, this session, uncommitted at time of writing):
+- `mcp-server/src/benchmark/runner.ts`: guard-comment on `RunResult.rawResponse` documenting the
+  non-serialization INVARIANT (must never reach report.ts/pick.ts/benchmark-results.json — it is
+  tens-of-KB/model and would re-inflate an orchestrator's per-turn context, the exact blow-up the
+  routing fix prevents). Comment-only ⇒ provably compile-safe (no tsc needed).
+
+**Deliberate NO-GO (recorded so it is not re-litigated):** a DEFAULT `--qualifying-top-n` cap (or
+forced-confirmation) INSIDE the CLI was considered and REJECTED. Rationale: (1) CLI runs cost
+OpenRouter *credit*, not Claude *tokens* — they never touch context, so a CLI cap does nothing for
+the token burn; (2) the user wants the procedure scriptable — a silent default cap/refusal breaks
+scriptability and the fail-fast principle (a script author wanting exhaustive would be surprised);
+(3) the credit gate the user asked for ("pre-filter + estimate + ASK before large paid runs") is
+already enforced at the ORCHESTRATION layer by P-A's mandated dry-run-first ($0 candidate count)
++ cap-15 default. The cap belongs where the burn occurred (orchestrator), not in the CLI.
+
+**NEXT = P5 (the actual model update) — GATED on explicit user $-OK ($20 OpenRouter budget):**
+1. `llm-ext-benchmark --dry-run` → surface the qualifying candidate count ($0, no API calls).
+2. On OK: PAID ensemble `llm-ext-benchmark --qualifying-top-n 15 --pick-top-n 3 --apply-profile
+   remote-ensemble` (backgrounded) + FREE ensemble `--bench-free-pool` (admits owl-alpha-style $0).
+3. Show the $ estimate BEFORE spending; WAIT for approval. No push (publish-only; ~44 commits unpushed).
+
 
 **Goal (user's verbatim intent, 2026-06-25):** "launch the skill to rescan openrouter for
 compatible models, both normals and free. Identify the 3 best cheap models for the ensemble
