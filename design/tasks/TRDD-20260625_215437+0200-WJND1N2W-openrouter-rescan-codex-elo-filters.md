@@ -3,7 +3,7 @@ trdd-id: WJND1N2W
 title: OpenRouter model rescan — codex/design-arena pre-filters, free-no-suffix inclusion, skills update
 column: dev
 created: 2026-06-25T21:54:37+0200
-updated: 2026-07-02T05:15:00+0200
+updated: 2026-07-02T06:25:00+0200
 current-owner: claude-llm-externalizer
 assignee: claude-llm-externalizer
 priority: 3
@@ -35,7 +35,32 @@ external-refs: ["https://openrouter.ai/api/v1/models"]
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-06-25
 
-### UPDATE 2026-07-02 — token-cost audit + procedure token-fix (P-A/P-B done; P5 still gated)
+### UPDATE 2026-07-02 (later) — P5 DONE: models updated (user approved "go on 2 directly")
+
+Ran the actual rescan. Total spend ≈ **$0.06** (well under $20). Two runs, both via the one-shot CLI
+(zero orchestrator per-model loops — the token fix held; each run was one backgrounded Bash call):
+- **Paid sweep** (`--qualifying-top-n 15 --pick-top-n 3 --apply-profile <name>`): `category=programming`
+  + `<$1/M` + caps yields only **3 paid candidates** (mimo-v2.5-pro, mimo-v2.5, deepseek-v4-pro).
+  Run 1 deepseek scored 88.6% (FAIL) → only 2 passed → pick correctly REFUSED (need 3) → nothing applied.
+- **Unified free-pool sweep** (`--bench-free-pool --pick-top-n 3`): 3 paid CAND + 13 `:free` BASE = 16
+  models. **12/13 free models 429/timeout** (free tier heavily rate-limited right now); only
+  `nvidia/nemotron-3-super-120b-a12b:free` passed (100%, $0). All 3 paid passed 100% this run.
+- **Pick (F1 desc, cost asc):** deepseek-v4-pro ($0.0028) / mimo-v2.5 ($0.0041) / mimo-v2.5-pro ($0.0083),
+  all 100%. Free models enter as BASELINES → NOT pickable into the paid ensemble (by design; also
+  429-unreliable as live members). The $0 nemotron-super was excluded despite 100% for this reason.
+- **APPLIED** (deterministic `--from-cache`, $0) to profile **`remote-ensemble-geminigrok`** (the remote
+  ensemble; the assumed name `remote-ensemble` does NOT exist): second_model
+  gemini-3.1-flash-lite-preview→**mimo-v2.5**, third gpt-5.4-nano→**mimo-v2.5-pro**; deepseek-v4-pro
+  unchanged as primary. Verified in settings.yaml. Takes effect after `reset` MCP tool or Claude restart.
+- **Caveats surfaced to user:** (1) deepseek-v4-pro is FLAKY (88.6% then 100%) but was already the old
+  primary → no regression; (2) profile name `remote-ensemble-geminigrok` is now STALE (no gemini/grok);
+  (3) nemotron-3-super-120b-a12b:free passed but stays in the FREE pool (free_only mode), not the paid
+  ensemble, due to 429s.
+- Reports (gitignored): `reports/benchmark/20260702_054749+0200-model-comparison.md` (paid),
+  `…20260702_062059+0200-model-comparison.md` (unified).
+- **Remaining:** push (~44 commits) still gated on user; optional `reset`/restart to load the ensemble.
+
+### UPDATE 2026-07-02 — token-cost audit + procedure token-fix (P-A/P-B done)
 
 **User escalation (verbatim, 2026-07-02):** "you need to update the models, but you also need to
 make the procedure less token consuming. it should be pretty much all automatable via scripts.
