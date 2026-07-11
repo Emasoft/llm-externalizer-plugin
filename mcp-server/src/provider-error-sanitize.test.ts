@@ -3,7 +3,9 @@
 // (TRDD-e82f2c49) stops it booting the server during tests.
 
 import { describe, it, expect } from "vitest";
-import { sanitizeProviderError } from "./index";
+// sanitizeProviderError moved to the provider transport layer (B1 Phase 5b,
+// TRDD-63314265). No re-export shim by project rule — import from its new home.
+import { sanitizeProviderError } from "./provider/http";
 
 describe("sanitizeProviderError — privacy-safe provider error collapse (TRDD-54f508a4)", () => {
   // The exact live blob from the dogfood run that exposed the user_id leak.

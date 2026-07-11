@@ -193,3 +193,70 @@ export function computeBackoffMs(attempt: number, retryAfterMs: number): number 
   const jitter = capped * (0.75 + Math.random() * 0.5);
   return Math.round(jitter);
 }
+
+/**
+ * Collapse a raw provider HTTP-error body into a short, privacy-safe reason.
+ *
+ * OpenRouter (and other backends) return a large JSON error envelope that
+ * embeds the account `user_id` plus nested metadata. Baking that raw body
+ * verbatim into the thrown Error message means it (a) floods the console on
+ * every retry and (b) gets written into report files — noisy AND a privacy leak
+ * of the account id into a file the user may share. This keeps only the
+ * human-readable message + the upstream provider detail, capped, and scrubs any
+ * id / key tokens.
+ *
+ * SAFETY: callers prepend `API error <status> (<backend>): ` themselves, so the
+ * status code that index.ts's classifyError() regex-matches (`/API error 429\b/`
+ * etc.) is OUTSIDE what this returns and is always preserved — this only cleans
+ * the response-body portion. Kept as a pure exported function so it is
+ * unit-tested offline with zero spend (provider-error-sanitize.test.ts).
+ *
+ * Lives here (B1 Phase 5b) rather than in completion.ts because it is a
+ * stateless transform of an HTTP response body — the same layer that produced
+ * it — and http.ts is the module that is guaranteed dependency-free.
+ */
+export function sanitizeProviderError(raw: string, maxLen = 200): string {
+  const stripTokens = (s: string): string =>
+    s
+      // OpenRouter account id — "user_id":"user_..." (the privacy leak)
+      .replace(/"?user_?id"?\s*[:=]\s*"?[\w.-]+"?/gi, "")
+      // any API-key-looking token that should never reach a log / report
+      .replace(/\bsk-[A-Za-z0-9_-]{8,}/g, "sk-***")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!raw || !raw.trim()) return "(no response body)";
+
+  // Assigned on both paths below (try: `reason = msg`; catch: `reason = raw`),
+  // so no initializer is needed — and an `= ""` here trips no-useless-assignment.
+  let reason: string;
+  try {
+    const parsed = JSON.parse(raw) as {
+      error?: {
+        message?: string;
+        metadata?: { raw?: string; provider_name?: string };
+      };
+      message?: string;
+    };
+    const errObj = parsed.error ?? parsed;
+    const msg = typeof errObj?.message === "string" ? errObj.message.trim() : "";
+    const meta = parsed.error?.metadata;
+    const detail = typeof meta?.raw === "string" ? meta.raw.trim() : "";
+    const provider =
+      typeof meta?.provider_name === "string" ? meta.provider_name.trim() : "";
+    // Order matters: msg + provider first, then the verbose upstream detail —
+    // so the provider survives the length cap instead of being truncated off.
+    reason = msg;
+    if (provider) reason = reason ? `${reason} [${provider}]` : provider;
+    if (detail && !detail.startsWith(msg)) {
+      reason = reason ? `${reason}: ${detail}` : detail;
+    }
+  } catch {
+    // Not JSON (HTML error page, plain text, truncated body) — fall back to raw.
+    reason = raw;
+  }
+
+  reason = stripTokens(reason || raw);
+  if (reason.length > maxLen) reason = reason.slice(0, maxLen - 1) + "…";
+  return reason || "(unparseable error body)";
+}

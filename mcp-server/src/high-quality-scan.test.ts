@@ -12,7 +12,9 @@
 
 import { describe, it, expect } from "vitest";
 
-import { withSystemCacheBreakpoint } from "./index.js";
+// withSystemCacheBreakpoint moved to the completion layer (B1 Phase 5b,
+// TRDD-63314265) — it is the prompt-cache transform chatCompletionSimple applies.
+import { withSystemCacheBreakpoint } from "./provider/completion.js";
 
 describe("withSystemCacheBreakpoint (prompt cache breakpoint, TRDD-DBUSM55E)", () => {
   it("wraps the system message in array-of-parts with an ephemeral cache_control", () => {

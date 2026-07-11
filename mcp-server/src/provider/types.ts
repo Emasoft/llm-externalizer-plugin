@@ -84,3 +84,33 @@ export interface ProviderDeps {
   /** Fallback temperature when a caller does not set one. */
   defaultTemperature: number;
 }
+
+/**
+ * The extra seams the COMPLETION layer needs on top of the transport ones
+ * (B1 Phase 5b). Every field here reaches state that could NOT move into
+ * provider/completion.ts because index.ts reads or writes it elsewhere —
+ * `creditExhausted` feeds `shouldUseFree()` and the dispatch layer,
+ * `engageAutoFree` drives the ensemble builder's free pool, `FREE_MODEL_ID`
+ * and the resolved max-tokens are consumed all over index.ts.
+ *
+ * They are exposed as FUNCTIONS for two reasons: (1) same as ProviderDeps —
+ * a value captured at wiring time would pin the completion layer to a stale
+ * generation; (2) `FREE_MODEL_ID` is a `const` initialised LATER in index.ts
+ * than the deps object itself, so reading it eagerly here would throw on TDZ.
+ *
+ * The two mutators keep index.ts's `let creditExhausted` / auto-free flags as
+ * the SINGLE binding — the completion layer writes THROUGH the seam instead of
+ * owning a copy that would silently diverge from what index.ts reads.
+ */
+export interface CompletionDeps extends ProviderDeps {
+  /** Max output tokens for the current model (index.ts `resolveDefaultMaxTokens()`). */
+  getDefaultMaxTokens(): number;
+  /** The configured free-model id used for the 402 mid-flight fallback. */
+  getFreeModelId(): string;
+  /** Set index.ts's `creditExhausted` flag (402 seen → session is out of credit). */
+  setCreditExhausted(): void;
+  /** Engage auto-free routing for every later spend site. Idempotent in index.ts. */
+  engageAutoFree(reason: string): void;
+  /** Drop the cached OpenRouter balance so the next check re-queries. */
+  invalidateBalanceCache(): void;
+}

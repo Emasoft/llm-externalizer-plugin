@@ -14234,7 +14234,7 @@ import {
   existsSync as existsSync15,
   renameSync as renameSync8,
   statSync as statSync9,
-  appendFileSync as appendFileSync5,
+  appendFileSync as appendFileSync6,
   unlinkSync as unlinkSync2,
   realpathSync as realpathSync5,
   watchFile,
@@ -52215,31 +52215,6 @@ function makePreflightHook(profileFingerprint, llmCall, opts = {}) {
   };
 }
 
-// src/request-overrides.ts
-var MODEL_REQUEST_OVERRIDES = {
-  // NVIDIA Nemotron 3 Super 120B (free tier). NVIDIA's documented sampling
-  // recommendation: temperature=1.0, top_p=0.95. The earlier empty-response
-  // failures were caused by our ensemble default of temperature=0.1, which is
-  // far below what this model tolerates — the sampling floor collapsed the
-  // output distribution to empty on large inputs. OpenRouter reports
-  // supports_reasoning=true for this model, so the reasoning.effort field from
-  // the ladder is still sent and translated to the vLLM enable_thinking flag
-  // internally.
-  "nvidia/nemotron-3-super-120b-a12b:free": {
-    temperature: 1,
-    top_p: 0.95
-  }
-};
-function applyModelOverrides(body, modelId) {
-  if (!modelId) return body;
-  const override = MODEL_REQUEST_OVERRIDES[modelId];
-  if (!override) return body;
-  const out = { ...body };
-  if (override.temperature !== void 0) out.temperature = override.temperature;
-  if (override.top_p !== void 0) out.top_p = override.top_p;
-  return out;
-}
-
 // src/provider/http.ts
 var CONNECT_TIMEOUT_MS = 5e3;
 async function fetchWithTimeout(url2, options, timeoutMs = CONNECT_TIMEOUT_MS) {
@@ -52344,6 +52319,29 @@ function computeBackoffMs(attempt, retryAfterMs) {
   const capped = Math.min(base, RETRY_MAX_DELAY_MS);
   const jitter = capped * (0.75 + Math.random() * 0.5);
   return Math.round(jitter);
+}
+function sanitizeProviderError(raw, maxLen = 200) {
+  const stripTokens = (s) => s.replace(/"?user_?id"?\s*[:=]\s*"?[\w.-]+"?/gi, "").replace(/\bsk-[A-Za-z0-9_-]{8,}/g, "sk-***").replace(/\s+/g, " ").trim();
+  if (!raw || !raw.trim()) return "(no response body)";
+  let reason;
+  try {
+    const parsed = JSON.parse(raw);
+    const errObj = parsed.error ?? parsed;
+    const msg = typeof errObj?.message === "string" ? errObj.message.trim() : "";
+    const meta3 = parsed.error?.metadata;
+    const detail = typeof meta3?.raw === "string" ? meta3.raw.trim() : "";
+    const provider = typeof meta3?.provider_name === "string" ? meta3.provider_name.trim() : "";
+    reason = msg;
+    if (provider) reason = reason ? `${reason} [${provider}]` : provider;
+    if (detail && !detail.startsWith(msg)) {
+      reason = reason ? `${reason}: ${detail}` : detail;
+    }
+  } catch {
+    reason = raw;
+  }
+  reason = stripTokens(reason || raw);
+  if (reason.length > maxLen) reason = reason.slice(0, maxLen - 1) + "\u2026";
+  return reason || "(unparseable error body)";
 }
 
 // src/provider/lmstudio.ts
@@ -52492,33 +52490,33 @@ async function chatCompletionNative(conn, messages, options, deps) {
   }
 }
 
-// src/provider/connection.ts
-async function resolveConnection(options, deps) {
-  const backend = deps.getBackend();
-  const model = options?.model || backend.model;
-  assertFreeOnlyModel(deps.isFreeOnly(), backend.type, model);
-  const headers = deps.apiHeaders();
-  const timeout = deps.getSoftTimeoutMs();
-  if (backend.type === "local" && await detectLMStudio(deps)) {
-    return {
-      url: `${backend.baseUrl}/api/v1/chat`,
-      headers,
-      model,
-      isNative: true,
-      timeout
-    };
-  }
-  return {
-    url: `${backend.baseUrl}/v1/chat/completions`,
-    headers,
-    model,
-    isNative: false,
-    timeout
-  };
-}
+// src/provider/completion.ts
+import { appendFileSync as appendFileSync5 } from "node:fs";
 
-// src/provider/types.ts
-var VALID_REASONING_EFFORTS = ["off", "xhigh", "high", "medium", "low"];
+// src/request-overrides.ts
+var MODEL_REQUEST_OVERRIDES = {
+  // NVIDIA Nemotron 3 Super 120B (free tier). NVIDIA's documented sampling
+  // recommendation: temperature=1.0, top_p=0.95. The earlier empty-response
+  // failures were caused by our ensemble default of temperature=0.1, which is
+  // far below what this model tolerates — the sampling floor collapsed the
+  // output distribution to empty on large inputs. OpenRouter reports
+  // supports_reasoning=true for this model, so the reasoning.effort field from
+  // the ladder is still sent and translated to the vLLM enable_thinking flag
+  // internally.
+  "nvidia/nemotron-3-super-120b-a12b:free": {
+    temperature: 1,
+    top_p: 0.95
+  }
+};
+function applyModelOverrides(body, modelId) {
+  if (!modelId) return body;
+  const override = MODEL_REQUEST_OVERRIDES[modelId];
+  if (!override) return body;
+  const out = { ...body };
+  if (override.temperature !== void 0) out.temperature = override.temperature;
+  if (override.top_p !== void 0) out.top_p = override.top_p;
+  return out;
+}
 
 // src/rate-limiter.ts
 var AdaptiveRateLimiter = class {
@@ -52639,6 +52637,647 @@ async function rateLimitedParallel(tasks, rps, maxInFlight = DEFAULT_MAX_IN_FLIG
     if (heartbeat) clearInterval(heartbeat);
   }
   return results;
+}
+
+// src/provider/connection.ts
+async function resolveConnection(options, deps) {
+  const backend = deps.getBackend();
+  const model = options?.model || backend.model;
+  assertFreeOnlyModel(deps.isFreeOnly(), backend.type, model);
+  const headers = deps.apiHeaders();
+  const timeout = deps.getSoftTimeoutMs();
+  if (backend.type === "local" && await detectLMStudio(deps)) {
+    return {
+      url: `${backend.baseUrl}/api/v1/chat`,
+      headers,
+      model,
+      isNative: true,
+      timeout
+    };
+  }
+  return {
+    url: `${backend.baseUrl}/v1/chat/completions`,
+    headers,
+    model,
+    isNative: false,
+    timeout
+  };
+}
+
+// src/provider/types.ts
+var VALID_REASONING_EFFORTS = ["off", "xhigh", "high", "medium", "low"];
+
+// src/provider/completion.ts
+var MODEL_REASONING_CACHE = /* @__PURE__ */ new Map();
+var DEFAULT_REASONING_EFFORT = (() => {
+  const raw = (process.env.LLM_EXT_REASONING_EFFORT ?? "high").toLowerCase();
+  return VALID_REASONING_EFFORTS.includes(raw) ? raw : "high";
+})();
+function reasoningLadderForModel(modelId, override) {
+  if (!modelId) return [null];
+  const effort = override ?? DEFAULT_REASONING_EFFORT;
+  if (effort === "off") return [null];
+  const cached2 = MODEL_REASONING_CACHE.get(modelId);
+  if (cached2 === "none") return [null];
+  if (cached2 === "high") return [{ effort: "high" }, null];
+  if (effort === "xhigh") return [{ effort: "xhigh" }, { effort: "high" }, null];
+  return [{ effort }, null];
+}
+function recordReasoningRejection(modelId, failedReasoning) {
+  if (!modelId || !failedReasoning) return;
+  const effort = failedReasoning.effort;
+  if (effort === "xhigh") {
+    MODEL_REASONING_CACHE.set(modelId, "high");
+    appendModelEvent(modelId, "reasoning_downgrade", "xhigh\u2192high");
+  } else if (effort === "high" || effort === "medium" || effort === "low") {
+    MODEL_REASONING_CACHE.set(modelId, "none");
+    appendModelEvent(modelId, "reasoning_downgrade", `${effort}\u2192none`);
+  }
+}
+function isReasoningRejectionError(status, bodyText) {
+  if (status !== 400 && status !== 422) return false;
+  return /reason|effort|xhigh|thinking/i.test(bodyText);
+}
+function dumpRequestBody(body, model) {
+  const dest = process.env.LLM_EXT_DUMP_REQUESTS;
+  if (!dest) return;
+  try {
+    const wire = JSON.stringify(body);
+    appendFileSync5(
+      dest,
+      `
+==== ${(/* @__PURE__ */ new Date()).toISOString()} model=${model} bytes=${wire.length} ====
+${wire}
+`
+    );
+  } catch (e) {
+    process.stderr.write(
+      `[llm-externalizer] LLM_EXT_DUMP_REQUESTS write failed (non-fatal): ${e instanceof Error ? e.message : String(e)}
+`
+    );
+  }
+}
+var MODEL_SUPPORTED_PARAMS = /* @__PURE__ */ new Map();
+var modelSupportedParamsCacheTime = 0;
+var MODEL_SUPPORTED_PARAMS_TTL_MS = 36e5;
+var FILTERABLE_REQUEST_FIELDS = /* @__PURE__ */ new Set([
+  "temperature",
+  "top_p",
+  "top_k",
+  "min_p",
+  "top_a",
+  "frequency_penalty",
+  "presence_penalty",
+  "repetition_penalty",
+  "reasoning",
+  "include_reasoning",
+  "response_format",
+  "structured_outputs",
+  "seed",
+  "stop",
+  "tools",
+  "tool_choice",
+  "parallel_tool_calls",
+  "logit_bias",
+  "logprobs",
+  "top_logprobs"
+]);
+async function getModelSupportedParams(modelId, deps) {
+  const backend = deps.getBackend();
+  if (!modelId || backend.type !== "openrouter") return null;
+  const now = Date.now();
+  if (now - modelSupportedParamsCacheTime > MODEL_SUPPORTED_PARAMS_TTL_MS) {
+    MODEL_SUPPORTED_PARAMS.clear();
+    modelSupportedParamsCacheTime = now;
+  }
+  const cached2 = MODEL_SUPPORTED_PARAMS.get(modelId);
+  if (cached2 !== void 0) return cached2;
+  try {
+    const res = await fetchWithTimeout(
+      `${backend.baseUrl}/v1/models/${modelId}/endpoints`,
+      { headers: deps.apiHeaders() }
+    );
+    if (!res.ok) return null;
+    const body = await safeReadJson(res);
+    const endpoints = body.data?.endpoints;
+    if (!Array.isArray(endpoints) || endpoints.length === 0) return null;
+    const merged = /* @__PURE__ */ new Set();
+    for (const ep of endpoints) {
+      if (Array.isArray(ep.supported_parameters)) {
+        for (const p of ep.supported_parameters) merged.add(p);
+      }
+    }
+    if (merged.size === 0) return null;
+    MODEL_SUPPORTED_PARAMS.set(modelId, merged);
+    process.stderr.write(
+      `[llm-externalizer] Model ${modelId} supports: ${Array.from(merged).sort().join(", ")}
+`
+    );
+    return merged;
+  } catch {
+    return null;
+  }
+}
+var FILTER_WARN_SEEN = /* @__PURE__ */ new Set();
+function filterBodyForSupportedParams(body, supported, modelId) {
+  if (!supported) return body;
+  const out = {};
+  for (const [key, value] of Object.entries(body)) {
+    if (FILTERABLE_REQUEST_FIELDS.has(key) && !supported.has(key)) {
+      if (modelId) {
+        const seenKey = `${modelId}|${key}`;
+        if (!FILTER_WARN_SEEN.has(seenKey)) {
+          FILTER_WARN_SEEN.add(seenKey);
+          process.stderr.write(
+            `[llm-externalizer] Dropping unsupported field '${key}' for model '${modelId}' (per OpenRouter supported_parameters). Override your profile if this was intentional.
+`
+          );
+          appendModelEvent(modelId, "param_drop", `dropped '${key}'`);
+        }
+      }
+      continue;
+    }
+    out[key] = value;
+  }
+  return out;
+}
+function withSystemCacheBreakpoint(messages) {
+  return messages.map(
+    (m) => m.role === "system" && typeof m.content === "string" ? {
+      role: "system",
+      content: [
+        {
+          type: "text",
+          text: m.content,
+          cache_control: { type: "ephemeral" }
+        }
+      ]
+    } : m
+  );
+}
+async function chatCompletionSimple(messages, options, deps) {
+  const backend = deps.getBackend();
+  const conn = await resolveConnection(options, deps);
+  if (conn.isNative) {
+    return chatCompletionNative(conn, messages, options, deps);
+  }
+  const baseBody = {
+    messages,
+    temperature: options.temperature ?? deps.defaultTemperature,
+    max_tokens: options.maxTokens ?? deps.getDefaultMaxTokens(),
+    stream: false
+  };
+  if (conn.model) baseBody.model = conn.model;
+  if (backend.type === "openrouter") {
+    if (options.provider) baseBody.provider = options.provider;
+    if (options.cache) baseBody.messages = withSystemCacheBreakpoint(messages);
+  }
+  const reasoningLadder = backend.type === "openrouter" ? reasoningLadderForModel(conn.model || "", options.reasoning) : [null];
+  const supportedParams = await getModelSupportedParams(conn.model || "", deps);
+  const startTime = Date.now();
+  const heartbeat = options.onProgress ? setInterval(() => {
+    const elapsed = Math.round((Date.now() - startTime) / 1e3);
+    options.onProgress(50, 100, `Processing\u2026 ${elapsed}s elapsed`);
+  }, HEARTBEAT_INTERVAL_MS) : null;
+  try {
+    let lastError = null;
+    let emitted429 = false;
+    for (const reasoning of reasoningLadder) {
+      let body = { ...baseBody };
+      if (reasoning) body.reasoning = reasoning;
+      body = applyModelOverrides(body, conn.model);
+      body = filterBodyForSupportedParams(body, supportedParams, conn.model);
+      dumpRequestBody(body, conn.model);
+      const rl429 = { saw429: false };
+      const res = await fetchWithRetry429(
+        conn.url,
+        {
+          method: "POST",
+          headers: conn.headers,
+          body: JSON.stringify(body)
+        },
+        conn.timeout,
+        startTime,
+        rl429
+      );
+      if ((rl429.saw429 || res.status === 429) && !emitted429) {
+        emitted429 = true;
+        appendModelEvent(conn.model || "unknown", "rate_limit_429", "429 during call");
+      }
+      if (!res.ok) {
+        const text = await safeReadText(res).catch(() => "");
+        if (reasoning && isReasoningRejectionError(res.status, text)) {
+          const effort = reasoning.effort;
+          process.stderr.write(
+            `[llm-externalizer] Model ${conn.model} rejected reasoning.effort=${effort} \u2014 downgrading
+`
+          );
+          recordReasoningRejection(conn.model || "", reasoning);
+          lastError = new Error(
+            `API error ${res.status} (${backend.type}): ${sanitizeProviderError(text)}`
+          );
+          continue;
+        }
+        if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+          appendModelEvent(conn.model || "unknown", "non_retryable_failure", `HTTP ${res.status}`);
+        }
+        throw new Error(
+          `API error ${res.status} (${backend.type}): ${sanitizeProviderError(text)}`
+        );
+      }
+      const data = await safeReadJson(res);
+      const content = data.choices?.[0]?.message?.content ?? "";
+      const model = data.model ?? options.model ?? "unknown";
+      const finishReason = data.choices?.[0]?.finish_reason ?? "";
+      const usage = data.usage;
+      recordRequest({ ok: true, durationMs: Date.now() - startTime, costUsd: usage?.cost ?? 0 });
+      return { content, model, usage, finishReason, truncated: false };
+    }
+    throw lastError ?? new Error("Reasoning ladder exhausted with no response");
+  } catch (e) {
+    recordRequest({ ok: false, durationMs: Date.now() - startTime, costUsd: 0 });
+    throw e;
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+  }
+}
+var EXTRACT_PATHS_SCHEMA = {
+  name: "extract_paths_response",
+  strict: true,
+  schema: {
+    type: "object",
+    properties: {
+      paths: {
+        type: "array",
+        items: { type: "string" },
+        description: "All file paths, imports, and module references found in the source."
+      }
+    },
+    required: ["paths"],
+    additionalProperties: false
+  }
+};
+async function chatCompletionJSON(messages, options, deps) {
+  const backend = deps.getBackend();
+  const conn = await resolveConnection(options, deps);
+  if (conn.isNative) {
+    const nativeResult = await chatCompletionNative(conn, messages, options, deps);
+    const rawContent = nativeResult.content;
+    const nativeModel = nativeResult.model || conn.model || "unknown";
+    if (!rawContent.trim()) {
+      appendModelEvent(nativeModel, "empty_response", "blank JSON body (native)");
+      throw new Error(
+        "LLM returned empty response (expected JSON). Model may not support structured output."
+      );
+    }
+    let parsed;
+    try {
+      const cleaned = rawContent.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+      parsed = JSON.parse(cleaned);
+      if (cleaned !== rawContent.trim()) {
+        appendModelEvent(nativeModel, "schema_heal", "fence-stripped JSON (native)");
+      }
+    } catch {
+      throw new Error(
+        `LLM returned non-JSON response: ${rawContent.substring(0, 200)}`
+      );
+    }
+    return {
+      parsed,
+      model: nativeResult.model,
+      usage: nativeResult.usage,
+      finishReason: nativeResult.finishReason
+    };
+  }
+  const baseBody = {
+    messages,
+    temperature: options.temperature ?? deps.defaultTemperature,
+    max_tokens: options.maxTokens ?? deps.getDefaultMaxTokens(),
+    stream: false
+    // Non-streaming for structured output
+  };
+  if (conn.model) baseBody.model = conn.model;
+  if (options.jsonSchema && backend.type === "openrouter") {
+    baseBody.response_format = {
+      type: "json_schema",
+      json_schema: options.jsonSchema
+    };
+    baseBody.plugins = [{ id: "response-healing" }];
+  }
+  const reasoningLadder = backend.type === "openrouter" ? reasoningLadderForModel(conn.model || "") : [null];
+  const supportedParams = await getModelSupportedParams(conn.model || "", deps);
+  const jsonStartTime = Date.now();
+  let progressTimer;
+  if (options.onProgress) {
+    const pg = options.onProgress;
+    pg(5, 100, "Sending request to LLM\u2026");
+    progressTimer = setInterval(() => {
+      const pct = Math.min(
+        90,
+        Math.round((Date.now() - jsonStartTime) / conn.timeout * 100)
+      );
+      pg(pct, 100, "Waiting for LLM response\u2026");
+    }, 1e4);
+  }
+  try {
+    let lastLadderError = null;
+    let rawContent = "";
+    let model = "";
+    let usage;
+    let finishReason = "";
+    let gotResponse = false;
+    let emitted429 = false;
+    for (const reasoning of reasoningLadder) {
+      let body = { ...baseBody };
+      if (reasoning) body.reasoning = reasoning;
+      body = applyModelOverrides(body, conn.model);
+      body = filterBodyForSupportedParams(body, supportedParams, conn.model);
+      dumpRequestBody(body, conn.model);
+      const rl429 = { saw429: false };
+      const res = await fetchWithRetry429(
+        conn.url,
+        {
+          method: "POST",
+          headers: conn.headers,
+          body: JSON.stringify(body)
+        },
+        conn.timeout,
+        jsonStartTime,
+        rl429
+      );
+      if ((rl429.saw429 || res.status === 429) && !emitted429) {
+        emitted429 = true;
+        appendModelEvent(conn.model || "unknown", "rate_limit_429", "429 during call (JSON mode)");
+      }
+      if (!res.ok) {
+        const text = await safeReadText(res).catch(() => "");
+        if (reasoning && isReasoningRejectionError(res.status, text)) {
+          const effort = reasoning.effort;
+          process.stderr.write(
+            `[llm-externalizer] Model ${conn.model} rejected reasoning.effort=${effort} (JSON mode) \u2014 downgrading
+`
+          );
+          recordReasoningRejection(conn.model || "", reasoning);
+          lastLadderError = new Error(
+            `API error ${res.status} (${backend.type}): ${sanitizeProviderError(text)}`
+          );
+          continue;
+        }
+        if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+          appendModelEvent(conn.model || "unknown", "non_retryable_failure", `HTTP ${res.status} (JSON mode)`);
+        }
+        throw new Error(
+          `API error ${res.status} (${backend.type}): ${sanitizeProviderError(text)}`
+        );
+      }
+      const data = await safeReadJson(res);
+      rawContent = data.choices?.[0]?.message?.content ?? "";
+      model = data.model ?? conn.model ?? "";
+      usage = data.usage;
+      finishReason = data.choices?.[0]?.finish_reason ?? "";
+      gotResponse = true;
+      break;
+    }
+    if (!gotResponse) {
+      throw lastLadderError ?? new Error("Reasoning ladder exhausted with no response");
+    }
+    if (!rawContent.trim()) {
+      appendModelEvent(model || conn.model || "unknown", "empty_response", "blank JSON body");
+      throw new Error(
+        "LLM returned empty response (expected JSON). Model may not support structured output."
+      );
+    }
+    let parsed;
+    try {
+      const cleaned = rawContent.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+      parsed = JSON.parse(cleaned);
+      if (cleaned !== rawContent.trim()) {
+        appendModelEvent(model || conn.model || "unknown", "schema_heal", "fence-stripped JSON");
+      }
+    } catch (e) {
+      throw new Error(
+        `LLM returned malformed JSON: ${e instanceof Error ? e.message : String(e)}. Raw (first 200 chars): ${rawContent.slice(0, 200)}`,
+        { cause: e }
+      );
+    }
+    recordRequest({ ok: true, durationMs: Date.now() - jsonStartTime, costUsd: usage?.cost ?? 0 });
+    return { parsed, model, usage, finishReason };
+  } catch (e) {
+    recordRequest({ ok: false, durationMs: Date.now() - jsonStartTime, costUsd: 0 });
+    throw e;
+  } finally {
+    if (progressTimer) clearInterval(progressTimer);
+  }
+}
+var SERVICE_HEALTH = {
+  consecutiveFailures: 0,
+  lastSuccessAt: Date.now(),
+  // Threshold: 5 consecutive failures across any requests → likely systemic
+  failureThreshold: 5,
+  // Backoff delays in ms: 60s, 120s, 350s, then give up
+  backoffDelays: [6e4, 12e4, 35e4],
+  backoffAttempt: 0,
+  // If true, service is in backoff/cooldown mode
+  inCooldown: false
+};
+function recordServiceSuccess() {
+  SERVICE_HEALTH.consecutiveFailures = 0;
+  SERVICE_HEALTH.lastSuccessAt = Date.now();
+  SERVICE_HEALTH.backoffAttempt = 0;
+  SERVICE_HEALTH.inCooldown = false;
+}
+function recordServiceFailure() {
+  SERVICE_HEALTH.consecutiveFailures++;
+}
+async function checkServiceHealthOrWait() {
+  if (SERVICE_HEALTH.consecutiveFailures < SERVICE_HEALTH.failureThreshold) {
+    return null;
+  }
+  const { backoffDelays, backoffAttempt } = SERVICE_HEALTH;
+  if (backoffAttempt >= backoffDelays.length) {
+    return `SERVER ISSUE DETECTED: ${SERVICE_HEALTH.consecutiveFailures} consecutive failures. Last success was ${Math.round((Date.now() - SERVICE_HEALTH.lastSuccessAt) / 1e3)}s ago. Tried waiting ${backoffDelays.map((d) => `${d / 1e3}s`).join(", ")}. The issue appears to be server-side (offline, overloaded, or connection broken). Please retry later.`;
+  }
+  const delay = backoffDelays[backoffAttempt];
+  SERVICE_HEALTH.inCooldown = true;
+  process.stderr.write(
+    `[circuit-breaker] ${SERVICE_HEALTH.consecutiveFailures} consecutive failures detected \u2014 waiting ${delay / 1e3}s before retrying (backoff ${backoffAttempt + 1}/${backoffDelays.length})
+`
+  );
+  await new Promise((r) => setTimeout(r, delay));
+  SERVICE_HEALTH.backoffAttempt++;
+  SERVICE_HEALTH.inCooldown = false;
+  return null;
+}
+var MAX_TRUNCATION_RETRIES = 3;
+var MAX_EMPTY_RESPONSE_RETRIES = 15;
+var EMPTY_RESPONSE_RETRY_DELAY_MS = 2e3;
+async function chatCompletionWithRetry(messages, options, deps) {
+  const backend = deps.getBackend();
+  const freeModelId = deps.getFreeModelId();
+  const healthAbort = await checkServiceHealthOrWait();
+  if (healthAbort) {
+    return {
+      content: healthAbort,
+      model: options.model || backend.model,
+      finishReason: "error",
+      truncated: true
+    };
+  }
+  let genericAttempts = 0;
+  let emptyAttempts = 0;
+  let emittedTruncationRetry = false;
+  while (true) {
+    let resp;
+    try {
+      resp = await chatCompletionSimple(messages, options, deps);
+    } catch (err3) {
+      const errMsg = err3 instanceof Error ? err3.message : String(err3);
+      if (/API error 402\b/.test(errMsg) && backend.type === "openrouter" && options.model !== freeModelId) {
+        deps.setCreditExhausted();
+        deps.invalidateBalanceCache();
+        deps.engageAutoFree("402 mid-flight");
+        process.stderr.write(
+          `[llm-externalizer] Credit exhausted (402) \u2014 retrying call with free model (${freeModelId})
+`
+        );
+        try {
+          return await chatCompletionSimple(
+            messages,
+            { ...options, model: freeModelId },
+            deps
+          );
+        } catch (freeErr) {
+          const freeMsg = freeErr instanceof Error ? freeErr.message : String(freeErr);
+          process.stderr.write(
+            `[llm-externalizer] Free-mode fallback also failed: ${freeMsg}
+`
+          );
+          throw err3;
+        }
+      }
+      recordServiceFailure();
+      genericAttempts++;
+      if (genericAttempts <= MAX_TRUNCATION_RETRIES) {
+        const retryModel = options.model || backend.model;
+        process.stderr.write(
+          `[model-retry] ${retryModel}: request error: ${errMsg} \u2014 retrying (${genericAttempts}/${MAX_TRUNCATION_RETRIES})
+`
+        );
+        const abort = await checkServiceHealthOrWait();
+        if (abort) {
+          return {
+            content: abort,
+            model: options.model || backend.model,
+            finishReason: "error",
+            truncated: true
+          };
+        }
+        continue;
+      }
+      throw err3;
+    }
+    if (resp.finishReason === "stop" && !resp.truncated && resp.content.trim().length > 0) {
+      recordServiceSuccess();
+      return resp;
+    }
+    if (resp.finishReason === "length") {
+      recordServiceSuccess();
+      resp.truncated = true;
+      resp.content += "\n\n---\n**TRUNCATED**: Response hit the output-token limit (finish_reason=length). The analysis above is cut off mid-generation.";
+      process.stderr.write(
+        `[llm-externalizer] finish_reason=length \u2014 output token limit hit
+`
+      );
+      return resp;
+    }
+    if (resp.finishReason === "content_filter") {
+      recordServiceSuccess();
+      resp.truncated = true;
+      resp.content += "\n\n---\n**BLOCKED**: The provider's content filter blocked this response (finish_reason=content_filter). No retry \u2014 the block is deterministic for this prompt.";
+      process.stderr.write(
+        `[llm-externalizer] finish_reason=content_filter \u2014 content filter blocked response
+`
+      );
+      return resp;
+    }
+    recordServiceFailure();
+    const isEmpty = resp.content.trim().length === 0;
+    const reasonLabel = resp.finishReason || "empty";
+    const useEmptyBudget = isEmpty && backend.type === "openrouter";
+    if (useEmptyBudget) {
+      emptyAttempts++;
+    } else {
+      genericAttempts++;
+    }
+    const limit = useEmptyBudget ? MAX_EMPTY_RESPONSE_RETRIES : MAX_TRUNCATION_RETRIES;
+    const currentAttempt = useEmptyBudget ? emptyAttempts : genericAttempts;
+    if (useEmptyBudget && options.model && currentAttempt <= limit) {
+      const current = MODEL_REASONING_CACHE.get(options.model);
+      if (current === void 0 || current === "xhigh") {
+        MODEL_REASONING_CACHE.set(options.model, "high");
+        process.stderr.write(
+          `[llm-externalizer] Empty response on ${options.model} \u2014 downgrading reasoning cache to high
+`
+        );
+      } else if (current === "high") {
+        MODEL_REASONING_CACHE.set(options.model, "none");
+        process.stderr.write(
+          `[llm-externalizer] Empty response on ${options.model} \u2014 disabling reasoning
+`
+        );
+      }
+    }
+    if (currentAttempt <= limit) {
+      if (!emittedTruncationRetry) {
+        emittedTruncationRetry = true;
+        appendModelEvent(
+          options.model || backend.model || "unknown",
+          "truncation_retry",
+          `finish_reason=${reasonLabel}`
+        );
+      }
+      process.stderr.write(
+        `[llm-externalizer] ${useEmptyBudget ? "Empty" : "Invalid"} response (finish_reason=${reasonLabel}) \u2014 retrying (${currentAttempt}/${limit})
+`
+      );
+      const abort = await checkServiceHealthOrWait();
+      if (abort) {
+        return {
+          content: abort,
+          model: resp.model,
+          finishReason: "error",
+          truncated: true
+        };
+      }
+      if (useEmptyBudget) {
+        process.stderr.write(
+          `[llm-externalizer] Waiting ${Math.round(EMPTY_RESPONSE_RETRY_DELAY_MS / 1e3)}s before retry ${currentAttempt + 1}
+`
+        );
+        await new Promise((r) => setTimeout(r, EMPTY_RESPONSE_RETRY_DELAY_MS));
+      }
+      continue;
+    }
+    if (isEmpty && (resp.finishReason === "" || resp.finishReason === "stop")) {
+      resp.content = `**EMPTY RESPONSE**: The provider returned no content after ${limit} retries (finish_reason=${reasonLabel}). This usually means a transient provider glitch or the model failed on this specific prompt. No partial output available.`;
+    } else if (resp.finishReason === "error") {
+      resp.content += `
+
+---
+**UPSTREAM ERROR**: The provider reported an error (finish_reason=error) after ${limit} retries. The partial output above may be incomplete.`;
+    } else {
+      resp.content += `
+
+---
+**INCOMPLETE**: Response did not finish cleanly after ${limit} retries (finish_reason=${reasonLabel}). The output above may be incomplete.`;
+    }
+    resp.truncated = true;
+    process.stderr.write(
+      `[llm-externalizer] Exhausted ${limit} retries (finish_reason=${reasonLabel}, empty=${isEmpty}) \u2014 returning with label
+`
+    );
+    return resp;
+  }
 }
 
 // src/index.ts
@@ -54078,139 +54717,6 @@ RULES (override any conflicting instructions):
 var SOFT_TIMEOUT_MS = (activeResolved?.timeout ?? 300) * 1e3;
 var FALLBACK_CONTEXT_LENGTH = activeResolved?.contextWindow || 1e5;
 var MODEL_CACHE_TTL_MS = 36e5;
-var MODEL_REASONING_CACHE = /* @__PURE__ */ new Map();
-var DEFAULT_REASONING_EFFORT = (() => {
-  const raw = (process.env.LLM_EXT_REASONING_EFFORT ?? "high").toLowerCase();
-  return VALID_REASONING_EFFORTS.includes(raw) ? raw : "high";
-})();
-function reasoningLadderForModel(modelId, override) {
-  if (!modelId) return [null];
-  const effort = override ?? DEFAULT_REASONING_EFFORT;
-  if (effort === "off") return [null];
-  const cached2 = MODEL_REASONING_CACHE.get(modelId);
-  if (cached2 === "none") return [null];
-  if (cached2 === "high") return [{ effort: "high" }, null];
-  if (effort === "xhigh") return [{ effort: "xhigh" }, { effort: "high" }, null];
-  return [{ effort }, null];
-}
-function dumpRequestBody(body, model) {
-  const dest = process.env.LLM_EXT_DUMP_REQUESTS;
-  if (!dest) return;
-  try {
-    const wire = JSON.stringify(body);
-    appendFileSync5(
-      dest,
-      `
-==== ${(/* @__PURE__ */ new Date()).toISOString()} model=${model} bytes=${wire.length} ====
-${wire}
-`
-    );
-  } catch (e) {
-    process.stderr.write(
-      `[llm-externalizer] LLM_EXT_DUMP_REQUESTS write failed (non-fatal): ${e instanceof Error ? e.message : String(e)}
-`
-    );
-  }
-}
-var MODEL_SUPPORTED_PARAMS = /* @__PURE__ */ new Map();
-var modelSupportedParamsCacheTime = 0;
-var MODEL_SUPPORTED_PARAMS_TTL_MS = 36e5;
-var FILTERABLE_REQUEST_FIELDS = /* @__PURE__ */ new Set([
-  "temperature",
-  "top_p",
-  "top_k",
-  "min_p",
-  "top_a",
-  "frequency_penalty",
-  "presence_penalty",
-  "repetition_penalty",
-  "reasoning",
-  "include_reasoning",
-  "response_format",
-  "structured_outputs",
-  "seed",
-  "stop",
-  "tools",
-  "tool_choice",
-  "parallel_tool_calls",
-  "logit_bias",
-  "logprobs",
-  "top_logprobs"
-]);
-async function getModelSupportedParams(modelId) {
-  const backend = getCurrentBackend();
-  if (!modelId || backend.type !== "openrouter") return null;
-  const now = Date.now();
-  if (now - modelSupportedParamsCacheTime > MODEL_SUPPORTED_PARAMS_TTL_MS) {
-    MODEL_SUPPORTED_PARAMS.clear();
-    modelSupportedParamsCacheTime = now;
-  }
-  const cached2 = MODEL_SUPPORTED_PARAMS.get(modelId);
-  if (cached2 !== void 0) return cached2;
-  try {
-    const res = await fetchWithTimeout(
-      `${backend.baseUrl}/v1/models/${modelId}/endpoints`,
-      { headers: apiHeaders() }
-    );
-    if (!res.ok) return null;
-    const body = await safeReadJson(res);
-    const endpoints = body.data?.endpoints;
-    if (!Array.isArray(endpoints) || endpoints.length === 0) return null;
-    const merged = /* @__PURE__ */ new Set();
-    for (const ep of endpoints) {
-      if (Array.isArray(ep.supported_parameters)) {
-        for (const p of ep.supported_parameters) merged.add(p);
-      }
-    }
-    if (merged.size === 0) return null;
-    MODEL_SUPPORTED_PARAMS.set(modelId, merged);
-    process.stderr.write(
-      `[llm-externalizer] Model ${modelId} supports: ${Array.from(merged).sort().join(", ")}
-`
-    );
-    return merged;
-  } catch {
-    return null;
-  }
-}
-var FILTER_WARN_SEEN = /* @__PURE__ */ new Set();
-function filterBodyForSupportedParams(body, supported, modelId) {
-  if (!supported) return body;
-  const out = {};
-  for (const [key, value] of Object.entries(body)) {
-    if (FILTERABLE_REQUEST_FIELDS.has(key) && !supported.has(key)) {
-      if (modelId) {
-        const seenKey = `${modelId}|${key}`;
-        if (!FILTER_WARN_SEEN.has(seenKey)) {
-          FILTER_WARN_SEEN.add(seenKey);
-          process.stderr.write(
-            `[llm-externalizer] Dropping unsupported field '${key}' for model '${modelId}' (per OpenRouter supported_parameters). Override your profile if this was intentional.
-`
-          );
-          appendModelEvent(modelId, "param_drop", `dropped '${key}'`);
-        }
-      }
-      continue;
-    }
-    out[key] = value;
-  }
-  return out;
-}
-function recordReasoningRejection(modelId, failedReasoning) {
-  if (!modelId || !failedReasoning) return;
-  const effort = failedReasoning.effort;
-  if (effort === "xhigh") {
-    MODEL_REASONING_CACHE.set(modelId, "high");
-    appendModelEvent(modelId, "reasoning_downgrade", "xhigh\u2192high");
-  } else if (effort === "high" || effort === "medium" || effort === "low") {
-    MODEL_REASONING_CACHE.set(modelId, "none");
-    appendModelEvent(modelId, "reasoning_downgrade", `${effort}\u2192none`);
-  }
-}
-function isReasoningRejectionError(status, bodyText) {
-  if (status !== 400 && status !== 422) return false;
-  return /reason|effort|xhigh|thinking/i.test(bodyText);
-}
 var RELOAD_VERSION = 0;
 function makeBackendFromProfile(resolved, modelOverride) {
   const isRemote = resolved.protocol === "openrouter_api";
@@ -54575,7 +55081,7 @@ var LOG_FILE = join20(
 function writeLogEntry(entry) {
   try {
     mkdirSync18(LOG_DIR, { recursive: true });
-    appendFileSync5(LOG_FILE, JSON.stringify(entry) + "\n");
+    appendFileSync6(LOG_FILE, JSON.stringify(entry) + "\n");
   } catch {
     process.stderr.write(`[llm-externalizer] Failed to write log entry
 `);
@@ -54662,7 +55168,14 @@ var providerDeps = {
   getSoftTimeoutMs: () => SOFT_TIMEOUT_MS,
   isFreeOnly: () => activeResolved?.freeOnly ?? false,
   isLMStudioProvider: () => activeResolved?.protocol === "lmstudio_api",
-  defaultTemperature: DEFAULT_TEMPERATURE
+  defaultTemperature: DEFAULT_TEMPERATURE,
+  getDefaultMaxTokens: () => resolveDefaultMaxTokens(),
+  getFreeModelId: () => FREE_MODEL_ID,
+  setCreditExhausted: () => {
+    creditExhausted = true;
+  },
+  engageAutoFree: (reason) => engageAutoFree(reason),
+  invalidateBalanceCache: () => invalidateBalanceCache()
 };
 function makeProgressFn(progressToken) {
   if (progressToken === void 0) return void 0;
@@ -54678,274 +55191,6 @@ function makeProgressFn(progressToken) {
     }).catch(() => {
     });
   };
-}
-function withSystemCacheBreakpoint(messages) {
-  return messages.map(
-    (m) => m.role === "system" && typeof m.content === "string" ? {
-      role: "system",
-      content: [
-        {
-          type: "text",
-          text: m.content,
-          cache_control: { type: "ephemeral" }
-        }
-      ]
-    } : m
-  );
-}
-async function chatCompletionSimple(messages, options = {}) {
-  const backend = getCurrentBackend();
-  const conn = await resolveConnection(options, providerDeps);
-  if (conn.isNative) {
-    return chatCompletionNative(conn, messages, options, providerDeps);
-  }
-  const baseBody = {
-    messages,
-    temperature: options.temperature ?? DEFAULT_TEMPERATURE,
-    max_tokens: options.maxTokens ?? resolveDefaultMaxTokens(),
-    stream: false
-  };
-  if (conn.model) baseBody.model = conn.model;
-  if (backend.type === "openrouter") {
-    if (options.provider) baseBody.provider = options.provider;
-    if (options.cache) baseBody.messages = withSystemCacheBreakpoint(messages);
-  }
-  const reasoningLadder = backend.type === "openrouter" ? reasoningLadderForModel(conn.model || "", options.reasoning) : [null];
-  const supportedParams = await getModelSupportedParams(conn.model || "");
-  const startTime = Date.now();
-  const heartbeat = options.onProgress ? setInterval(() => {
-    const elapsed = Math.round((Date.now() - startTime) / 1e3);
-    options.onProgress(50, 100, `Processing\u2026 ${elapsed}s elapsed`);
-  }, HEARTBEAT_INTERVAL_MS) : null;
-  try {
-    let lastError = null;
-    let emitted429 = false;
-    for (const reasoning of reasoningLadder) {
-      let body = { ...baseBody };
-      if (reasoning) body.reasoning = reasoning;
-      body = applyModelOverrides(body, conn.model);
-      body = filterBodyForSupportedParams(body, supportedParams, conn.model);
-      dumpRequestBody(body, conn.model);
-      const rl429 = { saw429: false };
-      const res = await fetchWithRetry429(
-        conn.url,
-        {
-          method: "POST",
-          headers: conn.headers,
-          body: JSON.stringify(body)
-        },
-        conn.timeout,
-        startTime,
-        rl429
-      );
-      if ((rl429.saw429 || res.status === 429) && !emitted429) {
-        emitted429 = true;
-        appendModelEvent(conn.model || "unknown", "rate_limit_429", "429 during call");
-      }
-      if (!res.ok) {
-        const text = await safeReadText(res).catch(() => "");
-        if (reasoning && isReasoningRejectionError(res.status, text)) {
-          const effort = reasoning.effort;
-          process.stderr.write(
-            `[llm-externalizer] Model ${conn.model} rejected reasoning.effort=${effort} \u2014 downgrading
-`
-          );
-          recordReasoningRejection(conn.model || "", reasoning);
-          lastError = new Error(
-            `API error ${res.status} (${backend.type}): ${sanitizeProviderError(text)}`
-          );
-          continue;
-        }
-        if (res.status >= 400 && res.status < 500 && res.status !== 429) {
-          appendModelEvent(conn.model || "unknown", "non_retryable_failure", `HTTP ${res.status}`);
-        }
-        throw new Error(
-          `API error ${res.status} (${backend.type}): ${sanitizeProviderError(text)}`
-        );
-      }
-      const data = await safeReadJson(res);
-      const content = data.choices?.[0]?.message?.content ?? "";
-      const model = data.model ?? options.model ?? "unknown";
-      const finishReason = data.choices?.[0]?.finish_reason ?? "";
-      const usage = data.usage;
-      recordRequest({ ok: true, durationMs: Date.now() - startTime, costUsd: usage?.cost ?? 0 });
-      return { content, model, usage, finishReason, truncated: false };
-    }
-    throw lastError ?? new Error("Reasoning ladder exhausted with no response");
-  } catch (e) {
-    recordRequest({ ok: false, durationMs: Date.now() - startTime, costUsd: 0 });
-    throw e;
-  } finally {
-    if (heartbeat) clearInterval(heartbeat);
-  }
-}
-var EXTRACT_PATHS_SCHEMA = {
-  name: "extract_paths_response",
-  strict: true,
-  schema: {
-    type: "object",
-    properties: {
-      paths: {
-        type: "array",
-        items: { type: "string" },
-        description: "All file paths, imports, and module references found in the source."
-      }
-    },
-    required: ["paths"],
-    additionalProperties: false
-  }
-};
-async function chatCompletionJSON(messages, options = {}) {
-  const backend = getCurrentBackend();
-  const conn = await resolveConnection(options, providerDeps);
-  if (conn.isNative) {
-    const nativeResult = await chatCompletionNative(conn, messages, options, providerDeps);
-    const rawContent = nativeResult.content;
-    const nativeModel = nativeResult.model || conn.model || "unknown";
-    if (!rawContent.trim()) {
-      appendModelEvent(nativeModel, "empty_response", "blank JSON body (native)");
-      throw new Error(
-        "LLM returned empty response (expected JSON). Model may not support structured output."
-      );
-    }
-    let parsed;
-    try {
-      const cleaned = rawContent.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
-      parsed = JSON.parse(cleaned);
-      if (cleaned !== rawContent.trim()) {
-        appendModelEvent(nativeModel, "schema_heal", "fence-stripped JSON (native)");
-      }
-    } catch {
-      throw new Error(
-        `LLM returned non-JSON response: ${rawContent.substring(0, 200)}`
-      );
-    }
-    return {
-      parsed,
-      model: nativeResult.model,
-      usage: nativeResult.usage,
-      finishReason: nativeResult.finishReason
-    };
-  }
-  const baseBody = {
-    messages,
-    temperature: options.temperature ?? DEFAULT_TEMPERATURE,
-    max_tokens: options.maxTokens ?? resolveDefaultMaxTokens(),
-    stream: false
-    // Non-streaming for structured output
-  };
-  if (conn.model) baseBody.model = conn.model;
-  if (options.jsonSchema && backend.type === "openrouter") {
-    baseBody.response_format = {
-      type: "json_schema",
-      json_schema: options.jsonSchema
-    };
-    baseBody.plugins = [{ id: "response-healing" }];
-  }
-  const reasoningLadder = backend.type === "openrouter" ? reasoningLadderForModel(conn.model || "") : [null];
-  const supportedParams = await getModelSupportedParams(conn.model || "");
-  const jsonStartTime = Date.now();
-  let progressTimer;
-  if (options.onProgress) {
-    const pg = options.onProgress;
-    pg(5, 100, "Sending request to LLM\u2026");
-    progressTimer = setInterval(() => {
-      const pct = Math.min(
-        90,
-        Math.round((Date.now() - jsonStartTime) / conn.timeout * 100)
-      );
-      pg(pct, 100, "Waiting for LLM response\u2026");
-    }, 1e4);
-  }
-  try {
-    let lastLadderError = null;
-    let rawContent = "";
-    let model = "";
-    let usage;
-    let finishReason = "";
-    let gotResponse = false;
-    let emitted429 = false;
-    for (const reasoning of reasoningLadder) {
-      let body = { ...baseBody };
-      if (reasoning) body.reasoning = reasoning;
-      body = applyModelOverrides(body, conn.model);
-      body = filterBodyForSupportedParams(body, supportedParams, conn.model);
-      dumpRequestBody(body, conn.model);
-      const rl429 = { saw429: false };
-      const res = await fetchWithRetry429(
-        conn.url,
-        {
-          method: "POST",
-          headers: conn.headers,
-          body: JSON.stringify(body)
-        },
-        conn.timeout,
-        jsonStartTime,
-        rl429
-      );
-      if ((rl429.saw429 || res.status === 429) && !emitted429) {
-        emitted429 = true;
-        appendModelEvent(conn.model || "unknown", "rate_limit_429", "429 during call (JSON mode)");
-      }
-      if (!res.ok) {
-        const text = await safeReadText(res).catch(() => "");
-        if (reasoning && isReasoningRejectionError(res.status, text)) {
-          const effort = reasoning.effort;
-          process.stderr.write(
-            `[llm-externalizer] Model ${conn.model} rejected reasoning.effort=${effort} (JSON mode) \u2014 downgrading
-`
-          );
-          recordReasoningRejection(conn.model || "", reasoning);
-          lastLadderError = new Error(
-            `API error ${res.status} (${backend.type}): ${sanitizeProviderError(text)}`
-          );
-          continue;
-        }
-        if (res.status >= 400 && res.status < 500 && res.status !== 429) {
-          appendModelEvent(conn.model || "unknown", "non_retryable_failure", `HTTP ${res.status} (JSON mode)`);
-        }
-        throw new Error(
-          `API error ${res.status} (${backend.type}): ${sanitizeProviderError(text)}`
-        );
-      }
-      const data = await safeReadJson(res);
-      rawContent = data.choices?.[0]?.message?.content ?? "";
-      model = data.model ?? conn.model ?? "";
-      usage = data.usage;
-      finishReason = data.choices?.[0]?.finish_reason ?? "";
-      gotResponse = true;
-      break;
-    }
-    if (!gotResponse) {
-      throw lastLadderError ?? new Error("Reasoning ladder exhausted with no response");
-    }
-    if (!rawContent.trim()) {
-      appendModelEvent(model || conn.model || "unknown", "empty_response", "blank JSON body");
-      throw new Error(
-        "LLM returned empty response (expected JSON). Model may not support structured output."
-      );
-    }
-    let parsed;
-    try {
-      const cleaned = rawContent.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
-      parsed = JSON.parse(cleaned);
-      if (cleaned !== rawContent.trim()) {
-        appendModelEvent(model || conn.model || "unknown", "schema_heal", "fence-stripped JSON");
-      }
-    } catch (e) {
-      throw new Error(
-        `LLM returned malformed JSON: ${e instanceof Error ? e.message : String(e)}. Raw (first 200 chars): ${rawContent.slice(0, 200)}`,
-        { cause: e }
-      );
-    }
-    recordRequest({ ok: true, durationMs: Date.now() - jsonStartTime, costUsd: usage?.cost ?? 0 });
-    return { parsed, model, usage, finishReason };
-  } catch (e) {
-    recordRequest({ ok: false, durationMs: Date.now() - jsonStartTime, costUsd: 0 });
-    throw e;
-  } finally {
-    if (progressTimer) clearInterval(progressTimer);
-  }
 }
 async function listModelsRaw() {
   const backend = getCurrentBackend();
@@ -55045,29 +55290,6 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
     );
   }
   return filepath;
-}
-function sanitizeProviderError(raw, maxLen = 200) {
-  const stripTokens = (s) => s.replace(/"?user_?id"?\s*[:=]\s*"?[\w.-]+"?/gi, "").replace(/\bsk-[A-Za-z0-9_-]{8,}/g, "sk-***").replace(/\s+/g, " ").trim();
-  if (!raw || !raw.trim()) return "(no response body)";
-  let reason;
-  try {
-    const parsed = JSON.parse(raw);
-    const errObj = parsed.error ?? parsed;
-    const msg = typeof errObj?.message === "string" ? errObj.message.trim() : "";
-    const meta3 = parsed.error?.metadata;
-    const detail = typeof meta3?.raw === "string" ? meta3.raw.trim() : "";
-    const provider = typeof meta3?.provider_name === "string" ? meta3.provider_name.trim() : "";
-    reason = msg;
-    if (provider) reason = reason ? `${reason} [${provider}]` : provider;
-    if (detail && !detail.startsWith(msg)) {
-      reason = reason ? `${reason}: ${detail}` : detail;
-    }
-  } catch {
-    reason = raw;
-  }
-  reason = stripTokens(reason || raw);
-  if (reason.length > maxLen) reason = reason.slice(0, maxLen - 1) + "\u2026";
-  return reason || "(unparseable error body)";
 }
 function classifyError(error48) {
   const msg = error48 instanceof Error ? error48.message : String(error48);
@@ -55222,228 +55444,20 @@ function batchReportFilename(toolName, _batchId, filePath, _fileIndex) {
   const srcName = sanitizeFilename(filePath).replace(/\.md$/, "");
   return `${ts}-${toolName}-${srcName}-${shortId}.md`;
 }
-var SERVICE_HEALTH = {
-  consecutiveFailures: 0,
-  lastSuccessAt: Date.now(),
-  // Threshold: 5 consecutive failures across any requests → likely systemic
-  failureThreshold: 5,
-  // Backoff delays in ms: 60s, 120s, 350s, then give up
-  backoffDelays: [6e4, 12e4, 35e4],
-  backoffAttempt: 0,
-  // If true, service is in backoff/cooldown mode
-  inCooldown: false
-};
-function recordServiceSuccess() {
-  SERVICE_HEALTH.consecutiveFailures = 0;
-  SERVICE_HEALTH.lastSuccessAt = Date.now();
-  SERVICE_HEALTH.backoffAttempt = 0;
-  SERVICE_HEALTH.inCooldown = false;
-}
-function recordServiceFailure() {
-  SERVICE_HEALTH.consecutiveFailures++;
-}
-async function checkServiceHealthOrWait() {
-  if (SERVICE_HEALTH.consecutiveFailures < SERVICE_HEALTH.failureThreshold) {
-    return null;
-  }
-  const { backoffDelays, backoffAttempt } = SERVICE_HEALTH;
-  if (backoffAttempt >= backoffDelays.length) {
-    return `SERVER ISSUE DETECTED: ${SERVICE_HEALTH.consecutiveFailures} consecutive failures. Last success was ${Math.round((Date.now() - SERVICE_HEALTH.lastSuccessAt) / 1e3)}s ago. Tried waiting ${backoffDelays.map((d) => `${d / 1e3}s`).join(", ")}. The issue appears to be server-side (offline, overloaded, or connection broken). Please retry later.`;
-  }
-  const delay = backoffDelays[backoffAttempt];
-  SERVICE_HEALTH.inCooldown = true;
-  process.stderr.write(
-    `[circuit-breaker] ${SERVICE_HEALTH.consecutiveFailures} consecutive failures detected \u2014 waiting ${delay / 1e3}s before retrying (backoff ${backoffAttempt + 1}/${backoffDelays.length})
-`
-  );
-  await new Promise((r) => setTimeout(r, delay));
-  SERVICE_HEALTH.backoffAttempt++;
-  SERVICE_HEALTH.inCooldown = false;
-  return null;
-}
-var MAX_TRUNCATION_RETRIES = 3;
-var MAX_EMPTY_RESPONSE_RETRIES = 15;
-var EMPTY_RESPONSE_RETRY_DELAY_MS = 2e3;
-async function chatCompletionWithRetry(messages, options) {
-  const backend = getCurrentBackend();
-  const healthAbort = await checkServiceHealthOrWait();
-  if (healthAbort) {
-    return {
-      content: healthAbort,
-      model: options.model || backend.model,
-      finishReason: "error",
-      truncated: true
-    };
-  }
-  let genericAttempts = 0;
-  let emptyAttempts = 0;
-  let emittedTruncationRetry = false;
-  while (true) {
-    let resp;
-    try {
-      resp = await chatCompletionSimple(messages, options);
-    } catch (err3) {
-      const errMsg = err3 instanceof Error ? err3.message : String(err3);
-      if (/API error 402\b/.test(errMsg) && backend.type === "openrouter" && options.model !== FREE_MODEL_ID) {
-        creditExhausted = true;
-        invalidateBalanceCache();
-        engageAutoFree("402 mid-flight");
-        process.stderr.write(
-          `[llm-externalizer] Credit exhausted (402) \u2014 retrying call with free model (${FREE_MODEL_ID})
-`
-        );
-        try {
-          return await chatCompletionSimple(messages, {
-            ...options,
-            model: FREE_MODEL_ID
-          });
-        } catch (freeErr) {
-          const freeMsg = freeErr instanceof Error ? freeErr.message : String(freeErr);
-          process.stderr.write(
-            `[llm-externalizer] Free-mode fallback also failed: ${freeMsg}
-`
-          );
-          throw err3;
-        }
-      }
-      recordServiceFailure();
-      genericAttempts++;
-      if (genericAttempts <= MAX_TRUNCATION_RETRIES) {
-        const retryModel = options.model || backend.model;
-        process.stderr.write(
-          `[model-retry] ${retryModel}: request error: ${errMsg} \u2014 retrying (${genericAttempts}/${MAX_TRUNCATION_RETRIES})
-`
-        );
-        const abort = await checkServiceHealthOrWait();
-        if (abort) {
-          return {
-            content: abort,
-            model: options.model || backend.model,
-            finishReason: "error",
-            truncated: true
-          };
-        }
-        continue;
-      }
-      throw err3;
-    }
-    if (resp.finishReason === "stop" && !resp.truncated && resp.content.trim().length > 0) {
-      recordServiceSuccess();
-      return resp;
-    }
-    if (resp.finishReason === "length") {
-      recordServiceSuccess();
-      resp.truncated = true;
-      resp.content += "\n\n---\n**TRUNCATED**: Response hit the output-token limit (finish_reason=length). The analysis above is cut off mid-generation.";
-      process.stderr.write(
-        `[llm-externalizer] finish_reason=length \u2014 output token limit hit
-`
-      );
-      return resp;
-    }
-    if (resp.finishReason === "content_filter") {
-      recordServiceSuccess();
-      resp.truncated = true;
-      resp.content += "\n\n---\n**BLOCKED**: The provider's content filter blocked this response (finish_reason=content_filter). No retry \u2014 the block is deterministic for this prompt.";
-      process.stderr.write(
-        `[llm-externalizer] finish_reason=content_filter \u2014 content filter blocked response
-`
-      );
-      return resp;
-    }
-    recordServiceFailure();
-    const isEmpty = resp.content.trim().length === 0;
-    const reasonLabel = resp.finishReason || "empty";
-    const useEmptyBudget = isEmpty && backend.type === "openrouter";
-    if (useEmptyBudget) {
-      emptyAttempts++;
-    } else {
-      genericAttempts++;
-    }
-    const limit = useEmptyBudget ? MAX_EMPTY_RESPONSE_RETRIES : MAX_TRUNCATION_RETRIES;
-    const currentAttempt = useEmptyBudget ? emptyAttempts : genericAttempts;
-    if (useEmptyBudget && options.model && currentAttempt <= limit) {
-      const current = MODEL_REASONING_CACHE.get(options.model);
-      if (current === void 0 || current === "xhigh") {
-        MODEL_REASONING_CACHE.set(options.model, "high");
-        process.stderr.write(
-          `[llm-externalizer] Empty response on ${options.model} \u2014 downgrading reasoning cache to high
-`
-        );
-      } else if (current === "high") {
-        MODEL_REASONING_CACHE.set(options.model, "none");
-        process.stderr.write(
-          `[llm-externalizer] Empty response on ${options.model} \u2014 disabling reasoning
-`
-        );
-      }
-    }
-    if (currentAttempt <= limit) {
-      if (!emittedTruncationRetry) {
-        emittedTruncationRetry = true;
-        appendModelEvent(
-          options.model || backend.model || "unknown",
-          "truncation_retry",
-          `finish_reason=${reasonLabel}`
-        );
-      }
-      process.stderr.write(
-        `[llm-externalizer] ${useEmptyBudget ? "Empty" : "Invalid"} response (finish_reason=${reasonLabel}) \u2014 retrying (${currentAttempt}/${limit})
-`
-      );
-      const abort = await checkServiceHealthOrWait();
-      if (abort) {
-        return {
-          content: abort,
-          model: resp.model,
-          finishReason: "error",
-          truncated: true
-        };
-      }
-      if (useEmptyBudget) {
-        process.stderr.write(
-          `[llm-externalizer] Waiting ${Math.round(EMPTY_RESPONSE_RETRY_DELAY_MS / 1e3)}s before retry ${currentAttempt + 1}
-`
-        );
-        await new Promise((r) => setTimeout(r, EMPTY_RESPONSE_RETRY_DELAY_MS));
-      }
-      continue;
-    }
-    if (isEmpty && (resp.finishReason === "" || resp.finishReason === "stop")) {
-      resp.content = `**EMPTY RESPONSE**: The provider returned no content after ${limit} retries (finish_reason=${reasonLabel}). This usually means a transient provider glitch or the model failed on this specific prompt. No partial output available.`;
-    } else if (resp.finishReason === "error") {
-      resp.content += `
-
----
-**UPSTREAM ERROR**: The provider reported an error (finish_reason=error) after ${limit} retries. The partial output above may be incomplete.`;
-    } else {
-      resp.content += `
-
----
-**INCOMPLETE**: Response did not finish cleanly after ${limit} retries (finish_reason=${reasonLabel}). The output above may be incomplete.`;
-    }
-    resp.truncated = true;
-    process.stderr.write(
-      `[llm-externalizer] Exhausted ${limit} retries (finish_reason=${reasonLabel}, empty=${isEmpty}) \u2014 returning with label
-`
-    );
-    return resp;
-  }
-}
 async function ensembleStreaming(messages, options, ensemble, fileLineCount) {
   const backend = getCurrentBackend();
   if (options.modelOverride) {
-    return chatCompletionWithRetry(messages, { ...options, model: options.modelOverride });
+    return chatCompletionWithRetry(messages, { ...options, model: options.modelOverride }, providerDeps);
   }
   const ensembleModels = getEnsembleModels();
   if (!ensemble || backend.type !== "openrouter" || ensembleModels.length === 0) {
-    return chatCompletionWithRetry(messages, options);
+    return chatCompletionWithRetry(messages, options, providerDeps);
   }
   const models = ensembleModels.filter(
     (m) => !fileLineCount || fileLineCount <= m.maxInputLines
   );
   if (models.length === 0) {
-    return chatCompletionWithRetry(messages, options);
+    return chatCompletionWithRetry(messages, options, providerDeps);
   }
   const freeOnly = activeResolved?.freeOnly ?? false;
   const fallbacks = [];
@@ -55468,22 +55482,30 @@ async function ensembleStreaming(messages, options, ensemble, fileLineCount) {
     }
   }
   if (models.length === 1 && fallbacks.length === 0) {
-    return chatCompletionWithRetry(messages, {
-      ...options,
-      model: models[0].id,
-      maxTokens: Math.min(
-        options.maxTokens ?? models[0].maxOutput,
-        models[0].maxOutput
-      )
-    });
+    return chatCompletionWithRetry(
+      messages,
+      {
+        ...options,
+        model: models[0].id,
+        maxTokens: Math.min(
+          options.maxTokens ?? models[0].maxOutput,
+          models[0].maxOutput
+        )
+      },
+      providerDeps
+    );
   }
   const results = await Promise.all(
     models.map(async (m) => {
-      const callOne = (model, maxOutput) => chatCompletionWithRetry(messages, {
-        ...options,
-        model,
-        maxTokens: Math.min(options.maxTokens ?? maxOutput, maxOutput)
-      });
+      const callOne = (model, maxOutput) => chatCompletionWithRetry(
+        messages,
+        {
+          ...options,
+          model,
+          maxTokens: Math.min(options.maxTokens ?? maxOutput, maxOutput)
+        },
+        providerDeps
+      );
       if (freeOnly) {
         return callEnsembleSlotWithRotation(m, fallbacks, claimFallback, callOne);
       }
@@ -57538,7 +57560,7 @@ FAILED: File not found.`);
 
 ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}` }
                 ];
-                const extractResp = await chatCompletionJSON(extractMessages, { temperature: 0, maxTokens: resolveDefaultMaxTokens(), jsonSchema: EXTRACT_PATHS_SCHEMA, onProgress });
+                const extractResp = await chatCompletionJSON(extractMessages, { temperature: 0, maxTokens: resolveDefaultMaxTokens(), jsonSchema: EXTRACT_PATHS_SCHEMA, onProgress }, providerDeps);
                 recordUsage(extractResp.usage);
                 logRequest({ tool: "check_imports", model: extractResp.model, status: "success", usage: extractResp.usage, filePath });
                 const rawPaths = extractResp.parsed.paths;
@@ -57623,12 +57645,16 @@ FAILED: File not found.`);
 ` + readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)
               }
             ];
-            const extractResp = await chatCompletionJSON(extractMessages, {
-              temperature: 0,
-              maxTokens: resolveDefaultMaxTokens(),
-              jsonSchema: EXTRACT_PATHS_SCHEMA,
-              onProgress
-            });
+            const extractResp = await chatCompletionJSON(
+              extractMessages,
+              {
+                temperature: 0,
+                maxTokens: resolveDefaultMaxTokens(),
+                jsonSchema: EXTRACT_PATHS_SCHEMA,
+                onProgress
+              },
+              providerDeps
+            );
             recordUsage(extractResp.usage);
             logRequest({
               tool: "check_imports",
@@ -57992,11 +58018,15 @@ ${csResp.content}${csFooter}`
           };
           const csRawLlmCall = async (prompt) => {
             const messages = [{ role: "user", content: prompt }];
-            const resp = await chatCompletionWithRetry(messages, {
-              temperature: 0.1,
-              maxTokens: 4096,
-              reasoning: "off"
-            });
+            const resp = await chatCompletionWithRetry(
+              messages,
+              {
+                temperature: 0.1,
+                maxTokens: 4096,
+                reasoning: "off"
+              },
+              providerDeps
+            );
             if (resp.finishReason === "error") {
               throw new Error(`cluster_synonyms: LLM call failed: ${resp.content}`);
             }
@@ -58161,11 +58191,8 @@ export {
   filterFreeModels,
   isModelUnavailableError,
   parseFreeBelowUsd,
-  reasoningLadderForModel,
   resolveAutoFreePool,
   resolveFreeModelId,
   resolveSubsystemFreeModel,
-  sanitizeProviderError,
-  selectFreeEnsembleModels,
-  withSystemCacheBreakpoint
+  selectFreeEnsembleModels
 };

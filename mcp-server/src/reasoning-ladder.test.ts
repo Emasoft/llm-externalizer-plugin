@@ -9,7 +9,10 @@
 // so importing it never boots the server or contacts a backend.
 
 import { describe, it, expect } from "vitest";
-import { reasoningLadderForModel } from "./index";
+// The reasoning ladder moved out of index.ts into the provider layer
+// (B1 Phase 5b, TRDD-63314265). No re-export shim exists by project rule, so the
+// test imports it from its new (and only) home.
+import { reasoningLadderForModel } from "./provider/completion";
 
 describe("reasoningLadderForModel — cost-safe default effort (TRDD-ec45c66f)", () => {
   it("default top rung is 'high', NOT 'xhigh' (the per-call cost regression)", () => {
