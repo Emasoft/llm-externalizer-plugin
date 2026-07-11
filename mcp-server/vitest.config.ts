@@ -11,6 +11,10 @@ export default defineConfig({
     // Run live tests explicitly: npx vitest run src/live.test.ts
     include: [
       'src/index.test.ts',
+      // Launcher → server boot handoff — spawns the real launcher and completes
+      // an MCP initialize; catches the -32001 regression that unit-level imports
+      // (which never go through launcher.mjs) structurally cannot see.
+      'src/launcher-boot.test.ts',
       // Cost-safety guard — default test backend must never bill (TRDD-e82f2c49).
       'src/test-helpers.test.ts',
       'src/grouping.test.ts',
