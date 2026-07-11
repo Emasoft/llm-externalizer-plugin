@@ -1,109 +1,65 @@
 ---
 name: llm-externalizer-benchmark
-description: Benchmark OpenRouter programming-category models against a TypeScript classification task. Filters by cost + capability, scores each candidate against 71 fixture functions + 3 literal keywords, writes a markdown comparison report. Use this to pick the cheapest model that still passes the real workload. Trigger with "rescan models", "update the models", "update/refresh the model ensemble", "find better or cheaper models", "run a full model rescan", "auto-pick the ensemble", "is there a better model now". This ONE command IS the whole rescan/benchmark/pick procedure — route here instead of hand-rolling a per-model loop.
+description: Benchmark OpenRouter programming-category models against a TypeScript classification task, then pick/apply the best ensemble. Filters by cost + capability, scores each candidate against 71 fixture functions + 3 literal keywords, writes a markdown comparison report. Use this to pick the cheapest model that still passes the real workload. Trigger with "rescan models", "update the models", "update/refresh the model ensemble", "find better or cheaper models", "run a full model rescan", "auto-pick the ensemble", "is there a better model now". This ONE command IS the whole rescan/benchmark/pick procedure — route here instead of hand-rolling a per-model loop.
 allowed-tools:
   - Bash
-argument-hint: "[--include MODEL_ID]... [--dry-run] [--report PATH] [--reasoning low|medium|high] [--seed N] [--qualifying-top-n N]"
-effort: medium
+argument-hint: "[--pick-top-n N] [--apply-profile NAME] [--include MODEL_ID]... [--dry-run] [--no-qualifying-cap] [--reasoning low|medium|high] [--seed N]"
+effort: low
 ---
 
-Runs the `llm-ext-benchmark` CLI bundled with the plugin. Forwards `$ARGUMENTS` verbatim.
+Run the command below. Print its final line. Nothing else.
 
-## What the benchmark does
+## Run
 
-1. Queries `https://openrouter.ai/api/v1/models?category=programming`.
-2. Filters to models with context ≥ 128K, max output ≥ 64K, structured outputs + reasoning supported, and both input AND output priced **strictly under $1/M** (`< $1.00`, so $1.00 itself is rejected), excluding the `:free` tier. Models priced at exactly $0 without a `:free` suffix (e.g. `openrouter/owl-alpha`) are valid candidates — $0 passes the cost cap.
-3. Pre-ranks candidates using two credit-free quality indexes read from the same public endpoint (no API key, $0): the **codex index score** (`benchmarks.artificial_analysis.coding_index`, 0–100) and the **design arena code-categories ELO** (the `benchmarks.design_arena[]` entry where `arena=="models"` and `category=="codecategories"`, its `.elo`). Scores are min–max normalized and composited; scored models rank above unscored; cheapest breaks ties. A missing index = UNKNOWN, never a disqualifier. If `--qualifying-top-n N` is set, only the top N pre-ranked candidates proceed to paid runs — use this to cap spend without excluding explicit `--include` baselines, which are never capped.
-4. For each qualifying candidate (plus any `--include MODEL_ID` baselines, which bypass the cost filter), sends the 5 fixture TypeScript files (71 top-level functions) and asks the model — under a strict JSON schema — to list every function whose body contains each of three literal substrings: `JSON.parse(`, `new URLSearchParams`, `performance.now()`.
-5. Compares the returned arrays against the ground truth (derived at runtime from the fixtures via the TypeScript compiler API). PASS = all 3 arrays exact match; partial-credit F1 is reported for failures.
-6. Writes a markdown report to `$MAIN_ROOT/reports/benchmark/<ts±tz>-model-comparison.md`.
-
-No agents. No MCP tools. No retry loops beyond what the CLI itself implements. Deterministic (`temperature=0`, optional `--seed`).
-
-## Step 1 — Check prerequisites
-
-Using `Bash`:
-
-1. `test -x "${CLAUDE_PLUGIN_ROOT}/bin/llm-ext-benchmark"` — abort with `[FAILED] llm-externalizer-benchmark — CLI not found at $CLAUDE_PLUGIN_ROOT/bin/llm-ext-benchmark` if missing.
-2. Skip the dry-run auth check when `$ARGUMENTS` contains `--dry-run`. Otherwise verify auth:
-   ```bash
-   if [ -z "${OPENROUTER_API_KEY:-}" ] && [ -z "${CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY:-}" ]; then
-       echo "[FAILED] llm-externalizer-benchmark — OPENROUTER_API_KEY not set (or set the plugin option 'openrouter_api_key' via /plugin configure llm-externalizer)"
-       exit 1
-   fi
-   ```
-
-## Step 2 — Run the benchmark
-
-Run it as ONE Bash call. The CLI does all discovery/filter/rank/benchmark/pick/settings-write inside the Node process — **nothing touches your context**. NEVER re-implement any of that with a per-model loop over `chat` / `code_task` / `or_model_info`: that costs real OpenRouter $ per call AND re-sends the whole transcript every turn — the exact 30–40M-token failure mode this command exists to prevent.
-
-The sweep takes **10–30 minutes** (≈60s/model), so:
-- If `$ARGUMENTS` has no `--qualifying-top-n` and the user did NOT ask for an *exhaustive* sweep, add `--qualifying-top-n 15` — bounds both spend and runtime.
-- Launch it with `run_in_background: true` (or an explicit ≥20-minute Bash timeout). Do NOT block the session on a foreground half-hour call; you'll be notified on completion, then surface the report path.
+ONE Bash call, with `run_in_background: true` (always — a sweep takes 10-30 min):
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/llm-ext-benchmark" $ARGUMENTS
 ```
 
-The CLI streams progress to stderr as `[benchmark] ...` lines (one per model), then prints the final report path and pass count. Propagate the exit code.
+The CLI does everything itself — prerequisite checks, discovery, cost/capability
+filter, credit-free quality pre-ranking, the paid-candidate cap (`--qualifying-top-n`
+defaults to **15** in code), the runs, the scoring, the report, the JSON cache, and —
+with `--pick-top-n N --apply-profile P` — the atomic settings.yaml write.
 
-Typical cost for a bounded sweep is well under $0.10 (≈$0.005–$0.02 per candidate depending on reasoning token usage). `--dry-run` makes zero API calls — when no `--qualifying-top-n` is given, run `--dry-run` FIRST to surface the candidate count before spending.
+You choose NOTHING. Add no flags of your own; forward `$ARGUMENTS` verbatim.
 
-## Step 3 — Return
+## Report
 
-The CLI's last stderr line already shows the report path (`[benchmark] Report: <absolute path>`) and the pass count (`[benchmark] N/M models passed`). Surface both to the user — the report path is the only artifact the user needs.
+The CLI's last stdout line is exactly one of:
 
-Do NOT `Read` the report. Its content is the user's output, not the orchestrator's.
+```
+[OK] <summary>. Report: <absolute path>
+[FAILED] <reason>
+```
 
-## Constraints
+Print that line **verbatim** and stop. Do not read the report. Do not summarize,
+re-word, or append next steps — the line already carries the counts and the path,
+and the exit code already carries success/failure.
 
-- Never bypass the cost filter with ad-hoc edits — if the user wants a non-qualifying model evaluated, they pass `--include MODEL_ID` (baseline slot, clearly tagged in the output).
-- Never summarize or reformat the report. Only the path flows back.
-- The CLI is a single-pass, non-agentic runner. Do NOT wrap it in a retry loop or re-score its output.
+## Never
 
-## Examples
+- Never re-implement the sweep as a per-model loop over `chat` / `code_task` /
+  `or_model_info`: it costs real OpenRouter $ per call AND re-sends the whole
+  transcript every turn — the 30-40M-token failure mode this command exists to prevent.
+- Never retry a `[FAILED]` run. Never edit `settings.yaml` by hand; the CLI writes it.
 
-| Goal | Invocation |
+## Flags the user may ask for (pass through; do not add unprompted)
+
+| Goal | Flag |
 |---|---|
-| Preview the qualifying roster + count, $0 (do this FIRST when no cap is set) | `/llm-externalizer:llm-externalizer-benchmark --dry-run` |
-| Default bounded sweep (top-15 pre-ranked candidates) | `/llm-externalizer:llm-externalizer-benchmark --qualifying-top-n 15` |
-| Exhaustive sweep — every qualifying candidate (slow, costs more; opt-in only) | `/llm-externalizer:llm-externalizer-benchmark` |
-| Sweep plus current production ensemble as baselines | `/llm-externalizer:llm-externalizer-benchmark --include google/gemini-3-flash-preview --include x-ai/grok-4.1-fast` |
-| Force reasoning-heavy runs for sensitivity testing | `/llm-externalizer:llm-externalizer-benchmark --reasoning high` |
-| Cap paid runs to the top 5 pre-ranked candidates | `/llm-externalizer:llm-externalizer-benchmark --qualifying-top-n 5` |
+| Preview the roster, $0, no API call | `--dry-run` |
+| Pick the top 3 and write them to a profile | `--pick-top-n 3 --apply-profile remote-ensemble` |
+| Exhaustive sweep (slow, costs more) | `--no-qualifying-cap` |
+| Re-pick from the last run's cache, no new calls | `--from-cache --pick-top-n 3` |
+| Include a specific model as a baseline | `--include vendor/model-id` |
 
-## Three-surface compliance: by-design no MCP tool (GAP-2)
+Full flag list: `llm-ext-benchmark --help`.
 
-The benchmark is **CLI + slash command**, with **no MCP tool** — by
-design. Rationale documented in TRDD-f1510055 §"Why no MCP tool":
+## Why there is no MCP tool for this (by design, TRDD-f1510055)
 
-- A sweep takes 10–30 minutes (15 models × ~60s each for the keyword
-  task, more for `--security-triage`). Every other MCP tool the
-  plugin exposes completes in seconds to a few minutes.
-- Exposing it as a tool would let any orchestrator agent trigger a
-  half-hour blocking operation on the user's account.
-- It writes a cache the WHOLE plugin reads (`~/.llm-externalizer/benchmark-results.json`),
-  not a per-call artifact — closer to a build step than a tool call.
-
-The MCP-equivalent fourth surface is the **auto-trigger** wired into
-the MCP server's startup + settings-reload paths (see
-`/llm-externalizer:llm-externalizer-bench-free-pool` and TRDD-f1510055).
-When `free_only` flips ON and the cache lacks `:free` entries, the
-server spawns a detached bench process. This delivers the
-"capability available without leaving the MCP layer" property
-without the agent-triggered half-hour-block hazard.
-
-`pickTopN` + `--apply-profile` (the GAP-3 "ensemble-autoselect"
-capability) is exposed as a CLI mode of this same binary
-(`--pick-top-n N --apply-profile <name>`) rather than a separate
-MCP tool — its core (`benchmark/pick.ts`) reads the same cache the
-benchmark writes, so a "rotate" call without a prior benchmark would
-be a no-op or stale-pick footgun.
-
-## Error handling
-
-| Error | Resolution |
-|-------|------------|
-| CLI binary not bundled | Abort `[FAILED] — CLI not found at $CLAUDE_PLUGIN_ROOT/bin/llm-ext-benchmark`. The plugin build is incomplete. |
-| Auth missing | Abort `[FAILED] — OPENROUTER_API_KEY not set`. Tell user to export it or set the plugin userConfig. |
-| CLI exits non-zero | Surface the last stderr line in the `[FAILED]` message. Do NOT retry. |
+A sweep is a 10-30 minute, money-spending, cache-writing build step, not a tool
+call. Exposing it as an MCP tool would let any agent trigger a half-hour blocking
+operation on the user's account. The MCP-side equivalent is the auto-trigger wired
+into the server's startup / settings-reload path (see
+`/llm-externalizer:llm-externalizer-bench-free-pool`).

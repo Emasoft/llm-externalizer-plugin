@@ -10,80 +10,43 @@ description: |-
   surface at a glance. Trigger with "assess model X", "which tools can model X
   serve", "does model X meet the requirements".
 allowed-tools:
-  - mcp__llm-externalizer__assess_model
-argument-hint: "model=<openrouter-model-id>"
+  - Bash
+argument-hint: "<openrouter-model-id>"
 effort: low
 ---
 
-# assess_model — cross-tool requirements assessment
+Run the command below. Print its final line. Nothing else.
 
-Each LLM-using tool in this plugin declares its own model REQUIREMENTS (cost
-ceiling, minimum context, minimum output, structured-output / reasoning support)
-and, when one exists, a model-judgment BENCHMARK that gates selection
-([[TRDD-f45eeaa0]]). This command answers a single question for one candidate
-model: **which tools can it serve?**
+## Run
 
-It is the REQUIREMENTS half of the per-tool gate, and it is **free** — no LLM
-call and no token cost; it makes a single public OpenRouter model-catalog fetch
-(no API key). It does NOT run any benchmark; for the tools that carry a benchmark
-gate it tells you to run that benchmark separately.
-
-## What it does
-
-1. **Fetches** the OpenRouter model catalog and finds the model id.
-2. **Checks the requirements** of every registered LLM tool against the model's
-   advertised capabilities + pricing (the single-sourced `qualify` predicate).
-3. **Reports** a per-tool `OK` / `NO` table: for a passing tool, whether it ALSO
-   needs a benchmark pass; for a failing tool, the first failing requirement.
-
-## Inputs
-
-| Field | Required | Description |
-|---|---|---|
-| `model` | yes | OpenRouter model id, e.g. `google/gemini-2.5-flash`. |
-
-## Output
-
-A human-readable block:
-
-```
-Model: <id> (<name>)
-Meets requirements for <K>/<N> LLM tools.
-
-  security_scan    OK  benchmark: security-triage (run before assigning)
-  mass_scout       OK  benchmark: keyword-classification (run before assigning)
-  code_task        OK  requirements-only
-  chat             OK  requirements-only
-  ...
-  <tool>           NO  <first failing requirement, e.g. "context 32000 < required 128000">
-
-Note: security_scan, mass_scout ALSO require a benchmark pass before assignment —
-run that tool's benchmark (security_scan → /llm-externalizer-security-triage-benchmark).
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/llm-ext-benchmark" --assess-model $ARGUMENTS
 ```
 
-`OK` means the model meets that tool's hard requirements. A tool tagged
-`benchmark: <id>` additionally requires a benchmark PASS before the model should
-be assigned to it — assessment alone is necessary but not sufficient for the
-benchmarked tools. `NO` rows carry the specific reason (cost over the ceiling,
-context too small, missing structured-output or reasoning support, …).
+`$ARGUMENTS` is the model id (e.g. `google/gemini-2.5-flash`). Free: one public
+catalog fetch, no API key, no LLM call, $0. It runs NO benchmark — the per-tool
+benchmark gate is each tool's own command.
 
-## How to act on the result
+## Report
 
-- A tool shown `OK` with `requirements-only` can take the model via the
-  settings `tool_models.<tool>` override (or the tool's `model` parameter).
-- A tool shown `OK` with a `benchmark:` tag — run that benchmark first
-  (`security_scan` → `/llm-externalizer-security-triage-benchmark`), and only
-  assign the model if it PASSES. The standing rule still holds: never auto-bump
-  to a pricier model.
-- A tool shown `NO` cannot take the model; the reason tells you why.
-
-## CLI equivalent
+The CLI prints the full per-tool table, then a final stdout line:
 
 ```
-llm-ext-benchmark --assess-model google/gemini-2.5-flash
+[OK] <id> meets the requirements of <N>/<M> LLM tool(s)
+[FAILED] <reason>            # e.g. the id is not in the OpenRouter catalog
 ```
 
-## Environment
+Print that final line **verbatim** and stop. The table above it is the user's
+output, not yours to re-format.
 
-No API key required — the OpenRouter model catalog is public. (Running a tool's
-benchmark afterwards does need `$OPENROUTER_API_KEY`.)
+## Adopting the model (scripted — never a hand edit)
+
+Only when the user asks to adopt it:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/llm-ext-benchmark" --adopt <MODEL_ID> --adopt-into model
+"${CLAUDE_PLUGIN_ROOT}/bin/llm-ext-benchmark" --adopt <MODEL_ID> --adopt-into tool:<tool>
+```
+
+The CLI re-checks the requirements gate and refuses to write a model that fits
+nothing. Print its final line verbatim.

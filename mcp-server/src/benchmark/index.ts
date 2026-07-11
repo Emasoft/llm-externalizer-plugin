@@ -16,7 +16,6 @@
  */
 
 import { mkdirSync, writeFileSync, existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -34,17 +33,26 @@ import { runBenchmarkOnModel, type RunOutcome } from "./runner.js";
 import { scoreRun, type ModelScore } from "./score.js";
 import { renderReport, renderJson } from "./report.js";
 import {
+  applyEnsembleSlotToSettings,
+  applyFreePoolToSettings,
   applyPicksToSettings,
   applyToolModelToSettings,
   loadCachedReport,
   pickTopN,
   renderEnsembleBlock,
+  ENSEMBLE_SLOTS,
+  type CachedReport,
   type CachedResult,
+  type EnsembleSlot,
   type PickedModel,
 } from "./pick.js";
 import { runSecurityTriageBenchmark } from "./security-triage/index.js";
 import { runSearchExistingBenchmark } from "./search-existing/index.js";
-import { planToolReplacements } from "../model-qualification/auto-replace.js";
+import {
+  planEnsembleRotation,
+  planToolReplacements,
+  renderEnsembleRotationSection,
+} from "../model-qualification/auto-replace.js";
 import {
   assessModelById,
   renderAssessmentText,
@@ -60,326 +68,15 @@ import {
 } from "../model-qualification/new-arrivals.js";
 import { resolveProjectMainRoot } from "../project-root.js";
 import {
+  getConfigDir,
+  getSettingsPath,
   loadSettings,
   resolveProfile,
   setActiveFreeOnly,
   FREE_POOL_SEED,
 } from "../config.js";
 
-interface CliOptions {
-  includeIds: string[];
-  dryRun: boolean;
-  reportPath: string | null;
-  jsonPath: string | null;
-  reasoningEffort: "low" | "medium" | "high" | undefined;
-  seed: number | undefined;
-  /** Sort surviving results by meanF1 desc + cost asc, print top N. */
-  pickTopN: number | null;
-  /** PRE-benchmark candidate cap: after quality-ranking the auto-discovered
-   *  candidates by their catalog codex/design-arena indexes, benchmark only the
-   *  top N (credit-saver — TRDD-WJND1N2W P2). null = no cap (benchmark all,
-   *  still quality-ordered). Distinct from pickTopN, which caps RESULTS after
-   *  the paid run; this caps the paid run's INPUT. Explicit --include baselines
-   *  are never capped. */
-  qualifyingTopN: number | null;
-  /** After picking, mutate ~/.llm-externalizer/settings.yaml so this
-   *  profile name's `model`/`second_model`/`third_model` become the
-   *  three winners. Atomic write (tmp + rename); existing other profiles
-   *  preserved verbatim. */
-  applyProfile: string | null;
-  /** Don't run the benchmark — pick top-N from the most recent cached
-   *  results at ~/.llm-externalizer/benchmark-results.json. Useful for
-   *  re-applying a fresh selection without burning more API calls. */
-  fromCache: boolean;
-  /** Minimum meanF1 a model must hit to be eligible for top-N. Default
-   *  0.95 — anything lower indicates the keyword classifier flunked. */
-  minMeanF1: number;
-  /** Run the security_scan TRIAGE benchmark instead of the keyword task. */
-  securityTriage: boolean;
-  /** Explicit model id(s) to assess in --security-triage mode (repeatable).
-   *  When empty, the triage benchmark auto-discovers the candidate pool. */
-  triageModels: string[];
-  /** Run the search_existing_implementations benchmark instead of the keyword task. */
-  searchExisting: boolean;
-  /** Explicit model id(s) to assess in --search-existing mode (variadic — any
-   *  non-flag tokens following the flag). When empty, the benchmark
-   *  auto-discovers the same-or-cheaper candidate pool. */
-  searchExistingModels: string[];
-  /** Ignore the per-model-per-day cache (currently only --security-triage). */
-  force: boolean;
-  /** Assess one model against EVERY tool's per-tool requirements (no LLM call). */
-  assessModel: string | null;
-  /** Self-check the CONFIGURED model(s) for presence/cost-drift/regression (no LLM call). */
-  checkHealth: boolean;
-  /** Autodiscover models that newly appeared in the catalog since last run (no LLM call). */
-  newArrivals: boolean;
-  /** With --new-arrivals, report only arrivals that meet ≥1 tool's requirements. */
-  qualifyingOnly: boolean;
-  /** Auto-fill the candidate set from the active profile's free pool (TRDD-f1510055).
-   *  Resolves to the active profile's `free_models` if set; falls back to
-   *  `FREE_POOL_SEED`. Adds each id to `includeIds` (keyword mode) or
-   *  `triageModels` (security-triage mode). Lets the user benchmark the free
-   *  pool with one flag instead of N `--include` invocations. */
-  benchFreePool: boolean;
-  /** Run the cross-tool auto-replacement planner (TRDD-828238b5 A7): for every
-   *  benchmarked tool, check the ledger health of its incumbent and (when degraded
-   *  or --force) run that tool's benchmark to surface the best same-or-cheaper
-   *  replacement. ADVISORY by default — prints + writes a report, writes nothing. */
-  autoReplace: boolean;
-  /** With --auto-replace, ACTUALLY adopt each changed recommendation by writing
-   *  the per-tool `tool_models` entry to ~/.llm-externalizer/settings.yaml (the
-   *  SOLE writer path; the MCP surface never writes). Requires --auto-replace. */
-  apply: boolean;
-}
-
-function parseArgs(argv: readonly string[]): CliOptions {
-  const opts: CliOptions = {
-    includeIds: [],
-    dryRun: false,
-    reportPath: null,
-    jsonPath: null,
-    reasoningEffort: undefined,
-    seed: undefined,
-    pickTopN: null,
-    qualifyingTopN: null,
-    applyProfile: null,
-    fromCache: false,
-    minMeanF1: 0.95,
-    securityTriage: false,
-    triageModels: [],
-    searchExisting: false,
-    searchExistingModels: [],
-    force: false,
-    assessModel: null,
-    checkHealth: false,
-    newArrivals: false,
-    qualifyingOnly: false,
-    benchFreePool: false,
-    autoReplace: false,
-    apply: false,
-  };
-  // Consume the value that must follow a value-taking flag. If the flag is the
-  // last token, or the next token is itself a flag, fail fast — silently
-  // swallowing the trailing flag would push e.g. "--dry-run" into includeIds
-  // and never set dryRun, which is data corruption from the user's POV.
-  const takeValue = (flag: string, i: number): string => {
-    const v = argv[i + 1];
-    if (v === undefined || v.startsWith("--")) {
-      throw new Error(`${flag} requires a value`);
-    }
-    return v;
-  };
-  for (let i = 2; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === "--include") {
-      opts.includeIds.push(takeValue(a, i));
-      i++;
-    } else if (a === "--dry-run" || a === "-n") opts.dryRun = true;
-    else if (a === "--report") {
-      opts.reportPath = takeValue(a, i);
-      i++;
-    } else if (a === "--json") {
-      opts.jsonPath = takeValue(a, i);
-      i++;
-    } else if (a === "--reasoning") {
-      const eff = takeValue(a, i);
-      i++;
-      if (eff !== "low" && eff !== "medium" && eff !== "high") {
-        throw new Error(`--reasoning must be low|medium|high, got ${eff}`);
-      }
-      opts.reasoningEffort = eff;
-    } else if (a === "--seed") {
-      opts.seed = parseInt(takeValue(a, i), 10);
-      i++;
-    } else if (a === "--pick-top-n") {
-      const n = parseInt(takeValue(a, i), 10);
-      if (!Number.isInteger(n) || n < 1) {
-        throw new Error(`--pick-top-n must be a positive integer, got ${n}`);
-      }
-      opts.pickTopN = n;
-      i++;
-    } else if (a === "--qualifying-top-n") {
-      const n = parseInt(takeValue(a, i), 10);
-      if (!Number.isInteger(n) || n < 1) {
-        throw new Error(`--qualifying-top-n must be a positive integer, got ${n}`);
-      }
-      opts.qualifyingTopN = n;
-      i++;
-    } else if (a === "--apply-profile") {
-      opts.applyProfile = takeValue(a, i);
-      i++;
-    } else if (a === "--from-cache") {
-      opts.fromCache = true;
-    } else if (a === "--min-f1") {
-      const f = parseFloat(takeValue(a, i));
-      if (!Number.isFinite(f) || f < 0 || f > 1) {
-        throw new Error(`--min-f1 must be 0..1, got ${f}`);
-      }
-      opts.minMeanF1 = f;
-      i++;
-    } else if (a === "--security-triage") {
-      opts.securityTriage = true;
-    } else if (a === "--search-existing") {
-      // Variadic: consume every following non-flag token as a model id, so
-      // `--search-existing a/b c/d` assesses exactly those two; with no trailing
-      // tokens the benchmark auto-discovers the same-or-cheaper candidate pool.
-      opts.searchExisting = true;
-      while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
-        opts.searchExistingModels.push(argv[i + 1]);
-        i++;
-      }
-    } else if (a === "--model") {
-      opts.triageModels.push(takeValue(a, i));
-      i++;
-    } else if (a === "--force") {
-      opts.force = true;
-    } else if (a === "--assess-model") {
-      opts.assessModel = takeValue(a, i);
-      i++;
-    } else if (a === "--check-health") {
-      opts.checkHealth = true;
-    } else if (a === "--new-arrivals") {
-      opts.newArrivals = true;
-    } else if (a === "--qualifying-only") {
-      opts.qualifyingOnly = true;
-    } else if (a === "--bench-free-pool") {
-      opts.benchFreePool = true;
-    } else if (a === "--auto-replace") {
-      opts.autoReplace = true;
-    } else if (a === "--apply") {
-      opts.apply = true;
-    } else if (a === "--help" || a === "-h") {
-      printHelp();
-      process.exit(0);
-    } else {
-      throw new Error(`unknown flag: ${a}`);
-    }
-  }
-  return opts;
-}
-
-function printHelp(): void {
-  console.log(
-    [
-      "llm-ext-benchmark — score OpenRouter models on a TypeScript-AST classification task.",
-      "",
-      "Usage:",
-      "  llm-ext-benchmark [--include MODEL_ID]... [--dry-run] [--report PATH]",
-      "                   [--reasoning low|medium|high] [--seed N]",
-      "",
-      "Flags:",
-      "  --include ID      Add a model ID that bypasses the cost filter (repeatable).",
-      "                    Use this to benchmark the current production ensemble.",
-      "  --dry-run | -n    Print the resolved roster and exit; no API calls made.",
-      "  --report PATH     Write the markdown report to PATH (default: auto-timestamped).",
-      "  --json PATH       Write the machine-readable JSON sidecar to PATH.",
-      "                    Always also written to ~/.llm-externalizer/benchmark-results.json.",
-      "  --reasoning EFF   Pass reasoning.effort to each model. Default: model default.",
-      "  --seed N          Fixed seed (models that support it will respect it).",
-      "  --pick-top-n N    After scoring, sort survivors by meanF1 desc + total cost",
-      "                    asc and print the top N (typically 3) as a settings.yaml",
-      "                    ensemble block. Survivors must hit --min-f1 (default 0.95).",
-      "  --qualifying-top-n N",
-      "                    BEFORE benchmarking, quality-rank the auto-discovered",
-      "                    candidates by their OpenRouter codex + design-arena code",
-      "                    indexes and benchmark only the top N (credit-saver; caps the",
-      "                    paid run's INPUT, vs --pick-top-n which caps the OUTPUT).",
-      "                    --include baselines are never capped.",
-      "  --apply-profile P Mutate ~/.llm-externalizer/settings.yaml so profile P's",
-      "                    model/second_model/third_model are the top-N picks. Atomic",
-      "                    (tmp + rename); other profiles preserved verbatim. Requires",
-      "                    --pick-top-n.",
-      "  --from-cache      Skip benchmarking; pick straight from the cached results",
-      "                    at ~/.llm-externalizer/benchmark-results.json. Useful for",
-      "                    re-applying a fresh selection without burning more calls.",
-      "  --min-f1 F        Threshold a model must hit (default 0.95) to be eligible",
-      "                    for top-N. 0..1.",
-      "",
-      "Free-pool sweep (TRDD-f1510055):",
-      "  --bench-free-pool Auto-fill the candidate set from the active profile's",
-      "                    free_models list (or the bundled FREE_POOL_SEED if the",
-      "                    profile doesn't pin one). Equivalent to repeating --include",
-      "                    once per pool entry. Refuses to run if any pool id is not",
-      "                    a ':free' model — the flag is a cost-safety chokepoint.",
-      "                    Composes with --security-triage (fills --model instead).",
-      "",
-      "security_scan TRIAGE benchmark (separate task — verdict adjudication):",
-      "  --security-triage Run the security_scan triage benchmark instead of the",
-      "                    keyword task. Scores model(s) on the golden dataset via",
-      "                    the real judge pipeline and recommends the best",
-      "                    same-or-cheaper passer. Writes a report under",
-      "                    reports/security-triage-benchmark/.",
-      "  --model ID        Assess this specific model (repeatable). Without it the",
-      "                    triage benchmark auto-discovers same-or-cheaper candidates.",
-      "  --force           Ignore the per-model-per-day cache and re-run.",
-      "",
-      "search_existing_implementations benchmark (separate task — duplicate-impl match):",
-      "  --search-existing [ID...]",
-      "                    Run the search_existing_implementations benchmark instead",
-      "                    of the keyword task. Drives the REAL search-existing",
-      "                    pipeline over a golden fixture codebase and scores it",
-      "                    DETERMINISTICALLY (micro precision/recall/F1 over the known",
-      "                    duplicate locations — no LLM judge), recommending the best",
-      "                    same-or-cheaper passer. Pass explicit model id(s) after the",
-      "                    flag to assess exactly those; with none, auto-discovers the",
-      "                    same-or-cheaper candidate pool. Writes a report under",
-      "                    reports/search-existing-benchmark/. Composes with --force.",
-      "  Pass gate: micro-F1 >= 0.85 AND micro-recall >= 0.85 AND coverage >= 0.90.",
-      "  Never auto-selects a pricier model. ADVISORY only — never edits config.",
-      "",
-      "Cross-tool auto-replacement (TRDD-828238b5 A7 — the writer path):",
-      "  --auto-replace    For every benchmarked tool (security_scan,",
-      "                    search_existing_implementations), check its incumbent",
-      "                    model's health against the durable ledger and, when",
-      "                    degraded (or with --force), run that tool's benchmark to",
-      "                    surface the best same-or-cheaper replacement. On a",
-      "                    healthy ledger no benchmark runs. ADVISORY by default —",
-      "                    prints + writes a report under reports/auto-replace/,",
-      "                    changes NOTHING.",
-      "  --apply           With --auto-replace, ACTUALLY adopt each changed",
-      "                    recommendation by writing the per-tool `tool_models`",
-      "                    entry to ~/.llm-externalizer/settings.yaml (atomic). This",
-      "                    is the SOLE writer path — the MCP `check_tool_replacements`",
-      "                    tool is read-only and never writes. Requires",
-      "                    --auto-replace. Run `reset` afterwards to pick up the",
-      "                    change. --force re-runs benchmarks even on a healthy",
-      "                    ledger. Honors free_only (zero-spend on the free pool).",
-      "",
-      "Cross-tool requirements assessment (free — no LLM call, no API key):",
-      "  --check-health    Self-check the CONFIGURED model(s) of the active profile",
-      "                    for catalog presence / cost drift / requirements",
-      "                    regression. Free (no LLM call). Writes a report under",
-      "                    reports/model-health/. No benchmark is run.",
-      "  --assess-model ID Report which LLM tools model ID meets the per-tool",
-      "                    REQUIREMENTS for (cost/context/output/params), and which",
-      "                    of those tools ALSO need a benchmark pass before",
-      "                    assignment. Makes one public OpenRouter catalog fetch.",
-      "                    Does NOT run any benchmark (use --security-triage for",
-      "                    security_scan's benchmark gate).",
-      "  --new-arrivals    Autodiscover models that newly appeared in the catalog",
-      "                    since the last run, each assessed against every tool's",
-      "                    requirements. Free (no LLM call). Writes a report under",
-      "                    reports/model-arrivals/. Add --qualifying-only to list",
-      "                    only arrivals that fit >=1 tool.",
-      "  Pass gate: zero under-flags on critical (judge-manipulation + visible-taint)",
-      "  cases AND aggregate score >= 0.5. Never auto-selects a pricier model.",
-      "  Fail-safe (error/timeout) cases are excluded from scoring; a run with",
-      "  >15% errored calls is INCONCLUSIVE (degraded provider) — re-run later.",
-      "",
-      "Criteria applied to candidates (non-baseline):",
-      `  - category = ${DEFAULT_CRITERIA.category}`,
-      `  - context_length >= ${DEFAULT_CRITERIA.minContextTokens.toLocaleString()}`,
-      `  - max_completion_tokens >= ${DEFAULT_CRITERIA.minOutputTokens.toLocaleString()}`,
-      `  - structured_outputs or response_format supported`,
-      `  - reasoning or include_reasoning supported`,
-      `  - $/M in <  ${DEFAULT_CRITERIA.maxInputDollarsPerMillion.toFixed(2)}   (strictly less)`,
-      `  - $/M out <  ${DEFAULT_CRITERIA.maxOutputDollarsPerMillion.toFixed(2)}   (strictly less)`,
-      `  - :free tier excluded`,
-      "",
-      "API key resolution order: OPENROUTER_API_KEY env, then $CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY.",
-    ].join("\n"),
-  );
-}
+import { parseArgs, type CliOptions } from "./cli-args.js";
 
 function resolveApiKey(): string {
   const k = process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
@@ -414,8 +111,109 @@ function resolveMainRoot(): string {
   return resolveProjectMainRoot();
 }
 
-async function main(): Promise<number> {
+// ── The single machine-readable contract (P1 zero-token model pipeline) ──────
+//
+// EVERY path through this CLI ends with EXACTLY ONE line on stdout:
+//
+//     [OK] <summary>. Report: <abs path>          (exit 0)
+//     [FAILED] <reason>                           (exit non-zero)
+//
+// The caller (a slash command) prints that line verbatim and is done — it never
+// parses stderr, never picks a message template, never judges whether the run
+// worked. Before P1 the commands' prose asked the AGENT to do all three.
+
+interface CliResult {
+  ok: boolean;
+  /** One line, no trailing period — finalLine adds the punctuation. */
+  summary: string;
+  /** The artifact the user should read, when the phase wrote one. */
+  reportPath?: string;
+  /** Exit code override. Default: 0 when ok, 1 otherwise. */
+  code?: number;
+}
+
+function finalLine(r: CliResult): string {
+  const tag = r.ok ? "[OK]" : "[FAILED]";
+  return r.reportPath ? `${tag} ${r.summary}. Report: ${r.reportPath}` : `${tag} ${r.summary}`;
+}
+
+/**
+ * Does this invocation make a PAID OpenRouter call? Everything listed here is
+ * free: --dry-run stops before the first call; --check-health / --new-arrivals /
+ * --assess-model / --adopt hit only the PUBLIC catalog (no key); --from-cache
+ * reads the JSON sidecar. --auto-replace is deliberately NOT gated: on a healthy
+ * ledger it runs zero benchmarks, so demanding a key it may never use would be a
+ * false prerequisite (and when it DOES run one, resolveApiKey reports the miss).
+ */
+function needsApiKey(opts: CliOptions): boolean {
+  if (opts.dryRun || opts.fromCache || opts.checkHealth || opts.newArrivals) return false;
+  if (opts.assessModel !== null || opts.adoptModel !== null) return false;
+  if (opts.autoReplace) return false;
+  return true;
+}
+
+/**
+ * Flag-combination validation. Runs BEFORE preflight, because a usage error is true
+ * regardless of the environment: `--apply-free-pool P` with no `--bench-free-pool` is
+ * wrong whether or not an API key is present, and reporting "OPENROUTER_API_KEY not
+ * set" for it would send the caller off fixing the wrong thing.
+ *
+ * Every rule here is "flag X is meaningless without flag Y" — each would otherwise be
+ * a SILENT no-op, which is the failure class we refuse (fail fast, never quietly do
+ * nothing).
+ */
+function validateCombinations(opts: CliOptions): void {
+  if (opts.apply && !opts.autoReplace) {
+    throw new Error("--apply requires --auto-replace");
+  }
+  if (opts.applyProfile !== null && opts.pickTopN === null) {
+    throw new Error("--apply-profile requires --pick-top-n");
+  }
+  if (opts.fromCache && opts.pickTopN === null) {
+    throw new Error("--from-cache requires --pick-top-n (no point loading the cache otherwise).");
+  }
+  if (opts.applyFreePool !== null && !opts.benchFreePool) {
+    // The pool it writes is "the ':free' models that PASSED" — which only exists when
+    // the free pool was the thing benchmarked.
+    throw new Error("--apply-free-pool requires --bench-free-pool");
+  }
+  if (opts.adoptModel === null && (opts.adoptInto !== null || opts.adoptProfile !== null)) {
+    throw new Error("--adopt-into / --adopt-profile require --adopt <MODEL_ID>");
+  }
+  if (opts.adoptModel !== null && opts.adoptInto === null) {
+    throw new Error(`--adopt requires --adopt-into <${ENSEMBLE_SLOTS.join("|")}|tool:NAME>`);
+  }
+}
+
+/**
+ * Prerequisite self-check. The CLI decides what it needs and refuses itself —
+ * the slash commands used to make the AGENT probe $OPENROUTER_API_KEY and branch
+ * on the result, which is judgment (and tokens) spent re-deriving something the
+ * process can check in a microsecond.
+ */
+function preflight(opts: CliOptions): void {
+  if (!needsApiKey(opts)) return;
+  if (!process.env.OPENROUTER_API_KEY && !process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY) {
+    throw new Error(
+      "OPENROUTER_API_KEY not set — export it in your shell, or set the plugin option " +
+        "'openrouter_api_key' via /plugin configure llm-externalizer",
+    );
+  }
+}
+
+/** Well-known JSON sidecar every run writes; --from-cache and --pick-top-n read it. */
+function benchmarkCachePath(): string {
+  // getConfigDir() — NOT homedir() — so LLM_EXT_CONFIG_DIR is honored. Identical to
+  // ~/.llm-externalizer in production; in tests it is what keeps a CLI run that
+  // WRITES settings from ever touching the developer's real config.
+  return join(getConfigDir(), "benchmark-results.json");
+}
+
+async function main(): Promise<CliResult> {
   const opts = parseArgs(process.argv);
+  // Usage errors first, environment second — see validateCombinations.
+  validateCombinations(opts);
+  preflight(opts);
 
   // Airtight free_only cost-safety (TRDD-97ef8b63). The benchmark CLI runs as a
   // SEPARATE process from the MCP server, so it publishes the active profile's
@@ -507,19 +305,18 @@ async function main(): Promise<number> {
     return runSearchExistingPhase(opts);
   }
 
-  // --apply is meaningless on its own — it is the writer toggle for the
-  // --auto-replace planner. Gate it exactly like --apply-profile gates on
-  // --pick-top-n: fail fast rather than silently no-op'ing.
-  if (opts.apply && !opts.autoReplace) {
-    throw new Error("--apply requires --auto-replace");
-  }
-
   // --auto-replace routes to the cross-tool auto-replacement planner — for every
   // benchmarked tool it checks the incumbent's ledger health and (when degraded
   // or --force) runs that tool's benchmark to recommend the best same-or-cheaper
   // replacement. ADVISORY unless --apply is also passed (the sole writer path).
   if (opts.autoReplace) {
     return runAutoReplacePhase(opts);
+  }
+
+  // --adopt routes to the scripted adoption writer (the new-arrival path) — free
+  // (a public catalog fetch to gate the id against per-tool requirements).
+  if (opts.adoptModel !== null) {
+    return runAdoptPhase(opts);
   }
 
   // --assess-model routes to the cross-tool requirements assessment — free (no
@@ -540,24 +337,78 @@ async function main(): Promise<number> {
     return runNewArrivalsPhase(opts);
   }
 
-  if (opts.applyProfile !== null && opts.pickTopN === null) {
-    throw new Error("--apply-profile requires --pick-top-n");
-  }
-
-  // --from-cache: skip the benchmark entirely, pick straight from the
-  // most recent JSON sidecar. The default cache lives at
-  // ~/.llm-externalizer/benchmark-results.json (always written by a
-  // fresh run, see step 9 below).
+  // --from-cache: skip the benchmark entirely, pick straight from the most recent
+  // JSON sidecar (always written by a fresh run — see runKeywordSweep).
   if (opts.fromCache) {
-    const cachePath = join(homedir(), ".llm-externalizer", "benchmark-results.json");
+    const cachePath = benchmarkCachePath();
     const cache = loadCachedReport(cachePath);
     console.error(`[benchmark] --from-cache: using ${cachePath} (${cache.results.length} models, run at ${cache.timestamp}).`);
-    if (opts.pickTopN === null) {
-      throw new Error("--from-cache requires --pick-top-n (no point loading the cache otherwise).");
-    }
     return runPickPhase(cache.results, opts);
   }
 
+  const sweep = await runKeywordSweep(opts);
+  if (sweep.dryRun) {
+    return {
+      ok: true,
+      summary: `dry-run — ${sweep.candidates} candidate(s) + ${sweep.baselines} baseline(s) would run; no API call made, $0 spent`,
+    };
+  }
+
+  const notes: string[] = [];
+  if (opts.applyFreePool !== null) {
+    // Scripted free-pool maintenance: the pool BECOMES the set of ':free' models
+    // that actually passed, best first. Only ':free' ids are eligible — a $0
+    // open-beta model with no ':free' suffix is benchmarkable but cannot be pinned
+    // into free_models (config.ts rejects it under free_only), so it is filtered
+    // out here rather than blowing up the writer.
+    const passing = sweep.results
+      .filter((r) => r.ok && r.pass === true && r.schemaCompliant !== false && r.modelId.endsWith(":free"))
+      .sort((a, b) => (b.meanF1 ?? 0) - (a.meanF1 ?? 0) || a.latencyMs - b.latencyMs)
+      .map((r) => r.modelId);
+    if (passing.length === 0) {
+      return {
+        ok: false,
+        code: 2,
+        summary: "--apply-free-pool: no ':free' model passed the sweep — free_models left unchanged",
+        reportPath: sweep.reportPath,
+      };
+    }
+    const w = applyFreePoolToSettings(getSettingsPath(), opts.applyFreePool, passing);
+    console.error(
+      `[benchmark] free_models(${w.profileName}): ${w.oldPool.length} → ${w.newPool.length} — ${w.newPool.join(", ")}`,
+    );
+    notes.push(`free_models(${w.profileName})=${w.newPool.length}`);
+  }
+
+  if (opts.pickTopN !== null) {
+    return runPickPhase(sweep.results, opts, sweep.reportPath, notes);
+  }
+  return {
+    ok: true,
+    summary: [`${sweep.passers}/${sweep.total} model(s) passed`, ...notes].join(", "),
+    reportPath: sweep.reportPath,
+  };
+}
+
+/** What a keyword sweep produced. `dryRun` short-circuits before any paid call. */
+interface SweepOutcome {
+  dryRun: boolean;
+  candidates: number;
+  baselines: number;
+  results: CachedResult[];
+  reportPath: string;
+  passers: number;
+  total: number;
+}
+
+/**
+ * The keyword-classification sweep: discover → rank → cap → run → score → report →
+ * JSON cache. Extracted from main() so the ENSEMBLE-ROTATION path can re-use it
+ * (runAutoReplacePhase --apply): a rotation must re-benchmark before it re-picks,
+ * and re-implementing the sweep there would be a second source of truth for the
+ * roster rules.
+ */
+async function runKeywordSweep(opts: CliOptions): Promise<SweepOutcome> {
   const fixturesDir = resolveFixturesDir();
   const truth = buildGroundTruth(fixturesDir, BENCHMARK_KEYWORDS);
 
@@ -607,7 +458,15 @@ async function main(): Promise<number> {
 
   if (opts.dryRun) {
     console.error("[benchmark] --dry-run: roster only, exiting before any API call.");
-    return 0;
+    return {
+      dryRun: true,
+      candidates: candidates.length,
+      baselines: baselines.length,
+      results: [],
+      reportPath: "",
+      passers: 0,
+      total: 0,
+    };
   }
 
   const apiKey = resolveApiKey();
@@ -666,7 +525,7 @@ async function main(): Promise<number> {
   // without needing to be told where. --json PATH adds a second copy at
   // the user-chosen location.
   const json = renderJson(reportInput);
-  const cacheJsonPath = join(homedir(), ".llm-externalizer", "benchmark-results.json");
+  const cacheJsonPath = benchmarkCachePath();
   mkdirSync(dirname(cacheJsonPath), { recursive: true });
   writeFileSync(cacheJsonPath, json, "utf-8");
   console.error(`[benchmark] JSON cache: ${cacheJsonPath}`);
@@ -680,14 +539,19 @@ async function main(): Promise<number> {
   const passers = [...results.values()].filter((r) => r.score?.pass).length;
   console.error(`[benchmark] ${passers}/${results.size} models passed.`);
 
-  // --pick-top-n (with optional --apply-profile) — re-uses the cached
-  // JSON we just wrote. Parse it instead of mirroring report.ts's
-  // renderJson shape inline; one source of truth.
-  if (opts.pickTopN !== null) {
-    const cache = loadCachedReport(cacheJsonPath);
-    return runPickPhase(cache.results, opts);
-  }
-  return 0;
+  // Hand back the results by re-parsing the sidecar we just wrote, rather than
+  // mirroring report.ts's renderJson shape inline — one source of truth for the
+  // CachedResult shape that --pick-top-n / --from-cache also consume.
+  const parsed = JSON.parse(json) as CachedReport;
+  return {
+    dryRun: false,
+    candidates: candidates.length,
+    baselines: baselines.length,
+    results: parsed.results,
+    reportPath,
+    passers,
+    total: results.size,
+  };
 }
 
 /**
@@ -695,7 +559,7 @@ async function main(): Promise<number> {
  * dataset and recommend the best same-or-cheaper passer. Writes its own JSON +
  * markdown report under reports/security-triage-benchmark/.
  */
-async function runSecurityTriagePhase(opts: CliOptions): Promise<number> {
+async function runSecurityTriagePhase(opts: CliOptions): Promise<CliResult> {
   console.error("[triage] security_scan triage model benchmark");
   const result = await runSecurityTriageBenchmark({
     models: opts.triageModels.length > 0 ? opts.triageModels : undefined,
@@ -704,13 +568,15 @@ async function runSecurityTriagePhase(opts: CliOptions): Promise<number> {
   });
   console.error("");
   console.error(`[triage] ${result.summaryLine}`);
-  console.error(`[triage] recommended: ${result.recommendedModelId} (changed=${result.changed})`);
   console.error(`[triage] spend: $${result.costUsd.toFixed(6)}`);
-  console.error(`[triage] report: ${result.mdReportPath}`);
   console.error(`[triage] json:   ${result.jsonReportPath}`);
   // stdout carries the machine-grep-able recommendation line.
   process.stdout.write(`recommended_model=${result.recommendedModelId}\n`);
-  return 0;
+  return {
+    ok: true,
+    summary: `triage benchmark done — recommended ${result.recommendedModelId} (changed=${result.changed}), spend $${result.costUsd.toFixed(6)}`,
+    reportPath: result.mdReportPath,
+  };
 }
 
 /**
@@ -720,7 +586,7 @@ async function runSecurityTriagePhase(opts: CliOptions): Promise<number> {
  * LLM judge). Writes its own JSON + markdown report under
  * reports/search-existing-benchmark/. ADVISORY only — never edits config.
  */
-async function runSearchExistingPhase(opts: CliOptions): Promise<number> {
+async function runSearchExistingPhase(opts: CliOptions): Promise<CliResult> {
   console.error("[search-existing] search_existing_implementations model benchmark");
   const result = await runSearchExistingBenchmark({
     models: opts.searchExistingModels.length > 0 ? opts.searchExistingModels : undefined,
@@ -729,13 +595,15 @@ async function runSearchExistingPhase(opts: CliOptions): Promise<number> {
   });
   console.error("");
   console.error(`[search-existing] ${result.summaryLine}`);
-  console.error(`[search-existing] recommended: ${result.recommendedModelId} (changed=${result.changed})`);
   console.error(`[search-existing] spend: $${result.costUsd.toFixed(6)}`);
-  console.error(`[search-existing] report: ${result.reportPath}`);
   console.error(`[search-existing] json:   ${result.jsonReportPath}`);
   // stdout carries the machine-grep-able recommendation line.
   process.stdout.write(`recommended_model=${result.recommendedModelId}\n`);
-  return 0;
+  return {
+    ok: true,
+    summary: `search-existing benchmark done — recommended ${result.recommendedModelId} (changed=${result.changed}), spend $${result.costUsd.toFixed(6)}`,
+    reportPath: result.reportPath,
+  };
 }
 
 /**
@@ -752,7 +620,7 @@ async function runSearchExistingPhase(opts: CliOptions): Promise<number> {
  * ~/.llm-externalizer/settings.yaml via applyToolModelToSettings (the CLI/cron-
  * only writer behind the read-only-MCP guardrail). Exit 3 on any write failure.
  */
-async function runAutoReplacePhase(opts: CliOptions): Promise<number> {
+async function runAutoReplacePhase(opts: CliOptions): Promise<CliResult> {
   console.error("[auto-replace] cross-tool auto-replacement planner");
   const { findings, reportMarkdown } = await planToolReplacements({
     candidateModels: opts.searchExistingModels.length > 0 ? opts.searchExistingModels : undefined,
@@ -760,10 +628,18 @@ async function runAutoReplacePhase(opts: CliOptions): Promise<number> {
     onProgress: (m) => console.error(`[auto-replace] ${m}`),
   });
 
+  // ENSEMBLE half (P1). planToolReplacements only covers tools that own a per-tool
+  // selector benchmark; the ensemble slots serve every OTHER tool and had no
+  // automated verdict at all — the agent was asked to eyeball "is this 404
+  // persistent?". planEnsembleRotation answers that with the ledger's code
+  // threshold (assessModelPersistence), so no judgment happens up here.
+  const ensemble = planEnsembleRotation();
+  const fullReport = reportMarkdown + "\n" + renderEnsembleRotationSection(ensemble);
+
   // Persist the advisory report (always — same posture as every other phase).
   const reportPath = join(resolveProjectMainRoot(), "reports", "auto-replace", `${compactStamp()}-auto-replace.md`);
   mkdirSync(dirname(reportPath), { recursive: true });
-  writeFileSync(reportPath, reportMarkdown, "utf-8");
+  writeFileSync(reportPath, fullReport, "utf-8");
 
   console.error("");
   for (const f of findings) {
@@ -774,13 +650,23 @@ async function runAutoReplacePhase(opts: CliOptions): Promise<number> {
         : `keep ${f.incumbentModelId}`;
     console.error(`[auto-replace] ${f.tool} (${f.benchmark}): ${verdict}`);
   }
+  for (const s of ensemble.slots) {
+    console.error(
+      `[auto-replace] ensemble.${s.slot} (${s.modelId}): ${s.verdict.persistentlyBroken ? "BROKEN" : "healthy"} — ${s.verdict.reason}`,
+    );
+  }
   const recommended = findings.filter((f) => f.changed);
   console.error(
     `[auto-replace] ${findings.length} tool(s) checked, ` +
       `${findings.filter((f) => f.degraded).length} degraded, ` +
-      `${recommended.length} replacement(s) recommended.`,
+      `${recommended.length} replacement(s) recommended; ` +
+      `${ensemble.brokenSlots.length}/${ensemble.slots.length} ensemble slot(s) persistently broken.`,
   );
   console.error(`[auto-replace] report: ${reportPath}`);
+
+  const scope =
+    `${findings.length} tool(s) checked, ${recommended.length} replacement(s) recommended; ` +
+    `${ensemble.brokenSlots.length}/${ensemble.slots.length} ensemble slot(s) broken`;
 
   if (!opts.apply) {
     // ADVISORY default — surfaced for the operator to adopt deliberately.
@@ -788,30 +674,29 @@ async function runAutoReplacePhase(opts: CliOptions): Promise<number> {
       "[auto-replace] ADVISORY only — nothing written. Re-run with --apply to adopt the recommendation(s).",
     );
     process.stdout.write(`recommended_replacements=${recommended.length}\n`);
-    return 0;
+    return { ok: true, summary: `advisory — ${scope}; nothing written`, reportPath };
   }
 
   // --apply: adopt every changed recommendation. The incumbent profile name is
   // the active profile (the planner resolved incumbents from it). Resolve it
   // here so the writer targets the same profile the health verdict came from.
-  const settingsPath = join(homedir(), ".llm-externalizer", "settings.yaml");
+  const settingsPath = getSettingsPath();
   let profileName: string;
   try {
     const settings = loadSettings();
     if (!settings || !settings.active) {
       throw new Error(
-        "--apply needs an active profile in ~/.llm-externalizer/settings.yaml, but none is configured.",
+        `--apply needs an active profile in ${settingsPath}, but none is configured.`,
       );
     }
     profileName = settings.active;
   } catch (err) {
-    console.error(`[auto-replace] --apply failed: ${(err as Error).message}`);
-    return 3;
+    return { ok: false, code: 3, summary: `--apply failed: ${(err as Error).message}`, reportPath };
   }
 
-  if (recommended.length === 0) {
+  if (recommended.length === 0 && !ensemble.rotationNeeded) {
     console.error("[auto-replace] --apply: no changed recommendation to adopt — nothing written.");
-    return 0;
+    return { ok: true, summary: `no changed recommendation to adopt — ${scope}; nothing written`, reportPath };
   }
 
   console.error("");
@@ -823,13 +708,155 @@ async function runAutoReplacePhase(opts: CliOptions): Promise<number> {
           `${r.oldModelId || "—"}  →  ${r.newModelId}`,
       );
     } catch (err) {
-      console.error(`[auto-replace] --apply failed on ${f.tool}: ${(err as Error).message}`);
-      return 3;
+      return { ok: false, code: 3, summary: `--apply failed on ${f.tool}: ${(err as Error).message}`, reportPath };
     }
   }
-  console.error("[auto-replace] Run the `reset` MCP tool or restart Claude Code to pick up the new tool model(s).");
+
+  // Ensemble rotation. Gated on the CODE threshold — a healthy ensemble never
+  // triggers a (paid) sweep, so `--auto-replace --apply` on a healthy machine is
+  // still free. When it DOES fire we must re-benchmark before re-picking: picking
+  // from a stale cache would re-select the very model the ledger just condemned.
+  let rotated = 0;
+  if (ensemble.rotationNeeded) {
+    // Re-pick exactly as many models as the profile ALREADY runs, not a hard-coded 3:
+    // applyPicksToSettings derives `mode` from the pick count, so re-picking 3 on a
+    // single-model `remote` profile would silently promote it to `remote-ensemble` —
+    // a config change the user never asked for. slots.length is ≥1 here (rotation
+    // needs a broken slot), and an explicit --pick-top-n still wins.
+    const topN = opts.pickTopN ?? ensemble.slots.length;
+    console.error(
+      `[auto-replace] ensemble rotation: ${ensemble.brokenSlots.map((s) => `${s.slot}=${s.modelId}`).join(", ")} — ` +
+        `running a fresh keyword sweep, then re-picking the top ${topN} (the profile's current slot count).`,
+    );
+    // Reuse the ONE sweep implementation. --bench-free-pool parked the resolved
+    // free pool in searchExistingModels for this phase (see main), so forward it
+    // as --include baselines — under free_only those are the only models the
+    // runner will actually bill (it skips every non-free id).
+    const sweepOpts: CliOptions = {
+      ...opts,
+      includeIds: [...opts.includeIds, ...opts.searchExistingModels],
+      dryRun: false,
+      fromCache: false,
+      pickTopN: topN,
+    };
+    const sweep = await runKeywordSweep(sweepOpts);
+    let picks: PickedModel[];
+    try {
+      picks = pickTopN(sweep.results, { topN, minMeanF1: opts.minMeanF1, requireSchema: true });
+    } catch (err) {
+      // No silent fallback: leaving a broken model in place and SAYING so beats
+      // quietly re-applying a stale/degraded ensemble.
+      return {
+        ok: false,
+        code: 2,
+        summary: `ensemble rotation failed — ${(err as Error).message} (settings unchanged)`,
+        reportPath: sweep.reportPath || reportPath,
+      };
+    }
+    try {
+      const r = applyPicksToSettings(settingsPath, profileName, picks);
+      rotated = picks.length;
+      console.error(
+        `[auto-replace] rotated ${profileName}: ${r.oldEnsemble.model} → ${r.newEnsemble.model}` +
+          (r.newEnsemble.second_model ? `, ${r.oldEnsemble.second_model ?? "—"} → ${r.newEnsemble.second_model}` : "") +
+          (r.newEnsemble.third_model ? `, ${r.oldEnsemble.third_model ?? "—"} → ${r.newEnsemble.third_model}` : ""),
+      );
+    } catch (err) {
+      return {
+        ok: false,
+        code: 3,
+        summary: `ensemble rotation write failed: ${(err as Error).message}`,
+        reportPath: sweep.reportPath || reportPath,
+      };
+    }
+  }
+
+  console.error("[auto-replace] Run the `reset` MCP tool or restart Claude Code to pick up the new model(s).");
   process.stdout.write(`applied_replacements=${recommended.length}\n`);
-  return 0;
+  process.stdout.write(`rotated_ensemble_slots=${rotated}\n`);
+  return {
+    ok: true,
+    summary: `applied ${recommended.length} tool replacement(s) and rotated ${rotated} ensemble slot(s) on '${profileName}' — run \`reset\` to reload`,
+    reportPath,
+  };
+}
+
+/**
+ * --adopt: the SCRIPTED new-arrival adoption path (P1). `--new-arrivals` used to
+ * end with "if it wins, edit ~/.llm-externalizer/settings.yaml by hand" — a manual
+ * step the agent had to narrate every single time. Now: gate the id on the per-tool
+ * REQUIREMENTS registry (a free public catalog fetch — an id that fits nothing is
+ * refused, exit 2), then write it atomically into the requested slot / tool_models
+ * entry. CLI-only writer; the MCP surface stays read-only.
+ */
+async function runAdoptPhase(opts: CliOptions): Promise<CliResult> {
+  const modelId = opts.adoptModel as string;
+  const target = opts.adoptInto as string; // validateCombinations guarantees both are set
+  const settingsPath = getSettingsPath();
+  let profileName = opts.adoptProfile;
+  if (profileName === null) {
+    const settings = loadSettings();
+    if (!settings || !settings.active) {
+      throw new Error(
+        `--adopt needs a profile: none given via --adopt-profile and no active profile in ${settingsPath}`,
+      );
+    }
+    profileName = settings.active;
+  }
+
+  console.error(`[adopt] assessing ${modelId} against every LLM tool's requirements …`);
+  const assessment = await assessModelById(modelId); // throws when the id is not in the catalog
+
+  if (target.startsWith("tool:")) {
+    const tool = target.slice("tool:".length);
+    const fit = assessment.tools.find((t) => t.tool === tool);
+    if (!fit) {
+      throw new Error(
+        `--adopt-into tool:${tool} — '${tool}' is not a registered LLM-using tool. ` +
+          `Registered: ${assessment.tools.map((t) => t.tool).join(", ")}.`,
+      );
+    }
+    if (!fit.meetsRequirements) {
+      return {
+        ok: false,
+        code: 2,
+        summary: `${modelId} does not meet ${tool}'s requirements (${fit.disqualifyReason ?? "unspecified"}) — settings unchanged`,
+      };
+    }
+    const r = applyToolModelToSettings(settingsPath, profileName, tool, modelId);
+    process.stdout.write(`adopted_model=${modelId}\n`);
+    return {
+      ok: true,
+      summary:
+        `adopted ${modelId} into ${profileName}::tool_models.${tool} (was ${r.oldModelId || "unset"})` +
+        (fit.benchmark ? `; NOTE ${tool} also has a '${fit.benchmark}' benchmark gate` : "") +
+        " — run `reset` to reload",
+    };
+  }
+
+  if (!(ENSEMBLE_SLOTS as readonly string[]).includes(target)) {
+    throw new Error(
+      `--adopt-into must be one of ${ENSEMBLE_SLOTS.join(", ")} or tool:<name>, got '${target}'`,
+    );
+  }
+  // An ensemble slot serves EVERY tool that has no per-tool override, so the bar is
+  // "fits at least one tool's requirements" — a model that fits nothing would break
+  // every call routed to it, and that is exactly the write we refuse.
+  if (assessment.qualifiedCount < 1) {
+    return {
+      ok: false,
+      code: 2,
+      summary: `${modelId} meets no LLM tool's requirements (0/${assessment.totalTools}) — settings unchanged`,
+    };
+  }
+  const r = applyEnsembleSlotToSettings(settingsPath, profileName, target as EnsembleSlot, modelId);
+  process.stdout.write(`adopted_model=${modelId}\n`);
+  return {
+    ok: true,
+    summary:
+      `adopted ${modelId} into ${profileName}::${r.slot} (was ${r.oldModelId || "unset"}); ` +
+      `fits ${assessment.qualifiedCount}/${assessment.totalTools} tool(s) — run \`reset\` to reload`,
+  };
 }
 
 /**
@@ -838,13 +865,16 @@ async function runAutoReplacePhase(opts: CliOptions): Promise<number> {
  * public OpenRouter catalog fetch (no API key needed). Does NOT run any
  * benchmark (that's each tool's own gate; for security_scan use --security-triage).
  */
-async function runAssessModelPhase(modelId: string): Promise<number> {
+async function runAssessModelPhase(modelId: string): Promise<CliResult> {
   console.error(
     `[assess] assessing ${modelId} against every LLM tool's requirements …`,
   );
   const assessment = await assessModelById(modelId);
   process.stdout.write(renderAssessmentText(assessment) + "\n");
-  return 0;
+  return {
+    ok: true,
+    summary: `${modelId} meets the requirements of ${assessment.qualifiedCount}/${assessment.totalTools} LLM tool(s)`,
+  };
 }
 
 /**
@@ -854,12 +884,26 @@ async function runAssessModelPhase(modelId: string): Promise<number> {
  * baseline. Writes a report under reports/model-health/ and prints a summary.
  * Exit 1 when any configured model is critical (deprecated/removed).
  */
-async function runCheckHealthPhase(): Promise<number> {
+async function runCheckHealthPhase(): Promise<CliResult> {
   console.error(`[check-health] checking the active profile's configured model(s) …`);
   const { report, reportPath } = await runCheckModelHealth();
-  process.stdout.write(renderModelHealthText(report) + "\n");
-  process.stdout.write(`\nReport: ${reportPath}\n`);
-  return report.summary.critical > 0 ? 1 : 0;
+  console.error(renderModelHealthText(report));
+  const s = report.summary;
+  // A CRITICAL model (deprecated / removed from the catalog) is a FAILURE of the
+  // configuration, not of this command — but it must exit non-zero so a cron or a
+  // caller can act on it without reading the report.
+  return s.critical > 0
+    ? {
+        ok: false,
+        code: 1,
+        summary: `${s.critical} configured model(s) are CRITICAL (deprecated/removed), ${s.warn} warn, ${s.ok} ok`,
+        reportPath,
+      }
+    : {
+        ok: true,
+        summary: `configured models: ${s.ok} ok, ${s.warn} warn, 0 critical`,
+        reportPath,
+      };
 }
 
 /**
@@ -869,26 +913,37 @@ async function runCheckHealthPhase(): Promise<number> {
  * every per-tool requirements gate. Writes a report under reports/model-arrivals/
  * and prints a summary. Report-only — always exit 0 (informational).
  */
-async function runNewArrivalsPhase(opts: CliOptions): Promise<number> {
+async function runNewArrivalsPhase(opts: CliOptions): Promise<CliResult> {
   console.error(`[new-arrivals] diffing the live catalog against the last snapshot …`);
   const { report, reportPath } = await runDiscoverNewArrivals({
     qualifyingOnly: opts.qualifyingOnly,
   });
-  process.stdout.write(renderNewArrivalsText(report) + "\n");
-  process.stdout.write(`\nReport: ${reportPath}\n`);
-  return 0;
+  console.error(renderNewArrivalsText(report));
+  return {
+    ok: true,
+    summary: `${report.summary.total} new arrival(s), ${report.summary.qualifying} qualify for ≥1 tool` +
+      (report.summary.qualifying > 0
+        ? " — adopt one with `--adopt <ID> --adopt-into <slot|tool:NAME>`"
+        : ""),
+    reportPath,
+  };
 }
 
 /** Shared by --from-cache and the post-benchmark --pick-top-n branch. */
-function runPickPhase(results: readonly CachedResult[], opts: CliOptions): number {
+function runPickPhase(
+  results: readonly CachedResult[],
+  opts: CliOptions,
+  reportPath?: string,
+  notes: string[] = [],
+): CliResult {
   const topN = opts.pickTopN;
-  if (topN === null) return 0;
+  if (topN === null) return { ok: true, summary: "nothing to pick", reportPath };
   let picks: PickedModel[];
   try {
     picks = pickTopN(results, { topN, minMeanF1: opts.minMeanF1, requireSchema: true });
   } catch (err) {
-    console.error(`[benchmark] pick failed: ${(err as Error).message}`);
-    return 2;
+    // No silent fallback: surface the shortage and leave the config alone.
+    return { ok: false, code: 2, summary: `pick failed: ${(err as Error).message}`, reportPath };
   }
   console.error(`[benchmark] Top ${topN} survivors (sorted by meanF1 desc, then cost asc):`);
   for (const p of picks) {
@@ -904,8 +959,9 @@ function runPickPhase(results: readonly CachedResult[], opts: CliOptions): numbe
   console.error("# settings.yaml block (paste under `profiles:`):");
   process.stdout.write(block);
 
+  const ids = picks.map((p) => p.modelId).join(", ");
   if (opts.applyProfile !== null) {
-    const settingsPath = join(homedir(), ".llm-externalizer", "settings.yaml");
+    const settingsPath = getSettingsPath();
     try {
       const result = applyPicksToSettings(settingsPath, opts.applyProfile, picks);
       console.error("");
@@ -919,11 +975,19 @@ function runPickPhase(results: readonly CachedResult[], opts: CliOptions): numbe
       }
       console.error("[benchmark] Run the `reset` MCP tool or restart Claude Code to pick up the new ensemble.");
     } catch (err) {
-      console.error(`[benchmark] --apply-profile failed: ${(err as Error).message}`);
-      return 3;
+      return { ok: false, code: 3, summary: `--apply-profile failed: ${(err as Error).message}`, reportPath };
     }
+    return {
+      ok: true,
+      summary: [`applied top-${topN} to '${opts.applyProfile}': ${ids} — run \`reset\` to reload`, ...notes].join(", "),
+      reportPath,
+    };
   }
-  return 0;
+  return {
+    ok: true,
+    summary: [`top-${topN} picks: ${ids} (not applied — pass --apply-profile P to write them)`, ...notes].join(", "),
+    reportPath,
+  };
 }
 
 function buildReportPath(): string {
@@ -940,9 +1004,27 @@ function buildReportPath(): string {
 
 // Install a usage-history context so every per-model OpenRouter call made by
 // runBenchmarkOnModel is logged under `cli:benchmark` with a shared op-id.
+//
+// This is also where the ONE machine-readable final line is emitted and where the
+// exit code is set. Both were broken before P1: main()'s resolved code was simply
+// DISCARDED (only an exception exited non-zero), so `--pick-top-n` finding too few
+// survivors, or an --apply-profile write failing, still exited 0 — a caller could
+// not tell success from failure without parsing stderr prose, which is precisely
+// why the slash commands asked an AGENT to read stderr and pick a message.
+//
+// process.exitCode (not process.exit) so buffered stdout is flushed first.
 withUsageContext({ tool: "cli:benchmark", params: "" }, () =>
-  main().catch((err) => {
-    console.error("[benchmark] fatal:", err instanceof Error ? err.stack : String(err));
-    process.exit(1);
-  }),
+  main().then(
+    (result) => {
+      process.stdout.write(finalLine(result) + "\n");
+      process.exitCode = result.code ?? (result.ok ? 0 : 1);
+    },
+    (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      // The stack is diagnostic noise for the caller; keep it on stderr only.
+      if (err instanceof Error && err.stack) console.error("[benchmark] fatal:", err.stack);
+      process.stdout.write(finalLine({ ok: false, summary: msg }) + "\n");
+      process.exitCode = 1;
+    },
+  ),
 );

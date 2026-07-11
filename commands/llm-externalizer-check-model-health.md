@@ -5,83 +5,45 @@ description: |-
   only a public model-catalog fetch (no API key). For the main/second/third model
   and every tool_models entry it reports PRESENCE (still in the OpenRouter catalog
   vs deprecated/removed), COST DRIFT (price moved vs a seeded baseline), and
-  REQUIREMENTS REGRESSION (still meets every tool it serves). Advisory only —
-  never changes settings. Trigger with "check model health", "is my model
+  REQUIREMENTS REGRESSION (still meets every tool it serves). Exits non-zero when
+  any configured model is CRITICAL. Trigger with "check model health", "is my model
   outdated", "did the price change", "are my configured models still valid".
 allowed-tools:
-  - mcp__llm-externalizer__check_model_health
+  - Bash
 argument-hint: ""
 effort: low
 ---
 
-# check_model_health — configured-model self-check
+Run the command below. Print its final line. Nothing else.
 
-This command answers the questions you would otherwise check by hand for the
-model(s) your active profile is configured to use: **is each still available,
-has its price moved, and does it still meet the requirements of the tools it
-serves?** ([[TRDD-828238b5]])
+## Run
 
-It is **free** — no LLM call, no token cost; it makes a single public OpenRouter
-model-catalog fetch (no API key) and diffs it against a seeded baseline. It is
-**advisory only**: it writes a report and prints a summary, and NEVER changes
-your settings (the MCP server is read-only by design — model/profile changes are
-user-only, see `/llm-externalizer:llm-externalizer-change-model`).
-
-## What it checks (for main / second / third model + every `tool_models` entry)
-
-1. **Presence** — is the model id still in the OpenRouter catalog? An absent id
-   is **CRITICAL**: it has been deprecated/removed and calls will fail.
-2. **Cost drift** — compares the live price against a baseline snapshot at
-   `~/.llm-externalizer/model-baseline.json`. The first run seeds the baseline
-   (no drift reported); later runs flag a meaningful price increase as **WARN**
-   (and note decreases). The baseline refreshes on every run.
-3. **Requirements regression** — re-runs each served tool's hard-requirements
-   gate (`qualifyModelForTool`). A model that no longer meets a served tool's
-   requirements is **WARN**.
-
-## Inputs
-
-None — it always inspects the *active* profile from `~/.llm-externalizer/settings.yaml`.
-
-## Output
-
-A human-readable summary plus a Markdown report path under
-`<project>/reports/model-health/`:
-
-```
-Model health — profile 'remote-ensemble-geminigrok' — 2026-05-25T03:10:00+0200
-3 configured model(s): 2 ok, 1 warn, 0 critical
-
-✓ google/gemini-2.5-flash  [model]
-    - healthy
-! x-ai/grok-4.1-fast  [second_model]
-    - input price up 33.3% ($0.300→$0.400/M)
-✓ qwen/qwen3.6-plus  [third_model]
-    - healthy
-
-Report: /path/to/project/reports/model-health/20260525_031000+0200-model-health-<profile>.md
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/llm-ext-benchmark" --check-health
 ```
 
-## How to act on the result
+No arguments, ever. Free: one public catalog fetch, no API key, no LLM call, $0.
+It always inspects the *active* profile.
 
-- **CRITICAL** (removed/deprecated) — pick a replacement and update
-  `~/.llm-externalizer/settings.yaml` by hand (then `reset`). To vet candidates,
-  use `/llm-externalizer:llm-externalizer-assess-model` (requirements) and, for
-  benchmarked tools, the tool's benchmark.
-- **WARN — cost drift** — decide whether the new price is acceptable; switch
-  model in settings.yaml if not.
-- **WARN — requirements regression** — the model lost a capability a served tool
-  needs (e.g. structured output); replace it for that tool via
-  `tool_models.<tool>`.
+## Report
 
-The standing rule holds: model changes are user-only and never auto-applied.
-
-## CLI equivalent
+The CLI's last stdout line is exactly one of:
 
 ```
-llm-ext-benchmark --check-health
+[OK] configured models: <N> ok, <M> warn, 0 critical. Report: <absolute path>
+[FAILED] <N> configured model(s) are CRITICAL (deprecated/removed), … . Report: <absolute path>
 ```
 
-## Environment
+Print that line **verbatim** and stop. Do not read the report, do not restate the
+per-model detail, and do NOT tell the user to hand-edit `settings.yaml`.
 
-No API key required — the OpenRouter model catalog is public.
+A `[FAILED]` here is a finding, not a broken command — the exit code is how a cron
+notices a dead model. The fix is scripted:
+
+| Finding | The one command that fixes it |
+|---|---|
+| CRITICAL — a model was removed / deprecated | `/llm-externalizer:llm-externalizer-benchmark --pick-top-n 3 --apply-profile <profile>` (re-picks and writes the ensemble) |
+| CRITICAL — a per-tool model was removed | `llm-ext-benchmark --adopt <NEW_ID> --adopt-into tool:<tool>` |
+| WARN — cost drift / requirements regression | Surface it. It is the user's call whether the new price or capability is acceptable. |
+
+Offer the fix command; run it only if the user asks.

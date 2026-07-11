@@ -168,12 +168,19 @@ export interface YamlMutationResult {
   newEnsemble: { model: string; second_model?: string; third_model?: string };
 }
 
-export function applyPicksToSettings(
+/** The narrow shape every writer below mutates. */
+type SettingsRoot = { profiles?: Record<string, Record<string, unknown>> };
+
+/**
+ * Shared load+validate step for EVERY settings writer in this file: existsSync
+ * guard → yamlParse with a clear error → top-level-object guard → profiles-map
+ * guard → named-profile guard. One spelling of these five errors, so a new writer
+ * cannot drift from the established (and tested) messages.
+ */
+function loadProfileForMutation(
   settingsPath: string,
   profileName: string,
-  picks: readonly PickedModel[],
-): YamlMutationResult {
-  if (picks.length < 1) throw new Error("applyPicksToSettings: need at least one pick");
+): { root: SettingsRoot; profile: Record<string, unknown> } {
   if (!existsSync(settingsPath)) {
     throw new Error(`settings.yaml not found at ${settingsPath}`);
   }
@@ -187,7 +194,7 @@ export function applyPicksToSettings(
   if (typeof doc !== "object" || doc === null) {
     throw new Error(`settings.yaml at ${settingsPath} must be a YAML object at the top level.`);
   }
-  const root = doc as { profiles?: Record<string, Record<string, unknown>> };
+  const root = doc as SettingsRoot;
   if (!root.profiles || typeof root.profiles !== "object") {
     throw new Error(`settings.yaml at ${settingsPath} missing 'profiles' map.`);
   }
@@ -198,6 +205,31 @@ export function applyPicksToSettings(
         `Existing profiles: ${Object.keys(root.profiles).join(", ")}.`,
     );
   }
+  return { root, profile };
+}
+
+/**
+ * Shared atomic write: serialize → tmp file → rename over the original. rename is
+ * atomic on POSIX; on Windows it is atomic too when both paths sit on the same
+ * volume — which they always do here (the tmp lives in the target's own dir). A
+ * crash mid-write therefore leaves the ORIGINAL settings.yaml intact, never a
+ * half-written one: these writers run unattended (CLI/cron), so a torn config file
+ * would silently break every later tool call.
+ */
+function writeSettingsAtomic(settingsPath: string, root: SettingsRoot): void {
+  const newRaw = yamlStringify(root, { indent: 2 });
+  const tmp = settingsPath + ".tmp." + process.pid;
+  writeFileSync(tmp, newRaw, "utf-8");
+  renameSyncCb(tmp, settingsPath);
+}
+
+export function applyPicksToSettings(
+  settingsPath: string,
+  profileName: string,
+  picks: readonly PickedModel[],
+): YamlMutationResult {
+  if (picks.length < 1) throw new Error("applyPicksToSettings: need at least one pick");
+  const { root, profile } = loadProfileForMutation(settingsPath, profileName);
   const oldEnsemble: YamlMutationResult["oldEnsemble"] = {
     model: typeof profile.model === "string" ? profile.model : "",
     ...(typeof profile.second_model === "string" ? { second_model: profile.second_model } : {}),
@@ -212,13 +244,7 @@ export function applyPicksToSettings(
   if (picks.length >= 3) profile.third_model = picks[2].modelId;
   else delete profile.third_model;
 
-  const newRaw = yamlStringify(root, { indent: 2 });
-  const tmp = settingsPath + ".tmp." + process.pid;
-  writeFileSync(tmp, newRaw, "utf-8");
-  // rename is atomic on POSIX. On Windows it's also atomic when both
-  // paths sit on the same volume — which they always do here (tmp lives
-  // in the same dir as the target).
-  renameSyncCb(tmp, settingsPath);
+  writeSettingsAtomic(settingsPath, root);
   return {
     oldEnsemble,
     newEnsemble: {
@@ -275,30 +301,7 @@ export function applyToolModelToSettings(
         `Registered LLM-using tools: ${known.join(", ")}.`,
     );
   }
-  if (!existsSync(settingsPath)) {
-    throw new Error(`settings.yaml not found at ${settingsPath}`);
-  }
-  const raw = readFileSync(settingsPath, "utf-8");
-  let doc: unknown;
-  try {
-    doc = yamlParse(raw);
-  } catch (err) {
-    throw new Error(`settings.yaml at ${settingsPath} is not valid YAML: ${(err as Error).message}`, { cause: err });
-  }
-  if (typeof doc !== "object" || doc === null) {
-    throw new Error(`settings.yaml at ${settingsPath} must be a YAML object at the top level.`);
-  }
-  const root = doc as { profiles?: Record<string, Record<string, unknown>> };
-  if (!root.profiles || typeof root.profiles !== "object") {
-    throw new Error(`settings.yaml at ${settingsPath} missing 'profiles' map.`);
-  }
-  const profile = root.profiles[profileName];
-  if (!profile || typeof profile !== "object") {
-    throw new Error(
-      `settings.yaml at ${settingsPath} has no profile named '${profileName}'. ` +
-        `Existing profiles: ${Object.keys(root.profiles).join(", ")}.`,
-    );
-  }
+  const { root, profile } = loadProfileForMutation(settingsPath, profileName);
   // Read the existing tool_models map defensively: a malformed value (null, a
   // scalar, an array) must NOT crash — treat it as empty so we still write a
   // valid map. Preserve every existing tool entry by spreading the old object.
@@ -311,11 +314,127 @@ export function applyToolModelToSettings(
 
   profile.tool_models = { ...oldToolModels, [tool]: modelId };
 
-  const newRaw = yamlStringify(root, { indent: 2 });
-  const tmp = settingsPath + ".tmp." + process.pid;
-  writeFileSync(tmp, newRaw, "utf-8");
-  // rename is atomic on POSIX. On Windows it's also atomic when both paths sit on
-  // the same volume — which they always do here (tmp lives in the target's dir).
-  renameSyncCb(tmp, settingsPath);
+  writeSettingsAtomic(settingsPath, root);
   return { profileName, tool, oldModelId, newModelId: modelId };
+}
+
+// ── free_models pool writer (P1 zero-token model pipeline) ────────────────────
+//
+// READ-ONLY-MCP GUARDRAIL (same invariant as applyToolModelToSettings above): this
+// function MUTATES settings.yaml and MUST NEVER be called from an MCP tool handler.
+// The MCP surface stays incapable of rewriting its own config; only the CLI (or a
+// cron running it) may write. Until now the `free_models` pool was hand-edited by
+// the operator, which is why the free-pool commands ended with "now go edit
+// settings.yaml yourself" — a manual step the agent had to narrate every run.
+
+/** Result of rewriting a profile's free_models pool. */
+export interface FreePoolMutationResult {
+  profileName: string;
+  oldPool: string[];
+  newPool: string[];
+}
+
+/**
+ * Atomically REPLACE a named profile's `free_models` list. Every other key on the
+ * profile (mode, api, model, tool_models, free_only, …) and every other profile is
+ * preserved by-key.
+ *
+ * Fails fast when any id does not end in `:free`. This is NOT pedantry: config.ts's
+ * validateProfile REJECTS a non-`:free` entry under `free_only`, so writing one here
+ * would produce a settings.yaml that no longer loads — i.e. the writer would brick
+ * the very config it is maintaining. Better to refuse at write time with a precise
+ * message than to hand the user an unloadable file. (A zero-cost NON-`:free` model
+ * such as an open-beta id is still benchmarkable via --bench-free-pool's catalog
+ * price check; it just cannot be pinned into the `free_models` list.)
+ *
+ * Duplicates are collapsed (first occurrence wins) so a re-run is idempotent.
+ */
+export function applyFreePoolToSettings(
+  settingsPath: string,
+  profileName: string,
+  modelIds: readonly string[],
+): FreePoolMutationResult {
+  if (modelIds.length < 1) {
+    throw new Error("applyFreePoolToSettings: need at least one model id (an empty free_models pool would break free_only)");
+  }
+  const bad = modelIds.filter((id) => typeof id !== "string" || !id.endsWith(":free"));
+  if (bad.length > 0) {
+    throw new Error(
+      `applyFreePoolToSettings: every free_models entry MUST end with ':free' — ` +
+        `settings.yaml validation rejects anything else under free_only. Offending: ${bad.join(", ")}.`,
+    );
+  }
+  const newPool = [...new Set(modelIds)];
+  const { root, profile } = loadProfileForMutation(settingsPath, profileName);
+  const existing = profile.free_models;
+  const oldPool: string[] = Array.isArray(existing)
+    ? existing.filter((v): v is string => typeof v === "string")
+    : [];
+
+  profile.free_models = newPool;
+
+  writeSettingsAtomic(settingsPath, root);
+  return { profileName, oldPool, newPool };
+}
+
+// ── New-arrival adoption writer (P1 zero-token model pipeline) ────────────────
+//
+// READ-ONLY-MCP GUARDRAIL: as above — CLI/cron only, NEVER an MCP tool handler.
+// This is the missing scripted half of `--new-arrivals`: the discover command used
+// to end with "if it wins, edit settings.yaml by hand", so adopting a new model
+// always cost a human (or an agent) a manual edit. Adoption is now one CLI call.
+
+/** The three ensemble slots a model can be adopted into. */
+export type EnsembleSlot = "model" | "second_model" | "third_model";
+export const ENSEMBLE_SLOTS: readonly EnsembleSlot[] = ["model", "second_model", "third_model"];
+
+/** Result of adopting a model into one ensemble slot. */
+export interface EnsembleSlotMutationResult {
+  profileName: string;
+  slot: EnsembleSlot;
+  /** The slot's previous model (empty string when the slot was unset). */
+  oldModelId: string;
+  newModelId: string;
+}
+
+/**
+ * Atomically set ONE ensemble slot (`model` / `second_model` / `third_model`) on a
+ * named profile. Copies applyPicksToSettings's safety pattern exactly, but writes a
+ * single slot instead of a whole top-3 — that is the shape new-arrival adoption
+ * needs (swap ONE incumbent for ONE arrival, leave the rest of a working ensemble
+ * alone).
+ *
+ * Refuses to fill `second_model`/`third_model` on a non-ensemble profile: those keys
+ * are IGNORED unless `mode: remote-ensemble`, so writing one would report success
+ * while changing nothing the runtime reads — a silent no-op, which is the exact
+ * failure class the fail-fast rule exists to prevent. The caller must switch the
+ * profile's mode deliberately (that is a real decision, not a side effect).
+ */
+export function applyEnsembleSlotToSettings(
+  settingsPath: string,
+  profileName: string,
+  slot: EnsembleSlot,
+  modelId: string,
+): EnsembleSlotMutationResult {
+  if (typeof modelId !== "string" || modelId.length === 0) {
+    throw new Error("applyEnsembleSlotToSettings: modelId must be a non-empty string");
+  }
+  if (!ENSEMBLE_SLOTS.includes(slot)) {
+    throw new Error(
+      `applyEnsembleSlotToSettings: unknown slot '${slot}'. Valid slots: ${ENSEMBLE_SLOTS.join(", ")}.`,
+    );
+  }
+  const { root, profile } = loadProfileForMutation(settingsPath, profileName);
+  if (slot !== "model" && profile.mode !== "remote-ensemble") {
+    throw new Error(
+      `applyEnsembleSlotToSettings: profile '${profileName}' has mode '${String(profile.mode)}' — ` +
+        `'${slot}' is only read under mode 'remote-ensemble', so writing it would silently do nothing. ` +
+        `Switch the profile to remote-ensemble first, or adopt into 'model'.`,
+    );
+  }
+  const oldModelId = typeof profile[slot] === "string" ? (profile[slot] as string) : "";
+  profile[slot] = modelId;
+
+  writeSettingsAtomic(settingsPath, root);
+  return { profileName, slot, oldModelId, newModelId: modelId };
 }

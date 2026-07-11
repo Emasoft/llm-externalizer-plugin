@@ -222,3 +222,157 @@ export function aggregateModelHealth(
 
   return byModel;
 }
+
+// ── Persistent-failure verdict — the ROTATION threshold (P1 zero-token pipeline) ──
+//
+// `aggregateModelHealth` above answers "has this model misbehaved a lot, ever?".
+// That is the right question for an ADVISORY per-tool audit, but the WRONG one for
+// ROTATION: rotating a model rewrites settings.yaml, so it must fire only on a
+// failure that is both PERMANENT and STILL CURRENT. Until now that judgment lived
+// in prose — the ensemble-autoselect skill told the agent to eyeball the retry
+// history and decide "is this 404 persistent?" — which is exactly the kind of
+// judgment that costs agent tokens on every model update. It is a code rule now.
+//
+// THE RULE: a model is PERSISTENTLY BROKEN iff its most recent
+// `non_retryable_failure` events inside a rolling `windowHours` window form a
+// TRAILING run of >= `minConsecutive` events that all carry the SAME rotate-worthy
+// HTTP status. Every clause is load-bearing:
+//
+//   * non_retryable_failure ONLY. A 429 (rate_limit_429) is normal on the free tier
+//     and a 5xx burst is the provider's problem — neither is fixed by swapping the
+//     model, so rotating on them would churn the ensemble on every transient outage.
+//   * ROTATE-WORTHY statuses only (see ROTATE_WORTHY_STATUSES). 401/403 mean the API
+//     KEY is wrong; rotating the model cannot fix an auth misconfiguration and would
+//     silently destroy a working ensemble — so they are deliberately excluded.
+//   * SAME status, TRAILING run. This is the code spelling of "same error class,
+//     still happening". A model that 404'd three times yesterday but whose LATEST
+//     failure is a 400 is not a settled deprecation, and a model whose failure class
+//     keeps changing is a provider wobble, not a retirement.
+//   * >= 3 within <= 24h. Three is the same bar the skill asked the agent to eyeball
+//     ("3+ retries, same error"): one stray 400 from a malformed request must never
+//     rotate an ensemble, while three identical ones inside a day is a settled fact.
+//     The 24h WINDOW is what makes the verdict current — an old, since-healed failure
+//     ages out instead of accumulating forever the way the unwindowed counters above
+//     do (that unboundedness is precisely why those counters cannot gate a write).
+
+/**
+ * HTTP statuses that mean "THIS MODEL ID is unusable" — the only ones a model swap
+ * can actually fix. 400 (the model rejects the request shape we send every other
+ * model), 404 (id gone from the catalog — OpenRouter retires ids silently), 410
+ * (explicitly retired), 422 (unprocessable for this model). Anything else is an
+ * account, network, or provider problem that rotation would not repair.
+ */
+export const ROTATE_WORTHY_STATUSES: readonly number[] = [400, 404, 410, 422];
+const ROTATE_WORTHY = new Set<number>(ROTATE_WORTHY_STATUSES);
+
+/** Rolling window over which failures must be concentrated to count as current. */
+export const PERSISTENCE_WINDOW_HOURS = 24;
+/** Trailing same-status failures required before a model is declared broken. */
+export const PERSISTENCE_MIN_CONSECUTIVE = 3;
+
+export interface PersistenceOptions {
+  /** Rolling window in hours. Default PERSISTENCE_WINDOW_HOURS (24). */
+  windowHours?: number;
+  /** Trailing same-status failures required. Default PERSISTENCE_MIN_CONSECUTIVE (3). */
+  minConsecutive?: number;
+  /** Injected clock — tests pass a fixed `now` so the window is deterministic. */
+  now?: Date;
+}
+
+/** One model's rotation verdict, derived purely from a window of ledger events. */
+export interface ModelPersistenceVerdict {
+  model: string;
+  /** True iff the code threshold above is met — the sole rotation trigger. */
+  persistentlyBroken: boolean;
+  /** The repeated status when broken; null otherwise. */
+  httpStatus: number | null;
+  /** Length of the trailing same-status failure run inside the window. */
+  consecutiveFailures: number;
+  windowHours: number;
+  /** One-line rationale (goes straight into the report — no agent paraphrase). */
+  reason: string;
+}
+
+/**
+ * Extract the HTTP status a `non_retryable_failure` detail carries. Every write
+ * site spells it `HTTP <status>` (provider/completion.ts, security_scan/judge.ts),
+ * so this regex IS the ledger's status contract — change one, change the other.
+ * Returns null when the detail carries no status (an unclassifiable failure, which
+ * therefore never triggers a rotation).
+ */
+export function parseEventHttpStatus(detail: string): number | null {
+  const m = /\bHTTP (\d{3})\b/.exec(detail);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Parse a ledger timestamp (`YYYY-MM-DDTHH:MM:SS±HHMM`) into epoch ms. ECMA-262
+ * only GUARANTEES `Date.parse` on the `±HH:MM` spelling, so re-insert the colon
+ * rather than relying on engine leniency. Returns null on a malformed stamp; the
+ * caller SKIPS such an event — an event we cannot place in time can then only make
+ * us LESS likely to rotate, never more (the fail-safe direction for a config write).
+ */
+export function parseEventTimestamp(ts: string): number | null {
+  const ms = Date.parse(ts.replace(/([+-]\d{2})(\d{2})$/, "$1:$2"));
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/**
+ * Apply the rotation threshold to a window of events. PURE — no disk, no ambient
+ * clock (pass `now`) — so it is fully unit-testable with synthetic events.
+ * Only models that produced at least one in-window, status-carrying
+ * `non_retryable_failure` appear in the result; a model absent from the map has
+ * nothing rotation-relevant on the ledger and is therefore NOT broken.
+ */
+export function assessModelPersistence(
+  events: readonly ModelEvent[],
+  opts: PersistenceOptions = {},
+): Map<string, ModelPersistenceVerdict> {
+  const windowHours = opts.windowHours ?? PERSISTENCE_WINDOW_HOURS;
+  const minConsecutive = opts.minConsecutive ?? PERSISTENCE_MIN_CONSECUTIVE;
+  if (!Number.isFinite(windowHours) || windowHours <= 0) {
+    throw new Error(`assessModelPersistence: windowHours must be > 0, got ${windowHours}`);
+  }
+  if (!Number.isInteger(minConsecutive) || minConsecutive < 1) {
+    throw new Error(`assessModelPersistence: minConsecutive must be a positive integer, got ${minConsecutive}`);
+  }
+  const cutoff = (opts.now ?? new Date()).getTime() - windowHours * 3_600_000;
+
+  const failuresByModel = new Map<string, { at: number; status: number }[]>();
+  for (const ev of events) {
+    if (ev.kind !== "non_retryable_failure") continue;
+    const at = parseEventTimestamp(ev.timestamp);
+    if (at === null || at < cutoff) continue;
+    const status = parseEventHttpStatus(ev.detail);
+    if (status === null) continue;
+    const list = failuresByModel.get(ev.model) ?? [];
+    list.push({ at, status });
+    failuresByModel.set(ev.model, list);
+  }
+
+  const out = new Map<string, ModelPersistenceVerdict>();
+  for (const [model, failures] of failuresByModel) {
+    // Sort by time: the ledger is append-only and therefore already chronological,
+    // but concurrent processes append to it, so do not ASSUME order — the trailing
+    // run is only meaningful on a chronologically sorted sequence.
+    failures.sort((a, b) => a.at - b.at);
+    const latest = failures[failures.length - 1].status;
+    let run = 0;
+    for (let i = failures.length - 1; i >= 0 && failures[i].status === latest; i--) run++;
+    const rotateWorthy = ROTATE_WORTHY.has(latest);
+    const persistentlyBroken = rotateWorthy && run >= minConsecutive;
+    out.set(model, {
+      model,
+      persistentlyBroken,
+      httpStatus: persistentlyBroken ? latest : null,
+      consecutiveFailures: run,
+      windowHours,
+      reason: persistentlyBroken
+        ? `${run} consecutive HTTP ${latest} failures in the last ${windowHours}h (≥ ${minConsecutive}) — permanent model-scoped error`
+        : rotateWorthy
+          ? `${run} consecutive HTTP ${latest} failure(s) in the last ${windowHours}h (< ${minConsecutive}) — not yet persistent`
+          : `latest failure is HTTP ${latest}, not model-scoped (${ROTATE_WORTHY_STATUSES.join("/")}) — a model swap would not fix it`,
+    });
+  }
+  return out;
+}

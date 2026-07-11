@@ -2,134 +2,90 @@
 name: llm-externalizer-ensemble-autoselect
 description: |-
   Reference for rotating the OpenRouter ensemble when a model has 404'd / been
-  deprecated / is misbehaving. Encodes the cost rule (input AND output both
-  strictly < $1/M) and the F1-then-cost selection algorithm. Real invocation
-  path is the benchmark command's CLI mode `llm-ext-benchmark --pick-top-n 3
-  [--apply-profile <name>]`; this skill is loaded as background reference for
-  that, not a standalone slash command.
-argument-hint: "[--apply | --dry-run] [--profile <name>]"
-effort: medium
+  deprecated / is misbehaving. The persistence decision is CODE, not judgment: the
+  CLI reads the durable model-health ledger and rotates only on ≥3 consecutive
+  same-status 400/404/410/422 failures within 24h. Real invocation path is one CLI
+  call — `llm-ext-benchmark --auto-replace --apply` (ledger-gated) or
+  `--pick-top-n 3 --apply-profile <name>` (unconditional re-pick). Loaded as
+  background reference, not a standalone slash command.
+argument-hint: ""
+effort: low
 user-invocable: false
 ---
 
 # LLM Externalizer — Ensemble Auto-Selection
 
-## Overview
+## The one rule
 
-Picks three OpenRouter models for the active `remote-ensemble` profile
-**without asking the user which specific models** — you choose from the
-qualifying candidates. The user has delegated this decision; do not prompt
-for the picks. Selection runs the same TypeScript-AST keyword-classification
-benchmark the `llm-ext-benchmark` CLI uses (`mcp-server/src/benchmark/`),
-scores each qualifying model with a `meanF1` in 0..1, sorts the survivors,
-and takes the top three. The full filter/ranking rules live in Resources.
+**Never judge whether a failure is "persistent". The ledger does it.**
 
-**Credit-free pre-ranking.** Before any paid benchmark, candidates are
-ranked by two indexes read from the public OpenRouter models endpoint
-(`GET https://openrouter.ai/api/v1/models` — no API key, $0): the
-*codex index score* (`benchmarks.artificial_analysis.coding_index`,
-0–100) and the *design arena code categories ELO*
-(`benchmarks.design_arena[arena=="models", category=="codecategories"].elo`).
-Coverage is partial (~60/339 models have a codex score, ~94/339 have an
-ELO); a missing index means UNKNOWN — an unscored model is **never**
-dropped for lacking one. Each index is min–max normalized over models
-that report it; scored models rank above unscored; cheapest is the final
-tiebreak. Use `--qualifying-top-n N` to cap how many top-ranked
-candidates are actually benchmarked (N paid runs instead of the whole
-pool). This flag is distinct from `--pick-top-n` (which caps results
-after the run); explicit `--include` baselines are never capped by it.
+A model rotates iff `assessModelPersistence` (`mcp-server/src/model-events.ts`) says
+so: **≥3 consecutive `non_retryable_failure` events carrying the SAME rotate-worthy
+HTTP status (400 / 404 / 410 / 422) within a rolling 24h window.** That threshold is
+the code spelling of "same error class, 3+ times, still current":
 
-**Zero-cost non-`:free` models.** A model OpenRouter prices at exactly
-$0 with no `:free` suffix (e.g. `openrouter/owl-alpha`, an open-beta
-"free for now" model) passes the `<$1/M` cost cap and competes as a
-normal ensemble candidate ranked by its indexes. The runtime free-mode
-guard is now semantic: free-eligible if and only if the model id ends
-`:free` OR the catalog price is exactly $0.
+- 429s and 5xx bursts never rotate — a swap cannot fix a rate limit or a provider outage.
+- 401/403 never rotate — that is a wrong API key; rotating would destroy a working ensemble.
+- A run broken by a *different* status is a wobble, not a retirement.
+- An old, since-healed break ages out of the 24h window.
 
-## Prerequisites
+Do not read retry histories. Do not count 404s in the transcript. Do not decide.
 
-- An active `remote-ensemble` profile in `~/.llm-externalizer/settings.yaml`.
-- `OPENROUTER_API_KEY` resolvable (a fresh benchmark hits OpenRouter).
-- `llm-ext-benchmark` on PATH (ships with the plugin's mcp-server).
+## What to run
 
-## Instructions
-
-Auto-trigger when **any** of these surface: an ensemble call returns
-`API error 404 (openrouter): {... "deprecated" ...}` (OpenRouter retires
-models silently, so any configured model — including a current ensemble
-default — can start 404ing without notice); a model returns a 4xx/5xx
-**consistently** (3+ retries, same error class); or the user asks — reactively —
-to "rotate ensemble" / "swap broken model" / "auto-pick models" / "pick a better
-ensemble" / "the ensemble is broken", OR — proactively — to "rescan models" /
-"update the models" / "refresh the ensemble" / "check for better or cheaper
-models" / "run a model rescan". In EVERY case the action is the SAME single
-CLI call (`llm-ext-benchmark --qualifying-top-n 15 --pick-top-n 3
-[--apply-profile <name>]`, run in background) — NEVER hand-roll a per-model loop
-over `chat`/`code_task`/`or_model_info` (that is the 30-40M-token failure mode).
-This skill is reference for the benchmark command's
-`--pick-top-n` / `--apply-profile` CLI mode — there is no standalone slash
-command. Do **not** auto-rotate on transient 5xx-bursts that recover on retry —
-rotation is for permanent drift only.
-
-Then run these steps:
-
-1. Confirm the failure is **persistent** (one model, 3+ retries, same
-   `400|404|410` carrying a deprecation signal). If it self-recovers, stop.
-2. Pick a mode from Examples (manual / semi-auto / cache). For a 404, follow
-   the detailed workflow in [selection-algorithm](references/selection-algorithm.md).
-3. Run `llm-ext-benchmark --pick-top-n 3` (add `--apply-profile <name>` to
-   write the picks; add `--from-cache` to reuse `benchmark-results.json`).
-4. Review the picks; if fewer than 3 qualify, **surface the shortage** — do
-   not silently fall back (see Error Handling).
-5. Call the `reset` MCP tool (or restart Claude Code) so the running server
-   reloads the new ensemble.
-6. Report to the user what changed (old → new model ids + F1 / cost / latency).
-
-## Error Handling
-
-- **Fewer than 3 survivors**: do NOT silently fall back. Surface the shortage;
-  let the user lower `--min-f1`, broaden the search, or accept fewer.
-- **`meanF1 < 0.95` or `schemaCompliant === false`**: the model is rejected
-  (downstream JSON parsers need schema compliance).
-- **Transient 5xx**: skip rotation; only persistent 4xx with a deprecation
-  signal qualifies.
-- **No qualifying candidates**: report it; never auto-`--include`, never
-  auto-pick a `:free` model (they log prompts upstream).
-
-## Examples
+Every trigger below — reactive ("the ensemble is broken", "swap the broken model",
+"rotate the ensemble", a call returning `API error 404 … "deprecated"`) and proactive
+("rescan models", "refresh the ensemble", "find better or cheaper models") — maps to
+ONE background CLI call:
 
 ```bash
-# Manual: benchmark + print the top-3 settings.yaml block (no file change)
-llm-ext-benchmark --pick-top-n 3
+# Ledger-gated: rotates ONLY if the threshold is met; free + no-op on a healthy ledger.
+llm-ext-benchmark --auto-replace --apply
 
-# Semi-auto: benchmark + apply to a named profile (atomic tmp+rename)
-llm-ext-benchmark --pick-top-n 3 --apply-profile remote-ensemble
+# Unconditional re-pick (the user asked for a rescan, not a repair):
+llm-ext-benchmark --pick-top-n 3 --apply-profile <profile>
 
-# Cache: re-pick from benchmark-results.json without new API calls
-llm-ext-benchmark --from-cache --pick-top-n 3 --apply-profile remote-ensemble
-
-# Pre-filter: benchmark only the top 20 index-ranked candidates (saves credits)
-llm-ext-benchmark --qualifying-top-n 20 --pick-top-n 3 --apply-profile remote-ensemble
+# Re-pick from the last sweep's cache, no new API calls:
+llm-ext-benchmark --from-cache --pick-top-n 3 --apply-profile <profile>
 ```
 
-## Output
+Then print the CLI's final `[OK] …` / `[FAILED] …` line verbatim. It already carries
+the picks, the write, and the report path.
 
-- The resolved picks, one line each: `id  meanF1  cost  latency`.
-- The proposed `settings.yaml` ensemble block (`model` / `second_model` /
-  `third_model`).
-- If `--apply-profile` was used: the old → new model-id diff.
-- One line: "Run the `reset` MCP tool or restart Claude Code to reload."
-- Long benchmark reports are NOT pasted into chat — they live under
-  `<main-project-dir>/reports/llm-externalizer/` (anchored on
-  `$CLAUDE_PROJECT_DIR`, then cwd fallback — never derived from git;
-  override with the `output_dir` arg or `$LLM_OUTPUT_DIR`).
+NEVER hand-roll a per-model loop over `chat` / `code_task` / `or_model_info` — that is
+the 30-40M-token failure mode these commands exist to prevent.
+
+## What the CLI decides, so you don't
+
+- **The paid-candidate cap.** `--qualifying-top-n` defaults to **15** in code.
+- **The selection.** Survivors must clear `meanF1 ≥ 0.95` (`--min-f1`) AND
+  `schemaCompliant`; sorted by meanF1 desc, then cost asc, then latency asc; top N.
+- **The shortage.** Fewer than N survivors ⇒ `[FAILED]`, exit 2, **settings unchanged**.
+  There is no silent fallback and nothing for you to decide — relay the line; the user
+  can lower `--min-f1` or broaden the sweep.
+- **The write.** Atomic (tmp + rename); every other profile and key preserved.
+- **The cost rule.** Input AND output both strictly `< $1/M`; a model priced at exactly
+  `$0` with no `:free` suffix (open-beta, e.g. `openrouter/owl-alpha`) qualifies. Free
+  eligibility is semantic: id ends `:free` OR the catalog prices it at exactly $0.
+
+## Credit-free pre-ranking (why the cap is safe)
+
+Before any paid run, candidates are ranked by two indexes on the public catalog
+endpoint ($0, no key): the codex index (`benchmarks.artificial_analysis.coding_index`)
+and the design-arena code-categories ELO. Coverage is partial; a missing index is
+UNKNOWN and never a disqualifier. Scored models rank above unscored; cheapest breaks
+ties. So the top-15 cap spends the budget on the most promising candidates first.
+
+## After a write
+
+The CLI's line ends with "run `reset` to reload". Relay it. Do not elaborate.
 
 ## Resources
 
-- [selection-algorithm](references/selection-algorithm.md) — full hard filters,
-  ranking rules, the 404 workflow, anti-patterns, and the code
-  single-source-of-truth table.
-- Code SoT (authoritative): `mcp-server/src/benchmark/discover.ts`
-  (`DEFAULT_CRITERIA`, `qualify()`) and `mcp-server/src/benchmark/pick.ts`
-  (`pickTopN()`, `DEFAULT_PICK_OPTIONS`, `applyPicksToSettings()`). Edit the
-  code first, then mirror the change here.
+- [selection-algorithm](references/selection-algorithm.md) — hard filters, ranking
+  rules, anti-patterns.
+- Code SoT (authoritative — edit code first, mirror here second):
+  `mcp-server/src/model-events.ts` (`assessModelPersistence`, `ROTATE_WORTHY_STATUSES`),
+  `mcp-server/src/model-qualification/auto-replace.ts` (`planEnsembleRotation`),
+  `mcp-server/src/benchmark/discover.ts` (`DEFAULT_CRITERIA`, `qualify()`),
+  `mcp-server/src/benchmark/pick.ts` (`pickTopN`, `applyPicksToSettings`).

@@ -218108,7 +218108,6 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 
 // src/benchmark/index.ts
 import { mkdirSync as mkdirSync8, writeFileSync as writeFileSync7, existsSync as existsSync10 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
 import { dirname as dirname4, join as join13 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
@@ -219622,8 +219621,7 @@ function renderEnsembleBlock(profileName, picks) {
   const wrapped = { [profileName]: block };
   return (0, import_yaml2.stringify)(wrapped, { indent: 2 });
 }
-function applyPicksToSettings(settingsPath, profileName, picks) {
-  if (picks.length < 1) throw new Error("applyPicksToSettings: need at least one pick");
+function loadProfileForMutation(settingsPath, profileName) {
   if (!existsSync2(settingsPath)) {
     throw new Error(`settings.yaml not found at ${settingsPath}`);
   }
@@ -219647,6 +219645,17 @@ function applyPicksToSettings(settingsPath, profileName, picks) {
       `settings.yaml at ${settingsPath} has no profile named '${profileName}'. Existing profiles: ${Object.keys(root.profiles).join(", ")}.`
     );
   }
+  return { root, profile };
+}
+function writeSettingsAtomic(settingsPath, root) {
+  const newRaw = (0, import_yaml2.stringify)(root, { indent: 2 });
+  const tmp = settingsPath + ".tmp." + process.pid;
+  writeFileSync2(tmp, newRaw, "utf-8");
+  renameSyncCb(tmp, settingsPath);
+}
+function applyPicksToSettings(settingsPath, profileName, picks) {
+  if (picks.length < 1) throw new Error("applyPicksToSettings: need at least one pick");
+  const { root, profile } = loadProfileForMutation(settingsPath, profileName);
   const oldEnsemble = {
     model: typeof profile.model === "string" ? profile.model : "",
     ...typeof profile.second_model === "string" ? { second_model: profile.second_model } : {},
@@ -219658,10 +219667,7 @@ function applyPicksToSettings(settingsPath, profileName, picks) {
   else delete profile.second_model;
   if (picks.length >= 3) profile.third_model = picks[2].modelId;
   else delete profile.third_model;
-  const newRaw = (0, import_yaml2.stringify)(root, { indent: 2 });
-  const tmp = settingsPath + ".tmp." + process.pid;
-  writeFileSync2(tmp, newRaw, "utf-8");
-  renameSyncCb(tmp, settingsPath);
+  writeSettingsAtomic(settingsPath, root);
   return {
     oldEnsemble,
     newEnsemble: {
@@ -219681,38 +219687,52 @@ function applyToolModelToSettings(settingsPath, profileName, tool, modelId) {
       `applyToolModelToSettings: unknown tool '${tool}'. Registered LLM-using tools: ${known.join(", ")}.`
     );
   }
-  if (!existsSync2(settingsPath)) {
-    throw new Error(`settings.yaml not found at ${settingsPath}`);
-  }
-  const raw = readFileSync4(settingsPath, "utf-8");
-  let doc;
-  try {
-    doc = (0, import_yaml2.parse)(raw);
-  } catch (err) {
-    throw new Error(`settings.yaml at ${settingsPath} is not valid YAML: ${err.message}`, { cause: err });
-  }
-  if (typeof doc !== "object" || doc === null) {
-    throw new Error(`settings.yaml at ${settingsPath} must be a YAML object at the top level.`);
-  }
-  const root = doc;
-  if (!root.profiles || typeof root.profiles !== "object") {
-    throw new Error(`settings.yaml at ${settingsPath} missing 'profiles' map.`);
-  }
-  const profile = root.profiles[profileName];
-  if (!profile || typeof profile !== "object") {
-    throw new Error(
-      `settings.yaml at ${settingsPath} has no profile named '${profileName}'. Existing profiles: ${Object.keys(root.profiles).join(", ")}.`
-    );
-  }
+  const { root, profile } = loadProfileForMutation(settingsPath, profileName);
   const existing = profile.tool_models;
   const oldToolModels = existing && typeof existing === "object" && !Array.isArray(existing) ? { ...existing } : {};
   const oldModelId = typeof oldToolModels[tool] === "string" ? oldToolModels[tool] : "";
   profile.tool_models = { ...oldToolModels, [tool]: modelId };
-  const newRaw = (0, import_yaml2.stringify)(root, { indent: 2 });
-  const tmp = settingsPath + ".tmp." + process.pid;
-  writeFileSync2(tmp, newRaw, "utf-8");
-  renameSyncCb(tmp, settingsPath);
+  writeSettingsAtomic(settingsPath, root);
   return { profileName, tool, oldModelId, newModelId: modelId };
+}
+function applyFreePoolToSettings(settingsPath, profileName, modelIds) {
+  if (modelIds.length < 1) {
+    throw new Error("applyFreePoolToSettings: need at least one model id (an empty free_models pool would break free_only)");
+  }
+  const bad = modelIds.filter((id) => typeof id !== "string" || !id.endsWith(":free"));
+  if (bad.length > 0) {
+    throw new Error(
+      `applyFreePoolToSettings: every free_models entry MUST end with ':free' \u2014 settings.yaml validation rejects anything else under free_only. Offending: ${bad.join(", ")}.`
+    );
+  }
+  const newPool = [...new Set(modelIds)];
+  const { root, profile } = loadProfileForMutation(settingsPath, profileName);
+  const existing = profile.free_models;
+  const oldPool = Array.isArray(existing) ? existing.filter((v) => typeof v === "string") : [];
+  profile.free_models = newPool;
+  writeSettingsAtomic(settingsPath, root);
+  return { profileName, oldPool, newPool };
+}
+var ENSEMBLE_SLOTS = ["model", "second_model", "third_model"];
+function applyEnsembleSlotToSettings(settingsPath, profileName, slot, modelId) {
+  if (typeof modelId !== "string" || modelId.length === 0) {
+    throw new Error("applyEnsembleSlotToSettings: modelId must be a non-empty string");
+  }
+  if (!ENSEMBLE_SLOTS.includes(slot)) {
+    throw new Error(
+      `applyEnsembleSlotToSettings: unknown slot '${slot}'. Valid slots: ${ENSEMBLE_SLOTS.join(", ")}.`
+    );
+  }
+  const { root, profile } = loadProfileForMutation(settingsPath, profileName);
+  if (slot !== "model" && profile.mode !== "remote-ensemble") {
+    throw new Error(
+      `applyEnsembleSlotToSettings: profile '${profileName}' has mode '${String(profile.mode)}' \u2014 '${slot}' is only read under mode 'remote-ensemble', so writing it would silently do nothing. Switch the profile to remote-ensemble first, or adopt into 'model'.`
+    );
+  }
+  const oldModelId = typeof profile[slot] === "string" ? profile[slot] : "";
+  profile[slot] = modelId;
+  writeSettingsAtomic(settingsPath, root);
+  return { profileName, slot, oldModelId, newModelId: modelId };
 }
 
 // src/benchmark/security-triage/index.ts
@@ -220361,6 +220381,58 @@ function aggregateModelHealth(events, opts = {}) {
     s.degraded = s.reasons.length > 0;
   }
   return byModel;
+}
+var ROTATE_WORTHY_STATUSES = [400, 404, 410, 422];
+var ROTATE_WORTHY = new Set(ROTATE_WORTHY_STATUSES);
+var PERSISTENCE_WINDOW_HOURS = 24;
+var PERSISTENCE_MIN_CONSECUTIVE = 3;
+function parseEventHttpStatus(detail) {
+  const m = /\bHTTP (\d{3})\b/.exec(detail);
+  return m ? Number(m[1]) : null;
+}
+function parseEventTimestamp(ts2) {
+  const ms = Date.parse(ts2.replace(/([+-]\d{2})(\d{2})$/, "$1:$2"));
+  return Number.isNaN(ms) ? null : ms;
+}
+function assessModelPersistence(events, opts = {}) {
+  const windowHours = opts.windowHours ?? PERSISTENCE_WINDOW_HOURS;
+  const minConsecutive = opts.minConsecutive ?? PERSISTENCE_MIN_CONSECUTIVE;
+  if (!Number.isFinite(windowHours) || windowHours <= 0) {
+    throw new Error(`assessModelPersistence: windowHours must be > 0, got ${windowHours}`);
+  }
+  if (!Number.isInteger(minConsecutive) || minConsecutive < 1) {
+    throw new Error(`assessModelPersistence: minConsecutive must be a positive integer, got ${minConsecutive}`);
+  }
+  const cutoff = (opts.now ?? /* @__PURE__ */ new Date()).getTime() - windowHours * 36e5;
+  const failuresByModel = /* @__PURE__ */ new Map();
+  for (const ev of events) {
+    if (ev.kind !== "non_retryable_failure") continue;
+    const at = parseEventTimestamp(ev.timestamp);
+    if (at === null || at < cutoff) continue;
+    const status = parseEventHttpStatus(ev.detail);
+    if (status === null) continue;
+    const list = failuresByModel.get(ev.model) ?? [];
+    list.push({ at, status });
+    failuresByModel.set(ev.model, list);
+  }
+  const out = /* @__PURE__ */ new Map();
+  for (const [model, failures] of failuresByModel) {
+    failures.sort((a, b) => a.at - b.at);
+    const latest = failures[failures.length - 1].status;
+    let run = 0;
+    for (let i = failures.length - 1; i >= 0 && failures[i].status === latest; i--) run++;
+    const rotateWorthy = ROTATE_WORTHY.has(latest);
+    const persistentlyBroken = rotateWorthy && run >= minConsecutive;
+    out.set(model, {
+      model,
+      persistentlyBroken,
+      httpStatus: persistentlyBroken ? latest : null,
+      consecutiveFailures: run,
+      windowHours,
+      reason: persistentlyBroken ? `${run} consecutive HTTP ${latest} failures in the last ${windowHours}h (\u2265 ${minConsecutive}) \u2014 permanent model-scoped error` : rotateWorthy ? `${run} consecutive HTTP ${latest} failure(s) in the last ${windowHours}h (< ${minConsecutive}) \u2014 not yet persistent` : `latest failure is HTTP ${latest}, not model-scoped (${ROTATE_WORTHY_STATUSES.join("/")}) \u2014 a model swap would not fix it`
+    });
+  }
+  return out;
 }
 
 // src/security_scan/judge.ts
@@ -223614,6 +223686,66 @@ async function planToolReplacements(opts = {}) {
   const reportMarkdown = renderReport2(reader.profileName, !!opts.force, findings);
   return { findings, reportMarkdown };
 }
+function defaultEnsembleReader() {
+  const settings = loadSettings();
+  if (!settings || !settings.active) return { profileName: "(unconfigured)", slots: [] };
+  const profile = settings.profiles[settings.active];
+  if (!profile) return { profileName: settings.active, slots: [] };
+  const resolved = resolveProfile(settings.active, profile);
+  const bySlot = {
+    model: resolved.model,
+    second_model: resolved.secondModel,
+    third_model: resolved.thirdModel
+  };
+  const slots = ENSEMBLE_SLOTS.filter((s) => !!bySlot[s]).map((s) => ({ slot: s, modelId: bySlot[s] }));
+  return { profileName: settings.active, slots };
+}
+function planEnsembleRotation(opts = {}) {
+  const reader = (opts.settingsReader ?? defaultEnsembleReader)();
+  const events = readModelEvents({ path: opts.eventsPath });
+  const verdicts = assessModelPersistence(events, opts.persistence);
+  const windowHours = opts.persistence?.windowHours ?? 24;
+  const slots = reader.slots.map(({ slot, modelId }) => ({
+    slot,
+    modelId,
+    verdict: verdicts.get(modelId) ?? {
+      model: modelId,
+      persistentlyBroken: false,
+      httpStatus: null,
+      consecutiveFailures: 0,
+      windowHours,
+      reason: `no model-scoped failure on the ledger in the last ${windowHours}h`
+    }
+  }));
+  const brokenSlots = slots.filter((s) => s.verdict.persistentlyBroken);
+  return {
+    profileName: reader.profileName,
+    slots,
+    brokenSlots,
+    rotationNeeded: brokenSlots.length > 0
+  };
+}
+function renderEnsembleRotationSection(plan) {
+  const lines = [];
+  lines.push("## Ensemble slots (ledger rotation threshold)");
+  lines.push("");
+  if (plan.slots.length === 0) {
+    lines.push("No ensemble slot is configured on the active profile \u2014 nothing to check.");
+    lines.push("");
+    return lines.join("\n");
+  }
+  lines.push(
+    plan.rotationNeeded ? `${plan.brokenSlots.length} of ${plan.slots.length} slot(s) are PERSISTENTLY BROKEN \u2014 rotation is warranted.` : `All ${plan.slots.length} configured slot(s) are healthy \u2014 no rotation.`
+  );
+  lines.push("");
+  for (const s of plan.slots) {
+    lines.push(
+      `- **${s.slot}:** \`${s.modelId}\` \u2014 ${s.verdict.persistentlyBroken ? "BROKEN" : "healthy"} (${s.verdict.reason})`
+    );
+  }
+  lines.push("");
+  return lines.join("\n");
+}
 function renderReport2(profileName, force, findings) {
   const lines = [];
   lines.push("# Auto-replacement plan \u2014 per-tool model health");
@@ -224152,7 +224284,8 @@ async function runDiscoverNewArrivals(opts = {}) {
   return { report, reportPath };
 }
 
-// src/benchmark/index.ts
+// src/benchmark/cli-args.ts
+var DEFAULT_QUALIFYING_TOP_N = 15;
 function parseArgs(argv) {
   const opts = {
     includeIds: [],
@@ -224162,7 +224295,7 @@ function parseArgs(argv) {
     reasoningEffort: void 0,
     seed: void 0,
     pickTopN: null,
-    qualifyingTopN: null,
+    qualifyingTopN: DEFAULT_QUALIFYING_TOP_N,
     applyProfile: null,
     fromCache: false,
     minMeanF1: 0.95,
@@ -224177,7 +224310,11 @@ function parseArgs(argv) {
     qualifyingOnly: false,
     benchFreePool: false,
     autoReplace: false,
-    apply: false
+    apply: false,
+    applyFreePool: null,
+    adoptModel: null,
+    adoptInto: null,
+    adoptProfile: null
   };
   const takeValue = (flag, i) => {
     const v = argv[i + 1];
@@ -224221,6 +224358,20 @@ function parseArgs(argv) {
         throw new Error(`--qualifying-top-n must be a positive integer, got ${n}`);
       }
       opts.qualifyingTopN = n;
+      i++;
+    } else if (a === "--no-qualifying-cap") {
+      opts.qualifyingTopN = null;
+    } else if (a === "--apply-free-pool") {
+      opts.applyFreePool = takeValue(a, i);
+      i++;
+    } else if (a === "--adopt") {
+      opts.adoptModel = takeValue(a, i);
+      i++;
+    } else if (a === "--adopt-into") {
+      opts.adoptInto = takeValue(a, i);
+      i++;
+    } else if (a === "--adopt-profile") {
+      opts.adoptProfile = takeValue(a, i);
       i++;
     } else if (a === "--apply-profile") {
       opts.applyProfile = takeValue(a, i);
@@ -224296,8 +224447,12 @@ function printHelp() {
       "                    BEFORE benchmarking, quality-rank the auto-discovered",
       "                    candidates by their OpenRouter codex + design-arena code",
       "                    indexes and benchmark only the top N (credit-saver; caps the",
-      "                    paid run's INPUT, vs --pick-top-n which caps the OUTPUT).",
-      "                    --include baselines are never capped.",
+      `                    paid run's INPUT, vs --pick-top-n which caps the OUTPUT).`,
+      `                    DEFAULT ${DEFAULT_QUALIFYING_TOP_N} \u2014 the bound is a code default, not a flag you`,
+      "                    must remember. --include baselines are never capped.",
+      "  --no-qualifying-cap",
+      "                    Opt in to the EXHAUSTIVE sweep: benchmark every qualifying",
+      "                    candidate (slower, costs more). Removes the default cap.",
       "  --apply-profile P Mutate ~/.llm-externalizer/settings.yaml so profile P's",
       "                    model/second_model/third_model are the top-N picks. Atomic",
       "                    (tmp + rename); other profiles preserved verbatim. Requires",
@@ -224315,6 +224470,20 @@ function printHelp() {
       "                    once per pool entry. Refuses to run if any pool id is not",
       "                    a ':free' model \u2014 the flag is a cost-safety chokepoint.",
       "                    Composes with --security-triage (fills --model instead).",
+      "  --apply-free-pool P",
+      "                    With --bench-free-pool: after the sweep, REWRITE profile P's",
+      "                    `free_models` list to exactly the ':free' models that PASSED",
+      "                    (best meanF1 first). Atomic. The scripted replacement for",
+      "                    hand-editing the pool. Fails (exit 2) if none passed.",
+      "",
+      "Adoption \u2014 write ONE model into the config (the scripted new-arrival path):",
+      "  --adopt ID        Adopt model ID into the config after checking it against the",
+      "                    per-tool REQUIREMENTS gate (a free public catalog fetch; the",
+      "                    id must exist and fit what it is adopted into, else exit 2).",
+      "  --adopt-into T    Where: `model` | `second_model` | `third_model` | `tool:<name>`.",
+      "                    second/third are refused unless the profile is remote-ensemble",
+      "                    (those keys are ignored otherwise \u2014 a silent no-op).",
+      "  --adopt-profile P Profile to write. Default: the active profile.",
       "",
       "security_scan TRIAGE benchmark (separate task \u2014 verdict adjudication):",
       "  --security-triage Run the security_scan triage benchmark instead of the",
@@ -224393,6 +224562,8 @@ function printHelp() {
     ].join("\n")
   );
 }
+
+// src/benchmark/index.ts
 function resolveApiKey3() {
   const k = process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
   if (!k) {
@@ -224418,8 +224589,51 @@ function resolveFixturesDir() {
 function resolveMainRoot3() {
   return resolveProjectMainRoot();
 }
+function finalLine(r) {
+  const tag = r.ok ? "[OK]" : "[FAILED]";
+  return r.reportPath ? `${tag} ${r.summary}. Report: ${r.reportPath}` : `${tag} ${r.summary}`;
+}
+function needsApiKey(opts) {
+  if (opts.dryRun || opts.fromCache || opts.checkHealth || opts.newArrivals) return false;
+  if (opts.assessModel !== null || opts.adoptModel !== null) return false;
+  if (opts.autoReplace) return false;
+  return true;
+}
+function validateCombinations(opts) {
+  if (opts.apply && !opts.autoReplace) {
+    throw new Error("--apply requires --auto-replace");
+  }
+  if (opts.applyProfile !== null && opts.pickTopN === null) {
+    throw new Error("--apply-profile requires --pick-top-n");
+  }
+  if (opts.fromCache && opts.pickTopN === null) {
+    throw new Error("--from-cache requires --pick-top-n (no point loading the cache otherwise).");
+  }
+  if (opts.applyFreePool !== null && !opts.benchFreePool) {
+    throw new Error("--apply-free-pool requires --bench-free-pool");
+  }
+  if (opts.adoptModel === null && (opts.adoptInto !== null || opts.adoptProfile !== null)) {
+    throw new Error("--adopt-into / --adopt-profile require --adopt <MODEL_ID>");
+  }
+  if (opts.adoptModel !== null && opts.adoptInto === null) {
+    throw new Error(`--adopt requires --adopt-into <${ENSEMBLE_SLOTS.join("|")}|tool:NAME>`);
+  }
+}
+function preflight(opts) {
+  if (!needsApiKey(opts)) return;
+  if (!process.env.OPENROUTER_API_KEY && !process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY) {
+    throw new Error(
+      "OPENROUTER_API_KEY not set \u2014 export it in your shell, or set the plugin option 'openrouter_api_key' via /plugin configure llm-externalizer"
+    );
+  }
+}
+function benchmarkCachePath() {
+  return join13(getConfigDir(), "benchmark-results.json");
+}
 async function main() {
   const opts = parseArgs(process.argv);
+  validateCombinations(opts);
+  preflight(opts);
   let activeFreeModels = [];
   try {
     const s = loadSettings();
@@ -224467,11 +224681,11 @@ async function main() {
   if (opts.searchExisting) {
     return runSearchExistingPhase(opts);
   }
-  if (opts.apply && !opts.autoReplace) {
-    throw new Error("--apply requires --auto-replace");
-  }
   if (opts.autoReplace) {
     return runAutoReplacePhase(opts);
+  }
+  if (opts.adoptModel !== null) {
+    return runAdoptPhase(opts);
   }
   if (opts.assessModel !== null) {
     return runAssessModelPhase(opts.assessModel);
@@ -224482,18 +224696,46 @@ async function main() {
   if (opts.newArrivals) {
     return runNewArrivalsPhase(opts);
   }
-  if (opts.applyProfile !== null && opts.pickTopN === null) {
-    throw new Error("--apply-profile requires --pick-top-n");
-  }
   if (opts.fromCache) {
-    const cachePath3 = join13(homedir3(), ".llm-externalizer", "benchmark-results.json");
+    const cachePath3 = benchmarkCachePath();
     const cache = loadCachedReport(cachePath3);
     console.error(`[benchmark] --from-cache: using ${cachePath3} (${cache.results.length} models, run at ${cache.timestamp}).`);
-    if (opts.pickTopN === null) {
-      throw new Error("--from-cache requires --pick-top-n (no point loading the cache otherwise).");
-    }
     return runPickPhase(cache.results, opts);
   }
+  const sweep = await runKeywordSweep(opts);
+  if (sweep.dryRun) {
+    return {
+      ok: true,
+      summary: `dry-run \u2014 ${sweep.candidates} candidate(s) + ${sweep.baselines} baseline(s) would run; no API call made, $0 spent`
+    };
+  }
+  const notes = [];
+  if (opts.applyFreePool !== null) {
+    const passing = sweep.results.filter((r) => r.ok && r.pass === true && r.schemaCompliant !== false && r.modelId.endsWith(":free")).sort((a, b) => (b.meanF1 ?? 0) - (a.meanF1 ?? 0) || a.latencyMs - b.latencyMs).map((r) => r.modelId);
+    if (passing.length === 0) {
+      return {
+        ok: false,
+        code: 2,
+        summary: "--apply-free-pool: no ':free' model passed the sweep \u2014 free_models left unchanged",
+        reportPath: sweep.reportPath
+      };
+    }
+    const w = applyFreePoolToSettings(getSettingsPath(), opts.applyFreePool, passing);
+    console.error(
+      `[benchmark] free_models(${w.profileName}): ${w.oldPool.length} \u2192 ${w.newPool.length} \u2014 ${w.newPool.join(", ")}`
+    );
+    notes.push(`free_models(${w.profileName})=${w.newPool.length}`);
+  }
+  if (opts.pickTopN !== null) {
+    return runPickPhase(sweep.results, opts, sweep.reportPath, notes);
+  }
+  return {
+    ok: true,
+    summary: [`${sweep.passers}/${sweep.total} model(s) passed`, ...notes].join(", "),
+    reportPath: sweep.reportPath
+  };
+}
+async function runKeywordSweep(opts) {
   const fixturesDir = resolveFixturesDir();
   const truth = buildGroundTruth(fixturesDir, BENCHMARK_KEYWORDS);
   console.error(`[benchmark] Ground truth built from ${truth.fixtures.length} files, ${truth.allFunctions.length} top-level functions.`);
@@ -224527,7 +224769,15 @@ async function main() {
   }
   if (opts.dryRun) {
     console.error("[benchmark] --dry-run: roster only, exiting before any API call.");
-    return 0;
+    return {
+      dryRun: true,
+      candidates: candidates.length,
+      baselines: baselines.length,
+      results: [],
+      reportPath: "",
+      passers: 0,
+      total: 0
+    };
   }
   const apiKey = resolveApiKey3();
   const roster = [
@@ -224569,7 +224819,7 @@ async function main() {
   writeFileSync7(reportPath, markdown, "utf-8");
   console.error(`[benchmark] Report: ${reportPath}`);
   const json = renderJson(reportInput);
-  const cacheJsonPath = join13(homedir3(), ".llm-externalizer", "benchmark-results.json");
+  const cacheJsonPath = benchmarkCachePath();
   mkdirSync8(dirname4(cacheJsonPath), { recursive: true });
   writeFileSync7(cacheJsonPath, json, "utf-8");
   console.error(`[benchmark] JSON cache: ${cacheJsonPath}`);
@@ -224580,11 +224830,16 @@ async function main() {
   }
   const passers = [...results.values()].filter((r) => r.score?.pass).length;
   console.error(`[benchmark] ${passers}/${results.size} models passed.`);
-  if (opts.pickTopN !== null) {
-    const cache = loadCachedReport(cacheJsonPath);
-    return runPickPhase(cache.results, opts);
-  }
-  return 0;
+  const parsed = JSON.parse(json);
+  return {
+    dryRun: false,
+    candidates: candidates.length,
+    baselines: baselines.length,
+    results: parsed.results,
+    reportPath,
+    passers,
+    total: results.size
+  };
 }
 async function runSecurityTriagePhase(opts) {
   console.error("[triage] security_scan triage model benchmark");
@@ -224595,13 +224850,15 @@ async function runSecurityTriagePhase(opts) {
   });
   console.error("");
   console.error(`[triage] ${result.summaryLine}`);
-  console.error(`[triage] recommended: ${result.recommendedModelId} (changed=${result.changed})`);
   console.error(`[triage] spend: $${result.costUsd.toFixed(6)}`);
-  console.error(`[triage] report: ${result.mdReportPath}`);
   console.error(`[triage] json:   ${result.jsonReportPath}`);
   process.stdout.write(`recommended_model=${result.recommendedModelId}
 `);
-  return 0;
+  return {
+    ok: true,
+    summary: `triage benchmark done \u2014 recommended ${result.recommendedModelId} (changed=${result.changed}), spend $${result.costUsd.toFixed(6)}`,
+    reportPath: result.mdReportPath
+  };
 }
 async function runSearchExistingPhase(opts) {
   console.error("[search-existing] search_existing_implementations model benchmark");
@@ -224612,13 +224869,15 @@ async function runSearchExistingPhase(opts) {
   });
   console.error("");
   console.error(`[search-existing] ${result.summaryLine}`);
-  console.error(`[search-existing] recommended: ${result.recommendedModelId} (changed=${result.changed})`);
   console.error(`[search-existing] spend: $${result.costUsd.toFixed(6)}`);
-  console.error(`[search-existing] report: ${result.reportPath}`);
   console.error(`[search-existing] json:   ${result.jsonReportPath}`);
   process.stdout.write(`recommended_model=${result.recommendedModelId}
 `);
-  return 0;
+  return {
+    ok: true,
+    summary: `search-existing benchmark done \u2014 recommended ${result.recommendedModelId} (changed=${result.changed}), spend $${result.costUsd.toFixed(6)}`,
+    reportPath: result.reportPath
+  };
 }
 async function runAutoReplacePhase(opts) {
   console.error("[auto-replace] cross-tool auto-replacement planner");
@@ -224627,44 +224886,51 @@ async function runAutoReplacePhase(opts) {
     force: opts.force,
     onProgress: (m) => console.error(`[auto-replace] ${m}`)
   });
+  const ensemble = planEnsembleRotation();
+  const fullReport = reportMarkdown + "\n" + renderEnsembleRotationSection(ensemble);
   const reportPath = join13(resolveProjectMainRoot(), "reports", "auto-replace", `${compactStamp()}-auto-replace.md`);
   mkdirSync8(dirname4(reportPath), { recursive: true });
-  writeFileSync7(reportPath, reportMarkdown, "utf-8");
+  writeFileSync7(reportPath, fullReport, "utf-8");
   console.error("");
   for (const f of findings) {
     const verdict = !f.ranBenchmark ? "healthy \u2014 no benchmark" : f.changed ? `RECOMMEND ${f.incumbentModelId} -> ${f.recommendedModelId}` : `keep ${f.incumbentModelId}`;
     console.error(`[auto-replace] ${f.tool} (${f.benchmark}): ${verdict}`);
   }
+  for (const s of ensemble.slots) {
+    console.error(
+      `[auto-replace] ensemble.${s.slot} (${s.modelId}): ${s.verdict.persistentlyBroken ? "BROKEN" : "healthy"} \u2014 ${s.verdict.reason}`
+    );
+  }
   const recommended = findings.filter((f) => f.changed);
   console.error(
-    `[auto-replace] ${findings.length} tool(s) checked, ${findings.filter((f) => f.degraded).length} degraded, ${recommended.length} replacement(s) recommended.`
+    `[auto-replace] ${findings.length} tool(s) checked, ${findings.filter((f) => f.degraded).length} degraded, ${recommended.length} replacement(s) recommended; ${ensemble.brokenSlots.length}/${ensemble.slots.length} ensemble slot(s) persistently broken.`
   );
   console.error(`[auto-replace] report: ${reportPath}`);
+  const scope = `${findings.length} tool(s) checked, ${recommended.length} replacement(s) recommended; ${ensemble.brokenSlots.length}/${ensemble.slots.length} ensemble slot(s) broken`;
   if (!opts.apply) {
     console.error(
       "[auto-replace] ADVISORY only \u2014 nothing written. Re-run with --apply to adopt the recommendation(s)."
     );
     process.stdout.write(`recommended_replacements=${recommended.length}
 `);
-    return 0;
+    return { ok: true, summary: `advisory \u2014 ${scope}; nothing written`, reportPath };
   }
-  const settingsPath = join13(homedir3(), ".llm-externalizer", "settings.yaml");
+  const settingsPath = getSettingsPath();
   let profileName;
   try {
     const settings = loadSettings();
     if (!settings || !settings.active) {
       throw new Error(
-        "--apply needs an active profile in ~/.llm-externalizer/settings.yaml, but none is configured."
+        `--apply needs an active profile in ${settingsPath}, but none is configured.`
       );
     }
     profileName = settings.active;
   } catch (err) {
-    console.error(`[auto-replace] --apply failed: ${err.message}`);
-    return 3;
+    return { ok: false, code: 3, summary: `--apply failed: ${err.message}`, reportPath };
   }
-  if (recommended.length === 0) {
+  if (recommended.length === 0 && !ensemble.rotationNeeded) {
     console.error("[auto-replace] --apply: no changed recommendation to adopt \u2014 nothing written.");
-    return 0;
+    return { ok: true, summary: `no changed recommendation to adopt \u2014 ${scope}; nothing written`, reportPath };
   }
   console.error("");
   for (const f of recommended) {
@@ -224674,14 +224940,118 @@ async function runAutoReplacePhase(opts) {
         `[auto-replace] applied ${profileName}::tool_models.${f.tool}: ${r.oldModelId || "\u2014"}  \u2192  ${r.newModelId}`
       );
     } catch (err) {
-      console.error(`[auto-replace] --apply failed on ${f.tool}: ${err.message}`);
-      return 3;
+      return { ok: false, code: 3, summary: `--apply failed on ${f.tool}: ${err.message}`, reportPath };
     }
   }
-  console.error("[auto-replace] Run the `reset` MCP tool or restart Claude Code to pick up the new tool model(s).");
+  let rotated = 0;
+  if (ensemble.rotationNeeded) {
+    const topN = opts.pickTopN ?? ensemble.slots.length;
+    console.error(
+      `[auto-replace] ensemble rotation: ${ensemble.brokenSlots.map((s) => `${s.slot}=${s.modelId}`).join(", ")} \u2014 running a fresh keyword sweep, then re-picking the top ${topN} (the profile's current slot count).`
+    );
+    const sweepOpts = {
+      ...opts,
+      includeIds: [...opts.includeIds, ...opts.searchExistingModels],
+      dryRun: false,
+      fromCache: false,
+      pickTopN: topN
+    };
+    const sweep = await runKeywordSweep(sweepOpts);
+    let picks;
+    try {
+      picks = pickTopN(sweep.results, { topN, minMeanF1: opts.minMeanF1, requireSchema: true });
+    } catch (err) {
+      return {
+        ok: false,
+        code: 2,
+        summary: `ensemble rotation failed \u2014 ${err.message} (settings unchanged)`,
+        reportPath: sweep.reportPath || reportPath
+      };
+    }
+    try {
+      const r = applyPicksToSettings(settingsPath, profileName, picks);
+      rotated = picks.length;
+      console.error(
+        `[auto-replace] rotated ${profileName}: ${r.oldEnsemble.model} \u2192 ${r.newEnsemble.model}` + (r.newEnsemble.second_model ? `, ${r.oldEnsemble.second_model ?? "\u2014"} \u2192 ${r.newEnsemble.second_model}` : "") + (r.newEnsemble.third_model ? `, ${r.oldEnsemble.third_model ?? "\u2014"} \u2192 ${r.newEnsemble.third_model}` : "")
+      );
+    } catch (err) {
+      return {
+        ok: false,
+        code: 3,
+        summary: `ensemble rotation write failed: ${err.message}`,
+        reportPath: sweep.reportPath || reportPath
+      };
+    }
+  }
+  console.error("[auto-replace] Run the `reset` MCP tool or restart Claude Code to pick up the new model(s).");
   process.stdout.write(`applied_replacements=${recommended.length}
 `);
-  return 0;
+  process.stdout.write(`rotated_ensemble_slots=${rotated}
+`);
+  return {
+    ok: true,
+    summary: `applied ${recommended.length} tool replacement(s) and rotated ${rotated} ensemble slot(s) on '${profileName}' \u2014 run \`reset\` to reload`,
+    reportPath
+  };
+}
+async function runAdoptPhase(opts) {
+  const modelId = opts.adoptModel;
+  const target = opts.adoptInto;
+  const settingsPath = getSettingsPath();
+  let profileName = opts.adoptProfile;
+  if (profileName === null) {
+    const settings = loadSettings();
+    if (!settings || !settings.active) {
+      throw new Error(
+        `--adopt needs a profile: none given via --adopt-profile and no active profile in ${settingsPath}`
+      );
+    }
+    profileName = settings.active;
+  }
+  console.error(`[adopt] assessing ${modelId} against every LLM tool's requirements \u2026`);
+  const assessment = await assessModelById(modelId);
+  if (target.startsWith("tool:")) {
+    const tool = target.slice("tool:".length);
+    const fit = assessment.tools.find((t) => t.tool === tool);
+    if (!fit) {
+      throw new Error(
+        `--adopt-into tool:${tool} \u2014 '${tool}' is not a registered LLM-using tool. Registered: ${assessment.tools.map((t) => t.tool).join(", ")}.`
+      );
+    }
+    if (!fit.meetsRequirements) {
+      return {
+        ok: false,
+        code: 2,
+        summary: `${modelId} does not meet ${tool}'s requirements (${fit.disqualifyReason ?? "unspecified"}) \u2014 settings unchanged`
+      };
+    }
+    const r2 = applyToolModelToSettings(settingsPath, profileName, tool, modelId);
+    process.stdout.write(`adopted_model=${modelId}
+`);
+    return {
+      ok: true,
+      summary: `adopted ${modelId} into ${profileName}::tool_models.${tool} (was ${r2.oldModelId || "unset"})` + (fit.benchmark ? `; NOTE ${tool} also has a '${fit.benchmark}' benchmark gate` : "") + " \u2014 run `reset` to reload"
+    };
+  }
+  if (!ENSEMBLE_SLOTS.includes(target)) {
+    throw new Error(
+      `--adopt-into must be one of ${ENSEMBLE_SLOTS.join(", ")} or tool:<name>, got '${target}'`
+    );
+  }
+  if (assessment.qualifiedCount < 1) {
+    return {
+      ok: false,
+      code: 2,
+      summary: `${modelId} meets no LLM tool's requirements (0/${assessment.totalTools}) \u2014 settings unchanged`
+    };
+  }
+  const r = applyEnsembleSlotToSettings(settingsPath, profileName, target, modelId);
+  process.stdout.write(`adopted_model=${modelId}
+`);
+  return {
+    ok: true,
+    summary: `adopted ${modelId} into ${profileName}::${r.slot} (was ${r.oldModelId || "unset"}); fits ${assessment.qualifiedCount}/${assessment.totalTools} tool(s) \u2014 run \`reset\` to reload`
+  };
 }
 async function runAssessModelPhase(modelId) {
   console.error(
@@ -224689,37 +225059,47 @@ async function runAssessModelPhase(modelId) {
   );
   const assessment = await assessModelById(modelId);
   process.stdout.write(renderAssessmentText(assessment) + "\n");
-  return 0;
+  return {
+    ok: true,
+    summary: `${modelId} meets the requirements of ${assessment.qualifiedCount}/${assessment.totalTools} LLM tool(s)`
+  };
 }
 async function runCheckHealthPhase() {
   console.error(`[check-health] checking the active profile's configured model(s) \u2026`);
   const { report, reportPath } = await runCheckModelHealth();
-  process.stdout.write(renderModelHealthText(report) + "\n");
-  process.stdout.write(`
-Report: ${reportPath}
-`);
-  return report.summary.critical > 0 ? 1 : 0;
+  console.error(renderModelHealthText(report));
+  const s = report.summary;
+  return s.critical > 0 ? {
+    ok: false,
+    code: 1,
+    summary: `${s.critical} configured model(s) are CRITICAL (deprecated/removed), ${s.warn} warn, ${s.ok} ok`,
+    reportPath
+  } : {
+    ok: true,
+    summary: `configured models: ${s.ok} ok, ${s.warn} warn, 0 critical`,
+    reportPath
+  };
 }
 async function runNewArrivalsPhase(opts) {
   console.error(`[new-arrivals] diffing the live catalog against the last snapshot \u2026`);
   const { report, reportPath } = await runDiscoverNewArrivals({
     qualifyingOnly: opts.qualifyingOnly
   });
-  process.stdout.write(renderNewArrivalsText(report) + "\n");
-  process.stdout.write(`
-Report: ${reportPath}
-`);
-  return 0;
+  console.error(renderNewArrivalsText(report));
+  return {
+    ok: true,
+    summary: `${report.summary.total} new arrival(s), ${report.summary.qualifying} qualify for \u22651 tool` + (report.summary.qualifying > 0 ? " \u2014 adopt one with `--adopt <ID> --adopt-into <slot|tool:NAME>`" : ""),
+    reportPath
+  };
 }
-function runPickPhase(results, opts) {
+function runPickPhase(results, opts, reportPath, notes = []) {
   const topN = opts.pickTopN;
-  if (topN === null) return 0;
+  if (topN === null) return { ok: true, summary: "nothing to pick", reportPath };
   let picks;
   try {
     picks = pickTopN(results, { topN, minMeanF1: opts.minMeanF1, requireSchema: true });
   } catch (err) {
-    console.error(`[benchmark] pick failed: ${err.message}`);
-    return 2;
+    return { ok: false, code: 2, summary: `pick failed: ${err.message}`, reportPath };
   }
   console.error(`[benchmark] Top ${topN} survivors (sorted by meanF1 desc, then cost asc):`);
   for (const p of picks) {
@@ -224732,8 +225112,9 @@ function runPickPhase(results, opts) {
   console.error("");
   console.error("# settings.yaml block (paste under `profiles:`):");
   process.stdout.write(block);
+  const ids = picks.map((p) => p.modelId).join(", ");
   if (opts.applyProfile !== null) {
-    const settingsPath = join13(homedir3(), ".llm-externalizer", "settings.yaml");
+    const settingsPath = getSettingsPath();
     try {
       const result = applyPicksToSettings(settingsPath, opts.applyProfile, picks);
       console.error("");
@@ -224747,11 +225128,19 @@ function runPickPhase(results, opts) {
       }
       console.error("[benchmark] Run the `reset` MCP tool or restart Claude Code to pick up the new ensemble.");
     } catch (err) {
-      console.error(`[benchmark] --apply-profile failed: ${err.message}`);
-      return 3;
+      return { ok: false, code: 3, summary: `--apply-profile failed: ${err.message}`, reportPath };
     }
+    return {
+      ok: true,
+      summary: [`applied top-${topN} to '${opts.applyProfile}': ${ids} \u2014 run \`reset\` to reload`, ...notes].join(", "),
+      reportPath
+    };
   }
-  return 0;
+  return {
+    ok: true,
+    summary: [`top-${topN} picks: ${ids} (not applied \u2014 pass --apply-profile P to write them)`, ...notes].join(", "),
+    reportPath
+  };
 }
 function buildReportPath() {
   const root = resolveMainRoot3();
@@ -224766,10 +225155,18 @@ function buildReportPath() {
 }
 withUsageContext(
   { tool: "cli:benchmark", params: "" },
-  () => main().catch((err) => {
-    console.error("[benchmark] fatal:", err instanceof Error ? err.stack : String(err));
-    process.exit(1);
-  })
+  () => main().then(
+    (result) => {
+      process.stdout.write(finalLine(result) + "\n");
+      process.exitCode = result.code ?? (result.ok ? 0 : 1);
+    },
+    (err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (err instanceof Error && err.stack) console.error("[benchmark] fatal:", err.stack);
+      process.stdout.write(finalLine({ ok: false, summary: msg }) + "\n");
+      process.exitCode = 1;
+    }
+  )
 );
 /*! Bundled license information:
 

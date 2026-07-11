@@ -19574,7 +19574,7 @@ function appendModelEvent(model, kind, detail = "") {
   } catch {
   }
 }
-var MODEL_EVENT_KINDS, KIND_SET, MAX_DETAIL;
+var MODEL_EVENT_KINDS, KIND_SET, MAX_DETAIL, ROTATE_WORTHY_STATUSES, ROTATE_WORTHY;
 var init_model_events = __esm({
   "src/model-events.ts"() {
     "use strict";
@@ -19592,6 +19592,8 @@ var init_model_events = __esm({
     ];
     KIND_SET = new Set(MODEL_EVENT_KINDS);
     MAX_DETAIL = 160;
+    ROTATE_WORTHY_STATUSES = [400, 404, 410, 422];
+    ROTATE_WORTHY = new Set(ROTATE_WORTHY_STATUSES);
   }
 });
 

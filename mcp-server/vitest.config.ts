@@ -99,6 +99,22 @@ export default defineConfig({
       // --auto-replace / --apply CLI surface — hermetic spawn of dist/benchmark.js
       // on a healthy ledger (no network); the writer path (TRDD-828238b5 A7-P3).
       'src/benchmark/auto-replace-cli.test.ts',
+      // ── P1 zero-token model pipeline ──────────────────────────────────────
+      // The ROTATION threshold that replaced the agent's "is this 404 persistent?"
+      // judgment: pure rule, synthetic events, injected clock.
+      'src/model-events-persistence.test.ts',
+      // Ensemble coverage of the ledger (planEnsembleRotation) — real ledger file.
+      'src/model-qualification/ensemble-rotation.test.ts',
+      // The flag defaults that used to be prose the agent had to apply by hand
+      // (--qualifying-top-n 15) + the P1 writer flags.
+      'src/benchmark/cli-args.test.ts',
+      // The two new CLI-only settings writers (free_models pool, new-arrival
+      // adoption). Real files, real atomic tmp+rename.
+      'src/benchmark/apply-free-pool.test.ts',
+      'src/benchmark/apply-ensemble-slot.test.ts',
+      // The [OK|FAILED] final-line + exit-code contract — hermetic spawn of the
+      // real bundle (no network, no key): prereq self-check, cache pick, writers.
+      'src/benchmark/cli-contract.test.ts',
       // security-triage model benchmark — golden dataset loader, scorer, and
       // the selection gate. Pure-TS unit tests (no LLM, no network).
       'src/benchmark/security-triage/dataset.test.ts',

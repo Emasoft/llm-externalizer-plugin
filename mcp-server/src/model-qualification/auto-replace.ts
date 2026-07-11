@@ -32,10 +32,14 @@
 
 import {
   aggregateModelHealth,
+  assessModelPersistence,
   readModelEvents,
   type AggregateOptions,
   type ModelHealthSummary,
+  type ModelPersistenceVerdict,
+  type PersistenceOptions,
 } from "../model-events.js";
+import { ENSEMBLE_SLOTS, type EnsembleSlot } from "../benchmark/pick.js";
 import {
   loadSettings,
   resolveModelForTool,
@@ -324,6 +328,135 @@ export async function planToolReplacements(
 
   const reportMarkdown = renderReport(reader.profileName, !!opts.force, findings);
   return { findings, reportMarkdown };
+}
+
+// ── ENSEMBLE coverage (P1 zero-token model pipeline) ─────────────────────────
+//
+// The planner above only covers tools that have a per-tool SELECTOR benchmark
+// (security-triage, search-existing) — see benchmarkedTools()'s scoping comment.
+// That left the ensemble slots (`model` / `second_model` / `third_model`), which
+// serve EVERY other tool, with no automated health verdict at all: when one of them
+// started 404ing, the ensemble-autoselect SKILL asked the AGENT to read the retry
+// history and judge whether the failure was "persistent". That judgment is now
+// assessModelPersistence's code threshold (model-events.ts), and this planner is
+// what applies it to the models the ensemble actually runs on.
+//
+// It stays ADVISORY, exactly like planToolReplacements: it computes the verdict and
+// never writes. The write lives in the CLI (--auto-replace --apply), behind the
+// read-only-MCP guardrail.
+
+/** One ensemble slot's rotation verdict. */
+export interface EnsembleSlotFinding {
+  slot: EnsembleSlot;
+  modelId: string;
+  /** The code threshold's verdict — no agent judgment anywhere in this path. */
+  verdict: ModelPersistenceVerdict;
+}
+
+export interface EnsembleRotationPlan {
+  profileName: string;
+  /** One finding per CONFIGURED slot (unset slots are skipped). */
+  slots: EnsembleSlotFinding[];
+  /** The subset whose verdict crossed the persistence threshold. */
+  brokenSlots: EnsembleSlotFinding[];
+  /** True iff ≥1 configured slot is persistently broken — the rotation trigger. */
+  rotationNeeded: boolean;
+}
+
+/** Injectable seam: which models the ensemble currently runs on. */
+export interface EnsembleReader {
+  profileName: string;
+  /** Configured slots, in ensemble order. An unset slot is simply absent. */
+  slots: { slot: EnsembleSlot; modelId: string }[];
+}
+
+export interface EnsembleRotationOptions {
+  /** Ledger path to aggregate (default: the real model-events.log). */
+  eventsPath?: string;
+  /** Rotation-threshold overrides (window / min-consecutive / clock). */
+  persistence?: PersistenceOptions;
+  /** Test seam — resolve the ensemble's configured slots. */
+  settingsReader?: () => EnsembleReader;
+}
+
+/**
+ * Default ensemble reader: the ACTIVE profile's resolved slots. Under `free_only`
+ * the ensemble is served from the `free_models` pool rather than these three keys,
+ * so resolveProfile's model/secondModel/thirdModel already reflect whichever source
+ * is authoritative — we read the RESOLVED values, not the raw YAML, so the verdict
+ * is about the models actually being CALLED.
+ */
+function defaultEnsembleReader(): EnsembleReader {
+  const settings = loadSettings();
+  if (!settings || !settings.active) return { profileName: "(unconfigured)", slots: [] };
+  const profile = settings.profiles[settings.active];
+  if (!profile) return { profileName: settings.active, slots: [] };
+  const resolved = resolveProfile(settings.active, profile);
+  const bySlot: Record<EnsembleSlot, string> = {
+    model: resolved.model,
+    second_model: resolved.secondModel,
+    third_model: resolved.thirdModel,
+  };
+  const slots = ENSEMBLE_SLOTS.filter((s) => !!bySlot[s]).map((s) => ({ slot: s, modelId: bySlot[s] }));
+  return { profileName: settings.active, slots };
+}
+
+/**
+ * Assess every configured ensemble slot against the durable ledger's rotation
+ * threshold. PURE wrt config — never writes. A model with no in-window,
+ * status-carrying non-retryable failure is not in the verdict map, and is reported
+ * healthy: a brand-new or simply quiet model must NEVER trigger a rotation.
+ */
+export function planEnsembleRotation(opts: EnsembleRotationOptions = {}): EnsembleRotationPlan {
+  const reader = (opts.settingsReader ?? defaultEnsembleReader)();
+  const events = readModelEvents({ path: opts.eventsPath });
+  const verdicts = assessModelPersistence(events, opts.persistence);
+  const windowHours = opts.persistence?.windowHours ?? 24;
+
+  const slots: EnsembleSlotFinding[] = reader.slots.map(({ slot, modelId }) => ({
+    slot,
+    modelId,
+    verdict: verdicts.get(modelId) ?? {
+      model: modelId,
+      persistentlyBroken: false,
+      httpStatus: null,
+      consecutiveFailures: 0,
+      windowHours,
+      reason: `no model-scoped failure on the ledger in the last ${windowHours}h`,
+    },
+  }));
+  const brokenSlots = slots.filter((s) => s.verdict.persistentlyBroken);
+  return {
+    profileName: reader.profileName,
+    slots,
+    brokenSlots,
+    rotationNeeded: brokenSlots.length > 0,
+  };
+}
+
+/** Markdown section for the ensemble half of the auto-replace report. */
+export function renderEnsembleRotationSection(plan: EnsembleRotationPlan): string {
+  const lines: string[] = [];
+  lines.push("## Ensemble slots (ledger rotation threshold)");
+  lines.push("");
+  if (plan.slots.length === 0) {
+    lines.push("No ensemble slot is configured on the active profile — nothing to check.");
+    lines.push("");
+    return lines.join("\n");
+  }
+  lines.push(
+    plan.rotationNeeded
+      ? `${plan.brokenSlots.length} of ${plan.slots.length} slot(s) are PERSISTENTLY BROKEN — rotation is warranted.`
+      : `All ${plan.slots.length} configured slot(s) are healthy — no rotation.`,
+  );
+  lines.push("");
+  for (const s of plan.slots) {
+    lines.push(
+      `- **${s.slot}:** \`${s.modelId}\` — ${s.verdict.persistentlyBroken ? "BROKEN" : "healthy"} (${s.verdict.reason})`,
+    );
+  }
+  lines.push("");
+  return lines.join("\n");
 }
 
 /**

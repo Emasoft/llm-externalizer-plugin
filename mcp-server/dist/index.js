@@ -14226,12 +14226,12 @@ var require_dist2 = __commonJS({
 });
 
 // src/index.ts
-var import_yaml2 = __toESM(require_dist(), 1);
+var import_yaml3 = __toESM(require_dist(), 1);
 import {
-  readFileSync as readFileSync18,
-  writeFileSync as writeFileSync14,
+  readFileSync as readFileSync19,
+  writeFileSync as writeFileSync15,
   mkdirSync as mkdirSync18,
-  existsSync as existsSync15,
+  existsSync as existsSync16,
   renameSync as renameSync8,
   statSync as statSync9,
   appendFileSync as appendFileSync6,
@@ -37640,7 +37640,7 @@ var StdioServerTransport = class {
 };
 
 // src/mass_scouting/mcp-tools.ts
-import { mkdirSync as mkdirSync11, writeFileSync as writeFileSync8 } from "node:fs";
+import { mkdirSync as mkdirSync11, writeFileSync as writeFileSync9 } from "node:fs";
 import { join as join14 } from "node:path";
 
 // src/mass_scouting/cli.ts
@@ -43000,6 +43000,8 @@ function aggregateModelHealth(events, opts = {}) {
   }
   return byModel;
 }
+var ROTATE_WORTHY_STATUSES = [400, 404, 410, 422];
+var ROTATE_WORTHY = new Set(ROTATE_WORTHY_STATUSES);
 
 // src/security_scan/judge.ts
 var OPENROUTER_URL2 = "https://openrouter.ai/api/v1/chat/completions";
@@ -48476,6 +48478,10 @@ async function runDiscoverNewArrivals(opts = {}) {
   return { report, reportPath };
 }
 
+// src/benchmark/pick.ts
+var import_yaml2 = __toESM(require_dist(), 1);
+import { readFileSync as readFileSync12, writeFileSync as writeFileSync8, renameSync as renameSyncCb, existsSync as existsSync9 } from "node:fs";
+
 // src/model-qualification/auto-replace.ts
 function defaultSettingsReader(profileNameOverride) {
   const settings = loadSettings();
@@ -49754,7 +49760,7 @@ Report: ${reportPath}`;
         const dir = str(args.output_dir) ?? join14(root, "reports", "auto-replace");
         mkdirSync11(dir, { recursive: true });
         const reportPath = join14(dir, `${compactStamp()}-auto-replace.md`);
-        writeFileSync8(reportPath, reportMarkdown);
+        writeFileSync9(reportPath, reportMarkdown);
         const degraded = findings.filter((f) => f.degraded).length;
         const recommended = findings.filter((f) => f.changed).length;
         const summary = `${findings.length} tool(s) checked, ${degraded} degraded, ${recommended} replacement(s) recommended (advisory \u2014 apply via the CLI \`llm-ext-benchmark --auto-replace --apply\`).`;
@@ -50505,10 +50511,10 @@ async function safeReadJson(res, maxBytes = MAX_RESPONSE_BYTES) {
 // src/cluster/cluster_synonyms_main.ts
 import {
   mkdirSync as mkdirSync14,
-  readFileSync as readFileSync13,
+  readFileSync as readFileSync14,
   readdirSync as readdirSync5,
-  writeFileSync as writeFileSync10,
-  existsSync as existsSync10,
+  writeFileSync as writeFileSync11,
+  existsSync as existsSync11,
   renameSync as renameSync5
 } from "node:fs";
 import { join as join16 } from "node:path";
@@ -50760,20 +50766,20 @@ var CheckpointDB = class _CheckpointDB {
 // src/cluster/embeddings.ts
 import { spawnSync as spawnSync2 } from "node:child_process";
 import {
-  existsSync as existsSync9,
+  existsSync as existsSync10,
   mkdirSync as mkdirSync13,
-  readFileSync as readFileSync12,
-  writeFileSync as writeFileSync9,
+  readFileSync as readFileSync13,
+  writeFileSync as writeFileSync10,
   statSync as statSync7
 } from "node:fs";
 import { dirname as dirname7, join as join15 } from "node:path";
 var F32_BYTES = 4;
 function readEmbeddingsMeta(path) {
   const metaPath = path + ".meta.json";
-  if (!existsSync9(metaPath)) {
+  if (!existsSync10(metaPath)) {
     throw new Error(`embeddings meta sidecar missing: ${metaPath}`);
   }
-  const raw = readFileSync12(metaPath, "utf-8");
+  const raw = readFileSync13(metaPath, "utf-8");
   let meta3;
   try {
     meta3 = JSON.parse(raw);
@@ -50792,7 +50798,7 @@ function readEmbeddingsMeta(path) {
   return meta3;
 }
 function loadEmbeddings(path, expectedN) {
-  if (!existsSync9(path)) throw new Error(`embeddings file missing: ${path}`);
+  if (!existsSync10(path)) throw new Error(`embeddings file missing: ${path}`);
   const meta3 = readEmbeddingsMeta(path);
   const [n, dim] = meta3.shape;
   if (meta3.dtype !== "float32") {
@@ -50811,21 +50817,21 @@ function loadEmbeddings(path, expectedN) {
       `embeddings file size mismatch: ${path} is ${stat.size} bytes, expected ${expectedBytes} = N(${n}) \xD7 D(${dim}) \xD7 ${F32_BYTES}`
     );
   }
-  const buf = readFileSync12(path);
+  const buf = readFileSync13(path);
   const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
   const embeddings = new Float32Array(ab);
   return { embeddings, dim, model: meta3.model, source: "loaded", path };
 }
 function computeEmbeddings(items, opts) {
   if (items.length === 0) throw new Error("computeEmbeddings: empty items");
-  if (!existsSync9(opts.scriptPath)) {
+  if (!existsSync10(opts.scriptPath)) {
     throw new Error(`compute_embeddings.py not found: ${opts.scriptPath}`);
   }
   mkdirSync13(opts.outDir, { recursive: true });
   const inputPath = join15(opts.outDir, "_embedding_sentences.txt");
   const outputPath = join15(opts.outDir, "embeddings.f32");
   const clean = opts.sentenceClean ?? defaultSentenceClean;
-  writeFileSync9(
+  writeFileSync10(
     inputPath,
     items.map((it) => clean(it.sentence)).join("\n") + "\n",
     { encoding: "utf-8" }
@@ -51762,17 +51768,17 @@ var OUTPUT_NAMES = {
   checkpoint: "checkpoint.sqlite"
 };
 async function loadInputJsonl(path) {
-  if (!existsSync10(path)) {
+  if (!existsSync11(path)) {
     throw new Error(`input_file not found: ${path}`);
   }
   return readClusterJsonl(path);
 }
 function loadPolicy(policyFile) {
   if (!policyFile) return resolvePolicy(void 0);
-  if (!existsSync10(policyFile)) {
+  if (!existsSync11(policyFile)) {
     throw new Error(`policy_file not found: ${policyFile}`);
   }
-  const raw = readFileSync13(policyFile, "utf-8");
+  const raw = readFileSync14(policyFile, "utf-8");
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -51840,7 +51846,7 @@ function reductionPct(itemsIn, clustersOut) {
 }
 function writeJsonAtomic(path, value) {
   const tmp = path + ".tmp";
-  writeFileSync10(tmp, JSON.stringify(value, null, 2) + "\n", { encoding: "utf-8" });
+  writeFileSync11(tmp, JSON.stringify(value, null, 2) + "\n", { encoding: "utf-8" });
   renameSync5(tmp, path);
 }
 function writeClustersJsonl(path, itemsById, partition) {
@@ -51855,7 +51861,7 @@ function writeClustersJsonl(path, itemsById, partition) {
       lines.push(JSON.stringify({ id: it.id, cluster_id: clusterId, sentence: it.sentence }));
     }
   }
-  writeFileSync10(path, lines.join("\n") + (lines.length ? "\n" : ""), { encoding: "utf-8" });
+  writeFileSync11(path, lines.join("\n") + (lines.length ? "\n" : ""), { encoding: "utf-8" });
 }
 function buildSummary(itemsById, partition, profileName, canonicalsOverride) {
   const clusters = [];
@@ -51892,7 +51898,7 @@ async function runClusterSynonyms(invocation, hooks) {
   const policy = loadPolicy(invocation.policy_file);
   const resumeFrom = invocation.resume_from;
   const resuming = resumeFrom !== void 0;
-  if (resumeFrom !== void 0 && !existsSync10(resumeFrom)) {
+  if (resumeFrom !== void 0 && !existsSync11(resumeFrom)) {
     errors.push(`resume_from checkpoint not found: ${resumeFrom}`);
     return buildEarlyAbort(invocation, errors, warnings, profileName, tStart);
   }
@@ -52064,7 +52070,7 @@ function buildEarlyAbort(invocation, errors, warnings, profileName, tStart) {
 
 // src/cluster/preflight_benchmark.ts
 import { createHash as createHash5 } from "node:crypto";
-import { mkdirSync as mkdirSync15, readFileSync as readFileSync14, writeFileSync as writeFileSync11, existsSync as existsSync11, renameSync as renameSync6 } from "node:fs";
+import { mkdirSync as mkdirSync15, readFileSync as readFileSync15, writeFileSync as writeFileSync12, existsSync as existsSync12, renameSync as renameSync6 } from "node:fs";
 import { join as join17, dirname as dirname8 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var DEFAULT_PREFLIGHT_PROMPT = `You are given 3 short sentences with numeric ids. Group sentences that have IDENTICAL or NEARLY-IDENTICAL overall meaning (full-sentence meaning equivalence, NOT word-by-word synonym matching).
@@ -52097,9 +52103,9 @@ function cachePathFor(profileHashStr, date5, cacheDir) {
   return join17(dir, `benchmark-${profileHashStr}-${date5}.json`);
 }
 function readCache(path) {
-  if (!existsSync11(path)) return null;
+  if (!existsSync12(path)) return null;
   try {
-    const raw = readFileSync14(path, "utf8");
+    const raw = readFileSync15(path, "utf8");
     const parsed = JSON.parse(raw);
     if (parsed.version !== 1) return null;
     return parsed;
@@ -52110,7 +52116,7 @@ function readCache(path) {
 function writeCache(path, rec) {
   mkdirSync15(dirname8(path), { recursive: true });
   const tmp = `${path}.tmp.${process.pid}`;
-  writeFileSync11(tmp, JSON.stringify(rec, null, 2) + "\n", "utf8");
+  writeFileSync12(tmp, JSON.stringify(rec, null, 2) + "\n", "utf8");
   renameSync6(tmp, path);
 }
 function validatePreflightResponse(raw) {
@@ -53285,7 +53291,7 @@ import { fileURLToPath as fileUrlToPath_cs } from "node:url";
 
 // src/scan-folder/core.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { existsSync as existsSync12, statSync as statSync8, readFileSync as readFileSync15 } from "node:fs";
+import { existsSync as existsSync13, statSync as statSync8, readFileSync as readFileSync16 } from "node:fs";
 async function runScanFolder(args, deps) {
   const {
     folder_path,
@@ -53314,7 +53320,7 @@ async function runScanFolder(args, deps) {
   } catch (err3) {
     return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
   }
-  if (!existsSync12(sfFolderPath)) {
+  if (!existsSync13(sfFolderPath)) {
     return {
       content: [
         {
@@ -53463,7 +53469,7 @@ async function runScanFolder(args, deps) {
   if (sfMode === 2 && succeeded.length > 0) {
     const sections = [];
     for (const r of succeeded) {
-      const content = r.reportPath && existsSync12(r.reportPath) ? readFileSync15(r.reportPath, "utf-8") : "";
+      const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync16(r.reportPath, "utf-8") : "";
       sections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -53503,7 +53509,7 @@ ${content}`);
       for (const fp of fg.files) {
         const r = pathToResult.get(fp);
         if (!r) continue;
-        const content = r.reportPath && existsSync12(r.reportPath) ? readFileSync15(r.reportPath, "utf-8") : "";
+        const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync16(r.reportPath, "utf-8") : "";
         sections.push(`## File: ${fp}
 
 ${content}`);
@@ -53857,10 +53863,10 @@ ${codeResp.content}${codeFooter}` : codeResp.content + codeFooter
 
 // src/rule-install.ts
 import {
-  existsSync as existsSync13,
+  existsSync as existsSync14,
   mkdirSync as mkdirSync16,
-  readFileSync as readFileSync16,
-  writeFileSync as writeFileSync12,
+  readFileSync as readFileSync17,
+  writeFileSync as writeFileSync13,
   renameSync as renameSync7,
   realpathSync as realpathSync4,
   unlinkSync
@@ -53882,7 +53888,7 @@ function resolveBundledRulePath() {
   } catch {
   }
   for (const c of candidates) {
-    if (existsSync13(c)) return c;
+    if (existsSync14(c)) return c;
   }
   return null;
 }
@@ -53925,7 +53931,7 @@ function installUsageRule(opts = {}) {
     return { status: "skipped", dest: "", detail: "disabled via LLM_EXT_INSTALL_RULE" };
   }
   const source = opts.sourcePath ?? resolveBundledRulePath();
-  if (!source || !existsSync13(source)) {
+  if (!source || !existsSync14(source)) {
     return { status: "error", dest: "", detail: "bundled rule source not found" };
   }
   const rulesDir = opts.rulesDir ?? resolveClaudeRulesDir();
@@ -53939,21 +53945,21 @@ function installUsageRule(opts = {}) {
   }
   let desired;
   try {
-    desired = readFileSync16(source, "utf-8");
+    desired = readFileSync17(source, "utf-8");
   } catch (e) {
     return { status: "error", dest, detail: `cannot read source: ${e.message}` };
   }
-  const existed = existsSync13(dest);
+  const existed = existsSync14(dest);
   if (existed) {
     try {
-      if (readFileSync16(dest, "utf-8") === desired) return { status: "unchanged", dest };
+      if (readFileSync17(dest, "utf-8") === desired) return { status: "unchanged", dest };
     } catch {
     }
   }
   const tmp = dest + ".tmp." + process.pid + "." + randomBytes3(4).toString("hex");
   try {
     mkdirSync16(rulesDir, { recursive: true });
-    writeFileSync12(tmp, desired, "utf-8");
+    writeFileSync13(tmp, desired, "utf-8");
     renameSync7(tmp, dest);
   } catch (e) {
     try {
@@ -54503,11 +54509,11 @@ function renderEndpointTable(ep, colors) {
 
 // src/free-pool-auto-bench.ts
 import {
-  existsSync as existsSync14,
+  existsSync as existsSync15,
   mkdirSync as mkdirSync17,
   openSync,
-  readFileSync as readFileSync17,
-  writeFileSync as writeFileSync13
+  readFileSync as readFileSync18,
+  writeFileSync as writeFileSync14
 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
 import { dirname as dirname10, join as join19, resolve as pathResolve } from "node:path";
@@ -54521,13 +54527,13 @@ var DISABLE_ENV = "LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH";
 function resolveBenchmarkScriptPath() {
   const here = dirname10(fileURLToPath5(import.meta.url));
   const bundled = pathResolve(here, "benchmark.js");
-  if (existsSync14(bundled)) return bundled;
+  if (existsSync15(bundled)) return bundled;
   const fromSrc = pathResolve(here, "..", "dist", "benchmark.js");
   return fromSrc;
 }
 function benchCacheHasFreeEntries(cachePath3 = BENCH_CACHE) {
   try {
-    const raw = readFileSync17(cachePath3, "utf-8");
+    const raw = readFileSync18(cachePath3, "utf-8");
     const data = JSON.parse(raw);
     if (!Array.isArray(data?.results)) return false;
     return data.results.some(
@@ -54538,9 +54544,9 @@ function benchCacheHasFreeEntries(cachePath3 = BENCH_CACHE) {
   }
 }
 function lockHoldsLivePid(lockPath = BENCH_LOCK) {
-  if (!existsSync14(lockPath)) return false;
+  if (!existsSync15(lockPath)) return false;
   try {
-    const pid = parseInt(readFileSync17(lockPath, "utf-8").trim(), 10);
+    const pid = parseInt(readFileSync18(lockPath, "utf-8").trim(), 10);
     if (!Number.isInteger(pid) || pid <= 0) return false;
     try {
       process.kill(pid, 0);
@@ -54625,7 +54631,7 @@ function maybeTriggerFreePoolBench(opts) {
   );
   child.unref();
   try {
-    writeFileSync13(lockPath, String(child.pid ?? ""), "utf-8");
+    writeFileSync14(lockPath, String(child.pid ?? ""), "utf-8");
   } catch {
   }
   log(
@@ -54736,13 +54742,13 @@ var _onSettingsReloaded = null;
 function reloadSettingsFromDisk() {
   let raw;
   try {
-    raw = readFileSync18(SETTINGS_FILE, "utf-8");
+    raw = readFileSync19(SETTINGS_FILE, "utf-8");
   } catch {
     return false;
   }
   let parsed;
   try {
-    parsed = (0, import_yaml2.parse)(raw);
+    parsed = (0, import_yaml3.parse)(raw);
   } catch {
     process.stderr.write(
       `[llm-externalizer] \u26A0 settings.yaml has invalid YAML \u2014 ignoring change
@@ -55105,7 +55111,7 @@ function writeStatsFile() {
       backend: backend.type
     };
     const tmpStats = STATS_FILE + ".tmp";
-    writeFileSync14(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
+    writeFileSync15(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
     renameSync8(tmpStats, STATS_FILE);
   } catch {
   }
@@ -55277,7 +55283,7 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
   lines.push("", "---", "", responseText);
   const tmpPath = filepath + ".tmp";
   try {
-    writeFileSync14(tmpPath, lines.join("\n"), "utf-8");
+    writeFileSync15(tmpPath, lines.join("\n"), "utf-8");
     renameSync8(tmpPath, filepath);
   } catch (err3) {
     try {
@@ -55415,7 +55421,7 @@ function resolveFolderPath(folderPath, opts) {
   } catch (err3) {
     return { files: [], error: `Invalid folder_path: ${err3 instanceof Error ? err3.message : String(err3)}` };
   }
-  if (!existsSync15(folderPath)) {
+  if (!existsSync16(folderPath)) {
     return { files: [], error: `folder_path not found: ${folderPath}` };
   }
   if (!statSync9(folderPath).isDirectory()) {
@@ -55575,7 +55581,7 @@ ${failed.map((r) => `- **${r.model}**: ${r.content}`).join("\n")}`);
   };
 }
 async function processFileCheck(filePath, task, options = {}) {
-  if (!existsSync15(filePath)) {
+  if (!existsSync16(filePath)) {
     return { filePath, success: false, error: `File not found: ${filePath}` };
   }
   const codeBlock = readFileAsCodeBlock(
@@ -56364,7 +56370,7 @@ Profiles: ${profileNames.join(", ")}`);
                 };
               }
               try {
-                writeFileSync14(absPath, jsonText, "utf-8");
+                writeFileSync15(absPath, jsonText, "utf-8");
               } catch (err3) {
                 return {
                   content: [
@@ -56432,11 +56438,11 @@ Profiles: ${profileNames.join(", ")}`);
         }
         case "get_settings": {
           try {
-            const raw = readFileSync18(SETTINGS_FILE, "utf-8");
+            const raw = readFileSync19(SETTINGS_FILE, "utf-8");
             const targetDir = outputDir || defaultOutputDir();
             mkdirSync18(targetDir, { recursive: true });
             const copyPath = join20(targetDir, "settings_edit.yaml");
-            writeFileSync14(copyPath, raw, "utf-8");
+            writeFileSync15(copyPath, raw, "utf-8");
             return { content: [{ type: "text", text: copyPath }] };
           } catch (err3) {
             return {
@@ -56593,7 +56599,7 @@ Profiles: ${profileNames.join(", ")}`);
               const gSucceeded = gAll.filter((r) => r.success);
               const reportSections = [];
               for (const r of gSucceeded) {
-                const content = r.reportPath && existsSync15(r.reportPath) ? readFileSync18(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync16(r.reportPath) ? readFileSync19(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -56729,7 +56735,7 @@ ${gAbortReason}`);
             } else {
               const reportSections = [];
               for (const r of succeeded) {
-                const content = r.reportPath && existsSync15(r.reportPath) ? readFileSync18(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync16(r.reportPath) ? readFileSync19(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -56882,8 +56888,8 @@ ${content}`);
             } catch (err3) {
               return { error: err3.message };
             }
-            if (!existsSync15(fA)) return { error: `File not found: ${fARaw}` };
-            if (!existsSync15(fB)) return { error: `File not found: ${fBRaw}` };
+            if (!existsSync16(fA)) return { error: `File not found: ${fARaw}` };
+            if (!existsSync16(fB)) return { error: `File not found: ${fBRaw}` };
             if (cfScan && !cfRedact) {
               const scanResult = scanFilesForSecrets([fA, fB]);
               if (scanResult.found) return { error: scanResult.report };
@@ -56945,7 +56951,7 @@ ${fence}${sourceBlocks}` }
             } catch (err3) {
               return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
             }
-            if (!existsSync15(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
+            if (!existsSync16(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
             const toRef = cfToRef || "HEAD";
             if (cfFromRef.startsWith("-") || toRef.startsWith("-")) {
               return { content: [{ type: "text", text: "FAILED: git refs must not start with '-'" }], isError: true };
@@ -57109,7 +57115,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync15(fileA)) {
+          if (!existsSync16(fileA)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileA}` }
@@ -57117,7 +57123,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync15(fileB)) {
+          if (!existsSync16(fileB)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileB}` }
@@ -57305,13 +57311,13 @@ ${diffFence}` + sourceFileBlocks
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync15(filePath)) {
+                if (!existsSync16(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
                   continue;
                 }
-                const src = readFileSync18(filePath, "utf-8");
+                const src = readFileSync19(filePath, "utf-8");
                 const lang = detectLang(filePath);
                 const deps = extractLocalImports(filePath, src);
                 const depBlocks = [];
@@ -57365,14 +57371,14 @@ ${resp.content}${footer}`);
           const crReports = [];
           const crReportPaths = [];
           for (const filePath of crFilePaths) {
-            if (!existsSync15(filePath)) {
+            if (!existsSync16(filePath)) {
               crReports.push(`## ${filePath}
 
 FAILED: File not found.`);
               crReportPaths.push("(skipped \u2014 file not found)");
               continue;
             }
-            const crSourceCode = readFileSync18(filePath, "utf-8");
+            const crSourceCode = readFileSync19(filePath, "utf-8");
             const crLang = detectLang(filePath);
             const depPaths = extractLocalImports(filePath, crSourceCode);
             const depBlocks = [];
@@ -57545,7 +57551,7 @@ ${crResp.content}${crFooter}`
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync15(filePath)) {
+                if (!existsSync16(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
@@ -57579,17 +57585,17 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     packageImports.push(importPath);
                     continue;
                   }
-                  let found = existsSync15(resolvedBase) && statSync9(resolvedBase).isFile();
+                  let found = existsSync16(resolvedBase) && statSync9(resolvedBase).isFile();
                   if (!found && !extname5(resolvedBase)) {
                     for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".json"]) {
-                      if (existsSync15(resolvedBase + ext)) {
+                      if (existsSync16(resolvedBase + ext)) {
                         found = true;
                         break;
                       }
                     }
                     if (!found) {
                       for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                        if (existsSync15(join20(resolvedBase, `index${ext}`))) {
+                        if (existsSync16(join20(resolvedBase, `index${ext}`))) {
                           found = true;
                           break;
                         }
@@ -57623,7 +57629,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
           const ciReports = [];
           const ciReportPaths = [];
           for (const filePath of ciFilePaths) {
-            if (!existsSync15(filePath)) {
+            if (!existsSync16(filePath)) {
               ciReports.push(`## ${filePath}
 
 FAILED: File not found.`);
@@ -57680,7 +57686,7 @@ FAILED: File not found.`);
                 continue;
               }
               let found = false;
-              if (existsSync15(resolvedBase) && statSync9(resolvedBase).isFile()) {
+              if (existsSync16(resolvedBase) && statSync9(resolvedBase).isFile()) {
                 found = true;
               }
               if (!found && !extname5(resolvedBase)) {
@@ -57696,14 +57702,14 @@ FAILED: File not found.`);
                   ".rs",
                   ".json"
                 ]) {
-                  if (existsSync15(resolvedBase + ext)) {
+                  if (existsSync16(resolvedBase + ext)) {
                     found = true;
                     break;
                   }
                 }
                 if (!found) {
                   for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                    if (existsSync15(join20(resolvedBase, `index${ext}`))) {
+                    if (existsSync16(join20(resolvedBase, `index${ext}`))) {
                       found = true;
                       break;
                     }
@@ -57881,7 +57887,7 @@ FAILED: File not found.`);
             if (csMode === 0 && !csEffectivelyGrouped) {
               const csPerFileResults = [];
               for (const fp of fgPaths) {
-                if (!existsSync15(fp)) {
+                if (!existsSync16(fp)) {
                   csPerFileResults.push(`FAILED: ${fp} \u2014 File not found`);
                   continue;
                 }
