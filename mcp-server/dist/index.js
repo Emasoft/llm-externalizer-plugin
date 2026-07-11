@@ -52240,6 +52240,286 @@ function applyModelOverrides(body, modelId) {
   return out;
 }
 
+// src/provider/http.ts
+var CONNECT_TIMEOUT_MS = 5e3;
+async function fetchWithTimeout(url2, options, timeoutMs = CONNECT_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url2, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+var RETRY_MAX_ATTEMPTS = 5;
+var RETRY_BASE_DELAY_MS = 1e3;
+var RETRY_MAX_DELAY_MS = 3e4;
+var RETRYABLE_STATUS = /* @__PURE__ */ new Set([429, 500, 502, 503, 504]);
+async function fetchWithRetry429(url2, fetchOpts, timeout, startTime, out) {
+  let lastRes;
+  let lastBodyText;
+  let count429 = 0;
+  for (let attempt = 0; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
+    const elapsed = Date.now() - startTime;
+    const remaining = timeout - elapsed;
+    if (attempt > 0 && remaining < 2e3) {
+      break;
+    }
+    try {
+      lastRes = await fetchWithTimeout(url2, fetchOpts, Math.max(remaining, 1e3));
+    } catch (err3) {
+      if (attempt >= RETRY_MAX_ATTEMPTS) throw err3;
+      const backoff2 = computeBackoffMs(attempt, 0);
+      const waitRemaining2 = timeout - (Date.now() - startTime);
+      if (backoff2 > waitRemaining2) throw err3;
+      process.stderr.write(
+        `[http-retry] Network error (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), retrying in ${(backoff2 / 1e3).toFixed(1)}s: ${err3 instanceof Error ? err3.message : String(err3)}
+`
+      );
+      await new Promise((r) => setTimeout(r, backoff2));
+      continue;
+    }
+    if (!RETRYABLE_STATUS.has(lastRes.status)) {
+      return lastRes;
+    }
+    if (attempt >= RETRY_MAX_ATTEMPTS) {
+      break;
+    }
+    let retryAfterMs = 0;
+    if (lastRes.status === 429) {
+      const retryAfter = lastRes.headers.get("retry-after");
+      if (retryAfter) {
+        const parsed = Number(retryAfter);
+        if (Number.isFinite(parsed)) {
+          retryAfterMs = parsed * 1e3;
+        } else {
+          const dateMs = Date.parse(retryAfter);
+          if (!isNaN(dateMs)) {
+            retryAfterMs = Math.max(0, dateMs - Date.now());
+          }
+        }
+      }
+    }
+    const backoff = computeBackoffMs(attempt, retryAfterMs);
+    const waitRemaining = timeout - (Date.now() - startTime);
+    if (backoff > waitRemaining) {
+      break;
+    }
+    if (lastRes.status === 429) {
+      count429++;
+      if (out) out.saw429 = true;
+      if (count429 === 1) {
+        process.stderr.write(
+          `[http-retry] HTTP 429 rate-limited (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), retrying in ${(backoff / 1e3).toFixed(1)}s
+`
+        );
+      } else if (attempt === RETRY_MAX_ATTEMPTS - 1) {
+        process.stderr.write(
+          `[http-retry] HTTP 429 \xD7${count429} (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), retrying in ${(backoff / 1e3).toFixed(1)}s
+`
+        );
+      }
+    } else {
+      process.stderr.write(
+        `[http-retry] HTTP ${lastRes.status} (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), retrying in ${(backoff / 1e3).toFixed(1)}s
+`
+      );
+    }
+    lastBodyText = await lastRes.text().catch(() => "");
+    await new Promise((r) => setTimeout(r, backoff));
+  }
+  if (lastRes) {
+    if (lastBodyText === void 0) return lastRes;
+    return new Response(lastBodyText, {
+      status: lastRes.status,
+      statusText: lastRes.statusText,
+      headers: lastRes.headers
+    });
+  }
+  throw new Error("API request failed \u2014 all retries exhausted with no response");
+}
+function computeBackoffMs(attempt, retryAfterMs) {
+  const exponential = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+  const base = Math.max(exponential, retryAfterMs);
+  const capped = Math.min(base, RETRY_MAX_DELAY_MS);
+  const jitter = capped * (0.75 + Math.random() * 0.5);
+  return Math.round(jitter);
+}
+
+// src/provider/lmstudio.ts
+var _lmStudioProbeCache = /* @__PURE__ */ new Map();
+function getLMStudioProbe(baseUrl) {
+  return _lmStudioProbeCache.get(baseUrl) ?? { isLMStudio: false, detected: false };
+}
+function setLMStudioProbe(baseUrl, result) {
+  _lmStudioProbeCache.set(baseUrl, result);
+}
+function clearLMStudioProbeCache() {
+  _lmStudioProbeCache.clear();
+}
+async function detectLMStudio(deps) {
+  const backend = deps.getBackend();
+  if (backend.type !== "local") return false;
+  const probed = getLMStudioProbe(backend.baseUrl);
+  if (probed.detected) return probed.isLMStudio;
+  const isLMStudioProvider = deps.isLMStudioProvider();
+  try {
+    const res = await fetchWithTimeout(
+      `${backend.baseUrl}/api/v1/models`,
+      { headers: deps.apiHeaders() }
+    );
+    if (res.ok) {
+      setLMStudioProbe(backend.baseUrl, { isLMStudio: true, detected: true });
+      process.stderr.write(
+        "[llm-externalizer] Detected LM Studio native API\n"
+      );
+      return true;
+    }
+    if (res.status === 401 && isLMStudioProvider) {
+      if (backend.apiKey) {
+        throw new Error(
+          "LM Studio rejected the API token (401 Unauthorized).\nThe token was resolved from the environment but is not valid for this LM Studio instance.\nCheck: LM Studio > Developer > Security \u2014 regenerate the API key and update $LM_API_TOKEN."
+        );
+      } else {
+        throw new Error(
+          "LM Studio requires authentication but no API token was found.\nSet the LM_API_TOKEN environment variable, or add api_token to the active profile in settings.yaml.\nIn LM Studio: Developer > Security > copy the API key."
+        );
+      }
+    }
+  } catch (err3) {
+    if (err3 instanceof Error && err3.message.includes("LM Studio requires authentication"))
+      throw err3;
+    if (isLMStudioProvider) {
+      throw new Error(
+        `LM Studio native API probe failed at ${backend.baseUrl}/api/v1/models: ${err3 instanceof Error ? err3.message : String(err3)}
+Ensure LM Studio is running and a model is loaded. The lmstudio provider requires the native API endpoint.`,
+        { cause: err3 }
+      );
+    }
+  }
+  setLMStudioProbe(backend.baseUrl, { isLMStudio: false, detected: true });
+  return false;
+}
+async function chatCompletionNative(conn, messages, options, deps) {
+  const systemMessages = messages.filter((m) => m.role === "system");
+  const nonSystemMessages = messages.filter((m) => m.role !== "system");
+  const inputParts = [];
+  for (const msg of nonSystemMessages) {
+    inputParts.push({
+      type: msg.role === "user" ? "text" : msg.role,
+      content: msg.content
+    });
+  }
+  const body = {
+    model: conn.model,
+    // If single user message, pass as string; otherwise pass as array
+    input: nonSystemMessages.length === 1 ? nonSystemMessages[0].content : inputParts,
+    temperature: options.temperature ?? deps.defaultTemperature,
+    stream: false,
+    store: false
+    // We don't need stateful chat
+  };
+  if (systemMessages.length > 0) {
+    body.system_prompt = systemMessages.map((m) => m.content).join("\n\n");
+  }
+  if (options.reasoning) {
+    body.reasoning = options.reasoning;
+  }
+  if (options.integrations && options.integrations.length > 0) {
+    body.integrations = options.integrations;
+  }
+  if (options.onProgress) {
+    options.onProgress(5, 100, "Sending request to LM Studio\u2026");
+  }
+  const startTime = Date.now();
+  let progressTimer;
+  if (options.onProgress) {
+    const pg = options.onProgress;
+    progressTimer = setInterval(() => {
+      const pct = Math.min(
+        90,
+        Math.round((Date.now() - startTime) / conn.timeout * 100)
+      );
+      pg(pct, 100, "Waiting for LM Studio response\u2026");
+    }, 1e4);
+  }
+  try {
+    let res = await fetchWithTimeout(
+      conn.url,
+      { method: "POST", headers: conn.headers, body: JSON.stringify(body) },
+      conn.timeout
+    );
+    if (!res.ok && body.reasoning) {
+      const errText = await safeReadText(res).catch(() => "");
+      if (errText.includes("does not support reasoning")) {
+        process.stderr.write(
+          "[llm-externalizer] Model does not support reasoning parameter, retrying without it\n"
+        );
+        delete body.reasoning;
+        res = await fetchWithTimeout(
+          conn.url,
+          { method: "POST", headers: conn.headers, body: JSON.stringify(body) },
+          conn.timeout
+        );
+      } else {
+        throw new Error(`LM Studio API error ${res.status}: ${errText}`);
+      }
+    }
+    if (!res.ok) {
+      const text = await safeReadText(res).catch(() => "");
+      throw new Error(`LM Studio API error ${res.status}: ${text}`);
+    }
+    const data = await safeReadJson(res);
+    const messageContent = data.output.filter((o) => o.type === "message" && o.content).map((o) => o.content).join("");
+    const usage = data.stats ? {
+      prompt_tokens: data.stats.input_tokens ?? 0,
+      completion_tokens: data.stats.total_output_tokens ?? 0,
+      total_tokens: (data.stats.input_tokens ?? 0) + (data.stats.total_output_tokens ?? 0)
+    } : void 0;
+    recordRequest({ ok: true, durationMs: Date.now() - startTime, costUsd: usage?.cost ?? 0 });
+    return {
+      content: messageContent,
+      model: data.model_instance_id || conn.model,
+      usage,
+      finishReason: "stop",
+      truncated: false
+    };
+  } catch (e) {
+    recordRequest({ ok: false, durationMs: Date.now() - startTime, costUsd: 0 });
+    throw e;
+  } finally {
+    if (progressTimer) clearInterval(progressTimer);
+  }
+}
+
+// src/provider/connection.ts
+async function resolveConnection(options, deps) {
+  const backend = deps.getBackend();
+  const model = options?.model || backend.model;
+  assertFreeOnlyModel(deps.isFreeOnly(), backend.type, model);
+  const headers = deps.apiHeaders();
+  const timeout = deps.getSoftTimeoutMs();
+  if (backend.type === "local" && await detectLMStudio(deps)) {
+    return {
+      url: `${backend.baseUrl}/api/v1/chat`,
+      headers,
+      model,
+      isNative: true,
+      timeout
+    };
+  }
+  return {
+    url: `${backend.baseUrl}/v1/chat/completions`,
+    headers,
+    model,
+    isNative: false,
+    timeout
+  };
+}
+
+// src/provider/types.ts
+var VALID_REASONING_EFFORTS = ["off", "xhigh", "high", "medium", "low"];
+
 // src/rate-limiter.ts
 var AdaptiveRateLimiter = class {
   tokens;
@@ -53795,12 +54075,10 @@ RULES (override any conflicting instructions):
 - Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.
 - If you assign a severity or priority to findings, reserve the highest level (e.g. CRITICAL) for demonstrably exploitable, data-loss, or crash-in-normal-use issues; default to a lower level when uncertain.` + FILE_FORMAT_EXAMPLE + BREVITY_RULES;
 }
-var CONNECT_TIMEOUT_MS = 5e3;
 var SOFT_TIMEOUT_MS = (activeResolved?.timeout ?? 300) * 1e3;
 var FALLBACK_CONTEXT_LENGTH = activeResolved?.contextWindow || 1e5;
 var MODEL_CACHE_TTL_MS = 36e5;
 var MODEL_REASONING_CACHE = /* @__PURE__ */ new Map();
-var VALID_REASONING_EFFORTS = ["off", "xhigh", "high", "medium", "low"];
 var DEFAULT_REASONING_EFFORT = (() => {
   const raw = (process.env.LLM_EXT_REASONING_EFFORT ?? "high").toLowerCase();
   return VALID_REASONING_EFFORTS.includes(raw) ? raw : "high";
@@ -53947,16 +54225,6 @@ function makeBackendFromProfile(resolved, modelOverride) {
 var currentBackend = activeResolved ? makeBackendFromProfile(activeResolved) : { type: "local", baseUrl: "http://localhost:1234", apiKey: "", model: "", __version: ++RELOAD_VERSION };
 function getCurrentBackend() {
   return currentBackend;
-}
-var _lmStudioProbeCache = /* @__PURE__ */ new Map();
-function getLMStudioProbe(baseUrl) {
-  return _lmStudioProbeCache.get(baseUrl) ?? { isLMStudio: false, detected: false };
-}
-function setLMStudioProbe(baseUrl, result) {
-  _lmStudioProbeCache.set(baseUrl, result);
-}
-function clearLMStudioProbeCache() {
-  _lmStudioProbeCache.clear();
 }
 var _onSettingsReloaded = null;
 function reloadSettingsFromDisk() {
@@ -54388,266 +54656,14 @@ function apiHeaders() {
   }
   return h;
 }
-async function resolveConnection(options) {
-  const backend = getCurrentBackend();
-  const model = options?.model || backend.model;
-  assertFreeOnlyModel(activeResolved?.freeOnly ?? false, backend.type, model);
-  const headers = apiHeaders();
-  const timeout = SOFT_TIMEOUT_MS;
-  if (backend.type === "local" && await detectLMStudio()) {
-    return {
-      url: `${backend.baseUrl}/api/v1/chat`,
-      headers,
-      model,
-      isNative: true,
-      timeout
-    };
-  }
-  return {
-    url: `${backend.baseUrl}/v1/chat/completions`,
-    headers,
-    model,
-    isNative: false,
-    timeout
-  };
-}
-var RETRY_MAX_ATTEMPTS = 5;
-var RETRY_BASE_DELAY_MS = 1e3;
-var RETRY_MAX_DELAY_MS = 3e4;
-var RETRYABLE_STATUS = /* @__PURE__ */ new Set([429, 500, 502, 503, 504]);
-async function fetchWithRetry429(url2, fetchOpts, timeout, startTime, out) {
-  let lastRes;
-  let lastBodyText;
-  let count429 = 0;
-  for (let attempt = 0; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
-    const elapsed = Date.now() - startTime;
-    const remaining = timeout - elapsed;
-    if (attempt > 0 && remaining < 2e3) {
-      break;
-    }
-    try {
-      lastRes = await fetchWithTimeout(url2, fetchOpts, Math.max(remaining, 1e3));
-    } catch (err3) {
-      if (attempt >= RETRY_MAX_ATTEMPTS) throw err3;
-      const backoff2 = computeBackoffMs(attempt, 0);
-      const waitRemaining2 = timeout - (Date.now() - startTime);
-      if (backoff2 > waitRemaining2) throw err3;
-      process.stderr.write(
-        `[http-retry] Network error (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), retrying in ${(backoff2 / 1e3).toFixed(1)}s: ${err3 instanceof Error ? err3.message : String(err3)}
-`
-      );
-      await new Promise((r) => setTimeout(r, backoff2));
-      continue;
-    }
-    if (!RETRYABLE_STATUS.has(lastRes.status)) {
-      return lastRes;
-    }
-    if (attempt >= RETRY_MAX_ATTEMPTS) {
-      break;
-    }
-    let retryAfterMs = 0;
-    if (lastRes.status === 429) {
-      const retryAfter = lastRes.headers.get("retry-after");
-      if (retryAfter) {
-        const parsed = Number(retryAfter);
-        if (Number.isFinite(parsed)) {
-          retryAfterMs = parsed * 1e3;
-        } else {
-          const dateMs = Date.parse(retryAfter);
-          if (!isNaN(dateMs)) {
-            retryAfterMs = Math.max(0, dateMs - Date.now());
-          }
-        }
-      }
-    }
-    const backoff = computeBackoffMs(attempt, retryAfterMs);
-    const waitRemaining = timeout - (Date.now() - startTime);
-    if (backoff > waitRemaining) {
-      break;
-    }
-    if (lastRes.status === 429) {
-      count429++;
-      if (out) out.saw429 = true;
-      if (count429 === 1) {
-        process.stderr.write(
-          `[http-retry] HTTP 429 rate-limited (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), retrying in ${(backoff / 1e3).toFixed(1)}s
-`
-        );
-      } else if (attempt === RETRY_MAX_ATTEMPTS - 1) {
-        process.stderr.write(
-          `[http-retry] HTTP 429 \xD7${count429} (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), retrying in ${(backoff / 1e3).toFixed(1)}s
-`
-        );
-      }
-    } else {
-      process.stderr.write(
-        `[http-retry] HTTP ${lastRes.status} (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), retrying in ${(backoff / 1e3).toFixed(1)}s
-`
-      );
-    }
-    lastBodyText = await lastRes.text().catch(() => "");
-    await new Promise((r) => setTimeout(r, backoff));
-  }
-  if (lastRes) {
-    if (lastBodyText === void 0) return lastRes;
-    return new Response(lastBodyText, {
-      status: lastRes.status,
-      statusText: lastRes.statusText,
-      headers: lastRes.headers
-    });
-  }
-  throw new Error("API request failed \u2014 all retries exhausted with no response");
-}
-function computeBackoffMs(attempt, retryAfterMs) {
-  const exponential = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
-  const base = Math.max(exponential, retryAfterMs);
-  const capped = Math.min(base, RETRY_MAX_DELAY_MS);
-  const jitter = capped * (0.75 + Math.random() * 0.5);
-  return Math.round(jitter);
-}
-async function fetchWithTimeout(url2, options, timeoutMs = CONNECT_TIMEOUT_MS) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url2, { ...options, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-async function detectLMStudio() {
-  const backend = getCurrentBackend();
-  if (backend.type !== "local") return false;
-  const probed = getLMStudioProbe(backend.baseUrl);
-  if (probed.detected) return probed.isLMStudio;
-  const isLMStudioProvider = activeResolved?.protocol === "lmstudio_api";
-  try {
-    const res = await fetchWithTimeout(
-      `${backend.baseUrl}/api/v1/models`,
-      { headers: apiHeaders() }
-    );
-    if (res.ok) {
-      setLMStudioProbe(backend.baseUrl, { isLMStudio: true, detected: true });
-      process.stderr.write(
-        "[llm-externalizer] Detected LM Studio native API\n"
-      );
-      return true;
-    }
-    if (res.status === 401 && isLMStudioProvider) {
-      if (backend.apiKey) {
-        throw new Error(
-          "LM Studio rejected the API token (401 Unauthorized).\nThe token was resolved from the environment but is not valid for this LM Studio instance.\nCheck: LM Studio > Developer > Security \u2014 regenerate the API key and update $LM_API_TOKEN."
-        );
-      } else {
-        throw new Error(
-          "LM Studio requires authentication but no API token was found.\nSet the LM_API_TOKEN environment variable, or add api_token to the active profile in settings.yaml.\nIn LM Studio: Developer > Security > copy the API key."
-        );
-      }
-    }
-  } catch (err3) {
-    if (err3 instanceof Error && err3.message.includes("LM Studio requires authentication"))
-      throw err3;
-    if (isLMStudioProvider) {
-      throw new Error(
-        `LM Studio native API probe failed at ${backend.baseUrl}/api/v1/models: ${err3 instanceof Error ? err3.message : String(err3)}
-Ensure LM Studio is running and a model is loaded. The lmstudio provider requires the native API endpoint.`,
-        { cause: err3 }
-      );
-    }
-  }
-  setLMStudioProbe(backend.baseUrl, { isLMStudio: false, detected: true });
-  return false;
-}
-async function chatCompletionNative(conn, messages, options = {}) {
-  const systemMessages = messages.filter((m) => m.role === "system");
-  const nonSystemMessages = messages.filter((m) => m.role !== "system");
-  const inputParts = [];
-  for (const msg of nonSystemMessages) {
-    inputParts.push({
-      type: msg.role === "user" ? "text" : msg.role,
-      content: msg.content
-    });
-  }
-  const body = {
-    model: conn.model,
-    // If single user message, pass as string; otherwise pass as array
-    input: nonSystemMessages.length === 1 ? nonSystemMessages[0].content : inputParts,
-    temperature: options.temperature ?? DEFAULT_TEMPERATURE,
-    stream: false,
-    store: false
-    // We don't need stateful chat
-  };
-  if (systemMessages.length > 0) {
-    body.system_prompt = systemMessages.map((m) => m.content).join("\n\n");
-  }
-  if (options.reasoning) {
-    body.reasoning = options.reasoning;
-  }
-  if (options.integrations && options.integrations.length > 0) {
-    body.integrations = options.integrations;
-  }
-  if (options.onProgress) {
-    options.onProgress(5, 100, "Sending request to LM Studio\u2026");
-  }
-  const startTime = Date.now();
-  let progressTimer;
-  if (options.onProgress) {
-    const pg = options.onProgress;
-    progressTimer = setInterval(() => {
-      const pct = Math.min(
-        90,
-        Math.round((Date.now() - startTime) / conn.timeout * 100)
-      );
-      pg(pct, 100, "Waiting for LM Studio response\u2026");
-    }, 1e4);
-  }
-  try {
-    let res = await fetchWithTimeout(
-      conn.url,
-      { method: "POST", headers: conn.headers, body: JSON.stringify(body) },
-      conn.timeout
-    );
-    if (!res.ok && body.reasoning) {
-      const errText = await safeReadText(res).catch(() => "");
-      if (errText.includes("does not support reasoning")) {
-        process.stderr.write(
-          "[llm-externalizer] Model does not support reasoning parameter, retrying without it\n"
-        );
-        delete body.reasoning;
-        res = await fetchWithTimeout(
-          conn.url,
-          { method: "POST", headers: conn.headers, body: JSON.stringify(body) },
-          conn.timeout
-        );
-      } else {
-        throw new Error(`LM Studio API error ${res.status}: ${errText}`);
-      }
-    }
-    if (!res.ok) {
-      const text = await safeReadText(res).catch(() => "");
-      throw new Error(`LM Studio API error ${res.status}: ${text}`);
-    }
-    const data = await safeReadJson(res);
-    const messageContent = data.output.filter((o) => o.type === "message" && o.content).map((o) => o.content).join("");
-    const usage = data.stats ? {
-      prompt_tokens: data.stats.input_tokens ?? 0,
-      completion_tokens: data.stats.total_output_tokens ?? 0,
-      total_tokens: (data.stats.input_tokens ?? 0) + (data.stats.total_output_tokens ?? 0)
-    } : void 0;
-    recordRequest({ ok: true, durationMs: Date.now() - startTime, costUsd: usage?.cost ?? 0 });
-    return {
-      content: messageContent,
-      model: data.model_instance_id || conn.model,
-      usage,
-      finishReason: "stop",
-      truncated: false
-    };
-  } catch (e) {
-    recordRequest({ ok: false, durationMs: Date.now() - startTime, costUsd: 0 });
-    throw e;
-  } finally {
-    if (progressTimer) clearInterval(progressTimer);
-  }
-}
+var providerDeps = {
+  getBackend: () => getCurrentBackend(),
+  apiHeaders: () => apiHeaders(),
+  getSoftTimeoutMs: () => SOFT_TIMEOUT_MS,
+  isFreeOnly: () => activeResolved?.freeOnly ?? false,
+  isLMStudioProvider: () => activeResolved?.protocol === "lmstudio_api",
+  defaultTemperature: DEFAULT_TEMPERATURE
+};
 function makeProgressFn(progressToken) {
   if (progressToken === void 0) return void 0;
   return (progress, total, message) => {
@@ -54679,9 +54695,9 @@ function withSystemCacheBreakpoint(messages) {
 }
 async function chatCompletionSimple(messages, options = {}) {
   const backend = getCurrentBackend();
-  const conn = await resolveConnection(options);
+  const conn = await resolveConnection(options, providerDeps);
   if (conn.isNative) {
-    return chatCompletionNative(conn, messages, options);
+    return chatCompletionNative(conn, messages, options, providerDeps);
   }
   const baseBody = {
     messages,
@@ -54781,9 +54797,9 @@ var EXTRACT_PATHS_SCHEMA = {
 };
 async function chatCompletionJSON(messages, options = {}) {
   const backend = getCurrentBackend();
-  const conn = await resolveConnection(options);
+  const conn = await resolveConnection(options, providerDeps);
   if (conn.isNative) {
-    const nativeResult = await chatCompletionNative(conn, messages, options);
+    const nativeResult = await chatCompletionNative(conn, messages, options, providerDeps);
     const rawContent = nativeResult.content;
     const nativeModel = nativeResult.model || conn.model || "unknown";
     if (!rawContent.trim()) {
@@ -56173,7 +56189,7 @@ API presets: ${Object.keys(API_PRESETS).join(", ")}`);
               parts.push(`Status: ONLINE (${ms}ms)`);
             } else {
               const models = await listModelsRaw();
-              const isLMS = await detectLMStudio();
+              const isLMS = await detectLMStudio(providerDeps);
               const ms = Date.now() - start;
               const backendLabel = isLMS ? "LM Studio" : "Local";
               if (models.length > 0) {

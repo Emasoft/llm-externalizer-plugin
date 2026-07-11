@@ -58,6 +58,25 @@ import {
 import type { Phase1RawLlmCall } from "./cluster/phase1_batch.js";
 import { makePreflightHook } from "./cluster/preflight_benchmark.js";
 import { applyModelOverrides } from "./request-overrides.js";
+// Provider/transport layer (B1 Phase 5, TRDD-63314265). These modules import
+// NOTHING from index.ts — the mutable backend/profile state they need is handed
+// to them through the `providerDeps` seam object built below.
+import { fetchWithTimeout, fetchWithRetry429 } from "./provider/http.js";
+import {
+  detectLMStudio,
+  chatCompletionNative,
+  clearLMStudioProbeCache,
+} from "./provider/lmstudio.js";
+import { resolveConnection } from "./provider/connection.js";
+import {
+  VALID_REASONING_EFFORTS,
+  type BackendConfig,
+  type ChatMessage,
+  type ModelInfo,
+  type ProviderDeps,
+  type ReasoningEffortSetting,
+  type StreamingResult,
+} from "./provider/types.js";
 import {
   rateLimitedParallel,
   signalRateLimitHit,
@@ -141,7 +160,6 @@ import {
   getSettingsPath,
   getConfigDir,
   generateDefaultSettings,
-  assertFreeOnlyModel,
   setActiveFreeOnly,
   FREE_POOL_SEED,
   HIGH_QUALITY_MODEL_DEFAULTS,
@@ -285,7 +303,6 @@ function codeTaskSystemPrompt(lang: string): string {
     BREVITY_RULES
   );
 }
-const CONNECT_TIMEOUT_MS = 5000;
 // Per-LLM-request timeout. Reasoning models (Qwen, etc.) need extended time for thinking.
 // The MCP tool-call timeout is inactivity-based, kept alive by heartbeat — no hard cap needed.
 // Default: profile timeout (300s). Extended dynamically when reasoning tokens are flowing.
@@ -311,8 +328,8 @@ const MODEL_REASONING_CACHE = new Map<string, "xhigh" | "high" | "none">();
 // Default reasoning effort, from env (default "high"). "off" disables reasoning
 // on every call. Invalid values fall back to "high". Per-call callers may still
 // pass `reasoning: "off"` to opt a specific path out (e.g. cluster_synonyms).
-const VALID_REASONING_EFFORTS = ["off", "xhigh", "high", "medium", "low"] as const;
-type ReasoningEffortSetting = (typeof VALID_REASONING_EFFORTS)[number];
+// VALID_REASONING_EFFORTS + ReasoningEffortSetting moved to ./provider/types.ts
+// (B1 Phase 5) — the provider layer needs them and must not import index.ts.
 const DEFAULT_REASONING_EFFORT: ReasoningEffortSetting = (() => {
   const raw = (process.env.LLM_EXT_REASONING_EFFORT ?? "high").toLowerCase();
   return (VALID_REASONING_EFFORTS as readonly string[]).includes(raw)
@@ -544,13 +561,7 @@ function isReasoningRejectionError(status: number, bodyText: string): boolean {
 //
 // `__version` is monotonic across the process lifetime. Loggers / audits
 // can use it to attribute requests to a specific reload generation.
-interface BackendConfig {
-  readonly type: "local" | "openrouter";
-  readonly baseUrl: string;
-  readonly apiKey: string;
-  readonly model: string;
-  readonly __version: number;
-}
+// BackendConfig moved to ./provider/types.ts (B1 Phase 5) — imported above.
 
 // Monotonic reload counter. Incremented every time currentBackend is replaced.
 let RELOAD_VERSION = 0;
@@ -585,23 +596,8 @@ function getCurrentBackend(): BackendConfig {
   return currentBackend;
 }
 
-// LM Studio native API detection cache. Keyed by baseUrl because detection
-// is per-endpoint (not per-backend-generation). Lives outside BackendConfig
-// so backend snapshots stay immutable — see T2.7.
-interface LMStudioProbeResult {
-  isLMStudio: boolean;
-  detected: boolean; // true once we have a definitive answer
-}
-const _lmStudioProbeCache = new Map<string, LMStudioProbeResult>();
-function getLMStudioProbe(baseUrl: string): LMStudioProbeResult {
-  return _lmStudioProbeCache.get(baseUrl) ?? { isLMStudio: false, detected: false };
-}
-function setLMStudioProbe(baseUrl: string, result: LMStudioProbeResult): void {
-  _lmStudioProbeCache.set(baseUrl, result);
-}
-function clearLMStudioProbeCache(): void {
-  _lmStudioProbeCache.clear();
-}
+// The LM Studio native-API probe cache moved to ./provider/lmstudio.ts with the
+// detector that owns it (B1 Phase 5); `clearLMStudioProbeCache` is imported above.
 
 // ── Settings file watcher — auto-reload on manual edits ─────────────
 // Polls settings.yaml every 5s. On change: validate → reload in memory.
@@ -1354,528 +1350,36 @@ function apiHeaders(): Record<string, string> {
   return h;
 }
 
-// ── Connection setup (universal) ─────────────────────────────────────
+// ── Provider seam (B1 Phase 5, TRDD-63314265) ────────────────────────
+// The provider/transport modules (connection.ts, lmstudio.ts) must not import
+// index.ts, so the backend/profile state they need is handed to them through
+// this one object. EVERY stateful field is a FUNCTION, not a captured value:
+// `currentBackend`, `activeResolved` and `SOFT_TIMEOUT_MS` are all reassigned on
+// a settings reload, and a value captured here at module-init would pin the
+// provider layer to the pre-reload generation forever.
+const providerDeps: ProviderDeps = {
+  getBackend: () => getCurrentBackend(),
+  apiHeaders: () => apiHeaders(),
+  getSoftTimeoutMs: () => SOFT_TIMEOUT_MS,
+  isFreeOnly: () => activeResolved?.freeOnly ?? false,
+  isLMStudioProvider: () => activeResolved?.protocol === "lmstudio_api",
+  defaultTemperature: DEFAULT_TEMPERATURE,
+};
 
-interface ConnectionSetup {
-  url: string; // Full endpoint URL
-  headers: Record<string, string>; // Auth + content-type headers
-  model: string; // Resolved model ID
-  isNative: boolean; // true = LM Studio native /api/v1/chat
-  timeout: number; // SOFT_TIMEOUT_MS
-}
+// resolveConnection() (universal connection setup) moved to
+// ./provider/connection.ts — imported above, called with `providerDeps`.
 
-/**
- * Universal connection resolver — single source of truth for endpoint URL,
- * auth headers, model, and API format. Called once per LLM request; the
- * result is passed down to the actual HTTP call.
- *
- * For lmstudio provider: always uses native API, fails hard on auth/connection errors.
- * For openrouter/ollama: uses OpenAI-compat /v1/chat/completions.
- */
-async function resolveConnection(options?: {
-  model?: string;
-}): Promise<ConnectionSetup> {
-  // T2.7 — snapshot once. detectLMStudio() is awaited, so a reload could
-  // race between this read and the post-detect URL build. Capturing
-  // `backend` here guarantees we serve a CONSISTENT (baseUrl, type, model)
-  // tuple for this single resolution.
-  const backend = getCurrentBackend();
-  const model = options?.model || backend.model;
-  // Airtight cost-safety (TRDD-97ef8b63): under a free_only profile, refuse any
-  // non-':free' model BEFORE it reaches the wire. resolveConnection is the SINGLE
-  // point every request's model flows through (every OpenRouter fetch sends
-  // conn.model), so this one check covers every tool, ensemble slot, rotation
-  // fallback, modelOverride, and the 402→free fallback. A leak fails fast — it
-  // never bills.
-  assertFreeOnlyModel(activeResolved?.freeOnly ?? false, backend.type, model);
-  const headers = apiHeaders();
-  const timeout = SOFT_TIMEOUT_MS;
-
-  // Detect LM Studio native API (only for local backends)
-  if (backend.type === "local" && (await detectLMStudio())) {
-    return {
-      url: `${backend.baseUrl}/api/v1/chat`,
-      headers,
-      model,
-      isNative: true,
-      timeout,
-    };
-  }
-
-  return {
-    url: `${backend.baseUrl}/v1/chat/completions`,
-    headers,
-    model,
-    isNative: false,
-    timeout,
-  };
-}
-
-/**
- * Fetch with single 429 retry. Parses Retry-After header (seconds or HTTP-date)
- * and waits before retrying, capped so total elapsed stays within the timeout.
- */
-/**
- * Fetch with exponential backoff retry for transient errors.
- *
- * Retries on:
- *   429 (rate limited) — respects Retry-After header as minimum delay
- *   500, 502, 503, 504 — transient server errors
- *
- * Backoff strategy:
- *   - Base delay: 1s, doubles each attempt (1s → 2s → 4s → 8s → 16s)
- *   - Jitter: ±25% randomization to prevent thundering herd across processes
- *   - Retry-After floor: if server says "wait 10s", delay is max(backoff, 10s)
- *   - Max 5 retries (6 total attempts), capped by remaining time budget
- *   - Gives up immediately if remaining time < 2s (not enough for a useful retry)
- */
-const RETRY_MAX_ATTEMPTS = 5;
-const RETRY_BASE_DELAY_MS = 1000;
-const RETRY_MAX_DELAY_MS = 30_000;
-const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
-
-async function fetchWithRetry429(
-  url: string,
-  fetchOpts: RequestInit,
-  timeout: number,
-  startTime: number,
-  // A1/A7 model-health: optional accumulator so the model-aware CALLER (which
-  // knows the model id this helper lacks) can emit a single durable
-  // `rate_limit_429` event PER CALL that hit ≥1 429. Set-only here; reading +
-  // emission happen at the caller. Purely observational — never alters
-  // retry/backoff/return behaviour.
-  out?: { saw429: boolean },
-): Promise<Response> {
-  let lastRes: Response | undefined;
-  // Capture the error body text before draining it (the body stream is
-  // single-shot; if we drain to free the connection between retries and
-  // then exhaust retries, the caller's `await res.text()` would return ""
-  // and the surfaced HTTP error would have no server-supplied detail).
-  // Stored verbatim so the caller can re-attach via the rewrapper below.
-  let lastBodyText: string | undefined;
-  // Issue 3: count 429s for this request so we can log only the first + a final
-  // summary instead of one line per retried attempt (free-tier rate-limit flood).
-  let count429 = 0;
-
-  for (let attempt = 0; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
-    const elapsed = Date.now() - startTime;
-    const remaining = timeout - elapsed;
-
-    // Not enough time for a meaningful retry
-    if (attempt > 0 && remaining < 2000) {
-      break;
-    }
-
-    try {
-      lastRes = await fetchWithTimeout(url, fetchOpts, Math.max(remaining, 1000));
-    } catch (err) {
-      // Network errors (ECONNRESET, ETIMEDOUT, etc.) are retryable
-      if (attempt >= RETRY_MAX_ATTEMPTS) throw err;
-
-      const backoff = computeBackoffMs(attempt, 0);
-      const waitRemaining = timeout - (Date.now() - startTime);
-      if (backoff > waitRemaining) throw err;
-
-      process.stderr.write(
-        `[http-retry] Network error (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), ` +
-        `retrying in ${(backoff / 1000).toFixed(1)}s: ${err instanceof Error ? err.message : String(err)}\n`,
-      );
-      await new Promise((r) => setTimeout(r, backoff));
-      continue;
-    }
-
-    // Success or non-retryable status — return immediately
-    if (!RETRYABLE_STATUS.has(lastRes.status)) {
-      return lastRes;
-    }
-
-    // Last attempt — return whatever we got
-    if (attempt >= RETRY_MAX_ATTEMPTS) {
-      break;
-    }
-
-    // Parse Retry-After header (seconds or HTTP-date) as minimum delay floor
-    let retryAfterMs = 0;
-    if (lastRes.status === 429) {
-      const retryAfter = lastRes.headers.get("retry-after");
-      if (retryAfter) {
-        const parsed = Number(retryAfter);
-        if (Number.isFinite(parsed)) {
-          retryAfterMs = parsed * 1000;
-        } else {
-          const dateMs = Date.parse(retryAfter);
-          if (!isNaN(dateMs)) {
-            retryAfterMs = Math.max(0, dateMs - Date.now());
-          }
-        }
-      }
-    }
-
-    const backoff = computeBackoffMs(attempt, retryAfterMs);
-    const waitRemaining = timeout - (Date.now() - startTime);
-
-    // Not enough time to wait + retry
-    if (backoff > waitRemaining) {
-      break;
-    }
-
-    // Issue 2/3: tag the HTTP retry layer ([http-retry]) and collapse the 429
-    // flood. The free tier's per-minute cap makes a single ensemble call emit
-    // dozens of 429s; we log the FIRST 429 for this request and a single summary
-    // on the last retried attempt, suppressing the middle ones. Non-429 transient
-    // statuses (500/502/503/504) still log every attempt (rarer, each diagnostic).
-    // Retry behaviour (backoff/continue/break) is unchanged — only log frequency.
-    if (lastRes.status === 429) {
-      count429++;
-      // Record (set-only, idempotent) that this CALL hit a 429 so the caller can
-      // emit ONE durable rate_limit_429 event for the call — not one per attempt.
-      if (out) out.saw429 = true;
-      if (count429 === 1) {
-        process.stderr.write(
-          `[http-retry] HTTP 429 rate-limited (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), ` +
-          `retrying in ${(backoff / 1000).toFixed(1)}s\n`,
-        );
-      } else if (attempt === RETRY_MAX_ATTEMPTS - 1) {
-        process.stderr.write(
-          `[http-retry] HTTP 429 ×${count429} (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), ` +
-          `retrying in ${(backoff / 1000).toFixed(1)}s\n`,
-        );
-      }
-    } else {
-      process.stderr.write(
-        `[http-retry] HTTP ${lastRes.status} (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), ` +
-        `retrying in ${(backoff / 1000).toFixed(1)}s\n`,
-      );
-    }
-
-    // Capture the body text BEFORE draining (replaces the previous
-    // discard-to-free-connection pattern that wiped server-supplied error
-    // detail before the caller could read it).
-    lastBodyText = await lastRes.text().catch(() => "");
-    await new Promise((r) => setTimeout(r, backoff));
-  }
-
-  // All retries exhausted — return a re-wrapped Response so the caller's
-  // `await res.text()` still sees the most-recent server-supplied error
-  // body. The previous version returned the original (already-consumed)
-  // Response, leaving callers to throw `API error 502: ` with no detail.
-  if (lastRes) {
-    if (lastBodyText === undefined) return lastRes;
-    return new Response(lastBodyText, {
-      status: lastRes.status,
-      statusText: lastRes.statusText,
-      headers: lastRes.headers,
-    });
-  }
-  throw new Error("API request failed — all retries exhausted with no response");
-}
-
-/** Exponential backoff with jitter. retryAfterMs is a floor from the server. */
-function computeBackoffMs(attempt: number, retryAfterMs: number): number {
-  // Exponential: 1s, 2s, 4s, 8s, 16s
-  const exponential = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
-  // Use the larger of exponential backoff or server-requested delay
-  const base = Math.max(exponential, retryAfterMs);
-  // Cap at max delay
-  const capped = Math.min(base, RETRY_MAX_DELAY_MS);
-  // Add ±25% jitter to prevent thundering herd across concurrent processes
-  const jitter = capped * (0.75 + Math.random() * 0.5);
-  return Math.round(jitter);
-}
+// fetchWithTimeout / fetchWithRetry429 / computeBackoffMs moved to
+// ./provider/http.ts (B1 Phase 5) — stateless transport, imported above.
+// The OpenAI-compat wire types (ChatMessage, StreamingResult, ModelInfo) moved
+// to ./provider/types.ts so the provider modules can be typed without importing
+// index.ts. (A stale docstring for a stream reader that no longer exists was
+// dropped with them.)
 
 // ── OpenAI-compatible API helpers ────────────────────────────────────
-
-interface ChatMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
-}
-
-interface StreamingResult {
-  content: string;
-  model: string;
-  usage?: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-    cost?: number;
-  };
-  finishReason: string;
-  truncated: boolean;
-}
-
-interface ModelInfo {
-  id: string;
-  context_length?: number;
-  max_model_len?: number;
-  owned_by?: string;
-  [key: string]: unknown;
-}
-
-/**
- * Fetch with a connect timeout so Claude doesn't hang when the host is offline.
- */
-async function fetchWithTimeout(
-  url: string,
-  options: RequestInit,
-  timeoutMs: number = CONNECT_TIMEOUT_MS,
-): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...options, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/**
- * Read from a stream with a per-chunk timeout.
- * Prevents hanging forever if the LLM stalls mid-generation.
- */
-// ── LM Studio native API (/api/v1/chat) ──────────────────────────────
-// LM Studio is the only local backend with MCP support, reasoning control,
-// model load events, and prompt processing events via its native API.
-// We auto-detect LM Studio by probing /api/v1/models on first request.
-
-/**
- * Probe whether the local backend is LM Studio by hitting its native endpoint.
- * Caches the result in _lmStudioProbeCache (keyed by baseUrl) so we only
- * probe once per endpoint. T2.7: the cache lives outside BackendConfig so
- * backend snapshots stay immutable across reloads.
- */
-async function detectLMStudio(): Promise<boolean> {
-  // SNAPSHOT once at top of scope — see T2.7. Reads below MUST use `backend`.
-  const backend = getCurrentBackend();
-  if (backend.type !== "local") return false;
-  const probed = getLMStudioProbe(backend.baseUrl);
-  if (probed.detected) return probed.isLMStudio;
-
-  const isLMStudioProvider = activeResolved?.protocol === "lmstudio_api";
-
-  try {
-    const res = await fetchWithTimeout(
-      `${backend.baseUrl}/api/v1/models`,
-      { headers: apiHeaders() },
-    );
-    // LM Studio's native /api/v1/models returns a JSON array of model objects
-    if (res.ok) {
-      setLMStudioProbe(backend.baseUrl, { isLMStudio: true, detected: true });
-      process.stderr.write(
-        "[llm-externalizer] Detected LM Studio native API\n",
-      );
-      return true;
-    }
-    // Auth failure on the native endpoint — if provider is explicitly lmstudio, fail hard
-    if (res.status === 401 && isLMStudioProvider) {
-      if (backend.apiKey) {
-        // Token was provided but LM Studio rejected it
-        throw new Error(
-          "LM Studio rejected the API token (401 Unauthorized).\n" +
-            "The token was resolved from the environment but is not valid for this LM Studio instance.\n" +
-            "Check: LM Studio > Developer > Security — regenerate the API key and update $LM_API_TOKEN.",
-        );
-      } else {
-        // No token at all
-        throw new Error(
-          "LM Studio requires authentication but no API token was found.\n" +
-            "Set the LM_API_TOKEN environment variable, or add api_token to the active profile in settings.yaml.\n" +
-            "In LM Studio: Developer > Security > copy the API key.",
-        );
-      }
-    }
-  } catch (err) {
-    // Re-throw auth errors — those are not "not LM Studio", they are config errors
-    if (
-      err instanceof Error &&
-      err.message.includes("LM Studio requires authentication")
-    )
-      throw err;
-    // If provider is explicitly lmstudio, don't silently fall back to OpenAI-compat
-    if (isLMStudioProvider) {
-      throw new Error(
-        `LM Studio native API probe failed at ${backend.baseUrl}/api/v1/models: ${err instanceof Error ? err.message : String(err)}\n` +
-          "Ensure LM Studio is running and a model is loaded. The lmstudio provider requires the native API endpoint.",
-        { cause: err },
-      );
-    }
-    // Not LM Studio or endpoint not available — fall through (only for non-lmstudio providers)
-  }
-  setLMStudioProbe(backend.baseUrl, { isLMStudio: false, detected: true });
-  return false;
-}
-
-/**
- * LM Studio native response shape from /api/v1/chat.
- */
-interface LMStudioOutputEntry {
-  type: "message" | "reasoning" | "tool_call" | "invalid_tool_call";
-  content?: string;
-  tool?: string;
-  arguments?: Record<string, unknown>;
-  output?: string;
-  provider_info?: Record<string, unknown>;
-}
-
-interface LMStudioChatResponse {
-  model_instance_id: string;
-  output: LMStudioOutputEntry[];
-  stats?: {
-    input_tokens?: number;
-    total_output_tokens?: number;
-    reasoning_output_tokens?: number;
-    tokens_per_second?: number;
-    time_to_first_token_seconds?: number;
-  };
-  response_id?: string;
-}
-
-/**
- * Chat completion using LM Studio's native /api/v1/chat endpoint (non-streaming).
- * Provides MCP integration, reasoning control, and avoids streaming timeout issues
- * with reasoning models that have high time-to-first-token.
- */
-async function chatCompletionNative(
-  conn: ConnectionSetup,
-  messages: ChatMessage[],
-  options: {
-    temperature?: number;
-    maxTokens?: number;
-    // Accepts the canonical ReasoningEffortSetting plus LM Studio's "on".
-    // In practice only "off" (cluster_synonyms) is ever passed here.
-    reasoning?: ReasoningEffortSetting | "on";
-    integrations?: Array<Record<string, unknown>>;
-    onProgress?: ProgressFn;
-  } = {},
-): Promise<StreamingResult> {
-  // Convert ChatMessage[] to LM Studio input format:
-  // system_prompt is extracted from system messages, input is the user message(s)
-  const systemMessages = messages.filter((m) => m.role === "system");
-  const nonSystemMessages = messages.filter((m) => m.role !== "system");
-
-  // Build multi-turn input as array of content parts
-  const inputParts: Array<{ type: string; content: string }> = [];
-  for (const msg of nonSystemMessages) {
-    inputParts.push({
-      type: msg.role === "user" ? "text" : msg.role,
-      content: msg.content,
-    });
-  }
-
-  const body: Record<string, unknown> = {
-    model: conn.model,
-    // If single user message, pass as string; otherwise pass as array
-    input:
-      nonSystemMessages.length === 1
-        ? nonSystemMessages[0].content
-        : inputParts,
-    temperature: options.temperature ?? DEFAULT_TEMPERATURE,
-    stream: false,
-    store: false, // We don't need stateful chat
-  };
-
-  // Never send max_output_tokens — LM Studio defaults to model maximum.
-  // Reasoning models use the budget for both thinking AND response, so setting
-  // a limit often causes truncated or empty responses.
-
-  if (systemMessages.length > 0) {
-    body.system_prompt = systemMessages.map((m) => m.content).join("\n\n");
-  }
-
-  // Only send reasoning if explicitly set — not all models support it.
-  // Models that don't will return error "does not support reasoning configuration".
-  if (options.reasoning) {
-    body.reasoning = options.reasoning;
-  }
-
-  if (options.integrations && options.integrations.length > 0) {
-    body.integrations = options.integrations;
-  }
-
-  // Send initial progress
-  if (options.onProgress) {
-    options.onProgress(5, 100, "Sending request to LM Studio…");
-  }
-
-  // Periodic progress while waiting for response
-  const startTime = Date.now();
-  let progressTimer: ReturnType<typeof setInterval> | undefined;
-  if (options.onProgress) {
-    const pg = options.onProgress;
-    progressTimer = setInterval(() => {
-      const pct = Math.min(
-        90,
-        Math.round(((Date.now() - startTime) / conn.timeout) * 100),
-      );
-      pg(pct, 100, "Waiting for LM Studio response…");
-    }, 10_000);
-  }
-
-  try {
-    let res = await fetchWithTimeout(
-      conn.url,
-      { method: "POST", headers: conn.headers, body: JSON.stringify(body) },
-      conn.timeout,
-    );
-
-    // If the reasoning parameter is rejected, retry without it
-    if (!res.ok && body.reasoning) {
-      const errText = await safeReadText(res).catch(() => "");
-      if (errText.includes("does not support reasoning")) {
-        process.stderr.write(
-          "[llm-externalizer] Model does not support reasoning parameter, retrying without it\n",
-        );
-        delete body.reasoning;
-        res = await fetchWithTimeout(
-          conn.url,
-          { method: "POST", headers: conn.headers, body: JSON.stringify(body) },
-          conn.timeout,
-        );
-      } else {
-        throw new Error(`LM Studio API error ${res.status}: ${errText}`);
-      }
-    }
-
-    if (!res.ok) {
-      const text = await safeReadText(res).catch(() => "");
-      throw new Error(`LM Studio API error ${res.status}: ${text}`);
-    }
-
-    const data = await safeReadJson<LMStudioChatResponse>(res);
-
-    // Extract message content from output array
-    const messageContent = data.output
-      .filter((o) => o.type === "message" && o.content)
-      .map((o) => o.content!)
-      .join("");
-
-    // Map LM Studio stats to our StreamingResult usage format
-    const usage = data.stats
-      ? {
-          prompt_tokens: data.stats.input_tokens ?? 0,
-          completion_tokens: data.stats.total_output_tokens ?? 0,
-          total_tokens:
-            (data.stats.input_tokens ?? 0) +
-            (data.stats.total_output_tokens ?? 0),
-        }
-      : undefined;
-
-    // One completed LLM web request → one usage-history line. Local LM Studio
-    // returns no `cost` in usage, so this is $0.000000 (correct for local).
-    recordRequest({ ok: true, durationMs: Date.now() - startTime, costUsd: (usage as { cost?: number } | undefined)?.cost ?? 0 });
-    return {
-      content: messageContent,
-      model: data.model_instance_id || conn.model,
-      usage,
-      finishReason: "stop",
-      truncated: false,
-    };
-  } catch (e) {
-    recordRequest({ ok: false, durationMs: Date.now() - startTime, costUsd: 0 });
-    throw e;
-  } finally {
-    if (progressTimer) clearInterval(progressTimer);
-  }
-}
+// The LM Studio native API block (detectLMStudio + chatCompletionNative + its
+// response types + the per-endpoint probe cache) moved to
+// ./provider/lmstudio.ts (B1 Phase 5) — imported above, called with `providerDeps`.
 
 // ── MCP progress notifications ───────────────────────────────────────
 // Sending progress notifications keeps the client connection alive during
@@ -1961,11 +1465,11 @@ async function chatCompletionSimple(
   // backend-type labels. A mid-call reload that changes `currentBackend`
   // cannot interleave fields between conn building and the request body.
   const backend = getCurrentBackend();
-  const conn = await resolveConnection(options);
+  const conn = await resolveConnection(options, providerDeps);
 
   // LM Studio native API — delegate to native handler (different request format)
   if (conn.isNative) {
-    return chatCompletionNative(conn, messages, options);
+    return chatCompletionNative(conn, messages, options, providerDeps);
   }
 
   const baseBody: Record<string, unknown> = {
@@ -2173,12 +1677,12 @@ async function chatCompletionJSON(
 ): Promise<JSONCompletionResult> {
   // T2.7 — snapshot once for consistent (type, model) across all branches
   const backend = getCurrentBackend();
-  const conn = await resolveConnection(options);
+  const conn = await resolveConnection(options, providerDeps);
 
   // Route through LM Studio native API (no json_schema support,
   // but the prompt-based JSON extraction works well with local models).
   if (conn.isNative) {
-    const nativeResult = await chatCompletionNative(conn, messages, options);
+    const nativeResult = await chatCompletionNative(conn, messages, options, providerDeps);
     const rawContent = nativeResult.content;
     const nativeModel = nativeResult.model || conn.model || "unknown";
     if (!rawContent.trim()) {
@@ -4384,7 +3888,7 @@ async function dispatchCallToolInner(
             parts.push(`Status: ONLINE (${ms}ms)`);
           } else {
             const models = await listModelsRaw();
-            const isLMS = await detectLMStudio();
+            const isLMS = await detectLMStudio(providerDeps);
             const ms = Date.now() - start;
             const backendLabel = isLMS ? "LM Studio" : "Local";
             if (models.length > 0) {
