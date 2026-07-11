@@ -152,6 +152,11 @@ export default defineConfig({
       // assembly). Covers single/inline/batch modes. No network, no module
       // mocking (B1 Phase 3, TRDD-63314265).
       'src/benchmark/code-task/runner.test.ts',
+      // check_against_specs in-process pipeline core — HERMETIC (fake
+      // ensembleStreaming seam only, real readFileAsCodeBlock + readAndGroupFiles
+      // + grouping + report assembly). Covers per-file / batched / grouped modes.
+      // No network, no module mocking (P2a, zero-token model pipeline).
+      'src/benchmark/check-specs/runner.test.ts',
       // Per-tool model-qualification registry (TRDD-f45eeaa0 framework core).
       'src/model-qualification/registry.test.ts',
       // Cross-tool model assessment (requirements half of the per-tool gate).

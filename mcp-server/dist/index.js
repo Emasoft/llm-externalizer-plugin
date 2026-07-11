@@ -14231,7 +14231,7 @@ import {
   readFileSync as readFileSync19,
   writeFileSync as writeFileSync15,
   mkdirSync as mkdirSync18,
-  existsSync as existsSync16,
+  existsSync as existsSync17,
   renameSync as renameSync8,
   statSync as statSync9,
   appendFileSync as appendFileSync6,
@@ -14241,7 +14241,7 @@ import {
   unwatchFile
 } from "node:fs";
 import { spawnSync as spawnSync3 } from "node:child_process";
-import { extname as extname5, join as join20, basename as basename5, dirname as dirname11, resolve as resolve10, isAbsolute as isAbsolute4 } from "node:path";
+import { extname as extname5, join as join20, basename as basename6, dirname as dirname11, resolve as resolve10, isAbsolute as isAbsolute4 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 
 // src/grouping.ts
@@ -38134,8 +38134,8 @@ function renderSystemPrompt(fs) {
   );
   return lines.join("\n");
 }
-function userPromptFor(basename6, body) {
-  return `FILE: ${basename6}
+function userPromptFor(basename7, body) {
+  return `FILE: ${basename7}
 
 CONTENT:
 ${body}`;
@@ -46032,6 +46032,8 @@ import {
 import { extname as extname4, join as join10, basename as basename4, dirname as dirname5, resolve as resolve6, sep } from "node:path";
 import { homedir as homedir2 } from "node:os";
 import { spawnSync } from "node:child_process";
+var BREVITY_RULES = "\nOUTPUT RULES:\n- Be SUCCINCT. Use bullet points, not paragraphs.\n- Skip preamble, filler, and restating the task.\n- Only report findings, not things that are correct.\n- For code reviews: skip files/areas with no issues \u2014 only mention what needs attention.\n- Maximum 3 sentences per finding. Lead with the problem, not the context.";
+var FILE_FORMAT_EXAMPLE = "\nINPUT FORMAT: Each attached file is wrapped as follows (placeholders use {BRACES}, actual tags use angle brackets):\n<filename>\n{ABSOLUTE_PATH_HERE}\n</filename>\n<file-content>\n````{LANGUAGE}\n{FILE_CONTENTS_HERE}\n````\n</file-content>\nReference files by the path inside the filename tag. Multiple files may appear in sequence.\n";
 var EXT_TO_LANG = {
   ".ts": "typescript",
   ".tsx": "typescript",
@@ -53289,9 +53291,230 @@ async function chatCompletionWithRetry(messages, options, deps) {
 // src/index.ts
 import { fileURLToPath as fileUrlToPath_cs } from "node:url";
 
+// src/check-specs/core.ts
+import { existsSync as existsSync13 } from "node:fs";
+import { basename as basename5 } from "node:path";
+var CHECK_SPECS_SYSTEM_PROMPT = "You are a strict specification compliance auditor. You will receive a SPECIFICATION FILE and one or more SOURCE FILES. Your job is to find every violation of the specification in the source files.\n\nRULES:\n1. The specification is the ABSOLUTE source of truth. Every rule, restriction, format, API contract, forbidden pattern, and requirement in the spec MUST be followed exactly.\n2. Report ONLY VIOLATIONS \u2014 things implemented WRONGLY or FORBIDDEN patterns used. Do NOT report MISSING features \u2014 some requirements may be implemented in other files that are not included here.\n3. For each violation, report:\n   - **File**: which source file\n   - **Location**: function/class/method name (NEVER line numbers)\n   - **Spec rule violated**: quote the exact spec text\n   - **What the code does**: describe the actual behavior\n   - **Severity**: CRITICAL (security/data loss), HIGH (wrong behavior), MEDIUM (non-compliance), LOW (style/convention)\n4. If a source file has NO violations, explicitly state: 'CLEAN \u2014 no spec violations found.'\n5. At the end, provide a SUMMARY with total violation counts by severity.\n6. Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.\n\nSPEC FORMAT: The specification file is wrapped in <specs-filename> and <specs-file-content> tags (distinct from source file tags).\n" + FILE_FORMAT_EXAMPLE + BREVITY_RULES;
+async function runCheckAgainstSpecs(args, deps) {
+  const {
+    spec_file_path: csSpecPath,
+    input_files_paths: csInputPathsRaw,
+    folder_path: csFolderPath,
+    extensions: csExtensions,
+    exclude_dirs: csExcludeDirs,
+    use_gitignore: csUseGitignore,
+    instructions: csInstructions,
+    instructions_files_paths: csInstructionsFilesPaths,
+    scan_secrets: csScan,
+    redact_secrets: csRedact,
+    answer_mode: csRawMode,
+    max_payload_kb: csMaxPayloadKb,
+    redact_regex: csRedactRegexRaw
+  } = args;
+  const csUseEnsemble = deps.useEnsemble;
+  const csBudgetBytes = (csMaxPayloadKb ?? 400) * 1024;
+  const csMode = resolveAnswerMode(csRawMode, 0);
+  let csRegexRedact;
+  try {
+    csRegexRedact = parseRedactRegex(csRedactRegexRaw);
+  } catch (err3) {
+    return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
+  }
+  if (!csSpecPath) {
+    return {
+      content: [{ type: "text", text: "FAILED: spec_file_path is required." }],
+      isError: true
+    };
+  }
+  const csNormalized = deps.normalizePaths(csInputPathsRaw);
+  let csFilePaths = [...csNormalized];
+  if (csFolderPath) {
+    const csFolderResult = deps.resolveFolderPath(csFolderPath, {
+      extensions: csExtensions,
+      excludeDirs: csExcludeDirs,
+      useGitignore: csUseGitignore,
+      maxFiles: args.max_files
+    });
+    if (csFolderResult.error && csFolderResult.files.length === 0 && csFilePaths.length === 0) {
+      return { content: [{ type: "text", text: `FAILED: ${csFolderResult.error}` }], isError: true };
+    }
+    csFilePaths = [...csFilePaths, ...csFolderResult.files];
+  }
+  if (csFilePaths.length === 0) {
+    return {
+      content: [{ type: "text", text: "FAILED: Provide input_files_paths or folder_path." }],
+      isError: true
+    };
+  }
+  let csSpecBlock;
+  try {
+    csSpecBlock = readFileAsCodeBlock(csSpecPath, void 0, csRedact, csBudgetBytes, null, "specs-");
+  } catch (err3) {
+    const errMsg = err3 instanceof Error ? err3.message : String(err3);
+    return {
+      content: [{ type: "text", text: `FAILED: Cannot read spec file: ${errMsg}` }],
+      isError: true
+    };
+  }
+  if (csScan && !csRedact) {
+    const csRealFiles = csFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
+    const scanResult = scanFilesForSecrets([csSpecPath, ...csRealFiles]);
+    if (scanResult.found)
+      return {
+        content: [{ type: "text", text: scanResult.report }],
+        isError: true
+      };
+  }
+  const csExtraInstructions = resolvePrompt(csInstructions, csInstructionsFilesPaths);
+  const csSystemPrompt = CHECK_SPECS_SYSTEM_PROMPT;
+  const csSpecBytes = Buffer.byteLength(csSpecBlock, "utf-8");
+  const csSystemBytes = Buffer.byteLength(csSystemPrompt, "utf-8");
+  const csExtraBytes = Buffer.byteLength(csExtraInstructions, "utf-8");
+  const csPromptBytes = csSpecBytes + csSystemBytes + csExtraBytes;
+  let csFileGroups = csFolderPath ? [{ id: "", files: csFilePaths }] : parseFileGroups(csFilePaths);
+  let csEffectivelyGrouped = hasNamedGroups(csFileGroups);
+  if (csMode === 1 && !csEffectivelyGrouped) {
+    const autoGroups = autoGroupByHeuristic(csFilePaths);
+    if (autoGroups.length > 0) {
+      csFileGroups = autoGroups;
+      csEffectivelyGrouped = true;
+    }
+  }
+  const csAllGroupReports = [];
+  for (const fg of csFileGroups) {
+    const fgPaths = fg.files;
+    if (fgPaths.length === 0) continue;
+    const fgId = fg.id;
+    if (csMode === 0 && !csEffectivelyGrouped) {
+      const csPerFileResults = [];
+      for (const fp of fgPaths) {
+        if (!existsSync13(fp)) {
+          csPerFileResults.push(`FAILED: ${fp} \u2014 File not found`);
+          continue;
+        }
+        let fpBlock;
+        try {
+          fpBlock = readFileAsCodeBlock(fp, void 0, csRedact, csBudgetBytes, csRegexRedact);
+        } catch (err3) {
+          csPerFileResults.push(`FAILED: ${fp} \u2014 ${err3 instanceof Error ? err3.message : String(err3)}`);
+          continue;
+        }
+        let fpUserContent = "## SPECIFICATION (source of truth)\n\n" + csSpecBlock + "\n\n";
+        if (csExtraInstructions) {
+          fpUserContent += "## ADDITIONAL INSTRUCTIONS\n\n" + csExtraInstructions + "\n\n";
+        }
+        fpUserContent += "## SOURCE FILES TO CHECK\n\n" + fpBlock;
+        const fpMessages = [
+          { role: "system", content: csSystemPrompt },
+          { role: "user", content: fpUserContent }
+        ];
+        const fpResp = await deps.ensembleStreaming(
+          fpMessages,
+          {
+            maxTokens: deps.resolveDefaultMaxTokens(),
+            onProgress: deps.onProgress,
+            modelOverride: deps.modelOverride
+            // honours --free and credit-exhausted auto-fallback
+          },
+          csUseEnsemble
+        );
+        if (fpResp.content.trim().length === 0) {
+          csPerFileResults.push(`FAILED: ${fp} \u2014 LLM returned empty response`);
+          continue;
+        }
+        const fpFooter = deps.formatFooter(fpResp, "check_against_specs", fp);
+        const fpReportPath = deps.saveResponse("check_against_specs", fpResp.content + fpFooter, {
+          model: deps.ensembleModelLabel(csUseEnsemble),
+          task: `Spec compliance: ${basename5(csSpecPath)} vs ${basename5(fp)}`,
+          inputFile: fp
+        }, void 0, deps.outputDir);
+        csPerFileResults.push(fpReportPath);
+      }
+      return { content: [{ type: "text", text: csPerFileResults.join("\n") }] };
+    }
+    const { groups: csGroups, autoBatched: csAutoBatched, skipped: csSkipped } = readAndGroupFiles(fgPaths, csPromptBytes, csRedact, csBudgetBytes, csRegexRedact);
+    const csBatchResults = [];
+    if (csSkipped.length > 0) {
+      csBatchResults.push(
+        `SKIPPED (exceeds ${csBudgetBytes / 1024} KB payload budget): ${csSkipped.length} file(s)
+` + csSkipped.map((f) => `  - ${f}`).join("\n")
+      );
+    }
+    for (let gi = 0; gi < csGroups.length; gi++) {
+      const group = csGroups[gi];
+      let userContent = "## SPECIFICATION (source of truth)\n\n" + csSpecBlock + "\n\n";
+      if (csExtraInstructions) {
+        userContent += "## ADDITIONAL INSTRUCTIONS\n\n" + csExtraInstructions + "\n\n";
+      }
+      userContent += "## SOURCE FILES TO CHECK\n\n";
+      for (const fd of group) {
+        userContent += `
+
+${fd.block}`;
+      }
+      const csMessages = [
+        { role: "system", content: csSystemPrompt },
+        { role: "user", content: userContent }
+      ];
+      const csResp = await deps.ensembleStreaming(
+        csMessages,
+        {
+          maxTokens: deps.resolveDefaultMaxTokens(),
+          onProgress: deps.onProgress,
+          modelOverride: deps.modelOverride
+        },
+        csUseEnsemble
+      );
+      const csFooter = deps.formatFooter(csResp, "check_against_specs", group[0]?.path);
+      if (csResp.content.trim().length > 0) {
+        if (csAutoBatched) {
+          const fileList = group.map((fd) => fd.path).join(", ");
+          csBatchResults.push(
+            `## Batch ${gi + 1}/${csGroups.length}
+
+Files: ${fileList}
+
+${csResp.content}${csFooter}`
+          );
+        } else {
+          csBatchResults.push(csResp.content + csFooter);
+        }
+      }
+    }
+    if (csBatchResults.length === 0) continue;
+    const csFinalContent = csBatchResults.join("\n\n---\n\n");
+    const csMergedModel = deps.ensembleModelLabel(csUseEnsemble);
+    const csReportPath = deps.saveResponse(
+      "check_against_specs",
+      csFinalContent,
+      {
+        model: csMergedModel,
+        task: `Spec compliance: ${basename5(csSpecPath)} vs ${fgPaths.length} file(s)`,
+        inputFile: fgPaths[0],
+        groupId: fgId || void 0
+      },
+      void 0,
+      deps.outputDir
+    );
+    if (csEffectivelyGrouped) {
+      const labelId = fgId || "auto";
+      csAllGroupReports.push(`[group:${labelId}] ${csReportPath}`);
+    } else {
+      return { content: [{ type: "text", text: csReportPath }] };
+    }
+  }
+  if (csEffectivelyGrouped) {
+    if (csAllGroupReports.length === 0) {
+      return { content: [{ type: "text", text: "FAILED: No results for any group." }], isError: true };
+    }
+    return { content: [{ type: "text", text: csAllGroupReports.join("\n") }] };
+  }
+  return { content: [{ type: "text", text: "FAILED: LLM returned empty response." }], isError: true };
+}
+
 // src/scan-folder/core.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { existsSync as existsSync13, statSync as statSync8, readFileSync as readFileSync16 } from "node:fs";
+import { existsSync as existsSync14, statSync as statSync8, readFileSync as readFileSync16 } from "node:fs";
 async function runScanFolder(args, deps) {
   const {
     folder_path,
@@ -53320,7 +53543,7 @@ async function runScanFolder(args, deps) {
   } catch (err3) {
     return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
   }
-  if (!existsSync13(sfFolderPath)) {
+  if (!existsSync14(sfFolderPath)) {
     return {
       content: [
         {
@@ -53469,7 +53692,7 @@ async function runScanFolder(args, deps) {
   if (sfMode === 2 && succeeded.length > 0) {
     const sections = [];
     for (const r of succeeded) {
-      const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync16(r.reportPath, "utf-8") : "";
+      const content = r.reportPath && existsSync14(r.reportPath) ? readFileSync16(r.reportPath, "utf-8") : "";
       sections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -53509,7 +53732,7 @@ ${content}`);
       for (const fp of fg.files) {
         const r = pathToResult.get(fp);
         if (!r) continue;
-        const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync16(r.reportPath, "utf-8") : "";
+        const content = r.reportPath && existsSync14(r.reportPath) ? readFileSync16(r.reportPath, "utf-8") : "";
         sections.push(`## File: ${fp}
 
 ${content}`);
@@ -53863,7 +54086,7 @@ ${codeResp.content}${codeFooter}` : codeResp.content + codeFooter
 
 // src/rule-install.ts
 import {
-  existsSync as existsSync14,
+  existsSync as existsSync15,
   mkdirSync as mkdirSync16,
   readFileSync as readFileSync17,
   writeFileSync as writeFileSync13,
@@ -53888,7 +54111,7 @@ function resolveBundledRulePath() {
   } catch {
   }
   for (const c of candidates) {
-    if (existsSync14(c)) return c;
+    if (existsSync15(c)) return c;
   }
   return null;
 }
@@ -53931,7 +54154,7 @@ function installUsageRule(opts = {}) {
     return { status: "skipped", dest: "", detail: "disabled via LLM_EXT_INSTALL_RULE" };
   }
   const source = opts.sourcePath ?? resolveBundledRulePath();
-  if (!source || !existsSync14(source)) {
+  if (!source || !existsSync15(source)) {
     return { status: "error", dest: "", detail: "bundled rule source not found" };
   }
   const rulesDir = opts.rulesDir ?? resolveClaudeRulesDir();
@@ -53949,7 +54172,7 @@ function installUsageRule(opts = {}) {
   } catch (e) {
     return { status: "error", dest, detail: `cannot read source: ${e.message}` };
   }
-  const existed = existsSync14(dest);
+  const existed = existsSync15(dest);
   if (existed) {
     try {
       if (readFileSync17(dest, "utf-8") === desired) return { status: "unchanged", dest };
@@ -54509,7 +54732,7 @@ function renderEndpointTable(ep, colors) {
 
 // src/free-pool-auto-bench.ts
 import {
-  existsSync as existsSync15,
+  existsSync as existsSync16,
   mkdirSync as mkdirSync17,
   openSync,
   readFileSync as readFileSync18,
@@ -54527,7 +54750,7 @@ var DISABLE_ENV = "LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH";
 function resolveBenchmarkScriptPath() {
   const here = dirname10(fileURLToPath5(import.meta.url));
   const bundled = pathResolve(here, "benchmark.js");
-  if (existsSync15(bundled)) return bundled;
+  if (existsSync16(bundled)) return bundled;
   const fromSrc = pathResolve(here, "..", "dist", "benchmark.js");
   return fromSrc;
 }
@@ -54544,7 +54767,7 @@ function benchCacheHasFreeEntries(cachePath3 = BENCH_CACHE) {
   }
 }
 function lockHoldsLivePid(lockPath = BENCH_LOCK) {
-  if (!existsSync15(lockPath)) return false;
+  if (!existsSync16(lockPath)) return false;
   try {
     const pid = parseInt(readFileSync18(lockPath, "utf-8").trim(), 10);
     if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -54709,8 +54932,6 @@ Settings file: ${SETTINGS_FILE}`;
 var DEFAULT_OPENROUTER_RPS = 5;
 var DEFAULT_MAX_IN_FLIGHT_REMOTE = 200;
 var DEFAULT_TEMPERATURE = 0.1;
-var BREVITY_RULES = "\nOUTPUT RULES:\n- Be SUCCINCT. Use bullet points, not paragraphs.\n- Skip preamble, filler, and restating the task.\n- Only report findings, not things that are correct.\n- For code reviews: skip files/areas with no issues \u2014 only mention what needs attention.\n- Maximum 3 sentences per finding. Lead with the problem, not the context.";
-var FILE_FORMAT_EXAMPLE = "\nINPUT FORMAT: Each attached file is wrapped as follows (placeholders use {BRACES}, actual tags use angle brackets):\n<filename>\n{ABSOLUTE_PATH_HERE}\n</filename>\n<file-content>\n````{LANGUAGE}\n{FILE_CONTENTS_HERE}\n````\n</file-content>\nReference files by the path inside the filename tag. Multiple files may appear in sequence.\n";
 function codeTaskSystemPrompt(lang) {
   return `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.
 RULES (override any conflicting instructions):
@@ -55334,7 +55555,7 @@ function classifyError(error48) {
   return { unrecoverable: false, serviceLevel: false, reason: msg };
 }
 function sanitizeFilename(filePath) {
-  const base = basename5(filePath);
+  const base = basename6(filePath);
   if (!base || base === "/") return "unknown";
   return base.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
@@ -55421,7 +55642,7 @@ function resolveFolderPath(folderPath, opts) {
   } catch (err3) {
     return { files: [], error: `Invalid folder_path: ${err3 instanceof Error ? err3.message : String(err3)}` };
   }
-  if (!existsSync16(folderPath)) {
+  if (!existsSync17(folderPath)) {
     return { files: [], error: `folder_path not found: ${folderPath}` };
   }
   if (!statSync9(folderPath).isDirectory()) {
@@ -55581,7 +55802,7 @@ ${failed.map((r) => `- **${r.model}**: ${r.content}`).join("\n")}`);
   };
 }
 async function processFileCheck(filePath, task, options = {}) {
-  if (!existsSync16(filePath)) {
+  if (!existsSync17(filePath)) {
     return { filePath, success: false, error: `File not found: ${filePath}` };
   }
   const codeBlock = readFileAsCodeBlock(
@@ -56599,7 +56820,7 @@ Profiles: ${profileNames.join(", ")}`);
               const gSucceeded = gAll.filter((r) => r.success);
               const reportSections = [];
               for (const r of gSucceeded) {
-                const content = r.reportPath && existsSync16(r.reportPath) ? readFileSync19(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync17(r.reportPath) ? readFileSync19(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -56735,7 +56956,7 @@ ${gAbortReason}`);
             } else {
               const reportSections = [];
               for (const r of succeeded) {
-                const content = r.reportPath && existsSync16(r.reportPath) ? readFileSync19(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync17(r.reportPath) ? readFileSync19(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -56888,8 +57109,8 @@ ${content}`);
             } catch (err3) {
               return { error: err3.message };
             }
-            if (!existsSync16(fA)) return { error: `File not found: ${fARaw}` };
-            if (!existsSync16(fB)) return { error: `File not found: ${fBRaw}` };
+            if (!existsSync17(fA)) return { error: `File not found: ${fARaw}` };
+            if (!existsSync17(fB)) return { error: `File not found: ${fBRaw}` };
             if (cfScan && !cfRedact) {
               const scanResult = scanFilesForSecrets([fA, fB]);
               if (scanResult.found) return { error: scanResult.report };
@@ -56951,7 +57172,7 @@ ${fence}${sourceBlocks}` }
             } catch (err3) {
               return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
             }
-            if (!existsSync16(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
+            if (!existsSync17(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
             const toRef = cfToRef || "HEAD";
             if (cfFromRef.startsWith("-") || toRef.startsWith("-")) {
               return { content: [{ type: "text", text: "FAILED: git refs must not start with '-'" }], isError: true };
@@ -57115,7 +57336,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync16(fileA)) {
+          if (!existsSync17(fileA)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileA}` }
@@ -57123,7 +57344,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync16(fileB)) {
+          if (!existsSync17(fileB)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileB}` }
@@ -57224,7 +57445,7 @@ ${diffFence}` + sourceFileBlocks
           const cfReportPath = saveResponse(
             "compare_files",
             cfResp.content + cfFooter,
-            { model: cfResp.model, task: `Compare ${basename5(fileA)} vs ${basename5(fileB)}`, inputFile: fileA },
+            { model: cfResp.model, task: `Compare ${basename6(fileA)} vs ${basename6(fileB)}`, inputFile: fileA },
             void 0,
             outputDir
           );
@@ -57311,7 +57532,7 @@ ${diffFence}` + sourceFileBlocks
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync16(filePath)) {
+                if (!existsSync17(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
@@ -57371,7 +57592,7 @@ ${resp.content}${footer}`);
           const crReports = [];
           const crReportPaths = [];
           for (const filePath of crFilePaths) {
-            if (!existsSync16(filePath)) {
+            if (!existsSync17(filePath)) {
               crReports.push(`## ${filePath}
 
 FAILED: File not found.`);
@@ -57551,7 +57772,7 @@ ${crResp.content}${crFooter}`
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync16(filePath)) {
+                if (!existsSync17(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
@@ -57585,17 +57806,17 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     packageImports.push(importPath);
                     continue;
                   }
-                  let found = existsSync16(resolvedBase) && statSync9(resolvedBase).isFile();
+                  let found = existsSync17(resolvedBase) && statSync9(resolvedBase).isFile();
                   if (!found && !extname5(resolvedBase)) {
                     for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".json"]) {
-                      if (existsSync16(resolvedBase + ext)) {
+                      if (existsSync17(resolvedBase + ext)) {
                         found = true;
                         break;
                       }
                     }
                     if (!found) {
                       for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                        if (existsSync16(join20(resolvedBase, `index${ext}`))) {
+                        if (existsSync17(join20(resolvedBase, `index${ext}`))) {
                           found = true;
                           break;
                         }
@@ -57629,7 +57850,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
           const ciReports = [];
           const ciReportPaths = [];
           for (const filePath of ciFilePaths) {
-            if (!existsSync16(filePath)) {
+            if (!existsSync17(filePath)) {
               ciReports.push(`## ${filePath}
 
 FAILED: File not found.`);
@@ -57686,7 +57907,7 @@ FAILED: File not found.`);
                 continue;
               }
               let found = false;
-              if (existsSync16(resolvedBase) && statSync9(resolvedBase).isFile()) {
+              if (existsSync17(resolvedBase) && statSync9(resolvedBase).isFile()) {
                 found = true;
               }
               if (!found && !extname5(resolvedBase)) {
@@ -57702,14 +57923,14 @@ FAILED: File not found.`);
                   ".rs",
                   ".json"
                 ]) {
-                  if (existsSync16(resolvedBase + ext)) {
+                  if (existsSync17(resolvedBase + ext)) {
                     found = true;
                     break;
                   }
                 }
                 if (!found) {
                   for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                    if (existsSync16(join20(resolvedBase, `index${ext}`))) {
+                    if (existsSync17(join20(resolvedBase, `index${ext}`))) {
                       found = true;
                       break;
                     }
@@ -57795,211 +58016,21 @@ FAILED: File not found.`);
           return { content: [{ type: "text", text: ciMergedPath }] };
         }
         case "check_against_specs": {
-          const {
-            spec_file_path: csSpecPath,
-            input_files_paths: csInputPathsRaw,
-            folder_path: csFolderPath,
-            extensions: csExtensions,
-            exclude_dirs: csExcludeDirs,
-            use_gitignore: csUseGitignore,
-            instructions: csInstructions,
-            instructions_files_paths: csInstructionsFilesPaths,
-            scan_secrets: csScan,
-            redact_secrets: csRedact,
-            answer_mode: csRawMode,
-            max_payload_kb: csMaxPayloadKb,
-            redact_regex: csRedactRegexRaw
-          } = args;
-          const csUseEnsemble = backend.type === "openrouter";
-          const csBudgetBytes = (csMaxPayloadKb ?? 400) * 1024;
-          const csMode = resolveAnswerMode(csRawMode, 0);
-          let csRegexRedact = null;
-          try {
-            csRegexRedact = parseRedactRegex(csRedactRegexRaw);
-          } catch (err3) {
-            return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
-          }
-          if (!csSpecPath) {
-            return {
-              content: [{ type: "text", text: "FAILED: spec_file_path is required." }],
-              isError: true
-            };
-          }
-          const csNormalized = normalizePaths(csInputPathsRaw);
-          let csFilePaths = [...csNormalized];
-          if (csFolderPath) {
-            const csFolderResult = resolveFolderPath(csFolderPath, {
-              extensions: csExtensions,
-              excludeDirs: csExcludeDirs,
-              useGitignore: csUseGitignore,
-              maxFiles: args.max_files
-            });
-            if (csFolderResult.error && csFolderResult.files.length === 0 && csFilePaths.length === 0) {
-              return { content: [{ type: "text", text: `FAILED: ${csFolderResult.error}` }], isError: true };
-            }
-            csFilePaths = [...csFilePaths, ...csFolderResult.files];
-          }
-          if (csFilePaths.length === 0) {
-            return {
-              content: [{ type: "text", text: "FAILED: Provide input_files_paths or folder_path." }],
-              isError: true
-            };
-          }
-          let csSpecBlock;
-          try {
-            csSpecBlock = readFileAsCodeBlock(csSpecPath, void 0, csRedact, csBudgetBytes, null, "specs-");
-          } catch (err3) {
-            const errMsg = err3 instanceof Error ? err3.message : String(err3);
-            return {
-              content: [{ type: "text", text: `FAILED: Cannot read spec file: ${errMsg}` }],
-              isError: true
-            };
-          }
-          if (csScan && !csRedact) {
-            const csRealFiles = csFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
-            const scanResult = scanFilesForSecrets([csSpecPath, ...csRealFiles]);
-            if (scanResult.found)
-              return {
-                content: [{ type: "text", text: scanResult.report }],
-                isError: true
-              };
-          }
-          const csExtraInstructions = resolvePrompt(csInstructions, csInstructionsFilesPaths);
-          const csSystemPrompt = "You are a strict specification compliance auditor. You will receive a SPECIFICATION FILE and one or more SOURCE FILES. Your job is to find every violation of the specification in the source files.\n\nRULES:\n1. The specification is the ABSOLUTE source of truth. Every rule, restriction, format, API contract, forbidden pattern, and requirement in the spec MUST be followed exactly.\n2. Report ONLY VIOLATIONS \u2014 things implemented WRONGLY or FORBIDDEN patterns used. Do NOT report MISSING features \u2014 some requirements may be implemented in other files that are not included here.\n3. For each violation, report:\n   - **File**: which source file\n   - **Location**: function/class/method name (NEVER line numbers)\n   - **Spec rule violated**: quote the exact spec text\n   - **What the code does**: describe the actual behavior\n   - **Severity**: CRITICAL (security/data loss), HIGH (wrong behavior), MEDIUM (non-compliance), LOW (style/convention)\n4. If a source file has NO violations, explicitly state: 'CLEAN \u2014 no spec violations found.'\n5. At the end, provide a SUMMARY with total violation counts by severity.\n6. Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.\n\nSPEC FORMAT: The specification file is wrapped in <specs-filename> and <specs-file-content> tags (distinct from source file tags).\n" + FILE_FORMAT_EXAMPLE + BREVITY_RULES;
-          const csSpecBytes = Buffer.byteLength(csSpecBlock, "utf-8");
-          const csSystemBytes = Buffer.byteLength(csSystemPrompt, "utf-8");
-          const csExtraBytes = Buffer.byteLength(csExtraInstructions, "utf-8");
-          const csPromptBytes = csSpecBytes + csSystemBytes + csExtraBytes;
-          let csFileGroups = csFolderPath ? [{ id: "", files: csFilePaths }] : parseFileGroups(csFilePaths);
-          let csEffectivelyGrouped = hasNamedGroups(csFileGroups);
-          if (csMode === 1 && !csEffectivelyGrouped) {
-            const autoGroups = autoGroupByHeuristic(csFilePaths);
-            if (autoGroups.length > 0) {
-              csFileGroups = autoGroups;
-              csEffectivelyGrouped = true;
-            }
-          }
-          const csAllGroupReports = [];
-          for (const fg of csFileGroups) {
-            const fgPaths = fg.files;
-            if (fgPaths.length === 0) continue;
-            const fgId = fg.id;
-            if (csMode === 0 && !csEffectivelyGrouped) {
-              const csPerFileResults = [];
-              for (const fp of fgPaths) {
-                if (!existsSync16(fp)) {
-                  csPerFileResults.push(`FAILED: ${fp} \u2014 File not found`);
-                  continue;
-                }
-                let fpBlock;
-                try {
-                  fpBlock = readFileAsCodeBlock(fp, void 0, csRedact, csBudgetBytes, csRegexRedact);
-                } catch (err3) {
-                  csPerFileResults.push(`FAILED: ${fp} \u2014 ${err3 instanceof Error ? err3.message : String(err3)}`);
-                  continue;
-                }
-                let fpUserContent = "## SPECIFICATION (source of truth)\n\n" + csSpecBlock + "\n\n";
-                if (csExtraInstructions) {
-                  fpUserContent += "## ADDITIONAL INSTRUCTIONS\n\n" + csExtraInstructions + "\n\n";
-                }
-                fpUserContent += "## SOURCE FILES TO CHECK\n\n" + fpBlock;
-                const fpMessages = [
-                  { role: "system", content: csSystemPrompt },
-                  { role: "user", content: fpUserContent }
-                ];
-                const fpResp = await ensembleStreaming(
-                  fpMessages,
-                  { maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride },
-                  csUseEnsemble
-                );
-                if (fpResp.content.trim().length === 0) {
-                  csPerFileResults.push(`FAILED: ${fp} \u2014 LLM returned empty response`);
-                  continue;
-                }
-                const fpFooter = formatFooter(fpResp, "check_against_specs", fp);
-                const fpReportPath = saveResponse("check_against_specs", fpResp.content + fpFooter, {
-                  model: ensembleModelLabel(csUseEnsemble),
-                  task: `Spec compliance: ${basename5(csSpecPath)} vs ${basename5(fp)}`,
-                  inputFile: fp
-                }, void 0, outputDir);
-                csPerFileResults.push(fpReportPath);
-              }
-              return { content: [{ type: "text", text: csPerFileResults.join("\n") }] };
-            }
-            const { groups: csGroups, autoBatched: csAutoBatched, skipped: csSkipped } = readAndGroupFiles(fgPaths, csPromptBytes, csRedact, csBudgetBytes, csRegexRedact);
-            const csBatchResults = [];
-            if (csSkipped.length > 0) {
-              csBatchResults.push(
-                `SKIPPED (exceeds ${csBudgetBytes / 1024} KB payload budget): ${csSkipped.length} file(s)
-` + csSkipped.map((f) => `  - ${f}`).join("\n")
-              );
-            }
-            for (let gi = 0; gi < csGroups.length; gi++) {
-              const group = csGroups[gi];
-              let userContent = "## SPECIFICATION (source of truth)\n\n" + csSpecBlock + "\n\n";
-              if (csExtraInstructions) {
-                userContent += "## ADDITIONAL INSTRUCTIONS\n\n" + csExtraInstructions + "\n\n";
-              }
-              userContent += "## SOURCE FILES TO CHECK\n\n";
-              for (const fd of group) {
-                userContent += `
-
-${fd.block}`;
-              }
-              const csMessages = [
-                { role: "system", content: csSystemPrompt },
-                { role: "user", content: userContent }
-              ];
-              const csResp = await ensembleStreaming(
-                csMessages,
-                { maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride },
-                csUseEnsemble
-              );
-              const csFooter = formatFooter(csResp, "check_against_specs", group[0]?.path);
-              if (csResp.content.trim().length > 0) {
-                if (csAutoBatched) {
-                  const fileList = group.map((fd) => fd.path).join(", ");
-                  csBatchResults.push(
-                    `## Batch ${gi + 1}/${csGroups.length}
-
-Files: ${fileList}
-
-${csResp.content}${csFooter}`
-                  );
-                } else {
-                  csBatchResults.push(csResp.content + csFooter);
-                }
-              }
-            }
-            if (csBatchResults.length === 0) continue;
-            const csFinalContent = csBatchResults.join("\n\n---\n\n");
-            const csMergedModel = ensembleModelLabel(csUseEnsemble);
-            const csReportPath = saveResponse(
-              "check_against_specs",
-              csFinalContent,
-              {
-                model: csMergedModel,
-                task: `Spec compliance: ${basename5(csSpecPath)} vs ${fgPaths.length} file(s)`,
-                inputFile: fgPaths[0],
-                groupId: fgId || void 0
-              },
-              void 0,
-              outputDir
-            );
-            if (csEffectivelyGrouped) {
-              const labelId = fgId || "auto";
-              csAllGroupReports.push(`[group:${labelId}] ${csReportPath}`);
-            } else {
-              return { content: [{ type: "text", text: csReportPath }] };
-            }
-          }
-          if (csEffectivelyGrouped) {
-            if (csAllGroupReports.length === 0) {
-              return { content: [{ type: "text", text: "FAILED: No results for any group." }], isError: true };
-            }
-            return { content: [{ type: "text", text: csAllGroupReports.join("\n") }] };
-          }
-          return { content: [{ type: "text", text: "FAILED: LLM returned empty response." }], isError: true };
+          const csDeps = {
+            useEnsemble: backend.type === "openrouter",
+            normalizePaths,
+            resolveFolderPath,
+            ensembleStreaming,
+            formatFooter,
+            saveResponse,
+            ensembleModelLabel,
+            resolveDefaultMaxTokens,
+            onProgress,
+            outputDir,
+            modelOverride
+            // honours --free and credit-exhausted auto-fallback
+          };
+          return await runCheckAgainstSpecs(args, csDeps);
         }
         case "cluster_synonyms": {
           const {

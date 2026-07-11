@@ -21,6 +21,36 @@ import { extname, join, basename, dirname, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 
+// ── Shared system-prompt fragments ───────────────────────────────────
+// Pure strings appended to every system prompt that receives files. They live
+// here (not in index.ts) so an extracted tool core — which must import ZERO from
+// index.ts — can build its REAL system prompt instead of taking it as an
+// injected seam and drifting from the server's copy.
+
+const BREVITY_RULES =
+  "\nOUTPUT RULES:\n" +
+  "- Be SUCCINCT. Use bullet points, not paragraphs.\n" +
+  "- Skip preamble, filler, and restating the task.\n" +
+  "- Only report findings, not things that are correct.\n" +
+  "- For code reviews: skip files/areas with no issues — only mention what needs attention.\n" +
+  "- Maximum 3 sentences per finding. Lead with the problem, not the context.";
+
+// Example of the file wrapping format, prepended to all system prompts that receive files.
+// Shows the LLM exactly what to expect so it can parse multi-file batches reliably.
+const FILE_FORMAT_EXAMPLE =
+  "\nINPUT FORMAT: Each attached file is wrapped as follows (placeholders use {BRACES}, actual tags use angle brackets):\n" +
+  "<filename>\n" +
+  "{ABSOLUTE_PATH_HERE}\n" +
+  "</filename>\n" +
+  "<file-content>\n" +
+  "````{LANGUAGE}\n" +
+  "{FILE_CONTENTS_HERE}\n" +
+  "````\n" +
+  "</file-content>\n" +
+  "Reference files by the path inside the filename tag. Multiple files may appear in sequence.\n";
+
+export { BREVITY_RULES, FILE_FORMAT_EXAMPLE };
+
 // ── File reading helpers ─────────────────────────────────────────────
 // The MCP reads files from disk so the calling agent never loads them into its context.
 

@@ -104,11 +104,17 @@ import {
   resolveAnswerMode,
   walkDir,
   extractLocalImports,
+  BREVITY_RULES,
+  FILE_FORMAT_EXAMPLE,
 } from "./scan-pipeline.js";
 import {
   runSearchExistingImplementations,
   type SeiDeps,
 } from "./search-existing/core.js";
+import {
+  runCheckAgainstSpecs,
+  type CheckSpecsDeps,
+} from "./check-specs/core.js";
 import {
   runScanFolder,
   type ScanFolderDeps,
@@ -261,27 +267,9 @@ const DEFAULT_MAX_IN_FLIGHT_REMOTE = 200; // safety cap on total concurrent requ
 const DEFAULT_TEMPERATURE = 0.1;
 
 // Appended to ALL system prompts to prevent verbose output that wastes tokens and causes truncation.
-const BREVITY_RULES =
-  "\nOUTPUT RULES:\n" +
-  "- Be SUCCINCT. Use bullet points, not paragraphs.\n" +
-  "- Skip preamble, filler, and restating the task.\n" +
-  "- Only report findings, not things that are correct.\n" +
-  "- For code reviews: skip files/areas with no issues — only mention what needs attention.\n" +
-  "- Maximum 3 sentences per finding. Lead with the problem, not the context.";
-
-// Example of the file wrapping format, prepended to all system prompts that receive files.
-// Shows the LLM exactly what to expect so it can parse multi-file batches reliably.
-const FILE_FORMAT_EXAMPLE =
-  "\nINPUT FORMAT: Each attached file is wrapped as follows (placeholders use {BRACES}, actual tags use angle brackets):\n" +
-  "<filename>\n" +
-  "{ABSOLUTE_PATH_HERE}\n" +
-  "</filename>\n" +
-  "<file-content>\n" +
-  "````{LANGUAGE}\n" +
-  "{FILE_CONTENTS_HERE}\n" +
-  "````\n" +
-  "</file-content>\n" +
-  "Reference files by the path inside the filename tag. Multiple files may appear in sequence.\n";
+// BREVITY_RULES and FILE_FORMAT_EXAMPLE now live in scan-pipeline.ts (imported
+// above) so extracted tool cores — which import ZERO from index.ts — can build
+// their real system prompts from the same single source.
 
 // Single source for the code_task system prompt (used at every code_task call site:
 // single-file, inline-content, and auto-batched). Collapsed here so the prompt —
@@ -4618,282 +4606,27 @@ async function dispatchCallToolInner(
       }
 
       case "check_against_specs": {
-        const {
-          spec_file_path: csSpecPath,
-          input_files_paths: csInputPathsRaw,
-          folder_path: csFolderPath,
-          extensions: csExtensions,
-          exclude_dirs: csExcludeDirs,
-          use_gitignore: csUseGitignore,
-          instructions: csInstructions,
-          instructions_files_paths: csInstructionsFilesPaths,
-          scan_secrets: csScan,
-          redact_secrets: csRedact,
-          answer_mode: csRawMode,
-          max_payload_kb: csMaxPayloadKb,
-          redact_regex: csRedactRegexRaw,
-        } = args as {
-          spec_file_path: string;
-          input_files_paths?: string | string[];
-          redact_regex?: string;
-          folder_path?: string;
-          extensions?: string[];
-          exclude_dirs?: string[];
-          use_gitignore?: boolean;
-          instructions?: string;
-          instructions_files_paths?: string | string[];
-          scan_secrets?: boolean;
-          redact_secrets?: boolean;
-          answer_mode?: number;
-          max_payload_kb?: number;
+        // Pipeline body extracted to check-specs/core.ts (P2a, zero-token model
+        // pipeline), mirroring the search_existing / scan_folder / code_task
+        // extractions so the REAL pipeline can run in-process from a benchmark
+        // runner; this case only wires the server-stateful deps. Unlike
+        // scan_folder there is no per-file processFileCheck seam: every LLM call
+        // (answer_mode 0's one-call-per-file path and the FFD-batched path alike)
+        // goes through ensembleStreaming, so that is the single LLM seam.
+        const csDeps: CheckSpecsDeps = {
+          useEnsemble: backend.type === "openrouter",
+          normalizePaths,
+          resolveFolderPath,
+          ensembleStreaming,
+          formatFooter,
+          saveResponse,
+          ensembleModelLabel,
+          resolveDefaultMaxTokens,
+          onProgress,
+          outputDir,
+          modelOverride, // honours --free and credit-exhausted auto-fallback
         };
-        const csUseEnsemble = backend.type === "openrouter";
-        const csBudgetBytes = (csMaxPayloadKb ?? 400) * 1024;
-        const csMode = resolveAnswerMode(csRawMode, 0);
-
-        // Validate redact_regex upfront
-        let csRegexRedact: RegexRedactOpts | null = null;
-        try {
-          csRegexRedact = parseRedactRegex(csRedactRegexRaw);
-        } catch (err) {
-          return { content: [{ type: "text", text: `FAILED: ${(err as Error).message}` }], isError: true };
-        }
-
-        // Validate required params
-        if (!csSpecPath) {
-          return {
-            content: [{ type: "text", text: "FAILED: spec_file_path is required." }],
-            isError: true,
-          };
-        }
-
-        // Reject if both folder_path and input_files_paths are provided
-        const csNormalized = normalizePaths(csInputPathsRaw);
-
-        // Resolve source files from input_files_paths AND/OR folder_path (can combine both)
-        let csFilePaths: string[] = [...csNormalized];
-        if (csFolderPath) {
-          const csFolderResult = resolveFolderPath(csFolderPath, {
-            extensions: csExtensions,
-            excludeDirs: csExcludeDirs,
-            useGitignore: csUseGitignore,
-            maxFiles: (args as { max_files?: number }).max_files,
-          });
-          if (csFolderResult.error && csFolderResult.files.length === 0 && csFilePaths.length === 0) {
-            return { content: [{ type: "text", text: `FAILED: ${csFolderResult.error}` }], isError: true };
-          }
-          csFilePaths = [...csFilePaths, ...csFolderResult.files];
-        }
-        if (csFilePaths.length === 0) {
-          return {
-            content: [{ type: "text", text: "FAILED: Provide input_files_paths or folder_path." }],
-            isError: true,
-          };
-        }
-
-        // Read the spec file
-        let csSpecBlock: string;
-        try {
-          csSpecBlock = readFileAsCodeBlock(csSpecPath, undefined, csRedact, csBudgetBytes, null, "specs-");
-        } catch (err) {
-          const errMsg = err instanceof Error ? err.message : String(err);
-          return {
-            content: [{ type: "text", text: `FAILED: Cannot read spec file: ${errMsg}` }],
-            isError: true,
-          };
-        }
-
-        // scan_secrets: abort if any secrets are found (filter out group markers).
-        // When redact_secrets is also true, skip the abort — downstream redaction handles it.
-        if (csScan && !csRedact) {
-          const csRealFiles = csFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
-          const scanResult = scanFilesForSecrets([csSpecPath, ...csRealFiles]);
-          if (scanResult.found)
-            return {
-              content: [{ type: "text", text: scanResult.report }],
-              isError: true,
-            };
-        }
-
-        // Resolve additional instructions
-        const csExtraInstructions = resolvePrompt(csInstructions, csInstructionsFilesPaths);
-
-        // Build the system prompt for spec compliance checking
-        const csSystemPrompt =
-          "You are a strict specification compliance auditor. You will receive a SPECIFICATION FILE " +
-          "and one or more SOURCE FILES. Your job is to find every violation of the specification " +
-          "in the source files.\n\n" +
-          "RULES:\n" +
-          "1. The specification is the ABSOLUTE source of truth. Every rule, restriction, format, " +
-          "API contract, forbidden pattern, and requirement in the spec MUST be followed exactly.\n" +
-          "2. Report ONLY VIOLATIONS — things implemented WRONGLY or FORBIDDEN patterns used. " +
-          "Do NOT report MISSING features — some requirements may be implemented in other files " +
-          "that are not included here.\n" +
-          "3. For each violation, report:\n" +
-          "   - **File**: which source file\n" +
-          "   - **Location**: function/class/method name (NEVER line numbers)\n" +
-          "   - **Spec rule violated**: quote the exact spec text\n" +
-          "   - **What the code does**: describe the actual behavior\n" +
-          "   - **Severity**: CRITICAL (security/data loss), HIGH (wrong behavior), " +
-          "MEDIUM (non-compliance), LOW (style/convention)\n" +
-          "4. If a source file has NO violations, explicitly state: 'CLEAN — no spec violations found.'\n" +
-          "5. At the end, provide a SUMMARY with total violation counts by severity.\n" +
-          "6. Be specific and actionable — reference concrete function names, variable names, and code patterns.\n" +
-          "\nSPEC FORMAT: The specification file is wrapped in <specs-filename> and <specs-file-content> tags (distinct from source file tags).\n" +
-          FILE_FORMAT_EXAMPLE + BREVITY_RULES;
-
-        // Compute prompt bytes for budget
-        const csSpecBytes = Buffer.byteLength(csSpecBlock, "utf-8");
-        const csSystemBytes = Buffer.byteLength(csSystemPrompt, "utf-8");
-        const csExtraBytes = Buffer.byteLength(csExtraInstructions, "utf-8");
-        const csPromptBytes = csSpecBytes + csSystemBytes + csExtraBytes;
-
-        // ── Group-aware processing (only for input_files_paths, not folder_path) ──
-        // answer_mode=1 means "one report per group". Auto-group the input
-        // files when the caller did not supply ---GROUP:id--- markers.
-        // folder_path input already normalizes to a single unnamed group, so
-        // auto-grouping works on csFilePaths regardless of the source.
-        let csFileGroups = csFolderPath
-          ? [{ id: "", files: csFilePaths }]
-          : parseFileGroups(csFilePaths);
-        let csEffectivelyGrouped = hasNamedGroups(csFileGroups);
-        if (csMode === 1 && !csEffectivelyGrouped) {
-          const autoGroups = autoGroupByHeuristic(csFilePaths);
-          if (autoGroups.length > 0) {
-            csFileGroups = autoGroups;
-            csEffectivelyGrouped = true;
-          }
-        }
-        const csAllGroupReports: string[] = [];
-
-        for (const fg of csFileGroups) {
-          const fgPaths = fg.files;
-          if (fgPaths.length === 0) continue;
-          const fgId = fg.id;
-
-          // Mode 0 (non-grouped only): one output report per input file
-          if (csMode === 0 && !csEffectivelyGrouped) {
-            const csPerFileResults: string[] = [];
-            for (const fp of fgPaths) {
-              if (!existsSync(fp)) {
-                csPerFileResults.push(`FAILED: ${fp} — File not found`);
-                continue;
-              }
-              let fpBlock: string;
-              try {
-                fpBlock = readFileAsCodeBlock(fp, undefined, csRedact, csBudgetBytes, csRegexRedact);
-              } catch (err) {
-                csPerFileResults.push(`FAILED: ${fp} — ${err instanceof Error ? err.message : String(err)}`);
-                continue;
-              }
-              let fpUserContent = "## SPECIFICATION (source of truth)\n\n" + csSpecBlock + "\n\n";
-              if (csExtraInstructions) {
-                fpUserContent += "## ADDITIONAL INSTRUCTIONS\n\n" + csExtraInstructions + "\n\n";
-              }
-              fpUserContent += "## SOURCE FILES TO CHECK\n\n" + fpBlock;
-              const fpMessages: ChatMessage[] = [
-                { role: "system", content: csSystemPrompt },
-                { role: "user", content: fpUserContent },
-              ];
-              const fpResp = await ensembleStreaming(
-                fpMessages,
-                { maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride },
-                csUseEnsemble,
-              );
-              if (fpResp.content.trim().length === 0) {
-                csPerFileResults.push(`FAILED: ${fp} — LLM returned empty response`);
-                continue;
-              }
-              const fpFooter = formatFooter(fpResp, "check_against_specs", fp);
-              const fpReportPath = saveResponse("check_against_specs", fpResp.content + fpFooter, {
-                model: ensembleModelLabel(csUseEnsemble),
-                task: `Spec compliance: ${basename(csSpecPath)} vs ${basename(fp)}`,
-                inputFile: fp,
-              }, undefined, outputDir);
-              csPerFileResults.push(fpReportPath);
-            }
-            return { content: [{ type: "text", text: csPerFileResults.join("\n") }] };
-          }
-
-          // Group source files using FFD bin packing
-          const { groups: csGroups, autoBatched: csAutoBatched, skipped: csSkipped } =
-            readAndGroupFiles(fgPaths, csPromptBytes, csRedact, csBudgetBytes, csRegexRedact);
-
-          const csBatchResults: string[] = [];
-          if (csSkipped.length > 0) {
-            csBatchResults.push(
-              `SKIPPED (exceeds ${csBudgetBytes / 1024} KB payload budget): ${csSkipped.length} file(s)\n` +
-              csSkipped.map((f) => `  - ${f}`).join("\n"),
-            );
-          }
-
-          for (let gi = 0; gi < csGroups.length; gi++) {
-            const group = csGroups[gi];
-            let userContent =
-              "## SPECIFICATION (source of truth)\n\n" + csSpecBlock + "\n\n";
-            if (csExtraInstructions) {
-              userContent += "## ADDITIONAL INSTRUCTIONS\n\n" + csExtraInstructions + "\n\n";
-            }
-            userContent += "## SOURCE FILES TO CHECK\n\n";
-            for (const fd of group) {
-              userContent += `\n\n${fd.block}`;
-            }
-
-            const csMessages: ChatMessage[] = [
-              { role: "system", content: csSystemPrompt },
-              { role: "user", content: userContent },
-            ];
-
-            const csResp = await ensembleStreaming(
-              csMessages,
-              { maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride },
-              csUseEnsemble,
-            );
-            const csFooter = formatFooter(csResp, "check_against_specs", group[0]?.path);
-            if (csResp.content.trim().length > 0) {
-              if (csAutoBatched) {
-                const fileList = group.map((fd) => fd.path).join(", ");
-                csBatchResults.push(
-                  `## Batch ${gi + 1}/${csGroups.length}\n\nFiles: ${fileList}\n\n${csResp.content}${csFooter}`,
-                );
-              } else {
-                csBatchResults.push(csResp.content + csFooter);
-              }
-            }
-          }
-
-          if (csBatchResults.length === 0) continue;
-          const csFinalContent = csBatchResults.join("\n\n---\n\n");
-          const csMergedModel = ensembleModelLabel(csUseEnsemble);
-          const csReportPath = saveResponse(
-            "check_against_specs",
-            csFinalContent,
-            {
-              model: csMergedModel,
-              task: `Spec compliance: ${basename(csSpecPath)} vs ${fgPaths.length} file(s)`,
-              inputFile: fgPaths[0],
-              groupId: fgId || undefined,
-            },
-            undefined,
-            outputDir,
-          );
-
-          if (csEffectivelyGrouped) {
-            const labelId = fgId || "auto";
-            csAllGroupReports.push(`[group:${labelId}] ${csReportPath}`);
-          } else {
-            return { content: [{ type: "text", text: csReportPath }] };
-          }
-        }
-
-        // Grouped: return per-group reports
-        if (csEffectivelyGrouped) {
-          if (csAllGroupReports.length === 0) {
-            return { content: [{ type: "text", text: "FAILED: No results for any group." }], isError: true };
-          }
-          return { content: [{ type: "text", text: csAllGroupReports.join("\n") }] };
-        }
-        return { content: [{ type: "text", text: "FAILED: LLM returned empty response." }], isError: true };
+        return await runCheckAgainstSpecs(args as Record<string, unknown>, csDeps);
       }
 
       case "cluster_synonyms": {
