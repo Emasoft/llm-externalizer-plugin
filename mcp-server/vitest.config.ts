@@ -161,6 +161,16 @@ export default defineConfig({
       'src/benchmark/code-task/score.test.ts',
       'src/benchmark/code-task/select.test.ts',
       'src/benchmark/code-task/bench-runner.test.ts',
+      // scan_folder MASS-SEARCH per-tool benchmark (P2c) — twelve files copied
+      // VERBATIM from this repo's own src/, three queries whose true MATCH set is
+      // DERIVED from the corpus bytes (never hand-listed), a deterministic
+      // judge-free per-file MATCH/NO_MATCH scorer, and the same-or-cheaper gate.
+      // bench-runner.test.ts is HERMETIC (fake FetchImpl seam only; real pipeline,
+      // real prompt, real fixtures, real scorer). No LLM, no network.
+      'src/benchmark/scan-folder/dataset.test.ts',
+      'src/benchmark/scan-folder/score.test.ts',
+      'src/benchmark/scan-folder/select.test.ts',
+      'src/benchmark/scan-folder/bench-runner.test.ts',
       // check_against_specs in-process pipeline core — HERMETIC (fake
       // ensembleStreaming seam only, real readFileAsCodeBlock + readAndGroupFiles
       // + grouping + report assembly). Covers per-file / batched / grouped modes.

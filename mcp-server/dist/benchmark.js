@@ -16004,7 +16004,7 @@ ${lanes.join("\n")}
               return process.memoryUsage().heapUsed;
             },
             getFileSize(path) {
-              const stat = statSync7(path);
+              const stat = statSync9(path);
               if (stat == null ? void 0 : stat.isFile()) {
                 return stat.size;
               }
@@ -16048,7 +16048,7 @@ ${lanes.join("\n")}
             }
           };
           return nodeSystem;
-          function statSync7(path) {
+          function statSync9(path) {
             try {
               return _fs.statSync(path, statSyncOptions);
             } catch {
@@ -16107,7 +16107,7 @@ ${lanes.join("\n")}
               activeSession.post("Profiler.stop", (err, { profile }) => {
                 var _a;
                 if (!err) {
-                  if ((_a = statSync7(profilePath)) == null ? void 0 : _a.isDirectory()) {
+                  if ((_a = statSync9(profilePath)) == null ? void 0 : _a.isDirectory()) {
                     profilePath = _path.join(profilePath, `${(/* @__PURE__ */ new Date()).toISOString().replace(/:/g, "-")}+P${process.pid}.cpuprofile`);
                   }
                   try {
@@ -16227,7 +16227,7 @@ ${lanes.join("\n")}
                 let stat;
                 if (typeof dirent === "string" || dirent.isSymbolicLink()) {
                   const name = combinePaths(path, entry);
-                  stat = statSync7(name);
+                  stat = statSync9(name);
                   if (!stat) {
                     continue;
                   }
@@ -16251,7 +16251,7 @@ ${lanes.join("\n")}
             return matchFiles(path, extensions, excludes, includes, useCaseSensitiveFileNames2, process.cwd(), depth, getAccessibleFileSystemEntries, realpath);
           }
           function fileSystemEntryExists(path, entryKind) {
-            const stat = statSync7(path);
+            const stat = statSync9(path);
             if (!stat) {
               return false;
             }
@@ -16293,7 +16293,7 @@ ${lanes.join("\n")}
           }
           function getModifiedTime3(path) {
             var _a;
-            return (_a = statSync7(path)) == null ? void 0 : _a.mtime;
+            return (_a = statSync9(path)) == null ? void 0 : _a.mtime;
           }
           function setModifiedTime(path, time) {
             try {
@@ -69109,9 +69109,9 @@ ${lanes.join("\n")}
             const originalModuleSpecifier = canHaveModuleSpecifier(enclosingDeclaration) ? tryGetModuleSpecifierFromDeclaration(enclosingDeclaration) : void 0;
             const contextFile = context.enclosingFile;
             const resolutionMode = overrideImportMode || originalModuleSpecifier && host.getModeForUsageLocation(contextFile, originalModuleSpecifier) || contextFile && host.getDefaultResolutionModeForFile(contextFile);
-            const cacheKey4 = createModeAwareCacheKey(contextFile.path, resolutionMode);
+            const cacheKey5 = createModeAwareCacheKey(contextFile.path, resolutionMode);
             const links = getSymbolLinks(symbol);
-            let specifier = links.specifierCache && links.specifierCache.get(cacheKey4);
+            let specifier = links.specifierCache && links.specifierCache.get(cacheKey5);
             if (!specifier) {
               const isBundle2 = !!compilerOptions.outFile;
               const { moduleResolverHost } = context.tracker;
@@ -69129,7 +69129,7 @@ ${lanes.join("\n")}
                 { overrideImportMode }
               ));
               links.specifierCache ?? (links.specifierCache = /* @__PURE__ */ new Map());
-              links.specifierCache.set(cacheKey4, specifier);
+              links.specifierCache.set(cacheKey5, specifier);
             }
             return specifier;
           }
@@ -85343,12 +85343,12 @@ ${lanes.join("\n")}
           );
         }
         function inferTypeForHomomorphicMappedType(source, target, constraint) {
-          const cacheKey4 = source.id + "," + target.id + "," + constraint.id;
-          if (reverseHomomorphicMappedCache.has(cacheKey4)) {
-            return reverseHomomorphicMappedCache.get(cacheKey4);
+          const cacheKey5 = source.id + "," + target.id + "," + constraint.id;
+          if (reverseHomomorphicMappedCache.has(cacheKey5)) {
+            return reverseHomomorphicMappedCache.get(cacheKey5);
           }
           const type = createReverseMappedType(source, target, constraint);
-          reverseHomomorphicMappedCache.set(cacheKey4, type);
+          reverseHomomorphicMappedCache.set(cacheKey5, type);
           return type;
         }
         function isPartiallyInferableType(type) {
@@ -85398,9 +85398,9 @@ ${lanes.join("\n")}
           return getTypeFromInference(inference) || unknownType;
         }
         function inferReverseMappedType(source, target, constraint) {
-          const cacheKey4 = source.id + "," + target.id + "," + constraint.id;
-          if (reverseMappedCache.has(cacheKey4)) {
-            return reverseMappedCache.get(cacheKey4) || unknownType;
+          const cacheKey5 = source.id + "," + target.id + "," + constraint.id;
+          if (reverseMappedCache.has(cacheKey5)) {
+            return reverseMappedCache.get(cacheKey5) || unknownType;
           }
           reverseMappedSourceStack.push(source);
           reverseMappedTargetStack.push(target);
@@ -85414,7 +85414,7 @@ ${lanes.join("\n")}
           reverseMappedSourceStack.pop();
           reverseMappedTargetStack.pop();
           reverseExpandingFlags = saveExpandingFlags;
-          reverseMappedCache.set(cacheKey4, type);
+          reverseMappedCache.set(cacheKey5, type);
           return type;
         }
         function* getUnmatchedProperties(source, target, requireOptionalProperties, matchDiscriminantProperties) {
@@ -102239,11 +102239,11 @@ ${lanes.join("\n")}
           }
           return noIterationTypes;
         }
-        function getCachedIterationTypes(type, cacheKey4) {
-          return type[cacheKey4];
+        function getCachedIterationTypes(type, cacheKey5) {
+          return type[cacheKey5];
         }
-        function setCachedIterationTypes(type, cacheKey4, cachedTypes2) {
-          return type[cacheKey4] = cachedTypes2;
+        function setCachedIterationTypes(type, cacheKey5, cachedTypes2) {
+          return type[cacheKey5] = cachedTypes2;
         }
         function getIterationTypesOfIterable(type, use, errorNode) {
           var _a, _b;
@@ -102271,8 +102271,8 @@ ${lanes.join("\n")}
             }
             return iterationTypes2;
           }
-          const cacheKey4 = use & 2 ? "iterationTypesOfAsyncIterable" : "iterationTypesOfIterable";
-          const cachedTypes2 = getCachedIterationTypes(type, cacheKey4);
+          const cacheKey5 = use & 2 ? "iterationTypesOfAsyncIterable" : "iterationTypesOfIterable";
+          const cachedTypes2 = getCachedIterationTypes(type, cacheKey5);
           if (cachedTypes2) return cachedTypes2 === noIterationTypes ? void 0 : cachedTypes2;
           let allIterationTypes;
           for (const constituent of type.types) {
@@ -102285,7 +102285,7 @@ ${lanes.join("\n")}
                   addRelatedInfo(rootDiag, ...errorOutputContainer.errors);
                 }
               }
-              setCachedIterationTypes(type, cacheKey4, noIterationTypes);
+              setCachedIterationTypes(type, cacheKey5, noIterationTypes);
               return void 0;
             } else if ((_b = errorOutputContainer == null ? void 0 : errorOutputContainer.errors) == null ? void 0 : _b.length) {
               for (const diag2 of errorOutputContainer.errors) {
@@ -102295,7 +102295,7 @@ ${lanes.join("\n")}
             allIterationTypes = append(allIterationTypes, iterationTypes2);
           }
           const iterationTypes = allIterationTypes ? combineIterationTypes(allIterationTypes) : noIterationTypes;
-          setCachedIterationTypes(type, cacheKey4, iterationTypes);
+          setCachedIterationTypes(type, cacheKey5, iterationTypes);
           return iterationTypes === noIterationTypes ? void 0 : iterationTypes;
         }
         function getAsyncFromSyncIterationTypes(iterationTypes, errorNode) {
@@ -117897,8 +117897,8 @@ ${lanes.join("\n")}
             /*allowSourceMaps*/
             true
           );
-          const decorate4 = emitHelpers().createDecorateHelper(decoratorExpressions, localName);
-          const expression = factory2.createAssignment(localName, classAlias ? factory2.createAssignment(classAlias, decorate4) : decorate4);
+          const decorate5 = emitHelpers().createDecorateHelper(decoratorExpressions, localName);
+          const expression = factory2.createAssignment(localName, classAlias ? factory2.createAssignment(classAlias, decorate5) : decorate5);
           setEmitFlags(
             expression,
             3072
@@ -131079,7 +131079,7 @@ ${lanes.join("\n")}
           }
         }
         function createImportCallExpressionAMD(arg, containsLexicalThis) {
-          const resolve8 = factory2.createUniqueName("resolve");
+          const resolve10 = factory2.createUniqueName("resolve");
           const reject = factory2.createUniqueName("reject");
           const parameters = [
             factory2.createParameterDeclaration(
@@ -131088,7 +131088,7 @@ ${lanes.join("\n")}
               /*dotDotDotToken*/
               void 0,
               /*name*/
-              resolve8
+              resolve10
             ),
             factory2.createParameterDeclaration(
               /*modifiers*/
@@ -131105,7 +131105,7 @@ ${lanes.join("\n")}
                 factory2.createIdentifier("require"),
                 /*typeArguments*/
                 void 0,
-                [factory2.createArrayLiteralExpression([arg || factory2.createOmittedExpression()]), resolve8, reject]
+                [factory2.createArrayLiteralExpression([arg || factory2.createOmittedExpression()]), resolve10, reject]
               )
             )
           ]);
@@ -205351,16 +205351,16 @@ ${options.prefix}` : "\n" : options.prefix
         isEnabled: () => false,
         writeLine: noop
       };
-      function typingToFileName(cachePath4, packageName, installTypingHost, log) {
+      function typingToFileName(cachePath5, packageName, installTypingHost, log) {
         try {
-          const result = resolveModuleName(packageName, combinePaths(cachePath4, "index.d.ts"), {
+          const result = resolveModuleName(packageName, combinePaths(cachePath5, "index.d.ts"), {
             moduleResolution: 2
             /* Node10 */
           }, installTypingHost);
           return result.resolvedModule && result.resolvedModule.resolvedFileName;
         } catch (e) {
           if (log.isEnabled()) {
-            log.writeLine(`Failed to resolve ${packageName} in folder '${cachePath4}': ${e.message}`);
+            log.writeLine(`Failed to resolve ${packageName} in folder '${cachePath5}': ${e.message}`);
           }
           return void 0;
         }
@@ -205632,7 +205632,7 @@ ${options.prefix}` : "\n" : options.prefix
             this.installTypingHost.writeFile(npmConfigPath, '{ "private": true }');
           }
         }
-        installTypings(req, cachePath4, currentlyCachedTypings, typingsToInstall) {
+        installTypings(req, cachePath5, currentlyCachedTypings, typingsToInstall) {
           if (this.log.isEnabled()) {
             this.log.writeLine(`Installing typings ${JSON.stringify(typingsToInstall)}`);
           }
@@ -205644,7 +205644,7 @@ ${options.prefix}` : "\n" : options.prefix
             this.sendResponse(this.createSetTypings(req, currentlyCachedTypings));
             return;
           }
-          this.ensurePackageDirectoryExists(cachePath4);
+          this.ensurePackageDirectoryExists(cachePath5);
           const requestId = this.installRunCount;
           this.installRunCount++;
           this.sendResponse({
@@ -205654,7 +205654,7 @@ ${options.prefix}` : "\n" : options.prefix
             projectName: req.projectName
           });
           const scopedTypings = filteredTypings.map(typingsName);
-          this.installTypingsAsync(requestId, scopedTypings, cachePath4, (ok) => {
+          this.installTypingsAsync(requestId, scopedTypings, cachePath5, (ok) => {
             try {
               if (!ok) {
                 if (this.log.isEnabled()) {
@@ -205670,7 +205670,7 @@ ${options.prefix}` : "\n" : options.prefix
               }
               const installedTypingFiles = [];
               for (const packageName of filteredTypings) {
-                const typingFile = typingToFileName(cachePath4, packageName, this.installTypingHost, this.log);
+                const typingFile = typingToFileName(cachePath5, packageName, this.installTypingHost, this.log);
                 if (!typingFile) {
                   this.missingTypingsSet.add(packageName);
                   continue;
@@ -205764,7 +205764,7 @@ ${options.prefix}` : "\n" : options.prefix
         Msg2["Perf"] = "Perf";
         return Msg2;
       })(Msg || {});
-      function createInstallTypingsRequest(project, typeAcquisition, unresolvedImports, cachePath4) {
+      function createInstallTypingsRequest(project, typeAcquisition, unresolvedImports, cachePath5) {
         return {
           projectName: project.getProjectName(),
           fileNames: project.getFileNames(
@@ -205777,7 +205777,7 @@ ${options.prefix}` : "\n" : options.prefix
           typeAcquisition,
           unresolvedImports,
           projectRootPath: project.getCurrentDirectory(),
-          cachePath: cachePath4,
+          cachePath: cachePath5,
           kind: "discover"
         };
       }
@@ -217823,8 +217823,8 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
         installPackage(options) {
           this.packageInstallId++;
           const request = { kind: "installPackage", ...options, id: this.packageInstallId };
-          const promise = new Promise((resolve8, reject) => {
-            (this.packageInstalledPromise ?? (this.packageInstalledPromise = /* @__PURE__ */ new Map())).set(this.packageInstallId, { resolve: resolve8, reject });
+          const promise = new Promise((resolve10, reject) => {
+            (this.packageInstalledPromise ?? (this.packageInstalledPromise = /* @__PURE__ */ new Map())).set(this.packageInstallId, { resolve: resolve10, reject });
           });
           this.installer.send(request);
           return promise;
@@ -218107,9 +218107,9 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 });
 
 // src/benchmark/index.ts
-import { mkdirSync as mkdirSync9, writeFileSync as writeFileSync8, existsSync as existsSync12 } from "node:fs";
-import { dirname as dirname5, join as join15 } from "node:path";
-import { fileURLToPath as fileURLToPath4 } from "node:url";
+import { mkdirSync as mkdirSync10, writeFileSync as writeFileSync9, existsSync as existsSync15 } from "node:fs";
+import { dirname as dirname5, join as join17 } from "node:path";
+import { fileURLToPath as fileURLToPath5 } from "node:url";
 
 // src/usage-history.ts
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -218492,8 +218492,8 @@ var TOOL_MODEL_REGISTRY = {
   scan_folder: {
     tool: "scan_folder",
     requirements: criteria({ requireReasoning: false, minContextTokens: 128e3 }),
-    benchmark: null,
-    note: "Per-file auto-discovery scan. Per-file detection benchmark dataset is incremental."
+    benchmark: "scan-folder",
+    note: "Per-file auto-discovery scan. Gated by the mass-search benchmark (P2c): twelve files copied verbatim from this repo's own src/, three queries whose true MATCH set is derived mechanically from the corpus bytes, scored deterministically on the per-file MATCH/NO_MATCH verdict \u2014 no LLM judge."
   },
   search_existing_implementations: {
     tool: "search_existing_implementations",
@@ -224868,6 +224868,1227 @@ function buildReportMarkdown3(args) {
   return lines.join("\n") + "\n";
 }
 
+// src/benchmark/scan-folder/index.ts
+import { existsSync as existsSync14, mkdirSync as mkdirSync7, readFileSync as readFileSync14, renameSync as renameSync4, writeFileSync as writeFileSync6 } from "node:fs";
+import { join as join14 } from "node:path";
+
+// src/benchmark/scan-folder/dataset.ts
+import { createHash as createHash5 } from "node:crypto";
+import { existsSync as existsSync12, readFileSync as readFileSync12, readdirSync as readdirSync5, statSync as statSync7 } from "node:fs";
+import { join as join13, resolve as resolve8 } from "node:path";
+import { fileURLToPath as fileURLToPath4 } from "node:url";
+function buildInstructions(criterion) {
+  return [
+    criterion,
+    "",
+    "OUTPUT FORMAT (mandatory). Your reply's FIRST line must be exactly one of:",
+    "MATCH: <the exact identifier or import in this file that proves it>",
+    "NO_MATCH",
+    "",
+    "Answer only about the file you were given. Judge what the code DOES, not what",
+    "its name, its comments, or its documentation suggest. If the file does not meet",
+    "the criterion, the first line must be exactly NO_MATCH."
+  ].join("\n");
+}
+var MIN_MATCHES_PER_CASE = 2;
+var MIN_NON_MATCHES_PER_CASE = 3;
+var SCAN_FOLDER_CASES = [
+  {
+    id: "spawns-external-process",
+    criterion: [
+      "Does this file START AN EXTERNAL PROCESS \u2014 that is, does it run another",
+      "program or a shell command through Node's child_process API (spawn,",
+      "spawnSync, exec, execSync, execFile, fork)?",
+      "",
+      "Running async tasks concurrently, scheduling work, awaiting promises, or",
+      "managing a queue is NOT starting an external process."
+    ].join("\n"),
+    extensions: [".ts"],
+    // Both import forms are covered; `require("child_process")` cannot occur in
+    // this ESM corpus but a future fixture could use it, and the rule should not
+    // silently miss it.
+    truthRegexSource: `(?:from\\s*["']node:child_process["'])|(?:require\\(\\s*["'](?:node:)?child_process["']\\s*\\))`,
+    expectedMatchFiles: ["src/embeddings.ts", "src/free-pool-auto-bench.ts"],
+    rationale: "In Node there is no other way to start a process than child_process, so 'imports child_process' and 'starts a process' are the same fact. Verified by reading all twelve fixtures: embeddings.ts uses spawnSync (the Python embedder), free-pool-auto-bench.ts uses spawn (the detached benchmark child), and the token appears nowhere else in the corpus \u2014 not even in a comment. Two traps: rate-limiter.ts dispatches many async tasks in parallel and reads like process management while starting nothing; and security-triage-dataset.ts is saturated with the vocabulary of shell execution ('command_injection', 'shell sink', 'shell=True') because it DESCRIBES that threat class \u2014 it never executes anything."
+  },
+  {
+    id: "writes-to-filesystem",
+    criterion: [
+      "Does this file WRITE TO THE FILESYSTEM \u2014 that is, does it create,",
+      "overwrite, append to, rename, or delete a file or directory using Node's fs",
+      "API (writeFileSync, appendFileSync, mkdirSync, renameSync, unlinkSync,",
+      "rmSync, copyFileSync, createWriteStream)?",
+      "",
+      "READING the filesystem does NOT count. A file that only calls readFileSync,",
+      "existsSync, readdirSync or statSync is NO_MATCH."
+    ].join("\n"),
+    extensions: [".ts"],
+    truthRegexSource: "\\b(?:writeFileSync|appendFileSync|mkdirSync|renameSync|unlinkSync|rmSync|copyFileSync|createWriteStream)\\s*\\(",
+    expectedMatchFiles: [
+      "src/embeddings.ts",
+      "src/free-pool-auto-bench.ts",
+      "src/jsonl.ts",
+      "src/preflight_benchmark.ts",
+      "src/report.ts",
+      "src/rule-install.ts"
+    ],
+    rationale: "Every match is a real call site (checked line by line \u2014 none is inside a comment or a string). FOUR of the six NO_MATCH files import node:fs and are read-only \u2014 doc-inventory.ts, project-root.ts, search-existing-dataset.ts and security-triage-dataset.ts use readFileSync/existsSync/readdirSync/statSync and nothing else. A model that keyword-matches 'fs' instead of reading the code answers MATCH on all four and loses precision exactly where it should."
+  },
+  {
+    id: "uses-node-crypto",
+    criterion: [
+      "Does this file USE A CRYPTOGRAPHIC PRIMITIVE from Node's crypto module \u2014",
+      "that is, does it import from 'node:crypto' and use it (hashing, HMAC, random",
+      "bytes, UUIDs)?",
+      "",
+      "Merely handling secrets, tokens, passwords or API keys \u2014 redacting them,",
+      "storing them, passing them to an HTTP header \u2014 is NOT using a cryptographic",
+      "primitive, unless node:crypto itself is called."
+    ].join("\n"),
+    extensions: [".ts"],
+    truthRegexSource: `(?:from\\s*["']node:crypto["'])|(?:require\\(\\s*["'](?:node:)?crypto["']\\s*\\))`,
+    expectedMatchFiles: ["src/preflight_benchmark.ts", "src/rule-install.ts"],
+    rationale: "preflight_benchmark.ts imports createHash, rule-install.ts imports randomBytes; both really call them. Three traps, and they are why this query cannot be answered by grepping for 'crypto': security-triage-dataset.ts contains the literal string 'insecure_crypto' and prose about 'a broken hash (md5/sha1)' and 'password hashing' because it DESCRIBES that threat; search-existing-dataset.ts says 'Only token.ts touches crypto/signing'; and report.ts is the SECURITY-scan reporter, saturated with secret/token/redact. None of the three imports node:crypto."
+  }
+];
+function resolveFixtureRoot3() {
+  const here = fileURLToPath4(new URL(".", import.meta.url));
+  const candidates = [
+    resolve8(here, "../../../benchmark-fixtures/scan-folder"),
+    // dist/ bundle layout: dist/<bundle>.js → one level less deep.
+    resolve8(here, "../../benchmark-fixtures/scan-folder"),
+    resolve8(here, "../benchmark-fixtures/scan-folder")
+  ];
+  for (const c of candidates) {
+    if (existsSync12(c) && statSync7(c).isDirectory()) return c;
+  }
+  throw new Error(
+    `scan-folder fixture root not found near ${here} \u2014 looked at:
+` + candidates.map((c) => `  ${c}`).join("\n")
+  );
+}
+function fixtureScanRoot(root = resolveFixtureRoot3()) {
+  return join13(root, "src");
+}
+function listFixtureFiles2(root = resolveFixtureRoot3()) {
+  const out = [];
+  const walk = (dir, rel) => {
+    for (const entry of readdirSync5(dir, { withFileTypes: true })) {
+      const abs2 = join13(dir, entry.name);
+      const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(abs2, relPath);
+      else if (entry.isFile()) out.push(relPath);
+    }
+  };
+  walk(fixtureScanRoot(root), "src");
+  return out.sort();
+}
+function scannedFilesFor(c, root = resolveFixtureRoot3()) {
+  return listFixtureFiles2(root).filter((f) => c.extensions.some((e) => f.endsWith(e)));
+}
+function fixtureAbsPath(rel, root = resolveFixtureRoot3()) {
+  return join13(root, rel);
+}
+function deriveMatchingFiles(c, root = resolveFixtureRoot3()) {
+  const re = new RegExp(c.truthRegexSource);
+  return scannedFilesFor(c, root).filter((rel) => re.test(readFileSync12(fixtureAbsPath(rel, root), "utf-8"))).sort();
+}
+function datasetFingerprint(root = resolveFixtureRoot3()) {
+  const h = createHash5("sha1");
+  h.update(JSON.stringify(SCAN_FOLDER_CASES));
+  for (const rel of listFixtureFiles2(root)) {
+    h.update(rel);
+    h.update(readFileSync12(fixtureAbsPath(rel, root)));
+  }
+  return h.digest("hex").slice(0, 12);
+}
+function validateDataset2(cases = SCAN_FOLDER_CASES, root = resolveFixtureRoot3()) {
+  const files = listFixtureFiles2(root);
+  if (files.length === 0) {
+    throw new Error(`scan-folder corpus is empty at ${fixtureScanRoot(root)}`);
+  }
+  for (const rel of files) {
+    const bytes = readFileSync12(fixtureAbsPath(rel, root));
+    if (bytes.includes(0)) {
+      throw new Error(
+        `fixture ${rel} contains a NUL byte \u2014 readFileAsCodeBlock treats it as binary and REFUSES to read it, so no model could ever be scored on it.`
+      );
+    }
+  }
+  const ids = /* @__PURE__ */ new Set();
+  for (const c of cases) {
+    if (ids.has(c.id)) throw new Error(`duplicate case id: ${c.id}`);
+    ids.add(c.id);
+    if (/[gy]/.test(new RegExp(c.truthRegexSource).flags)) {
+      throw new Error(`case ${c.id}: truth regex must not be global/sticky`);
+    }
+    const scanned = scannedFilesFor(c, root);
+    if (scanned.length !== files.length) {
+      throw new Error(
+        `case ${c.id}: its extensions ${c.extensions.join(",")} select only ${scanned.length}/${files.length} fixtures. The corpus is deliberately uniform \u2014 a per-case file subset would make the cases incomparable.`
+      );
+    }
+    const derived = deriveMatchingFiles(c, root);
+    const expected = [...c.expectedMatchFiles].sort();
+    if (JSON.stringify(derived) !== JSON.stringify(expected)) {
+      const missing = expected.filter((f) => !derived.includes(f));
+      const extra = derived.filter((f) => !expected.includes(f));
+      throw new Error(
+        `case ${c.id}: the truth regex and expectedMatchFiles DISAGREE \u2014 one of them is wrong.
+  derived from disk: ${derived.join(", ") || "(none)"}
+  checked in:        ${expected.join(", ") || "(none)"}
+` + (missing.length ? `  expected-but-not-derived: ${missing.join(", ")}
+` : "") + (extra.length ? `  derived-but-not-expected: ${extra.join(", ")}
+` : "") + `Fix the regex or the list \u2014 do NOT edit a fixture's bytes to make them agree.`
+      );
+    }
+    if (derived.length < MIN_MATCHES_PER_CASE) {
+      throw new Error(
+        `case ${c.id}: only ${derived.length} matching fixture(s) (need \u2265 ${MIN_MATCHES_PER_CASE}) \u2014 recall is not measurable.`
+      );
+    }
+    const nonMatches = scanned.length - derived.length;
+    if (nonMatches < MIN_NON_MATCHES_PER_CASE) {
+      throw new Error(
+        `case ${c.id}: only ${nonMatches} non-matching fixture(s) (need \u2265 ${MIN_NON_MATCHES_PER_CASE}) \u2014 precision is not measurable, so answering MATCH to everything would pass.`
+      );
+    }
+  }
+}
+
+// src/benchmark/scan-folder/bench-runner.ts
+import { resolve as resolve9 } from "node:path";
+
+// src/scan-folder/core.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
+import { existsSync as existsSync13, statSync as statSync8, readFileSync as readFileSync13 } from "node:fs";
+
+// src/rate-limiter.ts
+var AdaptiveRateLimiter = class {
+  tokens;
+  lastRefill;
+  currentRps;
+  initialRps;
+  minRps = 1;
+  refillPerMs;
+  consecutiveSuccesses = 0;
+  constructor(rps) {
+    this.initialRps = Math.max(1, rps);
+    this.currentRps = this.initialRps;
+    this.tokens = this.currentRps;
+    this.refillPerMs = this.currentRps / 1e3;
+    this.lastRefill = Date.now();
+  }
+  get rps() {
+    return this.currentRps;
+  }
+  refill() {
+    const now = Date.now();
+    const elapsed = now - this.lastRefill;
+    if (elapsed > 0) {
+      this.tokens = Math.min(this.currentRps, this.tokens + elapsed * this.refillPerMs);
+      this.lastRefill = now;
+    }
+  }
+  updateRate(newRps) {
+    this.currentRps = Math.max(this.minRps, Math.min(this.initialRps, newRps));
+    this.refillPerMs = this.currentRps / 1e3;
+  }
+  /** Wait until a token is available, then consume it. */
+  async acquire() {
+    this.refill();
+    if (this.tokens >= 1) {
+      this.tokens -= 1;
+      return;
+    }
+    const waitMs = Math.ceil((1 - this.tokens) / this.refillPerMs);
+    await new Promise((r) => setTimeout(r, Math.max(1, waitMs)));
+    this.refill();
+    this.tokens = Math.max(0, this.tokens - 1);
+  }
+  /** Call after a successful request — additive increase */
+  onSuccess() {
+    this.consecutiveSuccesses++;
+    if (this.consecutiveSuccesses >= 10 && this.currentRps < this.initialRps) {
+      this.updateRate(this.currentRps + 1);
+      this.consecutiveSuccesses = 0;
+      process.stderr.write(`[llm-externalizer] AIMD: RPS increased to ${this.currentRps}
+`);
+    }
+  }
+  /** Call after a 429 rate-limit error — multiplicative decrease */
+  onRateLimit() {
+    this.consecutiveSuccesses = 0;
+    const newRps = Math.floor(this.currentRps / 2);
+    if (newRps !== this.currentRps) {
+      this.updateRate(newRps);
+      process.stderr.write(`[llm-externalizer] AIMD: 429 detected, RPS halved to ${this.currentRps}
+`);
+    }
+  }
+  /** Reset to initial RPS (e.g., after profile switch) */
+  reset(newInitialRps) {
+    if (newInitialRps !== void 0) {
+      this.initialRps = Math.max(1, newInitialRps);
+    }
+    this.currentRps = this.initialRps;
+    this.refillPerMs = this.currentRps / 1e3;
+    this.tokens = this.currentRps;
+    this.consecutiveSuccesses = 0;
+    this.lastRefill = Date.now();
+  }
+};
+var adaptiveRateLimiter = null;
+function getAdaptiveRateLimiter(rps) {
+  if (!adaptiveRateLimiter || adaptiveRateLimiter.rps !== rps) {
+    adaptiveRateLimiter = new AdaptiveRateLimiter(rps);
+  }
+  return adaptiveRateLimiter;
+}
+var DEFAULT_MAX_IN_FLIGHT = 200;
+var HEARTBEAT_INTERVAL_MS = 3e4;
+async function rateLimitedParallel(tasks, rps, maxInFlight = DEFAULT_MAX_IN_FLIGHT, onProgress) {
+  if (tasks.length === 0) return [];
+  const results = new Array(tasks.length);
+  const limiter = getAdaptiveRateLimiter(rps);
+  let nextIndex = 0;
+  let completedCount = 0;
+  const heartbeat = onProgress ? setInterval(() => {
+    onProgress(completedCount, tasks.length, `Processing: ${completedCount}/${tasks.length} done (${limiter.rps} RPS)`);
+  }, HEARTBEAT_INTERVAL_MS) : null;
+  try {
+    async function worker() {
+      while (true) {
+        const i = nextIndex;
+        if (i >= tasks.length) return;
+        nextIndex++;
+        await limiter.acquire();
+        results[i] = await tasks[i]();
+        completedCount++;
+        if (onProgress) {
+          onProgress(completedCount, tasks.length, `Done: ${completedCount}/${tasks.length}`);
+        }
+      }
+    }
+    const workerCount = Math.min(Math.max(1, maxInFlight), tasks.length);
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+  }
+  return results;
+}
+
+// src/scan-folder/core.ts
+async function runScanFolder(args, deps) {
+  const {
+    folder_path,
+    extensions,
+    exclude_dirs,
+    max_files,
+    instructions: sfInstructions,
+    instructions_files_paths: sfInstructionsFilesPaths,
+    redact_secrets: sfRedact,
+    redact_regex: sfRedactRegexRaw,
+    answer_mode: sfRawMode,
+    use_gitignore: sfUseGitignore,
+    scan_secrets: sfScan
+  } = args;
+  const sfUseEnsemble = deps.useEnsemble;
+  const sfBudgetBytes = (args.max_payload_kb ?? 400) * 1024;
+  let sfRegexRedact = null;
+  try {
+    sfRegexRedact = parseRedactRegex(sfRedactRegexRaw);
+  } catch (err) {
+    return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+  }
+  let sfFolderPath;
+  try {
+    sfFolderPath = sanitizeInputPath(folder_path);
+  } catch (err) {
+    return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+  }
+  if (!existsSync13(sfFolderPath)) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `FAILED: Folder not found: ${folder_path}`
+        }
+      ],
+      isError: true
+    };
+  }
+  if (!statSync8(sfFolderPath).isDirectory()) {
+    return {
+      content: [
+        { type: "text", text: `FAILED: Not a directory: ${folder_path}` }
+      ],
+      isError: true
+    };
+  }
+  const sfPrompt = resolvePrompt(
+    sfInstructions,
+    sfInstructionsFilesPaths
+  );
+  if (!sfPrompt.trim()) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: "FAILED: instructions or instructions_files_paths is required."
+        }
+      ],
+      isError: true
+    };
+  }
+  const files = walkDir(sfFolderPath, {
+    extensions,
+    maxFiles: max_files ?? 2500,
+    exclude: exclude_dirs,
+    useGitignore: sfUseGitignore !== false
+    // default true
+  });
+  if (files.length === 0) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `No files found in ${folder_path} matching the criteria.`
+        }
+      ]
+    };
+  }
+  if (sfScan && !sfRedact) {
+    const scanResult = scanFilesForSecrets(files);
+    if (scanResult.found)
+      return {
+        content: [{ type: "text", text: scanResult.report }],
+        isError: true
+      };
+  }
+  const sfMode = resolveAnswerMode(sfRawMode, 0);
+  const batchId = randomUUID2();
+  const sfRl = await deps.getRateLimitConfig();
+  const recentOutcomes = [];
+  let aborted = false;
+  let abortReason = "";
+  const tasks = files.map((filePath, idx) => async () => {
+    if (aborted)
+      return {
+        filePath,
+        success: false,
+        error: "Batch aborted"
+      };
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      if (aborted)
+        return {
+          filePath,
+          success: false,
+          error: "Batch aborted"
+        };
+      try {
+        const result = await deps.processFileCheck(filePath, sfPrompt, {
+          maxTokens: deps.resolveDefaultMaxTokens(),
+          batchId,
+          fileIndex: idx,
+          redact: sfRedact,
+          regexRedact: sfRegexRedact,
+          onProgress: deps.onProgress,
+          ensemble: sfUseEnsemble,
+          maxBytes: sfBudgetBytes,
+          modelOverride: deps.modelOverride,
+          outputDir: deps.outputDir,
+          hqRequest: deps.hqRequest
+        });
+        recentOutcomes.push(result.success);
+        if (deps.onProgress) {
+          const completed = recentOutcomes.length;
+          deps.onProgress(
+            completed,
+            files.length,
+            `scan_folder: ${completed}/${files.length} files done`
+          );
+        }
+        return result;
+      } catch (err) {
+        const classified = deps.classifyError(err);
+        if (classified.unrecoverable) {
+          if (classified.serviceLevel) {
+            aborted = true;
+            abortReason = `Unrecoverable: ${classified.reason}`;
+          }
+          return {
+            filePath,
+            success: false,
+            error: classified.reason
+          };
+        }
+        if (attempt < 3) {
+          await new Promise(
+            (r) => setTimeout(r, Math.pow(3, attempt - 1) * 1e3)
+          );
+          continue;
+        }
+        recentOutcomes.push(false);
+        if (recentOutcomes.length >= 3 && recentOutcomes.slice(-3).every((v) => !v)) {
+          aborted = true;
+          abortReason = `3 consecutive failures. Last: ${classified.reason}`;
+        }
+        return {
+          filePath,
+          success: false,
+          error: `Failed after 3 retries: ${classified.reason}`
+        };
+      }
+    }
+    return {
+      filePath,
+      success: false,
+      error: "Unexpected retry loop exit"
+    };
+  });
+  const batchResults = await rateLimitedParallel(tasks, sfRl.rps, sfRl.maxInFlight, deps.onProgress);
+  const succeeded = batchResults.filter((r) => r.success);
+  const failed = batchResults.filter(
+    (r) => !r.success && r.error !== "Batch aborted"
+  );
+  const skipped = batchResults.filter((r) => r.error === "Batch aborted");
+  if (sfMode === 2 && succeeded.length > 0) {
+    const sections = [];
+    for (const r of succeeded) {
+      const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync13(r.reportPath, "utf-8") : "";
+      sections.push(`## File: ${r.filePath}
+
+${content}`);
+    }
+    const mergedPath = deps.saveResponse(
+      "scan_folder",
+      sections.join("\n\n---\n\n"),
+      { model: deps.backendModel, task: sfPrompt, inputFile: folder_path },
+      void 0,
+      deps.outputDir
+    );
+    const summary = [
+      `SCAN COMPLETE \u2014 ${succeeded.length} processed, ${failed.length} failed, ${skipped.length} skipped (${files.length} files found)`,
+      `Folder: ${folder_path}`,
+      `Batch UUID: ${batchId}`,
+      `MERGED REPORT: ${mergedPath}`
+    ];
+    if (failed.length > 0) {
+      summary.push("", "FAILED:");
+      for (const r of failed) summary.push(`  ${r.filePath}: ${r.error}`);
+    }
+    if (aborted) summary.push("", `ABORTED: ${abortReason}`);
+    return {
+      content: [{ type: "text", text: summary.join("\n") }],
+      isError: aborted
+    };
+  }
+  if (sfMode === 1 && succeeded.length > 0) {
+    const succeededPaths = succeeded.map((r) => r.filePath);
+    const sfAutoGroups = autoGroupByHeuristic(succeededPaths);
+    const pathToResult = /* @__PURE__ */ new Map();
+    for (const r of succeeded) pathToResult.set(r.filePath, r);
+    const sfGroupReportPaths = [];
+    for (const fg of sfAutoGroups) {
+      if (fg.files.length === 0) continue;
+      const sections = [];
+      for (const fp of fg.files) {
+        const r = pathToResult.get(fp);
+        if (!r) continue;
+        const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync13(r.reportPath, "utf-8") : "";
+        sections.push(`## File: ${fp}
+
+${content}`);
+      }
+      if (sections.length === 0) continue;
+      const gid = fg.id || "auto";
+      const groupPath = deps.saveResponse(
+        "scan_folder",
+        sections.join("\n\n---\n\n"),
+        { model: deps.backendModel, task: sfPrompt, inputFile: fg.files[0], groupId: gid },
+        void 0,
+        deps.outputDir
+      );
+      sfGroupReportPaths.push(`[group:${gid}] ${groupPath}`);
+    }
+    const summary = [
+      `SCAN COMPLETE \u2014 ${succeeded.length} processed, ${failed.length} failed, ${skipped.length} skipped (${files.length} files found)`,
+      `Folder: ${folder_path}`,
+      `Batch UUID: ${batchId}`
+    ];
+    if (sfGroupReportPaths.length > 0) {
+      summary.push("", `GROUP REPORTS (${sfGroupReportPaths.length}):`);
+      for (const line of sfGroupReportPaths) summary.push(`  ${line}`);
+    }
+    if (failed.length > 0) {
+      summary.push("", "FAILED:");
+      for (const r of failed) summary.push(`  ${r.filePath}: ${r.error}`);
+    }
+    if (aborted) summary.push("", `ABORTED: ${abortReason}`);
+    return {
+      content: [{ type: "text", text: summary.join("\n") }],
+      isError: aborted
+    };
+  }
+  const sfSummaryLines = [
+    `SCAN COMPLETE \u2014 ${succeeded.length} processed, ${failed.length} failed, ${skipped.length} skipped (${files.length} files found)`,
+    `Folder: ${folder_path}`,
+    `Batch UUID: ${batchId}`,
+    ""
+  ];
+  if (succeeded.length > 0) {
+    sfSummaryLines.push("REPORTS:");
+    for (const r of succeeded) sfSummaryLines.push(`  ${r.reportPath}`);
+  }
+  if (failed.length > 0) {
+    sfSummaryLines.push("", "FAILED:");
+    for (const r of failed)
+      sfSummaryLines.push(`  ${r.filePath}: ${r.error}`);
+  }
+  if (aborted) sfSummaryLines.push("", `ABORTED: ${abortReason}`);
+  return {
+    content: [{ type: "text", text: sfSummaryLines.join("\n") }],
+    isError: aborted
+  };
+}
+
+// src/benchmark/scan-folder/score.ts
+var NO_MATCH_RE = /^\s*(?:[-*+]\s*|#{1,6}\s*|\d+[.)]\s*)?\**\s*NO[_\s-]?MATCH\b/i;
+var MATCH_RE = /^\s*(?:[-*+]\s*|#{1,6}\s*|\d+[.)]\s*)?\**\s*MATCH\b/i;
+function parseFileVerdict(report) {
+  let inFence = false;
+  for (const raw of report.split("\n")) {
+    if (/^\s*(?:`{3,}|~{3,})/.test(raw)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    if (NO_MATCH_RE.test(raw)) return { verdict: "no", evidence: "" };
+    const m = MATCH_RE.exec(raw);
+    if (m) {
+      const evidence = raw.slice(m[0].length).replace(/^[\s:*\-—`]+/, "").replace(/[\s*`]+$/, "").trim();
+      return { verdict: "yes", evidence };
+    }
+  }
+  return { verdict: "unparseable", evidence: "" };
+}
+var DEFAULT_SCAN_FOLDER_THRESHOLDS = {
+  minMicroF1: 0.85,
+  minMicroRecall: 0.85,
+  minCoverage: 0.9
+};
+function passesThresholds3(score, thresholds = DEFAULT_SCAN_FOLDER_THRESHOLDS) {
+  const failures = [];
+  if (score.microF1 < thresholds.minMicroF1) {
+    failures.push(`micro-F1 ${score.microF1.toFixed(3)} < ${thresholds.minMicroF1}`);
+  }
+  if (score.microRecall < thresholds.minMicroRecall) {
+    failures.push(
+      `micro-recall ${score.microRecall.toFixed(3)} < ${thresholds.minMicroRecall} (a model that answers NO_MATCH to everything cannot pass)`
+    );
+  }
+  if (score.coverage < thresholds.minCoverage) {
+    failures.push(
+      `coverage ${score.coverage.toFixed(3)} < ${thresholds.minCoverage} \u2014 too many files produced no parseable verdict, so the run is not evidence about the model`
+    );
+  }
+  return { pass: failures.length === 0, failures };
+}
+
+// src/benchmark/scan-folder/bench-runner.ts
+var DEFAULT_API_URL3 = "https://openrouter.ai/api/v1/chat/completions";
+async function runScanFolderBenchmarkOnModel(modelId, cases = SCAN_FOLDER_CASES, opts = {
+  apiKey: "",
+  pricing: { input_per_m_usd: 0, output_per_m_usd: 0, context_window: 0 }
+}, fetchImpl = realFetch) {
+  const fixtureRoot = resolveFixtureRoot3();
+  const scanRoot = fixtureScanRoot(fixtureRoot);
+  const apiUrl = opts.apiUrl ?? DEFAULT_API_URL3;
+  const maxTokens = opts.maxTokens ?? 4096;
+  const temperature = opts.temperature ?? 0.1;
+  const perCallTimeoutMs = opts.perCallTimeoutMs ?? 3e5;
+  let costUsd = 0;
+  let latencyTotalMs = 0;
+  let callCount = 0;
+  const caseScores = [];
+  const failures = [];
+  const evidence = [];
+  let filesDone = 0;
+  const totalFiles = cases.reduce((n, c) => n + scannedFilesFor(c, fixtureRoot).length, 0);
+  for (const c of cases) {
+    const scanned = scannedFilesFor(c, fixtureRoot).map(
+      (rel) => resolve9(fixtureAbsPath(rel, fixtureRoot))
+    );
+    const expectedMatch = new Set(
+      deriveMatchingFiles(c, fixtureRoot).map((rel) => resolve9(fixtureAbsPath(rel, fixtureRoot)))
+    );
+    const reports = /* @__PURE__ */ new Map();
+    const errors = /* @__PURE__ */ new Map();
+    const processFileCheck = async (filePath, task, options) => {
+      const codeBlock = readFileAsCodeBlock(
+        filePath,
+        void 0,
+        options.redact,
+        options.maxBytes,
+        options.regexRedact
+      );
+      const messages = [
+        { role: "system", content: codeTaskSystemPrompt(detectLang(filePath)) },
+        {
+          role: "user",
+          content: `${buildPreInstructions(true, "read")}Task: ${task}
+
+${codeBlock}`
+        }
+      ];
+      const started = Date.now();
+      let res;
+      try {
+        res = await fetchImpl(apiUrl, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${opts.apiKey}`
+          },
+          body: JSON.stringify({ model: modelId, messages, temperature, max_tokens: maxTokens }),
+          signal: AbortSignal.timeout(perCallTimeoutMs)
+        });
+      } catch (err) {
+        const reason = `request failed: ${err.message}`;
+        errors.set(resolve9(filePath), reason);
+        return { filePath, success: false, error: reason };
+      } finally {
+        latencyTotalMs += Date.now() - started;
+        callCount++;
+        filesDone++;
+        if (opts.onProgress) opts.onProgress(filesDone, totalFiles);
+      }
+      if (!res.ok) {
+        const bodyText = await res.text().catch(() => "");
+        const reason = `API error ${res.status}: ${bodyText.slice(0, 300)}`;
+        errors.set(resolve9(filePath), reason);
+        return { filePath, success: false, error: reason };
+      }
+      const json = await res.json();
+      const usage = json.usage;
+      if (usage) {
+        costUsd += (usage.prompt_tokens ?? 0) / 1e6 * opts.pricing.input_per_m_usd + (usage.completion_tokens ?? 0) / 1e6 * opts.pricing.output_per_m_usd;
+      }
+      const content = json.choices?.[0]?.message?.content ?? "";
+      if (content.trim().length === 0) {
+        const reason = "LLM returned empty response";
+        errors.set(resolve9(filePath), reason);
+        return { filePath, success: false, error: reason };
+      }
+      reports.set(resolve9(filePath), content);
+      return { filePath, success: true, reportPath: `memory://${c.id}/${filePath}` };
+    };
+    const deps = {
+      // The benchmark scores ONE model at a time, so the multi-model ensemble is
+      // off — otherwise the score would belong to the ensemble, not the candidate.
+      useEnsemble: false,
+      backendModel: modelId,
+      processFileCheck,
+      // The seam above never throws (every failure is returned as a
+      // FileProcessResult), so this is only reachable if the pipeline itself throws.
+      // It is deliberately NOT service-level: a service-level verdict ABORTS the
+      // whole batch and would let one unexpected error erase a model's remaining
+      // files. `unrecoverable` skips the retry ladder — a benchmark must not spend
+      // three attempts (plus backoff) on a bug in its own runner.
+      classifyError: (err) => ({
+        reason: err instanceof Error ? err.message : String(err),
+        unrecoverable: true,
+        serviceLevel: false
+      }),
+      // Mode 0 never calls saveResponse (it only lists the per-file report paths),
+      // so this is unreachable. Return a marker rather than writing anything: a
+      // benchmark must not litter the user's report directory.
+      saveResponse: () => `memory://${c.id}`,
+      getRateLimitConfig: async () => ({
+        rps: opts.rps ?? 2,
+        maxInFlight: opts.maxInFlight ?? 3
+      }),
+      resolveDefaultMaxTokens: () => maxTokens
+    };
+    const args = {
+      folder_path: scanRoot,
+      instructions: buildInstructions(c.criterion),
+      extensions: c.extensions,
+      // The fixture dir is inside a git repo, and `git ls-files` would honour the
+      // repo's ignore rules; the manual walk is what makes the corpus the corpus.
+      use_gitignore: false,
+      scan_secrets: false,
+      redact_secrets: false,
+      // Mode 0 — one report per file. Mode 2 would merge them into one document and
+      // throw away the per-file boundary this benchmark scores on.
+      answer_mode: 0
+    };
+    const result = await runScanFolder(args, deps);
+    if (reports.size > 0 && !scanned.some((f) => reports.has(f))) {
+      throw new Error(
+        `scan-folder benchmark: the pipeline reported on ${reports.size} file(s), none of which match the dataset's paths. Dataset sees e.g. ${scanned[0]}; the pipeline produced e.g. ${[...reports.keys()][0]}. The fixture path form has drifted \u2014 fix the runner rather than scoring a phantom result.`
+      );
+    }
+    const verdicts = /* @__PURE__ */ new Map();
+    for (const file of scanned) {
+      const report = reports.get(file);
+      if (report === void 0) {
+        const reason = errors.get(file) ?? (result.isError ? result.content.map((p) => p.text).join("\n").split("\n")[0] : "no report produced");
+        failures.push({ caseId: c.id, file, reason });
+        continue;
+      }
+      const parsed = parseFileVerdict(report);
+      verdicts.set(file, parsed.verdict);
+      if (parsed.verdict === "yes" && parsed.evidence) {
+        evidence.push({ caseId: c.id, file, evidence: parsed.evidence });
+      }
+    }
+    caseScores.push(scoreCase(c.id, scanned, expectedMatch, verdicts));
+  }
+  const aggregate = aggregateScores(caseScores);
+  return {
+    modelId,
+    caseScores,
+    aggregate,
+    pass: passesThresholds3(aggregate).pass,
+    costUsd,
+    meanLatencyMs: callCount === 0 ? 0 : latencyTotalMs / callCount,
+    failures,
+    evidence
+  };
+}
+
+// src/benchmark/scan-folder/select.ts
+var SCAN_FOLDER_CRITERIA = TOOL_MODEL_REGISTRY.scan_folder.requirements;
+function toGeneric4(c) {
+  const thr = passesThresholds3(c.score);
+  return {
+    modelId: c.modelId,
+    qualified: c.qualified,
+    disqualifyReason: c.disqualifyReason,
+    inputDollarsPerMillion: c.inputDollarsPerMillion,
+    outputDollarsPerMillion: c.outputDollarsPerMillion,
+    latencyMs: c.latencyMs,
+    benchmarkPass: thr.pass,
+    benchmarkScore: c.score.microF1,
+    benchmarkFailReasons: thr.failures
+  };
+}
+function selectScanFolderModel(input) {
+  const byModelId = new Map(
+    input.candidates.map((c) => [c.modelId, c])
+  );
+  const generic = selectSameOrCheaper({
+    candidates: input.candidates.map(toGeneric4),
+    incumbentModelId: input.incumbentModelId,
+    incumbentInputDollarsPerMillion: input.incumbentInputDollarsPerMillion,
+    incumbentOutputDollarsPerMillion: input.incumbentOutputDollarsPerMillion,
+    requirementsLabel: "scan-folder requirements",
+    benchmarkLabel: "the mass-search benchmark"
+  });
+  return {
+    recommendedModelId: generic.recommendedModelId,
+    changed: generic.changed,
+    reason: generic.reason,
+    eligible: generic.eligible.map((g) => byModelId.get(g.modelId)),
+    rejected: generic.rejected
+  };
+}
+
+// src/benchmark/scan-folder/index.ts
+var INCUMBENT_FALLBACK_PRICING4 = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
+function cachePath4() {
+  return join14(getConfigDir(), "scan-folder-results.json");
+}
+function cacheKey4(modelId, date, datasetHash) {
+  return `${modelId}::${date}::${datasetHash}`;
+}
+function loadCache4() {
+  const p = cachePath4();
+  if (!existsSync14(p)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync14(p, "utf-8"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+  } catch {
+  }
+  return {};
+}
+function saveCache4(cache) {
+  mkdirSync7(getConfigDir(), { recursive: true });
+  const p = cachePath4();
+  const tmp = `${p}.tmp.${process.pid}`;
+  writeFileSync6(tmp, JSON.stringify(cache, null, 2), "utf-8");
+  renameSync4(tmp, p);
+}
+function resolveApiKey4(override) {
+  const k = override || process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
+  if (!k) {
+    throw new Error(
+      "OPENROUTER_API_KEY not set. Export it in your shell, or set the plugin option 'openrouter_api_key' via Claude Code's /plugin configure."
+    );
+  }
+  return k;
+}
+function today4() {
+  return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+}
+function reportStamp4() {
+  const d = /* @__PURE__ */ new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  const off = -d.getTimezoneOffset();
+  const sign = off >= 0 ? "+" : "-";
+  const oh = p(Math.floor(Math.abs(off) / 60));
+  const om = p(Math.abs(off) % 60);
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}${sign}${oh}${om}`;
+}
+function pricingFromModel4(m) {
+  return {
+    input_per_m_usd: m.inputDollarsPerMillion,
+    output_per_m_usd: m.outputDollarsPerMillion,
+    context_window: m.contextTokens
+  };
+}
+function decorate4(raw) {
+  const ctx = raw.context_length ?? 0;
+  const maxOutRaw = raw.top_provider?.max_completion_tokens;
+  const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
+  const promptPerToken = parseFloat(raw.pricing?.prompt ?? "NaN");
+  const completionPerToken = parseFloat(raw.pricing?.completion ?? "NaN");
+  const params = new Set(raw.supported_parameters ?? []);
+  return {
+    id: raw.id,
+    name: raw.name ?? raw.id,
+    contextTokens: ctx,
+    maxOutputTokens: maxOut,
+    inputDollarsPerMillion: isFinite(promptPerToken) ? promptPerToken * 1e6 : Infinity,
+    outputDollarsPerMillion: isFinite(completionPerToken) ? completionPerToken * 1e6 : Infinity,
+    supportsStructured: params.has("structured_outputs") || params.has("response_format"),
+    supportsReasoning: params.has("reasoning") || params.has("include_reasoning"),
+    raw
+  };
+}
+async function runScanFolderBenchmark(opts = {}) {
+  const apiKey = resolveApiKey4(opts.apiKey);
+  const cases = SCAN_FOLDER_CASES;
+  validateDataset2(cases);
+  const datasetHash = datasetFingerprint();
+  const thresholds = opts.thresholds ?? DEFAULT_SCAN_FOLDER_THRESHOLDS;
+  const incumbentId = opts.incumbentModelId ?? DEFAULT_MODEL;
+  const progress = opts.onProgress ?? (() => {
+  });
+  const freeOnly = getActiveFreeOnly();
+  const fileDecisions = cases.reduce((n, c) => n + scannedFilesFor(c).length, 0);
+  progress(
+    `Loaded ${cases.length} queries over ${fileDecisions / cases.length} real files = ${fileDecisions} per-file decisions (corpus ${datasetHash}).`
+  );
+  progress("Fetching OpenRouter model catalog\u2026");
+  const catalog = await fetchProgrammingModels();
+  const byId = new Map(catalog.map((m) => [m.id, m]));
+  const incumbentRaw = byId.get(incumbentId);
+  const incumbentDecorated = incumbentRaw ? decorate4(incumbentRaw) : null;
+  const incumbentIn = incumbentDecorated && isFinite(incumbentDecorated.inputDollarsPerMillion) ? incumbentDecorated.inputDollarsPerMillion : INCUMBENT_FALLBACK_PRICING4.input_per_m_usd;
+  const incumbentOut = incumbentDecorated && isFinite(incumbentDecorated.outputDollarsPerMillion) ? incumbentDecorated.outputDollarsPerMillion : INCUMBENT_FALLBACK_PRICING4.output_per_m_usd;
+  const toAssess = /* @__PURE__ */ new Map();
+  const addModel = (model, qualified, disqualifyReason2) => {
+    if (!toAssess.has(model.id)) toAssess.set(model.id, { model, qualified, disqualifyReason: disqualifyReason2 });
+  };
+  if (opts.models && opts.models.length > 0) {
+    for (const id of opts.models) {
+      const raw = byId.get(id);
+      if (raw) {
+        const q = qualify(raw, SCAN_FOLDER_CRITERIA);
+        addModel(
+          q ?? decorate4(raw),
+          q !== null,
+          q ? void 0 : "below scan-folder requirements (cost/context/structured-output)"
+        );
+      } else {
+        const fp = KNOWN_PRICING[id] ?? INCUMBENT_FALLBACK_PRICING4;
+        addModel(
+          {
+            id,
+            name: id,
+            contextTokens: fp.context_window,
+            maxOutputTokens: fp.context_window,
+            inputDollarsPerMillion: fp.input_per_m_usd,
+            outputDollarsPerMillion: fp.output_per_m_usd,
+            supportsStructured: false,
+            supportsReasoning: false,
+            raw: { id }
+          },
+          false,
+          "not found in the OpenRouter catalog"
+        );
+      }
+    }
+  } else {
+    const { candidates } = buildBenchmarkRoster(catalog, SCAN_FOLDER_CRITERIA, []);
+    const affordable = candidates.filter(
+      (c) => c.inputDollarsPerMillion <= incumbentIn + 1e-9 && c.outputDollarsPerMillion <= incumbentOut + 1e-9
+    );
+    const sameOrCheaper = rankByQualityIndex(affordable).slice(0, opts.qualifyingTopN ?? 16);
+    for (const c of sameOrCheaper) addModel(c, true);
+  }
+  if (!toAssess.has(incumbentId)) {
+    if (incumbentDecorated) {
+      const q = qualify(incumbentDecorated.raw, SCAN_FOLDER_CRITERIA);
+      addModel(incumbentDecorated, q !== null, q ? void 0 : "below scan-folder requirements");
+    } else {
+      addModel(
+        {
+          id: incumbentId,
+          name: incumbentId,
+          contextTokens: INCUMBENT_FALLBACK_PRICING4.context_window,
+          maxOutputTokens: INCUMBENT_FALLBACK_PRICING4.context_window,
+          inputDollarsPerMillion: incumbentIn,
+          outputDollarsPerMillion: incumbentOut,
+          supportsStructured: true,
+          supportsReasoning: true,
+          raw: { id: incumbentId }
+        },
+        true
+      );
+    }
+  }
+  progress(`Assessing ${toAssess.size} model(s) over ${fileDecisions} file decisions\u2026`);
+  const cache = loadCache4();
+  const assessments = [];
+  let totalCost = 0;
+  for (const { model, qualified, disqualifyReason: disqualifyReason2 } of toAssess.values()) {
+    if (freeOnly && !model.id.endsWith(":free")) {
+      progress(`  ${model.id}: skipped (free_only \u2014 non-':free' model).`);
+      assessments.push({
+        modelId: model.id,
+        qualified: false,
+        disqualifyReason: "free_only active \u2014 non-':free' model not benchmarked",
+        inputDollarsPerMillion: model.inputDollarsPerMillion,
+        outputDollarsPerMillion: model.outputDollarsPerMillion,
+        latencyMs: 0,
+        score: aggregateScores([]),
+        failureReasons: [],
+        costUsd: 0
+      });
+      continue;
+    }
+    const key = cacheKey4(model.id, today4(), datasetHash);
+    const cached = cache[key];
+    let score;
+    let costUsd;
+    let latencyMs;
+    let failureReasons;
+    if (cached && !opts.force) {
+      progress(`  ${model.id}: cache hit (${today4()}).`);
+      score = cached.score;
+      costUsd = cached.costUsd;
+      latencyMs = cached.latencyMs;
+      failureReasons = cached.failureReasons;
+    } else {
+      progress(`  ${model.id}: running\u2026`);
+      const run = await runScanFolderBenchmarkOnModel(
+        model.id,
+        cases,
+        {
+          apiKey,
+          pricing: pricingFromModel4(model),
+          perCallTimeoutMs: opts.perCallTimeoutMs ?? 3e5
+        },
+        opts.fetchImpl
+      );
+      score = run.aggregate;
+      costUsd = run.costUsd;
+      latencyMs = Math.round(run.meanLatencyMs);
+      failureReasons = run.failures.map((f) => `${f.caseId} / ${f.file}: ${f.reason}`);
+      cache[key] = {
+        date: today4(),
+        datasetHash,
+        score,
+        costUsd,
+        latencyMs,
+        inputDollarsPerMillion: model.inputDollarsPerMillion,
+        outputDollarsPerMillion: model.outputDollarsPerMillion,
+        qualified,
+        disqualifyReason: disqualifyReason2,
+        failureReasons
+      };
+    }
+    totalCost += costUsd;
+    assessments.push({
+      modelId: model.id,
+      qualified,
+      disqualifyReason: disqualifyReason2,
+      inputDollarsPerMillion: model.inputDollarsPerMillion,
+      outputDollarsPerMillion: model.outputDollarsPerMillion,
+      latencyMs,
+      score,
+      failureReasons,
+      costUsd
+    });
+    const thr = passesThresholds3(score, thresholds);
+    progress(
+      `    ${model.id}: ${thr.pass ? "PASS" : "FAIL"} microF1=${score.microF1.toFixed(3)} microP=${score.microPrecision.toFixed(3)} microR=${score.microRecall.toFixed(3)} cov=${score.coverage.toFixed(3)} unscored=${failureReasons.length}`
+    );
+  }
+  saveCache4(cache);
+  const selection = selectScanFolderModel({
+    candidates: assessments,
+    incumbentModelId: incumbentId,
+    incumbentInputDollarsPerMillion: incumbentIn,
+    incumbentOutputDollarsPerMillion: incumbentOut
+  });
+  const mainRoot = resolveProjectMainRoot(opts.mainRoot);
+  const reportDir = opts.outputDir ?? join14(mainRoot, "reports", "scan-folder-benchmark");
+  mkdirSync7(reportDir, { recursive: true });
+  const stamp = reportStamp4();
+  const jsonReportPath = join14(reportDir, `${stamp}-scan-folder-benchmark.json`);
+  const reportPath = join14(reportDir, `${stamp}-scan-folder-benchmark.md`);
+  const jsonPayload = {
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    datasetHash,
+    caseCount: cases.length,
+    fileDecisions,
+    thresholds,
+    incumbent: {
+      modelId: incumbentId,
+      inputDollarsPerMillion: incumbentIn,
+      outputDollarsPerMillion: incumbentOut
+    },
+    recommendedModelId: selection.recommendedModelId,
+    changed: selection.changed,
+    reason: selection.reason,
+    costUsd: totalCost,
+    assessments: assessments.map((a) => {
+      const thr = passesThresholds3(a.score, thresholds);
+      return {
+        modelId: a.modelId,
+        qualified: a.qualified,
+        disqualifyReason: a.disqualifyReason,
+        inputDollarsPerMillion: a.inputDollarsPerMillion,
+        outputDollarsPerMillion: a.outputDollarsPerMillion,
+        latencyMs: a.latencyMs,
+        pass: thr.pass,
+        failures: thr.failures,
+        microPrecision: a.score.microPrecision,
+        microRecall: a.score.microRecall,
+        microF1: a.score.microF1,
+        macroF1: a.score.macroF1,
+        coverage: a.score.coverage,
+        failureReasons: a.failureReasons,
+        costUsd: a.costUsd
+      };
+    }),
+    rejected: selection.rejected,
+    perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
+  };
+  const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
+  writeFileSync6(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync4(jtmp, jsonReportPath);
+  const md = buildReportMarkdown4({
+    cases,
+    datasetHash,
+    fileDecisions,
+    incumbentId,
+    incumbentIn,
+    incumbentOut,
+    thresholds,
+    assessments,
+    selection,
+    totalCost
+  });
+  const mtmp = `${reportPath}.tmp.${process.pid}`;
+  writeFileSync6(mtmp, md, "utf-8");
+  renameSync4(mtmp, reportPath);
+  const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
+  return {
+    recommendedModelId: selection.recommendedModelId,
+    changed: selection.changed,
+    selection,
+    results: assessments,
+    costUsd: totalCost,
+    reportPath,
+    jsonReportPath,
+    summaryLine
+  };
+}
+function buildReportMarkdown4(args) {
+  const lines = [];
+  lines.push("# scan_folder (MASS SEARCH) \u2014 model benchmark");
+  lines.push("");
+  lines.push(`**Run:** ${(/* @__PURE__ */ new Date()).toISOString()}`);
+  lines.push(
+    `**Corpus:** ${args.cases.length} queries \xD7 ${args.fileDecisions / args.cases.length} real source files = ${args.fileDecisions} per-file decisions \u2014 corpus ${args.datasetHash}`
+  );
+  lines.push(`**Incumbent:** \`${args.incumbentId}\` (in $${args.incumbentIn.toFixed(3)}/M, out $${args.incumbentOut.toFixed(3)}/M)`);
+  lines.push(
+    `**Pass gate:** micro-F1 \u2265 ${args.thresholds.minMicroF1.toFixed(2)} AND micro-recall \u2265 ${args.thresholds.minMicroRecall.toFixed(2)} AND coverage \u2265 ${args.thresholds.minCoverage.toFixed(2)}`
+  );
+  lines.push(`**Total LLM spend:** $${args.totalCost.toFixed(6)}`);
+  lines.push("");
+  lines.push(
+    "**Scoring is 100% deterministic \u2014 no LLM judge.** The corpus is twelve files copied VERBATIM from this repo's own `mcp-server/src/`, and each query's true MATCH set is DERIVED from those bytes by a mechanical rule at run time (not hand-listed), so the expected answer cannot drift from the corpus. The score is precision/recall/F1 over the per-file MATCH/NO_MATCH verdicts. A MATCH line's cited evidence is reported but NOT graded: judging whether a citation really proves the claim is a semantic judgment, which would need the judge this benchmark refuses to use."
+  );
+  lines.push("");
+  lines.push("## Queries");
+  lines.push("");
+  lines.push("| Query | Matches | Non-matches | Why the truth is unambiguous |");
+  lines.push("|---|---|---|---|");
+  for (const c of args.cases) {
+    const scanned = scannedFilesFor(c).length;
+    const matches = deriveMatchingFiles(c).length;
+    lines.push(`| ${c.id} | ${matches} | ${scanned - matches} | ${c.rationale} |`);
+  }
+  lines.push("");
+  lines.push("## Recommendation");
+  lines.push("");
+  lines.push(`**${args.selection.changed ? "SWITCH" : "KEEP"} \u2192 \`${args.selection.recommendedModelId}\`**`);
+  lines.push("");
+  lines.push(args.selection.reason);
+  lines.push("");
+  lines.push("## Assessed models");
+  lines.push("");
+  lines.push("| Model | Req | Bench | micro-F1 | micro-P | micro-R | macro-F1 | Coverage | Unscored | in $/M | out $/M | lat ms |");
+  lines.push("|---|---|---|---|---|---|---|---|---|---|---|---|");
+  const sorted = [...args.assessments].sort((a, b) => b.score.microF1 - a.score.microF1);
+  for (const a of sorted) {
+    const thr = passesThresholds3(a.score, args.thresholds);
+    lines.push(
+      `| \`${a.modelId}\` | ${a.qualified ? "ok" : "no"} | ${thr.pass ? "PASS" : "FAIL"} | ${a.score.microF1.toFixed(3)} | ${a.score.microPrecision.toFixed(3)} | ${a.score.microRecall.toFixed(3)} | ${a.score.macroF1.toFixed(3)} | ${(a.score.coverage * 100).toFixed(0)}% | ${a.failureReasons.length} | ${a.inputDollarsPerMillion.toFixed(3)} | ${a.outputDollarsPerMillion.toFixed(3)} | ${a.latencyMs} |`
+    );
+  }
+  lines.push("");
+  if (args.selection.rejected.length > 0) {
+    lines.push("## Rejected (and why)");
+    lines.push("");
+    for (const r of args.selection.rejected) lines.push(`- \`${r.modelId}\` \u2014 ${r.reason}`);
+    lines.push("");
+  }
+  const rec = args.assessments.find((a) => a.modelId === args.selection.recommendedModelId);
+  if (rec) {
+    lines.push(`## Per-query breakdown \u2014 \`${rec.modelId}\``);
+    lines.push("");
+    lines.push("| Query | Files | TP | FP | FN | TN | Unscored | Precision | Recall | F1 |");
+    lines.push("|---|---|---|---|---|---|---|---|---|---|");
+    for (const c of rec.score.cases) {
+      lines.push(
+        `| ${c.caseId} | ${c.scannedFiles} | ${c.truePositives} | ${c.falsePositives} | ${c.falseNegatives} | ${c.trueNegatives} | ${c.unscored} | ${c.precision.toFixed(3)} | ${c.recall.toFixed(3)} | ${c.f1.toFixed(3)} |`
+      );
+    }
+    lines.push("");
+    if (rec.failureReasons.length > 0) {
+      lines.push(`### Files with no parseable verdict \u2014 \`${rec.modelId}\``);
+      lines.push("");
+      for (const f of rec.failureReasons) lines.push(`- ${f}`);
+      lines.push("");
+    }
+  }
+  lines.push("---");
+  lines.push("");
+  lines.push(
+    "Re-run: `llm-externalizer benchmark --scan-folder` (auto-discover) or `--scan-folder <id> [<id>...]` (assess specific models). ADVISORY by default; add `--apply-profile <P>` to write the winner into that profile's `tool_models.scan_folder` (CLI-only writer \u2014 the MCP surface never writes)."
+  );
+  return lines.join("\n") + "\n";
+}
+
 // src/model-qualification/auto-replace.ts
 function defaultSettingsReader(profileNameOverride) {
   const settings = loadSettings();
@@ -224939,6 +226160,20 @@ async function defaultBenchmarkRunner(tool, benchmark, incumbentModelId, candida
       rejected: r.selection.rejected
     };
   }
+  if (benchmark === "scan-folder") {
+    const r = await runScanFolderBenchmark({
+      apiKey,
+      models: candidates,
+      incumbentModelId,
+      onProgress
+    });
+    return {
+      recommendedModelId: r.recommendedModelId,
+      changed: r.changed,
+      reason: r.selection.reason,
+      rejected: r.selection.rejected
+    };
+  }
   throw new Error(
     `defaultBenchmarkRunner: no orchestrator wired for benchmark '${benchmark}' (tool '${tool}'). The model-qualification registry declared a benchmark the auto-replace dispatcher does not know \u2014 add a case here when a new per-tool benchmark ships.`
   );
@@ -224946,7 +226181,7 @@ async function defaultBenchmarkRunner(tool, benchmark, incumbentModelId, candida
 function benchmarkedTools() {
   const out = [];
   for (const [tool, descriptor] of Object.entries(TOOL_MODEL_REGISTRY)) {
-    if (descriptor.benchmark === "security-triage" || descriptor.benchmark === "search-existing" || descriptor.benchmark === "code-task") {
+    if (descriptor.benchmark === "security-triage" || descriptor.benchmark === "search-existing" || descriptor.benchmark === "code-task" || descriptor.benchmark === "scan-folder") {
       out.push({ tool, benchmark: descriptor.benchmark });
     }
   }
@@ -225195,8 +226430,8 @@ function renderAssessmentText(a) {
 }
 
 // src/model-qualification/drift.ts
-import { mkdirSync as mkdirSync7, readFileSync as readFileSync12, renameSync as renameSync4, writeFileSync as writeFileSync6 } from "node:fs";
-import { join as join13 } from "node:path";
+import { mkdirSync as mkdirSync8, readFileSync as readFileSync15, renameSync as renameSync5, writeFileSync as writeFileSync7 } from "node:fs";
+import { join as join15 } from "node:path";
 function perMillion(s) {
   if (s == null) return null;
   const n = parseFloat(s);
@@ -225333,11 +226568,11 @@ function computeModelHealth(configured, catalog, baseline, opts = {}) {
   return { findings, updatedBaseline };
 }
 function getBaselinePath() {
-  return join13(getConfigDir(), "model-baseline.json");
+  return join15(getConfigDir(), "model-baseline.json");
 }
 function loadBaseline(path = getBaselinePath()) {
   try {
-    const raw = readFileSync12(path, "utf-8");
+    const raw = readFileSync15(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed;
@@ -225349,10 +226584,10 @@ function loadBaseline(path = getBaselinePath()) {
 }
 function saveBaseline(baseline, path = getBaselinePath()) {
   try {
-    mkdirSync7(getConfigDir(), { recursive: true });
+    mkdirSync8(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync6(tmp, JSON.stringify(baseline, null, 2));
-    renameSync4(tmp, path);
+    writeFileSync7(tmp, JSON.stringify(baseline, null, 2));
+    renameSync5(tmp, path);
   } catch {
   }
 }
@@ -225425,10 +226660,10 @@ function renderModelHealthMarkdown(report) {
 async function runCheckModelHealth(opts = {}) {
   const profile = opts.profile ?? resolveActiveProfile();
   const report = await checkModelHealth(profile, opts);
-  const dir = opts.outputDir ?? join13(resolveProjectMainRoot(), "reports", "model-health");
-  mkdirSync7(dir, { recursive: true });
-  const reportPath = join13(dir, `${compactStamp()}-model-health-${profile.name}.md`);
-  writeFileSync6(reportPath, renderModelHealthMarkdown(report));
+  const dir = opts.outputDir ?? join15(resolveProjectMainRoot(), "reports", "model-health");
+  mkdirSync8(dir, { recursive: true });
+  const reportPath = join15(dir, `${compactStamp()}-model-health-${profile.name}.md`);
+  writeFileSync7(reportPath, renderModelHealthMarkdown(report));
   return { report, reportPath };
 }
 function renderModelHealthText(report) {
@@ -225449,8 +226684,8 @@ function renderModelHealthText(report) {
 }
 
 // src/model-qualification/new-arrivals.ts
-import { mkdirSync as mkdirSync8, readFileSync as readFileSync13, renameSync as renameSync5, writeFileSync as writeFileSync7 } from "node:fs";
-import { join as join14 } from "node:path";
+import { mkdirSync as mkdirSync9, readFileSync as readFileSync16, renameSync as renameSync6, writeFileSync as writeFileSync8 } from "node:fs";
+import { join as join16 } from "node:path";
 function createdToIso(created) {
   if (created === null || !Number.isFinite(created) || created <= 0) return null;
   return new Date(created * 1e3).toISOString();
@@ -225492,11 +226727,11 @@ function diffNewArrivals(catalog, snapshot) {
   };
 }
 function getCatalogSnapshotPath() {
-  return join14(getConfigDir(), "catalog-snapshot.json");
+  return join16(getConfigDir(), "catalog-snapshot.json");
 }
 function loadSnapshot(path = getCatalogSnapshotPath()) {
   try {
-    const raw = readFileSync13(path, "utf-8");
+    const raw = readFileSync16(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const obj = parsed;
@@ -225514,10 +226749,10 @@ function loadSnapshot(path = getCatalogSnapshotPath()) {
 }
 function saveSnapshot(snapshot, path = getCatalogSnapshotPath()) {
   try {
-    mkdirSync8(getConfigDir(), { recursive: true });
+    mkdirSync9(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync7(tmp, JSON.stringify(snapshot, null, 2));
-    renameSync5(tmp, path);
+    writeFileSync8(tmp, JSON.stringify(snapshot, null, 2));
+    renameSync6(tmp, path);
   } catch {
   }
 }
@@ -225608,10 +226843,10 @@ function renderNewArrivalsText(report) {
 }
 async function runDiscoverNewArrivals(opts = {}) {
   const report = await discoverNewArrivals(opts);
-  const dir = opts.outputDir ?? join14(resolveProjectMainRoot(), "reports", "model-arrivals");
-  mkdirSync8(dir, { recursive: true });
-  const reportPath = join14(dir, `${compactStamp()}-new-arrivals.md`);
-  writeFileSync7(reportPath, renderNewArrivalsMarkdown(report));
+  const dir = opts.outputDir ?? join16(resolveProjectMainRoot(), "reports", "model-arrivals");
+  mkdirSync9(dir, { recursive: true });
+  const reportPath = join16(dir, `${compactStamp()}-new-arrivals.md`);
+  writeFileSync8(reportPath, renderNewArrivalsMarkdown(report));
   return { report, reportPath };
 }
 
@@ -225636,6 +226871,8 @@ function parseArgs(argv) {
     searchExistingModels: [],
     codeTask: false,
     codeTaskModels: [],
+    scanFolder: false,
+    scanFolderModels: [],
     force: false,
     assessModel: null,
     checkHealth: false,
@@ -225730,6 +226967,12 @@ function parseArgs(argv) {
       opts.codeTask = true;
       while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
         opts.codeTaskModels.push(argv[i + 1]);
+        i++;
+      }
+    } else if (a === "--scan-folder") {
+      opts.scanFolder = true;
+      while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
+        opts.scanFolderModels.push(argv[i + 1]);
         i++;
       }
     } else if (a === "--model") {
@@ -225865,9 +227108,27 @@ function printHelp() {
       "  Never auto-selects a pricier model. ADVISORY unless --apply-profile P is",
       "  given, which writes the winner into P's `tool_models.code_task` (CLI-only).",
       "",
+      "scan_folder MASS-SEARCH benchmark (separate task \u2014 per-file MATCH/NO_MATCH):",
+      "  --scan-folder [ID...]",
+      "                    Run the scan_folder mass-search benchmark instead of the",
+      "                    keyword task. Drives the REAL scan_folder pipeline (one LLM",
+      "                    call per file) over twelve files copied VERBATIM from this",
+      "                    repo's own src/, asking three questions whose true MATCH set",
+      "                    is DERIVED mechanically from the corpus bytes \u2014 not",
+      "                    hand-listed \u2014 and scores it DETERMINISTICALLY:",
+      "                    precision/recall/F1 over the per-file verdicts, no LLM judge.",
+      "                    Pass explicit model id(s) after the flag to assess exactly",
+      "                    those; with none, auto-discovers the same-or-cheaper candidate",
+      "                    pool. Writes a report under reports/scan-folder-benchmark/.",
+      "                    Composes with --force.",
+      "  Pass gate: micro-F1 >= 0.85 AND micro-recall >= 0.85 AND coverage >= 0.90.",
+      "  Never auto-selects a pricier model. ADVISORY unless --apply-profile P is",
+      "  given, which writes the winner into P's `tool_models.scan_folder` (CLI-only).",
+      "",
       "Cross-tool auto-replacement (TRDD-828238b5 A7 \u2014 the writer path):",
       "  --auto-replace    For every benchmarked tool (security_scan,",
-      "                    search_existing_implementations), check its incumbent",
+      "                    search_existing_implementations, code_task, scan_folder),",
+      "                    check its incumbent",
       "                    model's health against the durable ledger and, when",
       "                    degraded (or with --force), run that tool's benchmark to",
       "                    surface the best same-or-cheaper replacement. On a",
@@ -225920,7 +227181,7 @@ function printHelp() {
 }
 
 // src/benchmark/index.ts
-function resolveApiKey4() {
+function resolveApiKey5() {
   const k = process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
   if (!k) {
     throw new Error(
@@ -225930,14 +227191,14 @@ function resolveApiKey4() {
   return k;
 }
 function resolveFixturesDir() {
-  const here = dirname5(fileURLToPath4(import.meta.url));
+  const here = dirname5(fileURLToPath5(import.meta.url));
   const candidates = [
-    join15(here, "fixtures"),
-    join15(here, "..", "src", "benchmark", "fixtures"),
-    join15(here, "..", "..", "src", "benchmark", "fixtures")
+    join17(here, "fixtures"),
+    join17(here, "..", "src", "benchmark", "fixtures"),
+    join17(here, "..", "..", "src", "benchmark", "fixtures")
   ];
   for (const c of candidates) {
-    if (existsSync12(join15(c, "file-01.ts"))) return c;
+    if (existsSync15(join17(c, "file-01.ts"))) return c;
   }
   throw new Error(`Could not locate benchmark fixtures. Tried:
   ${candidates.join("\n  ")}`);
@@ -225959,9 +227220,9 @@ function validateCombinations(opts) {
   if (opts.apply && !opts.autoReplace) {
     throw new Error("--apply requires --auto-replace");
   }
-  if (opts.applyProfile !== null && opts.pickTopN === null && !opts.codeTask) {
+  if (opts.applyProfile !== null && opts.pickTopN === null && !opts.codeTask && !opts.scanFolder) {
     throw new Error(
-      "--apply-profile requires --pick-top-n (or --code-task, which writes its single winner into tool_models.code_task)"
+      "--apply-profile requires --pick-top-n (or --code-task / --scan-folder, which write their single winner into tool_models.code_task / tool_models.scan_folder)"
     );
   }
   if (opts.fromCache && opts.pickTopN === null) {
@@ -225986,7 +227247,7 @@ function preflight(opts) {
   }
 }
 function benchmarkCachePath() {
-  return join15(getConfigDir(), "benchmark-results.json");
+  return join17(getConfigDir(), "benchmark-results.json");
 }
 async function main() {
   const opts = parseArgs(process.argv);
@@ -226027,6 +227288,10 @@ async function main() {
       for (const id of pool) {
         if (!opts.codeTaskModels.includes(id)) opts.codeTaskModels.push(id);
       }
+    } else if (opts.scanFolder) {
+      for (const id of pool) {
+        if (!opts.scanFolderModels.includes(id)) opts.scanFolderModels.push(id);
+      }
     } else if (opts.searchExisting || opts.autoReplace) {
       for (const id of pool) {
         if (!opts.searchExistingModels.includes(id)) opts.searchExistingModels.push(id);
@@ -226046,6 +227311,9 @@ async function main() {
   if (opts.codeTask) {
     return runCodeTaskPhase(opts);
   }
+  if (opts.scanFolder) {
+    return runScanFolderPhase(opts);
+  }
   if (opts.autoReplace) {
     return runAutoReplacePhase(opts);
   }
@@ -226062,9 +227330,9 @@ async function main() {
     return runNewArrivalsPhase(opts);
   }
   if (opts.fromCache) {
-    const cachePath4 = benchmarkCachePath();
-    const cache = loadCachedReport(cachePath4);
-    console.error(`[benchmark] --from-cache: using ${cachePath4} (${cache.results.length} models, run at ${cache.timestamp}).`);
+    const cachePath5 = benchmarkCachePath();
+    const cache = loadCachedReport(cachePath5);
+    console.error(`[benchmark] --from-cache: using ${cachePath5} (${cache.results.length} models, run at ${cache.timestamp}).`);
     return runPickPhase(cache.results, opts);
   }
   const sweep = await runKeywordSweep(opts);
@@ -226144,7 +227412,7 @@ async function runKeywordSweep(opts) {
       total: 0
     };
   }
-  const apiKey = resolveApiKey4();
+  const apiKey = resolveApiKey5();
   const roster = [
     ...candidates.map((m) => ({ model: m, isBaseline: false })),
     ...baselines.map((m) => ({ model: m, isBaseline: true }))
@@ -226180,17 +227448,17 @@ async function runKeywordSweep(opts) {
     results
   };
   const markdown = renderReport(reportInput);
-  mkdirSync9(dirname5(reportPath), { recursive: true });
-  writeFileSync8(reportPath, markdown, "utf-8");
+  mkdirSync10(dirname5(reportPath), { recursive: true });
+  writeFileSync9(reportPath, markdown, "utf-8");
   console.error(`[benchmark] Report: ${reportPath}`);
   const json = renderJson(reportInput);
   const cacheJsonPath = benchmarkCachePath();
-  mkdirSync9(dirname5(cacheJsonPath), { recursive: true });
-  writeFileSync8(cacheJsonPath, json, "utf-8");
+  mkdirSync10(dirname5(cacheJsonPath), { recursive: true });
+  writeFileSync9(cacheJsonPath, json, "utf-8");
   console.error(`[benchmark] JSON cache: ${cacheJsonPath}`);
   if (opts.jsonPath) {
-    mkdirSync9(dirname5(opts.jsonPath), { recursive: true });
-    writeFileSync8(opts.jsonPath, json, "utf-8");
+    mkdirSync10(dirname5(opts.jsonPath), { recursive: true });
+    writeFileSync9(opts.jsonPath, json, "utf-8");
     console.error(`[benchmark] JSON (user-path): ${opts.jsonPath}`);
   }
   const passers = [...results.values()].filter((r) => r.score?.pass).length;
@@ -226293,6 +227561,55 @@ async function runCodeTaskPhase(opts) {
     };
   }
 }
+async function runScanFolderPhase(opts) {
+  console.error("[scan-folder] scan_folder mass-search model benchmark");
+  const result = await runScanFolderBenchmark({
+    models: opts.scanFolderModels.length > 0 ? opts.scanFolderModels : void 0,
+    force: opts.force,
+    onProgress: (m) => console.error(`[scan-folder] ${m}`)
+  });
+  console.error("");
+  console.error(`[scan-folder] ${result.summaryLine}`);
+  console.error(`[scan-folder] spend: $${result.costUsd.toFixed(6)}`);
+  console.error(`[scan-folder] json:   ${result.jsonReportPath}`);
+  process.stdout.write(`recommended_model=${result.recommendedModelId}
+`);
+  const base = `scan-folder benchmark done \u2014 recommended ${result.recommendedModelId} (changed=${result.changed}), spend $${result.costUsd.toFixed(6)}`;
+  if (opts.applyProfile === null) {
+    return { ok: true, summary: `${base} \u2014 ADVISORY (pass --apply-profile P to adopt it)`, reportPath: result.reportPath };
+  }
+  if (result.selection.eligible.length === 0) {
+    return {
+      ok: true,
+      summary: `${base} \u2014 no eligible same-or-cheaper passer, so nothing was written to '${opts.applyProfile}'`,
+      reportPath: result.reportPath
+    };
+  }
+  try {
+    const r = applyToolModelToSettings(
+      getSettingsPath(),
+      opts.applyProfile,
+      "scan_folder",
+      result.recommendedModelId
+    );
+    console.error(
+      `[scan-folder] applied ${opts.applyProfile}::tool_models.scan_folder: ${r.oldModelId || "\u2014"}  \u2192  ${r.newModelId}`
+    );
+    console.error("[scan-folder] Run the `reset` MCP tool or restart Claude Code to pick up the new model.");
+    return {
+      ok: true,
+      summary: `${base} \u2014 applied to '${opts.applyProfile}'::tool_models.scan_folder; run \`reset\` to reload`,
+      reportPath: result.reportPath
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      code: 3,
+      summary: `--apply-profile failed: ${err.message}`,
+      reportPath: result.reportPath
+    };
+  }
+}
 async function runAutoReplacePhase(opts) {
   console.error("[auto-replace] cross-tool auto-replacement planner");
   const { findings, reportMarkdown } = await planToolReplacements({
@@ -226302,9 +227619,9 @@ async function runAutoReplacePhase(opts) {
   });
   const ensemble = planEnsembleRotation();
   const fullReport = reportMarkdown + "\n" + renderEnsembleRotationSection(ensemble);
-  const reportPath = join15(resolveProjectMainRoot(), "reports", "auto-replace", `${compactStamp()}-auto-replace.md`);
-  mkdirSync9(dirname5(reportPath), { recursive: true });
-  writeFileSync8(reportPath, fullReport, "utf-8");
+  const reportPath = join17(resolveProjectMainRoot(), "reports", "auto-replace", `${compactStamp()}-auto-replace.md`);
+  mkdirSync10(dirname5(reportPath), { recursive: true });
+  writeFileSync9(reportPath, fullReport, "utf-8");
   console.error("");
   for (const f of findings) {
     const verdict = !f.ranBenchmark ? "healthy \u2014 no benchmark" : f.changed ? `RECOMMEND ${f.incumbentModelId} -> ${f.recommendedModelId}` : `keep ${f.incumbentModelId}`;
@@ -226565,7 +227882,7 @@ function buildReportPath() {
   const offsetAbs = Math.abs(offsetMin);
   const tz = `${offsetSign}${pad(Math.floor(offsetAbs / 60))}${pad(offsetAbs % 60)}`;
   const ts3 = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${tz}`;
-  return join15(root, "reports", "benchmark", `${ts3}-model-comparison.md`);
+  return join17(root, "reports", "benchmark", `${ts3}-model-comparison.md`);
 }
 withUsageContext(
   { tool: "cli:benchmark", params: "" },

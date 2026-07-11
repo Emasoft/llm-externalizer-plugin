@@ -56,9 +56,20 @@ describe("TOOL_MODEL_REGISTRY", () => {
     expect(d!.requirements.minContextTokens).toBe(128_000);
   });
 
+  it("registers scan_folder against the mass-search benchmark (P2c)", () => {
+    const d = getToolDescriptor("scan_folder");
+    expect(d).toBeDefined();
+    expect(d!.benchmark).toBe("scan-folder");
+    // scan_folder does NOT require reasoning — it is a per-file classification, not
+    // a chain of inference — but it does need the context to hold a whole file.
+    expect(d!.requirements.requireReasoning).toBe(false);
+    expect(d!.requirements.minContextTokens).toBe(128_000);
+  });
+
   it("carries requirements-only descriptors (benchmark:null) for tools without a dataset yet", () => {
-    // code_task LEFT this list in P2b — it now has a real golden corpus.
-    for (const t of ["scan_folder", "check_imports", "compare_files", "chat", "cluster_synonyms"]) {
+    // code_task LEFT this list in P2b (its code-audit corpus) and scan_folder LEFT
+    // it in P2c (its mass-search corpus) — both now have a real golden dataset.
+    for (const t of ["check_imports", "compare_files", "chat", "cluster_synonyms"]) {
       const d = getToolDescriptor(t);
       expect(d, `${t} registered`).toBeDefined();
       expect(d!.benchmark, `${t} has no dataset yet`).toBeNull();

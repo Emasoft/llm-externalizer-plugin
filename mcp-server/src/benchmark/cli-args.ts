@@ -61,6 +61,12 @@ export interface CliOptions {
    *  tokens following the flag). When empty, the benchmark auto-discovers the
    *  same-or-cheaper candidate pool. */
   codeTaskModels: string[];
+  /** Run the scan_folder MASS-SEARCH benchmark instead of the keyword task (P2c). */
+  scanFolder: boolean;
+  /** Explicit model id(s) to assess in --scan-folder mode (variadic — any non-flag
+   *  tokens following the flag). When empty, the benchmark auto-discovers the
+   *  same-or-cheaper candidate pool. */
+  scanFolderModels: string[];
   /** Ignore the per-model-per-day cache (currently only --security-triage). */
   force: boolean;
   /** Assess one model against EVERY tool's per-tool requirements (no LLM call). */
@@ -122,6 +128,8 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     searchExistingModels: [],
     codeTask: false,
     codeTaskModels: [],
+    scanFolder: false,
+    scanFolderModels: [],
     force: false,
     assessModel: null,
     checkHealth: false,
@@ -228,6 +236,15 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       opts.codeTask = true;
       while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
         opts.codeTaskModels.push(argv[i + 1]);
+        i++;
+      }
+    } else if (a === "--scan-folder") {
+      // Variadic, exactly like --code-task: `--scan-folder a/b c/d` assesses those
+      // two; with no trailing tokens the benchmark auto-discovers the
+      // same-or-cheaper candidate pool.
+      opts.scanFolder = true;
+      while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
+        opts.scanFolderModels.push(argv[i + 1]);
         i++;
       }
     } else if (a === "--model") {
@@ -364,9 +381,27 @@ export function printHelp(): void {
       "  Never auto-selects a pricier model. ADVISORY unless --apply-profile P is",
       "  given, which writes the winner into P's `tool_models.code_task` (CLI-only).",
       "",
+      "scan_folder MASS-SEARCH benchmark (separate task — per-file MATCH/NO_MATCH):",
+      "  --scan-folder [ID...]",
+      "                    Run the scan_folder mass-search benchmark instead of the",
+      "                    keyword task. Drives the REAL scan_folder pipeline (one LLM",
+      "                    call per file) over twelve files copied VERBATIM from this",
+      "                    repo's own src/, asking three questions whose true MATCH set",
+      "                    is DERIVED mechanically from the corpus bytes — not",
+      "                    hand-listed — and scores it DETERMINISTICALLY:",
+      "                    precision/recall/F1 over the per-file verdicts, no LLM judge.",
+      "                    Pass explicit model id(s) after the flag to assess exactly",
+      "                    those; with none, auto-discovers the same-or-cheaper candidate",
+      "                    pool. Writes a report under reports/scan-folder-benchmark/.",
+      "                    Composes with --force.",
+      "  Pass gate: micro-F1 >= 0.85 AND micro-recall >= 0.85 AND coverage >= 0.90.",
+      "  Never auto-selects a pricier model. ADVISORY unless --apply-profile P is",
+      "  given, which writes the winner into P's `tool_models.scan_folder` (CLI-only).",
+      "",
       "Cross-tool auto-replacement (TRDD-828238b5 A7 — the writer path):",
       "  --auto-replace    For every benchmarked tool (security_scan,",
-      "                    search_existing_implementations), check its incumbent",
+      "                    search_existing_implementations, code_task, scan_folder),",
+      "                    check its incumbent",
       "                    model's health against the durable ledger and, when",
       "                    degraded (or with --force), run that tool's benchmark to",
       "                    surface the best same-or-cheaper replacement. On a",

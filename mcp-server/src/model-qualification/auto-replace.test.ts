@@ -189,10 +189,11 @@ describe("planToolReplacements — report shape", () => {
       benchmarkRunner: runner,
     });
     // Every tool the registry declares a DISPATCHABLE benchmark for must appear.
-    // code_task joined in P2b (its code-audit corpus), so the planner now covers
-    // three tools — if a fourth benchmark ships, this list grows with it.
+    // code_task joined in P2b (its code-audit corpus) and scan_folder in P2c (its
+    // mass-search corpus), so the planner now covers four tools — if a fifth
+    // benchmark ships, this list grows with it.
     expect(findings.map((f) => f.tool).sort()).toEqual(
-      ["code_task", "search_existing_implementations", "security_scan"].sort(),
+      ["code_task", "scan_folder", "search_existing_implementations", "security_scan"].sort(),
     );
     for (const f of findings) {
       expect(reportMarkdown).toContain(`## ${f.tool} (benchmark: ${f.benchmark})`);
@@ -217,5 +218,6 @@ describe("planToolReplacements — report shape", () => {
     expect(byTool["security_scan"]).toBe("security-triage");
     expect(byTool["search_existing_implementations"]).toBe("search-existing");
     expect(byTool["code_task"]).toBe("code-task");
+    expect(byTool["scan_folder"]).toBe("scan-folder");
   });
 });

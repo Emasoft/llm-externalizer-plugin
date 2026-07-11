@@ -49,6 +49,7 @@ import {
 import { runSecurityTriageBenchmark } from "./security-triage/index.js";
 import { runSearchExistingBenchmark } from "./search-existing/index.js";
 import { runCodeAuditBenchmark } from "./code-task/index.js";
+import { runScanFolderBenchmark } from "./scan-folder/index.js";
 import {
   planEnsembleRotation,
   planToolReplacements,
@@ -167,13 +168,13 @@ function validateCombinations(opts: CliOptions): void {
   if (opts.apply && !opts.autoReplace) {
     throw new Error("--apply requires --auto-replace");
   }
-  if (opts.applyProfile !== null && opts.pickTopN === null && !opts.codeTask) {
-    // --code-task is the second legitimate consumer of --apply-profile: it has a
-    // single winner (not a top-N ensemble), which it writes into that profile's
-    // `tool_models.code_task`. Everything else needs --pick-top-n to have
-    // anything to write.
+  if (opts.applyProfile !== null && opts.pickTopN === null && !opts.codeTask && !opts.scanFolder) {
+    // --code-task and --scan-folder are the legitimate single-winner consumers of
+    // --apply-profile: each produces ONE winner (not a top-N ensemble), which it
+    // writes into that profile's `tool_models.<tool>`. Everything else needs
+    // --pick-top-n to have anything to write.
     throw new Error(
-      "--apply-profile requires --pick-top-n (or --code-task, which writes its single winner into tool_models.code_task)",
+      "--apply-profile requires --pick-top-n (or --code-task / --scan-folder, which write their single winner into tool_models.code_task / tool_models.scan_folder)",
     );
   }
   if (opts.fromCache && opts.pickTopN === null) {
@@ -287,6 +288,11 @@ async function main(): Promise<CliResult> {
       for (const id of pool) {
         if (!opts.codeTaskModels.includes(id)) opts.codeTaskModels.push(id);
       }
+    } else if (opts.scanFolder) {
+      // Append (preserve any explicit ids the user passed after --scan-folder).
+      for (const id of pool) {
+        if (!opts.scanFolderModels.includes(id)) opts.scanFolderModels.push(id);
+      }
     } else if (opts.searchExisting || opts.autoReplace) {
       // Append (preserve any explicit ids the user passed after --search-existing).
       // --auto-replace forwards opts.searchExistingModels as its candidate pool,
@@ -323,6 +329,14 @@ async function main(): Promise<CliResult> {
   // not keyword classification), scored deterministically with no LLM judge.
   if (opts.codeTask) {
     return runCodeTaskPhase(opts);
+  }
+
+  // --scan-folder routes to the scan_folder MASS-SEARCH benchmark — a wholly
+  // separate task (a per-file MATCH/NO_MATCH verdict against a stated criterion,
+  // not keyword classification), scored deterministically against a truth set
+  // DERIVED from the corpus bytes, with no LLM judge.
+  if (opts.scanFolder) {
+    return runScanFolderPhase(opts);
   }
 
   // --auto-replace routes to the cross-tool auto-replacement planner — for every
@@ -686,6 +700,80 @@ async function runCodeTaskPhase(opts: CliOptions): Promise<CliResult> {
     return {
       ok: true,
       summary: `${base} — applied to '${opts.applyProfile}'::tool_models.code_task; run \`reset\` to reload`,
+      reportPath: result.reportPath,
+    };
+  } catch (err) {
+    // Exit 3 on a write failure, matching every other writer path in this CLI.
+    return {
+      ok: false,
+      code: 3,
+      summary: `--apply-profile failed: ${(err as Error).message}`,
+      reportPath: result.reportPath,
+    };
+  }
+}
+
+/**
+ * --scan-folder phase: assess model(s) on the scan_folder MASS-SEARCH corpus and
+ * recommend the best same-or-cheaper passer. The corpus is twelve files copied
+ * VERBATIM from this repo's own `mcp-server/src/` (no fabricated code), and each
+ * query's true MATCH set is DERIVED from those bytes by a mechanical rule at run
+ * time rather than hand-listed — so the expected answer cannot drift from the
+ * corpus. Scoring is DETERMINISTIC: precision/recall/F1 over the per-file
+ * MATCH/NO_MATCH verdicts, with NO LLM judge anywhere. Writes JSON + markdown
+ * under reports/scan-folder-benchmark/.
+ *
+ * ADVISORY by default. With `--apply-profile P` it ALSO persists the winner into
+ * P's `tool_models.scan_folder` via applyToolModelToSettings — the same atomic,
+ * CLI-only writer --auto-replace --apply uses, which MUST NEVER be reachable from
+ * an MCP handler (see the guardrail comment at pick.ts:234).
+ */
+async function runScanFolderPhase(opts: CliOptions): Promise<CliResult> {
+  console.error("[scan-folder] scan_folder mass-search model benchmark");
+  const result = await runScanFolderBenchmark({
+    models: opts.scanFolderModels.length > 0 ? opts.scanFolderModels : undefined,
+    force: opts.force,
+    onProgress: (m) => console.error(`[scan-folder] ${m}`),
+  });
+  console.error("");
+  console.error(`[scan-folder] ${result.summaryLine}`);
+  console.error(`[scan-folder] spend: $${result.costUsd.toFixed(6)}`);
+  console.error(`[scan-folder] json:   ${result.jsonReportPath}`);
+  // stdout carries the machine-grep-able recommendation line.
+  process.stdout.write(`recommended_model=${result.recommendedModelId}\n`);
+
+  const base = `scan-folder benchmark done — recommended ${result.recommendedModelId} (changed=${result.changed}), spend $${result.costUsd.toFixed(6)}`;
+
+  if (opts.applyProfile === null) {
+    return { ok: true, summary: `${base} — ADVISORY (pass --apply-profile P to adopt it)`, reportPath: result.reportPath };
+  }
+
+  // The winner is only worth writing when the gate actually produced a passer:
+  // with an empty eligible set the "recommendation" is just the incumbent kept in
+  // place, and rewriting tool_models to the value it already resolves to would
+  // masquerade as an adoption. Say so instead of quietly no-op'ing.
+  if (result.selection.eligible.length === 0) {
+    return {
+      ok: true,
+      summary: `${base} — no eligible same-or-cheaper passer, so nothing was written to '${opts.applyProfile}'`,
+      reportPath: result.reportPath,
+    };
+  }
+
+  try {
+    const r = applyToolModelToSettings(
+      getSettingsPath(),
+      opts.applyProfile,
+      "scan_folder",
+      result.recommendedModelId,
+    );
+    console.error(
+      `[scan-folder] applied ${opts.applyProfile}::tool_models.scan_folder: ${r.oldModelId || "—"}  →  ${r.newModelId}`,
+    );
+    console.error("[scan-folder] Run the `reset` MCP tool or restart Claude Code to pick up the new model.");
+    return {
+      ok: true,
+      summary: `${base} — applied to '${opts.applyProfile}'::tool_models.scan_folder; run \`reset\` to reload`,
       reportPath: result.reportPath,
     };
   } catch (err) {

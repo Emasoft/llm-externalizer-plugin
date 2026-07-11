@@ -90,8 +90,8 @@ export const TOOL_MODEL_REGISTRY: Record<string, ToolModelDescriptor> = {
   scan_folder: {
     tool: "scan_folder",
     requirements: criteria({ requireReasoning: false, minContextTokens: 128_000 }),
-    benchmark: null,
-    note: "Per-file auto-discovery scan. Per-file detection benchmark dataset is incremental.",
+    benchmark: "scan-folder",
+    note: "Per-file auto-discovery scan. Gated by the mass-search benchmark (P2c): twelve files copied verbatim from this repo's own src/, three queries whose true MATCH set is derived mechanically from the corpus bytes, scored deterministically on the per-file MATCH/NO_MATCH verdict — no LLM judge.",
   },
   search_existing_implementations: {
     tool: "search_existing_implementations",
