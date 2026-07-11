@@ -36,8 +36,11 @@ import { resolveProjectMainRoot } from "../../project-root.js";
 import { KNOWN_PRICING, type ModelPricing } from "../../mass_scouting/cost-estimate.js";
 import type { FetchImpl } from "../../security_scan/judge.js";
 import { DEFAULT_MODEL } from "../../security_scan/types.js";
+import { buildSystemPrompt, buildUserMessage, makeNonce, preScanInjection } from "../../security_scan/prompt.js";
+import { ASSUMED_MAX_OUTPUT_TOKENS } from "../budget.js";
+import type { BenchmarkWorkload } from "../workload-types.js";
 
-import { loadDataset, resolveDatasetPath, type SecurityTriageCase } from "./dataset.js";
+import { BENCHMARK_RUBRICS, loadDataset, resolveDatasetPath, type SecurityTriageCase } from "./dataset.js";
 import { runTriageBenchmarkOnModel } from "./runner.js";
 import {
   DEFAULT_TRIAGE_THRESHOLDS,
@@ -515,6 +518,76 @@ export async function runSecurityTriageBenchmark(
     jsonReportPath,
     mdReportPath,
     summaryLine,
+  };
+}
+
+// ── Pre-flight workload description (P4 spend-cap estimate) ────────────────
+
+/**
+ * Derive this benchmark's P4 pre-flight workload for ONE model (see
+ * `BenchmarkWorkload`, workload-types.ts). Every field is DERIVED from the real
+ * golden dataset on disk plus the REAL prompt-building functions the runner
+ * actually calls (`buildSystemPrompt` / `buildUserMessage` / `preScanInjection`
+ * from security_scan/prompt.ts) — never a hand-counted guess — so a corpus edit
+ * or a prompt-wording change moves this estimate automatically. Makes NO
+ * network call.
+ *
+ * callsPerModel — `casesToGroups()` (runner.ts) maps ONE dataset case to ONE
+ * `DedupGroup` with a single member: no batching/dedup across cases in this
+ * benchmark (unlike the real security_scan tool, which dedupes identical
+ * findings before judging). So it is one judge call per case, and the
+ * orchestrator's default `maxRetries: 0` for this run (see
+ * `runSecurityTriageBenchmark` above) means exactly one attempt per case on
+ * the planned path — a retry is a runtime contingency, not part of the
+ * workload the estimate should count.
+ *
+ * promptCharsPerModel — for each case: the EXACT system prompt (category +
+ * `BENCHMARK_RUBRICS[category]` + the REAL pre-scan injection markers for that
+ * case's own snippet, built precisely as `judgeOneGroup` builds it) plus the
+ * EXACT user message (the nonce-delimited snippet envelope), summed over
+ * every case in the dataset.
+ *
+ * maxOutputTokensPerCall — judge.ts's `reqBody` (the actual wire request; see
+ * `judgeOneGroup`) sets NO `max_tokens` / `max_completion_tokens` field at
+ * all, so there is no real per-call literal to read verbatim. The run is not
+ * unbounded, though: `budget.ts`'s `chargeRequest` — the ONE place spend is
+ * actually reserved before a call goes out over the wire — already treats a
+ * request body with no numeric `max_tokens` as `ASSUMED_MAX_OUTPUT_TOKENS`
+ * (16,000). Reusing that SAME exported constant here, rather than inventing a
+ * smaller schema-sized guess (the strict schema's `reason` field caps at 600
+ * chars, so a well-behaved reply is a few hundred tokens), is deliberate: a
+ * verbose/reasoning model that ignores that guidance is bounded, in practice,
+ * by whatever the real chokepoint reserves for the call — 16,000. A smaller
+ * number here would make this pre-flight estimate UNDER-price exactly the
+ * case the chokepoint itself budgets for, which is the one failure mode a
+ * spend-cap estimate must never produce.
+ */
+export function describeWorkload(): BenchmarkWorkload {
+  const cases = loadDataset();
+  // One nonce for the whole estimate. Its only role here is prompt length: the
+  // envelope delimiters embed it, and every real call uses a nonce of the same
+  // fixed length (16 hex chars — see prompt.ts's makeNonce), so this reproduces
+  // the real per-call overhead exactly. No network call.
+  const nonce = makeNonce();
+  let promptCharsPerModel = 0;
+  for (const c of cases) {
+    const { markers } = preScanInjection(c.snippet);
+    const systemPrompt = buildSystemPrompt({
+      nonce,
+      category: c.category,
+      rubric: BENCHMARK_RUBRICS[c.category],
+      language: c.language,
+      injectionMarkers: markers,
+    });
+    const userMessage = buildUserMessage(nonce, c.snippet);
+    promptCharsPerModel += systemPrompt.length + userMessage.length;
+  }
+  return {
+    tool: "security_scan",
+    benchmark: "security-triage",
+    callsPerModel: cases.length,
+    promptCharsPerModel,
+    maxOutputTokensPerCall: ASSUMED_MAX_OUTPUT_TOKENS,
   };
 }
 

@@ -39,10 +39,15 @@ Every trigger below — reactive ("the ensemble is broken", "swap the broken mod
 ONE background CLI call:
 
 ```bash
-# Ledger-gated: rotates ONLY if the threshold is met; free + no-op on a healthy ledger.
+# EVERYTHING (catalog -> requirements -> every benchmark -> write ensemble + per-tool
+# models + the free_models pool). Defaults to FREE mode: provably $0. This is the
+# answer to "update all the models" / "refresh everything".
+llm-ext-benchmark --update-all
+
+# Ledger-gated repair: rotates ONLY if the threshold is met; free + no-op on a healthy ledger.
 llm-ext-benchmark --auto-replace --apply
 
-# Unconditional re-pick (the user asked for a rescan, not a repair):
+# Unconditional re-pick of just the ensemble (not the whole pipeline):
 llm-ext-benchmark --pick-top-n 3 --apply-profile <profile>
 
 # Re-pick from the last sweep's cache, no new API calls:
@@ -50,7 +55,13 @@ llm-ext-benchmark --from-cache --pick-top-n 3 --apply-profile <profile>
 ```
 
 Then print the CLI's final `[OK] …` / `[FAILED] …` line verbatim. It already carries
-the picks, the write, and the report path.
+the picks, the write, the spend, and the report path.
+
+**Spending is never your decision.** `--update-all` is $0 by default; `--paid` /
+`--both` spend real money under a hard `--budget-usd` cap (default $2.00). If a run
+aborts because its pre-flight estimate exceeds the cap, relay the `[FAILED]` line and
+STOP — do not re-run with a bigger budget unless the user asks. The abort is the
+safety feature working.
 
 NEVER hand-roll a per-model loop over `chat` / `code_task` / `or_model_info` — that is
 the 30-40M-token failure mode these commands exist to prevent.

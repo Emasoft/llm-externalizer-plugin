@@ -38,8 +38,19 @@ import { KNOWN_PRICING, type ModelPricing } from "../../mass_scouting/cost-estim
 import type { FetchImpl } from "../../security_scan/judge.js";
 import { DEFAULT_MODEL } from "../../security_scan/types.js";
 
-import { loadDataset, validateDataset, type CodeAuditCase } from "./dataset.js";
-import { runCodeAuditBenchmarkOnModel } from "./bench-runner.js";
+import { buildPreInstructions, codeTaskSystemPrompt, readFileAsCodeBlock } from "../../scan-pipeline.js";
+import type { BenchmarkWorkload } from "../workload-types.js";
+
+import {
+  CODE_AUDIT_INSTRUCTIONS,
+  CODE_AUDIT_LANGUAGE,
+  fixturePath,
+  loadDataset,
+  resolveFixtureRoot,
+  validateDataset,
+  type CodeAuditCase,
+} from "./dataset.js";
+import { CODE_TASK_MAX_OUTPUT_TOKENS, runCodeAuditBenchmarkOnModel } from "./bench-runner.js";
 import {
   aggregateScores,
   passesThresholds,
@@ -592,4 +603,41 @@ function buildReportMarkdown(args: {
       "into that profile's `tool_models.code_task` (CLI-only writer — the MCP surface never writes).",
   );
   return lines.join("\n") + "\n";
+}
+
+// ── P4 pre-flight workload description ──────────────────────────────────────
+
+/**
+ * Describe what ONE full run of this benchmark actually asks an LLM to do, for
+ * ONE model — the P4 pre-flight spend estimate's input. Every number is
+ * DERIVED from the real corpus on disk (loadDataset + the real fixture files),
+ * reproduced with the SAME helpers bench-runner.ts uses to build the request
+ * (readFileAsCodeBlock, buildPreInstructions, codeTaskSystemPrompt) — never a
+ * hardcoded count — so a corpus edit moves the estimate automatically and a
+ * stale literal can never quietly under-price a sweep. Makes NO network call;
+ * it only reads the fixture files already on disk.
+ */
+export function describeWorkload(): BenchmarkWorkload {
+  const cases: readonly CodeAuditCase[] = loadDataset();
+  const fixtureRoot = resolveFixtureRoot();
+  const preInstructions = buildPreInstructions(true, "read");
+  // Same system prompt for every case — code_task's fixtures are all TypeScript.
+  const systemPrompt = codeTaskSystemPrompt(CODE_AUDIT_LANGUAGE);
+
+  let promptCharsPerModel = 0;
+  for (const c of cases) {
+    // Same call as bench-runner.ts's processFileCheck seam: the real fixture
+    // path, the real file bytes, no redaction (the benchmark never redacts).
+    const codeBlock = readFileAsCodeBlock(fixturePath(c, fixtureRoot), CODE_AUDIT_LANGUAGE);
+    const userContent = `${preInstructions}Task: ${CODE_AUDIT_INSTRUCTIONS}\n\n${codeBlock}`;
+    promptCharsPerModel += systemPrompt.length + userContent.length;
+  }
+
+  return {
+    tool: "code_task",
+    benchmark: "code-task",
+    callsPerModel: cases.length,
+    promptCharsPerModel,
+    maxOutputTokensPerCall: CODE_TASK_MAX_OUTPUT_TOKENS,
+  };
 }

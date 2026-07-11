@@ -38,14 +38,21 @@ import { DEFAULT_MODEL } from "../../security_scan/types.js";
 // The confusion-matrix aggregate is the shared one (see score.ts's header) — a skipped
 // model still needs a well-formed, empty score object.
 import { aggregateScores } from "../search-existing/score.js";
+import { readFileAsCodeBlock, DEFAULT_MAX_PAYLOAD_BYTES } from "../../scan-pipeline.js";
+import { CHECK_SPECS_SYSTEM_PROMPT } from "../../check-specs/core.js";
+import type { BenchmarkWorkload } from "../workload-types.js";
 
 import {
   CHECK_SPECS_FIXTURES,
+  CHECK_SPECS_INSTRUCTIONS,
   datasetFingerprint,
   validateDataset,
+  fixtureAbsPath,
+  resolveFixtureRoot,
+  specPath,
   type SpecFixture,
 } from "./dataset.js";
-import { runCheckSpecsBenchmarkOnModel } from "./bench-runner.js";
+import { runCheckSpecsBenchmarkOnModel, CHECK_SPECS_MAX_OUTPUT_TOKENS } from "./bench-runner.js";
 import {
   accuracyOf,
   passesThresholds,
@@ -213,6 +220,61 @@ function decorate(raw: OpenRouterModel): QualifiedModel {
     supportsStructured: params.has("structured_outputs") || params.has("response_format"),
     supportsReasoning: params.has("reasoning") || params.has("include_reasoning"),
     raw,
+  };
+}
+
+// ── Pre-flight workload description (P4) ─────────────────────────────────────
+
+/**
+ * Describe what ONE model is asked to do, for the P4 pre-flight spend estimate.
+ *
+ * This builds the EXACT same messages bench-runner.ts's mode-0 loop sends per file
+ * (check-specs/core.ts:317-325) — the same `readFileAsCodeBlock` calls (same
+ * `redact_secrets: false`, same `max_payload_kb` default, same `"specs-"` tag prefix
+ * on the spec), the same system prompt, the same section headers, concatenated in the
+ * same order. Nothing here is re-derived or approximated: it is the real corpus read
+ * off disk through the same helpers the runner itself calls, so a corpus or spec edit
+ * moves this estimate automatically and it can never silently drift from what a run
+ * actually sends.
+ */
+export function describeWorkload(): BenchmarkWorkload {
+  const fixtures: readonly SpecFixture[] = CHECK_SPECS_FIXTURES;
+  const root = resolveFixtureRoot();
+  // Mirrors bench-runner.ts's csBudgetBytes = (max_payload_kb ?? 400) * 1024 — the
+  // benchmark never passes max_payload_kb, so the pipeline default applies to every call.
+  const specBlock = readFileAsCodeBlock(
+    specPath(root),
+    undefined,
+    false, // redact_secrets: false — the benchmark's args, verbatim
+    DEFAULT_MAX_PAYLOAD_BYTES,
+    null,
+    "specs-",
+  );
+
+  let promptCharsPerModel = 0;
+  for (const fixture of fixtures) {
+    const fileBlock = readFileAsCodeBlock(
+      fixtureAbsPath(fixture.file, root),
+      undefined,
+      false, // redact_secrets: false
+      DEFAULT_MAX_PAYLOAD_BYTES,
+      null,
+    );
+    let userContent = "## SPECIFICATION (source of truth)\n\n" + specBlock + "\n\n";
+    userContent += "## ADDITIONAL INSTRUCTIONS\n\n" + CHECK_SPECS_INSTRUCTIONS + "\n\n";
+    userContent += "## SOURCE FILES TO CHECK\n\n" + fileBlock;
+    // One call per file (mode 0): the system prompt rides on EVERY call, and so does
+    // the whole spec block — that per-call spec resend is the reason this benchmark's
+    // real cost scales with file count, not with the spec's size alone.
+    promptCharsPerModel += CHECK_SPECS_SYSTEM_PROMPT.length + userContent.length;
+  }
+
+  return {
+    tool: "check_against_specs",
+    benchmark: "check-specs",
+    callsPerModel: fixtures.length,
+    promptCharsPerModel,
+    maxOutputTokensPerCall: CHECK_SPECS_MAX_OUTPUT_TOKENS,
   };
 }
 

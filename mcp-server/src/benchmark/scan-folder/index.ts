@@ -38,16 +38,29 @@ import { DEFAULT_MODEL } from "../../security_scan/types.js";
 // The confusion-matrix aggregate is the shared one (see score.ts's header) — a
 // skipped model still needs a well-formed, empty score object.
 import { aggregateScores } from "../search-existing/score.js";
+import type { BenchmarkWorkload } from "../workload-types.js";
+// Same helpers bench-runner.ts's processFileCheck seam uses to assemble the real
+// per-file prompt — imported here too so describeWorkload() reproduces the exact
+// characters sent, rather than keeping a second copy that could drift.
+import {
+  buildPreInstructions,
+  detectLang,
+  readFileAsCodeBlock,
+  codeTaskSystemPrompt,
+} from "../../scan-pipeline.js";
 
 import {
   SCAN_FOLDER_CASES,
+  buildInstructions,
   datasetFingerprint,
   deriveMatchingFiles,
+  fixtureAbsPath,
+  resolveFixtureRoot,
   scannedFilesFor,
   validateDataset,
   type ScanFolderCase,
 } from "./dataset.js";
-import { runScanFolderBenchmarkOnModel } from "./bench-runner.js";
+import { runScanFolderBenchmarkOnModel, SCAN_FOLDER_MAX_OUTPUT_TOKENS } from "./bench-runner.js";
 import {
   passesThresholds,
   DEFAULT_SCAN_FOLDER_THRESHOLDS,
@@ -208,6 +221,60 @@ function decorate(raw: OpenRouterModel): QualifiedModel {
     supportsStructured: params.has("structured_outputs") || params.has("response_format"),
     supportsReasoning: params.has("reasoning") || params.has("include_reasoning"),
     raw,
+  };
+}
+
+// ── Workload description (P4 pre-flight spend estimate) ─────────────────────
+
+/**
+ * Describe what ONE full sweep of this benchmark asks an LLM to do, for the P4
+ * pre-flight spend estimate — see workload-types.ts's header. Every number below
+ * is DERIVED from the real corpus/dataset on disk (never a hardcoded count), so a
+ * fixture or dataset edit moves the estimate automatically.
+ *
+ * scan_folder makes ONE call per FILE (not per query): validateDataset's own
+ * invariant (dataset.ts) forces every case to scan the SAME file count as the
+ * full corpus, so `callsPerModel` is `cases.length * filesInCorpus` — computed
+ * here by actually walking each case's file list rather than assuming that
+ * uniformity holds.
+ *
+ * `promptCharsPerModel` reproduces bench-runner.ts's processFileCheck seam
+ * byte-for-byte: the same `codeTaskSystemPrompt` / `buildPreInstructions` /
+ * `readFileAsCodeBlock` calls, over every (case, file) pair the real sweep would
+ * dispatch. It is an exact count, not an over-estimate, because it calls the
+ * IDENTICAL prompt-assembly helpers the runner calls, with the runner's own
+ * no-redaction defaults (the benchmark always passes `redact_secrets: false`,
+ * `scan_secrets: false` and no regex-redact, so the default, unredacted
+ * `readFileAsCodeBlock(path)` call matches what a real run actually sends).
+ *
+ * Makes no network call — every input here is read from local disk.
+ */
+export function describeWorkload(): BenchmarkWorkload {
+  const fixtureRoot = resolveFixtureRoot();
+  const preInstructions = buildPreInstructions(true, "read");
+
+  let callsPerModel = 0;
+  let promptCharsPerModel = 0;
+
+  for (const c of SCAN_FOLDER_CASES) {
+    const task = buildInstructions(c.criterion);
+    const files = scannedFilesFor(c, fixtureRoot);
+    callsPerModel += files.length;
+    for (const rel of files) {
+      const absPath = fixtureAbsPath(rel, fixtureRoot);
+      const systemPrompt = codeTaskSystemPrompt(detectLang(absPath));
+      const codeBlock = readFileAsCodeBlock(absPath);
+      const userPrompt = `${preInstructions}Task: ${task}\n\n${codeBlock}`;
+      promptCharsPerModel += systemPrompt.length + userPrompt.length;
+    }
+  }
+
+  return {
+    tool: "scan_folder",
+    benchmark: "scan-folder",
+    callsPerModel,
+    promptCharsPerModel,
+    maxOutputTokensPerCall: SCAN_FOLDER_MAX_OUTPUT_TOKENS,
   };
 }
 

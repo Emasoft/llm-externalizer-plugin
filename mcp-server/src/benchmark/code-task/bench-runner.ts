@@ -73,6 +73,13 @@ import {
 /** Default OpenRouter chat/completions endpoint. */
 const DEFAULT_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
+/**
+ * Output bound this benchmark puts on the wire, per call. Exported so the P4
+ * pre-flight spend estimate reads the SAME number the request carries — a
+ * duplicated literal could silently under-price a sweep.
+ */
+export const CODE_TASK_MAX_OUTPUT_TOKENS = 8192;
+
 export interface CodeAuditRunOptions {
   apiKey: string;
   /**
@@ -153,7 +160,7 @@ export async function runCodeAuditBenchmarkOnModel(
 ): Promise<CodeAuditRunResult> {
   const fixtureRoot = resolveFixtureRoot();
   const apiUrl = opts.apiUrl ?? DEFAULT_API_URL;
-  const maxTokens = opts.maxTokens ?? 8192;
+  const maxTokens = opts.maxTokens ?? CODE_TASK_MAX_OUTPUT_TOKENS;
   const temperature = opts.temperature ?? 0.1;
   const perCallTimeoutMs = opts.perCallTimeoutMs ?? 300_000;
 

@@ -70,6 +70,13 @@ import {
 const DEFAULT_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 /**
+ * Output bound this benchmark puts on the wire, per call. Exported so the P4 pre-flight
+ * spend estimate reads the SAME number the request carries — a duplicated literal could
+ * silently under-price a sweep.
+ */
+export const CHECK_SPECS_MAX_OUTPUT_TOKENS = 4096;
+
+/**
  * The single case id. check_against_specs's corpus is ONE spec audited over N files
  * (unlike scan_folder's N queries), so the shared per-case math is fed exactly one case.
  * Named rather than inlined so the report, the cache and the tests all say the same word.
@@ -167,7 +174,7 @@ export async function runCheckSpecsBenchmarkOnModel(
 ): Promise<CheckSpecsRunResult> {
   const fixtureRoot = resolveFixtureRoot();
   const apiUrl = opts.apiUrl ?? DEFAULT_API_URL;
-  const maxTokens = opts.maxTokens ?? 4096;
+  const maxTokens = opts.maxTokens ?? CHECK_SPECS_MAX_OUTPUT_TOKENS;
   const perCallTimeoutMs = opts.perCallTimeoutMs ?? 300_000;
 
   const files = fixtureFilePaths(fixtures, fixtureRoot);

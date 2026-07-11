@@ -192,4 +192,71 @@ describe("benchmark CLI — the [OK|FAILED] final-line contract", () => {
     expect(r.final).toMatch(/0\/2 ensemble slot\(s\) broken/);
     expect(r.stderr).toMatch(/ensemble\.model \(vendor\/dead-model\): healthy/);
   });
+
+  // ── P3 + P4: --update-all and the spend cap ────────────────────────────────
+  //
+  // These stay hermetic by asserting only the paths that fail BEFORE the (public,
+  // network) catalog fetch: usage errors and the API-key self-check. The pipeline
+  // itself is covered end-to-end in update-all.test.ts with an injected catalog.
+
+  it("refuses the cost-safety flags when they would be a SILENT NO-OP (no --update-all)", () => {
+    // Typing --free / --budget-usd without --update-all means the user asked for a cost
+    // guarantee that nothing would honor. That must never pass quietly.
+    for (const args of [["--free"], ["--paid"], ["--both"], ["--budget-usd", "5"]]) {
+      const r = run(args);
+      expect(r.status).not.toBe(0);
+      expect(r.final).toMatch(/^\[FAILED\] --free \/ --paid \/ --both \/ --budget-usd only apply to --update-all/);
+    }
+  });
+
+  it("refuses contradictory spend modes rather than letting one silently win", () => {
+    const r = run(["--update-all", "--free", "--paid"]);
+    expect(r.status).not.toBe(0);
+    expect(r.final).toMatch(/^\[FAILED\] --free, --paid and --both are mutually exclusive/);
+  });
+
+  it("refuses a cap that is not a positive amount (a cap you cannot trust is worse than none)", () => {
+    for (const bad of ["0", "-1", "abc"]) {
+      const r = run(["--update-all", "--paid", "--budget-usd", bad]);
+      expect(r.status).not.toBe(0);
+      expect(r.final).toMatch(/^\[FAILED\] --budget-usd must be a positive USD amount/);
+    }
+  });
+
+  it("--update-all self-checks the API key before any work (one line, no agent probe)", () => {
+    const r = run(["--update-all", "--paid"]);
+    expect(r.status).not.toBe(0);
+    expect(r.finals).toHaveLength(1);
+    expect(r.final).toMatch(/^\[FAILED\] OPENROUTER_API_KEY not set/);
+  });
+
+  it("--paid REFUSES a free_only profile — a CLI flag may not overrule a zero-spend config", () => {
+    // free_only is the user's standing "this profile must never spend". Letting --paid
+    // silently flip that off is how money leaves an account (cf. 31ce212). It is a hard
+    // refusal, not a warning — and it names the deliberate way to proceed.
+    writeFileSync(
+      join(cfg, "settings.yaml"),
+      [
+        "active: fo",
+        "profiles:",
+        "  fo:",
+        "    mode: remote",
+        "    api: openrouter-remote",
+        "    model: v/x:free",
+        "    free_only: true",
+        "    free_models:",
+        "      - v/x:free",
+        "",
+      ].join("\n"),
+    );
+    const r = run(["--update-all", "--paid"]);
+    expect(r.status).toBe(2);
+    expect(r.finals).toHaveLength(1);
+    expect(r.final).toMatch(/^\[FAILED\] --update-all --paid refused: profile 'fo' has free_only: true/);
+    expect(r.final).toMatch(/must never spend/);
+    // …and it beats the API-key check (which run() strips). The user's key is not the
+    // problem — their REQUEST is — so reporting "OPENROUTER_API_KEY not set" here would
+    // send them off fixing the wrong thing. Same ordering rule as the usage errors above.
+    expect(r.final).not.toMatch(/OPENROUTER_API_KEY/);
+  });
 });

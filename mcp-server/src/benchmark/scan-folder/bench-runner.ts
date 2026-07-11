@@ -70,6 +70,13 @@ import {
 /** Default OpenRouter chat/completions endpoint. */
 const DEFAULT_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
+/**
+ * Output bound this benchmark puts on the wire, per call. Exported so the P4
+ * pre-flight spend estimate reads the SAME number the request carries — a
+ * duplicated literal could silently under-price a sweep.
+ */
+export const SCAN_FOLDER_MAX_OUTPUT_TOKENS = 4096;
+
 export interface ScanFolderRunOptions {
   apiKey: string;
   /** Per-million-token USD pricing; costUsd is accumulated from each call's usage. */
@@ -153,7 +160,7 @@ export async function runScanFolderBenchmarkOnModel(
   const fixtureRoot = resolveFixtureRoot();
   const scanRoot = fixtureScanRoot(fixtureRoot);
   const apiUrl = opts.apiUrl ?? DEFAULT_API_URL;
-  const maxTokens = opts.maxTokens ?? 4096;
+  const maxTokens = opts.maxTokens ?? SCAN_FOLDER_MAX_OUTPUT_TOKENS;
   const temperature = opts.temperature ?? 0.1;
   const perCallTimeoutMs = opts.perCallTimeoutMs ?? 300_000;
 

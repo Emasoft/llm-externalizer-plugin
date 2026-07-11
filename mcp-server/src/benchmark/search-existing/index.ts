@@ -35,7 +35,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import {
   buildBenchmarkRoster,
@@ -53,9 +53,11 @@ import { DEFAULT_MODEL } from "../../security_scan/types.js";
 
 import {
   SEARCH_EXISTING_CASES,
+  resolveFixtureRoot,
+  listFixtureFiles,
   type SearchExistingCase,
 } from "./dataset.js";
-import { runSearchExistingBenchmarkOnModel } from "./runner.js";
+import { runSearchExistingBenchmarkOnModel, SEARCH_EXISTING_MAX_OUTPUT_TOKENS } from "./runner.js";
 import {
   aggregateScores,
   passesThresholds,
@@ -69,6 +71,87 @@ import {
   type SearchExistingCandidate,
   type SearchExistingSelectionResult,
 } from "./select.js";
+import { readAndGroupFiles, buildPerFileSectionPrompt, DEFAULT_MAX_PAYLOAD_BYTES } from "../../scan-pipeline.js";
+import type { BenchmarkWorkload } from "../workload-types.js";
+
+// ── P4 pre-flight workload estimate ─────────────────────────────────────────
+
+/**
+ * Fixed per-call prompt overhead the real pipeline (search-existing/core.ts)
+ * builds INLINE — the system message, the base "checking every file..."
+ * instructions, the with/without-reference block, and (for multi-file
+ * batches) the per-file-section-prompt hint. That text lives inside
+ * runSearchExistingImplementations, not exported as a reusable literal, so it
+ * cannot be imported byte-for-byte without duplicating core.ts's private
+ * prompt-construction logic (which would silently go stale the moment core.ts's
+ * wording changes). Measured empirically against the actual strings core.ts
+ * builds (system message + the longest with-reference base-prompt branch +
+ * the multi-file section hint) at ~2.4k chars; rounded up to a clearly
+ * generous 3000 so this stays a SOUND UPPER BOUND, never an under-estimate.
+ * Accuracy here is not the run's safety net — budget.ts's per-call HTTP
+ * chokepoint is — this only has to keep the pre-flight number honest.
+ */
+const FIXED_PROMPT_OVERHEAD_CHARS_PER_CALL = 3000;
+
+/** Resolve a fixture-relative path to an absolute on-disk path (mirrors runner.ts's `abs`). */
+function absFixturePath(root: string, rel: string): string {
+  return resolve(root, rel);
+}
+
+/**
+ * Derive the P4 pre-flight spend-cap workload for the search_existing_implementations
+ * benchmark straight from the real fixture corpus on disk, replaying the SAME
+ * per-case file selection the runner uses (runner.ts's scannedAbs filter) and the
+ * SAME FFD bin-packing helper (scan-pipeline.ts's readAndGroupFiles) search-existing/
+ * core.ts calls per case — so callsPerModel and promptCharsPerModel move
+ * automatically with any change to the dataset or fixture corpus. No network call.
+ *
+ * promptBytes passed to readAndGroupFiles is FIXED_PROMPT_OVERHEAD_CHARS_PER_CALL
+ * (our generous fixed-overhead constant) rather than core.ts's exact (private)
+ * prompt byte count — a LARGER promptBytes can only shrink the per-batch file
+ * budget and so can only produce EQUAL-OR-MORE bins/calls than reality, keeping
+ * callsPerModel an over-estimate too, never an under-count.
+ */
+export function describeWorkload(): BenchmarkWorkload {
+  const fixtureRoot = resolveFixtureRoot();
+  const allFixtureRel = listFixtureFiles(fixtureRoot);
+
+  let callsPerModel = 0;
+  let promptCharsPerModel = 0;
+
+  for (const c of SEARCH_EXISTING_CASES) {
+    const sourceRel = new Set(c.sourceFiles ?? []);
+    const scannedAbs = allFixtureRel
+      .filter((rel) => c.extensions.some((ext) => rel.endsWith(ext)))
+      .filter((rel) => !sourceRel.has(rel))
+      .map((rel) => absFixturePath(fixtureRoot, rel));
+
+    const { groups } = readAndGroupFiles(
+      scannedAbs,
+      FIXED_PROMPT_OVERHEAD_CHARS_PER_CALL,
+      false, // redact_secrets: false — matches the args the runner builds per case
+      DEFAULT_MAX_PAYLOAD_BYTES,
+      null,
+    );
+
+    callsPerModel += groups.length;
+    for (const group of groups) {
+      const groupPaths = group.map((fd) => fd.path);
+      let callChars = FIXED_PROMPT_OVERHEAD_CHARS_PER_CALL;
+      if (groupPaths.length > 1) callChars += buildPerFileSectionPrompt(groupPaths).length;
+      for (const fd of group) callChars += fd.block.length;
+      promptCharsPerModel += callChars;
+    }
+  }
+
+  return {
+    tool: "search_existing_implementations",
+    benchmark: "search-existing",
+    callsPerModel,
+    promptCharsPerModel,
+    maxOutputTokensPerCall: SEARCH_EXISTING_MAX_OUTPUT_TOKENS,
+  };
+}
 
 /**
  * search_existing_implementations has no per-tool default model of its own — it

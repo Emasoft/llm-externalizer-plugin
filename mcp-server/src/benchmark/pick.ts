@@ -117,6 +117,28 @@ export function pickTopN(results: readonly CachedResult[], opts: PickOptions = D
   return survivors.slice(0, opts.topN);
 }
 
+/**
+ * The ':free' models that PASSED a keyword sweep, best-first — exactly the pool
+ * `--apply-free-pool` writes into `free_models`.
+ *
+ * Extracted (P3) because `--update-all --free` needs the SAME rule: two spellings of
+ * "which free models earned their place in the pool" would drift, and the drift would
+ * be invisible until one command wrote a pool the other considered wrong.
+ *
+ * Only ':free' ids are eligible: a $0 open-beta model with no ':free' suffix is
+ * benchmarkable, but config.ts REJECTS it inside `free_models` under free_only — so
+ * pinning one would brick the very config this maintains (see applyFreePoolToSettings).
+ */
+export function passingFreePoolIds(results: readonly CachedResult[]): string[] {
+  return results
+    .filter(
+      (r) =>
+        r.ok && r.pass === true && r.schemaCompliant !== false && r.modelId.endsWith(":free"),
+    )
+    .sort((a, b) => (b.meanF1 ?? 0) - (a.meanF1 ?? 0) || a.latencyMs - b.latencyMs)
+    .map((r) => r.modelId);
+}
+
 /** Read the JSON sidecar produced by `llm-ext-benchmark` (always written
  *  to ~/.llm-externalizer/benchmark-results.json). Throws on missing or
  *  malformed file — the caller can catch and tell the user to run a

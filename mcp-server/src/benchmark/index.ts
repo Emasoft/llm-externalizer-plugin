@@ -29,7 +29,7 @@ import {
   fetchProgrammingModels,
   type QualifiedModel,
 } from "./discover.js";
-import { runBenchmarkOnModel, type RunOutcome } from "./runner.js";
+import { runBenchmarkOnModel, keywordPromptChars, type RunOutcome } from "./runner.js";
 import { scoreRun, type ModelScore } from "./score.js";
 import { renderReport, renderJson } from "./report.js";
 import {
@@ -38,6 +38,7 @@ import {
   applyPicksToSettings,
   applyToolModelToSettings,
   loadCachedReport,
+  passingFreePoolIds,
   pickTopN,
   renderEnsembleBlock,
   ENSEMBLE_SLOTS,
@@ -46,6 +47,9 @@ import {
   type EnsembleSlot,
   type PickedModel,
 } from "./pick.js";
+import { runUpdateAll, type EnsembleSweepRun, type ToolBenchmarkRun } from "./update-all.js";
+import { ASSUMED_MAX_OUTPUT_TOKENS } from "./budget.js";
+import type { BenchmarkWorkload } from "./workload-types.js";
 import { runSecurityTriageBenchmark } from "./security-triage/index.js";
 import { runSearchExistingBenchmark } from "./search-existing/index.js";
 import { runCodeAuditBenchmark } from "./code-task/index.js";
@@ -224,10 +228,43 @@ function benchmarkCachePath(): string {
   return join(getConfigDir(), "benchmark-results.json");
 }
 
+/**
+ * A CONFIG-level refusal that, like a usage error, is true regardless of the
+ * environment — so it must fire BEFORE the API-key preflight.
+ *
+ * A `free_only` profile is the user saying "this configuration must NEVER spend".
+ * --paid / --both would turn that guard off for the duration of the run, letting a CLI
+ * flag silently overrule a standing config-level zero-spend guarantee. We refuse.
+ *
+ * WHY BEFORE preflight: reporting "OPENROUTER_API_KEY not set" for this would send the
+ * caller off fixing the wrong thing — their key is not the problem, their *request* is.
+ * That is exactly the ordering bug P1 fixed for --apply-free-pool, and it is a bug here
+ * for the same reason. (Cost-safety lineage: 31ce212 — money left a real account because
+ * a layer assumed it was allowed to spend.)
+ */
+function refuseUnsafeUpdateAll(opts: CliOptions): CliResult | null {
+  if (!opts.updateAll || opts.updateMode === "free") return null;
+  const settings = loadSettings();
+  if (!settings || !settings.active) return null; // the phase reports a missing profile
+  const active = settings.profiles[settings.active];
+  if (!active) return null;
+  if (!resolveProfile(settings.active, active).freeOnly) return null;
+  return {
+    ok: false,
+    code: 2,
+    summary:
+      `--update-all --${opts.updateMode} refused: profile '${settings.active}' has free_only: true, which means it must never spend. ` +
+      `Run --update-all (free, $0), or turn off free_only in ${getSettingsPath()} first — that is a deliberate decision, not a flag override`,
+  };
+}
+
 async function main(): Promise<CliResult> {
   const opts = parseArgs(process.argv);
   // Usage errors first, environment second — see validateCombinations.
   validateCombinations(opts);
+  // Config-level refusals rank WITH usage errors, not with environment checks.
+  const refusal = refuseUnsafeUpdateAll(opts);
+  if (refusal !== null) return refusal;
   preflight(opts);
 
   // Airtight free_only cost-safety (TRDD-97ef8b63). The benchmark CLI runs as a
@@ -320,6 +357,14 @@ async function main(): Promise<CliResult> {
         if (!opts.includeIds.includes(id)) opts.includeIds.push(id);
       }
     }
+  }
+
+  // --update-all routes to the ONE-COMMAND refresh (P3): discover → requirement-gate →
+  // benchmark → rank + write → report, under the P4 hard spend cap. It runs FIRST
+  // because it SUBSUMES the single-tool flags below — reaching this line with
+  // --update-all set means the whole pipeline, not one benchmark.
+  if (opts.updateAll) {
+    return runUpdateAllPhase(opts);
   }
 
   // --security-triage routes to the security_scan triage benchmark — a wholly
@@ -462,7 +507,13 @@ interface SweepOutcome {
  * and re-implementing the sweep there would be a second source of truth for the
  * roster rules.
  */
-async function runKeywordSweep(opts: CliOptions): Promise<SweepOutcome> {
+async function runKeywordSweep(
+  opts: CliOptions,
+  // P4: --update-all passes a BUDGETED fetch so every keyword call is reserved against
+  // the run's spend cap before it is sent. Undefined elsewhere → plain global fetch,
+  // i.e. production behavior for every pre-existing caller is byte-for-byte unchanged.
+  fetchImpl?: (url: string, init: RequestInit) => Promise<Response>,
+): Promise<SweepOutcome> {
   const fixturesDir = resolveFixturesDir();
   const truth = buildGroundTruth(fixturesDir, BENCHMARK_KEYWORDS);
 
@@ -544,6 +595,7 @@ async function runKeywordSweep(opts: CliOptions): Promise<SweepOutcome> {
       xTitle: "llm-externalizer-benchmark",
       reasoningEffort: opts.reasoningEffort,
       seed: opts.seed,
+      fetchImpl,
     });
     let score: ModelScore | null = null;
     if (outcome.ok) {
@@ -605,6 +657,166 @@ async function runKeywordSweep(opts: CliOptions): Promise<SweepOutcome> {
     reportPath,
     passers,
     total: results.size,
+  };
+}
+
+/**
+ * --update-all phase (P3 + P4): the WHOLE refresh as one command.
+ *
+ * This function is deliberately thin — it only RESOLVES the environment (which profile,
+ * which settings file, which free pool, how many ensemble slots) and hands the real
+ * pipeline to update-all.ts. Every DECISION (which models qualify, which tools to
+ * benchmark, what to write, when to abort on cost) lives there, in code, tested.
+ * Nothing here is left for an agent to judge.
+ */
+async function runUpdateAllPhase(opts: CliOptions): Promise<CliResult> {
+  const settingsPath = getSettingsPath();
+  const settings = loadSettings();
+  if (!settings || !settings.active) {
+    return {
+      ok: false,
+      code: 2,
+      summary: `--update-all needs an active profile in ${settingsPath}, but none is configured`,
+    };
+  }
+  const profileName = settings.active;
+  const resolved = resolveProfile(profileName, settings.profiles[profileName]);
+
+  // Re-pick exactly as many ensemble slots as the profile ALREADY runs (never a
+  // hard-coded 3): applyPicksToSettings derives `mode` from the pick count, so picking
+  // 3 on a single-model `remote` profile would silently promote it to remote-ensemble —
+  // a config change nobody asked for. Same rule as the P1 rotation path.
+  const currentSlots = [resolved.model, resolved.secondModel, resolved.thirdModel].filter(
+    (m): m is string => typeof m === "string" && m.length > 0,
+  ).length;
+  const ensembleTopN = opts.pickTopN ?? Math.max(1, currentSlots);
+
+  const result = await runUpdateAll(
+    {
+      mode: opts.updateMode,
+      budgetUsd: opts.budgetUsd,
+      dryRun: opts.dryRun,
+      settingsPath,
+      profileName,
+      configuredFreeModels: resolved.freeModels.length > 0 ? resolved.freeModels : FREE_POOL_SEED,
+      qualifyingTopN: opts.qualifyingTopN,
+      ensembleTopN,
+      force: opts.force,
+      mainRoot: resolveMainRoot(),
+      onProgress: (m) => console.error(`[update-all] ${m}`),
+    },
+    {
+      fetchCatalog: () => fetchProgrammingModels(),
+      describeEnsembleWorkload: describeKeywordWorkload,
+      runEnsembleSweep: async ({ models, restrictToModels, fetchImpl, topN }) => {
+        // Reuse the ONE sweep implementation (runKeywordSweep). In FREE mode the roster
+        // must be EXACTLY the resolved zero-cost pool: qualifyingTopN=0 empties the
+        // auto-discovered (paid) candidate list, and the pool rides in as --include
+        // baselines, which bypass the cost filter. Anything else would hand the sweep
+        // paid candidates that the free_only chokepoint then has to skip one by one.
+        const sweepOpts: CliOptions = {
+          ...opts,
+          includeIds: restrictToModels ? [...models] : [...opts.includeIds],
+          qualifyingTopN: restrictToModels ? 0 : opts.qualifyingTopN,
+          dryRun: false,
+          fromCache: false,
+          pickTopN: topN,
+        };
+        const sweep = await runKeywordSweep(sweepOpts, fetchImpl);
+        let picks: PickedModel[] = [];
+        let pickError: string | null = null;
+        try {
+          picks = pickTopN(sweep.results, {
+            topN,
+            minMeanF1: opts.minMeanF1,
+            requireSchema: true,
+          });
+        } catch (err) {
+          // Surface the shortage; update-all leaves the ensemble ALONE rather than
+          // writing a half-picked one. No silent fallback.
+          pickError = (err as Error).message;
+        }
+        const run: EnsembleSweepRun = {
+          picks,
+          pickError,
+          passingFreeIds: passingFreePoolIds(sweep.results),
+          modelsRun: sweep.total,
+          passers: sweep.passers,
+          costUsd: 0, // real spend is booked per-call by the budgeted fetch, not here
+          reportPath: sweep.reportPath,
+        };
+        return run;
+      },
+      runToolBenchmark: async ({ tool, benchmark, models, fetchImpl, force, onProgress }) => {
+        const common = { models, force, fetchImpl, onProgress };
+        switch (benchmark) {
+          case "security-triage": {
+            const r = await runSecurityTriageBenchmark(common);
+            return toolRun(r.recommendedModelId, r.changed, r.selection.eligible.length, r.costUsd, r.mdReportPath);
+          }
+          case "search-existing": {
+            const r = await runSearchExistingBenchmark(common);
+            return toolRun(r.recommendedModelId, r.changed, r.selection.eligible.length, r.costUsd, r.reportPath);
+          }
+          case "code-task": {
+            const r = await runCodeAuditBenchmark(common);
+            return toolRun(r.recommendedModelId, r.changed, r.selection.eligible.length, r.costUsd, r.reportPath);
+          }
+          case "scan-folder": {
+            const r = await runScanFolderBenchmark(common);
+            return toolRun(r.recommendedModelId, r.changed, r.selection.eligible.length, r.costUsd, r.reportPath);
+          }
+          case "check-specs": {
+            const r = await runCheckSpecsBenchmark(common);
+            return toolRun(r.recommendedModelId, r.changed, r.selection.eligible.length, r.costUsd, r.reportPath);
+          }
+          default:
+            // A registry benchmark id with no runner here is a WIRING BUG, not a
+            // condition to tolerate — a silently-skipped tool would report as if it
+            // had been swept. Fail loudly.
+            throw new Error(
+              `--update-all: tool '${tool}' declares benchmark '${benchmark}' in the registry, but no runner is wired for it.`,
+            );
+        }
+      },
+    },
+  );
+
+  return {
+    ok: result.ok,
+    code: result.ok ? 0 : 2,
+    summary: result.summary,
+    reportPath: result.reportPath,
+  };
+}
+
+function toolRun(
+  recommendedModelId: string,
+  changed: boolean,
+  eligibleCount: number,
+  costUsd: number,
+  reportPath: string,
+): ToolBenchmarkRun {
+  return { recommendedModelId, changed, eligibleCount, costUsd, reportPath };
+}
+
+/**
+ * The keyword/ensemble sweep's workload, for the P4 pre-flight estimate. It lives here
+ * (not in update-all.ts) because fixture resolution is this module's job. The prompt
+ * size is computed by the RUNNER's own builders (keywordPromptChars), so it cannot
+ * drift from what actually goes on the wire.
+ */
+function describeKeywordWorkload(): BenchmarkWorkload {
+  const truth = buildGroundTruth(resolveFixturesDir(), BENCHMARK_KEYWORDS);
+  return {
+    tool: "ensemble",
+    benchmark: "keyword-classification",
+    callsPerModel: 1, // one shot per model, by design (the benchmark measures it AS-IS)
+    promptCharsPerModel: keywordPromptChars(truth.keywords, truth.fixtures),
+    // This is the ONE request in the pipeline that declares no max_tokens — see
+    // ASSUMED_MAX_OUTPUT_TOKENS for why an assumption is unavoidable here, and why a
+    // wrong one can cost at most a single call's over-run (the ledger trips on it).
+    maxOutputTokensPerCall: ASSUMED_MAX_OUTPUT_TOKENS,
   };
 }
 

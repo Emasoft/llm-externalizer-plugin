@@ -124,6 +124,10 @@ export default defineConfig({
       'src/benchmark/security-triage/live.test.ts',
       // security-triage casesToGroups — pure cases→DedupGroup transform (Part F wave 3).
       'src/benchmark/security-triage/runner.test.ts',
+      // security-triage P4 pre-flight workload description — derives callsPerModel /
+      // promptCharsPerModel from the real golden dataset + the real judge prompt
+      // builders. No network.
+      'src/benchmark/security-triage/workload.test.ts',
       // Shared same-or-cheaper selection gate (TRDD-828238b5 A6) — generic
       // three-gate math reused by every per-tool selector. No LLM, no network.
       'src/benchmark/select-common.test.ts',
@@ -143,6 +147,10 @@ export default defineConfig({
       'src/benchmark/search-existing/runner.test.ts',
       // search-existing selection gate — criteria identity + winner/incumbent paths.
       'src/benchmark/search-existing/select.test.ts',
+      // search-existing P4 pre-flight workload description — derives callsPerModel /
+      // promptCharsPerModel from the real fixture corpus + the real FFD bin-packing
+      // helper (readAndGroupFiles). No network.
+      'src/benchmark/search-existing/workload.test.ts',
       // scan_folder in-process pipeline core — HERMETIC (fake processFileCheck
       // seam only, real rateLimitedParallel + real report assembly). No network,
       // no module mocking (B1 Phase 3, TRDD-63314265).
@@ -161,6 +169,9 @@ export default defineConfig({
       'src/benchmark/code-task/score.test.ts',
       'src/benchmark/code-task/select.test.ts',
       'src/benchmark/code-task/bench-runner.test.ts',
+      // code_task P4 pre-flight workload description — derives callsPerModel /
+      // promptCharsPerModel from the real dataset + fixtures on disk. No network.
+      'src/benchmark/code-task/workload.test.ts',
       // scan_folder MASS-SEARCH per-tool benchmark (P2c) — twelve files copied
       // VERBATIM from this repo's own src/, three queries whose true MATCH set is
       // DERIVED from the corpus bytes (never hand-listed), a deterministic
@@ -188,6 +199,25 @@ export default defineConfig({
       'src/benchmark/check-specs/score.test.ts',
       'src/benchmark/check-specs/select.test.ts',
       'src/benchmark/check-specs/bench-runner.test.ts',
+      // Pre-flight workload descriptions (P4) — each derives callsPerModel /
+      // promptCharsPerModel from that benchmark's REAL corpus on disk, so a corpus edit
+      // moves the spend estimate automatically and a stale literal can never quietly
+      // under-price a sweep. No network, no LLM.
+      'src/benchmark/scan-folder/workload.test.ts',
+      'src/benchmark/check-specs/workload.test.ts',
+      // ── P3 + P4: --update-all + the HARD SPEND CAP ────────────────────────
+      // The per-call spend chokepoint: reserve-BEFORE-send, book-actual-after, and the
+      // trip latch that stops a sweep dead. The latch is load-bearing because every
+      // runner CATCHES fetch errors (never-throw contract), so a throw alone would be
+      // swallowed and the sweep would keep spending. Real ledger + real wrappers; only
+      // the HTTP wire is a stub.
+      'src/benchmark/budget.test.ts',
+      // The one-command refresh: the requirement gate, the pre-flight estimate + abort,
+      // the mid-sweep abort driven through the REAL ledger, and the benchmark-proven vs
+      // requirement-gated distinction the report must never blur. The catalog and the
+      // per-tool runners are seams; settings.yaml is a REAL file written by the REAL
+      // atomic writers.
+      'src/benchmark/update-all.test.ts',
       // Per-tool model-qualification registry (TRDD-f45eeaa0 framework core).
       'src/model-qualification/registry.test.ts',
       // Cross-tool model assessment (requirements half of the per-tool gate).

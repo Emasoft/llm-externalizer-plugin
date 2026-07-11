@@ -78,6 +78,17 @@ export interface RunnerOptions {
   reasoningEffort?: "low" | "medium" | "high";
   /** Pass a specific seed for models that respect it. */
   seed?: number;
+  /**
+   * Injectable HTTP impl (P4 spend cap). The five per-tool benchmarks already took a
+   * `fetchImpl` seam; the keyword/ensemble sweep did not, so it was the ONE paid path
+   * a spend cap could not see. `--update-all` passes a budgeted wrapper here so every
+   * paid call in the whole pipeline is reserved before it is sent. Defaults to global
+   * fetch — production behavior is unchanged when it is not supplied.
+   *
+   * Global-fetch-shaped (not judge.ts's FetchImpl) on purpose: the retry loop below
+   * reads `resp.headers.get("retry-after")`, which FetchResponse does not carry.
+   */
+  fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
 }
 
 const SYSTEM_PROMPT =
@@ -107,6 +118,21 @@ function buildUserPrompt(keywords: readonly string[], fixtures: readonly Fixture
     `Files:`,
     fileSection,
   ].join("\n");
+}
+
+/**
+ * EXACT prompt characters this runner puts on the wire for ONE model (system + user).
+ *
+ * Exported for the P4 pre-flight spend estimate, and computed by calling the very same
+ * builders the request uses — so the estimate cannot drift from the prompt. A second,
+ * hand-maintained "approximately this big" constant is exactly how a cost estimate
+ * quietly stops matching the thing it claims to price.
+ */
+export function keywordPromptChars(
+  keywords: readonly string[],
+  fixtures: readonly Fixture[],
+): number {
+  return SYSTEM_PROMPT.length + buildUserPrompt(keywords, fixtures).length;
 }
 
 function responseSchema(keywords: readonly string[]): Record<string, unknown> {
@@ -218,12 +244,13 @@ async function runBenchmarkOnModelInner(
   // The chokepoint guard above still applies, so this only burns wall-clock,
   // never $. Non-429 HTTP errors (4xx/5xx) skip the retry and return ERR.
   const MAX_429_RETRIES = 3;
+  const doFetch = options.fetchImpl ?? ((url: string, init: RequestInit): Promise<Response> => fetch(url, init));
   let resp: Response;
   let rawText: string;
   let attempt = 0;
   while (true) {
     try {
-      resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      resp = await doFetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers,
         body: JSON.stringify(requestBody),

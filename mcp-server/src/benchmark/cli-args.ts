@@ -9,6 +9,7 @@
  */
 
 import { DEFAULT_CRITERIA } from "./discover.js";
+import { DEFAULT_BUDGET_USD } from "./budget.js";
 
 export interface CliOptions {
   includeIds: string[];
@@ -108,7 +109,24 @@ export interface CliOptions {
   adoptInto: string | null;
   /** Profile --adopt writes to. Default: the active profile. */
   adoptProfile: string | null;
+  /** Run the WHOLE refresh in one command (P3): discover → requirement-gate →
+   *  benchmark → rank + write → report. Zero decisions left to a human or an agent. */
+  updateAll: boolean;
+  /** What --update-all is allowed to spend money on.
+   *
+   *  DEFAULTS TO "free" — the single most important cost-safety property of this CLI.
+   *  A bare `--update-all` CANNOT spend a cent: it sweeps only zero-cost models, under
+   *  the free_only chokepoint. Money is at risk ONLY when the operator TYPES --paid or
+   *  --both, and even then it is capped by --budget-usd. (Commit 31ce212 fixed a defect
+   *  that drained $17.67 in an hour; a spend-by-default flag would invite the sequel.) */
+  updateMode: UpdateModeFlag;
+  /** HARD spend cap for --update-all, in USD (P4). Enforced twice: a pre-flight estimate
+   *  aborts before the first call, and budget.ts reserves each call before sending it. */
+  budgetUsd: number;
 }
+
+/** `--free` (default) | `--paid` | `--both`. */
+export type UpdateModeFlag = "free" | "paid" | "both";
 
 /** Code default for the pre-benchmark candidate cap (see CliOptions.qualifyingTopN).
  *  15 ≈ 15 min / well under $0.10 for a keyword sweep — the bound the command's
@@ -150,6 +168,21 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     adoptModel: null,
     adoptInto: null,
     adoptProfile: null,
+    updateAll: false,
+    updateMode: "free",
+    budgetUsd: DEFAULT_BUDGET_USD,
+  };
+  // The mode flags are mutually exclusive: `--free --paid` has no coherent meaning, and
+  // silently letting the last one win would decide — without saying so — whether the run
+  // can spend money. That is exactly the class of silent decision this CLI exists to kill.
+  let modeFlag: UpdateModeFlag | null = null;
+  let budgetSeen = false;
+  const setMode = (m: UpdateModeFlag): void => {
+    if (modeFlag !== null && modeFlag !== m) {
+      throw new Error(`--free, --paid and --both are mutually exclusive (got --${modeFlag} and --${m})`);
+    }
+    modeFlag = m;
+    opts.updateMode = m;
   };
   // Consume the value that must follow a value-taking flag. If the flag is the
   // last token, or the next token is itself a flag, fail fast — silently
@@ -284,12 +317,38 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       opts.autoReplace = true;
     } else if (a === "--apply") {
       opts.apply = true;
+    } else if (a === "--update-all") {
+      opts.updateAll = true;
+    } else if (a === "--free") {
+      setMode("free");
+    } else if (a === "--paid") {
+      setMode("paid");
+    } else if (a === "--both") {
+      setMode("both");
+    } else if (a === "--budget-usd") {
+      const rawBudget = takeValue(a, i);
+      i++;
+      const v = parseFloat(rawBudget);
+      // A non-positive or non-finite cap is not "unlimited", it is a typo. Refusing it
+      // is the whole point: a cap you cannot trust is worse than no cap, because it
+      // reads like protection. (Use --free for a genuinely $0 run.)
+      if (!Number.isFinite(v) || v <= 0) {
+        throw new Error(`--budget-usd must be a positive USD amount, got '${rawBudget}'`);
+      }
+      opts.budgetUsd = v;
+      budgetSeen = true;
     } else if (a === "--help" || a === "-h") {
       printHelp();
       process.exit(0);
     } else {
       throw new Error(`unknown flag: ${a}`);
     }
+  }
+  // A mode/budget flag with no --update-all is a SILENT NO-OP — the user typed a
+  // cost-safety instruction that would be ignored. That is the one failure mode a
+  // spend cap can never have, so it is a usage error, not a shrug.
+  if (!opts.updateAll && (modeFlag !== null || budgetSeen)) {
+    throw new Error("--free / --paid / --both / --budget-usd only apply to --update-all");
   }
   return opts;
 }
@@ -334,6 +393,29 @@ export function printHelp(): void {
       "                    re-applying a fresh selection without burning more calls.",
       "  --min-f1 F        Threshold a model must hit (default 0.95) to be eligible",
       "                    for top-N. 0..1.",
+      "",
+      "THE WHOLE REFRESH IN ONE COMMAND (P3) — zero decisions left to you or an agent:",
+      "  --update-all      discover -> requirement-gate -> benchmark -> rank + write -> report.",
+      "                    Fetches the live catalog, applies each tool's requirements from",
+      "                    the registry, runs every tool that HAS a benchmark, and writes",
+      "                    the winners: the ensemble (model/second/third), each",
+      "                    tool_models.<tool>, and the free_models pool. Atomic. CLI-only.",
+      "                    Ends with ONE [OK]/[FAILED] line + a report path.",
+      "",
+      "  --free            DEFAULT. Sweep only ZERO-COST models. Provably $0 — the free_only",
+      "                    chokepoint refuses a priced model BEFORE the request is sent, so a",
+      "                    bare `--update-all` cannot spend a cent. Also performs the",
+      "                    FREE-MODELS SEARCH: discovers zero-cost models from the live",
+      "                    catalog, verifies them, and REWRITES free_models (no hand-editing).",
+      "  --paid            Sweep the PRICED catalog. Spends real money, hard-capped below.",
+      "  --both            The free phase, then the paid phase, on ONE shared budget.",
+      `  --budget-usd X    HARD spend cap for --paid/--both. Default $${DEFAULT_BUDGET_USD.toFixed(2)}.`,
+      "                    Enforced TWICE: (1) a worst-case pre-flight estimate ABORTS the run",
+      "                    before the first call if it exceeds the cap (and prints the exact",
+      "                    --budget-usd that would authorize it); (2) every single call is",
+      "                    reserved against the cap before it is sent, so the cap cannot be",
+      "                    crossed by a call we chose to make. --dry-run prints the full plan",
+      "                    and the estimate and spends NOTHING.",
       "",
       "Free-pool sweep (TRDD-f1510055):",
       "  --bench-free-pool Auto-fill the candidate set from the active profile's",
