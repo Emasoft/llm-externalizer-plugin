@@ -2,12 +2,12 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "LLM Externalizer",
   "description": "MCP server that connects Claude to local LLMs (LM Studio, Ollama, vLLM, llama.cpp) and remote models via OpenRouter. Read-only by design: persistent settings at ~/.llm-externalizer/settings.yaml are user-edited by hand, then reloaded via the reset tool.",
-  "version": "10.2.0",
+  "version": "10.2.1",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "llm-externalizer",
-      "version": "10.2.0",
+      "version": "10.2.1",
       "transport": {
         "type": "stdio"
       },

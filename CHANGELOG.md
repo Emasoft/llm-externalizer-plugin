@@ -1,6 +1,27 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [10.2.1] - 2026-07-11
+
+### Fixed
+
+- Fix(mcp): boot server under launcher import (argv[1] entry-guard) — fixes -32001
+
+index.ts boots main() only when it is the process entry point (realpath(argv[1])
+=== its own module path — a cost-safety guard, TRDD-e82f2c49, so test-imports
+never boot the server + hit a backend). The MCP server launches as
+`node launcher.mjs`, which hands off via `await import(dist/index.js)`; that
+does NOT change argv[1], so the guard was false, main() never ran, and the
+server answered nothing → Claude Code -32001. The launcher now points argv[1]
+at the index path before importing, satisfying the guard for the launcher path
+only (test-imports never go through the launcher and stay correctly un-booted).
+
+All 1543 prior tests passed while the shipped server did not boot because every
+test imports index.ts directly and none exercised the launcher handoff. Adds
+src/launcher-boot.test.ts, which spawns the REAL launcher and completes a real
+MCP initialize — proven to FAIL without the fix (30s no-response) and PASS with.
+
+
 ## [10.2.0] - 2026-07-11
 
 ### Added
