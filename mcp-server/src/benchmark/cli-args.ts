@@ -67,6 +67,12 @@ export interface CliOptions {
    *  tokens following the flag). When empty, the benchmark auto-discovers the
    *  same-or-cheaper candidate pool. */
   scanFolderModels: string[];
+  /** Run the check_against_specs SPEC-ADHERENCE benchmark instead of the keyword task (P2d). */
+  checkSpecs: boolean;
+  /** Explicit model id(s) to assess in --check-specs mode (variadic — any non-flag
+   *  tokens following the flag). When empty, the benchmark auto-discovers the
+   *  same-or-cheaper candidate pool. */
+  checkSpecsModels: string[];
   /** Ignore the per-model-per-day cache (currently only --security-triage). */
   force: boolean;
   /** Assess one model against EVERY tool's per-tool requirements (no LLM call). */
@@ -130,6 +136,8 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     codeTaskModels: [],
     scanFolder: false,
     scanFolderModels: [],
+    checkSpecs: false,
+    checkSpecsModels: [],
     force: false,
     assessModel: null,
     checkHealth: false,
@@ -245,6 +253,15 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       opts.scanFolder = true;
       while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
         opts.scanFolderModels.push(argv[i + 1]);
+        i++;
+      }
+    } else if (a === "--check-specs") {
+      // Variadic, exactly like --scan-folder: `--check-specs a/b c/d` assesses those
+      // two; with no trailing tokens the benchmark auto-discovers the same-or-cheaper
+      // candidate pool.
+      opts.checkSpecs = true;
+      while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
+        opts.checkSpecsModels.push(argv[i + 1]);
         i++;
       }
     } else if (a === "--model") {
@@ -398,9 +415,29 @@ export function printHelp(): void {
       "  Never auto-selects a pricier model. ADVISORY unless --apply-profile P is",
       "  given, which writes the winner into P's `tool_models.scan_folder` (CLI-only).",
       "",
+      "check_against_specs SPEC-ADHERENCE benchmark (separate task — per-file CLEAN/VIOLATION):",
+      "  --check-specs [ID...]",
+      "                    Run the check_against_specs spec-adherence benchmark instead",
+      "                    of the keyword task. Drives the REAL check_against_specs",
+      "                    pipeline (one LLM call per file) over this repo's own shipped",
+      "                    TESTING.md and thirteen VERBATIM git snapshots — four of them",
+      "                    the exact pre-fix bytes a real cost-safety commit replaced,",
+      "                    each sitting next to its own fixed twin — and scores it",
+      "                    DETERMINISTICALLY: precision/recall/F1 over the per-file",
+      "                    CLEAN/VIOLATION verdicts, no LLM judge. The cited rule and the",
+      "                    severity are reported but NOT graded (that would need a judge).",
+      "                    Pass explicit model id(s) after the flag to assess exactly",
+      "                    those; with none, auto-discovers the same-or-cheaper candidate",
+      "                    pool. Writes a report under reports/check-specs-benchmark/.",
+      "                    Composes with --force.",
+      "  Pass gate: micro-F1 >= 0.80 AND micro-recall >= 0.70 AND coverage >= 0.90.",
+      "  Never auto-selects a pricier model. ADVISORY unless --apply-profile P is given,",
+      "  which writes the winner into P's `tool_models.check_against_specs` (CLI-only).",
+      "",
       "Cross-tool auto-replacement (TRDD-828238b5 A7 — the writer path):",
       "  --auto-replace    For every benchmarked tool (security_scan,",
-      "                    search_existing_implementations, code_task, scan_folder),",
+      "                    search_existing_implementations, code_task, scan_folder,",
+      "                    check_against_specs),",
       "                    check its incumbent",
       "                    model's health against the durable ledger and, when",
       "                    degraded (or with --force), run that tool's benchmark to",

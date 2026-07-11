@@ -176,6 +176,18 @@ export default defineConfig({
       // + grouping + report assembly). Covers per-file / batched / grouped modes.
       // No network, no module mocking (P2a, zero-token model pipeline).
       'src/benchmark/check-specs/runner.test.ts',
+      // check_against_specs SPEC-ADHERENCE per-tool benchmark (P2d) — this repo's own
+      // shipped TESTING.md audited over thirteen VERBATIM git snapshots, four of them
+      // the exact pre-fix bytes a real cost-safety commit replaced, each next to its
+      // own fixed twin. Deterministic judge-free per-file CLEAN/VIOLATION scorer + the
+      // same-or-cheaper gate. bench-runner.test.ts is HERMETIC (fake FetchImpl seam
+      // only; real pipeline, real prompt, real fixtures, real scorer) and ASSERTS that
+      // four code-blind baselines FAIL the gate — the corpus cannot decay into
+      // something a grep could pass. No LLM, no network.
+      'src/benchmark/check-specs/dataset.test.ts',
+      'src/benchmark/check-specs/score.test.ts',
+      'src/benchmark/check-specs/select.test.ts',
+      'src/benchmark/check-specs/bench-runner.test.ts',
       // Per-tool model-qualification registry (TRDD-f45eeaa0 framework core).
       'src/model-qualification/registry.test.ts',
       // Cross-tool model assessment (requirements half of the per-tool gate).

@@ -4,9 +4,9 @@
  * The durable model-health ledger (A1) records every per-call mitigation event
  * keyed by model id, and `aggregateModelHealth` (model-events.ts) turns a window
  * of those events into a per-model `degraded` verdict. The per-tool benchmarks
- * (security-triage, search-existing, code-task, scan-folder) already know how to
- * score candidate models and pick the best same-or-cheaper passer. This module
- * joins the two:
+ * (security-triage, search-existing, code-task, scan-folder, check-specs) already
+ * know how to score candidate models and pick the best same-or-cheaper passer.
+ * This module joins the two:
  *
  *   for every tool that HAS a benchmark, ask "is its incumbent model degraded?"
  *   and, if so (or when the operator forces an explicit audit), run that tool's
@@ -26,7 +26,7 @@
  *                          chain).
  *   - `benchmarkRunner`  — runs a tool's benchmark over candidates (defaults to
  *                          dispatching to the real security-triage / search-existing /
- *                          code-task / scan-folder orchestrator by the registry's
+ *                          code-task / scan-folder / check-specs orchestrator by the registry's
  *                          `.benchmark` string).
  *   - `eventsPath`       — the ledger file to aggregate (defaults to the real
  *                          model-events.log via readModelEvents).
@@ -53,6 +53,7 @@ import { runSecurityTriageBenchmark } from "../benchmark/security-triage/index.j
 import { runSearchExistingBenchmark } from "../benchmark/search-existing/index.js";
 import { runCodeAuditBenchmark } from "../benchmark/code-task/index.js";
 import { runScanFolderBenchmark } from "../benchmark/scan-folder/index.js";
+import { runCheckSpecsBenchmark } from "../benchmark/check-specs/index.js";
 
 /** A model the benchmark rejected (mirrors the selectors' RejectedCandidate). */
 export interface RejectedReplacement {
@@ -245,6 +246,20 @@ async function defaultBenchmarkRunner(
       rejected: r.selection.rejected,
     };
   }
+  if (benchmark === "check-specs") {
+    const r = await runCheckSpecsBenchmark({
+      apiKey,
+      models: candidates,
+      incumbentModelId,
+      onProgress,
+    });
+    return {
+      recommendedModelId: r.recommendedModelId,
+      changed: r.changed,
+      reason: r.selection.reason,
+      rejected: r.selection.rejected,
+    };
+  }
   throw new Error(
     `defaultBenchmarkRunner: no orchestrator wired for benchmark '${benchmark}' (tool '${tool}'). ` +
       `The model-qualification registry declared a benchmark the auto-replace dispatcher does not know — ` +
@@ -265,7 +280,8 @@ function benchmarkedTools(): { tool: string; benchmark: string }[] {
       descriptor.benchmark === "security-triage" ||
       descriptor.benchmark === "search-existing" ||
       descriptor.benchmark === "code-task" ||
-      descriptor.benchmark === "scan-folder"
+      descriptor.benchmark === "scan-folder" ||
+      descriptor.benchmark === "check-specs"
     ) {
       out.push({ tool, benchmark: descriptor.benchmark });
     }
@@ -370,7 +386,7 @@ export async function planToolReplacements(
 // ── ENSEMBLE coverage (P1 zero-token model pipeline) ─────────────────────────
 //
 // The planner above only covers tools that have a per-tool SELECTOR benchmark
-// (security-triage, search-existing, code-task, scan-folder) — see
+// (security-triage, search-existing, code-task, scan-folder, check-specs) — see
 // benchmarkedTools()'s scoping comment.
 // That left the ensemble slots (`model` / `second_model` / `third_model`), which
 // serve EVERY other tool, with no automated health verdict at all: when one of them

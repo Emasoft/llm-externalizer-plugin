@@ -114,8 +114,8 @@ export const TOOL_MODEL_REGISTRY: Record<string, ToolModelDescriptor> = {
   check_against_specs: {
     tool: "check_against_specs",
     requirements: criteria({ requireReasoning: false }),
-    benchmark: null,
-    note: "Source-vs-specification compliance. Validation-accuracy benchmark dataset is incremental.",
+    benchmark: "check-specs",
+    note: "Source-vs-specification compliance. Gated by the spec-adherence benchmark (P2d): this repo's own shipped TESTING.md audited over thirteen verbatim git snapshots — four of them the exact pre-fix bytes a real cost-safety commit replaced — scored deterministically on the per-file CLEAN/VIOLATION verdict, no LLM judge. Violation CONTENT (the cited rule, the severity) is deliberately NOT graded: that needs a judge.",
   },
   compare_files: {
     tool: "compare_files",

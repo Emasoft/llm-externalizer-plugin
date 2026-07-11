@@ -1,0 +1,132 @@
+/**
+ * Shared test infrastructure for LLM Externalizer MCP server tests.
+ *
+ * Uses the real ~/.llm-externalizer/settings.yaml — the same file the
+ * server uses. Tests exercise the real config pipeline with the real
+ * backend configured by the user.
+ *
+ * Usage:
+ *   import { resolveTestConfig, createTestClient } from './test-helpers';
+ *   const config = resolveTestConfig({ testName: 'unit' });
+ *   const { client, transport } = await createTestClient(config);
+ */
+
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { copyFileSync, existsSync, mkdtempSync } from "node:fs";
+import {
+  type ResolvedProfile,
+  validateSettings,
+  resolveProfile,
+  ensureSettingsExist,
+  getSettingsPath,
+} from "./config.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/** Path to the compiled server entry point */
+export const SERVER_SCRIPT = join(__dirname, "..", "dist", "index.js");
+
+// ── Exported types and functions ─────────────────────────────────────
+
+export interface TestConfig {
+  /** Active profile name */
+  activeProfile: string;
+  /** Resolved profile with concrete connection values */
+  resolved: ResolvedProfile;
+  /** Timeout in seconds */
+  timeout: number;
+  /** Unique test suite name — used for output dir naming */
+  testName: string;
+}
+
+export interface TestConfigOptions {
+  /** Unique test suite name — used for output dir naming (e.g. 'unit', 'live', 'extended') */
+  testName: string;
+  /** Override timeout in seconds */
+  timeout?: number;
+}
+
+/**
+ * Reads the real settings.yaml (same file the server uses) and resolves
+ * the active profile. Tests use the real configuration — no temp configs.
+ */
+export function resolveTestConfig(options: TestConfigOptions): TestConfig {
+  const settings = ensureSettingsExist();
+  const validation = validateSettings(settings);
+  if (!validation.valid) {
+    throw new Error(
+      `Test config validation failed:\n${validation.errors.map((e) => `  - ${e}`).join("\n")}\n` +
+        `Settings file: ${getSettingsPath()}`,
+    );
+  }
+
+  const profile = settings.profiles[settings.active];
+  const resolved = resolveProfile(settings.active, profile);
+  const timeout = options.timeout ?? resolved.timeout;
+
+  return { activeProfile: settings.active, resolved, timeout, testName: options.testName };
+}
+
+/**
+ * Create an MCP client connected to the server process.
+ * The server reads its own settings.yaml — no env overrides needed.
+ */
+export async function createTestClient(
+  config: TestConfig,
+  clientName = "test-client",
+): Promise<{ client: Client; transport: StdioClientTransport; timeoutMs: number }> {
+  const outputDir = `/tmp/__llm_ext_${config.testName}_output`;
+  const timeoutMs = config.timeout * 1000;
+
+  // Isolate the spawned server's config dir so its usage-history.log (and any
+  // settings-edit side effects) land in a throwaway /tmp dir instead of the
+  // developer's real ~/.llm-externalizer/. We copy the real settings.yaml into
+  // the tmp dir first so the server still resolves the real backend the tests
+  // depend on. /tmp (not os.tmpdir) because getConfigDir() only permits $HOME
+  // or /tmp. Resolve the real settings path BEFORE overriding the env var.
+  const realSettingsPath = getSettingsPath();
+  const tmpConfigDir = mkdtempSync("/tmp/__llm_ext_cfg_");
+  if (existsSync(realSettingsPath)) {
+    copyFileSync(realSettingsPath, join(tmpConfigDir, "settings.yaml"));
+  }
+
+  const transport = new StdioClientTransport({
+    command: "node",
+    args: [SERVER_SCRIPT],
+    env: {
+      ...process.env,
+      // Output .md files go to a temp dir so they don't accumulate
+      LLM_OUTPUT_DIR: outputDir,
+      // History + settings-edit side effects stay in the throwaway dir.
+      LLM_EXT_CONFIG_DIR: tmpConfigDir,
+      // Never let the spawned test server install the usage rule into the real
+      // ~/.claude/rules/ (the startup installer is opt-out via this var).
+      LLM_EXT_INSTALL_RULE: "0",
+    },
+    stderr: "pipe",
+  });
+
+  // Drain the server's stderr into the parent's stderr. If we leave the
+  // piped stderr unconsumed, the PassThrough buffer fills, backpressure
+  // propagates to the child's stderr, the OS pipe buffer (~64 KB) fills,
+  // and the server blocks on its next `process.stderr.write(...)` — which
+  // hangs the entire test. Attach the consumer BEFORE connect() so no
+  // early startup output is lost.
+  transport.stderr?.pipe(process.stderr);
+
+  const client = new Client(
+    { name: clientName, version: "1.0.0" },
+    { capabilities: {} },
+  );
+
+  try {
+    await client.connect(transport);
+  } catch (err) {
+    await transport.close();
+    throw err;
+  }
+  return { client, transport, timeoutMs };
+}

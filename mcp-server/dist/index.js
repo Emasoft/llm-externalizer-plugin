@@ -10320,7 +10320,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve14.call(this, root, ref);
+      let _sch = resolve15.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a2 = root.localRefs) === null || _a2 === void 0 ? void 0 : _a2[ref];
         const { schemaId } = this.opts;
@@ -10347,7 +10347,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve14(root, ref) {
+    function resolve15(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -10978,7 +10978,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve14(baseURI, relativeURI, options) {
+    function resolve15(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -11236,7 +11236,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve14,
+      resolve: resolve15,
       resolveComponent,
       equal,
       serialize,
@@ -11574,8 +11574,8 @@ var require_core = __commonJS({
             return this;
           }
           case "object": {
-            const cacheKey5 = schemaKeyRef;
-            this._cache.delete(cacheKey5);
+            const cacheKey6 = schemaKeyRef;
+            this._cache.delete(cacheKey6);
             let id = schemaKeyRef[this.opts.schemaId];
             if (id) {
               id = (0, resolve_1.normalizeId)(id);
@@ -22864,7 +22864,7 @@ ${lanes.join("\n")}
               return process.memoryUsage().heapUsed;
             },
             getFileSize(path) {
-              const stat = statSync12(path);
+              const stat = statSync13(path);
               if (stat == null ? void 0 : stat.isFile()) {
                 return stat.size;
               }
@@ -22908,7 +22908,7 @@ ${lanes.join("\n")}
             }
           };
           return nodeSystem;
-          function statSync12(path) {
+          function statSync13(path) {
             try {
               return _fs.statSync(path, statSyncOptions);
             } catch {
@@ -22967,7 +22967,7 @@ ${lanes.join("\n")}
               activeSession.post("Profiler.stop", (err3, { profile }) => {
                 var _a2;
                 if (!err3) {
-                  if ((_a2 = statSync12(profilePath)) == null ? void 0 : _a2.isDirectory()) {
+                  if ((_a2 = statSync13(profilePath)) == null ? void 0 : _a2.isDirectory()) {
                     profilePath = _path.join(profilePath, `${(/* @__PURE__ */ new Date()).toISOString().replace(/:/g, "-")}+P${process.pid}.cpuprofile`);
                   }
                   try {
@@ -23087,7 +23087,7 @@ ${lanes.join("\n")}
                 let stat;
                 if (typeof dirent === "string" || dirent.isSymbolicLink()) {
                   const name = combinePaths(path, entry);
-                  stat = statSync12(name);
+                  stat = statSync13(name);
                   if (!stat) {
                     continue;
                   }
@@ -23111,7 +23111,7 @@ ${lanes.join("\n")}
             return matchFiles(path, extensions, excludes, includes, useCaseSensitiveFileNames2, process.cwd(), depth, getAccessibleFileSystemEntries, realpath);
           }
           function fileSystemEntryExists(path, entryKind) {
-            const stat = statSync12(path);
+            const stat = statSync13(path);
             if (!stat) {
               return false;
             }
@@ -23153,7 +23153,7 @@ ${lanes.join("\n")}
           }
           function getModifiedTime3(path) {
             var _a2;
-            return (_a2 = statSync12(path)) == null ? void 0 : _a2.mtime;
+            return (_a2 = statSync13(path)) == null ? void 0 : _a2.mtime;
           }
           function setModifiedTime(path, time3) {
             try {
@@ -75969,9 +75969,9 @@ ${lanes.join("\n")}
             const originalModuleSpecifier = canHaveModuleSpecifier(enclosingDeclaration) ? tryGetModuleSpecifierFromDeclaration(enclosingDeclaration) : void 0;
             const contextFile = context.enclosingFile;
             const resolutionMode = overrideImportMode || originalModuleSpecifier && host.getModeForUsageLocation(contextFile, originalModuleSpecifier) || contextFile && host.getDefaultResolutionModeForFile(contextFile);
-            const cacheKey5 = createModeAwareCacheKey(contextFile.path, resolutionMode);
+            const cacheKey6 = createModeAwareCacheKey(contextFile.path, resolutionMode);
             const links = getSymbolLinks(symbol2);
-            let specifier = links.specifierCache && links.specifierCache.get(cacheKey5);
+            let specifier = links.specifierCache && links.specifierCache.get(cacheKey6);
             if (!specifier) {
               const isBundle2 = !!compilerOptions.outFile;
               const { moduleResolverHost } = context.tracker;
@@ -75989,7 +75989,7 @@ ${lanes.join("\n")}
                 { overrideImportMode }
               ));
               links.specifierCache ?? (links.specifierCache = /* @__PURE__ */ new Map());
-              links.specifierCache.set(cacheKey5, specifier);
+              links.specifierCache.set(cacheKey6, specifier);
             }
             return specifier;
           }
@@ -92203,12 +92203,12 @@ ${lanes.join("\n")}
           );
         }
         function inferTypeForHomomorphicMappedType(source, target, constraint) {
-          const cacheKey5 = source.id + "," + target.id + "," + constraint.id;
-          if (reverseHomomorphicMappedCache.has(cacheKey5)) {
-            return reverseHomomorphicMappedCache.get(cacheKey5);
+          const cacheKey6 = source.id + "," + target.id + "," + constraint.id;
+          if (reverseHomomorphicMappedCache.has(cacheKey6)) {
+            return reverseHomomorphicMappedCache.get(cacheKey6);
           }
           const type = createReverseMappedType(source, target, constraint);
-          reverseHomomorphicMappedCache.set(cacheKey5, type);
+          reverseHomomorphicMappedCache.set(cacheKey6, type);
           return type;
         }
         function isPartiallyInferableType(type) {
@@ -92258,9 +92258,9 @@ ${lanes.join("\n")}
           return getTypeFromInference(inference) || unknownType2;
         }
         function inferReverseMappedType(source, target, constraint) {
-          const cacheKey5 = source.id + "," + target.id + "," + constraint.id;
-          if (reverseMappedCache.has(cacheKey5)) {
-            return reverseMappedCache.get(cacheKey5) || unknownType2;
+          const cacheKey6 = source.id + "," + target.id + "," + constraint.id;
+          if (reverseMappedCache.has(cacheKey6)) {
+            return reverseMappedCache.get(cacheKey6) || unknownType2;
           }
           reverseMappedSourceStack.push(source);
           reverseMappedTargetStack.push(target);
@@ -92274,7 +92274,7 @@ ${lanes.join("\n")}
           reverseMappedSourceStack.pop();
           reverseMappedTargetStack.pop();
           reverseExpandingFlags = saveExpandingFlags;
-          reverseMappedCache.set(cacheKey5, type);
+          reverseMappedCache.set(cacheKey6, type);
           return type;
         }
         function* getUnmatchedProperties(source, target, requireOptionalProperties, matchDiscriminantProperties) {
@@ -109099,11 +109099,11 @@ ${lanes.join("\n")}
           }
           return noIterationTypes;
         }
-        function getCachedIterationTypes(type, cacheKey5) {
-          return type[cacheKey5];
+        function getCachedIterationTypes(type, cacheKey6) {
+          return type[cacheKey6];
         }
-        function setCachedIterationTypes(type, cacheKey5, cachedTypes2) {
-          return type[cacheKey5] = cachedTypes2;
+        function setCachedIterationTypes(type, cacheKey6, cachedTypes2) {
+          return type[cacheKey6] = cachedTypes2;
         }
         function getIterationTypesOfIterable(type, use, errorNode) {
           var _a2, _b;
@@ -109131,8 +109131,8 @@ ${lanes.join("\n")}
             }
             return iterationTypes2;
           }
-          const cacheKey5 = use & 2 ? "iterationTypesOfAsyncIterable" : "iterationTypesOfIterable";
-          const cachedTypes2 = getCachedIterationTypes(type, cacheKey5);
+          const cacheKey6 = use & 2 ? "iterationTypesOfAsyncIterable" : "iterationTypesOfIterable";
+          const cachedTypes2 = getCachedIterationTypes(type, cacheKey6);
           if (cachedTypes2) return cachedTypes2 === noIterationTypes ? void 0 : cachedTypes2;
           let allIterationTypes;
           for (const constituent of type.types) {
@@ -109145,7 +109145,7 @@ ${lanes.join("\n")}
                   addRelatedInfo(rootDiag, ...errorOutputContainer.errors);
                 }
               }
-              setCachedIterationTypes(type, cacheKey5, noIterationTypes);
+              setCachedIterationTypes(type, cacheKey6, noIterationTypes);
               return void 0;
             } else if ((_b = errorOutputContainer == null ? void 0 : errorOutputContainer.errors) == null ? void 0 : _b.length) {
               for (const diag2 of errorOutputContainer.errors) {
@@ -109155,7 +109155,7 @@ ${lanes.join("\n")}
             allIterationTypes = append(allIterationTypes, iterationTypes2);
           }
           const iterationTypes = allIterationTypes ? combineIterationTypes(allIterationTypes) : noIterationTypes;
-          setCachedIterationTypes(type, cacheKey5, iterationTypes);
+          setCachedIterationTypes(type, cacheKey6, iterationTypes);
           return iterationTypes === noIterationTypes ? void 0 : iterationTypes;
         }
         function getAsyncFromSyncIterationTypes(iterationTypes, errorNode) {
@@ -124757,8 +124757,8 @@ ${lanes.join("\n")}
             /*allowSourceMaps*/
             true
           );
-          const decorate5 = emitHelpers().createDecorateHelper(decoratorExpressions, localName);
-          const expression = factory2.createAssignment(localName, classAlias ? factory2.createAssignment(classAlias, decorate5) : decorate5);
+          const decorate6 = emitHelpers().createDecorateHelper(decoratorExpressions, localName);
+          const expression = factory2.createAssignment(localName, classAlias ? factory2.createAssignment(classAlias, decorate6) : decorate6);
           setEmitFlags(
             expression,
             3072
@@ -137939,7 +137939,7 @@ ${lanes.join("\n")}
           }
         }
         function createImportCallExpressionAMD(arg, containsLexicalThis) {
-          const resolve14 = factory2.createUniqueName("resolve");
+          const resolve15 = factory2.createUniqueName("resolve");
           const reject = factory2.createUniqueName("reject");
           const parameters = [
             factory2.createParameterDeclaration(
@@ -137948,7 +137948,7 @@ ${lanes.join("\n")}
               /*dotDotDotToken*/
               void 0,
               /*name*/
-              resolve14
+              resolve15
             ),
             factory2.createParameterDeclaration(
               /*modifiers*/
@@ -137965,7 +137965,7 @@ ${lanes.join("\n")}
                 factory2.createIdentifier("require"),
                 /*typeArguments*/
                 void 0,
-                [factory2.createArrayLiteralExpression([arg || factory2.createOmittedExpression()]), resolve14, reject]
+                [factory2.createArrayLiteralExpression([arg || factory2.createOmittedExpression()]), resolve15, reject]
               )
             )
           ]);
@@ -212211,16 +212211,16 @@ ${options.prefix}` : "\n" : options.prefix
         isEnabled: () => false,
         writeLine: noop
       };
-      function typingToFileName(cachePath5, packageName, installTypingHost, log) {
+      function typingToFileName(cachePath6, packageName, installTypingHost, log) {
         try {
-          const result = resolveModuleName(packageName, combinePaths(cachePath5, "index.d.ts"), {
+          const result = resolveModuleName(packageName, combinePaths(cachePath6, "index.d.ts"), {
             moduleResolution: 2
             /* Node10 */
           }, installTypingHost);
           return result.resolvedModule && result.resolvedModule.resolvedFileName;
         } catch (e) {
           if (log.isEnabled()) {
-            log.writeLine(`Failed to resolve ${packageName} in folder '${cachePath5}': ${e.message}`);
+            log.writeLine(`Failed to resolve ${packageName} in folder '${cachePath6}': ${e.message}`);
           }
           return void 0;
         }
@@ -212492,7 +212492,7 @@ ${options.prefix}` : "\n" : options.prefix
             this.installTypingHost.writeFile(npmConfigPath, '{ "private": true }');
           }
         }
-        installTypings(req, cachePath5, currentlyCachedTypings, typingsToInstall) {
+        installTypings(req, cachePath6, currentlyCachedTypings, typingsToInstall) {
           if (this.log.isEnabled()) {
             this.log.writeLine(`Installing typings ${JSON.stringify(typingsToInstall)}`);
           }
@@ -212504,7 +212504,7 @@ ${options.prefix}` : "\n" : options.prefix
             this.sendResponse(this.createSetTypings(req, currentlyCachedTypings));
             return;
           }
-          this.ensurePackageDirectoryExists(cachePath5);
+          this.ensurePackageDirectoryExists(cachePath6);
           const requestId = this.installRunCount;
           this.installRunCount++;
           this.sendResponse({
@@ -212514,7 +212514,7 @@ ${options.prefix}` : "\n" : options.prefix
             projectName: req.projectName
           });
           const scopedTypings = filteredTypings.map(typingsName);
-          this.installTypingsAsync(requestId, scopedTypings, cachePath5, (ok2) => {
+          this.installTypingsAsync(requestId, scopedTypings, cachePath6, (ok2) => {
             try {
               if (!ok2) {
                 if (this.log.isEnabled()) {
@@ -212530,7 +212530,7 @@ ${options.prefix}` : "\n" : options.prefix
               }
               const installedTypingFiles = [];
               for (const packageName of filteredTypings) {
-                const typingFile = typingToFileName(cachePath5, packageName, this.installTypingHost, this.log);
+                const typingFile = typingToFileName(cachePath6, packageName, this.installTypingHost, this.log);
                 if (!typingFile) {
                   this.missingTypingsSet.add(packageName);
                   continue;
@@ -212624,7 +212624,7 @@ ${options.prefix}` : "\n" : options.prefix
         Msg2["Perf"] = "Perf";
         return Msg2;
       })(Msg || {});
-      function createInstallTypingsRequest(project, typeAcquisition, unresolvedImports, cachePath5) {
+      function createInstallTypingsRequest(project, typeAcquisition, unresolvedImports, cachePath6) {
         return {
           projectName: project.getProjectName(),
           fileNames: project.getFileNames(
@@ -212637,7 +212637,7 @@ ${options.prefix}` : "\n" : options.prefix
           typeAcquisition,
           unresolvedImports,
           projectRootPath: project.getCurrentDirectory(),
-          cachePath: cachePath5,
+          cachePath: cachePath6,
           kind: "discover"
         };
       }
@@ -224683,8 +224683,8 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
         installPackage(options) {
           this.packageInstallId++;
           const request = { kind: "installPackage", ...options, id: this.packageInstallId };
-          const promise2 = new Promise((resolve14, reject) => {
-            (this.packageInstalledPromise ?? (this.packageInstalledPromise = /* @__PURE__ */ new Map())).set(this.packageInstallId, { resolve: resolve14, reject });
+          const promise2 = new Promise((resolve15, reject) => {
+            (this.packageInstalledPromise ?? (this.packageInstalledPromise = /* @__PURE__ */ new Map())).set(this.packageInstallId, { resolve: resolve15, reject });
           });
           this.installer.send(request);
           return promise2;
@@ -224969,12 +224969,12 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 // src/index.ts
 var import_yaml3 = __toESM(require_dist(), 1);
 import {
-  readFileSync as readFileSync23,
-  writeFileSync as writeFileSync17,
-  mkdirSync as mkdirSync20,
-  existsSync as existsSync21,
-  renameSync as renameSync10,
-  statSync as statSync11,
+  readFileSync as readFileSync25,
+  writeFileSync as writeFileSync18,
+  mkdirSync as mkdirSync21,
+  existsSync as existsSync23,
+  renameSync as renameSync11,
+  statSync as statSync12,
   appendFileSync as appendFileSync6,
   unlinkSync as unlinkSync2,
   realpathSync as realpathSync5,
@@ -224982,7 +224982,7 @@ import {
   unwatchFile
 } from "node:fs";
 import { spawnSync as spawnSync3 } from "node:child_process";
-import { extname as extname5, join as join24, basename as basename6, dirname as dirname12, resolve as resolve13, isAbsolute as isAbsolute4 } from "node:path";
+import { extname as extname5, join as join26, basename as basename6, dirname as dirname12, resolve as resolve14, isAbsolute as isAbsolute4 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 
 // src/grouping.ts
@@ -246406,7 +246406,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve14) => setTimeout(resolve14, pollInterval));
+        await new Promise((resolve15) => setTimeout(resolve15, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error48) {
@@ -246423,7 +246423,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve14, reject) => {
+    return new Promise((resolve15, reject) => {
       const earlyReject = (error48) => {
         reject(error48);
       };
@@ -246501,7 +246501,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve14(parseResult.data);
+            resolve15(parseResult.data);
           }
         } catch (error48) {
           reject(error48);
@@ -246762,12 +246762,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve14, reject) => {
+    return new Promise((resolve15, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve14, interval);
+      const timeoutId = setTimeout(resolve15, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -247726,7 +247726,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve14) => setTimeout(resolve14, pollInterval));
+      await new Promise((resolve15) => setTimeout(resolve15, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -248369,20 +248369,20 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve14) => {
+    return new Promise((resolve15) => {
       const json2 = serializeMessage(message);
       if (this._stdout.write(json2)) {
-        resolve14();
+        resolve15();
       } else {
-        this._stdout.once("drain", resolve14);
+        this._stdout.once("drain", resolve15);
       }
     });
   }
 };
 
 // src/mass_scouting/mcp-tools.ts
-import { mkdirSync as mkdirSync13, writeFileSync as writeFileSync11 } from "node:fs";
-import { join as join18 } from "node:path";
+import { mkdirSync as mkdirSync14, writeFileSync as writeFileSync12 } from "node:fs";
+import { join as join20 } from "node:path";
 
 // src/mass_scouting/cli.ts
 import { execSync as execSync2 } from "node:child_process";
@@ -250749,8 +250749,8 @@ var TOOL_MODEL_REGISTRY = {
   check_against_specs: {
     tool: "check_against_specs",
     requirements: criteria({ requireReasoning: false }),
-    benchmark: null,
-    note: "Source-vs-specification compliance. Validation-accuracy benchmark dataset is incremental."
+    benchmark: "check-specs",
+    note: "Source-vs-specification compliance. Gated by the spec-adherence benchmark (P2d): this repo's own shipped TESTING.md audited over thirteen verbatim git snapshots \u2014 four of them the exact pre-fix bytes a real cost-safety commit replaced \u2014 scored deterministically on the per-file CLEAN/VIOLATION verdict, no LLM judge. Violation CONTENT (the cited rule, the severity) is deliberately NOT graded: that needs a judge."
   },
   compare_files: {
     tool: "compare_files",
@@ -261700,6 +261700,1200 @@ function buildReportMarkdown4(args) {
   return lines.join("\n") + "\n";
 }
 
+// src/benchmark/check-specs/index.ts
+import { existsSync as existsSync17, mkdirSync as mkdirSync13, readFileSync as readFileSync19, renameSync as renameSync7, writeFileSync as writeFileSync11 } from "node:fs";
+import { join as join19 } from "node:path";
+
+// src/benchmark/check-specs/dataset.ts
+import { createHash as createHash7 } from "node:crypto";
+import { existsSync as existsSync15, readFileSync as readFileSync18, readdirSync as readdirSync6, statSync as statSync10 } from "node:fs";
+import { join as join18, resolve as resolve12 } from "node:path";
+import { fileURLToPath as fileURLToPath6 } from "node:url";
+var CHECK_SPECS_INSTRUCTIONS = [
+  "You are auditing exactly ONE source file against the specification above.",
+  "",
+  "OUTPUT FORMAT (mandatory). The FIRST line of your reply must be exactly one of:",
+  "VIOLATION: <which spec rule this file breaks, in a few words>",
+  "CLEAN \u2014 no spec violations found.",
+  "",
+  "Then, only if you answered VIOLATION, give the details the RULES section asks for.",
+  "",
+  "Judge what the code DOES, not what its name, its comments or its documentation",
+  "suggest. A file that merely mentions, describes, or tests the subject of a rule",
+  "does not thereby break it. A file that is not governed by a rule at all is CLEAN."
+].join("\n");
+var CHECK_SPECS_FIXTURES = [
+  // ── The four real violations (pre-fix blobs, 31ce212^ = b816534) ──────────
+  {
+    file: "src/b816534/test-helpers.ts",
+    truth: "VIOLATION",
+    provenance: "31ce212^:mcp-server/src/test-helpers.ts",
+    rule: "R1 \u2014 the default test backend must never bill",
+    rationale: "Its own header states it: 'Uses the real ~/.llm-externalizer/settings.yaml \u2014 the same file the server uses.' createTestClient copies that settings file into EVERY spawned test server, unconditionally: there is no requireLiveBackend opt-in in this revision at all. This is the root cause commit 31ce212 names \u2014 the default `npm test` ran the user's premium 3-model ensemble for real.",
+    // The R1 opt-in the spec REQUIRES does not exist anywhere in this revision. Its
+    // absence is what makes the real backend unconditional.
+    probe: {
+      source: "requireLiveBackend",
+      mustMatch: false,
+      says: "the pre-fix helper has no requireLiveBackend opt-in \u2014 the real backend is unconditional"
+    }
+  },
+  {
+    file: "src/b816534/live.test.ts",
+    truth: "VIOLATION",
+    provenance: "31ce212^:mcp-server/src/live.test.ts",
+    rule: "R2 \u2014 a real-LLM suite must self-skip unless opted into",
+    rationale: "Every describe block here makes real LLM round-trips (chat, code_task, compare_files, batch_check) against the user's configured backend, and NOT ONE is gated: no LIVE_TESTS, no key check, no skipIf. It bills on any invocation.",
+    probe: {
+      source: "LIVE_TESTS",
+      mustMatch: false,
+      says: "no LIVE_TESTS gate anywhere in the pre-fix live suite"
+    }
+  },
+  {
+    file: "src/b816534/live-extended.test.ts",
+    truth: "VIOLATION",
+    provenance: "31ce212^:mcp-server/src/live-extended.test.ts",
+    rule: "R2 \u2014 a real-LLM suite must self-skip unless opted into",
+    rationale: "The same defect across seven ungated live describe blocks (chat, scan_folder, batch_check, check_imports, check_references, deprecation, scan_secrets).",
+    probe: {
+      source: "LIVE_TESTS",
+      mustMatch: false,
+      says: "no LIVE_TESTS gate anywhere in the pre-fix extended live suite"
+    }
+  },
+  {
+    file: "src/b816534/security-scan-live.test.ts",
+    truth: "VIOLATION",
+    provenance: "31ce212^:mcp-server/src/security_scan/security_scan_live.test.ts",
+    rule: "R2 \u2014 a real-LLM suite must self-skip unless opted into",
+    rationale: "The subtle one, and the reason a model has to actually READ the gate rather than notice that one exists: this suite IS gated \u2014 on HAS_KEY alone. The spec requires BOTH LIVE_TESTS=1 AND the key. A half-gate fired the suite on every `npm test` in any environment that had a key exported, which the dev machine did \u2014 'silently billing the user', as the fix commit puts it.",
+    probe: {
+      source: "LIVE_TESTS",
+      mustMatch: false,
+      says: "the pre-fix gate is HAS_KEY only \u2014 the LIVE_TESTS half of the gate is missing"
+    }
+  },
+  // ── The four fixed twins (post-fix blobs, 31ce212) ────────────────────────
+  // Textually ~95% identical to the violations above. This pairing is what makes
+  // the corpus impossible to solve with a bag of words.
+  {
+    file: "src/31ce212/test-helpers.ts",
+    truth: "CLEAN",
+    provenance: "31ce212:mcp-server/src/test-helpers.ts",
+    rule: "R1 \u2014 satisfied",
+    rationale: "The fix. resolveTestConfig() now defaults to a synthetic LOCAL profile at http://127.0.0.1:1 (a guaranteed-dead port, local mode \u2192 never contacts openrouter.ai), and the real settings.yaml is copied ONLY when the caller passes requireLiveBackend: true \u2014 which is precisely what TESTING.md says.",
+    probe: {
+      source: "requireLiveBackend",
+      mustMatch: true,
+      says: "the fixed helper carries the requireLiveBackend opt-in the spec requires"
+    }
+  },
+  {
+    file: "src/31ce212/live.test.ts",
+    truth: "CLEAN",
+    provenance: "31ce212:mcp-server/src/live.test.ts",
+    rule: "R2 \u2014 satisfied",
+    rationale: "The fix: every describe became describe.skipIf(!LIVE), where LIVE requires LIVE_TESTS === '1' AND a non-empty OPENROUTER_API_KEY \u2014 both halves \u2014 and the config is taken with requireLiveBackend: true, the sanctioned opt-in.",
+    probe: {
+      source: "LIVE_TESTS",
+      mustMatch: true,
+      says: "the fixed live suite gates on LIVE_TESTS"
+    }
+  },
+  {
+    file: "src/31ce212/live-extended.test.ts",
+    truth: "CLEAN",
+    provenance: "31ce212:mcp-server/src/live-extended.test.ts",
+    rule: "R2 \u2014 satisfied",
+    rationale: "The same fix, applied to all seven describe blocks.",
+    probe: {
+      source: "LIVE_TESTS",
+      mustMatch: true,
+      says: "the fixed extended live suite gates on LIVE_TESTS"
+    }
+  },
+  {
+    file: "src/31ce212/security-scan-live.test.ts",
+    truth: "CLEAN",
+    provenance: "31ce212:mcp-server/src/security_scan/security_scan_live.test.ts",
+    rule: "R2 \u2014 satisfied",
+    rationale: "The fix: the half-gate becomes the full one \u2014 LIVE_TESTS === '1' AND a non-empty OPENROUTER_API_KEY.",
+    probe: {
+      source: "LIVE_TESTS",
+      mustMatch: true,
+      says: "the fixed security-scan live suite gates on LIVE_TESTS"
+    }
+  },
+  // ── Real files the incident never touched (HEAD, a4d6241) ─────────────────
+  {
+    file: "src/a4d6241/security-triage-live.test.ts",
+    truth: "CLEAN",
+    provenance: "a4d6241:mcp-server/src/benchmark/security-triage/live.test.ts",
+    rule: "R2 \u2014 satisfied",
+    rationale: "A live suite that was ALREADY compliant when the incident happened \u2014 commit 31ce212's own message cites it as the pattern the broken suites were fixed TO. It makes real, paid LLM calls and is correctly double-gated. Its presence is the direct rebuttal of 'a live test is a violation': what matters is the gate.",
+    probe: {
+      source: "LIVE_TESTS",
+      mustMatch: true,
+      says: "an already-compliant live suite: real calls, correctly double-gated"
+    }
+  },
+  {
+    file: "src/a4d6241/test-helpers.test.ts",
+    truth: "CLEAN",
+    provenance: "a4d6241:mcp-server/src/test-helpers.test.ts",
+    rule: "none \u2014 it makes no LLM call",
+    rationale: "THE HARDEST CLEAN CASE, and the fixture that defeats the smartest cheap rule. It contains `requireLiveBackend: true` (R1's opt-in marker) and carries NO LIVE_TESTS gate, so EVERY mechanical rule an adversary can write from the spec calls it a violation. It is compliant: it is the cost-safety REGRESSION GUARD, and it only RESOLVES a config object to assert the default can never bill \u2014 it never spawns a client, never opens a socket ('file read only \u2014 no network, no spend'). A rule you cannot break by reading a file cannot be violated by reading a file. Getting this one right requires reading the code.",
+    // No probe: "this test spends nothing" is a fact about what the code DOES, and
+    // there is no honest regex for it. The label rests on reading the file (its
+    // imports are vitest + one local pure function) — stated plainly rather than
+    // dressed up in a pattern that would only pretend to check it.
+    probe: null
+  },
+  {
+    file: "src/a4d6241/config.test.ts",
+    truth: "CLEAN",
+    provenance: "a4d6241:mcp-server/src/config.test.ts",
+    rule: "none \u2014 it makes no LLM call",
+    rationale: 'A settings-parser unit test. It contains the literal string `url: "https://openrouter.ai/api"` \u2014 as a YAML fixture VALUE it writes to a temp file to test the parser \u2014 so any grep for the OpenRouter endpoint flags it. It imports vitest, node:fs and local pure modules; it opens no socket and spends nothing.',
+    probe: null
+  },
+  {
+    file: "src/a4d6241/security-triage-runner.test.ts",
+    truth: "CLEAN",
+    provenance: "a4d6241:mcp-server/src/benchmark/security-triage/runner.test.ts",
+    rule: "none \u2014 it makes no LLM call",
+    rationale: "A hermetic transform test whose own header records that exercising the real judge over fetchImpl is out of scope. No network, no gate needed, no violation.",
+    probe: null
+  },
+  {
+    file: "src/a4d6241/pick.test.ts",
+    truth: "CLEAN",
+    provenance: "a4d6241:mcp-server/src/benchmark/pick.test.ts",
+    rule: "none \u2014 it makes no LLM call",
+    rationale: "A pure model-selection / settings-writer test over temp dirs. Saturated with model ids and OpenRouter pricing vocabulary, and spends nothing.",
+    probe: null
+  }
+];
+var MIN_VIOLATIONS = 3;
+var MIN_CLEAN = 4;
+function resolveFixtureRoot4() {
+  const here = fileURLToPath6(new URL(".", import.meta.url));
+  const candidates = [
+    resolve12(here, "../../../benchmark-fixtures/check-specs"),
+    // dist/ bundle layout: dist/<bundle>.js → one level less deep.
+    resolve12(here, "../../benchmark-fixtures/check-specs"),
+    resolve12(here, "../benchmark-fixtures/check-specs")
+  ];
+  for (const c of candidates) {
+    if (existsSync15(c) && statSync10(c).isDirectory()) return c;
+  }
+  throw new Error(
+    `check-specs fixture root not found near ${here} \u2014 looked at:
+` + candidates.map((c) => `  ${c}`).join("\n")
+  );
+}
+function specPath(root = resolveFixtureRoot4()) {
+  return join18(root, "spec", "TESTING.md");
+}
+function fixtureAbsPath2(rel, root = resolveFixtureRoot4()) {
+  return join18(root, rel);
+}
+function fixtureFilePaths(fixtures = CHECK_SPECS_FIXTURES, root = resolveFixtureRoot4()) {
+  return fixtures.map((f) => resolve12(fixtureAbsPath2(f.file, root)));
+}
+function expectedViolations(fixtures = CHECK_SPECS_FIXTURES, root = resolveFixtureRoot4()) {
+  return new Set(
+    fixtures.filter((f) => f.truth === "VIOLATION").map((f) => resolve12(fixtureAbsPath2(f.file, root)))
+  );
+}
+function listFixtureFiles3(root = resolveFixtureRoot4()) {
+  const out = [];
+  const walk = (dir, rel) => {
+    for (const entry of readdirSync6(dir, { withFileTypes: true })) {
+      const abs2 = join18(dir, entry.name);
+      const relPath = `${rel}/${entry.name}`;
+      if (entry.isDirectory()) walk(abs2, relPath);
+      else if (entry.isFile()) out.push(relPath);
+    }
+  };
+  walk(join18(root, "src"), "src");
+  return out.sort();
+}
+function datasetFingerprint2(root = resolveFixtureRoot4()) {
+  const h = createHash7("sha1");
+  h.update(JSON.stringify(CHECK_SPECS_FIXTURES));
+  h.update(CHECK_SPECS_INSTRUCTIONS);
+  h.update(readFileSync18(specPath(root)));
+  for (const rel of listFixtureFiles3(root)) {
+    h.update(rel);
+    h.update(readFileSync18(fixtureAbsPath2(rel, root)));
+  }
+  return h.digest("hex").slice(0, 12);
+}
+function validateDataset3(fixtures = CHECK_SPECS_FIXTURES, root = resolveFixtureRoot4()) {
+  const spec = specPath(root);
+  if (!existsSync15(spec)) {
+    throw new Error(`check-specs spec file missing: ${spec}`);
+  }
+  if (readFileSync18(spec, "utf-8").trim().length === 0) {
+    throw new Error(`check-specs spec file is empty: ${spec}`);
+  }
+  if (fixtures.length === 0) throw new Error("check-specs corpus is empty");
+  const seen = /* @__PURE__ */ new Set();
+  let violations = 0;
+  let clean = 0;
+  for (const f of fixtures) {
+    if (seen.has(f.file)) throw new Error(`duplicate fixture: ${f.file}`);
+    seen.add(f.file);
+    const abs2 = fixtureAbsPath2(f.file, root);
+    if (!existsSync15(abs2)) {
+      throw new Error(`fixture ${f.file} is listed in the dataset but missing on disk (${abs2})`);
+    }
+    const bytes = readFileSync18(abs2);
+    if (bytes.includes(0)) {
+      throw new Error(
+        `fixture ${f.file} contains a NUL byte \u2014 readFileAsCodeBlock treats it as binary and REFUSES to read it, so no model could ever be scored on it.`
+      );
+    }
+    if (f.rationale.trim().length < 40) {
+      throw new Error(`fixture ${f.file}: rationale is missing or too thin to check`);
+    }
+    if (f.probe) {
+      if (/[gy]/.test(new RegExp(f.probe.source).flags)) {
+        throw new Error(`fixture ${f.file}: truth probe must not be global/sticky`);
+      }
+      const hit = new RegExp(f.probe.source).test(bytes.toString("utf-8"));
+      if (hit !== f.probe.mustMatch) {
+        throw new Error(
+          `fixture ${f.file}: TRUTH PROBE FAILED \u2014 ${f.probe.says}.
+  expected /${f.probe.source}/ to ${f.probe.mustMatch ? "MATCH" : "NOT match"} the fixture, but it ${hit ? "matched" : "did not match"}.
+  These bytes came from ${f.provenance}. Re-extract them from git \u2014 do NOT edit a fixture to make the probe pass, and do NOT relax the probe to fit edited bytes.`
+        );
+      }
+    }
+    if (f.truth === "VIOLATION") violations++;
+    else clean++;
+  }
+  if (violations < MIN_VIOLATIONS) {
+    throw new Error(
+      `only ${violations} VIOLATION fixture(s) (need \u2265 ${MIN_VIOLATIONS}) \u2014 recall is not measurable.`
+    );
+  }
+  if (clean < MIN_CLEAN) {
+    throw new Error(
+      `only ${clean} CLEAN fixture(s) (need \u2265 ${MIN_CLEAN}) \u2014 precision is not measurable, so flagging every file would pass.`
+    );
+  }
+  const onDisk = listFixtureFiles3(root);
+  const unlabelled = onDisk.filter((rel) => !seen.has(rel));
+  if (unlabelled.length > 0) {
+    throw new Error(
+      `fixture file(s) on disk with no dataset entry: ${unlabelled.join(", ")}. Either label them or remove them \u2014 an unlabelled fixture is a file nobody has decided the truth about.`
+    );
+  }
+}
+
+// src/check-specs/core.ts
+import { existsSync as existsSync16 } from "node:fs";
+import { basename as basename5 } from "node:path";
+var CHECK_SPECS_SYSTEM_PROMPT = "You are a strict specification compliance auditor. You will receive a SPECIFICATION FILE and one or more SOURCE FILES. Your job is to find every violation of the specification in the source files.\n\nRULES:\n1. The specification is the ABSOLUTE source of truth. Every rule, restriction, format, API contract, forbidden pattern, and requirement in the spec MUST be followed exactly.\n2. Report ONLY VIOLATIONS \u2014 things implemented WRONGLY or FORBIDDEN patterns used. Do NOT report MISSING features \u2014 some requirements may be implemented in other files that are not included here.\n3. For each violation, report:\n   - **File**: which source file\n   - **Location**: function/class/method name (NEVER line numbers)\n   - **Spec rule violated**: quote the exact spec text\n   - **What the code does**: describe the actual behavior\n   - **Severity**: CRITICAL (security/data loss), HIGH (wrong behavior), MEDIUM (non-compliance), LOW (style/convention)\n4. If a source file has NO violations, explicitly state: 'CLEAN \u2014 no spec violations found.'\n5. At the end, provide a SUMMARY with total violation counts by severity.\n6. Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.\n\nSPEC FORMAT: The specification file is wrapped in <specs-filename> and <specs-file-content> tags (distinct from source file tags).\n" + FILE_FORMAT_EXAMPLE + BREVITY_RULES;
+async function runCheckAgainstSpecs(args, deps) {
+  const {
+    spec_file_path: csSpecPath,
+    input_files_paths: csInputPathsRaw,
+    folder_path: csFolderPath,
+    extensions: csExtensions,
+    exclude_dirs: csExcludeDirs,
+    use_gitignore: csUseGitignore,
+    instructions: csInstructions,
+    instructions_files_paths: csInstructionsFilesPaths,
+    scan_secrets: csScan,
+    redact_secrets: csRedact,
+    answer_mode: csRawMode,
+    max_payload_kb: csMaxPayloadKb,
+    redact_regex: csRedactRegexRaw
+  } = args;
+  const csUseEnsemble = deps.useEnsemble;
+  const csBudgetBytes = (csMaxPayloadKb ?? 400) * 1024;
+  const csMode = resolveAnswerMode(csRawMode, 0);
+  let csRegexRedact;
+  try {
+    csRegexRedact = parseRedactRegex(csRedactRegexRaw);
+  } catch (err3) {
+    return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
+  }
+  if (!csSpecPath) {
+    return {
+      content: [{ type: "text", text: "FAILED: spec_file_path is required." }],
+      isError: true
+    };
+  }
+  const csNormalized = deps.normalizePaths(csInputPathsRaw);
+  let csFilePaths = [...csNormalized];
+  if (csFolderPath) {
+    const csFolderResult = deps.resolveFolderPath(csFolderPath, {
+      extensions: csExtensions,
+      excludeDirs: csExcludeDirs,
+      useGitignore: csUseGitignore,
+      maxFiles: args.max_files
+    });
+    if (csFolderResult.error && csFolderResult.files.length === 0 && csFilePaths.length === 0) {
+      return { content: [{ type: "text", text: `FAILED: ${csFolderResult.error}` }], isError: true };
+    }
+    csFilePaths = [...csFilePaths, ...csFolderResult.files];
+  }
+  if (csFilePaths.length === 0) {
+    return {
+      content: [{ type: "text", text: "FAILED: Provide input_files_paths or folder_path." }],
+      isError: true
+    };
+  }
+  let csSpecBlock;
+  try {
+    csSpecBlock = readFileAsCodeBlock(csSpecPath, void 0, csRedact, csBudgetBytes, null, "specs-");
+  } catch (err3) {
+    const errMsg = err3 instanceof Error ? err3.message : String(err3);
+    return {
+      content: [{ type: "text", text: `FAILED: Cannot read spec file: ${errMsg}` }],
+      isError: true
+    };
+  }
+  if (csScan && !csRedact) {
+    const csRealFiles = csFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
+    const scanResult = scanFilesForSecrets([csSpecPath, ...csRealFiles]);
+    if (scanResult.found)
+      return {
+        content: [{ type: "text", text: scanResult.report }],
+        isError: true
+      };
+  }
+  const csExtraInstructions = resolvePrompt(csInstructions, csInstructionsFilesPaths);
+  const csSystemPrompt = CHECK_SPECS_SYSTEM_PROMPT;
+  const csSpecBytes = Buffer.byteLength(csSpecBlock, "utf-8");
+  const csSystemBytes = Buffer.byteLength(csSystemPrompt, "utf-8");
+  const csExtraBytes = Buffer.byteLength(csExtraInstructions, "utf-8");
+  const csPromptBytes = csSpecBytes + csSystemBytes + csExtraBytes;
+  let csFileGroups = csFolderPath ? [{ id: "", files: csFilePaths }] : parseFileGroups(csFilePaths);
+  let csEffectivelyGrouped = hasNamedGroups(csFileGroups);
+  if (csMode === 1 && !csEffectivelyGrouped) {
+    const autoGroups = autoGroupByHeuristic(csFilePaths);
+    if (autoGroups.length > 0) {
+      csFileGroups = autoGroups;
+      csEffectivelyGrouped = true;
+    }
+  }
+  const csAllGroupReports = [];
+  for (const fg of csFileGroups) {
+    const fgPaths = fg.files;
+    if (fgPaths.length === 0) continue;
+    const fgId = fg.id;
+    if (csMode === 0 && !csEffectivelyGrouped) {
+      const csPerFileResults = [];
+      for (const fp of fgPaths) {
+        if (!existsSync16(fp)) {
+          csPerFileResults.push(`FAILED: ${fp} \u2014 File not found`);
+          continue;
+        }
+        let fpBlock;
+        try {
+          fpBlock = readFileAsCodeBlock(fp, void 0, csRedact, csBudgetBytes, csRegexRedact);
+        } catch (err3) {
+          csPerFileResults.push(`FAILED: ${fp} \u2014 ${err3 instanceof Error ? err3.message : String(err3)}`);
+          continue;
+        }
+        let fpUserContent = "## SPECIFICATION (source of truth)\n\n" + csSpecBlock + "\n\n";
+        if (csExtraInstructions) {
+          fpUserContent += "## ADDITIONAL INSTRUCTIONS\n\n" + csExtraInstructions + "\n\n";
+        }
+        fpUserContent += "## SOURCE FILES TO CHECK\n\n" + fpBlock;
+        const fpMessages = [
+          { role: "system", content: csSystemPrompt },
+          { role: "user", content: fpUserContent }
+        ];
+        const fpResp = await deps.ensembleStreaming(
+          fpMessages,
+          {
+            maxTokens: deps.resolveDefaultMaxTokens(),
+            onProgress: deps.onProgress,
+            modelOverride: deps.modelOverride
+            // honours --free and credit-exhausted auto-fallback
+          },
+          csUseEnsemble
+        );
+        if (fpResp.content.trim().length === 0) {
+          csPerFileResults.push(`FAILED: ${fp} \u2014 LLM returned empty response`);
+          continue;
+        }
+        const fpFooter = deps.formatFooter(fpResp, "check_against_specs", fp);
+        const fpReportPath = deps.saveResponse("check_against_specs", fpResp.content + fpFooter, {
+          model: deps.ensembleModelLabel(csUseEnsemble),
+          task: `Spec compliance: ${basename5(csSpecPath)} vs ${basename5(fp)}`,
+          inputFile: fp
+        }, void 0, deps.outputDir);
+        csPerFileResults.push(fpReportPath);
+      }
+      return { content: [{ type: "text", text: csPerFileResults.join("\n") }] };
+    }
+    const { groups: csGroups, autoBatched: csAutoBatched, skipped: csSkipped } = readAndGroupFiles(fgPaths, csPromptBytes, csRedact, csBudgetBytes, csRegexRedact);
+    const csBatchResults = [];
+    if (csSkipped.length > 0) {
+      csBatchResults.push(
+        `SKIPPED (exceeds ${csBudgetBytes / 1024} KB payload budget): ${csSkipped.length} file(s)
+` + csSkipped.map((f) => `  - ${f}`).join("\n")
+      );
+    }
+    for (let gi = 0; gi < csGroups.length; gi++) {
+      const group = csGroups[gi];
+      let userContent = "## SPECIFICATION (source of truth)\n\n" + csSpecBlock + "\n\n";
+      if (csExtraInstructions) {
+        userContent += "## ADDITIONAL INSTRUCTIONS\n\n" + csExtraInstructions + "\n\n";
+      }
+      userContent += "## SOURCE FILES TO CHECK\n\n";
+      for (const fd of group) {
+        userContent += `
+
+${fd.block}`;
+      }
+      const csMessages = [
+        { role: "system", content: csSystemPrompt },
+        { role: "user", content: userContent }
+      ];
+      const csResp = await deps.ensembleStreaming(
+        csMessages,
+        {
+          maxTokens: deps.resolveDefaultMaxTokens(),
+          onProgress: deps.onProgress,
+          modelOverride: deps.modelOverride
+        },
+        csUseEnsemble
+      );
+      const csFooter = deps.formatFooter(csResp, "check_against_specs", group[0]?.path);
+      if (csResp.content.trim().length > 0) {
+        if (csAutoBatched) {
+          const fileList = group.map((fd) => fd.path).join(", ");
+          csBatchResults.push(
+            `## Batch ${gi + 1}/${csGroups.length}
+
+Files: ${fileList}
+
+${csResp.content}${csFooter}`
+          );
+        } else {
+          csBatchResults.push(csResp.content + csFooter);
+        }
+      }
+    }
+    if (csBatchResults.length === 0) continue;
+    const csFinalContent = csBatchResults.join("\n\n---\n\n");
+    const csMergedModel = deps.ensembleModelLabel(csUseEnsemble);
+    const csReportPath = deps.saveResponse(
+      "check_against_specs",
+      csFinalContent,
+      {
+        model: csMergedModel,
+        task: `Spec compliance: ${basename5(csSpecPath)} vs ${fgPaths.length} file(s)`,
+        inputFile: fgPaths[0],
+        groupId: fgId || void 0
+      },
+      void 0,
+      deps.outputDir
+    );
+    if (csEffectivelyGrouped) {
+      const labelId = fgId || "auto";
+      csAllGroupReports.push(`[group:${labelId}] ${csReportPath}`);
+    } else {
+      return { content: [{ type: "text", text: csReportPath }] };
+    }
+  }
+  if (csEffectivelyGrouped) {
+    if (csAllGroupReports.length === 0) {
+      return { content: [{ type: "text", text: "FAILED: No results for any group." }], isError: true };
+    }
+    return { content: [{ type: "text", text: csAllGroupReports.join("\n") }] };
+  }
+  return { content: [{ type: "text", text: "FAILED: LLM returned empty response." }], isError: true };
+}
+
+// src/benchmark/check-specs/score.ts
+var VIOLATION_RE = /^\s*(?:[-*+]\s*|#{1,6}\s*|\d+[.)]\s*)?\**\s*VIOLATION\b/i;
+var CLEAN_RE = /^\s*(?:[-*+]\s*|#{1,6}\s*|\d+[.)]\s*)?\**\s*CLEAN\b/i;
+function parseSpecVerdict(report) {
+  let inFence = false;
+  for (const raw of report.split("\n")) {
+    if (/^\s*(?:`{3,}|~{3,})/.test(raw)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const v = VIOLATION_RE.exec(raw);
+    if (v) {
+      const citedRule = raw.slice(v[0].length).replace(/^[\s:*\-—`]+/, "").replace(/[\s*`]+$/, "").trim();
+      return { verdict: "yes", citedRule };
+    }
+    if (CLEAN_RE.test(raw)) return { verdict: "no", citedRule: "" };
+  }
+  return { verdict: "unparseable", citedRule: "" };
+}
+function accuracyOf(score) {
+  let correct = 0;
+  let total = 0;
+  for (const c of score.cases) {
+    correct += c.truePositives + c.trueNegatives;
+    total += c.scannedFiles;
+  }
+  return total === 0 ? 0 : correct / total;
+}
+var DEFAULT_CHECK_SPECS_THRESHOLDS = {
+  minMicroF1: 0.8,
+  minMicroRecall: 0.7,
+  minCoverage: 0.9
+};
+function passesThresholds4(score, thresholds = DEFAULT_CHECK_SPECS_THRESHOLDS) {
+  const failures = [];
+  if (score.microF1 < thresholds.minMicroF1) {
+    failures.push(`micro-F1 ${score.microF1.toFixed(3)} < ${thresholds.minMicroF1}`);
+  }
+  if (score.microRecall < thresholds.minMicroRecall) {
+    failures.push(
+      `micro-recall ${score.microRecall.toFixed(3)} < ${thresholds.minMicroRecall} (a model that answers CLEAN to everything cannot pass)`
+    );
+  }
+  if (score.coverage < thresholds.minCoverage) {
+    failures.push(
+      `coverage ${score.coverage.toFixed(3)} < ${thresholds.minCoverage} \u2014 too many files produced no parseable verdict, so the run is not evidence about the model`
+    );
+  }
+  return { pass: failures.length === 0, failures };
+}
+
+// src/benchmark/check-specs/bench-runner.ts
+var DEFAULT_API_URL4 = "https://openrouter.ai/api/v1/chat/completions";
+var CHECK_SPECS_CASE_ID = "testing-md-cost-safety";
+function sourcePathFromUserMessage(userContent) {
+  const m = /<filename>\n([^\n]+)\n<\/filename>/.exec(userContent);
+  return m ? m[1] : null;
+}
+async function runCheckSpecsBenchmarkOnModel(modelId, fixtures = CHECK_SPECS_FIXTURES, opts = {
+  apiKey: "",
+  pricing: { input_per_m_usd: 0, output_per_m_usd: 0, context_window: 0 }
+}, fetchImpl = realFetch) {
+  const fixtureRoot = resolveFixtureRoot4();
+  const apiUrl = opts.apiUrl ?? DEFAULT_API_URL4;
+  const maxTokens = opts.maxTokens ?? 4096;
+  const perCallTimeoutMs = opts.perCallTimeoutMs ?? 3e5;
+  const files = fixtureFilePaths(fixtures, fixtureRoot);
+  const expected = expectedViolations(fixtures, fixtureRoot);
+  const known = new Set(files);
+  let costUsd = 0;
+  let latencyTotalMs = 0;
+  let callCount = 0;
+  let filesDone = 0;
+  const reports = /* @__PURE__ */ new Map();
+  const errors = /* @__PURE__ */ new Map();
+  const ensembleStreaming2 = async (messages) => {
+    const userContent = messages.find((m) => m.role === "user")?.content ?? "";
+    const filePath = sourcePathFromUserMessage(userContent);
+    if (filePath === null || !known.has(filePath)) {
+      throw new Error(
+        `check-specs benchmark: could not attribute an LLM call to a corpus file.
+  parsed <filename>: ${filePath ?? "(none found in the user message)"}
+  corpus expects e.g.: ${files[0]}
+The prompt's file-tag format or the fixture path form has drifted. Fix the runner \u2014 do not score this run.`
+      );
+    }
+    const started = Date.now();
+    let res;
+    try {
+      res = await fetchImpl(apiUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${opts.apiKey}`
+        },
+        body: JSON.stringify({ model: modelId, messages, max_tokens: maxTokens }),
+        signal: AbortSignal.timeout(perCallTimeoutMs)
+      });
+    } catch (err3) {
+      const reason = `request failed: ${err3.message}`;
+      errors.set(filePath, reason);
+      return emptyResult(modelId);
+    } finally {
+      latencyTotalMs += Date.now() - started;
+      callCount++;
+      filesDone++;
+      if (opts.onProgress) opts.onProgress(filesDone, files.length);
+    }
+    if (!res.ok) {
+      const bodyText = await res.text().catch(() => "");
+      const reason = `API error ${res.status}: ${bodyText.slice(0, 300)}`;
+      errors.set(filePath, reason);
+      return emptyResult(modelId);
+    }
+    const json2 = await res.json();
+    const usage = json2.usage;
+    if (usage) {
+      costUsd += (usage.prompt_tokens ?? 0) / 1e6 * opts.pricing.input_per_m_usd + (usage.completion_tokens ?? 0) / 1e6 * opts.pricing.output_per_m_usd;
+    }
+    const content = json2.choices?.[0]?.message?.content ?? "";
+    if (content.trim().length === 0) {
+      errors.set(filePath, "LLM returned empty response");
+      return emptyResult(modelId);
+    }
+    reports.set(filePath, content);
+    return {
+      content,
+      model: modelId,
+      usage: usage ? {
+        prompt_tokens: usage.prompt_tokens ?? 0,
+        completion_tokens: usage.completion_tokens ?? 0,
+        total_tokens: (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0)
+      } : void 0,
+      finishReason: "stop",
+      truncated: false
+    };
+  };
+  const deps = {
+    // The benchmark scores ONE model at a time, so the multi-model ensemble is off —
+    // otherwise the score would belong to the ensemble, not to the candidate.
+    useEnsemble: false,
+    normalizePaths: (raw) => {
+      if (!raw) return [];
+      const arr = Array.isArray(raw) ? raw : [raw];
+      return arr.filter((p) => typeof p === "string" && p.length > 0);
+    },
+    // No folder_path is passed (the corpus is an explicit, ordered file list — a folder
+    // walk would also sweep up the fixture README and audit it as a fourteenth "file").
+    // Unreachable; a clear error rather than a silent empty list if that ever changes.
+    resolveFolderPath: () => ({
+      files: [],
+      error: "check-specs benchmark passes input_files_paths, never folder_path"
+    }),
+    ensembleStreaming: ensembleStreaming2,
+    // No footer. The real one records usage + writes to the global ledger (index.ts side
+    // effects a benchmark must not have); usage is accumulated at the seam above instead,
+    // from the same response body. An empty footer also keeps the scored text EXACTLY the
+    // model's own output, with nothing appended that a verdict regex could trip over.
+    formatFooter: () => "",
+    // Mode 0 calls saveResponse once per file. The report is already captured at the seam
+    // (keyed by the file the call was FOR, which is stronger than trusting loop order), so
+    // this returns a marker rather than writing anything: a benchmark must not litter the
+    // user's report directory with 13 files per model per run.
+    saveResponse: (_tool, _content, meta3) => `memory://${meta3.inputFile ?? "unknown"}`,
+    ensembleModelLabel: () => modelId,
+    resolveDefaultMaxTokens: () => maxTokens
+  };
+  const args = {
+    spec_file_path: specPath(fixtureRoot),
+    input_files_paths: files,
+    instructions: CHECK_SPECS_INSTRUCTIONS,
+    scan_secrets: false,
+    redact_secrets: false,
+    // Mode 0 — one LLM call and one report per file. Mode 1/2 would batch several files
+    // into a single call and merge the findings into one document, destroying the per-file
+    // boundary this benchmark scores on.
+    answer_mode: 0
+  };
+  const result = await runCheckAgainstSpecs(args, deps);
+  if (result.isError && reports.size === 0 && errors.size === 0) {
+    throw new Error(
+      `check-specs benchmark: the pipeline refused the run before any LLM call \u2014 ${result.content.map((p) => p.text).join(" ")}`
+    );
+  }
+  const verdicts = /* @__PURE__ */ new Map();
+  const failures = [];
+  const citedRules = [];
+  for (const file2 of files) {
+    const report = reports.get(file2);
+    if (report === void 0) {
+      failures.push({ file: file2, reason: errors.get(file2) ?? "no report produced" });
+      continue;
+    }
+    const parsed = parseSpecVerdict(report);
+    verdicts.set(file2, parsed.verdict);
+    if (parsed.verdict === "yes" && parsed.citedRule) {
+      citedRules.push({ file: file2, citedRule: parsed.citedRule });
+    }
+  }
+  const caseScores = [scoreCase(CHECK_SPECS_CASE_ID, files, expected, verdicts)];
+  const aggregate2 = aggregateScores(caseScores);
+  return {
+    modelId,
+    caseScores,
+    aggregate: aggregate2,
+    accuracy: accuracyOf(aggregate2),
+    pass: passesThresholds4(aggregate2).pass,
+    costUsd,
+    meanLatencyMs: callCount === 0 ? 0 : latencyTotalMs / callCount,
+    failures,
+    citedRules
+  };
+}
+function emptyResult(modelId) {
+  return {
+    content: "",
+    model: modelId,
+    finishReason: "error",
+    truncated: false
+  };
+}
+
+// src/benchmark/check-specs/select.ts
+var CHECK_SPECS_CRITERIA = TOOL_MODEL_REGISTRY.check_against_specs.requirements;
+function toGeneric5(c) {
+  const thr = passesThresholds4(c.score);
+  return {
+    modelId: c.modelId,
+    qualified: c.qualified,
+    disqualifyReason: c.disqualifyReason,
+    inputDollarsPerMillion: c.inputDollarsPerMillion,
+    outputDollarsPerMillion: c.outputDollarsPerMillion,
+    latencyMs: c.latencyMs,
+    benchmarkPass: thr.pass,
+    benchmarkScore: c.score.microF1,
+    benchmarkFailReasons: thr.failures
+  };
+}
+function selectCheckSpecsModel(input) {
+  const byModelId = new Map(
+    input.candidates.map((c) => [c.modelId, c])
+  );
+  const generic = selectSameOrCheaper({
+    candidates: input.candidates.map(toGeneric5),
+    incumbentModelId: input.incumbentModelId,
+    incumbentInputDollarsPerMillion: input.incumbentInputDollarsPerMillion,
+    incumbentOutputDollarsPerMillion: input.incumbentOutputDollarsPerMillion,
+    requirementsLabel: "check-against-specs requirements",
+    benchmarkLabel: "the spec-adherence benchmark"
+  });
+  return {
+    recommendedModelId: generic.recommendedModelId,
+    changed: generic.changed,
+    reason: generic.reason,
+    eligible: generic.eligible.map((g) => byModelId.get(g.modelId)),
+    rejected: generic.rejected
+  };
+}
+
+// src/benchmark/check-specs/index.ts
+var INCUMBENT_FALLBACK_PRICING5 = KNOWN_PRICING[DEFAULT_MODEL] ?? {
+  input_per_m_usd: 0.04,
+  output_per_m_usd: 0.1,
+  context_window: 32768
+};
+function cachePath5() {
+  return join19(getConfigDir(), "check-specs-results.json");
+}
+function cacheKey5(modelId, date5, datasetHash) {
+  return `${modelId}::${date5}::${datasetHash}`;
+}
+function loadCache5() {
+  const p = cachePath5();
+  if (!existsSync17(p)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync19(p, "utf-8"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+  } catch {
+  }
+  return {};
+}
+function saveCache5(cache) {
+  mkdirSync13(getConfigDir(), { recursive: true });
+  const p = cachePath5();
+  const tmp = `${p}.tmp.${process.pid}`;
+  writeFileSync11(tmp, JSON.stringify(cache, null, 2), "utf-8");
+  renameSync7(tmp, p);
+}
+function resolveApiKey5(override) {
+  const k = override || process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
+  if (!k) {
+    throw new Error(
+      "OPENROUTER_API_KEY not set. Export it in your shell, or set the plugin option 'openrouter_api_key' via Claude Code's /plugin configure."
+    );
+  }
+  return k;
+}
+function today5() {
+  return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+}
+function reportStamp5() {
+  const d = /* @__PURE__ */ new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  const off = -d.getTimezoneOffset();
+  const sign = off >= 0 ? "+" : "-";
+  const oh = p(Math.floor(Math.abs(off) / 60));
+  const om = p(Math.abs(off) % 60);
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}${sign}${oh}${om}`;
+}
+function pricingFromModel5(m) {
+  return {
+    input_per_m_usd: m.inputDollarsPerMillion,
+    output_per_m_usd: m.outputDollarsPerMillion,
+    context_window: m.contextTokens
+  };
+}
+function decorate5(raw) {
+  const ctx = raw.context_length ?? 0;
+  const maxOutRaw = raw.top_provider?.max_completion_tokens;
+  const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
+  const promptPerToken = parseFloat(raw.pricing?.prompt ?? "NaN");
+  const completionPerToken = parseFloat(raw.pricing?.completion ?? "NaN");
+  const params = new Set(raw.supported_parameters ?? []);
+  return {
+    id: raw.id,
+    name: raw.name ?? raw.id,
+    contextTokens: ctx,
+    maxOutputTokens: maxOut,
+    inputDollarsPerMillion: isFinite(promptPerToken) ? promptPerToken * 1e6 : Infinity,
+    outputDollarsPerMillion: isFinite(completionPerToken) ? completionPerToken * 1e6 : Infinity,
+    supportsStructured: params.has("structured_outputs") || params.has("response_format"),
+    supportsReasoning: params.has("reasoning") || params.has("include_reasoning"),
+    raw
+  };
+}
+async function runCheckSpecsBenchmark(opts = {}) {
+  const apiKey = resolveApiKey5(opts.apiKey);
+  const fixtures = CHECK_SPECS_FIXTURES;
+  validateDataset3(fixtures);
+  const datasetHash = datasetFingerprint2();
+  const thresholds = opts.thresholds ?? DEFAULT_CHECK_SPECS_THRESHOLDS;
+  const incumbentId = opts.incumbentModelId ?? DEFAULT_MODEL;
+  const progress = opts.onProgress ?? (() => {
+  });
+  const freeOnly = getActiveFreeOnly();
+  const violations = fixtures.filter((f) => f.truth === "VIOLATION").length;
+  progress(
+    `Loaded 1 real spec over ${fixtures.length} real source files (${violations} VIOLATION / ${fixtures.length - violations} CLEAN) \u2014 corpus ${datasetHash}.`
+  );
+  progress("Fetching OpenRouter model catalog\u2026");
+  const catalog = await fetchProgrammingModels();
+  const byId = new Map(catalog.map((m) => [m.id, m]));
+  const incumbentRaw = byId.get(incumbentId);
+  const incumbentDecorated = incumbentRaw ? decorate5(incumbentRaw) : null;
+  const incumbentIn = incumbentDecorated && isFinite(incumbentDecorated.inputDollarsPerMillion) ? incumbentDecorated.inputDollarsPerMillion : INCUMBENT_FALLBACK_PRICING5.input_per_m_usd;
+  const incumbentOut = incumbentDecorated && isFinite(incumbentDecorated.outputDollarsPerMillion) ? incumbentDecorated.outputDollarsPerMillion : INCUMBENT_FALLBACK_PRICING5.output_per_m_usd;
+  const toAssess = /* @__PURE__ */ new Map();
+  const addModel = (model, qualified, disqualifyReason2) => {
+    if (!toAssess.has(model.id)) toAssess.set(model.id, { model, qualified, disqualifyReason: disqualifyReason2 });
+  };
+  if (opts.models && opts.models.length > 0) {
+    for (const id of opts.models) {
+      const raw = byId.get(id);
+      if (raw) {
+        const q = qualify(raw, CHECK_SPECS_CRITERIA);
+        addModel(
+          q ?? decorate5(raw),
+          q !== null,
+          q ? void 0 : "below check-against-specs requirements (cost/context/structured-output)"
+        );
+      } else {
+        const fp = KNOWN_PRICING[id] ?? INCUMBENT_FALLBACK_PRICING5;
+        addModel(
+          {
+            id,
+            name: id,
+            contextTokens: fp.context_window,
+            maxOutputTokens: fp.context_window,
+            inputDollarsPerMillion: fp.input_per_m_usd,
+            outputDollarsPerMillion: fp.output_per_m_usd,
+            supportsStructured: false,
+            supportsReasoning: false,
+            raw: { id }
+          },
+          false,
+          "not found in the OpenRouter catalog"
+        );
+      }
+    }
+  } else {
+    const { candidates } = buildBenchmarkRoster(catalog, CHECK_SPECS_CRITERIA, []);
+    const affordable = candidates.filter(
+      (c) => c.inputDollarsPerMillion <= incumbentIn + 1e-9 && c.outputDollarsPerMillion <= incumbentOut + 1e-9
+    );
+    const sameOrCheaper = rankByQualityIndex(affordable).slice(0, opts.qualifyingTopN ?? 16);
+    for (const c of sameOrCheaper) addModel(c, true);
+  }
+  if (!toAssess.has(incumbentId)) {
+    if (incumbentDecorated) {
+      const q = qualify(incumbentDecorated.raw, CHECK_SPECS_CRITERIA);
+      addModel(
+        incumbentDecorated,
+        q !== null,
+        q ? void 0 : "below check-against-specs requirements"
+      );
+    } else {
+      addModel(
+        {
+          id: incumbentId,
+          name: incumbentId,
+          contextTokens: INCUMBENT_FALLBACK_PRICING5.context_window,
+          maxOutputTokens: INCUMBENT_FALLBACK_PRICING5.context_window,
+          inputDollarsPerMillion: incumbentIn,
+          outputDollarsPerMillion: incumbentOut,
+          supportsStructured: true,
+          supportsReasoning: true,
+          raw: { id: incumbentId }
+        },
+        true
+      );
+    }
+  }
+  progress(`Assessing ${toAssess.size} model(s) over ${fixtures.length} file decisions\u2026`);
+  const cache = loadCache5();
+  const assessments = [];
+  let totalCost = 0;
+  for (const { model, qualified, disqualifyReason: disqualifyReason2 } of toAssess.values()) {
+    if (freeOnly && !model.id.endsWith(":free")) {
+      progress(`  ${model.id}: skipped (free_only \u2014 non-':free' model).`);
+      const empty = aggregateScores([]);
+      assessments.push({
+        modelId: model.id,
+        qualified: false,
+        disqualifyReason: "free_only active \u2014 non-':free' model not benchmarked",
+        inputDollarsPerMillion: model.inputDollarsPerMillion,
+        outputDollarsPerMillion: model.outputDollarsPerMillion,
+        latencyMs: 0,
+        score: empty,
+        accuracy: 0,
+        failureReasons: [],
+        costUsd: 0
+      });
+      continue;
+    }
+    const key = cacheKey5(model.id, today5(), datasetHash);
+    const cached2 = cache[key];
+    let score;
+    let accuracy;
+    let costUsd;
+    let latencyMs;
+    let failureReasons;
+    if (cached2 && !opts.force) {
+      progress(`  ${model.id}: cache hit (${today5()}).`);
+      score = cached2.score;
+      accuracy = cached2.accuracy;
+      costUsd = cached2.costUsd;
+      latencyMs = cached2.latencyMs;
+      failureReasons = cached2.failureReasons;
+    } else {
+      progress(`  ${model.id}: running\u2026`);
+      const run = await runCheckSpecsBenchmarkOnModel(
+        model.id,
+        fixtures,
+        {
+          apiKey,
+          pricing: pricingFromModel5(model),
+          perCallTimeoutMs: opts.perCallTimeoutMs ?? 3e5
+        },
+        opts.fetchImpl
+      );
+      score = run.aggregate;
+      accuracy = run.accuracy;
+      costUsd = run.costUsd;
+      latencyMs = Math.round(run.meanLatencyMs);
+      failureReasons = run.failures.map((f) => `${f.file}: ${f.reason}`);
+      cache[key] = {
+        date: today5(),
+        datasetHash,
+        score,
+        accuracy,
+        costUsd,
+        latencyMs,
+        inputDollarsPerMillion: model.inputDollarsPerMillion,
+        outputDollarsPerMillion: model.outputDollarsPerMillion,
+        qualified,
+        disqualifyReason: disqualifyReason2,
+        failureReasons
+      };
+    }
+    totalCost += costUsd;
+    assessments.push({
+      modelId: model.id,
+      qualified,
+      disqualifyReason: disqualifyReason2,
+      inputDollarsPerMillion: model.inputDollarsPerMillion,
+      outputDollarsPerMillion: model.outputDollarsPerMillion,
+      latencyMs,
+      score,
+      accuracy,
+      failureReasons,
+      costUsd
+    });
+    const thr = passesThresholds4(score, thresholds);
+    progress(
+      `    ${model.id}: ${thr.pass ? "PASS" : "FAIL"} microF1=${score.microF1.toFixed(3)} microP=${score.microPrecision.toFixed(3)} microR=${score.microRecall.toFixed(3)} acc=${accuracy.toFixed(3)} cov=${score.coverage.toFixed(3)} unscored=${failureReasons.length}`
+    );
+  }
+  saveCache5(cache);
+  const selection = selectCheckSpecsModel({
+    candidates: assessments,
+    incumbentModelId: incumbentId,
+    incumbentInputDollarsPerMillion: incumbentIn,
+    incumbentOutputDollarsPerMillion: incumbentOut
+  });
+  const mainRoot = resolveProjectMainRoot(opts.mainRoot);
+  const reportDir = opts.outputDir ?? join19(mainRoot, "reports", "check-specs-benchmark");
+  mkdirSync13(reportDir, { recursive: true });
+  const stamp = reportStamp5();
+  const jsonReportPath = join19(reportDir, `${stamp}-check-specs-benchmark.json`);
+  const reportPath = join19(reportDir, `${stamp}-check-specs-benchmark.md`);
+  const jsonPayload = {
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    datasetHash,
+    fixtureCount: fixtures.length,
+    violationCount: violations,
+    cleanCount: fixtures.length - violations,
+    thresholds,
+    incumbent: {
+      modelId: incumbentId,
+      inputDollarsPerMillion: incumbentIn,
+      outputDollarsPerMillion: incumbentOut
+    },
+    recommendedModelId: selection.recommendedModelId,
+    changed: selection.changed,
+    reason: selection.reason,
+    costUsd: totalCost,
+    assessments: assessments.map((a) => {
+      const thr = passesThresholds4(a.score, thresholds);
+      return {
+        modelId: a.modelId,
+        qualified: a.qualified,
+        disqualifyReason: a.disqualifyReason,
+        inputDollarsPerMillion: a.inputDollarsPerMillion,
+        outputDollarsPerMillion: a.outputDollarsPerMillion,
+        latencyMs: a.latencyMs,
+        pass: thr.pass,
+        failures: thr.failures,
+        microPrecision: a.score.microPrecision,
+        microRecall: a.score.microRecall,
+        microF1: a.score.microF1,
+        accuracy: a.accuracy,
+        coverage: a.score.coverage,
+        failureReasons: a.failureReasons,
+        costUsd: a.costUsd
+      };
+    }),
+    rejected: selection.rejected,
+    perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
+  };
+  const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
+  writeFileSync11(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync7(jtmp, jsonReportPath);
+  const md = buildReportMarkdown5({
+    fixtures,
+    datasetHash,
+    incumbentId,
+    incumbentIn,
+    incumbentOut,
+    thresholds,
+    assessments,
+    selection,
+    totalCost
+  });
+  const mtmp = `${reportPath}.tmp.${process.pid}`;
+  writeFileSync11(mtmp, md, "utf-8");
+  renameSync7(mtmp, reportPath);
+  const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
+  return {
+    recommendedModelId: selection.recommendedModelId,
+    changed: selection.changed,
+    selection,
+    results: assessments,
+    costUsd: totalCost,
+    reportPath,
+    jsonReportPath,
+    summaryLine
+  };
+}
+function buildReportMarkdown5(args) {
+  const violations = args.fixtures.filter((f) => f.truth === "VIOLATION").length;
+  const lines = [];
+  lines.push("# check_against_specs (SPEC ADHERENCE) \u2014 model benchmark");
+  lines.push("");
+  lines.push(`**Run:** ${(/* @__PURE__ */ new Date()).toISOString()}`);
+  lines.push(
+    `**Corpus:** 1 real spec (this repo's own \`mcp-server/TESTING.md\`) \xD7 ${args.fixtures.length} real source files = ${args.fixtures.length} per-file decisions (${violations} VIOLATION / ${args.fixtures.length - violations} CLEAN) \u2014 corpus ${args.datasetHash}`
+  );
+  lines.push(
+    `**Incumbent:** \`${args.incumbentId}\` (in $${args.incumbentIn.toFixed(3)}/M, out $${args.incumbentOut.toFixed(3)}/M)`
+  );
+  lines.push(
+    `**Pass gate:** micro-F1 \u2265 ${args.thresholds.minMicroF1.toFixed(2)} AND micro-recall \u2265 ${args.thresholds.minMicroRecall.toFixed(2)} AND coverage \u2265 ${args.thresholds.minCoverage.toFixed(2)}`
+  );
+  lines.push(`**Total LLM spend:** $${args.totalCost.toFixed(6)}`);
+  lines.push("");
+  lines.push(
+    "**Scoring is 100% deterministic \u2014 no LLM judge.** The spec is a verbatim copy of this repo's shipped `mcp-server/TESTING.md`; every source file is a byte-for-byte snapshot of a real revision out of git. The four VIOLATION fixtures are the exact bytes commit `31ce212` replaced *because they really violated this spec* \u2014 the defect drained a real OpenRouter balance ($17.67 in one hour) before it was found. The score is precision/recall/F1 over the per-file CLEAN/VIOLATION verdicts."
+  );
+  lines.push("");
+  lines.push(
+    "**What is NOT scored (stated, not smuggled past):** the rule a VIOLATION line cites is printed below but NOT graded \u2014 deciding whether a quoted rule really is the one that was broken is a semantic judgment, which would need the LLM judge this benchmark refuses to use. Severity (CRITICAL/HIGH/MEDIUM/LOW) is not graded either: human reviewers disagree about it, so scoring it would require a rubric somebody's opinion authored. Accuracy is reported but is NOT part of the gate \u2014 on a 4/9 corpus, answering CLEAN to everything scores 0.69 while finding nothing."
+  );
+  lines.push("");
+  lines.push("## The corpus");
+  lines.push("");
+  lines.push("| Fixture | Truth | Blob | Why |");
+  lines.push("|---|---|---|---|");
+  for (const f of args.fixtures) {
+    lines.push(
+      `| \`${f.file}\` | **${f.truth}** | \`${f.provenance}\` | ${f.rule} \u2014 ${f.rationale} |`
+    );
+  }
+  lines.push("");
+  lines.push("## Recommendation");
+  lines.push("");
+  lines.push(
+    `**${args.selection.changed ? "SWITCH" : "KEEP"} \u2192 \`${args.selection.recommendedModelId}\`**`
+  );
+  lines.push("");
+  lines.push(args.selection.reason);
+  lines.push("");
+  lines.push("## Assessed models");
+  lines.push("");
+  lines.push(
+    "| Model | Req | Bench | micro-F1 | micro-P | micro-R | Accuracy | Coverage | Unscored | in $/M | out $/M | lat ms |"
+  );
+  lines.push("|---|---|---|---|---|---|---|---|---|---|---|---|");
+  const sorted = [...args.assessments].sort((a, b) => b.score.microF1 - a.score.microF1);
+  for (const a of sorted) {
+    const thr = passesThresholds4(a.score, args.thresholds);
+    lines.push(
+      `| \`${a.modelId}\` | ${a.qualified ? "ok" : "no"} | ${thr.pass ? "PASS" : "FAIL"} | ${a.score.microF1.toFixed(3)} | ${a.score.microPrecision.toFixed(3)} | ${a.score.microRecall.toFixed(3)} | ${a.accuracy.toFixed(3)} | ${(a.score.coverage * 100).toFixed(0)}% | ${a.failureReasons.length} | ${a.inputDollarsPerMillion.toFixed(3)} | ${a.outputDollarsPerMillion.toFixed(3)} | ${a.latencyMs} |`
+    );
+  }
+  lines.push("");
+  if (args.selection.rejected.length > 0) {
+    lines.push("## Rejected (and why)");
+    lines.push("");
+    for (const r of args.selection.rejected) lines.push(`- \`${r.modelId}\` \u2014 ${r.reason}`);
+    lines.push("");
+  }
+  const rec = args.assessments.find((a) => a.modelId === args.selection.recommendedModelId);
+  if (rec) {
+    lines.push(`## Confusion matrix \u2014 \`${rec.modelId}\``);
+    lines.push("");
+    lines.push("| Files | TP | FP | FN | TN | Unscored | Precision | Recall | F1 | Accuracy |");
+    lines.push("|---|---|---|---|---|---|---|---|---|---|");
+    for (const c of rec.score.cases) {
+      lines.push(
+        `| ${c.scannedFiles} | ${c.truePositives} | ${c.falsePositives} | ${c.falseNegatives} | ${c.trueNegatives} | ${c.unscored} | ${c.precision.toFixed(3)} | ${c.recall.toFixed(3)} | ${c.f1.toFixed(3)} | ${accuracyOf(rec.score).toFixed(3)} |`
+      );
+    }
+    lines.push("");
+    if (rec.failureReasons.length > 0) {
+      lines.push(`### Files with no parseable verdict \u2014 \`${rec.modelId}\``);
+      lines.push("");
+      for (const f of rec.failureReasons) lines.push(`- ${f}`);
+      lines.push("");
+    }
+  }
+  lines.push("---");
+  lines.push("");
+  lines.push(
+    "Re-run: `llm-externalizer benchmark --check-specs` (auto-discover) or `--check-specs <id> [<id>...]` (assess specific models). ADVISORY by default; add `--apply-profile <P>` to write the winner into that profile's `tool_models.check_against_specs` (CLI-only writer \u2014 the MCP surface never writes)."
+  );
+  return lines.join("\n") + "\n";
+}
+
 // src/model-qualification/auto-replace.ts
 function defaultSettingsReader(profileNameOverride) {
   const settings = loadSettings();
@@ -261785,6 +262979,20 @@ async function defaultBenchmarkRunner(tool, benchmark, incumbentModelId, candida
       rejected: r.selection.rejected
     };
   }
+  if (benchmark === "check-specs") {
+    const r = await runCheckSpecsBenchmark({
+      apiKey,
+      models: candidates,
+      incumbentModelId,
+      onProgress
+    });
+    return {
+      recommendedModelId: r.recommendedModelId,
+      changed: r.changed,
+      reason: r.selection.reason,
+      rejected: r.selection.rejected
+    };
+  }
   throw new Error(
     `defaultBenchmarkRunner: no orchestrator wired for benchmark '${benchmark}' (tool '${tool}'). The model-qualification registry declared a benchmark the auto-replace dispatcher does not know \u2014 add a case here when a new per-tool benchmark ships.`
   );
@@ -261792,7 +263000,7 @@ async function defaultBenchmarkRunner(tool, benchmark, incumbentModelId, candida
 function benchmarkedTools() {
   const out = [];
   for (const [tool, descriptor] of Object.entries(TOOL_MODEL_REGISTRY)) {
-    if (descriptor.benchmark === "security-triage" || descriptor.benchmark === "search-existing" || descriptor.benchmark === "code-task" || descriptor.benchmark === "scan-folder") {
+    if (descriptor.benchmark === "security-triage" || descriptor.benchmark === "search-existing" || descriptor.benchmark === "code-task" || descriptor.benchmark === "scan-folder" || descriptor.benchmark === "check-specs") {
       out.push({ tool, benchmark: descriptor.benchmark });
     }
   }
@@ -263003,10 +264211,10 @@ Report: ${reportPath}`;
           apiKey: opts.apiKey
         });
         const root = opts.mainRoot ?? resolveProjectMainRoot();
-        const dir = str(args.output_dir) ?? join18(root, "reports", "auto-replace");
-        mkdirSync13(dir, { recursive: true });
-        const reportPath = join18(dir, `${compactStamp()}-auto-replace.md`);
-        writeFileSync11(reportPath, reportMarkdown);
+        const dir = str(args.output_dir) ?? join20(root, "reports", "auto-replace");
+        mkdirSync14(dir, { recursive: true });
+        const reportPath = join20(dir, `${compactStamp()}-auto-replace.md`);
+        writeFileSync12(reportPath, reportMarkdown);
         const degraded = findings.filter((f) => f.degraded).length;
         const recommended = findings.filter((f) => f.changed).length;
         const summary = `${findings.length} tool(s) checked, ${degraded} degraded, ${recommended} replacement(s) recommended (advisory \u2014 apply via the CLI \`llm-ext-benchmark --auto-replace --apply\`).`;
@@ -263756,14 +264964,14 @@ async function safeReadJson(res, maxBytes = MAX_RESPONSE_BYTES) {
 
 // src/cluster/cluster_synonyms_main.ts
 import {
-  mkdirSync as mkdirSync16,
-  readFileSync as readFileSync19,
-  readdirSync as readdirSync6,
-  writeFileSync as writeFileSync13,
-  existsSync as existsSync16,
-  renameSync as renameSync7
+  mkdirSync as mkdirSync17,
+  readFileSync as readFileSync21,
+  readdirSync as readdirSync7,
+  writeFileSync as writeFileSync14,
+  existsSync as existsSync19,
+  renameSync as renameSync8
 } from "node:fs";
-import { join as join20 } from "node:path";
+import { join as join22 } from "node:path";
 
 // src/cluster/checkpoint.ts
 import Database2 from "better-sqlite3";
@@ -263895,7 +265103,7 @@ var UnionFind = class _UnionFind {
 
 // src/cluster/checkpoint.ts
 import { dirname as dirname7 } from "node:path";
-import { mkdirSync as mkdirSync14 } from "node:fs";
+import { mkdirSync as mkdirSync15 } from "node:fs";
 var SCHEMA = `
 CREATE TABLE IF NOT EXISTS clusters_uf (
   item_id   TEXT PRIMARY KEY,
@@ -263922,7 +265130,7 @@ var CheckpointDB = class _CheckpointDB {
     this.db = db;
   }
   static open(path) {
-    mkdirSync14(dirname7(path), { recursive: true });
+    mkdirSync15(dirname7(path), { recursive: true });
     const db = new Database2(path);
     db.pragma("journal_mode = WAL");
     db.pragma("synchronous = NORMAL");
@@ -264012,20 +265220,20 @@ var CheckpointDB = class _CheckpointDB {
 // src/cluster/embeddings.ts
 import { spawnSync as spawnSync2 } from "node:child_process";
 import {
-  existsSync as existsSync15,
-  mkdirSync as mkdirSync15,
-  readFileSync as readFileSync18,
-  writeFileSync as writeFileSync12,
-  statSync as statSync10
+  existsSync as existsSync18,
+  mkdirSync as mkdirSync16,
+  readFileSync as readFileSync20,
+  writeFileSync as writeFileSync13,
+  statSync as statSync11
 } from "node:fs";
-import { dirname as dirname8, join as join19 } from "node:path";
+import { dirname as dirname8, join as join21 } from "node:path";
 var F32_BYTES = 4;
 function readEmbeddingsMeta(path) {
   const metaPath = path + ".meta.json";
-  if (!existsSync15(metaPath)) {
+  if (!existsSync18(metaPath)) {
     throw new Error(`embeddings meta sidecar missing: ${metaPath}`);
   }
-  const raw = readFileSync18(metaPath, "utf-8");
+  const raw = readFileSync20(metaPath, "utf-8");
   let meta3;
   try {
     meta3 = JSON.parse(raw);
@@ -264044,7 +265252,7 @@ function readEmbeddingsMeta(path) {
   return meta3;
 }
 function loadEmbeddings(path, expectedN) {
-  if (!existsSync15(path)) throw new Error(`embeddings file missing: ${path}`);
+  if (!existsSync18(path)) throw new Error(`embeddings file missing: ${path}`);
   const meta3 = readEmbeddingsMeta(path);
   const [n, dim] = meta3.shape;
   if (meta3.dtype !== "float32") {
@@ -264057,27 +265265,27 @@ function loadEmbeddings(path, expectedN) {
     throw new Error(`embeddings N mismatch: meta says ${n}, caller expected ${expectedN}`);
   }
   const expectedBytes = n * dim * F32_BYTES;
-  const stat = statSync10(path);
+  const stat = statSync11(path);
   if (stat.size !== expectedBytes) {
     throw new Error(
       `embeddings file size mismatch: ${path} is ${stat.size} bytes, expected ${expectedBytes} = N(${n}) \xD7 D(${dim}) \xD7 ${F32_BYTES}`
     );
   }
-  const buf = readFileSync18(path);
+  const buf = readFileSync20(path);
   const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
   const embeddings = new Float32Array(ab);
   return { embeddings, dim, model: meta3.model, source: "loaded", path };
 }
 function computeEmbeddings(items, opts) {
   if (items.length === 0) throw new Error("computeEmbeddings: empty items");
-  if (!existsSync15(opts.scriptPath)) {
+  if (!existsSync18(opts.scriptPath)) {
     throw new Error(`compute_embeddings.py not found: ${opts.scriptPath}`);
   }
-  mkdirSync15(opts.outDir, { recursive: true });
-  const inputPath = join19(opts.outDir, "_embedding_sentences.txt");
-  const outputPath = join19(opts.outDir, "embeddings.f32");
+  mkdirSync16(opts.outDir, { recursive: true });
+  const inputPath = join21(opts.outDir, "_embedding_sentences.txt");
+  const outputPath = join21(opts.outDir, "embeddings.f32");
   const clean = opts.sentenceClean ?? defaultSentenceClean;
-  writeFileSync12(
+  writeFileSync13(
     inputPath,
     items.map((it) => clean(it.sentence)).join("\n") + "\n",
     { encoding: "utf-8" }
@@ -265014,17 +266222,17 @@ var OUTPUT_NAMES = {
   checkpoint: "checkpoint.sqlite"
 };
 async function loadInputJsonl(path) {
-  if (!existsSync16(path)) {
+  if (!existsSync19(path)) {
     throw new Error(`input_file not found: ${path}`);
   }
   return readClusterJsonl(path);
 }
 function loadPolicy(policyFile) {
   if (!policyFile) return resolvePolicy(void 0);
-  if (!existsSync16(policyFile)) {
+  if (!existsSync19(policyFile)) {
     throw new Error(`policy_file not found: ${policyFile}`);
   }
-  const raw = readFileSync19(policyFile, "utf-8");
+  const raw = readFileSync21(policyFile, "utf-8");
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -265035,9 +266243,9 @@ function loadPolicy(policyFile) {
   return resolvePolicy(valid);
 }
 function gateOutputDir(outputDir, policy, resuming) {
-  mkdirSync16(outputDir, { recursive: true });
+  mkdirSync17(outputDir, { recursive: true });
   if (resuming) return;
-  const existing = readdirSync6(outputDir).filter((n) => !n.startsWith("."));
+  const existing = readdirSync7(outputDir).filter((n) => !n.startsWith("."));
   const collisions = existing.filter(
     (n) => Object.values(OUTPUT_NAMES).includes(n)
   );
@@ -265092,8 +266300,8 @@ function reductionPct(itemsIn, clustersOut) {
 }
 function writeJsonAtomic(path, value) {
   const tmp = path + ".tmp";
-  writeFileSync13(tmp, JSON.stringify(value, null, 2) + "\n", { encoding: "utf-8" });
-  renameSync7(tmp, path);
+  writeFileSync14(tmp, JSON.stringify(value, null, 2) + "\n", { encoding: "utf-8" });
+  renameSync8(tmp, path);
 }
 function writeClustersJsonl(path, itemsById, partition) {
   const lines = [];
@@ -265107,7 +266315,7 @@ function writeClustersJsonl(path, itemsById, partition) {
       lines.push(JSON.stringify({ id: it.id, cluster_id: clusterId, sentence: it.sentence }));
     }
   }
-  writeFileSync13(path, lines.join("\n") + (lines.length ? "\n" : ""), { encoding: "utf-8" });
+  writeFileSync14(path, lines.join("\n") + (lines.length ? "\n" : ""), { encoding: "utf-8" });
 }
 function buildSummary(itemsById, partition, profileName, canonicalsOverride) {
   const clusters = [];
@@ -265144,7 +266352,7 @@ async function runClusterSynonyms(invocation, hooks) {
   const policy = loadPolicy(invocation.policy_file);
   const resumeFrom = invocation.resume_from;
   const resuming = resumeFrom !== void 0;
-  if (resumeFrom !== void 0 && !existsSync16(resumeFrom)) {
+  if (resumeFrom !== void 0 && !existsSync19(resumeFrom)) {
     errors.push(`resume_from checkpoint not found: ${resumeFrom}`);
     return buildEarlyAbort(invocation, errors, warnings, profileName, tStart);
   }
@@ -265185,7 +266393,7 @@ async function runClusterSynonyms(invocation, hooks) {
     errors.push(`embeddings: ${err3.message}`);
     return buildEarlyAbort(invocation, errors, warnings, profileName, tStart);
   }
-  const checkpointPath = resumeFrom ?? join20(invocation.output_dir, OUTPUT_NAMES.checkpoint);
+  const checkpointPath = resumeFrom ?? join22(invocation.output_dir, OUTPUT_NAMES.checkpoint);
   const ckpt = CheckpointDB.open(checkpointPath);
   const uf = ckpt.loadUnionFind();
   for (const it of items) uf.add(it.id);
@@ -265270,9 +266478,9 @@ async function runClusterSynonyms(invocation, hooks) {
     weak_overlap_evidence: weakOverlapEvidence,
     warnings
   };
-  const clustersPath = join20(invocation.output_dir, OUTPUT_NAMES.clusters);
-  const summaryPath = join20(invocation.output_dir, OUTPUT_NAMES.summary);
-  const statsPath = join20(invocation.output_dir, OUTPUT_NAMES.stats);
+  const clustersPath = join22(invocation.output_dir, OUTPUT_NAMES.clusters);
+  const summaryPath = join22(invocation.output_dir, OUTPUT_NAMES.summary);
+  const statsPath = join22(invocation.output_dir, OUTPUT_NAMES.stats);
   writeClustersJsonl(clustersPath, itemsById, partition);
   writeJsonAtomic(summaryPath, buildSummary(itemsById, partition, profileName, canonicalsOverride));
   writeJsonAtomic(statsPath, stats);
@@ -265315,9 +266523,9 @@ function buildEarlyAbort(invocation, errors, warnings, profileName, tStart) {
 }
 
 // src/cluster/preflight_benchmark.ts
-import { createHash as createHash7 } from "node:crypto";
-import { mkdirSync as mkdirSync17, readFileSync as readFileSync20, writeFileSync as writeFileSync14, existsSync as existsSync17, renameSync as renameSync8 } from "node:fs";
-import { join as join21, dirname as dirname9 } from "node:path";
+import { createHash as createHash8 } from "node:crypto";
+import { mkdirSync as mkdirSync18, readFileSync as readFileSync22, writeFileSync as writeFileSync15, existsSync as existsSync20, renameSync as renameSync9 } from "node:fs";
+import { join as join23, dirname as dirname9 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var DEFAULT_PREFLIGHT_PROMPT = `You are given 3 short sentences with numeric ids. Group sentences that have IDENTICAL or NEARLY-IDENTICAL overall meaning (full-sentence meaning equivalence, NOT word-by-word synonym matching).
 
@@ -265332,10 +266540,10 @@ var ResponseSchema = external_exports3.object({
   groups: external_exports3.array(external_exports3.array(external_exports3.number().int()))
 });
 function profileHash(profileFingerprint) {
-  return createHash7("sha256").update(profileFingerprint).digest("hex").slice(0, 16);
+  return createHash8("sha256").update(profileFingerprint).digest("hex").slice(0, 16);
 }
 function defaultCacheDir() {
-  return join21(homedir3(), ".llm-externalizer", "cache");
+  return join23(homedir3(), ".llm-externalizer", "cache");
 }
 function todayLocalISO() {
   const d = /* @__PURE__ */ new Date();
@@ -265346,12 +266554,12 @@ function todayLocalISO() {
 }
 function cachePathFor(profileHashStr, date5, cacheDir) {
   const dir = cacheDir ?? defaultCacheDir();
-  return join21(dir, `benchmark-${profileHashStr}-${date5}.json`);
+  return join23(dir, `benchmark-${profileHashStr}-${date5}.json`);
 }
 function readCache(path) {
-  if (!existsSync17(path)) return null;
+  if (!existsSync20(path)) return null;
   try {
-    const raw = readFileSync20(path, "utf8");
+    const raw = readFileSync22(path, "utf8");
     const parsed = JSON.parse(raw);
     if (parsed.version !== 1) return null;
     return parsed;
@@ -265360,10 +266568,10 @@ function readCache(path) {
   }
 }
 function writeCache(path, rec) {
-  mkdirSync17(dirname9(path), { recursive: true });
+  mkdirSync18(dirname9(path), { recursive: true });
   const tmp = `${path}.tmp.${process.pid}`;
-  writeFileSync14(tmp, JSON.stringify(rec, null, 2) + "\n", "utf8");
-  renameSync8(tmp, path);
+  writeFileSync15(tmp, JSON.stringify(rec, null, 2) + "\n", "utf8");
+  renameSync9(tmp, path);
 }
 function validatePreflightResponse(raw) {
   let parsed;
@@ -266414,262 +267622,41 @@ async function chatCompletionWithRetry(messages, options, deps) {
 // src/index.ts
 import { fileURLToPath as fileUrlToPath_cs } from "node:url";
 
-// src/check-specs/core.ts
-import { existsSync as existsSync18 } from "node:fs";
-import { basename as basename5 } from "node:path";
-var CHECK_SPECS_SYSTEM_PROMPT = "You are a strict specification compliance auditor. You will receive a SPECIFICATION FILE and one or more SOURCE FILES. Your job is to find every violation of the specification in the source files.\n\nRULES:\n1. The specification is the ABSOLUTE source of truth. Every rule, restriction, format, API contract, forbidden pattern, and requirement in the spec MUST be followed exactly.\n2. Report ONLY VIOLATIONS \u2014 things implemented WRONGLY or FORBIDDEN patterns used. Do NOT report MISSING features \u2014 some requirements may be implemented in other files that are not included here.\n3. For each violation, report:\n   - **File**: which source file\n   - **Location**: function/class/method name (NEVER line numbers)\n   - **Spec rule violated**: quote the exact spec text\n   - **What the code does**: describe the actual behavior\n   - **Severity**: CRITICAL (security/data loss), HIGH (wrong behavior), MEDIUM (non-compliance), LOW (style/convention)\n4. If a source file has NO violations, explicitly state: 'CLEAN \u2014 no spec violations found.'\n5. At the end, provide a SUMMARY with total violation counts by severity.\n6. Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.\n\nSPEC FORMAT: The specification file is wrapped in <specs-filename> and <specs-file-content> tags (distinct from source file tags).\n" + FILE_FORMAT_EXAMPLE + BREVITY_RULES;
-async function runCheckAgainstSpecs(args, deps) {
-  const {
-    spec_file_path: csSpecPath,
-    input_files_paths: csInputPathsRaw,
-    folder_path: csFolderPath,
-    extensions: csExtensions,
-    exclude_dirs: csExcludeDirs,
-    use_gitignore: csUseGitignore,
-    instructions: csInstructions,
-    instructions_files_paths: csInstructionsFilesPaths,
-    scan_secrets: csScan,
-    redact_secrets: csRedact,
-    answer_mode: csRawMode,
-    max_payload_kb: csMaxPayloadKb,
-    redact_regex: csRedactRegexRaw
-  } = args;
-  const csUseEnsemble = deps.useEnsemble;
-  const csBudgetBytes = (csMaxPayloadKb ?? 400) * 1024;
-  const csMode = resolveAnswerMode(csRawMode, 0);
-  let csRegexRedact;
-  try {
-    csRegexRedact = parseRedactRegex(csRedactRegexRaw);
-  } catch (err3) {
-    return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
-  }
-  if (!csSpecPath) {
-    return {
-      content: [{ type: "text", text: "FAILED: spec_file_path is required." }],
-      isError: true
-    };
-  }
-  const csNormalized = deps.normalizePaths(csInputPathsRaw);
-  let csFilePaths = [...csNormalized];
-  if (csFolderPath) {
-    const csFolderResult = deps.resolveFolderPath(csFolderPath, {
-      extensions: csExtensions,
-      excludeDirs: csExcludeDirs,
-      useGitignore: csUseGitignore,
-      maxFiles: args.max_files
-    });
-    if (csFolderResult.error && csFolderResult.files.length === 0 && csFilePaths.length === 0) {
-      return { content: [{ type: "text", text: `FAILED: ${csFolderResult.error}` }], isError: true };
-    }
-    csFilePaths = [...csFilePaths, ...csFolderResult.files];
-  }
-  if (csFilePaths.length === 0) {
-    return {
-      content: [{ type: "text", text: "FAILED: Provide input_files_paths or folder_path." }],
-      isError: true
-    };
-  }
-  let csSpecBlock;
-  try {
-    csSpecBlock = readFileAsCodeBlock(csSpecPath, void 0, csRedact, csBudgetBytes, null, "specs-");
-  } catch (err3) {
-    const errMsg = err3 instanceof Error ? err3.message : String(err3);
-    return {
-      content: [{ type: "text", text: `FAILED: Cannot read spec file: ${errMsg}` }],
-      isError: true
-    };
-  }
-  if (csScan && !csRedact) {
-    const csRealFiles = csFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
-    const scanResult = scanFilesForSecrets([csSpecPath, ...csRealFiles]);
-    if (scanResult.found)
-      return {
-        content: [{ type: "text", text: scanResult.report }],
-        isError: true
-      };
-  }
-  const csExtraInstructions = resolvePrompt(csInstructions, csInstructionsFilesPaths);
-  const csSystemPrompt = CHECK_SPECS_SYSTEM_PROMPT;
-  const csSpecBytes = Buffer.byteLength(csSpecBlock, "utf-8");
-  const csSystemBytes = Buffer.byteLength(csSystemPrompt, "utf-8");
-  const csExtraBytes = Buffer.byteLength(csExtraInstructions, "utf-8");
-  const csPromptBytes = csSpecBytes + csSystemBytes + csExtraBytes;
-  let csFileGroups = csFolderPath ? [{ id: "", files: csFilePaths }] : parseFileGroups(csFilePaths);
-  let csEffectivelyGrouped = hasNamedGroups(csFileGroups);
-  if (csMode === 1 && !csEffectivelyGrouped) {
-    const autoGroups = autoGroupByHeuristic(csFilePaths);
-    if (autoGroups.length > 0) {
-      csFileGroups = autoGroups;
-      csEffectivelyGrouped = true;
-    }
-  }
-  const csAllGroupReports = [];
-  for (const fg of csFileGroups) {
-    const fgPaths = fg.files;
-    if (fgPaths.length === 0) continue;
-    const fgId = fg.id;
-    if (csMode === 0 && !csEffectivelyGrouped) {
-      const csPerFileResults = [];
-      for (const fp of fgPaths) {
-        if (!existsSync18(fp)) {
-          csPerFileResults.push(`FAILED: ${fp} \u2014 File not found`);
-          continue;
-        }
-        let fpBlock;
-        try {
-          fpBlock = readFileAsCodeBlock(fp, void 0, csRedact, csBudgetBytes, csRegexRedact);
-        } catch (err3) {
-          csPerFileResults.push(`FAILED: ${fp} \u2014 ${err3 instanceof Error ? err3.message : String(err3)}`);
-          continue;
-        }
-        let fpUserContent = "## SPECIFICATION (source of truth)\n\n" + csSpecBlock + "\n\n";
-        if (csExtraInstructions) {
-          fpUserContent += "## ADDITIONAL INSTRUCTIONS\n\n" + csExtraInstructions + "\n\n";
-        }
-        fpUserContent += "## SOURCE FILES TO CHECK\n\n" + fpBlock;
-        const fpMessages = [
-          { role: "system", content: csSystemPrompt },
-          { role: "user", content: fpUserContent }
-        ];
-        const fpResp = await deps.ensembleStreaming(
-          fpMessages,
-          {
-            maxTokens: deps.resolveDefaultMaxTokens(),
-            onProgress: deps.onProgress,
-            modelOverride: deps.modelOverride
-            // honours --free and credit-exhausted auto-fallback
-          },
-          csUseEnsemble
-        );
-        if (fpResp.content.trim().length === 0) {
-          csPerFileResults.push(`FAILED: ${fp} \u2014 LLM returned empty response`);
-          continue;
-        }
-        const fpFooter = deps.formatFooter(fpResp, "check_against_specs", fp);
-        const fpReportPath = deps.saveResponse("check_against_specs", fpResp.content + fpFooter, {
-          model: deps.ensembleModelLabel(csUseEnsemble),
-          task: `Spec compliance: ${basename5(csSpecPath)} vs ${basename5(fp)}`,
-          inputFile: fp
-        }, void 0, deps.outputDir);
-        csPerFileResults.push(fpReportPath);
-      }
-      return { content: [{ type: "text", text: csPerFileResults.join("\n") }] };
-    }
-    const { groups: csGroups, autoBatched: csAutoBatched, skipped: csSkipped } = readAndGroupFiles(fgPaths, csPromptBytes, csRedact, csBudgetBytes, csRegexRedact);
-    const csBatchResults = [];
-    if (csSkipped.length > 0) {
-      csBatchResults.push(
-        `SKIPPED (exceeds ${csBudgetBytes / 1024} KB payload budget): ${csSkipped.length} file(s)
-` + csSkipped.map((f) => `  - ${f}`).join("\n")
-      );
-    }
-    for (let gi = 0; gi < csGroups.length; gi++) {
-      const group = csGroups[gi];
-      let userContent = "## SPECIFICATION (source of truth)\n\n" + csSpecBlock + "\n\n";
-      if (csExtraInstructions) {
-        userContent += "## ADDITIONAL INSTRUCTIONS\n\n" + csExtraInstructions + "\n\n";
-      }
-      userContent += "## SOURCE FILES TO CHECK\n\n";
-      for (const fd of group) {
-        userContent += `
-
-${fd.block}`;
-      }
-      const csMessages = [
-        { role: "system", content: csSystemPrompt },
-        { role: "user", content: userContent }
-      ];
-      const csResp = await deps.ensembleStreaming(
-        csMessages,
-        {
-          maxTokens: deps.resolveDefaultMaxTokens(),
-          onProgress: deps.onProgress,
-          modelOverride: deps.modelOverride
-        },
-        csUseEnsemble
-      );
-      const csFooter = deps.formatFooter(csResp, "check_against_specs", group[0]?.path);
-      if (csResp.content.trim().length > 0) {
-        if (csAutoBatched) {
-          const fileList = group.map((fd) => fd.path).join(", ");
-          csBatchResults.push(
-            `## Batch ${gi + 1}/${csGroups.length}
-
-Files: ${fileList}
-
-${csResp.content}${csFooter}`
-          );
-        } else {
-          csBatchResults.push(csResp.content + csFooter);
-        }
-      }
-    }
-    if (csBatchResults.length === 0) continue;
-    const csFinalContent = csBatchResults.join("\n\n---\n\n");
-    const csMergedModel = deps.ensembleModelLabel(csUseEnsemble);
-    const csReportPath = deps.saveResponse(
-      "check_against_specs",
-      csFinalContent,
-      {
-        model: csMergedModel,
-        task: `Spec compliance: ${basename5(csSpecPath)} vs ${fgPaths.length} file(s)`,
-        inputFile: fgPaths[0],
-        groupId: fgId || void 0
-      },
-      void 0,
-      deps.outputDir
-    );
-    if (csEffectivelyGrouped) {
-      const labelId = fgId || "auto";
-      csAllGroupReports.push(`[group:${labelId}] ${csReportPath}`);
-    } else {
-      return { content: [{ type: "text", text: csReportPath }] };
-    }
-  }
-  if (csEffectivelyGrouped) {
-    if (csAllGroupReports.length === 0) {
-      return { content: [{ type: "text", text: "FAILED: No results for any group." }], isError: true };
-    }
-    return { content: [{ type: "text", text: csAllGroupReports.join("\n") }] };
-  }
-  return { content: [{ type: "text", text: "FAILED: LLM returned empty response." }], isError: true };
-}
-
 // src/rule-install.ts
 import {
-  existsSync as existsSync19,
-  mkdirSync as mkdirSync18,
-  readFileSync as readFileSync21,
-  writeFileSync as writeFileSync15,
-  renameSync as renameSync9,
+  existsSync as existsSync21,
+  mkdirSync as mkdirSync19,
+  readFileSync as readFileSync23,
+  writeFileSync as writeFileSync16,
+  renameSync as renameSync10,
   realpathSync as realpathSync4,
   unlinkSync
 } from "node:fs";
 import { randomBytes as randomBytes3 } from "node:crypto";
 import { homedir as homedir4, tmpdir } from "node:os";
-import { dirname as dirname10, join as join22, resolve as resolve12, sep as sep2 } from "node:path";
-import { fileURLToPath as fileURLToPath6 } from "node:url";
+import { dirname as dirname10, join as join24, resolve as resolve13, sep as sep2 } from "node:path";
+import { fileURLToPath as fileURLToPath7 } from "node:url";
 var RULE_FILENAME = "use-llm-externalizer.md";
 function resolveBundledRulePath() {
   const candidates = [];
   const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   if (pluginRoot && pluginRoot.length > 0) {
-    candidates.push(join22(resolve12(pluginRoot), "rules", RULE_FILENAME));
+    candidates.push(join24(resolve13(pluginRoot), "rules", RULE_FILENAME));
   }
   try {
-    const here = dirname10(fileURLToPath6(import.meta.url));
-    candidates.push(resolve12(here, "..", "..", "rules", RULE_FILENAME));
+    const here = dirname10(fileURLToPath7(import.meta.url));
+    candidates.push(resolve13(here, "..", "..", "rules", RULE_FILENAME));
   } catch {
   }
   for (const c of candidates) {
-    if (existsSync19(c)) return c;
+    if (existsSync21(c)) return c;
   }
   return null;
 }
 function resolveClaudeRulesDir() {
   const cfg = process.env.CLAUDE_CONFIG_DIR;
-  const base = cfg && cfg.length > 0 ? resolve12(cfg) : join22(homedir4(), ".claude");
-  return join22(base, "rules");
+  const base = cfg && cfg.length > 0 ? resolve13(cfg) : join24(homedir4(), ".claude");
+  return join24(base, "rules");
 }
 function canonical(p) {
   try {
@@ -266677,7 +267664,7 @@ function canonical(p) {
   } catch {
     const parent = dirname10(p);
     if (parent === p) return p;
-    return join22(canonical(parent), p.slice(parent.length + (parent.endsWith(sep2) ? 0 : 1)));
+    return join24(canonical(parent), p.slice(parent.length + (parent.endsWith(sep2) ? 0 : 1)));
   }
 }
 function underAllowedRoot(dir) {
@@ -266689,7 +267676,7 @@ function underAllowedRoot(dir) {
     roots.push(homedir4());
   }
   if (process.env.CLAUDE_CONFIG_DIR && process.env.CLAUDE_CONFIG_DIR.length > 0) {
-    roots.push(canonical(resolve12(process.env.CLAUDE_CONFIG_DIR)));
+    roots.push(canonical(resolve13(process.env.CLAUDE_CONFIG_DIR)));
   }
   const tmp = tmpdir();
   try {
@@ -266705,11 +267692,11 @@ function installUsageRule(opts = {}) {
     return { status: "skipped", dest: "", detail: "disabled via LLM_EXT_INSTALL_RULE" };
   }
   const source = opts.sourcePath ?? resolveBundledRulePath();
-  if (!source || !existsSync19(source)) {
+  if (!source || !existsSync21(source)) {
     return { status: "error", dest: "", detail: "bundled rule source not found" };
   }
   const rulesDir = opts.rulesDir ?? resolveClaudeRulesDir();
-  const dest = join22(rulesDir, RULE_FILENAME);
+  const dest = join24(rulesDir, RULE_FILENAME);
   if (!underAllowedRoot(rulesDir)) {
     return {
       status: "error",
@@ -266719,22 +267706,22 @@ function installUsageRule(opts = {}) {
   }
   let desired;
   try {
-    desired = readFileSync21(source, "utf-8");
+    desired = readFileSync23(source, "utf-8");
   } catch (e) {
     return { status: "error", dest, detail: `cannot read source: ${e.message}` };
   }
-  const existed = existsSync19(dest);
+  const existed = existsSync21(dest);
   if (existed) {
     try {
-      if (readFileSync21(dest, "utf-8") === desired) return { status: "unchanged", dest };
+      if (readFileSync23(dest, "utf-8") === desired) return { status: "unchanged", dest };
     } catch {
     }
   }
   const tmp = dest + ".tmp." + process.pid + "." + randomBytes3(4).toString("hex");
   try {
-    mkdirSync18(rulesDir, { recursive: true });
-    writeFileSync15(tmp, desired, "utf-8");
-    renameSync9(tmp, dest);
+    mkdirSync19(rulesDir, { recursive: true });
+    writeFileSync16(tmp, desired, "utf-8");
+    renameSync10(tmp, dest);
   } catch (e) {
     try {
       unlinkSync(tmp);
@@ -267283,31 +268270,31 @@ function renderEndpointTable(ep, colors) {
 
 // src/free-pool-auto-bench.ts
 import {
-  existsSync as existsSync20,
-  mkdirSync as mkdirSync19,
+  existsSync as existsSync22,
+  mkdirSync as mkdirSync20,
   openSync,
-  readFileSync as readFileSync22,
-  writeFileSync as writeFileSync16
+  readFileSync as readFileSync24,
+  writeFileSync as writeFileSync17
 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
-import { dirname as dirname11, join as join23, resolve as pathResolve } from "node:path";
+import { dirname as dirname11, join as join25, resolve as pathResolve } from "node:path";
 import { spawn } from "node:child_process";
-import { fileURLToPath as fileURLToPath7 } from "node:url";
-var LLM_EXT_HOME = join23(homedir5(), ".llm-externalizer");
-var BENCH_CACHE = join23(LLM_EXT_HOME, "benchmark-results.json");
-var BENCH_LOCK = join23(LLM_EXT_HOME, "free-pool-bench.lock");
-var BENCH_LOG = join23(LLM_EXT_HOME, "free-pool-bench.log");
+import { fileURLToPath as fileURLToPath8 } from "node:url";
+var LLM_EXT_HOME = join25(homedir5(), ".llm-externalizer");
+var BENCH_CACHE = join25(LLM_EXT_HOME, "benchmark-results.json");
+var BENCH_LOCK = join25(LLM_EXT_HOME, "free-pool-bench.lock");
+var BENCH_LOG = join25(LLM_EXT_HOME, "free-pool-bench.log");
 var DISABLE_ENV = "LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH";
 function resolveBenchmarkScriptPath() {
-  const here = dirname11(fileURLToPath7(import.meta.url));
+  const here = dirname11(fileURLToPath8(import.meta.url));
   const bundled = pathResolve(here, "benchmark.js");
-  if (existsSync20(bundled)) return bundled;
+  if (existsSync22(bundled)) return bundled;
   const fromSrc = pathResolve(here, "..", "dist", "benchmark.js");
   return fromSrc;
 }
-function benchCacheHasFreeEntries(cachePath5 = BENCH_CACHE) {
+function benchCacheHasFreeEntries(cachePath6 = BENCH_CACHE) {
   try {
-    const raw = readFileSync22(cachePath5, "utf-8");
+    const raw = readFileSync24(cachePath6, "utf-8");
     const data = JSON.parse(raw);
     if (!Array.isArray(data?.results)) return false;
     return data.results.some(
@@ -267318,9 +268305,9 @@ function benchCacheHasFreeEntries(cachePath5 = BENCH_CACHE) {
   }
 }
 function lockHoldsLivePid(lockPath = BENCH_LOCK) {
-  if (!existsSync20(lockPath)) return false;
+  if (!existsSync22(lockPath)) return false;
   try {
-    const pid = parseInt(readFileSync22(lockPath, "utf-8").trim(), 10);
+    const pid = parseInt(readFileSync24(lockPath, "utf-8").trim(), 10);
     if (!Number.isInteger(pid) || pid <= 0) return false;
     try {
       process.kill(pid, 0);
@@ -267339,7 +268326,7 @@ function maybeTriggerFreePoolBench(opts) {
     freeOnlyActive,
     freeOnlyWasOn,
     log,
-    cachePath: cachePath5 = BENCH_CACHE,
+    cachePath: cachePath6 = BENCH_CACHE,
     lockPath = BENCH_LOCK,
     logPath = BENCH_LOG,
     scriptPath = resolveBenchmarkScriptPath(),
@@ -267355,7 +268342,7 @@ function maybeTriggerFreePoolBench(opts) {
     );
     return { outcome: "skipped", reason: "disabled via env", pid: null };
   }
-  if (benchCacheHasFreeEntries(cachePath5)) {
+  if (benchCacheHasFreeEntries(cachePath6)) {
     return {
       outcome: "skipped",
       reason: "cache already has :free entries",
@@ -267381,7 +268368,7 @@ function maybeTriggerFreePoolBench(opts) {
     };
   }
   try {
-    mkdirSync19(LLM_EXT_HOME, { recursive: true });
+    mkdirSync20(LLM_EXT_HOME, { recursive: true });
   } catch {
   }
   let logFd;
@@ -267405,7 +268392,7 @@ function maybeTriggerFreePoolBench(opts) {
   );
   child.unref();
   try {
-    writeFileSync16(lockPath, String(child.pid ?? ""), "utf-8");
+    writeFileSync17(lockPath, String(child.pid ?? ""), "utf-8");
   } catch {
   }
   log(
@@ -267505,7 +268492,7 @@ var _onSettingsReloaded = null;
 function reloadSettingsFromDisk() {
   let raw;
   try {
-    raw = readFileSync23(SETTINGS_FILE, "utf-8");
+    raw = readFileSync25(SETTINGS_FILE, "utf-8");
   } catch {
     return false;
   }
@@ -267573,7 +268560,7 @@ function reloadSettingsFromDisk() {
 }
 var _settingsLastMtimeMs = (() => {
   try {
-    return statSync11(SETTINGS_FILE).mtimeMs;
+    return statSync12(SETTINGS_FILE).mtimeMs;
   } catch {
     return 0;
   }
@@ -267829,27 +268816,27 @@ function trackRequestEnd() {
 }
 function waitForRequestsDrained(timeoutMs = 12e4) {
   if (_activeRequests === 0) return Promise.resolve();
-  return new Promise((resolve14) => {
+  return new Promise((resolve15) => {
     const timer = setTimeout(() => {
       _activeRequestsDrained = null;
-      resolve14();
+      resolve15();
     }, timeoutMs);
     _activeRequestsDrained = () => {
       clearTimeout(timer);
-      resolve14();
+      resolve15();
     };
   });
 }
 var SESSION_ID = randomUUID3().slice(0, 8);
 var SESSION_START = /* @__PURE__ */ new Date();
-var LOG_DIR = join24(getConfigDir(), "logs");
-var LOG_FILE = join24(
+var LOG_DIR = join26(getConfigDir(), "logs");
+var LOG_FILE = join26(
   LOG_DIR,
   `session-${SESSION_ID}-${SESSION_START.toISOString().slice(0, 10)}.jsonl`
 );
 function writeLogEntry(entry) {
   try {
-    mkdirSync20(LOG_DIR, { recursive: true });
+    mkdirSync21(LOG_DIR, { recursive: true });
     appendFileSync6(LOG_FILE, JSON.stringify(entry) + "\n");
   } catch {
     process.stderr.write(`[llm-externalizer] Failed to write log entry
@@ -267859,7 +268846,7 @@ function writeLogEntry(entry) {
 var STATS_FILE = "/tmp/claude/llm-externalizer-stats.json";
 function writeStatsFile() {
   try {
-    mkdirSync20("/tmp/claude", { recursive: true, mode: 448 });
+    mkdirSync21("/tmp/claude", { recursive: true, mode: 448 });
     const backend = getCurrentBackend();
     const stats = {
       session_id: SESSION_ID,
@@ -267874,8 +268861,8 @@ function writeStatsFile() {
       backend: backend.type
     };
     const tmpStats = STATS_FILE + ".tmp";
-    writeFileSync17(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
-    renameSync10(tmpStats, STATS_FILE);
+    writeFileSync18(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
+    renameSync11(tmpStats, STATS_FILE);
   } catch {
   }
 }
@@ -267997,10 +268984,10 @@ function defaultOutputDir() {
   if (_cachedDefaultOutputDir) return _cachedDefaultOutputDir;
   const envOverride = process.env.LLM_OUTPUT_DIR;
   if (envOverride && envOverride.trim()) {
-    _cachedDefaultOutputDir = resolve13(envOverride.trim());
+    _cachedDefaultOutputDir = resolve14(envOverride.trim());
     return _cachedDefaultOutputDir;
   }
-  _cachedDefaultOutputDir = join24(resolveProjectMainRoot(), "reports", "llm-externalizer");
+  _cachedDefaultOutputDir = join26(resolveProjectMainRoot(), "reports", "llm-externalizer");
   return _cachedDefaultOutputDir;
 }
 function _resetDefaultOutputDirCache() {
@@ -268025,14 +269012,14 @@ function canonicalTimestamp(date5 = /* @__PURE__ */ new Date()) {
 }
 function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir) {
   const dir = outputDir || defaultOutputDir();
-  mkdirSync20(dir, { recursive: true });
+  mkdirSync21(dir, { recursive: true });
   const now = /* @__PURE__ */ new Date();
   const ts2 = canonicalTimestamp(now);
   const shortId = randomUUID3().slice(0, 6);
   const srcPart = meta3.inputFile ? `-${sanitizeFilename(meta3.inputFile).replace(/\.md$/, "")}` : "";
   const groupPart = meta3.groupId ? `-group-${meta3.groupId.replace(/[^a-zA-Z0-9_-]/g, "_")}` : "";
   const filename = overrideFilename || `${ts2}-${toolName}${groupPart}${srcPart}-${shortId}.md`;
-  const filepath = join24(dir, filename);
+  const filepath = join26(dir, filename);
   const lines = [
     "# LLM Externalizer Response",
     "",
@@ -268046,8 +269033,8 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
   lines.push("", "---", "", responseText);
   const tmpPath = filepath + ".tmp";
   try {
-    writeFileSync17(tmpPath, lines.join("\n"), "utf-8");
-    renameSync10(tmpPath, filepath);
+    writeFileSync18(tmpPath, lines.join("\n"), "utf-8");
+    renameSync11(tmpPath, filepath);
   } catch (err3) {
     try {
       unlinkSync2(tmpPath);
@@ -268184,10 +269171,10 @@ function resolveFolderPath(folderPath, opts) {
   } catch (err3) {
     return { files: [], error: `Invalid folder_path: ${err3 instanceof Error ? err3.message : String(err3)}` };
   }
-  if (!existsSync21(folderPath)) {
+  if (!existsSync23(folderPath)) {
     return { files: [], error: `folder_path not found: ${folderPath}` };
   }
-  if (!statSync11(folderPath).isDirectory()) {
+  if (!statSync12(folderPath).isDirectory()) {
     return { files: [], error: `Not a directory: ${folderPath}` };
   }
   const files = walkDir(folderPath, {
@@ -268344,7 +269331,7 @@ ${failed.map((r) => `- **${r.model}**: ${r.content}`).join("\n")}`);
   };
 }
 async function processFileCheck(filePath, task, options = {}) {
-  if (!existsSync21(filePath)) {
+  if (!existsSync23(filePath)) {
     return { filePath, success: false, error: `File not found: ${filePath}` };
   }
   const codeBlock = readFileAsCodeBlock(
@@ -268640,7 +269627,7 @@ Run the "discover" tool to see the current profile status.`
     const isLLMTool = LLM_TOOLS_SET.has(name);
     if (isLLMTool) trackRequestStart();
     const rawOutputDir = args?.output_dir;
-    const outputDir = typeof rawOutputDir === "string" && rawOutputDir.trim() ? resolve13(rawOutputDir.trim()) : void 0;
+    const outputDir = typeof rawOutputDir === "string" && rawOutputDir.trim() ? resolve14(rawOutputDir.trim()) : void 0;
     const freeRequested = args?.free === true;
     const modelOverride = await resolveModelOverride(freeRequested);
     if (modelOverride) {
@@ -269133,7 +270120,7 @@ Profiles: ${profileNames.join(", ")}`);
                 };
               }
               try {
-                writeFileSync17(absPath, jsonText, "utf-8");
+                writeFileSync18(absPath, jsonText, "utf-8");
               } catch (err3) {
                 return {
                   content: [
@@ -269201,11 +270188,11 @@ Profiles: ${profileNames.join(", ")}`);
         }
         case "get_settings": {
           try {
-            const raw = readFileSync23(SETTINGS_FILE, "utf-8");
+            const raw = readFileSync25(SETTINGS_FILE, "utf-8");
             const targetDir = outputDir || defaultOutputDir();
-            mkdirSync20(targetDir, { recursive: true });
-            const copyPath = join24(targetDir, "settings_edit.yaml");
-            writeFileSync17(copyPath, raw, "utf-8");
+            mkdirSync21(targetDir, { recursive: true });
+            const copyPath = join26(targetDir, "settings_edit.yaml");
+            writeFileSync18(copyPath, raw, "utf-8");
             return { content: [{ type: "text", text: copyPath }] };
           } catch (err3) {
             return {
@@ -269362,7 +270349,7 @@ Profiles: ${profileNames.join(", ")}`);
               const gSucceeded = gAll.filter((r) => r.success);
               const reportSections = [];
               for (const r of gSucceeded) {
-                const content = r.reportPath && existsSync21(r.reportPath) ? readFileSync23(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync23(r.reportPath) ? readFileSync25(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -269498,7 +270485,7 @@ ${gAbortReason}`);
             } else {
               const reportSections = [];
               for (const r of succeeded) {
-                const content = r.reportPath && existsSync21(r.reportPath) ? readFileSync23(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync23(r.reportPath) ? readFileSync25(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -269651,8 +270638,8 @@ ${content}`);
             } catch (err3) {
               return { error: err3.message };
             }
-            if (!existsSync21(fA)) return { error: `File not found: ${fARaw}` };
-            if (!existsSync21(fB)) return { error: `File not found: ${fBRaw}` };
+            if (!existsSync23(fA)) return { error: `File not found: ${fARaw}` };
+            if (!existsSync23(fB)) return { error: `File not found: ${fBRaw}` };
             if (cfScan && !cfRedact) {
               const scanResult = scanFilesForSecrets([fA, fB]);
               if (scanResult.found) return { error: scanResult.report };
@@ -269714,7 +270701,7 @@ ${fence}${sourceBlocks}` }
             } catch (err3) {
               return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
             }
-            if (!existsSync21(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
+            if (!existsSync23(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
             const toRef = cfToRef || "HEAD";
             if (cfFromRef.startsWith("-") || toRef.startsWith("-")) {
               return { content: [{ type: "text", text: "FAILED: git refs must not start with '-'" }], isError: true };
@@ -269785,7 +270772,7 @@ ${sections.join("\n\n---\n\n")}`;
                 {
                   model: "git-diff (no LLM)",
                   task: `${cfFromRef} \u2192 ${toRef}`,
-                  inputFile: join24(cfGitRepoSafe, dg.files[0]),
+                  inputFile: join26(cfGitRepoSafe, dg.files[0]),
                   groupId: gid
                 },
                 void 0,
@@ -269878,7 +270865,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync21(fileA)) {
+          if (!existsSync23(fileA)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileA}` }
@@ -269886,7 +270873,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync21(fileB)) {
+          if (!existsSync23(fileB)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileB}` }
@@ -270074,13 +271061,13 @@ ${diffFence}` + sourceFileBlocks
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync21(filePath)) {
+                if (!existsSync23(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
                   continue;
                 }
-                const src = readFileSync23(filePath, "utf-8");
+                const src = readFileSync25(filePath, "utf-8");
                 const lang = detectLang(filePath);
                 const deps = extractLocalImports(filePath, src);
                 const depBlocks = [];
@@ -270134,14 +271121,14 @@ ${resp.content}${footer}`);
           const crReports = [];
           const crReportPaths = [];
           for (const filePath of crFilePaths) {
-            if (!existsSync21(filePath)) {
+            if (!existsSync23(filePath)) {
               crReports.push(`## ${filePath}
 
 FAILED: File not found.`);
               crReportPaths.push("(skipped \u2014 file not found)");
               continue;
             }
-            const crSourceCode = readFileSync23(filePath, "utf-8");
+            const crSourceCode = readFileSync25(filePath, "utf-8");
             const crLang = detectLang(filePath);
             const depPaths = extractLocalImports(filePath, crSourceCode);
             const depBlocks = [];
@@ -270314,7 +271301,7 @@ ${crResp.content}${crFooter}`
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync21(filePath)) {
+                if (!existsSync23(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
@@ -270343,22 +271330,22 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     continue;
                   }
                   const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-                  const resolvedBase = importPath.startsWith("/") ? resolve13(importPath) : join24(resolveDir, importPath);
+                  const resolvedBase = importPath.startsWith("/") ? resolve14(importPath) : join26(resolveDir, importPath);
                   if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                     packageImports.push(importPath);
                     continue;
                   }
-                  let found = existsSync21(resolvedBase) && statSync11(resolvedBase).isFile();
+                  let found = existsSync23(resolvedBase) && statSync12(resolvedBase).isFile();
                   if (!found && !extname5(resolvedBase)) {
                     for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".json"]) {
-                      if (existsSync21(resolvedBase + ext)) {
+                      if (existsSync23(resolvedBase + ext)) {
                         found = true;
                         break;
                       }
                     }
                     if (!found) {
                       for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                        if (existsSync21(join24(resolvedBase, `index${ext}`))) {
+                        if (existsSync23(join26(resolvedBase, `index${ext}`))) {
                           found = true;
                           break;
                         }
@@ -270392,7 +271379,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
           const ciReports = [];
           const ciReportPaths = [];
           for (const filePath of ciFilePaths) {
-            if (!existsSync21(filePath)) {
+            if (!existsSync23(filePath)) {
               ciReports.push(`## ${filePath}
 
 FAILED: File not found.`);
@@ -270443,13 +271430,13 @@ FAILED: File not found.`);
                 continue;
               }
               const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-              const resolvedBase = importPath.startsWith("/") ? resolve13(importPath) : join24(resolveDir, importPath);
+              const resolvedBase = importPath.startsWith("/") ? resolve14(importPath) : join26(resolveDir, importPath);
               if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                 packageImports.push(importPath);
                 continue;
               }
               let found = false;
-              if (existsSync21(resolvedBase) && statSync11(resolvedBase).isFile()) {
+              if (existsSync23(resolvedBase) && statSync12(resolvedBase).isFile()) {
                 found = true;
               }
               if (!found && !extname5(resolvedBase)) {
@@ -270465,14 +271452,14 @@ FAILED: File not found.`);
                   ".rs",
                   ".json"
                 ]) {
-                  if (existsSync21(resolvedBase + ext)) {
+                  if (existsSync23(resolvedBase + ext)) {
                     found = true;
                     break;
                   }
                 }
                 if (!found) {
                   for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                    if (existsSync21(join24(resolvedBase, `index${ext}`))) {
+                    if (existsSync23(join26(resolvedBase, `index${ext}`))) {
                       found = true;
                       break;
                     }
@@ -270612,7 +271599,7 @@ FAILED: File not found.`);
             return resp.content;
           };
           const csModuleDir = dirname12(fileUrlToPath_cs(import.meta.url));
-          const csEmbeddingsScript = join24(csModuleDir, "..", "scripts", "compute_embeddings.py");
+          const csEmbeddingsScript = join26(csModuleDir, "..", "scripts", "compute_embeddings.py");
           const csPreflightModel = getCurrentBackend().model ?? "unknown";
           const csHooks = {
             rawLlmCall: csRawLlmCall,

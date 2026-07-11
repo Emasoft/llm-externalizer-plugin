@@ -16004,7 +16004,7 @@ ${lanes.join("\n")}
               return process.memoryUsage().heapUsed;
             },
             getFileSize(path) {
-              const stat = statSync9(path);
+              const stat = statSync10(path);
               if (stat == null ? void 0 : stat.isFile()) {
                 return stat.size;
               }
@@ -16048,7 +16048,7 @@ ${lanes.join("\n")}
             }
           };
           return nodeSystem;
-          function statSync9(path) {
+          function statSync10(path) {
             try {
               return _fs.statSync(path, statSyncOptions);
             } catch {
@@ -16107,7 +16107,7 @@ ${lanes.join("\n")}
               activeSession.post("Profiler.stop", (err, { profile }) => {
                 var _a;
                 if (!err) {
-                  if ((_a = statSync9(profilePath)) == null ? void 0 : _a.isDirectory()) {
+                  if ((_a = statSync10(profilePath)) == null ? void 0 : _a.isDirectory()) {
                     profilePath = _path.join(profilePath, `${(/* @__PURE__ */ new Date()).toISOString().replace(/:/g, "-")}+P${process.pid}.cpuprofile`);
                   }
                   try {
@@ -16227,7 +16227,7 @@ ${lanes.join("\n")}
                 let stat;
                 if (typeof dirent === "string" || dirent.isSymbolicLink()) {
                   const name = combinePaths(path, entry);
-                  stat = statSync9(name);
+                  stat = statSync10(name);
                   if (!stat) {
                     continue;
                   }
@@ -16251,7 +16251,7 @@ ${lanes.join("\n")}
             return matchFiles(path, extensions, excludes, includes, useCaseSensitiveFileNames2, process.cwd(), depth, getAccessibleFileSystemEntries, realpath);
           }
           function fileSystemEntryExists(path, entryKind) {
-            const stat = statSync9(path);
+            const stat = statSync10(path);
             if (!stat) {
               return false;
             }
@@ -16293,7 +16293,7 @@ ${lanes.join("\n")}
           }
           function getModifiedTime3(path) {
             var _a;
-            return (_a = statSync9(path)) == null ? void 0 : _a.mtime;
+            return (_a = statSync10(path)) == null ? void 0 : _a.mtime;
           }
           function setModifiedTime(path, time) {
             try {
@@ -69109,9 +69109,9 @@ ${lanes.join("\n")}
             const originalModuleSpecifier = canHaveModuleSpecifier(enclosingDeclaration) ? tryGetModuleSpecifierFromDeclaration(enclosingDeclaration) : void 0;
             const contextFile = context.enclosingFile;
             const resolutionMode = overrideImportMode || originalModuleSpecifier && host.getModeForUsageLocation(contextFile, originalModuleSpecifier) || contextFile && host.getDefaultResolutionModeForFile(contextFile);
-            const cacheKey5 = createModeAwareCacheKey(contextFile.path, resolutionMode);
+            const cacheKey6 = createModeAwareCacheKey(contextFile.path, resolutionMode);
             const links = getSymbolLinks(symbol);
-            let specifier = links.specifierCache && links.specifierCache.get(cacheKey5);
+            let specifier = links.specifierCache && links.specifierCache.get(cacheKey6);
             if (!specifier) {
               const isBundle2 = !!compilerOptions.outFile;
               const { moduleResolverHost } = context.tracker;
@@ -69129,7 +69129,7 @@ ${lanes.join("\n")}
                 { overrideImportMode }
               ));
               links.specifierCache ?? (links.specifierCache = /* @__PURE__ */ new Map());
-              links.specifierCache.set(cacheKey5, specifier);
+              links.specifierCache.set(cacheKey6, specifier);
             }
             return specifier;
           }
@@ -85343,12 +85343,12 @@ ${lanes.join("\n")}
           );
         }
         function inferTypeForHomomorphicMappedType(source, target, constraint) {
-          const cacheKey5 = source.id + "," + target.id + "," + constraint.id;
-          if (reverseHomomorphicMappedCache.has(cacheKey5)) {
-            return reverseHomomorphicMappedCache.get(cacheKey5);
+          const cacheKey6 = source.id + "," + target.id + "," + constraint.id;
+          if (reverseHomomorphicMappedCache.has(cacheKey6)) {
+            return reverseHomomorphicMappedCache.get(cacheKey6);
           }
           const type = createReverseMappedType(source, target, constraint);
-          reverseHomomorphicMappedCache.set(cacheKey5, type);
+          reverseHomomorphicMappedCache.set(cacheKey6, type);
           return type;
         }
         function isPartiallyInferableType(type) {
@@ -85398,9 +85398,9 @@ ${lanes.join("\n")}
           return getTypeFromInference(inference) || unknownType;
         }
         function inferReverseMappedType(source, target, constraint) {
-          const cacheKey5 = source.id + "," + target.id + "," + constraint.id;
-          if (reverseMappedCache.has(cacheKey5)) {
-            return reverseMappedCache.get(cacheKey5) || unknownType;
+          const cacheKey6 = source.id + "," + target.id + "," + constraint.id;
+          if (reverseMappedCache.has(cacheKey6)) {
+            return reverseMappedCache.get(cacheKey6) || unknownType;
           }
           reverseMappedSourceStack.push(source);
           reverseMappedTargetStack.push(target);
@@ -85414,7 +85414,7 @@ ${lanes.join("\n")}
           reverseMappedSourceStack.pop();
           reverseMappedTargetStack.pop();
           reverseExpandingFlags = saveExpandingFlags;
-          reverseMappedCache.set(cacheKey5, type);
+          reverseMappedCache.set(cacheKey6, type);
           return type;
         }
         function* getUnmatchedProperties(source, target, requireOptionalProperties, matchDiscriminantProperties) {
@@ -102239,11 +102239,11 @@ ${lanes.join("\n")}
           }
           return noIterationTypes;
         }
-        function getCachedIterationTypes(type, cacheKey5) {
-          return type[cacheKey5];
+        function getCachedIterationTypes(type, cacheKey6) {
+          return type[cacheKey6];
         }
-        function setCachedIterationTypes(type, cacheKey5, cachedTypes2) {
-          return type[cacheKey5] = cachedTypes2;
+        function setCachedIterationTypes(type, cacheKey6, cachedTypes2) {
+          return type[cacheKey6] = cachedTypes2;
         }
         function getIterationTypesOfIterable(type, use, errorNode) {
           var _a, _b;
@@ -102271,8 +102271,8 @@ ${lanes.join("\n")}
             }
             return iterationTypes2;
           }
-          const cacheKey5 = use & 2 ? "iterationTypesOfAsyncIterable" : "iterationTypesOfIterable";
-          const cachedTypes2 = getCachedIterationTypes(type, cacheKey5);
+          const cacheKey6 = use & 2 ? "iterationTypesOfAsyncIterable" : "iterationTypesOfIterable";
+          const cachedTypes2 = getCachedIterationTypes(type, cacheKey6);
           if (cachedTypes2) return cachedTypes2 === noIterationTypes ? void 0 : cachedTypes2;
           let allIterationTypes;
           for (const constituent of type.types) {
@@ -102285,7 +102285,7 @@ ${lanes.join("\n")}
                   addRelatedInfo(rootDiag, ...errorOutputContainer.errors);
                 }
               }
-              setCachedIterationTypes(type, cacheKey5, noIterationTypes);
+              setCachedIterationTypes(type, cacheKey6, noIterationTypes);
               return void 0;
             } else if ((_b = errorOutputContainer == null ? void 0 : errorOutputContainer.errors) == null ? void 0 : _b.length) {
               for (const diag2 of errorOutputContainer.errors) {
@@ -102295,7 +102295,7 @@ ${lanes.join("\n")}
             allIterationTypes = append(allIterationTypes, iterationTypes2);
           }
           const iterationTypes = allIterationTypes ? combineIterationTypes(allIterationTypes) : noIterationTypes;
-          setCachedIterationTypes(type, cacheKey5, iterationTypes);
+          setCachedIterationTypes(type, cacheKey6, iterationTypes);
           return iterationTypes === noIterationTypes ? void 0 : iterationTypes;
         }
         function getAsyncFromSyncIterationTypes(iterationTypes, errorNode) {
@@ -117897,8 +117897,8 @@ ${lanes.join("\n")}
             /*allowSourceMaps*/
             true
           );
-          const decorate5 = emitHelpers().createDecorateHelper(decoratorExpressions, localName);
-          const expression = factory2.createAssignment(localName, classAlias ? factory2.createAssignment(classAlias, decorate5) : decorate5);
+          const decorate6 = emitHelpers().createDecorateHelper(decoratorExpressions, localName);
+          const expression = factory2.createAssignment(localName, classAlias ? factory2.createAssignment(classAlias, decorate6) : decorate6);
           setEmitFlags(
             expression,
             3072
@@ -131079,7 +131079,7 @@ ${lanes.join("\n")}
           }
         }
         function createImportCallExpressionAMD(arg, containsLexicalThis) {
-          const resolve10 = factory2.createUniqueName("resolve");
+          const resolve11 = factory2.createUniqueName("resolve");
           const reject = factory2.createUniqueName("reject");
           const parameters = [
             factory2.createParameterDeclaration(
@@ -131088,7 +131088,7 @@ ${lanes.join("\n")}
               /*dotDotDotToken*/
               void 0,
               /*name*/
-              resolve10
+              resolve11
             ),
             factory2.createParameterDeclaration(
               /*modifiers*/
@@ -131105,7 +131105,7 @@ ${lanes.join("\n")}
                 factory2.createIdentifier("require"),
                 /*typeArguments*/
                 void 0,
-                [factory2.createArrayLiteralExpression([arg || factory2.createOmittedExpression()]), resolve10, reject]
+                [factory2.createArrayLiteralExpression([arg || factory2.createOmittedExpression()]), resolve11, reject]
               )
             )
           ]);
@@ -143915,9 +143915,9 @@ ${lanes.join("\n")}
             /*ignoreCase*/
             false
           )) {
-            const basename3 = getBaseFileName(a.fileName);
-            if (basename3 === "lib.d.ts" || basename3 === "lib.es6.d.ts") return 0;
-            const name = removeSuffix(removePrefix(basename3, "lib."), ".d.ts");
+            const basename4 = getBaseFileName(a.fileName);
+            if (basename4 === "lib.d.ts" || basename4 === "lib.es6.d.ts") return 0;
+            const name = removeSuffix(removePrefix(basename4, "lib."), ".d.ts");
             const index = libs.indexOf(name);
             if (index !== -1) return index + 1;
           }
@@ -205351,16 +205351,16 @@ ${options.prefix}` : "\n" : options.prefix
         isEnabled: () => false,
         writeLine: noop
       };
-      function typingToFileName(cachePath5, packageName, installTypingHost, log) {
+      function typingToFileName(cachePath6, packageName, installTypingHost, log) {
         try {
-          const result = resolveModuleName(packageName, combinePaths(cachePath5, "index.d.ts"), {
+          const result = resolveModuleName(packageName, combinePaths(cachePath6, "index.d.ts"), {
             moduleResolution: 2
             /* Node10 */
           }, installTypingHost);
           return result.resolvedModule && result.resolvedModule.resolvedFileName;
         } catch (e) {
           if (log.isEnabled()) {
-            log.writeLine(`Failed to resolve ${packageName} in folder '${cachePath5}': ${e.message}`);
+            log.writeLine(`Failed to resolve ${packageName} in folder '${cachePath6}': ${e.message}`);
           }
           return void 0;
         }
@@ -205632,7 +205632,7 @@ ${options.prefix}` : "\n" : options.prefix
             this.installTypingHost.writeFile(npmConfigPath, '{ "private": true }');
           }
         }
-        installTypings(req, cachePath5, currentlyCachedTypings, typingsToInstall) {
+        installTypings(req, cachePath6, currentlyCachedTypings, typingsToInstall) {
           if (this.log.isEnabled()) {
             this.log.writeLine(`Installing typings ${JSON.stringify(typingsToInstall)}`);
           }
@@ -205644,7 +205644,7 @@ ${options.prefix}` : "\n" : options.prefix
             this.sendResponse(this.createSetTypings(req, currentlyCachedTypings));
             return;
           }
-          this.ensurePackageDirectoryExists(cachePath5);
+          this.ensurePackageDirectoryExists(cachePath6);
           const requestId = this.installRunCount;
           this.installRunCount++;
           this.sendResponse({
@@ -205654,7 +205654,7 @@ ${options.prefix}` : "\n" : options.prefix
             projectName: req.projectName
           });
           const scopedTypings = filteredTypings.map(typingsName);
-          this.installTypingsAsync(requestId, scopedTypings, cachePath5, (ok) => {
+          this.installTypingsAsync(requestId, scopedTypings, cachePath6, (ok) => {
             try {
               if (!ok) {
                 if (this.log.isEnabled()) {
@@ -205670,7 +205670,7 @@ ${options.prefix}` : "\n" : options.prefix
               }
               const installedTypingFiles = [];
               for (const packageName of filteredTypings) {
-                const typingFile = typingToFileName(cachePath5, packageName, this.installTypingHost, this.log);
+                const typingFile = typingToFileName(cachePath6, packageName, this.installTypingHost, this.log);
                 if (!typingFile) {
                   this.missingTypingsSet.add(packageName);
                   continue;
@@ -205764,7 +205764,7 @@ ${options.prefix}` : "\n" : options.prefix
         Msg2["Perf"] = "Perf";
         return Msg2;
       })(Msg || {});
-      function createInstallTypingsRequest(project, typeAcquisition, unresolvedImports, cachePath5) {
+      function createInstallTypingsRequest(project, typeAcquisition, unresolvedImports, cachePath6) {
         return {
           projectName: project.getProjectName(),
           fileNames: project.getFileNames(
@@ -205777,7 +205777,7 @@ ${options.prefix}` : "\n" : options.prefix
           typeAcquisition,
           unresolvedImports,
           projectRootPath: project.getCurrentDirectory(),
-          cachePath: cachePath5,
+          cachePath: cachePath6,
           kind: "discover"
         };
       }
@@ -207663,8 +207663,8 @@ ${options.prefix}` : "\n" : options.prefix
             }
           };
           for (const file of files) {
-            const basename3 = getBaseFileName(file);
-            if (basename3 === "package.json" || basename3 === "bower.json") {
+            const basename4 = getBaseFileName(file);
+            if (basename4 === "package.json" || basename4 === "bower.json") {
               createProjectWatcher(
                 file,
                 "FileWatcher"
@@ -211336,8 +211336,8 @@ All files are: ${JSON.stringify(names)}`,
               var _a;
               const fileOrDirectoryPath = removeIgnoredPath(this.toPath(fileOrDirectory));
               if (!fileOrDirectoryPath) return;
-              const basename3 = getBaseFileName(fileOrDirectoryPath);
-              if (((_a = result.affectedModuleSpecifierCacheProjects) == null ? void 0 : _a.size) && (basename3 === "package.json" || basename3 === "node_modules")) {
+              const basename4 = getBaseFileName(fileOrDirectoryPath);
+              if (((_a = result.affectedModuleSpecifierCacheProjects) == null ? void 0 : _a.size) && (basename4 === "package.json" || basename4 === "node_modules")) {
                 result.affectedModuleSpecifierCacheProjects.forEach((project) => {
                   var _a2;
                   (_a2 = project.getModuleSpecifierCache()) == null ? void 0 : _a2.clear();
@@ -217823,8 +217823,8 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
         installPackage(options) {
           this.packageInstallId++;
           const request = { kind: "installPackage", ...options, id: this.packageInstallId };
-          const promise = new Promise((resolve10, reject) => {
-            (this.packageInstalledPromise ?? (this.packageInstalledPromise = /* @__PURE__ */ new Map())).set(this.packageInstallId, { resolve: resolve10, reject });
+          const promise = new Promise((resolve11, reject) => {
+            (this.packageInstalledPromise ?? (this.packageInstalledPromise = /* @__PURE__ */ new Map())).set(this.packageInstallId, { resolve: resolve11, reject });
           });
           this.installer.send(request);
           return promise;
@@ -218107,9 +218107,9 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 });
 
 // src/benchmark/index.ts
-import { mkdirSync as mkdirSync10, writeFileSync as writeFileSync9, existsSync as existsSync15 } from "node:fs";
-import { dirname as dirname5, join as join17 } from "node:path";
-import { fileURLToPath as fileURLToPath5 } from "node:url";
+import { mkdirSync as mkdirSync11, writeFileSync as writeFileSync10, existsSync as existsSync18 } from "node:fs";
+import { dirname as dirname5, join as join19 } from "node:path";
+import { fileURLToPath as fileURLToPath6 } from "node:url";
 
 // src/usage-history.ts
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -218516,8 +218516,8 @@ var TOOL_MODEL_REGISTRY = {
   check_against_specs: {
     tool: "check_against_specs",
     requirements: criteria({ requireReasoning: false }),
-    benchmark: null,
-    note: "Source-vs-specification compliance. Validation-accuracy benchmark dataset is incremental."
+    benchmark: "check-specs",
+    note: "Source-vs-specification compliance. Gated by the spec-adherence benchmark (P2d): this repo's own shipped TESTING.md audited over thirteen verbatim git snapshots \u2014 four of them the exact pre-fix bytes a real cost-safety commit replaced \u2014 scored deterministically on the per-file CLEAN/VIOLATION verdict, no LLM judge. Violation CONTENT (the cited rule, the severity) is deliberately NOT graded: that needs a judge."
   },
   compare_files: {
     tool: "compare_files",
@@ -226089,6 +226089,1200 @@ function buildReportMarkdown4(args) {
   return lines.join("\n") + "\n";
 }
 
+// src/benchmark/check-specs/index.ts
+import { existsSync as existsSync17, mkdirSync as mkdirSync8, readFileSync as readFileSync16, renameSync as renameSync5, writeFileSync as writeFileSync7 } from "node:fs";
+import { join as join16 } from "node:path";
+
+// src/benchmark/check-specs/dataset.ts
+import { createHash as createHash6 } from "node:crypto";
+import { existsSync as existsSync15, readFileSync as readFileSync15, readdirSync as readdirSync6, statSync as statSync9 } from "node:fs";
+import { join as join15, resolve as resolve10 } from "node:path";
+import { fileURLToPath as fileURLToPath5 } from "node:url";
+var CHECK_SPECS_INSTRUCTIONS = [
+  "You are auditing exactly ONE source file against the specification above.",
+  "",
+  "OUTPUT FORMAT (mandatory). The FIRST line of your reply must be exactly one of:",
+  "VIOLATION: <which spec rule this file breaks, in a few words>",
+  "CLEAN \u2014 no spec violations found.",
+  "",
+  "Then, only if you answered VIOLATION, give the details the RULES section asks for.",
+  "",
+  "Judge what the code DOES, not what its name, its comments or its documentation",
+  "suggest. A file that merely mentions, describes, or tests the subject of a rule",
+  "does not thereby break it. A file that is not governed by a rule at all is CLEAN."
+].join("\n");
+var CHECK_SPECS_FIXTURES = [
+  // ── The four real violations (pre-fix blobs, 31ce212^ = b816534) ──────────
+  {
+    file: "src/b816534/test-helpers.ts",
+    truth: "VIOLATION",
+    provenance: "31ce212^:mcp-server/src/test-helpers.ts",
+    rule: "R1 \u2014 the default test backend must never bill",
+    rationale: "Its own header states it: 'Uses the real ~/.llm-externalizer/settings.yaml \u2014 the same file the server uses.' createTestClient copies that settings file into EVERY spawned test server, unconditionally: there is no requireLiveBackend opt-in in this revision at all. This is the root cause commit 31ce212 names \u2014 the default `npm test` ran the user's premium 3-model ensemble for real.",
+    // The R1 opt-in the spec REQUIRES does not exist anywhere in this revision. Its
+    // absence is what makes the real backend unconditional.
+    probe: {
+      source: "requireLiveBackend",
+      mustMatch: false,
+      says: "the pre-fix helper has no requireLiveBackend opt-in \u2014 the real backend is unconditional"
+    }
+  },
+  {
+    file: "src/b816534/live.test.ts",
+    truth: "VIOLATION",
+    provenance: "31ce212^:mcp-server/src/live.test.ts",
+    rule: "R2 \u2014 a real-LLM suite must self-skip unless opted into",
+    rationale: "Every describe block here makes real LLM round-trips (chat, code_task, compare_files, batch_check) against the user's configured backend, and NOT ONE is gated: no LIVE_TESTS, no key check, no skipIf. It bills on any invocation.",
+    probe: {
+      source: "LIVE_TESTS",
+      mustMatch: false,
+      says: "no LIVE_TESTS gate anywhere in the pre-fix live suite"
+    }
+  },
+  {
+    file: "src/b816534/live-extended.test.ts",
+    truth: "VIOLATION",
+    provenance: "31ce212^:mcp-server/src/live-extended.test.ts",
+    rule: "R2 \u2014 a real-LLM suite must self-skip unless opted into",
+    rationale: "The same defect across seven ungated live describe blocks (chat, scan_folder, batch_check, check_imports, check_references, deprecation, scan_secrets).",
+    probe: {
+      source: "LIVE_TESTS",
+      mustMatch: false,
+      says: "no LIVE_TESTS gate anywhere in the pre-fix extended live suite"
+    }
+  },
+  {
+    file: "src/b816534/security-scan-live.test.ts",
+    truth: "VIOLATION",
+    provenance: "31ce212^:mcp-server/src/security_scan/security_scan_live.test.ts",
+    rule: "R2 \u2014 a real-LLM suite must self-skip unless opted into",
+    rationale: "The subtle one, and the reason a model has to actually READ the gate rather than notice that one exists: this suite IS gated \u2014 on HAS_KEY alone. The spec requires BOTH LIVE_TESTS=1 AND the key. A half-gate fired the suite on every `npm test` in any environment that had a key exported, which the dev machine did \u2014 'silently billing the user', as the fix commit puts it.",
+    probe: {
+      source: "LIVE_TESTS",
+      mustMatch: false,
+      says: "the pre-fix gate is HAS_KEY only \u2014 the LIVE_TESTS half of the gate is missing"
+    }
+  },
+  // ── The four fixed twins (post-fix blobs, 31ce212) ────────────────────────
+  // Textually ~95% identical to the violations above. This pairing is what makes
+  // the corpus impossible to solve with a bag of words.
+  {
+    file: "src/31ce212/test-helpers.ts",
+    truth: "CLEAN",
+    provenance: "31ce212:mcp-server/src/test-helpers.ts",
+    rule: "R1 \u2014 satisfied",
+    rationale: "The fix. resolveTestConfig() now defaults to a synthetic LOCAL profile at http://127.0.0.1:1 (a guaranteed-dead port, local mode \u2192 never contacts openrouter.ai), and the real settings.yaml is copied ONLY when the caller passes requireLiveBackend: true \u2014 which is precisely what TESTING.md says.",
+    probe: {
+      source: "requireLiveBackend",
+      mustMatch: true,
+      says: "the fixed helper carries the requireLiveBackend opt-in the spec requires"
+    }
+  },
+  {
+    file: "src/31ce212/live.test.ts",
+    truth: "CLEAN",
+    provenance: "31ce212:mcp-server/src/live.test.ts",
+    rule: "R2 \u2014 satisfied",
+    rationale: "The fix: every describe became describe.skipIf(!LIVE), where LIVE requires LIVE_TESTS === '1' AND a non-empty OPENROUTER_API_KEY \u2014 both halves \u2014 and the config is taken with requireLiveBackend: true, the sanctioned opt-in.",
+    probe: {
+      source: "LIVE_TESTS",
+      mustMatch: true,
+      says: "the fixed live suite gates on LIVE_TESTS"
+    }
+  },
+  {
+    file: "src/31ce212/live-extended.test.ts",
+    truth: "CLEAN",
+    provenance: "31ce212:mcp-server/src/live-extended.test.ts",
+    rule: "R2 \u2014 satisfied",
+    rationale: "The same fix, applied to all seven describe blocks.",
+    probe: {
+      source: "LIVE_TESTS",
+      mustMatch: true,
+      says: "the fixed extended live suite gates on LIVE_TESTS"
+    }
+  },
+  {
+    file: "src/31ce212/security-scan-live.test.ts",
+    truth: "CLEAN",
+    provenance: "31ce212:mcp-server/src/security_scan/security_scan_live.test.ts",
+    rule: "R2 \u2014 satisfied",
+    rationale: "The fix: the half-gate becomes the full one \u2014 LIVE_TESTS === '1' AND a non-empty OPENROUTER_API_KEY.",
+    probe: {
+      source: "LIVE_TESTS",
+      mustMatch: true,
+      says: "the fixed security-scan live suite gates on LIVE_TESTS"
+    }
+  },
+  // ── Real files the incident never touched (HEAD, a4d6241) ─────────────────
+  {
+    file: "src/a4d6241/security-triage-live.test.ts",
+    truth: "CLEAN",
+    provenance: "a4d6241:mcp-server/src/benchmark/security-triage/live.test.ts",
+    rule: "R2 \u2014 satisfied",
+    rationale: "A live suite that was ALREADY compliant when the incident happened \u2014 commit 31ce212's own message cites it as the pattern the broken suites were fixed TO. It makes real, paid LLM calls and is correctly double-gated. Its presence is the direct rebuttal of 'a live test is a violation': what matters is the gate.",
+    probe: {
+      source: "LIVE_TESTS",
+      mustMatch: true,
+      says: "an already-compliant live suite: real calls, correctly double-gated"
+    }
+  },
+  {
+    file: "src/a4d6241/test-helpers.test.ts",
+    truth: "CLEAN",
+    provenance: "a4d6241:mcp-server/src/test-helpers.test.ts",
+    rule: "none \u2014 it makes no LLM call",
+    rationale: "THE HARDEST CLEAN CASE, and the fixture that defeats the smartest cheap rule. It contains `requireLiveBackend: true` (R1's opt-in marker) and carries NO LIVE_TESTS gate, so EVERY mechanical rule an adversary can write from the spec calls it a violation. It is compliant: it is the cost-safety REGRESSION GUARD, and it only RESOLVES a config object to assert the default can never bill \u2014 it never spawns a client, never opens a socket ('file read only \u2014 no network, no spend'). A rule you cannot break by reading a file cannot be violated by reading a file. Getting this one right requires reading the code.",
+    // No probe: "this test spends nothing" is a fact about what the code DOES, and
+    // there is no honest regex for it. The label rests on reading the file (its
+    // imports are vitest + one local pure function) — stated plainly rather than
+    // dressed up in a pattern that would only pretend to check it.
+    probe: null
+  },
+  {
+    file: "src/a4d6241/config.test.ts",
+    truth: "CLEAN",
+    provenance: "a4d6241:mcp-server/src/config.test.ts",
+    rule: "none \u2014 it makes no LLM call",
+    rationale: 'A settings-parser unit test. It contains the literal string `url: "https://openrouter.ai/api"` \u2014 as a YAML fixture VALUE it writes to a temp file to test the parser \u2014 so any grep for the OpenRouter endpoint flags it. It imports vitest, node:fs and local pure modules; it opens no socket and spends nothing.',
+    probe: null
+  },
+  {
+    file: "src/a4d6241/security-triage-runner.test.ts",
+    truth: "CLEAN",
+    provenance: "a4d6241:mcp-server/src/benchmark/security-triage/runner.test.ts",
+    rule: "none \u2014 it makes no LLM call",
+    rationale: "A hermetic transform test whose own header records that exercising the real judge over fetchImpl is out of scope. No network, no gate needed, no violation.",
+    probe: null
+  },
+  {
+    file: "src/a4d6241/pick.test.ts",
+    truth: "CLEAN",
+    provenance: "a4d6241:mcp-server/src/benchmark/pick.test.ts",
+    rule: "none \u2014 it makes no LLM call",
+    rationale: "A pure model-selection / settings-writer test over temp dirs. Saturated with model ids and OpenRouter pricing vocabulary, and spends nothing.",
+    probe: null
+  }
+];
+var MIN_VIOLATIONS = 3;
+var MIN_CLEAN = 4;
+function resolveFixtureRoot4() {
+  const here = fileURLToPath5(new URL(".", import.meta.url));
+  const candidates = [
+    resolve10(here, "../../../benchmark-fixtures/check-specs"),
+    // dist/ bundle layout: dist/<bundle>.js → one level less deep.
+    resolve10(here, "../../benchmark-fixtures/check-specs"),
+    resolve10(here, "../benchmark-fixtures/check-specs")
+  ];
+  for (const c of candidates) {
+    if (existsSync15(c) && statSync9(c).isDirectory()) return c;
+  }
+  throw new Error(
+    `check-specs fixture root not found near ${here} \u2014 looked at:
+` + candidates.map((c) => `  ${c}`).join("\n")
+  );
+}
+function specPath(root = resolveFixtureRoot4()) {
+  return join15(root, "spec", "TESTING.md");
+}
+function fixtureAbsPath2(rel, root = resolveFixtureRoot4()) {
+  return join15(root, rel);
+}
+function fixtureFilePaths(fixtures = CHECK_SPECS_FIXTURES, root = resolveFixtureRoot4()) {
+  return fixtures.map((f) => resolve10(fixtureAbsPath2(f.file, root)));
+}
+function expectedViolations(fixtures = CHECK_SPECS_FIXTURES, root = resolveFixtureRoot4()) {
+  return new Set(
+    fixtures.filter((f) => f.truth === "VIOLATION").map((f) => resolve10(fixtureAbsPath2(f.file, root)))
+  );
+}
+function listFixtureFiles3(root = resolveFixtureRoot4()) {
+  const out = [];
+  const walk = (dir, rel) => {
+    for (const entry of readdirSync6(dir, { withFileTypes: true })) {
+      const abs2 = join15(dir, entry.name);
+      const relPath = `${rel}/${entry.name}`;
+      if (entry.isDirectory()) walk(abs2, relPath);
+      else if (entry.isFile()) out.push(relPath);
+    }
+  };
+  walk(join15(root, "src"), "src");
+  return out.sort();
+}
+function datasetFingerprint2(root = resolveFixtureRoot4()) {
+  const h = createHash6("sha1");
+  h.update(JSON.stringify(CHECK_SPECS_FIXTURES));
+  h.update(CHECK_SPECS_INSTRUCTIONS);
+  h.update(readFileSync15(specPath(root)));
+  for (const rel of listFixtureFiles3(root)) {
+    h.update(rel);
+    h.update(readFileSync15(fixtureAbsPath2(rel, root)));
+  }
+  return h.digest("hex").slice(0, 12);
+}
+function validateDataset3(fixtures = CHECK_SPECS_FIXTURES, root = resolveFixtureRoot4()) {
+  const spec = specPath(root);
+  if (!existsSync15(spec)) {
+    throw new Error(`check-specs spec file missing: ${spec}`);
+  }
+  if (readFileSync15(spec, "utf-8").trim().length === 0) {
+    throw new Error(`check-specs spec file is empty: ${spec}`);
+  }
+  if (fixtures.length === 0) throw new Error("check-specs corpus is empty");
+  const seen = /* @__PURE__ */ new Set();
+  let violations = 0;
+  let clean = 0;
+  for (const f of fixtures) {
+    if (seen.has(f.file)) throw new Error(`duplicate fixture: ${f.file}`);
+    seen.add(f.file);
+    const abs2 = fixtureAbsPath2(f.file, root);
+    if (!existsSync15(abs2)) {
+      throw new Error(`fixture ${f.file} is listed in the dataset but missing on disk (${abs2})`);
+    }
+    const bytes = readFileSync15(abs2);
+    if (bytes.includes(0)) {
+      throw new Error(
+        `fixture ${f.file} contains a NUL byte \u2014 readFileAsCodeBlock treats it as binary and REFUSES to read it, so no model could ever be scored on it.`
+      );
+    }
+    if (f.rationale.trim().length < 40) {
+      throw new Error(`fixture ${f.file}: rationale is missing or too thin to check`);
+    }
+    if (f.probe) {
+      if (/[gy]/.test(new RegExp(f.probe.source).flags)) {
+        throw new Error(`fixture ${f.file}: truth probe must not be global/sticky`);
+      }
+      const hit = new RegExp(f.probe.source).test(bytes.toString("utf-8"));
+      if (hit !== f.probe.mustMatch) {
+        throw new Error(
+          `fixture ${f.file}: TRUTH PROBE FAILED \u2014 ${f.probe.says}.
+  expected /${f.probe.source}/ to ${f.probe.mustMatch ? "MATCH" : "NOT match"} the fixture, but it ${hit ? "matched" : "did not match"}.
+  These bytes came from ${f.provenance}. Re-extract them from git \u2014 do NOT edit a fixture to make the probe pass, and do NOT relax the probe to fit edited bytes.`
+        );
+      }
+    }
+    if (f.truth === "VIOLATION") violations++;
+    else clean++;
+  }
+  if (violations < MIN_VIOLATIONS) {
+    throw new Error(
+      `only ${violations} VIOLATION fixture(s) (need \u2265 ${MIN_VIOLATIONS}) \u2014 recall is not measurable.`
+    );
+  }
+  if (clean < MIN_CLEAN) {
+    throw new Error(
+      `only ${clean} CLEAN fixture(s) (need \u2265 ${MIN_CLEAN}) \u2014 precision is not measurable, so flagging every file would pass.`
+    );
+  }
+  const onDisk = listFixtureFiles3(root);
+  const unlabelled = onDisk.filter((rel) => !seen.has(rel));
+  if (unlabelled.length > 0) {
+    throw new Error(
+      `fixture file(s) on disk with no dataset entry: ${unlabelled.join(", ")}. Either label them or remove them \u2014 an unlabelled fixture is a file nobody has decided the truth about.`
+    );
+  }
+}
+
+// src/check-specs/core.ts
+import { existsSync as existsSync16 } from "node:fs";
+import { basename as basename3 } from "node:path";
+var CHECK_SPECS_SYSTEM_PROMPT = "You are a strict specification compliance auditor. You will receive a SPECIFICATION FILE and one or more SOURCE FILES. Your job is to find every violation of the specification in the source files.\n\nRULES:\n1. The specification is the ABSOLUTE source of truth. Every rule, restriction, format, API contract, forbidden pattern, and requirement in the spec MUST be followed exactly.\n2. Report ONLY VIOLATIONS \u2014 things implemented WRONGLY or FORBIDDEN patterns used. Do NOT report MISSING features \u2014 some requirements may be implemented in other files that are not included here.\n3. For each violation, report:\n   - **File**: which source file\n   - **Location**: function/class/method name (NEVER line numbers)\n   - **Spec rule violated**: quote the exact spec text\n   - **What the code does**: describe the actual behavior\n   - **Severity**: CRITICAL (security/data loss), HIGH (wrong behavior), MEDIUM (non-compliance), LOW (style/convention)\n4. If a source file has NO violations, explicitly state: 'CLEAN \u2014 no spec violations found.'\n5. At the end, provide a SUMMARY with total violation counts by severity.\n6. Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.\n\nSPEC FORMAT: The specification file is wrapped in <specs-filename> and <specs-file-content> tags (distinct from source file tags).\n" + FILE_FORMAT_EXAMPLE + BREVITY_RULES;
+async function runCheckAgainstSpecs(args, deps) {
+  const {
+    spec_file_path: csSpecPath,
+    input_files_paths: csInputPathsRaw,
+    folder_path: csFolderPath,
+    extensions: csExtensions,
+    exclude_dirs: csExcludeDirs,
+    use_gitignore: csUseGitignore,
+    instructions: csInstructions,
+    instructions_files_paths: csInstructionsFilesPaths,
+    scan_secrets: csScan,
+    redact_secrets: csRedact,
+    answer_mode: csRawMode,
+    max_payload_kb: csMaxPayloadKb,
+    redact_regex: csRedactRegexRaw
+  } = args;
+  const csUseEnsemble = deps.useEnsemble;
+  const csBudgetBytes = (csMaxPayloadKb ?? 400) * 1024;
+  const csMode = resolveAnswerMode(csRawMode, 0);
+  let csRegexRedact;
+  try {
+    csRegexRedact = parseRedactRegex(csRedactRegexRaw);
+  } catch (err) {
+    return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+  }
+  if (!csSpecPath) {
+    return {
+      content: [{ type: "text", text: "FAILED: spec_file_path is required." }],
+      isError: true
+    };
+  }
+  const csNormalized = deps.normalizePaths(csInputPathsRaw);
+  let csFilePaths = [...csNormalized];
+  if (csFolderPath) {
+    const csFolderResult = deps.resolveFolderPath(csFolderPath, {
+      extensions: csExtensions,
+      excludeDirs: csExcludeDirs,
+      useGitignore: csUseGitignore,
+      maxFiles: args.max_files
+    });
+    if (csFolderResult.error && csFolderResult.files.length === 0 && csFilePaths.length === 0) {
+      return { content: [{ type: "text", text: `FAILED: ${csFolderResult.error}` }], isError: true };
+    }
+    csFilePaths = [...csFilePaths, ...csFolderResult.files];
+  }
+  if (csFilePaths.length === 0) {
+    return {
+      content: [{ type: "text", text: "FAILED: Provide input_files_paths or folder_path." }],
+      isError: true
+    };
+  }
+  let csSpecBlock;
+  try {
+    csSpecBlock = readFileAsCodeBlock(csSpecPath, void 0, csRedact, csBudgetBytes, null, "specs-");
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    return {
+      content: [{ type: "text", text: `FAILED: Cannot read spec file: ${errMsg}` }],
+      isError: true
+    };
+  }
+  if (csScan && !csRedact) {
+    const csRealFiles = csFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
+    const scanResult = scanFilesForSecrets([csSpecPath, ...csRealFiles]);
+    if (scanResult.found)
+      return {
+        content: [{ type: "text", text: scanResult.report }],
+        isError: true
+      };
+  }
+  const csExtraInstructions = resolvePrompt(csInstructions, csInstructionsFilesPaths);
+  const csSystemPrompt = CHECK_SPECS_SYSTEM_PROMPT;
+  const csSpecBytes = Buffer.byteLength(csSpecBlock, "utf-8");
+  const csSystemBytes = Buffer.byteLength(csSystemPrompt, "utf-8");
+  const csExtraBytes = Buffer.byteLength(csExtraInstructions, "utf-8");
+  const csPromptBytes = csSpecBytes + csSystemBytes + csExtraBytes;
+  let csFileGroups = csFolderPath ? [{ id: "", files: csFilePaths }] : parseFileGroups(csFilePaths);
+  let csEffectivelyGrouped = hasNamedGroups(csFileGroups);
+  if (csMode === 1 && !csEffectivelyGrouped) {
+    const autoGroups = autoGroupByHeuristic(csFilePaths);
+    if (autoGroups.length > 0) {
+      csFileGroups = autoGroups;
+      csEffectivelyGrouped = true;
+    }
+  }
+  const csAllGroupReports = [];
+  for (const fg of csFileGroups) {
+    const fgPaths = fg.files;
+    if (fgPaths.length === 0) continue;
+    const fgId = fg.id;
+    if (csMode === 0 && !csEffectivelyGrouped) {
+      const csPerFileResults = [];
+      for (const fp of fgPaths) {
+        if (!existsSync16(fp)) {
+          csPerFileResults.push(`FAILED: ${fp} \u2014 File not found`);
+          continue;
+        }
+        let fpBlock;
+        try {
+          fpBlock = readFileAsCodeBlock(fp, void 0, csRedact, csBudgetBytes, csRegexRedact);
+        } catch (err) {
+          csPerFileResults.push(`FAILED: ${fp} \u2014 ${err instanceof Error ? err.message : String(err)}`);
+          continue;
+        }
+        let fpUserContent = "## SPECIFICATION (source of truth)\n\n" + csSpecBlock + "\n\n";
+        if (csExtraInstructions) {
+          fpUserContent += "## ADDITIONAL INSTRUCTIONS\n\n" + csExtraInstructions + "\n\n";
+        }
+        fpUserContent += "## SOURCE FILES TO CHECK\n\n" + fpBlock;
+        const fpMessages = [
+          { role: "system", content: csSystemPrompt },
+          { role: "user", content: fpUserContent }
+        ];
+        const fpResp = await deps.ensembleStreaming(
+          fpMessages,
+          {
+            maxTokens: deps.resolveDefaultMaxTokens(),
+            onProgress: deps.onProgress,
+            modelOverride: deps.modelOverride
+            // honours --free and credit-exhausted auto-fallback
+          },
+          csUseEnsemble
+        );
+        if (fpResp.content.trim().length === 0) {
+          csPerFileResults.push(`FAILED: ${fp} \u2014 LLM returned empty response`);
+          continue;
+        }
+        const fpFooter = deps.formatFooter(fpResp, "check_against_specs", fp);
+        const fpReportPath = deps.saveResponse("check_against_specs", fpResp.content + fpFooter, {
+          model: deps.ensembleModelLabel(csUseEnsemble),
+          task: `Spec compliance: ${basename3(csSpecPath)} vs ${basename3(fp)}`,
+          inputFile: fp
+        }, void 0, deps.outputDir);
+        csPerFileResults.push(fpReportPath);
+      }
+      return { content: [{ type: "text", text: csPerFileResults.join("\n") }] };
+    }
+    const { groups: csGroups, autoBatched: csAutoBatched, skipped: csSkipped } = readAndGroupFiles(fgPaths, csPromptBytes, csRedact, csBudgetBytes, csRegexRedact);
+    const csBatchResults = [];
+    if (csSkipped.length > 0) {
+      csBatchResults.push(
+        `SKIPPED (exceeds ${csBudgetBytes / 1024} KB payload budget): ${csSkipped.length} file(s)
+` + csSkipped.map((f) => `  - ${f}`).join("\n")
+      );
+    }
+    for (let gi = 0; gi < csGroups.length; gi++) {
+      const group = csGroups[gi];
+      let userContent = "## SPECIFICATION (source of truth)\n\n" + csSpecBlock + "\n\n";
+      if (csExtraInstructions) {
+        userContent += "## ADDITIONAL INSTRUCTIONS\n\n" + csExtraInstructions + "\n\n";
+      }
+      userContent += "## SOURCE FILES TO CHECK\n\n";
+      for (const fd of group) {
+        userContent += `
+
+${fd.block}`;
+      }
+      const csMessages = [
+        { role: "system", content: csSystemPrompt },
+        { role: "user", content: userContent }
+      ];
+      const csResp = await deps.ensembleStreaming(
+        csMessages,
+        {
+          maxTokens: deps.resolveDefaultMaxTokens(),
+          onProgress: deps.onProgress,
+          modelOverride: deps.modelOverride
+        },
+        csUseEnsemble
+      );
+      const csFooter = deps.formatFooter(csResp, "check_against_specs", group[0]?.path);
+      if (csResp.content.trim().length > 0) {
+        if (csAutoBatched) {
+          const fileList = group.map((fd) => fd.path).join(", ");
+          csBatchResults.push(
+            `## Batch ${gi + 1}/${csGroups.length}
+
+Files: ${fileList}
+
+${csResp.content}${csFooter}`
+          );
+        } else {
+          csBatchResults.push(csResp.content + csFooter);
+        }
+      }
+    }
+    if (csBatchResults.length === 0) continue;
+    const csFinalContent = csBatchResults.join("\n\n---\n\n");
+    const csMergedModel = deps.ensembleModelLabel(csUseEnsemble);
+    const csReportPath = deps.saveResponse(
+      "check_against_specs",
+      csFinalContent,
+      {
+        model: csMergedModel,
+        task: `Spec compliance: ${basename3(csSpecPath)} vs ${fgPaths.length} file(s)`,
+        inputFile: fgPaths[0],
+        groupId: fgId || void 0
+      },
+      void 0,
+      deps.outputDir
+    );
+    if (csEffectivelyGrouped) {
+      const labelId = fgId || "auto";
+      csAllGroupReports.push(`[group:${labelId}] ${csReportPath}`);
+    } else {
+      return { content: [{ type: "text", text: csReportPath }] };
+    }
+  }
+  if (csEffectivelyGrouped) {
+    if (csAllGroupReports.length === 0) {
+      return { content: [{ type: "text", text: "FAILED: No results for any group." }], isError: true };
+    }
+    return { content: [{ type: "text", text: csAllGroupReports.join("\n") }] };
+  }
+  return { content: [{ type: "text", text: "FAILED: LLM returned empty response." }], isError: true };
+}
+
+// src/benchmark/check-specs/score.ts
+var VIOLATION_RE = /^\s*(?:[-*+]\s*|#{1,6}\s*|\d+[.)]\s*)?\**\s*VIOLATION\b/i;
+var CLEAN_RE = /^\s*(?:[-*+]\s*|#{1,6}\s*|\d+[.)]\s*)?\**\s*CLEAN\b/i;
+function parseSpecVerdict(report) {
+  let inFence = false;
+  for (const raw of report.split("\n")) {
+    if (/^\s*(?:`{3,}|~{3,})/.test(raw)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const v = VIOLATION_RE.exec(raw);
+    if (v) {
+      const citedRule = raw.slice(v[0].length).replace(/^[\s:*\-—`]+/, "").replace(/[\s*`]+$/, "").trim();
+      return { verdict: "yes", citedRule };
+    }
+    if (CLEAN_RE.test(raw)) return { verdict: "no", citedRule: "" };
+  }
+  return { verdict: "unparseable", citedRule: "" };
+}
+function accuracyOf(score) {
+  let correct = 0;
+  let total = 0;
+  for (const c of score.cases) {
+    correct += c.truePositives + c.trueNegatives;
+    total += c.scannedFiles;
+  }
+  return total === 0 ? 0 : correct / total;
+}
+var DEFAULT_CHECK_SPECS_THRESHOLDS = {
+  minMicroF1: 0.8,
+  minMicroRecall: 0.7,
+  minCoverage: 0.9
+};
+function passesThresholds4(score, thresholds = DEFAULT_CHECK_SPECS_THRESHOLDS) {
+  const failures = [];
+  if (score.microF1 < thresholds.minMicroF1) {
+    failures.push(`micro-F1 ${score.microF1.toFixed(3)} < ${thresholds.minMicroF1}`);
+  }
+  if (score.microRecall < thresholds.minMicroRecall) {
+    failures.push(
+      `micro-recall ${score.microRecall.toFixed(3)} < ${thresholds.minMicroRecall} (a model that answers CLEAN to everything cannot pass)`
+    );
+  }
+  if (score.coverage < thresholds.minCoverage) {
+    failures.push(
+      `coverage ${score.coverage.toFixed(3)} < ${thresholds.minCoverage} \u2014 too many files produced no parseable verdict, so the run is not evidence about the model`
+    );
+  }
+  return { pass: failures.length === 0, failures };
+}
+
+// src/benchmark/check-specs/bench-runner.ts
+var DEFAULT_API_URL4 = "https://openrouter.ai/api/v1/chat/completions";
+var CHECK_SPECS_CASE_ID = "testing-md-cost-safety";
+function sourcePathFromUserMessage(userContent) {
+  const m = /<filename>\n([^\n]+)\n<\/filename>/.exec(userContent);
+  return m ? m[1] : null;
+}
+async function runCheckSpecsBenchmarkOnModel(modelId, fixtures = CHECK_SPECS_FIXTURES, opts = {
+  apiKey: "",
+  pricing: { input_per_m_usd: 0, output_per_m_usd: 0, context_window: 0 }
+}, fetchImpl = realFetch) {
+  const fixtureRoot = resolveFixtureRoot4();
+  const apiUrl = opts.apiUrl ?? DEFAULT_API_URL4;
+  const maxTokens = opts.maxTokens ?? 4096;
+  const perCallTimeoutMs = opts.perCallTimeoutMs ?? 3e5;
+  const files = fixtureFilePaths(fixtures, fixtureRoot);
+  const expected = expectedViolations(fixtures, fixtureRoot);
+  const known = new Set(files);
+  let costUsd = 0;
+  let latencyTotalMs = 0;
+  let callCount = 0;
+  let filesDone = 0;
+  const reports = /* @__PURE__ */ new Map();
+  const errors = /* @__PURE__ */ new Map();
+  const ensembleStreaming = async (messages) => {
+    const userContent = messages.find((m) => m.role === "user")?.content ?? "";
+    const filePath = sourcePathFromUserMessage(userContent);
+    if (filePath === null || !known.has(filePath)) {
+      throw new Error(
+        `check-specs benchmark: could not attribute an LLM call to a corpus file.
+  parsed <filename>: ${filePath ?? "(none found in the user message)"}
+  corpus expects e.g.: ${files[0]}
+The prompt's file-tag format or the fixture path form has drifted. Fix the runner \u2014 do not score this run.`
+      );
+    }
+    const started = Date.now();
+    let res;
+    try {
+      res = await fetchImpl(apiUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${opts.apiKey}`
+        },
+        body: JSON.stringify({ model: modelId, messages, max_tokens: maxTokens }),
+        signal: AbortSignal.timeout(perCallTimeoutMs)
+      });
+    } catch (err) {
+      const reason = `request failed: ${err.message}`;
+      errors.set(filePath, reason);
+      return emptyResult(modelId);
+    } finally {
+      latencyTotalMs += Date.now() - started;
+      callCount++;
+      filesDone++;
+      if (opts.onProgress) opts.onProgress(filesDone, files.length);
+    }
+    if (!res.ok) {
+      const bodyText = await res.text().catch(() => "");
+      const reason = `API error ${res.status}: ${bodyText.slice(0, 300)}`;
+      errors.set(filePath, reason);
+      return emptyResult(modelId);
+    }
+    const json = await res.json();
+    const usage = json.usage;
+    if (usage) {
+      costUsd += (usage.prompt_tokens ?? 0) / 1e6 * opts.pricing.input_per_m_usd + (usage.completion_tokens ?? 0) / 1e6 * opts.pricing.output_per_m_usd;
+    }
+    const content = json.choices?.[0]?.message?.content ?? "";
+    if (content.trim().length === 0) {
+      errors.set(filePath, "LLM returned empty response");
+      return emptyResult(modelId);
+    }
+    reports.set(filePath, content);
+    return {
+      content,
+      model: modelId,
+      usage: usage ? {
+        prompt_tokens: usage.prompt_tokens ?? 0,
+        completion_tokens: usage.completion_tokens ?? 0,
+        total_tokens: (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0)
+      } : void 0,
+      finishReason: "stop",
+      truncated: false
+    };
+  };
+  const deps = {
+    // The benchmark scores ONE model at a time, so the multi-model ensemble is off —
+    // otherwise the score would belong to the ensemble, not to the candidate.
+    useEnsemble: false,
+    normalizePaths: (raw) => {
+      if (!raw) return [];
+      const arr = Array.isArray(raw) ? raw : [raw];
+      return arr.filter((p) => typeof p === "string" && p.length > 0);
+    },
+    // No folder_path is passed (the corpus is an explicit, ordered file list — a folder
+    // walk would also sweep up the fixture README and audit it as a fourteenth "file").
+    // Unreachable; a clear error rather than a silent empty list if that ever changes.
+    resolveFolderPath: () => ({
+      files: [],
+      error: "check-specs benchmark passes input_files_paths, never folder_path"
+    }),
+    ensembleStreaming,
+    // No footer. The real one records usage + writes to the global ledger (index.ts side
+    // effects a benchmark must not have); usage is accumulated at the seam above instead,
+    // from the same response body. An empty footer also keeps the scored text EXACTLY the
+    // model's own output, with nothing appended that a verdict regex could trip over.
+    formatFooter: () => "",
+    // Mode 0 calls saveResponse once per file. The report is already captured at the seam
+    // (keyed by the file the call was FOR, which is stronger than trusting loop order), so
+    // this returns a marker rather than writing anything: a benchmark must not litter the
+    // user's report directory with 13 files per model per run.
+    saveResponse: (_tool, _content, meta) => `memory://${meta.inputFile ?? "unknown"}`,
+    ensembleModelLabel: () => modelId,
+    resolveDefaultMaxTokens: () => maxTokens
+  };
+  const args = {
+    spec_file_path: specPath(fixtureRoot),
+    input_files_paths: files,
+    instructions: CHECK_SPECS_INSTRUCTIONS,
+    scan_secrets: false,
+    redact_secrets: false,
+    // Mode 0 — one LLM call and one report per file. Mode 1/2 would batch several files
+    // into a single call and merge the findings into one document, destroying the per-file
+    // boundary this benchmark scores on.
+    answer_mode: 0
+  };
+  const result = await runCheckAgainstSpecs(args, deps);
+  if (result.isError && reports.size === 0 && errors.size === 0) {
+    throw new Error(
+      `check-specs benchmark: the pipeline refused the run before any LLM call \u2014 ${result.content.map((p) => p.text).join(" ")}`
+    );
+  }
+  const verdicts = /* @__PURE__ */ new Map();
+  const failures = [];
+  const citedRules = [];
+  for (const file of files) {
+    const report = reports.get(file);
+    if (report === void 0) {
+      failures.push({ file, reason: errors.get(file) ?? "no report produced" });
+      continue;
+    }
+    const parsed = parseSpecVerdict(report);
+    verdicts.set(file, parsed.verdict);
+    if (parsed.verdict === "yes" && parsed.citedRule) {
+      citedRules.push({ file, citedRule: parsed.citedRule });
+    }
+  }
+  const caseScores = [scoreCase(CHECK_SPECS_CASE_ID, files, expected, verdicts)];
+  const aggregate = aggregateScores(caseScores);
+  return {
+    modelId,
+    caseScores,
+    aggregate,
+    accuracy: accuracyOf(aggregate),
+    pass: passesThresholds4(aggregate).pass,
+    costUsd,
+    meanLatencyMs: callCount === 0 ? 0 : latencyTotalMs / callCount,
+    failures,
+    citedRules
+  };
+}
+function emptyResult(modelId) {
+  return {
+    content: "",
+    model: modelId,
+    finishReason: "error",
+    truncated: false
+  };
+}
+
+// src/benchmark/check-specs/select.ts
+var CHECK_SPECS_CRITERIA = TOOL_MODEL_REGISTRY.check_against_specs.requirements;
+function toGeneric5(c) {
+  const thr = passesThresholds4(c.score);
+  return {
+    modelId: c.modelId,
+    qualified: c.qualified,
+    disqualifyReason: c.disqualifyReason,
+    inputDollarsPerMillion: c.inputDollarsPerMillion,
+    outputDollarsPerMillion: c.outputDollarsPerMillion,
+    latencyMs: c.latencyMs,
+    benchmarkPass: thr.pass,
+    benchmarkScore: c.score.microF1,
+    benchmarkFailReasons: thr.failures
+  };
+}
+function selectCheckSpecsModel(input) {
+  const byModelId = new Map(
+    input.candidates.map((c) => [c.modelId, c])
+  );
+  const generic = selectSameOrCheaper({
+    candidates: input.candidates.map(toGeneric5),
+    incumbentModelId: input.incumbentModelId,
+    incumbentInputDollarsPerMillion: input.incumbentInputDollarsPerMillion,
+    incumbentOutputDollarsPerMillion: input.incumbentOutputDollarsPerMillion,
+    requirementsLabel: "check-against-specs requirements",
+    benchmarkLabel: "the spec-adherence benchmark"
+  });
+  return {
+    recommendedModelId: generic.recommendedModelId,
+    changed: generic.changed,
+    reason: generic.reason,
+    eligible: generic.eligible.map((g) => byModelId.get(g.modelId)),
+    rejected: generic.rejected
+  };
+}
+
+// src/benchmark/check-specs/index.ts
+var INCUMBENT_FALLBACK_PRICING5 = KNOWN_PRICING[DEFAULT_MODEL] ?? {
+  input_per_m_usd: 0.04,
+  output_per_m_usd: 0.1,
+  context_window: 32768
+};
+function cachePath5() {
+  return join16(getConfigDir(), "check-specs-results.json");
+}
+function cacheKey5(modelId, date, datasetHash) {
+  return `${modelId}::${date}::${datasetHash}`;
+}
+function loadCache5() {
+  const p = cachePath5();
+  if (!existsSync17(p)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync16(p, "utf-8"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+  } catch {
+  }
+  return {};
+}
+function saveCache5(cache) {
+  mkdirSync8(getConfigDir(), { recursive: true });
+  const p = cachePath5();
+  const tmp = `${p}.tmp.${process.pid}`;
+  writeFileSync7(tmp, JSON.stringify(cache, null, 2), "utf-8");
+  renameSync5(tmp, p);
+}
+function resolveApiKey5(override) {
+  const k = override || process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
+  if (!k) {
+    throw new Error(
+      "OPENROUTER_API_KEY not set. Export it in your shell, or set the plugin option 'openrouter_api_key' via Claude Code's /plugin configure."
+    );
+  }
+  return k;
+}
+function today5() {
+  return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+}
+function reportStamp5() {
+  const d = /* @__PURE__ */ new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  const off = -d.getTimezoneOffset();
+  const sign = off >= 0 ? "+" : "-";
+  const oh = p(Math.floor(Math.abs(off) / 60));
+  const om = p(Math.abs(off) % 60);
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}${sign}${oh}${om}`;
+}
+function pricingFromModel5(m) {
+  return {
+    input_per_m_usd: m.inputDollarsPerMillion,
+    output_per_m_usd: m.outputDollarsPerMillion,
+    context_window: m.contextTokens
+  };
+}
+function decorate5(raw) {
+  const ctx = raw.context_length ?? 0;
+  const maxOutRaw = raw.top_provider?.max_completion_tokens;
+  const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
+  const promptPerToken = parseFloat(raw.pricing?.prompt ?? "NaN");
+  const completionPerToken = parseFloat(raw.pricing?.completion ?? "NaN");
+  const params = new Set(raw.supported_parameters ?? []);
+  return {
+    id: raw.id,
+    name: raw.name ?? raw.id,
+    contextTokens: ctx,
+    maxOutputTokens: maxOut,
+    inputDollarsPerMillion: isFinite(promptPerToken) ? promptPerToken * 1e6 : Infinity,
+    outputDollarsPerMillion: isFinite(completionPerToken) ? completionPerToken * 1e6 : Infinity,
+    supportsStructured: params.has("structured_outputs") || params.has("response_format"),
+    supportsReasoning: params.has("reasoning") || params.has("include_reasoning"),
+    raw
+  };
+}
+async function runCheckSpecsBenchmark(opts = {}) {
+  const apiKey = resolveApiKey5(opts.apiKey);
+  const fixtures = CHECK_SPECS_FIXTURES;
+  validateDataset3(fixtures);
+  const datasetHash = datasetFingerprint2();
+  const thresholds = opts.thresholds ?? DEFAULT_CHECK_SPECS_THRESHOLDS;
+  const incumbentId = opts.incumbentModelId ?? DEFAULT_MODEL;
+  const progress = opts.onProgress ?? (() => {
+  });
+  const freeOnly = getActiveFreeOnly();
+  const violations = fixtures.filter((f) => f.truth === "VIOLATION").length;
+  progress(
+    `Loaded 1 real spec over ${fixtures.length} real source files (${violations} VIOLATION / ${fixtures.length - violations} CLEAN) \u2014 corpus ${datasetHash}.`
+  );
+  progress("Fetching OpenRouter model catalog\u2026");
+  const catalog = await fetchProgrammingModels();
+  const byId = new Map(catalog.map((m) => [m.id, m]));
+  const incumbentRaw = byId.get(incumbentId);
+  const incumbentDecorated = incumbentRaw ? decorate5(incumbentRaw) : null;
+  const incumbentIn = incumbentDecorated && isFinite(incumbentDecorated.inputDollarsPerMillion) ? incumbentDecorated.inputDollarsPerMillion : INCUMBENT_FALLBACK_PRICING5.input_per_m_usd;
+  const incumbentOut = incumbentDecorated && isFinite(incumbentDecorated.outputDollarsPerMillion) ? incumbentDecorated.outputDollarsPerMillion : INCUMBENT_FALLBACK_PRICING5.output_per_m_usd;
+  const toAssess = /* @__PURE__ */ new Map();
+  const addModel = (model, qualified, disqualifyReason2) => {
+    if (!toAssess.has(model.id)) toAssess.set(model.id, { model, qualified, disqualifyReason: disqualifyReason2 });
+  };
+  if (opts.models && opts.models.length > 0) {
+    for (const id of opts.models) {
+      const raw = byId.get(id);
+      if (raw) {
+        const q = qualify(raw, CHECK_SPECS_CRITERIA);
+        addModel(
+          q ?? decorate5(raw),
+          q !== null,
+          q ? void 0 : "below check-against-specs requirements (cost/context/structured-output)"
+        );
+      } else {
+        const fp = KNOWN_PRICING[id] ?? INCUMBENT_FALLBACK_PRICING5;
+        addModel(
+          {
+            id,
+            name: id,
+            contextTokens: fp.context_window,
+            maxOutputTokens: fp.context_window,
+            inputDollarsPerMillion: fp.input_per_m_usd,
+            outputDollarsPerMillion: fp.output_per_m_usd,
+            supportsStructured: false,
+            supportsReasoning: false,
+            raw: { id }
+          },
+          false,
+          "not found in the OpenRouter catalog"
+        );
+      }
+    }
+  } else {
+    const { candidates } = buildBenchmarkRoster(catalog, CHECK_SPECS_CRITERIA, []);
+    const affordable = candidates.filter(
+      (c) => c.inputDollarsPerMillion <= incumbentIn + 1e-9 && c.outputDollarsPerMillion <= incumbentOut + 1e-9
+    );
+    const sameOrCheaper = rankByQualityIndex(affordable).slice(0, opts.qualifyingTopN ?? 16);
+    for (const c of sameOrCheaper) addModel(c, true);
+  }
+  if (!toAssess.has(incumbentId)) {
+    if (incumbentDecorated) {
+      const q = qualify(incumbentDecorated.raw, CHECK_SPECS_CRITERIA);
+      addModel(
+        incumbentDecorated,
+        q !== null,
+        q ? void 0 : "below check-against-specs requirements"
+      );
+    } else {
+      addModel(
+        {
+          id: incumbentId,
+          name: incumbentId,
+          contextTokens: INCUMBENT_FALLBACK_PRICING5.context_window,
+          maxOutputTokens: INCUMBENT_FALLBACK_PRICING5.context_window,
+          inputDollarsPerMillion: incumbentIn,
+          outputDollarsPerMillion: incumbentOut,
+          supportsStructured: true,
+          supportsReasoning: true,
+          raw: { id: incumbentId }
+        },
+        true
+      );
+    }
+  }
+  progress(`Assessing ${toAssess.size} model(s) over ${fixtures.length} file decisions\u2026`);
+  const cache = loadCache5();
+  const assessments = [];
+  let totalCost = 0;
+  for (const { model, qualified, disqualifyReason: disqualifyReason2 } of toAssess.values()) {
+    if (freeOnly && !model.id.endsWith(":free")) {
+      progress(`  ${model.id}: skipped (free_only \u2014 non-':free' model).`);
+      const empty = aggregateScores([]);
+      assessments.push({
+        modelId: model.id,
+        qualified: false,
+        disqualifyReason: "free_only active \u2014 non-':free' model not benchmarked",
+        inputDollarsPerMillion: model.inputDollarsPerMillion,
+        outputDollarsPerMillion: model.outputDollarsPerMillion,
+        latencyMs: 0,
+        score: empty,
+        accuracy: 0,
+        failureReasons: [],
+        costUsd: 0
+      });
+      continue;
+    }
+    const key = cacheKey5(model.id, today5(), datasetHash);
+    const cached = cache[key];
+    let score;
+    let accuracy;
+    let costUsd;
+    let latencyMs;
+    let failureReasons;
+    if (cached && !opts.force) {
+      progress(`  ${model.id}: cache hit (${today5()}).`);
+      score = cached.score;
+      accuracy = cached.accuracy;
+      costUsd = cached.costUsd;
+      latencyMs = cached.latencyMs;
+      failureReasons = cached.failureReasons;
+    } else {
+      progress(`  ${model.id}: running\u2026`);
+      const run = await runCheckSpecsBenchmarkOnModel(
+        model.id,
+        fixtures,
+        {
+          apiKey,
+          pricing: pricingFromModel5(model),
+          perCallTimeoutMs: opts.perCallTimeoutMs ?? 3e5
+        },
+        opts.fetchImpl
+      );
+      score = run.aggregate;
+      accuracy = run.accuracy;
+      costUsd = run.costUsd;
+      latencyMs = Math.round(run.meanLatencyMs);
+      failureReasons = run.failures.map((f) => `${f.file}: ${f.reason}`);
+      cache[key] = {
+        date: today5(),
+        datasetHash,
+        score,
+        accuracy,
+        costUsd,
+        latencyMs,
+        inputDollarsPerMillion: model.inputDollarsPerMillion,
+        outputDollarsPerMillion: model.outputDollarsPerMillion,
+        qualified,
+        disqualifyReason: disqualifyReason2,
+        failureReasons
+      };
+    }
+    totalCost += costUsd;
+    assessments.push({
+      modelId: model.id,
+      qualified,
+      disqualifyReason: disqualifyReason2,
+      inputDollarsPerMillion: model.inputDollarsPerMillion,
+      outputDollarsPerMillion: model.outputDollarsPerMillion,
+      latencyMs,
+      score,
+      accuracy,
+      failureReasons,
+      costUsd
+    });
+    const thr = passesThresholds4(score, thresholds);
+    progress(
+      `    ${model.id}: ${thr.pass ? "PASS" : "FAIL"} microF1=${score.microF1.toFixed(3)} microP=${score.microPrecision.toFixed(3)} microR=${score.microRecall.toFixed(3)} acc=${accuracy.toFixed(3)} cov=${score.coverage.toFixed(3)} unscored=${failureReasons.length}`
+    );
+  }
+  saveCache5(cache);
+  const selection = selectCheckSpecsModel({
+    candidates: assessments,
+    incumbentModelId: incumbentId,
+    incumbentInputDollarsPerMillion: incumbentIn,
+    incumbentOutputDollarsPerMillion: incumbentOut
+  });
+  const mainRoot = resolveProjectMainRoot(opts.mainRoot);
+  const reportDir = opts.outputDir ?? join16(mainRoot, "reports", "check-specs-benchmark");
+  mkdirSync8(reportDir, { recursive: true });
+  const stamp = reportStamp5();
+  const jsonReportPath = join16(reportDir, `${stamp}-check-specs-benchmark.json`);
+  const reportPath = join16(reportDir, `${stamp}-check-specs-benchmark.md`);
+  const jsonPayload = {
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    datasetHash,
+    fixtureCount: fixtures.length,
+    violationCount: violations,
+    cleanCount: fixtures.length - violations,
+    thresholds,
+    incumbent: {
+      modelId: incumbentId,
+      inputDollarsPerMillion: incumbentIn,
+      outputDollarsPerMillion: incumbentOut
+    },
+    recommendedModelId: selection.recommendedModelId,
+    changed: selection.changed,
+    reason: selection.reason,
+    costUsd: totalCost,
+    assessments: assessments.map((a) => {
+      const thr = passesThresholds4(a.score, thresholds);
+      return {
+        modelId: a.modelId,
+        qualified: a.qualified,
+        disqualifyReason: a.disqualifyReason,
+        inputDollarsPerMillion: a.inputDollarsPerMillion,
+        outputDollarsPerMillion: a.outputDollarsPerMillion,
+        latencyMs: a.latencyMs,
+        pass: thr.pass,
+        failures: thr.failures,
+        microPrecision: a.score.microPrecision,
+        microRecall: a.score.microRecall,
+        microF1: a.score.microF1,
+        accuracy: a.accuracy,
+        coverage: a.score.coverage,
+        failureReasons: a.failureReasons,
+        costUsd: a.costUsd
+      };
+    }),
+    rejected: selection.rejected,
+    perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
+  };
+  const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
+  writeFileSync7(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync5(jtmp, jsonReportPath);
+  const md = buildReportMarkdown5({
+    fixtures,
+    datasetHash,
+    incumbentId,
+    incumbentIn,
+    incumbentOut,
+    thresholds,
+    assessments,
+    selection,
+    totalCost
+  });
+  const mtmp = `${reportPath}.tmp.${process.pid}`;
+  writeFileSync7(mtmp, md, "utf-8");
+  renameSync5(mtmp, reportPath);
+  const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
+  return {
+    recommendedModelId: selection.recommendedModelId,
+    changed: selection.changed,
+    selection,
+    results: assessments,
+    costUsd: totalCost,
+    reportPath,
+    jsonReportPath,
+    summaryLine
+  };
+}
+function buildReportMarkdown5(args) {
+  const violations = args.fixtures.filter((f) => f.truth === "VIOLATION").length;
+  const lines = [];
+  lines.push("# check_against_specs (SPEC ADHERENCE) \u2014 model benchmark");
+  lines.push("");
+  lines.push(`**Run:** ${(/* @__PURE__ */ new Date()).toISOString()}`);
+  lines.push(
+    `**Corpus:** 1 real spec (this repo's own \`mcp-server/TESTING.md\`) \xD7 ${args.fixtures.length} real source files = ${args.fixtures.length} per-file decisions (${violations} VIOLATION / ${args.fixtures.length - violations} CLEAN) \u2014 corpus ${args.datasetHash}`
+  );
+  lines.push(
+    `**Incumbent:** \`${args.incumbentId}\` (in $${args.incumbentIn.toFixed(3)}/M, out $${args.incumbentOut.toFixed(3)}/M)`
+  );
+  lines.push(
+    `**Pass gate:** micro-F1 \u2265 ${args.thresholds.minMicroF1.toFixed(2)} AND micro-recall \u2265 ${args.thresholds.minMicroRecall.toFixed(2)} AND coverage \u2265 ${args.thresholds.minCoverage.toFixed(2)}`
+  );
+  lines.push(`**Total LLM spend:** $${args.totalCost.toFixed(6)}`);
+  lines.push("");
+  lines.push(
+    "**Scoring is 100% deterministic \u2014 no LLM judge.** The spec is a verbatim copy of this repo's shipped `mcp-server/TESTING.md`; every source file is a byte-for-byte snapshot of a real revision out of git. The four VIOLATION fixtures are the exact bytes commit `31ce212` replaced *because they really violated this spec* \u2014 the defect drained a real OpenRouter balance ($17.67 in one hour) before it was found. The score is precision/recall/F1 over the per-file CLEAN/VIOLATION verdicts."
+  );
+  lines.push("");
+  lines.push(
+    "**What is NOT scored (stated, not smuggled past):** the rule a VIOLATION line cites is printed below but NOT graded \u2014 deciding whether a quoted rule really is the one that was broken is a semantic judgment, which would need the LLM judge this benchmark refuses to use. Severity (CRITICAL/HIGH/MEDIUM/LOW) is not graded either: human reviewers disagree about it, so scoring it would require a rubric somebody's opinion authored. Accuracy is reported but is NOT part of the gate \u2014 on a 4/9 corpus, answering CLEAN to everything scores 0.69 while finding nothing."
+  );
+  lines.push("");
+  lines.push("## The corpus");
+  lines.push("");
+  lines.push("| Fixture | Truth | Blob | Why |");
+  lines.push("|---|---|---|---|");
+  for (const f of args.fixtures) {
+    lines.push(
+      `| \`${f.file}\` | **${f.truth}** | \`${f.provenance}\` | ${f.rule} \u2014 ${f.rationale} |`
+    );
+  }
+  lines.push("");
+  lines.push("## Recommendation");
+  lines.push("");
+  lines.push(
+    `**${args.selection.changed ? "SWITCH" : "KEEP"} \u2192 \`${args.selection.recommendedModelId}\`**`
+  );
+  lines.push("");
+  lines.push(args.selection.reason);
+  lines.push("");
+  lines.push("## Assessed models");
+  lines.push("");
+  lines.push(
+    "| Model | Req | Bench | micro-F1 | micro-P | micro-R | Accuracy | Coverage | Unscored | in $/M | out $/M | lat ms |"
+  );
+  lines.push("|---|---|---|---|---|---|---|---|---|---|---|---|");
+  const sorted = [...args.assessments].sort((a, b) => b.score.microF1 - a.score.microF1);
+  for (const a of sorted) {
+    const thr = passesThresholds4(a.score, args.thresholds);
+    lines.push(
+      `| \`${a.modelId}\` | ${a.qualified ? "ok" : "no"} | ${thr.pass ? "PASS" : "FAIL"} | ${a.score.microF1.toFixed(3)} | ${a.score.microPrecision.toFixed(3)} | ${a.score.microRecall.toFixed(3)} | ${a.accuracy.toFixed(3)} | ${(a.score.coverage * 100).toFixed(0)}% | ${a.failureReasons.length} | ${a.inputDollarsPerMillion.toFixed(3)} | ${a.outputDollarsPerMillion.toFixed(3)} | ${a.latencyMs} |`
+    );
+  }
+  lines.push("");
+  if (args.selection.rejected.length > 0) {
+    lines.push("## Rejected (and why)");
+    lines.push("");
+    for (const r of args.selection.rejected) lines.push(`- \`${r.modelId}\` \u2014 ${r.reason}`);
+    lines.push("");
+  }
+  const rec = args.assessments.find((a) => a.modelId === args.selection.recommendedModelId);
+  if (rec) {
+    lines.push(`## Confusion matrix \u2014 \`${rec.modelId}\``);
+    lines.push("");
+    lines.push("| Files | TP | FP | FN | TN | Unscored | Precision | Recall | F1 | Accuracy |");
+    lines.push("|---|---|---|---|---|---|---|---|---|---|");
+    for (const c of rec.score.cases) {
+      lines.push(
+        `| ${c.scannedFiles} | ${c.truePositives} | ${c.falsePositives} | ${c.falseNegatives} | ${c.trueNegatives} | ${c.unscored} | ${c.precision.toFixed(3)} | ${c.recall.toFixed(3)} | ${c.f1.toFixed(3)} | ${accuracyOf(rec.score).toFixed(3)} |`
+      );
+    }
+    lines.push("");
+    if (rec.failureReasons.length > 0) {
+      lines.push(`### Files with no parseable verdict \u2014 \`${rec.modelId}\``);
+      lines.push("");
+      for (const f of rec.failureReasons) lines.push(`- ${f}`);
+      lines.push("");
+    }
+  }
+  lines.push("---");
+  lines.push("");
+  lines.push(
+    "Re-run: `llm-externalizer benchmark --check-specs` (auto-discover) or `--check-specs <id> [<id>...]` (assess specific models). ADVISORY by default; add `--apply-profile <P>` to write the winner into that profile's `tool_models.check_against_specs` (CLI-only writer \u2014 the MCP surface never writes)."
+  );
+  return lines.join("\n") + "\n";
+}
+
 // src/model-qualification/auto-replace.ts
 function defaultSettingsReader(profileNameOverride) {
   const settings = loadSettings();
@@ -226174,6 +227368,20 @@ async function defaultBenchmarkRunner(tool, benchmark, incumbentModelId, candida
       rejected: r.selection.rejected
     };
   }
+  if (benchmark === "check-specs") {
+    const r = await runCheckSpecsBenchmark({
+      apiKey,
+      models: candidates,
+      incumbentModelId,
+      onProgress
+    });
+    return {
+      recommendedModelId: r.recommendedModelId,
+      changed: r.changed,
+      reason: r.selection.reason,
+      rejected: r.selection.rejected
+    };
+  }
   throw new Error(
     `defaultBenchmarkRunner: no orchestrator wired for benchmark '${benchmark}' (tool '${tool}'). The model-qualification registry declared a benchmark the auto-replace dispatcher does not know \u2014 add a case here when a new per-tool benchmark ships.`
   );
@@ -226181,7 +227389,7 @@ async function defaultBenchmarkRunner(tool, benchmark, incumbentModelId, candida
 function benchmarkedTools() {
   const out = [];
   for (const [tool, descriptor] of Object.entries(TOOL_MODEL_REGISTRY)) {
-    if (descriptor.benchmark === "security-triage" || descriptor.benchmark === "search-existing" || descriptor.benchmark === "code-task" || descriptor.benchmark === "scan-folder") {
+    if (descriptor.benchmark === "security-triage" || descriptor.benchmark === "search-existing" || descriptor.benchmark === "code-task" || descriptor.benchmark === "scan-folder" || descriptor.benchmark === "check-specs") {
       out.push({ tool, benchmark: descriptor.benchmark });
     }
   }
@@ -226430,8 +227638,8 @@ function renderAssessmentText(a) {
 }
 
 // src/model-qualification/drift.ts
-import { mkdirSync as mkdirSync8, readFileSync as readFileSync15, renameSync as renameSync5, writeFileSync as writeFileSync7 } from "node:fs";
-import { join as join15 } from "node:path";
+import { mkdirSync as mkdirSync9, readFileSync as readFileSync17, renameSync as renameSync6, writeFileSync as writeFileSync8 } from "node:fs";
+import { join as join17 } from "node:path";
 function perMillion(s) {
   if (s == null) return null;
   const n = parseFloat(s);
@@ -226568,11 +227776,11 @@ function computeModelHealth(configured, catalog, baseline, opts = {}) {
   return { findings, updatedBaseline };
 }
 function getBaselinePath() {
-  return join15(getConfigDir(), "model-baseline.json");
+  return join17(getConfigDir(), "model-baseline.json");
 }
 function loadBaseline(path = getBaselinePath()) {
   try {
-    const raw = readFileSync15(path, "utf-8");
+    const raw = readFileSync17(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed;
@@ -226584,10 +227792,10 @@ function loadBaseline(path = getBaselinePath()) {
 }
 function saveBaseline(baseline, path = getBaselinePath()) {
   try {
-    mkdirSync8(getConfigDir(), { recursive: true });
+    mkdirSync9(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync7(tmp, JSON.stringify(baseline, null, 2));
-    renameSync5(tmp, path);
+    writeFileSync8(tmp, JSON.stringify(baseline, null, 2));
+    renameSync6(tmp, path);
   } catch {
   }
 }
@@ -226660,10 +227868,10 @@ function renderModelHealthMarkdown(report) {
 async function runCheckModelHealth(opts = {}) {
   const profile = opts.profile ?? resolveActiveProfile();
   const report = await checkModelHealth(profile, opts);
-  const dir = opts.outputDir ?? join15(resolveProjectMainRoot(), "reports", "model-health");
-  mkdirSync8(dir, { recursive: true });
-  const reportPath = join15(dir, `${compactStamp()}-model-health-${profile.name}.md`);
-  writeFileSync7(reportPath, renderModelHealthMarkdown(report));
+  const dir = opts.outputDir ?? join17(resolveProjectMainRoot(), "reports", "model-health");
+  mkdirSync9(dir, { recursive: true });
+  const reportPath = join17(dir, `${compactStamp()}-model-health-${profile.name}.md`);
+  writeFileSync8(reportPath, renderModelHealthMarkdown(report));
   return { report, reportPath };
 }
 function renderModelHealthText(report) {
@@ -226684,8 +227892,8 @@ function renderModelHealthText(report) {
 }
 
 // src/model-qualification/new-arrivals.ts
-import { mkdirSync as mkdirSync9, readFileSync as readFileSync16, renameSync as renameSync6, writeFileSync as writeFileSync8 } from "node:fs";
-import { join as join16 } from "node:path";
+import { mkdirSync as mkdirSync10, readFileSync as readFileSync18, renameSync as renameSync7, writeFileSync as writeFileSync9 } from "node:fs";
+import { join as join18 } from "node:path";
 function createdToIso(created) {
   if (created === null || !Number.isFinite(created) || created <= 0) return null;
   return new Date(created * 1e3).toISOString();
@@ -226727,11 +227935,11 @@ function diffNewArrivals(catalog, snapshot) {
   };
 }
 function getCatalogSnapshotPath() {
-  return join16(getConfigDir(), "catalog-snapshot.json");
+  return join18(getConfigDir(), "catalog-snapshot.json");
 }
 function loadSnapshot(path = getCatalogSnapshotPath()) {
   try {
-    const raw = readFileSync16(path, "utf-8");
+    const raw = readFileSync18(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const obj = parsed;
@@ -226749,10 +227957,10 @@ function loadSnapshot(path = getCatalogSnapshotPath()) {
 }
 function saveSnapshot(snapshot, path = getCatalogSnapshotPath()) {
   try {
-    mkdirSync9(getConfigDir(), { recursive: true });
+    mkdirSync10(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync8(tmp, JSON.stringify(snapshot, null, 2));
-    renameSync6(tmp, path);
+    writeFileSync9(tmp, JSON.stringify(snapshot, null, 2));
+    renameSync7(tmp, path);
   } catch {
   }
 }
@@ -226843,10 +228051,10 @@ function renderNewArrivalsText(report) {
 }
 async function runDiscoverNewArrivals(opts = {}) {
   const report = await discoverNewArrivals(opts);
-  const dir = opts.outputDir ?? join16(resolveProjectMainRoot(), "reports", "model-arrivals");
-  mkdirSync9(dir, { recursive: true });
-  const reportPath = join16(dir, `${compactStamp()}-new-arrivals.md`);
-  writeFileSync8(reportPath, renderNewArrivalsMarkdown(report));
+  const dir = opts.outputDir ?? join18(resolveProjectMainRoot(), "reports", "model-arrivals");
+  mkdirSync10(dir, { recursive: true });
+  const reportPath = join18(dir, `${compactStamp()}-new-arrivals.md`);
+  writeFileSync9(reportPath, renderNewArrivalsMarkdown(report));
   return { report, reportPath };
 }
 
@@ -226873,6 +228081,8 @@ function parseArgs(argv) {
     codeTaskModels: [],
     scanFolder: false,
     scanFolderModels: [],
+    checkSpecs: false,
+    checkSpecsModels: [],
     force: false,
     assessModel: null,
     checkHealth: false,
@@ -226973,6 +228183,12 @@ function parseArgs(argv) {
       opts.scanFolder = true;
       while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
         opts.scanFolderModels.push(argv[i + 1]);
+        i++;
+      }
+    } else if (a === "--check-specs") {
+      opts.checkSpecs = true;
+      while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
+        opts.checkSpecsModels.push(argv[i + 1]);
         i++;
       }
     } else if (a === "--model") {
@@ -227125,9 +228341,29 @@ function printHelp() {
       "  Never auto-selects a pricier model. ADVISORY unless --apply-profile P is",
       "  given, which writes the winner into P's `tool_models.scan_folder` (CLI-only).",
       "",
+      "check_against_specs SPEC-ADHERENCE benchmark (separate task \u2014 per-file CLEAN/VIOLATION):",
+      "  --check-specs [ID...]",
+      "                    Run the check_against_specs spec-adherence benchmark instead",
+      "                    of the keyword task. Drives the REAL check_against_specs",
+      "                    pipeline (one LLM call per file) over this repo's own shipped",
+      "                    TESTING.md and thirteen VERBATIM git snapshots \u2014 four of them",
+      "                    the exact pre-fix bytes a real cost-safety commit replaced,",
+      "                    each sitting next to its own fixed twin \u2014 and scores it",
+      "                    DETERMINISTICALLY: precision/recall/F1 over the per-file",
+      "                    CLEAN/VIOLATION verdicts, no LLM judge. The cited rule and the",
+      "                    severity are reported but NOT graded (that would need a judge).",
+      "                    Pass explicit model id(s) after the flag to assess exactly",
+      "                    those; with none, auto-discovers the same-or-cheaper candidate",
+      "                    pool. Writes a report under reports/check-specs-benchmark/.",
+      "                    Composes with --force.",
+      "  Pass gate: micro-F1 >= 0.80 AND micro-recall >= 0.70 AND coverage >= 0.90.",
+      "  Never auto-selects a pricier model. ADVISORY unless --apply-profile P is given,",
+      "  which writes the winner into P's `tool_models.check_against_specs` (CLI-only).",
+      "",
       "Cross-tool auto-replacement (TRDD-828238b5 A7 \u2014 the writer path):",
       "  --auto-replace    For every benchmarked tool (security_scan,",
-      "                    search_existing_implementations, code_task, scan_folder),",
+      "                    search_existing_implementations, code_task, scan_folder,",
+      "                    check_against_specs),",
       "                    check its incumbent",
       "                    model's health against the durable ledger and, when",
       "                    degraded (or with --force), run that tool's benchmark to",
@@ -227181,7 +228417,7 @@ function printHelp() {
 }
 
 // src/benchmark/index.ts
-function resolveApiKey5() {
+function resolveApiKey6() {
   const k = process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
   if (!k) {
     throw new Error(
@@ -227191,14 +228427,14 @@ function resolveApiKey5() {
   return k;
 }
 function resolveFixturesDir() {
-  const here = dirname5(fileURLToPath5(import.meta.url));
+  const here = dirname5(fileURLToPath6(import.meta.url));
   const candidates = [
-    join17(here, "fixtures"),
-    join17(here, "..", "src", "benchmark", "fixtures"),
-    join17(here, "..", "..", "src", "benchmark", "fixtures")
+    join19(here, "fixtures"),
+    join19(here, "..", "src", "benchmark", "fixtures"),
+    join19(here, "..", "..", "src", "benchmark", "fixtures")
   ];
   for (const c of candidates) {
-    if (existsSync15(join17(c, "file-01.ts"))) return c;
+    if (existsSync18(join19(c, "file-01.ts"))) return c;
   }
   throw new Error(`Could not locate benchmark fixtures. Tried:
   ${candidates.join("\n  ")}`);
@@ -227220,9 +228456,9 @@ function validateCombinations(opts) {
   if (opts.apply && !opts.autoReplace) {
     throw new Error("--apply requires --auto-replace");
   }
-  if (opts.applyProfile !== null && opts.pickTopN === null && !opts.codeTask && !opts.scanFolder) {
+  if (opts.applyProfile !== null && opts.pickTopN === null && !opts.codeTask && !opts.scanFolder && !opts.checkSpecs) {
     throw new Error(
-      "--apply-profile requires --pick-top-n (or --code-task / --scan-folder, which write their single winner into tool_models.code_task / tool_models.scan_folder)"
+      "--apply-profile requires --pick-top-n (or --code-task / --scan-folder / --check-specs, which write their single winner into tool_models.code_task / tool_models.scan_folder / tool_models.check_against_specs)"
     );
   }
   if (opts.fromCache && opts.pickTopN === null) {
@@ -227247,7 +228483,7 @@ function preflight(opts) {
   }
 }
 function benchmarkCachePath() {
-  return join17(getConfigDir(), "benchmark-results.json");
+  return join19(getConfigDir(), "benchmark-results.json");
 }
 async function main() {
   const opts = parseArgs(process.argv);
@@ -227292,6 +228528,10 @@ async function main() {
       for (const id of pool) {
         if (!opts.scanFolderModels.includes(id)) opts.scanFolderModels.push(id);
       }
+    } else if (opts.checkSpecs) {
+      for (const id of pool) {
+        if (!opts.checkSpecsModels.includes(id)) opts.checkSpecsModels.push(id);
+      }
     } else if (opts.searchExisting || opts.autoReplace) {
       for (const id of pool) {
         if (!opts.searchExistingModels.includes(id)) opts.searchExistingModels.push(id);
@@ -227314,6 +228554,9 @@ async function main() {
   if (opts.scanFolder) {
     return runScanFolderPhase(opts);
   }
+  if (opts.checkSpecs) {
+    return runCheckSpecsPhase(opts);
+  }
   if (opts.autoReplace) {
     return runAutoReplacePhase(opts);
   }
@@ -227330,9 +228573,9 @@ async function main() {
     return runNewArrivalsPhase(opts);
   }
   if (opts.fromCache) {
-    const cachePath5 = benchmarkCachePath();
-    const cache = loadCachedReport(cachePath5);
-    console.error(`[benchmark] --from-cache: using ${cachePath5} (${cache.results.length} models, run at ${cache.timestamp}).`);
+    const cachePath6 = benchmarkCachePath();
+    const cache = loadCachedReport(cachePath6);
+    console.error(`[benchmark] --from-cache: using ${cachePath6} (${cache.results.length} models, run at ${cache.timestamp}).`);
     return runPickPhase(cache.results, opts);
   }
   const sweep = await runKeywordSweep(opts);
@@ -227412,7 +228655,7 @@ async function runKeywordSweep(opts) {
       total: 0
     };
   }
-  const apiKey = resolveApiKey5();
+  const apiKey = resolveApiKey6();
   const roster = [
     ...candidates.map((m) => ({ model: m, isBaseline: false })),
     ...baselines.map((m) => ({ model: m, isBaseline: true }))
@@ -227448,17 +228691,17 @@ async function runKeywordSweep(opts) {
     results
   };
   const markdown = renderReport(reportInput);
-  mkdirSync10(dirname5(reportPath), { recursive: true });
-  writeFileSync9(reportPath, markdown, "utf-8");
+  mkdirSync11(dirname5(reportPath), { recursive: true });
+  writeFileSync10(reportPath, markdown, "utf-8");
   console.error(`[benchmark] Report: ${reportPath}`);
   const json = renderJson(reportInput);
   const cacheJsonPath = benchmarkCachePath();
-  mkdirSync10(dirname5(cacheJsonPath), { recursive: true });
-  writeFileSync9(cacheJsonPath, json, "utf-8");
+  mkdirSync11(dirname5(cacheJsonPath), { recursive: true });
+  writeFileSync10(cacheJsonPath, json, "utf-8");
   console.error(`[benchmark] JSON cache: ${cacheJsonPath}`);
   if (opts.jsonPath) {
-    mkdirSync10(dirname5(opts.jsonPath), { recursive: true });
-    writeFileSync9(opts.jsonPath, json, "utf-8");
+    mkdirSync11(dirname5(opts.jsonPath), { recursive: true });
+    writeFileSync10(opts.jsonPath, json, "utf-8");
     console.error(`[benchmark] JSON (user-path): ${opts.jsonPath}`);
   }
   const passers = [...results.values()].filter((r) => r.score?.pass).length;
@@ -227610,6 +228853,59 @@ async function runScanFolderPhase(opts) {
     };
   }
 }
+async function runCheckSpecsPhase(opts) {
+  console.error("[check-specs] check_against_specs spec-adherence model benchmark");
+  const result = await runCheckSpecsBenchmark({
+    models: opts.checkSpecsModels.length > 0 ? opts.checkSpecsModels : void 0,
+    force: opts.force,
+    onProgress: (m) => console.error(`[check-specs] ${m}`)
+  });
+  console.error("");
+  console.error(`[check-specs] ${result.summaryLine}`);
+  console.error(`[check-specs] spend: $${result.costUsd.toFixed(6)}`);
+  console.error(`[check-specs] json:   ${result.jsonReportPath}`);
+  process.stdout.write(`recommended_model=${result.recommendedModelId}
+`);
+  const base = `check-specs benchmark done \u2014 recommended ${result.recommendedModelId} (changed=${result.changed}), spend $${result.costUsd.toFixed(6)}`;
+  if (opts.applyProfile === null) {
+    return {
+      ok: true,
+      summary: `${base} \u2014 ADVISORY (pass --apply-profile P to adopt it)`,
+      reportPath: result.reportPath
+    };
+  }
+  if (result.selection.eligible.length === 0) {
+    return {
+      ok: true,
+      summary: `${base} \u2014 no eligible same-or-cheaper passer, so nothing was written to '${opts.applyProfile}'`,
+      reportPath: result.reportPath
+    };
+  }
+  try {
+    const r = applyToolModelToSettings(
+      getSettingsPath(),
+      opts.applyProfile,
+      "check_against_specs",
+      result.recommendedModelId
+    );
+    console.error(
+      `[check-specs] applied ${opts.applyProfile}::tool_models.check_against_specs: ${r.oldModelId || "\u2014"}  \u2192  ${r.newModelId}`
+    );
+    console.error("[check-specs] Run the `reset` MCP tool or restart Claude Code to pick up the new model.");
+    return {
+      ok: true,
+      summary: `${base} \u2014 applied to '${opts.applyProfile}'::tool_models.check_against_specs; run \`reset\` to reload`,
+      reportPath: result.reportPath
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      code: 3,
+      summary: `--apply-profile failed: ${err.message}`,
+      reportPath: result.reportPath
+    };
+  }
+}
 async function runAutoReplacePhase(opts) {
   console.error("[auto-replace] cross-tool auto-replacement planner");
   const { findings, reportMarkdown } = await planToolReplacements({
@@ -227619,9 +228915,9 @@ async function runAutoReplacePhase(opts) {
   });
   const ensemble = planEnsembleRotation();
   const fullReport = reportMarkdown + "\n" + renderEnsembleRotationSection(ensemble);
-  const reportPath = join17(resolveProjectMainRoot(), "reports", "auto-replace", `${compactStamp()}-auto-replace.md`);
-  mkdirSync10(dirname5(reportPath), { recursive: true });
-  writeFileSync9(reportPath, fullReport, "utf-8");
+  const reportPath = join19(resolveProjectMainRoot(), "reports", "auto-replace", `${compactStamp()}-auto-replace.md`);
+  mkdirSync11(dirname5(reportPath), { recursive: true });
+  writeFileSync10(reportPath, fullReport, "utf-8");
   console.error("");
   for (const f of findings) {
     const verdict = !f.ranBenchmark ? "healthy \u2014 no benchmark" : f.changed ? `RECOMMEND ${f.incumbentModelId} -> ${f.recommendedModelId}` : `keep ${f.incumbentModelId}`;
@@ -227882,7 +229178,7 @@ function buildReportPath() {
   const offsetAbs = Math.abs(offsetMin);
   const tz = `${offsetSign}${pad(Math.floor(offsetAbs / 60))}${pad(offsetAbs % 60)}`;
   const ts3 = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${tz}`;
-  return join17(root, "reports", "benchmark", `${ts3}-model-comparison.md`);
+  return join19(root, "reports", "benchmark", `${ts3}-model-comparison.md`);
 }
 withUsageContext(
   { tool: "cli:benchmark", params: "" },

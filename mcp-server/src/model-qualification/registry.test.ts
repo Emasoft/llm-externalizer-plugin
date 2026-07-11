@@ -66,9 +66,20 @@ describe("TOOL_MODEL_REGISTRY", () => {
     expect(d!.requirements.minContextTokens).toBe(128_000);
   });
 
+  it("registers check_against_specs against the spec-adherence benchmark (P2d)", () => {
+    const d = getToolDescriptor("check_against_specs");
+    expect(d).toBeDefined();
+    expect(d!.benchmark).toBe("check-specs");
+    // Spec adherence is a per-file CLEAN/VIOLATION classification, not a chain of
+    // inference, so reasoning is not required — reasoning models remain valid
+    // candidates and the runner's token cap is sized so as not to punish them.
+    expect(d!.requirements.requireReasoning).toBe(false);
+  });
+
   it("carries requirements-only descriptors (benchmark:null) for tools without a dataset yet", () => {
-    // code_task LEFT this list in P2b (its code-audit corpus) and scan_folder LEFT
-    // it in P2c (its mass-search corpus) — both now have a real golden dataset.
+    // code_task LEFT this list in P2b (its code-audit corpus), scan_folder in P2c (its
+    // mass-search corpus) and check_against_specs in P2d (its spec-adherence corpus) —
+    // all three now have a real golden dataset.
     for (const t of ["check_imports", "compare_files", "chat", "cluster_synonyms"]) {
       const d = getToolDescriptor(t);
       expect(d, `${t} registered`).toBeDefined();
