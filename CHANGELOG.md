@@ -1,6 +1,438 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [10.2.0] - 2026-07-11
+
+### Added
+
+- Feat(model-pipeline): one command refreshes every model, under a hard spend cap (P3+P4, zero-token model pipeline)
+
+P1 made each model-update STEP a scripted CLI call. P2 gave four more tools a real
+benchmark. What was still prose was the GLUE: "fetch the catalog, decide which tools to
+sweep, choose the flags, read the report, then hand-edit settings.yaml". That glue was
+judgment — so it cost agent tokens and it drifted. It is now code.
+
+`llm-ext-benchmark --update-all` does the whole pipeline in-process: discover the live
+catalog -> apply each tool's requirements from the registry -> run every tool that HAS a
+benchmark -> rank -> atomically write the winners (ensemble, each tool_models.<tool>, and
+the free_models pool) -> report. It ends with ONE [OK]/[FAILED] line the command prints
+verbatim. Zero decisions are left to a human or an agent.
+
+WHY A SPEND CAP, AND WHY IT IS SHAPED THIS WAY (P4)
+
+Commit 31ce212 fixed a cost-safety defect that had already drained $17.67 of a real
+OpenRouter balance in one hour. Nothing BOUNDED spend; a run either finished or it emptied
+the wallet. So:
+
+- The default mode is FREE. A bare `--update-all` cannot spend a cent — it sweeps only
+  zero-cost models, and `--free` also performs the free-models SEARCH that rewrites
+  free_models (that pool was hand-edited until now). Spending requires TYPING --paid/--both.
+- Paid runs are capped twice. A worst-case pre-flight estimate aborts BEFORE the first call
+  (naming the exact --budget-usd that would authorize it), and budget.ts reserves every
+  single call against the cap before it is sent. Default cap $2.00 — ~10% of the balance.
+- The estimate is derived, never invented: each benchmark's describeWorkload() reads its
+  REAL corpus on disk, and each runner's max_tokens is now an exported constant the
+  estimator imports — so a corpus edit moves the estimate and a stale literal cannot
+  under-price a sweep. Approximations deliberately err HIGH (3 chars/token, full max_tokens).
+- The TRIP LATCH is load-bearing, not decoration: every runner CATCHES fetch errors (their
+  never-throw contract), so a throw from inside the guard would be SWALLOWED and the sweep
+  would keep spending. Once tripped, every later reserve refuses instantly, the orchestrator
+  fails the run, and remaining tools are reported SKIPPED. Refuse-then-report, never
+  silent-continue.
+- A `free_only` profile is a standing config-level "never spend". --paid/--both now REFUSE
+  it rather than letting a CLI flag overrule it, and that refusal ranks with the usage
+  errors (before the API-key check) — reporting "OPENROUTER_API_KEY not set" would have sent
+  the user off fixing the wrong thing.
+
+HONESTY ABOUT THE GATE
+
+The report labels every tool benchmark-proven (a model really ran that tool's golden
+dataset and passed) or requirement-gated (checked only against cost/context/output/params —
+no benchmark exists for it yet). An unbenchmarked tool must never read as if it were tested.
+
+TWO REAL BUGS FOUND AND FIXED WHILE BUILDING THIS
+
+1. mass_scout was gated by the keyword-classification benchmark (the ensemble sweep), so it
+   had no per-tool sweep — and it fell through the plan loop into NO REPORT ROW AT ALL. The
+   summary read "5 proven + 5 gated" against an 11-tool registry and nothing said a tool was
+   missing. Caught by the live dry-run, not by review. Now every registered tool is
+   accounted for, and a test asserts the count.
+2. The budget abort used `break`, leaving the remaining tools with no row — an omission a
+   reader could easily take for "nothing to report". It now continues so each is written out
+   as SKIPPED. The ledger is latched, so looping costs nothing and buys a complete report.
+
+Writers stay CLI-only (the read-only-MCP guardrail at pick.ts): the MCP surface remains
+incapable of rewriting its own config.
+
+Gates: build clean, eslint clean, 1543 passing / 0 failing (baseline 1477), doc-consistency
++ tool-roster green. Verified live against the real catalog: --free estimates $0.0000 and
+--paid estimates $8.4036 against the $2 default, aborting with $0 spent and settings
+byte-identical.
+
+- Feat(benchmark): gate check_against_specs on a real-incident spec-adherence benchmark (P2d, zero-token model pipeline)
+
+check_against_specs was the last of the three tools carrying `benchmark: null` —
+it had per-tool REQUIREMENTS but no way to tell whether a model that met them could
+actually do the job. A requirements-only gate admits any model with a big enough
+context window, including one that cannot read code at all.
+
+The P2 dataset spec judged this tool only PARTIALLY deterministic, and it was right,
+so this ships ONLY the half that is honestly gradeable: the per-file CLEAN/VIOLATION
+verdict. Exact-rule-match and severity are printed and NOT graded — deciding whether
+a quoted rule is really the one that was broken is a semantic judgment, and severity
+is one human reviewers disagree about. Both need an LLM judge; a judge is excluded by
+design, so they stay ungraded and are named as such in the report rather than smuggled
+past as a metric.
+
+The corpus is a real incident, not an invention. The spec is this repo's own shipped
+mcp-server/TESTING.md; the thirteen source files are byte-for-byte git snapshots. The
+four VIOLATION fixtures are the exact bytes commit 31ce212 replaced *because they
+really violated that spec* — the defect billed the user's premium ensemble on every
+`npm test` and drained $17.67 in a single hour before it was found. Three of the four
+sit in the corpus NEXT TO their own fixed twin: the same file, ten lines apart, from
+the commits either side of the fix.
+
+That pairing is the whole design, and it is why the benchmark is worth its cost. P2c
+shipped a first corpus that a pure keyword matcher scored F1 0.909 on — it PASSED the
+gate while measuring nothing. So the discrimination check is now structural: four
+code-blind baselines are run through the REAL pipeline and the REAL scorer, and every
+one MUST fail. They do — flag-everything 0.47, spec-vocabulary-grep 0.50 (the fixed
+twins discuss LIVE_TESTS *more* than the broken ones, because the fix added the
+comments), missing-live-gate-grep 0.67 even though it has been HANDED spec rule R2,
+and flag-nothing dies on the recall floor. A corpus that a grep can pass is worthless,
+and now it cannot silently decay into one.
+
+Gate: micro-F1 >= 0.80 AND micro-recall >= 0.70 AND coverage >= 0.90. The recall floor
+is load-bearing: "answer CLEAN to everything" asserts nothing, so it is never wrong,
+and F1 alone cannot punish it on a 4/9 corpus. Accuracy is reported, never gated —
+perpetual silence scores 0.69 on this corpus while finding nothing.
+
+- benchmark-fixtures/check-specs/: 13 verbatim snapshots + the spec (+ README with
+  the full provenance table and the git commands to re-extract every fixture).
+- benchmark/check-specs/{dataset,score,select,bench-runner,index}.ts: the corpus and
+  its tripwires, the judge-free scorer, the same-or-cheaper gate, the real-pipeline
+  runner (only fake = the HTTP seam), the orchestrator.
+- Labels are anchored in the fix commit, not in a regex: spec adherence is violated in
+  structurally different ways and "this test spends money" is not a pattern. What IS
+  mechanical is a per-fixture TRIPWIRE that validateDataset re-checks against the bytes
+  before a cent is spent, so an edited or wrongly-extracted fixture fails loudly instead
+  of silently redefining the answer key.
+- CLI phase --check-specs [ID...] (+ --apply-profile writes tool_models.check_against_specs;
+  CLI-only writer, never reachable from MCP), registry flip, auto-replace now plans five
+  tools.
+- 62 new tests. All gates green: build, lint, 1477 passed / 0 failed, doc-consistency 11/11.
+
+Agent: llm-externalizer
+
+- Feat(benchmark): gate scan_folder on a real-corpus mass-search benchmark (P2c, zero-token model pipeline)
+
+scan_folder was the last of the three high-traffic tools with `benchmark: null`
+in the model-qualification registry, so nothing stopped a model that cannot
+actually do a per-file MATCH/NO_MATCH judgment from becoming its default. This
+adds the missing gate, with the same posture as P2b: deterministic, zero
+LLM-judge, zero agent tokens at run time.
+
+WHY THE GROUND TRUTH IS DERIVED, NOT HAND-LISTED. The corpus is twelve files
+copied VERBATIM from this repo's own mcp-server/src/ (no fabricated code), and
+each query's true MATCH set is recomputed from those bytes by a mechanical rule
+on every run. So the expected answer cannot drift from the corpus — it IS the
+corpus. The checked-in `expectedMatchFiles` is kept only as a TRIPWIRE:
+validateDataset recomputes the set and throws if the two disagree, so neither a
+mistyped regex nor an edited fixture can silently redefine the truth.
+
+WHY TWO OF THE TWELVE FIXTURES ARE "DESCRIBES IT BUT NEVER DOES IT" FILES. The
+first corpus was measurably worthless: a plain grep scored 0.909 and CLEARED the
+0.85 gate, because "imports child_process" and "imports node:crypto" are exactly
+what a keyword matcher finds. Adding security-triage/dataset.ts (real source
+whose job is to DESCRIBE threats: it is saturated with command_injection, "shell
+sink", insecure_crypto, "a broken hash (md5/sha1)" while importing none of them,
+and only ever reads from disk) plus search-existing/dataset.ts drops the keyword
+strategy to ~0.77 — a FAIL — while a model that reads the code still passes.
+bench-runner.test.ts asserts exactly that, so the corpus can never quietly decay
+back into something a grep could pass.
+
+The gate is search_existing's (micro-F1 >= 0.85, micro-recall >= 0.85, coverage
+>= 0.90), NOT code_task's 0.5, and the difference is the OUTPUT CONTRACT rather
+than the difficulty: a forced per-file binary has no structural noise, so a coin
+flip must not clear the bar. The recall floor is what makes "answer NO_MATCH to
+everything" — which is never WRONG, and so has vacuous precision — structurally
+unable to pass.
+
+Honest ceiling, stated rather than smuggled past: a MATCH line's cited evidence
+is REPORTED but NOT graded. Judging whether a citation really proves the claim is
+a semantic-equivalence judgment, and the only mechanical alternatives are a
+brittle substring match or an LLM judge, which this benchmark excludes by design.
+The child_process query is likewise grep-solvable on its own and serves as a
+precision/format control; a test pins that so nobody mistakes it for more.
+
+The math is IMPORTED from search-existing/score.ts, not copied — the per-file
+binary confusion matrix is the same computation, and two copies drift the day one
+is fixed (the same call P2b made when it MOVED codeTaskSystemPrompt).
+
+- corpus: mcp-server/benchmark-fixtures/scan-folder/ (12 real files, 81 KB, full
+  provenance + the anti-grep rationale in its README)
+- dataset/score/select/bench-runner/orchestrator under src/benchmark/scan-folder/
+- CLI phase `--scan-folder [ID...]`; writer (tool_models.scan_folder) is CLI-only
+  and never reachable from an MCP handler
+- registry: scan_folder benchmark null -> "scan-folder"; --auto-replace now plans
+  four tools
+- 49 new tests (1415 passing, zero failures); build + lint + doc-consistency green
+
+Est. spend: ~$0.01/model realistic cheap tier; <= $0.09/model at the registry's
+$1/M ceiling.
+
+Agent: llm-externalizer
+
+- Feat(benchmark): gate code_task on a real-defect code-audit benchmark (P2b, zero-token model pipeline)
+
+code_task was one of the tools carrying `benchmark: null` in the model-
+qualification registry: we could check that a candidate model MET its
+requirements (reasoning + 128K ctx + under the cost ceiling), but we had no way
+to check that it was any good at the job. Model selection for the tool was
+therefore requirements-only — a model could be adopted having never
+demonstrated it can find a bug. This closes that gap with a benchmark that is
+deterministic, judge-free, and driven entirely by script (no agent tokens).
+
+WHY THE CORPUS IS REAL. Every defect fixture is a VERBATIM pre-fix snapshot of a
+file from this repo's own git history (`git show <fixCommit>^:<path>`): each
+defect really shipped and was really fixed, and the fixing commit supplies both
+the buggy symbol (from its diff) and the rationale (from its message). Nothing
+is synthesized. A pre-fix snapshot also contains any defect fixed LATER in the
+same file, and scoring a model WRONG for spotting one of those would penalise
+the best models — so each snapshot is taken at the parent of the LATEST fix
+commit touching that file. grouping.ts is the deliberate exception: it sits one
+fix earlier and therefore lists BOTH of its verified defects. Three clean
+fixtures (files no fix commit has ever touched) are the negative distractors;
+their filenames are neutral because the model sees the filename.
+
+WHY SYMBOL NAMES, NOT file:line. The tool's own system prompt orders the model
+to "Identify code by FUNCTION/CLASS/METHOD NAME, never by line number". A
+line-based scorer would grade models against an instruction the tool actively
+tells them to ignore, so the symbol name is the only sound key. The dataset
+still records each defect's line, but only for humans reading the report.
+
+WHY NO LLM JUDGE, AND WHERE THE HONEST CEILING IS. The audit instructions force
+a `DEFECT: <symbol>` anchor (the same device search-existing's YES/NO contract
+uses), which makes extraction exact string work. The corpus's defectClass labels
+are REPORTED but never gated on: judging whether a model's free-text explanation
+*means the same thing* as a label is semantic equivalence, which needs a judge.
+Claiming to grade that deterministically would be a lie, so we don't.
+
+codeTaskSystemPrompt moves from index.ts to scan-pipeline.ts (next to the two
+strings it embeds). The benchmark MUST send byte-for-byte the prompt the server
+sends, and it cannot import index.ts (that module runs main() at import time) —
+a copy would drift the day either was edited. One definition, two importers.
+
+code_task also joins the --auto-replace planner, so its incumbent is now
+ledger-watched and re-benchmarked like the other two gated tools.
+
+Pass gate: macro-F1 >= 0.5 AND micro-recall >= 0.5 AND <= 1 failed case. 0.5
+mirrors security-triage (the other PROSE-output benchmark), not
+search-existing's 0.85 — a free-form review legitimately surfaces a second
+concern in a 34 KB file, so a higher bar would measure terseness rather than
+code understanding. The recall floor exists because macro-F1 alone is gameable:
+without it, "answer NO DEFECTS to everything" scores 1.0 on every clean case.
+
+Two bugs found and fixed in this work, both recorded so they aren't reintroduced:
+- a candidate fixture (security_scan/intake.ts) carries literal NUL bytes, which
+  readFileAsCodeBlock rejects as binary — the case could never have been scored
+  and every model would have "failed" it. validateDataset now refuses a binary
+  fixture outright, and the fixture was dropped.
+- max_tokens on the benchmark call must NOT be clamped tight (the obvious
+  cost-saving move). code_task requires REASONING models, and max_tokens bounds
+  thinking + visible content together, so a tight cap truncates them mid-thought
+  and the scorer reads it as "found nothing" — a broken benchmark that
+  systematically fails exactly the class of model the tool needs.
+
+Corpus: 8 cases / 103 KB, ~30K input tokens per model => ~$0.01 per model at
+realistic cheap-tier pricing (<= $0.10 at the registry's $1/M ceiling).
+
+Gates: npm run build clean, npm run lint clean, 1365 tests passing (0 failures),
+doc-consistency green. dist/ rebuilt.
+
+- Feat(model-pipeline): move every model-update judgment out of prose into code (P1 zero-token model pipeline)
+
+A model update cost agent tokens not because the benchmark engine needed an LLM
+— it never did — but because the PROCEDURE around it did. The command/skill prose
+made Claude check prerequisites, choose flags, judge whether a 404 was
+"persistent", parse stderr, and relay reports. Each of those is now code.
+
+1. ROTATION IS A THRESHOLD, NOT A JUDGMENT (the biggest hotspot).
+   The ensemble-autoselect skill told the agent to eyeball the retry history and
+   decide "is this 404/degradation persistent?". model-events.ts now answers it:
+   assessModelPersistence flags a model iff its TRAILING run of non_retryable_failure
+   events inside a rolling 24h window is >=3 events carrying the SAME rotate-worthy
+   status (400/404/410/422). Every clause is load-bearing and commented: 429s and 5xx
+   never rotate (a swap cannot fix a rate limit or a provider outage); 401/403 never
+   rotate (that is a wrong API key — rotating would destroy a working ensemble); a run
+   broken by a different status is a wobble, not a retirement; the window is what makes
+   the verdict CURRENT, unlike the unwindowed counters, which can never gate a write.
+
+2. THE LEDGER NOW COVERS THE ENSEMBLE, not just benchmarked tools.
+   planEnsembleRotation applies that threshold to the model/second_model/third_model
+   slots — which serve every tool that has no per-tool override and previously had no
+   automated verdict at all. `--auto-replace --apply` rotates them automatically: fresh
+   sweep, re-pick, atomic write. It re-picks the profile's CURRENT slot count (not a
+   hard-coded 3), because applyPicksToSettings derives `mode` from the pick count and
+   would otherwise silently promote a single-model profile to remote-ensemble.
+
+3. THE SPEND BOUND IS A CODE DEFAULT. --qualifying-top-n 15 was prose ("add it unless
+   the user asked for an exhaustive sweep"); a bound that depends on an LLM remembering
+   a sentence is not a bound. It is parseArgs' default now; --no-qualifying-cap opts
+   into the exhaustive sweep. parseArgs moved to cli-args.ts so it can be tested at all
+   (index.ts runs a benchmark at import).
+
+4. THE CLI SELF-CHECKS AND SPEAKS ONE LINE. Prereq probing (test -x, $OPENROUTER_API_KEY)
+   moved into the process; usage errors are validated BEFORE the environment, so a bad
+   flag combination no longer reports a missing API key. Every path now ends with exactly
+   one `[OK|FAILED] <summary>. Report: <path>` on stdout — and a CORRECT EXIT CODE.
+   That last part was a real bug: main()'s resolved code was DISCARDED, so a failed pick
+   or a failed settings write still exited 0. Nothing could tell success from failure
+   without parsing stderr prose — which is precisely why the prose asked an agent to.
+
+5. ADOPTION IS SCRIPTED. The new-arrivals and check-health commands ended with "now edit
+   settings.yaml by hand". Two new CLI-only atomic writers close that: applyFreePoolToSettings
+   (--apply-free-pool: the pool BECOMES the :free models that passed) and
+   applyEnsembleSlotToSettings (--adopt ID --adopt-into <slot|tool:NAME>, gated on the
+   per-tool requirements registry). Both carry the read-only-MCP guardrail comment and are
+   unreachable from any MCP handler — the server still cannot rewrite its own config.
+   applyEnsembleSlotToSettings REFUSES second/third_model on a non-ensemble profile: those
+   keys are ignored unless mode is remote-ensemble, so "succeeding" would be a silent no-op.
+
+Prose rewritten to carry zero judgment: 6 commands + the skill now say "run exactly this,
+print its final line verbatim" — no prereq checks, no flag decisions, no persistence call,
+no report paraphrase, no manual-next-step reminders.
+
+Also fixes: the CLI wrote settings/cache via homedir() and ignored LLM_EXT_CONFIG_DIR, so a
+test that exercised a writer would have hit the developer's real ~/.llm-externalizer.
+
+Tests: +60 real tests (1247 -> 1307, zero failures). The threshold rule (every clause), both
+writers against real files, the parseArgs defaults, and a hermetic spawn of the real bundle
+proving the [OK|FAILED] line, the exit codes, the prereq self-check, and a ledger-driven
+BROKEN ensemble verdict — no network, no key, nothing mocked.
+
+
+### Documentation
+
+- Docs(trdd): record Phase 5b landed — completion layer extracted (P5b, TRDD-63314265)
+
+STATE block now carries what moved, WHY the four caches could move (zero readers
+outside the three completion fns => still one binding per cache) while the
+auto-free/credit state could NOT (index.ts reads it elsewhere; a copy would keep
+the session spending after a 402), and the corrected call-site count (10, not the
+~50 the 5a report estimated — the rest were comments). index.ts 6190 -> 5147.
+Only P4b remains in this TRDD; there is no Phase 5c.
+
+Agent: llm-externalizer
+
+
+### Refactored
+
+- Refactor(check_against_specs): extract handler into an importable core (P2a, zero-token model pipeline)
+
+WHY: model-qualification/registry.ts carries `benchmark: null` for
+check_against_specs. A benchmark cannot exist while the pipeline is only
+reachable by booting the MCP server — the same blocker already solved for
+search_existing_implementations, scan_folder and code_task. This applies the
+identical seam-injection pattern so a hermetic, zero-judge benchmark (P2b) can
+drive the REAL pipeline in-process.
+
+- src/check-specs/core.ts: runCheckAgainstSpecs(args, CheckSpecsDeps). Imports
+  ZERO from index.ts. Every index.ts-scoped binding the case body read is now an
+  injected seam: the LLM call (ensembleStreaming — the tool's ONLY LLM site,
+  used by both the per-file mode-0 path and the FFD-batched path), the
+  usage-recording footer (formatFooter), the report writer (saveResponse), the
+  merged-model label (ensembleModelLabel), the max-tokens resolver, path
+  resolution (normalizePaths/resolveFolderPath), and the
+  useEnsemble/onProgress/outputDir/modelOverride values. Redaction, grouping and
+  file reading already lived in the pure scan-pipeline/grouping modules and are
+  imported directly, so the core runs the real readFileAsCodeBlock (incl. the
+  `specs-` tag prefix) and the real FFD packer.
+- The auditor system prompt moved INTO the core rather than becoming an injected
+  seam (unlike code_task's codeTaskSystemPrompt): the prompt IS what a
+  spec-compliance benchmark grades, so a seam would force every benchmark to
+  ship its own copy and the two would silently drift. Its only index.ts inputs
+  were the pure strings FILE_FORMAT_EXAMPLE / BREVITY_RULES, which move to
+  scan-pipeline.ts (single source of truth, imported back by index.ts).
+- index.ts's case is now delegation-only: 5147 -> 4880 lines.
+- src/benchmark/check-specs/runner.test.ts: 9 hermetic tests, fake LLM seam only,
+  real files on disk through the real pipeline + real report assembly. Covers
+  per-file (mode 0), batched (mode 2), auto-grouped (mode 1), and the four
+  fail-fast validation paths (missing spec, missing inputs, unreadable spec,
+  empty LLM response).
+
+Gates: build clean, eslint clean, 1316 tests passing (1307 + 9 new), zero
+failures, zero tool-roster/doc drift.
+
+- Refactor(provider): extract the completion + retry layer (P5b, TRDD-63314265)
+
+Moves the last big block of index.ts's LLM plumbing into
+provider/completion.ts: chatCompletionSimple, chatCompletionJSON and
+chatCompletionWithRetry, plus the four state clusters they — and only they —
+touch (the reasoning ladder, the supported_parameters filter, the
+LLM_EXT_DUMP_REQUESTS hook, the SERVICE_HEALTH circuit breaker).
+sanitizeProviderError goes to provider/http.ts, where the HTTP body it
+sanitizes comes from.
+
+WHY the four caches could move but the auto-free state could not: each of the
+four was verified to have zero readers or writers outside those three
+functions, so relocating them keeps every cache a SINGLE binding with one
+owning module. `creditExhausted` and the auto-free flags are the opposite —
+index.ts reads them elsewhere (shouldUseFree, the dispatch layer,
+getEnsembleModels), so they STAY in index.ts and completion.ts writes them
+THROUGH the seam (setCreditExhausted / engageAutoFree). A local copy in
+completion.ts would silently diverge from what index.ts reads on the very next
+call, and the session would keep spending after a 402.
+
+Seam: ProviderDeps (P5a) is reused, extended to CompletionDeps. Every new field
+is a FUNCTION, never a captured value — not only for the settings-reload reason
+P5a documented, but because FREE_MODEL_ID is a `const` declared LATER in
+index.ts than the deps object, so an eager read would throw on TDZ at init.
+
+No re-export shims (project rule): the three test files that imported the moved
+symbols from ./index now import them from their new homes.
+
+index.ts 6190 -> 5147 (-1043). Build + lint green; 1247 tests pass, 0 fail;
+doc-consistency (11) + tool roster (23) green => zero tool drift.
+provider/ still imports ZERO from index.ts. dist rebuilt.
+
+Agent: llm-externalizer
+
+- Refactor(provider): extract connection/transport/LM-Studio layer (P5a, TRDD-63314265)
+
+Phase 5a of the index.ts monolith split. index.ts 6685 -> 6190 (-495).
+
+New src/provider/ package, importing ZERO from index.ts (no cycle, no
+re-export shims):
+  - types.ts     BackendConfig, ConnectionSetup, ChatMessage, StreamingResult,
+                 ModelInfo, VALID_REASONING_EFFORTS/ReasoningEffortSetting and
+                 the ProviderDeps seam.
+  - http.ts      fetchWithTimeout, fetchWithRetry429, computeBackoffMs —
+                 stateless transport, no deps at all.
+  - lmstudio.ts  the LM Studio native block: per-endpoint probe cache,
+                 detectLMStudio, chatCompletionNative.
+  - connection.ts resolveConnection (the single point every request's model
+                 flows through, so the free_only cost-safety assert lives here).
+
+WHY the deps object: the provider modules cannot read index.ts's mutable
+backend state (currentBackend / activeResolved / SOFT_TIMEOUT_MS are all
+reassigned on a settings reload), so index.ts builds one providerDeps object
+and passes it at the 5 call sites — same pattern as ScanFolderDeps/CodeTaskDeps.
+Every stateful field is a FUNCTION, not a captured value: a value captured at
+module-init would pin the provider layer to the pre-reload generation forever.
+
+Also dropped two stale docstrings that moved out with the code: a duplicated
+fetchWithRetry429 header, and one for a per-chunk stream reader that no longer
+exists.
+
+Gates: tsc+esbuild build green; eslint src --max-warnings 0 clean; full suite
+1247 pass / 0 fail; doc-consistency (11) + index roster (23) green => zero tool
+drift. dist rebuilt and committed.
+
+Phase 5b (chatCompletionSimple / chatCompletionJSON / chatCompletionWithRetry)
+deliberately NOT cut — see the TRDD.
+
+
 ## [10.1.0] - 2026-07-02
 
 ### Added
