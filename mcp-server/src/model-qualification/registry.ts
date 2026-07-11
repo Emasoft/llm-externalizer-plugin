@@ -84,8 +84,8 @@ export const TOOL_MODEL_REGISTRY: Record<string, ToolModelDescriptor> = {
   code_task: {
     tool: "code_task",
     requirements: criteria({ requireReasoning: true, minContextTokens: 128_000 }),
-    benchmark: null,
-    note: "Code-optimized analysis. Code-understanding benchmark dataset is incremental.",
+    benchmark: "code-task",
+    note: "Code-optimized analysis. Gated by the code-audit benchmark (P2b): real pre-fix snapshots from this repo's own git history, scored deterministically on defect localization by symbol name — no LLM judge.",
   },
   scan_folder: {
     tool: "scan_folder",

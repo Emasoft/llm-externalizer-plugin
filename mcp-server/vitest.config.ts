@@ -152,6 +152,15 @@ export default defineConfig({
       // assembly). Covers single/inline/batch modes. No network, no module
       // mocking (B1 Phase 3, TRDD-63314265).
       'src/benchmark/code-task/runner.test.ts',
+      // code_task CODE-AUDIT per-tool benchmark (P2b) — golden corpus of REAL
+      // pre-fix snapshots from this repo's git history + a deterministic,
+      // judge-free localization scorer + the same-or-cheaper selection gate.
+      // bench-runner.test.ts is HERMETIC (fake FetchImpl seam only; real
+      // pipeline, real prompt, real fixtures, real scorer). No LLM, no network.
+      'src/benchmark/code-task/dataset.test.ts',
+      'src/benchmark/code-task/score.test.ts',
+      'src/benchmark/code-task/select.test.ts',
+      'src/benchmark/code-task/bench-runner.test.ts',
       // check_against_specs in-process pipeline core — HERMETIC (fake
       // ensembleStreaming seam only, real readFileAsCodeBlock + readAndGroupFiles
       // + grouping + report assembly). Covers per-file / batched / grouped modes.

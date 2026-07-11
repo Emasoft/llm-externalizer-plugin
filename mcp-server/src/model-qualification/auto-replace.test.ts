@@ -188,9 +188,11 @@ describe("planToolReplacements — report shape", () => {
       settingsReader: fakeReader("incumbent/model"),
       benchmarkRunner: runner,
     });
-    // Both reference benchmarked tools must appear.
+    // Every tool the registry declares a DISPATCHABLE benchmark for must appear.
+    // code_task joined in P2b (its code-audit corpus), so the planner now covers
+    // three tools — if a fourth benchmark ships, this list grows with it.
     expect(findings.map((f) => f.tool).sort()).toEqual(
-      ["search_existing_implementations", "security_scan"].sort(),
+      ["code_task", "search_existing_implementations", "security_scan"].sort(),
     );
     for (const f of findings) {
       expect(reportMarkdown).toContain(`## ${f.tool} (benchmark: ${f.benchmark})`);
@@ -214,5 +216,6 @@ describe("planToolReplacements — report shape", () => {
     const byTool = Object.fromEntries(calls.map((c) => [c.tool, c.benchmark]));
     expect(byTool["security_scan"]).toBe("security-triage");
     expect(byTool["search_existing_implementations"]).toBe("search-existing");
+    expect(byTool["code_task"]).toBe("code-task");
   });
 });

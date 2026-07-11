@@ -47,8 +47,18 @@ describe("TOOL_MODEL_REGISTRY", () => {
     expect(d!.requirements.minContextTokens).toBe(128_000);
   });
 
+  it("registers code_task against the code-audit benchmark (P2b)", () => {
+    const d = getToolDescriptor("code_task");
+    expect(d).toBeDefined();
+    expect(d!.benchmark).toBe("code-task");
+    // Code-optimized analysis needs a reasoning + long-context model.
+    expect(d!.requirements.requireReasoning).toBe(true);
+    expect(d!.requirements.minContextTokens).toBe(128_000);
+  });
+
   it("carries requirements-only descriptors (benchmark:null) for tools without a dataset yet", () => {
-    for (const t of ["code_task", "scan_folder", "check_imports", "compare_files", "chat", "cluster_synonyms"]) {
+    // code_task LEFT this list in P2b — it now has a real golden corpus.
+    for (const t of ["scan_folder", "check_imports", "compare_files", "chat", "cluster_synonyms"]) {
       const d = getToolDescriptor(t);
       expect(d, `${t} registered`).toBeDefined();
       expect(d!.benchmark, `${t} has no dataset yet`).toBeNull();

@@ -49,6 +49,7 @@ import { DEFAULT_MODEL } from "../security_scan/types.js";
 import { TOOL_MODEL_REGISTRY } from "./registry.js";
 import { runSecurityTriageBenchmark } from "../benchmark/security-triage/index.js";
 import { runSearchExistingBenchmark } from "../benchmark/search-existing/index.js";
+import { runCodeAuditBenchmark } from "../benchmark/code-task/index.js";
 
 /** A model the benchmark rejected (mirrors the selectors' RejectedCandidate). */
 export interface RejectedReplacement {
@@ -213,6 +214,20 @@ async function defaultBenchmarkRunner(
       rejected: r.selection.rejected,
     };
   }
+  if (benchmark === "code-task") {
+    const r = await runCodeAuditBenchmark({
+      apiKey,
+      models: candidates,
+      incumbentModelId,
+      onProgress,
+    });
+    return {
+      recommendedModelId: r.recommendedModelId,
+      changed: r.changed,
+      reason: r.selection.reason,
+      rejected: r.selection.rejected,
+    };
+  }
   throw new Error(
     `defaultBenchmarkRunner: no orchestrator wired for benchmark '${benchmark}' (tool '${tool}'). ` +
       `The model-qualification registry declared a benchmark the auto-replace dispatcher does not know — ` +
@@ -229,7 +244,11 @@ function benchmarkedTools(): { tool: string; benchmark: string }[] {
     // the ensemble's keyword benchmark (benchmark/pick.ts), not a per-tool
     // same-or-cheaper selector — so it is intentionally excluded here. We gate on
     // the dispatchable benchmark ids the default runner actually handles.
-    if (descriptor.benchmark === "security-triage" || descriptor.benchmark === "search-existing") {
+    if (
+      descriptor.benchmark === "security-triage" ||
+      descriptor.benchmark === "search-existing" ||
+      descriptor.benchmark === "code-task"
+    ) {
       out.push({ tool, benchmark: descriptor.benchmark });
     }
   }

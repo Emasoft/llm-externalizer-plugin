@@ -48,6 +48,7 @@ import {
 } from "./pick.js";
 import { runSecurityTriageBenchmark } from "./security-triage/index.js";
 import { runSearchExistingBenchmark } from "./search-existing/index.js";
+import { runCodeAuditBenchmark } from "./code-task/index.js";
 import {
   planEnsembleRotation,
   planToolReplacements,
@@ -166,8 +167,14 @@ function validateCombinations(opts: CliOptions): void {
   if (opts.apply && !opts.autoReplace) {
     throw new Error("--apply requires --auto-replace");
   }
-  if (opts.applyProfile !== null && opts.pickTopN === null) {
-    throw new Error("--apply-profile requires --pick-top-n");
+  if (opts.applyProfile !== null && opts.pickTopN === null && !opts.codeTask) {
+    // --code-task is the second legitimate consumer of --apply-profile: it has a
+    // single winner (not a top-N ensemble), which it writes into that profile's
+    // `tool_models.code_task`. Everything else needs --pick-top-n to have
+    // anything to write.
+    throw new Error(
+      "--apply-profile requires --pick-top-n (or --code-task, which writes its single winner into tool_models.code_task)",
+    );
   }
   if (opts.fromCache && opts.pickTopN === null) {
     throw new Error("--from-cache requires --pick-top-n (no point loading the cache otherwise).");
@@ -242,7 +249,8 @@ async function main(): Promise<CliResult> {
   // guard. Auto-discovery then adds every structurally-qualified zero-cost model (incl.
   // no-suffix open-beta models like owl-alpha), ranked by the free quality indexes. The
   // resolved ids feed the existing pipeline: keyword → opts.includeIds (baselines);
-  // security-triage → opts.triageModels; search-existing/auto-replace → searchExistingModels.
+  // security-triage → opts.triageModels; code-task → codeTaskModels;
+  // search-existing/auto-replace → searchExistingModels.
   if (opts.benchFreePool) {
     const configured =
       activeFreeModels.length > 0 ? activeFreeModels : FREE_POOL_SEED;
@@ -274,6 +282,11 @@ async function main(): Promise<CliResult> {
       for (const id of pool) {
         if (!opts.triageModels.includes(id)) opts.triageModels.push(id);
       }
+    } else if (opts.codeTask) {
+      // Append (preserve any explicit ids the user passed after --code-task).
+      for (const id of pool) {
+        if (!opts.codeTaskModels.includes(id)) opts.codeTaskModels.push(id);
+      }
     } else if (opts.searchExisting || opts.autoReplace) {
       // Append (preserve any explicit ids the user passed after --search-existing).
       // --auto-replace forwards opts.searchExistingModels as its candidate pool,
@@ -303,6 +316,13 @@ async function main(): Promise<CliResult> {
   // classification) scored deterministically against a golden fixture codebase.
   if (opts.searchExisting) {
     return runSearchExistingPhase(opts);
+  }
+
+  // --code-task routes to the code_task CODE-AUDIT benchmark — a wholly separate
+  // task (defect localization in real pre-fix snapshots of this repo's own code,
+  // not keyword classification), scored deterministically with no LLM judge.
+  if (opts.codeTask) {
+    return runCodeTaskPhase(opts);
   }
 
   // --auto-replace routes to the cross-tool auto-replacement planner — for every
@@ -604,6 +624,79 @@ async function runSearchExistingPhase(opts: CliOptions): Promise<CliResult> {
     summary: `search-existing benchmark done — recommended ${result.recommendedModelId} (changed=${result.changed}), spend $${result.costUsd.toFixed(6)}`,
     reportPath: result.reportPath,
   };
+}
+
+/**
+ * --code-task phase: assess model(s) on the code_task CODE-AUDIT corpus and
+ * recommend the best same-or-cheaper passer. The corpus is VERBATIM pre-fix
+ * snapshots from this repo's own git history (no fabricated code — every defect
+ * really shipped and was really fixed) plus never-fixed clean files, and scoring
+ * is DETERMINISTIC: precision/recall/F1 on localizing the defect by FUNCTION
+ * NAME, with NO LLM judge anywhere. Writes JSON + markdown under
+ * reports/code-task-benchmark/.
+ *
+ * ADVISORY by default. With `--apply-profile P` it ALSO persists the winner into
+ * P's `tool_models.code_task` via applyToolModelToSettings — the same atomic,
+ * CLI-only writer --auto-replace --apply uses, which MUST NEVER be reachable
+ * from an MCP handler (see the guardrail comment at pick.ts:258).
+ */
+async function runCodeTaskPhase(opts: CliOptions): Promise<CliResult> {
+  console.error("[code-task] code_task code-audit model benchmark");
+  const result = await runCodeAuditBenchmark({
+    models: opts.codeTaskModels.length > 0 ? opts.codeTaskModels : undefined,
+    force: opts.force,
+    onProgress: (m) => console.error(`[code-task] ${m}`),
+  });
+  console.error("");
+  console.error(`[code-task] ${result.summaryLine}`);
+  console.error(`[code-task] spend: $${result.costUsd.toFixed(6)}`);
+  console.error(`[code-task] json:   ${result.jsonReportPath}`);
+  // stdout carries the machine-grep-able recommendation line.
+  process.stdout.write(`recommended_model=${result.recommendedModelId}\n`);
+
+  const base = `code-task benchmark done — recommended ${result.recommendedModelId} (changed=${result.changed}), spend $${result.costUsd.toFixed(6)}`;
+
+  if (opts.applyProfile === null) {
+    return { ok: true, summary: `${base} — ADVISORY (pass --apply-profile P to adopt it)`, reportPath: result.reportPath };
+  }
+
+  // The winner is only worth writing when the gate actually produced a passer:
+  // with an empty eligible set the "recommendation" is just the incumbent kept
+  // in place, and rewriting tool_models to the value it already resolves to
+  // would masquerade as an adoption. Say so instead of quietly no-op'ing.
+  if (result.selection.eligible.length === 0) {
+    return {
+      ok: true,
+      summary: `${base} — no eligible same-or-cheaper passer, so nothing was written to '${opts.applyProfile}'`,
+      reportPath: result.reportPath,
+    };
+  }
+
+  try {
+    const r = applyToolModelToSettings(
+      getSettingsPath(),
+      opts.applyProfile,
+      "code_task",
+      result.recommendedModelId,
+    );
+    console.error(
+      `[code-task] applied ${opts.applyProfile}::tool_models.code_task: ${r.oldModelId || "—"}  →  ${r.newModelId}`,
+    );
+    console.error("[code-task] Run the `reset` MCP tool or restart Claude Code to pick up the new model.");
+    return {
+      ok: true,
+      summary: `${base} — applied to '${opts.applyProfile}'::tool_models.code_task; run \`reset\` to reload`,
+      reportPath: result.reportPath,
+    };
+  } catch (err) {
+    // Exit 3 on a write failure, matching every other writer path in this CLI.
+    return {
+      ok: false,
+      code: 3,
+      summary: `--apply-profile failed: ${(err as Error).message}`,
+      reportPath: result.reportPath,
+    };
+  }
 }
 
 /**

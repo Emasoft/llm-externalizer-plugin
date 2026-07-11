@@ -7460,8 +7460,8 @@ var init_registry = __esm({
       code_task: {
         tool: "code_task",
         requirements: criteria({ requireReasoning: true, minContextTokens: 128e3 }),
-        benchmark: null,
-        note: "Code-optimized analysis. Code-understanding benchmark dataset is incremental."
+        benchmark: "code-task",
+        note: "Code-optimized analysis. Gated by the code-audit benchmark (P2b): real pre-fix snapshots from this repo's own git history, scored deterministically on defect localization by symbol name \u2014 no LLM judge."
       },
       scan_folder: {
         tool: "scan_folder",

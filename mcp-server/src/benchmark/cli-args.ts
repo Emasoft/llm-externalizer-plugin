@@ -55,6 +55,12 @@ export interface CliOptions {
    *  non-flag tokens following the flag). When empty, the benchmark
    *  auto-discovers the same-or-cheaper candidate pool. */
   searchExistingModels: string[];
+  /** Run the code_task CODE-AUDIT benchmark instead of the keyword task (P2b). */
+  codeTask: boolean;
+  /** Explicit model id(s) to assess in --code-task mode (variadic — any non-flag
+   *  tokens following the flag). When empty, the benchmark auto-discovers the
+   *  same-or-cheaper candidate pool. */
+  codeTaskModels: string[];
   /** Ignore the per-model-per-day cache (currently only --security-triage). */
   force: boolean;
   /** Assess one model against EVERY tool's per-tool requirements (no LLM call). */
@@ -114,6 +120,8 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     triageModels: [],
     searchExisting: false,
     searchExistingModels: [],
+    codeTask: false,
+    codeTaskModels: [],
     force: false,
     assessModel: null,
     checkHealth: false,
@@ -211,6 +219,15 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       opts.searchExisting = true;
       while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
         opts.searchExistingModels.push(argv[i + 1]);
+        i++;
+      }
+    } else if (a === "--code-task") {
+      // Variadic, exactly like --search-existing: `--code-task a/b c/d` assesses
+      // those two; with no trailing tokens the benchmark auto-discovers the
+      // same-or-cheaper candidate pool.
+      opts.codeTask = true;
+      while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
+        opts.codeTaskModels.push(argv[i + 1]);
         i++;
       }
     } else if (a === "--model") {
@@ -329,6 +346,23 @@ export function printHelp(): void {
       "                    reports/search-existing-benchmark/. Composes with --force.",
       "  Pass gate: micro-F1 >= 0.85 AND micro-recall >= 0.85 AND coverage >= 0.90.",
       "  Never auto-selects a pricier model. ADVISORY only — never edits config.",
+      "",
+      "code_task CODE-AUDIT benchmark (separate task — defect localization):",
+      "  --code-task [ID...]",
+      "                    Run the code_task code-audit benchmark instead of the",
+      "                    keyword task. Drives the REAL code_task pipeline over a",
+      "                    corpus of VERBATIM pre-fix snapshots from this repo's own",
+      "                    git history (every defect really shipped and was really",
+      "                    fixed) plus never-fixed clean files, and scores it",
+      "                    DETERMINISTICALLY: precision/recall/F1 on localizing the",
+      "                    defect by FUNCTION NAME — no LLM judge. Pass explicit model",
+      "                    id(s) after the flag to assess exactly those; with none,",
+      "                    auto-discovers the same-or-cheaper candidate pool. Writes a",
+      "                    report under reports/code-task-benchmark/. Composes with",
+      "                    --force.",
+      "  Pass gate: macro-F1 >= 0.50 AND micro-recall >= 0.50 AND <= 1 failed case.",
+      "  Never auto-selects a pricier model. ADVISORY unless --apply-profile P is",
+      "  given, which writes the winner into P's `tool_models.code_task` (CLI-only).",
       "",
       "Cross-tool auto-replacement (TRDD-828238b5 A7 — the writer path):",
       "  --auto-replace    For every benchmarked tool (security_scan,",

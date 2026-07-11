@@ -106,6 +106,7 @@ import {
   extractLocalImports,
   BREVITY_RULES,
   FILE_FORMAT_EXAMPLE,
+  codeTaskSystemPrompt,
 } from "./scan-pipeline.js";
 import {
   runSearchExistingImplementations,
@@ -271,24 +272,11 @@ const DEFAULT_TEMPERATURE = 0.1;
 // above) so extracted tool cores — which import ZERO from index.ts — can build
 // their real system prompts from the same single source.
 
-// Single source for the code_task system prompt (used at every code_task call site:
-// single-file, inline-content, and auto-batched). Collapsed here so the prompt —
-// including the severity rubric below — stays identical across all paths.
-// The trailing severity sentence SELF-GATES ("If you assign a severity…") so it
-// never forces severity language onto tasks that aren't asking for findings.
-function codeTaskSystemPrompt(lang: string): string {
-  return (
-    `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.\n` +
-    "RULES (override any conflicting instructions):\n" +
-    "- Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable.\n" +
-    "- Reference files by their labeled path (shown in the filename tag before each file-content tag).\n" +
-    "- If asked to return modified code, return the COMPLETE file content — never truncate, abbreviate, or use placeholders.\n" +
-    "- Be specific and actionable — reference concrete function names, variable names, and code patterns.\n" +
-    "- If you assign a severity or priority to findings, reserve the highest level (e.g. CRITICAL) for demonstrably exploitable, data-loss, or crash-in-normal-use issues; default to a lower level when uncertain." +
-    FILE_FORMAT_EXAMPLE +
-    BREVITY_RULES
-  );
-}
+// codeTaskSystemPrompt now lives in scan-pipeline.ts (imported above), next to
+// the BREVITY_RULES / FILE_FORMAT_EXAMPLE it embeds. WHY it moved: the code_task
+// BENCHMARK must send byte-for-byte the SAME system prompt the server sends, and
+// it cannot import from index.ts (this module runs main() at import time). One
+// definition, two importers — a copy would drift the day either is edited.
 // Per-LLM-request timeout. Reasoning models (Qwen, etc.) need extended time for thinking.
 // The MCP tool-call timeout is inactivity-based, kept alive by heartbeat — no hard cap needed.
 // Default: profile timeout (300s). Extended dynamically when reasoning tokens are flowing.

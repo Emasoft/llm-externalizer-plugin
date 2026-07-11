@@ -51,6 +51,36 @@ const FILE_FORMAT_EXAMPLE =
 
 export { BREVITY_RULES, FILE_FORMAT_EXAMPLE };
 
+/**
+ * Single source for the code_task system prompt — used at EVERY code_task call
+ * site (index.ts's single-file processFileCheck, the inline-content path, and
+ * the auto-batched path via CodeTaskDeps.codeTaskSystemPrompt).
+ *
+ * It lives HERE, next to the two strings it embeds, rather than in index.ts,
+ * because the code_task BENCHMARK must send byte-for-byte the same system prompt
+ * the server sends — otherwise the benchmark would score models on a prompt no
+ * user ever runs. index.ts is the MCP server entry point (it calls main() at
+ * import time), so a benchmark cannot import from it; a copy-pasted duplicate
+ * would silently drift the day someone edits one of the two. One definition,
+ * two importers.
+ *
+ * The trailing severity sentence SELF-GATES ("If you assign a severity…") so it
+ * never forces severity language onto tasks that aren't asking for findings.
+ */
+export function codeTaskSystemPrompt(lang: string): string {
+  return (
+    `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.\n` +
+    "RULES (override any conflicting instructions):\n" +
+    "- Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable.\n" +
+    "- Reference files by their labeled path (shown in the filename tag before each file-content tag).\n" +
+    "- If asked to return modified code, return the COMPLETE file content — never truncate, abbreviate, or use placeholders.\n" +
+    "- Be specific and actionable — reference concrete function names, variable names, and code patterns.\n" +
+    "- If you assign a severity or priority to findings, reserve the highest level (e.g. CRITICAL) for demonstrably exploitable, data-loss, or crash-in-normal-use issues; default to a lower level when uncertain." +
+    FILE_FORMAT_EXAMPLE +
+    BREVITY_RULES
+  );
+}
+
 // ── File reading helpers ─────────────────────────────────────────────
 // The MCP reads files from disk so the calling agent never loads them into its context.
 

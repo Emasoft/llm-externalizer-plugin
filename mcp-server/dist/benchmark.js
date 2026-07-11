@@ -4602,9 +4602,9 @@ var require_resolve_block_scalar = __commonJS({
           default: {
             const message = `Unexpected token in block scalar header: ${token.type}`;
             onError(token, "UNEXPECTED_TOKEN", message);
-            const ts2 = token.source;
-            if (ts2 && typeof ts2 === "string")
-              length += ts2.length;
+            const ts3 = token.source;
+            if (ts3 && typeof ts3 === "string")
+              length += ts3.length;
           }
         }
       }
@@ -4913,9 +4913,9 @@ var require_compose_scalar = __commonJS({
       if (schema.compat) {
         const compat = schema.compat.find((tag2) => tag2.default && tag2.test?.test(value)) ?? schema[identity.SCALAR];
         if (tag.tag !== compat.tag) {
-          const ts2 = directives.tagString(tag.tag);
+          const ts3 = directives.tagString(tag.tag);
           const cs = directives.tagString(compat.tag);
-          const msg = `Value may be parsed as either ${ts2} or ${cs}`;
+          const msg = `Value may be parsed as either ${ts3} or ${cs}`;
           onError(token, "TAG_RESOLVE_FAILED", msg, true);
         }
       }
@@ -7368,7 +7368,7 @@ var require_dist = __commonJS({
 // node_modules/typescript/lib/typescript.js
 var require_typescript = __commonJS({
   "node_modules/typescript/lib/typescript.js"(exports, module) {
-    var ts2 = {};
+    var ts3 = {};
     ((module2) => {
       "use strict";
       var __defProp2 = Object.defineProperty;
@@ -16004,7 +16004,7 @@ ${lanes.join("\n")}
               return process.memoryUsage().heapUsed;
             },
             getFileSize(path) {
-              const stat = statSync6(path);
+              const stat = statSync7(path);
               if (stat == null ? void 0 : stat.isFile()) {
                 return stat.size;
               }
@@ -16048,7 +16048,7 @@ ${lanes.join("\n")}
             }
           };
           return nodeSystem;
-          function statSync6(path) {
+          function statSync7(path) {
             try {
               return _fs.statSync(path, statSyncOptions);
             } catch {
@@ -16107,7 +16107,7 @@ ${lanes.join("\n")}
               activeSession.post("Profiler.stop", (err, { profile }) => {
                 var _a;
                 if (!err) {
-                  if ((_a = statSync6(profilePath)) == null ? void 0 : _a.isDirectory()) {
+                  if ((_a = statSync7(profilePath)) == null ? void 0 : _a.isDirectory()) {
                     profilePath = _path.join(profilePath, `${(/* @__PURE__ */ new Date()).toISOString().replace(/:/g, "-")}+P${process.pid}.cpuprofile`);
                   }
                   try {
@@ -16227,7 +16227,7 @@ ${lanes.join("\n")}
                 let stat;
                 if (typeof dirent === "string" || dirent.isSymbolicLink()) {
                   const name = combinePaths(path, entry);
-                  stat = statSync6(name);
+                  stat = statSync7(name);
                   if (!stat) {
                     continue;
                   }
@@ -16251,7 +16251,7 @@ ${lanes.join("\n")}
             return matchFiles(path, extensions, excludes, includes, useCaseSensitiveFileNames2, process.cwd(), depth, getAccessibleFileSystemEntries, realpath);
           }
           function fileSystemEntryExists(path, entryKind) {
-            const stat = statSync6(path);
+            const stat = statSync7(path);
             if (!stat) {
               return false;
             }
@@ -16293,7 +16293,7 @@ ${lanes.join("\n")}
           }
           function getModifiedTime3(path) {
             var _a;
-            return (_a = statSync6(path)) == null ? void 0 : _a.mtime;
+            return (_a = statSync7(path)) == null ? void 0 : _a.mtime;
           }
           function setModifiedTime(path, time) {
             try {
@@ -69109,9 +69109,9 @@ ${lanes.join("\n")}
             const originalModuleSpecifier = canHaveModuleSpecifier(enclosingDeclaration) ? tryGetModuleSpecifierFromDeclaration(enclosingDeclaration) : void 0;
             const contextFile = context.enclosingFile;
             const resolutionMode = overrideImportMode || originalModuleSpecifier && host.getModeForUsageLocation(contextFile, originalModuleSpecifier) || contextFile && host.getDefaultResolutionModeForFile(contextFile);
-            const cacheKey3 = createModeAwareCacheKey(contextFile.path, resolutionMode);
+            const cacheKey4 = createModeAwareCacheKey(contextFile.path, resolutionMode);
             const links = getSymbolLinks(symbol);
-            let specifier = links.specifierCache && links.specifierCache.get(cacheKey3);
+            let specifier = links.specifierCache && links.specifierCache.get(cacheKey4);
             if (!specifier) {
               const isBundle2 = !!compilerOptions.outFile;
               const { moduleResolverHost } = context.tracker;
@@ -69129,7 +69129,7 @@ ${lanes.join("\n")}
                 { overrideImportMode }
               ));
               links.specifierCache ?? (links.specifierCache = /* @__PURE__ */ new Map());
-              links.specifierCache.set(cacheKey3, specifier);
+              links.specifierCache.set(cacheKey4, specifier);
             }
             return specifier;
           }
@@ -85343,12 +85343,12 @@ ${lanes.join("\n")}
           );
         }
         function inferTypeForHomomorphicMappedType(source, target, constraint) {
-          const cacheKey3 = source.id + "," + target.id + "," + constraint.id;
-          if (reverseHomomorphicMappedCache.has(cacheKey3)) {
-            return reverseHomomorphicMappedCache.get(cacheKey3);
+          const cacheKey4 = source.id + "," + target.id + "," + constraint.id;
+          if (reverseHomomorphicMappedCache.has(cacheKey4)) {
+            return reverseHomomorphicMappedCache.get(cacheKey4);
           }
           const type = createReverseMappedType(source, target, constraint);
-          reverseHomomorphicMappedCache.set(cacheKey3, type);
+          reverseHomomorphicMappedCache.set(cacheKey4, type);
           return type;
         }
         function isPartiallyInferableType(type) {
@@ -85398,9 +85398,9 @@ ${lanes.join("\n")}
           return getTypeFromInference(inference) || unknownType;
         }
         function inferReverseMappedType(source, target, constraint) {
-          const cacheKey3 = source.id + "," + target.id + "," + constraint.id;
-          if (reverseMappedCache.has(cacheKey3)) {
-            return reverseMappedCache.get(cacheKey3) || unknownType;
+          const cacheKey4 = source.id + "," + target.id + "," + constraint.id;
+          if (reverseMappedCache.has(cacheKey4)) {
+            return reverseMappedCache.get(cacheKey4) || unknownType;
           }
           reverseMappedSourceStack.push(source);
           reverseMappedTargetStack.push(target);
@@ -85414,7 +85414,7 @@ ${lanes.join("\n")}
           reverseMappedSourceStack.pop();
           reverseMappedTargetStack.pop();
           reverseExpandingFlags = saveExpandingFlags;
-          reverseMappedCache.set(cacheKey3, type);
+          reverseMappedCache.set(cacheKey4, type);
           return type;
         }
         function* getUnmatchedProperties(source, target, requireOptionalProperties, matchDiscriminantProperties) {
@@ -102239,11 +102239,11 @@ ${lanes.join("\n")}
           }
           return noIterationTypes;
         }
-        function getCachedIterationTypes(type, cacheKey3) {
-          return type[cacheKey3];
+        function getCachedIterationTypes(type, cacheKey4) {
+          return type[cacheKey4];
         }
-        function setCachedIterationTypes(type, cacheKey3, cachedTypes2) {
-          return type[cacheKey3] = cachedTypes2;
+        function setCachedIterationTypes(type, cacheKey4, cachedTypes2) {
+          return type[cacheKey4] = cachedTypes2;
         }
         function getIterationTypesOfIterable(type, use, errorNode) {
           var _a, _b;
@@ -102271,8 +102271,8 @@ ${lanes.join("\n")}
             }
             return iterationTypes2;
           }
-          const cacheKey3 = use & 2 ? "iterationTypesOfAsyncIterable" : "iterationTypesOfIterable";
-          const cachedTypes2 = getCachedIterationTypes(type, cacheKey3);
+          const cacheKey4 = use & 2 ? "iterationTypesOfAsyncIterable" : "iterationTypesOfIterable";
+          const cachedTypes2 = getCachedIterationTypes(type, cacheKey4);
           if (cachedTypes2) return cachedTypes2 === noIterationTypes ? void 0 : cachedTypes2;
           let allIterationTypes;
           for (const constituent of type.types) {
@@ -102285,7 +102285,7 @@ ${lanes.join("\n")}
                   addRelatedInfo(rootDiag, ...errorOutputContainer.errors);
                 }
               }
-              setCachedIterationTypes(type, cacheKey3, noIterationTypes);
+              setCachedIterationTypes(type, cacheKey4, noIterationTypes);
               return void 0;
             } else if ((_b = errorOutputContainer == null ? void 0 : errorOutputContainer.errors) == null ? void 0 : _b.length) {
               for (const diag2 of errorOutputContainer.errors) {
@@ -102295,7 +102295,7 @@ ${lanes.join("\n")}
             allIterationTypes = append(allIterationTypes, iterationTypes2);
           }
           const iterationTypes = allIterationTypes ? combineIterationTypes(allIterationTypes) : noIterationTypes;
-          setCachedIterationTypes(type, cacheKey3, iterationTypes);
+          setCachedIterationTypes(type, cacheKey4, iterationTypes);
           return iterationTypes === noIterationTypes ? void 0 : iterationTypes;
         }
         function getAsyncFromSyncIterationTypes(iterationTypes, errorNode) {
@@ -117897,8 +117897,8 @@ ${lanes.join("\n")}
             /*allowSourceMaps*/
             true
           );
-          const decorate3 = emitHelpers().createDecorateHelper(decoratorExpressions, localName);
-          const expression = factory2.createAssignment(localName, classAlias ? factory2.createAssignment(classAlias, decorate3) : decorate3);
+          const decorate4 = emitHelpers().createDecorateHelper(decoratorExpressions, localName);
+          const expression = factory2.createAssignment(localName, classAlias ? factory2.createAssignment(classAlias, decorate4) : decorate4);
           setEmitFlags(
             expression,
             3072
@@ -131079,7 +131079,7 @@ ${lanes.join("\n")}
           }
         }
         function createImportCallExpressionAMD(arg, containsLexicalThis) {
-          const resolve7 = factory2.createUniqueName("resolve");
+          const resolve8 = factory2.createUniqueName("resolve");
           const reject = factory2.createUniqueName("reject");
           const parameters = [
             factory2.createParameterDeclaration(
@@ -131088,7 +131088,7 @@ ${lanes.join("\n")}
               /*dotDotDotToken*/
               void 0,
               /*name*/
-              resolve7
+              resolve8
             ),
             factory2.createParameterDeclaration(
               /*modifiers*/
@@ -131105,7 +131105,7 @@ ${lanes.join("\n")}
                 factory2.createIdentifier("require"),
                 /*typeArguments*/
                 void 0,
-                [factory2.createArrayLiteralExpression([arg || factory2.createOmittedExpression()]), resolve7, reject]
+                [factory2.createArrayLiteralExpression([arg || factory2.createOmittedExpression()]), resolve8, reject]
               )
             )
           ]);
@@ -205351,16 +205351,16 @@ ${options.prefix}` : "\n" : options.prefix
         isEnabled: () => false,
         writeLine: noop
       };
-      function typingToFileName(cachePath3, packageName, installTypingHost, log) {
+      function typingToFileName(cachePath4, packageName, installTypingHost, log) {
         try {
-          const result = resolveModuleName(packageName, combinePaths(cachePath3, "index.d.ts"), {
+          const result = resolveModuleName(packageName, combinePaths(cachePath4, "index.d.ts"), {
             moduleResolution: 2
             /* Node10 */
           }, installTypingHost);
           return result.resolvedModule && result.resolvedModule.resolvedFileName;
         } catch (e) {
           if (log.isEnabled()) {
-            log.writeLine(`Failed to resolve ${packageName} in folder '${cachePath3}': ${e.message}`);
+            log.writeLine(`Failed to resolve ${packageName} in folder '${cachePath4}': ${e.message}`);
           }
           return void 0;
         }
@@ -205632,7 +205632,7 @@ ${options.prefix}` : "\n" : options.prefix
             this.installTypingHost.writeFile(npmConfigPath, '{ "private": true }');
           }
         }
-        installTypings(req, cachePath3, currentlyCachedTypings, typingsToInstall) {
+        installTypings(req, cachePath4, currentlyCachedTypings, typingsToInstall) {
           if (this.log.isEnabled()) {
             this.log.writeLine(`Installing typings ${JSON.stringify(typingsToInstall)}`);
           }
@@ -205644,7 +205644,7 @@ ${options.prefix}` : "\n" : options.prefix
             this.sendResponse(this.createSetTypings(req, currentlyCachedTypings));
             return;
           }
-          this.ensurePackageDirectoryExists(cachePath3);
+          this.ensurePackageDirectoryExists(cachePath4);
           const requestId = this.installRunCount;
           this.installRunCount++;
           this.sendResponse({
@@ -205654,7 +205654,7 @@ ${options.prefix}` : "\n" : options.prefix
             projectName: req.projectName
           });
           const scopedTypings = filteredTypings.map(typingsName);
-          this.installTypingsAsync(requestId, scopedTypings, cachePath3, (ok) => {
+          this.installTypingsAsync(requestId, scopedTypings, cachePath4, (ok) => {
             try {
               if (!ok) {
                 if (this.log.isEnabled()) {
@@ -205670,7 +205670,7 @@ ${options.prefix}` : "\n" : options.prefix
               }
               const installedTypingFiles = [];
               for (const packageName of filteredTypings) {
-                const typingFile = typingToFileName(cachePath3, packageName, this.installTypingHost, this.log);
+                const typingFile = typingToFileName(cachePath4, packageName, this.installTypingHost, this.log);
                 if (!typingFile) {
                   this.missingTypingsSet.add(packageName);
                   continue;
@@ -205764,7 +205764,7 @@ ${options.prefix}` : "\n" : options.prefix
         Msg2["Perf"] = "Perf";
         return Msg2;
       })(Msg || {});
-      function createInstallTypingsRequest(project, typeAcquisition, unresolvedImports, cachePath3) {
+      function createInstallTypingsRequest(project, typeAcquisition, unresolvedImports, cachePath4) {
         return {
           projectName: project.getProjectName(),
           fileNames: project.getFileNames(
@@ -205777,7 +205777,7 @@ ${options.prefix}` : "\n" : options.prefix
           typeAcquisition,
           unresolvedImports,
           projectRootPath: project.getCurrentDirectory(),
-          cachePath: cachePath3,
+          cachePath: cachePath4,
           kind: "discover"
         };
       }
@@ -217823,8 +217823,8 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
         installPackage(options) {
           this.packageInstallId++;
           const request = { kind: "installPackage", ...options, id: this.packageInstallId };
-          const promise = new Promise((resolve7, reject) => {
-            (this.packageInstalledPromise ?? (this.packageInstalledPromise = /* @__PURE__ */ new Map())).set(this.packageInstallId, { resolve: resolve7, reject });
+          const promise = new Promise((resolve8, reject) => {
+            (this.packageInstalledPromise ?? (this.packageInstalledPromise = /* @__PURE__ */ new Map())).set(this.packageInstallId, { resolve: resolve8, reject });
           });
           this.installer.send(request);
           return promise;
@@ -218096,9 +218096,9 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
         };
       }
     })({ get exports() {
-      return ts2;
+      return ts3;
     }, set exports(v) {
-      ts2 = v;
+      ts3 = v;
       if (typeof module !== "undefined" && module.exports) {
         module.exports = v;
       }
@@ -218107,9 +218107,9 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 });
 
 // src/benchmark/index.ts
-import { mkdirSync as mkdirSync8, writeFileSync as writeFileSync7, existsSync as existsSync10 } from "node:fs";
-import { dirname as dirname4, join as join13 } from "node:path";
-import { fileURLToPath as fileURLToPath3 } from "node:url";
+import { mkdirSync as mkdirSync9, writeFileSync as writeFileSync8, existsSync as existsSync12 } from "node:fs";
+import { dirname as dirname5, join as join15 } from "node:path";
+import { fileURLToPath as fileURLToPath4 } from "node:url";
 
 // src/usage-history.ts
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -218486,8 +218486,8 @@ var TOOL_MODEL_REGISTRY = {
   code_task: {
     tool: "code_task",
     requirements: criteria({ requireReasoning: true, minContextTokens: 128e3 }),
-    benchmark: null,
-    note: "Code-optimized analysis. Code-understanding benchmark dataset is incremental."
+    benchmark: "code-task",
+    note: "Code-optimized analysis. Gated by the code-audit benchmark (P2b): real pre-fix snapshots from this repo's own git history, scored deterministically on defect localization by symbol name \u2014 no LLM judge."
   },
   scan_folder: {
     tool: "scan_folder",
@@ -220390,8 +220390,8 @@ function parseEventHttpStatus(detail) {
   const m = /\bHTTP (\d{3})\b/.exec(detail);
   return m ? Number(m[1]) : null;
 }
-function parseEventTimestamp(ts2) {
-  const ms = Date.parse(ts2.replace(/([+-]\d{2})(\d{2})$/, "$1:$2"));
+function parseEventTimestamp(ts3) {
+  const ms = Date.parse(ts3.replace(/([+-]\d{2})(\d{2})$/, "$1:$2"));
   return Number.isNaN(ms) ? null : ms;
 }
 function assessModelPersistence(events, opts = {}) {
@@ -221453,6 +221453,66 @@ import { statSync as statSync3 } from "node:fs";
 import { basename, dirname as dirname2, extname } from "node:path";
 var GROUP_HEADER_RE = /^---GROUP:(.+)---$/;
 var GROUP_FOOTER_RE = /^---\/GROUP:(.+)---$/;
+function parseFileGroups(paths) {
+  const hasMarkers = paths.some(
+    (p) => GROUP_HEADER_RE.test(p) || GROUP_FOOTER_RE.test(p)
+  );
+  if (!hasMarkers) {
+    return paths.length > 0 ? [{ id: "", files: paths }] : [];
+  }
+  const groups = [];
+  const seenIds = /* @__PURE__ */ new Set();
+  let pendingUngrouped = [];
+  let currentGroup = null;
+  const flushUngrouped = () => {
+    if (pendingUngrouped.length > 0) {
+      groups.push({ id: "", files: pendingUngrouped });
+      pendingUngrouped = [];
+    }
+  };
+  for (const entry of paths) {
+    const headerMatch = entry.match(GROUP_HEADER_RE);
+    if (headerMatch) {
+      flushUngrouped();
+      if (currentGroup && currentGroup.files.length > 0) {
+        groups.push(currentGroup);
+      }
+      const newId = headerMatch[1];
+      if (seenIds.has(newId)) {
+        throw new Error(`Duplicate group id '${newId}' in input_files_paths`);
+      }
+      seenIds.add(newId);
+      currentGroup = { id: newId, files: [] };
+      continue;
+    }
+    const footerMatch = entry.match(GROUP_FOOTER_RE);
+    if (footerMatch) {
+      if (currentGroup && footerMatch[1] !== currentGroup.id) {
+        throw new Error(
+          `Group footer '${entry}' does not match open group '${currentGroup.id}'`
+        );
+      }
+      if (currentGroup && currentGroup.files.length > 0) {
+        groups.push(currentGroup);
+      }
+      currentGroup = null;
+      continue;
+    }
+    if (currentGroup) {
+      currentGroup.files.push(entry);
+    } else {
+      pendingUngrouped.push(entry);
+    }
+  }
+  if (currentGroup && currentGroup.files.length > 0) {
+    groups.push(currentGroup);
+  }
+  flushUngrouped();
+  return groups;
+}
+function hasNamedGroups(groups) {
+  return groups.some((g) => g.id !== "");
+}
 var AUTO_GROUP_DEFAULT_MAX_BYTES = 1024 * 1024;
 function sanitizeGroupId(raw) {
   const cleaned = raw.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -221651,6 +221711,17 @@ import {
 import { extname as extname2, join as join9, basename as basename2, dirname as dirname3, resolve as resolve4, sep } from "node:path";
 import { homedir as homedir2 } from "node:os";
 import { spawnSync } from "node:child_process";
+var BREVITY_RULES = "\nOUTPUT RULES:\n- Be SUCCINCT. Use bullet points, not paragraphs.\n- Skip preamble, filler, and restating the task.\n- Only report findings, not things that are correct.\n- For code reviews: skip files/areas with no issues \u2014 only mention what needs attention.\n- Maximum 3 sentences per finding. Lead with the problem, not the context.";
+var FILE_FORMAT_EXAMPLE = "\nINPUT FORMAT: Each attached file is wrapped as follows (placeholders use {BRACES}, actual tags use angle brackets):\n<filename>\n{ABSOLUTE_PATH_HERE}\n</filename>\n<file-content>\n````{LANGUAGE}\n{FILE_CONTENTS_HERE}\n````\n</file-content>\nReference files by the path inside the filename tag. Multiple files may appear in sequence.\n";
+function codeTaskSystemPrompt(lang) {
+  return `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.
+RULES (override any conflicting instructions):
+- Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable.
+- Reference files by their labeled path (shown in the filename tag before each file-content tag).
+- If asked to return modified code, return the COMPLETE file content \u2014 never truncate, abbreviate, or use placeholders.
+- Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.
+- If you assign a severity or priority to findings, reserve the highest level (e.g. CRITICAL) for demonstrably exploitable, data-loss, or crash-in-normal-use issues; default to a lower level when uncertain.` + FILE_FORMAT_EXAMPLE + BREVITY_RULES;
+}
 var EXT_TO_LANG = {
   ".ts": "typescript",
   ".tsx": "typescript",
@@ -222022,6 +222093,13 @@ function applyRegexRedaction(content, opts) {
     return hasLetters ? "[REDACTED:USER_PATTERN]" : "0".repeat(match.length);
   });
   return { redacted, count: Math.min(count, MAX_REPLACEMENTS) };
+}
+function buildPreInstructions(hasFiles, toolContext) {
+  if (!hasFiles) return "";
+  if (toolContext === "fix") {
+    return "";
+  }
+  return 'TASK: Read the following instructions carefully, then examine the attached file(s) and respond according to the instructions.\n\nRULES (override any conflicting instructions below):\n- Process ALL attached files \u2014 do not skip any.\n- Each file is labeled with its full path inside a filename tag before the file-content tag. Always reference files by their labeled path.\n- When referencing code, identify it by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable and must not be used.\n- If asked to return modified code, return the COMPLETE file content \u2014 never truncate, abbreviate, or use placeholders like "// ... rest of code" or "// unchanged".\n- Be specific and actionable. Reference concrete function names, variable names, and code patterns.\n\nINSTRUCTIONS:\n';
 }
 function resolvePrompt(instructions, instructionsFilesPaths) {
   let prompt = instructions || "";
@@ -223551,6 +223629,1245 @@ function buildReportMarkdown2(args) {
   return lines.join("\n") + "\n";
 }
 
+// src/benchmark/code-task/index.ts
+import { createHash as createHash4 } from "node:crypto";
+import { existsSync as existsSync11, mkdirSync as mkdirSync6, readFileSync as readFileSync11, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join12 } from "node:path";
+
+// src/benchmark/code-task/dataset.ts
+var import_typescript2 = __toESM(require_typescript(), 1);
+import { existsSync as existsSync10, readFileSync as readFileSync10, statSync as statSync6 } from "node:fs";
+import { dirname as dirname4, join as join11, resolve as resolve7 } from "node:path";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
+var CODE_AUDIT_INSTRUCTIONS = [
+  "Audit this file for GENUINE DEFECTS \u2014 bugs that cause incorrect behavior, data loss,",
+  "a crash, a silent failure, a security hole, or a cost regression.",
+  "",
+  "Do NOT report style, naming, formatting, missing tests, missing documentation,",
+  "type-annotation nits, or hypothetical improvements. Those are not defects.",
+  "",
+  "OUTPUT FORMAT (mandatory):",
+  "For EVERY defect you find, emit one line of exactly this form:",
+  "DEFECT: <functionName> \u2014 <one sentence explaining the bug>",
+  "Use the exact identifier of the top-level function, class, or method that contains",
+  "the bug. One line per defect. Do not mention a symbol in a DEFECT line unless it",
+  "really is defective.",
+  "If the file contains no genuine defect, reply with exactly this line and nothing else:",
+  "NO DEFECTS"
+].join("\n");
+var CODE_AUDIT_LANGUAGE = "typescript";
+var MIN_SYMBOL_LENGTH = 4;
+var MIN_DISTRACTOR_SYMBOLS = 20;
+function resolveFixtureRoot2() {
+  const here = fileURLToPath3(new URL(".", import.meta.url));
+  const candidates = [
+    resolve7(here, "../../../benchmark-fixtures/code-task"),
+    // dist/ bundle layout: dist/<bundle>.js → one level less deep.
+    resolve7(here, "../../benchmark-fixtures/code-task"),
+    resolve7(here, "../benchmark-fixtures/code-task")
+  ];
+  for (const c of candidates) {
+    if (existsSync10(c) && statSync6(c).isDirectory()) return c;
+  }
+  throw new Error(
+    `code-task fixture root not found near ${here} \u2014 looked at:
+` + candidates.map((c) => `  ${c}`).join("\n")
+  );
+}
+function resolveDatasetPath2() {
+  const here = dirname4(fileURLToPath3(import.meta.url));
+  const candidates = [
+    join11(here, "dataset.jsonl"),
+    join11(here, "..", "src", "benchmark", "code-task", "dataset.jsonl"),
+    join11(here, "..", "..", "src", "benchmark", "code-task", "dataset.jsonl")
+  ];
+  for (const c of candidates) {
+    if (existsSync10(c)) return c;
+  }
+  throw new Error(
+    `Could not locate the code-task dataset. Tried:
+  ${candidates.join("\n  ")}`
+  );
+}
+function listTopLevelSymbols(source, filename = "fixture.ts") {
+  const sf = import_typescript2.default.createSourceFile(filename, source, import_typescript2.default.ScriptTarget.ES2022, true);
+  const names = [];
+  for (const stmt of sf.statements) {
+    if (import_typescript2.default.isFunctionDeclaration(stmt) && stmt.name && stmt.body) {
+      names.push(stmt.name.text);
+      continue;
+    }
+    if (import_typescript2.default.isClassDeclaration(stmt) && stmt.name) {
+      names.push(stmt.name.text);
+      continue;
+    }
+    if (import_typescript2.default.isVariableStatement(stmt)) {
+      for (const decl of stmt.declarationList.declarations) {
+        if (!import_typescript2.default.isIdentifier(decl.name) || !decl.initializer) continue;
+        const init = decl.initializer;
+        if (import_typescript2.default.isArrowFunction(init) || import_typescript2.default.isFunctionExpression(init)) {
+          names.push(decl.name.text);
+        }
+      }
+    }
+  }
+  return [...new Set(names)].filter((n) => n.length >= MIN_SYMBOL_LENGTH).sort();
+}
+function readFixture(c, root = resolveFixtureRoot2()) {
+  return readFileSync10(join11(root, c.file), "utf-8");
+}
+function fixturePath(c, root = resolveFixtureRoot2()) {
+  return join11(root, c.file);
+}
+function loadDataset2(path = resolveDatasetPath2()) {
+  const raw = readFileSync10(path, "utf-8");
+  const cases = [];
+  const seenIds = /* @__PURE__ */ new Set();
+  const lines = raw.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line === "") continue;
+    let obj;
+    try {
+      obj = JSON.parse(line);
+    } catch (e) {
+      throw new Error(`dataset.jsonl line ${i + 1}: invalid JSON: ${e.message}`, {
+        cause: e
+      });
+    }
+    if (typeof obj !== "object" || obj === null || Array.isArray(obj)) {
+      throw new Error(`dataset.jsonl line ${i + 1}: row must be a JSON object`);
+    }
+    const row = obj;
+    if ("_schema" in row) continue;
+    const parsed = parseCase2(row, i + 1);
+    if (seenIds.has(parsed.id)) {
+      throw new Error(`dataset.jsonl line ${i + 1}: duplicate case id '${parsed.id}'`);
+    }
+    seenIds.add(parsed.id);
+    cases.push(parsed);
+  }
+  if (cases.length === 0) {
+    throw new Error(`dataset.jsonl at ${path} contained zero cases.`);
+  }
+  return cases;
+}
+function parseCase2(row, lineNo) {
+  const id = requireString2(row, "id", lineNo);
+  const file = requireString2(row, "file", lineNo);
+  const defectClass = requireString2(row, "defectClass", lineNo);
+  const rationale = requireString2(row, "rationale", lineNo);
+  const source = requireString2(row, "source", lineNo);
+  if (!Array.isArray(row.buggySymbols)) {
+    throw new Error(`dataset.jsonl line ${lineNo} (${id}): buggySymbols must be an array`);
+  }
+  const buggySymbols = [];
+  for (const s of row.buggySymbols) {
+    if (typeof s !== "string" || s.length === 0) {
+      throw new Error(
+        `dataset.jsonl line ${lineNo} (${id}): buggySymbols[] entry ${JSON.stringify(s)} is not a non-empty string`
+      );
+    }
+    if (!buggySymbols.includes(s)) buggySymbols.push(s);
+  }
+  const clean = buggySymbols.length === 0;
+  const fixCommit = typeof row.fixCommit === "string" ? row.fixCommit : "";
+  const originalPath = typeof row.originalPath === "string" ? row.originalPath : "";
+  const line = typeof row.line === "number" ? row.line : 0;
+  if (!clean && (fixCommit === "" || originalPath === "")) {
+    throw new Error(
+      `dataset.jsonl line ${lineNo} (${id}): a defect case must declare fixCommit + originalPath (its git provenance).`
+    );
+  }
+  if (clean && fixCommit !== "") {
+    throw new Error(
+      `dataset.jsonl line ${lineNo} (${id}): a CLEAN case (buggySymbols: []) must not declare a fixCommit.`
+    );
+  }
+  return { id, file, buggySymbols, defectClass, fixCommit, originalPath, line, rationale, source };
+}
+function requireString2(row, key, lineNo) {
+  const v = row[key];
+  if (typeof v !== "string" || v.length === 0) {
+    throw new Error(`dataset.jsonl line ${lineNo}: '${key}' must be a non-empty string`);
+  }
+  return v;
+}
+function validateDataset(cases = loadDataset2(), root = resolveFixtureRoot2()) {
+  let defectCases = 0;
+  let cleanCases = 0;
+  let distractors = 0;
+  for (const c of cases) {
+    const abs2 = join11(root, c.file);
+    if (!existsSync10(abs2)) {
+      throw new Error(`case ${c.id}: fixture file missing on disk: ${c.file}`);
+    }
+    const bytes = readFileSync10(abs2);
+    if (bytes.includes(0)) {
+      throw new Error(
+        `case ${c.id}: fixture ${c.file} contains a NUL byte \u2014 readFileAsCodeBlock treats it as binary and REFUSES to read it, so the case could never be scored.`
+      );
+    }
+    const universe = listTopLevelSymbols(bytes.toString("utf-8"), c.file);
+    if (universe.length === 0) {
+      throw new Error(
+        `case ${c.id}: fixture ${c.file} exposes NO scorable top-level symbol \u2014 nothing about it can be scored.`
+      );
+    }
+    for (const s of c.buggySymbols) {
+      if (!universe.includes(s)) {
+        throw new Error(
+          `case ${c.id}: buggySymbol '${s}' is not a scorable top-level symbol of ${c.file}. Universe: ${universe.join(", ")}. (A symbol under ${MIN_SYMBOL_LENGTH} chars, a class method, or a nested helper is excluded by design \u2014 see listTopLevelSymbols.)`
+        );
+      }
+    }
+    if (c.buggySymbols.length === 0) {
+      cleanCases++;
+    } else {
+      defectCases++;
+      distractors += universe.length - c.buggySymbols.length;
+    }
+  }
+  if (defectCases === 0) throw new Error("dataset has no defect case \u2014 recall is unmeasurable.");
+  if (cleanCases === 0) throw new Error("dataset has no clean case \u2014 precision is unmeasurable.");
+  if (distractors < MIN_DISTRACTOR_SYMBOLS) {
+    throw new Error(
+      `the defect fixtures offer only ${distractors} non-buggy candidate symbol(s) (need \u2265 ${MIN_DISTRACTOR_SYMBOLS}). With too few ways to be WRONG, naming every symbol in the file would score well and the benchmark would measure nothing.`
+    );
+  }
+}
+
+// src/code-task/core.ts
+async function runCodeTask(args, deps) {
+  const {
+    instructions: ctInstructions,
+    instructions_files_paths: ctInstructionsFilesPaths,
+    input_files_paths: ctInputPathsRaw,
+    input_files_content: ctInputContent,
+    language,
+    answer_mode: ctRawMode,
+    scan_secrets: ctScan,
+    redact_secrets: ctRedact,
+    max_payload_kb: ctMaxPayloadKb,
+    max_retries: ctMaxRetries,
+    redact_regex: ctRedactRegexRaw,
+    folder_path: ctFolderPath,
+    extensions: ctExtensions,
+    exclude_dirs: ctExcludeDirs,
+    use_gitignore: ctUseGitignore,
+    recursive: ctRecursive,
+    follow_symlinks: ctFollowSymlinks,
+    max_files: ctMaxFiles
+  } = args;
+  const ctUseEnsemble = deps.useEnsemble;
+  const ctBudgetBytes = (ctMaxPayloadKb ?? 400) * 1024;
+  const ctMode = resolveAnswerMode(ctRawMode, 0);
+  const ctTask = resolvePrompt(ctInstructions, ctInstructionsFilesPaths);
+  if (!ctTask.trim()) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: "FAILED: Either instructions or instructions_files_paths must be provided."
+        }
+      ],
+      isError: true
+    };
+  }
+  let ctFilePaths = deps.normalizePaths(ctInputPathsRaw);
+  if (ctFolderPath) {
+    const folderResult = deps.resolveFolderPath(ctFolderPath, {
+      extensions: ctExtensions,
+      excludeDirs: ctExcludeDirs,
+      useGitignore: ctUseGitignore,
+      recursive: ctRecursive,
+      followSymlinks: ctFollowSymlinks,
+      maxFiles: ctMaxFiles
+    });
+    if (folderResult.error && folderResult.files.length === 0 && ctFilePaths.length === 0) {
+      return { content: [{ type: "text", text: `FAILED: ${folderResult.error}` }], isError: true };
+    }
+    ctFilePaths = [...ctFilePaths, ...folderResult.files];
+  }
+  let ctRegexRedact;
+  try {
+    ctRegexRedact = parseRedactRegex(ctRedactRegexRaw);
+  } catch (err) {
+    return { content: [{ type: "text", text: `FAILED: ${err.message}` }], isError: true };
+  }
+  if (ctScan && !ctRedact) {
+    const ctRealFiles = ctFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
+    if (ctRealFiles.length > 0) {
+      const scanResult = scanFilesForSecrets(ctRealFiles);
+      if (scanResult.found)
+        return {
+          content: [{ type: "text", text: scanResult.report }],
+          isError: true
+        };
+    }
+    if (ctInputContent) {
+      const inlineScan = scanForSecrets(ctInputContent);
+      if (inlineScan.found) {
+        const details = inlineScan.details.map((d) => `  - ${d.label}: ${d.count} occurrence(s)`).join("\n");
+        return {
+          content: [
+            {
+              type: "text",
+              text: `ABORTED: Secrets detected in input_files_content:
+${details}
+
+Remove secrets before sending to remote LLM.`
+            }
+          ],
+          isError: true
+        };
+      }
+    }
+  }
+  if (ctFilePaths.length === 1 && !ctInputContent && !GROUP_HEADER_RE.test(ctFilePaths[0]) && !GROUP_FOOTER_RE.test(ctFilePaths[0])) {
+    const result = await deps.processFileCheck(ctFilePaths[0], ctTask, {
+      language,
+      maxTokens: deps.resolveDefaultMaxTokens(),
+      redact: ctRedact,
+      regexRedact: ctRegexRedact,
+      onProgress: deps.onProgress,
+      ensemble: ctUseEnsemble,
+      maxBytes: ctBudgetBytes,
+      modelOverride: deps.modelOverride
+    });
+    if (!result.success) {
+      return {
+        content: [{ type: "text", text: `FAILED: ${result.error}` }],
+        isError: true
+      };
+    }
+    if (!result.reportPath) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "FAILED: processFileCheck returned success but no report path."
+          }
+        ],
+        isError: true
+      };
+    }
+    return { content: [{ type: "text", text: result.reportPath }] };
+  }
+  const lang = language || "unknown";
+  const ctHasFiles = ctFilePaths.length > 0 || !!ctInputContent;
+  let ctPromptBase = buildPreInstructions(ctHasFiles, "read") + ctTask;
+  if (ctInputContent) {
+    let ctInline = ctInputContent;
+    if (ctRedact) ctInline = redactSecrets2(ctInline).redacted;
+    const fence = fenceBackticks(ctInline);
+    ctPromptBase += `
+
+${fence}${lang}
+${ctInline}
+${fence}`;
+  }
+  if (ctFilePaths.length === 0 && !ctInputContent) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: "FAILED: input_files_paths or input_files_content is required."
+        }
+      ],
+      isError: true
+    };
+  }
+  if (ctFilePaths.length === 0) {
+    const codeMessages = [
+      {
+        role: "system",
+        content: `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.
+RULES (override any conflicting instructions): Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Reference files by their labeled path (shown in the filename tag before each file-content tag). Be specific and actionable.`
+      },
+      { role: "user", content: ctPromptBase }
+    ];
+    const codeResp = await deps.ensembleStreaming(
+      codeMessages,
+      {
+        temperature: deps.defaultTemperature,
+        maxTokens: deps.resolveDefaultMaxTokens(),
+        onProgress: deps.onProgress,
+        modelOverride: deps.modelOverride
+      },
+      ctUseEnsemble
+    );
+    const codeFooter = deps.formatFooter(codeResp, "code_task");
+    if (codeResp.content.trim().length === 0) {
+      return {
+        content: [
+          { type: "text", text: "FAILED: LLM returned empty response." }
+        ],
+        isError: true
+      };
+    }
+    const savedPath = deps.saveResponse(
+      "code_task",
+      codeResp.content + codeFooter,
+      { model: codeResp.model, task: ctTask },
+      void 0,
+      deps.outputDir
+    );
+    return { content: [{ type: "text", text: savedPath }] };
+  }
+  let ctFileGroups = parseFileGroups(ctFilePaths);
+  let ctEffectivelyGrouped = hasNamedGroups(ctFileGroups);
+  if (ctMode === 1 && !ctEffectivelyGrouped) {
+    const autoGroups = autoGroupByHeuristic(ctFilePaths);
+    if (autoGroups.length > 0) {
+      ctFileGroups = autoGroups;
+      ctEffectivelyGrouped = true;
+    }
+  }
+  const ctAllGroupReports = [];
+  for (const fg of ctFileGroups) {
+    const fgPaths = fg.files;
+    if (fgPaths.length === 0) continue;
+    const fgId = fg.id;
+    if (ctMode === 0 && !ctEffectivelyGrouped) {
+      const ctRetries = ctMaxRetries ?? 1;
+      if (ctRetries > 1) {
+        const rpResult = await deps.robustPerFileProcess(fgPaths, {
+          task: ctTask,
+          maxRetries: ctRetries,
+          language,
+          redact: ctRedact,
+          regexRedact: ctRegexRedact,
+          onProgress: deps.onProgress,
+          ensemble: ctUseEnsemble,
+          budgetBytes: ctBudgetBytes,
+          toolName: "code_task",
+          modelOverride: deps.modelOverride,
+          outputDir: deps.outputDir
+        });
+        const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
+        if (rpResult.failed.length > 0) lines.push("", "FAILED:", ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
+        if (rpResult.aborted) lines.push("", `ABORTED: ${rpResult.abortReason}`);
+        return { content: [{ type: "text", text: lines.join("\n") }], isError: rpResult.aborted };
+      }
+      const perFileResults = [];
+      for (const fp of fgPaths) {
+        const result = await deps.processFileCheck(fp, ctTask, {
+          language,
+          maxTokens: deps.resolveDefaultMaxTokens(),
+          redact: ctRedact,
+          regexRedact: ctRegexRedact,
+          onProgress: deps.onProgress,
+          ensemble: ctUseEnsemble,
+          maxBytes: ctBudgetBytes,
+          modelOverride: deps.modelOverride,
+          outputDir: deps.outputDir
+        });
+        perFileResults.push(
+          result.success && result.reportPath ? result.reportPath : `FAILED: ${fp} \u2014 ${result.error}`
+        );
+      }
+      return {
+        content: [{ type: "text", text: perFileResults.join("\n") }]
+      };
+    }
+    const ctPromptBytes = Buffer.byteLength(ctPromptBase, "utf-8") + Buffer.byteLength(deps.codeTaskSystemPrompt(lang), "utf-8");
+    const { groups: ctGroups, autoBatched: ctAutoBatched, skipped: ctSkipped } = readAndGroupFiles(fgPaths, ctPromptBytes, ctRedact, ctBudgetBytes, ctRegexRedact);
+    const ctBatchResults = [];
+    if (ctSkipped.length > 0) {
+      ctBatchResults.push(`SKIPPED (exceeds payload budget): ${ctSkipped.length} file(s)
+${ctSkipped.map((f) => `  - ${f}`).join("\n")}`);
+    }
+    for (let gi = 0; gi < ctGroups.length; gi++) {
+      const group = ctGroups[gi];
+      let userContent = ctPromptBase;
+      for (const fd of group) {
+        userContent += `
+
+${fd.block}`;
+      }
+      const codeMessages = [
+        {
+          role: "system",
+          content: deps.codeTaskSystemPrompt(lang)
+        },
+        { role: "user", content: userContent }
+      ];
+      const codeResp = await deps.ensembleStreaming(
+        codeMessages,
+        { temperature: deps.defaultTemperature, maxTokens: deps.resolveDefaultMaxTokens(), onProgress: deps.onProgress, modelOverride: deps.modelOverride },
+        ctUseEnsemble
+      );
+      const codeFooter = deps.formatFooter(codeResp, "code_task", group[0]?.path);
+      if (codeResp.content.trim().length > 0) {
+        ctBatchResults.push(
+          ctAutoBatched ? `## Batch ${gi + 1}/${ctGroups.length}
+
+Files: ${group.map((fd) => fd.path).join(", ")}
+
+${codeResp.content}${codeFooter}` : codeResp.content + codeFooter
+        );
+      }
+    }
+    if (ctBatchResults.length === 0) continue;
+    const ctFinalContent = ctBatchResults.join("\n\n---\n\n");
+    const ctMergedModel = deps.ensembleModelLabel(ctUseEnsemble);
+    const savedPath = deps.saveResponse(
+      "code_task",
+      ctFinalContent,
+      { model: ctMergedModel, task: ctTask, inputFile: fgPaths[0], groupId: fgId || void 0 },
+      void 0,
+      deps.outputDir
+    );
+    if (ctEffectivelyGrouped) {
+      const labelId = fgId || "auto";
+      ctAllGroupReports.push(`[group:${labelId}] ${savedPath}`);
+    } else {
+      return { content: [{ type: "text", text: savedPath }] };
+    }
+  }
+  if (ctAllGroupReports.length === 0) {
+    return { content: [{ type: "text", text: "FAILED: LLM returned empty response for all groups." }], isError: true };
+  }
+  return { content: [{ type: "text", text: ctAllGroupReports.join("\n") }] };
+}
+
+// src/benchmark/code-task/score.ts
+var NEGATION_PATTERNS = [
+  /\bno\s+(?:genuine\s+|real\s+|actual\s+)?(?:defect|bug|issue|problem|error|finding|concern)s?\b/i,
+  /\bnot\s+(?:a\s+)?(?:defect|bug|issue|problem)\b/i,
+  /\bno\s+changes?\s+(?:are\s+)?(?:needed|required)\b/i,
+  /\b(?:looks?|seems?|appears?|is|are)\s+(?:to\s+be\s+)?(?:fine|correct|ok|okay|good|clean|sound|safe|valid)\b/i,
+  /\b(?:correct|clean|fine|ok)\s*[.:—-]/i,
+  /\bLGTM\b/i
+];
+var ANCHOR_RE = /^\s*(?:[-*+]\s*|#{1,6}\s*|\d+[.)]\s*)?\**\s*DEFECT\s*\**\s*:\s*\**\s*[`'"]?([A-Za-z_$][A-Za-z0-9_$]*)[`'"]?/i;
+function mentionsSymbol(line, name) {
+  const idx = indexOfIdentifier(line, name);
+  return idx >= 0;
+}
+function indexOfIdentifier(haystack, name) {
+  const isIdent = (ch) => ch !== void 0 && /[A-Za-z0-9_$]/.test(ch);
+  let from = 0;
+  for (; ; ) {
+    const i = haystack.indexOf(name, from);
+    if (i < 0) return -1;
+    const before = i > 0 ? haystack[i - 1] : void 0;
+    const after = i + name.length < haystack.length ? haystack[i + name.length] : void 0;
+    if (!isIdent(before) && !isIdent(after)) return i;
+    from = i + 1;
+  }
+}
+function isNegated(line) {
+  return NEGATION_PATTERNS.some((re) => re.test(line));
+}
+function extractAccusedSymbols(report, universe) {
+  const known = new Set(universe);
+  const lines = report.split("\n");
+  const anchored = /* @__PURE__ */ new Set();
+  const anchoredHallucinated = /* @__PURE__ */ new Set();
+  let sawAnchor = false;
+  for (const line of lines) {
+    const m = ANCHOR_RE.exec(line);
+    if (!m) continue;
+    sawAnchor = true;
+    const name = m[1];
+    if (known.has(name)) anchored.add(name);
+    else anchoredHallucinated.add(name);
+  }
+  if (sawAnchor) {
+    return {
+      accused: [...anchored].sort(),
+      hallucinated: [...anchoredHallucinated].sort(),
+      // An anchor that named ONLY non-existent symbols still parsed as anchored:
+      // the model followed the contract, it just hallucinated the target. Scoring
+      // that as `empty` would hide the hallucination.
+      mode: "anchored"
+    };
+  }
+  const accused = /* @__PURE__ */ new Set();
+  let inFence = false;
+  for (const line of lines) {
+    if (/^\s*(?:`{3,}|~{3,})/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    if (isNegated(line)) continue;
+    for (const name of universe) {
+      if (mentionsSymbol(line, name)) accused.add(name);
+    }
+  }
+  return {
+    accused: [...accused].sort(),
+    hallucinated: [],
+    mode: accused.size === 0 ? "empty" : "freetext"
+  };
+}
+function safePrecision2(tp, fp) {
+  return tp + fp === 0 ? 1 : tp / (tp + fp);
+}
+function safeRecall2(tp, fn) {
+  return tp + fn === 0 ? 1 : tp / (tp + fn);
+}
+function f1Of2(precision, recall) {
+  return precision + recall === 0 ? 0 : 2 * precision * recall / (precision + recall);
+}
+function scoreCase2(c, universe, report, failed = false) {
+  const { accused, hallucinated, mode } = failed ? { accused: [], hallucinated: [], mode: "empty" } : extractAccusedSymbols(report, universe);
+  const expected = new Set(c.buggySymbols);
+  const returned = new Set(accused);
+  const truePositives = [];
+  const falsePositives = [];
+  const falseNegatives = [];
+  for (const name of returned) {
+    if (expected.has(name)) truePositives.push(name);
+    else falsePositives.push(name);
+  }
+  for (const name of expected) {
+    if (!returned.has(name)) falseNegatives.push(name);
+  }
+  const precision = safePrecision2(truePositives.length, falsePositives.length);
+  const recall = safeRecall2(truePositives.length, falseNegatives.length);
+  return {
+    caseId: c.id,
+    file: c.file,
+    expected: [...expected].sort(),
+    returned: [...returned].sort(),
+    truePositives: truePositives.sort(),
+    falsePositives: falsePositives.sort(),
+    falseNegatives: falseNegatives.sort(),
+    hallucinated: [...hallucinated].sort(),
+    universeSize: universe.length,
+    mode,
+    precision,
+    recall,
+    f1: f1Of2(precision, recall),
+    exactMatch: falsePositives.length === 0 && falseNegatives.length === 0,
+    failed,
+    defectClass: c.defectClass
+  };
+}
+function aggregateScores2(cases) {
+  let tp = 0;
+  let fp = 0;
+  let fn = 0;
+  let exact = 0;
+  let hallucinations = 0;
+  let failed = 0;
+  let anchored = 0;
+  for (const c of cases) {
+    tp += c.truePositives.length;
+    fp += c.falsePositives.length;
+    fn += c.falseNegatives.length;
+    if (c.exactMatch) exact++;
+    hallucinations += c.hallucinated.length;
+    if (c.failed) failed++;
+    if (c.mode === "anchored") anchored++;
+  }
+  const microPrecision = safePrecision2(tp, fp);
+  const microRecall = safeRecall2(tp, fn);
+  return {
+    cases: [...cases],
+    microPrecision,
+    microRecall,
+    microF1: f1Of2(microPrecision, microRecall),
+    macroF1: cases.length === 0 ? 0 : cases.reduce((s, c) => s + c.f1, 0) / cases.length,
+    exactMatches: exact,
+    hallucinations,
+    failedCases: failed,
+    anchoredRate: cases.length === 0 ? 0 : anchored / cases.length
+  };
+}
+var DEFAULT_CODE_AUDIT_THRESHOLDS = {
+  minMacroF1: 0.5,
+  minMicroRecall: 0.5,
+  maxFailedCases: 1
+};
+function passesThresholds2(score, thresholds = DEFAULT_CODE_AUDIT_THRESHOLDS) {
+  const failures = [];
+  if (score.macroF1 < thresholds.minMacroF1) {
+    failures.push(`macro-F1 ${score.macroF1.toFixed(3)} < ${thresholds.minMacroF1}`);
+  }
+  if (score.microRecall < thresholds.minMicroRecall) {
+    failures.push(`micro-recall ${score.microRecall.toFixed(3)} < ${thresholds.minMicroRecall}`);
+  }
+  if (score.failedCases > thresholds.maxFailedCases) {
+    failures.push(
+      `${score.failedCases} case(s) produced no report (max ${thresholds.maxFailedCases}) \u2014 the run is infrastructure noise, not evidence`
+    );
+  }
+  return { pass: failures.length === 0, failures };
+}
+
+// src/benchmark/code-task/bench-runner.ts
+var DEFAULT_API_URL2 = "https://openrouter.ai/api/v1/chat/completions";
+async function runCodeAuditBenchmarkOnModel(modelId, cases = loadDataset2(), opts = {
+  apiKey: "",
+  pricing: { input_per_m_usd: 0, output_per_m_usd: 0, context_window: 0 }
+}, fetchImpl = realFetch) {
+  const fixtureRoot = resolveFixtureRoot2();
+  const apiUrl = opts.apiUrl ?? DEFAULT_API_URL2;
+  const maxTokens = opts.maxTokens ?? 8192;
+  const temperature = opts.temperature ?? 0.1;
+  const perCallTimeoutMs = opts.perCallTimeoutMs ?? 3e5;
+  let costUsd = 0;
+  let latencyTotalMs = 0;
+  let callCount = 0;
+  const caseScores = [];
+  const failures = [];
+  for (let ci = 0; ci < cases.length; ci++) {
+    const c = cases[ci];
+    const abs2 = fixturePath(c, fixtureRoot);
+    const universe = listTopLevelSymbols(readFixture(c, fixtureRoot), c.file);
+    let capturedReport = "";
+    const processFileCheck = async (filePath, task, options) => {
+      const codeBlock = readFileAsCodeBlock(
+        filePath,
+        options.language,
+        options.redact,
+        options.maxBytes,
+        options.regexRedact
+      );
+      const lang = options.language || CODE_AUDIT_LANGUAGE;
+      const messages = [
+        { role: "system", content: codeTaskSystemPrompt(lang) },
+        {
+          role: "user",
+          content: `${buildPreInstructions(true, "read")}Task: ${task}
+
+${codeBlock}`
+        }
+      ];
+      const started = Date.now();
+      let res;
+      try {
+        res = await fetchImpl(apiUrl, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${opts.apiKey}`
+          },
+          body: JSON.stringify({ model: modelId, messages, temperature, max_tokens: maxTokens }),
+          signal: AbortSignal.timeout(perCallTimeoutMs)
+        });
+      } catch (err) {
+        return { filePath, success: false, error: `request failed: ${err.message}` };
+      } finally {
+        latencyTotalMs += Date.now() - started;
+        callCount++;
+      }
+      if (!res.ok) {
+        const bodyText = await res.text().catch(() => "");
+        return {
+          filePath,
+          success: false,
+          error: `API error ${res.status}: ${bodyText.slice(0, 300)}`
+        };
+      }
+      const json = await res.json();
+      const usage = json.usage;
+      if (usage) {
+        costUsd += (usage.prompt_tokens ?? 0) / 1e6 * opts.pricing.input_per_m_usd + (usage.completion_tokens ?? 0) / 1e6 * opts.pricing.output_per_m_usd;
+      }
+      const content = json.choices?.[0]?.message?.content ?? "";
+      if (content.trim().length === 0) {
+        return { filePath, success: false, error: "LLM returned empty response" };
+      }
+      capturedReport = content;
+      return { filePath, success: true, reportPath: `memory://case/${c.id}` };
+    };
+    const deps = {
+      // The benchmark scores ONE model at a time, so the multi-model ensemble is
+      // off — otherwise the score would belong to the ensemble, not the candidate.
+      useEnsemble: false,
+      defaultTemperature: temperature,
+      normalizePaths: (raw) => {
+        if (!raw) return [];
+        const arr = Array.isArray(raw) ? raw : [raw];
+        return arr.filter((p) => typeof p === "string" && p.length > 0);
+      },
+      // The benchmark always passes explicit input_files_paths; folder_path is
+      // never used, and a silent empty result would be worse than a clear error.
+      resolveFolderPath: () => ({ files: [], error: "folder_path is not used by the code-audit benchmark" }),
+      processFileCheck,
+      // Unreachable on the single-file route. Throw rather than return a stub:
+      // if the pipeline ever changed shape and started batching here, a silent
+      // stub would produce a plausible-looking but meaningless score.
+      ensembleStreaming: async () => {
+        throw new Error(
+          "code-audit benchmark: ensembleStreaming was called, but every case is a SINGLE input file and must route through processFileCheck. The pipeline's single-file route changed \u2014 fix the runner rather than scoring a different code path."
+        );
+      },
+      formatFooter: () => "",
+      saveResponse: () => `memory://case/${c.id}`,
+      robustPerFileProcess: async () => {
+        throw new Error(
+          "code-audit benchmark: robustPerFileProcess was called, but the benchmark never sets max_retries > 1."
+        );
+      },
+      // The REAL system prompt — imported, not copied (scan-pipeline.ts).
+      codeTaskSystemPrompt,
+      ensembleModelLabel: () => modelId,
+      resolveDefaultMaxTokens: () => maxTokens
+    };
+    const args = {
+      instructions: CODE_AUDIT_INSTRUCTIONS,
+      input_files_paths: [abs2],
+      language: CODE_AUDIT_LANGUAGE,
+      answer_mode: 0,
+      scan_secrets: false,
+      redact_secrets: false
+    };
+    const result = await runCodeTask(args, deps);
+    if (result.isError || capturedReport === "") {
+      const reason = result.content.map((p) => p.text).join("\n").split("\n")[0] || "pipeline produced no report";
+      failures.push({ caseId: c.id, reason });
+      caseScores.push(scoreCase2(
+        c,
+        universe,
+        "",
+        /* failed */
+        true
+      ));
+    } else {
+      caseScores.push(scoreCase2(c, universe, capturedReport));
+    }
+    if (opts.onProgress) opts.onProgress(ci + 1, cases.length);
+  }
+  const aggregate = aggregateScores2(caseScores);
+  return {
+    modelId,
+    caseScores,
+    aggregate,
+    pass: passesThresholds2(aggregate).pass,
+    costUsd,
+    meanLatencyMs: callCount === 0 ? 0 : latencyTotalMs / callCount,
+    failures
+  };
+}
+
+// src/benchmark/code-task/select.ts
+var CODE_TASK_CRITERIA = TOOL_MODEL_REGISTRY.code_task.requirements;
+function toGeneric3(c) {
+  const thr = passesThresholds2(c.score);
+  return {
+    modelId: c.modelId,
+    qualified: c.qualified,
+    disqualifyReason: c.disqualifyReason,
+    inputDollarsPerMillion: c.inputDollarsPerMillion,
+    outputDollarsPerMillion: c.outputDollarsPerMillion,
+    latencyMs: c.latencyMs,
+    benchmarkPass: thr.pass,
+    benchmarkScore: c.score.macroF1,
+    benchmarkFailReasons: thr.failures
+  };
+}
+function selectCodeTaskModel(input) {
+  const byModelId = new Map(
+    input.candidates.map((c) => [c.modelId, c])
+  );
+  const generic = selectSameOrCheaper({
+    candidates: input.candidates.map(toGeneric3),
+    incumbentModelId: input.incumbentModelId,
+    incumbentInputDollarsPerMillion: input.incumbentInputDollarsPerMillion,
+    incumbentOutputDollarsPerMillion: input.incumbentOutputDollarsPerMillion,
+    requirementsLabel: "code-task requirements",
+    benchmarkLabel: "the code-audit benchmark"
+  });
+  return {
+    recommendedModelId: generic.recommendedModelId,
+    changed: generic.changed,
+    reason: generic.reason,
+    eligible: generic.eligible.map((g) => byModelId.get(g.modelId)),
+    rejected: generic.rejected
+  };
+}
+
+// src/benchmark/code-task/index.ts
+var INCUMBENT_FALLBACK_PRICING3 = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
+function cachePath3() {
+  return join12(getConfigDir(), "code-task-results.json");
+}
+function cacheKey3(modelId, date, datasetHash) {
+  return `${modelId}::${date}::${datasetHash}`;
+}
+function loadCache3() {
+  const p = cachePath3();
+  if (!existsSync11(p)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync11(p, "utf-8"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+  } catch {
+  }
+  return {};
+}
+function saveCache3(cache) {
+  mkdirSync6(getConfigDir(), { recursive: true });
+  const p = cachePath3();
+  const tmp = `${p}.tmp.${process.pid}`;
+  writeFileSync5(tmp, JSON.stringify(cache, null, 2), "utf-8");
+  renameSync3(tmp, p);
+}
+function resolveApiKey3(override) {
+  const k = override || process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
+  if (!k) {
+    throw new Error(
+      "OPENROUTER_API_KEY not set. Export it in your shell, or set the plugin option 'openrouter_api_key' via Claude Code's /plugin configure."
+    );
+  }
+  return k;
+}
+function today3() {
+  return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+}
+function reportStamp3() {
+  const d = /* @__PURE__ */ new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  const off = -d.getTimezoneOffset();
+  const sign = off >= 0 ? "+" : "-";
+  const oh = p(Math.floor(Math.abs(off) / 60));
+  const om = p(Math.abs(off) % 60);
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}${sign}${oh}${om}`;
+}
+function pricingFromModel3(m) {
+  return {
+    input_per_m_usd: m.inputDollarsPerMillion,
+    output_per_m_usd: m.outputDollarsPerMillion,
+    context_window: m.contextTokens
+  };
+}
+function decorate3(raw) {
+  const ctx = raw.context_length ?? 0;
+  const maxOutRaw = raw.top_provider?.max_completion_tokens;
+  const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
+  const promptPerToken = parseFloat(raw.pricing?.prompt ?? "NaN");
+  const completionPerToken = parseFloat(raw.pricing?.completion ?? "NaN");
+  const params = new Set(raw.supported_parameters ?? []);
+  return {
+    id: raw.id,
+    name: raw.name ?? raw.id,
+    contextTokens: ctx,
+    maxOutputTokens: maxOut,
+    inputDollarsPerMillion: isFinite(promptPerToken) ? promptPerToken * 1e6 : Infinity,
+    outputDollarsPerMillion: isFinite(completionPerToken) ? completionPerToken * 1e6 : Infinity,
+    supportsStructured: params.has("structured_outputs") || params.has("response_format"),
+    supportsReasoning: params.has("reasoning") || params.has("include_reasoning"),
+    raw
+  };
+}
+async function runCodeAuditBenchmark(opts = {}) {
+  const apiKey = resolveApiKey3(opts.apiKey);
+  const cases = loadDataset2();
+  validateDataset(cases);
+  const datasetHash = createHash4("sha1").update(JSON.stringify(cases)).digest("hex").slice(0, 12);
+  const thresholds = opts.thresholds ?? DEFAULT_CODE_AUDIT_THRESHOLDS;
+  const incumbentId = opts.incumbentModelId ?? DEFAULT_MODEL;
+  const progress = opts.onProgress ?? (() => {
+  });
+  const freeOnly = getActiveFreeOnly();
+  progress(`Loaded ${cases.length} golden cases (dataset ${datasetHash}).`);
+  progress("Fetching OpenRouter model catalog\u2026");
+  const catalog = await fetchProgrammingModels();
+  const byId = new Map(catalog.map((m) => [m.id, m]));
+  const incumbentRaw = byId.get(incumbentId);
+  const incumbentDecorated = incumbentRaw ? decorate3(incumbentRaw) : null;
+  const incumbentIn = incumbentDecorated && isFinite(incumbentDecorated.inputDollarsPerMillion) ? incumbentDecorated.inputDollarsPerMillion : INCUMBENT_FALLBACK_PRICING3.input_per_m_usd;
+  const incumbentOut = incumbentDecorated && isFinite(incumbentDecorated.outputDollarsPerMillion) ? incumbentDecorated.outputDollarsPerMillion : INCUMBENT_FALLBACK_PRICING3.output_per_m_usd;
+  const toAssess = /* @__PURE__ */ new Map();
+  const addModel = (model, qualified, disqualifyReason2) => {
+    if (!toAssess.has(model.id)) toAssess.set(model.id, { model, qualified, disqualifyReason: disqualifyReason2 });
+  };
+  if (opts.models && opts.models.length > 0) {
+    for (const id of opts.models) {
+      const raw = byId.get(id);
+      if (raw) {
+        const q = qualify(raw, CODE_TASK_CRITERIA);
+        addModel(
+          q ?? decorate3(raw),
+          q !== null,
+          q ? void 0 : "below code-task requirements (cost/context/structured-output/reasoning)"
+        );
+      } else {
+        const fp = KNOWN_PRICING[id] ?? INCUMBENT_FALLBACK_PRICING3;
+        addModel(
+          {
+            id,
+            name: id,
+            contextTokens: fp.context_window,
+            maxOutputTokens: fp.context_window,
+            inputDollarsPerMillion: fp.input_per_m_usd,
+            outputDollarsPerMillion: fp.output_per_m_usd,
+            supportsStructured: false,
+            supportsReasoning: false,
+            raw: { id }
+          },
+          false,
+          "not found in the OpenRouter catalog"
+        );
+      }
+    }
+  } else {
+    const { candidates } = buildBenchmarkRoster(catalog, CODE_TASK_CRITERIA, []);
+    const affordable = candidates.filter(
+      (c) => c.inputDollarsPerMillion <= incumbentIn + 1e-9 && c.outputDollarsPerMillion <= incumbentOut + 1e-9
+    );
+    const sameOrCheaper = rankByQualityIndex(affordable).slice(0, opts.qualifyingTopN ?? 16);
+    for (const c of sameOrCheaper) addModel(c, true);
+  }
+  if (!toAssess.has(incumbentId)) {
+    if (incumbentDecorated) {
+      const q = qualify(incumbentDecorated.raw, CODE_TASK_CRITERIA);
+      addModel(incumbentDecorated, q !== null, q ? void 0 : "below code-task requirements");
+    } else {
+      addModel(
+        {
+          id: incumbentId,
+          name: incumbentId,
+          contextTokens: INCUMBENT_FALLBACK_PRICING3.context_window,
+          maxOutputTokens: INCUMBENT_FALLBACK_PRICING3.context_window,
+          inputDollarsPerMillion: incumbentIn,
+          outputDollarsPerMillion: incumbentOut,
+          supportsStructured: true,
+          supportsReasoning: true,
+          raw: { id: incumbentId }
+        },
+        true
+      );
+    }
+  }
+  progress(`Assessing ${toAssess.size} model(s) over ${cases.length} cases\u2026`);
+  const cache = loadCache3();
+  const assessments = [];
+  let totalCost = 0;
+  for (const { model, qualified, disqualifyReason: disqualifyReason2 } of toAssess.values()) {
+    if (freeOnly && !model.id.endsWith(":free")) {
+      progress(`  ${model.id}: skipped (free_only \u2014 non-':free' model).`);
+      assessments.push({
+        modelId: model.id,
+        qualified: false,
+        disqualifyReason: "free_only active \u2014 non-':free' model not benchmarked",
+        inputDollarsPerMillion: model.inputDollarsPerMillion,
+        outputDollarsPerMillion: model.outputDollarsPerMillion,
+        latencyMs: 0,
+        score: aggregateScores2([]),
+        failureReasons: [],
+        costUsd: 0
+      });
+      continue;
+    }
+    const key = cacheKey3(model.id, today3(), datasetHash);
+    const cached = cache[key];
+    let score;
+    let costUsd;
+    let latencyMs;
+    let failureReasons;
+    if (cached && !opts.force) {
+      progress(`  ${model.id}: cache hit (${today3()}).`);
+      score = cached.score;
+      costUsd = cached.costUsd;
+      latencyMs = cached.latencyMs;
+      failureReasons = cached.failureReasons;
+    } else {
+      progress(`  ${model.id}: running\u2026`);
+      const run = await runCodeAuditBenchmarkOnModel(
+        model.id,
+        cases,
+        {
+          apiKey,
+          pricing: pricingFromModel3(model),
+          perCallTimeoutMs: opts.perCallTimeoutMs ?? 3e5
+        },
+        opts.fetchImpl
+      );
+      score = run.aggregate;
+      costUsd = run.costUsd;
+      latencyMs = Math.round(run.meanLatencyMs);
+      failureReasons = run.failures.map((f) => `${f.caseId}: ${f.reason}`);
+      cache[key] = {
+        date: today3(),
+        datasetHash,
+        score,
+        costUsd,
+        latencyMs,
+        inputDollarsPerMillion: model.inputDollarsPerMillion,
+        outputDollarsPerMillion: model.outputDollarsPerMillion,
+        qualified,
+        disqualifyReason: disqualifyReason2,
+        failureReasons
+      };
+    }
+    totalCost += costUsd;
+    assessments.push({
+      modelId: model.id,
+      qualified,
+      disqualifyReason: disqualifyReason2,
+      inputDollarsPerMillion: model.inputDollarsPerMillion,
+      outputDollarsPerMillion: model.outputDollarsPerMillion,
+      latencyMs,
+      score,
+      failureReasons,
+      costUsd
+    });
+    const thr = passesThresholds2(score, thresholds);
+    progress(
+      `    ${model.id}: ${thr.pass ? "PASS" : "FAIL"} macroF1=${score.macroF1.toFixed(3)} microR=${score.microRecall.toFixed(3)} exact=${score.exactMatches}/${cases.length} halluc=${score.hallucinations} fail=${failureReasons.length}`
+    );
+  }
+  saveCache3(cache);
+  const selection = selectCodeTaskModel({
+    candidates: assessments,
+    incumbentModelId: incumbentId,
+    incumbentInputDollarsPerMillion: incumbentIn,
+    incumbentOutputDollarsPerMillion: incumbentOut
+  });
+  const mainRoot = resolveProjectMainRoot(opts.mainRoot);
+  const reportDir = opts.outputDir ?? join12(mainRoot, "reports", "code-task-benchmark");
+  mkdirSync6(reportDir, { recursive: true });
+  const stamp = reportStamp3();
+  const jsonReportPath = join12(reportDir, `${stamp}-code-task-benchmark.json`);
+  const reportPath = join12(reportDir, `${stamp}-code-task-benchmark.md`);
+  const jsonPayload = {
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    datasetHash,
+    caseCount: cases.length,
+    thresholds,
+    incumbent: {
+      modelId: incumbentId,
+      inputDollarsPerMillion: incumbentIn,
+      outputDollarsPerMillion: incumbentOut
+    },
+    recommendedModelId: selection.recommendedModelId,
+    changed: selection.changed,
+    reason: selection.reason,
+    costUsd: totalCost,
+    assessments: assessments.map((a) => {
+      const thr = passesThresholds2(a.score, thresholds);
+      return {
+        modelId: a.modelId,
+        qualified: a.qualified,
+        disqualifyReason: a.disqualifyReason,
+        inputDollarsPerMillion: a.inputDollarsPerMillion,
+        outputDollarsPerMillion: a.outputDollarsPerMillion,
+        latencyMs: a.latencyMs,
+        pass: thr.pass,
+        failures: thr.failures,
+        macroF1: a.score.macroF1,
+        microPrecision: a.score.microPrecision,
+        microRecall: a.score.microRecall,
+        microF1: a.score.microF1,
+        exactMatches: a.score.exactMatches,
+        hallucinations: a.score.hallucinations,
+        anchoredRate: a.score.anchoredRate,
+        failedCases: a.score.failedCases,
+        failureReasons: a.failureReasons,
+        costUsd: a.costUsd
+      };
+    }),
+    rejected: selection.rejected,
+    perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
+  };
+  const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
+  writeFileSync5(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync3(jtmp, jsonReportPath);
+  const md = buildReportMarkdown3({
+    cases,
+    datasetHash,
+    incumbentId,
+    incumbentIn,
+    incumbentOut,
+    thresholds,
+    assessments,
+    selection,
+    totalCost
+  });
+  const mtmp = `${reportPath}.tmp.${process.pid}`;
+  writeFileSync5(mtmp, md, "utf-8");
+  renameSync3(mtmp, reportPath);
+  const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
+  return {
+    recommendedModelId: selection.recommendedModelId,
+    changed: selection.changed,
+    selection,
+    results: assessments,
+    costUsd: totalCost,
+    reportPath,
+    jsonReportPath,
+    summaryLine
+  };
+}
+function buildReportMarkdown3(args) {
+  const defectCases = args.cases.filter((c) => c.buggySymbols.length > 0).length;
+  const cleanCases = args.cases.length - defectCases;
+  const plantedDefects = args.cases.reduce((n, c) => n + c.buggySymbols.length, 0);
+  const lines = [];
+  lines.push("# code_task (CODE AUDIT) \u2014 model benchmark");
+  lines.push("");
+  lines.push(`**Run:** ${(/* @__PURE__ */ new Date()).toISOString()}`);
+  lines.push(
+    `**Corpus:** ${args.cases.length} cases (${defectCases} real pre-fix snapshots carrying ${plantedDefects} verified defects, ${cleanCases} never-fixed clean files) \u2014 hash ${args.datasetHash}`
+  );
+  lines.push(`**Incumbent:** \`${args.incumbentId}\` (in $${args.incumbentIn.toFixed(3)}/M, out $${args.incumbentOut.toFixed(3)}/M)`);
+  lines.push(
+    `**Pass gate:** macro-F1 \u2265 ${args.thresholds.minMacroF1.toFixed(2)} AND micro-recall \u2265 ${args.thresholds.minMicroRecall.toFixed(2)} AND \u2264 ${args.thresholds.maxFailedCases} failed case(s)`
+  );
+  lines.push(`**Total LLM spend:** $${args.totalCost.toFixed(6)}`);
+  lines.push("");
+  lines.push(
+    "**Scoring is 100% deterministic \u2014 no LLM judge.** The score is defect LOCALIZATION by symbol name (the tool's own system prompt forbids identifying code by line number, so the symbol name is the tool's contract and the only sound key). The corpus's `defectClass` labels are reported but NOT graded: matching a model's free-text explanation against them is a semantic-equivalence judgment, which would need a judge."
+  );
+  lines.push("");
+  lines.push("## Recommendation");
+  lines.push("");
+  lines.push(`**${args.selection.changed ? "SWITCH" : "KEEP"} \u2192 \`${args.selection.recommendedModelId}\`**`);
+  lines.push("");
+  lines.push(args.selection.reason);
+  lines.push("");
+  lines.push("## Assessed models");
+  lines.push("");
+  lines.push("| Model | Req | Bench | macro-F1 | micro-P | micro-R | Exact | Halluc | Anchored | Fail | in $/M | out $/M | lat ms |");
+  lines.push("|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+  const sorted = [...args.assessments].sort((a, b) => b.score.macroF1 - a.score.macroF1);
+  for (const a of sorted) {
+    const thr = passesThresholds2(a.score, args.thresholds);
+    lines.push(
+      `| \`${a.modelId}\` | ${a.qualified ? "ok" : "no"} | ${thr.pass ? "PASS" : "FAIL"} | ${a.score.macroF1.toFixed(3)} | ${a.score.microPrecision.toFixed(3)} | ${a.score.microRecall.toFixed(3)} | ${a.score.exactMatches}/${args.cases.length} | ${a.score.hallucinations} | ${(a.score.anchoredRate * 100).toFixed(0)}% | ${a.score.failedCases} | ${a.inputDollarsPerMillion.toFixed(3)} | ${a.outputDollarsPerMillion.toFixed(3)} | ${a.latencyMs} |`
+    );
+  }
+  lines.push("");
+  if (args.selection.rejected.length > 0) {
+    lines.push("## Rejected (and why)");
+    lines.push("");
+    for (const r of args.selection.rejected) lines.push(`- \`${r.modelId}\` \u2014 ${r.reason}`);
+    lines.push("");
+  }
+  const rec = args.assessments.find((a) => a.modelId === args.selection.recommendedModelId);
+  if (rec) {
+    lines.push(`## Per-case breakdown \u2014 \`${rec.modelId}\``);
+    lines.push("");
+    lines.push("| Case | Universe | Expected | Accused | TP | FP | FN | Halluc | Mode | F1 | Defect class (not graded) |");
+    lines.push("|---|---|---|---|---|---|---|---|---|---|---|");
+    for (const c of rec.score.cases) {
+      lines.push(
+        `| ${c.caseId} | ${c.universeSize} | ${c.expected.join(", ") || "\u2014"} | ${c.returned.join(", ") || "\u2014"} | ${c.truePositives.length} | ${c.falsePositives.length} | ${c.falseNegatives.length} | ${c.hallucinated.length} | ${c.mode} | ${c.f1.toFixed(3)} | ${c.defectClass} |`
+      );
+    }
+    lines.push("");
+    if (rec.failureReasons.length > 0) {
+      lines.push(`### Pipeline failures for \`${rec.modelId}\``);
+      lines.push("");
+      for (const f of rec.failureReasons) lines.push(`- ${f}`);
+      lines.push("");
+    }
+  }
+  lines.push("---");
+  lines.push("");
+  lines.push(
+    "Re-run: `llm-externalizer benchmark --code-task` (auto-discover) or `--code-task <id> [<id>...]` (assess specific models). ADVISORY by default; add `--apply-profile <P>` to write the winner into that profile's `tool_models.code_task` (CLI-only writer \u2014 the MCP surface never writes)."
+  );
+  return lines.join("\n") + "\n";
+}
+
 // src/model-qualification/auto-replace.ts
 function defaultSettingsReader(profileNameOverride) {
   const settings = loadSettings();
@@ -223608,6 +224925,20 @@ async function defaultBenchmarkRunner(tool, benchmark, incumbentModelId, candida
       rejected: r.selection.rejected
     };
   }
+  if (benchmark === "code-task") {
+    const r = await runCodeAuditBenchmark({
+      apiKey,
+      models: candidates,
+      incumbentModelId,
+      onProgress
+    });
+    return {
+      recommendedModelId: r.recommendedModelId,
+      changed: r.changed,
+      reason: r.selection.reason,
+      rejected: r.selection.rejected
+    };
+  }
   throw new Error(
     `defaultBenchmarkRunner: no orchestrator wired for benchmark '${benchmark}' (tool '${tool}'). The model-qualification registry declared a benchmark the auto-replace dispatcher does not know \u2014 add a case here when a new per-tool benchmark ships.`
   );
@@ -223615,7 +224946,7 @@ async function defaultBenchmarkRunner(tool, benchmark, incumbentModelId, candida
 function benchmarkedTools() {
   const out = [];
   for (const [tool, descriptor] of Object.entries(TOOL_MODEL_REGISTRY)) {
-    if (descriptor.benchmark === "security-triage" || descriptor.benchmark === "search-existing") {
+    if (descriptor.benchmark === "security-triage" || descriptor.benchmark === "search-existing" || descriptor.benchmark === "code-task") {
       out.push({ tool, benchmark: descriptor.benchmark });
     }
   }
@@ -223864,8 +225195,8 @@ function renderAssessmentText(a) {
 }
 
 // src/model-qualification/drift.ts
-import { mkdirSync as mkdirSync6, readFileSync as readFileSync10, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
-import { join as join11 } from "node:path";
+import { mkdirSync as mkdirSync7, readFileSync as readFileSync12, renameSync as renameSync4, writeFileSync as writeFileSync6 } from "node:fs";
+import { join as join13 } from "node:path";
 function perMillion(s) {
   if (s == null) return null;
   const n = parseFloat(s);
@@ -224002,11 +225333,11 @@ function computeModelHealth(configured, catalog, baseline, opts = {}) {
   return { findings, updatedBaseline };
 }
 function getBaselinePath() {
-  return join11(getConfigDir(), "model-baseline.json");
+  return join13(getConfigDir(), "model-baseline.json");
 }
 function loadBaseline(path = getBaselinePath()) {
   try {
-    const raw = readFileSync10(path, "utf-8");
+    const raw = readFileSync12(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed;
@@ -224018,10 +225349,10 @@ function loadBaseline(path = getBaselinePath()) {
 }
 function saveBaseline(baseline, path = getBaselinePath()) {
   try {
-    mkdirSync6(getConfigDir(), { recursive: true });
+    mkdirSync7(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync5(tmp, JSON.stringify(baseline, null, 2));
-    renameSync3(tmp, path);
+    writeFileSync6(tmp, JSON.stringify(baseline, null, 2));
+    renameSync4(tmp, path);
   } catch {
   }
 }
@@ -224094,10 +225425,10 @@ function renderModelHealthMarkdown(report) {
 async function runCheckModelHealth(opts = {}) {
   const profile = opts.profile ?? resolveActiveProfile();
   const report = await checkModelHealth(profile, opts);
-  const dir = opts.outputDir ?? join11(resolveProjectMainRoot(), "reports", "model-health");
-  mkdirSync6(dir, { recursive: true });
-  const reportPath = join11(dir, `${compactStamp()}-model-health-${profile.name}.md`);
-  writeFileSync5(reportPath, renderModelHealthMarkdown(report));
+  const dir = opts.outputDir ?? join13(resolveProjectMainRoot(), "reports", "model-health");
+  mkdirSync7(dir, { recursive: true });
+  const reportPath = join13(dir, `${compactStamp()}-model-health-${profile.name}.md`);
+  writeFileSync6(reportPath, renderModelHealthMarkdown(report));
   return { report, reportPath };
 }
 function renderModelHealthText(report) {
@@ -224118,8 +225449,8 @@ function renderModelHealthText(report) {
 }
 
 // src/model-qualification/new-arrivals.ts
-import { mkdirSync as mkdirSync7, readFileSync as readFileSync11, renameSync as renameSync4, writeFileSync as writeFileSync6 } from "node:fs";
-import { join as join12 } from "node:path";
+import { mkdirSync as mkdirSync8, readFileSync as readFileSync13, renameSync as renameSync5, writeFileSync as writeFileSync7 } from "node:fs";
+import { join as join14 } from "node:path";
 function createdToIso(created) {
   if (created === null || !Number.isFinite(created) || created <= 0) return null;
   return new Date(created * 1e3).toISOString();
@@ -224161,11 +225492,11 @@ function diffNewArrivals(catalog, snapshot) {
   };
 }
 function getCatalogSnapshotPath() {
-  return join12(getConfigDir(), "catalog-snapshot.json");
+  return join14(getConfigDir(), "catalog-snapshot.json");
 }
 function loadSnapshot(path = getCatalogSnapshotPath()) {
   try {
-    const raw = readFileSync11(path, "utf-8");
+    const raw = readFileSync13(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const obj = parsed;
@@ -224183,10 +225514,10 @@ function loadSnapshot(path = getCatalogSnapshotPath()) {
 }
 function saveSnapshot(snapshot, path = getCatalogSnapshotPath()) {
   try {
-    mkdirSync7(getConfigDir(), { recursive: true });
+    mkdirSync8(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync6(tmp, JSON.stringify(snapshot, null, 2));
-    renameSync4(tmp, path);
+    writeFileSync7(tmp, JSON.stringify(snapshot, null, 2));
+    renameSync5(tmp, path);
   } catch {
   }
 }
@@ -224277,10 +225608,10 @@ function renderNewArrivalsText(report) {
 }
 async function runDiscoverNewArrivals(opts = {}) {
   const report = await discoverNewArrivals(opts);
-  const dir = opts.outputDir ?? join12(resolveProjectMainRoot(), "reports", "model-arrivals");
-  mkdirSync7(dir, { recursive: true });
-  const reportPath = join12(dir, `${compactStamp()}-new-arrivals.md`);
-  writeFileSync6(reportPath, renderNewArrivalsMarkdown(report));
+  const dir = opts.outputDir ?? join14(resolveProjectMainRoot(), "reports", "model-arrivals");
+  mkdirSync8(dir, { recursive: true });
+  const reportPath = join14(dir, `${compactStamp()}-new-arrivals.md`);
+  writeFileSync7(reportPath, renderNewArrivalsMarkdown(report));
   return { report, reportPath };
 }
 
@@ -224303,6 +225634,8 @@ function parseArgs(argv) {
     triageModels: [],
     searchExisting: false,
     searchExistingModels: [],
+    codeTask: false,
+    codeTaskModels: [],
     force: false,
     assessModel: null,
     checkHealth: false,
@@ -224391,6 +225724,12 @@ function parseArgs(argv) {
       opts.searchExisting = true;
       while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
         opts.searchExistingModels.push(argv[i + 1]);
+        i++;
+      }
+    } else if (a === "--code-task") {
+      opts.codeTask = true;
+      while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
+        opts.codeTaskModels.push(argv[i + 1]);
         i++;
       }
     } else if (a === "--model") {
@@ -224509,6 +225848,23 @@ function printHelp() {
       "  Pass gate: micro-F1 >= 0.85 AND micro-recall >= 0.85 AND coverage >= 0.90.",
       "  Never auto-selects a pricier model. ADVISORY only \u2014 never edits config.",
       "",
+      "code_task CODE-AUDIT benchmark (separate task \u2014 defect localization):",
+      "  --code-task [ID...]",
+      "                    Run the code_task code-audit benchmark instead of the",
+      "                    keyword task. Drives the REAL code_task pipeline over a",
+      "                    corpus of VERBATIM pre-fix snapshots from this repo's own",
+      "                    git history (every defect really shipped and was really",
+      "                    fixed) plus never-fixed clean files, and scores it",
+      "                    DETERMINISTICALLY: precision/recall/F1 on localizing the",
+      "                    defect by FUNCTION NAME \u2014 no LLM judge. Pass explicit model",
+      "                    id(s) after the flag to assess exactly those; with none,",
+      "                    auto-discovers the same-or-cheaper candidate pool. Writes a",
+      "                    report under reports/code-task-benchmark/. Composes with",
+      "                    --force.",
+      "  Pass gate: macro-F1 >= 0.50 AND micro-recall >= 0.50 AND <= 1 failed case.",
+      "  Never auto-selects a pricier model. ADVISORY unless --apply-profile P is",
+      "  given, which writes the winner into P's `tool_models.code_task` (CLI-only).",
+      "",
       "Cross-tool auto-replacement (TRDD-828238b5 A7 \u2014 the writer path):",
       "  --auto-replace    For every benchmarked tool (security_scan,",
       "                    search_existing_implementations), check its incumbent",
@@ -224564,7 +225920,7 @@ function printHelp() {
 }
 
 // src/benchmark/index.ts
-function resolveApiKey3() {
+function resolveApiKey4() {
   const k = process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
   if (!k) {
     throw new Error(
@@ -224574,14 +225930,14 @@ function resolveApiKey3() {
   return k;
 }
 function resolveFixturesDir() {
-  const here = dirname4(fileURLToPath3(import.meta.url));
+  const here = dirname5(fileURLToPath4(import.meta.url));
   const candidates = [
-    join13(here, "fixtures"),
-    join13(here, "..", "src", "benchmark", "fixtures"),
-    join13(here, "..", "..", "src", "benchmark", "fixtures")
+    join15(here, "fixtures"),
+    join15(here, "..", "src", "benchmark", "fixtures"),
+    join15(here, "..", "..", "src", "benchmark", "fixtures")
   ];
   for (const c of candidates) {
-    if (existsSync10(join13(c, "file-01.ts"))) return c;
+    if (existsSync12(join15(c, "file-01.ts"))) return c;
   }
   throw new Error(`Could not locate benchmark fixtures. Tried:
   ${candidates.join("\n  ")}`);
@@ -224603,8 +225959,10 @@ function validateCombinations(opts) {
   if (opts.apply && !opts.autoReplace) {
     throw new Error("--apply requires --auto-replace");
   }
-  if (opts.applyProfile !== null && opts.pickTopN === null) {
-    throw new Error("--apply-profile requires --pick-top-n");
+  if (opts.applyProfile !== null && opts.pickTopN === null && !opts.codeTask) {
+    throw new Error(
+      "--apply-profile requires --pick-top-n (or --code-task, which writes its single winner into tool_models.code_task)"
+    );
   }
   if (opts.fromCache && opts.pickTopN === null) {
     throw new Error("--from-cache requires --pick-top-n (no point loading the cache otherwise).");
@@ -224628,7 +225986,7 @@ function preflight(opts) {
   }
 }
 function benchmarkCachePath() {
-  return join13(getConfigDir(), "benchmark-results.json");
+  return join15(getConfigDir(), "benchmark-results.json");
 }
 async function main() {
   const opts = parseArgs(process.argv);
@@ -224665,6 +226023,10 @@ async function main() {
       for (const id of pool) {
         if (!opts.triageModels.includes(id)) opts.triageModels.push(id);
       }
+    } else if (opts.codeTask) {
+      for (const id of pool) {
+        if (!opts.codeTaskModels.includes(id)) opts.codeTaskModels.push(id);
+      }
     } else if (opts.searchExisting || opts.autoReplace) {
       for (const id of pool) {
         if (!opts.searchExistingModels.includes(id)) opts.searchExistingModels.push(id);
@@ -224680,6 +226042,9 @@ async function main() {
   }
   if (opts.searchExisting) {
     return runSearchExistingPhase(opts);
+  }
+  if (opts.codeTask) {
+    return runCodeTaskPhase(opts);
   }
   if (opts.autoReplace) {
     return runAutoReplacePhase(opts);
@@ -224697,9 +226062,9 @@ async function main() {
     return runNewArrivalsPhase(opts);
   }
   if (opts.fromCache) {
-    const cachePath3 = benchmarkCachePath();
-    const cache = loadCachedReport(cachePath3);
-    console.error(`[benchmark] --from-cache: using ${cachePath3} (${cache.results.length} models, run at ${cache.timestamp}).`);
+    const cachePath4 = benchmarkCachePath();
+    const cache = loadCachedReport(cachePath4);
+    console.error(`[benchmark] --from-cache: using ${cachePath4} (${cache.results.length} models, run at ${cache.timestamp}).`);
     return runPickPhase(cache.results, opts);
   }
   const sweep = await runKeywordSweep(opts);
@@ -224779,7 +226144,7 @@ async function runKeywordSweep(opts) {
       total: 0
     };
   }
-  const apiKey = resolveApiKey3();
+  const apiKey = resolveApiKey4();
   const roster = [
     ...candidates.map((m) => ({ model: m, isBaseline: false })),
     ...baselines.map((m) => ({ model: m, isBaseline: true }))
@@ -224815,17 +226180,17 @@ async function runKeywordSweep(opts) {
     results
   };
   const markdown = renderReport(reportInput);
-  mkdirSync8(dirname4(reportPath), { recursive: true });
-  writeFileSync7(reportPath, markdown, "utf-8");
+  mkdirSync9(dirname5(reportPath), { recursive: true });
+  writeFileSync8(reportPath, markdown, "utf-8");
   console.error(`[benchmark] Report: ${reportPath}`);
   const json = renderJson(reportInput);
   const cacheJsonPath = benchmarkCachePath();
-  mkdirSync8(dirname4(cacheJsonPath), { recursive: true });
-  writeFileSync7(cacheJsonPath, json, "utf-8");
+  mkdirSync9(dirname5(cacheJsonPath), { recursive: true });
+  writeFileSync8(cacheJsonPath, json, "utf-8");
   console.error(`[benchmark] JSON cache: ${cacheJsonPath}`);
   if (opts.jsonPath) {
-    mkdirSync8(dirname4(opts.jsonPath), { recursive: true });
-    writeFileSync7(opts.jsonPath, json, "utf-8");
+    mkdirSync9(dirname5(opts.jsonPath), { recursive: true });
+    writeFileSync8(opts.jsonPath, json, "utf-8");
     console.error(`[benchmark] JSON (user-path): ${opts.jsonPath}`);
   }
   const passers = [...results.values()].filter((r) => r.score?.pass).length;
@@ -224879,6 +226244,55 @@ async function runSearchExistingPhase(opts) {
     reportPath: result.reportPath
   };
 }
+async function runCodeTaskPhase(opts) {
+  console.error("[code-task] code_task code-audit model benchmark");
+  const result = await runCodeAuditBenchmark({
+    models: opts.codeTaskModels.length > 0 ? opts.codeTaskModels : void 0,
+    force: opts.force,
+    onProgress: (m) => console.error(`[code-task] ${m}`)
+  });
+  console.error("");
+  console.error(`[code-task] ${result.summaryLine}`);
+  console.error(`[code-task] spend: $${result.costUsd.toFixed(6)}`);
+  console.error(`[code-task] json:   ${result.jsonReportPath}`);
+  process.stdout.write(`recommended_model=${result.recommendedModelId}
+`);
+  const base = `code-task benchmark done \u2014 recommended ${result.recommendedModelId} (changed=${result.changed}), spend $${result.costUsd.toFixed(6)}`;
+  if (opts.applyProfile === null) {
+    return { ok: true, summary: `${base} \u2014 ADVISORY (pass --apply-profile P to adopt it)`, reportPath: result.reportPath };
+  }
+  if (result.selection.eligible.length === 0) {
+    return {
+      ok: true,
+      summary: `${base} \u2014 no eligible same-or-cheaper passer, so nothing was written to '${opts.applyProfile}'`,
+      reportPath: result.reportPath
+    };
+  }
+  try {
+    const r = applyToolModelToSettings(
+      getSettingsPath(),
+      opts.applyProfile,
+      "code_task",
+      result.recommendedModelId
+    );
+    console.error(
+      `[code-task] applied ${opts.applyProfile}::tool_models.code_task: ${r.oldModelId || "\u2014"}  \u2192  ${r.newModelId}`
+    );
+    console.error("[code-task] Run the `reset` MCP tool or restart Claude Code to pick up the new model.");
+    return {
+      ok: true,
+      summary: `${base} \u2014 applied to '${opts.applyProfile}'::tool_models.code_task; run \`reset\` to reload`,
+      reportPath: result.reportPath
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      code: 3,
+      summary: `--apply-profile failed: ${err.message}`,
+      reportPath: result.reportPath
+    };
+  }
+}
 async function runAutoReplacePhase(opts) {
   console.error("[auto-replace] cross-tool auto-replacement planner");
   const { findings, reportMarkdown } = await planToolReplacements({
@@ -224888,9 +226302,9 @@ async function runAutoReplacePhase(opts) {
   });
   const ensemble = planEnsembleRotation();
   const fullReport = reportMarkdown + "\n" + renderEnsembleRotationSection(ensemble);
-  const reportPath = join13(resolveProjectMainRoot(), "reports", "auto-replace", `${compactStamp()}-auto-replace.md`);
-  mkdirSync8(dirname4(reportPath), { recursive: true });
-  writeFileSync7(reportPath, fullReport, "utf-8");
+  const reportPath = join15(resolveProjectMainRoot(), "reports", "auto-replace", `${compactStamp()}-auto-replace.md`);
+  mkdirSync9(dirname5(reportPath), { recursive: true });
+  writeFileSync8(reportPath, fullReport, "utf-8");
   console.error("");
   for (const f of findings) {
     const verdict = !f.ranBenchmark ? "healthy \u2014 no benchmark" : f.changed ? `RECOMMEND ${f.incumbentModelId} -> ${f.recommendedModelId}` : `keep ${f.incumbentModelId}`;
@@ -225150,8 +226564,8 @@ function buildReportPath() {
   const offsetSign = offsetMin >= 0 ? "+" : "-";
   const offsetAbs = Math.abs(offsetMin);
   const tz = `${offsetSign}${pad(Math.floor(offsetAbs / 60))}${pad(offsetAbs % 60)}`;
-  const ts2 = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${tz}`;
-  return join13(root, "reports", "benchmark", `${ts2}-model-comparison.md`);
+  const ts3 = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${tz}`;
+  return join15(root, "reports", "benchmark", `${ts3}-model-comparison.md`);
 }
 withUsageContext(
   { tool: "cli:benchmark", params: "" },
