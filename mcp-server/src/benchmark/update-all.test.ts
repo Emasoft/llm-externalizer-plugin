@@ -326,6 +326,100 @@ describe("--update-all", () => {
     expect(readFileSync(settingsPath, "utf-8")).toBe(SETTINGS); // nothing written
   });
 
+  it("--free EXCLUDES a zero-cost NON-':free' router/pseudo-model from EVERY consumer (openrouter/free regression)", async () => {
+    // THE BUG: 'openrouter/free' is priced $0, so resolveFreePool auto-discovers it into the
+    // pool — but it lacks the ':free' suffix the send-time guard assertFreeOnlyModel requires,
+    // so a real --free run aborted the entire multi-tool sweep at its first send. Fix A drops
+    // it BEFORE the pool reaches the ensemble sweep or any per-tool benchmark.
+    const ROUTER = model("openrouter/free", 0, 0); // zero-cost ROUTER pseudo-model, NO ':free' suffix
+    let ensembleModels: string[] = [];
+    const toolModels: string[][] = [];
+    const { deps } = spyDeps({
+      fetchCatalog: async () => [...CATALOG, ROUTER],
+      runEnsembleSweep: async ({ models, topN }) => {
+        ensembleModels = models;
+        return {
+          picks: models.slice(0, topN).map((id) => ({
+            modelId: id,
+            meanF1: 1,
+            actualCost: 0,
+            latencyMs: 1,
+            inputDollarsPerMillion: 0,
+            outputDollarsPerMillion: 0,
+          })),
+          pickError: null,
+          passingFreeIds: models.filter((m) => m.endsWith(":free")),
+          modelsRun: models.length,
+          passers: models.length,
+          costUsd: 0,
+          reportPath: join(root, "sweep.md"),
+        };
+      },
+      runToolBenchmark: async ({ tool, models }) => {
+        toolModels.push([...models]);
+        return {
+          recommendedModelId: models[0] ?? "v/incumbent",
+          changed: true,
+          eligibleCount: models.length,
+          costUsd: 0,
+          reportPath: join(root, `${tool}.md`),
+        };
+      },
+    });
+    const r = await runUpdateAll(baseOpts({ mode: "free", budgetUsd: 0 }), deps);
+
+    expect(r.ok).toBe(true);
+    // The ensemble sweep sees ONLY the ':free' ids — the router pseudo-model is gone.
+    expect(ensembleModels).not.toContain("openrouter/free");
+    expect(ensembleModels.sort()).toEqual(["v/alpha:free", "v/beta:free"]);
+    // Every per-tool benchmark's candidate set is likewise router-free.
+    expect(toolModels.length).toBeGreaterThan(0);
+    for (const models of toolModels) expect(models).not.toContain("openrouter/free");
+    // And nothing non-':free' can leak into the written free_models pool.
+    for (const id of r.freePool?.pool ?? []) expect(id.endsWith(":free")).toBe(true);
+  });
+
+  it("a per-tool benchmark that THROWS is recorded ERRORED and the sweep still completes over the remaining tools", async () => {
+    // RESILIENCE (Fix B): one tool's benchmark throwing (e.g. a cost-safety guard throw from
+    // inside its per-model judge) must NOT abort the whole --update-all sweep. Simulate the
+    // first per-tool benchmark throwing; the rest must still run and the run must end [OK].
+    let threw = false;
+    const { deps, toolCalls } = spyDeps({
+      runToolBenchmark: async ({ tool, models }) => {
+        toolCalls.push(tool);
+        if (!threw) {
+          threw = true;
+          throw new Error(
+            "free_only cost-safety: refusing to send non-free model 'openrouter/free' to OpenRouter",
+          );
+        }
+        return {
+          recommendedModelId: models[0] ?? "v/incumbent",
+          changed: true,
+          eligibleCount: models.length,
+          costUsd: 0,
+          reportPath: join(root, `${tool}.md`),
+        };
+      },
+    });
+    const r = await runUpdateAll(baseOpts(), deps);
+
+    // The whole sweep must NOT abort on one tool's throw.
+    expect(r.ok).toBe(true);
+    expect(r.aborted).toBeNull();
+    // The loop continued past the throwing tool to at least one more.
+    expect(toolCalls.length).toBeGreaterThan(1);
+    // The throwing tool is recorded ERRORED (winner null, no write), not silently dropped.
+    const erroredTool = r.tools.find((t) => t.tool === toolCalls[0]);
+    expect(erroredTool?.winner).toBeNull();
+    expect(erroredTool?.written).toBe(false);
+    expect(erroredTool?.note).toMatch(/ERRORED/);
+    // Every registered tool still has a row — the report stays complete.
+    expect(r.tools.map((t) => t.tool).sort()).toEqual(registeredTools().sort());
+    // A tool AFTER the throw still produced a real winner.
+    expect(r.tools.some((t) => t.winner !== null)).toBe(true);
+  });
+
   // ── P4: the spend cap ────────────────────────────────────────────────────
 
   it("ABORTS on the pre-flight estimate — before a single call, $0 spent", async () => {

@@ -26,6 +26,7 @@ import {
   rankByQualityIndex,
   isZeroCostPriced,
   isFreeModeEligible,
+  freeSuffixOnly,
   resolveFreePool,
   extractCodexIndex,
   extractDesignArenaCodeElo,
@@ -491,5 +492,26 @@ describe("benchmark/discover resolveFreePool (free-pool verify + auto-discovery,
     });
     expect(both.pool.filter((id) => id === "openrouter/owl-alpha")).toEqual(["openrouter/owl-alpha"]); // once
     expect(both.autoDiscovered).not.toContain("openrouter/owl-alpha"); // already counted as configured
+  });
+});
+
+describe("benchmark/discover freeSuffixOnly (free_only send-eligibility filter — matches assertFreeOnlyModel)", () => {
+  it("keeps ONLY the ':free'-suffixed id — a zero-cost ROUTER pseudo-model 'openrouter/free' is excluded", () => {
+    // The exact regression: 'openrouter/free' is priced $0 so resolveFreePool auto-discovers
+    // it, but it lacks the ':free' suffix — assertFreeOnlyModel would throw before its send,
+    // aborting a whole --update-all --free sweep. The filter drops it, keeps the real :free id.
+    expect(freeSuffixOnly(["openrouter/free", "vendor/x:free"])).toEqual(["vendor/x:free"]);
+  });
+
+  it("excludes EVERY non-':free' id (router / auto / no-suffix beta) even when the catalog prices them $0", () => {
+    expect(
+      freeSuffixOnly(["openrouter/free", "openrouter/auto", "openrouter/owl-alpha", "a:free", "b:free"]),
+    ).toEqual(["a:free", "b:free"]);
+  });
+
+  it("is order-preserving, a no-op on an all-':free' list, and yields [] when nothing qualifies", () => {
+    expect(freeSuffixOnly(["a:free", "b:free"])).toEqual(["a:free", "b:free"]);
+    expect(freeSuffixOnly(["openrouter/free", "openrouter/auto"])).toEqual([]);
+    expect(freeSuffixOnly([])).toEqual([]);
   });
 });

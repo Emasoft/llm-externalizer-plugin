@@ -412,6 +412,25 @@ export function isFreeModeEligible(
   return id.endsWith(":free") || isZeroCostPriced(inputDollarsPerMillion, outputDollarsPerMillion);
 }
 
+/**
+ * Keep ONLY ids that carry OpenRouter's ':free' suffix — exactly the set the runtime
+ * send-time cost-safety chokepoint `assertFreeOnlyModel` (config.ts) admits under a
+ * free_only profile. That guard has NO catalog-price context, so a zero-cost model that
+ * LACKS the suffix — a ROUTER/auto pseudo-model such as `openrouter/free` /
+ * `openrouter/auto`, or an open-beta no-suffix model — is REJECTED there and THROWS
+ * before its request. `resolveFreePool`, by contrast, admits any zero-cost-priced id
+ * (isZeroCostPriced, which intentionally welcomes no-suffix betas for a non-free_only
+ * `--bench-free-pool`). Filtering a free candidate pool through this before it feeds a
+ * free_only sweep is what stops a non-':free' id from reaching a benchmark: sending it is
+ * impossible (assertFreeOnlyModel throws), writing it to `free_models` is impossible
+ * (config.ts rejects it), and a SINGLE such id thrown inside one tool's judge would abort
+ * an entire `--update-all --free` sweep. Predicate is IDENTICAL to assertFreeOnlyModel's
+ * (`endsWith(":free")`) so the pool matches precisely what can actually be sent.
+ */
+export function freeSuffixOnly(ids: readonly string[]): string[] {
+  return ids.filter((id) => id.endsWith(":free"));
+}
+
 export interface FreePoolResolution {
   /** The verified zero-cost pool: configured ids that passed + auto-discovered, deduped. */
   pool: string[];

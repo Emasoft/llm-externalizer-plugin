@@ -34,6 +34,7 @@ import { dirname, join } from "node:path";
 import {
   rankByQualityIndex,
   resolveFreePool,
+  freeSuffixOnly,
   qualify,
   isZeroCostPriced,
   DEFAULT_CRITERIA,
@@ -324,7 +325,7 @@ export async function runUpdateAll(
       // FREE-MODELS SEARCH (an explicit part of the goal — the pool is no longer
       // hand-edited). Zero-cost models are discovered from the live catalog, VERIFIED
       // against it, and the survivors become every tool's candidate set.
-      const { pool, autoDiscovered, rejected } = resolveFreePool(
+      const { pool: discoveredPool, autoDiscovered, rejected } = resolveFreePool(
         opts.configuredFreeModels,
         catalog,
         { autoDiscover: true, autoDiscoverTopN: opts.qualifyingTopN ?? 16 },
@@ -339,17 +340,36 @@ export async function runUpdateAll(
           `free-pool: configured non-':free' id(s) ${JSON.stringify(rejected)} are NOT priced at $0 by the live catalog (they would cost money) or are absent from it — fix the profile's free_models`,
         );
       }
+      // This phase has activated free_only (setActiveFreeOnly(true) above), and the runtime
+      // send-time chokepoint assertFreeOnlyModel() (config.ts) admits ONLY ':free'-suffixed
+      // ids — it has no catalog-price context. resolveFreePool, by contrast, ALSO admits
+      // zero-cost models that LACK the suffix (isZeroCostPriced): ROUTER/auto pseudo-models
+      // like 'openrouter/free' / 'openrouter/auto', plus open-beta no-suffix models. Under
+      // free_only such an id can NEVER be sent (assertFreeOnlyModel throws) and can NEVER be
+      // written to free_models (config.ts rejects it) — benchmarking it is meaningless, and a
+      // SINGLE one throwing inside a per-tool judge (e.g. security-triage's judgeGroups) would
+      // abort this whole multi-tool sweep at its first send. So drop every non-':free' id HERE,
+      // before the pool feeds ANY consumer (ensemble sweep, every per-tool benchmark, the
+      // free_models write-back), matching exactly what assertFreeOnlyModel permits.
+      const pool = freeSuffixOnly(discoveredPool);
+      const nonFreeExcluded = discoveredPool.length - pool.length;
       if (pool.length === 0) {
         return abortResult(
           opts,
           ledger,
           catalog.length,
-          "free-pool: the live catalog currently offers no zero-cost model that meets the structural bar (structured output / context / output length) — nothing to benchmark",
+          "free-pool: the live catalog currently offers no zero-cost ':free' model that meets the structural bar (structured output / context / output length) — nothing to benchmark" +
+            (nonFreeExcluded > 0
+              ? ` (${nonFreeExcluded} zero-cost non-':free' id(s) were excluded — unusable under free_only)`
+              : ""),
         );
       }
       progress(
-        `gate: free pool = ${pool.length} zero-cost model(s)` +
-          (autoDiscovered.length > 0 ? ` (${autoDiscovered.length} auto-discovered)` : "") +
+        `gate: free pool = ${pool.length} ':free' model(s)` +
+          (autoDiscovered.length > 0 ? ` (${freeSuffixOnly(autoDiscovered).length} auto-discovered)` : "") +
+          (nonFreeExcluded > 0
+            ? `; excluded ${nonFreeExcluded} zero-cost non-':free' id(s) (unusable under free_only)`
+            : "") +
           ".",
       );
       ensembleCandidates = [...pool];
@@ -634,7 +654,31 @@ export async function runUpdateAll(
           // which is precisely the silence this whole module refuses.
           continue;
         }
-        throw err;
+        // RESILIENCE (defense in depth — TRDD free-pool fix): a per-tool benchmark that
+        // THROWS for a NON-budget reason must NOT abort the entire multi-tool sweep and
+        // discard every tool already written this phase. The canonical trigger is a
+        // cost-safety guard throw (assertFreeOnlyModel) reaching us from inside a tool's
+        // per-model judge — but ANY unexpected per-tool error is contained the same way.
+        // Record this tool as ERRORED and continue; the ensemble keyword phase already
+        // tolerates per-model errors identically (runner.ts returns a RunError, never
+        // throws). The run still ends [OK] — only a genuine whole-run failure (budget,
+        // catalog fetch, the ensemble sweep itself) aborts, so `aborted` is NOT set here.
+        const errMsg = err instanceof Error ? err.message : String(err);
+        progress(`benchmark: ${item.tool} ERRORED — ${errMsg} (skipped; sweep continues).`);
+        tools.push({
+          tool: item.tool,
+          phase,
+          gate: "benchmark-proven",
+          benchmark: item.benchmark,
+          qualifiedModels: item.models.length,
+          benchmarkedModels: 0,
+          winner: null,
+          changed: false,
+          costUsd: 0,
+          written: false,
+          note: `ERRORED — ${errMsg} (skipped; sweep continued)`,
+        });
+        continue;
       }
       for (const id of item.models) benchmarkedModels.add(id);
 

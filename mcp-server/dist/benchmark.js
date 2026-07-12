@@ -218294,6 +218294,9 @@ function isZeroCostPriced(inputDollarsPerMillion, outputDollarsPerMillion) {
 function isFreeModeEligible(id, inputDollarsPerMillion, outputDollarsPerMillion) {
   return id.endsWith(":free") || isZeroCostPriced(inputDollarsPerMillion, outputDollarsPerMillion);
 }
+function freeSuffixOnly(ids) {
+  return ids.filter((id) => id.endsWith(":free"));
+}
 function resolveFreePool(configuredIds, catalog, opts) {
   const pricePerMillion = (m) => ({
     input: parseFloat(m.pricing?.prompt ?? "NaN") * 1e6,
@@ -227653,7 +227656,7 @@ async function runUpdateAll(opts, deps) {
     const candidatesForTool = /* @__PURE__ */ new Map();
     let ensembleCandidates;
     if (isFree) {
-      const { pool, autoDiscovered, rejected } = resolveFreePool(
+      const { pool: discoveredPool, autoDiscovered, rejected } = resolveFreePool(
         opts.configuredFreeModels,
         catalog,
         { autoDiscover: true, autoDiscoverTopN: opts.qualifyingTopN ?? 16 }
@@ -227666,16 +227669,18 @@ async function runUpdateAll(opts, deps) {
           `free-pool: configured non-':free' id(s) ${JSON.stringify(rejected)} are NOT priced at $0 by the live catalog (they would cost money) or are absent from it \u2014 fix the profile's free_models`
         );
       }
+      const pool = freeSuffixOnly(discoveredPool);
+      const nonFreeExcluded = discoveredPool.length - pool.length;
       if (pool.length === 0) {
         return abortResult(
           opts,
           ledger,
           catalog.length,
-          "free-pool: the live catalog currently offers no zero-cost model that meets the structural bar (structured output / context / output length) \u2014 nothing to benchmark"
+          "free-pool: the live catalog currently offers no zero-cost ':free' model that meets the structural bar (structured output / context / output length) \u2014 nothing to benchmark" + (nonFreeExcluded > 0 ? ` (${nonFreeExcluded} zero-cost non-':free' id(s) were excluded \u2014 unusable under free_only)` : "")
         );
       }
       progress(
-        `gate: free pool = ${pool.length} zero-cost model(s)` + (autoDiscovered.length > 0 ? ` (${autoDiscovered.length} auto-discovered)` : "") + "."
+        `gate: free pool = ${pool.length} ':free' model(s)` + (autoDiscovered.length > 0 ? ` (${freeSuffixOnly(autoDiscovered).length} auto-discovered)` : "") + (nonFreeExcluded > 0 ? `; excluded ${nonFreeExcluded} zero-cost non-':free' id(s) (unusable under free_only)` : "") + "."
       );
       ensembleCandidates = [...pool];
       for (const tool of registeredTools()) candidatesForTool.set(tool, [...pool]);
@@ -227907,7 +227912,22 @@ async function runUpdateAll(opts, deps) {
           });
           continue;
         }
-        throw err;
+        const errMsg = err instanceof Error ? err.message : String(err);
+        progress(`benchmark: ${item.tool} ERRORED \u2014 ${errMsg} (skipped; sweep continues).`);
+        tools.push({
+          tool: item.tool,
+          phase,
+          gate: "benchmark-proven",
+          benchmark: item.benchmark,
+          qualifiedModels: item.models.length,
+          benchmarkedModels: 0,
+          winner: null,
+          changed: false,
+          costUsd: 0,
+          written: false,
+          note: `ERRORED \u2014 ${errMsg} (skipped; sweep continued)`
+        });
+        continue;
       }
       for (const id of item.models) benchmarkedModels.add(id);
       let written = false;
