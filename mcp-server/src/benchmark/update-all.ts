@@ -41,6 +41,7 @@ import {
   type OpenRouterModel,
   type QualifiedModel,
 } from "./discover.js";
+import { FreeModeSkipError } from "./free-mode.js";
 import {
   TOOL_MODEL_REGISTRY,
   registeredTools,
@@ -652,6 +653,29 @@ export async function runUpdateAll(
           // remaining tool as SKIPPED. Breaking here would leave them with no row at all
           // — an omission the reader could easily misread as "fine, nothing to report",
           // which is precisely the silence this whole module refuses.
+          continue;
+        }
+        if (err instanceof FreeModeSkipError) {
+          // EXPECTED under `--free`, NOT a bug: this tool's benchmark has no ':free'
+          // model it may send (its only model is the paid incumbent), so it cannot be
+          // benchmarked in this phase. Say exactly that. The cost-safety guard's
+          // "this is a bug, please report it" wording stays reserved for a GENUINE
+          // leak — a paid id reaching the sender — which falls through to the ERRORED
+          // path below and SHOULD read as a bug.
+          progress(`benchmark: ${item.tool} skipped under free mode: ${err.message} (sweep continues).`);
+          tools.push({
+            tool: item.tool,
+            phase,
+            gate: "benchmark-proven",
+            benchmark: item.benchmark,
+            qualifiedModels: item.models.length,
+            benchmarkedModels: 0,
+            winner: null,
+            changed: false,
+            costUsd: 0,
+            written: false,
+            note: `skipped under free mode: ${err.message}`,
+          });
           continue;
         }
         // RESILIENCE (defense in depth — TRDD free-pool fix): a per-tool benchmark that

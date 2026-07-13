@@ -7372,11 +7372,19 @@ var require_dist = __commonJS({
   }
 });
 
+// src/benchmark/free-mode.ts
+var init_free_mode = __esm({
+  "src/benchmark/free-mode.ts"() {
+    "use strict";
+  }
+});
+
 // src/benchmark/discover.ts
 var DEFAULT_CRITERIA;
 var init_discover = __esm({
   "src/benchmark/discover.ts"() {
     "use strict";
+    init_free_mode();
     DEFAULT_CRITERIA = {
       category: "programming",
       minContextTokens: 128e3,

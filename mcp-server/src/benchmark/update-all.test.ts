@@ -24,6 +24,7 @@ import {
   type EnsembleSweepRun,
 } from "./update-all.js";
 import { registeredTools } from "../model-qualification/registry.js";
+import { FreeModeSkipError } from "./free-mode.js";
 import type { OpenRouterModel } from "./discover.js";
 import type { BenchmarkWorkload } from "./workload-types.js";
 import type { FetchImpl } from "../security_scan/judge.js";
@@ -418,6 +419,54 @@ describe("--update-all", () => {
     expect(r.tools.map((t) => t.tool).sort()).toEqual(registeredTools().sort());
     // A tool AFTER the throw still produced a real winner.
     expect(r.tools.some((t) => t.winner !== null)).toBe(true);
+  });
+
+  it("reports an HONEST skip — never 'please report it' — when a tool cannot be benchmarked under free mode", async () => {
+    // THE BUG: under --free, security_scan's benchmark threw the cost-safety guard's
+    // message (which ends "this is a bug, please report it") because it always ran its
+    // PAID incumbent as a baseline. That wording is for a genuine leak; "this tool has
+    // no ':free' model to benchmark" is an EXPECTED condition and must read as a skip.
+    const progressLines: string[] = [];
+    const { deps, toolCalls } = spyDeps({
+      runToolBenchmark: async ({ tool, models }) => {
+        toolCalls.push(tool);
+        if (tool === "security_scan") {
+          throw new FreeModeSkipError(
+            "security_scan",
+            "qwen/qwen-2.5-7b-instruct",
+            "security_scan requires non-free model 'qwen/qwen-2.5-7b-instruct' — no ':free' model is available to benchmark under free_only",
+          );
+        }
+        return {
+          recommendedModelId: models[0] ?? "v/incumbent",
+          changed: true,
+          eligibleCount: models.length,
+          costUsd: 0,
+          reportPath: join(root, `${tool}.md`),
+        };
+      },
+    });
+    const r = await runUpdateAll(
+      baseOpts({ mode: "free", budgetUsd: 0, onProgress: (m) => progressLines.push(m) }),
+      deps,
+    );
+
+    expect(r.ok).toBe(true);
+    expect(r.aborted).toBeNull();
+    const row = r.tools.find((t) => t.tool === "security_scan");
+    expect(row?.note).toContain("skipped under free mode:");
+    expect(row?.note).toContain("requires non-free model 'qwen/qwen-2.5-7b-instruct'");
+    expect(row?.note).not.toContain("please report it");
+    expect(row?.note).not.toContain("ERRORED");
+    expect(row?.benchmarkedModels).toBe(0);
+    expect(row?.winner).toBeNull();
+    expect(row?.written).toBe(false);
+    // The skip is honest in the operator-facing stream too, and the sweep continued.
+    expect(progressLines.join("\n")).toContain("security_scan skipped under free mode:");
+    expect(progressLines.join("\n")).not.toContain("please report it");
+    expect(r.tools.some((t) => t.winner !== null)).toBe(true);
+    expect(r.tools.map((t) => t.tool).sort()).toEqual(registeredTools().sort());
+    expect(r.spentUsd).toBe(0);
   });
 
   // ── P4: the spend cap ────────────────────────────────────────────────────

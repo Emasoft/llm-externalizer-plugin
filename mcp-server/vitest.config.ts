@@ -128,6 +128,10 @@ export default defineConfig({
       'src/benchmark/security-triage/live.test.ts',
       // security-triage casesToGroups — pure cases→DedupGroup transform (Part F wave 3).
       'src/benchmark/security-triage/runner.test.ts',
+      // security-triage model ROUTING + free_only — HERMETIC end-to-end of the real
+      // orchestrator (fake catalog + judge FetchImpl only): the candidate under test is
+      // the model actually sent, and free mode never sends the paid incumbent.
+      'src/benchmark/security-triage/free-mode.test.ts',
       // security-triage P4 pre-flight workload description — derives callsPerModel /
       // promptCharsPerModel from the real golden dataset + the real judge prompt
       // builders. No network.

@@ -250415,6 +250415,21 @@ import {
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 
+// src/benchmark/free-mode.ts
+function isFreeSuffixModelId(id) {
+  return id.endsWith(":free");
+}
+var FreeModeSkipError = class extends Error {
+  tool;
+  nonFreeModelId;
+  constructor(tool, nonFreeModelId, message) {
+    super(message);
+    this.name = "FreeModeSkipError";
+    this.tool = tool;
+    this.nonFreeModelId = nonFreeModelId;
+  }
+};
+
 // src/benchmark/discover.ts
 var DEFAULT_CRITERIA = {
   category: "programming",
@@ -256156,6 +256171,29 @@ var DEFAULT_TRIAGE_THRESHOLDS = {
   minScore: 0.5,
   maxErrorRate: 0.15
 };
+function notBenchmarkedScore(modelId, total, reason) {
+  return {
+    modelId,
+    total,
+    scoredCount: 0,
+    erroredCount: 0,
+    errorRate: 0,
+    correctCount: 0,
+    correctRate: 0,
+    overFlagCount: 0,
+    overFlagRate: 0,
+    underFlagCount: 0,
+    underFlagRate: 0,
+    appropriatelyUncertainCount: 0,
+    criticalCount: 0,
+    criticalUnderFlags: 0,
+    score: 0,
+    inconclusive: true,
+    pass: false,
+    failReasons: [reason],
+    perCase: []
+  };
+}
 function scoreTriage(modelId, cases, returned, thresholds = DEFAULT_TRIAGE_THRESHOLDS, failSafe) {
   const perCase = [];
   let correctCount = 0;
@@ -256376,6 +256414,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
   const incumbentId = opts.incumbentModelId ?? DEFAULT_MODEL;
   const progress = opts.onProgress ?? (() => {
   });
+  const freeOnly = getActiveFreeOnly();
   progress(`Loaded ${cases.length} golden cases (dataset ${datasetHash}).`);
   progress("Fetching OpenRouter model catalog\u2026");
   const catalog = await fetchProgrammingModels();
@@ -256442,12 +256481,40 @@ async function runSecurityTriageBenchmark(opts = {}) {
       );
     }
   }
+  if (freeOnly && ![...toAssess.keys()].some(isFreeSuffixModelId)) {
+    throw new FreeModeSkipError(
+      "security_scan",
+      incumbentId,
+      `security_scan requires non-free model '${incumbentId}' \u2014 no ':free' model is available to benchmark under free_only`
+    );
+  }
   progress(`Assessing ${toAssess.size} model(s) over ${cases.length} cases\u2026`);
   const cache = loadCache();
   const assessments = [];
   const scores = [];
+  const freeOnlySkipped = [];
   let totalCost = 0;
   for (const { model, qualified, disqualifyReason: disqualifyReason2 } of toAssess.values()) {
+    if (freeOnly && !isFreeSuffixModelId(model.id)) {
+      progress(`  ${model.id}: skipped (free_only \u2014 non-':free' model, not sent).`);
+      freeOnlySkipped.push(model.id);
+      const skippedScore = notBenchmarkedScore(
+        model.id,
+        cases.length,
+        "not benchmarked: free_only is active and this is not a ':free' model"
+      );
+      scores.push(skippedScore);
+      assessments.push({
+        modelId: model.id,
+        qualified: false,
+        disqualifyReason: "free_only active \u2014 non-':free' model not benchmarked",
+        inputDollarsPerMillion: model.inputDollarsPerMillion,
+        outputDollarsPerMillion: model.outputDollarsPerMillion,
+        latencyMs: 0,
+        triage: skippedScore
+      });
+      continue;
+    }
     const key = cacheKey(model.id, today(), datasetHash);
     const cached2 = cache[key];
     let score;
@@ -256524,6 +256591,11 @@ async function runSecurityTriageBenchmark(opts = {}) {
     caseCount: cases.length,
     thresholds,
     incumbent: { modelId: incumbentId, inputDollarsPerMillion: incumbentIn, outputDollarsPerMillion: incumbentOut },
+    freeOnly,
+    // The models free_only refused to send (paid ids — typically the incumbent
+    // itself). Recorded so a free-mode report never LOOKS like the incumbent was
+    // re-scored when it was not.
+    freeOnlySkipped,
     recommendedModelId: selection.recommendedModelId,
     changed: selection.changed,
     reason: selection.reason,
@@ -256561,7 +256633,8 @@ async function runSecurityTriageBenchmark(opts = {}) {
     thresholds,
     assessments,
     selection,
-    totalCost
+    totalCost,
+    freeOnlySkipped
   });
   const mtmp = `${mdReportPath}.tmp.${process.pid}`;
   writeFileSync4(mtmp, md, "utf-8");
@@ -256587,6 +256660,11 @@ function buildReportMarkdown(args) {
   lines.push(`**Incumbent default:** \`${args.incumbentId}\` (in $${args.incumbentIn.toFixed(3)}/M, out $${args.incumbentOut.toFixed(3)}/M)`);
   lines.push(`**Pass gate:** zero critical under-flags AND score \u2265 ${args.thresholds.minScore.toFixed(2)}`);
   lines.push(`**Total LLM spend:** $${args.totalCost.toFixed(6)}`);
+  if (args.freeOnlySkipped.length > 0) {
+    lines.push(
+      `**free_only active:** ${args.freeOnlySkipped.length} non-\`:free\` model(s) were NOT benchmarked (${args.freeOnlySkipped.map((id) => `\`${id}\``).join(", ")}) \u2014 free mode may not send a paid model. They appear below as unbenchmarked (score 0, INCONCLUSIVE), NOT as failures.`
+    );
+  }
   lines.push("");
   lines.push(`## Recommendation`);
   lines.push("");

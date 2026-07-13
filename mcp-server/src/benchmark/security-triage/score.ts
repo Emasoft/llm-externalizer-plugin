@@ -99,6 +99,44 @@ export const DEFAULT_TRIAGE_THRESHOLDS: TriageThresholds = {
 };
 
 /**
+ * The score for a model that was NOT benchmarked at all (today: a non-':free'
+ * model under a free_only profile, which cannot legally be sent).
+ *
+ * Why a dedicated constructor instead of `scoreTriage(id, [], new Map())`: over an
+ * EMPTY case list the scorer produces zero failReasons, hence `pass: true` — it
+ * would advertise an UNBENCHMARKED model as having cleared the safety gate. This
+ * returns the opposite and honest shape: `inconclusive` (nothing was measured),
+ * `pass: false`, and the reason it was not run.
+ */
+export function notBenchmarkedScore(
+  modelId: string,
+  total: number,
+  reason: string,
+): TriageScore {
+  return {
+    modelId,
+    total,
+    scoredCount: 0,
+    erroredCount: 0,
+    errorRate: 0,
+    correctCount: 0,
+    correctRate: 0,
+    overFlagCount: 0,
+    overFlagRate: 0,
+    underFlagCount: 0,
+    underFlagRate: 0,
+    appropriatelyUncertainCount: 0,
+    criticalCount: 0,
+    criticalUnderFlags: 0,
+    score: 0,
+    inconclusive: true,
+    pass: false,
+    failReasons: [reason],
+    perCase: [],
+  };
+}
+
+/**
  * Score a model's verdicts over the golden dataset. `returned` maps every
  * case id → the verdict the model produced (the runner guarantees one verdict
  * per case — the judge never throws, it fail-safes to a verdict). A case id

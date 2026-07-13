@@ -31,7 +31,8 @@ import {
   type OpenRouterModel,
   type QualifiedModel,
 } from "../discover.js";
-import { getConfigDir } from "../../config.js";
+import { getConfigDir, getActiveFreeOnly } from "../../config.js";
+import { FreeModeSkipError, isFreeSuffixModelId } from "../free-mode.js";
 import { resolveProjectMainRoot } from "../../project-root.js";
 import { KNOWN_PRICING, type ModelPricing } from "../../mass_scouting/cost-estimate.js";
 import type { FetchImpl } from "../../security_scan/judge.js";
@@ -44,6 +45,7 @@ import { BENCHMARK_RUBRICS, loadDataset, resolveDatasetPath, type SecurityTriage
 import { runTriageBenchmarkOnModel } from "./runner.js";
 import {
   DEFAULT_TRIAGE_THRESHOLDS,
+  notBenchmarkedScore,
   scoreTriage,
   type TriageScore,
   type TriageThresholds,
@@ -273,6 +275,7 @@ export async function runSecurityTriageBenchmark(
   const thresholds = opts.thresholds ?? DEFAULT_TRIAGE_THRESHOLDS;
   const incumbentId = opts.incumbentModelId ?? DEFAULT_MODEL;
   const progress = opts.onProgress ?? (() => {});
+  const freeOnly = getActiveFreeOnly();
 
   progress(`Loaded ${cases.length} golden cases (dataset ${datasetHash}).`);
 
@@ -366,15 +369,60 @@ export async function runSecurityTriageBenchmark(
     }
   }
 
+  // 4b. free_only PRE-condition (never a replacement for the send-time chokepoint).
+  //     Under free_only, `judgeGroups` calls assertFreeOnlyModel and THROWS on any
+  //     non-':free' id — and step 4 ALWAYS adds the paid incumbent (DEFAULT_MODEL).
+  //     That is what killed the whole `--update-all --free` sweep here even though
+  //     every CANDIDATE was ':free': the throw came from the incumbent's own
+  //     baseline run, not from a candidate. Non-':free' models are therefore skipped
+  //     per-model below (the pattern search-existing/scan-folder already use). If
+  //     NOTHING ':free' remains, this benchmark genuinely cannot run under free mode
+  //     — report that as a typed, expected skip rather than letting a paid id reach
+  //     the guard, whose "please report it" wording is reserved for a real leak.
+  if (freeOnly && ![...toAssess.keys()].some(isFreeSuffixModelId)) {
+    throw new FreeModeSkipError(
+      "security_scan",
+      incumbentId,
+      `security_scan requires non-free model '${incumbentId}' — no ':free' model is available to benchmark under free_only`,
+    );
+  }
+
   progress(`Assessing ${toAssess.size} model(s) over ${cases.length} cases…`);
 
   // 5. Run + score each model (sequential — avoids stacking rate-limit hits).
   const cache = loadCache();
   const assessments: CandidateAssessment[] = [];
   const scores: TriageScore[] = [];
+  const freeOnlySkipped: string[] = [];
   let totalCost = 0;
 
   for (const { model, qualified, disqualifyReason } of toAssess.values()) {
+    // free_only: never SEND a non-':free' model (the judge's assertFreeOnlyModel
+    // would throw and abort the sweep, and OpenRouter would bill it). Record it as
+    // a $0, UNBENCHMARKED entry so the report still accounts for it — it is
+    // disqualified, so it can never become the free-mode default, and the incumbent
+    // still serves as the cost baseline / fallback in the selection gate.
+    if (freeOnly && !isFreeSuffixModelId(model.id)) {
+      progress(`  ${model.id}: skipped (free_only — non-':free' model, not sent).`);
+      freeOnlySkipped.push(model.id);
+      const skippedScore = notBenchmarkedScore(
+        model.id,
+        cases.length,
+        "not benchmarked: free_only is active and this is not a ':free' model",
+      );
+      scores.push(skippedScore);
+      assessments.push({
+        modelId: model.id,
+        qualified: false,
+        disqualifyReason: "free_only active — non-':free' model not benchmarked",
+        inputDollarsPerMillion: model.inputDollarsPerMillion,
+        outputDollarsPerMillion: model.outputDollarsPerMillion,
+        latencyMs: 0,
+        triage: skippedScore,
+      });
+      continue;
+    }
+
     const key = cacheKey(model.id, today(), datasetHash);
     const cached = cache[key];
     let score: TriageScore;
@@ -461,6 +509,11 @@ export async function runSecurityTriageBenchmark(
     caseCount: cases.length,
     thresholds,
     incumbent: { modelId: incumbentId, inputDollarsPerMillion: incumbentIn, outputDollarsPerMillion: incumbentOut },
+    freeOnly,
+    // The models free_only refused to send (paid ids — typically the incumbent
+    // itself). Recorded so a free-mode report never LOOKS like the incumbent was
+    // re-scored when it was not.
+    freeOnlySkipped,
     recommendedModelId: selection.recommendedModelId,
     changed: selection.changed,
     reason: selection.reason,
@@ -500,6 +553,7 @@ export async function runSecurityTriageBenchmark(
     assessments,
     selection,
     totalCost,
+    freeOnlySkipped,
   });
   const mtmp = `${mdReportPath}.tmp.${process.pid}`;
   writeFileSync(mtmp, md, "utf-8");
@@ -603,6 +657,8 @@ function buildReportMarkdown(args: {
   assessments: readonly CandidateAssessment[];
   selection: SelectionResult;
   totalCost: number;
+  /** Paid ids free_only refused to send (empty unless free_only is active). */
+  freeOnlySkipped: readonly string[];
 }): string {
   const lines: string[] = [];
   lines.push("# security_scan triage — model benchmark");
@@ -612,6 +668,13 @@ function buildReportMarkdown(args: {
   lines.push(`**Incumbent default:** \`${args.incumbentId}\` (in $${args.incumbentIn.toFixed(3)}/M, out $${args.incumbentOut.toFixed(3)}/M)`);
   lines.push(`**Pass gate:** zero critical under-flags AND score ≥ ${args.thresholds.minScore.toFixed(2)}`);
   lines.push(`**Total LLM spend:** $${args.totalCost.toFixed(6)}`);
+  if (args.freeOnlySkipped.length > 0) {
+    lines.push(
+      `**free_only active:** ${args.freeOnlySkipped.length} non-\`:free\` model(s) were NOT benchmarked ` +
+        `(${args.freeOnlySkipped.map((id) => `\`${id}\``).join(", ")}) — free mode may not send a paid model. ` +
+        `They appear below as unbenchmarked (score 0, INCONCLUSIVE), NOT as failures.`,
+    );
+  }
   lines.push("");
   lines.push(`## Recommendation`);
   lines.push("");

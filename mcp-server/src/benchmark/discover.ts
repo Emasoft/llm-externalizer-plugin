@@ -28,6 +28,8 @@
  * sits just above the cap.
  */
 
+import { isFreeSuffixModelId } from "./free-mode.js";
+
 export interface OpenRouterModel {
   id: string;
   name?: string;
@@ -428,7 +430,9 @@ export function isFreeModeEligible(
  * (`endsWith(":free")`) so the pool matches precisely what can actually be sent.
  */
 export function freeSuffixOnly(ids: readonly string[]): string[] {
-  return ids.filter((id) => id.endsWith(":free"));
+  // Delegates to the ONE predicate (free-mode.ts) so the pool filter, the
+  // per-benchmark model skip, and assertFreeOnlyModel can never drift apart.
+  return ids.filter(isFreeSuffixModelId);
 }
 
 export interface FreePoolResolution {
