@@ -1,6 +1,70 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [10.2.2] - 2026-07-13
+
+### Fixed
+
+- Fix(security-triage): never send the paid incumbent under free_only; honest skip, not "please report it"
+
+WHY: `--update-all --free` died on security_scan with the cost-safety guard's
+hard-bug message naming qwen/qwen-2.5-7b-instruct — a model that was NOT among
+the 16 ':free' candidates it was sweeping. Root cause: the orchestrator ALWAYS
+adds the tool's paid DEFAULT (the incumbent baseline) to the assessed set, and
+under free_only judgeGroups' assertFreeOnlyModel refuses to send it and throws.
+The throw came from the incumbent's OWN baseline run, not from a candidate.
+
+NOT a scoring bug: runTriageBenchmarkOnModel passes the model UNDER TEST as
+judgeGroups' `model`, so every candidate was always scored on itself. The
+default only ever appeared as its own baseline row. Past benchmark results are
+valid. A new hermetic end-to-end test now fences that property.
+
+Fixes:
+- security-triage/index.ts: under free_only, skip every non-':free' model
+  (record it $0, unbenchmarked, disqualified) instead of sending it — the guard
+  pattern search-existing/scan-folder already use. If NOTHING ':free' remains,
+  throw the new typed FreeModeSkipError.
+- benchmark/free-mode.ts (new): the ONE ':free' predicate (identical to
+  assertFreeOnlyModel's, so pool filter and guard cannot drift) + FreeModeSkipError.
+  discover.ts's freeSuffixOnly now delegates to it.
+- update-all.ts: a FreeModeSkipError is reported as "skipped under free mode: …".
+  The guard's "this is a bug, please report it" wording stays reserved for a
+  GENUINE leak (a paid id reaching the sender), which still lands in ERRORED.
+- score.ts: notBenchmarkedScore() — scoreTriage over an EMPTY case list returns
+  pass=true (no failReasons), which would advertise an unbenchmarked model as
+  having cleared the safety gate. Unbenchmarked is now inconclusive + pass=false.
+
+assertFreeOnlyModel is UNCHANGED — it is the chokepoint; this only stops paid
+ids from ever reaching it.
+
+Tests: +4 (routing regression, free-mode ':free' candidate benchmarked with the
+incumbent never sent, typed honest skip, update-all honest-skip row). 1553 pass.
+
+- Fix(update-all): exclude non-:free router models + per-model resilience
+
+A real `--update-all --free` run aborted the ENTIRE multi-tool sweep with
+'free_only cost-safety: refusing to send non-free model openrouter/free'. Two
+defects, found only by running it for real (a dry-run cannot surface them):
+
+- Root cause: resolveFreePool admits ANY zero-cost-priced catalog model via
+  isZeroCostPriced, including 'openrouter/free' — a ROUTER pseudo-model with no
+  ':free' suffix. The send-time guard assertFreeOnlyModel (correctly) admits
+  only ':free'-suffixed ids, so it threw. Fix A: freeSuffixOnly() filters the
+  pool to ':free'-only at the point of construction, so EVERY consumer (ensemble
+  + per-tool candidates + the free_models write-back) is protected — mirroring
+  the guard's own contract. openrouter/free / openrouter/auto / no-suffix betas
+  are dropped even when the catalog prices them at 0.
+- Resilience: the per-tool loop RETHREW a single model's error, killing the
+  whole sweep (30+ min of prior benchmarking wasted). Fix B: a per-tool throw is
+  now recorded ERRORED and the loop continues; only a genuine whole-run failure
+  (budget, catalog fetch, ensemble sweep) aborts. Mirrors the ensemble runner's
+  never-throw contract. The cost-safety guard itself is deliberately NOT weakened.
+
++5 tests (freeSuffixOnly units; Fix A excludes openrouter/free from every
+candidate set; Fix B: a throwing tool is ERRORED and the sweep still ends [OK]).
+Real re-run: free pool = ':free'-only, zero openrouter/free aborts, 429s tolerated.
+
+
 ## [10.2.1] - 2026-07-11
 
 ### Fixed
