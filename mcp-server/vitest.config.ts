@@ -43,6 +43,10 @@ export default defineConfig({
       'src/rate-limiter.test.ts',
       // Free-only switch — config core + context-floor filter (TRDD-8b6b3646).
       'src/free-only.test.ts',
+      // Free-model ROTATION — the cross-call cooldown registry + the rotation
+      // executor. Covers the daily-quota-vs-transient split, the "cooling models
+      // are deferred, never dropped" invariant, and real on-disk persistence.
+      'src/free-rotation.test.ts',
       // Free-pool auto-bench trigger — fire-and-forget detached child (TRDD-f1510055).
       'src/free-pool-auto-bench.test.ts',
       // Auto-free on low balance (<$1) — threshold/model/pool helpers (TRDD-542bdbef).

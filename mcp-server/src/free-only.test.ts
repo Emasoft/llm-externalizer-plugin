@@ -22,6 +22,7 @@ import {
   callEnsembleSlotWithRotation,
   FREE_FLOOR_MIN_CONTEXT_TOKENS,
 } from "./index";
+import { memoryRotationStore } from "./free-rotation";
 import { runBenchmarkOnModel } from "./benchmark/runner";
 import type { QualifiedModel } from "./benchmark/discover";
 import { failedModelsFromCache } from "./benchmark/security-triage/index";
@@ -278,6 +279,11 @@ describe("callEnsembleSlotWithRotation — free-model fallback rotation (Phase 3
     truncated: false,
   });
   const slot = (id: string) => ({ id, maxOutput: 1000 });
+  // Every rotation test injects a RAM-only cooldown registry. The production
+  // default is the PERSISTENT one, and a unit test must neither write to the
+  // developer's real ~/.llm-externalizer nor leak a cooldown into the next test
+  // (a model cooled by one case would be skipped by the next, silently).
+  const rot = () => ({ store: memoryRotationStore() });
 
   it("returns the primary result when it succeeds — no fallback claimed", async () => {
     let claims = 0;
@@ -287,6 +293,7 @@ describe("callEnsembleSlotWithRotation — free-model fallback rotation (Phase 3
       [slot("fb0:free")],
       () => claims++,
       callOne,
+      rot(),
     );
     expect(r.error).toBe(false);
     expect(r.model).toBe("p0:free");
@@ -305,6 +312,7 @@ describe("callEnsembleSlotWithRotation — free-model fallback rotation (Phase 3
       [slot("fb0:free")],
       () => next++,
       callOne,
+      rot(),
     );
     expect(r.error).toBe(false);
     expect(r.model).toBe("fb0:free");
@@ -319,6 +327,7 @@ describe("callEnsembleSlotWithRotation — free-model fallback rotation (Phase 3
       [slot("fb0:free"), slot("fb1:free")],
       () => next++,
       callOne,
+      rot(),
     );
     expect(r.error).toBe(false);
     expect(r.model).toBe("fb1:free");
@@ -335,6 +344,7 @@ describe("callEnsembleSlotWithRotation — free-model fallback rotation (Phase 3
       [slot("fb0:free")],
       () => next++,
       callOne,
+      rot(),
     );
     expect(r.error).toBe(false);
     expect(r.model).toBe("fb0:free");
@@ -348,6 +358,7 @@ describe("callEnsembleSlotWithRotation — free-model fallback rotation (Phase 3
       [slot("fb0:free")],
       () => claims++,
       callOne,
+      rot(),
     );
     expect(r.error).toBe(true);
     expect(r.model).toBe("p0:free"); // never rotated
@@ -362,21 +373,25 @@ describe("callEnsembleSlotWithRotation — free-model fallback rotation (Phase 3
       [slot("fb0:free")],
       () => next++,
       callOne,
+      rot(),
     );
     expect(r.error).toBe(true);
     expect(r.model).toBe("fb0:free"); // rotated once, then the pool ran out
+    expect(r.content).toMatch(/All 2 approved free model\(s\) are unavailable/);
   });
 
   it("a SHARED claimFallback stops two parallel slots grabbing the same fallback", async () => {
     let next = 0;
     const claim = () => next++; // shared atomic counter across both slots
+    // ONE registry shared by both slots — exactly how ensembleStreaming wires it.
+    const shared = rot();
     const callOne = async (model: string) =>
       model === "p0:free" || model === "p1:free"
         ? sr(model, "429 too many requests", "error")
         : sr(model, "ok", "stop");
     const [a, b] = await Promise.all([
-      callEnsembleSlotWithRotation(slot("p0:free"), [slot("fb0:free"), slot("fb1:free")], claim, callOne),
-      callEnsembleSlotWithRotation(slot("p1:free"), [slot("fb0:free"), slot("fb1:free")], claim, callOne),
+      callEnsembleSlotWithRotation(slot("p0:free"), [slot("fb0:free"), slot("fb1:free")], claim, callOne, shared),
+      callEnsembleSlotWithRotation(slot("p1:free"), [slot("fb0:free"), slot("fb1:free")], claim, callOne, shared),
     ]);
     // Each slot landed on a DISTINCT fallback — no double-spend of one model's quota.
     expect(new Set([a.model, b.model])).toEqual(new Set(["fb0:free", "fb1:free"]));

@@ -183,6 +183,15 @@ import { resolveProjectMainRoot } from "./project-root.js";
 import { resolveEnsembleModelLimits } from "./ensemble-limits.js";
 import { benchmarkFailedModels } from "./benchmark/security-triage/index.js";
 import {
+  AllFreeModelsExhaustedError,
+  callWithFreeRotation,
+  classifyUnavailable,
+  getCooldownStore,
+  orderByAvailability,
+  type RotationCandidate,
+  type RotationHooks,
+} from "./free-rotation.js";
+import {
   fetchOpenRouterModelInfo,
   formatModelInfoMarkdown,
   formatModelInfoTable,
@@ -1628,6 +1637,99 @@ function batchReportFilename(
 // Runs the same prompt on multiple models in parallel, combines results.
 // When ensemble=false or backend is local, falls through to single-model call.
 
+/**
+ * True when EVERY LLM call must be served from the free pool: a `free_only`
+ * profile, OR a paid profile with auto-free engaged (balance under the threshold
+ * / a prior 402 — TRDD-542bdbef).
+ *
+ * Rotation keys off THIS, not off `freeOnly` alone. That was the bug: under
+ * auto-free, getEnsembleModels() already served the free pool while the rotation
+ * predicate still said "not a free profile", so the fallback list came out empty
+ * and the boot log's promise of "rotation on rate-limit" was simply false.
+ */
+function isFreeModeActive(): boolean {
+  return (activeResolved?.freeOnly ?? false) || autoFreeEngaged;
+}
+
+/**
+ * The APPROVED free pool as rotation candidates, in the user's preference order.
+ *
+ * "Approved" is exactly what filterFreeModels() means: benchmark-failed models
+ * are dropped, sub-floor-context models are dropped. So rotation can only ever
+ * land on a model the pipeline already vetted — never on an arbitrary free id.
+ *
+ * This builds the pool; it does NOT decide whether to USE it. Each call site
+ * gates that itself, because the two gates differ: the ensemble paths rotate
+ * only under free mode, while a ':free' modelOverride rotates even on a funded
+ * profile (an explicit `free: true` call is a free call, and its one pinned model
+ * hitting its daily cap should not be a hard failure). A paid call must never
+ * reach this pool — that would spend money the user did not ask to spend.
+ */
+function buildFreeRotationPool(
+  fileLineCount?: number,
+  exclude: ReadonlySet<string> = new Set(),
+): Array<RotationCandidate & { maxInputLines: number }> {
+  if (!activeResolved || getCurrentBackend().type !== "openrouter") return [];
+  // free_only pins its own pool; every other profile draws on autoFreePool,
+  // which is resolved at profile-load time (the profile's free_models, else the
+  // bundled FREE_POOL_SEED) and is therefore always populated.
+  const pool = activeResolved.freeOnly ? activeResolved.freeModels : autoFreePool;
+  const catalogById = new Map(openRouterModelCache.map((cm) => [cm.id, cm]));
+  const out: Array<RotationCandidate & { maxInputLines: number }> = [];
+  for (const id of filterFreeModels(pool, catalogById, benchmarkFailedModels())) {
+    if (exclude.has(id)) continue;
+    // Cost-safety: mirrors assertFreeOnlyModel's contract at the point where the
+    // rotation TARGET is chosen, so a router pseudo-model like `openrouter/free`
+    // (priced $0, but with no ':free' suffix) can never enter the rotation and
+    // blow up at send time — the exact failure that killed a 32-minute sweep.
+    if (!id.endsWith(":free")) continue;
+    const limits = resolveEnsembleModelLimits(
+      id,
+      catalogById.get(id)?.top_provider?.max_completion_tokens,
+    );
+    if (!fileLineCount || fileLineCount <= limits.maxInputLines) {
+      out.push({ id, ...limits });
+    }
+  }
+  return out;
+}
+
+/** One free-pool call with rotation, for the paths that have no ensemble slots
+ *  (a ':free' modelOverride, ensemble:false, or a file too large for every
+ *  ensemble primary). Throws AllFreeModelsExhaustedError only after every
+ *  approved free model has actually been tried and failed. */
+async function callSingleWithFreeRotation(
+  primary: RotationCandidate,
+  fallbacks: readonly RotationCandidate[],
+  messages: ChatMessage[],
+  options: Record<string, unknown>,
+): Promise<StreamingResult> {
+  return callWithFreeRotation<StreamingResult>(
+    primary,
+    fallbacks,
+    (model, maxOutput) =>
+      chatCompletionWithRetry(
+        messages,
+        {
+          ...options,
+          model,
+          maxTokens: Math.min(
+            (options.maxTokens as number | undefined) ?? maxOutput,
+            maxOutput,
+          ),
+        },
+        providerDeps,
+      ),
+    {
+      resultFailureDetail: (r) => (r.finishReason === "error" ? r.content : null),
+      onRotate: (from, _to, detail) =>
+        process.stderr.write(
+          `[llm-externalizer] Free model ${from} unavailable (${detail.split("\n")[0].slice(0, 120)}) — rotating to the next approved free model.\n`,
+        ),
+    },
+  );
+}
+
 async function ensembleStreaming(
   messages: ChatMessage[],
   options: {
@@ -1648,10 +1750,34 @@ async function ensembleStreaming(
 ): Promise<StreamingResult> {
   // T2.7 — snapshot once for the type gating below
   const backend = getCurrentBackend();
-  // Model override: skip ensemble entirely, use the specified model
+  const freeMode = isFreeModeActive();
+
+  // Model override: skip the ensemble, use the specified model.
+  //
+  // A ':free' override STILL ROTATES — and the gate here is the OVERRIDE's own
+  // ':free' suffix, NOT freeMode, on purpose: an explicit `free: true` call on a
+  // FUNDED profile is still a free call, and it used to pin the single
+  // FREE_MODEL_ID, so that model's daily cap was a hard failure while a whole
+  // approved pool sat unused. A PAID override (high_quality_scan) is left exactly
+  // as it was — rotating it could bill a second model the user never asked for,
+  // which is the one thing rotation must never do.
   if (options.modelOverride) {
+    if (options.modelOverride.endsWith(":free")) {
+      const primaryLimits = resolveEnsembleModelLimits(options.modelOverride, undefined);
+      const pool = buildFreeRotationPool(
+        fileLineCount,
+        new Set([options.modelOverride]),
+      );
+      return callSingleWithFreeRotation(
+        { id: options.modelOverride, maxOutput: primaryLimits.maxOutput },
+        pool,
+        messages,
+        options,
+      );
+    }
     return chatCompletionWithRetry(messages, { ...options, model: options.modelOverride }, providerDeps);
   }
+
   // Single-model path: ensemble off, not remote-ensemble, or no models configured
   const ensembleModels = getEnsembleModels();
   if (
@@ -1659,6 +1785,14 @@ async function ensembleStreaming(
     backend.type !== "openrouter" ||
     ensembleModels.length === 0
   ) {
+    // Free mode ONLY: one model at a time is still ONE model at a time —
+    // rotation is failover, not ensembling — so a rate-limited free model hands
+    // off to the next approved free one instead of failing the call. A funded
+    // profile keeps its own model and its existing backoff.
+    const pool = freeMode ? buildFreeRotationPool(fileLineCount) : [];
+    if (pool.length > 0) {
+      return callSingleWithFreeRotation(pool[0], pool.slice(1), messages, options);
+    }
     return chatCompletionWithRetry(messages, options, providerDeps);
   }
 
@@ -1667,37 +1801,36 @@ async function ensembleStreaming(
     (m) => !fileLineCount || fileLineCount <= m.maxInputLines,
   );
   if (models.length === 0) {
-    // File too large for all ensemble models — fall back to current model
+    // Every ensemble primary is too small for this file. Under free mode the
+    // approved pool may still hold a larger-context model BEYOND the top 3, so
+    // rotate over the size-filtered pool before giving up on the file.
+    const pool = freeMode ? buildFreeRotationPool(fileLineCount) : [];
+    if (pool.length > 0) {
+      return callSingleWithFreeRotation(pool[0], pool.slice(1), messages, options);
+    }
     return chatCompletionWithRetry(messages, options, providerDeps);
   }
 
-  // Free-only rate-limit fallback rotation (TRDD-8b6b3646 Phase 3). Free providers
+  // Free-mode rate-limit fallback rotation (TRDD-8b6b3646 Phase 3). Free providers
   // all impose a DAILY request cap, so when a slot's model is rate/daily-limited we
-  // rotate to the next FILTERED free model — the pool BEYOND the ensemble's top-3,
+  // rotate to the next APPROVED free model — the pool BEYOND the ensemble's top-3,
   // file-size-aware — rather than failing the slot. A shared atomic counter stops
   // two parallel slots grabbing the same fallback. Empty for non-free profiles.
-  const freeOnly = activeResolved?.freeOnly ?? false;
-  const fallbacks: Array<{ id: string; maxOutput: number; maxInputLines: number }> = [];
+  const primaryIds = new Set(models.map((m) => m.id));
+  const rawFallbacks = freeMode ? buildFreeRotationPool(fileLineCount, primaryIds) : [];
+  // Order the shared list ONCE, here — cooling models sink to the back but are
+  // never removed (a wrong cooldown may only reorder attempts). It MUST be done
+  // once for the whole call, not per slot: the slots share one index counter, so
+  // two slots resolving the same index to different models would let both grab
+  // the same model and starve another.
+  const { fresh, deferred } = orderByAvailability(
+    rawFallbacks,
+    getCooldownStore(),
+    Date.now(),
+  );
+  const fallbacks = [...fresh, ...deferred];
   let nextFallback = 0;
   const claimFallback = () => nextFallback++;
-  if (freeOnly && activeResolved) {
-    const catalogById = new Map(openRouterModelCache.map((cm) => [cm.id, cm]));
-    const primaryIds = new Set(models.map((m) => m.id));
-    for (const id of filterFreeModels(
-      activeResolved.freeModels,
-      catalogById,
-      benchmarkFailedModels(),
-    )) {
-      if (primaryIds.has(id)) continue; // already a primary slot
-      const limits = resolveEnsembleModelLimits(
-        id,
-        catalogById.get(id)?.top_provider?.max_completion_tokens,
-      );
-      if (!fileLineCount || fileLineCount <= limits.maxInputLines) {
-        fallbacks.push({ id, ...limits });
-      }
-    }
-  }
 
   // Single qualifying model AND no fallbacks to rotate to — no need to combine.
   if (models.length === 1 && fallbacks.length === 0) {
@@ -1729,8 +1862,9 @@ async function ensembleStreaming(
           },
           providerDeps,
         );
-      // Free-only: rotate to a fallback free model on a rate/daily-limit error.
-      if (freeOnly) {
+      // Free mode: rotate to another approved free model on a rate/daily-limit
+      // error — and remember, across calls, which ones are spent.
+      if (freeMode) {
         return callEnsembleSlotWithRotation(m, fallbacks, claimFallback, callOne);
       }
       try {
@@ -2014,50 +2148,41 @@ export function selectFreeEnsembleModels(
 
 /**
  * True when an error string indicates the model is UNAVAILABLE (now or for the
- * rest of the day) and a DIFFERENT model should be tried — the free_only ensemble
+ * rest of the day) and a DIFFERENT model should be tried — the free ensemble
  * rotates on this (TRDD-8b6b3646 Phase 3). Free providers ALL impose a daily
  * request cap, so daily-limit phrasing is explicitly covered: retrying the SAME
- * model after a daily 429 would just fail until the quota resets. Also covers
- * generic 429s, provider overload, and no-endpoints/404. PURE + offline-testable.
+ * model after a daily 429 would just fail until the quota resets.
+ *
+ * Delegates to free-rotation's classifier, which is the SINGLE source of truth —
+ * it also has to decide HOW LONG the model stays out (a spent daily quota needs
+ * a UTC-midnight cooldown, a transient 429 needs seconds), and two independent
+ * phrase lists would inevitably drift apart.
  */
 export function isModelUnavailableError(detail: string): boolean {
-  const s = (detail || "").toLowerCase();
-  return (
-    s.includes("429") ||
-    s.includes("rate limit") ||
-    s.includes("rate-limit") ||
-    s.includes("rate_limit") ||
-    s.includes("ratelimit") ||
-    s.includes("too many requests") ||
-    s.includes("quota") ||
-    s.includes("daily limit") ||
-    s.includes("limit exceeded") ||
-    s.includes("exceeded your") ||
-    s.includes("per-day") ||
-    s.includes("per day") ||
-    s.includes("free-models-per-day") ||
-    s.includes("no endpoints") ||
-    s.includes("no allowed providers") ||
-    s.includes("not found") ||
-    s.includes("404") ||
-    s.includes("502") ||
-    s.includes("503") ||
-    s.includes("overloaded") ||
-    s.includes("temporarily unavailable")
-  );
+  return classifyUnavailable(detail) !== null;
 }
 
 /** One ensemble slot with free-model fallback rotation (TRDD-8b6b3646 Phase 3).
- *  Tries `primary`; if the call fails with an unavailable/rate-limit/daily-limit
- *  error, claims the next shared fallback and retries — until a model succeeds or
- *  the fallback pool is exhausted. `claimFallback` is a shared atomic counter
- *  (`idx = next++`, safe in single-threaded JS) so parallel slots never grab the
- *  same fallback. Pure given `callOne` — offline-testable with a mock. */
+ *  Tries `primary`; on an unavailable/rate-limit/daily-limit error it claims the
+ *  next SHARED fallback (`claimFallback` = `idx = next++`, atomic in
+ *  single-threaded JS, so parallel slots never grab the same one) and retries —
+ *  until a model succeeds or every approved free model has been tried.
+ *
+ *  The rotation itself now lives in free-rotation.ts, which ALSO remembers across
+ *  calls which models are spent — so a 50-file scan stops paying one 429 per file
+ *  to re-discover that yesterday's primary is daily-capped. This wrapper only
+ *  adapts the generic rotation to the ensemble slot's value shape (a failure
+ *  arrives as `finishReason: "error"`, and an exhausted pool must come back as an
+ *  error ENTRY, not a throw, so the other slots' results still survive).
+ *
+ *  `hooks` is the test seam: pass `{ store: memoryRotationStore() }` to keep a
+ *  unit test off the real ~/.llm-externalizer registry. */
 export async function callEnsembleSlotWithRotation(
   primary: { id: string; maxOutput: number },
   fallbacks: ReadonlyArray<{ id: string; maxOutput: number }>,
   claimFallback: () => number,
   callOne: (model: string, maxOutput: number) => Promise<StreamingResult>,
+  hooks: RotationHooks<StreamingResult> = {},
 ): Promise<{
   model: string;
   content: string;
@@ -2065,37 +2190,44 @@ export async function callEnsembleSlotWithRotation(
   truncated: boolean;
   error: boolean;
 }> {
-  let cur = primary;
-  for (;;) {
-    try {
-      const resp = await callOne(cur.id, cur.maxOutput);
-      const isUnavail =
-        resp.finishReason === "error" && isModelUnavailableError(resp.content);
-      if (isUnavail) {
-        const idx = claimFallback();
-        if (idx >= 0 && idx < fallbacks.length) {
-          cur = fallbacks[idx];
-          continue;
-        }
-      }
-      return {
-        model: cur.id,
-        content: resp.content,
-        usage: resp.usage,
-        truncated: resp.truncated,
-        error: resp.finishReason === "error",
-      };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (isModelUnavailableError(msg)) {
-        const idx = claimFallback();
-        if (idx >= 0 && idx < fallbacks.length) {
-          cur = fallbacks[idx];
-          continue;
-        }
-      }
-      return { model: cur.id, content: `ERROR: ${msg}`, usage: undefined, truncated: false, error: true };
+  let attempted = primary.id;
+  try {
+    const resp = await callWithFreeRotation<StreamingResult>(
+      primary,
+      fallbacks,
+      callOne,
+      {
+        ...hooks,
+        onAttempt: (id) => {
+          attempted = id;
+          hooks.onAttempt?.(id);
+        },
+        resultFailureDetail: (r) => (r.finishReason === "error" ? r.content : null),
+        onRotate:
+          hooks.onRotate ??
+          ((from, _to, detail) =>
+            process.stderr.write(
+              `[llm-externalizer] Free model ${from} unavailable (${detail.split("\n")[0].slice(0, 120)}) — rotating to the next approved free model.\n`,
+            )),
+      },
+      claimFallback,
+    );
+    return {
+      model: attempted,
+      content: resp.content,
+      usage: resp.usage,
+      truncated: resp.truncated,
+      error: resp.finishReason === "error",
+    };
+  } catch (err) {
+    if (err instanceof AllFreeModelsExhaustedError) {
+      // Report the LAST model actually attempted, so the ensemble's
+      // "Unavailable models" section names something real.
+      const last = err.tried[err.tried.length - 1] ?? primary.id;
+      return { model: last, content: `ERROR: ${err.message}`, usage: undefined, truncated: false, error: true };
     }
+    const msg = err instanceof Error ? err.message : String(err);
+    return { model: primary.id, content: `ERROR: ${msg}`, usage: undefined, truncated: false, error: true };
   }
 }
 
