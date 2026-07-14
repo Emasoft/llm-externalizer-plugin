@@ -67,6 +67,11 @@ import {
   getActiveFreeOnly,
 } from "../config";
 import type { OpenRouterModel } from "../benchmark/discover";
+import {
+  rotationJournalMark,
+  rotationJournalSince,
+  withFreeRotation,
+} from "../free-rotation";
 import { resolveProjectMainRoot } from "../project-root";
 
 // ── Public types ───────────────────────────────────────────────────────
@@ -469,7 +474,7 @@ function parseFilterToken(token: string): SearchFilter | { error: string } {
 
 // ── Real-fetch adapter ─────────────────────────────────────────────────
 
-const realFetch: FetchImpl = async (url, init) => {
+const rawFetch: FetchImpl = async (url, init) => {
   const res = await fetch(url, init);
   return {
     ok: res.ok,
@@ -478,6 +483,21 @@ const realFetch: FetchImpl = async (url, init) => {
     text: () => res.text(),
   };
 };
+
+/**
+ * The production adapter, with free-model rotation baked in — mass_scout is the
+ * heaviest free-tier consumer in the tool (one call per file, thousands of files),
+ * so it is the likeliest thing in the codebase to meet a free model's DAILY cap
+ * mid-job. Without rotation that cap simply ends the job: every remaining file
+ * exhausts its retry budget against the same spent model.
+ *
+ * Wrapping the adapter — rather than threading a model choice through scout.ts's
+ * worker pool — leaves the pipeline, the retries, and the resume/checkpoint logic
+ * untouched, and covers all four of this file's send sites at once.
+ * Under a paid profile the wrapper is a straight pass-through; tests inject their
+ * own fetchImpl and never see it.
+ */
+const realFetch: FetchImpl = withFreeRotation(rawFetch);
 
 /**
  * fetchProviderContext expects a slimmer fetcher signature than scout's
@@ -813,6 +833,9 @@ async function runScout(
     );
   }
   const fetchImpl = opts.fetchImpl ?? realFetch;
+  // Mark the rotation send-log before any request, so the report can tell which
+  // free models actually answered if the adapter rotated during this job.
+  const rotationMark = rotationJournalMark();
 
   // Live context-window override — opt-in; same semantics as estimate.
   // Wired here too so a one-shot `scout` (without a preceding `estimate`)
@@ -877,8 +900,15 @@ async function runScout(
     return err(`scout failed: ${(e as Error).message}`);
   }
 
-  // Render markdown report and write to canonical path.
+  // Render markdown report and write to canonical path. Under free mode the
+  // fetch adapter may have rotated off `model` mid-job (a per-file job is the
+  // likeliest thing here to meet a free model's daily cap), so the report names
+  // every model that actually answered rather than only the one we asked for.
   const summary = summariseJob(reg, jobId);
+  const rotated = rotationJournalSince(rotationMark);
+  if (rotated.length > 1 || (rotated.length === 1 && rotated[0] !== summary.model)) {
+    summary.models_used = rotated;
+  }
   const md = renderMarkdownReport(summary);
   reg.close();
 

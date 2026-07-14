@@ -71,6 +71,13 @@ export interface AggregateInput {
   budgetSpent: number;
   /** Items refused because the whole-job budget gate failed. */
   itemsSkippedOverBudget: number;
+  /**
+   * Every free model that ACTUALLY answered during this run, when free-mode
+   * rotation was in play (the requested model included). Omitted/singleton on a
+   * normal run. Reported so the artifact cannot claim one model judged findings
+   * that a rotated-to model actually judged.
+   */
+  modelsUsed?: string[];
 }
 
 /**
@@ -149,13 +156,20 @@ export function aggregate(input: AggregateInput): SecurityScanReport {
     items_skipped_over_budget: input.itemsSkippedOverBudget,
   };
 
-  return {
+  const report: SecurityScanReport = {
     job_id: input.jobId,
     model: input.model,
     generated_at: new Date().toISOString(),
     summary,
     items,
   };
+  // Only when rotation actually moved off the requested model — otherwise the
+  // extra field would be noise on every normal run.
+  const used = input.modelsUsed ?? [];
+  if (used.length > 1 || (used.length === 1 && used[0] !== input.model)) {
+    report.models_used = used;
+  }
+  return report;
 }
 
 // ── Markdown render ──────────────────────────────────────────────────────
@@ -165,6 +179,13 @@ export function renderMarkdown(report: SecurityScanReport): string {
   const lines: string[] = [];
   lines.push(`# Security-scan report — ${report.job_id}`, "");
   lines.push(`- Model: \`${report.model}\``);
+  if (report.models_used && report.models_used.length > 0) {
+    // Free-mode rotation moved off the requested model mid-run. Say so, and name
+    // every model that actually produced a verdict.
+    lines.push(
+      `- Models actually used (free-model rotation on rate-limit): ${report.models_used.map((m) => `\`${m}\``).join(", ")}`,
+    );
+  }
   lines.push(`- Generated: ${report.generated_at}`);
   lines.push(`- Items total: ${s.items_total}`);
   lines.push(`- Deduped (judged once, fanned out): ${s.items_deduped}`);

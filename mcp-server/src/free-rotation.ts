@@ -32,7 +32,114 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { getConfigDir } from "./config.js";
+import {
+  FREE_POOL_SEED,
+  getActiveFreeOnly,
+  getConfigDir,
+  loadSettings,
+  resolveProfile,
+} from "./config.js";
+import { isFreeSuffixModelId } from "./benchmark/free-mode.js";
+import { benchmarkFailedModels } from "./benchmark/security-triage/index.js";
+
+// ── Which free models are APPROVED (the pool rotation may draw on) ──────
+
+/**
+ * The only catalog fields the approval filter reads. Deliberately minimal and
+ * structural, so this module needs no import from index.ts (which owns the full
+ * OpenRouterModelInfo) — that import would be a cycle.
+ */
+export interface FreeModelCatalogEntry {
+  context_length?: number;
+  top_provider?: { context_length?: number };
+}
+
+/**
+ * Minimum context window (tokens) for a free model to enter the ensemble. A
+ * lenient floor that drops only obviously-unusable (tiny-context) free models;
+ * the real quality gate is the golden-dataset benchmark (Phase 2, TRDD-8b6b3646).
+ * Deliberately NOT the 128K premium bar — free models cluster at 32K-256K and a
+ * 128K floor would empty most pools.
+ */
+export const FREE_FLOOR_MIN_CONTEXT_TOKENS = 32_000;
+
+/**
+ * The APPROVED free pool (TRDD-8b6b3646). Two zero-spend filters, in the user's
+ * preference order:
+ *
+ *   1. BENCHMARK (Phase 2) — drop any free model with a RECORDED failing
+ *      security-triage benchmark (`benchmarkFailed`). Populated by a deliberate
+ *      ($0, free-model) benchmark run; empty until then, so this is a no-op on a
+ *      fresh install. A model never benchmarked is NOT dropped here.
+ *   2. REQUIREMENTS (Phase 1) — drop free models the catalog POSITIVELY reports
+ *      below the context floor.
+ *
+ * The premium qualification framework (qualifyModelForTool) can't be reused for
+ * (2): its criteria set allowFree:false, so it rejects every ':free' model by
+ * design — hence the dedicated context floor.
+ *
+ * Lenient on availability: a model absent from the catalog, or whose catalog
+ * entry carries no context info, is KEPT (can't assess → don't penalise) — so a
+ * cold catalog degrades to the raw list, never an empty pool. Pure +
+ * offline-testable: pass an explicit catalog map and failed-set.
+ *
+ * This IS the definition of "pre-benchmarked and approved": rotation can only
+ * ever land on a model that passed through here.
+ */
+export function filterFreeModels(
+  freeModels: readonly string[],
+  catalogById: ReadonlyMap<string, FreeModelCatalogEntry>,
+  benchmarkFailed: ReadonlySet<string> = new Set(),
+): string[] {
+  return freeModels.filter((id) => {
+    if (benchmarkFailed.has(id)) return false; // proven-failing benchmark — exclude
+    const m = catalogById.get(id);
+    if (!m) return true; // unknown to the catalog — keep (lenient on availability)
+    const ctx = m.context_length ?? m.top_provider?.context_length ?? 0;
+    if (ctx === 0) return true; // catalog has no context info — keep (lenient)
+    return ctx >= FREE_FLOOR_MIN_CONTEXT_TOKENS;
+  });
+}
+
+/** The top-3 approved free models (the ensemble). Rotation uses the FULL approved
+ *  list (filterFreeModels) so models 4+ serve as fallbacks. */
+export function selectFreeEnsembleModels(
+  freeModels: readonly string[],
+  catalogById: ReadonlyMap<string, FreeModelCatalogEntry>,
+  benchmarkFailed: ReadonlySet<string> = new Set(),
+): string[] {
+  return filterFreeModels(freeModels, catalogById, benchmarkFailed).slice(0, 3);
+}
+
+/**
+ * The approved free pool resolved from settings on disk — the surface-independent
+ * entry point. The MCP server has a warm catalog cache and uses filterFreeModels
+ * directly; the CLI processes (mass_scout, security_scan) do not, so they call
+ * this. An empty catalog map is safe precisely because filterFreeModels is lenient
+ * on availability: with no catalog we keep every id and let the benchmark filter
+ * and the ':free' suffix do the gating.
+ *
+ * Returns [] on any failure — an unreadable settings file must degrade to "no
+ * rotation", never to an exception inside a live tool call.
+ */
+export function approvedFreePoolFromSettings(): string[] {
+  try {
+    const s = loadSettings();
+    const active = s?.profiles[s.active];
+    if (!s || !active) return [];
+    const r = resolveProfile(s.active, active);
+    // free_only pins its own pool. Any other profile reaching this point is under
+    // AUTO-free (the balance fell / a 402 fired, and engageAutoFree flipped the
+    // global flag), where the pool is the profile's free_models if it pins any,
+    // else the bundled seed.
+    const base = r.freeModels.length > 0 ? r.freeModels : [...FREE_POOL_SEED];
+    return filterFreeModels(base, new Map(), benchmarkFailedModels()).filter(
+      isFreeSuffixModelId,
+    );
+  } catch {
+    return [];
+  }
+}
 
 // ── Shapes ─────────────────────────────────────────────────────────────
 
@@ -492,4 +599,192 @@ export async function callWithFreeRotation<T>(
     hooks.onRotate?.(cur.id, "next free model", detail);
     cur = null;
   }
+}
+
+// ── The FetchImpl decorator: rotation for the direct-HTTP tools ─────────
+//
+// security_scan and mass_scout do NOT go through the completion layer. Each runs
+// its own worker pool against an injected `FetchImpl`, with the model baked into
+// the request body, its own retry ladder, and (for security_scan) a circuit
+// breaker that force-marks every remaining item `uncertain` after N consecutive
+// failures. So a daily-capped free model there does not merely fail the job — it
+// silently degrades a whole security scan to "uncertain".
+//
+// Rotating at the FetchImpl boundary fixes both tools without touching either
+// pipeline: the 429 never reaches their retry ladders, so their fail-safe and
+// circuit-breaker paths behave exactly as they do on a healthy model. It also
+// covers every FUTURE direct-HTTP caller for free, because both tools wire the
+// SAME production adapter (`realFetch`).
+
+/** Structural mirror of the FetchResponse both tools define (they are identical
+ *  by construction; duplicating the shape here avoids importing either). */
+export interface RotatingFetchResponse {
+  ok: boolean;
+  status: number;
+  json(): Promise<unknown>;
+  text(): Promise<string>;
+}
+
+export type RotatingFetchImpl = (
+  url: string,
+  init: {
+    method: string;
+    headers: Record<string, string>;
+    body: string;
+    signal?: AbortSignal;
+  },
+) => Promise<RotatingFetchResponse>;
+
+/** A response whose body was already consumed by the decorator, replayed so the
+ *  caller can still read it. Real `res.json()` throws on invalid JSON — so does
+ *  this, faithfully. */
+function replayResponse(ok: boolean, status: number, body: string): RotatingFetchResponse {
+  return {
+    ok,
+    status,
+    text: async () => body,
+    json: async () => JSON.parse(body) as unknown,
+  };
+}
+
+// Which free models this process has actually SENT to. Reports read a delta of
+// this so a run that rotated can say so instead of naming only the model it
+// asked for — a report that names one model while another answered half the
+// items is a report that lies.
+//
+// Only TRANSITIONS are recorded, not requests: a 10k-file mass_scout run sends
+// 10k times but changes model a handful of times, and an entry per request would
+// be 10k strings of pure duplication in a long-lived server. The distinct-set
+// that readers actually want is unchanged by the dedup.
+const modelsSent: string[] = [];
+
+function noteSend(model: string): void {
+  if (modelsSent[modelsSent.length - 1] !== model) modelsSent.push(model);
+}
+
+/** A token for the current point in the send log. */
+export function rotationJournalMark(): number {
+  return modelsSent.length;
+}
+
+/** The distinct free models actually sent since `mark`, in first-use order. */
+export function rotationJournalSince(mark: number): string[] {
+  return [...new Set(modelsSent.slice(Math.max(0, mark)))];
+}
+
+/** Test hook — clears the send log. */
+export function resetRotationJournalForTests(): void {
+  modelsSent.length = 0;
+}
+
+export interface FetchRotationHooks {
+  /** The approved free pool, in preference order. Defaults to settings on disk. */
+  pool?: () => string[];
+  /** Whether free mode is active. Defaults to the global free_only flag, which
+   *  engageAutoFree() also sets — so this one predicate covers both. */
+  freeActive?: () => boolean;
+  now?: () => number;
+  store?: RotationStore;
+  onRotate?: (from: string, to: string, detail: string) => void;
+}
+
+/**
+ * Wrap a production FetchImpl so that, under free mode, an OpenRouter request
+ * whose body pins a rate-limited ':free' model is transparently re-sent against
+ * the next APPROVED free model — until one answers or every approved model has
+ * been tried.
+ *
+ * Deliberately inert in these cases, each of which would otherwise be a footgun:
+ *  • free mode off            → paid calls are never rerouted (that would spend
+ *                               money on a model the user did not choose);
+ *  • the body pins no model   → e.g. the catalog/pricing GETs, which must pass
+ *                               through untouched;
+ *  • the model is not ':free' → nothing to rotate to, and rotating a paid model
+ *                               is exactly what must never happen;
+ *  • the failure is not an availability failure (a 400, a bad key, a schema
+ *    error) → returned to the caller as-is, because rotating on a real defect
+ *    would burn the whole pool while hiding the one error worth reading.
+ *
+ * On exhaustion it returns the LAST failing response (replayed, body intact) so
+ * the caller's existing error/fail-safe path runs exactly as it does today.
+ */
+export function withFreeRotation(
+  inner: RotatingFetchImpl,
+  hooks: FetchRotationHooks = {},
+): RotatingFetchImpl {
+  return async (url, init) => {
+    // Defaults are resolved HERE, per request — never at decoration time.
+    // security_scan/openrouter.ts decorates at MODULE-INIT (`export const
+    // realFetch = withFreeRotation(rawFetch)`), and this module reaches back into
+    // security_scan through the security-triage benchmark import. Reading a
+    // later-declared const of this module (persistentRotationStore) during that
+    // circular init is a TDZ crash — and it crashed on the first run. Request
+    // time is also simply the correct moment: the free-mode flag and the pool can
+    // both change after boot (engageAutoFree, a settings reload).
+    const freeActive = hooks.freeActive ?? getActiveFreeOnly;
+    const poolOf = hooks.pool ?? approvedFreePoolFromSettings;
+    const now = hooks.now ?? Date.now;
+    const store = hooks.store ?? persistentRotationStore;
+
+    if (!freeActive()) return inner(url, init);
+
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(init.body) as Record<string, unknown>;
+    } catch {
+      return inner(url, init); // not a JSON body we can rewrite — pass through
+    }
+    const requested = parsed["model"];
+    if (typeof requested !== "string" || !isFreeSuffixModelId(requested)) {
+      return inner(url, init);
+    }
+
+    // Candidates: the requested model first, then the rest of the approved pool.
+    // Cooling models sink to the back but are never dropped — see
+    // orderByAvailability's contract.
+    const poolIds = poolOf().filter((id) => id !== requested);
+    const ordered = orderByAvailability(
+      poolIds.map((id) => ({ id })),
+      store.get(now()),
+      now(),
+    );
+    const candidates = [requested, ...ordered.fresh.map((c) => c.id), ...ordered.deferred.map((c) => c.id)];
+
+    // Skip a requested model already known to be spent — but only if there is
+    // somewhere else to go, and keep it as the last-resort probe.
+    const startCooling = isCooling(store.get(now()), requested, now()) && candidates.length > 1;
+    const attemptOrder = startCooling ? [...candidates.slice(1), requested] : candidates;
+
+    let last: RotatingFetchResponse | null = null;
+    for (const model of attemptOrder) {
+      noteSend(model);
+      const res = await inner(url, {
+        ...init,
+        body: JSON.stringify({ ...parsed, model }),
+      });
+      if (res.ok) {
+        store.recordAvailable(model, now());
+        return res; // untouched — the body was never consumed
+      }
+      // Non-OK: we must read the body to tell "rate-limited" from "real bug".
+      const body = await res.text();
+      const detail = `HTTP ${res.status}: ${body.slice(0, 300)}`;
+      last = replayResponse(res.ok, res.status, body);
+      if (!classifyUnavailable(detail)) return last; // a real defect — hand it back
+      store.recordUnavailable(model, detail, now());
+      const idx = attemptOrder.indexOf(model);
+      const next = idx + 1 < attemptOrder.length ? attemptOrder[idx + 1] : "(none left)";
+      (hooks.onRotate ??
+        ((from: string, to: string) =>
+          process.stderr.write(
+            `[llm-externalizer] Free model ${from} rate-limited (HTTP ${res.status}) — rotating to ${to}.\n`,
+          )))(model, next, detail);
+    }
+    // Pool exhausted: give the caller the last real failure, body intact, so its
+    // own fail-safe path runs exactly as it would have without rotation.
+    return (
+      last ??
+      replayResponse(false, 429, JSON.stringify({ error: { message: "no approved free models available" } }))
+    );
+  };
 }

@@ -70,7 +70,13 @@ export interface FieldStats {
 export interface JobSummary {
   jobId: string;
   fieldset_name: string;
+  /** The model the job REQUESTED. Under free-mode rotation it may not be the only
+   *  one that answered — see `models_used`. */
   model: string;
+  /** Present ONLY when free-mode rotation moved off `model` mid-job: every free
+   *  model that actually produced a result, in first-use order. Absent on a normal
+   *  run, so its presence is itself the signal that rotation happened. */
+  models_used?: string[];
   source_root: string;
   files_total: number;
   files_ok: number;
@@ -255,6 +261,11 @@ export function renderMarkdownReport(s: JobSummary): string {
   lines.push("");
   lines.push(`- **Fieldset:** \`${s.fieldset_name}\``);
   lines.push(`- **Model:** \`${s.model}\``);
+  if (s.models_used && s.models_used.length > 0) {
+    lines.push(
+      `- **Models actually used (free-model rotation on rate-limit):** ${s.models_used.map((m) => `\`${m}\``).join(", ")}`,
+    );
+  }
   lines.push(`- **Source root:** \`${s.source_root}\``);
   lines.push(
     `- **Files:** ${s.files_total} total / **${s.files_ok}** ok / **${s.files_failed}** failed`,

@@ -157,10 +157,16 @@ export interface SecurityScanSummary {
 /** The whole report object serialized to <stamp>-security-scan-<job>.json. */
 export interface SecurityScanReport {
   job_id: string;
+  /** The model the run REQUESTED. Under free-mode rotation it may not be the only
+   *  one that answered — see `models_used`. */
   model: string;
   generated_at: string;
   summary: SecurityScanSummary;
   items: SecurityScanItemResult[];
+  /** Present ONLY when free-mode rotation moved off `model` mid-run: every free
+   *  model that actually produced a verdict, in first-use order. Absent on a
+   *  normal run, so its presence is itself the signal that rotation happened. */
+  models_used?: string[];
 }
 
 // ── Validation ───────────────────────────────────────────────────────────

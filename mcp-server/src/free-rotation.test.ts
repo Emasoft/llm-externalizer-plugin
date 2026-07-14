@@ -27,6 +27,9 @@ import {
   recordAvailable,
   recordUnavailable,
   resetCooldownCacheForTests,
+  resetRotationJournalForTests,
+  rotationJournalSince,
+  withFreeRotation,
 } from "./free-rotation";
 
 const T0 = Date.UTC(2026, 6, 14, 10, 0, 0); // 2026-07-14T10:00:00Z
@@ -268,6 +271,111 @@ describe("callWithFreeRotation — rotate until one answers or the pool is truly
         { now: () => T0, store: memoryRotationStore() },
       ),
     ).rejects.toBeInstanceOf(AllFreeModelsExhaustedError);
+  });
+});
+
+describe("withFreeRotation — the FetchImpl decorator (security_scan / mass_scout)", () => {
+  const POOL = ["a:free", "b:free", "c:free"];
+  const req = (model: string) => ({
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model, messages: [{ role: "user", content: "hi" }] }),
+  });
+  const res = (status: number, body: string) => ({
+    ok: status >= 200 && status < 300,
+    status,
+    text: async () => body,
+    json: async () => JSON.parse(body) as unknown,
+  });
+  const hooks = (store = memoryRotationStore()) => ({
+    pool: () => [...POOL],
+    freeActive: () => true,
+    now: () => T0,
+    store,
+    onRotate: () => {},
+  });
+
+  beforeEach(() => resetRotationJournalForTests());
+
+  it("passes through untouched when free mode is OFF — a paid call is never rerouted", async () => {
+    const seen: string[] = [];
+    const inner = async (_u: string, init: { body: string }) => {
+      seen.push(JSON.parse(init.body).model);
+      return res(429, "rate limit");
+    };
+    const wrapped = withFreeRotation(inner, { ...hooks(), freeActive: () => false });
+    const r = await wrapped("u", req("paid/model"));
+    expect(r.status).toBe(429);
+    expect(seen).toEqual(["paid/model"]); // never rotated
+  });
+
+  it("passes through a body with NO model — the catalog/pricing GETs must not be rewritten", async () => {
+    let bodySeen = "";
+    const inner = async (_u: string, init: { body: string }) => {
+      bodySeen = init.body;
+      return res(200, "{}");
+    };
+    const wrapped = withFreeRotation(inner, hooks());
+    await wrapped("u", { method: "POST", headers: {}, body: JSON.stringify({ q: 1 }) });
+    expect(JSON.parse(bodySeen)).toEqual({ q: 1 });
+  });
+
+  it("rewrites the body's model and re-sends when the requested free model is rate-limited", async () => {
+    const seen: string[] = [];
+    const inner = async (_u: string, init: { body: string }) => {
+      const m = JSON.parse(init.body).model as string;
+      seen.push(m);
+      return m === "a:free"
+        ? res(429, JSON.stringify({ error: { message: "free-models-per-day" } }))
+        : res(200, JSON.stringify({ choices: [{ message: { content: "ok" } }] }));
+    };
+    const wrapped = withFreeRotation(inner, hooks());
+    const r = await wrapped("u", req("a:free"));
+    expect(r.ok).toBe(true);
+    expect(seen).toEqual(["a:free", "b:free"]);
+    // The caller's own retry ladder and circuit breaker never even see the 429.
+    expect(rotationJournalSince(0)).toEqual(["a:free", "b:free"]);
+  });
+
+  it("does NOT rotate on a real defect (400) and hands the body back intact", async () => {
+    const seen: string[] = [];
+    const inner = async (_u: string, init: { body: string }) => {
+      seen.push(JSON.parse(init.body).model as string);
+      return res(400, JSON.stringify({ error: { message: "invalid schema" } }));
+    };
+    const wrapped = withFreeRotation(inner, hooks());
+    const r = await wrapped("u", req("a:free"));
+    expect(r.status).toBe(400);
+    expect(seen).toEqual(["a:free"]); // never rotated
+    // The decorator consumed the body to classify it — the caller must still read it.
+    expect(await r.text()).toContain("invalid schema");
+  });
+
+  it("returns the LAST real failure when the whole pool is spent, body intact, so the caller's fail-safe runs", async () => {
+    const seen: string[] = [];
+    const inner = async (_u: string, init: { body: string }) => {
+      seen.push(JSON.parse(init.body).model as string);
+      return res(429, JSON.stringify({ error: { message: "rate limit" } }));
+    };
+    const wrapped = withFreeRotation(inner, hooks());
+    const r = await wrapped("u", req("a:free"));
+    expect(seen).toEqual(["a:free", "b:free", "c:free"]); // every approved model tried
+    expect(r.status).toBe(429);
+    expect(await r.text()).toContain("rate limit"); // judge.ts can still build its error
+  });
+
+  it("skips a model already known to be daily-capped, so a 100-file scan pays the 429 ONCE", async () => {
+    const store = memoryRotationStore(
+      applyUnavailable(emptyStore(), "a:free", "free-models-per-day", T0),
+    );
+    const seen: string[] = [];
+    const inner = async (_u: string, init: { body: string }) => {
+      seen.push(JSON.parse(init.body).model as string);
+      return res(200, "{}");
+    };
+    const wrapped = withFreeRotation(inner, hooks(store));
+    await wrapped("u", req("a:free"));
+    expect(seen).toEqual(["b:free"]); // the spent model was never contacted again
   });
 });
 

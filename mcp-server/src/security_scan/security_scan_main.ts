@@ -20,6 +20,7 @@ import {
 import { intake } from "./intake";
 import { floorFailSafeVerdict, judgeGroups, type FetchImpl } from "./judge";
 import { realFetch } from "./openrouter";
+import { rotationJournalMark, rotationJournalSince } from "../free-rotation.js";
 import {
   promptOverheadBytes,
   buildSystemPrompt,
@@ -184,6 +185,13 @@ export async function runSecurityScan(
 
   // 5. Judge — the injection-hardened LLM loop. If there is no API key, skip
   //    the network entirely and synthesize an all-default-verdict run (§3.7).
+  //
+  //    Under free mode the production fetch adapter rotates away from a
+  //    rate-limited free model mid-run (free-rotation.ts). Mark the send log
+  //    HERE, before any judging, so the report can name the models that ACTUALLY
+  //    judged these groups: a report that prints only the requested model while a
+  //    different one answered half the items is a report that lies.
+  const rotationMark = rotationJournalMark();
   let judge;
   if (!apiKey) {
     // Still run the script-only pre-scan so the report carries injection
@@ -245,6 +253,9 @@ export async function runSecurityScan(
     recordsTotal: intakeResult.recordsTotal,
     budgetSpent: judge.costUsd,
     itemsSkippedOverBudget: 0,
+    // Empty unless free-mode rotation actually fired, in which case it is every
+    // model that answered — the requested one included.
+    modelsUsed: rotationJournalSince(rotationMark),
   });
   const reportDir = resolveReportDir(input.output_dir, deps.mainRoot);
   const paths = writeReport(report, reportDir);

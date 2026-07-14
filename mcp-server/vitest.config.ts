@@ -47,6 +47,10 @@ export default defineConfig({
       // executor. Covers the daily-quota-vs-transient split, the "cooling models
       // are deferred, never dropped" invariant, and real on-disk persistence.
       'src/free-rotation.test.ts',
+      // Rotation WIRING guard — asserts every LLM send path is rotation-aware.
+      // The helper being correct is not the risk; a send site never CALLING it is
+      // (that is exactly how four paths stayed pinned to one free model).
+      'src/free-rotation-coverage.test.ts',
       // Free-pool auto-bench trigger — fire-and-forget detached child (TRDD-f1510055).
       'src/free-pool-auto-bench.test.ts',
       // Auto-free on low balance (<$1) — threshold/model/pool helpers (TRDD-542bdbef).

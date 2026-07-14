@@ -66,6 +66,7 @@ import {
   chatCompletionJSON,
   chatCompletionWithRetry,
   EXTRACT_PATHS_SCHEMA,
+  type JSONCompletionResult,
 } from "./provider/completion.js";
 import {
   type BackendConfig,
@@ -182,12 +183,15 @@ import { installUsageRule } from "./rule-install.js";
 import { resolveProjectMainRoot } from "./project-root.js";
 import { resolveEnsembleModelLimits } from "./ensemble-limits.js";
 import { benchmarkFailedModels } from "./benchmark/security-triage/index.js";
+import { isFreeSuffixModelId } from "./benchmark/free-mode.js";
 import {
   AllFreeModelsExhaustedError,
   callWithFreeRotation,
   classifyUnavailable,
+  filterFreeModels,
   getCooldownStore,
   orderByAvailability,
+  selectFreeEnsembleModels,
   type RotationCandidate,
   type RotationHooks,
 } from "./free-rotation.js";
@@ -1682,7 +1686,9 @@ function buildFreeRotationPool(
     // rotation TARGET is chosen, so a router pseudo-model like `openrouter/free`
     // (priced $0, but with no ':free' suffix) can never enter the rotation and
     // blow up at send time — the exact failure that killed a 32-minute sweep.
-    if (!id.endsWith(":free")) continue;
+    // isFreeSuffixModelId is THE definition of what the chokepoint admits; a
+    // second inline copy of that rule is how the two drift apart.
+    if (!isFreeSuffixModelId(id)) continue;
     const limits = resolveEnsembleModelLimits(
       id,
       catalogById.get(id)?.top_provider?.max_completion_tokens,
@@ -1730,6 +1736,41 @@ async function callSingleWithFreeRotation(
   );
 }
 
+/** chatCompletionJSON with free-pool rotation — check_imports' structured-output
+ *  path, which calls the completion layer directly rather than through
+ *  ensembleStreaming. chatCompletionJSON THROWS on an API error (its result shape
+ *  carries no error content), so the rotation's catch path is the whole story
+ *  here — no resultFailureDetail seam is needed. */
+async function chatCompletionJSONWithFreeRotation(
+  messages: ChatMessage[],
+  options: Parameters<typeof chatCompletionJSON>[1],
+): Promise<JSONCompletionResult> {
+  const pool = isFreeModeActive() ? buildFreeRotationPool() : [];
+  if (pool.length === 0) {
+    return chatCompletionJSON(messages, options, providerDeps);
+  }
+  return callWithFreeRotation<JSONCompletionResult>(
+    pool[0],
+    pool.slice(1),
+    (model, maxOutput) =>
+      chatCompletionJSON(
+        messages,
+        {
+          ...options,
+          model,
+          maxTokens: Math.min(options.maxTokens ?? maxOutput, maxOutput),
+        },
+        providerDeps,
+      ),
+    {
+      onRotate: (from, _to, detail) =>
+        process.stderr.write(
+          `[llm-externalizer] Free model ${from} unavailable (${detail.split("\n")[0].slice(0, 120)}) — rotating to the next approved free model.\n`,
+        ),
+    },
+  );
+}
+
 async function ensembleStreaming(
   messages: ChatMessage[],
   options: {
@@ -1762,7 +1803,7 @@ async function ensembleStreaming(
   // as it was — rotating it could bill a second model the user never asked for,
   // which is the one thing rotation must never do.
   if (options.modelOverride) {
-    if (options.modelOverride.endsWith(":free")) {
+    if (isFreeSuffixModelId(options.modelOverride)) {
       const primaryLimits = resolveEnsembleModelLimits(options.modelOverride, undefined);
       const pool = buildFreeRotationPool(
         fileLineCount,
@@ -2093,58 +2134,19 @@ function ensembleModelLabel(useEnsemble: boolean): string {
 }
 
 /**
- * Minimum context window (tokens) for a free model to enter the ensemble. A
- * lenient floor that drops only obviously-unusable (tiny-context) free models;
- * the real quality gate is the golden-dataset benchmark (Phase 2, TRDD-8b6b3646).
- * Deliberately NOT the 128K premium bar — free models cluster at 32K-256K and a
- * 128K floor would empty most pools.
+ * The free-pool selection helpers (FREE_FLOOR_MIN_CONTEXT_TOKENS,
+ * filterFreeModels, selectFreeEnsembleModels) moved to ./free-rotation.ts and are
+ * re-exported below. WHY: the CLI surfaces (mass_scout, security_scan, the
+ * benchmark) must resolve the SAME approved pool, and they cannot import index.ts
+ * — it is the MCP server entry point. Leaving the filter here would have forced
+ * either an import cycle or a second copy of the approval rules, and two copies of
+ * "which free models are allowed" is exactly the kind of drift that bills money.
  */
-export const FREE_FLOOR_MIN_CONTEXT_TOKENS = 32_000;
-
-/**
- * Free-only ensemble selection (TRDD-8b6b3646). Two zero-spend filters, then the
- * top 3 in the user's preference order:
- *
- *   1. BENCHMARK (Phase 2) — drop any free model with a RECORDED failing
- *      security-triage benchmark (`benchmarkFailed`). Populated by a deliberate
- *      ($0, free-model) benchmark run; empty until then, so this is a no-op on a
- *      fresh install. A model never benchmarked is NOT dropped here.
- *   2. REQUIREMENTS (Phase 1) — drop free models the catalog POSITIVELY reports
- *      below the context floor.
- *
- * The premium qualification framework (qualifyModelForTool) can't be reused for
- * (2): its criteria set allowFree:false, so it rejects every ':free' model by
- * design — hence the dedicated context floor.
- *
- * Lenient on availability: a model absent from the catalog, or whose catalog
- * entry carries no context info, is KEPT (can't assess → don't penalise) — so a
- * cold catalog degrades to the raw top-3, never an empty ensemble. Pure +
- * offline-testable: pass an explicit catalog map and failed-set.
- */
-export function filterFreeModels(
-  freeModels: string[],
-  catalogById: Map<string, OpenRouterModelInfo>,
-  benchmarkFailed: ReadonlySet<string> = new Set(),
-): string[] {
-  return freeModels.filter((id) => {
-    if (benchmarkFailed.has(id)) return false; // proven-failing benchmark — exclude
-    const m = catalogById.get(id);
-    if (!m) return true; // unknown to the catalog — keep (lenient on availability)
-    const ctx = m.context_length ?? m.top_provider?.context_length ?? 0;
-    if (ctx === 0) return true; // catalog has no context info — keep (lenient)
-    return ctx >= FREE_FLOOR_MIN_CONTEXT_TOKENS;
-  });
-}
-
-/** The top-3 filtered free models (the ensemble). Phase 3's rotation uses the
- *  FULL filtered list (filterFreeModels) so models 4+ serve as fallbacks. */
-export function selectFreeEnsembleModels(
-  freeModels: string[],
-  catalogById: Map<string, OpenRouterModelInfo>,
-  benchmarkFailed: ReadonlySet<string> = new Set(),
-): string[] {
-  return filterFreeModels(freeModels, catalogById, benchmarkFailed).slice(0, 3);
-}
+export {
+  FREE_FLOOR_MIN_CONTEXT_TOKENS,
+  filterFreeModels,
+  selectFreeEnsembleModels,
+} from "./free-rotation.js";
 
 /**
  * True when an error string indicates the model is UNAVAILABLE (now or for the
@@ -4482,7 +4484,7 @@ async function dispatchCallToolInner(
                 { role: "system", content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path inside a filename tag before the file-content tag — reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.` + FILE_FORMAT_EXAMPLE },
                 { role: "user", content: `${ciPrompt ? ciPrompt + "\n\n" : ""}Extract all import and file references from:\n\n${readFileAsCodeBlock(filePath, undefined, ciRedact, ciBudgetBytes, ciRegexRedact)}` },
               ];
-              const extractResp = await chatCompletionJSON(extractMessages, { temperature: 0, maxTokens: resolveDefaultMaxTokens(), jsonSchema: EXTRACT_PATHS_SCHEMA, onProgress }, providerDeps);
+              const extractResp = await chatCompletionJSONWithFreeRotation(extractMessages, { temperature: 0, maxTokens: resolveDefaultMaxTokens(), jsonSchema: EXTRACT_PATHS_SCHEMA, onProgress });
               recordUsage(extractResp.usage);
               logRequest({ tool: "check_imports", model: extractResp.model, status: "success", usage: extractResp.usage, filePath });
               const rawPaths = extractResp.parsed.paths;
@@ -4558,7 +4560,7 @@ async function dispatchCallToolInner(
             },
           ];
 
-          const extractResp = await chatCompletionJSON(
+          const extractResp = await chatCompletionJSONWithFreeRotation(
             extractMessages,
             {
               temperature: 0,
@@ -4566,7 +4568,6 @@ async function dispatchCallToolInner(
               jsonSchema: EXTRACT_PATHS_SCHEMA,
               onProgress,
             },
-            providerDeps,
           );
           recordUsage(extractResp.usage);
           logRequest({
@@ -4791,15 +4792,26 @@ async function dispatchCallToolInner(
           // It must NEVER reason (reasoning tokens are billed and would dwarf the
           // answer on a reasoning primary like deepseek-v4-pro) and never needs a
           // 65K output budget. reasoning:"off" + a 4K cap keep each call cheap.
-          const resp = await chatCompletionWithRetry(
-            messages,
-            {
-              temperature: 0.1,
-              maxTokens: 4096,
-              reasoning: "off",
-            },
-            providerDeps,
-          );
+          const csCallOpts = {
+            temperature: 0.1,
+            maxTokens: 4096,
+            reasoning: "off" as const,
+          };
+          // Free mode: rotate across the approved free pool. A clustering run is
+          // thousands of small calls, so a daily-capped model here is guaranteed
+          // to be hit — and without rotation it would abort the whole run.
+          // The 4K cap survives rotation (the helper clamps DOWN, never up), so
+          // the cost guard above still holds on every fallback model.
+          const csPool = isFreeModeActive() ? buildFreeRotationPool() : [];
+          const resp =
+            csPool.length > 0
+              ? await callSingleWithFreeRotation(
+                  csPool[0],
+                  csPool.slice(1),
+                  messages,
+                  csCallOpts,
+                )
+              : await chatCompletionWithRetry(messages, csCallOpts, providerDeps);
           if (resp.finishReason === "error") {
             throw new Error(`cluster_synonyms: LLM call failed: ${resp.content}`);
           }
