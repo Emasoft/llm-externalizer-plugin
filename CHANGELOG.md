@@ -1,6 +1,119 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [10.3.0] - 2026-07-14
+
+### Added
+
+- Feat(free-rotation): rotate on EVERY send path — the two direct-HTTP tools included
+
+Phase 1 covered the paths that go through the completion layer. Verifying the
+rest showed the codebase has two families of LLM sender, not one, and the second
+had no rotation at all:
+
+  * completion-layer callers — the ensemble, cluster_synonyms' rawLlmCall,
+    check_imports' chatCompletionJSON. Wired here (cluster and check_imports were
+    still pinned to a single free model).
+
+  * direct-HTTP callers — security_scan's judge and mass_scout's scout each run
+    their own worker pool against an injected FetchImpl, with the model in the
+    request body and their own retry ladders. Neither could ever rotate.
+
+For the second family the fix is a decorator on the production FetchImpl adapter
+(`realFetch = withFreeRotation(rawFetch)`), NOT per-tool plumbing. The 429 is
+absorbed below the tool: the body's model is rewritten to the next approved free
+model and re-sent, so neither pipeline, retry ladder, circuit breaker, nor report
+control flow changes at all — and a future direct-HTTP caller inherits rotation by
+using the adapter it would have used anyway.
+
+WHY that matters most for security_scan: its circuit breaker force-marks every
+remaining item `uncertain` after N consecutive failures. So a daily-capped free
+model did not merely fail the scan — it silently degraded the whole scan to
+"uncertain". That is a security tool reporting "I could not tell" when the real
+answer was "my model ran out of free quota".
+
+Also in this commit, each found by checking an assumption rather than by a test:
+
+  * mass_scouting/cli.ts declares its OWN realFetch (all four of its send sites use
+    that one, NOT security_scan's). Assuming a single shared adapter would have
+    left mass_scout unrotated; the new wiring guard caught it on its first run.
+  * TDZ: openrouter.ts decorates at module-init, and free-rotation reaches back
+    into security_scan via the security-triage import. Resolving the decorator's
+    deps at decoration time crashed on the circular init — they are resolved per
+    request now, which is also simply correct (free mode and the pool can both
+    change after boot).
+  * The `:free` suffix rule had a second inline copy in the rotation path. It now
+    uses isFreeSuffixModelId, the one definition the cost-safety chokepoint uses;
+    two copies of that rule is how `openrouter/free` got into a pool and detonated
+    a 32-minute sweep at send time.
+  * Reports no longer lie: security_scan's and mass_scout's reports print the
+    models that ACTUALLY answered whenever rotation moved off the requested one.
+    The field is absent on a normal run, so its presence IS the rotation signal.
+
+The pool-approval logic (filterFreeModels et al.) moved out of index.ts into
+free-rotation.ts because the CLI surfaces cannot import index.ts — leaving it there
+would have forced either an import cycle or a second copy of "which free models are
+allowed", and two copies of that rule is what bills money.
+
+New guard test (free-rotation-coverage) asserts the WIRING, not the logic: rotation
+was correct all along in Phase 1's helper — four paths simply never called it, and
+that class of bug only shows up on the day a quota runs out. Tests 1577 -> 1589.
+
+- Feat(free-rotation): remember spent free models across calls; rotate on every free path (TRDD-8b6b3646 Phase 4)
+
+Rotation already existed for the free ENSEMBLE slots, but its cursor lived in a
+local `let` inside one ensembleStreaming() call, so it was forgotten the moment
+that call returned. A scan over 50 files therefore re-tried the SAME daily-capped
+free model 50 times, paying a 429 (and a retry ladder) every single file. And
+three other free paths never rotated at all.
+
+WHY each change:
+
+* free-rotation.ts (new) — the missing memory: a per-model cooldown registry,
+  persisted to ~/.llm-externalizer/free-cooldowns.json so the MCP server and the
+  llm-ext-benchmark CLI, two processes drawing on ONE daily quota, don't each
+  re-learn that a model is spent. A spent DAILY quota is classified apart from a
+  transient 429 because only the former needs a cooldown to 00:00 UTC — backing
+  off 30s and retrying would just hit the same wall until midnight.
+
+* Cooling models are DEFERRED, never dropped, and are PROBED once the pool is
+  exhausted. A cooldown is a heuristic derived from an error string; if it is
+  wrong it must cost one wasted 429, never a tool that refuses to run. So
+  "exhausted" always means every approved model was actually TRIED and failed.
+
+* The rotation predicate was `activeResolved.freeOnly` alone, while
+  getEnsembleModels() served the free pool under `freeOnly || autoFreeEngaged`.
+  So under AUTO-FREE (funded profile, low balance / 402) the fallback list came
+  out empty and the boot log's promise of "rotation on rate-limit" was false.
+
+* A ':free' modelOverride now rotates too, gated on the override's own suffix and
+  NOT on freeMode: an explicit `free: true` call on a funded profile is still a
+  free call, and it used to pin one FREE_MODEL_ID whose daily cap was a hard
+  failure. A PAID override (high_quality_scan) is untouched — rotating it could
+  bill a second model the user never asked for.
+
+* Same for ensemble:false and for a file too large for every ensemble primary:
+  the approved pool may hold a bigger-context free model beyond the top 3.
+
+Cost-safety is unchanged and reinforced: candidates come only from
+filterFreeModels() (benchmark-failed and sub-floor models already dropped), every
+candidate is re-checked for the ':free' suffix at the point of selection — so a
+$0 router pseudo-model like `openrouter/free` can never enter the rotation and
+detonate at send time — and assertFreeOnlyModel still guards every send.
+
+Tests: 24 new (1553 -> 1577). The registry tests inject a RAM-only store so a unit
+test can neither write to the real ~/.llm-externalizer nor leak a cooldown into
+the next case; the persistence tests drive the REAL atomic writer under a tmp dir.
+
+
+### Miscellaneous
+
+- Chore(dist): rebuild benchmark/cli bundles for the free-rotation wiring
+
+The CLI surfaces (mass_scout, benchmark) now import free-rotation.ts, so their
+bundles change alongside the MCP server's.
+
+
 ## [10.2.2] - 2026-07-13
 
 ### Fixed

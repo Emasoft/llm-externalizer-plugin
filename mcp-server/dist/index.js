@@ -269996,7 +269996,7 @@ function getEnsembleModels() {
   });
 }
 var mcpServer = new McpServer(
-  { name: "llm-externalizer", version: "10.2.2" },
+  { name: "llm-externalizer", version: "10.3.0" },
   { capabilities: { tools: { listChanged: true } } }
 );
 function notifyToolsChanged() {

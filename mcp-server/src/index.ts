@@ -2292,7 +2292,7 @@ function getEnsembleModels(): Array<{
 // advertising 9.5.1 to clients while the plugin manifest reported 9.7.0 —
 // see commit history for the consolidation.)
 const mcpServer = new McpServer(
-  { name: "llm-externalizer", version: "10.2.2" },
+  { name: "llm-externalizer", version: "10.3.0" },
   { capabilities: { tools: { listChanged: true } } },
 );
 
