@@ -15237,19 +15237,19 @@ ${lanes.join("\n")}
           pollScheduled = host.setTimeout(pollQueue, 2e3, "pollQueue");
         }
       }
-      function createSingleWatcherPerName(cache, useCaseSensitiveFileNames2, name, callback, createWatcher) {
+      function createSingleWatcherPerName(cache2, useCaseSensitiveFileNames2, name, callback, createWatcher) {
         const toCanonicalFileName = createGetCanonicalFileName(useCaseSensitiveFileNames2);
         const path = toCanonicalFileName(name);
-        const existing = cache.get(path);
+        const existing = cache2.get(path);
         if (existing) {
           existing.callbacks.push(callback);
         } else {
-          cache.set(path, {
+          cache2.set(path, {
             watcher: createWatcher(
               // Cant infer types correctly so lets satisfy checker
               (param1, param2, param3) => {
                 var _a;
-                return (_a = cache.get(path)) == null ? void 0 : _a.callbacks.slice().forEach((cb) => cb(param1, param2, param3));
+                return (_a = cache2.get(path)) == null ? void 0 : _a.callbacks.slice().forEach((cb) => cb(param1, param2, param3));
               }
             ),
             callbacks: [callback]
@@ -15257,10 +15257,10 @@ ${lanes.join("\n")}
         }
         return {
           close: () => {
-            const watcher = cache.get(path);
+            const watcher = cache2.get(path);
             if (!watcher) return;
             if (!orderedRemoveItem(watcher.callbacks, callback) || watcher.callbacks.length) return;
-            cache.delete(path);
+            cache2.delete(path);
             closeFileWatcherOf(watcher);
           }
         };
@@ -15296,7 +15296,7 @@ ${lanes.join("\n")}
         setTimeout: setTimeout2,
         clearTimeout: clearTimeout2
       }) {
-        const cache = /* @__PURE__ */ new Map();
+        const cache2 = /* @__PURE__ */ new Map();
         const callbackCache = createMultiMap();
         const cacheToUpdateChildWatches = /* @__PURE__ */ new Map();
         let timerToUpdateChildWatches;
@@ -15305,7 +15305,7 @@ ${lanes.join("\n")}
         return (dirName, callback, recursive, options) => recursive ? createDirectoryWatcher(dirName, options, callback) : watchDirectory(dirName, callback, recursive, options);
         function createDirectoryWatcher(dirName, options, callback, link) {
           const dirPath = toCanonicalFilePath(dirName);
-          let directoryWatcher = cache.get(dirPath);
+          let directoryWatcher = cache2.get(dirPath);
           if (directoryWatcher) {
             directoryWatcher.refCount++;
           } else {
@@ -15316,7 +15316,7 @@ ${lanes.join("\n")}
                   var _a;
                   if (isIgnoredPath(fileName, options)) return;
                   if (options == null ? void 0 : options.synchronousWatchDirectory) {
-                    if (!((_a = cache.get(dirPath)) == null ? void 0 : _a.targetWatcher)) invokeCallbacks(dirName, dirPath, fileName);
+                    if (!((_a = cache2.get(dirPath)) == null ? void 0 : _a.targetWatcher)) invokeCallbacks(dirName, dirPath, fileName);
                     updateChildWatches(dirName, dirPath, options);
                   } else {
                     nonSyncUpdateChildWatches(dirName, dirPath, fileName, options);
@@ -15331,7 +15331,7 @@ ${lanes.join("\n")}
               targetWatcher: void 0,
               links: void 0
             };
-            cache.set(dirPath, directoryWatcher);
+            cache2.set(dirPath, directoryWatcher);
             updateChildWatches(dirName, dirPath, options);
           }
           if (link) (directoryWatcher.links ?? (directoryWatcher.links = /* @__PURE__ */ new Set())).add(link);
@@ -15343,12 +15343,12 @@ ${lanes.join("\n")}
             dirName,
             close: () => {
               var _a;
-              const directoryWatcher2 = Debug.checkDefined(cache.get(dirPath));
+              const directoryWatcher2 = Debug.checkDefined(cache2.get(dirPath));
               if (callbackToAdd) callbackCache.remove(dirPath, callbackToAdd);
               if (link) (_a = directoryWatcher2.links) == null ? void 0 : _a.delete(link);
               directoryWatcher2.refCount--;
               if (directoryWatcher2.refCount) return;
-              cache.delete(dirPath);
+              cache2.delete(dirPath);
               directoryWatcher2.links = void 0;
               closeFileWatcherOf(directoryWatcher2);
               closeTargetWatcher(directoryWatcher2);
@@ -15384,7 +15384,7 @@ ${lanes.join("\n")}
               }
             }
           });
-          (_b = (_a = cache.get(dirPath)) == null ? void 0 : _a.links) == null ? void 0 : _b.forEach((link) => {
+          (_b = (_a = cache2.get(dirPath)) == null ? void 0 : _a.links) == null ? void 0 : _b.forEach((link) => {
             const toPathInLink = (fileName2) => combinePaths(link, getRelativePathFromDirectory(dirName, fileName2, toCanonicalFilePath));
             if (invokeMap) {
               invokeCallbacks(link, toCanonicalFilePath(link), invokeMap, fileNames == null ? void 0 : fileNames.map(toPathInLink));
@@ -15394,7 +15394,7 @@ ${lanes.join("\n")}
           });
         }
         function nonSyncUpdateChildWatches(dirName, dirPath, fileName, options) {
-          const parentWatcher = cache.get(dirPath);
+          const parentWatcher = cache2.get(dirPath);
           if (parentWatcher && fileSystemEntryExists(
             dirName,
             1
@@ -15432,7 +15432,7 @@ ${lanes.join("\n")}
             const { value: [dirPath, { dirName, options, fileNames }] } = result;
             cacheToUpdateChildWatches.delete(dirPath);
             const hasChanges = updateChildWatches(dirName, dirPath, options);
-            if (!((_a = cache.get(dirPath)) == null ? void 0 : _a.targetWatcher)) invokeCallbacks(dirName, dirPath, invokeMap, hasChanges ? void 0 : fileNames);
+            if (!((_a = cache2.get(dirPath)) == null ? void 0 : _a.targetWatcher)) invokeCallbacks(dirName, dirPath, invokeMap, hasChanges ? void 0 : fileNames);
           }
           sysLog(`sysLog:: invokingWatchers:: Elapsed:: ${timestamp() - start}ms:: ${cacheToUpdateChildWatches.size}`);
           callbackCache.forEach((callbacks, rootDirName) => {
@@ -15456,7 +15456,7 @@ ${lanes.join("\n")}
           parentWatcher.childWatches = emptyArray;
           for (const childWatcher of existingChildWatches) {
             childWatcher.close();
-            removeChildWatches(cache.get(toCanonicalFilePath(childWatcher.dirName)));
+            removeChildWatches(cache2.get(toCanonicalFilePath(childWatcher.dirName)));
           }
         }
         function closeTargetWatcher(watcher) {
@@ -15466,7 +15466,7 @@ ${lanes.join("\n")}
           }
         }
         function updateChildWatches(parentDir, parentDirPath, options) {
-          const parentWatcher = cache.get(parentDirPath);
+          const parentWatcher = cache2.get(parentDirPath);
           if (!parentWatcher) return false;
           const target = normalizePath(realpath(parentDir));
           let hasChanges;
@@ -30188,13 +30188,13 @@ ${lanes.join("\n")}
         function hasAnySymlinks() {
           return !!(symlinkedFiles == null ? void 0 : symlinkedFiles.size) || !!symlinkedDirectories && !!forEachEntry(symlinkedDirectories, (value) => !!value);
         }
-        function processResolution(cache, resolution) {
+        function processResolution(cache2, resolution) {
           if (!resolution || !resolution.originalPath || !resolution.resolvedFileName) return;
           const { resolvedFileName, originalPath } = resolution;
-          cache.setSymlinkedFile(toPath(originalPath, cwd, getCanonicalFileName), resolvedFileName);
+          cache2.setSymlinkedFile(toPath(originalPath, cwd, getCanonicalFileName), resolvedFileName);
           const [commonResolved, commonOriginal] = guessDirectorySymlink(resolvedFileName, originalPath, cwd, getCanonicalFileName) || emptyArray;
           if (commonResolved && commonOriginal) {
-            cache.setSymlinkedDirectory(
+            cache2.setSymlinkedDirectory(
               commonOriginal,
               {
                 real: ensureTrailingDirectorySeparator(commonResolved),
@@ -54610,7 +54610,7 @@ ${lanes.join("\n")}
         Debug.assert(extensionIsTS(resolved.extension));
         return { fileName: resolved.path, packageId: resolved.packageId };
       }
-      function createResolvedModuleWithFailedLookupLocationsHandlingSymlink(moduleName, resolved, isExternalLibraryImport, failedLookupLocations, affectingLocations, diagnostics, state, cache, alternateResult) {
+      function createResolvedModuleWithFailedLookupLocationsHandlingSymlink(moduleName, resolved, isExternalLibraryImport, failedLookupLocations, affectingLocations, diagnostics, state, cache2, alternateResult) {
         if (!state.resultFromCache && !state.compilerOptions.preserveSymlinks && resolved && isExternalLibraryImport && !resolved.originalPath && !isExternalModuleNameRelative(moduleName)) {
           const { resolvedFileName, originalPath } = getOriginalAndResolvedFileName(resolved.path, state.host, state.traceEnabled);
           if (originalPath) resolved = { ...resolved, path: resolvedFileName, originalPath };
@@ -54622,13 +54622,13 @@ ${lanes.join("\n")}
           affectingLocations,
           diagnostics,
           state.resultFromCache,
-          cache,
+          cache2,
           alternateResult
         );
       }
-      function createResolvedModuleWithFailedLookupLocations(resolved, isExternalLibraryImport, failedLookupLocations, affectingLocations, diagnostics, resultFromCache, cache, alternateResult) {
+      function createResolvedModuleWithFailedLookupLocations(resolved, isExternalLibraryImport, failedLookupLocations, affectingLocations, diagnostics, resultFromCache, cache2, alternateResult) {
         if (resultFromCache) {
-          if (!(cache == null ? void 0 : cache.isReadonly)) {
+          if (!(cache2 == null ? void 0 : cache2.isReadonly)) {
             resultFromCache.failedLookupLocations = updateResolutionField(resultFromCache.failedLookupLocations, failedLookupLocations);
             resultFromCache.affectingLocations = updateResolutionField(resultFromCache.affectingLocations, affectingLocations);
             resultFromCache.resolutionDiagnostics = updateResolutionField(resultFromCache.resolutionDiagnostics, diagnostics);
@@ -54801,16 +54801,16 @@ ${lanes.join("\n")}
         const nameForLookup = endsWith(typeRoot, "/node_modules/@types") || endsWith(typeRoot, "/node_modules/@types/") ? mangleScopedPackageNameWithTrace(typeReferenceDirectiveName, moduleResolutionState) : typeReferenceDirectiveName;
         return combinePaths(typeRoot, nameForLookup);
       }
-      function resolveTypeReferenceDirective(typeReferenceDirectiveName, containingFile, options, host, redirectedReference, cache, resolutionMode) {
+      function resolveTypeReferenceDirective(typeReferenceDirectiveName, containingFile, options, host, redirectedReference, cache2, resolutionMode) {
         Debug.assert(typeof typeReferenceDirectiveName === "string", "Non-string value passed to `ts.resolveTypeReferenceDirective`, likely by a wrapping package working with an outdated `resolveTypeReferenceDirectives` signature. This is probably not a problem in TS itself.");
         const traceEnabled = isTraceEnabled(options, host);
         if (redirectedReference) {
           options = redirectedReference.commandLine.options;
         }
         const containingDirectory = containingFile ? getDirectoryPath(containingFile) : void 0;
-        let result = containingDirectory ? cache == null ? void 0 : cache.getFromDirectoryCache(typeReferenceDirectiveName, resolutionMode, containingDirectory, redirectedReference) : void 0;
+        let result = containingDirectory ? cache2 == null ? void 0 : cache2.getFromDirectoryCache(typeReferenceDirectiveName, resolutionMode, containingDirectory, redirectedReference) : void 0;
         if (!result && containingDirectory && !isExternalModuleNameRelative(typeReferenceDirectiveName)) {
-          result = cache == null ? void 0 : cache.getFromNonRelativeNameCache(typeReferenceDirectiveName, resolutionMode, containingDirectory, redirectedReference);
+          result = cache2 == null ? void 0 : cache2.getFromNonRelativeNameCache(typeReferenceDirectiveName, resolutionMode, containingDirectory, redirectedReference);
         }
         if (result) {
           if (traceEnabled) {
@@ -54858,7 +54858,7 @@ ${lanes.join("\n")}
           traceEnabled,
           failedLookupLocations,
           affectingLocations,
-          packageJsonInfoCache: cache,
+          packageJsonInfoCache: cache2,
           features,
           conditions,
           requestContainingDirectory: containingDirectory,
@@ -54892,15 +54892,15 @@ ${lanes.join("\n")}
           affectingLocations: initializeResolutionField(affectingLocations),
           resolutionDiagnostics: initializeResolutionField(diagnostics)
         };
-        if (containingDirectory && cache && !cache.isReadonly) {
-          cache.getOrCreateCacheForDirectory(containingDirectory, redirectedReference).set(
+        if (containingDirectory && cache2 && !cache2.isReadonly) {
+          cache2.getOrCreateCacheForDirectory(containingDirectory, redirectedReference).set(
             typeReferenceDirectiveName,
             /*mode*/
             resolutionMode,
             result
           );
           if (!isExternalModuleNameRelative(typeReferenceDirectiveName)) {
-            cache.getOrCreateCacheForNonRelativeName(typeReferenceDirectiveName, resolutionMode, redirectedReference).set(containingDirectory, result);
+            cache2.getOrCreateCacheForNonRelativeName(typeReferenceDirectiveName, resolutionMode, redirectedReference).set(containingDirectory, result);
           }
         }
         if (traceEnabled) traceResult(result);
@@ -55035,8 +55035,8 @@ ${lanes.join("\n")}
         }
         return concatenate(conditions, options.customConditions);
       }
-      function resolvePackageNameToPackageJson(packageName, containingDirectory, options, host, cache) {
-        const moduleResolutionState = getTemporaryModuleResolutionState(cache == null ? void 0 : cache.getPackageJsonInfoCache(), host, options);
+      function resolvePackageNameToPackageJson(packageName, containingDirectory, options, host, cache2) {
+        const moduleResolutionState = getTemporaryModuleResolutionState(cache2 == null ? void 0 : cache2.getPackageJsonInfoCache(), host, options);
         return forEachAncestorDirectoryStoppingAtGlobalCache(host, containingDirectory, (ancestorDirectory) => {
           if (getBaseFileName(ancestorDirectory) !== "node_modules") {
             const nodeModulesFolder = combinePaths(ancestorDirectory, "node_modules");
@@ -55176,27 +55176,27 @@ ${lanes.join("\n")}
         }
       }
       function createPackageJsonInfoCache(currentDirectory, getCanonicalFileName) {
-        let cache;
+        let cache2;
         return { getPackageJsonInfo: getPackageJsonInfo2, setPackageJsonInfo, clear: clear2, getInternalMap };
         function getPackageJsonInfo2(packageJsonPath) {
-          return cache == null ? void 0 : cache.get(toPath(packageJsonPath, currentDirectory, getCanonicalFileName));
+          return cache2 == null ? void 0 : cache2.get(toPath(packageJsonPath, currentDirectory, getCanonicalFileName));
         }
         function setPackageJsonInfo(packageJsonPath, info) {
-          (cache || (cache = /* @__PURE__ */ new Map())).set(toPath(packageJsonPath, currentDirectory, getCanonicalFileName), info);
+          (cache2 || (cache2 = /* @__PURE__ */ new Map())).set(toPath(packageJsonPath, currentDirectory, getCanonicalFileName), info);
         }
         function clear2() {
-          cache = void 0;
+          cache2 = void 0;
         }
         function getInternalMap() {
-          return cache;
+          return cache2;
         }
       }
       function getOrCreateCache(cacheWithRedirects, redirectedReference, key, create) {
-        const cache = cacheWithRedirects.getOrCreateMapOfCacheRedirects(redirectedReference);
-        let result = cache.get(key);
+        const cache2 = cacheWithRedirects.getOrCreateMapOfCacheRedirects(redirectedReference);
+        let result = cache2.get(key);
         if (!result) {
           result = create();
-          cache.set(key, result);
+          cache2.set(key, result);
         }
         return result;
       }
@@ -55231,17 +55231,17 @@ ${lanes.join("\n")}
       function createModeAwareCache() {
         const underlying = /* @__PURE__ */ new Map();
         const memoizedReverseKeys = /* @__PURE__ */ new Map();
-        const cache = {
+        const cache2 = {
           get(specifier, mode) {
             return underlying.get(getUnderlyingCacheKey(specifier, mode));
           },
           set(specifier, mode, value) {
             underlying.set(getUnderlyingCacheKey(specifier, mode), value);
-            return cache;
+            return cache2;
           },
           delete(specifier, mode) {
             underlying.delete(getUnderlyingCacheKey(specifier, mode));
-            return cache;
+            return cache2;
           },
           has(specifier, mode) {
             return underlying.has(getUnderlyingCacheKey(specifier, mode));
@@ -55256,7 +55256,7 @@ ${lanes.join("\n")}
             return underlying.size;
           }
         };
-        return cache;
+        return cache2;
         function getUnderlyingCacheKey(specifier, mode) {
           const result = createModeAwareCacheKey(specifier, mode);
           memoizedReverseKeys.set(result, [specifier, mode]);
@@ -55402,12 +55402,12 @@ ${lanes.join("\n")}
       function getOptionsForLibraryResolution(options) {
         return { moduleResolution: 2, traceResolution: options.traceResolution };
       }
-      function resolveLibrary(libraryName, resolveFrom, compilerOptions, host, cache) {
-        return resolveModuleName(libraryName, resolveFrom, getOptionsForLibraryResolution(compilerOptions), host, cache);
+      function resolveLibrary(libraryName, resolveFrom, compilerOptions, host, cache2) {
+        return resolveModuleName(libraryName, resolveFrom, getOptionsForLibraryResolution(compilerOptions), host, cache2);
       }
-      function resolveModuleNameFromCache(moduleName, containingFile, cache, mode) {
+      function resolveModuleNameFromCache(moduleName, containingFile, cache2, mode) {
         const containingDirectory = getDirectoryPath(containingFile);
-        return cache.getFromDirectoryCache(
+        return cache2.getFromDirectoryCache(
           moduleName,
           mode,
           containingDirectory,
@@ -55415,7 +55415,7 @@ ${lanes.join("\n")}
           void 0
         );
       }
-      function resolveModuleName(moduleName, containingFile, compilerOptions, host, cache, redirectedReference, resolutionMode) {
+      function resolveModuleName(moduleName, containingFile, compilerOptions, host, cache2, redirectedReference, resolutionMode) {
         const traceEnabled = isTraceEnabled(compilerOptions, host);
         if (redirectedReference) {
           compilerOptions = redirectedReference.commandLine.options;
@@ -55427,7 +55427,7 @@ ${lanes.join("\n")}
           }
         }
         const containingDirectory = getDirectoryPath(containingFile);
-        let result = cache == null ? void 0 : cache.getFromDirectoryCache(moduleName, resolutionMode, containingDirectory, redirectedReference);
+        let result = cache2 == null ? void 0 : cache2.getFromDirectoryCache(moduleName, resolutionMode, containingDirectory, redirectedReference);
         if (result) {
           if (traceEnabled) {
             trace(host, Diagnostics.Resolution_for_module_0_was_found_in_cache_from_location_1, moduleName, containingDirectory);
@@ -55446,27 +55446,27 @@ ${lanes.join("\n")}
           }
           switch (moduleResolution) {
             case 3:
-              result = node16ModuleNameResolver(moduleName, containingFile, compilerOptions, host, cache, redirectedReference, resolutionMode);
+              result = node16ModuleNameResolver(moduleName, containingFile, compilerOptions, host, cache2, redirectedReference, resolutionMode);
               break;
             case 99:
-              result = nodeNextModuleNameResolver(moduleName, containingFile, compilerOptions, host, cache, redirectedReference, resolutionMode);
+              result = nodeNextModuleNameResolver(moduleName, containingFile, compilerOptions, host, cache2, redirectedReference, resolutionMode);
               break;
             case 2:
-              result = nodeModuleNameResolver(moduleName, containingFile, compilerOptions, host, cache, redirectedReference, resolutionMode ? getConditions(compilerOptions, resolutionMode) : void 0);
+              result = nodeModuleNameResolver(moduleName, containingFile, compilerOptions, host, cache2, redirectedReference, resolutionMode ? getConditions(compilerOptions, resolutionMode) : void 0);
               break;
             case 1:
-              result = classicNameResolver(moduleName, containingFile, compilerOptions, host, cache, redirectedReference);
+              result = classicNameResolver(moduleName, containingFile, compilerOptions, host, cache2, redirectedReference);
               break;
             case 100:
-              result = bundlerModuleNameResolver(moduleName, containingFile, compilerOptions, host, cache, redirectedReference, resolutionMode ? getConditions(compilerOptions, resolutionMode) : void 0);
+              result = bundlerModuleNameResolver(moduleName, containingFile, compilerOptions, host, cache2, redirectedReference, resolutionMode ? getConditions(compilerOptions, resolutionMode) : void 0);
               break;
             default:
               return Debug.fail(`Unexpected moduleResolution: ${moduleResolution}`);
           }
-          if (cache && !cache.isReadonly) {
-            cache.getOrCreateCacheForDirectory(containingDirectory, redirectedReference).set(moduleName, resolutionMode, result);
+          if (cache2 && !cache2.isReadonly) {
+            cache2.getOrCreateCacheForDirectory(containingDirectory, redirectedReference).set(moduleName, resolutionMode, result);
             if (!isExternalModuleNameRelative(moduleName)) {
-              cache.getOrCreateCacheForNonRelativeName(moduleName, resolutionMode, redirectedReference).set(containingDirectory, result);
+              cache2.getOrCreateCacheForNonRelativeName(moduleName, resolutionMode, redirectedReference).set(containingDirectory, result);
             }
           }
         }
@@ -55612,31 +55612,31 @@ ${lanes.join("\n")}
         NodeResolutionFeatures2[NodeResolutionFeatures2["EsmMode"] = 32] = "EsmMode";
         return NodeResolutionFeatures2;
       })(NodeResolutionFeatures || {});
-      function node16ModuleNameResolver(moduleName, containingFile, compilerOptions, host, cache, redirectedReference, resolutionMode) {
+      function node16ModuleNameResolver(moduleName, containingFile, compilerOptions, host, cache2, redirectedReference, resolutionMode) {
         return nodeNextModuleNameResolverWorker(
           30,
           moduleName,
           containingFile,
           compilerOptions,
           host,
-          cache,
+          cache2,
           redirectedReference,
           resolutionMode
         );
       }
-      function nodeNextModuleNameResolver(moduleName, containingFile, compilerOptions, host, cache, redirectedReference, resolutionMode) {
+      function nodeNextModuleNameResolver(moduleName, containingFile, compilerOptions, host, cache2, redirectedReference, resolutionMode) {
         return nodeNextModuleNameResolverWorker(
           30,
           moduleName,
           containingFile,
           compilerOptions,
           host,
-          cache,
+          cache2,
           redirectedReference,
           resolutionMode
         );
       }
-      function nodeNextModuleNameResolverWorker(features, moduleName, containingFile, compilerOptions, host, cache, redirectedReference, resolutionMode, conditions) {
+      function nodeNextModuleNameResolverWorker(features, moduleName, containingFile, compilerOptions, host, cache2, redirectedReference, resolutionMode, conditions) {
         const containingDirectory = getDirectoryPath(containingFile);
         const esmMode = resolutionMode === 99 ? 32 : 0;
         let extensions = compilerOptions.noDtsResolution ? 3 : 1 | 2 | 4;
@@ -55649,7 +55649,7 @@ ${lanes.join("\n")}
           containingDirectory,
           compilerOptions,
           host,
-          cache,
+          cache2,
           extensions,
           /*isConfigLookup*/
           false,
@@ -55675,7 +55675,7 @@ ${lanes.join("\n")}
           void 0
         );
       }
-      function bundlerModuleNameResolver(moduleName, containingFile, compilerOptions, host, cache, redirectedReference, conditions) {
+      function bundlerModuleNameResolver(moduleName, containingFile, compilerOptions, host, cache2, redirectedReference, conditions) {
         const containingDirectory = getDirectoryPath(containingFile);
         let extensions = compilerOptions.noDtsResolution ? 3 : 1 | 2 | 4;
         if (getResolveJsonModule(compilerOptions)) {
@@ -55687,7 +55687,7 @@ ${lanes.join("\n")}
           containingDirectory,
           compilerOptions,
           host,
-          cache,
+          cache2,
           extensions,
           /*isConfigLookup*/
           false,
@@ -55695,7 +55695,7 @@ ${lanes.join("\n")}
           conditions
         );
       }
-      function nodeModuleNameResolver(moduleName, containingFile, compilerOptions, host, cache, redirectedReference, conditions, isConfigLookup) {
+      function nodeModuleNameResolver(moduleName, containingFile, compilerOptions, host, cache2, redirectedReference, conditions, isConfigLookup) {
         let extensions;
         if (isConfigLookup) {
           extensions = 8;
@@ -55705,7 +55705,7 @@ ${lanes.join("\n")}
         } else {
           extensions = getResolveJsonModule(compilerOptions) ? 1 | 2 | 4 | 8 : 1 | 2 | 4;
         }
-        return nodeModuleNameResolverWorker(conditions ? 30 : 0, moduleName, getDirectoryPath(containingFile), compilerOptions, host, cache, extensions, !!isConfigLookup, redirectedReference, conditions);
+        return nodeModuleNameResolverWorker(conditions ? 30 : 0, moduleName, getDirectoryPath(containingFile), compilerOptions, host, cache2, extensions, !!isConfigLookup, redirectedReference, conditions);
       }
       function nodeNextJsonConfigResolver(moduleName, containingFile, host) {
         return nodeModuleNameResolverWorker(
@@ -55728,7 +55728,7 @@ ${lanes.join("\n")}
           void 0
         );
       }
-      function nodeModuleNameResolverWorker(features, moduleName, containingDirectory, compilerOptions, host, cache, extensions, isConfigLookup, redirectedReference, conditions) {
+      function nodeModuleNameResolverWorker(features, moduleName, containingDirectory, compilerOptions, host, cache2, extensions, isConfigLookup, redirectedReference, conditions) {
         var _a, _b, _c, _d, _e;
         const traceEnabled = isTraceEnabled(compilerOptions, host);
         const failedLookupLocations = [];
@@ -55746,7 +55746,7 @@ ${lanes.join("\n")}
           traceEnabled,
           failedLookupLocations,
           affectingLocations,
-          packageJsonInfoCache: cache,
+          packageJsonInfoCache: cache2,
           features,
           conditions: conditions ?? emptyArray,
           requestContainingDirectory: containingDirectory,
@@ -55808,7 +55808,7 @@ ${lanes.join("\n")}
           affectingLocations,
           diagnostics,
           state,
-          cache,
+          cache2,
           alternateResult
         );
         function tryResolve(extensions2, state2) {
@@ -55826,13 +55826,13 @@ ${lanes.join("\n")}
           }
           if (!isExternalModuleNameRelative(moduleName)) {
             if (features & 2 && startsWith(moduleName, "#")) {
-              const resolved3 = loadModuleFromImports(extensions2, moduleName, containingDirectory, state2, cache, redirectedReference);
+              const resolved3 = loadModuleFromImports(extensions2, moduleName, containingDirectory, state2, cache2, redirectedReference);
               if (resolved3) {
                 return resolved3.value && { value: { resolved: resolved3.value, isExternalLibraryImport: false } };
               }
             }
             if (features & 4) {
-              const resolved3 = loadModuleFromSelfNameReference(extensions2, moduleName, containingDirectory, state2, cache, redirectedReference);
+              const resolved3 = loadModuleFromSelfNameReference(extensions2, moduleName, containingDirectory, state2, cache2, redirectedReference);
               if (resolved3) {
                 return resolved3.value && { value: { resolved: resolved3.value, isExternalLibraryImport: false } };
               }
@@ -55846,7 +55846,7 @@ ${lanes.join("\n")}
             if (traceEnabled) {
               trace(host, Diagnostics.Loading_module_0_from_node_modules_folder_target_file_types_Colon_1, moduleName, formatExtensions(extensions2));
             }
-            let resolved2 = loadModuleFromNearestNodeModulesDirectory(extensions2, moduleName, containingDirectory, state2, cache, redirectedReference);
+            let resolved2 = loadModuleFromNearestNodeModulesDirectory(extensions2, moduleName, containingDirectory, state2, cache2, redirectedReference);
             if (extensions2 & 4) {
               resolved2 ?? (resolved2 = resolveFromTypeRoot(moduleName, state2));
             }
@@ -56118,14 +56118,14 @@ ${lanes.join("\n")}
         const packageInfo = considerPackageJson ? getPackageJsonInfo(candidate, onlyRecordFailures, state) : void 0;
         return withPackageId(packageInfo, loadNodeModuleFromDirectoryWorker(extensions, candidate, onlyRecordFailures, state, packageInfo), state);
       }
-      function getEntrypointsFromPackageJsonInfo(packageJsonInfo, options, host, cache, resolveJs) {
+      function getEntrypointsFromPackageJsonInfo(packageJsonInfo, options, host, cache2, resolveJs) {
         if (!resolveJs && packageJsonInfo.contents.resolvedEntrypoints !== void 0) {
           return packageJsonInfo.contents.resolvedEntrypoints;
         }
         let entrypoints;
         const extensions = 1 | 4 | (resolveJs ? 2 : 0);
         const features = getNodeResolutionFeatures(options);
-        const loadPackageJsonMainState = getTemporaryModuleResolutionState(cache == null ? void 0 : cache.getPackageJsonInfoCache(), host, options);
+        const loadPackageJsonMainState = getTemporaryModuleResolutionState(cache2 == null ? void 0 : cache2.getPackageJsonInfoCache(), host, options);
         loadPackageJsonMainState.conditions = getConditions(options);
         loadPackageJsonMainState.requestContainingDirectory = packageJsonInfo.packageDirectory;
         const mainResolution = loadNodeModuleFromDirectoryWorker(
@@ -56427,7 +56427,7 @@ ${lanes.join("\n")}
       function noKeyStartsWithDot(obj) {
         return !some(getOwnKeys(obj), (k) => startsWith(k, "."));
       }
-      function loadModuleFromSelfNameReference(extensions, moduleName, directory, state, cache, redirectedReference) {
+      function loadModuleFromSelfNameReference(extensions, moduleName, directory, state, cache2, redirectedReference) {
         var _a, _b;
         const directoryPath = getNormalizedAbsolutePath(directory, (_b = (_a = state.host).getCurrentDirectory) == null ? void 0 : _b.call(_a));
         const scope = getPackageScopeForPath(directoryPath, state);
@@ -56445,13 +56445,13 @@ ${lanes.join("\n")}
         const trailingParts = parts.slice(nameParts.length);
         const subpath = !length(trailingParts) ? "." : `.${directorySeparator}${trailingParts.join(directorySeparator)}`;
         if (getAllowJSCompilerOption(state.compilerOptions) && !pathContainsNodeModules(directory)) {
-          return loadModuleFromExports(scope, extensions, subpath, state, cache, redirectedReference);
+          return loadModuleFromExports(scope, extensions, subpath, state, cache2, redirectedReference);
         }
         const priorityExtensions = extensions & (1 | 4);
         const secondaryExtensions = extensions & ~(1 | 4);
-        return loadModuleFromExports(scope, priorityExtensions, subpath, state, cache, redirectedReference) || loadModuleFromExports(scope, secondaryExtensions, subpath, state, cache, redirectedReference);
+        return loadModuleFromExports(scope, priorityExtensions, subpath, state, cache2, redirectedReference) || loadModuleFromExports(scope, secondaryExtensions, subpath, state, cache2, redirectedReference);
       }
-      function loadModuleFromExports(scope, extensions, subpath, state, cache, redirectedReference) {
+      function loadModuleFromExports(scope, extensions, subpath, state, cache2, redirectedReference) {
         if (!scope.contents.packageJsonContent.exports) {
           return void 0;
         }
@@ -56466,7 +56466,7 @@ ${lanes.join("\n")}
             const loadModuleFromTargetExportOrImport = getLoadModuleFromTargetExportOrImport(
               extensions,
               state,
-              cache,
+              cache2,
               redirectedReference,
               subpath,
               scope,
@@ -56494,7 +56494,7 @@ ${lanes.join("\n")}
           const result = loadModuleFromExportsOrImports(
             extensions,
             state,
-            cache,
+            cache2,
             redirectedReference,
             subpath,
             scope.contents.packageJsonContent.exports,
@@ -56514,7 +56514,7 @@ ${lanes.join("\n")}
           void 0
         );
       }
-      function loadModuleFromImports(extensions, moduleName, directory, state, cache, redirectedReference) {
+      function loadModuleFromImports(extensions, moduleName, directory, state, cache2, redirectedReference) {
         var _a, _b;
         if (moduleName === "#" || startsWith(moduleName, "#/")) {
           if (state.traceEnabled) {
@@ -56548,7 +56548,7 @@ ${lanes.join("\n")}
         const result = loadModuleFromExportsOrImports(
           extensions,
           state,
-          cache,
+          cache2,
           redirectedReference,
           moduleName,
           scope.contents.packageJsonContent.imports,
@@ -56580,8 +56580,8 @@ ${lanes.join("\n")}
         if (b.length > a.length) return 1;
         return 0;
       }
-      function loadModuleFromExportsOrImports(extensions, state, cache, redirectedReference, moduleName, lookupTable, scope, isImports) {
-        const loadModuleFromTargetExportOrImport = getLoadModuleFromTargetExportOrImport(extensions, state, cache, redirectedReference, moduleName, scope, isImports);
+      function loadModuleFromExportsOrImports(extensions, state, cache2, redirectedReference, moduleName, lookupTable, scope, isImports) {
+        const loadModuleFromTargetExportOrImport = getLoadModuleFromTargetExportOrImport(extensions, state, cache2, redirectedReference, moduleName, scope, isImports);
         if (!endsWith(moduleName, directorySeparator) && !moduleName.includes("*") && hasProperty(lookupTable, moduleName)) {
           const target = lookupTable[moduleName];
           return loadModuleFromTargetExportOrImport(
@@ -56639,7 +56639,7 @@ ${lanes.join("\n")}
         const firstStar = patternKey.indexOf("*");
         return firstStar !== -1 && firstStar === patternKey.lastIndexOf("*");
       }
-      function getLoadModuleFromTargetExportOrImport(extensions, state, cache, redirectedReference, moduleName, scope, isImports) {
+      function getLoadModuleFromTargetExportOrImport(extensions, state, cache2, redirectedReference, moduleName, scope, isImports) {
         return loadModuleFromTargetExportOrImport;
         function loadModuleFromTargetExportOrImport(target, subpath, pattern, key) {
           var _a, _b;
@@ -56664,7 +56664,7 @@ ${lanes.join("\n")}
                   scope.packageDirectory + "/",
                   state.compilerOptions,
                   state.host,
-                  cache,
+                  cache2,
                   extensions,
                   /*isConfigLookup*/
                   false,
@@ -56881,7 +56881,7 @@ ${lanes.join("\n")}
         if (!range) return false;
         return range.test(version);
       }
-      function loadModuleFromNearestNodeModulesDirectory(extensions, moduleName, directory, state, cache, redirectedReference) {
+      function loadModuleFromNearestNodeModulesDirectory(extensions, moduleName, directory, state, cache2, redirectedReference) {
         return loadModuleFromNearestNodeModulesDirectoryWorker(
           extensions,
           moduleName,
@@ -56889,7 +56889,7 @@ ${lanes.join("\n")}
           state,
           /*typesScopeOnly*/
           false,
-          cache,
+          cache2,
           redirectedReference
         );
       }
@@ -56907,7 +56907,7 @@ ${lanes.join("\n")}
           void 0
         );
       }
-      function loadModuleFromNearestNodeModulesDirectoryWorker(extensions, moduleName, directory, state, typesScopeOnly, cache, redirectedReference) {
+      function loadModuleFromNearestNodeModulesDirectoryWorker(extensions, moduleName, directory, state, typesScopeOnly, cache2, redirectedReference) {
         const mode = state.features === 0 ? void 0 : state.features & 32 || state.conditions.includes("import") ? 99 : 1;
         const priorityExtensions = extensions & (1 | 4);
         const secondaryExtensions = extensions & ~(1 | 4);
@@ -56926,11 +56926,11 @@ ${lanes.join("\n")}
             normalizeSlashes(directory),
             (ancestorDirectory) => {
               if (getBaseFileName(ancestorDirectory) !== "node_modules") {
-                const resolutionFromCache = tryFindNonRelativeModuleNameInCache(cache, moduleName, mode, ancestorDirectory, redirectedReference, state);
+                const resolutionFromCache = tryFindNonRelativeModuleNameInCache(cache2, moduleName, mode, ancestorDirectory, redirectedReference, state);
                 if (resolutionFromCache) {
                   return resolutionFromCache;
                 }
-                return toSearchResult(loadModuleFromImmediateNodeModulesDirectory(extensions2, moduleName, ancestorDirectory, state, typesScopeOnly, cache, redirectedReference));
+                return toSearchResult(loadModuleFromImmediateNodeModulesDirectory(extensions2, moduleName, ancestorDirectory, state, typesScopeOnly, cache2, redirectedReference));
               }
             }
           );
@@ -56945,14 +56945,14 @@ ${lanes.join("\n")}
           if (ancestorDirectory === globalCache) return false;
         }) || void 0;
       }
-      function loadModuleFromImmediateNodeModulesDirectory(extensions, moduleName, directory, state, typesScopeOnly, cache, redirectedReference) {
+      function loadModuleFromImmediateNodeModulesDirectory(extensions, moduleName, directory, state, typesScopeOnly, cache2, redirectedReference) {
         const nodeModulesFolder = combinePaths(directory, "node_modules");
         const nodeModulesFolderExists = directoryProbablyExists(nodeModulesFolder, state.host);
         if (!nodeModulesFolderExists && state.traceEnabled) {
           trace(state.host, Diagnostics.Directory_0_does_not_exist_skipping_all_lookups_in_it, nodeModulesFolder);
         }
         if (!typesScopeOnly) {
-          const packageResult = loadModuleFromSpecificNodeModulesDirectory(extensions, moduleName, nodeModulesFolder, nodeModulesFolderExists, state, cache, redirectedReference);
+          const packageResult = loadModuleFromSpecificNodeModulesDirectory(extensions, moduleName, nodeModulesFolder, nodeModulesFolderExists, state, cache2, redirectedReference);
           if (packageResult) {
             return packageResult;
           }
@@ -56966,10 +56966,10 @@ ${lanes.join("\n")}
             }
             nodeModulesAtTypesExists = false;
           }
-          return loadModuleFromSpecificNodeModulesDirectory(4, mangleScopedPackageNameWithTrace(moduleName, state), nodeModulesAtTypes2, nodeModulesAtTypesExists, state, cache, redirectedReference);
+          return loadModuleFromSpecificNodeModulesDirectory(4, mangleScopedPackageNameWithTrace(moduleName, state), nodeModulesAtTypes2, nodeModulesAtTypesExists, state, cache2, redirectedReference);
         }
       }
-      function loadModuleFromSpecificNodeModulesDirectory(extensions, moduleName, nodeModulesDirectory, nodeModulesDirectoryExists, state, cache, redirectedReference) {
+      function loadModuleFromSpecificNodeModulesDirectory(extensions, moduleName, nodeModulesDirectory, nodeModulesDirectoryExists, state, cache2, redirectedReference) {
         var _a, _b;
         const candidate = normalizePath(combinePaths(nodeModulesDirectory, moduleName));
         const { packageName, rest } = parsePackageName(moduleName);
@@ -57010,7 +57010,7 @@ ${lanes.join("\n")}
           state.resolvedPackageDirectory = true;
         }
         if (packageInfo && packageInfo.contents.packageJsonContent.exports && state.features & 8) {
-          return (_b = loadModuleFromExports(packageInfo, extensions, combinePaths(".", rest), state, cache, redirectedReference)) == null ? void 0 : _b.value;
+          return (_b = loadModuleFromExports(packageInfo, extensions, combinePaths(".", rest), state, cache2, redirectedReference)) == null ? void 0 : _b.value;
         }
         const versionPaths = rest !== "" && packageInfo ? getVersionPathsOfPackageJsonInfo(packageInfo, state) : void 0;
         if (versionPaths) {
@@ -57082,8 +57082,8 @@ ${lanes.join("\n")}
       function unmangleScopedPackageName(typesPackageName) {
         return typesPackageName.includes(mangledScopedPackageSeparator) ? "@" + typesPackageName.replace(mangledScopedPackageSeparator, directorySeparator) : typesPackageName;
       }
-      function tryFindNonRelativeModuleNameInCache(cache, moduleName, mode, containingDirectory, redirectedReference, state) {
-        const result = cache && cache.getFromNonRelativeNameCache(moduleName, mode, containingDirectory, redirectedReference);
+      function tryFindNonRelativeModuleNameInCache(cache2, moduleName, mode, containingDirectory, redirectedReference, state) {
+        const result = cache2 && cache2.getFromNonRelativeNameCache(moduleName, mode, containingDirectory, redirectedReference);
         if (result) {
           if (state.traceEnabled) {
             trace(state.host, Diagnostics.Resolution_for_module_0_was_found_in_cache_from_location_1, moduleName, containingDirectory);
@@ -57100,7 +57100,7 @@ ${lanes.join("\n")}
           };
         }
       }
-      function classicNameResolver(moduleName, containingFile, compilerOptions, host, cache, redirectedReference) {
+      function classicNameResolver(moduleName, containingFile, compilerOptions, host, cache2, redirectedReference) {
         const traceEnabled = isTraceEnabled(compilerOptions, host);
         const failedLookupLocations = [];
         const affectingLocations = [];
@@ -57112,7 +57112,7 @@ ${lanes.join("\n")}
           traceEnabled,
           failedLookupLocations,
           affectingLocations,
-          packageJsonInfoCache: cache,
+          packageJsonInfoCache: cache2,
           features: 0,
           conditions: [],
           requestContainingDirectory: containingDirectory,
@@ -57133,7 +57133,7 @@ ${lanes.join("\n")}
           affectingLocations,
           diagnostics,
           state,
-          cache
+          cache2
         );
         function tryResolve(extensions) {
           const resolvedUsingSettings = tryLoadModuleUsingOptionalResolutionSettings(extensions, moduleName, containingDirectory, loadModuleFromFileNoPackageId, state);
@@ -57146,7 +57146,7 @@ ${lanes.join("\n")}
               containingDirectory,
               (directory) => {
                 const resolutionFromCache = tryFindNonRelativeModuleNameInCache(
-                  cache,
+                  cache2,
                   moduleName,
                   /*mode*/
                   void 0,
@@ -60977,9 +60977,9 @@ ${lanes.join("\n")}
         if (!moduleSourceFile) {
           return emptyArray;
         }
-        const cache = (_a = host.getModuleSpecifierCache) == null ? void 0 : _a.call(host);
-        const cached = cache == null ? void 0 : cache.get(importingSourceFile.path, moduleSourceFile.path, userPreferences, options);
-        return [cached == null ? void 0 : cached.kind, cached == null ? void 0 : cached.moduleSpecifiers, moduleSourceFile, cached == null ? void 0 : cached.modulePaths, cache];
+        const cache2 = (_a = host.getModuleSpecifierCache) == null ? void 0 : _a.call(host);
+        const cached = cache2 == null ? void 0 : cache2.get(importingSourceFile.path, moduleSourceFile.path, userPreferences, options);
+        return [cached == null ? void 0 : cached.kind, cached == null ? void 0 : cached.moduleSpecifiers, moduleSourceFile, cached == null ? void 0 : cached.modulePaths, cache2];
       }
       function getModuleSpecifiers(moduleSymbol, checker, compilerOptions, importingSourceFile, host, userPreferences, options = {}) {
         return getModuleSpecifiersWithCacheInfo(
@@ -61004,7 +61004,7 @@ ${lanes.join("\n")}
             computedWithoutCache
           };
         }
-        let [kind, specifiers, moduleSourceFile, modulePaths, cache] = tryGetModuleSpecifiersFromCacheWorker(
+        let [kind, specifiers, moduleSourceFile, modulePaths, cache2] = tryGetModuleSpecifiersFromCacheWorker(
           moduleSymbol,
           importingSourceFile,
           host,
@@ -61024,7 +61024,7 @@ ${lanes.join("\n")}
           options,
           forAutoImport
         );
-        cache == null ? void 0 : cache.set(importingSourceFile.path, moduleSourceFile.path, userPreferences, options, result.kind, modulePaths, result.moduleSpecifiers);
+        cache2 == null ? void 0 : cache2.set(importingSourceFile.path, moduleSourceFile.path, userPreferences, options, result.kind, modulePaths, result.moduleSpecifiers);
         return result;
       }
       function getLocalModuleSpecifierBetweenFileNames(importingFile, targetFileName, compilerOptions, host, preferences, options = {}) {
@@ -61256,14 +61256,14 @@ ${lanes.join("\n")}
         var _a;
         const importingFilePath = toPath(info.importingSourceFileName, host.getCurrentDirectory(), hostGetCanonicalFileName(host));
         const importedFilePath = toPath(importedFileName, host.getCurrentDirectory(), hostGetCanonicalFileName(host));
-        const cache = (_a = host.getModuleSpecifierCache) == null ? void 0 : _a.call(host);
-        if (cache) {
-          const cached = cache.get(importingFilePath, importedFilePath, preferences, options);
+        const cache2 = (_a = host.getModuleSpecifierCache) == null ? void 0 : _a.call(host);
+        if (cache2) {
+          const cached = cache2.get(importingFilePath, importedFilePath, preferences, options);
           if (cached == null ? void 0 : cached.modulePaths) return cached.modulePaths;
         }
         const modulePaths = getAllModulePathsWorker(info, importedFileName, host, compilerOptions, options);
-        if (cache) {
-          cache.setModulePaths(importingFilePath, importedFilePath, preferences, options, modulePaths);
+        if (cache2) {
+          cache2.setModulePaths(importingFilePath, importedFilePath, preferences, options, modulePaths);
         }
         return modulePaths;
       }
@@ -61280,11 +61280,11 @@ ${lanes.join("\n")}
       }
       function getAllModulePathsWorker(info, importedFileName, host, compilerOptions, options) {
         var _a, _b;
-        const cache = (_a = host.getModuleResolutionCache) == null ? void 0 : _a.call(host);
+        const cache2 = (_a = host.getModuleResolutionCache) == null ? void 0 : _a.call(host);
         const links = (_b = host.getSymlinkCache) == null ? void 0 : _b.call(host);
-        if (cache && links && host.readFile && !pathContainsNodeModules(info.importingSourceFileName)) {
+        if (cache2 && links && host.readFile && !pathContainsNodeModules(info.importingSourceFileName)) {
           Debug.type(host);
-          const state = getTemporaryModuleResolutionState(cache.getPackageJsonInfoCache(), host, {});
+          const state = getTemporaryModuleResolutionState(cache2.getPackageJsonInfoCache(), host, {});
           const packageJson = getPackageScopeForPath(getDirectoryPath(info.importingSourceFileName), state);
           if (packageJson) {
             const toResolve = getAllRuntimeDependencies(packageJson.contents.packageJsonContent);
@@ -61294,7 +61294,7 @@ ${lanes.join("\n")}
                 combinePaths(packageJson.packageDirectory, "package.json"),
                 compilerOptions,
                 host,
-                cache,
+                cache2,
                 /*redirectedReference*/
                 void 0,
                 options.overrideImportMode
@@ -66038,11 +66038,11 @@ ${lanes.join("\n")}
             return void 0;
           }
           const links = getSymbolLinks(symbol);
-          const cache = links.accessibleChainCache || (links.accessibleChainCache = /* @__PURE__ */ new Map());
+          const cache2 = links.accessibleChainCache || (links.accessibleChainCache = /* @__PURE__ */ new Map());
           const firstRelevantLocation = forEachSymbolTableInScope(enclosingDeclaration, (_, __, ___, node) => node);
           const key = `${useOnlyExternalAliasing ? 0 : 1}|${firstRelevantLocation ? getNodeId(firstRelevantLocation) : 0}|${meaning}`;
-          if (cache.has(key)) {
-            return cache.get(key);
+          if (cache2.has(key)) {
+            return cache2.get(key);
           }
           const id = getSymbolId(symbol);
           let visitedSymbolTables = visitedSymbolTablesMap.get(id);
@@ -66050,7 +66050,7 @@ ${lanes.join("\n")}
             visitedSymbolTablesMap.set(id, visitedSymbolTables = []);
           }
           const result = forEachSymbolTableInScope(enclosingDeclaration, getAccessibleSymbolChainFromSymbolTable);
-          cache.set(key, result);
+          cache2.set(key, result);
           return result;
           function getAccessibleSymbolChainFromSymbolTable(symbols, ignoreQualification, isLocalNameLookup) {
             if (!pushIfUnique(visitedSymbolTables, symbols)) {
@@ -79150,21 +79150,21 @@ ${lanes.join("\n")}
           }
         }
         function getSimplifiedIndexedAccessType(type, writing) {
-          const cache = writing ? "simplifiedForWriting" : "simplifiedForReading";
-          if (type[cache]) {
-            return type[cache] === circularConstraintType ? type : type[cache];
+          const cache2 = writing ? "simplifiedForWriting" : "simplifiedForReading";
+          if (type[cache2]) {
+            return type[cache2] === circularConstraintType ? type : type[cache2];
           }
-          type[cache] = circularConstraintType;
+          type[cache2] = circularConstraintType;
           const objectType = getSimplifiedType(type.objectType, writing);
           const indexType = getSimplifiedType(type.indexType, writing);
           const distributedOverIndex = distributeObjectOverIndexType(objectType, indexType, writing);
           if (distributedOverIndex) {
-            return type[cache] = distributedOverIndex;
+            return type[cache2] = distributedOverIndex;
           }
           if (!(indexType.flags & 465829888)) {
             const distributedOverObject = distributeIndexOverObjectType(objectType, indexType, writing);
             if (distributedOverObject) {
-              return type[cache] = distributedOverObject;
+              return type[cache2] = distributedOverObject;
             }
           }
           if (isGenericTupleType(objectType) && indexType.flags & 296) {
@@ -79176,15 +79176,15 @@ ${lanes.join("\n")}
               writing
             );
             if (elementType) {
-              return type[cache] = elementType;
+              return type[cache2] = elementType;
             }
           }
           if (isGenericMappedType(objectType)) {
             if (getMappedTypeNameTypeKind(objectType) !== 2) {
-              return type[cache] = mapType(substituteIndexedMappedType(objectType, type.indexType), (t) => getSimplifiedType(t, writing));
+              return type[cache2] = mapType(substituteIndexedMappedType(objectType, type.indexType), (t) => getSimplifiedType(t, writing));
             }
           }
-          return type[cache] = type;
+          return type[cache2] = type;
         }
         function getSimplifiedConditionalType(type, writing) {
           const checkType = type.checkType;
@@ -87786,12 +87786,12 @@ ${lanes.join("\n")}
           }
           function getTypeAtFlowLoopLabel(flow) {
             const id = getFlowNodeId(flow);
-            const cache = flowLoopCaches[id] || (flowLoopCaches[id] = /* @__PURE__ */ new Map());
+            const cache2 = flowLoopCaches[id] || (flowLoopCaches[id] = /* @__PURE__ */ new Map());
             const key2 = getOrSetCacheKey();
             if (!key2) {
               return declaredType;
             }
-            const cached = cache.get(key2);
+            const cached = cache2.get(key2);
             if (cached) {
               return cached;
             }
@@ -87825,7 +87825,7 @@ ${lanes.join("\n")}
                 flowType = getTypeAtFlowNode(antecedent);
                 flowTypeCache = saveFlowTypeCache;
                 flowLoopCount--;
-                const cached2 = cache.get(key2);
+                const cached2 = cache2.get(key2);
                 if (cached2) {
                   return cached2;
                 }
@@ -87851,7 +87851,7 @@ ${lanes.join("\n")}
                 true
               );
             }
-            cache.set(key2, result);
+            cache2.set(key2, result);
             return result;
           }
           function getUnionOrEvolvingArrayType(types, subtypeReduction) {
@@ -92881,12 +92881,12 @@ ${lanes.join("\n")}
         }
         function reportNonexistentProperty(propNode, containingType, isUncheckedJS) {
           const links = getNodeLinks(propNode);
-          const cache = links.nonExistentPropCheckCache || (links.nonExistentPropCheckCache = /* @__PURE__ */ new Set());
+          const cache2 = links.nonExistentPropCheckCache || (links.nonExistentPropCheckCache = /* @__PURE__ */ new Set());
           const key = `${getTypeId(containingType)}|${isUncheckedJS}`;
-          if (cache.has(key)) {
+          if (cache2.has(key)) {
             return;
           }
-          cache.add(key);
+          cache2.add(key);
           let errorInfo;
           let relatedInfo;
           if (!isPrivateIdentifier(propNode) && containingType.flags & 1048576 && !(containingType.flags & 402784252)) {
@@ -98961,8 +98961,8 @@ ${lanes.join("\n")}
             /* TypeOnly */
           );
           if (flowInvocationCount !== startInvocationCount) {
-            const cache = flowTypeCache || (flowTypeCache = []);
-            cache[getNodeId(node)] = type;
+            const cache2 = flowTypeCache || (flowTypeCache = []);
+            cache2[getNodeId(node)] = type;
             setNodeFlags(
               node,
               node.flags | 268435456
@@ -141289,8 +141289,8 @@ ${lanes.join("\n")}
         }
         function generateNameCached(node, privateName, flags, prefix, suffix) {
           const nodeId = getNodeId(node);
-          const cache = privateName ? nodeIdToGeneratedPrivateName : nodeIdToGeneratedName;
-          return cache[nodeId] || (cache[nodeId] = generateNameForNode(node, privateName, flags ?? 0, formatGeneratedNamePart(prefix, generateName), formatGeneratedNamePart(suffix)));
+          const cache2 = privateName ? nodeIdToGeneratedPrivateName : nodeIdToGeneratedName;
+          return cache2[nodeId] || (cache2[nodeId] = generateNameForNode(node, privateName, flags ?? 0, formatGeneratedNamePart(prefix, generateName), formatGeneratedNamePart(suffix)));
         }
         function isUniqueName(name, privateName) {
           return isFileLevelUniqueNameInCurrentFile(name, privateName) && !isReservedName(name, privateName) && !generatedNames.has(name);
@@ -143096,7 +143096,7 @@ ${lanes.join("\n")}
         getName: getModuleResolutionName,
         getMode: (entry, file, compilerOptions) => getModeForUsageLocation(file, entry, compilerOptions)
       };
-      function createModuleResolutionLoader(containingFile, redirectedReference, options, host, cache) {
+      function createModuleResolutionLoader(containingFile, redirectedReference, options, host, cache2) {
         return {
           nameAndMode: moduleResolutionNameAndModeGetter,
           resolve: (moduleName, resolutionMode) => resolveModuleName(
@@ -143104,7 +143104,7 @@ ${lanes.join("\n")}
             containingFile,
             options,
             host,
-            cache,
+            cache2,
             redirectedReference,
             resolutionMode
           )
@@ -143117,7 +143117,7 @@ ${lanes.join("\n")}
         getName: getTypeReferenceResolutionName,
         getMode: (entry, file, compilerOptions) => getModeForFileReference(entry, file && getDefaultResolutionModeForFileWorker(file, compilerOptions))
       };
-      function createTypeReferenceResolutionLoader(containingFile, redirectedReference, options, host, cache) {
+      function createTypeReferenceResolutionLoader(containingFile, redirectedReference, options, host, cache2) {
         return {
           nameAndMode: typeReferenceResolutionNameAndModeGetter,
           resolve: (typeRef, resoluionMode) => resolveTypeReferenceDirective(
@@ -143126,7 +143126,7 @@ ${lanes.join("\n")}
             options,
             host,
             redirectedReference,
-            cache,
+            cache2,
             resoluionMode
           )
         };
@@ -143134,15 +143134,15 @@ ${lanes.join("\n")}
       function loadWithModeAwareCache(entries, containingFile, redirectedReference, options, containingSourceFile, host, resolutionCache, createLoader) {
         if (entries.length === 0) return emptyArray;
         const resolutions = [];
-        const cache = /* @__PURE__ */ new Map();
+        const cache2 = /* @__PURE__ */ new Map();
         const loader = createLoader(containingFile, redirectedReference, options, host, resolutionCache);
         for (const entry of entries) {
           const name = loader.nameAndMode.getName(entry);
           const mode = loader.nameAndMode.getMode(entry, containingSourceFile, (redirectedReference == null ? void 0 : redirectedReference.commandLine.options) || options);
           const key = createModeAwareCacheKey(name, mode);
-          let result = cache.get(key);
+          let result = cache2.get(key);
           if (!result) {
-            cache.set(key, result = loader.resolve(name, mode));
+            cache2.set(key, result = loader.resolve(name, mode));
           }
           resolutions.push(result);
         }
@@ -149680,8 +149680,8 @@ ${lanes.join("\n")}
             /* Recursive */
           );
         }
-        function removeResolutionsOfFileFromCache(cache, filePath, getResolutionWithResolvedFileName) {
-          const resolutions = cache.get(filePath);
+        function removeResolutionsOfFileFromCache(cache2, filePath, getResolutionWithResolvedFileName) {
+          const resolutions = cache2.get(filePath);
           if (resolutions) {
             resolutions.forEach(
               (resolution) => stopWatchFailedLookupLocationOfResolution(
@@ -149690,7 +149690,7 @@ ${lanes.join("\n")}
                 getResolutionWithResolvedFileName
               )
             );
-            cache.delete(filePath);
+            cache2.delete(filePath);
           }
         }
         function removeResolutionsFromProjectReferenceRedirects(filePath) {
@@ -151705,14 +151705,14 @@ ${lanes.join("\n")}
       }
       function disableCache(state) {
         if (!state.cache) return;
-        const { cache, host, compilerHost, extendedConfigCache, moduleResolutionCache, typeReferenceDirectiveResolutionCache, libraryResolutionCache } = state;
-        host.readFile = cache.originalReadFile;
-        host.fileExists = cache.originalFileExists;
-        host.directoryExists = cache.originalDirectoryExists;
-        host.createDirectory = cache.originalCreateDirectory;
-        host.writeFile = cache.originalWriteFile;
-        compilerHost.getSourceFile = cache.originalGetSourceFile;
-        state.readFileWithCache = cache.originalReadFileWithCache;
+        const { cache: cache2, host, compilerHost, extendedConfigCache, moduleResolutionCache, typeReferenceDirectiveResolutionCache, libraryResolutionCache } = state;
+        host.readFile = cache2.originalReadFile;
+        host.fileExists = cache2.originalFileExists;
+        host.directoryExists = cache2.originalDirectoryExists;
+        host.createDirectory = cache2.originalCreateDirectory;
+        host.writeFile = cache2.originalWriteFile;
+        compilerHost.getSourceFile = cache2.originalGetSourceFile;
+        state.readFileWithCache = cache2.originalReadFileWithCache;
         extendedConfigCache.clear();
         moduleResolutionCache == null ? void 0 : moduleResolutionCache.clear();
         typeReferenceDirectiveResolutionCache == null ? void 0 : typeReferenceDirectiveResolutionCache.clear();
@@ -159078,7 +159078,7 @@ ${lanes.join("\n")}
         const symbols = /* @__PURE__ */ new Map();
         const packages = /* @__PURE__ */ new Map();
         let usableByFileName;
-        const cache = {
+        const cache2 = {
           isUsableByFile: (importingFile) => importingFile === usableByFileName,
           isEmpty: () => !exportInfo.size,
           clear: () => {
@@ -159088,7 +159088,7 @@ ${lanes.join("\n")}
           },
           add: (importingFile, symbol, symbolTableKey, moduleSymbol, moduleFile, exportKind, isFromPackageJson, checker) => {
             if (importingFile !== usableByFileName) {
-              cache.clear();
+              cache2.clear();
               usableByFileName = importingFile;
             }
             let packageName;
@@ -159176,7 +159176,7 @@ ${lanes.join("\n")}
             // Changes elsewhere in the file can change the *type* of an export in a module augmentation,
             // but type info is gathered in getCompletionEntryDetails, which doesn't use the cache.
             !arrayIsEqualTo(oldSourceFile.moduleAugmentations, newSourceFile.moduleAugmentations) || !ambientModuleDeclarationsAreEqual(oldSourceFile, newSourceFile)) {
-              cache.clear();
+              cache2.clear();
               return true;
             }
             usableByFileName = newSourceFile.path;
@@ -159184,9 +159184,9 @@ ${lanes.join("\n")}
           }
         };
         if (Debug.isDebugging) {
-          Object.defineProperty(cache, "__cache", { value: exportInfo });
+          Object.defineProperty(cache2, "__cache", { value: exportInfo });
         }
-        return cache;
+        return cache2;
         function rehydrateCachedInfo(info) {
           if (info.symbol && info.moduleSymbol) return info;
           const { id, exportKind, targetFlags, isFromPackageJson, moduleFileName } = info;
@@ -159404,7 +159404,7 @@ ${lanes.join("\n")}
         var _a, _b, _c, _d, _e;
         const start = timestamp();
         (_a = host.getPackageJsonAutoImportProvider) == null ? void 0 : _a.call(host);
-        const cache = ((_b = host.getCachedExportInfoMap) == null ? void 0 : _b.call(host)) || createCacheableExportInfoMap({
+        const cache2 = ((_b = host.getCachedExportInfoMap) == null ? void 0 : _b.call(host)) || createCacheableExportInfoMap({
           getCurrentProgram: () => program,
           getPackageJsonAutoImportProvider: () => {
             var _a2;
@@ -159415,9 +159415,9 @@ ${lanes.join("\n")}
             return (_a2 = host.getGlobalTypingsCacheLocation) == null ? void 0 : _a2.call(host);
           }
         });
-        if (cache.isUsableByFile(importingFile.path)) {
+        if (cache2.isUsableByFile(importingFile.path)) {
           (_c = host.log) == null ? void 0 : _c.call(host, "getExportInfoMap: cache hit");
-          return cache;
+          return cache2;
         }
         (_d = host.log) == null ? void 0 : _d.call(host, "getExportInfoMap: cache miss or empty; calculating new results");
         let moduleCount = 0;
@@ -159434,7 +159434,7 @@ ${lanes.join("\n")}
               const checker = program2.getTypeChecker();
               const defaultInfo = getDefaultLikeExportInfo(moduleSymbol, checker);
               if (defaultInfo && isImportableSymbol(defaultInfo.symbol, checker)) {
-                cache.add(
+                cache2.add(
                   importingFile.path,
                   defaultInfo.symbol,
                   defaultInfo.exportKind === 1 ? "default" : "export=",
@@ -159447,7 +159447,7 @@ ${lanes.join("\n")}
               }
               checker.forEachExportAndPropertyOfModule(moduleSymbol, (exported, key) => {
                 if (exported !== (defaultInfo == null ? void 0 : defaultInfo.symbol) && isImportableSymbol(exported, checker) && addToSeen(seenExports, key)) {
-                  cache.add(
+                  cache2.add(
                     importingFile.path,
                     exported,
                     key,
@@ -159462,11 +159462,11 @@ ${lanes.join("\n")}
             }
           );
         } catch (err) {
-          cache.clear();
+          cache2.clear();
           throw err;
         }
         (_e = host.log) == null ? void 0 : _e.call(host, `getExportInfoMap: done in ${timestamp() - start} ms`);
-        return cache;
+        return cache2;
       }
       function getDefaultLikeExportInfo(moduleSymbol, checker) {
         const exportEquals = checker.resolveExternalModuleSymbol(moduleSymbol);
@@ -184799,8 +184799,8 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
       function completionEntryDataIsResolved(data) {
         return !!(data == null ? void 0 : data.moduleSpecifier);
       }
-      function continuePreviousIncompleteResponse(cache, file, location, program, host, preferences, cancellationToken, position) {
-        const previousResponse = cache.get();
+      function continuePreviousIncompleteResponse(cache2, file, location, program, host, preferences, cancellationToken, position) {
+        const previousResponse = cache2.get();
         if (!previousResponse) return void 0;
         const touchNode = getTouchingPropertyName(file, position);
         const lowerCaseTokenText = location.text.toLowerCase();
@@ -209204,9 +209204,9 @@ ${options.prefix}` : "\n" : options.prefix
         // TODO: GH#18217
       };
       var noopConfigFileWatcher = { close: noop };
-      function getConfigFileNameFromCache(info, cache) {
-        if (!cache) return void 0;
-        const configFileForOpenFile = cache.get(info.path);
+      function getConfigFileNameFromCache(info, cache2) {
+        if (!cache2) return void 0;
+        const configFileForOpenFile = cache2.get(info.path);
         if (configFileForOpenFile === void 0) return void 0;
         if (!isAncestorConfigFileInfo(info)) {
           return isString(configFileForOpenFile) || !configFileForOpenFile ? configFileForOpenFile : (
@@ -213017,12 +213017,12 @@ Dynamic files must always be opened with service's current directory or service 
       }
       function createModuleSpecifierCache(host) {
         let containedNodeModulesWatchers;
-        let cache;
+        let cache2;
         let currentKey;
         const result = {
           get(fromFileName, toFileName2, preferences, options) {
-            if (!cache || currentKey !== key(fromFileName, preferences, options)) return void 0;
-            return cache.get(toFileName2);
+            if (!cache2 || currentKey !== key(fromFileName, preferences, options)) return void 0;
+            return cache2.get(toFileName2);
           },
           set(fromFileName, toFileName2, preferences, options, kind, modulePaths, moduleSpecifiers2) {
             ensureCache(fromFileName, preferences, options).set(toFileName2, createInfo(
@@ -213050,12 +213050,12 @@ Dynamic files must always be opened with service's current directory or service 
             }
           },
           setModulePaths(fromFileName, toFileName2, preferences, options, modulePaths) {
-            const cache2 = ensureCache(fromFileName, preferences, options);
-            const info = cache2.get(toFileName2);
+            const cache22 = ensureCache(fromFileName, preferences, options);
+            const info = cache22.get(toFileName2);
             if (info) {
               info.modulePaths = modulePaths;
             } else {
-              cache2.set(toFileName2, createInfo(
+              cache22.set(toFileName2, createInfo(
                 /*kind*/
                 void 0,
                 modulePaths,
@@ -213069,13 +213069,13 @@ Dynamic files must always be opened with service's current directory or service 
             }
           },
           setBlockedByPackageJsonDependencies(fromFileName, toFileName2, preferences, options, packageName, isBlockedByPackageJsonDependencies) {
-            const cache2 = ensureCache(fromFileName, preferences, options);
-            const info = cache2.get(toFileName2);
+            const cache22 = ensureCache(fromFileName, preferences, options);
+            const info = cache22.get(toFileName2);
             if (info) {
               info.isBlockedByPackageJsonDependencies = isBlockedByPackageJsonDependencies;
               info.packageName = packageName;
             } else {
-              cache2.set(toFileName2, createInfo(
+              cache22.set(toFileName2, createInfo(
                 /*kind*/
                 void 0,
                 /*modulePaths*/
@@ -213089,25 +213089,25 @@ Dynamic files must always be opened with service's current directory or service 
           },
           clear() {
             containedNodeModulesWatchers == null ? void 0 : containedNodeModulesWatchers.forEach(closeFileWatcher);
-            cache == null ? void 0 : cache.clear();
+            cache2 == null ? void 0 : cache2.clear();
             containedNodeModulesWatchers == null ? void 0 : containedNodeModulesWatchers.clear();
             currentKey = void 0;
           },
           count() {
-            return cache ? cache.size : 0;
+            return cache2 ? cache2.size : 0;
           }
         };
         if (Debug.isDebugging) {
-          Object.defineProperty(result, "__cache", { get: () => cache });
+          Object.defineProperty(result, "__cache", { get: () => cache2 });
         }
         return result;
         function ensureCache(fromFileName, preferences, options) {
           const newKey = key(fromFileName, preferences, options);
-          if (cache && currentKey !== newKey) {
+          if (cache2 && currentKey !== newKey) {
             result.clear();
           }
           currentKey = newKey;
-          return cache || (cache = /* @__PURE__ */ new Map());
+          return cache2 || (cache2 = /* @__PURE__ */ new Map());
         }
         function key(fromFileName, preferences, options) {
           return `${fromFileName},${preferences.importModuleSpecifierEnding},${preferences.importModuleSpecifierPreference},${options.overrideImportMode}`;
@@ -217346,9 +217346,9 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
       _ScriptVersionCache.maxVersions = 8;
       var ScriptVersionCache = _ScriptVersionCache;
       var LineIndexSnapshot = class _LineIndexSnapshot {
-        constructor(version2, cache, index, changesSincePreviousVersion = emptyArray2) {
+        constructor(version2, cache2, index, changesSincePreviousVersion = emptyArray2) {
           this.version = version2;
-          this.cache = cache;
+          this.cache = cache2;
           this.index = index;
           this.changesSincePreviousVersion = changesSincePreviousVersion;
         }
@@ -218107,8 +218107,8 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 });
 
 // src/benchmark/index.ts
-import { mkdirSync as mkdirSync12, writeFileSync as writeFileSync11, existsSync as existsSync18 } from "node:fs";
-import { dirname as dirname6, join as join20 } from "node:path";
+import { mkdirSync as mkdirSync13, writeFileSync as writeFileSync12, existsSync as existsSync18 } from "node:fs";
+import { dirname as dirname6, join as join21 } from "node:path";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 
 // src/usage-history.ts
@@ -219763,8 +219763,8 @@ function applyEnsembleSlotToSettings(settingsPath, profileName, slot, modelId) {
 }
 
 // src/benchmark/update-all.ts
-import { mkdirSync as mkdirSync9, writeFileSync as writeFileSync8 } from "node:fs";
-import { dirname as dirname5, join as join17 } from "node:path";
+import { mkdirSync as mkdirSync10, writeFileSync as writeFileSync9 } from "node:fs";
+import { dirname as dirname5, join as join18 } from "node:path";
 
 // src/benchmark/budget.ts
 var DEFAULT_BUDGET_USD = 2;
@@ -219924,8 +219924,8 @@ function makeBudgetedGlobalFetch(ledger, priceOf, inner = (url, init) => fetch(u
 
 // src/benchmark/security-triage/index.ts
 import { createHash as createHash2 } from "node:crypto";
-import { existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync7, renameSync, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join7 } from "node:path";
+import { existsSync as existsSync5, mkdirSync as mkdirSync5, readFileSync as readFileSync8, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join8 } from "node:path";
 
 // src/project-root.ts
 import { existsSync as existsSync3 } from "node:fs";
@@ -220983,8 +220983,238 @@ function computeCallCost(usage, pricing, fallbackInputBytes, fallbackOutputBytes
   return inTok / 1e6 * pricing.input_per_m_usd + outTok / 1e6 * pricing.output_per_m_usd;
 }
 
+// src/free-rotation.ts
+import { mkdirSync as mkdirSync4, readFileSync as readFileSync7, renameSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join7 } from "node:path";
+var FREE_FLOOR_MIN_CONTEXT_TOKENS = 32e3;
+function filterFreeModels(freeModels, catalogById, benchmarkFailed = /* @__PURE__ */ new Set()) {
+  return freeModels.filter((id) => {
+    if (benchmarkFailed.has(id)) return false;
+    const m = catalogById.get(id);
+    if (!m) return true;
+    const ctx = m.context_length ?? m.top_provider?.context_length ?? 0;
+    if (ctx === 0) return true;
+    return ctx >= FREE_FLOOR_MIN_CONTEXT_TOKENS;
+  });
+}
+function approvedFreePoolFromSettings() {
+  try {
+    const s = loadSettings();
+    const active = s?.profiles[s.active];
+    if (!s || !active) return [];
+    const r = resolveProfile(s.active, active);
+    const base = r.freeModels.length > 0 ? r.freeModels : [...FREE_POOL_SEED];
+    return filterFreeModels(base, /* @__PURE__ */ new Map(), benchmarkFailedModels()).filter(
+      isFreeSuffixModelId
+    );
+  } catch {
+    return [];
+  }
+}
+function emptyStore() {
+  return { version: 1, models: {} };
+}
+var TRANSIENT_BASE_MS = 3e4;
+var TRANSIENT_CAP_MS = 3e5;
+var GONE_MS = 36e5;
+function classifyUnavailable(detail) {
+  const s = (detail || "").toLowerCase();
+  if (s.includes("free-models-per-day") || s.includes("per-day") || s.includes("per day") || s.includes("daily limit") || s.includes("daily quota") || s.includes("quota") || s.includes("limit exceeded") || s.includes("exceeded your")) {
+    return "daily-quota";
+  }
+  if (s.includes("no endpoints") || s.includes("no allowed providers") || s.includes("not found") || s.includes("404")) {
+    return "gone";
+  }
+  if (s.includes("429") || s.includes("rate limit") || s.includes("rate-limit") || s.includes("rate_limit") || s.includes("ratelimit") || s.includes("too many requests") || s.includes("502") || s.includes("503") || s.includes("overloaded") || s.includes("temporarily unavailable")) {
+    return "transient";
+  }
+  return null;
+}
+function nextUtcMidnight(nowMs) {
+  const d = new Date(nowMs);
+  return Date.UTC(
+    d.getUTCFullYear(),
+    d.getUTCMonth(),
+    d.getUTCDate() + 1,
+    0,
+    0,
+    0,
+    0
+  );
+}
+function computeCooldownUntil(kind, strikes, nowMs) {
+  if (kind === "daily-quota") return nextUtcMidnight(nowMs);
+  if (kind === "gone") return nowMs + GONE_MS;
+  const step = TRANSIENT_BASE_MS * 2 ** Math.max(0, strikes - 1);
+  return nowMs + Math.min(step, TRANSIENT_CAP_MS);
+}
+function applyUnavailable(store, modelId, detail, nowMs) {
+  const kind = classifyUnavailable(detail);
+  if (!kind) return store;
+  const prev = store.models[modelId];
+  const strikes = prev && prev.kind === "transient" && prev.until > nowMs ? prev.strikes + 1 : 1;
+  return {
+    version: 1,
+    models: {
+      ...store.models,
+      [modelId]: {
+        until: computeCooldownUntil(kind, strikes, nowMs),
+        kind,
+        strikes,
+        detail: (detail || "").split("\n")[0].slice(0, 200)
+      }
+    }
+  };
+}
+function clearCooldown(store, modelId) {
+  if (!store.models[modelId]) return store;
+  const models = { ...store.models };
+  delete models[modelId];
+  return { version: 1, models };
+}
+function pruneExpired(store, nowMs) {
+  const models = {};
+  for (const [id, cd] of Object.entries(store.models)) {
+    if (cd.until > nowMs) models[id] = cd;
+  }
+  return { version: 1, models };
+}
+function isCooling(store, modelId, nowMs) {
+  const cd = store.models[modelId];
+  return !!cd && cd.until > nowMs;
+}
+function orderByAvailability(pool, store, nowMs) {
+  const fresh = [];
+  const deferred = [];
+  for (const c of pool) {
+    if (isCooling(store, c.id, nowMs)) deferred.push(c);
+    else fresh.push(c);
+  }
+  deferred.sort(
+    (a, b) => (store.models[a.id]?.until ?? 0) - (store.models[b.id]?.until ?? 0)
+  );
+  return { fresh, deferred };
+}
+var RELOAD_INTERVAL_MS = 5e3;
+var cache = null;
+var lastLoadMs = 0;
+function cooldownFilePath() {
+  return join7(getConfigDir(), "free-cooldowns.json");
+}
+function readStoreFromDisk() {
+  try {
+    const raw = readFileSync7(cooldownFilePath(), "utf-8");
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.version === 1 && parsed.models && typeof parsed.models === "object") {
+      return { version: 1, models: parsed.models };
+    }
+  } catch {
+  }
+  return emptyStore();
+}
+function writeStoreToDisk(store) {
+  try {
+    const path = cooldownFilePath();
+    mkdirSync4(getConfigDir(), { recursive: true });
+    const tmp = `${path}.tmp`;
+    writeFileSync3(tmp, JSON.stringify(store), { encoding: "utf-8", mode: 384 });
+    renameSync(tmp, path);
+  } catch {
+  }
+}
+function getCooldownStore(nowMs = Date.now()) {
+  if (!cache || nowMs - lastLoadMs > RELOAD_INTERVAL_MS) {
+    cache = pruneExpired(readStoreFromDisk(), nowMs);
+    lastLoadMs = nowMs;
+  }
+  return cache;
+}
+function recordUnavailable(modelId, detail, nowMs = Date.now()) {
+  const before = getCooldownStore(nowMs);
+  const after = applyUnavailable(before, modelId, detail, nowMs);
+  if (after === before) return;
+  cache = after;
+  writeStoreToDisk(after);
+}
+function recordAvailable(modelId, nowMs = Date.now()) {
+  const before = getCooldownStore(nowMs);
+  const after = clearCooldown(before, modelId);
+  if (after === before) return;
+  cache = after;
+  writeStoreToDisk(after);
+}
+var persistentRotationStore = {
+  get: getCooldownStore,
+  recordUnavailable,
+  recordAvailable
+};
+function replayResponse(ok, status, body) {
+  return {
+    ok,
+    status,
+    text: async () => body,
+    json: async () => JSON.parse(body)
+  };
+}
+var modelsSent = [];
+function noteSend(model) {
+  if (modelsSent[modelsSent.length - 1] !== model) modelsSent.push(model);
+}
+function withFreeRotation(inner, hooks = {}) {
+  return async (url, init) => {
+    const freeActive = hooks.freeActive ?? getActiveFreeOnly;
+    const poolOf = hooks.pool ?? approvedFreePoolFromSettings;
+    const now = hooks.now ?? Date.now;
+    const store = hooks.store ?? persistentRotationStore;
+    if (!freeActive()) return inner(url, init);
+    let parsed;
+    try {
+      parsed = JSON.parse(init.body);
+    } catch {
+      return inner(url, init);
+    }
+    const requested = parsed["model"];
+    if (typeof requested !== "string" || !isFreeSuffixModelId(requested)) {
+      return inner(url, init);
+    }
+    const poolIds = poolOf().filter((id) => id !== requested);
+    const ordered = orderByAvailability(
+      poolIds.map((id) => ({ id })),
+      store.get(now()),
+      now()
+    );
+    const candidates = [requested, ...ordered.fresh.map((c) => c.id), ...ordered.deferred.map((c) => c.id)];
+    const startCooling = isCooling(store.get(now()), requested, now()) && candidates.length > 1;
+    const attemptOrder = startCooling ? [...candidates.slice(1), requested] : candidates;
+    let last = null;
+    for (const model of attemptOrder) {
+      noteSend(model);
+      const res = await inner(url, {
+        ...init,
+        body: JSON.stringify({ ...parsed, model })
+      });
+      if (res.ok) {
+        store.recordAvailable(model, now());
+        return res;
+      }
+      const body = await res.text();
+      const detail = `HTTP ${res.status}: ${body.slice(0, 300)}`;
+      last = replayResponse(res.ok, res.status, body);
+      if (!classifyUnavailable(detail)) return last;
+      store.recordUnavailable(model, detail, now());
+      const idx = attemptOrder.indexOf(model);
+      const next = idx + 1 < attemptOrder.length ? attemptOrder[idx + 1] : "(none left)";
+      (hooks.onRotate ?? ((from, to) => process.stderr.write(
+        `[llm-externalizer] Free model ${from} rate-limited (HTTP ${res.status}) \u2014 rotating to ${to}.
+`
+      )))(model, next, detail);
+    }
+    return last ?? replayResponse(false, 429, JSON.stringify({ error: { message: "no approved free models available" } }));
+  };
+}
+
 // src/security_scan/openrouter.ts
-var realFetch = async (url, init) => {
+var rawFetch = async (url, init) => {
   const res = await fetch(url, init);
   return {
     ok: res.ok,
@@ -220993,6 +221223,7 @@ var realFetch = async (url, init) => {
     text: () => res.text()
   };
 };
+var realFetch = withFreeRotation(rawFetch);
 
 // src/benchmark/security-triage/runner.ts
 function casesToGroups(cases) {
@@ -221196,7 +221427,7 @@ function scoreTriage(modelId, cases, returned, thresholds = DEFAULT_TRIAGE_THRES
 var SECURITY_TRIAGE_CRITERIA2 = getToolDescriptor("security_scan").requirements;
 var INCUMBENT_FALLBACK_PRICING = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
 function cachePath() {
-  return join7(getConfigDir(), "security-triage-results.json");
+  return join8(getConfigDir(), "security-triage-results.json");
 }
 function cacheKey(modelId, date, datasetHash) {
   return `${modelId}::${date}::${datasetHash}`;
@@ -221205,19 +221436,42 @@ function loadCache() {
   const p = cachePath();
   if (!existsSync5(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync7(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync8(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
   return {};
 }
-function saveCache(cache) {
+function saveCache(cache2) {
   const dir = getConfigDir();
-  mkdirSync4(dir, { recursive: true });
+  mkdirSync5(dir, { recursive: true });
   const p = cachePath();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync3(tmp, JSON.stringify(cache, null, 2), "utf-8");
-  renameSync(tmp, p);
+  writeFileSync4(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  renameSync2(tmp, p);
+}
+function failedModelsFromCache(cache2) {
+  const latest = /* @__PURE__ */ new Map();
+  for (const [key, entry] of Object.entries(cache2)) {
+    const modelId = key.split("::")[0];
+    if (!modelId) continue;
+    const prev = latest.get(modelId);
+    if (!prev || entry.date > prev.date) {
+      latest.set(modelId, {
+        date: entry.date,
+        pass: entry.score.pass,
+        inconclusive: entry.score.inconclusive
+      });
+    }
+  }
+  const failed = /* @__PURE__ */ new Set();
+  for (const [modelId, v] of latest) {
+    if (!v.inconclusive && !v.pass) failed.add(modelId);
+  }
+  return failed;
+}
+function benchmarkFailedModels() {
+  return failedModelsFromCache(loadCache());
 }
 function resolveApiKey(override) {
   const k = override || process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
@@ -221273,7 +221527,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
   const apiKey = resolveApiKey(opts.apiKey);
   const datasetPath = opts.datasetPath ?? resolveDatasetPath();
   const cases = loadDataset(datasetPath);
-  const datasetHash = createHash2("sha1").update(readFileSync7(datasetPath, "utf-8")).digest("hex").slice(0, 12);
+  const datasetHash = createHash2("sha1").update(readFileSync8(datasetPath, "utf-8")).digest("hex").slice(0, 12);
   const thresholds = opts.thresholds ?? DEFAULT_TRIAGE_THRESHOLDS;
   const incumbentId = opts.incumbentModelId ?? DEFAULT_MODEL;
   const progress = opts.onProgress ?? (() => {
@@ -221353,7 +221607,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
     );
   }
   progress(`Assessing ${toAssess.size} model(s) over ${cases.length} cases\u2026`);
-  const cache = loadCache();
+  const cache2 = loadCache();
   const assessments = [];
   const scores = [];
   const freeOnlySkipped = [];
@@ -221380,7 +221634,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
       continue;
     }
     const key = cacheKey(model.id, today(), datasetHash);
-    const cached = cache[key];
+    const cached = cache2[key];
     let score;
     let costUsd;
     let latencyMs;
@@ -221408,7 +221662,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
       latencyMs = cases.length > 0 ? Math.round(elapsed / cases.length) : elapsed;
       score = scoreTriage(model.id, cases, run.verdicts, thresholds, run.failSafe);
       costUsd = run.costUsd;
-      cache[key] = {
+      cache2[key] = {
         date: today(),
         datasetHash,
         score,
@@ -221435,7 +221689,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
       `    ${model.id}: ${score.inconclusive ? "INCONCLUSIVE" : score.pass ? "PASS" : "FAIL"} score=${score.score.toFixed(3)} scored=${score.scoredCount}/${score.total} errored=${score.erroredCount} under=${score.underFlagCount} over=${score.overFlagCount} critUF=${score.criticalUnderFlags}`
     );
   }
-  saveCache(cache);
+  saveCache(cache2);
   const selection = selectSecurityTriageModel({
     candidates: assessments,
     incumbentModelId: incumbentId,
@@ -221443,11 +221697,11 @@ async function runSecurityTriageBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const mainRoot = resolveMainRoot(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join7(mainRoot, "reports", "security-triage-benchmark");
-  mkdirSync4(reportDir, { recursive: true });
+  const reportDir = opts.outputDir ?? join8(mainRoot, "reports", "security-triage-benchmark");
+  mkdirSync5(reportDir, { recursive: true });
   const stamp2 = reportStamp();
-  const jsonReportPath = join7(reportDir, `${stamp2}-security-triage-benchmark.json`);
-  const mdReportPath = join7(reportDir, `${stamp2}-security-triage-benchmark.md`);
+  const jsonReportPath = join8(reportDir, `${stamp2}-security-triage-benchmark.json`);
+  const mdReportPath = join8(reportDir, `${stamp2}-security-triage-benchmark.md`);
   const jsonPayload = {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     datasetPath,
@@ -221486,8 +221740,8 @@ async function runSecurityTriageBenchmark(opts = {}) {
     perCase: Object.fromEntries(scores.map((s) => [s.modelId, s.perCase]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync3(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
-  renameSync(jtmp, jsonReportPath);
+  writeFileSync4(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync2(jtmp, jsonReportPath);
   const md = buildReportMarkdown({
     cases,
     datasetHash,
@@ -221501,8 +221755,8 @@ async function runSecurityTriageBenchmark(opts = {}) {
     freeOnlySkipped
   });
   const mtmp = `${mdReportPath}.tmp.${process.pid}`;
-  writeFileSync3(mtmp, md, "utf-8");
-  renameSync(mtmp, mdReportPath);
+  writeFileSync4(mtmp, md, "utf-8");
+  renameSync2(mtmp, mdReportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
     recommendedModelId: selection.recommendedModelId,
@@ -221602,12 +221856,12 @@ function buildReportMarkdown(args) {
 
 // src/benchmark/search-existing/index.ts
 import { createHash as createHash3 } from "node:crypto";
-import { existsSync as existsSync9, mkdirSync as mkdirSync5, readFileSync as readFileSync9, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join10, resolve as resolve7 } from "node:path";
+import { existsSync as existsSync9, mkdirSync as mkdirSync6, readFileSync as readFileSync10, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join11, resolve as resolve7 } from "node:path";
 
 // src/benchmark/search-existing/dataset.ts
 import { existsSync as existsSync6, readdirSync as readdirSync3, statSync as statSync2 } from "node:fs";
-import { join as join8, resolve as resolve3 } from "node:path";
+import { join as join9, resolve as resolve3 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function resolveFixtureRoot() {
   const here = fileURLToPath2(new URL(".", import.meta.url));
@@ -221629,7 +221883,7 @@ function listFixtureFiles(root = resolveFixtureRoot()) {
   const out = [];
   const walk = (dir, rel) => {
     for (const entry of readdirSync3(dir, { withFileTypes: true })) {
-      const abs2 = join8(dir, entry.name);
+      const abs2 = join9(dir, entry.name);
       const relPath = rel ? `${rel}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
         walk(abs2, relPath);
@@ -221975,14 +222229,14 @@ import { resolve as resolve5 } from "node:path";
 
 // src/scan-pipeline.ts
 import {
-  readFileSync as readFileSync8,
+  readFileSync as readFileSync9,
   existsSync as existsSync7,
   statSync as statSync4,
   lstatSync,
   readdirSync as readdirSync4,
   realpathSync as realpathSync2
 } from "node:fs";
-import { extname as extname2, join as join9, basename as basename2, dirname as dirname3, resolve as resolve4, sep } from "node:path";
+import { extname as extname2, join as join10, basename as basename2, dirname as dirname3, resolve as resolve4, sep } from "node:path";
 import { homedir as homedir2 } from "node:os";
 import { spawnSync } from "node:child_process";
 var BREVITY_RULES = "\nOUTPUT RULES:\n- Be SUCCINCT. Use bullet points, not paragraphs.\n- Skip preamble, filler, and restating the task.\n- Only report findings, not things that are correct.\n- For code reviews: skip files/areas with no issues \u2014 only mention what needs attention.\n- Maximum 3 sentences per finding. Lead with the problem, not the context.";
@@ -222065,7 +222319,7 @@ function detectLang(filePath) {
   const ext = extname2(filePath).toLowerCase();
   if (EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
   try {
-    const head = readFileSync8(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
+    const head = readFileSync9(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
     const shebang = head.match(/^#!\s*(?:\/usr\/bin\/env\s+)?(\S+)/);
     if (shebang) {
       const bin = basename2(shebang[1]);
@@ -222143,7 +222397,7 @@ function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexReda
       `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
     );
   }
-  const raw = readFileSync8(safePath);
+  const raw = readFileSync9(safePath);
   if (raw.length > limit) {
     throw new Error(
       `File too large after read (${(raw.length / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
@@ -222291,7 +222545,7 @@ function scanFilesForSecrets(filePaths) {
   for (const fp of filePaths) {
     if (!existsSync7(fp)) continue;
     try {
-      const content = readFileSync8(fp, "utf-8");
+      const content = readFileSync9(fp, "utf-8");
       const scan = scanForSecrets(content);
       if (scan.found) {
         for (const d of scan.details) {
@@ -222381,7 +222635,7 @@ function resolvePrompt(instructions, instructionsFilesPaths) {
     const paths = Array.isArray(instructionsFilesPaths) ? instructionsFilesPaths : [instructionsFilesPaths];
     for (const fp of paths) {
       assertFileExists(fp);
-      const content = readFileSync8(fp, "utf-8");
+      const content = readFileSync9(fp, "utf-8");
       prompt = prompt ? `${prompt}
 
 ${content}` : content;
@@ -222603,7 +222857,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
     if (trackedResult.status === 0 && trackedResult.stdout) {
       for (const relPath of trackedResult.stdout.split("\n")) {
         if (!relPath.trim()) continue;
-        allFiles.add(join9(dirPath, relPath));
+        allFiles.add(join10(dirPath, relPath));
       }
     }
     const untrackedResult = spawnSync(
@@ -222614,7 +222868,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
     if (untrackedResult.status === 0 && untrackedResult.stdout) {
       for (const relPath of untrackedResult.stdout.split("\n")) {
         if (!relPath.trim()) continue;
-        allFiles.add(join9(dirPath, relPath));
+        allFiles.add(join10(dirPath, relPath));
       }
     }
   }
@@ -222631,8 +222885,8 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
         if (!entry.isDirectory()) continue;
         if (entry.name === ".git" || entry.name === "node_modules") continue;
         if (entry.name.startsWith(".")) continue;
-        const subDir = join9(dir, entry.name);
-        const gitDir = join9(subDir, ".git");
+        const subDir = join10(dir, entry.name);
+        const gitDir = join10(subDir, ".git");
         const gitStat = lstatSyncRetry(gitDir);
         const gitDirIsDir = gitStat ? gitStat.isDirectory() : false;
         if (gitDirIsDir) {
@@ -222659,7 +222913,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
       if (nestedResult.status === 0 && nestedResult.stdout) {
         for (const relPath of nestedResult.stdout.split("\n")) {
           if (!relPath.trim()) continue;
-          allFiles.add(join9(nestedRoot, relPath));
+          allFiles.add(join10(nestedRoot, relPath));
         }
       }
     }
@@ -222714,7 +222968,7 @@ function walkDir(dirPath, options) {
     }
     for (const entry of entries) {
       if (results.length >= maxFiles) return;
-      const fullPath = join9(dir, entry.name);
+      const fullPath = join10(dir, entry.name);
       if (entry.isSymbolicLink()) {
         if (!followSymlinks) continue;
         try {
@@ -223570,7 +223824,7 @@ function describeWorkload2() {
 }
 var INCUMBENT_FALLBACK_PRICING2 = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
 function cachePath2() {
-  return join10(getConfigDir(), "search-existing-results.json");
+  return join11(getConfigDir(), "search-existing-results.json");
 }
 function cacheKey2(modelId, date, datasetHash) {
   return `${modelId}::${date}::${datasetHash}`;
@@ -223579,19 +223833,19 @@ function loadCache2() {
   const p = cachePath2();
   if (!existsSync9(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync9(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync10(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
   return {};
 }
-function saveCache2(cache) {
+function saveCache2(cache2) {
   const dir = getConfigDir();
-  mkdirSync5(dir, { recursive: true });
+  mkdirSync6(dir, { recursive: true });
   const p = cachePath2();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync4(tmp, JSON.stringify(cache, null, 2), "utf-8");
-  renameSync2(tmp, p);
+  writeFileSync5(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  renameSync3(tmp, p);
 }
 function resolveApiKey2(override) {
   const k = override || process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
@@ -223723,7 +223977,7 @@ async function runSearchExistingBenchmark(opts = {}) {
     }
   }
   progress(`Assessing ${toAssess.size} model(s) over ${cases.length} cases\u2026`);
-  const cache = loadCache2();
+  const cache2 = loadCache2();
   const assessments = [];
   let totalCost = 0;
   for (const { model, qualified, disqualifyReason: disqualifyReason2 } of toAssess.values()) {
@@ -223744,7 +223998,7 @@ async function runSearchExistingBenchmark(opts = {}) {
       continue;
     }
     const key = cacheKey2(model.id, today2(), datasetHash);
-    const cached = cache[key];
+    const cached = cache2[key];
     let score;
     let costUsd;
     let latencyMs;
@@ -223771,7 +224025,7 @@ async function runSearchExistingBenchmark(opts = {}) {
       costUsd = run.costUsd;
       latencyMs = Math.round(run.meanLatencyMs);
       failureReasons = run.failures.map((f) => `${f.caseId}: ${f.reason}`);
-      cache[key] = {
+      cache2[key] = {
         date: today2(),
         datasetHash,
         score,
@@ -223801,7 +224055,7 @@ async function runSearchExistingBenchmark(opts = {}) {
       `    ${model.id}: ${thr.pass ? "PASS" : "FAIL"} microF1=${score.microF1.toFixed(3)} microR=${score.microRecall.toFixed(3)} cov=${score.coverage.toFixed(3)} fail=${failureReasons.length}`
     );
   }
-  saveCache2(cache);
+  saveCache2(cache2);
   const selection = selectSearchExistingModel({
     candidates: assessments,
     incumbentModelId: incumbentId,
@@ -223809,11 +224063,11 @@ async function runSearchExistingBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const mainRoot = resolveMainRoot2(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join10(mainRoot, "reports", "search-existing-benchmark");
-  mkdirSync5(reportDir, { recursive: true });
+  const reportDir = opts.outputDir ?? join11(mainRoot, "reports", "search-existing-benchmark");
+  mkdirSync6(reportDir, { recursive: true });
   const stamp2 = reportStamp2();
-  const jsonReportPath = join10(reportDir, `${stamp2}-search-existing-benchmark.json`);
-  const reportPath = join10(reportDir, `${stamp2}-search-existing-benchmark.md`);
+  const jsonReportPath = join11(reportDir, `${stamp2}-search-existing-benchmark.json`);
+  const reportPath = join11(reportDir, `${stamp2}-search-existing-benchmark.md`);
   const jsonPayload = {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     datasetHash,
@@ -223848,8 +224102,8 @@ async function runSearchExistingBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync4(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
-  renameSync2(jtmp, jsonReportPath);
+  writeFileSync5(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync3(jtmp, jsonReportPath);
   const md = buildReportMarkdown2({
     cases,
     datasetHash,
@@ -223862,8 +224116,8 @@ async function runSearchExistingBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync4(mtmp, md, "utf-8");
-  renameSync2(mtmp, reportPath);
+  writeFileSync5(mtmp, md, "utf-8");
+  renameSync3(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
     recommendedModelId: selection.recommendedModelId,
@@ -223943,13 +224197,13 @@ function buildReportMarkdown2(args) {
 
 // src/benchmark/code-task/index.ts
 import { createHash as createHash4 } from "node:crypto";
-import { existsSync as existsSync11, mkdirSync as mkdirSync6, readFileSync as readFileSync11, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
-import { join as join12 } from "node:path";
+import { existsSync as existsSync11, mkdirSync as mkdirSync7, readFileSync as readFileSync12, renameSync as renameSync4, writeFileSync as writeFileSync6 } from "node:fs";
+import { join as join13 } from "node:path";
 
 // src/benchmark/code-task/dataset.ts
 var import_typescript2 = __toESM(require_typescript(), 1);
-import { existsSync as existsSync10, readFileSync as readFileSync10, statSync as statSync6 } from "node:fs";
-import { dirname as dirname4, join as join11, resolve as resolve8 } from "node:path";
+import { existsSync as existsSync10, readFileSync as readFileSync11, statSync as statSync6 } from "node:fs";
+import { dirname as dirname4, join as join12, resolve as resolve8 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 var CODE_AUDIT_INSTRUCTIONS = [
   "Audit this file for GENUINE DEFECTS \u2014 bugs that cause incorrect behavior, data loss,",
@@ -223989,9 +224243,9 @@ function resolveFixtureRoot2() {
 function resolveDatasetPath2() {
   const here = dirname4(fileURLToPath3(import.meta.url));
   const candidates = [
-    join11(here, "dataset.jsonl"),
-    join11(here, "..", "src", "benchmark", "code-task", "dataset.jsonl"),
-    join11(here, "..", "..", "src", "benchmark", "code-task", "dataset.jsonl")
+    join12(here, "dataset.jsonl"),
+    join12(here, "..", "src", "benchmark", "code-task", "dataset.jsonl"),
+    join12(here, "..", "..", "src", "benchmark", "code-task", "dataset.jsonl")
   ];
   for (const c of candidates) {
     if (existsSync10(c)) return c;
@@ -224026,13 +224280,13 @@ function listTopLevelSymbols(source, filename = "fixture.ts") {
   return [...new Set(names)].filter((n) => n.length >= MIN_SYMBOL_LENGTH).sort();
 }
 function readFixture(c, root = resolveFixtureRoot2()) {
-  return readFileSync10(join11(root, c.file), "utf-8");
+  return readFileSync11(join12(root, c.file), "utf-8");
 }
 function fixturePath(c, root = resolveFixtureRoot2()) {
-  return join11(root, c.file);
+  return join12(root, c.file);
 }
 function loadDataset2(path = resolveDatasetPath2()) {
-  const raw = readFileSync10(path, "utf-8");
+  const raw = readFileSync11(path, "utf-8");
   const cases = [];
   const seenIds = /* @__PURE__ */ new Set();
   const lines = raw.split("\n");
@@ -224110,11 +224364,11 @@ function validateDataset(cases = loadDataset2(), root = resolveFixtureRoot2()) {
   let cleanCases = 0;
   let distractors = 0;
   for (const c of cases) {
-    const abs2 = join11(root, c.file);
+    const abs2 = join12(root, c.file);
     if (!existsSync10(abs2)) {
       throw new Error(`case ${c.id}: fixture file missing on disk: ${c.file}`);
     }
-    const bytes = readFileSync10(abs2);
+    const bytes = readFileSync11(abs2);
     if (bytes.includes(0)) {
       throw new Error(
         `case ${c.id}: fixture ${c.file} contains a NUL byte \u2014 readFileAsCodeBlock treats it as binary and REFUSES to read it, so the case could never be scored.`
@@ -224800,7 +225054,7 @@ function selectCodeTaskModel(input) {
 // src/benchmark/code-task/index.ts
 var INCUMBENT_FALLBACK_PRICING3 = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
 function cachePath3() {
-  return join12(getConfigDir(), "code-task-results.json");
+  return join13(getConfigDir(), "code-task-results.json");
 }
 function cacheKey3(modelId, date, datasetHash) {
   return `${modelId}::${date}::${datasetHash}`;
@@ -224809,18 +225063,18 @@ function loadCache3() {
   const p = cachePath3();
   if (!existsSync11(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync11(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync12(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
   return {};
 }
-function saveCache3(cache) {
-  mkdirSync6(getConfigDir(), { recursive: true });
+function saveCache3(cache2) {
+  mkdirSync7(getConfigDir(), { recursive: true });
   const p = cachePath3();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync5(tmp, JSON.stringify(cache, null, 2), "utf-8");
-  renameSync3(tmp, p);
+  writeFileSync6(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  renameSync4(tmp, p);
 }
 function resolveApiKey3(override) {
   const k = override || process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
@@ -224950,7 +225204,7 @@ async function runCodeAuditBenchmark(opts = {}) {
     }
   }
   progress(`Assessing ${toAssess.size} model(s) over ${cases.length} cases\u2026`);
-  const cache = loadCache3();
+  const cache2 = loadCache3();
   const assessments = [];
   let totalCost = 0;
   for (const { model, qualified, disqualifyReason: disqualifyReason2 } of toAssess.values()) {
@@ -224970,7 +225224,7 @@ async function runCodeAuditBenchmark(opts = {}) {
       continue;
     }
     const key = cacheKey3(model.id, today3(), datasetHash);
-    const cached = cache[key];
+    const cached = cache2[key];
     let score;
     let costUsd;
     let latencyMs;
@@ -224997,7 +225251,7 @@ async function runCodeAuditBenchmark(opts = {}) {
       costUsd = run.costUsd;
       latencyMs = Math.round(run.meanLatencyMs);
       failureReasons = run.failures.map((f) => `${f.caseId}: ${f.reason}`);
-      cache[key] = {
+      cache2[key] = {
         date: today3(),
         datasetHash,
         score,
@@ -225027,7 +225281,7 @@ async function runCodeAuditBenchmark(opts = {}) {
       `    ${model.id}: ${thr.pass ? "PASS" : "FAIL"} macroF1=${score.macroF1.toFixed(3)} microR=${score.microRecall.toFixed(3)} exact=${score.exactMatches}/${cases.length} halluc=${score.hallucinations} fail=${failureReasons.length}`
     );
   }
-  saveCache3(cache);
+  saveCache3(cache2);
   const selection = selectCodeTaskModel({
     candidates: assessments,
     incumbentModelId: incumbentId,
@@ -225035,11 +225289,11 @@ async function runCodeAuditBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const mainRoot = resolveProjectMainRoot(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join12(mainRoot, "reports", "code-task-benchmark");
-  mkdirSync6(reportDir, { recursive: true });
+  const reportDir = opts.outputDir ?? join13(mainRoot, "reports", "code-task-benchmark");
+  mkdirSync7(reportDir, { recursive: true });
   const stamp2 = reportStamp3();
-  const jsonReportPath = join12(reportDir, `${stamp2}-code-task-benchmark.json`);
-  const reportPath = join12(reportDir, `${stamp2}-code-task-benchmark.md`);
+  const jsonReportPath = join13(reportDir, `${stamp2}-code-task-benchmark.json`);
+  const reportPath = join13(reportDir, `${stamp2}-code-task-benchmark.md`);
   const jsonPayload = {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     datasetHash,
@@ -225081,8 +225335,8 @@ async function runCodeAuditBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync5(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
-  renameSync3(jtmp, jsonReportPath);
+  writeFileSync6(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync4(jtmp, jsonReportPath);
   const md = buildReportMarkdown3({
     cases,
     datasetHash,
@@ -225095,8 +225349,8 @@ async function runCodeAuditBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync5(mtmp, md, "utf-8");
-  renameSync3(mtmp, reportPath);
+  writeFileSync6(mtmp, md, "utf-8");
+  renameSync4(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
     recommendedModelId: selection.recommendedModelId,
@@ -225203,13 +225457,13 @@ ${codeBlock}`;
 }
 
 // src/benchmark/scan-folder/index.ts
-import { existsSync as existsSync14, mkdirSync as mkdirSync7, readFileSync as readFileSync14, renameSync as renameSync4, writeFileSync as writeFileSync6 } from "node:fs";
-import { join as join14 } from "node:path";
+import { existsSync as existsSync14, mkdirSync as mkdirSync8, readFileSync as readFileSync15, renameSync as renameSync5, writeFileSync as writeFileSync7 } from "node:fs";
+import { join as join15 } from "node:path";
 
 // src/benchmark/scan-folder/dataset.ts
 import { createHash as createHash5 } from "node:crypto";
-import { existsSync as existsSync12, readFileSync as readFileSync12, readdirSync as readdirSync5, statSync as statSync7 } from "node:fs";
-import { join as join13, resolve as resolve9 } from "node:path";
+import { existsSync as existsSync12, readFileSync as readFileSync13, readdirSync as readdirSync5, statSync as statSync7 } from "node:fs";
+import { join as join14, resolve as resolve9 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function buildInstructions(criterion) {
   return [
@@ -225302,13 +225556,13 @@ function resolveFixtureRoot3() {
   );
 }
 function fixtureScanRoot(root = resolveFixtureRoot3()) {
-  return join13(root, "src");
+  return join14(root, "src");
 }
 function listFixtureFiles2(root = resolveFixtureRoot3()) {
   const out = [];
   const walk = (dir, rel) => {
     for (const entry of readdirSync5(dir, { withFileTypes: true })) {
-      const abs2 = join13(dir, entry.name);
+      const abs2 = join14(dir, entry.name);
       const relPath = rel ? `${rel}/${entry.name}` : entry.name;
       if (entry.isDirectory()) walk(abs2, relPath);
       else if (entry.isFile()) out.push(relPath);
@@ -225321,18 +225575,18 @@ function scannedFilesFor(c, root = resolveFixtureRoot3()) {
   return listFixtureFiles2(root).filter((f) => c.extensions.some((e) => f.endsWith(e)));
 }
 function fixtureAbsPath(rel, root = resolveFixtureRoot3()) {
-  return join13(root, rel);
+  return join14(root, rel);
 }
 function deriveMatchingFiles(c, root = resolveFixtureRoot3()) {
   const re = new RegExp(c.truthRegexSource);
-  return scannedFilesFor(c, root).filter((rel) => re.test(readFileSync12(fixtureAbsPath(rel, root), "utf-8"))).sort();
+  return scannedFilesFor(c, root).filter((rel) => re.test(readFileSync13(fixtureAbsPath(rel, root), "utf-8"))).sort();
 }
 function datasetFingerprint(root = resolveFixtureRoot3()) {
   const h = createHash5("sha1");
   h.update(JSON.stringify(SCAN_FOLDER_CASES));
   for (const rel of listFixtureFiles2(root)) {
     h.update(rel);
-    h.update(readFileSync12(fixtureAbsPath(rel, root)));
+    h.update(readFileSync13(fixtureAbsPath(rel, root)));
   }
   return h.digest("hex").slice(0, 12);
 }
@@ -225342,7 +225596,7 @@ function validateDataset2(cases = SCAN_FOLDER_CASES, root = resolveFixtureRoot3(
     throw new Error(`scan-folder corpus is empty at ${fixtureScanRoot(root)}`);
   }
   for (const rel of files) {
-    const bytes = readFileSync12(fixtureAbsPath(rel, root));
+    const bytes = readFileSync13(fixtureAbsPath(rel, root));
     if (bytes.includes(0)) {
       throw new Error(
         `fixture ${rel} contains a NUL byte \u2014 readFileAsCodeBlock treats it as binary and REFUSES to read it, so no model could ever be scored on it.`
@@ -225395,7 +225649,7 @@ import { resolve as resolve10 } from "node:path";
 
 // src/scan-folder/core.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { existsSync as existsSync13, statSync as statSync8, readFileSync as readFileSync13 } from "node:fs";
+import { existsSync as existsSync13, statSync as statSync8, readFileSync as readFileSync14 } from "node:fs";
 
 // src/rate-limiter.ts
 var AdaptiveRateLimiter = class {
@@ -225690,7 +225944,7 @@ async function runScanFolder(args, deps) {
   if (sfMode === 2 && succeeded.length > 0) {
     const sections = [];
     for (const r of succeeded) {
-      const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync13(r.reportPath, "utf-8") : "";
+      const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync14(r.reportPath, "utf-8") : "";
       sections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -225730,7 +225984,7 @@ ${content}`);
       for (const fp of fg.files) {
         const r = pathToResult.get(fp);
         if (!r) continue;
-        const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync13(r.reportPath, "utf-8") : "";
+        const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync14(r.reportPath, "utf-8") : "";
         sections.push(`## File: ${fp}
 
 ${content}`);
@@ -226034,7 +226288,7 @@ function selectScanFolderModel(input) {
 // src/benchmark/scan-folder/index.ts
 var INCUMBENT_FALLBACK_PRICING4 = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
 function cachePath4() {
-  return join14(getConfigDir(), "scan-folder-results.json");
+  return join15(getConfigDir(), "scan-folder-results.json");
 }
 function cacheKey4(modelId, date, datasetHash) {
   return `${modelId}::${date}::${datasetHash}`;
@@ -226043,18 +226297,18 @@ function loadCache4() {
   const p = cachePath4();
   if (!existsSync14(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync14(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync15(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
   return {};
 }
-function saveCache4(cache) {
-  mkdirSync7(getConfigDir(), { recursive: true });
+function saveCache4(cache2) {
+  mkdirSync8(getConfigDir(), { recursive: true });
   const p = cachePath4();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync6(tmp, JSON.stringify(cache, null, 2), "utf-8");
-  renameSync4(tmp, p);
+  writeFileSync7(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  renameSync5(tmp, p);
 }
 function resolveApiKey4(override) {
   const k = override || process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
@@ -226214,7 +226468,7 @@ async function runScanFolderBenchmark(opts = {}) {
     }
   }
   progress(`Assessing ${toAssess.size} model(s) over ${fileDecisions} file decisions\u2026`);
-  const cache = loadCache4();
+  const cache2 = loadCache4();
   const assessments = [];
   let totalCost = 0;
   for (const { model, qualified, disqualifyReason: disqualifyReason2 } of toAssess.values()) {
@@ -226234,7 +226488,7 @@ async function runScanFolderBenchmark(opts = {}) {
       continue;
     }
     const key = cacheKey4(model.id, today4(), datasetHash);
-    const cached = cache[key];
+    const cached = cache2[key];
     let score;
     let costUsd;
     let latencyMs;
@@ -226261,7 +226515,7 @@ async function runScanFolderBenchmark(opts = {}) {
       costUsd = run.costUsd;
       latencyMs = Math.round(run.meanLatencyMs);
       failureReasons = run.failures.map((f) => `${f.caseId} / ${f.file}: ${f.reason}`);
-      cache[key] = {
+      cache2[key] = {
         date: today4(),
         datasetHash,
         score,
@@ -226291,7 +226545,7 @@ async function runScanFolderBenchmark(opts = {}) {
       `    ${model.id}: ${thr.pass ? "PASS" : "FAIL"} microF1=${score.microF1.toFixed(3)} microP=${score.microPrecision.toFixed(3)} microR=${score.microRecall.toFixed(3)} cov=${score.coverage.toFixed(3)} unscored=${failureReasons.length}`
     );
   }
-  saveCache4(cache);
+  saveCache4(cache2);
   const selection = selectScanFolderModel({
     candidates: assessments,
     incumbentModelId: incumbentId,
@@ -226299,11 +226553,11 @@ async function runScanFolderBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const mainRoot = resolveProjectMainRoot(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join14(mainRoot, "reports", "scan-folder-benchmark");
-  mkdirSync7(reportDir, { recursive: true });
+  const reportDir = opts.outputDir ?? join15(mainRoot, "reports", "scan-folder-benchmark");
+  mkdirSync8(reportDir, { recursive: true });
   const stamp2 = reportStamp4();
-  const jsonReportPath = join14(reportDir, `${stamp2}-scan-folder-benchmark.json`);
-  const reportPath = join14(reportDir, `${stamp2}-scan-folder-benchmark.md`);
+  const jsonReportPath = join15(reportDir, `${stamp2}-scan-folder-benchmark.json`);
+  const reportPath = join15(reportDir, `${stamp2}-scan-folder-benchmark.md`);
   const jsonPayload = {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     datasetHash,
@@ -226343,8 +226597,8 @@ async function runScanFolderBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync6(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
-  renameSync4(jtmp, jsonReportPath);
+  writeFileSync7(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync5(jtmp, jsonReportPath);
   const md = buildReportMarkdown4({
     cases,
     datasetHash,
@@ -226358,8 +226612,8 @@ async function runScanFolderBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync6(mtmp, md, "utf-8");
-  renameSync4(mtmp, reportPath);
+  writeFileSync7(mtmp, md, "utf-8");
+  renameSync5(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
     recommendedModelId: selection.recommendedModelId,
@@ -226452,8 +226706,8 @@ function buildReportMarkdown4(args) {
 }
 
 // src/benchmark/check-specs/index.ts
-import { existsSync as existsSync17, mkdirSync as mkdirSync8, readFileSync as readFileSync16, renameSync as renameSync5, writeFileSync as writeFileSync7 } from "node:fs";
-import { join as join16 } from "node:path";
+import { existsSync as existsSync17, mkdirSync as mkdirSync9, readFileSync as readFileSync17, renameSync as renameSync6, writeFileSync as writeFileSync8 } from "node:fs";
+import { join as join17 } from "node:path";
 
 // src/check-specs/core.ts
 import { existsSync as existsSync15 } from "node:fs";
@@ -226678,8 +226932,8 @@ ${csResp.content}${csFooter}`
 
 // src/benchmark/check-specs/dataset.ts
 import { createHash as createHash6 } from "node:crypto";
-import { existsSync as existsSync16, readFileSync as readFileSync15, readdirSync as readdirSync6, statSync as statSync9 } from "node:fs";
-import { join as join15, resolve as resolve11 } from "node:path";
+import { existsSync as existsSync16, readFileSync as readFileSync16, readdirSync as readdirSync6, statSync as statSync9 } from "node:fs";
+import { join as join16, resolve as resolve11 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 var CHECK_SPECS_INSTRUCTIONS = [
   "You are auditing exactly ONE source file against the specification above.",
@@ -226866,10 +227120,10 @@ function resolveFixtureRoot4() {
   );
 }
 function specPath(root = resolveFixtureRoot4()) {
-  return join15(root, "spec", "TESTING.md");
+  return join16(root, "spec", "TESTING.md");
 }
 function fixtureAbsPath2(rel, root = resolveFixtureRoot4()) {
-  return join15(root, rel);
+  return join16(root, rel);
 }
 function fixtureFilePaths(fixtures = CHECK_SPECS_FIXTURES, root = resolveFixtureRoot4()) {
   return fixtures.map((f) => resolve11(fixtureAbsPath2(f.file, root)));
@@ -226883,23 +227137,23 @@ function listFixtureFiles3(root = resolveFixtureRoot4()) {
   const out = [];
   const walk = (dir, rel) => {
     for (const entry of readdirSync6(dir, { withFileTypes: true })) {
-      const abs2 = join15(dir, entry.name);
+      const abs2 = join16(dir, entry.name);
       const relPath = `${rel}/${entry.name}`;
       if (entry.isDirectory()) walk(abs2, relPath);
       else if (entry.isFile()) out.push(relPath);
     }
   };
-  walk(join15(root, "src"), "src");
+  walk(join16(root, "src"), "src");
   return out.sort();
 }
 function datasetFingerprint2(root = resolveFixtureRoot4()) {
   const h = createHash6("sha1");
   h.update(JSON.stringify(CHECK_SPECS_FIXTURES));
   h.update(CHECK_SPECS_INSTRUCTIONS);
-  h.update(readFileSync15(specPath(root)));
+  h.update(readFileSync16(specPath(root)));
   for (const rel of listFixtureFiles3(root)) {
     h.update(rel);
-    h.update(readFileSync15(fixtureAbsPath2(rel, root)));
+    h.update(readFileSync16(fixtureAbsPath2(rel, root)));
   }
   return h.digest("hex").slice(0, 12);
 }
@@ -226908,7 +227162,7 @@ function validateDataset3(fixtures = CHECK_SPECS_FIXTURES, root = resolveFixture
   if (!existsSync16(spec)) {
     throw new Error(`check-specs spec file missing: ${spec}`);
   }
-  if (readFileSync15(spec, "utf-8").trim().length === 0) {
+  if (readFileSync16(spec, "utf-8").trim().length === 0) {
     throw new Error(`check-specs spec file is empty: ${spec}`);
   }
   if (fixtures.length === 0) throw new Error("check-specs corpus is empty");
@@ -226922,7 +227176,7 @@ function validateDataset3(fixtures = CHECK_SPECS_FIXTURES, root = resolveFixture
     if (!existsSync16(abs2)) {
       throw new Error(`fixture ${f.file} is listed in the dataset but missing on disk (${abs2})`);
     }
-    const bytes = readFileSync15(abs2);
+    const bytes = readFileSync16(abs2);
     if (bytes.includes(0)) {
       throw new Error(
         `fixture ${f.file} contains a NUL byte \u2014 readFileAsCodeBlock treats it as binary and REFUSES to read it, so no model could ever be scored on it.`
@@ -227234,7 +227488,7 @@ var INCUMBENT_FALLBACK_PRICING5 = KNOWN_PRICING[DEFAULT_MODEL] ?? {
   context_window: 32768
 };
 function cachePath5() {
-  return join16(getConfigDir(), "check-specs-results.json");
+  return join17(getConfigDir(), "check-specs-results.json");
 }
 function cacheKey5(modelId, date, datasetHash) {
   return `${modelId}::${date}::${datasetHash}`;
@@ -227243,18 +227497,18 @@ function loadCache5() {
   const p = cachePath5();
   if (!existsSync17(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync16(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync17(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
   return {};
 }
-function saveCache5(cache) {
-  mkdirSync8(getConfigDir(), { recursive: true });
+function saveCache5(cache2) {
+  mkdirSync9(getConfigDir(), { recursive: true });
   const p = cachePath5();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync7(tmp, JSON.stringify(cache, null, 2), "utf-8");
-  renameSync5(tmp, p);
+  writeFileSync8(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  renameSync6(tmp, p);
 }
 function resolveApiKey5(override) {
   const k = override || process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
@@ -227426,7 +227680,7 @@ async function runCheckSpecsBenchmark(opts = {}) {
     }
   }
   progress(`Assessing ${toAssess.size} model(s) over ${fixtures.length} file decisions\u2026`);
-  const cache = loadCache5();
+  const cache2 = loadCache5();
   const assessments = [];
   let totalCost = 0;
   for (const { model, qualified, disqualifyReason: disqualifyReason2 } of toAssess.values()) {
@@ -227448,7 +227702,7 @@ async function runCheckSpecsBenchmark(opts = {}) {
       continue;
     }
     const key = cacheKey5(model.id, today5(), datasetHash);
-    const cached = cache[key];
+    const cached = cache2[key];
     let score;
     let accuracy;
     let costUsd;
@@ -227478,7 +227732,7 @@ async function runCheckSpecsBenchmark(opts = {}) {
       costUsd = run.costUsd;
       latencyMs = Math.round(run.meanLatencyMs);
       failureReasons = run.failures.map((f) => `${f.file}: ${f.reason}`);
-      cache[key] = {
+      cache2[key] = {
         date: today5(),
         datasetHash,
         score,
@@ -227510,7 +227764,7 @@ async function runCheckSpecsBenchmark(opts = {}) {
       `    ${model.id}: ${thr.pass ? "PASS" : "FAIL"} microF1=${score.microF1.toFixed(3)} microP=${score.microPrecision.toFixed(3)} microR=${score.microRecall.toFixed(3)} acc=${accuracy.toFixed(3)} cov=${score.coverage.toFixed(3)} unscored=${failureReasons.length}`
     );
   }
-  saveCache5(cache);
+  saveCache5(cache2);
   const selection = selectCheckSpecsModel({
     candidates: assessments,
     incumbentModelId: incumbentId,
@@ -227518,11 +227772,11 @@ async function runCheckSpecsBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const mainRoot = resolveProjectMainRoot(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join16(mainRoot, "reports", "check-specs-benchmark");
-  mkdirSync8(reportDir, { recursive: true });
+  const reportDir = opts.outputDir ?? join17(mainRoot, "reports", "check-specs-benchmark");
+  mkdirSync9(reportDir, { recursive: true });
   const stamp2 = reportStamp5();
-  const jsonReportPath = join16(reportDir, `${stamp2}-check-specs-benchmark.json`);
-  const reportPath = join16(reportDir, `${stamp2}-check-specs-benchmark.md`);
+  const jsonReportPath = join17(reportDir, `${stamp2}-check-specs-benchmark.json`);
+  const reportPath = join17(reportDir, `${stamp2}-check-specs-benchmark.md`);
   const jsonPayload = {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     datasetHash,
@@ -227563,8 +227817,8 @@ async function runCheckSpecsBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync7(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
-  renameSync5(jtmp, jsonReportPath);
+  writeFileSync8(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync6(jtmp, jsonReportPath);
   const md = buildReportMarkdown5({
     fixtures,
     datasetHash,
@@ -227577,8 +227831,8 @@ async function runCheckSpecsBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync7(mtmp, md, "utf-8");
-  renameSync5(mtmp, reportPath);
+  writeFileSync8(mtmp, md, "utf-8");
+  renameSync6(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
     recommendedModelId: selection.recommendedModelId,
@@ -228216,9 +228470,9 @@ ${r.ensemble.picks.map((p, i) => `${i + 1}. \`${p}\``).join("\n")}` : "")
   return L.join("\n") + "\n";
 }
 function writeReport(r, opts) {
-  const path = join17(opts.mainRoot, "reports", "update-all", `${stamp()}-update-all.md`);
-  mkdirSync9(dirname5(path), { recursive: true });
-  writeFileSync8(path, renderUpdateAllReport(r, opts), "utf-8");
+  const path = join18(opts.mainRoot, "reports", "update-all", `${stamp()}-update-all.md`);
+  mkdirSync10(dirname5(path), { recursive: true });
+  writeFileSync9(path, renderUpdateAllReport(r, opts), "utf-8");
   return path;
 }
 
@@ -228577,8 +228831,8 @@ function renderAssessmentText(a) {
 }
 
 // src/model-qualification/drift.ts
-import { mkdirSync as mkdirSync10, readFileSync as readFileSync17, renameSync as renameSync6, writeFileSync as writeFileSync9 } from "node:fs";
-import { join as join18 } from "node:path";
+import { mkdirSync as mkdirSync11, readFileSync as readFileSync18, renameSync as renameSync7, writeFileSync as writeFileSync10 } from "node:fs";
+import { join as join19 } from "node:path";
 function perMillion(s) {
   if (s == null) return null;
   const n = parseFloat(s);
@@ -228715,11 +228969,11 @@ function computeModelHealth(configured, catalog, baseline, opts = {}) {
   return { findings, updatedBaseline };
 }
 function getBaselinePath() {
-  return join18(getConfigDir(), "model-baseline.json");
+  return join19(getConfigDir(), "model-baseline.json");
 }
 function loadBaseline(path = getBaselinePath()) {
   try {
-    const raw = readFileSync17(path, "utf-8");
+    const raw = readFileSync18(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed;
@@ -228731,10 +228985,10 @@ function loadBaseline(path = getBaselinePath()) {
 }
 function saveBaseline(baseline, path = getBaselinePath()) {
   try {
-    mkdirSync10(getConfigDir(), { recursive: true });
+    mkdirSync11(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync9(tmp, JSON.stringify(baseline, null, 2));
-    renameSync6(tmp, path);
+    writeFileSync10(tmp, JSON.stringify(baseline, null, 2));
+    renameSync7(tmp, path);
   } catch {
   }
 }
@@ -228807,10 +229061,10 @@ function renderModelHealthMarkdown(report) {
 async function runCheckModelHealth(opts = {}) {
   const profile = opts.profile ?? resolveActiveProfile();
   const report = await checkModelHealth(profile, opts);
-  const dir = opts.outputDir ?? join18(resolveProjectMainRoot(), "reports", "model-health");
-  mkdirSync10(dir, { recursive: true });
-  const reportPath = join18(dir, `${compactStamp()}-model-health-${profile.name}.md`);
-  writeFileSync9(reportPath, renderModelHealthMarkdown(report));
+  const dir = opts.outputDir ?? join19(resolveProjectMainRoot(), "reports", "model-health");
+  mkdirSync11(dir, { recursive: true });
+  const reportPath = join19(dir, `${compactStamp()}-model-health-${profile.name}.md`);
+  writeFileSync10(reportPath, renderModelHealthMarkdown(report));
   return { report, reportPath };
 }
 function renderModelHealthText(report) {
@@ -228831,8 +229085,8 @@ function renderModelHealthText(report) {
 }
 
 // src/model-qualification/new-arrivals.ts
-import { mkdirSync as mkdirSync11, readFileSync as readFileSync18, renameSync as renameSync7, writeFileSync as writeFileSync10 } from "node:fs";
-import { join as join19 } from "node:path";
+import { mkdirSync as mkdirSync12, readFileSync as readFileSync19, renameSync as renameSync8, writeFileSync as writeFileSync11 } from "node:fs";
+import { join as join20 } from "node:path";
 function createdToIso(created) {
   if (created === null || !Number.isFinite(created) || created <= 0) return null;
   return new Date(created * 1e3).toISOString();
@@ -228874,11 +229128,11 @@ function diffNewArrivals(catalog, snapshot) {
   };
 }
 function getCatalogSnapshotPath() {
-  return join19(getConfigDir(), "catalog-snapshot.json");
+  return join20(getConfigDir(), "catalog-snapshot.json");
 }
 function loadSnapshot(path = getCatalogSnapshotPath()) {
   try {
-    const raw = readFileSync18(path, "utf-8");
+    const raw = readFileSync19(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const obj = parsed;
@@ -228896,10 +229150,10 @@ function loadSnapshot(path = getCatalogSnapshotPath()) {
 }
 function saveSnapshot(snapshot, path = getCatalogSnapshotPath()) {
   try {
-    mkdirSync11(getConfigDir(), { recursive: true });
+    mkdirSync12(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync10(tmp, JSON.stringify(snapshot, null, 2));
-    renameSync7(tmp, path);
+    writeFileSync11(tmp, JSON.stringify(snapshot, null, 2));
+    renameSync8(tmp, path);
   } catch {
   }
 }
@@ -228990,10 +229244,10 @@ function renderNewArrivalsText(report) {
 }
 async function runDiscoverNewArrivals(opts = {}) {
   const report = await discoverNewArrivals(opts);
-  const dir = opts.outputDir ?? join19(resolveProjectMainRoot(), "reports", "model-arrivals");
-  mkdirSync11(dir, { recursive: true });
-  const reportPath = join19(dir, `${compactStamp()}-new-arrivals.md`);
-  writeFileSync10(reportPath, renderNewArrivalsMarkdown(report));
+  const dir = opts.outputDir ?? join20(resolveProjectMainRoot(), "reports", "model-arrivals");
+  mkdirSync12(dir, { recursive: true });
+  const reportPath = join20(dir, `${compactStamp()}-new-arrivals.md`);
+  writeFileSync11(reportPath, renderNewArrivalsMarkdown(report));
   return { report, reportPath };
 }
 
@@ -229423,12 +229677,12 @@ function resolveApiKey6() {
 function resolveFixturesDir() {
   const here = dirname6(fileURLToPath6(import.meta.url));
   const candidates = [
-    join20(here, "fixtures"),
-    join20(here, "..", "src", "benchmark", "fixtures"),
-    join20(here, "..", "..", "src", "benchmark", "fixtures")
+    join21(here, "fixtures"),
+    join21(here, "..", "src", "benchmark", "fixtures"),
+    join21(here, "..", "..", "src", "benchmark", "fixtures")
   ];
   for (const c of candidates) {
-    if (existsSync18(join20(c, "file-01.ts"))) return c;
+    if (existsSync18(join21(c, "file-01.ts"))) return c;
   }
   throw new Error(`Could not locate benchmark fixtures. Tried:
   ${candidates.join("\n  ")}`);
@@ -229477,7 +229731,7 @@ function preflight(opts) {
   }
 }
 function benchmarkCachePath() {
-  return join20(getConfigDir(), "benchmark-results.json");
+  return join21(getConfigDir(), "benchmark-results.json");
 }
 function refuseUnsafeUpdateAll(opts) {
   if (!opts.updateAll || opts.updateMode === "free") return null;
@@ -229586,9 +229840,9 @@ async function main() {
   }
   if (opts.fromCache) {
     const cachePath6 = benchmarkCachePath();
-    const cache = loadCachedReport(cachePath6);
-    console.error(`[benchmark] --from-cache: using ${cachePath6} (${cache.results.length} models, run at ${cache.timestamp}).`);
-    return runPickPhase(cache.results, opts);
+    const cache2 = loadCachedReport(cachePath6);
+    console.error(`[benchmark] --from-cache: using ${cachePath6} (${cache2.results.length} models, run at ${cache2.timestamp}).`);
+    return runPickPhase(cache2.results, opts);
   }
   const sweep = await runKeywordSweep(opts);
   if (sweep.dryRun) {
@@ -229704,17 +229958,17 @@ async function runKeywordSweep(opts, fetchImpl) {
     results
   };
   const markdown = renderReport(reportInput);
-  mkdirSync12(dirname6(reportPath), { recursive: true });
-  writeFileSync11(reportPath, markdown, "utf-8");
+  mkdirSync13(dirname6(reportPath), { recursive: true });
+  writeFileSync12(reportPath, markdown, "utf-8");
   console.error(`[benchmark] Report: ${reportPath}`);
   const json = renderJson(reportInput);
   const cacheJsonPath = benchmarkCachePath();
-  mkdirSync12(dirname6(cacheJsonPath), { recursive: true });
-  writeFileSync11(cacheJsonPath, json, "utf-8");
+  mkdirSync13(dirname6(cacheJsonPath), { recursive: true });
+  writeFileSync12(cacheJsonPath, json, "utf-8");
   console.error(`[benchmark] JSON cache: ${cacheJsonPath}`);
   if (opts.jsonPath) {
-    mkdirSync12(dirname6(opts.jsonPath), { recursive: true });
-    writeFileSync11(opts.jsonPath, json, "utf-8");
+    mkdirSync13(dirname6(opts.jsonPath), { recursive: true });
+    writeFileSync12(opts.jsonPath, json, "utf-8");
     console.error(`[benchmark] JSON (user-path): ${opts.jsonPath}`);
   }
   const passers = [...results.values()].filter((r) => r.score?.pass).length;
@@ -230049,9 +230303,9 @@ async function runAutoReplacePhase(opts) {
   });
   const ensemble = planEnsembleRotation();
   const fullReport = reportMarkdown + "\n" + renderEnsembleRotationSection(ensemble);
-  const reportPath = join20(resolveProjectMainRoot(), "reports", "auto-replace", `${compactStamp()}-auto-replace.md`);
-  mkdirSync12(dirname6(reportPath), { recursive: true });
-  writeFileSync11(reportPath, fullReport, "utf-8");
+  const reportPath = join21(resolveProjectMainRoot(), "reports", "auto-replace", `${compactStamp()}-auto-replace.md`);
+  mkdirSync13(dirname6(reportPath), { recursive: true });
+  writeFileSync12(reportPath, fullReport, "utf-8");
   console.error("");
   for (const f of findings) {
     const verdict = !f.ranBenchmark ? "healthy \u2014 no benchmark" : f.changed ? `RECOMMEND ${f.incumbentModelId} -> ${f.recommendedModelId}` : `keep ${f.incumbentModelId}`;
@@ -230312,7 +230566,7 @@ function buildReportPath() {
   const offsetAbs = Math.abs(offsetMin);
   const tz = `${offsetSign}${pad(Math.floor(offsetAbs / 60))}${pad(offsetAbs % 60)}`;
   const ts3 = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${tz}`;
-  return join20(root, "reports", "benchmark", `${ts3}-model-comparison.md`);
+  return join21(root, "reports", "benchmark", `${ts3}-model-comparison.md`);
 }
 withUsageContext(
   { tool: "cli:benchmark", params: "" },

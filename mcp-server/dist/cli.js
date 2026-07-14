@@ -7373,6 +7373,9 @@ var require_dist = __commonJS({
 });
 
 // src/benchmark/free-mode.ts
+function isFreeSuffixModelId(id) {
+  return id.endsWith(":free");
+}
 var init_free_mode = __esm({
   "src/benchmark/free-mode.ts"() {
     "use strict";
@@ -7437,6 +7440,9 @@ var init_select = __esm({
 // src/model-qualification/registry.ts
 function criteria(overrides) {
   return { ...DEFAULT_CRITERIA, ...overrides };
+}
+function getToolDescriptor(tool) {
+  return TOOL_MODEL_REGISTRY[tool];
 }
 var TOOL_MODEL_REGISTRY;
 var init_registry = __esm({
@@ -19089,6 +19095,11 @@ function renderMarkdownReport(s) {
   lines.push("");
   lines.push(`- **Fieldset:** \`${s.fieldset_name}\``);
   lines.push(`- **Model:** \`${s.model}\``);
+  if (s.models_used && s.models_used.length > 0) {
+    lines.push(
+      `- **Models actually used (free-model rotation on rate-limit):** ${s.models_used.map((m) => `\`${m}\``).join(", ")}`
+    );
+  }
   lines.push(`- **Source root:** \`${s.source_root}\``);
   lines.push(
     `- **Files:** ${s.files_total} total / **${s.files_ok}** ok / **${s.files_failed}** failed`
@@ -19978,24 +19989,6 @@ var init_judge = __esm({
   }
 });
 
-// src/security_scan/openrouter.ts
-var realFetch;
-var init_openrouter = __esm({
-  "src/security_scan/openrouter.ts"() {
-    "use strict";
-    init_judge();
-    realFetch = async (url2, init) => {
-      const res = await fetch(url2, init);
-      return {
-        ok: res.ok,
-        status: res.status,
-        json: () => res.json(),
-        text: () => res.text()
-      };
-    };
-  }
-});
-
 // src/project-root.ts
 import { existsSync as existsSync4 } from "node:fs";
 function resolveProjectMainRoot(override) {
@@ -20010,9 +20003,371 @@ var init_project_root = __esm({
   }
 });
 
+// src/benchmark/budget.ts
+var init_budget = __esm({
+  "src/benchmark/budget.ts"() {
+    "use strict";
+  }
+});
+
+// src/benchmark/security-triage/dataset.ts
+import { existsSync as existsSync5, readFileSync as readFileSync7 } from "node:fs";
+import { dirname as dirname4, join as join7 } from "node:path";
+import { fileURLToPath } from "node:url";
+var init_dataset = __esm({
+  "src/benchmark/security-triage/dataset.ts"() {
+    "use strict";
+    init_types();
+  }
+});
+
+// src/benchmark/security-triage/runner.ts
+var init_runner = __esm({
+  "src/benchmark/security-triage/runner.ts"() {
+    "use strict";
+    init_judge();
+    init_openrouter();
+    init_dataset();
+  }
+});
+
+// src/benchmark/security-triage/score.ts
+var init_score = __esm({
+  "src/benchmark/security-triage/score.ts"() {
+    "use strict";
+  }
+});
+
+// src/benchmark/security-triage/index.ts
+import { createHash as createHash3 } from "node:crypto";
+import { existsSync as existsSync6, mkdirSync as mkdirSync8, readFileSync as readFileSync8, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join8 } from "node:path";
+function cachePath() {
+  return join8(getConfigDir(), "security-triage-results.json");
+}
+function loadCache() {
+  const p = cachePath();
+  if (!existsSync6(p)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync8(p, "utf-8"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+  } catch {
+  }
+  return {};
+}
+function failedModelsFromCache(cache2) {
+  const latest = /* @__PURE__ */ new Map();
+  for (const [key, entry] of Object.entries(cache2)) {
+    const modelId = key.split("::")[0];
+    if (!modelId) continue;
+    const prev = latest.get(modelId);
+    if (!prev || entry.date > prev.date) {
+      latest.set(modelId, {
+        date: entry.date,
+        pass: entry.score.pass,
+        inconclusive: entry.score.inconclusive
+      });
+    }
+  }
+  const failed = /* @__PURE__ */ new Set();
+  for (const [modelId, v] of latest) {
+    if (!v.inconclusive && !v.pass) failed.add(modelId);
+  }
+  return failed;
+}
+function benchmarkFailedModels() {
+  return failedModelsFromCache(loadCache());
+}
+var SECURITY_TRIAGE_CRITERIA2, INCUMBENT_FALLBACK_PRICING;
+var init_security_triage = __esm({
+  "src/benchmark/security-triage/index.ts"() {
+    "use strict";
+    init_discover();
+    init_config();
+    init_free_mode();
+    init_project_root();
+    init_cost_estimate();
+    init_types();
+    init_prompt();
+    init_budget();
+    init_dataset();
+    init_runner();
+    init_score();
+    init_select();
+    init_registry();
+    SECURITY_TRIAGE_CRITERIA2 = getToolDescriptor("security_scan").requirements;
+    INCUMBENT_FALLBACK_PRICING = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
+  }
+});
+
+// src/free-rotation.ts
+import { mkdirSync as mkdirSync9, readFileSync as readFileSync9, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join9 } from "node:path";
+function filterFreeModels(freeModels, catalogById, benchmarkFailed = /* @__PURE__ */ new Set()) {
+  return freeModels.filter((id) => {
+    if (benchmarkFailed.has(id)) return false;
+    const m = catalogById.get(id);
+    if (!m) return true;
+    const ctx = m.context_length ?? m.top_provider?.context_length ?? 0;
+    if (ctx === 0) return true;
+    return ctx >= FREE_FLOOR_MIN_CONTEXT_TOKENS;
+  });
+}
+function approvedFreePoolFromSettings() {
+  try {
+    const s = loadSettings();
+    const active = s?.profiles[s.active];
+    if (!s || !active) return [];
+    const r = resolveProfile(s.active, active);
+    const base = r.freeModels.length > 0 ? r.freeModels : [...FREE_POOL_SEED];
+    return filterFreeModels(base, /* @__PURE__ */ new Map(), benchmarkFailedModels()).filter(
+      isFreeSuffixModelId
+    );
+  } catch {
+    return [];
+  }
+}
+function emptyStore() {
+  return { version: 1, models: {} };
+}
+function classifyUnavailable(detail) {
+  const s = (detail || "").toLowerCase();
+  if (s.includes("free-models-per-day") || s.includes("per-day") || s.includes("per day") || s.includes("daily limit") || s.includes("daily quota") || s.includes("quota") || s.includes("limit exceeded") || s.includes("exceeded your")) {
+    return "daily-quota";
+  }
+  if (s.includes("no endpoints") || s.includes("no allowed providers") || s.includes("not found") || s.includes("404")) {
+    return "gone";
+  }
+  if (s.includes("429") || s.includes("rate limit") || s.includes("rate-limit") || s.includes("rate_limit") || s.includes("ratelimit") || s.includes("too many requests") || s.includes("502") || s.includes("503") || s.includes("overloaded") || s.includes("temporarily unavailable")) {
+    return "transient";
+  }
+  return null;
+}
+function nextUtcMidnight(nowMs) {
+  const d = new Date(nowMs);
+  return Date.UTC(
+    d.getUTCFullYear(),
+    d.getUTCMonth(),
+    d.getUTCDate() + 1,
+    0,
+    0,
+    0,
+    0
+  );
+}
+function computeCooldownUntil(kind, strikes, nowMs) {
+  if (kind === "daily-quota") return nextUtcMidnight(nowMs);
+  if (kind === "gone") return nowMs + GONE_MS;
+  const step = TRANSIENT_BASE_MS * 2 ** Math.max(0, strikes - 1);
+  return nowMs + Math.min(step, TRANSIENT_CAP_MS);
+}
+function applyUnavailable(store, modelId, detail, nowMs) {
+  const kind = classifyUnavailable(detail);
+  if (!kind) return store;
+  const prev = store.models[modelId];
+  const strikes = prev && prev.kind === "transient" && prev.until > nowMs ? prev.strikes + 1 : 1;
+  return {
+    version: 1,
+    models: {
+      ...store.models,
+      [modelId]: {
+        until: computeCooldownUntil(kind, strikes, nowMs),
+        kind,
+        strikes,
+        detail: (detail || "").split("\n")[0].slice(0, 200)
+      }
+    }
+  };
+}
+function clearCooldown(store, modelId) {
+  if (!store.models[modelId]) return store;
+  const models = { ...store.models };
+  delete models[modelId];
+  return { version: 1, models };
+}
+function pruneExpired(store, nowMs) {
+  const models = {};
+  for (const [id, cd] of Object.entries(store.models)) {
+    if (cd.until > nowMs) models[id] = cd;
+  }
+  return { version: 1, models };
+}
+function isCooling(store, modelId, nowMs) {
+  const cd = store.models[modelId];
+  return !!cd && cd.until > nowMs;
+}
+function orderByAvailability(pool, store, nowMs) {
+  const fresh = [];
+  const deferred = [];
+  for (const c of pool) {
+    if (isCooling(store, c.id, nowMs)) deferred.push(c);
+    else fresh.push(c);
+  }
+  deferred.sort(
+    (a, b) => (store.models[a.id]?.until ?? 0) - (store.models[b.id]?.until ?? 0)
+  );
+  return { fresh, deferred };
+}
+function cooldownFilePath() {
+  return join9(getConfigDir(), "free-cooldowns.json");
+}
+function readStoreFromDisk() {
+  try {
+    const raw = readFileSync9(cooldownFilePath(), "utf-8");
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.version === 1 && parsed.models && typeof parsed.models === "object") {
+      return { version: 1, models: parsed.models };
+    }
+  } catch {
+  }
+  return emptyStore();
+}
+function writeStoreToDisk(store) {
+  try {
+    const path = cooldownFilePath();
+    mkdirSync9(getConfigDir(), { recursive: true });
+    const tmp = `${path}.tmp`;
+    writeFileSync5(tmp, JSON.stringify(store), { encoding: "utf-8", mode: 384 });
+    renameSync3(tmp, path);
+  } catch {
+  }
+}
+function getCooldownStore(nowMs = Date.now()) {
+  if (!cache || nowMs - lastLoadMs > RELOAD_INTERVAL_MS) {
+    cache = pruneExpired(readStoreFromDisk(), nowMs);
+    lastLoadMs = nowMs;
+  }
+  return cache;
+}
+function recordUnavailable(modelId, detail, nowMs = Date.now()) {
+  const before = getCooldownStore(nowMs);
+  const after = applyUnavailable(before, modelId, detail, nowMs);
+  if (after === before) return;
+  cache = after;
+  writeStoreToDisk(after);
+}
+function recordAvailable(modelId, nowMs = Date.now()) {
+  const before = getCooldownStore(nowMs);
+  const after = clearCooldown(before, modelId);
+  if (after === before) return;
+  cache = after;
+  writeStoreToDisk(after);
+}
+function replayResponse(ok2, status, body) {
+  return {
+    ok: ok2,
+    status,
+    text: async () => body,
+    json: async () => JSON.parse(body)
+  };
+}
+function noteSend(model) {
+  if (modelsSent[modelsSent.length - 1] !== model) modelsSent.push(model);
+}
+function rotationJournalMark() {
+  return modelsSent.length;
+}
+function rotationJournalSince(mark) {
+  return [...new Set(modelsSent.slice(Math.max(0, mark)))];
+}
+function withFreeRotation(inner, hooks = {}) {
+  return async (url2, init) => {
+    const freeActive = hooks.freeActive ?? getActiveFreeOnly;
+    const poolOf = hooks.pool ?? approvedFreePoolFromSettings;
+    const now = hooks.now ?? Date.now;
+    const store = hooks.store ?? persistentRotationStore;
+    if (!freeActive()) return inner(url2, init);
+    let parsed;
+    try {
+      parsed = JSON.parse(init.body);
+    } catch {
+      return inner(url2, init);
+    }
+    const requested = parsed["model"];
+    if (typeof requested !== "string" || !isFreeSuffixModelId(requested)) {
+      return inner(url2, init);
+    }
+    const poolIds = poolOf().filter((id) => id !== requested);
+    const ordered = orderByAvailability(
+      poolIds.map((id) => ({ id })),
+      store.get(now()),
+      now()
+    );
+    const candidates = [requested, ...ordered.fresh.map((c) => c.id), ...ordered.deferred.map((c) => c.id)];
+    const startCooling = isCooling(store.get(now()), requested, now()) && candidates.length > 1;
+    const attemptOrder = startCooling ? [...candidates.slice(1), requested] : candidates;
+    let last = null;
+    for (const model of attemptOrder) {
+      noteSend(model);
+      const res = await inner(url2, {
+        ...init,
+        body: JSON.stringify({ ...parsed, model })
+      });
+      if (res.ok) {
+        store.recordAvailable(model, now());
+        return res;
+      }
+      const body = await res.text();
+      const detail = `HTTP ${res.status}: ${body.slice(0, 300)}`;
+      last = replayResponse(res.ok, res.status, body);
+      if (!classifyUnavailable(detail)) return last;
+      store.recordUnavailable(model, detail, now());
+      const idx = attemptOrder.indexOf(model);
+      const next = idx + 1 < attemptOrder.length ? attemptOrder[idx + 1] : "(none left)";
+      (hooks.onRotate ?? ((from, to) => process.stderr.write(
+        `[llm-externalizer] Free model ${from} rate-limited (HTTP ${res.status}) \u2014 rotating to ${to}.
+`
+      )))(model, next, detail);
+    }
+    return last ?? replayResponse(false, 429, JSON.stringify({ error: { message: "no approved free models available" } }));
+  };
+}
+var FREE_FLOOR_MIN_CONTEXT_TOKENS, TRANSIENT_BASE_MS, TRANSIENT_CAP_MS, GONE_MS, RELOAD_INTERVAL_MS, cache, lastLoadMs, persistentRotationStore, modelsSent;
+var init_free_rotation = __esm({
+  "src/free-rotation.ts"() {
+    "use strict";
+    init_config();
+    init_free_mode();
+    init_security_triage();
+    FREE_FLOOR_MIN_CONTEXT_TOKENS = 32e3;
+    TRANSIENT_BASE_MS = 3e4;
+    TRANSIENT_CAP_MS = 3e5;
+    GONE_MS = 36e5;
+    RELOAD_INTERVAL_MS = 5e3;
+    cache = null;
+    lastLoadMs = 0;
+    persistentRotationStore = {
+      get: getCooldownStore,
+      recordUnavailable,
+      recordAvailable
+    };
+    modelsSent = [];
+  }
+});
+
+// src/security_scan/openrouter.ts
+var rawFetch, realFetch;
+var init_openrouter = __esm({
+  "src/security_scan/openrouter.ts"() {
+    "use strict";
+    init_judge();
+    init_free_rotation();
+    rawFetch = async (url2, init) => {
+      const res = await fetch(url2, init);
+      return {
+        ok: res.ok,
+        status: res.status,
+        json: () => res.json(),
+        text: () => res.text()
+      };
+    };
+    realFetch = withFreeRotation(rawFetch);
+  }
+});
+
 // src/security_scan/report.ts
-import { mkdirSync as mkdirSync8, writeFileSync as writeFileSync4 } from "node:fs";
-import { isAbsolute as isAbsolute2, join as join7, resolve as resolve3 } from "node:path";
+import { mkdirSync as mkdirSync10, writeFileSync as writeFileSync6 } from "node:fs";
+import { isAbsolute as isAbsolute2, join as join10, resolve as resolve3 } from "node:path";
 function defaultMainRoot() {
   return resolveProjectMainRoot();
 }
@@ -20020,7 +20375,7 @@ function resolveReportDir(outputDir, mainRoot) {
   if (outputDir && outputDir.length > 0) {
     return isAbsolute2(outputDir) ? outputDir : resolve3(process.cwd(), outputDir);
   }
-  return join7(mainRoot ?? defaultMainRoot(), "reports", "security_scan");
+  return join10(mainRoot ?? defaultMainRoot(), "reports", "security_scan");
 }
 function isoTimestampLocal(now = /* @__PURE__ */ new Date()) {
   const pad = (n, w = 2) => String(n).padStart(w, "0");
@@ -20096,19 +20451,29 @@ function aggregate(input) {
     budget_usd_spent: input.budgetSpent,
     items_skipped_over_budget: input.itemsSkippedOverBudget
   };
-  return {
+  const report = {
     job_id: input.jobId,
     model: input.model,
     generated_at: (/* @__PURE__ */ new Date()).toISOString(),
     summary,
     items
   };
+  const used = input.modelsUsed ?? [];
+  if (used.length > 1 || used.length === 1 && used[0] !== input.model) {
+    report.models_used = used;
+  }
+  return report;
 }
 function renderMarkdown(report) {
   const s = report.summary;
   const lines = [];
   lines.push(`# Security-scan report \u2014 ${report.job_id}`, "");
   lines.push(`- Model: \`${report.model}\``);
+  if (report.models_used && report.models_used.length > 0) {
+    lines.push(
+      `- Models actually used (free-model rotation on rate-limit): ${report.models_used.map((m) => `\`${m}\``).join(", ")}`
+    );
+  }
   lines.push(`- Generated: ${report.generated_at}`);
   lines.push(`- Items total: ${s.items_total}`);
   lines.push(`- Deduped (judged once, fanned out): ${s.items_deduped}`);
@@ -20156,13 +20521,13 @@ function mdCell2(s) {
   return s.replace(/\|/g, "\\|").replace(/\n/g, " ").slice(0, 400);
 }
 function writeReport(report, reportDir) {
-  mkdirSync8(reportDir, { recursive: true });
+  mkdirSync10(reportDir, { recursive: true });
   const stamp = isoTimestampLocal();
   const base = `${stamp}-security-scan-${slugify2(report.job_id)}`;
-  const jsonPath = join7(reportDir, `${base}.json`);
-  const mdPath = join7(reportDir, `${base}.md`);
-  writeFileSync4(jsonPath, JSON.stringify(report, null, 2) + "\n", "utf-8");
-  writeFileSync4(mdPath, renderMarkdown(report), "utf-8");
+  const jsonPath = join10(reportDir, `${base}.json`);
+  const mdPath = join10(reportDir, `${base}.md`);
+  writeFileSync6(jsonPath, JSON.stringify(report, null, 2) + "\n", "utf-8");
+  writeFileSync6(mdPath, renderMarkdown(report), "utf-8");
   return { jsonPath, mdPath };
 }
 var init_report = __esm({
@@ -20242,6 +20607,7 @@ async function runSecurityScan(rawInput, deps = {}) {
       paths: paths2
     };
   }
+  const rotationMark = rotationJournalMark();
   let judge;
   if (!apiKey) {
     judge = {
@@ -20294,7 +20660,10 @@ async function runSecurityScan(rawInput, deps = {}) {
     skipped: intakeResult.skipped,
     recordsTotal: intakeResult.recordsTotal,
     budgetSpent: judge.costUsd,
-    itemsSkippedOverBudget: 0
+    itemsSkippedOverBudget: 0,
+    // Empty unless free-mode rotation actually fired, in which case it is every
+    // model that answered — the requested one included.
+    modelsUsed: rotationJournalSince(rotationMark)
   });
   const reportDir = resolveReportDir(input.output_dir, deps.mainRoot);
   const paths = writeReport(report, reportDir);
@@ -20340,6 +20709,7 @@ var init_security_scan_main = __esm({
     init_intake();
     init_judge();
     init_openrouter();
+    init_free_rotation();
     init_prompt();
     init_report();
     init_types();
@@ -20364,14 +20734,14 @@ __export(cli_exports, {
 import { execSync as execSync2 } from "node:child_process";
 import {
   appendFileSync as appendFileSync4,
-  mkdirSync as mkdirSync9,
-  readFileSync as readFileSync7,
+  mkdirSync as mkdirSync11,
+  readFileSync as readFileSync10,
   readdirSync as readdirSync3,
   statSync as statSync3,
-  writeFileSync as writeFileSync5
+  writeFileSync as writeFileSync7
 } from "node:fs";
-import { dirname as dirname4, extname as extname2, isAbsolute as isAbsolute3, join as join8, resolve as resolve4 } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname as dirname5, extname as extname2, isAbsolute as isAbsolute3, join as join11, resolve as resolve4 } from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 function parseFlags2(args) {
   const flags = {};
   const positional = [];
@@ -20434,7 +20804,7 @@ function resolveReportDir2(outputDirFlag, opts) {
     return isAbsolute3(outputDirFlag) ? outputDirFlag : resolve4(process.cwd(), outputDirFlag);
   }
   const mainRoot = opts.mainRoot ?? defaultMainRoot2();
-  return join8(mainRoot, "reports", "mass_scouting");
+  return join11(mainRoot, "reports", "mass_scouting");
 }
 function listGitChangedFiles(root, ref) {
   if (!/^[A-Za-z0-9_./~^@{}-]+$/.test(ref) || ref.length > 200) {
@@ -20484,7 +20854,7 @@ function walkFiles2(root, extensionFilter, extraSkipDirs) {
       continue;
     }
     for (const e of entries) {
-      const full = join8(dir, e);
+      const full = join11(dir, e);
       let st;
       try {
         st = statSync3(full);
@@ -20511,7 +20881,7 @@ function resolveBundledFieldset(arg) {
       error: `invalid bundled fieldset name ${JSON.stringify(name)}; allowed: [a-zA-Z0-9_-]`
     };
   }
-  const here = dirname4(fileURLToPath(import.meta.url));
+  const here = dirname5(fileURLToPath2(import.meta.url));
   const candidates = [
     resolve4(here, "..", "fieldsets", `${name}.json`),
     resolve4(here, "fieldsets", `${name}.json`),
@@ -20519,7 +20889,7 @@ function resolveBundledFieldset(arg) {
   ];
   for (const p of candidates) {
     try {
-      readFileSync7(p, "utf-8");
+      readFileSync10(p, "utf-8");
       return { path: p };
     } catch {
     }
@@ -20536,7 +20906,7 @@ function loadFieldsetFromArg(path) {
   }
   let raw;
   try {
-    raw = readFileSync7(path, "utf-8");
+    raw = readFileSync10(path, "utf-8");
   } catch (e) {
     return { error: `cannot read --fields-file: ${e.message}` };
   }
@@ -20685,7 +21055,7 @@ function runRegister(args) {
   for (const p of paths) {
     let body;
     try {
-      body = readFileSync7(p);
+      body = readFileSync10(p);
     } catch {
       skippedRead++;
       continue;
@@ -20702,7 +21072,7 @@ function runRegister(args) {
     }
     const out = reg.registerFile({
       file_path: isAbsolute3(p) ? p : resolve4(p),
-      source_root: root ?? dirname4(p),
+      source_root: root ?? dirname5(p),
       body,
       registered_via: filesArg ? "explicit" : "folder"
     });
@@ -20837,6 +21207,7 @@ async function runScout(args, opts) {
     );
   }
   const fetchImpl = opts.fetchImpl ?? realFetch2;
+  const rotationMark = rotationJournalMark();
   if (flags["live-context"] === "true") {
     const live = await fetchProviderContext(
       model,
@@ -20887,13 +21258,17 @@ async function runScout(args, opts) {
     return err2(`scout failed: ${e.message}`);
   }
   const summary = summariseJob(reg, jobId);
+  const rotated = rotationJournalSince(rotationMark);
+  if (rotated.length > 1 || rotated.length === 1 && rotated[0] !== summary.model) {
+    summary.models_used = rotated;
+  }
   const md = renderMarkdownReport(summary);
   reg.close();
   const reportDir = resolveReportDir2(flags["output-dir"], opts);
-  mkdirSync9(reportDir, { recursive: true });
+  mkdirSync11(reportDir, { recursive: true });
   const stamp = isoTimestampLocal2();
-  const reportPath = join8(reportDir, `${stamp}-scout-${slugify3(jobId)}.md`);
-  writeFileSync5(reportPath, md, "utf-8");
+  const reportPath = join11(reportDir, `${stamp}-scout-${slugify3(jobId)}.md`);
+  writeFileSync7(reportPath, md, "utf-8");
   return ok(
     [
       `job_id=${jobId}`,
@@ -21067,7 +21442,7 @@ function runBuildFieldset(args) {
   const json2 = JSON.stringify(fieldset, null, 2);
   const outPath = flags["out"];
   if (outPath) {
-    writeFileSync5(outPath, json2 + "\n", "utf-8");
+    writeFileSync7(outPath, json2 + "\n", "utf-8");
     return ok(`fieldset_name=${name}
 fields=${fields.length}
 path=${outPath}`);
@@ -21093,7 +21468,7 @@ async function runProposeFieldset(args, opts) {
   if (samplesArg) {
     for (const p of samplesArg.split(",").map((s) => s.trim()).filter(Boolean)) {
       try {
-        const body = readFileSync7(p, "utf-8");
+        const body = readFileSync10(p, "utf-8");
         samples.push({ path: p, body: body.slice(0, 2e3) });
       } catch {
       }
@@ -21203,7 +21578,7 @@ ${content.slice(0, 400)}`
   const json2 = JSON.stringify(candidate, null, 2);
   const outPath = flags["out"];
   if (outPath) {
-    writeFileSync5(outPath, json2 + "\n", "utf-8");
+    writeFileSync7(outPath, json2 + "\n", "utf-8");
     return ok(
       `fieldset_name=${candidate.fieldset_name}
 fields=${candidate.fields.length}
@@ -21214,7 +21589,7 @@ path=${outPath}`
 }
 function runListBundledFieldsets(args) {
   const { flags } = parseFlags2(args);
-  const here = dirname4(fileURLToPath(import.meta.url));
+  const here = dirname5(fileURLToPath2(import.meta.url));
   const candidates = [
     resolve4(here, "..", "fieldsets"),
     resolve4(here, "fieldsets"),
@@ -21241,7 +21616,7 @@ function runListBundledFieldsets(args) {
     const name = e.replace(/\.json$/, "");
     let fields = [];
     try {
-      const parsed = JSON.parse(readFileSync7(full, "utf-8"));
+      const parsed = JSON.parse(readFileSync10(full, "utf-8"));
       fields = (parsed.fields ?? []).map((f) => f.name);
     } catch {
     }
@@ -21581,11 +21956,11 @@ function runExport(args, opts) {
   const rows = reg.listResultsByJob(jobId);
   reg.close();
   const reportDir = resolveReportDir2(flags["output-dir"], opts);
-  mkdirSync9(reportDir, { recursive: true });
+  mkdirSync11(reportDir, { recursive: true });
   const stamp = isoTimestampLocal2();
   const filename = `${stamp}-export-${slugify3(jobId)}.${format}`;
-  const path = join8(reportDir, filename);
-  writeFileSync5(path, "", "utf-8");
+  const path = join11(reportDir, filename);
+  writeFileSync7(path, "", "utf-8");
   if (format === "jsonl") {
     for (const r of rows) {
       appendFileSync4(path, JSON.stringify(r) + "\n", "utf-8");
@@ -21742,7 +22117,7 @@ async function runMassScoutCli(args, opts = {}) {
       );
   }
 }
-var DEFAULT_SKIP_DIRS2, realFetch2, HELP_TEXT;
+var DEFAULT_SKIP_DIRS2, rawFetch2, realFetch2, HELP_TEXT;
 var init_cli = __esm({
   "src/mass_scouting/cli.ts"() {
     "use strict";
@@ -21757,6 +22132,7 @@ var init_cli = __esm({
     init_security_scan_main();
     init_types();
     init_config();
+    init_free_rotation();
     init_project_root();
     DEFAULT_SKIP_DIRS2 = /* @__PURE__ */ new Set([
       ".git",
@@ -21775,7 +22151,7 @@ var init_cli = __esm({
       ".turbo",
       "out"
     ]);
-    realFetch2 = async (url2, init) => {
+    rawFetch2 = async (url2, init) => {
       const res = await fetch(url2, init);
       return {
         ok: res.ok,
@@ -21784,6 +22160,7 @@ var init_cli = __esm({
         text: () => res.text()
       };
     };
+    realFetch2 = withFreeRotation(rawFetch2);
     HELP_TEXT = `mass-scout \u2014 bulk LLM-driven structured-output file analysis.
 
 Usage:
@@ -43817,9 +44194,9 @@ function isElectron() {
 }
 
 // src/cli.ts
-import { writeFileSync as writeFileSync6, existsSync as existsSync5, statSync as statSync4, unlinkSync } from "node:fs";
-import { resolve as resolvePath, isAbsolute as isAbsolute4, join as join9, dirname as dirname5 } from "node:path";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
+import { writeFileSync as writeFileSync8, existsSync as existsSync7, statSync as statSync4, unlinkSync } from "node:fs";
+import { resolve as resolvePath, isAbsolute as isAbsolute4, join as join12, dirname as dirname6 } from "node:path";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { spawnSync as spawnSync2 } from "node:child_process";
 import { tmpdir } from "node:os";
 function die(msg) {
@@ -43923,7 +44300,7 @@ async function cmdModelInfo(modelId, flags) {
       }
       const filepath = isAbsolute4(jsonFlag) ? jsonFlag : resolvePath(jsonFlag);
       try {
-        writeFileSync6(filepath, text, "utf-8");
+        writeFileSync8(filepath, text, "utf-8");
       } catch (err3) {
         die(
           `Failed to write JSON to '${filepath}': ${err3 instanceof Error ? err3.message : String(err3)}`
@@ -43941,15 +44318,15 @@ async function cmdModelInfo(modelId, flags) {
 }
 var DEFAULT_SEARCH_TIMEOUT_MS = 4 * 60 * 60 * 1e3;
 function findServerScript() {
-  const here = dirname5(fileURLToPath2(import.meta.url));
+  const here = dirname6(fileURLToPath3(import.meta.url));
   const candidates = [
-    join9(here, "index.js"),
+    join12(here, "index.js"),
     // running from dist/
-    join9(here, "..", "dist", "index.js")
+    join12(here, "..", "dist", "index.js")
     // running from src/
   ];
   for (const c of candidates) {
-    if (existsSync5(c)) return c;
+    if (existsSync7(c)) return c;
   }
   die(
     `Cannot locate MCP server entry point. Looked for:
@@ -44005,7 +44382,7 @@ function generateGitDiff(base, sourceFiles) {
       );
     }
   }
-  const outPath = join9(tmpdir(), `llm-ext-search-existing-diff-${Date.now()}.patch`);
+  const outPath = join12(tmpdir(), `llm-ext-search-existing-diff-${Date.now()}.patch`);
   const result = spawnSync2(
     "git",
     ["diff", `${base}...HEAD`, "--", ...sourceFiles],
@@ -44037,7 +44414,7 @@ function generateGitDiff(base, sourceFiles) {
     );
   }
   try {
-    writeFileSync6(outPath, diffText, "utf-8");
+    writeFileSync8(outPath, diffText, "utf-8");
   } catch (err3) {
     die(
       `Failed to write diff to '${outPath}': ${err3 instanceof Error ? err3.message : String(err3)}`
@@ -44112,7 +44489,7 @@ function parseSearchExistingArgs(args) {
   }
   for (const fp of folderPaths) {
     const abs = isAbsolute4(fp) ? fp : resolvePath(fp);
-    if (!existsSync5(abs)) die(`--in path not found: ${fp}`);
+    if (!existsSync7(abs)) die(`--in path not found: ${fp}`);
     let isDir;
     try {
       isDir = statSync4(abs).isDirectory();
@@ -44125,7 +44502,7 @@ function parseSearchExistingArgs(args) {
   }
   for (const sf of sourceFiles) {
     const abs = isAbsolute4(sf) ? sf : resolvePath(sf);
-    if (!existsSync5(abs)) die(`Source file not found: ${sf}`);
+    if (!existsSync7(abs)) die(`Source file not found: ${sf}`);
     if (statSync4(abs).isDirectory()) die(`Source file must be a file, not a directory: ${sf}`);
   }
   let timeoutMs = void 0;
@@ -44166,7 +44543,7 @@ async function cmdSearchExisting(rawArgs) {
     info(`Generated PR diff via git: ${diffPath}`);
   } else if (opts.diffPath) {
     const abs = isAbsolute4(opts.diffPath) ? opts.diffPath : resolvePath(opts.diffPath);
-    if (!existsSync5(abs)) die(`--diff file not found: ${opts.diffPath}`);
+    if (!existsSync7(abs)) die(`--diff file not found: ${opts.diffPath}`);
     diffPath = abs;
   }
   const toolArgs = {
