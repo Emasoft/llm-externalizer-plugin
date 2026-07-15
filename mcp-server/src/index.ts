@@ -194,6 +194,7 @@ import {
 } from "./model-reconcile.js";
 import {
   AllFreeModelsExhaustedError,
+  approvedFreePoolFromSettings,
   callWithFreeRotation,
   classifyUnavailable,
   filterFreeModels,
@@ -723,9 +724,15 @@ let creditExhausted = false;
 /** Parse the low-balance auto-free threshold (USD) from LLM_EXT_FREE_BELOW_USD.
  *  Default $1.00; a non-finite or ≤0 value falls back to $1.00. */
 export function parseFreeBelowUsd(raw: string | undefined): number {
-  if (raw === undefined) return 1.0;
+  // Default 0: use PAID credit down to $0 (the user's rule — "when it reaches 0,
+  // switch to free"). At 0 the pre-flight never engages auto-free proactively;
+  // the guaranteed non-interrupting trigger is the 402 mid-call catch, which
+  // completes the in-flight call on the rotating free pool. A user who wants a
+  // safety margin sets LLM_EXT_FREE_BELOW_USD to e.g. 1. `0` is now a valid value
+  // (the old clamp forbade it); only a NEGATIVE / non-finite value falls back.
+  if (raw === undefined) return 0;
   const v = Number(raw);
-  return Number.isFinite(v) && v > 0 ? v : 1.0;
+  return Number.isFinite(v) && v >= 0 ? v : 0;
 }
 
 /** Resolve the single working free model (LLM_EXT_FREE_MODEL_ID) for the
@@ -798,7 +805,18 @@ let autoFreePool: string[] = [];
 function engageAutoFree(reason: string): void {
   if (autoFreeEngaged) return;
   autoFreeEngaged = true;
-  autoFreePool = resolveAutoFreePool(activeResolved?.freeModels ?? []);
+  // Prefer the RECONCILED / persisted approved pool (catalog-tracked, benchmark-
+  // filtered) over whatever the profile resolved to at boot. On a paid profile
+  // resolveProfile leaves activeResolved.freeModels empty, so without this the
+  // credit→free switch would fall back to the STATIC seed even when reconcile had
+  // just written a fresh pool to settings. approvedFreePoolFromSettings reads
+  // that persisted pool; resolveAutoFreePool (profile free_models → seed) is the
+  // fallback when settings are unreadable / hold no pool.
+  const reconciled = approvedFreePoolFromSettings();
+  autoFreePool =
+    reconciled.length > 0
+      ? reconciled
+      : resolveAutoFreePool(activeResolved?.freeModels ?? []);
   // Engage the airtight chokepoint so the subsystem spend sites (judge.ts,
   // scout.ts) that read getActiveFreeOnly() also enforce ':free'. Safe because
   // the dispatch site now substitutes a ':free' model for those tools.

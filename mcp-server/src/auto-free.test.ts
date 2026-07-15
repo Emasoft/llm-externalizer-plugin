@@ -14,29 +14,33 @@ import {
 import { FREE_POOL_SEED } from "./config";
 
 describe("parseFreeBelowUsd — low-balance threshold (TRDD-542bdbef)", () => {
-  it("defaults to $1.00 when the env var is unset", () => {
-    expect(parseFreeBelowUsd(undefined)).toBe(1.0);
+  it("defaults to $0 — use paid credit down to zero; the 402 catch is the safety net", () => {
+    // The user's rule: use the paid credit fully, then switch to free at $0. The
+    // guaranteed non-interrupting trigger is the mid-call 402 catch, not a
+    // proactive margin. A user who wants a margin sets LLM_EXT_FREE_BELOW_USD.
+    expect(parseFreeBelowUsd(undefined)).toBe(0);
   });
 
-  it("honours a valid positive override", () => {
+  it("honours a valid positive override (the opt-in safety margin)", () => {
     expect(parseFreeBelowUsd("2")).toBe(2);
     expect(parseFreeBelowUsd("0.5")).toBe(0.5);
     expect(parseFreeBelowUsd("10.25")).toBe(10.25);
+    expect(parseFreeBelowUsd("1")).toBe(1);
   });
 
-  it("rejects zero, negative, and non-numeric values → $1.00", () => {
-    expect(parseFreeBelowUsd("0")).toBe(1.0);
-    expect(parseFreeBelowUsd("-5")).toBe(1.0);
-    expect(parseFreeBelowUsd("abc")).toBe(1.0);
-    expect(parseFreeBelowUsd("")).toBe(1.0);
-    expect(parseFreeBelowUsd("NaN")).toBe(1.0);
-    expect(parseFreeBelowUsd("Infinity")).toBe(1.0);
+  it("accepts 0 explicitly; only negative / non-numeric fall back to 0", () => {
+    expect(parseFreeBelowUsd("0")).toBe(0); // 0 is now a valid, honoured value
+    expect(parseFreeBelowUsd("-5")).toBe(0);
+    expect(parseFreeBelowUsd("abc")).toBe(0);
+    expect(parseFreeBelowUsd("")).toBe(0);
+    expect(parseFreeBelowUsd("NaN")).toBe(0);
+    expect(parseFreeBelowUsd("Infinity")).toBe(0);
   });
 
-  it("the $0.10-balance / $1-threshold case engages (balance < threshold)", () => {
-    // Regression guard for the live bug: balance $0.10 must be below the
-    // default threshold so auto-free fires.
-    expect(0.10214525300000332 < parseFreeBelowUsd(undefined)).toBe(true);
+  it("with a $1 override, the $0.10-balance case still engages (balance < threshold)", () => {
+    // The proactive early-switch is now opt-in via the override; when set, it
+    // still fires below the margin.
+    expect(0.10214525300000332 < parseFreeBelowUsd("1")).toBe(true);
   });
 });
 

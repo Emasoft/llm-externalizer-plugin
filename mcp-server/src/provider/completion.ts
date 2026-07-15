@@ -41,6 +41,12 @@ import { HEARTBEAT_INTERVAL_MS, type ProgressFn } from "../rate-limiter.js";
 import { fetchWithTimeout, fetchWithRetry429, sanitizeProviderError } from "./http.js";
 import { chatCompletionNative } from "./lmstudio.js";
 import { resolveConnection } from "./connection.js";
+import { isFreeSuffixModelId } from "../benchmark/free-mode.js";
+import {
+  approvedFreePoolFromSettings,
+  callWithFreeRotation,
+  classifyUnavailable,
+} from "../free-rotation.js";
 import {
   VALID_REASONING_EFFORTS,
   type ReasoningEffortSetting,
@@ -858,6 +864,45 @@ const MAX_EMPTY_RESPONSE_RETRIES = 15;
 // scaling it was doing before we try again.
 const EMPTY_RESPONSE_RETRY_DELAY_MS = 2000;
 
+/**
+ * Complete one call on the APPROVED free pool, ROTATING across it — the paid→free
+ * fallback body shared by the 402 (credit-exhausted) and the terminal
+ * (paid-model-unavailable) paths.
+ *
+ * Strictly ONE-DIRECTIONAL. Every caller has already established that the current
+ * model is a PAID model, so this only ever moves paid→free; it can never move a
+ * free_only profile to paid (that profile's model is ':free', and
+ * assertFreeOnlyModel forbids paid regardless). The pool is the reconciled /
+ * persisted approved pool, minus the model we just failed on; it degrades to the
+ * single validated freeModelId only when settings are unreadable. Rotation means
+ * a daily-capped first free model doesn't kill the command — the whole point of
+ * the user's "every command must complete" rule.
+ */
+async function completeOnFreePool(
+  messages: ChatMessage[],
+  options: SimpleCompletionOptions,
+  deps: CompletionDeps,
+  freeModelId: string,
+): Promise<StreamingResult> {
+  const pool = approvedFreePoolFromSettings().filter((id) => id !== options.model);
+  const ids = pool.length > 0 ? pool : [freeModelId];
+  const candidates = ids.map((id) => ({ id, maxOutput: options.maxTokens ?? 8192 }));
+  return callWithFreeRotation<StreamingResult>(
+    candidates[0],
+    candidates.slice(1),
+    (model) => chatCompletionSimple(messages, { ...options, model }, deps),
+    {
+      resultFailureDetail: (r) => (r.finishReason === "error" ? r.content : null),
+      onRotate: (from, _to, detail) =>
+        process.stderr.write(
+          `[llm-externalizer] Free model ${from} unavailable (${detail
+            .split("\n")[0]
+            .slice(0, 100)}) — rotating.\n`,
+        ),
+    },
+  );
+}
+
 export async function chatCompletionWithRetry(
   messages: ChatMessage[],
   options: SimpleCompletionOptions,
@@ -916,23 +961,21 @@ export async function chatCompletionWithRetry(
         // the auto-free engagement flags (read by getEnsembleModels), and the
         // balance cache. They must NOT be mirrored here: a local copy would
         // diverge from the single binding index.ts actually reads.
+        // Credit is gone for the SESSION, so engage sticky auto-free: later calls
+        // route through the free pool too, not just this one.
         deps.setCreditExhausted();
         deps.invalidateBalanceCache();
-        deps.engageAutoFree("402 mid-flight"); // route later ensemble calls through the free pool
+        deps.engageAutoFree("402 mid-flight");
         process.stderr.write(
-          `[llm-externalizer] Credit exhausted (402) — retrying call with free model (${freeModelId})\n`,
+          `[llm-externalizer] Credit exhausted (402) — completing this call on the free pool (rotating on rate-limit).\n`,
         );
         try {
-          return await chatCompletionSimple(
-            messages,
-            { ...options, model: freeModelId },
-            deps,
-          );
+          return await completeOnFreePool(messages, options, deps, freeModelId);
         } catch (freeErr) {
           const freeMsg =
             freeErr instanceof Error ? freeErr.message : String(freeErr);
           process.stderr.write(
-            `[llm-externalizer] Free-mode fallback also failed: ${freeMsg}\n`,
+            `[llm-externalizer] Free-mode fallback exhausted the approved pool: ${freeMsg}\n`,
           );
           throw err;
         }
@@ -957,6 +1000,31 @@ export async function chatCompletionWithRetry(
           };
         }
         continue;
+      }
+      // Last resort (the user's directional rule): a PAID model that has
+      // exhausted its retries on a genuine AVAILABILITY failure (429/404/no
+      // endpoints/503 — never a 400/bad-key, which classifyUnavailable rejects)
+      // completes on the free pool instead of failing the command. Non-sticky:
+      // we do NOT engage session-wide auto-free here, because the wallet may be
+      // fine and only this model/moment was bad — the next call retries paid. The
+      // guard `!isFreeSuffixModelId(options.model)` makes this STRICTLY one-way
+      // (paid→free): a free_only profile's model is already ':free', so it never
+      // reaches here, and free-rotation already covers a failing free model.
+      if (
+        backend.type === "openrouter" &&
+        options.model !== undefined &&
+        !isFreeSuffixModelId(options.model) &&
+        options.model !== freeModelId &&
+        classifyUnavailable(errMsg) !== null
+      ) {
+        process.stderr.write(
+          `[llm-externalizer] Paid model '${options.model}' is unavailable and out of retries — completing this call on the free pool.\n`,
+        );
+        try {
+          return await completeOnFreePool(messages, options, deps, freeModelId);
+        } catch {
+          throw err; // free pool also exhausted — surface the ORIGINAL paid error
+        }
       }
       throw err; // Exhausted retries
     }

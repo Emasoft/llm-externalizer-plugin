@@ -267924,6 +267924,23 @@ async function checkServiceHealthOrWait() {
 var MAX_TRUNCATION_RETRIES = 3;
 var MAX_EMPTY_RESPONSE_RETRIES = 15;
 var EMPTY_RESPONSE_RETRY_DELAY_MS = 2e3;
+async function completeOnFreePool(messages, options, deps, freeModelId) {
+  const pool = approvedFreePoolFromSettings().filter((id) => id !== options.model);
+  const ids = pool.length > 0 ? pool : [freeModelId];
+  const candidates = ids.map((id) => ({ id, maxOutput: options.maxTokens ?? 8192 }));
+  return callWithFreeRotation(
+    candidates[0],
+    candidates.slice(1),
+    (model) => chatCompletionSimple(messages, { ...options, model }, deps),
+    {
+      resultFailureDetail: (r) => r.finishReason === "error" ? r.content : null,
+      onRotate: (from, _to, detail) => process.stderr.write(
+        `[llm-externalizer] Free model ${from} unavailable (${detail.split("\n")[0].slice(0, 100)}) \u2014 rotating.
+`
+      )
+    }
+  );
+}
 async function chatCompletionWithRetry(messages, options, deps) {
   const backend = deps.getBackend();
   const freeModelId = deps.getFreeModelId();
@@ -267950,19 +267967,15 @@ async function chatCompletionWithRetry(messages, options, deps) {
         deps.invalidateBalanceCache();
         deps.engageAutoFree("402 mid-flight");
         process.stderr.write(
-          `[llm-externalizer] Credit exhausted (402) \u2014 retrying call with free model (${freeModelId})
+          `[llm-externalizer] Credit exhausted (402) \u2014 completing this call on the free pool (rotating on rate-limit).
 `
         );
         try {
-          return await chatCompletionSimple(
-            messages,
-            { ...options, model: freeModelId },
-            deps
-          );
+          return await completeOnFreePool(messages, options, deps, freeModelId);
         } catch (freeErr) {
           const freeMsg = freeErr instanceof Error ? freeErr.message : String(freeErr);
           process.stderr.write(
-            `[llm-externalizer] Free-mode fallback also failed: ${freeMsg}
+            `[llm-externalizer] Free-mode fallback exhausted the approved pool: ${freeMsg}
 `
           );
           throw err3;
@@ -267986,6 +267999,17 @@ async function chatCompletionWithRetry(messages, options, deps) {
           };
         }
         continue;
+      }
+      if (backend.type === "openrouter" && options.model !== void 0 && !isFreeSuffixModelId(options.model) && options.model !== freeModelId && classifyUnavailable(errMsg) !== null) {
+        process.stderr.write(
+          `[llm-externalizer] Paid model '${options.model}' is unavailable and out of retries \u2014 completing this call on the free pool.
+`
+        );
+        try {
+          return await completeOnFreePool(messages, options, deps, freeModelId);
+        } catch {
+          throw err3;
+        }
       }
       throw err3;
     }
@@ -269317,9 +269341,9 @@ var session = {
 };
 var creditExhausted = false;
 function parseFreeBelowUsd(raw) {
-  if (raw === void 0) return 1;
+  if (raw === void 0) return 0;
   const v = Number(raw);
-  return Number.isFinite(v) && v > 0 ? v : 1;
+  return Number.isFinite(v) && v >= 0 ? v : 0;
 }
 function resolveFreeModelId(raw) {
   if (typeof raw === "string" && raw.trim().endsWith(":free")) {
@@ -269343,7 +269367,8 @@ var autoFreePool = [];
 function engageAutoFree(reason) {
   if (autoFreeEngaged) return;
   autoFreeEngaged = true;
-  autoFreePool = resolveAutoFreePool(activeResolved?.freeModels ?? []);
+  const reconciled = approvedFreePoolFromSettings();
+  autoFreePool = reconciled.length > 0 ? reconciled : resolveAutoFreePool(activeResolved?.freeModels ?? []);
   setActiveFreeOnly(true);
   process.stderr.write(
     `[llm-externalizer] Auto-free engaged (${reason}) \u2014 ALL tools now route through the free pool (${autoFreePool.length} models, rotation on rate-limit). Funded-profile choices reactivate on restart.

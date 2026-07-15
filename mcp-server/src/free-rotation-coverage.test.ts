@@ -122,6 +122,28 @@ describe("free-model rotation coverage — every LLM send path can rotate", () =
     );
   });
 
+  it("credit→free is non-interrupting AND strictly one-directional (paid→free only)", () => {
+    const completion = read("provider/completion.ts");
+    // 402 (credit exhausted) completes on the ROTATING free pool, not a single
+    // pinned model — so a daily-capped first free model can't kill the command.
+    expect(completion).toContain("completeOnFreePool");
+    expect(completion).toMatch(/API error 402[\s\S]{0,1400}completeOnFreePool/);
+    // The paid→free fallback is guarded by the current model NOT being ':free',
+    // which makes it structurally one-directional: a free_only profile's model is
+    // already ':free', so it can never be pushed to paid here.
+    expect(completion).toMatch(/!isFreeSuffixModelId\(options\.model\)/);
+    // The fallback only fires on a genuine availability failure, never a 400/bad
+    // key (classifyUnavailable rejects those) — so it can't mask real bugs.
+    expect(completion).toContain("classifyUnavailable(errMsg)");
+  });
+
+  it("the paid credit is used down to $0 by default (the 402 catch is the safety net)", () => {
+    const index = read("index.ts");
+    // parseFreeBelowUsd defaults to 0 — no proactive early switch; the guaranteed
+    // non-interrupting trigger is the mid-call 402.
+    expect(index).toMatch(/function parseFreeBelowUsd[\s\S]{0,700}return 0;/);
+  });
+
   it("the ':free' suffix rule has exactly ONE definition", () => {
     // isFreeSuffixModelId IS what the cost-safety chokepoint admits. A second
     // inline `.endsWith(":free")` in the rotation path is how a $0-but-not-':free'
