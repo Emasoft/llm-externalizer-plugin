@@ -35,6 +35,7 @@ import { join } from "node:path";
 import {
   FREE_POOL_SEED,
   getActiveFreeOnly,
+  setActiveFreeOnly,
   getConfigDir,
   loadSettings,
   resolveProfile,
@@ -677,6 +678,28 @@ export function resetRotationJournalForTests(): void {
   modelsSent.length = 0;
 }
 
+// Auto-free engagement seam. index.ts owns the real engageAutoFree (it sets the
+// autoFreeEngaged flag + autoFreePool + the chokepoint flag, all consistently)
+// and REGISTERS it here at startup, so this leaf module can trigger a session-wide
+// paid→free switch WITHOUT importing index.ts (which would be a cycle). In a
+// standalone CLI process index.ts is never loaded, so the hook stays null and the
+// decorator falls back to flipping the config chokepoint flag directly — safe
+// there because a CLI process has no completion-ensemble path to keep in sync.
+let autoFreeEngageHook: ((reason: string) => void) | null = null;
+
+/** index.ts calls this once at boot with its engageAutoFree. */
+export function registerAutoFreeEngage(fn: (reason: string) => void): void {
+  autoFreeEngageHook = fn;
+}
+
+/** Engage session-wide free mode after a mid-command credit exhaustion. Uses the
+ *  registered engageAutoFree when present (the MCP process, keeps every spend
+ *  site consistent), else flips the chokepoint flag directly (a CLI process). */
+function engageFreeAfterCreditExhaustion(reason: string): void {
+  if (autoFreeEngageHook) autoFreeEngageHook(reason);
+  else setActiveFreeOnly(true);
+}
+
 export interface FetchRotationHooks {
   /** The approved free pool, in preference order. Defaults to settings on disk. */
   pool?: () => string[];
@@ -686,27 +709,85 @@ export interface FetchRotationHooks {
   now?: () => number;
   store?: RotationStore;
   onRotate?: (from: string, to: string, detail: string) => void;
+  /** Test seam for the paid→free credit switch. Defaults to the real engage. */
+  onCreditExhausted?: (reason: string) => void;
 }
 
 /**
- * Wrap a production FetchImpl so that, under free mode, an OpenRouter request
- * whose body pins a rate-limited ':free' model is transparently re-sent against
- * the next APPROVED free model — until one answers or every approved model has
- * been tried.
+ * Run one rewritten request through an ordered list of ':free' model ids,
+ * rotating on each availability failure. `parsed` is the original JSON body; each
+ * attempt re-sends it with `model` swapped. Returns the first OK response (body
+ * untouched), or — on a real (non-availability) defect or an exhausted list — the
+ * last failing response replayed with its body intact so the caller's own
+ * error/fail-safe path runs exactly as before.
+ */
+async function rotateOverFreeIds(
+  inner: RotatingFetchImpl,
+  url: string,
+  init: Parameters<RotatingFetchImpl>[1],
+  parsed: Record<string, unknown>,
+  attemptOrder: readonly string[],
+  store: RotationStore,
+  now: () => number,
+  onRotate: (from: string, to: string, detail: string) => void,
+): Promise<RotatingFetchResponse> {
+  let last: RotatingFetchResponse | null = null;
+  for (const model of attemptOrder) {
+    noteSend(model);
+    const res = await inner(url, { ...init, body: JSON.stringify({ ...parsed, model }) });
+    if (res.ok) {
+      store.recordAvailable(model, now());
+      return res; // untouched — the body was never consumed
+    }
+    const body = await res.text(); // must read to tell "rate-limited" from "real bug"
+    const detail = `HTTP ${res.status}: ${body.slice(0, 300)}`;
+    last = replayResponse(res.ok, res.status, body);
+    if (!classifyUnavailable(detail)) return last; // a real defect — hand it back
+    store.recordUnavailable(model, detail, now());
+    const idx = attemptOrder.indexOf(model);
+    const next = idx + 1 < attemptOrder.length ? attemptOrder[idx + 1] : "(none left)";
+    onRotate(model, next, detail);
+  }
+  return (
+    last ??
+    replayResponse(false, 429, JSON.stringify({ error: { message: "no approved free models available" } }))
+  );
+}
+
+/** Order a pool of free ids for attempts: fresh first (preference), cooling ones
+ *  deferred to the back but never dropped. */
+function orderedFreeAttempts(
+  ids: readonly string[],
+  store: RotationStore,
+  now: () => number,
+): string[] {
+  const ordered = orderByAvailability(
+    ids.map((id) => ({ id })),
+    store.get(now()),
+    now(),
+  );
+  return [...ordered.fresh.map((c) => c.id), ...ordered.deferred.map((c) => c.id)];
+}
+
+/**
+ * Wrap a production FetchImpl for the direct-HTTP tools (security_scan / mass_scout,
+ * which do not go through the completion layer) so that:
  *
- * Deliberately inert in these cases, each of which would otherwise be a footgun:
- *  • free mode off            → paid calls are never rerouted (that would spend
- *                               money on a model the user did not choose);
- *  • the body pins no model   → e.g. the catalog/pricing GETs, which must pass
- *                               through untouched;
- *  • the model is not ':free' → nothing to rotate to, and rotating a paid model
- *                               is exactly what must never happen;
- *  • the failure is not an availability failure (a 400, a bad key, a schema
- *    error) → returned to the caller as-is, because rotating on a real defect
- *    would burn the whole pool while hiding the one error worth reading.
+ *  A. Under FREE mode, a request pinning a rate-limited ':free' model is
+ *     transparently re-sent against the next APPROVED free model, until one
+ *     answers or the whole approved pool has been tried.
  *
- * On exhaustion it returns the LAST failing response (replayed, body intact) so
- * the caller's existing error/fail-safe path runs exactly as it does today.
+ *  B. Under PAID mode, a request that comes back 402 (credit exhausted mid-
+ *     command) engages session-wide free and completes THAT call on the rotating
+ *     free pool — the direct-HTTP twin of the completion layer's 402 catch, so a
+ *     security_scan / mass_scout that hits $0 still finishes instead of fail-
+ *     safing every remaining item. Strictly one-directional (paid→free): there is
+ *     no path here that ever sends a paid model under free mode.
+ *
+ * Inert (pass-through) in the safe cases: a paid call that DIDN'T 402; a body with
+ * no model (catalog/pricing GETs); a free-mode request whose model isn't ':free';
+ * and a non-availability failure (400/bad-key/schema), which is handed back as-is
+ * so a real defect is never masked by rotating the whole pool.
  */
 export function withFreeRotation(
   inner: RotatingFetchImpl,
@@ -717,16 +798,22 @@ export function withFreeRotation(
     // security_scan/openrouter.ts decorates at MODULE-INIT (`export const
     // realFetch = withFreeRotation(rawFetch)`), and this module reaches back into
     // security_scan through the security-triage benchmark import. Reading a
-    // later-declared const of this module (persistentRotationStore) during that
-    // circular init is a TDZ crash — and it crashed on the first run. Request
-    // time is also simply the correct moment: the free-mode flag and the pool can
-    // both change after boot (engageAutoFree, a settings reload).
+    // later-declared const of this module during that circular init is a TDZ crash
+    // — and it crashed on the first run. Request time is also simply correct: the
+    // free-mode flag and the pool both change after boot.
     const freeActive = hooks.freeActive ?? getActiveFreeOnly;
     const poolOf = hooks.pool ?? approvedFreePoolFromSettings;
     const now = hooks.now ?? Date.now;
     const store = hooks.store ?? persistentRotationStore;
-
-    if (!freeActive()) return inner(url, init);
+    const onCreditExhausted = hooks.onCreditExhausted ?? engageFreeAfterCreditExhaustion;
+    const onRotate =
+      hooks.onRotate ??
+      ((from: string, to: string, detail: string) =>
+        process.stderr.write(
+          `[llm-externalizer] Free model ${from} unavailable (${detail
+            .split("\n")[0]
+            .slice(0, 100)}) — rotating to ${to}.\n`,
+        ));
 
     let parsed: Record<string, unknown>;
     try {
@@ -735,56 +822,53 @@ export function withFreeRotation(
       return inner(url, init); // not a JSON body we can rewrite — pass through
     }
     const requested = parsed["model"];
-    if (typeof requested !== "string" || !isFreeSuffixModelId(requested)) {
-      return inner(url, init);
+
+    // ── PAID mode: send as-is; only a 402 (credit exhausted) triggers a switch.
+    if (!freeActive()) {
+      const res = await inner(url, init);
+      if (res.status !== 402 || typeof requested !== "string" || requested.length === 0) {
+        return res; // not a credit-exhaustion on a real completion call → untouched
+      }
+      const body = await res.text(); // consume the 402 so we can replay it if needed
+      // Engage session-wide free (consistently, via the registered engageAutoFree),
+      // then complete THIS call on the free pool. The paid `requested` model is not
+      // a candidate — it can never be sent under free mode.
+      onCreditExhausted("402 in direct-HTTP tool");
+      process.stderr.write(
+        `[llm-externalizer] Credit exhausted (402) in a direct-HTTP tool — switching this command to the free pool.\n`,
+      );
+      const pool = poolOf();
+      if (pool.length === 0) return replayResponse(false, 402, body); // no free pool → surface the 402
+      const out = await rotateOverFreeIds(
+        inner,
+        url,
+        init,
+        parsed,
+        orderedFreeAttempts(pool, store, now),
+        store,
+        now,
+        onRotate,
+      );
+      // If the free pool also couldn't complete it, surface the ORIGINAL 402 (the
+      // actionable error), not a downstream free-model 429.
+      return out.ok ? out : replayResponse(false, 402, body);
     }
 
-    // Candidates: the requested model first, then the rest of the approved pool.
-    // Cooling models sink to the back but are never dropped — see
-    // orderByAvailability's contract.
-    const poolIds = poolOf().filter((id) => id !== requested);
-    const ordered = orderByAvailability(
-      poolIds.map((id) => ({ id })),
-      store.get(now()),
-      now(),
+    // ── FREE mode: rotate only a request that pins a ':free' model.
+    if (typeof requested !== "string" || !isFreeSuffixModelId(requested)) {
+      return inner(url, init); // no model / non-':free' (catalog GET) → pass through
+    }
+    // Candidates: the requested model first, then the rest of the approved pool
+    // (cooling ones deferred but never dropped). If the requested model is itself
+    // cooling and there's somewhere else to go, probe it last.
+    const rest = orderedFreeAttempts(
+      poolOf().filter((id) => id !== requested),
+      store,
+      now,
     );
-    const candidates = [requested, ...ordered.fresh.map((c) => c.id), ...ordered.deferred.map((c) => c.id)];
-
-    // Skip a requested model already known to be spent — but only if there is
-    // somewhere else to go, and keep it as the last-resort probe.
+    const candidates = [requested, ...rest];
     const startCooling = isCooling(store.get(now()), requested, now()) && candidates.length > 1;
     const attemptOrder = startCooling ? [...candidates.slice(1), requested] : candidates;
-
-    let last: RotatingFetchResponse | null = null;
-    for (const model of attemptOrder) {
-      noteSend(model);
-      const res = await inner(url, {
-        ...init,
-        body: JSON.stringify({ ...parsed, model }),
-      });
-      if (res.ok) {
-        store.recordAvailable(model, now());
-        return res; // untouched — the body was never consumed
-      }
-      // Non-OK: we must read the body to tell "rate-limited" from "real bug".
-      const body = await res.text();
-      const detail = `HTTP ${res.status}: ${body.slice(0, 300)}`;
-      last = replayResponse(res.ok, res.status, body);
-      if (!classifyUnavailable(detail)) return last; // a real defect — hand it back
-      store.recordUnavailable(model, detail, now());
-      const idx = attemptOrder.indexOf(model);
-      const next = idx + 1 < attemptOrder.length ? attemptOrder[idx + 1] : "(none left)";
-      (hooks.onRotate ??
-        ((from: string, to: string) =>
-          process.stderr.write(
-            `[llm-externalizer] Free model ${from} rate-limited (HTTP ${res.status}) — rotating to ${to}.\n`,
-          )))(model, next, detail);
-    }
-    // Pool exhausted: give the caller the last real failure, body intact, so its
-    // own fail-safe path runs exactly as it would have without rotation.
-    return (
-      last ??
-      replayResponse(false, 429, JSON.stringify({ error: { message: "no approved free models available" } }))
-    );
+    return rotateOverFreeIds(inner, url, init, parsed, attemptOrder, store, now, onRotate);
   };
 }

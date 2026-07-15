@@ -200,6 +200,7 @@ import {
   filterFreeModels,
   getCooldownStore,
   orderByAvailability,
+  registerAutoFreeEngage,
   selectFreeEnsembleModels,
   type RotationCandidate,
   type RotationHooks,
@@ -825,6 +826,13 @@ function engageAutoFree(reason: string): void {
     `[llm-externalizer] Auto-free engaged (${reason}) — ALL tools now route through the free pool (${autoFreePool.length} models, rotation on rate-limit). Funded-profile choices reactivate on restart.\n`,
   );
 }
+
+// Let the direct-HTTP tools' fetch decorator (free-rotation.ts) trigger THIS same
+// engageAutoFree on a mid-command 402 — without importing index.ts (a cycle). The
+// registration keeps every spend site's free-mode state consistent: flipping only
+// the config chokepoint flag would leave autoFreeEngaged false and make the
+// completion path build a paid ensemble that then throws at assertFreeOnlyModel.
+registerAutoFreeEngage(engageAutoFree);
 
 // Balance query cache: fresh for 60s so we don't hammer /v1/credits
 // every time a tool is invoked. Still queried on demand when the cache

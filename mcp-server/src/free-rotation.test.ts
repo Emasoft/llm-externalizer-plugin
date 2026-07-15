@@ -377,6 +377,85 @@ describe("withFreeRotation — the FetchImpl decorator (security_scan / mass_sco
     await wrapped("u", req("a:free"));
     expect(seen).toEqual(["b:free"]); // the spent model was never contacted again
   });
+
+  // ── PAID mode: the credit-exhaustion (402) switch — the "no interruptions" rule ──
+  const paidHooks = (over: Partial<Parameters<typeof withFreeRotation>[1]> = {}) => ({
+    pool: () => [...POOL],
+    freeActive: () => false, // PAID profile
+    now: () => T0,
+    store: memoryRotationStore(),
+    onRotate: () => {},
+    onCreditExhausted: () => {},
+    ...over,
+  });
+
+  it("a paid call that does NOT 402 passes through untouched (no reroute, no spend surprise)", async () => {
+    const seen: string[] = [];
+    const inner = async (_u: string, init: { body: string }) => {
+      seen.push(JSON.parse(init.body).model as string);
+      return res(200, JSON.stringify({ ok: 1 }));
+    };
+    const wrapped = withFreeRotation(inner, paidHooks());
+    const r = await wrapped("u", req("paid/model"));
+    expect(r.ok).toBe(true);
+    expect(seen).toEqual(["paid/model"]); // the paid model was used, never rerouted
+  });
+
+  it("a paid 402 (credit exhausted) engages free AND completes the call on a rotating free model", async () => {
+    let engaged = "";
+    const seen: string[] = [];
+    const inner = async (_u: string, init: { body: string }) => {
+      const m = JSON.parse(init.body).model as string;
+      seen.push(m);
+      if (m === "paid/model") return res(402, JSON.stringify({ error: { message: "insufficient credits" } }));
+      return res(200, JSON.stringify({ choices: [{ message: { content: "ok" } }] }));
+    };
+    const wrapped = withFreeRotation(inner, paidHooks({ onCreditExhausted: (r) => (engaged = r) }));
+    const r = await wrapped("u", req("paid/model"));
+    expect(r.ok).toBe(true); // the command COMPLETED despite hitting $0
+    expect(engaged).toMatch(/402/); // session-wide free was engaged
+    expect(seen[0]).toBe("paid/model"); // paid tried first
+    expect(seen.slice(1)).toEqual(["a:free"]); // then the free pool, paid never re-sent
+  });
+
+  it("a paid 402 with the first free model ALSO capped rotates to the next — still completes", async () => {
+    const seen: string[] = [];
+    const inner = async (_u: string, init: { body: string }) => {
+      const m = JSON.parse(init.body).model as string;
+      seen.push(m);
+      if (m === "paid/model") return res(402, "insufficient credits");
+      if (m === "a:free") return res(429, "free-models-per-day");
+      return res(200, "{}");
+    };
+    const wrapped = withFreeRotation(inner, paidHooks());
+    const r = await wrapped("u", req("paid/model"));
+    expect(r.ok).toBe(true);
+    expect(seen).toEqual(["paid/model", "a:free", "b:free"]); // rotated past the capped free model
+  });
+
+  it("a paid 402 with NO free pool surfaces the ORIGINAL 402 (actionable), not a downstream error", async () => {
+    const inner = async (_u: string, init: { body: string }) => {
+      const m = JSON.parse(init.body).model as string;
+      return m === "paid/model" ? res(402, "insufficient credits") : res(200, "{}");
+    };
+    const wrapped = withFreeRotation(inner, paidHooks({ pool: () => [] }));
+    const r = await wrapped("u", req("paid/model"));
+    expect(r.status).toBe(402);
+    expect(await r.text()).toContain("insufficient credits");
+  });
+
+  it("a paid 402 where the free pool ALSO exhausts surfaces the original 402, not the free 429", async () => {
+    const inner = async (_u: string, init: { body: string }) => {
+      const m = JSON.parse(init.body).model as string;
+      return m === "paid/model"
+        ? res(402, "insufficient credits")
+        : res(429, "free-models-per-day"); // every free model capped too
+    };
+    const wrapped = withFreeRotation(inner, paidHooks());
+    const r = await wrapped("u", req("paid/model"));
+    expect(r.status).toBe(402); // the credit issue is the actionable one
+    expect(await r.text()).toContain("insufficient credits");
+  });
 });
 
 describe("persistent registry — survives across processes (the CLI and the MCP server share one quota)", () => {

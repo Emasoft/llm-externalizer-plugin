@@ -10064,13 +10064,49 @@ function rotationJournalMark() {
 function rotationJournalSince(mark) {
   return [...new Set(modelsSent.slice(Math.max(0, mark)))];
 }
+function engageFreeAfterCreditExhaustion(reason) {
+  if (autoFreeEngageHook) autoFreeEngageHook(reason);
+  else setActiveFreeOnly(true);
+}
+async function rotateOverFreeIds(inner, url2, init, parsed, attemptOrder, store, now, onRotate) {
+  let last = null;
+  for (const model of attemptOrder) {
+    noteSend(model);
+    const res = await inner(url2, { ...init, body: JSON.stringify({ ...parsed, model }) });
+    if (res.ok) {
+      store.recordAvailable(model, now());
+      return res;
+    }
+    const body = await res.text();
+    const detail = `HTTP ${res.status}: ${body.slice(0, 300)}`;
+    last = replayResponse(res.ok, res.status, body);
+    if (!classifyUnavailable(detail)) return last;
+    store.recordUnavailable(model, detail, now());
+    const idx = attemptOrder.indexOf(model);
+    const next = idx + 1 < attemptOrder.length ? attemptOrder[idx + 1] : "(none left)";
+    onRotate(model, next, detail);
+  }
+  return last ?? replayResponse(false, 429, JSON.stringify({ error: { message: "no approved free models available" } }));
+}
+function orderedFreeAttempts(ids, store, now) {
+  const ordered = orderByAvailability(
+    ids.map((id) => ({ id })),
+    store.get(now()),
+    now()
+  );
+  return [...ordered.fresh.map((c) => c.id), ...ordered.deferred.map((c) => c.id)];
+}
 function withFreeRotation(inner, hooks = {}) {
   return async (url2, init) => {
     const freeActive = hooks.freeActive ?? getActiveFreeOnly;
     const poolOf = hooks.pool ?? approvedFreePoolFromSettings;
     const now = hooks.now ?? Date.now;
     const store = hooks.store ?? persistentRotationStore;
-    if (!freeActive()) return inner(url2, init);
+    const onCreditExhausted = hooks.onCreditExhausted ?? engageFreeAfterCreditExhaustion;
+    const onRotate = hooks.onRotate ?? ((from, to, detail) => process.stderr.write(
+      `[llm-externalizer] Free model ${from} unavailable (${detail.split("\n")[0].slice(0, 100)}) \u2014 rotating to ${to}.
+`
+    ));
     let parsed;
     try {
       parsed = JSON.parse(init.body);
@@ -10078,45 +10114,46 @@ function withFreeRotation(inner, hooks = {}) {
       return inner(url2, init);
     }
     const requested = parsed["model"];
-    if (typeof requested !== "string" || !isFreeSuffixModelId(requested)) {
-      return inner(url2, init);
-    }
-    const poolIds = poolOf().filter((id) => id !== requested);
-    const ordered = orderByAvailability(
-      poolIds.map((id) => ({ id })),
-      store.get(now()),
-      now()
-    );
-    const candidates = [requested, ...ordered.fresh.map((c) => c.id), ...ordered.deferred.map((c) => c.id)];
-    const startCooling = isCooling(store.get(now()), requested, now()) && candidates.length > 1;
-    const attemptOrder = startCooling ? [...candidates.slice(1), requested] : candidates;
-    let last = null;
-    for (const model of attemptOrder) {
-      noteSend(model);
-      const res = await inner(url2, {
-        ...init,
-        body: JSON.stringify({ ...parsed, model })
-      });
-      if (res.ok) {
-        store.recordAvailable(model, now());
+    if (!freeActive()) {
+      const res = await inner(url2, init);
+      if (res.status !== 402 || typeof requested !== "string" || requested.length === 0) {
         return res;
       }
       const body = await res.text();
-      const detail = `HTTP ${res.status}: ${body.slice(0, 300)}`;
-      last = replayResponse(res.ok, res.status, body);
-      if (!classifyUnavailable(detail)) return last;
-      store.recordUnavailable(model, detail, now());
-      const idx = attemptOrder.indexOf(model);
-      const next = idx + 1 < attemptOrder.length ? attemptOrder[idx + 1] : "(none left)";
-      (hooks.onRotate ?? ((from, to) => process.stderr.write(
-        `[llm-externalizer] Free model ${from} rate-limited (HTTP ${res.status}) \u2014 rotating to ${to}.
+      onCreditExhausted("402 in direct-HTTP tool");
+      process.stderr.write(
+        `[llm-externalizer] Credit exhausted (402) in a direct-HTTP tool \u2014 switching this command to the free pool.
 `
-      )))(model, next, detail);
+      );
+      const pool = poolOf();
+      if (pool.length === 0) return replayResponse(false, 402, body);
+      const out = await rotateOverFreeIds(
+        inner,
+        url2,
+        init,
+        parsed,
+        orderedFreeAttempts(pool, store, now),
+        store,
+        now,
+        onRotate
+      );
+      return out.ok ? out : replayResponse(false, 402, body);
     }
-    return last ?? replayResponse(false, 429, JSON.stringify({ error: { message: "no approved free models available" } }));
+    if (typeof requested !== "string" || !isFreeSuffixModelId(requested)) {
+      return inner(url2, init);
+    }
+    const rest = orderedFreeAttempts(
+      poolOf().filter((id) => id !== requested),
+      store,
+      now
+    );
+    const candidates = [requested, ...rest];
+    const startCooling = isCooling(store.get(now()), requested, now()) && candidates.length > 1;
+    const attemptOrder = startCooling ? [...candidates.slice(1), requested] : candidates;
+    return rotateOverFreeIds(inner, url2, init, parsed, attemptOrder, store, now, onRotate);
   };
 }
-var FREE_FLOOR_MIN_CONTEXT_TOKENS, TRANSIENT_BASE_MS, TRANSIENT_CAP_MS, GONE_MS, RELOAD_INTERVAL_MS, cache, lastLoadMs, persistentRotationStore, modelsSent;
+var FREE_FLOOR_MIN_CONTEXT_TOKENS, TRANSIENT_BASE_MS, TRANSIENT_CAP_MS, GONE_MS, RELOAD_INTERVAL_MS, cache, lastLoadMs, persistentRotationStore, modelsSent, autoFreeEngageHook;
 var init_free_rotation = __esm({
   "src/free-rotation.ts"() {
     "use strict";
@@ -10136,6 +10173,7 @@ var init_free_rotation = __esm({
       recordAvailable
     };
     modelsSent = [];
+    autoFreeEngageHook = null;
   }
 });
 

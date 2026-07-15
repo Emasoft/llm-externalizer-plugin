@@ -137,6 +137,19 @@ describe("free-model rotation coverage — every LLM send path can rotate", () =
     expect(completion).toContain("classifyUnavailable(errMsg)");
   });
 
+  it("the direct-HTTP tools' paid→free credit switch is wired consistently (engage hook registered)", () => {
+    // The decorator can't import index.ts (a cycle), so index.ts REGISTERS its
+    // engageAutoFree as the hook. Without this the decorator would flip only the
+    // config chokepoint flag, leaving autoFreeEngaged false — and the completion
+    // path would then build a paid ensemble that throws at assertFreeOnlyModel.
+    const index = read("index.ts");
+    expect(index).toContain("registerAutoFreeEngage(engageAutoFree)");
+    // The decorator handles the paid-402 branch (not only free-mode rotation).
+    const rotation = read("free-rotation.ts");
+    expect(rotation).toContain("onCreditExhausted");
+    expect(rotation).toMatch(/res\.status !== 402/);
+  });
+
   it("the paid credit is used down to $0 by default (the 402 catch is the safety net)", () => {
     const index = read("index.ts");
     // parseFreeBelowUsd defaults to 0 — no proactive early switch; the guaranteed
