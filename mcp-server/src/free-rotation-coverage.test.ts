@@ -105,6 +105,23 @@ describe("free-model rotation coverage — every LLM send path can rotate", () =
     expect(index).toMatch(/csPool[\s\S]{0,400}callSingleWithFreeRotation/);
   });
 
+  it("the auto-reconcile pre-flight is wired at BOTH runtime funnels (MCP + CLI)", () => {
+    // Same class of bug as the rotation-wiring guard: the reconcile helper being
+    // correct is worthless if a funnel never calls it. Skills / slash-commands /
+    // agents all wrap one of these two entry points, so these two calls are what
+    // make "always assess first" hold for every surface.
+    const index = read("index.ts");
+    expect(index, "MCP dispatch must run reconcile before work tools").toMatch(
+      /RECONCILE_SKIP_TOOLS[\s\S]{0,400}runModelReconcile\(\)/,
+    );
+    expect(index).toContain("reconcileModelsBeforeWork");
+
+    const cli = read("cli.ts");
+    expect(cli, "the CLI main must run reconcile before work commands").toContain(
+      "reconcileModelsBeforeWork(makeCliReconcileDeps())",
+    );
+  });
+
   it("the ':free' suffix rule has exactly ONE definition", () => {
     // isFreeSuffixModelId IS what the cost-safety chokepoint admits. A second
     // inline `.endsWith(":free")` in the rotation path is how a $0-but-not-':free'

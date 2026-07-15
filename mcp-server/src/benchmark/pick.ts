@@ -342,12 +342,23 @@ export function applyToolModelToSettings(
 
 // ── free_models pool writer (P1 zero-token model pipeline) ────────────────────
 //
-// READ-ONLY-MCP GUARDRAIL (same invariant as applyToolModelToSettings above): this
-// function MUTATES settings.yaml and MUST NEVER be called from an MCP tool handler.
-// The MCP surface stays incapable of rewriting its own config; only the CLI (or a
-// cron running it) may write. Until now the `free_models` pool was hand-edited by
-// the operator, which is why the free-pool commands ended with "now go edit
-// settings.yaml yourself" — a manual step the agent had to narrate every run.
+// READ-ONLY-MCP GUARDRAIL — with ONE deliberate, narrow carve-out.
+//
+// The general invariant still holds: an MCP TOOL HANDLER must never rewrite config
+// as a side-effect of the user's requested action, and the tool_models / ensemble
+// writers (applyToolModelToSettings / applyPicksToSettings) are STILL never reachable
+// from the MCP — only the CLI (`--update-all --apply`) writes those.
+//
+// The carve-out (TRDD-8b6b3646 autoconfiguration): this function — and ONLY this one,
+// the free_models pool writer — MAY be called by the auto-reconcile PRE-FLIGHT
+// (model-reconcile.ts), which runs on both the MCP and CLI surfaces before work. It
+// is safe precisely because it is the narrowest possible write: `free_models` only
+// (never model/tool_models/api), `:free` ids only (enforced below — so $0), throttled
+// to ≤1×/hour, and disable-able via LLM_EXT_DISABLE_AUTO_RECONCILE. It can neither
+// select a paid model nor spend money, so it cannot do the harm the read-only rule
+// exists to prevent. Adopting a PAID/cheaper model still requires the explicit CLI
+// command. Before this, the free pool was hand-edited by the operator — which is why
+// the free-pool commands used to end with "now go edit settings.yaml yourself".
 
 /** Result of rewriting a profile's free_models pool. */
 export interface FreePoolMutationResult {

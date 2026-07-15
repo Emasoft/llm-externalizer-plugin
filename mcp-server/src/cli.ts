@@ -30,6 +30,10 @@ import {
   formatModelInfoJson,
 } from "./or-model-info.js";
 import { parseClusterSynonymsInput } from "./cluster/cli.js";
+import {
+  reconcileModelsBeforeWork,
+  makeCliReconcileDeps,
+} from "./model-reconcile.js";
 import { formatSuccessBanner } from "./cli-banner.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -925,6 +929,16 @@ async function main(): Promise<void> {
     if (s && active) setActiveFreeOnly(resolveProfile(s.active, active).freeOnly);
   } catch {
     /* settings not loadable yet — leave flag false; subcommand reports the error */
+  }
+
+  // Assess the model situation BEFORE any WORK command (the user's "always assess
+  // first" rule, on the CLI surface). Throttled ≤1×/hr, shared with the MCP via
+  // one state file, and fully fail-open. Skipped for the pure meta commands
+  // (model-info / profile are read-only status). Commands that spawn the server
+  // reconcile there too, but the throttle makes the second pass a no-op.
+  const RECONCILE_SKIP_CLI = new Set(["model-info", "profile"]);
+  if (!RECONCILE_SKIP_CLI.has(args[0])) {
+    await reconcileModelsBeforeWork(makeCliReconcileDeps());
   }
 
   // ── model-info top-level command ────────────────────────────────

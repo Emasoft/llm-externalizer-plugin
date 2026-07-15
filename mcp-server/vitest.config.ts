@@ -51,6 +51,10 @@ export default defineConfig({
       // The helper being correct is not the risk; a send site never CALLING it is
       // (that is exactly how four paths stayed pinned to one free model).
       'src/free-rotation-coverage.test.ts',
+      // Auto model-reconcile PURE CORE — dead/new model detection, free-pool
+      // recompute (free auto-adopt, paid warn-only), fail-open on a cold catalog,
+      // and the throttle math. Hermetic; no catalog fetch, no settings IO.
+      'src/model-reconcile.test.ts',
       // Free-pool auto-bench trigger — fire-and-forget detached child (TRDD-f1510055).
       'src/free-pool-auto-bench.test.ts',
       // Auto-free on low balance (<$1) — threshold/model/pool helpers (TRDD-542bdbef).

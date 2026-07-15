@@ -161,6 +161,7 @@ import {
   API_PRESETS,
   validateSettings,
   resolveProfile,
+  loadSettings,
   ensureSettingsExist,
   getSettingsPath,
   getConfigDir,
@@ -184,6 +185,13 @@ import { resolveProjectMainRoot } from "./project-root.js";
 import { resolveEnsembleModelLimits } from "./ensemble-limits.js";
 import { benchmarkFailedModels } from "./benchmark/security-triage/index.js";
 import { isFreeSuffixModelId } from "./benchmark/free-mode.js";
+import { applyFreePoolToSettings } from "./benchmark/pick.js";
+import {
+  reconcileModelsBeforeWork,
+  readLastReconcileMs,
+  writeLastReconcileMs,
+  type ReconcileConfigured,
+} from "./model-reconcile.js";
 import {
   AllFreeModelsExhaustedError,
   callWithFreeRotation,
@@ -1700,6 +1708,88 @@ function buildFreeRotationPool(
   return out;
 }
 
+// ── Auto model-reconcile (MCP side of the shared pre-flight) ────────────
+// Assess dead/new OpenRouter models before a work tool runs, adopt free ($0),
+// write settings, and fire the $0 benchmark on a class change. Throttled ≤1×/hr
+// via a shared state file, so at most one catalog fetch per hour regardless of
+// how many tools are called. Never throws into the tool (the shell swallows all).
+
+/** Tools that do NOT send LLM requests — pure status/meta. They skip reconcile so
+ *  a `discover`/`reset`/`get_settings` stays instant (no catalog fetch). */
+const RECONCILE_SKIP_TOOLS = new Set(["discover", "reset", "get_settings"]);
+
+async function runModelReconcile(): Promise<void> {
+  await reconcileModelsBeforeWork({
+    now: () => Date.now(),
+    env: process.env,
+    readLastRunMs: readLastReconcileMs,
+    writeLastRunMs: writeLastReconcileMs,
+    fetchCatalog: async () => {
+      const cat = await fetchOpenRouterModels();
+      const ids = new Set(cat.map((m) => m.id));
+      const catalogById = new Map(cat.map((m) => [m.id, m]));
+      const freeIds = cat.map((m) => m.id).filter(isFreeSuffixModelId);
+      const freeQualified = filterFreeModels(freeIds, catalogById, benchmarkFailedModels());
+      return { ids, freeQualified };
+    },
+    getConfigured: (): ReconcileConfigured | null => {
+      if (!activeResolved || getCurrentBackend().type !== "openrouter") return null;
+      const ensemble = [
+        activeResolved.model,
+        activeResolved.secondModel,
+        activeResolved.thirdModel,
+      ].filter((x): x is string => typeof x === "string" && x.length > 0);
+      const toolModels = Object.values(activeResolved.toolModels ?? {}).filter(
+        (x): x is string => typeof x === "string" && x.length > 0,
+      );
+      // The PERSISTED pool, not activeResolved.freeModels: the resolver leaves the
+      // latter empty on a paid profile, which would make every reconcile look like
+      // a change and rewrite settings every hour. The raw settings value is what
+      // applyFreePoolToSettings actually compares against.
+      const s = loadSettings();
+      const rawFree = s?.profiles[s.active]?.free_models;
+      const freePool = Array.isArray(rawFree)
+        ? rawFree.filter((v): v is string => typeof v === "string")
+        : [];
+      return { ensemble, freePool, toolModels };
+    },
+    benchmarkFailed: () => benchmarkFailedModels(),
+    applyFreePool: (pool) => {
+      try {
+        const s = loadSettings();
+        if (!s || !activeResolved) return false;
+        applyFreePoolToSettings(getSettingsPath(), s.active, pool);
+        // Update the in-memory pool the current run reads. On a paid profile this
+        // pre-populates freeModels so the eventual credit→free switch
+        // (engageAutoFree → resolveAutoFreePool) uses the freshly-reconciled pool
+        // instead of the static seed. When auto-free is already engaged, refresh
+        // the live pool immediately.
+        activeResolved.freeModels = [...pool];
+        if (autoFreeEngaged) autoFreePool = resolveAutoFreePool(pool);
+        return true;
+      } catch (err) {
+        process.stderr.write(
+          `[llm-externalizer] Model reconcile: could not write free pool to settings: ${
+            err instanceof Error ? err.message : String(err)
+          }\n`,
+        );
+        return false;
+      }
+    },
+    launchFreeBench: (reason) => {
+      maybeTriggerFreePoolBench({
+        activeProfile: loadSettings()?.active ?? "unknown",
+        freeOnlyActive: true, // reconcile only ever bumps the FREE pool
+        freeOnlyWasOn: null,
+        log: (m) => process.stderr.write(m),
+        force: true, // a pool change: re-score even if the cache has old entries
+        env: { ...process.env, LLM_EXT_AUTO_BENCH_REASON: reason },
+      });
+    },
+    log: (m) => process.stderr.write(m),
+  });
+}
+
 /** One free-pool call with rotation, for the paths that have no ensemble slots
  *  (a ':free' modelOverride, ensemble:false, or a file too large for every
  *  ensemble primary). Throws AllFreeModelsExhaustedError only after every
@@ -2476,6 +2566,14 @@ async function dispatchCallToolInner(
         ],
         isError: true,
       };
+    }
+
+    // Assess the model situation BEFORE the work runs (the user's "always assess
+    // first" rule). Throttled ≤1×/hr and fully fail-open — a reconcile problem
+    // must never break the tool — so this is safe to await on every work tool.
+    // Skipped for the pure status/meta tools so they stay instant.
+    if (!RECONCILE_SKIP_TOOLS.has(name)) {
+      await runModelReconcile();
     }
 
     // mass-scouting tools are thin shims around the CLI dispatcher in

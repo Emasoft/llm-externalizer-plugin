@@ -105,6 +105,13 @@ export interface MaybeTriggerOpts {
   scriptPath?: string;
   /** Override for the env-var check (tests). Default: process.env. */
   env?: NodeJS.ProcessEnv;
+  /**
+   * Force a bench even when the cache already holds `:free` entries. The auto-
+   * reconcile sets this when it has just CHANGED the pool: the cache's old scores
+   * don't cover the newly-adopted models, so "cache has entries" must not skip.
+   * The lock check and env opt-out still apply — force never double-spawns.
+   */
+  force?: boolean;
 }
 
 export interface TriggerResult {
@@ -143,6 +150,7 @@ export function maybeTriggerFreePoolBench(
     logPath = BENCH_LOG,
     scriptPath = resolveBenchmarkScriptPath(),
     env = process.env,
+    force = false,
   } = opts;
 
   if (!freeOnlyActive) {
@@ -154,7 +162,10 @@ export function maybeTriggerFreePoolBench(
     );
     return { outcome: "skipped", reason: "disabled via env", pid: null };
   }
-  if (benchCacheHasFreeEntries(cachePath)) {
+  // `force` (a reconcile-driven pool change) bypasses the cache-has-entries skip:
+  // the newly-adopted models are unscored, so an existing cache is exactly the
+  // case that DOES need a re-bench.
+  if (!force && benchCacheHasFreeEntries(cachePath)) {
     return {
       outcome: "skipped",
       reason: "cache already has :free entries",
@@ -171,9 +182,10 @@ export function maybeTriggerFreePoolBench(
       pid: null,
     };
   }
-  if (freeOnlyWasOn === true) {
+  if (!force && freeOnlyWasOn === true) {
     // Reload of an already-free_only profile — not a *transition*, so
-    // not the moment the user expects an auto-bench to fire.
+    // not the moment the user expects an auto-bench to fire. `force` (a reconcile
+    // pool change) is exactly the case that SHOULD re-bench regardless.
     return {
       outcome: "skipped",
       reason: "not a free_only transition",

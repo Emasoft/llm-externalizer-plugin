@@ -224969,11 +224969,11 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 // src/index.ts
 var import_yaml3 = __toESM(require_dist(), 1);
 import {
-  readFileSync as readFileSync26,
-  writeFileSync as writeFileSync19,
-  mkdirSync as mkdirSync22,
+  readFileSync as readFileSync27,
+  writeFileSync as writeFileSync20,
+  mkdirSync as mkdirSync23,
   existsSync as existsSync23,
-  renameSync as renameSync12,
+  renameSync as renameSync13,
   statSync as statSync12,
   appendFileSync as appendFileSync6,
   unlinkSync as unlinkSync2,
@@ -224982,7 +224982,7 @@ import {
   unwatchFile
 } from "node:fs";
 import { spawnSync as spawnSync3 } from "node:child_process";
-import { extname as extname5, join as join27, basename as basename6, dirname as dirname12, resolve as resolve15, isAbsolute as isAbsolute4 } from "node:path";
+import { extname as extname5, join as join28, basename as basename6, dirname as dirname12, resolve as resolve15, isAbsolute as isAbsolute4 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 
 // src/grouping.ts
@@ -259654,6 +259654,56 @@ async function runDiscoverNewArrivals(opts = {}) {
 // src/benchmark/pick.ts
 var import_yaml2 = __toESM(require_dist(), 1);
 import { readFileSync as readFileSync13, writeFileSync as writeFileSync9, renameSync as renameSyncCb, existsSync as existsSync9 } from "node:fs";
+function loadProfileForMutation(settingsPath, profileName) {
+  if (!existsSync9(settingsPath)) {
+    throw new Error(`settings.yaml not found at ${settingsPath}`);
+  }
+  const raw = readFileSync13(settingsPath, "utf-8");
+  let doc;
+  try {
+    doc = (0, import_yaml2.parse)(raw);
+  } catch (err3) {
+    throw new Error(`settings.yaml at ${settingsPath} is not valid YAML: ${err3.message}`, { cause: err3 });
+  }
+  if (typeof doc !== "object" || doc === null) {
+    throw new Error(`settings.yaml at ${settingsPath} must be a YAML object at the top level.`);
+  }
+  const root = doc;
+  if (!root.profiles || typeof root.profiles !== "object") {
+    throw new Error(`settings.yaml at ${settingsPath} missing 'profiles' map.`);
+  }
+  const profile = root.profiles[profileName];
+  if (!profile || typeof profile !== "object") {
+    throw new Error(
+      `settings.yaml at ${settingsPath} has no profile named '${profileName}'. Existing profiles: ${Object.keys(root.profiles).join(", ")}.`
+    );
+  }
+  return { root, profile };
+}
+function writeSettingsAtomic(settingsPath, root) {
+  const newRaw = (0, import_yaml2.stringify)(root, { indent: 2 });
+  const tmp = settingsPath + ".tmp." + process.pid;
+  writeFileSync9(tmp, newRaw, "utf-8");
+  renameSyncCb(tmp, settingsPath);
+}
+function applyFreePoolToSettings(settingsPath, profileName, modelIds) {
+  if (modelIds.length < 1) {
+    throw new Error("applyFreePoolToSettings: need at least one model id (an empty free_models pool would break free_only)");
+  }
+  const bad = modelIds.filter((id) => typeof id !== "string" || !id.endsWith(":free"));
+  if (bad.length > 0) {
+    throw new Error(
+      `applyFreePoolToSettings: every free_models entry MUST end with ':free' \u2014 settings.yaml validation rejects anything else under free_only. Offending: ${bad.join(", ")}.`
+    );
+  }
+  const newPool = [...new Set(modelIds)];
+  const { root, profile } = loadProfileForMutation(settingsPath, profileName);
+  const existing = profile.free_models;
+  const oldPool = Array.isArray(existing) ? existing.filter((v) => typeof v === "string") : [];
+  profile.free_models = newPool;
+  writeSettingsAtomic(settingsPath, root);
+  return { profileName, oldPool, newPool };
+}
 
 // src/benchmark/code-task/index.ts
 import { createHash as createHash5 } from "node:crypto";
@@ -268177,6 +268227,285 @@ function resolveEnsembleModelLimits(id, catalogMaxOutput, known = KNOWN_MODEL_LI
   return { maxOutput, maxInputLines };
 }
 
+// src/model-reconcile.ts
+import { mkdirSync as mkdirSync22, readFileSync as readFileSync26, renameSync as renameSync12, writeFileSync as writeFileSync19 } from "node:fs";
+import { join as join27 } from "node:path";
+
+// src/free-pool-auto-bench.ts
+import {
+  existsSync as existsSync22,
+  mkdirSync as mkdirSync21,
+  openSync,
+  readFileSync as readFileSync25,
+  writeFileSync as writeFileSync18
+} from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { dirname as dirname11, join as join26, resolve as pathResolve } from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath as fileURLToPath8 } from "node:url";
+var LLM_EXT_HOME = join26(homedir5(), ".llm-externalizer");
+var BENCH_CACHE = join26(LLM_EXT_HOME, "benchmark-results.json");
+var BENCH_LOCK = join26(LLM_EXT_HOME, "free-pool-bench.lock");
+var BENCH_LOG = join26(LLM_EXT_HOME, "free-pool-bench.log");
+var DISABLE_ENV = "LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH";
+function resolveBenchmarkScriptPath() {
+  const here = dirname11(fileURLToPath8(import.meta.url));
+  const bundled = pathResolve(here, "benchmark.js");
+  if (existsSync22(bundled)) return bundled;
+  const fromSrc = pathResolve(here, "..", "dist", "benchmark.js");
+  return fromSrc;
+}
+function benchCacheHasFreeEntries(cachePath6 = BENCH_CACHE) {
+  try {
+    const raw = readFileSync25(cachePath6, "utf-8");
+    const data = JSON.parse(raw);
+    if (!Array.isArray(data?.results)) return false;
+    return data.results.some(
+      (r) => typeof r?.modelId === "string" && r.modelId.endsWith(":free")
+    );
+  } catch {
+    return false;
+  }
+}
+function lockHoldsLivePid(lockPath = BENCH_LOCK) {
+  if (!existsSync22(lockPath)) return false;
+  try {
+    const pid = parseInt(readFileSync25(lockPath, "utf-8").trim(), 10);
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (e) {
+      if (e.code === "EPERM") return true;
+      return false;
+    }
+  } catch {
+    return false;
+  }
+}
+function maybeTriggerFreePoolBench(opts) {
+  const {
+    activeProfile,
+    freeOnlyActive,
+    freeOnlyWasOn,
+    log,
+    cachePath: cachePath6 = BENCH_CACHE,
+    lockPath = BENCH_LOCK,
+    logPath = BENCH_LOG,
+    scriptPath = resolveBenchmarkScriptPath(),
+    env = process.env,
+    force = false
+  } = opts;
+  if (!freeOnlyActive) {
+    return { outcome: "skipped", reason: "free_only not active", pid: null };
+  }
+  if (env[DISABLE_ENV] === "1") {
+    log(
+      `[llm-externalizer] free-pool auto-bench: ${DISABLE_ENV}=1 \u2014 skipped by opt-out.
+`
+    );
+    return { outcome: "skipped", reason: "disabled via env", pid: null };
+  }
+  if (!force && benchCacheHasFreeEntries(cachePath6)) {
+    return {
+      outcome: "skipped",
+      reason: "cache already has :free entries",
+      pid: null
+    };
+  }
+  if (lockHoldsLivePid(lockPath)) {
+    log(
+      `[llm-externalizer] free-pool auto-bench: another run is already in progress (see ${lockPath}).
+`
+    );
+    return {
+      outcome: "skipped",
+      reason: "lock holds live pid",
+      pid: null
+    };
+  }
+  if (!force && freeOnlyWasOn === true) {
+    return {
+      outcome: "skipped",
+      reason: "not a free_only transition",
+      pid: null
+    };
+  }
+  try {
+    mkdirSync21(LLM_EXT_HOME, { recursive: true });
+  } catch {
+  }
+  let logFd;
+  try {
+    logFd = openSync(logPath, "a");
+  } catch (e) {
+    log(
+      `[llm-externalizer] free-pool auto-bench: could not open log ${logPath}: ${e.message}
+`
+    );
+    return { outcome: "skipped", reason: "cannot open log file", pid: null };
+  }
+  const child = spawn(
+    process.execPath,
+    [scriptPath, "--bench-free-pool", "--min-f1", "0.5"],
+    {
+      detached: true,
+      stdio: ["ignore", logFd, logFd],
+      env: { ...env, LLM_EXT_AUTO_BENCH_REASON: `free_only_transition:${activeProfile}` }
+    }
+  );
+  child.unref();
+  try {
+    writeFileSync18(lockPath, String(child.pid ?? ""), "utf-8");
+  } catch {
+  }
+  log(
+    `[llm-externalizer] free_only transition for profile '${activeProfile}' + no :free entries in cache \u2192 spawned auto-bench (pid ${child.pid}). Log: ${logPath}
+`
+  );
+  return { outcome: "spawned", reason: null, pid: child.pid ?? null };
+}
+
+// src/model-reconcile.ts
+var DEFAULT_MAX_FREE_POOL = 12;
+function computeReconcile(input) {
+  const {
+    catalogIds,
+    configuredEnsemble,
+    configuredFreePool,
+    configuredToolModels,
+    catalogFreeQualified,
+    benchmarkFailed,
+    maxFreePool = DEFAULT_MAX_FREE_POOL
+  } = input;
+  const empty = {
+    deadModels: [],
+    deadFreeModels: [],
+    deadPaidModels: [],
+    newFreeModels: [],
+    newFreePool: [...configuredFreePool],
+    freePoolChanged: false,
+    paidWarnings: []
+  };
+  if (catalogIds.size === 0) return empty;
+  const allConfigured = /* @__PURE__ */ new Set([
+    ...configuredEnsemble,
+    ...configuredFreePool,
+    ...configuredToolModels
+  ]);
+  const deadModels = [];
+  for (const id of allConfigured) {
+    if (!id.includes("/")) continue;
+    if (!catalogIds.has(id)) deadModels.push(id);
+  }
+  const deadSet = new Set(deadModels);
+  const deadFreeModels = deadModels.filter(isFreeSuffixModelId);
+  const deadPaidModels = deadModels.filter((id) => !isFreeSuffixModelId(id));
+  const pooled = new Set(configuredFreePool);
+  const newFreeModels = catalogFreeQualified.filter(
+    (id) => isFreeSuffixModelId(id) && !pooled.has(id) && !benchmarkFailed.has(id)
+  );
+  const kept = configuredFreePool.filter(
+    (id) => !deadSet.has(id) && !benchmarkFailed.has(id)
+  );
+  const newFreePool = [...kept, ...newFreeModels].filter(isFreeSuffixModelId).filter((id, i, a) => a.indexOf(id) === i).slice(0, maxFreePool);
+  const freePoolChanged = newFreePool.length !== configuredFreePool.length || newFreePool.some((id, i) => id !== configuredFreePool[i]);
+  const paidWarnings = deadPaidModels.map(
+    (id) => `configured paid model '${id}' is no longer in the OpenRouter catalog \u2014 run \`llm-ext-benchmark --update-all --paid\` to pick a replacement (paid models are never auto-adopted, to avoid unrequested spend).`
+  );
+  return {
+    deadModels,
+    deadFreeModels,
+    deadPaidModels,
+    newFreeModels,
+    newFreePool,
+    freePoolChanged,
+    paidWarnings
+  };
+}
+var DEFAULT_RECONCILE_INTERVAL_MS = 36e5;
+function shouldReconcile(lastRunMs, nowMs, intervalMs = DEFAULT_RECONCILE_INTERVAL_MS) {
+  if (lastRunMs === null) return true;
+  const interval = Number.isFinite(intervalMs) && intervalMs >= 0 ? intervalMs : DEFAULT_RECONCILE_INTERVAL_MS;
+  return nowMs - lastRunMs >= interval;
+}
+function parseReconcileInterval(raw) {
+  if (raw === void 0 || raw.trim() === "") return DEFAULT_RECONCILE_INTERVAL_MS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_RECONCILE_INTERVAL_MS;
+  return n;
+}
+var DISABLE_RECONCILE_ENV = "LLM_EXT_DISABLE_AUTO_RECONCILE";
+var RECONCILE_INTERVAL_ENV = "LLM_EXT_RECONCILE_INTERVAL_MS";
+function reconcileStateFilePath() {
+  return join27(getConfigDir(), "last-reconcile.json");
+}
+function readLastReconcileMs() {
+  try {
+    const raw = readFileSync26(reconcileStateFilePath(), "utf-8");
+    const parsed = JSON.parse(raw);
+    return typeof parsed.lastRunMs === "number" && Number.isFinite(parsed.lastRunMs) ? parsed.lastRunMs : null;
+  } catch {
+    return null;
+  }
+}
+function writeLastReconcileMs(nowMs) {
+  try {
+    const path = reconcileStateFilePath();
+    mkdirSync22(getConfigDir(), { recursive: true });
+    const tmp = `${path}.tmp`;
+    writeFileSync19(tmp, JSON.stringify({ lastRunMs: nowMs }), { encoding: "utf-8", mode: 384 });
+    renameSync12(tmp, path);
+  } catch {
+  }
+}
+async function reconcileModelsBeforeWork(deps) {
+  if (deps.env[DISABLE_RECONCILE_ENV] === "1") {
+    return { outcome: "skipped", reason: "disabled via env", verdict: null };
+  }
+  const now = deps.now();
+  const interval = parseReconcileInterval(deps.env[RECONCILE_INTERVAL_ENV]);
+  if (!shouldReconcile(deps.readLastRunMs(), now, interval)) {
+    return { outcome: "skipped", reason: "throttled", verdict: null };
+  }
+  const cfg = deps.getConfigured();
+  if (!cfg) {
+    return { outcome: "skipped", reason: "not openrouter / no profile", verdict: null };
+  }
+  let catalog;
+  try {
+    catalog = await deps.fetchCatalog();
+  } catch {
+    deps.writeLastRunMs(now);
+    return { outcome: "skipped", reason: "catalog fetch failed", verdict: null };
+  }
+  const verdict = computeReconcile({
+    catalogIds: catalog.ids,
+    configuredEnsemble: cfg.ensemble,
+    configuredFreePool: cfg.freePool,
+    configuredToolModels: cfg.toolModels,
+    catalogFreeQualified: catalog.freeQualified,
+    benchmarkFailed: deps.benchmarkFailed(),
+    maxFreePool: deps.maxFreePool
+  });
+  deps.writeLastRunMs(now);
+  if (verdict.freePoolChanged && verdict.newFreePool.length > 0) {
+    const wrote = deps.applyFreePool(verdict.newFreePool);
+    if (wrote) {
+      deps.log(
+        `[llm-externalizer] Model reconcile: free pool updated \u2014 added [${verdict.newFreeModels.join(", ") || "none"}], dropped [${verdict.deadFreeModels.join(", ") || "none"}]. Launching a $0 benchmark to score the new class.
+`
+      );
+      deps.launchFreeBench(
+        `reconcile: +${verdict.newFreeModels.length}/-${verdict.deadFreeModels.length}`
+      );
+    }
+  }
+  for (const w of verdict.paidWarnings) deps.log(`[llm-externalizer] ${w}
+`);
+  return { outcome: "ran", reason: null, verdict };
+}
+
 // src/or-model-info.ts
 function sortedPercentiles(obj) {
   if (!obj || typeof obj !== "object") return [];
@@ -268692,140 +269021,6 @@ function renderEndpointTable(ep, colors) {
   return lines.join("\n");
 }
 
-// src/free-pool-auto-bench.ts
-import {
-  existsSync as existsSync22,
-  mkdirSync as mkdirSync21,
-  openSync,
-  readFileSync as readFileSync25,
-  writeFileSync as writeFileSync18
-} from "node:fs";
-import { homedir as homedir5 } from "node:os";
-import { dirname as dirname11, join as join26, resolve as pathResolve } from "node:path";
-import { spawn } from "node:child_process";
-import { fileURLToPath as fileURLToPath8 } from "node:url";
-var LLM_EXT_HOME = join26(homedir5(), ".llm-externalizer");
-var BENCH_CACHE = join26(LLM_EXT_HOME, "benchmark-results.json");
-var BENCH_LOCK = join26(LLM_EXT_HOME, "free-pool-bench.lock");
-var BENCH_LOG = join26(LLM_EXT_HOME, "free-pool-bench.log");
-var DISABLE_ENV = "LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH";
-function resolveBenchmarkScriptPath() {
-  const here = dirname11(fileURLToPath8(import.meta.url));
-  const bundled = pathResolve(here, "benchmark.js");
-  if (existsSync22(bundled)) return bundled;
-  const fromSrc = pathResolve(here, "..", "dist", "benchmark.js");
-  return fromSrc;
-}
-function benchCacheHasFreeEntries(cachePath6 = BENCH_CACHE) {
-  try {
-    const raw = readFileSync25(cachePath6, "utf-8");
-    const data = JSON.parse(raw);
-    if (!Array.isArray(data?.results)) return false;
-    return data.results.some(
-      (r) => typeof r?.modelId === "string" && r.modelId.endsWith(":free")
-    );
-  } catch {
-    return false;
-  }
-}
-function lockHoldsLivePid(lockPath = BENCH_LOCK) {
-  if (!existsSync22(lockPath)) return false;
-  try {
-    const pid = parseInt(readFileSync25(lockPath, "utf-8").trim(), 10);
-    if (!Number.isInteger(pid) || pid <= 0) return false;
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch (e) {
-      if (e.code === "EPERM") return true;
-      return false;
-    }
-  } catch {
-    return false;
-  }
-}
-function maybeTriggerFreePoolBench(opts) {
-  const {
-    activeProfile,
-    freeOnlyActive,
-    freeOnlyWasOn,
-    log,
-    cachePath: cachePath6 = BENCH_CACHE,
-    lockPath = BENCH_LOCK,
-    logPath = BENCH_LOG,
-    scriptPath = resolveBenchmarkScriptPath(),
-    env = process.env
-  } = opts;
-  if (!freeOnlyActive) {
-    return { outcome: "skipped", reason: "free_only not active", pid: null };
-  }
-  if (env[DISABLE_ENV] === "1") {
-    log(
-      `[llm-externalizer] free-pool auto-bench: ${DISABLE_ENV}=1 \u2014 skipped by opt-out.
-`
-    );
-    return { outcome: "skipped", reason: "disabled via env", pid: null };
-  }
-  if (benchCacheHasFreeEntries(cachePath6)) {
-    return {
-      outcome: "skipped",
-      reason: "cache already has :free entries",
-      pid: null
-    };
-  }
-  if (lockHoldsLivePid(lockPath)) {
-    log(
-      `[llm-externalizer] free-pool auto-bench: another run is already in progress (see ${lockPath}).
-`
-    );
-    return {
-      outcome: "skipped",
-      reason: "lock holds live pid",
-      pid: null
-    };
-  }
-  if (freeOnlyWasOn === true) {
-    return {
-      outcome: "skipped",
-      reason: "not a free_only transition",
-      pid: null
-    };
-  }
-  try {
-    mkdirSync21(LLM_EXT_HOME, { recursive: true });
-  } catch {
-  }
-  let logFd;
-  try {
-    logFd = openSync(logPath, "a");
-  } catch (e) {
-    log(
-      `[llm-externalizer] free-pool auto-bench: could not open log ${logPath}: ${e.message}
-`
-    );
-    return { outcome: "skipped", reason: "cannot open log file", pid: null };
-  }
-  const child = spawn(
-    process.execPath,
-    [scriptPath, "--bench-free-pool", "--min-f1", "0.5"],
-    {
-      detached: true,
-      stdio: ["ignore", logFd, logFd],
-      env: { ...env, LLM_EXT_AUTO_BENCH_REASON: `free_only_transition:${activeProfile}` }
-    }
-  );
-  child.unref();
-  try {
-    writeFileSync18(lockPath, String(child.pid ?? ""), "utf-8");
-  } catch {
-  }
-  log(
-    `[llm-externalizer] free_only transition for profile '${activeProfile}' + no :free entries in cache \u2192 spawned auto-bench (pid ${child.pid}). Log: ${logPath}
-`
-  );
-  return { outcome: "spawned", reason: null, pid: child.pid ?? null };
-}
-
 // src/index.ts
 function resolveDefaultMaxTokens() {
   const backend = getCurrentBackend();
@@ -268916,7 +269111,7 @@ var _onSettingsReloaded = null;
 function reloadSettingsFromDisk() {
   let raw;
   try {
-    raw = readFileSync26(SETTINGS_FILE, "utf-8");
+    raw = readFileSync27(SETTINGS_FILE, "utf-8");
   } catch {
     return false;
   }
@@ -269253,14 +269448,14 @@ function waitForRequestsDrained(timeoutMs = 12e4) {
 }
 var SESSION_ID = randomUUID3().slice(0, 8);
 var SESSION_START = /* @__PURE__ */ new Date();
-var LOG_DIR = join27(getConfigDir(), "logs");
-var LOG_FILE = join27(
+var LOG_DIR = join28(getConfigDir(), "logs");
+var LOG_FILE = join28(
   LOG_DIR,
   `session-${SESSION_ID}-${SESSION_START.toISOString().slice(0, 10)}.jsonl`
 );
 function writeLogEntry(entry) {
   try {
-    mkdirSync22(LOG_DIR, { recursive: true });
+    mkdirSync23(LOG_DIR, { recursive: true });
     appendFileSync6(LOG_FILE, JSON.stringify(entry) + "\n");
   } catch {
     process.stderr.write(`[llm-externalizer] Failed to write log entry
@@ -269270,7 +269465,7 @@ function writeLogEntry(entry) {
 var STATS_FILE = "/tmp/claude/llm-externalizer-stats.json";
 function writeStatsFile() {
   try {
-    mkdirSync22("/tmp/claude", { recursive: true, mode: 448 });
+    mkdirSync23("/tmp/claude", { recursive: true, mode: 448 });
     const backend = getCurrentBackend();
     const stats = {
       session_id: SESSION_ID,
@@ -269285,8 +269480,8 @@ function writeStatsFile() {
       backend: backend.type
     };
     const tmpStats = STATS_FILE + ".tmp";
-    writeFileSync19(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
-    renameSync12(tmpStats, STATS_FILE);
+    writeFileSync20(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
+    renameSync13(tmpStats, STATS_FILE);
   } catch {
   }
 }
@@ -269411,7 +269606,7 @@ function defaultOutputDir() {
     _cachedDefaultOutputDir = resolve15(envOverride.trim());
     return _cachedDefaultOutputDir;
   }
-  _cachedDefaultOutputDir = join27(resolveProjectMainRoot(), "reports", "llm-externalizer");
+  _cachedDefaultOutputDir = join28(resolveProjectMainRoot(), "reports", "llm-externalizer");
   return _cachedDefaultOutputDir;
 }
 function _resetDefaultOutputDirCache() {
@@ -269436,14 +269631,14 @@ function canonicalTimestamp(date5 = /* @__PURE__ */ new Date()) {
 }
 function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir) {
   const dir = outputDir || defaultOutputDir();
-  mkdirSync22(dir, { recursive: true });
+  mkdirSync23(dir, { recursive: true });
   const now = /* @__PURE__ */ new Date();
   const ts2 = canonicalTimestamp(now);
   const shortId = randomUUID3().slice(0, 6);
   const srcPart = meta3.inputFile ? `-${sanitizeFilename(meta3.inputFile).replace(/\.md$/, "")}` : "";
   const groupPart = meta3.groupId ? `-group-${meta3.groupId.replace(/[^a-zA-Z0-9_-]/g, "_")}` : "";
   const filename = overrideFilename || `${ts2}-${toolName}${groupPart}${srcPart}-${shortId}.md`;
-  const filepath = join27(dir, filename);
+  const filepath = join28(dir, filename);
   const lines = [
     "# LLM Externalizer Response",
     "",
@@ -269457,8 +269652,8 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
   lines.push("", "---", "", responseText);
   const tmpPath = filepath + ".tmp";
   try {
-    writeFileSync19(tmpPath, lines.join("\n"), "utf-8");
-    renameSync12(tmpPath, filepath);
+    writeFileSync20(tmpPath, lines.join("\n"), "utf-8");
+    renameSync13(tmpPath, filepath);
   } catch (err3) {
     try {
       unlinkSync2(tmpPath);
@@ -269644,6 +269839,68 @@ function buildFreeRotationPool(fileLineCount, exclude = /* @__PURE__ */ new Set(
     }
   }
   return out;
+}
+var RECONCILE_SKIP_TOOLS = /* @__PURE__ */ new Set(["discover", "reset", "get_settings"]);
+async function runModelReconcile() {
+  await reconcileModelsBeforeWork({
+    now: () => Date.now(),
+    env: process.env,
+    readLastRunMs: readLastReconcileMs,
+    writeLastRunMs: writeLastReconcileMs,
+    fetchCatalog: async () => {
+      const cat = await fetchOpenRouterModels();
+      const ids = new Set(cat.map((m) => m.id));
+      const catalogById = new Map(cat.map((m) => [m.id, m]));
+      const freeIds = cat.map((m) => m.id).filter(isFreeSuffixModelId);
+      const freeQualified = filterFreeModels(freeIds, catalogById, benchmarkFailedModels());
+      return { ids, freeQualified };
+    },
+    getConfigured: () => {
+      if (!activeResolved || getCurrentBackend().type !== "openrouter") return null;
+      const ensemble = [
+        activeResolved.model,
+        activeResolved.secondModel,
+        activeResolved.thirdModel
+      ].filter((x) => typeof x === "string" && x.length > 0);
+      const toolModels = Object.values(activeResolved.toolModels ?? {}).filter(
+        (x) => typeof x === "string" && x.length > 0
+      );
+      const s = loadSettings();
+      const rawFree = s?.profiles[s.active]?.free_models;
+      const freePool = Array.isArray(rawFree) ? rawFree.filter((v) => typeof v === "string") : [];
+      return { ensemble, freePool, toolModels };
+    },
+    benchmarkFailed: () => benchmarkFailedModels(),
+    applyFreePool: (pool) => {
+      try {
+        const s = loadSettings();
+        if (!s || !activeResolved) return false;
+        applyFreePoolToSettings(getSettingsPath(), s.active, pool);
+        activeResolved.freeModels = [...pool];
+        if (autoFreeEngaged) autoFreePool = resolveAutoFreePool(pool);
+        return true;
+      } catch (err3) {
+        process.stderr.write(
+          `[llm-externalizer] Model reconcile: could not write free pool to settings: ${err3 instanceof Error ? err3.message : String(err3)}
+`
+        );
+        return false;
+      }
+    },
+    launchFreeBench: (reason) => {
+      maybeTriggerFreePoolBench({
+        activeProfile: loadSettings()?.active ?? "unknown",
+        freeOnlyActive: true,
+        // reconcile only ever bumps the FREE pool
+        freeOnlyWasOn: null,
+        log: (m) => process.stderr.write(m),
+        force: true,
+        // a pool change: re-score even if the cache has old entries
+        env: { ...process.env, LLM_EXT_AUTO_BENCH_REASON: reason }
+      });
+    },
+    log: (m) => process.stderr.write(m)
+  });
 }
 async function callSingleWithFreeRotation(primary, fallbacks, messages, options) {
   return callWithFreeRotation(
@@ -270092,6 +270349,9 @@ Run the "discover" tool to see the current profile status.`
         ],
         isError: true
       };
+    }
+    if (!RECONCILE_SKIP_TOOLS.has(name)) {
+      await runModelReconcile();
     }
     if (MASS_SCOUT_TOOL_NAMES.has(name)) {
       const scoutArgs = { ...args ?? {} };
@@ -270614,7 +270874,7 @@ Profiles: ${profileNames.join(", ")}`);
                 };
               }
               try {
-                writeFileSync19(absPath, jsonText, "utf-8");
+                writeFileSync20(absPath, jsonText, "utf-8");
               } catch (err3) {
                 return {
                   content: [
@@ -270682,11 +270942,11 @@ Profiles: ${profileNames.join(", ")}`);
         }
         case "get_settings": {
           try {
-            const raw = readFileSync26(SETTINGS_FILE, "utf-8");
+            const raw = readFileSync27(SETTINGS_FILE, "utf-8");
             const targetDir = outputDir || defaultOutputDir();
-            mkdirSync22(targetDir, { recursive: true });
-            const copyPath = join27(targetDir, "settings_edit.yaml");
-            writeFileSync19(copyPath, raw, "utf-8");
+            mkdirSync23(targetDir, { recursive: true });
+            const copyPath = join28(targetDir, "settings_edit.yaml");
+            writeFileSync20(copyPath, raw, "utf-8");
             return { content: [{ type: "text", text: copyPath }] };
           } catch (err3) {
             return {
@@ -270843,7 +271103,7 @@ Profiles: ${profileNames.join(", ")}`);
               const gSucceeded = gAll.filter((r) => r.success);
               const reportSections = [];
               for (const r of gSucceeded) {
-                const content = r.reportPath && existsSync23(r.reportPath) ? readFileSync26(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync23(r.reportPath) ? readFileSync27(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -270979,7 +271239,7 @@ ${gAbortReason}`);
             } else {
               const reportSections = [];
               for (const r of succeeded) {
-                const content = r.reportPath && existsSync23(r.reportPath) ? readFileSync26(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync23(r.reportPath) ? readFileSync27(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -271266,7 +271526,7 @@ ${sections.join("\n\n---\n\n")}`;
                 {
                   model: "git-diff (no LLM)",
                   task: `${cfFromRef} \u2192 ${toRef}`,
-                  inputFile: join27(cfGitRepoSafe, dg.files[0]),
+                  inputFile: join28(cfGitRepoSafe, dg.files[0]),
                   groupId: gid
                 },
                 void 0,
@@ -271561,7 +271821,7 @@ ${diffFence}` + sourceFileBlocks
 FAILED: File not found.`);
                   continue;
                 }
-                const src = readFileSync26(filePath, "utf-8");
+                const src = readFileSync27(filePath, "utf-8");
                 const lang = detectLang(filePath);
                 const deps = extractLocalImports(filePath, src);
                 const depBlocks = [];
@@ -271622,7 +271882,7 @@ FAILED: File not found.`);
               crReportPaths.push("(skipped \u2014 file not found)");
               continue;
             }
-            const crSourceCode = readFileSync26(filePath, "utf-8");
+            const crSourceCode = readFileSync27(filePath, "utf-8");
             const crLang = detectLang(filePath);
             const depPaths = extractLocalImports(filePath, crSourceCode);
             const depBlocks = [];
@@ -271824,7 +272084,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     continue;
                   }
                   const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-                  const resolvedBase = importPath.startsWith("/") ? resolve15(importPath) : join27(resolveDir, importPath);
+                  const resolvedBase = importPath.startsWith("/") ? resolve15(importPath) : join28(resolveDir, importPath);
                   if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                     packageImports.push(importPath);
                     continue;
@@ -271839,7 +272099,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     }
                     if (!found) {
                       for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                        if (existsSync23(join27(resolvedBase, `index${ext}`))) {
+                        if (existsSync23(join28(resolvedBase, `index${ext}`))) {
                           found = true;
                           break;
                         }
@@ -271923,7 +272183,7 @@ FAILED: File not found.`);
                 continue;
               }
               const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-              const resolvedBase = importPath.startsWith("/") ? resolve15(importPath) : join27(resolveDir, importPath);
+              const resolvedBase = importPath.startsWith("/") ? resolve15(importPath) : join28(resolveDir, importPath);
               if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                 packageImports.push(importPath);
                 continue;
@@ -271952,7 +272212,7 @@ FAILED: File not found.`);
                 }
                 if (!found) {
                   for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                    if (existsSync23(join27(resolvedBase, `index${ext}`))) {
+                    if (existsSync23(join28(resolvedBase, `index${ext}`))) {
                       found = true;
                       break;
                     }
@@ -272095,7 +272355,7 @@ FAILED: File not found.`);
             return resp.content;
           };
           const csModuleDir = dirname12(fileUrlToPath_cs(import.meta.url));
-          const csEmbeddingsScript = join27(csModuleDir, "..", "scripts", "compute_embeddings.py");
+          const csEmbeddingsScript = join28(csModuleDir, "..", "scripts", "compute_embeddings.py");
           const csPreflightModel = getCurrentBackend().model ?? "unknown";
           const csHooks = {
             rawLlmCall: csRawLlmCall,
