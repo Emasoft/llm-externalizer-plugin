@@ -1,6 +1,28 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [10.4.1] - 2026-07-15
+
+### Added
+
+- Feat(reconcile): raise the free-pool cap 12 → 50 (USER — free models die often on rate limits)
+
+Free ':free' models hit their daily rate-limit caps constantly, so the rotation
+needs a DEEP bench of fallbacks, not a dozen. Raised DEFAULT_MAX_FREE_POOL to 50.
+
+Cost-safety is size-independent, so "not a waste of tokens" still holds at 50:
+only ':free' ids ever enter the pool (isFreeSuffixModelId), and only models the
+benchmark has NOT failed (filterFreeModels drops benchmarkFailed). Newly-adopted
+models are validated by the $0 free-pool benchmark the reconcile fires on every
+pool change, and any that FAIL are pruned on the next reconcile — so a bigger pool
+is more VALIDATED fallbacks, never more garbage. The ensemble still runs only the
+top-3; models 4..50 are pure rate-limit rotation fallbacks.
+
+Verified live this session: a real-catalog reconcile against the paid profile
+detected 8 new qualifying :free arrivals that the old cap-12 (full) pool rejected;
+at 50 they now have room to be adopted + benchmarked. 1619 tests green.
+
+
 ## [10.4.0] - 2026-07-15
 
 ### Added
