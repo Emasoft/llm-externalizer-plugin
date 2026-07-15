@@ -84,7 +84,14 @@ export interface ReconcileVerdict {
   paidWarnings: string[];
 }
 
-const DEFAULT_MAX_FREE_POOL = 12;
+// Free models die often (daily rate-limit caps), so the rotation needs a DEEP
+// bench of fallbacks — 50, not a dozen (USER 2026-07-15). Cost-safety holds at any
+// size: only ':free' ids ever enter (isFreeSuffixModelId), and only models the
+// benchmark has NOT failed (filterFreeModels drops benchmarkFailed). Newly-adopted
+// models are validated by the $0 free-pool benchmark the reconcile fires on every
+// pool change, and any that FAIL it are pruned on the next reconcile — so a bigger
+// pool means more validated fallbacks, never more token-wasting garbage models.
+const DEFAULT_MAX_FREE_POOL = 50;
 
 // ── Pure core ───────────────────────────────────────────────────────────
 

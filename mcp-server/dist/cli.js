@@ -37033,7 +37033,7 @@ function maybeTriggerFreePoolBench(opts) {
 }
 
 // src/model-reconcile.ts
-var DEFAULT_MAX_FREE_POOL = 12;
+var DEFAULT_MAX_FREE_POOL = 50;
 function computeReconcile(input) {
   const {
     catalogIds,
