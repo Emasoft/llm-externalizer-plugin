@@ -1,6 +1,125 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [10.4.0] - 2026-07-15
+
+### Added
+
+- Feat(credit-switch): direct-HTTP tools (security_scan/mass_scout) also complete on free at $0 (TRDD-8b6b3646)
+
+The completion layer already switched paid→free on a 402 (B1). But security_scan
+and mass_scout do NOT go through it — they run their own worker pools against the
+injected FetchImpl. So a paid profile hitting $0 mid-scan would fail-safe every
+remaining item (security_scan force-marks them "uncertain" after N failures). The
+user's rule is the command must COMPLETE; this closes that gap.
+
+withFreeRotation (the FetchImpl decorator) now has two branches:
+  A. FREE mode — rotate a rate-limited ':free' request across the pool (as before).
+  B. PAID mode — send as-is; on a 402 (credit exhausted, on a real completion
+     call) engage session-wide free and complete THAT call on the rotating free
+     pool. The paid model is never a candidate — strictly one-directional. If the
+     free pool can't complete it either, the ORIGINAL 402 is surfaced (the
+     actionable error), not a downstream free-model 429.
+
+The consistency trap this avoids: the decorator can't import index.ts (a cycle),
+so a naive `setActiveFreeOnly(true)` would flip the chokepoint flag while leaving
+index.ts's autoFreeEngaged false — and the completion path would then build a paid
+ensemble that throws at assertFreeOnlyModel. Fix: index.ts REGISTERS its real
+engageAutoFree via registerAutoFreeEngage; the decorator calls that (MCP process,
+every spend site stays consistent), falling back to setActiveFreeOnly only in a
+standalone CLI process where index.ts isn't loaded and there is no completion
+ensemble to keep in sync.
+
+The rotation loop is extracted to rotateOverFreeIds() and shared by both branches.
+Tests: 5 new paid-402 cases (pass-through when no 402, engage+complete, rotate-past
+a capped free model, empty-pool→surface-402, free-also-exhausted→surface-402), plus
+a coverage guard for the registration. 1611 -> 1619.
+
+- Feat(credit-switch): paid→free is non-interrupting and one-directional; use credit to $0 (TRDD-8b6b3646)
+
+The user's rule, made literal: a paid profile ALWAYS falls back to free when
+credit is exhausted OR the paid model is unavailable — and the command that hits
+that wall still COMPLETES. A free_only profile can NEVER go the other way.
+
+* The 402 (credit-exhausted) mid-call catch now completes the in-flight call on
+  the ROTATING approved free pool, not a single pinned FREE_MODEL_ID. Before, if
+  that one free model was itself daily-capped the retry threw and the command
+  died — the exact interruption the rule forbids. It engages sticky auto-free
+  (the wallet is empty for the session) and rotates until one free model answers.
+
+* NEW terminal fallback: a PAID model that exhausts its retries on a genuine
+  AVAILABILITY failure (429/404/no-endpoints/503 — never a 400/bad-key, which
+  classifyUnavailable rejects) completes on the free pool instead of failing.
+  Non-sticky: the wallet may be fine and only that model/moment was bad, so the
+  next call retries paid. This is the "or the models not available" half.
+
+* Both paths share completeOnFreePool(). It is STRICTLY one-directional: every
+  caller has already established the current model is PAID (guard
+  !isFreeSuffixModelId(options.model)), so a free_only profile — whose model is
+  ':free', and which assertFreeOnlyModel forbids from ever holding a paid id —
+  can never be pushed to paid. There is no auto free→paid path anywhere.
+
+* Threshold default MIN_BALANCE_FOR_PAID_USD → $0 (was $1): use the paid credit
+  fully; the guaranteed non-interrupting trigger is the 402 catch, not a proactive
+  margin. `0` is now an honoured LLM_EXT_FREE_BELOW_USD value (the old clamp
+  forbade it); a user who wants a margin sets it explicitly.
+
+* engageAutoFree now prefers the RECONCILED / persisted approved pool
+  (approvedFreePoolFromSettings) over the boot-time profile pool, so the credit
+  switch uses the freshest catalog-tracked free models, not the static seed —
+  falling back to the seed only when settings hold no pool.
+
+Guard test asserts the wiring + the one-directional !isFreeSuffixModelId guard at
+source level (the completion layer can't be hermetically unit-tested — it owns
+real HTTP). auto-free.test updated for the $0 default. Tests 1611 -> 1620.
+
+- Feat(reconcile): assess dead/new OpenRouter models before every scan; auto-adopt free ($0), warn on paid (TRDD-8b6b3646 autoconfiguration)
+
+Every surface now ASSESSES the model situation before it does work, and
+reconfigures the FREE class to track the live catalog at $0 — the user's
+"it must be automatic, detect dead or new models before launching the scan".
+
+model-reconcile.ts (new), pure core + IO shell:
+  * Detect DEAD: any configured model (ensemble / free_models / tool_models)
+    positively absent from the live catalog. Free-dead is dropped from the pool;
+    PAID-dead is WARNED about ("run --update-all --paid"), never auto-replaced —
+    benchmarking a paid model spends money, and that is the credit-switch's job,
+    not this.
+  * Detect NEW: qualifying ':free' arrivals (context-floor gate) are adopted.
+    openrouter/free (a $0 router pseudo-model with no ':free' suffix) is
+    structurally excluded; benchmark-failed excluded. So the pool can only ever
+    hold a model the pipeline already approves.
+  * On a free-class change: write free_models to settings.yaml (atomic) AND
+    fire-and-forget the $0 free-pool benchmark to score the new class.
+  * FAIL-OPEN: an empty catalog (fetch failed) is a no-op — a network blip can
+    never wipe the configured pool. THROTTLED to <=1x/hour via a shared state
+    file, so a 50-file scan reconciles once, not 50 times. Env opt-out.
+
+"All surfaces" = two runtime funnels: dispatchCallToolInner (MCP) and cli.ts
+main() (CLI). Skills, slash-commands, and agents all wrap one of these, so they
+inherit the pre-flight. benchmark/index.ts main() is deliberately NOT wired — it
+IS the reconfigure machinery (--update-all / --bench-free-pool), so reconciling
+there would be circular. A coverage guard asserts both funnels stay wired.
+
+READ-ONLY-MCP carve-out: the MCP may now write settings.yaml, but ONLY the
+free_models pool, ONLY ':free' ids (applyFreePoolToSettings enforces it), ONLY
+throttled, and disable-able. It can neither pick a paid model nor spend, so it
+cannot do the harm the read-only rule prevents. The tool_models / ensemble
+writers stay CLI-only. pick.ts's guardrail comment updated to state the exact
+boundary. Writing free_models to a PAID profile is safe: validateProfile only
+checks free_models under free_only, so it is an inert pre-populated pool that the
+eventual credit->free switch will use (with FREE_POOL_SEED as the fallback).
+
+Tests: 21 new (1590 -> 1611). Pure core + the deps-injected IO shell are hermetic
+(no catalog fetch, no settings IO, injected clock); the coverage guard is
+source-level, same shape as the rotation-wiring guard.
+
+
+### Miscellaneous
+
+- Chore(dist): rebuild benchmark bundle for the reconcile/credit-switch wiring
+
+
 ## [10.3.0] - 2026-07-14
 
 ### Added
