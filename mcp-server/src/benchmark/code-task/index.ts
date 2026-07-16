@@ -30,6 +30,7 @@ import {
   fetchProgrammingModels,
   qualify,
   assertModelsUnderPriceCap,
+  assertPaidBenchmarkAllowed,
   type OpenRouterModel,
   type QualifiedModel,
 } from "../discover.js";
@@ -330,6 +331,8 @@ export async function runCodeAuditBenchmark(
   // any send if any model exceeds $1.25/1M — $0 spent. This is the path the user
   // actually hit (`--code-task <ids>`), so the cap binds here first.
   assertModelsUnderPriceCap([...toAssess.values()].map((v) => v.model));
+  // Then the paid opt-in: a paid (non-free) candidate needs --allow-paid-models-tests.
+  assertPaidBenchmarkAllowed([...toAssess.values()].map((v) => v.model));
 
   progress(`Assessing ${toAssess.size} model(s) over ${cases.length} cases…`);
 

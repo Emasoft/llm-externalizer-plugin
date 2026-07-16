@@ -219,6 +219,53 @@ export interface OverCapModel {
   outputDollarsPerMillion: number;
 }
 
+// ── Paid-benchmark opt-in (USER directive, cost-safety) ───────────────────
+//
+// Benchmarking a PAID model spends real money, so it requires an EXPLICIT opt-in:
+// the `--allow-paid-models-tests` CLI flag, or the `allow_paid_models_tests` MCP
+// input. This is a process-level flag (like config.ts's free_only accessors) — the
+// established pattern here for cross-cutting cost-safety state — because the paid
+// gate must bind every benchmark phase, which carry three different option shapes;
+// threading a bool through all of them is what the process flag avoids. Set ONCE
+// per invocation from whichever surface launched the run. Default OFF: a caller
+// who does nothing can never trigger a paid benchmark by accident.
+let paidBenchmarksAllowed = false;
+
+/** Record whether paid-model benchmarking is opted into for this process. Called
+ *  by the CLI main() (from `--allow-paid-models-tests`) and the MCP benchmark
+ *  handlers (from `allow_paid_models_tests`). */
+export function setPaidBenchmarksAllowed(v: boolean): void {
+  paidBenchmarksAllowed = v;
+}
+
+/** Test/inspection accessor for the opt-in flag. */
+export function getPaidBenchmarksAllowed(): boolean {
+  return paidBenchmarksAllowed;
+}
+
+/**
+ * Fail-fast unless paid-model benchmarking has been opted into. A model is PAID
+ * when it is NOT free-eligible (isFreeModeEligible = a ':free' id OR a $0 catalog
+ * price), so `:free` / $0 pools never trip this — `--bench-free-pool` and bare
+ * `--update-all` stay unguarded. Called at each phase's final-candidate chokepoint,
+ * AFTER the price cap (so the message only ever concerns models already ≤ $1.25/M).
+ * Refuses BEFORE any send, $0 spent.
+ */
+export function assertPaidBenchmarkAllowed(models: readonly OverCapModel[]): void {
+  if (paidBenchmarksAllowed) return;
+  const paid = models.filter(
+    (m) => !isFreeModeEligible(m.id, m.inputDollarsPerMillion, m.outputDollarsPerMillion),
+  );
+  if (paid.length === 0) return;
+  const list = paid.map((m) => m.id).join(", ");
+  throw new Error(
+    `paid-benchmark opt-in: benchmarking paid model(s) ${list} requires explicit permission. ` +
+      `Re-run with --allow-paid-models-tests (CLI) or allow_paid_models_tests: true (MCP). ` +
+      `Paid models are also capped at $${MAX_BENCHMARK_PRICE_PER_M}/1M (input AND output). ` +
+      `No API call was made, $0 spent.`,
+  );
+}
+
 /**
  * Fail-fast for EXPLICITLY-named benchmark candidates over the global price cap.
  * The user typed these ids (`--code-task <id>`, `--include <id>`, an MCP

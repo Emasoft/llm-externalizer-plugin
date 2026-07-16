@@ -23,6 +23,7 @@ import { join } from "node:path";
 import { runMassScoutCli, type CliResult, type CliRunOptions } from "./cli";
 import { runSecurityTriageBenchmark } from "../benchmark/security-triage/index";
 import { runSearchExistingBenchmark } from "../benchmark/search-existing/index";
+import { setPaidBenchmarksAllowed } from "../benchmark/discover";
 import { assessModelById, renderAssessmentText } from "../model-qualification/assess";
 import { runCheckModelHealth, renderModelHealthText } from "../model-qualification/drift";
 import { compactStamp } from "../model-qualification/drift";
@@ -882,6 +883,14 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
           description:
             "Report dir; defaults to <main-root>/reports/security-triage-benchmark/.",
         },
+        allow_paid_models_tests: {
+          type: "boolean",
+          description:
+            "Opt-in to benchmarking PAID (non-free) models. Default false — a " +
+            "paid candidate REFUSES the run without it ($0 spent). Paid models " +
+            "are also hard-capped at $1.25/1M (input AND output). Free/$0 pools " +
+            "are unaffected.",
+        },
       },
       required: [],
     },
@@ -923,6 +932,14 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
           type: "string",
           description:
             "Report dir; defaults to <main-root>/reports/search-existing-benchmark/.",
+        },
+        allow_paid_models_tests: {
+          type: "boolean",
+          description:
+            "Opt-in to benchmarking PAID (non-free) models. Default false — a " +
+            "paid candidate REFUSES the run without it ($0 spent). Paid models " +
+            "are also hard-capped at $1.25/1M (input AND output). Free/$0 pools " +
+            "are unaffected.",
         },
       },
       required: [],
@@ -1027,6 +1044,14 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
           type: "string",
           description:
             "Report dir; defaults to <main-root>/reports/auto-replace/.",
+        },
+        allow_paid_models_tests: {
+          type: "boolean",
+          description:
+            "Opt-in to benchmarking PAID (non-free) models when a degraded " +
+            "incumbent triggers a same-or-cheaper benchmark. Default false — a " +
+            "paid candidate REFUSES the run without it ($0 spent). Paid models " +
+            "are also hard-capped at $1.25/1M (input AND output).",
         },
       },
       required: [],
@@ -1320,6 +1345,10 @@ export async function dispatchMassScoutTool(
       );
     }
     case "security_triage_benchmark": {
+      // Publish the paid-benchmark opt-in for THIS call. Set explicitly (true or
+      // false) on every entry — the MCP server is long-lived, so a stale `true`
+      // from a prior call must never leak into a later paid send.
+      setPaidBenchmarksAllowed(args.allow_paid_models_tests === true);
       // In-process call to the triage orchestrator (NOT a CLI delegation — this
       // is a distinct subsystem, not a mass_scout sub-command). Honors test
       // injection (fetchImpl / apiKey / mainRoot) from CliRunOptions.
@@ -1345,6 +1374,8 @@ export async function dispatchMassScoutTool(
       return { content: [{ type: "text", text }], isError: false };
     }
     case "search_existing_benchmark": {
+      // Paid-benchmark opt-in for THIS call (reset every entry — see above).
+      setPaidBenchmarksAllowed(args.allow_paid_models_tests === true);
       // In-process call to the search-existing orchestrator (NOT a CLI
       // delegation — a distinct subsystem, not a mass_scout sub-command). Honors
       // test injection (fetchImpl / apiKey / mainRoot) from CliRunOptions.
@@ -1441,6 +1472,10 @@ export async function dispatchMassScoutTool(
       }
     }
     case "check_tool_replacements": {
+      // Paid-benchmark opt-in for THIS call (reset every entry — see above). When
+      // a degraded incumbent triggers a same-or-cheaper benchmark, a paid
+      // candidate needs this or the benchmark refuses ($0 spent).
+      setPaidBenchmarksAllowed(args.allow_paid_models_tests === true);
       // READ-ONLY advisory auto-replacement planner (TRDD-828238b5 A7-P3).
       //
       // GUARDRAIL: this handler calls ONLY `planToolReplacements` — the advisory

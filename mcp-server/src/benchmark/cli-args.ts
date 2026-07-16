@@ -45,6 +45,10 @@ export interface CliOptions {
   /** Minimum meanF1 a model must hit to be eligible for top-N. Default
    *  0.95 — anything lower indicates the keyword classifier flunked. */
   minMeanF1: number;
+  /** Opt-in to benchmarking PAID (non-free) models. Default false — a paid
+   *  candidate refuses the run without it ($0 spent). Free/$0 pools are
+   *  unaffected. USER cost-safety directive (TRDD-8b6b3646). */
+  allowPaidModelsTests: boolean;
   /** Run the security_scan TRIAGE benchmark instead of the keyword task. */
   securityTriage: boolean;
   /** Explicit model id(s) to assess in --security-triage mode (repeatable).
@@ -137,6 +141,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
   const opts: CliOptions = {
     includeIds: [],
     dryRun: false,
+    allowPaidModelsTests: false,
     reportPath: null,
     jsonPath: null,
     reasoningEffort: undefined,
@@ -259,6 +264,8 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       }
       opts.minMeanF1 = f;
       i++;
+    } else if (a === "--allow-paid-models-tests") {
+      opts.allowPaidModelsTests = true;
     } else if (a === "--security-triage") {
       opts.securityTriage = true;
     } else if (a === "--search-existing") {
@@ -366,6 +373,10 @@ export function printHelp(): void {
       "  --include ID      Add a model ID that bypasses the cost filter (repeatable).",
       "                    Use this to benchmark the current production ensemble.",
       "  --dry-run | -n    Print the resolved roster and exit; no API calls made.",
+      "  --allow-paid-models-tests",
+      "                    Opt-in to benchmarking PAID (non-free) models. Without it,",
+      "                    a paid candidate refuses the run ($0 spent). Paid models are",
+      "                    also hard-capped at $1.25/1M on input AND output.",
       "  --report PATH     Write the markdown report to PATH (default: auto-timestamped).",
       "  --json PATH       Write the machine-readable JSON sidecar to PATH.",
       "                    Always also written to ~/.llm-externalizer/benchmark-results.json.",

@@ -25,6 +25,8 @@ import {
   DEFAULT_CRITERIA,
   buildBenchmarkRoster,
   assertModelsUnderPriceCap,
+  assertPaidBenchmarkAllowed,
+  setPaidBenchmarksAllowed,
   rankByQualityIndex,
   resolveFreePool,
   fetchProgrammingModels,
@@ -261,6 +263,9 @@ function refuseUnsafeUpdateAll(opts: CliOptions): CliResult | null {
 
 async function main(): Promise<CliResult> {
   const opts = parseArgs(process.argv);
+  // Publish the paid-benchmark opt-in for the whole process, so every phase's
+  // assertPaidBenchmarkAllowed chokepoint sees it (USER cost-safety directive).
+  setPaidBenchmarksAllowed(opts.allowPaidModelsTests);
   // Usage errors first, environment second — see validateCombinations.
   validateCombinations(opts);
   // Config-level refusals rank WITH usage errors, not with environment checks.
@@ -586,6 +591,9 @@ async function runKeywordSweep(
   // ones this catches — the user's cap now overrides the old "explicit includes
   // are never capped" behaviour: an over-$1.25/1M include refuses the run, $0 spent.
   assertModelsUnderPriceCap(roster.map((r) => r.model));
+  // The keyword sweep is the DEFAULT paid benchmark, so it needs the opt-in too:
+  // a paid candidate/baseline without --allow-paid-models-tests refuses, $0 spent.
+  assertPaidBenchmarkAllowed(roster.map((r) => r.model));
 
   const results = new Map<
     string,
