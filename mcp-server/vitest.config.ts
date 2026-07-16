@@ -159,6 +159,7 @@ export default defineConfig({
       'src/benchmark/discover.test.ts',
       'src/benchmark/price-cap.test.ts',
       'src/benchmark/paid-guard.test.ts',
+      'src/benchmark/validated.test.ts',
       'src/benchmark/score.test.ts',
       // search-existing per-tool benchmark (TRDD-828238b5 A6) — fixture-backed
       // golden dataset + deterministic precision/recall scorer. No LLM, no network.
