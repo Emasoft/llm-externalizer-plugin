@@ -176,11 +176,22 @@ export function validatedForTool(modelId: string, toolName: string): boolean {
  * copy-pasteable recovery command; refuses on an empty/corrupt ledger (cost-safety
  * does NOT fail open). `$0` is spent — this runs before any HTTP.
  */
+// Test-only bypass. The gate reads REAL ledger files, so suites that exercise the
+// scout/judge/cli/completion PLUMBING with a MOCKED fetch (no real spend, no ledger
+// fixture) would trip it despite testing nothing about validation. This lets those
+// suites opt out — set true in beforeEach, false in afterEach. Production code NEVER
+// calls it; same risk profile as setPaidBenchmarksAllowed.
+let validationBypassForTests = false;
+export function setValidationBypassForTests(v: boolean): void {
+  validationBypassForTests = v;
+}
+
 export function assertModelValidated(
   modelId: string,
   toolName: string,
   backendType: "local" | "openrouter",
 ): void {
+  if (validationBypassForTests) return; // test-only escape hatch (see above)
   if (backendType !== "openrouter") return; // local — no catalog/benchmark
   if (isFreeSuffixModelId(modelId)) return; // ':free' — its own filter, and $0
   if (validatedForTool(modelId, toolName)) return;

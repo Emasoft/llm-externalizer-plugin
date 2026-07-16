@@ -42,6 +42,7 @@ import {
 import type { DedupGroup } from "./intake";
 import type { ModelPricing } from "../mass_scouting/cost-estimate";
 import { assertFreeOnlyModel, getActiveFreeOnly } from "../config";
+import { assertModelValidated } from "../benchmark/validated.js";
 
 // ── Constants ────────────────────────────────────────────────────────────
 
@@ -184,6 +185,10 @@ export async function judgeGroups(
   // directly (not via resolveConnection), so it enforces the guard itself: under
   // a free_only profile a non-':free' judge model throws BEFORE any request.
   assertFreeOnlyModel(getActiveFreeOnly(), "openrouter", opts.model);
+  // IRON RULE (TRDD-8b6b3646): a PAID judge model must have passed the
+  // security_scan (or a harder) benchmark, else refuse BEFORE any request. Exempt
+  // for a ':free' model (own filter). The judge is an OpenRouter subsystem.
+  assertModelValidated(opts.model, "security_scan", "openrouter");
   const apiUrl = opts.apiUrl ?? OPENROUTER_URL;
   const verdicts: GroupVerdict[] = new Array(groups.length);
   let totalCost = 0;

@@ -17,6 +17,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { setValidationBypassForTests } from "../benchmark/validated.js";
 import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -147,6 +148,9 @@ let fieldsetPath: string;
 let mainRoot: string;
 
 beforeEach(() => {
+  // These tests exercise the mass_scout CLI plumbing with a MOCKED fetch (no real
+  // spend); bypass the IRON RULE validation gate, which is not under test here.
+  setValidationBypassForTests(true);
   workdir = join(
     tmpdir(),
     `cli-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -163,6 +167,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setValidationBypassForTests(false);
   if (existsSync(workdir)) rmSync(workdir, { recursive: true, force: true });
 });
 

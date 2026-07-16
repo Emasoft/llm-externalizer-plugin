@@ -16,6 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { setValidationBypassForTests } from "../benchmark/validated.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -37,11 +38,14 @@ import type { ModelPricing } from "./cost-estimate";
 let __histPrevCfg: string | undefined;
 let __histTmp: string;
 beforeEach(() => {
+  // Plumbing tests with a MOCKED fetch — bypass the IRON RULE gate (not under test).
+  setValidationBypassForTests(true);
   __histPrevCfg = process.env.LLM_EXT_CONFIG_DIR;
   __histTmp = mkdtempSync(join("/tmp", "scout-test-hist-"));
   process.env.LLM_EXT_CONFIG_DIR = __histTmp;
 });
 afterEach(() => {
+  setValidationBypassForTests(false);
   if (__histPrevCfg === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
   else process.env.LLM_EXT_CONFIG_DIR = __histPrevCfg;
   rmSync(__histTmp, { recursive: true, force: true });

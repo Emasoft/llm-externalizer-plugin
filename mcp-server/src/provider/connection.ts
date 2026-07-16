@@ -9,6 +9,8 @@
  */
 
 import { assertFreeOnlyModel } from "../config.js";
+import { assertModelValidated } from "../benchmark/validated.js";
+import { ctxStore } from "../usage-history.js";
 import { detectLMStudio } from "./lmstudio.js";
 import type { ConnectionSetup, ProviderDeps } from "./types.js";
 
@@ -37,6 +39,15 @@ export async function resolveConnection(
   // fallback, modelOverride, and the 402→free fallback. A leak fails fast — it
   // never bills.
   assertFreeOnlyModel(deps.isFreeOnly(), backend.type, model);
+  // IRON RULE (TRDD-8b6b3646): a PAID OpenRouter model may only be SENT by a tool
+  // it has passed the benchmark for (or a harder one). Fires ONLY when a tool
+  // usage-context is present — i.e. a real tool invocation (set once at the
+  // dispatch chokepoint). A context-less call (a unit test, or the benchmark
+  // runner, which is EXEMPT and bypasses resolveConnection anyway) is not gated.
+  // No-op for local / ':free' (handled inside assertModelValidated). Refuses
+  // BEFORE the wire — $0 spent.
+  const toolCtx = ctxStore.getStore()?.tool;
+  if (toolCtx) assertModelValidated(model, toolCtx, backend.type);
   const headers = deps.apiHeaders();
   const timeout = deps.getSoftTimeoutMs();
 

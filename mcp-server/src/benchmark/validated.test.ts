@@ -10,6 +10,7 @@ import {
   validatedForTool,
   validatedModelsForTool,
   assertModelValidated,
+  setValidationBypassForTests,
   rankForTool,
   TOOL_DIFFICULTY_RANK,
 } from "./validated.js";
@@ -133,5 +134,12 @@ describe("assertModelValidated — the send-time chokepoint", () => {
   it("is a NO-OP for a local backend and for a ':free' model (exempt)", () => {
     expect(() => assertModelValidated("anything/paid", "code_task", "local")).not.toThrow();
     expect(() => assertModelValidated("anything:free", "code_task", "openrouter")).not.toThrow();
+  });
+
+  it("the test-only bypass suppresses the gate, and resets cleanly", () => {
+    setValidationBypassForTests(true);
+    expect(() => assertModelValidated("x/paid", "code_task", "openrouter")).not.toThrow();
+    setValidationBypassForTests(false);
+    expect(() => assertModelValidated("x/paid", "code_task", "openrouter")).toThrow(/IRON RULE/);
   });
 });

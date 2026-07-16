@@ -9422,6 +9422,124 @@ var init_model_events = __esm({
   }
 });
 
+// src/benchmark/validated.ts
+import { readFileSync as readFileSync7 } from "node:fs";
+import { join as join8 } from "node:path";
+function passedModelsFromKeyedLedger(fileName, isPass) {
+  let cache2;
+  try {
+    const raw = readFileSync7(join8(getConfigDir(), fileName), "utf-8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return /* @__PURE__ */ new Set();
+    cache2 = parsed;
+  } catch {
+    return /* @__PURE__ */ new Set();
+  }
+  const latest = /* @__PURE__ */ new Map();
+  for (const [key, value] of Object.entries(cache2)) {
+    if (!value || typeof value !== "object") continue;
+    const entry = value;
+    const modelId = key.split("::")[0];
+    if (!modelId) continue;
+    const date5 = typeof entry.date === "string" ? entry.date : "";
+    const prev = latest.get(modelId);
+    if (!prev || date5 > prev.date) latest.set(modelId, { date: date5, entry });
+  }
+  const passed = /* @__PURE__ */ new Set();
+  for (const [modelId, { entry }] of latest) {
+    if (isPass(entry)) passed.add(modelId);
+  }
+  return passed;
+}
+function passedSecurityTriage() {
+  return passedModelsFromKeyedLedger("security-triage-results.json", (e) => {
+    const s = e.score;
+    return !!s && s.inconclusive !== true && s.pass === true;
+  });
+}
+function passedDeterministic(fileName) {
+  return passedModelsFromKeyedLedger(fileName, (e) => {
+    const fr = e.failureReasons;
+    return Array.isArray(fr) && fr.length === 0;
+  });
+}
+function passedGeneralKeyword() {
+  const passed = /* @__PURE__ */ new Set();
+  try {
+    const raw = readFileSync7(join8(getConfigDir(), "benchmark-results.json"), "utf-8");
+    const parsed = JSON.parse(raw);
+    const results = Array.isArray(parsed.results) ? parsed.results : [];
+    for (const r of results) {
+      if (!r || typeof r !== "object") continue;
+      const row = r;
+      if (typeof row.modelId === "string" && row.ok === true && row.pass === true) {
+        passed.add(row.modelId);
+      }
+    }
+  } catch {
+  }
+  return passed;
+}
+function rankForTool(toolName) {
+  return TOOL_DIFFICULTY_RANK[toolName] ?? 0;
+}
+function validatedModelsForTool(toolName) {
+  const min = rankForTool(toolName);
+  const out = /* @__PURE__ */ new Set();
+  for (const ledger of LEDGERS) {
+    if (ledger.rank < min) continue;
+    for (const id of ledger.read()) out.add(id);
+  }
+  return out;
+}
+function validatedForTool(modelId, toolName) {
+  return validatedModelsForTool(toolName).has(modelId);
+}
+function assertModelValidated(modelId, toolName, backendType) {
+  if (validationBypassForTests) return;
+  if (backendType !== "openrouter") return;
+  if (isFreeSuffixModelId(modelId)) return;
+  if (validatedForTool(modelId, toolName)) return;
+  const validated = [...validatedModelsForTool(toolName)];
+  const flag = TOOL_BENCH_FLAG[toolName];
+  const validateCmd = flag ? `llm-ext-benchmark ${flag} ${modelId} --allow-paid-models-tests` : `llm-ext-benchmark --allow-paid-models-tests   (any benchmark validates '${toolName}')`;
+  const haveList = validated.length > 0 ? `Currently validated for ${toolName}: ${validated.join(", ")}.` : `No model is validated for ${toolName} yet.`;
+  throw new Error(
+    `IRON RULE: model '${modelId}' is not validated for ${toolName}. No LLM call was made, no money was spent. Validate it: ${validateCmd} \u2014 or configure a model already validated for this tool. ${haveList}`
+  );
+}
+var TOOL_DIFFICULTY_RANK, LEDGERS, TOOL_BENCH_FLAG, validationBypassForTests;
+var init_validated = __esm({
+  "src/benchmark/validated.ts"() {
+    "use strict";
+    init_config();
+    init_free_mode();
+    TOOL_DIFFICULTY_RANK = {
+      code_task: 5,
+      check_against_specs: 4,
+      scan_folder: 3,
+      search_existing_implementations: 2,
+      security_scan: 1
+    };
+    LEDGERS = [
+      { rank: 5, read: () => passedDeterministic("code-task-results.json") },
+      { rank: 4, read: () => passedDeterministic("check-specs-results.json") },
+      { rank: 3, read: () => passedDeterministic("scan-folder-results.json") },
+      { rank: 2, read: () => passedDeterministic("search-existing-results.json") },
+      { rank: 1, read: passedSecurityTriage },
+      { rank: 0, read: passedGeneralKeyword }
+    ];
+    TOOL_BENCH_FLAG = {
+      code_task: "--code-task",
+      check_against_specs: "--check-specs",
+      scan_folder: "--scan-folder",
+      search_existing_implementations: "--search-existing",
+      security_scan: "--security-triage"
+    };
+    validationBypassForTests = false;
+  }
+});
+
 // src/security_scan/judge.ts
 function scanReasonTells(reason) {
   const found = /* @__PURE__ */ new Set();
@@ -9433,6 +9551,7 @@ function scanReasonTells(reason) {
 }
 async function judgeGroups(groups, opts, fetchImpl) {
   assertFreeOnlyModel(getActiveFreeOnly(), "openrouter", opts.model);
+  assertModelValidated(opts.model, "security_scan", "openrouter");
   const apiUrl = opts.apiUrl ?? OPENROUTER_URL;
   const verdicts = new Array(groups.length);
   let totalCost = 0;
@@ -9762,6 +9881,7 @@ var init_judge = __esm({
     init_model_events();
     init_types();
     init_config();
+    init_validated();
     OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
     SOFT_MARKERS = /* @__PURE__ */ new Set(["base64-blob"]);
     REASON_TELLS = [
@@ -9834,16 +9954,16 @@ var init_score = __esm({
 
 // src/benchmark/security-triage/index.ts
 import { createHash as createHash2 } from "node:crypto";
-import { existsSync as existsSync6, mkdirSync as mkdirSync7, readFileSync as readFileSync7, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join8 } from "node:path";
+import { existsSync as existsSync6, mkdirSync as mkdirSync7, readFileSync as readFileSync8, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join9 } from "node:path";
 function cachePath() {
-  return join8(getConfigDir(), "security-triage-results.json");
+  return join9(getConfigDir(), "security-triage-results.json");
 }
 function loadCache() {
   const p = cachePath();
   if (!existsSync6(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync7(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync8(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
@@ -9895,8 +10015,8 @@ var init_security_triage = __esm({
 });
 
 // src/free-rotation.ts
-import { mkdirSync as mkdirSync8, readFileSync as readFileSync8, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
-import { join as join9 } from "node:path";
+import { mkdirSync as mkdirSync8, readFileSync as readFileSync9, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join10 } from "node:path";
 function filterFreeModels(freeModels, catalogById, benchmarkFailed = /* @__PURE__ */ new Set()) {
   return freeModels.filter((id) => {
     if (benchmarkFailed.has(id)) return false;
@@ -10006,11 +10126,11 @@ function orderByAvailability(pool, store, nowMs) {
   return { fresh, deferred };
 }
 function cooldownFilePath() {
-  return join9(getConfigDir(), "free-cooldowns.json");
+  return join10(getConfigDir(), "free-cooldowns.json");
 }
 function readStoreFromDisk() {
   try {
-    const raw = readFileSync8(cooldownFilePath(), "utf-8");
+    const raw = readFileSync9(cooldownFilePath(), "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && parsed.version === 1 && parsed.models && typeof parsed.models === "object") {
       return { version: 1, models: parsed.models };
@@ -17565,7 +17685,7 @@ var require_cross_spawn = __commonJS({
 });
 
 // src/mass_scouting/fieldset.ts
-import { readFileSync as readFileSync12 } from "node:fs";
+import { readFileSync as readFileSync13 } from "node:fs";
 function isPlainObject4(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
@@ -19483,6 +19603,7 @@ async function runWithLimit2(items, limit, fn) {
 }
 async function runScoutJob(reg, opts, fetchImpl) {
   assertFreeOnlyModel(getActiveFreeOnly(), "openrouter", opts.model);
+  assertModelValidated(opts.model, "mass_scout", "openrouter");
   const compiled = compileFieldset(opts.fieldset);
   const workers = Math.max(1, opts.workers ?? DEFAULT_SCOUT_WORKERS);
   const maxRetries = opts.maxRetries ?? 1;
@@ -19779,6 +19900,7 @@ var init_scout = __esm({
     init_cost_estimate();
     init_usage_history();
     init_config();
+    init_validated();
     OPENROUTER_URL2 = "https://openrouter.ai/api/v1/chat/completions";
     SMOKE_TEST_SAMPLE = 5;
   }
@@ -20448,7 +20570,7 @@ var init_reports = __esm({
 
 // src/security_scan/report.ts
 import { mkdirSync as mkdirSync12, writeFileSync as writeFileSync9 } from "node:fs";
-import { isAbsolute as isAbsolute2, join as join12, resolve as resolve3 } from "node:path";
+import { isAbsolute as isAbsolute2, join as join13, resolve as resolve3 } from "node:path";
 function defaultMainRoot() {
   return resolveProjectMainRoot();
 }
@@ -20456,7 +20578,7 @@ function resolveReportDir(outputDir, mainRoot) {
   if (outputDir && outputDir.length > 0) {
     return isAbsolute2(outputDir) ? outputDir : resolve3(process.cwd(), outputDir);
   }
-  return join12(mainRoot ?? defaultMainRoot(), "reports", "security_scan");
+  return join13(mainRoot ?? defaultMainRoot(), "reports", "security_scan");
 }
 function isoTimestampLocal(now = /* @__PURE__ */ new Date()) {
   const pad = (n, w = 2) => String(n).padStart(w, "0");
@@ -20605,8 +20727,8 @@ function writeReport(report, reportDir) {
   mkdirSync12(reportDir, { recursive: true });
   const stamp = isoTimestampLocal();
   const base = `${stamp}-security-scan-${slugify2(report.job_id)}`;
-  const jsonPath = join12(reportDir, `${base}.json`);
-  const mdPath = join12(reportDir, `${base}.md`);
+  const jsonPath = join13(reportDir, `${base}.json`);
+  const mdPath = join13(reportDir, `${base}.md`);
   writeFileSync9(jsonPath, JSON.stringify(report, null, 2) + "\n", "utf-8");
   writeFileSync9(mdPath, renderMarkdown(report), "utf-8");
   return { jsonPath, mdPath };
@@ -20816,12 +20938,12 @@ import { execSync as execSync2 } from "node:child_process";
 import {
   appendFileSync as appendFileSync4,
   mkdirSync as mkdirSync13,
-  readFileSync as readFileSync13,
+  readFileSync as readFileSync14,
   readdirSync as readdirSync3,
   statSync as statSync3,
   writeFileSync as writeFileSync10
 } from "node:fs";
-import { dirname as dirname6, extname as extname2, isAbsolute as isAbsolute3, join as join13, resolve as resolve4 } from "node:path";
+import { dirname as dirname6, extname as extname2, isAbsolute as isAbsolute3, join as join14, resolve as resolve4 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 function parseFlags2(args) {
   const flags = {};
@@ -20885,7 +21007,7 @@ function resolveReportDir2(outputDirFlag, opts) {
     return isAbsolute3(outputDirFlag) ? outputDirFlag : resolve4(process.cwd(), outputDirFlag);
   }
   const mainRoot = opts.mainRoot ?? defaultMainRoot2();
-  return join13(mainRoot, "reports", "mass_scouting");
+  return join14(mainRoot, "reports", "mass_scouting");
 }
 function listGitChangedFiles(root, ref) {
   if (!/^[A-Za-z0-9_./~^@{}-]+$/.test(ref) || ref.length > 200) {
@@ -20935,7 +21057,7 @@ function walkFiles2(root, extensionFilter, extraSkipDirs) {
       continue;
     }
     for (const e of entries) {
-      const full = join13(dir, e);
+      const full = join14(dir, e);
       let st;
       try {
         st = statSync3(full);
@@ -20970,7 +21092,7 @@ function resolveBundledFieldset(arg) {
   ];
   for (const p of candidates) {
     try {
-      readFileSync13(p, "utf-8");
+      readFileSync14(p, "utf-8");
       return { path: p };
     } catch {
     }
@@ -20987,7 +21109,7 @@ function loadFieldsetFromArg(path) {
   }
   let raw;
   try {
-    raw = readFileSync13(path, "utf-8");
+    raw = readFileSync14(path, "utf-8");
   } catch (e) {
     return { error: `cannot read --fields-file: ${e.message}` };
   }
@@ -21136,7 +21258,7 @@ function runRegister(args) {
   for (const p of paths) {
     let body;
     try {
-      body = readFileSync13(p);
+      body = readFileSync14(p);
     } catch {
       skippedRead++;
       continue;
@@ -21348,7 +21470,7 @@ async function runScout(args, opts) {
   const reportDir = resolveReportDir2(flags["output-dir"], opts);
   mkdirSync13(reportDir, { recursive: true });
   const stamp = isoTimestampLocal2();
-  const reportPath = join13(reportDir, `${stamp}-scout-${slugify3(jobId)}.md`);
+  const reportPath = join14(reportDir, `${stamp}-scout-${slugify3(jobId)}.md`);
   writeFileSync10(reportPath, md, "utf-8");
   return ok(
     [
@@ -21543,13 +21665,14 @@ async function runProposeFieldset(args, opts) {
   const fetchImpl = opts.fetchImpl ?? realFetch2;
   const model = resolveCliModel(flags);
   assertFreeOnlyModel(getActiveFreeOnly(), "openrouter", model);
+  assertModelValidated(model, "mass_scout", "openrouter");
   const apiUrl = "https://openrouter.ai/api/v1/chat/completions";
   const samples = [];
   const samplesArg = flags["samples"];
   if (samplesArg) {
     for (const p of samplesArg.split(",").map((s) => s.trim()).filter(Boolean)) {
       try {
-        const body = readFileSync13(p, "utf-8");
+        const body = readFileSync14(p, "utf-8");
         samples.push({ path: p, body: body.slice(0, 2e3) });
       } catch {
       }
@@ -21697,7 +21820,7 @@ function runListBundledFieldsets(args) {
     const name = e.replace(/\.json$/, "");
     let fields = [];
     try {
-      const parsed = JSON.parse(readFileSync13(full, "utf-8"));
+      const parsed = JSON.parse(readFileSync14(full, "utf-8"));
       fields = (parsed.fields ?? []).map((f) => f.name);
     } catch {
     }
@@ -22040,7 +22163,7 @@ function runExport(args, opts) {
   mkdirSync13(reportDir, { recursive: true });
   const stamp = isoTimestampLocal2();
   const filename = `${stamp}-export-${slugify3(jobId)}.${format}`;
-  const path = join13(reportDir, filename);
+  const path = join14(reportDir, filename);
   writeFileSync10(path, "", "utf-8");
   if (format === "jsonl") {
     for (const r of rows) {
@@ -22214,6 +22337,7 @@ var init_cli = __esm({
     init_types();
     init_config();
     init_free_rotation();
+    init_validated();
     init_project_root();
     DEFAULT_SKIP_DIRS2 = /* @__PURE__ */ new Set([
       ".git",
@@ -36870,18 +36994,18 @@ init_config();
 init_free_mode();
 init_free_rotation();
 init_discover();
-import { mkdirSync as mkdirSync10, readFileSync as readFileSync11, renameSync as renameSync4, writeFileSync as writeFileSync8 } from "node:fs";
-import { join as join11 } from "node:path";
+import { mkdirSync as mkdirSync10, readFileSync as readFileSync12, renameSync as renameSync4, writeFileSync as writeFileSync8 } from "node:fs";
+import { join as join12 } from "node:path";
 
 // src/benchmark/pick.ts
 var import_yaml2 = __toESM(require_dist(), 1);
 init_registry();
-import { readFileSync as readFileSync9, writeFileSync as writeFileSync6, renameSync as renameSyncCb, existsSync as existsSync7 } from "node:fs";
+import { readFileSync as readFileSync10, writeFileSync as writeFileSync6, renameSync as renameSyncCb, existsSync as existsSync7 } from "node:fs";
 function loadProfileForMutation(settingsPath, profileName) {
   if (!existsSync7(settingsPath)) {
     throw new Error(`settings.yaml not found at ${settingsPath}`);
   }
-  const raw = readFileSync9(settingsPath, "utf-8");
+  const raw = readFileSync10(settingsPath, "utf-8");
   let doc;
   try {
     doc = (0, import_yaml2.parse)(raw);
@@ -36937,17 +37061,17 @@ import {
   existsSync as existsSync8,
   mkdirSync as mkdirSync9,
   openSync,
-  readFileSync as readFileSync10,
+  readFileSync as readFileSync11,
   writeFileSync as writeFileSync7
 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname4, join as join10, resolve as pathResolve } from "node:path";
+import { dirname as dirname4, join as join11, resolve as pathResolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-var LLM_EXT_HOME = join10(homedir2(), ".llm-externalizer");
-var BENCH_CACHE = join10(LLM_EXT_HOME, "benchmark-results.json");
-var BENCH_LOCK = join10(LLM_EXT_HOME, "free-pool-bench.lock");
-var BENCH_LOG = join10(LLM_EXT_HOME, "free-pool-bench.log");
+var LLM_EXT_HOME = join11(homedir2(), ".llm-externalizer");
+var BENCH_CACHE = join11(LLM_EXT_HOME, "benchmark-results.json");
+var BENCH_LOCK = join11(LLM_EXT_HOME, "free-pool-bench.lock");
+var BENCH_LOG = join11(LLM_EXT_HOME, "free-pool-bench.log");
 var DISABLE_ENV = "LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH";
 function resolveBenchmarkScriptPath() {
   const here = dirname4(fileURLToPath2(import.meta.url));
@@ -36958,7 +37082,7 @@ function resolveBenchmarkScriptPath() {
 }
 function benchCacheHasFreeEntries(cachePath2 = BENCH_CACHE) {
   try {
-    const raw = readFileSync10(cachePath2, "utf-8");
+    const raw = readFileSync11(cachePath2, "utf-8");
     const data = JSON.parse(raw);
     if (!Array.isArray(data?.results)) return false;
     return data.results.some(
@@ -36971,7 +37095,7 @@ function benchCacheHasFreeEntries(cachePath2 = BENCH_CACHE) {
 function lockHoldsLivePid(lockPath = BENCH_LOCK) {
   if (!existsSync8(lockPath)) return false;
   try {
-    const pid = parseInt(readFileSync10(lockPath, "utf-8").trim(), 10);
+    const pid = parseInt(readFileSync11(lockPath, "utf-8").trim(), 10);
     if (!Number.isInteger(pid) || pid <= 0) return false;
     try {
       process.kill(pid, 0);
@@ -37156,11 +37280,11 @@ function parseReconcileInterval(raw) {
 var DISABLE_RECONCILE_ENV = "LLM_EXT_DISABLE_AUTO_RECONCILE";
 var RECONCILE_INTERVAL_ENV = "LLM_EXT_RECONCILE_INTERVAL_MS";
 function reconcileStateFilePath() {
-  return join11(getConfigDir(), "last-reconcile.json");
+  return join12(getConfigDir(), "last-reconcile.json");
 }
 function readLastReconcileMs() {
   try {
-    const raw = readFileSync11(reconcileStateFilePath(), "utf-8");
+    const raw = readFileSync12(reconcileStateFilePath(), "utf-8");
     const parsed = JSON.parse(raw);
     return typeof parsed.lastRunMs === "number" && Number.isFinite(parsed.lastRunMs) ? parsed.lastRunMs : null;
   } catch {
@@ -44701,7 +44825,7 @@ function isElectron() {
 
 // src/cli.ts
 import { writeFileSync as writeFileSync11, existsSync as existsSync9, statSync as statSync4, unlinkSync } from "node:fs";
-import { resolve as resolvePath, isAbsolute as isAbsolute4, join as join14, dirname as dirname7 } from "node:path";
+import { resolve as resolvePath, isAbsolute as isAbsolute4, join as join15, dirname as dirname7 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 import { spawnSync as spawnSync2 } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -44826,9 +44950,9 @@ var DEFAULT_SEARCH_TIMEOUT_MS = 4 * 60 * 60 * 1e3;
 function findServerScript() {
   const here = dirname7(fileURLToPath4(import.meta.url));
   const candidates = [
-    join14(here, "index.js"),
+    join15(here, "index.js"),
     // running from dist/
-    join14(here, "..", "dist", "index.js")
+    join15(here, "..", "dist", "index.js")
     // running from src/
   ];
   for (const c of candidates) {
@@ -44888,7 +45012,7 @@ function generateGitDiff(base, sourceFiles) {
       );
     }
   }
-  const outPath = join14(tmpdir(), `llm-ext-search-existing-diff-${Date.now()}.patch`);
+  const outPath = join15(tmpdir(), `llm-ext-search-existing-diff-${Date.now()}.patch`);
   const result = spawnSync2(
     "git",
     ["diff", `${base}...HEAD`, "--", ...sourceFiles],

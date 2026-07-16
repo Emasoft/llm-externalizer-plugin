@@ -29,6 +29,7 @@ import { join } from "node:path";
 
 import { setActiveFreeOnly } from "../../config.js";
 import { setPaidBenchmarksAllowed } from "../discover.js";
+import { setValidationBypassForTests } from "../validated.js";
 import { DEFAULT_MODEL } from "../../security_scan/types.js";
 import type { FetchImpl } from "../../security_scan/judge.js";
 import type { OpenRouterModel } from "../discover.js";
@@ -106,6 +107,7 @@ describe("security-triage benchmark — model routing + free_only", () => {
     // spend) to validate model ROUTING — so opt into paid benchmarking. Reset in
     // afterEach so the module-level flag never leaks into a sibling test.
     setPaidBenchmarksAllowed(true);
+    setValidationBypassForTests(true); // benchmark routing test — the gate is not under test
     vi.stubGlobal("fetch", async () => ({
       ok: true,
       status: 200,
@@ -116,6 +118,7 @@ describe("security-triage benchmark — model routing + free_only", () => {
   afterEach(() => {
     setActiveFreeOnly(false); // module state — never leak free_only into a sibling test
     setPaidBenchmarksAllowed(false);
+    setValidationBypassForTests(false);
     vi.unstubAllGlobals();
     if (prevKey === undefined) delete process.env.OPENROUTER_API_KEY;
     else process.env.OPENROUTER_API_KEY = prevKey;

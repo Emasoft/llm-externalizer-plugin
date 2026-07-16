@@ -218108,7 +218108,7 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 
 // src/benchmark/index.ts
 import { mkdirSync as mkdirSync13, writeFileSync as writeFileSync12, existsSync as existsSync18 } from "node:fs";
-import { dirname as dirname6, join as join21 } from "node:path";
+import { dirname as dirname6, join as join22 } from "node:path";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 
 // src/usage-history.ts
@@ -218161,6 +218161,12 @@ var DEFAULT_CRITERIA = {
   requireReasoning: true,
   allowFree: false
 };
+var MAX_BENCHMARK_PRICE_PER_M = 1.25;
+function overBenchmarkPriceCap(m) {
+  const { inputDollarsPerMillion: i, outputDollarsPerMillion: o } = m;
+  if (!Number.isFinite(i) || !Number.isFinite(o)) return true;
+  return i > MAX_BENCHMARK_PRICE_PER_M || o > MAX_BENCHMARK_PRICE_PER_M;
+}
 function extractCodexIndex(m) {
   const v = m.benchmarks?.artificial_analysis?.coding_index;
   return typeof v === "number" && isFinite(v) ? v : void 0;
@@ -218185,9 +218191,34 @@ function filterModels(models, criteria2 = DEFAULT_CRITERIA) {
   const out = [];
   for (const m of models) {
     const q = qualify(m, criteria2);
-    if (q) out.push(q);
+    if (q && !overBenchmarkPriceCap(q)) out.push(q);
   }
   return out;
+}
+var paidBenchmarksAllowed = false;
+function setPaidBenchmarksAllowed(v) {
+  paidBenchmarksAllowed = v;
+}
+function assertPaidBenchmarkAllowed(models) {
+  if (paidBenchmarksAllowed) return;
+  const paid = models.filter(
+    (m) => !isFreeModeEligible(m.id, m.inputDollarsPerMillion, m.outputDollarsPerMillion)
+  );
+  if (paid.length === 0) return;
+  const list = paid.map((m) => m.id).join(", ");
+  throw new Error(
+    `paid-benchmark opt-in: benchmarking paid model(s) ${list} requires explicit permission. Re-run with --allow-paid-models-tests (CLI) or allow_paid_models_tests: true (MCP). Paid models are also capped at $${MAX_BENCHMARK_PRICE_PER_M}/1M (input AND output). No API call was made, $0 spent.`
+  );
+}
+function assertModelsUnderPriceCap(models) {
+  const over = models.filter(overBenchmarkPriceCap);
+  if (over.length === 0) return;
+  const list = over.map(
+    (m) => `${m.id} (in $${m.inputDollarsPerMillion.toFixed(3)}/M, out $${m.outputDollarsPerMillion.toFixed(3)}/M)`
+  ).join("; ");
+  throw new Error(
+    `benchmark price cap: refusing to benchmark model(s) priced over $${MAX_BENCHMARK_PRICE_PER_M}/1M (input AND output must be \u2264 $${MAX_BENCHMARK_PRICE_PER_M}/1M): ${list}. No API call was made, $0 spent. Remove the over-cap id(s) or pick a cheaper model.`
+  );
 }
 function disqualifyReason(m, criteria2) {
   if (!criteria2.allowFree && m.id.endsWith(":free")) return "free model not allowed (allowFree=false)";
@@ -219764,7 +219795,7 @@ function applyEnsembleSlotToSettings(settingsPath, profileName, slot, modelId) {
 
 // src/benchmark/update-all.ts
 import { mkdirSync as mkdirSync10, writeFileSync as writeFileSync9 } from "node:fs";
-import { dirname as dirname5, join as join18 } from "node:path";
+import { dirname as dirname5, join as join19 } from "node:path";
 
 // src/benchmark/budget.ts
 var DEFAULT_BUDGET_USD = 2;
@@ -219924,8 +219955,8 @@ function makeBudgetedGlobalFetch(ledger, priceOf, inner = (url, init) => fetch(u
 
 // src/benchmark/security-triage/index.ts
 import { createHash as createHash2 } from "node:crypto";
-import { existsSync as existsSync5, mkdirSync as mkdirSync5, readFileSync as readFileSync8, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join8 } from "node:path";
+import { existsSync as existsSync5, mkdirSync as mkdirSync5, readFileSync as readFileSync9, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join9 } from "node:path";
 
 // src/project-root.ts
 import { existsSync as existsSync3 } from "node:fs";
@@ -220622,6 +220653,116 @@ function assessModelPersistence(events, opts = {}) {
   return out;
 }
 
+// src/benchmark/validated.ts
+import { readFileSync as readFileSync7 } from "node:fs";
+import { join as join7 } from "node:path";
+function passedModelsFromKeyedLedger(fileName, isPass) {
+  let cache2;
+  try {
+    const raw = readFileSync7(join7(getConfigDir(), fileName), "utf-8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return /* @__PURE__ */ new Set();
+    cache2 = parsed;
+  } catch {
+    return /* @__PURE__ */ new Set();
+  }
+  const latest = /* @__PURE__ */ new Map();
+  for (const [key, value] of Object.entries(cache2)) {
+    if (!value || typeof value !== "object") continue;
+    const entry = value;
+    const modelId = key.split("::")[0];
+    if (!modelId) continue;
+    const date = typeof entry.date === "string" ? entry.date : "";
+    const prev = latest.get(modelId);
+    if (!prev || date > prev.date) latest.set(modelId, { date, entry });
+  }
+  const passed = /* @__PURE__ */ new Set();
+  for (const [modelId, { entry }] of latest) {
+    if (isPass(entry)) passed.add(modelId);
+  }
+  return passed;
+}
+function passedSecurityTriage() {
+  return passedModelsFromKeyedLedger("security-triage-results.json", (e) => {
+    const s = e.score;
+    return !!s && s.inconclusive !== true && s.pass === true;
+  });
+}
+function passedDeterministic(fileName) {
+  return passedModelsFromKeyedLedger(fileName, (e) => {
+    const fr = e.failureReasons;
+    return Array.isArray(fr) && fr.length === 0;
+  });
+}
+function passedGeneralKeyword() {
+  const passed = /* @__PURE__ */ new Set();
+  try {
+    const raw = readFileSync7(join7(getConfigDir(), "benchmark-results.json"), "utf-8");
+    const parsed = JSON.parse(raw);
+    const results = Array.isArray(parsed.results) ? parsed.results : [];
+    for (const r of results) {
+      if (!r || typeof r !== "object") continue;
+      const row = r;
+      if (typeof row.modelId === "string" && row.ok === true && row.pass === true) {
+        passed.add(row.modelId);
+      }
+    }
+  } catch {
+  }
+  return passed;
+}
+var TOOL_DIFFICULTY_RANK = {
+  code_task: 5,
+  check_against_specs: 4,
+  scan_folder: 3,
+  search_existing_implementations: 2,
+  security_scan: 1
+};
+var LEDGERS = [
+  { rank: 5, read: () => passedDeterministic("code-task-results.json") },
+  { rank: 4, read: () => passedDeterministic("check-specs-results.json") },
+  { rank: 3, read: () => passedDeterministic("scan-folder-results.json") },
+  { rank: 2, read: () => passedDeterministic("search-existing-results.json") },
+  { rank: 1, read: passedSecurityTriage },
+  { rank: 0, read: passedGeneralKeyword }
+];
+var TOOL_BENCH_FLAG = {
+  code_task: "--code-task",
+  check_against_specs: "--check-specs",
+  scan_folder: "--scan-folder",
+  search_existing_implementations: "--search-existing",
+  security_scan: "--security-triage"
+};
+function rankForTool(toolName) {
+  return TOOL_DIFFICULTY_RANK[toolName] ?? 0;
+}
+function validatedModelsForTool(toolName) {
+  const min = rankForTool(toolName);
+  const out = /* @__PURE__ */ new Set();
+  for (const ledger of LEDGERS) {
+    if (ledger.rank < min) continue;
+    for (const id of ledger.read()) out.add(id);
+  }
+  return out;
+}
+function validatedForTool(modelId, toolName) {
+  return validatedModelsForTool(toolName).has(modelId);
+}
+var validationBypassForTests = false;
+function assertModelValidated(modelId, toolName, backendType) {
+  if (validationBypassForTests) return;
+  if (backendType !== "openrouter") return;
+  if (isFreeSuffixModelId(modelId)) return;
+  if (validatedForTool(modelId, toolName)) return;
+  const validated = [...validatedModelsForTool(toolName)];
+  const flag = TOOL_BENCH_FLAG[toolName];
+  const validateCmd = flag ? `llm-ext-benchmark ${flag} ${modelId} --allow-paid-models-tests` : `llm-ext-benchmark --allow-paid-models-tests   (any benchmark validates '${toolName}')`;
+  const haveList = validated.length > 0 ? `Currently validated for ${toolName}: ${validated.join(", ")}.` : `No model is validated for ${toolName} yet.`;
+  throw new Error(
+    `IRON RULE: model '${modelId}' is not validated for ${toolName}. No LLM call was made, no money was spent. Validate it: ${validateCmd} \u2014 or configure a model already validated for this tool. ${haveList}`
+  );
+}
+
 // src/security_scan/judge.ts
 var OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 var SOFT_MARKERS = /* @__PURE__ */ new Set(["base64-blob"]);
@@ -220663,6 +220804,7 @@ function scanReasonTells(reason) {
 }
 async function judgeGroups(groups, opts, fetchImpl) {
   assertFreeOnlyModel(getActiveFreeOnly(), "openrouter", opts.model);
+  assertModelValidated(opts.model, "security_scan", "openrouter");
   const apiUrl = opts.apiUrl ?? OPENROUTER_URL;
   const verdicts = new Array(groups.length);
   let totalCost = 0;
@@ -220984,8 +221126,8 @@ function computeCallCost(usage, pricing, fallbackInputBytes, fallbackOutputBytes
 }
 
 // src/free-rotation.ts
-import { mkdirSync as mkdirSync4, readFileSync as readFileSync7, renameSync, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join7 } from "node:path";
+import { mkdirSync as mkdirSync4, readFileSync as readFileSync8, renameSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join8 } from "node:path";
 var FREE_FLOOR_MIN_CONTEXT_TOKENS = 32e3;
 function filterFreeModels(freeModels, catalogById, benchmarkFailed = /* @__PURE__ */ new Set()) {
   return freeModels.filter((id) => {
@@ -221102,11 +221244,11 @@ var RELOAD_INTERVAL_MS = 5e3;
 var cache = null;
 var lastLoadMs = 0;
 function cooldownFilePath() {
-  return join7(getConfigDir(), "free-cooldowns.json");
+  return join8(getConfigDir(), "free-cooldowns.json");
 }
 function readStoreFromDisk() {
   try {
-    const raw = readFileSync7(cooldownFilePath(), "utf-8");
+    const raw = readFileSync8(cooldownFilePath(), "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && parsed.version === 1 && parsed.models && typeof parsed.models === "object") {
       return { version: 1, models: parsed.models };
@@ -221499,7 +221641,7 @@ function scoreTriage(modelId, cases, returned, thresholds = DEFAULT_TRIAGE_THRES
 var SECURITY_TRIAGE_CRITERIA2 = getToolDescriptor("security_scan").requirements;
 var INCUMBENT_FALLBACK_PRICING = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
 function cachePath() {
-  return join8(getConfigDir(), "security-triage-results.json");
+  return join9(getConfigDir(), "security-triage-results.json");
 }
 function cacheKey(modelId, date, datasetHash) {
   return `${modelId}::${date}::${datasetHash}`;
@@ -221508,7 +221650,7 @@ function loadCache() {
   const p = cachePath();
   if (!existsSync5(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync8(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync9(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
@@ -221599,7 +221741,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
   const apiKey = resolveApiKey(opts.apiKey);
   const datasetPath = opts.datasetPath ?? resolveDatasetPath();
   const cases = loadDataset(datasetPath);
-  const datasetHash = createHash2("sha1").update(readFileSync8(datasetPath, "utf-8")).digest("hex").slice(0, 12);
+  const datasetHash = createHash2("sha1").update(readFileSync9(datasetPath, "utf-8")).digest("hex").slice(0, 12);
   const thresholds = opts.thresholds ?? DEFAULT_TRIAGE_THRESHOLDS;
   const incumbentId = opts.incumbentModelId ?? DEFAULT_MODEL;
   const progress = opts.onProgress ?? (() => {
@@ -221678,6 +221820,8 @@ async function runSecurityTriageBenchmark(opts = {}) {
       `security_scan requires non-free model '${incumbentId}' \u2014 no ':free' model is available to benchmark under free_only`
     );
   }
+  assertModelsUnderPriceCap([...toAssess.values()].map((v) => v.model));
+  assertPaidBenchmarkAllowed([...toAssess.values()].map((v) => v.model));
   progress(`Assessing ${toAssess.size} model(s) over ${cases.length} cases\u2026`);
   const cache2 = loadCache();
   const assessments = [];
@@ -221769,11 +221913,11 @@ async function runSecurityTriageBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const mainRoot = resolveMainRoot(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join8(mainRoot, "reports", "security-triage-benchmark");
+  const reportDir = opts.outputDir ?? join9(mainRoot, "reports", "security-triage-benchmark");
   mkdirSync5(reportDir, { recursive: true });
   const stamp2 = reportStamp();
-  const jsonReportPath = join8(reportDir, `${stamp2}-security-triage-benchmark.json`);
-  const mdReportPath = join8(reportDir, `${stamp2}-security-triage-benchmark.md`);
+  const jsonReportPath = join9(reportDir, `${stamp2}-security-triage-benchmark.json`);
+  const mdReportPath = join9(reportDir, `${stamp2}-security-triage-benchmark.md`);
   const jsonPayload = {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     datasetPath,
@@ -221928,12 +222072,12 @@ function buildReportMarkdown(args) {
 
 // src/benchmark/search-existing/index.ts
 import { createHash as createHash3 } from "node:crypto";
-import { existsSync as existsSync9, mkdirSync as mkdirSync6, readFileSync as readFileSync10, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
-import { join as join11, resolve as resolve7 } from "node:path";
+import { existsSync as existsSync9, mkdirSync as mkdirSync6, readFileSync as readFileSync11, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join12, resolve as resolve7 } from "node:path";
 
 // src/benchmark/search-existing/dataset.ts
 import { existsSync as existsSync6, readdirSync as readdirSync3, statSync as statSync2 } from "node:fs";
-import { join as join9, resolve as resolve3 } from "node:path";
+import { join as join10, resolve as resolve3 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function resolveFixtureRoot() {
   const here = fileURLToPath2(new URL(".", import.meta.url));
@@ -221955,7 +222099,7 @@ function listFixtureFiles(root = resolveFixtureRoot()) {
   const out = [];
   const walk = (dir, rel) => {
     for (const entry of readdirSync3(dir, { withFileTypes: true })) {
-      const abs2 = join9(dir, entry.name);
+      const abs2 = join10(dir, entry.name);
       const relPath = rel ? `${rel}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
         walk(abs2, relPath);
@@ -222301,14 +222445,14 @@ import { resolve as resolve5 } from "node:path";
 
 // src/scan-pipeline.ts
 import {
-  readFileSync as readFileSync9,
+  readFileSync as readFileSync10,
   existsSync as existsSync7,
   statSync as statSync4,
   lstatSync,
   readdirSync as readdirSync4,
   realpathSync as realpathSync2
 } from "node:fs";
-import { extname as extname2, join as join10, basename as basename2, dirname as dirname3, resolve as resolve4, sep } from "node:path";
+import { extname as extname2, join as join11, basename as basename2, dirname as dirname3, resolve as resolve4, sep } from "node:path";
 import { homedir as homedir2 } from "node:os";
 import { spawnSync } from "node:child_process";
 var BREVITY_RULES = "\nOUTPUT RULES:\n- Be SUCCINCT. Use bullet points, not paragraphs.\n- Skip preamble, filler, and restating the task.\n- Only report findings, not things that are correct.\n- For code reviews: skip files/areas with no issues \u2014 only mention what needs attention.\n- Maximum 3 sentences per finding. Lead with the problem, not the context.";
@@ -222391,7 +222535,7 @@ function detectLang(filePath) {
   const ext = extname2(filePath).toLowerCase();
   if (EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
   try {
-    const head = readFileSync9(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
+    const head = readFileSync10(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
     const shebang = head.match(/^#!\s*(?:\/usr\/bin\/env\s+)?(\S+)/);
     if (shebang) {
       const bin = basename2(shebang[1]);
@@ -222469,7 +222613,7 @@ function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexReda
       `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
     );
   }
-  const raw = readFileSync9(safePath);
+  const raw = readFileSync10(safePath);
   if (raw.length > limit) {
     throw new Error(
       `File too large after read (${(raw.length / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
@@ -222617,7 +222761,7 @@ function scanFilesForSecrets(filePaths) {
   for (const fp of filePaths) {
     if (!existsSync7(fp)) continue;
     try {
-      const content = readFileSync9(fp, "utf-8");
+      const content = readFileSync10(fp, "utf-8");
       const scan = scanForSecrets(content);
       if (scan.found) {
         for (const d of scan.details) {
@@ -222707,7 +222851,7 @@ function resolvePrompt(instructions, instructionsFilesPaths) {
     const paths = Array.isArray(instructionsFilesPaths) ? instructionsFilesPaths : [instructionsFilesPaths];
     for (const fp of paths) {
       assertFileExists(fp);
-      const content = readFileSync9(fp, "utf-8");
+      const content = readFileSync10(fp, "utf-8");
       prompt = prompt ? `${prompt}
 
 ${content}` : content;
@@ -222929,7 +223073,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
     if (trackedResult.status === 0 && trackedResult.stdout) {
       for (const relPath of trackedResult.stdout.split("\n")) {
         if (!relPath.trim()) continue;
-        allFiles.add(join10(dirPath, relPath));
+        allFiles.add(join11(dirPath, relPath));
       }
     }
     const untrackedResult = spawnSync(
@@ -222940,7 +223084,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
     if (untrackedResult.status === 0 && untrackedResult.stdout) {
       for (const relPath of untrackedResult.stdout.split("\n")) {
         if (!relPath.trim()) continue;
-        allFiles.add(join10(dirPath, relPath));
+        allFiles.add(join11(dirPath, relPath));
       }
     }
   }
@@ -222957,8 +223101,8 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
         if (!entry.isDirectory()) continue;
         if (entry.name === ".git" || entry.name === "node_modules") continue;
         if (entry.name.startsWith(".")) continue;
-        const subDir = join10(dir, entry.name);
-        const gitDir = join10(subDir, ".git");
+        const subDir = join11(dir, entry.name);
+        const gitDir = join11(subDir, ".git");
         const gitStat = lstatSyncRetry(gitDir);
         const gitDirIsDir = gitStat ? gitStat.isDirectory() : false;
         if (gitDirIsDir) {
@@ -222985,7 +223129,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
       if (nestedResult.status === 0 && nestedResult.stdout) {
         for (const relPath of nestedResult.stdout.split("\n")) {
           if (!relPath.trim()) continue;
-          allFiles.add(join10(nestedRoot, relPath));
+          allFiles.add(join11(nestedRoot, relPath));
         }
       }
     }
@@ -223040,7 +223184,7 @@ function walkDir(dirPath, options) {
     }
     for (const entry of entries) {
       if (results.length >= maxFiles) return;
-      const fullPath = join10(dir, entry.name);
+      const fullPath = join11(dir, entry.name);
       if (entry.isSymbolicLink()) {
         if (!followSymlinks) continue;
         try {
@@ -223896,7 +224040,7 @@ function describeWorkload2() {
 }
 var INCUMBENT_FALLBACK_PRICING2 = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
 function cachePath2() {
-  return join11(getConfigDir(), "search-existing-results.json");
+  return join12(getConfigDir(), "search-existing-results.json");
 }
 function cacheKey2(modelId, date, datasetHash) {
   return `${modelId}::${date}::${datasetHash}`;
@@ -223905,7 +224049,7 @@ function loadCache2() {
   const p = cachePath2();
   if (!existsSync9(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync10(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync11(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
@@ -224048,6 +224192,8 @@ async function runSearchExistingBenchmark(opts = {}) {
       );
     }
   }
+  assertModelsUnderPriceCap([...toAssess.values()].map((v) => v.model));
+  assertPaidBenchmarkAllowed([...toAssess.values()].map((v) => v.model));
   progress(`Assessing ${toAssess.size} model(s) over ${cases.length} cases\u2026`);
   const cache2 = loadCache2();
   const assessments = [];
@@ -224135,11 +224281,11 @@ async function runSearchExistingBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const mainRoot = resolveMainRoot2(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join11(mainRoot, "reports", "search-existing-benchmark");
+  const reportDir = opts.outputDir ?? join12(mainRoot, "reports", "search-existing-benchmark");
   mkdirSync6(reportDir, { recursive: true });
   const stamp2 = reportStamp2();
-  const jsonReportPath = join11(reportDir, `${stamp2}-search-existing-benchmark.json`);
-  const reportPath = join11(reportDir, `${stamp2}-search-existing-benchmark.md`);
+  const jsonReportPath = join12(reportDir, `${stamp2}-search-existing-benchmark.json`);
+  const reportPath = join12(reportDir, `${stamp2}-search-existing-benchmark.md`);
   const jsonPayload = {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     datasetHash,
@@ -224269,13 +224415,13 @@ function buildReportMarkdown2(args) {
 
 // src/benchmark/code-task/index.ts
 import { createHash as createHash4 } from "node:crypto";
-import { existsSync as existsSync11, mkdirSync as mkdirSync7, readFileSync as readFileSync12, renameSync as renameSync4, writeFileSync as writeFileSync6 } from "node:fs";
-import { join as join13 } from "node:path";
+import { existsSync as existsSync11, mkdirSync as mkdirSync7, readFileSync as readFileSync13, renameSync as renameSync4, writeFileSync as writeFileSync6 } from "node:fs";
+import { join as join14 } from "node:path";
 
 // src/benchmark/code-task/dataset.ts
 var import_typescript2 = __toESM(require_typescript(), 1);
-import { existsSync as existsSync10, readFileSync as readFileSync11, statSync as statSync6 } from "node:fs";
-import { dirname as dirname4, join as join12, resolve as resolve8 } from "node:path";
+import { existsSync as existsSync10, readFileSync as readFileSync12, statSync as statSync6 } from "node:fs";
+import { dirname as dirname4, join as join13, resolve as resolve8 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 var CODE_AUDIT_INSTRUCTIONS = [
   "Audit this file for GENUINE DEFECTS \u2014 bugs that cause incorrect behavior, data loss,",
@@ -224315,9 +224461,9 @@ function resolveFixtureRoot2() {
 function resolveDatasetPath2() {
   const here = dirname4(fileURLToPath3(import.meta.url));
   const candidates = [
-    join12(here, "dataset.jsonl"),
-    join12(here, "..", "src", "benchmark", "code-task", "dataset.jsonl"),
-    join12(here, "..", "..", "src", "benchmark", "code-task", "dataset.jsonl")
+    join13(here, "dataset.jsonl"),
+    join13(here, "..", "src", "benchmark", "code-task", "dataset.jsonl"),
+    join13(here, "..", "..", "src", "benchmark", "code-task", "dataset.jsonl")
   ];
   for (const c of candidates) {
     if (existsSync10(c)) return c;
@@ -224352,13 +224498,13 @@ function listTopLevelSymbols(source, filename = "fixture.ts") {
   return [...new Set(names)].filter((n) => n.length >= MIN_SYMBOL_LENGTH).sort();
 }
 function readFixture(c, root = resolveFixtureRoot2()) {
-  return readFileSync11(join12(root, c.file), "utf-8");
+  return readFileSync12(join13(root, c.file), "utf-8");
 }
 function fixturePath(c, root = resolveFixtureRoot2()) {
-  return join12(root, c.file);
+  return join13(root, c.file);
 }
 function loadDataset2(path = resolveDatasetPath2()) {
-  const raw = readFileSync11(path, "utf-8");
+  const raw = readFileSync12(path, "utf-8");
   const cases = [];
   const seenIds = /* @__PURE__ */ new Set();
   const lines = raw.split("\n");
@@ -224436,11 +224582,11 @@ function validateDataset(cases = loadDataset2(), root = resolveFixtureRoot2()) {
   let cleanCases = 0;
   let distractors = 0;
   for (const c of cases) {
-    const abs2 = join12(root, c.file);
+    const abs2 = join13(root, c.file);
     if (!existsSync10(abs2)) {
       throw new Error(`case ${c.id}: fixture file missing on disk: ${c.file}`);
     }
-    const bytes = readFileSync11(abs2);
+    const bytes = readFileSync12(abs2);
     if (bytes.includes(0)) {
       throw new Error(
         `case ${c.id}: fixture ${c.file} contains a NUL byte \u2014 readFileAsCodeBlock treats it as binary and REFUSES to read it, so the case could never be scored.`
@@ -225126,7 +225272,7 @@ function selectCodeTaskModel(input) {
 // src/benchmark/code-task/index.ts
 var INCUMBENT_FALLBACK_PRICING3 = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
 function cachePath3() {
-  return join13(getConfigDir(), "code-task-results.json");
+  return join14(getConfigDir(), "code-task-results.json");
 }
 function cacheKey3(modelId, date, datasetHash) {
   return `${modelId}::${date}::${datasetHash}`;
@@ -225135,7 +225281,7 @@ function loadCache3() {
   const p = cachePath3();
   if (!existsSync11(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync12(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync13(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
@@ -225275,6 +225421,8 @@ async function runCodeAuditBenchmark(opts = {}) {
       );
     }
   }
+  assertModelsUnderPriceCap([...toAssess.values()].map((v) => v.model));
+  assertPaidBenchmarkAllowed([...toAssess.values()].map((v) => v.model));
   progress(`Assessing ${toAssess.size} model(s) over ${cases.length} cases\u2026`);
   const cache2 = loadCache3();
   const assessments = [];
@@ -225361,11 +225509,11 @@ async function runCodeAuditBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const mainRoot = resolveProjectMainRoot(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join13(mainRoot, "reports", "code-task-benchmark");
+  const reportDir = opts.outputDir ?? join14(mainRoot, "reports", "code-task-benchmark");
   mkdirSync7(reportDir, { recursive: true });
   const stamp2 = reportStamp3();
-  const jsonReportPath = join13(reportDir, `${stamp2}-code-task-benchmark.json`);
-  const reportPath = join13(reportDir, `${stamp2}-code-task-benchmark.md`);
+  const jsonReportPath = join14(reportDir, `${stamp2}-code-task-benchmark.json`);
+  const reportPath = join14(reportDir, `${stamp2}-code-task-benchmark.md`);
   const jsonPayload = {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     datasetHash,
@@ -225529,13 +225677,13 @@ ${codeBlock}`;
 }
 
 // src/benchmark/scan-folder/index.ts
-import { existsSync as existsSync14, mkdirSync as mkdirSync8, readFileSync as readFileSync15, renameSync as renameSync5, writeFileSync as writeFileSync7 } from "node:fs";
-import { join as join15 } from "node:path";
+import { existsSync as existsSync14, mkdirSync as mkdirSync8, readFileSync as readFileSync16, renameSync as renameSync5, writeFileSync as writeFileSync7 } from "node:fs";
+import { join as join16 } from "node:path";
 
 // src/benchmark/scan-folder/dataset.ts
 import { createHash as createHash5 } from "node:crypto";
-import { existsSync as existsSync12, readFileSync as readFileSync13, readdirSync as readdirSync5, statSync as statSync7 } from "node:fs";
-import { join as join14, resolve as resolve9 } from "node:path";
+import { existsSync as existsSync12, readFileSync as readFileSync14, readdirSync as readdirSync5, statSync as statSync7 } from "node:fs";
+import { join as join15, resolve as resolve9 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function buildInstructions(criterion) {
   return [
@@ -225628,13 +225776,13 @@ function resolveFixtureRoot3() {
   );
 }
 function fixtureScanRoot(root = resolveFixtureRoot3()) {
-  return join14(root, "src");
+  return join15(root, "src");
 }
 function listFixtureFiles2(root = resolveFixtureRoot3()) {
   const out = [];
   const walk = (dir, rel) => {
     for (const entry of readdirSync5(dir, { withFileTypes: true })) {
-      const abs2 = join14(dir, entry.name);
+      const abs2 = join15(dir, entry.name);
       const relPath = rel ? `${rel}/${entry.name}` : entry.name;
       if (entry.isDirectory()) walk(abs2, relPath);
       else if (entry.isFile()) out.push(relPath);
@@ -225647,18 +225795,18 @@ function scannedFilesFor(c, root = resolveFixtureRoot3()) {
   return listFixtureFiles2(root).filter((f) => c.extensions.some((e) => f.endsWith(e)));
 }
 function fixtureAbsPath(rel, root = resolveFixtureRoot3()) {
-  return join14(root, rel);
+  return join15(root, rel);
 }
 function deriveMatchingFiles(c, root = resolveFixtureRoot3()) {
   const re = new RegExp(c.truthRegexSource);
-  return scannedFilesFor(c, root).filter((rel) => re.test(readFileSync13(fixtureAbsPath(rel, root), "utf-8"))).sort();
+  return scannedFilesFor(c, root).filter((rel) => re.test(readFileSync14(fixtureAbsPath(rel, root), "utf-8"))).sort();
 }
 function datasetFingerprint(root = resolveFixtureRoot3()) {
   const h = createHash5("sha1");
   h.update(JSON.stringify(SCAN_FOLDER_CASES));
   for (const rel of listFixtureFiles2(root)) {
     h.update(rel);
-    h.update(readFileSync13(fixtureAbsPath(rel, root)));
+    h.update(readFileSync14(fixtureAbsPath(rel, root)));
   }
   return h.digest("hex").slice(0, 12);
 }
@@ -225668,7 +225816,7 @@ function validateDataset2(cases = SCAN_FOLDER_CASES, root = resolveFixtureRoot3(
     throw new Error(`scan-folder corpus is empty at ${fixtureScanRoot(root)}`);
   }
   for (const rel of files) {
-    const bytes = readFileSync13(fixtureAbsPath(rel, root));
+    const bytes = readFileSync14(fixtureAbsPath(rel, root));
     if (bytes.includes(0)) {
       throw new Error(
         `fixture ${rel} contains a NUL byte \u2014 readFileAsCodeBlock treats it as binary and REFUSES to read it, so no model could ever be scored on it.`
@@ -225721,7 +225869,7 @@ import { resolve as resolve10 } from "node:path";
 
 // src/scan-folder/core.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { existsSync as existsSync13, statSync as statSync8, readFileSync as readFileSync14 } from "node:fs";
+import { existsSync as existsSync13, statSync as statSync8, readFileSync as readFileSync15 } from "node:fs";
 
 // src/rate-limiter.ts
 var AdaptiveRateLimiter = class {
@@ -226016,7 +226164,7 @@ async function runScanFolder(args, deps) {
   if (sfMode === 2 && succeeded.length > 0) {
     const sections = [];
     for (const r of succeeded) {
-      const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync14(r.reportPath, "utf-8") : "";
+      const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync15(r.reportPath, "utf-8") : "";
       sections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -226056,7 +226204,7 @@ ${content}`);
       for (const fp of fg.files) {
         const r = pathToResult.get(fp);
         if (!r) continue;
-        const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync14(r.reportPath, "utf-8") : "";
+        const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync15(r.reportPath, "utf-8") : "";
         sections.push(`## File: ${fp}
 
 ${content}`);
@@ -226360,7 +226508,7 @@ function selectScanFolderModel(input) {
 // src/benchmark/scan-folder/index.ts
 var INCUMBENT_FALLBACK_PRICING4 = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
 function cachePath4() {
-  return join15(getConfigDir(), "scan-folder-results.json");
+  return join16(getConfigDir(), "scan-folder-results.json");
 }
 function cacheKey4(modelId, date, datasetHash) {
   return `${modelId}::${date}::${datasetHash}`;
@@ -226369,7 +226517,7 @@ function loadCache4() {
   const p = cachePath4();
   if (!existsSync14(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync15(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync16(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
@@ -226539,6 +226687,8 @@ async function runScanFolderBenchmark(opts = {}) {
       );
     }
   }
+  assertModelsUnderPriceCap([...toAssess.values()].map((v) => v.model));
+  assertPaidBenchmarkAllowed([...toAssess.values()].map((v) => v.model));
   progress(`Assessing ${toAssess.size} model(s) over ${fileDecisions} file decisions\u2026`);
   const cache2 = loadCache4();
   const assessments = [];
@@ -226625,11 +226775,11 @@ async function runScanFolderBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const mainRoot = resolveProjectMainRoot(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join15(mainRoot, "reports", "scan-folder-benchmark");
+  const reportDir = opts.outputDir ?? join16(mainRoot, "reports", "scan-folder-benchmark");
   mkdirSync8(reportDir, { recursive: true });
   const stamp2 = reportStamp4();
-  const jsonReportPath = join15(reportDir, `${stamp2}-scan-folder-benchmark.json`);
-  const reportPath = join15(reportDir, `${stamp2}-scan-folder-benchmark.md`);
+  const jsonReportPath = join16(reportDir, `${stamp2}-scan-folder-benchmark.json`);
+  const reportPath = join16(reportDir, `${stamp2}-scan-folder-benchmark.md`);
   const jsonPayload = {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     datasetHash,
@@ -226778,8 +226928,8 @@ function buildReportMarkdown4(args) {
 }
 
 // src/benchmark/check-specs/index.ts
-import { existsSync as existsSync17, mkdirSync as mkdirSync9, readFileSync as readFileSync17, renameSync as renameSync6, writeFileSync as writeFileSync8 } from "node:fs";
-import { join as join17 } from "node:path";
+import { existsSync as existsSync17, mkdirSync as mkdirSync9, readFileSync as readFileSync18, renameSync as renameSync6, writeFileSync as writeFileSync8 } from "node:fs";
+import { join as join18 } from "node:path";
 
 // src/check-specs/core.ts
 import { existsSync as existsSync15 } from "node:fs";
@@ -227004,8 +227154,8 @@ ${csResp.content}${csFooter}`
 
 // src/benchmark/check-specs/dataset.ts
 import { createHash as createHash6 } from "node:crypto";
-import { existsSync as existsSync16, readFileSync as readFileSync16, readdirSync as readdirSync6, statSync as statSync9 } from "node:fs";
-import { join as join16, resolve as resolve11 } from "node:path";
+import { existsSync as existsSync16, readFileSync as readFileSync17, readdirSync as readdirSync6, statSync as statSync9 } from "node:fs";
+import { join as join17, resolve as resolve11 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 var CHECK_SPECS_INSTRUCTIONS = [
   "You are auditing exactly ONE source file against the specification above.",
@@ -227192,10 +227342,10 @@ function resolveFixtureRoot4() {
   );
 }
 function specPath(root = resolveFixtureRoot4()) {
-  return join16(root, "spec", "TESTING.md");
+  return join17(root, "spec", "TESTING.md");
 }
 function fixtureAbsPath2(rel, root = resolveFixtureRoot4()) {
-  return join16(root, rel);
+  return join17(root, rel);
 }
 function fixtureFilePaths(fixtures = CHECK_SPECS_FIXTURES, root = resolveFixtureRoot4()) {
   return fixtures.map((f) => resolve11(fixtureAbsPath2(f.file, root)));
@@ -227209,23 +227359,23 @@ function listFixtureFiles3(root = resolveFixtureRoot4()) {
   const out = [];
   const walk = (dir, rel) => {
     for (const entry of readdirSync6(dir, { withFileTypes: true })) {
-      const abs2 = join16(dir, entry.name);
+      const abs2 = join17(dir, entry.name);
       const relPath = `${rel}/${entry.name}`;
       if (entry.isDirectory()) walk(abs2, relPath);
       else if (entry.isFile()) out.push(relPath);
     }
   };
-  walk(join16(root, "src"), "src");
+  walk(join17(root, "src"), "src");
   return out.sort();
 }
 function datasetFingerprint2(root = resolveFixtureRoot4()) {
   const h = createHash6("sha1");
   h.update(JSON.stringify(CHECK_SPECS_FIXTURES));
   h.update(CHECK_SPECS_INSTRUCTIONS);
-  h.update(readFileSync16(specPath(root)));
+  h.update(readFileSync17(specPath(root)));
   for (const rel of listFixtureFiles3(root)) {
     h.update(rel);
-    h.update(readFileSync16(fixtureAbsPath2(rel, root)));
+    h.update(readFileSync17(fixtureAbsPath2(rel, root)));
   }
   return h.digest("hex").slice(0, 12);
 }
@@ -227234,7 +227384,7 @@ function validateDataset3(fixtures = CHECK_SPECS_FIXTURES, root = resolveFixture
   if (!existsSync16(spec)) {
     throw new Error(`check-specs spec file missing: ${spec}`);
   }
-  if (readFileSync16(spec, "utf-8").trim().length === 0) {
+  if (readFileSync17(spec, "utf-8").trim().length === 0) {
     throw new Error(`check-specs spec file is empty: ${spec}`);
   }
   if (fixtures.length === 0) throw new Error("check-specs corpus is empty");
@@ -227248,7 +227398,7 @@ function validateDataset3(fixtures = CHECK_SPECS_FIXTURES, root = resolveFixture
     if (!existsSync16(abs2)) {
       throw new Error(`fixture ${f.file} is listed in the dataset but missing on disk (${abs2})`);
     }
-    const bytes = readFileSync16(abs2);
+    const bytes = readFileSync17(abs2);
     if (bytes.includes(0)) {
       throw new Error(
         `fixture ${f.file} contains a NUL byte \u2014 readFileAsCodeBlock treats it as binary and REFUSES to read it, so no model could ever be scored on it.`
@@ -227560,7 +227710,7 @@ var INCUMBENT_FALLBACK_PRICING5 = KNOWN_PRICING[DEFAULT_MODEL] ?? {
   context_window: 32768
 };
 function cachePath5() {
-  return join17(getConfigDir(), "check-specs-results.json");
+  return join18(getConfigDir(), "check-specs-results.json");
 }
 function cacheKey5(modelId, date, datasetHash) {
   return `${modelId}::${date}::${datasetHash}`;
@@ -227569,7 +227719,7 @@ function loadCache5() {
   const p = cachePath5();
   if (!existsSync17(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync17(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync18(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
@@ -227751,6 +227901,8 @@ async function runCheckSpecsBenchmark(opts = {}) {
       );
     }
   }
+  assertModelsUnderPriceCap([...toAssess.values()].map((v) => v.model));
+  assertPaidBenchmarkAllowed([...toAssess.values()].map((v) => v.model));
   progress(`Assessing ${toAssess.size} model(s) over ${fixtures.length} file decisions\u2026`);
   const cache2 = loadCache5();
   const assessments = [];
@@ -227844,11 +227996,11 @@ async function runCheckSpecsBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const mainRoot = resolveProjectMainRoot(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join17(mainRoot, "reports", "check-specs-benchmark");
+  const reportDir = opts.outputDir ?? join18(mainRoot, "reports", "check-specs-benchmark");
   mkdirSync9(reportDir, { recursive: true });
   const stamp2 = reportStamp5();
-  const jsonReportPath = join17(reportDir, `${stamp2}-check-specs-benchmark.json`);
-  const reportPath = join17(reportDir, `${stamp2}-check-specs-benchmark.md`);
+  const jsonReportPath = join18(reportDir, `${stamp2}-check-specs-benchmark.json`);
+  const reportPath = join18(reportDir, `${stamp2}-check-specs-benchmark.md`);
   const jsonPayload = {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     datasetHash,
@@ -228542,7 +228694,7 @@ ${r.ensemble.picks.map((p, i) => `${i + 1}. \`${p}\``).join("\n")}` : "")
   return L.join("\n") + "\n";
 }
 function writeReport(r, opts) {
-  const path = join18(opts.mainRoot, "reports", "update-all", `${stamp()}-update-all.md`);
+  const path = join19(opts.mainRoot, "reports", "update-all", `${stamp()}-update-all.md`);
   mkdirSync10(dirname5(path), { recursive: true });
   writeFileSync9(path, renderUpdateAllReport(r, opts), "utf-8");
   return path;
@@ -228903,8 +229055,8 @@ function renderAssessmentText(a) {
 }
 
 // src/model-qualification/drift.ts
-import { mkdirSync as mkdirSync11, readFileSync as readFileSync18, renameSync as renameSync7, writeFileSync as writeFileSync10 } from "node:fs";
-import { join as join19 } from "node:path";
+import { mkdirSync as mkdirSync11, readFileSync as readFileSync19, renameSync as renameSync7, writeFileSync as writeFileSync10 } from "node:fs";
+import { join as join20 } from "node:path";
 function perMillion(s) {
   if (s == null) return null;
   const n = parseFloat(s);
@@ -229041,11 +229193,11 @@ function computeModelHealth(configured, catalog, baseline, opts = {}) {
   return { findings, updatedBaseline };
 }
 function getBaselinePath() {
-  return join19(getConfigDir(), "model-baseline.json");
+  return join20(getConfigDir(), "model-baseline.json");
 }
 function loadBaseline(path = getBaselinePath()) {
   try {
-    const raw = readFileSync18(path, "utf-8");
+    const raw = readFileSync19(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed;
@@ -229133,9 +229285,9 @@ function renderModelHealthMarkdown(report) {
 async function runCheckModelHealth(opts = {}) {
   const profile = opts.profile ?? resolveActiveProfile();
   const report = await checkModelHealth(profile, opts);
-  const dir = opts.outputDir ?? join19(resolveProjectMainRoot(), "reports", "model-health");
+  const dir = opts.outputDir ?? join20(resolveProjectMainRoot(), "reports", "model-health");
   mkdirSync11(dir, { recursive: true });
-  const reportPath = join19(dir, `${compactStamp()}-model-health-${profile.name}.md`);
+  const reportPath = join20(dir, `${compactStamp()}-model-health-${profile.name}.md`);
   writeFileSync10(reportPath, renderModelHealthMarkdown(report));
   return { report, reportPath };
 }
@@ -229157,8 +229309,8 @@ function renderModelHealthText(report) {
 }
 
 // src/model-qualification/new-arrivals.ts
-import { mkdirSync as mkdirSync12, readFileSync as readFileSync19, renameSync as renameSync8, writeFileSync as writeFileSync11 } from "node:fs";
-import { join as join20 } from "node:path";
+import { mkdirSync as mkdirSync12, readFileSync as readFileSync20, renameSync as renameSync8, writeFileSync as writeFileSync11 } from "node:fs";
+import { join as join21 } from "node:path";
 function createdToIso(created) {
   if (created === null || !Number.isFinite(created) || created <= 0) return null;
   return new Date(created * 1e3).toISOString();
@@ -229200,11 +229352,11 @@ function diffNewArrivals(catalog, snapshot) {
   };
 }
 function getCatalogSnapshotPath() {
-  return join20(getConfigDir(), "catalog-snapshot.json");
+  return join21(getConfigDir(), "catalog-snapshot.json");
 }
 function loadSnapshot(path = getCatalogSnapshotPath()) {
   try {
-    const raw = readFileSync19(path, "utf-8");
+    const raw = readFileSync20(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const obj = parsed;
@@ -229316,9 +229468,9 @@ function renderNewArrivalsText(report) {
 }
 async function runDiscoverNewArrivals(opts = {}) {
   const report = await discoverNewArrivals(opts);
-  const dir = opts.outputDir ?? join20(resolveProjectMainRoot(), "reports", "model-arrivals");
+  const dir = opts.outputDir ?? join21(resolveProjectMainRoot(), "reports", "model-arrivals");
   mkdirSync12(dir, { recursive: true });
-  const reportPath = join20(dir, `${compactStamp()}-new-arrivals.md`);
+  const reportPath = join21(dir, `${compactStamp()}-new-arrivals.md`);
   writeFileSync11(reportPath, renderNewArrivalsMarkdown(report));
   return { report, reportPath };
 }
@@ -229329,6 +229481,7 @@ function parseArgs(argv) {
   const opts = {
     includeIds: [],
     dryRun: false,
+    allowPaidModelsTests: false,
     reportPath: null,
     jsonPath: null,
     reasoningEffort: void 0,
@@ -229442,6 +229595,8 @@ function parseArgs(argv) {
       }
       opts.minMeanF1 = f;
       i++;
+    } else if (a === "--allow-paid-models-tests") {
+      opts.allowPaidModelsTests = true;
     } else if (a === "--security-triage") {
       opts.securityTriage = true;
     } else if (a === "--search-existing") {
@@ -229530,6 +229685,10 @@ function printHelp() {
       "  --include ID      Add a model ID that bypasses the cost filter (repeatable).",
       "                    Use this to benchmark the current production ensemble.",
       "  --dry-run | -n    Print the resolved roster and exit; no API calls made.",
+      "  --allow-paid-models-tests",
+      "                    Opt-in to benchmarking PAID (non-free) models. Without it,",
+      "                    a paid candidate refuses the run ($0 spent). Paid models are",
+      "                    also hard-capped at $1.25/1M on input AND output.",
       "  --report PATH     Write the markdown report to PATH (default: auto-timestamped).",
       "  --json PATH       Write the machine-readable JSON sidecar to PATH.",
       "                    Always also written to ~/.llm-externalizer/benchmark-results.json.",
@@ -229749,12 +229908,12 @@ function resolveApiKey6() {
 function resolveFixturesDir() {
   const here = dirname6(fileURLToPath6(import.meta.url));
   const candidates = [
-    join21(here, "fixtures"),
-    join21(here, "..", "src", "benchmark", "fixtures"),
-    join21(here, "..", "..", "src", "benchmark", "fixtures")
+    join22(here, "fixtures"),
+    join22(here, "..", "src", "benchmark", "fixtures"),
+    join22(here, "..", "..", "src", "benchmark", "fixtures")
   ];
   for (const c of candidates) {
-    if (existsSync18(join21(c, "file-01.ts"))) return c;
+    if (existsSync18(join22(c, "file-01.ts"))) return c;
   }
   throw new Error(`Could not locate benchmark fixtures. Tried:
   ${candidates.join("\n  ")}`);
@@ -229803,7 +229962,7 @@ function preflight(opts) {
   }
 }
 function benchmarkCachePath() {
-  return join21(getConfigDir(), "benchmark-results.json");
+  return join22(getConfigDir(), "benchmark-results.json");
 }
 function refuseUnsafeUpdateAll(opts) {
   if (!opts.updateAll || opts.updateMode === "free") return null;
@@ -229820,6 +229979,7 @@ function refuseUnsafeUpdateAll(opts) {
 }
 async function main() {
   const opts = parseArgs(process.argv);
+  setPaidBenchmarksAllowed(opts.allowPaidModelsTests);
   validateCombinations(opts);
   const refusal = refuseUnsafeUpdateAll(opts);
   if (refusal !== null) return refusal;
@@ -229998,6 +230158,8 @@ async function runKeywordSweep(opts, fetchImpl) {
     ...candidates.map((m) => ({ model: m, isBaseline: false })),
     ...baselines.map((m) => ({ model: m, isBaseline: true }))
   ];
+  assertModelsUnderPriceCap(roster.map((r) => r.model));
+  assertPaidBenchmarkAllowed(roster.map((r) => r.model));
   const results = /* @__PURE__ */ new Map();
   for (const { model, isBaseline } of roster) {
     console.error(`[benchmark] Running ${model.id} \u2026`);
@@ -230375,7 +230537,7 @@ async function runAutoReplacePhase(opts) {
   });
   const ensemble = planEnsembleRotation();
   const fullReport = reportMarkdown + "\n" + renderEnsembleRotationSection(ensemble);
-  const reportPath = join21(resolveProjectMainRoot(), "reports", "auto-replace", `${compactStamp()}-auto-replace.md`);
+  const reportPath = join22(resolveProjectMainRoot(), "reports", "auto-replace", `${compactStamp()}-auto-replace.md`);
   mkdirSync13(dirname6(reportPath), { recursive: true });
   writeFileSync12(reportPath, fullReport, "utf-8");
   console.error("");
@@ -230638,7 +230800,7 @@ function buildReportPath() {
   const offsetAbs = Math.abs(offsetMin);
   const tz = `${offsetSign}${pad(Math.floor(offsetAbs / 60))}${pad(offsetAbs % 60)}`;
   const ts3 = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${tz}`;
-  return join21(root, "reports", "benchmark", `${ts3}-model-comparison.md`);
+  return join22(root, "reports", "benchmark", `${ts3}-model-comparison.md`);
 }
 withUsageContext(
   { tool: "cli:benchmark", params: "" },

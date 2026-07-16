@@ -8,6 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { setValidationBypassForTests } from "../benchmark/validated.js";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -109,12 +110,15 @@ let tmp: string;
 let histPrevCfg: string | undefined;
 let histTmp: string;
 beforeEach(() => {
+  // Judge plumbing tests with a MOCKED fetch — bypass the IRON RULE gate.
+  setValidationBypassForTests(true);
   tmp = mkdtempSync(join(tmpdir(), "secscan-"));
   histPrevCfg = process.env.LLM_EXT_CONFIG_DIR;
   histTmp = mkdtempSync(join("/tmp", "secscan-hist-"));
   process.env.LLM_EXT_CONFIG_DIR = histTmp;
 });
 afterEach(() => {
+  setValidationBypassForTests(false);
   rmSync(tmp, { recursive: true, force: true });
   if (histPrevCfg === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
   else process.env.LLM_EXT_CONFIG_DIR = histPrevCfg;

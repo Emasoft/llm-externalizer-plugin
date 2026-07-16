@@ -72,6 +72,7 @@ import {
   rotationJournalSince,
   withFreeRotation,
 } from "../free-rotation";
+import { assertModelValidated } from "../benchmark/validated.js";
 import { resolveProjectMainRoot } from "../project-root";
 
 // ── Public types ───────────────────────────────────────────────────────
@@ -1151,6 +1152,9 @@ async function runProposeFieldset(
   // Airtight free_only cost-safety (TRDD-97ef8b63). propose-fieldset makes its own
   // OpenRouter call; under free_only a non-':free' model throws BEFORE the request.
   assertFreeOnlyModel(getActiveFreeOnly(), "openrouter", model);
+  // IRON RULE (TRDD-8b6b3646): a PAID propose-fieldset model must be validated
+  // (mass_scout is rank 0 — any pass validates), else refuse. Exempt for ':free'.
+  assertModelValidated(model, "mass_scout", "openrouter");
   const apiUrl = "https://openrouter.ai/api/v1/chat/completions";
 
   // Read sample files (if any) so the LLM can see actual content.

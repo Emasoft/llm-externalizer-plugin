@@ -9,6 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { setValidationBypassForTests } from "../benchmark/validated.js";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,9 +44,11 @@ const NOT_THREAT = JSON.stringify({
 
 let tmp: string;
 beforeEach(() => {
+  setValidationBypassForTests(true); // plumbing test, mocked fetch — gate not under test
   tmp = mkdtempSync(join(tmpdir(), "secscan-wire-"));
 });
 afterEach(() => {
+  setValidationBypassForTests(false);
   rmSync(tmp, { recursive: true, force: true });
 });
 
