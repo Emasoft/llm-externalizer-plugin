@@ -46,7 +46,9 @@ import {
   approvedFreePoolFromSettings,
   callWithFreeRotation,
   classifyUnavailable,
+  logRotation,
 } from "../free-rotation.js";
+import { resolveEnsembleModelLimits } from "../ensemble-limits.js";
 import {
   VALID_REASONING_EFFORTS,
   type ReasoningEffortSetting,
@@ -886,19 +888,32 @@ async function completeOnFreePool(
 ): Promise<StreamingResult> {
   const pool = approvedFreePoolFromSettings().filter((id) => id !== options.model);
   const ids = pool.length > 0 ? pool : [freeModelId];
-  const candidates = ids.map((id) => ({ id, maxOutput: options.maxTokens ?? 8192 }));
+  // Per-model output ceilings, and CLAMP the request to them. The failing call
+  // was sized for a PAID model (maxTokens can be 65K); many free models cap
+  // completions far lower, and a max_tokens above the cap is a 400 — a
+  // NON-availability error, so rotation would rethrow it and the command would
+  // die with an approved pool sitting right there. Clamp DOWN only (Math.min),
+  // never up, so the caller's own budget still bounds every fallback.
+  const candidates = ids.map((id) => ({
+    id,
+    maxOutput: resolveEnsembleModelLimits(id, undefined).maxOutput,
+  }));
   return callWithFreeRotation<StreamingResult>(
     candidates[0],
     candidates.slice(1),
-    (model) => chatCompletionSimple(messages, { ...options, model }, deps),
+    (model, maxOutput) =>
+      chatCompletionSimple(
+        messages,
+        {
+          ...options,
+          model,
+          maxTokens: Math.min(options.maxTokens ?? maxOutput, maxOutput),
+        },
+        deps,
+      ),
     {
       resultFailureDetail: (r) => (r.finishReason === "error" ? r.content : null),
-      onRotate: (from, _to, detail) =>
-        process.stderr.write(
-          `[llm-externalizer] Free model ${from} unavailable (${detail
-            .split("\n")[0]
-            .slice(0, 100)}) — rotating.\n`,
-        ),
+      onRotate: (from, to, detail) => logRotation(from, to, detail),
     },
   );
 }

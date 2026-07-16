@@ -933,11 +933,23 @@ async function main(): Promise<void> {
 
   // Assess the model situation BEFORE any WORK command (the user's "always assess
   // first" rule, on the CLI surface). Throttled ≤1×/hr, shared with the MCP via
-  // one state file, and fully fail-open. Skipped for the pure meta commands
-  // (model-info / profile are read-only status). Commands that spawn the server
-  // reconcile there too, but the throttle makes the second pass a no-op.
-  const RECONCILE_SKIP_CLI = new Set(["model-info", "profile"]);
-  if (!RECONCILE_SKIP_CLI.has(args[0])) {
+  // one state file, and fully fail-open. An ALLOW-list of the work commands, not
+  // a deny-list of the meta ones: a deny-list ran the reconcile — a catalog
+  // fetch, a possible settings.yaml write, and a background benchmark spawn —
+  // for a TYPO'D command before "Unknown command" printed, and silently opted
+  // every future meta command in unless someone remembered to list it. Commands
+  // that spawn the server reconcile there too; the throttle dedups the pass.
+  const RECONCILE_WORK_CLI = new Set([
+    "search-existing",
+    "search-existing-implementations",
+    "mass-scout",
+    "security-scan",
+    "cluster-synonyms",
+    "cluster_synonyms",
+    "high-quality-scan",
+    "high_quality_scan",
+  ]);
+  if (RECONCILE_WORK_CLI.has(args[0])) {
     await reconcileModelsBeforeWork(makeCliReconcileDeps());
   }
 

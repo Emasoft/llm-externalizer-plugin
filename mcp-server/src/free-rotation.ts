@@ -194,15 +194,22 @@ export function classifyUnavailable(detail: string): UnavailableKind | null {
   // Daily-quota phrasing FIRST: these strings also contain "429"/"rate limit",
   // and treating a spent daily quota as a 30s transient would send us straight
   // back into the same wall, over and over, until midnight UTC.
+  //
+  // Only phrasings that POSITIVELY name a per-day window belong here. Bare
+  // "quota" / "limit exceeded" / "exceeded your" must NOT: providers use those
+  // for minute-scale limits too ("quota exceeded, retry in 60s") and even for
+  // per-request token caps, and a daily-quota verdict is now PERSISTED to
+  // free-cooldowns.json until 00:00 UTC — a misread would sideline a healthy
+  // model in every process for up to 24h. Those bare phrases still classify as
+  // unavailable (transient, below), so rotation behavior is unchanged; only the
+  // cooldown horizon is kept honest.
   if (
     s.includes("free-models-per-day") ||
     s.includes("per-day") ||
     s.includes("per day") ||
     s.includes("daily limit") ||
     s.includes("daily quota") ||
-    s.includes("quota") ||
-    s.includes("limit exceeded") ||
-    s.includes("exceeded your")
+    s.includes("daily rate limit")
   ) {
     return "daily-quota";
   }
@@ -223,6 +230,12 @@ export function classifyUnavailable(detail: string): UnavailableKind | null {
     s.includes("rate_limit") ||
     s.includes("ratelimit") ||
     s.includes("too many requests") ||
+    // Ambiguous quota phrasings land here (short backoff), not in daily-quota —
+    // see the comment above. Rotation still fires; the model just isn't
+    // sidelined until midnight on a guess.
+    s.includes("quota") ||
+    s.includes("limit exceeded") ||
+    s.includes("exceeded your") ||
     s.includes("502") ||
     s.includes("503") ||
     s.includes("overloaded") ||
@@ -700,6 +713,20 @@ function engageFreeAfterCreditExhaustion(reason: string): void {
   else setActiveFreeOnly(true);
 }
 
+/**
+ * The ONE stderr line for "a free model was rotated away from". Every rotation
+ * site (the FetchImpl decorator here, the completion layer's 402 fallback, and
+ * index.ts's ensemble/single-call wrappers) logs through this, so the format —
+ * and the truncation — can never drift between the four of them again.
+ */
+export function logRotation(from: string, to: string, detail: string): void {
+  process.stderr.write(
+    `[llm-externalizer] Free model ${from} unavailable (${detail
+      .split("\n")[0]
+      .slice(0, 120)}) — rotating to ${to}.\n`,
+  );
+}
+
 export interface FetchRotationHooks {
   /** The approved free pool, in preference order. Defaults to settings on disk. */
   pool?: () => string[];
@@ -785,9 +812,11 @@ function orderedFreeAttempts(
  *     no path here that ever sends a paid model under free mode.
  *
  * Inert (pass-through) in the safe cases: a paid call that DIDN'T 402; a body with
- * no model (catalog/pricing GETs); a free-mode request whose model isn't ':free';
- * and a non-availability failure (400/bad-key/schema), which is handed back as-is
- * so a real defect is never masked by rotating the whole pool.
+ * no model (catalog/pricing GETs); and a non-availability failure
+ * (400/bad-key/schema), which is handed back as-is so a real defect is never
+ * masked by rotating the whole pool. A free-mode request pinning a PAID model is
+ * NOT passed through — it is served from the free pool, because the only way it
+ * occurs is a mid-job auto-free engage (see the branch comment below).
  */
 export function withFreeRotation(
   inner: RotatingFetchImpl,
@@ -806,14 +835,7 @@ export function withFreeRotation(
     const now = hooks.now ?? Date.now;
     const store = hooks.store ?? persistentRotationStore;
     const onCreditExhausted = hooks.onCreditExhausted ?? engageFreeAfterCreditExhaustion;
-    const onRotate =
-      hooks.onRotate ??
-      ((from: string, to: string, detail: string) =>
-        process.stderr.write(
-          `[llm-externalizer] Free model ${from} unavailable (${detail
-            .split("\n")[0]
-            .slice(0, 100)}) — rotating to ${to}.\n`,
-        ));
+    const onRotate = hooks.onRotate ?? logRotation;
 
     let parsed: Record<string, unknown>;
     try {
@@ -854,9 +876,32 @@ export function withFreeRotation(
       return out.ok ? out : replayResponse(false, 402, body);
     }
 
-    // ── FREE mode: rotate only a request that pins a ':free' model.
-    if (typeof requested !== "string" || !isFreeSuffixModelId(requested)) {
-      return inner(url, init); // no model / non-':free' (catalog GET) → pass through
+    // ── FREE mode.
+    if (typeof requested !== "string" || requested.length === 0) {
+      return inner(url, init); // no model in the body (catalog/pricing GET) → pass through
+    }
+    if (!isFreeSuffixModelId(requested)) {
+      // A PAID model pinned in a completion body while free mode is active. The
+      // only way here is a MID-JOB auto-free engage: the job-start chokepoints
+      // (assertFreeOnlyModel in judge.ts/scout.ts) run once per job and would have
+      // thrown on a paid model under free_only-from-boot — but they do NOT re-run
+      // per request, and the model is baked into every request body. Passing this
+      // through would just 402 again (or violate free mode), so every call AFTER
+      // the one that hit the 402 would exhaust its retry ladder and fail-safe —
+      // the switch must cover the REST of the job, not only the in-flight call.
+      // Serve it from the approved free pool instead (still strictly paid→free).
+      const pool = poolOf();
+      if (pool.length === 0) return inner(url, init); // no pool — degrade to old behavior
+      return rotateOverFreeIds(
+        inner,
+        url,
+        init,
+        parsed,
+        orderedFreeAttempts(pool, store, now),
+        store,
+        now,
+        onRotate,
+      );
     }
     // Candidates: the requested model first, then the rest of the approved pool
     // (cooling ones deferred but never dropped). If the requested model is itself

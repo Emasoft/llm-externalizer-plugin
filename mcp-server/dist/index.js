@@ -254912,13 +254912,16 @@ var TRANSIENT_CAP_MS = 3e5;
 var GONE_MS = 36e5;
 function classifyUnavailable(detail) {
   const s = (detail || "").toLowerCase();
-  if (s.includes("free-models-per-day") || s.includes("per-day") || s.includes("per day") || s.includes("daily limit") || s.includes("daily quota") || s.includes("quota") || s.includes("limit exceeded") || s.includes("exceeded your")) {
+  if (s.includes("free-models-per-day") || s.includes("per-day") || s.includes("per day") || s.includes("daily limit") || s.includes("daily quota") || s.includes("daily rate limit")) {
     return "daily-quota";
   }
   if (s.includes("no endpoints") || s.includes("no allowed providers") || s.includes("not found") || s.includes("404")) {
     return "gone";
   }
-  if (s.includes("429") || s.includes("rate limit") || s.includes("rate-limit") || s.includes("rate_limit") || s.includes("ratelimit") || s.includes("too many requests") || s.includes("502") || s.includes("503") || s.includes("overloaded") || s.includes("temporarily unavailable")) {
+  if (s.includes("429") || s.includes("rate limit") || s.includes("rate-limit") || s.includes("rate_limit") || s.includes("ratelimit") || s.includes("too many requests") || // Ambiguous quota phrasings land here (short backoff), not in daily-quota —
+  // see the comment above. Rotation still fires; the model just isn't
+  // sidelined until midnight on a guess.
+  s.includes("quota") || s.includes("limit exceeded") || s.includes("exceeded your") || s.includes("502") || s.includes("503") || s.includes("overloaded") || s.includes("temporarily unavailable")) {
     return "transient";
   }
   return null;
@@ -255144,6 +255147,12 @@ function engageFreeAfterCreditExhaustion(reason) {
   if (autoFreeEngageHook) autoFreeEngageHook(reason);
   else setActiveFreeOnly(true);
 }
+function logRotation(from, to, detail) {
+  process.stderr.write(
+    `[llm-externalizer] Free model ${from} unavailable (${detail.split("\n")[0].slice(0, 120)}) \u2014 rotating to ${to}.
+`
+  );
+}
 async function rotateOverFreeIds(inner, url2, init, parsed, attemptOrder, store, now, onRotate) {
   let last = null;
   for (const model of attemptOrder) {
@@ -255179,10 +255188,7 @@ function withFreeRotation(inner, hooks = {}) {
     const now = hooks.now ?? Date.now;
     const store = hooks.store ?? persistentRotationStore;
     const onCreditExhausted = hooks.onCreditExhausted ?? engageFreeAfterCreditExhaustion;
-    const onRotate = hooks.onRotate ?? ((from, to, detail) => process.stderr.write(
-      `[llm-externalizer] Free model ${from} unavailable (${detail.split("\n")[0].slice(0, 100)}) \u2014 rotating to ${to}.
-`
-    ));
+    const onRotate = hooks.onRotate ?? logRotation;
     let parsed;
     try {
       parsed = JSON.parse(init.body);
@@ -255215,8 +255221,22 @@ function withFreeRotation(inner, hooks = {}) {
       );
       return out.ok ? out : replayResponse(false, 402, body);
     }
-    if (typeof requested !== "string" || !isFreeSuffixModelId(requested)) {
+    if (typeof requested !== "string" || requested.length === 0) {
       return inner(url2, init);
+    }
+    if (!isFreeSuffixModelId(requested)) {
+      const pool = poolOf();
+      if (pool.length === 0) return inner(url2, init);
+      return rotateOverFreeIds(
+        inner,
+        url2,
+        init,
+        parsed,
+        orderedFreeAttempts(pool, store, now),
+        store,
+        now,
+        onRotate
+      );
     }
     const rest = orderedFreeAttempts(
       poolOf().filter((id) => id !== requested),
@@ -267518,6 +267538,27 @@ async function resolveConnection(options, deps) {
   };
 }
 
+// src/ensemble-limits.ts
+var KNOWN_MODEL_LIMITS = {
+  "x-ai/grok-4.1-fast": { maxOutput: 3e4, maxInputLines: 2e4 },
+  "google/gemini-2.5-flash": { maxOutput: 65535, maxInputLines: 5e4 },
+  // Qwen 3.6 Plus: 1M context, 65K max output.
+  "qwen/qwen3.6-plus": { maxOutput: 65535, maxInputLines: 4e4 },
+  // Nemotron 3 Super: 262K context, free on OpenRouter. Conservative 40K-line
+  // input cap to avoid quality degradation on very long contexts.
+  "nvidia/nemotron-3-super-120b-a12b:free": { maxOutput: 65535, maxInputLines: 4e4 }
+};
+var DEFAULT_MODEL_LIMITS = { maxOutput: 32e3, maxInputLines: 3e4 };
+var MIN_PLAUSIBLE_MAX_OUTPUT = 1024;
+function resolveEnsembleModelLimits(id, catalogMaxOutput, known = KNOWN_MODEL_LIMITS, fallback = DEFAULT_MODEL_LIMITS) {
+  const knownEntry = known[id];
+  const maxInputLines = knownEntry?.maxInputLines ?? fallback.maxInputLines;
+  const calibrated = knownEntry?.maxOutput ?? fallback.maxOutput;
+  const liveMaxOutput = typeof catalogMaxOutput === "number" && Number.isFinite(catalogMaxOutput) && catalogMaxOutput >= MIN_PLAUSIBLE_MAX_OUTPUT ? Math.floor(catalogMaxOutput) : void 0;
+  const maxOutput = liveMaxOutput !== void 0 ? Math.min(liveMaxOutput, calibrated) : calibrated;
+  return { maxOutput, maxInputLines };
+}
+
 // src/provider/types.ts
 var VALID_REASONING_EFFORTS = ["off", "xhigh", "high", "medium", "low"];
 
@@ -267968,17 +268009,25 @@ var EMPTY_RESPONSE_RETRY_DELAY_MS = 2e3;
 async function completeOnFreePool(messages, options, deps, freeModelId) {
   const pool = approvedFreePoolFromSettings().filter((id) => id !== options.model);
   const ids = pool.length > 0 ? pool : [freeModelId];
-  const candidates = ids.map((id) => ({ id, maxOutput: options.maxTokens ?? 8192 }));
+  const candidates = ids.map((id) => ({
+    id,
+    maxOutput: resolveEnsembleModelLimits(id, void 0).maxOutput
+  }));
   return callWithFreeRotation(
     candidates[0],
     candidates.slice(1),
-    (model) => chatCompletionSimple(messages, { ...options, model }, deps),
+    (model, maxOutput) => chatCompletionSimple(
+      messages,
+      {
+        ...options,
+        model,
+        maxTokens: Math.min(options.maxTokens ?? maxOutput, maxOutput)
+      },
+      deps
+    ),
     {
       resultFailureDetail: (r) => r.finishReason === "error" ? r.content : null,
-      onRotate: (from, _to, detail) => process.stderr.write(
-        `[llm-externalizer] Free model ${from} unavailable (${detail.split("\n")[0].slice(0, 100)}) \u2014 rotating.
-`
-      )
+      onRotate: (from, to, detail) => logRotation(from, to, detail)
     }
   );
 }
@@ -268269,27 +268318,6 @@ function installUsageRule(opts = {}) {
     return { status: "error", dest, detail: `write failed: ${e.message}` };
   }
   return { status: existed ? "updated" : "installed", dest };
-}
-
-// src/ensemble-limits.ts
-var KNOWN_MODEL_LIMITS = {
-  "x-ai/grok-4.1-fast": { maxOutput: 3e4, maxInputLines: 2e4 },
-  "google/gemini-2.5-flash": { maxOutput: 65535, maxInputLines: 5e4 },
-  // Qwen 3.6 Plus: 1M context, 65K max output.
-  "qwen/qwen3.6-plus": { maxOutput: 65535, maxInputLines: 4e4 },
-  // Nemotron 3 Super: 262K context, free on OpenRouter. Conservative 40K-line
-  // input cap to avoid quality degradation on very long contexts.
-  "nvidia/nemotron-3-super-120b-a12b:free": { maxOutput: 65535, maxInputLines: 4e4 }
-};
-var DEFAULT_MODEL_LIMITS = { maxOutput: 32e3, maxInputLines: 3e4 };
-var MIN_PLAUSIBLE_MAX_OUTPUT = 1024;
-function resolveEnsembleModelLimits(id, catalogMaxOutput, known = KNOWN_MODEL_LIMITS, fallback = DEFAULT_MODEL_LIMITS) {
-  const knownEntry = known[id];
-  const maxInputLines = knownEntry?.maxInputLines ?? fallback.maxInputLines;
-  const calibrated = knownEntry?.maxOutput ?? fallback.maxOutput;
-  const liveMaxOutput = typeof catalogMaxOutput === "number" && Number.isFinite(catalogMaxOutput) && catalogMaxOutput >= MIN_PLAUSIBLE_MAX_OUTPUT ? Math.floor(catalogMaxOutput) : void 0;
-  const maxOutput = liveMaxOutput !== void 0 ? Math.min(liveMaxOutput, calibrated) : calibrated;
-  return { maxOutput, maxInputLines };
 }
 
 // src/model-reconcile.ts
@@ -269891,7 +269919,7 @@ function isFreeModeActive() {
 }
 function buildFreeRotationPool(fileLineCount, exclude = /* @__PURE__ */ new Set()) {
   if (!activeResolved || getCurrentBackend().type !== "openrouter") return [];
-  const pool = activeResolved.freeOnly ? activeResolved.freeModels : autoFreePool;
+  const pool = activeResolved.freeOnly ? activeResolved.freeModels : autoFreePool.length > 0 ? autoFreePool : resolveAutoFreePool(activeResolved.freeModels);
   const catalogById = new Map(openRouterModelCache.map((cm) => [cm.id, cm]));
   const out = [];
   for (const id of filterFreeModels(pool, catalogById, benchmarkFailedModels())) {
@@ -269907,7 +269935,17 @@ function buildFreeRotationPool(fileLineCount, exclude = /* @__PURE__ */ new Set(
   }
   return out;
 }
-var RECONCILE_SKIP_TOOLS = /* @__PURE__ */ new Set(["discover", "reset", "get_settings"]);
+var RECONCILE_SKIP_TOOLS = /* @__PURE__ */ new Set([
+  "discover",
+  "reset",
+  "get_settings",
+  "or_model_info",
+  "or_model_info_json",
+  "or_model_info_table",
+  "assess_model",
+  "check_model_health",
+  "discover_new_models"
+]);
 async function runModelReconcile() {
   await reconcileModelsBeforeWork({
     now: () => Date.now(),
@@ -269987,10 +270025,7 @@ async function callSingleWithFreeRotation(primary, fallbacks, messages, options)
     ),
     {
       resultFailureDetail: (r) => r.finishReason === "error" ? r.content : null,
-      onRotate: (from, _to, detail) => process.stderr.write(
-        `[llm-externalizer] Free model ${from} unavailable (${detail.split("\n")[0].slice(0, 120)}) \u2014 rotating to the next approved free model.
-`
-      )
+      onRotate: logRotation
     }
   );
 }
@@ -270012,10 +270047,7 @@ async function chatCompletionJSONWithFreeRotation(messages, options) {
       providerDeps
     ),
     {
-      onRotate: (from, _to, detail) => process.stderr.write(
-        `[llm-externalizer] Free model ${from} unavailable (${detail.split("\n")[0].slice(0, 120)}) \u2014 rotating to the next approved free model.
-`
-      )
+      onRotate: logRotation
     }
   );
 }
@@ -270268,10 +270300,7 @@ async function callEnsembleSlotWithRotation(primary, fallbacks, claimFallback, c
           hooks.onAttempt?.(id);
         },
         resultFailureDetail: (r) => r.finishReason === "error" ? r.content : null,
-        onRotate: hooks.onRotate ?? ((from, _to, detail) => process.stderr.write(
-          `[llm-externalizer] Free model ${from} unavailable (${detail.split("\n")[0].slice(0, 120)}) \u2014 rotating to the next approved free model.
-`
-        ))
+        onRotate: hooks.onRotate ?? logRotation
       },
       claimFallback
     );
@@ -270288,7 +270317,7 @@ async function callEnsembleSlotWithRotation(primary, fallbacks, claimFallback, c
       return { model: last, content: `ERROR: ${err3.message}`, usage: void 0, truncated: false, error: true };
     }
     const msg = err3 instanceof Error ? err3.message : String(err3);
-    return { model: primary.id, content: `ERROR: ${msg}`, usage: void 0, truncated: false, error: true };
+    return { model: attempted, content: `ERROR: ${msg}`, usage: void 0, truncated: false, error: true };
   }
 }
 function getEnsembleModels() {

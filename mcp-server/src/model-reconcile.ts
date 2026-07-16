@@ -33,7 +33,7 @@ import {
   resolveProfile,
 } from "./config.js";
 import { isFreeSuffixModelId } from "./benchmark/free-mode.js";
-import { filterFreeModels } from "./free-rotation.js";
+import { filterFreeModels, type FreeModelCatalogEntry } from "./free-rotation.js";
 import { fetchProgrammingModels } from "./benchmark/discover.js";
 import { applyFreePoolToSettings } from "./benchmark/pick.js";
 import { benchmarkFailedModels } from "./benchmark/security-triage/index.js";
@@ -386,6 +386,26 @@ export async function reconcileModelsBeforeWork(
   return { outcome: "ran", reason: null, verdict };
 }
 
+// ── Shared catalog mapping ──────────────────────────────────────────────
+
+/**
+ * Map a fetched catalog to the reconcile's `fetchCatalog` result shape — the
+ * id-set plus the requirements-qualified ':free' arrivals. ONE copy, used by
+ * BOTH surfaces (index.ts's runModelReconcile and makeCliReconcileDeps below):
+ * they fetch through different clients (the MCP's cached fetchOpenRouterModels
+ * vs the CLI's fetchProgrammingModels), but the QUALIFICATION rules must be the
+ * same list, or the two surfaces silently reconcile different free classes.
+ */
+export function catalogForReconcile(
+  cat: ReadonlyArray<{ id: string } & FreeModelCatalogEntry>,
+): { ids: Set<string>; freeQualified: string[] } {
+  const ids = new Set(cat.map((m) => m.id));
+  const catalogById = new Map(cat.map((m) => [m.id, m]));
+  const freeIds = cat.map((m) => m.id).filter(isFreeSuffixModelId);
+  const freeQualified = filterFreeModels(freeIds, catalogById, benchmarkFailedModels());
+  return { ids, freeQualified };
+}
+
 // ── CLI-side deps factory ───────────────────────────────────────────────
 //
 // The MCP server builds its own deps inline (it also updates in-memory state).
@@ -402,14 +422,8 @@ export function makeCliReconcileDeps(): ReconcileDeps {
     env: process.env,
     readLastRunMs: readLastReconcileMs,
     writeLastRunMs: writeLastReconcileMs,
-    fetchCatalog: async () => {
-      const cat = await fetchProgrammingModels(); // no category = the full catalog
-      const ids = new Set(cat.map((m) => m.id));
-      const catalogById = new Map(cat.map((m) => [m.id, m]));
-      const freeIds = cat.map((m) => m.id).filter(isFreeSuffixModelId);
-      const freeQualified = filterFreeModels(freeIds, catalogById, benchmarkFailedModels());
-      return { ids, freeQualified };
-    },
+    // fetchProgrammingModels with no category = the full catalog.
+    fetchCatalog: async () => catalogForReconcile(await fetchProgrammingModels()),
     getConfigured: (): ReconcileConfigured | null => {
       const s = loadSettings();
       const active = s?.profiles[s.active];

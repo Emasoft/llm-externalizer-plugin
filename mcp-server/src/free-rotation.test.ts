@@ -44,6 +44,14 @@ describe("classifyUnavailable — decides WHETHER to rotate and for HOW LONG", (
     expect(classifyUnavailable("Daily limit reached for this model")).toBe("daily-quota");
   });
 
+  it("classifies bare 'quota'/'limit exceeded' phrasings as TRANSIENT — a minute-scale limit must not sideline a model until UTC midnight", () => {
+    // These verdicts are PERSISTED to free-cooldowns.json now; a daily-quota
+    // misread would demote a healthy model in every process for up to 24h.
+    expect(classifyUnavailable("RESOURCE_EXHAUSTED: quota exceeded, retry in 60s")).toBe("transient");
+    expect(classifyUnavailable("output token limit exceeded for this request")).toBe("transient");
+    expect(classifyUnavailable("you have exceeded your requests-per-minute allowance")).toBe("transient");
+  });
+
   it("classifies a plain 429 / overload as transient", () => {
     expect(classifyUnavailable("HTTP 429: too many requests")).toBe("transient");
     expect(classifyUnavailable("503 overloaded")).toBe("transient");
@@ -318,6 +326,22 @@ describe("withFreeRotation — the FetchImpl decorator (security_scan / mass_sco
     const wrapped = withFreeRotation(inner, hooks());
     await wrapped("u", { method: "POST", headers: {}, body: JSON.stringify({ q: 1 }) });
     expect(JSON.parse(bodySeen)).toEqual({ q: 1 });
+  });
+
+  it("serves a PAID model pinned under FREE mode from the free pool — the mid-job credit switch must cover the REST of the job, not only the 402'd call", async () => {
+    // After a mid-job engageAutoFree, every remaining scout/judge request still
+    // carries the paid model baked into its body (the job-start chokepoint does
+    // not re-run per request). Passing those through would 402 each one and
+    // fail-safe the rest of the job — so they must be rewritten to the pool.
+    const seen: string[] = [];
+    const inner = async (_u: string, init: { body: string }) => {
+      seen.push(JSON.parse(init.body).model as string);
+      return res(200, JSON.stringify({ choices: [{ message: { content: "ok" } }] }));
+    };
+    const wrapped = withFreeRotation(inner, hooks());
+    const r = await wrapped("u", req("paid/model"));
+    expect(r.ok).toBe(true);
+    expect(seen).toEqual(["a:free"]); // never sent the paid model under free mode
   });
 
   it("rewrites the body's model and re-sends when the requested free model is rate-limited", async () => {

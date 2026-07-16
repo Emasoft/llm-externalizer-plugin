@@ -199,6 +199,7 @@ import {
   classifyUnavailable,
   filterFreeModels,
   getCooldownStore,
+  logRotation,
   orderByAvailability,
   registerAutoFreeEngage,
   selectFreeEnsembleModels,
@@ -1708,10 +1709,18 @@ function buildFreeRotationPool(
   exclude: ReadonlySet<string> = new Set(),
 ): Array<RotationCandidate & { maxInputLines: number }> {
   if (!activeResolved || getCurrentBackend().type !== "openrouter") return [];
-  // free_only pins its own pool; every other profile draws on autoFreePool,
-  // which is resolved at profile-load time (the profile's free_models, else the
-  // bundled FREE_POOL_SEED) and is therefore always populated.
-  const pool = activeResolved.freeOnly ? activeResolved.freeModels : autoFreePool;
+  // free_only pins its own pool. Every other profile draws on autoFreePool — but
+  // that is populated only when engageAutoFree() fires, NOT at profile load. The
+  // lazy resolveAutoFreePool fallback covers the funded-profile call sites that
+  // reach here WITHOUT auto-free engaged — the ':free' modelOverride path (an
+  // explicit `free: true` call on a funded profile) — which would otherwise get
+  // an empty pool and zero rotation fallbacks, re-creating the exact "one pinned
+  // model's daily cap is a hard failure" bug the override rotation exists to fix.
+  const pool = activeResolved.freeOnly
+    ? activeResolved.freeModels
+    : autoFreePool.length > 0
+      ? autoFreePool
+      : resolveAutoFreePool(activeResolved.freeModels);
   const catalogById = new Map(openRouterModelCache.map((cm) => [cm.id, cm]));
   const out: Array<RotationCandidate & { maxInputLines: number }> = [];
   for (const id of filterFreeModels(pool, catalogById, benchmarkFailedModels())) {
@@ -1740,9 +1749,28 @@ function buildFreeRotationPool(
 // via a shared state file, so at most one catalog fetch per hour regardless of
 // how many tools are called. Never throws into the tool (the shell swallows all).
 
-/** Tools that do NOT send LLM requests — pure status/meta. They skip reconcile so
- *  a `discover`/`reset`/`get_settings` stays instant (no catalog fetch). */
-const RECONCILE_SKIP_TOOLS = new Set(["discover", "reset", "get_settings"]);
+/** Tools that do NOT send LLM requests — pure status/meta and the assessment
+ *  machinery itself. They skip reconcile so:
+ *   • `discover`/`reset`/`get_settings` stay instant (no catalog fetch);
+ *   • the `or_model_info*` lookups match the CLI surface, whose `model-info`
+ *     twin is explicitly skipped — a read-only query must not first rewrite
+ *     settings and spawn a background benchmark;
+ *   • `assess_model`/`check_model_health`/`discover_new_models` report on the
+ *     config AS THE USER HAS IT — reconcile rewriting free_models one moment
+ *     before a health check would make the report describe a config the user
+ *     never saw (and they ARE the assessment layer; reconciling before them is
+ *     the same circularity that keeps benchmark/index.ts main() unwired). */
+const RECONCILE_SKIP_TOOLS = new Set([
+  "discover",
+  "reset",
+  "get_settings",
+  "or_model_info",
+  "or_model_info_json",
+  "or_model_info_table",
+  "assess_model",
+  "check_model_health",
+  "discover_new_models",
+]);
 
 async function runModelReconcile(): Promise<void> {
   await reconcileModelsBeforeWork({
@@ -1844,10 +1872,7 @@ async function callSingleWithFreeRotation(
       ),
     {
       resultFailureDetail: (r) => (r.finishReason === "error" ? r.content : null),
-      onRotate: (from, _to, detail) =>
-        process.stderr.write(
-          `[llm-externalizer] Free model ${from} unavailable (${detail.split("\n")[0].slice(0, 120)}) — rotating to the next approved free model.\n`,
-        ),
+      onRotate: logRotation,
     },
   );
 }
@@ -1879,10 +1904,7 @@ async function chatCompletionJSONWithFreeRotation(
         providerDeps,
       ),
     {
-      onRotate: (from, _to, detail) =>
-        process.stderr.write(
-          `[llm-externalizer] Free model ${from} unavailable (${detail.split("\n")[0].slice(0, 120)}) — rotating to the next approved free model.\n`,
-        ),
+      onRotate: logRotation,
     },
   );
 }
@@ -2321,12 +2343,7 @@ export async function callEnsembleSlotWithRotation(
           hooks.onAttempt?.(id);
         },
         resultFailureDetail: (r) => (r.finishReason === "error" ? r.content : null),
-        onRotate:
-          hooks.onRotate ??
-          ((from, _to, detail) =>
-            process.stderr.write(
-              `[llm-externalizer] Free model ${from} unavailable (${detail.split("\n")[0].slice(0, 120)}) — rotating to the next approved free model.\n`,
-            )),
+        onRotate: hooks.onRotate ?? logRotation,
       },
       claimFallback,
     );
@@ -2345,7 +2362,10 @@ export async function callEnsembleSlotWithRotation(
       return { model: last, content: `ERROR: ${err.message}`, usage: undefined, truncated: false, error: true };
     }
     const msg = err instanceof Error ? err.message : String(err);
-    return { model: primary.id, content: `ERROR: ${msg}`, usage: undefined, truncated: false, error: true };
+    // `attempted`, not primary.id: a non-availability error is rethrown from
+    // whichever model was CURRENT — naming the primary would pin a fallback's
+    // 400 on a model that never produced it.
+    return { model: attempted, content: `ERROR: ${msg}`, usage: undefined, truncated: false, error: true };
   }
 }
 

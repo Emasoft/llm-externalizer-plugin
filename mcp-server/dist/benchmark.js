@@ -221019,13 +221019,16 @@ var TRANSIENT_CAP_MS = 3e5;
 var GONE_MS = 36e5;
 function classifyUnavailable(detail) {
   const s = (detail || "").toLowerCase();
-  if (s.includes("free-models-per-day") || s.includes("per-day") || s.includes("per day") || s.includes("daily limit") || s.includes("daily quota") || s.includes("quota") || s.includes("limit exceeded") || s.includes("exceeded your")) {
+  if (s.includes("free-models-per-day") || s.includes("per-day") || s.includes("per day") || s.includes("daily limit") || s.includes("daily quota") || s.includes("daily rate limit")) {
     return "daily-quota";
   }
   if (s.includes("no endpoints") || s.includes("no allowed providers") || s.includes("not found") || s.includes("404")) {
     return "gone";
   }
-  if (s.includes("429") || s.includes("rate limit") || s.includes("rate-limit") || s.includes("rate_limit") || s.includes("ratelimit") || s.includes("too many requests") || s.includes("502") || s.includes("503") || s.includes("overloaded") || s.includes("temporarily unavailable")) {
+  if (s.includes("429") || s.includes("rate limit") || s.includes("rate-limit") || s.includes("rate_limit") || s.includes("ratelimit") || s.includes("too many requests") || // Ambiguous quota phrasings land here (short backoff), not in daily-quota —
+  // see the comment above. Rotation still fires; the model just isn't
+  // sidelined until midnight on a guess.
+  s.includes("quota") || s.includes("limit exceeded") || s.includes("exceeded your") || s.includes("502") || s.includes("503") || s.includes("overloaded") || s.includes("temporarily unavailable")) {
     return "transient";
   }
   return null;
@@ -221165,6 +221168,12 @@ function engageFreeAfterCreditExhaustion(reason) {
   if (autoFreeEngageHook) autoFreeEngageHook(reason);
   else setActiveFreeOnly(true);
 }
+function logRotation(from, to, detail) {
+  process.stderr.write(
+    `[llm-externalizer] Free model ${from} unavailable (${detail.split("\n")[0].slice(0, 120)}) \u2014 rotating to ${to}.
+`
+  );
+}
 async function rotateOverFreeIds(inner, url, init, parsed, attemptOrder, store, now, onRotate) {
   let last = null;
   for (const model of attemptOrder) {
@@ -221200,10 +221209,7 @@ function withFreeRotation(inner, hooks = {}) {
     const now = hooks.now ?? Date.now;
     const store = hooks.store ?? persistentRotationStore;
     const onCreditExhausted = hooks.onCreditExhausted ?? engageFreeAfterCreditExhaustion;
-    const onRotate = hooks.onRotate ?? ((from, to, detail) => process.stderr.write(
-      `[llm-externalizer] Free model ${from} unavailable (${detail.split("\n")[0].slice(0, 100)}) \u2014 rotating to ${to}.
-`
-    ));
+    const onRotate = hooks.onRotate ?? logRotation;
     let parsed;
     try {
       parsed = JSON.parse(init.body);
@@ -221236,8 +221242,22 @@ function withFreeRotation(inner, hooks = {}) {
       );
       return out.ok ? out : replayResponse(false, 402, body);
     }
-    if (typeof requested !== "string" || !isFreeSuffixModelId(requested)) {
+    if (typeof requested !== "string" || requested.length === 0) {
       return inner(url, init);
+    }
+    if (!isFreeSuffixModelId(requested)) {
+      const pool = poolOf();
+      if (pool.length === 0) return inner(url, init);
+      return rotateOverFreeIds(
+        inner,
+        url,
+        init,
+        parsed,
+        orderedFreeAttempts(pool, store, now),
+        store,
+        now,
+        onRotate
+      );
     }
     const rest = orderedFreeAttempts(
       poolOf().filter((id) => id !== requested),
