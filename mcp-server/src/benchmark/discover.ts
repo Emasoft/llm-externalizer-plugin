@@ -96,6 +96,34 @@ export const DEFAULT_CRITERIA: ModelCriteria = {
   allowFree: false,
 };
 
+// ── Global benchmark price cap (USER directive, cost-safety) ──────────────
+//
+// A HARD ceiling on what any benchmark may spend PER MODEL, independent of the
+// per-tool `ModelCriteria` cost gates above. Those gates apply only to
+// AUTO-DISCOVERED candidates and can be as high as a tool wants; this cap also
+// binds EXPLICITLY-named models (`--code-task <id>`, `--include <id>`, an MCP
+// `models:[...]`), which bypass `qualify()` entirely. A model whose input OR
+// output price exceeds this is NEVER benchmarked — the run refuses before any
+// send. $1.25/M is the user's stated ceiling; it is deliberately a touch above
+// DEFAULT_CRITERIA's $1.0 auto-select cap so an explicit, slightly-pricier
+// choice is allowed, but a genuinely expensive model can never burn budget.
+export const MAX_BENCHMARK_PRICE_PER_M = 1.25;
+
+/** True when a model's input OR output price exceeds the global benchmark cap.
+ *  Pure + structural (no QualifiedModel dependency) so every candidate path —
+ *  discovered or explicit — can gate on it. `> cap` (not `>=`): $1.25 itself is
+ *  allowed, matching the user's "must be ≤ $1.25/1M". A non-finite price
+ *  (unknown / unpriced) is treated as OVER the cap: we never benchmark a paid
+ *  model whose cost we cannot bound. */
+export function overBenchmarkPriceCap(m: {
+  inputDollarsPerMillion: number;
+  outputDollarsPerMillion: number;
+}): boolean {
+  const { inputDollarsPerMillion: i, outputDollarsPerMillion: o } = m;
+  if (!Number.isFinite(i) || !Number.isFinite(o)) return true;
+  return i > MAX_BENCHMARK_PRICE_PER_M || o > MAX_BENCHMARK_PRICE_PER_M;
+}
+
 export interface QualifiedModel {
   id: string;
   name: string;
@@ -173,9 +201,46 @@ export function filterModels(
   const out: QualifiedModel[] = [];
   for (const m of models) {
     const q = qualify(m, criteria);
-    if (q) out.push(q);
+    // Global price-cap backstop on DISCOVERED candidates: even if a per-tool
+    // ModelCriteria set a cost gate above $1.25/M, no auto-discovered model over
+    // the global cap is ever benchmarked. Silent here (the user never named these
+    // — they were discovered); explicit ids get a fail-fast instead (see
+    // assertModelsUnderPriceCap). qualify() already dropped anything above the
+    // per-tool criteria caps, so this only bites when a criteria cap exceeds $1.25.
+    if (q && !overBenchmarkPriceCap(q)) out.push(q);
   }
   return out;
+}
+
+/** A model priced over the global benchmark cap, for the fail-fast message. */
+export interface OverCapModel {
+  id: string;
+  inputDollarsPerMillion: number;
+  outputDollarsPerMillion: number;
+}
+
+/**
+ * Fail-fast for EXPLICITLY-named benchmark candidates over the global price cap.
+ * The user typed these ids (`--code-task <id>`, `--include <id>`, an MCP
+ * `models:[...]`), so — unlike discovered candidates — they must NOT be silently
+ * dropped: refuse the whole run, naming each offender and its price, BEFORE any
+ * API call ($0 spent). Mirrors the `--bench-free-pool` non-$0 fail-fast. No-op
+ * when every id is within the cap.
+ */
+export function assertModelsUnderPriceCap(models: readonly OverCapModel[]): void {
+  const over = models.filter(overBenchmarkPriceCap);
+  if (over.length === 0) return;
+  const list = over
+    .map(
+      (m) =>
+        `${m.id} (in $${m.inputDollarsPerMillion.toFixed(3)}/M, out $${m.outputDollarsPerMillion.toFixed(3)}/M)`,
+    )
+    .join("; ");
+  throw new Error(
+    `benchmark price cap: refusing to benchmark model(s) priced over $${MAX_BENCHMARK_PRICE_PER_M}/1M ` +
+      `(input AND output must be ≤ $${MAX_BENCHMARK_PRICE_PER_M}/1M): ${list}. ` +
+      `No API call was made, $0 spent. Remove the over-cap id(s) or pick a cheaper model.`,
+  );
 }
 
 /**

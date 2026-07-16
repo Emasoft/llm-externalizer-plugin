@@ -24,6 +24,7 @@ import { buildGroundTruth, BENCHMARK_KEYWORDS } from "./ground-truth.js";
 import {
   DEFAULT_CRITERIA,
   buildBenchmarkRoster,
+  assertModelsUnderPriceCap,
   rankByQualityIndex,
   resolveFreePool,
   fetchProgrammingModels,
@@ -579,6 +580,12 @@ async function runKeywordSweep(
     ...candidates.map((m) => ({ model: m, isBaseline: false })),
     ...baselines.map((m) => ({ model: m, isBaseline: true })),
   ];
+
+  // Global price-cap fail-fast on the FULL roster before any send. Candidates
+  // were already dropped by filterModels; baselines (explicit --include) are the
+  // ones this catches — the user's cap now overrides the old "explicit includes
+  // are never capped" behaviour: an over-$1.25/1M include refuses the run, $0 spent.
+  assertModelsUnderPriceCap(roster.map((r) => r.model));
 
   const results = new Map<
     string,

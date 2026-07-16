@@ -157,6 +157,7 @@ export default defineConfig({
       // Model-discovery pure logic (filter/disqualify/qualify/roster) + run scorer
       // (scoreRun) — TRDD-828238b5 Part F wave 3. No network (fetchProgrammingModels excluded).
       'src/benchmark/discover.test.ts',
+      'src/benchmark/price-cap.test.ts',
       'src/benchmark/score.test.ts',
       // search-existing per-tool benchmark (TRDD-828238b5 A6) — fixture-backed
       // golden dataset + deterministic precision/recall scorer. No LLM, no network.

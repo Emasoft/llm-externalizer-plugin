@@ -25,6 +25,7 @@ import { join } from "node:path";
 
 import {
   buildBenchmarkRoster,
+  assertModelsUnderPriceCap,
   rankByQualityIndex,
   fetchProgrammingModels,
   qualify,
@@ -386,6 +387,10 @@ export async function runSecurityTriageBenchmark(
       `security_scan requires non-free model '${incumbentId}' — no ':free' model is available to benchmark under free_only`,
     );
   }
+
+  // Global price-cap fail-fast (explicit ids + incumbent; discovered already
+  // dropped by filterModels). Refuses before any send, $0 spent.
+  assertModelsUnderPriceCap([...toAssess.values()].map((v) => v.model));
 
   progress(`Assessing ${toAssess.size} model(s) over ${cases.length} cases…`);
 

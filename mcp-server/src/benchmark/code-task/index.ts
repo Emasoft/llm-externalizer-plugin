@@ -29,6 +29,7 @@ import {
   rankByQualityIndex,
   fetchProgrammingModels,
   qualify,
+  assertModelsUnderPriceCap,
   type OpenRouterModel,
   type QualifiedModel,
 } from "../discover.js";
@@ -323,6 +324,12 @@ export async function runCodeAuditBenchmark(
       );
     }
   }
+
+  // Global price-cap fail-fast on the FINAL candidate set (explicit ids +
+  // incumbent; discovered were already dropped by filterModels). Refuses BEFORE
+  // any send if any model exceeds $1.25/1M — $0 spent. This is the path the user
+  // actually hit (`--code-task <ids>`), so the cap binds here first.
+  assertModelsUnderPriceCap([...toAssess.values()].map((v) => v.model));
 
   progress(`Assessing ${toAssess.size} model(s) over ${cases.length} cases…`);
 

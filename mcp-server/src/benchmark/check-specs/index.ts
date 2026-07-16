@@ -24,6 +24,7 @@ import { join } from "node:path";
 
 import {
   buildBenchmarkRoster,
+  assertModelsUnderPriceCap,
   rankByQualityIndex,
   fetchProgrammingModels,
   qualify,
@@ -396,6 +397,10 @@ export async function runCheckSpecsBenchmark(
       );
     }
   }
+
+  // Global price-cap fail-fast (explicit ids + incumbent; discovered already
+  // dropped by filterModels). Refuses before any send, $0 spent.
+  assertModelsUnderPriceCap([...toAssess.values()].map((v) => v.model));
 
   progress(`Assessing ${toAssess.size} model(s) over ${fixtures.length} file decisions…`);
 
