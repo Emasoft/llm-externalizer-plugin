@@ -1052,8 +1052,26 @@ export async function chatCompletionWithRetry(
       return resp;
     }
 
-    // "length" — output hit max_tokens limit, real truncation. Don't retry.
-    if (resp.finishReason === "length") {
+    // "length" WITH CONTENT — the model wrote an answer and ran out of room.
+    // Real truncation: the partial output is useful and a retry would just
+    // truncate again at the same place. Don't retry.
+    //
+    // "length" with EMPTY content is a DIFFERENT failure and must NOT land here
+    // (TRDD-8b6b3646). It means the model burned its ENTIRE max_tokens budget on
+    // REASONING tokens and emitted zero content — a reasoning model does not
+    // self-limit (see the COST NOTE at the top of this file). Treating that as
+    // "truncation, don't retry" was a money bug with three compounding costs:
+    //   1. It billed a full reasoning budget and returned NOTHING to the user.
+    //   2. It marked the call recordServiceSuccess() — a call that produced zero
+    //      content was counted as healthy, so nothing anywhere flagged it.
+    //   3. Worst: it returned BEFORE the empty-response path below, whose
+    //      reasoning-downgrade ladder (xhigh→high→none, ~40 lines down) exists
+    //      to fix EXACTLY this. The cure was already written and this guard
+    //      clause made it unreachable. Every subsequent call re-paid the same
+    //      full-reasoning burn because the ladder never got to cache a downgrade.
+    // Falling through routes it to that ladder: retry with less reasoning until
+    // real content comes back.
+    if (resp.finishReason === "length" && resp.content.trim().length > 0) {
       recordServiceSuccess();
       resp.truncated = true;
       resp.content +=
@@ -1116,6 +1134,32 @@ export async function chatCompletionWithRetry(
       }
     }
 
+    // COST STOP for the length+empty case. The reasoning ladder needs at most two
+    // downgrades to reach "none"; if the model STILL returns length+empty with
+    // reasoning off, it cannot produce content in this budget for this prompt and
+    // every further attempt bills a full max_tokens burn for a guaranteed nothing.
+    // The generic empty budget is 15 retries — appropriate for a cold-start blank
+    // (those are cheap: no tokens generated), but ruinous here, where each attempt
+    // is a MAXED-OUT completion. Stop as soon as the cure has demonstrably failed.
+    if (
+      useEmptyBudget &&
+      resp.finishReason === "length" &&
+      options.model &&
+      MODEL_REASONING_CACHE.get(options.model) === "none"
+    ) {
+      recordServiceFailure();
+      resp.truncated = true;
+      resp.content =
+        `**NO CONTENT**: ${options.model} consumed its entire ${options.maxTokens ?? "output"}-token budget without emitting any content, ` +
+        `even with reasoning disabled (finish_reason=length). The model produced only reasoning tokens. ` +
+        `Retrying would bill another full budget for the same empty result, so this call stops here. ` +
+        `Consider a smaller input, a larger max_tokens, or a different model for this slot.`;
+      process.stderr.write(
+        `[llm-externalizer] ${options.model}: length+empty with reasoning already off — refusing to burn another full budget on a retry that cannot help.\n`,
+      );
+      return resp;
+    }
+
     if (currentAttempt <= limit) {
       // A1/A7: one durable truncation_retry per call — the first time an
       // incomplete/truncated/empty response forces a continuation retry on this
@@ -1157,7 +1201,12 @@ export async function chatCompletionWithRetry(
     }
 
     // Exhausted retries — label by cause so the report makes sense.
-    if (isEmpty && (resp.finishReason === "" || resp.finishReason === "stop")) {
+    if (isEmpty && resp.finishReason === "length") {
+      // Distinct from a blank/glitch empty: the model DID generate — all of it
+      // reasoning, none of it content. Say that, so the report doesn't blame a
+      // "provider glitch" for a model/budget mismatch the user can actually act on.
+      resp.content = `**NO CONTENT**: ${options.model || backend.model} spent its whole output budget on reasoning tokens and returned no content after ${limit} attempts (finish_reason=length). Not a provider glitch — the model generated only reasoning. Try a larger max_tokens, a smaller input, or a different model for this slot.`;
+    } else if (isEmpty && (resp.finishReason === "" || resp.finishReason === "stop")) {
       resp.content = `**EMPTY RESPONSE**: The provider returned no content after ${limit} retries (finish_reason=${reasonLabel}). This usually means a transient provider glitch or the model failed on this specific prompt. No partial output available.`;
     } else if (resp.finishReason === "error") {
       resp.content += `\n\n---\n**UPSTREAM ERROR**: The provider reported an error (finish_reason=error) after ${limit} retries. The partial output above may be incomplete.`;

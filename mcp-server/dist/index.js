@@ -268121,7 +268121,7 @@ async function chatCompletionWithRetry(messages, options, deps) {
       recordServiceSuccess();
       return resp;
     }
-    if (resp.finishReason === "length") {
+    if (resp.finishReason === "length" && resp.content.trim().length > 0) {
       recordServiceSuccess();
       resp.truncated = true;
       resp.content += "\n\n---\n**TRUNCATED**: Response hit the output-token limit (finish_reason=length). The analysis above is cut off mid-generation.";
@@ -268168,6 +268168,16 @@ async function chatCompletionWithRetry(messages, options, deps) {
         );
       }
     }
+    if (useEmptyBudget && resp.finishReason === "length" && options.model && MODEL_REASONING_CACHE.get(options.model) === "none") {
+      recordServiceFailure();
+      resp.truncated = true;
+      resp.content = `**NO CONTENT**: ${options.model} consumed its entire ${options.maxTokens ?? "output"}-token budget without emitting any content, even with reasoning disabled (finish_reason=length). The model produced only reasoning tokens. Retrying would bill another full budget for the same empty result, so this call stops here. Consider a smaller input, a larger max_tokens, or a different model for this slot.`;
+      process.stderr.write(
+        `[llm-externalizer] ${options.model}: length+empty with reasoning already off \u2014 refusing to burn another full budget on a retry that cannot help.
+`
+      );
+      return resp;
+    }
     if (currentAttempt <= limit) {
       if (!emittedTruncationRetry) {
         emittedTruncationRetry = true;
@@ -268199,7 +268209,9 @@ async function chatCompletionWithRetry(messages, options, deps) {
       }
       continue;
     }
-    if (isEmpty && (resp.finishReason === "" || resp.finishReason === "stop")) {
+    if (isEmpty && resp.finishReason === "length") {
+      resp.content = `**NO CONTENT**: ${options.model || backend.model} spent its whole output budget on reasoning tokens and returned no content after ${limit} attempts (finish_reason=length). Not a provider glitch \u2014 the model generated only reasoning. Try a larger max_tokens, a smaller input, or a different model for this slot.`;
+    } else if (isEmpty && (resp.finishReason === "" || resp.finishReason === "stop")) {
       resp.content = `**EMPTY RESPONSE**: The provider returned no content after ${limit} retries (finish_reason=${reasonLabel}). This usually means a transient provider glitch or the model failed on this specific prompt. No partial output available.`;
     } else if (resp.finishReason === "error") {
       resp.content += `
