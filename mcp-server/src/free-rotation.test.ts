@@ -328,6 +328,19 @@ describe("withFreeRotation — the FetchImpl decorator (security_scan / mass_sco
     expect(JSON.parse(bodySeen)).toEqual({ q: 1 });
   });
 
+  it("FAILS CLOSED on a PAID model under free mode with an EMPTY pool — never bills a model the user signalled they don't want spent", async () => {
+    const seen: string[] = [];
+    const inner = async (_u: string, init: { body: string }) => {
+      seen.push(JSON.parse(init.body).model as string);
+      return res(200, JSON.stringify({ choices: [{ message: { content: "ok" } }] }));
+    };
+    const wrapped = withFreeRotation(inner, { ...hooks(), pool: () => [] });
+    const r = await wrapped("u", req("paid/model"));
+    expect(seen).toEqual([]); // the paid model was NEVER sent
+    expect(r.ok).toBe(false);
+    expect(await r.text()).toContain("refusing to send a paid model");
+  });
+
   it("serves a PAID model pinned under FREE mode from the free pool — the mid-job credit switch must cover the REST of the job, not only the 402'd call", async () => {
     // After a mid-job engageAutoFree, every remaining scout/judge request still
     // carries the paid model baked into its body (the job-start chokepoint does

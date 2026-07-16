@@ -221247,7 +221247,21 @@ function withFreeRotation(inner, hooks = {}) {
     }
     if (!isFreeSuffixModelId(requested)) {
       const pool = poolOf();
-      if (pool.length === 0) return inner(url, init);
+      if (pool.length === 0) {
+        process.stderr.write(
+          `[llm-externalizer] Free mode is active but the approved free pool is EMPTY \u2014 refusing to send paid model '${requested}'. The call fails safe instead of billing.
+`
+        );
+        return replayResponse(
+          false,
+          429,
+          JSON.stringify({
+            error: {
+              message: "free mode active with an empty approved free pool \u2014 refusing to send a paid model"
+            }
+          })
+        );
+      }
       return rotateOverFreeIds(
         inner,
         url,

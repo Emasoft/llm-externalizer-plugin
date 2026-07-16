@@ -15,6 +15,7 @@
  */
 
 import {
+  closeSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -216,15 +217,43 @@ export function maybeTriggerFreePoolBench(
     return { outcome: "skipped", reason: "cannot open log file", pid: null };
   }
 
-  const child = spawn(
-    process.execPath,
-    [scriptPath, "--bench-free-pool", "--min-f1", "0.5"],
-    {
-      detached: true,
-      stdio: ["ignore", logFd, logFd],
-      env: { ...env, LLM_EXT_AUTO_BENCH_REASON: `free_only_transition:${activeProfile}` },
-    },
-  );
+  let child;
+  try {
+    child = spawn(
+      process.execPath,
+      [scriptPath, "--bench-free-pool", "--min-f1", "0.5"],
+      {
+        detached: true,
+        stdio: ["ignore", logFd, logFd],
+        env: { ...env, LLM_EXT_AUTO_BENCH_REASON: `free_only_transition:${activeProfile}` },
+      },
+    );
+  } catch (e) {
+    // spawn() throws SYNCHRONOUSLY on argument/resource errors (EMFILE, ENOMEM,
+    // a bad options shape). This is a fire-and-forget optimisation launched from
+    // the reconcile pre-flight, which is contractually fail-open — a benchmark
+    // we could not start must never fail the tool the user actually ran.
+    log(
+      `[llm-externalizer] free-pool auto-bench: could not spawn: ${(e as Error).message}\n`,
+    );
+    try {
+      closeSync(logFd);
+    } catch {
+      /* already closed */
+    }
+    return { outcome: "skipped", reason: "spawn failed", pid: null };
+  }
+
+  // MANDATORY, and NOT redundant with the try/catch above: a spawn FAILURE
+  // (ENOENT on a missing benchmark.js, EACCES) is reported as an ASYNCHRONOUS
+  // 'error' event, not a throw. An 'error' event with no listener is, per Node's
+  // EventEmitter contract, re-thrown as an UNCAUGHT EXCEPTION — which would kill
+  // the whole MCP server, from a detached tick that no try/catch anywhere can
+  // reach. The fail-open contract dies with it. Swallowing to a log is the entire
+  // point: the bench is best-effort, the server is not.
+  child.on("error", (e: Error) => {
+    log(`[llm-externalizer] free-pool auto-bench: child failed to start: ${e.message}\n`);
+  });
 
   // Detach so the bench survives MCP server shutdown.
   child.unref();

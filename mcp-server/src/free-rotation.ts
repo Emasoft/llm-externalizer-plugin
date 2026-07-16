@@ -891,7 +891,27 @@ export function withFreeRotation(
       // the switch must cover the REST of the job, not only the in-flight call.
       // Serve it from the approved free pool instead (still strictly paid→free).
       const pool = poolOf();
-      if (pool.length === 0) return inner(url, init); // no pool — degrade to old behavior
+      if (pool.length === 0) {
+        // FAIL CLOSED. Passing the request through would SEND THE PAID MODEL while
+        // free mode is active — billing the user money they just signalled they
+        // don't want spent (auto-free engages at the balance floor or on a 402).
+        // Cost-safety outranks completing the call: a synthetic 429 lands in the
+        // caller's existing fail-safe path (uncertain verdict / failed file),
+        // which is a visible, honest outcome. An unrequested charge is not.
+        process.stderr.write(
+          `[llm-externalizer] Free mode is active but the approved free pool is EMPTY — refusing to send paid model '${requested}'. The call fails safe instead of billing.\n`,
+        );
+        return replayResponse(
+          false,
+          429,
+          JSON.stringify({
+            error: {
+              message:
+                "free mode active with an empty approved free pool — refusing to send a paid model",
+            },
+          }),
+        );
+      }
       return rotateOverFreeIds(
         inner,
         url,

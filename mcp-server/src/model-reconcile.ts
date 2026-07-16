@@ -367,16 +367,30 @@ export async function reconcileModelsBeforeWork(
   // with an empty pool (applyFreePoolToSettings rejects that — an empty
   // free_models would break free_only).
   if (verdict.freePoolChanged && verdict.newFreePool.length > 0) {
-    const wrote = deps.applyFreePool(verdict.newFreePool);
-    if (wrote) {
+    // The effects are wrapped, not trusted. This function's contract is "never
+    // throws into the caller" — it runs as a PRE-FLIGHT on every work tool, so a
+    // throw here fails the tool the user actually asked for, over a background
+    // config refresh they never requested. The injected effects reach the real
+    // world (settings.yaml, a spawned process); each is individually best-effort
+    // internally, but the contract must hold even if a future dep forgets that.
+    try {
+      const wrote = deps.applyFreePool(verdict.newFreePool);
+      if (wrote) {
+        deps.log(
+          `[llm-externalizer] Model reconcile: free pool updated — ` +
+            `added [${verdict.newFreeModels.join(", ") || "none"}], ` +
+            `dropped [${verdict.deadFreeModels.join(", ") || "none"}]. ` +
+            `Launching a $0 benchmark to score the new class.\n`,
+        );
+        deps.launchFreeBench(
+          `reconcile: +${verdict.newFreeModels.length}/-${verdict.deadFreeModels.length}`,
+        );
+      }
+    } catch (err) {
       deps.log(
-        `[llm-externalizer] Model reconcile: free pool updated — ` +
-          `added [${verdict.newFreeModels.join(", ") || "none"}], ` +
-          `dropped [${verdict.deadFreeModels.join(", ") || "none"}]. ` +
-          `Launching a $0 benchmark to score the new class.\n`,
-      );
-      deps.launchFreeBench(
-        `reconcile: +${verdict.newFreeModels.length}/-${verdict.deadFreeModels.length}`,
+        `[llm-externalizer] Model reconcile: applying the free pool failed (continuing on the existing config): ${
+          err instanceof Error ? err.message : String(err)
+        }\n`,
       );
     }
   }

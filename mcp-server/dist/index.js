@@ -255226,7 +255226,21 @@ function withFreeRotation(inner, hooks = {}) {
     }
     if (!isFreeSuffixModelId(requested)) {
       const pool = poolOf();
-      if (pool.length === 0) return inner(url2, init);
+      if (pool.length === 0) {
+        process.stderr.write(
+          `[llm-externalizer] Free mode is active but the approved free pool is EMPTY \u2014 refusing to send paid model '${requested}'. The call fails safe instead of billing.
+`
+        );
+        return replayResponse(
+          false,
+          429,
+          JSON.stringify({
+            error: {
+              message: "free mode active with an empty approved free pool \u2014 refusing to send a paid model"
+            }
+          })
+        );
+      }
       return rotateOverFreeIds(
         inner,
         url2,
@@ -268326,6 +268340,7 @@ import { join as join27 } from "node:path";
 
 // src/free-pool-auto-bench.ts
 import {
+  closeSync,
   existsSync as existsSync22,
   mkdirSync as mkdirSync21,
   openSync,
@@ -268438,15 +268453,32 @@ function maybeTriggerFreePoolBench(opts) {
     );
     return { outcome: "skipped", reason: "cannot open log file", pid: null };
   }
-  const child = spawn(
-    process.execPath,
-    [scriptPath, "--bench-free-pool", "--min-f1", "0.5"],
-    {
-      detached: true,
-      stdio: ["ignore", logFd, logFd],
-      env: { ...env, LLM_EXT_AUTO_BENCH_REASON: `free_only_transition:${activeProfile}` }
+  let child;
+  try {
+    child = spawn(
+      process.execPath,
+      [scriptPath, "--bench-free-pool", "--min-f1", "0.5"],
+      {
+        detached: true,
+        stdio: ["ignore", logFd, logFd],
+        env: { ...env, LLM_EXT_AUTO_BENCH_REASON: `free_only_transition:${activeProfile}` }
+      }
+    );
+  } catch (e) {
+    log(
+      `[llm-externalizer] free-pool auto-bench: could not spawn: ${e.message}
+`
+    );
+    try {
+      closeSync(logFd);
+    } catch {
     }
-  );
+    return { outcome: "skipped", reason: "spawn failed", pid: null };
+  }
+  child.on("error", (e) => {
+    log(`[llm-externalizer] free-pool auto-bench: child failed to start: ${e.message}
+`);
+  });
   child.unref();
   try {
     writeFileSync18(lockPath, String(child.pid ?? ""), "utf-8");
@@ -268583,14 +268615,21 @@ async function reconcileModelsBeforeWork(deps) {
   });
   deps.writeLastRunMs(now);
   if (verdict.freePoolChanged && verdict.newFreePool.length > 0) {
-    const wrote = deps.applyFreePool(verdict.newFreePool);
-    if (wrote) {
-      deps.log(
-        `[llm-externalizer] Model reconcile: free pool updated \u2014 added [${verdict.newFreeModels.join(", ") || "none"}], dropped [${verdict.deadFreeModels.join(", ") || "none"}]. Launching a $0 benchmark to score the new class.
+    try {
+      const wrote = deps.applyFreePool(verdict.newFreePool);
+      if (wrote) {
+        deps.log(
+          `[llm-externalizer] Model reconcile: free pool updated \u2014 added [${verdict.newFreeModels.join(", ") || "none"}], dropped [${verdict.deadFreeModels.join(", ") || "none"}]. Launching a $0 benchmark to score the new class.
 `
-      );
-      deps.launchFreeBench(
-        `reconcile: +${verdict.newFreeModels.length}/-${verdict.deadFreeModels.length}`
+        );
+        deps.launchFreeBench(
+          `reconcile: +${verdict.newFreeModels.length}/-${verdict.deadFreeModels.length}`
+        );
+      }
+    } catch (err3) {
+      deps.log(
+        `[llm-externalizer] Model reconcile: applying the free pool failed (continuing on the existing config): ${err3 instanceof Error ? err3.message : String(err3)}
+`
       );
     }
   }
