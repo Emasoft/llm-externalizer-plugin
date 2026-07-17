@@ -29,7 +29,8 @@ Steps (in order — validate is FIRST, no skipping):
     6. Rebuild dist (with new version)
     7. Update README.md badges
     8. Commit as `chore(release): vX.Y.Z`
-    9. Create annotated git tag vX.Y.Z
+    9. Create annotated git tags vX.Y.Z AND {plugin-name}--vX.Y.Z
+       (the second is the plugin-dependency resolver tag, CC >= 2.1.110)
    10. Push --follow-tags (pre-push hook walks ancestry, finds publish.py)
    11. gh release create
 """
@@ -176,6 +177,25 @@ def determine_next_version(args, current: str) -> str:
         file=sys.stderr,
     )
     sys.exit(1)
+
+
+def resolver_tag_for(plugin_name: str, release_tag: str) -> str:
+    """The plugin-dependency resolver tag `{plugin-name}--v{version}`.
+
+    Claude Code (>= 2.1.110) resolves a version-constrained plugin
+    dependency ONLY against a git tag of this exact shape — the plain
+    release tag `vX.Y.Z` is invisible to it. A dependent pinning us to a
+    version range on a repo that carries only `vX.Y.Z` tags gets the
+    misleading `no git tag satisfying <range>`, so we push both.
+
+    Raises ValueError on an empty/whitespace name: a `--vX.Y.Z` tag with
+    no name in front resolves nothing and would ship the very failure this
+    tag exists to prevent. (issue #11 / ai-maestro TRDD-JT3U4ZVM.)
+    """
+    name = str(plugin_name).strip()
+    if not name:
+        raise ValueError("plugin manifest has no 'name' — cannot form resolver tag")
+    return f"{name}--{release_tag}"
 
 
 def extract_release_notes(changelog_path: Path, version: str) -> str:
@@ -706,25 +726,33 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     current = manifest.get("version", "0.0.0")
     new_version = determine_next_version(args, current)
     tag = f"v{new_version}"
-
-    # Verify tag does not already exist (local + remote)
-    tag_check = run(["git", "tag", "--list", tag], check=False)
-    if tag_check.stdout and tag_check.stdout.strip() == tag:
-        print(f"ERROR: tag '{tag}' already exists locally", file=sys.stderr)
-        sys.exit(1)
-    remote_tag_check = run(["git", "ls-remote", "--tags", "origin", tag], check=False)
-    if remote_tag_check.stdout and remote_tag_check.stdout.strip():
-        print(f"ERROR: tag '{tag}' already exists on remote origin", file=sys.stderr)
+    # Also push the plugin-dependency resolver tag (see resolver_tag_for).
+    try:
+        resolver_tag = resolver_tag_for(manifest.get("name", ""), tag)
+    except ValueError as exc:
+        print(f"ERROR: {plugin_json}: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"  Planned: {current} -> {new_version} (tag: {tag})")
+    # Verify neither tag already exists (local + remote) — a stale copy of
+    # either aborts, since both are pushed together.
+    for t in (tag, resolver_tag):
+        local = run(["git", "tag", "--list", t], check=False)
+        if local.stdout and local.stdout.strip() == t:
+            print(f"ERROR: tag '{t}' already exists locally", file=sys.stderr)
+            sys.exit(1)
+        remote = run(["git", "ls-remote", "--tags", "origin", t], check=False)
+        if remote.stdout and remote.stdout.strip():
+            print(f"ERROR: tag '{t}' already exists on remote origin", file=sys.stderr)
+            sys.exit(1)
+
+    print(f"  Planned: {current} -> {new_version} (tags: {tag}, {resolver_tag})")
     print()
 
     # ── dry-run exits here, after checks pass AND version is determined ──
     if args.dry_run:
         print("[DRY RUN] All checks passed.")
         print(f"[DRY RUN] Would bump {current} -> {new_version}")
-        print(f"[DRY RUN] Would generate CHANGELOG.md, sync version, commit, tag {tag}, push")
+        print(f"[DRY RUN] Would generate CHANGELOG.md, sync version, commit, tag {tag} + {resolver_tag}, push")
         return
 
     # ── 4. Generate CHANGELOG.md via git-cliff ──
@@ -965,8 +993,12 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     print()
 
     # ── 9. Tag ──
+    # Two annotated tags on the release commit: the human-facing release
+    # tag and the resolver tag the plugin-dependency system requires. Both
+    # are annotated so `git push --follow-tags` carries them.
     print("── 9. Tag ──")
     run(["git", "tag", "-a", tag, "-m", f"Release {tag}"], capture=False)
+    run(["git", "tag", "-a", resolver_tag, "-m", f"Dependency-resolver tag for {tag}"], capture=False)
     print()
 
     # ── 10. Push (pre-push hook sees the lock file and skips its own checks) ──
@@ -978,6 +1010,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
             print(f"  {push_result.stderr.strip()}", file=sys.stderr)
         run(["git", "reset", "--hard", "HEAD~1"], check=False, capture=False)
         run(["git", "tag", "-d", tag], check=False, capture=False)
+        run(["git", "tag", "-d", resolver_tag], check=False, capture=False)
         sys.exit(1)
     print()
 
