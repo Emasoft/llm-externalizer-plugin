@@ -8778,6 +8778,144 @@ var init_usage_history = __esm({
   }
 });
 
+// src/benchmark/validated.ts
+import { mkdirSync as mkdirSync6, readFileSync as readFileSync5, writeFileSync as writeFileSync4 } from "node:fs";
+import { dirname as dirname3, join as join6 } from "node:path";
+function latestEntriesFromKeyedLedger(fileName) {
+  let cache2;
+  try {
+    const raw = readFileSync5(join6(getConfigDir(), fileName), "utf-8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return /* @__PURE__ */ new Map();
+    cache2 = parsed;
+  } catch {
+    return /* @__PURE__ */ new Map();
+  }
+  const latest = /* @__PURE__ */ new Map();
+  for (const [key, value] of Object.entries(cache2)) {
+    if (!value || typeof value !== "object") continue;
+    const entry = value;
+    const modelId = key.split("::")[0];
+    if (!modelId) continue;
+    const date5 = typeof entry.date === "string" ? entry.date : "";
+    const prev = latest.get(modelId);
+    if (!prev || date5 > prev.date) latest.set(modelId, { date: date5, entry });
+  }
+  const out = /* @__PURE__ */ new Map();
+  for (const [modelId, { entry }] of latest) out.set(modelId, entry);
+  return out;
+}
+function passedModelsFromKeyedLedger(fileName, isPass) {
+  const passed = /* @__PURE__ */ new Set();
+  for (const [modelId, entry] of latestEntriesFromKeyedLedger(fileName)) {
+    if (isPass(entry)) passed.add(modelId);
+  }
+  return passed;
+}
+function passedSecurityTriage() {
+  return passedModelsFromKeyedLedger("security-triage-results.json", (e) => {
+    const s = e.score;
+    return !!s && s.inconclusive !== true && s.pass === true;
+  });
+}
+function passedDeterministic(fileName) {
+  return passedModelsFromKeyedLedger(fileName, (e) => {
+    const fr = e.failureReasons;
+    return Array.isArray(fr) && fr.length === 0;
+  });
+}
+function isGeneralKeywordPass(row) {
+  return row.ok === true && row.pass === true && row.schemaCompliant !== false;
+}
+function passedGeneralKeyword() {
+  const ledger = latestEntriesFromKeyedLedger(GENERAL_KEYWORD_LEDGER);
+  const passed = /* @__PURE__ */ new Set();
+  for (const [modelId, entry] of ledger) {
+    if (isGeneralKeywordPass(entry)) passed.add(modelId);
+  }
+  try {
+    const raw = readFileSync5(join6(getConfigDir(), "benchmark-results.json"), "utf-8");
+    const parsed = JSON.parse(raw);
+    const results = Array.isArray(parsed.results) ? parsed.results : [];
+    for (const r of results) {
+      if (!r || typeof r !== "object") continue;
+      const row = r;
+      if (typeof row.modelId !== "string") continue;
+      if (ledger.has(row.modelId)) continue;
+      if (isGeneralKeywordPass(row)) passed.add(row.modelId);
+    }
+  } catch {
+  }
+  return passed;
+}
+function rankForTool(toolName) {
+  return TOOL_DIFFICULTY_RANK[toolName] ?? 0;
+}
+function validatedModelsForTool(toolName) {
+  const key = `${getConfigDir()}\0${toolName}`;
+  const hit = validatedMemo.get(key);
+  const now = Date.now();
+  if (hit && now - hit.at < VALIDATED_MEMO_TTL_MS) return hit.set;
+  const min = rankForTool(toolName);
+  const out = /* @__PURE__ */ new Set();
+  for (const ledger of LEDGERS) {
+    if (ledger.rank < min) continue;
+    for (const id of ledger.read()) out.add(id);
+  }
+  validatedMemo.set(key, { at: now, set: out });
+  return out;
+}
+function assertModelValidated(modelId, toolName, backendType) {
+  if (validationBypassForTests) return;
+  if (benchmarkValidationExempt) return;
+  if (backendType !== "openrouter") return;
+  if (isFreeSuffixModelId(modelId)) return;
+  const validatedSet = validatedModelsForTool(toolName);
+  if (validatedSet.has(modelId)) return;
+  const validated = [...validatedSet];
+  const flag = TOOL_BENCH_FLAG[toolName];
+  const validateCmd = flag ? `llm-ext-benchmark ${flag} ${modelId} --allow-paid-models-tests` : `llm-ext-benchmark --allow-paid-models-tests   (any benchmark validates '${toolName}')`;
+  const haveList = validated.length > 0 ? `Currently validated for ${toolName}: ${validated.join(", ")}.` : `No model is validated for ${toolName} yet.`;
+  throw new Error(
+    `IRON RULE: model '${modelId}' is not validated for ${toolName}. No LLM call was made, no money was spent. Validate it: ${validateCmd} \u2014 or configure a model already validated for this tool. ${haveList}`
+  );
+}
+var GENERAL_KEYWORD_LEDGER, TOOL_DIFFICULTY_RANK, LEDGERS, TOOL_BENCH_FLAG, VALIDATED_MEMO_TTL_MS, validatedMemo, validationBypassForTests, benchmarkValidationExempt;
+var init_validated = __esm({
+  "src/benchmark/validated.ts"() {
+    "use strict";
+    init_config();
+    init_free_mode();
+    GENERAL_KEYWORD_LEDGER = "general-keyword-results.json";
+    TOOL_DIFFICULTY_RANK = {
+      code_task: 5,
+      check_against_specs: 4,
+      scan_folder: 3,
+      search_existing_implementations: 2,
+      security_scan: 1
+    };
+    LEDGERS = [
+      { rank: 5, read: () => passedDeterministic("code-task-results.json") },
+      { rank: 4, read: () => passedDeterministic("check-specs-results.json") },
+      { rank: 3, read: () => passedDeterministic("scan-folder-results.json") },
+      { rank: 2, read: () => passedDeterministic("search-existing-results.json") },
+      { rank: 1, read: passedSecurityTriage },
+      { rank: 0, read: passedGeneralKeyword }
+    ];
+    TOOL_BENCH_FLAG = {
+      code_task: "--code-task",
+      check_against_specs: "--check-specs",
+      scan_folder: "--scan-folder",
+      search_existing_implementations: "--search-existing",
+      security_scan: "--security-triage"
+    };
+    VALIDATED_MEMO_TTL_MS = 5e3;
+    validatedMemo = /* @__PURE__ */ new Map();
+    validationBypassForTests = false;
+    benchmarkValidationExempt = false;
+  }
+});
+
 // src/project-root.ts
 import { existsSync as existsSync4 } from "node:fs";
 function resolveProjectMainRoot(override) {
@@ -9340,8 +9478,8 @@ var init_budget = __esm({
 });
 
 // src/benchmark/security-triage/dataset.ts
-import { existsSync as existsSync5, readFileSync as readFileSync5 } from "node:fs";
-import { dirname as dirname3, join as join6 } from "node:path";
+import { existsSync as existsSync5, readFileSync as readFileSync6 } from "node:fs";
+import { dirname as dirname4, join as join7 } from "node:path";
 import { fileURLToPath } from "node:url";
 var init_dataset = __esm({
   "src/benchmark/security-triage/dataset.ts"() {
@@ -9377,10 +9515,10 @@ var init_concurrency = __esm({
 });
 
 // src/model-events.ts
-import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync6, readFileSync as readFileSync6 } from "node:fs";
-import { join as join7 } from "node:path";
+import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync7, readFileSync as readFileSync7 } from "node:fs";
+import { join as join8 } from "node:path";
 function getModelEventsPath() {
-  return join7(getConfigDir(), "model-events.log");
+  return join8(getConfigDir(), "model-events.log");
 }
 function sanitizeField(s) {
   return s.replace(/ - /g, " | ").replace(/[\r\n]+/g, " ").trim();
@@ -9394,7 +9532,7 @@ function appendModelEvent(model, kind, detail = "") {
     }
     const line = `${localIsoTimestamp()} - ${safeModel} - ${kind} - ${safeDetail}`;
     const dir = getConfigDir();
-    mkdirSync6(dir, { recursive: true });
+    mkdirSync7(dir, { recursive: true });
     appendFileSync2(getModelEventsPath(), line + "\n", { flag: "a" });
   } catch {
   }
@@ -9419,124 +9557,6 @@ var init_model_events = __esm({
     MAX_DETAIL = 160;
     ROTATE_WORTHY_STATUSES = [400, 404, 410, 422];
     ROTATE_WORTHY = new Set(ROTATE_WORTHY_STATUSES);
-  }
-});
-
-// src/benchmark/validated.ts
-import { readFileSync as readFileSync7 } from "node:fs";
-import { join as join8 } from "node:path";
-function passedModelsFromKeyedLedger(fileName, isPass) {
-  let cache2;
-  try {
-    const raw = readFileSync7(join8(getConfigDir(), fileName), "utf-8");
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return /* @__PURE__ */ new Set();
-    cache2 = parsed;
-  } catch {
-    return /* @__PURE__ */ new Set();
-  }
-  const latest = /* @__PURE__ */ new Map();
-  for (const [key, value] of Object.entries(cache2)) {
-    if (!value || typeof value !== "object") continue;
-    const entry = value;
-    const modelId = key.split("::")[0];
-    if (!modelId) continue;
-    const date5 = typeof entry.date === "string" ? entry.date : "";
-    const prev = latest.get(modelId);
-    if (!prev || date5 > prev.date) latest.set(modelId, { date: date5, entry });
-  }
-  const passed = /* @__PURE__ */ new Set();
-  for (const [modelId, { entry }] of latest) {
-    if (isPass(entry)) passed.add(modelId);
-  }
-  return passed;
-}
-function passedSecurityTriage() {
-  return passedModelsFromKeyedLedger("security-triage-results.json", (e) => {
-    const s = e.score;
-    return !!s && s.inconclusive !== true && s.pass === true;
-  });
-}
-function passedDeterministic(fileName) {
-  return passedModelsFromKeyedLedger(fileName, (e) => {
-    const fr = e.failureReasons;
-    return Array.isArray(fr) && fr.length === 0;
-  });
-}
-function passedGeneralKeyword() {
-  const passed = /* @__PURE__ */ new Set();
-  try {
-    const raw = readFileSync7(join8(getConfigDir(), "benchmark-results.json"), "utf-8");
-    const parsed = JSON.parse(raw);
-    const results = Array.isArray(parsed.results) ? parsed.results : [];
-    for (const r of results) {
-      if (!r || typeof r !== "object") continue;
-      const row = r;
-      if (typeof row.modelId === "string" && row.ok === true && row.pass === true) {
-        passed.add(row.modelId);
-      }
-    }
-  } catch {
-  }
-  return passed;
-}
-function rankForTool(toolName) {
-  return TOOL_DIFFICULTY_RANK[toolName] ?? 0;
-}
-function validatedModelsForTool(toolName) {
-  const min = rankForTool(toolName);
-  const out = /* @__PURE__ */ new Set();
-  for (const ledger of LEDGERS) {
-    if (ledger.rank < min) continue;
-    for (const id of ledger.read()) out.add(id);
-  }
-  return out;
-}
-function validatedForTool(modelId, toolName) {
-  return validatedModelsForTool(toolName).has(modelId);
-}
-function assertModelValidated(modelId, toolName, backendType) {
-  if (validationBypassForTests) return;
-  if (backendType !== "openrouter") return;
-  if (isFreeSuffixModelId(modelId)) return;
-  if (validatedForTool(modelId, toolName)) return;
-  const validated = [...validatedModelsForTool(toolName)];
-  const flag = TOOL_BENCH_FLAG[toolName];
-  const validateCmd = flag ? `llm-ext-benchmark ${flag} ${modelId} --allow-paid-models-tests` : `llm-ext-benchmark --allow-paid-models-tests   (any benchmark validates '${toolName}')`;
-  const haveList = validated.length > 0 ? `Currently validated for ${toolName}: ${validated.join(", ")}.` : `No model is validated for ${toolName} yet.`;
-  throw new Error(
-    `IRON RULE: model '${modelId}' is not validated for ${toolName}. No LLM call was made, no money was spent. Validate it: ${validateCmd} \u2014 or configure a model already validated for this tool. ${haveList}`
-  );
-}
-var TOOL_DIFFICULTY_RANK, LEDGERS, TOOL_BENCH_FLAG, validationBypassForTests;
-var init_validated = __esm({
-  "src/benchmark/validated.ts"() {
-    "use strict";
-    init_config();
-    init_free_mode();
-    TOOL_DIFFICULTY_RANK = {
-      code_task: 5,
-      check_against_specs: 4,
-      scan_folder: 3,
-      search_existing_implementations: 2,
-      security_scan: 1
-    };
-    LEDGERS = [
-      { rank: 5, read: () => passedDeterministic("code-task-results.json") },
-      { rank: 4, read: () => passedDeterministic("check-specs-results.json") },
-      { rank: 3, read: () => passedDeterministic("scan-folder-results.json") },
-      { rank: 2, read: () => passedDeterministic("search-existing-results.json") },
-      { rank: 1, read: passedSecurityTriage },
-      { rank: 0, read: passedGeneralKeyword }
-    ];
-    TOOL_BENCH_FLAG = {
-      code_task: "--code-task",
-      check_against_specs: "--check-specs",
-      scan_folder: "--scan-folder",
-      search_existing_implementations: "--search-existing",
-      security_scan: "--security-triage"
-    };
-    validationBypassForTests = false;
   }
 });
 
@@ -9954,7 +9974,7 @@ var init_score = __esm({
 
 // src/benchmark/security-triage/index.ts
 import { createHash as createHash2 } from "node:crypto";
-import { existsSync as existsSync6, mkdirSync as mkdirSync7, readFileSync as readFileSync8, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync6, mkdirSync as mkdirSync8, readFileSync as readFileSync8, renameSync as renameSync2, writeFileSync as writeFileSync5 } from "node:fs";
 import { join as join9 } from "node:path";
 function cachePath() {
   return join9(getConfigDir(), "security-triage-results.json");
@@ -9997,6 +10017,7 @@ var init_security_triage = __esm({
   "src/benchmark/security-triage/index.ts"() {
     "use strict";
     init_discover();
+    init_validated();
     init_config();
     init_free_mode();
     init_project_root();
@@ -10015,7 +10036,7 @@ var init_security_triage = __esm({
 });
 
 // src/free-rotation.ts
-import { mkdirSync as mkdirSync8, readFileSync as readFileSync9, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
+import { mkdirSync as mkdirSync9, readFileSync as readFileSync9, renameSync as renameSync3, writeFileSync as writeFileSync6 } from "node:fs";
 import { join as join10 } from "node:path";
 function filterFreeModels(freeModels, catalogById, benchmarkFailed = /* @__PURE__ */ new Set()) {
   return freeModels.filter((id) => {
@@ -10142,9 +10163,9 @@ function readStoreFromDisk() {
 function writeStoreToDisk(store) {
   try {
     const path = cooldownFilePath();
-    mkdirSync8(getConfigDir(), { recursive: true });
+    mkdirSync9(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp`;
-    writeFileSync5(tmp, JSON.stringify(store), { encoding: "utf-8", mode: 384 });
+    writeFileSync6(tmp, JSON.stringify(store), { encoding: "utf-8", mode: 384 });
     renameSync3(tmp, path);
   } catch {
   }
@@ -20367,8 +20388,8 @@ var init_search = __esm({
 });
 
 // src/mass_scouting/reports.ts
-import { appendFileSync as appendFileSync3, mkdirSync as mkdirSync11 } from "node:fs";
-import { dirname as dirname5 } from "node:path";
+import { appendFileSync as appendFileSync3, mkdirSync as mkdirSync12 } from "node:fs";
+import { dirname as dirname6 } from "node:path";
 function tallyValues(values, cap = 25) {
   const counts = /* @__PURE__ */ new Map();
   for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
@@ -20569,7 +20590,7 @@ var init_reports = __esm({
 });
 
 // src/security_scan/report.ts
-import { mkdirSync as mkdirSync12, writeFileSync as writeFileSync9 } from "node:fs";
+import { mkdirSync as mkdirSync13, writeFileSync as writeFileSync10 } from "node:fs";
 import { isAbsolute as isAbsolute2, join as join13, resolve as resolve3 } from "node:path";
 function defaultMainRoot() {
   return resolveProjectMainRoot();
@@ -20724,13 +20745,13 @@ function mdCell2(s) {
   return s.replace(/\|/g, "\\|").replace(/\n/g, " ").slice(0, 400);
 }
 function writeReport(report, reportDir) {
-  mkdirSync12(reportDir, { recursive: true });
+  mkdirSync13(reportDir, { recursive: true });
   const stamp = isoTimestampLocal();
   const base = `${stamp}-security-scan-${slugify2(report.job_id)}`;
   const jsonPath = join13(reportDir, `${base}.json`);
   const mdPath = join13(reportDir, `${base}.md`);
-  writeFileSync9(jsonPath, JSON.stringify(report, null, 2) + "\n", "utf-8");
-  writeFileSync9(mdPath, renderMarkdown(report), "utf-8");
+  writeFileSync10(jsonPath, JSON.stringify(report, null, 2) + "\n", "utf-8");
+  writeFileSync10(mdPath, renderMarkdown(report), "utf-8");
   return { jsonPath, mdPath };
 }
 var init_report = __esm({
@@ -20937,13 +20958,13 @@ __export(cli_exports, {
 import { execSync as execSync2 } from "node:child_process";
 import {
   appendFileSync as appendFileSync4,
-  mkdirSync as mkdirSync13,
+  mkdirSync as mkdirSync14,
   readFileSync as readFileSync14,
   readdirSync as readdirSync3,
   statSync as statSync3,
-  writeFileSync as writeFileSync10
+  writeFileSync as writeFileSync11
 } from "node:fs";
-import { dirname as dirname6, extname as extname2, isAbsolute as isAbsolute3, join as join14, resolve as resolve4 } from "node:path";
+import { dirname as dirname7, extname as extname2, isAbsolute as isAbsolute3, join as join14, resolve as resolve4 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 function parseFlags2(args) {
   const flags = {};
@@ -21084,7 +21105,7 @@ function resolveBundledFieldset(arg) {
       error: `invalid bundled fieldset name ${JSON.stringify(name)}; allowed: [a-zA-Z0-9_-]`
     };
   }
-  const here = dirname6(fileURLToPath3(import.meta.url));
+  const here = dirname7(fileURLToPath3(import.meta.url));
   const candidates = [
     resolve4(here, "..", "fieldsets", `${name}.json`),
     resolve4(here, "fieldsets", `${name}.json`),
@@ -21275,7 +21296,7 @@ function runRegister(args) {
     }
     const out = reg.registerFile({
       file_path: isAbsolute3(p) ? p : resolve4(p),
-      source_root: root ?? dirname6(p),
+      source_root: root ?? dirname7(p),
       body,
       registered_via: filesArg ? "explicit" : "folder"
     });
@@ -21468,10 +21489,10 @@ async function runScout(args, opts) {
   const md = renderMarkdownReport(summary);
   reg.close();
   const reportDir = resolveReportDir2(flags["output-dir"], opts);
-  mkdirSync13(reportDir, { recursive: true });
+  mkdirSync14(reportDir, { recursive: true });
   const stamp = isoTimestampLocal2();
   const reportPath = join14(reportDir, `${stamp}-scout-${slugify3(jobId)}.md`);
-  writeFileSync10(reportPath, md, "utf-8");
+  writeFileSync11(reportPath, md, "utf-8");
   return ok(
     [
       `job_id=${jobId}`,
@@ -21645,7 +21666,7 @@ function runBuildFieldset(args) {
   const json2 = JSON.stringify(fieldset, null, 2);
   const outPath = flags["out"];
   if (outPath) {
-    writeFileSync10(outPath, json2 + "\n", "utf-8");
+    writeFileSync11(outPath, json2 + "\n", "utf-8");
     return ok(`fieldset_name=${name}
 fields=${fields.length}
 path=${outPath}`);
@@ -21782,7 +21803,7 @@ ${content.slice(0, 400)}`
   const json2 = JSON.stringify(candidate, null, 2);
   const outPath = flags["out"];
   if (outPath) {
-    writeFileSync10(outPath, json2 + "\n", "utf-8");
+    writeFileSync11(outPath, json2 + "\n", "utf-8");
     return ok(
       `fieldset_name=${candidate.fieldset_name}
 fields=${candidate.fields.length}
@@ -21793,7 +21814,7 @@ path=${outPath}`
 }
 function runListBundledFieldsets(args) {
   const { flags } = parseFlags2(args);
-  const here = dirname6(fileURLToPath3(import.meta.url));
+  const here = dirname7(fileURLToPath3(import.meta.url));
   const candidates = [
     resolve4(here, "..", "fieldsets"),
     resolve4(here, "fieldsets"),
@@ -22160,11 +22181,11 @@ function runExport(args, opts) {
   const rows = reg.listResultsByJob(jobId);
   reg.close();
   const reportDir = resolveReportDir2(flags["output-dir"], opts);
-  mkdirSync13(reportDir, { recursive: true });
+  mkdirSync14(reportDir, { recursive: true });
   const stamp = isoTimestampLocal2();
   const filename = `${stamp}-export-${slugify3(jobId)}.${format}`;
   const path = join14(reportDir, filename);
-  writeFileSync10(path, "", "utf-8");
+  writeFileSync11(path, "", "utf-8");
   if (format === "jsonl") {
     for (const r of rows) {
       appendFileSync4(path, JSON.stringify(r) + "\n", "utf-8");
@@ -36994,13 +37015,13 @@ init_config();
 init_free_mode();
 init_free_rotation();
 init_discover();
-import { mkdirSync as mkdirSync10, readFileSync as readFileSync12, renameSync as renameSync4, writeFileSync as writeFileSync8 } from "node:fs";
+import { mkdirSync as mkdirSync11, readFileSync as readFileSync12, renameSync as renameSync4, writeFileSync as writeFileSync9 } from "node:fs";
 import { join as join12 } from "node:path";
 
 // src/benchmark/pick.ts
 var import_yaml2 = __toESM(require_dist(), 1);
 init_registry();
-import { readFileSync as readFileSync10, writeFileSync as writeFileSync6, renameSync as renameSyncCb, existsSync as existsSync7 } from "node:fs";
+import { readFileSync as readFileSync10, writeFileSync as writeFileSync7, renameSync as renameSyncCb, existsSync as existsSync7 } from "node:fs";
 function loadProfileForMutation(settingsPath, profileName) {
   if (!existsSync7(settingsPath)) {
     throw new Error(`settings.yaml not found at ${settingsPath}`);
@@ -37030,7 +37051,7 @@ function loadProfileForMutation(settingsPath, profileName) {
 function writeSettingsAtomic(settingsPath, root) {
   const newRaw = (0, import_yaml2.stringify)(root, { indent: 2 });
   const tmp = settingsPath + ".tmp." + process.pid;
-  writeFileSync6(tmp, newRaw, "utf-8");
+  writeFileSync7(tmp, newRaw, "utf-8");
   renameSyncCb(tmp, settingsPath);
 }
 function applyFreePoolToSettings(settingsPath, profileName, modelIds) {
@@ -37059,13 +37080,13 @@ init_security_triage();
 import {
   closeSync,
   existsSync as existsSync8,
-  mkdirSync as mkdirSync9,
+  mkdirSync as mkdirSync10,
   openSync,
   readFileSync as readFileSync11,
-  writeFileSync as writeFileSync7
+  writeFileSync as writeFileSync8
 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname4, join as join11, resolve as pathResolve } from "node:path";
+import { dirname as dirname5, join as join11, resolve as pathResolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var LLM_EXT_HOME = join11(homedir2(), ".llm-externalizer");
@@ -37074,7 +37095,7 @@ var BENCH_LOCK = join11(LLM_EXT_HOME, "free-pool-bench.lock");
 var BENCH_LOG = join11(LLM_EXT_HOME, "free-pool-bench.log");
 var DISABLE_ENV = "LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH";
 function resolveBenchmarkScriptPath() {
-  const here = dirname4(fileURLToPath2(import.meta.url));
+  const here = dirname5(fileURLToPath2(import.meta.url));
   const bundled = pathResolve(here, "benchmark.js");
   if (existsSync8(bundled)) return bundled;
   const fromSrc = pathResolve(here, "..", "dist", "benchmark.js");
@@ -37157,7 +37178,7 @@ function maybeTriggerFreePoolBench(opts) {
     };
   }
   try {
-    mkdirSync9(LLM_EXT_HOME, { recursive: true });
+    mkdirSync10(LLM_EXT_HOME, { recursive: true });
   } catch {
   }
   let logFd;
@@ -37198,7 +37219,7 @@ function maybeTriggerFreePoolBench(opts) {
   });
   child.unref();
   try {
-    writeFileSync7(lockPath, String(child.pid ?? ""), "utf-8");
+    writeFileSync8(lockPath, String(child.pid ?? ""), "utf-8");
   } catch {
   }
   log(
@@ -37294,9 +37315,9 @@ function readLastReconcileMs() {
 function writeLastReconcileMs(nowMs) {
   try {
     const path = reconcileStateFilePath();
-    mkdirSync10(getConfigDir(), { recursive: true });
+    mkdirSync11(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp`;
-    writeFileSync8(tmp, JSON.stringify({ lastRunMs: nowMs }), { encoding: "utf-8", mode: 384 });
+    writeFileSync9(tmp, JSON.stringify({ lastRunMs: nowMs }), { encoding: "utf-8", mode: 384 });
     renameSync4(tmp, path);
   } catch {
   }
@@ -44824,8 +44845,8 @@ function isElectron() {
 }
 
 // src/cli.ts
-import { writeFileSync as writeFileSync11, existsSync as existsSync9, statSync as statSync4, unlinkSync } from "node:fs";
-import { resolve as resolvePath, isAbsolute as isAbsolute4, join as join15, dirname as dirname7 } from "node:path";
+import { writeFileSync as writeFileSync12, existsSync as existsSync9, statSync as statSync4, unlinkSync } from "node:fs";
+import { resolve as resolvePath, isAbsolute as isAbsolute4, join as join15, dirname as dirname8 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 import { spawnSync as spawnSync2 } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -44930,7 +44951,7 @@ async function cmdModelInfo(modelId, flags) {
       }
       const filepath = isAbsolute4(jsonFlag) ? jsonFlag : resolvePath(jsonFlag);
       try {
-        writeFileSync11(filepath, text, "utf-8");
+        writeFileSync12(filepath, text, "utf-8");
       } catch (err3) {
         die(
           `Failed to write JSON to '${filepath}': ${err3 instanceof Error ? err3.message : String(err3)}`
@@ -44948,7 +44969,7 @@ async function cmdModelInfo(modelId, flags) {
 }
 var DEFAULT_SEARCH_TIMEOUT_MS = 4 * 60 * 60 * 1e3;
 function findServerScript() {
-  const here = dirname7(fileURLToPath4(import.meta.url));
+  const here = dirname8(fileURLToPath4(import.meta.url));
   const candidates = [
     join15(here, "index.js"),
     // running from dist/
@@ -45044,7 +45065,7 @@ function generateGitDiff(base, sourceFiles) {
     );
   }
   try {
-    writeFileSync11(outPath, diffText, "utf-8");
+    writeFileSync12(outPath, diffText, "utf-8");
   } catch (err3) {
     die(
       `Failed to write diff to '${outPath}': ${err3 instanceof Error ? err3.message : String(err3)}`

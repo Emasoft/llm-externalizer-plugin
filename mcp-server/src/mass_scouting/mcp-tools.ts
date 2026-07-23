@@ -23,7 +23,7 @@ import { join } from "node:path";
 import { runMassScoutCli, type CliResult, type CliRunOptions } from "./cli";
 import { runSecurityTriageBenchmark } from "../benchmark/security-triage/index";
 import { runSearchExistingBenchmark } from "../benchmark/search-existing/index";
-import { setPaidBenchmarksAllowed } from "../benchmark/discover";
+import { withPaidBenchmarksAllowed } from "../benchmark/discover";
 import { assessModelById, renderAssessmentText } from "../model-qualification/assess";
 import { runCheckModelHealth, renderModelHealthText } from "../model-qualification/drift";
 import { compactStamp } from "../model-qualification/drift";
@@ -1345,24 +1345,27 @@ export async function dispatchMassScoutTool(
       );
     }
     case "security_triage_benchmark": {
-      // Publish the paid-benchmark opt-in for THIS call. Set explicitly (true or
-      // false) on every entry — the MCP server is long-lived, so a stale `true`
-      // from a prior call must never leak into a later paid send.
-      setPaidBenchmarksAllowed(args.allow_paid_models_tests === true);
+      // Paid-benchmark opt-in SCOPED to this call: set on entry, restored on exit
+      // (the MCP server is long-lived — an opt-in that outlives its own request
+      // would grant a later benchmark a permission its caller never asked for).
       // In-process call to the triage orchestrator (NOT a CLI delegation — this
       // is a distinct subsystem, not a mass_scout sub-command). Honors test
       // injection (fetchImpl / apiKey / mainRoot) from CliRunOptions.
       const models = Array.isArray(args.models)
         ? (args.models.filter((m) => typeof m === "string" && m.length > 0) as string[])
         : undefined;
-      const result = await runSecurityTriageBenchmark({
-        models: models && models.length > 0 ? models : undefined,
-        force: args.force === true,
-        outputDir: str(args.output_dir),
-        apiKey: opts.apiKey,
-        mainRoot: opts.mainRoot,
-        fetchImpl: opts.fetchImpl,
-      });
+      const result = await withPaidBenchmarksAllowed(
+        args.allow_paid_models_tests === true,
+        () =>
+          runSecurityTriageBenchmark({
+            models: models && models.length > 0 ? models : undefined,
+            force: args.force === true,
+            outputDir: str(args.output_dir),
+            apiKey: opts.apiKey,
+            mainRoot: opts.mainRoot,
+            fetchImpl: opts.fetchImpl,
+          }),
+      );
       const text = [
         result.summaryLine,
         `recommended_model=${result.recommendedModelId}`,
@@ -1374,23 +1377,27 @@ export async function dispatchMassScoutTool(
       return { content: [{ type: "text", text }], isError: false };
     }
     case "search_existing_benchmark": {
-      // Paid-benchmark opt-in for THIS call (reset every entry — see above).
-      setPaidBenchmarksAllowed(args.allow_paid_models_tests === true);
+      // Paid-benchmark opt-in SCOPED to this call (set on entry, restored on exit
+      // — see the security_triage_benchmark case above).
       // In-process call to the search-existing orchestrator (NOT a CLI
       // delegation — a distinct subsystem, not a mass_scout sub-command). Honors
       // test injection (fetchImpl / apiKey / mainRoot) from CliRunOptions.
       const models = Array.isArray(args.models)
         ? (args.models.filter((m) => typeof m === "string" && m.length > 0) as string[])
         : undefined;
-      const result = await runSearchExistingBenchmark({
-        models: models && models.length > 0 ? models : undefined,
-        qualifyingTopN: num(args.qualifying_top_n),
-        force: args.force === true,
-        outputDir: str(args.output_dir),
-        apiKey: opts.apiKey,
-        mainRoot: opts.mainRoot,
-        fetchImpl: opts.fetchImpl,
-      });
+      const result = await withPaidBenchmarksAllowed(
+        args.allow_paid_models_tests === true,
+        () =>
+          runSearchExistingBenchmark({
+            models: models && models.length > 0 ? models : undefined,
+            qualifyingTopN: num(args.qualifying_top_n),
+            force: args.force === true,
+            outputDir: str(args.output_dir),
+            apiKey: opts.apiKey,
+            mainRoot: opts.mainRoot,
+            fetchImpl: opts.fetchImpl,
+          }),
+      );
       const text = [
         result.summaryLine,
         `recommended_model=${result.recommendedModelId}`,
@@ -1472,10 +1479,10 @@ export async function dispatchMassScoutTool(
       }
     }
     case "check_tool_replacements": {
-      // Paid-benchmark opt-in for THIS call (reset every entry — see above). When
-      // a degraded incumbent triggers a same-or-cheaper benchmark, a paid
-      // candidate needs this or the benchmark refuses ($0 spent).
-      setPaidBenchmarksAllowed(args.allow_paid_models_tests === true);
+      // Paid-benchmark opt-in SCOPED to this call (set on entry, restored on exit
+      // — see the security_triage_benchmark case above). When a degraded incumbent
+      // triggers a same-or-cheaper benchmark, a paid candidate needs this or the
+      // benchmark refuses ($0 spent).
       // READ-ONLY advisory auto-replacement planner (TRDD-828238b5 A7-P3).
       //
       // GUARDRAIL: this handler calls ONLY `planToolReplacements` — the advisory
@@ -1492,11 +1499,15 @@ export async function dispatchMassScoutTool(
         const models = Array.isArray(args.models)
           ? (args.models.filter((m) => typeof m === "string" && m.length > 0) as string[])
           : undefined;
-        const { findings, reportMarkdown } = await planToolReplacements({
-          candidateModels: models && models.length > 0 ? models : undefined,
-          force: args.force === true,
-          apiKey: opts.apiKey,
-        });
+        const { findings, reportMarkdown } = await withPaidBenchmarksAllowed(
+          args.allow_paid_models_tests === true,
+          () =>
+            planToolReplacements({
+              candidateModels: models && models.length > 0 ? models : undefined,
+              force: args.force === true,
+              apiKey: opts.apiKey,
+            }),
+        );
         const root = opts.mainRoot ?? resolveProjectMainRoot();
         const dir = str(args.output_dir) ?? join(root, "reports", "auto-replace");
         mkdirSync(dir, { recursive: true });

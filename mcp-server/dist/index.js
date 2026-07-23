@@ -224970,8 +224970,8 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 var import_yaml3 = __toESM(require_dist(), 1);
 import {
   readFileSync as readFileSync28,
-  writeFileSync as writeFileSync20,
-  mkdirSync as mkdirSync23,
+  writeFileSync as writeFileSync21,
+  mkdirSync as mkdirSync24,
   existsSync as existsSync23,
   renameSync as renameSync13,
   statSync as statSync12,
@@ -224982,7 +224982,7 @@ import {
   unwatchFile
 } from "node:fs";
 import { spawnSync as spawnSync3 } from "node:child_process";
-import { extname as extname5, join as join29, basename as basename6, dirname as dirname12, resolve as resolve15, isAbsolute as isAbsolute4 } from "node:path";
+import { extname as extname5, join as join29, basename as basename6, dirname as dirname13, resolve as resolve15, isAbsolute as isAbsolute4 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 
 // src/grouping.ts
@@ -248381,20 +248381,20 @@ var StdioServerTransport = class {
 };
 
 // src/mass_scouting/mcp-tools.ts
-import { mkdirSync as mkdirSync15, writeFileSync as writeFileSync13 } from "node:fs";
+import { mkdirSync as mkdirSync16, writeFileSync as writeFileSync14 } from "node:fs";
 import { join as join22 } from "node:path";
 
 // src/mass_scouting/cli.ts
 import { execSync as execSync2 } from "node:child_process";
 import {
   appendFileSync as appendFileSync4,
-  mkdirSync as mkdirSync8,
+  mkdirSync as mkdirSync9,
   readFileSync as readFileSync9,
   readdirSync as readdirSync2,
   statSync as statSync3,
-  writeFileSync as writeFileSync5
+  writeFileSync as writeFileSync6
 } from "node:fs";
-import { dirname as dirname4, extname as extname3, isAbsolute as isAbsolute3, join as join10, resolve as resolve4 } from "node:path";
+import { dirname as dirname5, extname as extname3, isAbsolute as isAbsolute3, join as join10, resolve as resolve4 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/mass_scouting/fieldset.ts
@@ -250480,8 +250480,14 @@ function filterModels(models, criteria2 = DEFAULT_CRITERIA) {
   return out;
 }
 var paidBenchmarksAllowed = false;
-function setPaidBenchmarksAllowed(v) {
-  paidBenchmarksAllowed = v;
+async function withPaidBenchmarksAllowed(allowed, fn) {
+  const prev = paidBenchmarksAllowed;
+  paidBenchmarksAllowed = allowed;
+  try {
+    return await fn();
+  } finally {
+    paidBenchmarksAllowed = prev;
+  }
 }
 function assertPaidBenchmarkAllowed(models) {
   if (paidBenchmarksAllowed) return;
@@ -252311,17 +252317,17 @@ function withUsageContext(init, fn) {
 }
 
 // src/benchmark/validated.ts
-import { readFileSync as readFileSync4 } from "node:fs";
-import { join as join4 } from "node:path";
-function passedModelsFromKeyedLedger(fileName, isPass) {
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname2, join as join4 } from "node:path";
+function latestEntriesFromKeyedLedger(fileName) {
   let cache2;
   try {
     const raw = readFileSync4(join4(getConfigDir(), fileName), "utf-8");
     const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return /* @__PURE__ */ new Set();
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return /* @__PURE__ */ new Map();
     cache2 = parsed;
   } catch {
-    return /* @__PURE__ */ new Set();
+    return /* @__PURE__ */ new Map();
   }
   const latest = /* @__PURE__ */ new Map();
   for (const [key, value] of Object.entries(cache2)) {
@@ -252333,8 +252339,13 @@ function passedModelsFromKeyedLedger(fileName, isPass) {
     const prev = latest.get(modelId);
     if (!prev || date5 > prev.date) latest.set(modelId, { date: date5, entry });
   }
+  const out = /* @__PURE__ */ new Map();
+  for (const [modelId, { entry }] of latest) out.set(modelId, entry);
+  return out;
+}
+function passedModelsFromKeyedLedger(fileName, isPass) {
   const passed = /* @__PURE__ */ new Set();
-  for (const [modelId, { entry }] of latest) {
+  for (const [modelId, entry] of latestEntriesFromKeyedLedger(fileName)) {
     if (isPass(entry)) passed.add(modelId);
   }
   return passed;
@@ -252351,8 +252362,16 @@ function passedDeterministic(fileName) {
     return Array.isArray(fr) && fr.length === 0;
   });
 }
+var GENERAL_KEYWORD_LEDGER = "general-keyword-results.json";
+function isGeneralKeywordPass(row) {
+  return row.ok === true && row.pass === true && row.schemaCompliant !== false;
+}
 function passedGeneralKeyword() {
+  const ledger = latestEntriesFromKeyedLedger(GENERAL_KEYWORD_LEDGER);
   const passed = /* @__PURE__ */ new Set();
+  for (const [modelId, entry] of ledger) {
+    if (isGeneralKeywordPass(entry)) passed.add(modelId);
+  }
   try {
     const raw = readFileSync4(join4(getConfigDir(), "benchmark-results.json"), "utf-8");
     const parsed = JSON.parse(raw);
@@ -252360,9 +252379,9 @@ function passedGeneralKeyword() {
     for (const r of results) {
       if (!r || typeof r !== "object") continue;
       const row = r;
-      if (typeof row.modelId === "string" && row.ok === true && row.pass === true) {
-        passed.add(row.modelId);
-      }
+      if (typeof row.modelId !== "string") continue;
+      if (ledger.has(row.modelId)) continue;
+      if (isGeneralKeywordPass(row)) passed.add(row.modelId);
     }
   } catch {
   }
@@ -252393,25 +252412,35 @@ var TOOL_BENCH_FLAG = {
 function rankForTool(toolName) {
   return TOOL_DIFFICULTY_RANK[toolName] ?? 0;
 }
+var VALIDATED_MEMO_TTL_MS = 5e3;
+var validatedMemo = /* @__PURE__ */ new Map();
 function validatedModelsForTool(toolName) {
+  const key = `${getConfigDir()}\0${toolName}`;
+  const hit = validatedMemo.get(key);
+  const now = Date.now();
+  if (hit && now - hit.at < VALIDATED_MEMO_TTL_MS) return hit.set;
   const min = rankForTool(toolName);
   const out = /* @__PURE__ */ new Set();
   for (const ledger of LEDGERS) {
     if (ledger.rank < min) continue;
     for (const id of ledger.read()) out.add(id);
   }
+  validatedMemo.set(key, { at: now, set: out });
   return out;
 }
-function validatedForTool(modelId, toolName) {
-  return validatedModelsForTool(toolName).has(modelId);
-}
 var validationBypassForTests = false;
+var benchmarkValidationExempt = false;
+function setBenchmarkValidationExempt(v) {
+  benchmarkValidationExempt = v;
+}
 function assertModelValidated(modelId, toolName, backendType) {
   if (validationBypassForTests) return;
+  if (benchmarkValidationExempt) return;
   if (backendType !== "openrouter") return;
   if (isFreeSuffixModelId(modelId)) return;
-  if (validatedForTool(modelId, toolName)) return;
-  const validated = [...validatedModelsForTool(toolName)];
+  const validatedSet = validatedModelsForTool(toolName);
+  if (validatedSet.has(modelId)) return;
+  const validated = [...validatedSet];
   const flag = TOOL_BENCH_FLAG[toolName];
   const validateCmd = flag ? `llm-ext-benchmark ${flag} ${modelId} --allow-paid-models-tests` : `llm-ext-benchmark --allow-paid-models-tests   (any benchmark validates '${toolName}')`;
   const haveList = validated.length > 0 ? `Currently validated for ${toolName}: ${validated.join(", ")}.` : `No model is validated for ${toolName} yet.`;
@@ -253209,8 +253238,8 @@ function pickUnifiedMode(seen) {
 }
 
 // src/mass_scouting/reports.ts
-import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync3 } from "node:fs";
-import { dirname as dirname2 } from "node:path";
+import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync4 } from "node:fs";
+import { dirname as dirname3 } from "node:path";
 function tallyValues(values, cap = 25) {
   const counts = /* @__PURE__ */ new Map();
   for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
@@ -253808,7 +253837,7 @@ async function runWithLimit2(items, limit, fn) {
 }
 
 // src/model-events.ts
-import { appendFileSync as appendFileSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync5 } from "node:fs";
+import { appendFileSync as appendFileSync3, mkdirSync as mkdirSync5, readFileSync as readFileSync5 } from "node:fs";
 import { join as join5 } from "node:path";
 var MODEL_EVENT_KINDS = [
   "param_drop",
@@ -253836,7 +253865,7 @@ function appendModelEvent(model, kind, detail = "") {
     }
     const line = `${localIsoTimestamp()} - ${safeModel} - ${kind} - ${safeDetail}`;
     const dir = getConfigDir();
-    mkdirSync4(dir, { recursive: true });
+    mkdirSync5(dir, { recursive: true });
     appendFileSync3(getModelEventsPath(), line + "\n", { flag: "a" });
   } catch {
   }
@@ -254275,12 +254304,12 @@ function computeCallCost2(usage, pricing, fallbackInputBytes, fallbackOutputByte
 }
 
 // src/free-rotation.ts
-import { mkdirSync as mkdirSync6, readFileSync as readFileSync8, renameSync as renameSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { mkdirSync as mkdirSync7, readFileSync as readFileSync8, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
 import { join as join8 } from "node:path";
 
 // src/benchmark/security-triage/index.ts
 import { createHash as createHash3 } from "node:crypto";
-import { existsSync as existsSync4, mkdirSync as mkdirSync5, readFileSync as readFileSync7, renameSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync as existsSync4, mkdirSync as mkdirSync6, readFileSync as readFileSync7, renameSync, writeFileSync as writeFileSync3 } from "node:fs";
 import { join as join7 } from "node:path";
 
 // src/project-root.ts
@@ -254294,7 +254323,7 @@ function resolveProjectMainRoot(override) {
 
 // src/benchmark/security-triage/dataset.ts
 import { existsSync as existsSync3, readFileSync as readFileSync6 } from "node:fs";
-import { dirname as dirname3, join as join6 } from "node:path";
+import { dirname as dirname4, join as join6 } from "node:path";
 import { fileURLToPath } from "node:url";
 var BENCHMARK_RUBRICS = {
   prompt_injection: "THREAT when prose/comments instruct an agent or LLM to ignore prior instructions, exfiltrate secrets, perform destructive actions, or dictate the reviewer's verdict. NOT_THREAT when DEFENSIVE/detection code that QUOTES or PATTERN-DEFINES an attack in order to detect or warn about it (a detector's own rule list, a 'do NOT comply' doc). UNCERTAIN otherwise.",
@@ -254309,7 +254338,7 @@ var BENCHMARK_RUBRICS = {
   tool_shadow: "THREAT when code deliberately overrides/shadows a trusted tool or builtin to hijack its behavior. NOT_THREAT when two unrelated identifiers merely appear on one line (e.g. a fallback `a || b`) with no shadowing of a trusted name. UNCERTAIN when intent is genuinely ambiguous."
 };
 function resolveDatasetPath() {
-  const here = dirname3(fileURLToPath(import.meta.url));
+  const here = dirname4(fileURLToPath(import.meta.url));
   const candidates = [
     join6(here, "dataset.jsonl"),
     join6(here, "..", "src", "benchmark", "security-triage", "dataset.jsonl"),
@@ -254638,10 +254667,10 @@ function loadCache() {
 }
 function saveCache(cache2) {
   const dir = getConfigDir();
-  mkdirSync5(dir, { recursive: true });
+  mkdirSync6(dir, { recursive: true });
   const p = cachePath();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync2(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  writeFileSync3(tmp, JSON.stringify(cache2, null, 2), "utf-8");
   renameSync(tmp, p);
 }
 function failedModelsFromCache(cache2) {
@@ -254842,18 +254871,24 @@ async function runSecurityTriageBenchmark(opts = {}) {
     } else {
       progress(`  ${model.id}: running\u2026`);
       const t0 = Date.now();
-      const run = await runTriageBenchmarkOnModel(
-        model.id,
-        cases,
-        {
-          apiKey,
-          pricing: pricingFromModel(model),
-          perCallTimeoutMs: opts.perCallTimeoutMs ?? 45e3,
-          maxRetries: opts.maxRetries ?? 0,
-          workers: opts.workers
-        },
-        opts.fetchImpl
-      );
+      setBenchmarkValidationExempt(true);
+      let run;
+      try {
+        run = await runTriageBenchmarkOnModel(
+          model.id,
+          cases,
+          {
+            apiKey,
+            pricing: pricingFromModel(model),
+            perCallTimeoutMs: opts.perCallTimeoutMs ?? 45e3,
+            maxRetries: opts.maxRetries ?? 0,
+            workers: opts.workers
+          },
+          opts.fetchImpl
+        );
+      } finally {
+        setBenchmarkValidationExempt(false);
+      }
       const elapsed = Date.now() - t0;
       latencyMs = cases.length > 0 ? Math.round(elapsed / cases.length) : elapsed;
       score = scoreTriage(model.id, cases, run.verdicts, thresholds, run.failSafe);
@@ -254894,7 +254929,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
   });
   const mainRoot = resolveMainRoot(opts.mainRoot);
   const reportDir = opts.outputDir ?? join7(mainRoot, "reports", "security-triage-benchmark");
-  mkdirSync5(reportDir, { recursive: true });
+  mkdirSync6(reportDir, { recursive: true });
   const stamp = reportStamp();
   const jsonReportPath = join7(reportDir, `${stamp}-security-triage-benchmark.json`);
   const mdReportPath = join7(reportDir, `${stamp}-security-triage-benchmark.md`);
@@ -254936,7 +254971,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
     perCase: Object.fromEntries(scores.map((s) => [s.modelId, s.perCase]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync2(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  writeFileSync3(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
   renameSync(jtmp, jsonReportPath);
   const md = buildReportMarkdown({
     cases,
@@ -254951,7 +254986,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
     freeOnlySkipped
   });
   const mtmp = `${mdReportPath}.tmp.${process.pid}`;
-  writeFileSync2(mtmp, md, "utf-8");
+  writeFileSync3(mtmp, md, "utf-8");
   renameSync(mtmp, mdReportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
@@ -255171,9 +255206,9 @@ function readStoreFromDisk() {
 function writeStoreToDisk(store) {
   try {
     const path = cooldownFilePath();
-    mkdirSync6(getConfigDir(), { recursive: true });
+    mkdirSync7(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp`;
-    writeFileSync3(tmp, JSON.stringify(store), { encoding: "utf-8", mode: 384 });
+    writeFileSync4(tmp, JSON.stringify(store), { encoding: "utf-8", mode: 384 });
     renameSync2(tmp, path);
   } catch {
   }
@@ -255428,7 +255463,7 @@ var rawFetch = async (url2, init) => {
 var realFetch = withFreeRotation(rawFetch);
 
 // src/security_scan/report.ts
-import { mkdirSync as mkdirSync7, writeFileSync as writeFileSync4 } from "node:fs";
+import { mkdirSync as mkdirSync8, writeFileSync as writeFileSync5 } from "node:fs";
 import { isAbsolute as isAbsolute2, join as join9, resolve as resolve3 } from "node:path";
 function defaultMainRoot() {
   return resolveProjectMainRoot();
@@ -255583,13 +255618,13 @@ function mdCell(s) {
   return s.replace(/\|/g, "\\|").replace(/\n/g, " ").slice(0, 400);
 }
 function writeReport(report, reportDir) {
-  mkdirSync7(reportDir, { recursive: true });
+  mkdirSync8(reportDir, { recursive: true });
   const stamp = isoTimestampLocal();
   const base = `${stamp}-security-scan-${slugify2(report.job_id)}`;
   const jsonPath = join9(reportDir, `${base}.json`);
   const mdPath = join9(reportDir, `${base}.md`);
-  writeFileSync4(jsonPath, JSON.stringify(report, null, 2) + "\n", "utf-8");
-  writeFileSync4(mdPath, renderMarkdown(report), "utf-8");
+  writeFileSync5(jsonPath, JSON.stringify(report, null, 2) + "\n", "utf-8");
+  writeFileSync5(mdPath, renderMarkdown(report), "utf-8");
   return { jsonPath, mdPath };
 }
 
@@ -255919,7 +255954,7 @@ function resolveBundledFieldset(arg) {
       error: `invalid bundled fieldset name ${JSON.stringify(name)}; allowed: [a-zA-Z0-9_-]`
     };
   }
-  const here = dirname4(fileURLToPath2(import.meta.url));
+  const here = dirname5(fileURLToPath2(import.meta.url));
   const candidates = [
     resolve4(here, "..", "fieldsets", `${name}.json`),
     resolve4(here, "fieldsets", `${name}.json`),
@@ -256120,7 +256155,7 @@ function runRegister(args) {
     }
     const out = reg.registerFile({
       file_path: isAbsolute3(p) ? p : resolve4(p),
-      source_root: root ?? dirname4(p),
+      source_root: root ?? dirname5(p),
       body,
       registered_via: filesArg ? "explicit" : "folder"
     });
@@ -256313,10 +256348,10 @@ async function runScout(args, opts) {
   const md = renderMarkdownReport(summary);
   reg.close();
   const reportDir = resolveReportDir2(flags["output-dir"], opts);
-  mkdirSync8(reportDir, { recursive: true });
+  mkdirSync9(reportDir, { recursive: true });
   const stamp = isoTimestampLocal2();
   const reportPath = join10(reportDir, `${stamp}-scout-${slugify3(jobId)}.md`);
-  writeFileSync5(reportPath, md, "utf-8");
+  writeFileSync6(reportPath, md, "utf-8");
   return ok(
     [
       `job_id=${jobId}`,
@@ -256490,7 +256525,7 @@ function runBuildFieldset(args) {
   const json2 = JSON.stringify(fieldset, null, 2);
   const outPath = flags["out"];
   if (outPath) {
-    writeFileSync5(outPath, json2 + "\n", "utf-8");
+    writeFileSync6(outPath, json2 + "\n", "utf-8");
     return ok(`fieldset_name=${name}
 fields=${fields.length}
 path=${outPath}`);
@@ -256627,7 +256662,7 @@ ${content.slice(0, 400)}`
   const json2 = JSON.stringify(candidate, null, 2);
   const outPath = flags["out"];
   if (outPath) {
-    writeFileSync5(outPath, json2 + "\n", "utf-8");
+    writeFileSync6(outPath, json2 + "\n", "utf-8");
     return ok(
       `fieldset_name=${candidate.fieldset_name}
 fields=${candidate.fields.length}
@@ -256638,7 +256673,7 @@ path=${outPath}`
 }
 function runListBundledFieldsets(args) {
   const { flags } = parseFlags(args);
-  const here = dirname4(fileURLToPath2(import.meta.url));
+  const here = dirname5(fileURLToPath2(import.meta.url));
   const candidates = [
     resolve4(here, "..", "fieldsets"),
     resolve4(here, "fieldsets"),
@@ -257005,11 +257040,11 @@ function runExport(args, opts) {
   const rows = reg.listResultsByJob(jobId);
   reg.close();
   const reportDir = resolveReportDir2(flags["output-dir"], opts);
-  mkdirSync8(reportDir, { recursive: true });
+  mkdirSync9(reportDir, { recursive: true });
   const stamp = isoTimestampLocal2();
   const filename = `${stamp}-export-${slugify3(jobId)}.${format}`;
   const path = join10(reportDir, filename);
-  writeFileSync5(path, "", "utf-8");
+  writeFileSync6(path, "", "utf-8");
   if (format === "jsonl") {
     for (const r of rows) {
       appendFileSync4(path, JSON.stringify(r) + "\n", "utf-8");
@@ -257283,7 +257318,7 @@ async function runMassScoutCli(args, opts = {}) {
 
 // src/benchmark/search-existing/index.ts
 import { createHash as createHash4 } from "node:crypto";
-import { existsSync as existsSync8, mkdirSync as mkdirSync9, readFileSync as readFileSync11, renameSync as renameSync3, writeFileSync as writeFileSync6 } from "node:fs";
+import { existsSync as existsSync8, mkdirSync as mkdirSync10, readFileSync as readFileSync11, renameSync as renameSync3, writeFileSync as writeFileSync7 } from "node:fs";
 import { join as join13, resolve as resolve9 } from "node:path";
 
 // src/benchmark/search-existing/dataset.ts
@@ -257417,7 +257452,7 @@ import {
   readdirSync as readdirSync4,
   realpathSync as realpathSync2
 } from "node:fs";
-import { extname as extname4, join as join12, basename as basename4, dirname as dirname5, resolve as resolve6, sep } from "node:path";
+import { extname as extname4, join as join12, basename as basename4, dirname as dirname6, resolve as resolve6, sep } from "node:path";
 import { homedir as homedir2 } from "node:os";
 import { spawnSync } from "node:child_process";
 var BREVITY_RULES = "\nOUTPUT RULES:\n- Be SUCCINCT. Use bullet points, not paragraphs.\n- Skip preamble, filler, and restating the task.\n- Only report findings, not things that are correct.\n- For code reviews: skip files/areas with no issues \u2014 only mention what needs attention.\n- Maximum 3 sentences per finding. Lead with the problem, not the context.";
@@ -258200,7 +258235,7 @@ function walkDir(dirPath, options) {
   return results;
 }
 function extractLocalImports(filePath, sourceCode) {
-  const dir = dirname5(filePath);
+  const dir = dirname6(filePath);
   const lang = detectLang(filePath);
   const paths = [];
   const patterns = [];
@@ -259046,10 +259081,10 @@ function loadCache2() {
 }
 function saveCache2(cache2) {
   const dir = getConfigDir();
-  mkdirSync9(dir, { recursive: true });
+  mkdirSync10(dir, { recursive: true });
   const p = cachePath2();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync6(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  writeFileSync7(tmp, JSON.stringify(cache2, null, 2), "utf-8");
   renameSync3(tmp, p);
 }
 function resolveApiKey2(override) {
@@ -259271,7 +259306,7 @@ async function runSearchExistingBenchmark(opts = {}) {
   });
   const mainRoot = resolveMainRoot2(opts.mainRoot);
   const reportDir = opts.outputDir ?? join13(mainRoot, "reports", "search-existing-benchmark");
-  mkdirSync9(reportDir, { recursive: true });
+  mkdirSync10(reportDir, { recursive: true });
   const stamp = reportStamp2();
   const jsonReportPath = join13(reportDir, `${stamp}-search-existing-benchmark.json`);
   const reportPath = join13(reportDir, `${stamp}-search-existing-benchmark.md`);
@@ -259309,7 +259344,7 @@ async function runSearchExistingBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync6(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  writeFileSync7(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
   renameSync3(jtmp, jsonReportPath);
   const md = buildReportMarkdown2({
     cases,
@@ -259323,7 +259358,7 @@ async function runSearchExistingBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync6(mtmp, md, "utf-8");
+  writeFileSync7(mtmp, md, "utf-8");
   renameSync3(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
@@ -259460,7 +259495,7 @@ function renderAssessmentText(a) {
 }
 
 // src/model-qualification/drift.ts
-import { mkdirSync as mkdirSync10, readFileSync as readFileSync12, renameSync as renameSync4, writeFileSync as writeFileSync7 } from "node:fs";
+import { mkdirSync as mkdirSync11, readFileSync as readFileSync12, renameSync as renameSync4, writeFileSync as writeFileSync8 } from "node:fs";
 import { join as join14 } from "node:path";
 function perMillion(s) {
   if (s == null) return null;
@@ -259614,9 +259649,9 @@ function loadBaseline(path = getBaselinePath()) {
 }
 function saveBaseline(baseline, path = getBaselinePath()) {
   try {
-    mkdirSync10(getConfigDir(), { recursive: true });
+    mkdirSync11(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync7(tmp, JSON.stringify(baseline, null, 2));
+    writeFileSync8(tmp, JSON.stringify(baseline, null, 2));
     renameSync4(tmp, path);
   } catch {
   }
@@ -259691,9 +259726,9 @@ async function runCheckModelHealth(opts = {}) {
   const profile = opts.profile ?? resolveActiveProfile();
   const report = await checkModelHealth(profile, opts);
   const dir = opts.outputDir ?? join14(resolveProjectMainRoot(), "reports", "model-health");
-  mkdirSync10(dir, { recursive: true });
+  mkdirSync11(dir, { recursive: true });
   const reportPath = join14(dir, `${compactStamp()}-model-health-${profile.name}.md`);
-  writeFileSync7(reportPath, renderModelHealthMarkdown(report));
+  writeFileSync8(reportPath, renderModelHealthMarkdown(report));
   return { report, reportPath };
 }
 function renderModelHealthText(report) {
@@ -259714,7 +259749,7 @@ function renderModelHealthText(report) {
 }
 
 // src/model-qualification/new-arrivals.ts
-import { mkdirSync as mkdirSync11, readFileSync as readFileSync13, renameSync as renameSync5, writeFileSync as writeFileSync8 } from "node:fs";
+import { mkdirSync as mkdirSync12, readFileSync as readFileSync13, renameSync as renameSync5, writeFileSync as writeFileSync9 } from "node:fs";
 import { join as join15 } from "node:path";
 function createdToIso(created) {
   if (created === null || !Number.isFinite(created) || created <= 0) return null;
@@ -259779,9 +259814,9 @@ function loadSnapshot(path = getCatalogSnapshotPath()) {
 }
 function saveSnapshot(snapshot, path = getCatalogSnapshotPath()) {
   try {
-    mkdirSync11(getConfigDir(), { recursive: true });
+    mkdirSync12(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync8(tmp, JSON.stringify(snapshot, null, 2));
+    writeFileSync9(tmp, JSON.stringify(snapshot, null, 2));
     renameSync5(tmp, path);
   } catch {
   }
@@ -259874,15 +259909,15 @@ function renderNewArrivalsText(report) {
 async function runDiscoverNewArrivals(opts = {}) {
   const report = await discoverNewArrivals(opts);
   const dir = opts.outputDir ?? join15(resolveProjectMainRoot(), "reports", "model-arrivals");
-  mkdirSync11(dir, { recursive: true });
+  mkdirSync12(dir, { recursive: true });
   const reportPath = join15(dir, `${compactStamp()}-new-arrivals.md`);
-  writeFileSync8(reportPath, renderNewArrivalsMarkdown(report));
+  writeFileSync9(reportPath, renderNewArrivalsMarkdown(report));
   return { report, reportPath };
 }
 
 // src/benchmark/pick.ts
 var import_yaml2 = __toESM(require_dist(), 1);
-import { readFileSync as readFileSync14, writeFileSync as writeFileSync9, renameSync as renameSyncCb, existsSync as existsSync9 } from "node:fs";
+import { readFileSync as readFileSync14, writeFileSync as writeFileSync10, renameSync as renameSyncCb, existsSync as existsSync9 } from "node:fs";
 function loadProfileForMutation(settingsPath, profileName) {
   if (!existsSync9(settingsPath)) {
     throw new Error(`settings.yaml not found at ${settingsPath}`);
@@ -259912,7 +259947,7 @@ function loadProfileForMutation(settingsPath, profileName) {
 function writeSettingsAtomic(settingsPath, root) {
   const newRaw = (0, import_yaml2.stringify)(root, { indent: 2 });
   const tmp = settingsPath + ".tmp." + process.pid;
-  writeFileSync9(tmp, newRaw, "utf-8");
+  writeFileSync10(tmp, newRaw, "utf-8");
   renameSyncCb(tmp, settingsPath);
 }
 function applyFreePoolToSettings(settingsPath, profileName, modelIds) {
@@ -259936,13 +259971,13 @@ function applyFreePoolToSettings(settingsPath, profileName, modelIds) {
 
 // src/benchmark/code-task/index.ts
 import { createHash as createHash5 } from "node:crypto";
-import { existsSync as existsSync11, mkdirSync as mkdirSync12, readFileSync as readFileSync16, renameSync as renameSync6, writeFileSync as writeFileSync10 } from "node:fs";
+import { existsSync as existsSync11, mkdirSync as mkdirSync13, readFileSync as readFileSync16, renameSync as renameSync6, writeFileSync as writeFileSync11 } from "node:fs";
 import { join as join17 } from "node:path";
 
 // src/benchmark/code-task/dataset.ts
 var import_typescript = __toESM(require_typescript(), 1);
 import { existsSync as existsSync10, readFileSync as readFileSync15, statSync as statSync7 } from "node:fs";
-import { dirname as dirname6, join as join16, resolve as resolve10 } from "node:path";
+import { dirname as dirname7, join as join16, resolve as resolve10 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 var CODE_AUDIT_INSTRUCTIONS = [
   "Audit this file for GENUINE DEFECTS \u2014 bugs that cause incorrect behavior, data loss,",
@@ -259980,7 +260015,7 @@ function resolveFixtureRoot2() {
   );
 }
 function resolveDatasetPath2() {
-  const here = dirname6(fileURLToPath4(import.meta.url));
+  const here = dirname7(fileURLToPath4(import.meta.url));
   const candidates = [
     join16(here, "dataset.jsonl"),
     join16(here, "..", "src", "benchmark", "code-task", "dataset.jsonl"),
@@ -260809,10 +260844,10 @@ function loadCache3() {
   return {};
 }
 function saveCache3(cache2) {
-  mkdirSync12(getConfigDir(), { recursive: true });
+  mkdirSync13(getConfigDir(), { recursive: true });
   const p = cachePath3();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync10(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  writeFileSync11(tmp, JSON.stringify(cache2, null, 2), "utf-8");
   renameSync6(tmp, p);
 }
 function resolveApiKey3(override) {
@@ -261031,7 +261066,7 @@ async function runCodeAuditBenchmark(opts = {}) {
   });
   const mainRoot = resolveProjectMainRoot(opts.mainRoot);
   const reportDir = opts.outputDir ?? join17(mainRoot, "reports", "code-task-benchmark");
-  mkdirSync12(reportDir, { recursive: true });
+  mkdirSync13(reportDir, { recursive: true });
   const stamp = reportStamp3();
   const jsonReportPath = join17(reportDir, `${stamp}-code-task-benchmark.json`);
   const reportPath = join17(reportDir, `${stamp}-code-task-benchmark.md`);
@@ -261076,7 +261111,7 @@ async function runCodeAuditBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync10(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  writeFileSync11(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
   renameSync6(jtmp, jsonReportPath);
   const md = buildReportMarkdown3({
     cases,
@@ -261090,7 +261125,7 @@ async function runCodeAuditBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync10(mtmp, md, "utf-8");
+  writeFileSync11(mtmp, md, "utf-8");
   renameSync6(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
@@ -261177,7 +261212,7 @@ function buildReportMarkdown3(args) {
 }
 
 // src/benchmark/scan-folder/index.ts
-import { existsSync as existsSync14, mkdirSync as mkdirSync13, readFileSync as readFileSync19, renameSync as renameSync7, writeFileSync as writeFileSync11 } from "node:fs";
+import { existsSync as existsSync14, mkdirSync as mkdirSync14, readFileSync as readFileSync19, renameSync as renameSync7, writeFileSync as writeFileSync12 } from "node:fs";
 import { join as join19 } from "node:path";
 
 // src/benchmark/scan-folder/dataset.ts
@@ -262030,10 +262065,10 @@ function loadCache4() {
   return {};
 }
 function saveCache4(cache2) {
-  mkdirSync13(getConfigDir(), { recursive: true });
+  mkdirSync14(getConfigDir(), { recursive: true });
   const p = cachePath4();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync11(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  writeFileSync12(tmp, JSON.stringify(cache2, null, 2), "utf-8");
   renameSync7(tmp, p);
 }
 function resolveApiKey4(override) {
@@ -262255,7 +262290,7 @@ async function runScanFolderBenchmark(opts = {}) {
   });
   const mainRoot = resolveProjectMainRoot(opts.mainRoot);
   const reportDir = opts.outputDir ?? join19(mainRoot, "reports", "scan-folder-benchmark");
-  mkdirSync13(reportDir, { recursive: true });
+  mkdirSync14(reportDir, { recursive: true });
   const stamp = reportStamp4();
   const jsonReportPath = join19(reportDir, `${stamp}-scan-folder-benchmark.json`);
   const reportPath = join19(reportDir, `${stamp}-scan-folder-benchmark.md`);
@@ -262298,7 +262333,7 @@ async function runScanFolderBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync11(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  writeFileSync12(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
   renameSync7(jtmp, jsonReportPath);
   const md = buildReportMarkdown4({
     cases,
@@ -262313,7 +262348,7 @@ async function runScanFolderBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync11(mtmp, md, "utf-8");
+  writeFileSync12(mtmp, md, "utf-8");
   renameSync7(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
@@ -262407,7 +262442,7 @@ function buildReportMarkdown4(args) {
 }
 
 // src/benchmark/check-specs/index.ts
-import { existsSync as existsSync17, mkdirSync as mkdirSync14, readFileSync as readFileSync21, renameSync as renameSync8, writeFileSync as writeFileSync12 } from "node:fs";
+import { existsSync as existsSync17, mkdirSync as mkdirSync15, readFileSync as readFileSync21, renameSync as renameSync8, writeFileSync as writeFileSync13 } from "node:fs";
 import { join as join21 } from "node:path";
 
 // src/check-specs/core.ts
@@ -263205,10 +263240,10 @@ function loadCache5() {
   return {};
 }
 function saveCache5(cache2) {
-  mkdirSync14(getConfigDir(), { recursive: true });
+  mkdirSync15(getConfigDir(), { recursive: true });
   const p = cachePath5();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync12(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  writeFileSync13(tmp, JSON.stringify(cache2, null, 2), "utf-8");
   renameSync8(tmp, p);
 }
 function resolveApiKey5(override) {
@@ -263441,7 +263476,7 @@ async function runCheckSpecsBenchmark(opts = {}) {
   });
   const mainRoot = resolveProjectMainRoot(opts.mainRoot);
   const reportDir = opts.outputDir ?? join21(mainRoot, "reports", "check-specs-benchmark");
-  mkdirSync14(reportDir, { recursive: true });
+  mkdirSync15(reportDir, { recursive: true });
   const stamp = reportStamp5();
   const jsonReportPath = join21(reportDir, `${stamp}-check-specs-benchmark.json`);
   const reportPath = join21(reportDir, `${stamp}-check-specs-benchmark.md`);
@@ -263485,7 +263520,7 @@ async function runCheckSpecsBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync12(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  writeFileSync13(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
   renameSync8(jtmp, jsonReportPath);
   const md = buildReportMarkdown5({
     fixtures,
@@ -263499,7 +263534,7 @@ async function runCheckSpecsBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync12(mtmp, md, "utf-8");
+  writeFileSync13(mtmp, md, "utf-8");
   renameSync8(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
@@ -264820,16 +264855,18 @@ async function dispatchMassScoutTool(name, args, opts = {}) {
       );
     }
     case "security_triage_benchmark": {
-      setPaidBenchmarksAllowed(args.allow_paid_models_tests === true);
       const models = Array.isArray(args.models) ? args.models.filter((m) => typeof m === "string" && m.length > 0) : void 0;
-      const result = await runSecurityTriageBenchmark({
-        models: models && models.length > 0 ? models : void 0,
-        force: args.force === true,
-        outputDir: str(args.output_dir),
-        apiKey: opts.apiKey,
-        mainRoot: opts.mainRoot,
-        fetchImpl: opts.fetchImpl
-      });
+      const result = await withPaidBenchmarksAllowed(
+        args.allow_paid_models_tests === true,
+        () => runSecurityTriageBenchmark({
+          models: models && models.length > 0 ? models : void 0,
+          force: args.force === true,
+          outputDir: str(args.output_dir),
+          apiKey: opts.apiKey,
+          mainRoot: opts.mainRoot,
+          fetchImpl: opts.fetchImpl
+        })
+      );
       const text = [
         result.summaryLine,
         `recommended_model=${result.recommendedModelId}`,
@@ -264841,17 +264878,19 @@ async function dispatchMassScoutTool(name, args, opts = {}) {
       return { content: [{ type: "text", text }], isError: false };
     }
     case "search_existing_benchmark": {
-      setPaidBenchmarksAllowed(args.allow_paid_models_tests === true);
       const models = Array.isArray(args.models) ? args.models.filter((m) => typeof m === "string" && m.length > 0) : void 0;
-      const result = await runSearchExistingBenchmark({
-        models: models && models.length > 0 ? models : void 0,
-        qualifyingTopN: num(args.qualifying_top_n),
-        force: args.force === true,
-        outputDir: str(args.output_dir),
-        apiKey: opts.apiKey,
-        mainRoot: opts.mainRoot,
-        fetchImpl: opts.fetchImpl
-      });
+      const result = await withPaidBenchmarksAllowed(
+        args.allow_paid_models_tests === true,
+        () => runSearchExistingBenchmark({
+          models: models && models.length > 0 ? models : void 0,
+          qualifyingTopN: num(args.qualifying_top_n),
+          force: args.force === true,
+          outputDir: str(args.output_dir),
+          apiKey: opts.apiKey,
+          mainRoot: opts.mainRoot,
+          fetchImpl: opts.fetchImpl
+        })
+      );
       const text = [
         result.summaryLine,
         `recommended_model=${result.recommendedModelId}`,
@@ -264926,19 +264965,21 @@ Report: ${reportPath}`;
       }
     }
     case "check_tool_replacements": {
-      setPaidBenchmarksAllowed(args.allow_paid_models_tests === true);
       try {
         const models = Array.isArray(args.models) ? args.models.filter((m) => typeof m === "string" && m.length > 0) : void 0;
-        const { findings, reportMarkdown } = await planToolReplacements({
-          candidateModels: models && models.length > 0 ? models : void 0,
-          force: args.force === true,
-          apiKey: opts.apiKey
-        });
+        const { findings, reportMarkdown } = await withPaidBenchmarksAllowed(
+          args.allow_paid_models_tests === true,
+          () => planToolReplacements({
+            candidateModels: models && models.length > 0 ? models : void 0,
+            force: args.force === true,
+            apiKey: opts.apiKey
+          })
+        );
         const root = opts.mainRoot ?? resolveProjectMainRoot();
         const dir = str(args.output_dir) ?? join22(root, "reports", "auto-replace");
-        mkdirSync15(dir, { recursive: true });
+        mkdirSync16(dir, { recursive: true });
         const reportPath = join22(dir, `${compactStamp()}-auto-replace.md`);
-        writeFileSync13(reportPath, reportMarkdown);
+        writeFileSync14(reportPath, reportMarkdown);
         const degraded = findings.filter((f) => f.degraded).length;
         const recommended = findings.filter((f) => f.changed).length;
         const summary = `${findings.length} tool(s) checked, ${degraded} degraded, ${recommended} replacement(s) recommended (advisory \u2014 apply via the CLI \`llm-ext-benchmark --auto-replace --apply\`).`;
@@ -265688,10 +265729,10 @@ async function safeReadJson(res, maxBytes = MAX_RESPONSE_BYTES) {
 
 // src/cluster/cluster_synonyms_main.ts
 import {
-  mkdirSync as mkdirSync18,
+  mkdirSync as mkdirSync19,
   readFileSync as readFileSync23,
   readdirSync as readdirSync7,
-  writeFileSync as writeFileSync15,
+  writeFileSync as writeFileSync16,
   existsSync as existsSync19,
   renameSync as renameSync9
 } from "node:fs";
@@ -265826,8 +265867,8 @@ var UnionFind = class _UnionFind {
 };
 
 // src/cluster/checkpoint.ts
-import { dirname as dirname7 } from "node:path";
-import { mkdirSync as mkdirSync16 } from "node:fs";
+import { dirname as dirname8 } from "node:path";
+import { mkdirSync as mkdirSync17 } from "node:fs";
 var SCHEMA = `
 CREATE TABLE IF NOT EXISTS clusters_uf (
   item_id   TEXT PRIMARY KEY,
@@ -265854,7 +265895,7 @@ var CheckpointDB = class _CheckpointDB {
     this.db = db;
   }
   static open(path) {
-    mkdirSync16(dirname7(path), { recursive: true });
+    mkdirSync17(dirname8(path), { recursive: true });
     const db = new Database2(path);
     db.pragma("journal_mode = WAL");
     db.pragma("synchronous = NORMAL");
@@ -265945,12 +265986,12 @@ var CheckpointDB = class _CheckpointDB {
 import { spawnSync as spawnSync2 } from "node:child_process";
 import {
   existsSync as existsSync18,
-  mkdirSync as mkdirSync17,
+  mkdirSync as mkdirSync18,
   readFileSync as readFileSync22,
-  writeFileSync as writeFileSync14,
+  writeFileSync as writeFileSync15,
   statSync as statSync11
 } from "node:fs";
-import { dirname as dirname8, join as join23 } from "node:path";
+import { dirname as dirname9, join as join23 } from "node:path";
 var F32_BYTES = 4;
 function readEmbeddingsMeta(path) {
   const metaPath = path + ".meta.json";
@@ -266005,11 +266046,11 @@ function computeEmbeddings(items, opts) {
   if (!existsSync18(opts.scriptPath)) {
     throw new Error(`compute_embeddings.py not found: ${opts.scriptPath}`);
   }
-  mkdirSync17(opts.outDir, { recursive: true });
+  mkdirSync18(opts.outDir, { recursive: true });
   const inputPath = join23(opts.outDir, "_embedding_sentences.txt");
   const outputPath = join23(opts.outDir, "embeddings.f32");
   const clean = opts.sentenceClean ?? defaultSentenceClean;
-  writeFileSync14(
+  writeFileSync15(
     inputPath,
     items.map((it) => clean(it.sentence)).join("\n") + "\n",
     { encoding: "utf-8" }
@@ -266967,7 +267008,7 @@ function loadPolicy(policyFile) {
   return resolvePolicy(valid);
 }
 function gateOutputDir(outputDir, policy, resuming) {
-  mkdirSync18(outputDir, { recursive: true });
+  mkdirSync19(outputDir, { recursive: true });
   if (resuming) return;
   const existing = readdirSync7(outputDir).filter((n) => !n.startsWith("."));
   const collisions = existing.filter(
@@ -267024,7 +267065,7 @@ function reductionPct(itemsIn, clustersOut) {
 }
 function writeJsonAtomic(path, value) {
   const tmp = path + ".tmp";
-  writeFileSync15(tmp, JSON.stringify(value, null, 2) + "\n", { encoding: "utf-8" });
+  writeFileSync16(tmp, JSON.stringify(value, null, 2) + "\n", { encoding: "utf-8" });
   renameSync9(tmp, path);
 }
 function writeClustersJsonl(path, itemsById, partition) {
@@ -267039,7 +267080,7 @@ function writeClustersJsonl(path, itemsById, partition) {
       lines.push(JSON.stringify({ id: it.id, cluster_id: clusterId, sentence: it.sentence }));
     }
   }
-  writeFileSync15(path, lines.join("\n") + (lines.length ? "\n" : ""), { encoding: "utf-8" });
+  writeFileSync16(path, lines.join("\n") + (lines.length ? "\n" : ""), { encoding: "utf-8" });
 }
 function buildSummary(itemsById, partition, profileName, canonicalsOverride) {
   const clusters = [];
@@ -267248,8 +267289,8 @@ function buildEarlyAbort(invocation, errors, warnings, profileName, tStart) {
 
 // src/cluster/preflight_benchmark.ts
 import { createHash as createHash8 } from "node:crypto";
-import { mkdirSync as mkdirSync19, readFileSync as readFileSync24, writeFileSync as writeFileSync16, existsSync as existsSync20, renameSync as renameSync10 } from "node:fs";
-import { join as join25, dirname as dirname9 } from "node:path";
+import { mkdirSync as mkdirSync20, readFileSync as readFileSync24, writeFileSync as writeFileSync17, existsSync as existsSync20, renameSync as renameSync10 } from "node:fs";
+import { join as join25, dirname as dirname10 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var DEFAULT_PREFLIGHT_PROMPT = `You are given 3 short sentences with numeric ids. Group sentences that have IDENTICAL or NEARLY-IDENTICAL overall meaning (full-sentence meaning equivalence, NOT word-by-word synonym matching).
 
@@ -267292,9 +267333,9 @@ function readCache(path) {
   }
 }
 function writeCache(path, rec) {
-  mkdirSync19(dirname9(path), { recursive: true });
+  mkdirSync20(dirname10(path), { recursive: true });
   const tmp = `${path}.tmp.${process.pid}`;
-  writeFileSync16(tmp, JSON.stringify(rec, null, 2) + "\n", "utf8");
+  writeFileSync17(tmp, JSON.stringify(rec, null, 2) + "\n", "utf8");
   renameSync10(tmp, path);
 }
 function validatePreflightResponse(raw) {
@@ -268329,28 +268370,29 @@ async function chatCompletionWithRetry(messages, options, deps) {
     }
     const limit = useEmptyBudget ? MAX_EMPTY_RESPONSE_RETRIES : MAX_TRUNCATION_RETRIES;
     const currentAttempt = useEmptyBudget ? emptyAttempts : genericAttempts;
-    if (useEmptyBudget && options.model && currentAttempt <= limit) {
-      const current = MODEL_REASONING_CACHE.get(options.model);
+    const ladderModel = options.model || backend.model;
+    if (useEmptyBudget && ladderModel && currentAttempt <= limit) {
+      const current = MODEL_REASONING_CACHE.get(ladderModel);
       if (current === void 0 || current === "xhigh") {
-        MODEL_REASONING_CACHE.set(options.model, "high");
+        MODEL_REASONING_CACHE.set(ladderModel, "high");
         process.stderr.write(
-          `[llm-externalizer] Empty response on ${options.model} \u2014 downgrading reasoning cache to high
+          `[llm-externalizer] Empty response on ${ladderModel} \u2014 downgrading reasoning cache to high
 `
         );
       } else if (current === "high") {
-        MODEL_REASONING_CACHE.set(options.model, "none");
+        MODEL_REASONING_CACHE.set(ladderModel, "none");
         process.stderr.write(
-          `[llm-externalizer] Empty response on ${options.model} \u2014 disabling reasoning
+          `[llm-externalizer] Empty response on ${ladderModel} \u2014 disabling reasoning
 `
         );
       }
     }
-    if (useEmptyBudget && resp.finishReason === "length" && options.model && MODEL_REASONING_CACHE.get(options.model) === "none") {
+    if (useEmptyBudget && resp.finishReason === "length" && currentAttempt > 1 && ladderModel && MODEL_REASONING_CACHE.get(ladderModel) === "none") {
       recordServiceFailure();
       resp.truncated = true;
-      resp.content = `**NO CONTENT**: ${options.model} consumed its entire ${options.maxTokens ?? "output"}-token budget without emitting any content, even with reasoning disabled (finish_reason=length). The model produced only reasoning tokens. Retrying would bill another full budget for the same empty result, so this call stops here. Consider a smaller input, a larger max_tokens, or a different model for this slot.`;
+      resp.content = `**NO CONTENT**: ${ladderModel} consumed its entire ${options.maxTokens ?? "output"}-token budget without emitting any content, even with reasoning disabled (finish_reason=length). The model produced only reasoning tokens. Retrying would bill another full budget for the same empty result, so this call stops here. Consider a smaller input, a larger max_tokens, or a different model for this slot.`;
       process.stderr.write(
-        `[llm-externalizer] ${options.model}: length+empty with reasoning already off \u2014 refusing to burn another full budget on a retry that cannot help.
+        `[llm-externalizer] ${ladderModel}: length+empty with reasoning already off \u2014 refusing to burn another full budget on a retry that cannot help.
 `
       );
       return resp;
@@ -268416,16 +268458,16 @@ import { fileURLToPath as fileUrlToPath_cs } from "node:url";
 // src/rule-install.ts
 import {
   existsSync as existsSync21,
-  mkdirSync as mkdirSync20,
+  mkdirSync as mkdirSync21,
   readFileSync as readFileSync25,
-  writeFileSync as writeFileSync17,
+  writeFileSync as writeFileSync18,
   renameSync as renameSync11,
   realpathSync as realpathSync4,
   unlinkSync
 } from "node:fs";
 import { randomBytes as randomBytes3 } from "node:crypto";
 import { homedir as homedir4, tmpdir } from "node:os";
-import { dirname as dirname10, join as join26, resolve as resolve14, sep as sep2 } from "node:path";
+import { dirname as dirname11, join as join26, resolve as resolve14, sep as sep2 } from "node:path";
 import { fileURLToPath as fileURLToPath7 } from "node:url";
 var RULE_FILENAME = "use-llm-externalizer.md";
 function resolveBundledRulePath() {
@@ -268435,7 +268477,7 @@ function resolveBundledRulePath() {
     candidates.push(join26(resolve14(pluginRoot), "rules", RULE_FILENAME));
   }
   try {
-    const here = dirname10(fileURLToPath7(import.meta.url));
+    const here = dirname11(fileURLToPath7(import.meta.url));
     candidates.push(resolve14(here, "..", "..", "rules", RULE_FILENAME));
   } catch {
   }
@@ -268453,7 +268495,7 @@ function canonical(p) {
   try {
     return realpathSync4(p);
   } catch {
-    const parent = dirname10(p);
+    const parent = dirname11(p);
     if (parent === p) return p;
     return join26(canonical(parent), p.slice(parent.length + (parent.endsWith(sep2) ? 0 : 1)));
   }
@@ -268510,8 +268552,8 @@ function installUsageRule(opts = {}) {
   }
   const tmp = dest + ".tmp." + process.pid + "." + randomBytes3(4).toString("hex");
   try {
-    mkdirSync20(rulesDir, { recursive: true });
-    writeFileSync17(tmp, desired, "utf-8");
+    mkdirSync21(rulesDir, { recursive: true });
+    writeFileSync18(tmp, desired, "utf-8");
     renameSync11(tmp, dest);
   } catch (e) {
     try {
@@ -268524,20 +268566,20 @@ function installUsageRule(opts = {}) {
 }
 
 // src/model-reconcile.ts
-import { mkdirSync as mkdirSync22, readFileSync as readFileSync27, renameSync as renameSync12, writeFileSync as writeFileSync19 } from "node:fs";
+import { mkdirSync as mkdirSync23, readFileSync as readFileSync27, renameSync as renameSync12, writeFileSync as writeFileSync20 } from "node:fs";
 import { join as join28 } from "node:path";
 
 // src/free-pool-auto-bench.ts
 import {
   closeSync,
   existsSync as existsSync22,
-  mkdirSync as mkdirSync21,
+  mkdirSync as mkdirSync22,
   openSync,
   readFileSync as readFileSync26,
-  writeFileSync as writeFileSync18
+  writeFileSync as writeFileSync19
 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
-import { dirname as dirname11, join as join27, resolve as pathResolve } from "node:path";
+import { dirname as dirname12, join as join27, resolve as pathResolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath as fileURLToPath8 } from "node:url";
 var LLM_EXT_HOME = join27(homedir5(), ".llm-externalizer");
@@ -268546,7 +268588,7 @@ var BENCH_LOCK = join27(LLM_EXT_HOME, "free-pool-bench.lock");
 var BENCH_LOG = join27(LLM_EXT_HOME, "free-pool-bench.log");
 var DISABLE_ENV = "LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH";
 function resolveBenchmarkScriptPath() {
-  const here = dirname11(fileURLToPath8(import.meta.url));
+  const here = dirname12(fileURLToPath8(import.meta.url));
   const bundled = pathResolve(here, "benchmark.js");
   if (existsSync22(bundled)) return bundled;
   const fromSrc = pathResolve(here, "..", "dist", "benchmark.js");
@@ -268629,7 +268671,7 @@ function maybeTriggerFreePoolBench(opts) {
     };
   }
   try {
-    mkdirSync21(LLM_EXT_HOME, { recursive: true });
+    mkdirSync22(LLM_EXT_HOME, { recursive: true });
   } catch {
   }
   let logFd;
@@ -268670,7 +268712,7 @@ function maybeTriggerFreePoolBench(opts) {
   });
   child.unref();
   try {
-    writeFileSync18(lockPath, String(child.pid ?? ""), "utf-8");
+    writeFileSync19(lockPath, String(child.pid ?? ""), "utf-8");
   } catch {
   }
   log(
@@ -268766,9 +268808,9 @@ function readLastReconcileMs() {
 function writeLastReconcileMs(nowMs) {
   try {
     const path = reconcileStateFilePath();
-    mkdirSync22(getConfigDir(), { recursive: true });
+    mkdirSync23(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp`;
-    writeFileSync19(tmp, JSON.stringify({ lastRunMs: nowMs }), { encoding: "utf-8", mode: 384 });
+    writeFileSync20(tmp, JSON.stringify({ lastRunMs: nowMs }), { encoding: "utf-8", mode: 384 });
     renameSync12(tmp, path);
   } catch {
   }
@@ -269778,7 +269820,7 @@ var LOG_FILE = join29(
 );
 function writeLogEntry(entry) {
   try {
-    mkdirSync23(LOG_DIR, { recursive: true });
+    mkdirSync24(LOG_DIR, { recursive: true });
     appendFileSync6(LOG_FILE, JSON.stringify(entry) + "\n");
   } catch {
     process.stderr.write(`[llm-externalizer] Failed to write log entry
@@ -269788,7 +269830,7 @@ function writeLogEntry(entry) {
 var STATS_FILE = "/tmp/claude/llm-externalizer-stats.json";
 function writeStatsFile() {
   try {
-    mkdirSync23("/tmp/claude", { recursive: true, mode: 448 });
+    mkdirSync24("/tmp/claude", { recursive: true, mode: 448 });
     const backend = getCurrentBackend();
     const stats = {
       session_id: SESSION_ID,
@@ -269803,7 +269845,7 @@ function writeStatsFile() {
       backend: backend.type
     };
     const tmpStats = STATS_FILE + ".tmp";
-    writeFileSync20(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
+    writeFileSync21(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
     renameSync13(tmpStats, STATS_FILE);
   } catch {
   }
@@ -269954,7 +269996,7 @@ function canonicalTimestamp(date5 = /* @__PURE__ */ new Date()) {
 }
 function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir) {
   const dir = outputDir || defaultOutputDir();
-  mkdirSync23(dir, { recursive: true });
+  mkdirSync24(dir, { recursive: true });
   const now = /* @__PURE__ */ new Date();
   const ts2 = canonicalTimestamp(now);
   const shortId = randomUUID3().slice(0, 6);
@@ -269975,7 +270017,7 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
   lines.push("", "---", "", responseText);
   const tmpPath = filepath + ".tmp";
   try {
-    writeFileSync20(tmpPath, lines.join("\n"), "utf-8");
+    writeFileSync21(tmpPath, lines.join("\n"), "utf-8");
     renameSync13(tmpPath, filepath);
   } catch (err3) {
     try {
@@ -271198,7 +271240,7 @@ Profiles: ${profileNames.join(", ")}`);
                 };
               }
               try {
-                writeFileSync20(absPath, jsonText, "utf-8");
+                writeFileSync21(absPath, jsonText, "utf-8");
               } catch (err3) {
                 return {
                   content: [
@@ -271268,9 +271310,9 @@ Profiles: ${profileNames.join(", ")}`);
           try {
             const raw = readFileSync28(SETTINGS_FILE, "utf-8");
             const targetDir = outputDir || defaultOutputDir();
-            mkdirSync23(targetDir, { recursive: true });
+            mkdirSync24(targetDir, { recursive: true });
             const copyPath = join29(targetDir, "settings_edit.yaml");
-            writeFileSync20(copyPath, raw, "utf-8");
+            writeFileSync21(copyPath, raw, "utf-8");
             return { content: [{ type: "text", text: copyPath }] };
           } catch (err3) {
             return {
@@ -272386,7 +272428,7 @@ FAILED: File not found.`);
                   continue;
                 }
                 const ciLang = detectLang(filePath);
-                const fileDir = dirname12(filePath);
+                const fileDir = dirname13(filePath);
                 const ciResolveBase = project_root || fileDir;
                 const extractMessages = [
                   { role: "system", content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path inside a filename tag before the file-content tag \u2014 reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.` + FILE_FORMAT_EXAMPLE },
@@ -272465,7 +272507,7 @@ FAILED: File not found.`);
               continue;
             }
             const ciLang = detectLang(filePath);
-            const fileDir = dirname12(filePath);
+            const fileDir = dirname13(filePath);
             const ciResolveBase = project_root || fileDir;
             const extractMessages = [
               {
@@ -272678,7 +272720,7 @@ FAILED: File not found.`);
             }
             return resp.content;
           };
-          const csModuleDir = dirname12(fileUrlToPath_cs(import.meta.url));
+          const csModuleDir = dirname13(fileUrlToPath_cs(import.meta.url));
           const csEmbeddingsScript = join29(csModuleDir, "..", "scripts", "compute_embeddings.py");
           const csPreflightModel = getCurrentBackend().model ?? "unknown";
           const csHooks = {

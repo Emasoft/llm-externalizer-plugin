@@ -7,6 +7,7 @@ import {
   setPaidBenchmarksAllowed,
   getPaidBenchmarksAllowed,
   assertPaidBenchmarkAllowed,
+  withPaidBenchmarksAllowed,
 } from "./discover.js";
 import { parseArgs } from "./cli-args.js";
 
@@ -68,5 +69,38 @@ describe("paid-benchmark opt-in — CLI flag parse", () => {
     expect(
       parseArgs(["node", "bench", "--allow-paid-models-tests"]).allowPaidModelsTests,
     ).toBe(true);
+  });
+});
+
+describe("paid-benchmark opt-in — withPaidBenchmarksAllowed scoping", () => {
+  // The flag is a process global; the MCP handlers serve ONE request each in a
+  // long-lived server. A bare set() has no matching unset, so an opted-in call
+  // would leave the process opted in for its entire remaining life and any later
+  // in-process benchmark would inherit a paid permission its caller never granted.
+  beforeEach(() => setPaidBenchmarksAllowed(false));
+
+  it("restores the previous value after the call resolves", async () => {
+    await withPaidBenchmarksAllowed(true, async () => {
+      expect(getPaidBenchmarksAllowed()).toBe(true);
+    });
+    expect(getPaidBenchmarksAllowed()).toBe(false);
+  });
+
+  it("restores the previous value even when the body THROWS", async () => {
+    await expect(
+      withPaidBenchmarksAllowed(true, async () => {
+        throw new Error("benchmark blew up");
+      }),
+    ).rejects.toThrow("benchmark blew up");
+    expect(getPaidBenchmarksAllowed()).toBe(false);
+  });
+
+  it("restores a previously-TRUE value rather than forcing false", () => {
+    setPaidBenchmarksAllowed(true);
+    return withPaidBenchmarksAllowed(false, async () => {
+      expect(getPaidBenchmarksAllowed()).toBe(false);
+    }).then(() => {
+      expect(getPaidBenchmarksAllowed()).toBe(true);
+    });
   });
 });

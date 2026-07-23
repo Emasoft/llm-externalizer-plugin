@@ -244,6 +244,31 @@ export function getPaidBenchmarksAllowed(): boolean {
 }
 
 /**
+ * Run `fn` with the opt-in set to `allowed`, then RESTORE the previous value.
+ *
+ * Use this — not a bare `setPaidBenchmarksAllowed(true)` — from any entry point
+ * that handles ONE request in a long-lived process (the MCP tool handlers). A bare
+ * set has no matching unset, so an opted-in call leaves the process opted in for
+ * its entire remaining life, and any later in-process benchmark inherits a paid
+ * permission its own caller never granted. (This restores; it does not serialize —
+ * two genuinely concurrent benchmark tool calls with different opt-ins still share
+ * one process flag. That needs the flag threaded through the phase options, which
+ * is why the module comment above calls it out.)
+ */
+export async function withPaidBenchmarksAllowed<T>(
+  allowed: boolean,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const prev = paidBenchmarksAllowed;
+  paidBenchmarksAllowed = allowed;
+  try {
+    return await fn();
+  } finally {
+    paidBenchmarksAllowed = prev;
+  }
+}
+
+/**
  * Fail-fast unless paid-model benchmarking has been opted into. A model is PAID
  * when it is NOT free-eligible (isFreeModeEligible = a ':free' id OR a $0 catalog
  * price), so `:free` / $0 pools never trip this — `--bench-free-pool` and bare

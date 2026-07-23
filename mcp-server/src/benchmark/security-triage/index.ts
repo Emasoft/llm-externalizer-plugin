@@ -33,6 +33,7 @@ import {
   type OpenRouterModel,
   type QualifiedModel,
 } from "../discover.js";
+import { setBenchmarkValidationExempt } from "../validated.js";
 import { getConfigDir, getActiveFreeOnly } from "../../config.js";
 import { FreeModeSkipError, isFreeSuffixModelId } from "../free-mode.js";
 import { resolveProjectMainRoot } from "../../project-root.js";
@@ -444,18 +445,31 @@ export async function runSecurityTriageBenchmark(
     } else {
       progress(`  ${model.id}: running…`);
       const t0 = Date.now();
-      const run = await runTriageBenchmarkOnModel(
-        model.id,
-        cases,
-        {
-          apiKey,
-          pricing: pricingFromModel(model),
-          perCallTimeoutMs: opts.perCallTimeoutMs ?? 45_000,
-          maxRetries: opts.maxRetries ?? 0,
-          workers: opts.workers,
-        },
-        opts.fetchImpl,
-      );
+      // The IRON RULE gate lives inside `judgeGroups`, which this runner calls —
+      // and a candidate is UNVALIDATED by definition until this very run scores
+      // it. Without the exemption the benchmark refuses its own subject and no
+      // paid model could ever become validated for security_scan. The run has
+      // already cleared the two cost gates above (price cap + paid opt-in), so
+      // this exempts the one caller that has paid the toll. try/finally: the flag
+      // must not survive the call, however it ends.
+      setBenchmarkValidationExempt(true);
+      let run: Awaited<ReturnType<typeof runTriageBenchmarkOnModel>>;
+      try {
+        run = await runTriageBenchmarkOnModel(
+          model.id,
+          cases,
+          {
+            apiKey,
+            pricing: pricingFromModel(model),
+            perCallTimeoutMs: opts.perCallTimeoutMs ?? 45_000,
+            maxRetries: opts.maxRetries ?? 0,
+            workers: opts.workers,
+          },
+          opts.fetchImpl,
+        );
+      } finally {
+        setBenchmarkValidationExempt(false);
+      }
       const elapsed = Date.now() - t0;
       latencyMs = cases.length > 0 ? Math.round(elapsed / cases.length) : elapsed;
       score = scoreTriage(model.id, cases, run.verdicts, thresholds, run.failSafe);

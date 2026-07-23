@@ -22,8 +22,8 @@
 //
 // Config.ts stays benchmark-free (no import cycle): the chokepoint lives here.
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import { getConfigDir } from "../config.js";
 import { isFreeSuffixModelId } from "./free-mode.js";
@@ -35,18 +35,15 @@ import { isFreeSuffixModelId } from "./free-mode.js";
  *  the model to the result set when `isPass(entry)` holds. A missing/corrupt file
  *  is an EMPTY set (→ the gate refuses; never "all pass"). Loosely typed so it
  *  serves every tool's differently-shaped entry. */
-function passedModelsFromKeyedLedger(
-  fileName: string,
-  isPass: (entry: Record<string, unknown>) => boolean,
-): Set<string> {
+function latestEntriesFromKeyedLedger(fileName: string): Map<string, Record<string, unknown>> {
   let cache: Record<string, unknown>;
   try {
     const raw = readFileSync(join(getConfigDir(), fileName), "utf-8");
     const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return new Set();
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return new Map();
     cache = parsed as Record<string, unknown>;
   } catch {
-    return new Set(); // missing / unreadable / corrupt → no proof of any pass
+    return new Map(); // missing / unreadable / corrupt → no proof of any pass
   }
   const latest = new Map<string, { date: string; entry: Record<string, unknown> }>();
   for (const [key, value] of Object.entries(cache)) {
@@ -58,8 +55,17 @@ function passedModelsFromKeyedLedger(
     const prev = latest.get(modelId);
     if (!prev || date > prev.date) latest.set(modelId, { date, entry });
   }
+  const out = new Map<string, Record<string, unknown>>();
+  for (const [modelId, { entry }] of latest) out.set(modelId, entry);
+  return out;
+}
+
+function passedModelsFromKeyedLedger(
+  fileName: string,
+  isPass: (entry: Record<string, unknown>) => boolean,
+): Set<string> {
   const passed = new Set<string>();
-  for (const [modelId, { entry }] of latest) {
+  for (const [modelId, entry] of latestEntriesFromKeyedLedger(fileName)) {
     if (isPass(entry)) passed.add(modelId);
   }
   return passed;
@@ -84,26 +90,101 @@ function passedDeterministic(fileName: string): Set<string> {
   });
 }
 
-/** The GENERAL keyword sweep ledger — a single-run snapshot, NOT key-per-model:
- *  `{ results: [{ modelId, ok, pass }] }`. Pass = `ok && pass`. This is the
- *  BOTTOM rank: it validates tools that have no dedicated benchmark. */
+/** The rank-0 ACCUMULATING ledger — keyed `modelId::date` like the five per-tool
+ *  ledgers, so it survives a later sweep of a different model set. */
+export const GENERAL_KEYWORD_LEDGER = "general-keyword-results.json";
+
+/** THE single definition of "passed the general keyword sweep", applied to both
+ *  the accumulating ledger and the legacy snapshot. `schemaCompliant !== false`
+ *  matches --apply-free-pool's own filter (index.ts) — before this there were two
+ *  competing definitions, and the looser one guarded the send gate. */
+function isGeneralKeywordPass(row: {
+  ok?: unknown;
+  pass?: unknown;
+  schemaCompliant?: unknown;
+}): boolean {
+  return row.ok === true && row.pass === true && row.schemaCompliant !== false;
+}
+
+/** The GENERAL keyword sweep passed-set — rank 0, the floor that validates every
+ *  tool with no dedicated benchmark (chat, compare_files, cluster_synonyms, …).
+ *
+ *  TWO sources, because `benchmark-results.json` is a WHOLE-FILE SNAPSHOT of one
+ *  run, not an accumulating ledger. Every sweep OVERWRITES it, so a background
+ *  free-pool bench (`--bench-free-pool`, whose roster is ':free'-only) used to
+ *  erase the pass of a paid model that was working minutes earlier — silently
+ *  revoking it for every rank-0 tool. The accumulating ledger fixes that; the
+ *  snapshot is still read so an install whose only proof predates the ledger
+ *  keeps working.
+ *
+ *  Precedence: the accumulating ledger is AUTHORITATIVE for every model it
+ *  mentions (its latest entry wins, pass or fail); the snapshot only contributes
+ *  models the ledger has never seen. Unioning them blindly would let a stale
+ *  snapshot PASS resurrect a model the ledger has since recorded as FAILING. */
 function passedGeneralKeyword(): Set<string> {
+  const ledger = latestEntriesFromKeyedLedger(GENERAL_KEYWORD_LEDGER);
   const passed = new Set<string>();
+  for (const [modelId, entry] of ledger) {
+    if (isGeneralKeywordPass(entry)) passed.add(modelId);
+  }
   try {
     const raw = readFileSync(join(getConfigDir(), "benchmark-results.json"), "utf-8");
     const parsed = JSON.parse(raw) as { results?: unknown };
     const results = Array.isArray(parsed.results) ? parsed.results : [];
     for (const r of results) {
       if (!r || typeof r !== "object") continue;
-      const row = r as { modelId?: unknown; ok?: unknown; pass?: unknown };
-      if (typeof row.modelId === "string" && row.ok === true && row.pass === true) {
-        passed.add(row.modelId);
-      }
+      const row = r as { modelId?: unknown; ok?: unknown; pass?: unknown; schemaCompliant?: unknown };
+      if (typeof row.modelId !== "string") continue;
+      if (ledger.has(row.modelId)) continue; // the ledger already ruled on it
+      if (isGeneralKeywordPass(row)) passed.add(row.modelId);
     }
   } catch {
-    /* missing / corrupt → empty */
+    /* missing / corrupt → the ledger alone answers */
   }
   return passed;
+}
+
+/**
+ * Append one keyword-sweep's rows to the rank-0 ACCUMULATING ledger.
+ *
+ * Called by the sweep right after it writes its snapshot. Merge-on-write keyed
+ * `modelId::date` so a run only ever ADDS to (or supersedes its own model's entry
+ * in) the record — never revokes another model's pass the way overwriting the
+ * snapshot does. Best-effort: a ledger we cannot write must not fail a benchmark
+ * that already ran and already wrote its report; the gate simply falls back to
+ * the snapshot, which is exactly the pre-ledger behavior.
+ */
+export function recordGeneralKeywordPasses(
+  rows: ReadonlyArray<{ modelId?: unknown; ok?: unknown; pass?: unknown; schemaCompliant?: unknown }>,
+  when: string = new Date().toISOString(),
+): void {
+  const path = join(getConfigDir(), GENERAL_KEYWORD_LEDGER);
+  let cache: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      cache = parsed as Record<string, unknown>;
+    }
+  } catch {
+    /* missing / corrupt → start a fresh ledger rather than lose the run */
+  }
+  const date = when.slice(0, 10);
+  for (const row of rows) {
+    if (!row || typeof row.modelId !== "string" || row.modelId.length === 0) continue;
+    cache[`${row.modelId}::${date}`] = {
+      date: when,
+      ok: row.ok === true,
+      pass: row.pass === true,
+      schemaCompliant: row.schemaCompliant,
+    };
+  }
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${JSON.stringify(cache, null, 2)}\n`, "utf-8");
+  } catch {
+    /* best-effort — see the doc comment */
+  }
+  clearValidatedMemo(); // the gate must see this run's passes immediately
 }
 
 // ── The difficulty hierarchy ──────────────────────────────────────────────
@@ -145,6 +226,16 @@ export function rankForTool(toolName: string): number {
   return TOOL_DIFFICULTY_RANK[toolName] ?? 0;
 }
 
+// Short-TTL memo of the per-tool passed-sets. WHY: `assertModelValidated` runs at
+// resolveConnection — i.e. once per LLM REQUEST — and an uncached call reads and
+// JSON-parses up to six ledger files SYNCHRONOUSLY. A 500-file ensemble scan would
+// do thousands of blocking reads for an answer that changes only when a benchmark
+// finishes. The TTL (not a permanent memo) is the point: a benchmark that runs
+// IN-PROCESS must still be able to validate a model within seconds, so the memo has
+// to expire on its own rather than need explicit invalidation from every writer.
+const VALIDATED_MEMO_TTL_MS = 5_000;
+const validatedMemo = new Map<string, { at: number; set: Set<string> }>();
+
 /**
  * Every model validated for `toolName`: the UNION of the passed-sets of every
  * ledger at least as hard as the tool (harder covers easier). For a rank-0 tool
@@ -152,13 +243,27 @@ export function rankForTool(toolName: string): number {
  * code_task (rank 5) it is ONLY a code_task pass.
  */
 export function validatedModelsForTool(toolName: string): Set<string> {
+  // Keyed by CONFIG DIR too, not just the tool: LLM_EXT_CONFIG_DIR is swapped per
+  // test case (and can change at runtime), and a dir-blind memo would answer one
+  // config's question with another config's ledgers.
+  const key = `${getConfigDir()} ${toolName}`;
+  const hit = validatedMemo.get(key);
+  const now = Date.now();
+  if (hit && now - hit.at < VALIDATED_MEMO_TTL_MS) return hit.set;
   const min = rankForTool(toolName);
   const out = new Set<string>();
   for (const ledger of LEDGERS) {
     if (ledger.rank < min) continue;
     for (const id of ledger.read()) out.add(id);
   }
+  validatedMemo.set(key, { at: now, set: out });
   return out;
+}
+
+/** Drop the memo. Called by the test bypass toggles so a suite that swaps
+ *  LLM_EXT_CONFIG_DIR between cases never reads a previous case's ledgers. */
+export function clearValidatedMemo(): void {
+  validatedMemo.clear();
 }
 
 /** Is `modelId` validated to serve `toolName`? (Pure availability of a pass — the
@@ -184,6 +289,21 @@ export function validatedForTool(modelId: string, toolName: string): boolean {
 let validationBypassForTests = false;
 export function setValidationBypassForTests(v: boolean): void {
   validationBypassForTests = v;
+  clearValidatedMemo(); // a suite toggling this also swaps LLM_EXT_CONFIG_DIR
+}
+
+// The BENCHMARK exemption — production, and load-bearing. A benchmark is the ONLY
+// thing that can PRODUCE a validation, so gating it on one is circular: without this
+// flag, benchmarking a paid candidate for security_scan is impossible, because
+// `runSecurityTriageBenchmark` → runner.ts → `judgeGroups` hits the very gate the
+// run exists to satisfy ("IRON RULE: not validated for security_scan"), and the
+// candidate can never become validated. The benchmark has its OWN, stricter cost
+// guards in front of it (the $1.25/1M cap + the --allow-paid-models-tests opt-in),
+// so exempting it does not weaken cost-safety — it is the one caller that has
+// already paid the opt-in toll. Set with try/finally around the benchmark body.
+let benchmarkValidationExempt = false;
+export function setBenchmarkValidationExempt(v: boolean): void {
+  benchmarkValidationExempt = v;
 }
 
 export function assertModelValidated(
@@ -192,11 +312,15 @@ export function assertModelValidated(
   backendType: "local" | "openrouter",
 ): void {
   if (validationBypassForTests) return; // test-only escape hatch (see above)
+  if (benchmarkValidationExempt) return; // the run that CREATES validations
   if (backendType !== "openrouter") return; // local — no catalog/benchmark
   if (isFreeSuffixModelId(modelId)) return; // ':free' — its own filter, and $0
-  if (validatedForTool(modelId, toolName)) return;
 
-  const validated = [...validatedModelsForTool(toolName)];
+  // ONE ledger read for both the decision and the message — the failure path used
+  // to re-read all six files a second time just to name the alternatives.
+  const validatedSet = validatedModelsForTool(toolName);
+  if (validatedSet.has(modelId)) return;
+  const validated = [...validatedSet];
   const flag = TOOL_BENCH_FLAG[toolName];
   const validateCmd = flag
     ? `llm-ext-benchmark ${flag} ${modelId} --allow-paid-models-tests`

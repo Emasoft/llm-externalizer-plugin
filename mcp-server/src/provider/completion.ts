@@ -1117,19 +1117,26 @@ export async function chatCompletionWithRetry(
     const limit = useEmptyBudget ? MAX_EMPTY_RESPONSE_RETRIES : MAX_TRUNCATION_RETRIES;
     const currentAttempt = useEmptyBudget ? emptyAttempts : genericAttempts;
 
+    // The model this call actually hit. `options.model` is OPTIONAL — when the
+    // caller relies on the profile's configured model it is undefined, and keying
+    // the ladder (and the cost stop below) off it alone silently disabled BOTH for
+    // exactly the calls that spend the most. The exhausted-retries message already
+    // resolves it this way; do it once, here, and use it everywhere.
+    const ladderModel = options.model || backend.model;
+
     // Empty-response escalation: downgrade the reasoning cache so the next
     // attempt runs with less (or no) reasoning. xhigh -> high -> none.
-    if (useEmptyBudget && options.model && currentAttempt <= limit) {
-      const current = MODEL_REASONING_CACHE.get(options.model);
+    if (useEmptyBudget && ladderModel && currentAttempt <= limit) {
+      const current = MODEL_REASONING_CACHE.get(ladderModel);
       if (current === undefined || current === "xhigh") {
-        MODEL_REASONING_CACHE.set(options.model, "high");
+        MODEL_REASONING_CACHE.set(ladderModel, "high");
         process.stderr.write(
-          `[llm-externalizer] Empty response on ${options.model} — downgrading reasoning cache to high\n`,
+          `[llm-externalizer] Empty response on ${ladderModel} — downgrading reasoning cache to high\n`,
         );
       } else if (current === "high") {
-        MODEL_REASONING_CACHE.set(options.model, "none");
+        MODEL_REASONING_CACHE.set(ladderModel, "none");
         process.stderr.write(
-          `[llm-externalizer] Empty response on ${options.model} — disabling reasoning\n`,
+          `[llm-externalizer] Empty response on ${ladderModel} — disabling reasoning\n`,
         );
       }
     }
@@ -1141,21 +1148,29 @@ export async function chatCompletionWithRetry(
     // The generic empty budget is 15 retries — appropriate for a cold-start blank
     // (those are cheap: no tokens generated), but ruinous here, where each attempt
     // is a MAXED-OUT completion. Stop as soon as the cure has demonstrably failed.
+    //
+    // `currentAttempt > 1` is required, not cosmetic: MODEL_REASONING_CACHE is a
+    // process-global that is ALSO set to "none" when a model simply does not
+    // SUPPORT reasoning (see reasoningLadderForModel). For such a model the cache
+    // reads "none" from the very first failure, so without this guard the first
+    // length+empty aborted with zero retries — turning a possibly transient
+    // provider hiccup into a hard error. One retry, then stop.
     if (
       useEmptyBudget &&
       resp.finishReason === "length" &&
-      options.model &&
-      MODEL_REASONING_CACHE.get(options.model) === "none"
+      currentAttempt > 1 &&
+      ladderModel &&
+      MODEL_REASONING_CACHE.get(ladderModel) === "none"
     ) {
       recordServiceFailure();
       resp.truncated = true;
       resp.content =
-        `**NO CONTENT**: ${options.model} consumed its entire ${options.maxTokens ?? "output"}-token budget without emitting any content, ` +
+        `**NO CONTENT**: ${ladderModel} consumed its entire ${options.maxTokens ?? "output"}-token budget without emitting any content, ` +
         `even with reasoning disabled (finish_reason=length). The model produced only reasoning tokens. ` +
         `Retrying would bill another full budget for the same empty result, so this call stops here. ` +
         `Consider a smaller input, a larger max_tokens, or a different model for this slot.`;
       process.stderr.write(
-        `[llm-externalizer] ${options.model}: length+empty with reasoning already off — refusing to burn another full budget on a retry that cannot help.\n`,
+        `[llm-externalizer] ${ladderModel}: length+empty with reasoning already off — refusing to burn another full budget on a retry that cannot help.\n`,
       );
       return resp;
     }

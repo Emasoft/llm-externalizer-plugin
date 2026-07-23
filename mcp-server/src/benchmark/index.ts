@@ -33,6 +33,7 @@ import {
   type QualifiedModel,
 } from "./discover.js";
 import { runBenchmarkOnModel, keywordPromptChars, type RunOutcome } from "./runner.js";
+import { recordGeneralKeywordPasses } from "./validated.js";
 import { scoreRun, type ModelScore } from "./score.js";
 import { renderReport, renderJson } from "./report.js";
 import {
@@ -664,6 +665,14 @@ async function runKeywordSweep(
   // mirroring report.ts's renderJson shape inline — one source of truth for the
   // CachedResult shape that --pick-top-n / --from-cache also consume.
   const parsed = JSON.parse(json) as CachedReport;
+
+  // Mirror this run's rows into the rank-0 ACCUMULATING ledger. The sidecar above
+  // is a whole-file SNAPSHOT — every sweep overwrites it — so on its own it lets a
+  // later ':free'-only run silently revoke a paid model's IRON RULE validation for
+  // every rank-0 tool. Recorded from `parsed.results` (not `results`) so the ledger
+  // and the sidecar can never disagree about a row's shape.
+  recordGeneralKeywordPasses(parsed.results, timestamp);
+
   return {
     dryRun: false,
     candidates: candidates.length,
