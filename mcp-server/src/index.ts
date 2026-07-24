@@ -1741,6 +1741,14 @@ function recomputeForceFree(): void {
 function activeFreePool(): string[] {
   if (activeResolved?.freeOnly) return resolveAutoFreePool(activeResolved.freeModels);
   if (autoFreePool.length > 0) return autoFreePool;
+  // Forced-free (or auto-free without an engaged pool) on a profile that is NOT
+  // free_only: resolveProfile leaves activeResolved.freeModels EMPTY, so prefer the
+  // persisted/curated free_models read from settings (approvedFreePoolFromSettings,
+  // which reads the RAW configured list + reconcile's updates) before the static
+  // seed — the operator's own pool must win. resolveAutoFreePool([]) supplies the
+  // seed only when there is genuinely no configured pool (the "never dark" floor).
+  const persisted = approvedFreePoolFromSettings();
+  if (persisted.length > 0) return persisted;
   return resolveAutoFreePool(activeResolved?.freeModels ?? []);
 }
 

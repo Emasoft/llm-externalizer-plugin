@@ -221216,7 +221216,8 @@ function approvedFreePoolFromSettings() {
     const active = s?.profiles[s.active];
     if (!s || !active) return [];
     const r = resolveProfile(s.active, active);
-    const base = r.freeModels.length > 0 ? r.freeModels : [...FREE_POOL_SEED];
+    const configured = r.freeModels.length > 0 ? r.freeModels : Array.isArray(active.free_models) ? active.free_models.filter((v) => typeof v === "string") : [];
+    const base = configured.length > 0 ? configured : [...FREE_POOL_SEED];
     return filterFreeModels(base, /* @__PURE__ */ new Map(), benchmarkFailedModels()).filter(
       isFreeSuffixModelId
     );

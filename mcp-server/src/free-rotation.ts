@@ -129,11 +129,23 @@ export function approvedFreePoolFromSettings(): string[] {
     const active = s?.profiles[s.active];
     if (!s || !active) return [];
     const r = resolveProfile(s.active, active);
-    // free_only pins its own pool. Any other profile reaching this point is under
-    // AUTO-free (the balance fell / a 402 fired, and engageAutoFree flipped the
-    // global flag), where the pool is the profile's free_models if it pins any,
-    // else the bundled seed.
-    const base = r.freeModels.length > 0 ? r.freeModels : [...FREE_POOL_SEED];
+    // The pool this profile should run when free mode is active for ANY reason
+    // (free_only, auto-free on low balance / 402, OR the allow_paid_models master
+    // switch). Precedence: the profile's OWN curated free_models win over the
+    // bundled seed. resolveProfile fills r.freeModels ONLY for a free_only profile,
+    // so for a paid profile that pins free_models (the master-switch case, and the
+    // credit-switch case) we MUST read the RAW configured list — otherwise the
+    // operator's curated pool is silently dropped and the static seed used instead
+    // (a real bug the free-by-default default exposes: on geminigrok the 14
+    // configured :free models were ignored in favour of FREE_POOL_SEED). The seed
+    // is the last-resort fallback only when there is genuinely no configured pool.
+    const configured =
+      r.freeModels.length > 0
+        ? r.freeModels
+        : Array.isArray(active.free_models)
+          ? active.free_models.filter((v): v is string => typeof v === "string")
+          : [];
+    const base = configured.length > 0 ? configured : [...FREE_POOL_SEED];
     return filterFreeModels(base, new Map(), benchmarkFailedModels()).filter(
       isFreeSuffixModelId,
     );

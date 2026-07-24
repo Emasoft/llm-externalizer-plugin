@@ -8,9 +8,11 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
+import { getSettingsPath } from "./config";
 import {
   AllFreeModelsExhaustedError,
   applyUnavailable,
+  approvedFreePoolFromSettings,
   callWithFreeRotation,
   classifyUnavailable,
   clearCooldown,
@@ -34,6 +36,68 @@ import {
 
 const T0 = Date.UTC(2026, 6, 14, 10, 0, 0); // 2026-07-14T10:00:00Z
 const slot = (id: string) => ({ id, maxOutput: 1000 });
+
+describe("approvedFreePoolFromSettings — a paid profile's OWN free_models win over the seed", () => {
+  // Regression fence: resolveProfile only fills freeModels for a free_only
+  // profile, so this helper used to read an empty list for a PAID profile that
+  // pins free_models and fall back to FREE_POOL_SEED — silently dropping the
+  // operator's curated pool. The free-by-default default made that the common
+  // case (every remote profile is forced free), so a paid profile's configured
+  // pool MUST be honoured.
+  let prev: string | undefined;
+  let dir: string;
+  beforeEach(() => {
+    prev = process.env.LLM_EXT_CONFIG_DIR;
+    dir = mkdtempSync(join("/tmp", "llm-ext-afps-"));
+    process.env.LLM_EXT_CONFIG_DIR = dir;
+  });
+  afterEach(() => {
+    if (prev === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
+    else process.env.LLM_EXT_CONFIG_DIR = prev;
+  });
+
+  it("returns the configured :free models of a PAID (non-free_only) profile, not the seed", () => {
+    writeFileSync(
+      getSettingsPath(),
+      [
+        "active: p",
+        "profiles:",
+        "  p:",
+        "    mode: remote-ensemble",
+        "    api: openrouter-remote",
+        "    model: vendor/paid-a", // paid config models — must be ignored under free
+        "    second_model: vendor/paid-b",
+        "    free_models:",
+        "      - curated/one:free",
+        "      - curated/two:free",
+        "      - curated/three:free",
+      ].join("\n"),
+      "utf-8",
+    );
+    const pool = approvedFreePoolFromSettings();
+    expect(pool).toEqual(["curated/one:free", "curated/two:free", "curated/three:free"]);
+    // Not the bundled seed, and no paid config model leaked in.
+    expect(pool).not.toContain("vendor/paid-a");
+  });
+
+  it("falls back to the seed ONLY when the profile pins no free_models (never dark)", () => {
+    writeFileSync(
+      getSettingsPath(),
+      [
+        "active: p",
+        "profiles:",
+        "  p:",
+        "    mode: remote",
+        "    api: openrouter-remote",
+        "    model: vendor/paid-a",
+      ].join("\n"),
+      "utf-8",
+    );
+    const pool = approvedFreePoolFromSettings();
+    expect(pool.length).toBeGreaterThan(0); // seed → never empty
+    expect(pool.every((id) => id.endsWith(":free"))).toBe(true);
+  });
+});
 
 describe("classifyUnavailable — decides WHETHER to rotate and for HOW LONG", () => {
   it("classifies a spent DAILY free quota as daily-quota, not a transient 429", () => {
