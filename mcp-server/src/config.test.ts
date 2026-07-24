@@ -4,7 +4,9 @@
 // tool_models validation (known-tool keys + non-empty model-id values,
 // treated as untrusted YAML). Pure — no network, no filesystem.
 
-import { describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, it, expect } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 import {
   resolveModelForTool,
@@ -14,6 +16,11 @@ import {
   HIGH_QUALITY_MODEL_DEFAULTS,
   buildHighQualityProvider,
   highQualityScanRefusal,
+  shouldForceFreeMode,
+  loadSettings,
+  getSettingsPath,
+  setAllowPaidModels,
+  getAllowPaidModels,
   type Profile,
   type ResolvedProfile,
 } from "./config.js";
@@ -417,5 +424,86 @@ describe("highQualityScanRefusal (paid-model fail-fast gate, TRDD-DBUSM55E)", ()
     expect(highQualityScanRefusal("local", true, true)).toContain(
       "OpenRouter backend",
     );
+  });
+
+  it("under the master switch (allow_paid_models=false), names the switch as the fix, not free_only (D2)", () => {
+    // high_quality_scan is a REFUSAL, not a silent downgrade — its contract is
+    // "ONE strong paid model". Under the master switch the actionable fix is the
+    // switch itself, so the message must point there.
+    const msg = highQualityScanRefusal("openrouter", true, false, /* allowPaidModels */ false);
+    expect(msg).toContain("allow_paid_models");
+    expect(msg).toContain("scan_folder");
+    expect(msg).not.toContain("Disable free_only");
+  });
+
+  it("keeps the original 'disable free_only' wording when paid IS allowed (3-arg back-compat)", () => {
+    // The 4th arg defaults true, so every pre-switch caller keeps its wording.
+    expect(highQualityScanRefusal("openrouter", true, false)).toContain("free_only");
+    expect(highQualityScanRefusal("openrouter", true, false, true)).toContain("free_only");
+  });
+});
+
+describe("shouldForceFreeMode — the pure free-by-default decision (USER)", () => {
+  it("FORCES free for a remote profile while paid is off", () => {
+    expect(shouldForceFreeMode(false, "remote")).toBe(true);
+    expect(shouldForceFreeMode(false, "remote-ensemble")).toBe(true);
+  });
+
+  it("never forces a LOCAL profile ($0/offline)", () => {
+    expect(shouldForceFreeMode(false, "local")).toBe(false);
+  });
+
+  it("does not force when paid is allowed (the opt-in restores normal behavior)", () => {
+    expect(shouldForceFreeMode(true, "remote")).toBe(false);
+    expect(shouldForceFreeMode(true, "remote-ensemble")).toBe(false);
+    expect(shouldForceFreeMode(true, "local")).toBe(false);
+  });
+
+  it("does not force a null mode (invalid/absent active profile — nothing to run)", () => {
+    expect(shouldForceFreeMode(false, null)).toBe(false);
+    expect(shouldForceFreeMode(true, null)).toBe(false);
+  });
+});
+
+describe("allow_paid_models — the master switch parse + cache", () => {
+  let cfg: string;
+  let prevCfgDir: string | undefined;
+
+  beforeEach(() => {
+    cfg = mkdtempSync(join("/tmp", "aps-cfg-"));
+    prevCfgDir = process.env.LLM_EXT_CONFIG_DIR;
+    process.env.LLM_EXT_CONFIG_DIR = cfg;
+  });
+  afterEach(() => {
+    if (prevCfgDir === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
+    else process.env.LLM_EXT_CONFIG_DIR = prevCfgDir;
+    rmSync(cfg, { recursive: true, force: true });
+    setAllowPaidModels(false); // restore the free-safe default for sibling suites
+  });
+
+  const write = (yaml: string) => writeFileSync(getSettingsPath(), yaml, "utf-8");
+  const BASE =
+    "active: p\nprofiles:\n  p:\n    mode: remote\n    api: openrouter-remote\n    model: x/y\n";
+
+  it("defaults to false when the key is absent (a pre-switch settings.yaml is free-safe)", () => {
+    write(BASE);
+    expect(loadSettings()?.allow_paid_models).toBe(false);
+  });
+
+  it("parses true only for the literal boolean true", () => {
+    write(`${BASE}allow_paid_models: true\n`);
+    expect(loadSettings()?.allow_paid_models).toBe(true);
+  });
+
+  it("treats any non-true value (a typo / string) as false — never accidentally enables paid", () => {
+    write(`${BASE}allow_paid_models: "yes"\n`);
+    expect(loadSettings()?.allow_paid_models).toBe(false);
+  });
+
+  it("get/set round-trips the process cache; default is false", () => {
+    setAllowPaidModels(false);
+    expect(getAllowPaidModels()).toBe(false);
+    setAllowPaidModels(true);
+    expect(getAllowPaidModels()).toBe(true);
   });
 });

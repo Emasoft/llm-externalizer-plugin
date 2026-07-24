@@ -250430,6 +250430,15 @@ var FreeModeSkipError = class extends Error {
   }
 };
 
+// src/paid-switch.ts
+var _allowPaidModels = false;
+function setAllowPaidModels(allow) {
+  _allowPaidModels = allow;
+}
+function getAllowPaidModels() {
+  return _allowPaidModels;
+}
+
 // src/benchmark/discover.ts
 var DEFAULT_CRITERIA = {
   category: "programming",
@@ -250490,12 +250499,17 @@ async function withPaidBenchmarksAllowed(allowed, fn) {
   }
 }
 function assertPaidBenchmarkAllowed(models) {
-  if (paidBenchmarksAllowed) return;
   const paid = models.filter(
     (m) => !isFreeModeEligible(m.id, m.inputDollarsPerMillion, m.outputDollarsPerMillion)
   );
   if (paid.length === 0) return;
   const list = paid.map((m) => m.id).join(", ");
+  if (!getAllowPaidModels()) {
+    throw new Error(
+      `paid benchmarks are off: allow_paid_models is false, so paid model(s) ${list} cannot be benchmarked. Set allow_paid_models: true in ~/.llm-externalizer/settings.yaml to benchmark (and use) paid models \u2014 --allow-paid-models-tests cannot override the master switch. No API call was made, $0 spent.`
+    );
+  }
+  if (paidBenchmarksAllowed) return;
   throw new Error(
     `paid-benchmark opt-in: benchmarking paid model(s) ${list} requires explicit permission. Re-run with --allow-paid-models-tests (CLI) or allow_paid_models_tests: true (MCP). Paid models are also capped at $${MAX_BENCHMARK_PRICE_PER_M}/1M (input AND output). No API call was made, $0 spent.`
   );
@@ -251015,7 +251029,10 @@ function loadSettings() {
     if (!parsed || typeof parsed !== "object") return null;
     return {
       active: parsed.active || "",
-      profiles: parsed.profiles || {}
+      profiles: parsed.profiles || {},
+      // Absent / any non-true value ⟺ false: the safe (free) side. A YAML that
+      // predates this key, or sets it to a typo, never accidentally enables paid.
+      allow_paid_models: parsed.allow_paid_models === true
     };
   } catch (err3) {
     process.stderr.write(
@@ -251028,6 +251045,10 @@ function loadSettings() {
 function generateDefaultSettings() {
   return {
     active: "local-lmstudio-qwen35",
+    // Explicit free-safe default (USER: free-by-default). The default active
+    // profile is local ($0) so the switch is inert here, but stating it keeps the
+    // object in lock-step with SETTINGS_TEMPLATE and documents the safe posture.
+    allow_paid_models: false,
     profiles: {
       "local-lmstudio-qwen35": {
         mode: "local",
@@ -251334,11 +251355,14 @@ function buildHighQualityProvider(hq) {
   if (hq.quantizations.length > 0) provider.quantizations = hq.quantizations;
   return provider;
 }
-function highQualityScanRefusal(backendType, freeOnly, creditExhausted2) {
+function highQualityScanRefusal(backendType, freeOnly, creditExhausted2, allowPaidModels = true) {
   if (backendType !== "openrouter") {
     return `high_quality_scan requires the OpenRouter backend (it runs a remote high-quality model); the active backend is ${backendType}. Switch to a remote profile, or use scan_folder for the local backend.`;
   }
   if (freeOnly) {
+    if (!allowPaidModels) {
+      return `high_quality_scan runs ONE paid high-quality model, and paid models are off (allow_paid_models: false). Set allow_paid_models: true in ~/.llm-externalizer/settings.yaml to enable it, or use scan_folder (the free 3-model ensemble).`;
+    }
     return `high_quality_scan uses a paid high-quality model and cannot run under free_only mode. Disable free_only in your profile, or use scan_folder (which honours the free pool).`;
   }
   if (creditExhausted2) {
@@ -251413,6 +251437,9 @@ function setActiveFreeOnly(freeOnly) {
 function getActiveFreeOnly() {
   return _activeFreeOnly;
 }
+function shouldForceFreeMode(allowPaidModels, mode) {
+  return !allowPaidModels && mode !== null && mode !== "local";
+}
 function assertFreeOnlyModel(freeOnly, backendType, model) {
   if (freeOnly && backendType === "openrouter" && !model.endsWith(":free")) {
     throw new Error(
@@ -251432,6 +251459,17 @@ var SETTINGS_TEMPLATE = `# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u250
 
 # Active profile name
 active: local-lmstudio-qwen35
+
+# \u2500\u2500 Master paid-spend switch \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# DEFAULT false \u2014 only FREE models are used, everywhere, by default. While
+# this is false (or absent), every remote (OpenRouter) profile is forced to
+# its free pool no matter what 'model' it configures, and even paid
+# *benchmarks* are refused \u2014 one switch guarantees zero paid spend. Local
+# profiles are $0/offline and always run as-is. Set it true to use paid
+# models (and to benchmark them); per-profile 'free_only' then remains an
+# opt-in. A remote profile with no 'free_models' still runs free \u2014 the
+# server auto-discovers a benchmark-vetted free pool at $0.
+allow_paid_models: false
 
 # \u2500\u2500 Profiles \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 profiles:
@@ -269412,6 +269450,7 @@ Settings file: ${SETTINGS_FILE}`;
     return generateDefaultSettings();
   }
 })();
+setAllowPaidModels(activeSettings.allow_paid_models === true);
 var activeResolved = (() => {
   const validation = validateSettings(activeSettings);
   if (!validation.valid) {
@@ -269493,7 +269532,11 @@ function reloadSettingsFromDisk() {
   }
   const newSettings = {
     active: parsed.active || "",
-    profiles: parsed.profiles || {}
+    profiles: parsed.profiles || {},
+    // Carry the master switch through the hot-reload — without this line, editing
+    // allow_paid_models in settings.yaml would be silently ignored until restart
+    // (the reload builder used to drop every top-level key but active/profiles).
+    allow_paid_models: parsed.allow_paid_models === true
   };
   if (newSettings.active) {
     const validation = validateSettings(newSettings);
@@ -269520,7 +269563,8 @@ function reloadSettingsFromDisk() {
   const priorFreeOnly = activeResolved?.freeOnly ?? false;
   activeSettings = newSettings;
   activeResolved = nextResolved;
-  setActiveFreeOnly((nextResolved?.freeOnly ?? false) || autoFreeEngaged);
+  setAllowPaidModels(newSettings.allow_paid_models === true);
+  publishFreeState();
   maybeTriggerFreePoolBench({
     activeProfile: newSettings.active,
     freeOnlyActive: nextResolved?.freeOnly ?? false,
@@ -269703,6 +269747,7 @@ var MIN_BALANCE_FOR_PAID_USD = parseFreeBelowUsd(
 );
 var autoFreeEngaged = false;
 var autoFreePool = [];
+var forceFreeByMasterSwitch = false;
 function engageAutoFree(reason) {
   if (autoFreeEngaged) return;
   autoFreeEngaged = true;
@@ -270185,7 +270230,22 @@ function batchReportFilename(toolName, _batchId, filePath, _fileIndex) {
   return `${ts2}-${toolName}-${srcName}-${shortId}.md`;
 }
 function isFreeModeActive() {
-  return (activeResolved?.freeOnly ?? false) || autoFreeEngaged;
+  return (activeResolved?.freeOnly ?? false) || autoFreeEngaged || forceFreeByMasterSwitch;
+}
+function recomputeForceFree() {
+  forceFreeByMasterSwitch = shouldForceFreeMode(
+    getAllowPaidModels(),
+    activeResolved?.mode ?? null
+  );
+}
+function activeFreePool() {
+  if (activeResolved?.freeOnly) return resolveAutoFreePool(activeResolved.freeModels);
+  if (autoFreePool.length > 0) return autoFreePool;
+  return resolveAutoFreePool(activeResolved?.freeModels ?? []);
+}
+function publishFreeState() {
+  recomputeForceFree();
+  setActiveFreeOnly(isFreeModeActive());
 }
 function buildFreeRotationPool(fileLineCount, exclude = /* @__PURE__ */ new Set()) {
   if (!activeResolved || getCurrentBackend().type !== "openrouter") return [];
@@ -270594,8 +270654,8 @@ function getEnsembleModels() {
   if (!activeResolved || activeResolved.mode !== "remote-ensemble") return [];
   const catalogById = new Map(openRouterModelCache.map((m) => [m.id, m]));
   let models;
-  if (activeResolved.freeOnly || autoFreeEngaged) {
-    const pool = activeResolved.freeOnly ? activeResolved.freeModels : autoFreePool;
+  if (isFreeModeActive()) {
+    const pool = activeFreePool();
     models = selectFreeEnsembleModels(
       pool,
       catalogById,
@@ -270722,8 +270782,8 @@ Run the "discover" tool to see the current profile status.`
     if (MASS_SCOUT_TOOL_NAMES.has(name)) {
       const scoutArgs = { ...args ?? {} };
       await ensureAutoFreeDecided();
-      const freeActive = (activeResolved?.freeOnly ?? false) || autoFreeEngaged;
-      const freePool = activeResolved?.freeOnly ? activeResolved.freeModels : autoFreePool;
+      const freeActive = isFreeModeActive();
+      const freePool = activeFreePool();
       const inject = resolveSubsystemFreeModel(
         freeActive,
         freePool,
@@ -271062,6 +271122,20 @@ API presets: ${Object.keys(API_PRESETS).join(", ")}`);
           }
           if (activeResolved.thirdModel) {
             parts.push(`Third model: ${activeResolved.thirdModel}`);
+          }
+          if (isFreeModeActive()) {
+            const reason = !getAllowPaidModels() ? "allow_paid_models=false \u2014 set it true to use paid models" : activeResolved.freeOnly ? "profile free_only" : "auto \u2014 low balance / 402";
+            const pool = activeFreePool();
+            const shown = pool.slice(0, 6).join(", ");
+            parts.push(`Free mode: ON (${reason})`);
+            parts.push(
+              `Free pool (${pool.length}, benchmark-vetted, rotates on rate-limit): ${shown}${pool.length > 6 ? ", \u2026" : ""}`
+            );
+            if (!getAllowPaidModels()) {
+              parts.push(
+                `\u2191 The configured Model line(s) are ignored while paid is off; the ensemble runs the free pool above.`
+              );
+            }
           }
           const authSource = (() => {
             const preset = API_PRESETS[activeSettings.profiles[activeSettings.active]?.api];
@@ -271682,8 +271756,9 @@ ${content}`);
         case "high_quality_scan": {
           const hqRefusal = highQualityScanRefusal(
             backend.type,
-            activeResolved?.freeOnly ?? false,
-            creditExhausted
+            isFreeModeActive(),
+            creditExhausted,
+            getAllowPaidModels()
           );
           if (hqRefusal) throw new Error(hqRefusal);
           const hq = activeResolved?.highQualityModel ?? HIGH_QUALITY_MODEL_DEFAULTS;
@@ -272824,6 +272899,7 @@ FAILED: File not found.`);
 async function main() {
   const transport = new StdioServerTransport();
   await mcpServer.connect(transport);
+  publishFreeState();
   writeStatsFile();
   try {
     const ruleResult = installUsageRule();

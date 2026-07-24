@@ -7382,6 +7382,21 @@ var init_free_mode = __esm({
   }
 });
 
+// src/paid-switch.ts
+function setAllowPaidModels(allow) {
+  _allowPaidModels = allow;
+}
+function getAllowPaidModels() {
+  return _allowPaidModels;
+}
+var _allowPaidModels;
+var init_paid_switch = __esm({
+  "src/paid-switch.ts"() {
+    "use strict";
+    _allowPaidModels = false;
+  }
+});
+
 // src/benchmark/discover.ts
 async function fetchProgrammingModels(category) {
   const url2 = category ? `https://openrouter.ai/api/v1/models?category=${encodeURIComponent(category)}` : `https://openrouter.ai/api/v1/models`;
@@ -7397,6 +7412,7 @@ var init_discover = __esm({
   "src/benchmark/discover.ts"() {
     "use strict";
     init_free_mode();
+    init_paid_switch();
     DEFAULT_CRITERIA = {
       category: "programming",
       minContextTokens: 128e3,
@@ -7604,7 +7620,10 @@ function loadSettings() {
     if (!parsed || typeof parsed !== "object") return null;
     return {
       active: parsed.active || "",
-      profiles: parsed.profiles || {}
+      profiles: parsed.profiles || {},
+      // Absent / any non-true value ⟺ false: the safe (free) side. A YAML that
+      // predates this key, or sets it to a typo, never accidentally enables paid.
+      allow_paid_models: parsed.allow_paid_models === true
     };
   } catch (err3) {
     process.stderr.write(
@@ -7742,6 +7761,7 @@ var init_config = __esm({
     "use strict";
     import_yaml = __toESM(require_dist(), 1);
     init_registry();
+    init_paid_switch();
     QUANT_TIERS = Object.freeze([
       "int4",
       "fp4",
@@ -7868,6 +7888,17 @@ var init_config = __esm({
 
 # Active profile name
 active: local-lmstudio-qwen35
+
+# \u2500\u2500 Master paid-spend switch \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# DEFAULT false \u2014 only FREE models are used, everywhere, by default. While
+# this is false (or absent), every remote (OpenRouter) profile is forced to
+# its free pool no matter what 'model' it configures, and even paid
+# *benchmarks* are refused \u2014 one switch guarantees zero paid spend. Local
+# profiles are $0/offline and always run as-is. Set it true to use paid
+# models (and to benchmark them); per-profile 'free_only' then remains an
+# opt-in. A remote profile with no 'free_models' still runs free \u2014 the
+# server auto-discovers a benchmark-vetted free pool at $0.
+allow_paid_models: false
 
 # \u2500\u2500 Profiles \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 profiles:
@@ -45506,7 +45537,12 @@ async function main() {
   try {
     const s = loadSettings();
     const active = s?.profiles[s.active];
-    if (s && active) setActiveFreeOnly(resolveProfile(s.active, active).freeOnly);
+    if (s && active) {
+      setAllowPaidModels(s.allow_paid_models === true);
+      const resolved = resolveProfile(s.active, active);
+      const forcedFree = !getAllowPaidModels() && resolved.mode !== "local";
+      setActiveFreeOnly(resolved.freeOnly || forcedFree);
+    }
   } catch {
   }
   const RECONCILE_WORK_CLI = /* @__PURE__ */ new Set([

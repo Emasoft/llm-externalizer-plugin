@@ -21,6 +21,8 @@ import {
   resolveProfile,
   loadSettings,
   setActiveFreeOnly,
+  setAllowPaidModels,
+  getAllowPaidModels,
 } from "./config.js";
 import { withUsageContext, summarizeParams } from "./usage-history.js";
 import {
@@ -926,7 +928,18 @@ async function main(): Promise<void> {
   try {
     const s = loadSettings();
     const active = s?.profiles[s.active];
-    if (s && active) setActiveFreeOnly(resolveProfile(s.active, active).freeOnly);
+    if (s && active) {
+      // Master switch (USER): publish it, then force the cost-safety chokepoint
+      // ON for any REMOTE profile while paid is off — so an in-process CLI
+      // subsystem call (scout/judge/benchmark) can never bill a paid model. It
+      // fails safe (a paid send THROWS, $0) rather than routing free gracefully;
+      // the CLI's heavy work spawns the MCP server child, which IS fully wired
+      // for graceful free routing. Local profiles are $0/offline, never forced.
+      setAllowPaidModels(s.allow_paid_models === true);
+      const resolved = resolveProfile(s.active, active);
+      const forcedFree = !getAllowPaidModels() && resolved.mode !== "local";
+      setActiveFreeOnly(resolved.freeOnly || forcedFree);
+    }
   } catch {
     /* settings not loadable yet — leave flag false; subcommand reports the error */
   }

@@ -2,13 +2,14 @@
 // the --allow-paid-models-tests CLI flag or the allow_paid_models_tests MCP
 // input. Free/$0 pools are never gated. Verifies the pure guard + the flag parse;
 // the per-phase + MCP wiring is asserted at tsc/integration level.
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   setPaidBenchmarksAllowed,
   getPaidBenchmarksAllowed,
   assertPaidBenchmarkAllowed,
   withPaidBenchmarksAllowed,
 } from "./discover.js";
+import { setAllowPaidModels } from "../paid-switch.js";
 import { parseArgs } from "./cli-args.js";
 
 const paid = (id: string, input = 0.5, output = 0.5) => ({
@@ -18,8 +19,14 @@ const paid = (id: string, input = 0.5, output = 0.5) => ({
 });
 
 describe("paid-benchmark opt-in — assertPaidBenchmarkAllowed", () => {
-  // Module-level flag: reset before every test so one test never leaks into the next.
-  beforeEach(() => setPaidBenchmarksAllowed(false));
+  // This describe exercises the INNER opt-in gate, which is only reachable once
+  // the OUTER master switch is open — so open it here and reset the per-run opt-in
+  // before every test. (The master switch itself is covered by its own describe
+  // below.) Both flags are process-module state; reset so no test leaks into the next.
+  beforeEach(() => {
+    setAllowPaidModels(true);
+    setPaidBenchmarksAllowed(false);
+  });
 
   it("defaults to NOT allowed", () => {
     expect(getPaidBenchmarksAllowed()).toBe(false);
@@ -57,6 +64,36 @@ describe("paid-benchmark opt-in — assertPaidBenchmarkAllowed", () => {
     expect(() =>
       assertPaidBenchmarkAllowed([paid("free/one", 0, 0), paid("paid/two", 0.1, 0.1)]),
     ).toThrow(/paid\/two/);
+  });
+});
+
+describe("paid-benchmark master switch — allow_paid_models is the OUTER gate (USER D4)", () => {
+  // Restore the free-safe default after each test so this describe's `false`
+  // never leaks into a later one that assumes paid is allowed.
+  afterEach(() => setAllowPaidModels(true));
+
+  it("BLOCKS a paid benchmark even WITH the opt-in, and cannot be overridden by it", () => {
+    setAllowPaidModels(false); // paid globally off
+    setPaidBenchmarksAllowed(true); // inner opt-in ON — must NOT be enough
+    let msg = "";
+    try {
+      assertPaidBenchmarkAllowed([paid("deepseek/deepseek-v4-pro")]);
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toContain("allow_paid_models is false");
+    expect(msg).toContain("cannot override the master switch");
+    expect(msg).toContain("deepseek/deepseek-v4-pro");
+    expect(msg).toContain("$0 spent");
+  });
+
+  it("still never gates a ':free' / $0 model — the switch only governs PAID spend", () => {
+    setAllowPaidModels(false);
+    setPaidBenchmarksAllowed(false);
+    expect(() =>
+      assertPaidBenchmarkAllowed([{ id: "x/y:free", inputDollarsPerMillion: 0, outputDollarsPerMillion: 0 }]),
+    ).not.toThrow();
+    expect(() => assertPaidBenchmarkAllowed([paid("some/zero-cost", 0, 0)])).not.toThrow();
   });
 });
 

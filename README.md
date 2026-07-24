@@ -301,6 +301,39 @@ See [Configuration → B. Remote free (Nemotron)](#b-remote-free-nemotron) for t
 > The free provider logs your prompts. Use only on open-source code.
 </details>
 
+<details open>
+<summary><b>B1. Free by default — the <code>allow_paid_models</code> master switch</b></summary>
+
+**By default, the plugin uses only FREE models — everywhere, in every tool.** The
+top-level `allow_paid_models` switch in `settings.yaml` governs all paid spend:
+
+```yaml
+active: remote-ensemble-mine
+allow_paid_models: false      # ← DEFAULT (absent ⟺ false). Zero paid spend.
+profiles:
+  # ... your profiles, paid models and all ...
+```
+
+While `allow_paid_models` is **false** (the default):
+
+- Every **remote (OpenRouter)** profile is forced to its free pool at boot,
+  regardless of the `model` / `second_model` / `third_model` it configures — the
+  ensemble runs 3 benchmark-vetted `:free` models. A profile with **no**
+  `free_models` list still runs free: the server auto-discovers a `:free` pool at
+  $0 (falling back to a bundled seed), so **nothing ever goes dark**.
+- **Local** profiles are untouched — they are $0/offline, never "paid".
+- Even paid **benchmarks** are refused: `--allow-paid-models-tests` cannot
+  override the master switch. One switch = zero paid spend of any kind.
+- `discover` reports `Free mode: ON (allow_paid_models=false)` and the actual free
+  pool, so you always see what is really running.
+
+Set `allow_paid_models: true` to use paid models (and to benchmark them); the
+per-profile `free_only` below then remains an opt-in for a specific profile. This
+is a behavior-changing default introduced to make free-tier the safe, zero-config
+baseline — flip the switch when you deliberately want to spend.
+
+</details>
+
 <details>
 <summary><b>B2. OpenRouter free-only ensemble (zero spend, multiple free models)</b></summary>
 

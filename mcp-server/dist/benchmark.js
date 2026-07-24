@@ -218146,6 +218146,15 @@ var FreeModeSkipError = class extends Error {
   }
 };
 
+// src/paid-switch.ts
+var _allowPaidModels = false;
+function setAllowPaidModels(allow) {
+  _allowPaidModels = allow;
+}
+function getAllowPaidModels() {
+  return _allowPaidModels;
+}
+
 // src/benchmark/discover.ts
 var DEFAULT_CRITERIA = {
   category: "programming",
@@ -218200,12 +218209,17 @@ function setPaidBenchmarksAllowed(v) {
   paidBenchmarksAllowed = v;
 }
 function assertPaidBenchmarkAllowed(models) {
-  if (paidBenchmarksAllowed) return;
   const paid = models.filter(
     (m) => !isFreeModeEligible(m.id, m.inputDollarsPerMillion, m.outputDollarsPerMillion)
   );
   if (paid.length === 0) return;
   const list = paid.map((m) => m.id).join(", ");
+  if (!getAllowPaidModels()) {
+    throw new Error(
+      `paid benchmarks are off: allow_paid_models is false, so paid model(s) ${list} cannot be benchmarked. Set allow_paid_models: true in ~/.llm-externalizer/settings.yaml to benchmark (and use) paid models \u2014 --allow-paid-models-tests cannot override the master switch. No API call was made, $0 spent.`
+    );
+  }
+  if (paidBenchmarksAllowed) return;
   throw new Error(
     `paid-benchmark opt-in: benchmarking paid model(s) ${list} requires explicit permission. Re-run with --allow-paid-models-tests (CLI) or allow_paid_models_tests: true (MCP). Paid models are also capped at $${MAX_BENCHMARK_PRICE_PER_M}/1M (input AND output). No API call was made, $0 spent.`
   );
@@ -218769,7 +218783,10 @@ function loadSettings() {
     if (!parsed || typeof parsed !== "object") return null;
     return {
       active: parsed.active || "",
-      profiles: parsed.profiles || {}
+      profiles: parsed.profiles || {},
+      // Absent / any non-true value ⟺ false: the safe (free) side. A YAML that
+      // predates this key, or sets it to a typo, never accidentally enables paid.
+      allow_paid_models: parsed.allow_paid_models === true
     };
   } catch (err) {
     process.stderr.write(
@@ -230049,6 +230066,7 @@ async function main() {
     const s = loadSettings();
     const active = s?.profiles[s.active];
     if (s && active) {
+      setAllowPaidModels(s.allow_paid_models === true);
       const resolved = resolveProfile(s.active, active);
       setActiveFreeOnly(resolved.freeOnly);
       activeFreeModels = resolved.freeModels;

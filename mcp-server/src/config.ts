@@ -104,6 +104,16 @@ export interface Settings {
   active: string;
   /** Named profiles */
   profiles: Record<string, Profile>;
+  /**
+   * Master paid-spend switch (USER directive, this session). DEFAULT false —
+   * "only free models are viable, everything runs free by default". While false,
+   * every remote (OpenRouter) profile is FORCED to free mode at boot regardless of
+   * its configured `model` fields, and paid *benchmarks* are refused too — one
+   * switch governs every kind of paid spend. Set true to restore paid sends +
+   * paid benchmarks (per-profile `free_only` then remains an opt-in). Absent ⟺
+   * false, so a settings file that never heard of this key is safely free.
+   */
+  allow_paid_models?: boolean;
 }
 
 /** Fully resolved profile with concrete values (no env var refs) */
@@ -420,6 +430,9 @@ export function loadSettings(): Settings | null {
     return {
       active: parsed.active || "",
       profiles: parsed.profiles || {},
+      // Absent / any non-true value ⟺ false: the safe (free) side. A YAML that
+      // predates this key, or sets it to a typo, never accidentally enables paid.
+      allow_paid_models: parsed.allow_paid_models === true,
     };
   } catch (err) {
     process.stderr.write(
@@ -433,6 +446,10 @@ export function loadSettings(): Settings | null {
 export function generateDefaultSettings(): Settings {
   return {
     active: "local-lmstudio-qwen35",
+    // Explicit free-safe default (USER: free-by-default). The default active
+    // profile is local ($0) so the switch is inert here, but stating it keeps the
+    // object in lock-step with SETTINGS_TEMPLATE and documents the safe posture.
+    allow_paid_models: false,
     profiles: {
       "local-lmstudio-qwen35": {
         mode: "local",
@@ -930,6 +947,11 @@ export function highQualityScanRefusal(
   backendType: string,
   freeOnly: boolean,
   creditExhausted: boolean,
+  // The master paid switch (getAllowPaidModels()). Only shapes the free-mode
+  // MESSAGE — under the global free-default the fix is the switch, not a
+  // per-profile edit. Defaults true so the pre-switch 3-arg callers (and their
+  // tests) keep the original "disable free_only" wording unchanged.
+  allowPaidModels: boolean = true,
 ): string | null {
   if (backendType !== "openrouter") {
     return (
@@ -939,6 +961,18 @@ export function highQualityScanRefusal(
     );
   }
   if (freeOnly) {
+    // Deliberately a REFUSAL, not a silent downgrade: high_quality_scan's whole
+    // contract is "ONE strong (paid) model". Degrading it to a free model would
+    // return free-tier results under a name that promises better — worse than an
+    // honest refusal. Under the master switch the actionable fix is the switch.
+    if (!allowPaidModels) {
+      return (
+        `high_quality_scan runs ONE paid high-quality model, and paid models are ` +
+        `off (allow_paid_models: false). Set allow_paid_models: true in ` +
+        `~/.llm-externalizer/settings.yaml to enable it, or use scan_folder (the ` +
+        `free 3-model ensemble).`
+      );
+    }
     return (
       `high_quality_scan uses a paid high-quality model and cannot run under ` +
       `free_only mode. Disable free_only in your profile, or use scan_folder ` +
@@ -1106,6 +1140,29 @@ export function getActiveFreeOnly(): boolean {
   return _activeFreeOnly;
 }
 
+// Master paid-spend switch (Settings.allow_paid_models). The STATE lives in the
+// leaf module ./paid-switch.js — NOT here — because benchmark/discover.ts also
+// reads it, and config.ts → model-qualification/registry.ts → benchmark/discover.ts
+// is already a chain; discover.ts importing config.ts would close that into a
+// cycle that leaves TOOL_MODEL_REGISTRY undefined at init. config.ts re-exports so
+// its own consumers (index.ts / cli.ts / benchmark/index.ts) import from here as
+// before, while discover.ts imports the leaf directly.
+export { setAllowPaidModels, getAllowPaidModels } from "./paid-switch.js";
+
+/**
+ * The pure force-free decision (USER: free-by-default). Free mode is FORCED for a
+ * remote profile whenever paid is globally off. LOCAL profiles are $0/offline and
+ * never forced; a null mode (invalid/absent active profile) is not forced because
+ * there is nothing to run. Extracted so the rule is unit-testable in isolation;
+ * index.ts's recomputeForceFree is the single caller that supplies the live inputs.
+ */
+export function shouldForceFreeMode(
+  allowPaidModels: boolean,
+  mode: Mode | null,
+): boolean {
+  return !allowPaidModels && mode !== null && mode !== "local";
+}
+
 /**
  * Airtight free_only cost-safety gate (TRDD-97ef8b63). Under a free_only profile
  * EVERY OpenRouter request — across EVERY subsystem (the main chat/scan path via
@@ -1150,6 +1207,17 @@ export const SETTINGS_TEMPLATE = `# ──────────────�
 
 # Active profile name
 active: local-lmstudio-qwen35
+
+# ── Master paid-spend switch ─────────────────────────────────────────
+# DEFAULT false — only FREE models are used, everywhere, by default. While
+# this is false (or absent), every remote (OpenRouter) profile is forced to
+# its free pool no matter what 'model' it configures, and even paid
+# *benchmarks* are refused — one switch guarantees zero paid spend. Local
+# profiles are $0/offline and always run as-is. Set it true to use paid
+# models (and to benchmark them); per-profile 'free_only' then remains an
+# opt-in. A remote profile with no 'free_models' still runs free — the
+# server auto-discovers a benchmark-vetted free pool at $0.
+allow_paid_models: false
 
 # ── Profiles ─────────────────────────────────────────────────────────
 profiles:

@@ -167,6 +167,9 @@ import {
   getConfigDir,
   generateDefaultSettings,
   setActiveFreeOnly,
+  setAllowPaidModels,
+  getAllowPaidModels,
+  shouldForceFreeMode,
   FREE_POOL_SEED,
   HIGH_QUALITY_MODEL_DEFAULTS,
   buildHighQualityProvider,
@@ -235,6 +238,11 @@ let activeSettings: Settings = (() => {
     return generateDefaultSettings();
   }
 })();
+// Publish the master paid-spend switch to config.ts the instant settings load, so
+// getAllowPaidModels() is correct for any early reader (tool-schema gen, the boot
+// force-free publish in main(), the paid-benchmark guard). Absent ⟺ false = the
+// safe/free posture (USER: "only free models are viable, everything free by default").
+setAllowPaidModels(activeSettings.allow_paid_models === true);
 
 let activeResolved: ResolvedProfile | null = (() => {
   const validation = validateSettings(activeSettings);
@@ -397,7 +405,11 @@ function reloadSettingsFromDisk(): boolean {
     return false;
   }
 
-  let parsed: { active?: string; profiles?: Record<string, Profile> };
+  let parsed: {
+    active?: string;
+    profiles?: Record<string, Profile>;
+    allow_paid_models?: boolean;
+  };
   try {
     parsed = yamlParse(raw);
   } catch {
@@ -414,6 +426,10 @@ function reloadSettingsFromDisk(): boolean {
   const newSettings: Settings = {
     active: parsed.active || "",
     profiles: parsed.profiles || {},
+    // Carry the master switch through the hot-reload — without this line, editing
+    // allow_paid_models in settings.yaml would be silently ignored until restart
+    // (the reload builder used to drop every top-level key but active/profiles).
+    allow_paid_models: parsed.allow_paid_models === true,
   };
 
   // Validate before applying
@@ -453,13 +469,16 @@ function reloadSettingsFromDisk(): boolean {
   const priorFreeOnly = activeResolved?.freeOnly ?? false;
   activeSettings = newSettings;
   activeResolved = nextResolved;
-  // Re-publish free_only on every reload so the subsystem guard tracks the live
-  // profile (TRDD-97ef8b63). null resolved (invalid settings) → not free_only.
-  // Preserve a live auto-free engagement across the reload (TRDD-542bdbef): a
-  // low-balance session stays free even if the user edits an unrelated part of
-  // settings.yaml — the wallet is still empty, so don't un-protect the spend
-  // sites. (Cleared only on process restart.)
-  setActiveFreeOnly((nextResolved?.freeOnly ?? false) || autoFreeEngaged);
+  // Publish the master switch BEFORE recomputing free state so a flipped
+  // allow_paid_models takes effect on this reload (clean toggle).
+  setAllowPaidModels(newSettings.allow_paid_models === true);
+  // Re-publish free state on every reload so the subsystem guard tracks the live
+  // profile (TRDD-97ef8b63). publishFreeState recomputes the master-switch force
+  // (a clean toggle) AND re-publishes the chokepoint = free_only OR sticky
+  // auto-free (preserved across reload — a low-balance session stays free even if
+  // the user edits an unrelated key; the wallet is still empty) OR the master
+  // switch. null resolved (invalid settings) → not free.
+  publishFreeState();
   // Auto-bench the free pool on an OFF→ON transition with an empty cache
   // (TRDD-f1510055). Helper is fire-and-forget and short-circuits on every
   // skip condition (already-on, cache populated, lock held, opt-out env).
@@ -797,6 +816,14 @@ const MIN_BALANCE_FOR_PAID_USD: number = parseFreeBelowUsd(
 // only on process restart (no point re-probing a dead wallet every call).
 let autoFreeEngaged = false;
 let autoFreePool: string[] = [];
+
+// The MASTER SWITCH force-free flag (Settings.allow_paid_models=false). Distinct
+// from autoFreeEngaged on purpose: auto-free is STICKY (a dead wallet stays dead
+// until restart), but the master switch must be a clean TOGGLE — so this is
+// RECOMPUTED on every load/reload from the switch + backend, never latched. It is
+// OR'd into isFreeModeActive(), so every free-routing decision already gated on
+// "free_only OR auto-free" also honours the master switch, with no per-site latch.
+let forceFreeByMasterSwitch = false;
 
 /** Engage auto-free: route EVERY spend site through the free pool.
  *  Idempotent — safe to call on every low-balance / 402 check. Sets the global
@@ -1687,7 +1714,45 @@ function batchReportFilename(
  * and the boot log's promise of "rotation on rate-limit" was simply false.
  */
 function isFreeModeActive(): boolean {
-  return (activeResolved?.freeOnly ?? false) || autoFreeEngaged;
+  return (activeResolved?.freeOnly ?? false) || autoFreeEngaged || forceFreeByMasterSwitch;
+}
+
+/**
+ * Recompute the master-switch force-free flag from the live state. Called on boot
+ * (main) and every reload, so flipping `allow_paid_models` in settings.yaml is a
+ * clean toggle. Forces free for any REMOTE profile while paid is off; LOCAL
+ * profiles are $0/offline and never forced.
+ */
+function recomputeForceFree(): void {
+  forceFreeByMasterSwitch = shouldForceFreeMode(
+    getAllowPaidModels(),
+    activeResolved?.mode ?? null,
+  );
+}
+
+/**
+ * The pool to draw the free ensemble / rotation from, whichever way free mode was
+ * entered — and it is NEVER empty. free_only pins the profile's list; auto-free
+ * uses the engaged pool; the master switch (no engaged pool) uses the profile's
+ * list. Every branch flows through resolveAutoFreePool, so an empty configured
+ * pool falls back to the bundled FREE_POOL_SEED — the "never dark" guarantee
+ * (USER D1: a paid profile with no free_models still runs a working :free ensemble).
+ */
+function activeFreePool(): string[] {
+  if (activeResolved?.freeOnly) return resolveAutoFreePool(activeResolved.freeModels);
+  if (autoFreePool.length > 0) return autoFreePool;
+  return resolveAutoFreePool(activeResolved?.freeModels ?? []);
+}
+
+/**
+ * Recompute force-free and re-publish the config.ts cost-safety chokepoint
+ * (getActiveFreeOnly) so the pure subsystem spend sites (judge/scout/benchmark)
+ * enforce ':free' whenever free mode is active for ANY reason — profile free_only,
+ * sticky auto-free, or the master switch. Called on boot (main) and each reload.
+ */
+function publishFreeState(): void {
+  recomputeForceFree();
+  setActiveFreeOnly(isFreeModeActive());
 }
 
 /**
@@ -2380,15 +2445,15 @@ function getEnsembleModels(): Array<{
   // case resolveEnsembleModelLimits falls back to the calibrated table.
   const catalogById = new Map(openRouterModelCache.map((m) => [m.id, m]));
   let models: string[];
-  if (activeResolved.freeOnly || autoFreeEngaged) {
+  if (isFreeModeActive()) {
     // Free pool: a free_only profile uses its pinned free_models; auto-free on
-    // a paid profile (TRDD-542bdbef, low balance / 402) uses the engaged pool
-    // (the profile's free_models if any, else FREE_POOL_SEED). Either way
-    // selectFreeEnsembleModels applies the requirements + benchmark filters and
-    // takes the top 3; the FULL pool stays as rotation fallbacks downstream.
-    const pool = activeResolved.freeOnly
-      ? activeResolved.freeModels
-      : autoFreePool;
+    // a paid profile (TRDD-542bdbef, low balance / 402) uses the engaged pool;
+    // the master switch (allow_paid_models=false) forces free with no engaged
+    // pool. activeFreePool() covers all three and never returns empty (seed
+    // fallback), so a paid profile with no free_models still gets a working
+    // ensemble. selectFreeEnsembleModels applies the requirements + benchmark
+    // filters and takes the top 3; the FULL pool stays as rotation fallbacks.
+    const pool = activeFreePool();
     models = selectFreeEnsembleModels(
       pool,
       catalogById,
@@ -2637,10 +2702,8 @@ async function dispatchCallToolInner(
       // under an explicit free_only profile.
       const scoutArgs = { ...((args ?? {}) as Record<string, unknown>) };
       await ensureAutoFreeDecided();
-      const freeActive = (activeResolved?.freeOnly ?? false) || autoFreeEngaged;
-      const freePool = activeResolved?.freeOnly
-        ? activeResolved.freeModels
-        : autoFreePool;
+      const freeActive = isFreeModeActive();
+      const freePool = activeFreePool();
       const inject = resolveSubsystemFreeModel(
         freeActive,
         freePool,
@@ -3058,6 +3121,30 @@ async function dispatchCallToolInner(
         }
         if (activeResolved.thirdModel) {
           parts.push(`Third model: ${activeResolved.thirdModel}`);
+        }
+        // Free-mode reporting. Under forced-free (allow_paid_models=false),
+        // profile free_only, or sticky auto-free, the Model/second/third lines
+        // above are the CONFIGURED values but are NOT what runs — the ensemble
+        // draws from the free pool. Say so explicitly, and show the actual pool,
+        // so the user is never misled into thinking a paid model is being billed.
+        if (isFreeModeActive()) {
+          const reason = !getAllowPaidModels()
+            ? "allow_paid_models=false — set it true to use paid models"
+            : activeResolved.freeOnly
+              ? "profile free_only"
+              : "auto — low balance / 402";
+          const pool = activeFreePool();
+          const shown = pool.slice(0, 6).join(", ");
+          parts.push(`Free mode: ON (${reason})`);
+          parts.push(
+            `Free pool (${pool.length}, benchmark-vetted, rotates on rate-limit): ` +
+              `${shown}${pool.length > 6 ? ", …" : ""}`,
+          );
+          if (!getAllowPaidModels()) {
+            parts.push(
+              `↑ The configured Model line(s) are ignored while paid is off; the ensemble runs the free pool above.`,
+            );
+          }
         }
         // Show auth status so agents can verify the token is available
         const authSource = (() => {
@@ -3815,10 +3902,15 @@ async function dispatchCallToolInner(
         // NOT the cheap 3-model ensemble. The model is PAID by design, so the
         // gate REFUSES (never silently downgrades) when the backend can't run it
         // — wrong backend, free_only, or exhausted credit (gate is unit-tested).
+        // Feed the RUNTIME free state (isFreeModeActive), not just the profile's
+        // static free_only — so forced-free (allow_paid_models=false) and sticky
+        // auto-free also refuse this paid-only tool. getAllowPaidModels shapes the
+        // message: under the master switch the fix is the switch, not a profile edit.
         const hqRefusal = highQualityScanRefusal(
           backend.type,
-          activeResolved?.freeOnly ?? false,
+          isFreeModeActive(),
           creditExhausted,
+          getAllowPaidModels(),
         );
         if (hqRefusal) throw new Error(hqRefusal);
         const hq = activeResolved?.highQualityModel ?? HIGH_QUALITY_MODEL_DEFAULTS;
@@ -5097,6 +5189,14 @@ async function dispatchCallToolInner(
 async function main() {
   const transport = new StdioServerTransport();
   await mcpServer.connect(transport);
+  // Boot-time force-free publish. The module-init chokepoint (set at import from
+  // the profile's own free_only) does NOT yet know the master switch, because the
+  // force-free `let` + helpers live below the boot IIFE and would be in the TDZ
+  // there. main() runs once at the very end of module init, so every binding is
+  // ready — recompute the master-switch force and re-publish the chokepoint so a
+  // remote profile boots free under allow_paid_models: false. (Tests import the
+  // module without calling main(), so their state is untouched.)
+  publishFreeState();
   // Write initial stats file at startup so statusline can show MCP icons immediately
   writeStatsFile();
   // Install/update the plugin's usage rule into ~/.claude/rules/ (the MCP server

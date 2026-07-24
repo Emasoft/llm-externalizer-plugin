@@ -84,6 +84,7 @@ import {
   loadSettings,
   resolveProfile,
   setActiveFreeOnly,
+  setAllowPaidModels,
   FREE_POOL_SEED,
 } from "../config.js";
 
@@ -284,6 +285,11 @@ async function main(): Promise<CliResult> {
     const s = loadSettings();
     const active = s?.profiles[s.active];
     if (s && active) {
+      // Publish the master switch for this separate benchmark process, so
+      // assertPaidBenchmarkAllowed's getAllowPaidModels() check (USER D4) is
+      // correct here too — a paid benchmark is refused unless allow_paid_models
+      // is true, regardless of --allow-paid-models-tests. Absent ⟺ false (free).
+      setAllowPaidModels(s.allow_paid_models === true);
       const resolved = resolveProfile(s.active, active);
       setActiveFreeOnly(resolved.freeOnly);
       activeFreeModels = resolved.freeModels;

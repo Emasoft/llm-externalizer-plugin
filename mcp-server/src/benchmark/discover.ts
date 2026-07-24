@@ -29,6 +29,9 @@
  */
 
 import { isFreeSuffixModelId } from "./free-mode.js";
+// Leaf module (NOT ../config.js) — importing config here would close the cycle
+// config → registry → discover → config. See paid-switch.ts.
+import { getAllowPaidModels } from "../paid-switch.js";
 
 export interface OpenRouterModel {
   id: string;
@@ -277,12 +280,25 @@ export async function withPaidBenchmarksAllowed<T>(
  * Refuses BEFORE any send, $0 spent.
  */
 export function assertPaidBenchmarkAllowed(models: readonly OverCapModel[]): void {
-  if (paidBenchmarksAllowed) return;
   const paid = models.filter(
     (m) => !isFreeModeEligible(m.id, m.inputDollarsPerMillion, m.outputDollarsPerMillion),
   );
-  if (paid.length === 0) return;
+  if (paid.length === 0) return; // no paid candidate → nothing to gate (`:free`/$0 stay free)
   const list = paid.map((m) => m.id).join(", ");
+  // MASTER SWITCH (USER D4): while allow_paid_models is false, NO paid spend of
+  // ANY kind happens — not even a benchmark. This is checked BEFORE the per-run
+  // opt-in and is NOT overridable by it: --allow-paid-models-tests /
+  // allow_paid_models_tests can enable a paid benchmark only once the master
+  // switch is on. One switch governs every paid entry point; you cannot pay to
+  // benchmark a model you are not allowed to send.
+  if (!getAllowPaidModels()) {
+    throw new Error(
+      `paid benchmarks are off: allow_paid_models is false, so paid model(s) ${list} cannot be benchmarked. ` +
+        `Set allow_paid_models: true in ~/.llm-externalizer/settings.yaml to benchmark (and use) paid models — ` +
+        `--allow-paid-models-tests cannot override the master switch. No API call was made, $0 spent.`,
+    );
+  }
+  if (paidBenchmarksAllowed) return;
   throw new Error(
     `paid-benchmark opt-in: benchmarking paid model(s) ${list} requires explicit permission. ` +
       `Re-run with --allow-paid-models-tests (CLI) or allow_paid_models_tests: true (MCP). ` +

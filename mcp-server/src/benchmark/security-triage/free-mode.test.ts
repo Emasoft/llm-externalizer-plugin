@@ -28,6 +28,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { setActiveFreeOnly } from "../../config.js";
+import { setAllowPaidModels } from "../../paid-switch.js";
 import { setPaidBenchmarksAllowed } from "../discover.js";
 import { setValidationBypassForTests } from "../validated.js";
 import { DEFAULT_MODEL } from "../../security_scan/types.js";
@@ -106,6 +107,7 @@ describe("security-triage benchmark — model routing + free_only", () => {
     // These tests benchmark PAID candidates through a STUBBED fetch (no real
     // spend) to validate model ROUTING — so opt into paid benchmarking. Reset in
     // afterEach so the module-level flag never leaks into a sibling test.
+    setAllowPaidModels(true); // OUTER master switch — paid benchmarks need it too (USER D4)
     setPaidBenchmarksAllowed(true);
     setValidationBypassForTests(true); // benchmark routing test — the gate is not under test
     vi.stubGlobal("fetch", async () => ({
@@ -117,6 +119,7 @@ describe("security-triage benchmark — model routing + free_only", () => {
 
   afterEach(() => {
     setActiveFreeOnly(false); // module state — never leak free_only into a sibling test
+    setAllowPaidModels(false); // restore the free-safe default
     setPaidBenchmarksAllowed(false);
     setValidationBypassForTests(false);
     vi.unstubAllGlobals();
