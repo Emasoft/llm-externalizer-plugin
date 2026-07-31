@@ -6,8 +6,7 @@ description: |-
   + validates each response, persists to SQLite, writes a markdown report.
   Phase 4 of the pipeline.
 allowed-tools:
-  - mcp__llm-externalizer__mass_scout
-  - mcp__llm-externalizer__mass_scout_estimate
+  - Bash
 argument-hint: "--db <path> --fields-file <json> --job-id <id> --source-root <path> [--workers N] [--bucket <name>]"
 effort: high
 ---
@@ -42,7 +41,7 @@ When all files are done, render a markdown report to
 | `--no-smoke-test` | no | Skip the 5-file sequential smoke test |
 | `--no-resume` | no | Re-process files even if they already have a result row |
 | `--max-context-pct-scout <0..1>` | no | Override the default 40% scout cap |
-| `--output-dir <path>` | no | Directory for the markdown report. Default `<main-project-dir>/reports/mass_scouting/` (anchored on `$CLAUDE_PROJECT_DIR`, then cwd — never git). Pass an explicit path when running as an MCP server so the report lands in the user's project, not the plugin install cache. |
+| `--output-dir <path>` | no | Directory for the markdown report. Default `<main-project-dir>/reports/mass_scouting/` (anchored on `$CLAUDE_PROJECT_DIR`, then cwd — never git). |
 | `--live-context` | no | Query OpenRouter for the active provider's real `context_length` and override KNOWN_PRICING. Recommended when you don't know whether your account routes to a smaller-cap endpoint (e.g. 32K vs 128K). Requires `$OPENROUTER_API_KEY`. |
 
 ## Pre-flight
@@ -50,6 +49,25 @@ When all files are done, render a markdown report to
 ALWAYS run `mass-scout-estimate` first with the same `--fields-file` and
 `--budget-usd` value. If the gate flips to `budget_allowed=false`, do
 NOT run `mass-scout` — surface the cost to the user and let them decide.
+
+## Invocation
+
+Run via the CLI. This phase can take TENS OF MINUTES for large corpora
+(one LLM call per file, fanned out across `--workers`) — invoke it with
+an explicit 20-minute Bash `timeout`, or with `run_in_background: true`,
+so the turn doesn't block waiting on the whole scout:
+
+```bash
+timeout 1200 ${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout \
+  --db-path ./scout.sqlite \
+  --fields-file bundled:code-audit \
+  --job-id audit-1 \
+  --source-root ./src \
+  --workers 24
+```
+
+Re-invoking with the same `--job-id` resumes — already-scouted files
+are skipped, so a `timeout`-killed run can simply be re-run.
 
 ## Output
 
@@ -97,7 +115,7 @@ Set `$OPENROUTER_API_KEY` (or configure the plugin's
 ```
 # Scout every eligible file with the bundled code-audit fieldset, 24 workers.
 # (Always run mass-scout-estimate with the same --fields-file first.)
-/llm-externalizer:llm-externalizer-mass-scout --db ./scout.sqlite --fields-file bundled:code-audit --job-id audit-1 --source-root ./src --workers 24
+timeout 1200 ${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout --db-path ./scout.sqlite --fields-file bundled:code-audit --job-id audit-1 --source-root ./src --workers 24
 ```
 
 When the run finishes, return only the `report=` path to the user — that is

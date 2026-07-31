@@ -15,17 +15,17 @@ Profile-based configuration for local and remote LLM backends. Settings stored a
 
 Changing models, profiles, API keys, URLs, or timeouts is **user-only**. This is a deliberate design choice.
 
-The MCP tools `set_settings` and `change_model` are **disabled**; the CLI subcommands `profile add | select | edit | remove | rename` are **disabled**. Calling any of them returns a refusal pointing here.
+The `set-settings` and `change-model` CLI commands are **disabled**; the `profile add | select | edit | remove | rename` subcommands are **disabled**. Calling any of them returns a refusal pointing here.
 
 The only supported workflow is:
 
 1. Open `~/.llm-externalizer/settings.yaml` in your editor.
 2. Edit the file and save.
-3. Either restart Claude Code, or call the `mcp__llm-externalizer__reset` tool to reload without restarting.
+3. Run `llm-ext reset` to purge on-disk caches and reload the edited settings (no server to restart — every `llm-ext` call is already a fresh process).
 
 ## Prerequisites
 
-- LLM Externalizer MCP server running (auto-started by Claude Code plugin)
+- `${CLAUDE_PLUGIN_ROOT}/bin/llm-ext` CLI available (no server process to start)
 - For local backends: LM Studio, Ollama, vLLM, or llama.cpp running locally
 - For remote backends: `OPENROUTER_API_KEY` environment variable set
 
@@ -33,12 +33,12 @@ The only supported workflow is:
 
 Copy this checklist and track your progress:
 
-1. [ ] Call `mcp__llm-externalizer__discover` to report active profile, mode, model, auth status, service health, context window, concurrency limits
-2. [ ] Call `mcp__llm-externalizer__get_settings` — returns a file path to an editable **copy** of `settings.yaml`
+1. [ ] Run `llm-ext discover` to report active profile, mode, model, auth status, service health, context window, concurrency limits
+2. [ ] Run `llm-ext get-settings` — returns a file path to an editable **copy** of `settings.yaml`
 3. [ ] Read the returned file with the Read tool and surface the full profile table to the user
-4. [ ] Remind the user that any change must be made by editing `~/.llm-externalizer/settings.yaml` in an editor, then restarting or calling `reset`
+4. [ ] Remind the user that any change must be made by editing `~/.llm-externalizer/settings.yaml` in an editor, then calling `llm-ext reset`
 
-Do NOT attempt to call `set_settings` or `change_model` — both are disabled.
+Do NOT attempt to call `set-settings` or `change-model` — both are disabled.
 
 ## Context
 
@@ -46,37 +46,37 @@ Use this skill when the user wants to see the current LLM Externalizer configura
 
 ## Output
 
-- `discover` — active profile name, mode, model, auth status, context window, concurrency limits
-- `get_settings` — file path to a read-only editable copy (you still show the user how to apply changes manually)
-- `reset` — reloads settings after the user has edited the file
+- `llm-ext discover` — active profile name, mode, model, auth status, context window, concurrency limits
+- `llm-ext get-settings` — file path to a read-only editable copy (you still show the user how to apply changes manually)
+- `llm-ext reset` — purges on-disk caches and reloads settings after the user has edited the file
 
 ## Error Handling
 
 | Error | Cause | Resolution |
 |-------|-------|------------|
-| `discover` shows invalid profile | Settings file malformed | Ask user to open `~/.llm-externalizer/settings.yaml`, fix, save, then call `reset` |
-| Auth token `(NOT SET)` | Env var missing | Ask user to add the env var to shell profile or `.mcp.json`, then restart Claude Code |
+| `discover` shows invalid profile | Settings file malformed | Ask user to open `~/.llm-externalizer/settings.yaml`, fix, save, then run `llm-ext reset` |
+| Auth token `(NOT SET)` | Env var missing | Ask user to add the env var (e.g. `OPENROUTER_API_KEY`) to their shell profile |
 | Connection refused | Local LLM server not running | Ask user to start LM Studio / Ollama / vLLM; verify URL and port in settings |
-| `set_settings` / `change_model` returned DISABLED | Expected — tools are user-only | Direct user to manual edit |
+| `set-settings` / `change-model` returned DISABLED | Expected — commands are user-only | Direct user to manual edit |
 
 ## Examples
 
 ### Inspect the current profile
 
 ```
-1. discover → shows active: remote-ensemble-geminigrok, mode: remote-ensemble
-2. get_settings → /path/to/settings_edit.yaml
+1. llm-ext discover → shows active: remote-ensemble-geminigrok, mode: remote-ensemble
+2. llm-ext get-settings → /path/to/settings_edit.yaml
 3. Read the file, surface the profiles table to the user
-4. Tell the user: to change, edit ~/.llm-externalizer/settings.yaml, save, then call reset
+4. Tell the user: to change, edit ~/.llm-externalizer/settings.yaml, save, then run llm-ext reset
 ```
 
 ### User asks to switch profiles
 
 ```
-Do NOT call set_settings. Instead:
-  1. Show the current active profile via discover
-  2. List available profile names from get_settings
-  3. Tell the user: open ~/.llm-externalizer/settings.yaml, change the "active:" line to the desired profile name, save, then call reset
+Do NOT call set-settings. Instead:
+  1. Show the current active profile via llm-ext discover
+  2. List available profile names from llm-ext get-settings
+  3. Tell the user: open ~/.llm-externalizer/settings.yaml, change the "active:" line to the desired profile name, save, then run llm-ext reset
 ```
 
 ## Resources

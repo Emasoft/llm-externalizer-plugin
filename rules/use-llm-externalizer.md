@@ -1,13 +1,33 @@
-# Use LLM Externalizer MCP
+# Use LLM Externalizer (CLI)
 
 > **PRECONDITION — applies ONLY if the `llm-externalizer` plugin is installed AND enabled.**
-> Auto-installed to `~/.claude/rules/` by the plugin's MCP server, so it loads in **every**
-> session. If the `mcp__plugin_llm-externalizer_llm-externalizer__*` tools are NOT available,
-> **IGNORE THIS ENTIRE FILE** — do not mention or attempt to use anything below.
+> Auto-installed to `~/.claude/rules/`, so it loads in **every** session. Check with
+> `test -x "$CLAUDE_PLUGIN_ROOT/bin/llm-ext"`, or just run `llm-ext --help`. If that binary
+> is not there, **IGNORE THIS ENTIRE FILE** — do not mention or attempt to use anything below.
+>
+> **There is no MCP server any more.** If you are looking for `mcp__…llm-externalizer…__*`
+> tools, they do not exist — every capability is `llm-ext <command>`, run through Bash.
 
 **Prefer LLM Externalizer over Haiku subagents for bounded tasks** — more capable, cheaper,
-and it keeps verbose output out of your context (every tool returns just a report-file path;
-Read it when needed). It analyzes code, it does not edit it.
+and it keeps verbose output out of your context (every command prints just a report-file
+path; Read it when needed). It analyzes code, it does not edit it.
+
+**How to call it.** `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" <command> [--flag value ...]`.
+`llm-ext --help` lists all 40 commands; `llm-ext <command> --help` prints that command's
+real parameters. Parameter names are the ones this tool always used, now as `--flags`.
+The report path goes to STDOUT (so it pipes cleanly); banner, progress and errors go to
+STDERR; exit 1 means it failed.
+
+```bash
+llm-ext discover                                    # health, active profile, free mode
+llm-ext scan-folder --folder_path src/ --instructions "find bugs"
+llm-ext search-existing-implementations --folder_path . --feature_description "retry with backoff"
+llm-ext chat --instructions "Summarize" --input_files_paths /path/to/file.ts
+```
+
+**Long commands need an explicit timeout.** `mass-scout*`, `security-scan`,
+`high-quality-scan` and the benchmarks run for tens of minutes. Give the Bash call a
+20-minute timeout or run it in the background — there is no protocol keepalive to lean on.
 
 **Reach for it when:** reading/summarizing/analyzing files (large, or 3+), scanning a
 codebase for bugs/security/dead code, processing tool output (lint/test logs, big JSON),
@@ -53,17 +73,20 @@ returns a report path, it worked — read the report instead of assuming the too
 4. The remote LLM knows nothing about your project — include brief context in `instructions`.
 
 **Details live on demand — don't duplicate them here:**
-- Per-tool params/behavior → each tool's own MCP description: `chat`, `code_task`,
-  `scan_folder`, `compare_files`, `check_references`, `check_imports`, `check_against_specs`,
-  `search_existing_implementations`, `security_scan`, `cluster_synonyms`, `assess_model`,
-  `check_model_health`, `discover_new_models`, `security_triage_benchmark`,
-  `search_existing_benchmark`, `check_tool_replacements`, `discover`,
-  `get_settings` (read-only), `or_model_info*`, `reset`.
-- Profiles, auth, ensemble, and per-tool model routing (`tool_models`) → `discover` for live
-  status; config is **user-only** (edit `~/.llm-externalizer/settings.yaml` by hand, then
-  `reset`) — there is no `set_settings`/`change_model` tool.
+- Per-command params/behavior → `llm-ext <command> --help`. That help is generated from the
+  same catalog the commands run from, so it cannot drift. `llm-ext --help` lists all 40
+  (`chat`, `code-task`, `scan-folder`, `compare-files`, `check-references`, `check-imports`,
+  `check-against-specs`, `search-existing-implementations`, `security-scan`,
+  `cluster-synonyms`, `discover`, `get-settings`, `or-model-info*`, `reset`, the
+  `mass-scout-*` family, and the model-health/benchmark commands).
+- Profiles, auth, ensemble, and per-tool model routing (`tool_models`) → `llm-ext discover`
+  for live status; config is **user-only** (edit `~/.llm-externalizer/settings.yaml` by hand)
+  — there is no set-settings/change-model command.
+- `llm-ext reset` purges the on-disk caches. It does NOT restart anything: every invocation
+  is already a fresh process.
 - Scan / fix / config recipes → the plugin's skills and slash commands.
 
 Auth auto-detects from `$OPENROUTER_API_KEY` (or the plugin keychain
-`userConfig.openrouter_api_key`). Don't report an auth error if `discover` shows the token
-resolved.
+`userConfig.openrouter_api_key`, exported to child processes as
+`$CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY`). Don't report an auth error if
+`llm-ext discover` shows the token resolved.
