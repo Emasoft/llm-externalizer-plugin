@@ -23,9 +23,17 @@ import { limitsBlock } from './index.js';
 const testConfig = resolveTestConfig({ testName: 'unit' });
 
 // The LLM backend is deliberately unreachable, so a real-call test only needs
-// to wait long enough for the call to fail (the CLI's retry-ladder backoff),
-// not the full production timeout. Short timeout keeps the suite fast AND free.
-const UNREACHABLE_CALL_TIMEOUT_MS = 10_000;
+// to wait long enough for the call to fail, not the full production timeout.
+//
+// This budget must clear boot + the first model-reconcile (a fresh throwaway
+// config dir has no last-reconcile.json, so it is NOT throttled) + the capped
+// retry ladder. Measured ~13s; 20s leaves headroom on a loaded machine.
+//
+// Do NOT tighten this back to 10s: `execFileAsync` SIGKILLs on timeout, which
+// surfaces as `exitCode: null` — indistinguishable from the CLI hanging, and it
+// cost a real debugging session chasing a hang that did not exist. The ladder
+// itself is bounded by `timeout: 5` in the synthetic test profile.
+const UNREACHABLE_CALL_TIMEOUT_MS = 20_000;
 
 /** The tool catalog the CLI itself is built from — no MCP `listTools()` any
  * more, so this is the direct equivalent: same function, same input. */

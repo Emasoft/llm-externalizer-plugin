@@ -87,6 +87,15 @@ const LOCAL_TEST_SETTINGS_YAML = [
   "    api: generic-local",
   "    model: test-model",
   `    url: ${LOCAL_TEST_URL}`,
+  // Short timeout ON PURPOSE. This backend is DELIBERATELY unreachable, and the
+  // HTTP layer retries a network error 5 times with exponential backoff
+  // (~1.2 + 1.9 + 3.9 + 7.1 + 16.2 ≈ 30s) — but that ladder is capped by the
+  // profile's remaining time budget (provider/http.ts:40). Without this line the
+  // profile inherits the long default, every unreachable-backend test spends
+  // ~30s retrying something that can never succeed, and a test asserting "fails
+  // cleanly within 10s" gets SIGKILLed and reports a null exit code — which
+  // looks exactly like a hang.
+  "    timeout: 5",
   "",
 ].join("\n");
 
