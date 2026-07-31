@@ -142889,18 +142889,18 @@ ${lanes.join("\n")}
         return formatStyle + text + resetEscapeSequence;
       }
       function formatCodeSpan(file2, start, length2, indent3, squiggleColor, host) {
-        const { line: firstLine, character: firstLineChar } = getLineAndCharacterOfPosition(file2, start);
+        const { line: firstLine2, character: firstLineChar } = getLineAndCharacterOfPosition(file2, start);
         const { line: lastLine, character: lastLineChar } = getLineAndCharacterOfPosition(file2, start + length2);
         const lastLineInFile = getLineAndCharacterOfPosition(file2, file2.text.length).line;
-        const hasMoreThanFiveLines = lastLine - firstLine >= 4;
+        const hasMoreThanFiveLines = lastLine - firstLine2 >= 4;
         let gutterWidth = (lastLine + 1 + "").length;
         if (hasMoreThanFiveLines) {
           gutterWidth = Math.max(ellipsis.length, gutterWidth);
         }
         let context = "";
-        for (let i = firstLine; i <= lastLine; i++) {
+        for (let i = firstLine2; i <= lastLine; i++) {
           context += host.getNewLine();
-          if (hasMoreThanFiveLines && firstLine + 1 < i && i < lastLine - 1) {
+          if (hasMoreThanFiveLines && firstLine2 + 1 < i && i < lastLine - 1) {
             context += indent3 + formatColorAndReset(ellipsis.padStart(gutterWidth), gutterStyleSequence) + gutterSeparator + host.getNewLine();
             i = lastLine - 1;
           }
@@ -142913,7 +142913,7 @@ ${lanes.join("\n")}
           context += lineContent + host.getNewLine();
           context += indent3 + formatColorAndReset("".padStart(gutterWidth), gutterStyleSequence) + gutterSeparator;
           context += squiggleColor;
-          if (i === firstLine) {
+          if (i === firstLine2) {
             const lastCharForLine = i === lastLine ? lastLineChar : void 0;
             context += lineContent.slice(0, firstLineChar).replace(/\S/g, " ");
             context += lineContent.slice(firstLineChar, lastCharForLine).replace(/./g, "~");
@@ -142927,7 +142927,7 @@ ${lanes.join("\n")}
         return context;
       }
       function formatLocation(file2, start, host, color = formatColorAndReset) {
-        const { line: firstLine, character: firstLineChar } = getLineAndCharacterOfPosition(file2, start);
+        const { line: firstLine2, character: firstLineChar } = getLineAndCharacterOfPosition(file2, start);
         const relativeFileName = host ? convertToRelativePath(file2.fileName, host.getCurrentDirectory(), (fileName) => host.getCanonicalFileName(fileName)) : file2.fileName;
         let output = "";
         output += color(
@@ -142937,7 +142937,7 @@ ${lanes.join("\n")}
         );
         output += ":";
         output += color(
-          `${firstLine + 1}`,
+          `${firstLine2 + 1}`,
           "\x1B[93m"
           /* Yellow */
         );
@@ -171087,14 +171087,14 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
         function toggleLineComment(fileName, textRange, insertComment) {
           const sourceFile = syntaxTreeCache.getCurrentSourceFile(fileName);
           const textChanges2 = [];
-          const { lineStarts, firstLine, lastLine } = getLinesForRange(sourceFile, textRange);
+          const { lineStarts, firstLine: firstLine2, lastLine } = getLinesForRange(sourceFile, textRange);
           let isCommenting = insertComment || false;
           let leftMostPosition = Number.MAX_VALUE;
           const lineTextStarts = /* @__PURE__ */ new Map();
           const firstNonWhitespaceCharacterRegex = new RegExp(/\S/);
-          const isJsx = isInsideJsxElement(sourceFile, lineStarts[firstLine]);
+          const isJsx = isInsideJsxElement(sourceFile, lineStarts[firstLine2]);
           const openComment = isJsx ? "{/*" : "//";
-          for (let i = firstLine; i <= lastLine; i++) {
+          for (let i = firstLine2; i <= lastLine; i++) {
             const lineText = sourceFile.text.substring(lineStarts[i], sourceFile.getLineEndOfPosition(lineStarts[i]));
             const regExec = firstNonWhitespaceCharacterRegex.exec(lineText);
             if (regExec) {
@@ -171105,8 +171105,8 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
               }
             }
           }
-          for (let i = firstLine; i <= lastLine; i++) {
-            if (firstLine !== lastLine && lineStarts[i] === textRange.end) {
+          for (let i = firstLine2; i <= lastLine; i++) {
+            if (firstLine2 !== lastLine && lineStarts[i] === textRange.end) {
               continue;
             }
             const lineTextStart = lineTextStarts.get(i.toString());
@@ -171229,8 +171229,8 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
         }
         function commentSelection(fileName, textRange) {
           const sourceFile = syntaxTreeCache.getCurrentSourceFile(fileName);
-          const { firstLine, lastLine } = getLinesForRange(sourceFile, textRange);
-          return firstLine === lastLine && textRange.pos !== textRange.end ? toggleMultilineComment(
+          const { firstLine: firstLine2, lastLine } = getLinesForRange(sourceFile, textRange);
+          return firstLine2 === lastLine && textRange.pos !== textRange.end ? toggleMultilineComment(
             fileName,
             textRange,
             /*insertComment*/
@@ -253102,12 +253102,6 @@ function defaultOutputDir() {
   _cachedDefaultOutputDir = join29(resolveProjectMainRoot(), "reports", "llm-externalizer");
   return _cachedDefaultOutputDir;
 }
-function _resetDefaultOutputDirCache() {
-  _cachedDefaultOutputDir = void 0;
-}
-function _testDefaultOutputDir() {
-  return defaultOutputDir();
-}
 function canonicalTimestamp(date5 = /* @__PURE__ */ new Date()) {
   const pad = (n) => String(Math.abs(n)).padStart(2, "0");
   const Y = date5.getFullYear();
@@ -253697,9 +253691,6 @@ function ensembleModelLabel(useEnsemble) {
   const models = [backend.model, activeResolved.secondModel];
   if (activeResolved.thirdModel) models.push(activeResolved.thirdModel);
   return `ensemble: ${models.join(" + ")}`;
-}
-function isModelUnavailableError(detail) {
-  return classifyUnavailable(detail) !== null;
 }
 async function callEnsembleSlotWithRotation(primary, fallbacks, claimFallback, callOne, hooks = {}) {
   let attempted = primary.id;
@@ -255919,23 +255910,869 @@ function writeBootBanner() {
   process.stderr.write(`Session log: ${LOG_FILE}
 `);
 }
-export {
-  FREE_FLOOR_MIN_CONTEXT_TOKENS,
-  _resetDefaultOutputDirCache,
-  _testDefaultOutputDir,
-  boot,
-  callEnsembleSlotWithRotation,
-  dispatchCallTool,
-  filterFreeModels,
-  isModelUnavailableError,
-  limitsBlock,
-  parseFreeBelowUsd,
-  resolveAutoFreePool,
-  resolveFreeModelId,
-  resolveSubsystemFreeModel,
-  selectFreeEnsembleModels,
-  writeBootBanner
+
+// src/tools/definitions.ts
+var BATCHING_NOTE = "\n\nBATCHING (READ THIS): The LLM never sees your whole set of input files at once. Files are packed into LLM requests of typically 1-5 files each \u2014 by default via First-Fit Decreasing bin packing into ~400 KB batches (sized to fit the context window), or one group per request when ---GROUP:id--- markers are used. In ensemble mode each file is reviewed by 3 different LLMs in parallel so every file receives 3 distinct responses; in free mode and local mode each file receives only 1 response. answer_mode controls ONLY how reports are written to disk, NOT how many files the LLM sees per request: 0 = ONE REPORT PER FILE, 1 = ONE REPORT PER GROUP (auto-grouped by subfolder/language/namespace/basename/imports if no ---GROUP:id--- markers are supplied, max 1 MB per group), 2 = SINGLE REPORT (everything merged). If you need cross-file analysis across the whole codebase, use search_existing_implementations \u2014 it is purpose-built for it.";
+var answerModeSchema = {
+  type: "number",
+  enum: [0, 1, 2],
+  description: "Output file organization. Does NOT change how many files the LLM sees per request \u2014 that is governed by the batching algorithm, not by this field. The LLM never sees your whole set of input files at once: files are packed into LLM requests of typically 1-5 files each (First-Fit Decreasing bin packing into ~400 KB batches, or one group per request when ---GROUP:id--- markers are supplied). In ENSEMBLE mode each file is reviewed by 3 different LLMs in parallel so every file receives 3 distinct responses; in FREE mode and LOCAL mode each file receives only 1 response.\n\nanswer_mode : 0\nNAME: ONE REPORT PER FILE\nDESCRIPTION: One .md report is saved for every input file. Files are still batched into LLM requests of typically 1-5 files each (FFD bin packing); each LLM response contains structured per-file sections that the MCP server splits apart and persists as individual reports. Output is a list of (input_file_path -> report_path) pairs.\nFORMAT: markdown (.md)\nWHEN TO USE: Downstream consumers (agents, tools, CI) need to pick up one file's review without scanning an aggregate. Typical for per-file lint/audit pipelines and for fan-out workflows that route each file's findings to a different handler.\nADVANTAGES: Trivially routed \u2014 one file in, one report out. Supports parallel execution with retry and circuit breaker via max_retries.\nDISADVANTAGES: N files = N report files on disk. Slightly more overhead when you only want the big picture.\n\nanswer_mode : 1\nNAME: ONE REPORT PER GROUP\nDESCRIPTION: One .md report is saved per GROUP of files. Groups are either explicit (---GROUP:id--- / ---/GROUP:id--- markers inside input_files_paths) or auto-generated. When the caller supplies markers, files inside each ---GROUP:id--- block share a report. When no markers are supplied, the MCP server auto-groups files intelligently using these priorities, in order: 1) parent subfolder, 2) language/format (file extension), 3) namespace/package (inferred from directory hierarchy), 4) shared filename prefix (e.g. user.ts + user.test.ts), 5) shared imports/libraries. Each auto-group contains at most 1 MB of source; oversized buckets are split into sub-groups by bin packing. The LLM still processes each group in isolation and cannot cross-reference files across groups.\nFORMAT: markdown (.md)\nWHEN TO USE: You want one report per logical chunk of the codebase (e.g. one report per feature folder, one per module). Keeps related-file context together while still producing separate files for independent groups.\nADVANTAGES: Balanced output \u2014 fewer files than mode 0, more granular than mode 2. Group boundaries match natural project structure so reports are easy to route and review.\nDISADVANTAGES: Group composition is a heuristic when markers are not supplied; callers who need exact control must pass explicit ---GROUP:id--- markers.\n\nanswer_mode : 2\nNAME: SINGLE REPORT\nDESCRIPTION: Exactly one .md report is saved, merging the responses from every LLM batch into a single document with per-batch and per-file sections.\nFORMAT: markdown (.md)\nWHEN TO USE: You want one top-level summary across all scanned files \u2014 e.g. a single audit report to share with a reviewer or attach to a PR.\nADVANTAGES: Simplest output. One file path returned. Easy to email, attach, or hand off.\nDISADVANTAGES: For very large scans the merged file can be long. Downstream per-file routing requires re-parsing sections out of the single report.\n\nDefaults per tool: scan_folder=0, chat/code_task/check_*=2, search_existing_implementations=2."
 };
+var maxRetriesSchema = {
+  type: "number",
+  description: "Max retries per file when answer_mode=0 (per-file processing). Default: 1 (no retry). Set to 3 for robust batch processing with exponential backoff and circuit breaker. When > 1, enables parallel execution and automatic abort after 3 consecutive failures."
+};
+var folderSchemaProps = {
+  folder_path: {
+    type: "string",
+    description: "Absolute path to a folder to scan. All matching files are processed. Can be combined with input_files_paths."
+  },
+  extensions: {
+    type: "array",
+    items: { type: "string" },
+    description: 'File extensions to include when using folder_path. E.g., [".ts", ".py"]. If not set, all non-binary files are included.'
+  },
+  exclude_dirs: {
+    type: "array",
+    items: { type: "string" },
+    description: "Additional directory names to skip when scanning folder_path. Hidden dirs, node_modules, .git, dist, build are always skipped."
+  },
+  use_gitignore: {
+    type: "boolean",
+    description: "Use .gitignore rules to filter files (via git ls-files). Default: true. Set false to include gitignored files."
+  },
+  recursive: {
+    type: "boolean",
+    description: "Recurse into subdirectories when scanning folder_path. Default: true."
+  },
+  follow_symlinks: {
+    type: "boolean",
+    description: "Follow symbolic links to files and directories. Default: true. Circular symlinks are detected and skipped automatically."
+  },
+  max_files: {
+    type: "number",
+    description: "Maximum number of files to discover from folder_path. Default: 2500."
+  },
+  output_dir: {
+    type: "string",
+    description: "Absolute path to a custom output directory for reports. Default: <main-project-dir>/reports/llm-externalizer/, anchored on $CLAUDE_PROJECT_DIR VERBATIM (the dir Claude Code operates in), then falling back to $PWD/reports/llm-externalizer/. NEVER derived from git (no `git worktree list`, no git-root climb) \u2014 that picks the wrong dir in worktrees, per-subfolder-git monorepos, and git-less roots. Per-call override wins unconditionally; $LLM_OUTPUT_DIR also overrides the default."
+  },
+  free: {
+    type: "boolean",
+    description: "Use the free Nemotron 3 Super model (nvidia/nemotron-3-super-120b-a12b:free) instead of the ensemble. No cost, single model, 262K context. LOW QUALITY: significantly lower intelligence than ensemble \u2014 more false positives, missed bugs, shallow analysis. WARNING: prompts are logged by the provider \u2014 do not use with sensitive/proprietary code."
+  }
+};
+var redactRegexSchema = {
+  type: "string",
+  description: "JavaScript regex pattern to redact matching strings from file content before sending to LLM. Applied after secret redaction. Alphanumeric matches \u2192 [REDACTED:USER_PATTERN], numeric-only matches \u2192 zero-padded placeholder. Invalid regex returns an error with details."
+};
+var scanFolderSchemaProps = {
+  folder_path: {
+    type: "string",
+    description: "Absolute path to the folder to scan recursively."
+  },
+  extensions: {
+    type: "array",
+    items: { type: "string" },
+    description: 'File extensions to include (e.g. [".ts", ".py"]). If omitted, includes all files.'
+  },
+  exclude_dirs: {
+    type: "array",
+    items: { type: "string" },
+    description: "Additional directory names to skip (hidden dirs, node_modules, .git are always skipped)."
+  },
+  max_files: {
+    type: "number",
+    description: "Maximum number of files to process (default: 2500). Safety limit to prevent runaway scans."
+  },
+  instructions: {
+    type: "string",
+    description: "What to look for or do with each file."
+  },
+  instructions_files_paths: {
+    oneOf: [
+      { type: "string" },
+      { type: "array", items: { type: "string" } }
+    ],
+    description: "File(s) containing instructions."
+  },
+  scan_secrets: {
+    type: "boolean",
+    description: "Scan input files for secrets and ABORT if any are found. Best practice: move secrets to .env (gitignored)."
+  },
+  redact_secrets: {
+    type: "boolean",
+    description: "Redact secrets before sending to LLM. DISCOURAGED: prefer moving secrets to .env files (gitignored)."
+  },
+  use_gitignore: {
+    type: "boolean",
+    description: "Use .gitignore rules to filter files (via git ls-files). When true, only files not ignored by git are included. Falls back to manual walk if not in a git repo. Default: true."
+  },
+  answer_mode: answerModeSchema,
+  redact_regex: redactRegexSchema,
+  max_payload_kb: {
+    type: "number",
+    description: "Max file size in KB per file. Default: 400. Files exceeding this are skipped and reported."
+  }
+};
+function buildTools(limitsText) {
+  const allTools = [
+    {
+      name: "chat",
+      description: "General-purpose LLM call. More capable than Haiku, costs less. Offloads bounded work (summarise, generate, translate, compare) to a separate LLM.\n\nFiles via input_files_paths are read from disk (saves your context).\n\nFILE GROUPING: Organize files into named groups using ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths. Each group is processed in COMPLETE ISOLATION (no cross-group LLM calls) and produces its own SEPARATE report file with the group ID in the filename. Output: one line per group: [group:id] /path/to/report_group-id_....md. WHY: Each downstream agent only reads the report for its own group, saving context tokens by not loading findings about files it is not responsible for. Without markers, all files are processed together (backward compatible).\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 always include brief context in instructions.\n\nOUTPUT: Saved to .md file, returns only the file path." + BATCHING_NOTE + limitsText,
+      inputSchema: {
+        type: "object",
+        properties: {
+          instructions: {
+            type: "string",
+            description: "Task instructions for the LLM. Placed BEFORE input-files content in the prompt. Be specific about expected output format."
+          },
+          instructions_files_paths: {
+            oneOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ],
+            description: "Path(s) to file(s) containing instructions (appended to instructions)."
+          },
+          input_files_paths: {
+            oneOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ],
+            description: 'One or more absolute file paths. Accepts a single string OR an array. Files are read from disk, code-fenced, and included in the prompt after the instructions. Auto-batched if they exceed context window. ALWAYS prefer this over input_files_content \u2014 saves your context tokens. GROUPING: Insert ---GROUP:id--- before a group of files and ---/GROUP:id--- after to process groups in isolation. Each group produces its own report. Example: ["---GROUP:auth---", "/path/auth.ts", "---/GROUP:auth---", "---GROUP:api---", "/path/api.ts", "---/GROUP:api---"]'
+          },
+          input_files_content: {
+            type: "string",
+            description: "Inline content, code-fenced in the prompt. DISCOURAGED \u2014 wastes your context tokens. Use input_files_paths instead. Only for short snippets that are not on disk."
+          },
+          ...folderSchemaProps,
+          system: {
+            type: "string",
+            description: 'Persona. Be specific: "Senior TypeScript dev" not "helpful assistant".'
+          },
+          scan_secrets: {
+            type: "boolean",
+            description: "Scan input files for secrets (API keys, tokens, passwords) and ABORT if any are found."
+          },
+          redact_secrets: {
+            type: "boolean",
+            description: "Redact secrets before sending to LLM. Prevents leaking sensitive data to the remote service."
+          },
+          answer_mode: answerModeSchema,
+          max_retries: maxRetriesSchema,
+          redact_regex: redactRegexSchema,
+          max_payload_kb: {
+            type: "number",
+            description: "Max total payload per batch in KB (prompt + instructions + files). Default: 400. Must fit within the weakest ensemble model's context. Lower if you see hallucinations or truncations on large batches."
+          }
+        },
+        required: []
+      }
+    },
+    // custom_prompt was merged into chat — both have identical schemas/behavior.
+    // The 'custom_prompt' case in the switch handler still works for backward compatibility.
+    {
+      name: "code_task",
+      description: "Code analysis with optimised code-review system prompt. More capable than Haiku, costs less. Less capable than Sonnet/Opus.\n\nPass input_files_paths (read from disk, language auto-detected). Be specific in instructions.\n\nFILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths to process groups in isolation. Each group produces its own SEPARATE report: [group:id] path. When no markers are supplied, answer_mode=1 auto-groups files by subfolder/language/basename (max 1 MB per group) so every answer_mode=1 run emits one merged report per group. WHY: downstream agents only read their own group's report, saving context tokens.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 always include brief context.\n\nOUTPUT: Saved to .md file, returns only the file path." + BATCHING_NOTE + limitsText,
+      inputSchema: {
+        type: "object",
+        properties: {
+          instructions: {
+            type: "string",
+            description: 'Your instructions/notes for the LLM \u2014 placed BEFORE input-files content so the LLM reads them first. Be specific: "Find bugs", "Explain this", "Add error handling to fetchData", "Write tests".'
+          },
+          instructions_files_paths: {
+            oneOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ],
+            description: "Path(s) to file(s) containing instructions (appended to instructions)."
+          },
+          input_files_paths: {
+            oneOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ],
+            description: "One or more absolute paths to source files. Read from disk, code-fenced, language auto-detected. ALWAYS prefer this over input_files_content \u2014 saves your context tokens."
+          },
+          input_files_content: {
+            type: "string",
+            description: "Inline source code, code-fenced. DISCOURAGED \u2014 wastes your context tokens. Use input_files_paths instead. Only for short snippets not on disk."
+          },
+          ...folderSchemaProps,
+          language: {
+            type: "string",
+            description: "Programming language (auto-detected from input_files_paths extension if not set)."
+          },
+          scan_secrets: {
+            type: "boolean",
+            description: "Scan input files for secrets (API keys, tokens, passwords) and ABORT if any are found."
+          },
+          redact_secrets: {
+            type: "boolean",
+            description: "Redact secrets before sending to LLM. Prevents leaking sensitive data to the remote service."
+          },
+          answer_mode: answerModeSchema,
+          max_retries: maxRetriesSchema,
+          redact_regex: redactRegexSchema,
+          max_payload_kb: {
+            type: "number",
+            description: "Max total payload per batch in KB (prompt + instructions + files). Default: 400. Must fit within the weakest ensemble model's context. Lower if you see hallucinations or truncations on large batches."
+          }
+        },
+        required: ["instructions"]
+      }
+    },
+    {
+      name: "discover",
+      description: "Check service availability, active profile, auth status, available profiles and API presets. Returns: status (online/offline), active profile name/mode/model, auth token status (shows whether env vars like $LM_API_TOKEN or $OPENROUTER_API_KEY are resolved), context window, concurrency mode, response latency, session usage, and lists of available profiles/presets for editing guidance. Call this before delegating work.",
+      inputSchema: { type: "object", properties: {} }
+    },
+    {
+      name: "or_model_info",
+      description: "Query OpenRouter for detailed information about a specific model by its EXACT id (e.g. 'nvidia/nemotron-3-super-120b-a12b:free' or 'anthropic/claude-sonnet-4'). Returns model metadata, per-endpoint provider info, context length, pricing, supported request-body parameters (reasoning, temperature, top_p, etc.), quantization, uptime, latency percentiles, and throughput. Uses the /v1/models/{id}/endpoints OpenRouter endpoint. Only works when the active profile is configured for OpenRouter. Use this before calling a new model to verify which parameters it accepts and what pricing applies.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          model: {
+            type: "string",
+            description: "Exact OpenRouter model id (e.g. 'nvidia/nemotron-3-super-120b-a12b:free'). Must match the id as listed in OpenRouter \u2014 case sensitive, includes the vendor prefix and any ':free' / ':thinking' suffix."
+          }
+        },
+        required: ["model"]
+      }
+    },
+    {
+      name: "or_model_info_table",
+      description: "Same as or_model_info but returns the data formatted as a human-readable Unicode-bordered table with ANSI colors. Use this for terminal display; use or_model_info for programmatic consumption or contexts where ANSI escape codes are not rendered. Takes the same `model` input (exact OpenRouter id). Colors: green = good (high uptime, low latency, free pricing), yellow = borderline, red = poor. Headers bold cyan. Compares multiple endpoints side-by-side in a single table if the model has multiple hosting providers.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          model: {
+            type: "string",
+            description: "Exact OpenRouter model id (case-sensitive, vendor-prefixed, with any ':free' / ':thinking' suffix)."
+          }
+        },
+        required: ["model"]
+      }
+    },
+    {
+      name: "or_model_info_json",
+      description: "Same as or_model_info but returns the raw OpenRouter response data as pretty JSON. Use this when you need the unprocessed fields (every numeric value, every field OpenRouter exposes) to pipe into another tool or parse in code. Takes the same `model` input plus an optional `file_path` \u2014 when set, the JSON is written to that file (absolute path recommended) instead of being returned inline, and the tool result contains only the absolute path. This mirrors the CLI `llm-externalizer model-info <id> --json [file]`.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          model: {
+            type: "string",
+            description: "Exact OpenRouter model id (case-sensitive, vendor-prefixed, with any ':free' / ':thinking' suffix)."
+          },
+          file_path: {
+            type: "string",
+            description: "Optional absolute path to write the JSON to. When set, the tool result contains only the resolved file path, not the JSON itself \u2014 saves caller context tokens. When omitted, the JSON is returned inline."
+          }
+        },
+        required: ["model"]
+      }
+    },
+    {
+      name: "reset",
+      description: "Full soft-restart. NOT IMMEDIATE \u2014 waits for all currently running LLM requests to finish before resetting. Then: reloads settings.yaml from disk, clears all caches (model list, concurrency, LM Studio detection), resets session counters (tokens/cost/calls), re-resolves the active profile, and notifies the client to refresh the tool list. Use when settings were changed externally, the backend is misbehaving, or you need a clean slate.",
+      inputSchema: { type: "object", properties: {} }
+    },
+    {
+      name: "get_settings",
+      description: "Read-only view of settings.yaml. Copies the current settings file to the output directory and returns the copy's path. The MCP cannot write settings \u2014 model & profile changes are user-only. Edit ~/.llm-externalizer/settings.yaml manually in your editor, then call the 'reset' tool (or restart Claude Code) to reload.",
+      inputSchema: { type: "object", properties: {} }
+    },
+    // ── Batch Operations ────────────────────────────────────────────────
+    {
+      name: "batch_check",
+      description: "DEPRECATED: Use chat or code_task with answer_mode=0 and max_retries=3 instead.\n\nSame prompt applied to EACH file separately \u2014 one report per file.\n\nFILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths to process groups in isolation. Each group produces its own SEPARATE merged report: [group:id] path. When no markers are supplied, answer_mode=1 auto-groups files by subfolder/language/basename (max 1 MB per group) so every answer_mode=1 run emits one merged report per group. WHY: downstream agents only read their own group's report, saving context tokens.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context.\n\nRetry: 3 attempts for recoverable errors. Aborts on auth/payment errors or 3+ consecutive failures.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          instructions: {
+            type: "string",
+            description: 'Prompt applied to every input-file. Default: comprehensive bug-finding. Can be ANY instruction: "Summarise in 3 bullets", "Extract function signatures", etc.'
+          },
+          instructions_files_paths: {
+            oneOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ],
+            description: "Path(s) to file(s) containing instructions (appended to instructions)."
+          },
+          input_files_paths: {
+            type: "array",
+            items: { type: "string" },
+            description: "Absolute paths to the files to process (one report per input-file)."
+          },
+          input_files_content: {
+            type: "string",
+            description: "NOT SUPPORTED for batch_check \u2014 files must be on disk via input_files_paths."
+          },
+          ...folderSchemaProps,
+          scan_secrets: {
+            type: "boolean",
+            description: "Scan input files for secrets and ABORT if any are found. Best practice: move secrets to .env (gitignored)."
+          },
+          redact_secrets: {
+            type: "boolean",
+            description: "Redact secrets before sending to LLM. DISCOURAGED: prefer moving secrets to .env files (gitignored)."
+          },
+          answer_mode: answerModeSchema,
+          redact_regex: redactRegexSchema,
+          max_payload_kb: {
+            type: "number",
+            description: "Max file size in KB per file. Default: 400. Files exceeding this are skipped and reported."
+          }
+        },
+        required: []
+      }
+    },
+    // ── Specialized Operations ─────────────────────────────────────────
+    {
+      name: "scan_folder",
+      description: "Auto-discover files from a directory tree and run the given instructions against each. Filters by extension, skips hidden dirs/node_modules/.git/dist/build.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context." + BATCHING_NOTE + limitsText,
+      inputSchema: {
+        type: "object",
+        properties: scanFolderSchemaProps,
+        required: ["folder_path"]
+      }
+    },
+    {
+      name: "high_quality_scan",
+      description: "HIGH-QUALITY single-model variant of scan_folder. Runs the given instructions against each discovered file using ONE strong remote model (default z-ai/glm-5.2) at maximum reasoning effort with prompt caching \u2014 NOT the 3-model cheap ensemble. Use when review QUALITY matters more than cost: deep audits, security review, subtle-bug hunts.\n\nRequires the OpenRouter backend with available credit: the high-quality model is PAID by design, so this tool FAIL-FASTS (it does NOT silently downgrade) under a local backend, free_only mode, or exhausted credit \u2014 use scan_folder for those. Configure the model via `high_quality_model` in settings.yaml (id, reasoning_effort, cache, min_quantization, provider).\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context." + BATCHING_NOTE + limitsText,
+      inputSchema: {
+        type: "object",
+        properties: scanFolderSchemaProps,
+        required: ["folder_path"]
+      }
+    },
+    {
+      name: "search_existing_implementations",
+      description: "Search a codebase for an existing implementation of a specified feature. THE CANONICAL WAY to answer 'does this already exist in the codebase?' or 'does this PR duplicate existing code?'. Works even though the LLM never sees the whole codebase at once \u2014 see the batching note below.\n\nThe server walks the target folder(s), filters by language extension, FFD-packs all matching files into batches up to max_payload_kb per LLM request (typically 1\u20135 files per batch, depending on file sizes), and asks the LLM (ensemble by default) to emit per-file YES/NO answers for every file in the batch. Each batch is ONE LLM call \u2014 for a 10k-file codebase this is typically ~500 calls instead of 10k. The LLM never needs global codebase visibility because every file is checked against a REFERENCE (feature_description + optional source_files + optional diff_path), not against other files in the codebase.\n\nBATCHING vs ANSWER_MODE (important): batching behavior is the same in all modes. The LLM always sees 1\u20135 files per request. answer_mode only controls how the per-file output is persisted to disk:\n  - answer_mode 0: one .md per input file (MCP splits each batch response by per-file section markers and saves one report per original file; returns a list of (input_file -> report_file) pairs).\n  - answer_mode 1: one .md per batch (per LLM request).\n  - answer_mode 2 (default): one .md for the whole operation, merged.\n\nThe feature_description is the primary signal. Optionally pass PR source files (shipped as reference context and automatically excluded from the scan to avoid self-match) and/or a unified diff (to focus the LLM on the new lines). Both are optional \u2014 the tool also works as a pure description-based scan.\n\nPer-file answer is terse \u2014 either 'NO' or one-or-more 'YES symbol=<name> lines=<a-b>' lines. EXHAUSTIVE: the LLM reports every occurrence in every file, no cap \u2014 so a reviewer can delete every duplicate and keep only the PR's new one. Ensemble mode runs all configured models in parallel so reviewers can spot false positives from model disagreement.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include the brief context in feature_description." + limitsText,
+      inputSchema: {
+        type: "object",
+        properties: {
+          // Inherit the shared folder-scan props — exposes extensions,
+          // exclude_dirs, use_gitignore, recursive, follow_symlinks, max_files,
+          // output_dir, free. Overridden below where SEI needs different semantics.
+          ...folderSchemaProps,
+          feature_description: {
+            type: "string",
+            description: "Concise one-sentence description of the feature to look for. The source files (if any) may contain many unrelated functions \u2014 this string is what tells the LLM which one matters. Required."
+          },
+          // Override folder_path: SEI accepts a single path OR an array of paths.
+          folder_path: {
+            oneOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ],
+            description: "Absolute path(s) to the codebase folder(s) to scan. Single folder or list of folders; each entry is walked recursively. Required."
+          },
+          // Override max_files: SEI defaults to 10000 (vs scan_folder's 2500)
+          // because this tool is designed for massive-codebase PR-review scans.
+          max_files: {
+            type: "number",
+            description: "Maximum number of files to walk (default: 10000 for this tool, higher than scan_folder's 2500). The FFD batcher packs files up to max_payload_kb per batch, so a 10k-file codebase typically fits in ~500 LLM calls."
+          },
+          source_files: {
+            oneOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ],
+            description: "Optional absolute path(s) to the PR's new/modified files. Their contents are shipped to the LLM as reference context, and the paths are automatically excluded from the scan target list so they don't self-match (symlinks are canonicalized via realpathSync). Omit for pure description-based scans."
+          },
+          diff_path: {
+            type: "string",
+            description: "Optional absolute path to a unified-diff file showing the exact PR changes. The server ships it alongside source_files as reference context so the LLM focuses on the NEW lines (prefixed with '+')."
+          },
+          scan_secrets: {
+            type: "boolean",
+            description: "Scan input files for secrets and ABORT if any are found."
+          },
+          redact_secrets: {
+            type: "boolean",
+            description: "Redact secrets before sending to LLM. DISCOURAGED: prefer .env."
+          },
+          answer_mode: answerModeSchema,
+          redact_regex: redactRegexSchema,
+          max_payload_kb: {
+            type: "number",
+            description: "Max batch payload size in KB (default: 400). Controls FFD bin packing: larger values pack more files per LLM call. search_existing_implementations default answer_mode is 2 (SINGLE REPORT). Mode 1 (ONE REPORT PER GROUP) auto-clusters files by subfolder/extension heuristic and emits one merged report per group. Mode 0 (ONE REPORT PER FILE) splits each batch response by per-file section so every scanned file gets its own report. Batching (1-5 files per LLM call) is always active \u2014 this tool is designed to scale to 10k-file codebases."
+          }
+        },
+        required: ["feature_description", "folder_path"]
+      }
+    },
+    {
+      name: "compare_files",
+      description: "Compare files \u2014 auto-computes unified diff, LLM summarises differences. Three modes:\n\n1. PAIR MODE: input_files_paths with exactly 2 paths (before, after).\n2. BATCH MODE: file_pairs array of [fileA, fileB] pairs for batch comparison.\n3. GIT DIFF MODE: git_repo + from_ref + to_ref to compare files between two commits/tags. Diffs computed via git, LLM summarises each.\n\nFILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in file_pairs to produce separate reports per group. WHY: downstream agents only read their own group's report, saving context tokens.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context." + limitsText,
+      inputSchema: {
+        type: "object",
+        properties: {
+          input_files_paths: {
+            type: "array",
+            items: { type: "string" },
+            description: "Two absolute file paths: [before, after]. For batch comparisons, use file_pairs instead."
+          },
+          file_pairs: {
+            type: "array",
+            items: {
+              type: "array",
+              items: { type: "string" },
+              minItems: 2,
+              maxItems: 2
+            },
+            description: 'Array of [fileA, fileB] pairs for batch comparison. Supports ---GROUP:id--- markers: use ["---GROUP:id---"] as a single-element entry between pairs to group them. Each group produces its own report.'
+          },
+          git_repo: {
+            type: "string",
+            description: "Absolute path to a git repository. Used with from_ref and to_ref for git diff mode."
+          },
+          from_ref: {
+            type: "string",
+            description: "Git ref (commit hash, tag, branch) for the 'before' version. Used with git_repo."
+          },
+          to_ref: {
+            type: "string",
+            description: "Git ref (commit hash, tag, branch) for the 'after' version. Used with git_repo. Defaults to HEAD."
+          },
+          instructions: {
+            type: "string",
+            description: 'Optional focus area (e.g. "focus on API changes", "check for regressions").'
+          },
+          instructions_files_paths: {
+            oneOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ],
+            description: "File(s) containing comparison instructions."
+          },
+          scan_secrets: {
+            type: "boolean",
+            description: "Scan input files for secrets and ABORT if any are found. Best practice: move secrets to .env (gitignored)."
+          },
+          redact_secrets: {
+            type: "boolean",
+            description: "Redact secrets before sending to LLM. DISCOURAGED: prefer moving secrets to .env files (gitignored)."
+          },
+          max_payload_kb: {
+            type: "number",
+            description: "Max file size in KB per file. Default: 400. Files exceeding this are skipped."
+          }
+        },
+        required: []
+      }
+    },
+    {
+      name: "check_references",
+      description: "Check source file for broken symbol references. Auto-resolves local imports, reads dependencies, LLM validates all symbols exist.\n\nFILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths to process groups in isolation. Each group produces its own SEPARATE report: [group:id] path. When no markers are supplied, answer_mode=1 auto-groups files by subfolder/language/basename (max 1 MB per group) so every answer_mode=1 run emits one merged report per group. WHY: downstream agents only read their own group's report, saving context tokens.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context." + BATCHING_NOTE + limitsText,
+      inputSchema: {
+        type: "object",
+        properties: {
+          input_files_paths: {
+            oneOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ],
+            description: "Source file(s) to check for broken references."
+          },
+          ...folderSchemaProps,
+          instructions: {
+            type: "string",
+            description: "Optional additional context or focus areas."
+          },
+          instructions_files_paths: {
+            oneOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ],
+            description: "File(s) containing additional instructions."
+          },
+          scan_secrets: {
+            type: "boolean",
+            description: "Scan input files for secrets and ABORT if any are found. Best practice: move secrets to .env (gitignored)."
+          },
+          redact_secrets: {
+            type: "boolean",
+            description: "Redact secrets before sending to LLM. DISCOURAGED: prefer moving secrets to .env files (gitignored)."
+          },
+          answer_mode: answerModeSchema,
+          max_retries: maxRetriesSchema,
+          redact_regex: redactRegexSchema,
+          max_payload_kb: {
+            type: "number",
+            description: "Max payload in KB (prompt + files). Default: 400. Lower if you see hallucinations."
+          }
+        },
+        required: []
+      }
+    },
+    {
+      name: "check_imports",
+      description: "Two-phase import checker: (1) LLM extracts import paths, (2) server validates each exists on disk. Detects broken imports after file moves/renames.\n\nFILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths to process groups in isolation. Each group produces its own SEPARATE report: [group:id] path. When no markers are supplied, answer_mode=1 auto-groups files by subfolder/language/basename (max 1 MB per group) so every answer_mode=1 run emits one merged report per group. WHY: downstream agents only read their own group's report, saving context tokens.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context." + BATCHING_NOTE + limitsText,
+      inputSchema: {
+        type: "object",
+        properties: {
+          input_files_paths: {
+            oneOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ],
+            description: "Source file(s) to check for broken imports."
+          },
+          ...folderSchemaProps,
+          project_root: {
+            type: "string",
+            description: "Project root for resolving relative imports. Defaults to the source file's directory."
+          },
+          instructions: {
+            type: "string",
+            description: "Optional additional context."
+          },
+          instructions_files_paths: {
+            oneOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ],
+            description: "File(s) containing additional instructions."
+          },
+          scan_secrets: {
+            type: "boolean",
+            description: "Scan input files for secrets and ABORT if any are found. Best practice: move secrets to .env (gitignored)."
+          },
+          redact_secrets: {
+            type: "boolean",
+            description: "Redact secrets before sending to LLM. DISCOURAGED: prefer moving secrets to .env files (gitignored)."
+          },
+          answer_mode: answerModeSchema,
+          max_retries: maxRetriesSchema,
+          redact_regex: redactRegexSchema,
+          max_payload_kb: {
+            type: "number",
+            description: "Max payload in KB (prompt + files). Default: 400. Lower if you see hallucinations."
+          }
+        },
+        required: []
+      }
+    },
+    {
+      name: "check_against_specs",
+      description: "Compare source files against a specification file. The spec file defines requirements, rules, API parameters, output formats, restrictions, forbidden patterns, forbidden endpoints/services/tools, etc. Each source file is strictly examined for spec violations: wrong implementations, missed rules, forbidden patterns used, incorrect API contracts, wrong output formats, etc.\n\nAccepts individual files via input_files_paths OR an entire folder via folder_path (recursive). Files are auto-batched using FFD bin packing \u2014 the spec file is included in EVERY batch.\n\nFILE GROUPING: Use ---GROUP:id--- / ---/GROUP:id--- markers in input_files_paths to process groups in isolation. Each group produces its own SEPARATE report: [group:id] path. When no markers are supplied, answer_mode=1 auto-groups files by subfolder/language/basename (max 1 MB per group) so every answer_mode=1 run emits one merged report per group. WHY: downstream agents only read their own group's report, saving context tokens.\n\nNOTE: The LLM does NOT have the full project \u2014 some requirements may be implemented elsewhere. Therefore only VIOLATIONS of the spec are reported (things done wrong), not MISSING features (things not yet implemented). Everything that IS implemented must follow the spec exactly.\n\nCONTEXT WARNING: Remote LLM has ZERO project context \u2014 include brief context in instructions.\n\nOUTPUT: Violation report saved to .md file, returns only the file path." + BATCHING_NOTE + limitsText,
+      inputSchema: {
+        type: "object",
+        properties: {
+          spec_file_path: {
+            type: "string",
+            description: "Absolute path to the specification file (requirements, rules, API contracts, restrictions). This is the source of truth \u2014 all source files are checked against it. Included in EVERY batch when files are split across multiple requests."
+          },
+          input_files_paths: {
+            oneOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ],
+            description: "Source file(s) to check against the spec. Use this OR folder_path (not both)."
+          },
+          folder_path: {
+            type: "string",
+            description: "Absolute path to a folder to scan recursively. All matching files are checked against the spec. Use this OR input_files_paths (not both)."
+          },
+          extensions: {
+            type: "array",
+            items: { type: "string" },
+            description: 'File extensions to include when using folder_path. E.g., [".ts", ".py"]. If not set, all non-binary files are included.'
+          },
+          exclude_dirs: {
+            type: "array",
+            items: { type: "string" },
+            description: "Additional directory names to skip when scanning folder_path. Hidden dirs, node_modules, .git, dist, build are always skipped."
+          },
+          use_gitignore: {
+            type: "boolean",
+            description: "Use git ls-files to respect .gitignore rules when scanning folders. Default: true. Set false to include gitignored files."
+          },
+          max_files: {
+            type: "number",
+            description: "Maximum number of files to process when using folder_path. Default: 2500. Safety limit to prevent runaway scans on large directory trees."
+          },
+          instructions: {
+            type: "string",
+            description: "Optional additional context or focus areas. E.g., 'Focus on API response format violations' or 'Check if forbidden endpoints are used'."
+          },
+          instructions_files_paths: {
+            oneOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ],
+            description: "File(s) containing additional instructions."
+          },
+          scan_secrets: {
+            type: "boolean",
+            description: "Scan input files for secrets and ABORT if any are found."
+          },
+          redact_secrets: {
+            type: "boolean",
+            description: "Redact secrets before sending to LLM."
+          },
+          answer_mode: answerModeSchema,
+          max_retries: maxRetriesSchema,
+          redact_regex: redactRegexSchema,
+          max_payload_kb: {
+            type: "number",
+            description: "Max payload in KB (prompt + spec + source files) per batch. Default: 400. The spec file is always included \u2014 remaining budget is for source files."
+          }
+        },
+        required: ["spec_file_path"]
+      }
+    },
+    {
+      name: "cluster_synonyms",
+      description: "Cluster SENTENCES (or short labels treated as sentences) by full-sentence meaning equivalence. ZERO orchestrator tokens \u2014 file-in, file-out. The whole batch+verify+canonicalise loop runs inside the MCP server; you get only output paths back.\n\nPURPOSE: aggregate synonymous / equivalent-meaning items across a large term set. Designed for taxonomy work, ontology cleanup, label canonicalisation. NOT a word-level synonym lookup \u2014 the unit of comparison is the full sentence/label.\n\nSCALE: the whole corpus and its embeddings are held in memory, so the practical ceiling is heap-bound \u2014 tens-of-thousands to low-hundreds-of- thousands of items on a typical Node heap with the default 384-dim embeddings, more with policy.compute_embeddings=false. A pre-flight guard estimates the footprint and FAILS FAST with guidance (raise --max-old-space-size, disable embeddings, split the corpus, or set policy.skip_memory_guard) instead of OOM-ing mid-run.\n\nPIPELINE: Pre-flight model benchmark \u2192 Phase 0 setup (load JSONL, embeddings) \u2192 Phase 1 embedding-clustered batching + per-batch grouping \u2192 Phase 2 cross- cluster verification with transitive-closure merge (>=3 distinct items from each cluster must co-occur in the same response) \u2192 Phase 3 canonical-label selection \u2192 Phase 4 emit clusters.jsonl + clusters_summary.json + stats.json + checkpoint.sqlite.\n\nRESUMABLE: pass resume_from to a prior checkpoint.sqlite to continue.\nBUDGET-CAPPED: policy.budget_max_llm_calls aborts cleanly when hit.\nFAILURE-RECOVERY: each failed batch retries 3x, then splits in half and recurses (max depth 3 \u2192 8 leaf sub-batches, 45-call hard cap per source batch).\nBACKEND-AGNOSTIC: uses the active profile's model selection.\n\nSTATUS: all phases live \u2014 embedding-clustered batching + recursive-split- and-retry ladder (Phase 1), cross-cluster transitive-closure verification (Phase 2), and canonical-label selection (Phase 3 \u2014 LLM mode when policy.canonical_label_mode=llm, else a length heuristic). Phases 2-3 run when the LLM budget allows; clusters.jsonl reflects Phase-1 grouping refined by Phase-2 merges, with Phase-3 canonical labels surfaced in clusters_summary.json (TRDD-220ea89f).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          input_file: {
+            type: "string",
+            description: "Absolute path to a JSONL file. Each line is a JSON object with an 'id' (string) and a 'sentence' (string, the text to cluster); optional 'context' (free-text disambiguator). Field 'label' is accepted as an alias for 'sentence'."
+          },
+          output_dir: {
+            type: "string",
+            description: "Absolute path to the output directory. Will be created if missing. Contains clusters.jsonl, clusters_summary.json, stats.json, checkpoint.sqlite."
+          },
+          embeddings_file: {
+            type: "string",
+            description: "Optional. Absolute path to a precomputed float32 memmap file (one row per input item, dimension D). Requires a sibling .meta.json with {shape:[N,D], dtype, model}. If absent, the tool computes its own embeddings via the Python sidecar (sentence-transformers/all-MiniLM-L6-v2)."
+          },
+          policy_file: {
+            type: "string",
+            description: "Optional. Absolute path to a JSON file with policy knobs. See the TRDD for the full list \u2014 defaults apply per field if omitted. Backend / model / ensemble are NOT policy knobs \u2014 they come from the active llm-externalizer profile."
+          },
+          resume_from: {
+            type: "string",
+            description: "Optional. Absolute path to a prior checkpoint.sqlite from this tool. When set, the run resumes from where the prior invocation stopped (after the budget cap, an abort, or any other early termination)."
+          }
+        },
+        required: ["input_file", "output_dir"]
+      }
+    }
+  ];
+  return [...allTools, ...MASS_SCOUT_TOOLS];
+}
+
+// src/cli/main.ts
+function toKebab(toolName) {
+  return toolName.replace(/_/g, "-");
+}
+function resolveCommand(input, tools) {
+  const wanted = input.trim().toLowerCase();
+  return tools.find(
+    (t) => t.name === wanted || toKebab(t.name) === wanted
+  );
+}
+var QUIET_TOOLS = /* @__PURE__ */ new Set([
+  "discover",
+  "get_settings",
+  "reset",
+  "or_model_info",
+  "or_model_info_json",
+  "or_model_info_table"
+]);
+var BOOLEAN_LITERALS = /* @__PURE__ */ new Set([
+  "true",
+  "false",
+  "1",
+  "0",
+  "yes",
+  "no",
+  "on",
+  "off"
+]);
+function die(msg) {
+  process.stderr.write(`llm-ext: ${msg}
+`);
+  process.exit(1);
+}
+function schemaTypeOf(prop) {
+  if (!prop) return "string";
+  if (prop.type) return prop.type;
+  if (Array.isArray(prop.oneOf) && prop.oneOf.length > 0) return "oneOf";
+  return "string";
+}
+function coerce(flag, raw, prop) {
+  const type = schemaTypeOf(prop);
+  switch (type) {
+    case "number": {
+      const n = Number(raw);
+      if (!Number.isFinite(n)) die(`--${flag} expects a number, got '${raw}'`);
+      return n;
+    }
+    case "boolean": {
+      const v = raw.toLowerCase();
+      if (["true", "1", "yes", "on"].includes(v)) return true;
+      if (["false", "0", "no", "off"].includes(v)) return false;
+      die(`--${flag} expects true/false, got '${raw}'`);
+      break;
+    }
+    case "array":
+    case "oneOf": {
+      const trimmed = raw.trim();
+      if (trimmed.startsWith("[")) {
+        try {
+          return JSON.parse(trimmed);
+        } catch {
+          die(`--${flag} looks like JSON but does not parse: ${trimmed}`);
+        }
+      }
+      if (type === "oneOf" && !trimmed.includes(",")) return trimmed;
+      return trimmed.split(",").map((s) => s.trim()).filter(Boolean);
+    }
+    case "object": {
+      try {
+        return JSON.parse(raw);
+      } catch {
+        die(`--${flag} expects JSON, got '${raw}'`);
+      }
+      break;
+    }
+    default:
+      return raw;
+  }
+  return raw;
+}
+function parseFlags2(argv, tool) {
+  const props = tool.inputSchema?.properties ?? {};
+  const out = {};
+  let quiet = false;
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    if (!token.startsWith("--")) {
+      die(`unexpected argument '${token}' (all inputs are named flags)`);
+    }
+    let flag = token.slice(2);
+    let raw;
+    const eq = flag.indexOf("=");
+    if (eq !== -1) {
+      raw = flag.slice(eq + 1);
+      flag = flag.slice(0, eq);
+    }
+    if (flag === "quiet") {
+      quiet = true;
+      continue;
+    }
+    const key = flag in props ? flag : flag.replace(/-/g, "_");
+    const prop = props[key];
+    if (!prop) {
+      die(
+        `unknown flag --${flag} for '${toKebab(tool.name)}'. Run 'llm-ext ${toKebab(tool.name)} --help' to see its parameters.`
+      );
+    }
+    if (raw === void 0) {
+      if (schemaTypeOf(prop) === "boolean") {
+        const next = argv[i + 1];
+        if (next !== void 0 && BOOLEAN_LITERALS.has(next.toLowerCase())) {
+          out[key] = coerce(flag, argv[++i], prop);
+        } else {
+          out[key] = true;
+        }
+        continue;
+      }
+      raw = argv[++i];
+      if (raw === void 0) die(`--${flag} expects a value`);
+    }
+    out[key] = coerce(flag, raw, prop);
+  }
+  const missing = (tool.inputSchema?.required ?? []).filter((r) => !(r in out));
+  if (missing.length > 0) {
+    die(
+      `'${toKebab(tool.name)}' requires ${missing.map((m) => `--${m}`).join(", ")}`
+    );
+  }
+  return { args: out, quiet };
+}
+function firstLine(text) {
+  const line = text.split("\n").find((l) => l.trim().length > 0) ?? "";
+  return line.length > 96 ? `${line.slice(0, 93)}...` : line;
+}
+function printGlobalHelp(tools) {
+  const width = Math.max(...tools.map((t) => toKebab(t.name).length));
+  process.stdout.write(
+    "llm-ext \u2014 offload bounded LLM work to cheaper models.\n\nUsage:\n  llm-ext <command> [--flag value ...]\n  llm-ext <command> --help      show a command's parameters\n  llm-ext --help                this list\n\nGlobal flags:\n  --quiet                       suppress the banner and progress lines\n\nCommands:\n"
+  );
+  for (const t of [...tools].sort((a, b) => a.name.localeCompare(b.name))) {
+    process.stdout.write(
+      `  ${toKebab(t.name).padEnd(width)}  ${firstLine(t.description)}
+`
+    );
+  }
+  process.stdout.write(
+    "\nReports are written to <project>/reports/llm-externalizer/ and the path is printed on stdout.\n"
+  );
+}
+function printToolHelp(tool) {
+  const props = tool.inputSchema?.properties ?? {};
+  const required2 = new Set(tool.inputSchema?.required ?? []);
+  process.stdout.write(`llm-ext ${toKebab(tool.name)}
+
+${tool.description}
+`);
+  const keys = Object.keys(props);
+  if (keys.length === 0) {
+    process.stdout.write("\nTakes no parameters.\n");
+    return;
+  }
+  process.stdout.write("\nParameters:\n");
+  const width = Math.max(...keys.map((k) => k.length));
+  for (const key of keys.sort()) {
+    const prop = props[key];
+    const tag = required2.has(key) ? " (required)" : "";
+    process.stdout.write(
+      `  --${key.padEnd(width)}  [${schemaTypeOf(prop)}]${tag} ${firstLine(prop.description ?? "")}
+`
+    );
+  }
+}
+async function main() {
+  const argv = process.argv.slice(2);
+  const tools = buildTools(limitsBlock());
+  if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
+    printGlobalHelp(tools);
+    return;
+  }
+  const commandName = argv[0];
+  const tool = resolveCommand(commandName, tools);
+  if (!tool) {
+    die(
+      `unknown command '${commandName}'. Run 'llm-ext --help' for the list.`
+    );
+  }
+  const rest = argv.slice(1);
+  if (rest.includes("--help") || rest.includes("-h")) {
+    printToolHelp(tool);
+    return;
+  }
+  const { args, quiet } = parseFlags2(rest, tool);
+  await boot();
+  const verbose = !quiet && !QUIET_TOOLS.has(tool.name);
+  if (verbose) writeBootBanner();
+  const result = await dispatchCallTool(tool.name, args, { progress: verbose });
+  const text = result.content.map((c) => c.text).join("\n");
+  if (result.isError) {
+    process.stderr.write(`${text}
+`);
+    process.exit(1);
+  }
+  process.stdout.write(`${text}
+`);
+}
+main().catch((error48) => {
+  process.stderr.write(
+    `llm-ext: ${error48 instanceof Error ? error48.message : String(error48)}
+`
+  );
+  process.exit(1);
+});
 /*! Bundled license information:
 
 typescript/lib/typescript.js:

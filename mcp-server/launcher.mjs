@@ -295,21 +295,19 @@ try {
 if (installed) {
   // Quick sanity log so the first-run user sees something positive after the
   // (slow) install completes. Subsequent runs hit the fast path and are silent.
-  log("self-install complete; server starting.");
+  log("self-install complete; starting.");
 }
 
-// Hand off to the bundled server. Use a URL-based dynamic import so esbuild
+// Hand off to the bundled CLI. Use a URL-based dynamic import so esbuild
 // leaves the path alone if this file ever passes through it.
-const indexUrl = pathToFileURL(join(SCRIPT_DIR, "dist", "index.js")).href;
-// index.ts boots main() ONLY when it is the process entry point — it compares
-// realpath(process.argv[1]) against its own module path (a cost-safety guard
-// from TRDD-e82f2c49 that stops test-imports from booting the server + hitting
-// a backend). When Claude Code runs `node launcher.mjs`, argv[1] is THIS
-// launcher, not dist/index.js; the launcher then hands off via dynamic import,
-// which does NOT change argv[1]. Without the line below the guard is false,
-// main() never runs, and the MCP server answers nothing → Claude Code -32001.
-// Point argv[1] at the index path so the guard passes for the launcher path
-// ONLY. Test-imports never go through the launcher, keep their own argv[1],
-// and stay correctly un-booted.
-process.argv[1] = fileURLToPath(indexUrl);
-await import(indexUrl);
+//
+// This file is NOT dead weight after the MCP removal — it is the only thing
+// that guarantees the native `better-sqlite3` binding is present before
+// mass-scout touches its SQLite registry, and the plugin ships with
+// node_modules gitignored. It just launches a CLI now instead of a server.
+//
+// (The `process.argv[1] = …` line that used to sit here is gone with the
+// entry-point guard it existed to satisfy. dist/llm-ext.js reads its command
+// from argv.slice(2) and does not care how it was reached.)
+const cliUrl = pathToFileURL(join(SCRIPT_DIR, "dist", "llm-ext.js")).href;
+await import(cliUrl);

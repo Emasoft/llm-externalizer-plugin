@@ -1,54 +1,50 @@
 /**
- * Integration tests for the LLM Externalizer MCP server.
+ * Integration tests for the LLM Externalizer CLI.
  *
- * These tests spawn the actual server process and communicate via stdio
- * using the MCP SDK client. No LLM backend is required for most tests —
- * only tools that don't make LLM calls (discover, listTools) are tested.
+ * These tests spawn the actual `llm-ext` CLI as a subprocess, the same way a
+ * real user would. No LLM backend is required for most tests — only tools
+ * that don't make LLM calls (discover, the tool catalog) are tested.
  *
  * For tools that DO call the LLM (chat, code_task, etc.), we test only the
  * input validation / error paths that fail before the LLM call.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { join } from 'node:path';
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
-import { resolveTestConfig, createTestClient } from './test-helpers';
+import { resolveTestConfig, runCli, type CliResult } from './test-helpers';
+import { buildTools } from './tools/definitions.js';
+import { limitsBlock } from './index.js';
 
-// COST-SAFETY (TRDD-e82f2c49): default resolveTestConfig now spawns the server
+// COST-SAFETY (TRDD-e82f2c49): default resolveTestConfig now spawns the CLI
 // with a LOCAL, unreachable backend (127.0.0.1:1), so these integration tests
 // make ZERO OpenRouter calls — every LLM tool call fails fast on ECONNREFUSED,
-// which is exactly what they assert ("server didn't crash"). NO requireLiveBackend.
+// which is exactly what they assert ("the CLI didn't crash"). NO requireLiveBackend.
 const testConfig = resolveTestConfig({ testName: 'unit' });
 
 // The LLM backend is deliberately unreachable, so a real-call test only needs
-// to wait long enough for the call to fail (the server's retry-ladder backoff),
+// to wait long enough for the call to fail (the CLI's retry-ladder backoff),
 // not the full production timeout. Short timeout keeps the suite fast AND free.
 const UNREACHABLE_CALL_TIMEOUT_MS = 10_000;
 
-async function createClient(): Promise<{ client: Client; transport: StdioClientTransport }> {
-  return createTestClient(testConfig, 'test-client');
+/** The tool catalog the CLI itself is built from — no MCP `listTools()` any
+ * more, so this is the direct equivalent: same function, same input. */
+const TOOLS = buildTools(limitsBlock()) as {
+  name: string;
+  description: string;
+  inputSchema: { type: string; properties?: Record<string, unknown> };
+}[];
+
+function firstText(result: CliResult): string {
+  return result.content[0]?.text ?? '';
 }
 
 // ── Tool listing ──────────────────────────────────────────────────────
 
-describe('listTools', () => {
-  let client: Client;
-  let transport: StdioClientTransport | undefined;
-
-  beforeAll(async () => {
-    ({ client, transport } = await createClient());
-  });
-
-  afterAll(async () => {
-    if (transport) await transport.close();
-  });
-
-  it('returns all expected tools', async () => {
-    /** Verify the server exposes the full set of tools */
-    const result = await client.listTools();
-    const toolNames = result.tools.map(t => t.name).sort();
+describe('tool catalog', () => {
+  it('returns all expected tools', () => {
+    /** Verify buildTools() exposes the full set of tools */
+    const toolNames = TOOLS.map(t => t.name).sort();
 
     // custom_prompt was merged into chat — it still works via switch fall-through
     // but is NOT listed as a separate tool in buildTools().
@@ -119,38 +115,32 @@ describe('listTools', () => {
     expect(toolNames).toEqual(expected);
   });
 
-  it('each tool has a non-empty description', async () => {
-    /** Every tool must have a description for MCP clients to display */
-    const result = await client.listTools();
-    for (const tool of result.tools) {
+  it('each tool has a non-empty description', () => {
+    /** Every tool must have a description — shown in `llm-ext --help` and per-command help */
+    for (const tool of TOOLS) {
       expect(tool.description, `Tool "${tool.name}" missing description`).toBeTruthy();
-      expect(tool.description!.length).toBeGreaterThan(10);
+      expect(tool.description.length).toBeGreaterThan(10);
     }
   });
 
-  it('each tool has an inputSchema', async () => {
-    /** Every tool must declare its input schema */
-    const result = await client.listTools();
-    for (const tool of result.tools) {
+  it('each tool has an inputSchema', () => {
+    /** Every tool must declare its input schema — the CLI's flag parser depends on it */
+    for (const tool of TOOLS) {
       expect(tool.inputSchema, `Tool "${tool.name}" missing inputSchema`).toBeDefined();
       expect(tool.inputSchema.type).toBe('object');
     }
   });
 
-  it('chat tool inputSchema preserves named properties after Zod round-trip', async () => {
+  it('chat tool inputSchema lists its named properties', () => {
     /**
-     * T2.MCP-SDK regression — after the McpServer migration, every tool's
-     * inputSchema is built via jsonSchemaToZod() and then re-serialized
-     * by the SDK for the wire. This test verifies the wire schema still
-     * lists the named properties the tool actually accepts.
+     * Regression guard carried over from the MCP era (where a Zod round-trip
+     * could silently drop a property). No round-trip exists any more —
+     * buildTools() is the CLI's own source of truth — but the invariant
+     * ("chat always exposes these flags") is still worth asserting directly.
      */
-    const result = await client.listTools();
-    const chat = result.tools.find(t => t.name === 'chat');
+    const chat = TOOLS.find(t => t.name === 'chat');
     expect(chat).toBeDefined();
     const props = (chat!.inputSchema.properties ?? {}) as Record<string, unknown>;
-    // These are the properties chat ALWAYS exposes (verified against
-    // buildTools() in index.ts). If any one is missing from the wire
-    // schema, the Zod converter dropped it.
     for (const key of ['instructions', 'input_files_paths', 'input_files_content', 'system', 'free']) {
       expect(props[key], `chat tool inputSchema missing property "${key}"`).toBeDefined();
     }
@@ -158,134 +148,90 @@ describe('listTools', () => {
 
   it('discover tool with no arguments is callable end-to-end', async () => {
     /**
-     * T2.MCP-SDK regression — verifies the registerTool callback is wired
-     * correctly. A tool with an empty argument set should still dispatch
-     * through dispatchCallTool() and return a non-error result. discover
+     * Verifies the CLI wiring end to end: command resolution, flag parsing
+     * (none needed here), boot(), and dispatchCallTool() all connect. discover
      * is chosen because it makes no LLM call (won't burn credits).
      */
-    const result = await client.callTool({ name: 'discover', arguments: {} });
+    const result = await runCli(testConfig, 'discover');
     expect(result.isError).not.toBe(true);
-    const content = (result.content as { type: string; text: string }[])[0];
-    expect(content.type).toBe('text');
-    expect(content.text).toMatch(/Active profile:/);
+    expect(result.content[0]?.type).toBe('text');
+    expect(firstText(result)).toMatch(/Active profile:/);
   });
 });
 
 // ── discover tool ─────────────────────────────────────────────────────
 
 describe('discover', () => {
-  let client: Client;
-  let transport: StdioClientTransport | undefined;
-
-  beforeAll(async () => {
-    ({ client, transport } = await createClient());
-  });
-
-  afterAll(async () => {
-    if (transport) await transport.close();
-  });
-
   it('returns service health information', async () => {
     /** discover returns status info — OFFLINE when no backend is running */
-    const result = await client.callTool({ name: 'discover', arguments: {} });
+    const result = await runCli(testConfig, 'discover');
     // discover always returns a result (even when offline)
-    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
-    expect(text).toBeDefined();
+    const text = firstText(result);
+    expect(text).toBeTruthy();
     // When no backend is running, it says OFFLINE
     // When a backend IS running, it mentions Local, LM Studio, or OpenRouter
     expect(text).toMatch(/OFFLINE|Local|LM Studio|OpenRouter/i);
   });
 
-  it('accepts progress token without error', async () => {
-    /** discover with a progress token should work (even though it finishes instantly) */
-    const result = await client.callTool(
-      { name: 'discover', arguments: {} },
-      undefined,
-      {
-        onprogress: () => {},
-        timeout: 30_000,
-      },
-    );
+  it('runs verbosely (banner + no crash) without error', async () => {
+    /**
+     * Was "accepts progress token without error" under MCP — there is no
+     * progress-token protocol over a CLI invocation, so the equivalent
+     * assertion is: running with the boot banner enabled (i.e. NOT --quiet)
+     * still completes cleanly, even though discover finishes instantly and
+     * emits no progress lines of its own.
+     */
+    const result = await runCli(testConfig, 'discover', {}, { quiet: false, timeoutMs: 30_000 });
     expect(result.isError).toBeFalsy();
-    // discover is instant — no progress expected, but no crash either
   });
 });
 
 // ── Input validation (error paths before LLM call) ───────────────────
 
 describe('input validation', () => {
-  let client: Client;
-  let transport: StdioClientTransport | undefined;
-
-  beforeAll(async () => {
-    ({ client, transport } = await createClient());
-  });
-
-  afterAll(async () => {
-    if (transport) await transport.close();
-  });
-
   it('chat: fails without instructions or input', async () => {
     /** chat requires either instructions or input_files_paths */
-    const result = await client.callTool({
-      name: 'chat',
-      arguments: {},
-    });
+    const result = await runCli(testConfig, 'chat', {});
     expect(result.isError).toBe(true);
-    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
-    expect(text).toMatch(/FAILED/i);
+    expect(firstText(result)).toMatch(/FAILED/i);
   });
 
   it('code_task: fails without instructions or input', async () => {
     /** code_task requires either instructions or input_files_paths */
-    const result = await client.callTool({
-      name: 'code_task',
-      arguments: {},
-    });
+    const result = await runCli(testConfig, 'code_task', {});
     expect(result.isError).toBe(true);
   });
 
   it('batch_check: fails with empty input_files_paths', async () => {
     /** batch_check requires non-empty input_files_paths array */
-    const result = await client.callTool({
-      name: 'batch_check',
-      arguments: { input_files_paths: [] },
-    });
+    const result = await runCli(testConfig, 'batch_check', { input_files_paths: [] });
     expect(result.isError).toBe(true);
-    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
-    expect(text).toMatch(/input_files_paths/i);
+    expect(firstText(result)).toMatch(/input_files_paths/i);
   });
 
   it('high_quality_scan: fails fast on a non-OpenRouter backend (TRDD-DBUSM55E)', async () => {
     /** high_quality_scan runs a PAID model and must refuse, not silently
      *  downgrade, when the backend cannot run it. The cost-safe test backend is
      *  LOCAL, so the paid-model gate refuses before any file is scanned. */
-    const result = await client.callTool({
-      name: 'high_quality_scan',
-      arguments: { folder_path: '/tmp', instructions: 'find bugs' },
+    const result = await runCli(testConfig, 'high_quality_scan', {
+      folder_path: '/tmp',
+      instructions: 'find bugs',
     });
     expect(result.isError).toBe(true);
-    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
-    expect(text).toMatch(/OpenRouter backend/i);
+    expect(firstText(result)).toMatch(/OpenRouter backend/i);
   });
 
   it('compare_files: fails with fewer than 2 files', async () => {
     /** compare_files requires exactly 2 input files */
-    const result = await client.callTool({
-      name: 'compare_files',
-      arguments: { input_files_paths: ['/nonexistent'] },
-    });
+    const result = await runCli(testConfig, 'compare_files', { input_files_paths: ['/nonexistent'] });
     expect(result.isError).toBe(true);
   });
 
   it('scan_folder: fails with nonexistent folder', async () => {
     /** scan_folder should return error for nonexistent directory */
-    const result = await client.callTool({
-      name: 'scan_folder',
-      arguments: {
-        folder_path: '/tmp/__nonexistent_test_folder_12345',
-        instructions: 'find bugs',
-      },
+    const result = await runCli(testConfig, 'scan_folder', {
+      folder_path: '/tmp/__nonexistent_test_folder_12345',
+      instructions: 'find bugs',
     });
     expect(result.isError).toBe(true);
   });
@@ -295,141 +241,109 @@ describe('input validation', () => {
 // ── scan_secrets validation ──────────────────────────────────────────
 
 describe('scan_secrets', () => {
-  let client: Client;
-  let transport: StdioClientTransport | undefined;
   const tmpDir = '/tmp/__llm_ext_test_secrets';
   const secretFile = join(tmpDir, 'secret.ts');
 
-  beforeAll(async () => {
-    ({ client, transport } = await createClient());
+  beforeAll(() => {
     mkdirSync(tmpDir, { recursive: true });
     // Write a file containing a fake API key pattern
     writeFileSync(secretFile, `const API_KEY = "sk-proj-1234567890abcdefghijklmnopqrstuvwxyz1234567890ab";\nconsole.log(API_KEY);\n`, 'utf-8');
   });
 
-  afterAll(async () => {
+  afterAll(() => {
     rmSync(tmpDir, { recursive: true, force: true });
-    if (transport) await transport.close();
   });
 
   it('chat: aborts when scan_secrets finds secrets', async () => {
     /** chat with scan_secrets should abort when input files contain API keys */
-    const result = await client.callTool({
-      name: 'chat',
-      arguments: {
-        instructions: 'summarize this file',
-        input_files_paths: secretFile,
-        scan_secrets: true,
-      },
+    const result = await runCli(testConfig, 'chat', {
+      instructions: 'summarize this file',
+      input_files_paths: secretFile,
+      scan_secrets: true,
     });
     expect(result.isError).toBe(true);
-    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
-    expect(text).toMatch(/secret|key|blocked|abort/i);
+    expect(firstText(result)).toMatch(/secret|key|blocked|abort/i);
   });
 
   it('code_task: aborts when scan_secrets finds secrets', async () => {
     /** code_task with scan_secrets should abort when input files contain API keys */
-    const result = await client.callTool({
-      name: 'code_task',
-      arguments: {
-        instructions: 'review this file',
-        input_files_paths: secretFile,
-        scan_secrets: true,
-      },
+    const result = await runCli(testConfig, 'code_task', {
+      instructions: 'review this file',
+      input_files_paths: secretFile,
+      scan_secrets: true,
     });
     expect(result.isError).toBe(true);
-    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
-    expect(text).toMatch(/secret|key|blocked|abort/i);
+    expect(firstText(result)).toMatch(/secret|key|blocked|abort/i);
   });
 
   it('batch_check: aborts when scan_secrets finds secrets', async () => {
     /** batch_check with scan_secrets should abort when input files contain secrets */
-    const result = await client.callTool({
-      name: 'batch_check',
-      arguments: {
-        input_files_paths: [secretFile],
-        scan_secrets: true,
-      },
+    const result = await runCli(testConfig, 'batch_check', {
+      input_files_paths: [secretFile],
+      scan_secrets: true,
     });
     expect(result.isError).toBe(true);
-    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
-    expect(text).toMatch(/secret|key|blocked|abort/i);
+    expect(firstText(result)).toMatch(/secret|key|blocked|abort/i);
   });
 });
 
 // ── Progress notifications during LLM calls ──────────────────────────
-// These tests verify that the server sends progress notifications when
-// a tool takes a long time. Since we don't have an LLM backend, we
-// test with tools that will fail AFTER sending at least one progress
-// notification (connection refused to localhost:1234).
+// Under MCP these tests verified the server sent notifications/progress
+// events mid-call without crashing. There is no MCP progress protocol over
+// a CLI invocation any more — the CLI's equivalent of "progress" is lines
+// written to stderr (`--quiet` off) via the same `onProgress` callback the
+// old server used (see makeProgressFn() in index.ts). So the rewritten
+// assertion is: running verbosely against an unreachable LLM backend still
+// exits cleanly (no hang, no uncaught crash) within the short timeout, and
+// a fresh `discover` invocation right after still succeeds — i.e. nothing
+// about the failed call corrupted process state that a later invocation
+// depends on (settings cache, free-mode publish, etc).
 
 describe('progress notifications', () => {
-  let client: Client;
-  let transport: StdioClientTransport | undefined;
   const tmpDir = '/tmp/__llm_ext_test_progress';
   const testFile = join(tmpDir, 'hello.ts');
 
-  beforeAll(async () => {
-    ({ client, transport } = await createClient());
+  beforeAll(() => {
     mkdirSync(tmpDir, { recursive: true });
     writeFileSync(testFile, 'export function hello() { return "world"; }\n', 'utf-8');
   });
 
-  afterAll(async () => {
+  afterAll(() => {
     rmSync(tmpDir, { recursive: true, force: true });
-    if (transport) await transport.close();
   });
 
-  it('chat: sends progress token in request without crash', async () => {
-    /** Calling chat with a progressToken should not crash, even if LLM is unreachable */
-    try {
-      await client.callTool(
-        {
-          name: 'chat',
-          arguments: {
-            instructions: 'say hello',
-          },
-        },
-        undefined,
-        {
-          onprogress: () => {},
-          // Short timeout since the LLM backend is unreachable — it will fail on connect
-          timeout: UNREACHABLE_CALL_TIMEOUT_MS,
-        },
-      );
-    } catch {
-      // Expected: LLM backend is unreachable, so the call will error.
-      // The key assertion is that it didn't crash the server.
-    }
+  it('chat: runs verbosely against an unreachable backend without hanging or crashing', async () => {
+    /** chat with the boot banner + progress lines enabled must still fail
+     * cleanly (ECONNREFUSED), not hang or crash. */
+    const result = await runCli(
+      testConfig,
+      'chat',
+      { instructions: 'say hello' },
+      { quiet: false, timeoutMs: UNREACHABLE_CALL_TIMEOUT_MS },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.exitCode).not.toBeNull();
 
-    // Verify the server is still alive after the failed call
-    const discoverResult = await client.callTool({ name: 'discover', arguments: {} });
+    // A fresh invocation right after must still work — no corrupted state
+    // survives a failed call.
+    const discoverResult = await runCli(testConfig, 'discover');
     expect(discoverResult.isError).toBeFalsy();
   });
 
-  it('code_task: sends progress token in request without crash', async () => {
-    /** code_task with a progressToken should not crash, even if LLM is unreachable */
-    try {
-      await client.callTool(
-        {
-          name: 'code_task',
-          arguments: {
-            instructions: 'review this file',
-            input_files_paths: testFile,
-          },
-        },
-        undefined,
-        {
-          onprogress: () => {},
-          timeout: UNREACHABLE_CALL_TIMEOUT_MS,
-        },
-      );
-    } catch {
-      // Expected: LLM backend unreachable
-    }
+  it('code_task: runs verbosely against an unreachable backend without hanging or crashing', async () => {
+    /** code_task with the boot banner + progress lines enabled must still fail
+     * cleanly (ECONNREFUSED), not hang or crash. */
+    const result = await runCli(
+      testConfig,
+      'code_task',
+      { instructions: 'review this file', input_files_paths: testFile },
+      { quiet: false, timeoutMs: UNREACHABLE_CALL_TIMEOUT_MS },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.exitCode).not.toBeNull();
 
-    // Server should still be alive
-    const discoverResult = await client.callTool({ name: 'discover', arguments: {} });
+    // A fresh invocation right after must still work.
+    const discoverResult = await runCli(testConfig, 'discover');
     expect(discoverResult.isError).toBeFalsy();
   });
 });
@@ -444,8 +358,6 @@ describe('progress notifications', () => {
 //       multiple extensions and subdirectories.
 
 describe('answer_mode dispatch', () => {
-  let client: Client;
-  let transport: StdioClientTransport | undefined;
   const tmpDir = '/tmp/__llm_ext_test_mode1';
   const srcDir = join(tmpDir, 'src');
   const scriptsDir = join(tmpDir, 'scripts');
@@ -454,8 +366,7 @@ describe('answer_mode dispatch', () => {
   const scriptFoo = join(scriptsDir, 'foo.py');
   const scriptBar = join(scriptsDir, 'bar.py');
 
-  beforeAll(async () => {
-    ({ client, transport } = await createClient());
+  beforeAll(() => {
     mkdirSync(srcDir, { recursive: true });
     mkdirSync(scriptsDir, { recursive: true });
     writeFileSync(srcA, 'export const a = 1;\n', 'utf-8');
@@ -464,82 +375,62 @@ describe('answer_mode dispatch', () => {
     writeFileSync(scriptBar, 'def bar(): pass\n', 'utf-8');
   });
 
-  afterAll(async () => {
+  afterAll(() => {
     rmSync(tmpDir, { recursive: true, force: true });
-    if (transport) await transport.close();
   });
 
   it('chat: answer_mode=1 routes mixed-extension files through auto-grouping without crash', async () => {
     /** With 4 files in 2 subdirs × 2 extensions, auto-grouping should
      * produce 2 groups (src-ts, scripts-py). The LLM is unreachable so
      * the call fails after the grouping decision — we only verify that
-     * the server survives the routing path and didn't reject the request
-     * up-front with a validation error. */
-    let result;
-    try {
-      result = await client.callTool(
-        {
-          name: 'chat',
-          arguments: {
-            instructions: 'audit for bugs',
-            input_files_paths: [srcA, srcB, scriptFoo, scriptBar],
-            answer_mode: 1,
-          },
-        },
-        undefined,
-        { timeout: UNREACHABLE_CALL_TIMEOUT_MS },
-      );
-    } catch {
-      // LLM unreachable or timed out mid-call — both acceptable.
-      // The assertion below verifies the server is still alive.
-    }
-    // If the call returned cleanly (e.g. service returned an error body
-    // but didn't throw), the response must NOT be a pre-LLM validation
-    // failure (e.g. "instructions required"). An empty-LLM error is fine.
-    if (result) {
-      const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? '';
-      expect(text).not.toMatch(/instructions or input_files_paths is required/i);
-      expect(text).not.toMatch(/folder_path is required/i);
-    }
-    // Server must still be responsive
-    const discoverResult = await client.callTool({ name: 'discover', arguments: {} });
+     * the CLI survives the routing path and didn't reject the request
+     * up-front with a validation error. runCli() never throws (unlike the
+     * old SDK client) — it always returns a CliResult, so no try/catch
+     * is needed here any more. */
+    const result = await runCli(
+      testConfig,
+      'chat',
+      {
+        instructions: 'audit for bugs',
+        input_files_paths: [srcA, srcB, scriptFoo, scriptBar],
+        answer_mode: 1,
+      },
+      { timeoutMs: UNREACHABLE_CALL_TIMEOUT_MS },
+    );
+    // The response must NOT be a pre-LLM validation failure (e.g.
+    // "instructions required"). An empty-LLM error is fine.
+    const text = firstText(result);
+    expect(text).not.toMatch(/instructions or input_files_paths is required/i);
+    expect(text).not.toMatch(/folder_path is required/i);
+    // CLI must still be usable afterward
+    const discoverResult = await runCli(testConfig, 'discover');
     expect(discoverResult.isError).toBeFalsy();
   });
 
   it('code_task: answer_mode=1 with explicit ---GROUP:id--- markers routes through grouped path', async () => {
     /** Group markers bypass auto-grouping — ensure the explicit path
-     * still works. The LLM call fails but the server mustn't crash. */
-    let result;
-    try {
-      result = await client.callTool(
-        {
-          name: 'code_task',
-          arguments: {
-            instructions: 'review',
-            input_files_paths: [
-              '---GROUP:typescript---',
-              srcA,
-              srcB,
-              '---/GROUP:typescript---',
-              '---GROUP:python---',
-              scriptFoo,
-              scriptBar,
-              '---/GROUP:python---',
-            ],
-            answer_mode: 1,
-          },
-        },
-        undefined,
-        { timeout: UNREACHABLE_CALL_TIMEOUT_MS },
-      );
-    } catch {
-      // LLM unreachable
-    }
-    if (result) {
-      const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? '';
-      expect(text).not.toMatch(/instructions.*required/i);
-    }
-    const discoverResult = await client.callTool({ name: 'discover', arguments: {} });
+     * still works. The LLM call fails but the CLI mustn't crash. */
+    const result = await runCli(
+      testConfig,
+      'code_task',
+      {
+        instructions: 'review',
+        input_files_paths: [
+          '---GROUP:typescript---',
+          srcA,
+          srcB,
+          '---/GROUP:typescript---',
+          '---GROUP:python---',
+          scriptFoo,
+          scriptBar,
+          '---/GROUP:python---',
+        ],
+        answer_mode: 1,
+      },
+      { timeoutMs: UNREACHABLE_CALL_TIMEOUT_MS },
+    );
+    expect(firstText(result)).not.toMatch(/instructions.*required/i);
+    const discoverResult = await runCli(testConfig, 'discover');
     expect(discoverResult.isError).toBeFalsy();
   });
 
@@ -547,63 +438,41 @@ describe('answer_mode dispatch', () => {
     /** scan_folder mode 1 should validate the folder exists BEFORE
      * walking it or issuing LLM calls, and BEFORE the auto-grouping
      * step runs on the (empty) file list. */
-    const result = await client.callTool({
-      name: 'scan_folder',
-      arguments: {
-        folder_path: '/tmp/__llm_ext_nonexistent_grouping',
-        instructions: 'audit',
-        answer_mode: 1,
-      },
+    const result = await runCli(testConfig, 'scan_folder', {
+      folder_path: '/tmp/__llm_ext_nonexistent_grouping',
+      instructions: 'audit',
+      answer_mode: 1,
     });
     expect(result.isError).toBe(true);
-    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? '';
     // The operation must reject BEFORE any LLM call. Either "folder not
     // found" (existence check) or the path-traversal allowlist rejection
     // (when /tmp/ is outside the allowed directories under test env) both
     // satisfy that — the point of the test is that no LLM call ran.
-    expect(text).toMatch(/not found|Folder not found|Path traversal|outside allowed/i);
+    expect(firstText(result)).toMatch(/not found|Folder not found|Path traversal|outside allowed/i);
   });
 
   it('chat: answer_mode=2 still works as the single-merged-report path', async () => {
     /** Regression guard — the redesign must not have broken mode 2. */
-    let result;
-    try {
-      result = await client.callTool(
-        {
-          name: 'chat',
-          arguments: {
-            instructions: 'summarize',
-            input_files_paths: [srcA],
-            answer_mode: 2,
-          },
-        },
-        undefined,
-        { timeout: UNREACHABLE_CALL_TIMEOUT_MS },
-      );
-    } catch {
-      // LLM unreachable
-    }
-    if (result) {
-      const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? '';
-      expect(text).not.toMatch(/instructions.*required/i);
-    }
-    const discoverResult = await client.callTool({ name: 'discover', arguments: {} });
+    const result = await runCli(
+      testConfig,
+      'chat',
+      { instructions: 'summarize', input_files_paths: [srcA], answer_mode: 2 },
+      { timeoutMs: UNREACHABLE_CALL_TIMEOUT_MS },
+    );
+    expect(firstText(result)).not.toMatch(/instructions.*required/i);
+    const discoverResult = await runCli(testConfig, 'discover');
     expect(discoverResult.isError).toBeFalsy();
   });
 
   it('search_existing_implementations: answer_mode=1 validates feature_description before grouping', async () => {
     /** SEI mode 1 path — missing feature_description must fail at the
      * top-level validator, not silently in the mode 1 branch. */
-    const result = await client.callTool({
-      name: 'search_existing_implementations',
-      arguments: {
-        folder_path: tmpDir,
-        answer_mode: 1,
-      },
+    const result = await runCli(testConfig, 'search_existing_implementations', {
+      folder_path: tmpDir,
+      answer_mode: 1,
     });
     expect(result.isError).toBe(true);
-    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? '';
-    expect(text).toMatch(/feature_description/i);
+    expect(firstText(result)).toMatch(/feature_description/i);
   });
 });
 

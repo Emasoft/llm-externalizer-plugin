@@ -1,0 +1,332 @@
+#!/usr/bin/env node
+/**
+ * llm-ext — the CLI. This is the ONLY runtime surface; there is no MCP server.
+ *
+ * Everything here is generated from the tool catalog (`buildTools`), never
+ * hand-maintained: the command list, `--help`, and flag coercion all read the
+ * same JSON Schema the tools have always declared. Add a tool to the catalog
+ * and it shows up here with correct help and typed flags, automatically.
+ *
+ * The single job of this file is to be the ONE place where the engine's
+ * `ToolResult` envelope is flattened into stdout + an exit code. Everything
+ * upstream keeps returning the envelope.
+ *
+ * Output contract:
+ *   STDOUT — the tool's text result (usually a report path). Nothing else, so
+ *            `llm-ext scan-folder … | xargs cat` works.
+ *   STDERR — banner, progress, diagnostics.
+ *   exit 0 — success · exit 1 — the tool reported an error or the invocation
+ *            was malformed.
+ */
+
+import {
+  boot,
+  dispatchCallTool,
+  limitsBlock,
+  writeBootBanner,
+} from "../index.js";
+import { buildTools } from "../tools/definitions.js";
+
+// ── Catalog ──────────────────────────────────────────────────────────
+
+interface JsonSchemaProp {
+  type?: string;
+  description?: string;
+  items?: JsonSchemaProp;
+  oneOf?: JsonSchemaProp[];
+}
+
+interface ToolDef {
+  name: string;
+  description: string;
+  inputSchema?: {
+    type?: string;
+    properties?: Record<string, JsonSchemaProp>;
+    required?: string[];
+  };
+}
+
+/** Canonical CLI command name for a tool: snake_case → kebab-case. */
+function toKebab(toolName: string): string {
+  return toolName.replace(/_/g, "-");
+}
+
+/**
+ * Resolve a user-typed command to a tool name. kebab-case is canonical and
+ * documented; the snake_case tool name is accepted silently so anything already
+ * scripted against the old names keeps working without a second spelling in the
+ * docs.
+ */
+function resolveCommand(input: string, tools: ToolDef[]): ToolDef | undefined {
+  const wanted = input.trim().toLowerCase();
+  return tools.find(
+    (t) => t.name === wanted || toKebab(t.name) === wanted,
+  );
+}
+
+// ── Flag parsing ─────────────────────────────────────────────────────
+
+/** The tools that return instantly and take no arguments worth narrating. */
+const QUIET_TOOLS = new Set([
+  "discover",
+  "get_settings",
+  "reset",
+  "or_model_info",
+  "or_model_info_json",
+  "or_model_info_table",
+]);
+
+/** Accepted spellings for an explicit boolean value. */
+const BOOLEAN_LITERALS = new Set([
+  "true",
+  "false",
+  "1",
+  "0",
+  "yes",
+  "no",
+  "on",
+  "off",
+]);
+
+function die(msg: string): never {
+  process.stderr.write(`llm-ext: ${msg}\n`);
+  process.exit(1);
+}
+
+function schemaTypeOf(prop: JsonSchemaProp | undefined): string {
+  if (!prop) return "string";
+  if (prop.type) return prop.type;
+  // `oneOf: [string, string[]]` is the repo's idiom for "path or list of paths".
+  if (Array.isArray(prop.oneOf) && prop.oneOf.length > 0) return "oneOf";
+  return "string";
+}
+
+/**
+ * Turn one raw `--flag` value into the JSON type the tool's schema declares.
+ *
+ * Arrays accept three spellings because all three occur in the wild: a JSON
+ * array (`'["a","b"]'`), a comma-separated list (`a,b`), or the flag repeated.
+ * Numbers and booleans are rejected loudly rather than coerced to NaN/false —
+ * a silently-wrong `--max_files abc` would scan the wrong amount of the tree.
+ */
+function coerce(
+  flag: string,
+  raw: string,
+  prop: JsonSchemaProp | undefined,
+): unknown {
+  const type = schemaTypeOf(prop);
+  switch (type) {
+    case "number": {
+      const n = Number(raw);
+      if (!Number.isFinite(n)) die(`--${flag} expects a number, got '${raw}'`);
+      return n;
+    }
+    case "boolean": {
+      const v = raw.toLowerCase();
+      if (["true", "1", "yes", "on"].includes(v)) return true;
+      if (["false", "0", "no", "off"].includes(v)) return false;
+      die(`--${flag} expects true/false, got '${raw}'`);
+      break;
+    }
+    case "array":
+    case "oneOf": {
+      const trimmed = raw.trim();
+      if (trimmed.startsWith("[")) {
+        try {
+          return JSON.parse(trimmed);
+        } catch {
+          die(`--${flag} looks like JSON but does not parse: ${trimmed}`);
+        }
+      }
+      // A lone value stays a string for `oneOf: [string, string[]]` props —
+      // the tools accept either, and not wrapping keeps their own logs honest.
+      if (type === "oneOf" && !trimmed.includes(",")) return trimmed;
+      return trimmed.split(",").map((s) => s.trim()).filter(Boolean);
+    }
+    case "object": {
+      try {
+        return JSON.parse(raw);
+      } catch {
+        die(`--${flag} expects JSON, got '${raw}'`);
+      }
+      break;
+    }
+    default:
+      return raw;
+  }
+  // Unreachable — every branch returns or dies. Present so TS sees a value.
+  return raw;
+}
+
+interface ParsedArgs {
+  args: Record<string, unknown>;
+  quiet: boolean;
+}
+
+function parseFlags(argv: string[], tool: ToolDef): ParsedArgs {
+  const props = tool.inputSchema?.properties ?? {};
+  const out: Record<string, unknown> = {};
+  let quiet = false;
+
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    if (!token.startsWith("--")) {
+      die(`unexpected argument '${token}' (all inputs are named flags)`);
+    }
+    let flag = token.slice(2);
+    let raw: string | undefined;
+
+    const eq = flag.indexOf("=");
+    if (eq !== -1) {
+      raw = flag.slice(eq + 1);
+      flag = flag.slice(0, eq);
+    }
+
+    if (flag === "quiet") {
+      quiet = true;
+      continue;
+    }
+
+    // Accept the kebab spelling of a parameter too, for the same reason the
+    // command names accept both.
+    const key = flag in props ? flag : flag.replace(/-/g, "_");
+    const prop = props[key];
+    if (!prop) {
+      die(
+        `unknown flag --${flag} for '${toKebab(tool.name)}'. ` +
+          `Run 'llm-ext ${toKebab(tool.name)} --help' to see its parameters.`,
+      );
+    }
+
+    if (raw === undefined) {
+      if (schemaTypeOf(prop) === "boolean") {
+        // Both spellings must work: a bare `--flag` AND an explicit
+        // `--flag true|false`. Only consume the next token when it actually
+        // looks like a boolean literal — otherwise `--quiet chat` would eat the
+        // command. Getting this wrong is silent and nasty: an earlier version
+        // always treated `--flag` as bare-true, so `--scan_secrets true` left
+        // `true` dangling and died with "unexpected argument".
+        const next = argv[i + 1];
+        if (next !== undefined && BOOLEAN_LITERALS.has(next.toLowerCase())) {
+          out[key] = coerce(flag, argv[++i], prop);
+        } else {
+          out[key] = true;
+        }
+        continue;
+      }
+      raw = argv[++i];
+      if (raw === undefined) die(`--${flag} expects a value`);
+    }
+
+    out[key] = coerce(flag, raw, prop);
+  }
+
+  const missing = (tool.inputSchema?.required ?? []).filter((r) => !(r in out));
+  if (missing.length > 0) {
+    die(
+      `'${toKebab(tool.name)}' requires ${missing.map((m) => `--${m}`).join(", ")}`,
+    );
+  }
+
+  return { args: out, quiet };
+}
+
+// ── Help ─────────────────────────────────────────────────────────────
+
+function firstLine(text: string): string {
+  const line = text.split("\n").find((l) => l.trim().length > 0) ?? "";
+  return line.length > 96 ? `${line.slice(0, 93)}...` : line;
+}
+
+function printGlobalHelp(tools: ToolDef[]): void {
+  const width = Math.max(...tools.map((t) => toKebab(t.name).length));
+  process.stdout.write(
+    "llm-ext — offload bounded LLM work to cheaper models.\n\n" +
+      "Usage:\n" +
+      "  llm-ext <command> [--flag value ...]\n" +
+      "  llm-ext <command> --help      show a command's parameters\n" +
+      "  llm-ext --help                this list\n\n" +
+      "Global flags:\n" +
+      "  --quiet                       suppress the banner and progress lines\n\n" +
+      "Commands:\n",
+  );
+  for (const t of [...tools].sort((a, b) => a.name.localeCompare(b.name))) {
+    process.stdout.write(
+      `  ${toKebab(t.name).padEnd(width)}  ${firstLine(t.description)}\n`,
+    );
+  }
+  process.stdout.write(
+    "\nReports are written to <project>/reports/llm-externalizer/ and the path " +
+      "is printed on stdout.\n",
+  );
+}
+
+function printToolHelp(tool: ToolDef): void {
+  const props = tool.inputSchema?.properties ?? {};
+  const required = new Set(tool.inputSchema?.required ?? []);
+  process.stdout.write(`llm-ext ${toKebab(tool.name)}\n\n${tool.description}\n`);
+  const keys = Object.keys(props);
+  if (keys.length === 0) {
+    process.stdout.write("\nTakes no parameters.\n");
+    return;
+  }
+  process.stdout.write("\nParameters:\n");
+  const width = Math.max(...keys.map((k) => k.length));
+  for (const key of keys.sort()) {
+    const prop = props[key];
+    const tag = required.has(key) ? " (required)" : "";
+    process.stdout.write(
+      `  --${key.padEnd(width)}  [${schemaTypeOf(prop)}]${tag} ${firstLine(prop.description ?? "")}\n`,
+    );
+  }
+}
+
+// ── Main ─────────────────────────────────────────────────────────────
+
+async function main(): Promise<void> {
+  const argv = process.argv.slice(2);
+  // The catalog's descriptions are backend-dependent, so build it per run.
+  const tools = buildTools(limitsBlock()) as ToolDef[];
+
+  if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
+    printGlobalHelp(tools);
+    return;
+  }
+
+  const commandName = argv[0];
+  const tool = resolveCommand(commandName, tools);
+  if (!tool) {
+    die(
+      `unknown command '${commandName}'. Run 'llm-ext --help' for the list.`,
+    );
+  }
+
+  const rest = argv.slice(1);
+  if (rest.includes("--help") || rest.includes("-h")) {
+    printToolHelp(tool);
+    return;
+  }
+
+  const { args, quiet } = parseFlags(rest, tool);
+
+  // boot() publishes the free-mode state; dispatchCallTool refuses without it.
+  await boot();
+  const verbose = !quiet && !QUIET_TOOLS.has(tool.name);
+  if (verbose) writeBootBanner();
+
+  const result = await dispatchCallTool(tool.name, args, { progress: verbose });
+
+  const text = result.content.map((c) => c.text).join("\n");
+  if (result.isError) {
+    process.stderr.write(`${text}\n`);
+    process.exit(1);
+  }
+  process.stdout.write(`${text}\n`);
+}
+
+main().catch((error) => {
+  process.stderr.write(
+    `llm-ext: ${error instanceof Error ? error.message : String(error)}\n`,
+  );
+  process.exit(1);
+});

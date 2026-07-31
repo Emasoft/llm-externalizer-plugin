@@ -1,7 +1,7 @@
 /**
- * Shared test infrastructure for LLM Externalizer MCP server tests.
+ * Shared test infrastructure for LLM Externalizer CLI tests.
  *
- * COST-SAFETY (TRDD-e82f2c49): by DEFAULT the spawned server is configured with
+ * COST-SAFETY (TRDD-e82f2c49): by DEFAULT the spawned CLI is configured with
  * a synthetic LOCAL, unreachable backend, so the default `npm test` / publish
  * gate makes ZERO OpenRouter calls — tool calls fail-fast on ECONNREFUSED, which
  * is exactly what the integration tests assert ("does not crash"). Reading the
@@ -10,14 +10,14 @@
  *
  * Usage (default — free, offline):
  *   const config = resolveTestConfig({ testName: 'unit' });
- *   const { client, transport } = await createTestClient(config);
+ *   const result = await runCli(config, 'discover');
  *
  * Usage (LIVE — real backend, costs money; gate the suite on LIVE_TESTS=1):
  *   const config = resolveTestConfig({ testName: 'live', requireLiveBackend: true });
  */
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { copyFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -30,10 +30,12 @@ import {
   getSettingsPath,
 } from "./config.js";
 
+const execFileAsync = promisify(execFile);
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-/** Path to the compiled server entry point */
-export const SERVER_SCRIPT = join(__dirname, "..", "dist", "index.js");
+/** Path to the compiled CLI entry point (there is no MCP server any more). */
+export const CLI_SCRIPT = join(__dirname, "..", "dist", "llm-ext.js");
 
 // ── Exported types and functions ─────────────────────────────────────
 
@@ -144,24 +146,71 @@ export function resolveTestConfig(options: TestConfigOptions): TestConfig {
   return { activeProfile: settings.active, resolved, timeout, testName: options.testName, liveBackend: true };
 }
 
-/**
- * Create an MCP client connected to the server process.
- * The server reads its own settings.yaml — no env overrides needed.
- */
-export async function createTestClient(
-  config: TestConfig,
-  clientName = "test-client",
-): Promise<{ client: Client; transport: StdioClientTransport; timeoutMs: number }> {
-  const outputDir = `/tmp/__llm_ext_${config.testName}_output`;
-  const timeoutMs = config.timeout * 1000;
+/** Text-content result of one CLI invocation, shaped like the old MCP `ToolResult`
+ * so call sites that inspected `result.content[0].text` / `result.isError`
+ * need only swap the call, not the assertions. */
+export interface CliResult {
+  content: { type: "text"; text: string }[];
+  isError: boolean;
+  /** Raw stderr — banner + progress lines + (on error) the error text. */
+  stderr: string;
+  exitCode: number | null;
+}
 
-  // Isolate the spawned server's config dir so its usage-history.log (and any
+export interface RunCliOptions {
+  /** Suppress the boot banner and progress lines. Default true — keeps
+   * stderr limited to the error text so assertions on it stay precise. */
+  quiet?: boolean;
+  /** Override the per-call timeout (ms). Defaults to `config.timeout * 1000`. */
+  timeoutMs?: number;
+}
+
+/** Turn a JS args object into `llm-ext` CLI flags. Flag names are passed
+ * through as-is (snake_case, matching the tool's JSON-schema property names —
+ * the CLI accepts that spelling directly). Non-primitive values are
+ * JSON-encoded, which is exactly what the CLI's array/object coercion expects. */
+function serializeFlags(args: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  for (const [key, value] of Object.entries(args)) {
+    if (value === undefined) continue;
+    out.push(`--${key}`);
+    if (typeof value === "string") out.push(value);
+    else if (typeof value === "number" || typeof value === "boolean") out.push(String(value));
+    else out.push(JSON.stringify(value));
+  }
+  return out;
+}
+
+/**
+ * Run one `llm-ext <command>` invocation as a subprocess, the same way a real
+ * user would. Replaces the old MCP `createTestClient()` — there is no server
+ * to connect to any more, only a CLI to spawn.
+ *
+ * COST-SAFETY (TRDD-e82f2c49): identical guard to the old client — by DEFAULT
+ * writes a synthetic LOCAL, unreachable settings.yaml into a throwaway
+ * `mkdtempSync("/tmp/__llm_ext_cfg_")` dir and passes it via
+ * `LLM_EXT_CONFIG_DIR`, so the spawned process can NEVER bill OpenRouter. Only
+ * `LIVE_TESTS`-gated suites (`config.liveBackend === true`) get the real
+ * settings.yaml copied in. Do NOT switch this to an in-process call — the
+ * subprocess boundary is exactly what makes the env-var isolation possible.
+ */
+export async function runCli(
+  config: TestConfig,
+  toolName: string,
+  args: Record<string, unknown> = {},
+  options: RunCliOptions = {},
+): Promise<CliResult> {
+  const quiet = options.quiet ?? true;
+  const timeoutMs = options.timeoutMs ?? config.timeout * 1000;
+  const outputDir = `/tmp/__llm_ext_${config.testName}_output`;
+
+  // Isolate the spawned process's config dir so its usage-history.log (and any
   // settings-edit side effects) land in a throwaway /tmp dir instead of the
   // developer's real ~/.llm-externalizer/. /tmp (not os.tmpdir) because
   // getConfigDir() only permits $HOME or /tmp.
   //
   // COST-SAFETY (TRDD-e82f2c49): by DEFAULT write a synthetic LOCAL, unreachable
-  // settings.yaml so the spawned server can NEVER bill OpenRouter — the previous
+  // settings.yaml so the spawned process can NEVER bill OpenRouter — the previous
   // behavior (copy the real settings.yaml) made every integration-test tool call
   // hit the user's real, possibly premium, remote backend. Only LIVE-gated
   // suites (config.liveBackend === true) get the real backend.
@@ -175,40 +224,42 @@ export async function createTestClient(
     writeFileSync(join(tmpConfigDir, "settings.yaml"), LOCAL_TEST_SETTINGS_YAML, "utf-8");
   }
 
-  const transport = new StdioClientTransport({
-    command: "node",
-    args: [SERVER_SCRIPT],
-    env: {
-      ...process.env,
-      // Output .md files go to a temp dir so they don't accumulate
-      LLM_OUTPUT_DIR: outputDir,
-      // History + settings-edit side effects stay in the throwaway dir.
-      LLM_EXT_CONFIG_DIR: tmpConfigDir,
-      // Never let the spawned test server install the usage rule into the real
-      // ~/.claude/rules/ (the startup installer is opt-out via this var).
-      LLM_EXT_INSTALL_RULE: "0",
-    },
-    stderr: "pipe",
-  });
-
-  // Drain the server's stderr into the parent's stderr. If we leave the
-  // piped stderr unconsumed, the PassThrough buffer fills, backpressure
-  // propagates to the child's stderr, the OS pipe buffer (~64 KB) fills,
-  // and the server blocks on its next `process.stderr.write(...)` — which
-  // hangs the entire test. Attach the consumer BEFORE connect() so no
-  // early startup output is lost.
-  transport.stderr?.pipe(process.stderr);
-
-  const client = new Client(
-    { name: clientName, version: "1.0.0" },
-    { capabilities: {} },
-  );
+  const cliArgs = [CLI_SCRIPT, toolName, ...serializeFlags(args)];
+  if (quiet) cliArgs.push("--quiet");
 
   try {
-    await client.connect(transport);
+    const { stdout, stderr } = await execFileAsync("node", cliArgs, {
+      env: {
+        ...process.env,
+        // Output .md files go to a temp dir so they don't accumulate
+        LLM_OUTPUT_DIR: outputDir,
+        // History + settings-edit side effects stay in the throwaway dir.
+        LLM_EXT_CONFIG_DIR: tmpConfigDir,
+        // Never let the spawned test process install the usage rule into the
+        // real ~/.claude/rules/ (the startup installer is opt-out via this var).
+        LLM_EXT_INSTALL_RULE: "0",
+      },
+      timeout: timeoutMs,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    return {
+      content: [{ type: "text", text: stdout.trim() }],
+      isError: false,
+      stderr,
+      exitCode: 0,
+    };
   } catch (err) {
-    await transport.close();
-    throw err;
+    const e = err as { stdout?: string; stderr?: string; code?: number | null };
+    // The CLI always writes the tool's error text to stderr (main.ts's
+    // `die()` and the dispatch-error branch both do). stdout is the fallback
+    // for a crash that happened before either wrote anything meaningful.
+    const stderrText = (e.stderr ?? "").trim();
+    const text = stderrText.length > 0 ? stderrText : (e.stdout ?? "").trim();
+    return {
+      content: [{ type: "text", text }],
+      isError: true,
+      stderr: e.stderr ?? "",
+      exitCode: e.code ?? null,
+    };
   }
-  return { client, transport, timeoutMs };
 }

@@ -16,9 +16,6 @@ import {
   statSync,
   appendFileSync,
   unlinkSync,
-  realpathSync,
-  watchFile,
-  unwatchFile,
 } from "node:fs";
 import { parse as yamlParse } from "yaml";
 import { spawnSync } from "node:child_process";
@@ -32,20 +29,10 @@ import {
   autoGroupByHeuristic,
 } from "./grouping.js";
 
-// T2.MCP-SDK — Migrated from the deprecated `Server` constructor to
-// `McpServer`. The high-level surface (registerTool) auto-handles
-// ListTools and CallTool routing, validates inputs against per-tool
-// Zod schemas, and exposes the underlying Server via `mcpServer.server`
-// for advanced operations (notifications, request handlers we still
-// need). The behavior of the wire protocol is preserved exactly.
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "zod";
 import {
   MASS_SCOUT_TOOL_NAMES,
   dispatchMassScoutTool,
 } from "./mass_scouting/mcp-tools.js";
-import { buildTools } from "./tools/definitions.js";
 import { safeReadJson } from "./safe-body.js";
 import {
   runClusterSynonyms,
@@ -384,9 +371,6 @@ function getCurrentBackend(): BackendConfig {
 // Polls settings.yaml every 5s. On change: validate → reload in memory.
 // Invalid changes are logged but ignored (old settings remain active).
 
-// Late-bound hook — assigned after the MCP server is created (see notifyToolsChanged)
-let _onSettingsReloaded: (() => void) | null = null;
-
 /**
  * Reload settings from disk. Returns true if settings changed and were applied.
  *
@@ -504,43 +488,23 @@ function reloadSettingsFromDisk(): boolean {
   // After this line, all new getCurrentBackend() calls see the new backend.
   // In-flight callers that snapshotted before this line keep the old one.
   if (nextBackend) currentBackend = nextBackend;
-  // Notify MCP client that tool descriptions may have changed (backend switch)
-  _onSettingsReloaded?.();
+  // No post-reload notification: the CLI resolves tool descriptions fresh on
+  // every invocation, so there is no long-lived client to tell about a backend
+  // switch (the MCP tools/list_changed hook this replaced had no other caller).
   return true;
 }
 
-// Track mtime so we only reload when the file actually changed on disk
-let _settingsLastMtimeMs = (() => {
-  try {
-    return statSync(SETTINGS_FILE).mtimeMs;
-  } catch {
-    return 0;
-  }
-})();
-
-// Poll every 5s — fs.watchFile uses stat polling (reliable across all platforms/NFS)
-watchFile(SETTINGS_FILE, { interval: 5000 }, (curr, _prev) => {
-  if (curr.mtimeMs === _settingsLastMtimeMs) return; // no change
-  _settingsLastMtimeMs = curr.mtimeMs;
-
-  process.stderr.write(
-    `[llm-externalizer] settings.yaml changed on disk — reloading…\n`,
-  );
-  if (reloadSettingsFromDisk()) {
-    // Snapshot AFTER reload completes — getCurrentBackend() returns the
-    // post-reload generation. Two reads of the same snapshot are safe.
-    const postBackend = getCurrentBackend();
-    const label = activeResolved
-      ? `${activeSettings.active} (${postBackend.type}, ${postBackend.model}, v${postBackend.__version})`
-      : "(no active profile)";
-    process.stderr.write(`[llm-externalizer] Settings reloaded: ${label}\n`);
-  }
-});
-
-// Clean up watcher on process exit to avoid dangling handles
-process.on("exit", () => {
-  unwatchFile(SETTINGS_FILE);
-});
+// The settings.yaml file-watcher lived here. It polled every 5s so a
+// long-lived MCP server would pick up manual edits without a restart.
+//
+// It is GONE, and its removal is load-bearing, not cleanup: `watchFile` runs at
+// MODULE SCOPE, so merely importing this file registered a 5-second poller that
+// keeps Node's event loop alive forever. A server never noticed. A CLI hangs —
+// `llm-ext --help` printed its output and then sat there until killed. Do not
+// reintroduce a module-scope timer, watcher, or open handle in this file.
+//
+// Nothing is lost: every CLI invocation is a fresh process that reads
+// settings.yaml at boot, which is strictly fresher than a 5s poll.
 
 // ── OpenRouter model list cache ──────────────────────────────────────
 
@@ -1217,34 +1181,29 @@ const providerDeps: CompletionDeps = {
 // the LM Studio native block → ./provider/lmstudio.ts; the OpenAI-compat wire types
 // → ./provider/types.ts. All four are called with `providerDeps`.
 
-// ── MCP progress notifications ───────────────────────────────────────
-// Sending progress notifications keeps the client connection alive during
-// long-running LLM calls, preventing the default 60s MCP request timeout.
-// The progressToken comes from request.params._meta?.progressToken.
+// ── Progress reporting ───────────────────────────────────────────────
+// This used to emit MCP `notifications/progress` to keep a long-lived client
+// connection from timing out. There is no client any more — but the need it
+// served is REAL and got worse: `mass_scout` / `security_scan` run for tens of
+// minutes, and a CLI that prints nothing for that long is indistinguishable
+// from a hang (a caller will kill it). So the same seam now writes to STDERR,
+// which keeps STDOUT clean for the machine-readable report path.
 
 // ProgressFn type moved to ./rate-limiter.ts (B1 Phase 2b, TRDD-63314265) —
 // imported above; it lives with the rateLimitedParallel executor that consumes it.
 
-function makeProgressFn(
-  progressToken: string | number | undefined,
-): ProgressFn | undefined {
-  if (progressToken === undefined) return undefined;
+function makeProgressFn(enabled: boolean): ProgressFn | undefined {
+  if (!enabled) return undefined;
   return (progress: number, total: number, message?: string) => {
-    // Fire-and-forget — progress notifications must never block or throw.
-    // T2.MCP-SDK: use mcpServer.server.notification (low-level Server is
-    // exposed via the .server property of McpServer for exactly this kind
-    // of advanced operation).
-    mcpServer.server
-      .notification({
-        method: "notifications/progress" as const,
-        params: {
-          progressToken,
-          progress,
-          total,
-          ...(message ? { message } : {}),
-        },
-      })
-      .catch(() => {});
+    // Fire-and-forget — progress reporting must never block or throw.
+    try {
+      const pct = total > 0 ? ` (${Math.round((progress / total) * 100)}%)` : "";
+      process.stderr.write(
+        `[llm-externalizer] progress ${progress}/${total}${pct}${message ? ` — ${message}` : ""}\n`,
+      );
+    } catch {
+      /* stderr closed — nothing useful to do */
+    }
   };
 }
 
@@ -2286,11 +2245,14 @@ async function processFileCheck(
   return { filePath, success: true, reportPath };
 }
 
-// ── MCP Tool definitions ─────────────────────────────────────────────
+// ── Tool definitions ─────────────────────────────────────────────────
 
 // Dynamic limits block appended to each task tool description.
 // Changes based on which backend is active (local = sequential, OpenRouter = parallel).
-function limitsBlock(): string {
+// Exported because the CLI renders `--help` from buildTools(limitsBlock()) —
+// the descriptions are backend-dependent, so help must be built per invocation
+// rather than baked in at build time.
+export function limitsBlock(): string {
   // T2.7 — snapshot once for the type read (function returns a string)
   const backend = getCurrentBackend();
   const throughput =
@@ -2489,151 +2451,36 @@ function getEnsembleModels(): Array<{
   });
 }
 
-// ── MCP Server ───────────────────────────────────────────────────────
-
-// T2.MCP-SDK — migrated from `Server` to `McpServer`. McpServer enumerates
-// registered tools for ListTools requests; we register each tool (one
-// `registerTool` call per tool name) below the dispatch function.
-//
-// Version is hard-coded here AND in package.json. publish.py's release flow
-// keeps them in sync; if you bump one, bump the other in the same commit.
-// (A previous release skipped the index.ts side, leaving the MCP server
-// advertising 9.5.1 to clients while the plugin manifest reported 9.7.0 —
-// see commit history for the consolidation.)
-const mcpServer = new McpServer(
-  { name: "llm-externalizer", version: "10.4.1" },
-  { capabilities: { tools: { listChanged: true } } },
-);
-
-// Notify the MCP client that our tool list may have changed (e.g. after
-// profile switch). The client will re-call ListTools to get fresh
-// descriptions. T2.MCP-SDK: notification() is on the underlying Server.
-function notifyToolsChanged(): void {
-  // First, update the description of every registered tool so the next
-  // ListTools call serves up the current backend's labels (limitsBlock
-  // text changes when local→remote or vice versa). Use the .update API
-  // exposed by the RegisteredTool returned from registerTool().
-  refreshAllToolDescriptions();
-  mcpServer.server
-    .notification({
-      method: "notifications/tools/list_changed" as const,
-      params: {},
-    })
-    .catch(() => {
-      /* fire-and-forget — client may not be connected yet */
-    });
-}
-
-// Wire up the late-bound hook so reloadSettingsFromDisk() triggers tool list refresh
-_onSettingsReloaded = notifyToolsChanged;
-
-// ── JSON Schema → Zod converter ──────────────────────────────────────
-// T2.MCP-SDK — McpServer.registerTool only accepts Zod schemas. Our
-// buildTools() returns plain JSON Schema for backward compatibility with
-// the existing wire format. This converter handles ONLY the subset of
-// JSON Schema we actually use: primitives (string/number/boolean), array
-// of strings, object with properties + required, and `oneOf` unions of
-// (string | string[]). Anything outside this subset returns z.unknown()
-// so the SDK still accepts the value (validation is then deferred to
-// the tool handler itself, which always validated inputs anyway).
-
-interface JsonSchemaSubset {
-  type?: string;
-  description?: string;
-  items?: JsonSchemaSubset;
-  properties?: Record<string, JsonSchemaSubset>;
-  required?: string[];
-  oneOf?: JsonSchemaSubset[];
-}
-
-function jsonSchemaPropToZod(s: JsonSchemaSubset): z.ZodType {
-  // Handle oneOf: [{type:"string"}, {type:"array", items:{type:"string"}}]
-  // → z.union([z.string(), z.array(z.string())])
-  if (Array.isArray(s.oneOf) && s.oneOf.length > 0) {
-    const variants = s.oneOf.map((v) => jsonSchemaPropToZod(v));
-    if (variants.length === 1) {
-      return s.description ? variants[0].describe(s.description) : variants[0];
-    }
-    // z.union requires at least 2 variants
-    const u = z.union(variants as [z.ZodType, z.ZodType, ...z.ZodType[]]);
-    return s.description ? u.describe(s.description) : u;
-  }
-  let base: z.ZodType;
-  switch (s.type) {
-    case "string":
-      base = z.string();
-      break;
-    case "number":
-      base = z.number();
-      break;
-    case "boolean":
-      base = z.boolean();
-      break;
-    case "array":
-      base = z.array(s.items ? jsonSchemaPropToZod(s.items) : z.unknown());
-      break;
-    case "object":
-      if (s.properties) {
-        base = jsonSchemaToZod(s);
-      } else {
-        base = z.record(z.string(), z.unknown());
-      }
-      break;
-    default:
-      base = z.unknown();
-  }
-  return s.description ? base.describe(s.description) : base;
-}
-
 /**
- * Convert a JSON-Schema object (the kind buildTools() returns) into a
- * Zod object schema. The returned schema is the COMPLETE input shape:
- * every required field is required, every non-required field is optional.
+ * What every tool returns. The `content` envelope is OUR OWN shape — a local
+ * interface, never an SDK type — so it survives the MCP removal untouched.
+ * Keeping it means 40 return sites stay as they are; the CLI flattens it to
+ * stdout + an exit code in exactly ONE place instead.
  */
-function jsonSchemaToZod(
-  s: JsonSchemaSubset,
-): z.ZodObject<Record<string, z.ZodType>> {
-  if (!s.properties) return z.object({});
-  const required = new Set(s.required ?? []);
-  const shape: Record<string, z.ZodType> = {};
-  for (const [key, prop] of Object.entries(s.properties)) {
-    const zodProp = jsonSchemaPropToZod(prop);
-    shape[key] = required.has(key) ? zodProp : zodProp.optional();
-  }
-  return z.object(shape);
+export interface ToolResult {
+  content: { type: "text"; text: string }[];
+  isError?: boolean;
+  [k: string]: unknown;
 }
 
-// ── Registered tools registry ────────────────────────────────────────
-// T2.MCP-SDK — keep a handle to every RegisteredTool we install so we
-// can refresh their descriptions on settings reload (the backend label
-// and parallel/sequential note in limitsBlock() change when local→remote
-// switches happen). The SDK's `.update({description})` triggers the
-// tools/list_changed notification automatically.
-interface RegisteredToolHandle {
-  update(updates: { description?: string; enabled?: boolean }): void;
-}
-const registeredToolHandles = new Map<string, RegisteredToolHandle>();
-
-function refreshAllToolDescriptions(): void {
-  // Rebuild every tool's description from buildTools(). Only descriptions
-  // are dynamic — names and inputSchema are static at registration time.
-  const fresh = buildTools(limitsBlock());
-  for (const t of fresh) {
-    const handle = registeredToolHandles.get(t.name);
-    if (handle) {
-      try { handle.update({ description: t.description }); } catch { /* best effort */ }
-    }
-  }
+export interface DispatchOptions {
+  /**
+   * Emit progress lines to stderr. Off by default so scripted/piped callers
+   * get clean output; the CLI turns it on for the long-running tools.
+   */
+  progress?: boolean;
 }
 
 /**
- * Dispatch a call to one of our tools. This is the body that used to live
- * inside `setRequestHandler(CallToolRequestSchema, …)` — split out so
- * each `registerTool` callback can route into the same logic.
+ * Set by boot(). dispatchCallTool REFUSES to run until boot() has completed.
  *
- * `extra` is the SDK's RequestHandlerExtra; we only need its `_meta`.
+ * WHY this is a hard gate and not a comment: boot() calls publishFreeState(),
+ * without which a remote profile silently runs PAID models even though
+ * `allow_paid_models` is false. That failure is invisible — the call succeeds,
+ * it just costs money. "Remember to call boot() first" is exactly the kind of
+ * instruction that gets lost, so the code makes forgetting impossible.
  */
-interface DispatchExtra { _meta?: { progressToken?: string | number } }
+let _booted = false;
 
 /**
  * Public entry — installs a per-invocation usage-history context (tool name +
@@ -2644,27 +2491,33 @@ interface DispatchExtra { _meta?: { progressToken?: string | number } }
  * context ONLY — it never writes a history line itself (the user wants one line
  * per web request, not per invocation).
  */
-async function dispatchCallTool(
+export async function dispatchCallTool(
   name: string,
   rawArgs: Record<string, unknown> | undefined,
-  extra: DispatchExtra,
-): Promise<{ content: { type: "text"; text: string }[]; isError?: boolean; [k: string]: unknown }> {
+  opts: DispatchOptions = {},
+): Promise<ToolResult> {
+  if (!_booted) {
+    throw new Error(
+      "llm-externalizer: dispatchCallTool() called before boot(). " +
+        "boot() publishes the free-mode state; dispatching without it can send " +
+        "PAID models while allow_paid_models is false.",
+    );
+  }
   return withUsageContext(
     { tool: name, params: summarizeParams(rawArgs) },
-    () => dispatchCallToolInner(name, rawArgs, extra),
+    () => dispatchCallToolInner(name, rawArgs, opts),
   );
 }
 
 async function dispatchCallToolInner(
   name: string,
   rawArgs: Record<string, unknown> | undefined,
-  extra: DispatchExtra,
-): Promise<{ content: { type: "text"; text: string }[]; isError?: boolean; [k: string]: unknown }> {
+  opts: DispatchOptions,
+): Promise<ToolResult> {
   const args = rawArgs;
-  // Extract progress token — if the client supports it, we send periodic
-  // progress notifications to keep the connection alive during long LLM calls.
-  const progressToken = extra._meta?.progressToken;
-  const onProgress = makeProgressFn(progressToken);
+  // Long tools (mass_scout, security_scan) can run for tens of minutes; without
+  // periodic output a caller cannot tell "working" from "hung".
+  const onProgress = makeProgressFn(opts.progress === true);
 
   try {
     // Gate all tools except discover, reset, get_settings behind settings validation.
@@ -3437,8 +3290,8 @@ async function dispatchCallToolInner(
         session.totalCost = 0;
         writeStatsFile();
 
-        // 4. Notify client to refresh tool list
-        notifyToolsChanged();
+        // (No tool-list notification: every CLI invocation is a fresh process
+        // and rebuilds its command table from the tool definitions anyway.)
 
         // Snapshot the post-reload backend ONCE for the summary string —
         // reads of multiple fields across multiple async-safe lines.
@@ -3452,7 +3305,6 @@ async function dispatchCallToolInner(
           profileChanged ? `Changed from: ${beforeProfile} / ${beforeModel}` : "Profile unchanged",
           "Caches cleared: model list, concurrency, LM Studio detection",
           "Session counters reset to zero",
-          "Tool list refresh sent to client",
         ];
 
         return {
@@ -5151,66 +5003,31 @@ async function dispatchCallToolInner(
   }
 }
 
-// ── Tool registration loop (T2.MCP-SDK) ──────────────────────────────
-// Iterate over every tool definition from buildTools() AND every
-// mass-scouting tool, and register each one with the McpServer. The
-// SDK handles ListTools serving + per-call CallTool routing for us.
-// Every callback delegates into the shared dispatchCallTool() above so
-// the existing switch logic is preserved verbatim.
-//
-// We snapshot the descriptions at startup; refreshAllToolDescriptions()
-// updates them on every settings reload (the limitsBlock() text depends
-// on the current backend type).
-{
-  const initialTools = buildTools(limitsBlock());
-  for (const def of initialTools) {
-    const toolName = def.name;
-    let inputZod: z.ZodTypeAny;
-    try {
-      inputZod = jsonSchemaToZod(
-        (def as { inputSchema?: JsonSchemaSubset }).inputSchema ?? { type: "object" },
-      );
-    } catch {
-      // Fallback: accept any object. The handler does its own validation.
-      // Zod 4: `z.object({}).passthrough()` is deprecated; use `z.looseObject({})`.
-      inputZod = z.looseObject({});
-    }
-    const handle = mcpServer.registerTool(
-      toolName,
-      {
-        description: def.description,
-        inputSchema: (inputZod as unknown as { shape: Record<string, z.ZodType> }).shape ?? {},
-      },
-      async (args: unknown, extra: { _meta?: { progressToken?: string | number } }) => {
-        return dispatchCallTool(
-          toolName,
-          (args ?? {}) as Record<string, unknown>,
-          extra,
-        );
-      },
-    );
-    // Stash the handle so refreshAllToolDescriptions can update it later.
-    registeredToolHandles.set(toolName, handle as unknown as RegisteredToolHandle);
-  }
-}
-
-async function main() {
-  const transport = new StdioServerTransport();
-  await mcpServer.connect(transport);
-  // Boot-time force-free publish. The module-init chokepoint (set at import from
-  // the profile's own free_only) does NOT yet know the master switch, because the
-  // force-free `let` + helpers live below the boot IIFE and would be in the TDZ
-  // there. main() runs once at the very end of module init, so every binding is
-  // ready — recompute the master-switch force and re-publish the chokepoint so a
-  // remote profile boots free under allow_paid_models: false. (Tests import the
-  // module without calling main(), so their state is untouched.)
+/**
+ * Prepare the engine for dispatch. MUST be awaited before dispatchCallTool()
+ * (which throws otherwise — see `_booted`).
+ *
+ * This is the surviving half of what used to be `main()`: the MCP transport and
+ * the registerTool loop are gone, but the three side effects below were never
+ * about MCP and are still required. `publishFreeState()` in particular is
+ * load-bearing and easy to lose: the module-init chokepoint is set at import
+ * from the profile's own `free_only` and does NOT yet know the
+ * `allow_paid_models` master switch, because the force-free `let` + helpers live
+ * below the boot IIFE and would be in the TDZ there. boot() runs after every
+ * binding is ready, so it recomputes the master-switch force and re-publishes
+ * the chokepoint — without it a remote profile runs PAID under
+ * `allow_paid_models: false`, silently.
+ *
+ * Idempotent: safe to call more than once (the CLI calls it exactly once).
+ */
+export async function boot(): Promise<void> {
+  if (_booted) return;
   publishFreeState();
-  // Write initial stats file at startup so statusline can show MCP icons immediately
+  // Write the stats file up front so the statusline has numbers immediately.
   writeStatsFile();
-  // Install/update the plugin's usage rule into ~/.claude/rules/ (the MCP server
-  // subprocess can write there even when the agent's hooks forbid writes outside
-  // the project). Best-effort + content-gated: never blocks boot, no churn after
-  // the first sync. Opt out with LLM_EXT_INSTALL_RULE=0.
+  // Install/update the plugin's usage rule into ~/.claude/rules/. Best-effort +
+  // content-gated: never blocks boot, no churn after the first sync. Opt out
+  // with LLM_EXT_INSTALL_RULE=0.
   try {
     const ruleResult = installUsageRule();
     if (ruleResult.status === "installed" || ruleResult.status === "updated") {
@@ -5227,38 +5044,22 @@ async function main() {
       `[llm-externalizer] Usage-rule install error (non-fatal): ${e instanceof Error ? e.message : String(e)}\n`,
     );
   }
-  // T2.7 — snapshot for the banner. Strictly defense in depth (main runs once
-  // at startup, before any reload can race).
+  _booted = true;
+}
+
+/**
+ * The banner the old server printed at startup. Split out of boot() because a
+ * CLI must be able to stay quiet: piping a report path into another command
+ * should not dump five lines of preamble first. The CLI prints this only for
+ * interactive/verbose invocations. Writes to STDERR so STDOUT stays clean.
+ */
+export function writeBootBanner(): void {
   const bootBackend = getCurrentBackend();
   const backendLabel =
     bootBackend.type === "openrouter"
       ? `OpenRouter (${bootBackend.model})`
       : `Local (${bootBackend.baseUrl}${bootBackend.model ? `, ${bootBackend.model}` : ""})`;
-  process.stderr.write(
-    `LLM Externalizer server running — backend: ${backendLabel}\n`,
-  );
+  process.stderr.write(`LLM Externalizer — backend: ${backendLabel}\n`);
   process.stderr.write(`Settings: ${SETTINGS_FILE}\n`);
   process.stderr.write(`Session log: ${LOG_FILE}\n`);
-}
-
-// Boot ONLY when this module is the process entry point. Importing it (tests
-// that pull _testDefaultOutputDir / _resetDefaultOutputDirCache, or any future
-// consumer) must NEVER boot the server or contact a backend — cost-safety
-// (TRDD-e82f2c49). The spawned `node dist/index.js` MCP server still boots
-// because there argv[1] === this module's path.
-const __isEntrypoint = (() => {
-  try {
-    const entry = process.argv[1];
-    if (!entry) return false;
-    return realpathSync(entry) === realpathSync(fileUrlToPath_cs(import.meta.url));
-  } catch {
-    return false;
-  }
-})();
-
-if (__isEntrypoint) {
-  main().catch((error) => {
-    process.stderr.write(`Fatal error: ${error}\n`);
-    process.exit(1);
-  });
 }
