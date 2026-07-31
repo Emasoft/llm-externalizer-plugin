@@ -256562,6 +256562,7 @@ function buildTools(limitsText) {
 }
 
 // src/cli/main.ts
+var VERSION = "10.4.1";
 function toKebab(toolName) {
   return toolName.replace(/_/g, "-");
 }
@@ -256698,7 +256699,7 @@ function firstLine(text) {
 function printGlobalHelp(tools) {
   const width = Math.max(...tools.map((t) => toKebab(t.name).length));
   process.stdout.write(
-    "llm-ext \u2014 offload bounded LLM work to cheaper models.\n\nUsage:\n  llm-ext <command> [--flag value ...]\n  llm-ext <command> --help      show a command's parameters\n  llm-ext --help                this list\n\nGlobal flags:\n  --quiet                       suppress the banner and progress lines\n\nCommands:\n"
+    "llm-ext \u2014 offload bounded LLM work to cheaper models.\n\nUsage:\n  llm-ext <command> [--flag value ...]\n  llm-ext <command> --help      show a command's parameters\n  llm-ext --help                this list\n  llm-ext --version             print the version\n\nGlobal flags:\n  --quiet                       suppress the banner and progress lines\n\nCommands:\n"
   );
   for (const t of [...tools].sort((a, b) => a.name.localeCompare(b.name))) {
     process.stdout.write(
@@ -256738,6 +256739,11 @@ async function main() {
   const tools = buildTools(limitsBlock());
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
     printGlobalHelp(tools);
+    return;
+  }
+  if (argv[0] === "--version" || argv[0] === "-V") {
+    process.stdout.write(`${VERSION}
+`);
     return;
   }
   const commandName = argv[0];

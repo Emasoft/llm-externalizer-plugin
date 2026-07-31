@@ -27,6 +27,19 @@ import {
 } from "../index.js";
 import { buildTools } from "../tools/definitions.js";
 
+/**
+ * The published version, and the anchor `scripts/publish.py` rewrites on every
+ * release before asserting the new value appears in `dist/llm-ext.js` — that
+ * assert is what stops a stale bundle from shipping under a fresh tag.
+ *
+ * Keep it on ONE line in exactly this shape; publish.py matches it by regex.
+ * The old anchor was the `version:` field of the `McpServer` constructor, which
+ * went away with the server — leaving publish.py matching a literal that no
+ * longer existed, which aborts the release. This is now the only anchor, so it
+ * is load-bearing: do not reformat, inline, or compute it.
+ */
+const VERSION = "10.4.1";
+
 // ── Catalog ──────────────────────────────────────────────────────────
 
 interface JsonSchemaProp {
@@ -245,7 +258,8 @@ function printGlobalHelp(tools: ToolDef[]): void {
       "Usage:\n" +
       "  llm-ext <command> [--flag value ...]\n" +
       "  llm-ext <command> --help      show a command's parameters\n" +
-      "  llm-ext --help                this list\n\n" +
+      "  llm-ext --help                this list\n" +
+      "  llm-ext --version             print the version\n\n" +
       "Global flags:\n" +
       "  --quiet                       suppress the banner and progress lines\n\n" +
       "Commands:\n",
@@ -290,6 +304,11 @@ async function main(): Promise<void> {
 
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
     printGlobalHelp(tools);
+    return;
+  }
+
+  if (argv[0] === "--version" || argv[0] === "-V") {
+    process.stdout.write(`${VERSION}\n`);
     return;
   }
 

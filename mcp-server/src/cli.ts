@@ -37,11 +37,9 @@ import {
   makeCliReconcileDeps,
 } from "./model-reconcile.js";
 import { formatSuccessBanner } from "./cli-banner.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { boot, dispatchCallTool } from "./index.js";
 import { writeFileSync, existsSync, statSync, unlinkSync } from "node:fs";
-import { resolve as resolvePath, isAbsolute, join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve as resolvePath, isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 
@@ -242,7 +240,7 @@ interface SearchExistingOpts {
   timeoutMs?: number;
 }
 
-// Default CLI → MCP callTool timeout: 4 hours.
+// Default tool-call timeout: 4 hours.
 // A 10k-file scan packs into ~500 FFD batches at 400 KB/batch; each batch
 // is one ensemble call (~10-60s with reasoning models). Worst case that's
 // ~8h of wall time, but typical runs finish in under 2h. We pick 4h as the
@@ -251,21 +249,63 @@ interface SearchExistingOpts {
 // can override with --timeout-hours <n> or set it to 0 to disable.
 const DEFAULT_SEARCH_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 
-/** Locate the compiled server entry point (dist/index.js) next to this CLI. */
-function findServerScript(): string {
-  // dist/cli.js → ../dist/index.js (same dir when running from dist/)
-  // src/cli.ts → ../dist/index.js (when running via ts-node or similar)
-  const here = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    join(here, "index.js"),           // running from dist/
-    join(here, "..", "dist", "index.js"), // running from src/
-  ];
-  for (const c of candidates) {
-    if (existsSync(c)) return c;
+/**
+ * Run a tool IN-PROCESS and flatten its result to stderr + an exit code.
+ *
+ * This replaces what used to be a spawn-the-server-and-JSON-RPC-to-it round
+ * trip: the CLI launched `dist/index.js` as an MCP server child just to reach
+ * functions that were already in its own bundle. The subprocess and handshake
+ * bought nothing, and once the server was deleted the spawn had nothing to
+ * spawn — so these commands were dead until this inversion.
+ *
+ * `boot()` is mandatory before dispatch: it runs `publishFreeState()`, without
+ * which a remote profile silently sends PAID models under
+ * `allow_paid_models: false`. `dispatchCallTool` throws if it is skipped.
+ *
+ * `timeoutMs` keeps `--timeout-hours` honest, and is a STRICTER promise than
+ * the one it replaces. The MCP SDK's timeout only abandoned the client's WAIT
+ * — the server kept scanning and kept spending. Here the bound ends the
+ * command. 0 disables it.
+ */
+async function runTool(
+  name: string,
+  toolArgs: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<void> {
+  await boot();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const work = dispatchCallTool(name, toolArgs, { progress: true });
+    const result =
+      timeoutMs > 0
+        ? await Promise.race([
+            work,
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => {
+                reject(
+                  new Error(
+                    `${name} exceeded the ${(timeoutMs / 3_600_000).toFixed(2)}h ` +
+                      `budget (--timeout-hours 0 disables it)`,
+                  ),
+                );
+              }, timeoutMs);
+            }),
+          ])
+        : await work;
+
+    const content = result.content as Array<{ type: string; text: string }>;
+    for (const c of content) {
+      if (c.type === "text") info(c.text);
+    }
+    if (result.isError) process.exit(1);
+    // Issue 4: clear success banner on STDERR (stdout keeps the raw report path).
+    successBanner(name, content.map((c) => c.text).join("\n"));
+  } finally {
+    // Load-bearing: a live timer holds Node's event loop open, so leaving one
+    // pending turns a command that already finished into a hang lasting the
+    // full multi-hour budget.
+    if (timer) clearTimeout(timer);
   }
-  die(
-    `Cannot locate MCP server entry point. Looked for:\n  ${candidates.join("\n  ")}`,
-  );
 }
 
 /** Parse repeatable / comma-separated list flags like --in a --in b,c */
@@ -563,53 +603,17 @@ async function cmdSearchExisting(rawArgs: string[]): Promise<void> {
   if (opts.free) toolArgs.free = true;
   if (opts.outputDir) toolArgs.output_dir = opts.outputDir;
 
-  // Spawn the MCP server as a child process and call the tool via stdio.
-  const serverScript = findServerScript();
-  const transport = new StdioClientTransport({
-    command: "node",
-    args: [serverScript],
-    env: { ...process.env } as Record<string, string>,
-    stderr: "inherit",
-  });
-  const client = new Client(
-    { name: "llm-externalizer-cli", version: "1.0.0" },
-    { capabilities: {} },
-  );
-
   // Effective timeout: --timeout-hours override, else DEFAULT_SEARCH_TIMEOUT_MS.
-  // 0 disables. The MCP SDK always applies a timeout (default 60s when the
-  // options object is omitted), so we pass Number.MAX_SAFE_INTEGER to
-  // effectively never fire the timer when the user requests no timeout.
   const effectiveTimeoutMs =
     opts.timeoutMs !== undefined ? opts.timeoutMs : DEFAULT_SEARCH_TIMEOUT_MS;
 
   try {
-    await client.connect(transport);
-    const result = await client.callTool(
-      { name: "search_existing_implementations", arguments: toolArgs },
-      undefined,
-      effectiveTimeoutMs > 0
-        ? { timeout: effectiveTimeoutMs }
-        : { timeout: Number.MAX_SAFE_INTEGER },
-    );
-    const content = result.content as Array<{ type: string; text: string }>;
-    for (const c of content) {
-      if (c.type === "text") info(c.text);
-    }
-    if (result.isError) {
-      process.exit(1);
-    }
-    // Issue 4: clear success banner on STDERR (stdout keeps the raw report path).
-    successBanner(
+    await runTool(
       "search_existing_implementations",
-      content.map((c) => c.text).join("\n"),
+      toolArgs,
+      effectiveTimeoutMs,
     );
   } finally {
-    try {
-      await transport.close();
-    } catch {
-      /* ignore cleanup errors */
-    }
     if (autoGeneratedDiffPath) {
       try {
         unlinkSync(autoGeneratedDiffPath);
@@ -642,18 +646,6 @@ async function cmdClusterSynonyms(rawArgs: string[]): Promise<void> {
   // server's schema defaults apply.
   const toolArgs: Record<string, unknown> = { ...parsed };
 
-  const serverScript = findServerScript();
-  const transport = new StdioClientTransport({
-    command: "node",
-    args: [serverScript],
-    env: { ...process.env } as Record<string, string>,
-    stderr: "inherit",
-  });
-  const client = new Client(
-    { name: "llm-externalizer-cli", version: "1.0.0" },
-    { capabilities: {} },
-  );
-
   // cluster_synonyms can run for a long time on large term sets. Reuse the
   // generous search timeout budget; --timeout-hours overrides it (0 disables).
   const flags = parseFlags(rawArgs);
@@ -666,27 +658,7 @@ async function cmdClusterSynonyms(rawArgs: string[]): Promise<void> {
     timeoutMs = hours === 0 ? 0 : Math.round(hours * 60 * 60 * 1000);
   }
 
-  try {
-    await client.connect(transport);
-    const result = await client.callTool(
-      { name: "cluster_synonyms", arguments: toolArgs },
-      undefined,
-      timeoutMs > 0 ? { timeout: timeoutMs } : { timeout: Number.MAX_SAFE_INTEGER },
-    );
-    const content = result.content as Array<{ type: string; text: string }>;
-    for (const c of content) {
-      if (c.type === "text") info(c.text);
-    }
-    if (result.isError) process.exit(1);
-    // Issue 4: clear success banner on STDERR (stdout keeps the raw report path).
-    successBanner("cluster_synonyms", content.map((c) => c.text).join("\n"));
-  } finally {
-    try {
-      await transport.close();
-    } catch {
-      /* ignore cleanup errors */
-    }
-  }
+  await runTool("cluster_synonyms", toolArgs, timeoutMs);
 }
 
 /**
@@ -772,38 +744,7 @@ async function cmdHighQualityScan(rawArgs: string[]): Promise<void> {
     timeoutMs = hours === 0 ? 0 : Math.round(hours * 60 * 60 * 1000);
   }
 
-  const serverScript = findServerScript();
-  const transport = new StdioClientTransport({
-    command: "node",
-    args: [serverScript],
-    env: { ...process.env } as Record<string, string>,
-    stderr: "inherit",
-  });
-  const client = new Client(
-    { name: "llm-externalizer-cli", version: "1.0.0" },
-    { capabilities: {} },
-  );
-
-  try {
-    await client.connect(transport);
-    const result = await client.callTool(
-      { name: "high_quality_scan", arguments: toolArgs },
-      undefined,
-      timeoutMs > 0 ? { timeout: timeoutMs } : { timeout: Number.MAX_SAFE_INTEGER },
-    );
-    const content = result.content as Array<{ type: string; text: string }>;
-    for (const c of content) {
-      if (c.type === "text") info(c.text);
-    }
-    if (result.isError) process.exit(1);
-    successBanner("high_quality_scan", content.map((c) => c.text).join("\n"));
-  } finally {
-    try {
-      await transport.close();
-    } catch {
-      /* ignore cleanup errors */
-    }
-  }
+  await runTool("high_quality_scan", toolArgs, timeoutMs);
 }
 
 function printUsage(): void {

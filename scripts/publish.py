@@ -816,7 +816,13 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
         )
         print(f"  Synced version to {srv_json.relative_to(repo_root)}")
 
-    # Sync hardcoded version in MCP server source (index.ts Server constructor).
+    # Sync the hardcoded version in the CLI source (cli/main.ts VERSION).
+    #
+    # This anchor used to be the `version:` field of the `McpServer`
+    # constructor in index.ts. That constructor was deleted with the server, so
+    # the old regex matched nothing AND the already-at-target check could never
+    # pass either — meaning every release from that point on aborted here. The
+    # CLI is the only entrypoint now, so its VERSION constant is the anchor.
     #
     # No-op tolerance (canonical-pipeline pattern):
     # `re.subn` returns (new_text, count). When count == 0 the regex did
@@ -828,12 +834,10 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     # We can tell which by re-checking whether new_version is ALREADY in
     # the file with the expected shape. If yes → idempotent skip. If no
     # → real structural bug, abort.
-    index_ts = repo_root / "mcp-server" / "src" / "index.ts"
+    index_ts = repo_root / "mcp-server" / "src" / "cli" / "main.ts"
     if index_ts.exists():
         src = index_ts.read_text(encoding="utf-8")
-        pattern = (
-            r"""(\{\s*name:\s*["'`]llm-externalizer["'`],\s*version:\s*(["'`]))[^"'`]+\2"""
-        )
+        pattern = r"""(const VERSION = (["'`]))[^"'`]+\2"""
         updated, count = re.subn(
             pattern,
             rf"\g<1>{new_version}\g<2>",
@@ -844,19 +848,20 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
             # carries new_version in the expected shape — if so this is
             # a benign idempotent republish, not a structural bug.
             already_at_target = re.search(
-                rf"""\{{\s*name:\s*["'`]llm-externalizer["'`],\s*version:\s*["'`]{re.escape(new_version)}["'`]""",
+                rf"""const VERSION = ["'`]{re.escape(new_version)}["'`]""",
                 src,
             )
             if already_at_target:
                 print(
-                    f"  index.ts already at {new_version} — idempotent skip"
+                    f"  cli/main.ts already at {new_version} — idempotent skip"
                 )
             else:
                 print(
-                    "ERROR: regex failed to match version in index.ts "
-                    "Server constructor (and file is not already at "
-                    f"{new_version}). Likely the constructor literal was "
-                    "renamed or removed.",
+                    "ERROR: regex failed to match `const VERSION = \"...\"` in "
+                    "mcp-server/src/cli/main.ts (and the file is not already "
+                    f"at {new_version}). Likely the constant was renamed, "
+                    "reformatted onto multiple lines, or computed instead of "
+                    "being a literal.",
                     file=sys.stderr,
                 )
                 sys.exit(1)
@@ -868,7 +873,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     # Must stay aligned with plugin.json so users don't see three disagreeing
     # numbers when inspecting the repo.
     #
-    # No-op tolerance (canonical-pipeline pattern, see index.ts block above):
+    # No-op tolerance (canonical-pipeline pattern, see cli/main.ts block above):
     # `re.subn` distinguishes count==0 (no match) from count>=1 (replaced).
     # On count==0 we re-check whether the file already carries new_version
     # in the expected shape — if so the file is at target and the skip is
@@ -932,12 +937,25 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
         if rebuild.stderr:
             print(f"  {rebuild.stderr.strip()}", file=sys.stderr)
         sys.exit(1)
-    dist_index = repo_root / "mcp-server" / "dist" / "index.js"
-    if dist_index.exists():
-        dist_content = dist_index.read_text(encoding="utf-8")
-        if new_version not in dist_content:
-            print(f"ERROR: version '{new_version}' not found in dist/index.js", file=sys.stderr)
-            sys.exit(1)
+    # Assert the SHIPPED bundle carries the new version. This is the gate that
+    # catches a build that silently no-oped, so it must point at the artifact
+    # users actually run: dist/llm-ext.js (the CLI). It used to check
+    # dist/index.js — the MCP server bundle, which no longer carries a version
+    # literal at all, so the check would fail every release.
+    dist_cli = repo_root / "mcp-server" / "dist" / "llm-ext.js"
+    if not dist_cli.exists():
+        print(
+            "ERROR: mcp-server/dist/llm-ext.js missing after build — the CLI "
+            "bundle is the shipped artifact and cannot be absent.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if new_version not in dist_cli.read_text(encoding="utf-8"):
+        print(
+            f"ERROR: version '{new_version}' not found in dist/llm-ext.js",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     print("  OK: dist rebuilt with updated version")
     print()
 
@@ -957,18 +975,19 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     print("── 8. Commit ──")
     files_to_stage = [str(plugin_json)]
     pkg_json_path = repo_root / "mcp-server" / "package.json"
-    srv_json_path = repo_root / "mcp-server" / "server.json"
     if changelog.exists():
         files_to_stage.append(str(changelog))
     if readme.exists():
         files_to_stage.append(str(readme))
     if pkg_json_path.exists():
         files_to_stage.append(str(pkg_json_path))
-    if srv_json_path.exists():
-        files_to_stage.append(str(srv_json_path))
-    index_ts_path = repo_root / "mcp-server" / "src" / "index.ts"
-    if index_ts_path.exists():
-        files_to_stage.append(str(index_ts_path))
+    # Must be the SAME file the version-sync block above rewrote, or the bump
+    # is left unstaged: the release commit ships without it and the very next
+    # publish starts on a dirty tree. (server.json was the MCP registry
+    # manifest and is gone.)
+    cli_main_ts_path = repo_root / "mcp-server" / "src" / "cli" / "main.ts"
+    if cli_main_ts_path.exists():
+        files_to_stage.append(str(cli_main_ts_path))
     pyproject_path = repo_root / "pyproject.toml"
     if pyproject_path.exists():
         files_to_stage.append(str(pyproject_path))
