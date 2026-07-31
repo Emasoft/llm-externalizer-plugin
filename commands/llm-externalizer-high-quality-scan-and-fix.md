@@ -2,8 +2,6 @@
 name: llm-externalizer-high-quality-scan-and-fix
 description: High-quality two-stage audit. ONE strong remote model (default z-ai/glm-5.2, max reasoning + cache) scans each file via high_quality_scan; then parallel Opus fixer subagents (≤15) verify and fix each finding in the same run. Paid + OpenRouter-only — fails fast on a local backend, free_only, or no credit. Orchestrator never reads scan or fixer content, only report paths.
 allowed-tools:
-  - mcp__llm-externalizer__discover
-  - mcp__llm-externalizer__high_quality_scan
   - Bash
   - Task
 argument-hint: '<folder> [--instructions path] [--specs path] [--text] [--no-secrets]'
@@ -11,10 +9,10 @@ argument-hint: '<folder> [--instructions path] [--specs path] [--text] [--no-sec
 
 The **high-quality** twin of `/llm-externalizer:llm-externalizer-scan-and-fix`. Two differences, everything else is the same scan → per-file report → parallel fix → join pipeline:
 
-1. **Scan** uses `mcp__llm-externalizer__high_quality_scan` — ONE strong remote model (default `z-ai/glm-5.2`) at max reasoning effort + prompt cache, NOT the cheap 3-model ensemble.
+1. **Scan** uses `${CLAUDE_PLUGIN_ROOT}/bin/llm-ext high-quality-scan` — ONE strong remote model (default `z-ai/glm-5.2`) at max reasoning effort + prompt cache, NOT the cheap 3-model ensemble.
 2. **Fix** always runs on **Opus** (the `llm-externalizer-parallel-fixer-opus-agent`) — every report, regardless of size — because a high-quality scan deserves a high-quality fix.
 
-**Paid + OpenRouter-only by design.** `high_quality_scan` fails fast (never silently downgrades) on a local backend, in `free_only` mode, or when credit is exhausted. For cheap/free fixing use `/llm-externalizer:llm-externalizer-scan-and-fix` instead. Configure the model via the `high_quality_model` block in `~/.llm-externalizer/settings.yaml`.
+**Paid + OpenRouter-only by design.** `high-quality-scan` fails fast (never silently downgrades) on a local backend, in `free_only` mode, or when credit is exhausted. For cheap/free fixing use `/llm-externalizer:llm-externalizer-scan-and-fix` instead. Configure the model via the `high_quality_model` block in `~/.llm-externalizer/settings.yaml`.
 
 **HARDCODED (not overridable):** `answer_mode: 0` (one report per file → one fixer agent per file, zero orchestrator-side consolidation); `output_dir: $MAIN_ROOT/reports/llm-externalizer/` (so the join script finds every `.fixer.`-tagged summary).
 
@@ -26,11 +24,11 @@ The **high-quality** twin of `/llm-externalizer:llm-externalizer-scan-and-fix`. 
 - **`--text`**: include plain-text extensions (`.md .txt .json .yml .yaml .toml .ini .cfg .conf .xml .html .rst .csv`). Without it, the tool uses its default source-code extensions.
 - **`--no-secrets`**: disable the secret detector (`scan_secrets: false, redact_secrets: false`). Default is `scan_secrets: true, redact_secrets: true` (secrets detected and REDACTED before reaching the LLM, scan continues).
 
-Resolve the reports dir the SAME way the MCP server does (no git — mirror `mcp-server/src/project-root.ts`): `MAIN_ROOT="$CLAUDE_PROJECT_DIR"` when that dir exists on disk, else `$(pwd)`. `REPORTS_DIR="$MAIN_ROOT/reports/llm-externalizer"`; `mkdir -p` it. Recompute it in every `Bash` step (env vars do not persist across tool calls).
+Resolve the reports dir the SAME way the CLI does (no git — mirror `mcp-server/src/project-root.ts`): `MAIN_ROOT="$CLAUDE_PROJECT_DIR"` when that dir exists on disk, else `$(pwd)`. `REPORTS_DIR="$MAIN_ROOT/reports/llm-externalizer"`; `mkdir -p` it. Recompute it in every `Bash` step (env vars do not persist across tool calls).
 
 ## Step 2 — Verify service + backend
 
-Call `mcp__llm-externalizer__discover`. Abort with `[FAILED] — service offline` if OFFLINE. The output shows the active backend and `free_only`: if the backend is NOT OpenRouter or `free_only` is on, STOP and tell the user `high_quality_scan` will fail fast — suggest `/llm-externalizer:llm-externalizer-scan-and-fix` instead. Do not start a scan that the gate will refuse.
+Run `${CLAUDE_PLUGIN_ROOT}/bin/llm-ext discover`. Abort with `[FAILED] — service offline` if OFFLINE. The output shows the active backend and `free_only`: if the backend is NOT OpenRouter or `free_only` is on, STOP and tell the user `high-quality-scan` will fail fast — suggest `/llm-externalizer:llm-externalizer-scan-and-fix` instead. Do not start a scan that the gate will refuse.
 
 ## Step 3 — Run the high-quality scan
 
@@ -57,24 +55,22 @@ Description: <1–3 sentences; reference the exact function/line/symbol>
 If NO real defects: emit the single line `No real defects.` Do NOT echo these instructions, add preamble, use ### or numbered lists for findings, or treat [REDACTED:...] placeholders as defects.
 ```
 
-Call `mcp__llm-externalizer__high_quality_scan`:
+Run `${CLAUDE_PLUGIN_ROOT}/bin/llm-ext high-quality-scan`:
 
-```json
-{
-  "folder_path": "<absolute folder>",
-  "answer_mode": 0,
-  "use_gitignore": true,
-  "output_dir": "<MAIN_ROOT>/reports/llm-externalizer",
-  "extensions": ["<only if --text: .md,.txt,.json,.yml,.yaml,.toml,.ini,.cfg,.conf,.xml,.html,.rst,.csv>"],
-  "exclude_dirs": ["docs_dev","reports_dev","scripts_dev","tests_dev","samples_dev","examples_dev","downloads_dev","libs_dev","builds_dev","reports","llm_externalizer_output",".rechecker",".mypy_cache",".ruff_cache",".serena",".claude",".venv","__pycache__"],
-  "instructions": "<see above>",
-  "instructions_files_paths": ["<if applicable>"],
-  "scan_secrets": <default true; --no-secrets: false>,
-  "redact_secrets": <default true; --no-secrets: false>
-}
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext high-quality-scan \
+  --folder_path "<absolute folder>" \
+  --answer_mode 0 \
+  --use_gitignore true \
+  --output_dir "<MAIN_ROOT>/reports/llm-externalizer" \
+  [--extensions ".md,.txt,.json,.yml,.yaml,.toml,.ini,.cfg,.conf,.xml,.html,.rst,.csv" if --text] \
+  --exclude_dirs "docs_dev,reports_dev,scripts_dev,tests_dev,samples_dev,examples_dev,downloads_dev,libs_dev,builds_dev,reports,llm_externalizer_output,.rechecker,.mypy_cache,.ruff_cache,.serena,.claude,.venv,__pycache__" \
+  --instructions "<see above>" \
+  [--instructions_files_paths <path,path,...> if applicable] \
+  [--scan_secrets] [--redact_secrets]   # default true; --no-secrets omits both
 ```
 
-Omit `extensions` unless `--text` is set. If the tool returns an error (paid-model gate refusal), abort and surface its one-line reason.
+Omit `--extensions` unless `--text` is set. If the command returns an error (paid-model gate refusal), abort and surface its one-line reason. This can take several minutes on a large folder — run it with an explicit long `timeout` or `run_in_background: true`.
 
 ## Step 4 — Extract + script-validate report paths (no Read)
 
@@ -142,17 +138,17 @@ On any error: `[FAILED] llm-externalizer-high-quality-scan-and-fix — <one-line
 - Fixers are ALWAYS Opus — never Sonnet. Do NOT route by file size.
 - You MUST NOT `Read` any scan report, fixer summary, or the final joined report; only file paths flow through the orchestrator.
 - Fixer dispatch MUST be parallel (batches of ≤15). Sequential dispatch defeats the design.
-- For cross-file reference validation, use the `check_against_specs` tool (pass `--specs`) — the LLM sees only 1–5 files per batch and cannot validate references against files outside the batch.
+- For cross-file reference validation, use the `check-against-specs` command (pass `--specs`) — the LLM sees only 1–5 files per batch and cannot validate references against files outside the batch.
 
 ## Three-surface compliance: by-design slash-only (GAP-11)
 
-This command is multi-agent orchestration — a high_quality_scan MCP batch, then up to 15 parallel Opus fixer subagents (one per report) via the Task tool, then a Python join script across multiple turns of orchestrator control flow. Per TRDD-a24b213c §C, that is a documented exemption from the "every capability has MCP tool + CLI command + slash command" invariant: a single MCP or CLI surface cannot spawn subagents (only the orchestrator can, via Task), so the `_and_fix` capability is inherently slash-only. The pure scan IS three-surfaced (the `high_quality_scan` MCP tool + the `high-quality-scan` CLI command + `/llm-externalizer:llm-externalizer-high-quality-scan`).
+This command is multi-agent orchestration — a `high-quality-scan` CLI batch, then up to 15 parallel Opus fixer subagents (one per report) via the Task tool, then a Python join script across multiple turns of orchestrator control flow. Per TRDD-a24b213c §C, that is a documented exemption from the "every capability has a CLI command + slash command" invariant: a single CLI surface cannot spawn subagents (only the orchestrator can, via Task), so the `_and_fix` capability is inherently slash-only. The pure scan IS two-surfaced (the `high-quality-scan` CLI command + `/llm-externalizer:llm-externalizer-high-quality-scan`).
 
 ## Error handling
 
 | Error | Resolution |
 |---|---|
-| MCP service offline | `[FAILED] — service offline`. Restart Claude Code. |
+| Service offline | `[FAILED] — service offline`. Check `$OPENROUTER_API_KEY` and re-run `discover`. |
 | Backend not OpenRouter / free_only / no credit | STOP before scanning; suggest `/llm-externalizer:llm-externalizer-scan-and-fix`. |
 | Target path / instructions / specs missing | `[FAILED] — <which> not found: <path>`. |
 | Scan returns 0 reports | `[FAILED] — scan produced 0 reports`. Widen target. |

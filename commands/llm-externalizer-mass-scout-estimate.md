@@ -5,7 +5,7 @@ description: |-
   registered files. Honors --budget-usd as a hard gate. Phase 3 of the
   pipeline.
 allowed-tools:
-  - mcp__llm-externalizer__mass_scout_estimate
+  - Bash
 argument-hint: "--db <path> --fields-file <json> [--budget-usd N] [--bucket <name>] [--workers N]"
 effort: low
 ---
@@ -71,7 +71,7 @@ responsibility to check the estimate first. The slash command for
 ## Example
 
 ```
-/llm-externalizer:llm-externalizer-mass-scout-estimate --db /tmp/scout.db --fields-file bundled:code-audit --budget-usd 0.50 --bucket sourcecode
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout-estimate --db-path /tmp/scout.db --fields-file bundled:code-audit --budget-usd 0.50 --bucket sourcecode
 ```
 
 Estimates the cost of running the bundled `code-audit` fieldset over the

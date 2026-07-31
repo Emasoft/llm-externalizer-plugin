@@ -5,7 +5,7 @@ description: |-
   as `--fields-file bundled:<name>`. Skip the "what fields do I write?"
   cliff entirely when one of the standard sets fits your use case.
 allowed-tools:
-  - mcp__llm-externalizer__mass_scout_list_bundled_fieldsets
+  - Bash
 argument-hint: "[--json]"
 effort: low
 ---
@@ -40,7 +40,7 @@ selector agent that picks a bundled set based on the user's goal).
 ## Example
 
 ```
-/llm-externalizer:llm-externalizer-mass-scout-list-bundled-fieldsets
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout-list-bundled-fieldsets
 ```
 
 Prints every bundled fieldset with its field roster. Pick one whose

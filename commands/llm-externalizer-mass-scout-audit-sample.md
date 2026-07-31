@@ -5,7 +5,7 @@ description: |-
   cached file body. The standard human-trust check: did the model
   actually understand the file?
 allowed-tools:
-  - mcp__llm-externalizer__mass_scout_audit_sample
+  - Bash
 argument-hint: "--db <path> --job-id <id> [--sample <N>] [--body-truncate <chars>] [--json]"
 effort: low
 ---
@@ -41,7 +41,7 @@ downstream review pipelines.
 ## Example
 
 ```
-/llm-externalizer:llm-externalizer-mass-scout-audit-sample --db /tmp/scout.db --job-id job-2026-05-24 --sample 8
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout-audit-sample --db-path /tmp/scout.db --job-id job-2026-05-24 --sample 8
 ```
 
 Pulls 8 random rows from `job-2026-05-24` and prints them with their

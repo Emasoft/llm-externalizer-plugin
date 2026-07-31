@@ -9,7 +9,7 @@ description: |-
   (snippet | file_path+line+context_lines window | path_glob) into per-item
   verdicts and writes a JSON + markdown report.
 allowed-tools:
-  - mcp__llm-externalizer__security_scan
+  - Bash
 argument-hint: "targets=[{id,category, snippet|file_path[+line]|path_glob}] [category_rubrics={...}] [budget_usd=N] [model=<id>]"
 effort: high
 ---
@@ -143,13 +143,20 @@ a pricier model — adopt it explicitly via `model` when the extra accuracy is
 worth the cost. Re-verify any candidate yourself with
 `llm-ext-benchmark --security-triage --model <id>`.
 
-## CLI equivalent
+## Invocation
 
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext security-scan \
+  --targets '[{"id":"t1","category":"command_injection","snippet":"..."}]' \
+  [--category_rubrics '{"command_injection":"..."}'] \
+  [--budget_usd N] [--model <id>] [--workers N] [--max_retries N] \
+  [--folder_root <path>] [--git_diff_ref <ref>] [--output_dir <path>]
 ```
-bin/llm-externalizer security-scan --input-json '<json>'
-```
-(the `--input-json` value is the same object documented above). Also
-reachable as `bin/llm-externalizer mass-scout security-scan ...`.
+
+`--targets` and `--category_rubrics` take a JSON string (array / object) — the
+CLI parses `[`-prefixed values as JSON. This can run for tens of minutes on a
+large `--targets` batch — run it with an explicit long `timeout` or
+`run_in_background: true`.
 
 ## Environment
 

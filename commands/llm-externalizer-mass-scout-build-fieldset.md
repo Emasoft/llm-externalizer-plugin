@@ -5,7 +5,7 @@ description: |-
   you know the shape you want and prefer one-liner field definitions
   over hand-writing JSON.
 allowed-tools:
-  - mcp__llm-externalizer__mass_scout_build_fieldset
+  - Bash
 argument-hint: "--name <id> --field \"name:type=desc\" [--field \"...\"] ... [--out <path>]"
 effort: low
 ---
@@ -49,7 +49,7 @@ scout run.
 ## Example
 
 ```
-/llm-externalizer:llm-externalizer-mass-scout-build-fieldset \
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout-build-fieldset \
   --name auth-audit \
   --field "is_login:bool=true if file authenticates a user" \
   --field "auth_method:enum(jwt,oauth2,session,basic,none)=mechanism in use" \

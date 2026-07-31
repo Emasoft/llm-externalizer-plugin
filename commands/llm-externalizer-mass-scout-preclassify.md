@@ -6,7 +6,7 @@ description: |-
   log_to_classify / rules_to_eval / has_frontmatter / unknown). Phase 2 of
   the pipeline.
 allowed-tools:
-  - mcp__llm-externalizer__mass_scout_preclassify
+  - Bash
 argument-hint: "--db <path> [--reclassify] [--limit <n>]"
 effort: low
 ---
@@ -54,7 +54,7 @@ by_bucket: sourcecode=<a>, documentation=<b>, config=<c>, ...
 ## Example
 
 ```
-/llm-externalizer:llm-externalizer-mass-scout-preclassify --db /tmp/scout.db
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout-preclassify --db-path /tmp/scout.db
 ```
 
 Classifies every freshly-registered file in `/tmp/scout.db` into its

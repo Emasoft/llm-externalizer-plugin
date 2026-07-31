@@ -4,7 +4,7 @@ description: |-
   Dump every result row of a mass-scouting job to JSONL or CSV under
   reports/mass_scouting/. Useful for follow-up analysis in pandas, jq, etc.
 allowed-tools:
-  - mcp__llm-externalizer__mass_scout_export
+  - Bash
 argument-hint: "--db <path> --job-id <id> [--format jsonl|csv]"
 effort: low
 ---
@@ -59,7 +59,7 @@ contain commas, quotes, or newlines are quoted and double-escaped.
 ## Example
 
 ```
-/llm-externalizer:llm-externalizer-mass-scout-export --db /tmp/scout.db --job-id job-2026-05-24 --format csv
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout-export --db-path /tmp/scout.db --job-id job-2026-05-24 --format csv
 ```
 
 Exports every result row of `job-2026-05-24` to a CSV under

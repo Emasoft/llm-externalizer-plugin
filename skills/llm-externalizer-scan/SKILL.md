@@ -16,31 +16,31 @@ Scan `$ARGUMENTS` with the LLM Externalizer ensemble and return only report file
 
 ## Overview
 
-Codebase scan via the LLM Externalizer MCP server, active profile (default: `remote-ensemble`, parallel). One report per file. `context: fork` runs work in the `llm-externalizer-reviewer-agent` subagent (Sonnet, no Write/Edit); only report paths come back.
+Codebase scan via the `llm-ext` CLI, active profile (default: `remote-ensemble`, parallel). One report per file. `context: fork` runs work in the `llm-externalizer-reviewer-agent` subagent (Sonnet, no Write/Edit); only report paths come back.
 
 ## Prerequisites
 
-- LLM Externalizer MCP server running (auto-started by the plugin)
+- `${CLAUDE_PLUGIN_ROOT}/bin/llm-ext` CLI available (no server process to start)
 - Active profile in `~/.llm-externalizer/settings.yaml`
 - For remote profiles: OpenRouter key — set via plugin `userConfig.openrouter_api_key` (keychain) OR `$OPENROUTER_API_KEY` shell env
 
 ## Instructions
 
 1. Parse `$ARGUMENTS` for **target** (default `.`), **focus**, `free` flag.
-2. `mcp__llm-externalizer__discover`. Abort `[FAILED] — offline` if offline.
-3. Pick the tool: duplicate-check → `search_existing_implementations`; folder audit → `scan_folder` (`use_gitignore: true`, `answer_mode: 0`); ≤5 files → `code_task` (`answer_mode: 0`, `max_retries: 3`); glob → expand, then `code_task`.
-4. Call the tool. `free: true` only if asked (warn about prompt logging).
+2. `llm-ext discover`. Abort `[FAILED] — offline` if offline.
+3. Pick the command: duplicate-check → `search-existing-implementations`; folder audit → `scan-folder` (`--use_gitignore`, `--answer_mode 0`); ≤5 files → `code-task` (`--answer_mode 0`, `--max_retries 3`); glob → expand, then `code-task`. Folder/large scans can run long — use an extended Bash timeout or `run_in_background: true`.
+4. Run the command. `--free` only if asked (warn about prompt logging).
 5. Default rubric: bugs/crashes/security exploits/data corruption/local broken refs only. NOT missing error handling, null checks, validation, logging, style. Respect source style. Cite function names + lines.
 6. Collect report paths. Do NOT read/summarize.
 7. Return paths using Output format.
 
-Limitations: `.md` files EXCLUDED by default (pass `instructions` for semantic search; structural validation → CPV). LLM sees only 1–5 files/request — no cross-file refs (use `check_against_specs` or `search_existing_implementations`).
+Limitations: `.md` files EXCLUDED by default (pass `--instructions` for semantic search; structural validation → CPV). LLM sees only 1–5 files/request — no cross-file refs (use `check-against-specs` or `search-existing-implementations`).
 
 ## Output
 
-Reports default to `<main-project-dir>/reports/llm-externalizer/` (the main project dir Claude Code is in); pass `output_dir` only for a custom location. Filenames embed the source filename or group id.
+Reports default to `<main-project-dir>/reports/llm-externalizer/` (the main project dir Claude Code is in); pass `--output_dir` only for a custom location. Filenames embed the source filename or group id.
 
-**answer_mode**: `0`=per-file (scan_folder default), `1`=per-group (subfolder/extension/basename, 1 MB cap), `2`=merged. Controls disk output only, not LLM visibility.
+**answer_mode**: `0`=per-file (`scan-folder` default), `1`=per-group (subfolder/extension/basename, 1 MB cap), `2`=merged. Controls disk output only, not LLM visibility.
 
 Reply format (exact, no preamble):
 ```
@@ -54,11 +54,11 @@ On failure: `[FAILED] scan-<label> — <one-line reason>`
 
 | Error | Fix |
 |-------|-----|
-| Service offline | Restart Claude Code; abort |
+| Service offline | Check network/API status; abort |
 | Auth 401 | Set `userConfig.openrouter_api_key` or `$OPENROUTER_API_KEY` |
 | Credit 402 | Server auto-falls back to free Nemotron |
 | Empty response | Server auto-retries up to 15× (2s backoff) |
-| No files found | Verify target path and `use_gitignore` |
+| No files found | Verify target path and `--use_gitignore` |
 
 ## Examples
 

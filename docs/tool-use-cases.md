@@ -2,8 +2,9 @@
 
 A decision guide for agents. Each entry says **what the tool is for**, **when to
 pick it**, and **what to use instead** when it's the wrong fit. For parameters
-and behavior see [agent-usage-reference.md](agent-usage-reference.md) or each
-tool's own MCP description.
+and behavior see [agent-usage-reference.md](agent-usage-reference.md) or run
+`llm-ext <command> --help`, generated from the same catalog the commands run
+from.
 
 The golden rule for all of them: **pass file paths, never file contents**, and
 read the returned report path when you need the result — output stays out of
@@ -178,12 +179,13 @@ and, only when it has — or when you pass `force` for an explicit audit — run
 tool's benchmark to recommend the best SAME-OR-CHEAPER replacement. On a
 healthy/empty ledger NO benchmark runs and every recommendation is "keep the
 incumbent" (zero false positives, zero spend). Writes a report to
-`reports/auto-replace/` and NEVER touches settings — the MCP surface is read-only
-and cannot rewrite its own config. **To adopt a recommendation** run the CLI
-writer (the sole writer path): `llm-ext-benchmark --auto-replace --apply`
-(`--apply` requires `--auto-replace`; run `reset` afterwards; honors `free_only`).
-**Use when** you want a "has any tool's model gone bad? what should replace it?"
-sweep — and let the operator decide whether to apply.
+`reports/auto-replace/` and NEVER touches settings — `llm-ext` is read-only and
+cannot rewrite its own config. **To adopt a recommendation**, hand-edit
+`~/.llm-externalizer/settings.yaml` with the recommended model id, then run
+`llm-ext reset` (configuration stays user-only — see
+[Editing profiles](setup-and-configuration.md)). **Use when** you want a "has
+any tool's model gone bad? what should replace it?" sweep — and let the
+operator decide whether to apply.
 
 ### `security_triage_benchmark`
 Qualifies model(s) for `security_scan` against a labeled golden dataset, scored
@@ -215,9 +217,9 @@ auth error.
 reloads settings from disk and clears caches without a full Claude Code restart.
 
 ### `get_settings`
-**Read-only.** Returns the path to a copy of settings.yaml for inspection. The
-MCP cannot write settings — configuration is user-only (edit the file by hand,
-then `reset`). See [setup-and-configuration.md](setup-and-configuration.md).
+**Read-only.** Returns the path to a copy of settings.yaml for inspection.
+`llm-ext` cannot write settings — configuration is user-only (edit the file by
+hand, then `reset`). See [setup-and-configuration.md](setup-and-configuration.md).
 
 ### `or_model_info` / `or_model_info_table` / `or_model_info_json`
 Query OpenRouter for a model's supported params, pricing, latency, and uptime, in

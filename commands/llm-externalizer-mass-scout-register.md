@@ -4,7 +4,7 @@ description: |-
   Register a folder (or explicit file list) into the mass-scouting SQLite
   registry. Phase 1 of the mass-scouting pipeline.
 allowed-tools:
-  - mcp__llm-externalizer__mass_scout_register
+  - Bash
 argument-hint: "--db <path> --root <folder> [--git-diff <ref>] [--no-gitignore] | --files <a,b,c> [--extensions .ts,.md] [--exclude-dirs ...]"
 effort: low
 ---
@@ -58,7 +58,7 @@ See the `llm-externalizer-mass-scouting` skill for the full pipeline.
 ## Example
 
 ```
-/llm-externalizer:llm-externalizer-mass-scout-register --db /tmp/scout.db --root /path/to/repo/src --extensions .ts,.tsx,.md
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout-register --db-path /tmp/scout.db --folder-path /path/to/repo/src --extensions .ts,.tsx,.md
 ```
 
 Walks `/path/to/repo/src`, caches every `.ts`/`.tsx`/`.md` file body into

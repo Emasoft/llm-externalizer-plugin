@@ -52,7 +52,7 @@ profiles:
     context_window: 32768
 ```
 
-Then call `mcp__llm-externalizer__reset` to reload settings without restarting Claude Code.
+Then run `llm-ext reset` to purge caches and reload settings (no server to restart).
 
 ## Runtime 2 — vMLX (`vmlx serve`, MLX-native, built-in doctor/bench)
 

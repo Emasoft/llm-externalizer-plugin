@@ -5,7 +5,7 @@ description: |-
   query semantics as mass-scout-search; results are tagged with the
   originating job_id and merged by bm25 rank.
 allowed-tools:
-  - mcp__llm-externalizer__mass_scout_search_xjob
+  - Bash
 argument-hint: "--db <path> --job-ids id1,id2,... [--query \"...\"] [--regex \"...\"] [--filter '...'] [--json]"
 effort: low
 ---
@@ -58,7 +58,7 @@ With `--json`, returns the full `XjobSearchResponse` envelope including
 ## Example
 
 ```
-/llm-externalizer:llm-externalizer-mass-scout-search-xjob --db /tmp/scout.db --job-ids job-v1,job-v2 --query "async" --limit-merged 100
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout-search-xjob --db-path /tmp/scout.db --job-ids job-v1,job-v2 --query "async" --limit-merged 100
 ```
 
 Searches both `job-v1` and `job-v2` for files matching `async`, merges the

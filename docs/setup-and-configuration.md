@@ -7,11 +7,12 @@ profile. This doc exists for the cases where the wizard can't finish — no agen
 available, a headless/CI environment, an exotic machine, or you simply want to
 configure by hand. **The knowledge is here so you never get stuck.**
 
-> Configuration is **user-only by design**: there is no `set_settings` /
-> `change_model` MCP tool and the CLI `profile add/select/edit/remove/rename`
-> subcommands are disabled. You edit `~/.llm-externalizer/settings.yaml` by hand
-> and call `reset`. The wizard generates a snippet for you to paste — it never
-> writes the file itself.
+> Configuration is **user-only by design**: there is no `get-settings`/`reset`
+> counterpart that writes — `llm-ext` ships no `set-settings`, `change-model`, or
+> `profile` (add/select/edit/remove/rename) command at all. You edit
+> `~/.llm-externalizer/settings.yaml` by hand and run `llm-ext reset` to purge
+> caches. The wizard generates a snippet for you to paste — it never writes the
+> file itself.
 
 ---
 
@@ -113,8 +114,8 @@ is too slow (>60 s on the long-context test).
 ## Remote setup (OpenRouter)
 
 Set your key one of three ways (precedence: shell env → settings.yaml literal →
-keychain). **Shell env is strongly recommended** — every consumer (MCP server,
-statusline credit panel, CLI, subprocesses) picks it up automatically.
+keychain). **Shell env is strongly recommended** — every consumer (`llm-ext`,
+the statusline credit panel, subprocesses) picks it up automatically.
 
 ```bash
 # ~/.zshrc / ~/.bashrc / ~/.config/fish/config.fish
@@ -143,8 +144,10 @@ box once any one source is set.
 3. **Write a profile** in `~/.llm-externalizer/settings.yaml` (templates below),
    matching the preset + port to your runner.
 4. **Set `active:`** to your new profile name.
-5. **Reload** — call the `reset` MCP tool (or restart Claude Code).
-6. **Verify** — `discover` should show the profile with `service_health: ok`.
+5. **Reload** — nothing to restart: every `llm-ext` invocation is a fresh
+   process that re-reads `settings.yaml` from disk. Run `llm-ext reset` only to
+   also purge the on-disk caches (model list, concurrency, LM Studio detection).
+6. **Verify** — `llm-ext discover` should show the profile with `service_health: ok`.
 
 ---
 
@@ -213,10 +216,13 @@ runs the documented GLM-5.2 setup. `high_quality_scan` is paid and **fails fast*
 silently downgrades) on a local backend, in `free_only` mode, or when credit is exhausted.
 
 ### Auth resolution
-`api_key` / `api_token` accept `$ENV_VAR_NAME` (resolved from the server's
-process env at runtime) or a literal value. If `discover` shows the token
-resolved, auth works; `(NOT SET)` means the env var is missing from the MCP
-server's environment.
+`api_key` / `api_token` accept `$ENV_VAR_NAME` (resolved from `llm-ext`'s own
+process environment at call time) or a literal value. If `llm-ext discover`
+shows the token resolved, auth works; `(NOT SET)` means the env var is missing
+from the environment the command runs in — export it in your shell rc, or set
+it via `claude plugin configure llm-externalizer` (the keychain value is
+exported to every `llm-ext` invocation as `CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY`
+and mapped to `$OPENROUTER_API_KEY` automatically).
 
 ### Validation (checked at load / `reset`; a bad profile becomes unusable)
 - `active` references an existing profile key
@@ -313,7 +319,7 @@ profiles:
 | Symptom | Fix |
 |---|---|
 | Wizard reports `RAM: 0 GB` (Win11 24H2+ `wmic` removed) | Tell it your RAM, or set `context_window` manually; don't trust auto-detect. |
-| `discover` shows auth `(NOT SET)` | Env var missing from the MCP server process — export it in your shell rc / `.mcp.json`, restart Claude Code. |
+| `discover` shows auth `(NOT SET)` | Env var missing from the environment `llm-ext` runs in — export it in your shell rc (new commands re-read it immediately, nothing to restart). |
 | Connection refused | Runner not started or wrong port — start it, `curl /v1/models`, fix `url`. |
 | `structured_output` test fails | Model can't do `response_format: json_schema` — pick a JSON-capable model; it's a hard requirement. |
 | Passes but `output_length` low | Raise the runner's max tokens (`-n` llama.cpp, `num_predict` Ollama, `--max-model-len`/`--max-num-tokens` vLLM) or pick a higher-cap model. |

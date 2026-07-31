@@ -10,7 +10,7 @@ description: |-
   "benchmark the triage model", "qualify a model for security_scan", or "is model
   X good enough for security triage".
 allowed-tools:
-  - mcp__llm-externalizer__security_triage_benchmark
+  - Bash
 argument-hint: "[models=<id,[id...]>] [force] [output_dir=<abs path>]"
 effort: high
 ---
@@ -111,21 +111,17 @@ not auto-edit source.
 
 ## How to assess a new model
 
-```
-/llm-externalizer:llm-externalizer-security-triage-benchmark models=vendor/new-model
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext security-triage-benchmark --models vendor/new-model
 ```
 
 Read the report's per-case breakdown to see exactly which cases the model
 under-flagged or over-flagged. To re-qualify the whole pool after a model
-shake-up, run with no arguments.
+shake-up, run with no `--models` flag.
 
-## CLI equivalent
-
-```
-llm-ext-benchmark --security-triage                 # auto-discover + recommend
-llm-ext-benchmark --security-triage --model <id>    # assess one model (repeatable)
-llm-ext-benchmark --security-triage --force         # ignore the per-day cache
-```
+Other flags: `--force` (ignore the per-day cache), `--output_dir <path>`,
+`--allow_paid_models_tests`. Benchmark runs can take a long time — run with
+an explicit long `timeout` or `run_in_background: true`.
 
 ## Environment
 

@@ -11,30 +11,28 @@ Complete example showing tool selection, invocation, output reading, and acting 
 
 ### Step 1: Choose the right tool
 
-- Need to scan multiple files in a directory? Use `scan_folder` or any tool with `folder_path`.
-- Need to analyze specific files? Use `code_task` (or `chat` with `answer_mode: 0, max_retries: 3` for per-file processing).
-- Need to compare two files? Use `compare_files` (pair mode).
-- Need to compare multiple file pairs? Use `compare_files` (batch mode with `file_pairs`).
-- Need to compare between git commits? Use `compare_files` (git diff mode with `git_repo` + `from_ref` + `to_ref`).
+- Need to scan multiple files in a directory? Use `scan-folder` or any command with `--folder_path`.
+- Need to analyze specific files? Use `code-task` (or `chat` with `--answer_mode 0 --max_retries 3` for per-file processing).
+- Need to compare two files? Use `compare-files` (pair mode).
+- Need to compare multiple file pairs? Use `compare-files` (batch mode with `--file_pairs`).
+- Need to compare between git commits? Use `compare-files` (git diff mode with `--git_repo` + `--from_ref` + `--to_ref`).
 
-For a directory scan: `scan_folder`.
+For a directory scan: `scan-folder`. Folder scans can run long — use an extended Bash timeout or `run_in_background: true`.
 
-### Step 2: Call the tool
+### Step 2: Run the command
 
-```json
-{
-  "tool": "mcp__llm-externalizer__scan_folder",
-  "folder_path": "/path/to/project/src",
-  "extensions": [".ts"],
-  "instructions": "Find security vulnerabilities. This is a Node.js Express REST API with JWT auth. Focus on: SQL injection, XSS, SSRF, path traversal, and auth bypass.",
-  "use_gitignore": true,
-  "exclude_dirs": ["__tests__", "fixtures"]
-}
+```bash
+llm-ext scan-folder \
+  --folder_path /path/to/project/src \
+  --extensions '[".ts"]' \
+  --instructions "Find security vulnerabilities. This is a Node.js Express REST API with JWT auth. Focus on: SQL injection, XSS, SSRF, path traversal, and auth bypass." \
+  --use_gitignore \
+  --exclude_dirs '["__tests__","fixtures"]'
 ```
 
-### Step 3: Read the tool response
+### Step 3: Read the command's response
 
-The tool returns ONLY a file path:
+The command prints ONLY a file path on stdout:
 ```
 /path/to/project/reports/llm-externalizer/scan_folder_20260315_143022.md
 ```
@@ -49,19 +47,17 @@ Read /path/to/project/reports/llm-externalizer/scan_folder_20260315_143022.md
 The output file contains the LLM's analysis with per-file findings. Use the findings to:
 - Create GitHub issues for each vulnerability
 - Fix critical issues using Read + Edit tools
-- Run `check_references` on modified files to verify fixes didn't break imports
+- Run `check-references` on modified files to verify fixes didn't break imports
 
 ### Step 5: Follow up (optional)
 
 Re-scan specific fixed files to verify:
-```json
-{
-  "tool": "mcp__llm-externalizer__code_task",
-  "answer_mode": 0,
-  "max_retries": 3,
-  "instructions": "Verify these files have no remaining security vulnerabilities. This is a Node.js Express REST API.",
-  "input_files_paths": ["/path/to/fixed-file-1.ts", "/path/to/fixed-file-2.ts"]
-}
+```bash
+llm-ext code-task \
+  --answer_mode 0 \
+  --max_retries 3 \
+  --instructions "Verify these files have no remaining security vulnerabilities. This is a Node.js Express REST API." \
+  --input_files_paths '["/path/to/fixed-file-1.ts","/path/to/fixed-file-2.ts"]'
 ```
 
 ## Quick Decision Tree
@@ -71,14 +67,14 @@ Need to process files with an external LLM?
 |
 +-- How many files?
     |
-    +-- 1 file, code analysis ---------> code_task
+    +-- 1 file, code analysis ---------> code-task
     +-- 1 file, general task ----------> chat
-    +-- 2 files, compare --------------> compare_files (pair mode)
-    +-- N file pairs, compare ---------> compare_files (batch mode, file_pairs)
-    +-- Compare between git commits ---> compare_files (git diff mode, git_repo + refs)
-    +-- 2+ files, same check each -----> code_task with answer_mode=0, max_retries=3
-    +-- Whole directory ----------------> scan_folder (or any tool with folder_path)
-    +-- Check imports valid ------------> check_imports
-    +-- Check symbol refs --------------> check_references
-    +-- Check against spec -------------> check_against_specs
+    +-- 2 files, compare --------------> compare-files (pair mode)
+    +-- N file pairs, compare ---------> compare-files (batch mode, file_pairs)
+    +-- Compare between git commits ---> compare-files (git diff mode, git_repo + refs)
+    +-- 2+ files, same check each -----> code-task with answer_mode=0, max_retries=3
+    +-- Whole directory ----------------> scan-folder (or any command with folder_path)
+    +-- Check imports valid ------------> check-imports
+    +-- Check symbol refs --------------> check-references
+    +-- Check against spec -------------> check-against-specs
 ```

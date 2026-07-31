@@ -12,7 +12,7 @@ skills:
 # WebFetch, AskUserQuestion, all MCP tools). The agent needs Bash for runner detection +
 # install commands, Read for state files, Write for SCRATCH state under $CLAUDE_PLUGIN_DATA
 # (NEVER for ~/.llm-externalizer/settings.yaml — that file is user-only by policy), and
-# `mcp__llm-externalizer__discover` to verify the final configuration.
+# `llm-ext discover` (CLI, via Bash) to verify the final configuration.
 #
 # skills: the five helper skills above are non-user-invocable (user-invocable: false)
 # and are PRELOADED into this agent's context at startup per the Claude Code
@@ -93,7 +93,7 @@ fi
 
 If `$SETTINGS` does not exist, the user is doing a fresh install — proceed to Step 1.
 
-If it DOES exist, also call `mcp__llm-externalizer__discover` so you can show the user a table of every profile already configured (name, mode, api preset, model, service health). Ask one explicit question:
+If it DOES exist, also run `llm-ext discover` so you can show the user a table of every profile already configured (name, mode, api preset, model, service health). Ask one explicit question:
 
 > "I see you already have these profiles. Are you (a) adding a NEW profile, (b) fixing an EXISTING profile, or (c) replacing the active default?"
 
@@ -468,7 +468,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup/build-snippet.py" \
 
 (For the OpenRouter fallback path, pass `--mode remote` and `--runner` per the `/llm-externalizer:llm-externalizer-configure` flow — but in practice that command handles its own snippet, so the wizard's role there is just to hand off.)
 
-**CRITICAL: NEVER write to `~/.llm-externalizer/settings.yaml` yourself.** Per the user-only configuration policy (`skills/llm-externalizer-config/SKILL.md`), profile changes are USER-ONLY. The `set_settings` MCP tool is disabled by design.
+**CRITICAL: NEVER write to `~/.llm-externalizer/settings.yaml` yourself.** Per the user-only configuration policy (`skills/llm-externalizer-config/SKILL.md`), profile changes are USER-ONLY. The `set-settings` CLI command is disabled by design.
 
 Read back `$CLAUDE_PLUGIN_DATA/setup/profile.yaml` and print it to the user inside a fenced ` ```yaml ` block, then the exact paste-here instructions:
 
@@ -483,18 +483,17 @@ Read back `$CLAUDE_PLUGIN_DATA/setup/profile.yaml` and print it to the user insi
 4. If you want this profile to be the default, set `active: <new-profile-name>`
    at the top of the file.
 5. Save the file.
-6. Call mcp__llm-externalizer__reset (or restart Claude Code) to reload
-   settings.
+6. Run `llm-ext reset` to purge caches and reload settings.
 ```
 
 ### Step 7 — Verify
 
-After the user confirms they have pasted and saved, call `mcp__llm-externalizer__discover` and report: active profile name, mode, api preset, model, auth status, service health. If `discover` returns the expected profile with `service_health: ok`, output one line: `Setup complete — try /llm-externalizer:llm-externalizer-discover any time to re-check health.`
+After the user confirms they have pasted and saved, run `llm-ext discover` and report: active profile name, mode, api preset, model, auth status, service health. If `discover` returns the expected profile with `service_health: ok`, output one line: `Setup complete — try /llm-externalizer:llm-externalizer-discover any time to re-check health.`
 
 If `discover` does NOT see the new profile, walk the user through diagnostics:
 - Did the file get saved with valid YAML? (`python3 -c "import yaml, os; yaml.safe_load(open(os.path.expanduser('~/.llm-externalizer/settings.yaml')))"`)
 - Is `active:` set correctly?
-- Did `reset` actually run (look for the reset confirmation)?
+- Did `llm-ext reset` actually run (look for the reset confirmation)?
 
 ## Recovery & corner cases
 
@@ -533,7 +532,7 @@ Both Ollama and `hf` handle resumes natively — DO NOT manually `rm` partial fi
 
 - Write to `~/.llm-externalizer/settings.yaml`. Generate the snippet, hand it to the user.
 - Auto-execute installer commands without explicit user confirmation.
-- Call `mcp__llm-externalizer__set_settings` or `mcp__llm-externalizer__change_model` (both disabled by design — they would fail anyway).
+- Call `llm-ext set-settings` or `llm-ext change-model` (both disabled by design — they would fail anyway).
 - Promise that a model will work — only TESTING confirms that. Always run Step 5.
 - Skip Step 5 even when the user is impatient. A 30-second test prevents hours of failed scans.
 - Auto-download a model > 30 GB without explicit consent (it is the user's bandwidth).

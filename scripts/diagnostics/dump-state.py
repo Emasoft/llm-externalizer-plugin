@@ -5,7 +5,7 @@ Output is a single Markdown report on stdout (no tarball — easier to paste
 into GitHub issues). Every value is run through a redaction pass that
 matches the plugin's own SECRET_PATTERNS (kept in sync via a comment block;
 this script intentionally re-implements a smaller subset rather than
-depending on the MCP server's TypeScript regexes).
+depending on the CLI's TypeScript regexes).
 
 Usage:
   scripts/diagnostics/dump-state.py           # stdout
@@ -23,7 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Redaction patterns. Mirror the MCP server's SECRET_PATTERNS approximately
+# Redaction patterns. Mirror the CLI's SECRET_PATTERNS approximately
 # (full sync is too brittle — these cover the same OAuth / vendor key shapes
 # plus the wildcard *_KEY / *_TOKEN / *_SECRET / *_PASSWORD pattern that
 # v9.9.0 added).
@@ -34,7 +34,7 @@ _REDACTION_PATTERNS = [
     re.compile(r"sk-or-v1-[A-Za-z0-9_\-]{16,}"),
     # Generic Bearer <token>
     re.compile(r"Bearer\s+[A-Za-z0-9_\-]{8,}"),
-    # ENV name = value (mirror of SECRET_PATTERNS in mcp-server/src/index.ts)
+    # ENV name = value (mirror of SECRET_PATTERNS in mcp-server/src/scan-pipeline.ts)
     re.compile(
         r"(?im)^\s*((?:[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|"
         r"_APIKEY|_API_KEY|_AUTH)|PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|"
@@ -102,7 +102,7 @@ def collect() -> str:
             except json.JSONDecodeError:
                 lines.append("- plugin.json: PARSE ERROR")
 
-    lines.append(section("MCP server"))
+    lines.append(section("CLI build"))
     lines.append(f"- Last git commit: {cmd_output(['git', '-C', plugin_root, 'log', '-1', '--format=%H %s'])}" if plugin_root not in ("(unset)", "") else "- (plugin root unset)")
 
     lines.append(section("Active profile (settings.yaml)"))

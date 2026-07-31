@@ -1,6 +1,6 @@
 # LLM Externalizer — Agent Usage Reference
 
-The full operational reference for the `llm-externalizer` MCP tools. The
+The full operational reference for the `llm-externalizer` CLI commands. The
 always-loaded rule (`rules/use-llm-externalizer.md`, auto-installed to
 `~/.claude/rules/`) is deliberately lean — it carries only the trigger, the
 when-to/when-not-to-use decision, and the four gotchas. **This document holds
@@ -9,10 +9,10 @@ context: the per-tool reference tables, the batching model, the full
 `answer_mode` explanation, the profile/auth/settings workflow, usage patterns,
 safety features, and constraints.
 
-Per-tool parameter schemas also live in each tool's own MCP description (loaded
-on demand when the tool is called) and in the plugin's skills and slash
-commands. This doc is the single human-readable companion that gathers them in
-one place.
+Every command is a subcommand of one binary, `bin/llm-ext`. Per-command
+parameter schemas live in `llm-ext <command> --help`, generated from the same
+catalog the commands run from, and in the plugin's skills and slash commands.
+This doc is the single human-readable companion that gathers them in one place.
 
 ---
 
@@ -35,13 +35,11 @@ Every tool returns **only the file path** — never inline content. Use Read to
 access the output when needed. The folder is inside the project sandbox so all
 files are reachable by Claude Code's Read/Edit tools.
 
-Pass an absolute `output_dir` only to override the default:
+Pass an absolute `--output_dir` only to override the default:
 
-```json
-{"tool": "code_task",
- "output_dir": "/abs/custom/path",
- "instructions": "...",
- "input_files_paths": "..."}
+```bash
+llm-ext code-task --output_dir /abs/custom/path \
+  --instructions "..." --input_files_paths /abs/path/to/file.ts
 ```
 
 ---
@@ -89,14 +87,14 @@ are grouped into LLM requests. See [answer_mode](#answer_mode) below.
 | `check_against_specs` | Compare source files against specification files | 2 (merged) |
 | `search_existing_implementations` | Scan codebase (same language) for existing implementations of a described feature. FFD-batched, ensemble-backed, exhaustive per-file YES/NO output with symbol + lines. Use for PR duplicate-check reviews and "is this already done?" audits. | 2 (merged) |
 | `security_scan` | **Injection-hardened** security triage for suspected-malicious code. Bespoke (NOT mass_scout): nonce-delimited untrusted-data envelope, hardened system prompt, strict json_schema, in-band injection pre-scan, fail-safe-to-`uncertain` on every error/deviation, secret redaction before egress. Input `targets[]` (snippet \| file_path+line+context_lines \| path_glob) + `category_rubrics`. Emits per-item `{verdict: threat\|not_threat\|uncertain, confidence, reason, injection_observed}` to a JSON+md report; returns only path(s)+counter. Env `$OPENROUTER_API_KEY` (absent ⇒ all `uncertain`). | report (JSON+md) |
-| `cluster_synonyms` | Cluster SENTENCES / short labels by **full-sentence meaning equivalence** (NOT word-level synonyms). File-in, file-out, ZERO orchestrator tokens — the whole embedding-batch → group → cross-cluster-verify → canonicalise loop runs in the server. For taxonomy / ontology cleanup / label canonicalisation over 10k–1M items. Input `{input_file (JSONL of {id,sentence}), output_dir, embeddings_file?, policy_file?, resume_from?}`. Emits `clusters.jsonl` + `clusters_summary.json` + `stats.json` + `checkpoint.sqlite`; resumable + budget-capped; backend from the active profile. CLI: `bin/llm-externalizer cluster-synonyms --input-json '<json>'`. | files (4 outputs) |
+| `cluster_synonyms` | Cluster SENTENCES / short labels by **full-sentence meaning equivalence** (NOT word-level synonyms). File-in, file-out, ZERO orchestrator tokens — the whole embedding-batch → group → cross-cluster-verify → canonicalise loop runs in the server. For taxonomy / ontology cleanup / label canonicalisation over 10k–1M items. Input `{input_file (JSONL of {id,sentence}), output_dir, embeddings_file?, policy_file?, resume_from?}`. Emits `clusters.jsonl` + `clusters_summary.json` + `stats.json` + `checkpoint.sqlite`; resumable + budget-capped; backend from the active profile. CLI: `llm-ext cluster-synonyms --input_file <path> --output_dir <dir>`. | files (4 outputs) |
 
 ### Utility tools
 | Tool | Purpose |
 |------|---------|
 | `discover` | Check service health, auth token status, context window, concurrency mode, profiles |
 | `reset` | Full soft-restart — waits for running requests, reloads settings.yaml from disk, clears caches, resets counters. Call after you hand-edit settings.yaml. |
-| `get_settings` | **Read-only.** Copies settings.yaml to the output dir and returns the copy's path for inspection. The MCP cannot write settings — see [Editing profiles](#editing-profiles-user-only). |
+| `get_settings` | **Read-only.** Copies settings.yaml to the output dir and returns the copy's path for inspection. `llm-ext` cannot write settings — see [Editing profiles](#editing-profiles-user-only). |
 | `or_model_info` / `or_model_info_table` / `or_model_info_json` | Query OpenRouter for a model's supported params, pricing, latency, uptime — three output formats |
 
 > **There is no `set_settings` or `change_model` tool, and no profile-mutating CLI subcommand.** Model and profile configuration is **user-only** by design — edit `~/.llm-externalizer/settings.yaml` by hand, then call `reset`. See [Editing profiles](#editing-profiles-user-only).
@@ -104,12 +102,19 @@ are grouped into LLM requests. See [answer_mode](#answer_mode) below.
 ### Model-qualification tools (per-tool model selection, TRDD-f45eeaa0)
 | Tool | Purpose |
 |------|---------|
-| `assess_model` | Assess ONE OpenRouter model against EVERY LLM tool's per-tool REQUIREMENTS (cost / context / output / structured-output / reasoning). FREE — no LLM call, no token cost; just a public catalog fetch (no API key). Reports per-tool `OK`/`NO` + which qualifying tools also need a benchmark pass. CLI: `llm-ext-benchmark --assess-model <id>`. |
-| `check_model_health` | Self-check the CONFIGURED model(s) of the ACTIVE profile (main / second / third + every `tool_models` entry). FREE — no LLM call, no token cost; one public catalog fetch (no API key). Reports presence (removed/deprecated = CRITICAL), cost drift vs a seeded baseline at `~/.llm-externalizer/model-baseline.json` (WARN), and per-served-tool requirements regression (WARN). Advisory only — never writes settings. Writes a report to `reports/model-health/`. CLI: `llm-ext-benchmark --check-health`. |
-| `discover_new_models` | Autodiscover models that newly appeared in the OpenRouter catalog since the last run. FREE — no LLM call, no token cost; one public catalog fetch (no API key). Diffs the live catalog against a seeded snapshot at `~/.llm-externalizer/catalog-snapshot.json` and assesses each new id against every tool's requirements. Advisory only — never writes settings. Writes a report to `reports/model-arrivals/`. CLI: `llm-ext-benchmark --new-arrivals [--qualifying-only]`. |
-| `security_triage_benchmark` | Qualify model(s) for `security_scan` against a labeled golden dataset, scored via the REAL judge pipeline; recommends the best SAME-OR-CHEAPER passer (never a pricier model). Cached per-model-per-day. Env `$OPENROUTER_API_KEY`. CLI: `llm-ext-benchmark --security-triage [--model <id>]`. |
-| `search_existing_benchmark` | Qualify model(s) for `search_existing_implementations` against a labeled golden-fixture codebase, scored DETERMINISTICALLY (precision/recall/F1 over the known duplicate locations — NO LLM judge) by driving the REAL search-existing pipeline in-process; recommends the best SAME-OR-CHEAPER passer (never a pricier model). Cached per-model-per-day. Env `$OPENROUTER_API_KEY`. CLI: `llm-ext-benchmark --search-existing [<id>...] [--force]`. |
-| `check_tool_replacements` | READ-ONLY advisory auto-replacement planner: for every tool that HAS a per-tool benchmark (`security_scan`, `search_existing_implementations`), aggregate the durable model-health ledger for that tool's incumbent and, when degraded (or with `force`), run that tool's benchmark to recommend the best SAME-OR-CHEAPER replacement. On a healthy/empty ledger NO benchmark runs (zero false positives). Advisory ONLY — writes a report to `reports/auto-replace/` + returns its path; NEVER writes settings (the MCP surface cannot self-rewrite its config). Adopt via the CLI writer `llm-ext-benchmark --auto-replace --apply` (the sole writer path; `--apply` requires `--auto-replace`). |
+| `assess_model` | Assess ONE OpenRouter model against EVERY LLM tool's per-tool REQUIREMENTS (cost / context / output / structured-output / reasoning). FREE — no LLM call, no token cost; just a public catalog fetch (no API key). Reports per-tool `OK`/`NO` + which qualifying tools also need a benchmark pass. CLI: `llm-ext assess-model --model <id>`. |
+| `check_model_health` | Self-check the CONFIGURED model(s) of the ACTIVE profile (main / second / third + every `tool_models` entry). FREE — no LLM call, no token cost; one public catalog fetch (no API key). Reports presence (removed/deprecated = CRITICAL), cost drift vs a seeded baseline at `~/.llm-externalizer/model-baseline.json` (WARN), and per-served-tool requirements regression (WARN). Advisory only — never writes settings. Writes a report to `reports/model-health/`. CLI: `llm-ext check-model-health`. |
+| `discover_new_models` | Autodiscover models that newly appeared in the OpenRouter catalog since the last run. FREE — no LLM call, no token cost; one public catalog fetch (no API key). Diffs the live catalog against a seeded snapshot at `~/.llm-externalizer/catalog-snapshot.json` and assesses each new id against every tool's requirements. Advisory only — never writes settings. Writes a report to `reports/model-arrivals/`. CLI: `llm-ext discover-new-models [--qualifying_only]`. |
+| `security_triage_benchmark` | Qualify model(s) for `security_scan` against a labeled golden dataset, scored via the REAL judge pipeline; recommends the best SAME-OR-CHEAPER passer (never a pricier model). Cached per-model-per-day. Env `$OPENROUTER_API_KEY`. CLI: `llm-ext security-triage-benchmark [--models <id>] [--force]`. |
+| `search_existing_benchmark` | Qualify model(s) for `search_existing_implementations` against a labeled golden-fixture codebase, scored DETERMINISTICALLY (precision/recall/F1 over the known duplicate locations — NO LLM judge) by driving the REAL search-existing pipeline in-process; recommends the best SAME-OR-CHEAPER passer (never a pricier model). Cached per-model-per-day. Env `$OPENROUTER_API_KEY`. CLI: `llm-ext search-existing-benchmark [--models <id>...] [--force]`. |
+
+> Note: `bin/llm-ext-benchmark` is a **separate, unrelated** binary — a
+> TypeScript-AST classification benchmark for scoring OpenRouter candidates
+> against `code_task`'s system prompt (`llm-ext-benchmark --help` for its own
+> flags). It is not the CLI surface for `assess_model` / `check_model_health` /
+> `discover_new_models` / the two per-tool benchmarks above — those are plain
+> `llm-ext <command>` subcommands.
+| `check_tool_replacements` | READ-ONLY advisory auto-replacement planner: for every tool that HAS a per-tool benchmark (`security_scan`, `search_existing_implementations`), aggregate the durable model-health ledger for that tool's incumbent and, when degraded (or with `force`), run that tool's benchmark to recommend the best SAME-OR-CHEAPER replacement. On a healthy/empty ledger NO benchmark runs (zero false positives). Advisory ONLY — writes a report to `reports/auto-replace/` + returns its path; NEVER writes settings (`llm-ext` cannot self-rewrite its config). Adopt by hand-editing `~/.llm-externalizer/settings.yaml` with the recommended model id, then `llm-ext reset` — configuration stays user-only. |
 
 ### Per-tool model selection (`tool_models`)
 
@@ -156,12 +161,12 @@ Output per file: one line of `NO` or `YES symbol=<name> lines=<a-b>`. EXHAUSTIVE
 and keep only the PR's new one. Default `max_files` is 10000 (higher than
 `scan_folder`'s 2500).
 
-```json
-{"tool": "search_existing_implementations",
- "feature_description": "async retry with exponential backoff and jitter",
- "folder_path": "/path/to/codebase/src",
- "source_files": ["/path/to/pr/retry.py"],
- "diff_path": "/tmp/pr.patch"}
+```bash
+llm-ext search-existing-implementations \
+  --feature_description "async retry with exponential backoff and jitter" \
+  --folder_path /path/to/codebase/src \
+  --source_files /path/to/pr/retry.py \
+  --diff_path /tmp/pr.patch
 ```
 
 ### Plugin-shipped agents
@@ -186,17 +191,18 @@ variant is chosen:
 All six agents are fresh-spawn (zero parent-conversation context) and load
 CLAUDE.md the same way `claude -p` does.
 
-### CLI — `llm-externalizer search-existing`
+### CLI — `llm-ext search-existing-implementations`
 
 Shell entry point for the `search_existing_implementations` tool. Use for
-scripting, CI, or quick terminal checks without spawning a subagent. Supports
-`--base <ref>` to auto-generate the PR diff via `git diff <ref>...HEAD` (with
-auto-detection of origin/HEAD → main → master when omitted), and `--diff <path>`
-as an escape hatch for pre-made patches.
+scripting, CI, or quick terminal checks without spawning a subagent.
+`--diff_path` takes a pre-made unified-diff file (generate it yourself with
+`git diff <ref>...HEAD > /tmp/pr.patch` — the CLI does not auto-generate one).
 
 ```bash
-llm-externalizer search-existing "async retry with exponential backoff" \
-  /path/to/pr/retry.py --in /path/to/codebase
+llm-ext search-existing-implementations \
+  --feature_description "async retry with exponential backoff and jitter" \
+  --folder_path /path/to/codebase \
+  --source_files /path/to/pr/retry.py
 ```
 
 ---
@@ -227,11 +233,13 @@ All local backends must support structured output (`response_format:
 json_schema`). Only OpenRouter is supported for remote.
 
 ### Auth — auto-detected from environment
-Auth is **automatic** when env vars are set. The server resolves
-`$ENV_VAR_NAME` references at startup and logs whether the token was found. **Do
-NOT report auth errors if `discover` shows the token is resolved.** If `discover`
-shows `$LM_API_TOKEN (NOT SET)`, the env var is missing from the MCP server's
-process environment — check `server.json` env configuration.
+Auth is **automatic** when env vars are set. Each `llm-ext` invocation resolves
+`$ENV_VAR_NAME` references from its own process environment at call time and
+logs whether the token was found. **Do NOT report auth errors if `discover`
+shows the token is resolved.** If `discover` shows `$LM_API_TOKEN (NOT SET)`,
+the env var is missing from the environment the CLI runs in — check your shell
+rc / the environment the calling process (e.g. Claude Code's Bash tool) starts
+`llm-ext` with.
 
 | Env var | Used by |
 |---------|---------|
@@ -245,33 +253,25 @@ Profile fields `api_key` / `api_token` can override the default env var with
 ### Auth — plugin `userConfig` (keychain)
 The plugin declares `userConfig.openrouter_api_key` with `sensitive: true`. When
 set via `/plugin configure llm-externalizer` or the plugin install prompt,
-Claude Code stores the value in the system keychain and exports it to the MCP
-server as `CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY`. The server's
+Claude Code stores the value in the system keychain and exports it to every
+`llm-ext` invocation as `CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY`. `llm-ext`'s
 `resolveEnvValue()` transparently maps this into the canonical
 `OPENROUTER_API_KEY` name, so all existing profile refs (`$OPENROUTER_API_KEY`)
 work unchanged. userConfig wins over shell env when both are set; if only the
-shell env is set, the plugin still works (backwards compatible).
-
-### CLI profile management (inspection only)
-```bash
-npx llm-externalizer profile list      # works — lists profiles
-# add | select | edit | remove | rename are DISABLED by design (user-only config)
-```
-The mutating subcommands error out and point you at the manual-edit workflow
-below. Only `list` is active.
+shell env is set, the CLI still works (backwards compatible).
 
 ### Editing profiles (user-only)
 
-**Model and profile configuration is user-only by design.** There is no
-`set_settings` and no `change_model` MCP tool; the CLI `profile
-add/select/edit/remove/rename` subcommands are disabled. The settings file
-on disk (`~/.llm-externalizer/settings.yaml`, YAML — NOT JSON) is the single
-source of truth, and you edit it by hand. `get_settings` only gives you a
-read-only copy to look at.
+**Model and profile configuration is user-only by design.** `llm-ext` ships no
+`set-settings`, `change-model`, or `profile` (add/select/edit/remove/rename)
+command at all — there is nothing to disable. The settings file on disk
+(`~/.llm-externalizer/settings.yaml`, YAML — NOT JSON) is the single source of
+truth, and you edit it by hand. `get-settings` only gives you a read-only copy
+to look at.
 
 **Workflow:**
 
-1. **Inspect** — call `get_settings` for a read-only copy's path, or open
+1. **Inspect** — run `llm-ext get-settings` for a read-only copy's path, or open
    `~/.llm-externalizer/settings.yaml` directly. (Back it up first: a YAML
    indent typo breaks *every* profile, not just the one you changed.)
 2. **Edit** the real file. Two top-level keys: `active` (string) and `profiles`
@@ -296,8 +296,9 @@ read-only copy to look at.
        # tool_models: { security_scan: "qwen/qwen-2.5-7b-instruct" }  # optional per-tool routing
    ```
 3. **Save** the file.
-4. **Reload** — call the `reset` MCP tool (or restart Claude Code).
-5. **Verify** with `discover`.
+4. **Reload** — nothing to restart: the next `llm-ext` invocation re-reads
+   `settings.yaml` from disk. Run `llm-ext reset` only to also purge caches.
+5. **Verify** with `llm-ext discover`.
 
 **Change model** — edit the `model:` field. **Switch active profile** — edit the
 top-level `active:` line. **Remove a profile** — delete its block (you cannot
@@ -382,11 +383,11 @@ Use `---GROUP:id---` / `---/GROUP:id---` markers in `input_files_paths` to
 process groups in complete isolation. Each group produces its own separate
 report file with the group ID in the filename.
 
-```json
-{"tool": "code_task", "answer_mode": 0, "max_retries": 3,
- "instructions": "Find bugs in this auth module",
- "input_files_paths": ["---GROUP:auth---", "/path/auth.ts", "/path/auth-utils.ts", "---/GROUP:auth---",
-                        "---GROUP:api---", "/path/api.ts", "/path/routes.ts", "---/GROUP:api---"]}
+```bash
+llm-ext code-task --answer_mode 0 --max_retries 3 \
+  --instructions "Find bugs in this auth module" \
+  --input_files_paths '---GROUP:auth---' /path/auth.ts /path/auth-utils.ts '---/GROUP:auth---' \
+    '---GROUP:api---' /path/api.ts /path/routes.ts '---/GROUP:api---'
 ```
 
 Output: one line per group — `[group:auth] /path/to/report_group-auth_....md`.
@@ -448,8 +449,8 @@ Each mode writes `.md` files to `reports/llm-externalizer/`.
 
 **answer_mode : 0 — ONE REPORT PER FILE.** One `.md` report is saved for every
 input file. Files are still batched into LLM requests of typically 1–5 files
-each; each LLM response contains structured per-file sections that the MCP
-server splits apart and persists as individual reports. Output is a list of
+each; each LLM response contains structured per-file sections that `llm-ext`
+splits apart and persists as individual reports. Output is a list of
 `<input_file_path> -> <report_path>` pairs. Use when downstream consumers
 (agents, tools, CI) pick up one file's review without scanning an aggregate
 (per-file lint/audit pipelines, fan-out workflows). Trivially routed; supports
@@ -484,85 +485,85 @@ report.
 ## Usage patterns
 
 ### Scan a codebase for issues
-```json
-{"tool": "scan_folder", "folder_path": "/path/to/src", "extensions": [".ts", ".py"],
- "instructions": "Find security vulnerabilities. This is a Node.js REST API using Express."}
+```bash
+llm-ext scan-folder --folder_path /path/to/src --extensions .ts .py \
+  --instructions "Find security vulnerabilities. This is a Node.js REST API using Express."
 ```
 
 ### Analyze multiple files together
-```json
-{"tool": "chat", "instructions": "Compare these configs and list differences",
- "input_files_paths": ["/path/a.yaml", "/path/b.yaml"]}
+```bash
+llm-ext chat --instructions "Compare these configs and list differences" \
+  --input_files_paths /path/a.yaml /path/b.yaml
 ```
 
 ### Apply same check to each file independently
-```json
-{"tool": "code_task", "answer_mode": 0, "max_retries": 3,
- "instructions": "Find all TODO comments and classify by urgency",
- "input_files_paths": ["/path/a.ts", "/path/b.ts", "/path/c.ts"]}
+```bash
+llm-ext code-task --answer_mode 0 --max_retries 3 \
+  --instructions "Find all TODO comments and classify by urgency" \
+  --input_files_paths /path/a.ts /path/b.ts /path/c.ts
 ```
 
 ### Search codebase for existing implementations of a feature
-```json
-{"tool": "search_existing_implementations",
- "feature_description": "rate-limited HTTP client with retry backoff",
- "folder_path": "/path/to/codebase",
- "source_files": ["/path/to/pr/http_client.py"]}
+```bash
+llm-ext search-existing-implementations \
+  --feature_description "rate-limited HTTP client with retry backoff" \
+  --folder_path /path/to/codebase \
+  --source_files /path/to/pr/http_client.py
 ```
 
 ### Compare two file versions
-```json
-{"tool": "compare_files", "input_files_paths": ["/path/old.ts", "/path/new.ts"],
- "instructions": "Focus on API breaking changes"}
+```bash
+llm-ext compare-files --input_files_paths /path/old.ts /path/new.ts \
+  --instructions "Focus on API breaking changes"
 ```
 
 ### Check for broken code references after refactoring
-```json
-{"tool": "check_references", "input_files_paths": "/path/to/file.ts",
- "instructions": "This is a TypeScript MCP server. Check all symbol references are valid."}
+```bash
+llm-ext check-references --input_files_paths /path/to/file.ts \
+  --instructions "This is a TypeScript backend service. Check all symbol references are valid."
 ```
 
 ### Check for broken file imports
-```json
-{"tool": "check_imports", "input_files_paths": "/path/to/file.ts"}
+```bash
+llm-ext check-imports --input_files_paths /path/to/file.ts
 ```
 
 ### Reuse instructions across operations
-```json
-{"tool": "code_task", "answer_mode": 0, "max_retries": 3,
- "instructions_files_paths": "/path/to/review-rules.md",
- "input_files_paths": ["/path/a.ts", "/path/b.ts"]}
+```bash
+llm-ext code-task --answer_mode 0 --max_retries 3 \
+  --instructions_files_paths /path/to/review-rules.md \
+  --input_files_paths /path/a.ts /path/b.ts
 ```
 
 ### Simple task
-```json
-{"tool": "chat", "instructions": "What is the main export of this module?",
- "input_files_paths": "/path/to/file.ts"}
+```bash
+llm-ext chat --instructions "What is the main export of this module?" \
+  --input_files_paths /path/to/file.ts
 ```
 
 ### Quick factual answer
-```json
-{"tool": "chat", "instructions": "List the function names exported from this module. One per line.",
- "input_files_paths": "/path/to/file.ts"}
+```bash
+llm-ext chat --instructions "List the function names exported from this module. One per line." \
+  --input_files_paths /path/to/file.ts
 ```
 
 ### Compare source against specification
-```json
-{"tool": "check_against_specs", "instructions": "Check compliance with the API contract",
- "input_files_paths": "/path/to/impl.ts", "instructions_files_paths": "/path/to/spec.md"}
+```bash
+llm-ext check-against-specs --instructions "Check compliance with the API contract" \
+  --input_files_paths /path/to/impl.ts --instructions_files_paths /path/to/spec.md
 ```
 
 ### Code review with persona
-```json
-{"tool": "chat", "instructions": "Review this Python CLI script for error handling gaps.",
- "input_files_paths": "/path/to/cli.py", "system": "Senior Python CLI developer"}
+```bash
+llm-ext chat --instructions "Review this Python CLI script for error handling gaps." \
+  --input_files_paths /path/to/cli.py --system "Senior Python CLI developer"
 ```
 
 ### Scan folder with gitignore + excluded dirs
-```json
-{"tool": "scan_folder", "folder_path": "/path/to/project",
- "extensions": [".py"], "use_gitignore": true, "exclude_dirs": ["migrations", "fixtures"],
- "instructions": "Find security vulnerabilities. This is a Django REST API."}
+```bash
+llm-ext scan-folder --folder_path /path/to/project --extensions .py \
+  --use_gitignore true --exclude_dirs migrations fixtures \
+  --instructions "Find security vulnerabilities. This is a Django REST API."
 ```
 
 ---
@@ -585,9 +586,9 @@ report.
 
 ## Global usage history (`~/.llm-externalizer/history.log`)
 
-Independent of the per-call `.md` reports, the server keeps a flat, append-only,
+Independent of the per-call `.md` reports, `llm-ext` keeps a flat, append-only,
 human-readable **usage history**: one line per individual LLM web request, from
-any MCP tool **or** the `llm-externalizer` CLI. File:
+any `llm-ext` command. File:
 `~/.llm-externalizer/history.log` (honors `LLM_EXT_CONFIG_DIR`; created on first
 write, never truncated). One line per *web request* — a tool that makes N
 backend calls writes N lines; a tool that makes none writes nothing. It is a

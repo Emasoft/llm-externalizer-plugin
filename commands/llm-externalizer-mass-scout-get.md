@@ -4,7 +4,7 @@ description: |-
   Print one file row from the mass-scouting registry by short_id.
   Optionally include the result row for a specific job_id.
 allowed-tools:
-  - mcp__llm-externalizer__mass_scout_get
+  - Bash
 argument-hint: "--db <path> --short-id <n> [--job-id <id>]"
 effort: low
 ---
@@ -35,7 +35,7 @@ format, frontmatter flag, created_at). When `--job-id` is set, a nested
 ## Example
 
 ```
-/llm-externalizer:llm-externalizer-mass-scout-get --db /tmp/scout.db --short-id 42 --job-id job-2026-05-24
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout-get --db-path /tmp/scout.db --short-id 42 --job-id job-2026-05-24
 ```
 
 Prints the full file-metadata row for `short_id=42` plus the nested

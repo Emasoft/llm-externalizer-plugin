@@ -3,14 +3,14 @@ name: llm-externalizer-cluster-synonyms
 description: |-
   Cluster SENTENCES (or short labels) by full-sentence meaning equivalence —
   file-in, file-out, ZERO orchestrator tokens. The whole batch+verify+canonicalise
-  loop runs inside the MCP server; you get back only the output paths. NOT a
+  loop runs inside the CLI; you get back only the output paths. NOT a
   word-level synonym lookup — the unit of comparison is the full sentence/label.
   Built for taxonomy work, ontology cleanup, and label canonicalisation over large
   term sets (10k–1M items). Resumable, budget-capped, backend-agnostic. Trigger
   with "cluster synonyms", "dedupe these labels by meaning", "canonicalise this
   taxonomy", or "merge equivalent-meaning sentences".
 allowed-tools:
-  - mcp__llm-externalizer__cluster_synonyms
+  - Bash
 argument-hint: "input_file=<abs JSONL path> output_dir=<abs path> [embeddings_file=<path>] [policy_file=<path>] [resume_from=<checkpoint.sqlite>]"
 effort: high
 ---
@@ -20,9 +20,21 @@ effort: high
 Aggregate synonymous / equivalent-meaning items across a large term set. The
 unit of comparison is the **full sentence/label**, not the word — so "cancel a
 subscription" and "stop my plan" can land in the same cluster while a word-level
-synonym table would miss it. Everything runs inside the MCP server: you pass a
+synonym table would miss it. Everything runs inside the CLI process: you pass a
 JSONL file in and get four output files back, spending no orchestrator tokens on
 the loop itself.
+
+Run:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext cluster-synonyms \
+  --input_file <abs.jsonl> --output_dir <abs dir> \
+  [--embeddings_file <path>] [--policy_file <path>] [--resume_from <checkpoint.sqlite>]
+```
+
+This can run for tens of minutes on large corpora — run it with an explicit
+long `timeout` (e.g. `timeout 1200 ...`) or `run_in_background: true`; there is
+no keepalive to fall back on.
 
 ## Pipeline
 
@@ -75,19 +87,6 @@ Return the four `outputs` paths to the user — they are the deliverable.
 `size`, `canonical`, and member `{id, sentence}` rows); `clusters.jsonl` is the
 per-item assignment stream; `stats.json` records the run metrics; resume from
 `checkpoint.sqlite`.
-
-## CLI equivalent
-
-```
-bin/llm-externalizer cluster-synonyms --input-json '<json>'
-```
-
-The `--input-json` value is the same object documented in the Inputs table
-(e.g. `{"input_file":"/abs/in.jsonl","output_dir":"/abs/out"}`). An explicit
-`--output-dir <path>` flag overrides the `output_dir` embedded in the JSON.
-`--timeout-hours <n>` caps wall time (default 4h; 0 disables). The CLI spawns
-the MCP server and calls this same tool, so the clustering core
-(`runClusterSynonyms`) and LLM transport are identical to the MCP path.
 
 ## Environment
 

@@ -11,7 +11,7 @@ description: |-
   model for search_existing_implementations", or "is model X good enough for
   duplicate detection".
 allowed-tools:
-  - mcp__llm-externalizer__search_existing_benchmark
+  - Bash
 argument-hint: "[models=<id,[id...]>] [qualifying_top_n=<N>] [force] [output_dir=<abs path>]"
 effort: high
 ---
@@ -113,22 +113,18 @@ config.
 
 ## How to assess a new model
 
-```
-/llm-externalizer:llm-externalizer-search-existing-benchmark models=vendor/new-model
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext search-existing-benchmark --models vendor/new-model
 ```
 
 Read the report's per-case breakdown to see exactly which fixture cases the model
 got right, where it under-flagged (missed a real duplicate → false negative), and
 where it over-flagged (claimed a non-duplicate → false positive). To re-qualify
-the whole pool after a model shake-up, run with no arguments.
+the whole pool after a model shake-up, run with no `--models` flag.
 
-## CLI equivalent
-
-```
-llm-ext-benchmark --search-existing                 # auto-discover + recommend
-llm-ext-benchmark --search-existing <id> [<id>...]  # assess specific models
-llm-ext-benchmark --search-existing --force         # ignore the per-day cache
-```
+Other flags: `--qualifying_top_n <N>`, `--force` (ignore the per-day cache),
+`--output_dir <path>`, `--allow_paid_models_tests`. Benchmark runs can take a
+long time — run with an explicit long `timeout` or `run_in_background: true`.
 
 ## Environment
 

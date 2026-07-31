@@ -5,7 +5,7 @@ description: |-
   regex (for trivial queries — emails, urls, ipv4, etc.), FTS5 keyword
   search, and structured JSON1 path filters. Phase 5 of the pipeline.
 allowed-tools:
-  - mcp__llm-externalizer__mass_scout_search
+  - Bash
 argument-hint: "--db <path> --job-id <id> [--query \"...\"] [--regex \"...\"] [--filter '$.x:=:val'] [--json]"
 effort: low
 ---
@@ -75,8 +75,8 @@ context window) for regex hits.
 
 ```
 # Regex bypass — pull every email from a scouted job (never hits the LLM)
-/llm-externalizer:llm-externalizer-mass-scout-search --db ./scout.sqlite --job-id audit-1 --regex "all emails"
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout-search --db-path ./scout.sqlite --job-id audit-1 --regex "all emails"
 
 # FTS5 keyword search narrowed by a structured predicate, as JSON
-/llm-externalizer:llm-externalizer-mass-scout-search --db ./scout.sqlite --job-id audit-1 --query "retry backoff" --filter '$.is_async:=:true' --json
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout-search --db-path ./scout.sqlite --job-id audit-1 --query "retry backoff" --filter '$.is_async:=:true' --json
 ```

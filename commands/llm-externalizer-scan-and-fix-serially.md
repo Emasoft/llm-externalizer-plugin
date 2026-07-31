@@ -2,9 +2,6 @@
 name: llm-externalizer-scan-and-fix-serially
 description: Scan a codebase, aggregate findings into one canonical bug list, then fix each bug serially with a sonnet- or opus-model serial-fixer subagent. Use when fixes mutate shared state or bug order matters.
 allowed-tools:
-  - mcp__llm-externalizer__discover
-  - mcp__llm-externalizer__scan_folder
-  - mcp__llm-externalizer__code_task
   - Bash
   - Task
 argument-hint: "[target] [--file-list path] [--instructions path] [--specs path] [--free] [--no-secrets] [--text]"
@@ -29,8 +26,8 @@ The LLM used by this command sees only **1–5 files per request** (FFD bin-pack
 
 **If you need cross-file reference validation, DO NOT use the default rubric. Use one of these two tools instead:**
 
-1. **`mcp__llm-externalizer__check_against_specs`** — provide an explicit API surface / spec file; the tool compares each source file against the spec. Every batch sees its source + the spec, so each reference is validated against an authoritative list instead of against "whatever the LLM thinks might exist". Pass the spec to this command via `--specs <path>` for the same effect.
-2. **`mcp__llm-externalizer__search_existing_implementations`** (exposed as `/llm-externalizer:llm-externalizer-search-existing-implementations`) — for semantic duplicate hunts ("is feature X already implemented somewhere?"). Each file is compared against a REFERENCE (description + optional source files + optional diff), NOT against every other file. Purpose-built for cross-codebase questions that an AST / schema check cannot answer.
+1. **`${CLAUDE_PLUGIN_ROOT}/bin/llm-ext check-against-specs`** — provide an explicit API surface / spec file; the tool compares each source file against the spec. Every batch sees its source + the spec, so each reference is validated against an authoritative list instead of against "whatever the LLM thinks might exist". Pass the spec to this command via `--specs <path>` for the same effect.
+2. **`${CLAUDE_PLUGIN_ROOT}/bin/llm-ext search-existing-implementations`** (exposed as `/llm-externalizer:llm-externalizer-search-existing-implementations`) — for semantic duplicate hunts ("is feature X already implemented somewhere?"). Each file is compared against a REFERENCE (description + optional source files + optional diff), NOT against every other file. Purpose-built for cross-codebase questions that an AST / schema check cannot answer.
 
 For everything else — logic bugs, error handling, security, resource leaks in the local function — the 1–5-file batch is enough and this command is the right tool. Just don't ask it questions that require global visibility.
 
@@ -133,7 +130,7 @@ The agent — not a blind glob — curates the scan target. Humans cannot reliab
 
 Using `Bash`:
 
-1. Resolve the reports directory. `MAIN_ROOT` MUST match the MCP server's own report-root resolver (`mcp-server/src/project-root.ts`), which uses **NO git**: it is `$CLAUDE_PROJECT_DIR` when that exists on disk, else the current working dir. This is the single source of truth — git is deliberately NOT used (linked worktrees, monorepos whose subfolders each have their own git, and git-less roots all make a git-root climb pick the WRONG directory). Because this command passes `output_dir` explicitly to the scan tool, the orchestrator's `MAIN_ROOT` and the server's resolver must agree, or reports scatter.
+1. Resolve the reports directory. `MAIN_ROOT` MUST match the CLI's own report-root resolver (`mcp-server/src/project-root.ts`), which uses **NO git**: it is `$CLAUDE_PROJECT_DIR` when that exists on disk, else the current working dir. This is the single source of truth — git is deliberately NOT used (linked worktrees, monorepos whose subfolders each have their own git, and git-less roots all make a git-root climb pick the WRONG directory). Because this command passes `output_dir` explicitly to the scan tool, the orchestrator's `MAIN_ROOT` and the CLI's resolver must agree, or reports scatter.
    ```bash
    # No git: mirror mcp-server/src/project-root.ts exactly.
    if [ -n "$CLAUDE_PROJECT_DIR" ] && [ -d "$CLAUDE_PROJECT_DIR" ]; then
@@ -150,7 +147,7 @@ Using `Bash`:
 4. If `--specs <path>` is set: `test -f <path>`. Abort if missing.
 5. If the user supplied a target-path (not auto-discovered in Step 0): resolve it to an absolute path and `test -d` it. Abort with `[FAILED] llm-externalizer-scan-and-fix-serially — target path not found: <path>` if missing.
 
-Then call `mcp__llm-externalizer__discover`. Abort with `[FAILED] llm-externalizer-scan-and-fix-serially — service offline` if the service is offline.
+Then run `${CLAUDE_PLUGIN_ROOT}/bin/llm-ext discover`. Abort with `[FAILED] llm-externalizer-scan-and-fix-serially — service offline` if the service is offline.
 
 ## Step 2 — Build and run the scan call
 
@@ -230,69 +227,55 @@ echo "ANSWER_MODE=$ANSWER_MODE"
 
 If `ANSWER_MODE=1`, log `File list contains group markers — using answer_mode=1 (one report per group)` to the user.
 
-Common tool arguments (ALWAYS present, NOT overridable):
+Common CLI flags (ALWAYS present, NOT overridable): `--answer_mode <ANSWER_MODE>` and `--output_dir "<MAIN_ROOT>/reports/llm-externalizer"`.
 
-```json
-{
-  "answer_mode": <ANSWER_MODE>,
-  "output_dir": "<MAIN_ROOT>/reports/llm-externalizer"
-}
-```
+This scan can take several minutes to tens of minutes on a large target — run
+the CLI call with an explicit long `timeout` (e.g. `timeout 1200 ...`) or
+`run_in_background: true`.
 
 ### Branch A — `--file-list` supplied
 
-Call `mcp__llm-externalizer__code_task`:
+Run `${CLAUDE_PLUGIN_ROOT}/bin/llm-ext code-task`:
 
-```json
-{
-  "answer_mode": <ANSWER_MODE>,
-  "max_retries": 3,
-  "output_dir": "<MAIN_ROOT>/reports/llm-externalizer",
-  "input_files_paths": ["<each absolute path from the list file — pass ---GROUP:id--- markers through verbatim>"],
-  "instructions": "<see above>",
-  "instructions_files_paths": ["<if applicable>"],
-  "free": <if applicable>,
-  "scan_secrets": <default true; --no-secrets: false>,
-  "redact_secrets": <default true; --no-secrets: false>
-}
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext code-task \
+  --answer_mode <ANSWER_MODE> \
+  --max_retries 3 \
+  --output_dir "<MAIN_ROOT>/reports/llm-externalizer" \
+  --input_files_paths '<JSON array of each absolute path from the list file — pass ---GROUP:id--- markers through verbatim>' \
+  --instructions "<see above>" \
+  [--instructions_files_paths <path,path,...> if applicable] \
+  [--free if applicable] \
+  [--scan_secrets] [--redact_secrets]   # default true; --no-secrets omits both
 ```
 
 ### Branch B — folder scan (default)
 
-`scan_folder` does not accept group markers — always use `answer_mode: 0` on this branch.
+`scan-folder` does not accept group markers — always use `--answer_mode 0` on this branch.
 
-Call `mcp__llm-externalizer__scan_folder`:
+Run `${CLAUDE_PLUGIN_ROOT}/bin/llm-ext scan-folder`:
 
-```json
-{
-  "folder_path": "<absolute target-path>",
-  "answer_mode": 0,
-  "use_gitignore": true,
-  "output_dir": "<MAIN_ROOT>/reports/llm-externalizer",
-  "extensions": ["<only if --text>"],
-  "exclude_dirs": [
-    "docs_dev", "reports_dev", "scripts_dev", "tests_dev",
-    "samples_dev", "examples_dev", "downloads_dev",
-    "libs_dev", "builds_dev",
-    "reports", "llm_externalizer_output",
-    ".rechecker", ".mypy_cache", ".ruff_cache",
-    ".serena", ".claude", ".venv", "__pycache__"
-  ],
-  "instructions": "<see above>",
-  "instructions_files_paths": ["<if applicable>"],
-  "free": <if applicable>,
-  "scan_secrets": <default true; --no-secrets: false>,
-  "redact_secrets": <default true; --no-secrets: false>
-}
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext scan-folder \
+  --folder_path "<absolute target-path>" \
+  --answer_mode 0 \
+  --use_gitignore true \
+  --output_dir "<MAIN_ROOT>/reports/llm-externalizer" \
+  [--extensions <a,b> only if --text] \
+  --exclude_dirs "docs_dev,reports_dev,scripts_dev,tests_dev,samples_dev,examples_dev,downloads_dev,libs_dev,builds_dev,reports,llm_externalizer_output,.rechecker,.mypy_cache,.ruff_cache,.serena,.claude,.venv,__pycache__" \
+  --instructions "<see above>" \
+  [--instructions_files_paths <path,path,...> if applicable] \
+  [--free if applicable] \
+  [--scan_secrets] [--redact_secrets]   # default true; --no-secrets omits both
 ```
 
-With `--text`, set `extensions: [".md", ".txt", ".json", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf", ".xml", ".html", ".rst", ".csv"]`. Without it, OMIT the `extensions` field.
+With `--text`, set `--extensions ".md,.txt,.json,.yml,.yaml,.toml,.ini,.cfg,.conf,.xml,.html,.rst,.csv"`. Without it, OMIT the `--extensions` flag.
 
-> The `exclude_dirs` list above is **always sent**, on top of the server's own built-in ignores (`node_modules`, `.git`, `dist`, `build`, etc.). It covers the `*_dev/` convention from the project-level rules (cache/tmp/runtime directories that must never be committed or scanned) plus other recurrent runtime/artifact folders. `use_gitignore: true` handles anything listed in `.gitignore` when the target is a git repo; `exclude_dirs` catches the rest for non-git trees.
+> The `--exclude_dirs` list above is **always sent**, on top of the CLI's own built-in ignores (`node_modules`, `.git`, `dist`, `build`, etc.). It covers the `*_dev/` convention from the project-level rules (cache/tmp/runtime directories that must never be committed or scanned) plus other recurrent runtime/artifact folders. `--use_gitignore true` handles anything listed in `.gitignore` when the target is a git repo; `--exclude_dirs` catches the rest for non-git trees.
 
 ## Step 3 — Extract report paths and persist them to a file
 
-The MCP response from Step 2 already contains every `<source> -> <report>` pair (mode 0). Parse that response text and write ONE absolute report path per line to a shared temp file. Files persist across `Bash` tool calls (each Bash invocation is a separate subshell — env vars DO NOT persist, but `/tmp` files DO). Every later step reads from this file rather than re-parsing the MCP response.
+The CLI output from Step 2 already contains every `<source> -> <report>` pair (mode 0). Parse that output text and write ONE absolute report path per line to a shared temp file. Files persist across `Bash` tool calls (each Bash invocation is a separate subshell — env vars DO NOT persist, but `/tmp` files DO). Every later step reads from this file rather than re-parsing the CLI output.
 
 ```bash
 RUN_TS=$(date +%Y%m%dT%H%M%S%z)
@@ -305,7 +288,7 @@ REPORTS_DIR="$MAIN_ROOT/reports/llm-externalizer"
 : > "$REJECTED"
 ```
 
-Then emit one `printf '%s\n' "<absolute-path>" >> "$EXTRACTED"` command per report path you parsed from the MCP response (or build the list inline with a heredoc). Exclude any line whose name carries a fixer-sidecar tag — either `.fixer.` or `-fixer-` (both are canonical, matching `FIXER_MARKERS` in `fix_found_bugs_helper.py`). Pass the same `$RUN_TS` through subsequent Bash steps so the filenames stay consistent (or capture them into your conversation state).
+Then emit one `printf '%s\n' "<absolute-path>" >> "$EXTRACTED"` command per report path you parsed from the CLI output (or build the list inline with a heredoc). Exclude any line whose name carries a fixer-sidecar tag — either `.fixer.` or `-fixer-` (both are canonical, matching `FIXER_MARKERS` in `fix_found_bugs_helper.py`). Pass the same `$RUN_TS` through subsequent Bash steps so the filenames stay consistent (or capture them into your conversation state).
 
 Abort with `[FAILED] llm-externalizer-scan-and-fix-serially — scan produced 0 reports` if `wc -l "$EXTRACTED"` shows zero.
 
@@ -486,15 +469,15 @@ Print the summary's absolute path to the user. Also mention: bugs fixed this run
 
 ## Three-surface compliance: by-design slash-only (GAP-12)
 
-This command is multi-agent orchestration with serial scheduling: scan with one MCP batch, aggregate findings into a canonical bug list, then dispatch one serial-fixer subagent per bug in a loop. It shares the multi-agent orchestration shape with `/llm-externalizer:llm-externalizer-scan-and-fix`, differing only in serial-vs-parallel scheduling — neither shape is a single callable unit because both compose MCP tools with N subagent dispatches across multiple turns.
+This command is multi-agent orchestration with serial scheduling: scan with one CLI batch, aggregate findings into a canonical bug list, then dispatch one serial-fixer subagent per bug in a loop. It shares the multi-agent orchestration shape with `/llm-externalizer:llm-externalizer-scan-and-fix`, differing only in serial-vs-parallel scheduling — neither shape is a single callable unit because both compose CLI commands with N subagent dispatches across multiple turns.
 
-Per TRDD-a24b213c §C, this is a documented exemption from the "every capability has MCP tool + CLI command + slash command" invariant — not a gap waiting to be filled. A single MCP or CLI surface would have to spawn subagents itself (which only the orchestrator can do via the Task tool), so this capability is inherently slash-only.
+Per TRDD-a24b213c §C, this is a documented exemption from the "every capability has a CLI command + slash command" invariant — not a gap waiting to be filled. A single CLI surface would have to spawn subagents itself (which only the orchestrator can do via the Task tool), so this capability is inherently slash-only.
 
 ## Error handling
 
 | Error | Resolution |
 |---|---|
-| MCP service offline | `[FAILED] — service offline`. Ask user to restart Claude Code. |
+| Service offline | `[FAILED] — service offline`. Check `$OPENROUTER_API_KEY` and re-run `discover`. |
 | Target / file-list / instructions / specs missing | `[FAILED] — <which> not found: <path>`. |
 | Scan returns 0 reports | `[FAILED] — scan produced 0 reports`. User should widen target. |
 | All reports fail `validate_report.py` | `[FAILED] — all N reports failed validate_report.py`. |

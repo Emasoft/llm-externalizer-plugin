@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude Code statusline: Model | tokens | %used | cwd | MCP stats | usage limits.
+"""Claude Code statusline: Model | tokens | %used | cwd | CLI stats | usage limits.
 
 Reads JSON from stdin (piped by Claude Code), outputs a single ANSI-colored line.
 No external dependencies — uses only Python stdlib.
@@ -612,7 +612,7 @@ def main() -> None:
     mcp_seg = ""
     or_seg = ""
 
-    # ── LLM Externalizer MCP stats ──
+    # ── LLM Externalizer CLI stats ──
     try:
         mcp_stats_file = cache_dir / "llm-externalizer-stats.json"
         mcp_data = read_json_file(mcp_stats_file)
@@ -767,13 +767,13 @@ def main() -> None:
             if cols < 65:
                 # Tier 4: mobile / very narrow. Split at every section marker
                 # so each gets its own row. Nothing dropped, nothing compacted.
-                # MCP+OpenRouter share a row (combined ~27 chars at typical
+                # CLI+OpenRouter share a row (combined ~27 chars at typical
                 # values, fits 40-col phones). Same for the rate-limit @resets.
                 tier_chosen = 4
                 markers = [
                     f"{sep}📁",  # cwd + git/worktree
                     f"{sep}📊",  # token bar
-                    f"{sep}🔌",  # MCP (with 🏦 OpenRouter staying on same row)
+                    f"{sep}🔌",  # CLI (with 🏦 OpenRouter staying on same row)
                     f"{sep}⏱️",  # 5-hour rate limit
                     f"{sep}📅",  # 7-day rate limit
                 ]
@@ -797,7 +797,7 @@ def main() -> None:
                 if cols < 95 and rl_marker in rest:
                     # Tier 3: 3 lines.
                     #   Line 1: header (model + version + effort + thinking + dir)
-                    #   Line 2: 📊 token bar + 🔌 MCP + 🏦 OpenRouter
+                    #   Line 2: 📊 token bar + 🔌 CLI + 🏦 OpenRouter
                     #   Line 3: ⏱️ 5h (full @reset) + 📅 7d (full @reset)
                     tier_chosen = 3
                     middle, tail = rest.split(rl_marker, 1)

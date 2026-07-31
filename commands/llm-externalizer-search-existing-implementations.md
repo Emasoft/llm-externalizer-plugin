@@ -2,21 +2,19 @@
 name: llm-externalizer-search-existing-implementations
 description: Scan a codebase (same language as the input files) for an existing implementation of a described feature. FFD-batched ensemble calls, exhaustive per-file output. Works for PR duplicate-check and greenfield audits.
 allowed-tools:
-  - mcp__llm-externalizer__discover
-  - mcp__llm-externalizer__search_existing_implementations
   - Bash
 argument-hint: '"description" [src-files...] --in path [--base ref] [--free]'
 effort: medium
 ---
 
-Thin wrapper over `mcp__llm-externalizer__search_existing_implementations`. All heavy lifting (folder walking, FFD bin-packing, batched ensemble LLM calls, source-file exclusion) happens server-side.
+Thin wrapper over `${CLAUDE_PLUGIN_ROOT}/bin/llm-ext search-existing-implementations`. All heavy lifting (folder walking, FFD bin-packing, batched ensemble LLM calls, source-file exclusion) happens inside the CLI process.
 
-**How the LLM sees the codebase**: The server packs files into batches up to `max_payload_kb` (default 400 KB) each — **typically 1–5 files per batch**. Each batch is ONE LLM call. The LLM never sees the whole codebase at once and doesn't need to: each file is compared against the reference (feature description + optional source files + optional diff), not against other files. In **ensemble mode** each file receives 3 responses from 3 LLMs running in parallel; in `--free` mode each file receives 1 response. For a 10k-file codebase this is typically ~500 LLM calls instead of 10k.
+**How the LLM sees the codebase**: the tool packs files into batches up to `max_payload_kb` (default 400 KB) each — **typically 1–5 files per batch**. Each batch is ONE LLM call. The LLM never sees the whole codebase at once and doesn't need to: each file is compared against the reference (feature description + optional source files + optional diff), not against other files. In **ensemble mode** each file receives 3 responses from 3 LLMs running in parallel; in `--free` mode each file receives 1 response. For a 10k-file codebase this is typically ~500 LLM calls instead of 10k.
 
 **Output** (default `answer_mode` is 2):
 
-- **answer_mode : 0 — ONE REPORT PER FILE.** MCP splits each batch response by `## File:` markers and writes one `.md` per input file. Output: `<input_file> -> <report_file>` pairs.
-- **answer_mode : 1 — ONE REPORT PER GROUP.** MCP auto-groups scanned files by subfolder/extension/basename (max 1 MB per group) and writes one merged `.md` per group. Output: `[group:id] <report>` lines.
+- **answer_mode : 0 — ONE REPORT PER FILE.** The tool splits each batch response by `## File:` markers and writes one `.md` per input file. Output: `<input_file> -> <report_file>` pairs.
+- **answer_mode : 1 — ONE REPORT PER GROUP.** The tool auto-groups scanned files by subfolder/extension/basename (max 1 MB per group) and writes one merged `.md` per group. Output: `[group:id] <report>` lines.
 - **answer_mode : 2 — SINGLE REPORT (default).** One merged `.md` with per-batch sections and per-file `NO` / `YES symbol=... lines=...` entries.
 
 Batching is identical across all three modes — only the persistence differs. EXHAUSTIVE: every occurrence in every file is reported (no cap) so a reviewer can delete every duplicate and keep only the PR's new implementation.
@@ -34,38 +32,41 @@ Abort with `[FAILED] llm-externalizer-search-existing-implementations — <reaso
 
 ## Step 2 — Verify service is online
 
-Call `mcp__llm-externalizer__discover`. Abort with `[FAILED] — service offline` if OFFLINE.
+Run `${CLAUDE_PLUGIN_ROOT}/bin/llm-ext discover`. Abort with `[FAILED] — service offline` if OFFLINE.
 
-## Step 3 — Call the MCP tool directly
+## Step 3 — Call the CLI directly
 
-Prefer calling `mcp__llm-externalizer__search_existing_implementations` directly. All diff generation, batching, and file filtering happens server-side:
+All diff generation, batching, and file filtering happens inside the CLI process:
 
-```json
-{
-  "feature_description": "<description from step 1>",
-  "folder_path": "<single path or array from --in>",
-  "source_files": "<array from step 1 if non-empty, else omit>",
-  "diff_path": "<pre-made --diff path if given, else omit>"
-}
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext search-existing-implementations \
+  --feature_description "<description from step 1>" \
+  --folder_path <single path, or a comma-separated list for multiple --in entries> \
+  [--source_files <path,path,...>] \
+  [--diff_path <pre-made --diff path if given>]
 ```
+
+Repeated flags OVERWRITE rather than accumulate — combine multiple `--in`
+paths into ONE `--folder_path a,b,c` (comma-separated), never repeat the flag.
+Same for `--source_files`.
 
 Forward optional flags the user supplied:
 
-- `--free` → `"free": true`
-- `--output-dir` → `"output_dir": "<path>"`
-- `--exclude-dirs` → `"exclude_dirs": ["a","b","c"]`
-- `--extensions` → `"extensions": [".py", ".ts"]`
-- `--max-files` → `"max_files": N`  (server default: 10000 — higher than scan_folder's 2500)
-- `--max-payload-kb` → `"max_payload_kb": N`
-- `--answer-mode` → `"answer_mode": N`  (server default: 2 = single merged report; mode 0 falls back to mode 1 per-batch reports since per-file calls defeat the batching)
+- `--free` → `--free`
+- `--output-dir` → `--output_dir <path>`
+- `--exclude-dirs` → `--exclude_dirs a,b,c`
+- `--extensions` → `--extensions .py,.ts`
+- `--max-files` → `--max_files N`  (default: 10000 — higher than scan-folder's 2500)
+- `--max-payload-kb` → `--max_payload_kb N`
+- `--answer-mode` → `--answer_mode N`  (default: 2 = single merged report; mode 0 falls back to mode 1 per-batch reports since per-file calls defeat the batching)
 
-**If the user passed `--base <ref>` (no `--diff`)**, you need to generate the diff yourself. Use `Bash` to run `git diff <ref>...HEAD -- <source-files> > /tmp/llm-ext-diff-<timestamp>.patch` from the git root, then pass the temp path as `diff_path`. Auto-detect the base if missing: try `git symbolic-ref --quiet --short refs/remotes/origin/HEAD`, fall back to `main`, then `master`. Abort with a clear `[FAILED]` if cwd is not a git repo, if the diff is empty, or if auto-detection fails.
+**If the user passed `--base <ref>` (no `--diff`)**, you need to generate the diff yourself. Use `Bash` to run `git diff <ref>...HEAD -- <source-files> > /tmp/llm-ext-diff-<timestamp>.patch` from the git root, then pass the temp path as `--diff_path`. Auto-detect the base if missing: try `git symbolic-ref --quiet --short refs/remotes/origin/HEAD`, fall back to `main`, then `master`. Abort with a clear `[FAILED]` if cwd is not a git repo, if the diff is empty, or if auto-detection fails.
 
-**Alternative — shell out to the CLI**: `llm-externalizer search-existing` implements all of the above natively (including `--base` auto-generation and 4-hour timeout) and can be invoked via `Bash` as a single command. Prefer this for non-interactive workflows.
+This can take several minutes on a large codebase — run it with an explicit long `timeout` or `run_in_background: true`.
 
 ## Step 4 — Return the result
 
-The MCP tool returns a text body with the `SEARCH COMPLETE` summary, a `MERGED REPORT:` path (mode 2) or a list of `REPORTS:` paths (mode 1), and any failed/skipped batches. Forward that text to the user verbatim — do NOT read any report, do NOT summarize. The reviewer opens the reports they care about.
+The CLI prints a `SEARCH COMPLETE` summary, a `MERGED REPORT:` path (mode 2) or a list of `REPORTS:` paths (mode 1), and any failed/skipped batches. Forward that text to the user verbatim — do NOT read any report, do NOT summarize. The reviewer opens the reports they care about.
 
 ## Scope rules — when NOT to use this command
 

@@ -5,7 +5,7 @@ description: |-
   ok/total, cost, started_at). Run this BEFORE starting a new scout to
   discover what work already exists in the registry.
 allowed-tools:
-  - mcp__llm-externalizer__mass_scout_jobs_list
+  - Bash
 argument-hint: "--db <path> [--json]"
 effort: low
 ---
@@ -34,14 +34,14 @@ downstream programmatic use.
 ## Example
 
 ```
-/llm-externalizer:llm-externalizer-mass-scout-jobs-list --db /tmp/scout.db
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout-jobs-list --db-path /tmp/scout.db
 ```
 
 Lists every job in `/tmp/scout.db`. Add `--json` to pipe the result
 through `jq`:
 
 ```
-/llm-externalizer:llm-externalizer-mass-scout-jobs-list --db /tmp/scout.db --json
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout-jobs-list --db-path /tmp/scout.db --json
 ```
 
 ## Errors

@@ -5,7 +5,7 @@ description: |-
   read-once-from-disk source of truth — exposing it lets follow-up
   subagents re-analyse a file without touching the filesystem.
 allowed-tools:
-  - mcp__llm-externalizer__mass_scout_body_get
+  - Bash
 argument-hint: "--db <path> --short-id <n>"
 effort: low
 ---
@@ -33,7 +33,7 @@ it elsewhere.
 ## Example
 
 ```
-/llm-externalizer:llm-externalizer-mass-scout-body-get --db /tmp/scout.db --short-id 42
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout-body-get --db-path /tmp/scout.db --short-id 42
 ```
 
 Prints the body that was registered under `short_id=42`. Combine with

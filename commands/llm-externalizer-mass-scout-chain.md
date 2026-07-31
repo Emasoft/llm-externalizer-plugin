@@ -5,7 +5,7 @@ description: |-
   match a JSON-extract filter. Drills deeper into a high-value slice
   without re-scouting the whole tree.
 allowed-tools:
-  - mcp__llm-externalizer__mass_scout_chain
+  - Bash
 argument-hint: "--db <path> --source-job <id> --new-job-id <id> --new-fields-file <path> --filter \"$.path:OP:value\" [--model <id>] [--workers <N>] [--max-retries <N>]"
 effort: medium
 ---
@@ -53,11 +53,18 @@ A standard mass-scout markdown report under
 scout. The report path + a counter line (`chained=N from=<src>
 matched=K`) are returned to the caller.
 
+## Invocation
+
+Like `mass-scout`, a chained pass runs one LLM call per matched file and
+can take tens of minutes on a large subset. Invoke with an explicit
+20-minute Bash `timeout`, or with `run_in_background: true`, so the turn
+doesn't block waiting on the whole chain.
+
 ## Example
 
 ```
-/llm-externalizer:llm-externalizer-mass-scout-chain \
-  --db /tmp/scout.db \
+timeout 1200 ${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout-chain \
+  --db-path /tmp/scout.db \
   --source-job initial-audit \
   --new-job-id critical-deep-dive \
   --new-fields-file /tmp/critical.fields.json \

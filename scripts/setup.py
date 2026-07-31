@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the LLM Externalizer MCP server. Run after cloning the plugin repository."""
+"""Build the LLM Externalizer CLI bundle. Run after cloning the plugin repository."""
 
 import subprocess
 import sys
@@ -21,7 +21,7 @@ def main() -> None:
     subprocess.run(["npm", "run", "build"], cwd=str(mcp_dir), check=True)
 
     print()
-    print("LLM Externalizer MCP server built successfully.")
+    print("LLM Externalizer CLI built successfully.")
     print(f"Output: {mcp_dir / 'dist'}/")
     print()
     print("The plugin is now ready to use in Claude Code.")

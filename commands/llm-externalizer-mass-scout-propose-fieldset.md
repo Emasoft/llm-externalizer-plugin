@@ -5,7 +5,7 @@ description: |-
   optionally seeded with sample files. Resolves the "what fields do I
   write?" UX cliff.
 allowed-tools:
-  - mcp__llm-externalizer__mass_scout_propose_fieldset
+  - Bash
 argument-hint: "--goal \"...\" [--samples a.ts,b.ts,...] [--model <id>] [--out <path>]"
 effort: low
 ---
@@ -31,14 +31,14 @@ by hand or passed straight into `mass_scout`.
 
 A validated fieldset JSON ready to pass to `mass_scout` as
 `--fields-file`. Inspect it, prune fields you don't need, then run the
-scout. The MCP tool only emits a fieldset that passes the same
+scout. This command only emits a fieldset that passes the same
 validation the rest of the pipeline enforces, so you don't ship a
 malformed schema.
 
 ## Example
 
 ```
-/llm-externalizer:llm-externalizer-mass-scout-propose-fieldset \
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout-propose-fieldset \
   --goal "Audit every Express route handler for auth / input-validation gaps" \
   --samples src/routes/users.ts,src/routes/admin.ts,src/middleware/auth.ts \
   --out /tmp/route-audit.fields.json

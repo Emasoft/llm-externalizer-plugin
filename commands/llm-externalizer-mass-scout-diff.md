@@ -5,7 +5,7 @@ description: |-
   only in one, only in the other, identical, or have changed fields.
   Confirms that a re-scout actually changed what you expected.
 allowed-tools:
-  - mcp__llm-externalizer__mass_scout_diff
+  - Bash
 argument-hint: "--db <path> --from-job <id> --to-job <id> [--json]"
 effort: low
 ---
@@ -43,7 +43,7 @@ for downstream programmatic comparison.
 ## Example
 
 ```
-/llm-externalizer:llm-externalizer-mass-scout-diff --db /tmp/scout.db --from-job baseline --to-job after-fieldset-tweak
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout-diff --db-path /tmp/scout.db --from-job baseline --to-job after-fieldset-tweak
 ```
 
 Reports which files appeared/disappeared between `baseline` and the
