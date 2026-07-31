@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -275,18 +276,24 @@ def phase_build(h: Harness) -> bool:
 
 
 def parse_top_help_tools(top_help: str) -> list[str]:
-    """Extract verb names from the 'Tools:' section of `llm-ext --help`.
+    """Extract command names from the 'Commands:' section of `llm-ext --help`.
 
-    Ground truth (verified against the real CLI): the dispatcher prints a
-    'Tools:' header, then each verb indented by two spaces — the first token of
-    the line is the verb name, followed by its description (which may itself
+    Ground truth (verified against the real CLI): the CLI prints a 'Commands:'
+    header, then each command indented by two spaces — the first token of the
+    line is the command name, followed by its description (which may itself
     contain words, so only the first token is the name). Collection stops at the
     first blank line after the header.
+
+    The header used to be 'Tools:' when this was an MCP server. Nothing errored
+    when it changed: the scan simply matched no header, returned [], and every
+    downstream command check degraded to SKIP while still reporting a green
+    run. A parser that yields nothing must never look like a clean pass, which
+    is why the caller now treats an empty catalog as a failure.
     """
     verbs: list[str] = []
     in_tools = False
     for line in top_help.splitlines():
-        if line.strip() == "Tools:":
+        if line.strip() == "Commands:":
             in_tools = True
             continue
         if in_tools:
@@ -301,14 +308,14 @@ def parse_top_help_tools(top_help: str) -> list[str]:
 
 
 def phase_top_help(h: Harness) -> list[str]:
-    """Run top-level --help, record PASS/FAIL, return the parsed verb list."""
+    """Run top-level --help, record PASS/FAIL, return the parsed command list."""
     res = llm_ext(["--help"])
-    if res.code != 0 or "Tools:" not in res.out:
+    if res.code != 0 or "Commands:" not in res.out:
         h.add(
             "cli",
             "--help",
             FAIL,
-            "top-level `llm-ext --help` lists the tool catalog",
+            "top-level `llm-ext --help` lists the command catalog",
             _evidence(res),
         )
         return []
@@ -318,16 +325,16 @@ def phase_top_help(h: Harness) -> list[str]:
             "cli",
             "--help",
             FAIL,
-            "top-level `llm-ext --help` lists the tool catalog",
-            "'Tools:' section present but no verbs parsed",
+            "top-level `llm-ext --help` lists the command catalog",
+            "'Commands:' section present but no commands parsed",
         )
         return []
     h.add(
         "cli",
         "--help",
         PASS,
-        f"top-level --help lists {len(verbs)} verbs",
-        "verbs: " + ", ".join(verbs),
+        f"top-level --help lists {len(verbs)} commands",
+        "commands: " + ", ".join(verbs),
     )
     return verbs
 
@@ -338,18 +345,24 @@ def phase_top_help(h: Harness) -> list[str]:
 
 
 def phase_per_verb_help(h: Harness, verbs: list[str]) -> None:
-    """Every verb must print a help block.
+    """Every command must print a help block.
 
-    Ground truth: `llm-ext <verb> --help` prints a header line `<verb>: <desc>`
-    followed by either a 'Parameters:' block or the literal 'No parameters.'.
+    Ground truth (re-verified against the real CLI): `llm-ext <cmd> --help`
+    prints a `llm-ext <cmd>` header, the description, then either a
+    'Parameters:' block or the literal 'Takes no parameters.'.
+
+    This previously looked for a `<cmd>:` header and 'No parameters.', which is
+    what the MCP-era CLI printed. Both spellings changed with the rewrite, so
+    all 40 checks failed at once — the useful signal being that a whole phase
+    failing identically means the assertion moved, not the subject.
     """
     for verb in verbs:
-        # `--help` prints synchronously and exits BEFORE the MCP server is
-        # spawned, so it should be near-instant. A short timeout makes a stuck
-        # help call fail fast instead of stalling the whole suite.
+        # `--help` is generated from the in-process catalog and exits without
+        # any network call, so it should be near-instant. A short timeout makes
+        # a stuck help call fail fast instead of stalling the whole suite.
         res = llm_ext([verb, "--help"], timeout=30)
-        header_ok = f"{verb}:" in res.out
-        schema_ok = ("Parameters:" in res.out) or ("No parameters." in res.out)
+        header_ok = f"llm-ext {verb}" in res.out
+        schema_ok = ("Parameters:" in res.out) or ("Takes no parameters." in res.out)
         if res.code == 0 and header_ok and schema_ok:
             h.add("cli-help", verb, PASS, f"`llm-ext {verb} --help` prints its schema")
         else:
@@ -619,7 +632,26 @@ def parse_frontmatter(text: str) -> dict[str, object] | None:
 # --------------------------------------------------------------------------- #
 
 
-MCP_TOOL_PREFIX = "mcp__llm-externalizer__"
+# Matches `llm-ext <subcommand>` anywhere in a command body, including the
+# `${CLAUDE_PLUGIN_ROOT}/bin/llm-ext scan-folder` form the commands actually
+# use. Requiring the subcommand to start with a letter is what keeps
+# `llm-ext --help` and `llm-ext --version` from being read as subcommands.
+LLM_EXT_INVOCATION = re.compile(r"llm-ext\s+([a-z][a-z0-9_-]*)")
+
+
+def _llm_ext_subcommands(body: str) -> list[str]:
+    """Every distinct `llm-ext <subcommand>` named in a command body, kebab-normalized.
+
+    The CLI accepts snake_case as a silent alias, so a body may legitimately
+    say `scan_folder`; the catalog only ever lists the kebab spelling, so
+    normalize before comparing or the alias reads as an unknown command.
+    """
+    seen: list[str] = []
+    for m in LLM_EXT_INVOCATION.finditer(body):
+        name = m.group(1).replace("_", "-")
+        if name not in seen:
+            seen.append(name)
+    return seen
 
 
 def _allowed_tools_list(fm: dict[str, object]) -> list[str]:
@@ -636,54 +668,61 @@ def _allowed_tools_list(fm: dict[str, object]) -> list[str]:
 def resolve_command_tool(fm: dict[str, object], body: str, catalog: set[str]) -> tuple[str, str]:
     """Resolve what real tool a command dispatches.
 
-    The plugin's commands are thin wrappers and come in three legitimate shapes
-    (verified against the actual commands/*.md frontmatter):
+    The plugin's commands are thin wrappers and come in four legitimate shapes
+    (verified against the actual commands/*.md):
 
-    1. MCP-tool wrapper — `allowed-tools` lists `mcp__llm-externalizer__<verb>`;
-       the wrapped tool resolves iff `<verb>` is in the CLI/MCP catalog. This is
-       the TRDD's "the wrapped tool name resolves to a real MCP tool / CLI verb"
-       check, done against the frontmatter (where the tool is actually named),
-       NOT by grepping the prose body.
-    2. Benchmark CLI wrapper — `allowed-tools: [Bash]` and the body runs
-       `bin/llm-ext-benchmark`; dispatch is by flag, no catalog verb (a
-       documented by-design shape, GAP-2).
-    3. Orchestration / installer wrapper — `allowed-tools` includes `Task`
-       or `Agent` (subagent dispatch), or is `Bash`-only wrapping an external
-       CLI / file installer (statusline). Deliberately slash-only with
-       no single MCP verb (documented GAP-8..14).
+    1. CLI wrapper — the body runs `llm-ext <subcommand>`. Every subcommand it
+       names must exist in the live command table. This is the real check, and
+       it is checked FIRST for a reason (see below).
+    2. Benchmark wrapper — the body runs `llm-ext-benchmark`; dispatch is by
+       flag, so there is no subcommand to resolve (by design, GAP-2).
+    3. Orchestration wrapper — `allowed-tools` includes `Task`/`Agent`; the
+       command dispatches a subagent rather than a command (GAP-8..14).
+    4. Installer / external-CLI wrapper — `Bash`-only and legitimately never
+       calls `llm-ext` (the statusline installer).
+
+    Ordering is load-bearing. This used to key off the
+    `mcp__llm-externalizer__<verb>` entry in `allowed-tools`, with a Bash-only
+    catch-all last. The migration made every command `allowed-tools: Bash`, so
+    that catch-all matched all of them and the function returned PASS without
+    ever resolving anything — the gate reported green while checking nothing.
+    Resolving the body's invocations first is what keeps it a real check;
+    shape 4 only applies once we know there is no invocation to verify.
 
     Returns (status, detail). status is PASS or FAIL.
     """
     tools = _allowed_tools_list(fm)
-    mcp_verbs = [t[len(MCP_TOOL_PREFIX):] for t in tools if t.startswith(MCP_TOOL_PREFIX)]
 
-    # Shape 1 — an MCP-tool entry must resolve to a real catalog verb.
-    if mcp_verbs:
-        resolved = [v for v in mcp_verbs if v in catalog]
-        if resolved:
-            return PASS, f"wraps MCP tool `{resolved[0]}` (in catalog)"
-        return (
-            FAIL,
-            f"allowed-tools names {', '.join(MCP_TOOL_PREFIX + v for v in mcp_verbs)} "
-            f"but none resolve to a catalog verb ({len(catalog)} verbs known).",
-        )
+    # Shape 1 — every `llm-ext <subcommand>` in the body must be a real command.
+    invoked = _llm_ext_subcommands(body)
+    if invoked:
+        unknown = [c for c in invoked if c not in catalog]
+        if unknown:
+            return (
+                FAIL,
+                f"body runs `llm-ext {'`, `llm-ext '.join(unknown)}` but "
+                f"{'that is not a' if len(unknown) == 1 else 'those are not'} "
+                f"command{'' if len(unknown) == 1 else 's'} in the CLI table "
+                f"({len(catalog)} known).",
+            )
+        return PASS, f"runs `llm-ext {invoked[0]}` (in catalog)"
 
-    # Shape 2 — benchmark CLI wrapper (Bash + llm-ext-benchmark in the body).
+    # Shape 2 — benchmark wrapper (flag-dispatched, no subcommand).
     if "llm-ext-benchmark" in body:
-        return PASS, "benchmark CLI wrapper (Bash + llm-ext-benchmark, flag-dispatched)"
+        return PASS, "benchmark CLI wrapper (flag-dispatched)"
 
     # Shape 3 — orchestration wrapper (Task/Agent subagent dispatch).
     if "Task" in tools or "Agent" in tools:
         return PASS, "orchestration wrapper (Task/Agent dispatch; by-design slash-only)"
-    # Bash-only installer / external-CLI wrapper (statusline) — a
-    # documented by-design exemption with no in-process MCP verb.
+
+    # Shape 4 — installer / external-CLI wrapper with no llm-ext call to check.
     if "Bash" in tools:
-        return PASS, "Bash wrapper (external CLI / installer; by-design slash-only)"
+        return PASS, "Bash wrapper (external CLI / installer; invokes no llm-ext command)"
 
     return (
         FAIL,
-        "allowed-tools names no MCP llm-externalizer tool and no Bash/Task wrapper "
-        "shape — cannot confirm this command dispatches a real tool.",
+        "command names no llm-ext invocation and no Bash/Task wrapper shape — "
+        "cannot confirm it dispatches anything real.",
     )
 
 

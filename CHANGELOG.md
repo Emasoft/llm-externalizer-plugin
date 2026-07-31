@@ -1,6 +1,37 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+
+## [Unreleased]
+
+### BREAKING
+
+- feat(cli)!: retire the MCP server — llm-externalizer is a CLI plugin
+
+The MCP server is gone. Installing this plugin no longer installs an MCP
+server, there is no `.mcp.json`, and every one of the 40 tools is reached
+through `llm-ext <command>` instead of an MCP tool call
+(`mcp__plugin_llm-externalizer_llm-externalizer__<tool>` no longer resolves
+to anything). `bin/llm-externalizer` and `bin/llm-ext-benchmark`'s old
+JSON-RPC-over-stdio client are gone — `bin/llm-ext` is now a thin wrapper
+around the bundled TypeScript engine, and `bin/llm-ext-benchmark` remains
+the separate model-selection harness. `/llm-externalizer:llm-externalizer-reset`
+and the `reset` command no longer "soft-restart a server, waiting for
+in-flight calls" — every CLI invocation is already a fresh process, so
+`reset` now purges the on-disk caches (model list, concurrency, LM Studio
+detection) and resets session counters, nothing more.
+
+Also affected: the Claude Code plugin keychain (`userConfig.openrouter_api_key`,
+set via `claude plugin configure llm-externalizer`) no longer reaches the
+tool. It relied on Claude Code injecting `CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY`
+into the MCP server process Claude Code spawned directly; `llm-ext` now runs
+as a plain `Bash`-spawned subprocess like any other command, and Claude Code
+does not export that variable into it. Exporting `OPENROUTER_API_KEY` in your
+shell rc is now the only reliable way to supply the key.
+
+WHY: the 40 MCP tool schemas were injected into every turn's base context
+(~32k tokens) whether or not the agent used them.
+
 ## [10.4.1] - 2026-07-15
 
 ### Added

@@ -39,7 +39,7 @@ register.
 | 🌳 worktree | `workspace.git_worktree` → `worktree.name` | only inside a worktree |
 | 🌿 branch | `git branch --show-current` | red `*` if dirty |
 | 📊 token bar | `context_window.used_percentage` (preferred) → manual sum | `current/size %` + 8-char bar |
-| 🔌 MCP | `~/.cache/claude/llm-externalizer-stats.json` | tokens + cost |
+| 🔌 CLI | `~/.cache/claude/llm-externalizer-stats.json` | tokens + cost |
 | 🏦 OpenRouter | OpenRouter `/credits` API | cached 5min |
 | ⏱️ 5h | `rate_limits.five_hour.used_percentage` (spec) → `utilization` (legacy) | bar + % + reset time |
 | 📅 7d | `rate_limits.seven_day.used_percentage` (spec) → `utilization` (legacy) | bar + % + reset date+time |
@@ -67,7 +67,7 @@ Width detection precedence:
 ## Resilience
 
 - **Per-section error isolation**: every optional section (cwd-git, ctx bar,
-  MCP, OpenRouter, 5h, 7d, extra) is wrapped in its own `try/except` and
+  CLI, OpenRouter, 5h, 7d, extra) is wrapped in its own `try/except` and
   builds into a local string before committing to the bar — a partial
   mutation can never leave a dangling separator.
 - **Top-level guard**: prints `"Claude"` if even the model header throws,

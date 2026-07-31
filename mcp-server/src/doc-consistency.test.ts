@@ -72,9 +72,9 @@ describe("doc-inventory extraction (sanity)", () => {
 });
 
 describe("README count consistency", () => {
-  it("every 'N MCP tools' count equals core + mass-scout total", () => {
+  it("every 'N CLI commands' count equals core + mass-scout total", () => {
     const total = allTools.length;
-    const occurrences = [...README.matchAll(/(\d+) MCP tools/g)].map((m) => Number(m[1]));
+    const occurrences = [...README.matchAll(/(\d+) CLI commands/g)].map((m) => Number(m[1]));
     expect(occurrences.length).toBeGreaterThanOrEqual(2); // features bullet + detail bullet
     for (const n of occurrences) expect(n).toBe(total);
   });
@@ -102,8 +102,17 @@ describe("README count consistency", () => {
 });
 
 describe("README membership consistency", () => {
-  it("names every MCP tool (backtick-wrapped) somewhere in the README", () => {
-    const missing = allTools.filter((t) => !README.includes(`\`${t}\``));
+  it("names every CLI command (backtick-wrapped) somewhere in the README", () => {
+    // The catalog is authored snake_case; the CLI's canonical spelling — and
+    // so the README's — is kebab. Accept either, because both are real: the
+    // CLI takes snake_case as a silent alias, so a README that happens to use
+    // one is not wrong. What must not happen is a command appearing in
+    // NEITHER spelling, which is a command users have no way to discover.
+    const missing = allTools.filter(
+      (t) =>
+        !README.includes(`\`${t}\``) &&
+        !README.includes(`\`${t.replace(/_/g, "-")}\``),
+    );
     expect(missing).toEqual([]);
   });
 

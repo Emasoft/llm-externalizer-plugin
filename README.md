@@ -48,7 +48,7 @@ Keeping the fix half local means the expensive model only touches code when it a
 - [Install](#install)
 - [First run](#first-run)
 - [Plugin commands](#plugin-commands) (`/llm-externalizer:*` — what you type in Claude Code)
-- [MCP tools](#mcp-tools) (direct tool calls — for skills, custom agents, scripts)
+- [CLI commands](#cli-commands) (direct `llm-ext <command>` calls — for skills, custom agents, scripts)
 - [Agents](#agents) (internal, dispatched by commands)
 - [Configuration](#configuration)
 - [Troubleshooting](#troubleshooting)
@@ -67,11 +67,11 @@ Keeping the fix half local means the expensive model only touches code when it a
 │   /llm-externalizer:llm-externalizer-scan-and-fix                       │
 │        │                                                                │
 │        │  1. auto-discover codebase via git ls-files                    │
-│        │  2. call MCP tool "scan_folder" or "code_task"  ───────┐       │
+│        │  2. run "llm-ext scan-folder" or "llm-ext code-task"  ─┐       │
 │        │                                                        │       │
 │        │                                                        ▼       │
 │        │           ┌─────────────────────────────────────────────────┐  │
-│        │           │  MCP SERVER (bundled with plugin)               │  │
+│        │           │  BUNDLED CLI ENGINE (llm-ext, in the plugin)    │  │
 │        │           │                                                 │  │
 │        │           │  FFD-batches files into ~400 KB payloads        │  │
 │        │           │  Streams each batch to the configured backend:  │  │
@@ -101,18 +101,18 @@ Keeping the fix half local means the expensive model only touches code when it a
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**One-line summary.** The MCP server is the scan engine; your Claude Code session is the fix engine. Only file paths cross the boundary — the orchestrator context never reads a report body.
+**One-line summary.** The `llm-ext` CLI is the scan engine; your Claude Code session is the fix engine. Only file paths cross the boundary — the orchestrator context never reads a report body.
 
 ---
 
 ## Features
 
 - **Interactive setup wizard** (`/llm-externalizer:llm-externalizer-setup`, since v9.6.0) — detects your platform (OS, arch, RAM, GPU), finds installed runners (Ollama, LM Studio, vLLM, llama.cpp, Jan), helps download a Hugging Face model with the `hf` CLI, runs five calibrated compatibility tests on the chosen model, and emits a paste-ready `settings.yaml` profile snippet via a stdlib-only generator (`scripts/setup/build-snippet.py`). The wizard NEVER writes to your `settings.yaml` — user-only-configuration policy.
-- **Scan externalization** — 40 MCP tools for code review, duplicate hunting, import/reference validation, spec-compliance checks, bulk LLM-driven structured-output extraction (mass-scouting), full-sentence meaning-equivalence clustering (`cluster_synonyms`), and injection-hardened security triage (`security_scan`), all backed by a local or remote LLM you choose.
+- **Scan externalization** — 40 CLI commands for code review, duplicate hunting, import/reference validation, spec-compliance checks, bulk LLM-driven structured-output extraction (mass-scouting), full-sentence meaning-equivalence clustering (`cluster-synonyms`), and injection-hardened security triage (`security-scan`), all backed by a local or remote LLM you choose.
 - **Fix loop stays local** — fixes are applied by your Claude Code Sonnet / Opus session, NOT by the external LLM. You get the ensemble's second opinion without giving up editorial control.
 - **False-positive-aware fixers** — every fixer subagent runs a verification pass (file-read + flow-trace) before editing. Empirically ~15–30% of ensemble findings are false positives; the fixer rejects them with a typed reason.
-- **40 plugin commands** — 23 base (`setup`, `discover`, `reset`, `configure`, `change-model`, `install-statusline`, `update-all`, `benchmark`, `bench-free-pool`, `assess-model`, `check-model-health`, `discover-new-models`, `security-triage-benchmark`, `search-existing-benchmark`, `auto-replace`, `search-existing-implementations`, `cluster-synonyms`, `scan-and-fix`, `scan-and-fix-serially`, `fix-report`, `fix-found-bugs`, `high-quality-scan`, `high-quality-scan-and-fix`) + 16 mass-scout (`mass-scout-register`, `mass-scout-preclassify`, `mass-scout-estimate`, `mass-scout`, `mass-scout-search`, `mass-scout-search-xjob`, `mass-scout-get`, `mass-scout-export`, `mass-scout-jobs-list`, `mass-scout-audit-sample`, `mass-scout-body-get`, `mass-scout-build-fieldset`, `mass-scout-propose-fieldset`, `mass-scout-list-bundled-fieldsets`, `mass-scout-diff`, `mass-scout-chain`) + 1 dedicated security tool (`security-scan`). Full list in [Plugin commands](#plugin-commands). Note: `/llm-externalizer:llm-externalizer-change-model` is a *user-only* redirect — it shows your current config (`discover`/`get_settings`) and guides you to edit `~/.llm-externalizer/settings.yaml` by hand, then reload via `reset`. There is no `change_model` or `set_settings` MCP tool (the server is read-only by design). Model / profile changes always go through editing `~/.llm-externalizer/settings.yaml` (or running the setup wizard above).
-- **40 MCP tools** — 17 core/utility (`chat`, `code_task`, `scan_folder`, `high_quality_scan`, `compare_files`, `check_references`, `check_imports`, `check_against_specs`, `search_existing_implementations`, `cluster_synonyms`, `batch_check`, `discover`, `reset`, `get_settings`, `or_model_info`, `or_model_info_table`, `or_model_info_json`) + 16 mass-scout (`mass_scout_register`, `mass_scout_preclassify`, `mass_scout_estimate`, `mass_scout`, `mass_scout_search`, `mass_scout_search_xjob`, `mass_scout_get`, `mass_scout_export`, `mass_scout_jobs_list`, `mass_scout_audit_sample`, `mass_scout_body_get`, `mass_scout_build_fieldset`, `mass_scout_propose_fieldset`, `mass_scout_list_bundled_fieldsets`, `mass_scout_diff`, `mass_scout_chain`) + 7 security / model-qualification (`security_scan`, `security_triage_benchmark`, `search_existing_benchmark`, `assess_model`, `check_model_health`, `discover_new_models`, `check_tool_replacements`). The MCP server is **read-only by design** — there are no `set_settings`, `change_model`, `fix_code`, `batch_fix`, `merge_files`, `split_file`, `revert_file`, or `custom_prompt` tools (configuration is user-only; `custom_prompt` was merged into `chat`). The `max_retries: 3` parameter on per-file tools (chat/code_task/scan_folder) replaces the older `batch_check` workflow (parallel execution + exponential backoff + circuit breaker); `batch_check` itself is DEPRECATED.
+- **40 plugin commands** — 23 base (`setup`, `discover`, `reset`, `configure`, `change-model`, `install-statusline`, `update-all`, `benchmark`, `bench-free-pool`, `assess-model`, `check-model-health`, `discover-new-models`, `security-triage-benchmark`, `search-existing-benchmark`, `auto-replace`, `search-existing-implementations`, `cluster-synonyms`, `scan-and-fix`, `scan-and-fix-serially`, `fix-report`, `fix-found-bugs`, `high-quality-scan`, `high-quality-scan-and-fix`) + 16 mass-scout (`mass-scout-register`, `mass-scout-preclassify`, `mass-scout-estimate`, `mass-scout`, `mass-scout-search`, `mass-scout-search-xjob`, `mass-scout-get`, `mass-scout-export`, `mass-scout-jobs-list`, `mass-scout-audit-sample`, `mass-scout-body-get`, `mass-scout-build-fieldset`, `mass-scout-propose-fieldset`, `mass-scout-list-bundled-fieldsets`, `mass-scout-diff`, `mass-scout-chain`) + 1 dedicated security tool (`security-scan`). Full list in [Plugin commands](#plugin-commands). Note: `/llm-externalizer:llm-externalizer-change-model` is a *user-only* redirect — it shows your current config (`discover`/`get-settings`) and guides you to edit `~/.llm-externalizer/settings.yaml` by hand, then reload via `reset`. There is no `change-model` or `set-settings` CLI command (the CLI is read-only by design). Model / profile changes always go through editing `~/.llm-externalizer/settings.yaml` (or running the setup wizard above).
+- **40 CLI commands** — 17 core/utility (`chat`, `code-task`, `scan-folder`, `high-quality-scan`, `compare-files`, `check-references`, `check-imports`, `check-against-specs`, `search-existing-implementations`, `cluster-synonyms`, `batch-check`, `discover`, `reset`, `get-settings`, `or-model-info`, `or-model-info-table`, `or-model-info-json`) + 16 mass-scout (`mass-scout-register`, `mass-scout-preclassify`, `mass-scout-estimate`, `mass-scout`, `mass-scout-search`, `mass-scout-search-xjob`, `mass-scout-get`, `mass-scout-export`, `mass-scout-jobs-list`, `mass-scout-audit-sample`, `mass-scout-body-get`, `mass-scout-build-fieldset`, `mass-scout-propose-fieldset`, `mass-scout-list-bundled-fieldsets`, `mass-scout-diff`, `mass-scout-chain`) + 7 security / model-qualification (`security-scan`, `security-triage-benchmark`, `search-existing-benchmark`, `assess-model`, `check-model-health`, `discover-new-models`, `check-tool-replacements`). The CLI is **read-only by design** — there are no `set-settings`, `change-model`, `fix-code`, `batch-fix`, `merge-files`, `split-file`, `revert-file`, or `custom-prompt` commands (configuration is user-only; `custom_prompt` was merged into `chat`). The `max_retries: 3` parameter on per-file commands (chat/code-task/scan-folder) replaces the older `batch-check` workflow (parallel execution + exponential backoff + circuit breaker); `batch-check` itself is DEPRECATED.
 - **6 internal agents** — setup wizard + reviewer + 4 fixer variants (parallel/serial × Sonnet/Opus). The setup-agent ships with five preloaded Hugging Face helper skills (`huggingface-best`, `huggingface-local-models`, `huggingface-mlx-models`, `hf-cli`, `huggingface-community-evals`) — all marked `user-invocable: false`. See [Agents](#agents).
 - **3 backend modes** — `local` (sequential), `remote` (parallel, single model), `remote-ensemble` (parallel, three models → combined report).
 - **6 backend presets** — LM Studio, Ollama, vLLM, llama.cpp, generic local, OpenRouter.
@@ -120,7 +120,7 @@ Keeping the fix half local means the expensive model only touches code when it a
 - **File grouping** — `---GROUP:<id>---` markers in a file list pack related files into one request and produce one report per group.
 - **Secret handling** — every file is run through the pre-scan secret detector (`scan_secrets: true`) before it leaves your machine, and any hit is rewritten to `[REDACTED:LABEL]` (`redact_secrets: true`) so the scan still completes on partially-dirty inputs. The detector's `SECRET_PATTERNS` set now includes wildcard variants for the common API-key shapes (`sk-…`, `gho_…`, `aws_…`, etc.) and prefix-bearing tokens, so accidental leaks via `.env`, fixtures, or stale comments are caught and silently masked instead of being shipped to the remote LLM. Opt out per run with `--no-secrets` only after you have moved secrets to a gitignored `.env`.
 - **File-based output** — every report lands in `./reports/llm-externalizer/`. Only paths flow through the orchestrator context (≤ 200 bytes per report).
-- **Cross-platform** — macOS, Linux, Windows. The MCP server is a bundled Node executable; the helper scripts are pure Python 3.12+.
+- **Cross-platform** — macOS, Linux, Windows. `llm-ext` is a bundled Node executable; the helper scripts are pure Python 3.12+.
 
 ---
 
@@ -132,7 +132,7 @@ Keeping the fix half local means the expensive model only touches code when it a
 | Tool | Minimum | Why |
 |---|---|---|
 | **Claude Code** | 2.0+ | Host for the plugin |
-| **Node.js + npm** | Node ≥ 18 | The install hook rebuilds the bundled MCP server |
+| **Node.js + npm** | Node ≥ 18 | The install hook rebuilds the bundled `llm-ext` CLI |
 | **Python** | ≥ 3.12 | Install hook runs `scripts/setup.py`; statusline is Python |
 | **git** | any recent | `git ls-files` / `git rev-parse` drive codebase auto-discovery |
 | **ONE backend** | — | Either an OpenRouter API key **or** a local model server (LM Studio, Ollama, vLLM, llama.cpp) |
@@ -221,7 +221,7 @@ You have **three ways** to give the plugin your OpenRouter key. They are listed 
 
 #### 1. Shell environment variable (recommended)
 
-Export `OPENROUTER_API_KEY` in your shell rc file. **Every** consumer in this plugin picks it up automatically: the MCP server, the statusline (🏦 remaining-credit panel), the `llm-externalizer` CLI, and any subprocess Claude Code spawns. Nothing else to configure.
+Export `OPENROUTER_API_KEY` in your shell rc file. **Every** consumer in this plugin picks it up automatically: the statusline (🏦 remaining-credit panel), the `llm-ext` CLI, and any subprocess Claude Code spawns. Nothing else to configure.
 
 <details open>
 <summary>macOS / Linux (bash / zsh / fish)</summary>
@@ -264,7 +264,7 @@ profiles:
 
 Why this is **not** recommended: the statusline and any other subprocess that does not parse settings.yaml (CLI calls, ad-hoc scripts) will not see the key, so the 🏦 remaining-credit panel stays blank. Also: a literal key in a YAML file is one careless `git add` away from a leak.
 
-#### 3. Claude Code plugin keychain (supported, not recommended)
+#### 3. Claude Code plugin keychain (not functional today — see below)
 
 Store the key in the OS keychain via Claude Code:
 
@@ -273,7 +273,11 @@ Store the key in the OS keychain via Claude Code:
 claude plugin configure llm-externalizer
 ```
 
-Claude Code exports the value to the MCP server as `CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY`; the server's `resolveEnvValue()` transparently maps it onto `OPENROUTER_API_KEY`. **But** that mapping only happens inside the MCP server process tree — the statusline subprocess and ad-hoc CLI calls run outside it and will not see the key, so the 🏦 panel stays blank.
+The CLI still contains a `CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY` → `OPENROUTER_API_KEY` mapping (`resolveEnvValue()` in `mcp-server/src/config.ts`), left over from when Claude Code spawned the MCP server directly and injected that variable into it. **That injection no longer happens for this plugin.** `llm-ext` now runs the way every other tool call does — as a plain subprocess spawned via `Bash` — and this plugin's `userConfig` value is not among the variables that reach it.
+
+Verified empirically inside a Bash tool call: `CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY` is unset, while `discover` resolves the key whenever `OPENROUTER_API_KEY` is exported in the shell. Note the narrow shape of that result — *other* plugins' `CLAUDE_PLUGIN_OPTION_*` variables **are** visible in the same environment, so the mechanism is not globally absent and it is not worth debugging as if it were. What is missing is specifically this plugin's key.
+
+**So treat the keychain option as non-functional for the CLI today** — exporting `OPENROUTER_API_KEY` in your shell rc (option 1) is the only reliable way to supply it.
 
 #### Auth precedence
 
@@ -281,9 +285,9 @@ When more than one source is set, the resolution order is:
 
 1. Shell env `OPENROUTER_API_KEY` (or any env var the profile's `api_key` points at via `$VAR` syntax)
 2. Literal value in `settings.yaml::profiles.<name>.api_key`
-3. Claude Code keychain (`userConfig.openrouter_api_key`)
+3. Claude Code keychain (`userConfig.openrouter_api_key`) — **does not currently reach the CLI**; see above
 
-The default profile `remote-ensemble-geminigrok` works out of the box once any one of these is set.
+The default profile `remote-ensemble-geminigrok` works out of the box once (1) or (2) is set.
 </details>
 
 <details>
@@ -469,10 +473,10 @@ Commands are slash-invoked inside Claude Code. The format is `/llm-externalizer:
 |---|---|---|
 | `/llm-externalizer:llm-externalizer-setup` | Interactive setup wizard — detects platform, installs runner if needed, downloads model, runs five compatibility tests, prints paste-ready profile snippet | `settings.yaml` profile snippet (user pastes manually) |
 | `/llm-externalizer:llm-externalizer-discover` | Print active profile, model, auth, context window, health | Text summary |
-| `/llm-externalizer:llm-externalizer-reset` | Soft-restart the MCP server — reload `settings.yaml`, clear caches, reset session counters. Waits for in-flight LLM calls to finish first | Confirmation line (active profile + model) |
+| `/llm-externalizer:llm-externalizer-reset` | Purge the on-disk caches (model list, concurrency, LM Studio detection) and reset session counters. Every `llm-ext` invocation is already a fresh process — there is nothing to restart and no in-flight calls to wait for | Confirmation line (active profile + model) |
 | `/llm-externalizer:llm-externalizer-configure` | Read-only profile inspector (edit `settings.yaml` to change) | Profile table |
-| `/llm-externalizer:llm-externalizer-change-model` | User-only redirect — shows the current config (`discover`/`get_settings`), then guides you to edit `~/.llm-externalizer/settings.yaml` by hand and reload via `reset`. There is no `change_model` MCP tool; the server is read-only | `settings.yaml` edit guidance |
-| `/llm-externalizer:llm-externalizer-install-statusline` | Install the bundled multi-tier statusline (credit balance, model, context bar, MCP cost, git, usage limits) | Updated `settings.json` |
+| `/llm-externalizer:llm-externalizer-change-model` | User-only redirect — shows the current config (`discover`/`get-settings`), then guides you to edit `~/.llm-externalizer/settings.yaml` by hand and reload via `reset`. There is no `change-model` CLI command; the CLI is read-only | `settings.yaml` edit guidance |
+| `/llm-externalizer:llm-externalizer-install-statusline` | Install the bundled multi-tier statusline (credit balance, model, context bar, LLM tokens & cost, git, usage limits) | Updated `settings.json` |
 | `/llm-externalizer:llm-externalizer-update-all` | **The whole model refresh in ONE command** — discover the live catalog, requirement-gate every tool, run every benchmark, rank, and atomically write the winners (ensemble + each `tool_models.<tool>` + the `free_models` pool). Defaults to a **provably $0** free-model refresh (incl. the free-models search); `--paid` / `--both` spend under a **hard `--budget-usd` cap** (default $2.00) that aborts *before* the first call if the pre-flight estimate exceeds it. `--dry-run` prints the plan + estimate and spends nothing | Update report + updated `settings.yaml` |
 | `/llm-externalizer:llm-externalizer-benchmark` | Run the OpenRouter model-selection harness over your sample to compare candidates | Benchmark report |
 | `/llm-externalizer:llm-externalizer-bench-free-pool` | Auto-fill the benchmark candidate set from the active profile's `free_models` (or the bundled `FREE_POOL_SEED`) — one flag instead of N `--include`s. Resolves the pool against the live catalog: a configured non-`:free` id is admitted only when the catalog prices it at exactly `$0` (fail-fast otherwise), and zero-cost open-beta models without a `:free` suffix (e.g. `openrouter/owl-alpha`) are auto-discovered into the sweep. Composes with `--security-triage`. The same sweep runs automatically when `free_only` flips ON and the cache has no `:free` entries (TRDD-f1510055, TRDD-WJND1N2W) | Benchmark report (zero-cost) |
@@ -497,7 +501,7 @@ Commands are slash-invoked inside Claude Code. The format is `/llm-externalizer:
 | `/llm-externalizer:llm-externalizer-mass-scout-register` | Walk a folder / take a file list and store every body in the SQLite cache (honors `.gitignore`; `--git-diff <ref>` for incremental) | Counter line `registered=N already=M skipped_too_big=K …` |
 | `/llm-externalizer:llm-externalizer-mass-scout-preclassify` | Script-only bucket tagger | Counter line per bucket |
 | `/llm-externalizer:llm-externalizer-mass-scout-estimate` | Cost / time / cap-skipped numbers for a fieldset; honors `--budget-usd`; `--live-context` queries OpenRouter for the real provider cap | Numbers + per-bucket breakdown |
-| `/llm-externalizer:llm-externalizer-mass-scout` | Run the LLM scout end-to-end; emits MCP `notifications/progress` per file | Markdown report under `reports/mass_scouting/` + counter line |
+| `/llm-externalizer:llm-externalizer-mass-scout` | Run the LLM scout end-to-end; emits progress lines to stderr per file | Markdown report under `reports/mass_scouting/` + counter line |
 | `/llm-externalizer:llm-externalizer-mass-scout-search` | Per-job search (regex bypass / FTS5 / structured / combined) | Hit list (text or `--json`) |
 | `/llm-externalizer:llm-externalizer-mass-scout-search-xjob` | Cross-job federated search | Merged hit list |
 | `/llm-externalizer:llm-externalizer-mass-scout-get` | Print one row by `short_id` (with optional per-job result) | JSON row |
@@ -512,7 +516,7 @@ Commands are slash-invoked inside Claude Code. The format is `/llm-externalizer:
 | `/llm-externalizer:llm-externalizer-mass-scout-chain` | Run a second scout pass on the subset of a prior job's rows that match a `--filter "$.path:OP:value"` expression, using a fresh fieldset. Drills deeper without re-scouting the whole tree | New job's mass-scout markdown report under `reports/mass_scouting/` + counter line |
 | `/llm-externalizer:llm-externalizer-security-scan` | **Injection-hardened** security triage (NOT mass_scout). Adjudicates a batch of `targets[]` (snippet \| file_path+line+context_lines \| path_glob) + per-category rubrics into per-item `{verdict, confidence, reason, injection_observed}`; nonce-delimited envelope + strict json_schema + fail-safe-to-`uncertain` | JSON + markdown report under `reports/security_scan/` + counter line |
 
-Bundled fieldsets shipped with the plugin: `code-audit`, `skill-audit`, `security-audit`, `pr-review` (pass as `--fields-file bundled:<name>`). The CLI also exposes every tool as `bin/llm-externalizer mass-scout <subcommand>` — see `--help` for the full flag list.
+Bundled fieldsets shipped with the plugin: `code-audit`, `skill-audit`, `security-audit`, `pr-review` (pass as `--fields-file bundled:<name>`). The CLI also exposes every tool as `bin/llm-ext mass-scout-<subcommand>` — see `--help` for the full flag list.
 
 <details>
 <summary><b>Parameter reference — click to expand</b></summary>
@@ -521,7 +525,7 @@ Bundled fieldsets shipped with the plugin: `code-audit`, `skill-audit`, `securit
 No parameters.
 
 ### `/llm-externalizer:llm-externalizer-configure`
-No parameters. Read-only; edit `~/.llm-externalizer/settings.yaml` directly then call MCP `reset` or restart.
+No parameters. Read-only; edit `~/.llm-externalizer/settings.yaml` directly then run `llm-ext reset` (or restart).
 
 ### `/llm-externalizer:llm-externalizer-search-existing-implementations`
 
@@ -566,13 +570,13 @@ Same parameters as `scan-and-fix`. Fix phase differs: one fixer subagent at a ti
 No parameters. Interactive wizard. WSL2 users may pass `--include-wsl2-host` to also probe the Windows side for reachable runners.
 
 ### `/llm-externalizer:llm-externalizer-change-model`
-No parameters. User-only config helper — prints a paste-ready `settings.yaml` edit, then guides you to save and call MCP `reset`. There is no `change_model` MCP tool.
+No parameters. User-only config helper — prints a paste-ready `settings.yaml` edit, then guides you to save and run `llm-ext reset`. There is no `change-model` CLI command.
 
 ### `/llm-externalizer:llm-externalizer-install-statusline`
 No parameters. Honors the `REFRESH_INTERVAL` env var (seconds; default `3`) when invoking the underlying installer.
 
 ### `/llm-externalizer:llm-externalizer-cluster-synonyms`
-Wraps the `cluster_synonyms` tool / `bin/llm-externalizer cluster-synonyms --input-json '<json>'`. Inputs: `input_file` (JSONL of `{id, sentence}`), `output_dir`, optional `embeddings_file`, `policy_file`, `resume_from`.
+Wraps the `cluster-synonyms` command (`bin/llm-ext cluster-synonyms`). Inputs: `input_file` (JSONL of `{id, sentence}`), `output_dir`, optional `embeddings_file`, `policy_file`, `resume_from`.
 
 ### `/llm-externalizer:llm-externalizer-update-all`
 The entire model pipeline as one command: `llm-ext-benchmark --update-all`. It discovers the live OpenRouter catalog, applies each tool's requirements from the model-qualification registry, runs every tool that HAS a benchmark, ranks the survivors, and atomically writes the winners into `settings.yaml` — the ensemble (`model`/`second_model`/`third_model`), each `tool_models.<tool>`, and the `free_models` pool. It ends with one machine-readable `[OK]`/`[FAILED]` line and a report.
@@ -637,7 +641,7 @@ benchmark (`security_scan`, `search_existing_implementations`), checks its
 configured model's health against the durable ledger and, when degraded (or with
 `force`), runs that tool's benchmark to recommend the best same-or-cheaper
 replacement. On a healthy ledger no benchmark runs. This command wraps the
-**read-only** `check_tool_replacements` MCP tool — it writes a report and
+**read-only** `check-tool-replacements` CLI command — it writes a report and
 recommends, it **never** rewrites settings. To adopt a recommendation, run the
 CLI writer (the sole writer path): `llm-ext-benchmark --auto-replace --apply`
 (`--apply` requires `--auto-replace`; run `reset` afterwards; honors `free_only`).
@@ -657,15 +661,15 @@ Common per-command flag highlights:
 - `--json` on `search`, `search-xjob`, `get`, `jobs-list`, `audit-sample`, `diff`, `list-bundled-fieldsets` — structured output for downstream scripts.
 - Filter syntax for `search` / `search-xjob` / `chain`: `'$.path:OP:value'` where `OP ∈ {=, !=, >, >=, <, <=, LIKE}` (e.g. `'$.is_async:=:true'`, `'$.severity:LIKE:critical%'`).
 
-CLI equivalents are exposed as `bin/llm-externalizer mass-scout <subcommand>` for every command — run any one with `--help` (or just `bin/llm-externalizer mass-scout --help`) for the full flag list.
+CLI equivalents are exposed as `bin/llm-ext mass-scout-<subcommand>` for every command — run any one with `--help` for the full flag list.
 
 </details>
 
 ---
 
-## MCP tools
+## CLI commands
 
-These are **direct MCP tool calls** — addressable by skills, custom agents, or scripts as `mcp__plugin_llm-externalizer_llm-externalizer__<tool>`. End users typically don't call these directly; they use the slash commands above. Tools are listed here for advanced users writing custom workflows.
+These are **direct `llm-ext` calls** — run as `llm-ext <command> [--flag value ...]` (or `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" <command> ...` from a skill/agent/script). End users typically don't call these directly; they use the slash commands above. Commands are listed here for advanced users writing custom workflows.
 
 > **In-depth docs** (`docs/`, on-demand companions to the lean always-loaded `rules/use-llm-externalizer.md`):
 > - [`agent-usage-reference.md`](docs/agent-usage-reference.md) — full operational reference: per-tool tables, the batching model, the `answer_mode` explanation, the profile/auth/`tool_models` workflow, usage patterns, safety, constraints.
@@ -685,7 +689,7 @@ These are **direct MCP tool calls** — addressable by skills, custom agents, or
 | `check_imports` | LLM extracts imports; server verifies each exists on disk |
 | `check_against_specs` | Compare sources against a spec file; report deviations |
 | `search_existing_implementations` | FFD-batched duplicate hunt; exhaustive `NO` / `YES symbol=<name> lines=<a-b>` per file |
-| `cluster_synonyms` | Cluster SENTENCES / short labels by full-sentence meaning equivalence (NOT word-level). File-in, file-out, zero orchestrator tokens; the whole batch+verify+canonicalise loop runs in the server. For taxonomy / ontology / label canonicalisation over 10k–1M items. Resumable from a checkpoint; budget-capped. CLI: `bin/llm-externalizer cluster-synonyms --input-json '<json>'` |
+| `cluster_synonyms` | Cluster SENTENCES / short labels by full-sentence meaning equivalence (NOT word-level). File-in, file-out, zero orchestrator tokens; the whole batch+verify+canonicalise loop runs in the server. For taxonomy / ontology / label canonicalisation over 10k–1M items. Resumable from a checkpoint; budget-capped. CLI: `bin/llm-ext cluster-synonyms` |
 | `batch_check` | Multi-file sanity check wrapper (DEPRECATED — use `chat` / `code_task` with `answer_mode=0`, `max_retries=3`) |
 
 ### Mass-scouting tools (16)
@@ -697,7 +701,7 @@ The base 8-tool pipeline plus 8 follow-on tools for fieldset authoring, job intr
 | `mass_scout_register` | Walk a folder / take explicit `file_paths`; cache every body in SQLite (idempotent). Honors `.gitignore` by default; `--git-diff <ref>` for incremental |
 | `mass_scout_preclassify` | Script-only bucket tagger (binary / sourcecode / config / documentation / log_to_classify / rules_to_eval / has_frontmatter / unknown) |
 | `mass_scout_estimate` | Cost / time / cap-skipped numbers for a fieldset; honors `budget_usd`. `live_context` queries OpenRouter for the real provider cap |
-| `mass_scout` | Compile fieldset → JSON Schema → call LLM per file → repair + validate → persist; emits MCP `notifications/progress` per file |
+| `mass_scout` | Compile fieldset → JSON Schema → call LLM per file → repair + validate → persist; emits progress lines to stderr per file |
 | `mass_scout_search` | Per-job search (regex bypass / FTS5 / structured / combined) |
 | `mass_scout_search_xjob` | Cross-job federated search; merges per-job hits by bm25 |
 | `mass_scout_get` | Print one row by `short_id` (with optional per-job result) |
@@ -711,13 +715,13 @@ The base 8-tool pipeline plus 8 follow-on tools for fieldset authoring, job intr
 | `mass_scout_diff` | Compare two jobs row-by-row; counts only_in_a / only_in_b / changed (with changed_keys) |
 | `mass_scout_chain` | Re-scout the SUBSET of an existing job's results matching a JSON-extract filter, with a fresh fieldset |
 
-The CLI exposes every sub-command as `bin/llm-externalizer mass-scout <subcommand>`. The 8 slash commands listed above are 1:1 wrappers around the base 8 sub-commands; the remaining 8 are MCP-only and are addressed by skills/agents. The `llm-externalizer-mass-scouting` skill walks through the full pipeline including the bundled fieldsets, troubleshooting flowchart, and worked example.
+The CLI exposes every sub-command as `bin/llm-ext mass-scout <subcommand>`. The 8 slash commands listed above are 1:1 wrappers around the base 8 sub-commands; the remaining 8 are CLI-only and are addressed by skills/agents. The `llm-externalizer-mass-scouting` skill walks through the full pipeline including the bundled fieldsets, troubleshooting flowchart, and worked example.
 
 ### Security tools
 
 | Tool | Purpose |
 |---|---|
-| `security_scan` | **Dedicated, injection-hardened** security triage for suspected-malicious code. NOT the mass_scout pipeline — a bespoke judge with a nonce-delimited untrusted-data envelope, hardened system prompt, strict json_schema output, in-band injection pre-scan, and fail-safe-to-`uncertain` on every error/deviation. Takes a batch of `targets[]` (inline snippet \| file_path+line+context_lines window \| path_glob) + per-category rubrics; emits per-item `{verdict: threat\|not_threat\|uncertain, confidence, reason, injection_observed}` to a JSON + markdown report. CLI: `bin/llm-externalizer security-scan --input-json '<json>'`. Env: `$OPENROUTER_API_KEY` (absent ⇒ all verdicts `uncertain`) |
+| `security_scan` | **Dedicated, injection-hardened** security triage for suspected-malicious code. NOT the mass_scout pipeline — a bespoke judge with a nonce-delimited untrusted-data envelope, hardened system prompt, strict json_schema output, in-band injection pre-scan, and fail-safe-to-`uncertain` on every error/deviation. Takes a batch of `targets[]` (inline snippet \| file_path+line+context_lines window \| path_glob) + per-category rubrics; emits per-item `{verdict: threat\|not_threat\|uncertain, confidence, reason, injection_observed}` to a JSON + markdown report. CLI: `bin/llm-ext security-scan`. Env: `$OPENROUTER_API_KEY` (absent ⇒ all verdicts `uncertain`) |
 
 ### Utility tools
 
@@ -796,7 +800,7 @@ The settings file lives at:
 - **Windows:** `%USERPROFILE%\.llm-externalizer\settings.yaml`
 - **WSL2** (Linux side, addressed from Windows): `\\wsl$\Ubuntu\home\<user>\.llm-externalizer\settings.yaml`
 
-The plugin creates it on first install with four starter profiles. Edit it with any text editor, save, then restart Claude Code — or call the MCP `reset` tool to reload without a restart.
+The plugin creates it on first install with four starter profiles. Edit it with any text editor, save, then run `llm-ext reset` to purge the caches (a restart is not required — every CLI call re-reads it fresh anyway).
 
 > [!NOTE]
 > The setup wizard uses `scripts/setup/build-snippet.py` to safely quote `settings.yaml` values via stdlib-only logic (no PyYAML at this step) so an attacker who controls a model name or env-var reference cannot trigger arbitrary code execution through a malicious YAML constructor. Documented model IDs are also verified against OpenRouter's live `/v1/models` endpoint by `scripts/publish.py` as a CI gate on every release.
@@ -984,11 +988,11 @@ gates never bump a tool to a *pricier* model than its incumbent.
 | `LLM_EXT_DUMP_REQUESTS` | Cost-audit hook. Set to a file path to append the **exact wire payload** (model + byte size + full JSON body) of every chat/code_task/ensemble request to that file, so you can verify there is no unexpected prompt/file inflation. Off unless set. The dumped body contains your prompt + file content — treat the file as sensitive. |
 
 > [!NOTE]
-> The **shell environment variable is the recommended way** to provide every key listed above. Both the MCP server and the statusline subprocess inherit it automatically, and the `llm-externalizer` CLI sees the same value with no extra plumbing. Profile-level `api_key` / `api_token` fields and the Claude Code keychain (`userConfig.openrouter_api_key`) are supported as fallbacks but only the MCP server sees them — the statusline's 🏦 panel stays blank, and ad-hoc CLI calls won't pick the key up. See [First run § A. OpenRouter](#first-run) for the full precedence list and the trade-offs.
+> The **shell environment variable is the recommended way** to provide every key listed above. The statusline subprocess and every `llm-ext` invocation inherit it automatically, with no extra plumbing. Profile-level `api_key` / `api_token` fields are a supported fallback (read from `settings.yaml`). The Claude Code keychain (`userConfig.openrouter_api_key`) is **not** a reliable fallback — see [First run § A. OpenRouter](#first-run) for why. See that same section for the full precedence list and the trade-offs.
 
 ### Optional: statusline
 
-Adds a multi-tier status bar with: model name, context-window bar, **live OpenRouter credit balance**, MCP tokens & cost, git branch, and Claude Code 5-hour / 7-day usage limits. Width-aware (1 line at ≥ 184 cols → 6 lines under 65 cols), per-section error isolation, no external dependencies.
+Adds a multi-tier status bar with: model name, context-window bar, **live OpenRouter credit balance**, LLM tokens & cost, git branch, and Claude Code 5-hour / 7-day usage limits. Width-aware (1 line at ≥ 184 cols → 6 lines under 65 cols), per-section error isolation, no external dependencies.
 
 Easiest way — invoke the bundled slash command from inside Claude Code:
 
@@ -1022,13 +1026,13 @@ python3 "$env:CLAUDE_PLUGIN_ROOT\scripts\install_statusline.py"
 </details>
 
 > [!NOTE]
-> The OpenRouter remaining-credit panel (🏦) only renders when `OPENROUTER_API_KEY` is exported in your shell environment. The statusline runs as a fresh subprocess on every refresh, so the plugin's keychain (`userConfig.openrouter_api_key`) and the per-profile `api_key` field in `settings.yaml` are **not visible** to it — see [First run § A. OpenRouter](#first-run) for why the shell env is the only way to get every consumer (MCP, statusline, CLI) to share the same key.
+> The OpenRouter remaining-credit panel (🏦) only renders when `OPENROUTER_API_KEY` is exported in your shell environment. The statusline runs as a fresh subprocess on every refresh, so the plugin's keychain (`userConfig.openrouter_api_key`) and the per-profile `api_key` field in `settings.yaml` are **not visible** to it — see [First run § A. OpenRouter](#first-run) for why the shell env is the only way to get every consumer (statusline, `llm-ext`) to share the same key.
 
 See `scripts/statusline/README.md` for the full feature matrix and width-tiering details.
 
 ### Usage history
 
-Every LLM web request the plugin makes — from any MCP tool **or** the `llm-externalizer` CLI — appends one flat, human-readable line to `~/.llm-externalizer/history.log` (honors `LLM_EXT_CONFIG_DIR`; the file is created on first write, append-only, never truncated). One line per *web request* — a tool that makes several backend calls writes several lines, and a tool that makes none writes nothing. The log is for eyeballing and `grep`; the plugin ships no query/aggregation command for it.
+Every LLM web request the plugin makes — from any `llm-ext` command — appends one flat, human-readable line to `~/.llm-externalizer/history.log` (honors `LLM_EXT_CONFIG_DIR`; the file is created on first write, append-only, never truncated). One line per *web request* — a tool that makes several backend calls writes several lines, and a tool that makes none writes nothing. The log is for eyeballing and `grep`; the plugin ships no query/aggregation command for it.
 
 Each line has 7 ` - `-separated fields:
 
@@ -1062,7 +1066,7 @@ Run `/llm-externalizer:llm-externalizer-discover` first — the output identifie
 
 | Symptom | Cause / fix |
 |---|---|
-| `discover` shows `$OPENROUTER_API_KEY (NOT SET)` | Env var missing from the MCP-server process env. Set it in your shell rc and restart Claude Code — OR store it via `claude plugin configure llm-externalizer` |
+| `discover` shows `$OPENROUTER_API_KEY (NOT SET)` | Env var missing from your shell environment. Set it in your shell rc and open a new terminal (the Claude Code keychain does **not** reliably reach the CLI — see [First run § A. OpenRouter](#first-run)) |
 | Token resolved but scans return 401 | Key revoked or scoped incorrectly. Check <https://openrouter.ai/keys> and regenerate |
 | Token resolved but scans return 429 | Out of credits or hit RPS ceiling. Check <https://openrouter.ai/activity>. AIMD back-off recovers automatically — just wait |
 | `model not found` | Model ID in `settings.yaml` was renamed / deprecated upstream. Look it up at <https://openrouter.ai/models> |
@@ -1098,7 +1102,7 @@ Run `/llm-externalizer:llm-externalizer-discover` first — the output identifie
 
 | Symptom | Cause / fix |
 |---|---|
-| vLLM half-installed — `pip` reports success but `python -c "import vllm"` fails | Stock `pip install vllm` on Apple Silicon installs broken wheels. Re-run the wizard and pick `vllm-metal` (Apple Silicon) or use the [`install-mcp-deps`](scripts/hooks/install-mcp-deps.sh) helper for Linux/Windows |
+| vLLM half-installed — `pip` reports success but `python -c "import vllm"` fails | Stock `pip install vllm` on Apple Silicon installs broken wheels. Re-run the wizard and pick `vllm-metal` (Apple Silicon), or a stock `pip install vllm` on Linux/Windows |
 | Jan port collision — Jan won't bind | Jan defaults to port `1337`. Stop the other process (`lsof -i :1337`) or change Jan's port in **Settings → Server** |
 | `hf` auth — gated repo returns 401 | `huggingface-cli login` once with a read token from <https://huggingface.co/settings/tokens>. Accept the model's license on the HF page |
 | Pasted snippet broke my YAML | Restore from the wizard's automatic backup: `cp ~/.llm-externalizer/settings.yaml.bak ~/.llm-externalizer/settings.yaml` |
@@ -1114,13 +1118,12 @@ Run `/llm-externalizer:llm-externalizer-discover` first — the output identifie
 ```
 llm-externalizer-plugin/
 ├── .claude-plugin/plugin.json     # Plugin manifest
-├── .mcp.json                      # MCP server launcher
-├── bin/                           # MCP launcher + CLI wrapper
+├── bin/                           # llm-ext + llm-ext-benchmark CLI entry points
 ├── commands/                      # 35 slash commands
 ├── agents/                        # 6 internal agents (reviewer + 4 fixers + setup-agent)
 ├── skills/                        # 15 auto-discovered skills
 ├── rules/                         # Lean always-loaded usage rule (auto-installed to ~/.claude/rules/)
-├── mcp-server/                    # Bundled TypeScript MCP server
+├── mcp-server/                    # Bundled TypeScript CLI engine (all 40 commands; name is historical)
 ├── scripts/                       # Python: setup, publish, validators, helpers
 └── docs/                          # Banner, cost image, agent docs (usage-reference, tool-use-cases, setup-and-configuration), OpenRouter refs
 ```
@@ -1230,7 +1233,7 @@ git rm .github/workflows/notify-marketplace.yml .github/workflows/ci.yml
 git commit -m "chore: disable owner-only workflows on fork"
 ```
 
-### 3 · Build the bundled MCP server
+### 3 · Build the bundled CLI
 
 ```bash
 # Installs npm deps and compiles TypeScript
