@@ -87,7 +87,16 @@ describe("benchmark CLI — the [OK|FAILED] final-line contract", () => {
 
   /** Run the bundle with NO OpenRouter credentials unless the case supplies them. */
   function run(args: string[], extraEnv: Record<string, string> = {}) {
-    const env = { ...process.env, LLM_EXT_CONFIG_DIR: cfg, CLAUDE_PROJECT_DIR: root, ...extraEnv };
+    // Explicit index signature (not the narrower inferred literal type) so the
+    // `delete` calls below type-check: spreading process.env alongside plain
+    // string properties otherwise loses its `[key: string]: string | undefined`
+    // index signature, and TS then rejects deleting a property it can't see.
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+      LLM_EXT_CONFIG_DIR: cfg,
+      CLAUDE_PROJECT_DIR: root,
+      ...extraEnv,
+    };
     delete env.OPENROUTER_API_KEY;
     delete env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
     const r = spawnSync(process.execPath, [BENCH_JS, ...args], { encoding: "utf-8", env });

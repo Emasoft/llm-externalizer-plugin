@@ -13,15 +13,15 @@
  * Run with: npx vitest run src/live-websearch.test.ts
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { describe, it, expect, afterAll } from 'vitest';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { join } from 'node:path';
 import { writeFileSync, unlinkSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { CLI_SCRIPT, type CliResult } from './test-helpers';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const SERVER_SCRIPT = join(__dirname, '..', 'dist', 'index.js');
+const execFileAsync = promisify(execFile);
+
 const TMP_DIR = '/tmp/__llm_ext_websearch_test';
 const MODEL = process.env.LM_STUDIO_MODEL || 'thecluster/qwen3.5-27b-mlx';
 
@@ -55,52 +55,57 @@ function cleanDir(dir: string) {
   mkdirSync(dir, { recursive: true });
 }
 
-async function createClient(): Promise<{ client: Client; transport: StdioClientTransport }> {
-  const transport = new StdioClientTransport({
-    command: 'node',
-    args: [SERVER_SCRIPT],
-    env: {
-      ...process.env,
-      LLM_EXT_CONFIG_DIR: TEST_CONFIG_DIR,
-      LLM_OUTPUT_DIR: join(TMP_DIR, 'output'),
-    },
-    stderr: 'pipe',
-  });
+/**
+ * Run one `llm-ext <tool>` invocation as a subprocess against the
+ * websearch-lmstudio profile written above — the local equivalent of
+ * `test-helpers.ts`'s `runCli()`, but pointed at this file's own
+ * TEST_CONFIG_DIR/MODEL instead of the shared synthetic/live profile
+ * resolution. Replaces the old MCP `createClient()` — there is no server
+ * to connect to any more, only a CLI to spawn.
+ */
+async function runWebsearchCli(
+  toolName: string,
+  args: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<CliResult> {
+  const cliArgs = [CLI_SCRIPT, toolName];
+  for (const [key, value] of Object.entries(args)) {
+    if (value === undefined) continue;
+    cliArgs.push(`--${key}`);
+    cliArgs.push(typeof value === 'string' ? value : JSON.stringify(value));
+  }
+  cliArgs.push('--quiet');
 
-  // Drain the server's stderr into the parent's stderr. If we leave the
-  // piped stderr unconsumed, the PassThrough buffer fills, backpressure
-  // propagates to the child's stderr, the OS pipe buffer (~64 KB) fills,
-  // and the server blocks on its next `process.stderr.write(...)` — which
-  // hangs the entire test. Attach the consumer BEFORE connect() so no
-  // early startup output is lost.
-  transport.stderr?.pipe(process.stderr);
-
-  const client = new Client(
-    { name: 'websearch-test-client', version: '1.0.0' },
-    { capabilities: {} },
-  );
-  await client.connect(transport);
-  return { client, transport };
+  try {
+    const { stdout, stderr } = await execFileAsync('node', cliArgs, {
+      env: {
+        ...process.env,
+        LLM_EXT_CONFIG_DIR: TEST_CONFIG_DIR,
+        LLM_OUTPUT_DIR: join(TMP_DIR, 'output'),
+        LLM_EXT_INSTALL_RULE: '0',
+      },
+      timeout: timeoutMs,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    return { content: [{ type: 'text', text: stdout.trim() }], isError: false, stderr, exitCode: 0 };
+  } catch (err) {
+    const e = err as { stdout?: string; stderr?: string; code?: number | null };
+    const stderrText = (e.stderr ?? '').trim();
+    const text = stderrText.length > 0 ? stderrText : (e.stdout ?? '').trim();
+    return { content: [{ type: 'text', text }], isError: true, stderr: e.stderr ?? '', exitCode: e.code ?? null };
+  }
 }
 
-function getText(result: unknown): string {
-  const content = (result as Record<string, unknown>).content;
-  if (!Array.isArray(content)) return '';
-  return (content[0] as { type: string; text: string } | undefined)?.text ?? '';
+function getText(result: CliResult): string {
+  return result.content[0]?.text ?? '';
 }
 
 // ── Pre-flight: verify LM Studio is reachable ────────────────────────
 
 describe('pre-flight (websearch)', () => {
-  let client: Client;
-  let transport: StdioClientTransport;
-
-  beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { if (transport) await transport.close(); });
-
   it('LLM backend is reachable', async () => {
     /** discover should report the backend as online */
-    const result = await client.callTool({ name: 'discover', arguments: {} });
+    const result = await runWebsearchCli('discover', {}, 60_000);
     const text = getText(result);
     expect(text).not.toMatch(/OFFLINE/i);
     expect(text).toMatch(/ONLINE/i);
@@ -112,12 +117,6 @@ describe('pre-flight (websearch)', () => {
 // the current React API and identify deprecated patterns.
 
 describe('web search: React deprecation detection', () => {
-  let client: Client;
-  let transport: StdioClientTransport;
-
-  beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { if (transport) await transport.close(); });
-
   it('detects deprecated React patterns by searching the web', async () => {
     /**
      * Given ONLY a source file with deprecated React class component patterns,
@@ -161,20 +160,17 @@ describe('web search: React deprecation detection', () => {
     ].join('\n'), 'utf-8');
 
     try {
-      const result = await client.callTool({
-        name: 'code_task',
-        arguments: {
-          instructions: [
-            'You have web search tools available. Use them.',
-            'Search the web for the official React 18+ migration guide and current API reference.',
-            'Then compare this source file against the current React API.',
-            'List every deprecated or removed API usage found in this file.',
-            'For each finding, state: the deprecated call, why it is deprecated, and the modern replacement.',
-            'Be concise — one line per finding.',
-          ].join(' '),
-          input_files_paths: sourceFile,
-        },
-      }, undefined, { timeout: 900_000 });
+      const result = await runWebsearchCli('code_task', {
+        instructions: [
+          'You have web search tools available. Use them.',
+          'Search the web for the official React 18+ migration guide and current API reference.',
+          'Then compare this source file against the current React API.',
+          'List every deprecated or removed API usage found in this file.',
+          'For each finding, state: the deprecated call, why it is deprecated, and the modern replacement.',
+          'Be concise — one line per finding.',
+        ].join(' '),
+        input_files_paths: sourceFile,
+      }, 900_000);
 
       expect(result.isError).toBeFalsy();
       const reportPath = getText(result);
@@ -203,12 +199,6 @@ describe('web search: React deprecation detection', () => {
 // Tests with a different ecosystem to validate web search generality.
 
 describe('web search: Express.js deprecation detection', () => {
-  let client: Client;
-  let transport: StdioClientTransport;
-
-  beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { if (transport) await transport.close(); });
-
   it('detects deprecated Express.js patterns by searching the web', async () => {
     /**
      * Source file uses deprecated Express.js patterns (body-parser as separate
@@ -254,20 +244,17 @@ describe('web search: Express.js deprecation detection', () => {
     ].join('\n'), 'utf-8');
 
     try {
-      const result = await client.callTool({
-        name: 'code_task',
-        arguments: {
-          instructions: [
-            'You have web search tools available. Use them.',
-            'Search the web for the current Express.js API documentation and migration guides.',
-            'Then compare this source file against the current Express API.',
-            'List every deprecated or removed API usage found in this file.',
-            'For each finding, state: the deprecated call, why it is deprecated, and the modern replacement.',
-            'Be concise — one line per finding.',
-          ].join(' '),
-          input_files_paths: sourceFile,
-        },
-      }, undefined, { timeout: 900_000 });
+      const result = await runWebsearchCli('code_task', {
+        instructions: [
+          'You have web search tools available. Use them.',
+          'Search the web for the current Express.js API documentation and migration guides.',
+          'Then compare this source file against the current Express API.',
+          'List every deprecated or removed API usage found in this file.',
+          'For each finding, state: the deprecated call, why it is deprecated, and the modern replacement.',
+          'Be concise — one line per finding.',
+        ].join(' '),
+        input_files_paths: sourceFile,
+      }, 900_000);
 
       expect(result.isError).toBeFalsy();
       const reportPath = getText(result);
@@ -297,12 +284,6 @@ describe('web search: Express.js deprecation detection', () => {
 // library and verify whether the code uses up-to-date patterns.
 
 describe('web search: Node.js API currency check', () => {
-  let client: Client;
-  let transport: StdioClientTransport;
-
-  beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { if (transport) await transport.close(); });
-
   it('identifies outdated Node.js patterns by checking current docs', async () => {
     /**
      * Source file uses Node.js patterns that were common in older versions
@@ -353,20 +334,17 @@ describe('web search: Node.js API currency check', () => {
     ].join('\n'), 'utf-8');
 
     try {
-      const result = await client.callTool({
-        name: 'code_task',
-        arguments: {
-          instructions: [
-            'You have web search tools available. Use them.',
-            'Search the web for the current Node.js API documentation (latest LTS version).',
-            'Then compare this source file against the current Node.js API.',
-            'List every deprecated, outdated, or insecure API usage found in this file.',
-            'For each finding, state: the deprecated call, why it is deprecated, and the modern replacement.',
-            'Be concise — one line per finding.',
-          ].join(' '),
-          input_files_paths: sourceFile,
-        },
-      }, undefined, { timeout: 900_000 });
+      const result = await runWebsearchCli('code_task', {
+        instructions: [
+          'You have web search tools available. Use them.',
+          'Search the web for the current Node.js API documentation (latest LTS version).',
+          'Then compare this source file against the current Node.js API.',
+          'List every deprecated, outdated, or insecure API usage found in this file.',
+          'For each finding, state: the deprecated call, why it is deprecated, and the modern replacement.',
+          'Be concise — one line per finding.',
+        ].join(' '),
+        input_files_paths: sourceFile,
+      }, 900_000);
 
       expect(result.isError).toBeFalsy();
       const reportPath = getText(result);

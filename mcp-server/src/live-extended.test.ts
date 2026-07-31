@@ -6,12 +6,10 @@
  * Run with: npx vitest run src/live-extended.test.ts
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { describe, it, expect, afterAll } from 'vitest';
 import { join } from 'node:path';
 import { writeFileSync, unlinkSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
-import { resolveTestConfig, createTestClient } from './test-helpers';
+import { resolveTestConfig, runCli, type CliResult } from './test-helpers';
 
 const TMP_DIR = '/tmp/__llm_ext_extended_test';
 
@@ -32,30 +30,33 @@ const LIVE =
 // default is a local, unreachable one).
 const testConfig = resolveTestConfig({ testName: 'extended', timeout: 300, requireLiveBackend: true });
 
-async function createClient(): Promise<{ client: Client; transport: StdioClientTransport }> {
-  return createTestClient(testConfig, 'extended-test-client');
-}
-
 function cleanDir(dir: string) {
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
 }
 
-function getText(result: unknown): string {
-  const content = (result as Record<string, unknown>).content;
-  if (!Array.isArray(content)) return '';
-  return (content[0] as { type: string; text: string } | undefined)?.text ?? '';
+function getText(result: CliResult): string {
+  return result.content[0]?.text ?? '';
+}
+
+/**
+ * Parse `[llm-externalizer] progress N/M (X%) — message` lines the CLI
+ * writes to stderr (src/index.ts's `makeProgressFn`) when NOT run with
+ * `--quiet`. Replaces the old MCP `onprogress` callback.
+ */
+function parseProgressEvents(stderr: string): Array<{ progress: number; total: number; message?: string }> {
+  const events: Array<{ progress: number; total: number; message?: string }> = [];
+  const re = /\[llm-externalizer\] progress (\d+)\/(\d+)(?: \(\d+%\))?(?: — (.+))?$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(stderr)) !== null) {
+    events.push({ progress: Number(m[1]), total: Number(m[2]), message: m[3] });
+  }
+  return events;
 }
 
 // ── chat: multi-file input ───────────────────────────────────────────
 
 describe.skipIf(!LIVE)('chat: multi-file input', () => {
-  let client: Client;
-  let transport: StdioClientTransport;
-
-  beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { if (transport) await transport.close(); });
-
   it('analyzes multiple files passed together', async () => {
     /** chat should read and respond about multiple input files */
     cleanDir(TMP_DIR);
@@ -65,13 +66,10 @@ describe.skipIf(!LIVE)('chat: multi-file input', () => {
     writeFileSync(f2, 'export interface User { name: string; age: number; }\n', 'utf-8');
 
     try {
-      const result = await client.callTool({
-        name: 'chat',
-        arguments: {
-          instructions: 'How many files were provided? Name each file and its purpose in 1 line each.',
-          input_files_paths: [f1, f2],
-        },
-      }, undefined, { timeout: 600_000 });
+      const result = await runCli(testConfig, 'chat', {
+        instructions: 'How many files were provided? Name each file and its purpose in 1 line each.',
+        input_files_paths: [f1, f2],
+      }, { timeoutMs: 600_000 });
 
       expect(result.isError).toBeFalsy();
       const reportPath = getText(result);
@@ -89,12 +87,6 @@ describe.skipIf(!LIVE)('chat: multi-file input', () => {
 // ── chat: system prompt via instructions_files_paths ──────────────────
 
 describe.skipIf(!LIVE)('chat: instructions from file', () => {
-  let client: Client;
-  let transport: StdioClientTransport;
-
-  beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { if (transport) await transport.close(); });
-
   it('reads instructions from a file', async () => {
     /** instructions_files_paths should be appended to instructions */
     cleanDir(TMP_DIR);
@@ -104,13 +96,10 @@ describe.skipIf(!LIVE)('chat: instructions from file', () => {
     writeFileSync(codeFile, 'def foo():\n  pass\n\ndef bar():\n  pass\n\ndef baz():\n  pass\n', 'utf-8');
 
     try {
-      const result = await client.callTool({
-        name: 'chat',
-        arguments: {
-          instructions_files_paths: instrFile,
-          input_files_paths: codeFile,
-        },
-      }, undefined, { timeout: 600_000 });
+      const result = await runCli(testConfig, 'chat', {
+        instructions_files_paths: instrFile,
+        input_files_paths: codeFile,
+      }, { timeoutMs: 600_000 });
 
       expect(result.isError).toBeFalsy();
       const reportPath = getText(result);
@@ -128,12 +117,6 @@ describe.skipIf(!LIVE)('chat: instructions from file', () => {
 // ── scan_folder ──────────────────────────────────────────────────────
 
 describe.skipIf(!LIVE)('scan_folder (live)', () => {
-  let client: Client;
-  let transport: StdioClientTransport;
-
-  beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { if (transport) await transport.close(); });
-
   it('scans a folder of .ts files', async () => {
     /** scan_folder should discover and process files by extension */
     const scanDir = join(TMP_DIR, 'scan_target');
@@ -143,14 +126,11 @@ describe.skipIf(!LIVE)('scan_folder (live)', () => {
     writeFileSync(join(scanDir, 'c.txt'), 'not a ts file\n', 'utf-8'); // should be skipped
 
     try {
-      const result = await client.callTool({
-        name: 'scan_folder',
-        arguments: {
-          folder_path: scanDir,
-          extensions: ['.ts'],
-          instructions: 'What does this file export? Reply in 1 sentence.',
-        },
-      }, undefined, { timeout: 600_000 });
+      const result = await runCli(testConfig, 'scan_folder', {
+        folder_path: scanDir,
+        extensions: ['.ts'],
+        instructions: 'What does this file export? Reply in 1 sentence.',
+      }, { timeoutMs: 600_000 });
 
       expect(result.isError).toBeFalsy();
       const text = getText(result);
@@ -173,14 +153,8 @@ describe.skipIf(!LIVE)('scan_folder (live)', () => {
 // this stresses with 3 distinct code patterns + progress validation.
 
 describe.skipIf(!LIVE)('batch_check stress: 3 files', () => {
-  let client: Client;
-  let transport: StdioClientTransport;
-
-  beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { if (transport) await transport.close(); });
-
   it('checks 3 files with diverse content and reports progress', async () => {
-    /** batch_check with 3 diverse files should process each and report progress */
+    /** batch_check with 3 diverse files should process each and report progress on stderr */
     const batchDir = join(TMP_DIR, 'batch3');
     cleanDir(batchDir);
 
@@ -197,29 +171,22 @@ describe.skipIf(!LIVE)('batch_check stress: 3 files', () => {
       files.push(fp);
     });
 
-    const progressEvents: Array<{ progress: number; total?: number; message?: string }> = [];
-
     try {
-      const result = await client.callTool(
+      const result = await runCli(
+        testConfig,
+        'batch_check',
         {
-          name: 'batch_check',
-          arguments: {
-            input_files_paths: files,
-            instructions: 'Any bugs? Reply YES or NO in 1 word.',
-          },
+          input_files_paths: files,
+          instructions: 'Any bugs? Reply YES or NO in 1 word.',
         },
-        undefined,
-        {
-          onprogress: (p) => {
-            progressEvents.push({ progress: p.progress, total: p.total, message: p.message });
-          },
-          timeout: 600_000,
-        },
+        { timeoutMs: 600_000, quiet: false },
       );
 
       expect(result.isError).toBeFalsy();
       const text = getText(result);
       expect(text).toBeDefined();
+
+      const progressEvents = parseProgressEvents(result.stderr);
 
       // Should have batch progress events showing file completion
       const batchProgress = progressEvents.filter(e => e.message?.includes('batch_check'));
@@ -237,12 +204,6 @@ describe.skipIf(!LIVE)('batch_check stress: 3 files', () => {
 // ── check_imports ────────────────────────────────────────────────────
 
 describe.skipIf(!LIVE)('check_imports (live)', () => {
-  let client: Client;
-  let transport: StdioClientTransport;
-
-  beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { if (transport) await transport.close(); });
-
   it('validates import paths in a TypeScript file', async () => {
     /** check_imports should find broken imports */
     cleanDir(TMP_DIR);
@@ -259,12 +220,9 @@ describe.skipIf(!LIVE)('check_imports (live)', () => {
     ].join('\n'), 'utf-8');
 
     try {
-      const result = await client.callTool({
-        name: 'check_imports',
-        arguments: {
-          input_files_paths: mainFile,
-        },
-      }, undefined, { timeout: 600_000 });
+      const result = await runCli(testConfig, 'check_imports', {
+        input_files_paths: mainFile,
+      }, { timeoutMs: 600_000 });
 
       // check_imports may return isError if the LLM extraction fails,
       // but it should not crash the server
@@ -286,12 +244,6 @@ describe.skipIf(!LIVE)('check_imports (live)', () => {
 // ── check_references ─────────────────────────────────────────────────
 
 describe.skipIf(!LIVE)('check_references (live)', () => {
-  let client: Client;
-  let transport: StdioClientTransport;
-
-  beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { if (transport) await transport.close(); });
-
   it('validates symbol references across files', async () => {
     /** check_references should detect undefined symbols */
     cleanDir(TMP_DIR);
@@ -307,13 +259,10 @@ describe.skipIf(!LIVE)('check_references (live)', () => {
     ].join('\n'), 'utf-8');
 
     try {
-      const result = await client.callTool({
-        name: 'check_references',
-        arguments: {
-          input_files_paths: mainFile,
-          instructions: 'This is TypeScript. Check if all referenced symbols are defined.',
-        },
-      }, undefined, { timeout: 600_000 });
+      const result = await runCli(testConfig, 'check_references', {
+        input_files_paths: mainFile,
+        instructions: 'This is TypeScript. Check if all referenced symbols are defined.',
+      }, { timeoutMs: 600_000 });
 
       // check_references may return isError if the LLM extraction fails on a
       // non-deterministic local model, but it should not crash the server.
@@ -340,12 +289,6 @@ describe.skipIf(!LIVE)('check_references (live)', () => {
 // to find deprecated usage patterns.
 
 describe.skipIf(!LIVE)('API deprecation check (live)', () => {
-  let client: Client;
-  let transport: StdioClientTransport;
-
-  beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { if (transport) await transport.close(); });
-
   it('detects deprecated API usage by comparing against docs', async () => {
     /**
      * Given:
@@ -421,21 +364,18 @@ describe.skipIf(!LIVE)('API deprecation check (live)', () => {
     ].join('\n'), 'utf-8');
 
     try {
-      const result = await client.callTool({
-        name: 'code_task',
-        arguments: {
-          instructions: [
-            'Compare the source code against the API documentation provided.',
-            'List each deprecated or removed API usage found in the source code.',
-            'For each one, state:',
-            '1. The line with the deprecated call',
-            '2. Why it is deprecated (removed/deprecated)',
-            '3. The correct v3 replacement',
-            'Be concise — one line per finding.',
-          ].join(' '),
-          input_files_paths: [sourceFile, docsFile],
-        },
-      }, undefined, { timeout: 600_000 });
+      const result = await runCli(testConfig, 'code_task', {
+        instructions: [
+          'Compare the source code against the API documentation provided.',
+          'List each deprecated or removed API usage found in the source code.',
+          'For each one, state:',
+          '1. The line with the deprecated call',
+          '2. Why it is deprecated (removed/deprecated)',
+          '3. The correct v3 replacement',
+          'Be concise — one line per finding.',
+        ].join(' '),
+        input_files_paths: [sourceFile, docsFile],
+      }, { timeoutMs: 600_000 });
 
       expect(result.isError).toBeFalsy();
       const reportPath = getText(result);
@@ -527,13 +467,10 @@ describe.skipIf(!LIVE)('API deprecation check (live)', () => {
     ].join('\n'), 'utf-8');
 
     try {
-      const result = await client.callTool({
-        name: 'code_task',
-        arguments: {
-          instructions: 'Compare the React source code against the migration guide. List every deprecated API usage and its modern replacement. Be concise.',
-          input_files_paths: [sourceFile, docsFile],
-        },
-      }, undefined, { timeout: 600_000 });
+      const result = await runCli(testConfig, 'code_task', {
+        instructions: 'Compare the React source code against the migration guide. List every deprecated API usage and its modern replacement. Be concise.',
+        input_files_paths: [sourceFile, docsFile],
+      }, { timeoutMs: 600_000 });
 
       expect(result.isError).toBeFalsy();
       const reportPath = getText(result);
@@ -562,12 +499,6 @@ describe.skipIf(!LIVE)('API deprecation check (live)', () => {
 // ── scan_secrets validation ──────────────────────────────────────────
 
 describe.skipIf(!LIVE)('scan_secrets (live)', () => {
-  let client: Client;
-  let transport: StdioClientTransport;
-
-  beforeAll(async () => { ({ client, transport } = await createClient()); });
-  afterAll(async () => { if (transport) await transport.close(); });
-
   it('aborts batch_check when file contains secrets', async () => {
     /** scan_secrets should prevent processing files with leaked secrets */
     cleanDir(TMP_DIR);
@@ -581,14 +512,11 @@ describe.skipIf(!LIVE)('scan_secrets (live)', () => {
     ].join('\n'), 'utf-8');
 
     try {
-      const result = await client.callTool({
-        name: 'batch_check',
-        arguments: {
-          input_files_paths: [secretFile],
-          instructions: 'Check this config.',
-          scan_secrets: true,
-        },
-      }, undefined, { timeout: 600_000 });
+      const result = await runCli(testConfig, 'batch_check', {
+        input_files_paths: [secretFile],
+        instructions: 'Check this config.',
+        scan_secrets: true,
+      }, { timeoutMs: 600_000 });
 
       // Should be an error — secrets detected
       expect(result.isError).toBe(true);

@@ -216,6 +216,10 @@ describe("security-triage benchmark — model routing + free_only", () => {
     }).catch((e: unknown) => e as FreeModeSkipError);
 
     expect(err).toBeInstanceOf(FreeModeSkipError);
+    // Narrow the `FreeModeSkipError | SecurityTriageBenchmarkResult` union —
+    // the instanceof assertion above proves it at runtime, but `expect()`
+    // doesn't narrow the static type, so TS still sees both branches.
+    if (!(err instanceof FreeModeSkipError)) throw new Error("expected FreeModeSkipError");
     expect(err.tool).toBe("security_scan");
     expect(err.nonFreeModelId).toBe(DEFAULT_MODEL);
     expect(err.message).toContain(`requires non-free model '${DEFAULT_MODEL}'`);

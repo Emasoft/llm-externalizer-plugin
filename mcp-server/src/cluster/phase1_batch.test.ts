@@ -35,6 +35,7 @@ function basePolicy(overrides: Partial<ClusterPolicy> = {}): ClusterPolicy {
     merge_min_cross_count: 3,
     overwrite_output: true,
     emit_sqlite_clusters: false,
+    skip_memory_guard: false,
     ...overrides,
   };
 }
