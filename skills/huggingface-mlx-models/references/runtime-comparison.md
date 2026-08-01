@@ -37,4 +37,4 @@ All three serve MLX-quantized models from `mlx-community/*` HF namespace.
 | Best for scan workload | Smallest install footprint; minimal flags; headless servers | Built-in `doctor`/`bench` for setup-wizard reliability+perf | GUI-first users; no command line for download/serve/swap |
 | Preset in `settings.yaml` | `generic-local` (`url: http://127.0.0.1:8082/v1`) | `vllm-local` (`url: http://localhost:8000`) | `lmstudio-local` (`url: http://localhost:1234`) |
 
-**Setup-agent hand-off:** for vMLX or the `vllm-local` Apple-Silicon path, invoke `Skill(skill: "vmlx-setup")` for install + serve flags. For vLLM-on-Apple-Silicon (vLLM core + community MLX backend plugin), invoke `Skill(skill: "vllm-metal-setup")`. For `mlx_lm.server` and LM Studio MLX runtime, the recipes here are self-contained.
+**Setup-agent hand-off:** for vMLX or the `vllm-local` Apple-Silicon path, invoke `Skill(vmlx-setup)` for install + serve flags. For vLLM-on-Apple-Silicon (vLLM core + community MLX backend plugin), invoke `Skill(vllm-metal-setup)`. For `mlx_lm.server` and LM Studio MLX runtime, the recipes here are self-contained.

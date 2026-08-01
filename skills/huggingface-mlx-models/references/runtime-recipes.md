@@ -56,7 +56,7 @@ Then run `llm-ext reset` to purge caches and reload settings (no server to resta
 
 ## Runtime 2 — vMLX (`vmlx serve`, MLX-native, built-in doctor/bench)
 
-For install + tuned-serve flags + `vmlx doctor`/`vmlx bench` reliability+perf checks, invoke `Skill(skill: "vmlx-setup")`. Once `vmlx serve <model-id> --port 8000` is running (optionally `--continuous-batching --enable-prefix-cache --enable-pld --kv-cache-quantization q8` for scan workloads), wire with `vllm-local` preset:
+For install + tuned-serve flags + `vmlx doctor`/`vmlx bench` reliability+perf checks, invoke `Skill(vmlx-setup)`. Once `vmlx serve <model-id> --port 8000` is running (optionally `--continuous-batching --enable-prefix-cache --enable-pld --kv-cache-quantization q8` for scan workloads), wire with `vllm-local` preset:
 
 ```yaml
 profiles:
@@ -68,7 +68,7 @@ profiles:
     # api_token: $LM_API_TOKEN              # only if you started vmlx with --api-key
 ```
 
-For the **vLLM-on-Apple-Silicon** path (vLLM core + community MLX plugin), use `Skill(skill: "vllm-metal-setup")` instead — also lands on `vllm-local` at `:8000`.
+For the **vLLM-on-Apple-Silicon** path (vLLM core + community MLX plugin), use `Skill(vllm-metal-setup)` instead — also lands on `vllm-local` at `:8000`.
 
 ## Runtime 3 — LM Studio MLX runtime (GUI / `lms` CLI)
 
@@ -122,7 +122,7 @@ mlx_lm.convert --hf-path <original-hf-repo> \
     --quantize --q-bits 4
 ```
 
-The output directory is usable by all three runtimes. vMLX also ships `vmlx convert` (similar flags, JANG quant support) — see `Skill(skill: "vmlx-setup")`.
+The output directory is usable by all three runtimes. vMLX also ships `vmlx convert` (similar flags, JANG quant support) — see `Skill(vmlx-setup)`.
 
 ## Common gotchas
 

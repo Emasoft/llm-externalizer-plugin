@@ -63,12 +63,12 @@ mlx_lm.server --model ~/models/l3-70b-4bit --host 127.0.0.1 --port 8082
   > Quant selection table · Beyond plain bit-quants
 - [runtime-recipes](references/runtime-recipes.md)
   > Default workflow (runtime-agnostic) · Runtime 1 — `mlx_lm.server` (official, Python-native) · Runtime 2 — vMLX (`vmlx serve`, MLX-native, built-in doctor/bench) · Runtime 3 — LM Studio MLX runtime (GUI / `lms` CLI) · Listing & comparing MLX models · Converting a non-MLX HF repo to MLX · Common gotchas · Examples
-- Related: `Skill(skill: "vmlx-setup")` — full vMLX install/serve guide.
-- Related: `Skill(skill: "vllm-metal-setup")` — vLLM-on-Apple-Silicon path.
-- Related: `Skill(skill: "huggingface-local-models")` — GGUF/llama.cpp path for Intel Mac/Linux/Windows.
-- Related: `Skill(skill: "hf-cli")` — `hf` command reference.
-- Related: `Skill(skill: "huggingface-best")` — best-model-for-task across HF leaderboards.
-- Related: `Skill(skill: "huggingface-community-evals")` — benchmark evaluation post-download.
+- Related: `Skill(vmlx-setup)` — full vMLX install/serve guide.
+- Related: `Skill(vllm-metal-setup)` — vLLM-on-Apple-Silicon path.
+- Related: `Skill(huggingface-local-models)` — GGUF/llama.cpp path for Intel Mac/Linux/Windows.
+- Related: `Skill(hf-cli)` — `hf` command reference.
+- Related: `Skill(huggingface-best)` — best-model-for-task across HF leaderboards.
+- Related: `Skill(huggingface-community-evals)` — benchmark evaluation post-download.
 - MLX: `https://github.com/ml-explore/mlx`
 - mlx-lm: `https://github.com/ml-explore/mlx-lm`
 - vMLX: `https://github.com/jjang-ai/vmlx`
