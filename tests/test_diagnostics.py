@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Tests for scripts/diagnostics/*.py — the user-facing diagnostic CLIs.
 
-Covers six real behaviors of the three diagnostic scripts:
-  - check-mcp-server.py: --help exits 0 and a normal run emits a markdown table
+Covers four real behaviors of the two diagnostic scripts:
   - check-statusline.py: --help exits 0 and a real run is graceful (exits with
     documented code 0/1/2 and a `FAIL:` stderr line if it can't proceed)
   - dump-state.py: --help exits 0 and secret-shaped substrings inside the
@@ -25,7 +24,6 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DIAG_DIR = PROJECT_ROOT / "scripts" / "diagnostics"
-CHECK_MCP = DIAG_DIR / "check-mcp-server.py"
 CHECK_STATUSLINE = DIAG_DIR / "check-statusline.py"
 DUMP_STATE = DIAG_DIR / "dump-state.py"
 
@@ -40,67 +38,15 @@ PY = str(_VENV_PY) if _VENV_PY.exists() else sys.executable
 TIMEOUT_S = 5.0
 
 
-# ---------------------------------------------------------------------------
-# 1. check-mcp-server.py --help
-# ---------------------------------------------------------------------------
-
-
-def test_check_mcp_server_help_exits_zero() -> None:
-    """`check-mcp-server.py --help` exits 0 (argparse help contract)."""
-    assert CHECK_MCP.is_file(), f"missing {CHECK_MCP}"
-    proc = subprocess.run(
-        [PY, str(CHECK_MCP), "--help"],
-        capture_output=True,
-        text=True,
-        timeout=TIMEOUT_S,
-        check=False,
-    )
-    assert proc.returncode == 0, (
-        f"--help should exit 0; got {proc.returncode}\n"
-        f"stdout: {proc.stdout[:300]}\nstderr: {proc.stderr[:300]}"
-    )
-    # argparse always prints the usage line to stdout when --help is passed
-    assert "usage:" in proc.stdout.lower(), (
-        f"--help should print 'usage:' to stdout; got: {proc.stdout[:300]}"
-    )
+# The two check-mcp-server.py tests that used to open this file are gone with
+# the script itself: it probed a spawned MCP server, and the CLI migration
+# (d557c68) deleted both. They are not replaced — `llm-ext discover` is the
+# health check now, and it is already covered end-to-end by the dogfood harness
+# (tests/dogfood/dogfood_test.py) against the real binary.
 
 
 # ---------------------------------------------------------------------------
-# 2. check-mcp-server.py emits markdown table to stdout
-# ---------------------------------------------------------------------------
-
-
-def test_check_mcp_server_emits_markdown_table() -> None:
-    """A normal run prints a markdown table header to stdout regardless of
-    pass/fail status. format_table() unconditionally emits the header row
-    `| Check | Status | Detail |` and the separator `|---|---|---|`."""
-    # --no-net to skip the OpenRouter HTTP probe — keeps the test offline and
-    # under the 5-second budget. The script still runs every other check.
-    proc = subprocess.run(
-        [PY, str(CHECK_MCP), "--no-net"],
-        capture_output=True,
-        text=True,
-        timeout=TIMEOUT_S,
-        check=False,
-    )
-    # Exit code may be 0 (all checks pass on dev box) or 1 (some fail on CI).
-    # Both are acceptable; what we test is that the table is emitted.
-    assert proc.returncode in (0, 1), (
-        f"unexpected exit {proc.returncode} (expected 0 or 1)\n"
-        f"stdout: {proc.stdout[:500]}\nstderr: {proc.stderr[:500]}"
-    )
-    # The header row and the separator row are both invariant — assert both
-    # to catch any future regression that drops one of them.
-    assert "| Check |" in proc.stdout, (
-        f"expected markdown table header `| Check |` in stdout; got:\n{proc.stdout[:500]}"
-    )
-    assert "|---|---|---|" in proc.stdout, (
-        f"expected markdown separator `|---|---|---|` in stdout; got:\n{proc.stdout[:500]}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# 3. check-statusline.py --help
+# 1. check-statusline.py --help
 # ---------------------------------------------------------------------------
 
 

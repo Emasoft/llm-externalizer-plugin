@@ -1,13 +1,21 @@
 [project]
 name = "llm-externalizer-plugin"
 version = "10.4.1"
-description = "Claude Code plugin: offload bounded LLM tasks to cheaper local or remote models via MCP"
+description = "Claude Code plugin: offload bounded LLM tasks to cheaper local or remote models via the llm-ext CLI"
 requires-python = ">=3.12"
 
 [project.optional-dependencies]
 test = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+]
+# Canonical CPV pipeline dev extra. `.github/workflows/release.yml` runs
+# `uv sync --extra dev` and then invokes ruff / mypy / pytest from it — if this
+# extra is absent the release job dies at the sync step, before any gate runs.
+dev = [
+    "pytest",
+    "ruff",
+    "mypy",
 ]
 # cluster_synonyms embeddings sidecar (mcp-server/scripts/compute_embeddings.py).
 # Heavy deps (torch via sentence-transformers, ~1GB). Install only when you

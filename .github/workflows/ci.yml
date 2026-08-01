@@ -6,39 +6,111 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel superseded runs on the same ref instead of letting them pile up.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   build:
+    name: Lint, build and test
     runs-on: ubuntu-latest
+    # The default ceiling is 360 min; a hung npm/vitest step would otherwise
+    # burn six hours of Actions minutes before anyone noticed.
+    timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: '24'
+          cache: npm
+          cache-dependency-path: mcp-server/package-lock.json
 
+      # `npm ci` (not `npm install`): CI must build against the locked dep tree,
+      # not whatever the registry resolves today. Mirrors publish.py's gate.
       - name: Install dependencies
         working-directory: mcp-server
-        run: npm install --ignore-scripts
+        run: npm ci --ignore-scripts
 
-      - name: TypeScript build check
+      # `--ignore-scripts` above blocks every package's install hook for
+      # supply-chain safety, but better-sqlite3 ships a native addon (.node)
+      # that the mass-scouting tests load at runtime. Rebuilding ONLY that
+      # package keeps the protection on every other dependency. The explicit
+      # `--no-ignore-scripts` is mandatory — a global `ignore-scripts=true`
+      # otherwise silently no-ops the rebuild and the tests then fail with
+      # "Could not locate the bindings file". Mirrors publish.py::run_checks.
+      - name: Rebuild native modules
         working-directory: mcp-server
-        run: npx tsc --noEmit
+        run: npm rebuild better-sqlite3 --no-ignore-scripts
+
+      - name: Typecheck
+        working-directory: mcp-server
+        run: npm run typecheck
+
+      - name: Lint
+        working-directory: mcp-server
+        run: npm run lint
+
+      - name: Build
+        working-directory: mcp-server
+        run: npm run build
+
+      - name: Test
+        working-directory: mcp-server
+        run: npm test
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+
+      - name: Lint Python scripts
+        run: uv run --no-project --with ruff ruff check scripts/
 
       - name: Validate plugin manifest
         run: python3 -c "import json, pathlib; json.loads(pathlib.Path('.claude-plugin/plugin.json').read_text(encoding='utf-8'))"
 
+      # The CLI migration (d557c68) deleted mcp-server/server.json — the MCP
+      # registry manifest this step used to read. Reading a file that no longer
+      # exists made the step die with FileNotFoundError on EVERY run, so CI was
+      # red regardless of the code being pushed. The three version anchors that
+      # actually exist now are plugin.json, mcp-server/package.json and the
+      # `const VERSION` literal in mcp-server/src/cli/main.ts — the exact same
+      # three publish.py rewrites and stages on release, so this check and the
+      # release pipeline can no longer disagree about where the version lives.
       - name: Version consistency check
         run: |
-          PV=$(python3 -c "import json, pathlib; print(json.loads(pathlib.Path('.claude-plugin/plugin.json').read_text(encoding='utf-8'))['version'])")
-          PKG=$(python3 -c "import json, pathlib; print(json.loads(pathlib.Path('mcp-server/package.json').read_text(encoding='utf-8'))['version'])")
-          SRV=$(python3 -c "import json, pathlib; print(json.loads(pathlib.Path('mcp-server/server.json').read_text(encoding='utf-8'))['version'])")
-          echo "plugin.json: $PV | package.json: $PKG | server.json: $SRV"
-          if [ "$PV" != "$PKG" ] || [ "$PV" != "$SRV" ]; then
-            echo "::error::Version mismatch across manifests"
-            exit 1
-          fi
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import re
+          import sys
+
+          plugin = json.loads(
+              pathlib.Path(".claude-plugin/plugin.json").read_text(encoding="utf-8")
+          )["version"]
+          pkg = json.loads(
+              pathlib.Path("mcp-server/package.json").read_text(encoding="utf-8")
+          )["version"]
+
+          src = pathlib.Path("mcp-server/src/cli/main.ts").read_text(encoding="utf-8")
+          match = re.search(r"""const VERSION = (["'`])([^"'`]+)\1""", src)
+          if match is None:
+              sys.exit(
+                  "::error::could not find `const VERSION = \"...\"` in "
+                  "mcp-server/src/cli/main.ts — the release version anchor moved"
+              )
+          cli = match.group(2)
+
+          print(f"plugin.json: {plugin} | package.json: {pkg} | cli/main.ts: {cli}")
+          if len({plugin, pkg, cli}) != 1:
+              sys.exit("::error::Version mismatch across manifests")
+          PY

@@ -38,6 +38,17 @@
     }
   },
   "cpv": {
-    "skillaudit_advisory": true
+    "skillaudit_advisory": true,
+    "pipeline_profile": "remote-validation",
+    "pipeline": {
+      "intentional_divergence": [
+        "scripts/publish.py",
+        ".github/workflows/ci.yml",
+        ".github/workflows/release.yml",
+        ".github/workflows/notify-marketplace.yml",
+        "cliff.toml",
+        ".markdownlint.json"
+      ]
+    }
   }
 }

@@ -25,7 +25,7 @@ Steps (in order — validate is FIRST, no skipping):
        lint, build, test, ruff, shellcheck, plugin.json, CPV
     3. Determine next version (git-cliff --bumped-version or flag override)
     4. Generate CHANGELOG.md (git-cliff)
-    5. Sync version to plugin.json, package.json, server.json, index.ts
+    5. Sync version to plugin.json, package.json, cli/main.ts, pyproject.toml
     6. Rebuild dist (with new version)
     7. Update README.md badges
     8. Commit as `chore(release): vX.Y.Z`
@@ -791,7 +791,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
         encoding="utf-8",
     )
 
-    # Sync version to mcp-server/package.json and server.json
+    # Sync version to mcp-server/package.json
     pkg_json = repo_root / "mcp-server" / "package.json"
     if pkg_json.exists():
         pkg = json.loads(pkg_json.read_text(encoding="utf-8"))
@@ -802,19 +802,12 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
         )
         print(f"  Synced version to {pkg_json.relative_to(repo_root)}")
 
-    srv_json = repo_root / "mcp-server" / "server.json"
-    if srv_json.exists():
-        srv = json.loads(srv_json.read_text(encoding="utf-8"))
-        if "version" in srv:
-            srv["version"] = new_version
-        for pkg_entry in srv.get("packages", []):
-            if "version" in pkg_entry:
-                pkg_entry["version"] = new_version
-        srv_json.write_text(
-            json.dumps(srv, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        print(f"  Synced version to {srv_json.relative_to(repo_root)}")
+    # NOTE: mcp-server/server.json (the MCP registry manifest) was deleted with
+    # the server in the CLI migration. Its sync block is gone with it — it was
+    # dead code behind an `exists()` guard that can never be true again, and
+    # leaving it invited a future reader to re-add server.json as a version
+    # anchor that nothing reads. The anchors are now exactly: plugin.json,
+    # mcp-server/package.json, mcp-server/src/cli/main.ts and pyproject.toml.
 
     # Sync the hardcoded version in the CLI source (cli/main.ts VERSION).
     #
@@ -1020,7 +1013,10 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     run(["git", "tag", "-a", resolver_tag, "-m", f"Dependency-resolver tag for {tag}"], capture=False)
     print()
 
-    # ── 10. Push (pre-push hook sees the lock file and skips its own checks) ──
+    # ── 10. Push ──
+    # The pre-push hook walks the process ancestry and finds THIS script as an
+    # ancestor of `git push`, which is what authorises the push. There is no
+    # lock file and no env var — both are spoofable, ancestry is not.
     print("── 10. Push ──")
     push_result = run(["git", "push", "--follow-tags"], capture=True, check=False)
     if push_result.returncode != 0:

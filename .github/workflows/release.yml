@@ -1,0 +1,241 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+# Least-privilege baseline. The release job widens to exactly the writes it
+# needs (contents: write to create the release + upload assets; id-token +
+# attestations: write for the build-provenance attestation).
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Cold-install ceiling: `uvx --from git+…` clones and builds CPV from
+    # source on a COLD runner (12-20 min). The uv cache below makes every run
+    # after the first fast, but the first cold build must fit under this cap.
+    # Do NOT lower below 25.
+    timeout-minutes: 30
+    permissions:
+      contents: write       # create the release + upload assets
+      id-token: write       # OIDC token for the provenance attestation
+      attestations: write   # write the provenance attestation
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install uv
+        # enable-cache keys an actions/cache on UV_CACHE_DIR so the cold
+        # `uvx --from git+…` build of CPV is paid ONCE per lockfile/runner.
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      # ── Plugin validation ───────────────────────────────────────────────
+      # This re-runs, on the tag, the SAME CPV gate scripts/publish.py already
+      # passed locally before it pushed. Two deliberate deviations from the
+      # stock CPV template, both required for this plugin to have a truthful
+      # gate rather than a permanently-red one:
+      #
+      #   1. NO `--strict`. publish.py's gate blocks on CRITICAL/MAJOR only.
+      #      `--strict` additionally blocks MINOR/NIT, so a strict job here
+      #      would fail tags that publish.py legitimately allowed — the CI
+      #      verdict must match the gate that actually guards the release.
+      #   2. The verdict is computed by publish.py's OWN classifier
+      #      (classify_cpv_findings), so the `cpv.skillaudit_advisory` opt-in
+      #      declared in plugin.json is honoured here exactly as it is locally.
+      #      A raw exit-code check would ignore the opt-in and red-light every
+      #      release on the known skillaudit false positives (upstream #41).
+      #
+      # Importing the classifier instead of re-implementing it keeps ONE
+      # source of truth: if the local gate's semantics change, this job
+      # follows automatically and cannot silently drift apart from it.
+      #
+      # CPV is PINNED to a tag so a stricter future CPV release cannot break
+      # the release gate with no change to this plugin.
+      - name: Run full plugin validation (remote CPV)
+        env:
+          # Skip the GitHub-anchored integrity fetch on a fresh-checkout runner
+          # (the local manifest already matches the code).
+          PLUGIN_SKIP_GITHUB_INTEGRITY: "1"
+          # Cap the aggregate repo-lint wall-clock; on a cold runner the
+          # ~17-linter fan-out serializes on a global uv/npm cache lock.
+          PLUGIN_REPO_LINT_PHASE_TIMEOUT: "600"
+        run: |
+          set +e
+          uvx --from git+https://github.com/Emasoft/claude-plugins-validation@v3.19.1 \
+              --with pyyaml \
+              cpv-remote-validate plugin . > validation-report.txt 2>&1
+          text_exit=$?
+          set -e
+          cat validation-report.txt
+          if [ "$text_exit" -eq 0 ]; then
+            echo "Validation passed (clean)"
+            exit 0
+          fi
+          # Non-zero: re-run with --json so the findings can be classified with
+          # the same rule the local gate uses.
+          set +e
+          uvx --from git+https://github.com/Emasoft/claude-plugins-validation@v3.19.1 \
+              --with pyyaml \
+              cpv-remote-validate plugin . --json > validation.json 2>/dev/null
+          json_exit=$?
+          set -e
+          if [ ! -s validation.json ]; then
+            echo "::error::CPV produced no --json output (exit ${json_exit}) — the validator FAILED TO RUN (infra/network/install failure), this is NOT a findings verdict. See the log above."
+            exit 1
+          fi
+          python3 - <<'PY'
+          import pathlib
+          import sys
+
+          # scripts/publish.py is import-safe: everything executable lives
+          # behind `if __name__ == "__main__"`.
+          sys.path.insert(0, "scripts")
+          from publish import (  # noqa: E402
+              _format_finding,
+              _read_skillaudit_advisory_optin,
+              classify_cpv_findings,
+          )
+
+          raw = pathlib.Path("validation.json").read_text(encoding="utf-8")
+          repo_root = pathlib.Path(".")
+          advisory_optin = _read_skillaudit_advisory_optin(repo_root)
+
+          parse_ok, advisory, blocking = classify_cpv_findings(
+              raw, skillaudit_advisory=advisory_optin
+          )
+          if not parse_ok:
+              # Fail CLOSED, exactly as publish.py does: an unparseable report
+              # must never be read as "no findings".
+              sys.exit(
+                  "::error::CPV --json output could not be parsed — failing "
+                  "closed. See validation-report.txt above."
+              )
+
+          for finding in advisory:
+              print(f"::notice::ADVISORY (skillaudit, upstream #41) {_format_finding(finding)}")
+          for finding in blocking:
+              print(f"::error::{_format_finding(finding)}")
+
+          if blocking:
+              sys.exit(
+                  f"::error::Validation failed — {len(blocking)} blocking "
+                  "CRITICAL/MAJOR finding(s)"
+              )
+          print(
+              f"Validation passed ({len(advisory)} skillaudit finding(s) "
+              "downgraded to advisory via cpv.skillaudit_advisory)"
+          )
+          PY
+
+      - name: Run tests
+        # Integration- and slow-marked tests need a live backend / API credit,
+        # which a release runner has neither of; every other test must pass.
+        run: uv run pytest tests/ -v -m "not integration and not slow"
+
+      - name: Lint Python scripts
+        run: uv run ruff check scripts/
+
+      - name: Type check
+        run: uv run mypy scripts/ --ignore-missing-imports
+
+      - name: Generate SBOM (SPDX)
+        # Supply-chain control: publish an SPDX bill of materials alongside the
+        # release so consumers can audit what shipped.
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-release-assets: false
+          upload-artifact: false
+
+      - name: Generate changelog
+        id: changelog
+        # Extract ONLY the matching `## [X.Y.Z] - YYYY-MM-DD` block from
+        # CHANGELOG.md — the release body should be this release's notes, not
+        # the entire project history. Falls back to a git log when no section
+        # (or no CHANGELOG.md) matches.
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -e
+          VERSION="${TAG#v}"
+          if [ -f CHANGELOG.md ]; then
+            SECTION=$(awk -v ver="$VERSION" '
+              $0 ~ "^## \\[" ver "\\][ ]*[—-]" {found=1; print; next}
+              found && /^## / {exit}
+              found {print}
+            ' CHANGELOG.md)
+            if [ -n "$SECTION" ]; then
+              printf '%s\n' "$SECTION" > changelog.txt
+              echo "::notice::Release body extracted from CHANGELOG.md section for $VERSION"
+            else
+              echo "::warning::No CHANGELOG.md section matched ## [$VERSION] — falling back to git log"
+              PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+              if [ -z "$PREV_TAG" ]; then
+                git log --pretty=format:"- %s (%h)" HEAD > changelog.txt
+              else
+                git log --pretty=format:"- %s (%h)" "$PREV_TAG..HEAD" > changelog.txt
+              fi
+            fi
+          else
+            PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+            if [ -z "$PREV_TAG" ]; then
+              git log --pretty=format:"- %s (%h)" HEAD > changelog.txt
+            else
+              git log --pretty=format:"- %s (%h)" "$PREV_TAG..HEAD" > changelog.txt
+            fi
+          fi
+          echo "changelog_file=changelog.txt" >> "$GITHUB_OUTPUT"
+
+      - name: Compute per-asset SHA256SUMS
+        run: |
+          set -e
+          : > SHA256SUMS
+          for f in validation-report.txt sbom.spdx.json; do
+            if [ -f "$f" ]; then
+              sha256sum "$f" >> SHA256SUMS
+            fi
+          done
+          echo "SHA256SUMS:"
+          cat SHA256SUMS
+
+      - name: Create or update GitHub Release (idempotent)
+        # scripts/publish.py already creates the release locally as its last
+        # step, so this job must tolerate an existing release rather than 422.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -e
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — editing in place"
+            gh release edit "$TAG" --notes-file changelog.txt --verify-tag
+            gh release upload "$TAG" validation-report.txt sbom.spdx.json SHA256SUMS --clobber
+          else
+            echo "Release $TAG does not exist yet — creating"
+            gh release create "$TAG" validation-report.txt sbom.spdx.json SHA256SUMS \
+              --title "$TAG" \
+              --notes-file changelog.txt \
+              --verify-tag
+          fi
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: |
+            validation-report.txt
+            sbom.spdx.json
