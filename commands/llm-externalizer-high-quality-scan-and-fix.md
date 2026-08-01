@@ -24,7 +24,7 @@ The **high-quality** twin of `/llm-externalizer:llm-externalizer-scan-and-fix`. 
 - **`--text`**: include plain-text extensions (`.md .txt .json .yml .yaml .toml .ini .cfg .conf .xml .html .rst .csv`). Without it, the tool uses its default source-code extensions.
 - **`--no-secrets`**: disable the secret detector (`scan_secrets: false, redact_secrets: false`). Default is `scan_secrets: true, redact_secrets: true` (secrets detected and REDACTED before reaching the LLM, scan continues).
 
-Resolve the reports dir the SAME way the CLI does (no git — mirror `mcp-server/src/project-root.ts`): `MAIN_ROOT="$CLAUDE_PROJECT_DIR"` when that dir exists on disk, else `$(pwd)`. `REPORTS_DIR="$MAIN_ROOT/reports/llm-externalizer"`; `mkdir -p` it. Recompute it in every `Bash` step (env vars do not persist across tool calls).
+Resolve the reports dir the SAME way the CLI does (no git — mirror `scripts/llm-ext/src/project-root.ts`): `MAIN_ROOT="$CLAUDE_PROJECT_DIR"` when that dir exists on disk, else `$(pwd)`. `REPORTS_DIR="$MAIN_ROOT/reports/llm-externalizer"`; `mkdir -p` it. Recompute it in every `Bash` step (env vars do not persist across tool calls).
 
 ## Step 2 — Verify service + backend
 

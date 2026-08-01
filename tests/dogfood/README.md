@@ -51,7 +51,7 @@ DOGFOOD_LIVE=1 uv run tests/dogfood/dogfood_test.py
 
 ## Phases
 
-1. Build gate (`npm run build` in `mcp-server/`).
+1. Build gate (`npm run build` in `scripts/llm-ext/`).
 2. Top-level `llm-ext --help` — enumerates the verb catalog dynamically.
 3. Per-verb `--help` for every enumerated verb.
 4. `discover` — profile + auth + balance probe (no LLM call).

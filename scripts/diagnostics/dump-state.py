@@ -34,7 +34,7 @@ _REDACTION_PATTERNS = [
     re.compile(r"sk-or-v1-[A-Za-z0-9_\-]{16,}"),
     # Generic Bearer <token>
     re.compile(r"Bearer\s+[A-Za-z0-9_\-]{8,}"),
-    # ENV name = value (mirror of SECRET_PATTERNS in mcp-server/src/scan-pipeline.ts)
+    # ENV name = value (mirror of SECRET_PATTERNS in scripts/llm-ext/src/scan-pipeline.ts)
     re.compile(
         r"(?im)^\s*((?:[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|"
         r"_APIKEY|_API_KEY|_AUTH)|PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|"

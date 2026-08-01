@@ -33,7 +33,7 @@ tool's benchmark.
 ## What it does
 
 1. **Loads the golden fixture dataset** — a real, hand-authored mini-codebase
-   under `mcp-server/benchmark-fixtures/search-existing/` where every feature
+   under `scripts/llm-ext/benchmark-fixtures/search-existing/` where every feature
    location is KNOWN (retry-with-backoff, LRU cache, memoization, slugify,
    debounce, HMAC tokens, leveled logger, plus an absent-feature case that
    measures hallucination resistance). Each case states the exact files a correct

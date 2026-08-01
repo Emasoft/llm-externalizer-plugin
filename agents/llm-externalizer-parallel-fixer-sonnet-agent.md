@@ -135,7 +135,7 @@ After all `Edit` calls:
 
 ### Step 4 — Write the `.fixer.` summary
 
-Resolve the canonical reports root first — the dispatching command writes scan reports under `$MAIN_ROOT/reports/llm-externalizer/`, and the post-flight validator below requires the summary to live under the same root. This MUST match the MCP server's own report-root resolver (`mcp-server/src/project-root.ts`) and the dispatching command's resolver, both of which use **NO git**: the root is `$CLAUDE_PROJECT_DIR` when it exists on disk, else the current working dir. Git is deliberately NOT used — a git-root climb picks the WRONG directory inside linked worktrees, monorepos whose subfolders each have their own git, and git-less roots, scattering the summary away from the scan reports:
+Resolve the canonical reports root first — the dispatching command writes scan reports under `$MAIN_ROOT/reports/llm-externalizer/`, and the post-flight validator below requires the summary to live under the same root. This MUST match the CLI's own report-root resolver (`scripts/llm-ext/src/project-root.ts`) and the dispatching command's resolver, both of which use **NO git**: the root is `$CLAUDE_PROJECT_DIR` when it exists on disk, else the current working dir. Git is deliberately NOT used — a git-root climb picks the WRONG directory inside linked worktrees, monorepos whose subfolders each have their own git, and git-less roots, scattering the summary away from the scan reports:
 
 ```bash
 if [ -n "$CLAUDE_PROJECT_DIR" ] && [ -d "$CLAUDE_PROJECT_DIR" ]; then

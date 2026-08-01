@@ -17,7 +17,7 @@ dev = [
     "ruff",
     "mypy",
 ]
-# cluster_synonyms embeddings sidecar (mcp-server/scripts/compute_embeddings.py).
+# cluster_synonyms embeddings sidecar (scripts/llm-ext/scripts/compute_embeddings.py).
 # Heavy deps (torch via sentence-transformers, ~1GB). Install only when you
 # plan to use the cluster_synonyms tool: `uv pip install -e '.[embeddings]'`.
 embeddings = [

@@ -13,7 +13,7 @@ Goal: produce a per-file code review of a plugin's source.
 ```bash
 # Register only TypeScript files.
 llm-externalizer mass-scout register --db /tmp/plugin.db \
-  --root <project-root>/mcp-server/src \
+  --root <project-root>/scripts/llm-ext/src \
   --extensions .ts
 
 # Script-tag each row with a bucket (sourcecode / config / documentation / …).
@@ -30,7 +30,7 @@ llm-externalizer mass-scout estimate --db /tmp/plugin.db \
 llm-externalizer mass-scout scout --db /tmp/plugin.db \
   --fields-file bundled:code-audit \
   --job-id audit-2026-05-06 \
-  --source-root <project-root>/mcp-server/src
+  --source-root <project-root>/scripts/llm-ext/src
 # expect: files_ok=50  files_failed=0  cost_usd=$0.0014  report=...
 
 # Find the high-complexity files.

@@ -113,9 +113,9 @@ function installDeps(dataDir) {
   log(`deps installed via ${pm.bin}`);
 }
 
-// Replace ${PLUGIN_ROOT}/mcp-server/node_modules with a link/copy pointing at
+// Replace ${PLUGIN_ROOT}/scripts/llm-ext/node_modules with a link/copy pointing at
 // the freshly-installed ${DATA_DIR}/node_modules. We refuse to operate on
-// destinations whose resolved-realpath leaves the plugin's own mcp-server
+// destinations whose resolved-realpath leaves the plugin's own scripts/llm-ext
 // directory — defense in depth against accidental `rm -rf` outside the
 // expected tree (the previous bash hook hit this concern, audit SC-P1-002).
 function linkNodeModules(dataDir) {
@@ -192,7 +192,7 @@ async function tryImport() {
 // missing inputs — so the wall-time cost on the warm path is <100 ms on
 // any reasonable machine.
 function runMigrate() {
-  const migrateScript = resolve(SCRIPT_DIR, "..", "scripts", "setup", "migrate.py");
+  const migrateScript = resolve(SCRIPT_DIR, "..", "setup", "migrate.py");
   if (!existsSync(migrateScript)) {
     // Defensive: don't block server start if migrate.py is missing from a
     // partial install. The user can run it manually if they hit issues.
@@ -202,7 +202,7 @@ function runMigrate() {
   // Pass the plugin root so the broken-symlink check looks at the right
   // mcp-server/node_modules location, even if migrate.py is run from a
   // dev checkout where the relative-path heuristic would land elsewhere.
-  const pluginRoot = resolve(SCRIPT_DIR, "..");
+  const pluginRoot = resolve(SCRIPT_DIR, "..", "..");
   const env = { ...process.env, LLM_EXT_PLUGIN_ROOT: pluginRoot };
   // Prefer python3, fall back to python. spawnSync timeout 10 s — the script
   // is tiny but a corrupted FS could hang stat().

@@ -611,7 +611,7 @@ function buildReportMarkdown(args: {
   lines.push("");
   lines.push(
     "**Scoring is 100% deterministic — no LLM judge.** The corpus is twelve files copied " +
-      "VERBATIM from this repo's own `mcp-server/src/`, and each query's true MATCH set is " +
+      "VERBATIM from this repo's own `scripts/llm-ext/src/`, and each query's true MATCH set is " +
       "DERIVED from those bytes by a mechanical rule at run time (not hand-listed), so the " +
       "expected answer cannot drift from the corpus. The score is precision/recall/F1 over " +
       "the per-file MATCH/NO_MATCH verdicts. A MATCH line's cited evidence is reported but " +

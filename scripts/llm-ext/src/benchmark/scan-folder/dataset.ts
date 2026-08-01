@@ -11,7 +11,7 @@
  *
  * ── THE CORPUS IS REAL CODE (a hard project rule) ───────────────────────────
  * benchmark-fixtures/scan-folder/src/ holds TWELVE files copied VERBATIM out of
- * this repository's own mcp-server/src/ tree (provenance table in that directory's
+ * this repository's own scripts/llm-ext/src/ tree (provenance table in that directory's
  * README.md). Nothing is authored for the benchmark and nothing is edited. They
  * sit outside src/ so the toolchain never compiles them — their relative imports
  * dangle by design, which is irrelevant: scan_folder reads a file's TEXT.

@@ -609,7 +609,7 @@ function buildReportMarkdown(args: {
   lines.push("");
   lines.push(`**Run:** ${new Date().toISOString()}`);
   lines.push(
-    `**Corpus:** 1 real spec (this repo's own \`mcp-server/TESTING.md\`) × ${args.fixtures.length} real source files ` +
+    `**Corpus:** 1 real spec (this repo's own \`scripts/llm-ext/TESTING.md\`) × ${args.fixtures.length} real source files ` +
       `= ${args.fixtures.length} per-file decisions (${violations} VIOLATION / ${args.fixtures.length - violations} CLEAN) — corpus ${args.datasetHash}`,
   );
   lines.push(
@@ -624,7 +624,7 @@ function buildReportMarkdown(args: {
   lines.push("");
   lines.push(
     "**Scoring is 100% deterministic — no LLM judge.** The spec is a verbatim copy of this " +
-      "repo's shipped `mcp-server/TESTING.md`; every source file is a byte-for-byte snapshot of a " +
+      "repo's shipped `scripts/llm-ext/TESTING.md`; every source file is a byte-for-byte snapshot of a " +
       "real revision out of git. The four VIOLATION fixtures are the exact bytes commit `31ce212` " +
       "replaced *because they really violated this spec* — the defect drained a real OpenRouter " +
       "balance ($17.67 in one hour) before it was found. The score is precision/recall/F1 over the " +

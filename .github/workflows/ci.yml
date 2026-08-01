@@ -32,12 +32,12 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-          cache-dependency-path: mcp-server/package-lock.json
+          cache-dependency-path: scripts/llm-ext/package-lock.json
 
       # `npm ci` (not `npm install`): CI must build against the locked dep tree,
       # not whatever the registry resolves today. Mirrors publish.py's gate.
       - name: Install dependencies
-        working-directory: mcp-server
+        working-directory: scripts/llm-ext
         run: npm ci --ignore-scripts
 
       # `--ignore-scripts` above blocks every package's install hook for
@@ -48,23 +48,23 @@ jobs:
       # otherwise silently no-ops the rebuild and the tests then fail with
       # "Could not locate the bindings file". Mirrors publish.py::run_checks.
       - name: Rebuild native modules
-        working-directory: mcp-server
+        working-directory: scripts/llm-ext
         run: npm rebuild better-sqlite3 --no-ignore-scripts
 
       - name: Typecheck
-        working-directory: mcp-server
+        working-directory: scripts/llm-ext
         run: npm run typecheck
 
       - name: Lint
-        working-directory: mcp-server
+        working-directory: scripts/llm-ext
         run: npm run lint
 
       - name: Build
-        working-directory: mcp-server
+        working-directory: scripts/llm-ext
         run: npm run build
 
       - name: Test
-        working-directory: mcp-server
+        working-directory: scripts/llm-ext
         run: npm test
 
       - name: Install uv
@@ -82,8 +82,8 @@ jobs:
       # registry manifest this step used to read. Reading a file that no longer
       # exists made the step die with FileNotFoundError on EVERY run, so CI was
       # red regardless of the code being pushed. The three version anchors that
-      # actually exist now are plugin.json, mcp-server/package.json and the
-      # `const VERSION` literal in mcp-server/src/cli/main.ts — the exact same
+      # actually exist now are plugin.json, scripts/llm-ext/package.json and the
+      # `const VERSION` literal in scripts/llm-ext/src/cli/main.ts — the exact same
       # three publish.py rewrites and stages on release, so this check and the
       # release pipeline can no longer disagree about where the version lives.
       - name: Version consistency check
@@ -98,15 +98,15 @@ jobs:
               pathlib.Path(".claude-plugin/plugin.json").read_text(encoding="utf-8")
           )["version"]
           pkg = json.loads(
-              pathlib.Path("mcp-server/package.json").read_text(encoding="utf-8")
+              pathlib.Path("scripts/llm-ext/package.json").read_text(encoding="utf-8")
           )["version"]
 
-          src = pathlib.Path("mcp-server/src/cli/main.ts").read_text(encoding="utf-8")
+          src = pathlib.Path("scripts/llm-ext/src/cli/main.ts").read_text(encoding="utf-8")
           match = re.search(r"""const VERSION = (["'`])([^"'`]+)\1""", src)
           if match is None:
               sys.exit(
                   "::error::could not find `const VERSION = \"...\"` in "
-                  "mcp-server/src/cli/main.ts — the release version anchor moved"
+                  "scripts/llm-ext/src/cli/main.ts — the release version anchor moved"
               )
           cli = match.group(2)
 

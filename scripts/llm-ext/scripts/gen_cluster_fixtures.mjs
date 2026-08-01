@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Deterministic synthetic fixture generator for cluster_synonyms tests.
-// Produces 3 fixture files under mcp-server/src/cluster/fixtures/:
+// Produces 3 fixture files under scripts/llm-ext/src/cluster/fixtures/:
 //
 //   synthetic_500.jsonl       — 500 items, 130 ground-truth clusters
 //   synthetic_500.expected.json — id → cluster_id ground truth
@@ -8,7 +8,7 @@
 //   merge_3_floor.jsonl       — 12 items, 2 pre-defined clusters (used in T15)
 //
 // All output is deterministic given the same seeds in this script.
-// Re-run anytime: `node mcp-server/scripts/gen_cluster_fixtures.mjs`
+// Re-run anytime: `node scripts/llm-ext/scripts/gen_cluster_fixtures.mjs`
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

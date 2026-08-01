@@ -273,7 +273,7 @@ Store the key in the OS keychain via Claude Code:
 claude plugin configure llm-externalizer
 ```
 
-The CLI still contains a `CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY` → `OPENROUTER_API_KEY` mapping (`resolveEnvValue()` in `mcp-server/src/config.ts`), left over from when Claude Code spawned the MCP server directly and injected that variable into it. **That injection no longer happens for this plugin.** `llm-ext` now runs the way every other tool call does — as a plain subprocess spawned via `Bash` — and this plugin's `userConfig` value is not among the variables that reach it.
+The CLI still contains a `CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY` → `OPENROUTER_API_KEY` mapping (`resolveEnvValue()` in `scripts/llm-ext/src/config.ts`), left over from when Claude Code spawned the MCP server directly and injected that variable into it. **That injection no longer happens for this plugin.** `llm-ext` now runs the way every other tool call does — as a plain subprocess spawned via `Bash` — and this plugin's `userConfig` value is not among the variables that reach it.
 
 Verified empirically inside a Bash tool call: `CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY` is unset, while `discover` resolves the key whenever `OPENROUTER_API_KEY` is exported in the shell. Note the narrow shape of that result — *other* plugins' `CLAUDE_PLUGIN_OPTION_*` variables **are** visible in the same environment, so the mechanism is not globally absent and it is not worth debugging as if it were. What is missing is specifically this plugin's key.
 
@@ -1123,8 +1123,8 @@ llm-externalizer-plugin/
 ├── agents/                        # 6 internal agents (reviewer + 4 fixers + setup-agent)
 ├── skills/                        # 15 auto-discovered skills
 ├── rules/                         # Lean always-loaded usage rule (auto-installed to ~/.claude/rules/)
-├── mcp-server/                    # Bundled TypeScript CLI engine (all 40 commands; name is historical)
 ├── scripts/                       # Python: setup, publish, validators, helpers
+│   └── llm-ext/                   # Bundled TypeScript CLI engine (all 40 commands; name is historical)
 └── docs/                          # Banner, cost image, agent docs (usage-reference, tool-use-cases, setup-and-configuration), OpenRouter refs
 ```
 
@@ -1279,7 +1279,7 @@ git commit -m "feat: <what it does>"
 ```
 
 > [!CAUTION]
-> **Do NOT bump `version` in `plugin.json`, `mcp-server/package.json`, or `pyproject.toml`** in your PR. Do NOT edit `CHANGELOG.md`. Do NOT run `scripts/publish.py`. All version work is done by the maintainer after merge.
+> **Do NOT bump `version` in `plugin.json`, `scripts/llm-ext/package.json`, or `pyproject.toml`** in your PR. Do NOT edit `CHANGELOG.md`. Do NOT run `scripts/publish.py`. All version work is done by the maintainer after merge.
 
 ### 8 · Push to YOUR fork and open a PR
 
@@ -1327,7 +1327,7 @@ python3 scripts/publish.py --check-only
 
 `publish.py` runs **9 mandatory validation gates** before any tag or push: `npm ci`, `npm run typecheck`, `npm run lint`, `npm run build`, `npm test`, `ruff check`, `shellcheck`, `plugin.json` schema, `claude plugin validate`. All must pass with zero errors.
 
-`npm test` is **offline and free** — it never makes a real LLM call. Real-LLM (live) tests are opt-in behind `LIVE_TESTS=1` + `OPENROUTER_API_KEY`. See [`mcp-server/TESTING.md`](mcp-server/TESTING.md).
+`npm test` is **offline and free** — it never makes a real LLM call. Real-LLM (live) tests are opt-in behind `LIVE_TESTS=1` + `OPENROUTER_API_KEY`. See [`scripts/llm-ext/TESTING.md`](scripts/llm-ext/TESTING.md).
 
 ---
 

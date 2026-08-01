@@ -294,7 +294,7 @@ def run_checks(repo_root: Path) -> bool:
       8. plugin.json parse — manifest must be valid JSON
       9. claude plugin validate — authoritative Claude Code plugin validator
     """
-    mcp_dir = str(repo_root / "mcp-server")
+    mcp_dir = str(repo_root / "scripts" / "llm-ext")
     reports = _reports_dir(repo_root)
     print(f"  Reports: {reports}")
 
@@ -791,8 +791,8 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
         encoding="utf-8",
     )
 
-    # Sync version to mcp-server/package.json
-    pkg_json = repo_root / "mcp-server" / "package.json"
+    # Sync version to scripts/llm-ext/package.json
+    pkg_json = repo_root / "scripts" / "llm-ext" / "package.json"
     if pkg_json.exists():
         pkg = json.loads(pkg_json.read_text(encoding="utf-8"))
         pkg["version"] = new_version
@@ -807,7 +807,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     # dead code behind an `exists()` guard that can never be true again, and
     # leaving it invited a future reader to re-add server.json as a version
     # anchor that nothing reads. The anchors are now exactly: plugin.json,
-    # mcp-server/package.json, mcp-server/src/cli/main.ts and pyproject.toml.
+    # scripts/llm-ext/package.json, scripts/llm-ext/src/cli/main.ts and pyproject.toml.
 
     # Sync the hardcoded version in the CLI source (cli/main.ts VERSION).
     #
@@ -827,7 +827,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     # We can tell which by re-checking whether new_version is ALREADY in
     # the file with the expected shape. If yes → idempotent skip. If no
     # → real structural bug, abort.
-    index_ts = repo_root / "mcp-server" / "src" / "cli" / "main.ts"
+    index_ts = repo_root / "scripts" / "llm-ext" / "src" / "cli" / "main.ts"
     if index_ts.exists():
         src = index_ts.read_text(encoding="utf-8")
         pattern = r"""(const VERSION = (["'`]))[^"'`]+\2"""
@@ -851,7 +851,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
             else:
                 print(
                     "ERROR: regex failed to match `const VERSION = \"...\"` in "
-                    "mcp-server/src/cli/main.ts (and the file is not already "
+                    "scripts/llm-ext/src/cli/main.ts (and the file is not already "
                     f"at {new_version}). Likely the constant was renamed, "
                     "reformatted onto multiple lines, or computed instead of "
                     "being a literal.",
@@ -923,7 +923,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
 
     # ── 6. Rebuild dist (with new version) ──
     print("── 6. Rebuild dist ──")
-    mcp_dir = str(repo_root / "mcp-server")
+    mcp_dir = str(repo_root / "scripts" / "llm-ext")
     rebuild = run(["npm", "run", "build"], capture=True, check=False, cwd=mcp_dir)
     if rebuild.returncode != 0:
         print("ERROR: dist rebuild failed.", file=sys.stderr)
@@ -935,10 +935,10 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     # users actually run: dist/llm-ext.js (the CLI). It used to check
     # dist/index.js — the MCP server bundle, which no longer carries a version
     # literal at all, so the check would fail every release.
-    dist_cli = repo_root / "mcp-server" / "dist" / "llm-ext.js"
+    dist_cli = repo_root / "scripts" / "llm-ext" / "dist" / "llm-ext.js"
     if not dist_cli.exists():
         print(
-            "ERROR: mcp-server/dist/llm-ext.js missing after build — the CLI "
+            "ERROR: scripts/llm-ext/dist/llm-ext.js missing after build — the CLI "
             "bundle is the shipped artifact and cannot be absent.",
             file=sys.stderr,
         )
@@ -967,7 +967,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     # excludes this commit from future changelog generation.
     print("── 8. Commit ──")
     files_to_stage = [str(plugin_json)]
-    pkg_json_path = repo_root / "mcp-server" / "package.json"
+    pkg_json_path = repo_root / "scripts" / "llm-ext" / "package.json"
     if changelog.exists():
         files_to_stage.append(str(changelog))
     if readme.exists():
@@ -978,7 +978,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     # is left unstaged: the release commit ships without it and the very next
     # publish starts on a dirty tree. (server.json was the MCP registry
     # manifest and is gone.)
-    cli_main_ts_path = repo_root / "mcp-server" / "src" / "cli" / "main.ts"
+    cli_main_ts_path = repo_root / "scripts" / "llm-ext" / "src" / "cli" / "main.ts"
     if cli_main_ts_path.exists():
         files_to_stage.append(str(cli_main_ts_path))
     pyproject_path = repo_root / "pyproject.toml"
@@ -987,7 +987,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     uv_lock_path = repo_root / "uv.lock"
     if uv_lock_path.exists():
         files_to_stage.append(str(uv_lock_path))
-    dist_dir = repo_root / "mcp-server" / "dist"
+    dist_dir = repo_root / "scripts" / "llm-ext" / "dist"
     if dist_dir.exists():
         files_to_stage.append(str(dist_dir))
     run(["git", "add"] + files_to_stage, capture=False)

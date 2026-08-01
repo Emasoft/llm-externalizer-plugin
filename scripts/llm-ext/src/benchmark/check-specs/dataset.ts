@@ -29,7 +29,7 @@
  * ── THE CORPUS IS REAL, AND SO IS THE SPEC (a hard project rule) ────────────
  * benchmark-fixtures/check-specs/ holds:
  *   • spec/TESTING.md — a verbatim copy of this repo's own shipped
- *     mcp-server/TESTING.md: the cost-safety contract the project actually lives by.
+ *     scripts/llm-ext/TESTING.md: the cost-safety contract the project actually lives by.
  *   • src/<blob>/… — THIRTEEN byte-for-byte snapshots of real revisions of real
  *     files in this repo, pulled straight out of git.
  *

@@ -73,12 +73,12 @@ All paths are repo-relative from the plugin root:
 
 | What | Where |
 |------|-------|
-| The cost ceiling (< $1/M in & out) | `DEFAULT_CRITERIA` in `mcp-server/src/benchmark/discover.ts` |
-| The qualifier filter | `qualify()` in `mcp-server/src/benchmark/discover.ts` |
-| The picker (F1 → cost → latency) | `pickTopN()` in `mcp-server/src/benchmark/pick.ts` |
-| The min-F1 threshold (default 0.95) | `DEFAULT_PICK_OPTIONS` in `mcp-server/src/benchmark/pick.ts` |
-| The settings.yaml mutator | `applyPicksToSettings()` in `mcp-server/src/benchmark/pick.ts` |
-| The CLI surface | `mcp-server/src/benchmark/index.ts` (`--pick-top-n`, `--apply-profile`, `--from-cache`, `--min-f1`) |
+| The cost ceiling (< $1/M in & out) | `DEFAULT_CRITERIA` in `scripts/llm-ext/src/benchmark/discover.ts` |
+| The qualifier filter | `qualify()` in `scripts/llm-ext/src/benchmark/discover.ts` |
+| The picker (F1 → cost → latency) | `pickTopN()` in `scripts/llm-ext/src/benchmark/pick.ts` |
+| The min-F1 threshold (default 0.95) | `DEFAULT_PICK_OPTIONS` in `scripts/llm-ext/src/benchmark/pick.ts` |
+| The settings.yaml mutator | `applyPicksToSettings()` in `scripts/llm-ext/src/benchmark/pick.ts` |
+| The CLI surface | `scripts/llm-ext/src/benchmark/index.ts` (`--pick-top-n`, `--apply-profile`, `--from-cache`, `--min-f1`) |
 
 If a user asks to change a rule, edit the relevant SoT and add a unit test to
 `pick.test.ts` covering the change. The skill body is the human-readable

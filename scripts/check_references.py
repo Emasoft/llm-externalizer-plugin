@@ -25,7 +25,7 @@ Detection patterns (applied in order):
 
   2. Paths starting with a known plugin directory name:
        scripts/, agents/, commands/, skills/, hooks/, bin/, docs/,
-       mcp-server/, examples/, references/, .github/, .claude-plugin/
+       examples/, references/, .github/, .claude-plugin/
      — resolved first relative to the containing file's directory, then
        relative to the plugin root.
 
@@ -69,7 +69,6 @@ _KNOWN_DIRS = (
     "hooks",
     "bin",
     "docs",
-    "mcp-server",
     "examples",
     "references",
     ".github",

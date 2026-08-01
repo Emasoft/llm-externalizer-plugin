@@ -3,7 +3,7 @@
  * (TRDD-828238b5 A6). Mirrors benchmark/security-triage/dataset.ts.
  *
  * The corpus is a REAL, hand-authored fixture mini-codebase under
- * mcp-server/benchmark-fixtures/search-existing/ — authored specifically so
+ * scripts/llm-ext/benchmark-fixtures/search-existing/ — authored specifically so
  * every feature location is KNOWN, which is what makes deterministic
  * precision/recall scoring possible (no LLM judge needed). Each case states
  * the exact files a correct run must answer YES for; every other discovered

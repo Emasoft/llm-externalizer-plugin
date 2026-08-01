@@ -11,11 +11,11 @@ import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const REPO_ROOT = join(__dirname, "..", "..");
+const REPO_ROOT = join(__dirname, "..", "..", "..");
 
 // Shipped surfaces that could shell out to codex. Mirrors the verification
-// scope in the TRDD: commands/ scripts/ skills/ mcp-server/src bin hooks .mcp.json.
-const SHIPPED_DIRS = ["commands", "scripts", "skills", join("mcp-server", "src"), "bin", "hooks"];
+// scope in the TRDD: commands/ scripts/ skills/ scripts/llm-ext/src bin hooks .mcp.json.
+const SHIPPED_DIRS = ["commands", "scripts", "skills", join("scripts", "llm-ext", "src"), "bin", "hooks"];
 const SHIPPED_FILES = [".mcp.json"];
 
 // Directories never walked (build output, caches, deps).

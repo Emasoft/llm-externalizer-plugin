@@ -35,7 +35,7 @@ Draw on the WHOLE pool of capability available to you, not just the next script 
 
 - **The five preloaded skills** — deep reference for GGUF/llama.cpp, MLX on Apple Silicon, the `hf` CLI, leaderboard widening, and rigorous eval paths. Always in context; consult them freely.
 - **`scripts/setup/` helpers** — the fast path for environment detection + model recommendation.
-- **`scripts/diagnostics/` helpers** (`check-mcp-server.py`, `check-statusline.py`, `dump-state.py`) — for probing *why* something is broken when a step fails.
+- **`scripts/diagnostics/` helpers** (`check-statusline.py`, `dump-state.py`) — for probing *why* something is broken when a step fails. For the engine itself, `bin/llm-ext discover` is the health check (`check-mcp-server.py` went with the MCP server).
 - **Bash** for first-hand inspection, **WebFetch** for current upstream docs / installers, **AskUserQuestion** when only the user holds the answer (RAM, intent, which runner to keep).
 - **Any other skill on the system** that fits a corner case — invoke it on demand. The preloaded five are a floor, not a ceiling.
 - **Your own general knowledge** — when a corner case is covered by none of the above, reason from first principles rather than aborting.

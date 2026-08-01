@@ -31,7 +31,7 @@ const { join } = require("path");
 const { existsSync } = require("fs");
 const { pathToFileURL } = require("url");
 
-const launcher = join(__dirname, "..", "mcp-server", "launcher.mjs");
+const launcher = join(__dirname, "..", "scripts", "llm-ext", "launcher.mjs");
 
 if (!existsSync(launcher)) {
   console.error(`llm-ext: launcher not found at ${launcher}`);

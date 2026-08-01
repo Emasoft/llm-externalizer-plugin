@@ -2,7 +2,7 @@
 /**
  * CLI wrapper for the LLM Externalizer model benchmark.
  *
- * Spawns the bundled benchmark entry point (mcp-server/dist/benchmark.js)
+ * Spawns the bundled benchmark entry point (scripts/llm-ext/dist/benchmark.js)
  * which queries OpenRouter for programming-category models under a cost
  * cap, runs the keyword-classification benchmark against each, and
  * writes a markdown report to reports/benchmark/<timestamp>-...md.
@@ -19,10 +19,10 @@ const { join } = require("path");
 const { existsSync } = require("fs");
 const { spawn } = require("child_process");
 
-const benchmarkPath = join(__dirname, "..", "mcp-server", "dist", "benchmark.js");
+const benchmarkPath = join(__dirname, "..", "scripts", "llm-ext", "dist", "benchmark.js");
 if (!existsSync(benchmarkPath)) {
   console.error(`ERROR: Benchmark bundle not found at ${benchmarkPath}`);
-  console.error("Run 'cd mcp-server && npm run build' in the plugin directory first.");
+  console.error("Run 'cd scripts/llm-ext && npm run build' in the plugin directory first.");
   process.exit(1);
 }
 

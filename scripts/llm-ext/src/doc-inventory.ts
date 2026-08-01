@@ -11,9 +11,9 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Repo root = two levels up from this module (mcp-server/src → repo root). */
+/** Repo root = three levels up from this module (scripts/llm-ext/src → repo root). */
 export function repoRoot(): string {
-  return join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  return join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 }
 
 /**
@@ -24,7 +24,7 @@ export function repoRoot(): string {
  */
 export function readCoreToolNames(root: string = repoRoot()): string[] {
   const src = readFileSync(
-    join(root, "mcp-server", "src", "tools", "definitions.ts"),
+    join(root, "scripts", "llm-ext", "src", "tools", "definitions.ts"),
     "utf-8",
   );
   return matchAll(src, /^ {6}name: "([a-z0-9_]+)",$/gm);
@@ -36,7 +36,7 @@ export function readCoreToolNames(root: string = repoRoot()): string[] {
  */
 export function readMassScoutToolNames(root: string = repoRoot()): string[] {
   const src = readFileSync(
-    join(root, "mcp-server", "src", "mass_scouting", "mcp-tools.ts"),
+    join(root, "scripts", "llm-ext", "src", "mass_scouting", "mcp-tools.ts"),
     "utf-8",
   );
   return matchAll(src, /^ {4}name: "([a-z0-9_]+)",$/gm);
@@ -49,7 +49,7 @@ export function readAllToolNames(root: string = repoRoot()): string[] {
 
 /** API-preset keys — declared in API_PRESETS in config.ts. */
 export function readApiPresetNames(root: string = repoRoot()): string[] {
-  const src = readFileSync(join(root, "mcp-server", "src", "config.ts"), "utf-8");
+  const src = readFileSync(join(root, "scripts", "llm-ext", "src", "config.ts"), "utf-8");
   const start = src.indexOf("export const API_PRESETS");
   if (start === -1) throw new Error("API_PRESETS not found in config.ts");
   // Keys are 2-space-indented quoted strings until the next top-level `};`.

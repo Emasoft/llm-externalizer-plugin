@@ -53,12 +53,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BIN_DIR = PROJECT_ROOT / "bin"
 LLM_EXT = BIN_DIR / "llm-ext"
 LLM_EXT_BENCH = BIN_DIR / "llm-ext-benchmark"
-MCP_SERVER_DIR = PROJECT_ROOT / "mcp-server"
-# `bin/llm-ext` spawns dist/index.js; `bin/llm-ext-benchmark` spawns
-# dist/benchmark.js (verified by reading both wrapper scripts). These are the
-# two compiled artifacts the build gate must produce.
-MCP_SERVER_ENTRY = MCP_SERVER_DIR / "dist" / "index.js"
-BENCH_BUNDLE = MCP_SERVER_DIR / "dist" / "benchmark.js"
+ENGINE_DIR = PROJECT_ROOT / "scripts" / "llm-ext"
+# The two artifacts the wrappers actually execute, verified by reading both:
+# `bin/llm-ext` runs launcher.mjs, which runs dist/llm-ext.js; and
+# `bin/llm-ext-benchmark` runs dist/benchmark.js.
+#
+# This used to assert dist/index.js — the old MCP *server* bundle. esbuild
+# still emits that file (package.json's `main` points at it), so the check kept
+# passing while guarding a bundle nothing runs: the CLI could have failed to
+# build and this gate would not have noticed.
+CLI_BUNDLE = ENGINE_DIR / "dist" / "llm-ext.js"
+BENCH_BUNDLE = ENGINE_DIR / "dist" / "benchmark.js"
 SKILLS_DIR = PROJECT_ROOT / "skills"
 COMMANDS_DIR = PROJECT_ROOT / "commands"
 FIXTURE = Path(__file__).resolve().parent / "sample-fixture.txt"
@@ -67,7 +72,7 @@ FIXTURE = Path(__file__).resolve().parent / "sample-fixture.txt"
 # to look up. The lookup is a catalog read (no LLM call, no key, $0).
 KNOWN_MODEL_ID = "openai/gpt-4o-mini"
 
-# Generous per-call ceiling: catalog fetches + the MCP server spawn can be slow
+# Generous per-call ceiling: catalog fetches + the CLI's cold start can be slow
 # on a cold start, but no default-mode call issues an LLM request.
 RUN_TIMEOUT = 210  # seconds
 BUILD_TIMEOUT = 420  # seconds
@@ -154,7 +159,7 @@ def run(args: list[str], cwd: Path | None = None, timeout: int = RUN_TIMEOUT) ->
     """Run a command, capturing stdout/stderr. Never raises on non-zero exit.
 
     Robustness note (load-bearing): `bin/llm-ext` and `bin/llm-ext-benchmark`
-    each spawn a GRANDCHILD node process (the MCP server / benchmark CLI). A
+    each spawn a GRANDCHILD node process (the CLI bundle / benchmark CLI). A
     plain `subprocess.run(timeout=...)` only signals the DIRECT child on
     timeout, so a surviving grandchild can keep the inherited stdout pipe open
     and make `communicate()` block far past the intended deadline (observed: a
@@ -232,32 +237,32 @@ def _evidence(res: RunResult, limit: int = 1500) -> str:
 
 
 def phase_build(h: Harness) -> bool:
-    """Compile the MCP server so the CLIs can spawn dist/index.js + dist/benchmark.js.
+    """Compile the engine so the wrappers can run dist/llm-ext.js + dist/benchmark.js.
 
-    `bin/llm-ext` spawns `mcp-server/dist/index.js`; `bin/llm-ext-benchmark`
-    spawns `mcp-server/dist/benchmark.js` (both verified by reading the wrapper
-    scripts). Without a build every CLI phase fails for the same root cause, so
-    this gate runs first and stops the CLI phases (but not the static file
-    audits) on failure. `npm run build` = `tsc --noEmit && esbuild` per
-    mcp-server/package.json.
+    `bin/llm-ext` runs launcher.mjs, which runs `scripts/llm-ext/dist/llm-ext.js`;
+    `bin/llm-ext-benchmark` runs `scripts/llm-ext/dist/benchmark.js` (both verified
+    by reading the wrapper scripts). Without a build every CLI phase fails for the
+    same root cause, so this gate runs first and stops the CLI phases (but not the
+    static file audits) on failure. `npm run build` = `tsc --noEmit && esbuild` per
+    scripts/llm-ext/package.json.
     """
-    res = run(["npm", "run", "build"], cwd=MCP_SERVER_DIR, timeout=BUILD_TIMEOUT)
+    res = run(["npm", "run", "build"], cwd=ENGINE_DIR, timeout=BUILD_TIMEOUT)
     if res.code != 0:
         h.add(
             "build",
             "npm run build",
             FAIL,
-            "compile mcp-server (tsc --noEmit && esbuild)",
+            "compile the engine (tsc --noEmit && esbuild)",
             _evidence(res, 2500),
         )
         return False
-    missing = [str(p) for p in (MCP_SERVER_ENTRY, BENCH_BUNDLE) if not p.exists()]
+    missing = [str(p) for p in (CLI_BUNDLE, BENCH_BUNDLE) if not p.exists()]
     if missing:
         h.add(
             "build",
             "npm run build",
             FAIL,
-            "compile mcp-server (tsc --noEmit && esbuild)",
+            "compile the engine (tsc --noEmit && esbuild)",
             "build exited 0 but expected artifact(s) missing:\n" + "\n".join(missing),
         )
         return False
@@ -265,7 +270,7 @@ def phase_build(h: Harness) -> bool:
         "build",
         "npm run build",
         PASS,
-        "compile mcp-server -> dist/index.js + dist/benchmark.js",
+        "compile the engine -> dist/llm-ext.js + dist/benchmark.js",
     )
     return True
 

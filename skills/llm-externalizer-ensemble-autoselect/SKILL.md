@@ -19,7 +19,7 @@ user-invocable: false
 
 **Never judge whether a failure is "persistent". The ledger does it.**
 
-A model rotates iff `assessModelPersistence` (`mcp-server/src/model-events.ts`) says
+A model rotates iff `assessModelPersistence` (`scripts/llm-ext/src/model-events.ts`) says
 so: **≥3 consecutive `non_retryable_failure` events carrying the SAME rotate-worthy
 HTTP status (400 / 404 / 410 / 422) within a rolling 24h window.** That threshold is
 the code spelling of "same error class, 3+ times, still current":
@@ -96,7 +96,7 @@ The CLI's line ends with "run `reset` to reload". Relay it. Do not elaborate.
 - [selection-algorithm](references/selection-algorithm.md) — hard filters, ranking
   rules, anti-patterns.
 - Code SoT (authoritative — edit code first, mirror here second):
-  `mcp-server/src/model-events.ts` (`assessModelPersistence`, `ROTATE_WORTHY_STATUSES`),
-  `mcp-server/src/model-qualification/auto-replace.ts` (`planEnsembleRotation`),
-  `mcp-server/src/benchmark/discover.ts` (`DEFAULT_CRITERIA`, `qualify()`),
-  `mcp-server/src/benchmark/pick.ts` (`pickTopN`, `applyPicksToSettings`).
+  `scripts/llm-ext/src/model-events.ts` (`assessModelPersistence`, `ROTATE_WORTHY_STATUSES`),
+  `scripts/llm-ext/src/model-qualification/auto-replace.ts` (`planEnsembleRotation`),
+  `scripts/llm-ext/src/benchmark/discover.ts` (`DEFAULT_CRITERIA`, `qualify()`),
+  `scripts/llm-ext/src/benchmark/pick.ts` (`pickTopN`, `applyPicksToSettings`).

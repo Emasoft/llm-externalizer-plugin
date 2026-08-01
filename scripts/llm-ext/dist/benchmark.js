@@ -226941,7 +226941,7 @@ function buildReportMarkdown4(args) {
   lines.push(`**Total LLM spend:** $${args.totalCost.toFixed(6)}`);
   lines.push("");
   lines.push(
-    "**Scoring is 100% deterministic \u2014 no LLM judge.** The corpus is twelve files copied VERBATIM from this repo's own `mcp-server/src/`, and each query's true MATCH set is DERIVED from those bytes by a mechanical rule at run time (not hand-listed), so the expected answer cannot drift from the corpus. The score is precision/recall/F1 over the per-file MATCH/NO_MATCH verdicts. A MATCH line's cited evidence is reported but NOT graded: judging whether a citation really proves the claim is a semantic judgment, which would need the judge this benchmark refuses to use."
+    "**Scoring is 100% deterministic \u2014 no LLM judge.** The corpus is twelve files copied VERBATIM from this repo's own `scripts/llm-ext/src/`, and each query's true MATCH set is DERIVED from those bytes by a mechanical rule at run time (not hand-listed), so the expected answer cannot drift from the corpus. The score is precision/recall/F1 over the per-file MATCH/NO_MATCH verdicts. A MATCH line's cited evidence is reported but NOT graded: judging whether a citation really proves the claim is a semantic judgment, which would need the judge this benchmark refuses to use."
   );
   lines.push("");
   lines.push("## Queries");
@@ -228154,7 +228154,7 @@ function buildReportMarkdown5(args) {
   lines.push("");
   lines.push(`**Run:** ${(/* @__PURE__ */ new Date()).toISOString()}`);
   lines.push(
-    `**Corpus:** 1 real spec (this repo's own \`mcp-server/TESTING.md\`) \xD7 ${args.fixtures.length} real source files = ${args.fixtures.length} per-file decisions (${violations} VIOLATION / ${args.fixtures.length - violations} CLEAN) \u2014 corpus ${args.datasetHash}`
+    `**Corpus:** 1 real spec (this repo's own \`scripts/llm-ext/TESTING.md\`) \xD7 ${args.fixtures.length} real source files = ${args.fixtures.length} per-file decisions (${violations} VIOLATION / ${args.fixtures.length - violations} CLEAN) \u2014 corpus ${args.datasetHash}`
   );
   lines.push(
     `**Incumbent:** \`${args.incumbentId}\` (in $${args.incumbentIn.toFixed(3)}/M, out $${args.incumbentOut.toFixed(3)}/M)`
@@ -228165,7 +228165,7 @@ function buildReportMarkdown5(args) {
   lines.push(`**Total LLM spend:** $${args.totalCost.toFixed(6)}`);
   lines.push("");
   lines.push(
-    "**Scoring is 100% deterministic \u2014 no LLM judge.** The spec is a verbatim copy of this repo's shipped `mcp-server/TESTING.md`; every source file is a byte-for-byte snapshot of a real revision out of git. The four VIOLATION fixtures are the exact bytes commit `31ce212` replaced *because they really violated this spec* \u2014 the defect drained a real OpenRouter balance ($17.67 in one hour) before it was found. The score is precision/recall/F1 over the per-file CLEAN/VIOLATION verdicts."
+    "**Scoring is 100% deterministic \u2014 no LLM judge.** The spec is a verbatim copy of this repo's shipped `scripts/llm-ext/TESTING.md`; every source file is a byte-for-byte snapshot of a real revision out of git. The four VIOLATION fixtures are the exact bytes commit `31ce212` replaced *because they really violated this spec* \u2014 the defect drained a real OpenRouter balance ($17.67 in one hour) before it was found. The score is precision/recall/F1 over the per-file CLEAN/VIOLATION verdicts."
   );
   lines.push("");
   lines.push(

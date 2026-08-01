@@ -16,7 +16,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-// src/benchmark → mcp-server, then dist/benchmark.js (the bundled entry).
+// src/benchmark → scripts/llm-ext, then dist/benchmark.js (the bundled entry).
 const BENCH_JS = join(HERE, "..", "..", "dist", "benchmark.js");
 
 const SETTINGS = [

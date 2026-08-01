@@ -978,7 +978,7 @@ async function runCodeTaskPhase(opts: CliOptions): Promise<CliResult> {
 /**
  * --scan-folder phase: assess model(s) on the scan_folder MASS-SEARCH corpus and
  * recommend the best same-or-cheaper passer. The corpus is twelve files copied
- * VERBATIM from this repo's own `mcp-server/src/` (no fabricated code), and each
+ * VERBATIM from this repo's own `scripts/llm-ext/src/` (no fabricated code), and each
  * query's true MATCH set is DERIVED from those bytes by a mechanical rule at run
  * time rather than hand-listed — so the expected answer cannot drift from the
  * corpus. Scoring is DETERMINISTIC: precision/recall/F1 over the per-file
@@ -1052,7 +1052,7 @@ async function runScanFolderPhase(opts: CliOptions): Promise<CliResult> {
 /**
  * --check-specs phase: assess model(s) on the check_against_specs SPEC-ADHERENCE corpus
  * and recommend the best same-or-cheaper passer. The spec is this repo's own shipped
- * `mcp-server/TESTING.md` and the corpus is thirteen VERBATIM git snapshots of real files
+ * `scripts/llm-ext/TESTING.md` and the corpus is thirteen VERBATIM git snapshots of real files
  * (no fabricated code): four are the exact pre-fix bytes commit 31ce212 replaced because
  * they really violated that spec — a defect that drained a real OpenRouter balance — and
  * three of those four sit right next to their own fixed twin, which is what makes the

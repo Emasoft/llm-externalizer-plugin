@@ -50,10 +50,10 @@ export function resolveBundledRulePath(): string | null {
     candidates.push(join(resolve(pluginRoot), "rules", RULE_FILENAME));
   }
   try {
-    // dist/index.js → <plugin>/mcp-server/dist; src/rule-install.ts →
-    // <plugin>/mcp-server/src. Either way, ../../rules is <plugin>/rules.
+    // dist/index.js → <plugin>/scripts/llm-ext/dist; src/rule-install.ts →
+    // <plugin>/scripts/llm-ext/src. Either way, ../../../rules is <plugin>/rules.
     const here = dirname(fileURLToPath(import.meta.url));
-    candidates.push(resolve(here, "..", "..", "rules", RULE_FILENAME));
+    candidates.push(resolve(here, "..", "..", "..", "rules", RULE_FILENAME));
   } catch {
     /* import.meta.url unavailable (non-ESM context) — rely on the env var. */
   }

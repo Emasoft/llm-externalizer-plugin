@@ -14,27 +14,27 @@ __pycache__/
 
 # Node
 node_modules/
-mcp-server/node_modules/
-mcp-server/*.tsbuildinfo
-mcp-server/*.tgz
-mcp-server/coverage/
-mcp-server/logs/
-mcp-server/llm_externalizer_output/
-mcp-server/reports_dev/
+scripts/llm-ext/node_modules/
+scripts/llm-ext/*.tsbuildinfo
+scripts/llm-ext/*.tgz
+scripts/llm-ext/coverage/
+scripts/llm-ext/logs/
+scripts/llm-ext/llm_externalizer_output/
+scripts/llm-ext/reports_dev/
 reports_dev/
 # Audit output from /llm-externalizer:* commands (and any plugin agent).
 # Reports routinely contain absolute local paths, raw LLM responses, and
 # redacted secret markers — never publish them. Agents should write to the
 # root-project ./reports/ even when running inside a git worktree.
 reports/
-mcp-server/reports/
+scripts/llm-ext/reports/
 
 # Build artifacts
 dist/
-!mcp-server/dist/
+!scripts/llm-ext/dist/
 # …but never the source maps: debug-only, not needed at runtime, and they trip
 # CPV's RC-70 security heuristic (esbuild config sets sourcemap:false anyway).
-mcp-server/dist/*.map
+scripts/llm-ext/dist/*.map
 build/
 
 # macOS

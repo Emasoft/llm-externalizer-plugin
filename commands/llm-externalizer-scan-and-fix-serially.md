@@ -130,9 +130,9 @@ The agent — not a blind glob — curates the scan target. Humans cannot reliab
 
 Using `Bash`:
 
-1. Resolve the reports directory. `MAIN_ROOT` MUST match the CLI's own report-root resolver (`mcp-server/src/project-root.ts`), which uses **NO git**: it is `$CLAUDE_PROJECT_DIR` when that exists on disk, else the current working dir. This is the single source of truth — git is deliberately NOT used (linked worktrees, monorepos whose subfolders each have their own git, and git-less roots all make a git-root climb pick the WRONG directory). Because this command passes `output_dir` explicitly to the scan tool, the orchestrator's `MAIN_ROOT` and the CLI's resolver must agree, or reports scatter.
+1. Resolve the reports directory. `MAIN_ROOT` MUST match the CLI's own report-root resolver (`scripts/llm-ext/src/project-root.ts`), which uses **NO git**: it is `$CLAUDE_PROJECT_DIR` when that exists on disk, else the current working dir. This is the single source of truth — git is deliberately NOT used (linked worktrees, monorepos whose subfolders each have their own git, and git-less roots all make a git-root climb pick the WRONG directory). Because this command passes `output_dir` explicitly to the scan tool, the orchestrator's `MAIN_ROOT` and the CLI's resolver must agree, or reports scatter.
    ```bash
-   # No git: mirror mcp-server/src/project-root.ts exactly.
+   # No git: mirror scripts/llm-ext/src/project-root.ts exactly.
    if [ -n "$CLAUDE_PROJECT_DIR" ] && [ -d "$CLAUDE_PROJECT_DIR" ]; then
      MAIN_ROOT="$CLAUDE_PROJECT_DIR"
    else

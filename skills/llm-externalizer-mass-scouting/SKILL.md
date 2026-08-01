@@ -30,7 +30,7 @@ Bulk LLM-driven structured-output analysis. Point a cheap model (default `qwen/q
 ## Instructions
 
 Five phases, one MCP tool per phase, source in
-`mcp-server/src/mass_scouting/cli.ts`.
+`scripts/llm-ext/src/mass_scouting/cli.ts`.
 
 1. **register** — walks a folder (honors `.gitignore`; `no_gitignore: true`
    to override) or takes `file_paths[]`; hashes + caches every body.
@@ -91,4 +91,4 @@ End-to-end: [worked-example](references/worked-example.md).
 - [worked-example](references/worked-example.md) — Pipeline run, Cost rules-of-thumb, Reading the report.
 - [fieldsets](references/fieldsets.md) — Fieldset format, Bundled fieldsets, Build-fieldset shorthand, Propose-fieldset.
 - [glossary](references/glossary.md) — Terms, Model selection guide, Privacy.
-- Source: `mcp-server/src/mass_scouting/`, `mcp-server/fieldsets/`.
+- Source: `scripts/llm-ext/src/mass_scouting/`, `scripts/llm-ext/fieldsets/`.
