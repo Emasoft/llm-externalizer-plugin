@@ -132,7 +132,10 @@ interface ChatCompletionResponse {
 export async function runSearchExistingBenchmarkOnModel(
   modelId: string,
   cases: readonly SearchExistingCase[] = SEARCH_EXISTING_CASES,
-  opts: SearchExistingRunOptions = { apiKey: "", pricing: { input_per_m_usd: 0, output_per_m_usd: 0, context_window: 0 } },
+  opts: SearchExistingRunOptions = {
+    apiKey: "",
+    pricing: { input_per_m_usd: 0, output_per_m_usd: 0, context_window: 0 },
+  },
   fetchImpl: FetchImpl = realFetch,
 ): Promise<SearchExistingRunResult> {
   const fixtureRoot = resolveFixtureRoot();
@@ -160,7 +163,9 @@ export async function runSearchExistingBenchmarkOnModel(
       .filter((rel) => c.extensions.some((ext) => rel.endsWith(ext)))
       .filter((rel) => !sourceRel.has(rel))
       .map((rel) => abs(fixtureRoot, rel));
-    const expectedYesAbs = new Set(c.expectedYes.map((rel) => abs(fixtureRoot, rel)));
+    const expectedYesAbs = new Set(
+      c.expectedYes.map((rel) => abs(fixtureRoot, rel)),
+    );
 
     // In-memory tee: the pipeline calls saveResponse exactly once in mode 2
     // with the full merged report (per-file `## File:` sections embedded inside
@@ -171,7 +176,9 @@ export async function runSearchExistingBenchmarkOnModel(
       return `memory://case/${c.id}`;
     };
 
-    const callModel: SeiDeps["callModel"] = async (messages: SeiChatMessage[]) => {
+    const callModel: SeiDeps["callModel"] = async (
+      messages: SeiChatMessage[],
+    ) => {
       const started = Date.now();
       let res;
       try {
@@ -200,12 +207,29 @@ export async function runSearchExistingBenchmarkOnModel(
         const bodyText = await res.text().catch(() => "");
         throw new Error(`API error ${res.status}: ${bodyText.slice(0, 500)}`);
       }
-      const json = (await res.json()) as ChatCompletionResponse;
+      // Same trap as code-task/bench-runner.ts, but this runner signals failure by
+      // THROWING — the caller classifies it as a recoverable batch error, so the
+      // sweep survives. A bare res.json() throws a bare SyntaxError instead, which
+      // reads as "Unexpected end of JSON input" with no HTTP context. Rethrow it in
+      // the same shape as the non-2xx branch above so the batch record is legible.
+      let json: ChatCompletionResponse;
+      try {
+        json = (await res.json()) as ChatCompletionResponse;
+      } catch (err) {
+        throw new Error(
+          `malformed response body (HTTP ${res.status}): ${(err as Error).message}`,
+          {
+            cause: err,
+          },
+        );
+      }
       const usage = json.usage;
       if (usage) {
         costUsd +=
-          ((usage.prompt_tokens ?? 0) / 1_000_000) * opts.pricing.input_per_m_usd +
-          ((usage.completion_tokens ?? 0) / 1_000_000) * opts.pricing.output_per_m_usd;
+          ((usage.prompt_tokens ?? 0) / 1_000_000) *
+            opts.pricing.input_per_m_usd +
+          ((usage.completion_tokens ?? 0) / 1_000_000) *
+            opts.pricing.output_per_m_usd;
       }
       const content = json.choices?.[0]?.message?.content ?? "";
       return { content, model: modelId };
@@ -219,7 +243,11 @@ export async function runSearchExistingBenchmarkOnModel(
       // so the pipeline records it as a per-batch error and continues. A whole
       // case that produces zero usable output still returns isError (handled
       // below), but a single bad batch within a multi-batch case does not stop.
-      classifyError: () => ({ reason: "benchmark batch error", unrecoverable: false, serviceLevel: false }),
+      classifyError: () => ({
+        reason: "benchmark batch error",
+        unrecoverable: false,
+        serviceLevel: false,
+      }),
       saveResponse,
       ensembleModelLabel: () => modelId,
       // No onProgress / outputDir for the in-memory benchmark.
@@ -245,9 +273,20 @@ export async function runSearchExistingBenchmarkOnModel(
       // score the case with an EMPTY verdict map — every scanned file is
       // unscored, turning each expected-YES into a false negative. The model is
       // penalized for the failure rather than the case being silently dropped.
-      const reason = result.content.map((p) => p.text).join("\n").split("\n")[0] ?? "pipeline FAILED";
+      const reason =
+        result.content
+          .map((p) => p.text)
+          .join("\n")
+          .split("\n")[0] ?? "pipeline FAILED";
       failures.push({ caseId: c.id, reason });
-      caseScores.push(scoreCase(c.id, scannedAbs, expectedYesAbs, new Map<string, SectionVerdict>()));
+      caseScores.push(
+        scoreCase(
+          c.id,
+          scannedAbs,
+          expectedYesAbs,
+          new Map<string, SectionVerdict>(),
+        ),
+      );
       if (opts.onProgress) opts.onProgress(ci + 1, cases.length);
       continue;
     }

@@ -245651,7 +245651,10 @@ var SEARCH_EXISTING_MAX_OUTPUT_TOKENS = 8192;
 function abs(root, rel) {
   return resolve8(root, rel);
 }
-async function runSearchExistingBenchmarkOnModel(modelId, cases = SEARCH_EXISTING_CASES, opts = { apiKey: "", pricing: { input_per_m_usd: 0, output_per_m_usd: 0, context_window: 0 } }, fetchImpl = realFetch) {
+async function runSearchExistingBenchmarkOnModel(modelId, cases = SEARCH_EXISTING_CASES, opts = {
+  apiKey: "",
+  pricing: { input_per_m_usd: 0, output_per_m_usd: 0, context_window: 0 }
+}, fetchImpl = realFetch) {
   const fixtureRoot = resolveFixtureRoot();
   const allFixtureRel = listFixtureFiles(fixtureRoot);
   const apiUrl = opts.apiUrl ?? DEFAULT_API_URL;
@@ -245667,7 +245670,9 @@ async function runSearchExistingBenchmarkOnModel(modelId, cases = SEARCH_EXISTIN
     const c = cases[ci];
     const sourceRel = new Set(c.sourceFiles ?? []);
     const scannedAbs = allFixtureRel.filter((rel) => c.extensions.some((ext) => rel.endsWith(ext))).filter((rel) => !sourceRel.has(rel)).map((rel) => abs(fixtureRoot, rel));
-    const expectedYesAbs = new Set(c.expectedYes.map((rel) => abs(fixtureRoot, rel)));
+    const expectedYesAbs = new Set(
+      c.expectedYes.map((rel) => abs(fixtureRoot, rel))
+    );
     let capturedMergedReport = "";
     const saveResponse2 = (_tool, content) => {
       capturedMergedReport = content;
@@ -245699,7 +245704,17 @@ async function runSearchExistingBenchmarkOnModel(modelId, cases = SEARCH_EXISTIN
         const bodyText = await res.text().catch(() => "");
         throw new Error(`API error ${res.status}: ${bodyText.slice(0, 500)}`);
       }
-      const json2 = await res.json();
+      let json2;
+      try {
+        json2 = await res.json();
+      } catch (err3) {
+        throw new Error(
+          `malformed response body (HTTP ${res.status}): ${err3.message}`,
+          {
+            cause: err3
+          }
+        );
+      }
       const usage = json2.usage;
       if (usage) {
         costUsd += (usage.prompt_tokens ?? 0) / 1e6 * opts.pricing.input_per_m_usd + (usage.completion_tokens ?? 0) / 1e6 * opts.pricing.output_per_m_usd;
@@ -245715,7 +245730,11 @@ async function runSearchExistingBenchmarkOnModel(modelId, cases = SEARCH_EXISTIN
       // so the pipeline records it as a per-batch error and continues. A whole
       // case that produces zero usable output still returns isError (handled
       // below), but a single bad batch within a multi-batch case does not stop.
-      classifyError: () => ({ reason: "benchmark batch error", unrecoverable: false, serviceLevel: false }),
+      classifyError: () => ({
+        reason: "benchmark batch error",
+        unrecoverable: false,
+        serviceLevel: false
+      }),
       saveResponse: saveResponse2,
       ensembleModelLabel: () => modelId
       // No onProgress / outputDir for the in-memory benchmark.
@@ -245736,7 +245755,14 @@ async function runSearchExistingBenchmarkOnModel(modelId, cases = SEARCH_EXISTIN
     if (result.isError) {
       const reason = result.content.map((p) => p.text).join("\n").split("\n")[0] ?? "pipeline FAILED";
       failures.push({ caseId: c.id, reason });
-      caseScores.push(scoreCase(c.id, scannedAbs, expectedYesAbs, /* @__PURE__ */ new Map()));
+      caseScores.push(
+        scoreCase(
+          c.id,
+          scannedAbs,
+          expectedYesAbs,
+          /* @__PURE__ */ new Map()
+        )
+      );
       if (opts.onProgress) opts.onProgress(ci + 1, cases.length);
       continue;
     }
@@ -247410,11 +247436,20 @@ ${codeBlock}`
             "content-type": "application/json",
             authorization: `Bearer ${opts.apiKey}`
           },
-          body: JSON.stringify({ model: modelId, messages, temperature, max_tokens: maxTokens }),
+          body: JSON.stringify({
+            model: modelId,
+            messages,
+            temperature,
+            max_tokens: maxTokens
+          }),
           signal: AbortSignal.timeout(perCallTimeoutMs)
         });
       } catch (err3) {
-        return { filePath, success: false, error: `request failed: ${err3.message}` };
+        return {
+          filePath,
+          success: false,
+          error: `request failed: ${err3.message}`
+        };
       } finally {
         latencyTotalMs += Date.now() - started;
         callCount++;
@@ -247427,14 +247462,27 @@ ${codeBlock}`
           error: `API error ${res.status}: ${bodyText.slice(0, 300)}`
         };
       }
-      const json2 = await res.json();
+      let json2;
+      try {
+        json2 = await res.json();
+      } catch (err3) {
+        return {
+          filePath,
+          success: false,
+          error: `malformed response body (HTTP ${res.status}): ${err3.message}`
+        };
+      }
       const usage = json2.usage;
       if (usage) {
         costUsd += (usage.prompt_tokens ?? 0) / 1e6 * opts.pricing.input_per_m_usd + (usage.completion_tokens ?? 0) / 1e6 * opts.pricing.output_per_m_usd;
       }
       const content = json2.choices?.[0]?.message?.content ?? "";
       if (content.trim().length === 0) {
-        return { filePath, success: false, error: "LLM returned empty response" };
+        return {
+          filePath,
+          success: false,
+          error: "LLM returned empty response"
+        };
       }
       capturedReport = content;
       return { filePath, success: true, reportPath: `memory://case/${c.id}` };
@@ -247447,11 +247495,16 @@ ${codeBlock}`
       normalizePaths: (raw) => {
         if (!raw) return [];
         const arr = Array.isArray(raw) ? raw : [raw];
-        return arr.filter((p) => typeof p === "string" && p.length > 0);
+        return arr.filter(
+          (p) => typeof p === "string" && p.length > 0
+        );
       },
       // The benchmark always passes explicit input_files_paths; folder_path is
       // never used, and a silent empty result would be worse than a clear error.
-      resolveFolderPath: () => ({ files: [], error: "folder_path is not used by the code-audit benchmark" }),
+      resolveFolderPath: () => ({
+        files: [],
+        error: "folder_path is not used by the code-audit benchmark"
+      }),
       processFileCheck: processFileCheck2,
       // Unreachable on the single-file route. Throw rather than return a stub:
       // if the pipeline ever changed shape and started batching here, a silent
@@ -248603,13 +248656,18 @@ async function runScanFolderBenchmarkOnModel(modelId, cases = SCAN_FOLDER_CASES,
   const failures = [];
   const evidence = [];
   let filesDone = 0;
-  const totalFiles = cases.reduce((n, c) => n + scannedFilesFor(c, fixtureRoot).length, 0);
+  const totalFiles = cases.reduce(
+    (n, c) => n + scannedFilesFor(c, fixtureRoot).length,
+    0
+  );
   for (const c of cases) {
     const scanned = scannedFilesFor(c, fixtureRoot).map(
       (rel) => resolve12(fixtureAbsPath(rel, fixtureRoot))
     );
     const expectedMatch = new Set(
-      deriveMatchingFiles(c, fixtureRoot).map((rel) => resolve12(fixtureAbsPath(rel, fixtureRoot)))
+      deriveMatchingFiles(c, fixtureRoot).map(
+        (rel) => resolve12(fixtureAbsPath(rel, fixtureRoot))
+      )
     );
     const reports = /* @__PURE__ */ new Map();
     const errors = /* @__PURE__ */ new Map();
@@ -248639,7 +248697,12 @@ ${codeBlock}`
             "content-type": "application/json",
             authorization: `Bearer ${opts.apiKey}`
           },
-          body: JSON.stringify({ model: modelId, messages, temperature, max_tokens: maxTokens }),
+          body: JSON.stringify({
+            model: modelId,
+            messages,
+            temperature,
+            max_tokens: maxTokens
+          }),
           signal: AbortSignal.timeout(perCallTimeoutMs)
         });
       } catch (err3) {
@@ -248658,7 +248721,14 @@ ${codeBlock}`
         errors.set(resolve12(filePath), reason);
         return { filePath, success: false, error: reason };
       }
-      const json2 = await res.json();
+      let json2;
+      try {
+        json2 = await res.json();
+      } catch (err3) {
+        const reason = `malformed response body (HTTP ${res.status}): ${err3.message}`;
+        errors.set(resolve12(filePath), reason);
+        return { filePath, success: false, error: reason };
+      }
       const usage = json2.usage;
       if (usage) {
         costUsd += (usage.prompt_tokens ?? 0) / 1e6 * opts.pricing.input_per_m_usd + (usage.completion_tokens ?? 0) / 1e6 * opts.pricing.output_per_m_usd;
@@ -248670,7 +248740,11 @@ ${codeBlock}`
         return { filePath, success: false, error: reason };
       }
       reports.set(resolve12(filePath), content);
-      return { filePath, success: true, reportPath: `memory://${c.id}/${filePath}` };
+      return {
+        filePath,
+        success: true,
+        reportPath: `memory://${c.id}/${filePath}`
+      };
     };
     const deps = {
       // The benchmark scores ONE model at a time, so the multi-model ensemble is
@@ -249809,7 +249883,11 @@ The prompt's file-tag format or the fixture path form has drifted. Fix the runne
           "content-type": "application/json",
           authorization: `Bearer ${opts.apiKey}`
         },
-        body: JSON.stringify({ model: modelId, messages, max_tokens: maxTokens }),
+        body: JSON.stringify({
+          model: modelId,
+          messages,
+          max_tokens: maxTokens
+        }),
         signal: AbortSignal.timeout(perCallTimeoutMs)
       });
     } catch (err3) {
@@ -249828,7 +249906,16 @@ The prompt's file-tag format or the fixture path form has drifted. Fix the runne
       errors.set(filePath, reason);
       return emptyResult(modelId);
     }
-    const json2 = await res.json();
+    let json2;
+    try {
+      json2 = await res.json();
+    } catch (err3) {
+      errors.set(
+        filePath,
+        `malformed response body (HTTP ${res.status}): ${err3.message}`
+      );
+      return emptyResult(modelId);
+    }
     const usage = json2.usage;
     if (usage) {
       costUsd += (usage.prompt_tokens ?? 0) / 1e6 * opts.pricing.input_per_m_usd + (usage.completion_tokens ?? 0) / 1e6 * opts.pricing.output_per_m_usd;
@@ -249858,7 +249945,9 @@ The prompt's file-tag format or the fixture path form has drifted. Fix the runne
     normalizePaths: (raw) => {
       if (!raw) return [];
       const arr = Array.isArray(raw) ? raw : [raw];
-      return arr.filter((p) => typeof p === "string" && p.length > 0);
+      return arr.filter(
+        (p) => typeof p === "string" && p.length > 0
+      );
     },
     // No folder_path is passed (the corpus is an explicit, ordered file list — a folder
     // walk would also sweep up the fixture README and audit it as a fourteenth "file").
@@ -249913,7 +250002,9 @@ The prompt's file-tag format or the fixture path form has drifted. Fix the runne
       citedRules.push({ file: file2, citedRule: parsed.citedRule });
     }
   }
-  const caseScores = [scoreCase(CHECK_SPECS_CASE_ID, files, expected, verdicts)];
+  const caseScores = [
+    scoreCase(CHECK_SPECS_CASE_ID, files, expected, verdicts)
+  ];
   const aggregate2 = aggregateScores(caseScores);
   return {
     modelId,

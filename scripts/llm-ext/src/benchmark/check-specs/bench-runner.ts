@@ -228,7 +228,11 @@ export async function runCheckSpecsBenchmarkOnModel(
           "content-type": "application/json",
           authorization: `Bearer ${opts.apiKey}`,
         },
-        body: JSON.stringify({ model: modelId, messages, max_tokens: maxTokens }),
+        body: JSON.stringify({
+          model: modelId,
+          messages,
+          max_tokens: maxTokens,
+        }),
         signal: AbortSignal.timeout(perCallTimeoutMs),
       });
     } catch (err) {
@@ -252,12 +256,26 @@ export async function runCheckSpecsBenchmarkOnModel(
       return emptyResult(modelId);
     }
 
-    const json = (await res.json()) as ChatCompletionResponse;
+    // Same trap as code-task/bench-runner.ts: a 200 with an empty/truncated body
+    // throws out of the sweep and costs every OTHER model its run. Degrade to the
+    // per-file failure shape the non-2xx branch above already uses.
+    let json: ChatCompletionResponse;
+    try {
+      json = (await res.json()) as ChatCompletionResponse;
+    } catch (err) {
+      errors.set(
+        filePath,
+        `malformed response body (HTTP ${res.status}): ${(err as Error).message}`,
+      );
+      return emptyResult(modelId);
+    }
     const usage = json.usage;
     if (usage) {
       costUsd +=
-        ((usage.prompt_tokens ?? 0) / 1_000_000) * opts.pricing.input_per_m_usd +
-        ((usage.completion_tokens ?? 0) / 1_000_000) * opts.pricing.output_per_m_usd;
+        ((usage.prompt_tokens ?? 0) / 1_000_000) *
+          opts.pricing.input_per_m_usd +
+        ((usage.completion_tokens ?? 0) / 1_000_000) *
+          opts.pricing.output_per_m_usd;
     }
     const content = json.choices?.[0]?.message?.content ?? "";
     if (content.trim().length === 0) {
@@ -272,7 +290,8 @@ export async function runCheckSpecsBenchmarkOnModel(
         ? {
             prompt_tokens: usage.prompt_tokens ?? 0,
             completion_tokens: usage.completion_tokens ?? 0,
-            total_tokens: (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0),
+            total_tokens:
+              (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0),
           }
         : undefined,
       finishReason: "stop",
@@ -287,14 +306,17 @@ export async function runCheckSpecsBenchmarkOnModel(
     normalizePaths: (raw) => {
       if (!raw) return [];
       const arr = Array.isArray(raw) ? raw : [raw];
-      return arr.filter((p): p is string => typeof p === "string" && p.length > 0);
+      return arr.filter(
+        (p): p is string => typeof p === "string" && p.length > 0,
+      );
     },
     // No folder_path is passed (the corpus is an explicit, ordered file list — a folder
     // walk would also sweep up the fixture README and audit it as a fourteenth "file").
     // Unreachable; a clear error rather than a silent empty list if that ever changes.
     resolveFolderPath: () => ({
       files: [],
-      error: "check-specs benchmark passes input_files_paths, never folder_path",
+      error:
+        "check-specs benchmark passes input_files_paths, never folder_path",
     }),
     ensembleStreaming,
     // No footer. The real one records usage + writes to the global ledger (index.ts side
@@ -306,7 +328,8 @@ export async function runCheckSpecsBenchmarkOnModel(
     // (keyed by the file the call was FOR, which is stronger than trusting loop order), so
     // this returns a marker rather than writing anything: a benchmark must not litter the
     // user's report directory with 13 files per model per run.
-    saveResponse: (_tool, _content, meta) => `memory://${meta.inputFile ?? "unknown"}`,
+    saveResponse: (_tool, _content, meta) =>
+      `memory://${meta.inputFile ?? "unknown"}`,
     ensembleModelLabel: () => modelId,
     resolveDefaultMaxTokens: () => maxTokens,
   };
@@ -355,7 +378,9 @@ export async function runCheckSpecsBenchmarkOnModel(
     }
   }
 
-  const caseScores = [scoreCase(CHECK_SPECS_CASE_ID, files, expected, verdicts)];
+  const caseScores = [
+    scoreCase(CHECK_SPECS_CASE_ID, files, expected, verdicts),
+  ];
   const aggregate = aggregateScores(caseScores);
 
   return {

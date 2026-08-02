@@ -215,13 +215,22 @@ export async function runCodeAuditBenchmarkOnModel(
             "content-type": "application/json",
             authorization: `Bearer ${opts.apiKey}`,
           },
-          body: JSON.stringify({ model: modelId, messages, temperature, max_tokens: maxTokens }),
+          body: JSON.stringify({
+            model: modelId,
+            messages,
+            temperature,
+            max_tokens: maxTokens,
+          }),
           signal: AbortSignal.timeout(perCallTimeoutMs),
         });
       } catch (err) {
         // Network/timeout: report it as a FileProcessResult failure (the shape
         // the pipeline understands) rather than throwing out of the sweep.
-        return { filePath, success: false, error: `request failed: ${(err as Error).message}` };
+        return {
+          filePath,
+          success: false,
+          error: `request failed: ${(err as Error).message}`,
+        };
       } finally {
         latencyTotalMs += Date.now() - started;
         callCount++;
@@ -236,16 +245,40 @@ export async function runCodeAuditBenchmarkOnModel(
         };
       }
 
-      const json = (await res.json()) as ChatCompletionResponse;
+      // A 200 with an empty or truncated body throws "Unexpected end of JSON
+      // input" straight OUT of the sweep, so one flaky provider response kills
+      // the whole tool's benchmark — every other model loses its run too, and
+      // the ledger ends up empty. That is not hypothetical: it is exactly how
+      // the code_task phase died on 2026-08-02, after a free-tier model that had
+      // already taken ~94s elsewhere returned a 200 with an unparseable body.
+      // Every OTHER failure here (network, timeout, non-2xx, empty content)
+      // already degrades to a FileProcessResult; this one must too, so a bad
+      // response costs ONE model's row instead of all sixteen.
+      let json: ChatCompletionResponse;
+      try {
+        json = (await res.json()) as ChatCompletionResponse;
+      } catch (err) {
+        return {
+          filePath,
+          success: false,
+          error: `malformed response body (HTTP ${res.status}): ${(err as Error).message}`,
+        };
+      }
       const usage = json.usage;
       if (usage) {
         costUsd +=
-          ((usage.prompt_tokens ?? 0) / 1_000_000) * opts.pricing.input_per_m_usd +
-          ((usage.completion_tokens ?? 0) / 1_000_000) * opts.pricing.output_per_m_usd;
+          ((usage.prompt_tokens ?? 0) / 1_000_000) *
+            opts.pricing.input_per_m_usd +
+          ((usage.completion_tokens ?? 0) / 1_000_000) *
+            opts.pricing.output_per_m_usd;
       }
       const content = json.choices?.[0]?.message?.content ?? "";
       if (content.trim().length === 0) {
-        return { filePath, success: false, error: "LLM returned empty response" };
+        return {
+          filePath,
+          success: false,
+          error: "LLM returned empty response",
+        };
       }
       capturedReport = content;
       return { filePath, success: true, reportPath: `memory://case/${c.id}` };
@@ -259,11 +292,16 @@ export async function runCodeAuditBenchmarkOnModel(
       normalizePaths: (raw) => {
         if (!raw) return [];
         const arr = Array.isArray(raw) ? raw : [raw];
-        return arr.filter((p): p is string => typeof p === "string" && p.length > 0);
+        return arr.filter(
+          (p): p is string => typeof p === "string" && p.length > 0,
+        );
       },
       // The benchmark always passes explicit input_files_paths; folder_path is
       // never used, and a silent empty result would be worse than a clear error.
-      resolveFolderPath: () => ({ files: [], error: "folder_path is not used by the code-audit benchmark" }),
+      resolveFolderPath: () => ({
+        files: [],
+        error: "folder_path is not used by the code-audit benchmark",
+      }),
       processFileCheck,
       // Unreachable on the single-file route. Throw rather than return a stub:
       // if the pipeline ever changed shape and started batching here, a silent
@@ -299,7 +337,10 @@ export async function runCodeAuditBenchmarkOnModel(
 
     if (result.isError || capturedReport === "") {
       const reason =
-        result.content.map((p) => p.text).join("\n").split("\n")[0] || "pipeline produced no report";
+        result.content
+          .map((p) => p.text)
+          .join("\n")
+          .split("\n")[0] || "pipeline produced no report";
       failures.push({ caseId: c.id, reason });
       // Scored with an EMPTY accused set: the case's defects become false
       // negatives, so the model is PENALISED for the failure rather than the

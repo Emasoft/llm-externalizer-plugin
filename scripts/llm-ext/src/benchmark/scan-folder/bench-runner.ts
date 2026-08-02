@@ -54,8 +54,17 @@ import type { ModelPricing } from "../../mass_scouting/cost-estimate.js";
 // and two copies of a confusion matrix drift the day one is fixed. See the header
 // of ./score.ts. The scan_folder-specific half (the anchor contract, the gate)
 // lives in ./score.ts.
-import { aggregateScores, scoreCase, type CaseScore, type SectionVerdict } from "../search-existing/score.js";
-import { parseFileVerdict, passesThresholds, type ScanFolderScore } from "./score.js";
+import {
+  aggregateScores,
+  scoreCase,
+  type CaseScore,
+  type SectionVerdict,
+} from "../search-existing/score.js";
+import {
+  parseFileVerdict,
+  passesThresholds,
+  type ScanFolderScore,
+} from "./score.js";
 import {
   SCAN_FOLDER_CASES,
   buildInstructions,
@@ -172,7 +181,10 @@ export async function runScanFolderBenchmarkOnModel(
   const evidence: { caseId: string; file: string; evidence: string }[] = [];
 
   let filesDone = 0;
-  const totalFiles = cases.reduce((n, c) => n + scannedFilesFor(c, fixtureRoot).length, 0);
+  const totalFiles = cases.reduce(
+    (n, c) => n + scannedFilesFor(c, fixtureRoot).length,
+    0,
+  );
 
   for (const c of cases) {
     // Truth is recomputed from the fixture bytes on every run — the corpus is the
@@ -184,7 +196,9 @@ export async function runScanFolderBenchmarkOnModel(
       resolve(fixtureAbsPath(rel, fixtureRoot)),
     );
     const expectedMatch = new Set(
-      deriveMatchingFiles(c, fixtureRoot).map((rel) => resolve(fixtureAbsPath(rel, fixtureRoot))),
+      deriveMatchingFiles(c, fixtureRoot).map((rel) =>
+        resolve(fixtureAbsPath(rel, fixtureRoot)),
+      ),
     );
 
     /** filePath (resolved) → the model's raw per-file report. */
@@ -234,7 +248,12 @@ export async function runScanFolderBenchmarkOnModel(
             "content-type": "application/json",
             authorization: `Bearer ${opts.apiKey}`,
           },
-          body: JSON.stringify({ model: modelId, messages, temperature, max_tokens: maxTokens }),
+          body: JSON.stringify({
+            model: modelId,
+            messages,
+            temperature,
+            max_tokens: maxTokens,
+          }),
           signal: AbortSignal.timeout(perCallTimeoutMs),
         });
       } catch (err) {
@@ -259,12 +278,24 @@ export async function runScanFolderBenchmarkOnModel(
         return { filePath, success: false, error: reason };
       }
 
-      const json = (await res.json()) as ChatCompletionResponse;
+      // Same trap as code-task/bench-runner.ts: a 200 with an empty/truncated
+      // body throws out of the sweep and costs every OTHER model its run. Degrade
+      // to the per-file failure shape the surrounding code already uses.
+      let json: ChatCompletionResponse;
+      try {
+        json = (await res.json()) as ChatCompletionResponse;
+      } catch (err) {
+        const reason = `malformed response body (HTTP ${res.status}): ${(err as Error).message}`;
+        errors.set(resolve(filePath), reason);
+        return { filePath, success: false, error: reason };
+      }
       const usage = json.usage;
       if (usage) {
         costUsd +=
-          ((usage.prompt_tokens ?? 0) / 1_000_000) * opts.pricing.input_per_m_usd +
-          ((usage.completion_tokens ?? 0) / 1_000_000) * opts.pricing.output_per_m_usd;
+          ((usage.prompt_tokens ?? 0) / 1_000_000) *
+            opts.pricing.input_per_m_usd +
+          ((usage.completion_tokens ?? 0) / 1_000_000) *
+            opts.pricing.output_per_m_usd;
       }
       const content = json.choices?.[0]?.message?.content ?? "";
       if (content.trim().length === 0) {
@@ -273,7 +304,11 @@ export async function runScanFolderBenchmarkOnModel(
         return { filePath, success: false, error: reason };
       }
       reports.set(resolve(filePath), content);
-      return { filePath, success: true, reportPath: `memory://${c.id}/${filePath}` };
+      return {
+        filePath,
+        success: true,
+        reportPath: `memory://${c.id}/${filePath}`,
+      };
     };
 
     const deps: ScanFolderDeps = {
@@ -346,7 +381,10 @@ export async function runScanFolderBenchmarkOnModel(
         const reason =
           errors.get(file) ??
           (result.isError
-            ? result.content.map((p) => p.text).join("\n").split("\n")[0]
+            ? result.content
+                .map((p) => p.text)
+                .join("\n")
+                .split("\n")[0]
             : "no report produced");
         failures.push({ caseId: c.id, file, reason });
         continue;
