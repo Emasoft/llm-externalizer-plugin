@@ -272,6 +272,29 @@ export async function withPaidBenchmarksAllowed<T>(
 }
 
 /**
+ * Would `assertPaidBenchmarkAllowed` REFUSE this model? True iff the model is paid
+ * (not free-eligible) AND either gate below is shut.
+ *
+ * This exists so a phase can decide "the assert will reject this one" WITHOUT
+ * duplicating the assert's conditions — the two must never drift, because the
+ * failure mode of drift is a paid model that the assert waved through and the
+ * phase then BILLED. It deliberately mirrors BOTH throw branches: the master
+ * switch (allow_paid_models) and the per-run opt-in (--allow-paid-models-tests).
+ * Gating on only the master switch leaves a paid-profile user who omits the opt-in
+ * still aborting at the second branch.
+ *
+ * Use it ONLY for candidates the phase auto-added (the incumbent). A model the USER
+ * typed must still hit the assert and be refused loudly — silently skipping an
+ * explicitly-named id would hide the very thing they asked to benchmark.
+ */
+export function paidBenchmarkWouldRefuse(model: OverCapModel): boolean {
+  if (isFreeModeEligible(model.id, model.inputDollarsPerMillion, model.outputDollarsPerMillion)) {
+    return false;
+  }
+  return !getAllowPaidModels() || !paidBenchmarksAllowed;
+}
+
+/**
  * Fail-fast unless paid-model benchmarking has been opted into. A model is PAID
  * when it is NOT free-eligible (isFreeModeEligible = a ':free' id OR a $0 catalog
  * price), so `:free` / $0 pools never trip this — `--bench-free-pool` and bare

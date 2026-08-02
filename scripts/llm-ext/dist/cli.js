@@ -7451,6 +7451,12 @@ async function withPaidBenchmarksAllowed(allowed, fn) {
     paidBenchmarksAllowed = prev;
   }
 }
+function paidBenchmarkWouldRefuse(model) {
+  if (isFreeModeEligible(model.id, model.inputDollarsPerMillion, model.outputDollarsPerMillion)) {
+    return false;
+  }
+  return !getAllowPaidModels() || !paidBenchmarksAllowed;
+}
 function assertPaidBenchmarkAllowed(models) {
   const paid = models.filter(
     (m) => !isFreeModeEligible(m.id, m.inputDollarsPerMillion, m.outputDollarsPerMillion)
@@ -11136,7 +11142,15 @@ async function runSecurityTriageBenchmark(opts = {}) {
     for (const c of sameOrCheaper) addModel(c, true);
   }
   if (!toAssess.has(incumbentId)) {
-    if (incumbentDecorated) {
+    if (paidBenchmarkWouldRefuse({
+      id: incumbentId,
+      inputDollarsPerMillion: incumbentIn,
+      outputDollarsPerMillion: incumbentOut
+    })) {
+      progress(
+        `  ${incumbentId}: incumbent not assessed \u2014 it is paid and paid benchmarks are off ($0 spent).`
+      );
+    } else if (incumbentDecorated) {
       const q = qualify(incumbentDecorated.raw, SECURITY_TRIAGE_CRITERIA2);
       addModel(incumbentDecorated, q !== null, q ? void 0 : "below this tool's requirements");
     } else {
@@ -245920,7 +245934,15 @@ async function runSearchExistingBenchmark(opts = {}) {
     for (const c of sameOrCheaper) addModel(c, true);
   }
   if (!toAssess.has(incumbentId)) {
-    if (incumbentDecorated) {
+    if (paidBenchmarkWouldRefuse({
+      id: incumbentId,
+      inputDollarsPerMillion: incumbentIn,
+      outputDollarsPerMillion: incumbentOut
+    })) {
+      progress(
+        `  ${incumbentId}: incumbent not assessed \u2014 it is paid and paid benchmarks are off ($0 spent).`
+      );
+    } else if (incumbentDecorated) {
       const q = qualify(incumbentDecorated.raw, SEARCH_EXISTING_CRITERIA);
       addModel(incumbentDecorated, q !== null, q ? void 0 : "below search-existing requirements");
     } else {
@@ -247658,7 +247680,16 @@ async function runCodeAuditBenchmark(opts = {}) {
     for (const c of sameOrCheaper) addModel(c, true);
   }
   if (!toAssess.has(incumbentId)) {
-    if (incumbentDecorated) {
+    const incumbentRefused = paidBenchmarkWouldRefuse({
+      id: incumbentId,
+      inputDollarsPerMillion: incumbentIn,
+      outputDollarsPerMillion: incumbentOut
+    });
+    if (incumbentRefused) {
+      progress(
+        `  ${incumbentId}: incumbent not assessed \u2014 it is paid and paid benchmarks are off ($0 spent).`
+      );
+    } else if (incumbentDecorated) {
       const q = qualify(incumbentDecorated.raw, CODE_TASK_CRITERIA);
       addModel(incumbentDecorated, q !== null, q ? void 0 : "below code-task requirements");
     } else {
@@ -247685,7 +247716,7 @@ async function runCodeAuditBenchmark(opts = {}) {
   const assessments = [];
   let totalCost = 0;
   for (const { model, qualified, disqualifyReason: disqualifyReason2 } of toAssess.values()) {
-    if (freeOnly && !model.id.endsWith(":free")) {
+    if (freeOnly && !model.id.endsWith(":free") || paidBenchmarkWouldRefuse(model)) {
       progress(`  ${model.id}: skipped (free_only \u2014 non-':free' model).`);
       assessments.push({
         modelId: model.id,
@@ -248890,7 +248921,15 @@ async function runScanFolderBenchmark(opts = {}) {
     for (const c of sameOrCheaper) addModel(c, true);
   }
   if (!toAssess.has(incumbentId)) {
-    if (incumbentDecorated) {
+    if (paidBenchmarkWouldRefuse({
+      id: incumbentId,
+      inputDollarsPerMillion: incumbentIn,
+      outputDollarsPerMillion: incumbentOut
+    })) {
+      progress(
+        `  ${incumbentId}: incumbent not assessed \u2014 it is paid and paid benchmarks are off ($0 spent).`
+      );
+    } else if (incumbentDecorated) {
       const q = qualify(incumbentDecorated.raw, SCAN_FOLDER_CRITERIA);
       addModel(incumbentDecorated, q !== null, q ? void 0 : "below scan-folder requirements");
     } else {
@@ -250075,7 +250114,15 @@ async function runCheckSpecsBenchmark(opts = {}) {
     for (const c of sameOrCheaper) addModel(c, true);
   }
   if (!toAssess.has(incumbentId)) {
-    if (incumbentDecorated) {
+    if (paidBenchmarkWouldRefuse({
+      id: incumbentId,
+      inputDollarsPerMillion: incumbentIn,
+      outputDollarsPerMillion: incumbentOut
+    })) {
+      progress(
+        `  ${incumbentId}: incumbent not assessed \u2014 it is paid and paid benchmarks are off ($0 spent).`
+      );
+    } else if (incumbentDecorated) {
       const q = qualify(incumbentDecorated.raw, CHECK_SPECS_CRITERIA);
       addModel(
         incumbentDecorated,

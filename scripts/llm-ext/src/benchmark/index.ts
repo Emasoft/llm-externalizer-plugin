@@ -85,6 +85,7 @@ import {
   resolveProfile,
   setActiveFreeOnly,
   setAllowPaidModels,
+  profileFreeModels,
   FREE_POOL_SEED,
 } from "../config.js";
 
@@ -292,7 +293,14 @@ async function main(): Promise<CliResult> {
       setAllowPaidModels(s.allow_paid_models === true);
       const resolved = resolveProfile(s.active, active);
       setActiveFreeOnly(resolved.freeOnly);
-      activeFreeModels = resolved.freeModels;
+      // Read the pool UNCONDITIONALLY, not via resolved.freeModels — that one is
+      // gated on the per-profile `free_only`, so for anyone whose free mode comes
+      // from the top-level allow_paid_models switch it is [] and --bench-free-pool
+      // silently fell back to the hardcoded FREE_POOL_SEED, benchmarking stale
+      // seed ids instead of the pool actually in use. $0 is still guaranteed
+      // downstream by resolveFreePool's non-$0 fail-fast, so widening the source
+      // here cannot admit a priced model.
+      activeFreeModels = profileFreeModels(active);
     }
   } catch {
     /* settings not loadable — leave flag false; the phase reports any real error */

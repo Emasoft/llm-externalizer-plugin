@@ -852,6 +852,24 @@ function coerceFreeModels(raw: unknown): string[] {
   return raw.filter((m): m is string => typeof m === "string");
 }
 
+/**
+ * A profile's configured `free_models`, WITHOUT the `free_only` gate that
+ * resolveProfile applies.
+ *
+ * resolveProfile returns `freeModels: []` unless the profile sets `free_only`
+ * (see its freeModels line), because there it feeds model/second_model/
+ * third_model — a runtime invariant that must not change. But free mode is now
+ * normally enabled by the TOP-LEVEL `allow_paid_models: false` master switch,
+ * whose users have no per-profile `free_only` at all. Anything that wants the
+ * pool ITSELF (rather than the resolved ensemble) must therefore read it
+ * unconditionally, or it silently sees an empty list and falls back to a
+ * hardcoded seed — which is exactly how --bench-free-pool ended up benchmarking
+ * stale seed ids instead of the user's real pool.
+ */
+export function profileFreeModels(profile: Profile | undefined): string[] {
+  return coerceFreeModels(profile?.free_models);
+}
+
 // ── High-quality model resolution (TRDD-DBUSM55E) ───────────────────────────
 
 /**

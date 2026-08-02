@@ -191,6 +191,32 @@ describe("security-triage benchmark — model routing + free_only", () => {
     expect(md).toContain(DEFAULT_MODEL);
   });
 
+  it("master switch OFF and NO per-profile free_only: the free candidate still runs, the paid incumbent is skipped", async () => {
+    // The configuration every other test in this file skips: allow_paid_models
+    // false (the modern top-level switch) while the per-profile free_only flag is
+    // absent. That is the DEFAULT for anyone who never set free_only, and it used
+    // to abort the whole sweep — the auto-added PAID incumbent tripped
+    // assertPaidBenchmarkAllowed before a single free candidate was scored, which
+    // is why the free-mode ledgers were empty. setActiveFreeOnly stays false here
+    // on purpose: that is precisely what makes this case distinct.
+    setAllowPaidModels(false);
+    setPaidBenchmarksAllowed(false);
+    const sent: string[] = [];
+    const r = await runSecurityTriageBenchmark({
+      models: ["v/free-a:free"],
+      force: true,
+      mainRoot: root,
+      outputDir: join(root, "reports"),
+      fetchImpl: recordingJudge(sent),
+    });
+
+    // The free candidate was benchmarked — the run was NOT aborted.
+    expect(tally(sent)["v/free-a:free"]).toBe(CASES);
+    // The paid incumbent never reached the wire, so nothing was billed.
+    expect(sent).not.toContain(DEFAULT_MODEL);
+    expect(r.costUsd).toBe(0);
+  });
+
   it("free_only with NOTHING ':free' to assess: an honest typed skip, never 'please report it'", async () => {
     setActiveFreeOnly(true);
     const sent: string[] = [];

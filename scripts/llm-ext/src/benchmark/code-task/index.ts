@@ -31,6 +31,7 @@ import {
   qualify,
   assertModelsUnderPriceCap,
   assertPaidBenchmarkAllowed,
+  paidBenchmarkWouldRefuse,
   type OpenRouterModel,
   type QualifiedModel,
 } from "../discover.js";
@@ -303,9 +304,29 @@ export async function runCodeAuditBenchmark(
   }
 
   // ALWAYS assess the incumbent, so the report confirms it still passes and the
-  // gate has a fallback.
+  // gate has a fallback — EXCEPT when the paid-benchmark gates would refuse it.
+  //
+  // This incumbent is auto-added, not user-typed. A free-pool sweep
+  // (--bench-free-pool) therefore inherits a PAID default incumbent, and
+  // assertPaidBenchmarkAllowed below refuses the WHOLE run over it — so the $0
+  // candidates the sweep exists to score were never benchmarked at all. That is
+  // why the free-mode ledgers were empty and no free model ever passed rank-0.
+  // Skipping it costs nothing the guard was protecting: a refused incumbent is
+  // one we may not send anyway, and the selection gate reads the incumbent's
+  // id + pricing directly (incumbentIn/incumbentOut above), not its assessment
+  // row. Only auto-added candidates get this treatment — a paid id the USER
+  // typed must still hit the assert and be refused loudly.
   if (!toAssess.has(incumbentId)) {
-    if (incumbentDecorated) {
+    const incumbentRefused = paidBenchmarkWouldRefuse({
+      id: incumbentId,
+      inputDollarsPerMillion: incumbentIn,
+      outputDollarsPerMillion: incumbentOut,
+    });
+    if (incumbentRefused) {
+      progress(
+        `  ${incumbentId}: incumbent not assessed — it is paid and paid benchmarks are off ($0 spent).`,
+      );
+    } else if (incumbentDecorated) {
       const q = qualify(incumbentDecorated.raw, CODE_TASK_CRITERIA);
       addModel(incumbentDecorated, q !== null, q ? undefined : "below code-task requirements");
     } else {
@@ -343,7 +364,13 @@ export async function runCodeAuditBenchmark(
   for (const { model, qualified, disqualifyReason } of toAssess.values()) {
     // free_only cost-safety: a non-':free' model cannot become the free-mode
     // default, so don't spend a cent running it.
-    if (freeOnly && !model.id.endsWith(":free")) {
+    //
+    // `freeOnly` is the PER-PROFILE free_only flag, which is FALSE for anyone
+    // whose free mode comes from the newer top-level allow_paid_models switch —
+    // so this condition alone does NOT cover them. paidBenchmarkWouldRefuse is
+    // the same predicate assertPaidBenchmarkAllowed uses, so anything the guard
+    // would refuse can never be sent here either, whichever switch is in play.
+    if ((freeOnly && !model.id.endsWith(":free")) || paidBenchmarkWouldRefuse(model)) {
       progress(`  ${model.id}: skipped (free_only — non-':free' model).`);
       assessments.push({
         modelId: model.id,

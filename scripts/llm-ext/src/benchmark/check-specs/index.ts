@@ -26,6 +26,7 @@ import {
   buildBenchmarkRoster,
   assertModelsUnderPriceCap,
   assertPaidBenchmarkAllowed,
+  paidBenchmarkWouldRefuse,
   rankByQualityIndex,
   fetchProgrammingModels,
   qualify,
@@ -374,7 +375,19 @@ export async function runCheckSpecsBenchmark(
   // ALWAYS assess the incumbent, so the report confirms it still passes and the gate has
   // a fallback.
   if (!toAssess.has(incumbentId)) {
-    if (incumbentDecorated) {
+    if (
+      paidBenchmarkWouldRefuse({
+        id: incumbentId,
+        inputDollarsPerMillion: incumbentIn,
+        outputDollarsPerMillion: incumbentOut,
+      })
+    ) {
+      // Auto-added incumbent the paid gates would refuse: skipping it is what
+      // lets the $0 candidates run at all. See code-task/index.ts for why.
+      progress(
+        `  ${incumbentId}: incumbent not assessed — it is paid and paid benchmarks are off ($0 spent).`,
+      );
+    } else if (incumbentDecorated) {
       const q = qualify(incumbentDecorated.raw, CHECK_SPECS_CRITERIA);
       addModel(
         incumbentDecorated,

@@ -26,6 +26,7 @@ import {
   buildBenchmarkRoster,
   assertModelsUnderPriceCap,
   assertPaidBenchmarkAllowed,
+  paidBenchmarkWouldRefuse,
   rankByQualityIndex,
   fetchProgrammingModels,
   qualify,
@@ -372,9 +373,22 @@ export async function runScanFolderBenchmark(
   }
 
   // ALWAYS assess the incumbent, so the report confirms it still passes and the
-  // gate has a fallback.
+  // gate has a fallback — EXCEPT when the paid-benchmark gates would refuse it.
+  // The incumbent is AUTO-added, so on a free-pool sweep a paid default would
+  // make assertPaidBenchmarkAllowed abort the whole run and the $0 candidates
+  // would never be scored. See code-task/index.ts for the full rationale.
   if (!toAssess.has(incumbentId)) {
-    if (incumbentDecorated) {
+    if (
+      paidBenchmarkWouldRefuse({
+        id: incumbentId,
+        inputDollarsPerMillion: incumbentIn,
+        outputDollarsPerMillion: incumbentOut,
+      })
+    ) {
+      progress(
+        `  ${incumbentId}: incumbent not assessed — it is paid and paid benchmarks are off ($0 spent).`,
+      );
+    } else if (incumbentDecorated) {
       const q = qualify(incumbentDecorated.raw, SCAN_FOLDER_CRITERIA);
       addModel(incumbentDecorated, q !== null, q ? undefined : "below scan-folder requirements");
     } else {
