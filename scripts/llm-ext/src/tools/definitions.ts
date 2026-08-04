@@ -406,6 +406,50 @@ export function buildTools(limitsText: string) {
       },
     },
     {
+      name: "review_plan",
+      description:
+        "Delegate-mode code review: emit the deterministic review scaffolding — resolved file " +
+        "set (same walker as scan_folder), the review rubric, and a per-file protocol — WITHOUT " +
+        "calling any LLM ($0, no API key, ~1s). The HOST agent then performs the actual review " +
+        "with its own model. Use when the caller (e.g. Claude Code on a subscription) should do " +
+        "the reviewing itself instead of spending external tokens. Accepts the same file inputs " +
+        "as scan_folder: input_files_paths OR folder_path (+ extensions, excluded_dirs, " +
+        "use_gitignore).",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          input_files_paths: {
+            type: "array",
+            items: { type: "string" },
+            description: "Explicit absolute file paths to review (wins over folder_path).",
+          },
+          folder_path: {
+            type: "string",
+            description: "Folder to expand via the standard walker (gitignore-aware).",
+          },
+          extensions: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional extension filter for folder_path expansion.",
+          },
+          excluded_dirs: {
+            type: "array",
+            items: { type: "string" },
+            description: "Directory names to exclude from folder_path expansion.",
+          },
+          use_gitignore: {
+            type: "boolean",
+            description: "Respect .gitignore during folder expansion (default true).",
+          },
+          instructions: {
+            type: "string",
+            description:
+              "Extra review instructions APPENDED to the built-in real-defects-only rubric.",
+          },
+        },
+      },
+    },
+    {
       name: "discover",
       description:
         "Check service availability, active profile, auth status, available profiles and API presets. " +

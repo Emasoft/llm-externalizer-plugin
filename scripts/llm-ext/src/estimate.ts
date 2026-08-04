@@ -132,6 +132,8 @@ const ZERO_COST_TOOLS = new Set([
   "reset",
   "or_model_info",
   "or_model_info_by_id",
+  // Delegate mode (TRDD-SNAEERHU): emits scaffolding only, the host agent reviews.
+  "review_plan",
 ]);
 
 // ── Core ───────────────────────────────────────────────────────────────

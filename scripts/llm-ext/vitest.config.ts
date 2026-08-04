@@ -261,6 +261,8 @@ export default defineConfig({
       'src/scan-pipeline.test.ts',
       // --estimate dry-run estimator (task #187) — pure arithmetic + fail-fast negatives.
       'src/estimate.test.ts',
+      // review_plan delegate-mode plan builder (TRDD-SNAEERHU).
+      'src/review-plan.test.ts',
       'src/cluster/phase2_verify.test.ts',
       'src/cluster/phase3_canonical.test.ts',
     ],

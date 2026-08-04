@@ -21,6 +21,7 @@ import { parse as yamlParse } from "yaml";
 import { spawnSync } from "node:child_process";
 import { extname, join, basename, dirname, resolve, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
+import { buildReviewPlan } from "./review-plan.js";
 import {
   GROUP_HEADER_RE,
   GROUP_FOOTER_RE,
@@ -3029,6 +3030,44 @@ async function dispatchCallToolInner(
           modelOverride, // honours --free and credit-exhausted auto-fallback
         };
         return await runCodeTask(args as Record<string, unknown>, ctDeps);
+      }
+
+      case "review_plan": {
+        // Delegate mode (TRDD-SNAEERHU): deterministic scaffolding only, the
+        // HOST agent reviews. Reuses the estimator's resolver seam so plan,
+        // estimate, and run always agree on the file set — one source of truth.
+        const resolved = buildEstimateDeps().resolveFiles(
+          args as Record<string, unknown>,
+        );
+        if (resolved.error) {
+          return {
+            content: [{ type: "text", text: `review_plan: ${resolved.error}` }],
+            isError: true,
+          };
+        }
+        if (resolved.files.length === 0) {
+          return {
+            content: [
+              { type: "text", text: "review_plan: the plan would cover zero files" },
+            ],
+            isError: true,
+          };
+        }
+        const planFiles = resolved.files.map((p) => {
+          try {
+            return { path: p, bytes: statSync(p).size };
+          } catch {
+            return { path: p, bytes: 0 };
+          }
+        });
+        const plan = buildReviewPlan(planFiles, {
+          instructions:
+            typeof (args as Record<string, unknown>).instructions === "string"
+              ? ((args as Record<string, unknown>).instructions as string)
+              : undefined,
+          reportDir: defaultOutputDir(),
+        });
+        return { content: [{ type: "text", text: plan }] };
       }
 
       case "discover": {
