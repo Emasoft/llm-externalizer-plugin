@@ -259,6 +259,8 @@ export default defineConfig({
       'src/default-output-dir.test.ts',
       // File-walking + FFD bin-packed batching engine (TRDD-828238b5 Part F).
       'src/scan-pipeline.test.ts',
+      // --estimate dry-run estimator (task #187) — pure arithmetic + fail-fast negatives.
+      'src/estimate.test.ts',
       'src/cluster/phase2_verify.test.ts',
       'src/cluster/phase3_canonical.test.ts',
     ],

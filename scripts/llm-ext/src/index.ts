@@ -1638,6 +1638,85 @@ function resolveFolderPath(
   return { files };
 }
 
+// ── Cost-estimation deps (--estimate, task #187) ─────────────────────
+// The estimator itself lives in ./estimate.ts and is pure; this factory is the
+// ONE place its seams bind to the engine's real internals, so the estimate
+// walks the SAME file resolution and the SAME model slots the run would use.
+// It lives here (not in estimate.ts) because the internals it closes over —
+// resolveFolderPath, getEnsembleModels, resolveDefaultMaxTokens, the model
+// cache — are deliberately not exported.
+
+/**
+ * Warm the pricing source for an estimate. One GET /models (no completion, $0);
+ * failure is swallowed — the estimate then degrades to tokens-only with a note,
+ * which beats blocking a dry-run on a network blip.
+ */
+export async function warmEstimatePricing(): Promise<void> {
+  try {
+    await fetchOpenRouterModels();
+  } catch {
+    /* estimate degrades to tokens-only */
+  }
+}
+
+export function buildEstimateDeps(): import("./estimate.js").EstimateDeps {
+  return {
+    resolveFiles(args) {
+      // Mirror the tools' own input contract: explicit input_files_paths wins,
+      // else folder_path expands through the SAME walker the run would use
+      // (gitignore, extensions, excluded dirs) — an estimate over a different
+      // file set than the run's would be worse than none.
+      const explicit = Array.isArray(args.input_files_paths)
+        ? (args.input_files_paths as unknown[]).filter(
+            (p): p is string => typeof p === "string" && p.length > 0,
+          )
+        : [];
+      if (explicit.length > 0) return { files: explicit };
+      if (typeof args.folder_path === "string" && args.folder_path.length > 0) {
+        return resolveFolderPath(args.folder_path, {
+          extensions: Array.isArray(args.extensions)
+            ? (args.extensions as string[])
+            : undefined,
+          excludeDirs: Array.isArray(args.excluded_dirs)
+            ? (args.excluded_dirs as string[])
+            : undefined,
+          useGitignore: args.use_gitignore !== false,
+        });
+      }
+      return { files: [], error: "no input_files_paths or folder_path given" };
+    },
+    fileSizeBytes(path) {
+      try {
+        return statSync(path).size;
+      } catch {
+        return 0; // unreadable file costs nothing in the estimate; the run itself will fail loudly on it
+      }
+    },
+    ensembleSlots() {
+      const ensemble = getEnsembleModels();
+      if (ensemble.length > 0)
+        return ensemble.map((m) => ({ id: m.id, maxOutput: m.maxOutput }));
+      // Single-model mode: the backend's configured model with its default cap.
+      const backend = getCurrentBackend();
+      if (!backend.model) return [];
+      return [{ id: backend.model, maxOutput: resolveDefaultMaxTokens() }];
+    },
+    pricingFor(modelId) {
+      const m = openRouterModelCache.find((x) => x.id === modelId);
+      if (!m?.pricing) return null;
+      // OpenRouter pricing strings are USD per TOKEN ("0.000000435") — scale
+      // to per-million so the arithmetic matches every other pricing site.
+      const inp = Number(m.pricing.prompt);
+      const out = Number(m.pricing.completion);
+      if (!Number.isFinite(inp) || !Number.isFinite(out)) return null;
+      return { inputUsdPerM: inp * 1_000_000, outputUsdPerM: out * 1_000_000 };
+    },
+    defaultMaxTokens() {
+      return resolveDefaultMaxTokens();
+    },
+  };
+}
+
 // fileIndex disambiguates files with the same basename processed in the same second
 function batchReportFilename(
   toolName: string,

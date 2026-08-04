@@ -21,10 +21,13 @@
 
 import {
   boot,
+  buildEstimateDeps,
   dispatchCallTool,
   limitsBlock,
+  warmEstimatePricing,
   writeBootBanner,
 } from "../index.js";
+import { estimateToolRun, renderEstimate } from "../estimate.js";
 import { buildTools } from "../tools/definitions.js";
 
 /**
@@ -326,10 +329,29 @@ async function main(): Promise<void> {
     return;
   }
 
+  // --estimate (task #187): dry-run the invocation and print the predicted
+  // cost INSTEAD of dispatching. Stripped before parseFlags because it is a
+  // global flag, not part of any tool's schema. The paid-mode rules/skills
+  // tell agents to run this before every paid operation.
+  const estimateIdx = rest.indexOf("--estimate");
+  const wantEstimate = estimateIdx !== -1;
+  if (wantEstimate) rest.splice(estimateIdx, 1);
+
   const { args, quiet } = parseFlags(rest, tool);
 
   // boot() publishes the free-mode state; dispatchCallTool refuses without it.
   await boot();
+
+  if (wantEstimate) {
+    // Warm pricing with one $0 GET /models; the estimator itself sends nothing
+    // (estimateToolRun is pure). Estimation errors propagate to main().catch —
+    // fail-fast beats printing a fabricated number.
+    await warmEstimatePricing();
+    const estimate = estimateToolRun(tool.name, args, buildEstimateDeps());
+    process.stdout.write(`${renderEstimate(estimate)}\n`);
+    return;
+  }
+
   const verbose = !quiet && !QUIET_TOOLS.has(tool.name);
   if (verbose) writeBootBanner();
 

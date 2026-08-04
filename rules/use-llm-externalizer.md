@@ -37,6 +37,18 @@ refactor, or getting a second opinion.
 **Don't use it for:** surgical edits (Read+Edit), multi-step logic needing tool access
 (git/fs/web), reasoning only Opus can handle, or applying fixes (write tools are inactive).
 
+**Cost safety — ESTIMATE BEFORE EVERY PAID RUN:** when the active profile is PAID (free mode
+off), run the same command with `--estimate` FIRST — it dry-runs the invocation (same file
+resolution, same ensemble slots, zero LLM sends, ~3s) and prints two numbers per model:
+`expected` (calibrated average) and `ceiling` (every request bills its full max_tokens — the
+amount that cannot be exceeded). Proceed only when the ceiling fits the budget; on a free
+profile `--estimate` is optional (everything is $0).
+
+```bash
+llm-ext scan-folder --estimate --folder_path src/   # predicted cost, nothing sent
+llm-ext scan-folder --folder_path src/              # the real run, once the ceiling fits
+```
+
 **Cost safety — free mode (zero spend, ALL tools):** to guarantee not a single cent is spent
 on OpenRouter, set `free_only: true` on the active profile in
 `~/.llm-externalizer/settings.yaml` with a `free_models:` pool of `:free` model ids (then

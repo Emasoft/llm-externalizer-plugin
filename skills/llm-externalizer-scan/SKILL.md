@@ -37,10 +37,14 @@ Codebase scan via the `llm-ext` CLI, active profile (default: `remote-ensemble`,
 1. Parse `$ARGUMENTS` for **target** (default `.`), **focus**, `free` flag.
 2. `llm-ext discover`. Abort `[FAILED] — offline` if offline.
 3. Pick the command: duplicate-check → `search-existing-implementations`; folder audit → `scan-folder` (`--use_gitignore`, `--answer_mode 0`); ≤5 files → `code-task` (`--answer_mode 0`, `--max_retries 3`); glob → expand, then `code-task`. Folder/large scans can run long — use an extended Bash timeout or `run_in_background: true`.
-4. Run the command. `--free` only if asked (warn about prompt logging).
-5. Default rubric: bugs/crashes/security exploits/data corruption/local broken refs only. NOT missing error handling, null checks, validation, logging, style. Respect source style. Cite function names + lines.
-6. Collect report paths. Do NOT read/summarize.
-7. Return paths using Output format.
+4. **Paid profile? Estimate first.** If `discover` shows free mode OFF, run the exact
+   command with `--estimate` prepended to its flags — a ~3s dry-run (zero LLM sends) that
+   prints `expected` and `ceiling` USD. Proceed only when the ceiling is acceptable; report
+   the estimate in the reply. Free mode: skip, everything is $0.
+5. Run the command. `--free` only if asked (warn about prompt logging).
+6. Default rubric: bugs/crashes/security exploits/data corruption/local broken refs only. NOT missing error handling, null checks, validation, logging, style. Respect source style. Cite function names + lines.
+7. Collect report paths. Do NOT read/summarize.
+8. Return paths using Output format.
 
 Limitations: `.md` files EXCLUDED by default (pass `--instructions` for semantic search; structural validation → CPV). LLM sees only 1–5 files/request — no cross-file refs (use `check-against-specs` or `search-existing-implementations`).
 
