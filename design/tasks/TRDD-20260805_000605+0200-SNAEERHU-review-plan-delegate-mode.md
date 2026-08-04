@@ -1,9 +1,9 @@
 ---
 trdd-id: SNAEERHU
 title: review-plan — a $0 delegate mode where the host agent is the reviewer
-column: dev
+column: complete
 created: 2026-08-05T00:06:05+0200
-updated: 2026-08-05T01:10:00+0200
+updated: 2026-08-05T01:14:00+0200
 current-owner: llm-externalizer-session
 task-type: feature
 ---
@@ -19,12 +19,12 @@ resolver seam — one source of truth for the file set), pure builder
 zero-cost entry, README counts 40→41 (doc-consistency gate green). Verified live:
 0.42s, zero sends, rubric + appended instructions correct.
 
-NEXT ACTION: verify the no-settings.yaml boot path (run `llm-ext review-plan` with
-settings temporarily absent in a THROWAWAY HOME, never the real one) — the only
-unticked acceptance box. Then: diff-args input lands with TRDD-MNK2YNH0; per-path
-rubric replaces DEFAULT_REVIEW_RUBRIC when TRDD-3JQVBO7M lands.
+CLOSED 2026-08-05 01:14 (+0200), commit 9ae1258. No-settings boot path VERIFIED
+in a throwaway HOME: default settings auto-generated (Auto-DUBC), exit 0. All
+v1 acceptance met. Future integration points live on their OWN cards:
+diff-args input → TRDD-MNK2YNH0; per-path rubric → TRDD-3JQVBO7M.
 
-SUPERSEDED — do NOT carry forward: nothing yet.
+SUPERSEDED — do NOT carry forward: nothing.
 
 **USER directive (2026-08-04):** distill/absorb OCR's ideas, adapted to our rules —
 no dashboards/UI, Auto-DUBC, YAML strictly opt-in, crossplatform (linux/macos/WSL,
@@ -54,6 +54,6 @@ the valuable half — and it is the half llm-ext does not have.
       (diff args deferred to TRDD-MNK2YNH0 — noted in STATE)
 - [x] skill `llm-externalizer-review` drives it: plan → host agent reviews → report
       in reports/llm-externalizer/ (two-surface rule)
-- [ ] works with no settings.yaml present (Auto-DUBC default path) — UNVERIFIED,
-      see STATE next action
+- [x] works with no settings.yaml present (Auto-DUBC default path) — verified in
+      a throwaway HOME: default settings auto-generated, exit 0
 - [x] no UI, plain greppable stdout; crossplatform paths (no shell-isms)
