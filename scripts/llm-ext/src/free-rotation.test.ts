@@ -134,6 +134,21 @@ describe("classifyUnavailable — decides WHETHER to rotate and for HOW LONG", (
     expect(classifyUnavailable("400 bad request: messages[0].role is invalid")).toBeNull();
     expect(classifyUnavailable("")).toBeNull();
   });
+
+  it("returns null for the circuit breaker's GLOBAL verdict — rotating cannot outrun a provider-wide abort", () => {
+    // Mutation-verified against the 2026-08-04 livelock: the breaker's abort
+    // text contains the word "overloaded", so without the signature guard the
+    // transient branch matched it, every pool member got a 30s cooldown in
+    // turn, and rotation cycled instant-aborts forever with zero requests
+    // going out. The exact production string, verbatim shape:
+    const breakerAbort =
+      "SERVER ISSUE DETECTED: 246 consecutive failures. Last success was 432s ago. " +
+      "Tried waiting 60s, 120s, 350s. The issue appears to be server-side " +
+      "(offline, overloaded, or connection broken). Please retry later.";
+    expect(classifyUnavailable(breakerAbort)).toBeNull();
+    // A REAL per-model overload (no breaker signature) must still rotate.
+    expect(classifyUnavailable("503 overloaded")).toBe("transient");
+  });
 });
 
 describe("cooldown maths", () => {

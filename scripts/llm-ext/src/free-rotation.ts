@@ -203,6 +203,19 @@ const GONE_MS = 3_600_000;
 export function classifyUnavailable(detail: string): UnavailableKind | null {
   const s = (detail || "").toLowerCase();
 
+  // The circuit breaker's verdict is GLOBAL, never per-model — checked FIRST
+  // because its abort text also contains "overloaded", which the transient
+  // branch below would match. That match is exactly how the 2026-08-04
+  // livelock ran: a tripped breaker aborts every call instantly, the abort was
+  // classified "transient", the model got a 30s cooldown, rotation moved to
+  // the next model, which insta-aborted too — the whole pool cycled through
+  // 30s cooldowns forever while zero requests went out. Rotating within the
+  // same provider cannot outrun a provider-wide verdict; hand the error back
+  // so the caller fails fast with the breaker's own message.
+  if (s.includes("server issue detected")) {
+    return null;
+  }
+
   // Daily-quota phrasing FIRST: these strings also contain "429"/"rate limit",
   // and treating a spent daily quota as a 30s transient would send us straight
   // back into the same wall, over and over, until midnight UTC.

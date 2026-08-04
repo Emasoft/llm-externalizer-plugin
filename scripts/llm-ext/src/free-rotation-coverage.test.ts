@@ -137,6 +137,35 @@ describe("free-model rotation coverage — every LLM send path can rotate", () =
     expect(completion).toContain("classifyUnavailable(errMsg)");
   });
 
+  it("the circuit breaker is TRANSPORT-only and half-opens after aborting (2026-08-04 livelock guards)", () => {
+    const completion = read("provider/completion.ts");
+    // 1. The empty/glitch response path must NOT feed the GLOBAL breaker: an
+    //    HTTP 200 with an empty or all-reasoning body is a MODEL-shape failure
+    //    with its own retry ladder. Counting them let a parallel scan over
+    //    reasoning-heavy free models trip a provider-wide "SERVER ISSUE"
+    //    verdict while a live probe showed the provider healthy. Exactly ONE
+    //    recordServiceFailure() call site may remain: the thrown-request
+    //    (network/timeout/non-2xx) branch.
+    const failureCalls = completion.match(/^\s*recordServiceFailure\(\);/gm) ?? [];
+    expect(
+      failureCalls.length,
+      "recordServiceFailure() must be called from exactly ONE site (the transport-error branch)",
+    ).toBe(1);
+    // 2. The exhausted-backoff abort must HALF-OPEN the breaker before
+    //    returning. The only other reset is recordServiceSuccess(), which needs
+    //    a completed request — and a tripped breaker aborts every call BEFORE
+    //    any request, so without this reset the tripped state was permanent and
+    //    the rotation layer livelocked on a pool of instant aborts.
+    expect(completion).toMatch(
+      /SERVER ISSUE DETECTED[\s\S]{0,900}consecutiveFailures = 0;[\s\S]{0,200}backoffAttempt = 0;[\s\S]{0,400}return message;/,
+    );
+    // 3. The rotation layer must refuse to classify the breaker's GLOBAL
+    //    verdict as per-model unavailability (its text contains "overloaded",
+    //    which the transient branch would otherwise match).
+    const rotation = read("free-rotation.ts");
+    expect(rotation).toMatch(/server issue detected[\s\S]{0,400}return null;/);
+  });
+
   it("the direct-HTTP tools' paid→free credit switch is wired consistently (engage hook registered)", () => {
     // The decorator can't import index.ts (a cycle), so index.ts REGISTERS its
     // engageAutoFree as the hook. Without this the decorator would flip only the

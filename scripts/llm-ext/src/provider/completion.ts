@@ -786,10 +786,21 @@ export async function chatCompletionJSON(
 }
 
 // ── Global service health tracker ────────────────────────────────────
-// Tracks consecutive failures across ALL requests to detect systemic issues
-// (offline servers, broken connections, traffic overload). When the failure
-// rate exceeds the threshold, pauses with exponential backoff before retrying.
-// If all backoff attempts fail, aborts with a clear server-side error message.
+// Tracks consecutive TRANSPORT failures across ALL requests to detect systemic
+// issues (offline servers, broken connections, traffic overload). When the
+// failure rate exceeds the threshold, pauses with exponential backoff before
+// retrying. If all backoff attempts fail, aborts with a clear server-side error
+// message.
+//
+// TRANSPORT-ONLY (2026-08-04 livelock post-mortem): only thrown request errors
+// (network / timeout / non-2xx) feed this breaker. An HTTP 200 whose body is
+// empty or all-reasoning (finish_reason=length) is a MODEL-shape failure with
+// its own dedicated cures (the reasoning downgrade ladder + the length+empty
+// cost stop below) and MUST NOT count here: during a parallel scan over
+// reasoning-heavy free models, counting those raced this GLOBAL counter past
+// the threshold while the provider was measurably healthy (a live probe
+// returned 200 in <2s), and the resulting false "SERVER ISSUE" verdict fed the
+// rotation layer a poisoned error that livelocked the whole free pool.
 //
 // SINGLE BINDING (P5b): SERVICE_HEALTH is read/written ONLY by the three
 // functions below and by chatCompletionWithRetry — all in this module. It is
@@ -827,14 +838,25 @@ async function checkServiceHealthOrWait(): Promise<string | null> {
 
   const { backoffDelays, backoffAttempt } = SERVICE_HEALTH;
   if (backoffAttempt >= backoffDelays.length) {
-    // Exhausted all backoff attempts — abort
-    return (
+    // Exhausted all backoff attempts — abort THIS call, then HALF-OPEN the
+    // breaker. Without the reset, the tripped state was permanent: the only
+    // reset was recordServiceSuccess(), which needs a completed request, but a
+    // tripped breaker aborts every call BEFORE any request goes out — so no
+    // success could ever occur again and every later call in the process was
+    // stillborn (the 2026-08-04 livelock: rotation cycled a whole pool of
+    // instant aborts forever). Resetting here means the NEXT call gets one
+    // real attempt; if the outage is real, failures re-trip the breaker and
+    // the ladder runs again.
+    const message =
       `SERVER ISSUE DETECTED: ${SERVICE_HEALTH.consecutiveFailures} consecutive failures. ` +
       `Last success was ${Math.round((Date.now() - SERVICE_HEALTH.lastSuccessAt) / 1000)}s ago. ` +
       `Tried waiting ${backoffDelays.map((d) => `${d / 1000}s`).join(", ")}. ` +
       `The issue appears to be server-side (offline, overloaded, or connection broken). ` +
-      `Please retry later.`
-    );
+      `Please retry later.`;
+    SERVICE_HEALTH.consecutiveFailures = 0;
+    SERVICE_HEALTH.backoffAttempt = 0;
+    SERVICE_HEALTH.inCooldown = false;
+    return message;
   }
 
   // Pause with backoff
@@ -1096,7 +1118,14 @@ export async function chatCompletionWithRetry(
 
     // Everything else: empty content, finishReason="" (malformed/glitch),
     // finishReason="error", or unknown values.
-    recordServiceFailure();
+    //
+    // Deliberately NOT recordServiceFailure(): these arrived over a WORKING
+    // transport (the HTTP round-trip succeeded) and are model-shape failures —
+    // cold-start blanks, reasoning burn, glitched finish reasons — each with
+    // its own retry budget and cure below. Feeding them to the GLOBAL breaker
+    // is how a parallel scan over reasoning-heavy free models manufactured a
+    // false "SERVER ISSUE" verdict against a provider that a live probe showed
+    // healthy (see the breaker's TRANSPORT-ONLY note above).
     const isEmpty = resp.content.trim().length === 0;
     const reasonLabel = resp.finishReason || "empty";
 
@@ -1162,7 +1191,8 @@ export async function chatCompletionWithRetry(
       ladderModel &&
       MODEL_REASONING_CACHE.get(ladderModel) === "none"
     ) {
-      recordServiceFailure();
+      // No recordServiceFailure() here either: length+empty with reasoning off
+      // is a model/budget mismatch, not transport health (see above).
       resp.truncated = true;
       resp.content =
         `**NO CONTENT**: ${ladderModel} consumed its entire ${options.maxTokens ?? "output"}-token budget without emitting any content, ` +
