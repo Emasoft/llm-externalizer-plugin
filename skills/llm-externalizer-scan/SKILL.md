@@ -7,6 +7,14 @@ description: |-
 argument-hint: "[folder-path | . | glob-pattern] [focus: bugs|security|all]"
 effort: medium
 context: fork
+# Claude Code 2.1.218 made `context: fork` skills run in the BACKGROUND by
+# default. That would silently change this skill's contract: it promises to
+# RETURN the report file paths, and a background skill returns an agent name
+# instead, with the paths arriving later as a task notification. Pin it off so
+# upgrading Claude Code does not change what `/llm-externalizer-scan` hands
+# back. Remove this line only together with the body's "returns report paths"
+# wording — the two must agree.
+background: false
 agent: llm-externalizer-reviewer-agent
 ---
 

@@ -370,12 +370,23 @@ export async function runCodeAuditBenchmark(
     // so this condition alone does NOT cover them. paidBenchmarkWouldRefuse is
     // the same predicate assertPaidBenchmarkAllowed uses, so anything the guard
     // would refuse can never be sent here either, whichever switch is in play.
-    if ((freeOnly && !model.id.endsWith(":free")) || paidBenchmarkWouldRefuse(model)) {
-      progress(`  ${model.id}: skipped (free_only — non-':free' model).`);
+    // TWO independent reasons to skip, and the row must say WHICH one fired.
+    // `disqualifyReason` is PERSISTED to the ledger, so a row claiming
+    // "free_only active" on a profile where free_only is OFF sends the next
+    // reader hunting a flag that was never set — the same misattribution class
+    // this whole change set exists to remove. Keep the message and the
+    // condition in lockstep.
+    const freeOnlySkip = freeOnly && !model.id.endsWith(":free");
+    const paidRefusedSkip = !freeOnlySkip && paidBenchmarkWouldRefuse(model);
+    if (freeOnlySkip || paidRefusedSkip) {
+      const skipReason = freeOnlySkip
+        ? "free_only active — non-':free' model not benchmarked"
+        : "paid benchmarks are off — paid model not benchmarked";
+      progress(`  ${model.id}: skipped (${skipReason}).`);
       assessments.push({
         modelId: model.id,
         qualified: false,
-        disqualifyReason: "free_only active — non-':free' model not benchmarked",
+        disqualifyReason: skipReason,
         inputDollarsPerMillion: model.inputDollarsPerMillion,
         outputDollarsPerMillion: model.outputDollarsPerMillion,
         latencyMs: 0,
