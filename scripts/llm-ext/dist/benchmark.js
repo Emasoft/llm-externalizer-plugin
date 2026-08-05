@@ -221219,6 +221219,7 @@ function filterFreeModels(freeModels, catalogById, benchmarkFailed = /* @__PURE_
     return ctx >= FREE_FLOOR_MIN_CONTEXT_TOKENS;
   });
 }
+var NO_CONTENT_STRIKE_TTL_MS = 24 * 60 * 60 * 1e3;
 function approvedFreePoolFromSettings() {
   try {
     const s = loadSettings();
@@ -221988,6 +221989,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
         disqualifyReason: disqualifyReason2
       };
     }
+    if (!score.inconclusive) cache2[key].qualityPass = score.pass;
     totalCost += costUsd;
     scores.push(score);
     assessments.push({
@@ -223249,7 +223251,11 @@ function walkDir(dirPath, options) {
       const extraExcludeSet = new Set(options?.exclude ?? []);
       const results2 = [];
       for (const fullPath of gitResults) {
-        if (results2.length >= maxFiles) break;
+        if (results2.length >= maxFiles) {
+          if (!options?.onExcluded) break;
+          onExcluded(fullPath, "max-files cap");
+          continue;
+        }
         if (skipBinary && isBinaryExtension(fullPath)) {
           onExcluded(fullPath, "binary extension");
           continue;
@@ -223283,8 +223289,15 @@ function walkDir(dirPath, options) {
   const extraExclude = options?.exclude ?? [];
   const exclude = /* @__PURE__ */ new Set([...WALK_DEFAULT_EXCLUDE, ...extraExclude]);
   const visitedPaths = /* @__PURE__ */ new Set();
+  const addFile = (p) => {
+    if (results.length >= maxFiles) {
+      onExcluded(p, "max-files cap");
+      return;
+    }
+    results.push(p);
+  };
   function recurse(dir) {
-    if (results.length >= maxFiles) return;
+    if (results.length >= maxFiles && !options?.onExcluded) return;
     let entries;
     try {
       entries = readdirSync4(dir, { withFileTypes: true });
@@ -223292,7 +223305,7 @@ function walkDir(dirPath, options) {
       return;
     }
     for (const entry of entries) {
-      if (results.length >= maxFiles) return;
+      if (results.length >= maxFiles && !options?.onExcluded) return;
       const fullPath = join11(dir, entry.name);
       if (entry.isSymbolicLink()) {
         if (!followSymlinks) continue;
@@ -223317,7 +223330,7 @@ function walkDir(dirPath, options) {
                 continue;
               }
             }
-            results.push(fullPath);
+            addFile(fullPath);
           }
         } catch {
           continue;
@@ -223354,7 +223367,7 @@ function walkDir(dirPath, options) {
             continue;
           }
         }
-        results.push(fullPath);
+        addFile(fullPath);
       }
     }
   }
@@ -224417,6 +224430,7 @@ async function runSearchExistingBenchmark(opts = {}) {
         failureReasons
       };
     }
+    cache2[key].qualityPass = passesThresholds(score, thresholds).pass;
     totalCost += costUsd;
     assessments.push({
       modelId: model.id,
@@ -225684,6 +225698,7 @@ async function runCodeAuditBenchmark(opts = {}) {
         failureReasons
       };
     }
+    cache2[key].qualityPass = passesThresholds2(score, thresholds).pass;
     totalCost += costUsd;
     assessments.push({
       modelId: model.id,
@@ -226979,6 +226994,7 @@ async function runScanFolderBenchmark(opts = {}) {
         failureReasons
       };
     }
+    cache2[key].qualityPass = passesThresholds3(score, thresholds).pass;
     totalCost += costUsd;
     assessments.push({
       modelId: model.id,
@@ -228224,6 +228240,7 @@ async function runCheckSpecsBenchmark(opts = {}) {
         failureReasons
       };
     }
+    cache2[key].qualityPass = passesThresholds4(score, thresholds).pass;
     totalCost += costUsd;
     assessments.push({
       modelId: model.id,

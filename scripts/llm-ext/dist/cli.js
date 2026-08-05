@@ -11290,6 +11290,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
         disqualifyReason: disqualifyReason2
       };
     }
+    if (!score.inconclusive) cache2[key].qualityPass = score.pass;
     totalCost += costUsd;
     scores.push(score);
     assessments.push({
@@ -11490,6 +11491,14 @@ function parseBenchEvidence(ledgers) {
     for (const [key, row] of Object.entries(ledger)) {
       const id = key.split("::")[0];
       if (!id) continue;
+      if (row.qualityPass === true) {
+        out.set(id, "pass");
+        continue;
+      }
+      if (row.qualityPass === false) {
+        if (out.get(id) !== "pass") out.set(id, "fail");
+        continue;
+      }
       if (row.qualified === true) {
         out.set(id, "pass");
         continue;
@@ -11551,7 +11560,8 @@ function recordNoContentStrike(modelId, nowMs = Date.now()) {
   if (!modelId) return;
   const s = loadStrikes();
   const prev = s.models[modelId];
-  s.models[modelId] = { strikes: (prev?.strikes ?? 0) + 1, lastAt: nowMs };
+  const withinWindow = prev !== void 0 && nowMs - prev.lastAt <= NO_CONTENT_STRIKE_TTL_MS;
+  s.models[modelId] = { strikes: withinWindow ? prev.strikes + 1 : 1, lastAt: nowMs };
   saveStrikes(s);
 }
 function clearNoContentStrikes(modelId) {
@@ -11561,9 +11571,10 @@ function clearNoContentStrikes(modelId) {
   delete s.models[modelId];
   saveStrikes(s);
 }
-function noContentDemotedModels() {
+function noContentDemotedModels(nowMs = Date.now()) {
   const out = /* @__PURE__ */ new Set();
   for (const [id, rec] of Object.entries(loadStrikes().models)) {
+    if (nowMs - rec.lastAt > NO_CONTENT_STRIKE_TTL_MS) continue;
     if (rec.strikes >= NO_CONTENT_DEMOTION_THRESHOLD) out.add(id);
   }
   return out;
@@ -11931,7 +11942,7 @@ function withFreeRotation(inner, hooks = {}) {
     return rotateOverFreeIds(inner, url2, init, parsed, attemptOrder, store, now, onRotate);
   };
 }
-var FREE_FLOOR_MIN_CONTEXT_TOKENS, BENCH_LEDGER_FILES, NO_CONTENT_DEMOTION_THRESHOLD, TRANSIENT_BASE_MS, TRANSIENT_CAP_MS, GONE_MS, RELOAD_INTERVAL_MS, cache, lastLoadMs, AllFreeModelsExhaustedError, persistentRotationStore, modelsSent, autoFreeEngageHook;
+var FREE_FLOOR_MIN_CONTEXT_TOKENS, BENCH_LEDGER_FILES, NO_CONTENT_DEMOTION_THRESHOLD, NO_CONTENT_STRIKE_TTL_MS, TRANSIENT_BASE_MS, TRANSIENT_CAP_MS, GONE_MS, RELOAD_INTERVAL_MS, cache, lastLoadMs, AllFreeModelsExhaustedError, persistentRotationStore, modelsSent, autoFreeEngageHook;
 var init_free_rotation = __esm({
   "src/free-rotation.ts"() {
     "use strict";
@@ -11947,6 +11958,7 @@ var init_free_rotation = __esm({
       "security-triage-results.json"
     ];
     NO_CONTENT_DEMOTION_THRESHOLD = 3;
+    NO_CONTENT_STRIKE_TTL_MS = 24 * 60 * 60 * 1e3;
     TRANSIENT_BASE_MS = 3e4;
     TRANSIENT_CAP_MS = 3e5;
     GONE_MS = 36e5;
@@ -244024,7 +244036,9 @@ function globToRegExp2(glob) {
         re += "\\{";
         i += 1;
       } else {
-        const alts = glob.slice(i + 1, end).split(",").map((a) => a.replace(/[.+^$()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*"));
+        const alts = glob.slice(i + 1, end).split(",").map(
+          (a) => a.replace(/[.+^$()|[\]\\]/g, "\\$&").replace(/\*\*/g, "\0").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]").split("\0").join(".*")
+        );
         re += `(?:${alts.join("|")})`;
         i = end + 1;
       }
@@ -244042,7 +244056,11 @@ function globToRegExp2(glob) {
       i += 1;
     }
   }
-  return new RegExp(`^${re}$`, "i");
+  try {
+    return new RegExp(`^${re}$`, "i");
+  } catch {
+    return /^(?!)$/;
+  }
 }
 function ruleGlobMatches(pattern, filePath) {
   const re = globToRegExp2(pattern);
@@ -245307,7 +245325,11 @@ function walkDir(dirPath, options) {
       const extraExcludeSet = new Set(options?.exclude ?? []);
       const results2 = [];
       for (const fullPath of gitResults) {
-        if (results2.length >= maxFiles) break;
+        if (results2.length >= maxFiles) {
+          if (!options?.onExcluded) break;
+          onExcluded(fullPath, "max-files cap");
+          continue;
+        }
         if (skipBinary && isBinaryExtension(fullPath)) {
           onExcluded(fullPath, "binary extension");
           continue;
@@ -245341,8 +245363,15 @@ function walkDir(dirPath, options) {
   const extraExclude = options?.exclude ?? [];
   const exclude = /* @__PURE__ */ new Set([...WALK_DEFAULT_EXCLUDE, ...extraExclude]);
   const visitedPaths = /* @__PURE__ */ new Set();
+  const addFile = (p) => {
+    if (results.length >= maxFiles) {
+      onExcluded(p, "max-files cap");
+      return;
+    }
+    results.push(p);
+  };
   function recurse(dir) {
-    if (results.length >= maxFiles) return;
+    if (results.length >= maxFiles && !options?.onExcluded) return;
     let entries;
     try {
       entries = readdirSync5(dir, { withFileTypes: true });
@@ -245350,7 +245379,7 @@ function walkDir(dirPath, options) {
       return;
     }
     for (const entry of entries) {
-      if (results.length >= maxFiles) return;
+      if (results.length >= maxFiles && !options?.onExcluded) return;
       const fullPath = join18(dir, entry.name);
       if (entry.isSymbolicLink()) {
         if (!followSymlinks) continue;
@@ -245375,7 +245404,7 @@ function walkDir(dirPath, options) {
                 continue;
               }
             }
-            results.push(fullPath);
+            addFile(fullPath);
           }
         } catch {
           continue;
@@ -245412,7 +245441,7 @@ function walkDir(dirPath, options) {
             continue;
           }
         }
-        results.push(fullPath);
+        addFile(fullPath);
       }
     }
   }
@@ -246501,6 +246530,7 @@ async function runSearchExistingBenchmark(opts = {}) {
         failureReasons
       };
     }
+    cache2[key].qualityPass = passesThresholds(score, thresholds).pass;
     totalCost += costUsd;
     assessments.push({
       modelId: model.id,
@@ -248277,6 +248307,7 @@ async function runCodeAuditBenchmark(opts = {}) {
         failureReasons
       };
     }
+    cache2[key].qualityPass = passesThresholds2(score, thresholds).pass;
     totalCost += costUsd;
     assessments.push({
       modelId: model.id,
@@ -249538,6 +249569,7 @@ async function runScanFolderBenchmark(opts = {}) {
         failureReasons
       };
     }
+    cache2[key].qualityPass = passesThresholds3(score, thresholds).pass;
     totalCost += costUsd;
     assessments.push({
       modelId: model.id,
@@ -250758,6 +250790,7 @@ async function runCheckSpecsBenchmark(opts = {}) {
         failureReasons
       };
     }
+    cache2[key].qualityPass = passesThresholds4(score, thresholds).pass;
     totalCost += costUsd;
     assessments.push({
       modelId: model.id,
@@ -253292,18 +253325,20 @@ async function checkServiceHealthOrWait() {
     return message;
   }
   const delay = backoffDelays[backoffAttempt];
+  SERVICE_HEALTH.backoffAttempt++;
   SERVICE_HEALTH.inCooldown = true;
   process.stderr.write(
     `[circuit-breaker] ${SERVICE_HEALTH.consecutiveFailures} consecutive failures detected \u2014 waiting ${delay / 1e3}s before retrying (backoff ${backoffAttempt + 1}/${backoffDelays.length})
 `
   );
   await new Promise((r) => setTimeout(r, delay));
-  SERVICE_HEALTH.backoffAttempt++;
   SERVICE_HEALTH.inCooldown = false;
   return null;
 }
 var MAX_TRUNCATION_RETRIES = 3;
 var MAX_EMPTY_RESPONSE_RETRIES = 15;
+var RUN_PAID_EMPTY_RETRY_BUDGET = 30;
+var runPaidEmptyRetriesByModel = /* @__PURE__ */ new Map();
 var EMPTY_RESPONSE_RETRY_DELAY_MS = 2e3;
 async function completeOnFreePool(messages, options, deps, freeModelId) {
   const pool = approvedFreePoolFromSettings().filter((id) => id !== options.model);
@@ -253427,6 +253462,7 @@ async function chatCompletionWithRetry(messages, options, deps) {
       );
       return resp;
     }
+    recordServiceSuccess();
     const isEmpty = resp.content.trim().length === 0;
     const reasonLabel = resp.finishReason || "empty";
     const useEmptyBudget = isEmpty && backend.type === "openrouter";
@@ -253438,6 +253474,19 @@ async function chatCompletionWithRetry(messages, options, deps) {
     const limit = useEmptyBudget ? MAX_EMPTY_RESPONSE_RETRIES : MAX_TRUNCATION_RETRIES;
     const currentAttempt = useEmptyBudget ? emptyAttempts : genericAttempts;
     const ladderModel = options.model || backend.model;
+    if (useEmptyBudget && ladderModel && !isFreeSuffixModelId(ladderModel)) {
+      const used = (runPaidEmptyRetriesByModel.get(ladderModel) ?? 0) + 1;
+      runPaidEmptyRetriesByModel.set(ladderModel, used);
+      if (used > RUN_PAID_EMPTY_RETRY_BUDGET) {
+        resp.truncated = true;
+        resp.content = `**EMPTY RESPONSE (run budget)**: ${ladderModel} has returned ${used} billable empty responses across this run (finish_reason=${reasonLabel}). Each retry re-bills the full prompt for nothing, so this call stops retrying immediately. The model appears unable to answer in current conditions \u2014 consider a different model for this slot.`;
+        process.stderr.write(
+          `[llm-externalizer] ${ladderModel}: run-level empty-response budget (${RUN_PAID_EMPTY_RETRY_BUDGET}) exhausted \u2014 refusing further billed retries on this paid model.
+`
+        );
+        return resp;
+      }
+    }
     if (useEmptyBudget && ladderModel && currentAttempt <= limit) {
       const current = MODEL_REASONING_CACHE.get(ladderModel);
       if (current === void 0 || current === "xhigh") {
@@ -254426,8 +254475,20 @@ function buildEstimateDeps() {
       if (typeof args.folder_path === "string" && args.folder_path.length > 0) {
         return resolveFolderPath(args.folder_path, {
           extensions: Array.isArray(args.extensions) ? args.extensions : void 0,
-          excludeDirs: Array.isArray(args.excluded_dirs) ? args.excluded_dirs : void 0,
+          // `exclude_dirs` — the SAME name every real tool reads (scan_folder,
+          // chat, batch_check…). This resolver briefly read `excluded_dirs`,
+          // which made every dry-run/preview/rules pass resolve a DIFFERENT
+          // file set than the run whenever a dir-exclusion was passed
+          // (ultracode F6, 2026-08-05).
+          excludeDirs: Array.isArray(args.exclude_dirs) ? args.exclude_dirs : void 0,
           useGitignore: args.use_gitignore !== false,
+          // Mirror the walk-shape knobs the real tools honor (ultracode F7):
+          // an estimate walking the fixed 2500-file default while the run
+          // honors a caller-set max_files (or non-recursive / no-symlinks)
+          // counts the wrong files.
+          recursive: typeof args.recursive === "boolean" ? args.recursive : void 0,
+          followSymlinks: typeof args.follow_symlinks === "boolean" ? args.follow_symlinks : void 0,
+          maxFiles: typeof args.max_files === "number" && args.max_files > 0 ? args.max_files : void 0,
           onExcluded
         });
       }
@@ -254440,7 +254501,13 @@ function buildEstimateDeps() {
         return 0;
       }
     },
-    ensembleSlots() {
+    ensembleSlots(toolName) {
+      if (toolName === "high_quality_scan") {
+        const hq = activeResolved?.highQualityModel ?? HIGH_QUALITY_MODEL_DEFAULTS;
+        return [
+          { id: hq.id, maxOutput: resolveEnsembleModelLimits(hq.id, void 0).maxOutput }
+        ];
+      }
       const ensemble = getEnsembleModels();
       if (ensemble.length > 0)
         return ensemble.map((m) => ({ id: m.id, maxOutput: m.maxOutput }));
@@ -255008,7 +255075,8 @@ Run the "discover" tool to see the current profile status.`
     if (name === "scan_folder" || name === "high_quality_scan" || name === "code_task" || name === "review_plan") {
       const a = args;
       const hasInstr = typeof a?.instructions === "string";
-      if (hasInstr || name === "review_plan") {
+      const hasInstrFiles = typeof a?.instructions_files_paths === "string" || Array.isArray(a?.instructions_files_paths) && a.instructions_files_paths.length > 0;
+      if (hasInstr || hasInstrFiles || name === "review_plan") {
         try {
           const resolvedRules = resolveRulesLayers({
             explicitPath: typeof a?.rules === "string" && a.rules.length > 0 ? a.rules : void 0

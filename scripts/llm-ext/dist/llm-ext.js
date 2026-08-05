@@ -219403,7 +219403,9 @@ function globToRegExp(glob) {
         re += "\\{";
         i += 1;
       } else {
-        const alts = glob.slice(i + 1, end).split(",").map((a) => a.replace(/[.+^$()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*"));
+        const alts = glob.slice(i + 1, end).split(",").map(
+          (a) => a.replace(/[.+^$()|[\]\\]/g, "\\$&").replace(/\*\*/g, "\0").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]").split("\0").join(".*")
+        );
         re += `(?:${alts.join("|")})`;
         i = end + 1;
       }
@@ -219421,7 +219423,11 @@ function globToRegExp(glob) {
       i += 1;
     }
   }
-  return new RegExp(`^${re}$`, "i");
+  try {
+    return new RegExp(`^${re}$`, "i");
+  } catch {
+    return /^(?!)$/;
+  }
 }
 function ruleGlobMatches(pattern, filePath) {
   const re = globToRegExp(pattern);
@@ -225264,6 +225270,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
         disqualifyReason: disqualifyReason2
       };
     }
+    if (!score.inconclusive) cache2[key].qualityPass = score.pass;
     totalCost += costUsd;
     scores.push(score);
     assessments.push({
@@ -225441,6 +225448,14 @@ function parseBenchEvidence(ledgers) {
     for (const [key, row] of Object.entries(ledger)) {
       const id = key.split("::")[0];
       if (!id) continue;
+      if (row.qualityPass === true) {
+        out.set(id, "pass");
+        continue;
+      }
+      if (row.qualityPass === false) {
+        if (out.get(id) !== "pass") out.set(id, "fail");
+        continue;
+      }
       if (row.qualified === true) {
         out.set(id, "pass");
         continue;
@@ -225486,6 +225501,7 @@ function rankFreeModelsByBenchEvidence(ids, evidence) {
   return [...ids].sort((a, b) => tier(a) - tier(b));
 }
 var NO_CONTENT_DEMOTION_THRESHOLD = 3;
+var NO_CONTENT_STRIKE_TTL_MS = 24 * 60 * 60 * 1e3;
 function strikesFilePath() {
   return join10(getConfigDir(), "no-content-strikes.json");
 }
@@ -225510,7 +225526,8 @@ function recordNoContentStrike(modelId, nowMs = Date.now()) {
   if (!modelId) return;
   const s = loadStrikes();
   const prev = s.models[modelId];
-  s.models[modelId] = { strikes: (prev?.strikes ?? 0) + 1, lastAt: nowMs };
+  const withinWindow = prev !== void 0 && nowMs - prev.lastAt <= NO_CONTENT_STRIKE_TTL_MS;
+  s.models[modelId] = { strikes: withinWindow ? prev.strikes + 1 : 1, lastAt: nowMs };
   saveStrikes(s);
 }
 function clearNoContentStrikes(modelId) {
@@ -225520,9 +225537,10 @@ function clearNoContentStrikes(modelId) {
   delete s.models[modelId];
   saveStrikes(s);
 }
-function noContentDemotedModels() {
+function noContentDemotedModels(nowMs = Date.now()) {
   const out = /* @__PURE__ */ new Set();
   for (const [id, rec] of Object.entries(loadStrikes().models)) {
+    if (nowMs - rec.lastAt > NO_CONTENT_STRIKE_TTL_MS) continue;
     if (rec.strikes >= NO_CONTENT_DEMOTION_THRESHOLD) out.add(id);
   }
   return out;
@@ -228617,7 +228635,11 @@ function walkDir(dirPath, options) {
       const extraExcludeSet = new Set(options?.exclude ?? []);
       const results2 = [];
       for (const fullPath of gitResults) {
-        if (results2.length >= maxFiles) break;
+        if (results2.length >= maxFiles) {
+          if (!options?.onExcluded) break;
+          onExcluded(fullPath, "max-files cap");
+          continue;
+        }
         if (skipBinary && isBinaryExtension(fullPath)) {
           onExcluded(fullPath, "binary extension");
           continue;
@@ -228651,8 +228673,15 @@ function walkDir(dirPath, options) {
   const extraExclude = options?.exclude ?? [];
   const exclude = /* @__PURE__ */ new Set([...WALK_DEFAULT_EXCLUDE, ...extraExclude]);
   const visitedPaths = /* @__PURE__ */ new Set();
+  const addFile = (p) => {
+    if (results.length >= maxFiles) {
+      onExcluded(p, "max-files cap");
+      return;
+    }
+    results.push(p);
+  };
   function recurse(dir) {
-    if (results.length >= maxFiles) return;
+    if (results.length >= maxFiles && !options?.onExcluded) return;
     let entries;
     try {
       entries = readdirSync4(dir, { withFileTypes: true });
@@ -228660,7 +228689,7 @@ function walkDir(dirPath, options) {
       return;
     }
     for (const entry of entries) {
-      if (results.length >= maxFiles) return;
+      if (results.length >= maxFiles && !options?.onExcluded) return;
       const fullPath = join14(dir, entry.name);
       if (entry.isSymbolicLink()) {
         if (!followSymlinks) continue;
@@ -228685,7 +228714,7 @@ function walkDir(dirPath, options) {
                 continue;
               }
             }
-            results.push(fullPath);
+            addFile(fullPath);
           }
         } catch {
           continue;
@@ -228722,7 +228751,7 @@ function walkDir(dirPath, options) {
             continue;
           }
         }
-        results.push(fullPath);
+        addFile(fullPath);
       }
     }
   }
@@ -229809,6 +229838,7 @@ async function runSearchExistingBenchmark(opts = {}) {
         failureReasons
       };
     }
+    cache2[key].qualityPass = passesThresholds(score, thresholds).pass;
     totalCost += costUsd;
     assessments.push({
       modelId: model.id,
@@ -231608,6 +231638,7 @@ async function runCodeAuditBenchmark(opts = {}) {
         failureReasons
       };
     }
+    cache2[key].qualityPass = passesThresholds2(score, thresholds).pass;
     totalCost += costUsd;
     assessments.push({
       modelId: model.id,
@@ -232861,6 +232892,7 @@ async function runScanFolderBenchmark(opts = {}) {
         failureReasons
       };
     }
+    cache2[key].qualityPass = passesThresholds3(score, thresholds).pass;
     totalCost += costUsd;
     assessments.push({
       modelId: model.id,
@@ -234071,6 +234103,7 @@ async function runCheckSpecsBenchmark(opts = {}) {
         failureReasons
       };
     }
+    cache2[key].qualityPass = passesThresholds4(score, thresholds).pass;
     totalCost += costUsd;
     assessments.push({
       modelId: model.id,
@@ -251975,18 +252008,20 @@ async function checkServiceHealthOrWait() {
     return message;
   }
   const delay = backoffDelays[backoffAttempt];
+  SERVICE_HEALTH.backoffAttempt++;
   SERVICE_HEALTH.inCooldown = true;
   process.stderr.write(
     `[circuit-breaker] ${SERVICE_HEALTH.consecutiveFailures} consecutive failures detected \u2014 waiting ${delay / 1e3}s before retrying (backoff ${backoffAttempt + 1}/${backoffDelays.length})
 `
   );
   await new Promise((r) => setTimeout(r, delay));
-  SERVICE_HEALTH.backoffAttempt++;
   SERVICE_HEALTH.inCooldown = false;
   return null;
 }
 var MAX_TRUNCATION_RETRIES = 3;
 var MAX_EMPTY_RESPONSE_RETRIES = 15;
+var RUN_PAID_EMPTY_RETRY_BUDGET = 30;
+var runPaidEmptyRetriesByModel = /* @__PURE__ */ new Map();
 var EMPTY_RESPONSE_RETRY_DELAY_MS = 2e3;
 async function completeOnFreePool(messages, options, deps, freeModelId) {
   const pool = approvedFreePoolFromSettings().filter((id) => id !== options.model);
@@ -252110,6 +252145,7 @@ async function chatCompletionWithRetry(messages, options, deps) {
       );
       return resp;
     }
+    recordServiceSuccess();
     const isEmpty = resp.content.trim().length === 0;
     const reasonLabel = resp.finishReason || "empty";
     const useEmptyBudget = isEmpty && backend.type === "openrouter";
@@ -252121,6 +252157,19 @@ async function chatCompletionWithRetry(messages, options, deps) {
     const limit = useEmptyBudget ? MAX_EMPTY_RESPONSE_RETRIES : MAX_TRUNCATION_RETRIES;
     const currentAttempt = useEmptyBudget ? emptyAttempts : genericAttempts;
     const ladderModel = options.model || backend.model;
+    if (useEmptyBudget && ladderModel && !isFreeSuffixModelId(ladderModel)) {
+      const used = (runPaidEmptyRetriesByModel.get(ladderModel) ?? 0) + 1;
+      runPaidEmptyRetriesByModel.set(ladderModel, used);
+      if (used > RUN_PAID_EMPTY_RETRY_BUDGET) {
+        resp.truncated = true;
+        resp.content = `**EMPTY RESPONSE (run budget)**: ${ladderModel} has returned ${used} billable empty responses across this run (finish_reason=${reasonLabel}). Each retry re-bills the full prompt for nothing, so this call stops retrying immediately. The model appears unable to answer in current conditions \u2014 consider a different model for this slot.`;
+        process.stderr.write(
+          `[llm-externalizer] ${ladderModel}: run-level empty-response budget (${RUN_PAID_EMPTY_RETRY_BUDGET}) exhausted \u2014 refusing further billed retries on this paid model.
+`
+        );
+        return resp;
+      }
+    }
     if (useEmptyBudget && ladderModel && currentAttempt <= limit) {
       const current = MODEL_REASONING_CACHE.get(ladderModel);
       if (current === void 0 || current === "xhigh") {
@@ -253927,8 +253976,20 @@ function buildEstimateDeps() {
       if (typeof args.folder_path === "string" && args.folder_path.length > 0) {
         return resolveFolderPath(args.folder_path, {
           extensions: Array.isArray(args.extensions) ? args.extensions : void 0,
-          excludeDirs: Array.isArray(args.excluded_dirs) ? args.excluded_dirs : void 0,
+          // `exclude_dirs` — the SAME name every real tool reads (scan_folder,
+          // chat, batch_check…). This resolver briefly read `excluded_dirs`,
+          // which made every dry-run/preview/rules pass resolve a DIFFERENT
+          // file set than the run whenever a dir-exclusion was passed
+          // (ultracode F6, 2026-08-05).
+          excludeDirs: Array.isArray(args.exclude_dirs) ? args.exclude_dirs : void 0,
           useGitignore: args.use_gitignore !== false,
+          // Mirror the walk-shape knobs the real tools honor (ultracode F7):
+          // an estimate walking the fixed 2500-file default while the run
+          // honors a caller-set max_files (or non-recursive / no-symlinks)
+          // counts the wrong files.
+          recursive: typeof args.recursive === "boolean" ? args.recursive : void 0,
+          followSymlinks: typeof args.follow_symlinks === "boolean" ? args.follow_symlinks : void 0,
+          maxFiles: typeof args.max_files === "number" && args.max_files > 0 ? args.max_files : void 0,
           onExcluded
         });
       }
@@ -253941,7 +254002,13 @@ function buildEstimateDeps() {
         return 0;
       }
     },
-    ensembleSlots() {
+    ensembleSlots(toolName) {
+      if (toolName === "high_quality_scan") {
+        const hq = activeResolved?.highQualityModel ?? HIGH_QUALITY_MODEL_DEFAULTS;
+        return [
+          { id: hq.id, maxOutput: resolveEnsembleModelLimits(hq.id, void 0).maxOutput }
+        ];
+      }
       const ensemble = getEnsembleModels();
       if (ensemble.length > 0)
         return ensemble.map((m) => ({ id: m.id, maxOutput: m.maxOutput }));
@@ -254515,7 +254582,8 @@ Run the "discover" tool to see the current profile status.`
     if (name === "scan_folder" || name === "high_quality_scan" || name === "code_task" || name === "review_plan") {
       const a = args;
       const hasInstr = typeof a?.instructions === "string";
-      if (hasInstr || name === "review_plan") {
+      const hasInstrFiles = typeof a?.instructions_files_paths === "string" || Array.isArray(a?.instructions_files_paths) && a.instructions_files_paths.length > 0;
+      if (hasInstr || hasInstrFiles || name === "review_plan") {
         try {
           const resolvedRules = resolveRulesLayers({
             explicitPath: typeof a?.rules === "string" && a.rules.length > 0 ? a.rules : void 0
@@ -256704,9 +256772,7 @@ var PER_FILE_TOOLS = /* @__PURE__ */ new Set([
   "check_references",
   "check_against_specs",
   "search_existing_implementations",
-  "compare_files",
-  "high_quality_scan",
-  "security_scan"
+  "high_quality_scan"
 ]);
 var SINGLE_CALL_TOOLS = /* @__PURE__ */ new Set(["cluster_synonyms"]);
 var ZERO_COST_TOOLS = /* @__PURE__ */ new Set([
@@ -256736,31 +256802,89 @@ function estimateToolRun(toolName, args, deps) {
       "mass_scout tools carry their own estimator: run the scout with --budget-usd, or use mass-scout-estimate \u2014 this generic estimator would only be less precise."
     );
   }
+  if (toolName === "security_scan") {
+    throw new Error(
+      "security_scan runs through the mass_scouting subsystem with its own cost controls (--budget-usd / mass-scout-estimate) \u2014 this generic estimator would price the wrong models."
+    );
+  }
   const perFile = PER_FILE_TOOLS.has(toolName);
   const singleCall = SINGLE_CALL_TOOLS.has(toolName);
-  if (!perFile && !singleCall) {
+  const pairTool = toolName === "compare_files";
+  if (!perFile && !singleCall && !pairTool) {
     throw new Error(
       `--estimate does not model '${toolName}' yet; refusing to print a guess. File an issue if you need it.`
     );
   }
-  const resolved = deps.resolveFiles(args);
-  if (resolved.error) {
-    throw new Error(`estimate aborted \u2014 file resolution failed: ${resolved.error}`);
+  let comparePairs = null;
+  if (pairTool) {
+    if (typeof args.git_repo === "string" && args.git_repo.length > 0) {
+      return {
+        tool: toolName,
+        files: 0,
+        requests: 0,
+        rows: [],
+        totalCeilingUsd: 0,
+        totalExpectedUsd: 0,
+        notes: ["git mode diffs refs locally \u2014 no LLM request, $0 by construction"]
+      };
+    }
+    if (Array.isArray(args.file_pairs) && args.file_pairs.length > 0) {
+      comparePairs = args.file_pairs.filter(
+        (e) => Array.isArray(e) && e.length === 2 && typeof e[0] === "string" && typeof e[1] === "string"
+      );
+      if (comparePairs.length === 0) {
+        throw new Error(
+          "estimate aborted \u2014 file_pairs contains no [fileA, fileB] pairs (single-element entries are group markers, not pairs)"
+        );
+      }
+    }
   }
-  const files = resolved.files;
-  if (files.length === 0) {
-    throw new Error("estimate aborted \u2014 the run would process zero files");
+  const instrFilePaths = Array.isArray(args.instructions_files_paths) ? args.instructions_files_paths.filter(
+    (p) => typeof p === "string" && p.length > 0
+  ) : typeof args.instructions_files_paths === "string" ? [args.instructions_files_paths] : [];
+  const instructionBytes = (typeof args.instructions === "string" ? Buffer.byteLength(args.instructions) : 0) + instrFilePaths.reduce((a, p) => a + deps.fileSizeBytes(p), 0);
+  const contentBytes = typeof args.input_files_content === "string" ? Buffer.byteLength(args.input_files_content) : 0;
+  let files;
+  let chatZeroFiles = false;
+  if (comparePairs) {
+    files = comparePairs.flat();
+  } else {
+    const resolved = deps.resolveFiles(args);
+    chatZeroFiles = toolName === "chat" && (resolved.error !== void 0 || resolved.files.length === 0) && (typeof args.instructions === "string" || instrFilePaths.length > 0 || contentBytes > 0);
+    if (resolved.error && !chatZeroFiles) {
+      throw new Error(`estimate aborted \u2014 file resolution failed: ${resolved.error}`);
+    }
+    files = chatZeroFiles ? [] : resolved.files;
+    if (files.length === 0 && !chatZeroFiles) {
+      throw new Error("estimate aborted \u2014 the run would process zero files");
+    }
+    if (pairTool) {
+      if (files.length !== 2) {
+        throw new Error(
+          "estimate aborted \u2014 compare_files pair mode needs exactly 2 input_files_paths (or use file_pairs for batches, or git_repo for a $0 git diff)"
+        );
+      }
+      comparePairs = [[files[0], files[1]]];
+    }
   }
-  const instructionBytes = typeof args.instructions === "string" ? Buffer.byteLength(args.instructions) : 0;
+  if (chatZeroFiles) {
+    notes.push("no input files \u2014 instructions/input_files_content-only chat: one request per slot");
+  }
   const fileBytes = files.map((f) => deps.fileSizeBytes(f));
   const totalFileBytes = fileBytes.reduce((a, b) => a + b, 0);
-  const requestsPerSlot = perFile ? files.length : 1;
-  const perSlotInputTokens = perFile ? fileBytes.reduce(
-    (sum, bytes) => sum + estimateTokens(bytes) + estimateTokens(instructionBytes) + PROMPT_OVERHEAD_TOKENS,
+  const requestsPerSlot = comparePairs ? comparePairs.length : perFile && !chatZeroFiles ? files.length : 1;
+  const perSlotInputTokens = comparePairs ? comparePairs.reduce(
+    (sum, [a, b]) => sum + estimateTokens(2 * (deps.fileSizeBytes(a) + deps.fileSizeBytes(b))) + estimateTokens(instructionBytes) + PROMPT_OVERHEAD_TOKENS,
     0
-  ) : estimateTokens(totalFileBytes) + estimateTokens(instructionBytes) + PROMPT_OVERHEAD_TOKENS;
+  ) : perFile && !chatZeroFiles ? fileBytes.reduce(
+    (sum, bytes) => sum + estimateTokens(bytes) + estimateTokens(instructionBytes + contentBytes) + PROMPT_OVERHEAD_TOKENS,
+    0
+  ) : estimateTokens(totalFileBytes) + estimateTokens(instructionBytes + contentBytes) + PROMPT_OVERHEAD_TOKENS;
+  if (comparePairs) {
+    notes.push("compare_files: one request per pair, payload sized \u22482\xD7(A+B) (diff + full bodies)");
+  }
   const requestedMax = typeof args.max_tokens === "number" && args.max_tokens > 0 ? args.max_tokens : deps.defaultMaxTokens();
-  const slots = deps.ensembleSlots();
+  const slots = deps.ensembleSlots(toolName);
   if (slots.length === 0) {
     throw new Error("estimate aborted \u2014 no model slot resolved (no active profile?)");
   }
@@ -257083,7 +257207,7 @@ function buildTools(limitsText) {
     },
     {
       name: "review_plan",
-      description: "Delegate-mode code review: emit the deterministic review scaffolding \u2014 resolved file set (same walker as scan_folder), the review rubric, and a per-file protocol \u2014 WITHOUT calling any LLM ($0, no API key, ~1s). The HOST agent then performs the actual review with its own model. Use when the caller (e.g. Claude Code on a subscription) should do the reviewing itself instead of spending external tokens. Accepts the same file inputs as scan_folder: input_files_paths OR folder_path (+ extensions, excluded_dirs, use_gitignore).",
+      description: "Delegate-mode code review: emit the deterministic review scaffolding \u2014 resolved file set (same walker as scan_folder), the review rubric, and a per-file protocol \u2014 WITHOUT calling any LLM ($0, no API key, ~1s). The HOST agent then performs the actual review with its own model. Use when the caller (e.g. Claude Code on a subscription) should do the reviewing itself instead of spending external tokens. Accepts the same file inputs as scan_folder: input_files_paths OR folder_path (+ extensions, exclude_dirs, use_gitignore).",
       inputSchema: {
         type: "object",
         properties: {
@@ -257101,7 +257225,7 @@ function buildTools(limitsText) {
             items: { type: "string" },
             description: "Optional extension filter for folder_path expansion."
           },
-          excluded_dirs: {
+          exclude_dirs: {
             type: "array",
             items: { type: "string" },
             description: "Directory names to exclude from folder_path expansion."
