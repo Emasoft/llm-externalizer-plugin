@@ -13,7 +13,7 @@ and it keeps verbose output out of your context (every command prints just a rep
 path; Read it when needed). It analyzes code, it does not edit it.
 
 **How to call it.** `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" <command> [--flag value ...]`.
-`llm-ext --help` lists all 40 commands; `llm-ext <command> --help` prints that command's
+`llm-ext --help` lists all 42 commands; `llm-ext <command> --help` prints that command's
 real parameters. Parameter names are the ones this tool always used, now as `--flags`.
 The report path goes to STDOUT (so it pipes cleanly); banner, progress and errors go to
 STDERR; exit 1 means it failed.
@@ -45,8 +45,8 @@ amount that cannot be exceeded). Proceed only when the ceiling fits the budget; 
 profile `--estimate` is optional (everything is $0).
 
 ```bash
-llm-ext scan-folder --estimate --folder_path src/   # predicted cost, nothing sent
-llm-ext scan-folder --folder_path src/              # the real run, once the ceiling fits
+llm-ext scan-folder --estimate --folder_path src/ --instructions "find bugs"   # predicted cost, nothing sent
+llm-ext scan-folder --folder_path src/ --instructions "find bugs"              # the real run, once the ceiling fits
 ```
 
 **Cost safety — free mode (zero spend, ALL tools):** to guarantee not a single cent is spent
@@ -86,8 +86,9 @@ returns a report path, it worked — read the report instead of assuming the too
 
 **Details live on demand — don't duplicate them here:**
 - Per-command params/behavior → `llm-ext <command> --help`. That help is generated from the
-  same catalog the commands run from, so it cannot drift. `llm-ext --help` lists all 40
-  (`chat`, `code-task`, `scan-folder`, `compare-files`, `check-references`, `check-imports`,
+  same catalog the commands run from, so it cannot drift. `llm-ext --help` lists all 42
+  (`chat`, `code-task`, `scan-folder`, `review-plan`, `rules-check`, `compare-files`,
+  `check-references`, `check-imports`,
   `check-against-specs`, `search-existing-implementations`, `security-scan`,
   `cluster-synonyms`, `discover`, `get-settings`, `or-model-info*`, `reset`, the
   `mass-scout-*` family, and the model-health/benchmark commands).

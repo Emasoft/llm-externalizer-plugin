@@ -1120,9 +1120,9 @@ Run `/llm-externalizer:llm-externalizer-discover` first — the output identifie
 llm-externalizer-plugin/
 ├── .claude-plugin/plugin.json     # Plugin manifest
 ├── bin/                           # llm-ext + llm-ext-benchmark CLI entry points
-├── commands/                      # 35 slash commands
+├── commands/                      # 40 slash commands
 ├── agents/                        # 6 internal agents (reviewer + 4 fixers + setup-agent)
-├── skills/                        # 15 auto-discovered skills
+├── skills/                        # 16 auto-discovered skills
 ├── rules/                         # Lean always-loaded usage rule (auto-installed to ~/.claude/rules/)
 ├── scripts/                       # Python: setup, publish, validators, helpers
 │   └── llm-ext/                   # Bundled TypeScript CLI engine (all 42 commands; name is historical)

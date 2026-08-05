@@ -16,10 +16,9 @@ allowed-tools: Bash, Read, Grep, Write
 (gitignore-aware, same walker as scan-folder), the real-defects-only rubric, and
 a per-file protocol — **without calling any LLM**. YOU are the reviewer.
 
-Measured (reports/open-code-review-eval/20260805_005500+0200-final-trusted-results.md):
-on a planted-ground-truth range this workflow was the only configuration that
-found the planted bug — at $0 — while driven-LLM reviews found nothing at up to
-$0.55/run.
+Measured during development (2026-08-05, planted-ground-truth evaluation): this
+workflow was the only configuration that found the planted bug — at $0 — while
+driven-LLM reviews found nothing at up to $0.55/run.
 
 ## Instructions
 

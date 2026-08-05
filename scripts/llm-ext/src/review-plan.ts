@@ -5,11 +5,12 @@
  * The tool emits the DETERMINISTIC scaffolding of a code review — resolved
  * file set, per-file framing, the review rubric — and the HOST agent (Claude
  * Code on its own subscription, or any LLM the caller drives) performs the
- * actual reviewing. No LLM call, no network, no API key: measured on the
- * planted-ground-truth range (reports/open-code-review-eval/
- * 20260805_005500+0200-final-trusted-results.md), the host-agent workflow was
- * the ONLY configuration that found the planted bug — at $0 — while the
- * driven-LLM configurations found nothing at up to $0.55/run.
+ * actual reviewing. No LLM call, no network, no API key: measured during
+ * development on a planted-ground-truth range (2026-08-05 evaluation), the
+ * host-agent workflow was the ONLY configuration that found the planted bug —
+ * at $0 — while the driven-LLM configurations found nothing at up to
+ * $0.55/run. (The full evaluation report lives in the author's gitignored
+ * reports/ tree — cited here by date, not path, because it ships in no clone.)
  *
  * Pure module: the dispatch layer resolves files (same walker as scan_folder —
  * an estimate/plan over a different file set than a run would use is worse
