@@ -15,8 +15,12 @@ import {
   approvedFreePoolFromSettings,
   callWithFreeRotation,
   classifyUnavailable,
+  clearNoContentStrikes,
+  combinedFreeModelEvidence,
+  noContentDemotedModels,
   parseBenchEvidence,
   rankFreeModelsByBenchEvidence,
+  recordNoContentStrike,
   selectFreeEnsembleModels,
   clearCooldown,
   computeCooldownUntil,
@@ -204,6 +208,32 @@ describe("bench-evidence ranking (task #189) — the ledgers finally steer selec
     expect(
       selectFreeEnsembleModels(["v/a:free", "v/b:free", "v/c:free", "v/d:free"], new Map()),
     ).toEqual(["v/a:free", "v/b:free", "v/c:free"]);
+  });
+
+  it("no-content strikes (task #189c): 3 strikes demote, one content success heals — self-managing in both directions", () => {
+    // The strike store lives under getConfigDir() — redirect it to a temp dir
+    // for this test only (the suite-level redirect belongs to a different
+    // describe block; without our own we would write the REAL user store).
+    const prev = process.env.LLM_EXT_CONFIG_DIR;
+    process.env.LLM_EXT_CONFIG_DIR = mkdtempSync(join("/tmp", "llm-ext-strikes-"));
+    try {
+      const id = "v/reasoning-burner:free";
+      expect(noContentDemotedModels().has(id)).toBe(false);
+      recordNoContentStrike(id);
+      recordNoContentStrike(id);
+      expect(noContentDemotedModels().has(id)).toBe(false); // below threshold
+      recordNoContentStrike(id);
+      expect(noContentDemotedModels().has(id)).toBe(true); // 3 = demoted
+      // Demotion feeds the combined evidence as a fail-tier verdict.
+      expect(combinedFreeModelEvidence().get(id)).toBe("fail");
+      // One content-bearing success heals it completely.
+      clearNoContentStrikes(id);
+      expect(noContentDemotedModels().has(id)).toBe(false);
+      expect(combinedFreeModelEvidence().has(id)).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
+      else process.env.LLM_EXT_CONFIG_DIR = prev;
+    }
   });
 });
 

@@ -187,7 +187,7 @@ import {
   AllFreeModelsExhaustedError,
   approvedFreePoolFromSettings,
   callWithFreeRotation,
-  benchEvidenceFromLedgers,
+  combinedFreeModelEvidence,
   classifyUnavailable,
   filterFreeModels,
   getCooldownStore,
@@ -2505,16 +2505,17 @@ function getEnsembleModels(): Array<{
     // ensemble. selectFreeEnsembleModels applies the requirements + benchmark
     // filters and takes the top 3; the FULL pool stays as rotation fallbacks.
     const pool = activeFreePool();
-    // benchEvidenceFromLedgers (task #189): rank the pool by per-tool bench
-    // verdicts so a model with a PASSING bench outranks a never-benchmarked
-    // one, which outranks one with real failing/requirements rows — the
-    // 2026-08-05 unfit-trio incident (a content-safety classifier selected for
-    // code review) had qualified:false rows on disk that selection ignored.
+    // combinedFreeModelEvidence (task #189): rank the pool by per-tool bench
+    // verdicts overlaid with runtime no-content demotions, so a model with a
+    // PASSING bench outranks a never-benchmarked one, which outranks one with
+    // scored failing rows or a length+empty strike record — the 2026-08-05
+    // unfit-trio incident (a content-safety classifier selected for code
+    // review) had qualified:false rows on disk that selection ignored.
     models = selectFreeEnsembleModels(
       pool,
       catalogById,
       benchmarkFailedModels(),
-      benchEvidenceFromLedgers(),
+      combinedFreeModelEvidence(),
     );
     // Cost-safety (TRDD-542bdbef): under free mode every ensemble model MUST be
     // ':free'. FREE_POOL_SEED and validated free_models are all ':free', so this

@@ -235,6 +235,94 @@ export function rankFreeModelsByBenchEvidence(
   return [...ids].sort((a, b) => tier(a) - tier(b));
 }
 
+// ── Runtime no-content demotion (task #189 c) ──────────────────────────
+// A model that repeatedly burns its whole completion budget on reasoning and
+// emits NO content (the length+empty cost-stop in provider/completion.ts) is
+// unfit in current conditions whatever its ledger says. Strikes persist
+// cross-process (the CLI is one process per invocation) and are SELF-HEALING:
+// any content-bearing success clears them, and Auto-DUBC needs no user action
+// in either direction. This is a QUALITY signal feeding the ensemble ranking —
+// deliberately NOT a rotation cooldown (the model may still serve as a
+// rotation fallback; it just stops being a preferred ensemble slot).
+
+/** Strikes at or above this rank the model in the fail tier. Three = the
+ *  reasoning ladder ran its full course (downgrade, disable, still empty). */
+export const NO_CONTENT_DEMOTION_THRESHOLD = 3;
+
+interface NoContentStrikes {
+  version: 1;
+  models: Record<string, { strikes: number; lastAt: number }>;
+}
+
+function strikesFilePath(): string {
+  return join(getConfigDir(), "no-content-strikes.json");
+}
+
+function loadStrikes(): NoContentStrikes {
+  try {
+    const parsed = JSON.parse(readFileSync(strikesFilePath(), "utf-8")) as NoContentStrikes;
+    if (parsed && parsed.version === 1 && parsed.models) return parsed;
+  } catch {
+    /* absent/corrupt → fresh */
+  }
+  return { version: 1, models: {} };
+}
+
+function saveStrikes(s: NoContentStrikes): void {
+  // Same atomic tmp+rename pattern as the cooldown store. Best-effort:
+  // a failed write loses one strike observation, never breaks a live call.
+  try {
+    mkdirSync(getConfigDir(), { recursive: true });
+    const tmp = strikesFilePath() + ".tmp";
+    writeFileSync(tmp, JSON.stringify(s));
+    renameSync(tmp, strikesFilePath());
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Record one length+empty terminal outcome (the cost-stop / exhausted label). */
+export function recordNoContentStrike(modelId: string, nowMs = Date.now()): void {
+  if (!modelId) return;
+  const s = loadStrikes();
+  const prev = s.models[modelId];
+  s.models[modelId] = { strikes: (prev?.strikes ?? 0) + 1, lastAt: nowMs };
+  saveStrikes(s);
+}
+
+/** A content-bearing success heals the model — strikes reset to zero. Reads
+ *  first and writes only when an entry exists, so the hot success path does
+ *  not churn the file on every call. */
+export function clearNoContentStrikes(modelId: string): void {
+  if (!modelId) return;
+  const s = loadStrikes();
+  if (!s.models[modelId]) return;
+  delete s.models[modelId];
+  saveStrikes(s);
+}
+
+/** Models at/over the demotion threshold — merged into the fail tier. */
+export function noContentDemotedModels(): Set<string> {
+  const out = new Set<string>();
+  for (const [id, rec] of Object.entries(loadStrikes().models)) {
+    if (rec.strikes >= NO_CONTENT_DEMOTION_THRESHOLD) out.add(id);
+  }
+  return out;
+}
+
+/**
+ * The full evidence picture for ensemble ranking: ledger verdicts overlaid
+ * with runtime no-content demotions. The runtime signal is FRESHER than a
+ * ledger pass, so it wins — and because it self-heals on the next
+ * content-bearing success, a wrongly-demoted model recovers without anyone
+ * touching anything.
+ */
+export function combinedFreeModelEvidence(): Map<string, BenchVerdict> {
+  const evidence = benchEvidenceFromLedgers();
+  for (const id of noContentDemotedModels()) evidence.set(id, "fail");
+  return evidence;
+}
+
 /** The top-3 approved free models (the ensemble), best bench evidence first.
  *  Rotation uses the FULL approved list (filterFreeModels) so models 4+ serve
  *  as fallbacks. `benchEvidence` defaults empty (rank = operator order), so

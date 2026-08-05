@@ -46,7 +46,9 @@ import {
   approvedFreePoolFromSettings,
   callWithFreeRotation,
   classifyUnavailable,
+  clearNoContentStrikes,
   logRotation,
+  recordNoContentStrike,
 } from "../free-rotation.js";
 import { resolveEnsembleModelLimits } from "../ensemble-limits.js";
 import {
@@ -1071,6 +1073,9 @@ export async function chatCompletionWithRetry(
     // problematic prompts. We treat that as an empty response (retryable).
     if (resp.finishReason === "stop" && !resp.truncated && resp.content.trim().length > 0) {
       recordServiceSuccess();
+      // Task #189c: a content-bearing success HEALS any no-content demotion —
+      // the strike store is read-first, so this is a no-op unless strikes exist.
+      clearNoContentStrikes(options.model || backend.model || "");
       return resp;
     }
 
@@ -1193,6 +1198,9 @@ export async function chatCompletionWithRetry(
     ) {
       // No recordServiceFailure() here either: length+empty with reasoning off
       // is a model/budget mismatch, not transport health (see above).
+      // It IS a per-model quality strike (task #189c): three of these demote
+      // the model out of the preferred ensemble until a content success heals it.
+      recordNoContentStrike(ladderModel);
       resp.truncated = true;
       resp.content =
         `**NO CONTENT**: ${ladderModel} consumed its entire ${options.maxTokens ?? "output"}-token budget without emitting any content, ` +
@@ -1247,6 +1255,9 @@ export async function chatCompletionWithRetry(
 
     // Exhausted retries — label by cause so the report makes sense.
     if (isEmpty && resp.finishReason === "length") {
+      // Same quality strike as the cost-stop above (task #189c): the model
+      // generated only reasoning for the entire retry budget.
+      recordNoContentStrike(options.model || backend.model || "");
       // Distinct from a blank/glitch empty: the model DID generate — all of it
       // reasoning, none of it content. Say that, so the report doesn't blame a
       // "provider glitch" for a model/budget mismatch the user can actually act on.
