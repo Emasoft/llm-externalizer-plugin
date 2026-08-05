@@ -102,14 +102,153 @@ export function filterFreeModels(
   });
 }
 
-/** The top-3 approved free models (the ensemble). Rotation uses the FULL approved
- *  list (filterFreeModels) so models 4+ serve as fallbacks. */
+// ── Bench-evidence ranking (task #189) ─────────────────────────────────
+// 2026-08-05 finding: the auto-selected free trio (laguna-xs, north-mini-code,
+// nemotron-3.5-content-safety — a SAFETY CLASSIFIER) produced length+empty on
+// nearly every code-review call, while all three carried `qualified: false`
+// "below code-task requirements" rows in the per-tool ledgers THE WHOLE TIME.
+// The evidence existed; selection ignored it (it consumed only the
+// security-triage failed set). The cure is RANKING, never hard exclusion —
+// invariant 2 above: a pool must degrade, not empty. A model with a passing
+// per-tool bench outranks one never benchmarked, which outranks one with a
+// real failing/requirements verdict; within a tier the operator's configured
+// order is preserved (stable sort).
+
+export type BenchVerdict = "pass" | "fail";
+
+/** One per-tool ledger row, structurally (the files carry more; we read less). */
+interface LedgerRow {
+  qualified?: unknown;
+  disqualifyReason?: unknown;
+}
+
+/**
+ * Non-quality row shapes that must NOT demote a model. These are enumerable
+ * because WE write them:
+ *   • the paid/free skip rows (all contain "not benchmarked" or the free_only
+ *     skip phrasing),
+ *   • the catalog-availability miss ("not found in the OpenRouter catalog" —
+ *     lenient-on-availability, same philosophy as filterFreeModels),
+ *   • REQUIREMENTS rejections ("below <tool> requirements (…)"). Measured
+ *     2026-08-05: every one of the 17 ledgered ':free' models carried one —
+ *     because the premium qualification criteria set allowFree:false and
+ *     reject the ':free' CLASS by design (see the filterFreeModels comment).
+ *     A class rejection is not evidence the individual is bad AT THE TASK;
+ *     counting it demoted the entire pool uniformly, i.e. ranked nothing.
+ * Any OTHER qualified:false row (a scored golden-dataset failure) is a real
+ * verdict. A future skip row MUST keep the "not benchmarked" phrasing or it
+ * will demote models it meant to spare — enforced by the shape tests.
+ */
+function isNonQualityReason(reason: string): boolean {
+  return (
+    reason.includes("not benchmarked") ||
+    reason.includes("non-':free' model") ||
+    reason.includes("not found in the OpenRouter catalog") ||
+    reason.includes(" requirements (")
+  );
+}
+
+/**
+ * Fold per-tool ledger objects (keys `model::date::hash` → row) into one
+ * verdict per model. PASS wins over FAIL across tools: a model proven good at
+ * ONE tool is a usable ensemble member even if it fails another tool's
+ * requirements — the per-tool gates still protect those tools individually.
+ */
+export function parseBenchEvidence(
+  ledgers: ReadonlyArray<Record<string, LedgerRow>>,
+): Map<string, BenchVerdict> {
+  const out = new Map<string, BenchVerdict>();
+  for (const ledger of ledgers) {
+    for (const [key, row] of Object.entries(ledger)) {
+      const id = key.split("::")[0];
+      if (!id) continue;
+      if (row.qualified === true) {
+        out.set(id, "pass"); // pass wins, unconditionally
+        continue;
+      }
+      if (row.qualified !== false) continue; // malformed row — no verdict
+      const reason = typeof row.disqualifyReason === "string" ? row.disqualifyReason : "";
+      if (isNonQualityReason(reason)) continue; // skip/availability — no verdict
+      if (out.get(id) !== "pass") out.set(id, "fail");
+    }
+  }
+  return out;
+}
+
+/** The five per-tool ledger files the evidence fold reads. */
+const BENCH_LEDGER_FILES = [
+  "code-task-results.json",
+  "scan-folder-results.json",
+  "check-specs-results.json",
+  "search-existing-results.json",
+  "security-triage-results.json",
+] as const;
+
+/**
+ * Load + fold the on-disk ledgers. Best-effort per file (an unreadable or
+ * missing ledger contributes nothing — a fresh install ranks everything
+ * "unknown" and behavior is identical to the pre-#189 selector).
+ */
+export function benchEvidenceFromLedgers(
+  dir: string = getConfigDir(),
+): Map<string, BenchVerdict> {
+  const ledgers: Record<string, LedgerRow>[] = [];
+  for (const f of BENCH_LEDGER_FILES) {
+    try {
+      const parsed = JSON.parse(readFileSync(join(dir, f), "utf-8")) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        ledgers.push(parsed as Record<string, LedgerRow>);
+      }
+    } catch {
+      /* absent/unreadable ledger → no evidence from it */
+    }
+  }
+  return parseBenchEvidence(ledgers);
+}
+
+/**
+ * Classifier-class models (safety/guard filters) are not generators and can
+ * never produce a code review, whatever their bench rows say — clamp them to
+ * the last tier. Id heuristic with honest limits: it catches the observed
+ * offenders (content-safety, llama-guard style ids) and misses exotic names;
+ * the ledger evidence is the primary signal, this is belt-and-braces.
+ */
+function looksLikeClassifier(id: string): boolean {
+  const s = id.toLowerCase();
+  return s.includes("content-safety") || s.includes("guard") || s.includes("-safety");
+}
+
+/**
+ * Stable tier sort: pass (0) < unknown (1) < fail (2); classifier-named ids
+ * clamp to tier 2. Within a tier the input (operator) order is preserved.
+ */
+export function rankFreeModelsByBenchEvidence(
+  ids: readonly string[],
+  evidence: ReadonlyMap<string, BenchVerdict>,
+): string[] {
+  const tier = (id: string): number => {
+    if (looksLikeClassifier(id)) return 2;
+    const v = evidence.get(id);
+    return v === "pass" ? 0 : v === "fail" ? 2 : 1;
+  };
+  // Array.prototype.sort is stable per spec — operator order survives per tier.
+  return [...ids].sort((a, b) => tier(a) - tier(b));
+}
+
+/** The top-3 approved free models (the ensemble), best bench evidence first.
+ *  Rotation uses the FULL approved list (filterFreeModels) so models 4+ serve
+ *  as fallbacks. `benchEvidence` defaults empty (rank = operator order), so
+ *  callers without ledger access keep the old behavior. */
 export function selectFreeEnsembleModels(
   freeModels: readonly string[],
   catalogById: ReadonlyMap<string, FreeModelCatalogEntry>,
   benchmarkFailed: ReadonlySet<string> = new Set(),
+  benchEvidence: ReadonlyMap<string, BenchVerdict> = new Map(),
 ): string[] {
-  return filterFreeModels(freeModels, catalogById, benchmarkFailed).slice(0, 3);
+  return rankFreeModelsByBenchEvidence(
+    filterFreeModels(freeModels, catalogById, benchmarkFailed),
+    benchEvidence,
+  ).slice(0, 3);
 }
 
 /**

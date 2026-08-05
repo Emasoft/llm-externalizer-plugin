@@ -15,6 +15,9 @@ import {
   approvedFreePoolFromSettings,
   callWithFreeRotation,
   classifyUnavailable,
+  parseBenchEvidence,
+  rankFreeModelsByBenchEvidence,
+  selectFreeEnsembleModels,
   clearCooldown,
   computeCooldownUntil,
   cooldownFilePath,
@@ -96,6 +99,111 @@ describe("approvedFreePoolFromSettings — a paid profile's OWN free_models win 
     const pool = approvedFreePoolFromSettings();
     expect(pool.length).toBeGreaterThan(0); // seed → never empty
     expect(pool.every((id) => id.endsWith(":free"))).toBe(true);
+  });
+});
+
+describe("bench-evidence ranking (task #189) — the ledgers finally steer selection", () => {
+  it("parseBenchEvidence: pass wins over scored-fail; skip/availability/REQUIREMENTS rows carry NO verdict", () => {
+    const evidence = parseBenchEvidence([
+      // code-task ledger: A has a SCORED failure (real verdict), B passes
+      {
+        "v/a:free::2026-08-05::x": {
+          qualified: false,
+          disqualifyReason: "meanF1 0.40 below the 0.95 threshold",
+        },
+        "v/b:free::2026-08-05::x": { qualified: true },
+      },
+      {
+        // B scored-fails here — but its code-task PASS wins across tools
+        "v/b:free::2026-08-05::y": {
+          qualified: false,
+          disqualifyReason: "meanF1 0.10 below the 0.95 threshold",
+        },
+        // skip rows, catalog misses, and requirements rejections must NOT
+        // demote. Requirements is the load-bearing one: the premium criteria
+        // reject the ':free' CLASS by design (allowFree:false), so on
+        // 2026-08-05 ALL 17 ledgered free models carried such a row — counting
+        // them demoted the whole pool uniformly, i.e. ranked nothing.
+        "v/c:free::2026-08-05::y": {
+          qualified: false,
+          disqualifyReason: "free_only active — non-':free' model not benchmarked",
+        },
+        "v/d:free::2026-08-05::y": {
+          qualified: false,
+          disqualifyReason: "not found in the OpenRouter catalog",
+        },
+        "v/e:free::2026-08-05::y": {
+          qualified: false,
+          disqualifyReason: "below code-task requirements (cost/context/structured-output/reasoning)",
+        },
+      },
+    ]);
+    expect(evidence.get("v/a:free")).toBe("fail");
+    expect(evidence.get("v/b:free")).toBe("pass");
+    expect(evidence.has("v/c:free")).toBe(false);
+    expect(evidence.has("v/d:free")).toBe(false);
+    expect(evidence.has("v/e:free")).toBe(false);
+  });
+
+  it("rankFreeModelsByBenchEvidence: pass < unknown < fail, operator order stable within tiers", () => {
+    const evidence = new Map<string, "pass" | "fail">([
+      ["v/failing:free", "fail"],
+      ["v/passing:free", "pass"],
+    ]);
+    expect(
+      rankFreeModelsByBenchEvidence(
+        ["v/failing:free", "v/unknown1:free", "v/passing:free", "v/unknown2:free"],
+        evidence,
+      ),
+    ).toEqual(["v/passing:free", "v/unknown1:free", "v/unknown2:free", "v/failing:free"]);
+  });
+
+  it("REGRESSION (2026-08-05 unfit-trio incident): scored-fail models and a content-safety classifier lose the ensemble", () => {
+    // The classifier sinks on NAME alone, with no ledger row at all — that is
+    // the immediate improvement on the incident machine, where no scored rows
+    // exist yet. Scored fails (here given to laguna/north-mini, as the next $0
+    // free-pool sweep will produce for real) sink the rest.
+    const evidence = new Map<string, "pass" | "fail">([
+      ["poolside/laguna-xs-2.1:free", "fail"],
+      ["cohere/north-mini-code:free", "fail"],
+    ]);
+    const selected = selectFreeEnsembleModels(
+      [
+        "poolside/laguna-xs-2.1:free",
+        "cohere/north-mini-code:free",
+        "nvidia/nemotron-3.5-content-safety:free", // no ledger row — name clamps it
+        "v/decent-a:free",
+        "v/decent-b:free",
+        "v/decent-c:free",
+      ],
+      new Map(),
+      new Set(),
+      evidence,
+    );
+    expect(selected).toEqual(["v/decent-a:free", "v/decent-b:free", "v/decent-c:free"]);
+    // With NO evidence at all (today's machine state), the classifier alone
+    // sinks and the 4th pool member takes its ensemble slot.
+    expect(
+      selectFreeEnsembleModels(
+        [
+          "poolside/laguna-xs-2.1:free",
+          "cohere/north-mini-code:free",
+          "nvidia/nemotron-3.5-content-safety:free",
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+        ],
+        new Map(),
+      ),
+    ).toEqual([
+      "poolside/laguna-xs-2.1:free",
+      "cohere/north-mini-code:free",
+      "nvidia/nemotron-3-ultra-550b-a55b:free",
+    ]);
+  });
+
+  it("default (no evidence) keeps the pre-#189 behavior — operator order, top 3", () => {
+    expect(
+      selectFreeEnsembleModels(["v/a:free", "v/b:free", "v/c:free", "v/d:free"], new Map()),
+    ).toEqual(["v/a:free", "v/b:free", "v/c:free"]);
   });
 });
 
