@@ -192,6 +192,26 @@ const scanFolderSchemaProps = {
       "Explicit per-path rules-file path (highest layer; see rules_check). Omitted: " +
       "<repo>/.llm-ext/rules.yaml, then ~/.llm-externalizer/rules.yaml, then none.",
   },
+  diff_workspace: {
+    type: "boolean" as const,
+    description:
+      "Diff mode: review only files changed in the workspace (staged + unstaged + " +
+      "untracked vs HEAD). Overrides folder_path. Mutually exclusive with the other diff args.",
+  },
+  diff_from: {
+    type: "string" as const,
+    description:
+      "Diff mode: base ref of a range (merge-base '...' semantics with diff_to). " +
+      "Requires diff_to.",
+  },
+  diff_to: {
+    type: "string" as const,
+    description: "Diff mode: head ref of the range. Requires diff_from.",
+  },
+  diff_commit: {
+    type: "string" as const,
+    description: "Diff mode: review one commit's changes (vs its parent).",
+  },
   extensions: {
     type: "array" as const,
     items: { type: "string" as const },
@@ -413,6 +433,23 @@ export function buildTools(limitsText: string) {
               "Explicit per-path rules-file path (highest layer; see rules_check). Omitted: " +
               "<repo>/.llm-ext/rules.yaml, then ~/.llm-externalizer/rules.yaml, then none.",
           },
+          diff_workspace: {
+            type: "boolean",
+            description:
+              "Diff mode: review only workspace-changed files (staged+unstaged+untracked vs HEAD).",
+          },
+          diff_from: {
+            type: "string",
+            description: "Diff mode: base ref (merge-base '...' semantics; requires diff_to).",
+          },
+          diff_to: {
+            type: "string",
+            description: "Diff mode: head ref (requires diff_from).",
+          },
+          diff_commit: {
+            type: "string",
+            description: "Diff mode: one commit's changes (vs its parent).",
+          },
         },
         required: ["instructions"],
       },
@@ -463,6 +500,23 @@ export function buildTools(limitsText: string) {
             description:
               "Explicit rules-file path (highest layer). Omitted: <repo>/.llm-ext/rules.yaml, " +
               "then ~/.llm-externalizer/rules.yaml, then none. See rules_check.",
+          },
+          diff_workspace: {
+            type: "boolean",
+            description:
+              "Diff mode: plan covers workspace-changed files and EMBEDS their hunks.",
+          },
+          diff_from: {
+            type: "string",
+            description: "Diff mode: base ref (merge-base '...' semantics; requires diff_to).",
+          },
+          diff_to: {
+            type: "string",
+            description: "Diff mode: head ref (requires diff_from).",
+          },
+          diff_commit: {
+            type: "string",
+            description: "Diff mode: one commit's changes (vs its parent).",
           },
         },
       },

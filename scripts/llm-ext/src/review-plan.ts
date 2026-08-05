@@ -28,6 +28,12 @@ export interface ReviewPlanOptions {
   instructions?: string;
   /** Where the host agent should write its report (advisory line in the plan). */
   reportDir?: string;
+  /**
+   * Diff mode (TRDD-MNK2YNH0): per-file unified-diff hunks (with git's
+   * enclosing-function context). When present, the plan embeds them so the
+   * host agent reviews the CHANGES and opens full files only when needed.
+   */
+  hunksByFile?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -78,6 +84,19 @@ export function buildReviewPlan(
   const sorted = [...files].sort((a, b) => a.bytes - b.bytes);
   for (const f of sorted) {
     lines.push(`- ${f.path} (${f.bytes.toLocaleString()} B)`);
+  }
+  if (opts.hunksByFile && opts.hunksByFile.size > 0) {
+    lines.push("");
+    lines.push("## Changed hunks (diff mode — review THESE; open full files only when a hunk demands it)");
+    for (const f of sorted) {
+      const hunk = opts.hunksByFile.get(f.path);
+      if (!hunk) continue;
+      lines.push("");
+      lines.push(`### ${f.path}`);
+      lines.push("```diff");
+      lines.push(hunk);
+      lines.push("```");
+    }
   }
   lines.push("");
   lines.push("## Protocol");

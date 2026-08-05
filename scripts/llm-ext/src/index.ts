@@ -27,6 +27,7 @@ import {
   matchRuleForFile,
   resolveRulesLayers,
 } from "./review-rules.js";
+import { parseDiffMode, resolveDiffScope, type DiffScope } from "./diff-scope.js";
 import {
   GROUP_HEADER_RE,
   GROUP_FOOTER_RE,
@@ -1673,12 +1674,21 @@ export async function warmEstimatePricing(): Promise<void> {
 export function buildEstimateDeps(): import("./estimate.js").EstimateDeps {
   return {
     resolveFiles(args, onExcluded) {
-      // Mirror the tools' own input contract: explicit input_files_paths wins,
-      // else folder_path expands through the SAME walker the run would use
+      // Mirror the tools' own input contract: diff modes win (TRDD-MNK2YNH0 —
+      // resolution DELEGATED to git), then explicit input_files_paths, else
+      // folder_path expands through the SAME walker the run would use
       // (gitignore, extensions, excluded dirs) — an estimate over a different
       // file set than the run's would be worse than none. `onExcluded` is the
       // --preview reason channel (TRDD-SCLGL8T4), threaded into that same
       // walker so preview can never drift from the real selection.
+      try {
+        const mode = parseDiffMode(args);
+        if (mode) {
+          return { files: resolveDiffScope(mode, process.cwd()).files };
+        }
+      } catch (err) {
+        return { files: [], error: (err as Error).message };
+      }
       const explicit = Array.isArray(args.input_files_paths)
         ? (args.input_files_paths as unknown[]).filter(
             (p): p is string => typeof p === "string" && p.length > 0,
@@ -2717,6 +2727,42 @@ async function dispatchCallToolInner(
         `[llm-externalizer] Routing through ${modelOverride}${freeRequested ? " (free requested)" : " (auto-fallback)"}\n`,
       );
     }
+    // Diff-mode scoping (TRDD-MNK2YNH0): resolve the caller's diff args ONCE,
+    // delegated to git, and rewrite the input contract to the changed-file set
+    // — so the tools, the rules chokepoint below, --estimate and --preview all
+    // see the SAME scope. review_plan additionally embeds the per-file hunks.
+    let reviewDiffScope: DiffScope | null = null;
+    if (
+      name === "scan_folder" ||
+      name === "high_quality_scan" ||
+      name === "code_task" ||
+      name === "review_plan"
+    ) {
+      const a = args as Record<string, unknown>;
+      try {
+        const mode = parseDiffMode(a ?? {});
+        if (mode) {
+          reviewDiffScope = resolveDiffScope(mode, process.cwd());
+          a.input_files_paths = reviewDiffScope.files;
+          delete a.folder_path; // diff mode wins; a stale folder_path would widen the scope back
+          process.stderr.write(
+            `[llm-externalizer] Diff scope (${mode.kind}): ${reviewDiffScope.files.length} changed file(s)` +
+              (reviewDiffScope.skipped.length > 0
+                ? `, ${reviewDiffScope.skipped.length} skipped (${reviewDiffScope.skipped.map((s) => s.reason).join("; ")})`
+                : "") +
+              "\n",
+          );
+        }
+      } catch (err) {
+        // Fail-fast: a diff of nothing, a non-repo, or mixed modes is the
+        // caller's error to see, never a silent full-tree review instead.
+        return {
+          content: [{ type: "text", text: `diff: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+
     // Layered per-path review rules (TRDD-3JQVBO7M): for the review-family
     // tools, resolve the winning rules layer and AUGMENT the caller's
     // instructions with the entries matching the actual file set — resolved
@@ -3168,6 +3214,10 @@ async function dispatchCallToolInner(
               ? ((args as Record<string, unknown>).instructions as string)
               : undefined,
           reportDir: defaultOutputDir(),
+          // Diff mode (TRDD-MNK2YNH0): the plan carries the hunks themselves —
+          // the host agent reviews the CHANGES with function context, and only
+          // opens the full file when a hunk demands it.
+          hunksByFile: reviewDiffScope?.hunksByFile,
         });
         return { content: [{ type: "text", text: plan }] };
       }

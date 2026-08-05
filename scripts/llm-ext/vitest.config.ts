@@ -265,6 +265,8 @@ export default defineConfig({
       'src/review-plan.test.ts',
       // Layered per-path review rules (TRDD-3JQVBO7M).
       'src/review-rules.test.ts',
+      // Diff-mode review scoping against a real fixture git repo (TRDD-MNK2YNH0).
+      'src/diff-scope.test.ts',
       'src/cluster/phase2_verify.test.ts',
       'src/cluster/phase3_canonical.test.ts',
     ],
