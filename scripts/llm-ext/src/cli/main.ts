@@ -41,7 +41,7 @@ import { buildTools } from "../tools/definitions.js";
  * longer existed, which aborts the release. This is now the only anchor, so it
  * is load-bearing: do not reformat, inline, or compute it.
  */
-const VERSION = "11.0.0";
+const VERSION = "11.1.0";
 
 // ── Catalog ──────────────────────────────────────────────────────────
 

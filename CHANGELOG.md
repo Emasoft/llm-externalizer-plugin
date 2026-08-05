@@ -1,6 +1,413 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [11.1.0] - 2026-08-05
+
+### Added
+
+- Feat(cli): diff-mode review — workspace/range/commit scoping, git-delegated (TRDD-MNK2YNH0)
+
+llm-ext reviewed WHOLE FILES only. Diff modes (diff_workspace,
+diff_from/diff_to with merge-base '...' semantics, diff_commit) now scope the
+review-family tools (scan_folder / high_quality_scan / code_task /
+review_plan) to what actually changed — resolution DELEGATED to git (argv
+arrays, no shell interpolation; flag-shaped refs rejected before reaching
+git), applied at ONE dispatch chokepoint that rewrites input_files_paths, so
+the tools, the rules engine, --estimate and --preview all see the SAME scope.
+review_plan embeds the per-file hunks with git's own enclosing-function
+context (--function-context — no tree-sitter dependency, no hand-rolled brace
+matcher). FAIL-FAST: non-repo, zero-file diff, and mixed modes are loud
+errors, never a silent full-tree review.
+
+Two measured-in-live-fire guards: git diff --no-index exit 1 means
+'differences found' (the NORMAL untracked-file case), not failure; and a
+per-file 400KB hunk cap with VISIBLE skips — the first workspace run swept
+tracked dist bundles into a 46MB 'plan' that reviewed nothing.
+
+7 fixture-repo tests (real git init, never a mocked git). Full suite 1714.
+
+- Feat(cli): layered per-path review rules + rules-check (TRDD-3JQVBO7M)
+
+Distilled from OCR's rule.json concept, adapted to YAML and this plugin's
+rules: precedence --rules (explicit, LOUD on failure — the caller named that
+file) > <repo>/.llm-ext/rules.yaml > ~/.llm-externalizer/rules.yaml (opt-in) >
+none (zero-config default: tools unchanged, Auto-DUBC). Entries are
+{path-glob, rule}, first match in DECLARATION order, case-insensitive globs
+(**, *, ?, {a,b}, [abc]) via a small tested converter — no new dependency.
+Rules AUGMENT the caller's instructions, never replace them, applied at ONE
+dispatch chokepoint for scan_folder / high_quality_scan / code_task /
+review_plan through the same file resolver --estimate/--preview use.
+
+rules_check is the debug surface: which layer, which file, which entry fired.
+Ships the project's own .llm-ext/rules.yaml (FAIL-FAST encoded; tests exempt).
+
+Verified live: rules-check resolves the project layer with correct first-match
+(test file → test rule, source → TS rule); review-plan's emitted plan carries
+the matched rule. Full suite 1707 passed, README/catalog counts 42.
+
+- Feat(cli): --preview selection dry-run with per-path exclusion reasons (TRDD-SCLGL8T4); fix catalog test to 41
+
+Distilled from OCR's delegate-preview concept, adapted: an onExcluded reason
+channel threaded through walkDir ITSELF — never a second walker — so the
+preview can never drift from the real selection (the card's one-source-of-
+truth requirement). Reasons: binary extension, extension filter, excluded dir,
+hidden dir; in gitignore mode the ignored files are never enumerated by git
+ls-files, and the preview says so instead of pretending completeness.
+--preview composes with --estimate (selection + price in one dry-run, zero
+sends) — verified live: a .jsonl excluded with its reason, then priced.
+
+Also: index.test.ts's hardcoded catalog list updated to 41 — review_plan
+(9ae1258) landed while only targeted suites ran, so the full suite had ONE
+red test until now. Full suite: 1697 passed, exit 0.
+
+- Feat(estimate): self-calibrating EXPECTED line — output-token EWMA per tool×model (task #188)
+
+Closes the --estimate loop (a4b19bc): every completed request with a usage
+block folds completion_tokens into an EWMA sidecar (output-ewma.json, α=0.3,
+tmp+rename, best-effort IO), keyed tool::model via the usage context. The
+estimator prefers the EWMA once it has ≥3 real samples — one lucky short reply
+must not swing a budget decision — and says so in a note ('calibrated from N
+recorded runs'). The CEILING never calibrates: it is a guarantee, not a
+prediction. Auto-DUBC: the estimator sharpens itself from use with no user
+action.
+
+Verified live: a $0 chat wrote per-slot entries with real token counts (and
+incidentally re-proved #189 — the recorded trio excludes the classifier).
+87 tests green across estimate/usage-history/free-rotation suites.
+
+- Feat(free-mode): runtime auto-demotion of length+empty repeaters, self-healing (task #189 c)
+
+A model that burns its whole completion budget on reasoning and emits no
+content — the length+empty cost-stop and the exhausted-retries NO CONTENT
+label in provider/completion.ts — is unfit in current conditions whatever its
+ledger says. Three such strikes (the reasoning ladder's full course) demote it
+to the fail tier of the ensemble ranking via combinedFreeModelEvidence; ANY
+content-bearing success clears the strikes, so demotion is reversible with no
+user action in either direction (Auto-DUBC). Strikes persist cross-process
+(no-content-strikes.json, tmp+rename, best-effort IO that never throws into a
+live call). Deliberately a RANKING signal, not a rotation cooldown — the model
+stays available as a rotation fallback; it just stops being a preferred slot.
+
+119 tests green across the four free-mode suites.
+
+- Feat(free-mode): rank the free ensemble by bench evidence; clamp classifier-class models (task #189 a+b)
+
+2026-08-05 incident: the auto-selected free trio included
+nvidia/nemotron-3.5-content-safety:free — a SAFETY CLASSIFIER — for code
+review, and produced length+empty on nearly every call. selectFreeEnsembleModels
+was order-preserving slice(0,3): it consumed only the security-triage failed
+set and ignored the per-tool ledgers entirely.
+
+Fix: RANK, never hard-exclude (invariant 2 — a pool must degrade, not empty).
+parseBenchEvidence folds the 5 per-tool ledgers into pass/fail per model (pass
+wins across tools); rankFreeModelsByBenchEvidence sorts pass < unknown < fail
+with stable operator order inside tiers, and classifier-named ids clamp to the
+last tier on NAME alone. Measured subtlety that shaped the parser: ALL 17
+ledgered ':free' models carried 'below <tool> requirements' rows because the
+premium criteria reject the ':free' CLASS by design (allowFree:false) — a
+class rejection is not task-quality evidence, so requirements rows carry NO
+verdict; only scored golden-dataset failures demote.
+
+Verified live: a $0 chat now engages laguna + north-mini + nemotron-3-ultra;
+content-safety is out (grep count 0). 118 tests green across the four
+free-mode suites. Item (c) — runtime auto-demotion of length+empty repeaters —
+is the remaining half of #189.
+
+- Feat(cli): review-plan — $0 delegate mode where the host agent reviews (TRDD-SNAEERHU)
+
+Distilled from OpenCodeReview's delegate concept, adapted (never vendored —
+OCR is Go): llm-ext emits the deterministic scaffolding (file set via the
+SAME resolver seam --estimate uses, rubric, per-file protocol) with zero LLM
+calls, and the host agent reviews with its own model. Measured basis: on the
+planted-ground-truth range the host-agent workflow was the only configuration
+that found the planted bug — at $0 — while driven-LLM reviews found nothing
+at up to $0.55/run (reports/open-code-review-eval/20260805_005500+0200-
+final-trusted-results.md).
+
+Ships: catalog entry (CLI command generated), dispatch case, pure builder +
+5 unit tests, skill llm-externalizer-review (two-surface rule), estimator
+zero-cost entry, README 40→41 (doc-consistency gate green). Verified live
+through the bare command: 0.42s, zero sends. Remaining on the card: the
+no-settings boot path (STATE block).
+
+- Feat(cli): --estimate cost dry-run for every file/instruction tool (task #187)
+
+USER directive 2026-08-04: any command must be able to report its predicted
+cost INSTEAD of running, and the paid-mode guidance must tell agents to do so
+before every paid operation.
+
+estimate.ts is pure and network-free; buildEstimateDeps() in index.ts is the
+one place its seams bind to the real internals (resolveFolderPath, ensemble
+slots, model-cache pricing) so the estimate walks the SAME file set and model
+slots the run would use — an estimate over a different file set would be worse
+than none. Two numbers per slot: expected (calibrated constant, tightenable
+later from history) and ceiling (max_tokens every request — cannot be
+exceeded). Fail-fast: an unmodeled tool THROWS rather than printing a guess;
+mass_scout points at its own tighter registry-bound estimator.
+
+Verified end-to-end through the bare command: 93-file scan estimated in 3.2s,
+zero LLM sends, per-model output clamping visible, $0 on the free ensemble.
+11 new unit tests (arithmetic + fail-fast negatives).
+
+
+### Changed
+
+- Build(dist): rebuild bundles with the ultracode F0-F22 fixes
+
+Full gate on the finished state: tsc 0 errors, eslint 0 problems,
+vitest 1727 passed / 4 skipped (117 files).
+
+- Build: rebuild dist bundles with the day's six features
+
+esbuild output for e08b381..02d4707 (breaker fix, --estimate + EWMA,
+review-plan, --preview, rules engine, diff modes, roster ranking). The
+publish gate asserts the VERSION anchor inside dist/llm-ext.js, so dist must
+track src at release time.
+
+
+### Documentation
+
+- Docs: true counts, runnable examples, no gitignored-path citations (ultracode F17-F20, F22)
+
+- The always-installed usage rule said "40 commands" twice; the catalog is
+  42 (review-plan + rules-check landed in this range) — verified against
+  the live `llm-ext --help` output, and the example command list names the
+  two new ones.
+- Its cost-safety example ran scan-folder without --instructions, which
+  runScanFolder requires — the "real run" example failed as written. Both
+  example lines now carry the required flag.
+- README repository layout: 16 skills (llm-externalizer-review is the
+  16th) and 40 slash commands (the 35 was stale from an earlier range) —
+  both counted from the tree, not assumed.
+- The review skill and review-plan.ts cited a reports/ path as their
+  headline evidence, but reports/ is gitignored — the file ships in no
+  clone. The measurement is now cited by date, with the source of the
+  claim stated honestly.
+
+- Docs: showcase diff modes, per-path rules, and the dry-run pair in README + skills
+
+The generated --help already carried the new flags; the README feature list
+and the two review skills now teach WHEN to reach for them (diff modes for
+reviewing recent changes, rules-check to see which rubric fires, --estimate/
+--preview before any paid run). Doc-consistency gate green.
+
+- Docs: close TRDD-MNK2YNH0 — diff-mode review shipped (a3f03ae), the distillation board is DRAINED
+
+- Docs: close TRDD-3JQVBO7M — layered rules engine shipped (bee8f71), acceptance verified live
+
+- Docs: close TRDD-SCLGL8T4 — --preview shipped (c46a774), all acceptance verified live
+
+- Docs: close TRDD-SNAEERHU — review-plan v1 complete, all acceptance verified
+
+The closing edit: no-settings boot path verified in a throwaway HOME (Auto-DUBC
+generated defaults, exit 0). Deferred integrations live on their own cards
+(MNK2YNH0 diff args, 3JQVBO7M per-path rules).
+
+- Docs: add TRDD-SNAEERHU, TRDD-MNK2YNH0, TRDD-3JQVBO7M, TRDD-SCLGL8T4 — the OCR distillation backlog
+
+The 'filter what we integrate' deliverable of the OCR evaluation (USER
+directive 2026-08-04): four adapt-not-vendor features distilled from
+OpenCodeReview's deterministic half — review-plan delegate mode ($0 host-agent
+reviews), diff-mode scoping, layered per-path rules, --preview selection
+dry-run. Each card cites the measured evidence in
+reports/open-code-review-eval/ and carries the user's constraints verbatim:
+no UI, Auto-DUBC, YAML opt-in, crossplatform. Discarded (knowledge only, no
+card): OCR's agentic LLM loop (measured 0-precision half), its WebUI, its
+plaintext-key provider config.
+
+
+### Fixed
+
+- Fix(estimate): price the right models, resolve the same files, model pairs honestly (ultracode F5-F12, F21)
+
+The --estimate/--preview/rules resolver diverged from the real runs in
+eight confirmed ways; each is now fixed at the seam, with tests:
+
+- F5: high_quality_scan was priced against the cheap ensemble while the run
+  bills its single premium model — ensembleSlots(toolName) now returns the
+  hq slot for it; security_scan (mass_scouting subsystem, own model
+  selection) is refused with a pointer to its own estimator instead of
+  being priced on models it never sends to.
+- F6: the resolver read `excluded_dirs` while every real tool reads
+  `exclude_dirs`, so any dir-exclusion made dry-run and run resolve
+  different file sets. One name now (exclude_dirs), including review_plan's
+  schema.
+- F7: max_files/recursive/follow_symlinks are threaded into the resolver —
+  the estimate no longer walks the fixed default while the run honors the
+  caller's knobs.
+- F8: instructions-only and input_files_content-only chat are legal paid
+  runs (one request per slot); the estimator priced neither and aborted on
+  both. Zero-file chat now estimates, and content/instruction-file bytes
+  are counted.
+- F9: an uncompilable glob ([b-a]) threw at MATCH time inside dispatch,
+  taking the tools down from a non-explicit rules layer. globToRegExp now
+  fails closed (matches nothing) — per its own documented contract.
+- F10: callers supplying the prompt via instructions_files_paths silently
+  got no rules augmentation; the chokepoint now treats instruction files as
+  the first-class prompt source they are.
+- F11: inside {a,b} alternates, ** could not cross a slash and ? compiled
+  to a live regex quantifier. Alternates now get the same wildcard
+  translation as the main walk.
+- F12: compare_files sends one request per PAIR — git mode is $0 (no LLM),
+  file_pairs counts 2-element pairs, pair mode enforces exactly 2 files.
+- F21: files dropped by the max-files cap were silently omitted from
+  --preview; they now carry a "max-files cap" verdict when a reporter is
+  attached (the cap-free early exit is preserved otherwise).
+
+- Fix(free-mode): make bench evidence real, strikes self-heal, breaker truly transport-only (ultracode F0-F4)
+
+Adversarial multi-agent review of the unpushed stack confirmed five defects
+in the free-mode/cost-safety layer; all five are fixed with first-hand
+verification and regression tests:
+
+- F0: the ledger `qualified` field records only the catalog-requirements
+  gate, which rejects the whole ':free' class by design — so the #189
+  bench-evidence ranking could never see a quality verdict for the very
+  pool it ranks. Every scored benchmark run now persists the golden-dataset
+  verdict as `qualityPass` (backfilled on cache hits), and parseBenchEvidence
+  reads it as layer 1, keeping the old inference only as a legacy fallback.
+- F1: a no-content-demoted model drops out of the top-3 and may never be
+  called again, so the success-heals path could never fire — the demotion
+  was permanent, contradicting the store's self-healing contract. Strikes
+  now EXPIRE after a 24h TTL, and a new strike after the gap restarts the
+  window at 1 ("3 under current conditions", not "3 ever").
+- F2: model-shape HTTP-200 responses neither fed nor reset the transport
+  breaker, so sparse timeouts spread across hours of healthy 200s still
+  summed to the "consecutive" threshold. A 200 now records a transport
+  success — restoring "consecutive" to its literal meaning.
+- F3: backoffAttempt was incremented AFTER the cooldown sleep, so a waking
+  sleeper could advance a freshly-reset ladder past its end. The slot is now
+  claimed synchronously BEFORE the await.
+- F4: making the breaker transport-only deleted the accidental run-level
+  spend stop for paid models returning billable empty 200s. A deliberate
+  one replaces it: RUN_PAID_EMPTY_RETRY_BUDGET (30) empty retries per paid
+  model per process, then no more billed retries (free models exempt — $0).
+
+Test honesty (F13/F14): the breaker guard now counts EVERY textual
+recordServiceFailure() occurrence on comment-stripped code (the per-line
+anchor missed guarded calls), and pass-wins is asserted in BOTH orderings.
+
+- Fix(free-mode): transport-only circuit breaker + half-open on abort + rotation refuses global verdicts (TRDD ref: task #186)
+
+Livelock post-mortem (2026-08-04, verified by live probe: HTTP 200 while the
+breaker claimed outage): (1) empty/length responses over a WORKING transport
+fed the GLOBAL breaker, so a parallel scan on reasoning-heavy free models
+tripped it in seconds; (2) once backoff exhausted, nothing could ever reset the
+breaker (the only reset needed a completed request, and a tripped breaker
+aborts before any request) — every later call was stillborn; (3) the abort
+text contains 'overloaded', so classifyUnavailable called the GLOBAL verdict a
+per-model transient and rotation cycled the whole pool through 30s cooldowns
+forever, zero requests going out.
+
+Fixes: recordServiceFailure() now fires ONLY from the thrown-request branch;
+the exhausted-backoff abort half-opens the breaker; classifyUnavailable
+returns null on the breaker signature so callers fail fast with the breaker's
+own message. Guards: exact-count + signature assertions in
+free-rotation-coverage.test.ts, mutation-verified classify test with the
+verbatim production abort string.
+
+- Fix(benchmark): skip rows name the gate that actually fired; pin scan skill foreground
+
+Two independent skip causes share the code-task send-loop skip: per-profile
+free_only, and the paid-benchmark gates (paidBenchmarkWouldRefuse). The row's
+disqualifyReason is PERSISTED to the ledger, so a row claiming 'free_only
+active' on a profile where free_only is OFF sends the next reader hunting a
+flag that was never set. Say which gate fired.
+
+SKILL.md: Claude Code 2.1.218 made context:fork skills background by default,
+which would silently change /llm-externalizer-scan's contract (returns report
+paths inline). background:false pins the documented behavior.
+
+- Fix(benchmark): one malformed response no longer kills a whole tool's sweep
+
+The code_task phase died mid-run on "Unexpected end of JSON input" and was
+skipped, so all 16 models lost their run and the ledger stayed empty — after
+the free-pool sweep had finally been unblocked. Cause: `await res.json()` was
+the ONE unguarded failure mode in each runner. Network errors, timeouts,
+non-2xx and empty content all degrade to a per-file/per-case failure the
+pipeline understands; a 200 whose body is empty or truncated threw a bare
+SyntaxError straight out of the sweep.
+
+Free-tier providers return exactly that under load. The model that triggered
+it had already spent ~94s and 6440 output tokens on an earlier phase.
+
+The same unguarded call was in all four runners (code-task, scan-folder,
+check-specs, search-existing), so all four are fixed the same way: parse
+inside a try, and on failure emit the shape that runner already uses for a
+bad HTTP status — a per-file failure for the three that return results, a
+thrown-and-classified recoverable batch error for search-existing (with the
+original attached as `cause`, and the HTTP status in the message, which a
+bare SyntaxError never carried).
+
+This is not error-swallowing: nothing is hidden, the failure is still
+recorded and still costs the model its score. It changes the blast radius
+from "every model in this tool" to "this one response".
+
+Note: prettier reflowed neighbouring lines in these four files, so the diffs
+are larger than the logic change. The repo does not enforce prettier (82
+files are unformatted and there is no prettier publish gate), so this is
+local churn only.
+
+Verified: tsc 0, eslint 0, 1671/1671 vitest (up 1 — the master-switch-off
+test from 8097df1).
+
+Agent: llm-externalizer
+
+- Fix(benchmark): let the free pool actually be benchmarked in free mode
+
+Free-pool validation could never run. Every per-tool phase force-adds the
+incumbent ("ALWAYS assess the incumbent, so the gate has a fallback"), and
+that incumbent defaults to the PAID qwen/qwen-2.5-7b-instruct. With
+allow_paid_models false, assertPaidBenchmarkAllowed then refused the WHOLE
+run over a candidate the sweep had auto-added — so the $0 models it exists
+to score were never scored. That is why the per-tool ledgers were empty and
+no free model ever passed rank-0: not because free models failed, but
+because the sweep aborted before sending anything.
+
+The guard was right; the unconditional paid-incumbent injection was wrong.
+A refused incumbent is one we may not send anyway, and the selection gate
+reads the incumbent's id + pricing directly (incumbentIn/incumbentOut), not
+its assessment row — so skipping it costs nothing the guard was protecting.
+
+- discover.ts: new paidBenchmarkWouldRefuse(), mirroring BOTH of the assert's
+  throw branches (master switch AND per-run opt-in). Gating on the master
+  switch alone still aborted for a paid-profile user who omitted
+  --allow-paid-models-tests. Sharing one predicate is what stops the skip and
+  the refusal from drifting — and drift here means a paid model the assert
+  waved through and the phase then BILLED.
+- The 5 phases: skip the AUTO-ADDED incumbent when that predicate is true.
+  The assert is untouched for user-typed ids: an explicitly named paid model
+  must still be refused loudly, never silently dropped.
+- code-task: the send-loop skip keyed only on the per-profile free_only flag,
+  which is FALSE for anyone whose free mode comes from the top-level
+  allow_paid_models switch. That was a real path to billing a paid model, so
+  it now also honours the shared predicate.
+- config.ts + benchmark/index.ts: --bench-free-pool read resolveProfile()'s
+  freeModels, which config.ts gates on that same per-profile free_only — so
+  it silently fell back to the hardcoded FREE_POOL_SEED and benchmarked stale
+  seed ids instead of the pool actually in use. profileFreeModels() reads it
+  unconditionally. Not fixed inside resolveProfile: freeModels=[] when
+  !free_only is a runtime invariant there (it derives model/second_model/
+  third_model), so widening it would change the live ensemble.
+
+Verified: 16 models benchmarked across 5 ledgers where 0 had been, $0.0000
+spent, settings.yaml unchanged. tsc 0, eslint 0, 1670/1670 vitest. The new
+master-switch-off test was mutation-checked — stubbing the predicate to
+return false makes it fail — because a test that passes without the fix
+would just be another gate reporting green over nothing.
+
+Agent: llm-externalizer
+
+
+### Miscellaneous
+
+- Chore: track the tailored OpenCodeReview rule pack
+
+The project-level .opencodereview/rule.json (real-defects-only, FAIL-FAST
+encoded) serves any future OCR delegate-mode use on this repo and keeps the
+tree publish-clean. No key, no secrets — rules text only.
+
+
 ## [11.0.0] - 2026-08-01
 
 ### Added
