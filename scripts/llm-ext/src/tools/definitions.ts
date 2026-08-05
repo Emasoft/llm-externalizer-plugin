@@ -186,6 +186,12 @@ const scanFolderSchemaProps = {
     type: "string" as const,
     description: "Absolute path to the folder to scan recursively.",
   },
+  rules: {
+    type: "string" as const,
+    description:
+      "Explicit per-path rules-file path (highest layer; see rules_check). Omitted: " +
+      "<repo>/.llm-ext/rules.yaml, then ~/.llm-externalizer/rules.yaml, then none.",
+  },
   extensions: {
     type: "array" as const,
     items: { type: "string" as const },
@@ -401,6 +407,12 @@ export function buildTools(limitsText: string) {
               "Default: 400. Must fit within the weakest ensemble model's context. " +
               "Lower if you see hallucinations or truncations on large batches.",
           },
+          rules: {
+            type: "string",
+            description:
+              "Explicit per-path rules-file path (highest layer; see rules_check). Omitted: " +
+              "<repo>/.llm-ext/rules.yaml, then ~/.llm-externalizer/rules.yaml, then none.",
+          },
         },
         required: ["instructions"],
       },
@@ -446,7 +458,36 @@ export function buildTools(limitsText: string) {
             description:
               "Extra review instructions APPENDED to the built-in real-defects-only rubric.",
           },
+          rules: {
+            type: "string",
+            description:
+              "Explicit rules-file path (highest layer). Omitted: <repo>/.llm-ext/rules.yaml, " +
+              "then ~/.llm-externalizer/rules.yaml, then none. See rules_check.",
+          },
         },
+      },
+    },
+    {
+      name: "rules_check",
+      description:
+        "Show which per-path review rule applies to a file, and from which layer " +
+        "(--rules explicit > <repo>/.llm-ext/rules.yaml > ~/.llm-externalizer/rules.yaml > none). " +
+        "Pure lookup, no LLM call — the debug surface of the layered rules engine that " +
+        "augments scan_folder / code_task / review_plan instructions per matching path glob " +
+        "(first entry wins, declaration order, case-insensitive globs with **, *, ?, {a,b}, [abc]).",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          file_path: {
+            type: "string",
+            description: "The file path to look up (absolute or repo-relative).",
+          },
+          rules: {
+            type: "string",
+            description: "Explicit rules-file path overriding the layered lookup.",
+          },
+        },
+        required: ["file_path"],
       },
     },
     {

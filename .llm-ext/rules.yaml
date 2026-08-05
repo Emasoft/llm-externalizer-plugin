@@ -1,0 +1,5 @@
+rules:
+  - path: "**/*.test.ts"
+    rule: "Tests are exempt from the FAIL-FAST rule; judge them on assertion honesty only."
+  - path: "**/*.ts"
+    rule: "Strict-TS Node CLI backend, FAIL-FAST project: never report missing error handling or null checks."

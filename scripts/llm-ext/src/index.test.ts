@@ -76,6 +76,8 @@ describe('tool catalog', () => {
       // review_plan — $0 delegate mode (TRDD-SNAEERHU): scaffolding only,
       // the host agent reviews with its own model.
       'review_plan',
+      // rules_check — layered per-path rules debug lookup (TRDD-3JQVBO7M), no LLM.
+      'rules_check',
       'scan_folder',
       'high_quality_scan',
       'search_existing_implementations',

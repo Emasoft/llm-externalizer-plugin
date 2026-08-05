@@ -23,6 +23,11 @@ import { extname, join, basename, dirname, resolve, isAbsolute } from "node:path
 import { randomUUID } from "node:crypto";
 import { buildReviewPlan } from "./review-plan.js";
 import {
+  composeRuleInstructions,
+  matchRuleForFile,
+  resolveRulesLayers,
+} from "./review-rules.js";
+import {
   GROUP_HEADER_RE,
   GROUP_FOOTER_RE,
   parseFileGroups,
@@ -2712,6 +2717,50 @@ async function dispatchCallToolInner(
         `[llm-externalizer] Routing through ${modelOverride}${freeRequested ? " (free requested)" : " (auto-fallback)"}\n`,
       );
     }
+    // Layered per-path review rules (TRDD-3JQVBO7M): for the review-family
+    // tools, resolve the winning rules layer and AUGMENT the caller's
+    // instructions with the entries matching the actual file set — resolved
+    // through the SAME resolver --estimate/--preview use, so every dry-run
+    // and the real run agree on which rules fire. Zero-config default: no
+    // rules file anywhere → nothing changes (Auto-DUBC).
+    if (
+      name === "scan_folder" ||
+      name === "high_quality_scan" ||
+      name === "code_task" ||
+      name === "review_plan"
+    ) {
+      const a = args as Record<string, unknown>;
+      const hasInstr = typeof a?.instructions === "string";
+      if (hasInstr || name === "review_plan") {
+        try {
+          const resolvedRules = resolveRulesLayers({
+            explicitPath:
+              typeof a?.rules === "string" && a.rules.length > 0 ? a.rules : undefined,
+          });
+          if (resolvedRules) {
+            const fileSet = buildEstimateDeps().resolveFiles(a ?? {});
+            if (!fileSet.error && fileSet.files.length > 0) {
+              a.instructions = composeRuleInstructions(
+                hasInstr ? (a.instructions as string) : "",
+                fileSet.files,
+                resolvedRules,
+              );
+              process.stderr.write(
+                `[llm-externalizer] Review rules: ${resolvedRules.layer} layer (${resolvedRules.file})\n`,
+              );
+            }
+          }
+        } catch (err) {
+          // Only an EXPLICIT --rules path throws (the caller named that exact
+          // file); the layered lookups degrade silently. Loud beats silent here.
+          return {
+            content: [{ type: "text", text: `rules: ${(err as Error).message}` }],
+            isError: true,
+          };
+        }
+      }
+    }
+
     // T2.7 — Snapshot backend AFTER all pre-dispatch async work (settings
     // gating + resolveModelOverride). All `currentBackend.X` reads inside
     // the switch below MUST use this `backend` snapshot so a reload that
@@ -3049,6 +3098,40 @@ async function dispatchCallToolInner(
           modelOverride, // honours --free and credit-exhausted auto-fallback
         };
         return await runCodeTask(args as Record<string, unknown>, ctDeps);
+      }
+
+      case "rules_check": {
+        // TRDD-3JQVBO7M: which rule applies to a path, and from which layer.
+        // Pure lookup, no LLM — the debuggability half of the rules engine.
+        const a = args as Record<string, unknown>;
+        const target = typeof a?.file_path === "string" ? a.file_path : "";
+        if (!target) {
+          return {
+            content: [{ type: "text", text: "rules_check: file_path is required" }],
+            isError: true,
+          };
+        }
+        const resolvedRules = resolveRulesLayers({
+          explicitPath:
+            typeof a?.rules === "string" && a.rules.length > 0 ? a.rules : undefined,
+        });
+        if (!resolvedRules) {
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  "no rules layer found (checked: --rules, <repo>/.llm-ext/rules.yaml, " +
+                  `${join(getConfigDir(), "rules.yaml")}) — tools run with their built-in rubric`,
+              },
+            ],
+          };
+        }
+        const match = matchRuleForFile(target, resolvedRules.entries);
+        const text = match
+          ? `layer: ${resolvedRules.layer}\nfile: ${resolvedRules.file}\nmatched: \`${match.path}\`\nrule: ${match.rule}`
+          : `layer: ${resolvedRules.layer}\nfile: ${resolvedRules.file}\nmatched: (none — no entry's glob matches ${target})`;
+        return { content: [{ type: "text", text }] };
       }
 
       case "review_plan": {
