@@ -1,9 +1,9 @@
 ---
 trdd-id: SCLGL8T4
 title: --preview — dry-run file selection with per-file exclusion reasons
-column: todo
+column: complete
 created: 2026-08-05T00:06:05+0200
-updated: 2026-08-05T00:06:05+0200
+updated: 2026-08-05T15:35:00+0200
 current-owner: llm-externalizer-session
 task-type: feature
 ---
@@ -34,8 +34,8 @@ drifts).
 
 ## Acceptance
 
-- [ ] `llm-ext scan-folder --preview --folder_path src/` lists every candidate with
+- [x] `llm-ext scan-folder --preview --folder_path src/` lists every candidate with
       verdict+reason; exit 0; zero sends
-- [ ] `--preview --estimate` composes (selection + price in one dry-run)
-- [ ] walker emits reasons via the SAME code path the real run uses (drift-proof);
+- [x] `--preview --estimate` composes (selection + price in one dry-run)
+- [x] walker emits reasons via the SAME code path the real run uses (drift-proof);
       unit tests cover each exclusion class
