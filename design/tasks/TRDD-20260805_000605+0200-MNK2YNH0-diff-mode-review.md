@@ -1,9 +1,9 @@
 ---
 trdd-id: MNK2YNH0
 title: Diff-mode review — workspace, range, commit scoping for every review tool
-column: todo
+column: complete
 created: 2026-08-05T00:06:05+0200
-updated: 2026-08-05T00:06:05+0200
+updated: 2026-08-05T16:20:00+0200
 current-owner: llm-externalizer-session
 task-type: feature
 ---
@@ -27,8 +27,6 @@ crossplatform (git plumbing via child_process, no shell pipelines that break on 
 
 ## Acceptance
 
-- [ ] `scan_folder`/`code_task` accept diff args; file resolution delegates to git
-      (name-only + per-file hunks), estimator (--estimate, a4b19bc) understands them
-- [ ] hunk context includes the enclosing function (tree-sitter NOT required — a
-      brace/indent heuristic with honest limits beats a new native dependency)
-- [ ] tests: fixture repo with staged/unstaged/range cases; zero-diff → fail-fast
+- [x] scan_folder/high_quality_scan/code_task/review_plan accept diff args; resolution delegated to git (name-only + per-file hunks); --estimate/--preview understand them via the shared resolver (a3f03ae)
+- [x] hunk context includes the enclosing function via git's own --function-context (better than the planned brace heuristic: git's xfuncname machinery, zero new dependencies)
+- [x] tests: real fixture repo (git init) covering workspace/commit/range, untracked, binary + 400KB-cap skips, zero-diff and non-repo fail-fast
