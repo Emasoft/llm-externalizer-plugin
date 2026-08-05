@@ -77,8 +77,10 @@ export interface EstimateDeps {
   /**
    * The model slots the run would actually send to: ensemble slots in
    * remote-ensemble mode, else the single backend model. Never empty.
+   * `toolName` lets the seam price tool-specific routing — high_quality_scan
+   * bills its single premium model, not the cheap ensemble (ultracode F5).
    */
-  ensembleSlots(): EstimateModelSlot[];
+  ensembleSlots(toolName?: string): EstimateModelSlot[];
   /** Live catalog pricing, null when unknown (estimate degrades to tokens-only). */
   pricingFor(modelId: string): EstimatePricing | null;
   /** The max_tokens the run would default to when the caller passes none. */
@@ -122,7 +124,11 @@ export interface ToolEstimate {
 // a tool absent from BOTH sets is one this estimator does not understand,
 // and the answer is a fail-fast error, never a silently-wrong guess.
 
-/** One request per resolved file, per slot (the pipeline maps files→calls). */
+/** One request per resolved file, per slot (the pipeline maps files→calls).
+ *  NOT here (ultracode F5/F12, 2026-08-05): `compare_files` sends one request
+ *  per PAIR (handled by its own branch below), and `security_scan` runs
+ *  through the mass_scouting subsystem on its own model selection — pricing
+ *  either with this family produced confidently wrong numbers. */
 const PER_FILE_TOOLS = new Set([
   "scan_folder",
   "code_task",
@@ -131,9 +137,7 @@ const PER_FILE_TOOLS = new Set([
   "check_references",
   "check_against_specs",
   "search_existing_implementations",
-  "compare_files",
   "high_quality_scan",
-  "security_scan",
 ]);
 
 /** Exactly one request per slot regardless of input size. */
@@ -184,52 +188,157 @@ export function estimateToolRun(
         "or use mass-scout-estimate — this generic estimator would only be less precise.",
     );
   }
+  if (toolName === "security_scan") {
+    // security_scan routes through the mass_scouting subsystem with its own
+    // model selection — pricing it against the profile ensemble quoted models
+    // the run never sends to (ultracode F5).
+    throw new Error(
+      "security_scan runs through the mass_scouting subsystem with its own cost " +
+        "controls (--budget-usd / mass-scout-estimate) — this generic estimator " +
+        "would price the wrong models.",
+    );
+  }
 
   const perFile = PER_FILE_TOOLS.has(toolName);
   const singleCall = SINGLE_CALL_TOOLS.has(toolName);
-  if (!perFile && !singleCall) {
+  const pairTool = toolName === "compare_files";
+  if (!perFile && !singleCall && !pairTool) {
     throw new Error(
       `--estimate does not model '${toolName}' yet; refusing to print a guess. ` +
         "File an issue if you need it.",
     );
   }
 
-  const resolved = deps.resolveFiles(args);
-  if (resolved.error) {
-    throw new Error(`estimate aborted — file resolution failed: ${resolved.error}`);
-  }
-  const files = resolved.files;
-  if (files.length === 0) {
-    throw new Error("estimate aborted — the run would process zero files");
+  // compare_files (ultracode F12) resolves PAIRS, not a flat file list: git
+  // mode never calls an LLM at all, file_pairs batch sends one request per
+  // 2-element pair, and pair mode requires exactly 2 input_files_paths —
+  // mirroring the tool's own three documented input modes.
+  let comparePairs: [string, string][] | null = null;
+  if (pairTool) {
+    if (typeof args.git_repo === "string" && args.git_repo.length > 0) {
+      return {
+        tool: toolName,
+        files: 0,
+        requests: 0,
+        rows: [],
+        totalCeilingUsd: 0,
+        totalExpectedUsd: 0,
+        notes: ["git mode diffs refs locally — no LLM request, $0 by construction"],
+      };
+    }
+    if (Array.isArray(args.file_pairs) && args.file_pairs.length > 0) {
+      comparePairs = (args.file_pairs as unknown[]).filter(
+        (e): e is [string, string] =>
+          Array.isArray(e) &&
+          e.length === 2 &&
+          typeof e[0] === "string" &&
+          typeof e[1] === "string",
+      );
+      if (comparePairs.length === 0) {
+        throw new Error(
+          "estimate aborted — file_pairs contains no [fileA, fileB] pairs " +
+            "(single-element entries are group markers, not pairs)",
+        );
+      }
+    }
   }
 
+  // Byte inputs the request payload carries beyond the file bodies:
+  // inline instructions, instruction FILES (resolvePrompt inlines their
+  // contents into every request), and chat's inline input_files_content.
+  const instrFilePaths = Array.isArray(args.instructions_files_paths)
+    ? (args.instructions_files_paths as unknown[]).filter(
+        (p): p is string => typeof p === "string" && p.length > 0,
+      )
+    : typeof args.instructions_files_paths === "string"
+      ? [args.instructions_files_paths]
+      : [];
   const instructionBytes =
-    typeof args.instructions === "string" ? Buffer.byteLength(args.instructions) : 0;
+    (typeof args.instructions === "string" ? Buffer.byteLength(args.instructions) : 0) +
+    instrFilePaths.reduce((a, p) => a + deps.fileSizeBytes(p), 0);
+  const contentBytes =
+    typeof args.input_files_content === "string"
+      ? Buffer.byteLength(args.input_files_content)
+      : 0;
+
+  let files: string[];
+  let chatZeroFiles = false;
+  if (comparePairs) {
+    files = comparePairs.flat();
+  } else {
+    const resolved = deps.resolveFiles(args);
+    // chat is billable with ZERO files (ultracode F8): instructions-only and
+    // input_files_content-only calls are legal paid runs that send exactly
+    // one request per slot — aborting on them made "estimate before every
+    // paid run" impossible for that shape.
+    chatZeroFiles =
+      toolName === "chat" &&
+      (resolved.error !== undefined || resolved.files.length === 0) &&
+      (typeof args.instructions === "string" || instrFilePaths.length > 0 || contentBytes > 0);
+    if (resolved.error && !chatZeroFiles) {
+      throw new Error(`estimate aborted — file resolution failed: ${resolved.error}`);
+    }
+    files = chatZeroFiles ? [] : resolved.files;
+    if (files.length === 0 && !chatZeroFiles) {
+      throw new Error("estimate aborted — the run would process zero files");
+    }
+    if (pairTool) {
+      if (files.length !== 2) {
+        throw new Error(
+          "estimate aborted — compare_files pair mode needs exactly 2 input_files_paths " +
+            "(or use file_pairs for batches, or git_repo for a $0 git diff)",
+        );
+      }
+      comparePairs = [[files[0], files[1]]];
+    }
+  }
+  if (chatZeroFiles) {
+    notes.push("no input files — instructions/input_files_content-only chat: one request per slot");
+  }
+
   const fileBytes = files.map((f) => deps.fileSizeBytes(f));
   const totalFileBytes = fileBytes.reduce((a, b) => a + b, 0);
 
   // Input tokens across the whole run (per slot): per-file tools re-send the
-  // instructions + template with EVERY request; single-call tools once.
-  const requestsPerSlot = perFile ? files.length : 1;
-  const perSlotInputTokens = perFile
-    ? fileBytes.reduce(
-        (sum, bytes) =>
+  // instructions + template with EVERY request; single-call tools once;
+  // compare_files once per pair (payload ≈ 2×(A+B): the unified diff plus
+  // both full file bodies when they fit — worst-case-shaped on purpose).
+  const requestsPerSlot = comparePairs
+    ? comparePairs.length
+    : perFile && !chatZeroFiles
+      ? files.length
+      : 1;
+  const perSlotInputTokens = comparePairs
+    ? comparePairs.reduce(
+        (sum, [a, b]) =>
           sum +
-          estimateTokens(bytes) +
+          estimateTokens(2 * (deps.fileSizeBytes(a) + deps.fileSizeBytes(b))) +
           estimateTokens(instructionBytes) +
           PROMPT_OVERHEAD_TOKENS,
         0,
       )
-    : estimateTokens(totalFileBytes) +
-      estimateTokens(instructionBytes) +
-      PROMPT_OVERHEAD_TOKENS;
+    : perFile && !chatZeroFiles
+      ? fileBytes.reduce(
+          (sum, bytes) =>
+            sum +
+            estimateTokens(bytes) +
+            estimateTokens(instructionBytes + contentBytes) +
+            PROMPT_OVERHEAD_TOKENS,
+          0,
+        )
+      : estimateTokens(totalFileBytes) +
+        estimateTokens(instructionBytes + contentBytes) +
+        PROMPT_OVERHEAD_TOKENS;
+  if (comparePairs) {
+    notes.push("compare_files: one request per pair, payload sized ≈2×(A+B) (diff + full bodies)");
+  }
 
   const requestedMax =
     typeof args.max_tokens === "number" && args.max_tokens > 0
       ? args.max_tokens
       : deps.defaultMaxTokens();
 
-  const slots = deps.ensembleSlots();
+  const slots = deps.ensembleSlots(toolName);
   if (slots.length === 0) {
     throw new Error("estimate aborted — no model slot resolved (no active profile?)");
   }

@@ -28,6 +28,25 @@ describe("globToRegExp — the documented subset", () => {
     expect(globToRegExp("[ab].ts").test("b.ts")).toBe(true);
     expect(globToRegExp("SRC/*.TS").test("src/a.ts")).toBe(true); // case-insensitive
   });
+
+  it("brace alternates translate wildcards like the main walk (ultracode F11): ? is one char, ** crosses slashes", () => {
+    // `?` inside an alternate must mean "one non-slash char", never the regex
+    // "optional previous char" quantifier it silently compiled to before.
+    expect(globToRegExp("{a?c}.ts").test("abc.ts")).toBe(true);
+    expect(globToRegExp("{a?c}.ts").test("ac.ts")).toBe(false); // quantifier bug would match
+    // `**` inside an alternate crosses segments; bare `*` still stops at `/`.
+    expect(globToRegExp("src/{**/util,lib}/x.ts").test("src/deep/nested/util/x.ts")).toBe(true);
+    expect(globToRegExp("src/{*/util,lib}/x.ts").test("src/deep/nested/util/x.ts")).toBe(false);
+  });
+
+  it("NEVER throws on an uncompilable pattern (ultracode F9) — it fails closed instead", () => {
+    // `[b-a]` is a regex-invalid class range; throwing here used to happen at
+    // MATCH time inside dispatch, taking the tools down from a non-explicit
+    // rules layer — the exact thing the silent-degrade contract forbids.
+    expect(() => globToRegExp("[b-a].ts")).not.toThrow();
+    expect(globToRegExp("[b-a].ts").test("a.ts")).toBe(false); // matches nothing
+    expect(ruleGlobMatches("[b-a].ts", "/repo/a.ts")).toBe(false);
+  });
 });
 
 describe("ruleGlobMatches — repo-relative patterns match absolute paths", () => {

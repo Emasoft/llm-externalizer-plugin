@@ -136,6 +136,96 @@ describe("estimateToolRun — fail-fast negatives", () => {
       /own estimator/,
     );
   });
+
+  it("refuses security_scan — it routes through mass_scouting on models this estimator cannot see (ultracode F5)", () => {
+    expect(() => estimateToolRun("security_scan", {}, deps())).toThrow(
+      /mass_scouting subsystem/,
+    );
+  });
+});
+
+describe("chat with zero files (ultracode F8) — a legal billable run, one request per slot", () => {
+  it("instructions-only chat estimates one request per slot instead of aborting", () => {
+    const e = estimateToolRun(
+      "chat",
+      { instructions: "x".repeat(400) },
+      deps({ resolveFiles: () => ({ files: [], error: "no input_files_paths or folder_path given" }) }),
+    );
+    expect(e.files).toBe(0);
+    expect(e.requests).toBe(1);
+    // 100 (instructions) + overhead, no file bytes.
+    expect(e.rows[0].inputTokens).toBe(100 + PROMPT_OVERHEAD_TOKENS);
+    expect(e.notes.join("\n")).toMatch(/instructions\/input_files_content-only chat/);
+  });
+
+  it("input_files_content bytes are counted — they are billed like any other prompt bytes", () => {
+    const e = estimateToolRun(
+      "chat",
+      { input_files_content: "y".repeat(4000) },
+      deps({ resolveFiles: () => ({ files: [] }) }),
+    );
+    expect(e.requests).toBe(1);
+    expect(e.rows[0].inputTokens).toBe(1000 + PROMPT_OVERHEAD_TOKENS);
+  });
+
+  it("a NON-chat tool with zero files still throws — only chat is billable file-less", () => {
+    expect(() =>
+      estimateToolRun(
+        "code_task",
+        { instructions: "review" },
+        deps({ resolveFiles: () => ({ files: [] }) }),
+      ),
+    ).toThrow(/zero files/);
+  });
+});
+
+describe("compare_files (ultracode F12) — pairs, not a flat file list", () => {
+  it("git mode is $0 by construction — the tool diffs refs locally without any LLM", () => {
+    const e = estimateToolRun("compare_files", { git_repo: "/repo", from_ref: "a" }, deps());
+    expect(e.requests).toBe(0);
+    expect(e.totalCeilingUsd).toBe(0);
+    expect(e.notes.join("\n")).toMatch(/no LLM request/);
+  });
+
+  it("file_pairs batch: one request per 2-element pair; group markers are not pairs", () => {
+    const e = estimateToolRun(
+      "compare_files",
+      { file_pairs: [["group: g1"], ["/a.ts", "/b.ts"], ["/c.ts", "/d.ts"]] },
+      deps(),
+    );
+    expect(e.requests).toBe(2); // 2 pairs × 1 slot
+    // Per pair: 2×(4000+4000) bytes → 4000 tokens, + overhead; × 2 pairs.
+    expect(e.rows[0].inputTokens).toBe(2 * (4000 + PROMPT_OVERHEAD_TOKENS));
+  });
+
+  it("pair mode requires exactly 2 input_files_paths — mirroring the tool's own contract", () => {
+    expect(() =>
+      estimateToolRun(
+        "compare_files",
+        {},
+        deps({ resolveFiles: () => ({ files: ["/a.ts", "/b.ts", "/c.ts"] }) }),
+      ),
+    ).toThrow(/exactly 2/);
+    const e = estimateToolRun("compare_files", {}, deps()); // default deps: 2 files
+    expect(e.requests).toBe(1);
+  });
+});
+
+describe("per-tool model slots (ultracode F5)", () => {
+  it("the estimator asks the seam for slots WITH the tool name, so tool-specific routing can be priced", () => {
+    const seen: (string | undefined)[] = [];
+    estimateToolRun(
+      "high_quality_scan",
+      { instructions: "audit" },
+      deps({
+        ensembleSlots: (toolName) => {
+          seen.push(toolName);
+          return [{ id: "z-ai/glm-5.2", maxOutput: 8000 }];
+        },
+      }),
+    );
+    expect(seen).toEqual(["high_quality_scan"]);
+  });
 });
 
 describe("calibrated EXPECTED (task #188)", () => {

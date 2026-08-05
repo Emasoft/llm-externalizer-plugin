@@ -1090,7 +1090,15 @@ export function walkDir(
       const extraExcludeSet = new Set(options?.exclude ?? []);
       const results: string[] = [];
       for (const fullPath of gitResults) {
-        if (results.length >= maxFiles) break;
+        if (results.length >= maxFiles) {
+          // The cap is a VERDICT, not a silent omission (ultracode F21): a
+          // preview that drops the tail with no reason reads as "covered
+          // everything". Report each capped file when a reporter is attached;
+          // keep the cheap early exit when nobody is listening.
+          if (!options?.onExcluded) break;
+          onExcluded(fullPath, "max-files cap");
+          continue;
+        }
         if (skipBinary && isBinaryExtension(fullPath)) {
           onExcluded(fullPath, "binary extension");
           continue;
@@ -1129,8 +1137,20 @@ export function walkDir(
   // Track visited real paths to detect circular symlinks
   const visitedPaths = new Set<string>();
 
+  // Same cap-is-a-verdict contract as the git branch above (ultracode F21):
+  // with a reporter attached the walk continues past the cap so every
+  // dropped file gets a "max-files cap" reason; without one it early-exits
+  // exactly as before.
+  const addFile = (p: string): void => {
+    if (results.length >= maxFiles) {
+      onExcluded(p, "max-files cap");
+      return;
+    }
+    results.push(p);
+  };
+
   function recurse(dir: string) {
-    if (results.length >= maxFiles) return;
+    if (results.length >= maxFiles && !options?.onExcluded) return;
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
@@ -1138,7 +1158,7 @@ export function walkDir(
       return;
     }
     for (const entry of entries) {
-      if (results.length >= maxFiles) return;
+      if (results.length >= maxFiles && !options?.onExcluded) return;
       const fullPath = join(dir, entry.name);
 
       // Resolve symlinks: follow them to their target (file or dir)
@@ -1166,7 +1186,7 @@ export function walkDir(
                 continue;
               }
             }
-            results.push(fullPath);
+            addFile(fullPath);
           }
         } catch {
           continue; // broken symlink — skip
@@ -1206,7 +1226,7 @@ export function walkDir(
             continue;
           }
         }
-        results.push(fullPath);
+        addFile(fullPath);
       }
     }
   }

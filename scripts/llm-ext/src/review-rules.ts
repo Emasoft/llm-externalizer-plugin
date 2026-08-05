@@ -81,10 +81,23 @@ export function globToRegExp(glob: string): RegExp {
         re += "\\{";
         i += 1;
       } else {
+        // Alternates get the SAME wildcard translation as the main walk:
+        // `**` → any depth, `*` → within-segment, `?` → one non-slash char.
+        // The NUL placeholder (legal in no filename, hence in no glob) keeps `**` from being eaten by the `*` pass, and
+        // translating `?` matters doubly — untranslated it was a live regex
+        // QUANTIFIER ("optional previous char"), silently changing the
+        // pattern's meaning (ultracode F11, 2026-08-05).
         const alts = glob
           .slice(i + 1, end)
           .split(",")
-          .map((a) => a.replace(/[.+^$()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*"));
+          .map((a) =>
+            a
+              .replace(/[.+^$()|[\]\\]/g, "\\$&")
+              .replace(/\*\*/g, "\u0000")
+              .replace(/\*/g, "[^/]*")
+              .replace(/\?/g, "[^/]")
+              .split("\u0000").join(".*"),
+          );
         re += `(?:${alts.join("|")})`;
         i = end + 1;
       }
@@ -102,7 +115,17 @@ export function globToRegExp(glob: string): RegExp {
       i += 1;
     }
   }
-  return new RegExp(`^${re}$`, "i");
+  // NEVER throw (ultracode F9, 2026-08-05): `[...]` class content is compiled
+  // verbatim, so a regex-invalid class like `[b-a]` used to throw HERE — at
+  // MATCH time, inside composeRuleInstructions during dispatch — taking the
+  // tools down from a non-explicit project/user rules layer, the exact thing
+  // the module contract forbids. Fail closed instead: an uncompilable pattern
+  // matches nothing, which rules-check makes visible.
+  try {
+    return new RegExp(`^${re}$`, "i");
+  } catch {
+    return /^(?!)$/; // never matches anything
+  }
 }
 
 /**

@@ -462,7 +462,7 @@ export function buildTools(limitsText: string) {
         "calling any LLM ($0, no API key, ~1s). The HOST agent then performs the actual review " +
         "with its own model. Use when the caller (e.g. Claude Code on a subscription) should do " +
         "the reviewing itself instead of spending external tokens. Accepts the same file inputs " +
-        "as scan_folder: input_files_paths OR folder_path (+ extensions, excluded_dirs, " +
+        "as scan_folder: input_files_paths OR folder_path (+ extensions, exclude_dirs, " +
         "use_gitignore).",
       inputSchema: {
         type: "object" as const,
@@ -481,7 +481,7 @@ export function buildTools(limitsText: string) {
             items: { type: "string" },
             description: "Optional extension filter for folder_path expansion.",
           },
-          excluded_dirs: {
+          exclude_dirs: {
             type: "array",
             items: { type: "string" },
             description: "Directory names to exclude from folder_path expansion.",

@@ -1700,10 +1700,26 @@ export function buildEstimateDeps(): import("./estimate.js").EstimateDeps {
           extensions: Array.isArray(args.extensions)
             ? (args.extensions as string[])
             : undefined,
-          excludeDirs: Array.isArray(args.excluded_dirs)
-            ? (args.excluded_dirs as string[])
+          // `exclude_dirs` — the SAME name every real tool reads (scan_folder,
+          // chat, batch_check…). This resolver briefly read `excluded_dirs`,
+          // which made every dry-run/preview/rules pass resolve a DIFFERENT
+          // file set than the run whenever a dir-exclusion was passed
+          // (ultracode F6, 2026-08-05).
+          excludeDirs: Array.isArray(args.exclude_dirs)
+            ? (args.exclude_dirs as string[])
             : undefined,
           useGitignore: args.use_gitignore !== false,
+          // Mirror the walk-shape knobs the real tools honor (ultracode F7):
+          // an estimate walking the fixed 2500-file default while the run
+          // honors a caller-set max_files (or non-recursive / no-symlinks)
+          // counts the wrong files.
+          recursive: typeof args.recursive === "boolean" ? args.recursive : undefined,
+          followSymlinks:
+            typeof args.follow_symlinks === "boolean" ? args.follow_symlinks : undefined,
+          maxFiles:
+            typeof args.max_files === "number" && args.max_files > 0
+              ? args.max_files
+              : undefined,
           onExcluded,
         });
       }
@@ -1716,7 +1732,17 @@ export function buildEstimateDeps(): import("./estimate.js").EstimateDeps {
         return 0; // unreadable file costs nothing in the estimate; the run itself will fail loudly on it
       }
     },
-    ensembleSlots() {
+    ensembleSlots(toolName) {
+      // high_quality_scan bills a SINGLE premium model (hq.id, useEnsemble
+      // false — see its dispatch case), never the cheap ensemble. Pricing it
+      // against the ensemble under-quoted the one paid-by-design tool where
+      // the budget gate matters most (ultracode F5, 2026-08-05).
+      if (toolName === "high_quality_scan") {
+        const hq = activeResolved?.highQualityModel ?? HIGH_QUALITY_MODEL_DEFAULTS;
+        return [
+          { id: hq.id, maxOutput: resolveEnsembleModelLimits(hq.id, undefined).maxOutput },
+        ];
+      }
       const ensemble = getEnsembleModels();
       if (ensemble.length > 0)
         return ensemble.map((m) => ({ id: m.id, maxOutput: m.maxOutput }));
@@ -2777,7 +2803,17 @@ async function dispatchCallToolInner(
     ) {
       const a = args as Record<string, unknown>;
       const hasInstr = typeof a?.instructions === "string";
-      if (hasInstr || name === "review_plan") {
+      // instructions_files_paths is a first-class way to supply the prompt
+      // (resolvePrompt appends the files' contents after a.instructions), so
+      // callers using it must get the SAME rules augmentation the identical
+      // inline-instructions call gets (ultracode F10, 2026-08-05). The rules
+      // text lands in a.instructions; resolvePrompt then appends the caller's
+      // instruction files after it — augmented, never replaced.
+      const hasInstrFiles =
+        typeof a?.instructions_files_paths === "string" ||
+        (Array.isArray(a?.instructions_files_paths) &&
+          (a.instructions_files_paths as unknown[]).length > 0);
+      if (hasInstr || hasInstrFiles || name === "review_plan") {
         try {
           const resolvedRules = resolveRulesLayers({
             explicitPath:
