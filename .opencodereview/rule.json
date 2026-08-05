@@ -1,0 +1,9 @@
+{
+  "exclude": ["**/dist/**", "**/node_modules/**"],
+  "rules": [
+    {
+      "path": "**/*.{ts,js}",
+      "rule": "This is a strict-TypeScript Node.js CLI backend (no React, no browser, no DOM). Report ONLY real defects: wrong logic or inverted conditions, data corruption, race conditions, security exploits, broken local references, misleading data persisted to ledgers or reports. Do NOT report: missing null/undefined checks (strict TypeScript null-checking already covers them), missing error handling (this project follows a deliberate FAIL-FAST rule: errors must propagate, try/catch exists only where a comment explains why), style, formatting, naming, comment density, or hypothetical hardening. Cite exact line numbers only for lines that actually exist in the file."
+    }
+  ]
+}
