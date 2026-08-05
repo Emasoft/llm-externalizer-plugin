@@ -30,7 +30,11 @@ $0.55/run.
    "${CLAUDE_PLUGIN_ROOT}/bin/llm-ext" review-plan --folder_path <target> \
      --use_gitignore true [--instructions "<extra>"]
    ```
-   (Explicit files: `--input_files_paths <a> <b> …` instead of `--folder_path`.)
+   (Explicit files: `--input_files_paths <a> <b> …` instead of `--folder_path`.
+   Reviewing recent changes: `--diff_workspace true`, `--diff_from <ref> --diff_to <ref>`,
+   or `--diff_commit <sha>` — the plan then EMBEDS the per-file hunks with
+   enclosing-function context, so you review the changes and open full files
+   only when a hunk demands it.)
 3. Follow the plan's protocol EXACTLY: read each listed file IN FULL, apply the
    rubric, and verify every candidate finding against the actual code before
    reporting it — a claim refutable by three lines of context is worse than none.
