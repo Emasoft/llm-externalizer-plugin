@@ -78,6 +78,15 @@ export interface EstimateDeps {
   pricingFor(modelId: string): EstimatePricing | null;
   /** The max_tokens the run would default to when the caller passes none. */
   defaultMaxTokens(): number;
+  /**
+   * Calibrated mean completion tokens per request for a tool×model (the
+   * output-EWMA sidecar, task #188), or null when no calibration exists.
+   * Optional so pure tests and older callers need not provide it.
+   */
+  calibratedOutputTokens?(
+    toolName: string,
+    modelId: string,
+  ): { ewma: number; n: number } | null;
 }
 
 export interface ModelEstimateRow {
@@ -226,8 +235,21 @@ export function estimateToolRun(
   for (const slot of slots) {
     const perRequestCeil = Math.min(requestedMax, slot.maxOutput);
     const outCeil = perRequestCeil * requestsPerSlot;
-    const outExp =
-      Math.min(EXPECTED_OUTPUT_TOKENS_PER_REQUEST, perRequestCeil) * requestsPerSlot;
+    // EXPECTED prefers the calibrated EWMA once it has ≥3 real samples for
+    // this tool×model (task #188); the CEILING is a guarantee and never
+    // calibrates. Below 3 samples the constant stays — one lucky short reply
+    // must not swing a budget decision.
+    const calibrated = deps.calibratedOutputTokens?.(toolName, slot.id) ?? null;
+    const perRequestExpected =
+      calibrated && calibrated.n >= 3
+        ? Math.ceil(calibrated.ewma)
+        : EXPECTED_OUTPUT_TOKENS_PER_REQUEST;
+    if (calibrated && calibrated.n >= 3) {
+      notes.push(
+        `${slot.id}: expected calibrated from ${calibrated.n} recorded runs (~${Math.ceil(calibrated.ewma)} tok/request)`,
+      );
+    }
+    const outExp = Math.min(perRequestExpected, perRequestCeil) * requestsPerSlot;
     const pricing = slot.id.endsWith(":free")
       ? { inputUsdPerM: 0, outputUsdPerM: 0 }
       : deps.pricingFor(slot.id);

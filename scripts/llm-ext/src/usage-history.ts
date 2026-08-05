@@ -34,7 +34,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 
@@ -286,4 +286,86 @@ export function withUsageContext<T>(
     opId: newOpId(),
   };
   return ctxStore.run(ctx, fn);
+}
+
+// ── Output-token EWMA (task #188) ────────────────────────────────────────
+// The --estimate dry-run's EXPECTED line uses a fixed per-request constant
+// until real data exists. This sidecar IS that data: every completed request
+// with a usage block folds its completion_tokens into an EWMA per tool×model,
+// and buildEstimateDeps reads it back. Auto-DUBC: the estimator calibrates
+// itself from use, no user action. Same best-effort discipline as the history
+// log — a failed write loses one sample, never breaks a live call.
+
+export interface OutputEwmaEntry {
+  /** Exponentially-weighted mean of completion_tokens per request. */
+  ewma: number;
+  /** Samples folded so far — consumers require n ≥ 3 before trusting it. */
+  n: number;
+}
+
+/** α = 0.3: reactive enough to track a model change within a handful of runs,
+ *  smooth enough that one outlier reply doesn't swing the estimate. */
+export const OUTPUT_EWMA_ALPHA = 0.3;
+
+/** Pure fold — exported so the maths is unit-testable without fs. */
+export function foldOutputEwma(
+  prev: OutputEwmaEntry | undefined,
+  sample: number,
+  alpha: number = OUTPUT_EWMA_ALPHA,
+): OutputEwmaEntry {
+  if (!prev || prev.n <= 0) return { ewma: sample, n: 1 };
+  return { ewma: alpha * sample + (1 - alpha) * prev.ewma, n: prev.n + 1 };
+}
+
+interface OutputEwmaStore {
+  version: 1;
+  /** key `tool::model` → entry. */
+  entries: Record<string, OutputEwmaEntry>;
+}
+
+function ewmaFilePath(): string {
+  return join(getConfigDir(), "output-ewma.json");
+}
+
+function loadEwmaStore(): OutputEwmaStore {
+  try {
+    const parsed = JSON.parse(readFileSync(ewmaFilePath(), "utf-8")) as OutputEwmaStore;
+    if (parsed && parsed.version === 1 && parsed.entries) return parsed;
+  } catch {
+    /* absent/corrupt → fresh */
+  }
+  return { version: 1, entries: {} };
+}
+
+/**
+ * Fold one completed request's completion_tokens into the store. The tool
+ * name comes from the active usage context; a direct/utility call with no
+ * context is skipped (there is no tool to calibrate for).
+ */
+export function recordOutputTokensSample(model: string, outputTokens: number): void {
+  try {
+    const tool = ctxStore.getStore()?.tool;
+    if (!tool || !model || !Number.isFinite(outputTokens) || outputTokens < 0) return;
+    const store = loadEwmaStore();
+    const key = `${tool}::${model}`;
+    store.entries[key] = foldOutputEwma(store.entries[key], outputTokens);
+    mkdirSync(getConfigDir(), { recursive: true });
+    const tmp = ewmaFilePath() + ".tmp";
+    writeFileSync(tmp, JSON.stringify(store));
+    renameSync(tmp, ewmaFilePath());
+  } catch {
+    /* best-effort — losing one sample must never break the call */
+  }
+}
+
+/** The calibrated entry for a tool×model, or null when none exists. */
+export function calibratedOutputTokens(
+  tool: string,
+  model: string,
+): OutputEwmaEntry | null {
+  try {
+    return loadEwmaStore().entries[`${tool}::${model}`] ?? null;
+  } catch {
+    return null;
+  }
 }

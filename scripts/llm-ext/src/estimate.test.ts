@@ -14,6 +14,7 @@ import {
   EXPECTED_OUTPUT_TOKENS_PER_REQUEST,
   type EstimateDeps,
 } from "./estimate.js";
+import { foldOutputEwma } from "./usage-history.js";
 
 /** 4000-byte files → exactly 1000 tokens each under the bytes/4 model. */
 function deps(overrides: Partial<EstimateDeps> = {}): EstimateDeps {
@@ -134,6 +135,38 @@ describe("estimateToolRun — fail-fast negatives", () => {
     expect(() => estimateToolRun("mass_scout_run", {}, deps())).toThrow(
       /own estimator/,
     );
+  });
+});
+
+describe("calibrated EXPECTED (task #188)", () => {
+  it("uses the EWMA once n ≥ 3, clamped by the ceiling; the CEILING never calibrates", () => {
+    const e = estimateToolRun(
+      "scan_folder",
+      {},
+      deps({ calibratedOutputTokens: () => ({ ewma: 900.4, n: 5 }) }),
+    );
+    // 2 requests × ceil(900.4) = 1802 expected; ceiling stays 2 × 4000.
+    expect(e.rows[0].outputExpectedTokens).toBe(2 * 901);
+    expect(e.rows[0].outputCeilingTokens).toBe(8000);
+    expect(e.notes.join(" ")).toContain("calibrated from 5 recorded runs");
+  });
+
+  it("ignores a calibration with fewer than 3 samples — one lucky reply must not swing a budget", () => {
+    const e = estimateToolRun(
+      "scan_folder",
+      {},
+      deps({ calibratedOutputTokens: () => ({ ewma: 5, n: 2 }) }),
+    );
+    expect(e.rows[0].outputExpectedTokens).toBe(2 * EXPECTED_OUTPUT_TOKENS_PER_REQUEST);
+    expect(e.notes.join(" ")).not.toContain("calibrated");
+  });
+
+  it("EWMA fold maths: first sample seeds, later samples blend at α", () => {
+    const first = foldOutputEwma(undefined, 1000);
+    expect(first).toEqual({ ewma: 1000, n: 1 });
+    const second = foldOutputEwma(first, 2000, 0.3);
+    expect(second.n).toBe(2);
+    expect(second.ewma).toBeCloseTo(0.3 * 2000 + 0.7 * 1000, 10);
   });
 });
 

@@ -35,7 +35,7 @@ import { appendFileSync } from "node:fs";
 import { applyModelOverrides } from "../request-overrides.js";
 import { safeReadText, safeReadJson } from "../safe-body.js";
 import { appendModelEvent } from "../model-events.js";
-import { recordRequest } from "../usage-history.js";
+import { recordOutputTokensSample, recordRequest } from "../usage-history.js";
 import { HEARTBEAT_INTERVAL_MS, type ProgressFn } from "../rate-limiter.js";
 
 import { fetchWithTimeout, fetchWithRetry429, sanitizeProviderError } from "./http.js";
@@ -499,6 +499,11 @@ export async function chatCompletionSimple(
       // cost, not a running sum). Native delegation above is recorded inside
       // chatCompletionNative, so this records ONLY the OpenAI-compat path.
       recordRequest({ ok: true, durationMs: Date.now() - startTime, costUsd: usage?.cost ?? 0 });
+      // Task #188: fold completion_tokens into the per-tool×model output EWMA
+      // so --estimate's EXPECTED line calibrates itself from real runs.
+      if (typeof usage?.completion_tokens === "number") {
+        recordOutputTokensSample(model, usage.completion_tokens);
+      }
       return { content, model, usage, finishReason, truncated: false };
     }
 
@@ -778,6 +783,10 @@ export async function chatCompletionJSON(
     // branch above is recorded inside chatCompletionNative, so this records
     // ONLY the OpenAI-compat structured-output path.
     recordRequest({ ok: true, durationMs: Date.now() - jsonStartTime, costUsd: usage?.cost ?? 0 });
+    // Task #188: same EWMA fold as the plain-completion path above.
+    if (typeof usage?.completion_tokens === "number" && model) {
+      recordOutputTokensSample(model, usage.completion_tokens);
+    }
     return { parsed, model, usage, finishReason };
   } catch (e) {
     recordRequest({ ok: false, durationMs: Date.now() - jsonStartTime, costUsd: 0 });

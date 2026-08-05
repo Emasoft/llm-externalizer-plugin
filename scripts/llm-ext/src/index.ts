@@ -168,6 +168,7 @@ import {
 // usage line is written where the request is actually made (provider/completion.ts
 // + provider/lmstudio.ts), so index.ts only sets up the usage CONTEXT here.
 import {
+  calibratedOutputTokens,
   withUsageContext,
   summarizeParams,
 } from "./usage-history.js";
@@ -1715,6 +1716,10 @@ export function buildEstimateDeps(): import("./estimate.js").EstimateDeps {
     },
     defaultMaxTokens() {
       return resolveDefaultMaxTokens();
+    },
+    calibratedOutputTokens(toolName, modelId) {
+      // The output-EWMA sidecar (task #188) — self-calibrating EXPECTED line.
+      return calibratedOutputTokens(toolName, modelId);
     },
   };
 }
