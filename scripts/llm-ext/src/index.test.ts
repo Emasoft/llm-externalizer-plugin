@@ -73,6 +73,9 @@ describe('tool catalog', () => {
       'or_model_info_json',
       'or_model_info_table',
       'reset',
+      // review_plan — $0 delegate mode (TRDD-SNAEERHU): scaffolding only,
+      // the host agent reviews with its own model.
+      'review_plan',
       'scan_folder',
       'high_quality_scan',
       'search_existing_implementations',

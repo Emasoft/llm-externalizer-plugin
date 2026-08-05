@@ -337,10 +337,43 @@ async function main(): Promise<void> {
   const wantEstimate = estimateIdx !== -1;
   if (wantEstimate) rest.splice(estimateIdx, 1);
 
+  // --preview (TRDD-SCLGL8T4): dry-run the FILE SELECTION and print every
+  // candidate's verdict — included, or excluded WITH the reason — via the
+  // same walker the real run uses. Composes with --estimate (selection +
+  // price in one dry-run). Zero LLM sends either way.
+  const previewIdx = rest.indexOf("--preview");
+  const wantPreview = previewIdx !== -1;
+  if (wantPreview) rest.splice(previewIdx, 1);
+
   const { args, quiet } = parseFlags(rest, tool);
 
   // boot() publishes the free-mode state; dispatchCallTool refuses without it.
   await boot();
+
+  if (wantPreview) {
+    const deps = buildEstimateDeps();
+    const excluded: Array<{ path: string; reason: string }> = [];
+    const resolved = deps.resolveFiles(args, (path, reason) =>
+      excluded.push({ path, reason }),
+    );
+    if (resolved.error) {
+      process.stderr.write(`preview: ${resolved.error}\n`);
+      process.exit(1);
+    }
+    process.stdout.write(
+      `PREVIEW (dry-run — nothing was sent) — ${tool.name}\n` +
+        `included: ${resolved.files.length}   excluded: ${excluded.length}\n`,
+    );
+    for (const f of resolved.files) process.stdout.write(`  + ${f}\n`);
+    for (const e of excluded) process.stdout.write(`  - ${e.path} (${e.reason})\n`);
+    if (args.use_gitignore !== false) {
+      process.stdout.write(
+        "note: gitignored files are omitted upstream by git ls-files and cannot be listed here\n",
+      );
+    }
+    if (!wantEstimate) return;
+    // fall through: --preview --estimate composes
+  }
 
   if (wantEstimate) {
     // Warm pricing with one $0 GET /models; the estimator itself sends nothing

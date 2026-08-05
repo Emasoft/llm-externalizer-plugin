@@ -1058,6 +1058,15 @@ export function walkDir(
     useGitignore?: boolean;
     recursive?: boolean;       // default: true — recurse into subdirectories
     followSymlinks?: boolean;  // default: true — follow symlinks to files/dirs
+    /**
+     * --preview reason channel (TRDD-SCLGL8T4): called once per skipped
+     * path with WHY it was skipped. Lives on the walker itself — never a
+     * second walker — so the preview can never drift from the real
+     * selection. Limits stated where they bind: in gitignore mode the
+     * ignored files are never ENUMERATED (git ls-files doesn't list them),
+     * so they cannot be reported here; the preview layer notes that.
+     */
+    onExcluded?: (path: string, reason: string) => void;
   },
 ): string[] {
   const maxFiles = options?.maxFiles ?? 10000;
@@ -1065,6 +1074,7 @@ export function walkDir(
   const skipBinary = !options?.includeBinary;
   const recursive = options?.recursive !== false;       // default true
   const followSymlinks = options?.followSymlinks !== false; // default true
+  const onExcluded = options?.onExcluded ?? (() => {});
 
   // When useGitignore is true, use `git ls-files` which respects all .gitignore rules:
   // - Nested .gitignore files in subdirectories
@@ -1081,10 +1091,16 @@ export function walkDir(
       const results: string[] = [];
       for (const fullPath of gitResults) {
         if (results.length >= maxFiles) break;
-        if (skipBinary && isBinaryExtension(fullPath)) continue;
+        if (skipBinary && isBinaryExtension(fullPath)) {
+          onExcluded(fullPath, "binary extension");
+          continue;
+        }
         if (extensions) {
           const ext = extname(fullPath).toLowerCase();
-          if (!extensions.includes(ext)) continue;
+          if (!extensions.includes(ext)) {
+            onExcluded(fullPath, "extension filter");
+            continue;
+          }
         }
         if (extraExcludeSet.size > 0) {
           // Skip if any path segment between dirPath and the file matches an excluded dir name.
@@ -1092,7 +1108,10 @@ export function walkDir(
           const segments = rel.split("/").filter((s) => s.length > 0);
           // Last segment is the filename; only directory segments are matched against exclude.
           const dirSegments = segments.slice(0, -1);
-          if (dirSegments.some((seg) => extraExcludeSet.has(seg))) continue;
+          if (dirSegments.some((seg) => extraExcludeSet.has(seg))) {
+            onExcluded(fullPath, "excluded dir");
+            continue;
+          }
         }
         results.push(fullPath);
       }
@@ -1136,10 +1155,16 @@ export function walkDir(
               recurse(fullPath);
             }
           } else if (targetStat.isFile()) {
-            if (skipBinary && isBinaryExtension(fullPath)) continue;
+            if (skipBinary && isBinaryExtension(fullPath)) {
+              onExcluded(fullPath, "binary extension");
+              continue;
+            }
             if (extensions) {
               const ext = extname(entry.name).toLowerCase();
-              if (!extensions.includes(ext)) continue;
+              if (!extensions.includes(ext)) {
+                onExcluded(fullPath, "extension filter");
+                continue;
+              }
             }
             results.push(fullPath);
           }
@@ -1152,9 +1177,15 @@ export function walkDir(
       if (entry.isDirectory()) {
         if (!recursive) continue;
         // L7: Only skip well-known hidden dirs, not all dotfiles
-        if (entry.name === ".git" || entry.name === ".svn" || entry.name === ".hg" || exclude.has(entry.name)) continue;
+        if (entry.name === ".git" || entry.name === ".svn" || entry.name === ".hg" || exclude.has(entry.name)) {
+          onExcluded(fullPath, "excluded dir");
+          continue;
+        }
         // Skip other hidden dirs (covers .venv, .cache, etc.)
-        if (entry.name.startsWith(".")) continue;
+        if (entry.name.startsWith(".")) {
+          onExcluded(fullPath, "hidden dir");
+          continue;
+        }
         // Track real path of directories to prevent cycles via symlinks pointing to ancestors
         try {
           const dirRealPath = realpathSync(fullPath);
@@ -1164,10 +1195,16 @@ export function walkDir(
         recurse(fullPath);
       } else if (entry.isFile()) {
         // Skip binary files by extension (readFileAsCodeBlock has null-byte check as second layer)
-        if (skipBinary && isBinaryExtension(fullPath)) continue;
+        if (skipBinary && isBinaryExtension(fullPath)) {
+          onExcluded(fullPath, "binary extension");
+          continue;
+        }
         if (extensions) {
           const ext = extname(entry.name).toLowerCase();
-          if (!extensions.includes(ext)) continue;
+          if (!extensions.includes(ext)) {
+            onExcluded(fullPath, "extension filter");
+            continue;
+          }
         }
         results.push(fullPath);
       }

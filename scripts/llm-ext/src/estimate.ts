@@ -65,8 +65,13 @@ export interface EstimateDeps {
    * Resolve the file set EXACTLY like the real tool would (folder walk,
    * gitignore, extension filter, explicit path list). An estimate computed
    * over a different file set than the run would use is worse than none.
+   * `onExcluded` is the optional --preview reason channel (TRDD-SCLGL8T4):
+   * when passed, the resolver reports every skipped path with WHY.
    */
-  resolveFiles(args: Record<string, unknown>): { files: string[]; error?: string };
+  resolveFiles(
+    args: Record<string, unknown>,
+    onExcluded?: (path: string, reason: string) => void,
+  ): { files: string[]; error?: string };
   /** Size of one file on disk. Injected so tests never touch the real fs. */
   fileSizeBytes(path: string): number;
   /**

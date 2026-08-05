@@ -1612,6 +1612,8 @@ function resolveFolderPath(
     recursive?: boolean;
     followSymlinks?: boolean;
     maxFiles?: number;
+    /** --preview reason channel — forwarded to walkDir (TRDD-SCLGL8T4). */
+    onExcluded?: (path: string, reason: string) => void;
   },
 ): FolderResolveResult {
   // Path traversal protection — reject symlinks and normalize traversal sequences
@@ -1633,6 +1635,7 @@ function resolveFolderPath(
     useGitignore: opts?.useGitignore !== false,     // default true
     recursive: opts?.recursive !== false,            // default true
     followSymlinks: opts?.followSymlinks !== false,   // default true
+    onExcluded: opts?.onExcluded,
   });
   if (files.length === 0) {
     const extInfo = opts?.extensions ? ` with extensions ${opts.extensions.join(", ")}` : "";
@@ -1664,11 +1667,13 @@ export async function warmEstimatePricing(): Promise<void> {
 
 export function buildEstimateDeps(): import("./estimate.js").EstimateDeps {
   return {
-    resolveFiles(args) {
+    resolveFiles(args, onExcluded) {
       // Mirror the tools' own input contract: explicit input_files_paths wins,
       // else folder_path expands through the SAME walker the run would use
       // (gitignore, extensions, excluded dirs) — an estimate over a different
-      // file set than the run's would be worse than none.
+      // file set than the run's would be worse than none. `onExcluded` is the
+      // --preview reason channel (TRDD-SCLGL8T4), threaded into that same
+      // walker so preview can never drift from the real selection.
       const explicit = Array.isArray(args.input_files_paths)
         ? (args.input_files_paths as unknown[]).filter(
             (p): p is string => typeof p === "string" && p.length > 0,
@@ -1684,6 +1689,7 @@ export function buildEstimateDeps(): import("./estimate.js").EstimateDeps {
             ? (args.excluded_dirs as string[])
             : undefined,
           useGitignore: args.use_gitignore !== false,
+          onExcluded,
         });
       }
       return { files: [], error: "no input_files_paths or folder_path given" };

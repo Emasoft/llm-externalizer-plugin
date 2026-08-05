@@ -34,8 +34,10 @@ import {
   detectLang,
   resolveAnswerMode,
   buildPerFileSectionPrompt,
+  walkDir,
   type FileData,
 } from "./scan-pipeline.js";
+import { mkdirSync } from "node:fs";
 
 // One real temp root under cwd (an allowed sanitizeInputPath root); per-test
 // files go inside it and are removed after the suite.
@@ -69,6 +71,48 @@ function totalBlockBytes(groups: FileData[][]): number {
     0,
   );
 }
+
+describe("walkDir --preview reason channel (TRDD-SCLGL8T4) — every exclusion class reports WHY", () => {
+  it("manual walk reports binary/extension/excluded-dir/hidden-dir with reasons, from the SAME walk that selects", () => {
+    const dir = join(root, "preview-fixture");
+    mkdirSync(join(dir, "node_modules"), { recursive: true });
+    // NOT in WALK_DEFAULT_EXCLUDE (unlike .cache/.git), so it exercises the
+    // hidden-dir branch rather than the excluded-dir branch.
+    mkdirSync(join(dir, ".myhidden"), { recursive: true });
+    writeFileSync(join(dir, "keep.ts"), "export const x = 1;\n");
+    writeFileSync(join(dir, "skip.png"), "not really a png\n");
+    writeFileSync(join(dir, "skip.md"), "# doc\n");
+    writeFileSync(join(dir, "node_modules", "dep.ts"), "export {};\n");
+
+    const excluded: Array<{ path: string; reason: string }> = [];
+    const files = walkDir(dir, {
+      extensions: [".ts"],
+      useGitignore: false, // force the manual branch — deterministic in a tmp dir
+      onExcluded: (path, reason) => excluded.push({ path, reason }),
+    });
+
+    expect(files).toEqual([join(dir, "keep.ts")]);
+    const byPath = new Map(excluded.map((e) => [e.path, e.reason]));
+    expect(byPath.get(join(dir, "skip.png"))).toBe("binary extension");
+    expect(byPath.get(join(dir, "skip.md"))).toBe("extension filter");
+    expect(byPath.get(join(dir, "node_modules"))).toBe("excluded dir");
+    expect(byPath.get(join(dir, ".myhidden"))).toBe("hidden dir");
+    // The dep inside the excluded dir was never even visited — the dir-level
+    // reason covers it, and reporting it per-file would require entering the
+    // excluded tree (which the real selection rightly never does).
+    expect(byPath.has(join(dir, "node_modules", "dep.ts"))).toBe(false);
+  });
+
+  it("omitting onExcluded changes nothing — the callback is observation-only", () => {
+    const dir = join(root, "preview-fixture-2");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "a.ts"), "export {};\n");
+    writeFileSync(join(dir, "b.png"), "x\n");
+    expect(walkDir(dir, { extensions: [".ts"], useGitignore: false })).toEqual([
+      join(dir, "a.ts"),
+    ]);
+  });
+});
 
 describe("fenceBackticks — minimum-backtick fence sizing", () => {
   it("returns the 4-backtick floor for content with no backticks", () => {
