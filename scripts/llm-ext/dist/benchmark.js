@@ -218107,14 +218107,14 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 });
 
 // src/benchmark/index.ts
-import { mkdirSync as mkdirSync14, writeFileSync as writeFileSync13, existsSync as existsSync18 } from "node:fs";
+import { mkdirSync as mkdirSync14, writeFileSync as writeFileSync14, existsSync as existsSync18 } from "node:fs";
 import { dirname as dirname7, join as join22 } from "node:path";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 
 // src/usage-history.ts
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
-import { appendFileSync, mkdirSync as mkdirSync2 } from "node:fs";
+import { appendFileSync, mkdirSync as mkdirSync2, readFileSync as readFileSync3, renameSync, writeFileSync as writeFileSync2 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join as join3 } from "node:path";
 
@@ -219079,7 +219079,7 @@ function withUsageContext(init, fn) {
 
 // src/benchmark/ground-truth.ts
 var import_typescript = __toESM(require_typescript(), 1);
-import { readFileSync as readFileSync3, readdirSync as readdirSync2 } from "node:fs";
+import { readFileSync as readFileSync4, readdirSync as readdirSync2 } from "node:fs";
 import { join as join4 } from "node:path";
 var BENCHMARK_KEYWORDS = [
   "JSON.parse(",
@@ -219098,7 +219098,7 @@ function buildGroundTruth(fixturesDir, keywords = BENCHMARK_KEYWORDS) {
   const multi = [];
   for (const filename of files) {
     const path = join4(fixturesDir, filename);
-    const source = readFileSync3(path, "utf-8");
+    const source = readFileSync4(path, "utf-8");
     const sf = import_typescript.default.createSourceFile(
       path,
       source,
@@ -219406,12 +219406,12 @@ function takeStringArray(obj, key) {
 }
 
 // src/benchmark/validated.ts
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync2 } from "node:fs";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync5, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname, join as join5 } from "node:path";
 function latestEntriesFromKeyedLedger(fileName) {
   let cache2;
   try {
-    const raw = readFileSync4(join5(getConfigDir(), fileName), "utf-8");
+    const raw = readFileSync5(join5(getConfigDir(), fileName), "utf-8");
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return /* @__PURE__ */ new Map();
     cache2 = parsed;
@@ -219462,7 +219462,7 @@ function passedGeneralKeyword() {
     if (isGeneralKeywordPass(entry)) passed.add(modelId);
   }
   try {
-    const raw = readFileSync4(join5(getConfigDir(), "benchmark-results.json"), "utf-8");
+    const raw = readFileSync5(join5(getConfigDir(), "benchmark-results.json"), "utf-8");
     const parsed = JSON.parse(raw);
     const results = Array.isArray(parsed.results) ? parsed.results : [];
     for (const r of results) {
@@ -219480,7 +219480,7 @@ function recordGeneralKeywordPasses(rows, when = (/* @__PURE__ */ new Date()).to
   const path = join5(getConfigDir(), GENERAL_KEYWORD_LEDGER);
   let cache2 = {};
   try {
-    const parsed = JSON.parse(readFileSync4(path, "utf-8"));
+    const parsed = JSON.parse(readFileSync5(path, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       cache2 = parsed;
     }
@@ -219498,7 +219498,7 @@ function recordGeneralKeywordPasses(rows, when = (/* @__PURE__ */ new Date()).to
   }
   try {
     mkdirSync3(dirname(path), { recursive: true });
-    writeFileSync2(path, `${JSON.stringify(cache2, null, 2)}
+    writeFileSync3(path, `${JSON.stringify(cache2, null, 2)}
 `, "utf-8");
   } catch {
   }
@@ -219798,7 +219798,7 @@ function renderReport(input) {
 
 // src/benchmark/pick.ts
 var import_yaml2 = __toESM(require_dist(), 1);
-import { readFileSync as readFileSync5, writeFileSync as writeFileSync3, renameSync as renameSyncCb, existsSync as existsSync2 } from "node:fs";
+import { readFileSync as readFileSync6, writeFileSync as writeFileSync4, renameSync as renameSyncCb, existsSync as existsSync2 } from "node:fs";
 var DEFAULT_PICK_OPTIONS = {
   topN: 3,
   minMeanF1: 0.95,
@@ -219844,7 +219844,7 @@ function loadCachedReport(path) {
       `No cached benchmark results at ${path}. Run \`llm-ext-benchmark\` first (without --from-cache).`
     );
   }
-  const raw = readFileSync5(path, "utf-8");
+  const raw = readFileSync6(path, "utf-8");
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -219873,7 +219873,7 @@ function loadProfileForMutation(settingsPath, profileName) {
   if (!existsSync2(settingsPath)) {
     throw new Error(`settings.yaml not found at ${settingsPath}`);
   }
-  const raw = readFileSync5(settingsPath, "utf-8");
+  const raw = readFileSync6(settingsPath, "utf-8");
   let doc;
   try {
     doc = (0, import_yaml2.parse)(raw);
@@ -219898,7 +219898,7 @@ function loadProfileForMutation(settingsPath, profileName) {
 function writeSettingsAtomic(settingsPath, root) {
   const newRaw = (0, import_yaml2.stringify)(root, { indent: 2 });
   const tmp = settingsPath + ".tmp." + process.pid;
-  writeFileSync3(tmp, newRaw, "utf-8");
+  writeFileSync4(tmp, newRaw, "utf-8");
   renameSyncCb(tmp, settingsPath);
 }
 function applyPicksToSettings(settingsPath, profileName, picks) {
@@ -219984,7 +219984,7 @@ function applyEnsembleSlotToSettings(settingsPath, profileName, slot, modelId) {
 }
 
 // src/benchmark/update-all.ts
-import { mkdirSync as mkdirSync11, writeFileSync as writeFileSync10 } from "node:fs";
+import { mkdirSync as mkdirSync11, writeFileSync as writeFileSync11 } from "node:fs";
 import { dirname as dirname6, join as join19 } from "node:path";
 
 // src/benchmark/budget.ts
@@ -220145,7 +220145,7 @@ function makeBudgetedGlobalFetch(ledger, priceOf, inner = (url, init) => fetch(u
 
 // src/benchmark/security-triage/index.ts
 import { createHash as createHash2 } from "node:crypto";
-import { existsSync as existsSync5, mkdirSync as mkdirSync6, readFileSync as readFileSync9, renameSync as renameSync2, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync5, mkdirSync as mkdirSync6, readFileSync as readFileSync10, renameSync as renameSync3, writeFileSync as writeFileSync6 } from "node:fs";
 import { join as join9 } from "node:path";
 
 // src/project-root.ts
@@ -220541,7 +220541,7 @@ ${closeDelimiter(nonce)}`;
 }
 
 // src/benchmark/security-triage/dataset.ts
-import { existsSync as existsSync4, readFileSync as readFileSync6 } from "node:fs";
+import { existsSync as existsSync4, readFileSync as readFileSync7 } from "node:fs";
 import { dirname as dirname2, join as join6 } from "node:path";
 import { fileURLToPath } from "node:url";
 var BENCHMARK_RUBRICS = {
@@ -220572,7 +220572,7 @@ function resolveDatasetPath() {
   );
 }
 function loadDataset(path = resolveDatasetPath()) {
-  const raw = readFileSync6(path, "utf-8");
+  const raw = readFileSync7(path, "utf-8");
   const cases = [];
   const seenIds = /* @__PURE__ */ new Set();
   const lines = raw.split("\n");
@@ -220689,7 +220689,7 @@ async function runWithLimit(items, limit, fn) {
 }
 
 // src/model-events.ts
-import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync4, readFileSync as readFileSync7 } from "node:fs";
+import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync4, readFileSync as readFileSync8 } from "node:fs";
 import { join as join7 } from "node:path";
 var MODEL_EVENT_KINDS = [
   "param_drop",
@@ -220739,7 +220739,7 @@ function parseModelEventLine(line) {
 function readModelEvents(opts = {}) {
   let raw;
   try {
-    raw = readFileSync7(opts.path ?? getModelEventsPath(), "utf-8");
+    raw = readFileSync8(opts.path ?? getModelEventsPath(), "utf-8");
   } catch {
     return [];
   }
@@ -221206,7 +221206,7 @@ function computeCallCost(usage, pricing, fallbackInputBytes, fallbackOutputBytes
 }
 
 // src/free-rotation.ts
-import { mkdirSync as mkdirSync5, readFileSync as readFileSync8, renameSync, writeFileSync as writeFileSync4 } from "node:fs";
+import { mkdirSync as mkdirSync5, readFileSync as readFileSync9, renameSync as renameSync2, writeFileSync as writeFileSync5 } from "node:fs";
 import { join as join8 } from "node:path";
 var FREE_FLOOR_MIN_CONTEXT_TOKENS = 32e3;
 function filterFreeModels(freeModels, catalogById, benchmarkFailed = /* @__PURE__ */ new Set()) {
@@ -221242,6 +221242,9 @@ var TRANSIENT_CAP_MS = 3e5;
 var GONE_MS = 36e5;
 function classifyUnavailable(detail) {
   const s = (detail || "").toLowerCase();
+  if (s.includes("server issue detected")) {
+    return null;
+  }
   if (s.includes("free-models-per-day") || s.includes("per-day") || s.includes("per day") || s.includes("daily limit") || s.includes("daily quota") || s.includes("daily rate limit")) {
     return "daily-quota";
   }
@@ -221329,7 +221332,7 @@ function cooldownFilePath() {
 }
 function readStoreFromDisk() {
   try {
-    const raw = readFileSync8(cooldownFilePath(), "utf-8");
+    const raw = readFileSync9(cooldownFilePath(), "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && parsed.version === 1 && parsed.models && typeof parsed.models === "object") {
       return { version: 1, models: parsed.models };
@@ -221343,8 +221346,8 @@ function writeStoreToDisk(store) {
     const path = cooldownFilePath();
     mkdirSync5(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp`;
-    writeFileSync4(tmp, JSON.stringify(store), { encoding: "utf-8", mode: 384 });
-    renameSync(tmp, path);
+    writeFileSync5(tmp, JSON.stringify(store), { encoding: "utf-8", mode: 384 });
+    renameSync2(tmp, path);
   } catch {
   }
 }
@@ -221731,7 +221734,7 @@ function loadCache() {
   const p = cachePath();
   if (!existsSync5(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync9(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync10(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
@@ -221742,8 +221745,8 @@ function saveCache(cache2) {
   mkdirSync6(dir, { recursive: true });
   const p = cachePath();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync5(tmp, JSON.stringify(cache2, null, 2), "utf-8");
-  renameSync2(tmp, p);
+  writeFileSync6(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  renameSync3(tmp, p);
 }
 function failedModelsFromCache(cache2) {
   const latest = /* @__PURE__ */ new Map();
@@ -221822,7 +221825,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
   const apiKey = resolveApiKey(opts.apiKey);
   const datasetPath = opts.datasetPath ?? resolveDatasetPath();
   const cases = loadDataset(datasetPath);
-  const datasetHash = createHash2("sha1").update(readFileSync9(datasetPath, "utf-8")).digest("hex").slice(0, 12);
+  const datasetHash = createHash2("sha1").update(readFileSync10(datasetPath, "utf-8")).digest("hex").slice(0, 12);
   const thresholds = opts.thresholds ?? DEFAULT_TRIAGE_THRESHOLDS;
   const incumbentId = opts.incumbentModelId ?? DEFAULT_MODEL;
   const progress = opts.onProgress ?? (() => {
@@ -222051,8 +222054,8 @@ async function runSecurityTriageBenchmark(opts = {}) {
     perCase: Object.fromEntries(scores.map((s) => [s.modelId, s.perCase]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync5(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
-  renameSync2(jtmp, jsonReportPath);
+  writeFileSync6(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync3(jtmp, jsonReportPath);
   const md = buildReportMarkdown({
     cases,
     datasetHash,
@@ -222066,8 +222069,8 @@ async function runSecurityTriageBenchmark(opts = {}) {
     freeOnlySkipped
   });
   const mtmp = `${mdReportPath}.tmp.${process.pid}`;
-  writeFileSync5(mtmp, md, "utf-8");
-  renameSync2(mtmp, mdReportPath);
+  writeFileSync6(mtmp, md, "utf-8");
+  renameSync3(mtmp, mdReportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
     recommendedModelId: selection.recommendedModelId,
@@ -222167,7 +222170,7 @@ function buildReportMarkdown(args) {
 
 // src/benchmark/search-existing/index.ts
 import { createHash as createHash3 } from "node:crypto";
-import { existsSync as existsSync9, mkdirSync as mkdirSync7, readFileSync as readFileSync11, renameSync as renameSync3, writeFileSync as writeFileSync6 } from "node:fs";
+import { existsSync as existsSync9, mkdirSync as mkdirSync7, readFileSync as readFileSync12, renameSync as renameSync4, writeFileSync as writeFileSync7 } from "node:fs";
 import { join as join12, resolve as resolve7 } from "node:path";
 
 // src/benchmark/search-existing/dataset.ts
@@ -222540,7 +222543,7 @@ import { resolve as resolve5 } from "node:path";
 
 // src/scan-pipeline.ts
 import {
-  readFileSync as readFileSync10,
+  readFileSync as readFileSync11,
   existsSync as existsSync7,
   statSync as statSync4,
   lstatSync,
@@ -222630,7 +222633,7 @@ function detectLang(filePath) {
   const ext = extname2(filePath).toLowerCase();
   if (EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
   try {
-    const head = readFileSync10(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
+    const head = readFileSync11(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
     const shebang = head.match(/^#!\s*(?:\/usr\/bin\/env\s+)?(\S+)/);
     if (shebang) {
       const bin = basename2(shebang[1]);
@@ -222708,7 +222711,7 @@ function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexReda
       `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
     );
   }
-  const raw = readFileSync10(safePath);
+  const raw = readFileSync11(safePath);
   if (raw.length > limit) {
     throw new Error(
       `File too large after read (${(raw.length / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
@@ -222856,7 +222859,7 @@ function scanFilesForSecrets(filePaths) {
   for (const fp of filePaths) {
     if (!existsSync7(fp)) continue;
     try {
-      const content = readFileSync10(fp, "utf-8");
+      const content = readFileSync11(fp, "utf-8");
       const scan = scanForSecrets(content);
       if (scan.found) {
         for (const d of scan.details) {
@@ -222946,7 +222949,7 @@ function resolvePrompt(instructions, instructionsFilesPaths) {
     const paths = Array.isArray(instructionsFilesPaths) ? instructionsFilesPaths : [instructionsFilesPaths];
     for (const fp of paths) {
       assertFileExists(fp);
-      const content = readFileSync10(fp, "utf-8");
+      const content = readFileSync11(fp, "utf-8");
       prompt = prompt ? `${prompt}
 
 ${content}` : content;
@@ -223238,6 +223241,8 @@ function walkDir(dirPath, options) {
   const skipBinary = !options?.includeBinary;
   const recursive = options?.recursive !== false;
   const followSymlinks = options?.followSymlinks !== false;
+  const onExcluded = options?.onExcluded ?? (() => {
+  });
   if (options?.useGitignore) {
     const gitResults = gitLsFilesMultiRepo(dirPath, recursive);
     if (gitResults !== null) {
@@ -223245,16 +223250,25 @@ function walkDir(dirPath, options) {
       const results2 = [];
       for (const fullPath of gitResults) {
         if (results2.length >= maxFiles) break;
-        if (skipBinary && isBinaryExtension(fullPath)) continue;
+        if (skipBinary && isBinaryExtension(fullPath)) {
+          onExcluded(fullPath, "binary extension");
+          continue;
+        }
         if (extensions) {
           const ext = extname2(fullPath).toLowerCase();
-          if (!extensions.includes(ext)) continue;
+          if (!extensions.includes(ext)) {
+            onExcluded(fullPath, "extension filter");
+            continue;
+          }
         }
         if (extraExcludeSet.size > 0) {
           const rel = fullPath.startsWith(dirPath) ? fullPath.slice(dirPath.length) : fullPath;
           const segments = rel.split("/").filter((s) => s.length > 0);
           const dirSegments = segments.slice(0, -1);
-          if (dirSegments.some((seg) => extraExcludeSet.has(seg))) continue;
+          if (dirSegments.some((seg) => extraExcludeSet.has(seg))) {
+            onExcluded(fullPath, "excluded dir");
+            continue;
+          }
         }
         results2.push(fullPath);
       }
@@ -223292,10 +223306,16 @@ function walkDir(dirPath, options) {
               recurse(fullPath);
             }
           } else if (targetStat.isFile()) {
-            if (skipBinary && isBinaryExtension(fullPath)) continue;
+            if (skipBinary && isBinaryExtension(fullPath)) {
+              onExcluded(fullPath, "binary extension");
+              continue;
+            }
             if (extensions) {
               const ext = extname2(entry.name).toLowerCase();
-              if (!extensions.includes(ext)) continue;
+              if (!extensions.includes(ext)) {
+                onExcluded(fullPath, "extension filter");
+                continue;
+              }
             }
             results.push(fullPath);
           }
@@ -223306,8 +223326,14 @@ function walkDir(dirPath, options) {
       }
       if (entry.isDirectory()) {
         if (!recursive) continue;
-        if (entry.name === ".git" || entry.name === ".svn" || entry.name === ".hg" || exclude.has(entry.name)) continue;
-        if (entry.name.startsWith(".")) continue;
+        if (entry.name === ".git" || entry.name === ".svn" || entry.name === ".hg" || exclude.has(entry.name)) {
+          onExcluded(fullPath, "excluded dir");
+          continue;
+        }
+        if (entry.name.startsWith(".")) {
+          onExcluded(fullPath, "hidden dir");
+          continue;
+        }
         try {
           const dirRealPath = realpathSync2(fullPath);
           if (visitedPaths.has(dirRealPath)) continue;
@@ -223317,10 +223343,16 @@ function walkDir(dirPath, options) {
         }
         recurse(fullPath);
       } else if (entry.isFile()) {
-        if (skipBinary && isBinaryExtension(fullPath)) continue;
+        if (skipBinary && isBinaryExtension(fullPath)) {
+          onExcluded(fullPath, "binary extension");
+          continue;
+        }
         if (extensions) {
           const ext = extname2(entry.name).toLowerCase();
-          if (!extensions.includes(ext)) continue;
+          if (!extensions.includes(ext)) {
+            onExcluded(fullPath, "extension filter");
+            continue;
+          }
         }
         results.push(fullPath);
       }
@@ -224170,7 +224202,7 @@ function loadCache2() {
   const p = cachePath2();
   if (!existsSync9(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync11(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync12(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
@@ -224181,8 +224213,8 @@ function saveCache2(cache2) {
   mkdirSync7(dir, { recursive: true });
   const p = cachePath2();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync6(tmp, JSON.stringify(cache2, null, 2), "utf-8");
-  renameSync3(tmp, p);
+  writeFileSync7(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  renameSync4(tmp, p);
 }
 function resolveApiKey2(override) {
   const k = override || process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
@@ -224449,8 +224481,8 @@ async function runSearchExistingBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync6(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
-  renameSync3(jtmp, jsonReportPath);
+  writeFileSync7(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync4(jtmp, jsonReportPath);
   const md = buildReportMarkdown2({
     cases,
     datasetHash,
@@ -224463,8 +224495,8 @@ async function runSearchExistingBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync6(mtmp, md, "utf-8");
-  renameSync3(mtmp, reportPath);
+  writeFileSync7(mtmp, md, "utf-8");
+  renameSync4(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
     recommendedModelId: selection.recommendedModelId,
@@ -224544,12 +224576,12 @@ function buildReportMarkdown2(args) {
 
 // src/benchmark/code-task/index.ts
 import { createHash as createHash4 } from "node:crypto";
-import { existsSync as existsSync11, mkdirSync as mkdirSync8, readFileSync as readFileSync13, renameSync as renameSync4, writeFileSync as writeFileSync7 } from "node:fs";
+import { existsSync as existsSync11, mkdirSync as mkdirSync8, readFileSync as readFileSync14, renameSync as renameSync5, writeFileSync as writeFileSync8 } from "node:fs";
 import { join as join14 } from "node:path";
 
 // src/benchmark/code-task/dataset.ts
 var import_typescript2 = __toESM(require_typescript(), 1);
-import { existsSync as existsSync10, readFileSync as readFileSync12, statSync as statSync6 } from "node:fs";
+import { existsSync as existsSync10, readFileSync as readFileSync13, statSync as statSync6 } from "node:fs";
 import { dirname as dirname5, join as join13, resolve as resolve8 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 var CODE_AUDIT_INSTRUCTIONS = [
@@ -224627,13 +224659,13 @@ function listTopLevelSymbols(source, filename = "fixture.ts") {
   return [...new Set(names)].filter((n) => n.length >= MIN_SYMBOL_LENGTH).sort();
 }
 function readFixture(c, root = resolveFixtureRoot2()) {
-  return readFileSync12(join13(root, c.file), "utf-8");
+  return readFileSync13(join13(root, c.file), "utf-8");
 }
 function fixturePath(c, root = resolveFixtureRoot2()) {
   return join13(root, c.file);
 }
 function loadDataset2(path = resolveDatasetPath2()) {
-  const raw = readFileSync12(path, "utf-8");
+  const raw = readFileSync13(path, "utf-8");
   const cases = [];
   const seenIds = /* @__PURE__ */ new Set();
   const lines = raw.split("\n");
@@ -224715,7 +224747,7 @@ function validateDataset(cases = loadDataset2(), root = resolveFixtureRoot2()) {
     if (!existsSync10(abs2)) {
       throw new Error(`case ${c.id}: fixture file missing on disk: ${c.file}`);
     }
-    const bytes = readFileSync12(abs2);
+    const bytes = readFileSync13(abs2);
     if (bytes.includes(0)) {
       throw new Error(
         `case ${c.id}: fixture ${c.file} contains a NUL byte \u2014 readFileAsCodeBlock treats it as binary and REFUSES to read it, so the case could never be scored.`
@@ -225437,7 +225469,7 @@ function loadCache3() {
   const p = cachePath3();
   if (!existsSync11(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync13(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync14(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
@@ -225447,8 +225479,8 @@ function saveCache3(cache2) {
   mkdirSync8(getConfigDir(), { recursive: true });
   const p = cachePath3();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync7(tmp, JSON.stringify(cache2, null, 2), "utf-8");
-  renameSync4(tmp, p);
+  writeFileSync8(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  renameSync5(tmp, p);
 }
 function resolveApiKey3(override) {
   const k = override || process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
@@ -225593,12 +225625,15 @@ async function runCodeAuditBenchmark(opts = {}) {
   const assessments = [];
   let totalCost = 0;
   for (const { model, qualified, disqualifyReason: disqualifyReason2 } of toAssess.values()) {
-    if (freeOnly && !model.id.endsWith(":free") || paidBenchmarkWouldRefuse(model)) {
-      progress(`  ${model.id}: skipped (free_only \u2014 non-':free' model).`);
+    const freeOnlySkip = freeOnly && !model.id.endsWith(":free");
+    const paidRefusedSkip = !freeOnlySkip && paidBenchmarkWouldRefuse(model);
+    if (freeOnlySkip || paidRefusedSkip) {
+      const skipReason = freeOnlySkip ? "free_only active \u2014 non-':free' model not benchmarked" : "paid benchmarks are off \u2014 paid model not benchmarked";
+      progress(`  ${model.id}: skipped (${skipReason}).`);
       assessments.push({
         modelId: model.id,
         qualified: false,
-        disqualifyReason: "free_only active \u2014 non-':free' model not benchmarked",
+        disqualifyReason: skipReason,
         inputDollarsPerMillion: model.inputDollarsPerMillion,
         outputDollarsPerMillion: model.outputDollarsPerMillion,
         latencyMs: 0,
@@ -225720,8 +225755,8 @@ async function runCodeAuditBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync7(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
-  renameSync4(jtmp, jsonReportPath);
+  writeFileSync8(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync5(jtmp, jsonReportPath);
   const md = buildReportMarkdown3({
     cases,
     datasetHash,
@@ -225734,8 +225769,8 @@ async function runCodeAuditBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync7(mtmp, md, "utf-8");
-  renameSync4(mtmp, reportPath);
+  writeFileSync8(mtmp, md, "utf-8");
+  renameSync5(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
     recommendedModelId: selection.recommendedModelId,
@@ -225842,12 +225877,12 @@ ${codeBlock}`;
 }
 
 // src/benchmark/scan-folder/index.ts
-import { existsSync as existsSync14, mkdirSync as mkdirSync9, readFileSync as readFileSync16, renameSync as renameSync5, writeFileSync as writeFileSync8 } from "node:fs";
+import { existsSync as existsSync14, mkdirSync as mkdirSync9, readFileSync as readFileSync17, renameSync as renameSync6, writeFileSync as writeFileSync9 } from "node:fs";
 import { join as join16 } from "node:path";
 
 // src/benchmark/scan-folder/dataset.ts
 import { createHash as createHash5 } from "node:crypto";
-import { existsSync as existsSync12, readFileSync as readFileSync14, readdirSync as readdirSync5, statSync as statSync7 } from "node:fs";
+import { existsSync as existsSync12, readFileSync as readFileSync15, readdirSync as readdirSync5, statSync as statSync7 } from "node:fs";
 import { join as join15, resolve as resolve9 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function buildInstructions(criterion) {
@@ -225964,14 +225999,14 @@ function fixtureAbsPath(rel, root = resolveFixtureRoot3()) {
 }
 function deriveMatchingFiles(c, root = resolveFixtureRoot3()) {
   const re = new RegExp(c.truthRegexSource);
-  return scannedFilesFor(c, root).filter((rel) => re.test(readFileSync14(fixtureAbsPath(rel, root), "utf-8"))).sort();
+  return scannedFilesFor(c, root).filter((rel) => re.test(readFileSync15(fixtureAbsPath(rel, root), "utf-8"))).sort();
 }
 function datasetFingerprint(root = resolveFixtureRoot3()) {
   const h = createHash5("sha1");
   h.update(JSON.stringify(SCAN_FOLDER_CASES));
   for (const rel of listFixtureFiles2(root)) {
     h.update(rel);
-    h.update(readFileSync14(fixtureAbsPath(rel, root)));
+    h.update(readFileSync15(fixtureAbsPath(rel, root)));
   }
   return h.digest("hex").slice(0, 12);
 }
@@ -225981,7 +226016,7 @@ function validateDataset2(cases = SCAN_FOLDER_CASES, root = resolveFixtureRoot3(
     throw new Error(`scan-folder corpus is empty at ${fixtureScanRoot(root)}`);
   }
   for (const rel of files) {
-    const bytes = readFileSync14(fixtureAbsPath(rel, root));
+    const bytes = readFileSync15(fixtureAbsPath(rel, root));
     if (bytes.includes(0)) {
       throw new Error(
         `fixture ${rel} contains a NUL byte \u2014 readFileAsCodeBlock treats it as binary and REFUSES to read it, so no model could ever be scored on it.`
@@ -226034,7 +226069,7 @@ import { resolve as resolve10 } from "node:path";
 
 // src/scan-folder/core.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { existsSync as existsSync13, statSync as statSync8, readFileSync as readFileSync15 } from "node:fs";
+import { existsSync as existsSync13, statSync as statSync8, readFileSync as readFileSync16 } from "node:fs";
 
 // src/rate-limiter.ts
 var AdaptiveRateLimiter = class {
@@ -226329,7 +226364,7 @@ async function runScanFolder(args, deps) {
   if (sfMode === 2 && succeeded.length > 0) {
     const sections = [];
     for (const r of succeeded) {
-      const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync15(r.reportPath, "utf-8") : "";
+      const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync16(r.reportPath, "utf-8") : "";
       sections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -226369,7 +226404,7 @@ ${content}`);
       for (const fp of fg.files) {
         const r = pathToResult.get(fp);
         if (!r) continue;
-        const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync15(r.reportPath, "utf-8") : "";
+        const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync16(r.reportPath, "utf-8") : "";
         sections.push(`## File: ${fp}
 
 ${content}`);
@@ -226703,7 +226738,7 @@ function loadCache4() {
   const p = cachePath4();
   if (!existsSync14(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync16(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync17(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
@@ -226713,8 +226748,8 @@ function saveCache4(cache2) {
   mkdirSync9(getConfigDir(), { recursive: true });
   const p = cachePath4();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync8(tmp, JSON.stringify(cache2, null, 2), "utf-8");
-  renameSync5(tmp, p);
+  writeFileSync9(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  renameSync6(tmp, p);
 }
 function resolveApiKey4(override) {
   const k = override || process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
@@ -227013,8 +227048,8 @@ async function runScanFolderBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync8(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
-  renameSync5(jtmp, jsonReportPath);
+  writeFileSync9(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync6(jtmp, jsonReportPath);
   const md = buildReportMarkdown4({
     cases,
     datasetHash,
@@ -227028,8 +227063,8 @@ async function runScanFolderBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync8(mtmp, md, "utf-8");
-  renameSync5(mtmp, reportPath);
+  writeFileSync9(mtmp, md, "utf-8");
+  renameSync6(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
     recommendedModelId: selection.recommendedModelId,
@@ -227122,7 +227157,7 @@ function buildReportMarkdown4(args) {
 }
 
 // src/benchmark/check-specs/index.ts
-import { existsSync as existsSync17, mkdirSync as mkdirSync10, readFileSync as readFileSync18, renameSync as renameSync6, writeFileSync as writeFileSync9 } from "node:fs";
+import { existsSync as existsSync17, mkdirSync as mkdirSync10, readFileSync as readFileSync19, renameSync as renameSync7, writeFileSync as writeFileSync10 } from "node:fs";
 import { join as join18 } from "node:path";
 
 // src/check-specs/core.ts
@@ -227348,7 +227383,7 @@ ${csResp.content}${csFooter}`
 
 // src/benchmark/check-specs/dataset.ts
 import { createHash as createHash6 } from "node:crypto";
-import { existsSync as existsSync16, readFileSync as readFileSync17, readdirSync as readdirSync6, statSync as statSync9 } from "node:fs";
+import { existsSync as existsSync16, readFileSync as readFileSync18, readdirSync as readdirSync6, statSync as statSync9 } from "node:fs";
 import { join as join17, resolve as resolve11 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 var CHECK_SPECS_INSTRUCTIONS = [
@@ -227566,10 +227601,10 @@ function datasetFingerprint2(root = resolveFixtureRoot4()) {
   const h = createHash6("sha1");
   h.update(JSON.stringify(CHECK_SPECS_FIXTURES));
   h.update(CHECK_SPECS_INSTRUCTIONS);
-  h.update(readFileSync17(specPath(root)));
+  h.update(readFileSync18(specPath(root)));
   for (const rel of listFixtureFiles3(root)) {
     h.update(rel);
-    h.update(readFileSync17(fixtureAbsPath2(rel, root)));
+    h.update(readFileSync18(fixtureAbsPath2(rel, root)));
   }
   return h.digest("hex").slice(0, 12);
 }
@@ -227578,7 +227613,7 @@ function validateDataset3(fixtures = CHECK_SPECS_FIXTURES, root = resolveFixture
   if (!existsSync16(spec)) {
     throw new Error(`check-specs spec file missing: ${spec}`);
   }
-  if (readFileSync17(spec, "utf-8").trim().length === 0) {
+  if (readFileSync18(spec, "utf-8").trim().length === 0) {
     throw new Error(`check-specs spec file is empty: ${spec}`);
   }
   if (fixtures.length === 0) throw new Error("check-specs corpus is empty");
@@ -227592,7 +227627,7 @@ function validateDataset3(fixtures = CHECK_SPECS_FIXTURES, root = resolveFixture
     if (!existsSync16(abs2)) {
       throw new Error(`fixture ${f.file} is listed in the dataset but missing on disk (${abs2})`);
     }
-    const bytes = readFileSync17(abs2);
+    const bytes = readFileSync18(abs2);
     if (bytes.includes(0)) {
       throw new Error(
         `fixture ${f.file} contains a NUL byte \u2014 readFileAsCodeBlock treats it as binary and REFUSES to read it, so no model could ever be scored on it.`
@@ -227930,7 +227965,7 @@ function loadCache5() {
   const p = cachePath5();
   if (!existsSync17(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync18(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync19(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
@@ -227940,8 +227975,8 @@ function saveCache5(cache2) {
   mkdirSync10(getConfigDir(), { recursive: true });
   const p = cachePath5();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync9(tmp, JSON.stringify(cache2, null, 2), "utf-8");
-  renameSync6(tmp, p);
+  writeFileSync10(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  renameSync7(tmp, p);
 }
 function resolveApiKey5(override) {
   const k = override || process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
@@ -228260,8 +228295,8 @@ async function runCheckSpecsBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync9(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
-  renameSync6(jtmp, jsonReportPath);
+  writeFileSync10(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync7(jtmp, jsonReportPath);
   const md = buildReportMarkdown5({
     fixtures,
     datasetHash,
@@ -228274,8 +228309,8 @@ async function runCheckSpecsBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync9(mtmp, md, "utf-8");
-  renameSync6(mtmp, reportPath);
+  writeFileSync10(mtmp, md, "utf-8");
+  renameSync7(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
     recommendedModelId: selection.recommendedModelId,
@@ -228915,7 +228950,7 @@ ${r.ensemble.picks.map((p, i) => `${i + 1}. \`${p}\``).join("\n")}` : "")
 function writeReport(r, opts) {
   const path = join19(opts.mainRoot, "reports", "update-all", `${stamp()}-update-all.md`);
   mkdirSync11(dirname6(path), { recursive: true });
-  writeFileSync10(path, renderUpdateAllReport(r, opts), "utf-8");
+  writeFileSync11(path, renderUpdateAllReport(r, opts), "utf-8");
   return path;
 }
 
@@ -229274,7 +229309,7 @@ function renderAssessmentText(a) {
 }
 
 // src/model-qualification/drift.ts
-import { mkdirSync as mkdirSync12, readFileSync as readFileSync19, renameSync as renameSync7, writeFileSync as writeFileSync11 } from "node:fs";
+import { mkdirSync as mkdirSync12, readFileSync as readFileSync20, renameSync as renameSync8, writeFileSync as writeFileSync12 } from "node:fs";
 import { join as join20 } from "node:path";
 function perMillion(s) {
   if (s == null) return null;
@@ -229416,7 +229451,7 @@ function getBaselinePath() {
 }
 function loadBaseline(path = getBaselinePath()) {
   try {
-    const raw = readFileSync19(path, "utf-8");
+    const raw = readFileSync20(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed;
@@ -229430,8 +229465,8 @@ function saveBaseline(baseline, path = getBaselinePath()) {
   try {
     mkdirSync12(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync11(tmp, JSON.stringify(baseline, null, 2));
-    renameSync7(tmp, path);
+    writeFileSync12(tmp, JSON.stringify(baseline, null, 2));
+    renameSync8(tmp, path);
   } catch {
   }
 }
@@ -229507,7 +229542,7 @@ async function runCheckModelHealth(opts = {}) {
   const dir = opts.outputDir ?? join20(resolveProjectMainRoot(), "reports", "model-health");
   mkdirSync12(dir, { recursive: true });
   const reportPath = join20(dir, `${compactStamp()}-model-health-${profile.name}.md`);
-  writeFileSync11(reportPath, renderModelHealthMarkdown(report));
+  writeFileSync12(reportPath, renderModelHealthMarkdown(report));
   return { report, reportPath };
 }
 function renderModelHealthText(report) {
@@ -229528,7 +229563,7 @@ function renderModelHealthText(report) {
 }
 
 // src/model-qualification/new-arrivals.ts
-import { mkdirSync as mkdirSync13, readFileSync as readFileSync20, renameSync as renameSync8, writeFileSync as writeFileSync12 } from "node:fs";
+import { mkdirSync as mkdirSync13, readFileSync as readFileSync21, renameSync as renameSync9, writeFileSync as writeFileSync13 } from "node:fs";
 import { join as join21 } from "node:path";
 function createdToIso(created) {
   if (created === null || !Number.isFinite(created) || created <= 0) return null;
@@ -229575,7 +229610,7 @@ function getCatalogSnapshotPath() {
 }
 function loadSnapshot(path = getCatalogSnapshotPath()) {
   try {
-    const raw = readFileSync20(path, "utf-8");
+    const raw = readFileSync21(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const obj = parsed;
@@ -229595,8 +229630,8 @@ function saveSnapshot(snapshot, path = getCatalogSnapshotPath()) {
   try {
     mkdirSync13(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync12(tmp, JSON.stringify(snapshot, null, 2));
-    renameSync8(tmp, path);
+    writeFileSync13(tmp, JSON.stringify(snapshot, null, 2));
+    renameSync9(tmp, path);
   } catch {
   }
 }
@@ -229690,7 +229725,7 @@ async function runDiscoverNewArrivals(opts = {}) {
   const dir = opts.outputDir ?? join21(resolveProjectMainRoot(), "reports", "model-arrivals");
   mkdirSync13(dir, { recursive: true });
   const reportPath = join21(dir, `${compactStamp()}-new-arrivals.md`);
-  writeFileSync12(reportPath, renderNewArrivalsMarkdown(report));
+  writeFileSync13(reportPath, renderNewArrivalsMarkdown(report));
   return { report, reportPath };
 }
 
@@ -230413,16 +230448,16 @@ async function runKeywordSweep(opts, fetchImpl) {
   };
   const markdown = renderReport(reportInput);
   mkdirSync14(dirname7(reportPath), { recursive: true });
-  writeFileSync13(reportPath, markdown, "utf-8");
+  writeFileSync14(reportPath, markdown, "utf-8");
   console.error(`[benchmark] Report: ${reportPath}`);
   const json = renderJson(reportInput);
   const cacheJsonPath = benchmarkCachePath();
   mkdirSync14(dirname7(cacheJsonPath), { recursive: true });
-  writeFileSync13(cacheJsonPath, json, "utf-8");
+  writeFileSync14(cacheJsonPath, json, "utf-8");
   console.error(`[benchmark] JSON cache: ${cacheJsonPath}`);
   if (opts.jsonPath) {
     mkdirSync14(dirname7(opts.jsonPath), { recursive: true });
-    writeFileSync13(opts.jsonPath, json, "utf-8");
+    writeFileSync14(opts.jsonPath, json, "utf-8");
     console.error(`[benchmark] JSON (user-path): ${opts.jsonPath}`);
   }
   const passers = [...results.values()].filter((r) => r.score?.pass).length;
@@ -230760,7 +230795,7 @@ async function runAutoReplacePhase(opts) {
   const fullReport = reportMarkdown + "\n" + renderEnsembleRotationSection(ensemble);
   const reportPath = join22(resolveProjectMainRoot(), "reports", "auto-replace", `${compactStamp()}-auto-replace.md`);
   mkdirSync14(dirname7(reportPath), { recursive: true });
-  writeFileSync13(reportPath, fullReport, "utf-8");
+  writeFileSync14(reportPath, fullReport, "utf-8");
   console.error("");
   for (const f of findings) {
     const verdict = !f.ranBenchmark ? "healthy \u2014 no benchmark" : f.changed ? `RECOMMEND ${f.incumbentModelId} -> ${f.recommendedModelId}` : `keep ${f.incumbentModelId}`;

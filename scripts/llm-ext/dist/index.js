@@ -131083,7 +131083,7 @@ ${lanes.join("\n")}
           }
         }
         function createImportCallExpressionAMD(arg, containsLexicalThis) {
-          const resolve16 = factory2.createUniqueName("resolve");
+          const resolve17 = factory2.createUniqueName("resolve");
           const reject = factory2.createUniqueName("reject");
           const parameters = [
             factory2.createParameterDeclaration(
@@ -131092,7 +131092,7 @@ ${lanes.join("\n")}
               /*dotDotDotToken*/
               void 0,
               /*name*/
-              resolve16
+              resolve17
             ),
             factory2.createParameterDeclaration(
               /*modifiers*/
@@ -131109,7 +131109,7 @@ ${lanes.join("\n")}
                 factory2.createIdentifier("require"),
                 /*typeArguments*/
                 void 0,
-                [factory2.createArrayLiteralExpression([arg || factory2.createOmittedExpression()]), resolve16, reject]
+                [factory2.createArrayLiteralExpression([arg || factory2.createOmittedExpression()]), resolve17, reject]
               )
             )
           ]);
@@ -217827,8 +217827,8 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
         installPackage(options) {
           this.packageInstallId++;
           const request = { kind: "installPackage", ...options, id: this.packageInstallId };
-          const promise2 = new Promise((resolve16, reject) => {
-            (this.packageInstalledPromise ?? (this.packageInstalledPromise = /* @__PURE__ */ new Map())).set(this.packageInstallId, { resolve: resolve16, reject });
+          const promise2 = new Promise((resolve17, reject) => {
+            (this.packageInstalledPromise ?? (this.packageInstalledPromise = /* @__PURE__ */ new Map())).set(this.packageInstallId, { resolve: resolve17, reject });
           });
           this.installer.send(request);
           return promise2;
@@ -218111,20 +218111,1487 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 });
 
 // src/index.ts
-var import_yaml3 = __toESM(require_dist(), 1);
+var import_yaml4 = __toESM(require_dist(), 1);
 import {
-  readFileSync as readFileSync28,
-  writeFileSync as writeFileSync21,
+  readFileSync as readFileSync30,
+  writeFileSync as writeFileSync22,
   mkdirSync as mkdirSync24,
-  existsSync as existsSync23,
-  renameSync as renameSync13,
+  existsSync as existsSync24,
+  renameSync as renameSync14,
   statSync as statSync12,
   appendFileSync as appendFileSync6,
   unlinkSync as unlinkSync2
 } from "node:fs";
-import { spawnSync as spawnSync3 } from "node:child_process";
-import { extname as extname5, join as join29, basename as basename6, dirname as dirname13, resolve as resolve15, isAbsolute as isAbsolute4 } from "node:path";
+import { spawnSync as spawnSync4 } from "node:child_process";
+import { extname as extname5, join as join31, basename as basename6, dirname as dirname13, resolve as resolve16, isAbsolute as isAbsolute5 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
+
+// src/review-plan.ts
+var DEFAULT_REVIEW_RUBRIC = "Report ONLY real defects: wrong logic or inverted conditions, crashes, data corruption, race conditions, security exploits, broken local references, and misleading data persisted to ledgers/reports. Do NOT report style, naming, missing error handling (fail-fast projects propagate errors deliberately), null checks a strict type-checker already covers, or hypothetical hardening. Cite exact function names and line numbers that exist. Rank findings by severity (critical/high/medium/low) and state a concrete failure scenario for each \u2014 a finding without a failure scenario is not a finding.";
+function buildReviewPlan(files, opts = {}) {
+  if (files.length === 0) {
+    throw new Error("review_plan: no files to plan \u2014 caller must fail before this point");
+  }
+  const totalBytes = files.reduce((a, f) => a + f.bytes, 0);
+  const lines = [];
+  lines.push("# REVIEW PLAN (delegate mode \u2014 no LLM was called, $0)");
+  lines.push("");
+  lines.push(
+    `${files.length} file(s), ${totalBytes.toLocaleString()} bytes total. YOU (the host agent) are the reviewer: read each file, apply the rubric, report findings. This tool only planned the work.`
+  );
+  lines.push("");
+  lines.push("## Rubric");
+  lines.push("");
+  lines.push(DEFAULT_REVIEW_RUBRIC);
+  if (opts.instructions && opts.instructions.trim().length > 0) {
+    lines.push("");
+    lines.push("Additional caller instructions (append to, do not replace, the rubric):");
+    lines.push(opts.instructions.trim());
+  }
+  lines.push("");
+  lines.push("## Files (review each, largest last so context-heavy work comes warm)");
+  lines.push("");
+  const sorted = [...files].sort((a, b) => a.bytes - b.bytes);
+  for (const f of sorted) {
+    lines.push(`- ${f.path} (${f.bytes.toLocaleString()} B)`);
+  }
+  if (opts.hunksByFile && opts.hunksByFile.size > 0) {
+    lines.push("");
+    lines.push("## Changed hunks (diff mode \u2014 review THESE; open full files only when a hunk demands it)");
+    for (const f of sorted) {
+      const hunk = opts.hunksByFile.get(f.path);
+      if (!hunk) continue;
+      lines.push("");
+      lines.push(`### ${f.path}`);
+      lines.push("```diff");
+      lines.push(hunk);
+      lines.push("```");
+    }
+  }
+  lines.push("");
+  lines.push("## Protocol");
+  lines.push("");
+  lines.push("1. Read each file IN FULL before judging it (no hunk-blind claims).");
+  lines.push(
+    "2. For every candidate finding, verify against the actual code before reporting \u2014 a claim refutable by reading three lines of context is worse than no claim."
+  );
+  lines.push(
+    "3. Write the findings report to " + (opts.reportDir ?? "<main-project>/reports/llm-externalizer/") + " with a local-time+offset timestamped filename; reply with the report path and a one-line verdict count."
+  );
+  return lines.join("\n");
+}
+
+// src/review-rules.ts
+var import_yaml2 = __toESM(require_dist(), 1);
+import { existsSync as existsSync2, readFileSync as readFileSync2 } from "node:fs";
+import { join as join2 } from "node:path";
+
+// src/config.ts
+var import_yaml = __toESM(require_dist(), 1);
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  chmodSync,
+  realpathSync
+} from "node:fs";
+import { resolve, join } from "node:path";
+import { homedir } from "node:os";
+
+// src/benchmark/free-mode.ts
+function isFreeSuffixModelId(id) {
+  return id.endsWith(":free");
+}
+var FreeModeSkipError = class extends Error {
+  tool;
+  nonFreeModelId;
+  constructor(tool, nonFreeModelId, message) {
+    super(message);
+    this.name = "FreeModeSkipError";
+    this.tool = tool;
+    this.nonFreeModelId = nonFreeModelId;
+  }
+};
+
+// src/paid-switch.ts
+var _allowPaidModels = false;
+function setAllowPaidModels(allow) {
+  _allowPaidModels = allow;
+}
+function getAllowPaidModels() {
+  return _allowPaidModels;
+}
+
+// src/benchmark/discover.ts
+var DEFAULT_CRITERIA = {
+  category: "programming",
+  minContextTokens: 128e3,
+  minOutputTokens: 64e3,
+  // Hard caps for auto-selection: STRICTLY less than $1/M for both
+  // input AND output. Anything at or above is rejected from the
+  // candidate pool. The `qualify()` predicate enforces this with `<`
+  // (not `<=`) so $1.00 itself is out. Override only via --include.
+  maxInputDollarsPerMillion: 1,
+  maxOutputDollarsPerMillion: 1,
+  requireStructuredOutputs: true,
+  requireReasoning: true,
+  allowFree: false
+};
+var MAX_BENCHMARK_PRICE_PER_M = 1.25;
+function overBenchmarkPriceCap(m) {
+  const { inputDollarsPerMillion: i, outputDollarsPerMillion: o } = m;
+  if (!Number.isFinite(i) || !Number.isFinite(o)) return true;
+  return i > MAX_BENCHMARK_PRICE_PER_M || o > MAX_BENCHMARK_PRICE_PER_M;
+}
+function extractCodexIndex(m) {
+  const v = m.benchmarks?.artificial_analysis?.coding_index;
+  return typeof v === "number" && isFinite(v) ? v : void 0;
+}
+function extractDesignArenaCodeElo(m) {
+  const row = (m.benchmarks?.design_arena ?? []).find(
+    (e) => e.arena === "models" && e.category === "codecategories"
+  );
+  const v = row?.elo;
+  return typeof v === "number" && isFinite(v) ? v : void 0;
+}
+async function fetchProgrammingModels(category) {
+  const url2 = category ? `https://openrouter.ai/api/v1/models?category=${encodeURIComponent(category)}` : `https://openrouter.ai/api/v1/models`;
+  const resp = await fetch(url2);
+  if (!resp.ok) {
+    throw new Error(`OpenRouter model list fetch failed: ${resp.status} ${resp.statusText}`);
+  }
+  const body = await resp.json();
+  return body.data ?? [];
+}
+function filterModels(models, criteria2 = DEFAULT_CRITERIA) {
+  const out = [];
+  for (const m of models) {
+    const q = qualify(m, criteria2);
+    if (q && !overBenchmarkPriceCap(q)) out.push(q);
+  }
+  return out;
+}
+var paidBenchmarksAllowed = false;
+async function withPaidBenchmarksAllowed(allowed, fn) {
+  const prev = paidBenchmarksAllowed;
+  paidBenchmarksAllowed = allowed;
+  try {
+    return await fn();
+  } finally {
+    paidBenchmarksAllowed = prev;
+  }
+}
+function paidBenchmarkWouldRefuse(model) {
+  if (isFreeModeEligible(model.id, model.inputDollarsPerMillion, model.outputDollarsPerMillion)) {
+    return false;
+  }
+  return !getAllowPaidModels() || !paidBenchmarksAllowed;
+}
+function assertPaidBenchmarkAllowed(models) {
+  const paid = models.filter(
+    (m) => !isFreeModeEligible(m.id, m.inputDollarsPerMillion, m.outputDollarsPerMillion)
+  );
+  if (paid.length === 0) return;
+  const list = paid.map((m) => m.id).join(", ");
+  if (!getAllowPaidModels()) {
+    throw new Error(
+      `paid benchmarks are off: allow_paid_models is false, so paid model(s) ${list} cannot be benchmarked. Set allow_paid_models: true in ~/.llm-externalizer/settings.yaml to benchmark (and use) paid models \u2014 --allow-paid-models-tests cannot override the master switch. No API call was made, $0 spent.`
+    );
+  }
+  if (paidBenchmarksAllowed) return;
+  throw new Error(
+    `paid-benchmark opt-in: benchmarking paid model(s) ${list} requires explicit permission. Re-run with --allow-paid-models-tests (CLI) or allow_paid_models_tests: true (MCP). Paid models are also capped at $${MAX_BENCHMARK_PRICE_PER_M}/1M (input AND output). No API call was made, $0 spent.`
+  );
+}
+function assertModelsUnderPriceCap(models) {
+  const over = models.filter(overBenchmarkPriceCap);
+  if (over.length === 0) return;
+  const list = over.map(
+    (m) => `${m.id} (in $${m.inputDollarsPerMillion.toFixed(3)}/M, out $${m.outputDollarsPerMillion.toFixed(3)}/M)`
+  ).join("; ");
+  throw new Error(
+    `benchmark price cap: refusing to benchmark model(s) priced over $${MAX_BENCHMARK_PRICE_PER_M}/1M (input AND output must be \u2264 $${MAX_BENCHMARK_PRICE_PER_M}/1M): ${list}. No API call was made, $0 spent. Remove the over-cap id(s) or pick a cheaper model.`
+  );
+}
+function disqualifyReason(m, criteria2) {
+  if (!criteria2.allowFree && m.id.endsWith(":free")) return "free model not allowed (allowFree=false)";
+  const params = new Set(m.supported_parameters ?? []);
+  const supportsStructured = params.has("structured_outputs") || params.has("response_format");
+  const supportsReasoning = params.has("reasoning") || params.has("include_reasoning");
+  if (criteria2.requireStructuredOutputs && !supportsStructured) {
+    return "no structured-output support (needs response_format or structured_outputs)";
+  }
+  if (criteria2.requireReasoning && !supportsReasoning) return "no reasoning support";
+  const ctx = m.context_length ?? 0;
+  if (ctx < criteria2.minContextTokens) return `context ${ctx} < required ${criteria2.minContextTokens}`;
+  const maxOutRaw = m.top_provider?.max_completion_tokens;
+  const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
+  if (!maxOut || maxOut < criteria2.minOutputTokens) {
+    return `max output ${maxOut} < required ${criteria2.minOutputTokens}`;
+  }
+  const promptPerToken = parseFloat(m.pricing?.prompt ?? "NaN");
+  const completionPerToken = parseFloat(m.pricing?.completion ?? "NaN");
+  if (!isFinite(promptPerToken) || !isFinite(completionPerToken)) return "missing or invalid pricing";
+  const inputDollarsPerMillion = promptPerToken * 1e6;
+  const outputDollarsPerMillion = completionPerToken * 1e6;
+  if (inputDollarsPerMillion >= criteria2.maxInputDollarsPerMillion) {
+    return `input $${inputDollarsPerMillion.toFixed(3)}/M >= cap $${criteria2.maxInputDollarsPerMillion.toFixed(3)}/M`;
+  }
+  if (outputDollarsPerMillion >= criteria2.maxOutputDollarsPerMillion) {
+    return `output $${outputDollarsPerMillion.toFixed(3)}/M >= cap $${criteria2.maxOutputDollarsPerMillion.toFixed(3)}/M`;
+  }
+  return null;
+}
+function qualify(m, criteria2) {
+  if (disqualifyReason(m, criteria2) !== null) return null;
+  const params = new Set(m.supported_parameters ?? []);
+  const supportsStructured = params.has("structured_outputs") || params.has("response_format");
+  const supportsReasoning = params.has("reasoning") || params.has("include_reasoning");
+  const ctx = m.context_length ?? 0;
+  const maxOutRaw = m.top_provider?.max_completion_tokens;
+  const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
+  const inputDollarsPerMillion = parseFloat(m.pricing?.prompt ?? "NaN") * 1e6;
+  const outputDollarsPerMillion = parseFloat(m.pricing?.completion ?? "NaN") * 1e6;
+  return {
+    id: m.id,
+    name: m.name ?? m.id,
+    contextTokens: ctx,
+    maxOutputTokens: maxOut,
+    inputDollarsPerMillion,
+    outputDollarsPerMillion,
+    supportsStructured,
+    supportsReasoning,
+    codexIndex: extractCodexIndex(m),
+    designArenaElo: extractDesignArenaCodeElo(m),
+    raw: m
+  };
+}
+function buildBenchmarkRoster(candidatePool, criteria2, includeIds, baselineLookupPool = candidatePool) {
+  const candidates = filterModels(candidatePool, criteria2);
+  const inRoster = new Set(candidates.map((m) => m.id));
+  const seen = new Set(inRoster);
+  const baselines = [];
+  for (const id of includeIds) {
+    if (seen.has(id)) continue;
+    const raw = baselineLookupPool.find((m) => m.id === id);
+    if (!raw) {
+      continue;
+    }
+    const params = new Set(raw.supported_parameters ?? []);
+    const promptPerToken = parseFloat(raw.pricing?.prompt ?? "NaN");
+    const completionPerToken = parseFloat(raw.pricing?.completion ?? "NaN");
+    const ctx = raw.context_length ?? 0;
+    const maxOutRaw = raw.top_provider?.max_completion_tokens;
+    const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
+    baselines.push({
+      id: raw.id,
+      name: raw.name ?? raw.id,
+      contextTokens: ctx,
+      maxOutputTokens: maxOut,
+      inputDollarsPerMillion: isFinite(promptPerToken) ? promptPerToken * 1e6 : Infinity,
+      outputDollarsPerMillion: isFinite(completionPerToken) ? completionPerToken * 1e6 : Infinity,
+      supportsStructured: params.has("structured_outputs") || params.has("response_format"),
+      supportsReasoning: params.has("reasoning") || params.has("include_reasoning"),
+      codexIndex: extractCodexIndex(raw),
+      designArenaElo: extractDesignArenaCodeElo(raw),
+      raw
+    });
+    seen.add(raw.id);
+  }
+  return { candidates, baselines };
+}
+function rankByQualityIndex(models) {
+  const codexVals = models.map((m) => m.codexIndex).filter((v) => v !== void 0);
+  const eloVals = models.map((m) => m.designArenaElo).filter((v) => v !== void 0);
+  const normalise = (v, pool) => {
+    if (v === void 0 || pool.length === 0) return void 0;
+    const lo = Math.min(...pool);
+    const hi = Math.max(...pool);
+    return hi === lo ? 1 : (v - lo) / (hi - lo);
+  };
+  const qualityScore = (m) => {
+    const axes = [normalise(m.codexIndex, codexVals), normalise(m.designArenaElo, eloVals)].filter(
+      (v) => v !== void 0
+    );
+    return axes.length === 0 ? void 0 : axes.reduce((a, b) => a + b, 0) / axes.length;
+  };
+  const cheapness = (m) => m.inputDollarsPerMillion + m.outputDollarsPerMillion;
+  return [...models].sort((a, b) => {
+    const sa = qualityScore(a);
+    const sb = qualityScore(b);
+    if (sa === void 0 !== (sb === void 0)) return sa === void 0 ? 1 : -1;
+    if (sa !== void 0 && sb !== void 0 && sa !== sb) return sb - sa;
+    const ca = cheapness(a);
+    const cb = cheapness(b);
+    if (ca !== cb) return ca - cb;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+}
+function isZeroCostPriced(inputDollarsPerMillion, outputDollarsPerMillion) {
+  return inputDollarsPerMillion === 0 && outputDollarsPerMillion === 0;
+}
+function isFreeModeEligible(id, inputDollarsPerMillion, outputDollarsPerMillion) {
+  return id.endsWith(":free") || isZeroCostPriced(inputDollarsPerMillion, outputDollarsPerMillion);
+}
+
+// src/benchmark/select-common.ts
+var COST_EPSILON = 1e-9;
+function notPricier(candidate, inInc, outInc) {
+  return candidate.inputDollarsPerMillion <= inInc + COST_EPSILON && candidate.outputDollarsPerMillion <= outInc + COST_EPSILON;
+}
+function selectSameOrCheaper(input) {
+  const {
+    incumbentModelId,
+    incumbentInputDollarsPerMillion: inInc,
+    incumbentOutputDollarsPerMillion: outInc,
+    requirementsLabel,
+    benchmarkLabel
+  } = input;
+  const eligible = [];
+  const rejected = [];
+  for (const c of input.candidates) {
+    if (!c.qualified) {
+      rejected.push({
+        modelId: c.modelId,
+        reason: `does not meet ${requirementsLabel}${c.disqualifyReason ? ` (${c.disqualifyReason})` : ""}`
+      });
+      continue;
+    }
+    if (!c.benchmarkPass) {
+      rejected.push({
+        modelId: c.modelId,
+        reason: `failed ${benchmarkLabel}: ${c.benchmarkFailReasons.join("; ")}`
+      });
+      continue;
+    }
+    if (!notPricier(c, inInc, outInc)) {
+      rejected.push({
+        modelId: c.modelId,
+        reason: `pricier than the incumbent default (in $${c.inputDollarsPerMillion.toFixed(3)}/out $${c.outputDollarsPerMillion.toFixed(3)} vs incumbent in $${inInc.toFixed(3)}/out $${outInc.toFixed(3)}) \u2014 never auto-bump to a pricier model`
+      });
+      continue;
+    }
+    eligible.push(c);
+  }
+  eligible.sort((a, b) => {
+    if (b.benchmarkScore !== a.benchmarkScore) return b.benchmarkScore - a.benchmarkScore;
+    const aCost = a.inputDollarsPerMillion + a.outputDollarsPerMillion;
+    const bCost = b.inputDollarsPerMillion + b.outputDollarsPerMillion;
+    if (aCost !== bCost) return aCost - bCost;
+    return a.latencyMs - b.latencyMs;
+  });
+  if (eligible.length === 0) {
+    return {
+      recommendedModelId: incumbentModelId,
+      changed: false,
+      reason: `No eligible same-or-cheaper model passed ${benchmarkLabel}. Keeping the incumbent default.`,
+      eligible,
+      rejected
+    };
+  }
+  const winner = eligible[0];
+  const changed = winner.modelId !== incumbentModelId;
+  return {
+    recommendedModelId: winner.modelId,
+    changed,
+    reason: changed ? `${winner.modelId} passed ${benchmarkLabel} (score ${winner.benchmarkScore.toFixed(3)}) at no higher cost than the incumbent and scored best among eligible passers.` : `The incumbent ${winner.modelId} remains the best eligible passer (score ${winner.benchmarkScore.toFixed(3)}).`,
+    eligible,
+    rejected
+  };
+}
+
+// src/benchmark/security-triage/select.ts
+var SECURITY_TRIAGE_CRITERIA = {
+  category: DEFAULT_CRITERIA.category,
+  // Snippet windows are at most a few KB; the judge prompt is small. 16K is
+  // plenty and keeps cheap small models (e.g. qwen-2.5-7b @ 32K) in the pool.
+  minContextTokens: 16e3,
+  // The verdict JSON is ~200 bytes. 1K completion headroom is ample.
+  minOutputTokens: 1e3,
+  maxInputDollarsPerMillion: DEFAULT_CRITERIA.maxInputDollarsPerMillion,
+  maxOutputDollarsPerMillion: DEFAULT_CRITERIA.maxOutputDollarsPerMillion,
+  requireStructuredOutputs: true,
+  // Triage does NOT need a reasoning model — the json_schema verdict is a
+  // direct classification. Requiring reasoning would wrongly exclude qwen-2.5-7b.
+  requireReasoning: false,
+  allowFree: false
+};
+function toGeneric(c) {
+  return {
+    modelId: c.modelId,
+    qualified: c.qualified,
+    disqualifyReason: c.disqualifyReason,
+    inputDollarsPerMillion: c.inputDollarsPerMillion,
+    outputDollarsPerMillion: c.outputDollarsPerMillion,
+    latencyMs: c.latencyMs,
+    benchmarkPass: c.triage.pass,
+    benchmarkScore: c.triage.score,
+    benchmarkFailReasons: c.triage.failReasons
+  };
+}
+function selectSecurityTriageModel(input) {
+  const byModelId = new Map(
+    input.candidates.map((c) => [c.modelId, c])
+  );
+  const generic = selectSameOrCheaper({
+    candidates: input.candidates.map(toGeneric),
+    incumbentModelId: input.incumbentModelId,
+    incumbentInputDollarsPerMillion: input.incumbentInputDollarsPerMillion,
+    incumbentOutputDollarsPerMillion: input.incumbentOutputDollarsPerMillion,
+    requirementsLabel: "security-triage requirements",
+    benchmarkLabel: "the triage benchmark"
+  });
+  return {
+    recommendedModelId: generic.recommendedModelId,
+    changed: generic.changed,
+    reason: generic.reason,
+    // Reorder the original assessments by the gate's eligible ordering. Every
+    // eligible modelId came from input.candidates, so the lookup never misses.
+    eligible: generic.eligible.map((g) => byModelId.get(g.modelId)),
+    rejected: generic.rejected
+  };
+}
+
+// src/model-qualification/registry.ts
+function criteria(overrides) {
+  return { ...DEFAULT_CRITERIA, ...overrides };
+}
+var TOOL_MODEL_REGISTRY = {
+  security_scan: {
+    tool: "security_scan",
+    // The reference instance. Structured output + a modest context; NO reasoning
+    // / 128K bar — triage snippets are small and the verdict is ~200 bytes.
+    requirements: SECURITY_TRIAGE_CRITERIA,
+    benchmark: "security-triage",
+    note: "Injection-hardened verdict adjudication. Gated by the security-triage golden dataset (TRDD-973a0265)."
+  },
+  mass_scout: {
+    tool: "mass_scout",
+    requirements: criteria({ requireReasoning: false }),
+    benchmark: "keyword-classification",
+    note: "Fieldset extraction / classification. Reuses the existing keyword-classification benchmark (benchmark/ground-truth.ts + pick.ts)."
+  },
+  cluster_synonyms: {
+    tool: "cluster_synonyms",
+    requirements: criteria({ requireReasoning: true }),
+    benchmark: null,
+    note: "Meaning-equivalence clustering. Has an in-tool pre-flight benchmark gate; a formal golden dataset is incremental."
+  },
+  code_task: {
+    tool: "code_task",
+    requirements: criteria({ requireReasoning: true, minContextTokens: 128e3 }),
+    benchmark: "code-task",
+    note: "Code-optimized analysis. Gated by the code-audit benchmark (P2b): real pre-fix snapshots from this repo's own git history, scored deterministically on defect localization by symbol name \u2014 no LLM judge."
+  },
+  scan_folder: {
+    tool: "scan_folder",
+    requirements: criteria({ requireReasoning: false, minContextTokens: 128e3 }),
+    benchmark: "scan-folder",
+    note: "Per-file auto-discovery scan. Gated by the mass-search benchmark (P2c): twelve files copied verbatim from this repo's own src/, three queries whose true MATCH set is derived mechanically from the corpus bytes, scored deterministically on the per-file MATCH/NO_MATCH verdict \u2014 no LLM judge."
+  },
+  search_existing_implementations: {
+    tool: "search_existing_implementations",
+    requirements: criteria({ requireReasoning: true, minContextTokens: 128e3 }),
+    benchmark: "search-existing",
+    note: "Duplicate-implementation match across a codebase. Gated by the search-existing fixture benchmark (TRDD-828238b5 A6)."
+  },
+  check_references: {
+    tool: "check_references",
+    requirements: criteria({ requireReasoning: false }),
+    benchmark: null,
+    note: "Symbol-reference validation. Validation-accuracy benchmark dataset is incremental."
+  },
+  check_imports: {
+    tool: "check_imports",
+    requirements: criteria({ requireReasoning: false }),
+    benchmark: null,
+    note: "Import-path validation. Validation-accuracy benchmark dataset is incremental."
+  },
+  check_against_specs: {
+    tool: "check_against_specs",
+    requirements: criteria({ requireReasoning: false }),
+    benchmark: "check-specs",
+    note: "Source-vs-specification compliance. Gated by the spec-adherence benchmark (P2d): this repo's own shipped TESTING.md audited over thirteen verbatim git snapshots \u2014 four of them the exact pre-fix bytes a real cost-safety commit replaced \u2014 scored deterministically on the per-file CLEAN/VIOLATION verdict, no LLM judge. Violation CONTENT (the cited rule, the severity) is deliberately NOT graded: that needs a judge."
+  },
+  compare_files: {
+    tool: "compare_files",
+    requirements: criteria({ requireReasoning: false, minContextTokens: 128e3 }),
+    benchmark: null,
+    note: "Two-file change summary. Change-summary benchmark dataset is incremental."
+  },
+  chat: {
+    tool: "chat",
+    // The loosest tool — general text. Structured output not required.
+    requirements: criteria({ requireStructuredOutputs: false, requireReasoning: false }),
+    benchmark: null,
+    note: "General-purpose text. A loose general-quality benchmark is incremental."
+  }
+};
+function getToolDescriptor(tool) {
+  return TOOL_MODEL_REGISTRY[tool];
+}
+function registeredTools() {
+  return Object.keys(TOOL_MODEL_REGISTRY);
+}
+function qualifyModelForTool(tool, model) {
+  const descriptor = getToolDescriptor(tool);
+  if (!descriptor) {
+    return {
+      tool,
+      meetsRequirements: false,
+      disqualifyReason: "unknown or non-LLM tool (no registry descriptor)",
+      qualified: null,
+      benchmark: null,
+      requirementsEligible: false
+    };
+  }
+  const qualified = qualify(model, descriptor.requirements);
+  const reason = qualified === null ? disqualifyReason(model, descriptor.requirements) : null;
+  return {
+    tool,
+    meetsRequirements: qualified !== null,
+    disqualifyReason: reason,
+    qualified,
+    benchmark: descriptor.benchmark,
+    requirementsEligible: qualified !== null
+  };
+}
+
+// src/config.ts
+var QUANT_TIERS = Object.freeze([
+  "int4",
+  "fp4",
+  "int8",
+  "fp6",
+  "fp8",
+  "fp16",
+  "bf16",
+  "fp32"
+]);
+var HIGH_QUALITY_MODEL_DEFAULTS = {
+  id: "z-ai/glm-5.2",
+  reasoningEffort: "xhigh",
+  // "max" maps here — the real OpenRouter ceiling
+  cache: true,
+  providerOrder: ["gmicloud/fp8"],
+  quantizations: ["fp8", "fp16", "bf16", "fp32"],
+  // fp8-or-higher
+  allowFallbacks: false
+};
+var VALID_HQ_REASONING = /* @__PURE__ */ new Set([
+  "off",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max"
+]);
+var API_PRESETS = {
+  // ── Local presets ─────────────────────────────────────────────────
+  "lmstudio-local": {
+    protocol: "lmstudio_api",
+    defaultUrl: "http://localhost:1234",
+    defaultAuthEnv: "$LM_API_TOKEN",
+    defaultTimeout: 300,
+    defaultAppName: "",
+    defaultHttpReferer: "",
+    defaultContextWindow: 0,
+    isLocal: true
+  },
+  "ollama-local": {
+    protocol: "openai_api",
+    defaultUrl: "http://localhost:11434",
+    defaultAuthEnv: "",
+    defaultTimeout: 300,
+    defaultAppName: "",
+    defaultHttpReferer: "",
+    defaultContextWindow: 0,
+    isLocal: true
+  },
+  "vllm-local": {
+    protocol: "openai_api",
+    defaultUrl: "http://localhost:8000",
+    defaultAuthEnv: "$VLLM_API_KEY",
+    defaultTimeout: 300,
+    defaultAppName: "",
+    defaultHttpReferer: "",
+    defaultContextWindow: 0,
+    isLocal: true
+  },
+  "llamacpp-local": {
+    protocol: "openai_api",
+    defaultUrl: "http://localhost:8080",
+    defaultAuthEnv: "",
+    defaultTimeout: 300,
+    defaultAppName: "",
+    defaultHttpReferer: "",
+    defaultContextWindow: 0,
+    isLocal: true
+  },
+  "generic-local": {
+    protocol: "openai_api",
+    defaultUrl: "",
+    defaultAuthEnv: "$LM_API_TOKEN",
+    defaultTimeout: 300,
+    defaultAppName: "",
+    defaultHttpReferer: "",
+    defaultContextWindow: 0,
+    isLocal: true
+  },
+  // ── Remote presets ────────────────────────────────────────────────
+  "openrouter-remote": {
+    protocol: "openrouter_api",
+    defaultUrl: "https://openrouter.ai/api",
+    defaultAuthEnv: "$OPENROUTER_API_KEY",
+    defaultTimeout: 600,
+    // 10 min — reasoning models (Qwen, etc.) need extended thinking time
+    defaultAppName: "llm-externalizer",
+    defaultHttpReferer: "",
+    defaultContextWindow: 0,
+    isLocal: false
+  }
+};
+function getConfigDir() {
+  const raw = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
+  function resolveDeepestExisting(p) {
+    try {
+      return realpathSync(p);
+    } catch {
+    }
+    const parent = join(p, "..");
+    if (parent === p) return p;
+    const resolvedParent = resolveDeepestExisting(parent);
+    return join(resolvedParent, p.slice(parent.length + (parent.endsWith("/") || parent.endsWith("\\") ? 0 : 1)));
+  }
+  const dir = resolveDeepestExisting(raw);
+  const home = (() => {
+    try {
+      return realpathSync(homedir());
+    } catch {
+      return homedir();
+    }
+  })();
+  const tmpCanonical = (() => {
+    try {
+      return realpathSync("/tmp");
+    } catch {
+      return "/tmp";
+    }
+  })();
+  const sep3 = process.platform === "win32" ? "\\" : "/";
+  const underHome = dir.startsWith(home + sep3) || dir === home;
+  const underTmp = dir.startsWith(tmpCanonical + sep3) || dir === tmpCanonical;
+  if (!underHome && !underTmp) {
+    throw new Error(`Config directory '${dir}' is outside allowed paths (${home} or ${tmpCanonical})`);
+  }
+  return dir;
+}
+function getSettingsPath() {
+  return join(getConfigDir(), "settings.yaml");
+}
+var USER_CONFIG_ENV_MAP = {
+  OPENROUTER_API_KEY: "CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY"
+};
+function resolveEnvValue(value) {
+  if (!value) return "";
+  if (value.startsWith("$")) {
+    const name = value.slice(1).trim();
+    const userConfigVar = USER_CONFIG_ENV_MAP[name];
+    if (userConfigVar) {
+      const userConfigVal = process.env[userConfigVar];
+      if (userConfigVal && userConfigVal.length > 0) return userConfigVal;
+    }
+    return process.env[name] || "";
+  }
+  return value;
+}
+var LOCAL_URL_PATTERN = /\/\/localhost([:/]|$)|\/\/127\.\d+\.\d+\.\d+|\/\/192\.168\.\d+\.\d+|\/\/10\.\d+\.\d+\.\d+|\/\/172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|\/\/\[::1\]|\/\/0\.0\.0\.0/i;
+function isLocalUrl(url2) {
+  return LOCAL_URL_PATTERN.test(url2);
+}
+function loadSettings() {
+  const settingsPath = getSettingsPath();
+  try {
+    if (!existsSync(settingsPath)) return null;
+    const raw = readFileSync(settingsPath, "utf-8");
+    const parsed = JSON.parse(JSON.stringify((0, import_yaml.parse)(raw)));
+    if (!parsed || typeof parsed !== "object") return null;
+    return {
+      active: parsed.active || "",
+      profiles: parsed.profiles || {},
+      // Absent / any non-true value ⟺ false: the safe (free) side. A YAML that
+      // predates this key, or sets it to a typo, never accidentally enables paid.
+      allow_paid_models: parsed.allow_paid_models === true
+    };
+  } catch (err3) {
+    process.stderr.write(
+      `[llm-externalizer] Warning: Failed to read ${settingsPath}: ${err3 instanceof Error ? err3.message : String(err3)}
+`
+    );
+    return null;
+  }
+}
+function generateDefaultSettings() {
+  return {
+    active: "local-lmstudio-qwen35",
+    // Explicit free-safe default (USER: free-by-default). The default active
+    // profile is local ($0) so the switch is inert here, but stating it keeps the
+    // object in lock-step with SETTINGS_TEMPLATE and documents the safe posture.
+    allow_paid_models: false,
+    profiles: {
+      "local-lmstudio-qwen35": {
+        mode: "local",
+        api: "lmstudio-local",
+        model: "thecluster/qwen3.5-27b-mlx"
+      },
+      "local-ollama-qwen314": {
+        mode: "local",
+        api: "ollama-local",
+        model: "qwen3:14b"
+      },
+      "remote-single-geminiflash": {
+        mode: "remote",
+        api: "openrouter-remote",
+        model: "google/gemini-2.5-flash",
+        api_key: "$OPENROUTER_API_KEY"
+      },
+      "remote-ensemble-geminigrok": {
+        mode: "remote-ensemble",
+        api: "openrouter-remote",
+        model: "google/gemini-2.5-flash",
+        second_model: "x-ai/grok-4.1-fast",
+        third_model: "qwen/qwen3.6-plus",
+        api_key: "$OPENROUTER_API_KEY"
+      }
+    }
+  };
+}
+function ensureSettingsExist() {
+  const settingsPath = getSettingsPath();
+  const configDir = getConfigDir();
+  const oldSettingsPath = join(configDir, "settings.yml");
+  if (existsSync(oldSettingsPath) && !existsSync(settingsPath)) {
+    process.stderr.write(
+      `[llm-externalizer] Found old settings.yml \u2014 the new format is settings.yaml with profiles.
+[llm-externalizer] Generating new settings.yaml. Your old settings.yml is preserved but no longer read.
+`
+    );
+  }
+  if (!existsSync(settingsPath)) {
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(settingsPath, SETTINGS_TEMPLATE, "utf-8");
+    try {
+      chmodSync(settingsPath, 384);
+    } catch {
+    }
+    process.stderr.write(
+      `[llm-externalizer] Generated default settings at ${settingsPath}
+`
+    );
+  }
+  const settings = loadSettings();
+  if (!settings) {
+    throw new Error(`Failed to parse ${settingsPath}. Check YAML syntax.`);
+  }
+  return settings;
+}
+function validateProfile(name, profile) {
+  const errors = [];
+  if (!profile.mode) {
+    errors.push(`Profile '${name}': missing required field: mode`);
+  } else if (!["local", "remote", "remote-ensemble"].includes(profile.mode)) {
+    errors.push(
+      `Invalid mode '${profile.mode}'. Must be: local, remote, or remote-ensemble`
+    );
+  }
+  if (!profile.api) {
+    errors.push(`Profile '${name}': missing required field: api`);
+  }
+  if (!profile.model && !profile.free_only) {
+    errors.push(`Profile '${name}': missing required field: model`);
+  }
+  const preset = profile.api ? API_PRESETS[profile.api] : void 0;
+  if (profile.api && !preset) {
+    errors.push(
+      `Unknown api preset '${profile.api}'. Valid presets: ${Object.keys(API_PRESETS).join(", ")}`
+    );
+    return { valid: false, errors };
+  }
+  if (!preset || !profile.mode) {
+    return { valid: false, errors };
+  }
+  if (profile.mode === "local" && !preset.isLocal) {
+    errors.push(
+      `Mode 'local' requires a -local api preset, got '${profile.api}'`
+    );
+  }
+  if ((profile.mode === "remote" || profile.mode === "remote-ensemble") && preset.isLocal) {
+    errors.push(
+      `Mode '${profile.mode}' requires a -remote api preset, got '${profile.api}'`
+    );
+  }
+  if (profile.free_only) {
+    if (preset.isLocal) {
+      errors.push(
+        `Profile '${name}': free_only requires a remote (OpenRouter) api preset \u2014 ':free' models are an OpenRouter concept. Got local preset '${profile.api}'.`
+      );
+    }
+    if (profile.free_models !== void 0 && !Array.isArray(profile.free_models)) {
+      errors.push(
+        `Profile '${name}': free_models must be a YAML list of ':free' model ids.`
+      );
+    }
+    const pool = coerceFreeModels(profile.free_models);
+    if (pool.length === 0) {
+      errors.push(
+        `Profile '${name}': free_only requires a non-empty 'free_models' list.`
+      );
+    }
+    const nonFree = pool.filter((m) => !m.endsWith(":free"));
+    if (nonFree.length > 0) {
+      errors.push(
+        `Profile '${name}': free_only forbids non-':free' models \u2014 every free_models entry MUST end with ':free'. Offending: ${nonFree.join(", ")}`
+      );
+    }
+    if (profile.mode === "remote-ensemble" && pool.length < 2) {
+      errors.push(
+        `Profile '${name}': free_only + mode 'remote-ensemble' needs at least 2 free_models (the ensemble fans out to the top models). Use mode 'remote' for a single free model.`
+      );
+    }
+  }
+  if (profile.mode === "remote-ensemble" && !profile.second_model && !profile.free_only) {
+    errors.push("Mode 'remote-ensemble' requires 'second_model'");
+  }
+  if (profile.mode === "local" && profile.second_model) {
+    errors.push("Mode 'local' does not support 'second_model'");
+  }
+  if (profile.mode === "remote" && profile.second_model) {
+    errors.push(
+      "Mode 'remote' does not support 'second_model'. Use 'remote-ensemble'"
+    );
+  }
+  if (profile.third_model && profile.mode !== "remote-ensemble") {
+    errors.push("'third_model' is only supported in 'remote-ensemble' mode");
+  }
+  if (profile.api === "lmstudio-local") {
+    if (profile.second_model) {
+      errors.push("LM Studio native API does not support second_model");
+    }
+  }
+  const effectiveUrl = profile.url || preset.defaultUrl;
+  if (effectiveUrl) {
+    const urlIsLocal = isLocalUrl(effectiveUrl);
+    if ((profile.mode === "remote" || profile.mode === "remote-ensemble") && urlIsLocal) {
+      errors.push(`Remote mode cannot use local URL '${effectiveUrl}'`);
+    }
+  }
+  if (profile.api === "generic-local" && !profile.url) {
+    errors.push("Api preset 'generic-local' requires explicit 'url'");
+  }
+  if (profile.timeout !== void 0 && (typeof profile.timeout !== "number" || !isFinite(profile.timeout) || profile.timeout < 0)) {
+    errors.push(
+      `Profile '${name}': timeout must be a non-negative finite number`
+    );
+  }
+  if (profile.context_window !== void 0 && (typeof profile.context_window !== "number" || !isFinite(profile.context_window) || profile.context_window < 0)) {
+    errors.push(
+      `Profile '${name}': context_window must be a non-negative finite number`
+    );
+  }
+  if (typeof profile.timeout === "number" && profile.timeout > 3600) {
+    errors.push(`Profile '${name}': timeout must be <= 3600 (1 hour)`);
+  }
+  if (typeof profile.context_window === "number" && profile.context_window > 1e7) {
+    errors.push(`Profile '${name}': context_window must be <= 10,000,000`);
+  }
+  if (!preset.isLocal) {
+    const rawAuth = profile.api_key || preset.defaultAuthEnv;
+    const resolved = resolveEnvValue(rawAuth);
+    if (!resolved) {
+      const hint = rawAuth?.startsWith("$") ? ` (env var ${rawAuth} is not set)` : "";
+      errors.push(`Remote api '${profile.api}' requires 'api_key'${hint}`);
+    }
+  }
+  const rawToolModels = profile.tool_models;
+  if (rawToolModels !== void 0 && rawToolModels !== null) {
+    if (typeof rawToolModels !== "object" || Array.isArray(rawToolModels)) {
+      errors.push(
+        `Profile '${name}': tool_models must be a map of {tool: model}`
+      );
+    } else {
+      const known = new Set(registeredTools());
+      for (const [toolName, modelId] of Object.entries(
+        rawToolModels
+      )) {
+        if (!known.has(toolName)) {
+          errors.push(
+            `Profile '${name}': tool_models has unknown tool '${toolName}'. Known LLM tools: ${registeredTools().join(", ")}`
+          );
+        }
+        if (typeof modelId !== "string" || modelId.length === 0) {
+          errors.push(
+            `Profile '${name}': tool_models['${toolName}'] must be a non-empty model-id string`
+          );
+        }
+      }
+    }
+  }
+  const rawHq = profile.high_quality_model;
+  if (rawHq !== void 0 && rawHq !== null) {
+    if (typeof rawHq !== "object" || Array.isArray(rawHq)) {
+      errors.push(
+        `Profile '${name}': high_quality_model must be a map of {id, reasoning_effort, cache, min_quantization, provider, allow_fallbacks}`
+      );
+    } else {
+      const hq = rawHq;
+      if (hq.id !== void 0 && (typeof hq.id !== "string" || hq.id.length === 0)) {
+        errors.push(
+          `Profile '${name}': high_quality_model.id must be a non-empty model-id string`
+        );
+      }
+      if (hq.reasoning_effort !== void 0 && (typeof hq.reasoning_effort !== "string" || !VALID_HQ_REASONING.has(hq.reasoning_effort.toLowerCase()))) {
+        errors.push(
+          `Profile '${name}': high_quality_model.reasoning_effort must be one of off|low|medium|high|xhigh|max`
+        );
+      }
+      if (hq.cache !== void 0 && typeof hq.cache !== "boolean") {
+        errors.push(
+          `Profile '${name}': high_quality_model.cache must be a boolean`
+        );
+      }
+      if (hq.min_quantization !== void 0 && (typeof hq.min_quantization !== "string" || !QUANT_TIERS.includes(hq.min_quantization.toLowerCase()))) {
+        errors.push(
+          `Profile '${name}': high_quality_model.min_quantization must be one of ${QUANT_TIERS.join("|")}`
+        );
+      }
+      if (hq.provider !== void 0 && (typeof hq.provider !== "string" || hq.provider.length === 0)) {
+        errors.push(
+          `Profile '${name}': high_quality_model.provider must be a non-empty provider slug string`
+        );
+      }
+      if (hq.allow_fallbacks !== void 0 && typeof hq.allow_fallbacks !== "boolean") {
+        errors.push(
+          `Profile '${name}': high_quality_model.allow_fallbacks must be a boolean`
+        );
+      }
+    }
+  }
+  return { valid: errors.length === 0, errors };
+}
+function validateSettings(settings) {
+  if (!settings.active) {
+    return {
+      valid: false,
+      errors: [
+        `No active profile set. Edit ${getSettingsPath()} manually and set the 'active:' field to one of the profile names listed under 'profiles:', then restart Claude Code or call the MCP 'reset' tool.`
+      ]
+    };
+  }
+  const profile = settings.profiles[settings.active];
+  if (!profile) {
+    const available = Object.keys(settings.profiles);
+    return {
+      valid: false,
+      errors: [
+        `Active profile '${settings.active}' not found. Available: ${available.join(", ") || "(none)"}`
+      ]
+    };
+  }
+  return validateProfile(settings.active, profile);
+}
+function coerceToolModels(raw) {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  return { ...raw };
+}
+function coerceFreeModels(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((m) => typeof m === "string");
+}
+function mapReasoningEffort(raw) {
+  if (typeof raw !== "string") return HIGH_QUALITY_MODEL_DEFAULTS.reasoningEffort;
+  const v = raw.toLowerCase();
+  if (v === "max") return "xhigh";
+  return VALID_HQ_REASONING.has(v) ? v : HIGH_QUALITY_MODEL_DEFAULTS.reasoningEffort;
+}
+function expandMinQuantization(raw) {
+  if (typeof raw !== "string")
+    return [...HIGH_QUALITY_MODEL_DEFAULTS.quantizations];
+  const idx = QUANT_TIERS.indexOf(raw.toLowerCase());
+  if (idx < 0) return [...HIGH_QUALITY_MODEL_DEFAULTS.quantizations];
+  return QUANT_TIERS.slice(idx);
+}
+function resolveHighQualityModel(raw) {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { ...HIGH_QUALITY_MODEL_DEFAULTS };
+  }
+  const hq = raw;
+  const id = typeof hq.id === "string" && hq.id.length > 0 ? hq.id : HIGH_QUALITY_MODEL_DEFAULTS.id;
+  const provider = typeof hq.provider === "string" && hq.provider.length > 0 ? hq.provider : HIGH_QUALITY_MODEL_DEFAULTS.providerOrder[0];
+  return {
+    id,
+    reasoningEffort: mapReasoningEffort(hq.reasoning_effort),
+    cache: typeof hq.cache === "boolean" ? hq.cache : HIGH_QUALITY_MODEL_DEFAULTS.cache,
+    providerOrder: [provider],
+    quantizations: expandMinQuantization(hq.min_quantization),
+    allowFallbacks: typeof hq.allow_fallbacks === "boolean" ? hq.allow_fallbacks : HIGH_QUALITY_MODEL_DEFAULTS.allowFallbacks
+  };
+}
+function buildHighQualityProvider(hq) {
+  const provider = {
+    allow_fallbacks: hq.allowFallbacks
+  };
+  if (hq.providerOrder.length > 0) provider.order = hq.providerOrder;
+  if (hq.quantizations.length > 0) provider.quantizations = hq.quantizations;
+  return provider;
+}
+function highQualityScanRefusal(backendType, freeOnly, creditExhausted2, allowPaidModels = true) {
+  if (backendType !== "openrouter") {
+    return `high_quality_scan requires the OpenRouter backend (it runs a remote high-quality model); the active backend is ${backendType}. Switch to a remote profile, or use scan_folder for the local backend.`;
+  }
+  if (freeOnly) {
+    if (!allowPaidModels) {
+      return `high_quality_scan runs ONE paid high-quality model, and paid models are off (allow_paid_models: false). Set allow_paid_models: true in ~/.llm-externalizer/settings.yaml to enable it, or use scan_folder (the free 3-model ensemble).`;
+    }
+    return `high_quality_scan uses a paid high-quality model and cannot run under free_only mode. Disable free_only in your profile, or use scan_folder (which honours the free pool).`;
+  }
+  if (creditExhausted2) {
+    return `high_quality_scan needs OpenRouter credit for its paid high-quality model, but credit is exhausted (a 402 was seen this session). Add credit, or use scan_folder.`;
+  }
+  return null;
+}
+function resolveProfile(name, profile) {
+  const preset = API_PRESETS[profile.api];
+  if (!preset) {
+    throw new Error(`Unknown api preset '${profile.api}'`);
+  }
+  const rawAuth = preset.isLocal ? profile.api_token || profile.api_key || preset.defaultAuthEnv : profile.api_key || preset.defaultAuthEnv;
+  const freeOnly = profile.free_only === true;
+  const freeModels = freeOnly ? coerceFreeModels(profile.free_models) : [];
+  const model = freeOnly ? freeModels[0] ?? "" : profile.model;
+  const secondModel = freeOnly ? freeModels[1] ?? "" : profile.second_model || "";
+  const thirdModel = freeOnly ? freeModels[2] ?? "" : profile.third_model || "";
+  return {
+    name,
+    mode: profile.mode,
+    protocol: preset.protocol,
+    url: profile.url || preset.defaultUrl,
+    model,
+    authToken: resolveEnvValue(rawAuth),
+    secondModel,
+    thirdModel,
+    freeOnly,
+    freeModels,
+    // Under free_only the free pool overrides EVERY per-tool choice (TRDD-97ef8b63):
+    // the resolved profile carries NO active per-tool overrides so resolveModelForTool,
+    // get_settings, and drift all agree that free models win. The user's settings.yaml
+    // tool_models are left intact on disk — they reactivate when free_only is off.
+    toolModels: freeOnly ? {} : coerceToolModels(profile.tool_models),
+    timeout: profile.timeout ?? preset.defaultTimeout,
+    contextWindow: profile.context_window ?? preset.defaultContextWindow,
+    appName: profile.app_name ?? preset.defaultAppName,
+    httpReferer: profile.http_referer ?? preset.defaultHttpReferer,
+    // High-quality-scan model (TRDD-DBUSM55E): always resolved (defaults filled),
+    // independent of mode — the high_quality_scan tool reads it; other tools ignore it.
+    highQualityModel: resolveHighQualityModel(profile.high_quality_model)
+  };
+}
+function resolveModelForTool(resolved, tool, fallback) {
+  if (resolved.freeOnly) return resolved.model;
+  const override = resolved.toolModels[tool];
+  if (typeof override === "string" && override.length > 0) return override;
+  if (fallback !== void 0) return fallback;
+  return resolved.model;
+}
+var FREE_POOL_SEED = Object.freeze([
+  "poolside/laguna-m.1:free",
+  "deepseek/deepseek-v4-flash:free",
+  "google/gemma-4-26b-a4b-it:free",
+  "google/gemma-4-31b-it:free",
+  "arcee-ai/trinity-large-thinking:free",
+  "nvidia/nemotron-3-super-120b-a12b:free",
+  "nvidia/nemotron-3-nano-30b-a3b:free",
+  "minimax/minimax-m2.5:free",
+  "qwen/qwen3-next-80b-a3b-instruct:free",
+  "openai/gpt-oss-120b:free",
+  "openai/gpt-oss-20b:free",
+  "qwen/qwen3-coder:free",
+  "z-ai/glm-4.5-air:free",
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "nousresearch/hermes-3-llama-3.1-405b:free"
+]);
+var _activeFreeOnly = false;
+function setActiveFreeOnly(freeOnly) {
+  _activeFreeOnly = freeOnly;
+}
+function getActiveFreeOnly() {
+  return _activeFreeOnly;
+}
+function shouldForceFreeMode(allowPaidModels, mode) {
+  return !allowPaidModels && mode !== null && mode !== "local";
+}
+function assertFreeOnlyModel(freeOnly, backendType, model) {
+  if (freeOnly && backendType === "openrouter" && !model.endsWith(":free")) {
+    throw new Error(
+      `free_only cost-safety: refusing to send non-free model '${model}' to OpenRouter. Under a free_only profile every tool MUST use a ':free' model \u2014 this is a bug, please report it.`
+    );
+  }
+}
+var SETTINGS_TEMPLATE = `# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# LLM Externalizer \u2014 Settings
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# Profile-based configuration. Each profile defines a complete LLM
+# backend setup. Edit this file manually and either restart Claude Code
+# or call the MCP 'reset' tool to reload.
+#
+# Location: ~/.llm-externalizer/settings.yaml
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+# Active profile name
+active: local-lmstudio-qwen35
+
+# \u2500\u2500 Master paid-spend switch \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# DEFAULT false \u2014 only FREE models are used, everywhere, by default. While
+# this is false (or absent), every remote (OpenRouter) profile is forced to
+# its free pool no matter what 'model' it configures, and even paid
+# *benchmarks* are refused \u2014 one switch guarantees zero paid spend. Local
+# profiles are $0/offline and always run as-is. Set it true to use paid
+# models (and to benchmark them); per-profile 'free_only' then remains an
+# opt-in. A remote profile with no 'free_models' still runs free \u2014 the
+# server auto-discovers a benchmark-vetted free pool at $0.
+allow_paid_models: false
+
+# \u2500\u2500 Profiles \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+profiles:
+
+  # \u2500\u2500 Local: LM Studio with Qwen 3.5 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  local-lmstudio-qwen35:
+    mode: local
+    api: lmstudio-local
+    model: "thecluster/qwen3.5-27b-mlx"
+    # url: "http://localhost:1234"       # (default from lmstudio-local preset)
+    # api_token: $LM_API_TOKEN           # (default from lmstudio-local preset)
+    # timeout: 300                        # (default from lmstudio-local preset)
+
+  # \u2500\u2500 Local: Ollama with Qwen 3 14B \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  local-ollama-qwen314:
+    mode: local
+    api: ollama-local
+    model: "qwen3:14b"
+    # url: "http://localhost:11434"       # (default from ollama-local preset)
+
+  # \u2500\u2500 Remote: Single model via OpenRouter \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  remote-single-geminiflash:
+    mode: remote
+    api: openrouter-remote
+    model: "google/gemini-2.5-flash"
+    api_key: $OPENROUTER_API_KEY          # set this env var, or replace with direct key
+    # Optional: high-quality scan model (TRDD-DBUSM55E). Drives high_quality_scan \u2014
+    # ONE strong model at max reasoning instead of the cheap 3-model ensemble.
+    # Absent \u2192 these exact defaults are used automatically. Needs an OpenRouter
+    # (remote) profile; NOT available under free_only (it is a paid model).
+    # high_quality_model:
+    #   id: "z-ai/glm-5.2"            # default high-quality model
+    #   reasoning_effort: max          # max -> OpenRouter "xhigh" (the real ceiling)
+    #   cache: true                    # prompt-cache the system prompt across files
+    #   min_quantization: fp8          # accept fp8-or-higher precision endpoints only
+    #   provider: "gmicloud/fp8"       # preferred provider (provider.order[0])
+    #   allow_fallbacks: false         # pin the preferred provider
+
+  # \u2500\u2500 Remote: Ensemble (three models in parallel) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  remote-ensemble-geminigrok:
+    mode: remote-ensemble
+    api: openrouter-remote
+    model: "google/gemini-2.5-flash"
+    second_model: "x-ai/grok-4.1-fast"
+    api_key: $OPENROUTER_API_KEY
+    # Optional: per-tool model overrides (TRDD-f45eeaa0). Absent \u2192 this
+    # profile's \`model\` (back-compat). Keys must be LLM-using tool names;
+    # a model set here should pass that tool's benchmark \u2014 see the
+    # security-triage benchmark (/llm-externalizer-security-triage-benchmark).
+    # tool_models:
+    #   security_scan: "qwen/qwen-2.5-7b-instruct"
+    #   code_task: "google/gemini-2.5-flash"
+
+  # \u2500\u2500 Remote: FREE-ONLY ensemble (zero spend) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  # free_only ignores model/second_model/third_model and uses ONLY the
+  # free_models pool. The top free models that clear the requirements
+  # floor form the ensemble; the rest are the rate-limit fallback pool.
+  # EVERY free_models entry MUST end with ':free' \u2014 the validator rejects
+  # the profile otherwise, so this profile can NEVER bill.
+  #
+  # The 15-model seed list below matches FREE_POOL_SEED in config.ts and
+  # is the canonical default. The auto-benchmark trigger (TRDD-f1510055)
+  # scores this pool when the profile is first activated (free_only=true
+  # + empty :free cache) and writes results to:
+  #   ~/.llm-externalizer/benchmark-results.json (keyword task)
+  #   ~/.llm-externalizer/security-triage-results.json (security_scan)
+  # Run it manually with: /llm-externalizer:llm-externalizer-bench-free-pool
+  remote-free-ensemble:
+    mode: remote-ensemble
+    api: openrouter-remote
+    free_only: true
+    api_key: $OPENROUTER_API_KEY            # free models still need the key (rate-limited, but $0)
+    free_models:
+      - "poolside/laguna-m.1:free"
+      - "deepseek/deepseek-v4-flash:free"
+      - "google/gemma-4-26b-a4b-it:free"
+      - "google/gemma-4-31b-it:free"
+      - "arcee-ai/trinity-large-thinking:free"
+      - "nvidia/nemotron-3-super-120b-a12b:free"
+      - "nvidia/nemotron-3-nano-30b-a3b:free"
+      - "minimax/minimax-m2.5:free"
+      - "qwen/qwen3-next-80b-a3b-instruct:free"
+      - "openai/gpt-oss-120b:free"
+      - "openai/gpt-oss-20b:free"
+      - "qwen/qwen3-coder:free"
+      - "z-ai/glm-4.5-air:free"
+      - "meta-llama/llama-3.3-70b-instruct:free"
+      - "nousresearch/hermes-3-llama-3.1-405b:free"
+
+# \u2500\u2500 API Presets Reference \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# Use with --api when creating profiles:
+#
+# LOCAL PRESETS (mode: local):
+#   lmstudio-local    LM Studio native API     http://localhost:1234   auth: $LM_API_TOKEN
+#   ollama-local      Ollama OpenAI-compat     http://localhost:11434  auth: (none)
+#   vllm-local        vLLM OpenAI-compat       http://localhost:8000   auth: $VLLM_API_KEY
+#   llamacpp-local    llama.cpp OpenAI-compat   http://localhost:8080   auth: (none)
+#   generic-local     Any OpenAI-compat        (url required)          auth: $LM_API_TOKEN
+#
+# REMOTE PRESETS (mode: remote / remote-ensemble):
+#   openrouter-remote  OpenRouter              https://openrouter.ai   auth: $OPENROUTER_API_KEY
+#
+# All local backends must support structured output (response_format: json_schema).
+#
+# \u2500\u2500 Modes Reference \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+#   local             Sequential requests to a local server
+#   remote            Parallel requests, single model via OpenRouter
+#   remote-ensemble   Parallel requests, three models, combined report
+#
+# \u2500\u2500 Auth Values \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# Auth fields (api_key, api_token) accept either:
+#   $ENV_VAR_NAME     Resolved from process environment at runtime
+#   "direct-value"    Used as-is (no env lookup)
+`;
+
+// src/review-rules.ts
+function globToRegExp(glob) {
+  let re = "";
+  let i = 0;
+  while (i < glob.length) {
+    const c = glob[i];
+    if (c === "*") {
+      if (glob[i + 1] === "*") {
+        if (glob[i + 2] === "/") {
+          re += "(?:[^/]+/)*";
+          i += 3;
+        } else {
+          re += ".*";
+          i += 2;
+        }
+      } else {
+        re += "[^/]*";
+        i += 1;
+      }
+    } else if (c === "?") {
+      re += "[^/]";
+      i += 1;
+    } else if (c === "{") {
+      const end = glob.indexOf("}", i);
+      if (end === -1) {
+        re += "\\{";
+        i += 1;
+      } else {
+        const alts = glob.slice(i + 1, end).split(",").map((a) => a.replace(/[.+^$()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*"));
+        re += `(?:${alts.join("|")})`;
+        i = end + 1;
+      }
+    } else if (c === "[") {
+      const end = glob.indexOf("]", i);
+      if (end === -1) {
+        re += "\\[";
+        i += 1;
+      } else {
+        re += glob.slice(i, end + 1);
+        i = end + 1;
+      }
+    } else {
+      re += c.replace(/[.+^$()|\\]/g, "\\$&");
+      i += 1;
+    }
+  }
+  return new RegExp(`^${re}$`, "i");
+}
+function ruleGlobMatches(pattern, filePath) {
+  const re = globToRegExp(pattern);
+  const norm = filePath.replace(/\\/g, "/");
+  if (re.test(norm)) return true;
+  const segments = norm.split("/").filter((s) => s.length > 0);
+  for (let start = 1; start < segments.length; start++) {
+    if (re.test(segments.slice(start).join("/"))) return true;
+  }
+  return false;
+}
+function matchRuleForFile(filePath, entries) {
+  for (const e of entries) {
+    if (ruleGlobMatches(e.path, filePath)) return e;
+  }
+  return null;
+}
+function readRulesFile(file2) {
+  try {
+    if (!existsSync2(file2)) return null;
+    const parsed = (0, import_yaml2.parse)(readFileSync2(file2, "utf-8"));
+    if (!parsed || !Array.isArray(parsed.rules)) return null;
+    const entries = parsed.rules.filter(
+      (r) => !!r && typeof r.path === "string" && typeof r.rule === "string"
+    );
+    return entries.length > 0 ? entries : null;
+  } catch {
+    return null;
+  }
+}
+function resolveRulesLayers(opts) {
+  if (opts?.explicitPath) {
+    const entries = readRulesFile(opts.explicitPath);
+    if (entries) return { layer: "explicit", file: opts.explicitPath, entries };
+    throw new Error(
+      `rules file not usable: ${opts.explicitPath} (missing, unreadable, or has no valid 'rules:' entries)`
+    );
+  }
+  const projectFile = join2(opts?.projectRoot ?? process.cwd(), ".llm-ext", "rules.yaml");
+  const projectEntries = readRulesFile(projectFile);
+  if (projectEntries) return { layer: "project", file: projectFile, entries: projectEntries };
+  const userFile = join2(opts?.configDir ?? getConfigDir(), "rules.yaml");
+  const userEntries = readRulesFile(userFile);
+  if (userEntries) return { layer: "user", file: userFile, entries: userEntries };
+  return null;
+}
+function composeRuleInstructions(baseInstructions, files, resolved) {
+  if (!resolved) return baseInstructions;
+  const matchedEntries = [];
+  for (const f of files) {
+    const m = matchRuleForFile(f, resolved.entries);
+    if (m && !matchedEntries.includes(m)) matchedEntries.push(m);
+  }
+  if (matchedEntries.length === 0) return baseInstructions;
+  const sections = matchedEntries.map(
+    (e) => `For files matching \`${e.path}\`: ${e.rule}`
+  );
+  return `${baseInstructions}
+
+PROJECT REVIEW RULES (${resolved.layer} layer \u2014 augment, never replace, the instructions above):
+` + sections.join("\n");
+}
+
+// src/diff-scope.ts
+import { spawnSync } from "node:child_process";
+import { isAbsolute, join as join3, resolve as resolve2 } from "node:path";
+var MAX_HUNK_BYTES = 4e5;
+function assertSafeRef(ref, label) {
+  if (!ref || ref.startsWith("-") || /\s/.test(ref)) {
+    throw new Error(`diff scope: invalid ${label} ref: '${ref}'`);
+  }
+}
+function git(repoRoot, argv, opts) {
+  const r = spawnSync("git", argv, {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    maxBuffer: 64 * 1024 * 1024
+  });
+  const ok2 = r.status === 0 || opts?.allowStatus1 === true && r.status === 1;
+  if (!ok2) {
+    const err3 = (r.stderr || "").trim().split("\n")[0] || `git ${argv[0]} failed`;
+    throw new Error(`diff scope: ${err3}`);
+  }
+  return r.stdout ?? "";
+}
+function resolveRepoRoot(dir) {
+  const r = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+    cwd: dir,
+    encoding: "utf-8"
+  });
+  const out = (r.stdout ?? "").trim();
+  if (r.status !== 0 || !out) {
+    throw new Error(
+      `diff scope: '${dir}' is not inside a git repository \u2014 diff modes need git`
+    );
+  }
+  return out;
+}
+function parseDiffMode(args) {
+  const workspace = args.diff_workspace === true;
+  const from = typeof args.diff_from === "string" ? args.diff_from : "";
+  const to = typeof args.diff_to === "string" ? args.diff_to : "";
+  const commit = typeof args.diff_commit === "string" ? args.diff_commit : "";
+  const picked = [workspace, Boolean(from || to), Boolean(commit)].filter(Boolean).length;
+  if (picked === 0) return null;
+  if (picked > 1) {
+    throw new Error(
+      "diff scope: pick ONE of diff_workspace, diff_from/diff_to, diff_commit"
+    );
+  }
+  if (workspace) return { kind: "workspace" };
+  if (commit) {
+    assertSafeRef(commit, "diff_commit");
+    return { kind: "commit", commit };
+  }
+  if (!from || !to) {
+    throw new Error("diff scope: diff_from and diff_to must BOTH be given");
+  }
+  assertSafeRef(from, "diff_from");
+  assertSafeRef(to, "diff_to");
+  return { kind: "range", from, to };
+}
+function diffSelector(mode) {
+  switch (mode.kind) {
+    case "workspace":
+      return ["HEAD"];
+    case "range":
+      return [`${mode.from}...${mode.to}`];
+    case "commit":
+      return [`${mode.commit}^`, mode.commit];
+  }
+}
+function resolveDiffScope(mode, dir) {
+  const repoRoot = resolveRepoRoot(dir);
+  const sel = diffSelector(mode);
+  const nameOnly = git(repoRoot, ["diff", "--name-only", "--diff-filter=d", ...sel]).split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+  const untracked = mode.kind === "workspace" ? git(repoRoot, ["ls-files", "--others", "--exclude-standard"]).split("\n").map((l) => l.trim()).filter((l) => l.length > 0) : [];
+  const rel = [.../* @__PURE__ */ new Set([...nameOnly, ...untracked])];
+  const hunksByFile = /* @__PURE__ */ new Map();
+  const files = [];
+  const skipped = [];
+  for (const r of rel) {
+    const abs2 = isAbsolute(r) ? r : resolve2(join3(repoRoot, r));
+    const hunk = untracked.includes(r) ? git(
+      repoRoot,
+      ["diff", "--no-index", "--function-context", "--", "/dev/null", r],
+      { allowStatus1: true }
+      // 1 = differences found — the normal case here
+    ).trim() || "(new untracked file)" : git(repoRoot, ["diff", "--function-context", ...sel, "--", r]).trim();
+    if (/^Binary files /m.test(hunk)) {
+      skipped.push({ path: abs2, reason: "binary file" });
+      continue;
+    }
+    if (Buffer.byteLength(hunk) > MAX_HUNK_BYTES) {
+      skipped.push({
+        path: abs2,
+        reason: `hunk over ${Math.round(MAX_HUNK_BYTES / 1e3)}KB (bundled/generated?) \u2014 review it deliberately if you mean to`
+      });
+      continue;
+    }
+    files.push(abs2);
+    hunksByFile.set(abs2, hunk);
+  }
+  if (files.length === 0) {
+    throw new Error(
+      `diff scope: the ${mode.kind} diff contains no reviewable files` + (skipped.length > 0 ? ` (${skipped.length} skipped: ${skipped.map((s) => s.reason).join("; ")})` : "") + " \u2014 nothing to review"
+    );
+  }
+  return { mode, repoRoot, files, hunksByFile, skipped };
+}
 
 // src/grouping.ts
 import { statSync } from "node:fs";
@@ -218373,24 +219840,24 @@ function splitPerFileSections(content, expectedPaths) {
 }
 
 // src/mass_scouting/mcp-tools.ts
-import { mkdirSync as mkdirSync16, writeFileSync as writeFileSync14 } from "node:fs";
-import { join as join22 } from "node:path";
+import { mkdirSync as mkdirSync16, writeFileSync as writeFileSync15 } from "node:fs";
+import { join as join24 } from "node:path";
 
 // src/mass_scouting/cli.ts
 import { execSync as execSync2 } from "node:child_process";
 import {
   appendFileSync as appendFileSync4,
   mkdirSync as mkdirSync9,
-  readFileSync as readFileSync9,
+  readFileSync as readFileSync11,
   readdirSync as readdirSync2,
   statSync as statSync3,
-  writeFileSync as writeFileSync6
+  writeFileSync as writeFileSync7
 } from "node:fs";
-import { dirname as dirname5, extname as extname3, isAbsolute as isAbsolute3, join as join10, resolve as resolve4 } from "node:path";
+import { dirname as dirname5, extname as extname3, isAbsolute as isAbsolute4, join as join12, resolve as resolve5 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/mass_scouting/fieldset.ts
-import { readFileSync } from "node:fs";
+import { readFileSync as readFileSync3 } from "node:fs";
 var FIELD_NAME_RE = /^[a-z][a-z0-9_]{0,39}$/;
 var FIELDSET_NAME_RE = /^[a-z][a-z0-9_-]{0,63}$/;
 var DESCRIPTION_MIN = 5;
@@ -220390,1204 +221857,15 @@ function preclassifyAll(reg, opts = {}) {
 // src/usage-history.ts
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
-import { appendFileSync, mkdirSync as mkdirSync2 } from "node:fs";
+import { appendFileSync, mkdirSync as mkdirSync2, readFileSync as readFileSync5, renameSync, writeFileSync as writeFileSync2 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { join as join3 } from "node:path";
-
-// src/config.ts
-var import_yaml = __toESM(require_dist(), 1);
-import {
-  existsSync,
-  readFileSync as readFileSync2,
-  writeFileSync,
-  mkdirSync,
-  chmodSync,
-  realpathSync
-} from "node:fs";
-import { resolve, join } from "node:path";
-import { homedir } from "node:os";
-
-// src/benchmark/free-mode.ts
-function isFreeSuffixModelId(id) {
-  return id.endsWith(":free");
-}
-var FreeModeSkipError = class extends Error {
-  tool;
-  nonFreeModelId;
-  constructor(tool, nonFreeModelId, message) {
-    super(message);
-    this.name = "FreeModeSkipError";
-    this.tool = tool;
-    this.nonFreeModelId = nonFreeModelId;
-  }
-};
-
-// src/paid-switch.ts
-var _allowPaidModels = false;
-function setAllowPaidModels(allow) {
-  _allowPaidModels = allow;
-}
-function getAllowPaidModels() {
-  return _allowPaidModels;
-}
-
-// src/benchmark/discover.ts
-var DEFAULT_CRITERIA = {
-  category: "programming",
-  minContextTokens: 128e3,
-  minOutputTokens: 64e3,
-  // Hard caps for auto-selection: STRICTLY less than $1/M for both
-  // input AND output. Anything at or above is rejected from the
-  // candidate pool. The `qualify()` predicate enforces this with `<`
-  // (not `<=`) so $1.00 itself is out. Override only via --include.
-  maxInputDollarsPerMillion: 1,
-  maxOutputDollarsPerMillion: 1,
-  requireStructuredOutputs: true,
-  requireReasoning: true,
-  allowFree: false
-};
-var MAX_BENCHMARK_PRICE_PER_M = 1.25;
-function overBenchmarkPriceCap(m) {
-  const { inputDollarsPerMillion: i, outputDollarsPerMillion: o } = m;
-  if (!Number.isFinite(i) || !Number.isFinite(o)) return true;
-  return i > MAX_BENCHMARK_PRICE_PER_M || o > MAX_BENCHMARK_PRICE_PER_M;
-}
-function extractCodexIndex(m) {
-  const v = m.benchmarks?.artificial_analysis?.coding_index;
-  return typeof v === "number" && isFinite(v) ? v : void 0;
-}
-function extractDesignArenaCodeElo(m) {
-  const row = (m.benchmarks?.design_arena ?? []).find(
-    (e) => e.arena === "models" && e.category === "codecategories"
-  );
-  const v = row?.elo;
-  return typeof v === "number" && isFinite(v) ? v : void 0;
-}
-async function fetchProgrammingModels(category) {
-  const url2 = category ? `https://openrouter.ai/api/v1/models?category=${encodeURIComponent(category)}` : `https://openrouter.ai/api/v1/models`;
-  const resp = await fetch(url2);
-  if (!resp.ok) {
-    throw new Error(`OpenRouter model list fetch failed: ${resp.status} ${resp.statusText}`);
-  }
-  const body = await resp.json();
-  return body.data ?? [];
-}
-function filterModels(models, criteria2 = DEFAULT_CRITERIA) {
-  const out = [];
-  for (const m of models) {
-    const q = qualify(m, criteria2);
-    if (q && !overBenchmarkPriceCap(q)) out.push(q);
-  }
-  return out;
-}
-var paidBenchmarksAllowed = false;
-async function withPaidBenchmarksAllowed(allowed, fn) {
-  const prev = paidBenchmarksAllowed;
-  paidBenchmarksAllowed = allowed;
-  try {
-    return await fn();
-  } finally {
-    paidBenchmarksAllowed = prev;
-  }
-}
-function paidBenchmarkWouldRefuse(model) {
-  if (isFreeModeEligible(model.id, model.inputDollarsPerMillion, model.outputDollarsPerMillion)) {
-    return false;
-  }
-  return !getAllowPaidModels() || !paidBenchmarksAllowed;
-}
-function assertPaidBenchmarkAllowed(models) {
-  const paid = models.filter(
-    (m) => !isFreeModeEligible(m.id, m.inputDollarsPerMillion, m.outputDollarsPerMillion)
-  );
-  if (paid.length === 0) return;
-  const list = paid.map((m) => m.id).join(", ");
-  if (!getAllowPaidModels()) {
-    throw new Error(
-      `paid benchmarks are off: allow_paid_models is false, so paid model(s) ${list} cannot be benchmarked. Set allow_paid_models: true in ~/.llm-externalizer/settings.yaml to benchmark (and use) paid models \u2014 --allow-paid-models-tests cannot override the master switch. No API call was made, $0 spent.`
-    );
-  }
-  if (paidBenchmarksAllowed) return;
-  throw new Error(
-    `paid-benchmark opt-in: benchmarking paid model(s) ${list} requires explicit permission. Re-run with --allow-paid-models-tests (CLI) or allow_paid_models_tests: true (MCP). Paid models are also capped at $${MAX_BENCHMARK_PRICE_PER_M}/1M (input AND output). No API call was made, $0 spent.`
-  );
-}
-function assertModelsUnderPriceCap(models) {
-  const over = models.filter(overBenchmarkPriceCap);
-  if (over.length === 0) return;
-  const list = over.map(
-    (m) => `${m.id} (in $${m.inputDollarsPerMillion.toFixed(3)}/M, out $${m.outputDollarsPerMillion.toFixed(3)}/M)`
-  ).join("; ");
-  throw new Error(
-    `benchmark price cap: refusing to benchmark model(s) priced over $${MAX_BENCHMARK_PRICE_PER_M}/1M (input AND output must be \u2264 $${MAX_BENCHMARK_PRICE_PER_M}/1M): ${list}. No API call was made, $0 spent. Remove the over-cap id(s) or pick a cheaper model.`
-  );
-}
-function disqualifyReason(m, criteria2) {
-  if (!criteria2.allowFree && m.id.endsWith(":free")) return "free model not allowed (allowFree=false)";
-  const params = new Set(m.supported_parameters ?? []);
-  const supportsStructured = params.has("structured_outputs") || params.has("response_format");
-  const supportsReasoning = params.has("reasoning") || params.has("include_reasoning");
-  if (criteria2.requireStructuredOutputs && !supportsStructured) {
-    return "no structured-output support (needs response_format or structured_outputs)";
-  }
-  if (criteria2.requireReasoning && !supportsReasoning) return "no reasoning support";
-  const ctx = m.context_length ?? 0;
-  if (ctx < criteria2.minContextTokens) return `context ${ctx} < required ${criteria2.minContextTokens}`;
-  const maxOutRaw = m.top_provider?.max_completion_tokens;
-  const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
-  if (!maxOut || maxOut < criteria2.minOutputTokens) {
-    return `max output ${maxOut} < required ${criteria2.minOutputTokens}`;
-  }
-  const promptPerToken = parseFloat(m.pricing?.prompt ?? "NaN");
-  const completionPerToken = parseFloat(m.pricing?.completion ?? "NaN");
-  if (!isFinite(promptPerToken) || !isFinite(completionPerToken)) return "missing or invalid pricing";
-  const inputDollarsPerMillion = promptPerToken * 1e6;
-  const outputDollarsPerMillion = completionPerToken * 1e6;
-  if (inputDollarsPerMillion >= criteria2.maxInputDollarsPerMillion) {
-    return `input $${inputDollarsPerMillion.toFixed(3)}/M >= cap $${criteria2.maxInputDollarsPerMillion.toFixed(3)}/M`;
-  }
-  if (outputDollarsPerMillion >= criteria2.maxOutputDollarsPerMillion) {
-    return `output $${outputDollarsPerMillion.toFixed(3)}/M >= cap $${criteria2.maxOutputDollarsPerMillion.toFixed(3)}/M`;
-  }
-  return null;
-}
-function qualify(m, criteria2) {
-  if (disqualifyReason(m, criteria2) !== null) return null;
-  const params = new Set(m.supported_parameters ?? []);
-  const supportsStructured = params.has("structured_outputs") || params.has("response_format");
-  const supportsReasoning = params.has("reasoning") || params.has("include_reasoning");
-  const ctx = m.context_length ?? 0;
-  const maxOutRaw = m.top_provider?.max_completion_tokens;
-  const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
-  const inputDollarsPerMillion = parseFloat(m.pricing?.prompt ?? "NaN") * 1e6;
-  const outputDollarsPerMillion = parseFloat(m.pricing?.completion ?? "NaN") * 1e6;
-  return {
-    id: m.id,
-    name: m.name ?? m.id,
-    contextTokens: ctx,
-    maxOutputTokens: maxOut,
-    inputDollarsPerMillion,
-    outputDollarsPerMillion,
-    supportsStructured,
-    supportsReasoning,
-    codexIndex: extractCodexIndex(m),
-    designArenaElo: extractDesignArenaCodeElo(m),
-    raw: m
-  };
-}
-function buildBenchmarkRoster(candidatePool, criteria2, includeIds, baselineLookupPool = candidatePool) {
-  const candidates = filterModels(candidatePool, criteria2);
-  const inRoster = new Set(candidates.map((m) => m.id));
-  const seen = new Set(inRoster);
-  const baselines = [];
-  for (const id of includeIds) {
-    if (seen.has(id)) continue;
-    const raw = baselineLookupPool.find((m) => m.id === id);
-    if (!raw) {
-      continue;
-    }
-    const params = new Set(raw.supported_parameters ?? []);
-    const promptPerToken = parseFloat(raw.pricing?.prompt ?? "NaN");
-    const completionPerToken = parseFloat(raw.pricing?.completion ?? "NaN");
-    const ctx = raw.context_length ?? 0;
-    const maxOutRaw = raw.top_provider?.max_completion_tokens;
-    const maxOut = maxOutRaw === null ? ctx : maxOutRaw ?? 0;
-    baselines.push({
-      id: raw.id,
-      name: raw.name ?? raw.id,
-      contextTokens: ctx,
-      maxOutputTokens: maxOut,
-      inputDollarsPerMillion: isFinite(promptPerToken) ? promptPerToken * 1e6 : Infinity,
-      outputDollarsPerMillion: isFinite(completionPerToken) ? completionPerToken * 1e6 : Infinity,
-      supportsStructured: params.has("structured_outputs") || params.has("response_format"),
-      supportsReasoning: params.has("reasoning") || params.has("include_reasoning"),
-      codexIndex: extractCodexIndex(raw),
-      designArenaElo: extractDesignArenaCodeElo(raw),
-      raw
-    });
-    seen.add(raw.id);
-  }
-  return { candidates, baselines };
-}
-function rankByQualityIndex(models) {
-  const codexVals = models.map((m) => m.codexIndex).filter((v) => v !== void 0);
-  const eloVals = models.map((m) => m.designArenaElo).filter((v) => v !== void 0);
-  const normalise = (v, pool) => {
-    if (v === void 0 || pool.length === 0) return void 0;
-    const lo = Math.min(...pool);
-    const hi = Math.max(...pool);
-    return hi === lo ? 1 : (v - lo) / (hi - lo);
-  };
-  const qualityScore = (m) => {
-    const axes = [normalise(m.codexIndex, codexVals), normalise(m.designArenaElo, eloVals)].filter(
-      (v) => v !== void 0
-    );
-    return axes.length === 0 ? void 0 : axes.reduce((a, b) => a + b, 0) / axes.length;
-  };
-  const cheapness = (m) => m.inputDollarsPerMillion + m.outputDollarsPerMillion;
-  return [...models].sort((a, b) => {
-    const sa = qualityScore(a);
-    const sb = qualityScore(b);
-    if (sa === void 0 !== (sb === void 0)) return sa === void 0 ? 1 : -1;
-    if (sa !== void 0 && sb !== void 0 && sa !== sb) return sb - sa;
-    const ca = cheapness(a);
-    const cb = cheapness(b);
-    if (ca !== cb) return ca - cb;
-    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-  });
-}
-function isZeroCostPriced(inputDollarsPerMillion, outputDollarsPerMillion) {
-  return inputDollarsPerMillion === 0 && outputDollarsPerMillion === 0;
-}
-function isFreeModeEligible(id, inputDollarsPerMillion, outputDollarsPerMillion) {
-  return id.endsWith(":free") || isZeroCostPriced(inputDollarsPerMillion, outputDollarsPerMillion);
-}
-
-// src/benchmark/select-common.ts
-var COST_EPSILON = 1e-9;
-function notPricier(candidate, inInc, outInc) {
-  return candidate.inputDollarsPerMillion <= inInc + COST_EPSILON && candidate.outputDollarsPerMillion <= outInc + COST_EPSILON;
-}
-function selectSameOrCheaper(input) {
-  const {
-    incumbentModelId,
-    incumbentInputDollarsPerMillion: inInc,
-    incumbentOutputDollarsPerMillion: outInc,
-    requirementsLabel,
-    benchmarkLabel
-  } = input;
-  const eligible = [];
-  const rejected = [];
-  for (const c of input.candidates) {
-    if (!c.qualified) {
-      rejected.push({
-        modelId: c.modelId,
-        reason: `does not meet ${requirementsLabel}${c.disqualifyReason ? ` (${c.disqualifyReason})` : ""}`
-      });
-      continue;
-    }
-    if (!c.benchmarkPass) {
-      rejected.push({
-        modelId: c.modelId,
-        reason: `failed ${benchmarkLabel}: ${c.benchmarkFailReasons.join("; ")}`
-      });
-      continue;
-    }
-    if (!notPricier(c, inInc, outInc)) {
-      rejected.push({
-        modelId: c.modelId,
-        reason: `pricier than the incumbent default (in $${c.inputDollarsPerMillion.toFixed(3)}/out $${c.outputDollarsPerMillion.toFixed(3)} vs incumbent in $${inInc.toFixed(3)}/out $${outInc.toFixed(3)}) \u2014 never auto-bump to a pricier model`
-      });
-      continue;
-    }
-    eligible.push(c);
-  }
-  eligible.sort((a, b) => {
-    if (b.benchmarkScore !== a.benchmarkScore) return b.benchmarkScore - a.benchmarkScore;
-    const aCost = a.inputDollarsPerMillion + a.outputDollarsPerMillion;
-    const bCost = b.inputDollarsPerMillion + b.outputDollarsPerMillion;
-    if (aCost !== bCost) return aCost - bCost;
-    return a.latencyMs - b.latencyMs;
-  });
-  if (eligible.length === 0) {
-    return {
-      recommendedModelId: incumbentModelId,
-      changed: false,
-      reason: `No eligible same-or-cheaper model passed ${benchmarkLabel}. Keeping the incumbent default.`,
-      eligible,
-      rejected
-    };
-  }
-  const winner = eligible[0];
-  const changed = winner.modelId !== incumbentModelId;
-  return {
-    recommendedModelId: winner.modelId,
-    changed,
-    reason: changed ? `${winner.modelId} passed ${benchmarkLabel} (score ${winner.benchmarkScore.toFixed(3)}) at no higher cost than the incumbent and scored best among eligible passers.` : `The incumbent ${winner.modelId} remains the best eligible passer (score ${winner.benchmarkScore.toFixed(3)}).`,
-    eligible,
-    rejected
-  };
-}
-
-// src/benchmark/security-triage/select.ts
-var SECURITY_TRIAGE_CRITERIA = {
-  category: DEFAULT_CRITERIA.category,
-  // Snippet windows are at most a few KB; the judge prompt is small. 16K is
-  // plenty and keeps cheap small models (e.g. qwen-2.5-7b @ 32K) in the pool.
-  minContextTokens: 16e3,
-  // The verdict JSON is ~200 bytes. 1K completion headroom is ample.
-  minOutputTokens: 1e3,
-  maxInputDollarsPerMillion: DEFAULT_CRITERIA.maxInputDollarsPerMillion,
-  maxOutputDollarsPerMillion: DEFAULT_CRITERIA.maxOutputDollarsPerMillion,
-  requireStructuredOutputs: true,
-  // Triage does NOT need a reasoning model — the json_schema verdict is a
-  // direct classification. Requiring reasoning would wrongly exclude qwen-2.5-7b.
-  requireReasoning: false,
-  allowFree: false
-};
-function toGeneric(c) {
-  return {
-    modelId: c.modelId,
-    qualified: c.qualified,
-    disqualifyReason: c.disqualifyReason,
-    inputDollarsPerMillion: c.inputDollarsPerMillion,
-    outputDollarsPerMillion: c.outputDollarsPerMillion,
-    latencyMs: c.latencyMs,
-    benchmarkPass: c.triage.pass,
-    benchmarkScore: c.triage.score,
-    benchmarkFailReasons: c.triage.failReasons
-  };
-}
-function selectSecurityTriageModel(input) {
-  const byModelId = new Map(
-    input.candidates.map((c) => [c.modelId, c])
-  );
-  const generic = selectSameOrCheaper({
-    candidates: input.candidates.map(toGeneric),
-    incumbentModelId: input.incumbentModelId,
-    incumbentInputDollarsPerMillion: input.incumbentInputDollarsPerMillion,
-    incumbentOutputDollarsPerMillion: input.incumbentOutputDollarsPerMillion,
-    requirementsLabel: "security-triage requirements",
-    benchmarkLabel: "the triage benchmark"
-  });
-  return {
-    recommendedModelId: generic.recommendedModelId,
-    changed: generic.changed,
-    reason: generic.reason,
-    // Reorder the original assessments by the gate's eligible ordering. Every
-    // eligible modelId came from input.candidates, so the lookup never misses.
-    eligible: generic.eligible.map((g) => byModelId.get(g.modelId)),
-    rejected: generic.rejected
-  };
-}
-
-// src/model-qualification/registry.ts
-function criteria(overrides) {
-  return { ...DEFAULT_CRITERIA, ...overrides };
-}
-var TOOL_MODEL_REGISTRY = {
-  security_scan: {
-    tool: "security_scan",
-    // The reference instance. Structured output + a modest context; NO reasoning
-    // / 128K bar — triage snippets are small and the verdict is ~200 bytes.
-    requirements: SECURITY_TRIAGE_CRITERIA,
-    benchmark: "security-triage",
-    note: "Injection-hardened verdict adjudication. Gated by the security-triage golden dataset (TRDD-973a0265)."
-  },
-  mass_scout: {
-    tool: "mass_scout",
-    requirements: criteria({ requireReasoning: false }),
-    benchmark: "keyword-classification",
-    note: "Fieldset extraction / classification. Reuses the existing keyword-classification benchmark (benchmark/ground-truth.ts + pick.ts)."
-  },
-  cluster_synonyms: {
-    tool: "cluster_synonyms",
-    requirements: criteria({ requireReasoning: true }),
-    benchmark: null,
-    note: "Meaning-equivalence clustering. Has an in-tool pre-flight benchmark gate; a formal golden dataset is incremental."
-  },
-  code_task: {
-    tool: "code_task",
-    requirements: criteria({ requireReasoning: true, minContextTokens: 128e3 }),
-    benchmark: "code-task",
-    note: "Code-optimized analysis. Gated by the code-audit benchmark (P2b): real pre-fix snapshots from this repo's own git history, scored deterministically on defect localization by symbol name \u2014 no LLM judge."
-  },
-  scan_folder: {
-    tool: "scan_folder",
-    requirements: criteria({ requireReasoning: false, minContextTokens: 128e3 }),
-    benchmark: "scan-folder",
-    note: "Per-file auto-discovery scan. Gated by the mass-search benchmark (P2c): twelve files copied verbatim from this repo's own src/, three queries whose true MATCH set is derived mechanically from the corpus bytes, scored deterministically on the per-file MATCH/NO_MATCH verdict \u2014 no LLM judge."
-  },
-  search_existing_implementations: {
-    tool: "search_existing_implementations",
-    requirements: criteria({ requireReasoning: true, minContextTokens: 128e3 }),
-    benchmark: "search-existing",
-    note: "Duplicate-implementation match across a codebase. Gated by the search-existing fixture benchmark (TRDD-828238b5 A6)."
-  },
-  check_references: {
-    tool: "check_references",
-    requirements: criteria({ requireReasoning: false }),
-    benchmark: null,
-    note: "Symbol-reference validation. Validation-accuracy benchmark dataset is incremental."
-  },
-  check_imports: {
-    tool: "check_imports",
-    requirements: criteria({ requireReasoning: false }),
-    benchmark: null,
-    note: "Import-path validation. Validation-accuracy benchmark dataset is incremental."
-  },
-  check_against_specs: {
-    tool: "check_against_specs",
-    requirements: criteria({ requireReasoning: false }),
-    benchmark: "check-specs",
-    note: "Source-vs-specification compliance. Gated by the spec-adherence benchmark (P2d): this repo's own shipped TESTING.md audited over thirteen verbatim git snapshots \u2014 four of them the exact pre-fix bytes a real cost-safety commit replaced \u2014 scored deterministically on the per-file CLEAN/VIOLATION verdict, no LLM judge. Violation CONTENT (the cited rule, the severity) is deliberately NOT graded: that needs a judge."
-  },
-  compare_files: {
-    tool: "compare_files",
-    requirements: criteria({ requireReasoning: false, minContextTokens: 128e3 }),
-    benchmark: null,
-    note: "Two-file change summary. Change-summary benchmark dataset is incremental."
-  },
-  chat: {
-    tool: "chat",
-    // The loosest tool — general text. Structured output not required.
-    requirements: criteria({ requireStructuredOutputs: false, requireReasoning: false }),
-    benchmark: null,
-    note: "General-purpose text. A loose general-quality benchmark is incremental."
-  }
-};
-function getToolDescriptor(tool) {
-  return TOOL_MODEL_REGISTRY[tool];
-}
-function registeredTools() {
-  return Object.keys(TOOL_MODEL_REGISTRY);
-}
-function qualifyModelForTool(tool, model) {
-  const descriptor = getToolDescriptor(tool);
-  if (!descriptor) {
-    return {
-      tool,
-      meetsRequirements: false,
-      disqualifyReason: "unknown or non-LLM tool (no registry descriptor)",
-      qualified: null,
-      benchmark: null,
-      requirementsEligible: false
-    };
-  }
-  const qualified = qualify(model, descriptor.requirements);
-  const reason = qualified === null ? disqualifyReason(model, descriptor.requirements) : null;
-  return {
-    tool,
-    meetsRequirements: qualified !== null,
-    disqualifyReason: reason,
-    qualified,
-    benchmark: descriptor.benchmark,
-    requirementsEligible: qualified !== null
-  };
-}
-
-// src/config.ts
-var QUANT_TIERS = Object.freeze([
-  "int4",
-  "fp4",
-  "int8",
-  "fp6",
-  "fp8",
-  "fp16",
-  "bf16",
-  "fp32"
-]);
-var HIGH_QUALITY_MODEL_DEFAULTS = {
-  id: "z-ai/glm-5.2",
-  reasoningEffort: "xhigh",
-  // "max" maps here — the real OpenRouter ceiling
-  cache: true,
-  providerOrder: ["gmicloud/fp8"],
-  quantizations: ["fp8", "fp16", "bf16", "fp32"],
-  // fp8-or-higher
-  allowFallbacks: false
-};
-var VALID_HQ_REASONING = /* @__PURE__ */ new Set([
-  "off",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max"
-]);
-var API_PRESETS = {
-  // ── Local presets ─────────────────────────────────────────────────
-  "lmstudio-local": {
-    protocol: "lmstudio_api",
-    defaultUrl: "http://localhost:1234",
-    defaultAuthEnv: "$LM_API_TOKEN",
-    defaultTimeout: 300,
-    defaultAppName: "",
-    defaultHttpReferer: "",
-    defaultContextWindow: 0,
-    isLocal: true
-  },
-  "ollama-local": {
-    protocol: "openai_api",
-    defaultUrl: "http://localhost:11434",
-    defaultAuthEnv: "",
-    defaultTimeout: 300,
-    defaultAppName: "",
-    defaultHttpReferer: "",
-    defaultContextWindow: 0,
-    isLocal: true
-  },
-  "vllm-local": {
-    protocol: "openai_api",
-    defaultUrl: "http://localhost:8000",
-    defaultAuthEnv: "$VLLM_API_KEY",
-    defaultTimeout: 300,
-    defaultAppName: "",
-    defaultHttpReferer: "",
-    defaultContextWindow: 0,
-    isLocal: true
-  },
-  "llamacpp-local": {
-    protocol: "openai_api",
-    defaultUrl: "http://localhost:8080",
-    defaultAuthEnv: "",
-    defaultTimeout: 300,
-    defaultAppName: "",
-    defaultHttpReferer: "",
-    defaultContextWindow: 0,
-    isLocal: true
-  },
-  "generic-local": {
-    protocol: "openai_api",
-    defaultUrl: "",
-    defaultAuthEnv: "$LM_API_TOKEN",
-    defaultTimeout: 300,
-    defaultAppName: "",
-    defaultHttpReferer: "",
-    defaultContextWindow: 0,
-    isLocal: true
-  },
-  // ── Remote presets ────────────────────────────────────────────────
-  "openrouter-remote": {
-    protocol: "openrouter_api",
-    defaultUrl: "https://openrouter.ai/api",
-    defaultAuthEnv: "$OPENROUTER_API_KEY",
-    defaultTimeout: 600,
-    // 10 min — reasoning models (Qwen, etc.) need extended thinking time
-    defaultAppName: "llm-externalizer",
-    defaultHttpReferer: "",
-    defaultContextWindow: 0,
-    isLocal: false
-  }
-};
-function getConfigDir() {
-  const raw = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
-  function resolveDeepestExisting(p) {
-    try {
-      return realpathSync(p);
-    } catch {
-    }
-    const parent = join(p, "..");
-    if (parent === p) return p;
-    const resolvedParent = resolveDeepestExisting(parent);
-    return join(resolvedParent, p.slice(parent.length + (parent.endsWith("/") || parent.endsWith("\\") ? 0 : 1)));
-  }
-  const dir = resolveDeepestExisting(raw);
-  const home = (() => {
-    try {
-      return realpathSync(homedir());
-    } catch {
-      return homedir();
-    }
-  })();
-  const tmpCanonical = (() => {
-    try {
-      return realpathSync("/tmp");
-    } catch {
-      return "/tmp";
-    }
-  })();
-  const sep3 = process.platform === "win32" ? "\\" : "/";
-  const underHome = dir.startsWith(home + sep3) || dir === home;
-  const underTmp = dir.startsWith(tmpCanonical + sep3) || dir === tmpCanonical;
-  if (!underHome && !underTmp) {
-    throw new Error(`Config directory '${dir}' is outside allowed paths (${home} or ${tmpCanonical})`);
-  }
-  return dir;
-}
-function getSettingsPath() {
-  return join(getConfigDir(), "settings.yaml");
-}
-var USER_CONFIG_ENV_MAP = {
-  OPENROUTER_API_KEY: "CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY"
-};
-function resolveEnvValue(value) {
-  if (!value) return "";
-  if (value.startsWith("$")) {
-    const name = value.slice(1).trim();
-    const userConfigVar = USER_CONFIG_ENV_MAP[name];
-    if (userConfigVar) {
-      const userConfigVal = process.env[userConfigVar];
-      if (userConfigVal && userConfigVal.length > 0) return userConfigVal;
-    }
-    return process.env[name] || "";
-  }
-  return value;
-}
-var LOCAL_URL_PATTERN = /\/\/localhost([:/]|$)|\/\/127\.\d+\.\d+\.\d+|\/\/192\.168\.\d+\.\d+|\/\/10\.\d+\.\d+\.\d+|\/\/172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|\/\/\[::1\]|\/\/0\.0\.0\.0/i;
-function isLocalUrl(url2) {
-  return LOCAL_URL_PATTERN.test(url2);
-}
-function loadSettings() {
-  const settingsPath = getSettingsPath();
-  try {
-    if (!existsSync(settingsPath)) return null;
-    const raw = readFileSync2(settingsPath, "utf-8");
-    const parsed = JSON.parse(JSON.stringify((0, import_yaml.parse)(raw)));
-    if (!parsed || typeof parsed !== "object") return null;
-    return {
-      active: parsed.active || "",
-      profiles: parsed.profiles || {},
-      // Absent / any non-true value ⟺ false: the safe (free) side. A YAML that
-      // predates this key, or sets it to a typo, never accidentally enables paid.
-      allow_paid_models: parsed.allow_paid_models === true
-    };
-  } catch (err3) {
-    process.stderr.write(
-      `[llm-externalizer] Warning: Failed to read ${settingsPath}: ${err3 instanceof Error ? err3.message : String(err3)}
-`
-    );
-    return null;
-  }
-}
-function generateDefaultSettings() {
-  return {
-    active: "local-lmstudio-qwen35",
-    // Explicit free-safe default (USER: free-by-default). The default active
-    // profile is local ($0) so the switch is inert here, but stating it keeps the
-    // object in lock-step with SETTINGS_TEMPLATE and documents the safe posture.
-    allow_paid_models: false,
-    profiles: {
-      "local-lmstudio-qwen35": {
-        mode: "local",
-        api: "lmstudio-local",
-        model: "thecluster/qwen3.5-27b-mlx"
-      },
-      "local-ollama-qwen314": {
-        mode: "local",
-        api: "ollama-local",
-        model: "qwen3:14b"
-      },
-      "remote-single-geminiflash": {
-        mode: "remote",
-        api: "openrouter-remote",
-        model: "google/gemini-2.5-flash",
-        api_key: "$OPENROUTER_API_KEY"
-      },
-      "remote-ensemble-geminigrok": {
-        mode: "remote-ensemble",
-        api: "openrouter-remote",
-        model: "google/gemini-2.5-flash",
-        second_model: "x-ai/grok-4.1-fast",
-        third_model: "qwen/qwen3.6-plus",
-        api_key: "$OPENROUTER_API_KEY"
-      }
-    }
-  };
-}
-function ensureSettingsExist() {
-  const settingsPath = getSettingsPath();
-  const configDir = getConfigDir();
-  const oldSettingsPath = join(configDir, "settings.yml");
-  if (existsSync(oldSettingsPath) && !existsSync(settingsPath)) {
-    process.stderr.write(
-      `[llm-externalizer] Found old settings.yml \u2014 the new format is settings.yaml with profiles.
-[llm-externalizer] Generating new settings.yaml. Your old settings.yml is preserved but no longer read.
-`
-    );
-  }
-  if (!existsSync(settingsPath)) {
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(settingsPath, SETTINGS_TEMPLATE, "utf-8");
-    try {
-      chmodSync(settingsPath, 384);
-    } catch {
-    }
-    process.stderr.write(
-      `[llm-externalizer] Generated default settings at ${settingsPath}
-`
-    );
-  }
-  const settings = loadSettings();
-  if (!settings) {
-    throw new Error(`Failed to parse ${settingsPath}. Check YAML syntax.`);
-  }
-  return settings;
-}
-function validateProfile(name, profile) {
-  const errors = [];
-  if (!profile.mode) {
-    errors.push(`Profile '${name}': missing required field: mode`);
-  } else if (!["local", "remote", "remote-ensemble"].includes(profile.mode)) {
-    errors.push(
-      `Invalid mode '${profile.mode}'. Must be: local, remote, or remote-ensemble`
-    );
-  }
-  if (!profile.api) {
-    errors.push(`Profile '${name}': missing required field: api`);
-  }
-  if (!profile.model && !profile.free_only) {
-    errors.push(`Profile '${name}': missing required field: model`);
-  }
-  const preset = profile.api ? API_PRESETS[profile.api] : void 0;
-  if (profile.api && !preset) {
-    errors.push(
-      `Unknown api preset '${profile.api}'. Valid presets: ${Object.keys(API_PRESETS).join(", ")}`
-    );
-    return { valid: false, errors };
-  }
-  if (!preset || !profile.mode) {
-    return { valid: false, errors };
-  }
-  if (profile.mode === "local" && !preset.isLocal) {
-    errors.push(
-      `Mode 'local' requires a -local api preset, got '${profile.api}'`
-    );
-  }
-  if ((profile.mode === "remote" || profile.mode === "remote-ensemble") && preset.isLocal) {
-    errors.push(
-      `Mode '${profile.mode}' requires a -remote api preset, got '${profile.api}'`
-    );
-  }
-  if (profile.free_only) {
-    if (preset.isLocal) {
-      errors.push(
-        `Profile '${name}': free_only requires a remote (OpenRouter) api preset \u2014 ':free' models are an OpenRouter concept. Got local preset '${profile.api}'.`
-      );
-    }
-    if (profile.free_models !== void 0 && !Array.isArray(profile.free_models)) {
-      errors.push(
-        `Profile '${name}': free_models must be a YAML list of ':free' model ids.`
-      );
-    }
-    const pool = coerceFreeModels(profile.free_models);
-    if (pool.length === 0) {
-      errors.push(
-        `Profile '${name}': free_only requires a non-empty 'free_models' list.`
-      );
-    }
-    const nonFree = pool.filter((m) => !m.endsWith(":free"));
-    if (nonFree.length > 0) {
-      errors.push(
-        `Profile '${name}': free_only forbids non-':free' models \u2014 every free_models entry MUST end with ':free'. Offending: ${nonFree.join(", ")}`
-      );
-    }
-    if (profile.mode === "remote-ensemble" && pool.length < 2) {
-      errors.push(
-        `Profile '${name}': free_only + mode 'remote-ensemble' needs at least 2 free_models (the ensemble fans out to the top models). Use mode 'remote' for a single free model.`
-      );
-    }
-  }
-  if (profile.mode === "remote-ensemble" && !profile.second_model && !profile.free_only) {
-    errors.push("Mode 'remote-ensemble' requires 'second_model'");
-  }
-  if (profile.mode === "local" && profile.second_model) {
-    errors.push("Mode 'local' does not support 'second_model'");
-  }
-  if (profile.mode === "remote" && profile.second_model) {
-    errors.push(
-      "Mode 'remote' does not support 'second_model'. Use 'remote-ensemble'"
-    );
-  }
-  if (profile.third_model && profile.mode !== "remote-ensemble") {
-    errors.push("'third_model' is only supported in 'remote-ensemble' mode");
-  }
-  if (profile.api === "lmstudio-local") {
-    if (profile.second_model) {
-      errors.push("LM Studio native API does not support second_model");
-    }
-  }
-  const effectiveUrl = profile.url || preset.defaultUrl;
-  if (effectiveUrl) {
-    const urlIsLocal = isLocalUrl(effectiveUrl);
-    if ((profile.mode === "remote" || profile.mode === "remote-ensemble") && urlIsLocal) {
-      errors.push(`Remote mode cannot use local URL '${effectiveUrl}'`);
-    }
-  }
-  if (profile.api === "generic-local" && !profile.url) {
-    errors.push("Api preset 'generic-local' requires explicit 'url'");
-  }
-  if (profile.timeout !== void 0 && (typeof profile.timeout !== "number" || !isFinite(profile.timeout) || profile.timeout < 0)) {
-    errors.push(
-      `Profile '${name}': timeout must be a non-negative finite number`
-    );
-  }
-  if (profile.context_window !== void 0 && (typeof profile.context_window !== "number" || !isFinite(profile.context_window) || profile.context_window < 0)) {
-    errors.push(
-      `Profile '${name}': context_window must be a non-negative finite number`
-    );
-  }
-  if (typeof profile.timeout === "number" && profile.timeout > 3600) {
-    errors.push(`Profile '${name}': timeout must be <= 3600 (1 hour)`);
-  }
-  if (typeof profile.context_window === "number" && profile.context_window > 1e7) {
-    errors.push(`Profile '${name}': context_window must be <= 10,000,000`);
-  }
-  if (!preset.isLocal) {
-    const rawAuth = profile.api_key || preset.defaultAuthEnv;
-    const resolved = resolveEnvValue(rawAuth);
-    if (!resolved) {
-      const hint = rawAuth?.startsWith("$") ? ` (env var ${rawAuth} is not set)` : "";
-      errors.push(`Remote api '${profile.api}' requires 'api_key'${hint}`);
-    }
-  }
-  const rawToolModels = profile.tool_models;
-  if (rawToolModels !== void 0 && rawToolModels !== null) {
-    if (typeof rawToolModels !== "object" || Array.isArray(rawToolModels)) {
-      errors.push(
-        `Profile '${name}': tool_models must be a map of {tool: model}`
-      );
-    } else {
-      const known = new Set(registeredTools());
-      for (const [toolName, modelId] of Object.entries(
-        rawToolModels
-      )) {
-        if (!known.has(toolName)) {
-          errors.push(
-            `Profile '${name}': tool_models has unknown tool '${toolName}'. Known LLM tools: ${registeredTools().join(", ")}`
-          );
-        }
-        if (typeof modelId !== "string" || modelId.length === 0) {
-          errors.push(
-            `Profile '${name}': tool_models['${toolName}'] must be a non-empty model-id string`
-          );
-        }
-      }
-    }
-  }
-  const rawHq = profile.high_quality_model;
-  if (rawHq !== void 0 && rawHq !== null) {
-    if (typeof rawHq !== "object" || Array.isArray(rawHq)) {
-      errors.push(
-        `Profile '${name}': high_quality_model must be a map of {id, reasoning_effort, cache, min_quantization, provider, allow_fallbacks}`
-      );
-    } else {
-      const hq = rawHq;
-      if (hq.id !== void 0 && (typeof hq.id !== "string" || hq.id.length === 0)) {
-        errors.push(
-          `Profile '${name}': high_quality_model.id must be a non-empty model-id string`
-        );
-      }
-      if (hq.reasoning_effort !== void 0 && (typeof hq.reasoning_effort !== "string" || !VALID_HQ_REASONING.has(hq.reasoning_effort.toLowerCase()))) {
-        errors.push(
-          `Profile '${name}': high_quality_model.reasoning_effort must be one of off|low|medium|high|xhigh|max`
-        );
-      }
-      if (hq.cache !== void 0 && typeof hq.cache !== "boolean") {
-        errors.push(
-          `Profile '${name}': high_quality_model.cache must be a boolean`
-        );
-      }
-      if (hq.min_quantization !== void 0 && (typeof hq.min_quantization !== "string" || !QUANT_TIERS.includes(hq.min_quantization.toLowerCase()))) {
-        errors.push(
-          `Profile '${name}': high_quality_model.min_quantization must be one of ${QUANT_TIERS.join("|")}`
-        );
-      }
-      if (hq.provider !== void 0 && (typeof hq.provider !== "string" || hq.provider.length === 0)) {
-        errors.push(
-          `Profile '${name}': high_quality_model.provider must be a non-empty provider slug string`
-        );
-      }
-      if (hq.allow_fallbacks !== void 0 && typeof hq.allow_fallbacks !== "boolean") {
-        errors.push(
-          `Profile '${name}': high_quality_model.allow_fallbacks must be a boolean`
-        );
-      }
-    }
-  }
-  return { valid: errors.length === 0, errors };
-}
-function validateSettings(settings) {
-  if (!settings.active) {
-    return {
-      valid: false,
-      errors: [
-        `No active profile set. Edit ${getSettingsPath()} manually and set the 'active:' field to one of the profile names listed under 'profiles:', then restart Claude Code or call the MCP 'reset' tool.`
-      ]
-    };
-  }
-  const profile = settings.profiles[settings.active];
-  if (!profile) {
-    const available = Object.keys(settings.profiles);
-    return {
-      valid: false,
-      errors: [
-        `Active profile '${settings.active}' not found. Available: ${available.join(", ") || "(none)"}`
-      ]
-    };
-  }
-  return validateProfile(settings.active, profile);
-}
-function coerceToolModels(raw) {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
-  return { ...raw };
-}
-function coerceFreeModels(raw) {
-  if (!Array.isArray(raw)) return [];
-  return raw.filter((m) => typeof m === "string");
-}
-function mapReasoningEffort(raw) {
-  if (typeof raw !== "string") return HIGH_QUALITY_MODEL_DEFAULTS.reasoningEffort;
-  const v = raw.toLowerCase();
-  if (v === "max") return "xhigh";
-  return VALID_HQ_REASONING.has(v) ? v : HIGH_QUALITY_MODEL_DEFAULTS.reasoningEffort;
-}
-function expandMinQuantization(raw) {
-  if (typeof raw !== "string")
-    return [...HIGH_QUALITY_MODEL_DEFAULTS.quantizations];
-  const idx = QUANT_TIERS.indexOf(raw.toLowerCase());
-  if (idx < 0) return [...HIGH_QUALITY_MODEL_DEFAULTS.quantizations];
-  return QUANT_TIERS.slice(idx);
-}
-function resolveHighQualityModel(raw) {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    return { ...HIGH_QUALITY_MODEL_DEFAULTS };
-  }
-  const hq = raw;
-  const id = typeof hq.id === "string" && hq.id.length > 0 ? hq.id : HIGH_QUALITY_MODEL_DEFAULTS.id;
-  const provider = typeof hq.provider === "string" && hq.provider.length > 0 ? hq.provider : HIGH_QUALITY_MODEL_DEFAULTS.providerOrder[0];
-  return {
-    id,
-    reasoningEffort: mapReasoningEffort(hq.reasoning_effort),
-    cache: typeof hq.cache === "boolean" ? hq.cache : HIGH_QUALITY_MODEL_DEFAULTS.cache,
-    providerOrder: [provider],
-    quantizations: expandMinQuantization(hq.min_quantization),
-    allowFallbacks: typeof hq.allow_fallbacks === "boolean" ? hq.allow_fallbacks : HIGH_QUALITY_MODEL_DEFAULTS.allowFallbacks
-  };
-}
-function buildHighQualityProvider(hq) {
-  const provider = {
-    allow_fallbacks: hq.allowFallbacks
-  };
-  if (hq.providerOrder.length > 0) provider.order = hq.providerOrder;
-  if (hq.quantizations.length > 0) provider.quantizations = hq.quantizations;
-  return provider;
-}
-function highQualityScanRefusal(backendType, freeOnly, creditExhausted2, allowPaidModels = true) {
-  if (backendType !== "openrouter") {
-    return `high_quality_scan requires the OpenRouter backend (it runs a remote high-quality model); the active backend is ${backendType}. Switch to a remote profile, or use scan_folder for the local backend.`;
-  }
-  if (freeOnly) {
-    if (!allowPaidModels) {
-      return `high_quality_scan runs ONE paid high-quality model, and paid models are off (allow_paid_models: false). Set allow_paid_models: true in ~/.llm-externalizer/settings.yaml to enable it, or use scan_folder (the free 3-model ensemble).`;
-    }
-    return `high_quality_scan uses a paid high-quality model and cannot run under free_only mode. Disable free_only in your profile, or use scan_folder (which honours the free pool).`;
-  }
-  if (creditExhausted2) {
-    return `high_quality_scan needs OpenRouter credit for its paid high-quality model, but credit is exhausted (a 402 was seen this session). Add credit, or use scan_folder.`;
-  }
-  return null;
-}
-function resolveProfile(name, profile) {
-  const preset = API_PRESETS[profile.api];
-  if (!preset) {
-    throw new Error(`Unknown api preset '${profile.api}'`);
-  }
-  const rawAuth = preset.isLocal ? profile.api_token || profile.api_key || preset.defaultAuthEnv : profile.api_key || preset.defaultAuthEnv;
-  const freeOnly = profile.free_only === true;
-  const freeModels = freeOnly ? coerceFreeModels(profile.free_models) : [];
-  const model = freeOnly ? freeModels[0] ?? "" : profile.model;
-  const secondModel = freeOnly ? freeModels[1] ?? "" : profile.second_model || "";
-  const thirdModel = freeOnly ? freeModels[2] ?? "" : profile.third_model || "";
-  return {
-    name,
-    mode: profile.mode,
-    protocol: preset.protocol,
-    url: profile.url || preset.defaultUrl,
-    model,
-    authToken: resolveEnvValue(rawAuth),
-    secondModel,
-    thirdModel,
-    freeOnly,
-    freeModels,
-    // Under free_only the free pool overrides EVERY per-tool choice (TRDD-97ef8b63):
-    // the resolved profile carries NO active per-tool overrides so resolveModelForTool,
-    // get_settings, and drift all agree that free models win. The user's settings.yaml
-    // tool_models are left intact on disk — they reactivate when free_only is off.
-    toolModels: freeOnly ? {} : coerceToolModels(profile.tool_models),
-    timeout: profile.timeout ?? preset.defaultTimeout,
-    contextWindow: profile.context_window ?? preset.defaultContextWindow,
-    appName: profile.app_name ?? preset.defaultAppName,
-    httpReferer: profile.http_referer ?? preset.defaultHttpReferer,
-    // High-quality-scan model (TRDD-DBUSM55E): always resolved (defaults filled),
-    // independent of mode — the high_quality_scan tool reads it; other tools ignore it.
-    highQualityModel: resolveHighQualityModel(profile.high_quality_model)
-  };
-}
-function resolveModelForTool(resolved, tool, fallback) {
-  if (resolved.freeOnly) return resolved.model;
-  const override = resolved.toolModels[tool];
-  if (typeof override === "string" && override.length > 0) return override;
-  if (fallback !== void 0) return fallback;
-  return resolved.model;
-}
-var FREE_POOL_SEED = Object.freeze([
-  "poolside/laguna-m.1:free",
-  "deepseek/deepseek-v4-flash:free",
-  "google/gemma-4-26b-a4b-it:free",
-  "google/gemma-4-31b-it:free",
-  "arcee-ai/trinity-large-thinking:free",
-  "nvidia/nemotron-3-super-120b-a12b:free",
-  "nvidia/nemotron-3-nano-30b-a3b:free",
-  "minimax/minimax-m2.5:free",
-  "qwen/qwen3-next-80b-a3b-instruct:free",
-  "openai/gpt-oss-120b:free",
-  "openai/gpt-oss-20b:free",
-  "qwen/qwen3-coder:free",
-  "z-ai/glm-4.5-air:free",
-  "meta-llama/llama-3.3-70b-instruct:free",
-  "nousresearch/hermes-3-llama-3.1-405b:free"
-]);
-var _activeFreeOnly = false;
-function setActiveFreeOnly(freeOnly) {
-  _activeFreeOnly = freeOnly;
-}
-function getActiveFreeOnly() {
-  return _activeFreeOnly;
-}
-function shouldForceFreeMode(allowPaidModels, mode) {
-  return !allowPaidModels && mode !== null && mode !== "local";
-}
-function assertFreeOnlyModel(freeOnly, backendType, model) {
-  if (freeOnly && backendType === "openrouter" && !model.endsWith(":free")) {
-    throw new Error(
-      `free_only cost-safety: refusing to send non-free model '${model}' to OpenRouter. Under a free_only profile every tool MUST use a ':free' model \u2014 this is a bug, please report it.`
-    );
-  }
-}
-var SETTINGS_TEMPLATE = `# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-# LLM Externalizer \u2014 Settings
-# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-# Profile-based configuration. Each profile defines a complete LLM
-# backend setup. Edit this file manually and either restart Claude Code
-# or call the MCP 'reset' tool to reload.
-#
-# Location: ~/.llm-externalizer/settings.yaml
-# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-
-# Active profile name
-active: local-lmstudio-qwen35
-
-# \u2500\u2500 Master paid-spend switch \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-# DEFAULT false \u2014 only FREE models are used, everywhere, by default. While
-# this is false (or absent), every remote (OpenRouter) profile is forced to
-# its free pool no matter what 'model' it configures, and even paid
-# *benchmarks* are refused \u2014 one switch guarantees zero paid spend. Local
-# profiles are $0/offline and always run as-is. Set it true to use paid
-# models (and to benchmark them); per-profile 'free_only' then remains an
-# opt-in. A remote profile with no 'free_models' still runs free \u2014 the
-# server auto-discovers a benchmark-vetted free pool at $0.
-allow_paid_models: false
-
-# \u2500\u2500 Profiles \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-profiles:
-
-  # \u2500\u2500 Local: LM Studio with Qwen 3.5 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  local-lmstudio-qwen35:
-    mode: local
-    api: lmstudio-local
-    model: "thecluster/qwen3.5-27b-mlx"
-    # url: "http://localhost:1234"       # (default from lmstudio-local preset)
-    # api_token: $LM_API_TOKEN           # (default from lmstudio-local preset)
-    # timeout: 300                        # (default from lmstudio-local preset)
-
-  # \u2500\u2500 Local: Ollama with Qwen 3 14B \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  local-ollama-qwen314:
-    mode: local
-    api: ollama-local
-    model: "qwen3:14b"
-    # url: "http://localhost:11434"       # (default from ollama-local preset)
-
-  # \u2500\u2500 Remote: Single model via OpenRouter \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  remote-single-geminiflash:
-    mode: remote
-    api: openrouter-remote
-    model: "google/gemini-2.5-flash"
-    api_key: $OPENROUTER_API_KEY          # set this env var, or replace with direct key
-    # Optional: high-quality scan model (TRDD-DBUSM55E). Drives high_quality_scan \u2014
-    # ONE strong model at max reasoning instead of the cheap 3-model ensemble.
-    # Absent \u2192 these exact defaults are used automatically. Needs an OpenRouter
-    # (remote) profile; NOT available under free_only (it is a paid model).
-    # high_quality_model:
-    #   id: "z-ai/glm-5.2"            # default high-quality model
-    #   reasoning_effort: max          # max -> OpenRouter "xhigh" (the real ceiling)
-    #   cache: true                    # prompt-cache the system prompt across files
-    #   min_quantization: fp8          # accept fp8-or-higher precision endpoints only
-    #   provider: "gmicloud/fp8"       # preferred provider (provider.order[0])
-    #   allow_fallbacks: false         # pin the preferred provider
-
-  # \u2500\u2500 Remote: Ensemble (three models in parallel) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  remote-ensemble-geminigrok:
-    mode: remote-ensemble
-    api: openrouter-remote
-    model: "google/gemini-2.5-flash"
-    second_model: "x-ai/grok-4.1-fast"
-    api_key: $OPENROUTER_API_KEY
-    # Optional: per-tool model overrides (TRDD-f45eeaa0). Absent \u2192 this
-    # profile's \`model\` (back-compat). Keys must be LLM-using tool names;
-    # a model set here should pass that tool's benchmark \u2014 see the
-    # security-triage benchmark (/llm-externalizer-security-triage-benchmark).
-    # tool_models:
-    #   security_scan: "qwen/qwen-2.5-7b-instruct"
-    #   code_task: "google/gemini-2.5-flash"
-
-  # \u2500\u2500 Remote: FREE-ONLY ensemble (zero spend) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  # free_only ignores model/second_model/third_model and uses ONLY the
-  # free_models pool. The top free models that clear the requirements
-  # floor form the ensemble; the rest are the rate-limit fallback pool.
-  # EVERY free_models entry MUST end with ':free' \u2014 the validator rejects
-  # the profile otherwise, so this profile can NEVER bill.
-  #
-  # The 15-model seed list below matches FREE_POOL_SEED in config.ts and
-  # is the canonical default. The auto-benchmark trigger (TRDD-f1510055)
-  # scores this pool when the profile is first activated (free_only=true
-  # + empty :free cache) and writes results to:
-  #   ~/.llm-externalizer/benchmark-results.json (keyword task)
-  #   ~/.llm-externalizer/security-triage-results.json (security_scan)
-  # Run it manually with: /llm-externalizer:llm-externalizer-bench-free-pool
-  remote-free-ensemble:
-    mode: remote-ensemble
-    api: openrouter-remote
-    free_only: true
-    api_key: $OPENROUTER_API_KEY            # free models still need the key (rate-limited, but $0)
-    free_models:
-      - "poolside/laguna-m.1:free"
-      - "deepseek/deepseek-v4-flash:free"
-      - "google/gemma-4-26b-a4b-it:free"
-      - "google/gemma-4-31b-it:free"
-      - "arcee-ai/trinity-large-thinking:free"
-      - "nvidia/nemotron-3-super-120b-a12b:free"
-      - "nvidia/nemotron-3-nano-30b-a3b:free"
-      - "minimax/minimax-m2.5:free"
-      - "qwen/qwen3-next-80b-a3b-instruct:free"
-      - "openai/gpt-oss-120b:free"
-      - "openai/gpt-oss-20b:free"
-      - "qwen/qwen3-coder:free"
-      - "z-ai/glm-4.5-air:free"
-      - "meta-llama/llama-3.3-70b-instruct:free"
-      - "nousresearch/hermes-3-llama-3.1-405b:free"
-
-# \u2500\u2500 API Presets Reference \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-# Use with --api when creating profiles:
-#
-# LOCAL PRESETS (mode: local):
-#   lmstudio-local    LM Studio native API     http://localhost:1234   auth: $LM_API_TOKEN
-#   ollama-local      Ollama OpenAI-compat     http://localhost:11434  auth: (none)
-#   vllm-local        vLLM OpenAI-compat       http://localhost:8000   auth: $VLLM_API_KEY
-#   llamacpp-local    llama.cpp OpenAI-compat   http://localhost:8080   auth: (none)
-#   generic-local     Any OpenAI-compat        (url required)          auth: $LM_API_TOKEN
-#
-# REMOTE PRESETS (mode: remote / remote-ensemble):
-#   openrouter-remote  OpenRouter              https://openrouter.ai   auth: $OPENROUTER_API_KEY
-#
-# All local backends must support structured output (response_format: json_schema).
-#
-# \u2500\u2500 Modes Reference \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-#   local             Sequential requests to a local server
-#   remote            Parallel requests, single model via OpenRouter
-#   remote-ensemble   Parallel requests, three models, combined report
-#
-# \u2500\u2500 Auth Values \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-# Auth fields (api_key, api_token) accept either:
-#   $ENV_VAR_NAME     Resolved from process environment at runtime
-#   "direct-value"    Used as-is (no env lookup)
-`;
+import { join as join5 } from "node:path";
 
 // src/security_scan/intake.ts
 import { execSync } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
-import { readFileSync as readFileSync3, readdirSync, statSync as statSync2 } from "node:fs";
-import { isAbsolute, join as join2, resolve as resolve2 } from "node:path";
+import { readFileSync as readFileSync4, readdirSync, statSync as statSync2 } from "node:fs";
+import { isAbsolute as isAbsolute2, join as join4, resolve as resolve3 } from "node:path";
 
 // src/security_scan/types.ts
 var VERDICTS = [
@@ -221925,7 +222203,7 @@ var DEFAULT_SKIP_DIRS = /* @__PURE__ */ new Set([
 ]);
 function expandGlob(root, glob) {
   const all = walkFiles(root);
-  const re = globToRegExp(glob);
+  const re = globToRegExp2(glob);
   return all.filter((abs2) => {
     const rel = relativeUnix(root, abs2);
     return re.test(rel);
@@ -221943,7 +222221,7 @@ function walkFiles(root) {
       continue;
     }
     for (const e of entries) {
-      const full = join2(dir, e);
+      const full = join4(dir, e);
       let st;
       try {
         st = statSync2(full);
@@ -221962,13 +222240,13 @@ function walkFiles(root) {
   return out;
 }
 function relativeUnix(root, abs2) {
-  const r = resolve2(root);
-  const a = resolve2(abs2);
+  const r = resolve3(root);
+  const a = resolve3(abs2);
   let rel = a.startsWith(r) ? a.slice(r.length) : a;
   rel = rel.replace(/^[/\\]+/, "").replace(/\\/g, "/");
   return rel;
 }
-function globToRegExp(glob) {
+function globToRegExp2(glob) {
   let re = "^";
   for (let i = 0; i < glob.length; i++) {
     const c = glob[i];
@@ -222002,7 +222280,7 @@ function gitChangedFiles(root, ref) {
       `git diff --name-only --diff-filter=ACMR -z ${JSON.stringify(ref)}...HEAD`,
       { cwd: root, encoding: "buffer", stdio: ["ignore", "pipe", "ignore"] }
     );
-    return out.toString("utf-8").split("\0").filter((s) => s.length > 0).map((p) => resolve2(root, p));
+    return out.toString("utf-8").split("\0").filter((s) => s.length > 0).map((p) => resolve3(root, p));
   } catch {
     return null;
   }
@@ -222014,7 +222292,7 @@ function gitTrackedFiles(root) {
       encoding: "buffer",
       stdio: ["ignore", "pipe", "ignore"]
     });
-    return out.toString("utf-8").split("\0").filter((s) => s.length > 0).map((p) => resolve2(root, p));
+    return out.toString("utf-8").split("\0").filter((s) => s.length > 0).map((p) => resolve3(root, p));
   } catch {
     return null;
   }
@@ -222028,7 +222306,7 @@ function extractWindow(content, line, contextLines) {
   return { window, startLine: start };
 }
 function intake(targets, opts = {}) {
-  const root = opts.folderRoot ? resolve2(opts.folderRoot) : process.cwd();
+  const root = opts.folderRoot ? resolve3(opts.folderRoot) : process.cwd();
   const honorGitignore = opts.honorGitignore !== false;
   const byteCap = opts.byteCap && opts.byteCap > 0 ? opts.byteCap : MAX_SNIPPET_BYTES;
   const records = [];
@@ -222084,12 +222362,12 @@ function intake(targets, opts = {}) {
       continue;
     }
     if (typeof t.file_path === "string") {
-      const abs2 = isAbsolute(t.file_path) ? t.file_path : resolve2(root, t.file_path);
+      const abs2 = isAbsolute2(t.file_path) ? t.file_path : resolve3(root, t.file_path);
       const fileGate = typeof t.line === "number" ? MAX_FILE_READ_BYTES : byteCap;
       if (statTooBig(t.id, t.category, abs2, fileGate)) continue;
       let content;
       try {
-        content = readFileSync3(abs2, "utf-8");
+        content = readFileSync4(abs2, "utf-8");
       } catch (e) {
         skipped.push({
           id: t.id,
@@ -222161,7 +222439,7 @@ function intake(targets, opts = {}) {
         }
         let content;
         try {
-          content = readFileSync3(abs2, "utf-8");
+          content = readFileSync4(abs2, "utf-8");
         } catch (e) {
           skipped.push({
             id: t.id,
@@ -222222,7 +222500,7 @@ function newOpId() {
   return `op-${randomBytes(4).toString("hex")}`;
 }
 function getHistoryPath() {
-  return join3(getConfigDir(), "history.log");
+  return join5(getConfigDir(), "history.log");
 }
 function resolveProject() {
   const fromEnv = process.env.CLAUDE_PROJECT_DIR;
@@ -222351,14 +222629,51 @@ function withUsageContext(init, fn) {
   };
   return ctxStore.run(ctx, fn);
 }
+var OUTPUT_EWMA_ALPHA = 0.3;
+function foldOutputEwma(prev, sample, alpha = OUTPUT_EWMA_ALPHA) {
+  if (!prev || prev.n <= 0) return { ewma: sample, n: 1 };
+  return { ewma: alpha * sample + (1 - alpha) * prev.ewma, n: prev.n + 1 };
+}
+function ewmaFilePath() {
+  return join5(getConfigDir(), "output-ewma.json");
+}
+function loadEwmaStore() {
+  try {
+    const parsed = JSON.parse(readFileSync5(ewmaFilePath(), "utf-8"));
+    if (parsed && parsed.version === 1 && parsed.entries) return parsed;
+  } catch {
+  }
+  return { version: 1, entries: {} };
+}
+function recordOutputTokensSample(model, outputTokens) {
+  try {
+    const tool = ctxStore.getStore()?.tool;
+    if (!tool || !model || !Number.isFinite(outputTokens) || outputTokens < 0) return;
+    const store = loadEwmaStore();
+    const key = `${tool}::${model}`;
+    store.entries[key] = foldOutputEwma(store.entries[key], outputTokens);
+    mkdirSync2(getConfigDir(), { recursive: true });
+    const tmp = ewmaFilePath() + ".tmp";
+    writeFileSync2(tmp, JSON.stringify(store));
+    renameSync(tmp, ewmaFilePath());
+  } catch {
+  }
+}
+function calibratedOutputTokens(tool, model) {
+  try {
+    return loadEwmaStore().entries[`${tool}::${model}`] ?? null;
+  } catch {
+    return null;
+  }
+}
 
 // src/benchmark/validated.ts
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname2, join as join4 } from "node:path";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync6, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname2, join as join6 } from "node:path";
 function latestEntriesFromKeyedLedger(fileName) {
   let cache2;
   try {
-    const raw = readFileSync4(join4(getConfigDir(), fileName), "utf-8");
+    const raw = readFileSync6(join6(getConfigDir(), fileName), "utf-8");
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return /* @__PURE__ */ new Map();
     cache2 = parsed;
@@ -222409,7 +222724,7 @@ function passedGeneralKeyword() {
     if (isGeneralKeywordPass(entry)) passed.add(modelId);
   }
   try {
-    const raw = readFileSync4(join4(getConfigDir(), "benchmark-results.json"), "utf-8");
+    const raw = readFileSync6(join6(getConfigDir(), "benchmark-results.json"), "utf-8");
     const parsed = JSON.parse(raw);
     const results = Array.isArray(parsed.results) ? parsed.results : [];
     for (const r of results) {
@@ -223873,8 +224188,8 @@ async function runWithLimit2(items, limit, fn) {
 }
 
 // src/model-events.ts
-import { appendFileSync as appendFileSync3, mkdirSync as mkdirSync5, readFileSync as readFileSync5 } from "node:fs";
-import { join as join5 } from "node:path";
+import { appendFileSync as appendFileSync3, mkdirSync as mkdirSync5, readFileSync as readFileSync7 } from "node:fs";
+import { join as join7 } from "node:path";
 var MODEL_EVENT_KINDS = [
   "param_drop",
   "reasoning_downgrade",
@@ -223887,7 +224202,7 @@ var MODEL_EVENT_KINDS = [
 var KIND_SET = new Set(MODEL_EVENT_KINDS);
 var MAX_DETAIL = 160;
 function getModelEventsPath() {
-  return join5(getConfigDir(), "model-events.log");
+  return join7(getConfigDir(), "model-events.log");
 }
 function sanitizeField(s) {
   return s.replace(/ - /g, " | ").replace(/[\r\n]+/g, " ").trim();
@@ -223923,7 +224238,7 @@ function parseModelEventLine(line) {
 function readModelEvents(opts = {}) {
   let raw;
   try {
-    raw = readFileSync5(opts.path ?? getModelEventsPath(), "utf-8");
+    raw = readFileSync7(opts.path ?? getModelEventsPath(), "utf-8");
   } catch {
     return [];
   }
@@ -224340,26 +224655,26 @@ function computeCallCost2(usage, pricing, fallbackInputBytes, fallbackOutputByte
 }
 
 // src/free-rotation.ts
-import { mkdirSync as mkdirSync7, readFileSync as readFileSync8, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join8 } from "node:path";
+import { mkdirSync as mkdirSync7, readFileSync as readFileSync10, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join10 } from "node:path";
 
 // src/benchmark/security-triage/index.ts
 import { createHash as createHash3 } from "node:crypto";
-import { existsSync as existsSync4, mkdirSync as mkdirSync6, readFileSync as readFileSync7, renameSync, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join7 } from "node:path";
+import { existsSync as existsSync5, mkdirSync as mkdirSync6, readFileSync as readFileSync9, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join9 } from "node:path";
 
 // src/project-root.ts
-import { existsSync as existsSync2 } from "node:fs";
+import { existsSync as existsSync3 } from "node:fs";
 function resolveProjectMainRoot(override) {
   if (override && override.length > 0) return override;
   const projDir = process.env.CLAUDE_PROJECT_DIR;
-  if (projDir && projDir.length > 0 && existsSync2(projDir)) return projDir;
+  if (projDir && projDir.length > 0 && existsSync3(projDir)) return projDir;
   return process.cwd();
 }
 
 // src/benchmark/security-triage/dataset.ts
-import { existsSync as existsSync3, readFileSync as readFileSync6 } from "node:fs";
-import { dirname as dirname4, join as join6 } from "node:path";
+import { existsSync as existsSync4, readFileSync as readFileSync8 } from "node:fs";
+import { dirname as dirname4, join as join8 } from "node:path";
 import { fileURLToPath } from "node:url";
 var BENCHMARK_RUBRICS = {
   prompt_injection: "THREAT when prose/comments instruct an agent or LLM to ignore prior instructions, exfiltrate secrets, perform destructive actions, or dictate the reviewer's verdict. NOT_THREAT when DEFENSIVE/detection code that QUOTES or PATTERN-DEFINES an attack in order to detect or warn about it (a detector's own rule list, a 'do NOT comply' doc). UNCERTAIN otherwise.",
@@ -224376,12 +224691,12 @@ var BENCHMARK_RUBRICS = {
 function resolveDatasetPath() {
   const here = dirname4(fileURLToPath(import.meta.url));
   const candidates = [
-    join6(here, "dataset.jsonl"),
-    join6(here, "..", "src", "benchmark", "security-triage", "dataset.jsonl"),
-    join6(here, "..", "..", "src", "benchmark", "security-triage", "dataset.jsonl")
+    join8(here, "dataset.jsonl"),
+    join8(here, "..", "src", "benchmark", "security-triage", "dataset.jsonl"),
+    join8(here, "..", "..", "src", "benchmark", "security-triage", "dataset.jsonl")
   ];
   for (const c of candidates) {
-    if (existsSync3(c)) return c;
+    if (existsSync4(c)) return c;
   }
   throw new Error(
     `Could not locate the security-triage dataset. Tried:
@@ -224389,7 +224704,7 @@ function resolveDatasetPath() {
   );
 }
 function loadDataset(path = resolveDatasetPath()) {
-  const raw = readFileSync6(path, "utf-8");
+  const raw = readFileSync8(path, "utf-8");
   const cases = [];
   const seenIds = /* @__PURE__ */ new Set();
   const lines = raw.split("\n");
@@ -224686,16 +225001,16 @@ function scoreTriage(modelId, cases, returned, thresholds = DEFAULT_TRIAGE_THRES
 var SECURITY_TRIAGE_CRITERIA2 = getToolDescriptor("security_scan").requirements;
 var INCUMBENT_FALLBACK_PRICING = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
 function cachePath() {
-  return join7(getConfigDir(), "security-triage-results.json");
+  return join9(getConfigDir(), "security-triage-results.json");
 }
 function cacheKey(modelId, date5, datasetHash) {
   return `${modelId}::${date5}::${datasetHash}`;
 }
 function loadCache() {
   const p = cachePath();
-  if (!existsSync4(p)) return {};
+  if (!existsSync5(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync7(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync9(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
@@ -224706,8 +225021,8 @@ function saveCache(cache2) {
   mkdirSync6(dir, { recursive: true });
   const p = cachePath();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync3(tmp, JSON.stringify(cache2, null, 2), "utf-8");
-  renameSync(tmp, p);
+  writeFileSync4(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  renameSync2(tmp, p);
 }
 function failedModelsFromCache(cache2) {
   const latest = /* @__PURE__ */ new Map();
@@ -224786,7 +225101,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
   const apiKey = resolveApiKey(opts.apiKey);
   const datasetPath = opts.datasetPath ?? resolveDatasetPath();
   const cases = loadDataset(datasetPath);
-  const datasetHash = createHash3("sha1").update(readFileSync7(datasetPath, "utf-8")).digest("hex").slice(0, 12);
+  const datasetHash = createHash3("sha1").update(readFileSync9(datasetPath, "utf-8")).digest("hex").slice(0, 12);
   const thresholds = opts.thresholds ?? DEFAULT_TRIAGE_THRESHOLDS;
   const incumbentId = opts.incumbentModelId ?? DEFAULT_MODEL;
   const progress = opts.onProgress ?? (() => {
@@ -224972,11 +225287,11 @@ async function runSecurityTriageBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const mainRoot = resolveMainRoot(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join7(mainRoot, "reports", "security-triage-benchmark");
+  const reportDir = opts.outputDir ?? join9(mainRoot, "reports", "security-triage-benchmark");
   mkdirSync6(reportDir, { recursive: true });
   const stamp = reportStamp();
-  const jsonReportPath = join7(reportDir, `${stamp}-security-triage-benchmark.json`);
-  const mdReportPath = join7(reportDir, `${stamp}-security-triage-benchmark.md`);
+  const jsonReportPath = join9(reportDir, `${stamp}-security-triage-benchmark.json`);
+  const mdReportPath = join9(reportDir, `${stamp}-security-triage-benchmark.md`);
   const jsonPayload = {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     datasetPath,
@@ -225015,8 +225330,8 @@ async function runSecurityTriageBenchmark(opts = {}) {
     perCase: Object.fromEntries(scores.map((s) => [s.modelId, s.perCase]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync3(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
-  renameSync(jtmp, jsonReportPath);
+  writeFileSync4(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync2(jtmp, jsonReportPath);
   const md = buildReportMarkdown({
     cases,
     datasetHash,
@@ -225030,8 +225345,8 @@ async function runSecurityTriageBenchmark(opts = {}) {
     freeOnlySkipped
   });
   const mtmp = `${mdReportPath}.tmp.${process.pid}`;
-  writeFileSync3(mtmp, md, "utf-8");
-  renameSync(mtmp, mdReportPath);
+  writeFileSync4(mtmp, md, "utf-8");
+  renameSync2(mtmp, mdReportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
     recommendedModelId: selection.recommendedModelId,
@@ -225117,8 +225432,111 @@ function filterFreeModels(freeModels, catalogById, benchmarkFailed = /* @__PURE_
     return ctx >= FREE_FLOOR_MIN_CONTEXT_TOKENS;
   });
 }
-function selectFreeEnsembleModels(freeModels, catalogById, benchmarkFailed = /* @__PURE__ */ new Set()) {
-  return filterFreeModels(freeModels, catalogById, benchmarkFailed).slice(0, 3);
+function isNonQualityReason(reason) {
+  return reason.includes("not benchmarked") || reason.includes("non-':free' model") || reason.includes("not found in the OpenRouter catalog") || reason.includes(" requirements (");
+}
+function parseBenchEvidence(ledgers) {
+  const out = /* @__PURE__ */ new Map();
+  for (const ledger of ledgers) {
+    for (const [key, row] of Object.entries(ledger)) {
+      const id = key.split("::")[0];
+      if (!id) continue;
+      if (row.qualified === true) {
+        out.set(id, "pass");
+        continue;
+      }
+      if (row.qualified !== false) continue;
+      const reason = typeof row.disqualifyReason === "string" ? row.disqualifyReason : "";
+      if (isNonQualityReason(reason)) continue;
+      if (out.get(id) !== "pass") out.set(id, "fail");
+    }
+  }
+  return out;
+}
+var BENCH_LEDGER_FILES = [
+  "code-task-results.json",
+  "scan-folder-results.json",
+  "check-specs-results.json",
+  "search-existing-results.json",
+  "security-triage-results.json"
+];
+function benchEvidenceFromLedgers(dir = getConfigDir()) {
+  const ledgers = [];
+  for (const f of BENCH_LEDGER_FILES) {
+    try {
+      const parsed = JSON.parse(readFileSync10(join10(dir, f), "utf-8"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        ledgers.push(parsed);
+      }
+    } catch {
+    }
+  }
+  return parseBenchEvidence(ledgers);
+}
+function looksLikeClassifier(id) {
+  const s = id.toLowerCase();
+  return s.includes("content-safety") || s.includes("guard") || s.includes("-safety");
+}
+function rankFreeModelsByBenchEvidence(ids, evidence) {
+  const tier = (id) => {
+    if (looksLikeClassifier(id)) return 2;
+    const v = evidence.get(id);
+    return v === "pass" ? 0 : v === "fail" ? 2 : 1;
+  };
+  return [...ids].sort((a, b) => tier(a) - tier(b));
+}
+var NO_CONTENT_DEMOTION_THRESHOLD = 3;
+function strikesFilePath() {
+  return join10(getConfigDir(), "no-content-strikes.json");
+}
+function loadStrikes() {
+  try {
+    const parsed = JSON.parse(readFileSync10(strikesFilePath(), "utf-8"));
+    if (parsed && parsed.version === 1 && parsed.models) return parsed;
+  } catch {
+  }
+  return { version: 1, models: {} };
+}
+function saveStrikes(s) {
+  try {
+    mkdirSync7(getConfigDir(), { recursive: true });
+    const tmp = strikesFilePath() + ".tmp";
+    writeFileSync5(tmp, JSON.stringify(s));
+    renameSync3(tmp, strikesFilePath());
+  } catch {
+  }
+}
+function recordNoContentStrike(modelId, nowMs = Date.now()) {
+  if (!modelId) return;
+  const s = loadStrikes();
+  const prev = s.models[modelId];
+  s.models[modelId] = { strikes: (prev?.strikes ?? 0) + 1, lastAt: nowMs };
+  saveStrikes(s);
+}
+function clearNoContentStrikes(modelId) {
+  if (!modelId) return;
+  const s = loadStrikes();
+  if (!s.models[modelId]) return;
+  delete s.models[modelId];
+  saveStrikes(s);
+}
+function noContentDemotedModels() {
+  const out = /* @__PURE__ */ new Set();
+  for (const [id, rec] of Object.entries(loadStrikes().models)) {
+    if (rec.strikes >= NO_CONTENT_DEMOTION_THRESHOLD) out.add(id);
+  }
+  return out;
+}
+function combinedFreeModelEvidence() {
+  const evidence = benchEvidenceFromLedgers();
+  for (const id of noContentDemotedModels()) evidence.set(id, "fail");
+  return evidence;
+}
+function selectFreeEnsembleModels(freeModels, catalogById, benchmarkFailed = /* @__PURE__ */ new Set(), benchEvidence = /* @__PURE__ */ new Map()) {
+  return rankFreeModelsByBenchEvidence(
+    filterFreeModels(freeModels, catalogById, benchmarkFailed),
+    benchEvidence
+  ).slice(0, 3);
 }
 function approvedFreePoolFromSettings() {
   try {
@@ -225143,6 +225561,9 @@ var TRANSIENT_CAP_MS = 3e5;
 var GONE_MS = 36e5;
 function classifyUnavailable(detail) {
   const s = (detail || "").toLowerCase();
+  if (s.includes("server issue detected")) {
+    return null;
+  }
   if (s.includes("free-models-per-day") || s.includes("per-day") || s.includes("per day") || s.includes("daily limit") || s.includes("daily quota") || s.includes("daily rate limit")) {
     return "daily-quota";
   }
@@ -225235,11 +225656,11 @@ var RELOAD_INTERVAL_MS = 5e3;
 var cache = null;
 var lastLoadMs = 0;
 function cooldownFilePath() {
-  return join8(getConfigDir(), "free-cooldowns.json");
+  return join10(getConfigDir(), "free-cooldowns.json");
 }
 function readStoreFromDisk() {
   try {
-    const raw = readFileSync8(cooldownFilePath(), "utf-8");
+    const raw = readFileSync10(cooldownFilePath(), "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && parsed.version === 1 && parsed.models && typeof parsed.models === "object") {
       return { version: 1, models: parsed.models };
@@ -225253,8 +225674,8 @@ function writeStoreToDisk(store) {
     const path = cooldownFilePath();
     mkdirSync7(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp`;
-    writeFileSync4(tmp, JSON.stringify(store), { encoding: "utf-8", mode: 384 });
-    renameSync2(tmp, path);
+    writeFileSync5(tmp, JSON.stringify(store), { encoding: "utf-8", mode: 384 });
+    renameSync3(tmp, path);
   } catch {
   }
 }
@@ -225508,16 +225929,16 @@ var rawFetch = async (url2, init) => {
 var realFetch = withFreeRotation(rawFetch);
 
 // src/security_scan/report.ts
-import { mkdirSync as mkdirSync8, writeFileSync as writeFileSync5 } from "node:fs";
-import { isAbsolute as isAbsolute2, join as join9, resolve as resolve3 } from "node:path";
+import { mkdirSync as mkdirSync8, writeFileSync as writeFileSync6 } from "node:fs";
+import { isAbsolute as isAbsolute3, join as join11, resolve as resolve4 } from "node:path";
 function defaultMainRoot() {
   return resolveProjectMainRoot();
 }
 function resolveReportDir(outputDir, mainRoot) {
   if (outputDir && outputDir.length > 0) {
-    return isAbsolute2(outputDir) ? outputDir : resolve3(process.cwd(), outputDir);
+    return isAbsolute3(outputDir) ? outputDir : resolve4(process.cwd(), outputDir);
   }
-  return join9(mainRoot ?? defaultMainRoot(), "reports", "security_scan");
+  return join11(mainRoot ?? defaultMainRoot(), "reports", "security_scan");
 }
 function isoTimestampLocal(now = /* @__PURE__ */ new Date()) {
   const pad = (n, w = 2) => String(n).padStart(w, "0");
@@ -225666,10 +226087,10 @@ function writeReport(report, reportDir) {
   mkdirSync8(reportDir, { recursive: true });
   const stamp = isoTimestampLocal();
   const base = `${stamp}-security-scan-${slugify(report.job_id)}`;
-  const jsonPath = join9(reportDir, `${base}.json`);
-  const mdPath = join9(reportDir, `${base}.md`);
-  writeFileSync5(jsonPath, JSON.stringify(report, null, 2) + "\n", "utf-8");
-  writeFileSync5(mdPath, renderMarkdown(report), "utf-8");
+  const jsonPath = join11(reportDir, `${base}.json`);
+  const mdPath = join11(reportDir, `${base}.md`);
+  writeFileSync6(jsonPath, JSON.stringify(report, null, 2) + "\n", "utf-8");
+  writeFileSync6(mdPath, renderMarkdown(report), "utf-8");
   return { jsonPath, mdPath };
 }
 
@@ -225919,10 +226340,10 @@ function defaultMainRoot2() {
 }
 function resolveReportDir2(outputDirFlag, opts) {
   if (outputDirFlag && outputDirFlag !== "true") {
-    return isAbsolute3(outputDirFlag) ? outputDirFlag : resolve4(process.cwd(), outputDirFlag);
+    return isAbsolute4(outputDirFlag) ? outputDirFlag : resolve5(process.cwd(), outputDirFlag);
   }
   const mainRoot = opts.mainRoot ?? defaultMainRoot2();
-  return join10(mainRoot, "reports", "mass_scouting");
+  return join12(mainRoot, "reports", "mass_scouting");
 }
 function listGitChangedFiles(root, ref) {
   if (!/^[A-Za-z0-9_./~^@{}-]+$/.test(ref) || ref.length > 200) {
@@ -225934,7 +226355,7 @@ function listGitChangedFiles(root, ref) {
       { cwd: root, encoding: "buffer", stdio: ["ignore", "pipe", "ignore"] }
     );
     const rel = out.toString("utf-8").split("\0").filter((s) => s.length > 0);
-    return rel.map((p) => resolve4(root, p));
+    return rel.map((p) => resolve5(root, p));
   } catch {
     return null;
   }
@@ -225946,7 +226367,7 @@ function listGitTrackedFiles(root) {
       { cwd: root, encoding: "buffer", stdio: ["ignore", "pipe", "ignore"] }
     );
     const rel = out.toString("utf-8").split("\0").filter((s) => s.length > 0);
-    return rel.map((p) => resolve4(root, p));
+    return rel.map((p) => resolve5(root, p));
   } catch {
     return null;
   }
@@ -225972,7 +226393,7 @@ function walkFiles2(root, extensionFilter, extraSkipDirs) {
       continue;
     }
     for (const e of entries) {
-      const full = join10(dir, e);
+      const full = join12(dir, e);
       let st;
       try {
         st = statSync3(full);
@@ -226001,13 +226422,13 @@ function resolveBundledFieldset(arg) {
   }
   const here = dirname5(fileURLToPath2(import.meta.url));
   const candidates = [
-    resolve4(here, "..", "fieldsets", `${name}.json`),
-    resolve4(here, "fieldsets", `${name}.json`),
-    resolve4(here, "..", "..", "fieldsets", `${name}.json`)
+    resolve5(here, "..", "fieldsets", `${name}.json`),
+    resolve5(here, "fieldsets", `${name}.json`),
+    resolve5(here, "..", "..", "fieldsets", `${name}.json`)
   ];
   for (const p of candidates) {
     try {
-      readFileSync9(p, "utf-8");
+      readFileSync11(p, "utf-8");
       return { path: p };
     } catch {
     }
@@ -226024,7 +226445,7 @@ function loadFieldsetFromArg(path) {
   }
   let raw;
   try {
-    raw = readFileSync9(path, "utf-8");
+    raw = readFileSync11(path, "utf-8");
   } catch (e) {
     return { error: `cannot read --fields-file: ${e.message}` };
   }
@@ -226183,7 +226604,7 @@ function runRegister(args) {
   for (const p of paths) {
     let body;
     try {
-      body = readFileSync9(p);
+      body = readFileSync11(p);
     } catch {
       skippedRead++;
       continue;
@@ -226199,7 +226620,7 @@ function runRegister(args) {
       continue;
     }
     const out = reg.registerFile({
-      file_path: isAbsolute3(p) ? p : resolve4(p),
+      file_path: isAbsolute4(p) ? p : resolve5(p),
       source_root: root ?? dirname5(p),
       body,
       registered_via: filesArg ? "explicit" : "folder"
@@ -226395,8 +226816,8 @@ async function runScout(args, opts) {
   const reportDir = resolveReportDir2(flags["output-dir"], opts);
   mkdirSync9(reportDir, { recursive: true });
   const stamp = isoTimestampLocal2();
-  const reportPath = join10(reportDir, `${stamp}-scout-${slugify2(jobId)}.md`);
-  writeFileSync6(reportPath, md, "utf-8");
+  const reportPath = join12(reportDir, `${stamp}-scout-${slugify2(jobId)}.md`);
+  writeFileSync7(reportPath, md, "utf-8");
   return ok(
     [
       `job_id=${jobId}`,
@@ -226570,7 +226991,7 @@ function runBuildFieldset(args) {
   const json2 = JSON.stringify(fieldset, null, 2);
   const outPath = flags["out"];
   if (outPath) {
-    writeFileSync6(outPath, json2 + "\n", "utf-8");
+    writeFileSync7(outPath, json2 + "\n", "utf-8");
     return ok(`fieldset_name=${name}
 fields=${fields.length}
 path=${outPath}`);
@@ -226597,7 +227018,7 @@ async function runProposeFieldset(args, opts) {
   if (samplesArg) {
     for (const p of samplesArg.split(",").map((s) => s.trim()).filter(Boolean)) {
       try {
-        const body = readFileSync9(p, "utf-8");
+        const body = readFileSync11(p, "utf-8");
         samples.push({ path: p, body: body.slice(0, 2e3) });
       } catch {
       }
@@ -226707,7 +227128,7 @@ ${content.slice(0, 400)}`
   const json2 = JSON.stringify(candidate, null, 2);
   const outPath = flags["out"];
   if (outPath) {
-    writeFileSync6(outPath, json2 + "\n", "utf-8");
+    writeFileSync7(outPath, json2 + "\n", "utf-8");
     return ok(
       `fieldset_name=${candidate.fieldset_name}
 fields=${candidate.fields.length}
@@ -226720,9 +227141,9 @@ function runListBundledFieldsets(args) {
   const { flags } = parseFlags(args);
   const here = dirname5(fileURLToPath2(import.meta.url));
   const candidates = [
-    resolve4(here, "..", "fieldsets"),
-    resolve4(here, "fieldsets"),
-    resolve4(here, "..", "..", "fieldsets")
+    resolve5(here, "..", "fieldsets"),
+    resolve5(here, "fieldsets"),
+    resolve5(here, "..", "..", "fieldsets")
   ];
   let dir = null;
   for (const c of candidates) {
@@ -226741,11 +227162,11 @@ function runListBundledFieldsets(args) {
   const entries = readdirSync2(dir).filter((n) => n.endsWith(".json")).sort();
   const sets = [];
   for (const e of entries) {
-    const full = resolve4(dir, e);
+    const full = resolve5(dir, e);
     const name = e.replace(/\.json$/, "");
     let fields = [];
     try {
-      const parsed = JSON.parse(readFileSync9(full, "utf-8"));
+      const parsed = JSON.parse(readFileSync11(full, "utf-8"));
       fields = (parsed.fields ?? []).map((f) => f.name);
     } catch {
     }
@@ -227088,8 +227509,8 @@ function runExport(args, opts) {
   mkdirSync9(reportDir, { recursive: true });
   const stamp = isoTimestampLocal2();
   const filename = `${stamp}-export-${slugify2(jobId)}.${format}`;
-  const path = join10(reportDir, filename);
-  writeFileSync6(path, "", "utf-8");
+  const path = join12(reportDir, filename);
+  writeFileSync7(path, "", "utf-8");
   if (format === "jsonl") {
     for (const r of rows) {
       appendFileSync4(path, JSON.stringify(r) + "\n", "utf-8");
@@ -227363,23 +227784,23 @@ async function runMassScoutCli(args, opts = {}) {
 
 // src/benchmark/search-existing/index.ts
 import { createHash as createHash4 } from "node:crypto";
-import { existsSync as existsSync8, mkdirSync as mkdirSync10, readFileSync as readFileSync11, renameSync as renameSync3, writeFileSync as writeFileSync7 } from "node:fs";
-import { join as join13, resolve as resolve9 } from "node:path";
+import { existsSync as existsSync9, mkdirSync as mkdirSync10, readFileSync as readFileSync13, renameSync as renameSync4, writeFileSync as writeFileSync8 } from "node:fs";
+import { join as join15, resolve as resolve10 } from "node:path";
 
 // src/benchmark/search-existing/dataset.ts
-import { existsSync as existsSync5, readdirSync as readdirSync3, statSync as statSync4 } from "node:fs";
-import { join as join11, resolve as resolve5 } from "node:path";
+import { existsSync as existsSync6, readdirSync as readdirSync3, statSync as statSync4 } from "node:fs";
+import { join as join13, resolve as resolve6 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 function resolveFixtureRoot() {
   const here = fileURLToPath3(new URL(".", import.meta.url));
   const candidates = [
-    resolve5(here, "../../../benchmark-fixtures/search-existing"),
+    resolve6(here, "../../../benchmark-fixtures/search-existing"),
     // dist/ bundle layout: dist/<bundle>.js → one level less deep.
-    resolve5(here, "../../benchmark-fixtures/search-existing"),
-    resolve5(here, "../benchmark-fixtures/search-existing")
+    resolve6(here, "../../benchmark-fixtures/search-existing"),
+    resolve6(here, "../benchmark-fixtures/search-existing")
   ];
   for (const c of candidates) {
-    if (existsSync5(c) && statSync4(c).isDirectory()) return c;
+    if (existsSync6(c) && statSync4(c).isDirectory()) return c;
   }
   throw new Error(
     `search-existing fixture root not found near ${here} \u2014 looked at:
@@ -227390,7 +227811,7 @@ function listFixtureFiles(root = resolveFixtureRoot()) {
   const out = [];
   const walk = (dir, rel) => {
     for (const entry of readdirSync3(dir, { withFileTypes: true })) {
-      const abs2 = join11(dir, entry.name);
+      const abs2 = join13(dir, entry.name);
       const relPath = rel ? `${rel}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
         walk(abs2, relPath);
@@ -227481,25 +227902,25 @@ var SEARCH_EXISTING_CASES = [
 ];
 
 // src/benchmark/search-existing/runner.ts
-import { resolve as resolve8 } from "node:path";
+import { resolve as resolve9 } from "node:path";
 
 // src/search-existing/core.ts
 import { randomUUID } from "node:crypto";
-import { existsSync as existsSync7, statSync as statSync6, realpathSync as realpathSync3 } from "node:fs";
-import { resolve as resolve7 } from "node:path";
+import { existsSync as existsSync8, statSync as statSync6, realpathSync as realpathSync3 } from "node:fs";
+import { resolve as resolve8 } from "node:path";
 
 // src/scan-pipeline.ts
 import {
-  readFileSync as readFileSync10,
-  existsSync as existsSync6,
+  readFileSync as readFileSync12,
+  existsSync as existsSync7,
   statSync as statSync5,
   lstatSync,
   readdirSync as readdirSync4,
   realpathSync as realpathSync2
 } from "node:fs";
-import { extname as extname4, join as join12, basename as basename4, dirname as dirname6, resolve as resolve6, sep } from "node:path";
+import { extname as extname4, join as join14, basename as basename4, dirname as dirname6, resolve as resolve7, sep } from "node:path";
 import { homedir as homedir2 } from "node:os";
-import { spawnSync } from "node:child_process";
+import { spawnSync as spawnSync2 } from "node:child_process";
 var BREVITY_RULES = "\nOUTPUT RULES:\n- Be SUCCINCT. Use bullet points, not paragraphs.\n- Skip preamble, filler, and restating the task.\n- Only report findings, not things that are correct.\n- For code reviews: skip files/areas with no issues \u2014 only mention what needs attention.\n- Maximum 3 sentences per finding. Lead with the problem, not the context.";
 var FILE_FORMAT_EXAMPLE = "\nINPUT FORMAT: Each attached file is wrapped as follows (placeholders use {BRACES}, actual tags use angle brackets):\n<filename>\n{ABSOLUTE_PATH_HERE}\n</filename>\n<file-content>\n````{LANGUAGE}\n{FILE_CONTENTS_HERE}\n````\n</file-content>\nReference files by the path inside the filename tag. Multiple files may appear in sequence.\n";
 function codeTaskSystemPrompt(lang) {
@@ -227580,7 +228001,7 @@ function detectLang(filePath) {
   const ext = extname4(filePath).toLowerCase();
   if (EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
   try {
-    const head = readFileSync10(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
+    const head = readFileSync12(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
     const shebang = head.match(/^#!\s*(?:\/usr\/bin\/env\s+)?(\S+)/);
     if (shebang) {
       const bin = basename4(shebang[1]);
@@ -227605,12 +228026,12 @@ function fenceBackticks(content) {
   return "`".repeat(needed);
 }
 function assertFileExists(filePath) {
-  if (!existsSync6(filePath)) {
+  if (!existsSync7(filePath)) {
     throw new Error(`File not found: ${filePath}`);
   }
 }
 function sanitizeInputPath(filePath) {
-  const resolved = resolve6(filePath);
+  const resolved = resolve7(filePath);
   const realpathSafe = (p) => {
     try {
       return realpathSync2(p);
@@ -227618,11 +228039,11 @@ function sanitizeInputPath(filePath) {
       return p;
     }
   };
-  const cwdReal = realpathSafe(resolve6(process.cwd()));
+  const cwdReal = realpathSafe(resolve7(process.cwd()));
   const homeReal = realpathSafe(
-    resolve6(process.env.HOME || process.env.USERPROFILE || homedir2())
+    resolve7(process.env.HOME || process.env.USERPROFILE || homedir2())
   );
-  const tmpReal = realpathSafe(resolve6("/tmp"));
+  const tmpReal = realpathSafe(resolve7("/tmp"));
   const resolvedReal = (() => {
     try {
       return realpathSync2(resolved);
@@ -227658,7 +228079,7 @@ function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexReda
       `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
     );
   }
-  const raw = readFileSync10(safePath);
+  const raw = readFileSync12(safePath);
   if (raw.length > limit) {
     throw new Error(
       `File too large after read (${(raw.length / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
@@ -227804,9 +228225,9 @@ function scanForSecrets(content) {
 function scanFilesForSecrets(filePaths) {
   const allDetails = [];
   for (const fp of filePaths) {
-    if (!existsSync6(fp)) continue;
+    if (!existsSync7(fp)) continue;
     try {
-      const content = readFileSync10(fp, "utf-8");
+      const content = readFileSync12(fp, "utf-8");
       const scan = scanForSecrets(content);
       if (scan.found) {
         for (const d of scan.details) {
@@ -227896,7 +228317,7 @@ function resolvePrompt(instructions, instructionsFilesPaths) {
     const paths = Array.isArray(instructionsFilesPaths) ? instructionsFilesPaths : [instructionsFilesPaths];
     for (const fp of paths) {
       assertFileExists(fp);
-      const content = readFileSync10(fp, "utf-8");
+      const content = readFileSync12(fp, "utf-8");
       prompt = prompt ? `${prompt}
 
 ${content}` : content;
@@ -228025,12 +228446,12 @@ function validateGitCwd(dirPath) {
     throw new Error("validateGitCwd: empty cwd not allowed");
   }
   if (dirPath.includes("..")) {
-    const trimmed = resolve6(dirPath);
+    const trimmed = resolve7(dirPath);
     if (trimmed.includes("..")) {
       throw new Error(`validateGitCwd: path contains parent refs: ${dirPath}`);
     }
   }
-  const resolved = resolve6(dirPath);
+  const resolved = resolve7(dirPath);
   const realpathSafe = (p) => {
     try {
       return realpathSync2(p);
@@ -228048,11 +228469,11 @@ function validateGitCwd(dirPath) {
       throw new Error(`validateGitCwd: system path rejected: ${dirPath}`);
     }
   }
-  const cwdReal = realpathSafe(resolve6(process.cwd()));
+  const cwdReal = realpathSafe(resolve7(process.cwd()));
   const homeReal = realpathSafe(
-    resolve6(process.env.HOME || process.env.USERPROFILE || homedir2())
+    resolve7(process.env.HOME || process.env.USERPROFILE || homedir2())
   );
-  const tmpReal = realpathSafe(resolve6("/tmp"));
+  const tmpReal = realpathSafe(resolve7("/tmp"));
   const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep);
   if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
     throw new Error(
@@ -228063,7 +228484,7 @@ function validateGitCwd(dirPath) {
 var _gitOnPath = void 0;
 function ensureGitOnPath() {
   if (_gitOnPath !== void 0) return _gitOnPath;
-  const probe = spawnSync("git", ["--version"], {
+  const probe = spawnSync2("git", ["--version"], {
     encoding: "utf-8",
     timeout: 2e3,
     killSignal: "SIGKILL"
@@ -228103,14 +228524,14 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
     killSignal: "SIGKILL"
   };
   const allFiles = /* @__PURE__ */ new Set();
-  const topLevelResult = spawnSync(
+  const topLevelResult = spawnSync2(
     "git",
     ["rev-parse", "--show-toplevel"],
     { cwd: dirPath, ...gitOpts }
   );
   const isInGitRepo = topLevelResult.status === 0 && topLevelResult.stdout.trim();
   if (isInGitRepo) {
-    const trackedResult = spawnSync(
+    const trackedResult = spawnSync2(
       "git",
       ["ls-files", "--cached"],
       { cwd: dirPath, ...gitOpts }
@@ -228118,10 +228539,10 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
     if (trackedResult.status === 0 && trackedResult.stdout) {
       for (const relPath of trackedResult.stdout.split("\n")) {
         if (!relPath.trim()) continue;
-        allFiles.add(join12(dirPath, relPath));
+        allFiles.add(join14(dirPath, relPath));
       }
     }
-    const untrackedResult = spawnSync(
+    const untrackedResult = spawnSync2(
       "git",
       ["ls-files", "--others", "--exclude-standard"],
       { cwd: dirPath, ...gitOpts }
@@ -228129,7 +228550,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
     if (untrackedResult.status === 0 && untrackedResult.stdout) {
       for (const relPath of untrackedResult.stdout.split("\n")) {
         if (!relPath.trim()) continue;
-        allFiles.add(join12(dirPath, relPath));
+        allFiles.add(join14(dirPath, relPath));
       }
     }
   }
@@ -228146,8 +228567,8 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
         if (!entry.isDirectory()) continue;
         if (entry.name === ".git" || entry.name === "node_modules") continue;
         if (entry.name.startsWith(".")) continue;
-        const subDir = join12(dir, entry.name);
-        const gitDir = join12(subDir, ".git");
+        const subDir = join14(dir, entry.name);
+        const gitDir = join14(subDir, ".git");
         const gitStat = lstatSyncRetry(gitDir);
         const gitDirIsDir = gitStat ? gitStat.isDirectory() : false;
         if (gitDirIsDir) {
@@ -228166,7 +228587,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
       } catch {
         continue;
       }
-      const nestedResult = spawnSync(
+      const nestedResult = spawnSync2(
         "git",
         ["ls-files", "--cached", "--others", "--exclude-standard"],
         { cwd: nestedRoot, ...gitOpts }
@@ -228174,7 +228595,7 @@ function gitLsFilesMultiRepo(dirPath, recursive) {
       if (nestedResult.status === 0 && nestedResult.stdout) {
         for (const relPath of nestedResult.stdout.split("\n")) {
           if (!relPath.trim()) continue;
-          allFiles.add(join12(nestedRoot, relPath));
+          allFiles.add(join14(nestedRoot, relPath));
         }
       }
     }
@@ -228188,6 +228609,8 @@ function walkDir(dirPath, options) {
   const skipBinary = !options?.includeBinary;
   const recursive = options?.recursive !== false;
   const followSymlinks = options?.followSymlinks !== false;
+  const onExcluded = options?.onExcluded ?? (() => {
+  });
   if (options?.useGitignore) {
     const gitResults = gitLsFilesMultiRepo(dirPath, recursive);
     if (gitResults !== null) {
@@ -228195,16 +228618,25 @@ function walkDir(dirPath, options) {
       const results2 = [];
       for (const fullPath of gitResults) {
         if (results2.length >= maxFiles) break;
-        if (skipBinary && isBinaryExtension(fullPath)) continue;
+        if (skipBinary && isBinaryExtension(fullPath)) {
+          onExcluded(fullPath, "binary extension");
+          continue;
+        }
         if (extensions) {
           const ext = extname4(fullPath).toLowerCase();
-          if (!extensions.includes(ext)) continue;
+          if (!extensions.includes(ext)) {
+            onExcluded(fullPath, "extension filter");
+            continue;
+          }
         }
         if (extraExcludeSet.size > 0) {
           const rel = fullPath.startsWith(dirPath) ? fullPath.slice(dirPath.length) : fullPath;
           const segments = rel.split("/").filter((s) => s.length > 0);
           const dirSegments = segments.slice(0, -1);
-          if (dirSegments.some((seg) => extraExcludeSet.has(seg))) continue;
+          if (dirSegments.some((seg) => extraExcludeSet.has(seg))) {
+            onExcluded(fullPath, "excluded dir");
+            continue;
+          }
         }
         results2.push(fullPath);
       }
@@ -228229,7 +228661,7 @@ function walkDir(dirPath, options) {
     }
     for (const entry of entries) {
       if (results.length >= maxFiles) return;
-      const fullPath = join12(dir, entry.name);
+      const fullPath = join14(dir, entry.name);
       if (entry.isSymbolicLink()) {
         if (!followSymlinks) continue;
         try {
@@ -228242,10 +228674,16 @@ function walkDir(dirPath, options) {
               recurse(fullPath);
             }
           } else if (targetStat.isFile()) {
-            if (skipBinary && isBinaryExtension(fullPath)) continue;
+            if (skipBinary && isBinaryExtension(fullPath)) {
+              onExcluded(fullPath, "binary extension");
+              continue;
+            }
             if (extensions) {
               const ext = extname4(entry.name).toLowerCase();
-              if (!extensions.includes(ext)) continue;
+              if (!extensions.includes(ext)) {
+                onExcluded(fullPath, "extension filter");
+                continue;
+              }
             }
             results.push(fullPath);
           }
@@ -228256,8 +228694,14 @@ function walkDir(dirPath, options) {
       }
       if (entry.isDirectory()) {
         if (!recursive) continue;
-        if (entry.name === ".git" || entry.name === ".svn" || entry.name === ".hg" || exclude.has(entry.name)) continue;
-        if (entry.name.startsWith(".")) continue;
+        if (entry.name === ".git" || entry.name === ".svn" || entry.name === ".hg" || exclude.has(entry.name)) {
+          onExcluded(fullPath, "excluded dir");
+          continue;
+        }
+        if (entry.name.startsWith(".")) {
+          onExcluded(fullPath, "hidden dir");
+          continue;
+        }
         try {
           const dirRealPath = realpathSync2(fullPath);
           if (visitedPaths.has(dirRealPath)) continue;
@@ -228267,10 +228711,16 @@ function walkDir(dirPath, options) {
         }
         recurse(fullPath);
       } else if (entry.isFile()) {
-        if (skipBinary && isBinaryExtension(fullPath)) continue;
+        if (skipBinary && isBinaryExtension(fullPath)) {
+          onExcluded(fullPath, "binary extension");
+          continue;
+        }
         if (extensions) {
           const ext = extname4(entry.name).toLowerCase();
-          if (!extensions.includes(ext)) continue;
+          if (!extensions.includes(ext)) {
+            onExcluded(fullPath, "extension filter");
+            continue;
+          }
         }
         results.push(fullPath);
       }
@@ -228299,16 +228749,16 @@ function extractLocalImports(filePath, sourceCode) {
       if (lang === "python" && importPath.startsWith(".")) {
         const dotCount = importPath.match(/^\.+/)?.[0].length ?? 1;
         const modulePart = importPath.slice(dotCount);
-        const baseDir = dotCount === 1 ? dir : join12(dir, ...Array(dotCount - 1).fill(".."));
-        resolved = modulePart ? join12(baseDir, ...modulePart.split(".")) : baseDir;
+        const baseDir = dotCount === 1 ? dir : join14(dir, ...Array(dotCount - 1).fill(".."));
+        resolved = modulePart ? join14(baseDir, ...modulePart.split(".")) : baseDir;
       } else {
-        resolved = join12(dir, importPath);
+        resolved = join14(dir, importPath);
       }
       if (!extname4(resolved)) {
         const tryExts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"];
         let found = false;
         for (const ext of tryExts) {
-          if (existsSync6(resolved + ext)) {
+          if (existsSync7(resolved + ext)) {
             resolved = resolved + ext;
             found = true;
             break;
@@ -228323,8 +228773,8 @@ function extractLocalImports(filePath, sourceCode) {
             "__init__.py"
           ];
           for (const leaf of indexCandidates) {
-            const indexPath = join12(resolved, leaf);
-            if (existsSync6(indexPath)) {
+            const indexPath = join14(resolved, leaf);
+            if (existsSync7(indexPath)) {
               resolved = indexPath;
               found = true;
               break;
@@ -228332,7 +228782,7 @@ function extractLocalImports(filePath, sourceCode) {
           }
         }
         if (!found) continue;
-      } else if (!existsSync6(resolved)) {
+      } else if (!existsSync7(resolved)) {
         continue;
       }
       paths.push(resolved);
@@ -228380,7 +228830,7 @@ async function runSearchExistingImplementations(args, deps) {
     } catch (err3) {
       return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
     }
-    if (!existsSync7(fp)) {
+    if (!existsSync8(fp)) {
       return { content: [{ type: "text", text: `FAILED: Folder not found: ${fpRaw}` }], isError: true };
     }
     if (!statSync6(fp).isDirectory()) {
@@ -228394,8 +228844,8 @@ async function runSearchExistingImplementations(args, deps) {
     const raw = Array.isArray(seiSourceFilesRaw) ? seiSourceFilesRaw : [seiSourceFilesRaw];
     for (const sf of raw) {
       if (typeof sf !== "string" || !sf.trim()) continue;
-      const resolved = resolve7(sf);
-      if (!existsSync7(resolved)) {
+      const resolved = resolve8(sf);
+      if (!existsSync8(resolved)) {
         return {
           content: [{ type: "text", text: `FAILED: source_files entry not found: ${sf}` }],
           isError: true
@@ -228411,8 +228861,8 @@ async function runSearchExistingImplementations(args, deps) {
   }
   let diffPathResolved = void 0;
   if (typeof seiDiffPathRaw === "string" && seiDiffPathRaw.trim()) {
-    const r = resolve7(seiDiffPathRaw);
-    if (!existsSync7(r)) {
+    const r = resolve8(seiDiffPathRaw);
+    if (!existsSync8(r)) {
       return {
         content: [{ type: "text", text: `FAILED: diff_path not found: ${seiDiffPathRaw}` }],
         isError: true
@@ -228958,7 +229408,7 @@ function passesThresholds(score, thresholds = DEFAULT_SEARCH_EXISTING_THRESHOLDS
 var DEFAULT_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 var SEARCH_EXISTING_MAX_OUTPUT_TOKENS = 8192;
 function abs(root, rel) {
-  return resolve8(root, rel);
+  return resolve9(root, rel);
 }
 async function runSearchExistingBenchmarkOnModel(modelId, cases = SEARCH_EXISTING_CASES, opts = {
   apiKey: "",
@@ -229135,16 +229585,16 @@ function selectSearchExistingModel(input) {
 // src/benchmark/search-existing/index.ts
 var INCUMBENT_FALLBACK_PRICING2 = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
 function cachePath2() {
-  return join13(getConfigDir(), "search-existing-results.json");
+  return join15(getConfigDir(), "search-existing-results.json");
 }
 function cacheKey2(modelId, date5, datasetHash) {
   return `${modelId}::${date5}::${datasetHash}`;
 }
 function loadCache2() {
   const p = cachePath2();
-  if (!existsSync8(p)) return {};
+  if (!existsSync9(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync11(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync13(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
@@ -229155,8 +229605,8 @@ function saveCache2(cache2) {
   mkdirSync10(dir, { recursive: true });
   const p = cachePath2();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync7(tmp, JSON.stringify(cache2, null, 2), "utf-8");
-  renameSync3(tmp, p);
+  writeFileSync8(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  renameSync4(tmp, p);
 }
 function resolveApiKey2(override) {
   const k = override || process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
@@ -229384,11 +229834,11 @@ async function runSearchExistingBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const mainRoot = resolveMainRoot2(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join13(mainRoot, "reports", "search-existing-benchmark");
+  const reportDir = opts.outputDir ?? join15(mainRoot, "reports", "search-existing-benchmark");
   mkdirSync10(reportDir, { recursive: true });
   const stamp = reportStamp2();
-  const jsonReportPath = join13(reportDir, `${stamp}-search-existing-benchmark.json`);
-  const reportPath = join13(reportDir, `${stamp}-search-existing-benchmark.md`);
+  const jsonReportPath = join15(reportDir, `${stamp}-search-existing-benchmark.json`);
+  const reportPath = join15(reportDir, `${stamp}-search-existing-benchmark.md`);
   const jsonPayload = {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     datasetHash,
@@ -229423,8 +229873,8 @@ async function runSearchExistingBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync7(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
-  renameSync3(jtmp, jsonReportPath);
+  writeFileSync8(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync4(jtmp, jsonReportPath);
   const md = buildReportMarkdown2({
     cases,
     datasetHash,
@@ -229437,8 +229887,8 @@ async function runSearchExistingBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync7(mtmp, md, "utf-8");
-  renameSync3(mtmp, reportPath);
+  writeFileSync8(mtmp, md, "utf-8");
+  renameSync4(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
     recommendedModelId: selection.recommendedModelId,
@@ -229574,8 +230024,8 @@ function renderAssessmentText(a) {
 }
 
 // src/model-qualification/drift.ts
-import { mkdirSync as mkdirSync11, readFileSync as readFileSync12, renameSync as renameSync4, writeFileSync as writeFileSync8 } from "node:fs";
-import { join as join14 } from "node:path";
+import { mkdirSync as mkdirSync11, readFileSync as readFileSync14, renameSync as renameSync5, writeFileSync as writeFileSync9 } from "node:fs";
+import { join as join16 } from "node:path";
 function perMillion(s) {
   if (s == null) return null;
   const n = parseFloat(s);
@@ -229712,11 +230162,11 @@ function computeModelHealth(configured, catalog, baseline, opts = {}) {
   return { findings, updatedBaseline };
 }
 function getBaselinePath() {
-  return join14(getConfigDir(), "model-baseline.json");
+  return join16(getConfigDir(), "model-baseline.json");
 }
 function loadBaseline(path = getBaselinePath()) {
   try {
-    const raw = readFileSync12(path, "utf-8");
+    const raw = readFileSync14(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed;
@@ -229730,8 +230180,8 @@ function saveBaseline(baseline, path = getBaselinePath()) {
   try {
     mkdirSync11(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync8(tmp, JSON.stringify(baseline, null, 2));
-    renameSync4(tmp, path);
+    writeFileSync9(tmp, JSON.stringify(baseline, null, 2));
+    renameSync5(tmp, path);
   } catch {
   }
 }
@@ -229804,10 +230254,10 @@ function renderModelHealthMarkdown(report) {
 async function runCheckModelHealth(opts = {}) {
   const profile = opts.profile ?? resolveActiveProfile();
   const report = await checkModelHealth(profile, opts);
-  const dir = opts.outputDir ?? join14(resolveProjectMainRoot(), "reports", "model-health");
+  const dir = opts.outputDir ?? join16(resolveProjectMainRoot(), "reports", "model-health");
   mkdirSync11(dir, { recursive: true });
-  const reportPath = join14(dir, `${compactStamp()}-model-health-${profile.name}.md`);
-  writeFileSync8(reportPath, renderModelHealthMarkdown(report));
+  const reportPath = join16(dir, `${compactStamp()}-model-health-${profile.name}.md`);
+  writeFileSync9(reportPath, renderModelHealthMarkdown(report));
   return { report, reportPath };
 }
 function renderModelHealthText(report) {
@@ -229828,8 +230278,8 @@ function renderModelHealthText(report) {
 }
 
 // src/model-qualification/new-arrivals.ts
-import { mkdirSync as mkdirSync12, readFileSync as readFileSync13, renameSync as renameSync5, writeFileSync as writeFileSync9 } from "node:fs";
-import { join as join15 } from "node:path";
+import { mkdirSync as mkdirSync12, readFileSync as readFileSync15, renameSync as renameSync6, writeFileSync as writeFileSync10 } from "node:fs";
+import { join as join17 } from "node:path";
 function createdToIso(created) {
   if (created === null || !Number.isFinite(created) || created <= 0) return null;
   return new Date(created * 1e3).toISOString();
@@ -229871,11 +230321,11 @@ function diffNewArrivals(catalog, snapshot) {
   };
 }
 function getCatalogSnapshotPath() {
-  return join15(getConfigDir(), "catalog-snapshot.json");
+  return join17(getConfigDir(), "catalog-snapshot.json");
 }
 function loadSnapshot(path = getCatalogSnapshotPath()) {
   try {
-    const raw = readFileSync13(path, "utf-8");
+    const raw = readFileSync15(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const obj = parsed;
@@ -229895,8 +230345,8 @@ function saveSnapshot(snapshot, path = getCatalogSnapshotPath()) {
   try {
     mkdirSync12(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync9(tmp, JSON.stringify(snapshot, null, 2));
-    renameSync5(tmp, path);
+    writeFileSync10(tmp, JSON.stringify(snapshot, null, 2));
+    renameSync6(tmp, path);
   } catch {
   }
 }
@@ -229987,24 +230437,24 @@ function renderNewArrivalsText(report) {
 }
 async function runDiscoverNewArrivals(opts = {}) {
   const report = await discoverNewArrivals(opts);
-  const dir = opts.outputDir ?? join15(resolveProjectMainRoot(), "reports", "model-arrivals");
+  const dir = opts.outputDir ?? join17(resolveProjectMainRoot(), "reports", "model-arrivals");
   mkdirSync12(dir, { recursive: true });
-  const reportPath = join15(dir, `${compactStamp()}-new-arrivals.md`);
-  writeFileSync9(reportPath, renderNewArrivalsMarkdown(report));
+  const reportPath = join17(dir, `${compactStamp()}-new-arrivals.md`);
+  writeFileSync10(reportPath, renderNewArrivalsMarkdown(report));
   return { report, reportPath };
 }
 
 // src/benchmark/pick.ts
-var import_yaml2 = __toESM(require_dist(), 1);
-import { readFileSync as readFileSync14, writeFileSync as writeFileSync10, renameSync as renameSyncCb, existsSync as existsSync9 } from "node:fs";
+var import_yaml3 = __toESM(require_dist(), 1);
+import { readFileSync as readFileSync16, writeFileSync as writeFileSync11, renameSync as renameSyncCb, existsSync as existsSync10 } from "node:fs";
 function loadProfileForMutation(settingsPath, profileName) {
-  if (!existsSync9(settingsPath)) {
+  if (!existsSync10(settingsPath)) {
     throw new Error(`settings.yaml not found at ${settingsPath}`);
   }
-  const raw = readFileSync14(settingsPath, "utf-8");
+  const raw = readFileSync16(settingsPath, "utf-8");
   let doc;
   try {
-    doc = (0, import_yaml2.parse)(raw);
+    doc = (0, import_yaml3.parse)(raw);
   } catch (err3) {
     throw new Error(`settings.yaml at ${settingsPath} is not valid YAML: ${err3.message}`, { cause: err3 });
   }
@@ -230024,9 +230474,9 @@ function loadProfileForMutation(settingsPath, profileName) {
   return { root, profile };
 }
 function writeSettingsAtomic(settingsPath, root) {
-  const newRaw = (0, import_yaml2.stringify)(root, { indent: 2 });
+  const newRaw = (0, import_yaml3.stringify)(root, { indent: 2 });
   const tmp = settingsPath + ".tmp." + process.pid;
-  writeFileSync10(tmp, newRaw, "utf-8");
+  writeFileSync11(tmp, newRaw, "utf-8");
   renameSyncCb(tmp, settingsPath);
 }
 function applyFreePoolToSettings(settingsPath, profileName, modelIds) {
@@ -230050,13 +230500,13 @@ function applyFreePoolToSettings(settingsPath, profileName, modelIds) {
 
 // src/benchmark/code-task/index.ts
 import { createHash as createHash5 } from "node:crypto";
-import { existsSync as existsSync11, mkdirSync as mkdirSync13, readFileSync as readFileSync16, renameSync as renameSync6, writeFileSync as writeFileSync11 } from "node:fs";
-import { join as join17 } from "node:path";
+import { existsSync as existsSync12, mkdirSync as mkdirSync13, readFileSync as readFileSync18, renameSync as renameSync7, writeFileSync as writeFileSync12 } from "node:fs";
+import { join as join19 } from "node:path";
 
 // src/benchmark/code-task/dataset.ts
 var import_typescript = __toESM(require_typescript(), 1);
-import { existsSync as existsSync10, readFileSync as readFileSync15, statSync as statSync7 } from "node:fs";
-import { dirname as dirname7, join as join16, resolve as resolve10 } from "node:path";
+import { existsSync as existsSync11, readFileSync as readFileSync17, statSync as statSync7 } from "node:fs";
+import { dirname as dirname7, join as join18, resolve as resolve11 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 var CODE_AUDIT_INSTRUCTIONS = [
   "Audit this file for GENUINE DEFECTS \u2014 bugs that cause incorrect behavior, data loss,",
@@ -230080,13 +230530,13 @@ var MIN_DISTRACTOR_SYMBOLS = 20;
 function resolveFixtureRoot2() {
   const here = fileURLToPath4(new URL(".", import.meta.url));
   const candidates = [
-    resolve10(here, "../../../benchmark-fixtures/code-task"),
+    resolve11(here, "../../../benchmark-fixtures/code-task"),
     // dist/ bundle layout: dist/<bundle>.js → one level less deep.
-    resolve10(here, "../../benchmark-fixtures/code-task"),
-    resolve10(here, "../benchmark-fixtures/code-task")
+    resolve11(here, "../../benchmark-fixtures/code-task"),
+    resolve11(here, "../benchmark-fixtures/code-task")
   ];
   for (const c of candidates) {
-    if (existsSync10(c) && statSync7(c).isDirectory()) return c;
+    if (existsSync11(c) && statSync7(c).isDirectory()) return c;
   }
   throw new Error(
     `code-task fixture root not found near ${here} \u2014 looked at:
@@ -230096,12 +230546,12 @@ function resolveFixtureRoot2() {
 function resolveDatasetPath2() {
   const here = dirname7(fileURLToPath4(import.meta.url));
   const candidates = [
-    join16(here, "dataset.jsonl"),
-    join16(here, "..", "src", "benchmark", "code-task", "dataset.jsonl"),
-    join16(here, "..", "..", "src", "benchmark", "code-task", "dataset.jsonl")
+    join18(here, "dataset.jsonl"),
+    join18(here, "..", "src", "benchmark", "code-task", "dataset.jsonl"),
+    join18(here, "..", "..", "src", "benchmark", "code-task", "dataset.jsonl")
   ];
   for (const c of candidates) {
-    if (existsSync10(c)) return c;
+    if (existsSync11(c)) return c;
   }
   throw new Error(
     `Could not locate the code-task dataset. Tried:
@@ -230133,13 +230583,13 @@ function listTopLevelSymbols(source, filename = "fixture.ts") {
   return [...new Set(names)].filter((n) => n.length >= MIN_SYMBOL_LENGTH).sort();
 }
 function readFixture(c, root = resolveFixtureRoot2()) {
-  return readFileSync15(join16(root, c.file), "utf-8");
+  return readFileSync17(join18(root, c.file), "utf-8");
 }
 function fixturePath(c, root = resolveFixtureRoot2()) {
-  return join16(root, c.file);
+  return join18(root, c.file);
 }
 function loadDataset2(path = resolveDatasetPath2()) {
-  const raw = readFileSync15(path, "utf-8");
+  const raw = readFileSync17(path, "utf-8");
   const cases = [];
   const seenIds = /* @__PURE__ */ new Set();
   const lines = raw.split("\n");
@@ -230217,11 +230667,11 @@ function validateDataset(cases = loadDataset2(), root = resolveFixtureRoot2()) {
   let cleanCases = 0;
   let distractors = 0;
   for (const c of cases) {
-    const abs2 = join16(root, c.file);
-    if (!existsSync10(abs2)) {
+    const abs2 = join18(root, c.file);
+    if (!existsSync11(abs2)) {
       throw new Error(`case ${c.id}: fixture file missing on disk: ${c.file}`);
     }
-    const bytes = readFileSync15(abs2);
+    const bytes = readFileSync17(abs2);
     if (bytes.includes(0)) {
       throw new Error(
         `case ${c.id}: fixture ${c.file} contains a NUL byte \u2014 readFileAsCodeBlock treats it as binary and REFUSES to read it, so the case could never be scored.`
@@ -230934,16 +231384,16 @@ function selectCodeTaskModel(input) {
 // src/benchmark/code-task/index.ts
 var INCUMBENT_FALLBACK_PRICING3 = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
 function cachePath3() {
-  return join17(getConfigDir(), "code-task-results.json");
+  return join19(getConfigDir(), "code-task-results.json");
 }
 function cacheKey3(modelId, date5, datasetHash) {
   return `${modelId}::${date5}::${datasetHash}`;
 }
 function loadCache3() {
   const p = cachePath3();
-  if (!existsSync11(p)) return {};
+  if (!existsSync12(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync16(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync18(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
@@ -230953,8 +231403,8 @@ function saveCache3(cache2) {
   mkdirSync13(getConfigDir(), { recursive: true });
   const p = cachePath3();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync11(tmp, JSON.stringify(cache2, null, 2), "utf-8");
-  renameSync6(tmp, p);
+  writeFileSync12(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  renameSync7(tmp, p);
 }
 function resolveApiKey3(override) {
   const k = override || process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
@@ -231099,12 +231549,15 @@ async function runCodeAuditBenchmark(opts = {}) {
   const assessments = [];
   let totalCost = 0;
   for (const { model, qualified, disqualifyReason: disqualifyReason2 } of toAssess.values()) {
-    if (freeOnly && !model.id.endsWith(":free") || paidBenchmarkWouldRefuse(model)) {
-      progress(`  ${model.id}: skipped (free_only \u2014 non-':free' model).`);
+    const freeOnlySkip = freeOnly && !model.id.endsWith(":free");
+    const paidRefusedSkip = !freeOnlySkip && paidBenchmarkWouldRefuse(model);
+    if (freeOnlySkip || paidRefusedSkip) {
+      const skipReason = freeOnlySkip ? "free_only active \u2014 non-':free' model not benchmarked" : "paid benchmarks are off \u2014 paid model not benchmarked";
+      progress(`  ${model.id}: skipped (${skipReason}).`);
       assessments.push({
         modelId: model.id,
         qualified: false,
-        disqualifyReason: "free_only active \u2014 non-':free' model not benchmarked",
+        disqualifyReason: skipReason,
         inputDollarsPerMillion: model.inputDollarsPerMillion,
         outputDollarsPerMillion: model.outputDollarsPerMillion,
         latencyMs: 0,
@@ -231180,11 +231633,11 @@ async function runCodeAuditBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const mainRoot = resolveProjectMainRoot(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join17(mainRoot, "reports", "code-task-benchmark");
+  const reportDir = opts.outputDir ?? join19(mainRoot, "reports", "code-task-benchmark");
   mkdirSync13(reportDir, { recursive: true });
   const stamp = reportStamp3();
-  const jsonReportPath = join17(reportDir, `${stamp}-code-task-benchmark.json`);
-  const reportPath = join17(reportDir, `${stamp}-code-task-benchmark.md`);
+  const jsonReportPath = join19(reportDir, `${stamp}-code-task-benchmark.json`);
+  const reportPath = join19(reportDir, `${stamp}-code-task-benchmark.md`);
   const jsonPayload = {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     datasetHash,
@@ -231226,8 +231679,8 @@ async function runCodeAuditBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync11(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
-  renameSync6(jtmp, jsonReportPath);
+  writeFileSync12(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync7(jtmp, jsonReportPath);
   const md = buildReportMarkdown3({
     cases,
     datasetHash,
@@ -231240,8 +231693,8 @@ async function runCodeAuditBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync11(mtmp, md, "utf-8");
-  renameSync6(mtmp, reportPath);
+  writeFileSync12(mtmp, md, "utf-8");
+  renameSync7(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
     recommendedModelId: selection.recommendedModelId,
@@ -231327,13 +231780,13 @@ function buildReportMarkdown3(args) {
 }
 
 // src/benchmark/scan-folder/index.ts
-import { existsSync as existsSync14, mkdirSync as mkdirSync14, readFileSync as readFileSync19, renameSync as renameSync7, writeFileSync as writeFileSync12 } from "node:fs";
-import { join as join19 } from "node:path";
+import { existsSync as existsSync15, mkdirSync as mkdirSync14, readFileSync as readFileSync21, renameSync as renameSync8, writeFileSync as writeFileSync13 } from "node:fs";
+import { join as join21 } from "node:path";
 
 // src/benchmark/scan-folder/dataset.ts
 import { createHash as createHash6 } from "node:crypto";
-import { existsSync as existsSync12, readFileSync as readFileSync17, readdirSync as readdirSync5, statSync as statSync8 } from "node:fs";
-import { join as join18, resolve as resolve11 } from "node:path";
+import { existsSync as existsSync13, readFileSync as readFileSync19, readdirSync as readdirSync5, statSync as statSync8 } from "node:fs";
+import { join as join20, resolve as resolve12 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 function buildInstructions(criterion) {
   return [
@@ -231412,13 +231865,13 @@ var SCAN_FOLDER_CASES = [
 function resolveFixtureRoot3() {
   const here = fileURLToPath5(new URL(".", import.meta.url));
   const candidates = [
-    resolve11(here, "../../../benchmark-fixtures/scan-folder"),
+    resolve12(here, "../../../benchmark-fixtures/scan-folder"),
     // dist/ bundle layout: dist/<bundle>.js → one level less deep.
-    resolve11(here, "../../benchmark-fixtures/scan-folder"),
-    resolve11(here, "../benchmark-fixtures/scan-folder")
+    resolve12(here, "../../benchmark-fixtures/scan-folder"),
+    resolve12(here, "../benchmark-fixtures/scan-folder")
   ];
   for (const c of candidates) {
-    if (existsSync12(c) && statSync8(c).isDirectory()) return c;
+    if (existsSync13(c) && statSync8(c).isDirectory()) return c;
   }
   throw new Error(
     `scan-folder fixture root not found near ${here} \u2014 looked at:
@@ -231426,13 +231879,13 @@ function resolveFixtureRoot3() {
   );
 }
 function fixtureScanRoot(root = resolveFixtureRoot3()) {
-  return join18(root, "src");
+  return join20(root, "src");
 }
 function listFixtureFiles2(root = resolveFixtureRoot3()) {
   const out = [];
   const walk = (dir, rel) => {
     for (const entry of readdirSync5(dir, { withFileTypes: true })) {
-      const abs2 = join18(dir, entry.name);
+      const abs2 = join20(dir, entry.name);
       const relPath = rel ? `${rel}/${entry.name}` : entry.name;
       if (entry.isDirectory()) walk(abs2, relPath);
       else if (entry.isFile()) out.push(relPath);
@@ -231445,18 +231898,18 @@ function scannedFilesFor(c, root = resolveFixtureRoot3()) {
   return listFixtureFiles2(root).filter((f) => c.extensions.some((e) => f.endsWith(e)));
 }
 function fixtureAbsPath(rel, root = resolveFixtureRoot3()) {
-  return join18(root, rel);
+  return join20(root, rel);
 }
 function deriveMatchingFiles(c, root = resolveFixtureRoot3()) {
   const re = new RegExp(c.truthRegexSource);
-  return scannedFilesFor(c, root).filter((rel) => re.test(readFileSync17(fixtureAbsPath(rel, root), "utf-8"))).sort();
+  return scannedFilesFor(c, root).filter((rel) => re.test(readFileSync19(fixtureAbsPath(rel, root), "utf-8"))).sort();
 }
 function datasetFingerprint(root = resolveFixtureRoot3()) {
   const h = createHash6("sha1");
   h.update(JSON.stringify(SCAN_FOLDER_CASES));
   for (const rel of listFixtureFiles2(root)) {
     h.update(rel);
-    h.update(readFileSync17(fixtureAbsPath(rel, root)));
+    h.update(readFileSync19(fixtureAbsPath(rel, root)));
   }
   return h.digest("hex").slice(0, 12);
 }
@@ -231466,7 +231919,7 @@ function validateDataset2(cases = SCAN_FOLDER_CASES, root = resolveFixtureRoot3(
     throw new Error(`scan-folder corpus is empty at ${fixtureScanRoot(root)}`);
   }
   for (const rel of files) {
-    const bytes = readFileSync17(fixtureAbsPath(rel, root));
+    const bytes = readFileSync19(fixtureAbsPath(rel, root));
     if (bytes.includes(0)) {
       throw new Error(
         `fixture ${rel} contains a NUL byte \u2014 readFileAsCodeBlock treats it as binary and REFUSES to read it, so no model could ever be scored on it.`
@@ -231515,11 +231968,11 @@ function validateDataset2(cases = SCAN_FOLDER_CASES, root = resolveFixtureRoot3(
 }
 
 // src/benchmark/scan-folder/bench-runner.ts
-import { resolve as resolve12 } from "node:path";
+import { resolve as resolve13 } from "node:path";
 
 // src/scan-folder/core.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { existsSync as existsSync13, statSync as statSync9, readFileSync as readFileSync18 } from "node:fs";
+import { existsSync as existsSync14, statSync as statSync9, readFileSync as readFileSync20 } from "node:fs";
 
 // src/rate-limiter.ts
 var AdaptiveRateLimiter = class {
@@ -231671,7 +232124,7 @@ async function runScanFolder(args, deps) {
   } catch (err3) {
     return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
   }
-  if (!existsSync13(sfFolderPath)) {
+  if (!existsSync14(sfFolderPath)) {
     return {
       content: [
         {
@@ -231820,7 +232273,7 @@ async function runScanFolder(args, deps) {
   if (sfMode === 2 && succeeded.length > 0) {
     const sections = [];
     for (const r of succeeded) {
-      const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync18(r.reportPath, "utf-8") : "";
+      const content = r.reportPath && existsSync14(r.reportPath) ? readFileSync20(r.reportPath, "utf-8") : "";
       sections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -231860,7 +232313,7 @@ ${content}`);
       for (const fp of fg.files) {
         const r = pathToResult.get(fp);
         if (!r) continue;
-        const content = r.reportPath && existsSync13(r.reportPath) ? readFileSync18(r.reportPath, "utf-8") : "";
+        const content = r.reportPath && existsSync14(r.reportPath) ? readFileSync20(r.reportPath, "utf-8") : "";
         sections.push(`## File: ${fp}
 
 ${content}`);
@@ -231986,11 +232439,11 @@ async function runScanFolderBenchmarkOnModel(modelId, cases = SCAN_FOLDER_CASES,
   );
   for (const c of cases) {
     const scanned = scannedFilesFor(c, fixtureRoot).map(
-      (rel) => resolve12(fixtureAbsPath(rel, fixtureRoot))
+      (rel) => resolve13(fixtureAbsPath(rel, fixtureRoot))
     );
     const expectedMatch = new Set(
       deriveMatchingFiles(c, fixtureRoot).map(
-        (rel) => resolve12(fixtureAbsPath(rel, fixtureRoot))
+        (rel) => resolve13(fixtureAbsPath(rel, fixtureRoot))
       )
     );
     const reports = /* @__PURE__ */ new Map();
@@ -232031,7 +232484,7 @@ ${codeBlock}`
         });
       } catch (err3) {
         const reason = `request failed: ${err3.message}`;
-        errors.set(resolve12(filePath), reason);
+        errors.set(resolve13(filePath), reason);
         return { filePath, success: false, error: reason };
       } finally {
         latencyTotalMs += Date.now() - started;
@@ -232042,7 +232495,7 @@ ${codeBlock}`
       if (!res.ok) {
         const bodyText = await res.text().catch(() => "");
         const reason = `API error ${res.status}: ${bodyText.slice(0, 300)}`;
-        errors.set(resolve12(filePath), reason);
+        errors.set(resolve13(filePath), reason);
         return { filePath, success: false, error: reason };
       }
       let json2;
@@ -232050,7 +232503,7 @@ ${codeBlock}`
         json2 = await res.json();
       } catch (err3) {
         const reason = `malformed response body (HTTP ${res.status}): ${err3.message}`;
-        errors.set(resolve12(filePath), reason);
+        errors.set(resolve13(filePath), reason);
         return { filePath, success: false, error: reason };
       }
       const usage = json2.usage;
@@ -232060,10 +232513,10 @@ ${codeBlock}`
       const content = json2.choices?.[0]?.message?.content ?? "";
       if (content.trim().length === 0) {
         const reason = "LLM returned empty response";
-        errors.set(resolve12(filePath), reason);
+        errors.set(resolve13(filePath), reason);
         return { filePath, success: false, error: reason };
       }
-      reports.set(resolve12(filePath), content);
+      reports.set(resolve13(filePath), content);
       return {
         filePath,
         success: true,
@@ -232185,16 +232638,16 @@ function selectScanFolderModel(input) {
 // src/benchmark/scan-folder/index.ts
 var INCUMBENT_FALLBACK_PRICING4 = KNOWN_PRICING[DEFAULT_MODEL] ?? { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 32768 };
 function cachePath4() {
-  return join19(getConfigDir(), "scan-folder-results.json");
+  return join21(getConfigDir(), "scan-folder-results.json");
 }
 function cacheKey4(modelId, date5, datasetHash) {
   return `${modelId}::${date5}::${datasetHash}`;
 }
 function loadCache4() {
   const p = cachePath4();
-  if (!existsSync14(p)) return {};
+  if (!existsSync15(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync19(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync21(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
@@ -232204,8 +232657,8 @@ function saveCache4(cache2) {
   mkdirSync14(getConfigDir(), { recursive: true });
   const p = cachePath4();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync12(tmp, JSON.stringify(cache2, null, 2), "utf-8");
-  renameSync7(tmp, p);
+  writeFileSync13(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  renameSync8(tmp, p);
 }
 function resolveApiKey4(override) {
   const k = override || process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
@@ -232433,11 +232886,11 @@ async function runScanFolderBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const mainRoot = resolveProjectMainRoot(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join19(mainRoot, "reports", "scan-folder-benchmark");
+  const reportDir = opts.outputDir ?? join21(mainRoot, "reports", "scan-folder-benchmark");
   mkdirSync14(reportDir, { recursive: true });
   const stamp = reportStamp4();
-  const jsonReportPath = join19(reportDir, `${stamp}-scan-folder-benchmark.json`);
-  const reportPath = join19(reportDir, `${stamp}-scan-folder-benchmark.md`);
+  const jsonReportPath = join21(reportDir, `${stamp}-scan-folder-benchmark.json`);
+  const reportPath = join21(reportDir, `${stamp}-scan-folder-benchmark.md`);
   const jsonPayload = {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     datasetHash,
@@ -232477,8 +232930,8 @@ async function runScanFolderBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync12(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
-  renameSync7(jtmp, jsonReportPath);
+  writeFileSync13(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync8(jtmp, jsonReportPath);
   const md = buildReportMarkdown4({
     cases,
     datasetHash,
@@ -232492,8 +232945,8 @@ async function runScanFolderBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync12(mtmp, md, "utf-8");
-  renameSync7(mtmp, reportPath);
+  writeFileSync13(mtmp, md, "utf-8");
+  renameSync8(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
     recommendedModelId: selection.recommendedModelId,
@@ -232586,11 +233039,11 @@ function buildReportMarkdown4(args) {
 }
 
 // src/benchmark/check-specs/index.ts
-import { existsSync as existsSync17, mkdirSync as mkdirSync15, readFileSync as readFileSync21, renameSync as renameSync8, writeFileSync as writeFileSync13 } from "node:fs";
-import { join as join21 } from "node:path";
+import { existsSync as existsSync18, mkdirSync as mkdirSync15, readFileSync as readFileSync23, renameSync as renameSync9, writeFileSync as writeFileSync14 } from "node:fs";
+import { join as join23 } from "node:path";
 
 // src/check-specs/core.ts
-import { existsSync as existsSync15 } from "node:fs";
+import { existsSync as existsSync16 } from "node:fs";
 import { basename as basename5 } from "node:path";
 var CHECK_SPECS_SYSTEM_PROMPT = "You are a strict specification compliance auditor. You will receive a SPECIFICATION FILE and one or more SOURCE FILES. Your job is to find every violation of the specification in the source files.\n\nRULES:\n1. The specification is the ABSOLUTE source of truth. Every rule, restriction, format, API contract, forbidden pattern, and requirement in the spec MUST be followed exactly.\n2. Report ONLY VIOLATIONS \u2014 things implemented WRONGLY or FORBIDDEN patterns used. Do NOT report MISSING features \u2014 some requirements may be implemented in other files that are not included here.\n3. For each violation, report:\n   - **File**: which source file\n   - **Location**: function/class/method name (NEVER line numbers)\n   - **Spec rule violated**: quote the exact spec text\n   - **What the code does**: describe the actual behavior\n   - **Severity**: CRITICAL (security/data loss), HIGH (wrong behavior), MEDIUM (non-compliance), LOW (style/convention)\n4. If a source file has NO violations, explicitly state: 'CLEAN \u2014 no spec violations found.'\n5. At the end, provide a SUMMARY with total violation counts by severity.\n6. Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.\n\nSPEC FORMAT: The specification file is wrapped in <specs-filename> and <specs-file-content> tags (distinct from source file tags).\n" + FILE_FORMAT_EXAMPLE + BREVITY_RULES;
 async function runCheckAgainstSpecs(args, deps) {
@@ -232686,7 +233139,7 @@ async function runCheckAgainstSpecs(args, deps) {
     if (csMode === 0 && !csEffectivelyGrouped) {
       const csPerFileResults = [];
       for (const fp of fgPaths) {
-        if (!existsSync15(fp)) {
+        if (!existsSync16(fp)) {
           csPerFileResults.push(`FAILED: ${fp} \u2014 File not found`);
           continue;
         }
@@ -232812,8 +233265,8 @@ ${csResp.content}${csFooter}`
 
 // src/benchmark/check-specs/dataset.ts
 import { createHash as createHash7 } from "node:crypto";
-import { existsSync as existsSync16, readFileSync as readFileSync20, readdirSync as readdirSync6, statSync as statSync10 } from "node:fs";
-import { join as join20, resolve as resolve13 } from "node:path";
+import { existsSync as existsSync17, readFileSync as readFileSync22, readdirSync as readdirSync6, statSync as statSync10 } from "node:fs";
+import { join as join22, resolve as resolve14 } from "node:path";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 var CHECK_SPECS_INSTRUCTIONS = [
   "You are auditing exactly ONE source file against the specification above.",
@@ -232986,13 +233439,13 @@ var MIN_CLEAN = 4;
 function resolveFixtureRoot4() {
   const here = fileURLToPath6(new URL(".", import.meta.url));
   const candidates = [
-    resolve13(here, "../../../benchmark-fixtures/check-specs"),
+    resolve14(here, "../../../benchmark-fixtures/check-specs"),
     // dist/ bundle layout: dist/<bundle>.js → one level less deep.
-    resolve13(here, "../../benchmark-fixtures/check-specs"),
-    resolve13(here, "../benchmark-fixtures/check-specs")
+    resolve14(here, "../../benchmark-fixtures/check-specs"),
+    resolve14(here, "../benchmark-fixtures/check-specs")
   ];
   for (const c of candidates) {
-    if (existsSync16(c) && statSync10(c).isDirectory()) return c;
+    if (existsSync17(c) && statSync10(c).isDirectory()) return c;
   }
   throw new Error(
     `check-specs fixture root not found near ${here} \u2014 looked at:
@@ -233000,49 +233453,49 @@ function resolveFixtureRoot4() {
   );
 }
 function specPath(root = resolveFixtureRoot4()) {
-  return join20(root, "spec", "TESTING.md");
+  return join22(root, "spec", "TESTING.md");
 }
 function fixtureAbsPath2(rel, root = resolveFixtureRoot4()) {
-  return join20(root, rel);
+  return join22(root, rel);
 }
 function fixtureFilePaths(fixtures = CHECK_SPECS_FIXTURES, root = resolveFixtureRoot4()) {
-  return fixtures.map((f) => resolve13(fixtureAbsPath2(f.file, root)));
+  return fixtures.map((f) => resolve14(fixtureAbsPath2(f.file, root)));
 }
 function expectedViolations(fixtures = CHECK_SPECS_FIXTURES, root = resolveFixtureRoot4()) {
   return new Set(
-    fixtures.filter((f) => f.truth === "VIOLATION").map((f) => resolve13(fixtureAbsPath2(f.file, root)))
+    fixtures.filter((f) => f.truth === "VIOLATION").map((f) => resolve14(fixtureAbsPath2(f.file, root)))
   );
 }
 function listFixtureFiles3(root = resolveFixtureRoot4()) {
   const out = [];
   const walk = (dir, rel) => {
     for (const entry of readdirSync6(dir, { withFileTypes: true })) {
-      const abs2 = join20(dir, entry.name);
+      const abs2 = join22(dir, entry.name);
       const relPath = `${rel}/${entry.name}`;
       if (entry.isDirectory()) walk(abs2, relPath);
       else if (entry.isFile()) out.push(relPath);
     }
   };
-  walk(join20(root, "src"), "src");
+  walk(join22(root, "src"), "src");
   return out.sort();
 }
 function datasetFingerprint2(root = resolveFixtureRoot4()) {
   const h = createHash7("sha1");
   h.update(JSON.stringify(CHECK_SPECS_FIXTURES));
   h.update(CHECK_SPECS_INSTRUCTIONS);
-  h.update(readFileSync20(specPath(root)));
+  h.update(readFileSync22(specPath(root)));
   for (const rel of listFixtureFiles3(root)) {
     h.update(rel);
-    h.update(readFileSync20(fixtureAbsPath2(rel, root)));
+    h.update(readFileSync22(fixtureAbsPath2(rel, root)));
   }
   return h.digest("hex").slice(0, 12);
 }
 function validateDataset3(fixtures = CHECK_SPECS_FIXTURES, root = resolveFixtureRoot4()) {
   const spec = specPath(root);
-  if (!existsSync16(spec)) {
+  if (!existsSync17(spec)) {
     throw new Error(`check-specs spec file missing: ${spec}`);
   }
-  if (readFileSync20(spec, "utf-8").trim().length === 0) {
+  if (readFileSync22(spec, "utf-8").trim().length === 0) {
     throw new Error(`check-specs spec file is empty: ${spec}`);
   }
   if (fixtures.length === 0) throw new Error("check-specs corpus is empty");
@@ -233053,10 +233506,10 @@ function validateDataset3(fixtures = CHECK_SPECS_FIXTURES, root = resolveFixture
     if (seen.has(f.file)) throw new Error(`duplicate fixture: ${f.file}`);
     seen.add(f.file);
     const abs2 = fixtureAbsPath2(f.file, root);
-    if (!existsSync16(abs2)) {
+    if (!existsSync17(abs2)) {
       throw new Error(`fixture ${f.file} is listed in the dataset but missing on disk (${abs2})`);
     }
-    const bytes = readFileSync20(abs2);
+    const bytes = readFileSync22(abs2);
     if (bytes.includes(0)) {
       throw new Error(
         `fixture ${f.file} contains a NUL byte \u2014 readFileAsCodeBlock treats it as binary and REFUSES to read it, so no model could ever be scored on it.`
@@ -233385,16 +233838,16 @@ var INCUMBENT_FALLBACK_PRICING5 = KNOWN_PRICING[DEFAULT_MODEL] ?? {
   context_window: 32768
 };
 function cachePath5() {
-  return join21(getConfigDir(), "check-specs-results.json");
+  return join23(getConfigDir(), "check-specs-results.json");
 }
 function cacheKey5(modelId, date5, datasetHash) {
   return `${modelId}::${date5}::${datasetHash}`;
 }
 function loadCache5() {
   const p = cachePath5();
-  if (!existsSync17(p)) return {};
+  if (!existsSync18(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync21(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync23(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
@@ -233404,8 +233857,8 @@ function saveCache5(cache2) {
   mkdirSync15(getConfigDir(), { recursive: true });
   const p = cachePath5();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync13(tmp, JSON.stringify(cache2, null, 2), "utf-8");
-  renameSync8(tmp, p);
+  writeFileSync14(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  renameSync9(tmp, p);
 }
 function resolveApiKey5(override) {
   const k = override || process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
@@ -233644,11 +234097,11 @@ async function runCheckSpecsBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const mainRoot = resolveProjectMainRoot(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join21(mainRoot, "reports", "check-specs-benchmark");
+  const reportDir = opts.outputDir ?? join23(mainRoot, "reports", "check-specs-benchmark");
   mkdirSync15(reportDir, { recursive: true });
   const stamp = reportStamp5();
-  const jsonReportPath = join21(reportDir, `${stamp}-check-specs-benchmark.json`);
-  const reportPath = join21(reportDir, `${stamp}-check-specs-benchmark.md`);
+  const jsonReportPath = join23(reportDir, `${stamp}-check-specs-benchmark.json`);
+  const reportPath = join23(reportDir, `${stamp}-check-specs-benchmark.md`);
   const jsonPayload = {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     datasetHash,
@@ -233689,8 +234142,8 @@ async function runCheckSpecsBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync13(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
-  renameSync8(jtmp, jsonReportPath);
+  writeFileSync14(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync9(jtmp, jsonReportPath);
   const md = buildReportMarkdown5({
     fixtures,
     datasetHash,
@@ -233703,8 +234156,8 @@ async function runCheckSpecsBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync13(mtmp, md, "utf-8");
-  renameSync8(mtmp, reportPath);
+  writeFileSync14(mtmp, md, "utf-8");
+  renameSync9(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
     recommendedModelId: selection.recommendedModelId,
@@ -235145,10 +235598,10 @@ Report: ${reportPath}`;
           })
         );
         const root = opts.mainRoot ?? resolveProjectMainRoot();
-        const dir = str(args.output_dir) ?? join22(root, "reports", "auto-replace");
+        const dir = str(args.output_dir) ?? join24(root, "reports", "auto-replace");
         mkdirSync16(dir, { recursive: true });
-        const reportPath = join22(dir, `${compactStamp()}-auto-replace.md`);
-        writeFileSync14(reportPath, reportMarkdown);
+        const reportPath = join24(dir, `${compactStamp()}-auto-replace.md`);
+        writeFileSync15(reportPath, reportMarkdown);
         const degraded = findings.filter((f) => f.degraded).length;
         const recommended = findings.filter((f) => f.changed).length;
         const summary = `${findings.length} tool(s) checked, ${degraded} degraded, ${recommended} replacement(s) recommended (advisory \u2014 apply via the CLI \`llm-ext-benchmark --auto-replace --apply\`).`;
@@ -235249,13 +235702,13 @@ async function safeReadJson(res, maxBytes = MAX_RESPONSE_BYTES) {
 // src/cluster/cluster_synonyms_main.ts
 import {
   mkdirSync as mkdirSync19,
-  readFileSync as readFileSync23,
+  readFileSync as readFileSync25,
   readdirSync as readdirSync7,
-  writeFileSync as writeFileSync16,
-  existsSync as existsSync19,
-  renameSync as renameSync9
+  writeFileSync as writeFileSync17,
+  existsSync as existsSync20,
+  renameSync as renameSync10
 } from "node:fs";
-import { join as join24 } from "node:path";
+import { join as join26 } from "node:path";
 
 // src/cluster/checkpoint.ts
 import Database2 from "better-sqlite3";
@@ -235502,22 +235955,22 @@ var CheckpointDB = class _CheckpointDB {
 };
 
 // src/cluster/embeddings.ts
-import { spawnSync as spawnSync2 } from "node:child_process";
+import { spawnSync as spawnSync3 } from "node:child_process";
 import {
-  existsSync as existsSync18,
+  existsSync as existsSync19,
   mkdirSync as mkdirSync18,
-  readFileSync as readFileSync22,
-  writeFileSync as writeFileSync15,
+  readFileSync as readFileSync24,
+  writeFileSync as writeFileSync16,
   statSync as statSync11
 } from "node:fs";
-import { dirname as dirname9, join as join23 } from "node:path";
+import { dirname as dirname9, join as join25 } from "node:path";
 var F32_BYTES = 4;
 function readEmbeddingsMeta(path) {
   const metaPath = path + ".meta.json";
-  if (!existsSync18(metaPath)) {
+  if (!existsSync19(metaPath)) {
     throw new Error(`embeddings meta sidecar missing: ${metaPath}`);
   }
-  const raw = readFileSync22(metaPath, "utf-8");
+  const raw = readFileSync24(metaPath, "utf-8");
   let meta3;
   try {
     meta3 = JSON.parse(raw);
@@ -235536,7 +235989,7 @@ function readEmbeddingsMeta(path) {
   return meta3;
 }
 function loadEmbeddings(path, expectedN) {
-  if (!existsSync18(path)) throw new Error(`embeddings file missing: ${path}`);
+  if (!existsSync19(path)) throw new Error(`embeddings file missing: ${path}`);
   const meta3 = readEmbeddingsMeta(path);
   const [n, dim] = meta3.shape;
   if (meta3.dtype !== "float32") {
@@ -235555,28 +236008,28 @@ function loadEmbeddings(path, expectedN) {
       `embeddings file size mismatch: ${path} is ${stat.size} bytes, expected ${expectedBytes} = N(${n}) \xD7 D(${dim}) \xD7 ${F32_BYTES}`
     );
   }
-  const buf = readFileSync22(path);
+  const buf = readFileSync24(path);
   const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
   const embeddings = new Float32Array(ab);
   return { embeddings, dim, model: meta3.model, source: "loaded", path };
 }
 function computeEmbeddings(items, opts) {
   if (items.length === 0) throw new Error("computeEmbeddings: empty items");
-  if (!existsSync18(opts.scriptPath)) {
+  if (!existsSync19(opts.scriptPath)) {
     throw new Error(`compute_embeddings.py not found: ${opts.scriptPath}`);
   }
   mkdirSync18(opts.outDir, { recursive: true });
-  const inputPath = join23(opts.outDir, "_embedding_sentences.txt");
-  const outputPath = join23(opts.outDir, "embeddings.f32");
+  const inputPath = join25(opts.outDir, "_embedding_sentences.txt");
+  const outputPath = join25(opts.outDir, "embeddings.f32");
   const clean = opts.sentenceClean ?? defaultSentenceClean;
-  writeFileSync15(
+  writeFileSync16(
     inputPath,
     items.map((it) => clean(it.sentence)).join("\n") + "\n",
     { encoding: "utf-8" }
   );
   const runner = opts.pythonRunner ?? "uv";
   const argv = ["run", opts.scriptPath, "--input", inputPath, "--output", outputPath, "--model", opts.model];
-  const result = spawnSync2(runner, argv, {
+  const result = spawnSync3(runner, argv, {
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -250274,17 +250727,17 @@ var OUTPUT_NAMES = {
   checkpoint: "checkpoint.sqlite"
 };
 async function loadInputJsonl(path) {
-  if (!existsSync19(path)) {
+  if (!existsSync20(path)) {
     throw new Error(`input_file not found: ${path}`);
   }
   return readClusterJsonl(path);
 }
 function loadPolicy(policyFile) {
   if (!policyFile) return resolvePolicy(void 0);
-  if (!existsSync19(policyFile)) {
+  if (!existsSync20(policyFile)) {
     throw new Error(`policy_file not found: ${policyFile}`);
   }
-  const raw = readFileSync23(policyFile, "utf-8");
+  const raw = readFileSync25(policyFile, "utf-8");
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -250352,8 +250805,8 @@ function reductionPct(itemsIn, clustersOut) {
 }
 function writeJsonAtomic(path, value) {
   const tmp = path + ".tmp";
-  writeFileSync16(tmp, JSON.stringify(value, null, 2) + "\n", { encoding: "utf-8" });
-  renameSync9(tmp, path);
+  writeFileSync17(tmp, JSON.stringify(value, null, 2) + "\n", { encoding: "utf-8" });
+  renameSync10(tmp, path);
 }
 function writeClustersJsonl(path, itemsById, partition) {
   const lines = [];
@@ -250367,7 +250820,7 @@ function writeClustersJsonl(path, itemsById, partition) {
       lines.push(JSON.stringify({ id: it.id, cluster_id: clusterId, sentence: it.sentence }));
     }
   }
-  writeFileSync16(path, lines.join("\n") + (lines.length ? "\n" : ""), { encoding: "utf-8" });
+  writeFileSync17(path, lines.join("\n") + (lines.length ? "\n" : ""), { encoding: "utf-8" });
 }
 function buildSummary(itemsById, partition, profileName, canonicalsOverride) {
   const clusters = [];
@@ -250404,7 +250857,7 @@ async function runClusterSynonyms(invocation, hooks) {
   const policy = loadPolicy(invocation.policy_file);
   const resumeFrom = invocation.resume_from;
   const resuming = resumeFrom !== void 0;
-  if (resumeFrom !== void 0 && !existsSync19(resumeFrom)) {
+  if (resumeFrom !== void 0 && !existsSync20(resumeFrom)) {
     errors.push(`resume_from checkpoint not found: ${resumeFrom}`);
     return buildEarlyAbort(invocation, errors, warnings, profileName, tStart);
   }
@@ -250445,7 +250898,7 @@ async function runClusterSynonyms(invocation, hooks) {
     errors.push(`embeddings: ${err3.message}`);
     return buildEarlyAbort(invocation, errors, warnings, profileName, tStart);
   }
-  const checkpointPath = resumeFrom ?? join24(invocation.output_dir, OUTPUT_NAMES.checkpoint);
+  const checkpointPath = resumeFrom ?? join26(invocation.output_dir, OUTPUT_NAMES.checkpoint);
   const ckpt = CheckpointDB.open(checkpointPath);
   const uf = ckpt.loadUnionFind();
   for (const it of items) uf.add(it.id);
@@ -250530,9 +250983,9 @@ async function runClusterSynonyms(invocation, hooks) {
     weak_overlap_evidence: weakOverlapEvidence,
     warnings
   };
-  const clustersPath = join24(invocation.output_dir, OUTPUT_NAMES.clusters);
-  const summaryPath = join24(invocation.output_dir, OUTPUT_NAMES.summary);
-  const statsPath = join24(invocation.output_dir, OUTPUT_NAMES.stats);
+  const clustersPath = join26(invocation.output_dir, OUTPUT_NAMES.clusters);
+  const summaryPath = join26(invocation.output_dir, OUTPUT_NAMES.summary);
+  const statsPath = join26(invocation.output_dir, OUTPUT_NAMES.stats);
   writeClustersJsonl(clustersPath, itemsById, partition);
   writeJsonAtomic(summaryPath, buildSummary(itemsById, partition, profileName, canonicalsOverride));
   writeJsonAtomic(statsPath, stats);
@@ -250576,8 +251029,8 @@ function buildEarlyAbort(invocation, errors, warnings, profileName, tStart) {
 
 // src/cluster/preflight_benchmark.ts
 import { createHash as createHash8 } from "node:crypto";
-import { mkdirSync as mkdirSync20, readFileSync as readFileSync24, writeFileSync as writeFileSync17, existsSync as existsSync20, renameSync as renameSync10 } from "node:fs";
-import { join as join25, dirname as dirname10 } from "node:path";
+import { mkdirSync as mkdirSync20, readFileSync as readFileSync26, writeFileSync as writeFileSync18, existsSync as existsSync21, renameSync as renameSync11 } from "node:fs";
+import { join as join27, dirname as dirname10 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var DEFAULT_PREFLIGHT_PROMPT = `You are given 3 short sentences with numeric ids. Group sentences that have IDENTICAL or NEARLY-IDENTICAL overall meaning (full-sentence meaning equivalence, NOT word-by-word synonym matching).
 
@@ -250595,7 +251048,7 @@ function profileHash(profileFingerprint) {
   return createHash8("sha256").update(profileFingerprint).digest("hex").slice(0, 16);
 }
 function defaultCacheDir() {
-  return join25(homedir3(), ".llm-externalizer", "cache");
+  return join27(homedir3(), ".llm-externalizer", "cache");
 }
 function todayLocalISO() {
   const d = /* @__PURE__ */ new Date();
@@ -250606,12 +251059,12 @@ function todayLocalISO() {
 }
 function cachePathFor(profileHashStr, date5, cacheDir) {
   const dir = cacheDir ?? defaultCacheDir();
-  return join25(dir, `benchmark-${profileHashStr}-${date5}.json`);
+  return join27(dir, `benchmark-${profileHashStr}-${date5}.json`);
 }
 function readCache(path) {
-  if (!existsSync20(path)) return null;
+  if (!existsSync21(path)) return null;
   try {
-    const raw = readFileSync24(path, "utf8");
+    const raw = readFileSync26(path, "utf8");
     const parsed = JSON.parse(raw);
     if (parsed.version !== 1) return null;
     return parsed;
@@ -250622,8 +251075,8 @@ function readCache(path) {
 function writeCache(path, rec) {
   mkdirSync20(dirname10(path), { recursive: true });
   const tmp = `${path}.tmp.${process.pid}`;
-  writeFileSync17(tmp, JSON.stringify(rec, null, 2) + "\n", "utf8");
-  renameSync10(tmp, path);
+  writeFileSync18(tmp, JSON.stringify(rec, null, 2) + "\n", "utf8");
+  renameSync11(tmp, path);
 }
 function validatePreflightResponse(raw) {
   let parsed;
@@ -251305,6 +251758,9 @@ async function chatCompletionSimple(messages, options, deps) {
       const finishReason = data.choices?.[0]?.finish_reason ?? "";
       const usage = data.usage;
       recordRequest({ ok: true, durationMs: Date.now() - startTime, costUsd: usage?.cost ?? 0 });
+      if (typeof usage?.completion_tokens === "number") {
+        recordOutputTokensSample(model, usage.completion_tokens);
+      }
       return { content, model, usage, finishReason, truncated: false };
     }
     throw lastError ?? new Error("Reasoning ladder exhausted with no response");
@@ -251475,6 +251931,9 @@ async function chatCompletionJSON(messages, options, deps) {
       );
     }
     recordRequest({ ok: true, durationMs: Date.now() - jsonStartTime, costUsd: usage?.cost ?? 0 });
+    if (typeof usage?.completion_tokens === "number" && model) {
+      recordOutputTokensSample(model, usage.completion_tokens);
+    }
     return { parsed, model, usage, finishReason };
   } catch (e) {
     recordRequest({ ok: false, durationMs: Date.now() - jsonStartTime, costUsd: 0 });
@@ -251509,7 +251968,11 @@ async function checkServiceHealthOrWait() {
   }
   const { backoffDelays, backoffAttempt } = SERVICE_HEALTH;
   if (backoffAttempt >= backoffDelays.length) {
-    return `SERVER ISSUE DETECTED: ${SERVICE_HEALTH.consecutiveFailures} consecutive failures. Last success was ${Math.round((Date.now() - SERVICE_HEALTH.lastSuccessAt) / 1e3)}s ago. Tried waiting ${backoffDelays.map((d) => `${d / 1e3}s`).join(", ")}. The issue appears to be server-side (offline, overloaded, or connection broken). Please retry later.`;
+    const message = `SERVER ISSUE DETECTED: ${SERVICE_HEALTH.consecutiveFailures} consecutive failures. Last success was ${Math.round((Date.now() - SERVICE_HEALTH.lastSuccessAt) / 1e3)}s ago. Tried waiting ${backoffDelays.map((d) => `${d / 1e3}s`).join(", ")}. The issue appears to be server-side (offline, overloaded, or connection broken). Please retry later.`;
+    SERVICE_HEALTH.consecutiveFailures = 0;
+    SERVICE_HEALTH.backoffAttempt = 0;
+    SERVICE_HEALTH.inCooldown = false;
+    return message;
   }
   const delay = backoffDelays[backoffAttempt];
   SERVICE_HEALTH.inCooldown = true;
@@ -251624,6 +252087,7 @@ async function chatCompletionWithRetry(messages, options, deps) {
     }
     if (resp.finishReason === "stop" && !resp.truncated && resp.content.trim().length > 0) {
       recordServiceSuccess();
+      clearNoContentStrikes(options.model || backend.model || "");
       return resp;
     }
     if (resp.finishReason === "length" && resp.content.trim().length > 0) {
@@ -251646,7 +252110,6 @@ async function chatCompletionWithRetry(messages, options, deps) {
       );
       return resp;
     }
-    recordServiceFailure();
     const isEmpty = resp.content.trim().length === 0;
     const reasonLabel = resp.finishReason || "empty";
     const useEmptyBudget = isEmpty && backend.type === "openrouter";
@@ -251675,7 +252138,7 @@ async function chatCompletionWithRetry(messages, options, deps) {
       }
     }
     if (useEmptyBudget && resp.finishReason === "length" && currentAttempt > 1 && ladderModel && MODEL_REASONING_CACHE.get(ladderModel) === "none") {
-      recordServiceFailure();
+      recordNoContentStrike(ladderModel);
       resp.truncated = true;
       resp.content = `**NO CONTENT**: ${ladderModel} consumed its entire ${options.maxTokens ?? "output"}-token budget without emitting any content, even with reasoning disabled (finish_reason=length). The model produced only reasoning tokens. Retrying would bill another full budget for the same empty result, so this call stops here. Consider a smaller input, a larger max_tokens, or a different model for this slot.`;
       process.stderr.write(
@@ -251716,6 +252179,7 @@ async function chatCompletionWithRetry(messages, options, deps) {
       continue;
     }
     if (isEmpty && resp.finishReason === "length") {
+      recordNoContentStrike(options.model || backend.model || "");
       resp.content = `**NO CONTENT**: ${options.model || backend.model} spent its whole output budget on reasoning tokens and returned no content after ${limit} attempts (finish_reason=length). Not a provider glitch \u2014 the model generated only reasoning. Try a larger max_tokens, a smaller input, or a different model for this slot.`;
     } else if (isEmpty && (resp.finishReason === "" || resp.finishReason === "stop")) {
       resp.content = `**EMPTY RESPONSE**: The provider returned no content after ${limit} retries (finish_reason=${reasonLabel}). This usually means a transient provider glitch or the model failed on this specific prompt. No partial output available.`;
@@ -251744,39 +252208,39 @@ import { fileURLToPath as fileUrlToPath_cs } from "node:url";
 
 // src/rule-install.ts
 import {
-  existsSync as existsSync21,
+  existsSync as existsSync22,
   mkdirSync as mkdirSync21,
-  readFileSync as readFileSync25,
-  writeFileSync as writeFileSync18,
-  renameSync as renameSync11,
+  readFileSync as readFileSync27,
+  writeFileSync as writeFileSync19,
+  renameSync as renameSync12,
   realpathSync as realpathSync4,
   unlinkSync
 } from "node:fs";
 import { randomBytes as randomBytes3 } from "node:crypto";
 import { homedir as homedir4, tmpdir } from "node:os";
-import { dirname as dirname11, join as join26, resolve as resolve14, sep as sep2 } from "node:path";
+import { dirname as dirname11, join as join28, resolve as resolve15, sep as sep2 } from "node:path";
 import { fileURLToPath as fileURLToPath7 } from "node:url";
 var RULE_FILENAME = "use-llm-externalizer.md";
 function resolveBundledRulePath() {
   const candidates = [];
   const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   if (pluginRoot && pluginRoot.length > 0) {
-    candidates.push(join26(resolve14(pluginRoot), "rules", RULE_FILENAME));
+    candidates.push(join28(resolve15(pluginRoot), "rules", RULE_FILENAME));
   }
   try {
     const here = dirname11(fileURLToPath7(import.meta.url));
-    candidates.push(resolve14(here, "..", "..", "..", "rules", RULE_FILENAME));
+    candidates.push(resolve15(here, "..", "..", "..", "rules", RULE_FILENAME));
   } catch {
   }
   for (const c of candidates) {
-    if (existsSync21(c)) return c;
+    if (existsSync22(c)) return c;
   }
   return null;
 }
 function resolveClaudeRulesDir() {
   const cfg = process.env.CLAUDE_CONFIG_DIR;
-  const base = cfg && cfg.length > 0 ? resolve14(cfg) : join26(homedir4(), ".claude");
-  return join26(base, "rules");
+  const base = cfg && cfg.length > 0 ? resolve15(cfg) : join28(homedir4(), ".claude");
+  return join28(base, "rules");
 }
 function canonical(p) {
   try {
@@ -251784,7 +252248,7 @@ function canonical(p) {
   } catch {
     const parent = dirname11(p);
     if (parent === p) return p;
-    return join26(canonical(parent), p.slice(parent.length + (parent.endsWith(sep2) ? 0 : 1)));
+    return join28(canonical(parent), p.slice(parent.length + (parent.endsWith(sep2) ? 0 : 1)));
   }
 }
 function underAllowedRoot(dir) {
@@ -251796,7 +252260,7 @@ function underAllowedRoot(dir) {
     roots.push(homedir4());
   }
   if (process.env.CLAUDE_CONFIG_DIR && process.env.CLAUDE_CONFIG_DIR.length > 0) {
-    roots.push(canonical(resolve14(process.env.CLAUDE_CONFIG_DIR)));
+    roots.push(canonical(resolve15(process.env.CLAUDE_CONFIG_DIR)));
   }
   const tmp = tmpdir();
   try {
@@ -251812,11 +252276,11 @@ function installUsageRule(opts = {}) {
     return { status: "skipped", dest: "", detail: "disabled via LLM_EXT_INSTALL_RULE" };
   }
   const source = opts.sourcePath ?? resolveBundledRulePath();
-  if (!source || !existsSync21(source)) {
+  if (!source || !existsSync22(source)) {
     return { status: "error", dest: "", detail: "bundled rule source not found" };
   }
   const rulesDir = opts.rulesDir ?? resolveClaudeRulesDir();
-  const dest = join26(rulesDir, RULE_FILENAME);
+  const dest = join28(rulesDir, RULE_FILENAME);
   if (!underAllowedRoot(rulesDir)) {
     return {
       status: "error",
@@ -251826,22 +252290,22 @@ function installUsageRule(opts = {}) {
   }
   let desired;
   try {
-    desired = readFileSync25(source, "utf-8");
+    desired = readFileSync27(source, "utf-8");
   } catch (e) {
     return { status: "error", dest, detail: `cannot read source: ${e.message}` };
   }
-  const existed = existsSync21(dest);
+  const existed = existsSync22(dest);
   if (existed) {
     try {
-      if (readFileSync25(dest, "utf-8") === desired) return { status: "unchanged", dest };
+      if (readFileSync27(dest, "utf-8") === desired) return { status: "unchanged", dest };
     } catch {
     }
   }
   const tmp = dest + ".tmp." + process.pid + "." + randomBytes3(4).toString("hex");
   try {
     mkdirSync21(rulesDir, { recursive: true });
-    writeFileSync18(tmp, desired, "utf-8");
-    renameSync11(tmp, dest);
+    writeFileSync19(tmp, desired, "utf-8");
+    renameSync12(tmp, dest);
   } catch (e) {
     try {
       unlinkSync(tmp);
@@ -251853,37 +252317,37 @@ function installUsageRule(opts = {}) {
 }
 
 // src/model-reconcile.ts
-import { mkdirSync as mkdirSync23, readFileSync as readFileSync27, renameSync as renameSync12, writeFileSync as writeFileSync20 } from "node:fs";
-import { join as join28 } from "node:path";
+import { mkdirSync as mkdirSync23, readFileSync as readFileSync29, renameSync as renameSync13, writeFileSync as writeFileSync21 } from "node:fs";
+import { join as join30 } from "node:path";
 
 // src/free-pool-auto-bench.ts
 import {
   closeSync,
-  existsSync as existsSync22,
+  existsSync as existsSync23,
   mkdirSync as mkdirSync22,
   openSync,
-  readFileSync as readFileSync26,
-  writeFileSync as writeFileSync19
+  readFileSync as readFileSync28,
+  writeFileSync as writeFileSync20
 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
-import { dirname as dirname12, join as join27, resolve as pathResolve } from "node:path";
+import { dirname as dirname12, join as join29, resolve as pathResolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath as fileURLToPath8 } from "node:url";
-var LLM_EXT_HOME = join27(homedir5(), ".llm-externalizer");
-var BENCH_CACHE = join27(LLM_EXT_HOME, "benchmark-results.json");
-var BENCH_LOCK = join27(LLM_EXT_HOME, "free-pool-bench.lock");
-var BENCH_LOG = join27(LLM_EXT_HOME, "free-pool-bench.log");
+var LLM_EXT_HOME = join29(homedir5(), ".llm-externalizer");
+var BENCH_CACHE = join29(LLM_EXT_HOME, "benchmark-results.json");
+var BENCH_LOCK = join29(LLM_EXT_HOME, "free-pool-bench.lock");
+var BENCH_LOG = join29(LLM_EXT_HOME, "free-pool-bench.log");
 var DISABLE_ENV = "LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH";
 function resolveBenchmarkScriptPath() {
   const here = dirname12(fileURLToPath8(import.meta.url));
   const bundled = pathResolve(here, "benchmark.js");
-  if (existsSync22(bundled)) return bundled;
+  if (existsSync23(bundled)) return bundled;
   const fromSrc = pathResolve(here, "..", "dist", "benchmark.js");
   return fromSrc;
 }
 function benchCacheHasFreeEntries(cachePath6 = BENCH_CACHE) {
   try {
-    const raw = readFileSync26(cachePath6, "utf-8");
+    const raw = readFileSync28(cachePath6, "utf-8");
     const data = JSON.parse(raw);
     if (!Array.isArray(data?.results)) return false;
     return data.results.some(
@@ -251894,9 +252358,9 @@ function benchCacheHasFreeEntries(cachePath6 = BENCH_CACHE) {
   }
 }
 function lockHoldsLivePid(lockPath = BENCH_LOCK) {
-  if (!existsSync22(lockPath)) return false;
+  if (!existsSync23(lockPath)) return false;
   try {
-    const pid = parseInt(readFileSync26(lockPath, "utf-8").trim(), 10);
+    const pid = parseInt(readFileSync28(lockPath, "utf-8").trim(), 10);
     if (!Number.isInteger(pid) || pid <= 0) return false;
     try {
       process.kill(pid, 0);
@@ -251999,7 +252463,7 @@ function maybeTriggerFreePoolBench(opts) {
   });
   child.unref();
   try {
-    writeFileSync19(lockPath, String(child.pid ?? ""), "utf-8");
+    writeFileSync20(lockPath, String(child.pid ?? ""), "utf-8");
   } catch {
   }
   log(
@@ -252081,11 +252545,11 @@ function parseReconcileInterval(raw) {
 var DISABLE_RECONCILE_ENV = "LLM_EXT_DISABLE_AUTO_RECONCILE";
 var RECONCILE_INTERVAL_ENV = "LLM_EXT_RECONCILE_INTERVAL_MS";
 function reconcileStateFilePath() {
-  return join28(getConfigDir(), "last-reconcile.json");
+  return join30(getConfigDir(), "last-reconcile.json");
 }
 function readLastReconcileMs() {
   try {
-    const raw = readFileSync27(reconcileStateFilePath(), "utf-8");
+    const raw = readFileSync29(reconcileStateFilePath(), "utf-8");
     const parsed = JSON.parse(raw);
     return typeof parsed.lastRunMs === "number" && Number.isFinite(parsed.lastRunMs) ? parsed.lastRunMs : null;
   } catch {
@@ -252097,8 +252561,8 @@ function writeLastReconcileMs(nowMs) {
     const path = reconcileStateFilePath();
     mkdirSync23(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp`;
-    writeFileSync20(tmp, JSON.stringify({ lastRunMs: nowMs }), { encoding: "utf-8", mode: 384 });
-    renameSync12(tmp, path);
+    writeFileSync21(tmp, JSON.stringify({ lastRunMs: nowMs }), { encoding: "utf-8", mode: 384 });
+    renameSync13(tmp, path);
   } catch {
   }
 }
@@ -252761,13 +253225,13 @@ function getCurrentBackend() {
 function reloadSettingsFromDisk() {
   let raw;
   try {
-    raw = readFileSync28(SETTINGS_FILE, "utf-8");
+    raw = readFileSync30(SETTINGS_FILE, "utf-8");
   } catch {
     return false;
   }
   let parsed;
   try {
-    parsed = (0, import_yaml3.parse)(raw);
+    parsed = (0, import_yaml4.parse)(raw);
   } catch {
     process.stderr.write(
       `[llm-externalizer] \u26A0 settings.yaml has invalid YAML \u2014 ignoring change
@@ -253068,21 +253532,21 @@ function trackRequestEnd() {
 }
 function waitForRequestsDrained(timeoutMs = 12e4) {
   if (_activeRequests === 0) return Promise.resolve();
-  return new Promise((resolve16) => {
+  return new Promise((resolve17) => {
     const timer = setTimeout(() => {
       _activeRequestsDrained = null;
-      resolve16();
+      resolve17();
     }, timeoutMs);
     _activeRequestsDrained = () => {
       clearTimeout(timer);
-      resolve16();
+      resolve17();
     };
   });
 }
 var SESSION_ID = randomUUID3().slice(0, 8);
 var SESSION_START = /* @__PURE__ */ new Date();
-var LOG_DIR = join29(getConfigDir(), "logs");
-var LOG_FILE = join29(
+var LOG_DIR = join31(getConfigDir(), "logs");
+var LOG_FILE = join31(
   LOG_DIR,
   `session-${SESSION_ID}-${SESSION_START.toISOString().slice(0, 10)}.jsonl`
 );
@@ -253113,8 +253577,8 @@ function writeStatsFile() {
       backend: backend.type
     };
     const tmpStats = STATS_FILE + ".tmp";
-    writeFileSync21(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
-    renameSync13(tmpStats, STATS_FILE);
+    writeFileSync22(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
+    renameSync14(tmpStats, STATS_FILE);
   } catch {
   }
 }
@@ -253234,10 +253698,10 @@ function defaultOutputDir() {
   if (_cachedDefaultOutputDir) return _cachedDefaultOutputDir;
   const envOverride = process.env.LLM_OUTPUT_DIR;
   if (envOverride && envOverride.trim()) {
-    _cachedDefaultOutputDir = resolve15(envOverride.trim());
+    _cachedDefaultOutputDir = resolve16(envOverride.trim());
     return _cachedDefaultOutputDir;
   }
-  _cachedDefaultOutputDir = join29(resolveProjectMainRoot(), "reports", "llm-externalizer");
+  _cachedDefaultOutputDir = join31(resolveProjectMainRoot(), "reports", "llm-externalizer");
   return _cachedDefaultOutputDir;
 }
 function _resetDefaultOutputDirCache() {
@@ -253269,7 +253733,7 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
   const srcPart = meta3.inputFile ? `-${sanitizeFilename(meta3.inputFile).replace(/\.md$/, "")}` : "";
   const groupPart = meta3.groupId ? `-group-${meta3.groupId.replace(/[^a-zA-Z0-9_-]/g, "_")}` : "";
   const filename = overrideFilename || `${ts2}-${toolName}${groupPart}${srcPart}-${shortId}.md`;
-  const filepath = join29(dir, filename);
+  const filepath = join31(dir, filename);
   const lines = [
     "# LLM Externalizer Response",
     "",
@@ -253283,8 +253747,8 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
   lines.push("", "---", "", responseText);
   const tmpPath = filepath + ".tmp";
   try {
-    writeFileSync21(tmpPath, lines.join("\n"), "utf-8");
-    renameSync13(tmpPath, filepath);
+    writeFileSync22(tmpPath, lines.join("\n"), "utf-8");
+    renameSync14(tmpPath, filepath);
   } catch (err3) {
     try {
       unlinkSync2(tmpPath);
@@ -253421,7 +253885,7 @@ function resolveFolderPath(folderPath, opts) {
   } catch (err3) {
     return { files: [], error: `Invalid folder_path: ${err3 instanceof Error ? err3.message : String(err3)}` };
   }
-  if (!existsSync23(folderPath)) {
+  if (!existsSync24(folderPath)) {
     return { files: [], error: `folder_path not found: ${folderPath}` };
   }
   if (!statSync12(folderPath).isDirectory()) {
@@ -253435,14 +253899,77 @@ function resolveFolderPath(folderPath, opts) {
     // default true
     recursive: opts?.recursive !== false,
     // default true
-    followSymlinks: opts?.followSymlinks !== false
+    followSymlinks: opts?.followSymlinks !== false,
     // default true
+    onExcluded: opts?.onExcluded
   });
   if (files.length === 0) {
     const extInfo = opts?.extensions ? ` with extensions ${opts.extensions.join(", ")}` : "";
     return { files: [], error: `No matching files found in ${folderPath}${extInfo}` };
   }
   return { files };
+}
+async function warmEstimatePricing() {
+  try {
+    await fetchOpenRouterModels();
+  } catch {
+  }
+}
+function buildEstimateDeps() {
+  return {
+    resolveFiles(args, onExcluded) {
+      try {
+        const mode = parseDiffMode(args);
+        if (mode) {
+          return { files: resolveDiffScope(mode, process.cwd()).files };
+        }
+      } catch (err3) {
+        return { files: [], error: err3.message };
+      }
+      const explicit = Array.isArray(args.input_files_paths) ? args.input_files_paths.filter(
+        (p) => typeof p === "string" && p.length > 0
+      ) : [];
+      if (explicit.length > 0) return { files: explicit };
+      if (typeof args.folder_path === "string" && args.folder_path.length > 0) {
+        return resolveFolderPath(args.folder_path, {
+          extensions: Array.isArray(args.extensions) ? args.extensions : void 0,
+          excludeDirs: Array.isArray(args.excluded_dirs) ? args.excluded_dirs : void 0,
+          useGitignore: args.use_gitignore !== false,
+          onExcluded
+        });
+      }
+      return { files: [], error: "no input_files_paths or folder_path given" };
+    },
+    fileSizeBytes(path) {
+      try {
+        return statSync12(path).size;
+      } catch {
+        return 0;
+      }
+    },
+    ensembleSlots() {
+      const ensemble = getEnsembleModels();
+      if (ensemble.length > 0)
+        return ensemble.map((m) => ({ id: m.id, maxOutput: m.maxOutput }));
+      const backend = getCurrentBackend();
+      if (!backend.model) return [];
+      return [{ id: backend.model, maxOutput: resolveDefaultMaxTokens() }];
+    },
+    pricingFor(modelId) {
+      const m = openRouterModelCache.find((x) => x.id === modelId);
+      if (!m?.pricing) return null;
+      const inp = Number(m.pricing.prompt);
+      const out = Number(m.pricing.completion);
+      if (!Number.isFinite(inp) || !Number.isFinite(out)) return null;
+      return { inputUsdPerM: inp * 1e6, outputUsdPerM: out * 1e6 };
+    },
+    defaultMaxTokens() {
+      return resolveDefaultMaxTokens();
+    },
+    calibratedOutputTokens(toolName, modelId) {
+      return calibratedOutputTokens(toolName, modelId);
+    }
+  };
 }
 function batchReportFilename(toolName, _batchId, filePath, _fileIndex) {
   const ts2 = canonicalTimestamp();
@@ -253745,7 +254272,7 @@ ${failed.map((r) => `- **${r.model}**: ${r.content}`).join("\n")}`);
   };
 }
 async function processFileCheck(filePath, task, options = {}) {
-  if (!existsSync23(filePath)) {
+  if (!existsSync24(filePath)) {
     return { filePath, success: false, error: `File not found: ${filePath}` };
   }
   const codeBlock = readFileAsCodeBlock(
@@ -253882,7 +254409,8 @@ function getEnsembleModels() {
     models = selectFreeEnsembleModels(
       pool,
       catalogById,
-      benchmarkFailedModels()
+      benchmarkFailedModels(),
+      combinedFreeModelEvidence()
     );
     const paid = models.filter((id) => !id.endsWith(":free"));
     if (paid.length > 0) {
@@ -253964,7 +254492,7 @@ Run the "discover" tool to see the current profile status.`
     const isLLMTool = LLM_TOOLS_SET.has(name);
     if (isLLMTool) trackRequestStart();
     const rawOutputDir = args?.output_dir;
-    const outputDir = typeof rawOutputDir === "string" && rawOutputDir.trim() ? resolve15(rawOutputDir.trim()) : void 0;
+    const outputDir = typeof rawOutputDir === "string" && rawOutputDir.trim() ? resolve16(rawOutputDir.trim()) : void 0;
     const freeRequested = args?.free === true;
     const modelOverride = await resolveModelOverride(freeRequested);
     if (modelOverride) {
@@ -253972,6 +254500,56 @@ Run the "discover" tool to see the current profile status.`
         `[llm-externalizer] Routing through ${modelOverride}${freeRequested ? " (free requested)" : " (auto-fallback)"}
 `
       );
+    }
+    let reviewDiffScope = null;
+    if (name === "scan_folder" || name === "high_quality_scan" || name === "code_task" || name === "review_plan") {
+      const a = args;
+      try {
+        const mode = parseDiffMode(a ?? {});
+        if (mode) {
+          reviewDiffScope = resolveDiffScope(mode, process.cwd());
+          a.input_files_paths = reviewDiffScope.files;
+          delete a.folder_path;
+          process.stderr.write(
+            `[llm-externalizer] Diff scope (${mode.kind}): ${reviewDiffScope.files.length} changed file(s)` + (reviewDiffScope.skipped.length > 0 ? `, ${reviewDiffScope.skipped.length} skipped (${reviewDiffScope.skipped.map((s) => s.reason).join("; ")})` : "") + "\n"
+          );
+        }
+      } catch (err3) {
+        return {
+          content: [{ type: "text", text: `diff: ${err3.message}` }],
+          isError: true
+        };
+      }
+    }
+    if (name === "scan_folder" || name === "high_quality_scan" || name === "code_task" || name === "review_plan") {
+      const a = args;
+      const hasInstr = typeof a?.instructions === "string";
+      if (hasInstr || name === "review_plan") {
+        try {
+          const resolvedRules = resolveRulesLayers({
+            explicitPath: typeof a?.rules === "string" && a.rules.length > 0 ? a.rules : void 0
+          });
+          if (resolvedRules) {
+            const fileSet = buildEstimateDeps().resolveFiles(a ?? {});
+            if (!fileSet.error && fileSet.files.length > 0) {
+              a.instructions = composeRuleInstructions(
+                hasInstr ? a.instructions : "",
+                fileSet.files,
+                resolvedRules
+              );
+              process.stderr.write(
+                `[llm-externalizer] Review rules: ${resolvedRules.layer} layer (${resolvedRules.file})
+`
+              );
+            }
+          }
+        } catch (err3) {
+          return {
+            content: [{ type: "text", text: `rules: ${err3.message}` }],
+            isError: true
+          };
+        }
+      }
     }
     const backend = getCurrentBackend();
     try {
@@ -254251,6 +254829,72 @@ ${resp.content}${footer}`
           };
           return await runCodeTask(args, ctDeps);
         }
+        case "rules_check": {
+          const a = args;
+          const target = typeof a?.file_path === "string" ? a.file_path : "";
+          if (!target) {
+            return {
+              content: [{ type: "text", text: "rules_check: file_path is required" }],
+              isError: true
+            };
+          }
+          const resolvedRules = resolveRulesLayers({
+            explicitPath: typeof a?.rules === "string" && a.rules.length > 0 ? a.rules : void 0
+          });
+          if (!resolvedRules) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `no rules layer found (checked: --rules, <repo>/.llm-ext/rules.yaml, ${join31(getConfigDir(), "rules.yaml")}) \u2014 tools run with their built-in rubric`
+                }
+              ]
+            };
+          }
+          const match = matchRuleForFile(target, resolvedRules.entries);
+          const text = match ? `layer: ${resolvedRules.layer}
+file: ${resolvedRules.file}
+matched: \`${match.path}\`
+rule: ${match.rule}` : `layer: ${resolvedRules.layer}
+file: ${resolvedRules.file}
+matched: (none \u2014 no entry's glob matches ${target})`;
+          return { content: [{ type: "text", text }] };
+        }
+        case "review_plan": {
+          const resolved = buildEstimateDeps().resolveFiles(
+            args
+          );
+          if (resolved.error) {
+            return {
+              content: [{ type: "text", text: `review_plan: ${resolved.error}` }],
+              isError: true
+            };
+          }
+          if (resolved.files.length === 0) {
+            return {
+              content: [
+                { type: "text", text: "review_plan: the plan would cover zero files" }
+              ],
+              isError: true
+            };
+          }
+          const planFiles = resolved.files.map((p) => {
+            try {
+              return { path: p, bytes: statSync12(p).size };
+            } catch {
+              return { path: p, bytes: 0 };
+            }
+          });
+          const plan = buildReviewPlan(planFiles, {
+            instructions: typeof args.instructions === "string" ? args.instructions : void 0,
+            reportDir: defaultOutputDir(),
+            // Diff mode (TRDD-MNK2YNH0): the plan carries the hunks themselves —
+            // the host agent reviews the CHANGES with function context, and only
+            // opens the full file when a hunk demands it.
+            hunksByFile: reviewDiffScope?.hunksByFile
+          });
+          return { content: [{ type: "text", text: plan }] };
+        }
         case "discover": {
           const parts = [];
           if (!settingsValid || !activeResolved) {
@@ -254445,7 +255089,7 @@ Profiles: ${profileNames.join(", ")}`);
             const jsonText = formatModelInfoJson(result.data, infoModel);
             if (infoFilePath && typeof infoFilePath === "string" && infoFilePath.trim()) {
               const rawPath = infoFilePath.trim();
-              if (!isAbsolute4(rawPath)) {
+              if (!isAbsolute5(rawPath)) {
                 return {
                   content: [
                     {
@@ -254471,7 +255115,7 @@ Profiles: ${profileNames.join(", ")}`);
                 };
               }
               try {
-                writeFileSync21(absPath, jsonText, "utf-8");
+                writeFileSync22(absPath, jsonText, "utf-8");
               } catch (err3) {
                 return {
                   content: [
@@ -254537,11 +255181,11 @@ Profiles: ${profileNames.join(", ")}`);
         }
         case "get_settings": {
           try {
-            const raw = readFileSync28(SETTINGS_FILE, "utf-8");
+            const raw = readFileSync30(SETTINGS_FILE, "utf-8");
             const targetDir = outputDir || defaultOutputDir();
             mkdirSync24(targetDir, { recursive: true });
-            const copyPath = join29(targetDir, "settings_edit.yaml");
-            writeFileSync21(copyPath, raw, "utf-8");
+            const copyPath = join31(targetDir, "settings_edit.yaml");
+            writeFileSync22(copyPath, raw, "utf-8");
             return { content: [{ type: "text", text: copyPath }] };
           } catch (err3) {
             return {
@@ -254698,7 +255342,7 @@ Profiles: ${profileNames.join(", ")}`);
               const gSucceeded = gAll.filter((r) => r.success);
               const reportSections = [];
               for (const r of gSucceeded) {
-                const content = r.reportPath && existsSync23(r.reportPath) ? readFileSync28(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync24(r.reportPath) ? readFileSync30(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -254834,7 +255478,7 @@ ${gAbortReason}`);
             } else {
               const reportSections = [];
               for (const r of succeeded) {
-                const content = r.reportPath && existsSync23(r.reportPath) ? readFileSync28(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync24(r.reportPath) ? readFileSync30(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -254988,13 +255632,13 @@ ${content}`);
             } catch (err3) {
               return { error: err3.message };
             }
-            if (!existsSync23(fA)) return { error: `File not found: ${fARaw}` };
-            if (!existsSync23(fB)) return { error: `File not found: ${fBRaw}` };
+            if (!existsSync24(fA)) return { error: `File not found: ${fARaw}` };
+            if (!existsSync24(fB)) return { error: `File not found: ${fBRaw}` };
             if (cfScan && !cfRedact) {
               const scanResult = scanFilesForSecrets([fA, fB]);
               if (scanResult.found) return { error: scanResult.report };
             }
-            const diffResult2 = spawnSync3("diff", ["-u", "--label", fA, "--label", fB, "--", fA, fB], { encoding: "utf-8", timeout: 3e4 });
+            const diffResult2 = spawnSync4("diff", ["-u", "--label", fA, "--label", fB, "--", fA, fB], { encoding: "utf-8", timeout: 3e4 });
             if (diffResult2.status === 2 || diffResult2.error) return { error: `diff error: ${diffResult2.error?.message || diffResult2.stderr}` };
             let diffOutput2 = diffResult2.stdout?.trim() ? diffResult2.stdout : "(files are identical)";
             if (diffOutput2.length > 2e5) {
@@ -255038,7 +255682,7 @@ ${fence}${sourceBlocks}` }
             return { content: resp.content + formatFooter(resp, "compare_files", fA), model: resp.model };
           };
           const gitDiffPair = (repo, fromRef, toRef, filePath) => {
-            const result = spawnSync3("git", ["diff", fromRef, toRef, "--", filePath], { cwd: repo, encoding: "utf-8", timeout: 3e4 });
+            const result = spawnSync4("git", ["diff", fromRef, toRef, "--", filePath], { cwd: repo, encoding: "utf-8", timeout: 3e4 });
             if (result.status !== 0 && result.status !== 1) return `(git diff failed: ${result.stderr?.trim() || "unknown error"})`;
             return result.stdout?.trim() || "(no differences)";
           };
@@ -255051,12 +255695,12 @@ ${fence}${sourceBlocks}` }
             } catch (err3) {
               return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
             }
-            if (!existsSync23(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
+            if (!existsSync24(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
             const toRef = cfToRef || "HEAD";
             if (cfFromRef.startsWith("-") || toRef.startsWith("-")) {
               return { content: [{ type: "text", text: "FAILED: git refs must not start with '-'" }], isError: true };
             }
-            const nameResult = spawnSync3("git", ["diff", "--name-only", cfFromRef, toRef], { cwd: cfGitRepoSafe, encoding: "utf-8", timeout: 15e3 });
+            const nameResult = spawnSync4("git", ["diff", "--name-only", cfFromRef, toRef], { cwd: cfGitRepoSafe, encoding: "utf-8", timeout: 15e3 });
             if (nameResult.status !== 0 && nameResult.status !== 1) {
               return { content: [{ type: "text", text: `FAILED: git diff --name-only failed: ${nameResult.stderr?.trim()}` }], isError: true };
             }
@@ -255122,7 +255766,7 @@ ${sections.join("\n\n---\n\n")}`;
                 {
                   model: "git-diff (no LLM)",
                   task: `${cfFromRef} \u2192 ${toRef}`,
-                  inputFile: join29(cfGitRepoSafe, dg.files[0]),
+                  inputFile: join31(cfGitRepoSafe, dg.files[0]),
                   groupId: gid
                 },
                 void 0,
@@ -255215,7 +255859,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync23(fileA)) {
+          if (!existsSync24(fileA)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileA}` }
@@ -255223,7 +255867,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync23(fileB)) {
+          if (!existsSync24(fileB)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileB}` }
@@ -255239,7 +255883,7 @@ ${result.content}`);
                 isError: true
               };
           }
-          const diffResult = spawnSync3(
+          const diffResult = spawnSync4(
             "diff",
             ["-u", "--label", fileA, "--label", fileB, "--", fileA, fileB],
             {
@@ -255411,13 +256055,13 @@ ${diffFence}` + sourceFileBlocks
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync23(filePath)) {
+                if (!existsSync24(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
                   continue;
                 }
-                const src = readFileSync28(filePath, "utf-8");
+                const src = readFileSync30(filePath, "utf-8");
                 const lang = detectLang(filePath);
                 const deps = extractLocalImports(filePath, src);
                 const depBlocks = [];
@@ -255471,14 +256115,14 @@ ${resp.content}${footer}`);
           const crReports = [];
           const crReportPaths = [];
           for (const filePath of crFilePaths) {
-            if (!existsSync23(filePath)) {
+            if (!existsSync24(filePath)) {
               crReports.push(`## ${filePath}
 
 FAILED: File not found.`);
               crReportPaths.push("(skipped \u2014 file not found)");
               continue;
             }
-            const crSourceCode = readFileSync28(filePath, "utf-8");
+            const crSourceCode = readFileSync30(filePath, "utf-8");
             const crLang = detectLang(filePath);
             const depPaths = extractLocalImports(filePath, crSourceCode);
             const depBlocks = [];
@@ -255651,7 +256295,7 @@ ${crResp.content}${crFooter}`
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync23(filePath)) {
+                if (!existsSync24(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
@@ -255680,22 +256324,22 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     continue;
                   }
                   const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-                  const resolvedBase = importPath.startsWith("/") ? resolve15(importPath) : join29(resolveDir, importPath);
+                  const resolvedBase = importPath.startsWith("/") ? resolve16(importPath) : join31(resolveDir, importPath);
                   if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                     packageImports.push(importPath);
                     continue;
                   }
-                  let found = existsSync23(resolvedBase) && statSync12(resolvedBase).isFile();
+                  let found = existsSync24(resolvedBase) && statSync12(resolvedBase).isFile();
                   if (!found && !extname5(resolvedBase)) {
                     for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".json"]) {
-                      if (existsSync23(resolvedBase + ext)) {
+                      if (existsSync24(resolvedBase + ext)) {
                         found = true;
                         break;
                       }
                     }
                     if (!found) {
                       for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                        if (existsSync23(join29(resolvedBase, `index${ext}`))) {
+                        if (existsSync24(join31(resolvedBase, `index${ext}`))) {
                           found = true;
                           break;
                         }
@@ -255729,7 +256373,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
           const ciReports = [];
           const ciReportPaths = [];
           for (const filePath of ciFilePaths) {
-            if (!existsSync23(filePath)) {
+            if (!existsSync24(filePath)) {
               ciReports.push(`## ${filePath}
 
 FAILED: File not found.`);
@@ -255779,13 +256423,13 @@ FAILED: File not found.`);
                 continue;
               }
               const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-              const resolvedBase = importPath.startsWith("/") ? resolve15(importPath) : join29(resolveDir, importPath);
+              const resolvedBase = importPath.startsWith("/") ? resolve16(importPath) : join31(resolveDir, importPath);
               if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                 packageImports.push(importPath);
                 continue;
               }
               let found = false;
-              if (existsSync23(resolvedBase) && statSync12(resolvedBase).isFile()) {
+              if (existsSync24(resolvedBase) && statSync12(resolvedBase).isFile()) {
                 found = true;
               }
               if (!found && !extname5(resolvedBase)) {
@@ -255801,14 +256445,14 @@ FAILED: File not found.`);
                   ".rs",
                   ".json"
                 ]) {
-                  if (existsSync23(resolvedBase + ext)) {
+                  if (existsSync24(resolvedBase + ext)) {
                     found = true;
                     break;
                   }
                 }
                 if (!found) {
                   for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                    if (existsSync23(join29(resolvedBase, `index${ext}`))) {
+                    if (existsSync24(join31(resolvedBase, `index${ext}`))) {
                       found = true;
                       break;
                     }
@@ -255951,7 +256595,7 @@ FAILED: File not found.`);
             return resp.content;
           };
           const csModuleDir = dirname13(fileUrlToPath_cs(import.meta.url));
-          const csEmbeddingsScript = join29(csModuleDir, "..", "scripts", "compute_embeddings.py");
+          const csEmbeddingsScript = join31(csModuleDir, "..", "scripts", "compute_embeddings.py");
           const csPreflightModel = getCurrentBackend().model ?? "unknown";
           const csHooks = {
             rawLlmCall: csRawLlmCall,
@@ -256062,6 +256706,7 @@ export {
   _resetDefaultOutputDirCache,
   _testDefaultOutputDir,
   boot,
+  buildEstimateDeps,
   callEnsembleSlotWithRotation,
   dispatchCallTool,
   filterFreeModels,
@@ -256072,6 +256717,7 @@ export {
   resolveFreeModelId,
   resolveSubsystemFreeModel,
   selectFreeEnsembleModels,
+  warmEstimatePricing,
   writeBootBanner
 };
 /*! Bundled license information:
