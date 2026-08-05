@@ -136,6 +136,9 @@ interface CacheEntry {
   qualified: boolean;
   disqualifyReason?: string;
   failureReasons: string[];
+  /** Golden-dataset verdict at write time — the quality signal the free-pool
+   *  bench-evidence ranking reads (see code-task CacheEntry.qualityPass). */
+  qualityPass?: boolean;
 }
 type CacheFile = Record<string, CacheEntry>;
 
@@ -490,6 +493,10 @@ export async function runCheckSpecsBenchmark(
         failureReasons,
       };
     }
+
+    // Persist the golden-dataset verdict on the ledger row (backfills legacy
+    // rows on cache hits too) — see code-task's CacheEntry.qualityPass note.
+    cache[key].qualityPass = passesThresholds(score, thresholds).pass;
 
     totalCost += costUsd;
     assessments.push({

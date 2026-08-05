@@ -146,11 +146,22 @@ describe("free-model rotation coverage — every LLM send path can rotate", () =
     //    verdict while a live probe showed the provider healthy. Exactly ONE
     //    recordServiceFailure() call site may remain: the thrown-request
     //    (network/timeout/non-2xx) branch.
-    const failureCalls = completion.match(/^\s*recordServiceFailure\(\);/gm) ?? [];
+    //    Strip //-comment lines first (the guard notes in completion.ts
+    //    mention the function by name), then count EVERY textual occurrence —
+    //    definition + call sites, however nested or guarded. The old per-line
+    //    anchor (/^\s*recordServiceFailure\(\);/m) only saw calls standing
+    //    alone on a line, so a reintroduced `if (x) recordServiceFailure();`
+    //    was invisible to the exact test built to block it (ultracode F13).
+    //    2 = the function definition + the ONE transport-error call site.
+    const codeOnly = completion
+      .split("\n")
+      .filter((l) => !l.trim().startsWith("//"))
+      .join("\n");
+    const failureRefs = codeOnly.match(/\brecordServiceFailure\(\)/g) ?? [];
     expect(
-      failureCalls.length,
-      "recordServiceFailure() must be called from exactly ONE site (the transport-error branch)",
-    ).toBe(1);
+      failureRefs.length,
+      "recordServiceFailure() must appear exactly twice: its definition + the single transport-error call site",
+    ).toBe(2);
     // 2. The exhausted-backoff abort must HALF-OPEN the breaker before
     //    returning. The only other reset is recordServiceSuccess(), which needs
     //    a completed request — and a tripped breaker aborts every call BEFORE

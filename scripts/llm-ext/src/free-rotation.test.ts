@@ -17,6 +17,7 @@ import {
   classifyUnavailable,
   clearNoContentStrikes,
   combinedFreeModelEvidence,
+  NO_CONTENT_STRIKE_TTL_MS,
   noContentDemotedModels,
   parseBenchEvidence,
   rankFreeModelsByBenchEvidence,
@@ -107,46 +108,70 @@ describe("approvedFreePoolFromSettings — a paid profile's OWN free_models win 
 });
 
 describe("bench-evidence ranking (task #189) — the ledgers finally steer selection", () => {
-  it("parseBenchEvidence: pass wins over scored-fail; skip/availability/REQUIREMENTS rows carry NO verdict", () => {
+  it("qualityPass (ultracode F0): the persisted golden-dataset verdict decides alone — class-rejected ':free' rows can pass or scored-fail", () => {
+    // EXACTLY the row shape every scored benchmark run writes since F0:
+    // `qualified:false` + the class-rejection reason (allowFree:false rejects
+    // the whole ':free' pool by design) PLUS the golden-dataset verdict. The
+    // old fold read only qualified/disqualifyReason, so both of these rows
+    // carried NO verdict and the ranking was inert for the very pool it ranks.
+    const REQ = "below code-task requirements (cost/context/structured-output/reasoning)";
     const evidence = parseBenchEvidence([
-      // code-task ledger: A has a SCORED failure (real verdict), B passes
       {
-        "v/a:free::2026-08-05::x": {
+        "v/aced:free::2026-08-05::x": { qualified: false, disqualifyReason: REQ, qualityPass: true },
+        "v/flopped:free::2026-08-05::x": {
           qualified: false,
-          disqualifyReason: "meanF1 0.40 below the 0.95 threshold",
-        },
-        "v/b:free::2026-08-05::x": { qualified: true },
-      },
-      {
-        // B scored-fails here — but its code-task PASS wins across tools
-        "v/b:free::2026-08-05::y": {
-          qualified: false,
-          disqualifyReason: "meanF1 0.10 below the 0.95 threshold",
-        },
-        // skip rows, catalog misses, and requirements rejections must NOT
-        // demote. Requirements is the load-bearing one: the premium criteria
-        // reject the ':free' CLASS by design (allowFree:false), so on
-        // 2026-08-05 ALL 17 ledgered free models carried such a row — counting
-        // them demoted the whole pool uniformly, i.e. ranked nothing.
-        "v/c:free::2026-08-05::y": {
-          qualified: false,
-          disqualifyReason: "free_only active — non-':free' model not benchmarked",
-        },
-        "v/d:free::2026-08-05::y": {
-          qualified: false,
-          disqualifyReason: "not found in the OpenRouter catalog",
-        },
-        "v/e:free::2026-08-05::y": {
-          qualified: false,
-          disqualifyReason: "below code-task requirements (cost/context/structured-output/reasoning)",
+          disqualifyReason: REQ,
+          qualityPass: false,
         },
       },
     ]);
-    expect(evidence.get("v/a:free")).toBe("fail");
+    expect(evidence.get("v/aced:free")).toBe("pass");
+    expect(evidence.get("v/flopped:free")).toBe("fail");
+  });
+
+  it("qualityPass: pass wins across tools in BOTH orderings (fail-then-pass AND pass-then-fail)", () => {
+    const row = (qualityPass: boolean) => ({ qualified: false, qualityPass });
+    // pass recorded FIRST, scored-fail later — the fail must not overwrite it
+    const passFirst = parseBenchEvidence([
+      { "v/m:free::d::x": row(true) },
+      { "v/m:free::d::y": row(false) },
+    ]);
+    expect(passFirst.get("v/m:free")).toBe("pass");
+    // scored-fail recorded FIRST, pass later — the unconditional pass-override
+    // branch (the direction the original test never exercised, ultracode F14)
+    const failFirst = parseBenchEvidence([
+      { "v/m:free::d::x": row(false) },
+      { "v/m:free::d::y": row(true) },
+    ]);
+    expect(failFirst.get("v/m:free")).toBe("pass");
+  });
+
+  it("legacy rows (no qualityPass): skip/availability/REQUIREMENTS rows carry NO verdict; qualified:true still counts as pass", () => {
+    const evidence = parseBenchEvidence([
+      {
+        // A requirements rejection is a CLASS verdict, not task quality — on
+        // 2026-08-05 ALL 17 ledgered free models carried one (the premium
+        // criteria set allowFree:false), so counting it demoted the whole
+        // pool uniformly, i.e. ranked nothing.
+        "v/a:free::2026-08-05::x": {
+          qualified: false,
+          disqualifyReason: "below code-task requirements (cost/context/structured-output/reasoning)",
+        },
+        "v/b:free::2026-08-05::x": { qualified: true },
+        "v/c:free::2026-08-05::x": {
+          qualified: false,
+          disqualifyReason: "free_only active — non-':free' model not benchmarked",
+        },
+        "v/d:free::2026-08-05::x": {
+          qualified: false,
+          disqualifyReason: "not found in the OpenRouter catalog",
+        },
+      },
+    ]);
+    expect(evidence.has("v/a:free")).toBe(false); // class rejection ≠ task verdict
     expect(evidence.get("v/b:free")).toBe("pass");
     expect(evidence.has("v/c:free")).toBe(false);
     expect(evidence.has("v/d:free")).toBe(false);
-    expect(evidence.has("v/e:free")).toBe(false);
   });
 
   it("rankFreeModelsByBenchEvidence: pass < unknown < fail, operator order stable within tiers", () => {
@@ -230,6 +255,33 @@ describe("bench-evidence ranking (task #189) — the ledgers finally steer selec
       clearNoContentStrikes(id);
       expect(noContentDemotedModels().has(id)).toBe(false);
       expect(combinedFreeModelEvidence().has(id)).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
+      else process.env.LLM_EXT_CONFIG_DIR = prev;
+    }
+  });
+
+  it("no-content strikes EXPIRE after the TTL — the heal path a never-called model needs (ultracode F1)", () => {
+    const prev = process.env.LLM_EXT_CONFIG_DIR;
+    process.env.LLM_EXT_CONFIG_DIR = mkdtempSync(join("/tmp", "llm-ext-strikes-ttl-"));
+    try {
+      const id = "v/demoted-yesterday:free";
+      const t0 = Date.now();
+      recordNoContentStrike(id, t0);
+      recordNoContentStrike(id, t0);
+      recordNoContentStrike(id, t0);
+      expect(noContentDemotedModels(t0).has(id)).toBe(true);
+      // One TTL later the demotion heals by TIME alone. This path is
+      // load-bearing, not belt-and-braces: a demoted model drops out of the
+      // top-3 ensemble, and with a healthy top-3 it is never CALLED again —
+      // so the success-heals path could never fire and the demotion was
+      // permanent, contradicting the store's own self-healing contract.
+      const later = t0 + NO_CONTENT_STRIKE_TTL_MS + 1;
+      expect(noContentDemotedModels(later).has(id)).toBe(false);
+      // A NEW strike after the gap restarts the count at 1 — the threshold
+      // means "3 under CURRENT conditions", not "3 ever".
+      recordNoContentStrike(id, later);
+      expect(noContentDemotedModels(later).has(id)).toBe(false);
     } finally {
       if (prev === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
       else process.env.LLM_EXT_CONFIG_DIR = prev;

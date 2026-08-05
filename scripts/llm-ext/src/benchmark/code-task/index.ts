@@ -128,6 +128,12 @@ interface CacheEntry {
   qualified: boolean;
   disqualifyReason?: string;
   failureReasons: string[];
+  /** The GOLDEN-DATASET verdict (passesThresholds at write time). `qualified`
+   *  records only the catalog-requirements gate — which rejects the ':free'
+   *  class by design — so without this field the free-ensemble bench-evidence
+   *  ranking (free-rotation.ts parseBenchEvidence) could never see a quality
+   *  verdict for the pool it ranks (ultracode F0, 2026-08-05). */
+  qualityPass?: boolean;
 }
 type CacheFile = Record<string, CacheEntry>;
 
@@ -439,6 +445,11 @@ export async function runCodeAuditBenchmark(
         failureReasons,
       };
     }
+
+    // Persist the golden-dataset verdict on the ledger row (see the
+    // CacheEntry.qualityPass note). Written on cache HITS too, so legacy rows
+    // backfill on the next benchmark run without a --force.
+    cache[key].qualityPass = passesThresholds(score, thresholds).pass;
 
     totalCost += costUsd;
     assessments.push({

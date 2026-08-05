@@ -129,6 +129,10 @@ interface CacheEntry {
   outputDollarsPerMillion: number;
   qualified: boolean;
   disqualifyReason?: string;
+  /** Golden-dataset verdict at write time — the quality signal the free-pool
+   *  bench-evidence ranking reads (see code-task CacheEntry.qualityPass).
+   *  Absent when the run was inconclusive. */
+  qualityPass?: boolean;
 }
 type CacheFile = Record<string, CacheEntry>;
 
@@ -501,6 +505,12 @@ export async function runSecurityTriageBenchmark(
         disqualifyReason,
       };
     }
+
+    // Persist the golden-dataset verdict on the ledger row for the free-pool
+    // bench-evidence fold (see code-task's CacheEntry.qualityPass note). An
+    // INCONCLUSIVE run carries no verdict — leave the field absent so the
+    // fold ranks the model "unknown" instead of demoting it on missing data.
+    if (!score.inconclusive) cache[key].qualityPass = score.pass;
 
     totalCost += costUsd;
     scores.push(score);

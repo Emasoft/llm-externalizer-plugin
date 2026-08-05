@@ -870,15 +870,22 @@ async function checkServiceHealthOrWait(): Promise<string | null> {
     return message;
   }
 
-  // Pause with backoff
+  // Pause with backoff. The attempt slot is claimed BEFORE the await —
+  // synchronously, so it is atomic in single-threaded JS. Incrementing after
+  // waking was a concurrency bug (ultracode F3, 2026-08-05): while one call
+  // slept, the exhausted-branch reset (or recordServiceSuccess) could zero
+  // backoffAttempt, and the waking sleeper's stale `++` then advanced the
+  // FRESH ladder — enough waking sleepers pushed it past backoffDelays.length
+  // with consecutiveFailures=0, so the NEXT failure streak aborted on its
+  // first health check while the message still claimed the full ladder ran.
   const delay = backoffDelays[backoffAttempt];
+  SERVICE_HEALTH.backoffAttempt++;
   SERVICE_HEALTH.inCooldown = true;
   process.stderr.write(
     `[circuit-breaker] ${SERVICE_HEALTH.consecutiveFailures} consecutive failures detected — ` +
     `waiting ${delay / 1000}s before retrying (backoff ${backoffAttempt + 1}/${backoffDelays.length})\n`,
   );
   await new Promise((r) => setTimeout(r, delay));
-  SERVICE_HEALTH.backoffAttempt++;
   SERVICE_HEALTH.inCooldown = false;
   return null;
 }
@@ -891,6 +898,21 @@ async function checkServiceHealthOrWait(): Promise<string | null> {
 // Integrates with SERVICE_HEALTH to detect systemic server issues.
 const MAX_TRUNCATION_RETRIES = 3;
 const MAX_EMPTY_RESPONSE_RETRIES = 15;
+
+// ── Run-level PAID empty-response spend guard (ultracode F4, 2026-08-05) ──
+// Every empty/glitch retry on a PAID model re-bills the full prompt: input
+// tokens are charged even when zero content comes back. The per-call budget
+// (MAX_EMPTY_RESPONSE_RETRIES) caps ONE call at 15 billed attempts, but a scan
+// makes hundreds of calls. Before the transport-only breaker change the GLOBAL
+// breaker accidentally bounded that spend (empty responses fed it and tripped
+// a stall); making the breaker transport-only deleted the only run-level stop.
+// This restores a DELIBERATE one: once a paid model has burned this many
+// empty-response retries process-wide, later calls on it stop retrying
+// immediately (label + return) instead of re-paying up to 15 attempts per file
+// for a model that is demonstrably not answering. Free models are exempt —
+// their retries cost $0 and the no-content strike store already demotes them.
+const RUN_PAID_EMPTY_RETRY_BUDGET = 30;
+const runPaidEmptyRetriesByModel = new Map<string, number>();
 // Fixed wait between empty-response retries. Empty responses aren't a
 // rate-limit signal — they're documented cold-start / scaling behavior,
 // so exponential backoff would be the wrong primitive (it would make us
@@ -1140,6 +1162,15 @@ export async function chatCompletionWithRetry(
     // is how a parallel scan over reasoning-heavy free models manufactured a
     // false "SERVER ISSUE" verdict against a provider that a live probe showed
     // healthy (see the breaker's TRANSPORT-ONLY note above).
+    //
+    // And under transport-ONLY semantics the same 200 is a transport SUCCESS,
+    // so it must RESET the consecutive-failure counter too (ultracode F2,
+    // 2026-08-05). Leaving the counter frozen here meant "consecutive" was a
+    // lie: on a run where every response is model-shaped (so the content
+    // branches above never fire), five sporadic timeouts spread over hours of
+    // healthy 200s still summed to the threshold and produced the exact false
+    // SERVER ISSUE verdict the transport-only change was written to eliminate.
+    recordServiceSuccess();
     const isEmpty = resp.content.trim().length === 0;
     const reasonLabel = resp.finishReason || "empty";
 
@@ -1166,6 +1197,25 @@ export async function chatCompletionWithRetry(
     // exactly the calls that spend the most. The exhausted-retries message already
     // resolves it this way; do it once, here, and use it everywhere.
     const ladderModel = options.model || backend.model;
+
+    // Run-level spend stop (RUN_PAID_EMPTY_RETRY_BUDGET above): a PAID model
+    // past its process-wide empty-retry budget gets no more billed retries
+    // this run — label and return before the ladder/retry machinery below.
+    if (useEmptyBudget && ladderModel && !isFreeSuffixModelId(ladderModel)) {
+      const used = (runPaidEmptyRetriesByModel.get(ladderModel) ?? 0) + 1;
+      runPaidEmptyRetriesByModel.set(ladderModel, used);
+      if (used > RUN_PAID_EMPTY_RETRY_BUDGET) {
+        resp.truncated = true;
+        resp.content =
+          `**EMPTY RESPONSE (run budget)**: ${ladderModel} has returned ${used} billable empty responses across this run ` +
+          `(finish_reason=${reasonLabel}). Each retry re-bills the full prompt for nothing, so this call stops retrying immediately. ` +
+          `The model appears unable to answer in current conditions — consider a different model for this slot.`;
+        process.stderr.write(
+          `[llm-externalizer] ${ladderModel}: run-level empty-response budget (${RUN_PAID_EMPTY_RETRY_BUDGET}) exhausted — refusing further billed retries on this paid model.\n`,
+        );
+        return resp;
+      }
+    }
 
     // Empty-response escalation: downgrade the reasoning cache so the next
     // attempt runs with less (or no) reasoning. xhigh -> high -> none.

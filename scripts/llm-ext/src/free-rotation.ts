@@ -120,6 +120,13 @@ export type BenchVerdict = "pass" | "fail";
 interface LedgerRow {
   qualified?: unknown;
   disqualifyReason?: unknown;
+  /** The persisted GOLDEN-DATASET verdict (passesThresholds at write time).
+   *  This is the real task-quality signal: `qualified` records only the
+   *  catalog-requirements gate, which rejects the whole ':free' class by
+   *  design (allowFree:false) — so without this field no ':free' model could
+   *  ever earn a scored verdict and the evidence fold was inert for exactly
+   *  the pool it ranks (ultracode F0, 2026-08-05). Absent on legacy rows. */
+  qualityPass?: unknown;
 }
 
 /**
@@ -162,6 +169,20 @@ export function parseBenchEvidence(
     for (const [key, row] of Object.entries(ledger)) {
       const id = key.split("::")[0];
       if (!id) continue;
+      // Layer 1 — the persisted golden-dataset verdict. When present it
+      // decides ALONE: a ':free' model that aced the dataset is a "pass"
+      // even though `qualified` is false for its whole class, and a scored
+      // flop is a "fail" whatever the requirements gate said.
+      if (row.qualityPass === true) {
+        out.set(id, "pass"); // pass wins, unconditionally
+        continue;
+      }
+      if (row.qualityPass === false) {
+        if (out.get(id) !== "pass") out.set(id, "fail");
+        continue;
+      }
+      // Layer 2 — legacy rows (written before qualityPass existed): infer
+      // from the requirements fields, skipping the non-quality shapes.
       if (row.qualified === true) {
         out.set(id, "pass"); // pass wins, unconditionally
         continue;
@@ -239,15 +260,27 @@ export function rankFreeModelsByBenchEvidence(
 // A model that repeatedly burns its whole completion budget on reasoning and
 // emits NO content (the length+empty cost-stop in provider/completion.ts) is
 // unfit in current conditions whatever its ledger says. Strikes persist
-// cross-process (the CLI is one process per invocation) and are SELF-HEALING:
-// any content-bearing success clears them, and Auto-DUBC needs no user action
-// in either direction. This is a QUALITY signal feeding the ensemble ranking —
-// deliberately NOT a rotation cooldown (the model may still serve as a
-// rotation fallback; it just stops being a preferred ensemble slot).
+// cross-process (the CLI is one process per invocation) and are SELF-HEALING
+// by TWO independent paths: any content-bearing success clears them, and a
+// strike EXPIRES after NO_CONTENT_STRIKE_TTL_MS regardless. The TTL is
+// load-bearing, not belt-and-braces (ultracode F1, 2026-08-05): a demoted
+// model drops out of the top-3 ensemble, and with a healthy top-3 it is never
+// called again — so the success-heals path alone could never fire and the
+// demotion was PERMANENT, contradicting this module's own self-healing
+// invariant. Auto-DUBC needs no user action in either direction. This is a
+// QUALITY signal feeding the ensemble ranking — deliberately NOT a rotation
+// cooldown (the model may still serve as a rotation fallback; it just stops
+// being a preferred ensemble slot).
 
 /** Strikes at or above this rank the model in the fail tier. Three = the
  *  reasoning ladder ran its full course (downgrade, disable, still empty). */
 export const NO_CONTENT_DEMOTION_THRESHOLD = 3;
+
+/** A strike record older than this no longer demotes, and a NEW strike after
+ *  this gap restarts the count at 1 (the threshold means "3 under CURRENT
+ *  conditions", not "3 ever"). 24h matches the free-tier daily-quota rhythm:
+ *  conditions that starve a model of output budget reset on that cadence. */
+export const NO_CONTENT_STRIKE_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface NoContentStrikes {
   version: 1;
@@ -281,12 +314,16 @@ function saveStrikes(s: NoContentStrikes): void {
   }
 }
 
-/** Record one length+empty terminal outcome (the cost-stop / exhausted label). */
+/** Record one length+empty terminal outcome (the cost-stop / exhausted label).
+ *  A previous record older than the TTL restarts the count at 1 — otherwise a
+ *  stale 3-strike entry from yesterday would demote on the FIRST hiccup today,
+ *  turning the windowed threshold into a lifetime one. */
 export function recordNoContentStrike(modelId: string, nowMs = Date.now()): void {
   if (!modelId) return;
   const s = loadStrikes();
   const prev = s.models[modelId];
-  s.models[modelId] = { strikes: (prev?.strikes ?? 0) + 1, lastAt: nowMs };
+  const withinWindow = prev !== undefined && nowMs - prev.lastAt <= NO_CONTENT_STRIKE_TTL_MS;
+  s.models[modelId] = { strikes: withinWindow ? prev.strikes + 1 : 1, lastAt: nowMs };
   saveStrikes(s);
 }
 
@@ -301,10 +338,14 @@ export function clearNoContentStrikes(modelId: string): void {
   saveStrikes(s);
 }
 
-/** Models at/over the demotion threshold — merged into the fail tier. */
-export function noContentDemotedModels(): Set<string> {
+/** Models at/over the demotion threshold — merged into the fail tier.
+ *  Expired records (lastAt older than the TTL) do NOT demote: this is the
+ *  time-based half of the self-healing invariant, the only heal path a model
+ *  that is never called again can take (see the module note above). */
+export function noContentDemotedModels(nowMs = Date.now()): Set<string> {
   const out = new Set<string>();
   for (const [id, rec] of Object.entries(loadStrikes().models)) {
+    if (nowMs - rec.lastAt > NO_CONTENT_STRIKE_TTL_MS) continue; // expired — healed
     if (rec.strikes >= NO_CONTENT_DEMOTION_THRESHOLD) out.add(id);
   }
   return out;
