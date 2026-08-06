@@ -1,3 +1,13 @@
+---
+trdd-id: 480419e5-fbaf-4182-a52b-2ab18be61503
+title: Full-plugin audit Tier 2 + Tier 3 follow-up
+column: complete
+created: 2026-05-01T00:00:00+0200
+updated: 2026-08-06T17:35:00+0200
+current-owner: claude-llm-externalizer
+task-type: feature
+---
+
 # TRDD-480419e5-fbaf-4182-a52b-2ab18be61503 — Full-plugin audit Tier 2 + Tier 3 follow-up
 
 **TRDD ID:** `480419e5-fbaf-4182-a52b-2ab18be61503`

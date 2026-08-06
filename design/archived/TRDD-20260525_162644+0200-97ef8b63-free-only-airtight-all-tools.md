@@ -1,9 +1,9 @@
 ---
 trdd-id: 97ef8b63-a9c2-48eb-8163-d6f29defe6a8
 title: free_only must override every tool — airtight zero-spend enforcement
-status: completed
+column: complete
 created: 2026-05-25T16:26:44+0200
-updated: 2026-05-25T16:45:53+0200
+updated: 2026-08-06T17:35:00+0200
 ---
 
 # TRDD-97ef8b63 — free_only airtight: free models override EVERY tool

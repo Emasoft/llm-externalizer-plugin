@@ -1,9 +1,9 @@
 ---
 trdd-id: ec45c66f-1ab9-4425-8515-8073dd8aa244
 title: Reasoning cost regression — cluster reasoning off, A3 cap revert, configurable effort
-status: completed
+column: complete
 created: 2026-05-25T11:40:31+0200
-updated: 2026-05-25T11:47:13+0200
+updated: 2026-08-06T17:35:00+0200
 ---
 
 # TRDD-ec45c66f — Reasoning cost regression remediation

@@ -3,7 +3,7 @@ trdd-id: MNK2YNH0
 title: Diff-mode review — workspace, range, commit scoping for every review tool
 column: complete
 created: 2026-08-05T00:06:05+0200
-updated: 2026-08-05T16:20:00+0200
+updated: 2026-08-06T17:35:00+0200
 current-owner: llm-externalizer-session
 task-type: feature
 ---

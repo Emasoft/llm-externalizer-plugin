@@ -1,9 +1,9 @@
 ---
 trdd-id: 6e859d3c-3116-4169-90da-a24c1b747e96
 title: Part-D script-bug remediation — honor each helper's own contract, with TDD
-status: completed
+column: complete
 created: 2026-05-25T09:53:56+0200
-updated: 2026-05-25T10:02:36+0200
+updated: 2026-08-06T17:35:00+0200
 ---
 
 # TRDD-6e859d3c — Part-D script-bug remediation (honor-contract + TDD)

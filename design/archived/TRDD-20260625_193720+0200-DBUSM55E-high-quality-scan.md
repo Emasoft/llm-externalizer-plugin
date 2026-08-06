@@ -3,7 +3,7 @@ trdd-id: DBUSM55E
 title: high_quality_scan + high_quality_scan_and_fix — single good model, configurable, Opus verify-fix
 column: complete
 created: 2026-06-25T19:37:20+0200
-updated: 2026-06-25T21:36:16+0200
+updated: 2026-08-06T17:35:00+0200
 current-owner: claude-llm-externalizer
 assignee: claude-llm-externalizer
 priority: 2

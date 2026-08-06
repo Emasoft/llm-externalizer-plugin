@@ -1,9 +1,9 @@
 ---
 trdd-id: 220ea89f-0af2-4eba-884d-367a986d27e7
 title: cluster_synonyms — zero-token batch synonym clustering MCP primitive
-status: completed
+column: complete
 created: 2026-05-21T23:25:51+0200
-updated: 2026-05-24T05:14:11+0200
+updated: 2026-08-06T17:35:00+0200
 ---
 
 # TRDD-220ea89f — cluster_synonyms — zero-token batch synonym clustering MCP primitive

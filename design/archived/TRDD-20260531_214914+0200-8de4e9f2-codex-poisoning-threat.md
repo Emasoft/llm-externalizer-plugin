@@ -1,9 +1,9 @@
 ---
 trdd-id: 8de4e9f2-2cb9-44f4-bc80-95dcb5d758ad
 title: URGENT — Codex externalization feature security review re reported Codex-poisons-Claude-Code-plugins threat
-status: superseded
+column: superseded
 created: 2026-05-31T21:49:14+0200
-updated: 2026-05-31T22:11:01+0200
+updated: 2026-08-06T17:35:00+0200
 superseded-by: [TRDD-1e2b87cb]
 ---
 

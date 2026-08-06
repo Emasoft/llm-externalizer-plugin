@@ -1,3 +1,13 @@
+---
+trdd-id: 807c1e2d-9457-4afb-b7a5-1e6099a17c28
+title: Codex/GPT-5.5 scan integration
+column: cancelled
+created: 2026-05-14T00:00:00+0200
+updated: 2026-08-06T17:35:00+0200
+current-owner: claude-llm-externalizer
+task-type: feature
+---
+
 # TRDD-807c1e2d-9457-4afb-b7a5-1e6099a17c28 — Codex/GPT-5.5 scan integration
 
 **TRDD ID:** `807c1e2d-9457-4afb-b7a5-1e6099a17c28`

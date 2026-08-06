@@ -1,9 +1,9 @@
 ---
 trdd-id: 54f508a4-266c-4838-979b-cea5b82823c3
 title: LLM Externalizer usability + output-quality fixes — surfaced by a live code_task test
-status: completed
+column: complete
 created: 2026-05-29T17:10:35+0200
-updated: 2026-05-30T08:26:58+0200
+updated: 2026-08-06T17:35:00+0200
 ---
 
 # TRDD-54f508a4 — LLM Externalizer usability + output-quality fixes

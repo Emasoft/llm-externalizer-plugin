@@ -1,9 +1,9 @@
 ---
 trdd-id: 1e2b87cb-9b3e-4031-a1c7-7cc7bde54ac7
 title: Remove the Codex externalization integration entirely — Codex breaks all Claude Code plugins
-status: completed
+column: complete
 created: 2026-05-31T22:11:01+0200
-updated: 2026-05-31T23:12:33+0200
+updated: 2026-08-06T17:35:00+0200
 ---
 
 # TRDD-1e2b87cb — Remove the Codex externalization integration entirely

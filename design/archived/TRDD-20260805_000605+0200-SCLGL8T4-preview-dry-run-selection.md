@@ -3,7 +3,7 @@ trdd-id: SCLGL8T4
 title: --preview — dry-run file selection with per-file exclusion reasons
 column: complete
 created: 2026-08-05T00:06:05+0200
-updated: 2026-08-05T15:35:00+0200
+updated: 2026-08-06T17:35:00+0200
 current-owner: llm-externalizer-session
 task-type: feature
 ---

@@ -3,7 +3,7 @@ trdd-id: ad8ce78f-2fa2-420c-a473-fc706b36becc
 title: Dependency security sweep — npm audit fix resolves 14 advisories + Dependabot PR 2
 column: complete
 created: 2026-06-09T22:42:03+0200
-updated: 2026-06-09T22:42:03+0200
+updated: 2026-08-06T17:35:00+0200
 current-owner: claude-llm-externalizer
 assignee: claude-llm-externalizer
 priority: 1

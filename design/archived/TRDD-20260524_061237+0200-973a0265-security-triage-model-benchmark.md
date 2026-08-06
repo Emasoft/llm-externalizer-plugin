@@ -1,9 +1,9 @@
 ---
 trdd-id: 973a0265-6b04-4167-876c-f30a18631f85
 title: Security-triage model benchmark — formalized golden dataset + scorer + selection gate
-status: completed
+column: complete
 created: 2026-05-24T06:12:37+0200
-updated: 2026-05-24T08:52:24+0200
+updated: 2026-08-06T17:35:00+0200
 ---
 
 # TRDD-973a0265 — Security-triage model benchmark + auto-selection gate

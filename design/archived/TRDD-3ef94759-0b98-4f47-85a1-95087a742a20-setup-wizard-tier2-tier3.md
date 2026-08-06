@@ -1,3 +1,13 @@
+---
+trdd-id: 3ef94759-0b98-4f47-85a1-95087a742a20
+title: Setup wizard Tier 2 + Tier 3 follow-up fixes
+column: complete
+created: 2026-05-01T00:00:00+0200
+updated: 2026-08-06T17:35:00+0200
+current-owner: claude-llm-externalizer
+task-type: feature
+---
+
 # TRDD-3ef94759-0b98-4f47-85a1-95087a742a20 — Setup wizard Tier 2 + Tier 3 follow-up fixes
 
 **TRDD ID:** `3ef94759-0b98-4f47-85a1-95087a742a20`

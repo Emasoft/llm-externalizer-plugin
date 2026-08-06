@@ -1,9 +1,9 @@
 ---
 trdd-id: 828238b5-42d7-478e-8fe7-44d74f812286
 title: Auto-* model management suite + deep-audit findings backlog
-status: in-progress
+column: backburner
 created: 2026-05-24T22:56:20+0200
-updated: 2026-06-20T22:39:55+0200
+updated: 2026-08-06T17:35:00+0200
 ---
 
 # TRDD-828238b5 — Auto-* model management suite + deep-audit findings backlog
@@ -622,3 +622,5 @@ per "don't over-engineer". Re-open if its logic grows.
 - Read-only guardrail upheld: no silent model writes from MCP tools.
 - `npm run build` + `npm test` green; `tsc --noEmit` + eslint clean.
 - This TRDD's status bumped per the trdd-design-tasks rule as items land.
+
+**TRIAGE 2026-08-06:** A1-A7 + Parts B-E landed; residue = A6 free-form benchmark tail (shared with TRDD-f45eeaa0) + `install_statusline.py` test coverage (explicitly deferred).

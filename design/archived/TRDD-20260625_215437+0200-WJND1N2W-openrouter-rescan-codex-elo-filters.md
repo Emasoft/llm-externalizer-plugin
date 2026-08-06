@@ -1,9 +1,9 @@
 ---
 trdd-id: WJND1N2W
 title: OpenRouter model rescan — codex/design-arena pre-filters, free-no-suffix inclusion, skills update
-column: dev
+column: complete
 created: 2026-06-25T21:54:37+0200
-updated: 2026-07-02T06:25:00+0200
+updated: 2026-08-06T17:35:00+0200
 current-owner: claude-llm-externalizer
 assignee: claude-llm-externalizer
 priority: 3

@@ -1,9 +1,9 @@
 ---
 trdd-id: 66da2aa7-82b0-4c6f-8d77-53f62bb39405
 title: cluster_synonyms — honor resume_from (data-loss fix) + cache partition + stale-comment cleanup
-status: completed
+column: complete
 created: 2026-05-25T10:06:02+0200
-updated: 2026-05-25T10:10:00+0200
+updated: 2026-08-06T17:35:00+0200
 ---
 
 # TRDD-66da2aa7 — cluster_synonyms resume + perf

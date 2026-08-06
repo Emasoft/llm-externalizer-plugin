@@ -1,3 +1,13 @@
+---
+trdd-id: 65867b68-e795-4fbc-8548-639648679708
+title: Local-backend expansion + setup-agent benchmarking
+column: complete
+created: 2026-05-15T00:00:00+0200
+updated: 2026-08-06T17:35:00+0200
+current-owner: claude-llm-externalizer
+task-type: feature
+---
+
 # TRDD-65867b68-e795-4fbc-8548-639648679708 — Local-backend expansion + setup-agent benchmarking
 
 **TRDD ID:** `65867b68-e795-4fbc-8548-639648679708`

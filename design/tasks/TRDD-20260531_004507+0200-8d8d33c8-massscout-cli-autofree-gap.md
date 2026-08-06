@@ -1,9 +1,9 @@
 ---
 trdd-id: 8d8d33c8-7286-4cef-9962-d33ec6633b65
 title: Standalone CLI bundle (dist/cli.js) misses auto-free-on-low-balance for mass_scout + security_scan
-status: not-started
+column: todo
 created: 2026-05-31T00:45:07+0200
-updated: 2026-05-31T00:45:07+0200
+updated: 2026-08-06T17:35:00+0200
 ---
 
 # TRDD-8d8d33c8 — Standalone CLI bundle misses auto-free-on-low-balance
@@ -107,3 +107,4 @@ separately-bundled CLI.
 - 2026-05-31 00:45 — TRDD authored from the user's mass_scout-free question.
   Documented per user's "Neither now — just document" decision. No code changed,
   no live test run, MCP path left as-is (sound by construction). Backlog only.
+- **VERIFIED STILL OPEN 2026-08-06:** `scripts/llm-ext/dist/` still ships a second bundle (`cli.js`) beside `llm-ext.js`, and `grep -rn "ensureAutoFreeDecided\|autoFreeEngaged" scripts/llm-ext/src/mass_scouting/ scripts/llm-ext/src/cli.ts` returns zero hits — the auto-free-on-low-balance path is absent from that entry point.

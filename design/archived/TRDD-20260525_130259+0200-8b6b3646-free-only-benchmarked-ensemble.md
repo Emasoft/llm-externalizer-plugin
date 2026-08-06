@@ -1,9 +1,9 @@
 ---
 trdd-id: 8b6b3646-0152-4077-8d2a-e888f17e0fc7
 title: Free-only switch — benchmark-filtered free ensemble (per-profile)
-status: completed
+column: complete
 created: 2026-05-25T13:02:59+0200
-updated: 2026-05-25T14:49:27+0200
+updated: 2026-08-06T17:35:00+0200
 ---
 
 # TRDD-8b6b3646 — Free-only benchmark-filtered ensemble

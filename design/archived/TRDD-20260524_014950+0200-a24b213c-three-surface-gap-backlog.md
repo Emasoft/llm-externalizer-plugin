@@ -1,9 +1,10 @@
 ---
 trdd-id: a24b213c-4061-4d4f-9405-3162d1914eea
 title: Three-surface compliance backlog — close the remaining MCP/CLI/slash gaps
-status: in-progress
+column: superseded
 created: 2026-05-24T01:49:50+0200
-updated: 2026-05-27T21:35:00+0200
+updated: 2026-08-06T17:35:00+0200
+superseded-by: d557c68
 ---
 
 # TRDD-a24b213c — Three-surface compliance backlog
