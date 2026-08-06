@@ -549,8 +549,9 @@ llm-ext chat --instructions "List the function names exported from this module. 
 
 ### Compare source against specification
 ```bash
-llm-ext check-against-specs --instructions "Check compliance with the API contract" \
-  --input_files_paths /path/to/impl.ts --instructions_files_paths /path/to/spec.md
+llm-ext check-against-specs --spec_file_path /path/to/spec.md \
+  --instructions "Check compliance with the API contract" \
+  --input_files_paths /path/to/impl.ts
 ```
 
 ### Code review with persona

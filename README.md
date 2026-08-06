@@ -716,7 +716,7 @@ The base 8-tool pipeline plus 8 follow-on tools for fieldset authoring, job intr
 | `mass_scout_diff` | Compare two jobs row-by-row; counts only_in_a / only_in_b / changed (with changed_keys) |
 | `mass_scout_chain` | Re-scout the SUBSET of an existing job's results matching a JSON-extract filter, with a fresh fieldset |
 
-The CLI exposes every sub-command as `bin/llm-ext mass-scout <subcommand>`. The 8 slash commands listed above are 1:1 wrappers around the base 8 sub-commands; the remaining 8 are CLI-only and are addressed by skills/agents. The `llm-externalizer-mass-scouting` skill walks through the full pipeline including the bundled fieldsets, troubleshooting flowchart, and worked example.
+The CLI exposes every sub-command as its own hyphenated command, `bin/llm-ext mass-scout-<subcommand>` (e.g. `bin/llm-ext mass-scout-register`) — NOT `mass-scout <subcommand>` with a space; the latter silently falls back to plain `mass-scout` and ignores the extra word. The 8 slash commands listed above are 1:1 wrappers around the base 8 sub-commands; the remaining 8 are CLI-only and are addressed by skills/agents. The `llm-externalizer-mass-scouting` skill walks through the full pipeline including the bundled fieldsets, troubleshooting flowchart, and worked example.
 
 ### Security tools
 

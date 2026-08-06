@@ -1,9 +1,9 @@
 ---
 trdd-id: R7VQ2XKD
 title: Complete the MCP to CLI migration — remove surface drift from commands and skills
-column: dev
+column: human_review
 created: 2026-08-06T17:46:19+0200
-updated: 2026-08-06T17:46:19+0200
+updated: 2026-08-06T18:07:00+0200
 current-owner: claude-llm-externalizer
 assignee: claude-llm-externalizer
 priority: 2
@@ -71,8 +71,21 @@ them would have been pure churn. **Do not re-open that class.** The genuinely br
 ("runs through the mass_scouting subsystem with its own cost controls") — `--budget_usd` is its
 gate by design.
 
-**NEXT ACTION:** re-run both audits and confirm 0 critical / 0 major remain, then re-check the
-two surfaces this pass did not cover: `agents/*.md` and `README.md`.
+- `agents/` + `README.md` + `docs/` wave — 2 real fixes: README documented
+  `mass-scout <subcommand>` (the flat `mass-scout-<subcommand>` form is the real one), and
+  `docs/agent-usage-reference.md` passed the spec to `check-against-specs` via
+  `--instructions_files_paths` while omitting `--spec_file_path`, which `--help` marks
+  **(required)** — that documented invocation could never have run.
+
+**RE-AUDIT PASSED (2026-08-06, re-run independently, not taken on an agent's word).** Across
+`commands/ skills/ agents/ README.md docs/`: 0 retired MCP payloads · 0 `mcp__` tool ids ·
+0 "MCP server" mentions · 0 legacy-binary invocations · every documented `llm-ext` command
+resolves in the live catalog.
+
+**NEXT ACTION: none — awaiting human review.** The acceptance criteria below are met. What this
+card did NOT do, deliberately: the *structural* half of the migration (two runtime entry points,
+one of them the published npm bin) is a breaking public-API change and is filed separately as
+proposal TRDD-W9DK4L3N for the owner to rule on.
 
 **Do NOT** "fix" a doc by deleting the example — a command with no worked example is how this
 drift became invisible in the first place.
