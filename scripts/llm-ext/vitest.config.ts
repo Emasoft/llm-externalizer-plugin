@@ -269,6 +269,9 @@ export default defineConfig({
       'src/diff-scope.test.ts',
       'src/cluster/phase2_verify.test.ts',
       'src/cluster/phase3_canonical.test.ts',
+      // session-summary P1 reader/pruner + P2 turn-boundary chunker (TRDD-T4MZ8YQR).
+      'src/session_summary/transcript.test.ts',
+      'src/session_summary/chunker.test.ts',
     ],
   },
 });

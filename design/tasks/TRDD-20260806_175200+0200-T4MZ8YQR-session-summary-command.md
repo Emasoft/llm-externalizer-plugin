@@ -71,6 +71,17 @@ whole session from the JSONL transcript of the project session, **using only fre
    are available. Rationale: the pruning ratio, not the context window, is what decides whether
    this command is usable — and what a compaction summary needs is the narrative, not the bytes.
 
+### Progress
+
+- **P1 + P2 DONE (2026-08-06).** `scripts/llm-ext/src/session_summary/{transcript,chunker}.ts`
+  plus their tests. 26 tests pass, `tsc --noEmit` clean, lint clean — all three re-run and
+  confirmed independently, not taken on report. Streaming is real (`createReadStream` +
+  `readline`, no `readFileSync`), with a structural test asserting no sync whole-file read and a
+  bounded-heap-growth test over a large fixture. `BYTES_PER_TOKEN_ESTIMATE` is one named
+  constant, not a scattered `/4`.
+- **P3-P5 HELD** pending the user's ruling on the two assumptions above. Nothing built so far
+  depends on either — the prune level is a parameter and the chunker takes a token budget.
+
 ### Phases (each lands with tests; no phase exceeds 5 files)
 
 - **P1 — reader + pruner ($0, pure, fully unit-testable).** Stream the JSONL line by line (never
