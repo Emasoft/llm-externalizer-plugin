@@ -261,9 +261,9 @@ Then renumber `### N.` entries sequentially across the file. Never rephrase, sum
 
 ## Three-surface compliance: by-design slash-only (GAP-10)
 
-This command dispatches per-bug serial-fixer subagents that APPLY fixes to source files via Edit/Write. As with `/llm-externalizer:llm-externalizer-fix-report`, the MCP server's file-write tools were deliberately removed because the server is read-only by design — only the orchestrator and its subagents may mutate the user's working tree.
+This command dispatches per-bug serial-fixer subagents that APPLY fixes to source files via Edit/Write. As with `/llm-externalizer:llm-externalizer-fix-report`, the CLI's file-write surface was deliberately never built — only the orchestrator and its subagents may mutate the user's working tree.
 
-Per TRDD-a24b213c §C, this is a documented exemption from the "every capability has MCP tool + CLI command + slash command" invariant — not a gap waiting to be filled. Re-enabling MCP file-write tools would close GAP-10 but violate the read-only-server design.
+Per TRDD-a24b213c §C, this is a documented exemption from the "every capability has a CLI command + slash command" invariant — not a gap waiting to be filled. Adding a CLI file-write verb would close GAP-10 but violate the CLI's read-only-analysis design.
 
 ## Safety rails
 

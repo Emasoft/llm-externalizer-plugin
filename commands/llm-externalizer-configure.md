@@ -12,9 +12,9 @@ Inspect LLM Externalizer configuration. **This command never mutates settings** 
 
 ## Configuration policy
 
-Model and profile configuration is **user-only**. There is no `set-settings` or
-`change-model` command, and the CLI `profile add | select | edit | remove |
-rename` subcommands are **disabled by design** so agents cannot silently swap
+Model and profile configuration is **user-only**. There is no `set-settings`,
+`change-model`, or `profile` command in the CLI at all — configuration is
+edited by hand in `settings.yaml`, by design, so agents cannot silently swap
 models or leak configuration to the wrong backend.
 
 To change anything (active profile, model, second_model, api preset, URL, api_key, timeouts):
@@ -37,5 +37,4 @@ Decline politely and explain the policy: configuration is user-only. Point the u
 ## What this command will NOT do
 
 - Write to `settings.yaml` in any way.
-- Run a `set-settings` or `change-model` command (neither exists).
-- Invoke `npx llm-externalizer profile add | select | edit | remove | rename` (those CLI subcommands are also disabled).
+- Run a `set-settings`, `change-model`, or `profile` command (none of them exist in the CLI).

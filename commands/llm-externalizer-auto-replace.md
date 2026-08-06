@@ -68,5 +68,5 @@ run, `$OPENROUTER_API_KEY` (or the plugin's `userConfig.openrouter_api_key`) mus
 set — the CLI says so itself, in one `[FAILED]` line. On a `free_only` profile the
 benchmarks run on the free pool at $0.
 
-The read-only MCP tool `check_tool_replacements` still exposes the advisory half for
-programmatic callers; the CLI is the only surface that can WRITE.
+The read-only CLI command `check-tool-replacements` still exposes the advisory half for
+programmatic callers; only `llm-ext-benchmark --auto-replace --apply` can WRITE.

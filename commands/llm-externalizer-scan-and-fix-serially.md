@@ -26,7 +26,7 @@ The LLM used by this command sees only **1–5 files per request** (FFD bin-pack
 
 **If you need cross-file reference validation, DO NOT use the default rubric. Use one of these two tools instead:**
 
-1. **`${CLAUDE_PLUGIN_ROOT}/bin/llm-ext check-against-specs`** — provide an explicit API surface / spec file; the tool compares each source file against the spec. Every batch sees its source + the spec, so each reference is validated against an authoritative list instead of against "whatever the LLM thinks might exist". Pass the spec to this command via `--specs <path>` for the same effect.
+1. **`${CLAUDE_PLUGIN_ROOT}/bin/llm-ext check-against-specs`** — provide an explicit API surface / spec file; the tool compares each source file against the spec. Every batch sees its source + the spec, so each reference is validated against an authoritative list instead of against "whatever the LLM thinks might exist". Pass the spec to this command via `--spec_file_path <path>` for the same effect.
 2. **`${CLAUDE_PLUGIN_ROOT}/bin/llm-ext search-existing-implementations`** (exposed as `/llm-externalizer:llm-externalizer-search-existing-implementations`) — for semantic duplicate hunts ("is feature X already implemented somewhere?"). Each file is compared against a REFERENCE (description + optional source files + optional diff), NOT against every other file. Purpose-built for cross-codebase questions that an AST / schema check cannot answer.
 
 For everything else — logic bugs, error handling, security, resource leaks in the local function — the 1–5-file batch is enough and this command is the right tool. Just don't ask it questions that require global visibility.
@@ -42,6 +42,8 @@ Parse `$ARGUMENTS` into:
 - `--specs <path>`: absolute path to an `.md` specification file. Appended to `instructions_files_paths`; the scan checks each file against the spec.
 - `--no-secrets`: disables the pre-scan secret detector (`scan_secrets: false`, `redact_secrets: false`). Default behaviour is `scan_secrets: true` + `redact_secrets: true` — secrets are detected and REDACTED (replaced by `[REDACTED:LABEL]`) before the files reach the LLM, so the scan keeps running. Use this flag only when you've already moved secrets to `.env` (gitignored) and want to skip the redaction pass.
 - `--free`: use the free Nemotron model (`free: true`). Warn once about provider prompt logging before running on proprietary code; proceed only after user confirms or when the argument was explicit.
+
+**Cost safety:** when `--free` is not set and the active profile is paid, run the same invocation with `--estimate` first — zero-cost dry run, prints expected/ceiling cost — and proceed with the real scan only if the ceiling fits the budget.
 
 Abort with `[FAILED] llm-externalizer-scan-and-fix-serially — <one-line reason>` on any validation failure.
 

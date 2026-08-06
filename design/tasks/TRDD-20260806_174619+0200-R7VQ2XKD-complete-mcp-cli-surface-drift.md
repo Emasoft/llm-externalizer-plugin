@@ -52,13 +52,27 @@ which is worse than a missing doc, because it looks authoritative.
 6. Retired "three surfaces" (MCP + CLI + slash) parity claims; it is CLI + skills now.
 
 **DONE so far (this session):**
-- `skills/` wave 1 — 13 files fixed, 88 invocations rewritten and each command/flag verified
+- `skills/` wave — 13 files fixed, 88 invocations rewritten and each command/flag verified
   against `--help`: the three `usage-patterns.md` files, the mass-scouting skill (4 files),
-  or-model-info (3 files), config, ensemble-autoselect, dogfood-test.
+  or-model-info (3 files), config, ensemble-autoselect, dogfood-test. (`b841e05`)
+- `commands/` wave — 13 files fixed: the `--specs` → `--spec_file_path` rename (3 files),
+  6 cost-safety additions, stale MCP wording, and removal of references to the legacy
+  `npx llm-externalizer profile …` subcommands (that surface is disabled; the real gap is
+  tracked by TRDD-K3PW7Q2M).
 
-**NEXT ACTION:** the `commands/` wave — 39 files, 45 findings, 20 critical. Same method: read
-the finding, verify against `./bin/llm-ext <cmd> --help`, fix with the Edit tool, never invent a
-flag. Then re-run the two audits and confirm the counts go to zero.
+**CORRECTION — the audit's biggest finding class was WRONG (2026-08-06).** It reported ~16
+CRITICAL "kebab vs snake flag mismatches" (`--db-path` documented, `--db_path` actual). Those
+docs are CORRECT: `scripts/llm-ext/src/cli/main.ts:208` normalises `-`→`_` at parse time, proven
+behaviourally (`mass-scout-jobs-list --db-path X` ≡ `--db_path X`, identical output). Fixing
+them would have been pure churn. **Do not re-open that class.** The genuinely broken flag was
+`--specs`, which is not a kebab variant of anything — it simply does not exist.
+
+**Also verified, do not "fix":** `security-scan` deliberately REFUSES `--estimate`
+("runs through the mass_scouting subsystem with its own cost controls") — `--budget_usd` is its
+gate by design.
+
+**NEXT ACTION:** re-run both audits and confirm 0 critical / 0 major remain, then re-check the
+two surfaces this pass did not cover: `agents/*.md` and `README.md`.
 
 **Do NOT** "fix" a doc by deleting the example — a command with no worked example is how this
 drift became invisible in the first place.

@@ -26,6 +26,8 @@ Abort with `[FAILED] llm-externalizer-high-quality-scan — <reason>` on any val
 
 Run `${CLAUDE_PLUGIN_ROOT}/bin/llm-ext discover`. Abort with `[FAILED] — service offline` if OFFLINE. The `discover` output also shows the active backend and whether `free_only` is on — if the backend is NOT OpenRouter or `free_only` is active, warn the user that `high-quality-scan` will fail fast, and suggest `/llm-externalizer:llm-externalizer-scan-and-fix` instead.
 
+**Cost safety:** this command is paid-only (no `--free` option). Before Step 3, run the same invocation with `--estimate` first — a zero-cost dry run that prints expected/ceiling cost — and proceed only if the ceiling fits the budget.
+
 ## Step 3 — Call the CLI directly
 
 ```bash

@@ -56,10 +56,11 @@ and the exit code already carries success/failure.
 
 Full flag list: `llm-ext-benchmark --help`.
 
-## Why there is no MCP tool for this (by design, TRDD-f1510055)
+## Why this stays a manual slash command (by design, TRDD-f1510055)
 
-A sweep is a 10-30 minute, money-spending, cache-writing build step, not a tool
-call. Exposing it as an MCP tool would let any agent trigger a half-hour blocking
-operation on the user's account. The MCP-side equivalent is the auto-trigger wired
-into the server's startup / settings-reload path (see
-`/llm-externalizer:llm-externalizer-bench-free-pool`).
+A sweep is a 10-30 minute, money-spending, cache-writing build step, not a
+one-shot call an agent should trigger unattended. There is no automatic
+trigger for it: it must be explicitly invoked, either via this slash command
+or directly as `llm-ext-benchmark`. For a zero-cost variant scoped to the
+free-model pool, see
+`/llm-externalizer:llm-externalizer-bench-free-pool`.

@@ -40,10 +40,10 @@ Parse `$ARGUMENTS`:
 
 ### Step 1 — Resolve and validate the report path
 
-Relative paths resolve against the main project dir, which is `$CLAUDE_PROJECT_DIR` used verbatim (process cwd as fallback) — the SAME no-git resolver the MCP server uses to write reports under `<main-project-dir>/reports/llm-externalizer/`. Do NOT derive this from git: linked worktrees, monorepos whose subfolders each have their own git, and git-less roots would all resolve to the wrong directory.
+Relative paths resolve against the main project dir, which is `$CLAUDE_PROJECT_DIR` used verbatim (process cwd as fallback) — the SAME no-git resolver the CLI uses to write reports under `<main-project-dir>/reports/llm-externalizer/`. Do NOT derive this from git: linked worktrees, monorepos whose subfolders each have their own git, and git-less roots would all resolve to the wrong directory.
 
 ```bash
-# No-git: anchor relative report paths exactly where the MCP server wrote
+# No-git: anchor relative report paths exactly where the CLI wrote
 # them — $CLAUDE_PROJECT_DIR verbatim, else the process cwd. NEVER git.
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 RAW="${ARGUMENTS#@}"                      # strip leading @
@@ -88,7 +88,7 @@ fi
 Route automatically per-report. Promote to Opus when EITHER (a) the report's source file is large (>1000 lines or >50 KB) or (b) the report carries many findings (>5 `[[FINDING]]` blocks).
 
 ```bash
-# Source-file extraction — matches all three MCP report header shapes
+# Source-file extraction — matches all three legacy/current report header shapes
 # (## File: / **File:** / - **Input file**: `…`). Paths containing
 # spaces are preserved. Audit references: SR-P1-001, SR-P1-003, SR-P1-004.
 SRC=$(grep -m1 -E '^(## File:|\*\*File:\*\*|- \*\*Input file\*\*:)' "$REPORT_PATH" 2>/dev/null \
@@ -147,9 +147,9 @@ The agent returns ONE line — its `.fixer.`-summary path, or `[FAILED] <agent-n
 
 ## Three-surface compliance: by-design slash-only (GAP-9)
 
-This command dispatches a subagent that APPLIES fixes to source files (Edit / Write). The MCP server's file-write tools (`fix_code`, `batch_fix`, `merge_files`, `split_file`, `revert_file`) were deliberately removed because the server is read-only by design — only the orchestrator and its subagents may mutate the user's working tree.
+This command dispatches a subagent that APPLIES fixes to source files (Edit / Write). The CLI's file-write surface was deliberately never built — only the orchestrator and its subagents may mutate the user's working tree.
 
-Per TRDD-a24b213c §C, this is a documented exemption from the "every capability has MCP tool + CLI command + slash command" invariant — not a gap waiting to be filled. Re-enabling MCP file-write tools would close GAP-9 but violate the read-only-server design.
+Per TRDD-a24b213c §C, this is a documented exemption from the "every capability has a CLI command + slash command" invariant — not a gap waiting to be filled. Adding a CLI file-write verb would close GAP-9 but violate the CLI's read-only-analysis design.
 
 ## Error handling
 

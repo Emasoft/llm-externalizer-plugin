@@ -30,6 +30,8 @@ Resolve the reports dir the SAME way the CLI does (no git — mirror `scripts/ll
 
 Run `${CLAUDE_PLUGIN_ROOT}/bin/llm-ext discover`. Abort with `[FAILED] — service offline` if OFFLINE. The output shows the active backend and `free_only`: if the backend is NOT OpenRouter or `free_only` is on, STOP and tell the user `high-quality-scan` will fail fast — suggest `/llm-externalizer:llm-externalizer-scan-and-fix` instead. Do not start a scan that the gate will refuse.
 
+**Cost safety:** this command is paid-only (no `--free` option). Before Step 3, run the same `high-quality-scan` invocation with `--estimate` first — a zero-cost dry run that prints expected/ceiling cost — and proceed only if the ceiling fits the budget.
+
 ## Step 3 — Run the high-quality scan
 
 Build the `instructions` / `instructions_files_paths`:
@@ -138,7 +140,7 @@ On any error: `[FAILED] llm-externalizer-high-quality-scan-and-fix — <one-line
 - Fixers are ALWAYS Opus — never Sonnet. Do NOT route by file size.
 - You MUST NOT `Read` any scan report, fixer summary, or the final joined report; only file paths flow through the orchestrator.
 - Fixer dispatch MUST be parallel (batches of ≤15). Sequential dispatch defeats the design.
-- For cross-file reference validation, use the `check-against-specs` command (pass `--specs`) — the LLM sees only 1–5 files per batch and cannot validate references against files outside the batch.
+- For cross-file reference validation, use the `check-against-specs` command (this file's `--specs` maps to the CLI's `--spec_file_path`) — the LLM sees only 1–5 files per batch and cannot validate references against files outside the batch.
 
 ## Three-surface compliance: by-design slash-only (GAP-11)
 

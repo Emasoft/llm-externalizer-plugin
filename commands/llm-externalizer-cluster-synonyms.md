@@ -36,6 +36,8 @@ This can run for tens of minutes on large corpora — run it with an explicit
 long `timeout` (e.g. `timeout 1200 ...`) or `run_in_background: true`; there is
 no keepalive to fall back on.
 
+**Cost safety:** on a paid profile, run the same invocation with `--estimate` first — a zero-cost dry run that prints expected/ceiling cost — and proceed only if the ceiling fits the budget.
+
 ## Pipeline
 
 1. **Pre-flight model benchmark** — qualifies the active profile's model.

@@ -34,6 +34,8 @@ Abort with `[FAILED] llm-externalizer-search-existing-implementations — <reaso
 
 Run `${CLAUDE_PLUGIN_ROOT}/bin/llm-ext discover`. Abort with `[FAILED] — service offline` if OFFLINE.
 
+**Cost safety:** on a paid profile, run the same `search-existing-implementations` invocation with `--estimate` first — a zero-cost dry run that prints expected/ceiling cost — and proceed only if the ceiling fits the budget.
+
 ## Step 3 — Call the CLI directly
 
 All diff generation, batching, and file filtering happens inside the CLI process:
