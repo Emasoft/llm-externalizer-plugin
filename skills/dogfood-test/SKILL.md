@@ -1,6 +1,6 @@
 ---
 name: dogfood-test
-description: Internal maintainer dogfood harness for the llm-externalizer plugin — exercises every surface (CLI verbs, benchmark, MCP-tool wiring, all slash commands, all skills) with a zero-spend offline sweep plus an opt-in free-pool live smoke. NOT user-invocable; run via tests/dogfood/dogfood_test.py. Use when validating a release or after touching any tool, command, or skill.
+description: Internal maintainer dogfood harness for the llm-externalizer plugin — exercises every surface (CLI verbs, benchmark, all slash commands, all skills) with a zero-spend offline sweep plus an opt-in free-pool live smoke. NOT user-invocable; run via tests/dogfood/dogfood_test.py. Use when validating a release or after touching any tool, command, or skill.
 user-invocable: false
 ---
 
@@ -32,7 +32,7 @@ markdown report is written under `<main-repo-root>/reports/dogfood/`.
 | Health | `bin/llm-ext discover` (auth + profile + balance probe, no LLM) | $0 |
 | CLI help | `--help` for every verb in `bin/llm-ext`'s TOOL_CATALOG + top-level + benchmark | $0 |
 | Benchmark | `llm-ext-benchmark --dry-run` and `--bench-free-pool --dry-run` | $0 |
-| Read-only tools | `get_settings`, `or_model_info_json`, `discover-new-models` (public catalog) | $0 |
+| Read-only tools | `get-settings`, `or-model-info-json`, `discover-new-models` (public catalog) | $0 |
 | Slash commands | structural audit of every `commands/*.md` (frontmatter + wrapped-tool resolves) | $0 |
 | Skills | structural audit of every `skills/*/SKILL.md` (frontmatter validity) | $0 |
 | Live smoke | `chat` + `code_task` on a tiny fixture, free-pool only — **opt-in** (`DOGFOOD_LIVE=1`) | $0 |

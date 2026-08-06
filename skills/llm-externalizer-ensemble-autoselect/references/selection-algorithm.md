@@ -60,11 +60,12 @@ search, or accept fewer than three models.
    self-recovers, skip rotation.
 2. Read `~/.llm-externalizer/benchmark-results.json` — if it is fresher than
    24 hours and contains ≥ 3 qualifying survivors, jump to step 4.
-3. Run `llm-ext-benchmark` (no flags) to refresh the cache. The roster comes
-   from OpenRouter's `programming` category + any `--include` baselines.
-4. Run `llm-ext-benchmark --from-cache --pick-top-n 3 --apply-profile <active>`.
+3. Run `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext-benchmark"` (no flags) to refresh the
+   cache. The roster comes from OpenRouter's `programming` category + any
+   `--include` baselines.
+4. Run `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext-benchmark" --from-cache --pick-top-n 3 --apply-profile <active>`.
 5. Tell the user what changed (old → new model IDs, F1, cost, latency) and
-   that they should call the `reset` MCP tool to reload.
+   that they should run `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" reset` to reload.
 6. Do **not** ask the user to pick — the user has delegated this decision.
 
 ## Where the rules live (single source of truth)

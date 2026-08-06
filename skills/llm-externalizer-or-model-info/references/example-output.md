@@ -8,8 +8,8 @@
 
 ## Sample response
 
-Calling the tool with `{ "model": "nvidia/nemotron-3-super-120b-a12b:free" }` returns
-markdown like this:
+Calling `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" or-model-info --model nvidia/nemotron-3-super-120b-a12b:free`
+returns markdown like this:
 
 ```markdown
 # NVIDIA: Nemotron 3 Super (free)

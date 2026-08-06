@@ -62,13 +62,13 @@ Auth fields accept either:
 - **`$ENV_VAR_NAME`** — resolved from process environment at runtime
 - **`"direct-value"`** — used as-is
 
-Default env vars are set by the API preset. If `discover` shows the token is resolved, auth is working. If it shows `(NOT SET)`, the env var is missing from the MCP server's process environment — check the MCP server env configuration.
+Default env vars are set by the API preset. If `discover` shows the token is resolved, auth is working. If it shows `(NOT SET)`, the env var is missing from the shell/process environment `llm-ext` runs in — check the plugin keychain or your exported env vars.
 
 ## Manual Edit Workflow
 
-**Model & profile configuration is user-only.** The MCP tools `set_settings` and `change_model`, and the CLI subcommands `profile add | select | edit | remove | rename`, are disabled by design. The only supported path is:
+**Model & profile configuration is user-only.** There is no command that writes `settings.yaml` — the only supported path is:
 
-**Step 1** — Open `~/.llm-externalizer/settings.yaml` in your editor. You can also call the MCP `get_settings` tool first — it copies the file to the output directory and returns the copy's path, but you are expected to transfer your edits back to the real file yourself.
+**Step 1** — Open `~/.llm-externalizer/settings.yaml` in your editor. You can also run `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" get-settings` first — it copies the file to the output directory and returns the copy's path, but you are expected to transfer your edits back to the real file yourself.
 
 **Step 2** — Edit the YAML. The structure:
 
@@ -94,7 +94,7 @@ profiles:
 
 **Step 3** — Save the file.
 
-**Step 4** — Reload. Either restart Claude Code, or call the `reset` MCP tool to reload without restarting.
+**Step 4** — Reload. Either restart Claude Code, or run `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" reset` to reload without restarting.
 
 **Step 5** — Verify with `discover`.
 
@@ -111,7 +111,7 @@ Validation runs at load time (when the server starts or `reset` is called). If v
 - `remote-ensemble` requires `second_model`
 - Remote presets require a resolvable `api_key`
 
-To recover: edit the file to fix the issue, save, and call `reset` (or restart Claude Code).
+To recover: edit the file to fix the issue, save, and run `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" reset` (or restart Claude Code).
 
 ## Ensemble Mode
 
@@ -135,10 +135,9 @@ On OpenRouter with `remote-ensemble` mode, read-only content tools run on three 
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `discover` shows `(NOT SET)` for auth token | Env var missing from MCP server process | Add the env var to `.mcp.json` env block or export it in shell, then restart Claude Code |
+| `discover` shows `(NOT SET)` for auth token | Env var missing from the process environment `llm-ext` runs in | Export the env var in your shell (or set it in the plugin keychain), then re-run |
 | Connection refused to local server | LM Studio / Ollama not running | Start the local server, verify URL and port |
 | Validation error on reload | Invalid profile config | Check validation rules above; ensure mode/api preset match |
 | Ensemble returns only one model's results | File exceeds size limit for one model | Normal behavior — grok limit is 20K lines, qwen 40K lines, gemini 50K lines |
-| Tools return "not configured" | No active profile or settings.yaml missing | Open `~/.llm-externalizer/settings.yaml`, confirm `active:` points to a valid profile, save, call `reset` |
-| `set_settings` / `change_model` return DISABLED | Expected — tools are user-only | Edit `~/.llm-externalizer/settings.yaml` manually instead |
-| `npx llm-externalizer profile add/select/edit/remove/rename` errors out | Expected — CLI mutation is disabled | Edit `~/.llm-externalizer/settings.yaml` manually instead |
+| Tools return "not configured" | No active profile or settings.yaml missing | Open `~/.llm-externalizer/settings.yaml`, confirm `active:` points to a valid profile, save, run `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" reset` |
+| No command exists to write `settings.yaml` | Expected — model & profile config is user-only | Edit `~/.llm-externalizer/settings.yaml` manually instead |

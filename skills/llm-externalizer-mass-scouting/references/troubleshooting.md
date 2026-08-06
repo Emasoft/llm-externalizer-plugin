@@ -9,51 +9,51 @@
 ## Symptom flowchart
 
 ```
-Something went wrong with mass_scout. Where?
+Something went wrong with mass-scout. Where?
 
-├── register said registered=0
-│   ├── --root path empty / wrong? → verify with `ls`
-│   ├── all files filtered by .gitignore? → re-run with --no-gitignore
-│   └── all files > register cap? → check --extensions; raise --max-context-pct-register
+├── mass-scout-register said registered=0
+│   ├── --folder_path empty / wrong? → verify with `ls`
+│   ├── all files filtered by .gitignore? → re-run with --no_gitignore
+│   └── all files > register cap? → check --extensions; raise --max_context_pct_register
 │
-├── preclassify shows everything as 'unknown'
+├── mass-scout-preclassify shows everything as 'unknown'
 │   └── files have no recognised extension and no shebang
 │       → that's expected; scout still processes them with
 │         --bucket sourcecode (or no bucket filter at all)
 │
-├── estimate shows budget_allowed=false
+├── mass-scout-estimate shows budget_allowed=false
 │   ├── too many files → narrow --bucket or filter the source tree
-│   ├── files too big → lower --max-context-pct-scout
-│   └── budget too low → raise --budget-usd
+│   ├── files too big → lower --max_context_pct_scout
+│   └── budget too low → raise --budget_usd
 │
-├── scout returns files_failed > 0
-│   ├── HTTP 400 context length exceeded? → --live-context to find
-│   │   the real cap, then lower --max-context-pct-scout to fit
-│   ├── all retries exhausted? → run audit-sample on the failing
-│   │   short_ids to see what the LLM returned; check
+├── mass-scout returns files_failed > 0
+│   ├── HTTP 400 context length exceeded? → --live_context to find
+│   │   the real cap, then lower --max_context_pct_scout to fit
+│   ├── all retries exhausted? → run mass-scout-audit-sample on the
+│   │   failing short_ids to see what the LLM returned; check
 │   │   `mass_scout_skipped` table for the recorded error
 │   └── circuit_tripped=true → too many consecutive failures.
 │       Likely a model/schema mismatch. Try a different --model
 │       or simplify the fieldset (drop array_object fields first).
 │
 ├── scout result_json doesn't match what I expected
-│   ├── audit-sample to see the raw responses
+│   ├── mass-scout-audit-sample to see the raw responses
 │   ├── verify the field descriptions are unambiguous
 │   ├── the LLM picks weird enum values? → tighten enum to fewer values
-│   └── re-run with chain on a small subset + a refined fieldset,
-│       compare with diff
+│   └── re-run with mass-scout-chain on a small subset + a refined
+│       fieldset, compare with mass-scout-diff
 │
-└── search returns nothing
+└── mass-scout-search returns nothing
     ├── --query is FTS5 syntax, not regex (use OR/AND/NEAR)
     ├── --filter uses '$.path:OP:value' (e.g. '$.is_async:=:true')
-    └── try `get` to confirm the row exists, then refine the filter
+    └── try `mass-scout-get` to confirm the row exists, then refine the filter
 ```
 
 ## Failure modes
 
 - **`HTTP 400 context length exceeded`** — file is bigger than the provider's
-  context. Lower `--max-context-pct-scout` or split the file. Use
-  `--live-context` to query the real cap.
+  context. Lower `--max_context_pct_scout` or split the file. Use
+  `--live_context` to query the real cap.
 - **`scout failed after N attempts`** — every retry hit the same error. The
   error message is recorded in `mass_scout_skipped` for post-mortem.
 - **Smoke-test failure** — by default the scout runs the first 5 files
@@ -67,9 +67,9 @@ Something went wrong with mass_scout. Where?
 
 ## Resume
 
-Re-running scout with the same `--job-id` skips files that already have a
-result row. Combined with the scout cap + skipped-file logging, you can
-iteratively fix oversize files (split them, reduce them) and re-run until
-every eligible file is scouted.
+Re-running `mass-scout` with the same `--job_id` skips files that already
+have a result row. Combined with the scout cap + skipped-file logging, you
+can iteratively fix oversize files (split them, reduce them) and re-run
+until every eligible file is scouted.
 
-Pass `--no-resume` to force-rescout (overwrites previous results).
+Pass `--no_resume` to force-rescout (overwrites previous results).
