@@ -38,6 +38,10 @@ import {
 } from "./model-reconcile.js";
 import { formatSuccessBanner } from "./cli-banner.js";
 import { boot, dispatchCallTool } from "./index.js";
+import {
+  parseFlags,
+  injectMassScoutFreeModel,
+} from "./cli-mass-scout-free.js";
 import { writeFileSync, existsSync, statSync, unlinkSync } from "node:fs";
 import { resolve as resolvePath, isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -67,31 +71,6 @@ function infoErr(msg: string): void {
 function successBanner(tool: string, resultText: string): void {
   const line = formatSuccessBanner(tool, resultText);
   if (line) infoErr(line);
-}
-
-/** Parse --key value pairs from argv into a Record */
-function parseFlags(args: string[]): Record<string, string> {
-  const flags: Record<string, string> = {};
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg.startsWith("--")) {
-      const eqIdx = arg.indexOf("=");
-      if (eqIdx !== -1) {
-        // --key=value syntax
-        flags[arg.slice(2, eqIdx)] = arg.slice(eqIdx + 1);
-      } else {
-        const key = arg.slice(2);
-        const next = args[i + 1];
-        if (next !== undefined && !next.startsWith("--")) {
-          flags[key] = next;
-          i++;
-        } else {
-          flags[key] = "true";
-        }
-      }
-    }
-  }
-  return flags;
 }
 
 // ── Commands ─────────────────────────────────────────────────────────
@@ -931,7 +910,8 @@ async function main(): Promise<void> {
   // (that lets the function be unit-tested cleanly).
   if (args[0] === "mass-scout") {
     const { runMassScoutCli } = await import("./mass_scouting/cli.js");
-    const result = await runMassScoutCli(args.slice(1));
+    const scoutArgv = await injectMassScoutFreeModel(args.slice(1));
+    const result = await runMassScoutCli(scoutArgv);
     if (result.stdout) process.stdout.write(result.stdout);
     if (result.stderr) process.stderr.write(result.stderr);
     process.exit(result.exitCode);
@@ -944,7 +924,11 @@ async function main(): Promise<void> {
   // mass_scout pipeline — TRDD §2).
   if (args[0] === "security-scan") {
     const { runMassScoutCli } = await import("./mass_scouting/cli.js");
-    const result = await runMassScoutCli(["security-scan", ...args.slice(1)]);
+    const scoutArgv = await injectMassScoutFreeModel([
+      "security-scan",
+      ...args.slice(1),
+    ]);
+    const result = await runMassScoutCli(scoutArgv);
     if (result.stdout) process.stdout.write(result.stdout);
     if (result.stderr) process.stderr.write(result.stderr);
     process.exit(result.exitCode);

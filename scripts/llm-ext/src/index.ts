@@ -951,6 +951,34 @@ async function ensureAutoFreeDecided(): Promise<void> {
   }
 }
 
+/**
+ * The mass-scouting pre-flight (TRDD-542bdbef Phase 2 / TRDD-W9DK4L3N): decide
+ * whether auto-free should engage, then return the ':free' model to substitute
+ * for `requestedModel` — or `undefined` to leave the caller's choice untouched
+ * (free mode inactive, or the caller already asked for a ':free' model).
+ *
+ * Extracted out of `dispatchCallToolInner`'s MASS_SCOUT_TOOL_NAMES branch so it
+ * is the ONE place this decision is made, callable by BOTH runtime entry
+ * points — the supported `llm-ext` catalog dispatch below, AND the legacy
+ * `dist/cli.js` (`src/cli.ts`), which calls `runMassScoutCli` directly and
+ * would otherwise never consult it (TRDD-W9DK4L3N: verified zero hits for
+ * this decision anywhere under `mass_scouting/` or `cli.ts` before this
+ * export existed — a user on the legacy entry point could be billed in a
+ * situation where the supported entry point would already have switched to
+ * free models). A second, copied implementation at the legacy call site is
+ * exactly the kind of duplication that silently rots when this logic changes.
+ */
+export async function resolveMassScoutFreeModelOverride(
+  requestedModel: string,
+): Promise<string | undefined> {
+  await ensureAutoFreeDecided();
+  return resolveSubsystemFreeModel(
+    isFreeModeActive(),
+    activeFreePool(),
+    requestedModel,
+  );
+}
+
 /** Invalidate the cached balance so the next check hits the API fresh. */
 function invalidateBalanceCache(): void {
   cachedBalanceUsd = null;
@@ -2704,12 +2732,7 @@ async function dispatchCallToolInner(
       // fixes a latent gap: security_scan never self-selected a free model even
       // under an explicit free_only profile.
       const scoutArgs = { ...((args ?? {}) as Record<string, unknown>) };
-      await ensureAutoFreeDecided();
-      const freeActive = isFreeModeActive();
-      const freePool = activeFreePool();
-      const inject = resolveSubsystemFreeModel(
-        freeActive,
-        freePool,
+      const inject = await resolveMassScoutFreeModelOverride(
         typeof scoutArgs.model === "string" ? scoutArgs.model : "",
       );
       if (inject) {

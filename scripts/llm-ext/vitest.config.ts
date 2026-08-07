@@ -66,6 +66,10 @@ export default defineConfig({
       'src/provider-error-sanitize.test.ts',
       // CLI success-banner helpers — pure path-pick + banner format (TRDD-54f508a4 Issue 4).
       'src/cli.banner.test.ts',
+      // Legacy dist/cli.js mass-scout/security-scan free-mode pre-flight — proves
+      // the legacy entry point consults the SAME auto-free decision the supported
+      // llm-ext catalog dispatch does (TRDD-W9DK4L3N).
+      'src/cli-mass-scout-free.test.ts',
       'src/mass_scouting/fieldset.test.ts',
       'src/mass_scouting/shorthand.test.ts',
       'src/mass_scouting/registry.test.ts',
@@ -273,10 +277,11 @@ export default defineConfig({
       'src/cluster/phase2_verify.test.ts',
       'src/cluster/phase3_canonical.test.ts',
       // session-summary P1 reader/pruner + P2 turn-boundary chunker + P3 model
-      // selection (TRDD-T4MZ8YQR).
+      // selection + P4 map-reduce driver (TRDD-T4MZ8YQR).
       'src/session_summary/transcript.test.ts',
       'src/session_summary/chunker.test.ts',
       'src/session_summary/model-select.test.ts',
+      'src/session_summary/driver.test.ts',
     ],
   },
 });

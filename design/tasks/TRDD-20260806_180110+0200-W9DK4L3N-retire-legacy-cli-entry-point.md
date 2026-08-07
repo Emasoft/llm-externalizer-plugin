@@ -1,10 +1,10 @@
 ---
 trdd-id: W9DK4L3N
 title: Retire the legacy dist-cli entry point so llm-ext is the only runtime surface
-column: planned
+column: human_review
 approval-tier: 3
 created: 2026-08-06T18:01:10+0200
-updated: 2026-08-07T15:20:00+0200
+updated: 2026-08-07T18:50:00+0200
 scope-approved: option-A-only
 current-owner: claude-llm-externalizer
 assignee: null
@@ -64,6 +64,26 @@ TRDD-8d8d33c8, and it is a symptom, not the disease.
 
 So once `profile` is ported, the legacy bundle carries **zero unique function** and exists only
 to behave differently from the supported surface.
+
+## ⏵ OPTION A DONE 2026-08-07 — option B still NOT approved
+
+`src/cli.ts` now consults the supported path's own pre-flight
+(`resolveMassScoutFreeModelOverride`, `index.ts:971`) through a new side-effect-free module
+`src/cli-mass-scout-free.ts`, instead of carrying its own model-resolution logic. `parseFlags`
+was deduplicated out of `cli.ts` into that module rather than left in two places.
+
+Only the six model-aware / spend-capable subcommands are intercepted
+(`register`, `estimate`, `scout`, `propose-fieldset`, `chain`, `security-scan`); everything else
+returns argv byte-for-byte, so the read-only subcommands keep their zero-network-call behaviour.
+`security-scan` needed a different injection point because its model lives inside the
+`--input-json` payload rather than in a flag.
+
+Verified: suite 1795 passed / 0 failed, `tsc --noEmit` clean, lint clean, `npm run build` green,
+and the fix confirmed present in the rebuilt `dist/cli.js`. Closes TRDD-8d8d33c8.
+
+**`package.json` was not touched — `bin` is still `{"llm-externalizer": "dist/cli.js"}`.**
+Option B stays unapproved; it is a deliberate breaking change for a future major, not a
+side effect of a bugfix.
 
 ## Options
 

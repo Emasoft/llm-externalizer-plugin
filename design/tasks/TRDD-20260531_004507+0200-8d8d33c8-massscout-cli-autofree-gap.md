@@ -1,12 +1,32 @@
 ---
 trdd-id: 8d8d33c8-7286-4cef-9962-d33ec6633b65
 title: Standalone CLI bundle (dist/cli.js) misses auto-free-on-low-balance for mass_scout + security_scan
-column: todo
+column: complete
 created: 2026-05-31T00:45:07+0200
-updated: 2026-08-06T17:35:00+0200
+updated: 2026-08-07T18:50:00+0200
+superseded-by: TRDD-W9DK4L3N
 ---
 
 # TRDD-8d8d33c8 — Standalone CLI bundle misses auto-free-on-low-balance
+
+## ⏵ CLOSED 2026-08-07 — fixed by TRDD-W9DK4L3N option A
+
+Not patched in place. The gap was a symptom of two entry points with independent dispatch, so it
+was closed at the cause: `src/cli.ts` now consults the SAME exported pre-flight the supported
+path uses (`resolveMassScoutFreeModelOverride`, `index.ts:971`) via `injectMassScoutFreeModel`
+(`cli.ts:913,927`) before forwarding to `runMassScoutCli`. No second copy of the balance /
+engagement logic exists, which is what would have rotted.
+
+Verified, not assumed: the fix is present in the built `dist/cli.js` (the shipped legacy bundle,
+5 occurrences) after `npm run build` — a source-only change would have left the published binary
+untouched. Tests cover the cost-safety case directly ("overrides an explicit paid `--model` when
+the resolver engages free mode") and guard the read-only subcommands against gaining a network
+call ("never consults the resolver (zero network calls) for a non-model sub-command").
+
+Note for anyone re-checking this: grepping for `ensureAutoFreeDecided` / `autoFreeEngaged` on the
+legacy path still returns nothing, and that is CORRECT — the legacy path delegates the decision
+rather than re-implementing it. Those symbol names were the original evidence of absence; they
+are not the name of the shared resolver.
 
 **Filename:** `design/tasks/TRDD-20260531_004507+0200-8d8d33c8-massscout-cli-autofree-gap.md`
 **Tracked in:** `Emasoft/llm-externalizer-plugin` (this repo)
