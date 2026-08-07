@@ -1,9 +1,9 @@
 ---
 trdd-id: T4MZ8YQR
 title: New command — compaction-style summary of a Claude Code session from its JSONL transcript
-column: todo
+column: human_review
 created: 2026-08-06T17:52:00+0200
-updated: 2026-08-06T17:52:00+0200
+updated: 2026-08-07T19:25:00+0200
 current-owner: claude-llm-externalizer
 assignee: null
 priority: 2
