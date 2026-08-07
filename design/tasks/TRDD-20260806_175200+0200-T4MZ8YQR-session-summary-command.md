@@ -79,8 +79,17 @@ whole session from the JSONL transcript of the project session, **using only fre
   `readline`, no `readFileSync`), with a structural test asserting no sync whole-file read and a
   bounded-heap-growth test over a large fixture. `BYTES_PER_TOKEN_ESTIMATE` is one named
   constant, not a scattered `/4`.
-- **P3-P5 HELD** pending the user's ruling on the two assumptions above. Nothing built so far
-  depends on either — the prune level is a parameter and the chunker takes a token budget.
+- **P3 DONE (2026-08-07)** — `session_summary/model-select.ts` + tests. 40 tests pass in the
+  session-summary suite, full repo suite 1775 pass, tsc + lint clean (re-run independently).
+  The **modality filter is now a regression test**, not a note: a fixture containing the
+  free 1,048,576-context `google/lyria-3-*` audio models asserts they are excluded, because a
+  price+context-only filter selects them and the command would fail in a way that looks like a
+  model bug rather than a filter bug. Fail-fast on an empty eligible set names the applied
+  filters and suggests `allowLowerContext`; two tests assert a paid model can never be selected
+  regardless of caller or profile. Tests are fixture-injected — no network.
+- **P4-P5 still HELD** pending the user's ruling. Nothing built so far depends on either
+  assumption: the prune level is a parameter, the chunker takes a token budget, and the context
+  floor is an argument with the 1M default the request asked for.
 
 ### Phases (each lands with tests; no phase exceeds 5 files)
 
