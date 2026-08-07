@@ -1,10 +1,11 @@
 ---
 trdd-id: W9DK4L3N
 title: Retire the legacy dist-cli entry point so llm-ext is the only runtime surface
-column: proposal
+column: planned
 approval-tier: 3
 created: 2026-08-06T18:01:10+0200
-updated: 2026-08-06T18:01:10+0200
+updated: 2026-08-07T15:20:00+0200
+scope-approved: option-A-only
 current-owner: claude-llm-externalizer
 assignee: null
 priority: 2
@@ -94,3 +95,16 @@ one-line manifest change once A has proven stable.
 - [ ] (option B only) `package.json` bin re-pointed, CHANGELOG records the change as breaking
 
 ## Approval log
+
+- 2026-08-07T15:20:00+0200 — **APPROVED, OPTION A ONLY** (tier 3). The owner was presented with
+  A / B / C and the trade, and delegated the decision verbatim: *"do as you think is better."*
+  That is a real human decision on a tier-3 item, so it authorizes the non-breaking half.
+  **Option B (re-pointing the published `bin`) is NOT approved and is NOT in scope.** Rationale
+  for the split: A removes an active billing exposure — the published entry point can spend where
+  the supported one would have switched to free models — and is behaviour-only, reversible, and
+  invisible to anyone's install. B renames a published binary, which is irreversible for existing
+  consumers and carries no urgency once A has removed the behavioural difference. Reopen B as its
+  own decision at the next major, with the CHANGELOG breaking note it deserves.
+- Scope of this approval, concretely: unify the dispatch path so `dist/cli.js` holds no
+  independent command logic, so BOTH entry points inherit auto-free-on-low-balance. Closes
+  TRDD-8d8d33c8. `package.json` `bin` is untouched.
