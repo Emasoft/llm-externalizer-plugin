@@ -86,6 +86,7 @@ function resolveCommand(input: string, tools: ToolDef[]): ToolDef | undefined {
 const QUIET_TOOLS = new Set([
   "discover",
   "get_settings",
+  "profile",
   "reset",
   "or_model_info",
   "or_model_info_json",

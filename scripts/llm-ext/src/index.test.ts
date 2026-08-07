@@ -69,6 +69,7 @@ describe('tool catalog', () => {
       'compare_files',
       'discover',
       'get_settings',
+      'profile',
       'or_model_info',
       'or_model_info_json',
       'or_model_info_table',

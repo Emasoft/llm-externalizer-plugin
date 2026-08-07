@@ -11,6 +11,9 @@ export default defineConfig({
     // Run live tests explicitly: npx vitest run src/live.test.ts
     include: [
       'src/index.test.ts',
+      // 'profile' command (TRDD-K3PW7Q2M) — read-only list/show against the
+      // real compiled CLI + a throwaway multi-profile settings.yaml.
+      'src/profile.test.ts',
       // Launcher → server boot handoff — spawns the real launcher and completes
       // an MCP initialize; catches the -32001 regression that unit-level imports
       // (which never go through launcher.mjs) structurally cannot see.
@@ -269,9 +272,11 @@ export default defineConfig({
       'src/diff-scope.test.ts',
       'src/cluster/phase2_verify.test.ts',
       'src/cluster/phase3_canonical.test.ts',
-      // session-summary P1 reader/pruner + P2 turn-boundary chunker (TRDD-T4MZ8YQR).
+      // session-summary P1 reader/pruner + P2 turn-boundary chunker + P3 model
+      // selection (TRDD-T4MZ8YQR).
       'src/session_summary/transcript.test.ts',
       'src/session_summary/chunker.test.ts',
+      'src/session_summary/model-select.test.ts',
     ],
   },
 });

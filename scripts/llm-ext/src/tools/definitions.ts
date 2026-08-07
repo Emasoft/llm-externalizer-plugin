@@ -651,6 +651,28 @@ export function buildTools(limitsText: string) {
         "your editor, then call the 'reset' tool (or restart Claude Code) to reload.",
       inputSchema: { type: "object" as const, properties: {} },
     },
+    {
+      name: "profile",
+      description:
+        "Read-only view of the profiles defined in settings.yaml. With no arguments, lists " +
+        "every profile (name, whether it is active, mode, backend, model(s), and whether " +
+        "free_only is set). With `show`, prints the full resolved detail for that one " +
+        "profile (concrete model, protocol, timeout, context window, free pool, per-tool " +
+        "overrides). This tool cannot add, switch, edit, or remove a profile — profile " +
+        "configuration is user-only. Edit ~/.llm-externalizer/settings.yaml manually to " +
+        "change the active profile or a profile's fields, then call 'reset' to reload.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          show: {
+            type: "string",
+            description:
+              "Name of one profile to show full resolved detail for. Omit to list every " +
+              "profile instead.",
+          },
+        },
+      },
+    },
     // ── Batch Operations ────────────────────────────────────────────────
     {
       name: "batch_check",

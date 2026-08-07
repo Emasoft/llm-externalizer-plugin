@@ -1929,6 +1929,7 @@ const RECONCILE_SKIP_TOOLS = new Set([
   "discover",
   "reset",
   "get_settings",
+  "profile",
   "or_model_info",
   "or_model_info_json",
   "or_model_info_table",
@@ -2667,7 +2668,8 @@ async function dispatchCallToolInner(
       !settingsValid &&
       name !== "discover" &&
       name !== "reset" &&
-      name !== "get_settings"
+      name !== "get_settings" &&
+      name !== "profile"
     ) {
       return {
         content: [
@@ -3639,6 +3641,111 @@ async function dispatchCallToolInner(
             isError: true,
           };
         }
+      }
+
+      case "profile": {
+        // Read-only. Adding/switching/removing a profile is user-only (hand-edit
+        // settings.yaml + 'reset') — see the tool description. This case only
+        // ever reads activeSettings.profiles / activeSettings.active; it never
+        // writes settings.yaml.
+        const profileNames = Object.keys(activeSettings.profiles);
+        if (profileNames.length === 0) {
+          // Fail fast: an empty profiles map is a configuration error, not "no
+          // profiles yet" — ensureSettingsExist() always seeds 4 defaults on
+          // first run, so an empty map here means the file was hand-edited into
+          // an invalid state. Say so instead of silently printing an empty list.
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `No profiles defined in ${SETTINGS_FILE}.\n` +
+                  `Settings file is present but its 'profiles' map is empty — this is a ` +
+                  `configuration error (ensureSettingsExist always seeds defaults on first ` +
+                  `run). Edit ${SETTINGS_FILE} manually to add at least one profile, then ` +
+                  `call 'reset'.`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const showName = typeof args?.show === "string" ? args.show : undefined;
+
+        if (showName !== undefined) {
+          const profile = activeSettings.profiles[showName];
+          if (!profile) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    `Unknown profile '${showName}'. Available profiles: ` +
+                    `${profileNames.join(", ")}`,
+                },
+              ],
+              isError: true,
+            };
+          }
+          let resolved: ResolvedProfile;
+          try {
+            resolved = resolveProfile(showName, profile);
+          } catch (err) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Failed to resolve profile '${showName}': ${err instanceof Error ? err.message : String(err)}`,
+                },
+              ],
+              isError: true,
+            };
+          }
+          const lines: string[] = [
+            `Profile: ${resolved.name}${resolved.name === activeSettings.active ? " (ACTIVE)" : ""}`,
+            `Mode: ${resolved.mode}`,
+            `Backend: ${profile.api} (${resolved.protocol})`,
+            `URL: ${resolved.url}`,
+          ];
+          if (resolved.freeOnly) {
+            lines.push(`Free only: true`);
+            lines.push(`Free pool: ${resolved.freeModels.join(", ") || "(empty)"}`);
+          } else {
+            lines.push(`Model: ${resolved.model}`);
+            if (resolved.secondModel) lines.push(`Second model: ${resolved.secondModel}`);
+            if (resolved.thirdModel) lines.push(`Third model: ${resolved.thirdModel}`);
+          }
+          if (Object.keys(resolved.toolModels).length > 0) {
+            lines.push(
+              `Per-tool overrides: ${Object.entries(resolved.toolModels)
+                .map(([tool, m]) => `${tool}=${m}`)
+                .join(", ")}`,
+            );
+          }
+          lines.push(`Timeout: ${resolved.timeout}s`);
+          lines.push(`Context window: ${resolved.contextWindow.toLocaleString()} tokens`);
+          lines.push(
+            `Auth: ${resolved.authToken ? `set (${resolved.authToken.length} chars)` : "NOT SET"}`,
+          );
+          return { content: [{ type: "text", text: lines.join("\n") }] };
+        }
+
+        // Default: list every profile, one line each.
+        const lines = [`Settings file: ${SETTINGS_FILE}`, ""];
+        for (const profileName of profileNames) {
+          const profile = activeSettings.profiles[profileName];
+          const marker = profileName === activeSettings.active ? "* " : "  ";
+          const modelSummary = profile.free_only
+            ? `free_only (${(profile.free_models ?? []).length} models)`
+            : [profile.model, profile.second_model, profile.third_model]
+                .filter(Boolean)
+                .join(", ");
+          lines.push(
+            `${marker}${profileName} — ${profile.mode} / ${profile.api} — ${modelSummary}`,
+          );
+        }
+        lines.push("", "* = active profile. Use --show <name> for full resolved detail.");
+        return { content: [{ type: "text", text: lines.join("\n") }] };
       }
 
       // ── Batch Operations ──────────────────────────────────────────────

@@ -1,9 +1,9 @@
 ---
 trdd-id: K3PW7Q2M
 title: Port the profile surface to the llm-ext CLI catalog
-column: todo
+column: human_review
 created: 2026-08-06T17:35:00+0200
-updated: 2026-08-06T17:35:00+0200
+updated: 2026-08-07T12:10:00+0200
 current-owner: claude-llm-externalizer
 task-type: feature
 priority: 3
@@ -34,9 +34,29 @@ test-requirements: [unit, typecheck, lint]
   Then cover it in the dogfood harness and mention it in the config skill.
 - **Do NOT** re-implement profile resolution; the logic already exists and is shared.
 
+## DONE 2026-08-07 — shipped READ-ONLY, deliberately
+
+`profile` lists every profile in `settings.yaml` (starring the active one) and
+`--show <name>` prints one resolved in full.
+
+**`switch` was NOT implemented, and that is the decision, not an omission.** Configuration in
+this project is user-only — `settings.yaml` is hand-edited and there is deliberately no
+`set-settings` / `change-model` command. A `profile --switch` would be the same write surface
+under a different name, so it would contradict a standing design rule to satisfy one acceptance
+box. The box is amended below rather than silently ticked.
+
+Verified by re-running, not by report: `llm-ext --help` lists `profile`; `./bin/llm-ext profile`
+runs and prints all 5 profiles with the active one starred; full suite 1775 passed / 0 failed;
+`tsc --noEmit` and lint both exit 0.
+
+Side note surfaced by the live run: the active profile is named `remote-ensemble-geminigrok` but
+resolves to three deepseek models — a stale NAME, already recorded in the archived rescan card.
+Cosmetic; not fixed here because renaming a profile edits the user's settings.
+
 ## Acceptance
 
-- [ ] `llm-ext profile` appears in `llm-ext --help` and works (list, show active, switch)
-- [ ] unit tests + typecheck + lint clean
-- [ ] dogfood harness exercises it
-- [ ] config skill / README mention the command
+- [x] `llm-ext profile` appears in `llm-ext --help` and works (list + `--show <name>`)
+- [x] ~~switch~~ — amended: out of scope, contradicts the user-only-configuration rule (see above)
+- [x] unit tests + typecheck + lint clean
+- [x] README mentions the command (and its command-count guard updated: 42→43, 19→20 core)
+- [ ] dogfood harness exercises it — pending; the harness validates surfaces generically today
