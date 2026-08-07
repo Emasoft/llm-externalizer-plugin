@@ -254080,6 +254080,7 @@ var RECONCILE_SKIP_TOOLS = /* @__PURE__ */ new Set([
   "discover",
   "reset",
   "get_settings",
+  "profile",
   "or_model_info",
   "or_model_info_json",
   "or_model_info_table",
@@ -254503,7 +254504,7 @@ async function dispatchCallToolInner(name, rawArgs, opts) {
   const args = rawArgs;
   const onProgress = makeProgressFn(opts.progress === true);
   try {
-    if (!settingsValid && name !== "discover" && name !== "reset" && name !== "get_settings") {
+    if (!settingsValid && name !== "discover" && name !== "reset" && name !== "get_settings" && name !== "profile") {
       return {
         content: [
           {
@@ -255257,6 +255258,86 @@ Profiles: ${profileNames.join(", ")}`);
               isError: true
             };
           }
+        }
+        case "profile": {
+          const profileNames = Object.keys(activeSettings.profiles);
+          if (profileNames.length === 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `No profiles defined in ${SETTINGS_FILE}.
+Settings file is present but its 'profiles' map is empty \u2014 this is a configuration error (ensureSettingsExist always seeds defaults on first run). Edit ${SETTINGS_FILE} manually to add at least one profile, then call 'reset'.`
+                }
+              ],
+              isError: true
+            };
+          }
+          const showName = typeof args?.show === "string" ? args.show : void 0;
+          if (showName !== void 0) {
+            const profile = activeSettings.profiles[showName];
+            if (!profile) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `Unknown profile '${showName}'. Available profiles: ${profileNames.join(", ")}`
+                  }
+                ],
+                isError: true
+              };
+            }
+            let resolved;
+            try {
+              resolved = resolveProfile(showName, profile);
+            } catch (err3) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `Failed to resolve profile '${showName}': ${err3 instanceof Error ? err3.message : String(err3)}`
+                  }
+                ],
+                isError: true
+              };
+            }
+            const lines2 = [
+              `Profile: ${resolved.name}${resolved.name === activeSettings.active ? " (ACTIVE)" : ""}`,
+              `Mode: ${resolved.mode}`,
+              `Backend: ${profile.api} (${resolved.protocol})`,
+              `URL: ${resolved.url}`
+            ];
+            if (resolved.freeOnly) {
+              lines2.push(`Free only: true`);
+              lines2.push(`Free pool: ${resolved.freeModels.join(", ") || "(empty)"}`);
+            } else {
+              lines2.push(`Model: ${resolved.model}`);
+              if (resolved.secondModel) lines2.push(`Second model: ${resolved.secondModel}`);
+              if (resolved.thirdModel) lines2.push(`Third model: ${resolved.thirdModel}`);
+            }
+            if (Object.keys(resolved.toolModels).length > 0) {
+              lines2.push(
+                `Per-tool overrides: ${Object.entries(resolved.toolModels).map(([tool, m]) => `${tool}=${m}`).join(", ")}`
+              );
+            }
+            lines2.push(`Timeout: ${resolved.timeout}s`);
+            lines2.push(`Context window: ${resolved.contextWindow.toLocaleString()} tokens`);
+            lines2.push(
+              `Auth: ${resolved.authToken ? `set (${resolved.authToken.length} chars)` : "NOT SET"}`
+            );
+            return { content: [{ type: "text", text: lines2.join("\n") }] };
+          }
+          const lines = [`Settings file: ${SETTINGS_FILE}`, ""];
+          for (const profileName of profileNames) {
+            const profile = activeSettings.profiles[profileName];
+            const marker = profileName === activeSettings.active ? "* " : "  ";
+            const modelSummary = profile.free_only ? `free_only (${(profile.free_models ?? []).length} models)` : [profile.model, profile.second_model, profile.third_model].filter(Boolean).join(", ");
+            lines.push(
+              `${marker}${profileName} \u2014 ${profile.mode} / ${profile.api} \u2014 ${modelSummary}`
+            );
+          }
+          lines.push("", "* = active profile. Use --show <name> for full resolved detail.");
+          return { content: [{ type: "text", text: lines.join("\n") }] };
         }
         // ── Batch Operations ──────────────────────────────────────────────
         case "batch_check": {
@@ -257340,6 +257421,19 @@ function buildTools(limitsText) {
       description: "Read-only view of settings.yaml. Copies the current settings file to the output directory and returns the copy's path. The MCP cannot write settings \u2014 model & profile changes are user-only. Edit ~/.llm-externalizer/settings.yaml manually in your editor, then call the 'reset' tool (or restart Claude Code) to reload.",
       inputSchema: { type: "object", properties: {} }
     },
+    {
+      name: "profile",
+      description: "Read-only view of the profiles defined in settings.yaml. With no arguments, lists every profile (name, whether it is active, mode, backend, model(s), and whether free_only is set). With `show`, prints the full resolved detail for that one profile (concrete model, protocol, timeout, context window, free pool, per-tool overrides). This tool cannot add, switch, edit, or remove a profile \u2014 profile configuration is user-only. Edit ~/.llm-externalizer/settings.yaml manually to change the active profile or a profile's fields, then call 'reset' to reload.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          show: {
+            type: "string",
+            description: "Name of one profile to show full resolved detail for. Omit to list every profile instead."
+          }
+        }
+      }
+    },
     // ── Batch Operations ────────────────────────────────────────────────
     {
       name: "batch_check",
@@ -257731,6 +257825,7 @@ function resolveCommand(input, tools) {
 var QUIET_TOOLS = /* @__PURE__ */ new Set([
   "discover",
   "get_settings",
+  "profile",
   "reset",
   "or_model_info",
   "or_model_info_json",
