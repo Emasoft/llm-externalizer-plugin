@@ -25425,7 +25425,7 @@ ${lanes.join("\n")}
               return process.memoryUsage().heapUsed;
             },
             getFileSize(path) {
-              const stat = statSync14(path);
+              const stat = statSync16(path);
               if (stat == null ? void 0 : stat.isFile()) {
                 return stat.size;
               }
@@ -25469,7 +25469,7 @@ ${lanes.join("\n")}
             }
           };
           return nodeSystem;
-          function statSync14(path) {
+          function statSync16(path) {
             try {
               return _fs.statSync(path, statSyncOptions);
             } catch {
@@ -25528,7 +25528,7 @@ ${lanes.join("\n")}
               activeSession.post("Profiler.stop", (err3, { profile }) => {
                 var _a2;
                 if (!err3) {
-                  if ((_a2 = statSync14(profilePath)) == null ? void 0 : _a2.isDirectory()) {
+                  if ((_a2 = statSync16(profilePath)) == null ? void 0 : _a2.isDirectory()) {
                     profilePath = _path.join(profilePath, `${(/* @__PURE__ */ new Date()).toISOString().replace(/:/g, "-")}+P${process.pid}.cpuprofile`);
                   }
                   try {
@@ -25648,7 +25648,7 @@ ${lanes.join("\n")}
                 let stat;
                 if (typeof dirent === "string" || dirent.isSymbolicLink()) {
                   const name = combinePaths(path, entry);
-                  stat = statSync14(name);
+                  stat = statSync16(name);
                   if (!stat) {
                     continue;
                   }
@@ -25672,7 +25672,7 @@ ${lanes.join("\n")}
             return matchFiles(path, extensions, excludes, includes, useCaseSensitiveFileNames2, process.cwd(), depth, getAccessibleFileSystemEntries, realpath);
           }
           function fileSystemEntryExists(path, entryKind) {
-            const stat = statSync14(path);
+            const stat = statSync16(path);
             if (!stat) {
               return false;
             }
@@ -25714,7 +25714,7 @@ ${lanes.join("\n")}
           }
           function getModifiedTime3(path) {
             var _a2;
-            return (_a2 = statSync14(path)) == null ? void 0 : _a2.mtime;
+            return (_a2 = statSync16(path)) == null ? void 0 : _a2.mtime;
           }
           function setModifiedTime(path, time3) {
             try {
@@ -140500,7 +140500,7 @@ ${lanes.join("\n")}
           }
         }
         function createImportCallExpressionAMD(arg, containsLexicalThis) {
-          const resolve17 = factory2.createUniqueName("resolve");
+          const resolve19 = factory2.createUniqueName("resolve");
           const reject = factory2.createUniqueName("reject");
           const parameters = [
             factory2.createParameterDeclaration(
@@ -140509,7 +140509,7 @@ ${lanes.join("\n")}
               /*dotDotDotToken*/
               void 0,
               /*name*/
-              resolve17
+              resolve19
             ),
             factory2.createParameterDeclaration(
               /*modifiers*/
@@ -140526,7 +140526,7 @@ ${lanes.join("\n")}
                 factory2.createIdentifier("require"),
                 /*typeArguments*/
                 void 0,
-                [factory2.createArrayLiteralExpression([arg || factory2.createOmittedExpression()]), resolve17, reject]
+                [factory2.createArrayLiteralExpression([arg || factory2.createOmittedExpression()]), resolve19, reject]
               )
             )
           ]);
@@ -227244,8 +227244,8 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
         installPackage(options) {
           this.packageInstallId++;
           const request = { kind: "installPackage", ...options, id: this.packageInstallId };
-          const promise2 = new Promise((resolve17, reject) => {
-            (this.packageInstalledPromise ?? (this.packageInstalledPromise = /* @__PURE__ */ new Map())).set(this.packageInstallId, { resolve: resolve17, reject });
+          const promise2 = new Promise((resolve19, reject) => {
+            (this.packageInstalledPromise ?? (this.packageInstalledPromise = /* @__PURE__ */ new Map())).set(this.packageInstallId, { resolve: resolve19, reject });
           });
           this.installer.send(request);
           return promise2;
@@ -243936,17 +243936,17 @@ function formatSuccessBanner(tool, resultText) {
 // src/index.ts
 var import_yaml4 = __toESM(require_dist(), 1);
 import {
-  readFileSync as readFileSync30,
-  writeFileSync as writeFileSync22,
-  mkdirSync as mkdirSync24,
-  existsSync as existsSync24,
-  renameSync as renameSync14,
-  statSync as statSync12,
+  readFileSync as readFileSync31,
+  writeFileSync as writeFileSync23,
+  mkdirSync as mkdirSync25,
+  existsSync as existsSync25,
+  renameSync as renameSync15,
+  statSync as statSync14,
   appendFileSync as appendFileSync6,
   unlinkSync as unlinkSync2
 } from "node:fs";
 import { spawnSync as spawnSync4 } from "node:child_process";
-import { extname as extname5, join as join31, basename as basename6, dirname as dirname13, resolve as resolve16, isAbsolute as isAbsolute5 } from "node:path";
+import { extname as extname5, join as join32, basename as basename6, dirname as dirname14, resolve as resolve18, isAbsolute as isAbsolute5 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 
 // src/review-plan.ts
@@ -252518,6 +252518,652 @@ function makePreflightHook(profileFingerprint, llmCall, opts = {}) {
   };
 }
 
+// src/session_summary/driver.ts
+init_config();
+init_free_rotation();
+import { statSync as statSync12, readFileSync as readFileSync29, writeFileSync as writeFileSync21, mkdirSync as mkdirSync23, renameSync as renameSync13 } from "node:fs";
+import { dirname as dirname12, resolve as resolve15 } from "node:path";
+
+// src/session_summary/transcript.ts
+import { createReadStream as createReadStream2 } from "node:fs";
+import { createInterface as createInterface2 } from "node:readline";
+var DEFAULT_MODERATE_TRUNCATE_LINES = 20;
+var ARG_SUMMARY_MAX_LEN = 160;
+var ARG_VALUE_TRUNCATE_AT = 80;
+async function readTranscript(filePath, options = {}) {
+  const pruneLevel = options.pruneLevel ?? "none";
+  const truncateLines = options.moderateTruncateLines ?? DEFAULT_MODERATE_TRUNCATE_LINES;
+  const turns = [];
+  let linesRead = 0;
+  let linesSkippedMalformed = 0;
+  let bytesIn = 0;
+  let bytesOut = 0;
+  const stream = createReadStream2(filePath, { encoding: "utf8" });
+  const rl = createInterface2({ input: stream, crlfDelay: Infinity });
+  for await (const raw of rl) {
+    if (raw.trim() === "") continue;
+    linesRead++;
+    bytesIn += Buffer.byteLength(raw, "utf8");
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      linesSkippedMalformed++;
+      continue;
+    }
+    const turn = extractTurn(parsed, pruneLevel, truncateLines);
+    if (turn === null) continue;
+    turns.push(turn);
+    bytesOut += Buffer.byteLength(JSON.stringify(turn), "utf8");
+  }
+  const pruneRatio = bytesIn > 0 ? bytesOut / bytesIn : 0;
+  return {
+    turns,
+    stats: {
+      linesRead,
+      linesSkippedMalformed,
+      turnsEmitted: turns.length,
+      bytesIn,
+      bytesOut,
+      pruneRatio
+    }
+  };
+}
+function extractTurn(parsed, pruneLevel, truncateLines) {
+  if (parsed === null || typeof parsed !== "object") return null;
+  const d = parsed;
+  if (d.type === "user" || d.type === "assistant") {
+    return extractMessageTurn(d, d.type, pruneLevel, truncateLines);
+  }
+  if (d.type === "system") {
+    return extractSystemTurn(d);
+  }
+  return null;
+}
+function extractMessageTurn(d, role, pruneLevel, truncateLines) {
+  const message = d.message;
+  if (message === null || typeof message !== "object") return null;
+  const content = message.content;
+  const textParts = [];
+  const toolCalls = [];
+  const errors = [];
+  if (typeof content === "string") {
+    if (content.trim() !== "") textParts.push(content);
+  } else if (Array.isArray(content)) {
+    for (const block of content) {
+      extractBlock(block, pruneLevel, truncateLines, textParts, toolCalls, errors);
+    }
+  }
+  if (textParts.length === 0 && toolCalls.length === 0 && errors.length === 0) {
+    return null;
+  }
+  return {
+    role,
+    timestamp: typeof d.timestamp === "string" ? d.timestamp : null,
+    uuid: typeof d.uuid === "string" ? d.uuid : null,
+    parentUuid: typeof d.parentUuid === "string" ? d.parentUuid : null,
+    text: textParts.join("\n"),
+    toolCalls,
+    errors
+  };
+}
+function extractBlock(block, pruneLevel, truncateLines, textParts, toolCalls, errors) {
+  if (block === null || typeof block !== "object") return;
+  const b = block;
+  if (b.type === "text") {
+    if (typeof b.text === "string" && b.text.trim() !== "") textParts.push(b.text);
+    return;
+  }
+  if (b.type === "thinking") {
+    if (pruneLevel === "aggressive") return;
+    if (typeof b.thinking === "string" && b.thinking.trim() !== "") {
+      textParts.push(`[thinking] ${b.thinking}`);
+    }
+    return;
+  }
+  if (b.type === "tool_use") {
+    const name = typeof b.name === "string" ? b.name : "unknown_tool";
+    toolCalls.push({ name, argSummary: summarizeToolInput(b.input) });
+    return;
+  }
+  if (b.type === "tool_result") {
+    const resultText = toolResultText(b.content);
+    const isError = b.is_error === true;
+    if (isError) {
+      errors.push(
+        resultText.trim() !== "" ? resultText : `(tool_use_id ${String(b.tool_use_id ?? "unknown")} reported an error with no message)`
+      );
+    }
+    if (pruneLevel === "aggressive") {
+      if (isError) textParts.push(`[tool_error] ${resultText}`);
+      return;
+    }
+    if (pruneLevel === "moderate") {
+      textParts.push(`[tool_result] ${headTailTruncate(resultText, truncateLines)}`);
+      return;
+    }
+    textParts.push(`[tool_result] ${resultText}`);
+    return;
+  }
+}
+function extractSystemTurn(d) {
+  const errors = [];
+  if (d.subtype === "api_error") {
+    const err3 = d.error;
+    if (err3 !== null && typeof err3 === "object") {
+      const msg = err3.message;
+      if (typeof msg === "string" && msg.trim() !== "") errors.push(msg);
+    }
+  }
+  const hookErrors = d.hookErrors;
+  if (Array.isArray(hookErrors)) {
+    for (const e of hookErrors) {
+      if (typeof e === "string" && e.trim() !== "") errors.push(e);
+    }
+  }
+  if (errors.length === 0) return null;
+  return {
+    role: "system",
+    timestamp: typeof d.timestamp === "string" ? d.timestamp : null,
+    uuid: typeof d.uuid === "string" ? d.uuid : null,
+    parentUuid: typeof d.parentUuid === "string" ? d.parentUuid : null,
+    text: "",
+    toolCalls: [],
+    errors
+  };
+}
+function toolResultText(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((item) => {
+      if (item !== null && typeof item === "object" && item.type === "text") {
+        const t = item.text;
+        return typeof t === "string" ? t : "";
+      }
+      return "";
+    }).filter((s) => s !== "").join("\n");
+  }
+  return "";
+}
+function headTailTruncate(text, n) {
+  const lines = text.split("\n");
+  if (lines.length <= n * 2) return text;
+  const head = lines.slice(0, n);
+  const tail = lines.slice(-n);
+  const omitted = lines.length - n * 2;
+  return [...head, `... [${omitted} lines omitted] ...`, ...tail].join("\n");
+}
+function summarizeToolInput(input) {
+  if (input === void 0) return "";
+  if (input === null || typeof input !== "object") {
+    return truncateOneLine(String(input), ARG_SUMMARY_MAX_LEN);
+  }
+  const entries = Object.entries(input).map(([key, value]) => {
+    let rendered;
+    if (typeof value === "string" && value.length > ARG_VALUE_TRUNCATE_AT) {
+      rendered = `"${value.slice(0, ARG_VALUE_TRUNCATE_AT)}\u2026(${value.length} chars)"`;
+    } else {
+      rendered = JSON.stringify(value);
+    }
+    return `${key}=${rendered}`;
+  });
+  return truncateOneLine(entries.join(", "), ARG_SUMMARY_MAX_LEN);
+}
+function truncateOneLine(s, max) {
+  const oneLine = s.replace(/\s+/g, " ").trim();
+  return oneLine.length > max ? `${oneLine.slice(0, max - 1)}\u2026` : oneLine;
+}
+
+// src/session_summary/chunker.ts
+var BYTES_PER_TOKEN_ESTIMATE = 4;
+var DEFAULT_OVERLAP_TURNS = 2;
+function chunkTurns(turns, options) {
+  const maxTokens = options.maxTokens;
+  if (!Number.isFinite(maxTokens) || maxTokens <= 0) {
+    throw new Error(`chunkTurns: maxTokens must be a positive finite number, got ${String(maxTokens)}`);
+  }
+  const overlapTurns = options.overlapTurns ?? DEFAULT_OVERLAP_TURNS;
+  if (!Number.isInteger(overlapTurns) || overlapTurns < 0) {
+    throw new Error(`chunkTurns: overlapTurns must be a non-negative integer, got ${String(overlapTurns)}`);
+  }
+  const expanded = [];
+  for (const turn of turns) {
+    if (estimateTurnTokens(turn) > maxTokens) {
+      expanded.push(...splitOversizedTurn(turn, maxTokens));
+    } else {
+      expanded.push(turn);
+    }
+  }
+  const chunks = [];
+  let current = [];
+  let currentTokens = 0;
+  const flush = () => {
+    if (current.length === 0) return;
+    chunks.push({
+      index: chunks.length,
+      turns: current,
+      estimatedTokens: currentTokens,
+      continuesNext: false,
+      // filled in below once every chunk exists
+      continuesFromPrev: false
+    });
+  };
+  for (const turn of expanded) {
+    const tokens = estimateTurnTokens(turn);
+    if (current.length > 0 && currentTokens + tokens > maxTokens) {
+      flush();
+      const prevTurns = chunks[chunks.length - 1].turns;
+      const overlap = overlapTurns > 0 ? prevTurns.slice(-overlapTurns) : [];
+      current = [...overlap];
+      currentTokens = overlap.reduce((sum, t) => sum + estimateTurnTokens(t), 0);
+    }
+    current.push(turn);
+    currentTokens += tokens;
+  }
+  flush();
+  for (let i = 0; i < chunks.length; i++) {
+    chunks[i].continuesFromPrev = i > 0 && overlapTurns > 0;
+    chunks[i].continuesNext = i < chunks.length - 1 && overlapTurns > 0;
+  }
+  return { chunks, totalTurnsIn: turns.length, totalTurnsOut: expanded.length };
+}
+function estimateTurnTokens(turn) {
+  const toolBytes = turn.toolCalls.reduce((sum, tc) => sum + tc.name.length + tc.argSummary.length, 0);
+  const errorBytes = turn.errors.reduce((sum, e) => sum + Buffer.byteLength(e, "utf8"), 0);
+  const totalBytes = Buffer.byteLength(turn.text, "utf8") + toolBytes + errorBytes;
+  return Math.ceil(totalBytes / BYTES_PER_TOKEN_ESTIMATE);
+}
+function splitOversizedTurn(turn, maxTokens) {
+  const maxBytes = Math.max(1, maxTokens * BYTES_PER_TOKEN_ESTIMATE);
+  const lines = turn.text.split("\n");
+  const pieces = [];
+  let current = [];
+  let currentBytes = 0;
+  for (const line of lines) {
+    const lineBytes = Buffer.byteLength(line, "utf8") + 1;
+    if (currentBytes + lineBytes > maxBytes && current.length > 0) {
+      pieces.push(current.join("\n"));
+      current = [];
+      currentBytes = 0;
+    }
+    current.push(line);
+    currentBytes += lineBytes;
+  }
+  if (current.length > 0 || pieces.length === 0) pieces.push(current.join("\n"));
+  return pieces.map((text, i) => {
+    const marker = pieces.length > 1 ? ` [continued ${i + 1}/${pieces.length}]` : "";
+    return {
+      role: turn.role,
+      timestamp: turn.timestamp,
+      uuid: turn.uuid,
+      parentUuid: turn.parentUuid,
+      text: `${text}${marker}`,
+      toolCalls: i === 0 ? turn.toolCalls : [],
+      errors: i === 0 ? turn.errors : []
+    };
+  });
+}
+
+// src/session_summary/driver.ts
+var PROMPT_OVERHEAD_TOKENS = 2e3;
+function checkpointIdentityMatches(a, b) {
+  return a.transcriptPath === b.transcriptPath && a.transcriptBytes === b.transcriptBytes && a.transcriptMtimeMs === b.transcriptMtimeMs && a.pruneLevel === b.pruneLevel && a.chunkerMaxTokens === b.chunkerMaxTokens && a.chunkerOverlapTurns === b.chunkerOverlapTurns;
+}
+function describeIdentityMismatch(prev, cur) {
+  const diffs = [];
+  if (prev.transcriptPath !== cur.transcriptPath) {
+    diffs.push(`transcript path '${prev.transcriptPath}' != '${cur.transcriptPath}'`);
+  }
+  if (prev.transcriptBytes !== cur.transcriptBytes) {
+    diffs.push(`transcript size ${prev.transcriptBytes}B != ${cur.transcriptBytes}B`);
+  }
+  if (prev.transcriptMtimeMs !== cur.transcriptMtimeMs) {
+    diffs.push(`transcript mtime ${prev.transcriptMtimeMs} != ${cur.transcriptMtimeMs}`);
+  }
+  if (prev.pruneLevel !== cur.pruneLevel) {
+    diffs.push(`prune level '${prev.pruneLevel}' != '${cur.pruneLevel}'`);
+  }
+  if (prev.chunkerMaxTokens !== cur.chunkerMaxTokens) {
+    diffs.push(`chunk token budget ${prev.chunkerMaxTokens} != ${cur.chunkerMaxTokens}`);
+  }
+  if (prev.chunkerOverlapTurns !== cur.chunkerOverlapTurns) {
+    diffs.push(`chunk overlap ${prev.chunkerOverlapTurns} != ${cur.chunkerOverlapTurns}`);
+  }
+  return diffs.join("; ");
+}
+function loadCheckpoint(path, identity) {
+  let raw;
+  try {
+    raw = readFileSync29(path, "utf-8");
+  } catch {
+    return null;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err3) {
+    const msg = err3 instanceof Error ? err3.message : String(err3);
+    throw new Error(
+      `session-summary: checkpoint at ${path} is not valid JSON (${msg}) \u2014 refusing to resume against a corrupt checkpoint. Delete the file to start a fresh run.`,
+      { cause: err3 }
+    );
+  }
+  if (parsed.version !== 1 || !parsed.identity || !Array.isArray(parsed.mapSummaries)) {
+    throw new Error(
+      `session-summary: checkpoint at ${path} has an unrecognised shape \u2014 refusing to resume. Delete the file to start a fresh run.`
+    );
+  }
+  if (!checkpointIdentityMatches(parsed.identity, identity)) {
+    throw new Error(
+      `session-summary: checkpoint at ${path} does not match this run (${describeIdentityMismatch(
+        parsed.identity,
+        identity
+      )}). A checkpoint may only resume the SAME transcript with the SAME prune level and chunking params it was created with. Delete the checkpoint to start fresh with the new settings.`
+    );
+  }
+  return parsed;
+}
+function saveCheckpoint(path, checkpoint) {
+  mkdirSync23(dirname12(path), { recursive: true });
+  const tmp = `${path}.tmp`;
+  writeFileSync21(tmp, JSON.stringify(checkpoint, null, 2), "utf-8");
+  renameSync13(tmp, path);
+}
+async function callWithRetry(prompt, modelId, maxOutputTokens, callModel, maxRetries, label, checkpointPath) {
+  let lastErr = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await callModel(prompt, modelId, maxOutputTokens);
+    } catch (err3) {
+      lastErr = err3;
+      const msg = err3 instanceof Error ? err3.message : String(err3);
+      if (classifyUnavailable(msg) !== null) {
+        throw new Error(
+          `session-summary: ${label} hit a rate limit / availability error on model '${modelId}': ${msg}. Checkpoint saved at ${checkpointPath} \u2014 re-run the same command to resume once the limit clears (free daily quotas reset at 00:00 UTC).`,
+          { cause: err3 }
+        );
+      }
+    }
+  }
+  const lastMsg = lastErr instanceof Error ? lastErr.message : String(lastErr);
+  throw new Error(
+    `session-summary: ${label} failed after ${maxRetries + 1} attempt(s) on model '${modelId}': ${lastMsg}. Checkpoint saved at ${checkpointPath} \u2014 fix the underlying issue and re-run to resume.`
+  );
+}
+function renderTurn(turn) {
+  const parts = [`[${turn.role}]`];
+  if (turn.text.trim() !== "") parts.push(turn.text);
+  for (const tc of turn.toolCalls) parts.push(`(tool_use ${tc.name}: ${tc.argSummary})`);
+  for (const e of turn.errors) parts.push(`(error: ${e})`);
+  return parts.join("\n");
+}
+function renderChunkPrompt(chunk) {
+  const continuation = [
+    chunk.continuesFromPrev ? "continues from the previous part" : null,
+    chunk.continuesNext ? "continues into the next part" : null
+  ].filter((s) => s !== null).join("; ");
+  const header = `You are summarizing part ${chunk.index + 1} of a Claude Code coding session transcript${continuation ? ` (${continuation})` : ""}. Produce a dense, factual summary of what happened: user requests, decisions made, files changed, commands run, and outcomes. Do not editorialize or pad \u2014 this summary will itself be folded together with summaries of the other parts.`;
+  const body = chunk.turns.map(renderTurn).join("\n\n");
+  return `${header}
+
+${body}`;
+}
+function renderFoldPrompt(summaries) {
+  const header = `You are folding ${summaries.length} partial summaries of one Claude Code session into a single, coherent summary. Preserve every distinct fact (requests, decisions, files changed, commands run, outcomes); do not drop information for brevity \u2014 merge duplicates instead.`;
+  const body = summaries.map((s, i) => `--- part ${i + 1} ---
+${s}`).join("\n\n");
+  return `${header}
+
+${body}`;
+}
+function estimateTextTokens(text) {
+  return Math.ceil(Buffer.byteLength(text, "utf8") / BYTES_PER_TOKEN_ESTIMATE);
+}
+function packIntoBatches(items, maxTokens) {
+  const batches = [];
+  let current = [];
+  let currentTokens = 0;
+  for (const item of items) {
+    const tokens = estimateTextTokens(item);
+    if (current.length > 0 && currentTokens + tokens > maxTokens) {
+      batches.push(current);
+      current = [];
+      currentTokens = 0;
+    }
+    current.push(item);
+    currentTokens += tokens;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+async function summarizeSession(options) {
+  const pruneLevel = options.pruneLevel ?? "aggressive";
+  const overlapTurns = options.chunkOverlapTurns ?? DEFAULT_OVERLAP_TURNS;
+  const maxChunkTokens = options.maxChunkTokens ?? Math.max(1e3, options.modelMaxContext - options.modelMaxCompletionTokens - PROMPT_OVERHEAD_TOKENS);
+  const maxRetries = options.maxRetriesPerChunk ?? 2;
+  const nowIso = options.now ?? (() => (/* @__PURE__ */ new Date()).toISOString());
+  assertFreeOnlyModel(true, "openrouter", options.modelId);
+  const stat = statSync12(options.transcriptPath);
+  if (!stat.isFile()) {
+    throw new Error(`session-summary: transcript is not a file: ${options.transcriptPath}`);
+  }
+  const identity = {
+    transcriptPath: resolve15(options.transcriptPath),
+    transcriptBytes: stat.size,
+    transcriptMtimeMs: stat.mtimeMs,
+    pruneLevel,
+    chunkerMaxTokens: maxChunkTokens,
+    chunkerOverlapTurns: overlapTurns
+  };
+  let checkpoint = loadCheckpoint(options.checkpointPath, identity);
+  const resumedFromCheckpoint = checkpoint !== null;
+  const { turns, stats } = await readTranscript(options.transcriptPath, { pruneLevel });
+  const { chunks } = chunkTurns(turns, { maxTokens: maxChunkTokens, overlapTurns });
+  if (checkpoint && checkpoint.totalChunks !== chunks.length) {
+    throw new Error(
+      `session-summary: checkpoint at ${options.checkpointPath} was recorded for ${checkpoint.totalChunks} chunks but this run produced ${chunks.length} chunks from the same identity \u2014 refusing to resume. Delete the checkpoint to start fresh.`
+    );
+  }
+  if (!checkpoint) {
+    checkpoint = {
+      version: 1,
+      identity,
+      totalChunks: chunks.length,
+      mapSummaries: new Array(chunks.length).fill(null),
+      reduce: null,
+      finalSummary: null,
+      updatedAt: nowIso()
+    };
+  }
+  for (let i = 0; i < chunks.length; i++) {
+    if (checkpoint.mapSummaries[i] !== null) continue;
+    const summary = await callWithRetry(
+      renderChunkPrompt(chunks[i]),
+      options.modelId,
+      options.modelMaxCompletionTokens,
+      options.callModel,
+      maxRetries,
+      `chunk ${i}`,
+      options.checkpointPath
+    );
+    checkpoint.mapSummaries[i] = summary;
+    checkpoint.updatedAt = nowIso();
+    saveCheckpoint(options.checkpointPath, checkpoint);
+  }
+  if (checkpoint.finalSummary !== null) {
+    return {
+      summary: checkpoint.finalSummary,
+      totalChunks: chunks.length,
+      transcriptStats: stats,
+      resumedFromCheckpoint,
+      checkpointPath: options.checkpointPath
+    };
+  }
+  const mapped = checkpoint.mapSummaries;
+  if (!checkpoint.reduce) {
+    if (mapped.length === 1) {
+      checkpoint.finalSummary = mapped[0];
+      checkpoint.updatedAt = nowIso();
+      saveCheckpoint(options.checkpointPath, checkpoint);
+      return {
+        summary: mapped[0],
+        totalChunks: chunks.length,
+        transcriptStats: stats,
+        resumedFromCheckpoint,
+        checkpointPath: options.checkpointPath
+      };
+    }
+    checkpoint.reduce = { level: 0, levelInput: mapped, foldedSoFar: [] };
+    checkpoint.updatedAt = nowIso();
+    saveCheckpoint(options.checkpointPath, checkpoint);
+  }
+  const foldBudget = maxChunkTokens;
+  for (; ; ) {
+    const rp = checkpoint.reduce;
+    if (!rp) break;
+    const batches = packIntoBatches(rp.levelInput, foldBudget);
+    if (batches.length >= rp.levelInput.length && rp.levelInput.length > 1) {
+      throw new Error(
+        `session-summary: cannot fold ${rp.levelInput.length} summaries at reduce level ${rp.level} into fewer batches under a ${foldBudget}-token budget \u2014 at least one summary alone exceeds the budget. Increase --max-chunk-tokens or pick a model with more context. Checkpoint saved at ${options.checkpointPath}.`
+      );
+    }
+    for (let b = rp.foldedSoFar.length; b < batches.length; b++) {
+      const batch = batches[b];
+      const folded = batch.length === 1 ? batch[0] : await callWithRetry(
+        renderFoldPrompt(batch),
+        options.modelId,
+        options.modelMaxCompletionTokens,
+        options.callModel,
+        maxRetries,
+        `reduce level ${rp.level} batch ${b}`,
+        options.checkpointPath
+      );
+      rp.foldedSoFar.push(folded);
+      checkpoint.updatedAt = nowIso();
+      saveCheckpoint(options.checkpointPath, checkpoint);
+    }
+    if (rp.foldedSoFar.length === 1) {
+      checkpoint.finalSummary = rp.foldedSoFar[0];
+      checkpoint.reduce = null;
+      checkpoint.updatedAt = nowIso();
+      saveCheckpoint(options.checkpointPath, checkpoint);
+      break;
+    }
+    checkpoint.reduce = { level: rp.level + 1, levelInput: rp.foldedSoFar, foldedSoFar: [] };
+    checkpoint.updatedAt = nowIso();
+    saveCheckpoint(options.checkpointPath, checkpoint);
+  }
+  return {
+    summary: checkpoint.finalSummary,
+    totalChunks: chunks.length,
+    transcriptStats: stats,
+    resumedFromCheckpoint,
+    checkpointPath: options.checkpointPath
+  };
+}
+
+// src/session_summary/model-select.ts
+init_config();
+var DEFAULT_MIN_CONTEXT = 1e6;
+var LOWER_CONTEXT_FLOOR = 262144;
+var TEXT_TO_TEXT_MODALITY = "text->text";
+function selectEligibleModels(catalog, options = {}) {
+  const minContext = options.minContext ?? (options.allowLowerContext ? LOWER_CONTEXT_FLOOR : DEFAULT_MIN_CONTEXT);
+  const eligible = [];
+  for (const m of catalog) {
+    const promptPrice = parseFloat(m.pricing?.prompt ?? "NaN");
+    const completionPrice = parseFloat(m.pricing?.completion ?? "NaN");
+    if (promptPrice !== 0 || completionPrice !== 0) continue;
+    const contextLength = m.context_length ?? 0;
+    if (contextLength < minContext) continue;
+    if (m.architecture?.modality !== TEXT_TO_TEXT_MODALITY) continue;
+    assertFreeOnlyModel(true, "openrouter", m.id);
+    eligible.push({
+      id: m.id,
+      contextLength,
+      maxCompletionTokens: m.top_provider?.max_completion_tokens ?? 0
+    });
+  }
+  eligible.sort((a, b) => b.contextLength - a.contextLength);
+  if (eligible.length === 0) {
+    throw new Error(
+      `session-summary: no free text->text model with context_length >= ${minContext} found on the OpenRouter catalog. Filters applied: pricing.prompt == 0 AND pricing.completion == 0 AND context_length >= ${minContext} AND architecture.modality == "${TEXT_TO_TEXT_MODALITY}" (this excludes free non-text models like music/image models that otherwise qualify on price and context alone). Try a lower --min-context (e.g. ${LOWER_CONTEXT_FLOOR}, today's next tier down) to widen the pool.`
+    );
+  }
+  return eligible;
+}
+async function fetchCatalog() {
+  const url2 = "https://openrouter.ai/api/v1/models";
+  const resp = await fetch(url2);
+  if (!resp.ok) {
+    throw new Error(`OpenRouter model catalog fetch failed: ${resp.status} ${resp.statusText}`);
+  }
+  const body = await resp.json();
+  return body.data ?? [];
+}
+async function selectModels(options = {}) {
+  const catalog = await fetchCatalog();
+  return selectEligibleModels(catalog, options);
+}
+
+// src/session-summary-resolve.ts
+init_project_root();
+import { existsSync as existsSync23, readdirSync as readdirSync8, statSync as statSync13 } from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { join as join30, resolve as resolve16 } from "node:path";
+import { createHash as createHash9 } from "node:crypto";
+function projectSlug(absProjectRoot) {
+  return absProjectRoot.replace(/[^a-zA-Z0-9]/g, "-");
+}
+function resolveTranscriptPath(options = {}) {
+  if (options.transcriptPath) {
+    const p = resolve16(options.transcriptPath);
+    if (!existsSync23(p)) {
+      throw new Error(`session-summary: --transcript path does not exist: ${p}`);
+    }
+    return p;
+  }
+  const projectRoot = resolve16(options.projectRoot ?? resolveProjectMainRoot());
+  const claudeProjectsDir = options.claudeProjectsDir ?? join30(homedir5(), ".claude", "projects");
+  const slug = projectSlug(projectRoot);
+  const sessionDir = join30(claudeProjectsDir, slug);
+  if (options.sessionId) {
+    const p = join30(sessionDir, `${options.sessionId}.jsonl`);
+    if (!existsSync23(p)) {
+      throw new Error(
+        `session-summary: no transcript for --session-id '${options.sessionId}' at ${p}. Pass --transcript with an explicit path instead.`
+      );
+    }
+    return p;
+  }
+  if (!existsSync23(sessionDir)) {
+    throw new Error(
+      `session-summary: no transcript directory for this project at ${sessionDir} (resolved project root: ${projectRoot}). Pass --transcript or --session-id explicitly.`
+    );
+  }
+  const jsonlFiles = readdirSync8(sessionDir).filter((f) => f.endsWith(".jsonl"));
+  if (jsonlFiles.length === 0) {
+    throw new Error(
+      `session-summary: no .jsonl transcripts found under ${sessionDir}. Pass --transcript or --session-id explicitly.`
+    );
+  }
+  let latestPath = "";
+  let latestMtimeMs = -Infinity;
+  for (const f of jsonlFiles) {
+    const p = join30(sessionDir, f);
+    const mtimeMs = statSync13(p).mtimeMs;
+    if (mtimeMs > latestMtimeMs) {
+      latestMtimeMs = mtimeMs;
+      latestPath = p;
+    }
+  }
+  return latestPath;
+}
+function defaultCheckpointPath(transcriptAbsPath, configDir) {
+  const hash2 = createHash9("sha256").update(transcriptAbsPath).digest("hex").slice(0, 16);
+  return join30(configDir, "session-summary-checkpoints", `${hash2}.json`);
+}
+
 // src/provider/http.ts
 var CONNECT_TIMEOUT_MS = 5e3;
 async function fetchWithTimeout(url2, options, timeoutMs = CONNECT_TIMEOUT_MS) {
@@ -253576,59 +254222,59 @@ init_usage_history();
 
 // src/rule-install.ts
 import {
-  existsSync as existsSync23,
-  mkdirSync as mkdirSync23,
-  readFileSync as readFileSync29,
-  writeFileSync as writeFileSync21,
-  renameSync as renameSync13,
+  existsSync as existsSync24,
+  mkdirSync as mkdirSync24,
+  readFileSync as readFileSync30,
+  writeFileSync as writeFileSync22,
+  renameSync as renameSync14,
   realpathSync as realpathSync4,
   unlinkSync
 } from "node:fs";
 import { randomBytes as randomBytes3 } from "node:crypto";
-import { homedir as homedir5, tmpdir } from "node:os";
-import { dirname as dirname12, join as join30, resolve as resolve15, sep as sep2 } from "node:path";
+import { homedir as homedir6, tmpdir } from "node:os";
+import { dirname as dirname13, join as join31, resolve as resolve17, sep as sep2 } from "node:path";
 import { fileURLToPath as fileURLToPath8 } from "node:url";
 var RULE_FILENAME = "use-llm-externalizer.md";
 function resolveBundledRulePath() {
   const candidates = [];
   const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   if (pluginRoot && pluginRoot.length > 0) {
-    candidates.push(join30(resolve15(pluginRoot), "rules", RULE_FILENAME));
+    candidates.push(join31(resolve17(pluginRoot), "rules", RULE_FILENAME));
   }
   try {
-    const here = dirname12(fileURLToPath8(import.meta.url));
-    candidates.push(resolve15(here, "..", "..", "..", "rules", RULE_FILENAME));
+    const here = dirname13(fileURLToPath8(import.meta.url));
+    candidates.push(resolve17(here, "..", "..", "..", "rules", RULE_FILENAME));
   } catch {
   }
   for (const c of candidates) {
-    if (existsSync23(c)) return c;
+    if (existsSync24(c)) return c;
   }
   return null;
 }
 function resolveClaudeRulesDir() {
   const cfg = process.env.CLAUDE_CONFIG_DIR;
-  const base = cfg && cfg.length > 0 ? resolve15(cfg) : join30(homedir5(), ".claude");
-  return join30(base, "rules");
+  const base = cfg && cfg.length > 0 ? resolve17(cfg) : join31(homedir6(), ".claude");
+  return join31(base, "rules");
 }
 function canonical(p) {
   try {
     return realpathSync4(p);
   } catch {
-    const parent = dirname12(p);
+    const parent = dirname13(p);
     if (parent === p) return p;
-    return join30(canonical(parent), p.slice(parent.length + (parent.endsWith(sep2) ? 0 : 1)));
+    return join31(canonical(parent), p.slice(parent.length + (parent.endsWith(sep2) ? 0 : 1)));
   }
 }
 function underAllowedRoot(dir) {
   const d = canonical(dir);
   const roots = [];
   try {
-    roots.push(realpathSync4(homedir5()));
+    roots.push(realpathSync4(homedir6()));
   } catch {
-    roots.push(homedir5());
+    roots.push(homedir6());
   }
   if (process.env.CLAUDE_CONFIG_DIR && process.env.CLAUDE_CONFIG_DIR.length > 0) {
-    roots.push(canonical(resolve15(process.env.CLAUDE_CONFIG_DIR)));
+    roots.push(canonical(resolve17(process.env.CLAUDE_CONFIG_DIR)));
   }
   const tmp = tmpdir();
   try {
@@ -253644,11 +254290,11 @@ function installUsageRule(opts = {}) {
     return { status: "skipped", dest: "", detail: "disabled via LLM_EXT_INSTALL_RULE" };
   }
   const source = opts.sourcePath ?? resolveBundledRulePath();
-  if (!source || !existsSync23(source)) {
+  if (!source || !existsSync24(source)) {
     return { status: "error", dest: "", detail: "bundled rule source not found" };
   }
   const rulesDir = opts.rulesDir ?? resolveClaudeRulesDir();
-  const dest = join30(rulesDir, RULE_FILENAME);
+  const dest = join31(rulesDir, RULE_FILENAME);
   if (!underAllowedRoot(rulesDir)) {
     return {
       status: "error",
@@ -253658,22 +254304,22 @@ function installUsageRule(opts = {}) {
   }
   let desired;
   try {
-    desired = readFileSync29(source, "utf-8");
+    desired = readFileSync30(source, "utf-8");
   } catch (e) {
     return { status: "error", dest, detail: `cannot read source: ${e.message}` };
   }
-  const existed = existsSync23(dest);
+  const existed = existsSync24(dest);
   if (existed) {
     try {
-      if (readFileSync29(dest, "utf-8") === desired) return { status: "unchanged", dest };
+      if (readFileSync30(dest, "utf-8") === desired) return { status: "unchanged", dest };
     } catch {
     }
   }
   const tmp = dest + ".tmp." + process.pid + "." + randomBytes3(4).toString("hex");
   try {
-    mkdirSync23(rulesDir, { recursive: true });
-    writeFileSync21(tmp, desired, "utf-8");
-    renameSync13(tmp, dest);
+    mkdirSync24(rulesDir, { recursive: true });
+    writeFileSync22(tmp, desired, "utf-8");
+    renameSync14(tmp, dest);
   } catch (e) {
     try {
       unlinkSync(tmp);
@@ -253779,7 +254425,7 @@ function getCurrentBackend() {
 function reloadSettingsFromDisk() {
   let raw;
   try {
-    raw = readFileSync30(SETTINGS_FILE, "utf-8");
+    raw = readFileSync31(SETTINGS_FILE, "utf-8");
   } catch {
     return false;
   }
@@ -254094,27 +254740,27 @@ function trackRequestEnd() {
 }
 function waitForRequestsDrained(timeoutMs = 12e4) {
   if (_activeRequests === 0) return Promise.resolve();
-  return new Promise((resolve17) => {
+  return new Promise((resolve19) => {
     const timer = setTimeout(() => {
       _activeRequestsDrained = null;
-      resolve17();
+      resolve19();
     }, timeoutMs);
     _activeRequestsDrained = () => {
       clearTimeout(timer);
-      resolve17();
+      resolve19();
     };
   });
 }
 var SESSION_ID = randomUUID3().slice(0, 8);
 var SESSION_START = /* @__PURE__ */ new Date();
-var LOG_DIR = join31(getConfigDir(), "logs");
-var LOG_FILE = join31(
+var LOG_DIR = join32(getConfigDir(), "logs");
+var LOG_FILE = join32(
   LOG_DIR,
   `session-${SESSION_ID}-${SESSION_START.toISOString().slice(0, 10)}.jsonl`
 );
 function writeLogEntry(entry) {
   try {
-    mkdirSync24(LOG_DIR, { recursive: true });
+    mkdirSync25(LOG_DIR, { recursive: true });
     appendFileSync6(LOG_FILE, JSON.stringify(entry) + "\n");
   } catch {
     process.stderr.write(`[llm-externalizer] Failed to write log entry
@@ -254124,7 +254770,7 @@ function writeLogEntry(entry) {
 var STATS_FILE = "/tmp/claude/llm-externalizer-stats.json";
 function writeStatsFile() {
   try {
-    mkdirSync24("/tmp/claude", { recursive: true, mode: 448 });
+    mkdirSync25("/tmp/claude", { recursive: true, mode: 448 });
     const backend = getCurrentBackend();
     const stats = {
       session_id: SESSION_ID,
@@ -254139,8 +254785,8 @@ function writeStatsFile() {
       backend: backend.type
     };
     const tmpStats = STATS_FILE + ".tmp";
-    writeFileSync22(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
-    renameSync14(tmpStats, STATS_FILE);
+    writeFileSync23(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
+    renameSync15(tmpStats, STATS_FILE);
   } catch {
   }
 }
@@ -254260,10 +254906,10 @@ function defaultOutputDir() {
   if (_cachedDefaultOutputDir) return _cachedDefaultOutputDir;
   const envOverride = process.env.LLM_OUTPUT_DIR;
   if (envOverride && envOverride.trim()) {
-    _cachedDefaultOutputDir = resolve16(envOverride.trim());
+    _cachedDefaultOutputDir = resolve18(envOverride.trim());
     return _cachedDefaultOutputDir;
   }
-  _cachedDefaultOutputDir = join31(resolveProjectMainRoot(), "reports", "llm-externalizer");
+  _cachedDefaultOutputDir = join32(resolveProjectMainRoot(), "reports", "llm-externalizer");
   return _cachedDefaultOutputDir;
 }
 function canonicalTimestamp(date5 = /* @__PURE__ */ new Date()) {
@@ -254282,14 +254928,14 @@ function canonicalTimestamp(date5 = /* @__PURE__ */ new Date()) {
 }
 function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir) {
   const dir = outputDir || defaultOutputDir();
-  mkdirSync24(dir, { recursive: true });
+  mkdirSync25(dir, { recursive: true });
   const now = /* @__PURE__ */ new Date();
   const ts2 = canonicalTimestamp(now);
   const shortId = randomUUID3().slice(0, 6);
   const srcPart = meta3.inputFile ? `-${sanitizeFilename(meta3.inputFile).replace(/\.md$/, "")}` : "";
   const groupPart = meta3.groupId ? `-group-${meta3.groupId.replace(/[^a-zA-Z0-9_-]/g, "_")}` : "";
   const filename = overrideFilename || `${ts2}-${toolName}${groupPart}${srcPart}-${shortId}.md`;
-  const filepath = join31(dir, filename);
+  const filepath = join32(dir, filename);
   const lines = [
     "# LLM Externalizer Response",
     "",
@@ -254303,8 +254949,8 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
   lines.push("", "---", "", responseText);
   const tmpPath = filepath + ".tmp";
   try {
-    writeFileSync22(tmpPath, lines.join("\n"), "utf-8");
-    renameSync14(tmpPath, filepath);
+    writeFileSync23(tmpPath, lines.join("\n"), "utf-8");
+    renameSync15(tmpPath, filepath);
   } catch (err3) {
     try {
       unlinkSync2(tmpPath);
@@ -254441,10 +255087,10 @@ function resolveFolderPath(folderPath, opts) {
   } catch (err3) {
     return { files: [], error: `Invalid folder_path: ${err3 instanceof Error ? err3.message : String(err3)}` };
   }
-  if (!existsSync24(folderPath)) {
+  if (!existsSync25(folderPath)) {
     return { files: [], error: `folder_path not found: ${folderPath}` };
   }
-  if (!statSync12(folderPath).isDirectory()) {
+  if (!statSync14(folderPath).isDirectory()) {
     return { files: [], error: `Not a directory: ${folderPath}` };
   }
   const files = walkDir(folderPath, {
@@ -254504,7 +255150,7 @@ function buildEstimateDeps() {
     },
     fileSizeBytes(path) {
       try {
-        return statSync12(path).size;
+        return statSync14(path).size;
       } catch {
         return 0;
       }
@@ -254841,7 +255487,7 @@ ${failed.map((r) => `- **${r.model}**: ${r.content}`).join("\n")}`);
   };
 }
 async function processFileCheck(filePath, task, options = {}) {
-  if (!existsSync24(filePath)) {
+  if (!existsSync25(filePath)) {
     return { filePath, success: false, error: `File not found: ${filePath}` };
   }
   const codeBlock = readFileAsCodeBlock(
@@ -255047,7 +255693,7 @@ Run the "discover" tool to see the current profile status.`
     const isLLMTool = LLM_TOOLS_SET.has(name);
     if (isLLMTool) trackRequestStart();
     const rawOutputDir = args?.output_dir;
-    const outputDir = typeof rawOutputDir === "string" && rawOutputDir.trim() ? resolve16(rawOutputDir.trim()) : void 0;
+    const outputDir = typeof rawOutputDir === "string" && rawOutputDir.trim() ? resolve18(rawOutputDir.trim()) : void 0;
     const freeRequested = args?.free === true;
     const modelOverride = await resolveModelOverride(freeRequested);
     if (modelOverride) {
@@ -255402,7 +256048,7 @@ ${resp.content}${footer}`
               content: [
                 {
                   type: "text",
-                  text: `no rules layer found (checked: --rules, <repo>/.llm-ext/rules.yaml, ${join31(getConfigDir(), "rules.yaml")}) \u2014 tools run with their built-in rubric`
+                  text: `no rules layer found (checked: --rules, <repo>/.llm-ext/rules.yaml, ${join32(getConfigDir(), "rules.yaml")}) \u2014 tools run with their built-in rubric`
                 }
               ]
             };
@@ -255436,7 +256082,7 @@ matched: (none \u2014 no entry's glob matches ${target})`;
           }
           const planFiles = resolved.files.map((p) => {
             try {
-              return { path: p, bytes: statSync12(p).size };
+              return { path: p, bytes: statSync14(p).size };
             } catch {
               return { path: p, bytes: 0 };
             }
@@ -255671,7 +256317,7 @@ Profiles: ${profileNames.join(", ")}`);
                 };
               }
               try {
-                writeFileSync22(absPath, jsonText, "utf-8");
+                writeFileSync23(absPath, jsonText, "utf-8");
               } catch (err3) {
                 return {
                   content: [
@@ -255737,11 +256383,11 @@ Profiles: ${profileNames.join(", ")}`);
         }
         case "get_settings": {
           try {
-            const raw = readFileSync30(SETTINGS_FILE, "utf-8");
+            const raw = readFileSync31(SETTINGS_FILE, "utf-8");
             const targetDir = outputDir || defaultOutputDir();
-            mkdirSync24(targetDir, { recursive: true });
-            const copyPath = join31(targetDir, "settings_edit.yaml");
-            writeFileSync22(copyPath, raw, "utf-8");
+            mkdirSync25(targetDir, { recursive: true });
+            const copyPath = join32(targetDir, "settings_edit.yaml");
+            writeFileSync23(copyPath, raw, "utf-8");
             return { content: [{ type: "text", text: copyPath }] };
           } catch (err3) {
             return {
@@ -255834,6 +256480,128 @@ Settings file is present but its 'profiles' map is empty \u2014 this is a config
           }
           lines.push("", "* = active profile. Use --show <name> for full resolved detail.");
           return { content: [{ type: "text", text: lines.join("\n") }] };
+        }
+        case "session_summary": {
+          const {
+            transcript: ssTranscript,
+            session_id: ssSessionId,
+            prune: ssPruneRaw,
+            min_context: ssMinContext,
+            allow_lower_context: ssAllowLowerContext,
+            resume: ssResume,
+            checkpoint: ssCheckpointRaw,
+            output: ssOutputRaw
+          } = args;
+          const VALID_PRUNE_LEVELS = /* @__PURE__ */ new Set(["aggressive", "moderate", "none"]);
+          const prune = ssPruneRaw ?? "aggressive";
+          if (!VALID_PRUNE_LEVELS.has(prune)) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `FAILED: --prune must be one of aggressive, moderate, none (got '${prune}')`
+                }
+              ],
+              isError: true
+            };
+          }
+          let transcriptPath;
+          try {
+            transcriptPath = resolveTranscriptPath({
+              transcriptPath: ssTranscript,
+              sessionId: ssSessionId
+            });
+          } catch (err3) {
+            return {
+              content: [{ type: "text", text: `FAILED: ${err3 instanceof Error ? err3.message : String(err3)}` }],
+              isError: true
+            };
+          }
+          let eligible;
+          try {
+            eligible = await selectModels({
+              minContext: ssMinContext,
+              allowLowerContext: ssAllowLowerContext === true
+            });
+          } catch (err3) {
+            return {
+              content: [{ type: "text", text: `FAILED: ${err3 instanceof Error ? err3.message : String(err3)}` }],
+              isError: true
+            };
+          }
+          const model = eligible[0];
+          if (!model.maxCompletionTokens || model.maxCompletionTokens <= 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `FAILED: selected model '${model.id}' reports no max_completion_tokens on the OpenRouter catalog \u2014 cannot size the summarization prompt safely.`
+                }
+              ],
+              isError: true
+            };
+          }
+          const checkpointPath = ssCheckpointRaw ? resolve18(ssCheckpointRaw) : defaultCheckpointPath(transcriptPath, getConfigDir());
+          if (ssResume === true && !existsSync25(checkpointPath)) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `FAILED: --resume was given but no checkpoint exists at ${checkpointPath} for this transcript. Re-run without --resume to start a fresh run (it will create one).`
+                }
+              ],
+              isError: true
+            };
+          }
+          const callModel = async (prompt, modelId, maxOutputTokens) => {
+            const resp = await chatCompletionWithRetry(
+              [{ role: "user", content: prompt }],
+              { model: modelId, maxTokens: maxOutputTokens, temperature: DEFAULT_TEMPERATURE, onProgress },
+              providerDeps
+            );
+            if (resp.finishReason === "error" || resp.content.trim().length === 0) {
+              throw new Error(
+                `model call to '${modelId}' failed (finishReason=${resp.finishReason}): ${resp.content || "empty response"}`
+              );
+            }
+            return resp.content;
+          };
+          let result;
+          try {
+            result = await summarizeSession({
+              transcriptPath,
+              checkpointPath,
+              modelId: model.id,
+              modelMaxContext: model.contextLength,
+              modelMaxCompletionTokens: model.maxCompletionTokens,
+              callModel,
+              pruneLevel: prune
+            });
+          } catch (err3) {
+            return {
+              content: [{ type: "text", text: `FAILED: ${err3 instanceof Error ? err3.message : String(err3)}` }],
+              isError: true
+            };
+          }
+          const header = `Model: ${model.id} (context ${model.contextLength.toLocaleString()})
+Transcript: ${transcriptPath}
+Chunks: ${result.totalChunks}
+Lines read: ${result.transcriptStats.linesRead}, prune ratio: ${result.transcriptStats.pruneRatio.toFixed(3)} (level: ${prune})
+` + (result.resumedFromCheckpoint ? `Resumed from checkpoint: ${result.checkpointPath}
+` : `Checkpoint: ${result.checkpointPath}
+`);
+          const ssOutputDir = typeof ssOutputRaw === "string" && ssOutputRaw.trim() ? resolve18(ssOutputRaw.trim()) : void 0;
+          const savedPath = saveResponse(
+            "session_summary",
+            `${header}
+---
+
+${result.summary}`,
+            { model: model.id, task: `session-summary of ${transcriptPath}` },
+            void 0,
+            ssOutputDir
+          );
+          return { content: [{ type: "text", text: savedPath }] };
         }
         // ── Batch Operations ──────────────────────────────────────────────
         case "batch_check": {
@@ -255978,7 +256746,7 @@ Settings file is present but its 'profiles' map is empty \u2014 this is a config
               const gSucceeded = gAll.filter((r) => r.success);
               const reportSections = [];
               for (const r of gSucceeded) {
-                const content = r.reportPath && existsSync24(r.reportPath) ? readFileSync30(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync25(r.reportPath) ? readFileSync31(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -256114,7 +256882,7 @@ ${gAbortReason}`);
             } else {
               const reportSections = [];
               for (const r of succeeded) {
-                const content = r.reportPath && existsSync24(r.reportPath) ? readFileSync30(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync25(r.reportPath) ? readFileSync31(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -256268,8 +257036,8 @@ ${content}`);
             } catch (err3) {
               return { error: err3.message };
             }
-            if (!existsSync24(fA)) return { error: `File not found: ${fARaw}` };
-            if (!existsSync24(fB)) return { error: `File not found: ${fBRaw}` };
+            if (!existsSync25(fA)) return { error: `File not found: ${fARaw}` };
+            if (!existsSync25(fB)) return { error: `File not found: ${fBRaw}` };
             if (cfScan && !cfRedact) {
               const scanResult = scanFilesForSecrets([fA, fB]);
               if (scanResult.found) return { error: scanResult.report };
@@ -256331,7 +257099,7 @@ ${fence}${sourceBlocks}` }
             } catch (err3) {
               return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
             }
-            if (!existsSync24(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
+            if (!existsSync25(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
             const toRef = cfToRef || "HEAD";
             if (cfFromRef.startsWith("-") || toRef.startsWith("-")) {
               return { content: [{ type: "text", text: "FAILED: git refs must not start with '-'" }], isError: true };
@@ -256402,7 +257170,7 @@ ${sections.join("\n\n---\n\n")}`;
                 {
                   model: "git-diff (no LLM)",
                   task: `${cfFromRef} \u2192 ${toRef}`,
-                  inputFile: join31(cfGitRepoSafe, dg.files[0]),
+                  inputFile: join32(cfGitRepoSafe, dg.files[0]),
                   groupId: gid
                 },
                 void 0,
@@ -256495,7 +257263,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync24(fileA)) {
+          if (!existsSync25(fileA)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileA}` }
@@ -256503,7 +257271,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync24(fileB)) {
+          if (!existsSync25(fileB)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileB}` }
@@ -256691,13 +257459,13 @@ ${diffFence}` + sourceFileBlocks
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync24(filePath)) {
+                if (!existsSync25(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
                   continue;
                 }
-                const src = readFileSync30(filePath, "utf-8");
+                const src = readFileSync31(filePath, "utf-8");
                 const lang = detectLang(filePath);
                 const deps = extractLocalImports(filePath, src);
                 const depBlocks = [];
@@ -256751,14 +257519,14 @@ ${resp.content}${footer}`);
           const crReports = [];
           const crReportPaths = [];
           for (const filePath of crFilePaths) {
-            if (!existsSync24(filePath)) {
+            if (!existsSync25(filePath)) {
               crReports.push(`## ${filePath}
 
 FAILED: File not found.`);
               crReportPaths.push("(skipped \u2014 file not found)");
               continue;
             }
-            const crSourceCode = readFileSync30(filePath, "utf-8");
+            const crSourceCode = readFileSync31(filePath, "utf-8");
             const crLang = detectLang(filePath);
             const depPaths = extractLocalImports(filePath, crSourceCode);
             const depBlocks = [];
@@ -256931,14 +257699,14 @@ ${crResp.content}${crFooter}`
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync24(filePath)) {
+                if (!existsSync25(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
                   continue;
                 }
                 const ciLang = detectLang(filePath);
-                const fileDir = dirname13(filePath);
+                const fileDir = dirname14(filePath);
                 const ciResolveBase = project_root || fileDir;
                 const extractMessages = [
                   { role: "system", content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path inside a filename tag before the file-content tag \u2014 reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.` + FILE_FORMAT_EXAMPLE },
@@ -256960,22 +257728,22 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     continue;
                   }
                   const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-                  const resolvedBase = importPath.startsWith("/") ? resolve16(importPath) : join31(resolveDir, importPath);
+                  const resolvedBase = importPath.startsWith("/") ? resolve18(importPath) : join32(resolveDir, importPath);
                   if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                     packageImports.push(importPath);
                     continue;
                   }
-                  let found = existsSync24(resolvedBase) && statSync12(resolvedBase).isFile();
+                  let found = existsSync25(resolvedBase) && statSync14(resolvedBase).isFile();
                   if (!found && !extname5(resolvedBase)) {
                     for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".json"]) {
-                      if (existsSync24(resolvedBase + ext)) {
+                      if (existsSync25(resolvedBase + ext)) {
                         found = true;
                         break;
                       }
                     }
                     if (!found) {
                       for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                        if (existsSync24(join31(resolvedBase, `index${ext}`))) {
+                        if (existsSync25(join32(resolvedBase, `index${ext}`))) {
                           found = true;
                           break;
                         }
@@ -257009,7 +257777,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
           const ciReports = [];
           const ciReportPaths = [];
           for (const filePath of ciFilePaths) {
-            if (!existsSync24(filePath)) {
+            if (!existsSync25(filePath)) {
               ciReports.push(`## ${filePath}
 
 FAILED: File not found.`);
@@ -257017,7 +257785,7 @@ FAILED: File not found.`);
               continue;
             }
             const ciLang = detectLang(filePath);
-            const fileDir = dirname13(filePath);
+            const fileDir = dirname14(filePath);
             const ciResolveBase = project_root || fileDir;
             const extractMessages = [
               {
@@ -257059,13 +257827,13 @@ FAILED: File not found.`);
                 continue;
               }
               const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-              const resolvedBase = importPath.startsWith("/") ? resolve16(importPath) : join31(resolveDir, importPath);
+              const resolvedBase = importPath.startsWith("/") ? resolve18(importPath) : join32(resolveDir, importPath);
               if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                 packageImports.push(importPath);
                 continue;
               }
               let found = false;
-              if (existsSync24(resolvedBase) && statSync12(resolvedBase).isFile()) {
+              if (existsSync25(resolvedBase) && statSync14(resolvedBase).isFile()) {
                 found = true;
               }
               if (!found && !extname5(resolvedBase)) {
@@ -257081,14 +257849,14 @@ FAILED: File not found.`);
                   ".rs",
                   ".json"
                 ]) {
-                  if (existsSync24(resolvedBase + ext)) {
+                  if (existsSync25(resolvedBase + ext)) {
                     found = true;
                     break;
                   }
                 }
                 if (!found) {
                   for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                    if (existsSync24(join31(resolvedBase, `index${ext}`))) {
+                    if (existsSync25(join32(resolvedBase, `index${ext}`))) {
                       found = true;
                       break;
                     }
@@ -257230,8 +257998,8 @@ FAILED: File not found.`);
             }
             return resp.content;
           };
-          const csModuleDir = dirname13(fileUrlToPath_cs(import.meta.url));
-          const csEmbeddingsScript = join31(csModuleDir, "..", "scripts", "compute_embeddings.py");
+          const csModuleDir = dirname14(fileUrlToPath_cs(import.meta.url));
+          const csEmbeddingsScript = join32(csModuleDir, "..", "scripts", "compute_embeddings.py");
           const csPreflightModel = getCurrentBackend().model ?? "unknown";
           const csHooks = {
             rawLlmCall: csRawLlmCall,
@@ -257410,8 +258178,8 @@ async function injectMassScoutFreeModel(argv, resolveOverride = resolveMassScout
 }
 
 // src/cli.ts
-import { writeFileSync as writeFileSync23, existsSync as existsSync25, statSync as statSync13, unlinkSync as unlinkSync3 } from "node:fs";
-import { resolve as resolvePath, isAbsolute as isAbsolute6, join as join32 } from "node:path";
+import { writeFileSync as writeFileSync24, existsSync as existsSync26, statSync as statSync15, unlinkSync as unlinkSync3 } from "node:fs";
+import { resolve as resolvePath, isAbsolute as isAbsolute6, join as join33 } from "node:path";
 import { spawnSync as spawnSync5 } from "node:child_process";
 import { tmpdir as tmpdir2 } from "node:os";
 function die(msg) {
@@ -257493,7 +258261,7 @@ async function cmdModelInfo(modelId, flags) {
       }
       const filepath = isAbsolute6(jsonFlag) ? jsonFlag : resolvePath(jsonFlag);
       try {
-        writeFileSync23(filepath, text, "utf-8");
+        writeFileSync24(filepath, text, "utf-8");
       } catch (err3) {
         die(
           `Failed to write JSON to '${filepath}': ${err3 instanceof Error ? err3.message : String(err3)}`
@@ -257586,7 +258354,7 @@ function generateGitDiff(base, sourceFiles) {
       );
     }
   }
-  const outPath = join32(tmpdir2(), `llm-ext-search-existing-diff-${Date.now()}.patch`);
+  const outPath = join33(tmpdir2(), `llm-ext-search-existing-diff-${Date.now()}.patch`);
   const result = spawnSync5(
     "git",
     ["diff", `${base}...HEAD`, "--", ...sourceFiles],
@@ -257618,7 +258386,7 @@ function generateGitDiff(base, sourceFiles) {
     );
   }
   try {
-    writeFileSync23(outPath, diffText, "utf-8");
+    writeFileSync24(outPath, diffText, "utf-8");
   } catch (err3) {
     die(
       `Failed to write diff to '${outPath}': ${err3 instanceof Error ? err3.message : String(err3)}`
@@ -257693,10 +258461,10 @@ function parseSearchExistingArgs(args) {
   }
   for (const fp of folderPaths) {
     const abs2 = isAbsolute6(fp) ? fp : resolvePath(fp);
-    if (!existsSync25(abs2)) die(`--in path not found: ${fp}`);
+    if (!existsSync26(abs2)) die(`--in path not found: ${fp}`);
     let isDir;
     try {
-      isDir = statSync13(abs2).isDirectory();
+      isDir = statSync15(abs2).isDirectory();
     } catch (err3) {
       die(
         `Cannot stat --in path '${fp}': ${err3 instanceof Error ? err3.message : String(err3)}`
@@ -257706,8 +258474,8 @@ function parseSearchExistingArgs(args) {
   }
   for (const sf of sourceFiles) {
     const abs2 = isAbsolute6(sf) ? sf : resolvePath(sf);
-    if (!existsSync25(abs2)) die(`Source file not found: ${sf}`);
-    if (statSync13(abs2).isDirectory()) die(`Source file must be a file, not a directory: ${sf}`);
+    if (!existsSync26(abs2)) die(`Source file not found: ${sf}`);
+    if (statSync15(abs2).isDirectory()) die(`Source file must be a file, not a directory: ${sf}`);
   }
   let timeoutMs = void 0;
   if (flags["timeout-hours"] && flags["timeout-hours"] !== "true") {
@@ -257747,7 +258515,7 @@ async function cmdSearchExisting(rawArgs) {
     info(`Generated PR diff via git: ${diffPath}`);
   } else if (opts.diffPath) {
     const abs2 = isAbsolute6(opts.diffPath) ? opts.diffPath : resolvePath(opts.diffPath);
-    if (!existsSync25(abs2)) die(`--diff file not found: ${opts.diffPath}`);
+    if (!existsSync26(abs2)) die(`--diff file not found: ${opts.diffPath}`);
     diffPath = abs2;
   }
   const toolArgs = {
