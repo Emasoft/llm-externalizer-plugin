@@ -70,6 +70,10 @@ describe('tool catalog', () => {
       'discover',
       'get_settings',
       'profile',
+      // session_summary — compaction-style summary of a whole Claude Code
+      // session from its JSONL transcript (TRDD-T4MZ8YQR), map-reduce +
+      // checkpointed, $0-only free models.
+      'session_summary',
       'or_model_info',
       'or_model_info_json',
       'or_model_info_table',

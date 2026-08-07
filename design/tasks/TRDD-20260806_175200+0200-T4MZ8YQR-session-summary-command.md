@@ -100,8 +100,17 @@ whole session from the JSONL transcript of the project session, **using only fre
   actionable error naming the checkpoint path instead of retry-looping. The cost chokepoint sits
   BEFORE any I/O — "refuses a non-free modelId before touching the transcript or calling the
   model" — so it cannot be bypassed by a path that forgets to ask.
-- **P5 (CLI surface + docs + dogfood) still open.** Deliberately last: registering the command is
-  what makes all of the above user-reachable, and it should land only once the driver is trusted.
+- **P5 DONE (2026-08-07)** — CLI surface + docs + dogfood. Registered `session_summary` in
+  `tools/definitions.ts` and wired it in `index.ts` (transcript resolution, model selection via
+  P3's `selectModels`, the real `chatCompletionWithRetry` call injected as P4's `CallModelFn`,
+  and `saveResponse` for the report). Transcript/checkpoint path resolution lives in its own new
+  module (`session-summary-resolve.ts`), deliberately OUTSIDE `session_summary/` — P1-P4 stayed
+  untouched. README counts moved (43→44 total, 20→21 core/utility) per `doc-consistency.test.ts`,
+  plus a `session_summary` write-up with every flag grounded in real `--help` output. Added to
+  `tests/dogfood/dogfood_test.py`'s opt-in live smoke (new `sample-session.jsonl` fixture) —
+  `--help` coverage for every command (including this one) is already automatic via the dynamic
+  verb parser. Full suite 1795 pass / 0 fail / 4 skip (re-run independently), tsc + lint clean,
+  `./bin/llm-ext session-summary --help` exercised for real against the live binary.
 
 ### Phases (each lands with tests; no phase exceeds 5 files)
 
@@ -123,15 +132,29 @@ whole session from the JSONL transcript of the project session, **using only fre
   session summary (reduce), recursing if the fold itself exceeds the window. Checkpoint after
   every chunk to a resume file so a 429 / daily-cap stall resumes instead of restarting — this
   is the mitigation for the single-model no-rotation problem.
-- **P5 — surface + docs.** Register the command in the catalog, write the skill/slash surface,
-  add it to the dogfood harness, README.
+- **P5 DONE — surface + docs.** Registered the command in the catalog, wrote the README surface
+  docs, added it to the dogfood harness.
 
 ## Acceptance
 
 - [ ] `llm-ext session-summary --transcript <path>` (and `--session-id` / latest-session default)
-      produces a readable compaction-style summary of a real transcript
-- [ ] never loads the whole file into memory; verified against the 265 MB transcript
-- [ ] $0 by construction — refuses to run on a non-free model even under a paid profile
-- [ ] resumes from checkpoint after an interrupted run
-- [ ] modality filter proven: lyria ids never selected
-- [ ] unit tests + typecheck + lint clean; dogfood covers it
+      produces a readable compaction-style summary of a real transcript — **NOT yet run against a
+      real transcript**: P5's verification scope was explicitly `--help` only (no live
+      summarization, to avoid spending free-tier quota). Reachability proven
+      (`./bin/llm-ext session-summary --help` exercised against the live binary); an actual live
+      run is the natural next step, e.g. via `DOGFOOD_LIVE=1`.
+- [ ] never loads the whole file into memory; verified against the 265 MB transcript — P1's
+      structural test (no sync whole-file read) is unit-verified; the real 265 MB transcript has
+      not been run through the wired-up CLI.
+- [x] $0 by construction — refuses to run on a non-free model even under a paid profile.
+      `summarizeSession()` calls `assertFreeOnlyModel(true, …)` with a HARDCODED `true`, and P5's
+      CLI wiring threads no caller-supplied override — unit-verified in `driver.test.ts` +
+      `model-select.test.ts`.
+- [x] resumes from checkpoint after an interrupted run — unit-verified in `driver.test.ts` (P4);
+      P5 exposes it via `--checkpoint` (deterministic default) and `--resume` (fail-fast if no
+      matching checkpoint exists). Not yet exercised end-to-end against a real interrupted run.
+- [x] modality filter proven: lyria ids never selected — regression test in `model-select.test.ts` (P3).
+- [x] unit tests + typecheck + lint clean; dogfood covers it — full suite 1795 pass / 0 fail / 4
+      skip, `tsc --noEmit` clean, `eslint` clean (all re-run independently); dogfood's dynamic
+      `--help` verb parser covers `session-summary` automatically, plus a new opt-in
+      (`DOGFOOD_LIVE=1`) live-smoke check with a dedicated `sample-session.jsonl` fixture.

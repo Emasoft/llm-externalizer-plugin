@@ -673,6 +673,73 @@ export function buildTools(limitsText: string) {
         },
       },
     },
+    {
+      name: "session_summary",
+      description:
+        "Compaction-style summary of a whole Claude Code session, streamed from its JSONL " +
+        "transcript via map-reduce (never loads the file into memory). $0 by construction: " +
+        "refuses to run on anything but a free, text->text OpenRouter model with " +
+        "context_length >= min_context (default 1,000,000 — today that is the single " +
+        "eligible model). Checkpoints after every chunk/fold, so an interrupted run (e.g. a " +
+        "free daily-quota hit) resumes instead of restarting: re-run the same command and it " +
+        "picks up where it left off automatically. With neither transcript nor session_id, " +
+        "summarizes the most recently modified transcript for the current project.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          transcript: {
+            type: "string",
+            description:
+              "Absolute path to a session's .jsonl transcript. Wins over session_id and the default.",
+          },
+          session_id: {
+            type: "string",
+            description:
+              "A session UUID; resolved to ~/.claude/projects/<project-slug>/<session_id>.jsonl " +
+              "for the current project.",
+          },
+          prune: {
+            type: "string",
+            description:
+              "One of 'aggressive' (default — drops tool-result payloads, pasted file " +
+              "contents, thinking blocks; keeps user/assistant prose, tool names + arg " +
+              "summaries, errors), 'moderate' (head/tail-truncates each tool result), or " +
+              "'none' (no pruning).",
+          },
+          min_context: {
+            type: "number",
+            description:
+              "Minimum context_length an eligible model must report. Default: 1,000,000.",
+          },
+          allow_lower_context: {
+            type: "boolean",
+            description:
+              "Drop the eligibility floor to 262,144 tokens when min_context is not given " +
+              "explicitly, widening the free-model pool (today ~5 models) so a long run has " +
+              "a rotation partner when the default single 1M model's daily cap hits.",
+          },
+          resume: {
+            type: "boolean",
+            description:
+              "Require an existing, matching checkpoint at the checkpoint path — fails fast " +
+              "if none is found, instead of silently starting a fresh run. Omit (or false) to " +
+              "start fresh when no checkpoint exists and resume automatically when one does.",
+          },
+          checkpoint: {
+            type: "string",
+            description:
+              "Absolute path to the checkpoint file. Default: a path derived deterministically " +
+              "from the resolved transcript path under ~/.llm-externalizer/session-summary-checkpoints/.",
+          },
+          output: {
+            type: "string",
+            description:
+              "Absolute path to a custom output directory for the summary report. Default: " +
+              "<main-project-dir>/reports/llm-externalizer/, same resolution as every other tool.",
+          },
+        },
+      },
+    },
     // ── Batch Operations ────────────────────────────────────────────────
     {
       name: "batch_check",

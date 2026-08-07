@@ -67,6 +67,11 @@ BENCH_BUNDLE = ENGINE_DIR / "dist" / "benchmark.js"
 SKILLS_DIR = PROJECT_ROOT / "skills"
 COMMANDS_DIR = PROJECT_ROOT / "commands"
 FIXTURE = Path(__file__).resolve().parent / "sample-fixture.txt"
+# Tiny 2-line JSONL transcript for the opt-in session_summary live smoke —
+# session_summary needs a real .jsonl to point --transcript at; using the
+# project's own live ~/.claude/projects/ transcripts here would be both
+# non-deterministic (whichever happens to be newest) and a privacy leak.
+SESSION_FIXTURE = Path(__file__).resolve().parent / "sample-session.jsonl"
 
 # A model id that exists in the public OpenRouter catalog and is stable enough
 # to look up. The lookup is a catalog read (no LLM call, no key, $0).
@@ -914,6 +919,12 @@ def phase_live_smoke(h: Harness) -> None:
         "code_task",
         ["code_task", "--instructions", "Name the single function in this file.", "--input_files_paths", str(FIXTURE)],
         "free-pool code_task answered by a :free model ($0)",
+    )
+    _live_smoke_one(
+        h,
+        "session_summary",
+        ["session_summary", "--transcript", str(SESSION_FIXTURE)],
+        "session_summary answered by a free, >=1M-context model ($0)",
     )
 
 

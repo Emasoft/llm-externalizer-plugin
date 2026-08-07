@@ -48,6 +48,14 @@ import {
 } from "./cluster/cluster_synonyms_main.js";
 import type { Phase1RawLlmCall } from "./cluster/phase1_batch.js";
 import { makePreflightHook } from "./cluster/preflight_benchmark.js";
+// session-summary (TRDD-T4MZ8YQR P5). The pipeline (transcript reader,
+// chunker, model-select, driver) is frozen from P1-P4; this file only wires
+// it to a real model call + real filesystem paths. resolveTranscriptPath /
+// defaultCheckpointPath are CLI-surface plumbing, kept OUT of session_summary/
+// on purpose (see session-summary-resolve.ts's own header).
+import { summarizeSession, type CallModelFn } from "./session_summary/driver.js";
+import { selectModels } from "./session_summary/model-select.js";
+import { resolveTranscriptPath, defaultCheckpointPath } from "./session-summary-resolve.js";
 // Provider layer (B1 Phase 5a/5b, TRDD-63314265). These modules import NOTHING
 // from index.ts — the mutable backend/profile state they need is handed to them
 // through the `providerDeps` seam object built below.
@@ -3769,6 +3777,160 @@ async function dispatchCallToolInner(
         }
         lines.push("", "* = active profile. Use --show <name> for full resolved detail.");
         return { content: [{ type: "text", text: lines.join("\n") }] };
+      }
+
+      case "session_summary": {
+        const {
+          transcript: ssTranscript,
+          session_id: ssSessionId,
+          prune: ssPruneRaw,
+          min_context: ssMinContext,
+          allow_lower_context: ssAllowLowerContext,
+          resume: ssResume,
+          checkpoint: ssCheckpointRaw,
+          output: ssOutputRaw,
+        } = args as {
+          transcript?: string;
+          session_id?: string;
+          prune?: string;
+          min_context?: number;
+          allow_lower_context?: boolean;
+          resume?: boolean;
+          checkpoint?: string;
+          output?: string;
+        };
+
+        const VALID_PRUNE_LEVELS = new Set(["aggressive", "moderate", "none"]);
+        const prune = ssPruneRaw ?? "aggressive";
+        if (!VALID_PRUNE_LEVELS.has(prune)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `FAILED: --prune must be one of aggressive, moderate, none (got '${prune}')`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        let transcriptPath: string;
+        try {
+          transcriptPath = resolveTranscriptPath({
+            transcriptPath: ssTranscript,
+            sessionId: ssSessionId,
+          });
+        } catch (err) {
+          return {
+            content: [{ type: "text", text: `FAILED: ${err instanceof Error ? err.message : String(err)}` }],
+            isError: true,
+          };
+        }
+
+        // Cost-safety + eligibility: catalog-only, $0. selectModels() itself
+        // routes every candidate id through assertFreeOnlyModel — this call
+        // can never hand back a paid model (see model-select.ts's own header).
+        let eligible;
+        try {
+          eligible = await selectModels({
+            minContext: ssMinContext,
+            allowLowerContext: ssAllowLowerContext === true,
+          });
+        } catch (err) {
+          return {
+            content: [{ type: "text", text: `FAILED: ${err instanceof Error ? err.message : String(err)}` }],
+            isError: true,
+          };
+        }
+        const model = eligible[0];
+        if (!model.maxCompletionTokens || model.maxCompletionTokens <= 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `FAILED: selected model '${model.id}' reports no max_completion_tokens on the ` +
+                  `OpenRouter catalog — cannot size the summarization prompt safely.`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const checkpointPath = ssCheckpointRaw
+          ? resolve(ssCheckpointRaw)
+          : defaultCheckpointPath(transcriptPath, getConfigDir());
+
+        if (ssResume === true && !existsSync(checkpointPath)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `FAILED: --resume was given but no checkpoint exists at ${checkpointPath} for ` +
+                  `this transcript. Re-run without --resume to start a fresh run (it will create one).`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        // The injected model-call seam driver.ts requires (see its own header):
+        // pure core + thin IO shell. This is the only place session-summary
+        // touches the network — driver.ts and its tests never do.
+        const callModel: CallModelFn = async (prompt, modelId, maxOutputTokens) => {
+          const resp = await chatCompletionWithRetry(
+            [{ role: "user", content: prompt }],
+            { model: modelId, maxTokens: maxOutputTokens, temperature: DEFAULT_TEMPERATURE, onProgress },
+            providerDeps,
+          );
+          if (resp.finishReason === "error" || resp.content.trim().length === 0) {
+            throw new Error(
+              `model call to '${modelId}' failed (finishReason=${resp.finishReason}): ` +
+                `${resp.content || "empty response"}`,
+            );
+          }
+          return resp.content;
+        };
+
+        let result;
+        try {
+          result = await summarizeSession({
+            transcriptPath,
+            checkpointPath,
+            modelId: model.id,
+            modelMaxContext: model.contextLength,
+            modelMaxCompletionTokens: model.maxCompletionTokens,
+            callModel,
+            pruneLevel: prune as "aggressive" | "moderate" | "none",
+          });
+        } catch (err) {
+          return {
+            content: [{ type: "text", text: `FAILED: ${err instanceof Error ? err.message : String(err)}` }],
+            isError: true,
+          };
+        }
+
+        const header =
+          `Model: ${model.id} (context ${model.contextLength.toLocaleString()})\n` +
+          `Transcript: ${transcriptPath}\n` +
+          `Chunks: ${result.totalChunks}\n` +
+          `Lines read: ${result.transcriptStats.linesRead}, prune ratio: ` +
+          `${result.transcriptStats.pruneRatio.toFixed(3)} (level: ${prune})\n` +
+          (result.resumedFromCheckpoint
+            ? `Resumed from checkpoint: ${result.checkpointPath}\n`
+            : `Checkpoint: ${result.checkpointPath}\n`);
+
+        const ssOutputDir =
+          typeof ssOutputRaw === "string" && ssOutputRaw.trim() ? resolve(ssOutputRaw.trim()) : undefined;
+        const savedPath = saveResponse(
+          "session_summary",
+          `${header}\n---\n\n${result.summary}`,
+          { model: model.id, task: `session-summary of ${transcriptPath}` },
+          undefined,
+          ssOutputDir,
+        );
+        return { content: [{ type: "text", text: savedPath }] };
       }
 
       // ── Batch Operations ──────────────────────────────────────────────

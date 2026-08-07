@@ -1,0 +1,2 @@
+{"type": "user", "uuid": "u1", "parentUuid": null, "timestamp": "2026-01-01T00:00:00Z", "message": {"role": "user", "content": "Please add a function that sums two numbers."}}
+{"type": "assistant", "uuid": "a1", "parentUuid": "u1", "timestamp": "2026-01-01T00:00:05Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "I added addNumbers(a, b) to sample-fixture.txt."}]}}
