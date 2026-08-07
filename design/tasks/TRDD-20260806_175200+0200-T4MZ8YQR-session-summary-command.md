@@ -87,9 +87,21 @@ whole session from the JSONL transcript of the project session, **using only fre
   model bug rather than a filter bug. Fail-fast on an empty eligible set names the applied
   filters and suggests `allowLowerContext`; two tests assert a paid model can never be selected
   regardless of caller or profile. Tests are fixture-injected — no network.
-- **P4-P5 still HELD** pending the user's ruling. Nothing built so far depends on either
-  assumption: the prune level is a parameter, the chunker takes a token budget, and the context
-  floor is an argument with the 1M default the request asked for.
+- **P4 DONE (2026-08-07)** — `session_summary/driver.ts` + tests: map each chunk, reduce, recurse
+  when the fold itself overflows the window, checkpoint after EVERY chunk. 50 tests pass in the
+  session-summary suite (re-run independently), no network in tests.
+  The checkpointing is not defensive polish: at the default 1M floor exactly ONE free model
+  qualifies, so there is no rotation partner when its daily cap hits and an interrupted run is
+  the NORMAL case. Tests therefore assert the parts that make resume trustworthy rather than
+  merely present — already-checkpointed chunks are not re-sent to the model; a checkpoint whose
+  transcript or prune level no longer matches fails fast instead of folding a summary of one
+  input into another; corrupt checkpoint JSON fails fast rather than silently starting over
+  (which would look like success while re-spending the whole run); a rate limit raises an
+  actionable error naming the checkpoint path instead of retry-looping. The cost chokepoint sits
+  BEFORE any I/O — "refuses a non-free modelId before touching the transcript or calling the
+  model" — so it cannot be bypassed by a path that forgets to ask.
+- **P5 (CLI surface + docs + dogfood) still open.** Deliberately last: registering the command is
+  what makes all of the above user-reachable, and it should land only once the driver is trusted.
 
 ### Phases (each lands with tests; no phase exceeds 5 files)
 
