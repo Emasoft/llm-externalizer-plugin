@@ -254068,6 +254068,14 @@ async function ensureAutoFreeDecided() {
     );
   }
 }
+async function resolveMassScoutFreeModelOverride(requestedModel) {
+  await ensureAutoFreeDecided();
+  return resolveSubsystemFreeModel(
+    isFreeModeActive(),
+    activeFreePool(),
+    requestedModel
+  );
+}
 function invalidateBalanceCache() {
   cachedBalanceUsd = null;
   balanceCacheTime = 0;
@@ -255018,12 +255026,7 @@ Run the "discover" tool to see the current profile status.`
     }
     if (MASS_SCOUT_TOOL_NAMES.has(name)) {
       const scoutArgs = { ...args ?? {} };
-      await ensureAutoFreeDecided();
-      const freeActive = isFreeModeActive();
-      const freePool = activeFreePool();
-      const inject = resolveSubsystemFreeModel(
-        freeActive,
-        freePool,
+      const inject = await resolveMassScoutFreeModelOverride(
         typeof scoutArgs.model === "string" ? scoutArgs.model : ""
       );
       if (inject) {
@@ -257325,28 +257328,7 @@ async function boot() {
   _booted = true;
 }
 
-// src/cli.ts
-import { writeFileSync as writeFileSync23, existsSync as existsSync25, statSync as statSync13, unlinkSync as unlinkSync3 } from "node:fs";
-import { resolve as resolvePath, isAbsolute as isAbsolute6, join as join32 } from "node:path";
-import { spawnSync as spawnSync5 } from "node:child_process";
-import { tmpdir as tmpdir2 } from "node:os";
-function die(msg) {
-  process.stderr.write(`Error: ${msg}
-`);
-  process.exit(1);
-}
-function info(msg) {
-  process.stdout.write(`${msg}
-`);
-}
-function infoErr(msg) {
-  process.stderr.write(`${msg}
-`);
-}
-function successBanner(tool, resultText) {
-  const line = formatSuccessBanner(tool, resultText);
-  if (line) infoErr(line);
-}
+// src/cli-mass-scout-free.ts
 function parseFlags3(args) {
   const flags = {};
   for (let i = 0; i < args.length; i++) {
@@ -257368,6 +257350,86 @@ function parseFlags3(args) {
     }
   }
   return flags;
+}
+var MASS_SCOUT_MODEL_AWARE_SUBS = /* @__PURE__ */ new Set([
+  "register",
+  "estimate",
+  "scout",
+  "propose-fieldset",
+  "chain",
+  "security-scan"
+]);
+function setFlagValue(argv, flagName, value) {
+  const out = [...argv];
+  const eqPrefix = `--${flagName}=`;
+  for (let i = 0; i < out.length; i++) {
+    if (out[i] === `--${flagName}`) {
+      if (i + 1 < out.length && !out[i + 1].startsWith("--")) {
+        out[i + 1] = value;
+      } else {
+        out.splice(i + 1, 0, value);
+      }
+      return out;
+    }
+    if (out[i].startsWith(eqPrefix)) {
+      out[i] = `${eqPrefix}${value}`;
+      return out;
+    }
+  }
+  return [...out, `--${flagName}`, value];
+}
+async function injectMassScoutFreeModel(argv, resolveOverride = resolveMassScoutFreeModelOverride) {
+  const sub = argv[0];
+  if (!MASS_SCOUT_MODEL_AWARE_SUBS.has(sub ?? "")) return argv;
+  const rest = argv.slice(1);
+  if (sub === "security-scan") {
+    const flags2 = parseFlags3(rest);
+    const rawInputJson = flags2["input-json"];
+    if (!rawInputJson || rawInputJson === "true") return argv;
+    let parsed;
+    try {
+      parsed = JSON.parse(rawInputJson);
+    } catch {
+      return argv;
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return argv;
+    }
+    const obj = parsed;
+    const currentModel2 = typeof obj.model === "string" ? obj.model : "";
+    const override2 = await resolveOverride(currentModel2);
+    if (override2 === void 0) return argv;
+    obj.model = override2;
+    return [sub, ...setFlagValue(rest, "input-json", JSON.stringify(obj))];
+  }
+  const flags = parseFlags3(rest);
+  const currentModel = flags["model"] && flags["model"] !== "true" ? flags["model"] : "";
+  const override = await resolveOverride(currentModel);
+  if (override === void 0) return argv;
+  return [sub, ...setFlagValue(rest, "model", override)];
+}
+
+// src/cli.ts
+import { writeFileSync as writeFileSync23, existsSync as existsSync25, statSync as statSync13, unlinkSync as unlinkSync3 } from "node:fs";
+import { resolve as resolvePath, isAbsolute as isAbsolute6, join as join32 } from "node:path";
+import { spawnSync as spawnSync5 } from "node:child_process";
+import { tmpdir as tmpdir2 } from "node:os";
+function die(msg) {
+  process.stderr.write(`Error: ${msg}
+`);
+  process.exit(1);
+}
+function info(msg) {
+  process.stdout.write(`${msg}
+`);
+}
+function infoErr(msg) {
+  process.stderr.write(`${msg}
+`);
+}
+function successBanner(tool, resultText) {
+  const line = formatSuccessBanner(tool, resultText);
+  if (line) infoErr(line);
 }
 function cmdList() {
   const settings = ensureSettingsExist();
@@ -257948,14 +258010,19 @@ async function main() {
   }
   if (args[0] === "mass-scout") {
     const { runMassScoutCli: runMassScoutCli2 } = await Promise.resolve().then(() => (init_cli(), cli_exports));
-    const result = await runMassScoutCli2(args.slice(1));
+    const scoutArgv = await injectMassScoutFreeModel(args.slice(1));
+    const result = await runMassScoutCli2(scoutArgv);
     if (result.stdout) process.stdout.write(result.stdout);
     if (result.stderr) process.stderr.write(result.stderr);
     process.exit(result.exitCode);
   }
   if (args[0] === "security-scan") {
     const { runMassScoutCli: runMassScoutCli2 } = await Promise.resolve().then(() => (init_cli(), cli_exports));
-    const result = await runMassScoutCli2(["security-scan", ...args.slice(1)]);
+    const scoutArgv = await injectMassScoutFreeModel([
+      "security-scan",
+      ...args.slice(1)
+    ]);
+    const result = await runMassScoutCli2(scoutArgv);
     if (result.stdout) process.stdout.write(result.stdout);
     if (result.stderr) process.stderr.write(result.stderr);
     process.exit(result.exitCode);

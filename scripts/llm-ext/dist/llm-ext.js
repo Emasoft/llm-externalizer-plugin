@@ -253563,6 +253563,14 @@ async function ensureAutoFreeDecided() {
     );
   }
 }
+async function resolveMassScoutFreeModelOverride(requestedModel) {
+  await ensureAutoFreeDecided();
+  return resolveSubsystemFreeModel(
+    isFreeModeActive(),
+    activeFreePool(),
+    requestedModel
+  );
+}
 function invalidateBalanceCache() {
   cachedBalanceUsd = null;
   balanceCacheTime = 0;
@@ -254525,12 +254533,7 @@ Run the "discover" tool to see the current profile status.`
     }
     if (MASS_SCOUT_TOOL_NAMES.has(name)) {
       const scoutArgs = { ...args ?? {} };
-      await ensureAutoFreeDecided();
-      const freeActive = isFreeModeActive();
-      const freePool = activeFreePool();
-      const inject = resolveSubsystemFreeModel(
-        freeActive,
-        freePool,
+      const inject = await resolveMassScoutFreeModelOverride(
         typeof scoutArgs.model === "string" ? scoutArgs.model : ""
       );
       if (inject) {
