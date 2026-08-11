@@ -6,13 +6,15 @@ import { describe, it, expect } from "vitest";
 import {
   selectEligibleModels,
   DEFAULT_MIN_CONTEXT,
-  LOWER_CONTEXT_FLOOR,
   type CatalogModel,
 } from "./model-select.js";
 
-// The exact real-world shape from the TRDD's verified facts (2026-08-06 live
-// catalog snapshot): one genuine free text->text model at 1M ctx, and two
-// free music models that are numerically 1M+ but text+image->text+audio.
+// The final modality rule is PERMISSIVE: text must be present on BOTH sides
+// of "->"; any OTHER modality on either side is irrelevant. This DOES admit
+// the lyria pair (they carry "text" on both sides, even though the rest of
+// their modality is music) — see model-select.ts's header for why that is
+// intentional, and driver.ts's runtime "no-text" fallback for what actually
+// enforces usability.
 const NEMOTRON: CatalogModel = {
   id: "nvidia/nemotron-3-ultra-550b-a55b:free",
   context_length: 1_000_000,
@@ -22,15 +24,7 @@ const NEMOTRON: CatalogModel = {
 };
 
 const LYRIA_PRO: CatalogModel = {
-  id: "google/lyria-3-pro-preview",
-  context_length: 1_048_576,
-  pricing: { prompt: "0", completion: "0" },
-  architecture: { modality: "text+image->text+audio" },
-  top_provider: { max_completion_tokens: 8_192 },
-};
-
-const LYRIA_CLIP: CatalogModel = {
-  id: "google/lyria-3-clip-preview",
+  id: "google/lyria-3-pro-preview:free",
   context_length: 1_048_576,
   pricing: { prompt: "0", completion: "0" },
   architecture: { modality: "text+image->text+audio" },
@@ -53,55 +47,133 @@ const FREE_SMALL_CONTEXT: CatalogModel = {
   top_provider: { max_completion_tokens: 8_192 },
 };
 
-const CATALOG: CatalogModel[] = [NEMOTRON, LYRIA_PRO, LYRIA_CLIP, PAID_BIG_CONTEXT, FREE_SMALL_CONTEXT];
+// text present on both sides, plus extra modalities — must be ELIGIBLE.
+const MULTIMODAL_TEXT_BOTH_SIDES: CatalogModel = {
+  id: "google/gemma-4-31b-it:free",
+  context_length: 262_144,
+  pricing: { prompt: "0", completion: "0" },
+  architecture: { modality: "text+image+video->text" },
+  top_provider: { max_completion_tokens: 8_192 },
+};
+
+// No text on the INPUT side — must be INELIGIBLE.
+const NO_TEXT_INPUT: CatalogModel = {
+  id: "vendor/image-only-in:free",
+  context_length: 262_144,
+  pricing: { prompt: "0", completion: "0" },
+  architecture: { modality: "image->text" },
+  top_provider: { max_completion_tokens: 8_192 },
+};
+
+// No text on the OUTPUT side — must be INELIGIBLE.
+const NO_TEXT_OUTPUT: CatalogModel = {
+  id: "vendor/audio-only-out:free",
+  context_length: 262_144,
+  pricing: { prompt: "0", completion: "0" },
+  architecture: { modality: "text->audio" },
+  top_provider: { max_completion_tokens: 8_192 },
+};
+
+// "textual" must NOT match "text" via substring — proves membership-split,
+// not a raw String.includes() check.
+const SUBSTRING_TRAP: CatalogModel = {
+  id: "vendor/textual-trap:free",
+  context_length: 262_144,
+  pricing: { prompt: "0", completion: "0" },
+  architecture: { modality: "textual->text" },
+  top_provider: { max_completion_tokens: 8_192 },
+};
+
+const CATALOG: CatalogModel[] = [NEMOTRON, LYRIA_PRO, PAID_BIG_CONTEXT, FREE_SMALL_CONTEXT];
 
 describe("selectEligibleModels", () => {
-  it("selects exactly the one free text->text 1M-context model from the TRDD's verified catalog shape", () => {
+  it("with no minContext, returns every eligible free model, biggest context first (no implicit floor)", () => {
     const result = selectEligibleModels(CATALOG);
+    // LYRIA_PRO (1,048,576) sorts ahead of NEMOTRON (1,000,000) — text is
+    // present on both sides of its modality, so it IS eligible even though
+    // it's a music model; that's the permissive-by-design rule.
+    expect(result.map((m) => m.id)).toEqual([
+      "google/lyria-3-pro-preview:free",
+      "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "google/gemma-4-26b:free",
+    ]);
+  });
+
+  it("the default (no floor) still returns the biggest model even when the biggest free text model is below 1,000,000 context", () => {
+    // Nothing at or above 1M in this catalog — the old default floor would
+    // have thrown here. The new default must return the smaller model
+    // anyway, first, instead of refusing.
+    const result = selectEligibleModels([FREE_SMALL_CONTEXT]);
     expect(result).toHaveLength(1);
-    expect(result[0]).toEqual({
-      id: "nvidia/nemotron-3-ultra-550b-a55b:free",
-      contextLength: 1_000_000,
-      maxCompletionTokens: 65_536,
-    });
+    expect(result[0].id).toBe("google/gemma-4-26b:free");
+    expect(result[0].contextLength).toBe(262_144);
   });
 
-  it("excludes free non-text models even when price and context both qualify (the load-bearing modality filter)", () => {
-    // Isolate the effect: a catalog of ONLY the two lyria ids, which pass
-    // price and context but must fail on modality alone.
-    expect(() => selectEligibleModels([LYRIA_PRO, LYRIA_CLIP])).toThrow();
-
-    // Mixed in with a genuine text->text model, the lyria ids are silently
-    // dropped rather than surfacing as false positives.
-    const withLyriaAndNemotron = selectEligibleModels([LYRIA_PRO, LYRIA_CLIP, NEMOTRON]);
-    expect(withLyriaAndNemotron.map((m) => m.id)).toEqual(["nvidia/nemotron-3-ultra-550b-a55b:free"]);
-    expect(withLyriaAndNemotron.some((m) => m.id.startsWith("google/lyria"))).toBe(false);
+  it("admits a model with text on both sides plus extra modalities (image, video) on the input side", () => {
+    const result = selectEligibleModels([MULTIMODAL_TEXT_BOTH_SIDES]);
+    expect(result.map((m) => m.id)).toEqual(["google/gemma-4-31b-it:free"]);
   });
 
-  it("throws fail-fast (never falls back to paid) when only a paid model qualifies on context", () => {
-    expect(() => selectEligibleModels([PAID_BIG_CONTEXT])).toThrow(/no free text->text model/);
+  it("admits text+image->text+audio (lyria-shaped) — text present on both sides is the whole rule, extra modalities are irrelevant", () => {
+    const result = selectEligibleModels([LYRIA_PRO]);
+    expect(result.map((m) => m.id)).toEqual(["google/lyria-3-pro-preview:free"]);
   });
 
-  it("excludes a free text->text model below minContext", () => {
-    expect(() => selectEligibleModels([FREE_SMALL_CONTEXT])).toThrow();
+  it("rejects a model with no text on the INPUT side", () => {
+    expect(() => selectEligibleModels([NO_TEXT_INPUT])).toThrow(/no free text-capable model/);
   });
 
-  it("defaults minContext to DEFAULT_MIN_CONTEXT (1,000,000)", () => {
+  it("rejects a model with no text on the OUTPUT side", () => {
+    expect(() => selectEligibleModels([NO_TEXT_OUTPUT])).toThrow(/no free text-capable model/);
+  });
+
+  it("rejects 'textual->text' — proves membership-split on '+', not a raw substring match against 'text'", () => {
+    expect(() => selectEligibleModels([SUBSTRING_TRAP])).toThrow(/no free text-capable model/);
+  });
+
+  it("rejects a missing or malformed architecture.modality as ineligible, never assuming text", () => {
+    const missingModality: CatalogModel = {
+      id: "vendor/no-modality:free",
+      context_length: 500_000,
+      pricing: { prompt: "0", completion: "0" },
+    };
+    const garbledModality: CatalogModel = {
+      id: "vendor/garbled-modality:free",
+      context_length: 500_000,
+      pricing: { prompt: "0", completion: "0" },
+      architecture: { modality: "not-a-real-modality-string" },
+    };
+    expect(() => selectEligibleModels([missingModality])).toThrow();
+    expect(() => selectEligibleModels([garbledModality])).toThrow();
+  });
+
+  it("throws fail-fast (never falls back to paid) when only a paid model is in the catalog", () => {
+    expect(() => selectEligibleModels([PAID_BIG_CONTEXT])).toThrow(/no free text-capable model/);
+  });
+
+  it("an explicit minContext excludes a free model below it and names the biggest available in the error", () => {
+    expect(() => selectEligibleModels([FREE_SMALL_CONTEXT], { minContext: 1_000_000 })).toThrow(
+      /no free text-capable model with context_length >= 1000000/,
+    );
+    expect(() => selectEligibleModels([FREE_SMALL_CONTEXT], { minContext: 1_000_000 })).toThrow(
+      /google\/gemma-4-26b:free/,
+    );
+  });
+
+  it("DEFAULT_MIN_CONTEXT is documented as 1,000,000 but is NOT applied unless passed explicitly", () => {
     expect(DEFAULT_MIN_CONTEXT).toBe(1_000_000);
-    const result = selectEligibleModels(CATALOG);
+    // Passing it explicitly restores the old hard-floor behavior.
+    const result = selectEligibleModels(CATALOG, { minContext: DEFAULT_MIN_CONTEXT });
     expect(result.every((m) => m.contextLength >= 1_000_000)).toBe(true);
+    expect(result.map((m) => m.id)).toEqual(["google/lyria-3-pro-preview:free", "nvidia/nemotron-3-ultra-550b-a55b:free"]);
   });
 
-  it("allowLowerContext drops the floor to LOWER_CONTEXT_FLOOR (262,144), admitting the smaller free model too", () => {
-    expect(LOWER_CONTEXT_FLOOR).toBe(262_144);
-    const result = selectEligibleModels(CATALOG, { allowLowerContext: true });
+  it("an explicit minContext, when met, still returns every model at or above it (not just the top one)", () => {
+    const result = selectEligibleModels(CATALOG, { minContext: 200_000 });
     const ids = result.map((m) => m.id).sort();
-    expect(ids).toEqual(["google/gemma-4-26b:free", "nvidia/nemotron-3-ultra-550b-a55b:free"].sort());
-  });
-
-  it("an explicit minContext overrides allowLowerContext", () => {
-    const result = selectEligibleModels(CATALOG, { allowLowerContext: true, minContext: 1_000_000 });
-    expect(result.map((m) => m.id)).toEqual(["nvidia/nemotron-3-ultra-550b-a55b:free"]);
+    expect(ids).toEqual(
+      ["google/gemma-4-26b:free", "nvidia/nemotron-3-ultra-550b-a55b:free", "google/lyria-3-pro-preview:free"].sort(),
+    );
   });
 
   it("orders eligible models by context_length descending", () => {
@@ -110,16 +182,36 @@ describe("selectEligibleModels", () => {
     expect(result.map((m) => m.id)).toEqual(["vendor/bigger:free", "nvidia/nemotron-3-ultra-550b-a55b:free"]);
   });
 
-  it("returns an empty-list-only error message that names the applied filters and suggests allowLowerContext", () => {
+  it("breaks a context_length tie by the larger max_completion_tokens, then by model id ascending", () => {
+    const sameContextHigherCompletion: CatalogModel = {
+      ...NEMOTRON,
+      id: "vendor/zzz-same-context:free",
+      top_provider: { max_completion_tokens: 100_000 },
+    };
+    const sameContextSameCompletionLaterId: CatalogModel = {
+      ...NEMOTRON,
+      id: "vendor/zzz-tiebreak:free",
+    };
+    const result = selectEligibleModels([
+      NEMOTRON, // 1M ctx, 65_536 completion, id "nvidia/..."
+      sameContextHigherCompletion, // 1M ctx, 100_000 completion — wins on completion tiebreak
+      sameContextSameCompletionLaterId, // 1M ctx, 65_536 completion, id sorts after "nvidia/..."
+    ]);
+    expect(result.map((m) => m.id)).toEqual([
+      "vendor/zzz-same-context:free", // highest max_completion_tokens first
+      "nvidia/nemotron-3-ultra-550b-a55b:free", // same completion as the third, but lower id
+      "vendor/zzz-tiebreak:free",
+    ]);
+  });
+
+  it("returns a no-eligible-models-at-all error message that names the applied filters", () => {
     try {
       selectEligibleModels([]);
       throw new Error("expected selectEligibleModels to throw on an empty catalog");
     } catch (err) {
       const msg = (err as Error).message;
       expect(msg).toMatch(/pricing\.prompt == 0/);
-      expect(msg).toMatch(/context_length >=/);
       expect(msg).toMatch(/modality/);
-      expect(msg).toMatch(/262144|262,144/);
     }
   });
 
@@ -128,9 +220,11 @@ describe("selectEligibleModels", () => {
     expect(() => selectEligibleModels([noPricing])).toThrow();
   });
 
-  it("treats a missing context_length as 0 (excluded, not a crash)", () => {
+  it("treats a missing context_length as 0 but still returns it when there is no minContext floor", () => {
     const noContext: CatalogModel = { id: "vendor/mystery:free", pricing: { prompt: "0", completion: "0" }, architecture: { modality: "text->text" } };
-    expect(() => selectEligibleModels([noContext])).toThrow();
+    const result = selectEligibleModels([noContext]);
+    expect(result).toHaveLength(1);
+    expect(result[0].contextLength).toBe(0);
   });
 
   it("defaults maxCompletionTokens to 0 when top_provider is absent", () => {
@@ -163,7 +257,7 @@ describe("selectEligibleModels", () => {
     // price != 0) before the cost-safety gate is even reached; assert the
     // whole pipeline end-to-end never returns it, independent of whatever
     // getActiveFreeOnly() would report for the real process.
-    const result = selectEligibleModels([...CATALOG, PAID_BIG_CONTEXT], { allowLowerContext: true });
+    const result = selectEligibleModels([...CATALOG, PAID_BIG_CONTEXT]);
     expect(result.some((m) => m.id === "anthropic/claude-sonnet-5")).toBe(false);
   });
 });

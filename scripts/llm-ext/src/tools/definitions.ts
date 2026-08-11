@@ -678,12 +678,14 @@ export function buildTools(limitsText: string) {
       description:
         "Compaction-style summary of a whole Claude Code session, streamed from its JSONL " +
         "transcript via map-reduce (never loads the file into memory). $0 by construction: " +
-        "refuses to run on anything but a free, text->text OpenRouter model with " +
-        "context_length >= min_context (default 1,000,000 — today that is the single " +
-        "eligible model). Checkpoints after every chunk/fold, so an interrupted run (e.g. a " +
-        "free daily-quota hit) resumes instead of restarting: re-run the same command and it " +
-        "picks up where it left off automatically. With neither transcript nor session_id, " +
-        "summarizes the most recently modified transcript for the current project.",
+        "always uses the biggest free, text-emitting OpenRouter model available today (no " +
+        "hard context floor unless min_context is given). Falls back down the ranked model " +
+        "list automatically if the active model is delisted, stops being free, or exhausts " +
+        "its daily cap mid-run, re-chunking the remaining work to the new model's context. " +
+        "Checkpoints after every chunk/fold, so an interrupted run resumes instead of " +
+        "restarting: re-run the same command and it picks up where it left off automatically. " +
+        "With neither transcript nor session_id, summarizes the most recently modified " +
+        "transcript for the current project.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -709,14 +711,9 @@ export function buildTools(limitsText: string) {
           min_context: {
             type: "number",
             description:
-              "Minimum context_length an eligible model must report. Default: 1,000,000.",
-          },
-          allow_lower_context: {
-            type: "boolean",
-            description:
-              "Drop the eligibility floor to 262,144 tokens when min_context is not given " +
-              "explicitly, widening the free-model pool (today ~5 models) so a long run has " +
-              "a rotation partner when the default single 1M model's daily cap hits.",
+              "Optional hard floor on context_length. Default: none — the biggest free, " +
+              "text-emitting model available today is used, whatever its context is. Set " +
+              "this only to require a guarantee and fail instead of accepting a smaller model.",
           },
           resume: {
             type: "boolean",

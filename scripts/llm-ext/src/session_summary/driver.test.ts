@@ -8,18 +8,32 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { summarizeSession, packIntoBatches, type CallModelFn } from "./driver.js";
+import type { EligibleModel } from "./model-select.js";
+import { resetCooldownCacheForTests } from "../free-rotation.js";
 
 const FREE_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free";
 const PAID_MODEL = "anthropic/claude-sonnet-5";
+const FALLBACK_MODEL = "vendor/fallback-small-context:free";
 
 describe("driver: summarizeSession", () => {
   let dir: string;
+  let prevConfigDir: string | undefined;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "session-summary-driver-"));
+    // recordUnavailable() (free-rotation.ts) persists cooldown bookkeeping
+    // to getConfigDir()/free-cooldowns.json on every fallback switch —
+    // redirect it to a per-test tmp dir so these tests never touch the
+    // developer's real ~/.llm-externalizer config (same pattern as
+    // free-rotation.test.ts).
+    prevConfigDir = process.env.LLM_EXT_CONFIG_DIR;
+    process.env.LLM_EXT_CONFIG_DIR = mkdtempSync(join("/tmp", "llm-ext-driver-cooldowns-"));
+    resetCooldownCacheForTests();
   });
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
+    if (prevConfigDir === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
+    else process.env.LLM_EXT_CONFIG_DIR = prevConfigDir;
   });
 
   function writeTranscript(lines: unknown[], name = "in.jsonl"): string {
@@ -302,5 +316,127 @@ describe("driver: summarizeSession", () => {
         callModel,
       }),
     ).rejects.toThrow(/not valid JSON/);
+  });
+
+  // ── Model fallback (delisted / no-longer-free / daily-cap / no-text) ──
+
+  it("falls back to the next model on a delisted (404) error and re-chunks the remaining unsent work to the new model's smaller context", async () => {
+    const lines = Array.from({ length: 6 }, (_, i) => userTurn(`u${i}`, `distinct fallback-test request ${i} `.repeat(30)));
+    const p = writeTranscript(lines);
+    const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 3_000, maxCompletionTokens: 500 };
+
+    let calls = 0;
+    const usedModelIds: string[] = [];
+    const callModel = vi.fn<CallModelFn>(async (prompt, modelId) => {
+      calls++;
+      usedModelIds.push(modelId);
+      if (calls === 1) {
+        // The primary model's single (huge-budget) chunk fails as delisted
+        // on the very first attempt — before any work is checkpointed.
+        throw new Error("404 No endpoints found for this model — it has been delisted");
+      }
+      if (prompt.includes("You are folding")) return "FOLDED";
+      return `CHUNK(${modelId})`;
+    });
+
+    const result = await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: checkpointPath(),
+      modelId: FREE_MODEL,
+      modelMaxContext: 100_000, // huge budget -> the whole transcript is ONE chunk
+      modelMaxCompletionTokens: 1_000,
+      fallbackModels: [fallback], // tiny budget -> forces several chunks on re-chunk
+      chunkOverlapTurns: 0,
+      callModel,
+    });
+
+    expect(result.fallbackEvents).toHaveLength(1);
+    expect(result.fallbackEvents[0]).toMatchObject({ fromModel: FREE_MODEL, toModel: FALLBACK_MODEL, reason: "gone" });
+    expect(result.modelId).toBe(FALLBACK_MODEL);
+    // THE TRAP this proves is NOT happening: without re-chunking, the
+    // single oversized chunk would be re-sent to the smaller-context
+    // fallback model unchanged and every call would fail. Instead the
+    // remaining work is re-packed to the fallback's own (much smaller)
+    // budget, producing more than the original single chunk.
+    expect(result.totalChunks).toBeGreaterThan(1);
+    // Every call after the first (failed, delisted) one must target the
+    // fallback model — the delisted primary is never retried in this run.
+    expect(usedModelIds.slice(1).every((id) => id === FALLBACK_MODEL)).toBe(true);
+  });
+
+  it("falls back to the next model when the primary returns an empty/no-text response (runtime evidence, not metadata), re-chunking to the new model's smaller context", async () => {
+    const lines = Array.from({ length: 6 }, (_, i) => userTurn(`u${i}`, `distinct notext-test request ${i} `.repeat(30)));
+    const p = writeTranscript(lines);
+    const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 3_000, maxCompletionTokens: 500 };
+
+    let calls = 0;
+    const usedModelIds: string[] = [];
+    const callModel = vi.fn<CallModelFn>(async (prompt, modelId) => {
+      calls++;
+      usedModelIds.push(modelId);
+      if (calls === 1) return "   "; // whitespace-only — a model that emits no usable text
+      if (prompt.includes("You are folding")) return "FOLDED";
+      return `CHUNK(${modelId})`;
+    });
+
+    const result = await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: checkpointPath(),
+      modelId: FREE_MODEL,
+      modelMaxContext: 100_000,
+      modelMaxCompletionTokens: 1_000,
+      fallbackModels: [fallback],
+      chunkOverlapTurns: 0,
+      callModel,
+    });
+
+    expect(result.fallbackEvents).toHaveLength(1);
+    expect(result.fallbackEvents[0].reason).toBe("no-text");
+    expect(result.modelId).toBe(FALLBACK_MODEL);
+    expect(result.totalChunks).toBeGreaterThan(1);
+    expect(usedModelIds.slice(1).every((id) => id === FALLBACK_MODEL)).toBe(true);
+  });
+
+  it("does NOT fall back on an ordinary transient (429) error even when a fallback candidate exists — a blip is not grounds to abandon a model", async () => {
+    const p = writeTranscript([userTurn("u1", "hello")]);
+    const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 3_000, maxCompletionTokens: 500 };
+    let calls = 0;
+    const callModel = vi.fn<CallModelFn>(async () => {
+      calls++;
+      throw new Error("HTTP 429: rate limit exceeded, try again later");
+    });
+
+    await expect(
+      summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 65_536,
+        fallbackModels: [fallback],
+        callModel,
+      }),
+    ).rejects.toThrow(/rate limit/);
+    expect(calls).toBe(1); // no retry, and no silent switch to the fallback candidate
+  });
+
+  it("exhausts every candidate and surfaces an actionable error naming all tried models when none survive", async () => {
+    const p = writeTranscript([userTurn("u1", "hello")]);
+    const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 3_000, maxCompletionTokens: 500 };
+    const callModel = vi.fn<CallModelFn>(async () => {
+      throw new Error("404 No endpoints found — delisted");
+    });
+
+    await expect(
+      summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 65_536,
+        fallbackModels: [fallback],
+        callModel,
+      }),
+    ).rejects.toThrow(/every candidate free model is unavailable/);
   });
 });

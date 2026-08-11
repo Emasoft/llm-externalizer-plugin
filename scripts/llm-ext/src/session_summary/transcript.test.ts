@@ -253,6 +253,42 @@ describe("readTranscript", () => {
       expect(source).toContain("createInterface");
     });
 
+    it("the stripped-output write path never buffers a joined string (structural proof)", () => {
+      // `writeFileSync(path, turns.map(...).join(...))` would buffer the
+      // entire stripped transcript as one string before writing it — exactly
+      // the pattern the streaming write exists to avoid. Assert the source
+      // only ever reaches for the incremental `createWriteStream` primitive
+      // for this path, with no whole-array-join write anywhere in the file.
+      const srcPath = new URL("./transcript.ts", import.meta.url).pathname;
+      const source = readFileSync(srcPath, "utf8");
+      expect(source).toContain("createWriteStream");
+      expect(source).not.toMatch(/\bwriteFileSync\b/);
+      expect(source).not.toMatch(/\bappendFileSync\b/);
+    });
+
+    it("streams the pruned turns to strippedOutputPath as ordered JSONL, incrementally", async () => {
+      const p = write([
+        { type: "user", uuid: "u1", parentUuid: null, timestamp: "t1", message: { role: "user", content: "first" } },
+        { type: "assistant", uuid: "a1", parentUuid: "u1", timestamp: "t2", message: { role: "assistant", content: "second" } },
+        { type: "user", uuid: "u2", parentUuid: "a1", timestamp: "t3", message: { role: "user", content: "third" } },
+      ]);
+      const outPath = join(dir, "stripped.jsonl");
+      const { turns } = await readTranscript(p, { strippedOutputPath: outPath });
+
+      const written = readFileSync(outPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+      expect(written).toHaveLength(3);
+      expect(written.map((t) => t.text)).toEqual(["first", "second", "third"]);
+      // The on-disk artifact matches the in-memory pruned turns exactly.
+      expect(written).toEqual(turns);
+    });
+
+    it("does not create a stripped-output file when strippedOutputPath is omitted", async () => {
+      const p = write([{ type: "user", uuid: "u1", parentUuid: null, timestamp: "t1", message: { role: "user", content: "hi" } }]);
+      const outPath = join(dir, "never-created.jsonl");
+      await readTranscript(p);
+      expect(() => statSync(outPath)).toThrow();
+    });
+
     it("processes a large fixture correctly with bounded heap growth relative to file size", async () => {
       const p = join(dir, "big.jsonl");
       // Build a ~20 MB fixture: 40,000 lines of a modest assistant turn each,

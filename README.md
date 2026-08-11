@@ -743,10 +743,14 @@ into token-budgeted chunks → map (summarize each chunk) → reduce (fold the c
 one, recursing when a fold itself overflows the window). Every chunk/fold is checkpointed, so an
 interrupted run (e.g. a free daily-quota hit) resumes automatically on re-run.
 
-Cost safety is structural, not a flag: it only ever selects a free, `text->text` OpenRouter model
-whose `context_length >= --min-context` (default `1,000,000`) — today that is exactly one model.
-`--allow-lower-context` drops the floor to `262,144` (~5 free models) so a long run has a rotation
-partner once the default model's daily cap hits.
+Cost safety is structural, not a flag: it only ever selects a free OpenRouter model that has
+`text` on both sides of its `architecture.modality` (extra modalities on either side — image,
+audio, video — are irrelevant and never disqualify). There is no hard context floor by default —
+it always picks the BIGGEST such model available today, whatever that is; pass `--min-context` to
+require a hard floor instead (fails if nothing clears it). If the picked model is delisted, stops
+being free, exhausts its daily cap, or returns an empty/no-text response mid-run, the run falls
+back automatically to the next-biggest eligible model and re-chunks the remaining (unsent) work to
+its context — already-checkpointed chunk/fold summaries are untouched.
 
 | Flag | Purpose |
 |---|---|
@@ -754,8 +758,7 @@ partner once the default model's daily cap hits.
 | `--session-id <id>` | Resolve a transcript within the current project's `~/.claude/projects/<slug>/` dir. |
 | (neither given) | Defaults to the most recently modified transcript for the current project. |
 | `--prune aggressive\|moderate\|none` | Default `aggressive` — drops tool-result payloads, pasted file contents, thinking blocks. |
-| `--min-context <n>` | Minimum eligible model `context_length`. Default `1,000,000`. |
-| `--allow-lower-context` | Widen the eligible pool to `262,144`+ when `--min-context` is not given explicitly. |
+| `--min-context <n>` | Optional hard floor on eligible model `context_length`. Default: none (biggest available is used). |
 | `--resume` | Require an existing, matching checkpoint — fails fast instead of silently starting fresh. |
 | `--checkpoint <path>` | Override the checkpoint file. Default: derived deterministically from the transcript path under `~/.llm-externalizer/session-summary-checkpoints/`. |
 | `--output <path>` | Custom output directory for the summary report. Default: `<main-project-dir>/reports/llm-externalizer/`. |

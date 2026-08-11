@@ -1,8 +1,9 @@
 // Unit tests for chunker.ts — turn-boundary chunker for session-summary
-// transcripts. Pure function, no I/O.
+// transcripts. Pure function, no I/O, no network.
 
 import { describe, it, expect } from "vitest";
-import { chunkTurns, BYTES_PER_TOKEN_ESTIMATE } from "./chunker.js";
+import { countTokens } from "gpt-tokenizer";
+import { chunkTurns, estimateTokens, computeUsableTokenBudget, TOKEN_ESTIMATE_SAFETY_MARGIN } from "./chunker.js";
 import type { Turn } from "./transcript.js";
 
 function makeTurn(id: string, text: string, extra: Partial<Turn> = {}): Turn {
@@ -17,6 +18,28 @@ function makeTurn(id: string, text: string, extra: Partial<Turn> = {}): Turn {
     ...extra,
   };
 }
+
+describe("estimateTokens", () => {
+  it("computes token counts from the real BPE tokenizer, not the old bytes/4 heuristic", () => {
+    // "a" repeated compresses heavily under BPE — its real token count is
+    // provably NOT text.length/4 (the old heuristic), and provably smaller.
+    const text = "a".repeat(40);
+    const naiveBytesOverFour = Math.ceil(Buffer.byteLength(text, "utf8") / 4);
+    const real = countTokens(text);
+    expect(real).not.toBe(naiveBytesOverFour);
+    expect(real).toBeLessThan(naiveBytesOverFour);
+  });
+
+  it("applies TOKEN_ESTIMATE_SAFETY_MARGIN on top of the raw tokenizer count", () => {
+    const text = "The quick brown fox jumps over the lazy dog, more than once. ".repeat(5);
+    const raw = countTokens(text);
+    expect(estimateTokens(text)).toBe(Math.ceil(raw * TOKEN_ESTIMATE_SAFETY_MARGIN));
+  });
+
+  it("returns 0 for empty text", () => {
+    expect(estimateTokens("")).toBe(0);
+  });
+});
 
 describe("chunkTurns", () => {
   it("throws on a non-positive maxTokens", () => {
@@ -47,10 +70,10 @@ describe("chunkTurns", () => {
   });
 
   it("splits into multiple chunks once the budget is exceeded, without exceeding it (overlapTurns=0)", () => {
-    // Each turn's text is exactly 40 bytes -> 10 tokens at BYTES_PER_TOKEN_ESTIMATE=4.
-    const turnText = "x".repeat(40);
+    const turnText = "The quick brown fox jumps over the lazy dog. ".repeat(3);
+    const perTurnTokens = estimateTokens(turnText);
     const turns = Array.from({ length: 10 }, (_, i) => makeTurn(String(i), turnText));
-    const maxTokens = 25; // fits 2 turns (20 tokens) but not 3 (30 tokens)
+    const maxTokens = perTurnTokens * 2 + 1; // fits 2 turns but not 3
     const result = chunkTurns(turns, { maxTokens, overlapTurns: 0 });
 
     expect(result.chunks.length).toBeGreaterThan(1);
@@ -60,8 +83,10 @@ describe("chunkTurns", () => {
   });
 
   it("loses no original turn — every input turn's uuid appears in at least one chunk", () => {
-    const turns = Array.from({ length: 25 }, (_, i) => makeTurn(String(i), `turn number ${i} `.repeat(3)));
-    const result = chunkTurns(turns, { maxTokens: 30, overlapTurns: 2 });
+    const turnText = "turn content padding padding ".repeat(3);
+    const perTurnTokens = estimateTokens(turnText);
+    const turns = Array.from({ length: 25 }, (_, i) => makeTurn(String(i), turnText));
+    const result = chunkTurns(turns, { maxTokens: perTurnTokens * 3, overlapTurns: 2 });
 
     const seenUuids = new Set<string>();
     for (const chunk of result.chunks) {
@@ -73,9 +98,10 @@ describe("chunkTurns", () => {
   });
 
   it("overlaps the last N turns of a chunk into the start of the next chunk", () => {
-    const turnText = "x".repeat(40); // 10 tokens each
+    const turnText = "The quick brown fox jumps over the lazy dog. ".repeat(3);
+    const perTurnTokens = estimateTokens(turnText);
     const turns = Array.from({ length: 6 }, (_, i) => makeTurn(String(i), turnText));
-    const result = chunkTurns(turns, { maxTokens: 25, overlapTurns: 2 });
+    const result = chunkTurns(turns, { maxTokens: perTurnTokens * 2 + 1, overlapTurns: 2 });
 
     expect(result.chunks.length).toBeGreaterThanOrEqual(2);
     const first = result.chunks[0];
@@ -90,9 +116,10 @@ describe("chunkTurns", () => {
   });
 
   it("does not mark overlap flags when overlapTurns=0", () => {
-    const turnText = "x".repeat(40);
+    const turnText = "The quick brown fox jumps over the lazy dog. ".repeat(3);
+    const perTurnTokens = estimateTokens(turnText);
     const turns = Array.from({ length: 6 }, (_, i) => makeTurn(String(i), turnText));
-    const result = chunkTurns(turns, { maxTokens: 25, overlapTurns: 0 });
+    const result = chunkTurns(turns, { maxTokens: perTurnTokens * 2 + 1, overlapTurns: 0 });
     expect(result.chunks.length).toBeGreaterThanOrEqual(2);
     for (const chunk of result.chunks) {
       expect(chunk.continuesNext).toBe(false);
@@ -101,9 +128,10 @@ describe("chunkTurns", () => {
   });
 
   it("splits a single turn that alone exceeds the budget into [continued] pieces on line boundaries", () => {
-    const lines = Array.from({ length: 50 }, (_, i) => `line ${i} of a huge tool_result`);
+    const lines = Array.from({ length: 50 }, (_, i) => `line ${i} of a huge tool_result, with some extra padding text`);
     const huge = makeTurn("huge", lines.join("\n"));
-    const maxTokens = 50; // 50*4 = 200 bytes per chunk; the whole text is far larger
+    const perLineTokens = estimateTokens(lines[0]);
+    const maxTokens = perLineTokens * 5; // far smaller than the whole text
     const result = chunkTurns([huge], { maxTokens, overlapTurns: 0 });
 
     expect(result.totalTurnsOut).toBeGreaterThan(1); // it was split into multiple pieces
@@ -120,12 +148,13 @@ describe("chunkTurns", () => {
   });
 
   it("attaches an oversized turn's toolCalls/errors only to its first split piece", () => {
-    const lines = Array.from({ length: 50 }, (_, i) => `line ${i}`);
+    const lines = Array.from({ length: 50 }, (_, i) => `line number ${i} with some padding text so it tokenizes to more than one token`);
     const huge = makeTurn("huge2", lines.join("\n"), {
       toolCalls: [{ name: "Bash", argSummary: "command=ls" }],
       errors: ["boom"],
     });
-    const result = chunkTurns([huge], { maxTokens: 20, overlapTurns: 0 });
+    const perLineTokens = estimateTokens(lines[0]);
+    const result = chunkTurns([huge], { maxTokens: perLineTokens * 3, overlapTurns: 0 });
     const pieces = result.chunks.flatMap((c) => c.turns);
     expect(pieces.length).toBeGreaterThan(1);
     expect(pieces[0].toolCalls).toEqual([{ name: "Bash", argSummary: "command=ls" }]);
@@ -136,17 +165,54 @@ describe("chunkTurns", () => {
     }
   });
 
-  it("never exceeds the budget on a per-piece basis even for an oversized turn (single-line exception aside)", () => {
+  it("never exceeds the budget on a per-piece basis for an oversized turn (single-line exception aside)", () => {
     const lines = Array.from({ length: 200 }, (_, i) => `short${i}`);
     const huge = makeTurn("huge3", lines.join("\n"));
     const maxTokens = 10;
-    const maxBytes = maxTokens * BYTES_PER_TOKEN_ESTIMATE;
     const result = chunkTurns([huge], { maxTokens, overlapTurns: 0 });
     const pieces = result.chunks.flatMap((c) => c.turns);
     for (const piece of pieces) {
-      // Each piece's raw text (marker aside) should be close to the byte
-      // budget — never wildly over it, since every line here is short.
-      expect(Buffer.byteLength(piece.text, "utf8")).toBeLessThanOrEqual(maxBytes * 2);
+      const rawPieceText = piece.text.replace(/ \[continued \d+\/\d+\]$/, "");
+      // Each piece's own text should not wildly exceed the budget, since
+      // every source line here tokenizes to well under `maxTokens` alone.
+      expect(estimateTokens(rawPieceText)).toBeLessThanOrEqual(maxTokens * 2);
     }
+  });
+});
+
+describe("computeUsableTokenBudget", () => {
+  it("returns context_length minus the reserved completion minus the measured prompt overhead", () => {
+    const overheadText = "You are summarizing a coding session transcript. Follow these instructions exactly.";
+    const overheadTokens = estimateTokens(overheadText);
+    const result = computeUsableTokenBudget({
+      contextLength: 100_000,
+      maxCompletionTokens: 8_000,
+      promptOverheadText: overheadText,
+    });
+    expect(result).toBe(100_000 - 8_000 - overheadTokens);
+  });
+
+  it("throws when the usable budget is non-positive", () => {
+    expect(() =>
+      computeUsableTokenBudget({
+        contextLength: 1_000,
+        maxCompletionTokens: 950,
+        promptOverheadText: "padding text ".repeat(50),
+      }),
+    ).toThrow();
+  });
+
+  it("throws on a non-positive contextLength", () => {
+    expect(() => computeUsableTokenBudget({ contextLength: 0, maxCompletionTokens: 10, promptOverheadText: "" })).toThrow();
+    expect(() => computeUsableTokenBudget({ contextLength: -1, maxCompletionTokens: 10, promptOverheadText: "" })).toThrow();
+  });
+
+  it("throws on a negative maxCompletionTokens", () => {
+    expect(() => computeUsableTokenBudget({ contextLength: 1000, maxCompletionTokens: -1, promptOverheadText: "" })).toThrow();
+  });
+
+  it("accepts a zero prompt overhead and a zero completion reserve", () => {
+    const result = computeUsableTokenBudget({ contextLength: 1000, maxCompletionTokens: 0, promptOverheadText: "" });
+    expect(result).toBe(1000);
   });
 });

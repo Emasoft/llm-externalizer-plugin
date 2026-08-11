@@ -21,10 +21,16 @@
  * block" rather than throwing, because the transcript format is not
  * versioned and a newer Claude Code build can add a block type this
  * module has never seen.
+ *
+ * When `strippedOutputPath` is given, the pruned turns are ALSO streamed to
+ * disk as JSONL via `createWriteStream`, one turn at a time — the same
+ * never-buffer-the-whole-thing discipline applies to the write side, so the
+ * stripped artifact itself never forces a 265 MB string into memory either.
  */
 
-import { createReadStream } from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
 import { createInterface } from "node:readline";
+import { once } from "node:events";
 
 export type PruneLevel = "aggressive" | "moderate" | "none";
 
@@ -63,6 +69,16 @@ export interface ReadTranscriptOptions {
   pruneLevel?: PruneLevel;
   /** Lines kept at each end of a truncated tool_result under `moderate`. */
   moderateTruncateLines?: number;
+  /**
+   * When set, every pruned `Turn` is ALSO streamed to this path as JSONL (one
+   * turn per line, in transcript order) — the inspectable, on-disk stripped
+   * artifact the owner wants to measure and split, instead of trusting an
+   * in-memory list nobody can look at. Written incrementally via
+   * `createWriteStream`, one turn at a time, as it is produced — never
+   * buffered as a joined string first, for the same reason the read side
+   * never buffers the 265 MB source transcript (see module docstring).
+   */
+  strippedOutputPath?: string;
 }
 
 // Heuristic (not a real tokenizer): a `moderate` prune keeps this many lines
@@ -96,24 +112,47 @@ export async function readTranscript(
   const stream = createReadStream(filePath, { encoding: "utf8" });
   const rl = createInterface({ input: stream, crlfDelay: Infinity });
 
-  for await (const raw of rl) {
-    if (raw.trim() === "") continue; // blank lines carry nothing; not counted either way
+  // Opened once, up front, and written to incrementally below — never a
+  // single joined-string write, which is exactly the whole-file-in-memory
+  // pattern this option exists to avoid.
+  const strippedOut = options.strippedOutputPath ? createWriteStream(options.strippedOutputPath, { encoding: "utf8" }) : null;
 
-    linesRead++;
-    bytesIn += Buffer.byteLength(raw, "utf8");
+  try {
+    for await (const raw of rl) {
+      if (raw.trim() === "") continue; // blank lines carry nothing; not counted either way
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      linesSkippedMalformed++;
-      continue;
+      linesRead++;
+      bytesIn += Buffer.byteLength(raw, "utf8");
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        linesSkippedMalformed++;
+        continue;
+      }
+
+      const turn = extractTurn(parsed, pruneLevel, truncateLines);
+      if (turn === null) continue;
+      turns.push(turn);
+      const serialized = JSON.stringify(turn);
+      bytesOut += Buffer.byteLength(serialized, "utf8");
+
+      if (strippedOut) {
+        // Respect backpressure: if the internal buffer is full, wait for
+        // "drain" before writing the next line, same discipline the read
+        // side gets for free from readline's async iterator.
+        const wroteWithoutBackpressure = strippedOut.write(serialized + "\n");
+        if (!wroteWithoutBackpressure) {
+          await once(strippedOut, "drain");
+        }
+      }
     }
-
-    const turn = extractTurn(parsed, pruneLevel, truncateLines);
-    if (turn === null) continue;
-    turns.push(turn);
-    bytesOut += Buffer.byteLength(JSON.stringify(turn), "utf8");
+  } finally {
+    if (strippedOut) {
+      strippedOut.end();
+      await once(strippedOut, "finish");
+    }
   }
 
   const pruneRatio = bytesIn > 0 ? bytesOut / bytesIn : 0;

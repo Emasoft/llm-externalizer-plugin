@@ -15,13 +15,42 @@
  * line boundaries before packing — content is never dropped to fit.
  */
 
+import { countTokens } from "gpt-tokenizer";
 import type { Turn } from "./transcript.js";
 
-// Heuristic token estimate: 1 token ≈ 4 bytes of UTF-8 text. This matches
-// the same heuristic already used to size the 265 MB transcript in the
-// TRDD (bytes/4 ≈ 66M tokens). Not a real tokenizer — kept as ONE named
-// constant so every caller estimates the same way.
-export const BYTES_PER_TOKEN_ESTIMATE = 4;
+// Real BPE token count (o200k_base, via `gpt-tokenizer`) replaces the old
+// bytes/4 heuristic. `gpt-tokenizer` was picked over `js-tiktoken` for this
+// module because it ships ZERO runtime dependencies (js-tiktoken pulls in
+// base64-js) and is pure JS/TS with no WASM binary — both matter here: this
+// package is published through a security gate that flags unexplained
+// dependencies and opaque binaries, and a pure-JS tokenizer keeps the
+// dependency tree exactly as small as it was before this change. See the
+// Phase A report for the full comparison.
+//
+// HONEST LIMITATION: the eligible free models this tool selects from
+// (nemotron, gemma, and whatever else the OpenRouter catalog offers — see
+// model-select.ts) do NOT use GPT/o200k tokenization. `countTokens` here is
+// therefore an APPROXIMATION of what those models' own tokenizers would
+// report, not ground truth. An approximation that happens to undercount
+// would silently let a packed chunk overflow the real model's context
+// window at request time — the same failure category bytes/4 caused, just
+// smaller and harder to notice. `TOKEN_ESTIMATE_SAFETY_MARGIN` exists to
+// absorb that gap: every count `estimateTokens()` returns is inflated by
+// this factor before it is used for any packing decision. Do NOT remove it
+// to "simplify" the math — the eligible model list changes catalog to
+// catalog and none of them are guaranteed token-compatible with GPT.
+export const TOKEN_ESTIMATE_SAFETY_MARGIN = 1.2;
+
+/**
+ * Real, safety-margined token count for `text`. The one function every
+ * token-budget decision in this module goes through, so the margin above is
+ * applied consistently everywhere (turn packing, oversized-turn splitting,
+ * and `computeUsableTokenBudget`'s prompt-overhead measurement).
+ */
+export function estimateTokens(text: string): number {
+  if (text.length === 0) return 0;
+  return Math.ceil(countTokens(text) * TOKEN_ESTIMATE_SAFETY_MARGIN);
+}
 
 // Default number of trailing turns from a chunk that are repeated at the
 // start of the next chunk, so a topic spanning the boundary is not lost
@@ -123,10 +152,15 @@ export function chunkTurns(turns: Turn[], options: ChunkerOptions): ChunkResult 
 }
 
 function estimateTurnTokens(turn: Turn): number {
-  const toolBytes = turn.toolCalls.reduce((sum, tc) => sum + tc.name.length + tc.argSummary.length, 0);
-  const errorBytes = turn.errors.reduce((sum, e) => sum + Buffer.byteLength(e, "utf8"), 0);
-  const totalBytes = Buffer.byteLength(turn.text, "utf8") + toolBytes + errorBytes;
-  return Math.ceil(totalBytes / BYTES_PER_TOKEN_ESTIMATE);
+  return estimateTokens(combinedTurnText(turn));
+}
+
+/** Turn text + tool-call summaries + error text, joined the same way every
+ *  caller of `estimateTurnTokens` measures it. */
+function combinedTurnText(turn: Turn): string {
+  const toolText = turn.toolCalls.map((tc) => `${tc.name} ${tc.argSummary}`).join("\n");
+  const errorText = turn.errors.join("\n");
+  return [turn.text, toolText, errorText].filter((s) => s.length > 0).join("\n");
 }
 
 /**
@@ -136,23 +170,22 @@ function estimateTurnTokens(turn: Turn): number {
  * duplicating them across every fragment.
  */
 function splitOversizedTurn(turn: Turn, maxTokens: number): Turn[] {
-  const maxBytes = Math.max(1, maxTokens * BYTES_PER_TOKEN_ESTIMATE);
   const lines = turn.text.split("\n");
 
   const pieces: string[] = [];
   let current: string[] = [];
-  let currentBytes = 0;
+  let currentTokens = 0;
   for (const line of lines) {
-    const lineBytes = Buffer.byteLength(line, "utf8") + 1; // +1 for the joining newline
-    if (currentBytes + lineBytes > maxBytes && current.length > 0) {
+    const lineTokens = estimateTokens(line);
+    if (currentTokens + lineTokens > maxTokens && current.length > 0) {
       pieces.push(current.join("\n"));
       current = [];
-      currentBytes = 0;
+      currentTokens = 0;
     }
     // A single line longer than the whole budget still gets its own piece
     // — content is never dropped, only split as finely as line boundaries allow.
     current.push(line);
-    currentBytes += lineBytes;
+    currentTokens += lineTokens;
   }
   if (current.length > 0 || pieces.length === 0) pieces.push(current.join("\n"));
 
@@ -168,4 +201,55 @@ function splitOversizedTurn(turn: Turn, maxTokens: number): Turn[] {
       errors: i === 0 ? turn.errors : [],
     };
   });
+}
+
+export interface UsableTokenBudgetParams {
+  /** The selected model's `context_length` (see model-select.ts's EligibleModel). */
+  contextLength: number;
+  /** The selected model's `top_provider.max_completion_tokens` — the reply reserve. */
+  maxCompletionTokens: number;
+  /**
+   * The system/instruction preamble that will accompany every chunk request.
+   * Measured with the SAME tokenizer as the transcript turns — guessing this
+   * the way bytes/4 guessed the transcript's size would reintroduce exactly
+   * the overflow bug this module exists to prevent.
+   */
+  promptOverheadText: string;
+}
+
+/**
+ * usable_budget = context_length − reserved_completion_tokens − prompt_overhead_tokens
+ *
+ * Sizing chunks to the model's full `context_length` guarantees overflow the
+ * moment the model starts generating a reply, because the completion counts
+ * against the same context window as the prompt. `maxCompletionTokens` MUST
+ * come from the selected model's own catalog entry — it varies model to
+ * model, so a guessed constant here would just move the overflow bug rather
+ * than fix it. Fails fast (never silently clamps to 0 or a negative budget)
+ * when the model's context can't even hold its own reserved completion plus
+ * the preamble — that means this model is unusable for the run, not that the
+ * chunker should pretend otherwise.
+ */
+export function computeUsableTokenBudget(params: UsableTokenBudgetParams): number {
+  const { contextLength, maxCompletionTokens, promptOverheadText } = params;
+  if (!Number.isFinite(contextLength) || contextLength <= 0) {
+    throw new Error(`computeUsableTokenBudget: contextLength must be a positive finite number, got ${String(contextLength)}`);
+  }
+  if (!Number.isFinite(maxCompletionTokens) || maxCompletionTokens < 0) {
+    throw new Error(
+      `computeUsableTokenBudget: maxCompletionTokens must be a non-negative finite number, got ${String(maxCompletionTokens)}`,
+    );
+  }
+
+  const promptOverheadTokens = estimateTokens(promptOverheadText);
+  const usable = contextLength - maxCompletionTokens - promptOverheadTokens;
+  if (usable <= 0) {
+    throw new Error(
+      `computeUsableTokenBudget: usable budget is non-positive (context_length=${contextLength}, ` +
+        `reserved_completion=${maxCompletionTokens}, prompt_overhead=${promptOverheadTokens}). This ` +
+        `model's context cannot hold its own reserved completion plus the instruction preamble — ` +
+        `select a different model rather than packing chunks into a budget that can't exist.`,
+    );
+  }
+  return usable;
 }

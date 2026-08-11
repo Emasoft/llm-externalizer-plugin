@@ -3785,7 +3785,6 @@ async function dispatchCallToolInner(
           session_id: ssSessionId,
           prune: ssPruneRaw,
           min_context: ssMinContext,
-          allow_lower_context: ssAllowLowerContext,
           resume: ssResume,
           checkpoint: ssCheckpointRaw,
           output: ssOutputRaw,
@@ -3794,7 +3793,6 @@ async function dispatchCallToolInner(
           session_id?: string;
           prune?: string;
           min_context?: number;
-          allow_lower_context?: boolean;
           resume?: boolean;
           checkpoint?: string;
           output?: string;
@@ -3830,32 +3828,36 @@ async function dispatchCallToolInner(
         // Cost-safety + eligibility: catalog-only, $0. selectModels() itself
         // routes every candidate id through assertFreeOnlyModel — this call
         // can never hand back a paid model (see model-select.ts's own header).
+        // Biggest-context-first, no implicit floor: "the biggest free model
+        // with the biggest context memory" available today. The whole
+        // ordered list (minus whatever lacks a usable completion ceiling)
+        // is handed to the driver as a fallback chain — see driver.ts.
         let eligible;
         try {
-          eligible = await selectModels({
-            minContext: ssMinContext,
-            allowLowerContext: ssAllowLowerContext === true,
-          });
+          eligible = (await selectModels({ minContext: ssMinContext })).filter(
+            (m) => m.maxCompletionTokens > 0,
+          );
         } catch (err) {
           return {
             content: [{ type: "text", text: `FAILED: ${err instanceof Error ? err.message : String(err)}` }],
             isError: true,
           };
         }
-        const model = eligible[0];
-        if (!model.maxCompletionTokens || model.maxCompletionTokens <= 0) {
+        if (eligible.length === 0) {
           return {
             content: [
               {
                 type: "text",
                 text:
-                  `FAILED: selected model '${model.id}' reports no max_completion_tokens on the ` +
+                  `FAILED: every eligible free model reports no max_completion_tokens on the ` +
                   `OpenRouter catalog — cannot size the summarization prompt safely.`,
               },
             ],
             isError: true,
           };
         }
+        const model = eligible[0];
+        const fallbackModels = eligible.slice(1);
 
         const checkpointPath = ssCheckpointRaw
           ? resolve(ssCheckpointRaw)
@@ -3884,12 +3886,15 @@ async function dispatchCallToolInner(
             { model: modelId, maxTokens: maxOutputTokens, temperature: DEFAULT_TEMPERATURE, onProgress },
             providerDeps,
           );
-          if (resp.finishReason === "error" || resp.content.trim().length === 0) {
-            throw new Error(
-              `model call to '${modelId}' failed (finishReason=${resp.finishReason}): ` +
-                `${resp.content || "empty response"}`,
-            );
+          if (resp.finishReason === "error") {
+            throw new Error(`model call to '${modelId}' failed (finishReason=error): ${resp.content || "no detail"}`);
           }
+          // An empty/whitespace-only completion is deliberately NOT thrown
+          // here as a generic error — it is returned as-is so driver.ts's
+          // own "no-text" runtime evidence check (its permissive modality
+          // selection needs this backstop) can classify it as a
+          // fallback-eligible model failure and demote the model, instead
+          // of it being misread as a retryable schema bug.
           return resp.content;
         };
 
@@ -3901,6 +3906,7 @@ async function dispatchCallToolInner(
             modelId: model.id,
             modelMaxContext: model.contextLength,
             modelMaxCompletionTokens: model.maxCompletionTokens,
+            fallbackModels,
             callModel,
             pruneLevel: prune as "aggressive" | "moderate" | "none",
           });
@@ -3911,8 +3917,14 @@ async function dispatchCallToolInner(
           };
         }
 
+        const fallbackLines = result.fallbackEvents.map(
+          (e) => `  ${e.atUnit}: '${e.fromModel}' -> '${e.toModel}' (${e.reason}: ${e.detail})`,
+        );
         const header =
-          `Model: ${model.id} (context ${model.contextLength.toLocaleString()})\n` +
+          `Model: ${result.modelId} (context ${eligible.find((m) => m.id === result.modelId)?.contextLength.toLocaleString() ?? "?"})\n` +
+          (result.fallbackEvents.length > 0
+            ? `Model fallbacks (started on '${model.id}'):\n${fallbackLines.join("\n")}\n`
+            : "") +
           `Transcript: ${transcriptPath}\n` +
           `Chunks: ${result.totalChunks}\n` +
           `Lines read: ${result.transcriptStats.linesRead}, prune ratio: ` +
@@ -3926,7 +3938,7 @@ async function dispatchCallToolInner(
         const savedPath = saveResponse(
           "session_summary",
           `${header}\n---\n\n${result.summary}`,
-          { model: model.id, task: `session-summary of ${transcriptPath}` },
+          { model: result.modelId, task: `session-summary of ${transcriptPath}` },
           undefined,
           ssOutputDir,
         );
