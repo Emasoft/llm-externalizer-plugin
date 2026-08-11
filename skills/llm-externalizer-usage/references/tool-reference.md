@@ -69,7 +69,7 @@ If you need cross-file analysis across the whole codebase (e.g. "find duplicates
 
 ### Disabled tools (by design)
 
-The LLM Externalizer MCP is read-only by design. The following tools exist but are disabled — calling them returns a refusal message:
+The LLM Externalizer CLI is read-only by design. The following tools exist but are disabled — calling them returns a refusal message:
 
 | Tool | Why disabled |
 |------|--------------|

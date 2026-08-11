@@ -2,9 +2,10 @@
 name: llm-externalizer-or-model-info
 description: |-
   Reference for querying OpenRouter model details — supported params, pricing,
-  latency, uptime, quantization. Real invocation path is the `or_model_info` MCP
-  tool or the `llm-externalizer model-info <id>` CLI; this skill is loaded as
-  background reference for those, not a standalone slash command.
+  latency, uptime, quantization. Real invocation path is the
+  `llm-ext or-model-info <id>` CLI (or `llm-externalizer model-info <id>` on an
+  npm install); this skill is loaded as background reference for those, not a
+  standalone slash command.
 argument-hint: "<model-id>"
 effort: low
 user-invocable: false

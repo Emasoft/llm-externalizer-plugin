@@ -33,7 +33,7 @@
 
 ### Disabled tools (by design)
 
-MCP is read-only. `fix_code`, `batch_fix`, `merge_files`, `split_file`, `revert_file` → apply fixes via the `llm-externalizer-scan-and-fix` plugin command instead. `set_settings`, `change_model` → edit `~/.llm-externalizer/settings.yaml` manually and call `reset`. `custom_prompt` → merged into `chat` (use `chat` with a `system` persona).
+The CLI is read-only. `fix_code`, `batch_fix`, `merge_files`, `split_file`, `revert_file` → apply fixes via the `llm-externalizer-scan-and-fix` plugin command instead. `set_settings`, `change_model` → edit `~/.llm-externalizer/settings.yaml` manually and call `reset`. `custom_prompt` → merged into `chat` (use `chat` with a `system` persona).
 
 ## Standard Input Fields
 
