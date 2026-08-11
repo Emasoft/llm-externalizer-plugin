@@ -21,6 +21,21 @@ For a directory scan: `scan-folder`. Folder scans can run long — use an extend
 
 ### Step 2: Run the command
 
+On a **paid** profile, prepend `--estimate` to any command below for a $0 dry-run that prints
+the predicted cost before you send anything real; skip it on a free profile (everything is $0).
+
+```bash
+# $0 dry-run first on a paid profile — prints the predicted cost, sends nothing.
+llm-ext scan-folder --estimate \
+  --folder_path /path/to/project/src \
+  --extensions '[".ts"]' \
+  --instructions "Find security vulnerabilities. This is a Node.js Express REST API with JWT auth. Focus on: SQL injection, XSS, SSRF, path traversal, and auth bypass." \
+  --use_gitignore \
+  --exclude_dirs '["__tests__","fixtures"]'
+```
+
+Once the predicted ceiling is acceptable, run the real command:
+
 ```bash
 llm-ext scan-folder \
   --folder_path /path/to/project/src \

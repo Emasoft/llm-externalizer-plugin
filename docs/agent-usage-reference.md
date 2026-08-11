@@ -484,6 +484,9 @@ report.
 
 ## Usage patterns
 
+On a **paid** profile, prepend `--estimate` to any command below for a $0 dry-run that prints
+the predicted cost before you send anything real; skip it on a free profile (everything is $0).
+
 ### Scan a codebase for issues
 ```bash
 llm-ext scan-folder --folder_path /path/to/src --extensions .ts .py \

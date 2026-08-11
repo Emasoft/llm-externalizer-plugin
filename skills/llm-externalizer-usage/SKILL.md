@@ -61,6 +61,9 @@ See [tool-reference.md](references/tool-reference.md) for the full answer_mode b
 
 ## Examples
 
+On a **paid** profile, prepend `--estimate` to any command below for a $0 dry-run that prints
+the predicted cost before you send anything real; skip it on a free profile (everything is $0).
+
 ```bash
 llm-ext code-task --folder_path /path/to/src --extensions '[".ts"]' \
   --instructions "Find bugs. Node.js Express API."
