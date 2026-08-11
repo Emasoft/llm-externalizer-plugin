@@ -21,6 +21,7 @@
 - [Check entire folder against specification](#check-entire-folder-against-specification)
 - [Grouped file processing](#grouped-file-processing-isolated-reports)
 - [Code-optimized analysis](#code-optimized-analysis)
+- [Compact a Claude Code session for $0](#compact-a-claude-code-session-for-0)
 
 Concrete examples for every command with recommended flags. There is no MCP server — `llm-ext`
 (shipped at `${CLAUDE_PLUGIN_ROOT}/bin/llm-ext`) is the only runtime surface. Array-valued flags
@@ -257,3 +258,23 @@ llm-ext code-task \
 
 (`ensemble: true` has no CLI flag — `code-task` always uses the active profile's configured
 ensemble unless `--free` is passed, which routes to a single free model instead.)
+
+## Compact a Claude Code session for $0
+
+Summarize a whole session's `.jsonl` transcript — the same nine sections Claude Code's own
+`/compact` produces (Primary Request and Intent, Key Technical Concepts, Files and Code
+Sections, Errors and Fixes, Problem Solving, All User Messages verbatim, Pending Tasks, Current
+Work, Next Step) — but on **free** OpenRouter models only, so it always costs $0.
+
+```bash
+# Current project's most recently modified session, no flags needed.
+llm-ext session-summary
+
+# A specific transcript, printing the summary text directly (no report file).
+llm-ext session-summary --transcript /path/to/session.jsonl --stdout
+```
+
+Every chunk is checkpointed, so a run interrupted by a free-model daily-quota hit resumes
+automatically on re-run; `--resume` fails fast instead of silently starting over if no matching
+checkpoint exists yet. See `tool-reference.md` → "`session_summary`" and `README.md` →
+"session_summary — session compaction, $0 by construction" for the full flag table.

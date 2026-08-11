@@ -86,7 +86,7 @@ llm-ext search-existing-implementations \
 - [Tool reference](references/tool-reference.md)
   - How batching works, Read-only analysis tools, Utility tools
   - Standard Input Fields, Advanced Parameters, File Grouping
-  - Critical Constraints, Safety Features
+  - Critical Constraints, `session_summary` (compact any session for $0), Safety Features
 - [Usage patterns](references/usage-patterns.md)
   - Scan a codebase for issues, Analyze multiple files in parallel
   - Apply same check to each file independently
@@ -99,5 +99,6 @@ llm-ext search-existing-implementations \
   - Redact custom patterns, Check source against specification
   - Check entire folder against specification
   - Grouped file processing (isolated reports), Code-optimized analysis
+  - Compact a Claude Code session for $0
 - [End-to-end workflow](examples/end-to-end-workflow.md)
   - Scenario: Security audit of a TypeScript project, Quick Decision Tree

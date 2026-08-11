@@ -735,16 +735,41 @@ The CLI exposes every sub-command as its own hyphenated command, `bin/llm-ext ma
 | `session_summary` | Compaction-style summary of a whole Claude Code session, streamed from its JSONL transcript (map-reduce, $0-only free models, checkpointed/resumable) |
 | `or_model_info` / `or_model_info_table` / `or_model_info_json` | OpenRouter model params / pricing / latency / uptime — three formats |
 
-### `session_summary` — session compaction, $0 by construction
+### `session_summary` — Claude-Code-compaction-equivalent, $0 by construction
 
-Summarizes a whole Claude Code session from its `.jsonl` transcript without ever loading it
-into memory: stream + prune (`--prune aggressive|moderate|none`, default `aggressive`) → pack
-into token-budgeted chunks (capped at 50,000 tokens by default, regardless of how large the
-selected model's own context window is — quality collapses long before the context LIMIT is
-reached, especially on free models; override with `--max-chunk-tokens`) → map (summarize each
-chunk) → reduce (fold the chunk summaries into one, recursing when a fold itself overflows the
+**Why it exists:** Claude Code's own `/compact` burns paid-model tokens summarizing a session
+and runs only inside that same session. `session_summary` reproduces the same
+compaction-equivalent output — for **any** session, from its `.jsonl` transcript, from a fresh
+agent that never held that context — and does it entirely on **free** OpenRouter models, so
+compacting an arbitrarily long session costs **$0**.
+
+Pipeline: stream the transcript (never loaded fully into memory) → extract real context (user
+turns, assistant text/thinking/tool_use, tool results) while dropping JSONL bookkeeping → prune
+(`--prune aggressive|moderate|none`, default `aggressive` — drops tool-result payloads, pasted
+file contents, thinking blocks; keeps user/assistant prose, tool names + arg summaries, errors)
+→ pack into token-budgeted chunks, **splitting only between turns, never mid-turn** (capped at
+50,000 tokens by default, regardless of how large the selected model's own context window is —
+quality collapses long before the context LIMIT is reached, especially on free models; override
+with `--max-chunk-tokens`) → map (summarize each chunk against a fixed nine-section
+compaction schema) → reduce (**deterministically join the chunk summaries in code — no second
+LLM pass**, so no fact can be dropped in the merge; recurses when a fold itself overflows the
 window). Every chunk/fold is checkpointed, so an interrupted run (e.g. a free daily-quota hit)
 resumes automatically on re-run.
+
+**What gets captured / dropped from the transcript:**
+- Messages sent **mid-turn** (stored by Claude Code as `type: "queue-operation"`, not
+  `type: "user"`) are captured as real user content.
+- Machine-injected turns are **excluded**: janitor-heartbeat cron fires, no-visible-output
+  nudges, system-reminder-only turns, slash-command plumbing, task notifications, skill-doc
+  loads.
+- Embedded images (base64 / `data:` URIs) are **dropped at every prune level**, leaving an
+  `[image omitted]` marker — a text-only model can't read them, and leaving them in would evict
+  real content from the chunk budget for nothing.
+
+**The nine-section schema** each chunk is summarized against (verbatim in the merged report):
+`Primary Request and Intent` · `Key Technical Concepts` · `Files and Code Sections` ·
+`Errors and Fixes` · `Problem Solving` · `All User Messages` (verbatim — the only section that
+copies transcript text) · `Pending Tasks` · `Current Work` · `Next Step`.
 
 Cost safety is structural, not a flag: it only ever selects a free OpenRouter model that has
 `text` on both sides of its `architecture.modality` (extra modalities on either side — image,
@@ -768,6 +793,33 @@ exits non-zero rather than reporting a false success.
 | `--resume` | Require an existing, matching checkpoint — fails fast instead of silently starting fresh. |
 | `--checkpoint <path>` | Override the checkpoint file. Default: derived deterministically from the transcript path under `~/.llm-externalizer/session-summary-checkpoints/`. |
 | `--output <path>` | Custom output directory for the summary report. Default: `<main-project-dir>/reports/llm-externalizer/`. |
+| `--stdout` | Print the summary TEXT directly to stdout (no report file written; banner/progress still go to stderr). |
+
+**Worked examples:**
+
+```bash
+# (a) Summarize the current project's most recently modified session — no
+#     flags needed, resolves the transcript automatically. Writes a report
+#     under reports/llm-externalizer/ and prints its path.
+llm-ext session-summary
+
+# (b) Summarize one specific transcript and print the summary text directly
+#     (e.g. to pipe into another tool), instead of writing a report file.
+llm-ext session-summary \
+  --transcript ~/.claude/projects/-Users-me-Code-myproj/3f9c1a2b-....jsonl \
+  --stdout
+
+# (c) Resume an interrupted run (e.g. hit a free-model daily quota mid-run) —
+#     `--resume` fails fast instead of silently starting over if no matching
+#     checkpoint exists yet at the default checkpoint path.
+llm-ext session-summary --transcript /path/to/session.jsonl --resume
+```
+
+Verified: `llm-ext session-summary --resume` (no transcript, no checkpoint) fails fast with
+`FAILED: session-summary: no transcript directory for this project ...`; `llm-ext
+session-summary --transcript /tmp/does-not-exist.jsonl --stdout` fails fast with `FAILED:
+session-summary: --transcript path does not exist: ...` — both confirm the flags parse and the
+fail-fast paths work without spending any free-tier quota.
 
 ### Model-qualification tools
 

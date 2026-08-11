@@ -72,10 +72,16 @@ export const PROMPT_OVERHEAD_TOKENS = 2_000;
  * still covers a substantial slice of transcript (keeping the total chunk
  * count — and so the final joined summary's part count — reasonable), small
  * enough that the model is asked to digest a bounded amount of material per
- * call rather than the whole session at once. Overridable via
- * `--max_chunk_tokens` for a caller who wants a different tradeoff; the
- * effective budget is always `Math.min(windowBudget, thisCap)` — never
- * silently override the model's own window when the cap is larger than it. */
+ * call rather than the whole session at once.
+ *
+ * THIS IS A DEFAULT, NOT A CEILING. An explicit `--max_chunk_tokens` is
+ * honored VERBATIM and may exceed both this value and the model's window: the
+ * caller made a deliberate choice, and this tool must not impose a limit the
+ * user did not ask for. An over-large setting is not a foot-gun — the model's
+ * own context-overflow error is authoritative and re-splits that chunk, so it
+ * degrades into extra calls rather than a failure. Only the DEFAULT is capped
+ * by the window; there is no point defaulting to a budget the model cannot
+ * accept. */
 export const DEFAULT_MAX_CHUNK_TOKENS = 50_000;
 
 /** The injected model-call seam. Takes a fully-rendered prompt, the model id

@@ -9,6 +9,7 @@
 - [Advanced Parameters](#advanced-parameters)
 - [File Grouping](#file-grouping)
 - [Critical Constraints](#critical-constraints)
+- [`session_summary` — compact any Claude Code session for $0](#session_summary--compact-any-claude-code-session-for-0)
 - [Safety Features](#safety-features)
 
 ## How batching works
@@ -65,6 +66,7 @@ If you need cross-file analysis across the whole codebase (e.g. "find duplicates
 | `discover` | Check service health, auth token status, context window, concurrency mode, profiles |
 | `reset` | Full soft-restart. Waits for running requests, then reloads settings (picks up manual edits to `settings.yaml`) and clears caches. |
 | `get_settings` | Copy `settings.yaml` to output dir and return the path. Read-only view — edit the REAL file at `~/.llm-externalizer/settings.yaml` manually, then call `reset`. |
+| `session_summary` | Claude-Code-compaction-equivalent summary of a whole session, from its `.jsonl` transcript, on **free models only ($0 by construction)**. Map-reduce: stream + prune → token-budgeted chunks (turn boundaries only) → per-chunk summary against a fixed 9-section schema → deterministic (non-LLM) merge. Checkpointed/resumable. See below. |
 | `or_model_info` / `or_model_info_table` / `or_model_info_json` | Query OpenRouter for a model's supported params, pricing, latency, uptime. Three output formats (pipe-delimited markdown, ANSI-colored terminal table, raw JSON). |
 
 ### Disabled tools (by design)
@@ -164,6 +166,22 @@ For `compare_files`, grouping uses `---GROUP:id---` markers as single-element en
 - **Output location**: All responses saved to `<main-project-dir>/reports/llm-externalizer/` (anchored on `$CLAUDE_PROJECT_DIR` verbatim, cwd fallback — never git; override with `output_dir` or `$LLM_OUTPUT_DIR`). Tool returns ONLY the file path — never inline content.
 - **Auto-batching**: If input files exceed context window, they are automatically split into batches.
 - **Rate limiting**: Adaptive RPS auto-detected from OpenRouter balance ($1 ≈ 1 RPS, max 500). Self-adjusts on 429 errors. Up to 200 in-flight. Local = sequential.
+
+## `session_summary` — compact any Claude Code session for $0
+
+Use this to compact a session's `.jsonl` transcript (this one, or any other project's) without
+spending paid tokens — it only ever picks a free, text-capable OpenRouter model, falling back
+down the ranked list on delisting/quota exhaustion. Key flags: `--transcript <path>` /
+`--session-id <id>` (default: current project's most recently modified transcript),
+`--prune aggressive|moderate|none` (default `aggressive`), `--stdout` (print the summary text
+instead of writing a report file), `--resume` (fail fast unless a matching checkpoint exists).
+Full flag table + the 9-section output schema: `README.md` → "session_summary — session
+compaction, $0 by construction".
+
+```bash
+llm-ext session-summary
+llm-ext session-summary --transcript /path/to/session.jsonl --stdout
+```
 
 ## Safety Features
 
