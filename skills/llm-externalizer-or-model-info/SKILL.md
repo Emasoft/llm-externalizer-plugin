@@ -3,10 +3,10 @@ name: llm-externalizer-or-model-info
 description: |-
   Reference for querying OpenRouter model details — supported params, pricing,
   latency, uptime, quantization. Real invocation path is the
-  `llm-ext or-model-info <id>` CLI (or `llm-externalizer model-info <id>` on an
-  npm install); this skill is loaded as background reference for those, not a
-  standalone slash command.
-argument-hint: "<model-id>"
+  `llm-ext or-model-info --model <id>` CLI (also `or-model-info-table` for a
+  colored table, `or-model-info-json` for raw JSON); this skill is loaded as
+  background reference for those, not a standalone slash command.
+argument-hint: "--model <model-id>"
 effort: low
 user-invocable: false
 ---
@@ -22,21 +22,24 @@ from subagents — MCP tools from plugins are not available in subagent contexts
 
 ## Prerequisites
 
-- `llm-externalizer` CLI on PATH (bundled with the plugin)
+- `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext"` (bundled with the plugin). An `npm i -g`
+  install also provides `llm-ext` / `llm-externalizer` on PATH; the plugin itself
+  does NOT put `llm-externalizer` on PATH, so prefer the explicit path above.
 - `$OPENROUTER_API_KEY` set, OR active profile is OpenRouter-backed
 
 ## Instructions
 
 Copy this checklist and track your progress:
 
-1. [ ] Parse the user's prompt for the **exact OpenRouter model id** (first arg) —
+1. [ ] Parse the user's prompt for the **exact OpenRouter model id** —
        case-sensitive, vendor-prefixed, with any `:free` / `:thinking` / `:beta`
-       suffix. Also scan for optional format flags:
-       - `--no-color` / `--nocolor` / `--bw` / `--mono` → forward `--no-color`
-       - `--markdown` / `--plain` → forward `--markdown`
-       - `--json` / `--raw` → forward `--json`
+       suffix. Then pick the command by desired output format:
+       - Colored terminal table → `or-model-info-table`
+       - Markdown report (default text) → `or-model-info`
+       - Raw JSON → `or-model-info-json` (optional `--file_path` to write to a file
+         instead of stdout)
 2. [ ] If the user gave only a partial name, ask for the full id.
-3. [ ] Run: `npx llm-externalizer model-info "<exact-id>" [flags]`
+3. [ ] Run: `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" <or-model-info|or-model-info-table|or-model-info-json> --model "<exact-id>"`
 4. [ ] **Stop. Do not reprint, paraphrase, summarize, or add commentary.** The Bash
        tool output pane renders the ANSI-colored table natively. If Claude Code
        collapses it behind a "+N lines" fold the user will expand it with ctrl+o
@@ -57,20 +60,20 @@ latency + throughput percentiles, supported_parameters. Live data, no cache.
 ## Examples
 
 ```bash
-# Default colored table
-npx llm-externalizer model-info "nvidia/nemotron-3-super-120b-a12b:free"
+# Colored terminal table
+"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" or-model-info-table --model "nvidia/nemotron-3-super-120b-a12b:free"
 
-# Compare providers (Llama 3.3 has 17 endpoints)
-npx llm-externalizer model-info "meta-llama/llama-3.3-70b-instruct"
+# Compare providers (Llama 3.3 has 17 endpoints) — markdown report
+"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" or-model-info --model "meta-llama/llama-3.3-70b-instruct"
 
-# Markdown table — renders in any markdown viewer
-npx llm-externalizer model-info "google/gemini-2.5-flash" --markdown
+# Markdown report — renders in any markdown viewer
+"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" or-model-info --model "google/gemini-2.5-flash"
 
 # Raw JSON to stdout (for jq / scripts)
-npx llm-externalizer model-info "anthropic/claude-sonnet-4.5" --json
+"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" or-model-info-json --model "anthropic/claude-sonnet-4.5"
 
 # Raw JSON written to a file
-npx llm-externalizer model-info "x-ai/grok-4.1-fast" --json grok-info.json
+"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" or-model-info-json --model "x-ai/grok-4.1-fast" --file_path grok-info.json
 ```
 
 See [references/example-output.md](references/example-output.md) for a full sample:
