@@ -106,6 +106,47 @@ solving the wrong problem. Biggest available free model wins; everything else is
   under the 1M floor. With the floor gone the eligible pool is the whole free text tier, and an
   ordered fallback chain is wired in `driver.ts`.
 
+### Compaction-equivalence rework (2026-08-12) — what the live runs actually taught
+
+The command "worked" (real summary, 4,353 B) while still failing the ORIGINAL request, which
+said *"compaction like"*. Validating "is this a summary?" is a weaker test than "is this a
+compaction?", and the gap only showed when compared against Claude Code's own compaction output.
+
+1. **Nine-section schema** replaces the five-section report. Claude Code's compaction is a
+   RESUMPTION HANDOFF: Primary Request and Intent · Key Technical Concepts · Files and Code
+   Sections · Errors and Fixes · Problem Solving · **All User Messages (verbatim)** · Pending
+   Tasks · Current Work · Next Step.
+2. **No model fold.** The reduce phase was a model call that decided what to keep — the exact
+   threat to the verbatim requirement. Chunk summaries are now JOINED IN CODE. "No facts lost in
+   the merge" became true by construction, and the recursive fold-overflow machinery, reduce
+   levels, reduce batch-packer and fold-only error paths all deleted with it.
+3. **Turn-atomic chunking.** A boundary may fall ONLY between turns. The old "split an oversized
+   turn at line boundaries and mark it `[continued]`" hatch is deleted: split a turn and chunk N
+   describes an action whose result is in N+1 while N+1 describes a result whose cause it cannot
+   see. No prompt repairs information destroyed at split time.
+4. **Images dropped at every prune level**, replaced by `[image omitted]`. A base64 screenshot
+   gives a text model zero information while EVICTING real content from the chunk — a quality
+   fix, not a cost one.
+5. **THE BUG ONLY A LIVE RUN COULD FIND — mid-turn user messages were silently discarded.**
+   A message sent WHILE THE ASSISTANT IS WORKING is recorded as `type: "queue-operation"` with
+   its text at the TOP-LEVEL `content` field, not `type: "user"`. The extractor keyed on `type`
+   and took only `"user"`. Measured: `"serena"` appeared **0 times** in a 328 KB summary although
+   the owner had said *"delete the whole .serena folder"*; also lost were the MCP ban,
+   *"find a way to make it work"*, *"the merge should not be made by the model"*, and
+   *"embedded images should be dropped"*.
+   Inverted in the worst way: `[janitor-heartbeat]` cron fires ARE type `"user"`, so machine
+   noise filled the verbatim section while human intent vanished from it.
+   **1865 unit tests could not see this** — no fixture contained the shape, because it only
+   occurs when a real person interrupts a working agent.
+   Verified after the fix against the REAL transcript (not fixtures): 6/6 lost messages present,
+   0 heartbeat fires, user turns 62 → 53 as 9 skill-doc loads drop out.
+
+**Cost note measured 2026-08-11:** under the verbatim schema, OUTPUT size scales with INPUT size
+(every user message must be reproduced), so large chunks are now doubly expensive — ~28 min per
+50k-token chunk on `nemotron-3-ultra:free` vs ~90 s for the old fixed-size summary. The 50,000
+default was chosen when output was fixed-size; 20–25k is likely better now. Not changed yet —
+that should be a measured decision, not a second guess.
+
 ### Load-bearing gotchas
 
 - A local BPE tokenizer does NOT match nemotron/gemma tokenization. It is an estimate with a
