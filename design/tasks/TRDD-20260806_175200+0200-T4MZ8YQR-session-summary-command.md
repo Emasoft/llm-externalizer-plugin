@@ -59,6 +59,42 @@ whole session from the JSONL transcript of the project session, **using only fre
   `index.ts:3077-3079`). A transcript needs a *turn-boundary* chunker, not a file packer —
   design a new one, do not force-fit the old.
 
+### ⏵ RELEASED v12.0.0 (2026-08-11 23:47Z) — state at handoff
+
+**SHIPPED.** `v12.0.0` tagged, GitHub release live, 0 unpushed commits. Major bump because the
+`bin` repoint changes what `llm-externalizer` executes (legacy positional args break) and the
+release completes the CLI-only direction. `publish.py --check-only` passed all gates first;
+the skillaudit findings are FPs on `benchmark/security-triage/dataset.*`, which is a corpus of
+deliberately-malicious fixtures — the scanner flagging them is correct behaviour (#41 advisory).
+
+**IN FLIGHT AT HANDOFF — post-fix quality verification.** Running
+`session-summary` on this session's transcript with a fresh checkpoint, to answer the owner's
+question "has the free model been verified able to handle the task?". Honest status: the
+nine-section schema WAS produced end-to-end once (328 KB, all sections, verbatim intact —
+`"i granted  permission"` kept its double space), but that was BEFORE the queue-operation
+extraction fix, which adds ~9 more user messages that must now be reproduced verbatim. So
+quality after the fix is NOT yet verified. Counter-evidence worth respecting: nemotron has
+produced an echo, a `finish_reason=error`, and repeated `finish_reason=empty` across tonight's
+runs, and takes ~28 min/chunk. "The free model can do it" rests on ONE clean run.
+
+What the verification must show: (a) the newly-captured mid-turn messages present verbatim
+(`delete the whole .serena folder`, the MCP ban, `find a way to make it work`) — 0/6 before the
+fix; (b) zero `[janitor-heartbeat]` noise in the user-message sections; (c) all nine sections
+still produced under the larger verbatim load; (d) completion at all.
+If (c) or (d) fail, the honest response is a follow-up release lowering per-chunk load — NOT
+relaxing the verbatim rule, which is the feature.
+
+### REMAINING AFTER HANDOFF
+
+1. Finish/inspect the verification run above.
+2. **File the janitor issue** (owner-requested): how to use `llm-ext session-summary` to compact
+   ANY Claude Code session at $0. Repo `Emasoft/ai-maestro-janitor`. No existing issue covers it;
+   #190 (large-transcript session cost) and #224 (post-`/clear` resume state) are adjacent and
+   worth citing. MUST open with the identity line naming which Claude authored it, and MUST NOT
+   contain a bare `@name` outside a code span.
+3. `9487d9a` fixes the package.json self-description ("MCP server for LLMs" shipped in 12.0.0) —
+   committed, unpublished; rides the next release.
+
 ### NEXT ACTION (one step)
 
 Phase B: wire the Phase-A tokenizer/artifact/budget work through `driver.ts` + `index.ts` —
