@@ -77,3 +77,6 @@ llm_externalizer_output/
 .publish.lock
 /reports/
 /reports_dev/
+/.trashcan/*
+!/.trashcan/.gitkeep
+!/.trashcan/README.txt
