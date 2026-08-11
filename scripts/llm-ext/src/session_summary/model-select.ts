@@ -19,30 +19,33 @@
  *     future-proof: split on `->`, require `"text"` to be a `+`-separated
  *     member of BOTH the input side and the output side (never a raw
  *     substring match — `"textual"` must not match `"text"`); any OTHER
- *     modality on either side never disqualifies. This DOES admit
- *     `google/lyria-3-pro-preview` / `google/lyria-3-clip-preview`
- *     (`text+image->text+audio`, free, 1,048,576 context) even though
- *     they're music-generation models — on purpose. A metadata string
- *     cannot reliably predict whether a model's text output is actually
- *     USABLE for summarization, so this module does not try; the driver's
- *     runtime fallback chain enforces usability instead — an empty/no-text
- *     response demotes the model and moves to the next ranked candidate
- *     (driver.ts's "no-text" fallback reason). A missing or malformed
- *     `architecture.modality` is always ineligible — never assume text.
+ *     modality on either side never disqualifies. On modality alone this
+ *     WOULD admit `google/lyria-3-pro-preview` / `google/lyria-3-clip-preview`
+ *     (`text+image->text+audio`, $0, 1,048,576 context) even though they're
+ *     music-generation models — on purpose. A metadata string cannot
+ *     reliably predict whether a model's text output is actually USABLE for
+ *     summarization, so this module does not try; the driver's runtime
+ *     fallback chain enforces usability instead — an empty/no-text response
+ *     demotes the model and moves to the next ranked candidate (driver.ts's
+ *     "no-text" fallback reason). In practice the lyria ids are excluded
+ *     earlier, by rule 2, because their ids carry no ':free' suffix. A
+ *     missing or malformed `architecture.modality` is always ineligible —
+ *     never assume text.
  *  2. **Never a paid model, even under a paid profile.** This tool exists
- *     specifically to guarantee $0 spend, so every selected id is passed
- *     through the project's own `assertFreeOnlyModel` cost-safety gate
- *     (config.ts, TRDD-97ef8b63) with `freeOnly` forced to `true` — the
- *     same chokepoint every other subsystem's live sends go through — so a
- *     filtering bug that let a non-':free' id slip through fails fast
- *     instead of silently being handed to a caller.
+ *     specifically to guarantee $0 spend. Eligibility therefore requires BOTH
+ *     $0 pricing AND a ':free'-suffixed id — they are different predicates,
+ *     and OpenRouter genuinely lists $0 models without the suffix. Only
+ *     ':free' ids are admissible under free_only (`assertFreeOnlyModel`,
+ *     config.ts, TRDD-97ef8b63), which every live send still passes through.
+ *     An unsuffixed id is EXCLUDED here, never fatal: calling the gate inline
+ *     made one such catalog row take the whole run down, and since the
+ *     unsuffixed lyria ids have the largest context in the free tier they are
+ *     hit first — so the command failed before it could reach a usable model.
  *
  * Fetch (network IO) and filter (pure) are kept in separate functions so
  * the filter is fully unit-testable against injected fixtures, per the
  * project's PURE CORE + THIN IO SHELL convention (see free-rotation.ts).
  */
-
-import { assertFreeOnlyModel } from "../config.js";
 
 /** The subset of the OpenRouter `/api/v1/models` catalog entry this module reads. */
 export interface CatalogModel {
@@ -145,13 +148,21 @@ export function selectEligibleModels(
 
     if (!hasTextInputAndOutput(m.architecture?.modality)) continue;
 
-    // Cost-safety backstop (TRDD-97ef8b63 chokepoint): this module exists to
-    // guarantee $0 spend, so every id it hands out must itself be admissible
-    // under free_only regardless of the caller's active profile. A model
-    // that priced at $0 but somehow lacks the ':free' suffix (a malformed or
-    // future catalog entry) must fail fast here, not ride downstream into a
-    // real request.
-    assertFreeOnlyModel(true, "openrouter", m.id);
+    // Cost-safety (TRDD-97ef8b63 chokepoint): only a ':free'-suffixed id is
+    // admissible under free_only, and this module must hand out ids that are
+    // admissible regardless of the caller's active profile. $0 PRICING IS NOT
+    // THE SAME PREDICATE: OpenRouter lists genuinely $0 models whose id carries
+    // no ':free' suffix (google/lyria-3-pro-preview is one). Such a model is
+    // simply NOT ELIGIBLE, so it is EXCLUDED here.
+    //
+    // It must be a `continue`, never a throw. This previously called
+    // assertFreeOnlyModel() inline, which made one unusable catalog entry fatal
+    // to the whole run — and because lyria has the largest context in the free
+    // tier it is encountered first, so selection threw before it could reach any
+    // usable model. That is exactly how the first live run failed: the command
+    // could not summarize anything, reporting a cost-safety bug rather than
+    // simply picking the next-biggest model.
+    if (!m.id.endsWith(":free")) continue;
 
     all.push({
       id: m.id,

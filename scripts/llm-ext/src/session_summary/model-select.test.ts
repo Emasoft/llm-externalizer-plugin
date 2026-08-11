@@ -238,18 +238,32 @@ describe("selectEligibleModels", () => {
     expect(result[0].maxCompletionTokens).toBe(0);
   });
 
-  it("cost-safety: a $0-priced model that lacks the ':free' suffix is rejected via the shared assertFreeOnlyModel gate, never returned", () => {
-    // Reuse of the project's existing free-only enforcement (config.ts,
-    // TRDD-97ef8b63) is proven by observing its exact throw message, not
-    // just "it throws" — a bespoke check here could pass while the real
-    // gate is bypassed elsewhere.
-    const malformed: CatalogModel = {
+  it("cost-safety: a $0-priced model that lacks the ':free' suffix is EXCLUDED, and does not take the whole selection down with it", () => {
+    // $0 pricing and ':free' are different predicates. OpenRouter really does
+    // list $0 models with no ':free' suffix (google/lyria-3-pro-preview), and
+    // only ':free' ids are admissible under free_only (config.ts,
+    // TRDD-97ef8b63). So such a model is simply not eligible.
+    //
+    // It must be SKIPPED, not fatal. This test previously asserted a throw,
+    // which is what the code did — and that shape broke the command in the
+    // first live run: the unsuffixed model has the largest context in the free
+    // tier, so it is encountered first and selection threw before reaching any
+    // usable model. The requirement was always "never returned"; "throws" was
+    // an implementation detail that turned one bad catalog row into a total
+    // outage. Assert the requirement, and assert that a usable model survives
+    // alongside it.
+    const unsuffixed: CatalogModel = {
       id: "vendor/free-priced-but-not-suffixed",
       context_length: 2_000_000,
       pricing: { prompt: "0", completion: "0" },
       architecture: { modality: "text->text" },
     };
-    expect(() => selectEligibleModels([malformed])).toThrow(/free_only cost-safety/);
+
+    const result = selectEligibleModels([unsuffixed, ...CATALOG]);
+
+    expect(result.some((m) => m.id === unsuffixed.id)).toBe(false);
+    expect(result.length).toBeGreaterThan(0);
+    expect(result.every((m) => m.id.endsWith(":free"))).toBe(true);
   });
 
   it("never selects a paid model regardless of the caller's active profile (this tool forces freeOnly=true internally)", () => {
