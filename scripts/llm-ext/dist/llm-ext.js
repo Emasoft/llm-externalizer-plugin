@@ -260130,7 +260130,7 @@ function buildTools(limitsText) {
 }
 
 // src/cli/main.ts
-var VERSION = "11.1.0";
+var VERSION = "12.0.0";
 function toKebab(toolName) {
   return toolName.replace(/_/g, "-");
 }

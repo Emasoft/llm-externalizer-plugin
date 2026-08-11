@@ -1,6 +1,883 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [12.0.0] - 2026-08-11
+
+### Added
+
+- Feat(session-summary): compaction-equivalent output, deterministic join, turn-atomic chunks (TRDD-T4MZ8YQR)
+
+Four owner-driven corrections. The command produced a readable summary but not
+the thing that was asked for — "compaction like" from the original request.
+
+1. NINE-SECTION COMPACTION SCHEMA. The map prompt asked for "user requests,
+   decisions made, files changed, commands run, outcomes" and got exactly that:
+   a retrospective REPORT. Claude Code's own compaction is a resumption HANDOFF
+   — Primary Request and Intent · Key Technical Concepts · Files and Code
+   Sections · Errors and Fixes · Problem Solving · All User Messages · Pending
+   Tasks · Current Work · Next Step. The highest-value section is All User
+   Messages, VERBATIM: paraphrase destroys intent, which is the whole reason
+   compaction preserves them.
+
+2. NO MODEL FOLD. The reduce phase was a model call that decided what to keep —
+   precisely what threatens the verbatim requirement, since a model merging nine
+   sections will "tidy" the longest one and a truncated user-message list is
+   unrecoverable. Chunk summaries are now JOINED IN CODE, in order. Removed with
+   it: the recursive fold-overflow machinery, reduce levels, the reduce
+   batch-packer, ReduceProgress, and the fold-only error paths. "No facts lost in
+   the merge" is now true by construction rather than asserted.
+
+3. TURN-ATOMIC CHUNKING. A chunk boundary may fall ONLY between turns. The old
+   escape hatch — split an oversized turn at line boundaries and mark it
+   [continued] — is deleted, because it is incompatible with joining: split a
+   turn and chunk N describes an action whose result is in N+1, while N+1
+   describes a result whose cause it cannot see, and no prompt fixes information
+   destroyed at split time. An oversized turn now gets its own over-cap chunk;
+   only a whole turn exceeding the model's usable budget fails, loudly, naming
+   the turn.
+
+4. IMAGES DROPPED, at every prune level including `none`. The summarizer is a
+   text model, so a base64 screenshot contributes zero information while
+   evicting genuine content from the chunk — a quality fix, not just a cost one.
+   Replaced with an [image omitted] marker rather than deleted, so "the user
+   shared a screenshot" survives and an image-only message does not read as
+   empty. Covers both {type:"image"} blocks and inline data:image URIs.
+
+The echo guard needed no change — verified against the new verbatim-quoting
+prompt, with a test that a summary containing substantial quoted user messages
+is NOT rejected.
+
+Verified independently: vitest 1850 passed / 0 failed / 4 skipped, tsc clean,
+eslint clean; and in source: zero fold remnants, zero line-splitting paths.
+
+- Feat(cli)!: point the published bin at the supported CLI (TRDD-W9DK4L3N option B)
+
+`bin` was `{ "llm-externalizer": "dist/cli.js" }` — the retired entry point.
+It is now `{ "llm-ext": "dist/llm-ext.js", "llm-externalizer": "dist/llm-ext.js" }`,
+so the documented name is installable and the old name still resolves.
+
+The card justified option B with "anyone invoking `llm-externalizer <cmd>`
+keeps working". Measured against the live catalog, that was FALSE for two of
+the seven legacy verbs: `model-info` and `search-existing` exited 1, because
+their tools were renamed to `or_model_info` and
+`search_existing_implementations`. Re-pointing on that premise would have
+silently broken two documented invocations for every npm install.
+
+So this commit adds LEGACY_COMMAND_ALIASES in cli/main.ts FIRST, mapping both
+old verbs onto the renamed tools, and only then re-points the bin — which
+makes the card's claim actually true. The other five (profile,
+cluster-synonyms, high-quality-scan, security-scan, mass-scout) already
+resolved by name; verified, not assumed.
+
+A regression test in launcher-boot.test.ts spawns the real launcher for ALL
+SEVEN verbs. Without it a future catalog rename re-breaks a documented
+invocation with nothing failing until a user reports it — which is exactly how
+this defect reached an approved card.
+
+Also verified `node dist/llm-ext.js` runs standalone (the npm bin path bypasses
+launcher.mjs): better-sqlite3 is a declared dependency, so npm builds it; the
+launcher's self-install covers the plugin-clone case where node_modules is
+gitignored, not npm installs.
+
+Verified: vitest 1832 passed / 0 failed / 4 skipped, tsc clean, eslint clean,
+all seven verbs exit 0 through ./bin/llm-ext.
+
+BREAKING CHANGE: the `llm-externalizer` command now runs the llm-ext CLI
+instead of the legacy dist/cli.js bundle. Every documented verb still resolves,
+but anyone depending on the old bundle's distinct behaviour (rather than its
+documented commands) is affected. A new `llm-ext` bin name is also installed.
+
+- Feat(session-summary): model-authoritative overflow re-split + --stdout output mode (TRDD-T4MZ8YQR)
+
+Phase B, completing the owner's pipeline spec.
+
+1. A context-overflow error FROM THE MODEL now re-splits the offending chunk
+   and retries, instead of failing the run. This is what makes Phase A's
+   tokenizer safe to rely on: `gpt-tokenizer` is o200k, the eligible models
+   (nemotron, gemma) are not, so estimateTokens is an ESTIMATE and the safety
+   margin reduces overflow without eliminating it. The model's own rejection is
+   therefore treated as ground truth and overrides our count.
+   Overflow is kept distinct from 429/402/404 — those are availability problems
+   and still route to the model-fallback chain; an overflow does NOT swap models,
+   because sizing is not availability. The halving is bounded: a chunk that
+   still overflows when it can no longer be split fails loudly rather than
+   looping.
+
+2. `--stdout` returns the summary text directly instead of a report path.
+   Deliberately a NEW flag rather than an overload of the existing `--output`,
+   which means output DIRECTORY — reusing it would have made "where does the
+   summary go" depend on the value's shape. Default stays the report path, which
+   is this CLI's convention everywhere else and keeps a 66M-token summary out of
+   the caller's context unless it asks.
+
+Verified independently after the agent reported: tsc --noEmit clean, eslint
+clean, `./bin/llm-ext session-summary --help` shows --stdout distinct from
+--output. NOTE on the suite: a full run under load showed 6 failures, 5 of them
+in profile.test.ts which this change never touches, with null (killed) exit
+codes and a 383s runtime vs the usual 82s. Re-run isolated on a quiet machine:
+32/32 pass. Load-induced timeouts, not a regression.
+
+- Feat(session-summary): biggest free model, runtime fallback, real tokenizer (TRDD-T4MZ8YQR)
+
+Implements the owner's pipeline spec. Three changes, each replacing something
+that was wrong rather than merely absent.
+
+1. No implicit context floor. Selection previously defaulted to a 1,000,000
+   floor, which on today's catalog admits exactly ONE model — so a delisting
+   or a daily cap left the command with nothing to fall back to. It now always
+   picks the BIGGEST eligible free model, whatever that is; `--min-context` is
+   an optional explicit floor. `--allow-lower-context` is deleted: meaningless
+   without a default floor. WHY no floor is correct: chunking, not the window,
+   is what handles a transcript larger than the model — refusing small-context
+   models solved the wrong problem.
+
+2. Modality filter is permissive: `text` must be PRESENT on both sides of
+   `architecture.modality`, extra modalities never disqualify, membership-split
+   on `+` so "textual" cannot match "text". The old exact `text->text` match
+   silently dropped 6 of 16 usable free models. It does admit the lyria audio
+   models (largest context, so they sort first) — deliberately. Selection is
+   permissive and RUNTIME evidence demotes: a model returning no usable text is
+   a fallback trigger. That is what survives model shapes nobody has shipped yet.
+
+3. Chunk sizing uses a real BPE tokenizer (gpt-tokenizer, MIT, zero transitive
+   deps, no WASM/native) instead of the bytes/4 heuristic, counted incrementally
+   per turn so a 265 MB transcript is never tokenized in one call. Budget is
+   context_length - reserved_completion - prompt_overhead, NOT the context
+   length: sizing to the full window guarantees overflow once the reply is
+   generated.
+
+TOKEN_ESTIMATE_SAFETY_MARGIN exists because the eligible models (nemotron,
+gemma) do not use o200k tokenization, so the count is an estimate. Do not
+"simplify" it away — the model's own overflow error is ground truth, the
+tokenizer is the estimate.
+
+Verified independently, not taken on an agent report: vitest 1816 passed /
+0 failed / 4 skipped, tsc --noEmit clean, eslint clean.
+
+- Feat(cli): expose `session-summary` — compaction-style summary of a whole session (TRDD-T4MZ8YQR P5)
+
+Wires P1-P4 into a reachable command: stream the JSONL transcript, prune, chunk on turn
+boundaries, select a free text-only model, map-reduce with per-chunk checkpointing.
+
+Defaults encode the two decisions recorded on the card. --min_context is 1,000,000, which honours
+the original request literally even though exactly ONE free model qualifies today; the opt-in
+--allow_lower_context drops the floor to 262,144 where five do, because with a one-model pool
+there is nothing to rotate to when its daily cap hits. --prune defaults to aggressive: the prune
+ratio, not the context window, is what makes a 66M-token transcript tractable, and a compaction
+summary wants the narrative rather than the bytes.
+
+Transcript/checkpoint path resolution lives in its own module OUTSIDE session_summary/ so the
+four already-tested phases stayed untouched by the wiring.
+
+README counts moved again (43→44, 20→21 core/utility) because doc-consistency.test.ts asserts
+they equal the real catalog — the same guard that caught the `profile` command. It is doing its
+job; the counts move, never the test.
+
+Verified through the binary a user actually types, not just the suite: `./bin/llm-ext
+session-summary --help` lists every documented flag after a rebuild. Suite 1795 passed / 0 failed,
+tsc + lint clean. package.json untouched — option B of W9DK4L3N remains unapproved.
+
+- Feat(session-summary): map-reduce driver with resumable per-chunk checkpointing (TRDD-T4MZ8YQR P4)
+
+Maps each chunk, reduces the chunk summaries into one, and recurses when the fold itself exceeds
+the window — a 265 MB / ~66M-token transcript is ~66 full 1M windows, so a single fold is not
+guaranteed to fit.
+
+Checkpointing after every chunk is the load-bearing part, not defensive polish. At the default
+1M context floor exactly ONE free model qualifies, so there is no rotation partner when its daily
+cap hits: an interrupted run is the normal case, not the exception. The tests therefore assert
+the properties that make resume trustworthy rather than merely present — already-checkpointed
+chunks are not re-sent to the model, a checkpoint whose transcript or prune level no longer
+matches fails fast instead of folding a summary of one input into another, corrupt checkpoint
+JSON fails fast rather than silently starting fresh (which would read as success while
+re-spending the entire run), and a rate limit raises an actionable error naming the checkpoint
+path instead of retry-looping against a daily quota that will not clear for hours.
+
+The cost gate runs before any I/O — it refuses a non-free model id before the transcript is even
+opened — so it cannot be bypassed by a later path that forgets to consult it.
+
+Tests inject the model-call seam, so the suite makes no network calls. 50 tests pass.
+
+- Feat(session-summary): free-model selection with a tested modality filter (TRDD-T4MZ8YQR P3)
+
+Selects eligible models by price==0 AND context_length>=minContext AND modality=="text->text".
+
+That last clause is the whole point and it has its own regression test. Measured on the live
+OpenRouter catalog: three free models clear >=1M context, but two of them
+(google/lyria-3-pro-preview, google/lyria-3-clip-preview) are text+image->text+audio music
+models. A price+context filter — the obvious implementation — selects them, and the resulting
+failure looks like a bad model rather than a bad filter, which is the kind of bug that costs an
+afternoon. The fixture now encodes that trap permanently.
+
+Default minContext is 1_000_000, honouring the request literally; allowLowerContext drops to
+262_144 where ~5 free text models exist. That option is not a convenience: at 1M the eligible
+set is a single model, so there is nothing to rotate to when its free daily cap hits.
+
+Empty eligible set fails fast naming the filters applied, and never falls back to a paid model —
+two tests assert that holds regardless of caller or active profile. Tests inject catalog JSON as
+a fixture, so the suite makes no network calls.
+
+- Feat(cli): add a read-only `profile` command to llm-ext (TRDD-K3PW7Q2M)
+
+Closes the last capability that existed ONLY in the legacy standalone bundle. Before this,
+`llm-ext --help` had no `profile` at all — the surface lived in scripts/llm-ext/src/cli.ts,
+reachable only through the `llm-externalizer` binary, so the supported entry point could not
+answer "which profile am I on?".
+
+Read-only ON PURPOSE: list, and --show <name>. No add/select/edit/remove/rename. This project's
+standing rule is that configuration is user-only — settings.yaml is hand-edited and there is
+deliberately no set-settings/change-model command — so a profile write verb would be that same
+banned surface wearing a different name. The TRDD's "switch" acceptance box is amended in the
+card rather than quietly ticked.
+
+README's command counts are updated with it (42→43 total, 19→20 core/utility). That was not
+cosmetic: src/doc-consistency.test.ts asserts the README counts equal the real catalog, and it
+went red the moment the command landed. The guard was right, so the counts moved, not the test.
+
+Full suite 1775 passed / 0 failed; tsc --noEmit and lint both clean; `./bin/llm-ext profile`
+exercised for real against the live settings file.
+
+- Feat(session-summary): streaming transcript reader + turn-boundary chunker (TRDD-T4MZ8YQR)
+
+P1+P2 of the session-summary command. Both are pure and model-free, so they hold whichever way
+the two open design flags land (--min-context, --prune).
+
+Streaming is not an optimisation here, it is the requirement: this project's largest session
+transcript is 265,443,684 bytes (~66M tokens), so a whole-file read would blow the heap before
+any model was ever called. transcript.ts therefore reads line-by-line via createReadStream +
+readline, and a structural test asserts no synchronous whole-file read can creep back in — that
+guard exists because the failure it prevents is silent until someone runs it on a big session.
+
+A malformed JSON line is skipped and COUNTED rather than thrown, because real transcripts get
+truncated mid-write when a session dies; everything else still fails fast.
+
+chunker.ts never silently drops a turn: a turn too large for the budget on its own is split on
+line boundaries and marked [continued], and a round-trip test asserts every input turn survives.
+The bytes/4 token heuristic is one exported constant so the estimate can be replaced with a real
+tokenizer in one place.
+
+26 tests, tsc --noEmit clean, lint clean (all re-run independently before this commit).
+
+
+### Changed
+
+- Build(dist): rebuild bundles with the queue-operation extraction fix
+
+- Build(dist): rebuild bundles with the compaction schema and deterministic join
+
+bin/llm-ext executes dist/, so the nine-section prompt, the removed fold, the
+turn-atomic chunker and the image dropping are all unreachable at runtime until
+this rebuild.
+
+- Build(dist): rebuild bundles with the chunk cap, echo rejection and loud failure
+
+Also carries the corrected benchmark re-run hints (2ff6c56) into the bundles.
+bin/llm-ext executes dist/, so none of it is reachable at runtime until this.
+
+- Build(dist): rebuild bundles with the ':free' selection fix
+
+Without this the shipped binary keeps selecting the unsuffixed lyria id and
+failing the cost gate — the source fix in 1931239 is not reachable at runtime
+until the bundles are regenerated.
+
+- Build(dist): rebuild bundles with the legacy command aliases
+
+bin/llm-ext and the npm bin both execute dist/llm-ext.js, so model-info and
+search-existing kept exiting 1 until the rebuild — caught by re-checking all
+seven verbs against the binary rather than assuming the source edit sufficed.
+
+- Build(dist): rebuild bundles with the Phase B overflow re-split and --stdout
+
+bin/llm-ext executes dist/llm-ext.js, so the flag and the re-split are not
+reachable at runtime until the bundles are regenerated (see the same note on
+fdff1f7). Verified after rebuild: session-summary --help lists --stdout.
+
+- Build(dist): rebuild bundles with the tokenizer pipeline and model selection
+
+Source landed in e89456a; dist was stale. bin/llm-ext resolves through
+launcher.mjs into dist/llm-ext.js, so the runtime keeps the OLD behaviour until
+the bundles are rebuilt — an unrebuilt dist is why a verified-green src can
+still ship the previous logic.
+
+Verified on the live binary after rebuild: 'llm-ext profile --help' and
+'llm-ext session-summary --help' both exit 0, and session-summary's help
+reflects the new selection (no hard floor, --allow-lower-context gone).
+
+- Build(dist): rebuild bundles with the session-summary command
+
+So the shipped bin/llm-ext actually carries it — verified by grepping the built bundle rather
+than inferring it from the source diff.
+
+- Build(dist): rebuild bundles with the unified auto-free pre-flight
+
+Regenerated so the SHIPPED dist/cli.js — the only binary package.json declares — actually carries
+the fix. Verified by grepping the built bundle, not inferred from the source change: a green
+source diff with a stale bundle is exactly the shape of "fixed it" that ships nothing.
+
+- Build(dist): rebuild bundles with the profile command
+
+Regenerated by the build so the shipped `bin/llm-ext` actually carries `profile` — the source
+change alone would leave the published surface unchanged, which is precisely the trap the
+"verify through the command the user runs" rule exists for.
+
+
+### Documentation
+
+- Docs: document session-summary as a $0 compaction tool for any Claude Code session (TRDD-T4MZ8YQR)
+
+README, the usage SKILL and its tool-reference / usage-patterns now describe
+what the command actually is: a Claude-Code-compaction-EQUIVALENT summary of a
+whole session, produced from its JSONL transcript on free models only, so an
+agent can compact any session at $0.
+
+Documents the parts that are load-bearing for a caller: the nine-section schema
+(with All User Messages verbatim), chunk boundaries that fall only BETWEEN
+turns, the deterministic non-LLM join, image dropping, checkpoint/resume, and
+the biggest-free-model selection with automatic fallback.
+
+Every documented invocation was executed against the real binary before being
+written — a documented command that errors is the exact defect class fixed
+earlier tonight, twice.
+
+Also corrects a contradiction in driver.ts: the DEFAULT_MAX_CHUNK_TOKENS header
+claimed the effective budget is "always Math.min(windowBudget, cap)", while the
+call site honors an explicit --max_chunk_tokens VERBATIM. The code is right and
+the header was stale. 50,000 is a DEFAULT, not a ceiling: a caller may set any
+value, above the default or above the model's window, and an over-large setting
+degrades into extra calls (the model's own overflow error re-splits the chunk)
+rather than failing. Only the default is window-capped, since defaulting to a
+budget the model cannot accept is pointless.
+
+NOT lowered to 20-25k as earlier speculated. Under the verbatim schema total
+output is ~proportional to total INPUT regardless of chunking — every user
+message is reproduced exactly once either way — so smaller chunks do not reduce
+total generation time, they only add per-request overhead.
+
+Verified: vitest 1865 passed / 0 failed / 4 skipped, tsc + lint + build clean.
+
+- Docs: TRDD-T4MZ8YQR — record the compaction rework and the mid-turn message loss
+
+Five findings, the fifth only visible in a live run: a message sent while the
+assistant is working is stored as type 'queue-operation' with text at the
+top-level content field, so every mid-turn user message was discarded while
+[janitor-heartbeat] cron fires survived. Machine noise kept, human intent
+dropped, in the feature whose selling point is verbatim user messages.
+
+Also records the measured cost shift: under the verbatim schema output scales
+with input, so ~28 min per 50k chunk vs ~90s for the old fixed-size summary —
+the 50k default predates that and 20-25k is likely better, left unchanged
+pending measurement rather than guessed at twice.
+
+- Docs: TRDD-W9DK4L3N — record the measured blast radius of removing src/cli.ts
+
+Nothing imports cli.ts (it is an entry point); cli-mass-scout-free.ts and its
+test are orphaned by its removal; the esbuild target and committed dist/cli.js
+go; resolveMassScoutFreeModelOverride stays (still used at index.ts:2743).
+
+The judgment call is the FOUR test files that read cli.ts as a source: they
+assert coverage across BOTH entry points, so removing one means deciding per
+assertion whether it still means anything — a change that stays green while
+dropping a guarantee. Recorded so this is not mistaken for a mechanical
+dead-code delete, and so the next session does not re-scope it.
+
+- Docs: close TRDD-R7VQ2XKD — all five criteria met and re-verified (archived)
+
+Fixes: 5c9d253 (4 live MCP references), 2ff6c56 (benchmark re-run hints naming
+a verb that never existed), f88d840 (or-model-info documented a positional
+invocation the CLI rejects), 70f17c0 (free-scan told agents to pass --free and
+--output_dir to scan-folder, which accepts neither), ceaad6d (--estimate
+preamble on four files with paid examples).
+
+Each criterion re-measured AFTER the fixes rather than re-read: 0 dead-MCP
+refs; 5/5 hints corrected with 0 stale; or-model-info fully on --model with 0
+positional forms; all 4 paid-example files carrying the --estimate rule.
+
+Recorded on the card because the card earned it twice: its original "0 drift"
+was narrative and four live MCP references survived it, and while closing it
+today I saw four criteria green and nearly archived with a HIGH free-scan
+finding still open — having fixed one of the two defective skills the audit
+named and carried "skills are done" forward as though it covered both.
+
+- Docs: TRDD-W9DK4L3N — correct an overstated verification claim
+
+I tested '<verb> --help' for all seven legacy verbs and reported 'all seven
+exit 0'. That proves verb RESOLUTION, not ARGUMENT CONVENTION. The legacy CLI
+took the model id positionally (src/cli.ts:890); this one accepts only named
+flags, so 'llm-externalizer model-info <id>' still fails for an npm user even
+though the alias resolves the verb. Measured both ways before writing this.
+
+The breakage is declared in 15eb6e4's BREAKING CHANGE footer, but it is broader
+than that footer implies, so the card now says so.
+
+- Docs: TRDD-T4MZ8YQR — session-summary produces a real summary, verified live
+
+Second live run: 3 chunks, 3,918 lines, prune 0.103, 4,353 B of structured
+compaction output with accurate specifics. Contrast with the first run's 941 B
+echo. Root cause recorded (chunk sizing used the whole window, so ~150k tokens
+went in one request), along with the correction that my first diagnosis blamed
+the fallback chain and was wrong — the driver's no-text handling was always
+right; the retries came from the client layer beneath it.
+
+- Docs: document the --estimate dry-run before paid examples (TRDD-R7VQ2XKD)
+
+Four files showed invocations that SPEND on a paid profile (scan-folder, chat,
+code-task, compare-files, check-references, check-imports, check-against-specs,
+search-existing-implementations) while containing zero mentions of `--estimate`
+— so a reader following them had neither an inline dry-run nor a file-level
+rule to fall back on. docs/agent-usage-reference.md alone carried 12 such
+examples across 653 lines with no cost preview anywhere.
+
+Uses the preamble already established in
+skills/llm-externalizer-usage/references/usage-patterns.md:28-30 rather than a
+new wording, so the corpus stays consistent. end-to-end-workflow.md also
+demonstrates estimate-then-real-run on its first invocation, since it is the
+canonical worked example.
+
+The rule is CONDITIONAL on purpose: `--estimate` is pointless on a free profile
+where everything is $0, so it reads "on a paid profile", never "always" — a
+guardrail that fires when it cannot matter trains readers to ignore it.
+
+llm-externalizer-reviewer-agent.md gets it as a DIRECTIVE rather than prose,
+because that agent runs scan-folder/code-task for real; its existing step 2 was
+extended, not replaced.
+
+Closes acceptance criterion 4 of TRDD-R7VQ2XKD. Verified additions-only: the
+single deletion is that step-2 line being extended in place.
+
+- Docs: TRDD-T4MZ8YQR — first live run exposes two defects, command still not usable
+
+Plumbing verified end-to-end (model selection, prune 0.103, 1 chunk,
+checkpoint, report, exit 0) but the summary body is a raw pruned turn, not a
+summary. Empty responses retried 15x on the same model instead of demoting to
+the next candidate, and the run exited 0 emitting a non-summary as success —
+which fail-fast forbids, since nothing downstream can distinguish it from a
+real summary.
+
+- Docs: TRDD-T4MZ8YQR — Phase B closes the last two implementation boxes
+
+Overflow re-split and --stdout both landed (21e2603). What remains unchecked is
+the live end-to-end run against a real transcript, which no phase has done.
+
+- Docs: TRDD-W9DK4L3N scope-approved now records option A and B
+
+The frontmatter still said option-A-only while the body recorded B as shipped.
+scope-approved is a greppable field, so a stale value there contradicts the
+card at exactly the place a query would trust it.
+
+- Docs: TRDD-W9DK4L3N option B shipped; card stays dev for the dead bundle
+
+Records that verification falsified the card's own premise (two of seven legacy
+verbs did NOT keep working) and that the aliases were added before the
+re-point so the promise holds. Four of six acceptance items now met; the
+unmet one is src/cli.ts still building to an uninstalled dist/cli.js.
+
+- Docs: archive TRDD-8d8d33c8 as superseded, not complete
+
+The card sat at `column: complete` inside design/tasks/, so the board counted
+it as open work while its body already said "CLOSED — fixed by TRDD-W9DK4L3N
+option A". Two corrections:
+
+- `complete` -> `superseded`. It already carried `superseded-by: TRDD-W9DK4L3N`,
+  and its own six acceptance boxes were never ticked. Work finished under a
+  different card is supersession; calling it complete would assert that THIS
+  card's criteria were verified, which nobody did.
+- moved to design/archived/, where terminal cards belong.
+
+Verified the substance before archiving rather than trusting the header: the
+shared module src/cli-mass-scout-free.ts exists and src/cli.ts consults the
+supported path's resolveMassScoutFreeModelOverride through it (d0c6c69), which
+was acceptance item 1 and the actual gap.
+
+- Docs: close TRDD-K3PW7Q2M (verified), reopen TRDD-R7VQ2XKD (verification failed)
+
+Owner approved closing both with the standing instruction "verify each before
+doing it". Verification split them.
+
+K3PW7Q2M -> completed, archived. Verified first-hand on the live binary after a
+fresh build: `llm-ext profile --help` exits 0 with the read-only list/--show
+schema; the verb is in the catalog (definitions.ts:655); dogfood covers it via
+its dynamic verb parser (dogfood_test.py:284,369) — confirmed by reading the
+harness, not by trusting the earlier "covered generically" note.
+
+R7VQ2XKD -> dev, NOT closed. Its "0 drift" was narrative and its five
+acceptance boxes had never been ticked. Measured: 1 of 5 now met (after
+5c9d253), 1 measurably UNMET — five benchmark modules print
+`Re-run: llm-externalizer benchmark --…` as runtime output, and that binary is
+not on PATH for plugin users — and 3 never checked at all.
+
+WHY reopened rather than closed with a note: a card in human_review asserts it
+is waiting on a person. This one is waiting on work, and the difference is
+invisible on the board unless the column says so.
+
+- Docs: TRDD-T4MZ8YQR — Phase A landed, Phase B is the remaining scope
+
+Records what the owner's pipeline spec superseded (the 1M floor,
+--allow-lower-context, exact-match modality, bytes/4) so a later session does
+not reintroduce any of them, and names the one honest gap: the tokenizer is an
+estimate, so the model's own overflow error must be the authority (Phase B).
+
+- Docs: remove the last four references to the deleted MCP surface (TRDD-R7VQ2XKD)
+
+The drift sweep was recorded as "0 drift", but four user-facing sites still
+named MCP as the live invocation path:
+
+- or-model-info/SKILL.md said "Real invocation path is the `or_model_info` MCP
+  tool", and then contradicted itself 14 lines later with "(not the MCP tool)".
+  The MCP server was deleted in v11.0.0 (d557c68); there is no such tool.
+- three tool-reference.md copies explained the disabled-tool list in terms of
+  "MCP is read-only", framing a surface that no longer exists.
+
+WHY it matters more than a wording nit: these are skill files, so the sentence
+is what an agent reads when deciding how to invoke the tool. A description
+pointing at a deleted surface produces a call that cannot succeed, and the
+self-contradiction inside one file means whichever line is read first wins.
+
+Only the MCP clauses were changed. `llm-externalizer model-info` was left
+alone on purpose: it is a REAL verb (src/cli.ts:890) under the real npm bin
+name, not drift — 24 other hits for that form are the legacy surface being
+documented correctly.
+
+- Docs: TRDD-T4MZ8YQR to human_review — all five phases shipped and verified
+
+The two defaults (--min_context 1M, --prune aggressive) were my assumptions under a delegated
+decision, not the owner's explicit choice, so the card waits on review rather than closing itself.
+
+- Docs: approve TRDD-W9DK4L3N option A only — unify dispatch, leave the published bin alone
+
+The owner delegated the tier-3 call ("do as you think is better"), so this approves the
+non-breaking half and explicitly refuses the breaking one.
+
+A removes an active billing exposure: the published entry point (dist/cli.js, the only declared
+npm bin) has no auto-free-on-low-balance path, so a user there can be charged in exactly the
+situation where the supported bin/llm-ext would have switched to free models. That is a defect
+in shipped behaviour, and fixing it changes nothing anyone can observe except the bill.
+
+B — re-pointing the npm bin — is NOT approved. It is irreversible for existing consumers and
+gains nothing once A has erased the behavioural difference between the two paths, so it belongs
+to a deliberate major with a breaking-change note, not to a bugfix.
+
+Scope: shared dispatch, package.json untouched. Closes TRDD-8d8d33c8 when it lands.
+
+- Docs: fix two invocations that could never have run, close the drift sweep (TRDD-R7VQ2XKD)
+
+README documented the mass-scout family as `bin/llm-ext mass-scout <subcommand>`. That two-word
+form does not exist — the commands are flat (`mass-scout-register`), so every example built on
+it would fail at the catalog lookup.
+
+docs/agent-usage-reference.md passed the spec file to check-against-specs via
+`--instructions_files_paths` and never supplied `--spec_file_path`, which --help marks
+(required). Same class of bug: an example that reads as authoritative and cannot execute.
+
+Re-audit across commands/ skills/ agents/ README.md docs/ now returns zero on all five drift
+categories, re-run independently rather than accepted from a report. Card moves to human_review
+(not complete) because it carries review-requirements: [human-review] and closing it is the
+owner's call.
+
+The structural half — two runtime entry points, the published npm bin being the legacy one —
+is deliberately NOT in this card; it is breaking public API and waits in proposal W9DK4L3N.
+
+- Docs: propose TRDD-W9DK4L3N — retire the legacy dist/cli.js entry point (tier 3, needs approval)
+
+Filed as a PROPOSAL, not a task: re-pointing a published npm bin is a breaking public-API
+change, so it is the owner's call.
+
+The finding that prompted it: package.json declares bin = {"llm-externalizer": "dist/cli.js"},
+i.e. the npm package still advertises ONLY the entry point v11.0.0 was meant to supersede, while
+the supported `bin/llm-ext` is not an npm bin at all. The two surfaces do not behave the same —
+grep proves auto-free-on-low-balance is absent from the legacy path, so a user there can be
+billed where the supported path would have switched to free models.
+
+Checked the legacy CLI's own 7-subcommand list against the real catalog: six already exist in
+llm-ext (two under renamed forms), and only `profile` is unique. So the legacy bundle carries no
+capability the supported one lacks — only divergent behaviour. Approving this closes both
+TRDD-8d8d33c8 and TRDD-K3PW7Q2M rather than patching each symptom separately.
+
+- Docs(commands): fix the flag that never existed + add the missing cost gates (TRDD-R7VQ2XKD)
+
+Three command files told the agent to pass `--specs` to check-against-specs. That flag does
+not exist and never did — `llm-ext check-against-specs --specs X` errors with "unknown flag".
+The real one is `--spec_file_path`. Each file keeps `--specs` as its OWN slash-command argument
+hint (that is its UX) and now translates it explicitly at the point of the CLI call, so the
+wrapper's vocabulary and the CLI's vocabulary stop being silently conflated.
+
+Separately, none of the 39 command files mentioned `--estimate` before dispatching a paid run,
+which is exactly the pre-flight the cost rule requires. Six paid commands now lead with it.
+security-scan is deliberately left on `--budget_usd`: it REFUSES --estimate by design, because
+it runs through mass_scouting and the generic estimator would price the wrong models.
+
+Also records a correction in the TRDD: the audit's ~16 "kebab vs snake flag mismatch" CRITICALs
+were false. cli/main.ts:208 normalises `-` to `_` at parse time, so the kebab docs already work
+(verified behaviourally). Fixing them would have been churn; the note exists so nobody re-opens
+that class from the same stale report.
+
+- Docs: add TRDD-T4MZ8YQR — session-summary command design (measured constraints)
+
+Captures the user's request for a compaction-style session summary built from the project's
+JSONL transcript using free 1M-context models only, and records what measurement actually
+found rather than what the request assumed: exactly ONE free model is both >=1M context and
+genuinely text->text (nvidia/nemotron-3-ultra-550b-a55b:free) — the other two >=1M free ids
+are lyria audio models that pass a naive price+context filter, which is why the modality
+filter is load-bearing in P3.
+
+The decisive number is the transcript itself: 265 MB / ~66M tokens for this project's largest
+session, i.e. ~66 full 1M windows. Map-reduce is therefore mandatory whatever model is chosen,
+and a single-model pool cannot rotate on a 429 — hence per-chunk checkpointing in P4.
+
+Two defaults are stated as assumptions, both flag-reversible: --min-context 1000000 (honours
+the request literally) and --prune aggressive (what makes a 66M-token input tractable at all).
+
+- Docs(skills): translate 13 skill files from the retired MCP surface to llm-ext (TRDD-R7VQ2XKD)
+
+v11.0.0 retired the MCP server and made `llm-ext` the only runtime surface, but these
+skill references were still written as MCP tool-call JSON payloads ({"tool": "scan_folder"}),
+still invoked the legacy `llm-externalizer` bundle name, and still used the two-word
+`mass-scout build-fieldset` form instead of the real flat `mass-scout-build-fieldset`.
+An agent following them executed something that could not work — worse than a missing doc,
+because it reads as authoritative.
+
+88 invocations rewritten; every command checked against `llm-ext --help` and every flag
+against that command's own --help, so no invented flags survive. Paid examples now lead
+with the $0 `--estimate` dry-run per the cost rule.
+
+Opens TRDD-R7VQ2XKD; the commands/ wave (39 files, 20 critical) is next.
+
+- Docs(board): triage the 33-card TRDD board — archive 29, keep 4 open, add profile-gap card
+
+Verified every card against the v11.1.0 tree rather than its own prose. 26 done, 2
+superseded by the MCP→CLI migration, 1 cancelled with the Codex feature removal. The 4
+that remain are genuinely open; adds TRDD-K3PW7Q2M for the verified llm-ext profile gap.
+Ledger: design/BOARD-TRIAGE-20260806.md
+
+
+### Fixed
+
+- Fix(session-summary): capture mid-turn user messages, drop machine-injected turns (TRDD-T4MZ8YQR)
+
+HIGH-severity data loss, found by the live run — 1865 unit tests could not see
+it, because no fixture contained the shape.
+
+A message the user sends WHILE THE ASSISTANT IS WORKING is recorded with
+`type: "queue-operation"` (text at the TOP-LEVEL `content` field), not
+`type: "user"`. The extractor keyed on `type` and accepted only "user", so
+EVERY mid-turn message was silently discarded. Measured on a real transcript:
+"serena" appeared 0 times in a 328 KB generated summary although the owner had
+explicitly said "delete the whole .serena folder". Also lost: the MCP ban,
+"find a way to make it work", "the merge should not be made by the model",
+"embedded images should be dropped".
+
+That is the worst possible subset to lose. Mid-turn messages are corrections
+and redirects — the moments the user changes course — and the summary's
+headline feature is "All User Messages, verbatim".
+
+Meanwhile the inverse was also true: `[janitor-heartbeat]` cron fires ARE
+type "user", so the verbatim section filled with machine noise while real
+intent vanished.
+
+Fixes: extract queue-operation/enqueue entries as user turns in original
+interleaved order, and exclude turns that are WHOLLY machine-injected —
+heartbeat fires, the no-visible-output nudge, slash-command plumbing,
+system-reminder-only turns, task-notification / cross-session relays (which
+Claude Code re-delivers later, so dropping them duplicates nothing), and
+skill documentation loaded as a synthetic user turn.
+
+The exclusion is deliberately conservative: whole-message matches only, never
+a mention. A false exclusion destroys real intent — the exact bug being fixed —
+so there is a test asserting a real message that merely MENTIONS a marker
+survives.
+
+Verified against the REAL transcript, not fixtures: all six previously-lost
+messages now present; user turns 62 -> 53 as 9 skill-doc loads drop out; 0
+heartbeat fires survive. Suite 1865 passed / 0 failed, tsc + lint + build clean.
+
+- Fix(skills): free-scan told agents to pass flags scan-folder rejects (TRDD-R7VQ2XKD)
+
+Four sites used `llm-ext scan-folder --free ...` or referred to `--output_dir`.
+Measured: scan-folder's complete flag list is 17 flags and contains NEITHER, so
+an agent following this skill errored out.
+
+This mattered more than a typo because the skill's whole purpose is $0 scanning.
+It taught that free routing comes from a `--free` flag on scan-folder; it does
+not, so the guarantee it advertised was never coming from the mechanism it
+named. Free-only routing for scan-folder is a PROFILE setting (`free_only: true`
+with a `free_models:` pool), and `llm-ext discover` is what reports whether it
+is active.
+
+NUANCE worth recording, because the obvious generalisation is wrong: `--free`
+IS a real flag — on `chat` and `code-task` (both verified PRESENT). Only
+scan-folder lacks it. So "free mode is a profile setting, not a flag" is a
+half-truth; which mechanism applies is PER COMMAND, and the only way to know is
+that command's own --help. references/ was therefore correctly left untouched:
+its --free mentions are on chat/code-task, where the flag exists.
+
+- Fix(skills): or-model-info documented an invocation that cannot run (TRDD-R7VQ2XKD)
+
+Every example in this skill passed the model id POSITIONALLY
+(`llm-externalizer model-info "<id>"`), and the CLI takes only named flags.
+Measured: `./bin/llm-ext or-model-info "google/gemini-2.5-flash"` exits 1 with
+"unexpected argument"; `--model "google/gemini-2.5-flash"` exits 0. So an agent
+loading this skill and following it verbatim failed every time.
+
+Seven sites corrected to `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" or-model-info
+--model "<id>"`, matching the spelling this skill's OWN references/ files
+already used — the skill was internally inconsistent with its own references,
+and the fictional form was the one a reader hits first.
+
+Also: the "flags" it told readers to forward (--markdown/--json/--no-color and
+aliases) do not exist. Output format is a different COMMAND
+(or-model-info-table / or-model-info-json), not a flag; each command's only
+parameter is --model. And the prerequisite claimed `llm-externalizer` is "on
+PATH (bundled with the plugin)" — the plugin bundles `bin/llm-ext`;
+`llm-externalizer` only exists after an npm install.
+
+MY OWN ERROR, recorded so it is not repeated: the frontmatter line said
+`llm-ext or-model-info <id>` because I wrote it that way in 5c9d253 while
+fixing this file's stale MCP reference. I corrected one defect and introduced
+another in the same edit, because I checked that the COMMAND existed and never
+ran it. Verifying a command's existence is not verifying its calling
+convention.
+
+Every replacement invocation in the file was executed against the live binary
+before being written.
+
+- Fix(session-summary): cap chunk size, reject echoes, fail loud (TRDD-T4MZ8YQR)
+
+The first live run completed and exited 0 while emitting a single raw
+transcript line as its "summary". Three fixes, all from that evidence.
+
+1. CHUNK SIZE IS CAPPED INDEPENDENTLY OF THE WINDOW (default 50,000 tokens,
+   `--max_chunk_tokens` to override). It previously used the whole window
+   budget — contextLength - maxCompletion - overhead, about 934k — so the
+   entire ~150k-token transcript went to the model in ONE request. A context
+   window governs what FITS, not what a model can summarize WELL; free models
+   collapse into echoing their input long before the limit. This is the actual
+   root cause of the garbage output.
+
+2. AN ECHO IS NO LONGER ACCEPTED AS A SUMMARY. A response that is essentially
+   its own input is now treated exactly like the existing "no-text" case: a
+   ModelUnavailableError that demotes the model and advances the fallback
+   chain, so a model that echoes is abandoned instead of trusted. Kept
+   conservative — a legitimate short summary that quotes a line must not be
+   killed — so the test is whole-response-is-input, not contains-input.
+
+3. NO USABLE SUMMARY IS NOW A LOUD FAILURE. Exhausting every candidate exits
+   NON-ZERO naming what was tried and why each failed. Exit 0 with a
+   non-summary is the worst outcome available: fail-fast forbids it precisely
+   because nothing downstream can distinguish it from real output.
+
+Note on the earlier diagnosis, corrected by reading the source: the driver's
+empty-response handling was never wrong. driver.ts:368 already throws
+"no-text" and :373 propagates it for fallback WITHOUT retry. The `retrying
+(1/15)` lines came from the OpenRouter client layer beneath it, which retried
+and eventually returned a non-empty echo — so the driver never saw an empty
+string and the fallback chain was never given the chance to fire.
+
+Verified independently: vitest 1841 passed / 0 failed / 4 skipped, tsc clean,
+eslint clean, and `session-summary --help` shows --max_chunk_tokens.
+
+- Fix(benchmark): re-run hints named a command that never existed (TRDD-R7VQ2XKD)
+
+Five benchmark modules printed `Re-run: llm-externalizer benchmark --<mode>` as
+runtime output. That was wrong in TWO ways, not one: `llm-externalizer` is the
+npm bin name and is not on PATH for plugin users, AND `benchmark` was never a
+verb on either CLI — the benchmarks ship as a SEPARATE binary, bin/llm-ext-benchmark.
+So a user who followed the hint got "unknown command" no matter how they had
+installed the plugin.
+
+Now `llm-ext-benchmark --<mode>`, verified against the real binary rather than
+assumed: `./bin/llm-ext-benchmark --help` exits 0 and lists --scan-folder,
+--code-task, --search-existing, --security-triage and --check-specs. A dry-run
+of one mode was also exercised; it stops at the allow_paid_models cost gate
+("No API call was made, $0 spent"), which confirms the flag parsed and the
+guard fired — not a bad invocation.
+
+Only the command name changed in each string; wording, flags and formatting are
+untouched. Closes acceptance criterion 2 of TRDD-R7VQ2XKD, which was the one
+item measurably UNMET.
+
+- Fix(session-summary): a $0 model without a ':free' suffix is excluded, not fatal (TRDD-T4MZ8YQR)
+
+Found by the first LIVE run, which no phase had done. The command failed
+outright with "free_only cost-safety: refusing to send non-free model
+'google/lyria-3-pro-preview'" and summarized nothing.
+
+Root cause: two different predicates for "free" were never reconciled.
+Selection filtered on pricing.prompt == 0 && pricing.completion == 0, while the
+cost gate (assertFreeOnlyModel) requires the id to END WITH ':free'. OpenRouter
+genuinely lists $0 models with no ':free' suffix — lyria is one — so such a
+model passed selection and was then refused downstream.
+
+The damage came from WHERE the gate sat: assertFreeOnlyModel() was called
+INSIDE the filter loop, so it THREW instead of skipping. One unusable catalog
+row therefore took the whole run down. And because the unsuffixed lyria ids
+have the largest context in the free tier, they sort first and are hit first —
+selection threw before it could ever reach a usable model. A cost-safety
+backstop that fires on a model nobody selected is not a backstop, it is an
+outage.
+
+Fix: require BOTH $0 pricing AND a ':free' id, and EXCLUDE (continue) on a
+miss. Live sends still pass the real gate, which is where a backstop belongs.
+This also resolves the lyria concern from the modality work: the permissive
+modality rule still admits them, and rule 2 drops them for lacking ':free',
+so runtime no-text demotion never has to.
+
+The existing test asserted the THROW, so it encoded the bug; it now asserts the
+requirement that was always intended ("never returned") plus the property the
+throw destroyed — that a usable model survives alongside the excluded one. The
+test was corrected, not weakened.
+
+Verified: session_summary suite 79 passed, tsc clean, eslint clean, build clean.
+
+- Fix(cli): give the legacy entry point the same auto-free pre-flight (TRDD-W9DK4L3N option A)
+
+The published npm bin is dist/cli.js, and that path forwarded mass-scout / security-scan to
+runMassScoutCli WITHOUT the free-model pre-flight the supported bin/llm-ext runs first. So a user
+on the published binary could be billed in exactly the situation where the supported one would
+have switched to a :free model. That is the whole defect; TRDD-8d8d33c8 was a symptom of it.
+
+Fixed at the cause rather than patched per-call-site: cli.ts now consults the SAME exported
+decision function the supported path uses (resolveMassScoutFreeModelOverride, index.ts:971) via
+a new side-effect-free module. Copying the balance/engagement logic into the legacy path would
+have worked today and drifted later — one resolver, two callers, no second copy. parseFlags was
+deduplicated out of cli.ts into that module while there.
+
+Only the six spend-capable subcommands are intercepted; every other subcommand returns argv
+byte-for-byte so the read-only paths keep making zero network calls — there is a test asserting
+exactly that, because "add a guard everywhere" is how a read-only command quietly acquires a
+balance probe. security-scan needed its own injection point: its model lives inside the
+--input-json payload, not in a flag.
+
+The module is separate from cli.ts because cli.ts invokes main() against process.argv at import
+time — importing it from a test would run the whole CLI.
+
+package.json is deliberately untouched: re-pointing the bin (option B) is a breaking change and
+remains unapproved. Suite 1795 passed / 0 failed, tsc + lint clean.
+
+
+### Miscellaneous
+
+- Chore(deps): sync package-lock bin block with the re-pointed bin
+
+The lockfile cached the old "llm-externalizer": "dist/cli.js" mapping. Left
+alone it is a stale record of the published entry point that contradicts
+package.json — regenerated with --package-lock-only so the two agree.
+
+- Chore: remove .serena — the project uses CLI tools, not MCP
+
+The owner banned MCP use on this machine ("i only use cli tools now"), so
+Serena's per-project config is dead weight. This plugin already deleted its own
+MCP server in v11.0.0 (d557c68); .serena was the last MCP-tool config left in
+the tree.
+
+Removed via the janitor's safe-delete, not rm: .serena/project.local.yml was
+gitignored, so a plain rm would have destroyed it with no git history to
+recover from. All 7 files (incl. the 5 MB typescript symbol caches) are staged
+in .trashcan/20260811_192502+0200/ with a manifest, recoverable by one mv for
+~90 days.
+
+Also tracks the .trashcan markers so the directory survives `git clean -fdx`
+and fresh clones, per the safe-delete contract.
+
+
 ## [11.1.0] - 2026-08-05
 
 ### Added
