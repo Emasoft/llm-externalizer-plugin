@@ -1,9 +1,9 @@
 ---
 trdd-id: K3PW7Q2M
 title: Port the profile surface to the llm-ext CLI catalog
-column: human_review
+column: completed
 created: 2026-08-06T17:35:00+0200
-updated: 2026-08-07T12:10:00+0200
+updated: 2026-08-11T19:30:58+0200
 current-owner: claude-llm-externalizer
 task-type: feature
 priority: 3
@@ -59,4 +59,15 @@ Cosmetic; not fixed here because renaming a profile edits the user's settings.
 - [x] ~~switch~~ — amended: out of scope, contradicts the user-only-configuration rule (see above)
 - [x] unit tests + typecheck + lint clean
 - [x] README mentions the command (and its command-count guard updated: 42→43, 19→20 core)
-- [ ] dogfood harness exercises it — pending; the harness validates surfaces generically today
+- [x] dogfood harness exercises it — verified, not assumed: `tests/dogfood/dogfood_test.py`
+      parses the verb catalog dynamically from `llm-ext --help` (`parse_top_help_tools`, line
+      284) and runs `<verb> --help` for every parsed verb (line 369). `profile` is in that
+      catalog, so it is covered automatically with no per-command harness entry.
+
+## Approval log
+
+- 2026-08-11T19:30:58+0200 — `human_review` → `completed`. Owner approved with the standing
+  instruction "verify each before doing it". Verified first-hand on the live binary after a
+  fresh `npm run build`: `./bin/llm-ext profile --help` exits 0 and prints the read-only
+  list/`--show` schema; `profile` is in the catalog at `src/tools/definitions.ts:655`; dogfood
+  coverage confirmed by reading the harness rather than trusting the earlier note.

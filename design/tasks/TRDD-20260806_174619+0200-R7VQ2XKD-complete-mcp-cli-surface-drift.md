@@ -1,9 +1,9 @@
 ---
 trdd-id: R7VQ2XKD
 title: Complete the MCP to CLI migration — remove surface drift from commands and skills
-column: human_review
+column: dev
 created: 2026-08-06T17:46:19+0200
-updated: 2026-08-06T18:07:00+0200
+updated: 2026-08-11T19:30:58+0200
 current-owner: claude-llm-externalizer
 assignee: claude-llm-externalizer
 priority: 2
@@ -92,9 +92,26 @@ drift became invisible in the first place.
 
 ## Acceptance
 
-- [ ] zero retired MCP tool-call payloads under `commands/`, `skills/`, `agents/`, docs
-- [ ] zero `llm-externalizer <cmd>` invocations presented as the supported surface
+- [x] zero retired MCP tool-call payloads under `commands/`, `skills/`, `agents/`, docs —
+      VERIFIED 2026-08-11 by grep after the fix in `5c9d253`. NOT clean beforehand: the earlier
+      "0 drift" claim was narrative, and four live sites still named MCP as the invocation path
+      (`or-model-info/SKILL.md:5`, which contradicted itself 14 lines later, plus three
+      `tool-reference.md` copies saying "MCP is read-only").
+- [ ] zero `llm-externalizer <cmd>` invocations presented as the supported surface — **NOT MET.**
+      Five benchmark modules print `Re-run: \`llm-externalizer benchmark --…\`` as runtime
+      output (`src/benchmark/{scan-folder,search-existing,code-task,security-triage,check-specs}/index.ts`).
+      `llm-externalizer` is the npm bin name and is NOT on PATH for plugin users — `llm-ext` is.
+      So the hint a plugin user is told to re-run cannot run. Deferred only to avoid editing
+      source while the Phase B agent held the tree.
 - [ ] every documented command exists in `llm-ext --help`; every documented flag exists in that
-      command's own `--help`
-- [ ] every documented paid run shows the `--estimate` dry-run first
-- [ ] re-run of both audits returns 0 critical / 0 major
+      command's own `--help` — UNVERIFIED. Not checked by this session.
+- [ ] every documented paid run shows the `--estimate` dry-run first — UNVERIFIED.
+- [ ] re-run of both audits returns 0 critical / 0 major — the prior audit reported clean and
+      was demonstrably not; treat its result as a hypothesis, not evidence, and re-run.
+
+## Approval log
+
+- 2026-08-11T19:30:58+0200 — `human_review` → `dev`, NOT closed. The owner approved closing it
+  with "verify each before doing it"; verification failed. One of five criteria is now genuinely
+  met, one is measurably unmet, three were never checked. Moved to `dev` rather than left in
+  `human_review` so the board stops claiming it awaits a human when it awaits work.
