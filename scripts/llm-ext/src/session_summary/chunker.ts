@@ -203,6 +203,42 @@ function splitOversizedTurn(turn: Turn, maxTokens: number): Turn[] {
   });
 }
 
+/**
+ * True when `detail` names a genuine PROVIDER-SIDE context-overflow rejection
+ * ("this input is too big for the model's window"), as distinct from a rate
+ * limit (429/daily-cap — see free-rotation.ts's `classifyUnavailable`) or a
+ * plain schema/auth error. This is the ground-truth check `estimateTokens`
+ * above cannot replace: the eligible free models are NOT o200k-tokenized, so
+ * our count is an estimate, and the provider's own rejection is the only
+ * authoritative signal that a chunk really did overflow. The driver uses
+ * this to re-split the offending chunk and retry — never to fail the run
+ * outright, and never to swap models (a sizing problem is not an
+ * availability problem).
+ *
+ * Deliberately narrow phrasing: generic words like "limit exceeded" or
+ * "token limit" are excluded because providers reuse them for RATE limiting
+ * too (see free-rotation.ts's own comment on that exact ambiguity) — a
+ * false positive here would re-split a chunk that was actually just
+ * rate-limited, burning cycles without fixing anything.
+ */
+export function classifyContextOverflow(detail: string): boolean {
+  const s = (detail || "").toLowerCase();
+  return (
+    s.includes("context_length_exceeded") ||
+    s.includes("maximum context length") ||
+    s.includes("context length exceeded") ||
+    (s.includes("context window") && (s.includes("exceed") || s.includes("too large") || s.includes("too long"))) ||
+    s.includes("too many tokens") ||
+    s.includes("input length and") || // OpenAI/OpenRouter's "input length and `max_tokens` exceed context limit"
+    s.includes("please reduce the length") ||
+    s.includes("reduce the length of the messages") ||
+    s.includes("prompt is too long") ||
+    s.includes("payload too large") ||
+    s.includes("request entity too large") ||
+    s.includes("maximum number of tokens allowed")
+  );
+}
+
 export interface UsableTokenBudgetParams {
   /** The selected model's `context_length` (see model-select.ts's EligibleModel). */
   contextLength: number;

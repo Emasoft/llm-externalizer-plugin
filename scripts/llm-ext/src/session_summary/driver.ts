@@ -44,6 +44,7 @@ import { readTranscript, type PruneLevel, type Turn, type TranscriptStats } from
 import type { EligibleModel } from "./model-select.js";
 import {
   chunkTurns,
+  classifyContextOverflow,
   DEFAULT_OVERLAP_TURNS,
   estimateTokens,
   type TranscriptChunk,
@@ -288,6 +289,39 @@ class ModelUnavailableError extends Error {
   }
 }
 
+/**
+ * A GENUINE provider-side context-overflow rejection — the model's own
+ * ground truth that a chunk/fold body was too big for its window, distinct
+ * from `ModelUnavailableError` (the MODEL itself is gone/exhausted) and from
+ * a rate limit. This is never retried unchanged (the identical prompt would
+ * fail identically) and never triggers a model swap — the caller re-splits
+ * the offending unit of work smaller and retries on the SAME model. See
+ * chunker.ts's `classifyContextOverflow` for the detection rules.
+ */
+class ContextOverflowError extends Error {
+  constructor(
+    readonly modelId: string,
+    readonly detail: string,
+  ) {
+    super(`model '${modelId}' rejected the request as exceeding its context window: ${detail}`);
+    this.name = "ContextOverflowError";
+  }
+}
+
+/** Floor for the shrink-on-overflow budget below which we stop halving and
+ *  fail loudly — see `shrinkBudgetOnOverflow`'s header. */
+const MIN_OVERFLOW_CHUNK_BUDGET = 500;
+
+/** Halve the current chunk/fold token budget in response to a real
+ *  context-overflow rejection, floored at `MIN_OVERFLOW_CHUNK_BUDGET`. The
+ *  caller MUST check whether the result actually changed (`!== current`)
+ *  before using it — a floor that stops moving means the content can't be
+ *  reduced any further under this model, and looping on it would be an
+ *  infinite retry disguised as progress. */
+function shrinkBudgetOnOverflow(current: number): number {
+  return Math.max(MIN_OVERFLOW_CHUNK_BUDGET, Math.floor(current / 2));
+}
+
 function classifyModelFallback(detail: string): ModelFallbackReason | null {
   const kind = classifyUnavailable(detail);
   if (kind === "gone" || kind === "daily-quota") return kind;
@@ -339,6 +373,16 @@ async function callWithRetry(
       if (err instanceof ModelUnavailableError) throw err; // no-text: never retried, propagate for fallback immediately
       lastErr = err;
       const msg = err instanceof Error ? err.message : String(err);
+
+      // Ground truth beats our estimate: the eligible free models aren't
+      // o200k-tokenized, so `estimateTokens` can undercount. A genuine
+      // provider-side overflow is never retried unchanged (the identical
+      // prompt fails identically) — it propagates immediately so the
+      // caller can re-split the unit of work and retry smaller, on the
+      // SAME model (a sizing problem is not an availability problem).
+      if (classifyContextOverflow(msg)) {
+        throw new ContextOverflowError(modelId, msg);
+      }
 
       const fallbackReason = classifyModelFallback(msg);
       if (fallbackReason) {
@@ -579,9 +623,14 @@ export async function summarizeSession(
    *  symptom looks like "the fallback model is broken" instead of "we
    *  didn't re-chunk". Already-summarized chunks (indices < fromChunkIndex)
    *  are untouched — they are dense summaries, not raw input, so they stay
-   *  valid regardless of which model produces the NEXT chunk. */
-  function rechunkRemainingMap(fromChunkIndex: number): void {
-    const newBudget = budgetForModel(activeModel());
+   *  valid regardless of which model produces the NEXT chunk.
+   *
+   *  `newBudget` is passed in rather than always derived from the active
+   *  model, because a context-overflow re-split (see `ContextOverflowError`)
+   *  needs to shrink the budget WITHOUT switching models — reusing this same
+   *  re-chunk + checkpoint machinery keeps both paths (model fallback and
+   *  overflow re-split) consistent with the resume/identity invariants. */
+  function rechunkRemainingMap(fromChunkIndex: number, newBudget: number): void {
     if (newBudget !== maxChunkTokens) {
       const remainingTurns = collectRemainingTurns(chunks, fromChunkIndex);
       const { chunks: newTail } = chunkTurns(remainingTurns, { maxTokens: newBudget, overlapTurns });
@@ -623,9 +672,30 @@ export async function summarizeSession(
         if (err instanceof ModelUnavailableError) {
           const fromModel = activeModel().id;
           advanceModel(err, triedForThisUnit);
-          rechunkRemainingMap(i);
+          rechunkRemainingMap(i, budgetForModel(activeModel()));
           fallbackEvents.push({ fromModel, toModel: activeModel().id, reason: err.reason, detail: err.detail, atUnit: `chunk ${i}` });
           continue; // retry the SAME unit of work — chunks[i] now reflects the new model's budget
+        }
+        if (err instanceof ContextOverflowError) {
+          // The model's own rejection is ground truth that our estimate was
+          // too optimistic for THIS chunk's real content — shrink the
+          // budget for the remaining (unsent) work and re-pack it at turn
+          // boundaries (chunkTurns degrades to line-boundary splitting for
+          // any single turn that alone still overflows — see chunker.ts).
+          // Never swap models here: this is a sizing problem, not an
+          // availability problem.
+          const newBudget = shrinkBudgetOnOverflow(maxChunkTokens);
+          if (newBudget === maxChunkTokens) {
+            throw new Error(
+              `session-summary: chunk ${i} still exceeds model '${activeModel().id}'s context window ` +
+                `even at the minimum ${MIN_OVERFLOW_CHUNK_BUDGET}-token re-split floor (${err.detail}). ` +
+                `This model cannot summarize this chunk's content — try a model with more context, or ` +
+                `raise --min-context. Checkpoint saved at ${options.checkpointPath}.`,
+              { cause: err },
+            );
+          }
+          rechunkRemainingMap(i, newBudget);
+          continue; // retry the SAME unit of work — chunks[i] is now smaller
         }
         throw err;
       }
@@ -739,6 +809,26 @@ export async function summarizeSession(
         saveCheckpoint(options.checkpointPath, checkpoint);
         fallbackEvents.push({ fromModel, toModel: activeModel().id, reason: err.reason, detail: err.detail, atUnit: `reduce level ${rp.level}` });
         continue; // retry with the same remaining input, repacked to the new budget
+      }
+      if (err instanceof ContextOverflowError) {
+        // Same ground-truth logic as the MAP phase: the fold batch's real
+        // token count exceeded the model's window even though our estimate
+        // said it would fit. Shrink the fold budget and re-pack the SAME
+        // remaining input into smaller batches — never swap models.
+        const newBudget = shrinkBudgetOnOverflow(maxChunkTokens);
+        if (newBudget === maxChunkTokens) {
+          throw new Error(
+            `session-summary: reduce level ${rp.level} still exceeds model '${activeModel().id}'s ` +
+              `context window even at the minimum ${MIN_OVERFLOW_CHUNK_BUDGET}-token re-split floor ` +
+              `(${err.detail}). Checkpoint saved at ${options.checkpointPath}.`,
+            { cause: err },
+          );
+        }
+        maxChunkTokens = newBudget;
+        checkpoint.identity = { ...checkpoint.identity, chunkerMaxTokens: maxChunkTokens };
+        checkpoint.updatedAt = nowIso();
+        saveCheckpoint(options.checkpointPath, checkpoint);
+        continue; // repack `remaining` into smaller batches on the next iteration
       }
       throw err;
     }

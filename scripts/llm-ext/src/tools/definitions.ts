@@ -734,6 +734,14 @@ export function buildTools(limitsText: string) {
               "Absolute path to a custom output directory for the summary report. Default: " +
               "<main-project-dir>/reports/llm-externalizer/, same resolution as every other tool.",
           },
+          stdout: {
+            type: "boolean",
+            description:
+              "Print the summary TEXT directly to stdout instead of writing a report file and " +
+              "returning its path (the default). Opt-in — NOT the same as `output`, which sets " +
+              "the report DIRECTORY. In this mode stdout carries ONLY the summary text (no " +
+              "header, no file is written); banner/progress still go to stderr.",
+          },
         },
       },
     },

@@ -439,4 +439,200 @@ describe("driver: summarizeSession", () => {
       }),
     ).rejects.toThrow(/every candidate free model is unavailable/);
   });
+
+  // ── Context-overflow re-split (Phase B item 1) ────────────────────────
+
+  /** Simulates a provider whose REAL context window is much smaller than the
+   *  huge `modelMaxContext` these tests pass — any request whose prompt
+   *  exceeds `thresholdChars` is rejected as overflow, converging regardless
+   *  of how many halvings the driver needs (deterministic, no call-count
+   *  guessing about the chunker's internal packing). */
+  function makeOverflowingCallModel(
+    thresholdChars: number,
+    usedModelIds: string[],
+    onMapPrompt?: (prompt: string) => void,
+  ): CallModelFn {
+    let mapCalls = 0;
+    return async (prompt, modelId) => {
+      usedModelIds.push(modelId);
+      if (prompt.includes("You are folding")) return "FOLDED";
+      if (prompt.length > thresholdChars) {
+        throw new Error(
+          "400 This model's maximum context length is 4096 tokens. However, your messages " +
+            "resulted in more tokens. Please reduce the length of the messages.",
+        );
+      }
+      onMapPrompt?.(prompt);
+      mapCalls++;
+      return `CHUNK-${mapCalls}`;
+    };
+  }
+
+  it("re-splits a chunk that overflows the model's real context window and completes the run, without switching models", async () => {
+    const lines = Array.from({ length: 6 }, (_, i) => userTurn(`u${i}`, `overflow-test request ${i} `.repeat(80)));
+    const p = writeTranscript(lines);
+
+    const usedModelIds: string[] = [];
+    const callModel = makeOverflowingCallModel(4_000, usedModelIds);
+
+    const result = await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: checkpointPath(),
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000, // huge -> our own estimate packs the whole transcript as ONE chunk
+      modelMaxCompletionTokens: 1_000,
+      chunkOverlapTurns: 0,
+      callModel,
+    });
+
+    expect(result.totalChunks).toBeGreaterThan(1); // the re-split actually produced more than one unit
+    // Never swapped models — an overflow is a sizing problem, not an
+    // availability problem, so fallbackEvents must stay empty.
+    expect(result.fallbackEvents).toHaveLength(0);
+    expect(result.modelId).toBe(FREE_MODEL);
+    expect(usedModelIds.every((id) => id === FREE_MODEL)).toBe(true);
+    expect(result.summary).toBe("FOLDED");
+  });
+
+  it("does NOT treat a rate-limit (429) error as a context overflow — no re-split, no retry, fails fast as before", async () => {
+    const p = writeTranscript([userTurn("u1", "hello")]);
+    let calls = 0;
+    const callModel = vi.fn<CallModelFn>(async () => {
+      calls++;
+      throw new Error("HTTP 429: rate limit exceeded, try again later");
+    });
+
+    await expect(
+      summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 65_536,
+        callModel,
+      }),
+    ).rejects.toThrow(/rate limit/);
+    expect(calls).toBe(1); // no retry burned re-splitting a rate limit
+  });
+
+  it("no chunk is lost or duplicated when an overflow forces a re-split (map summaries cover every original turn)", async () => {
+    const lines = Array.from({ length: 8 }, (_, i) => userTurn(`u${i}`, `distinct overflow content marker-${i} `.repeat(60)));
+    const p = writeTranscript(lines);
+
+    const usedModelIds: string[] = [];
+    const seenPrompts: string[] = [];
+    const callModel = makeOverflowingCallModel(4_000, usedModelIds, (prompt) => seenPrompts.push(prompt));
+
+    await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: checkpointPath(),
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 1_000,
+      chunkOverlapTurns: 0,
+      callModel,
+    });
+
+    // Every marker-N must appear in exactly one of the map prompts actually
+    // sent to the model — proving the re-split neither dropped nor
+    // duplicated content across the boundary it introduced.
+    for (let i = 0; i < lines.length; i++) {
+      const occurrences = seenPrompts.filter((p) => p.includes(`marker-${i} `)).length;
+      expect(occurrences).toBe(1);
+    }
+  });
+
+  it("resume still skips already-done chunks after a run was interrupted mid-map following an overflow re-split", async () => {
+    // Same accepted resume contract the module header already documents for
+    // a mid-run MODEL FALLBACK: chunk sizing is part of the checkpoint
+    // identity, so resuming after an in-run budget adaptation (fallback OR
+    // overflow re-split) requires the caller to pin the SAME --max-chunk-tokens
+    // the adapted run converged to — exactly like "Fixed regardless of a
+    // fallback switch when given explicitly" already works today. What THIS
+    // test proves is the part in scope for Phase B: once that budget is
+    // pinned, already-checkpointed chunks are never re-sent.
+    const lines = Array.from({ length: 6 }, (_, i) => userTurn(`u${i}`, `resume overflow request ${i} `.repeat(80)));
+    const p = writeTranscript(lines);
+    const cp = checkpointPath();
+
+    const usedModelIds: string[] = [];
+    let mapCalls = 0;
+    const firstRunModel: CallModelFn = async (prompt, modelId) => {
+      usedModelIds.push(modelId);
+      if (prompt.includes("You are folding")) return "FOLDED";
+      if (prompt.length > 4_000) {
+        throw new Error(
+          "400 This model's maximum context length is 4096 tokens. However, your messages " +
+            "resulted in more tokens. Please reduce the length of the messages.",
+        );
+      }
+      mapCalls++;
+      if (mapCalls === 2) throw new Error("simulated crash: genuine non-availability bug");
+      return `CHUNK-${mapCalls}`;
+    };
+
+    await expect(
+      summarizeSession({
+        transcriptPath: p,
+        checkpointPath: cp,
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        chunkOverlapTurns: 0,
+        maxRetriesPerChunk: 0,
+        callModel: firstRunModel,
+      }),
+    ).rejects.toThrow();
+
+    const savedCheckpoint = JSON.parse(readFileSync(cp, "utf-8")) as {
+      identity: { chunkerMaxTokens: number };
+      mapSummaries: (string | null)[];
+    };
+    const completedCount = savedCheckpoint.mapSummaries.filter((s) => s !== null).length;
+    expect(completedCount).toBeGreaterThan(0); // the overflow re-split did produce checkpointed progress
+
+    const resumeCalls: string[] = [];
+    const resumeModel = vi.fn<CallModelFn>(async (prompt) => {
+      resumeCalls.push(prompt);
+      return prompt.includes("You are folding") ? "FOLDED" : `RESUMED-${resumeCalls.length}`;
+    });
+
+    const resumed = await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: cp,
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 1_000,
+      chunkOverlapTurns: 0,
+      maxChunkTokens: savedCheckpoint.identity.chunkerMaxTokens, // pin the converged budget, same as a fallback resume
+      callModel: resumeModel,
+    });
+
+    expect(resumed.resumedFromCheckpoint).toBe(true);
+    expect(resumed.summary).toBe("FOLDED");
+    // Only the NOT-yet-done map chunks were sent — the already-checkpointed
+    // ones are never re-sent.
+    const remappedCount = resumeCalls.filter((p) => !p.includes("You are folding")).length;
+    expect(remappedCount).toBe(resumed.totalChunks - completedCount);
+  });
+
+  it("fails loudly instead of looping forever when a chunk still overflows at the minimum re-split floor", async () => {
+    const p = writeTranscript([userTurn("u1", "a single line that never shrinks no matter how many times we halve the budget")]);
+    const callModel = vi.fn<CallModelFn>(async () => {
+      throw new Error("400 maximum context length is 100 tokens, please reduce the length of the messages");
+    });
+
+    await expect(
+      summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        maxChunkTokens: 500, // already at the re-split floor — no shrink is possible
+        chunkOverlapTurns: 0,
+        callModel,
+      }),
+    ).rejects.toThrow(/re-split floor/);
+  });
 });

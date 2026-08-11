@@ -3788,6 +3788,7 @@ async function dispatchCallToolInner(
           resume: ssResume,
           checkpoint: ssCheckpointRaw,
           output: ssOutputRaw,
+          stdout: ssStdoutRaw,
         } = args as {
           transcript?: string;
           session_id?: string;
@@ -3796,6 +3797,7 @@ async function dispatchCallToolInner(
           resume?: boolean;
           checkpoint?: string;
           output?: string;
+          stdout?: boolean;
         };
 
         const VALID_PRUNE_LEVELS = new Set(["aggressive", "moderate", "none"]);
@@ -3932,6 +3934,16 @@ async function dispatchCallToolInner(
           (result.resumedFromCheckpoint
             ? `Resumed from checkpoint: ${result.checkpointPath}\n`
             : `Checkpoint: ${result.checkpointPath}\n`);
+
+        // --stdout (opt-in, caller-selected): return the summary TEXT
+        // directly instead of writing a report file and returning its path.
+        // Deliberately skips saveResponse entirely in this mode — "stdout
+        // carries ONLY the summary text" (definitions.ts) means no header,
+        // no file, no path line; a caller that wants both the direct text
+        // AND a persisted report should omit --stdout and read the file.
+        if (ssStdoutRaw === true) {
+          return { content: [{ type: "text", text: result.summary }] };
+        }
 
         const ssOutputDir =
           typeof ssOutputRaw === "string" && ssOutputRaw.trim() ? resolve(ssOutputRaw.trim()) : undefined;

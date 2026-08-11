@@ -3,7 +3,13 @@
 
 import { describe, it, expect } from "vitest";
 import { countTokens } from "gpt-tokenizer";
-import { chunkTurns, estimateTokens, computeUsableTokenBudget, TOKEN_ESTIMATE_SAFETY_MARGIN } from "./chunker.js";
+import {
+  chunkTurns,
+  classifyContextOverflow,
+  estimateTokens,
+  computeUsableTokenBudget,
+  TOKEN_ESTIMATE_SAFETY_MARGIN,
+} from "./chunker.js";
 import type { Turn } from "./transcript.js";
 
 function makeTurn(id: string, text: string, extra: Partial<Turn> = {}): Turn {
@@ -214,5 +220,42 @@ describe("computeUsableTokenBudget", () => {
   it("accepts a zero prompt overhead and a zero completion reserve", () => {
     const result = computeUsableTokenBudget({ contextLength: 1000, maxCompletionTokens: 0, promptOverheadText: "" });
     expect(result).toBe(1000);
+  });
+});
+
+describe("classifyContextOverflow", () => {
+  it("recognizes common real-world provider context-overflow phrasings", () => {
+    const overflowMessages = [
+      "400 This model's maximum context length is 4096 tokens. However, your messages resulted in 50000 tokens. Please reduce the length of the messages.",
+      "context_length_exceeded: the input exceeds the model's context length",
+      "Error: context length exceeded for this request",
+      "input length and `max_tokens` exceed context limit: 20000 + 4096 > 16384",
+      "too many tokens in the request payload",
+      "413 Payload Too Large",
+      "Request Entity Too Large",
+      "prompt is too long: reduce it and try again",
+      "This request exceeds the maximum number of tokens allowed",
+    ];
+    for (const msg of overflowMessages) {
+      expect(classifyContextOverflow(msg), `expected overflow for: ${msg}`).toBe(true);
+    }
+  });
+
+  it("does NOT classify a rate-limit / daily-quota / generic error as a context overflow", () => {
+    const nonOverflowMessages = [
+      "HTTP 429: rate limit exceeded, try again later",
+      "daily limit exceeded for free-models-per-day",
+      "402 insufficient credits",
+      "404 No endpoints found for this model",
+      "500 internal server error",
+      "invalid API key",
+    ];
+    for (const msg of nonOverflowMessages) {
+      expect(classifyContextOverflow(msg), `expected NOT overflow for: ${msg}`).toBe(false);
+    }
+  });
+
+  it("handles empty/undefined-ish detail without throwing", () => {
+    expect(classifyContextOverflow("")).toBe(false);
   });
 });

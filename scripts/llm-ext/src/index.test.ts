@@ -164,6 +164,26 @@ describe('tool catalog', () => {
     }
   });
 
+  it('session_summary tool inputSchema exposes the caller-selected --stdout output mode, distinct from --output', () => {
+    /**
+     * TRDD-T4MZ8YQR Phase B item 2: the caller chooses file-path (default)
+     * vs direct-text output. `stdout` must exist and must NOT be confused
+     * with `output` (the report DIRECTORY flag) — asserting both are
+     * present and are separate schema keys guards against the two being
+     * merged/renamed into one ambiguous flag later.
+     */
+    const sessionSummary = TOOLS.find(t => t.name === 'session_summary');
+    expect(sessionSummary).toBeDefined();
+    const props = (sessionSummary!.inputSchema.properties ?? {}) as Record<
+      string,
+      { type?: string }
+    >;
+    expect(props.stdout, 'session_summary inputSchema missing property "stdout"').toBeDefined();
+    expect(props.stdout.type).toBe('boolean');
+    expect(props.output, 'session_summary inputSchema missing property "output"').toBeDefined();
+    expect(props.output.type).toBe('string');
+  });
+
   it('discover tool with no arguments is callable end-to-end', async () => {
     /**
      * Verifies the CLI wiring end to end: command resolution, flag parsing
