@@ -1,9 +1,9 @@
 ---
 trdd-id: R7VQ2XKD
 title: Complete the MCP to CLI migration — remove surface drift from commands and skills
-column: dev
+column: completed
 created: 2026-08-06T17:46:19+0200
-updated: 2026-08-11T19:30:58+0200
+updated: 2026-08-11T21:15:00+0200
 current-owner: claude-llm-externalizer
 assignee: claude-llm-externalizer
 priority: 2
@@ -97,17 +97,33 @@ drift became invisible in the first place.
       "0 drift" claim was narrative, and four live sites still named MCP as the invocation path
       (`or-model-info/SKILL.md:5`, which contradicted itself 14 lines later, plus three
       `tool-reference.md` copies saying "MCP is read-only").
-- [ ] zero `llm-externalizer <cmd>` invocations presented as the supported surface — **NOT MET.**
-      Five benchmark modules print `Re-run: \`llm-externalizer benchmark --…\`` as runtime
-      output (`src/benchmark/{scan-folder,search-existing,code-task,security-triage,check-specs}/index.ts`).
-      `llm-externalizer` is the npm bin name and is NOT on PATH for plugin users — `llm-ext` is.
-      So the hint a plugin user is told to re-run cannot run. Deferred only to avoid editing
-      source while the Phase B agent held the tree.
-- [ ] every documented command exists in `llm-ext --help`; every documented flag exists in that
-      command's own `--help` — UNVERIFIED. Not checked by this session.
-- [ ] every documented paid run shows the `--estimate` dry-run first — UNVERIFIED.
-- [ ] re-run of both audits returns 0 critical / 0 major — the prior audit reported clean and
-      was demonstrably not; treat its result as a hypothesis, not evidence, and re-run.
+- [x] zero `llm-externalizer <cmd>` invocations presented as the supported surface — FIXED
+      (`2ff6c56`). Five benchmark modules printed `Re-run: llm-externalizer benchmark --…`, which
+      was wrong TWICE: `llm-externalizer` is not on plugin users' PATH, AND `benchmark` was never
+      a verb on either CLI — the benchmarks ship as a separate `bin/llm-ext-benchmark`. Now
+      corrected there and verified against that binary. Re-checked: 5 files carry the new form,
+      0 carry the old.
+- [x] every documented command exists in `llm-ext --help`; every documented flag exists in that
+      command's own `--help` — AUDITED against the live binary. `README.md` (44 commands, 106
+      flags) and `docs/`, `commands/`, `agents/` invocation examples came back VERIFIED CLEAN.
+      Two skills were defective and are fixed: `or-model-info` passed the id positionally when the
+      CLI takes only named flags (`f88d840`), and `free-scan` told agents to pass `--free` /
+      `--output_dir` to `scan-folder`, which accepts neither (`70f17c0`).
+- [x] every documented paid run shows the `--estimate` dry-run first — FIXED (`ceaad6d`). Four
+      files carried paid examples with zero mention of `--estimate`;
+      `docs/agent-usage-reference.md` alone had 12 across 653 lines. All four now carry the
+      established preamble, conditional on a paid profile.
+- [x] re-run of both audits returns 0 critical / 0 major — re-verified 2026-08-11 AFTER the
+      fixes, by measurement rather than by trusting the earlier "clean" claim: 0 dead-MCP refs;
+      5/5 benchmark hints corrected with 0 stale; `or-model-info` fully on `--model` with 0
+      positional forms; all 4 paid-example files carrying the `--estimate` rule.
+
+      **A LESSON THIS CARD EARNED TWICE.** Its first "0 drift" was narrative, and four live MCP
+      references survived it. Then, closing it today, I re-verified four criteria, saw them green,
+      and nearly archived the card while a HIGH finding on `free-scan` was still open — because I
+      had fixed one of the two defective skills the audit named and carried "the skills are done"
+      forward as if it covered both. A checklist re-verified item-by-item catches what a summary
+      impression does not.
 
 ## Approval log
 
@@ -115,3 +131,9 @@ drift became invisible in the first place.
   with "verify each before doing it"; verification failed. One of five criteria is now genuinely
   met, one is measurably unmet, three were never checked. Moved to `dev` rather than left in
   `human_review` so the board stops claiming it awaits a human when it awaits work.
+
+- 2026-08-11T21:15:00+0200 — `dev` → `completed`, archived. All five criteria now MET and each
+  re-verified by measurement after the fixes, not by re-reading the earlier claims. Fix commits:
+  `5c9d253` (MCP refs), `2ff6c56` (benchmark re-run hints), `f88d840` (or-model-info invocations),
+  `70f17c0` (free-scan flags), `ceaad6d` (--estimate preamble). The docs audit that found the last
+  three is at `reports/session-summary-design/20260811_205455+0200-docs-vs-cli-audit.md`.
