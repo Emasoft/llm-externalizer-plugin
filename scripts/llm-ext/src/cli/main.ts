@@ -68,15 +68,33 @@ function toKebab(toolName: string): string {
 }
 
 /**
+ * Top-level verbs from the retired `dist/cli.js` entry point whose tool was
+ * renamed in this catalog, so the old spelling resolves to nothing.
+ *
+ * These exist because the published npm bin `llm-externalizer` now points at
+ * THIS CLI. Measured against the live catalog, exactly two of the seven legacy
+ * verbs had no same-named tool — `profile`, `cluster-synonyms`,
+ * `high-quality-scan`, `security-scan` and `mass-scout` all already resolve by
+ * name. Without these two entries, re-pointing the bin would silently break
+ * `llm-externalizer model-info <id>` and `llm-externalizer search-existing`,
+ * both of which are documented and worked before.
+ */
+const LEGACY_COMMAND_ALIASES: Readonly<Record<string, string>> = {
+  "model-info": "or_model_info",
+  "search-existing": "search_existing_implementations",
+};
+
+/**
  * Resolve a user-typed command to a tool name. kebab-case is canonical and
  * documented; the snake_case tool name is accepted silently so anything already
  * scripted against the old names keeps working without a second spelling in the
- * docs.
+ * docs. Legacy verbs from the retired entry point are mapped first.
  */
 function resolveCommand(input: string, tools: ToolDef[]): ToolDef | undefined {
   const wanted = input.trim().toLowerCase();
+  const resolved = LEGACY_COMMAND_ALIASES[wanted] ?? wanted;
   return tools.find(
-    (t) => t.name === wanted || toKebab(t.name) === wanted,
+    (t) => t.name === resolved || toKebab(t.name) === resolved,
   );
 }
 

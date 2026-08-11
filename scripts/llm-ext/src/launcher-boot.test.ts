@@ -128,3 +128,48 @@ describe("launcher → CLI handoff (regressions: -32001, module-scope hang)", ()
     expect(run.stderr).toContain("unknown command");
   }, 45_000);
 });
+
+// The seven top-level verbs the retired `dist/cli.js` entry point exposed.
+// `package.json`'s `llm-externalizer` bin now points at THIS CLI, so every one
+// of them must keep resolving. Five have same-named tools in the catalog; two
+// (`model-info`, `search-existing`) resolve ONLY through LEGACY_COMMAND_ALIASES
+// in cli/main.ts, because their tools were renamed to `or_model_info` and
+// `search_existing_implementations`.
+//
+// This is the test that makes the bin re-point safe. Measured before the
+// aliases existed, `model-info` and `search-existing` exited 1 — re-pointing
+// without them would have silently broken two documented invocations for
+// everyone who installed the npm package, with nothing failing until a user
+// reported it. A future catalog rename would do the same; this catches it.
+const LEGACY_VERBS = [
+  "profile",
+  "model-info",
+  "search-existing",
+  "cluster-synonyms",
+  "high-quality-scan",
+  "security-scan",
+  "mass-scout",
+] as const;
+
+describe("legacy `llm-externalizer` verbs survive the bin re-point", () => {
+  it.each(LEGACY_VERBS)(
+    "`%s --help` resolves and exits 0",
+    async (verb) => {
+      expect(distReady).toBe(true);
+
+      const run = await runLauncher([verb, "--help"], 30_000);
+
+      expect(run.timedOut, `\`${verb} --help\` hung instead of exiting`).toBe(
+        false,
+      );
+      expect(
+        run.code,
+        `\`${verb}\` no longer resolves, so \`llm-externalizer ${verb}\` is ` +
+          `broken for npm installs. If a tool was renamed, add or update its ` +
+          `entry in LEGACY_COMMAND_ALIASES (src/cli/main.ts).\n` +
+          `stderr:\n${run.stderr}`,
+      ).toBe(0);
+    },
+    45_000,
+  );
+});

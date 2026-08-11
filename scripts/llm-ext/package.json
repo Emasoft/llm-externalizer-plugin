@@ -5,7 +5,8 @@
   "description": "MCP server for LLMs — profile-based configuration for local (LM Studio, Ollama, vLLM, llama.cpp) and remote (OpenRouter) backends with ensemble mode",
   "main": "dist/index.js",
   "bin": {
-    "llm-externalizer": "dist/cli.js"
+    "llm-ext": "dist/llm-ext.js",
+    "llm-externalizer": "dist/llm-ext.js"
   },
   "scripts": {
     "build": "tsc --noEmit && node esbuild.config.mjs",
