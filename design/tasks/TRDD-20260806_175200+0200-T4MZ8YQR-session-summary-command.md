@@ -1,9 +1,9 @@
 ---
 trdd-id: T4MZ8YQR
 title: New command — compaction-style summary of a Claude Code session from its JSONL transcript
-column: human_review
+column: dev
 created: 2026-08-06T17:52:00+0200
-updated: 2026-08-07T19:25:00+0200
+updated: 2026-08-11T19:09:22+0200
 current-owner: claude-llm-externalizer
 assignee: null
 priority: 2
@@ -28,7 +28,7 @@ implementation-commits: []
 
 # `llm-ext session-summary` — compaction-style summary of a whole session
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-06
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-11
 
 **User request (2026-08-06):** a new command that generates a summary (compaction-like) of the
 whole session from the JSONL transcript of the project session, **using only free models with
@@ -59,17 +59,60 @@ whole session from the JSONL transcript of the project session, **using only fre
   `index.ts:3077-3079`). A transcript needs a *turn-boundary* chunker, not a file packer —
   design a new one, do not force-fit the old.
 
-### Assumptions I am proceeding under (both are flags; say the word and they flip)
+### NEXT ACTION (one step)
 
-1. **`--min-context 1000000` is the DEFAULT**, honouring the request literally: only the single
-   1M free model is eligible. An opt-in `--allow-lower-context` admits the 262k free tier (5
-   models) so the job can actually rotate when the daily cap hits. Default = your words;
-   the escape hatch = the thing that finishes a 66M-token transcript on a rate-limited free tier.
-2. **`--prune aggressive` is the DEFAULT.** Tool-result payloads, pasted file contents and
-   thinking blocks are dropped; user turns, assistant prose, tool NAMES with an argument
-   summary, and errors are kept. `moderate` (head/tail-truncate each tool result) and `none`
-   are available. Rationale: the pruning ratio, not the context window, is what decides whether
-   this command is usable — and what a compaction summary needs is the narrative, not the bytes.
+Phase B: wire the Phase-A tokenizer/artifact/budget work through `driver.ts` + `index.ts` —
+overflow-retry-and-re-split (the model's own rejection is authoritative over the tokenizer's
+estimate) and the caller-selected output mode (file path default / direct output opt-in).
+
+Phase A LANDED GREEN — commit `e89456a`, verified independently (vitest 1816 pass / 0 fail /
+4 skip, `tsc --noEmit` clean, `eslint` clean). Dependency added: `gpt-tokenizer` ^3.4.0 (MIT,
+zero transitive deps, no WASM/native).
+
+### The owner's pipeline spec — AUTHORITATIVE, supersedes the phase descriptions below
+
+Stated 2026-08-11, in order:
+
+1. **Extract the context memory** from the JSONL, dropping JSONL-only bookkeeping that was
+   never part of the agent's actual context (`parentUuid`, `uuid`, `sessionId`, `requestId`,
+   `cwd`, `version`, `gitBranch`, `userType`, `isSidechain`, `isMeta`, timestamps, hook/plumbing
+   system lines). Keep what the model saw: user turns, assistant text/thinking/tool_use, tool
+   results — in order, with role attribution.
+2. **Write the stripped context to a FILE** — an inspectable on-disk artifact, not memory-only.
+   That file is what gets measured and split.
+3. **Measure it with a REAL TOKENIZER**, not the bytes/4 estimate. Counting is incremental
+   (per turn), never one call over a 265 MB string.
+4. **Split by the model's usable INPUT budget**: `context_length − reserved_completion −
+   prompt_overhead`. Sizing to the full context guarantees overflow once the reply is generated.
+5. **Summarize each chunk in a separate request**, then **re-join into a single file**.
+6. **Output mode is the CALLER's choice** — file path (default, protects the caller's context)
+   or direct output.
+
+**Why there is no min-context:** the owner's explicit reasoning — the chunking fallback is what
+handles a transcript larger than the model's window, so refusing small-context models is
+solving the wrong problem. Biggest available free model wins; everything else is a split count.
+
+### SUPERSEDED — do NOT carry forward
+
+- **`--min-context 1000000` as the default.** Removed. There is no implicit floor; models sort
+  biggest-context-first and `minContext` is an optional explicit floor only.
+- **`--allow-lower-context`.** Removed entirely — meaningless once the floor is gone.
+- **`modality === "text->text"` exact match.** Superseded twice by the owner. Final rule: text
+  must be PRESENT on both sides of `->` (membership on the `+`-split list, never substring);
+  any other modality is irrelevant. Deliberately permissive — it admits the lyria audio models,
+  and runtime "returned no usable text" demotes them instead of metadata guessing.
+- **`BYTES_PER_TOKEN_ESTIMATE = 4` as the sizing mechanism.** Superseded by a real tokenizer.
+- **"a one-model pool has no rotation partner"** as a standing constraint: it was true only
+  under the 1M floor. With the floor gone the eligible pool is the whole free text tier, and an
+  ordered fallback chain is wired in `driver.ts`.
+
+### Load-bearing gotchas
+
+- A local BPE tokenizer does NOT match nemotron/gemma tokenization. It is an estimate with a
+  named safety margin; the **model's own context-overflow error is ground truth** — on overflow,
+  re-split smaller and retry rather than trusting the count.
+- `--prune aggressive` remains the default: the pruning ratio, not the context window, is what
+  decides whether this command is usable. A compaction summary needs the narrative, not bytes.
 
 ### Progress
 
@@ -158,3 +201,29 @@ whole session from the JSONL transcript of the project session, **using only fre
       skip, `tsc --noEmit` clean, `eslint` clean (all re-run independently); dogfood's dynamic
       `--help` verb parser covers `session-summary` automatically, plus a new opt-in
       (`DOGFOOD_LIVE=1`) live-smoke check with a dedicated `sample-session.jsonl` fixture.
+
+Added 2026-08-11 with the owner's pipeline spec:
+
+- [x] no implicit context floor; biggest free model wins, deterministic tie-break; ordered
+      fallback chain on delisted / no-longer-free / cap-exhausted / no-usable-text — suite
+      1805 pass / 0 fail / 4 skip, typecheck clean.
+- [x] the stripped context is written to an inspectable FILE before measurement — streaming
+      write, no whole-file buffering (Phase A, `e89456a`).
+- [x] chunk sizing uses a REAL tokenizer, counted incrementally — `gpt-tokenizer`'s `countTokens`
+      per turn; `BYTES_PER_TOKEN_ESTIMATE` is gone, replaced by `estimateTokens` +
+      `TOKEN_ESTIMATE_SAFETY_MARGIN` (Phase A, `e89456a`).
+- [x] chunks are sized to `context_length − reserved_completion − prompt_overhead` via
+      `computeUsableTokenBudget` (Phase A, `e89456a`).
+- [ ] a context-overflow error FROM THE MODEL triggers a re-split rather than a failure —
+      Phase B. This is the half that makes the tokenizer's inexactness safe: a local o200k
+      tokenizer does not match nemotron/gemma, so the margin reduces overflow but cannot
+      eliminate it.
+- [ ] the caller chooses the output mode: file path (default) or direct output — Phase B.
+
+## Approval log
+
+- 2026-08-11T19:09:22+0200 — `human_review` → `dev`. The owner supplied a new pipeline
+  specification for this command (tokenizer-measured sizing, on-disk stripped artifact,
+  usable-budget splitting, caller-selected output mode) and the reasoning for removing the
+  context floor. That specification IS the review verdict: the command is not done. Moved back
+  to `dev` rather than left in `human_review`, so the board stops claiming it awaits a human.
