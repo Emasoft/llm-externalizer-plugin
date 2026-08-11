@@ -118,7 +118,19 @@ one-line manifest change once A has proven stable.
       the same bundle). TRDD-8d8d33c8 archived as superseded.
 - [x] no capability reachable from only one binary — `bin` maps BOTH `llm-ext` and
       `llm-externalizer` to `dist/llm-ext.js`, so the published names are the same program.
-      All seven legacy verbs verified exit 0; two needed new aliases (below).
+      All seven legacy verbs RESOLVE; two needed new aliases (below).
+
+      **CORRECTION — my verification was weaker than the claim I drew from it.** I tested
+      `<verb> --help` for all seven and reported "all seven exit 0". That proves VERB RESOLUTION,
+      not ARGUMENT CONVENTION, and the two differ: the legacy CLI took the model id
+      POSITIONALLY (`llm-externalizer model-info <id>`, `src/cli.ts:890,893`) while this CLI
+      accepts only named flags. Measured: `./bin/llm-ext or-model-info "google/gemini-2.5-flash"`
+      exits 1 ("unexpected argument"); `--model "google/gemini-2.5-flash"` exits 0.
+      So a legacy npm user's REAL invocation still breaks — the alias restores the verb, not the
+      calling convention. This is covered by the `BREAKING CHANGE:` footer on `15eb6e4`, but the
+      breakage is broader than that footer implies and should be stated plainly in release notes.
+      Open question for a follow-up: translate the legacy positional into `--model` inside the
+      alias, or accept it as part of the declared break.
 - [x] unit + typecheck + lint clean — vitest 1832 pass / 0 fail / 4 skip, `tsc --noEmit` clean,
       `eslint` clean, all re-run independently on a quiet machine.
 - [x] (option B only) `package.json` bin re-pointed; the breaking change is recorded in the
