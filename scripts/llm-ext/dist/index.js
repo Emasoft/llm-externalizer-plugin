@@ -252792,6 +252792,11 @@ function splitOversizedTurn(turn, maxTokens) {
     };
   });
 }
+function classifyContextOverflow(detail) {
+  const s = (detail || "").toLowerCase();
+  return s.includes("context_length_exceeded") || s.includes("maximum context length") || s.includes("context length exceeded") || s.includes("context window") && (s.includes("exceed") || s.includes("too large") || s.includes("too long")) || s.includes("too many tokens") || s.includes("input length and") || // OpenAI/OpenRouter's "input length and `max_tokens` exceed context limit"
+  s.includes("please reduce the length") || s.includes("reduce the length of the messages") || s.includes("prompt is too long") || s.includes("payload too large") || s.includes("request entity too large") || s.includes("maximum number of tokens allowed");
+}
 
 // src/session_summary/driver.ts
 var PROMPT_OVERHEAD_TOKENS = 2e3;
@@ -252867,6 +252872,18 @@ var ModelUnavailableError = class extends Error {
     this.name = "ModelUnavailableError";
   }
 };
+var ContextOverflowError = class extends Error {
+  constructor(modelId, detail) {
+    super(`model '${modelId}' rejected the request as exceeding its context window: ${detail}`);
+    this.modelId = modelId;
+    this.detail = detail;
+    this.name = "ContextOverflowError";
+  }
+};
+var MIN_OVERFLOW_CHUNK_BUDGET = 500;
+function shrinkBudgetOnOverflow(current) {
+  return Math.max(MIN_OVERFLOW_CHUNK_BUDGET, Math.floor(current / 2));
+}
 function classifyModelFallback(detail) {
   const kind = classifyUnavailable(detail);
   if (kind === "gone" || kind === "daily-quota") return kind;
@@ -252889,6 +252906,9 @@ async function callWithRetry(prompt, modelId, maxOutputTokens, callModel, maxRet
       if (err3 instanceof ModelUnavailableError) throw err3;
       lastErr = err3;
       const msg = err3 instanceof Error ? err3.message : String(err3);
+      if (classifyContextOverflow(msg)) {
+        throw new ContextOverflowError(modelId, msg);
+      }
       const fallbackReason = classifyModelFallback(msg);
       if (fallbackReason) {
         throw new ModelUnavailableError(fallbackReason, modelId, msg);
@@ -253027,8 +253047,7 @@ async function summarizeSession(options) {
     if (activeModelIdx + 1 >= models.length) throw allModelsExhausted(triedIds, err3);
     activeModelIdx++;
   }
-  function rechunkRemainingMap(fromChunkIndex) {
-    const newBudget = budgetForModel(activeModel());
+  function rechunkRemainingMap(fromChunkIndex, newBudget) {
     if (newBudget !== maxChunkTokens) {
       const remainingTurns = collectRemainingTurns(chunks, fromChunkIndex);
       const { chunks: newTail } = chunkTurns(remainingTurns, { maxTokens: newBudget, overlapTurns });
@@ -253068,8 +253087,19 @@ async function summarizeSession(options) {
         if (err3 instanceof ModelUnavailableError) {
           const fromModel = activeModel().id;
           advanceModel(err3, triedForThisUnit);
-          rechunkRemainingMap(i);
+          rechunkRemainingMap(i, budgetForModel(activeModel()));
           fallbackEvents.push({ fromModel, toModel: activeModel().id, reason: err3.reason, detail: err3.detail, atUnit: `chunk ${i}` });
+          continue;
+        }
+        if (err3 instanceof ContextOverflowError) {
+          const newBudget = shrinkBudgetOnOverflow(maxChunkTokens);
+          if (newBudget === maxChunkTokens) {
+            throw new Error(
+              `session-summary: chunk ${i} still exceeds model '${activeModel().id}'s context window even at the minimum ${MIN_OVERFLOW_CHUNK_BUDGET}-token re-split floor (${err3.detail}). This model cannot summarize this chunk's content \u2014 try a model with more context, or raise --min-context. Checkpoint saved at ${options.checkpointPath}.`,
+              { cause: err3 }
+            );
+          }
+          rechunkRemainingMap(i, newBudget);
           continue;
         }
         throw err3;
@@ -253158,6 +253188,20 @@ async function summarizeSession(options) {
         checkpoint.updatedAt = nowIso();
         saveCheckpoint(options.checkpointPath, checkpoint);
         fallbackEvents.push({ fromModel, toModel: activeModel().id, reason: err3.reason, detail: err3.detail, atUnit: `reduce level ${rp.level}` });
+        continue;
+      }
+      if (err3 instanceof ContextOverflowError) {
+        const newBudget = shrinkBudgetOnOverflow(maxChunkTokens);
+        if (newBudget === maxChunkTokens) {
+          throw new Error(
+            `session-summary: reduce level ${rp.level} still exceeds model '${activeModel().id}'s context window even at the minimum ${MIN_OVERFLOW_CHUNK_BUDGET}-token re-split floor (${err3.detail}). Checkpoint saved at ${options.checkpointPath}.`,
+            { cause: err3 }
+          );
+        }
+        maxChunkTokens = newBudget;
+        checkpoint.identity = { ...checkpoint.identity, chunkerMaxTokens: maxChunkTokens };
+        checkpoint.updatedAt = nowIso();
+        saveCheckpoint(options.checkpointPath, checkpoint);
         continue;
       }
       throw err3;
@@ -257436,7 +257480,8 @@ Settings file is present but its 'profiles' map is empty \u2014 this is a config
             min_context: ssMinContext,
             resume: ssResume,
             checkpoint: ssCheckpointRaw,
-            output: ssOutputRaw
+            output: ssOutputRaw,
+            stdout: ssStdoutRaw
           } = args;
           const VALID_PRUNE_LEVELS = /* @__PURE__ */ new Set(["aggressive", "moderate", "none"]);
           const prune = ssPruneRaw ?? "aggressive";
@@ -257540,6 +257585,9 @@ Lines read: ${result.transcriptStats.linesRead}, prune ratio: ${result.transcrip
 ` + (result.resumedFromCheckpoint ? `Resumed from checkpoint: ${result.checkpointPath}
 ` : `Checkpoint: ${result.checkpointPath}
 `);
+          if (ssStdoutRaw === true) {
+            return { content: [{ type: "text", text: result.summary }] };
+          }
           const ssOutputDir = typeof ssOutputRaw === "string" && ssOutputRaw.trim() ? resolve18(ssOutputRaw.trim()) : void 0;
           const savedPath = saveResponse(
             "session_summary",
