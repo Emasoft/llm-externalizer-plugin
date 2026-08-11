@@ -253235,7 +253235,7 @@ function selectEligibleModels(catalog, options = {}) {
     const completionPrice = parseFloat(m.pricing?.completion ?? "NaN");
     if (promptPrice !== 0 || completionPrice !== 0) continue;
     if (!hasTextInputAndOutput(m.architecture?.modality)) continue;
-    assertFreeOnlyModel(true, "openrouter", m.id);
+    if (!m.id.endsWith(":free")) continue;
     all.push({
       id: m.id,
       contextLength: m.context_length ?? 0,
