@@ -252537,6 +252537,42 @@ function stripInlineImageData(text) {
   if (!text.includes("data:image")) return text;
   return text.replace(DATA_URI_IMAGE_RE, IMAGE_OMITTED_MARKER);
 }
+var JANITOR_HEARTBEAT_FIRST_LINE = "[janitor-heartbeat]";
+var NO_VISIBLE_OUTPUT_MARKER = "[Your previous response had no visible output. Please continue and produce a user-visible response.]";
+var SKILL_LOAD_FIRST_LINE_PREFIX = "Base directory for this skill: ";
+var WHOLLY_MACHINE_TAG_PAIRS = [
+  ["<system-reminder>", "</system-reminder>"],
+  ["<command-name>", "</command-name>"],
+  ["<command-message>", "</command-message>"],
+  ["<command-args>", "</command-args>"],
+  ["<local-command-caveat>", "</local-command-caveat>"],
+  ["<local-command-stdout>", "</local-command-stdout>"],
+  ["<task-notification>", "</task-notification>"],
+  ["<cross-session-message", "</cross-session-message>"]
+  // opening tag carries attributes
+];
+function isMachineGeneratedUserTurn(text) {
+  const trimmed = text.trim();
+  if (trimmed === "") return false;
+  const firstLine = trimmed.split("\n", 1)[0];
+  if (firstLine === JANITOR_HEARTBEAT_FIRST_LINE) return true;
+  if (firstLine.startsWith(SKILL_LOAD_FIRST_LINE_PREFIX)) return true;
+  if (trimmed === NO_VISIBLE_OUTPUT_MARKER) return true;
+  let stripped = trimmed;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [open2, close] of WHOLLY_MACHINE_TAG_PAIRS) {
+      const openIdx = stripped.indexOf(open2);
+      if (openIdx === -1) continue;
+      const closeIdx = stripped.indexOf(close, openIdx);
+      if (closeIdx === -1) continue;
+      stripped = stripped.slice(0, openIdx) + stripped.slice(closeIdx + close.length);
+      changed = true;
+    }
+  }
+  return stripped.trim() === "";
+}
 async function readTranscript(filePath, options = {}) {
   const pruneLevel = options.pruneLevel ?? "none";
   const truncateLines = options.moderateTruncateLines ?? DEFAULT_MODERATE_TRUNCATE_LINES;
@@ -252600,7 +252636,27 @@ function extractTurn(parsed, pruneLevel, truncateLines) {
   if (d.type === "system") {
     return extractSystemTurn(d);
   }
+  if (d.type === "queue-operation") {
+    return extractQueueOperationTurn(d);
+  }
   return null;
+}
+function extractQueueOperationTurn(d) {
+  if (d.operation !== "enqueue") return null;
+  const content = d.content;
+  if (typeof content !== "string" || content.trim() === "") return null;
+  const text = stripInlineImageData(content);
+  if (isMachineGeneratedUserTurn(text)) return null;
+  return {
+    role: "user",
+    timestamp: typeof d.timestamp === "string" ? d.timestamp : null,
+    uuid: null,
+    // queue-operation lines carry no uuid/parentUuid in Claude Code's transcript format
+    parentUuid: null,
+    text,
+    toolCalls: [],
+    errors: []
+  };
 }
 function extractMessageTurn(d, role, pruneLevel, truncateLines) {
   const message = d.message;
@@ -252619,12 +252675,16 @@ function extractMessageTurn(d, role, pruneLevel, truncateLines) {
   if (textParts.length === 0 && toolCalls.length === 0 && errors.length === 0) {
     return null;
   }
+  const text = textParts.join("\n");
+  if (role === "user" && errors.length === 0 && isMachineGeneratedUserTurn(text)) {
+    return null;
+  }
   return {
     role,
     timestamp: typeof d.timestamp === "string" ? d.timestamp : null,
     uuid: typeof d.uuid === "string" ? d.uuid : null,
     parentUuid: typeof d.parentUuid === "string" ? d.parentUuid : null,
-    text: textParts.join("\n"),
+    text,
     toolCalls,
     errors
   };
