@@ -260110,10 +260110,15 @@ var VERSION = "11.1.0";
 function toKebab(toolName) {
   return toolName.replace(/_/g, "-");
 }
+var LEGACY_COMMAND_ALIASES = {
+  "model-info": "or_model_info",
+  "search-existing": "search_existing_implementations"
+};
 function resolveCommand(input, tools) {
   const wanted = input.trim().toLowerCase();
+  const resolved = LEGACY_COMMAND_ALIASES[wanted] ?? wanted;
   return tools.find(
-    (t) => t.name === wanted || toKebab(t.name) === wanted
+    (t) => t.name === resolved || toKebab(t.name) === resolved
   );
 }
 var QUIET_TOOLS = /* @__PURE__ */ new Set([
