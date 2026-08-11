@@ -1,9 +1,9 @@
 ---
 trdd-id: 8d8d33c8-7286-4cef-9962-d33ec6633b65
 title: Standalone CLI bundle (dist/cli.js) misses auto-free-on-low-balance for mass_scout + security_scan
-column: complete
+column: superseded
 created: 2026-05-31T00:45:07+0200
-updated: 2026-08-07T18:50:00+0200
+updated: 2026-08-11T19:36:00+0200
 superseded-by: TRDD-W9DK4L3N
 ---
 
@@ -128,3 +128,17 @@ separately-bundled CLI.
   Documented per user's "Neither now — just document" decision. No code changed,
   no live test run, MCP path left as-is (sound by construction). Backlog only.
 - **VERIFIED STILL OPEN 2026-08-06:** `scripts/llm-ext/dist/` still ships a second bundle (`cli.js`) beside `llm-ext.js`, and `grep -rn "ensureAutoFreeDecided\|autoFreeEngaged" scripts/llm-ext/src/mass_scouting/ scripts/llm-ext/src/cli.ts` returns zero hits — the auto-free-on-low-balance path is absent from that entry point.
+
+## Approval log
+
+- 2026-08-11T19:36:00+0200 — `complete` → `superseded`, archived. The fix landed under
+  TRDD-W9DK4L3N option A (`d0c6c69`): `src/cli.ts` now consults the supported path's own
+  pre-flight through the shared `src/cli-mass-scout-free.ts`, so the decision logic exists once
+  and both entry points read it — acceptance item 1, which was the substance of the gap.
+
+  Corrected from `complete` to `superseded` on archival: the card already carried
+  `superseded-by: TRDD-W9DK4L3N` and its body says "fixed by TRDD-W9DK4L3N option A". Work
+  finished under a DIFFERENT card is supersession, not completion, and the acceptance boxes here
+  were never ticked — leaving it as `complete` would claim this card's own criteria were
+  verified when they were not. It was also still sitting in `design/tasks/`, so the board read
+  it as open work.
