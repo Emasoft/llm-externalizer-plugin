@@ -8,11 +8,24 @@
  * proven in `src/cluster/jsonl.ts` for 1M-row corpora.
  *
  * A JSONL transcript line's top-level `type` can be `user`, `assistant`,
- * `system`, or a handful of bookkeeping types (`queue-operation`,
- * `attachment`, `last-prompt`, `summary`, ...) that carry no conversational
- * content this command needs. Only `user`/`assistant`/`system` lines ever
- * produce a `Turn`; everything else is silently ignored (not an error —
- * it is simply out of scope).
+ * `system`, or a handful of bookkeeping types (`attachment`, `last-prompt`,
+ * `summary`, ...) that carry no conversational content this command needs
+ * and are silently ignored (not an error — simply out of scope).
+ *
+ * `queue-operation` is the one bookkeeping type that DOES carry real user
+ * intent: when the user sends a message while the assistant is still
+ * working on the previous turn ("the user sent a new message while you
+ * were working"), Claude Code records it as `{type:"queue-operation",
+ * operation:"enqueue", content:"<the typed text>"}` — NOT as a `type:"user"`
+ * line. Only `operation:"enqueue"` entries are read (`"dequeue"`/`"remove"`
+ * carry no independent content — `"dequeue"`'s `content` is `null`, and
+ * `"remove"`'s duplicates the `"enqueue"` that created it, so reading them
+ * too would double-count). An `enqueue` entry whose payload is itself
+ * machine-injected (a task-completion notification, a cross-session relay)
+ * is excluded by `isMachineGeneratedUserTurn` below — verified against a
+ * real transcript, that payload is ALSO delivered a second time later as a
+ * genuine `type:"user"` turn, so keeping the queue-operation copy too would
+ * duplicate it, not recover lost content.
  *
  * A malformed line (JSON.parse failure) is skipped and counted — real
  * transcripts get truncated mid-write when a session is killed, so this
@@ -113,6 +126,92 @@ function stripInlineImageData(text: string): string {
   return text.replace(DATA_URI_IMAGE_RE, IMAGE_OMITTED_MARKER);
 }
 
+// ---------------------------------------------------------------------------
+// Machine-generated user-role turn exclusion (FIX 2).
+//
+// A user-role turn is dropped ONLY when it is WHOLLY one of these injected
+// forms — never merely because a marker appears somewhere inside otherwise
+// real user text. Being conservative here matters: a false exclusion here
+// silently destroys real user intent, which is exactly the class of bug
+// this module exists to stop causing.
+// ---------------------------------------------------------------------------
+
+// A cron-fired janitor heartbeat prompt, always beginning with this exact
+// line followed by a dispatcher-stub script path. Never anything a human
+// typed.
+const JANITOR_HEARTBEAT_FIRST_LINE = "[janitor-heartbeat]";
+
+// Injected verbatim by the harness when a turn produced no visible output,
+// asking the assistant to continue. Fixed, exact string — never user text.
+const NO_VISIBLE_OUTPUT_MARKER =
+  "[Your previous response had no visible output. Please continue and produce a user-visible response.]";
+
+// A SKILL's own documentation, loaded into context as a synthetic user turn.
+// It always opens with this preamble followed by the skill's install path, then
+// the skill body. Measured on a real transcript: 9 of 62 surviving user turns
+// were skill loads (janitor-arm, janitor-resume, ...) — ~15% of the verbatim
+// "All User Messages" section filled with text no human typed.
+// Matched as a FIRST-LINE PREFIX, not an equality, because the trailing path
+// varies per skill and per install. A human message opening with this exact
+// preamble is not a realistic collision.
+const SKILL_LOAD_FIRST_LINE_PREFIX = "Base directory for this skill: ";
+
+// Whole-message XML-style tag pairs that carry zero human-authored text.
+// `<command-name>`/`<command-message>`/`<command-args>` and the
+// `<local-command-caveat>` preamble are slash-command plumbing echoed back
+// as a synthetic user turn. `<system-reminder>` re-injected as an entire
+// turn (rather than embedded alongside real text) is pure harness noise.
+// `<task-notification>` and `<cross-session-message ...>` are background
+// task / cross-session relays that Claude Code re-delivers a second time as
+// a genuine `type:"user"` turn later — keeping either the queue-operation
+// copy or an isolated notification-only turn would duplicate content, never
+// recover any (see the module docstring for the verified evidence).
+const WHOLLY_MACHINE_TAG_PAIRS: ReadonlyArray<readonly [string, string]> = [
+  ["<system-reminder>", "</system-reminder>"],
+  ["<command-name>", "</command-name>"],
+  ["<command-message>", "</command-message>"],
+  ["<command-args>", "</command-args>"],
+  ["<local-command-caveat>", "</local-command-caveat>"],
+  ["<local-command-stdout>", "</local-command-stdout>"],
+  ["<task-notification>", "</task-notification>"],
+  ["<cross-session-message", "</cross-session-message>"], // opening tag carries attributes
+];
+
+/**
+ * True when `text` — the fully-assembled text of a user-role turn — is
+ * WHOLLY machine-injected noise and should be dropped. Only ever called on
+ * already-non-empty text; an empty turn is dropped elsewhere for an
+ * unrelated reason (nothing to summarize).
+ */
+function isMachineGeneratedUserTurn(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed === "") return false;
+
+  const firstLine = trimmed.split("\n", 1)[0];
+  if (firstLine === JANITOR_HEARTBEAT_FIRST_LINE) return true;
+  if (firstLine.startsWith(SKILL_LOAD_FIRST_LINE_PREFIX)) return true;
+  if (trimmed === NO_VISIBLE_OUTPUT_MARKER) return true;
+
+  // Repeatedly strip every known machine tag-pair (a caveat + command-name
+  // pair, or several task-notifications, can appear back to back in one
+  // turn); if nothing but whitespace survives, the turn was WHOLLY
+  // machine plumbing rather than real text merely containing a marker.
+  let stripped = trimmed;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [open, close] of WHOLLY_MACHINE_TAG_PAIRS) {
+      const openIdx = stripped.indexOf(open);
+      if (openIdx === -1) continue;
+      const closeIdx = stripped.indexOf(close, openIdx);
+      if (closeIdx === -1) continue;
+      stripped = stripped.slice(0, openIdx) + stripped.slice(closeIdx + close.length);
+      changed = true;
+    }
+  }
+  return stripped.trim() === "";
+}
+
 /**
  * Stream `filePath` line by line and return the pruned Turn list + stats.
  * Never buffers the whole file — memory usage is bounded by the turns kept
@@ -201,9 +300,39 @@ function extractTurn(parsed: unknown, pruneLevel: PruneLevel, truncateLines: num
   if (d.type === "system") {
     return extractSystemTurn(d);
   }
-  // queue-operation, attachment, last-prompt, summary, and any future
-  // bookkeeping line type: out of scope for a session summary.
+  if (d.type === "queue-operation") {
+    return extractQueueOperationTurn(d);
+  }
+  // attachment, last-prompt, summary, and any future bookkeeping line
+  // type: out of scope for a session summary.
   return null;
+}
+
+/**
+ * A message the user typed while the assistant was still working on the
+ * previous turn — see the module docstring. Only `operation:"enqueue"` ever
+ * carries independent content; `"dequeue"` has `content:null` and
+ * `"remove"` duplicates its own prior `"enqueue"`, so both are correctly
+ * skipped by the plain-string check below without special-casing the
+ * operation name.
+ */
+function extractQueueOperationTurn(d: Record<string, unknown>): Turn | null {
+  if (d.operation !== "enqueue") return null;
+  const content = d.content;
+  if (typeof content !== "string" || content.trim() === "") return null;
+
+  const text = stripInlineImageData(content);
+  if (isMachineGeneratedUserTurn(text)) return null;
+
+  return {
+    role: "user",
+    timestamp: typeof d.timestamp === "string" ? d.timestamp : null,
+    uuid: null, // queue-operation lines carry no uuid/parentUuid in Claude Code's transcript format
+    parentUuid: null,
+    text,
+    toolCalls: [],
+    errors: [],
+  };
 }
 
 function extractMessageTurn(
@@ -235,12 +364,23 @@ function extractMessageTurn(
     return null; // e.g. an assistant line whose only content was stripped by pruning
   }
 
+  const text = textParts.join("\n");
+
+  // FIX 2: a user-role turn that is WHOLLY machine-injected noise (a cron
+  // heartbeat, slash-command plumbing, a re-delivered task notification, ...)
+  // carries zero user intent and only dilutes the verbatim user-messages
+  // section. Never applied to assistant/tool turns — those aren't claiming
+  // to be something the user said.
+  if (role === "user" && errors.length === 0 && isMachineGeneratedUserTurn(text)) {
+    return null;
+  }
+
   return {
     role,
     timestamp: typeof d.timestamp === "string" ? d.timestamp : null,
     uuid: typeof d.uuid === "string" ? d.uuid : null,
     parentUuid: typeof d.parentUuid === "string" ? d.parentUuid : null,
-    text: textParts.join("\n"),
+    text,
     toolCalls,
     errors,
   };

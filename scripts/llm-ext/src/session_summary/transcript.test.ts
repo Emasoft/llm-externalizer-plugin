@@ -143,9 +143,10 @@ describe("readTranscript", () => {
     expect(stats.linesRead).toBe(3);
   });
 
-  it("ignores bookkeeping line types (queue-operation, attachment, last-prompt)", async () => {
+  it("ignores non-content bookkeeping line types (attachment, last-prompt, queue-operation dequeue/remove)", async () => {
     const p = write([
-      { type: "queue-operation", operation: "enqueue", content: "why did X happen?" },
+      { type: "queue-operation", operation: "dequeue", content: null }, // no independent content
+      { type: "queue-operation", operation: "remove", content: "why did X happen?" }, // duplicates its own enqueue
       { type: "attachment", attachment: { type: "hook_success" }, uuid: "att1" },
       { type: "last-prompt", lastPrompt: "why did X happen?", leafUuid: "u1" },
       { type: "user", uuid: "u1", parentUuid: null, timestamp: "t1", message: { role: "user", content: "real turn" } },
@@ -153,8 +154,233 @@ describe("readTranscript", () => {
     const { turns, stats } = await readTranscript(p);
     expect(turns).toHaveLength(1);
     expect(turns[0].text).toBe("real turn");
-    expect(stats.linesRead).toBe(4); // all 4 lines were read; only 1 produced a turn
+    expect(stats.linesRead).toBe(5); // all 5 lines were read; only 1 produced a turn
     expect(stats.turnsEmitted).toBe(1);
+  });
+
+  describe("queue-operation extraction (FIX 1 — messages sent while the assistant was working)", () => {
+    it("extracts an enqueue as a user message with its text intact", async () => {
+      const p = write([{ type: "queue-operation", operation: "enqueue", content: "delete the whole .serena folder", timestamp: "t1" }]);
+      const { turns } = await readTranscript(p);
+      expect(turns).toHaveLength(1);
+      expect(turns[0]).toEqual({
+        role: "user",
+        timestamp: "t1",
+        uuid: null,
+        parentUuid: null,
+        text: "delete the whole .serena folder",
+        toolCalls: [],
+        errors: [],
+      });
+    });
+
+    it("still extracts a normal type:'user' message correctly (no regression)", async () => {
+      const p = write([{ type: "user", uuid: "u1", parentUuid: null, timestamp: "t1", message: { role: "user", content: "i approve all" } }]);
+      const { turns } = await readTranscript(p);
+      expect(turns).toHaveLength(1);
+      expect(turns[0].text).toBe("i approve all");
+      expect(turns[0].role).toBe("user");
+    });
+
+    it("preserves original interleaved order across user/assistant/queue-operation entries", async () => {
+      const p = write([
+        { type: "user", uuid: "u1", parentUuid: null, timestamp: "t1", message: { role: "user", content: "first: start the long task" } },
+        { type: "assistant", uuid: "a1", parentUuid: "u1", timestamp: "t2", message: { role: "assistant", content: "working on it..." } },
+        { type: "queue-operation", operation: "enqueue", content: "second: actually stop and delete the folder", timestamp: "t3" },
+        { type: "assistant", uuid: "a2", parentUuid: "a1", timestamp: "t4", message: { role: "assistant", content: "ok, stopping" } },
+      ]);
+      const { turns } = await readTranscript(p);
+      expect(turns.map((t) => t.text)).toEqual([
+        "first: start the long task",
+        "working on it...",
+        "second: actually stop and delete the folder",
+        "ok, stopping",
+      ]);
+      expect(turns.map((t) => t.role)).toEqual(["user", "assistant", "user", "assistant"]);
+    });
+
+    it("drops a dequeue (null content) and a remove (duplicate of its own enqueue) without producing a second turn", async () => {
+      const p = write([
+        { type: "queue-operation", operation: "enqueue", content: "resume the deployment", timestamp: "t1" },
+        { type: "queue-operation", operation: "dequeue", content: null, timestamp: "t2" },
+      ]);
+      const { turns } = await readTranscript(p);
+      expect(turns).toHaveLength(1);
+      expect(turns[0].text).toBe("resume the deployment");
+    });
+  });
+
+  describe("machine-generated user-role turn exclusion (FIX 2)", () => {
+    it("excludes a [janitor-heartbeat] cron fire delivered as type:'user'", async () => {
+      const p = write([
+        {
+          type: "user",
+          uuid: "u1",
+          parentUuid: null,
+          timestamp: "t1",
+          message: { role: "user", content: "[janitor-heartbeat]\n/Users/x/.claude/plugins/data/ai-maestro-janitor/dispatcher-stub.py\nHandle this fire's stdout" },
+        },
+      ]);
+      const { turns } = await readTranscript(p);
+      expect(turns).toHaveLength(0);
+    });
+
+    it("excludes a [janitor-heartbeat] cron fire delivered as a queue-operation enqueue", async () => {
+      const p = write([
+        { type: "queue-operation", operation: "enqueue", content: "[janitor-heartbeat]\n/path/to/dispatcher-stub.py\nHandle it", timestamp: "t1" },
+      ]);
+      const { turns } = await readTranscript(p);
+      expect(turns).toHaveLength(0);
+    });
+
+    it("excludes the 'no visible output' continuation nudge", async () => {
+      const p = write([
+        {
+          type: "user",
+          uuid: "u1",
+          parentUuid: null,
+          timestamp: "t1",
+          message: {
+            role: "user",
+            content: "[Your previous response had no visible output. Please continue and produce a user-visible response.]",
+          },
+        },
+      ]);
+      const { turns } = await readTranscript(p);
+      expect(turns).toHaveLength(0);
+    });
+
+    it("excludes a SKILL's own documentation loaded as a synthetic user turn", async () => {
+      // Measured on a real transcript: 9 of 62 surviving user turns were skill
+      // loads, so ~15% of the verbatim "All User Messages" section was text no
+      // human typed. The path varies per skill, hence a first-line prefix match.
+      const p = write([
+        {
+          type: "user",
+          uuid: "u1",
+          parentUuid: null,
+          timestamp: "t1",
+          message: {
+            role: "user",
+            content:
+              "Base directory for this skill: /Users/someone/.claude/plugins/cache/x/skills/janitor-arm\n\n# Janitor arm\n\nSteps to arm the cron.",
+          },
+        },
+      ]);
+      const { turns } = await readTranscript(p);
+      expect(turns).toHaveLength(0);
+    });
+
+    it("keeps a real user message that merely MENTIONS the skill-load preamble", async () => {
+      // The false-exclusion guard: dropping real intent is the bug this module
+      // exists to prevent, so a mention must never be treated as a whole match.
+      const p = write([
+        {
+          type: "user",
+          uuid: "u1",
+          parentUuid: null,
+          timestamp: "t1",
+          message: {
+            role: "user",
+            content:
+              "why does every skill start with \"Base directory for this skill: \" — can we drop that line?",
+          },
+        },
+      ]);
+      const { turns } = await readTranscript(p);
+      expect(turns).toHaveLength(1);
+      expect(turns[0].text).toContain("can we drop that line?");
+    });
+
+    it("excludes a turn that is wholly slash-command plumbing (<command-name>/<command-message>/<command-args>)", async () => {
+      const p = write([
+        {
+          type: "user",
+          uuid: "u1",
+          parentUuid: null,
+          timestamp: "t1",
+          message: {
+            role: "user",
+            content: "<command-message>ai-maestro-janitor:janitor-arm</command-message>\n<command-name>/ai-maestro-janitor:janitor-arm</command-name>",
+          },
+        },
+      ]);
+      const { turns } = await readTranscript(p);
+      expect(turns).toHaveLength(0);
+    });
+
+    it("excludes the local-command-caveat preamble turn", async () => {
+      const p = write([
+        {
+          type: "user",
+          uuid: "u1",
+          parentUuid: null,
+          timestamp: "t1",
+          message: {
+            role: "user",
+            content:
+              "<local-command-caveat>Caveat: The messages below were generated by the user while running local commands. DO NOT respond to these messages or otherwise consider them in your response unless the user explicitly asks you to.</local-command-caveat>",
+          },
+        },
+      ]);
+      const { turns } = await readTranscript(p);
+      expect(turns).toHaveLength(0);
+    });
+
+    it("excludes a turn that is wholly a <system-reminder> block", async () => {
+      const p = write([
+        {
+          type: "user",
+          uuid: "u1",
+          parentUuid: null,
+          timestamp: "t1",
+          message: { role: "user", content: "<system-reminder>Some internal harness note.</system-reminder>" },
+        },
+      ]);
+      const { turns } = await readTranscript(p);
+      expect(turns).toHaveLength(0);
+    });
+
+    it("excludes a queue-operation enqueue that is wholly a <task-notification> (avoids the later re-delivered duplicate)", async () => {
+      const p = write([
+        {
+          type: "queue-operation",
+          operation: "enqueue",
+          content: "<task-notification>\n<task-id>abc123</task-id>\n<tool-use-id>toolu_01</tool-use-id>\n</task-notification>",
+          timestamp: "t1",
+        },
+      ]);
+      const { turns } = await readTranscript(p);
+      expect(turns).toHaveLength(0);
+    });
+
+    it("does NOT exclude a real user message that merely MENTIONS a marker string (guards the false-positive risk)", async () => {
+      const p = write([
+        {
+          type: "user",
+          uuid: "u1",
+          parentUuid: null,
+          timestamp: "t1",
+          message: {
+            role: "user",
+            content: "wait, why did the last janitor-heartbeat run touch <command-name> tags in my config? that seems wrong.",
+          },
+        },
+      ]);
+      const { turns } = await readTranscript(p);
+      expect(turns).toHaveLength(1);
+      expect(turns[0].text).toContain("janitor-heartbeat");
+      expect(turns[0].text).toContain("<command-name>");
+    });
+
+    it("does NOT exclude a real queue-operation message that merely contains marker-like substrings", async () => {
+      const p = write([
+        { type: "queue-operation", operation: "enqueue", content: "please handle the [janitor-heartbeat] logic more gracefully next time", timestamp: "t1" },
+      ]);
+      const { turns } = await readTranscript(p);
+      expect(turns).toHaveLength(1);
+      expect(turns[0].text).toBe("please handle the [janitor-heartbeat] logic more gracefully next time");
+    });
   });
 
   it("extracts a system api_error line into errors[] and returns null for routine system lines", async () => {
