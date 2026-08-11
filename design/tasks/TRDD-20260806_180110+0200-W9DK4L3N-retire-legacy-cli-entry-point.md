@@ -5,7 +5,7 @@ column: dev
 approval-tier: 3
 created: 2026-08-06T18:01:10+0200
 updated: 2026-08-11T20:22:00+0200
-scope-approved: option-A-only
+scope-approved: option-A-and-B
 current-owner: claude-llm-externalizer
 assignee: null
 priority: 2
