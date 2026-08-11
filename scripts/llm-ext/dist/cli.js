@@ -252531,6 +252531,12 @@ import { once } from "node:events";
 var DEFAULT_MODERATE_TRUNCATE_LINES = 20;
 var ARG_SUMMARY_MAX_LEN = 160;
 var ARG_VALUE_TRUNCATE_AT = 80;
+var IMAGE_OMITTED_MARKER = "[image omitted]";
+var DATA_URI_IMAGE_RE = /data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+/g;
+function stripInlineImageData(text) {
+  if (!text.includes("data:image")) return text;
+  return text.replace(DATA_URI_IMAGE_RE, IMAGE_OMITTED_MARKER);
+}
 async function readTranscript(filePath, options = {}) {
   const pruneLevel = options.pruneLevel ?? "none";
   const truncateLines = options.moderateTruncateLines ?? DEFAULT_MODERATE_TRUNCATE_LINES;
@@ -252604,7 +252610,7 @@ function extractMessageTurn(d, role, pruneLevel, truncateLines) {
   const toolCalls = [];
   const errors = [];
   if (typeof content === "string") {
-    if (content.trim() !== "") textParts.push(content);
+    if (content.trim() !== "") textParts.push(stripInlineImageData(content));
   } else if (Array.isArray(content)) {
     for (const block of content) {
       extractBlock(block, pruneLevel, truncateLines, textParts, toolCalls, errors);
@@ -252627,13 +252633,17 @@ function extractBlock(block, pruneLevel, truncateLines, textParts, toolCalls, er
   if (block === null || typeof block !== "object") return;
   const b = block;
   if (b.type === "text") {
-    if (typeof b.text === "string" && b.text.trim() !== "") textParts.push(b.text);
+    if (typeof b.text === "string" && b.text.trim() !== "") textParts.push(stripInlineImageData(b.text));
+    return;
+  }
+  if (b.type === "image") {
+    textParts.push(IMAGE_OMITTED_MARKER);
     return;
   }
   if (b.type === "thinking") {
     if (pruneLevel === "aggressive") return;
     if (typeof b.thinking === "string" && b.thinking.trim() !== "") {
-      textParts.push(`[thinking] ${b.thinking}`);
+      textParts.push(`[thinking] ${stripInlineImageData(b.thinking)}`);
     }
     return;
   }
@@ -252668,13 +252678,13 @@ function extractSystemTurn(d) {
     const err3 = d.error;
     if (err3 !== null && typeof err3 === "object") {
       const msg = err3.message;
-      if (typeof msg === "string" && msg.trim() !== "") errors.push(msg);
+      if (typeof msg === "string" && msg.trim() !== "") errors.push(stripInlineImageData(msg));
     }
   }
   const hookErrors = d.hookErrors;
   if (Array.isArray(hookErrors)) {
     for (const e of hookErrors) {
-      if (typeof e === "string" && e.trim() !== "") errors.push(e);
+      if (typeof e === "string" && e.trim() !== "") errors.push(stripInlineImageData(e));
     }
   }
   if (errors.length === 0) return null;
@@ -252689,13 +252699,16 @@ function extractSystemTurn(d) {
   };
 }
 function toolResultText(content) {
-  if (typeof content === "string") return content;
+  if (typeof content === "string") return stripInlineImageData(content);
   if (Array.isArray(content)) {
     return content.map((item) => {
-      if (item !== null && typeof item === "object" && item.type === "text") {
-        const t = item.text;
-        return typeof t === "string" ? t : "";
+      if (item === null || typeof item !== "object") return "";
+      const it = item;
+      if (it.type === "text") {
+        const t = it.text;
+        return typeof t === "string" ? stripInlineImageData(t) : "";
       }
+      if (it.type === "image") return IMAGE_OMITTED_MARKER;
       return "";
     }).filter((s) => s !== "").join("\n");
   }
@@ -252717,9 +252730,10 @@ function summarizeToolInput(input) {
   const entries = Object.entries(input).map(([key, value]) => {
     let rendered;
     if (typeof value === "string" && value.length > ARG_VALUE_TRUNCATE_AT) {
-      rendered = `"${value.slice(0, ARG_VALUE_TRUNCATE_AT)}\u2026(${value.length} chars)"`;
+      const stripped = stripInlineImageData(value);
+      rendered = `"${stripped.slice(0, ARG_VALUE_TRUNCATE_AT)}\u2026(${value.length} chars)"`;
     } else {
-      rendered = JSON.stringify(value);
+      rendered = JSON.stringify(typeof value === "string" ? stripInlineImageData(value) : value);
     }
     return `${key}=${rendered}`;
   });
@@ -254021,18 +254035,23 @@ function chunkTurns(turns, options) {
   if (!Number.isInteger(overlapTurns) || overlapTurns < 0) {
     throw new Error(`chunkTurns: overlapTurns must be a non-negative integer, got ${String(overlapTurns)}`);
   }
-  const expanded = [];
+  const hardBudgetTokens = options.hardBudgetTokens ?? maxTokens;
+  if (!Number.isFinite(hardBudgetTokens) || hardBudgetTokens <= 0) {
+    throw new Error(`chunkTurns: hardBudgetTokens must be a positive finite number, got ${String(hardBudgetTokens)}`);
+  }
   for (const turn of turns) {
-    if (estimateTurnTokens(turn) > maxTokens) {
-      expanded.push(...splitOversizedTurn(turn, maxTokens));
-    } else {
-      expanded.push(turn);
+    const tokens = estimateTurnTokens(turn);
+    if (tokens > hardBudgetTokens) {
+      throw new Error(
+        `chunkTurns: a single ${turn.role} turn (uuid=${turn.uuid ?? "unknown"}, timestamp=${turn.timestamp}) measures ~${tokens} tokens, which exceeds the model's usable budget of ${hardBudgetTokens} tokens even alone. A turn is never split across chunks, so this turn cannot be summarized by this model. Try a more aggressive --prune level, or select a model with a larger context window.`
+      );
     }
   }
   const chunks = [];
+  const oversized = [];
   let current = [];
   let currentTokens = 0;
-  const flush = () => {
+  const flushNormal = () => {
     if (current.length === 0) return;
     chunks.push({
       index: chunks.length,
@@ -254042,25 +254061,42 @@ function chunkTurns(turns, options) {
       // filled in below once every chunk exists
       continuesFromPrev: false
     });
+    oversized.push(false);
   };
-  for (const turn of expanded) {
+  for (const turn of turns) {
     const tokens = estimateTurnTokens(turn);
+    if (tokens > maxTokens) {
+      flushNormal();
+      current = [];
+      currentTokens = 0;
+      chunks.push({
+        index: chunks.length,
+        turns: [turn],
+        estimatedTokens: tokens,
+        continuesNext: false,
+        continuesFromPrev: false
+      });
+      oversized.push(true);
+      continue;
+    }
     if (current.length > 0 && currentTokens + tokens > maxTokens) {
-      flush();
-      const prevTurns = chunks[chunks.length - 1].turns;
-      const overlap = overlapTurns > 0 ? prevTurns.slice(-overlapTurns) : [];
+      flushNormal();
+      const prevIdx = chunks.length - 1;
+      const prevWasOversized = oversized[prevIdx];
+      const overlap = overlapTurns > 0 && !prevWasOversized ? chunks[prevIdx].turns.slice(-overlapTurns) : [];
       current = [...overlap];
       currentTokens = overlap.reduce((sum, t) => sum + estimateTurnTokens(t), 0);
     }
     current.push(turn);
     currentTokens += tokens;
   }
-  flush();
+  flushNormal();
   for (let i = 0; i < chunks.length; i++) {
-    chunks[i].continuesFromPrev = i > 0 && overlapTurns > 0;
-    chunks[i].continuesNext = i < chunks.length - 1 && overlapTurns > 0;
+    if (oversized[i]) continue;
+    if (i > 0 && !oversized[i - 1] && overlapTurns > 0) chunks[i].continuesFromPrev = true;
+    if (i < chunks.length - 1 && !oversized[i + 1] && overlapTurns > 0) chunks[i].continuesNext = true;
   }
-  return { chunks, totalTurnsIn: turns.length, totalTurnsOut: expanded.length };
+  return { chunks, totalTurnsIn: turns.length, totalTurnsOut: turns.length };
 }
 function estimateTurnTokens(turn) {
   return estimateTokens3(combinedTurnText(turn));
@@ -254069,35 +254105,6 @@ function combinedTurnText(turn) {
   const toolText = turn.toolCalls.map((tc) => `${tc.name} ${tc.argSummary}`).join("\n");
   const errorText = turn.errors.join("\n");
   return [turn.text, toolText, errorText].filter((s) => s.length > 0).join("\n");
-}
-function splitOversizedTurn(turn, maxTokens) {
-  const lines = turn.text.split("\n");
-  const pieces = [];
-  let current = [];
-  let currentTokens = 0;
-  for (const line of lines) {
-    const lineTokens = estimateTokens3(line);
-    if (currentTokens + lineTokens > maxTokens && current.length > 0) {
-      pieces.push(current.join("\n"));
-      current = [];
-      currentTokens = 0;
-    }
-    current.push(line);
-    currentTokens += lineTokens;
-  }
-  if (current.length > 0 || pieces.length === 0) pieces.push(current.join("\n"));
-  return pieces.map((text, i) => {
-    const marker = pieces.length > 1 ? ` [continued ${i + 1}/${pieces.length}]` : "";
-    return {
-      role: turn.role,
-      timestamp: turn.timestamp,
-      uuid: turn.uuid,
-      parentUuid: turn.parentUuid,
-      text: `${text}${marker}`,
-      toolCalls: i === 0 ? turn.toolCalls : [],
-      errors: i === 0 ? turn.errors : []
-    };
-  });
 }
 function classifyContextOverflow(detail) {
   const s = (detail || "").toLowerCase();
@@ -254261,45 +254268,60 @@ function renderTurn(turn) {
 function chunkBodyText(chunk) {
   return chunk.turns.map(renderTurn).join("\n\n");
 }
-function renderChunkPrompt(chunk) {
-  const continuation = [
+function chunkPromptHeader(partNumber, totalParts, continuation) {
+  return `You are compacting part ${partNumber} of ${totalParts} of a Claude Code coding-session transcript${continuation}. Your output REPLACES the transcript for a future session that must RESUME this work, so it must preserve everything needed to continue \u2014 it is a handoff, not a report.
+
+Use these sections, in this order, with these exact headings. OMIT any section with no content in this part \u2014 never write "none", "N/A", or filler.
+
+## Primary Request and Intent
+What the user asked for and why, in detail.
+
+## Key Technical Concepts
+Technologies, frameworks, patterns and tools involved.
+
+## Files and Code Sections
+Every file examined, created or modified: exact path, why it matters, and the important code or the specific change.
+
+## Errors and Fixes
+Every error or failure, how it was fixed, and any feedback the user gave about the fix. Include attempted fixes that did NOT work and why.
+
+## Problem Solving
+Problems solved, and troubleshooting still in progress.
+
+## All User Messages
+Every message from the USER, copied VERBATIM and in order, excluding tool results. Do NOT paraphrase, summarize, shorten, merge or tidy them. The exact wording IS the content \u2014 intent is lost the moment it is reworded. This is the highest-value section here.
+
+## Pending Tasks
+Work the user explicitly asked for that is not yet done.
+
+## Current Work
+Precisely what was being worked on at the end of this part, with file names and code.
+
+## Next Step
+The immediate next action, only if it follows directly from work in flight. Do not invent one.
+
+RULES
+- Dense and factual. No editorialising, no padding, no commentary.
+- Reproduce names EXACTLY: file paths, commands, flags, function names, commit hashes, error text, line numbers. Never approximate an identifier.
+- Do NOT copy transcript text anywhere EXCEPT the "All User Messages" section. Everywhere else, state facts in your own words.
+- Your output will be merged with summaries of the other parts: write no introduction and no conclusion.`;
+}
+function renderChunkPrompt(chunk, totalChunks) {
+  const continuationParts = [
     chunk.continuesFromPrev ? "continues from the previous part" : null,
     chunk.continuesNext ? "continues into the next part" : null
-  ].filter((s) => s !== null).join("; ");
-  const header = `You are summarizing part ${chunk.index + 1} of a Claude Code coding session transcript${continuation ? ` (${continuation})` : ""}. Produce a dense, factual summary of what happened: user requests, decisions made, files changed, commands run, and outcomes. Do not editorialize or pad \u2014 this summary will itself be folded together with summaries of the other parts.`;
+  ].filter((s) => s !== null);
+  const continuation = continuationParts.length > 0 ? ` (${continuationParts.join("; ")})` : "";
+  const header = chunkPromptHeader(chunk.index + 1, totalChunks, continuation);
   return `${header}
 
 ${chunkBodyText(chunk)}`;
 }
-function foldBodyText(summaries) {
-  return summaries.map((s, i) => `--- part ${i + 1} ---
-${s}`).join("\n\n");
-}
-function renderFoldPrompt(summaries) {
-  const header = `You are folding ${summaries.length} partial summaries of one Claude Code session into a single, coherent summary. Preserve every distinct fact (requests, decisions, files changed, commands run, outcomes); do not drop information for brevity \u2014 merge duplicates instead.`;
-  return `${header}
+function joinChunkSummaries(summaries) {
+  if (summaries.length === 1) return summaries[0];
+  return summaries.map((s, i) => `--- Part ${i + 1} of ${summaries.length} ---
 
-${foldBodyText(summaries)}`;
-}
-function estimateTextTokens(text) {
-  return estimateTokens3(text);
-}
-function packIntoBatches(items, maxTokens) {
-  const batches = [];
-  let current = [];
-  let currentTokens = 0;
-  for (const item of items) {
-    const tokens = estimateTextTokens(item);
-    if (current.length > 0 && currentTokens + tokens > maxTokens) {
-      batches.push(current);
-      current = [];
-      currentTokens = 0;
-    }
-    current.push(item);
-    currentTokens += tokens;
-  }
-  if (current.length > 0) batches.push(current);
-  return batches;
+${s}`).join("\n\n");
 }
 function collectRemainingTurns(chunks, fromIndex) {
   const seen = /* @__PURE__ */ new Set();
@@ -254326,10 +254348,8 @@ async function summarizeSession(options) {
   for (const m of models) assertFreeOnlyModel(true, "openrouter", m.id);
   let activeModelIdx = 0;
   const activeModel = () => models[activeModelIdx];
-  const budgetForModel = (m) => options.maxChunkTokens ?? Math.min(
-    DEFAULT_MAX_CHUNK_TOKENS,
-    Math.max(1e3, m.contextLength - m.maxCompletionTokens - PROMPT_OVERHEAD_TOKENS)
-  );
+  const windowBudgetForModel = (m) => Math.max(1e3, m.contextLength - m.maxCompletionTokens - PROMPT_OVERHEAD_TOKENS);
+  const budgetForModel = (m) => options.maxChunkTokens ?? Math.min(DEFAULT_MAX_CHUNK_TOKENS, windowBudgetForModel(m));
   let maxChunkTokens = budgetForModel(activeModel());
   const fallbackEvents = [];
   const stat = statSync12(options.transcriptPath);
@@ -254347,7 +254367,11 @@ async function summarizeSession(options) {
   let checkpoint = loadCheckpoint(options.checkpointPath, identity);
   const resumedFromCheckpoint = checkpoint !== null;
   const { turns, stats } = await readTranscript(options.transcriptPath, { pruneLevel });
-  let { chunks } = chunkTurns(turns, { maxTokens: maxChunkTokens, overlapTurns });
+  let { chunks } = chunkTurns(turns, {
+    maxTokens: maxChunkTokens,
+    overlapTurns,
+    hardBudgetTokens: windowBudgetForModel(activeModel())
+  });
   if (checkpoint && checkpoint.totalChunks !== chunks.length) {
     throw new Error(
       `session-summary: checkpoint at ${options.checkpointPath} was recorded for ${checkpoint.totalChunks} chunks but this run produced ${chunks.length} chunks from the same identity \u2014 refusing to resume. Delete the checkpoint to start fresh.`
@@ -254359,7 +254383,6 @@ async function summarizeSession(options) {
       identity,
       totalChunks: chunks.length,
       mapSummaries: new Array(chunks.length).fill(null),
-      reduce: null,
       finalSummary: null,
       updatedAt: nowIso(),
       activeModelId: activeModel().id
@@ -254382,7 +254405,11 @@ async function summarizeSession(options) {
   function rechunkRemainingMap(fromChunkIndex, newBudget) {
     if (newBudget !== maxChunkTokens) {
       const remainingTurns = collectRemainingTurns(chunks, fromChunkIndex);
-      const { chunks: newTail } = chunkTurns(remainingTurns, { maxTokens: newBudget, overlapTurns });
+      const { chunks: newTail } = chunkTurns(remainingTurns, {
+        maxTokens: newBudget,
+        overlapTurns,
+        hardBudgetTokens: windowBudgetForModel(activeModel())
+      });
       const reindexedTail = newTail.map((c, i) => ({ ...c, index: fromChunkIndex + i }));
       chunks = [...chunks.slice(0, fromChunkIndex), ...reindexedTail];
       maxChunkTokens = newBudget;
@@ -254403,7 +254430,7 @@ async function summarizeSession(options) {
     for (; ; ) {
       try {
         const summary = await callWithRetry(
-          renderChunkPrompt(chunks[i]),
+          renderChunkPrompt(chunks[i], chunks.length),
           activeModel().id,
           activeModel().maxCompletionTokens,
           options.callModel,
@@ -254439,107 +254466,11 @@ async function summarizeSession(options) {
       }
     }
   }
-  if (checkpoint.finalSummary !== null) {
-    return {
-      summary: checkpoint.finalSummary,
-      totalChunks: chunks.length,
-      transcriptStats: stats,
-      resumedFromCheckpoint,
-      checkpointPath: options.checkpointPath,
-      modelId: activeModel().id,
-      fallbackEvents
-    };
-  }
-  const mapped = checkpoint.mapSummaries;
-  if (!checkpoint.reduce) {
-    if (mapped.length === 1) {
-      checkpoint.finalSummary = mapped[0];
-      checkpoint.updatedAt = nowIso();
-      saveCheckpoint(options.checkpointPath, checkpoint);
-      return {
-        summary: mapped[0],
-        totalChunks: chunks.length,
-        transcriptStats: stats,
-        resumedFromCheckpoint,
-        checkpointPath: options.checkpointPath,
-        modelId: activeModel().id,
-        fallbackEvents
-      };
-    }
-    checkpoint.reduce = { level: 0, levelInput: mapped, foldedSoFar: [], consumedInputCount: 0 };
+  if (checkpoint.finalSummary === null) {
+    const mapped = checkpoint.mapSummaries;
+    checkpoint.finalSummary = joinChunkSummaries(mapped);
     checkpoint.updatedAt = nowIso();
     saveCheckpoint(options.checkpointPath, checkpoint);
-  }
-  for (; ; ) {
-    const rp = checkpoint.reduce;
-    if (!rp) break;
-    const remaining = rp.levelInput.slice(rp.consumedInputCount);
-    if (remaining.length === 0) {
-      if (rp.foldedSoFar.length === 1) {
-        checkpoint.finalSummary = rp.foldedSoFar[0];
-        checkpoint.reduce = null;
-        checkpoint.updatedAt = nowIso();
-        saveCheckpoint(options.checkpointPath, checkpoint);
-        break;
-      }
-      if (rp.foldedSoFar.length === rp.levelInput.length && rp.levelInput.length > 1) {
-        throw new Error(
-          `session-summary: cannot fold ${rp.levelInput.length} summaries at reduce level ${rp.level} into fewer batches under a ${maxChunkTokens}-token budget \u2014 at least one summary alone exceeds the budget. Increase --max-chunk-tokens or pick a model with more context. Checkpoint saved at ${options.checkpointPath}.`
-        );
-      }
-      checkpoint.reduce = { level: rp.level + 1, levelInput: rp.foldedSoFar, foldedSoFar: [], consumedInputCount: 0 };
-      checkpoint.updatedAt = nowIso();
-      saveCheckpoint(options.checkpointPath, checkpoint);
-      continue;
-    }
-    const batch = packIntoBatches(remaining, maxChunkTokens)[0];
-    try {
-      const folded = batch.length === 1 ? batch[0] : await callWithRetry(
-        renderFoldPrompt(batch),
-        activeModel().id,
-        activeModel().maxCompletionTokens,
-        options.callModel,
-        maxRetries,
-        `reduce level ${rp.level} batch ${rp.foldedSoFar.length}`,
-        options.checkpointPath,
-        foldBodyText(batch)
-      );
-      rp.foldedSoFar.push(folded);
-      rp.consumedInputCount += batch.length;
-      checkpoint.updatedAt = nowIso();
-      saveCheckpoint(options.checkpointPath, checkpoint);
-    } catch (err3) {
-      if (err3 instanceof ModelUnavailableError) {
-        const fromModel = activeModel().id;
-        const triedForThisUnit = [];
-        advanceModel(err3, triedForThisUnit);
-        const newBudget = budgetForModel(activeModel());
-        if (newBudget !== maxChunkTokens) {
-          maxChunkTokens = newBudget;
-          checkpoint.identity = { ...checkpoint.identity, chunkerMaxTokens: maxChunkTokens };
-        }
-        checkpoint.activeModelId = activeModel().id;
-        checkpoint.updatedAt = nowIso();
-        saveCheckpoint(options.checkpointPath, checkpoint);
-        fallbackEvents.push({ fromModel, toModel: activeModel().id, reason: err3.reason, detail: err3.detail, atUnit: `reduce level ${rp.level}` });
-        continue;
-      }
-      if (err3 instanceof ContextOverflowError) {
-        const newBudget = shrinkBudgetOnOverflow(maxChunkTokens);
-        if (newBudget === maxChunkTokens) {
-          throw new Error(
-            `session-summary: reduce level ${rp.level} still exceeds model '${activeModel().id}'s context window even at the minimum ${MIN_OVERFLOW_CHUNK_BUDGET}-token re-split floor (${err3.detail}). Checkpoint saved at ${options.checkpointPath}.`,
-            { cause: err3 }
-          );
-        }
-        maxChunkTokens = newBudget;
-        checkpoint.identity = { ...checkpoint.identity, chunkerMaxTokens: maxChunkTokens };
-        checkpoint.updatedAt = nowIso();
-        saveCheckpoint(options.checkpointPath, checkpoint);
-        continue;
-      }
-      throw err3;
-    }
   }
   return {
     summary: checkpoint.finalSummary,
