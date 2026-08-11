@@ -222165,7 +222165,7 @@ function buildReportMarkdown(args) {
   lines.push("---");
   lines.push("");
   lines.push(
-    "Re-run: `llm-externalizer benchmark --security-triage` (auto-discover) or `--security-triage --model <id>` (assess one). The recommended model is surfaced for the operator to adopt via the security_scan `model` parameter."
+    "Re-run: `llm-ext-benchmark --security-triage` (auto-discover) or `--security-triage --model <id>` (assess one). The recommended model is surfaced for the operator to adopt via the security_scan `model` parameter."
   );
   return lines.join("\n") + "\n";
 }
@@ -224583,7 +224583,7 @@ function buildReportMarkdown2(args) {
   lines.push("---");
   lines.push("");
   lines.push(
-    "Re-run: `llm-externalizer benchmark --search-existing` (auto-discover) or `--search-existing <id> [<id>...]` (assess specific models). ADVISORY only \u2014 the recommended model is surfaced for the operator to adopt via the `tool_models.search_existing_implementations` field on a settings.yaml profile; the benchmark never edits config."
+    "Re-run: `llm-ext-benchmark --search-existing` (auto-discover) or `--search-existing <id> [<id>...]` (assess specific models). ADVISORY only \u2014 the recommended model is surfaced for the operator to adopt via the `tool_models.search_existing_implementations` field on a settings.yaml profile; the benchmark never edits config."
   );
   return lines.join("\n") + "\n";
 }
@@ -225865,7 +225865,7 @@ function buildReportMarkdown3(args) {
   lines.push("---");
   lines.push("");
   lines.push(
-    "Re-run: `llm-externalizer benchmark --code-task` (auto-discover) or `--code-task <id> [<id>...]` (assess specific models). ADVISORY by default; add `--apply-profile <P>` to write the winner into that profile's `tool_models.code_task` (CLI-only writer \u2014 the MCP surface never writes)."
+    "Re-run: `llm-ext-benchmark --code-task` (auto-discover) or `--code-task <id> [<id>...]` (assess specific models). ADVISORY by default; add `--apply-profile <P>` to write the winner into that profile's `tool_models.code_task` (CLI-only writer \u2014 the MCP surface never writes)."
   );
   return lines.join("\n") + "\n";
 }
@@ -227167,7 +227167,7 @@ function buildReportMarkdown4(args) {
   lines.push("---");
   lines.push("");
   lines.push(
-    "Re-run: `llm-externalizer benchmark --scan-folder` (auto-discover) or `--scan-folder <id> [<id>...]` (assess specific models). ADVISORY by default; add `--apply-profile <P>` to write the winner into that profile's `tool_models.scan_folder` (CLI-only writer \u2014 the MCP surface never writes)."
+    "Re-run: `llm-ext-benchmark --scan-folder` (auto-discover) or `--scan-folder <id> [<id>...]` (assess specific models). ADVISORY by default; add `--apply-profile <P>` to write the winner into that profile's `tool_models.scan_folder` (CLI-only writer \u2014 the MCP surface never writes)."
   );
   return lines.join("\n") + "\n";
 }
@@ -228425,7 +228425,7 @@ function buildReportMarkdown5(args) {
   lines.push("---");
   lines.push("");
   lines.push(
-    "Re-run: `llm-externalizer benchmark --check-specs` (auto-discover) or `--check-specs <id> [<id>...]` (assess specific models). ADVISORY by default; add `--apply-profile <P>` to write the winner into that profile's `tool_models.check_against_specs` (CLI-only writer \u2014 the MCP surface never writes)."
+    "Re-run: `llm-ext-benchmark --check-specs` (auto-discover) or `--check-specs <id> [<id>...]` (assess specific models). ADVISORY by default; add `--apply-profile <P>` to write the winner into that profile's `tool_models.check_against_specs` (CLI-only writer \u2014 the MCP surface never writes)."
   );
   return lines.join("\n") + "\n";
 }

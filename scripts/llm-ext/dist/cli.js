@@ -11442,7 +11442,7 @@ function buildReportMarkdown(args) {
   lines.push("---");
   lines.push("");
   lines.push(
-    "Re-run: `llm-externalizer benchmark --security-triage` (auto-discover) or `--security-triage --model <id>` (assess one). The recommended model is surfaced for the operator to adopt via the security_scan `model` parameter."
+    "Re-run: `llm-ext-benchmark --security-triage` (auto-discover) or `--security-triage --model <id>` (assess one). The recommended model is surfaced for the operator to adopt via the security_scan `model` parameter."
   );
   return lines.join("\n") + "\n";
 }
@@ -246683,7 +246683,7 @@ function buildReportMarkdown2(args) {
   lines.push("---");
   lines.push("");
   lines.push(
-    "Re-run: `llm-externalizer benchmark --search-existing` (auto-discover) or `--search-existing <id> [<id>...]` (assess specific models). ADVISORY only \u2014 the recommended model is surfaced for the operator to adopt via the `tool_models.search_existing_implementations` field on a settings.yaml profile; the benchmark never edits config."
+    "Re-run: `llm-ext-benchmark --search-existing` (auto-discover) or `--search-existing <id> [<id>...]` (assess specific models). ADVISORY only \u2014 the recommended model is surfaced for the operator to adopt via the `tool_models.search_existing_implementations` field on a settings.yaml profile; the benchmark never edits config."
   );
   return lines.join("\n") + "\n";
 }
@@ -248474,7 +248474,7 @@ function buildReportMarkdown3(args) {
   lines.push("---");
   lines.push("");
   lines.push(
-    "Re-run: `llm-externalizer benchmark --code-task` (auto-discover) or `--code-task <id> [<id>...]` (assess specific models). ADVISORY by default; add `--apply-profile <P>` to write the winner into that profile's `tool_models.code_task` (CLI-only writer \u2014 the MCP surface never writes)."
+    "Re-run: `llm-ext-benchmark --code-task` (auto-discover) or `--code-task <id> [<id>...]` (assess specific models). ADVISORY by default; add `--apply-profile <P>` to write the winner into that profile's `tool_models.code_task` (CLI-only writer \u2014 the MCP surface never writes)."
   );
   return lines.join("\n") + "\n";
 }
@@ -249742,7 +249742,7 @@ function buildReportMarkdown4(args) {
   lines.push("---");
   lines.push("");
   lines.push(
-    "Re-run: `llm-externalizer benchmark --scan-folder` (auto-discover) or `--scan-folder <id> [<id>...]` (assess specific models). ADVISORY by default; add `--apply-profile <P>` to write the winner into that profile's `tool_models.scan_folder` (CLI-only writer \u2014 the MCP surface never writes)."
+    "Re-run: `llm-ext-benchmark --scan-folder` (auto-discover) or `--scan-folder <id> [<id>...]` (assess specific models). ADVISORY by default; add `--apply-profile <P>` to write the winner into that profile's `tool_models.scan_folder` (CLI-only writer \u2014 the MCP surface never writes)."
   );
   return lines.join("\n") + "\n";
 }
@@ -250975,7 +250975,7 @@ function buildReportMarkdown5(args) {
   lines.push("---");
   lines.push("");
   lines.push(
-    "Re-run: `llm-externalizer benchmark --check-specs` (auto-discover) or `--check-specs <id> [<id>...]` (assess specific models). ADVISORY by default; add `--apply-profile <P>` to write the winner into that profile's `tool_models.check_against_specs` (CLI-only writer \u2014 the MCP surface never writes)."
+    "Re-run: `llm-ext-benchmark --check-specs` (auto-discover) or `--check-specs <id> [<id>...]` (assess specific models). ADVISORY by default; add `--apply-profile <P>` to write the winner into that profile's `tool_models.check_against_specs` (CLI-only writer \u2014 the MCP surface never writes)."
   );
   return lines.join("\n") + "\n";
 }
@@ -254107,6 +254107,7 @@ function classifyContextOverflow(detail) {
 
 // src/session_summary/driver.ts
 var PROMPT_OVERHEAD_TOKENS = 2e3;
+var DEFAULT_MAX_CHUNK_TOKENS = 5e4;
 function checkpointIdentityMatches(a, b) {
   return a.transcriptPath === b.transcriptPath && a.transcriptBytes === b.transcriptBytes && a.transcriptMtimeMs === b.transcriptMtimeMs && a.pruneLevel === b.pruneLevel && a.chunkerMaxTokens === b.chunkerMaxTokens && a.chunkerOverlapTurns === b.chunkerOverlapTurns;
 }
@@ -254200,13 +254201,30 @@ function classifyModelFallback(detail) {
   }
   return null;
 }
-async function callWithRetry(prompt, modelId, maxOutputTokens, callModel, maxRetries, label, checkpointPath) {
+var ECHO_MIN_RESPONSE_LENGTH = 40;
+function normalizeForEchoCheck(text) {
+  return text.replace(/\s+/g, " ").trim().toLowerCase();
+}
+function isEchoResponse(response, sourceText) {
+  const normResponse = normalizeForEchoCheck(response);
+  if (normResponse.length < ECHO_MIN_RESPONSE_LENGTH) return false;
+  const normSource = normalizeForEchoCheck(sourceText);
+  return normSource.includes(normResponse);
+}
+async function callWithRetry(prompt, modelId, maxOutputTokens, callModel, maxRetries, label, checkpointPath, echoCheckSource) {
   let lastErr = null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       const result = await callModel(prompt, modelId, maxOutputTokens);
       if (result.trim().length === 0) {
         throw new ModelUnavailableError("no-text", modelId, "model returned an empty/no-text response");
+      }
+      if (isEchoResponse(result, echoCheckSource)) {
+        throw new ModelUnavailableError(
+          "echo",
+          modelId,
+          `model echoed its input verbatim instead of summarizing it (response: ${result.slice(0, 120)}${result.length > 120 ? "\u2026" : ""})`
+        );
       }
       return result;
     } catch (err3) {
@@ -254240,24 +254258,28 @@ function renderTurn(turn) {
   for (const e of turn.errors) parts.push(`(error: ${e})`);
   return parts.join("\n");
 }
+function chunkBodyText(chunk) {
+  return chunk.turns.map(renderTurn).join("\n\n");
+}
 function renderChunkPrompt(chunk) {
   const continuation = [
     chunk.continuesFromPrev ? "continues from the previous part" : null,
     chunk.continuesNext ? "continues into the next part" : null
   ].filter((s) => s !== null).join("; ");
   const header = `You are summarizing part ${chunk.index + 1} of a Claude Code coding session transcript${continuation ? ` (${continuation})` : ""}. Produce a dense, factual summary of what happened: user requests, decisions made, files changed, commands run, and outcomes. Do not editorialize or pad \u2014 this summary will itself be folded together with summaries of the other parts.`;
-  const body = chunk.turns.map(renderTurn).join("\n\n");
   return `${header}
 
-${body}`;
+${chunkBodyText(chunk)}`;
+}
+function foldBodyText(summaries) {
+  return summaries.map((s, i) => `--- part ${i + 1} ---
+${s}`).join("\n\n");
 }
 function renderFoldPrompt(summaries) {
   const header = `You are folding ${summaries.length} partial summaries of one Claude Code session into a single, coherent summary. Preserve every distinct fact (requests, decisions, files changed, commands run, outcomes); do not drop information for brevity \u2014 merge duplicates instead.`;
-  const body = summaries.map((s, i) => `--- part ${i + 1} ---
-${s}`).join("\n\n");
   return `${header}
 
-${body}`;
+${foldBodyText(summaries)}`;
 }
 function estimateTextTokens(text) {
   return estimateTokens3(text);
@@ -254304,7 +254326,10 @@ async function summarizeSession(options) {
   for (const m of models) assertFreeOnlyModel(true, "openrouter", m.id);
   let activeModelIdx = 0;
   const activeModel = () => models[activeModelIdx];
-  const budgetForModel = (m) => options.maxChunkTokens ?? Math.max(1e3, m.contextLength - m.maxCompletionTokens - PROMPT_OVERHEAD_TOKENS);
+  const budgetForModel = (m) => options.maxChunkTokens ?? Math.min(
+    DEFAULT_MAX_CHUNK_TOKENS,
+    Math.max(1e3, m.contextLength - m.maxCompletionTokens - PROMPT_OVERHEAD_TOKENS)
+  );
   let maxChunkTokens = budgetForModel(activeModel());
   const fallbackEvents = [];
   const stat = statSync12(options.transcriptPath);
@@ -254384,7 +254409,8 @@ async function summarizeSession(options) {
           options.callModel,
           maxRetries,
           `chunk ${i}`,
-          options.checkpointPath
+          options.checkpointPath,
+          chunkBodyText(chunks[i])
         );
         checkpoint.mapSummaries[i] = summary;
         checkpoint.updatedAt = nowIso();
@@ -254475,7 +254501,8 @@ async function summarizeSession(options) {
         options.callModel,
         maxRetries,
         `reduce level ${rp.level} batch ${rp.foldedSoFar.length}`,
-        options.checkpointPath
+        options.checkpointPath,
+        foldBodyText(batch)
       );
       rp.foldedSoFar.push(folded);
       rp.consumedInputCount += batch.length;
@@ -257968,7 +257995,8 @@ Settings file is present but its 'profiles' map is empty \u2014 this is a config
             resume: ssResume,
             checkpoint: ssCheckpointRaw,
             output: ssOutputRaw,
-            stdout: ssStdoutRaw
+            stdout: ssStdoutRaw,
+            max_chunk_tokens: ssMaxChunkTokens
           } = args;
           const VALID_PRUNE_LEVELS = /* @__PURE__ */ new Set(["aggressive", "moderate", "none"]);
           const prune = ssPruneRaw ?? "aggressive";
@@ -258052,7 +258080,8 @@ Settings file is present but its 'profiles' map is empty \u2014 this is a config
               modelMaxCompletionTokens: model.maxCompletionTokens,
               fallbackModels,
               callModel,
-              pruneLevel: prune
+              pruneLevel: prune,
+              maxChunkTokens: typeof ssMaxChunkTokens === "number" ? ssMaxChunkTokens : void 0
             });
           } catch (err3) {
             return {
