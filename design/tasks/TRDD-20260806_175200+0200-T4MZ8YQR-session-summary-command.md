@@ -214,11 +214,16 @@ Added 2026-08-11 with the owner's pipeline spec:
       `TOKEN_ESTIMATE_SAFETY_MARGIN` (Phase A, `e89456a`).
 - [x] chunks are sized to `context_length − reserved_completion − prompt_overhead` via
       `computeUsableTokenBudget` (Phase A, `e89456a`).
-- [ ] a context-overflow error FROM THE MODEL triggers a re-split rather than a failure —
-      Phase B. This is the half that makes the tokenizer's inexactness safe: a local o200k
-      tokenizer does not match nemotron/gemma, so the margin reduces overflow but cannot
-      eliminate it.
-- [ ] the caller chooses the output mode: file path (default) or direct output — Phase B.
+- [x] a context-overflow error FROM THE MODEL triggers a re-split rather than a failure —
+      Phase B (`21e2603`). This is the half that makes the tokenizer's inexactness safe: a local
+      o200k tokenizer does not match nemotron/gemma, so the margin reduces overflow but cannot
+      eliminate it; the model's rejection is therefore authoritative over our count. Bounded
+      halving — a chunk that still overflows when it cannot be split further fails loudly rather
+      than looping. Overflow deliberately does NOT swap models (sizing ≠ availability).
+- [x] the caller chooses the output mode: file path (default) or direct output — Phase B
+      (`21e2603`). `--stdout` is a NEW flag, not an overload of the existing `--output` (which
+      means output DIRECTORY); overloading would have made "where does the summary go" depend on
+      the value's shape. Verified on the live binary after rebuild.
 
 ## Approval log
 
