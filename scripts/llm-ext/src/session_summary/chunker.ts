@@ -6,13 +6,25 @@
  * context window is `context_budget = min(model_ctx, --max-chunk-tokens)`.
  * This is deliberately a NEW packer, not a reuse of the existing FFD
  * file-list bin-packer in `scan-folder/core.ts` — that packer treats each
- * file as an opaque, unsplittable unit; a transcript needs to preserve
- * turn ORDER and to split a turn only as a last resort, on line
- * boundaries, never mid-line. See TRDD-T4MZ8YQR P2.
+ * file as an opaque, unsplittable unit; a transcript needs to preserve turn
+ * ORDER. See TRDD-T4MZ8YQR P2.
  *
- * A single turn that alone exceeds the budget (a giant tool_result under
- * `--prune none`, for instance) is split into `[continued N/M]` pieces on
- * line boundaries before packing — content is never dropped to fit.
+ * HARD INVARIANT (owner, 2026-08-11): a chunk boundary may fall ONLY
+ * between turns. A turn is ATOMIC and is NEVER split across chunks. Each
+ * chunk is summarized independently and the per-chunk summaries are later
+ * joined with NO second model pass to reconcile them (see driver.ts's
+ * `joinChunkSummaries`) — splitting a turn would summarize its two halves
+ * without each other's context (an action in one half, its result in the
+ * other), producing a self-contradictory joined document that no amount of
+ * prompt tuning can fix, because the information was destroyed at split
+ * time. So a turn that alone exceeds the soft per-chunk target (`maxTokens`)
+ * becomes its own chunk, whole and over-cap — `maxTokens` is a summarization
+ * QUALITY target, not a hard wall. The only real hard wall is the model's
+ * usable input budget (`hardBudgetTokens` — see `computeUsableTokenBudget`);
+ * a turn that doesn't fit even alone under THAT budget can never be sent to
+ * the model at all, so `chunkTurns` fails loudly up front naming the turn,
+ * rather than silently producing a chunk request that would be rejected (or
+ * worse, silently mutilating the turn to make it fit).
  */
 
 import { countTokens } from "gpt-tokenizer";
@@ -58,10 +70,20 @@ export function estimateTokens(text: string): number {
 export const DEFAULT_OVERLAP_TURNS = 2;
 
 export interface ChunkerOptions {
-  /** Token budget per chunk. Must be a positive number. */
+  /** Token budget per chunk. Must be a positive number. A soft QUALITY
+   *  target — a turn that alone exceeds it still becomes its own chunk
+   *  rather than being split (see the module header). */
   maxTokens: number;
   /** Trailing turns repeated into the next chunk. Default DEFAULT_OVERLAP_TURNS. */
   overlapTurns?: number;
+  /** The hard, non-negotiable per-request budget a single request can never
+   *  exceed — normally `computeUsableTokenBudget`'s result for the selected
+   *  model. Defaults to `maxTokens` when omitted (matching every caller
+   *  that doesn't yet distinguish the quality target from the model's real
+   *  ceiling). A turn whose own token count exceeds this value can never be
+   *  sent to the model even alone, so `chunkTurns` throws instead of
+   *  producing an unsendable request or splitting the turn. */
+  hardBudgetTokens?: number;
 }
 
 export interface TranscriptChunk {
@@ -76,16 +98,24 @@ export interface TranscriptChunk {
 
 export interface ChunkResult {
   chunks: TranscriptChunk[];
-  /** Turn count in the input, before any oversized-turn splitting. */
+  /** Turn count in the input. */
   totalTurnsIn: number;
-  /** Turn count actually packed, after oversized-turn splitting (split pieces count individually). */
+  /** Turn count actually packed. A turn is never split or dropped, so this
+   *  always equals `totalTurnsIn` — kept as a separate field for backward
+   *  compatibility with callers that already destructure it as a sanity
+   *  check. */
   totalTurnsOut: number;
 }
 
 /**
- * Pack `turns` into token-budgeted chunks, preserving order, splitting a
- * turn only when it alone exceeds `maxTokens`, and overlapping
- * `overlapTurns` turns across each chunk boundary.
+ * Pack `turns` into token-budgeted chunks, preserving order and never
+ * splitting a turn (see the module header). A turn that alone exceeds
+ * `maxTokens` becomes its own, over-cap chunk; a turn that exceeds
+ * `hardBudgetTokens` (the real per-request ceiling) fails the whole call
+ * loudly instead, since no chunk containing it could ever be sent.
+ * `overlapTurns` turns are repeated across each chunk boundary, except
+ * boundaries touching an over-cap chunk — overlap would re-inflate a
+ * neighboring chunk with the very bulk that made the turn oversized.
  */
 export function chunkTurns(turns: Turn[], options: ChunkerOptions): ChunkResult {
   const maxTokens = options.maxTokens;
@@ -96,24 +126,34 @@ export function chunkTurns(turns: Turn[], options: ChunkerOptions): ChunkResult 
   if (!Number.isInteger(overlapTurns) || overlapTurns < 0) {
     throw new Error(`chunkTurns: overlapTurns must be a non-negative integer, got ${String(overlapTurns)}`);
   }
+  const hardBudgetTokens = options.hardBudgetTokens ?? maxTokens;
+  if (!Number.isFinite(hardBudgetTokens) || hardBudgetTokens <= 0) {
+    throw new Error(`chunkTurns: hardBudgetTokens must be a positive finite number, got ${String(hardBudgetTokens)}`);
+  }
 
-  // Expand any turn that alone exceeds the budget into `[continued]`
-  // pieces BEFORE packing, so the packer only ever handles turns that fit
-  // the budget individually.
-  const expanded: Turn[] = [];
+  // Fail fast, up front, on any turn that could never be sent to the model
+  // even alone — see the module header. A turn is atomic: there is no way
+  // to include it without splitting it (forbidden) or dropping it (also
+  // forbidden), so the only honest outcome is to refuse before any model
+  // call is attempted.
   for (const turn of turns) {
-    if (estimateTurnTokens(turn) > maxTokens) {
-      expanded.push(...splitOversizedTurn(turn, maxTokens));
-    } else {
-      expanded.push(turn);
+    const tokens = estimateTurnTokens(turn);
+    if (tokens > hardBudgetTokens) {
+      throw new Error(
+        `chunkTurns: a single ${turn.role} turn (uuid=${turn.uuid ?? "unknown"}, timestamp=${turn.timestamp}) ` +
+          `measures ~${tokens} tokens, which exceeds the model's usable budget of ${hardBudgetTokens} tokens ` +
+          `even alone. A turn is never split across chunks, so this turn cannot be summarized by this model. ` +
+          `Try a more aggressive --prune level, or select a model with a larger context window.`,
+      );
     }
   }
 
   const chunks: TranscriptChunk[] = [];
+  const oversized: boolean[] = []; // parallel to `chunks` — true for a lone over-cap turn
   let current: Turn[] = [];
   let currentTokens = 0;
 
-  const flush = (): void => {
+  const flushNormal = (): void => {
     if (current.length === 0) return;
     chunks.push({
       index: chunks.length,
@@ -122,33 +162,51 @@ export function chunkTurns(turns: Turn[], options: ChunkerOptions): ChunkResult 
       continuesNext: false, // filled in below once every chunk exists
       continuesFromPrev: false,
     });
+    oversized.push(false);
   };
 
-  for (const turn of expanded) {
+  for (const turn of turns) {
     const tokens = estimateTurnTokens(turn);
+    if (tokens > maxTokens) {
+      // The turn alone exceeds the soft target: flush whatever is pending,
+      // then this turn becomes its own whole, over-cap chunk — never
+      // split. Not eligible for overlap in either direction (see header).
+      flushNormal();
+      current = [];
+      currentTokens = 0;
+      chunks.push({
+        index: chunks.length,
+        turns: [turn],
+        estimatedTokens: tokens,
+        continuesNext: false,
+        continuesFromPrev: false,
+      });
+      oversized.push(true);
+      continue;
+    }
     if (current.length > 0 && currentTokens + tokens > maxTokens) {
-      flush();
+      flushNormal();
       // Seed the next chunk with the last `overlapTurns` turns of the
-      // chunk just flushed. This can push the new chunk slightly over
-      // budget once the next turn is added — that is the accepted
-      // trade-off of overlap; the strict budget guarantee only holds
-      // with overlapTurns=0.
-      const prevTurns = chunks[chunks.length - 1].turns;
-      const overlap = overlapTurns > 0 ? prevTurns.slice(-overlapTurns) : [];
+      // chunk just flushed — unless that chunk was itself an over-cap lone
+      // turn, in which case overlap is skipped (see header).
+      const prevIdx = chunks.length - 1;
+      const prevWasOversized = oversized[prevIdx];
+      const overlap = overlapTurns > 0 && !prevWasOversized ? chunks[prevIdx].turns.slice(-overlapTurns) : [];
       current = [...overlap];
       currentTokens = overlap.reduce((sum, t) => sum + estimateTurnTokens(t), 0);
     }
     current.push(turn);
     currentTokens += tokens;
   }
-  flush();
+  flushNormal();
 
   for (let i = 0; i < chunks.length; i++) {
-    chunks[i].continuesFromPrev = i > 0 && overlapTurns > 0;
-    chunks[i].continuesNext = i < chunks.length - 1 && overlapTurns > 0;
+    if (oversized[i]) continue; // an over-cap chunk never participates in overlap
+    if (i > 0 && !oversized[i - 1] && overlapTurns > 0) chunks[i].continuesFromPrev = true;
+    if (i < chunks.length - 1 && !oversized[i + 1] && overlapTurns > 0) chunks[i].continuesNext = true;
   }
 
-  return { chunks, totalTurnsIn: turns.length, totalTurnsOut: expanded.length };
+  return { chunks, totalTurnsIn: turns.length, totalTurnsOut: turns.length };
 }
 
 function estimateTurnTokens(turn: Turn): number {
@@ -161,46 +219,6 @@ function combinedTurnText(turn: Turn): string {
   const toolText = turn.toolCalls.map((tc) => `${tc.name} ${tc.argSummary}`).join("\n");
   const errorText = turn.errors.join("\n");
   return [turn.text, toolText, errorText].filter((s) => s.length > 0).join("\n");
-}
-
-/**
- * Split a single oversized turn into pieces on line boundaries so no piece
- * (except an unavoidably single huge line) exceeds the token budget.
- * toolCalls/errors are attached only to the first piece to avoid
- * duplicating them across every fragment.
- */
-function splitOversizedTurn(turn: Turn, maxTokens: number): Turn[] {
-  const lines = turn.text.split("\n");
-
-  const pieces: string[] = [];
-  let current: string[] = [];
-  let currentTokens = 0;
-  for (const line of lines) {
-    const lineTokens = estimateTokens(line);
-    if (currentTokens + lineTokens > maxTokens && current.length > 0) {
-      pieces.push(current.join("\n"));
-      current = [];
-      currentTokens = 0;
-    }
-    // A single line longer than the whole budget still gets its own piece
-    // — content is never dropped, only split as finely as line boundaries allow.
-    current.push(line);
-    currentTokens += lineTokens;
-  }
-  if (current.length > 0 || pieces.length === 0) pieces.push(current.join("\n"));
-
-  return pieces.map((text, i) => {
-    const marker = pieces.length > 1 ? ` [continued ${i + 1}/${pieces.length}]` : "";
-    return {
-      role: turn.role,
-      timestamp: turn.timestamp,
-      uuid: turn.uuid,
-      parentUuid: turn.parentUuid,
-      text: `${text}${marker}`,
-      toolCalls: i === 0 ? turn.toolCalls : [],
-      errors: i === 0 ? turn.errors : [],
-    };
-  });
 }
 
 /**

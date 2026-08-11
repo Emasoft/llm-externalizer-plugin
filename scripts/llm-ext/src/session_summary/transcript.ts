@@ -91,6 +91,28 @@ const DEFAULT_MODERATE_TRUNCATE_LINES = 20;
 const ARG_SUMMARY_MAX_LEN = 160;
 const ARG_VALUE_TRUNCATE_AT = 80;
 
+// The summarizer is a TEXT model — it cannot read an image, so a base64
+// blob (a screenshot easily runs hundreds of KB) contributes zero
+// information while consuming an enormous share of the chunk budget,
+// pushing genuine content out of the chunk. Dropped at EVERY prune level,
+// including `none`: "none" means "keep TEXT detail", and an image is not
+// text detail the pipeline can process either way. Replaced with a short
+// marker rather than silently removed, so the narrative fact ("the user
+// shared a screenshot") survives even though the pixels don't.
+const IMAGE_OMITTED_MARKER = "[image omitted]";
+const DATA_URI_IMAGE_RE = /data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+/g;
+
+/** Redact any inline `data:image/...;base64,...` URI embedded in free text
+ *  (a user-pasted screenshot markdown, a tool_result that echoes one back,
+ *  ...) — distinct from an explicit `{type:"image"}` content block, which
+ *  `extractBlock`/`toolResultText` intercept before any base64 is ever read
+ *  into a string at all. Cheap short-circuit: only allocates a new string
+ *  when the marker substring is actually present. */
+function stripInlineImageData(text: string): string {
+  if (!text.includes("data:image")) return text;
+  return text.replace(DATA_URI_IMAGE_RE, IMAGE_OMITTED_MARKER);
+}
+
 /**
  * Stream `filePath` line by line and return the pruned Turn list + stats.
  * Never buffers the whole file — memory usage is bounded by the turns kept
@@ -199,7 +221,7 @@ function extractMessageTurn(
   const errors: string[] = [];
 
   if (typeof content === "string") {
-    if (content.trim() !== "") textParts.push(content);
+    if (content.trim() !== "") textParts.push(stripInlineImageData(content));
   } else if (Array.isArray(content)) {
     for (const block of content) {
       extractBlock(block, pruneLevel, truncateLines, textParts, toolCalls, errors);
@@ -236,7 +258,15 @@ function extractBlock(
   const b = block as Record<string, unknown>;
 
   if (b.type === "text") {
-    if (typeof b.text === "string" && b.text.trim() !== "") textParts.push(b.text);
+    if (typeof b.text === "string" && b.text.trim() !== "") textParts.push(stripInlineImageData(b.text));
+    return;
+  }
+
+  if (b.type === "image") {
+    // A text model cannot read this regardless of prune level — the
+    // base64 `source.data` is never even read into a string; only the
+    // narrative marker survives. See IMAGE_OMITTED_MARKER's header.
+    textParts.push(IMAGE_OMITTED_MARKER);
     return;
   }
 
@@ -245,7 +275,7 @@ function extractBlock(
     // scratchpad, not narrative the user needs back.
     if (pruneLevel === "aggressive") return;
     if (typeof b.thinking === "string" && b.thinking.trim() !== "") {
-      textParts.push(`[thinking] ${b.thinking}`);
+      textParts.push(`[thinking] ${stripInlineImageData(b.thinking)}`);
     }
     return;
   }
@@ -292,14 +322,14 @@ function extractSystemTurn(d: Record<string, unknown>): Turn | null {
     const err = d.error;
     if (err !== null && typeof err === "object") {
       const msg = (err as Record<string, unknown>).message;
-      if (typeof msg === "string" && msg.trim() !== "") errors.push(msg);
+      if (typeof msg === "string" && msg.trim() !== "") errors.push(stripInlineImageData(msg));
     }
   }
 
   const hookErrors = d.hookErrors;
   if (Array.isArray(hookErrors)) {
     for (const e of hookErrors) {
-      if (typeof e === "string" && e.trim() !== "") errors.push(e);
+      if (typeof e === "string" && e.trim() !== "") errors.push(stripInlineImageData(e));
     }
   }
 
@@ -316,16 +346,23 @@ function extractSystemTurn(d: Record<string, unknown>): Turn | null {
   };
 }
 
-/** A `tool_result` block's `content` is a string OR an array of `{type:"text", text}` blocks. */
+/** A `tool_result` block's `content` is a string OR an array of blocks —
+ *  normally `{type:"text", text}`, but a tool (e.g. a screenshot capture)
+ *  can also return `{type:"image", source:{...}}`; that base64 is never
+ *  read into a string, only the marker survives (see IMAGE_OMITTED_MARKER's
+ *  header). */
 function toolResultText(content: unknown): string {
-  if (typeof content === "string") return content;
+  if (typeof content === "string") return stripInlineImageData(content);
   if (Array.isArray(content)) {
     return content
       .map((item) => {
-        if (item !== null && typeof item === "object" && (item as Record<string, unknown>).type === "text") {
-          const t = (item as Record<string, unknown>).text;
-          return typeof t === "string" ? t : "";
+        if (item === null || typeof item !== "object") return "";
+        const it = item as Record<string, unknown>;
+        if (it.type === "text") {
+          const t = it.text;
+          return typeof t === "string" ? stripInlineImageData(t) : "";
         }
+        if (it.type === "image") return IMAGE_OMITTED_MARKER;
         return "";
       })
       .filter((s) => s !== "")
@@ -351,9 +388,10 @@ function summarizeToolInput(input: unknown): string {
   const entries = Object.entries(input as Record<string, unknown>).map(([key, value]) => {
     let rendered: string;
     if (typeof value === "string" && value.length > ARG_VALUE_TRUNCATE_AT) {
-      rendered = `"${value.slice(0, ARG_VALUE_TRUNCATE_AT)}…(${value.length} chars)"`;
+      const stripped = stripInlineImageData(value);
+      rendered = `"${stripped.slice(0, ARG_VALUE_TRUNCATE_AT)}…(${value.length} chars)"`;
     } else {
-      rendered = JSON.stringify(value);
+      rendered = JSON.stringify(typeof value === "string" ? stripInlineImageData(value) : value);
     }
     return `${key}=${rendered}`;
   });

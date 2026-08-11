@@ -1,28 +1,32 @@
 /**
- * Map-reduce driver for session-summary — TRDD-T4MZ8YQR P4.
+ * Map-then-join driver for session-summary — TRDD-T4MZ8YQR P4.
  *
  * Orchestrates the pipeline built in P1-P3: stream + prune the transcript
  * (transcript.ts), pack it into token-budgeted chunks (chunker.ts), then
  *
- *   MAP    — summarize each chunk independently.
- *   REDUCE — fold the chunk summaries into one session summary, RECURSING
- *            when a fold level itself would still exceed the model's
- *            window. The TRDD measured a 265 MB / ~66M-token transcript
- *            against the ONE eligible 1M-context free model — that is
- *            ~66 full windows just for the map phase, so a single reduce
- *            pass over 66 summaries is not guaranteed to fit either; the
- *            fold must be able to fold its own output again.
+ *   MAP  — summarize each chunk independently into the nine-section
+ *          Claude-Code-compaction-equivalent handoff schema (see
+ *          `renderChunkPrompt`).
+ *   JOIN — concatenate the per-chunk summaries, in order, with a plain
+ *          separator. Deliberately NOT a second model call: the schema's
+ *          "All User Messages" section is mandatory-VERBATIM, and an LLM
+ *          asked to "merge" nine sections across N summaries is exactly
+ *          the failure mode that threatens it — it "tidies" the longest,
+ *          most repetitive section first. Concatenation cannot drop or
+ *          reword a fact, costs no request, spends no free-tier quota, and
+ *          is deterministic run to run — the "no facts lost" property
+ *          holds by construction, not by prompt discipline.
  *
  * CHECKPOINTING is the load-bearing part, not an afterthought. At the
  * default 1M context floor exactly ONE free model qualifies (P3's
  * `selectEligibleModels`), so there is no rotation partner once its daily
  * cap hits mid-run — an interruption is the EXPECTED outcome of a long
- * run, not an edge case. Every successful map chunk and every successful
- * reduce fold is persisted to `checkpointPath` immediately, and a resumed
- * run verifies the checkpoint was produced from the SAME transcript (path
- * + size + mtime) with the SAME prune level and chunking params before
- * reusing a single byte of it — resuming against a changed input silently
- * would produce a summary that is wrong in a way nobody could detect.
+ * run, not an edge case. Every successful map chunk is persisted to
+ * `checkpointPath` immediately, and a resumed run verifies the checkpoint
+ * was produced from the SAME transcript (path + size + mtime) with the
+ * SAME prune level and chunking params before reusing a single byte of it
+ * — resuming against a changed input silently would produce a summary
+ * that is wrong in a way nobody could detect.
  *
  * COST SAFETY: this command exists specifically to guarantee $0 spend, so
  * `assertFreeOnlyModel(true, ...)` is called with a HARDCODED `true` —
@@ -46,19 +50,18 @@ import {
   chunkTurns,
   classifyContextOverflow,
   DEFAULT_OVERLAP_TURNS,
-  estimateTokens,
   type TranscriptChunk,
 } from "./chunker.js";
 
 /** Tokens reserved out of the model's context window for prompt wrapper text
- *  (instructions) plus the completion itself — the chunk/fold BODY must fit
- *  in what's left. A heuristic margin, not a precise accounting; generous
+ *  (instructions) plus the completion itself — the chunk BODY must fit in
+ *  what's left. A heuristic margin, not a precise accounting; generous
  *  enough that the wrapper text this module actually writes never blows it. */
 export const PROMPT_OVERHEAD_TOKENS = 2_000;
 
 /**
- * Hard cap on the per-chunk/per-fold token budget, INDEPENDENT of how big
- * the selected model's context window is. Measured live (TRDD-T4MZ8YQR
+ * Hard cap on the per-chunk token budget, INDEPENDENT of how big the
+ * selected model's context window is. Measured live (TRDD-T4MZ8YQR
  * follow-up): a 1M-context free model handed a single ~150k-token chunk (the
  * whole pruned transcript, packed into ONE request because the window budget
  * alone allowed it) degenerated to echoing a raw line back instead of
@@ -66,10 +69,11 @@ export const PROMPT_OVERHEAD_TOKENS = 2_000;
  * especially on free models. The context window governs what FITS; it does
  * not govern what a model can summarize WELL, and the two must not be
  * conflated. 50k tokens is the default: generous enough that a single chunk
- * still covers a substantial slice of transcript (keeping the reduce tree
- * shallow), small enough that the model is asked to digest a bounded amount
- * of material per call rather than the whole session at once. Overridable
- * via `--max_chunk_tokens` for a caller who wants a different tradeoff; the
+ * still covers a substantial slice of transcript (keeping the total chunk
+ * count — and so the final joined summary's part count — reasonable), small
+ * enough that the model is asked to digest a bounded amount of material per
+ * call rather than the whole session at once. Overridable via
+ * `--max_chunk_tokens` for a caller who wants a different tradeoff; the
  * effective budget is always `Math.min(windowBudget, thisCap)` — never
  * silently override the model's own window when the cap is larger than it. */
 export const DEFAULT_MAX_CHUNK_TOKENS = 50_000;
@@ -110,7 +114,7 @@ export interface SummarizeSessionOptions {
   /** Default "aggressive" — matches the CLI layer's documented default (P5 TRDD note). */
   pruneLevel?: PruneLevel;
   chunkOverlapTurns?: number;
-  /** Token budget per chunk/fold. Default: min(DEFAULT_MAX_CHUNK_TOKENS,
+  /** Token budget per chunk. Default: min(DEFAULT_MAX_CHUNK_TOKENS,
    *  modelMaxContext minus completion headroom minus PROMPT_OVERHEAD_TOKENS)
    *  — see DEFAULT_MAX_CHUNK_TOKENS's header for why the window alone is not
    *  used as the budget. Fixed regardless of a fallback switch when given
@@ -160,28 +164,16 @@ interface CheckpointIdentity {
   chunkerOverlapTurns: number;
 }
 
-/** Fold-in-progress state for the current reduce level. `levelInput` is the
- *  full array of summaries being folded at this level; `foldedSoFar` holds
- *  the outputs already produced so far (in order); `consumedInputCount` is
- *  how many of `levelInput`'s LEADING items have been folded into
- *  `foldedSoFar` — tracked explicitly (rather than re-deriving batch
- *  boundaries from scratch) so a fold budget that shrinks mid-level, after
- *  a model fallback, can re-pack only what's left without invalidating the
- *  batches already folded. */
-interface ReduceProgress {
-  level: number;
-  levelInput: string[];
-  foldedSoFar: string[];
-  consumedInputCount: number;
-}
-
 interface Checkpoint {
   version: 1;
   identity: CheckpointIdentity;
   totalChunks: number;
   /** One slot per chunk; null until that chunk's map summary lands. */
   mapSummaries: (string | null)[];
-  reduce: ReduceProgress | null;
+  /** The deterministic join of `mapSummaries`, set once every slot is
+   *  filled — see `joinChunkSummaries`. Cached so a resumed run whose map
+   *  phase was already complete doesn't recompute (cheap, but pointless
+   *  work) or re-verify anything about the join. */
   finalSummary: string | null;
   updatedAt: string;
   /** The model actively producing new work as of the last save — informational
@@ -320,7 +312,7 @@ class ModelUnavailableError extends Error {
 
 /**
  * A GENUINE provider-side context-overflow rejection — the model's own
- * ground truth that a chunk/fold body was too big for its window, distinct
+ * ground truth that a chunk body was too big for its window, distinct
  * from `ModelUnavailableError` (the MODEL itself is gone/exhausted) and from
  * a rate limit. This is never retried unchanged (the identical prompt would
  * fail identically) and never triggers a model swap — the caller re-splits
@@ -341,7 +333,7 @@ class ContextOverflowError extends Error {
  *  fail loudly — see `shrinkBudgetOnOverflow`'s header. */
 const MIN_OVERFLOW_CHUNK_BUDGET = 500;
 
-/** Halve the current chunk/fold token budget in response to a real
+/** Halve the current chunk token budget in response to a real
  *  context-overflow rejection, floored at `MIN_OVERFLOW_CHUNK_BUDGET`. The
  *  caller MUST check whether the result actually changed (`!== current`)
  *  before using it — a floor that stops moving means the content can't be
@@ -402,14 +394,14 @@ export function isEchoResponse(response: string, sourceText: string): boolean {
  * switch: retrying immediately just re-hits the same wall, and swapping
  * models on an ordinary blip would silently downgrade quality instead of
  * just waiting it out. A delisted / no-longer-free / daily-cap-exhausted
- * model throws a `ModelUnavailableError` instead — the caller (the map or
- * reduce loop) is the one that decides whether a fallback candidate exists.
- * The checkpoint already holds every unit of work completed before this
- * one, so every thrown message names the checkpoint path to resume from.
+ * model throws a `ModelUnavailableError` instead — the caller (the map
+ * loop) is the one that decides whether a fallback candidate exists. The
+ * checkpoint already holds every unit of work completed before this one,
+ * so every thrown message names the checkpoint path to resume from.
  *
  * `echoCheckSource` is the raw text the model was asked to summarize (the
- * chunk's turns, or the fold batch's summaries) — used ONLY to detect an
- * echoed response (see `isEchoResponse`); it is never sent anywhere.
+ * chunk's turns) — used ONLY to detect an echoed response (see
+ * `isEchoResponse`); it is never sent anywhere.
  */
 async function callWithRetry(
   prompt: string,
@@ -506,68 +498,72 @@ function chunkBodyText(chunk: TranscriptChunk): string {
   return chunk.turns.map(renderTurn).join("\n\n");
 }
 
-function renderChunkPrompt(chunk: TranscriptChunk): string {
-  const continuation = [
+/**
+ * The map prompt's fixed instruction body, verbatim (owner-specified,
+ * 2026-08-11) — the nine-section Claude-Code-compaction-equivalent handoff
+ * schema. `{N}`/`{M}`/`{CONTINUATION}` are interpolated by `renderChunkPrompt`;
+ * everything else is reproduced exactly, including heading text and casing,
+ * so the schema's shape doesn't drift from what was specified.
+ */
+function chunkPromptHeader(partNumber: number, totalParts: number, continuation: string): string {
+  return `You are compacting part ${partNumber} of ${totalParts} of a Claude Code coding-session transcript${continuation}. Your output REPLACES the transcript for a future session that must RESUME this work, so it must preserve everything needed to continue — it is a handoff, not a report.
+
+Use these sections, in this order, with these exact headings. OMIT any section with no content in this part — never write "none", "N/A", or filler.
+
+## Primary Request and Intent
+What the user asked for and why, in detail.
+
+## Key Technical Concepts
+Technologies, frameworks, patterns and tools involved.
+
+## Files and Code Sections
+Every file examined, created or modified: exact path, why it matters, and the important code or the specific change.
+
+## Errors and Fixes
+Every error or failure, how it was fixed, and any feedback the user gave about the fix. Include attempted fixes that did NOT work and why.
+
+## Problem Solving
+Problems solved, and troubleshooting still in progress.
+
+## All User Messages
+Every message from the USER, copied VERBATIM and in order, excluding tool results. Do NOT paraphrase, summarize, shorten, merge or tidy them. The exact wording IS the content — intent is lost the moment it is reworded. This is the highest-value section here.
+
+## Pending Tasks
+Work the user explicitly asked for that is not yet done.
+
+## Current Work
+Precisely what was being worked on at the end of this part, with file names and code.
+
+## Next Step
+The immediate next action, only if it follows directly from work in flight. Do not invent one.
+
+RULES
+- Dense and factual. No editorialising, no padding, no commentary.
+- Reproduce names EXACTLY: file paths, commands, flags, function names, commit hashes, error text, line numbers. Never approximate an identifier.
+- Do NOT copy transcript text anywhere EXCEPT the "All User Messages" section. Everywhere else, state facts in your own words.
+- Your output will be merged with summaries of the other parts: write no introduction and no conclusion.`;
+}
+
+function renderChunkPrompt(chunk: TranscriptChunk, totalChunks: number): string {
+  const continuationParts = [
     chunk.continuesFromPrev ? "continues from the previous part" : null,
     chunk.continuesNext ? "continues into the next part" : null,
-  ]
-    .filter((s): s is string => s !== null)
-    .join("; ");
-  const header =
-    `You are summarizing part ${chunk.index + 1} of a Claude Code coding session transcript` +
-    `${continuation ? ` (${continuation})` : ""}. Produce a dense, factual summary of what ` +
-    `happened: user requests, decisions made, files changed, commands run, and outcomes. Do not ` +
-    `editorialize or pad — this summary will itself be folded together with summaries of the other parts.`;
+  ].filter((s): s is string => s !== null);
+  const continuation = continuationParts.length > 0 ? ` (${continuationParts.join("; ")})` : "";
+  const header = chunkPromptHeader(chunk.index + 1, totalChunks, continuation);
   return `${header}\n\n${chunkBodyText(chunk)}`;
 }
 
-/** The raw material a fold call is asked to condense — see `chunkBodyText`'s
- *  header for why the echo check compares against the BODY, not the prompt. */
-function foldBodyText(summaries: readonly string[]): string {
-  return summaries.map((s, i) => `--- part ${i + 1} ---\n${s}`).join("\n\n");
-}
-
-function renderFoldPrompt(summaries: readonly string[]): string {
-  const header =
-    `You are folding ${summaries.length} partial summaries of one Claude Code session into a ` +
-    `single, coherent summary. Preserve every distinct fact (requests, decisions, files changed, ` +
-    `commands run, outcomes); do not drop information for brevity — merge duplicates instead.`;
-  return `${header}\n\n${foldBodyText(summaries)}`;
-}
-
-// ── Batch packing for the reduce phase (pure — mirrors chunker.ts's packer,
-// but over plain summary strings instead of Turns, since a fold input has
-// no turn-boundary or tool-call structure to preserve). ───────────────────
-
-function estimateTextTokens(text: string): number {
-  // Phase-A compile-compatibility note: chunker.ts's bytes/4 heuristic
-  // (BYTES_PER_TOKEN_ESTIMATE) was replaced by a real tokenizer
-  // (chunker.ts's estimateTokens, TRDD-T4MZ8YQR Phase A). This call site
-  // just follows that removal to keep the module compiling — wiring the
-  // fold-packing budget to `computeUsableTokenBudget` is Phase B's job.
-  return estimateTokens(text);
-}
-
-/** Pack `items` into token-budgeted batches, never splitting an item (a
- *  chunk/fold summary is treated as atomic — it is already dense prose, not
- *  raw transcript text, so there is no meaningful line boundary to split
- *  it on the way `chunker.ts` splits an oversized turn). */
-export function packIntoBatches(items: readonly string[], maxTokens: number): string[][] {
-  const batches: string[][] = [];
-  let current: string[] = [];
-  let currentTokens = 0;
-  for (const item of items) {
-    const tokens = estimateTextTokens(item);
-    if (current.length > 0 && currentTokens + tokens > maxTokens) {
-      batches.push(current);
-      current = [];
-      currentTokens = 0;
-    }
-    current.push(item);
-    currentTokens += tokens;
-  }
-  if (current.length > 0) batches.push(current);
-  return batches;
+/** Deterministically join the per-chunk map summaries into the final
+ *  session summary — see the module header for why this is NOT a second
+ *  model call. Straight concatenation in chunk order, with a plain
+ *  separator naming the part so a reader (or the resuming agent) can still
+ *  tell which chunk each stretch of text came from; nothing is ever
+ *  re-summarized, so no fact from any chunk's summary can be dropped,
+ *  reworded, or "tidied" by this step. */
+export function joinChunkSummaries(summaries: readonly string[]): string {
+  if (summaries.length === 1) return summaries[0];
+  return summaries.map((s, i) => `--- Part ${i + 1} of ${summaries.length} ---\n\n${s}`).join("\n\n");
 }
 
 /** The turns still owed a map summary from `chunks[fromIndex..]` onward, in
@@ -577,8 +573,8 @@ export function packIntoBatches(items: readonly string[], maxTokens: number): st
  *  exact — no timestamp/uuid heuristic needed). Used to re-chunk only the
  *  UNSENT remainder to a new model's budget after a fallback switch, while
  *  every already-summarized chunk (and its checkpointed summary) is left
- *  untouched — a chunk/fold summary is dense prose, not raw input, so it
- *  stays valid regardless of which model produces the NEXT one. */
+ *  untouched — a chunk summary is dense prose, not raw input, so it stays
+ *  valid regardless of which model produces the NEXT one. */
 function collectRemainingTurns(chunks: readonly TranscriptChunk[], fromIndex: number): Turn[] {
   const seen = new Set<Turn>();
   const out: Turn[] = [];
@@ -596,9 +592,9 @@ function collectRemainingTurns(chunks: readonly TranscriptChunk[], fromIndex: nu
 // ── The driver ────────────────────────────────────────────────────────────
 
 /**
- * Summarize a whole session transcript via map-reduce, checkpointing after
- * every completed unit of work (map chunk or reduce fold) so an interrupted
- * run resumes instead of restarting.
+ * Summarize a whole session transcript by mapping each chunk to a summary
+ * and joining the results, checkpointing after every completed map chunk
+ * so an interrupted run resumes instead of restarting.
  */
 export async function summarizeSession(
   options: SummarizeSessionOptions,
@@ -631,16 +627,19 @@ export async function summarizeSession(
 
   let activeModelIdx = 0;
   const activeModel = (): EligibleModel => models[activeModelIdx];
+  // The model's REAL usable window — the hard wall a single turn (or any
+  // one request) can never exceed, regardless of the quality-cap target
+  // below. Passed to `chunkTurns` as `hardBudgetTokens` so an oversized
+  // turn is caught (and the run fails loudly, naming the turn) before any
+  // model call, per the chunker's atomic-turn invariant.
+  const windowBudgetForModel = (m: EligibleModel): number =>
+    Math.max(1_000, m.contextLength - m.maxCompletionTokens - PROMPT_OVERHEAD_TOKENS);
   // Effective budget = min(what the model's window allows, the quality cap)
   // — see DEFAULT_MAX_CHUNK_TOKENS's header. An explicit --max_chunk_tokens
   // from the caller is honored verbatim (the caller made a deliberate
   // choice); only the DEFAULT is capped, never a caller-supplied value.
   const budgetForModel = (m: EligibleModel): number =>
-    options.maxChunkTokens ??
-    Math.min(
-      DEFAULT_MAX_CHUNK_TOKENS,
-      Math.max(1_000, m.contextLength - m.maxCompletionTokens - PROMPT_OVERHEAD_TOKENS),
-    );
+    options.maxChunkTokens ?? Math.min(DEFAULT_MAX_CHUNK_TOKENS, windowBudgetForModel(m));
   let maxChunkTokens = budgetForModel(activeModel());
 
   const fallbackEvents: ModelFallbackEvent[] = [];
@@ -663,7 +662,11 @@ export async function summarizeSession(
   const resumedFromCheckpoint = checkpoint !== null;
 
   const { turns, stats } = await readTranscript(options.transcriptPath, { pruneLevel });
-  let { chunks } = chunkTurns(turns, { maxTokens: maxChunkTokens, overlapTurns });
+  let { chunks } = chunkTurns(turns, {
+    maxTokens: maxChunkTokens,
+    overlapTurns,
+    hardBudgetTokens: windowBudgetForModel(activeModel()),
+  });
 
   if (checkpoint && checkpoint.totalChunks !== chunks.length) {
     // The identity check above already pins transcript size/mtime + every
@@ -684,7 +687,6 @@ export async function summarizeSession(
       identity,
       totalChunks: chunks.length,
       mapSummaries: new Array<string | null>(chunks.length).fill(null),
-      reduce: null,
       finalSummary: null,
       updatedAt: nowIso(),
       activeModelId: activeModel().id,
@@ -732,7 +734,11 @@ export async function summarizeSession(
   function rechunkRemainingMap(fromChunkIndex: number, newBudget: number): void {
     if (newBudget !== maxChunkTokens) {
       const remainingTurns = collectRemainingTurns(chunks, fromChunkIndex);
-      const { chunks: newTail } = chunkTurns(remainingTurns, { maxTokens: newBudget, overlapTurns });
+      const { chunks: newTail } = chunkTurns(remainingTurns, {
+        maxTokens: newBudget,
+        overlapTurns,
+        hardBudgetTokens: windowBudgetForModel(activeModel()),
+      });
       const reindexedTail = newTail.map((c, i) => ({ ...c, index: fromChunkIndex + i }));
       chunks = [...chunks.slice(0, fromChunkIndex), ...reindexedTail];
       maxChunkTokens = newBudget;
@@ -755,7 +761,7 @@ export async function summarizeSession(
     for (;;) {
       try {
         const summary = await callWithRetry(
-          renderChunkPrompt(chunks[i]),
+          renderChunkPrompt(chunks[i], chunks.length),
           activeModel().id,
           activeModel().maxCompletionTokens,
           options.callModel,
@@ -802,141 +808,19 @@ export async function summarizeSession(
     }
   }
 
-  if (checkpoint.finalSummary !== null) {
-    return {
-      summary: checkpoint.finalSummary,
-      totalChunks: chunks.length,
-      transcriptStats: stats,
-      resumedFromCheckpoint,
-      checkpointPath: options.checkpointPath,
-      modelId: activeModel().id,
-      fallbackEvents,
-    };
-  }
-
-  // ── REDUCE: fold chunk summaries into one, recursing whenever a fold
-  // level's own output still needs folding (a summary-of-summaries can
-  // itself exceed the budget on a large enough transcript).
-  const mapped = checkpoint.mapSummaries as string[]; // every slot filled by the loop above
-
-  if (!checkpoint.reduce) {
-    if (mapped.length === 1) {
-      checkpoint.finalSummary = mapped[0];
-      checkpoint.updatedAt = nowIso();
-      saveCheckpoint(options.checkpointPath, checkpoint);
-      return {
-        summary: mapped[0],
-        totalChunks: chunks.length,
-        transcriptStats: stats,
-        resumedFromCheckpoint,
-        checkpointPath: options.checkpointPath,
-        modelId: activeModel().id,
-        fallbackEvents,
-      };
-    }
-    checkpoint.reduce = { level: 0, levelInput: mapped, foldedSoFar: [], consumedInputCount: 0 };
+  if (checkpoint.finalSummary === null) {
+    // Every map slot is filled by the loop above — join deterministically,
+    // no model call, no risk to the mandatory-verbatim sections. See
+    // `joinChunkSummaries`'s header for why this is not a second map-reduce
+    // phase.
+    const mapped = checkpoint.mapSummaries as string[];
+    checkpoint.finalSummary = joinChunkSummaries(mapped);
     checkpoint.updatedAt = nowIso();
     saveCheckpoint(options.checkpointPath, checkpoint);
   }
 
-  // Each iteration re-derives the NEXT batch from the CURRENT remaining
-  // input and the CURRENT (possibly just-shrunk) budget — deliberately not
-  // a single precomputed `batches` array like the old fixed-budget version,
-  // because a mid-level model switch invalidates any batch boundary that
-  // was computed under the old, larger budget. Re-deriving on every step is
-  // what keeps a downgrade safe without desyncing the resume position.
-  for (;;) {
-    const rp: ReduceProgress | null = checkpoint.reduce;
-    if (!rp) break; // unreachable: only null right after finalSummary is set, which exits the loop below
-
-    const remaining = rp.levelInput.slice(rp.consumedInputCount);
-    if (remaining.length === 0) {
-      if (rp.foldedSoFar.length === 1) {
-        checkpoint.finalSummary = rp.foldedSoFar[0];
-        checkpoint.reduce = null;
-        checkpoint.updatedAt = nowIso();
-        saveCheckpoint(options.checkpointPath, checkpoint);
-        break;
-      }
-      if (rp.foldedSoFar.length === rp.levelInput.length && rp.levelInput.length > 1) {
-        // No progress possible across the WHOLE level: every batch was a
-        // lone item, meaning at least one summary alone exceeds the fold
-        // budget. Recursing forever here would be an infinite loop
-        // disguised as progress — fail fast instead, naming the fix.
-        throw new Error(
-          `session-summary: cannot fold ${rp.levelInput.length} summaries at reduce level ${rp.level} ` +
-            `into fewer batches under a ${maxChunkTokens}-token budget — at least one summary alone ` +
-            `exceeds the budget. Increase --max-chunk-tokens or pick a model with more context. ` +
-            `Checkpoint saved at ${options.checkpointPath}.`,
-        );
-      }
-      checkpoint.reduce = { level: rp.level + 1, levelInput: rp.foldedSoFar, foldedSoFar: [], consumedInputCount: 0 };
-      checkpoint.updatedAt = nowIso();
-      saveCheckpoint(options.checkpointPath, checkpoint);
-      continue;
-    }
-
-    const batch = packIntoBatches(remaining, maxChunkTokens)[0];
-    try {
-      const folded =
-        batch.length === 1
-          ? batch[0] // a lone item passes through untouched — nothing to fold
-          : await callWithRetry(
-              renderFoldPrompt(batch),
-              activeModel().id,
-              activeModel().maxCompletionTokens,
-              options.callModel,
-              maxRetries,
-              `reduce level ${rp.level} batch ${rp.foldedSoFar.length}`,
-              options.checkpointPath,
-              foldBodyText(batch),
-            );
-      rp.foldedSoFar.push(folded);
-      rp.consumedInputCount += batch.length;
-      checkpoint.updatedAt = nowIso();
-      saveCheckpoint(options.checkpointPath, checkpoint);
-    } catch (err) {
-      if (err instanceof ModelUnavailableError) {
-        const fromModel = activeModel().id;
-        const triedForThisUnit: string[] = [];
-        advanceModel(err, triedForThisUnit);
-        const newBudget = budgetForModel(activeModel());
-        if (newBudget !== maxChunkTokens) {
-          maxChunkTokens = newBudget;
-          checkpoint.identity = { ...checkpoint.identity, chunkerMaxTokens: maxChunkTokens };
-        }
-        checkpoint.activeModelId = activeModel().id;
-        checkpoint.updatedAt = nowIso();
-        saveCheckpoint(options.checkpointPath, checkpoint);
-        fallbackEvents.push({ fromModel, toModel: activeModel().id, reason: err.reason, detail: err.detail, atUnit: `reduce level ${rp.level}` });
-        continue; // retry with the same remaining input, repacked to the new budget
-      }
-      if (err instanceof ContextOverflowError) {
-        // Same ground-truth logic as the MAP phase: the fold batch's real
-        // token count exceeded the model's window even though our estimate
-        // said it would fit. Shrink the fold budget and re-pack the SAME
-        // remaining input into smaller batches — never swap models.
-        const newBudget = shrinkBudgetOnOverflow(maxChunkTokens);
-        if (newBudget === maxChunkTokens) {
-          throw new Error(
-            `session-summary: reduce level ${rp.level} still exceeds model '${activeModel().id}'s ` +
-              `context window even at the minimum ${MIN_OVERFLOW_CHUNK_BUDGET}-token re-split floor ` +
-              `(${err.detail}). Checkpoint saved at ${options.checkpointPath}.`,
-            { cause: err },
-          );
-        }
-        maxChunkTokens = newBudget;
-        checkpoint.identity = { ...checkpoint.identity, chunkerMaxTokens: maxChunkTokens };
-        checkpoint.updatedAt = nowIso();
-        saveCheckpoint(options.checkpointPath, checkpoint);
-        continue; // repack `remaining` into smaller batches on the next iteration
-      }
-      throw err;
-    }
-  }
-
   return {
-    summary: checkpoint.finalSummary as string,
+    summary: checkpoint.finalSummary,
     totalChunks: chunks.length,
     transcriptStats: stats,
     resumedFromCheckpoint,

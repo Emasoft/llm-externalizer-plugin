@@ -133,55 +133,121 @@ describe("chunkTurns", () => {
     }
   });
 
-  it("splits a single turn that alone exceeds the budget into [continued] pieces on line boundaries", () => {
+  // ── Turn atomicity (owner hard invariant, 2026-08-11) ─────────────────
+  //
+  // A chunk boundary may fall ONLY between turns; a turn is never split.
+  // Each chunk is summarized independently and the summaries are later
+  // joined with no reconciling model pass, so a split turn would describe
+  // an action in one chunk and its result in another, with neither summary
+  // able to see the other half.
+
+  it("a single turn larger than maxTokens becomes its own chunk, intact — never split", () => {
     const lines = Array.from({ length: 50 }, (_, i) => `line ${i} of a huge tool_result, with some extra padding text`);
-    const huge = makeTurn("huge", lines.join("\n"));
+    const hugeText = lines.join("\n");
+    const huge = makeTurn("huge", hugeText);
     const perLineTokens = estimateTokens(lines[0]);
     const maxTokens = perLineTokens * 5; // far smaller than the whole text
-    const result = chunkTurns([huge], { maxTokens, overlapTurns: 0 });
+    const small = makeTurn("small", "ok");
+    const result = chunkTurns([small, huge], { maxTokens, overlapTurns: 0, hardBudgetTokens: 1_000_000 });
 
-    expect(result.totalTurnsOut).toBeGreaterThan(1); // it was split into multiple pieces
-    const allPieces = result.chunks.flatMap((c) => c.turns);
-    expect(allPieces.every((t) => t.uuid === "huge")).toBe(true);
-    expect(allPieces.some((t) => t.text.includes("[continued"))).toBe(true);
-    // The reconstructed text (markers stripped) still contains every original line.
-    const reconstructed = allPieces.map((t) => t.text.replace(/ \[continued \d+\/\d+\]$/, "")).join("\n");
-    for (const line of lines) {
-      expect(reconstructed).toContain(line);
-    }
-    // toolCalls/errors are attached only to the first piece.
-    expect(allPieces.filter((t) => t.errors.length > 0 || t.toolCalls.length > 0)).toHaveLength(0);
+    // The oversized turn lands in its OWN chunk, whole — never fragmented.
+    const hugeChunk = result.chunks.find((c) => c.turns.some((t) => t.uuid === "huge"));
+    expect(hugeChunk).toBeDefined();
+    expect(hugeChunk!.turns).toHaveLength(1);
+    expect(hugeChunk!.turns[0].text).toBe(hugeText); // byte-identical, no marker, no fragment
+    expect(hugeChunk!.estimatedTokens).toBeGreaterThan(maxTokens); // over-cap, by design
+    expect(result.totalTurnsOut).toBe(result.totalTurnsIn); // nothing split, nothing dropped
   });
 
-  it("attaches an oversized turn's toolCalls/errors only to its first split piece", () => {
-    const lines = Array.from({ length: 50 }, (_, i) => `line number ${i} with some padding text so it tokenizes to more than one token`);
-    const huge = makeTurn("huge2", lines.join("\n"), {
-      toolCalls: [{ name: "Bash", argSummary: "command=ls" }],
-      errors: ["boom"],
-    });
-    const perLineTokens = estimateTokens(lines[0]);
-    const result = chunkTurns([huge], { maxTokens: perLineTokens * 3, overlapTurns: 0 });
-    const pieces = result.chunks.flatMap((c) => c.turns);
-    expect(pieces.length).toBeGreaterThan(1);
-    expect(pieces[0].toolCalls).toEqual([{ name: "Bash", argSummary: "command=ls" }]);
-    expect(pieces[0].errors).toEqual(["boom"]);
-    for (const p of pieces.slice(1)) {
-      expect(p.toolCalls).toEqual([]);
-      expect(p.errors).toEqual([]);
+  it("a single whole turn larger than the hard usable budget raises a clear error instead of being split", () => {
+    const hugeText = Array.from({ length: 50 }, (_, i) => `line ${i} padding padding padding`).join("\n");
+    const huge = makeTurn("too-big", hugeText, { role: "assistant" });
+    const hardBudgetTokens = Math.floor(estimateTokens(hugeText) / 2); // strictly below the turn's own size
+
+    expect(() => chunkTurns([huge], { maxTokens: 100, overlapTurns: 0, hardBudgetTokens })).toThrow(
+      /exceeds the model's usable budget/,
+    );
+    // Names the offending turn, not just a generic overflow message.
+    try {
+      chunkTurns([huge], { maxTokens: 100, overlapTurns: 0, hardBudgetTokens });
+      expect.unreachable();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      expect(msg).toContain("assistant");
+      expect(msg).toContain("too-big");
     }
   });
 
-  it("never exceeds the budget on a per-piece basis for an oversized turn (single-line exception aside)", () => {
-    const lines = Array.from({ length: 200 }, (_, i) => `short${i}`);
-    const huge = makeTurn("huge3", lines.join("\n"));
-    const maxTokens = 10;
-    const result = chunkTurns([huge], { maxTokens, overlapTurns: 0 });
-    const pieces = result.chunks.flatMap((c) => c.turns);
-    for (const piece of pieces) {
-      const rawPieceText = piece.text.replace(/ \[continued \d+\/\d+\]$/, "");
-      // Each piece's own text should not wildly exceed the budget, since
-      // every source line here tokenizes to well under `maxTokens` alone.
-      expect(estimateTokens(rawPieceText)).toBeLessThanOrEqual(maxTokens * 2);
+  it("hardBudgetTokens defaults to maxTokens when omitted, so an oversized turn fails loudly by default", () => {
+    // A caller that never distinguishes the quality target from the
+    // model's real ceiling gets the conservative default: maxTokens IS
+    // the hard wall too, so an over-cap turn fails instead of silently
+    // producing a chunk nobody declared safe to send.
+    const hugeText = "x ".repeat(2000);
+    const huge = makeTurn("no-hard-budget", hugeText);
+    expect(() => chunkTurns([huge], { maxTokens: 10, overlapTurns: 0 })).toThrow(
+      /exceeds the model's usable budget/,
+    );
+  });
+
+  it("an oversized turn becomes its own over-cap chunk when hardBudgetTokens is explicitly larger than maxTokens", () => {
+    const hugeText = "x ".repeat(2000);
+    const huge = makeTurn("has-hard-budget", hugeText);
+    const result = chunkTurns([huge], { maxTokens: 10, overlapTurns: 0, hardBudgetTokens: 1_000_000 });
+    expect(result.chunks).toHaveLength(1);
+    expect(result.chunks[0].turns[0].text).toBe(hugeText);
+  });
+
+  it("reassembling every chunk in order reproduces the original turn sequence exactly — no turn split, dropped, or duplicated", () => {
+    const turnText = "turn content padding padding ".repeat(3);
+    const perTurnTokens = estimateTokens(turnText);
+    // Mix of ordinary turns and one oversized turn in the middle, to
+    // exercise both the normal packer path and the lone-oversized-chunk
+    // path in the same sequence.
+    const oversizedText = Array.from({ length: 40 }, (_, i) => `oversized line ${i}`).join("\n");
+    const turns = [
+      ...Array.from({ length: 4 }, (_, i) => makeTurn(`a${i}`, turnText)),
+      makeTurn("oversized", oversizedText),
+      ...Array.from({ length: 4 }, (_, i) => makeTurn(`b${i}`, turnText)),
+    ];
+    const maxTokens = perTurnTokens * 2 + 1; // forces multiple chunks; oversized turn exceeds it alone
+    const result = chunkTurns(turns, { maxTokens, overlapTurns: 0, hardBudgetTokens: 1_000_000 });
+
+    // Chunk order is preserved (index is monotonically increasing)...
+    expect(result.chunks.map((c) => c.index)).toEqual(result.chunks.map((_, i) => i));
+    // ...and every turn appears in exactly one chunk, in original order,
+    // with no boundary falling inside the oversized turn's text.
+    const reassembledUuids = result.chunks.flatMap((c) => c.turns.map((t) => t.uuid));
+    expect(reassembledUuids).toEqual(turns.map((t) => t.uuid));
+    const oversizedChunk = result.chunks.find((c) => c.turns[0]?.uuid === "oversized" && c.turns.length === 1);
+    expect(oversizedChunk).toBeDefined();
+    expect(oversizedChunk!.turns[0].text).toBe(oversizedText);
+  });
+
+  it("an over-cap lone-turn chunk never participates in overlap seeding (neither direction)", () => {
+    const turnText = "The quick brown fox jumps over the lazy dog. ".repeat(3);
+    const perTurnTokens = estimateTokens(turnText);
+    const oversizedText = Array.from({ length: 40 }, (_, i) => `oversized line ${i} with padding text`).join("\n");
+    const turns = [
+      makeTurn("a0", turnText),
+      makeTurn("a1", turnText),
+      makeTurn("oversized", oversizedText),
+      makeTurn("b0", turnText),
+      makeTurn("b1", turnText),
+    ];
+    const maxTokens = perTurnTokens * 2 + 1;
+    const result = chunkTurns(turns, { maxTokens, overlapTurns: 2, hardBudgetTokens: 1_000_000 });
+
+    const oversizedChunk = result.chunks.find((c) => c.turns[0]?.uuid === "oversized");
+    expect(oversizedChunk).toBeDefined();
+    expect(oversizedChunk!.continuesFromPrev).toBe(false);
+    expect(oversizedChunk!.continuesNext).toBe(false);
+    // The chunk right after it must not have been seeded with the
+    // oversized turn as "overlap" — it would re-inflate that chunk with
+    // the very bulk that made the turn oversized.
+    const afterIdx = result.chunks.indexOf(oversizedChunk!) + 1;
+    if (afterIdx < result.chunks.length) {
+      expect(result.chunks[afterIdx].turns.some((t) => t.uuid === "oversized")).toBe(false);
     }
   });
 });

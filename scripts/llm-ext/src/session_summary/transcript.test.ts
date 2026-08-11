@@ -168,6 +168,119 @@ describe("readTranscript", () => {
     expect(turns[0].errors).toEqual(["503 upstream connect error"]);
   });
 
+  describe("image blocks are dropped, never sent to the (text-only) summarizer", () => {
+    const FAKE_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB".repeat(50); // stand-in payload, never a real PNG
+
+    it("replaces an image content block with a marker and keeps the surrounding text, at prune level 'none'", async () => {
+      const p = write([
+        {
+          type: "user",
+          uuid: "u1",
+          parentUuid: null,
+          timestamp: "t1",
+          message: {
+            role: "user",
+            content: [
+              { type: "text", text: "here is a screenshot of the failing UI" },
+              { type: "image", source: { type: "base64", media_type: "image/png", data: FAKE_BASE64 } },
+              { type: "text", text: "please fix the layout" },
+            ],
+          },
+        },
+      ]);
+      const { turns } = await readTranscript(p, { pruneLevel: "none" });
+      expect(turns).toHaveLength(1);
+      expect(turns[0].text).toContain("here is a screenshot of the failing UI");
+      expect(turns[0].text).toContain("[image omitted]");
+      expect(turns[0].text).toContain("please fix the layout");
+      expect(turns[0].text).not.toContain(FAKE_BASE64);
+    });
+
+    it("replaces an image content block with a marker at prune level 'aggressive' too", async () => {
+      const p = write([
+        {
+          type: "user",
+          uuid: "u2",
+          parentUuid: null,
+          timestamp: "t2",
+          message: {
+            role: "user",
+            content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: FAKE_BASE64 } }],
+          },
+        },
+      ]);
+      const { turns } = await readTranscript(p, { pruneLevel: "aggressive" });
+      expect(turns).toHaveLength(1); // the marker is real content — the turn is NOT dropped
+      expect(turns[0].text).toBe("[image omitted]");
+      expect(turns[0].text).not.toContain(FAKE_BASE64);
+    });
+
+    it("redacts an inline data:image;base64 URI embedded in plain text without dropping the surrounding text", async () => {
+      const dataUri = `data:image/png;base64,${FAKE_BASE64}`;
+      const p = write([
+        {
+          type: "user",
+          uuid: "u3",
+          parentUuid: null,
+          timestamp: "t3",
+          message: { role: "user", content: `see this pasted screenshot: ${dataUri} — it shows the bug` },
+        },
+      ]);
+      const { turns } = await readTranscript(p, { pruneLevel: "none" });
+      expect(turns[0].text).toContain("see this pasted screenshot:");
+      expect(turns[0].text).toContain("it shows the bug");
+      expect(turns[0].text).toContain("[image omitted]");
+      expect(turns[0].text).not.toContain(FAKE_BASE64);
+    });
+
+    it("redacts a data URI returned inside a tool_result's text content", async () => {
+      const dataUri = `data:image/jpeg;base64,${FAKE_BASE64}`;
+      const p = write([
+        {
+          type: "user",
+          uuid: "r3",
+          parentUuid: "a1",
+          timestamp: "t4",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "x9", content: [{ type: "text", text: `screenshot saved: ${dataUri}` }] }],
+          },
+        },
+      ]);
+      const { turns } = await readTranscript(p, { pruneLevel: "none" });
+      expect(turns[0].text).toContain("[image omitted]");
+      expect(turns[0].text).not.toContain(FAKE_BASE64);
+    });
+
+    it("replaces a tool_result image content block with a marker", async () => {
+      const p = write([
+        {
+          type: "user",
+          uuid: "r4",
+          parentUuid: "a1",
+          timestamp: "t5",
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "x10",
+                content: [
+                  { type: "text", text: "captured a screenshot:" },
+                  { type: "image", source: { type: "base64", media_type: "image/png", data: FAKE_BASE64 } },
+                ],
+              },
+            ],
+          },
+        },
+      ]);
+      const { turns } = await readTranscript(p, { pruneLevel: "none" });
+      expect(turns[0].text).toContain("captured a screenshot:");
+      expect(turns[0].text).toContain("[image omitted]");
+      expect(turns[0].text).not.toContain(FAKE_BASE64);
+    });
+  });
+
   describe("prune levels", () => {
     function makeToolResultFixture(): unknown[] {
       const bigLines = Array.from({ length: 100 }, (_, i) => `line ${i}`).join("\n");

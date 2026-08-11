@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync, rmSync, readFileSync, utimesSync } from "no
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { summarizeSession, packIntoBatches, isEchoResponse, DEFAULT_MAX_CHUNK_TOKENS, type CallModelFn } from "./driver.js";
+import { summarizeSession, joinChunkSummaries, isEchoResponse, DEFAULT_MAX_CHUNK_TOKENS, type CallModelFn } from "./driver.js";
 import type { EligibleModel } from "./model-select.js";
 import { resetCooldownCacheForTests } from "../free-rotation.js";
 
@@ -89,20 +89,60 @@ describe("driver: summarizeSession", () => {
     expect(callModel).toHaveBeenCalledTimes(1);
   });
 
-  it("maps every chunk then reduces multiple chunk summaries into one folded summary", async () => {
+  // ── Compaction-equivalent prompt schema (map-only — no fold call) ────
+
+  it("map prompt asks for the nine compaction sections, verbatim headings, in order, with verbatim-user-message and no-filler instructions", async () => {
+    const p = writeTranscript([userTurn("u1", "please add a login page")]);
+    let seenPrompt = "";
+    const callModel = vi.fn<CallModelFn>(async (prompt) => {
+      seenPrompt = prompt;
+      return "a real summary of what happened";
+    });
+
+    await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: checkpointPath(),
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 65_536,
+      callModel,
+    });
+
+    // The nine sections, exact headings, in order.
+    const sectionTitles = [
+      "## Primary Request and Intent",
+      "## Key Technical Concepts",
+      "## Files and Code Sections",
+      "## Errors and Fixes",
+      "## Problem Solving",
+      "## All User Messages",
+      "## Pending Tasks",
+      "## Current Work",
+      "## Next Step",
+    ];
+    let lastIndex = -1;
+    for (const title of sectionTitles) {
+      const idx = seenPrompt.indexOf(title);
+      expect(idx, `expected "${title}" in the map prompt`).toBeGreaterThan(-1);
+      expect(idx, `expected "${title}" to appear after the previous section`).toBeGreaterThan(lastIndex);
+      lastIndex = idx;
+    }
+    expect(seenPrompt).toMatch(/copied VERBATIM and in order/);
+    expect(seenPrompt).toMatch(/OMIT any section with no content in this part/);
+    expect(seenPrompt).toMatch(/never write "none", "N\/A", or filler/);
+    expect(seenPrompt).toContain("Your output REPLACES the transcript for a future session that must RESUME this work");
+    expect(seenPrompt).not.toContain("You are folding"); // no fold phase exists any more
+  });
+
+  it("maps every chunk then joins the per-chunk summaries deterministically, in chunk order — no second (fold) model call", async () => {
     // Force multiple chunks with a tiny maxChunkTokens so each user turn
-    // lands in its own chunk, then force multiple reduce batches with a
-    // tiny fold budget too.
+    // lands in its own chunk.
     const lines = Array.from({ length: 5 }, (_, i) => userTurn(`u${i}`, `request number ${i} `.repeat(20)));
     const p = writeTranscript(lines);
 
     let mapCalls = 0;
-    let foldCalls = 0;
     const callModel = vi.fn<CallModelFn>(async (prompt) => {
-      if (prompt.includes("You are folding")) {
-        foldCalls++;
-        return `FOLDED-${foldCalls}`;
-      }
+      expect(prompt).not.toContain("You are folding"); // every call is a MAP call
       mapCalls++;
       return `CHUNK-${mapCalls}`;
     });
@@ -113,23 +153,21 @@ describe("driver: summarizeSession", () => {
       modelId: FREE_MODEL,
       modelMaxContext: 1_000_000,
       modelMaxCompletionTokens: 1_000,
-      maxChunkTokens: 30, // tiny — forces several chunks and several fold batches
+      maxChunkTokens: 30, // tiny — forces several chunks
       chunkOverlapTurns: 0,
       callModel,
     });
 
     expect(result.totalChunks).toBeGreaterThan(1);
     expect(mapCalls).toBe(result.totalChunks);
-    expect(foldCalls).toBeGreaterThan(0);
-    expect(result.summary).toMatch(/^FOLDED-/);
-  });
-
-  it("packIntoBatches never drops an item and respects the token budget when items fit individually", () => {
-    const items = ["a".repeat(40), "b".repeat(40), "c".repeat(40)];
-    const batches = packIntoBatches(items, 20); // ~5 tokens per item at 4B/token
-    const flat = batches.flat();
-    expect(flat).toEqual(items); // no loss, original order preserved
-    expect(batches.length).toBeGreaterThan(1); // budget forced a split
+    // "No facts lost in the merge" is provable by construction: the joined
+    // output IS the deterministic concatenation of every per-chunk summary,
+    // in order — assert it directly against the exported join function.
+    const expectedPieces = Array.from({ length: result.totalChunks }, (_, i) => `CHUNK-${i + 1}`);
+    expect(result.summary).toBe(joinChunkSummaries(expectedPieces));
+    for (const piece of expectedPieces) {
+      expect(result.summary).toContain(piece); // every chunk's summary survives, verbatim
+    }
   });
 
   // ── Checkpoint / resume ──────────────────────────────────────────────
@@ -196,7 +234,7 @@ describe("driver: summarizeSession", () => {
     const resumeCalls: string[] = [];
     const resumeModel = vi.fn<CallModelFn>(async (prompt) => {
       resumeCalls.push(prompt);
-      return prompt.includes("You are folding") ? "FOLDED" : `RESUMED-${resumeCalls.length}`;
+      return `RESUMED-${resumeCalls.length}`;
     });
 
     const result = await summarizeSession({
@@ -211,11 +249,9 @@ describe("driver: summarizeSession", () => {
     });
 
     expect(result.resumedFromCheckpoint).toBe(true);
-    // Only chunks 3 and 4 (indices 2, 3) were missing, plus whatever
-    // reduce folding was needed — never re-map chunks 1/2.
-    const remapped = resumeCalls.filter((p) => !p.includes("You are folding"));
-    expect(remapped.length).toBe(2);
-    expect(result.summary).toBe("FOLDED");
+    // Only chunks 3 and 4 (indices 2, 3) were missing — never re-map 1/2.
+    expect(resumeCalls.length).toBe(2);
+    expect(result.summary).toBe(joinChunkSummaries(["CHUNK-1", "CHUNK-2", "RESUMED-1", "RESUMED-2"]));
   });
 
   it("fails fast on resume when the checkpoint's transcript identity does not match (different mtime)", async () => {
@@ -335,7 +371,6 @@ describe("driver: summarizeSession", () => {
         // on the very first attempt — before any work is checkpointed.
         throw new Error("404 No endpoints found for this model — it has been delisted");
       }
-      if (prompt.includes("You are folding")) return "FOLDED";
       return `CHUNK(${modelId})`;
     });
 
@@ -375,7 +410,6 @@ describe("driver: summarizeSession", () => {
       calls++;
       usedModelIds.push(modelId);
       if (calls === 1) return "   "; // whitespace-only — a model that emits no usable text
-      if (prompt.includes("You are folding")) return "FOLDED";
       return `CHUNK(${modelId})`;
     });
 
@@ -455,7 +489,6 @@ describe("driver: summarizeSession", () => {
     let mapCalls = 0;
     return async (prompt, modelId) => {
       usedModelIds.push(modelId);
-      if (prompt.includes("You are folding")) return "FOLDED";
       if (prompt.length > thresholdChars) {
         throw new Error(
           "400 This model's maximum context length is 4096 tokens. However, your messages " +
@@ -471,13 +504,14 @@ describe("driver: summarizeSession", () => {
   it("re-splits a chunk that overflows the model's real context window and completes the run, without switching models", async () => {
     const lines = Array.from({ length: 6 }, (_, i) => userTurn(`u${i}`, `overflow-test request ${i} `.repeat(80)));
     const p = writeTranscript(lines);
+    const cp = checkpointPath();
 
     const usedModelIds: string[] = [];
-    const callModel = makeOverflowingCallModel(4_000, usedModelIds);
+    const callModel = makeOverflowingCallModel(6_000, usedModelIds);
 
     const result = await summarizeSession({
       transcriptPath: p,
-      checkpointPath: checkpointPath(),
+      checkpointPath: cp,
       modelId: FREE_MODEL,
       modelMaxContext: 1_000_000, // huge -> our own estimate packs the whole transcript as ONE chunk
       modelMaxCompletionTokens: 1_000,
@@ -491,7 +525,10 @@ describe("driver: summarizeSession", () => {
     expect(result.fallbackEvents).toHaveLength(0);
     expect(result.modelId).toBe(FREE_MODEL);
     expect(usedModelIds.every((id) => id === FREE_MODEL)).toBe(true);
-    expect(result.summary).toBe("FOLDED");
+    // No fold call exists — the final summary is the deterministic join of
+    // every checkpointed per-chunk summary, in order.
+    const saved = JSON.parse(readFileSync(cp, "utf-8")) as { mapSummaries: (string | null)[] };
+    expect(result.summary).toBe(joinChunkSummaries(saved.mapSummaries as string[]));
   });
 
   it("does NOT treat a rate-limit (429) error as a context overflow — no re-split, no retry, fails fast as before", async () => {
@@ -521,7 +558,7 @@ describe("driver: summarizeSession", () => {
 
     const usedModelIds: string[] = [];
     const seenPrompts: string[] = [];
-    const callModel = makeOverflowingCallModel(4_000, usedModelIds, (prompt) => seenPrompts.push(prompt));
+    const callModel = makeOverflowingCallModel(6_000, usedModelIds, (prompt) => seenPrompts.push(prompt));
 
     await summarizeSession({
       transcriptPath: p,
@@ -559,8 +596,7 @@ describe("driver: summarizeSession", () => {
     let mapCalls = 0;
     const firstRunModel: CallModelFn = async (prompt, modelId) => {
       usedModelIds.push(modelId);
-      if (prompt.includes("You are folding")) return "FOLDED";
-      if (prompt.length > 4_000) {
+      if (prompt.length > 6_000) {
         throw new Error(
           "400 This model's maximum context length is 4096 tokens. However, your messages " +
             "resulted in more tokens. Please reduce the length of the messages.",
@@ -594,7 +630,7 @@ describe("driver: summarizeSession", () => {
     const resumeCalls: string[] = [];
     const resumeModel = vi.fn<CallModelFn>(async (prompt) => {
       resumeCalls.push(prompt);
-      return prompt.includes("You are folding") ? "FOLDED" : `RESUMED-${resumeCalls.length}`;
+      return `RESUMED-${resumeCalls.length}`;
     });
 
     const resumed = await summarizeSession({
@@ -609,11 +645,13 @@ describe("driver: summarizeSession", () => {
     });
 
     expect(resumed.resumedFromCheckpoint).toBe(true);
-    expect(resumed.summary).toBe("FOLDED");
     // Only the NOT-yet-done map chunks were sent — the already-checkpointed
     // ones are never re-sent.
-    const remappedCount = resumeCalls.filter((p) => !p.includes("You are folding")).length;
-    expect(remappedCount).toBe(resumed.totalChunks - completedCount);
+    expect(resumeCalls.length).toBe(resumed.totalChunks - completedCount);
+    // No fold call exists — the final summary is the deterministic join of
+    // every checkpointed per-chunk summary (pre-resume + resumed), in order.
+    const finalCheckpoint = JSON.parse(readFileSync(cp, "utf-8")) as { mapSummaries: (string | null)[] };
+    expect(resumed.summary).toBe(joinChunkSummaries(finalCheckpoint.mapSummaries as string[]));
   });
 
   it("fails loudly instead of looping forever when a chunk still overflows at the minimum re-split floor", async () => {
@@ -723,6 +761,23 @@ describe("driver: summarizeSession", () => {
       const source = "Files Changed:\n  - auth.ts\n  - login.tsx\nCommands run: npm test";
       const response = "files changed:   - auth.ts - login.tsx commands run: npm test";
       expect(isEchoResponse(response, source)).toBe(true);
+    });
+
+    it("does NOT reject a compaction-style summary that quotes a user message verbatim in section 6 alongside other sections", () => {
+      // The compaction schema's section 6 requires VERBATIM user-message
+      // quotes, which legitimately reproduce long stretches of the source.
+      // The guard must still see this as a real summary (extra section
+      // headers and other sections' prose make the WHOLE response longer
+      // than, and never a substring of, the raw transcript body) — not an
+      // echo of it.
+      const source =
+        "[user]\nplease add a login page and wire it to the existing auth.ts handler, then run the tests";
+      const response =
+        "6. All user messages\n" +
+        '- "please add a login page and wire it to the existing auth.ts handler, then run the tests"\n\n' +
+        "3. Files and Code Sections\n- auth.ts: added the login handler\n\n" +
+        "8. Current Work\n- wiring the new handler into auth.ts";
+      expect(isEchoResponse(response, source)).toBe(false);
     });
   });
 
