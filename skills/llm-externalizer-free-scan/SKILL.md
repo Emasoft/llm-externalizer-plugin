@@ -25,9 +25,9 @@ Run a project scan using the **free** NVIDIA Nemotron 3 Super model (`nvidia/nem
 
 ## Instructions
 
-1. Run `llm-ext discover` to verify service online.
+1. Run `llm-ext discover` to verify service online AND confirm free mode is active for the current profile (it reports the active profile + whether free mode is on). `scan-folder` has no `--free` flag — free-only routing is a **profile setting** (`free_only: true` with a `free_models:` pool in `~/.llm-externalizer/settings.yaml`), not a per-command flag. If the active profile is not free-only, switch to a `free_only` profile first (see README "B2. OpenRouter free-only ensemble") or use the plugin's default free-by-default behavior.
 2. Parse prompt for **folder_path** (default cwd), **extensions**, **exclude_dirs**, **instructions** (default: report real bugs only — logic, crashes, security exploits, data corruption, functionality mismatch; not missing error handling/null checks/validation/logging; cite functions + lines; terse).
-3. Run `llm-ext scan-folder --free --use_gitignore` plus parsed fields (`--folder_path`, `--extensions`, `--exclude_dirs`, `--instructions`). Scans over large folders can run long — use an extended Bash timeout or `run_in_background: true`.
+3. Run `llm-ext scan-folder --use_gitignore` plus parsed fields (`--folder_path`, `--extensions`, `--exclude_dirs`, `--instructions`). Under an active free-only profile, this automatically uses only free models — no extra flag needed. Scans over large folders can run long — use an extended Bash timeout or `run_in_background: true`.
 4. Command returns one report path per file. List them for the user.
 5. Remind user this is low-quality — suggest ensemble for thorough audit. Do NOT read/summarise reports.
 
@@ -35,7 +35,7 @@ Limitations: `.md` files EXCLUDED by default (pass `--instructions` for semantic
 
 ## Output
 
-One `.md` report per source file. Reports default to `<main-project-dir>/reports/llm-externalizer/` (the main project dir Claude Code is in); pass `--output_dir` only for a custom location. Report filenames include the source filename for easy identification.
+One `.md` report per source file. Reports default to `<main-project-dir>/reports/llm-externalizer/` (the main project dir Claude Code is in); `scan-folder` has no output-location flag. Report filenames include the source filename for easy identification.
 
 ## Error Handling
 
@@ -50,14 +50,16 @@ One `.md` report per source file. Reports default to `<main-project-dir>/reports
 
 ```bash
 llm-ext scan-folder --folder_path /path/to/project/src \
-  --free --instructions "Find security issues." --use_gitignore
+  --instructions "Find security issues." --use_gitignore
 ```
 
 ```bash
 llm-ext scan-folder --folder_path /path/to/project \
-  --free --extensions '[".py"]' \
+  --extensions '[".py"]' \
   --instructions "Find TODO comments and classify by urgency."
 ```
+
+Both examples assume the active profile is `free_only` (verify with `llm-ext discover`) — `scan-folder` itself takes no free-mode flag.
 
 ## Resources
 
