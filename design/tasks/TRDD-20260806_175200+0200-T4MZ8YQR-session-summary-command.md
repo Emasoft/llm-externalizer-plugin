@@ -190,15 +190,29 @@ solving the wrong problem. Biggest available free model wins; everything else is
       The model logged `Empty response (finish_reason=empty)` and retried up to 15× on the SAME
       model instead of triggering the documented no-text fallback to the next ranked candidate.
 
-      TWO defects, and the second is the serious one:
-      1. an empty/no-text response retries in place rather than demoting the model, so the
-         fallback chain never engages for the failure mode it was built for;
-      2. **the run exits 0 and emits a non-summary as if it had succeeded.** Under the project's
-         fail-fast rule this must be a loud failure — a silent success is strictly worse than a
-         crash, because nothing downstream can tell the difference.
+      ROOT CAUSE (found by reading the source, not the logs): chunk sizing used the whole window
+      budget (`contextLength − maxCompletion − overhead` ≈ 934k), so the entire ~150k-token
+      transcript went to the model in ONE request. A context window governs what FITS, not what a
+      model can summarize WELL — free models collapse into echoing long before the limit.
+      The `retrying (1/15)` lines came from the OpenRouter CLIENT layer, not the driver:
+      `driver.ts:368` already threw `no-text` and `:373` propagated it for fallback without
+      retrying, so the driver never saw an empty string. My first diagnosis blamed the fallback
+      chain and was wrong.
 
-      This is exactly the class of defect five phases of green unit tests could not catch, which
-      is why the live-run criterion exists. First live run of the command, ever.
+      **RESOLVED 2026-08-11 — see the box below. Kept here because the defect shape is the
+      lesson: five phases of green unit tests could not catch it, which is why this criterion
+      exists.**
+
+- [x] **MET 2026-08-11 (second live run, `520b653`).** Real compaction summary produced:
+      3 chunks, 3,918 lines read, prune 0.103, 4,353 B / 70 lines of structured output —
+      *User Requests · Decisions Made · Files Changed (commit table) · Commands Run · Outcomes* —
+      with accurate specifics (the kebab/snake false positive, the board triage counts, the nine
+      commits). Report:
+      `reports/llm-externalizer/20260811_210710+0200-session_summary-13d13e.md`.
+      Fixes that got it there: chunk cap (default 50,000, `--max_chunk_tokens` to override),
+      echo-rejection routed through the model-fallback path, and non-zero exit when every
+      candidate is exhausted. Contrast with the failed run: 1 chunk → 3 chunks, 941 B echo →
+      4,353 B summary.
 - [ ] never loads the whole file into memory; verified against the 265 MB transcript — P1's
       structural test (no sync whole-file read) is unit-verified; the real 265 MB transcript has
       not been run through the wired-up CLI.
