@@ -141,10 +141,28 @@ one-line manifest change once A has proven stable.
 ## Remaining (why this card is still `dev`, not `complete`)
 
 Option B is DONE. What is left is the dead code option A never removed: `src/cli.ts` still
-builds to `dist/cli.js`, which nothing installs and nothing invokes. Under the project's
-no-legacy-code rule that bundle should go, but deleting it means removing an esbuild target and
-the tests that read the file — a separate, verifiable change, not a silent add-on to a bin
-re-point.
+builds to `dist/cli.js`, which nothing installs and nothing invokes.
+
+**BLAST RADIUS — measured 2026-08-11, so nobody re-derives it:**
+
+| step | detail |
+|---|---|
+| delete `src/cli.ts` | a true entry point — **nothing imports it** (`grep` for `from "./cli.js"` returns only itself) |
+| delete `src/cli-mass-scout-free.ts` + `src/cli-mass-scout-free.test.ts` | orphaned: `cli.ts` is its only consumer |
+| drop the esbuild target | `esbuild.config.mjs:68-69`, plus the committed `dist/cli.js` bundle |
+| update **4 test files** that read `cli.ts` as a source | `free-rotation-coverage.test.ts`, `cli-mass-scout-free.test.ts`, `cluster/wiring.test.ts`, `security_scan/wiring.test.ts` |
+| `resolveMassScoutFreeModelOverride` | STAYS — still used internally at `index.ts:2743`; only its `export` becomes unnecessary |
+
+**THE JUDGMENT CALL IS THE TEST ROW, NOT THE DELETIONS.** Those four tests assert coverage
+properties ACROSS BOTH entry points (e.g. that free-rotation reaches every send path). Removing
+one entry point means deciding, per assertion, whether it still means anything or has been
+silently weakened — a change that stays green while dropping a guarantee. So this is not a
+"delete the dead code" task and must not be handed to an agent as one.
+
+Two defensible outcomes, USER's call:
+(a) remove fully and rewrite the four tests to assert the single-entry-point invariant; or
+(b) leave `cli.ts` building as an unpublished artifact and close this card as-is, accepting one
+    dead bundle against the no-legacy-code rule.
 
 ## Approval log
 
