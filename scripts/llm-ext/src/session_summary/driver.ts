@@ -56,6 +56,24 @@ import {
  *  enough that the wrapper text this module actually writes never blows it. */
 export const PROMPT_OVERHEAD_TOKENS = 2_000;
 
+/**
+ * Hard cap on the per-chunk/per-fold token budget, INDEPENDENT of how big
+ * the selected model's context window is. Measured live (TRDD-T4MZ8YQR
+ * follow-up): a 1M-context free model handed a single ~150k-token chunk (the
+ * whole pruned transcript, packed into ONE request because the window budget
+ * alone allowed it) degenerated to echoing a raw line back instead of
+ * summarizing — quality collapses long before the context LIMIT is reached,
+ * especially on free models. The context window governs what FITS; it does
+ * not govern what a model can summarize WELL, and the two must not be
+ * conflated. 50k tokens is the default: generous enough that a single chunk
+ * still covers a substantial slice of transcript (keeping the reduce tree
+ * shallow), small enough that the model is asked to digest a bounded amount
+ * of material per call rather than the whole session at once. Overridable
+ * via `--max_chunk_tokens` for a caller who wants a different tradeoff; the
+ * effective budget is always `Math.min(windowBudget, thisCap)` — never
+ * silently override the model's own window when the cap is larger than it. */
+export const DEFAULT_MAX_CHUNK_TOKENS = 50_000;
+
 /** The injected model-call seam. Takes a fully-rendered prompt, the model id
  *  (already validated free-only by the caller), and a completion budget; a
  *  real implementation calls the OpenRouter chat completions endpoint (P5).
@@ -92,10 +110,13 @@ export interface SummarizeSessionOptions {
   /** Default "aggressive" — matches the CLI layer's documented default (P5 TRDD note). */
   pruneLevel?: PruneLevel;
   chunkOverlapTurns?: number;
-  /** Token budget per chunk/fold. Default: modelMaxContext minus completion
-   *  headroom minus PROMPT_OVERHEAD_TOKENS. Fixed regardless of a fallback
-   *  switch when given explicitly; derived per-model (and re-derived on
-   *  every fallback switch) when omitted. */
+  /** Token budget per chunk/fold. Default: min(DEFAULT_MAX_CHUNK_TOKENS,
+   *  modelMaxContext minus completion headroom minus PROMPT_OVERHEAD_TOKENS)
+   *  — see DEFAULT_MAX_CHUNK_TOKENS's header for why the window alone is not
+   *  used as the budget. Fixed regardless of a fallback switch when given
+   *  explicitly (an explicit value is a deliberate caller choice, never
+   *  auto-capped); derived per-model (and re-derived on every fallback
+   *  switch) when omitted. */
   maxChunkTokens?: number;
   /** Bounded retries for a non-availability (real bug/schema) failure before
    *  the run fails. Rate-limit-shaped failures are NEVER retried here — see
@@ -109,7 +130,7 @@ export interface SummarizeSessionOptions {
 export interface ModelFallbackEvent {
   fromModel: string;
   toModel: string;
-  reason: "gone" | "daily-quota" | "no-longer-free" | "no-text";
+  reason: "gone" | "daily-quota" | "no-longer-free" | "no-text" | "echo";
   detail: string;
   atUnit: string;
 }
@@ -275,8 +296,16 @@ function saveCheckpoint(path: string, checkpoint: Checkpoint): void {
  *  summarization; usability is instead enforced HERE, at runtime, by
  *  evidence — an empty or no-text response demotes the model exactly like
  *  a delisting would. Deliberately excludes "transient": a 429/502/503
- *  blip is NOT grounds to abandon a model — see the module header. */
-type ModelFallbackReason = "gone" | "daily-quota" | "no-longer-free" | "no-text";
+ *  blip is NOT grounds to abandon a model — see the module header.
+ *
+ *  "echo" is the sibling of "no-text": a model that returns NON-empty text
+ *  that is nevertheless not a summary — it copied its input back verbatim
+ *  (measured live: a 1M-context free model handed a large chunk returned a
+ *  single raw line lifted from the transcript instead of summarizing it,
+ *  and the run reported success because the response was non-empty). Same
+ *  treatment as "no-text": demote and fall back, never retried on the same
+ *  model — an identical prompt would echo identically. */
+type ModelFallbackReason = "gone" | "daily-quota" | "no-longer-free" | "no-text" | "echo";
 
 class ModelUnavailableError extends Error {
   constructor(
@@ -332,6 +361,39 @@ function classifyModelFallback(detail: string): ModelFallbackReason | null {
   return null;
 }
 
+/** Below this many normalized characters, a substring match is not worth
+ *  rejecting on — short generic replies ("Done.", "OK, summarized.") can
+ *  coincide with a short fragment of the input by chance, and rejecting
+ *  those would punish genuinely terse (but real) summaries. Real echoes
+ *  measured in the wild (a copied transcript line) run into the hundreds of
+ *  characters, so this floor is far below any real echo and only guards
+ *  against short-string false positives. */
+const ECHO_MIN_RESPONSE_LENGTH = 40;
+
+function normalizeForEchoCheck(text: string): string {
+  return text.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/**
+ * True when `response` is not a summary of `sourceText` but a copy of it —
+ * the WHOLE (normalized) response appears verbatim as a contiguous
+ * substring of the source. Deliberately a "whole-response-is-input" test,
+ * not "contains any input text": a legitimate summary very often quotes a
+ * short fragment of the source (a file name, an error message, a command)
+ * without being an echo, and rejecting on any shared substring would punish
+ * that. Only when the ENTIRE response reduces to something already present
+ * verbatim in the source — i.e. the model produced no new prose of its own
+ * — is this a rejection. Measured live: a 1M-context free model asked to
+ * summarize a large chunk returned a single raw line lifted straight from
+ * the transcript; that response IS its own source substring in full.
+ */
+export function isEchoResponse(response: string, sourceText: string): boolean {
+  const normResponse = normalizeForEchoCheck(response);
+  if (normResponse.length < ECHO_MIN_RESPONSE_LENGTH) return false;
+  const normSource = normalizeForEchoCheck(sourceText);
+  return normSource.includes(normResponse);
+}
+
 /**
  * Call `callModel` with a bounded number of retries — but ONLY for a
  * genuine (non-availability) failure. A rate-limit blip (per the project's
@@ -344,6 +406,10 @@ function classifyModelFallback(detail: string): ModelFallbackReason | null {
  * reduce loop) is the one that decides whether a fallback candidate exists.
  * The checkpoint already holds every unit of work completed before this
  * one, so every thrown message names the checkpoint path to resume from.
+ *
+ * `echoCheckSource` is the raw text the model was asked to summarize (the
+ * chunk's turns, or the fold batch's summaries) — used ONLY to detect an
+ * echoed response (see `isEchoResponse`); it is never sent anywhere.
  */
 async function callWithRetry(
   prompt: string,
@@ -353,6 +419,7 @@ async function callWithRetry(
   maxRetries: number,
   label: string,
   checkpointPath: string,
+  echoCheckSource: string,
 ): Promise<string> {
   let lastErr: unknown = null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -368,9 +435,21 @@ async function callWithRetry(
       if (result.trim().length === 0) {
         throw new ModelUnavailableError("no-text", modelId, "model returned an empty/no-text response");
       }
+      // A non-empty response that is nevertheless just a copy of its input
+      // is NOT a summary either — see isEchoResponse's header. Reported as
+      // model-unavailable ("echo") so the caller demotes this model and
+      // advances the fallback chain exactly like a delisting, instead of
+      // returning the echo to the caller as if it were real work.
+      if (isEchoResponse(result, echoCheckSource)) {
+        throw new ModelUnavailableError(
+          "echo",
+          modelId,
+          `model echoed its input verbatim instead of summarizing it (response: ${result.slice(0, 120)}${result.length > 120 ? "…" : ""})`,
+        );
+      }
       return result;
     } catch (err) {
-      if (err instanceof ModelUnavailableError) throw err; // no-text: never retried, propagate for fallback immediately
+      if (err instanceof ModelUnavailableError) throw err; // no-text/echo: never retried, propagate for fallback immediately
       lastErr = err;
       const msg = err instanceof Error ? err.message : String(err);
 
@@ -419,6 +498,14 @@ function renderTurn(turn: Turn): string {
   return parts.join("\n");
 }
 
+/** The raw material a chunk's map call is asked to summarize, with no
+ *  instruction wrapper — this (not the full prompt) is what `isEchoResponse`
+ *  compares the model's response against, so a coincidental match against
+ *  the INSTRUCTION text itself can never trigger a false echo rejection. */
+function chunkBodyText(chunk: TranscriptChunk): string {
+  return chunk.turns.map(renderTurn).join("\n\n");
+}
+
 function renderChunkPrompt(chunk: TranscriptChunk): string {
   const continuation = [
     chunk.continuesFromPrev ? "continues from the previous part" : null,
@@ -431,8 +518,13 @@ function renderChunkPrompt(chunk: TranscriptChunk): string {
     `${continuation ? ` (${continuation})` : ""}. Produce a dense, factual summary of what ` +
     `happened: user requests, decisions made, files changed, commands run, and outcomes. Do not ` +
     `editorialize or pad — this summary will itself be folded together with summaries of the other parts.`;
-  const body = chunk.turns.map(renderTurn).join("\n\n");
-  return `${header}\n\n${body}`;
+  return `${header}\n\n${chunkBodyText(chunk)}`;
+}
+
+/** The raw material a fold call is asked to condense — see `chunkBodyText`'s
+ *  header for why the echo check compares against the BODY, not the prompt. */
+function foldBodyText(summaries: readonly string[]): string {
+  return summaries.map((s, i) => `--- part ${i + 1} ---\n${s}`).join("\n\n");
 }
 
 function renderFoldPrompt(summaries: readonly string[]): string {
@@ -440,8 +532,7 @@ function renderFoldPrompt(summaries: readonly string[]): string {
     `You are folding ${summaries.length} partial summaries of one Claude Code session into a ` +
     `single, coherent summary. Preserve every distinct fact (requests, decisions, files changed, ` +
     `commands run, outcomes); do not drop information for brevity — merge duplicates instead.`;
-  const body = summaries.map((s, i) => `--- part ${i + 1} ---\n${s}`).join("\n\n");
-  return `${header}\n\n${body}`;
+  return `${header}\n\n${foldBodyText(summaries)}`;
 }
 
 // ── Batch packing for the reduce phase (pure — mirrors chunker.ts's packer,
@@ -540,8 +631,16 @@ export async function summarizeSession(
 
   let activeModelIdx = 0;
   const activeModel = (): EligibleModel => models[activeModelIdx];
+  // Effective budget = min(what the model's window allows, the quality cap)
+  // — see DEFAULT_MAX_CHUNK_TOKENS's header. An explicit --max_chunk_tokens
+  // from the caller is honored verbatim (the caller made a deliberate
+  // choice); only the DEFAULT is capped, never a caller-supplied value.
   const budgetForModel = (m: EligibleModel): number =>
-    options.maxChunkTokens ?? Math.max(1_000, m.contextLength - m.maxCompletionTokens - PROMPT_OVERHEAD_TOKENS);
+    options.maxChunkTokens ??
+    Math.min(
+      DEFAULT_MAX_CHUNK_TOKENS,
+      Math.max(1_000, m.contextLength - m.maxCompletionTokens - PROMPT_OVERHEAD_TOKENS),
+    );
   let maxChunkTokens = budgetForModel(activeModel());
 
   const fallbackEvents: ModelFallbackEvent[] = [];
@@ -663,6 +762,7 @@ export async function summarizeSession(
           maxRetries,
           `chunk ${i}`,
           options.checkpointPath,
+          chunkBodyText(chunks[i]),
         );
         checkpoint.mapSummaries[i] = summary;
         checkpoint.updatedAt = nowIso();
@@ -789,6 +889,7 @@ export async function summarizeSession(
               maxRetries,
               `reduce level ${rp.level} batch ${rp.foldedSoFar.length}`,
               options.checkpointPath,
+              foldBodyText(batch),
             );
       rp.foldedSoFar.push(folded);
       rp.consumedInputCount += batch.length;

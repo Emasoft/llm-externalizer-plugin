@@ -742,6 +742,16 @@ export function buildTools(limitsText: string) {
               "the report DIRECTORY. In this mode stdout carries ONLY the summary text (no " +
               "header, no file is written); banner/progress still go to stderr.",
           },
+          max_chunk_tokens: {
+            type: "number",
+            description:
+              "Override the per-chunk/per-fold token budget. Default: the smaller of 50,000 " +
+              "and the selected model's own context window (minus completion + prompt " +
+              "overhead) — summarization quality collapses long before a model's context " +
+              "LIMIT is reached, so the window alone is not used as the chunk size. Raise " +
+              "this only if you have measured that a bigger chunk still summarizes well on " +
+              "your selected model.",
+          },
         },
       },
     },

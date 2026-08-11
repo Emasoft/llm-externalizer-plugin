@@ -739,18 +739,23 @@ The CLI exposes every sub-command as its own hyphenated command, `bin/llm-ext ma
 
 Summarizes a whole Claude Code session from its `.jsonl` transcript without ever loading it
 into memory: stream + prune (`--prune aggressive|moderate|none`, default `aggressive`) → pack
-into token-budgeted chunks → map (summarize each chunk) → reduce (fold the chunk summaries into
-one, recursing when a fold itself overflows the window). Every chunk/fold is checkpointed, so an
-interrupted run (e.g. a free daily-quota hit) resumes automatically on re-run.
+into token-budgeted chunks (capped at 50,000 tokens by default, regardless of how large the
+selected model's own context window is — quality collapses long before the context LIMIT is
+reached, especially on free models; override with `--max-chunk-tokens`) → map (summarize each
+chunk) → reduce (fold the chunk summaries into one, recursing when a fold itself overflows the
+window). Every chunk/fold is checkpointed, so an interrupted run (e.g. a free daily-quota hit)
+resumes automatically on re-run.
 
 Cost safety is structural, not a flag: it only ever selects a free OpenRouter model that has
 `text` on both sides of its `architecture.modality` (extra modalities on either side — image,
 audio, video — are irrelevant and never disqualify). There is no hard context floor by default —
 it always picks the BIGGEST such model available today, whatever that is; pass `--min-context` to
 require a hard floor instead (fails if nothing clears it). If the picked model is delisted, stops
-being free, exhausts its daily cap, or returns an empty/no-text response mid-run, the run falls
-back automatically to the next-biggest eligible model and re-chunks the remaining (unsent) work to
-its context — already-checkpointed chunk/fold summaries are untouched.
+being free, exhausts its daily cap, returns an empty/no-text response, or echoes its input back
+verbatim instead of summarizing it, mid-run, the run falls back automatically to the next-biggest
+eligible model and re-chunks the remaining (unsent) work to its context — already-checkpointed
+chunk/fold summaries are untouched. If every eligible model is exhausted this way, the command
+exits non-zero rather than reporting a false success.
 
 | Flag | Purpose |
 |---|---|
@@ -759,6 +764,7 @@ its context — already-checkpointed chunk/fold summaries are untouched.
 | (neither given) | Defaults to the most recently modified transcript for the current project. |
 | `--prune aggressive\|moderate\|none` | Default `aggressive` — drops tool-result payloads, pasted file contents, thinking blocks. |
 | `--min-context <n>` | Optional hard floor on eligible model `context_length`. Default: none (biggest available is used). |
+| `--max-chunk-tokens <n>` | Override the per-chunk/per-fold token budget. Default: `min(50000, model window budget)`. |
 | `--resume` | Require an existing, matching checkpoint — fails fast instead of silently starting fresh. |
 | `--checkpoint <path>` | Override the checkpoint file. Default: derived deterministically from the transcript path under `~/.llm-externalizer/session-summary-checkpoints/`. |
 | `--output <path>` | Custom output directory for the summary report. Default: `<main-project-dir>/reports/llm-externalizer/`. |

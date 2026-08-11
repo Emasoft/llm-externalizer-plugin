@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync, rmSync, readFileSync, utimesSync } from "no
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { summarizeSession, packIntoBatches, type CallModelFn } from "./driver.js";
+import { summarizeSession, packIntoBatches, isEchoResponse, DEFAULT_MAX_CHUNK_TOKENS, type CallModelFn } from "./driver.js";
 import type { EligibleModel } from "./model-select.js";
 import { resetCooldownCacheForTests } from "../free-rotation.js";
 
@@ -634,5 +634,154 @@ describe("driver: summarizeSession", () => {
         callModel,
       }),
     ).rejects.toThrow(/re-split floor/);
+  });
+
+  // ── Chunk-size quality cap (Fix 1) ────────────────────────────────────
+
+  it("caps the default chunk budget at DEFAULT_MAX_CHUNK_TOKENS even when the model's window is far larger", async () => {
+    const p = writeTranscript([userTurn("u1", "hello")]);
+    const callModel = vi.fn<CallModelFn>(async () => "SUMMARY");
+
+    await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: checkpointPath(),
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000, // window budget alone would be ~934,000 tokens
+      modelMaxCompletionTokens: 64_000,
+      callModel,
+    });
+
+    const saved = JSON.parse(readFileSync(checkpointPath(), "utf-8")) as {
+      identity: { chunkerMaxTokens: number };
+    };
+    expect(saved.identity.chunkerMaxTokens).toBe(DEFAULT_MAX_CHUNK_TOKENS);
+  });
+
+  it("honors an explicit --max_chunk_tokens even when it exceeds the default cap (a deliberate caller choice)", async () => {
+    const p = writeTranscript([userTurn("u1", "hello")]);
+    const callModel = vi.fn<CallModelFn>(async () => "SUMMARY");
+
+    await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: checkpointPath(),
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 64_000,
+      maxChunkTokens: DEFAULT_MAX_CHUNK_TOKENS + 10_000, // explicit, larger than the default cap
+      callModel,
+    });
+
+    const saved = JSON.parse(readFileSync(checkpointPath(), "utf-8")) as {
+      identity: { chunkerMaxTokens: number };
+    };
+    expect(saved.identity.chunkerMaxTokens).toBe(DEFAULT_MAX_CHUNK_TOKENS + 10_000);
+  });
+
+  it("still uses the (smaller) window-derived budget when the model's own window is below the default cap", async () => {
+    const p = writeTranscript([userTurn("u1", "hello")]);
+    const callModel = vi.fn<CallModelFn>(async () => "SUMMARY");
+
+    await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: checkpointPath(),
+      modelId: FREE_MODEL,
+      modelMaxContext: 10_000, // window budget << DEFAULT_MAX_CHUNK_TOKENS
+      modelMaxCompletionTokens: 1_000,
+      callModel,
+    });
+
+    const saved = JSON.parse(readFileSync(checkpointPath(), "utf-8")) as {
+      identity: { chunkerMaxTokens: number };
+    };
+    expect(saved.identity.chunkerMaxTokens).toBeLessThan(DEFAULT_MAX_CHUNK_TOKENS);
+    expect(saved.identity.chunkerMaxTokens).toBe(10_000 - 1_000 - 2_000); // PROMPT_OVERHEAD_TOKENS
+  });
+
+  // ── Echo rejection (Fix 2) ─────────────────────────────────────────────
+
+  describe("isEchoResponse", () => {
+    it("rejects a response that is, in full, a verbatim substring of its source", () => {
+      const source =
+        "the user asked to add a login page and the assistant implemented auth.ts with a new handler";
+      const response = "the assistant implemented auth.ts with a new handler"; // lifted verbatim, > 40 chars
+      expect(isEchoResponse(response, source)).toBe(true);
+    });
+
+    it("does NOT reject a genuine short summary that merely quotes a fragment of the source", () => {
+      const source =
+        "the user asked to add a login page and the assistant implemented auth.ts with a new handler";
+      const response =
+        "User requested a login page; assistant added a new handler in auth.ts to implement it.";
+      expect(isEchoResponse(response, source)).toBe(false);
+    });
+
+    it("does NOT reject a short response below the minimum length floor, even if it matches", () => {
+      expect(isEchoResponse("done.", "the work is done.")).toBe(false);
+    });
+
+    it("is whitespace/case insensitive (normalizes before comparing)", () => {
+      const source = "Files Changed:\n  - auth.ts\n  - login.tsx\nCommands run: npm test";
+      const response = "files changed:   - auth.ts - login.tsx commands run: npm test";
+      expect(isEchoResponse(response, source)).toBe(true);
+    });
+  });
+
+  it("demotes a model whose response is an echo of its input and falls back to the next candidate", async () => {
+    const bigTurnText = `distinct echo-test request marker-XYZ ${"filler ".repeat(40)}`;
+    const p = writeTranscript([userTurn("u1", bigTurnText)]);
+    const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 3_000, maxCompletionTokens: 500 };
+
+    let calls = 0;
+    const usedModelIds: string[] = [];
+    const callModel = vi.fn<CallModelFn>(async (prompt, modelId) => {
+      calls++;
+      usedModelIds.push(modelId);
+      if (calls === 1) {
+        // Echo the raw transcript content back verbatim instead of summarizing it.
+        return bigTurnText;
+      }
+      return `REAL-SUMMARY(${modelId})`;
+    });
+
+    const result = await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: checkpointPath(),
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 1_000,
+      fallbackModels: [fallback],
+      chunkOverlapTurns: 0,
+      callModel,
+    });
+
+    expect(result.fallbackEvents).toHaveLength(1);
+    expect(result.fallbackEvents[0].reason).toBe("echo");
+    expect(result.modelId).toBe(FALLBACK_MODEL);
+    expect(result.summary).toBe(`REAL-SUMMARY(${FALLBACK_MODEL})`);
+    expect(usedModelIds[0]).toBe(FREE_MODEL);
+  });
+
+  // ── Fail loudly when every candidate echoes (Fix 3) ─────────────────────
+
+  it("exits with a real error (never a false success) when every candidate model only echoes its input", async () => {
+    const bigTurnText = `distinct all-echo request marker-ABC ${"filler ".repeat(40)}`;
+    const p = writeTranscript([userTurn("u1", bigTurnText)]);
+    const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 3_000, maxCompletionTokens: 500 };
+
+    // Every candidate — primary and fallback — just echoes its input back.
+    const callModel = vi.fn<CallModelFn>(async () => bigTurnText);
+
+    await expect(
+      summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        fallbackModels: [fallback],
+        chunkOverlapTurns: 0,
+        callModel,
+      }),
+    ).rejects.toThrow(/every candidate free model is unavailable/);
   });
 });

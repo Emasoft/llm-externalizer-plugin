@@ -3789,6 +3789,7 @@ async function dispatchCallToolInner(
           checkpoint: ssCheckpointRaw,
           output: ssOutputRaw,
           stdout: ssStdoutRaw,
+          max_chunk_tokens: ssMaxChunkTokens,
         } = args as {
           transcript?: string;
           session_id?: string;
@@ -3798,6 +3799,7 @@ async function dispatchCallToolInner(
           checkpoint?: string;
           output?: string;
           stdout?: boolean;
+          max_chunk_tokens?: number;
         };
 
         const VALID_PRUNE_LEVELS = new Set(["aggressive", "moderate", "none"]);
@@ -3911,6 +3913,7 @@ async function dispatchCallToolInner(
             fallbackModels,
             callModel,
             pruneLevel: prune as "aggressive" | "moderate" | "none",
+            maxChunkTokens: typeof ssMaxChunkTokens === "number" ? ssMaxChunkTokens : undefined,
           });
         } catch (err) {
           return {
