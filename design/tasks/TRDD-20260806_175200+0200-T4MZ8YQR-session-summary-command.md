@@ -180,12 +180,25 @@ solving the wrong problem. Biggest available free model wins; everything else is
 
 ## Acceptance
 
-- [ ] `llm-ext session-summary --transcript <path>` (and `--session-id` / latest-session default)
-      produces a readable compaction-style summary of a real transcript — **NOT yet run against a
-      real transcript**: P5's verification scope was explicitly `--help` only (no live
-      summarization, to avoid spending free-tier quota). Reachability proven
-      (`./bin/llm-ext session-summary --help` exercised against the live binary); an actual live
-      run is the natural next step, e.g. via `DOGFOOD_LIVE=1`.
+- [ ] `llm-ext session-summary --transcript <path>` produces a readable compaction-style summary
+      of a real transcript — **RUN 2026-08-11, STILL NOT MET.** The plumbing all works: it
+      selected `nvidia/nemotron-3-ultra-550b-a55b:free` (1,000,000 ctx), read 3,658 lines, pruned
+      to 0.103, packed 1 chunk, checkpointed, wrote a report, exited 0. **But the summary body is
+      a single raw pruned turn from the transcript, not a summary** — 941 B of output, the last
+      `tool_use` line echoed back
+      (`reports/llm-externalizer/20260811_203117+0200-session_summary-c77703.md`).
+      The model logged `Empty response (finish_reason=empty)` and retried up to 15× on the SAME
+      model instead of triggering the documented no-text fallback to the next ranked candidate.
+
+      TWO defects, and the second is the serious one:
+      1. an empty/no-text response retries in place rather than demoting the model, so the
+         fallback chain never engages for the failure mode it was built for;
+      2. **the run exits 0 and emits a non-summary as if it had succeeded.** Under the project's
+         fail-fast rule this must be a loud failure — a silent success is strictly worse than a
+         crash, because nothing downstream can tell the difference.
+
+      This is exactly the class of defect five phases of green unit tests could not catch, which
+      is why the live-run criterion exists. First live run of the command, ever.
 - [ ] never loads the whole file into memory; verified against the 265 MB transcript — P1's
       structural test (no sync whole-file read) is unit-verified; the real 265 MB transcript has
       not been run through the wired-up CLI.
