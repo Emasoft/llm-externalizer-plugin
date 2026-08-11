@@ -657,7 +657,7 @@ function buildReportMarkdown(args: {
   lines.push("---");
   lines.push("");
   lines.push(
-    "Re-run: `llm-externalizer benchmark --code-task` (auto-discover) or `--code-task <id> [<id>...]` " +
+    "Re-run: `llm-ext-benchmark --code-task` (auto-discover) or `--code-task <id> [<id>...]` " +
       "(assess specific models). ADVISORY by default; add `--apply-profile <P>` to write the winner " +
       "into that profile's `tool_models.code_task` (CLI-only writer — the MCP surface never writes).",
   );

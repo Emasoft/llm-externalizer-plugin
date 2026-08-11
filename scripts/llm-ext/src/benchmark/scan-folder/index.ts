@@ -703,7 +703,7 @@ function buildReportMarkdown(args: {
   lines.push("---");
   lines.push("");
   lines.push(
-    "Re-run: `llm-externalizer benchmark --scan-folder` (auto-discover) or `--scan-folder <id> [<id>...]` " +
+    "Re-run: `llm-ext-benchmark --scan-folder` (auto-discover) or `--scan-folder <id> [<id>...]` " +
       "(assess specific models). ADVISORY by default; add `--apply-profile <P>` to write the winner into " +
       "that profile's `tool_models.scan_folder` (CLI-only writer — the MCP surface never writes).",
   );

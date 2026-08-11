@@ -723,7 +723,7 @@ function buildReportMarkdown(args: {
   lines.push("---");
   lines.push("");
   lines.push(
-    "Re-run: `llm-externalizer benchmark --search-existing` (auto-discover) or " +
+    "Re-run: `llm-ext-benchmark --search-existing` (auto-discover) or " +
       "`--search-existing <id> [<id>...]` (assess specific models). ADVISORY only — " +
       "the recommended model is surfaced for the operator to adopt via the " +
       "`tool_models.search_existing_implementations` field on a settings.yaml " +

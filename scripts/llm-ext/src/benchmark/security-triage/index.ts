@@ -776,7 +776,7 @@ function buildReportMarkdown(args: {
   lines.push("---");
   lines.push("");
   lines.push(
-    "Re-run: `llm-externalizer benchmark --security-triage` (auto-discover) or " +
+    "Re-run: `llm-ext-benchmark --security-triage` (auto-discover) or " +
       "`--security-triage --model <id>` (assess one). The recommended model is " +
       "surfaced for the operator to adopt via the security_scan `model` parameter.",
   );

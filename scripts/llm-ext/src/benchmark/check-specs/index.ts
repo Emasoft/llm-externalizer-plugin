@@ -728,7 +728,7 @@ function buildReportMarkdown(args: {
   lines.push("---");
   lines.push("");
   lines.push(
-    "Re-run: `llm-externalizer benchmark --check-specs` (auto-discover) or `--check-specs <id> [<id>...]` " +
+    "Re-run: `llm-ext-benchmark --check-specs` (auto-discover) or `--check-specs <id> [<id>...]` " +
       "(assess specific models). ADVISORY by default; add `--apply-profile <P>` to write the winner into " +
       "that profile's `tool_models.check_against_specs` (CLI-only writer — the MCP surface never writes).",
   );
