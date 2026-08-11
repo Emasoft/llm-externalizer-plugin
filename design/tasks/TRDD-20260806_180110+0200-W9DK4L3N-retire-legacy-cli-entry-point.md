@@ -1,10 +1,10 @@
 ---
 trdd-id: W9DK4L3N
 title: Retire the legacy dist-cli entry point so llm-ext is the only runtime surface
-column: human_review
+column: dev
 approval-tier: 3
 created: 2026-08-06T18:01:10+0200
-updated: 2026-08-07T18:50:00+0200
+updated: 2026-08-11T20:22:00+0200
 scope-approved: option-A-only
 current-owner: claude-llm-externalizer
 assignee: null
@@ -106,13 +106,33 @@ one-line manifest change once A has proven stable.
 
 ## Acceptance (if approved)
 
-- [ ] `profile` available in the `llm-ext` catalog (absorbs TRDD-K3PW7Q2M)
-- [ ] one shared dispatch path; `dist/cli.js` holds no independent command logic
-- [ ] auto-free-on-low-balance provably active on BOTH entry points (test, not inspection) —
-      absorbs TRDD-8d8d33c8
-- [ ] no capability reachable from only one binary
-- [ ] unit + typecheck + lint clean; dogfood exercises both entry points
-- [ ] (option B only) `package.json` bin re-pointed, CHANGELOG records the change as breaking
+- [x] `profile` available in the `llm-ext` catalog (absorbs TRDD-K3PW7Q2M) — verified
+      `definitions.ts:655` + `./bin/llm-ext profile --help` exit 0. K3PW7Q2M archived.
+- [ ] one shared dispatch path; `dist/cli.js` holds no independent command logic — **NOT MET.**
+      `src/cli.ts` is still an esbuild entry point (`esbuild.config.mjs:68-69`) with its own
+      command table, and tests still read it. It is retired as the PUBLISHED entry point (nothing
+      installs it any more) but is not gone as code. See "Remaining" below.
+- [x] auto-free-on-low-balance active on BOTH entry points — closed at the cause by option A
+      (`d0c6c69`): one shared resolver via `src/cli-mass-scout-free.ts`, so there is no second
+      copy that can drift. Moot for the published surface as of option B (both bin names now run
+      the same bundle). TRDD-8d8d33c8 archived as superseded.
+- [x] no capability reachable from only one binary — `bin` maps BOTH `llm-ext` and
+      `llm-externalizer` to `dist/llm-ext.js`, so the published names are the same program.
+      All seven legacy verbs verified exit 0; two needed new aliases (below).
+- [x] unit + typecheck + lint clean — vitest 1832 pass / 0 fail / 4 skip, `tsc --noEmit` clean,
+      `eslint` clean, all re-run independently on a quiet machine.
+- [x] (option B only) `package.json` bin re-pointed; the breaking change is recorded in the
+      commit as `feat(cli)!` + a `BREAKING CHANGE:` footer. NOT hand-written into CHANGELOG.md
+      on purpose — `publish.py` regenerates that file with git-cliff from commits, so a manual
+      entry would be overwritten.
+
+## Remaining (why this card is still `dev`, not `complete`)
+
+Option B is DONE. What is left is the dead code option A never removed: `src/cli.ts` still
+builds to `dist/cli.js`, which nothing installs and nothing invokes. Under the project's
+no-legacy-code rule that bundle should go, but deleting it means removing an esbuild target and
+the tests that read the file — a separate, verifiable change, not a silent add-on to a bin
+re-point.
 
 ## Approval log
 
@@ -128,3 +148,15 @@ one-line manifest change once A has proven stable.
 - Scope of this approval, concretely: unify the dispatch path so `dist/cli.js` holds no
   independent command logic, so BOTH entry points inherit auto-free-on-low-balance. Closes
   TRDD-8d8d33c8. `package.json` `bin` is untouched.
+
+- 2026-08-11T20:22:00+0200 — **OPTION B APPROVED AND SHIPPED** (tier 3, owner: "i approve all,
+  just verify each before doing it"). Verification changed the work rather than merely
+  confirming it: the card justified B with "anyone invoking `llm-externalizer <cmd>` keeps
+  working", and measured against the live catalog that was FALSE — `model-info` and
+  `search-existing` exited 1, their tools having been renamed to `or_model_info` and
+  `search_existing_implementations`. Shipping B on that premise would have silently broken two
+  documented invocations for every npm install. So `LEGACY_COMMAND_ALIASES` (`src/cli/main.ts`)
+  landed FIRST, then the re-point, which makes the claim true; a regression test spawns the real
+  launcher for all seven verbs so a future rename fails loudly instead of reaching users.
+  Commits `15eb6e4` (feature, `BREAKING CHANGE:` footer), `85b1c27` (dist), `5bb05f5` (lockfile).
+  Card stays `dev`: the legacy bundle is retired as an entry point but still exists as code.
