@@ -29,6 +29,7 @@ import {
 } from "../index.js";
 import { estimateToolRun, renderEstimate } from "../estimate.js";
 import { buildTools } from "../tools/definitions.js";
+import { GROUPS, isGroupName, resolveInvocation, suggestCommand } from "./launcher.js";
 
 /**
  * The published version, and the anchor `scripts/publish.py` rewrites on every
@@ -275,26 +276,51 @@ function firstLine(text: string): string {
 }
 
 function printGlobalHelp(tools: ToolDef[]): void {
-  const width = Math.max(...tools.map((t) => toKebab(t.name).length));
   process.stdout.write(
     "llm-ext — offload bounded LLM work to cheaper models.\n\n" +
       "Usage:\n" +
-      "  llm-ext <command> [--flag value ...]\n" +
-      "  llm-ext <command> --help      show a command's parameters\n" +
+      "  llm-ext <group> <action> [input] [--flag value ...]\n" +
+      "  llm-ext <group> --help        list that group's actions\n" +
+      "  llm-ext <group> <action> --help  show that action's parameters\n" +
       "  llm-ext --help                this list\n" +
+      "  llm-ext --help --all          also list every flat command (advanced)\n" +
       "  llm-ext --version             print the version\n\n" +
       "Global flags:\n" +
       "  --quiet                       suppress the banner and progress lines\n\n" +
-      "Commands:\n",
+      "Groups:\n",
   );
-  for (const t of [...tools].sort((a, b) => a.name.localeCompare(b.name))) {
+  const groupWidth = Math.max(...Object.keys(GROUPS).map((g) => g.length));
+  for (const [group, actions] of Object.entries(GROUPS)) {
     process.stdout.write(
-      `  ${toKebab(t.name).padEnd(width)}  ${firstLine(t.description)}\n`,
+      `  ${group.padEnd(groupWidth)}  ${Object.keys(actions).join(", ")}\n`,
     );
   }
   process.stdout.write(
     "\nReports are written to <project>/reports/llm-externalizer/ and the path " +
       "is printed on stdout.\n",
+  );
+  if (process.argv.includes("--all")) {
+    const width = Math.max(...tools.map((t) => toKebab(t.name).length));
+    process.stdout.write("\nAll flat commands (advanced — the groups above dispatch to these):\n");
+    for (const t of [...tools].sort((a, b) => a.name.localeCompare(b.name))) {
+      process.stdout.write(
+        `  ${toKebab(t.name).padEnd(width)}  ${firstLine(t.description)}\n`,
+      );
+    }
+  }
+}
+
+function printGroupHelp(group: string): void {
+  const actions = GROUPS[group];
+  process.stdout.write(`llm-ext ${group} <action>\n\nActions:\n`);
+  const width = Math.max(...Object.keys(actions).map((a) => a.length));
+  for (const [action, spec] of Object.entries(actions)) {
+    process.stdout.write(
+      `  ${action.padEnd(width)}  -> ${toKebab(spec.command)}\n`,
+    );
+  }
+  process.stdout.write(
+    `\nRun 'llm-ext ${group} <action> --help' for that action's parameters.\n`,
   );
 }
 
@@ -335,15 +361,62 @@ async function main(): Promise<void> {
     return;
   }
 
-  const commandName = argv[0];
-  const tool = resolveCommand(commandName, tools);
-  if (!tool) {
-    die(
-      `unknown command '${commandName}'. Run 'llm-ext --help' for the list.`,
-    );
+  // The grouped launcher (TRDD-DT11TE2Z) is a pure argv rewrite that engages
+  // ONLY when argv[0] names a group — an existing flat command name (e.g.
+  // `session_summary`) is never a group name, so it falls through to the
+  // unchanged flat path below untouched.
+  let commandName: string;
+  let rest: string[];
+  if (isGroupName(argv[0])) {
+    const resolved = resolveInvocation(argv, tools);
+    switch (resolved.kind) {
+      case "group-help":
+        printGroupHelp(resolved.group);
+        return;
+      case "action-help": {
+        const actionTool = resolveCommand(resolved.command, tools);
+        if (actionTool) printToolHelp(actionTool);
+        return;
+      }
+      case "error": {
+        process.stderr.write(`llm-ext: ${resolved.message}\n`);
+        if (resolved.suggestions.length > 0) {
+          process.stderr.write(
+            `  did you mean: ${resolved.suggestions.join(", ")}?\n`,
+          );
+        }
+        process.exit(1);
+        return;
+      }
+      case "dispatch":
+        commandName = resolved.command;
+        rest = resolved.argv;
+        break;
+    }
+  } else {
+    commandName = argv[0];
+    rest = argv.slice(1);
   }
 
-  const rest = argv.slice(1);
+  const tool = resolveCommand(commandName, tools);
+  if (!tool) {
+    // A mistyped GROUP name (e.g. 'scna') never reaches the launcher's own
+    // did-you-mean (isGroupName() is exact-match by design), so it falls
+    // through to here. Groups are the surface we lead with, so they are
+    // suggested FIRST and exclusively when any are close enough; the flat
+    // catalog is only offered as a distinctly-labelled fallback when no
+    // group is close, so a group typo never gets muddied with a flat name.
+    const hint = suggestCommand(commandName, tools.map((t) => toKebab(t.name)));
+    process.stderr.write(
+      `llm-ext: unknown command '${commandName}'. Run 'llm-ext --help' for the list.\n`,
+    );
+    if (hint) {
+      const label = hint.kind === "group" ? "did you mean group" : "did you mean flat command";
+      process.stderr.write(`  ${label}: ${hint.names.join(", ")}?\n`);
+    }
+    process.exit(1);
+  }
+
   if (rest.includes("--help") || rest.includes("-h")) {
     printToolHelp(tool);
     return;

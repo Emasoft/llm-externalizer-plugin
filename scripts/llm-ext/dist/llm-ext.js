@@ -260874,6 +260874,162 @@ function buildTools(limitsText) {
   return [...allTools, ...MASS_SCOUT_TOOLS];
 }
 
+// src/cli/launcher.ts
+var GROUPS = {
+  session: {
+    compact: { command: "session_summary", positional: "transcript" }
+  },
+  llm: {
+    ask: { command: "chat", positional: "input_files_paths" },
+    code: { command: "code_task", positional: "input_files_paths" },
+    cluster: { command: "cluster_synonyms", positional: "input_file" }
+  },
+  scan: {
+    folder: { command: "scan_folder", positional: "folder_path" },
+    security: { command: "security_scan" },
+    quality: { command: "high_quality_scan", positional: "folder_path" },
+    impl: { command: "search_existing_implementations", positional: "folder_path" }
+  },
+  check: {
+    imports: { command: "check_imports", positional: "input_files_paths" },
+    refs: { command: "check_references", positional: "input_files_paths" },
+    specs: { command: "check_against_specs", positional: "spec_file_path" },
+    rules: { command: "rules_check", positional: "file_path" },
+    plan: { command: "review_plan", positional: "input_files_paths" },
+    diff: { command: "compare_files" }
+  },
+  scout: {
+    run: { command: "mass_scout" },
+    register: { command: "mass_scout_register" },
+    preclassify: { command: "mass_scout_preclassify" },
+    estimate: { command: "mass_scout_estimate" },
+    search: { command: "mass_scout_search" },
+    "search-xjob": { command: "mass_scout_search_xjob" },
+    get: { command: "mass_scout_get" },
+    export: { command: "mass_scout_export" },
+    jobs: { command: "mass_scout_jobs_list" },
+    "audit-sample": { command: "mass_scout_audit_sample" },
+    "body-get": { command: "mass_scout_body_get" },
+    "build-fieldset": { command: "mass_scout_build_fieldset" },
+    "propose-fieldset": { command: "mass_scout_propose_fieldset" },
+    diff: { command: "mass_scout_diff" },
+    chain: { command: "mass_scout_chain" },
+    "list-fieldsets": { command: "mass_scout_list_bundled_fieldsets" }
+  },
+  models: {
+    info: { command: "or_model_info", positional: "model" },
+    assess: { command: "assess_model", positional: "model" },
+    health: { command: "check_model_health" },
+    discover: { command: "discover_new_models" },
+    replacements: { command: "check_tool_replacements" }
+  },
+  config: {
+    show: { command: "get_settings" },
+    profile: { command: "profile" },
+    reset: { command: "reset" },
+    status: { command: "discover" },
+    "scan-local": { command: "scan_local_llm_services" }
+  }
+};
+function isGroupName(name) {
+  return Object.prototype.hasOwnProperty.call(GROUPS, name);
+}
+function levenshtein2(a, b) {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp = new Array(n + 1);
+  for (let j = 0; j <= n; j++) dp[j] = j;
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const tmp = dp[j];
+      dp[j] = Math.min(
+        dp[j] + 1,
+        // deletion
+        dp[j - 1] + 1,
+        // insertion
+        prev + (a[i - 1] === b[j - 1] ? 0 : 1)
+        // substitution
+      );
+      prev = tmp;
+    }
+  }
+  return dp[n];
+}
+function suggest(input, candidates, threshold = 3, max = 3) {
+  return candidates.map((c) => ({ c, d: levenshtein2(input, c) })).filter(({ d }) => d <= threshold).sort((a, b) => a.d - b.d).slice(0, max).map(({ c }) => c);
+}
+function suggestCommand(input, flatCommandNames) {
+  const groupHint = suggest(input, Object.keys(GROUPS));
+  if (groupHint.length > 0) return { kind: "group", names: groupHint };
+  const flatHint = suggest(input, flatCommandNames);
+  if (flatHint.length > 0) return { kind: "flat", names: flatHint };
+  return null;
+}
+function outputFlagOf(tool) {
+  const props = tool?.inputSchema?.properties ?? {};
+  if ("output" in props) return "output";
+  if ("output_dir" in props) return "output_dir";
+  return void 0;
+}
+function resolveInvocation(argv, tools) {
+  const byName = new Map(tools.map((t) => [t.name, t]));
+  const group = argv[0];
+  const actions = GROUPS[group];
+  if (!actions) {
+    return {
+      kind: "error",
+      message: `unknown group '${group}'.`,
+      suggestions: suggest(group, Object.keys(GROUPS))
+    };
+  }
+  const rest = argv.slice(1);
+  if (rest.length === 0 || rest[0].startsWith("-")) {
+    return { kind: "group-help", group };
+  }
+  const actionName = rest[0];
+  const spec = actions[actionName];
+  if (!spec) {
+    return {
+      kind: "error",
+      message: `unknown action '${actionName}' in group '${group}'.`,
+      // Grouped form (`scan folder`, not bare `folder`) — the user typed a
+      // grouped invocation, so the suggestion must stay in that vocabulary
+      // rather than leaking the flat command surface being de-emphasized.
+      suggestions: suggest(actionName, Object.keys(actions)).map((a) => `${group} ${a}`)
+    };
+  }
+  const tail = rest.slice(1);
+  if (tail.includes("--help") || tail.includes("-h")) {
+    return { kind: "action-help", group, action: actionName, command: spec.command };
+  }
+  const tool = byName.get(spec.command);
+  const outFlag = outputFlagOf(tool);
+  const out = [];
+  let consumedPositional = false;
+  for (let i = 0; i < tail.length; i++) {
+    const token = tail[i];
+    if (token === "-o" || token === "--output") {
+      if (!outFlag) {
+        out.push(token);
+        continue;
+      }
+      out.push(`--${outFlag}`);
+      continue;
+    }
+    if (!token.startsWith("-") && !consumedPositional && spec.positional) {
+      out.push(`--${spec.positional}`, token);
+      consumedPositional = true;
+      continue;
+    }
+    out.push(token);
+  }
+  return { kind: "dispatch", command: spec.command, argv: out };
+}
+
 // src/cli/main.ts
 var VERSION = "12.0.0";
 function toKebab(toolName) {
@@ -261017,18 +261173,47 @@ function firstLine(text) {
   return line.length > 96 ? `${line.slice(0, 93)}...` : line;
 }
 function printGlobalHelp(tools) {
-  const width = Math.max(...tools.map((t) => toKebab(t.name).length));
   process.stdout.write(
-    "llm-ext \u2014 offload bounded LLM work to cheaper models.\n\nUsage:\n  llm-ext <command> [--flag value ...]\n  llm-ext <command> --help      show a command's parameters\n  llm-ext --help                this list\n  llm-ext --version             print the version\n\nGlobal flags:\n  --quiet                       suppress the banner and progress lines\n\nCommands:\n"
+    "llm-ext \u2014 offload bounded LLM work to cheaper models.\n\nUsage:\n  llm-ext <group> <action> [input] [--flag value ...]\n  llm-ext <group> --help        list that group's actions\n  llm-ext <group> <action> --help  show that action's parameters\n  llm-ext --help                this list\n  llm-ext --help --all          also list every flat command (advanced)\n  llm-ext --version             print the version\n\nGlobal flags:\n  --quiet                       suppress the banner and progress lines\n\nGroups:\n"
   );
-  for (const t of [...tools].sort((a, b) => a.name.localeCompare(b.name))) {
+  const groupWidth = Math.max(...Object.keys(GROUPS).map((g) => g.length));
+  for (const [group, actions] of Object.entries(GROUPS)) {
     process.stdout.write(
-      `  ${toKebab(t.name).padEnd(width)}  ${firstLine(t.description)}
+      `  ${group.padEnd(groupWidth)}  ${Object.keys(actions).join(", ")}
 `
     );
   }
   process.stdout.write(
     "\nReports are written to <project>/reports/llm-externalizer/ and the path is printed on stdout.\n"
+  );
+  if (process.argv.includes("--all")) {
+    const width = Math.max(...tools.map((t) => toKebab(t.name).length));
+    process.stdout.write("\nAll flat commands (advanced \u2014 the groups above dispatch to these):\n");
+    for (const t of [...tools].sort((a, b) => a.name.localeCompare(b.name))) {
+      process.stdout.write(
+        `  ${toKebab(t.name).padEnd(width)}  ${firstLine(t.description)}
+`
+      );
+    }
+  }
+}
+function printGroupHelp(group) {
+  const actions = GROUPS[group];
+  process.stdout.write(`llm-ext ${group} <action>
+
+Actions:
+`);
+  const width = Math.max(...Object.keys(actions).map((a) => a.length));
+  for (const [action, spec] of Object.entries(actions)) {
+    process.stdout.write(
+      `  ${action.padEnd(width)}  -> ${toKebab(spec.command)}
+`
+    );
+  }
+  process.stdout.write(
+    `
+Run 'llm-ext ${group} <action> --help' for that action's parameters.
+`
   );
 }
 function printToolHelp(tool) {
@@ -261066,14 +261251,54 @@ async function main() {
 `);
     return;
   }
-  const commandName = argv[0];
+  let commandName;
+  let rest;
+  if (isGroupName(argv[0])) {
+    const resolved = resolveInvocation(argv, tools);
+    switch (resolved.kind) {
+      case "group-help":
+        printGroupHelp(resolved.group);
+        return;
+      case "action-help": {
+        const actionTool = resolveCommand(resolved.command, tools);
+        if (actionTool) printToolHelp(actionTool);
+        return;
+      }
+      case "error": {
+        process.stderr.write(`llm-ext: ${resolved.message}
+`);
+        if (resolved.suggestions.length > 0) {
+          process.stderr.write(
+            `  did you mean: ${resolved.suggestions.join(", ")}?
+`
+          );
+        }
+        process.exit(1);
+        return;
+      }
+      case "dispatch":
+        commandName = resolved.command;
+        rest = resolved.argv;
+        break;
+    }
+  } else {
+    commandName = argv[0];
+    rest = argv.slice(1);
+  }
   const tool = resolveCommand(commandName, tools);
   if (!tool) {
-    die(
-      `unknown command '${commandName}'. Run 'llm-ext --help' for the list.`
+    const hint = suggestCommand(commandName, tools.map((t) => toKebab(t.name)));
+    process.stderr.write(
+      `llm-ext: unknown command '${commandName}'. Run 'llm-ext --help' for the list.
+`
     );
+    if (hint) {
+      const label = hint.kind === "group" ? "did you mean group" : "did you mean flat command";
+      process.stderr.write(`  ${label}: ${hint.names.join(", ")}?
+`);
+    }
+    process.exit(1);
   }
-  const rest = argv.slice(1);
   if (rest.includes("--help") || rest.includes("-h")) {
     printToolHelp(tool);
     return;

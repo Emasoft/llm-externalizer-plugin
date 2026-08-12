@@ -18,6 +18,8 @@ export default defineConfig({
       // an MCP initialize; catches the -32001 regression that unit-level imports
       // (which never go through launcher.mjs) structurally cannot see.
       'src/launcher-boot.test.ts',
+      // Grouped CLI launcher (TRDD-DT11TE2Z) — argv rewrite + did-you-mean.
+      'src/cli/launcher.test.ts',
       // Cost-safety guard — default test backend must never bill (TRDD-e82f2c49).
       'src/test-helpers.test.ts',
       'src/grouping.test.ts',

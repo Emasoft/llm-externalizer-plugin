@@ -98,7 +98,10 @@ describe("launcher → CLI handoff (regressions: -32001, module-scope hang)", ()
 
     // 30s is enormous for `--help` (it takes ~0.2s). A timeout here does not
     // mean "slow", it means "hung" — the exact bug this guards.
-    const run = await runLauncher(["--help"], 30_000);
+    // --all (TRDD-DT11TE2Z) surfaces the full flat catalog below the grouped
+    // launcher's top-level menu — this test's job is "did the real catalog
+    // load", so it needs that expanded view, not the default grouped one.
+    const run = await runLauncher(["--help", "--all"], 30_000);
 
     expect(
       run.timedOut,
@@ -111,7 +114,7 @@ describe("launcher → CLI handoff (regressions: -32001, module-scope hang)", ()
 
     // It reached the real CLI, not just "a process that ran and quit".
     expect(run.stdout).toContain("llm-ext");
-    expect(run.stdout).toContain("Commands:");
+    expect(run.stdout).toContain("All flat commands");
     // Spot-check one core tool and one mass-scout tool so a half-populated
     // catalog (e.g. a broken buildTools import) still fails.
     expect(run.stdout).toContain("scan-folder");
