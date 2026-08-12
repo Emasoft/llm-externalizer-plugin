@@ -1,6 +1,103 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.1.0] - 2026-08-12
+
+### Added
+
+- Feat(cli): --profile flag, and -o on every command that writes a report
+
+Two gaps the owner specified that simply did not exist.
+
+`--profile <name>` was never implemented: `llm-ext llm ask ./p.md --profile
+free` failed with "unknown flag --profile for 'chat'". It is now a GLOBAL
+flag handled in the CLI layer alongside --quiet, so it works for every
+command rather than needing a per-command schema entry. It selects a
+built-in profile or one under `profiles:` in
+~/.llm-externalizer/settings.yaml for THIS invocation only -- it never
+mutates settings.yaml. An unknown name fails fast and LISTS the real
+profiles instead of silently falling back to the active one, since a silent
+fallback would bill the wrong backend while looking like it worked.
+
+Note settings.yaml is authoritative: a legacy settings.yml may sit beside
+it (config.ts warns) but is not read.
+
+`-o`/`--output` is shorthand for a command's --output_dir. Commands that
+produce a report file but declared no output parameter -- scan_folder among
+them -- now declare it, so -o works there. Commands that genuinely write no
+report keep the honest error added in 13.0.1 rather than gaining a
+meaningless flag.
+
+The default is unchanged and deliberately NOT git-derived: reports go to
+<project-root>/reports/llm-externalizer/ via resolveProjectMainRoot(),
+anchored on $CLAUDE_PROJECT_DIR. A linked git worktree is ephemeral, so
+anchoring on a git root would write reports into a directory that
+disappears. Two comments claimed "<git-root>/reports/llm-externalizer/" --
+the code was right and the comments were wrong; fixed.
+
+Verified on the real binary, not from the agent's report: --profile
+remote-single-geminiflash switched the backend to google/gemini-2.5-flash
+(the active profile is the ensemble); --profile nonesuch listed all five
+real profiles and exited 1; scan folder -o reached the tool instead of
+dying on argv parsing; config show -o kept the honest error.
+Gates: tsc 0, eslint 0 at --max-warnings 0, vitest 1931 passed / 4 skipped
+/ 0 failed, build clean.
+
+Known and deliberately left: get_settings' implementation honours an
+outputDir it has no schema entry to receive, so the capability is
+unreachable rather than wrong. Not expanding scope at release time.
+
+
+### Documentation
+
+- Docs: purge dead MCP guidance left behind by the CLI migration
+
+The MCP server was removed long ago, but nothing swept the plugin for what
+referenced it. Six agent definitions were still instructing subagents to
+call `mcp__serena-mcp__replace_symbol_body`, `find_referencing_symbols`,
+and `mcp__grepika__*` — tools that do not exist here and that MCP being
+banned project-wide guarantees will fail. Their frontmatter also advertised
+a tool surface ("can use SERENA MCP, TLDR, Grepika, LSP") the agent does
+not have.
+
+This is the failure mode worth naming: those are INSTRUCTIONS IN PROSE.
+tsc, eslint, vitest and the publish gates cannot see them, so the plugin
+shipped broken agent guidance through every green gate and two releases
+(v13.0.0, v13.0.1) while every check passed.
+
+Replaced with the stack that actually exists here: the `tldr` CLI
+(definition/references/structure/impact/search) for symbol lookup and flow
+tracing, `Read` + the built-in `Edit` for symbol-scope edits — anchoring
+old_string on the signature line so an edit cannot span into an adjacent
+symbol — and an explicit "no MCP, and never edit via sed/perl/python"
+instruction, since a scripted rewrite bypasses the diff the operator is
+meant to inspect.
+
+launcher.mjs comments and one log line still called the thing they prepare
+"the MCP server"; it is the `llm-ext` CLI. Comments only, no logic touched.
+
+rules/use-llm-externalizer.md rewritten 105 lines -> 13: it is force-loaded
+into every session in every project, so its size is a permanent tax. It now
+documents the grouped surface (7 groups over 45 commands), `-o` as shorthand
+for --output_dir defaulting to <project-root>/reports/llm-externalizer/
+(anchored on $CLAUDE_PROJECT_DIR, never a git root — a worktree is ephemeral
+and reports written there are lost), `--profile`, and that settings live in
+settings.yaml (a legacy settings.yml is preserved but not read).
+
+Deliberately NOT touched: design/** (historical TRDD records) and
+benchmark-fixtures/** (test INPUT — editing a fixture changes the
+benchmark's results). Statements that correctly describe history, such as
+"there is no MCP server any more", were left alone rather than "fixed" into
+nonsense.
+
+Verified by re-running the sweep myself: the only surviving mcp__/SERENA/
+grepika hits in the live surface are the negative statements introduced
+here ("there are NO MCP tools in this environment").
+
+The src/ changes for --profile and output_dir are still in flight and are
+deliberately NOT in this commit.
+
+
 ## [13.0.1] - 2026-08-12
 
 ### Fixed
