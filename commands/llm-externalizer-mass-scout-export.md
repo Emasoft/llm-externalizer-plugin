@@ -5,7 +5,7 @@ description: |-
   reports/mass_scouting/. Useful for follow-up analysis in pandas, jq, etc.
 allowed-tools:
   - Bash
-argument-hint: "--db <path> --job-id <id> [--format jsonl|csv]"
+argument-hint: "--db-path <path> --job-id <id> [--format jsonl|csv]"
 effort: low
 ---
 
@@ -25,7 +25,7 @@ workflow.
 
 | Flag | Required | Description |
 |---|---|---|
-| `--db <path>` | yes | The registry |
+| `--db-path <path>` | yes | The registry |
 | `--job-id <id>` | yes | The job to export |
 | `--format jsonl\|csv` | no | Default: `jsonl` |
 | `--output-dir <path>` | no | Override the default `<main-project-dir>/reports/mass_scouting/` output directory (absolute, or relative to cwd) |

@@ -6,7 +6,7 @@ description: |-
   subagents re-analyse a file without touching the filesystem.
 allowed-tools:
   - Bash
-argument-hint: "--db <path> --short-id <n>"
+argument-hint: "--db-path <path> --short-id <n>"
 effort: low
 ---
 
@@ -21,7 +21,7 @@ filesystem (no race against in-progress edits, no double I/O cost).
 
 | Flag | Required | Description |
 |---|---|---|
-| `--db <path>` | yes | Absolute path to the SQLite registry |
+| `--db-path <path>` | yes | Absolute path to the SQLite registry |
 | `--short-id <n>` | yes | Positive integer assigned by `mass_scout_register` |
 
 ## Output

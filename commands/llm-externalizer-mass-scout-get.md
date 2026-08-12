@@ -5,7 +5,7 @@ description: |-
   Optionally include the result row for a specific job_id.
 allowed-tools:
   - Bash
-argument-hint: "--db <path> --short-id <n> [--job-id <id>]"
+argument-hint: "--db-path <path> --short-id <n> [--job-id <id>]"
 effort: low
 ---
 
@@ -20,7 +20,7 @@ returned by `mass-scout-search`, where each result row carries the
 
 | Flag | Required | Description |
 |---|---|---|
-| `--db <path>` | yes | The registry |
+| `--db-path <path>` | yes | The registry |
 | `--short-id <n>` | yes | Positive integer short_id |
 | `--job-id <id>` | no | If supplied, includes the result row from `mass_scout_results` |
 

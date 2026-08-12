@@ -6,7 +6,7 @@ description: |-
   actually understand the file?
 allowed-tools:
   - Bash
-argument-hint: "--db <path> --job-id <id> [--sample <N>] [--body-truncate <chars>] [--json]"
+argument-hint: "--db-path <path> --job-id <id> [--sample <N>] [--body-truncate <chars>] [--json]"
 effort: low
 ---
 
@@ -22,7 +22,7 @@ job.
 
 | Flag | Required | Description |
 |---|---|---|
-| `--db <path>` | yes | Absolute path to the SQLite registry |
+| `--db-path <path>` | yes | Absolute path to the SQLite registry |
 | `--job-id <id>` | yes | The job whose results to sample |
 | `--sample <N>` | no | How many random rows to pull. Default: 5 |
 | `--body-truncate <chars>` | no | Per-body excerpt cap, in chars. Default: 1000 |

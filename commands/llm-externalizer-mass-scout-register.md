@@ -5,7 +5,7 @@ description: |-
   registry. Phase 1 of the mass-scouting pipeline.
 allowed-tools:
   - Bash
-argument-hint: "--db <path> --root <folder> [--git-diff <ref>] [--no-gitignore] | --files <a,b,c> [--extensions .ts,.md] [--exclude-dirs ...]"
+argument-hint: "--db-path <path> --folder-path <folder> [--git-diff <ref>] [--no-gitignore] | --file-paths <a,b,c> [--extensions .ts,.md] [--exclude-dirs ...]"
 effort: low
 ---
 
@@ -21,10 +21,10 @@ short_id.
 
 | Flag | Required | Description |
 |---|---|---|
-| `--db <path>` | yes | Absolute path to the SQLite registry (created if missing) |
-| `--root <folder>` | one of | Walk this folder (recursive) |
-| `--files <a,b,c>` | one of | Explicit comma-separated paths (mutually exclusive with `--root`) |
-| `--git-diff <ref>` | one of | Use `git diff --name-only --diff-filter=ACMR <ref>...HEAD` rooted at `--root` to register only added/modified files since `<ref>`. Incremental scouts. |
+| `--db-path <path>` | yes | Absolute path to the SQLite registry (created if missing) |
+| `--folder-path <folder>` | one of | Walk this folder (recursive) |
+| `--file-paths <a,b,c>` | one of | Explicit comma-separated paths (mutually exclusive with `--folder-path`) |
+| `--git-diff <ref>` | one of | Use `git diff --name-only --diff-filter=ACMR <ref>...HEAD` rooted at `--folder-path` to register only added/modified files since `<ref>`. Incremental scouts. |
 | `--extensions <list>` | no | Filter the walk to these extensions (e.g. `.ts,.tsx,.md`) |
 | `--exclude-dirs <list>` | no | Extra dir names to skip beyond the built-ins |
 | `--no-gitignore` | no | Bypass `.gitignore` filtering. Default: gitignored files are skipped. |
@@ -65,4 +65,4 @@ Walks `/path/to/repo/src`, caches every `.ts`/`.tsx`/`.md` file body into
 `/tmp/scout.db` (skipping gitignored paths and the built-in vendor dirs),
 and prints the registered / skipped counters. For an incremental scout of
 just the files changed since `main`, use `--git-diff main` instead of a
-plain `--root` walk.
+plain `--folder-path` walk.

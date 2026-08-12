@@ -6,7 +6,7 @@ description: |-
   search, and structured JSON1 path filters. Phase 5 of the pipeline.
 allowed-tools:
   - Bash
-argument-hint: "--db <path> --job-id <id> [--query \"...\"] [--regex \"...\"] [--filter '$.x:=:val'] [--json]"
+argument-hint: "--db-path <path> --job-id <id> [--query \"...\"] [--regex \"...\"] [--filter '$.x:=:val'] [--json]"
 effort: low
 ---
 
@@ -28,7 +28,7 @@ Query a single job's results. The dispatcher auto-routes to:
 
 | Flag | Required | Description |
 |---|---|---|
-| `--db <path>` | yes | The registry |
+| `--db-path <path>` | yes | The registry |
 | `--job-id <id>` | yes | The job to search |
 | `--query "..."` | maybe | FTS5 query OR a natural-language query |
 | `--regex "..."` | maybe | Explicit regex pattern (forces regex mode) |

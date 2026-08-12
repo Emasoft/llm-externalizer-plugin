@@ -62,7 +62,9 @@ free model is `nvidia/nemotron-3-super-120b-a12b:free`.
 
 ## What this command will NOT do
 
-- Run a `change-model` or `profile` command — neither exists in the CLI.
+- Run a `change-model` command — it does not exist in the CLI. (`profile`
+  does exist, but it is read-only — it lists/shows profiles, it cannot
+  switch or edit one.)
 - Write to `~/.llm-externalizer/settings.yaml` in any way.
 
 See also the `llm-externalizer-config` skill for full profile templates and the

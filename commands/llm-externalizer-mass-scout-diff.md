@@ -6,7 +6,7 @@ description: |-
   Confirms that a re-scout actually changed what you expected.
 allowed-tools:
   - Bash
-argument-hint: "--db <path> --from-job <id> --to-job <id> [--json]"
+argument-hint: "--db-path <path> --from-job <id> --to-job <id> [--json]"
 effort: low
 ---
 
@@ -25,7 +25,7 @@ silently regress other rows.
 
 | Flag | Required | Description |
 |---|---|---|
-| `--db <path>` | yes | Absolute path to the SQLite registry holding both jobs |
+| `--db-path <path>` | yes | Absolute path to the SQLite registry holding both jobs |
 | `--from-job <id>` | yes | Baseline `job_id` |
 | `--to-job <id>` | yes | Comparison `job_id` (must differ from `--from-job`) |
 | `--json` | no | Return a structured JSON envelope instead of human-readable summary |

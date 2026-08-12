@@ -6,7 +6,7 @@ description: |-
   discover what work already exists in the registry.
 allowed-tools:
   - Bash
-argument-hint: "--db <path> [--json]"
+argument-hint: "--db-path <path> [--json]"
 effort: low
 ---
 
@@ -20,7 +20,7 @@ spending time / tokens on a new one. Read-only.
 
 | Flag | Required | Description |
 |---|---|---|
-| `--db <path>` | yes | Absolute path to the SQLite registry |
+| `--db-path <path>` | yes | Absolute path to the SQLite registry |
 | `--json` | no | Return a JSON array of job objects instead of a human-readable table |
 
 ## Output

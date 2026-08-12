@@ -41,7 +41,10 @@ Parse `$ARGUMENTS` into:
 - `--instructions <path>`: absolute path to an `.md` file whose contents become the scan instructions. Replaces the default audit rubric.
 - `--specs <path>`: absolute path to an `.md` specification file. Appended to `instructions_files_paths`; the scan checks each file against the spec.
 - `--no-secrets`: disables the pre-scan secret detector (`scan_secrets: false`, `redact_secrets: false`). Default behaviour is `scan_secrets: true` + `redact_secrets: true` — secrets are detected and REDACTED (replaced by `[REDACTED:LABEL]`) before the files reach the LLM, so the scan keeps running. Use this flag only when you've already moved secrets to `.env` (gitignored) and want to skip the redaction pass.
-- `--free`: use the free Nemotron model (`free: true`). Warn once about provider prompt logging before running on proprietary code; proceed only after user confirms or when the argument was explicit.
+- `--free`: use the free Nemotron model (`free: true`). Only applies on **Branch A**
+  (`--file-list` → `code-task`) — `scan-folder` (Branch B) has no `--free` flag; drop it there
+  and tell the user. Warn once about provider prompt logging before running on proprietary code;
+  proceed only after user confirms or when the argument was explicit.
 
 **Cost safety:** when `--free` is not set and the active profile is paid, run the same invocation with `--estimate` first — zero-cost dry run, prints expected/ceiling cost — and proceed with the real scan only if the ceiling fits the budget.
 
@@ -267,9 +270,11 @@ ${CLAUDE_PLUGIN_ROOT}/bin/llm-ext scan-folder \
   --exclude_dirs "docs_dev,reports_dev,scripts_dev,tests_dev,samples_dev,examples_dev,downloads_dev,libs_dev,builds_dev,reports,llm_externalizer_output,.rechecker,.mypy_cache,.ruff_cache,.serena,.claude,.venv,__pycache__" \
   --instructions "<see above>" \
   [--instructions_files_paths <path,path,...> if applicable] \
-  [--free if applicable] \
   [--scan_secrets] [--redact_secrets]   # default true; --no-secrets omits both
 ```
+
+`scan-folder` has **no `--free` flag** — if the user passed `--free`, warn that free-model
+routing only works on Branch A (`--file-list` → `code-task`) and drop it here.
 
 With `--text`, set `--extensions ".md,.txt,.json,.yml,.yaml,.toml,.ini,.cfg,.conf,.xml,.html,.rst,.csv"`. Without it, OMIT the `--extensions` flag.
 

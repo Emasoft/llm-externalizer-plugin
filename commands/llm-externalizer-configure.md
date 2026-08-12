@@ -12,15 +12,20 @@ Inspect LLM Externalizer configuration. **This command never mutates settings** 
 
 ## Configuration policy
 
-Model and profile configuration is **user-only**. There is no `set-settings`,
-`change-model`, or `profile` command in the CLI at all — configuration is
-edited by hand in `settings.yaml`, by design, so agents cannot silently swap
-models or leak configuration to the wrong backend.
+Model and profile configuration is **user-only**. There is no `set-settings`
+or `change-model` command in the CLI — configuration is edited by hand in
+`settings.yaml`, by design, so agents cannot silently swap models or leak
+configuration to the wrong backend. (`profile` DOES exist, but it is
+read-only — it lists/shows profiles, it cannot switch or edit one.)
 
 To change anything (active profile, model, second_model, api preset, URL, api_key, timeouts):
 
 1. Open `~/.llm-externalizer/settings.yaml` in your editor and save your edits.
 2. Run `${CLAUDE_PLUGIN_ROOT}/bin/llm-ext reset` to reload.
+
+The global `--profile <name>` flag selects a profile for ONE call without
+touching `settings.yaml` — it does not persist and is not a substitute for
+changing the active profile.
 
 ## Subcommands
 
@@ -37,4 +42,4 @@ Decline politely and explain the policy: configuration is user-only. Point the u
 ## What this command will NOT do
 
 - Write to `settings.yaml` in any way.
-- Run a `set-settings`, `change-model`, or `profile` command (none of them exist in the CLI).
+- Run a `set-settings` or `change-model` command (neither exists in the CLI).

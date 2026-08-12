@@ -6,7 +6,7 @@ description: |-
   pipeline.
 allowed-tools:
   - Bash
-argument-hint: "--db <path> --fields-file <json> [--budget-usd N] [--bucket <name>] [--workers N]"
+argument-hint: "--db-path <path> --fields-file <json> [--budget-usd N] [--bucket <name>] [--workers N]"
 effort: low
 ---
 
@@ -23,7 +23,7 @@ The output is small enough to return inline — no file is written.
 
 | Flag | Required | Description |
 |---|---|---|
-| `--db <path>` | yes | The registry from `mass-scout-register` |
+| `--db-path <path>` | yes | The registry from `mass-scout-register` |
 | `--fields-file <json>` | yes | JSON fieldset describing what to extract (see skill) |
 | `--budget-usd <usd>` | no | Refuses to schedule if `est_cost_usd > budget_usd` |
 | `--bucket <name>` | no | Only count files in this preclassifier bucket |

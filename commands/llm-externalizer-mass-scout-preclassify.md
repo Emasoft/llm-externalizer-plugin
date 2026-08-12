@@ -7,7 +7,7 @@ description: |-
   the pipeline.
 allowed-tools:
   - Bash
-argument-hint: "--db <path> [--reclassify] [--limit <n>]"
+argument-hint: "--db-path <path> [--reclassify] [--limit <n>]"
 effort: low
 ---
 
@@ -22,7 +22,7 @@ the workload (e.g. "scout only sourcecode files").
 
 | Flag | Required | Description |
 |---|---|---|
-| `--db <path>` | yes | The registry from `mass-scout-register` |
+| `--db-path <path>` | yes | The registry from `mass-scout-register` |
 | `--reclassify` | no | Re-run the classifier on already-classified rows (default: false) |
 | `--limit <n>` | no | Process at most N rows. Useful for incremental runs. |
 

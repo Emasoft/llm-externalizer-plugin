@@ -6,7 +6,7 @@ description: |-
   originating job_id and merged by bm25 rank.
 allowed-tools:
   - Bash
-argument-hint: "--db <path> --job-ids id1,id2,... [--query \"...\"] [--regex \"...\"] [--filter '...'] [--json]"
+argument-hint: "--db-path <path> --job-ids id1,id2,... [--query \"...\"] [--regex \"...\"] [--filter '...'] [--json]"
 effort: low
 ---
 
@@ -28,7 +28,7 @@ Use cases:
 
 | Flag | Required | Description |
 |---|---|---|
-| `--db <path>` | yes | The registry |
+| `--db-path <path>` | yes | The registry |
 | `--job-ids <id1,id2,...>` | yes | Comma-separated list of job_ids |
 | `--query "..."` | maybe | FTS5 query OR named-pattern query |
 | `--regex "..."` | maybe | Explicit regex pattern |

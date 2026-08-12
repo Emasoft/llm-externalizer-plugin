@@ -7,7 +7,7 @@ description: |-
   Phase 4 of the pipeline.
 allowed-tools:
   - Bash
-argument-hint: "--db <path> --fields-file <json> --job-id <id> --source-root <path> [--workers N] [--bucket <name>]"
+argument-hint: "--db-path <path> --fields-file <json> --job-id <id> --source-root <path> [--workers N] [--bucket <name>]"
 effort: high
 ---
 
@@ -30,7 +30,7 @@ When all files are done, render a markdown report to
 
 | Flag | Required | Description |
 |---|---|---|
-| `--db <path>` | yes | The registry |
+| `--db-path <path>` | yes | The registry |
 | `--fields-file <json>` | yes | JSON fieldset path OR `bundled:<name>` shorthand (`code-audit`, `skill-audit`, `security-audit`, `pr-review`) |
 | `--job-id <id>` | yes | Stable job identifier — re-run with the same id to resume |
 | `--source-root <path>` | yes | Original folder the files came from (recorded on the job) |
@@ -102,7 +102,7 @@ without burning the full budget.
 
 Per-file failures are logged in `mass_scout_skipped` with the error
 reason. The run completes; `files_failed=<F>` reports the count. To see
-the exact errors, query the skipped log via the `--db` directly or run
+the exact errors, query the skipped log via `--db-path` directly or run
 the `mass-scout-search` sub-command with `--filter '$.short_id:>:0'`.
 
 ## Environment

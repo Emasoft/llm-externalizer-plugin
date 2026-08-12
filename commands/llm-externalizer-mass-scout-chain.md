@@ -6,7 +6,7 @@ description: |-
   without re-scouting the whole tree.
 allowed-tools:
   - Bash
-argument-hint: "--db <path> --source-job <id> --new-job-id <id> --new-fields-file <path> --filter \"$.path:OP:value\" [--model <id>] [--workers <N>] [--max-retries <N>]"
+argument-hint: "--db-path <path> --source-job <id> --new-job-id <id> --new-fields-file <path> --filter \"$.path:OP:value\" [--model <id>] [--workers <N>] [--max-retries <N>]"
 effort: medium
 ---
 
@@ -37,7 +37,7 @@ Examples: `$.severity:=:critical` · `$.score:>=:0.8` · `$.summary:LIKE:auth%`.
 
 | Flag | Required | Description |
 |---|---|---|
-| `--db <path>` | yes | Absolute path to the SQLite registry |
+| `--db-path <path>` | yes | Absolute path to the SQLite registry |
 | `--source-job <id>` | yes | The job to chain from (its results are the input set) |
 | `--new-job-id <id>` | yes | The job_id for the new chained scout. Must not already exist in the DB |
 | `--new-fields-file <path>` | yes | Path to the new fieldset JSON used by the chained scout |
