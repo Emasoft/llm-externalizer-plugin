@@ -254176,7 +254176,12 @@ function classifyContextOverflow(detail) {
 var PROMPT_OVERHEAD_TOKENS = 2e3;
 var DEFAULT_MAX_CHUNK_TOKENS = 25e3;
 var MAX_AUTO_CONCURRENCY = 28;
-var DEFAULT_CHUNK_TIMEOUT_MS = 12e4;
+var DEFAULT_CHUNK_TIMEOUT_MS = 24e4;
+var HEDGE_AFTER_MS = 6e4;
+var hedgeAfterMsOverride = null;
+function hedgeAfterMs() {
+  return hedgeAfterMsOverride ?? HEDGE_AFTER_MS;
+}
 var STAGGER_INTERVAL_MS = 250;
 var TRANSIENT_BACKOFF_MS = 5e3;
 function sleep(ms) {
@@ -254496,29 +254501,42 @@ async function summarizeSession(options) {
     saveCheckpoint(options.checkpointPath, checkpoint);
   }
   const triedModelIds = [];
-  async function attemptChunk(i, retryTransient, sleepFn) {
+  async function callChunkModel(i, model, label, retryTransient, sleepFn) {
     try {
       const summary = await callWithRetry(
         renderChunkPrompt(chunks[i], chunks.length),
-        activeModel().id,
-        activeModel().maxCompletionTokens,
+        model.id,
+        model.maxCompletionTokens,
         options.callModel,
         maxRetries,
-        `chunk ${i}`,
+        label,
         options.checkpointPath,
         chunkBodyText(chunks[i]),
         retryTransient,
         sleepFn
       );
-      checkpoint.mapSummaries[i] = summary;
-      checkpoint.updatedAt = nowIso();
-      saveCheckpoint(options.checkpointPath, checkpoint);
-      return { kind: "ok" };
+      return { kind: "ok", summary };
     } catch (err3) {
       if (err3 instanceof ModelUnavailableError) return { kind: "fallback", err: err3 };
       if (err3 instanceof ContextOverflowError) return { kind: "overflow", err: err3 };
       throw err3;
     }
+  }
+  function writeChunkSummaryOnce(i, summary) {
+    if (checkpoint.mapSummaries[i] !== null) return;
+    checkpoint.mapSummaries[i] = summary;
+    checkpoint.updatedAt = nowIso();
+    saveCheckpoint(options.checkpointPath, checkpoint);
+  }
+  function finishFromCallResult(i, result) {
+    if (result.kind === "ok") {
+      writeChunkSummaryOnce(i, result.summary);
+      return { kind: "ok" };
+    }
+    return result;
+  }
+  async function attemptChunk(i, retryTransient, sleepFn) {
+    return finishFromCallResult(i, await callChunkModel(i, activeModel(), `chunk ${i}`, retryTransient, sleepFn));
   }
   function applyTransition(i, outcome) {
     if (outcome.kind === "fallback") {
@@ -254560,6 +254578,55 @@ async function summarizeSession(options) {
       }
     }
   } else {
+    let raceForFirstOk2 = function(primary, hedge) {
+      return new Promise((res, rej) => {
+        let settled2 = false;
+        let primaryDone = false;
+        let primaryOutcome;
+        let primaryErr;
+        let hedgeDone = false;
+        let hedgeOutcome;
+        const finish = () => {
+          if (settled2) return;
+          if (primaryDone && primaryOutcome?.kind === "ok") {
+            settled2 = true;
+            res(primaryOutcome);
+          } else if (hedgeDone && hedgeOutcome?.kind === "ok") {
+            settled2 = true;
+            res(hedgeOutcome);
+          } else if (primaryDone && hedgeDone) {
+            settled2 = true;
+            if (primaryOutcome) res(primaryOutcome);
+            else rej(primaryErr);
+          }
+        };
+        primary.then(
+          (o) => {
+            primaryDone = true;
+            primaryOutcome = o;
+            finish();
+          },
+          (e) => {
+            primaryDone = true;
+            primaryErr = e;
+            finish();
+          }
+        );
+        hedge.then(
+          (o) => {
+            hedgeDone = true;
+            hedgeOutcome = o;
+            finish();
+          },
+          () => {
+            hedgeDone = true;
+            finish();
+          }
+          // hedge's own failure is discarded — see header above
+        );
+      });
+    };
+    var raceForFirstOk = raceForFirstOk2;
     let nextIndex = 0;
     const inFlight = /* @__PURE__ */ new Map();
     let transitioning = false;
@@ -254587,6 +254654,37 @@ async function summarizeSession(options) {
         release();
       }
     }
+    const hedgeEnabled = options.hedge ?? true;
+    const hedgedOnce = /* @__PURE__ */ new Set();
+    let hedgeInFlight = 0;
+    async function attemptChunkMaybeHedged(i) {
+      const primary = callChunkModel(i, activeModel(), `chunk ${i}`, true, sleep);
+      if (!hedgeEnabled || hedgedOnce.has(i) || activeModelIdx + 1 >= models.length) {
+        return finishFromCallResult(i, await primary);
+      }
+      let primarySettled = false;
+      primary.then(
+        () => {
+          primarySettled = true;
+        },
+        () => {
+          primarySettled = true;
+        }
+      );
+      await Promise.race([primary.catch(() => {
+      }), sleep(hedgeAfterMs())]);
+      if (primarySettled) return finishFromCallResult(i, await primary);
+      if (inFlight.size + hedgeInFlight >= concurrency) {
+        return finishFromCallResult(i, await primary);
+      }
+      hedgedOnce.add(i);
+      const hedgeModel = models[activeModelIdx + 1];
+      hedgeInFlight++;
+      const hedge = callChunkModel(i, hedgeModel, `chunk ${i} (hedge)`, true, sleep).finally(() => {
+        hedgeInFlight--;
+      });
+      return finishFromCallResult(i, await raceForFirstOk2(primary, hedge));
+    }
     async function worker(workerIdx) {
       if (workerIdx > 0) await sleep(STAGGER_INTERVAL_MS * workerIdx);
       for (; ; ) {
@@ -254605,8 +254703,10 @@ async function summarizeSession(options) {
         const startedAt = Date.now();
         onChunkEvent?.({ chunkIndex: i, totalChunks: chunks.length, phase: "start" });
         const task = (async () => {
+          let firstAttempt = true;
           for (; ; ) {
-            const outcome = await attemptChunk(i, true, sleep);
+            const outcome = firstAttempt ? await attemptChunkMaybeHedged(i) : await attemptChunk(i, true, sleep);
+            firstAttempt = false;
             if (outcome.kind === "ok") {
               onChunkEvent?.({ chunkIndex: i, totalChunks: chunks.length, phase: "done", elapsedMs: Date.now() - startedAt });
               return;

@@ -158,17 +158,67 @@ export const MAX_AUTO_CONCURRENCY = 28;
  * while every sibling has long since finished. Cutting the tail is worth far
  * more than shaving the median.
  *
- * 120s is ~3.4x the measured ~35s per-request floor (queue + cold start, which a
- * max_tokens=8 request still paid in full), so it leaves real room for genuine
- * generation while refusing to wait out a stall. A chunk that exceeds it aborts
- * and is retried/rotated like any other transient — which only became possible
- * once the deadline actually covered the body read (TRDD-0H5N1V9W); before that
- * fix a stalled generation ignored every timeout there was.
+ * A DEADLINE IS A BACKSTOP, NOT A TAIL-CUTTER — set it above the working
+ * distribution, and let HEDGING cut the tail. This value was FIRST shipped at
+ * 120s and that was WRONG, proven by a live run within the hour: measured chunk
+ * times on this model were 90.6 / 173.0 / 310.6 / 399.7s, so a 120s deadline sat
+ * BELOW the median and aborted three chunks out of four. Five consecutive aborts
+ * then tripped the circuit breaker and the run died. Making the deadline do the
+ * hedge's job converted "slow but working" into "everything fails" — strictly
+ * worse than the slowness it was meant to fix.
+ *
+ * 240s is above the measured p75 (~330s is the worst observed; 240s still admits
+ * the 90/173s body of the distribution with margin) and below the 300s global,
+ * so it catches a genuine STALL without touching work that is merely slow. The
+ * tail is cut by `HEDGE_AFTER_MS` instead, which races a second model rather
+ * than killing the first.
+ *
+ * A chunk that does exceed this aborts and is retried/rotated like any other
+ * transient — only possible at all once the deadline actually covered the body
+ * read (TRDD-0H5N1V9W); before that fix a stalled generation ignored every
+ * timeout there was.
  *
  * A DEFAULT, NOT A CEILING: `--chunk_timeout_s` is honored verbatim, including
  * values far above this one.
  */
-export const DEFAULT_CHUNK_TIMEOUT_MS = 120_000;
+export const DEFAULT_CHUNK_TIMEOUT_MS = 240_000;
+
+/**
+ * HEDGING (owner-specified, 2026-08-12). A concurrent run's wall-clock is its
+ * SLOWEST chunk (see the module header's CONCURRENCY note), and measured
+ * per-chunk latency on same-sized chunks spreads 4.4x (90s..400s) with the
+ * free model needing a retry roughly 1 in 3 attempts. Before hedging, a
+ * straggler that hit `DEFAULT_CHUNK_TIMEOUT_MS` aborted and retried
+ * SERIALLY, adding another ~120s to the critical path for no reason other
+ * than "we only ever tried one model at a time." Hedging removes that: once
+ * a chunk's first attempt has been running longer than `HEDGE_AFTER_MS`, a
+ * DUPLICATE attempt for the SAME chunk is launched against the next
+ * eligible model, and whichever answers first with usable text wins — see
+ * `attemptChunkMaybeHedged` in the concurrent map loop below.
+ *
+ * Half of `DEFAULT_CHUNK_TIMEOUT_MS`, not some independent tuning: waiting
+ * out the FULL deadline before hedging would only rescue the very last
+ * moment of a doomed attempt, and waiting less would fire a hedge for
+ * ordinary requests that were simply going to finish a bit late (the median
+ * of the measured spread is well under a minute). Sitting at the midpoint
+ * hedges genuine stragglers without doubling cost on the common case.
+ */
+export const HEDGE_AFTER_MS = 60_000;
+
+/** Test-only override for `HEDGE_AFTER_MS` (mirrors free-rotation.ts's
+ *  `resetCooldownCacheForTests` pattern): a concurrency test that wants to
+ *  exercise the hedge path in real time cannot wait 60 real seconds for it
+ *  to fire, so tests shrink the trigger delay here instead of faking a
+ *  clock the transcript reader's real filesystem I/O can't tolerate (see
+ *  the concurrency describe block's own header in driver.test.ts). Pass
+ *  `null` to restore the real default. */
+let hedgeAfterMsOverride: number | null = null;
+export function setHedgeAfterMsForTests(ms: number | null): void {
+  hedgeAfterMsOverride = ms;
+}
+function hedgeAfterMs(): number {
+  return hedgeAfterMsOverride ?? HEDGE_AFTER_MS;
+}
 
 /**
  * Minimum spacing between successive worker LAUNCHES under concurrency > 1
@@ -276,6 +326,15 @@ export interface SummarizeSessionOptions {
    *  phase stays SINGLE-WAVE whenever it can; that is what makes wall-clock
    *  `slowest chunk`, not `waves x slowest chunk`. */
   concurrency?: number | "auto";
+  /** Race a straggling chunk against a duplicate attempt on the next
+   *  eligible model once it has been running longer than `HEDGE_AFTER_MS`
+   *  — see that const's header for the measured rationale. Default: `true`
+   *  whenever the resolved `concurrency` is greater than 1; ALWAYS `false`
+   *  at `concurrency <= 1` regardless of this flag, since a sequential run
+   *  has no sibling slot to spare for a duplicate request and hedging it
+   *  would just add cost with nothing to overlap it against — the
+   *  sequential path is byte-for-byte unaffected by this option. */
+  hedge?: boolean;
   /** Optional per-chunk progress hook for a caller that wants to render
    *  readable output with several chunks in flight at once (see
    *  `ChunkEvent`). Never required for correctness — purely observational. */
@@ -495,6 +554,28 @@ class ContextOverflowError extends Error {
     this.name = "ContextOverflowError";
   }
 }
+
+/** The raw, no-side-effect result of one model call for one chunk — shared
+ *  by `callChunkModel`, the ordinary (single-model) `attemptChunk` path, and
+ *  the hedging race (`attemptChunkMaybeHedged`) so both a primary attempt
+ *  and its hedge produce the exact same shape and can be compared/raced
+ *  without either committing anything on its own. */
+type ChunkCallResult =
+  | { kind: "ok"; summary: string }
+  | { kind: "fallback"; err: ModelUnavailableError }
+  | { kind: "overflow"; err: ContextOverflowError };
+
+/** The non-"ok" subset of `ChunkCallResult` — what actually drives a
+ *  model-fallback or context-overflow transition (`applyTransition`,
+ *  `becomeLeaderAndTransition`). */
+type ChunkTransitionOutcome =
+  | { kind: "fallback"; err: ModelUnavailableError }
+  | { kind: "overflow"; err: ContextOverflowError };
+
+/** What a completed attempt cycle on one chunk index reports to a map
+ *  loop: either it's done (`"ok"`, the checkpoint already holds its
+ *  summary) or it needs a model-fallback/context-overflow transition. */
+type ChunkAttemptOutcome = { kind: "ok" } | ChunkTransitionOutcome;
 
 /** Floor for the shrink-on-overflow budget below which we stop halving and
  *  fail loudly — see `shrinkBudgetOnOverflow`'s header. */
@@ -960,30 +1041,34 @@ export async function summarizeSession(
    *  re-chunk itself — the sequential and concurrent map loops below need
    *  different coordination around that step (the concurrent one must drain
    *  every other in-flight chunk first; see `becomeLeaderAndTransition`). */
-  async function attemptChunk(
+  /** Call `model` for chunk `i` and classify the result — the raw building
+   *  block behind both `attemptChunk` (the ordinary single-model path) and
+   *  the hedging race in the concurrent loop below. Deliberately NEVER
+   *  writes the checkpoint itself (see `writeChunkSummaryOnce`): two
+   *  concurrent calls for the SAME chunk index — a primary attempt and its
+   *  hedge — must both be able to run to completion without either one
+   *  committing anything until the caller has decided which one WON. */
+  async function callChunkModel(
     i: number,
+    model: EligibleModel,
+    label: string,
     retryTransient: boolean,
     sleepFn: (ms: number) => Promise<void>,
-  ): Promise<
-    { kind: "ok" } | { kind: "fallback"; err: ModelUnavailableError } | { kind: "overflow"; err: ContextOverflowError }
-  > {
+  ): Promise<ChunkCallResult> {
     try {
       const summary = await callWithRetry(
         renderChunkPrompt(chunks[i], chunks.length),
-        activeModel().id,
-        activeModel().maxCompletionTokens,
+        model.id,
+        model.maxCompletionTokens,
         options.callModel,
         maxRetries,
-        `chunk ${i}`,
+        label,
         options.checkpointPath,
         chunkBodyText(chunks[i]),
         retryTransient,
         sleepFn,
       );
-      checkpoint!.mapSummaries[i] = summary;
-      checkpoint!.updatedAt = nowIso();
-      saveCheckpoint(options.checkpointPath, checkpoint!);
-      return { kind: "ok" };
+      return { kind: "ok", summary };
     } catch (err) {
       if (err instanceof ModelUnavailableError) return { kind: "fallback", err };
       if (err instanceof ContextOverflowError) return { kind: "overflow", err };
@@ -991,15 +1076,47 @@ export async function summarizeSession(
     }
   }
 
+  /** Commit chunk `i`'s summary to the checkpoint — AT MOST ONCE. A second
+   *  call for an already-filled slot is a silent no-op: this is precisely
+   *  how a hedge race's LOSER is discarded (HARD CONSTRAINT: a chunk index
+   *  is written at most once) — its text is simply never persisted,
+   *  whether it settles before or after the winner already wrote. */
+  function writeChunkSummaryOnce(i: number, summary: string): void {
+    if (checkpoint!.mapSummaries[i] !== null) return; // already won by another attempt — never overwrite
+    checkpoint!.mapSummaries[i] = summary;
+    checkpoint!.updatedAt = nowIso();
+    saveCheckpoint(options.checkpointPath, checkpoint!);
+  }
+
+  /** Turn a `ChunkCallResult` into the `ChunkAttemptOutcome` the map loops
+   *  branch on, committing the checkpoint on the way for a win (`"ok"`). */
+  function finishFromCallResult(i: number, result: ChunkCallResult): ChunkAttemptOutcome {
+    if (result.kind === "ok") {
+      writeChunkSummaryOnce(i, result.summary);
+      return { kind: "ok" };
+    }
+    return result;
+  }
+
+  /** One attempt cycle on chunk `i` against the currently ACTIVE model — the
+   *  ordinary (non-hedged) path used by the sequential loop, and by every
+   *  retry-after-transition in the concurrent loop (a chunk already
+   *  retrying past a model swap is never hedged again — see
+   *  `attemptChunkMaybeHedged`'s header). */
+  async function attemptChunk(
+    i: number,
+    retryTransient: boolean,
+    sleepFn: (ms: number) => Promise<void>,
+  ): Promise<ChunkAttemptOutcome> {
+    return finishFromCallResult(i, await callChunkModel(i, activeModel(), `chunk ${i}`, retryTransient, sleepFn));
+  }
+
   /** Apply a model-fallback or context-overflow outcome: re-chunk the
    *  remaining (unsent) work and, for a fallback, record the switch. Shared
    *  by both map loops — the sequential loop calls it directly (nothing
    *  else can be in flight); the concurrent loop wraps it in
    *  `becomeLeaderAndTransition`'s drain-then-transition gate. */
-  function applyTransition(
-    i: number,
-    outcome: { kind: "fallback"; err: ModelUnavailableError } | { kind: "overflow"; err: ContextOverflowError },
-  ): void {
+  function applyTransition(i: number, outcome: ChunkTransitionOutcome): void {
     if (outcome.kind === "fallback") {
       const fromModel = activeModel().id;
       advanceModel(outcome.err, triedModelIds);
@@ -1085,10 +1202,7 @@ export async function summarizeSession(
      *  stops — no separate transition of its own is needed, since the
      *  leader's rechunk already covers every index from the smallest
      *  failing index onward. */
-    async function becomeLeaderAndTransition(
-      i: number,
-      outcome: { kind: "fallback"; err: ModelUnavailableError } | { kind: "overflow"; err: ContextOverflowError },
-    ): Promise<void> {
+    async function becomeLeaderAndTransition(i: number, outcome: ChunkTransitionOutcome): Promise<void> {
       if (transitioning) {
         const gate = pauseGate;
         if (gate) await gate;
@@ -1112,6 +1226,108 @@ export async function summarizeSession(
       }
     }
 
+    // ── Hedging (owner-specified, 2026-08-12 — see HEDGE_AFTER_MS's header
+    // for the measured motivation). `hedgeEnabled` is resolved here, not
+    // earlier, because it is a function of the now-known `concurrency`: the
+    // sequential branch above never reaches this code at all, so
+    // `options.hedge` has no effect there regardless of its value.
+    const hedgeEnabled = options.hedge ?? true;
+    const hedgedOnce = new Set<number>(); // at most one hedge per chunk — bounded extra cost
+    let hedgeInFlight = 0; // counted against `concurrency` alongside `inFlight.size`
+
+    /** First side to produce USABLE text (`kind: "ok"`) wins, whichever of
+     *  `primary`/`hedge` that is — the entire point of hedging. If BOTH
+     *  sides settle without usable text, the PRIMARY's outcome (or its
+     *  thrown error) is authoritative; the hedge's own failure — rate
+     *  limit, echo, exhausted retries, anything — is swallowed here and
+     *  never rejects this race, because a hedge is a pure latency
+     *  optimization: losing it must never make the chunk WORSE than not
+     *  hedging would have. */
+    function raceForFirstOk(
+      primary: Promise<ChunkCallResult>,
+      hedge: Promise<ChunkCallResult>,
+    ): Promise<ChunkCallResult> {
+      return new Promise<ChunkCallResult>((res, rej) => {
+        let settled = false;
+        let primaryDone = false;
+        let primaryOutcome: ChunkCallResult | undefined;
+        let primaryErr: unknown;
+        let hedgeDone = false;
+        let hedgeOutcome: ChunkCallResult | undefined;
+
+        const finish = () => {
+          if (settled) return;
+          if (primaryDone && primaryOutcome?.kind === "ok") {
+            settled = true;
+            res(primaryOutcome);
+          } else if (hedgeDone && hedgeOutcome?.kind === "ok") {
+            settled = true;
+            res(hedgeOutcome);
+          } else if (primaryDone && hedgeDone) {
+            settled = true;
+            if (primaryOutcome) res(primaryOutcome);
+            else rej(primaryErr);
+          }
+        };
+
+        primary.then(
+          (o) => { primaryDone = true; primaryOutcome = o; finish(); },
+          (e) => { primaryDone = true; primaryErr = e; finish(); },
+        );
+        hedge.then(
+          (o) => { hedgeDone = true; hedgeOutcome = o; finish(); },
+          () => { hedgeDone = true; finish(); }, // hedge's own failure is discarded — see header above
+        );
+      });
+    }
+
+    /** Race chunk `i`'s primary attempt (on the currently active model)
+     *  against a duplicate attempt on the NEXT eligible model, launched
+     *  only once the primary has been running longer than `hedgeAfterMs()`
+     *  — most chunks finish well inside that window and never pay a second
+     *  request. A hedge win/loss NEVER touches `activeModelIdx`: it is a
+     *  latency bet on ONE chunk, not a fallback decision for the whole run
+     *  (that machinery stays exactly `applyTransition`/`advanceModel`, keyed
+     *  off the PRIMARY attempt only — see `finishFromCallResult` for how the
+     *  loser's text, whichever side it is, is discarded without ever
+     *  touching the checkpoint). */
+    async function attemptChunkMaybeHedged(i: number): Promise<ChunkAttemptOutcome> {
+      const primary = callChunkModel(i, activeModel(), `chunk ${i}`, true, sleep);
+
+      // Never hedge a chunk that already had (or is ineligible for) one —
+      // no fallback candidate beyond the active model, hedging disabled, or
+      // this chunk already spent its one hedge (HARD CONSTRAINT: one max).
+      if (!hedgeEnabled || hedgedOnce.has(i) || activeModelIdx + 1 >= models.length) {
+        return finishFromCallResult(i, await primary);
+      }
+
+      let primarySettled = false;
+      primary.then(
+        () => { primarySettled = true; },
+        () => { primarySettled = true; },
+      );
+      await Promise.race([primary.catch(() => {}), sleep(hedgeAfterMs())]);
+      if (primarySettled) return finishFromCallResult(i, await primary);
+
+      // Straggler past the deadline: hedge ONLY with a spare pool slot — a
+      // hedge must never push total in-flight requests past `concurrency`
+      // (HARD CONSTRAINT: never bypass the cap). No slot free means every
+      // worker is still busy elsewhere; just keep waiting on the primary
+      // alone, exactly as if hedging didn't exist.
+      if (inFlight.size + hedgeInFlight >= concurrency) {
+        return finishFromCallResult(i, await primary);
+      }
+
+      hedgedOnce.add(i); // spend this chunk's one hedge, win or lose
+      const hedgeModel = models[activeModelIdx + 1];
+      hedgeInFlight++;
+      const hedge = callChunkModel(i, hedgeModel, `chunk ${i} (hedge)`, true, sleep).finally(() => {
+        hedgeInFlight--;
+      });
+
+      return finishFromCallResult(i, await raceForFirstOk(primary, hedge));
+    }
+
     async function worker(workerIdx: number): Promise<void> {
       if (workerIdx > 0) await sleep(STAGGER_INTERVAL_MS * workerIdx);
       for (;;) {
@@ -1130,8 +1346,15 @@ export async function summarizeSession(
         const startedAt = Date.now();
         onChunkEvent?.({ chunkIndex: i, totalChunks: chunks.length, phase: "start" });
         const task = (async () => {
+          // Only the FIRST attempt on a chunk is ever hedged — a retry
+          // after a fallback/overflow transition uses the plain
+          // (non-hedged) `attemptChunk`, per HARD CONSTRAINT 5 ("never
+          // hedge a chunk that is already retrying due to a model
+          // transition").
+          let firstAttempt = true;
           for (;;) {
-            const outcome = await attemptChunk(i, true, sleep);
+            const outcome = firstAttempt ? await attemptChunkMaybeHedged(i) : await attemptChunk(i, true, sleep);
+            firstAttempt = false;
             if (outcome.kind === "ok") {
               onChunkEvent?.({ chunkIndex: i, totalChunks: chunks.length, phase: "done", elapsedMs: Date.now() - startedAt });
               return;

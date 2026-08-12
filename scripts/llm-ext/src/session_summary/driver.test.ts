@@ -13,6 +13,7 @@ import {
   isEchoResponse,
   DEFAULT_MAX_CHUNK_TOKENS,
   MAX_AUTO_CONCURRENCY,
+  setHedgeAfterMsForTests,
   type CallModelFn,
 } from "./driver.js";
 import type { EligibleModel } from "./model-select.js";
@@ -41,6 +42,7 @@ describe("driver: summarizeSession", () => {
     rmSync(dir, { recursive: true, force: true });
     if (prevConfigDir === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
     else process.env.LLM_EXT_CONFIG_DIR = prevConfigDir;
+    setHedgeAfterMsForTests(null); // never leak a shrunk hedge delay into another test file
   });
 
   function writeTranscript(lines: unknown[], name = "in.jsonl"): string {
@@ -1163,5 +1165,182 @@ describe("driver: summarizeSession", () => {
       expect(callOrder).toEqual(["0", "1", "2", "3"]);
       expect(result.summary).toBe(joinChunkSummaries(["SUMMARY-0", "SUMMARY-1", "SUMMARY-2", "SUMMARY-3"]));
     });
+  });
+
+  // ── Hedging (owner-specified, 2026-08-12) ─────────────────────────────
+  //
+  // Real timers throughout, same reasoning as the concurrency block above.
+  // `setHedgeAfterMsForTests` shrinks `HEDGE_AFTER_MS` (60s in production)
+  // to a few milliseconds so these tests don't wait a real minute for the
+  // hedge trigger to fire.
+
+  describe("hedging", () => {
+    it("a slow chunk gets hedged after HEDGE_AFTER_MS and the FIRST responder's text is the one joined", async () => {
+      const p = writeTranscript([userTurn("u1", "hedge win test turn ".repeat(20))]);
+      const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 500_000, maxCompletionTokens: 1_000 };
+
+      setHedgeAfterMsForTests(30);
+
+      // The PRIMARY model call never resolves — a permanent straggler — so
+      // the only way this run can ever finish is via the hedge.
+      const callModel = vi.fn<CallModelFn>(async (_prompt, modelId) => {
+        if (modelId === FREE_MODEL) return new Promise<string>(() => {});
+        return "HEDGE-SUMMARY";
+      });
+
+      const result = await summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        fallbackModels: [fallback],
+        chunkOverlapTurns: 0,
+        concurrency: 2,
+        callModel,
+      });
+
+      expect(result.summary).toBe("HEDGE-SUMMARY");
+      // A hedge win never touches the run's active model or fallback log —
+      // it is a latency bet on one chunk, not a model-availability decision.
+      expect(result.modelId).toBe(FREE_MODEL);
+      expect(result.fallbackEvents).toEqual([]);
+      expect(callModel).toHaveBeenCalledTimes(2);
+      expect(callModel.mock.calls.map((c) => c[1]).sort()).toEqual([FALLBACK_MODEL, FREE_MODEL].sort());
+    }, 10_000);
+
+    it("the loser's late response does not overwrite the winner nor double-write a checkpoint", async () => {
+      const p = writeTranscript([userTurn("u1", "hedge loser test turn ".repeat(20))]);
+      const cp = checkpointPath();
+      const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 500_000, maxCompletionTokens: 1_000 };
+
+      setHedgeAfterMsForTests(30);
+
+      let resolvePrimary!: (v: string) => void;
+      let resolveHedge!: (v: string) => void;
+      const callModel = vi.fn<CallModelFn>(async (_prompt, modelId) => {
+        if (modelId === FREE_MODEL) {
+          return new Promise<string>((res) => {
+            resolvePrimary = res;
+          });
+        }
+        return new Promise<string>((res) => {
+          resolveHedge = res;
+        });
+      });
+
+      const resultPromise = summarizeSession({
+        transcriptPath: p,
+        checkpointPath: cp,
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        fallbackModels: [fallback],
+        chunkOverlapTurns: 0,
+        concurrency: 2,
+        callModel,
+      });
+
+      await waitUntil(() => callModel.mock.calls.length >= 2, 5_000);
+      resolveHedge("HEDGE-WINS");
+      const result = await resultPromise;
+      expect(result.summary).toBe("HEDGE-WINS");
+
+      const savedAfterWin = JSON.parse(readFileSync(cp, "utf-8")) as { mapSummaries: (string | null)[] };
+      expect(savedAfterWin.mapSummaries[0]).toBe("HEDGE-WINS");
+
+      // The abandoned primary resolves AFTER the run has already finished
+      // and returned. Its text must never overwrite the checkpoint — the
+      // "a chunk index is written at most once" invariant holds regardless
+      // of completion order.
+      resolvePrimary("PRIMARY-TOO-LATE");
+      await new Promise((r) => setTimeout(r, 100));
+      const savedAfterLatePrimary = JSON.parse(readFileSync(cp, "utf-8")) as { mapSummaries: (string | null)[] };
+      expect(savedAfterLatePrimary.mapSummaries[0]).toBe("HEDGE-WINS");
+    }, 10_000);
+
+    it("concurrency <= 1 never hedges, even with hedge: true and fallback models available", async () => {
+      const p = writeTranscript([userTurn("u1", "sequential hedge test turn ".repeat(20))]);
+      const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 500_000, maxCompletionTokens: 1_000 };
+
+      // A trigger this small would fire almost instantly if hedging were
+      // (incorrectly) active on the sequential path — the primary call
+      // below deliberately takes longer than this to resolve.
+      setHedgeAfterMsForTests(1);
+
+      const callModel = vi.fn<CallModelFn>(async (_prompt, modelId) => {
+        await new Promise((r) => setTimeout(r, 50));
+        return modelId === FREE_MODEL ? "PRIMARY-SUMMARY" : "SHOULD-NEVER-BE-CALLED";
+      });
+
+      const result = await summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        fallbackModels: [fallback],
+        chunkOverlapTurns: 0,
+        concurrency: 1,
+        hedge: true,
+        callModel,
+      });
+
+      expect(result.summary).toBe("PRIMARY-SUMMARY");
+      expect(callModel).toHaveBeenCalledTimes(1);
+      expect(callModel.mock.calls[0][1]).toBe(FREE_MODEL);
+    }, 10_000);
+
+    it("hedging never exceeds the concurrency cap", async () => {
+      const lines = Array.from({ length: 2 }, (_, i) => userTurn(`u${i}`, `hedge cap request ${i} `.repeat(30)));
+      const p = writeTranscript(lines);
+      const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 500_000, maxCompletionTokens: 1_000 };
+
+      // Bigger than STAGGER_INTERVAL_MS (250ms): worker 1's launch is
+      // staggered by one interval, so a SHORT hedge trigger would fire for
+      // chunk 0 while worker 1 hasn't registered yet — a real spare slot at
+      // that instant, correctly hedged, but not what THIS test means to
+      // exercise. A trigger comfortably past the full stagger window
+      // guarantees both chunks are already occupying the pool by the time
+      // either one's hedge trigger fires.
+      setHedgeAfterMsForTests(400);
+
+      let inFlightCalls = 0;
+      let maxInFlightCalls = 0;
+      const releases: Array<() => void> = [];
+      const callModel = vi.fn<CallModelFn>(async () => {
+        inFlightCalls++;
+        maxInFlightCalls = Math.max(maxInFlightCalls, inFlightCalls);
+        await new Promise<void>((res) => releases.push(res));
+        inFlightCalls--;
+        return "SUMMARY";
+      });
+
+      const resultPromise = summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        fallbackModels: [fallback],
+        maxChunkTokens: 30, // one chunk per turn => 2 chunks
+        chunkOverlapTurns: 0,
+        concurrency: 2,
+        callModel,
+      });
+
+      // Both chunks' primaries occupy the pool's only 2 slots. Once both
+      // hedge-trigger windows have elapsed there is never a spare slot, so
+      // no hedge call may land and the cap must never be exceeded even
+      // though both chunks are permanent stragglers.
+      await waitUntil(() => callModel.mock.calls.length >= 2, 5_000);
+      await new Promise((r) => setTimeout(r, 800)); // outlive both 400ms trigger windows with margin
+      expect(callModel.mock.calls.length).toBe(2); // no hedge call landed — cap left no spare slot
+      expect(maxInFlightCalls).toBeLessThanOrEqual(2);
+
+      releases.splice(0).forEach((r) => r());
+      await resultPromise;
+      expect(maxInFlightCalls).toBeLessThanOrEqual(2);
+    }, 10_000);
   });
 });

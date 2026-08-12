@@ -768,11 +768,12 @@ export function buildTools(limitsText: string) {
           chunk_timeout_s: {
             type: "number",
             description:
-              "Per-chunk deadline in seconds. Default: 120 — deliberately far tighter than the " +
-              "global 300s request timeout, because under concurrency the wall-clock is the " +
-              "SLOWEST chunk, not the average one (measured spread on same-sized chunks was " +
-              "4.4x: 90s to 400s). A chunk exceeding this aborts and is retried or rotated to " +
-              "another free model like any other transient, instead of dragging the whole run. " +
+              "Per-chunk deadline in seconds. Default: 240 — a BACKSTOP against a stalled " +
+              "generation, not a tail-cutter. Measured chunk times on the current free model " +
+              "spread 4.4x (90s to 400s), so a deadline set below that band aborts work that " +
+              "was merely slow and can trip the circuit breaker; the tail is cut by hedging " +
+              "instead, which races a second model rather than killing the first. A chunk " +
+              "exceeding this aborts and is retried or rotated like any other transient. " +
               "Raise it for a slow model or a huge chunk; an explicit value is honored verbatim.",
           },
         },
