@@ -9,7 +9,7 @@ skills:
   - hf-cli
   - huggingface-community-evals
 # tools: intentionally omitted — inherits the full tool surface (Bash, Read, Edit, Write,
-# WebFetch, AskUserQuestion, all MCP tools). The agent needs Bash for runner detection +
+# WebFetch, AskUserQuestion). No MCP — MCP is banned project-wide. The agent needs Bash for runner detection +
 # install commands, Read for state files, Write for SCRATCH state under $CLAUDE_PLUGIN_DATA
 # (NEVER for ~/.llm-externalizer/settings.yaml — that file is user-only by policy), and
 # `llm-ext discover` (CLI, via Bash) to verify the final configuration.

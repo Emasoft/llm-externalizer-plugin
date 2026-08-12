@@ -1,6 +1,6 @@
-// launcher.mjs — pre-flight check + self-install for the MCP server.
+// launcher.mjs — pre-flight check + self-install for the `llm-ext` CLI.
 //
-// The plugin's MCP server has a native dependency (better-sqlite3) that
+// The plugin's CLI has a native dependency (better-sqlite3) that
 // esbuild marks external; it must be present in node_modules at runtime.
 //
 // Previous architecture (≤ v9.7.0): a SessionStart hook ran a bash script
@@ -9,10 +9,10 @@
 // and exposed a destructive-rm-rf-on-symlink race documented in the v9.8.0
 // audit (SC-P1-001, SC-P1-002). Per the audit's option-3 recommendation,
 // we now self-install from the launcher itself — the same Node binary that
-// will run the server is the one that prepares its dependencies. This is
+// will run the CLI is the one that prepares its dependencies. This is
 // cross-platform out of the box and has no rm-rf surface.
 //
-// The launcher runs every time the MCP server boots; the install path is
+// The launcher runs every time the CLI boots; the install path is
 // only taken when `import("better-sqlite3")` fails. On the warm path this
 // adds a single try/catch around the import — negligible overhead.
 
@@ -95,7 +95,7 @@ function installDeps(dataDir) {
       "No package manager (npm / pnpm / bun) on PATH. Install Node.js + npm and retry.",
     );
   }
-  log(`installing MCP server deps with ${pm.bin} (this is a one-time setup)...`);
+  log(`installing native deps with ${pm.bin} (this is a one-time setup)...`);
   // Use lock path if present, otherwise the fallback (install without lockfile).
   const hasLock = existsSync(join(dataDir, "package-lock.json"));
   const args = hasLock ? pm.lockArgs : pm.fallbackArgs;

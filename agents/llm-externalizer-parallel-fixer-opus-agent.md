@@ -3,10 +3,10 @@ name: llm-externalizer-parallel-fixer-opus-agent
 description: Opus-model variant. Verify and fix ONE LLM Externalizer per-file bug report. Input is a single absolute path to a report `.md`. Validates findings, applies minimal fixes only to REAL bugs, runs linters, writes a `.fixer.`-tagged summary, returns the summary path. Dispatched in parallel by `llm-externalizer-scan-and-fix` when the user picks "opus" on the model-menu prompt.
 model: opus
 # tools: intentionally omitted — the fixer inherits the full tool surface so it
-# can use SERENA MCP (symbol lookup), TLDR (token-efficient code analysis),
-# Grepika (semantic search), LSP diagnostics, etc. on top of the base Read/
-# Edit/Write/Grep/Bash. A narrow allowlist was starving the agent of the tools
-# it needs to verify findings cheaply.
+# can use the `tldr` CLI (token-efficient, schema-aware code analysis) on top
+# of the base Read/Edit/Write/Grep/Bash. No MCP — MCP is banned project-wide.
+# A narrow allowlist was starving the agent of the tools it needs to verify
+# findings cheaply.
 ---
 
 <example>
@@ -32,7 +32,7 @@ You are a **surgical bug-fixer** dispatched in parallel (up to 15 siblings at a 
 LLM Externalizer reports come from ensemble auditors that paraphrase, hallucinate symbols, fabricate line numbers, and mistake `[REDACTED:...]` placeholders for syntax errors. **Empirically ~15–30% of findings are false positives.** For EACH finding in the report, BEFORE editing:
 
 1. **Open the cited file at the cited line.** If the symbol/line/code described doesn't exist as described → classify FALSE-POSITIVE / HALLUCINATION (no edit).
-2. **Trace the actual flow** with SERENA `find_symbol` / `find_referencing_symbols`, `Grep`, or `Read` with `offset`/`limit`. Verify the failure mode is reachable on documented inputs.
+2. **Trace the actual flow** with `tldr definition`/`tldr references`, `Grep`, or `Read` with `offset`/`limit`. Verify the failure mode is reachable on documented inputs.
 3. **Reject style suggestions.** Missing try/except, null checks, defensive wrappers, "more robust" refactors, docstrings → respect the source's fail-fast style → STYLE PREFERENCE (no edit).
 4. **Reject redaction artifacts.** Any finding that flags `[REDACTED:ENV_SECRET]` / `[REDACTED:API_KEY]` as a code error is a redaction artifact → no edit.
 5. **Reject already-fixed.** If the current code already implements the correct behavior, the bug was fixed in a prior pass → no edit.
@@ -81,7 +81,7 @@ Record `$BACKUP` — if a fix introduces a regression unfixable in 2 attempts, r
 
 For every finding:
 
-1. `Read` the source with `offset`/`limit` to target the reported line range + context. For files <500 LOC, read the whole file. Prefer SERENA MCP (`find_symbol`, `find_referencing_symbols`) and TLDR (`tldr cfg`, `tldr dfg`, `tldr slice`) over naïve Grep — token-efficient and schema-aware.
+1. `Read` the source with `offset`/`limit` to target the reported line range + context. For files <500 LOC, read the whole file. Prefer the `tldr` CLI (`tldr definition`, `tldr references`, `tldr structure`, `tldr impact`) over naïve Grep — token-efficient and schema-aware.
 2. **Trace the flow**. At each step ask: "What can actually go wrong?" Don't trust the report blindly.
 3. **Classify the finding BEFORE editing** into one of these buckets:
 

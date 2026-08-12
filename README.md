@@ -870,7 +870,7 @@ All six agents are **internal** — users dispatch them via slash commands, not 
 | Agent | Model | Role | Dispatched by |
 |---|---|---|---|
 | `llm-externalizer-setup-agent` | sonnet | Interactive setup wizard. Detects platform, finds/installs a runner, downloads a Hugging Face model, runs five compatibility tests, emits a paste-ready `settings.yaml` snippet. Preloads five HF helper skills (`huggingface-best`, `huggingface-local-models`, `huggingface-mlx-models`, `hf-cli`, `huggingface-community-evals`) | The `/llm-externalizer-setup` command |
-| `llm-externalizer-reviewer-agent` | sonnet | Read-only code reviewer. Inherits full tool surface (SERENA, TLDR, Grepika, LSP). Returns only report paths | The `llm-externalizer-scan` skill |
+| `llm-externalizer-reviewer-agent` | sonnet | Read-only code reviewer. Inherits full tool surface (`tldr` CLI, no MCP). Returns only report paths | The `llm-externalizer-scan` skill |
 | `llm-externalizer-parallel-fixer-sonnet-agent` | sonnet | Verifies and fixes ALL findings in ONE scan report. Stateless; writes a `.fixer.`-tagged summary; up to 15 dispatched in parallel | `scan-and-fix`, `fix-report` — when the user picks **Sonnet** on the menu |
 | `llm-externalizer-parallel-fixer-opus-agent` | opus | Same role on Opus | `scan-and-fix`, `fix-report` — when the user picks **Opus** |
 | `llm-externalizer-serial-fixer-sonnet-agent` | sonnet | Fixes exactly ONE bug per invocation from an aggregated list. Stateful on disk (mutates the list). One at a time | `scan-and-fix-serially`, `fix-found-bugs` — when the user picks **Sonnet** |
