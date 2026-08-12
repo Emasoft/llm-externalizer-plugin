@@ -254766,11 +254766,34 @@ var CONNECT_TIMEOUT_MS = 5e3;
 async function fetchWithTimeout(url2, options, timeoutMs = CONNECT_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url2, { ...options, signal: controller.signal });
-  } finally {
+  let disarmed = false;
+  const disarm = () => {
+    if (disarmed) return;
+    disarmed = true;
     clearTimeout(timer);
+  };
+  let res;
+  try {
+    res = await fetch(url2, { ...options, signal: controller.signal });
+  } catch (err3) {
+    disarm();
+    throw err3;
   }
+  if (!res.body) {
+    disarm();
+    return res;
+  }
+  const tapped = res.body.pipeThrough(
+    new TransformStream({
+      flush: disarm,
+      cancel: disarm
+    })
+  );
+  return new Response(tapped, {
+    status: res.status,
+    statusText: res.statusText,
+    headers: res.headers
+  });
 }
 var RETRY_MAX_ATTEMPTS = 5;
 var RETRY_BASE_DELAY_MS = 1e3;

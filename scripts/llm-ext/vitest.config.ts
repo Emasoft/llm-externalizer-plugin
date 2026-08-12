@@ -282,6 +282,11 @@ export default defineConfig({
       'src/session_summary/chunker.test.ts',
       'src/session_summary/model-select.test.ts',
       'src/session_summary/driver.test.ts',
+      // Request-deadline contract (TRDD-0H5N1V9W) — the timeout must cover the
+      // BODY read, not just time-to-first-byte. Regression for a shipped bug
+      // where a stalled generation hung the run forever (measured 1890s against
+      // a 300s cap) because the abort timer was cleared when headers arrived.
+      'src/provider/http.test.ts',
     ],
   },
 });

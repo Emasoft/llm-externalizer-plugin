@@ -10,7 +10,31 @@
 export const CONNECT_TIMEOUT_MS = 5000;
 
 /**
- * Fetch with a connect timeout so Claude doesn't hang when the host is offline.
+ * Fetch with a timeout that covers the WHOLE exchange — connect, headers, AND
+ * the body read.
+ *
+ * THE BUG THIS FIXES (TRDD-0H5N1V9W), because the naive shape is subtly wrong:
+ *
+ *     const timer = setTimeout(() => controller.abort(), timeoutMs);
+ *     try { return await fetch(url, {...options, signal: controller.signal}); }
+ *     finally { clearTimeout(timer); }          // <-- fires at HEADERS
+ *
+ * `fetch()` resolves as soon as response HEADERS arrive, NOT when the body has
+ * been consumed. So that `finally` disarmed the abort the instant headers
+ * landed, and the caller then read the body with no deadline whatsoever — the
+ * timeout bounded time-to-first-byte only. A model that returned headers
+ * promptly and then stalled mid-generation hung forever: the retry ladder never
+ * fired, because a retry needs a RESPONSE and there is none. Measured: a
+ * session-summary chunk ran 1890s against a 300s cap (6.3x) before its socket
+ * died, while fetchWithRetry429's `remaining = timeout - elapsed` arithmetic
+ * believed the request had long since expired.
+ *
+ * The fix keeps the controller ARMED through the body read and disarms it only
+ * once the body settles, so an over-deadline generation ABORTS LOUDLY and can
+ * rotate like any other transient — fail-fast instead of a silent hang.
+ *
+ * Raising `timeoutMs` is NOT an alternative fix: it turns an unbounded hang into
+ * a longer unbounded hang.
  */
 export async function fetchWithTimeout(
   url: string,
@@ -19,11 +43,49 @@ export async function fetchWithTimeout(
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...options, signal: controller.signal });
-  } finally {
+  let disarmed = false;
+  const disarm = () => {
+    if (disarmed) return;
+    disarmed = true;
     clearTimeout(timer);
+  };
+
+  let res: Response;
+  try {
+    res = await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    // Never leak the timer when the request fails outright.
+    disarm();
+    throw err;
   }
+
+  // 204/304/HEAD and some runtimes give a null body — nothing left to bound, and
+  // the Response constructor REJECTS a body for those statuses, so returning the
+  // original object is both correct and necessary.
+  if (!res.body) {
+    disarm();
+    return res;
+  }
+
+  // Pass-through tap whose terminal callbacks disarm the timer. `flush` covers
+  // the body ending normally; `cancel` covers the consumer walking away (an
+  // early return, or a caller that never reads). Without `cancel` an unread body
+  // would leave the timer armed to fire later against a response nobody wants.
+  const tapped = res.body.pipeThrough(
+    new TransformStream({
+      flush: disarm,
+      cancel: disarm,
+    }),
+  );
+
+  // Rebuilt rather than mutated because Response.body is read-only. Safe here:
+  // no caller in this codebase reads `url`, `redirected`, or `type` (the fields
+  // reconstruction does not carry over) — verified before making this change.
+  return new Response(tapped, {
+    status: res.status,
+    statusText: res.statusText,
+    headers: res.headers,
+  });
 }
 
 /**
