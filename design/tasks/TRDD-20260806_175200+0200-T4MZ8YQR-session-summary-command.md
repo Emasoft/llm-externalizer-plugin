@@ -225,6 +225,46 @@ hang.
 That is now known to be at best incomplete: a chunk running 6.3× past its configured timeout is a
 BUG, not inherent cost. The issue text needs amending once the fix lands.
 
+### ⛔ FINAL MEASURED VERDICT ON LATENCY (2026-08-12) — SUPERSEDES every projection above
+
+**Every wall-clock estimate earlier in this card is arithmetic over per-chunk times, not an
+observed run. The observed runs say something different, and this section wins.**
+
+Measured on the frozen 8.7 MB transcript, defaults, after all of tonight's work landed:
+
+| chunk | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|
+| time | 91.0 s | 262.7 s | 1233.7 s | 1478.1 s |
+
+13 aborts, 13 retries, 4 distinct free models engaged. **~25 min and still running on chunk 5.**
+
+**The finding that invalidated the whole plan: per-request latency is NOT proportional to chunk
+size.** Cutting the budget 4× (25k → 6k) made chunks NO faster and produced **80 aborts on 22
+chunks** instead of 13 on 5 — the request count quadrupled at unchanged per-request cost. The
+earliest probe already proved it and I did not follow it through: a **`max_tokens=8` request still
+cost ~35 s**. Free-tier latency is queue/contention bound, not generation bound.
+
+**Consequences, all measured, none negotiable by configuration:**
+- Smaller chunks → WORSE (more requests, same per-request floor).
+- Tighter deadline → WORSE (the deadline is PER-ATTEMPT; below the working band it multiplies cost
+  one full deadline per doomed attempt — tried at 120 s and 240 s, both harmful).
+- More concurrency → already single-wave; not the bottleneck.
+- Fan-out across models → raises the parallelism ceiling, does not lower per-request latency.
+
+**So: 2–3 minutes for a 666k context is NOT reachable on the OpenRouter free tier. Realistic is
+~10–25 minutes.** A local backend would fix it and is genuinely $0, but is unavailable — the owner
+uses those servers for other work (2026-08-12).
+
+**The remaining lever is NOT REDOING THE WORK** → **TRDD-S8CKVH8S** (incremental compaction over the
+append-only prefix). First run stays 10–25 min; every later run costs only the new turns. That is
+what makes the janitor's cache-expiry design (issue #251) viable.
+
+**What tonight's work IS worth, independent of latency:** two real bugs fixed — the unbounded hang
+(`af60ab4`, a stalled generation ran forever because the timeout covered only time-to-first-byte)
+and the degenerate budget (`addf86c`, one free model's usable input budget went NEGATIVE and
+poisoned fan-out runs) — plus concurrency, auto-sizing, fan-out and hedging. Correctness wins, not
+latency wins. Do not let the latency verdict imply they were wasted.
+
 ### REMAINING AFTER HANDOFF
 
 1. Finish/inspect the verification run above.
