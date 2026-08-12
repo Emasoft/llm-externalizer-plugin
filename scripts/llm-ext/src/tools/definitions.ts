@@ -745,12 +745,23 @@ export function buildTools(limitsText: string) {
           max_chunk_tokens: {
             type: "number",
             description:
-              "Override the per-chunk/per-fold token budget. Default: the smaller of 50,000 " +
-              "and the selected model's own context window (minus completion + prompt " +
-              "overhead) — summarization quality collapses long before a model's context " +
-              "LIMIT is reached, so the window alone is not used as the chunk size. Raise " +
-              "this only if you have measured that a bigger chunk still summarizes well on " +
-              "your selected model.",
+              "Override the per-chunk token budget. Default: the smaller of 25,000 and the " +
+              "selected model's own context window (minus completion + prompt overhead) — " +
+              "summarization quality collapses long before a model's context LIMIT is " +
+              "reached, so the window alone is not used as the chunk size. Smaller chunks " +
+              "also parallelize better under concurrency (see concurrency). Raise this only " +
+              "if you have measured that a bigger chunk still summarizes well on your " +
+              "selected model.",
+          },
+          concurrency: {
+            type: "number",
+            description:
+              "How many chunk requests run in flight at once. Default: 12 — measured live " +
+              "against the free-model tier's actual burst behavior (a 32-concurrent burst " +
+              "was clean; 64 started tripping its ~20-requests/minute sub-minute limit), " +
+              "leaving headroom for the rest of the ensemble's traffic. Requests are staggered " +
+              "on launch so a burst never lands in a single instant. Set to 1 to force the " +
+              "original sequential behavior.",
           },
         },
       },

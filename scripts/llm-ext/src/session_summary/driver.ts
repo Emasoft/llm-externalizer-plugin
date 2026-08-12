@@ -37,6 +37,21 @@
  * PURE CORE + THIN IO SHELL: the actual model call is injected as
  * `callModel` (see `CallModelFn`), so this module — and its tests — never
  * touch the network. The real HTTP call lives in the CLI layer (P5).
+ *
+ * CONCURRENCY (owner-specified, 2026-08-12): map chunks are turn-atomic —
+ * no chunk's prompt depends on another chunk's summary — and the join above
+ * is a deterministic, order-based concatenation, not a model fold. So
+ * dispatching several chunks' model calls AT ONCE changes wall-clock only,
+ * never output: the same set of per-chunk summaries lands in
+ * `checkpoint.mapSummaries`, keyed by index, regardless of completion order.
+ * `options.concurrency` (default 1 — sequential — HERE; the CLI layer
+ * defaults it to `DEFAULT_CONCURRENCY`, see its own header) bounds how many
+ * chunk requests run in flight at once. Launches are staggered by
+ * `STAGGER_INTERVAL_MS` per worker so a burst of N concurrent launches never
+ * looks like a request spike to the provider. A model-fallback or
+ * context-overflow re-chunk mutates the SHARED `chunks` array and
+ * `mapSummaries` slice, so it is serialized behind a pause gate that drains
+ * every other in-flight chunk first — see `becomeLeaderAndTransition` below.
  */
 
 import { statSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
@@ -68,11 +83,19 @@ export const PROMPT_OVERHEAD_TOKENS = 2_000;
  * summarizing — quality collapses long before the context LIMIT is reached,
  * especially on free models. The context window governs what FITS; it does
  * not govern what a model can summarize WELL, and the two must not be
- * conflated. 50k tokens is the default: generous enough that a single chunk
- * still covers a substantial slice of transcript (keeping the total chunk
- * count — and so the final joined summary's part count — reasonable), small
- * enough that the model is asked to digest a bounded amount of material per
- * call rather than the whole session at once.
+ * conflated.
+ *
+ * REVISED to 25k (owner-specified, 2026-08-12; was 50k) now that the map
+ * phase runs CONCURRENTLY (see the module header's CONCURRENCY note): the
+ * old 50k value was sized for SEQUENTIAL processing, where a bigger chunk
+ * meant fewer round-trips and so a shorter total run — a tradeoff that no
+ * longer holds once several chunks are in flight at once. Under
+ * concurrency, a SMALLER chunk is strictly better on every axis: each
+ * request generates less output (so it returns sooner), more of them
+ * overlap in wall-clock time, and the per-chunk digest stays well inside
+ * the quality-collapse threshold measured above. The one thing a smaller
+ * default does NOT do is shrink the model's real capability — see
+ * `DEFAULT_CONCURRENCY` for how the two defaults were chosen together.
  *
  * THIS IS A DEFAULT, NOT A CEILING. An explicit `--max_chunk_tokens` is
  * honored VERBATIM and may exceed both this value and the model's window: the
@@ -82,7 +105,78 @@ export const PROMPT_OVERHEAD_TOKENS = 2_000;
  * degrades into extra calls rather than a failure. Only the DEFAULT is capped
  * by the window; there is no point defaulting to a budget the model cannot
  * accept. */
-export const DEFAULT_MAX_CHUNK_TOKENS = 50_000;
+export const DEFAULT_MAX_CHUNK_TOKENS = 25_000;
+
+/**
+ * The CLI layer's default for `--concurrency` when the flag is omitted (see
+ * index.ts's session_summary wiring). `summarizeSession` itself defaults
+ * `options.concurrency` to 1 (sequential) when omitted — a conservative
+ * library default that keeps every caller who doesn't ask for concurrency
+ * on the exact behavior this module always had. The CLI is the one place
+ * that opts every real invocation INTO concurrency by passing this value
+ * explicitly, matching how `max_chunk_tokens` already works (the model-
+ * dependent default lives here; a value the caller supplies, explicitly or
+ * via the CLI, is honored verbatim — see `DEFAULT_MAX_CHUNK_TOKENS`'s own
+ * header).
+ *
+ * MEASURED against the live account, not estimated (its `rate_limit` API
+ * field is deprecated and unusable — `requests: -1`): a burst of 32
+ * concurrent requests to the free model landed 32/32 clean (zero 429s,
+ * no rate-limit headers even returned); a burst of 64 landed 62/64, with
+ * the two 429s carrying `x-ratelimit-limit: 20` and a `x-ratelimit-reset`
+ * that was already in the past by the time the burst finished — i.e. a
+ * sub-minute rolling window, not the UTC-midnight daily cap. 12 stays
+ * comfortably inside the clean zone (32) while leaving headroom for the
+ * rest of the ensemble's traffic and for any candidate model with a
+ * tighter bucket than this one. Deliberately NOT the measured ceiling —
+ * defaulting to the edge of what's clean today is exactly how a small
+ * account-side change turns a default into a standing 429 storm. */
+export const DEFAULT_CONCURRENCY = 12;
+
+/**
+ * Minimum spacing between successive worker LAUNCHES under concurrency > 1
+ * (owner-specified, 2026-08-12; revised down from an initial 3s estimate
+ * once live burst data existed — see `DEFAULT_CONCURRENCY`'s header). Not a
+ * per-request throttle — once a worker is running, it moves straight to its
+ * next chunk with no further delay; this only breaks up the INSTANTANEOUS
+ * admission burst enough that `DEFAULT_CONCURRENCY` (or any larger explicit
+ * value) concurrent launches don't all land in the same tick. The measured
+ * bucket is a 20-slot sub-minute window, so 250ms of spread is plenty — 3s
+ * per launch would have added ~3s × (concurrency - 1) of pure dead time to
+ * every run (e.g. 45s at 16 workers) for no measured benefit.
+ *
+ * Two consequences worth keeping in mind when reading the map loop below
+ * (both measured live, not assumed): request LATENCY here is
+ * queue-dominated, not generation-dominated — even a `max_tokens: 8` probe
+ * took ~35s, a floor that has nothing to do with completion length. So (1)
+ * splitting into smaller chunks does NOT shorten a SEQUENTIAL run — each
+ * added chunk pays the same ~35s floor again, smaller chunks only pay off
+ * once they run concurrently (see `DEFAULT_MAX_CHUNK_TOKENS`'s header); and
+ * (2) a concurrent map phase's wall-clock is approximately the SLOWEST
+ * single chunk's time plus the stagger, not the sum of every chunk's time. */
+export const STAGGER_INTERVAL_MS = 250;
+
+/**
+ * Backoff delay before retrying a chunk that hit an ordinary transient
+ * (429) rate-limit blip WHILE running under concurrency > 1 (see
+ * `callWithRetry`). Sequential runs (concurrency <= 1, the default) keep
+ * the original fail-fast behavior — a lone request has no siblings to keep
+ * busy while it waits, so backing off in-process just stalls the whole run
+ * for no benefit over "checkpoint and let the operator re-run". Under
+ * concurrency, siblings DO keep making progress during the wait, so a
+ * bounded backoff-and-retry converts a same-minute blip into a few extra
+ * seconds of wall-clock instead of aborting a multi-hour run over one
+ * request. 5s clears a single-minute token-bucket refill on this account's
+ * measured ~20 req/min ceiling without being so long it stalls the worker
+ * pool. */
+const TRANSIENT_BACKOFF_MS = 5_000;
+
+/** Real-clock sleep, injected as `sleepFn` through the call chain so tests
+ *  can substitute vitest's fake timers instead of waiting for real seconds
+ *  to pass. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /** The injected model-call seam. Takes a fully-rendered prompt, the model id
  *  (already validated free-only by the caller), and a completion budget; a
@@ -132,8 +226,33 @@ export interface SummarizeSessionOptions {
    *  the run fails. Rate-limit-shaped failures are NEVER retried here — see
    *  `callWithRetry`. Default 2 (three attempts total). */
   maxRetriesPerChunk?: number;
+  /** How many chunk requests may be in flight at once. Default: 1
+   *  (sequential — the library's conservative default; see
+   *  `DEFAULT_CONCURRENCY`'s header for why the CLI opts every real
+   *  invocation into 8 instead). A DEFAULT, NOT A CEILING in the same sense
+   *  as `maxChunkTokens`: an explicit value — including 1, to force
+   *  sequential behavior — is honored verbatim. Launches beyond the first
+   *  are staggered by `STAGGER_INTERVAL_MS`. */
+  concurrency?: number;
+  /** Optional per-chunk progress hook for a caller that wants to render
+   *  readable output with several chunks in flight at once (see
+   *  `ChunkEvent`). Never required for correctness — purely observational. */
+  onChunkEvent?: (event: ChunkEvent) => void;
   /** Injectable clock for deterministic tests; defaults to the wall clock. */
   now?: () => string;
+}
+
+/** One observable moment in a chunk's lifecycle, for a caller's progress
+ *  display. Emitted around the OUTER (index) chunk, not each individual
+ *  callModel attempt, so a retried/rechunked chunk still reads as one
+ *  logical unit of work to the reader. */
+export interface ChunkEvent {
+  chunkIndex: number;
+  totalChunks: number;
+  phase: "start" | "done";
+  /** Set only on "done" — wall-clock time this chunk's index spent being
+   *  worked, including any retries/backoff it needed. */
+  elapsedMs?: number;
 }
 
 /** One model-to-model switch that happened mid-run, for the caller's report. */
@@ -408,6 +527,14 @@ export function isEchoResponse(response: string, sourceText: string): boolean {
  * `echoCheckSource` is the raw text the model was asked to summarize (the
  * chunk's turns) — used ONLY to detect an echoed response (see
  * `isEchoResponse`); it is never sent anywhere.
+ *
+ * `retryTransient` (default false, preserving the original sequential
+ * behavior byte-for-byte) opts a CONCURRENT run into backing off and
+ * retrying an ordinary 429 blip instead of failing the whole run over it —
+ * see `TRANSIENT_BACKOFF_MS`'s header for why this is safe only when
+ * siblings are making progress during the wait. `sleepFn` is the injected
+ * clock for that backoff, defaulting to the real `sleep` — tests substitute
+ * vitest's fake timers.
  */
 async function callWithRetry(
   prompt: string,
@@ -418,6 +545,8 @@ async function callWithRetry(
   label: string,
   checkpointPath: string,
   echoCheckSource: string,
+  retryTransient: boolean = false,
+  sleepFn: (ms: number) => Promise<void> = sleep,
 ): Promise<string> {
   let lastErr: unknown = null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -467,6 +596,18 @@ async function callWithRetry(
       }
 
       if (classifyUnavailable(msg) === "transient") {
+        // Concurrent run with attempts left: back off and retry THIS chunk
+        // — siblings keep making progress in the meantime, so a same-minute
+        // 429 blip costs a few seconds instead of the whole run. Sequential
+        // (the default) keeps the original behavior exactly: fail fast,
+        // name the checkpoint, let the operator re-run once the limit
+        // clears — a lone request has no sibling to keep busy while it
+        // waits, so an in-process backoff would just stall for nothing over
+        // "checkpoint and stop".
+        if (retryTransient && attempt < maxRetries) {
+          await sleepFn(TRANSIENT_BACKOFF_MS);
+          continue;
+        }
         throw new Error(
           `session-summary: ${label} hit a rate limit / availability error on model '${modelId}': ` +
             `${msg}. Checkpoint saved at ${checkpointPath} — re-run the same command to resume once ` +
@@ -760,58 +901,220 @@ export async function summarizeSession(
     saveCheckpoint(options.checkpointPath, checkpoint!);
   }
 
-  // ── MAP: summarize each chunk, checkpointing after every success.
-  for (let i = 0; i < chunks.length; i++) {
-    if (checkpoint.mapSummaries[i] !== null) continue; // already done — resume
-    const triedForThisUnit: string[] = [];
-    for (;;) {
-      try {
-        const summary = await callWithRetry(
-          renderChunkPrompt(chunks[i], chunks.length),
-          activeModel().id,
-          activeModel().maxCompletionTokens,
-          options.callModel,
-          maxRetries,
-          `chunk ${i}`,
-          options.checkpointPath,
-          chunkBodyText(chunks[i]),
-        );
-        checkpoint.mapSummaries[i] = summary;
-        checkpoint.updatedAt = nowIso();
-        saveCheckpoint(options.checkpointPath, checkpoint);
-        break;
-      } catch (err) {
-        if (err instanceof ModelUnavailableError) {
-          const fromModel = activeModel().id;
-          advanceModel(err, triedForThisUnit);
-          rechunkRemainingMap(i, budgetForModel(activeModel()));
-          fallbackEvents.push({ fromModel, toModel: activeModel().id, reason: err.reason, detail: err.detail, atUnit: `chunk ${i}` });
-          continue; // retry the SAME unit of work — chunks[i] now reflects the new model's budget
+  // Shared across every chunk for the lifetime of this run — see
+  // `allModelsExhausted`'s call site: once a model is demoted it is demoted
+  // for the WHOLE run (activeModelIdx only ever advances), so which chunk
+  // happened to discover a given model's unavailability is not meaningful;
+  // only the cumulative list of everything tried before exhaustion is.
+  const triedModelIds: string[] = [];
+
+  /** One attempt cycle on chunk `i`: call the model, and on success persist
+   *  the checkpoint immediately (see the module header — no `await` sits
+   *  between the mutation and the synchronous `saveCheckpoint`, so two
+   *  chunks completing "at once" can never interleave a torn write; the
+   *  second call's fs.writeFileSync simply blocks the JS thread until the
+   *  first's completes, and picks up its already-applied mutation). Returns
+   *  a discriminated outcome instead of performing the model-swap /
+   *  re-chunk itself — the sequential and concurrent map loops below need
+   *  different coordination around that step (the concurrent one must drain
+   *  every other in-flight chunk first; see `becomeLeaderAndTransition`). */
+  async function attemptChunk(
+    i: number,
+    retryTransient: boolean,
+    sleepFn: (ms: number) => Promise<void>,
+  ): Promise<
+    { kind: "ok" } | { kind: "fallback"; err: ModelUnavailableError } | { kind: "overflow"; err: ContextOverflowError }
+  > {
+    try {
+      const summary = await callWithRetry(
+        renderChunkPrompt(chunks[i], chunks.length),
+        activeModel().id,
+        activeModel().maxCompletionTokens,
+        options.callModel,
+        maxRetries,
+        `chunk ${i}`,
+        options.checkpointPath,
+        chunkBodyText(chunks[i]),
+        retryTransient,
+        sleepFn,
+      );
+      checkpoint!.mapSummaries[i] = summary;
+      checkpoint!.updatedAt = nowIso();
+      saveCheckpoint(options.checkpointPath, checkpoint!);
+      return { kind: "ok" };
+    } catch (err) {
+      if (err instanceof ModelUnavailableError) return { kind: "fallback", err };
+      if (err instanceof ContextOverflowError) return { kind: "overflow", err };
+      throw err;
+    }
+  }
+
+  /** Apply a model-fallback or context-overflow outcome: re-chunk the
+   *  remaining (unsent) work and, for a fallback, record the switch. Shared
+   *  by both map loops — the sequential loop calls it directly (nothing
+   *  else can be in flight); the concurrent loop wraps it in
+   *  `becomeLeaderAndTransition`'s drain-then-transition gate. */
+  function applyTransition(
+    i: number,
+    outcome: { kind: "fallback"; err: ModelUnavailableError } | { kind: "overflow"; err: ContextOverflowError },
+  ): void {
+    if (outcome.kind === "fallback") {
+      const fromModel = activeModel().id;
+      advanceModel(outcome.err, triedModelIds);
+      rechunkRemainingMap(i, budgetForModel(activeModel()));
+      fallbackEvents.push({
+        fromModel,
+        toModel: activeModel().id,
+        reason: outcome.err.reason,
+        detail: outcome.err.detail,
+        atUnit: `chunk ${i}`,
+      });
+      return;
+    }
+    // Context overflow: the model's own rejection is ground truth that our
+    // estimate was too optimistic for THIS chunk's real content — shrink
+    // the budget for the remaining (unsent) work and re-pack it at turn
+    // boundaries (chunkTurns degrades to line-boundary splitting for any
+    // single turn that alone still overflows — see chunker.ts). Never swap
+    // models here: this is a sizing problem, not an availability problem.
+    const newBudget = shrinkBudgetOnOverflow(maxChunkTokens);
+    if (newBudget === maxChunkTokens) {
+      throw new Error(
+        `session-summary: chunk ${i} still exceeds model '${activeModel().id}'s context window ` +
+          `even at the minimum ${MIN_OVERFLOW_CHUNK_BUDGET}-token re-split floor (${outcome.err.detail}). ` +
+          `This model cannot summarize this chunk's content — try a model with more context, or ` +
+          `raise --min-context. Checkpoint saved at ${options.checkpointPath}.`,
+        { cause: outcome.err },
+      );
+    }
+    rechunkRemainingMap(i, newBudget);
+  }
+
+  const concurrency = Math.max(1, options.concurrency ?? 1);
+  const onChunkEvent = options.onChunkEvent;
+
+  if (concurrency <= 1) {
+    // ── MAP (sequential): summarize each chunk, checkpointing after every
+    // success. Byte-for-byte the original single-worker behavior — no
+    // `retryTransient` backoff (a lone request has no sibling to keep busy
+    // while it waits — see `TRANSIENT_BACKOFF_MS`'s header), no stagger.
+    for (let i = 0; i < chunks.length; i++) {
+      if (checkpoint.mapSummaries[i] !== null) continue; // already done — resume
+      const startedAt = Date.now();
+      onChunkEvent?.({ chunkIndex: i, totalChunks: chunks.length, phase: "start" });
+      for (;;) {
+        const outcome = await attemptChunk(i, false, sleep);
+        if (outcome.kind === "ok") {
+          onChunkEvent?.({ chunkIndex: i, totalChunks: chunks.length, phase: "done", elapsedMs: Date.now() - startedAt });
+          break;
         }
-        if (err instanceof ContextOverflowError) {
-          // The model's own rejection is ground truth that our estimate was
-          // too optimistic for THIS chunk's real content — shrink the
-          // budget for the remaining (unsent) work and re-pack it at turn
-          // boundaries (chunkTurns degrades to line-boundary splitting for
-          // any single turn that alone still overflows — see chunker.ts).
-          // Never swap models here: this is a sizing problem, not an
-          // availability problem.
-          const newBudget = shrinkBudgetOnOverflow(maxChunkTokens);
-          if (newBudget === maxChunkTokens) {
-            throw new Error(
-              `session-summary: chunk ${i} still exceeds model '${activeModel().id}'s context window ` +
-                `even at the minimum ${MIN_OVERFLOW_CHUNK_BUDGET}-token re-split floor (${err.detail}). ` +
-                `This model cannot summarize this chunk's content — try a model with more context, or ` +
-                `raise --min-context. Checkpoint saved at ${options.checkpointPath}.`,
-              { cause: err },
-            );
-          }
-          rechunkRemainingMap(i, newBudget);
-          continue; // retry the SAME unit of work — chunks[i] is now smaller
-        }
-        throw err;
+        applyTransition(i, outcome); // throws on terminal exhaustion/floor — propagates as before
+        // retry the SAME unit of work — chunks[i] now reflects the new
+        // model's budget or the shrunk budget.
       }
     }
+  } else {
+    // ── MAP (concurrent): a bounded pool of workers pulls the next
+    // not-yet-done chunk index and processes it. Correctness under
+    // concurrency rests on one invariant: `applyTransition` mutates the
+    // SHARED `chunks` array and the `mapSummaries` slice from the failing
+    // index onward, so it may only run once every OTHER currently in-flight
+    // chunk has settled — see `becomeLeaderAndTransition`. Order in the
+    // final joined summary is unaffected either way: `mapSummaries` is
+    // always keyed by index, never by completion order.
+    let nextIndex = 0;
+    const inFlight = new Map<number, Promise<void>>();
+    let transitioning = false;
+    let pauseGate: Promise<void> | null = null;
+
+    /** Serialize a model-fallback/overflow transition behind a pause gate:
+     *  the FIRST worker to hit one becomes the leader, drains every other
+     *  in-flight attempt (so nothing else touches `chunks`/`mapSummaries`
+     *  mid-mutation), then applies the transition and rewinds the dispatch
+     *  cursor so the (now-invalidated) tail gets reprocessed. A worker that
+     *  arrives while a transition is already underway is a FOLLOWER: it
+     *  just waits for the gate to clear, then its own retry loop re-reads
+     *  the (possibly now out-of-range) `chunks[i]` and either retries or
+     *  stops — no separate transition of its own is needed, since the
+     *  leader's rechunk already covers every index from the smallest
+     *  failing index onward. */
+    async function becomeLeaderAndTransition(
+      i: number,
+      outcome: { kind: "fallback"; err: ModelUnavailableError } | { kind: "overflow"; err: ContextOverflowError },
+    ): Promise<void> {
+      if (transitioning) {
+        const gate = pauseGate;
+        if (gate) await gate;
+        return;
+      }
+      transitioning = true;
+      let release!: () => void;
+      const gate = new Promise<void>((res) => {
+        release = res;
+      });
+      pauseGate = gate;
+      try {
+        const others = [...inFlight.entries()].filter(([idx]) => idx !== i).map(([, p]) => p);
+        await Promise.allSettled(others);
+        applyTransition(i, outcome);
+        nextIndex = Math.min(nextIndex, i);
+      } finally {
+        transitioning = false;
+        pauseGate = null;
+        release();
+      }
+    }
+
+    async function worker(workerIdx: number): Promise<void> {
+      if (workerIdx > 0) await sleep(STAGGER_INTERVAL_MS * workerIdx);
+      for (;;) {
+        if (pauseGate) {
+          const gate = pauseGate;
+          await gate;
+          continue;
+        }
+        if (nextIndex >= chunks.length) return;
+        const i = nextIndex;
+        if (checkpoint!.mapSummaries[i] !== null) {
+          nextIndex++;
+          continue;
+        }
+        nextIndex++;
+        const startedAt = Date.now();
+        onChunkEvent?.({ chunkIndex: i, totalChunks: chunks.length, phase: "start" });
+        const task = (async () => {
+          for (;;) {
+            const outcome = await attemptChunk(i, true, sleep);
+            if (outcome.kind === "ok") {
+              onChunkEvent?.({ chunkIndex: i, totalChunks: chunks.length, phase: "done", elapsedMs: Date.now() - startedAt });
+              return;
+            }
+            await becomeLeaderAndTransition(i, outcome);
+            // After a transition (as leader or follower), `chunks`/
+            // `mapSummaries` may have changed shape entirely. Stop if this
+            // index is no longer this worker's to do; otherwise retry it
+            // against the fresh state.
+            if (i >= chunks.length || checkpoint!.mapSummaries[i] !== null) return;
+          }
+        })();
+        inFlight.set(i, task);
+        try {
+          await task;
+        } finally {
+          inFlight.delete(i);
+        }
+      }
+    }
+
+    const workerCount = Math.min(concurrency, chunks.length);
+    const settled = await Promise.allSettled(Array.from({ length: workerCount }, (_, k) => worker(k)));
+    // `allSettled` (never `all`) so every worker always runs to completion —
+    // including the ones still draining behind a leader's pause gate when a
+    // sibling worker's error is the one that ultimately dooms the run. That
+    // keeps every rejection captured here instead of surfacing as a Node
+    // "unhandled rejection" after `summarizeSession` has already returned.
+    const rejected = settled.find((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (rejected) throw rejected.reason;
   }
 
   if (checkpoint.finalSummary === null) {

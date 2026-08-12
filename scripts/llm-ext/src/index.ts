@@ -53,7 +53,7 @@ import { makePreflightHook } from "./cluster/preflight_benchmark.js";
 // it to a real model call + real filesystem paths. resolveTranscriptPath /
 // defaultCheckpointPath are CLI-surface plumbing, kept OUT of session_summary/
 // on purpose (see session-summary-resolve.ts's own header).
-import { summarizeSession, type CallModelFn } from "./session_summary/driver.js";
+import { summarizeSession, DEFAULT_CONCURRENCY, type CallModelFn, type ChunkEvent } from "./session_summary/driver.js";
 import { selectModels } from "./session_summary/model-select.js";
 import { resolveTranscriptPath, defaultCheckpointPath } from "./session-summary-resolve.js";
 // Provider layer (B1 Phase 5a/5b, TRDD-63314265). These modules import NOTHING
@@ -3790,6 +3790,7 @@ async function dispatchCallToolInner(
           output: ssOutputRaw,
           stdout: ssStdoutRaw,
           max_chunk_tokens: ssMaxChunkTokens,
+          concurrency: ssConcurrencyRaw,
         } = args as {
           transcript?: string;
           session_id?: string;
@@ -3800,6 +3801,7 @@ async function dispatchCallToolInner(
           output?: string;
           stdout?: boolean;
           max_chunk_tokens?: number;
+          concurrency?: number;
         };
 
         const VALID_PRUNE_LEVELS = new Set(["aggressive", "moderate", "none"]);
@@ -3902,6 +3904,27 @@ async function dispatchCallToolInner(
           return resp.content;
         };
 
+        // Concurrency: an explicit --concurrency (including 1, to force the
+        // original sequential behavior) is honored verbatim; omitted, the
+        // CLI opts every real invocation into DEFAULT_CONCURRENCY — see
+        // driver.ts's own header for why the library default stays 1.
+        const concurrency = typeof ssConcurrencyRaw === "number" ? ssConcurrencyRaw : DEFAULT_CONCURRENCY;
+
+        // Per-chunk progress lines labeled by chunk index, so N chunks in
+        // flight at once still read clearly instead of interleaving
+        // anonymous "Processing… Ns elapsed" lines (each chunk is its own
+        // named line; a "done" line always carries the SAME chunk index and
+        // its own elapsed time, however many other chunks completed first).
+        const onChunkEvent = (event: ChunkEvent) => {
+          const label = `[chunk ${event.chunkIndex + 1}/${event.totalChunks}]`;
+          if (event.phase === "start") {
+            process.stderr.write(`${label} started\n`);
+          } else {
+            const secs = ((event.elapsedMs ?? 0) / 1000).toFixed(1);
+            process.stderr.write(`${label} done in ${secs}s\n`);
+          }
+        };
+
         let result;
         try {
           result = await summarizeSession({
@@ -3914,6 +3937,8 @@ async function dispatchCallToolInner(
             callModel,
             pruneLevel: prune as "aggressive" | "moderate" | "none",
             maxChunkTokens: typeof ssMaxChunkTokens === "number" ? ssMaxChunkTokens : undefined,
+            concurrency,
+            onChunkEvent,
           });
         } catch (err) {
           return {

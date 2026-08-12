@@ -252867,7 +252867,13 @@ function classifyContextOverflow(detail) {
 
 // src/session_summary/driver.ts
 var PROMPT_OVERHEAD_TOKENS = 2e3;
-var DEFAULT_MAX_CHUNK_TOKENS = 5e4;
+var DEFAULT_MAX_CHUNK_TOKENS = 25e3;
+var DEFAULT_CONCURRENCY = 12;
+var STAGGER_INTERVAL_MS = 250;
+var TRANSIENT_BACKOFF_MS = 5e3;
+function sleep(ms) {
+  return new Promise((resolve19) => setTimeout(resolve19, ms));
+}
 function checkpointIdentityMatches(a, b) {
   return a.transcriptPath === b.transcriptPath && a.transcriptBytes === b.transcriptBytes && a.transcriptMtimeMs === b.transcriptMtimeMs && a.pruneLevel === b.pruneLevel && a.chunkerMaxTokens === b.chunkerMaxTokens && a.chunkerOverlapTurns === b.chunkerOverlapTurns;
 }
@@ -252971,7 +252977,7 @@ function isEchoResponse(response, sourceText) {
   const normSource = normalizeForEchoCheck(sourceText);
   return normSource.includes(normResponse);
 }
-async function callWithRetry(prompt, modelId, maxOutputTokens, callModel, maxRetries, label, checkpointPath, echoCheckSource) {
+async function callWithRetry(prompt, modelId, maxOutputTokens, callModel, maxRetries, label, checkpointPath, echoCheckSource, retryTransient = false, sleepFn = sleep) {
   let lastErr = null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -252999,6 +253005,10 @@ async function callWithRetry(prompt, modelId, maxOutputTokens, callModel, maxRet
         throw new ModelUnavailableError(fallbackReason, modelId, msg);
       }
       if (classifyUnavailable(msg) === "transient") {
+        if (retryTransient && attempt < maxRetries) {
+          await sleepFn(TRANSIENT_BACKOFF_MS);
+          continue;
+        }
         throw new Error(
           `session-summary: ${label} hit a rate limit / availability error on model '${modelId}': ${msg}. Checkpoint saved at ${checkpointPath} \u2014 re-run the same command to resume once the limit clears (free daily quotas reset at 00:00 UTC).`,
           { cause: err3 }
@@ -253177,47 +253187,138 @@ async function summarizeSession(options) {
     checkpoint.updatedAt = nowIso();
     saveCheckpoint(options.checkpointPath, checkpoint);
   }
-  for (let i = 0; i < chunks.length; i++) {
-    if (checkpoint.mapSummaries[i] !== null) continue;
-    const triedForThisUnit = [];
-    for (; ; ) {
-      try {
-        const summary = await callWithRetry(
-          renderChunkPrompt(chunks[i], chunks.length),
-          activeModel().id,
-          activeModel().maxCompletionTokens,
-          options.callModel,
-          maxRetries,
-          `chunk ${i}`,
-          options.checkpointPath,
-          chunkBodyText(chunks[i])
-        );
-        checkpoint.mapSummaries[i] = summary;
-        checkpoint.updatedAt = nowIso();
-        saveCheckpoint(options.checkpointPath, checkpoint);
-        break;
-      } catch (err3) {
-        if (err3 instanceof ModelUnavailableError) {
-          const fromModel = activeModel().id;
-          advanceModel(err3, triedForThisUnit);
-          rechunkRemainingMap(i, budgetForModel(activeModel()));
-          fallbackEvents.push({ fromModel, toModel: activeModel().id, reason: err3.reason, detail: err3.detail, atUnit: `chunk ${i}` });
-          continue;
+  const triedModelIds = [];
+  async function attemptChunk(i, retryTransient, sleepFn) {
+    try {
+      const summary = await callWithRetry(
+        renderChunkPrompt(chunks[i], chunks.length),
+        activeModel().id,
+        activeModel().maxCompletionTokens,
+        options.callModel,
+        maxRetries,
+        `chunk ${i}`,
+        options.checkpointPath,
+        chunkBodyText(chunks[i]),
+        retryTransient,
+        sleepFn
+      );
+      checkpoint.mapSummaries[i] = summary;
+      checkpoint.updatedAt = nowIso();
+      saveCheckpoint(options.checkpointPath, checkpoint);
+      return { kind: "ok" };
+    } catch (err3) {
+      if (err3 instanceof ModelUnavailableError) return { kind: "fallback", err: err3 };
+      if (err3 instanceof ContextOverflowError) return { kind: "overflow", err: err3 };
+      throw err3;
+    }
+  }
+  function applyTransition(i, outcome) {
+    if (outcome.kind === "fallback") {
+      const fromModel = activeModel().id;
+      advanceModel(outcome.err, triedModelIds);
+      rechunkRemainingMap(i, budgetForModel(activeModel()));
+      fallbackEvents.push({
+        fromModel,
+        toModel: activeModel().id,
+        reason: outcome.err.reason,
+        detail: outcome.err.detail,
+        atUnit: `chunk ${i}`
+      });
+      return;
+    }
+    const newBudget = shrinkBudgetOnOverflow(maxChunkTokens);
+    if (newBudget === maxChunkTokens) {
+      throw new Error(
+        `session-summary: chunk ${i} still exceeds model '${activeModel().id}'s context window even at the minimum ${MIN_OVERFLOW_CHUNK_BUDGET}-token re-split floor (${outcome.err.detail}). This model cannot summarize this chunk's content \u2014 try a model with more context, or raise --min-context. Checkpoint saved at ${options.checkpointPath}.`,
+        { cause: outcome.err }
+      );
+    }
+    rechunkRemainingMap(i, newBudget);
+  }
+  const concurrency = Math.max(1, options.concurrency ?? 1);
+  const onChunkEvent = options.onChunkEvent;
+  if (concurrency <= 1) {
+    for (let i = 0; i < chunks.length; i++) {
+      if (checkpoint.mapSummaries[i] !== null) continue;
+      const startedAt = Date.now();
+      onChunkEvent?.({ chunkIndex: i, totalChunks: chunks.length, phase: "start" });
+      for (; ; ) {
+        const outcome = await attemptChunk(i, false, sleep);
+        if (outcome.kind === "ok") {
+          onChunkEvent?.({ chunkIndex: i, totalChunks: chunks.length, phase: "done", elapsedMs: Date.now() - startedAt });
+          break;
         }
-        if (err3 instanceof ContextOverflowError) {
-          const newBudget = shrinkBudgetOnOverflow(maxChunkTokens);
-          if (newBudget === maxChunkTokens) {
-            throw new Error(
-              `session-summary: chunk ${i} still exceeds model '${activeModel().id}'s context window even at the minimum ${MIN_OVERFLOW_CHUNK_BUDGET}-token re-split floor (${err3.detail}). This model cannot summarize this chunk's content \u2014 try a model with more context, or raise --min-context. Checkpoint saved at ${options.checkpointPath}.`,
-              { cause: err3 }
-            );
-          }
-          rechunkRemainingMap(i, newBudget);
-          continue;
-        }
-        throw err3;
+        applyTransition(i, outcome);
       }
     }
+  } else {
+    let nextIndex = 0;
+    const inFlight = /* @__PURE__ */ new Map();
+    let transitioning = false;
+    let pauseGate = null;
+    async function becomeLeaderAndTransition(i, outcome) {
+      if (transitioning) {
+        const gate2 = pauseGate;
+        if (gate2) await gate2;
+        return;
+      }
+      transitioning = true;
+      let release;
+      const gate = new Promise((res) => {
+        release = res;
+      });
+      pauseGate = gate;
+      try {
+        const others = [...inFlight.entries()].filter(([idx]) => idx !== i).map(([, p]) => p);
+        await Promise.allSettled(others);
+        applyTransition(i, outcome);
+        nextIndex = Math.min(nextIndex, i);
+      } finally {
+        transitioning = false;
+        pauseGate = null;
+        release();
+      }
+    }
+    async function worker(workerIdx) {
+      if (workerIdx > 0) await sleep(STAGGER_INTERVAL_MS * workerIdx);
+      for (; ; ) {
+        if (pauseGate) {
+          const gate = pauseGate;
+          await gate;
+          continue;
+        }
+        if (nextIndex >= chunks.length) return;
+        const i = nextIndex;
+        if (checkpoint.mapSummaries[i] !== null) {
+          nextIndex++;
+          continue;
+        }
+        nextIndex++;
+        const startedAt = Date.now();
+        onChunkEvent?.({ chunkIndex: i, totalChunks: chunks.length, phase: "start" });
+        const task = (async () => {
+          for (; ; ) {
+            const outcome = await attemptChunk(i, true, sleep);
+            if (outcome.kind === "ok") {
+              onChunkEvent?.({ chunkIndex: i, totalChunks: chunks.length, phase: "done", elapsedMs: Date.now() - startedAt });
+              return;
+            }
+            await becomeLeaderAndTransition(i, outcome);
+            if (i >= chunks.length || checkpoint.mapSummaries[i] !== null) return;
+          }
+        })();
+        inFlight.set(i, task);
+        try {
+          await task;
+        } finally {
+          inFlight.delete(i);
+        }
+      }
+    }
+    const workerCount = Math.min(concurrency, chunks.length);
+    const settled = await Promise.allSettled(Array.from({ length: workerCount }, (_, k) => worker(k)));
+    const rejected = settled.find((r) => r.status === "rejected");
+    if (rejected) throw rejected.reason;
   }
   if (checkpoint.finalSummary === null) {
     const mapped = checkpoint.mapSummaries;
@@ -257491,7 +257592,8 @@ Settings file is present but its 'profiles' map is empty \u2014 this is a config
             checkpoint: ssCheckpointRaw,
             output: ssOutputRaw,
             stdout: ssStdoutRaw,
-            max_chunk_tokens: ssMaxChunkTokens
+            max_chunk_tokens: ssMaxChunkTokens,
+            concurrency: ssConcurrencyRaw
           } = args;
           const VALID_PRUNE_LEVELS = /* @__PURE__ */ new Set(["aggressive", "moderate", "none"]);
           const prune = ssPruneRaw ?? "aggressive";
@@ -257565,6 +257667,18 @@ Settings file is present but its 'profiles' map is empty \u2014 this is a config
             }
             return resp.content;
           };
+          const concurrency = typeof ssConcurrencyRaw === "number" ? ssConcurrencyRaw : DEFAULT_CONCURRENCY;
+          const onChunkEvent = (event) => {
+            const label = `[chunk ${event.chunkIndex + 1}/${event.totalChunks}]`;
+            if (event.phase === "start") {
+              process.stderr.write(`${label} started
+`);
+            } else {
+              const secs = ((event.elapsedMs ?? 0) / 1e3).toFixed(1);
+              process.stderr.write(`${label} done in ${secs}s
+`);
+            }
+          };
           let result;
           try {
             result = await summarizeSession({
@@ -257576,7 +257690,9 @@ Settings file is present but its 'profiles' map is empty \u2014 this is a config
               fallbackModels,
               callModel,
               pruneLevel: prune,
-              maxChunkTokens: typeof ssMaxChunkTokens === "number" ? ssMaxChunkTokens : void 0
+              maxChunkTokens: typeof ssMaxChunkTokens === "number" ? ssMaxChunkTokens : void 0,
+              concurrency,
+              onChunkEvent
             });
           } catch (err3) {
             return {
@@ -259747,7 +259863,11 @@ function buildTools(limitsText) {
           },
           max_chunk_tokens: {
             type: "number",
-            description: "Override the per-chunk/per-fold token budget. Default: the smaller of 50,000 and the selected model's own context window (minus completion + prompt overhead) \u2014 summarization quality collapses long before a model's context LIMIT is reached, so the window alone is not used as the chunk size. Raise this only if you have measured that a bigger chunk still summarizes well on your selected model."
+            description: "Override the per-chunk token budget. Default: the smaller of 25,000 and the selected model's own context window (minus completion + prompt overhead) \u2014 summarization quality collapses long before a model's context LIMIT is reached, so the window alone is not used as the chunk size. Smaller chunks also parallelize better under concurrency (see concurrency). Raise this only if you have measured that a bigger chunk still summarizes well on your selected model."
+          },
+          concurrency: {
+            type: "number",
+            description: "How many chunk requests run in flight at once. Default: 12 \u2014 measured live against the free-model tier's actual burst behavior (a 32-concurrent burst was clean; 64 started tripping its ~20-requests/minute sub-minute limit), leaving headroom for the rest of the ensemble's traffic. Requests are staggered on launch so a burst never lands in a single instant. Set to 1 to force the original sequential behavior."
           }
         }
       }

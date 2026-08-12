@@ -7,7 +7,13 @@ import { mkdtempSync, writeFileSync, rmSync, readFileSync, utimesSync } from "no
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { summarizeSession, joinChunkSummaries, isEchoResponse, DEFAULT_MAX_CHUNK_TOKENS, type CallModelFn } from "./driver.js";
+import {
+  summarizeSession,
+  joinChunkSummaries,
+  isEchoResponse,
+  DEFAULT_MAX_CHUNK_TOKENS,
+  type CallModelFn,
+} from "./driver.js";
 import type { EligibleModel } from "./model-select.js";
 import { resetCooldownCacheForTests } from "../free-rotation.js";
 
@@ -838,5 +844,235 @@ describe("driver: summarizeSession", () => {
         callModel,
       }),
     ).rejects.toThrow(/every candidate free model is unavailable/);
+  });
+
+  // ── Concurrency (owner-specified, 2026-08-12) ─────────────────────────
+  //
+  // These use REAL timers (not vi.useFakeTimers): the transcript reader
+  // (transcript.ts) streams the file via a real `fs.createReadStream` +
+  // `readline`, which needs real event-loop I/O ticks to emit its
+  // 'line'/'close' events — sinon/vitest fake timers intercept only
+  // setTimeout/setInterval scheduling, not that I/O, so faking time here
+  // just stalls before the first model call ever fires. STAGGER_INTERVAL_MS
+  // is 250ms (see its own header — deliberately small, not the original 3s
+  // estimate), so real waits stay well under a second even across a few
+  // staggered workers.
+
+  /** Poll `predicate` on a real 10ms cadence until it's true or `timeoutMs`
+   *  elapses (then throw) — the standard "wait for async state to settle"
+   *  primitive for these real-timer concurrency tests. */
+  async function waitUntil(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error(`waitUntil: condition not met within ${timeoutMs}ms`);
+      await new Promise((r) => setTimeout(r, 10));
+    }
+  }
+
+  describe("concurrency", () => {
+    it("never runs more than `concurrency` chunk requests in flight at once", async () => {
+      const lines = Array.from({ length: 5 }, (_, i) => userTurn(`u${i}`, `cap test request ${i} `.repeat(30)));
+      const p = writeTranscript(lines);
+
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const releases: Array<() => void> = [];
+      const callModel = vi.fn<CallModelFn>(async () => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise<void>((res) => releases.push(res));
+        inFlight--;
+        return "SUMMARY";
+      });
+
+      const resultPromise = summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        maxChunkTokens: 30, // tiny — forces 5 chunks, one per turn
+        chunkOverlapTurns: 0,
+        concurrency: 2,
+        callModel,
+      });
+
+      // Both workers should be blocked on their release-gate once the
+      // second worker's launch stagger clears — the first never waits.
+      await waitUntil(() => callModel.mock.calls.length >= 2);
+      expect(maxInFlight).toBe(2);
+
+      // Release chunks one wave at a time; the cap must hold for every
+      // wave, however many of the 5 chunks remain.
+      let guard = 0;
+      while (callModel.mock.calls.length < 5 && guard++ < 50) {
+        const pending = callModel.mock.calls.length;
+        releases.splice(0, releases.length).forEach((r) => r());
+        await waitUntil(() => callModel.mock.calls.length > pending || releases.length > 0, 1_000).catch(() => {});
+      }
+      releases.splice(0, releases.length).forEach((r) => r());
+
+      await resultPromise;
+      expect(callModel).toHaveBeenCalledTimes(5);
+      expect(maxInFlight).toBeLessThanOrEqual(2);
+      expect(maxInFlight).toBeGreaterThan(1); // proves real overlap happened, not accidental serialization
+    }, 10_000);
+
+    it("joins chunk summaries in CHUNK ORDER even when their model calls complete out of order", async () => {
+      const lines = Array.from({ length: 3 }, (_, i) => userTurn(`u${i}`, `order test request ${i} `.repeat(30)));
+      const p = writeTranscript(lines);
+
+      // Keyed by which chunk index's prompt this call carries (via the
+      // distinct marker text), so we can release them in a DELIBERATELY
+      // reversed order (2, then 1, then 0) and still expect the final join
+      // in ascending order.
+      const releaseByMarker = new Map<string, () => void>();
+      const callModel = vi.fn<CallModelFn>(async (prompt) => {
+        const marker = /order test request (\d+) /.exec(prompt)?.[1] ?? "?";
+        await new Promise<void>((res) => releaseByMarker.set(marker, res));
+        return `SUMMARY-${marker}`;
+      });
+
+      const resultPromise = summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        maxChunkTokens: 30,
+        chunkOverlapTurns: 0,
+        concurrency: 3,
+        callModel,
+      });
+
+      await waitUntil(() => releaseByMarker.size >= 3);
+
+      // Resolve deliberately out of index order.
+      for (const marker of ["2", "1", "0"]) {
+        releaseByMarker.get(marker)?.();
+      }
+
+      const result = await resultPromise;
+      expect(result.summary).toBe(joinChunkSummaries(["SUMMARY-0", "SUMMARY-1", "SUMMARY-2"]));
+    }, 10_000);
+
+    it("checkpoints a chunk's summary as soon as IT completes, not at the end of a wave", async () => {
+      const lines = Array.from({ length: 3 }, (_, i) => userTurn(`u${i}`, `checkpoint order request ${i} `.repeat(30)));
+      const p = writeTranscript(lines);
+      const cp = checkpointPath();
+
+      const releaseByMarker = new Map<string, () => void>();
+      const callModel = vi.fn<CallModelFn>(async (prompt) => {
+        const marker = /checkpoint order request (\d+) /.exec(prompt)?.[1] ?? "?";
+        await new Promise<void>((res) => releaseByMarker.set(marker, res));
+        return `SUMMARY-${marker}`;
+      });
+
+      const resultPromise = summarizeSession({
+        transcriptPath: p,
+        checkpointPath: cp,
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        maxChunkTokens: 30,
+        chunkOverlapTurns: 0,
+        concurrency: 3,
+        callModel,
+      });
+
+      await waitUntil(() => releaseByMarker.size >= 3);
+
+      // Complete only chunk 1 (the middle one) — before the other two
+      // finish — and verify its summary is already on disk, with the
+      // others still null.
+      releaseByMarker.get("1")?.();
+      await waitUntil(() => {
+        try {
+          const cur = JSON.parse(readFileSync(cp, "utf-8")) as { mapSummaries: (string | null)[] };
+          return cur.mapSummaries[1] === "SUMMARY-1";
+        } catch {
+          return false;
+        }
+      });
+
+      const midRun = JSON.parse(readFileSync(cp, "utf-8")) as { mapSummaries: (string | null)[] };
+      expect(midRun.mapSummaries[1]).toBe("SUMMARY-1");
+      expect(midRun.mapSummaries[0]).toBeNull();
+      expect(midRun.mapSummaries[2]).toBeNull();
+
+      releaseByMarker.get("0")?.();
+      releaseByMarker.get("2")?.();
+
+      await resultPromise;
+    }, 10_000);
+
+    it("a chunk that hits a transient (429) blip backs off and retries instead of aborting its siblings", async () => {
+      const lines = Array.from({ length: 3 }, (_, i) => userTurn(`u${i}`, `blip test request ${i} `.repeat(30)));
+      const p = writeTranscript(lines);
+
+      let calls = 0;
+      let blippedOnce = false;
+      const callModel = vi.fn<CallModelFn>(async (prompt) => {
+        calls++;
+        // The FIRST call (chunk 0's first attempt) hits one transient blip;
+        // every other call — including chunk 0's retry — succeeds
+        // immediately. Chunks 1 and 2 must not be blocked by chunk 0's
+        // backoff.
+        if (prompt.includes("blip test request 0 ") && !blippedOnce) {
+          blippedOnce = true;
+          throw new Error("HTTP 429: rate limit exceeded, try again later");
+        }
+        return "SUMMARY";
+      });
+
+      const result = await summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        maxChunkTokens: 30,
+        chunkOverlapTurns: 0,
+        concurrency: 3,
+        maxRetriesPerChunk: 2,
+        callModel,
+      });
+
+      // Real 5s TRANSIENT_BACKOFF_MS elapses for real here — no assertion
+      // against wall clock, just that the run finished at all (siblings
+      // were never blocked by it) instead of throwing.
+      expect(result.totalChunks).toBe(3);
+      expect(calls).toBeGreaterThan(3); // chunk 0 needed an extra attempt
+    }, 15_000);
+
+    it("--concurrency 1 reproduces sequential behavior exactly (in-order calls, no stagger wait)", async () => {
+      const lines = Array.from({ length: 4 }, (_, i) => userTurn(`u${i}`, `sequential-equivalence request ${i} `.repeat(30)));
+      const p = writeTranscript(lines);
+
+      const callOrder: string[] = [];
+      const callModel = vi.fn<CallModelFn>(async (prompt) => {
+        const marker = /sequential-equivalence request (\d+) /.exec(prompt)?.[1] ?? "?";
+        callOrder.push(marker);
+        return `SUMMARY-${marker}`;
+      });
+
+      const result = await summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        maxChunkTokens: 30,
+        chunkOverlapTurns: 0,
+        concurrency: 1,
+        callModel,
+      });
+
+      // No stagger, no overlap possible, strict index order — real timers,
+      // no vi.advanceTimersByTimeAsync needed, exactly like the pre-existing
+      // (concurrency-omitted) sequential tests above.
+      expect(callOrder).toEqual(["0", "1", "2", "3"]);
+      expect(result.summary).toBe(joinChunkSummaries(["SUMMARY-0", "SUMMARY-1", "SUMMARY-2", "SUMMARY-3"]));
+    });
   });
 });
