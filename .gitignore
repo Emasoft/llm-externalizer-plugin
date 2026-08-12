@@ -91,3 +91,6 @@ llm_externalizer_output/
 /.trashcan/*
 !/.trashcan/.gitkeep
 !/.trashcan/README.txt
+
+# Janitor runtime state (regeneratable; never committed)
+/.janitor/

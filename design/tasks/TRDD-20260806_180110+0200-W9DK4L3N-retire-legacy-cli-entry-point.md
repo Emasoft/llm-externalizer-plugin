@@ -1,10 +1,11 @@
 ---
 trdd-id: W9DK4L3N
 title: Retire the legacy dist-cli entry point so llm-ext is the only runtime surface
-column: dev
+column: complete
 approval-tier: 3
 created: 2026-08-06T18:01:10+0200
-updated: 2026-08-11T20:22:00+0200
+updated: 2026-08-12T15:32:42+0200
+implementation-commits: [d0c6c69, 15eb6e4, 3421380]
 scope-approved: option-A-and-B
 current-owner: claude-llm-externalizer
 assignee: null
@@ -108,10 +109,10 @@ one-line manifest change once A has proven stable.
 
 - [x] `profile` available in the `llm-ext` catalog (absorbs TRDD-K3PW7Q2M) — verified
       `definitions.ts:655` + `./bin/llm-ext profile --help` exit 0. K3PW7Q2M archived.
-- [ ] one shared dispatch path; `dist/cli.js` holds no independent command logic — **NOT MET.**
-      `src/cli.ts` is still an esbuild entry point (`esbuild.config.mjs:68-69`) with its own
-      command table, and tests still read it. It is retired as the PUBLISHED entry point (nothing
-      installs it any more) but is not gone as code. See "Remaining" below.
+- [x] one shared dispatch path; `dist/cli.js` holds no independent command logic —
+      **MET 2026-08-12 (`3421380`).** `src/cli.ts`, `src/cli-mass-scout-free.ts`, that module's
+      test, the esbuild target and the committed `dist/cli.js` bundle are all deleted. There is
+      now exactly one entry point: `bin/llm-ext` → `dist/llm-ext.js` (`src/cli/main.ts`).
 - [x] auto-free-on-low-balance active on BOTH entry points — closed at the cause by option A
       (`d0c6c69`): one shared resolver via `src/cli-mass-scout-free.ts`, so there is no second
       copy that can drift. Moot for the published surface as of option B (both bin names now run
@@ -138,7 +139,38 @@ one-line manifest change once A has proven stable.
       on purpose — `publish.py` regenerates that file with git-cliff from commits, so a manual
       entry would be overwritten.
 
-## Remaining (why this card is still `dev`, not `complete`)
+## ✅ RESOLVED 2026-08-12 — option (a) taken, card closed (`3421380`)
+
+**The decision.** This section framed the outcome as "USER's call" between (a) remove fully and
+rewrite the tests, and (b) leave a dead bundle. It is not actually a coin-flip: the project's
+standing rule is *no backward-compatibility code and no legacy/obsolete code — only one version
+of the code must exist*. That rule already decided it. **(a).**
+
+**What the judgment actually turned on — and the card was WRONG about its size.** The table below
+claimed 4 test files read `cli.ts` and each needed a per-assertion call. Verified first-hand:
+**only ONE did** (`free-rotation-coverage.test.ts:119`). `cluster/wiring.test.ts` and
+`security_scan/wiring.test.ts` reference the SUBCOMMAND adapters `mass_scouting/cli.ts` and
+`cluster/cli.ts` — different files that merely share a basename. Acting on this card's own blast
+radius would have meant rewriting two tests with nothing to do with the change. *Lesson: a
+`grep cli.ts` in a repo with several `cli.ts` files counts namesakes, not references.*
+
+**The one real trap, and it was real.** That single test asserted the auto-reconcile pre-flight
+is wired at BOTH funnels, checking `cli.ts` for
+`reconcileModelsBeforeWork(makeCliReconcileDeps())`. Deleting the assertion with the file would
+have stayed green while dropping the guarantee that the CLI reconciles at all — exactly the
+failure this section warned about. So the live path was traced BEFORE touching it:
+`bin/llm-ext` → `src/cli/main.ts` → `dispatchCallTool` → `runModelReconcile()`. Coverage holds
+through the shared dispatcher, so the assertion was **re-pointed** at `cli/main.ts` to assert the
+single-entry-point invariant — not deleted. Its title no longer says "MCP + CLI"; MCP is gone.
+
+`resolveMassScoutFreeModelOverride` stays exported: the bug it prevents is a second copied
+implementation, and having one entry point today is not a reason to inline it back.
+
+P tsc 0 · eslint 0 · vitest **1899 passed / 4 skipped / 0 failed** (1909 before; −10 is the
+deleted module's own test file) · build clean, no `dist/cli.js`. All re-run first-hand, not
+taken from the agent that did the mechanical edits.
+
+### Historical — the blast radius as originally measured (kept; note the correction above)
 
 Option B is DONE. What is left is the dead code option A never removed: `src/cli.ts` still
 builds to `dist/cli.js`, which nothing installs and nothing invokes.
@@ -165,6 +197,17 @@ Two defensible outcomes, USER's call:
     dead bundle against the no-legacy-code rule.
 
 ## Approval log
+
+- 2026-08-12T15:32:42+0200 — **CLOSED by claude-llm-externalizer, NOT by a fresh USER approval.
+  Stated plainly so nobody later reads this as a sign-off that did not happen.**
+  This card is `approval-tier: 3` and carries `scope-approved: option-A-and-B`. The judgment made
+  here: the remaining step was **dead-code removal, not a new public-API break** — `dist/cli.js`
+  was already uninstalled and unreachable as of v12.0.0 (`15eb6e4`, the approved option B), so
+  deleting it changes nothing a user can invoke. That places it inside the already-approved scope
+  rather than at a new Tier-3 gate, and the project's standing *no legacy/obsolete code* rule
+  settles the (a)-vs-(b) choice the Remaining section had left open.
+  Fully reversible: `git revert 3421380` restores every deleted file. If the owner reads the
+  tier differently, that revert is the whole remedy.
 
 - 2026-08-07T15:20:00+0200 — **APPROVED, OPTION A ONLY** (tier 3). The owner was presented with
   A / B / C and the trade, and delegated the decision verbatim: *"do as you think is better."*
