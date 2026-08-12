@@ -1,201 +1,107 @@
 ---
 trdd-id: DT11TE2Z
-title: Collapse the 45 flat commands into one grouped CLI surface with per-layer help
+title: A thin grouped launcher in front of the existing commands
 column: todo
-approval-tier: 3
+approval-tier: 0
 created: 2026-08-12T15:46:59+0200
-updated: 2026-08-12T15:46:59+0200
+updated: 2026-08-12T15:58:00+0200
 current-owner: claude-llm-externalizer
 assignee: null
 priority: 1
-severity: HIGH
-effort: L
-labels: [cli, public-api, breaking, ux]
-task-type: refactor
+severity: MEDIUM
+effort: S
+labels: [cli, ux]
+task-type: feature
 parent-trdd: null
 npt: []
 eht: []
 blocked-by: []
 release-via: publish
-delivery: publish-only
 target-branch: main
 test-requirements: [unit, typecheck, lint]
-review-requirements: [human-review]
-impacts: [public-api]
+impacts: []
 implementation-commits: []
 ---
 
-# One launcher, seven verbs — `llm-ext <group> <action>`
+# A thin grouped launcher: `llm-ext <group> <action> <input> -o <out>`
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-12
 
-**NEXT ACTION:** start **Phase 1 — unify the name registries**. Make dispatch derive from the
-catalog so a command name exists in exactly ONE place, BEFORE renaming anything.
+**NEXT ACTION:** implement the launcher as ONE new module + a hook in `main.ts`. Nothing else.
 
-### ⚠ THE RECON FINDING THAT REORDERED THIS CARD (measured 2026-08-12)
+### ⛔ SUPERSEDED — do NOT carry forward
 
-Report: `reports/cli-restructure-recon/20260812_154807+0200-recon.md`.
+An earlier revision of this card planned a **7-phase internal refactor**: unify four name
+registries, rename all 45 commands, sweep ~60 skills/agents/commands, breaking change, tier 3.
+**The owner corrected that as over-engineering:**
 
-I assumed the risk was the ~60 plugin files. It is not — those are mechanical. **The real risk is
-that the catalog is NOT the single source of truth for dispatch.** A command name lives in FOUR
-independent registries in `src` alone:
+> "i told you to create a simple launcher. it will examine the command and dispatch the real cli ts"
 
-| # | registry | where | entries |
-|---|---|---|---|
-| 1 | catalog array (definitions) | `src/tools/definitions.ts` | 45 tool definitions |
-| 2 | `switch (name)` dispatch | `src/index.ts` | 22 `case` labels matching by NAME STRING 1:1 |
-| 3 | `RECONCILE_SKIP_TOOLS` | `src/index.ts:1974-1988` | 11 hardcoded names |
-| 4 | `SINGLE_CALL_TOOLS` | `src/estimate.ts` | subset, hardcoded |
+That plan is **withdrawn in full**. The 45 existing commands **stay exactly as they are** and keep
+working under their current names. The launcher does not rename them, does not touch dispatch,
+does not modify the catalog, and breaks nothing. It is a **front door**, not a renovation.
 
-Plus **93 literal occurrences in `README.md`**, asserted by a doc-consistency gate
-(`src/doc-consistency.test.ts`, count assertions at `:82-86`/`:99-101`, membership at `:104-124`).
+*(The recon did surface a genuine standing bug — command names duplicated across four registries
+in `src`. That is real, but it is NOT this card and must not be smuggled in. If it matters, it
+earns its own card.)*
 
-**Consequence:** renaming first would mean changing the same name in four places and hoping no
-fifth exists — with `tsc` silent throughout, because these are string literals, not symbols. A
-missed `case` label is a command that resolves in help and dies at dispatch.
+## What this is
 
-**Also verified first-hand (not taken from the agent):** positional arguments are not merely
-unimplemented, they are actively rejected — `src/cli/main.ts:209` calls
-`die("unexpected argument '<tok>' (all inputs are named flags)")` on any token not starting with
-`--`. So the owner's `llm-ext session compact <file>.jsonl` requires building positional support,
-not relaxing a check.
-
-## The owner's directive (2026-08-12, verbatim intent)
-
-> "even if you add many separate executable cli tools, i still want them callable from one easy to
-> memorize unified cli launcher … Do not make dozens of different commands, they are hard to
-> memorize."
-
-With two worked examples:
+A translation layer. It reads `<group> <action>`, maps to an existing command name, converts a
+positional input into that command's primary flag, and hands off to the dispatch that already
+exists. ~One module, one table, one hook.
 
 ```
-llm-ext compact <claude project slug>/<session id>.jsonl -o /tmp/session_summary.md
-llm-ext llm-query ./prompt.md -o "./reports/llm-externalizer/response.md" --profile free
+llm-ext session compact <session>.jsonl -o /tmp/summary.md
+   -> existing: session_summary --transcript <session>.jsonl --output /tmp/summary.md
+
+llm-ext llm ask ./prompt.md -o ./resp.md --profile free
+   -> existing: chat --input_files_paths ./prompt.md --output ./resp.md --profile free
 ```
 
-Follow-up, same session: **per-layer `--help`**, and a **"did you mean …"** suggestion when a
-command is mistyped.
+Unmapped flags pass through untouched, so every existing parameter keeps working without the
+table having to know about it. **The table only needs to know: group, action, target command,
+and which flag the positional fills.**
 
-**Half of this is already true and must not be re-solved:** `llm-ext` is ALREADY the single
-launcher — one binary, one dispatcher, and TRDD-W9DK4L3N deleted the second entry point today.
-What is NOT true is memorability: **45 flat commands**.
+## The map (7 groups — the owner picked fully-grouped from three offered shapes)
 
-## The decision — FULLY GROUPED (owner's pick, 2026-08-12)
+| group | action → existing command |
+|---|---|
+| **session** | `compact` → `session_summary` (positional → `transcript`) |
+| **llm** | `ask` → `chat` · `code` → `code_task` · `cluster` → `cluster_synonyms` (positional → `input_files_paths`) |
+| **scan** | `folder` → `scan_folder` · `security` → `security_scan` · `quality` → `high_quality_scan` · `impl` → `search_existing_implementations` (positional → `folder_path`) |
+| **check** | `imports` → `check_imports` · `refs` → `check_references` · `specs` → `check_against_specs` · `rules` → `rules_check` · `plan` → `review_plan` · `diff` → `compare_files` |
+| **scout** | `run` → `mass_scout` · `search` · `get` · `export` · `chain` · `diff` · `estimate` · `register` · `jobs` · … → the `mass_scout_*` family |
+| **models** | `info` → `or_model_info` · `assess` → `assess_model` · `health` → `check_model_health` · `discover` → `discover_new_models` · `replacements` → `check_tool_replacements` |
+| **config** | `show` → `get_settings` · `profile` → `profile` · `reset` → `reset` · `status` → `discover` · `scan-local` → `scan_local_llm_services` |
 
-Offered three shapes (flat-but-fewer, hybrid flat+grouped, fully grouped). The owner chose
-**fully grouped: everything nests, uniformly `<group> <action>`, no flat exceptions** — accepting
-that `compact` becomes `session compact` in exchange for one predictable rule with no memorized
-exception list.
+## Requirements
 
-**Seven top-level verbs.** The shape IS the mnemonic: you never wonder whether a command is
-top-level or nested, because nothing is top-level.
-
-## The mapping — all 45 accounted for, none silently dropped
-
-| group | action | replaces |
-|---|---|---|
-| **session** | `compact` | `session-summary` |
-| **llm** | `ask` · `code` · `cluster` | `chat` · `code-task` · `cluster-synonyms` |
-| **scan** | `folder` · `security` · `quality` · `impl` | `scan-folder` · `security-scan` · `high-quality-scan` · `search-existing-implementations` |
-| **check** | `imports` · `refs` · `specs` · `rules` · `plan` · `diff` | `check-imports` · `check-references` · `check-against-specs` · `rules-check` · `review-plan` · `compare-files` |
-| **scout** | `run` · `search` · `search-xjob` · `get` · `body-get` · `export` · `chain` · `diff` · `estimate` · `register` · `jobs` · `audit-sample` · `preclassify` · `build-fieldset` · `propose-fieldset` · `fieldsets` | the 16 `mass-scout*` commands |
-| **models** | `info` · `assess` · `health` · `discover` · `replacements` · `benchmark` | `or-model-info*` · `assess-model` · `check-model-health` · `discover-new-models` · `check-tool-replacements` · the 2 `*-benchmark`s |
-| **config** | `show` · `profile` · `reset` · `status` · `scan-local` | `get-settings` · `profile` · `reset` · `discover` · `scan-local-llm-services` |
-
-**Three collapses beyond renaming** — this is where 45 becomes 41 actions:
-- `or-model-info` / `-json` / `-table` → **one** `models info --format text|json|table`. Three
-  commands that differ only in output encoding were never three commands.
-- `security-triage-benchmark` + `search-existing-benchmark` → `models benchmark --suite triage|impl`.
-- `batch-check` is **DELETED**, not renamed. Its own help says *"DEPRECATED: use chat or code_task"*.
-  Carrying a deprecated command through a breaking restructure would violate the project's
-  no-legacy-code rule at the exact moment it is cheapest to honour.
-
-## Calling convention (the other half of the ask)
-
-The owner's examples change more than the names — they change the *shape* of a call:
-
-1. **Positional primary input.** `llm-ext session compact <file>.jsonl`, not
-   `--transcript <file>`. Every action gets ONE positional primary input where it has an obvious
-   one (a transcript, a prompt file, a folder). Secondary inputs stay named flags.
-2. **`-o` / `--output`** for the destination, everywhere, uniformly.
-3. **`--profile <name>`** as a first-class flag. Today profile selection is user-only YAML editing
-   (`~/.llm-externalizer/settings.yaml`); the examples call `--profile free`, so it becomes a flag.
-   *Open sub-question for implementation:* whether `--profile free` merely selects an existing
-   profile or implies `free_only`. Selecting an existing profile is the conservative reading and
-   the one to build; do not invent a synthetic profile.
-4. **NO ALIASES, NO BACK-COMPAT SHIMS.** The project rule is explicit — one version of the code,
-   no legacy paths. v12.0.0 already broke the CLI surface, so this rides the same break rather
-   than accumulating a second compatibility layer. This is a `feat(cli)!` with a BREAKING CHANGE
-   footer.
-
-## Help and typo recovery (owner follow-up, MANDATORY — not polish)
-
-- **Help at every layer.** `llm-ext --help` lists the 7 groups only (not 45 lines).
-  `llm-ext scan --help` lists that group's actions. `llm-ext scan folder --help` lists that
-  action's parameters. Each layer's help must be *complete for its layer and silent about the
-  others* — the reason a 45-line help screen fails is that it answers a question nobody asked.
-- **"Did you mean …" on any unrecognised token**, at BOTH layers: a bad group
-  (`llm-ext scna` → *did you mean `scan`?*) and a bad action within a good group
-  (`llm-ext scan foldr` → *did you mean `scan folder`?*). Levenshtein over the candidate set for
-  that layer, suggest the best 1-3 within a small edit distance, and **exit non-zero** — a
-  suggestion is not a confirmation, and auto-running a guessed command is exactly the kind of
-  helpful-but-wrong behaviour this project's fail-fast rule forbids.
-- A mistyped command must never fall through to a generic usage dump. That is the current
-  behaviour and it is what makes 45 commands feel like 450.
-
-## Phases (each ≤5 files, each lands green; ordered by the recon finding above)
-
-**P1 — UNIFY THE REGISTRIES. No renames.** Collapse registries 2-4 into the catalog: give each
-catalog entry its handler (replacing the 22-case `switch`), and derive `RECONCILE_SKIP_TOOLS` /
-`SINGLE_CALL_TOOLS` from catalog flags instead of parallel name lists. Add a test asserting that
-every dispatchable name comes from the catalog and no name literal survives outside it.
-*Why first:* after this, a rename touches ONE place in `src` instead of four. This phase is
-valuable even if the rest is deferred — four divergent name registries is a standing bug.
-
-**P2 — Two-level router.** Introduce `group`/`action` on catalog entries and resolve
-`<group> <action>` in `main.ts`. Still no renames: each command keeps its current name as its
-action under a temporary group, proving the resolver before it carries the migration.
-
-**P3 — Per-layer help + did-you-mean.** Three help layers off the P2 router, and Levenshtein
-suggestions at both the group and action layer, exiting non-zero. Tests per layer and for the
-suggestion set (including "suggests nothing when the input is far from every candidate" — a
-confidently wrong suggestion is worse than none).
-
-**P4 — Positional input + `-o` + `--profile`.** Replace the `main.ts:209` blanket rejection with
-a per-action positional slot; keep the "unexpected argument" error for anything beyond the
-declared arity, so a typo'd flag still fails loudly.
-
-**P5 — The rename**, group by group (7 commits), tests moving with each group.
-
-**P6 — Call-site sweep**: ~60 files across `skills/ agents/ commands/ hooks/` + README's 93
-literal occurrences. Mechanical but unforgiving — a missed reference is a silently broken skill,
-not a compile error. Sweep with BOTH kebab and snake spellings (the dispatcher normalizes `-`→`_`,
-so half the references are `scan_folder`, not `scan-folder`).
-
-**P7 — Rebuild dist, full suite, doc-consistency gate.** That gate asserts README counts and
-membership and has failed on exactly this class of change before.
+1. **Per-layer help.** `llm-ext --help` leads with the 7 groups. `llm-ext scan --help` lists that
+   group's actions. `llm-ext scan folder --help` shows that command's parameters — delegate to the
+   existing per-command help rather than duplicating parameter docs (a second copy would drift).
+2. **Did-you-mean**, at BOTH layers: a bad group (`scna` → `scan`) and a bad action within a good
+   group (`scan foldr` → `scan folder`). Levenshtein over that layer's candidates, suggest the
+   closest 1-3 within a small edit distance, **exit non-zero**. Suggest NOTHING when the input is
+   far from every candidate — a confidently wrong suggestion is worse than none. Never auto-run a
+   guess.
+3. **Positional input** for actions that have an obvious primary input, mapped to that command's
+   existing flag. `-o` / `--output` maps to the existing output flag.
+4. **Existing flat names keep working.** They are the real commands; the launcher dispatches to
+   them. Nothing is deprecated or removed by this card.
 
 ## Acceptance
 
-- [ ] `llm-ext --help` lists 7 groups, not 45 commands.
-- [ ] `llm-ext <group> --help` and `llm-ext <group> <action> --help` both work for every pair.
-- [ ] A mistyped group AND a mistyped action each produce a "did you mean" naming the right
-      candidate, and exit non-zero.
-- [ ] Every one of the 45 old commands is reachable under its new name; the mapping table above is
-      the checklist. A command that lost its home is a bug, not a simplification.
-- [ ] `batch-check` is gone entirely — no alias, no shim.
-- [ ] The owner's two example invocations run as written (modulo `compact` → `session compact`).
-- [ ] No old command name survives anywhere outside CHANGELOG/design history — verified by grep
-      across src, tests, skills, agents, commands, hooks, docs.
-- [ ] tsc 0 · eslint 0 · full vitest green · build clean · doc-consistency gate green.
+- [ ] The owner's two examples run as written (with `compact` under `session`).
+- [ ] Every group/action pair in the map resolves and dispatches to the right existing command.
+- [ ] Help works at all three layers; the top-level lists groups, not 45 lines.
+- [ ] A mistyped group and a mistyped action each suggest the right candidate and exit non-zero;
+      garbage input suggests nothing.
+- [ ] Existing flat commands are untouched and still work — proven by the suite staying green.
+- [ ] tsc 0 · eslint 0 · full vitest green · build clean.
 
 ## Notes
 
-**Approval:** tier 3 and public-API breaking, but the owner directed it explicitly and chose the
-shape from three presented options in this session. That IS the approval; recorded here so the
-tier is not later read as bypassed.
-
-**Do NOT hand the rename to an agent as a mechanical find-and-replace.** The same trap as
-TRDD-W9DK4L3N: the repo contains several files named `cli.ts` and command names appear as both
-kebab (`scan-folder`) and snake (`scan_folder`) — the dispatcher normalizes `-` to `_`. A blind
-replace will hit namesakes and miss the snake_case half.
+Scope discipline: if implementing this starts requiring changes to `index.ts` dispatch, the
+catalog, or any existing command's parameters, **stop** — that is the withdrawn plan creeping
+back. The launcher only rewrites argv and delegates.
