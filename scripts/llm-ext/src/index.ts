@@ -3478,7 +3478,9 @@ async function dispatchCallToolInner(
         // Interactive prompt ONLY when a human is actually at the terminal and
         // didn't already pass --pick — an agent/script invocation (not a TTY)
         // must never block waiting on stdin that will never arrive.
+        let alreadyShowedList = false;
         if (pick === undefined && process.stdin.isTTY) {
+          alreadyShowedList = true;
           const rl = createInterface({ input: process.stdin, output: process.stdout });
           try {
             const answer = await rl.question(
@@ -3499,7 +3501,10 @@ async function dispatchCallToolInner(
               {
                 type: "text",
                 text:
-                  `${listText}\n\n${systemLine}\n\n` +
+                  // The interactive prompt already printed the list and the
+                  // system line to this same terminal — repeating them here
+                  // would show the whole scan twice for one command.
+                  (alreadyShowedList ? "" : `${listText}\n\n${systemLine}\n\n`) +
                   // "no profile", not "nothing" — on a cold config dir the server's
                   // normal first-run bootstrap still writes the default settings
                   // template before any command runs. Claiming "nothing was written"
@@ -4046,8 +4051,8 @@ async function dispatchCallToolInner(
 
         // Concurrency: an explicit --concurrency (including 1, to force the
         // original sequential behavior) is honored verbatim; omitted, the
-        // CLI opts every real invocation into DEFAULT_CONCURRENCY — see
-        // driver.ts's own header for why the library default stays 1.
+        // CLI opts every real invocation into "auto" — see driver.ts's own
+        // header for why the LIBRARY default stays 1.
         // Omitted => "auto": the driver sizes the pool to the chunk count
         // (min(chunks, MAX_AUTO_CONCURRENCY)) so the map phase stays SINGLE-WAVE.
         // A fixed 12 forced e.g. 27 chunks into three waves and roughly tripled

@@ -375,7 +375,17 @@ async function main(): Promise<void> {
         return;
       case "action-help": {
         const actionTool = resolveCommand(resolved.command, tools);
-        if (actionTool) printToolHelp(actionTool);
+        // A GROUPS entry naming a command the catalog does not have is a build
+        // bug (launcher.test.ts asserts against the real catalog). Say so and
+        // fail — exiting 0 with no output would read as "this action has no
+        // parameters", which is a different and wrong answer.
+        if (!actionTool) {
+          die(
+            `'${resolved.group} ${resolved.action}' maps to unknown command ` +
+              `'${resolved.command}' — the group table is out of sync with the catalog.`,
+          );
+        }
+        printToolHelp(actionTool);
         return;
       }
       case "error": {

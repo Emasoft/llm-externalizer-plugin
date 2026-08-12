@@ -252900,6 +252900,13 @@ var TRANSIENT_BACKOFF_MS = 5e3;
 function sleep(ms) {
   return new Promise((resolve19) => setTimeout(resolve19, ms));
 }
+function cancellableSleep(ms) {
+  let timer;
+  const promise2 = new Promise((resolve19) => {
+    timer = setTimeout(resolve19, ms);
+  });
+  return { promise: promise2, cancel: () => clearTimeout(timer) };
+}
 function checkpointIdentityMatches(a, b) {
   return a.transcriptPath === b.transcriptPath && a.pruneLevel === b.pruneLevel && a.chunkerMaxTokens === b.chunkerMaxTokens && a.chunkerOverlapTurns === b.chunkerOverlapTurns;
 }
@@ -253561,6 +253568,7 @@ async function summarizeSession(options) {
     var raceForFirstOk = raceForFirstOk2;
     let nextIndex = 0;
     const inFlight = /* @__PURE__ */ new Map();
+    const inFlightAttempts = /* @__PURE__ */ new Map();
     let transitioning = false;
     let pauseGate = null;
     async function becomeLeaderAndTransition(i, outcome) {
@@ -253576,8 +253584,11 @@ async function summarizeSession(options) {
       });
       pauseGate = gate;
       try {
-        const others = [...inFlight.entries()].filter(([idx]) => idx !== i).map(([, p]) => p);
-        await Promise.allSettled(others);
+        for (; ; ) {
+          const others = [...inFlightAttempts.entries()].filter(([idx]) => idx !== i).map(([, p]) => p);
+          if (others.length === 0) break;
+          await Promise.allSettled(others);
+        }
         applyTransition(i, outcome);
         nextIndex = Math.min(nextIndex, i);
       } finally {
@@ -253603,8 +253614,13 @@ async function summarizeSession(options) {
           primarySettled = true;
         }
       );
-      await Promise.race([primary.catch(() => {
-      }), sleep(hedgeAfterMs())]);
+      const hedgeDelay = cancellableSleep(hedgeAfterMs());
+      try {
+        await Promise.race([primary.catch(() => {
+        }), hedgeDelay.promise]);
+      } finally {
+        hedgeDelay.cancel();
+      }
       if (primarySettled) return finishFromCallResult(i, await primary);
       if (inFlight.size + hedgeInFlight >= concurrency) {
         return finishFromCallResult(i, await primary);
@@ -253627,7 +253643,7 @@ async function summarizeSession(options) {
         }
         if (nextIndex >= chunks.length) return;
         const i = nextIndex;
-        if (checkpoint.mapSummaries[i] !== null) {
+        if (checkpoint.mapSummaries[i] !== null || inFlight.has(i)) {
           nextIndex++;
           continue;
         }
@@ -253637,7 +253653,16 @@ async function summarizeSession(options) {
         const task = (async () => {
           let firstAttempt = true;
           for (; ; ) {
-            const outcome = firstAttempt ? await attemptChunkMaybeHedged(i) : await attemptChunk(i, true, sleep);
+            const attempt = firstAttempt ? attemptChunkMaybeHedged(i) : attemptChunk(i, true, sleep);
+            inFlightAttempts.set(i, attempt.then(() => {
+            }, () => {
+            }));
+            let outcome;
+            try {
+              outcome = await attempt;
+            } finally {
+              inFlightAttempts.delete(i);
+            }
             firstAttempt = false;
             if (outcome.kind === "ok") {
               onChunkEvent?.({ chunkIndex: i, totalChunks: chunks.length, phase: "done", elapsedMs: Date.now() - startedAt });
@@ -253912,6 +253937,8 @@ async function fetchWithRetry429(url2, fetchOpts, timeout, startTime, out) {
   }
   if (lastRes) {
     if (lastBodyText === void 0) return lastRes;
+    void lastRes.body?.cancel().catch(() => {
+    });
     return new Response(lastBodyText, {
       status: lastRes.status,
       statusText: lastRes.statusText,
@@ -257846,7 +257873,9 @@ Profiles: ${profileNames.join(", ")}`);
           const systemLine = `Detected system: ${(system.totalRamBytes / 1024 ** 3).toFixed(1)} GB RAM, ${system.cpuCount} CPUs`;
           const pickArg = args?.pick;
           let pick2 = typeof pickArg === "number" ? pickArg : void 0;
+          let alreadyShowedList = false;
           if (pick2 === void 0 && process.stdin.isTTY) {
+            alreadyShowedList = true;
             const rl = createInterface3({ input: process.stdin, output: process.stdout });
             try {
               const answer = await rl.question(
@@ -257868,11 +257897,20 @@ Configure llm-externalizer to use one of these? Enter a number, or leave blank t
               content: [
                 {
                   type: "text",
-                  text: `${listText}
+                  text: (
+                    // The interactive prompt already printed the list and the
+                    // system line to this same terminal — repeating them here
+                    // would show the whole scan twice for one command.
+                    (alreadyShowedList ? "" : `${listText}
 
 ${systemLine}
 
-No selection made \u2014 no profile was written and no profile was activated. Re-run with --pick <N> to configure and activate one of the REACHABLE services above (e.g. 'llm-ext scan-local-llm-services --pick 1').`
+`) + // "no profile", not "nothing" — on a cold config dir the server's
+                    // normal first-run bootstrap still writes the default settings
+                    // template before any command runs. Claiming "nothing was written"
+                    // is falsifiable by `find` and would undermine trust in the rest.
+                    "No selection made \u2014 no profile was written and no profile was activated. Re-run with --pick <N> to configure and activate one of the REACHABLE services above (e.g. 'llm-ext scan-local-llm-services --pick 1')."
+                  )
                 }
               ]
             };

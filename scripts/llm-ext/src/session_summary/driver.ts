@@ -59,7 +59,7 @@
  * never output: the same set of per-chunk summaries lands in
  * `checkpoint.mapSummaries`, keyed by index, regardless of completion order.
  * `options.concurrency` (default 1 — sequential — HERE; the CLI layer
- * defaults it to `DEFAULT_CONCURRENCY`, see its own header) bounds how many
+ * defaults it to `"auto"`, see `MAX_AUTO_CONCURRENCY`) bounds how many
  * chunk requests run in flight at once. Launches are staggered by
  * `STAGGER_INTERVAL_MS` per worker so a burst of N concurrent launches never
  * looks like a request spike to the provider. A model-fallback or
@@ -134,7 +134,7 @@ export const MAX_SUMMARY_COMPLETION_TOKENS = 32_000;
  * overlap in wall-clock time, and the per-chunk digest stays well inside
  * the quality-collapse threshold measured above. The one thing a smaller
  * default does NOT do is shrink the model's real capability — see
- * `DEFAULT_CONCURRENCY` for how the two defaults were chosen together.
+ * `MAX_AUTO_CONCURRENCY` for how the two defaults were chosen together.
  *
  * THIS IS A DEFAULT, NOT A CEILING. An explicit `--max_chunk_tokens` is
  * honored VERBATIM and may exceed both this value and the model's window: the
@@ -147,24 +147,23 @@ export const MAX_SUMMARY_COMPLETION_TOKENS = 32_000;
 export const DEFAULT_MAX_CHUNK_TOKENS = 25_000;
 
 /**
- * The CLI layer's default for `--concurrency` when the flag is omitted (see
- * index.ts's session_summary wiring). `summarizeSession` itself defaults
- * `options.concurrency` to 1 (sequential) when omitted — a conservative
- * library default that keeps every caller who doesn't ask for concurrency
- * on the exact behavior this module always had. The CLI is the one place
- * that opts every real invocation INTO concurrency by passing this value
- * explicitly, matching how `max_chunk_tokens` already works (the model-
- * dependent default lives here; a value the caller supplies, explicitly or
- * via the CLI, is honored verbatim — see `DEFAULT_MAX_CHUNK_TOKENS`'s own
- * header).
+ * THE MEASURED BURST CEILING every concurrency constant below is derived from.
  *
- * MEASURED against the live account, not estimated (its `rate_limit` API
- * field is deprecated and unusable — `requests: -1`): a burst of 32
- * concurrent requests to the free model landed 32/32 clean (zero 429s,
- * no rate-limit headers even returned); a burst of 64 landed 62/64, with
- * the two 429s carrying `x-ratelimit-limit: 20` and a `x-ratelimit-reset`
- * that was already in the past by the time the burst finished — i.e. a
- * sub-minute rolling window, not the UTC-midnight daily cap. */
+ * Measured against the live account, not estimated (its `rate_limit` API field
+ * is deprecated and unusable — `requests: -1`): a burst of 32 concurrent
+ * requests to the free model landed 32/32 clean (zero 429s, no rate-limit
+ * headers even returned); a burst of 64 landed 62/64, with the two 429s
+ * carrying `x-ratelimit-limit: 20` and an `x-ratelimit-reset` already in the
+ * past by the time the burst finished — i.e. a sub-minute rolling window, not
+ * the UTC-midnight daily cap.
+ *
+ * There is deliberately no fixed `DEFAULT_CONCURRENCY` const: the CLI passes
+ * `"auto"` when `--concurrency` is omitted, because ANY fixed number below the
+ * chunk count silently splits the map phase into waves (see
+ * `MAX_AUTO_CONCURRENCY`). `summarizeSession` itself still defaults
+ * `options.concurrency` to 1 (sequential) — a conservative library default that
+ * keeps every non-CLI caller on the exact behavior this module always had.
+ */
 
 /**
  * Ceiling for AUTO-sized concurrency (`concurrency: "auto"`, what the CLI
@@ -181,8 +180,7 @@ export const DEFAULT_MAX_CHUNK_TOKENS = 25_000;
  * 28, not the measured 32: a burst of 32 landed 32/32 clean against the live
  * account and 64 landed 62/64 (two 429s), so 32 is the measured EDGE. Sitting on
  * the edge is how a small account-side change turns a default into a standing
- * 429 storm — the same reasoning that keeps DEFAULT_CONCURRENCY at 12 rather
- * than at the cliff. A chunk count above this simply runs in more than one wave.
+ * 429 storm. A chunk count above this simply runs in more than one wave.
  */
 export const MAX_AUTO_CONCURRENCY = 28;
 
@@ -310,11 +308,12 @@ function hedgeAfterMs(): number {
 /**
  * Minimum spacing between successive worker LAUNCHES under concurrency > 1
  * (owner-specified, 2026-08-12; revised down from an initial 3s estimate
- * once live burst data existed — see `DEFAULT_CONCURRENCY`'s header). Not a
- * per-request throttle — once a worker is running, it moves straight to its
- * next chunk with no further delay; this only breaks up the INSTANTANEOUS
- * admission burst enough that `DEFAULT_CONCURRENCY` (or any larger explicit
- * value) concurrent launches don't all land in the same tick. The measured
+ * once live burst data existed — see the measured burst ceiling above
+ * `MAX_AUTO_CONCURRENCY`). Not a per-request throttle — once a worker is
+ * running, it moves straight to its next chunk with no further delay; this
+ * only breaks up the INSTANTANEOUS admission burst enough that a pool of
+ * auto-sized (or any larger explicit) concurrent launches doesn't all land in
+ * the same tick. The measured
  * bucket is a 20-slot sub-minute window, so 250ms of spread is plenty — 3s
  * per launch would have added ~3s × (concurrency - 1) of pure dead time to
  * every run (e.g. 45s at 16 workers) for no measured benefit.
@@ -350,6 +349,24 @@ const TRANSIENT_BACKOFF_MS = 5_000;
  *  to pass. */
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * A `sleep` whose timer can be CANCELLED once nobody is waiting on it.
+ *
+ * Load-bearing for the hedge trigger: `Promise.race([primary, sleep(60_000)])`
+ * discards the loser's promise but NOT its timer, and a live timer holds Node's
+ * event loop open. The CLI's `main()` returns rather than calling
+ * `process.exit`, so one un-cancelled hedge timer per chunk made the command
+ * sit there for up to HEDGE_AFTER_MS (60s) AFTER it had already printed the
+ * report path — indistinguishable, to the user, from a hang.
+ */
+function cancellableSleep(ms: number): { promise: Promise<void>; cancel: () => void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const promise = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms);
+  });
+  return { promise, cancel: () => clearTimeout(timer) };
 }
 
 /** The injected model-call seam. Takes a fully-rendered prompt, the model id
@@ -402,7 +419,7 @@ export interface SummarizeSessionOptions {
   maxRetriesPerChunk?: number;
   /** How many chunk requests may be in flight at once. Default: 1
    *  (sequential — the library's conservative default; see
-   *  `DEFAULT_CONCURRENCY`'s header for why the CLI opts every real
+   *  `MAX_AUTO_CONCURRENCY`'s header for why the CLI opts every real
    *  invocation into `"auto"` instead). A DEFAULT, NOT A CEILING in the same sense
    *  as `maxChunkTokens`: an explicit value — including 1, to force
    *  sequential behavior — is honored verbatim. Launches beyond the first
@@ -1737,12 +1754,21 @@ export async function summarizeSession(
     // always keyed by index, never by completion order.
     let nextIndex = 0;
     const inFlight = new Map<number, Promise<void>>();
+    /** The MODEL ATTEMPT currently outstanding for a chunk index — NOT the
+     *  worker task that owns it. The distinction is the whole fix for a
+     *  deadlock: a worker task parked on the pause gate never settles until
+     *  the leader releases the gate, so a leader that drained TASKS waited on
+     *  workers that were waiting on the leader. Attempts always settle (the
+     *  model call resolves or rejects, and `callChunkModel` swallows neither),
+     *  so draining these terminates. Entries never reject — the worker keeps
+     *  the real outcome. */
+    const inFlightAttempts = new Map<number, Promise<void>>();
     let transitioning = false;
     let pauseGate: Promise<void> | null = null;
 
     /** Serialize a model-fallback/overflow transition behind a pause gate:
      *  the FIRST worker to hit one becomes the leader, drains every other
-     *  in-flight attempt (so nothing else touches `chunks`/`mapSummaries`
+     *  in-flight ATTEMPT (so nothing else touches `chunks`/`mapSummaries`
      *  mid-mutation), then applies the transition and rewinds the dispatch
      *  cursor so the (now-invalidated) tail gets reprocessed. A worker that
      *  arrives while a transition is already underway is a FOLLOWER: it
@@ -1750,7 +1776,13 @@ export async function summarizeSession(
      *  the (possibly now out-of-range) `chunks[i]` and either retries or
      *  stops — no separate transition of its own is needed, since the
      *  leader's rechunk already covers every index from the smallest
-     *  failing index onward. */
+     *  failing index onward.
+     *
+     *  The drain LOOPS rather than awaiting one snapshot: `pauseGate` is set
+     *  before the first await, and every worker checks it before claiming new
+     *  work, so at most the attempts already in flight at that instant remain
+     *  — but re-reading the map after each drain closes the window without
+     *  relying on that ordering holding forever. */
     async function becomeLeaderAndTransition(i: number, outcome: ChunkTransitionOutcome): Promise<void> {
       if (transitioning) {
         const gate = pauseGate;
@@ -1764,8 +1796,13 @@ export async function summarizeSession(
       });
       pauseGate = gate;
       try {
-        const others = [...inFlight.entries()].filter(([idx]) => idx !== i).map(([, p]) => p);
-        await Promise.allSettled(others);
+        for (;;) {
+          const others = [...inFlightAttempts.entries()]
+            .filter(([idx]) => idx !== i)
+            .map(([, p]) => p);
+          if (others.length === 0) break;
+          await Promise.allSettled(others);
+        }
         applyTransition(i, outcome);
         nextIndex = Math.min(nextIndex, i);
       } finally {
@@ -1855,7 +1892,16 @@ export async function summarizeSession(
         () => { primarySettled = true; },
         () => { primarySettled = true; },
       );
-      await Promise.race([primary.catch(() => {}), sleep(hedgeAfterMs())]);
+      // CANCELLABLE: `Promise.race` drops the loser's promise but not its
+      // timer, and a live timer keeps Node's event loop open — one per chunk
+      // left the finished command sitting idle for the full hedge delay before
+      // the process could exit (see `cancellableSleep`).
+      const hedgeDelay = cancellableSleep(hedgeAfterMs());
+      try {
+        await Promise.race([primary.catch(() => {}), hedgeDelay.promise]);
+      } finally {
+        hedgeDelay.cancel();
+      }
       if (primarySettled) return finishFromCallResult(i, await primary);
 
       // Straggler past the deadline: hedge ONLY with a spare pool slot — a
@@ -1887,7 +1933,13 @@ export async function summarizeSession(
         }
         if (nextIndex >= chunks.length) return;
         const i = nextIndex;
-        if (checkpoint!.mapSummaries[i] !== null) {
+        // Skip an index another worker is already working. A transition rewinds
+        // `nextIndex` to the failing index so the invalidated tail is redone,
+        // and the LEADER retries that same index inside its own loop — without
+        // this guard a second worker claims it too, so the chunk is sent twice
+        // AND the duplicate `inFlight` key makes one task's cleanup delete the
+        // other's entry.
+        if (checkpoint!.mapSummaries[i] !== null || inFlight.has(i)) {
           nextIndex++;
           continue;
         }
@@ -1902,7 +1954,18 @@ export async function summarizeSession(
           // transition").
           let firstAttempt = true;
           for (;;) {
-            const outcome = firstAttempt ? await attemptChunkMaybeHedged(i) : await attemptChunk(i, true, sleep);
+            // Register the ATTEMPT (not this task) so a transition leader can
+            // drain it — see `inFlightAttempts`. Registered synchronously,
+            // before the first await, so no worker can slip an unregistered
+            // attempt past a leader that is about to set the pause gate.
+            const attempt = firstAttempt ? attemptChunkMaybeHedged(i) : attemptChunk(i, true, sleep);
+            inFlightAttempts.set(i, attempt.then(() => {}, () => {}));
+            let outcome: ChunkAttemptOutcome;
+            try {
+              outcome = await attempt;
+            } finally {
+              inFlightAttempts.delete(i);
+            }
             firstAttempt = false;
             if (outcome.kind === "ok") {
               onChunkEvent?.({ chunkIndex: i, totalChunks: chunks.length, phase: "done", elapsedMs: Date.now() - startedAt });

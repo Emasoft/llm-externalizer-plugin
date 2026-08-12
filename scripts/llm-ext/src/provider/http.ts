@@ -234,6 +234,14 @@ export async function fetchWithRetry429(
   // Response, leaving callers to throw `API error 502: ` with no detail.
   if (lastRes) {
     if (lastBodyText === undefined) return lastRes;
+    // The re-wrapped body replaces lastRes's own, which now nobody will ever
+    // read. Cancel it explicitly: fetchWithTimeout keeps its abort timer ARMED
+    // until the body settles (that is what made the deadline cover generation),
+    // so an abandoned body would hold Node's event loop open for the rest of
+    // this request's budget — minutes — after the command had finished. The
+    // tap's `cancel` callback is what disarms it. Already-consumed bodies
+    // reject here; that is the harmless case, hence the swallow.
+    void lastRes.body?.cancel().catch(() => {});
     return new Response(lastBodyText, {
       status: lastRes.status,
       statusText: lastRes.statusText,

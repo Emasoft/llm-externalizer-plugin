@@ -1406,6 +1406,56 @@ describe("driver: summarizeSession", () => {
       expect(calls).toBeGreaterThan(3); // chunk 0 needed an extra attempt
     }, 15_000);
 
+    it("SEVERAL chunks failing at once (model delisted) transition and finish — no deadlock", async () => {
+      // REGRESSION: a model going away fails EVERY in-flight chunk at once, so
+      // several workers reach `becomeLeaderAndTransition` together. The first
+      // becomes leader and drains the others; the others park on the pause
+      // gate. If the leader drains whole WORKER TASKS (which are themselves
+      // parked on that gate) instead of their settled model ATTEMPTS, the two
+      // wait on each other and the run hangs forever. `fanout: false` pins this
+      // to the single-active-model concurrent branch, which is where the leader
+      // /follower gate lives.
+      const lines = Array.from({ length: 4 }, (_, i) =>
+        userTurn(`u${i}`, `concurrent fallback request ${i} `.repeat(30)),
+      );
+      const p = writeTranscript(lines);
+      const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 1_000_000, maxCompletionTokens: 1_000 };
+
+      const callModel = vi.fn<CallModelFn>(async (prompt, modelId) => {
+        const marker = /concurrent fallback request (\d+) /.exec(prompt)?.[1] ?? "?";
+        if (modelId === FREE_MODEL) {
+          // Slow enough that every staggered worker is IN FLIGHT before the
+          // first failure lands — that is the whole point: the failures must
+          // arrive together, the way a delisted model really behaves.
+          await new Promise((r) => setTimeout(r, 1_500));
+          throw new Error("404 No endpoints found for this model — it has been delisted");
+        }
+        return `SUMMARY-${marker}`;
+      });
+
+      const result = await summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        fallbackModels: [fallback],
+        maxChunkTokens: 30,
+        chunkOverlapTurns: 0,
+        concurrency: 4,
+        fanout: false,
+        callModel,
+      });
+
+      expect(result.totalChunks).toBe(4);
+      expect(result.summary).toBe(
+        joinChunkSummaries(["SUMMARY-0", "SUMMARY-1", "SUMMARY-2", "SUMMARY-3"]),
+      );
+      // Exactly one model switch was recorded, however many chunks discovered
+      // the delisting simultaneously.
+      expect(result.fallbackEvents.length).toBe(1);
+    }, 20_000);
+
     it("--concurrency 1 reproduces sequential behavior exactly (in-order calls, no stagger wait)", async () => {
       const lines = Array.from({ length: 4 }, (_, i) => userTurn(`u${i}`, `sequential-equivalence request ${i} `.repeat(30)));
       const p = writeTranscript(lines);

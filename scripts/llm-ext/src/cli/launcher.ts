@@ -192,6 +192,36 @@ function outputFlagOf(tool: ToolDef | undefined): string | undefined {
   return undefined;
 }
 
+/** The literals the flat parser accepts as an explicit boolean VALUE — kept in
+ *  sync with `BOOLEAN_LITERALS` in main.ts, because that parser consumes the
+ *  token after a boolean flag ONLY when it is one of these. */
+const BOOLEAN_VALUE_LITERALS = new Set(["true", "false", "1", "0", "yes", "no", "on", "off"]);
+
+/**
+ * Does `token` (a `-`-prefixed flag) consume the NEXT token as its value?
+ *
+ * Load-bearing for positional capture: a flag's value is itself a bare,
+ * non-`-` token, so without this the FIRST such token wins the positional slot
+ * — `llm-ext scan folder --instructions "find bugs" src/` rewrote
+ * `"find bugs"` into `--folder_path`, leaving `--instructions` to swallow
+ * `--folder_path` as its value and `src/` to die as an "unexpected argument".
+ * The same hit `-o out.md` typed before the input.
+ *
+ * An unknown flag is assumed to take a value: guessing the other way would
+ * steal its argument, whereas guessing this way leaves the flat parser to
+ * report the unknown flag — the honest error either way.
+ */
+function flagTakesValue(token: string, next: string | undefined, tool: ToolDef | undefined): boolean {
+  if (token.includes("=")) return false; // `--flag=value` carries its own value
+  if (next === undefined || next.startsWith("-")) return false;
+  const props = tool?.inputSchema?.properties ?? {};
+  const name = token.replace(/^-+/, "");
+  const prop = props[name] ?? props[name.replace(/-/g, "_")];
+  if (!prop) return true; // unknown flag — never steal what might be its value
+  if (prop.type === "boolean") return BOOLEAN_VALUE_LITERALS.has(next.toLowerCase());
+  return true;
+}
+
 /**
  * Rewrite `<group> <action> [positional] [--flags...]` into the flat
  * `<command> [--flags...]` the existing dispatcher already understands.
@@ -245,6 +275,10 @@ export function resolveInvocation(argv: string[], tools: readonly ToolDef[]): Re
   const out: string[] = [];
   let consumedPositional = false;
 
+  // True while the PREVIOUS token was a flag still owed its value — that value
+  // is a bare token and must never be mistaken for the positional input.
+  let awaitingFlagValue = false;
+
   for (let i = 0; i < tail.length; i++) {
     const token = tail[i];
     if (token === "-o" || token === "--output") {
@@ -253,12 +287,24 @@ export function resolveInvocation(argv: string[], tools: readonly ToolDef[]): Re
         // unchanged; the flat parser will reject it with a clear message
         // rather than the launcher silently swallowing it.
         out.push(token);
-        continue;
+      } else {
+        out.push(`--${outFlag}`);
       }
-      out.push(`--${outFlag}`);
+      // Either way the next bare token is this flag's PATH, not the positional.
+      awaitingFlagValue = tail[i + 1] !== undefined && !tail[i + 1].startsWith("-");
       continue;
     }
-    if (!token.startsWith("-") && !consumedPositional && spec.positional) {
+    if (token.startsWith("-")) {
+      out.push(token);
+      awaitingFlagValue = flagTakesValue(token, tail[i + 1], tool);
+      continue;
+    }
+    if (awaitingFlagValue) {
+      out.push(token);
+      awaitingFlagValue = false;
+      continue;
+    }
+    if (!consumedPositional && spec.positional) {
       out.push(`--${spec.positional}`, token);
       consumedPositional = true;
       continue;

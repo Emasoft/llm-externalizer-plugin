@@ -66,6 +66,76 @@ describe("resolveInvocation — dispatch + positional/output mapping", () => {
     ]);
   });
 
+  it("a flag's VALUE is never mistaken for the positional input (flags typed before the input)", () => {
+    // REGRESSION: the first bare token used to win the positional slot no
+    // matter what preceded it, so `find bugs` (the value of --instructions)
+    // became --folder_path, --instructions swallowed `--folder_path` as its
+    // own value, and `src/` died as an "unexpected argument".
+    const r = resolveInvocation(
+      ["scan", "folder", "--instructions", "find bugs", "src/"],
+      tools,
+    );
+    expect(r).toEqual({
+      kind: "dispatch",
+      command: "scan_folder",
+      argv: ["--instructions", "find bugs", "--folder_path", "src/"],
+    });
+  });
+
+  it("an output path typed before the input is not stolen as the positional", () => {
+    // REGRESSION: `-o` mapped to --output, then `out.md` was rewritten into
+    // --transcript, so the summary was written nowhere and the transcript
+    // argument pointed at the output path.
+    const r = resolveInvocation(
+      ["session", "compact", "-o", "out.md", "foo.jsonl"],
+      tools,
+    );
+    expect(r).toEqual({
+      kind: "dispatch",
+      command: "session_summary",
+      argv: ["--output", "out.md", "--transcript", "foo.jsonl"],
+    });
+  });
+
+  it("a bare boolean flag does not swallow the input that follows it", () => {
+    // `stdout` is a boolean on session_summary: the flat parser only eats the
+    // next token when it IS a boolean literal, so the launcher must not treat
+    // `foo.jsonl` as its value — it is the positional.
+    const r = resolveInvocation(
+      ["session", "compact", "--stdout", "foo.jsonl"],
+      tools,
+    );
+    expect(r).toEqual({
+      kind: "dispatch",
+      command: "session_summary",
+      argv: ["--stdout", "--transcript", "foo.jsonl"],
+    });
+  });
+
+  it("an explicit boolean VALUE is still recognised as a value, not the input", () => {
+    const r = resolveInvocation(
+      ["session", "compact", "--stdout", "true", "foo.jsonl"],
+      tools,
+    );
+    expect(r).toEqual({
+      kind: "dispatch",
+      command: "session_summary",
+      argv: ["--stdout", "true", "--transcript", "foo.jsonl"],
+    });
+  });
+
+  it("--flag=value carries its own value, so the next bare token is the input", () => {
+    const r = resolveInvocation(
+      ["scan", "folder", "--instructions=find bugs", "src/"],
+      tools,
+    );
+    expect(r).toEqual({
+      kind: "dispatch",
+      command: "scan_folder",
+      argv: ["--instructions=find bugs", "--folder_path", "src/"],
+    });
+  });
+
   it("unmapped flags pass through untouched", () => {
     const r = resolveInvocation(
       ["scan", "folder", "/tmp/x", "--max_files", "10", "--quiet"],
