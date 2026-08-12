@@ -218123,6 +218123,7 @@ import {
   unlinkSync as unlinkSync2
 } from "node:fs";
 import { spawnSync as spawnSync4 } from "node:child_process";
+import { createInterface as createInterface3 } from "node:readline/promises";
 import { extname as extname5, join as join32, basename as basename6, dirname as dirname14, resolve as resolve18, isAbsolute as isAbsolute5 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 
@@ -230477,7 +230478,7 @@ async function runDiscoverNewArrivals(opts = {}) {
 // src/benchmark/pick.ts
 var import_yaml3 = __toESM(require_dist(), 1);
 import { readFileSync as readFileSync16, writeFileSync as writeFileSync11, renameSync as renameSyncCb, existsSync as existsSync10 } from "node:fs";
-function loadProfileForMutation(settingsPath, profileName) {
+function loadSettingsRoot(settingsPath) {
   if (!existsSync10(settingsPath)) {
     throw new Error(`settings.yaml not found at ${settingsPath}`);
   }
@@ -230495,6 +230496,10 @@ function loadProfileForMutation(settingsPath, profileName) {
   if (!root.profiles || typeof root.profiles !== "object") {
     throw new Error(`settings.yaml at ${settingsPath} missing 'profiles' map.`);
   }
+  return root;
+}
+function loadProfileForMutation(settingsPath, profileName) {
+  const root = loadSettingsRoot(settingsPath);
   const profile = root.profiles[profileName];
   if (!profile || typeof profile !== "object") {
     throw new Error(
@@ -230526,6 +230531,17 @@ function applyFreePoolToSettings(settingsPath, profileName, modelIds) {
   profile.free_models = newPool;
   writeSettingsAtomic(settingsPath, root);
   return { profileName, oldPool, newPool };
+}
+function addProfileToSettings(settingsPath, profileName, profile, opts = {}) {
+  if (typeof profileName !== "string" || profileName.length === 0) {
+    throw new Error("addProfileToSettings: profileName must be a non-empty string");
+  }
+  const root = loadSettingsRoot(settingsPath);
+  const created = !(profileName in root.profiles);
+  root.profiles[profileName] = profile;
+  if (opts.setActive) root.active = profileName;
+  writeSettingsAtomic(settingsPath, root);
+  return { profileName, created, activated: opts.setActive === true };
 }
 
 // src/benchmark/code-task/index.ts
@@ -254918,6 +254934,140 @@ function installUsageRule(opts = {}) {
   return { status: existed ? "updated" : "installed", dest };
 }
 
+// src/local_discovery/scan.ts
+import { execFileSync as execFileSync2 } from "node:child_process";
+import { cpus, totalmem } from "node:os";
+var PROBE_TARGETS = [
+  { kind: "lmstudio", baseUrl: "http://localhost:1234", presetName: "lmstudio-local", protocol: "openai" },
+  { kind: "vllm", baseUrl: "http://localhost:8000", presetName: "vllm-local", protocol: "openai" },
+  { kind: "llamacpp", baseUrl: "http://localhost:8080", presetName: "llamacpp-local", protocol: "openai" },
+  // Jan and other OpenAI-compatible local servers commonly default here.
+  { kind: "openai-compatible", baseUrl: "http://localhost:1337", presetName: "generic-local", protocol: "openai" },
+  { kind: "openai-compatible", baseUrl: "http://localhost:5000", presetName: "generic-local", protocol: "openai" },
+  { kind: "openai-compatible", baseUrl: "http://localhost:8081", presetName: "generic-local", protocol: "openai" },
+  // Ollama's OWN api, not the OpenAI-compat shim it also exposes — /api/tags
+  // lists every locally pulled model, which /v1/models does not.
+  { kind: "ollama", baseUrl: "http://localhost:11434", presetName: "ollama-local", protocol: "ollama" }
+];
+var PROBE_TIMEOUT_MS = 2e3;
+function parseOpenAiModels(body) {
+  if (!body || typeof body !== "object") return [];
+  const data = body.data;
+  if (!Array.isArray(data)) return [];
+  const out = [];
+  for (const item of data) {
+    if (!item || typeof item !== "object") continue;
+    const rec = item;
+    if (typeof rec.id !== "string") continue;
+    const ctxRaw = rec.context_length ?? rec.max_context_length;
+    out.push(typeof ctxRaw === "number" ? { id: rec.id, contextLength: ctxRaw } : { id: rec.id });
+  }
+  return out;
+}
+function parseOllamaTags(body) {
+  if (!body || typeof body !== "object") return [];
+  const models = body.models;
+  if (!Array.isArray(models)) return [];
+  const out = [];
+  for (const item of models) {
+    if (!item || typeof item !== "object") continue;
+    const rec = item;
+    const name = rec.name ?? rec.model;
+    if (typeof name === "string") out.push({ id: name });
+  }
+  return out;
+}
+async function probeOne(target, fetchImpl) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  const path = target.protocol === "ollama" ? "/api/tags" : "/v1/models";
+  const base = { kind: target.kind, baseUrl: target.baseUrl, presetName: target.presetName };
+  try {
+    const res = await fetchImpl(`${target.baseUrl}${path}`, { signal: controller.signal });
+    if (!res.ok) {
+      return { ...base, reachable: false, models: [], error: `HTTP ${res.status}` };
+    }
+    const body = await res.json();
+    const models = target.protocol === "ollama" ? parseOllamaTags(body) : parseOpenAiModels(body);
+    return { ...base, reachable: true, models };
+  } catch (err3) {
+    return { ...base, reachable: false, models: [], error: err3 instanceof Error ? err3.message : String(err3) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function discoverLocalLlmServices(fetchImpl = fetch) {
+  const results = await Promise.all(PROBE_TARGETS.map((t) => probeOne(t, fetchImpl)));
+  return results.map((r, i) => ({ ...r, index: i + 1 }));
+}
+var KNOWN_LOCAL_CLIS = ["lms", "ollama"];
+function defaultCheckInstalled(cmd) {
+  try {
+    if (process.platform === "win32") {
+      execFileSync2("where", [cmd], { stdio: "ignore" });
+    } else {
+      execFileSync2("/bin/sh", ["-c", `command -v ${cmd}`], { stdio: "ignore" });
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+function detectInstalledClis(checkInstalled = defaultCheckInstalled) {
+  return KNOWN_LOCAL_CLIS.map((cli) => ({ cli, installed: checkInstalled(cli) }));
+}
+function detectSystemInfo() {
+  return { totalRamBytes: totalmem(), cpuCount: cpus().length };
+}
+function formatDiscoveredServices(services, cliEvidence) {
+  const lines = ["Local LLM services scan:"];
+  for (const s of services) {
+    if (s.reachable) {
+      const modelList = s.models.length > 0 ? s.models.map((m) => m.id).join(", ") : "(no models loaded)";
+      lines.push(`  ${s.index}. [${s.kind}] ${s.baseUrl} \u2014 REACHABLE \u2014 models: ${modelList}`);
+    } else {
+      lines.push(`  ${s.index}. [${s.kind}] ${s.baseUrl} \u2014 not reachable`);
+    }
+  }
+  const installed = cliEvidence.filter((c) => c.installed);
+  if (installed.length > 0) {
+    lines.push("");
+    lines.push(
+      `Installed CLI(s) detected (may just be stopped): ${installed.map((c) => c.cli).join(", ")}`
+    );
+  }
+  return lines.join("\n");
+}
+function buildProfileForService(service, existingProfileNames) {
+  if (!service.reachable) {
+    throw new Error(`buildProfileForService: '${service.baseUrl}' is not reachable`);
+  }
+  const model = service.models[0]?.id;
+  if (!model) {
+    throw new Error(
+      `buildProfileForService: '${service.baseUrl}' reported no models \u2014 load a model in the service first`
+    );
+  }
+  const baseName = `${service.kind}-local-auto`;
+  let profileName = baseName;
+  let n = 2;
+  while (existingProfileNames.includes(profileName)) {
+    profileName = `${baseName}-${n}`;
+    n += 1;
+  }
+  const profile = {
+    mode: "local",
+    api: service.presetName,
+    model,
+    url: service.baseUrl
+  };
+  const contextLength = service.models[0]?.contextLength;
+  if (typeof contextLength === "number" && contextLength > 0) {
+    profile.context_window = contextLength;
+  }
+  return { profileName, profile };
+}
+
 // src/model-reconcile.ts
 import { mkdirSync as mkdirSync24, readFileSync as readFileSync30, renameSync as renameSync14, writeFileSync as writeFileSync22 } from "node:fs";
 import { join as join31 } from "node:path";
@@ -256653,7 +256803,11 @@ var RECONCILE_SKIP_TOOLS = /* @__PURE__ */ new Set([
   "or_model_info_table",
   "assess_model",
   "check_model_health",
-  "discover_new_models"
+  "discover_new_models",
+  // Local-service scan is its own configuration entry point — it must run
+  // (and print a usable list) even before any profile is reconciled, and it
+  // never sends an LLM request itself.
+  "scan_local_llm_services"
 ]);
 async function runModelReconcile() {
   await reconcileModelsBeforeWork({
@@ -257074,7 +257228,9 @@ async function dispatchCallToolInner(name, rawArgs, opts) {
   const args = rawArgs;
   const onProgress = makeProgressFn(opts.progress === true);
   try {
-    if (!settingsValid && name !== "discover" && name !== "reset" && name !== "get_settings" && name !== "profile") {
+    if (!settingsValid && name !== "discover" && name !== "reset" && name !== "get_settings" && name !== "profile" && // The whole point of this tool is helping the user get a WORKING profile
+    // in the first place, so it must run even while settings are misconfigured.
+    name !== "scan_local_llm_services") {
       return {
         content: [
           {
@@ -257640,6 +257796,87 @@ Profiles: ${profileNames.join(", ")}`);
           parts.push(`Session log: ${LOG_FILE}`);
           return {
             content: [{ type: "text", text: parts.join("\n") }]
+          };
+        }
+        case "scan_local_llm_services": {
+          const services = await discoverLocalLlmServices();
+          const cliEvidence = detectInstalledClis();
+          const listText = formatDiscoveredServices(services, cliEvidence);
+          const system = detectSystemInfo();
+          const systemLine = `Detected system: ${(system.totalRamBytes / 1024 ** 3).toFixed(1)} GB RAM, ${system.cpuCount} CPUs`;
+          const pickArg = args?.pick;
+          let pick2 = typeof pickArg === "number" ? pickArg : void 0;
+          if (pick2 === void 0 && process.stdin.isTTY) {
+            const rl = createInterface3({ input: process.stdin, output: process.stdout });
+            try {
+              const answer = await rl.question(
+                `${listText}
+
+${systemLine}
+
+Configure llm-externalizer to use one of these? Enter a number, or leave blank to cancel: `
+              );
+              const trimmed = answer.trim();
+              const n = Number(trimmed);
+              if (trimmed !== "" && Number.isInteger(n)) pick2 = n;
+            } finally {
+              rl.close();
+            }
+          }
+          if (pick2 === void 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `${listText}
+
+${systemLine}
+
+No selection made \u2014 no profile was written and no profile was activated. Re-run with --pick <N> to configure and activate one of the REACHABLE services above (e.g. 'llm-ext scan-local-llm-services --pick 1').`
+                }
+              ]
+            };
+          }
+          const service = services[pick2 - 1];
+          if (!service) {
+            return {
+              content: [
+                { type: "text", text: `Invalid selection ${pick2}. Valid range: 1-${services.length}.` }
+              ],
+              isError: true
+            };
+          }
+          if (!service.reachable) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Service #${pick2} (${service.baseUrl}) is not reachable \u2014 cannot configure it.`
+                }
+              ],
+              isError: true
+            };
+          }
+          let built;
+          try {
+            built = buildProfileForService(service, Object.keys(activeSettings.profiles));
+          } catch (err3) {
+            return {
+              content: [{ type: "text", text: err3 instanceof Error ? err3.message : String(err3) }],
+              isError: true
+            };
+          }
+          const result = addProfileToSettings(getSettingsPath(), built.profileName, built.profile, {
+            setActive: true
+          });
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Configured profile '${result.profileName}' (${String(built.profile.api)}, model ${String(built.profile.model)}) and set it ACTIVE in ${getSettingsPath()}.
+Restart Claude Code (or call the 'reset' tool) to pick up the change.`
+              }
+            ]
           };
         }
         case "or_model_info":

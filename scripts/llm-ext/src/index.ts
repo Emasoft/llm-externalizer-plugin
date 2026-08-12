@@ -19,6 +19,7 @@ import {
 } from "node:fs";
 import { parse as yamlParse } from "yaml";
 import { spawnSync } from "node:child_process";
+import { createInterface } from "node:readline/promises";
 import { extname, join, basename, dirname, resolve, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 import { buildReviewPlan } from "./review-plan.js";
@@ -191,7 +192,14 @@ import { resolveProjectMainRoot } from "./project-root.js";
 import { resolveEnsembleModelLimits } from "./ensemble-limits.js";
 import { benchmarkFailedModels } from "./benchmark/security-triage/index.js";
 import { isFreeSuffixModelId } from "./benchmark/free-mode.js";
-import { applyFreePoolToSettings } from "./benchmark/pick.js";
+import { applyFreePoolToSettings, addProfileToSettings } from "./benchmark/pick.js";
+import {
+  discoverLocalLlmServices,
+  detectInstalledClis,
+  detectSystemInfo,
+  formatDiscoveredServices,
+  buildProfileForService,
+} from "./local_discovery/scan.js";
 import {
   reconcileModelsBeforeWork,
   readLastReconcileMs,
@@ -1972,6 +1980,10 @@ const RECONCILE_SKIP_TOOLS = new Set([
   "assess_model",
   "check_model_health",
   "discover_new_models",
+  // Local-service scan is its own configuration entry point — it must run
+  // (and print a usable list) even before any profile is reconciled, and it
+  // never sends an LLM request itself.
+  "scan_local_llm_services",
 ]);
 
 async function runModelReconcile(): Promise<void> {
@@ -2705,7 +2717,10 @@ async function dispatchCallToolInner(
       name !== "discover" &&
       name !== "reset" &&
       name !== "get_settings" &&
-      name !== "profile"
+      name !== "profile" &&
+      // The whole point of this tool is helping the user get a WORKING profile
+      // in the first place, so it must run even while settings are misconfigured.
+      name !== "scan_local_llm_services"
     ) {
       return {
         content: [
@@ -3445,6 +3460,101 @@ async function dispatchCallToolInner(
 
         return {
           content: [{ type: "text", text: parts.join("\n") }],
+        };
+      }
+
+      case "scan_local_llm_services": {
+        const services = await discoverLocalLlmServices();
+        const cliEvidence = detectInstalledClis();
+        const listText = formatDiscoveredServices(services, cliEvidence);
+        const system = detectSystemInfo();
+        const systemLine = `Detected system: ${(system.totalRamBytes / 1024 ** 3).toFixed(1)} GB RAM, ${system.cpuCount} CPUs`;
+
+        const pickArg = (args as Record<string, unknown> | undefined)?.pick;
+        let pick: number | undefined = typeof pickArg === "number" ? pickArg : undefined;
+
+        // Interactive prompt ONLY when a human is actually at the terminal and
+        // didn't already pass --pick — an agent/script invocation (not a TTY)
+        // must never block waiting on stdin that will never arrive.
+        if (pick === undefined && process.stdin.isTTY) {
+          const rl = createInterface({ input: process.stdin, output: process.stdout });
+          try {
+            const answer = await rl.question(
+              `${listText}\n\n${systemLine}\n\n` +
+                "Configure llm-externalizer to use one of these? Enter a number, or leave blank to cancel: ",
+            );
+            const trimmed = answer.trim();
+            const n = Number(trimmed);
+            if (trimmed !== "" && Number.isInteger(n)) pick = n;
+          } finally {
+            rl.close();
+          }
+        }
+
+        if (pick === undefined) {
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `${listText}\n\n${systemLine}\n\n` +
+                  // "no profile", not "nothing" — on a cold config dir the server's
+                  // normal first-run bootstrap still writes the default settings
+                  // template before any command runs. Claiming "nothing was written"
+                  // is falsifiable by `find` and would undermine trust in the rest.
+                  "No selection made — no profile was written and no profile was activated. " +
+                  "Re-run with --pick <N> to configure " +
+                  "and activate one of the REACHABLE services above " +
+                  "(e.g. 'llm-ext scan-local-llm-services --pick 1').",
+              },
+            ],
+          };
+        }
+
+        const service = services[pick - 1];
+        if (!service) {
+          return {
+            content: [
+              { type: "text", text: `Invalid selection ${pick}. Valid range: 1-${services.length}.` },
+            ],
+            isError: true,
+          };
+        }
+        if (!service.reachable) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Service #${pick} (${service.baseUrl}) is not reachable — cannot configure it.`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        let built;
+        try {
+          built = buildProfileForService(service, Object.keys(activeSettings.profiles));
+        } catch (err) {
+          return {
+            content: [{ type: "text", text: err instanceof Error ? err.message : String(err) }],
+            isError: true,
+          };
+        }
+
+        const result = addProfileToSettings(getSettingsPath(), built.profileName, built.profile, {
+          setActive: true,
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Configured profile '${result.profileName}' (${String(built.profile.api)}, ` +
+                `model ${String(built.profile.model)}) and set it ACTIVE in ${getSettingsPath()}.\n` +
+                "Restart Claude Code (or call the 'reset' tool) to pick up the change.",
+            },
+          ],
         };
       }
 

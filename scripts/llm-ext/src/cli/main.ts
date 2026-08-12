@@ -109,6 +109,7 @@ const QUIET_TOOLS = new Set([
   "or_model_info",
   "or_model_info_json",
   "or_model_info_table",
+  "scan_local_llm_services",
 ]);
 
 /** Accepted spellings for an explicit boolean value. */

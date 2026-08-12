@@ -555,6 +555,29 @@ export function buildTools(limitsText: string) {
       inputSchema: { type: "object" as const, properties: {} },
     },
     {
+      name: "scan_local_llm_services",
+      description:
+        "Scan well-known local ports (LM Studio, Ollama, vLLM, llama.cpp, Jan, generic " +
+        "OpenAI-compatible) for a running LLM service and print the results as a NUMBERED " +
+        "list, with any loaded/available model ids and installed-but-stopped CLI evidence " +
+        "(lms, ollama). Prints only — never touches settings.yaml — unless `pick` is given: " +
+        "with `pick`, probes the chosen service, generates a settings.yaml profile section " +
+        "for it (mode local, the matching api preset, the detected model, and context_window " +
+        "when the server reports one), writes it, and makes it the ACTIVE profile. When run " +
+        "at an interactive terminal without `pick`, asks which numbered entry to configure.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          pick: {
+            type: "number",
+            description:
+              "1-based index from the numbered scan list to configure and activate. " +
+              "Omit to only print the list (and, at an interactive terminal, be prompted).",
+          },
+        },
+      },
+    },
+    {
       name: "or_model_info",
       description:
         "Query OpenRouter for detailed information about a specific model by its EXACT id " +

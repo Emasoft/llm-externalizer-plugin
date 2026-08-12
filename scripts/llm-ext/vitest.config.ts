@@ -30,6 +30,9 @@ export default defineConfig({
       'src/rule-install.test.ts',
       // Single-source project-root resolver (reports land inside the project).
       'src/project-root.test.ts',
+      // scan_local_llm_services — local-service autodiscovery (parsing + the
+      // discover→build→write chain against a tmp LLM_EXT_CONFIG_DIR).
+      'src/local_discovery/scan.test.ts',
       // Global usage-history logger — one line per LLM web request.
       'src/usage-history.test.ts',
       // Durable model-health event ledger (TRDD-828238b5 A1).

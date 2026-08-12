@@ -191,18 +191,15 @@ export interface YamlMutationResult {
 }
 
 /** The narrow shape every writer below mutates. */
-type SettingsRoot = { profiles?: Record<string, Record<string, unknown>> };
+type SettingsRoot = { active?: string; profiles?: Record<string, Record<string, unknown>> };
 
 /**
  * Shared load+validate step for EVERY settings writer in this file: existsSync
  * guard → yamlParse with a clear error → top-level-object guard → profiles-map
- * guard → named-profile guard. One spelling of these five errors, so a new writer
- * cannot drift from the established (and tested) messages.
+ * guard. One spelling of these four errors, so a new writer cannot drift from
+ * the established (and tested) messages.
  */
-function loadProfileForMutation(
-  settingsPath: string,
-  profileName: string,
-): { root: SettingsRoot; profile: Record<string, unknown> } {
+function loadSettingsRoot(settingsPath: string): SettingsRoot {
   if (!existsSync(settingsPath)) {
     throw new Error(`settings.yaml not found at ${settingsPath}`);
   }
@@ -220,11 +217,25 @@ function loadProfileForMutation(
   if (!root.profiles || typeof root.profiles !== "object") {
     throw new Error(`settings.yaml at ${settingsPath} missing 'profiles' map.`);
   }
-  const profile = root.profiles[profileName];
+  return root;
+}
+
+/**
+ * Shared load+validate step for every writer that mutates an EXISTING named
+ * profile: loadSettingsRoot() plus the named-profile guard. (addProfileToSettings
+ * below adds a brand-new profile, so it uses loadSettingsRoot() directly — the
+ * named-profile guard would reject the exact thing it's there to create.)
+ */
+function loadProfileForMutation(
+  settingsPath: string,
+  profileName: string,
+): { root: SettingsRoot; profile: Record<string, unknown> } {
+  const root = loadSettingsRoot(settingsPath);
+  const profile = root.profiles![profileName];
   if (!profile || typeof profile !== "object") {
     throw new Error(
       `settings.yaml at ${settingsPath} has no profile named '${profileName}'. ` +
-        `Existing profiles: ${Object.keys(root.profiles).join(", ")}.`,
+        `Existing profiles: ${Object.keys(root.profiles!).join(", ")}.`,
     );
   }
   return { root, profile };
@@ -470,4 +481,44 @@ export function applyEnsembleSlotToSettings(
 
   writeSettingsAtomic(settingsPath, root);
   return { profileName, slot, oldModelId, newModelId: modelId };
+}
+
+// ── New-profile writer (`scan_local_llm_services --pick N`) ─────────────────
+//
+// Unlike every writer above (which mutate ONE field on an EXISTING profile),
+// this one ADDS a brand-new profile section — the whole point of the
+// `scan_local_llm_services` command — and optionally activates it. It only
+// ever runs when the user has explicitly picked a numbered entry from that
+// command's scan list; it is never called on its own.
+
+/** Result of adding (or overwriting) a profile section. */
+export interface NewProfileMutationResult {
+  profileName: string;
+  /** false when a profile with this name already existed and was overwritten. */
+  created: boolean;
+  activated: boolean;
+}
+
+/**
+ * Atomically ADD a brand-new named profile to settings.yaml (or overwrite an
+ * existing one with the same name), and optionally set it as the active
+ * profile. Every other profile and every other top-level key is preserved
+ * by-key — same tmp+rename atomicity as every other writer in this file.
+ */
+export function addProfileToSettings(
+  settingsPath: string,
+  profileName: string,
+  profile: Record<string, unknown>,
+  opts: { setActive?: boolean } = {},
+): NewProfileMutationResult {
+  if (typeof profileName !== "string" || profileName.length === 0) {
+    throw new Error("addProfileToSettings: profileName must be a non-empty string");
+  }
+  const root = loadSettingsRoot(settingsPath);
+  const created = !(profileName in root.profiles!);
+  root.profiles![profileName] = profile;
+  if (opts.setActive) root.active = profileName;
+
+  writeSettingsAtomic(settingsPath, root);
+  return { profileName, created, activated: opts.setActive === true };
 }

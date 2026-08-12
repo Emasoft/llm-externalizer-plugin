@@ -74,6 +74,10 @@ describe('tool catalog', () => {
       // session from its JSONL transcript (TRDD-T4MZ8YQR), map-reduce +
       // checkpointed, $0-only free models.
       'session_summary',
+      // scan_local_llm_services — autodiscovers running local LLM services and,
+      // only on an explicit --pick N, writes + activates a profile for one.
+      // Never auto-runs; a bare invocation writes no profile.
+      'scan_local_llm_services',
       'or_model_info',
       'or_model_info_json',
       'or_model_info_table',
