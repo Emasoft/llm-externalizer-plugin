@@ -1,9 +1,9 @@
 ---
 trdd-id: T4MZ8YQR
 title: New command — compaction-style summary of a Claude Code session from its JSONL transcript
-column: dev
+column: complete
 created: 2026-08-06T17:52:00+0200
-updated: 2026-08-11T19:09:22+0200
+updated: 2026-08-12T15:22:44+0200
 current-owner: claude-llm-externalizer
 assignee: null
 priority: 2
@@ -23,7 +23,7 @@ test-requirements: [unit, typecheck, lint]
 review-requirements: [human-review]
 runtime-targets: [macos, linux]
 impacts: [public-api]
-implementation-commits: []
+implementation-commits: [418bf73, a3fbd53, ca2a5b3, 72c1d3c, 4a2baac, 9487d9a, f2c4815, af60ab4, a0cefce, ab00cb4, dd7023c, a4031d6, addf86c, d0c2532, 6eb7d6a]
 ---
 
 # `llm-ext session-summary` — compaction-style summary of a whole session
@@ -265,26 +265,40 @@ and the degenerate budget (`addf86c`, one free model's usable input budget went 
 poisoned fan-out runs) — plus concurrency, auto-sizing, fan-out and hedging. Correctness wins, not
 latency wins. Do not let the latency verdict imply they were wasted.
 
-### REMAINING AFTER HANDOFF
+### ✅ STREAMING VERIFIED AGAINST THE REAL 253 MB TRANSCRIPT (2026-08-12 15:20)
 
-1. Finish/inspect the verification run above.
-2. **File the janitor issue** (owner-requested): how to use `llm-ext session-summary` to compact
-   ANY Claude Code session at $0. Repo `Emasoft/ai-maestro-janitor`. No existing issue covers it;
-   #190 (large-transcript session cost) and #224 (post-`/clear` resume state) are adjacent and
-   worth citing. MUST open with the identity line naming which Claude authored it, and MUST NOT
-   contain a bare `@name` outside a code span.
-3. `9487d9a` fixes the package.json self-description ("MCP server for LLMs" shipped in 12.0.0) —
-   committed, unpublished; rides the next release.
+The last open acceptance criterion — *"never loads the whole file into memory; verified against the
+265 MB transcript"* — was structurally unit-tested but had never been run through the wired CLI on
+the big file. Now measured, by sampling peak RSS across the process tree while the CLI reads,
+prunes and packs:
 
-### NEXT ACTION (one step)
+| transcript | peak RSS | chunks packed |
+|---|---|---|
+| 12 MB (this session) | 293 MB | 5 |
+| **253 MB** (`cfe21fb2…`) | **406 MB** | **77** |
 
-Phase B: wire the Phase-A tokenizer/artifact/budget work through `driver.ts` + `index.ts` —
-overflow-retry-and-re-split (the model's own rejection is authoritative over the tokenizer's
-estimate) and the caller-selected output mode (file path default / direct output opt-in).
+**20× more input produced 1.4× more RSS.** A whole-file load would have added ~500 MB for the big
+file alone (JS strings are UTF-16, so 253 MB of bytes costs ~506 MB resident). Memory does not
+scale with raw file size ⇒ **the read genuinely streams**.
 
-Phase A LANDED GREEN — commit `e89456a`, verified independently (vitest 1816 pass / 0 fail /
-4 skip, `tsc --noEmit` clean, `eslint` clean). Dependency added: `gpt-tokenizer` ^3.4.0 (MIT,
-zero transitive deps, no WASM/native).
+The +113 MB that *does* appear is retained DERIVED data — the pruned context (~10% of input) and
+77 simultaneously-held chunk strings — not the raw file. Worth knowing, not a defect: memory scales
+with *pruned* size × chunk count, so a transcript another order of magnitude larger would want the
+chunks spilled to disk rather than held. Not a problem at any transcript size that exists today.
+
+Method: `scratchpad/measure_streaming_rss.sh` — the log proves all 253 MB were read and packed
+(`[chunk 1/77]`) before sampling stopped, so the number covers the whole read phase.
+
+### REMAINING — none blocking; the card is done
+
+1. ~~Finish/inspect the verification run~~ — done, see the POST-FIX box above.
+2. ~~File the janitor issue~~ — done: `Emasoft/ai-maestro-janitor` **#251**, with a measured
+   follow-up correcting both my "inherent, not a tuning bug" claim and my later optimistic
+   projection.
+3. `9487d9a` (package.json still self-described as an MCP server) is committed and unpublished —
+   it rides the next release, together with ~23 other unpushed commits. **Publishing is the
+   owner's call and `publish.py` is the only path**; that is a release step, not dev work, which
+   is why this card is `complete` rather than held open in `dev`.
 
 ### The owner's pipeline spec — AUTHORITATIVE, supersedes the phase descriptions below
 
@@ -438,8 +452,10 @@ that should be a measured decision, not a second guess.
 
 ## Acceptance
 
-- [ ] `llm-ext session-summary --transcript <path>` produces a readable compaction-style summary
-      of a real transcript — **RUN 2026-08-11, STILL NOT MET.** The plumbing all works: it
+- [x] `llm-ext session-summary --transcript <path>` produces a readable compaction-style summary
+      of a real transcript — **MET; see the box below.** The history of the FIRST attempt is kept
+      because the defect shape is the lesson. **RUN 2026-08-11, NOT MET AT THE TIME.** The
+      plumbing all worked: it
       selected `nvidia/nemotron-3-ultra-550b-a55b:free` (1,000,000 ctx), read 3,658 lines, pruned
       to 0.103, packed 1 chunk, checkpointed, wrote a report, exited 0. **But the summary body is
       a single raw pruned turn from the transcript, not a summary** — 941 B of output, the last
@@ -471,9 +487,11 @@ that should be a measured decision, not a second guess.
       echo-rejection routed through the model-fallback path, and non-zero exit when every
       candidate is exhausted. Contrast with the failed run: 1 chunk → 3 chunks, 941 B echo →
       4,353 B summary.
-- [ ] never loads the whole file into memory; verified against the 265 MB transcript — P1's
-      structural test (no sync whole-file read) is unit-verified; the real 265 MB transcript has
-      not been run through the wired-up CLI.
+- [x] never loads the whole file into memory; verified against the 253 MB transcript —
+      **MET 2026-08-12 by measurement, not by inspection.** Peak RSS through the wired CLI:
+      12 MB input → 293 MB, 253 MB input → 406 MB. 20× the input for 1.4× the memory, where a
+      whole-file load would have cost ~+500 MB. Full method and the caveat about retained pruned
+      chunks: the STREAMING VERIFIED box in the STATE section.
 - [x] $0 by construction — refuses to run on a non-free model even under a paid profile.
       `summarizeSession()` calls `assertFreeOnlyModel(true, …)` with a HARDCODED `true`, and P5's
       CLI wiring threads no caller-supplied override — unit-verified in `driver.test.ts` +
