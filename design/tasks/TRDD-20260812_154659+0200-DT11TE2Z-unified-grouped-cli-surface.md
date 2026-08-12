@@ -1,10 +1,10 @@
 ---
 trdd-id: DT11TE2Z
 title: A thin grouped launcher in front of the existing commands
-column: todo
+column: complete
 approval-tier: 0
 created: 2026-08-12T15:46:59+0200
-updated: 2026-08-12T15:58:00+0200
+updated: 2026-08-12T16:14:45+0200
 current-owner: claude-llm-externalizer
 assignee: null
 priority: 1
@@ -20,7 +20,7 @@ release-via: publish
 target-branch: main
 test-requirements: [unit, typecheck, lint]
 impacts: []
-implementation-commits: []
+implementation-commits: [470d175]
 ---
 
 # A thin grouped launcher: `llm-ext <group> <action> <input> -o <out>`
@@ -90,15 +90,36 @@ and which flag the positional fills.**
 4. **Existing flat names keep working.** They are the real commands; the launcher dispatches to
    them. Nothing is deprecated or removed by this card.
 
-## Acceptance
+## Acceptance — ALL MET 2026-08-12 (`470d175`)
 
-- [ ] The owner's two examples run as written (with `compact` under `session`).
-- [ ] Every group/action pair in the map resolves and dispatches to the right existing command.
-- [ ] Help works at all three layers; the top-level lists groups, not 45 lines.
-- [ ] A mistyped group and a mistyped action each suggest the right candidate and exit non-zero;
-      garbage input suggests nothing.
-- [ ] Existing flat commands are untouched and still work — proven by the suite staying green.
-- [ ] tsc 0 · eslint 0 · full vitest green · build clean.
+- [x] The owner's two examples run as written (with `compact` under `session`) —
+      `session compact --help` delegates to `session-summary`, `llm ask --help` to `chat`.
+- [x] Every group/action pair resolves to a real command — a test asserts every target exists in
+      the catalog, so a typo in the map fails the suite rather than at runtime.
+- [x] Help at all three layers; top level lists 7 groups, the flat catalog moved behind
+      `--help --all`.
+- [x] Mistyped group → *"did you mean group: scan, scout?"*; mistyped action → *"did you mean:
+      scan folder?"* (grouped form, not the flat name); both exit 1; `zzzzqqq` suggests nothing.
+- [x] Existing flat commands untouched — the launcher engages only when `argv[0]` is a group, and
+      no flat command name is a group name.
+- [x] tsc 0 · eslint 0 · vitest **1915 passed / 4 skipped / 0 failed** (1899 before) · build clean.
+
+## Notes and lessons learned
+
+**Two verification failures of my own, both of which nearly cost the implementer real work.** I
+reported the agent's results as "partly false" twice; both times the tool was correct and my
+harness was lying:
+
+1. **`$?` after a pipe reports the LAST command.** `./bin/llm-ext scna | head` then `echo $?`
+   measures `head`, not the CLI — so every error path read as `exit=0`. Measure the process
+   directly (`cmd > file 2>&1; echo $?`), never through a pipe.
+2. **zsh does NOT word-split unquoted `$var`** (bash does). `for c in "scan foldr"; do llm-ext $c`
+   passes ONE argv token `"scan foldr"`, so the CLI correctly reported an unknown command — and I
+   read that as a broken launcher. When testing argv handling, write the arguments literally.
+
+Both belong to the same family: *a test harness is code, and an untested harness fails silently in
+the direction of "the product is broken".* Before filing a defect against a component, confirm the
+observation reproduces under a differently-shaped command.
 
 ## Notes
 
