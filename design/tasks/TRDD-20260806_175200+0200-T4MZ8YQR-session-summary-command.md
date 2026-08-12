@@ -134,6 +134,45 @@ Note this only became possible when the model-fold was removed: with a fold, chu
 to be collected before the reduce step could run, and a mid-run downgrade re-chunked the
 remainder.
 
+### ✅ FREE-TIER CONCURRENCY CEILING — MEASURED, NOT ESTIMATED (2026-08-12 02:29)
+
+The account's OpenRouter `rate_limit` field is DEPRECATED (`requests: -1`), so the documented
+limit is unusable and the only trustworthy number is a measured one. Probed the live account
+against `nvidia/nemotron-3-ultra-550b-a55b:free` with bursts of tiny (`max_tokens: 8`) requests,
+so the burst measures ADMISSION, which is what a 429 gates on, rather than generation.
+
+| burst | result |
+|---|---|
+| **32 concurrent** | **32/32 HTTP 200.** Zero 429. No `x-ratelimit-*` headers returned at all. |
+| **64 concurrent** | 62/64 HTTP 200, **2× 429** — `x-ratelimit-limit: 20`, `x-ratelimit-remaining: 0`, `x-ratelimit-reset: 1786494540000`. Rejections came back in 0.2s. |
+
+**Answer to "do free models accept dozens in parallel?" — YES. Dozens is fine; 32 is clean, 64
+is where it breaks.** My earlier "realistically 10–16" was too pessimistic by ~2×.
+
+**THE LOAD-BEARING FINDING: that 429 is TRANSIENT, not a daily cap.** Converting the reset
+timestamp shows it was already **7 seconds in the past** when the burst finished — a sub-minute
+rolling window. This is a correctness trap, not a tuning note: if `classifyUnavailable`
+(`free-rotation.ts`) reads this 429 as daily-quota-exhausted it will DEMOTE the model, and a
+single parallel burst then walks the entire free pool in seconds — converting a 200 ms hiccup
+into a total run failure with "all candidates exhausted". The discriminator must be the reset
+timestamp's proximity: a genuine daily cap carries a reset many hours out (UTC midnight) and is
+cleanly distinguishable from one already elapsed.
+
+**~35 s PER-REQUEST FLOOR, INDEPENDENT OF OUTPUT SIZE.** A request generating 8 tokens still
+took ~35 s; successful large-chunk requests took 35–42 s. Latency is queue/cold-start dominated,
+not generation dominated. Two consequences:
+- splitting into smaller chunks does **not** reduce total time *sequentially* — each added chunk
+  re-pays the ~35 s floor. Smaller chunks only pay off when they run **concurrently**.
+- parallel wall-clock ≈ *slowest single chunk + stagger*, not the sum.
+
+**Stagger corrected from 3 s to ~250 ms.** My original 3 s figure modelled the risk as sustained
+throughput; the measurement shows the risk is the instantaneous admission burst against a 20-slot
+sub-minute bucket. 3 s × 16 workers would have added ~45 s of dead time per run for no benefit.
+
+**Default concurrency 12–16** — deliberately inside the measured-clean zone rather than at the
+64-request cliff, leaving headroom for the ensemble's other traffic and for models with tighter
+buckets. User-overridable; `--concurrency 1` must reproduce sequential exactly.
+
 ### REMAINING AFTER HANDOFF
 
 1. Finish/inspect the verification run above.
