@@ -53,7 +53,7 @@ import { makePreflightHook } from "./cluster/preflight_benchmark.js";
 // it to a real model call + real filesystem paths. resolveTranscriptPath /
 // defaultCheckpointPath are CLI-surface plumbing, kept OUT of session_summary/
 // on purpose (see session-summary-resolve.ts's own header).
-import { summarizeSession, DEFAULT_CONCURRENCY, type CallModelFn, type ChunkEvent } from "./session_summary/driver.js";
+import { summarizeSession, type CallModelFn, type ChunkEvent } from "./session_summary/driver.js";
 import { selectModels } from "./session_summary/model-select.js";
 import { resolveTranscriptPath, defaultCheckpointPath } from "./session-summary-resolve.js";
 // Provider layer (B1 Phase 5a/5b, TRDD-63314265). These modules import NOTHING
@@ -3908,7 +3908,12 @@ async function dispatchCallToolInner(
         // original sequential behavior) is honored verbatim; omitted, the
         // CLI opts every real invocation into DEFAULT_CONCURRENCY — see
         // driver.ts's own header for why the library default stays 1.
-        const concurrency = typeof ssConcurrencyRaw === "number" ? ssConcurrencyRaw : DEFAULT_CONCURRENCY;
+        // Omitted => "auto": the driver sizes the pool to the chunk count
+        // (min(chunks, MAX_AUTO_CONCURRENCY)) so the map phase stays SINGLE-WAVE.
+        // A fixed 12 forced e.g. 27 chunks into three waves and roughly tripled
+        // wall-clock for nothing — the account admits far more than 12 at once.
+        const concurrency: number | "auto" =
+          typeof ssConcurrencyRaw === "number" ? ssConcurrencyRaw : "auto";
 
         // Per-chunk progress lines labeled by chunk index, so N chunks in
         // flight at once still read clearly instead of interleaving

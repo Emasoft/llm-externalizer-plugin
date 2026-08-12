@@ -12,6 +12,7 @@ import {
   joinChunkSummaries,
   isEchoResponse,
   DEFAULT_MAX_CHUNK_TOKENS,
+  MAX_AUTO_CONCURRENCY,
   type CallModelFn,
 } from "./driver.js";
 import type { EligibleModel } from "./model-select.js";
@@ -870,6 +871,94 @@ describe("driver: summarizeSession", () => {
   }
 
   describe("concurrency", () => {
+    it("concurrency 'auto' sizes the pool to the chunk count so the map phase runs in ONE wave", async () => {
+      // The whole point of auto: wall-clock is `slowest chunk` only when every
+      // chunk is in flight together. A fixed default below the chunk count
+      // silently splits the run into waves and multiplies wall-clock.
+      const lines = Array.from({ length: 5 }, (_, i) => userTurn(`u${i}`, `auto wave request ${i} `.repeat(30)));
+      const p = writeTranscript(lines);
+
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const releases: Array<() => void> = [];
+      const callModel = vi.fn<CallModelFn>(async () => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise<void>((res) => releases.push(res));
+        inFlight--;
+        return "SUMMARY";
+      });
+
+      const resultPromise = summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        maxChunkTokens: 30, // tiny — forces 5 chunks, one per turn
+        chunkOverlapTurns: 0,
+        concurrency: "auto",
+        callModel,
+      });
+
+      // 5 chunks, well under MAX_AUTO_CONCURRENCY (28) — so all five must be
+      // in flight at once, i.e. a single wave.
+      // 5 launches x STAGGER_INTERVAL_MS (250ms) is ~1.25s — give it real headroom
+      // rather than riding waitUntil's 2s default.
+      await waitUntil(() => callModel.mock.calls.length >= 5, 30_000);
+      expect(maxInFlight).toBe(5);
+
+      releases.forEach((r) => r());
+      await resultPromise;
+    });
+
+    it("concurrency 'auto' never exceeds MAX_AUTO_CONCURRENCY even with more chunks than the cap", async () => {
+      // Auto must size DOWN to the measured-safe ceiling, not to the chunk
+      // count — otherwise a big transcript would fire a burst past the 429 cliff.
+      const lines = Array.from({ length: 34 }, (_, i) => userTurn(`u${i}`, `cap request ${i} `.repeat(30)));
+      const p = writeTranscript(lines);
+
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const releases: Array<() => void> = [];
+      const callModel = vi.fn<CallModelFn>(async () => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise<void>((res) => releases.push(res));
+        inFlight--;
+        return "SUMMARY";
+      });
+
+      const resultPromise = summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        maxChunkTokens: 30, // tiny — one chunk per turn => 34 chunks
+        chunkOverlapTurns: 0,
+        concurrency: "auto",
+        callModel,
+      });
+
+      // Budget for the real launch stagger: 28 workers x STAGGER_INTERVAL_MS
+      // (250ms) is ~7s, well past waitUntil's 2s default.
+      await waitUntil(() => callModel.mock.calls.length >= MAX_AUTO_CONCURRENCY, 30_000);
+      expect(maxInFlight).toBe(MAX_AUTO_CONCURRENCY);
+      expect(maxInFlight).toBeLessThan(34); // proves it capped rather than fanning out to every chunk
+
+      // Drain: each release frees a worker to pull the next queued chunk, so
+      // keep releasing until the run itself finishes. Polling on `done` rather
+      // than on a call count avoids racing the workers' own scheduling.
+      let done = false;
+      const settled = resultPromise.then((r) => { done = true; return r; });
+      while (!done) {
+        releases.splice(0).forEach((r) => r());
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      await settled;
+    });
+
     it("never runs more than `concurrency` chunk requests in flight at once", async () => {
       const lines = Array.from({ length: 5 }, (_, i) => userTurn(`u${i}`, `cap test request ${i} `.repeat(30)));
       const p = writeTranscript(lines);

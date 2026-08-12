@@ -125,13 +125,27 @@ export const DEFAULT_MAX_CHUNK_TOKENS = 25_000;
  * no rate-limit headers even returned); a burst of 64 landed 62/64, with
  * the two 429s carrying `x-ratelimit-limit: 20` and a `x-ratelimit-reset`
  * that was already in the past by the time the burst finished — i.e. a
- * sub-minute rolling window, not the UTC-midnight daily cap. 12 stays
- * comfortably inside the clean zone (32) while leaving headroom for the
- * rest of the ensemble's traffic and for any candidate model with a
- * tighter bucket than this one. Deliberately NOT the measured ceiling —
- * defaulting to the edge of what's clean today is exactly how a small
- * account-side change turns a default into a standing 429 storm. */
-export const DEFAULT_CONCURRENCY = 12;
+ * sub-minute rolling window, not the UTC-midnight daily cap. */
+
+/**
+ * Ceiling for AUTO-sized concurrency (`concurrency: "auto"`, what the CLI
+ * passes when the flag is omitted).
+ *
+ * WHY AUTO EXISTS, and why it is the single biggest lever on wall-clock: the map
+ * phase's wall-clock is `slowest chunk + stagger` *only when every chunk runs in
+ * ONE wave*. A fixed default of 12 silently forces a 27-chunk transcript into
+ * three sequential waves and therefore roughly TRIPLES the wall-clock, for no
+ * gain — the account admits far more than 12 at once. Auto sizes the pool to the
+ * actual work (`min(chunkCount, MAX_AUTO_CONCURRENCY)`) so a run stays
+ * single-wave whenever it physically can.
+ *
+ * 28, not the measured 32: a burst of 32 landed 32/32 clean against the live
+ * account and 64 landed 62/64 (two 429s), so 32 is the measured EDGE. Sitting on
+ * the edge is how a small account-side change turns a default into a standing
+ * 429 storm — the same reasoning that keeps DEFAULT_CONCURRENCY at 12 rather
+ * than at the cliff. A chunk count above this simply runs in more than one wave.
+ */
+export const MAX_AUTO_CONCURRENCY = 28;
 
 /**
  * Minimum spacing between successive worker LAUNCHES under concurrency > 1
@@ -229,11 +243,16 @@ export interface SummarizeSessionOptions {
   /** How many chunk requests may be in flight at once. Default: 1
    *  (sequential — the library's conservative default; see
    *  `DEFAULT_CONCURRENCY`'s header for why the CLI opts every real
-   *  invocation into 8 instead). A DEFAULT, NOT A CEILING in the same sense
+   *  invocation into `"auto"` instead). A DEFAULT, NOT A CEILING in the same sense
    *  as `maxChunkTokens`: an explicit value — including 1, to force
    *  sequential behavior — is honored verbatim. Launches beyond the first
-   *  are staggered by `STAGGER_INTERVAL_MS`. */
-  concurrency?: number;
+   *  are staggered by `STAGGER_INTERVAL_MS`.
+   *
+   *  `"auto"` (what the CLI passes when `--concurrency` is omitted) sizes the
+   *  pool to the work — `min(chunkCount, MAX_AUTO_CONCURRENCY)` — so the map
+   *  phase stays SINGLE-WAVE whenever it can; that is what makes wall-clock
+   *  `slowest chunk`, not `waves x slowest chunk`. */
+  concurrency?: number | "auto";
   /** Optional per-chunk progress hook for a caller that wants to render
    *  readable output with several chunks in flight at once (see
    *  `ChunkEvent`). Never required for correctness — purely observational. */
@@ -990,7 +1009,12 @@ export async function summarizeSession(
     rechunkRemainingMap(i, newBudget);
   }
 
-  const concurrency = Math.max(1, options.concurrency ?? 1);
+  // Resolved AFTER chunking, because "auto" is a function of the chunk count.
+  // An explicit number (including 1) is still honored verbatim.
+  const concurrency =
+    options.concurrency === "auto"
+      ? Math.max(1, Math.min(chunks.length, MAX_AUTO_CONCURRENCY))
+      : Math.max(1, options.concurrency ?? 1);
   const onChunkEvent = options.onChunkEvent;
 
   if (concurrency <= 1) {

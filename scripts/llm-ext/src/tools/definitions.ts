@@ -756,12 +756,14 @@ export function buildTools(limitsText: string) {
           concurrency: {
             type: "number",
             description:
-              "How many chunk requests run in flight at once. Default: 12 — measured live " +
-              "against the free-model tier's actual burst behavior (a 32-concurrent burst " +
-              "was clean; 64 started tripping its ~20-requests/minute sub-minute limit), " +
-              "leaving headroom for the rest of the ensemble's traffic. Requests are staggered " +
-              "on launch so a burst never lands in a single instant. Set to 1 to force the " +
-              "original sequential behavior.",
+              "How many chunk requests run in flight at once. Default: AUTO — sized to the " +
+              "chunk count (capped at 28) so every chunk runs in ONE wave, which is what makes " +
+              "wall-clock the slowest single chunk rather than waves x slowest. The cap is " +
+              "measured live against the free tier's burst behavior (a 32-concurrent burst was " +
+              "clean; 64 started tripping its ~20-requests/minute sub-minute limit), and sits " +
+              "below that edge to leave headroom for the rest of the ensemble's traffic. " +
+              "Requests are staggered on launch so a burst never lands in a single instant. " +
+              "Set to 1 to force the original sequential behavior.",
           },
         },
       },

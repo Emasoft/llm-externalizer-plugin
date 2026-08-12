@@ -254175,7 +254175,7 @@ function classifyContextOverflow(detail) {
 // src/session_summary/driver.ts
 var PROMPT_OVERHEAD_TOKENS = 2e3;
 var DEFAULT_MAX_CHUNK_TOKENS = 25e3;
-var DEFAULT_CONCURRENCY = 12;
+var MAX_AUTO_CONCURRENCY = 28;
 var STAGGER_INTERVAL_MS = 250;
 var TRANSIENT_BACKOFF_MS = 5e3;
 function sleep(ms) {
@@ -254542,7 +254542,7 @@ async function summarizeSession(options) {
     }
     rechunkRemainingMap(i, newBudget);
   }
-  const concurrency = Math.max(1, options.concurrency ?? 1);
+  const concurrency = options.concurrency === "auto" ? Math.max(1, Math.min(chunks.length, MAX_AUTO_CONCURRENCY)) : Math.max(1, options.concurrency ?? 1);
   const onChunkEvent = options.onChunkEvent;
   if (concurrency <= 1) {
     for (let i = 0; i < chunks.length; i++) {
@@ -258186,7 +258186,7 @@ Settings file is present but its 'profiles' map is empty \u2014 this is a config
             }
             return resp.content;
           };
-          const concurrency = typeof ssConcurrencyRaw === "number" ? ssConcurrencyRaw : DEFAULT_CONCURRENCY;
+          const concurrency = typeof ssConcurrencyRaw === "number" ? ssConcurrencyRaw : "auto";
           const onChunkEvent = (event) => {
             const label = `[chunk ${event.chunkIndex + 1}/${event.totalChunks}]`;
             if (event.phase === "start") {
