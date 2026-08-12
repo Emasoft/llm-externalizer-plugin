@@ -20,6 +20,9 @@ export default defineConfig({
       'src/launcher-boot.test.ts',
       // Grouped CLI launcher (TRDD-DT11TE2Z) — argv rewrite + did-you-mean.
       'src/cli/launcher.test.ts',
+      // --profile global flag + -o/--output_dir on newly-report-writing
+      // commands (profile+output-flags task).
+      'src/cli/profile-flag-and-output-dir.test.ts',
       // Cost-safety guard — default test backend must never bill (TRDD-e82f2c49).
       'src/test-helpers.test.ts',
       'src/grouping.test.ts',

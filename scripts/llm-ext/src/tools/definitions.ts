@@ -262,6 +262,18 @@ const scanFolderSchemaProps = {
     description:
       "Max file size in KB per file. Default: 400. Files exceeding this are skipped and reported.",
   },
+  output_dir: {
+    type: "string" as const,
+    description:
+      "Absolute path to a custom output directory for reports. " +
+      "Default: <main-project-dir>/reports/llm-externalizer/, anchored on " +
+      "$CLAUDE_PROJECT_DIR VERBATIM (the dir Claude Code operates in), then " +
+      "falling back to $PWD/reports/llm-externalizer/. NEVER derived from git " +
+      "(no `git worktree list`, no git-root climb) — that picks the wrong dir " +
+      "in worktrees, per-subfolder-git monorepos, and git-less roots. " +
+      "Per-call override wins unconditionally; $LLM_OUTPUT_DIR also overrides " +
+      "the default.",
+  },
 };
 
 export function buildTools(limitsText: string) {
@@ -1099,6 +1111,14 @@ export function buildTools(limitsText: string) {
             description:
               "Max file size in KB per file. Default: 400. Files exceeding this are skipped.",
           },
+          output_dir: {
+            type: "string",
+            description:
+              "Absolute path to a custom output directory for the report. " +
+              "Default: <main-project-dir>/reports/llm-externalizer/, anchored on " +
+              "$CLAUDE_PROJECT_DIR VERBATIM (the dir Claude Code operates in), then " +
+              "falling back to $PWD/reports/llm-externalizer/. NEVER derived from git.",
+          },
         },
         required: [],
       },
@@ -1323,6 +1343,14 @@ export function buildTools(limitsText: string) {
             description:
               "Max payload in KB (prompt + spec + source files) per batch. Default: 400. " +
               "The spec file is always included — remaining budget is for source files.",
+          },
+          output_dir: {
+            type: "string",
+            description:
+              "Absolute path to a custom output directory for the violation report. " +
+              "Default: <main-project-dir>/reports/llm-externalizer/, anchored on " +
+              "$CLAUDE_PROJECT_DIR VERBATIM (the dir Claude Code operates in), then " +
+              "falling back to $PWD/reports/llm-externalizer/. NEVER derived from git.",
           },
         },
         required: ["spec_file_path"],

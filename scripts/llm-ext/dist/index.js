@@ -256079,6 +256079,9 @@ function reloadSettingsFromDisk() {
       return false;
     }
   }
+  return applyNewSettings(newSettings);
+}
+function applyNewSettings(newSettings) {
   let nextResolved = null;
   let nextBackend = null;
   let nextValid = false;
@@ -256113,6 +256116,22 @@ function reloadSettingsFromDisk() {
   FALLBACK_CONTEXT_LENGTH = nextResolved?.contextWindow || 1e5;
   if (nextBackend) currentBackend = nextBackend;
   return true;
+}
+function overrideActiveProfile(name) {
+  const available = Object.keys(activeSettings.profiles);
+  if (!activeSettings.profiles[name]) {
+    return {
+      ok: false,
+      error: `unknown profile '${name}'. Available profiles: ${available.join(", ") || "(none)"}`
+    };
+  }
+  const newSettings = { ...activeSettings, active: name };
+  const validation = validateSettings(newSettings);
+  if (!validation.valid) {
+    return { ok: false, error: validation.errors.join("; ") };
+  }
+  applyNewSettings(newSettings);
+  return { ok: true };
 }
 var openRouterModelCache = [];
 var openRouterCacheTime = 0;
@@ -259896,6 +259915,7 @@ export {
   filterFreeModels,
   isModelUnavailableError,
   limitsBlock,
+  overrideActiveProfile,
   parseFreeBelowUsd,
   resolveAutoFreePool,
   resolveFreeModelId,

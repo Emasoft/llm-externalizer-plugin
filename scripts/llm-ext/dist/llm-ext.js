@@ -256079,6 +256079,9 @@ function reloadSettingsFromDisk() {
       return false;
     }
   }
+  return applyNewSettings(newSettings);
+}
+function applyNewSettings(newSettings) {
   let nextResolved = null;
   let nextBackend = null;
   let nextValid = false;
@@ -256113,6 +256116,22 @@ function reloadSettingsFromDisk() {
   FALLBACK_CONTEXT_LENGTH = nextResolved?.contextWindow || 1e5;
   if (nextBackend) currentBackend = nextBackend;
   return true;
+}
+function overrideActiveProfile(name) {
+  const available = Object.keys(activeSettings.profiles);
+  if (!activeSettings.profiles[name]) {
+    return {
+      ok: false,
+      error: `unknown profile '${name}'. Available profiles: ${available.join(", ") || "(none)"}`
+    };
+  }
+  const newSettings = { ...activeSettings, active: name };
+  const validation = validateSettings(newSettings);
+  if (!validation.valid) {
+    return { ok: false, error: validation.errors.join("; ") };
+  }
+  applyNewSettings(newSettings);
+  return { ok: true };
 }
 var openRouterModelCache = [];
 var openRouterCacheTime = 0;
@@ -260191,6 +260210,10 @@ var scanFolderSchemaProps = {
   max_payload_kb: {
     type: "number",
     description: "Max file size in KB per file. Default: 400. Files exceeding this are skipped and reported."
+  },
+  output_dir: {
+    type: "string",
+    description: "Absolute path to a custom output directory for reports. Default: <main-project-dir>/reports/llm-externalizer/, anchored on $CLAUDE_PROJECT_DIR VERBATIM (the dir Claude Code operates in), then falling back to $PWD/reports/llm-externalizer/. NEVER derived from git (no `git worktree list`, no git-root climb) \u2014 that picks the wrong dir in worktrees, per-subfolder-git monorepos, and git-less roots. Per-call override wins unconditionally; $LLM_OUTPUT_DIR also overrides the default."
   }
 };
 function buildTools(limitsText) {
@@ -260712,6 +260735,10 @@ function buildTools(limitsText) {
           max_payload_kb: {
             type: "number",
             description: "Max file size in KB per file. Default: 400. Files exceeding this are skipped."
+          },
+          output_dir: {
+            type: "string",
+            description: "Absolute path to a custom output directory for the report. Default: <main-project-dir>/reports/llm-externalizer/, anchored on $CLAUDE_PROJECT_DIR VERBATIM (the dir Claude Code operates in), then falling back to $PWD/reports/llm-externalizer/. NEVER derived from git."
           }
         },
         required: []
@@ -260873,6 +260900,10 @@ function buildTools(limitsText) {
           max_payload_kb: {
             type: "number",
             description: "Max payload in KB (prompt + spec + source files) per batch. Default: 400. The spec file is always included \u2014 remaining budget is for source files."
+          },
+          output_dir: {
+            type: "string",
+            description: "Absolute path to a custom output directory for the violation report. Default: <main-project-dir>/reports/llm-externalizer/, anchored on $CLAUDE_PROJECT_DIR VERBATIM (the dir Claude Code operates in), then falling back to $PWD/reports/llm-externalizer/. NEVER derived from git."
           }
         },
         required: ["spec_file_path"]
@@ -261238,7 +261269,7 @@ function firstLine(text) {
 }
 function printGlobalHelp(tools) {
   process.stdout.write(
-    "llm-ext \u2014 offload bounded LLM work to cheaper models.\n\nUsage:\n  llm-ext <group> <action> [input] [--flag value ...]\n  llm-ext <group> --help        list that group's actions\n  llm-ext <group> <action> --help  show that action's parameters\n  llm-ext --help                this list\n  llm-ext --help --all          also list every flat command (advanced)\n  llm-ext --version             print the version\n\nGlobal flags:\n  --quiet                       suppress the banner and progress lines\n\nGroups:\n"
+    "llm-ext \u2014 offload bounded LLM work to cheaper models.\n\nUsage:\n  llm-ext <group> <action> [input] [--flag value ...]\n  llm-ext <group> --help        list that group's actions\n  llm-ext <group> <action> --help  show that action's parameters\n  llm-ext --help                this list\n  llm-ext --help --all          also list every flat command (advanced)\n  llm-ext --version             print the version\n\nGlobal flags:\n  --quiet                       suppress the banner and progress lines\n  --profile <name>              use this settings.yaml profile for this call only\n\nGroups:\n"
   );
   const groupWidth = Math.max(...Object.keys(GROUPS).map((g) => g.length));
   for (const [group, actions] of Object.entries(GROUPS)) {
@@ -261303,8 +261334,25 @@ ${tool.description}
     );
   }
 }
+function extractProfileFlag(argv) {
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    if (token === "--profile") {
+      const value = argv[i + 1];
+      if (value === void 0) die("--profile expects a value");
+      return { argv: [...argv.slice(0, i), ...argv.slice(i + 2)], profile: value };
+    }
+    if (token.startsWith("--profile=")) {
+      return {
+        argv: [...argv.slice(0, i), ...argv.slice(i + 1)],
+        profile: token.slice("--profile=".length)
+      };
+    }
+  }
+  return { argv };
+}
 async function main() {
-  const argv = process.argv.slice(2);
+  const { argv, profile: profileOverride } = extractProfileFlag(process.argv.slice(2));
   const tools = buildTools(limitsBlock());
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
     printGlobalHelp(tools);
@@ -261379,6 +261427,10 @@ async function main() {
   const wantPreview = previewIdx !== -1;
   if (wantPreview) rest.splice(previewIdx, 1);
   const { args, quiet } = parseFlags2(rest, tool);
+  if (profileOverride !== void 0) {
+    const result2 = overrideActiveProfile(profileOverride);
+    if (!result2.ok) die(result2.error);
+  }
   await boot();
   if (wantPreview) {
     const deps = buildEstimateDeps();

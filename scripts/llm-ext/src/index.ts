@@ -452,8 +452,25 @@ function reloadSettingsFromDisk(): boolean {
     }
   }
 
-  // T2.7 — Build all replacement state in LOCAL variables first.
-  // Nothing is published to module-level state until every value is ready.
+  return applyNewSettings(newSettings);
+}
+
+/**
+ * T2.7 atomic swap, extracted so `reloadSettingsFromDisk` (settings.yaml
+ * edited on disk) and `overrideActiveProfile` (CLI `--profile` flag) publish
+ * the SAME in-memory state through the SAME sequence — one source of truth
+ * for "what does switching the active profile actually update". Caller MUST
+ * have already validated `newSettings` (e.g. via `validateSettings`) when
+ * `newSettings.active` is non-empty; this function itself never throws on a
+ * bad profile — it just falls into the "no active profile configured" branch.
+ *
+ * Builds all replacement state in LOCAL variables first; nothing is
+ * published to module-level state until every value is ready. Always
+ * returns true — "the swap was applied", not "the resulting profile is
+ * valid" (an empty/misconfigured active profile is itself a valid state to
+ * apply, e.g. `active: ""`).
+ */
+function applyNewSettings(newSettings: Settings): boolean {
   let nextResolved: ResolvedProfile | null = null;
   let nextBackend: BackendConfig | null = null;
   let nextValid = false;
@@ -517,6 +534,41 @@ function reloadSettingsFromDisk(): boolean {
   // every invocation, so there is no long-lived client to tell about a backend
   // switch (the MCP tools/list_changed hook this replaced had no other caller).
   return true;
+}
+
+/**
+ * CLI global `--profile <name>` flag: override which settings.yaml profile
+ * THIS invocation uses. Reuses the SAME profile map already loaded into
+ * `activeSettings` at module init (config.ts's `resolveProfile` /
+ * `validateSettings` are the single profile-resolution source — this does
+ * not re-implement resolution) and the SAME atomic-swap sequence a
+ * settings.yaml edit goes through. Never reads or writes settings.yaml: the
+ * override is in-memory only and vanishes when the process exits, exactly
+ * like every other per-call override (output_dir, free, …).
+ *
+ * Must be called AFTER activeSettings is loaded (module init — always true,
+ * since this function is only reachable once the module has finished
+ * loading) and BEFORE boot()/dispatchCallTool() so getCurrentBackend() and
+ * activeResolved reflect the override for the whole invocation.
+ */
+export function overrideActiveProfile(
+  name: string,
+): { ok: true } | { ok: false; error: string } {
+  const available = Object.keys(activeSettings.profiles);
+  if (!activeSettings.profiles[name]) {
+    return {
+      ok: false,
+      error:
+        `unknown profile '${name}'. Available profiles: ${available.join(", ") || "(none)"}`,
+    };
+  }
+  const newSettings: Settings = { ...activeSettings, active: name };
+  const validation = validateSettings(newSettings);
+  if (!validation.valid) {
+    return { ok: false, error: validation.errors.join("; ") };
+  }
+  applyNewSettings(newSettings);
+  return { ok: true };
 }
 
 // The settings.yaml file-watcher lived here. It polled every 5s so a
@@ -1390,9 +1442,10 @@ function saveResponse(
   outputDir?: string,
 ): string {
   // Per-call override wins; falls back to the lazily-computed
-  // <git-root>/reports/llm-externalizer/ default. Issue #5 traced
-  // many call sites that silently dropped outputDir — fix is to
-  // thread it through every saveResponse() in this file. This
+  // <project-root>/reports/llm-externalizer/ default (resolveProjectMainRoot —
+  // $CLAUDE_PROJECT_DIR, never a git root). Issue #5 traced many call sites
+  // that silently dropped outputDir — fix is to thread it through every
+  // saveResponse() in this file. This
   // function itself just respects whatever it's given.
   const dir = outputDir || defaultOutputDir();
   mkdirSync(dir, { recursive: true });
@@ -3770,7 +3823,8 @@ async function dispatchCallToolInner(
 
       case "get_settings": {
         // Copy settings.yaml to output dir and return only the path (saves context tokens).
-        // Per-call output_dir honored; otherwise default to <git-root>/reports/llm-externalizer/.
+        // Per-call output_dir honored; otherwise default to <project-root>/reports/llm-externalizer/
+        // (resolveProjectMainRoot — $CLAUDE_PROJECT_DIR, never a git root).
         try {
           const raw = readFileSync(SETTINGS_FILE, "utf-8");
           const targetDir = outputDir || defaultOutputDir();

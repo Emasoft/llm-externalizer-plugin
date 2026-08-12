@@ -47,16 +47,30 @@ describe("resolveInvocation — dispatch + positional/output mapping", () => {
   });
 
   it("-o on an action with NO output parameter fails with an honest message, not the flat parser's", () => {
-    // scan_folder declares neither `output` nor `output_dir` — it writes to a
-    // fixed reports dir. Passing `-o` through would reach the flat parser and
-    // surface "unexpected argument '-o' (all inputs are named flags)", which is
-    // actively wrong: `-o` IS a named flag. The launcher must own this error.
-    const r = resolveInvocation(["scan", "folder", "./src", "-o", "out.md"], tools);
+    // get_settings (config show) declares neither `output` nor `output_dir` —
+    // it is a report-less command by design (see profile+output-flags task:
+    // scan_folder/high_quality_scan/check_against_specs/compare_files gained
+    // output_dir, but the genuinely report-less commands — get_settings among
+    // them — must keep this honest error, not fall through to the flat
+    // parser's "unexpected argument '-o' (all inputs are named flags)", which
+    // is actively wrong: `-o` IS a named flag. The launcher must own this error.
+    const r = resolveInvocation(["config", "show", "-o", "out.md"], tools);
     expect(r.kind).toBe("error");
     expect((r as { message: string }).message).toContain("no output option");
-    expect((r as { message: string }).message).toContain("scan folder");
+    expect((r as { message: string }).message).toContain("config show");
     // and it must NOT leak the misleading flat-parser wording
     expect((r as { message: string }).message).not.toContain("named flags");
+  });
+
+  it("scan folder -o now maps to --output_dir instead of erroring (profile+output-flags task)", () => {
+    // scan_folder gained output_dir in its schema — -o must now dispatch, not
+    // fall into the "no output option" error path exercised by the test above.
+    const r = resolveInvocation(["scan", "folder", "./src", "-o", "out"], tools);
+    expect(r).toEqual({
+      kind: "dispatch",
+      command: "scan_folder",
+      argv: ["--folder_path", "./src", "--output_dir", "out"],
+    });
   });
 
   it("llm ask ./prompt.md -o ./resp.md --profile free -> chat --input_files_paths ... --output_dir ...", () => {

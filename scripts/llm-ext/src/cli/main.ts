@@ -24,6 +24,7 @@ import {
   buildEstimateDeps,
   dispatchCallTool,
   limitsBlock,
+  overrideActiveProfile,
   warmEstimatePricing,
   writeBootBanner,
 } from "../index.js";
@@ -286,7 +287,8 @@ function printGlobalHelp(tools: ToolDef[]): void {
       "  llm-ext --help --all          also list every flat command (advanced)\n" +
       "  llm-ext --version             print the version\n\n" +
       "Global flags:\n" +
-      "  --quiet                       suppress the banner and progress lines\n\n" +
+      "  --quiet                       suppress the banner and progress lines\n" +
+      "  --profile <name>              use this settings.yaml profile for this call only\n\n" +
       "Groups:\n",
   );
   const groupWidth = Math.max(...Object.keys(GROUPS).map((g) => g.length));
@@ -346,8 +348,34 @@ function printToolHelp(tool: ToolDef): void {
 
 // ── Main ─────────────────────────────────────────────────────────────
 
+/**
+ * Strip a global `--profile <name>` (or `--profile=<name>`) from anywhere in
+ * argv and return its value. Handled centrally here — not as a per-tool
+ * schema field — so it works identically on every command, positioned
+ * before OR after the group/action/flat command name (`llm-ext --profile
+ * free llm ask …` and `llm-ext llm ask … --profile free` both work), the
+ * same way `--quiet` is a global flag rather than a per-tool parameter.
+ */
+function extractProfileFlag(argv: string[]): { argv: string[]; profile?: string } {
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    if (token === "--profile") {
+      const value = argv[i + 1];
+      if (value === undefined) die("--profile expects a value");
+      return { argv: [...argv.slice(0, i), ...argv.slice(i + 2)], profile: value };
+    }
+    if (token.startsWith("--profile=")) {
+      return {
+        argv: [...argv.slice(0, i), ...argv.slice(i + 1)],
+        profile: token.slice("--profile=".length),
+      };
+    }
+  }
+  return { argv };
+}
+
 async function main(): Promise<void> {
-  const argv = process.argv.slice(2);
+  const { argv, profile: profileOverride } = extractProfileFlag(process.argv.slice(2));
   // The catalog's descriptions are backend-dependent, so build it per run.
   const tools = buildTools(limitsBlock()) as ToolDef[];
 
@@ -449,6 +477,15 @@ async function main(): Promise<void> {
   if (wantPreview) rest.splice(previewIdx, 1);
 
   const { args, quiet } = parseFlags(rest, tool);
+
+  // --profile <name>: apply BEFORE boot() so publishFreeState()/the boot
+  // banner and every downstream getCurrentBackend()/activeResolved read
+  // reflect the override for the whole invocation. Never mutates
+  // settings.yaml — see overrideActiveProfile()'s doc comment in index.ts.
+  if (profileOverride !== undefined) {
+    const result = overrideActiveProfile(profileOverride);
+    if (!result.ok) die(result.error);
+  }
 
   // boot() publishes the free-mode state; dispatchCallTool refuses without it.
   await boot();
