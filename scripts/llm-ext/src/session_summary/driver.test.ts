@@ -309,7 +309,12 @@ describe("driver: summarizeSession", () => {
     expect(result.summary).toBe(joinChunkSummaries(["CHUNK-1", "CHUNK-2", "RESUMED-1", "RESUMED-2"]));
   });
 
-  it("fails fast on resume when the checkpoint's transcript identity does not match (different mtime)", async () => {
+  it("mtime is NOT part of checkpoint identity — a touched mtime with unchanged content still resumes", async () => {
+    // Superseded by TRDD-S8CKVH8S: `transcriptMtimeMs` was dropped from the
+    // identity entirely (see the module header's INCREMENTAL COMPACTION
+    // note) — a live session's mtime changes on every append, so pinning it
+    // made `--resume` useless for exactly the case it exists for. Only the
+    // byte content (via the prefix hash) matters now.
     const p = writeTranscript([userTurn("u1", "hello")]);
     const cp = checkpointPath();
 
@@ -323,10 +328,44 @@ describe("driver: summarizeSession", () => {
       callModel,
     });
 
-    // Touch the transcript's mtime without changing its content/size — the
-    // identity check must still catch it and refuse to resume against it.
+    // Touch the transcript's mtime without changing its content/size.
     const future = new Date(Date.now() + 60_000);
     utimesSync(p, future, future);
+
+    const result = await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: cp,
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 65_536,
+      callModel,
+    });
+    expect(result.resumedFromCheckpoint).toBe(true);
+    expect(result.summary).toBe(joinChunkSummaries(["SUMMARY"]));
+    expect(callModel).toHaveBeenCalledTimes(1); // no re-send — the completed chunk was reused
+  });
+
+  it("a transcript whose prefix CHANGED (same length, rewritten content) does a full restart — no stale reuse", async () => {
+    const p = writeTranscript([userTurn("u1", "hello world one")]);
+    const cp = checkpointPath();
+
+    const callModel = vi.fn<CallModelFn>(async () => "SUMMARY-A");
+    await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: cp,
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 65_536,
+      callModel,
+    });
+
+    // Rewrite the file with DIFFERENT content of the SAME byte length as the
+    // original — a same-size mutation the old size-only check could never
+    // have caught, which is exactly why the prefix is hashed, not just sized.
+    const original = readFileSync(p, "utf-8");
+    const rewritten = original.replace("hello world one", "HELLO WORLD ONE");
+    expect(rewritten.length).toBe(original.length);
+    writeFileSync(p, rewritten);
 
     await expect(
       summarizeSession({
@@ -337,7 +376,192 @@ describe("driver: summarizeSession", () => {
         modelMaxCompletionTokens: 65_536,
         callModel,
       }),
-    ).rejects.toThrow(/does not match this run/);
+    ).rejects.toThrow(/prefix hash mismatch/);
+  });
+
+  it("a TRUNCATED (shorter) transcript does a full restart — refuses to resume", async () => {
+    const lines = Array.from({ length: 4 }, (_, i) => userTurn(`u${i}`, `distinct request ${i} `.repeat(20)));
+    const p = writeTranscript(lines);
+    const cp = checkpointPath();
+
+    const callModel = vi.fn<CallModelFn>(async () => "SUMMARY");
+    await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: cp,
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 65_536,
+      callModel,
+    });
+
+    // Truncate the transcript to shorter than what the checkpoint consumed.
+    const full = readFileSync(p, "utf-8");
+    writeFileSync(p, full.slice(0, Math.floor(full.length / 2)));
+
+    await expect(
+      summarizeSession({
+        transcriptPath: p,
+        checkpointPath: cp,
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 65_536,
+        callModel,
+      }),
+    ).rejects.toThrow(/smaller than the/);
+  });
+
+  it("incremental compaction: a GROWN transcript with an unchanged prefix reuses prior chunk summaries — only new turns hit the model", async () => {
+    // Small chunk budget so each turn becomes (roughly) its own chunk,
+    // giving a clean boundary to assert reuse against.
+    const initialLines = Array.from({ length: 3 }, (_, i) => userTurn(`u${i}`, `distinct request alpha ${i} `.repeat(20)));
+    const p = writeTranscript(initialLines);
+    const cp = checkpointPath();
+
+    let firstRunCalls = 0;
+    const firstRunModel = vi.fn<CallModelFn>(async () => {
+      firstRunCalls++;
+      return `CHUNK-${firstRunCalls}`;
+    });
+
+    const first = await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: cp,
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 1_000,
+      maxChunkTokens: 30,
+      chunkOverlapTurns: 0,
+      callModel: firstRunModel,
+    });
+    expect(first.totalChunks).toBeGreaterThan(1);
+    const firstTotalChunks = first.totalChunks;
+
+    // APPEND new turns to the SAME file — never rewrite the existing bytes.
+    const appendLines = Array.from({ length: 3 }, (_, i) =>
+      userTurn(`v${i}`, `distinct request beta ${i} `.repeat(20)),
+    );
+    const appended = appendLines.map((l) => JSON.stringify(l)).join("\n") + "\n";
+    writeFileSync(p, readFileSync(p, "utf-8") + appended);
+
+    const secondRunCalls: string[] = [];
+    const secondRunModel = vi.fn<CallModelFn>(async (prompt) => {
+      secondRunCalls.push(prompt);
+      return `NEWCHUNK-${secondRunCalls.length}`;
+    });
+
+    const second = await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: cp,
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 1_000,
+      maxChunkTokens: 30,
+      chunkOverlapTurns: 0,
+      callModel: secondRunModel,
+    });
+
+    expect(second.resumedFromCheckpoint).toBe(true);
+    expect(second.totalChunks).toBeGreaterThan(firstTotalChunks);
+    // Only the invalidated last-old-chunk plus the genuinely new chunks were
+    // sent to the model — every earlier chunk summary was reused verbatim.
+    expect(secondRunModel).toHaveBeenCalledTimes(second.totalChunks - (firstTotalChunks - 1));
+
+    const savedAfter = JSON.parse(readFileSync(cp, "utf-8")) as { mapSummaries: (string | null)[] };
+    for (let i = 0; i < firstTotalChunks - 1; i++) {
+      expect(savedAfter.mapSummaries[i]).toBe(`CHUNK-${i + 1}`); // reused, byte-for-byte, from the first run
+    }
+  });
+
+  it("incremental compaction: changing maxChunkTokens on resume still forces a full restart (params stay exact-match)", async () => {
+    const lines = Array.from({ length: 4 }, (_, i) => userTurn(`u${i}`, `distinct request ${i} `.repeat(20)));
+    const p = writeTranscript(lines);
+    const cp = checkpointPath();
+
+    const callModel = vi.fn<CallModelFn>(async () => "SUMMARY");
+    await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: cp,
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 1_000,
+      maxChunkTokens: 30,
+      chunkOverlapTurns: 0,
+      callModel,
+    });
+
+    await expect(
+      summarizeSession({
+        transcriptPath: p,
+        checkpointPath: cp,
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        maxChunkTokens: 60, // changed
+        chunkOverlapTurns: 0,
+        callModel,
+      }),
+    ).rejects.toThrow(/chunk token budget/);
+  });
+
+  it("incremental compaction: the joined output over a grown transcript is byte-identical to a from-scratch run over the same final transcript", async () => {
+    const initialLines = Array.from({ length: 3 }, (_, i) => userTurn(`u${i}`, `distinct request alpha ${i} `.repeat(20)));
+    const p = writeTranscript(initialLines);
+    const cp = checkpointPath();
+
+    // Deterministic, CONTENT-derived summaries (never call-order or raw
+    // prompt-length derived): the chunk-prompt header interpolates "part N
+    // of TOTAL", and TOTAL legitimately differs between the incremental run
+    // (grows mid-run) and a from-scratch run over the final transcript — so
+    // asserting on the raw prompt text/length would fail on that harmless
+    // framing difference even though the actual transcript content per
+    // chunk is identical. Extracting just the turn markers sidesteps that.
+    const deterministicModel = vi.fn<CallModelFn>(async (prompt) => {
+      const markers = Array.from(prompt.matchAll(/distinct request (alpha|beta) \d+/g)).map((m) => m[0]);
+      return `SUM(${markers.join(",")})`;
+    });
+
+    await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: cp,
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 1_000,
+      maxChunkTokens: 30,
+      chunkOverlapTurns: 0,
+      callModel: deterministicModel,
+    });
+
+    const appendLines = Array.from({ length: 3 }, (_, i) =>
+      userTurn(`v${i}`, `distinct request beta ${i} `.repeat(20)),
+    );
+    const appended = appendLines.map((l) => JSON.stringify(l)).join("\n") + "\n";
+    writeFileSync(p, readFileSync(p, "utf-8") + appended);
+
+    const incremental = await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: cp,
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 1_000,
+      maxChunkTokens: 30,
+      chunkOverlapTurns: 0,
+      callModel: deterministicModel,
+    });
+
+    // From-scratch run over the SAME final transcript, fresh checkpoint.
+    const freshCp = join(dir, "checkpoint-fresh.json");
+    const fromScratch = await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: freshCp,
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 1_000,
+      maxChunkTokens: 30,
+      chunkOverlapTurns: 0,
+      callModel: deterministicModel,
+    });
+
+    expect(incremental.summary).toBe(fromScratch.summary);
   });
 
   it("fails fast on resume when the prune level changed", async () => {

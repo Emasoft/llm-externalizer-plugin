@@ -23,10 +23,24 @@
  * cap hits mid-run — an interruption is the EXPECTED outcome of a long
  * run, not an edge case. Every successful map chunk is persisted to
  * `checkpointPath` immediately, and a resumed run verifies the checkpoint
- * was produced from the SAME transcript (path + size + mtime) with the
- * SAME prune level and chunking params before reusing a single byte of it
- * — resuming against a changed input silently would produce a summary
- * that is wrong in a way nobody could detect.
+ * was produced from the SAME transcript path with the SAME prune level and
+ * chunking params before reusing a single byte of it — resuming with a
+ * different one of those silently would produce a summary that is wrong in
+ * a way nobody could detect.
+ *
+ * INCREMENTAL COMPACTION (TRDD-S8CKVH8S): a Claude Code transcript is
+ * APPEND-ONLY — a live session only ever grows its own JSONL file, never
+ * rewrites earlier lines. So instead of pinning the transcript's exact
+ * size, the checkpoint instead pins the byte length it consumed plus a
+ * sha256 of exactly that many leading bytes (`Checkpoint.prefix`). On
+ * resume: the current file's first `prefix.bytes` bytes are re-hashed and
+ * compared — a match proves the whole prefix is byte-identical to what was
+ * already summarized, so every chunk summary computed over it is still
+ * valid BY CONSTRUCTION, and only the newly appended tail needs a model
+ * call. A shorter file, or a hash mismatch, means the prefix did NOT grow
+ * append-only (truncated, rotated, rewritten) — full restart, never a
+ * silent reuse. See `loadCheckpoint`'s `grew` branch and its caller in
+ * `summarizeSession` for the chunk-array splice this enables.
  *
  * COST SAFETY: this command exists specifically to guarantee $0 spend, so
  * `assertFreeOnlyModel(true, ...)` is called with a HARDCODED `true` —
@@ -54,7 +68,8 @@
  * every other in-flight chunk first — see `becomeLeaderAndTransition` below.
  */
 
-import { statSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
+import { statSync, readFileSync, writeFileSync, mkdirSync, renameSync, createReadStream } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 
 import { assertFreeOnlyModel } from "../config.js";
@@ -477,16 +492,28 @@ export interface SummarizeSessionResult {
 
 interface CheckpointIdentity {
   transcriptPath: string;
-  transcriptBytes: number;
-  transcriptMtimeMs: number;
   pruneLevel: PruneLevel;
   chunkerMaxTokens: number;
   chunkerOverlapTurns: number;
 }
 
+/** The byte range of the transcript this checkpoint's chunk summaries were
+ *  actually computed from, plus a hash proving it. `bytes` is always this
+ *  run's FULL transcript size at the time it was read (chunking always
+ *  consumes the whole current file, never a partial one) — so on the next
+ *  run, "does the current file's first `bytes` bytes still hash to
+ *  `sha256`?" is exactly "is the old file still an unmodified PREFIX of the
+ *  new one?", which is the one fact that makes chunk-summary reuse safe on
+ *  an append-only transcript. See `loadCheckpoint`. */
+interface CheckpointPrefix {
+  bytes: number;
+  sha256: string;
+}
+
 interface Checkpoint {
   version: 1;
   identity: CheckpointIdentity;
+  prefix: CheckpointPrefix;
   totalChunks: number;
   /** One slot per chunk; null until that chunk's map summary lands. */
   mapSummaries: (string | null)[];
@@ -504,8 +531,6 @@ interface Checkpoint {
 function checkpointIdentityMatches(a: CheckpointIdentity, b: CheckpointIdentity): boolean {
   return (
     a.transcriptPath === b.transcriptPath &&
-    a.transcriptBytes === b.transcriptBytes &&
-    a.transcriptMtimeMs === b.transcriptMtimeMs &&
     a.pruneLevel === b.pruneLevel &&
     a.chunkerMaxTokens === b.chunkerMaxTokens &&
     a.chunkerOverlapTurns === b.chunkerOverlapTurns
@@ -516,12 +541,6 @@ function describeIdentityMismatch(prev: CheckpointIdentity, cur: CheckpointIdent
   const diffs: string[] = [];
   if (prev.transcriptPath !== cur.transcriptPath) {
     diffs.push(`transcript path '${prev.transcriptPath}' != '${cur.transcriptPath}'`);
-  }
-  if (prev.transcriptBytes !== cur.transcriptBytes) {
-    diffs.push(`transcript size ${prev.transcriptBytes}B != ${cur.transcriptBytes}B`);
-  }
-  if (prev.transcriptMtimeMs !== cur.transcriptMtimeMs) {
-    diffs.push(`transcript mtime ${prev.transcriptMtimeMs} != ${cur.transcriptMtimeMs}`);
   }
   if (prev.pruneLevel !== cur.pruneLevel) {
     diffs.push(`prune level '${prev.pruneLevel}' != '${cur.pruneLevel}'`);
@@ -535,15 +554,58 @@ function describeIdentityMismatch(prev: CheckpointIdentity, cur: CheckpointIdent
   return diffs.join("; ");
 }
 
+/** sha256 of exactly the first `byteLength` bytes of `path`, streamed —
+ *  never buffers a (potentially 265 MB+, see transcript.ts's header) prefix
+ *  into memory as one string/Buffer. `byteLength === 0` hashes the empty
+ *  input without opening a stream (an empty range is a degenerate but
+ *  legal case: a checkpoint saved before any bytes were consumed). */
+async function hashFilePrefix(path: string, byteLength: number): Promise<string> {
+  const hash = createHash("sha256");
+  if (byteLength > 0) {
+    const stream = createReadStream(path, { start: 0, end: byteLength - 1 });
+    for await (const chunk of stream as AsyncIterable<Buffer>) hash.update(chunk);
+  }
+  return hash.digest("hex");
+}
+
+/** This run's consumed prefix — see `CheckpointPrefix`'s header. Computed
+ *  ONCE per `summarizeSession` call (never inside `saveCheckpoint`, which
+ *  runs once per completed chunk): re-hashing a multi-hundred-MB transcript
+ *  on every single chunk completion would turn checkpointing itself into
+ *  the bottleneck it exists to avoid. */
+async function computeConsumedPrefix(path: string, byteLength: number): Promise<CheckpointPrefix> {
+  return { bytes: byteLength, sha256: await hashFilePrefix(path, byteLength) };
+}
+
+/** Result of a checkpoint load that passed every check. `grew` distinguishes
+ *  the two safe-to-resume shapes: `false` = the transcript is byte-identical
+ *  to what the checkpoint was built from (today's plain resume — every slot
+ *  reusable as-is); `true` = the transcript grew with its old content intact
+ *  as a verified prefix (the incremental case — the caller must invalidate
+ *  the checkpoint's LAST chunk and extend the chunk arrays; see
+ *  `summarizeSession`'s `incrementalGrowth` branch and the module header). */
+interface LoadCheckpointResult {
+  checkpoint: Checkpoint;
+  grew: boolean;
+}
+
 /**
  * Load an existing checkpoint and verify it belongs to THIS run before
  * handing back a single cached summary. Returns null for "no checkpoint
- * yet" (a fresh run, not an error). Throws fail-fast on a corrupt file or
- * an identity mismatch — silently resuming against a different transcript
- * or different chunking params would produce a summary that is wrong in a
- * way nobody could detect from the output alone.
+ * yet" (a fresh run, not an error). Throws fail-fast on a corrupt file, a
+ * path/prune/chunking-params mismatch, a transcript SHORTER than what the
+ * checkpoint consumed, or a transcript whose prefix no longer hashes the
+ * same (rewritten/rotated/different file) — every one of those means
+ * "reusing this checkpoint would produce a summary that is wrong in a way
+ * nobody could detect", so each is a hard refusal, never a silent restart.
+ * A transcript that only GREW with its prefix intact is the one case that's
+ * safe to resume incrementally — signalled via `grew: true`.
  */
-function loadCheckpoint(path: string, identity: CheckpointIdentity): Checkpoint | null {
+async function loadCheckpoint(
+  path: string,
+  identity: CheckpointIdentity,
+  currentBytes: number,
+): Promise<LoadCheckpointResult | null> {
   let raw: string;
   try {
     raw = readFileSync(path, "utf-8");
@@ -562,7 +624,14 @@ function loadCheckpoint(path: string, identity: CheckpointIdentity): Checkpoint 
       { cause: err },
     );
   }
-  if (parsed.version !== 1 || !parsed.identity || !Array.isArray(parsed.mapSummaries)) {
+  if (
+    parsed.version !== 1 ||
+    !parsed.identity ||
+    !parsed.prefix ||
+    typeof parsed.prefix.bytes !== "number" ||
+    typeof parsed.prefix.sha256 !== "string" ||
+    !Array.isArray(parsed.mapSummaries)
+  ) {
     throw new Error(
       `session-summary: checkpoint at ${path} has an unrecognised shape — refusing to resume. ` +
         `Delete the file to start a fresh run.`,
@@ -577,7 +646,28 @@ function loadCheckpoint(path: string, identity: CheckpointIdentity): Checkpoint 
         `chunking params it was created with. Delete the checkpoint to start fresh with the new settings.`,
     );
   }
-  return parsed;
+
+  const storedBytes = parsed.prefix.bytes;
+  if (currentBytes < storedBytes) {
+    throw new Error(
+      `session-summary: transcript at ${identity.transcriptPath} is now ${currentBytes}B, smaller ` +
+        `than the ${storedBytes}B the checkpoint at ${path} was built from. A transcript only ever ` +
+        `grows during a live session, so this looks like a truncated, rotated, or different file — ` +
+        `refusing to resume against it. Delete the checkpoint to start fresh.`,
+    );
+  }
+
+  const currentPrefixHash = await hashFilePrefix(identity.transcriptPath, storedBytes);
+  if (currentPrefixHash !== parsed.prefix.sha256) {
+    throw new Error(
+      `session-summary: the first ${storedBytes}B of the transcript at ${identity.transcriptPath} ` +
+        `no longer match the checkpoint at ${path} (prefix hash mismatch). A checkpoint may only be ` +
+        `reused when the transcript grew APPEND-ONLY — this looks like a rewrite. Refusing to resume ` +
+        `against it. Delete the checkpoint to start fresh.`,
+    );
+  }
+
+  return { checkpoint: parsed, grew: currentBytes > storedBytes };
 }
 
 /** Atomic write (tmp + rename), matching the project's existing checkpoint/
@@ -1050,16 +1140,21 @@ export async function summarizeSession(
     throw new Error(`session-summary: transcript is not a file: ${options.transcriptPath}`);
   }
 
+  const resolvedTranscriptPath = resolve(options.transcriptPath);
   const identity: CheckpointIdentity = {
-    transcriptPath: resolve(options.transcriptPath),
-    transcriptBytes: stat.size,
-    transcriptMtimeMs: stat.mtimeMs,
+    transcriptPath: resolvedTranscriptPath,
     pruneLevel,
     chunkerMaxTokens: maxChunkTokens,
     chunkerOverlapTurns: overlapTurns,
   };
 
-  let checkpoint: Checkpoint | null = loadCheckpoint(options.checkpointPath, identity);
+  const loaded = await loadCheckpoint(options.checkpointPath, identity, stat.size);
+  let checkpoint: Checkpoint | null = loaded ? loaded.checkpoint : null;
+  // See the module header's INCREMENTAL COMPACTION note: true only when the
+  // transcript GREW with its old content verified as an unchanged prefix —
+  // false covers both "no checkpoint" and "byte-identical resume" (today's
+  // plain fill-in-the-nulls path, untouched by this feature).
+  const incrementalGrowth = loaded?.grew ?? false;
   const resumedFromCheckpoint = checkpoint !== null;
 
   const { turns, stats } = await readTranscript(options.transcriptPath, { pruneLevel });
@@ -1081,12 +1176,20 @@ export async function summarizeSession(
   // formula below key off this, chunk-count-aware flag instead.
   const fanoutEngaged = fanoutActive && chunks.length > 1;
 
-  if (checkpoint && checkpoint.totalChunks !== chunks.length) {
-    // The identity check above already pins transcript size/mtime + every
-    // chunking param, so this should be unreachable in practice — kept as a
-    // second, independent guard (fail fast rather than silently packing a
-    // mismatched checkpoint) in case a future chunker change makes chunk
-    // count non-deterministic for the same inputs.
+  // This run's consumed prefix — computed ONCE (see `computeConsumedPrefix`'s
+  // header for why: re-hashing per chunk would make checkpointing itself the
+  // bottleneck). Used both for a fresh checkpoint and to refresh an existing
+  // one after an incremental splice, below.
+  const consumedPrefix = await computeConsumedPrefix(resolvedTranscriptPath, stat.size);
+
+  if (checkpoint && !incrementalGrowth && checkpoint.totalChunks !== chunks.length) {
+    // The identity check above already pins the transcript path + every
+    // chunking param, and `loadCheckpoint` already proved this is a
+    // byte-identical resume (not an incremental one) — so this should be
+    // unreachable in practice. Kept as a second, independent guard (fail
+    // fast rather than silently packing a mismatched checkpoint) in case a
+    // future chunker change makes chunk count non-deterministic for the
+    // same inputs.
     throw new Error(
       `session-summary: checkpoint at ${options.checkpointPath} was recorded for ` +
         `${checkpoint.totalChunks} chunks but this run produced ${chunks.length} chunks from the ` +
@@ -1094,10 +1197,45 @@ export async function summarizeSession(
     );
   }
 
+  if (checkpoint && incrementalGrowth) {
+    // ── Incremental splice (TRDD-S8CKVH8S) ──────────────────────────────
+    // Greedy left-to-right chunking's decision at chunk i depends only on
+    // turns[0..i] and the chunks already flushed before it — never on turns
+    // that appear later (see chunker.ts's header: a boundary is placed the
+    // moment the running total would exceed the budget, and the next chunk
+    // is seeded only from the chunk just flushed). So for a transcript that
+    // only grew with its prefix intact, every chunk BEFORE the previous
+    // run's last one is guaranteed byte-for-byte identical between the old
+    // chunking and this (bigger) one. Only the old run's LAST chunk might
+    // not have been "closed" by a real budget flush (it may simply have
+    // ended at end-of-transcript), so ONLY that one index is invalidated —
+    // every earlier completed summary is reused verbatim, at zero model
+    // calls, and `finalSummary` is dropped since more chunks now exist to
+    // join.
+    const oldTotal = checkpoint.totalChunks;
+    const safeReuseCount = Math.max(0, Math.min(oldTotal - 1, chunks.length));
+    const mapSummaries = new Array<string | null>(chunks.length).fill(null);
+    for (let i = 0; i < safeReuseCount; i++) {
+      mapSummaries[i] = checkpoint.mapSummaries[i];
+    }
+    checkpoint = {
+      version: 1,
+      identity,
+      prefix: consumedPrefix,
+      totalChunks: chunks.length,
+      mapSummaries,
+      finalSummary: null,
+      updatedAt: nowIso(),
+      activeModelId: checkpoint.activeModelId ?? activeModel().id,
+    };
+    saveCheckpoint(options.checkpointPath, checkpoint);
+  }
+
   if (!checkpoint) {
     checkpoint = {
       version: 1,
       identity,
+      prefix: consumedPrefix,
       totalChunks: chunks.length,
       mapSummaries: new Array<string | null>(chunks.length).fill(null),
       finalSummary: null,

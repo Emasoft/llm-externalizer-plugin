@@ -251230,7 +251230,8 @@ function makePreflightHook(profileFingerprint, llmCall, opts = {}) {
 }
 
 // src/session_summary/driver.ts
-import { statSync as statSync12, readFileSync as readFileSync27, writeFileSync as writeFileSync19, mkdirSync as mkdirSync21, renameSync as renameSync12 } from "node:fs";
+import { statSync as statSync12, readFileSync as readFileSync27, writeFileSync as writeFileSync19, mkdirSync as mkdirSync21, renameSync as renameSync12, createReadStream as createReadStream3 } from "node:fs";
+import { createHash as createHash9 } from "node:crypto";
 import { dirname as dirname11, resolve as resolve15 } from "node:path";
 
 // src/session_summary/transcript.ts
@@ -252900,18 +252901,12 @@ function sleep(ms) {
   return new Promise((resolve19) => setTimeout(resolve19, ms));
 }
 function checkpointIdentityMatches(a, b) {
-  return a.transcriptPath === b.transcriptPath && a.transcriptBytes === b.transcriptBytes && a.transcriptMtimeMs === b.transcriptMtimeMs && a.pruneLevel === b.pruneLevel && a.chunkerMaxTokens === b.chunkerMaxTokens && a.chunkerOverlapTurns === b.chunkerOverlapTurns;
+  return a.transcriptPath === b.transcriptPath && a.pruneLevel === b.pruneLevel && a.chunkerMaxTokens === b.chunkerMaxTokens && a.chunkerOverlapTurns === b.chunkerOverlapTurns;
 }
 function describeIdentityMismatch(prev, cur) {
   const diffs = [];
   if (prev.transcriptPath !== cur.transcriptPath) {
     diffs.push(`transcript path '${prev.transcriptPath}' != '${cur.transcriptPath}'`);
-  }
-  if (prev.transcriptBytes !== cur.transcriptBytes) {
-    diffs.push(`transcript size ${prev.transcriptBytes}B != ${cur.transcriptBytes}B`);
-  }
-  if (prev.transcriptMtimeMs !== cur.transcriptMtimeMs) {
-    diffs.push(`transcript mtime ${prev.transcriptMtimeMs} != ${cur.transcriptMtimeMs}`);
   }
   if (prev.pruneLevel !== cur.pruneLevel) {
     diffs.push(`prune level '${prev.pruneLevel}' != '${cur.pruneLevel}'`);
@@ -252924,7 +252919,18 @@ function describeIdentityMismatch(prev, cur) {
   }
   return diffs.join("; ");
 }
-function loadCheckpoint(path, identity) {
+async function hashFilePrefix(path, byteLength) {
+  const hash2 = createHash9("sha256");
+  if (byteLength > 0) {
+    const stream = createReadStream3(path, { start: 0, end: byteLength - 1 });
+    for await (const chunk of stream) hash2.update(chunk);
+  }
+  return hash2.digest("hex");
+}
+async function computeConsumedPrefix(path, byteLength) {
+  return { bytes: byteLength, sha256: await hashFilePrefix(path, byteLength) };
+}
+async function loadCheckpoint(path, identity, currentBytes) {
   let raw;
   try {
     raw = readFileSync27(path, "utf-8");
@@ -252941,7 +252947,7 @@ function loadCheckpoint(path, identity) {
       { cause: err3 }
     );
   }
-  if (parsed.version !== 1 || !parsed.identity || !Array.isArray(parsed.mapSummaries)) {
+  if (parsed.version !== 1 || !parsed.identity || !parsed.prefix || typeof parsed.prefix.bytes !== "number" || typeof parsed.prefix.sha256 !== "string" || !Array.isArray(parsed.mapSummaries)) {
     throw new Error(
       `session-summary: checkpoint at ${path} has an unrecognised shape \u2014 refusing to resume. Delete the file to start a fresh run.`
     );
@@ -252954,7 +252960,19 @@ function loadCheckpoint(path, identity) {
       )}). A checkpoint may only resume the SAME transcript with the SAME prune level and chunking params it was created with. Delete the checkpoint to start fresh with the new settings.`
     );
   }
-  return parsed;
+  const storedBytes = parsed.prefix.bytes;
+  if (currentBytes < storedBytes) {
+    throw new Error(
+      `session-summary: transcript at ${identity.transcriptPath} is now ${currentBytes}B, smaller than the ${storedBytes}B the checkpoint at ${path} was built from. A transcript only ever grows during a live session, so this looks like a truncated, rotated, or different file \u2014 refusing to resume against it. Delete the checkpoint to start fresh.`
+    );
+  }
+  const currentPrefixHash = await hashFilePrefix(identity.transcriptPath, storedBytes);
+  if (currentPrefixHash !== parsed.prefix.sha256) {
+    throw new Error(
+      `session-summary: the first ${storedBytes}B of the transcript at ${identity.transcriptPath} no longer match the checkpoint at ${path} (prefix hash mismatch). A checkpoint may only be reused when the transcript grew APPEND-ONLY \u2014 this looks like a rewrite. Refusing to resume against it. Delete the checkpoint to start fresh.`
+    );
+  }
+  return { checkpoint: parsed, grew: currentBytes > storedBytes };
 }
 function saveCheckpoint(path, checkpoint) {
   mkdirSync21(dirname11(path), { recursive: true });
@@ -253161,15 +253179,16 @@ async function summarizeSession(options) {
   if (!stat.isFile()) {
     throw new Error(`session-summary: transcript is not a file: ${options.transcriptPath}`);
   }
+  const resolvedTranscriptPath = resolve15(options.transcriptPath);
   const identity = {
-    transcriptPath: resolve15(options.transcriptPath),
-    transcriptBytes: stat.size,
-    transcriptMtimeMs: stat.mtimeMs,
+    transcriptPath: resolvedTranscriptPath,
     pruneLevel,
     chunkerMaxTokens: maxChunkTokens,
     chunkerOverlapTurns: overlapTurns
   };
-  let checkpoint = loadCheckpoint(options.checkpointPath, identity);
+  const loaded = await loadCheckpoint(options.checkpointPath, identity, stat.size);
+  let checkpoint = loaded ? loaded.checkpoint : null;
+  const incrementalGrowth = loaded?.grew ?? false;
   const resumedFromCheckpoint = checkpoint !== null;
   const { turns, stats } = await readTranscript(options.transcriptPath, { pruneLevel });
   let { chunks } = chunkTurns(turns, {
@@ -253178,15 +253197,36 @@ async function summarizeSession(options) {
     hardBudgetTokens: fanoutActive ? fanoutMinWindowBudget : windowBudgetForModel(activeModel())
   });
   const fanoutEngaged = fanoutActive && chunks.length > 1;
-  if (checkpoint && checkpoint.totalChunks !== chunks.length) {
+  const consumedPrefix = await computeConsumedPrefix(resolvedTranscriptPath, stat.size);
+  if (checkpoint && !incrementalGrowth && checkpoint.totalChunks !== chunks.length) {
     throw new Error(
       `session-summary: checkpoint at ${options.checkpointPath} was recorded for ${checkpoint.totalChunks} chunks but this run produced ${chunks.length} chunks from the same identity \u2014 refusing to resume. Delete the checkpoint to start fresh.`
     );
+  }
+  if (checkpoint && incrementalGrowth) {
+    const oldTotal = checkpoint.totalChunks;
+    const safeReuseCount = Math.max(0, Math.min(oldTotal - 1, chunks.length));
+    const mapSummaries = new Array(chunks.length).fill(null);
+    for (let i = 0; i < safeReuseCount; i++) {
+      mapSummaries[i] = checkpoint.mapSummaries[i];
+    }
+    checkpoint = {
+      version: 1,
+      identity,
+      prefix: consumedPrefix,
+      totalChunks: chunks.length,
+      mapSummaries,
+      finalSummary: null,
+      updatedAt: nowIso(),
+      activeModelId: checkpoint.activeModelId ?? activeModel().id
+    };
+    saveCheckpoint(options.checkpointPath, checkpoint);
   }
   if (!checkpoint) {
     checkpoint = {
       version: 1,
       identity,
+      prefix: consumedPrefix,
       totalChunks: chunks.length,
       mapSummaries: new Array(chunks.length).fill(null),
       finalSummary: null,
@@ -253706,7 +253746,7 @@ async function selectModels(options = {}) {
 import { existsSync as existsSync22, readdirSync as readdirSync8, statSync as statSync13 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
 import { join as join28, resolve as resolve16 } from "node:path";
-import { createHash as createHash9 } from "node:crypto";
+import { createHash as createHash10 } from "node:crypto";
 function projectSlug(absProjectRoot) {
   return absProjectRoot.replace(/[^a-zA-Z0-9]/g, "-");
 }
@@ -253755,7 +253795,7 @@ function resolveTranscriptPath(options = {}) {
   return latestPath;
 }
 function defaultCheckpointPath(transcriptAbsPath, configDir) {
-  const hash2 = createHash9("sha256").update(transcriptAbsPath).digest("hex").slice(0, 16);
+  const hash2 = createHash10("sha256").update(transcriptAbsPath).digest("hex").slice(0, 16);
   return join28(configDir, "session-summary-checkpoints", `${hash2}.json`);
 }
 
