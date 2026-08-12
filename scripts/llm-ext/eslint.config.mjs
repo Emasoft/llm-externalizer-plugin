@@ -9,6 +9,11 @@ export default [
       "dist/**",
       "node_modules/**",
       "coverage/**",
+      // Benchmark fixtures are test INPUT, not project source: deliberately
+      // odd code the search-existing benchmark scans. Linting them reports
+      // noise, and "fixing" a fixture to satisfy a rule changes the benchmark's
+      // input and so its results.
+      "benchmark-fixtures/**",
       "*.js",
       "*.mjs",
       "*.cjs",

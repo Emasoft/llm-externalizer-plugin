@@ -283,13 +283,18 @@ export function resolveInvocation(argv: string[], tools: readonly ToolDef[]): Re
     const token = tail[i];
     if (token === "-o" || token === "--output") {
       if (!outFlag) {
-        // No output flag on this command — pass the literal token through
-        // unchanged; the flat parser will reject it with a clear message
-        // rather than the launcher silently swallowing it.
-        out.push(token);
-      } else {
-        out.push(`--${outFlag}`);
+        // This command declares no output parameter at all (it writes to a
+        // fixed reports dir). Passing `-o` through would reach the flat parser,
+        // which rejects it as "unexpected argument (all inputs are named
+        // flags)" — actively misleading, since `-o` IS a named flag and the
+        // real problem is that THIS action has nowhere to put it. Say that.
+        return {
+          kind: "error",
+          message: `'${group} ${actionName}' has no output option — it writes its report to the project's reports directory.`,
+          suggestions: [],
+        };
       }
+      out.push(`--${outFlag}`);
       // Either way the next bare token is this flag's PATH, not the positional.
       awaitingFlagValue = tail[i + 1] !== undefined && !tail[i + 1].startsWith("-");
       continue;

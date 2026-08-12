@@ -261064,10 +261064,13 @@ function resolveInvocation(argv, tools) {
     const token = tail[i];
     if (token === "-o" || token === "--output") {
       if (!outFlag) {
-        out.push(token);
-      } else {
-        out.push(`--${outFlag}`);
+        return {
+          kind: "error",
+          message: `'${group} ${actionName}' has no output option \u2014 it writes its report to the project's reports directory.`,
+          suggestions: []
+        };
       }
+      out.push(`--${outFlag}`);
       awaitingFlagValue = tail[i + 1] !== void 0 && !tail[i + 1].startsWith("-");
       continue;
     }

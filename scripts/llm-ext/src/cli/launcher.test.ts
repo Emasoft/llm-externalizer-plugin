@@ -46,6 +46,19 @@ describe("resolveInvocation — dispatch + positional/output mapping", () => {
     });
   });
 
+  it("-o on an action with NO output parameter fails with an honest message, not the flat parser's", () => {
+    // scan_folder declares neither `output` nor `output_dir` — it writes to a
+    // fixed reports dir. Passing `-o` through would reach the flat parser and
+    // surface "unexpected argument '-o' (all inputs are named flags)", which is
+    // actively wrong: `-o` IS a named flag. The launcher must own this error.
+    const r = resolveInvocation(["scan", "folder", "./src", "-o", "out.md"], tools);
+    expect(r.kind).toBe("error");
+    expect((r as { message: string }).message).toContain("no output option");
+    expect((r as { message: string }).message).toContain("scan folder");
+    // and it must NOT leak the misleading flat-parser wording
+    expect((r as { message: string }).message).not.toContain("named flags");
+  });
+
   it("llm ask ./prompt.md -o ./resp.md --profile free -> chat --input_files_paths ... --output_dir ...", () => {
     const r = resolveInvocation(
       ["llm", "ask", "./prompt.md", "-o", "./resp.md", "--profile", "free"],
