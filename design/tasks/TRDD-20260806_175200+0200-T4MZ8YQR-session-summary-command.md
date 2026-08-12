@@ -173,6 +173,58 @@ sub-minute bucket. 3 s × 16 workers would have added ~45 s of dead time per run
 64-request cliff, leaving headroom for the ensemble's other traffic and for models with tighter
 buckets. User-overridable; `--concurrency 1` must reproduce sequential exactly.
 
+### 🐛 ROOT CAUSE OF THE SLOWNESS — THE REQUEST TIMEOUT DOES NOT COVER GENERATION (2026-08-12 03:25)
+
+Found while measuring the concurrent run, by tracing the code — NOT by assuming. **The slowness
+was never primarily a parallelism problem.** Concurrency is now in and correct, but the live run
+exposed a defect that dominates everything else.
+
+**The bug.** `provider/http.ts::fetchWithTimeout`:
+
+```ts
+const timer = setTimeout(() => controller.abort(), timeoutMs);
+try {
+  return await fetch(url, { ...options, signal: controller.signal });
+} finally {
+  clearTimeout(timer);       // <-- runs as soon as HEADERS arrive
+}
+```
+
+`fetch()` resolves on response **headers**, not on a consumed body. The `finally` then cancels the
+abort timer, and the caller reads the body afterwards (`completion.ts:648+` records `jsonStartTime`
+and starts a progress ticker only after `fetchWithRetry429` has returned). **So `timeout` bounds
+time-to-first-byte only. The generation / body-read phase has NO deadline whatsoever.**
+
+**The evidence.** `settings.yaml` sets no `timeout:`, so the default 300 s applies
+(`index.ts:319`). In the live run chunk 5 reached **1890 s — 6.3× its own configured cap** — while
+`fetchWithRetry429`'s time-budget arithmetic (`remaining = timeout - elapsed`) believed the request
+had long since expired. The `progress … Ns elapsed` line is a client-side ticker computed as
+`elapsed / conn.timeout` capped at 90% (`completion.ts:656`); it is a DISPLAY, not a watchdog, and
+it is indistinguishable from a hung socket.
+
+**Why it hid for so long.** The comment justifying no hard cap (`index.ts:317`) reads: *"The MCP
+tool-call timeout is inactivity-based, kept alive by heartbeat — no hard cap needed."* That was
+TRUE under MCP — the MCP layer supplied the outer deadline. **MCP is gone; this is CLI-only now.**
+The justification died with the transport, but the code it justified stayed. A design decision
+outlived the premise that made it safe.
+
+**Consequences.**
+- A stalled generation hangs the run forever — the 15-retry ladder never fires, because a retry
+  needs a RESPONSE and there isn't one. This violates the project's fail-fast rule.
+- The chunk-level p99 sets the whole wall-clock under concurrency, so ONE unbounded chunk erases
+  the parallelism win. Measured: 4 chunks finished in 90–400 s; the 5th alone ran >31 min.
+
+**Fix direction (NOT yet implemented — needs its own TRDD).** Give the body read its own deadline
+rather than relying on the connect-phase timer: keep the AbortController armed until the body is
+consumed, so an over-deadline generation aborts LOUDLY and can rotate/retry like any other
+transient. Do not simply raise `timeout` — that changes an unbounded hang into a longer unbounded
+hang.
+
+**Correction to my own earlier claim.** I wrote in the janitor issue that the slowness was
+"inherent, not a tuning bug — preserving user messages verbatim means output scales with input".
+That is now known to be at best incomplete: a chunk running 6.3× past its configured timeout is a
+BUG, not inherent cost. The issue text needs amending once the fix lands.
+
 ### REMAINING AFTER HANDOFF
 
 1. Finish/inspect the verification run above.
