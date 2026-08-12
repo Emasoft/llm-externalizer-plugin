@@ -1,6 +1,38 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.0.1] - 2026-08-12
+
+### Fixed
+
+- Fix(cli): honest error when -o is used on an action with no output param
+
+Two leftovers from the v13.0.0 review, both about a message that lied.
+
+`llm-ext scan folder ./src -o out.md` passed `-o` through to the flat
+parser, which rejected it as "unexpected argument '-o' (all inputs are
+named flags)". That is actively wrong twice over: `-o` IS a named flag,
+and the real problem is that scan_folder declares no output parameter at
+all (it writes to a fixed reports dir). The launcher now owns the error and
+says so plainly, and a test asserts the misleading wording never returns.
+
+Worth noting -o was NOT broadly broken: outputFlagOf already maps it to
+`output` or `output_dir`, which covers every command that has one --
+scan_folder is the outlier that has neither.
+
+Also fixed the eslint gate. `--max-warnings 0` reported one warning: a
+stale eslint-disable in benchmark-fixtures/search-existing. The fix is to
+IGNORE benchmark-fixtures, not to edit the file: those fixtures are test
+INPUT for the search-existing benchmark, deliberately odd code, and
+"fixing" one to satisfy a lint rule changes the benchmark's input and so
+its results. Linting them was the bug.
+
+Verified: tsc 0, eslint 0 at --max-warnings 0 (previously 1 warning),
+vitest 1922 passed / 4 skipped / 0 failed (+1), build clean. Live: the new
+message appears with exit 1, and -o still resolves normally on commands
+that declare an output parameter.
+
+
 ## [13.0.0] - 2026-08-12
 
 ### Added
