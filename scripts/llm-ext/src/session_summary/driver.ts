@@ -148,6 +148,42 @@ export const DEFAULT_MAX_CHUNK_TOKENS = 25_000;
 export const MAX_AUTO_CONCURRENCY = 28;
 
 /**
+ * Ceiling for how many chunk requests may be in flight AT ONCE against a
+ * SINGLE model under fan-out (`fanout: true`, the default whenever the
+ * resolved concurrency is greater than 1 and more than one free model is
+ * eligible — see `SummarizeSessionOptions.fanout`).
+ *
+ * Below the measured 32-request edge for the SAME reason `MAX_AUTO_CONCURRENCY`
+ * sits at 28 rather than the edge itself: the free-tier rate bucket is
+ * PER-MODEL, not per-account (measured, TRDD-OU2TCWP8 — 64 concurrent
+ * requests against ONE model produced two 429s; the same 64 split 32+32
+ * across TWO models produced zero), so each fan-out slot needs its OWN
+ * safety margin below that per-model cliff, not a shared one. 20, not 28:
+ * fan-out already buys extra total throughput by adding MORE slots (up to
+ * `MAX_FANOUT_MODELS`), so any one slot can afford to sit a little further
+ * back from its own edge without giving up the wall-clock win — the
+ * AGGREGATE ceiling (`K * PER_MODEL_CONCURRENCY`, see `summarizeSession`'s
+ * fan-out branch) is what actually needs to stay near the measured ceiling.
+ */
+export const PER_MODEL_CONCURRENCY = 20;
+
+/**
+ * Hard cap on how many distinct free models fan-out will dispatch chunks
+ * across at once, regardless of how many more are eligible (`modelId` +
+ * `fallbackModels`). Unbounded fan-out would keep shrinking the chunk
+ * budget for diminishing wall-clock return once `PER_MODEL_CONCURRENCY` is
+ * no longer the binding constraint (the budget is sized to the MINIMUM
+ * context window across every model fan-out actually uses — see the
+ * `fanout` option's header), while ALSO widening the blast radius of "one
+ * model's narrower context window now sizes the WHOLE run's chunk budget."
+ * 4 keeps the aggregate ceiling (`4 * PER_MODEL_CONCURRENCY` = 80) well
+ * above the 27-to-83-chunk range the design measurements used, without
+ * pulling every long-tail free model on the catalog into the budget-sizing
+ * computation.
+ */
+export const MAX_FANOUT_MODELS = 4;
+
+/**
  * Default per-chunk deadline, in ms — deliberately far tighter than the global
  * soft timeout (300s).
  *
@@ -335,6 +371,28 @@ export interface SummarizeSessionOptions {
    *  would just add cost with nothing to overlap it against — the
    *  sequential path is byte-for-byte unaffected by this option. */
   hedge?: boolean;
+  /** Dispatch chunk requests across SEVERAL free models at once instead of
+   *  one, round-robin by chunk index over the first `MAX_FANOUT_MODELS`
+   *  entries of `[modelId, ...fallbackModels]` — see `PER_MODEL_CONCURRENCY`'s
+   *  header for the measurement that makes this worthwhile: the OpenRouter
+   *  free-tier rate bucket is PER-MODEL, so total parallelism scales with
+   *  the number of models used, letting a run use SMALLER (faster) chunks
+   *  without exceeding any single model's rate-limit cliff.
+   *
+   *  Default: `true` whenever the resolved `concurrency` is greater than 1
+   *  AND more than one free model is eligible. ALWAYS `false` at
+   *  `concurrency <= 1` (mirrors `hedge`'s own default rule) and ALWAYS
+   *  `false` with exactly one eligible model regardless of this flag's
+   *  value — fan-out with K=1 is just the single-model path with extra
+   *  bookkeeping, so it degrades to byte-for-byte identical behavior
+   *  rather than exercising a degenerate special case.
+   *
+   *  When active: the chunk token budget is derived from the MINIMUM
+   *  context window across the models fan-out actually uses (sizing to
+   *  the largest would overflow the smallest), and a model becoming
+   *  unavailable demotes ONLY the fan-out slot it was assigned to — never
+   *  the whole pool — see the module header's fan-out note. */
+  fanout?: boolean;
   /** Optional per-chunk progress hook for a caller that wants to render
    *  readable output with several chunks in flight at once (see
    *  `ChunkEvent`). Never required for correctness — purely observational. */
@@ -912,6 +970,32 @@ export async function summarizeSession(
     options.maxChunkTokens ?? Math.min(DEFAULT_MAX_CHUNK_TOKENS, windowBudgetForModel(m));
   let maxChunkTokens = budgetForModel(activeModel());
 
+  // ── Fan-out (owner-specified, 2026-08-12; TRDD-OU2TCWP8) ────────────────
+  // See PER_MODEL_CONCURRENCY's header for the measurement that makes this
+  // worthwhile (the free-tier rate bucket is PER-MODEL) and the `fanout`
+  // option's header for the exact default rule. Decided BEFORE chunking
+  // because the chunk-size budget itself depends on it — fan-out sizes to
+  // the MINIMUM window across the models it will actually use, not the
+  // primary's alone.
+  const concurrencyRequested = options.concurrency ?? 1;
+  const fanoutCandidate =
+    concurrencyRequested === "auto" ||
+    (typeof concurrencyRequested === "number" && concurrencyRequested > 1);
+  const fanoutK = Math.min(models.length, MAX_FANOUT_MODELS);
+  const fanoutModelsInit: EligibleModel[] = models.slice(0, fanoutK);
+  const fanoutMinWindowBudget =
+    fanoutK > 1 ? Math.min(...fanoutModelsInit.map(windowBudgetForModel)) : 0;
+  // Requires fanoutK > 1: a K=1 "fan-out" is just the single-model path
+  // with extra bookkeeping (acceptance criterion: single eligible model =>
+  // unchanged). Requires fanoutCandidate: a caller who left `concurrency`
+  // at its 1 default gets the untouched sequential path, with none of the
+  // fan-out machinery below ever evaluated as anything but this boolean —
+  // that is what keeps that path byte-for-byte identical.
+  const fanoutActive = fanoutCandidate && (options.fanout ?? true) && fanoutK > 1;
+  if (fanoutActive) {
+    maxChunkTokens = options.maxChunkTokens ?? Math.min(DEFAULT_MAX_CHUNK_TOKENS, fanoutMinWindowBudget);
+  }
+
   const fallbackEvents: ModelFallbackEvent[] = [];
 
   const stat = statSync(options.transcriptPath);
@@ -935,8 +1019,20 @@ export async function summarizeSession(
   let { chunks } = chunkTurns(turns, {
     maxTokens: maxChunkTokens,
     overlapTurns,
-    hardBudgetTokens: windowBudgetForModel(activeModel()),
+    hardBudgetTokens: fanoutActive ? fanoutMinWindowBudget : windowBudgetForModel(activeModel()),
   });
+
+  // A single-chunk run has nothing to distribute — round-robin over K slots
+  // degenerates to "everything on slot 0", which wastes every other slot
+  // AND silently disables hedging for that one chunk (hedging is a
+  // single-active-model feature; a chunk pinned to one fan-out slot is
+  // never raced against a duplicate attempt on another model). So fan-out
+  // only actually ENGAGES once there is more than one chunk to spread —
+  // `fanoutActive` still governs the up-front chunk-budget sizing (using
+  // the MIN window across the K candidate models is harmless even for a
+  // single resulting chunk), but the MAP LOOP and its auto-concurrency
+  // formula below key off this, chunk-count-aware flag instead.
+  const fanoutEngaged = fanoutActive && chunks.length > 1;
 
   if (checkpoint && checkpoint.totalChunks !== chunks.length) {
     // The identity check above already pins transcript size/mtime + every
@@ -1150,12 +1246,25 @@ export async function summarizeSession(
   }
 
   // Resolved AFTER chunking, because "auto" is a function of the chunk count.
-  // An explicit number (including 1) is still honored verbatim.
+  // An explicit number (including 1) is still honored verbatim. Under
+  // fan-out, auto sizes to `min(chunkCount, K * PER_MODEL_CONCURRENCY)`
+  // instead of the single-model `MAX_AUTO_CONCURRENCY` ceiling — see the
+  // fan-out determination block above for how `fanoutActive`/`fanoutK` were
+  // derived.
   const concurrency =
     options.concurrency === "auto"
-      ? Math.max(1, Math.min(chunks.length, MAX_AUTO_CONCURRENCY))
+      ? Math.max(
+          1,
+          Math.min(chunks.length, fanoutEngaged ? fanoutK * PER_MODEL_CONCURRENCY : MAX_AUTO_CONCURRENCY),
+        )
       : Math.max(1, options.concurrency ?? 1);
   const onChunkEvent = options.onChunkEvent;
+  // Populated only by the fan-out branch below, when a slot-local re-split
+  // (`appendSlotChunks`) supersedes a chunk index with new ones appended at
+  // the end of `chunks` — those old indices must never be retried and must
+  // be skipped when the final summary is joined. Always empty (a harmless
+  // no-op filter) on every other path.
+  const abandonedChunkIndices = new Set<number>();
 
   if (concurrency <= 1) {
     // ── MAP (sequential): summarize each chunk, checkpointing after every
@@ -1177,6 +1286,258 @@ export async function summarizeSession(
         // model's budget or the shrunk budget.
       }
     }
+  } else if (fanoutEngaged) {
+    // ── MAP (fan-out): each chunk index is pinned to one of `fanoutK`
+    // slots (round-robin), and each slot behaves like an INDEPENDENT
+    // single-model worker pool capped at `PER_MODEL_CONCURRENCY` — see the
+    // module header's fan-out note and the `fanout` option's header for why
+    // a slot's own model-fallback/overflow must never touch another slot's
+    // chunks or indices (the "no whole-pool drain" property that makes
+    // fan-out safe; contrast with `becomeLeaderAndTransition` below, which
+    // exists precisely because the single-active-model branch CANNOT make
+    // that guarantee). `chunks` may GROW during this branch: a slot-local
+    // re-split (`appendSlotChunks`) appends its new sub-chunks at the END
+    // rather than reindexing in place, so no other slot's existing indices
+    // ever shift — the old, superseded indices are recorded in
+    // `abandonedChunkIndices` so they are never retried and never joined.
+    interface FanoutSlot {
+      model: EligibleModel;
+      budget: number;
+      dead: boolean;
+    }
+    const fanoutSlots: FanoutSlot[] = fanoutModelsInit.map((m) => ({
+      model: m,
+      budget: maxChunkTokens,
+      dead: false,
+    }));
+    const slotQueues: number[][] = Array.from({ length: fanoutK }, () => []);
+    for (let i = 0; i < chunks.length; i++) {
+      if (checkpoint.mapSummaries[i] === null) slotQueues[i % fanoutK].push(i);
+    }
+    const slotInFlightCount: number[] = new Array(fanoutK).fill(0);
+    let nextReplacementIdx = fanoutK; // next `models[]` candidate offered to a demoted slot
+    let slotCursor = 0; // round-robin start across `claimNextChunk` calls, so slot 0 never starves the rest
+
+    /** All turns still owed a map summary from these chunk INDICES (already
+     *  slot-scoped by the caller), overlap-de-duplicated by Turn identity —
+     *  mirrors `collectRemainingTurns` but over an explicit index list
+     *  instead of a contiguous suffix, since one slot's pending work is not
+     *  contiguous once other slots' chunks are interleaved between them. */
+    function collectTurnsForIndices(indices: readonly number[]): Turn[] {
+      const seen = new Set<Turn>();
+      const out: Turn[] = [];
+      for (const idx of indices) {
+        for (const t of chunks[idx].turns) {
+          if (!seen.has(t)) {
+            seen.add(t);
+            out.push(t);
+          }
+        }
+      }
+      return out;
+    }
+
+    /** Re-split ONE slot's own pending turns (the chunk that just failed,
+     *  `fromChunkIndex`, plus whatever else was still queued for this slot)
+     *  at a NEW budget, appending the result to the end of the shared
+     *  `chunks` array — see this block's header for why appending, not
+     *  reindexing in place. A KNOWN LIMITATION, documented rather than
+     *  silently assumed away (mirrors the single-model fallback's own
+     *  documented resume limitation, above): because the checkpoint
+     *  identity's `chunkerMaxTokens` is not re-derived per-slot, a
+     *  crash-and-resume after this point will very likely trip the existing
+     *  `checkpoint.totalChunks !== chunks.length` fail-fast guard rather
+     *  than silently resuming against a stale layout — that is the
+     *  intended, safe outcome, not a bug to fix here. */
+    function appendSlotChunks(slotIdx: number, fromChunkIndex: number, newBudget: number): void {
+      const pendingIndices = [fromChunkIndex, ...slotQueues[slotIdx]];
+      const turns = collectTurnsForIndices(pendingIndices);
+      const { chunks: newSub } = chunkTurns(turns, {
+        maxTokens: newBudget,
+        overlapTurns,
+        hardBudgetTokens: windowBudgetForModel(fanoutSlots[slotIdx].model),
+      });
+      const baseIndex = chunks.length;
+      const appended: TranscriptChunk[] = newSub.map((c, k) => ({ ...c, index: baseIndex + k }));
+      chunks = [...chunks, ...appended];
+      checkpoint!.totalChunks = chunks.length;
+      checkpoint!.mapSummaries = [
+        ...checkpoint!.mapSummaries,
+        ...new Array<string | null>(appended.length).fill(null),
+      ];
+      checkpoint!.updatedAt = nowIso();
+      saveCheckpoint(options.checkpointPath, checkpoint!);
+      for (const idx of pendingIndices) abandonedChunkIndices.add(idx);
+      slotQueues[slotIdx] = appended.map((c) => c.index);
+      fanoutSlots[slotIdx].budget = newBudget;
+    }
+
+    /** No replacement model exists anywhere for a dead slot: hand its
+     *  still-pending chunk indices to the other ALIVE slots (round-robin)
+     *  instead of discarding them — "one model failing must not discard
+     *  sibling results" extends to "must not discard sibling CAPACITY"
+     *  either. A redistributed index keeps its ORIGINAL chunk content
+     *  (sized for the shared min-window budget at creation time); if it
+     *  doesn't fit its new slot's model, that slot's own overflow path
+     *  (below, in `applyFanoutTransition`) re-splits it like any other
+     *  oversized chunk — self-healing, no special case needed here. */
+    function redistributeSlotQueue(deadSlot: number, alsoIndex: number): void {
+      const aliveSlots = fanoutSlots
+        .map((_, idx) => idx)
+        .filter((idx) => idx !== deadSlot && !fanoutSlots[idx].dead);
+      const pending = [alsoIndex, ...slotQueues[deadSlot]];
+      slotQueues[deadSlot] = [];
+      if (aliveSlots.length === 0) return; // caller checks all-dead right after
+      pending.forEach((idx, k) => {
+        slotQueues[aliveSlots[k % aliveSlots.length]].push(idx);
+      });
+    }
+
+    /** Apply a model-fallback or context-overflow outcome for ONE slot —
+     *  the fan-out sibling of `applyTransition`, scoped to `slotIdx` alone:
+     *  it never touches another slot's model, budget, or queue. Deliberately
+     *  performs no `await` — a plain synchronous function body, so two
+     *  workers of the SAME slot racing a transition still run to completion
+     *  one at a time (JS's single-threaded run-to-completion semantics)
+     *  rather than interleaving mid-mutation. The `slot.model.id !==
+     *  outcome.err.modelId` guard below catches the residual case — a
+     *  SECOND worker's genuine failure against a model a FIRST worker
+     *  already replaced — as a no-op instead of wasting another scarce
+     *  replacement candidate. */
+    function applyFanoutTransition(slotIdx: number, i: number, outcome: ChunkTransitionOutcome): void {
+      const slot = fanoutSlots[slotIdx];
+
+      if (outcome.kind === "overflow") {
+        const currentBudget = slot.budget;
+        const newBudget = shrinkBudgetOnOverflow(currentBudget);
+        if (newBudget === currentBudget) {
+          throw new Error(
+            `session-summary: chunk ${i} (fan-out slot ${slotIdx}, model '${slot.model.id}') still ` +
+              `exceeds its context window even at the minimum ${MIN_OVERFLOW_CHUNK_BUDGET}-token ` +
+              `re-split floor (${outcome.err.detail}). This model cannot summarize this chunk's ` +
+              `content — try a model with more context. Checkpoint saved at ${options.checkpointPath}.`,
+            { cause: outcome.err },
+          );
+        }
+        appendSlotChunks(slotIdx, i, newBudget);
+        return;
+      }
+
+      // Fallback: another worker on this same slot may have already
+      // replaced its model while THIS worker's (now-stale) attempt was
+      // still in flight — nothing to do; the caller's retry loop simply
+      // retries `i` against the already-replaced model.
+      if (slot.model.id !== outcome.err.modelId) return;
+
+      recordUnavailable(outcome.err.modelId, outcome.err.detail);
+      triedModelIds.push(outcome.err.modelId);
+      const oldModel = slot.model;
+
+      if (nextReplacementIdx >= models.length) {
+        redistributeSlotQueue(slotIdx, i);
+        slot.dead = true;
+        if (fanoutSlots.every((s) => s.dead)) throw allModelsExhausted(triedModelIds, outcome.err);
+        return;
+      }
+
+      const newModel = models[nextReplacementIdx++];
+      slot.model = newModel;
+      fallbackEvents.push({
+        fromModel: oldModel.id,
+        toModel: newModel.id,
+        reason: outcome.err.reason,
+        detail: outcome.err.detail,
+        atUnit: `slot ${slotIdx} chunk ${i}`,
+      });
+      const newBudget = budgetForModel(newModel);
+      if (newBudget < slot.budget) {
+        appendSlotChunks(slotIdx, i, newBudget);
+      } else {
+        slot.budget = newBudget; // wider-or-equal window — already-sized chunks still fit, no re-split
+      }
+    }
+
+    /** Pick the next claimable (slotIdx, chunkIndex) pair: the first slot,
+     *  scanning round-robin from `slotCursor`, that both has pending work
+     *  AND is under its `PER_MODEL_CONCURRENCY` cap — the design's literal
+     *  "never exceed the cap; take a chunk for a model with room instead"
+     *  rule. Returns null when nothing is claimable RIGHT NOW — either
+     *  every chunk is done, or every slot with pending work currently sits
+     *  at its cap and a caller should wait for one to free up. */
+    function claimNextChunk(): { slotIdx: number; chunkIndex: number } | null {
+      for (let k = 0; k < fanoutK; k++) {
+        const idx = (slotCursor + k) % fanoutK;
+        if (slotInFlightCount[idx] < PER_MODEL_CONCURRENCY && slotQueues[idx].length > 0) {
+          const chunkIndex = slotQueues[idx].shift()!;
+          slotInFlightCount[idx]++;
+          slotCursor = (idx + 1) % fanoutK;
+          return { slotIdx: idx, chunkIndex };
+        }
+      }
+      return null;
+    }
+
+    const FANOUT_IDLE_POLL_MS = 50; // only hit while every slot with pending work sits at its cap
+
+    async function fanoutWorker(workerIdx: number): Promise<void> {
+      if (workerIdx > 0) await sleep(STAGGER_INTERVAL_MS * workerIdx);
+      for (;;) {
+        const claim = claimNextChunk();
+        if (!claim) {
+          const allEmpty = slotQueues.every((q) => q.length === 0);
+          const allIdle = slotInFlightCount.every((c) => c === 0);
+          if (allEmpty && allIdle) return; // no more work anywhere — done
+          await sleep(FANOUT_IDLE_POLL_MS); // every pending slot is at cap — wait for room
+          continue;
+        }
+        const { slotIdx, chunkIndex: i } = claim;
+        try {
+          if (checkpoint!.mapSummaries[i] !== null) continue; // already done (resumed checkpoint)
+          const startedAt = Date.now();
+          onChunkEvent?.({ chunkIndex: i, totalChunks: chunks.length, phase: "start" });
+          for (;;) {
+            const result = await callChunkModel(
+              i,
+              fanoutSlots[slotIdx].model,
+              `chunk ${i} (slot ${slotIdx})`,
+              true,
+              sleep,
+            );
+            const outcome = finishFromCallResult(i, result);
+            if (outcome.kind === "ok") {
+              onChunkEvent?.({
+                chunkIndex: i,
+                totalChunks: chunks.length,
+                phase: "done",
+                elapsedMs: Date.now() - startedAt,
+              });
+              break;
+            }
+            applyFanoutTransition(slotIdx, i, outcome);
+            if (
+              fanoutSlots[slotIdx].dead ||
+              abandonedChunkIndices.has(i) ||
+              checkpoint!.mapSummaries[i] !== null
+            ) {
+              break; // `i` was superseded, redistributed elsewhere, or this slot died — go claim new work
+            }
+            // else: retry `i` against this slot's (possibly now different) model/budget
+          }
+        } finally {
+          slotInFlightCount[slotIdx]--;
+        }
+      }
+    }
+
+    const workerCount = Math.min(concurrency, chunks.length);
+    const settled = await Promise.allSettled(Array.from({ length: workerCount }, (_, k) => fanoutWorker(k)));
+    // `allSettled` (never `all`), same reasoning as the single-model
+    // concurrent branch below: every worker runs to completion, including
+    // ones still idle-polling behind another worker's error, so every
+    // rejection is captured here instead of surfacing as an unhandled
+    // rejection after `summarizeSession` has already returned.
+    const rejected = settled.find((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (rejected) throw rejected.reason;
   } else {
     // ── MAP (concurrent): a bounded pool of workers pulls the next
     // not-yet-done chunk index and processes it. Correctness under
@@ -1391,8 +1752,11 @@ export async function summarizeSession(
     // Every map slot is filled by the loop above — join deterministically,
     // no model call, no risk to the mandatory-verbatim sections. See
     // `joinChunkSummaries`'s header for why this is not a second map-reduce
-    // phase.
-    const mapped = checkpoint.mapSummaries as string[];
+    // phase. `abandonedChunkIndices` (always empty outside the fan-out
+    // branch) drops the old, superseded indices a slot-local re-split left
+    // behind — their content lives in the appended replacement chunks, not
+    // at their own (never-filled) slot.
+    const mapped = checkpoint.mapSummaries.filter((_, i) => !abandonedChunkIndices.has(i)) as string[];
     checkpoint.finalSummary = joinChunkSummaries(mapped);
     checkpoint.updatedAt = nowIso();
     saveCheckpoint(options.checkpointPath, checkpoint);
@@ -1404,7 +1768,13 @@ export async function summarizeSession(
     transcriptStats: stats,
     resumedFromCheckpoint,
     checkpointPath: options.checkpointPath,
-    modelId: activeModel().id,
+    // Under fan-out, several models may have produced the final summary at
+    // once — there is no single "the" active model the way the sequential
+    // and single-model-concurrent branches have one, so this reports the
+    // caller's originally-requested primary model instead of a slot's
+    // (possibly demoted) one. `fallbackEvents` carries the full per-slot
+    // switch history for a caller that needs it.
+    modelId: fanoutEngaged ? options.modelId : activeModel().id,
     fallbackEvents,
   };
 }

@@ -13,6 +13,7 @@ import {
   isEchoResponse,
   DEFAULT_MAX_CHUNK_TOKENS,
   MAX_AUTO_CONCURRENCY,
+  PER_MODEL_CONCURRENCY,
   setHedgeAfterMsForTests,
   type CallModelFn,
 } from "./driver.js";
@@ -1164,6 +1165,218 @@ describe("driver: summarizeSession", () => {
       // (concurrency-omitted) sequential tests above.
       expect(callOrder).toEqual(["0", "1", "2", "3"]);
       expect(result.summary).toBe(joinChunkSummaries(["SUMMARY-0", "SUMMARY-1", "SUMMARY-2", "SUMMARY-3"]));
+    });
+  });
+
+  // ── Fan-out (owner-specified, 2026-08-12; TRDD-OU2TCWP8) ──────────────
+  //
+  // Real timers throughout, same reasoning as the concurrency block above.
+
+  describe("fan-out", () => {
+    it("distributes chunk indices round-robin across the eligible models", async () => {
+      const lines = Array.from({ length: 6 }, (_, i) => userTurn(`u${i}`, `fanout distribute request ${i} `.repeat(30)));
+      const p = writeTranscript(lines);
+      const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 1_000_000, maxCompletionTokens: 1_000 };
+
+      const modelByChunk = new Map<string, string>();
+      const callModel = vi.fn<CallModelFn>(async (prompt, modelId) => {
+        const marker = /fanout distribute request (\d+) /.exec(prompt)?.[1] ?? "?";
+        modelByChunk.set(marker, modelId);
+        return `SUMMARY-${marker}`;
+      });
+
+      await summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        fallbackModels: [fallback],
+        maxChunkTokens: 30, // tiny — one chunk per turn => 6 chunks
+        chunkOverlapTurns: 0,
+        concurrency: "auto",
+        callModel,
+      });
+
+      // K=2 (FREE_MODEL, FALLBACK_MODEL) — round-robin by chunk index.
+      expect(modelByChunk.get("0")).toBe(FREE_MODEL);
+      expect(modelByChunk.get("1")).toBe(FALLBACK_MODEL);
+      expect(modelByChunk.get("2")).toBe(FREE_MODEL);
+      expect(modelByChunk.get("3")).toBe(FALLBACK_MODEL);
+      expect(modelByChunk.get("4")).toBe(FREE_MODEL);
+      expect(modelByChunk.get("5")).toBe(FALLBACK_MODEL);
+      // Both models were actually used — the whole point of fan-out.
+      expect(new Set(modelByChunk.values())).toEqual(new Set([FREE_MODEL, FALLBACK_MODEL]));
+    }, 10_000);
+
+    it("never exceeds PER_MODEL_CONCURRENCY in flight against any single model", async () => {
+      // 44 turns split round-robin over 2 slots = 22 pending chunks per
+      // model — comfortably past PER_MODEL_CONCURRENCY (20), so the cap
+      // must actually bind rather than never being exercised.
+      const lines = Array.from({ length: 44 }, (_, i) => userTurn(`u${i}`, `cap fanout request ${i} `.repeat(30)));
+      const p = writeTranscript(lines);
+      const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 1_000_000, maxCompletionTokens: 1_000 };
+
+      const inFlightByModel = new Map<string, number>();
+      const maxInFlightByModel = new Map<string, number>();
+      const releases: Array<() => void> = [];
+      const callModel = vi.fn<CallModelFn>(async (_prompt, modelId) => {
+        const cur = (inFlightByModel.get(modelId) ?? 0) + 1;
+        inFlightByModel.set(modelId, cur);
+        maxInFlightByModel.set(modelId, Math.max(maxInFlightByModel.get(modelId) ?? 0, cur));
+        await new Promise<void>((res) => releases.push(res));
+        inFlightByModel.set(modelId, cur - 1);
+        return "SUMMARY";
+      });
+
+      const resultPromise = summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        fallbackModels: [fallback],
+        maxChunkTokens: 30,
+        chunkOverlapTurns: 0,
+        concurrency: "auto", // K * PER_MODEL_CONCURRENCY = 2 * 20 = 40 workers
+        callModel,
+      });
+
+      // Budget for the real launch stagger: 40 workers x STAGGER_INTERVAL_MS
+      // (250ms) is up to ~10s.
+      await waitUntil(() => callModel.mock.calls.length >= 40, 30_000);
+      expect(maxInFlightByModel.get(FREE_MODEL)).toBeLessThanOrEqual(PER_MODEL_CONCURRENCY);
+      expect(maxInFlightByModel.get(FALLBACK_MODEL)).toBeLessThanOrEqual(PER_MODEL_CONCURRENCY);
+      // Proves real overlap happened per model, not accidental serialization.
+      expect(maxInFlightByModel.get(FREE_MODEL)).toBeGreaterThan(1);
+      expect(maxInFlightByModel.get(FALLBACK_MODEL)).toBeGreaterThan(1);
+
+      let done = false;
+      const settled = resultPromise.then((r) => { done = true; return r; });
+      while (!done) {
+        releases.splice(0).forEach((r) => r());
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      await settled;
+    }, 30_000);
+
+    it("one model failing does NOT discard sibling results from healthy models", async () => {
+      const lines = Array.from({ length: 4 }, (_, i) => userTurn(`u${i}`, `sibling fanout request ${i} `.repeat(30)));
+      const p = writeTranscript(lines);
+      // Exactly K=2 models total (no THIRD candidate to replace a dead
+      // slot) — FREE_MODEL's slot dies outright, and its chunks (0 and 2)
+      // must be redistributed to the surviving FALLBACK_MODEL slot rather
+      // than lost, while chunks 1 and 3 (already on FALLBACK_MODEL) are
+      // never touched by FREE_MODEL's failure.
+      const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 1_000_000, maxCompletionTokens: 1_000 };
+
+      const callModel = vi.fn<CallModelFn>(async (prompt, modelId) => {
+        const marker = /sibling fanout request (\d+) /.exec(prompt)?.[1] ?? "?";
+        if (modelId === FREE_MODEL) {
+          throw new Error("404 No endpoints found for this model — it has been delisted");
+        }
+        return `SUMMARY-${marker}`;
+      });
+
+      const result = await summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        fallbackModels: [fallback],
+        maxChunkTokens: 30,
+        chunkOverlapTurns: 0,
+        concurrency: "auto",
+        callModel,
+      });
+
+      // Every chunk landed, in original index order, all on the surviving
+      // model — nothing from the healthy slot was discarded or re-run, and
+      // the dead slot's own chunks were rescued rather than lost.
+      expect(result.totalChunks).toBe(4);
+      expect(result.summary).toBe(
+        joinChunkSummaries(["SUMMARY-0", "SUMMARY-1", "SUMMARY-2", "SUMMARY-3"]),
+      );
+      expect(callModel.mock.calls.filter((c) => c[1] === FALLBACK_MODEL).length).toBeGreaterThanOrEqual(4);
+    }, 10_000);
+
+    it("a single eligible model degrades to identical (non-fan-out) sizing, never PER_MODEL_CONCURRENCY", async () => {
+      // Mirrors the plain "concurrency 'auto' never exceeds MAX_AUTO_CONCURRENCY"
+      // test above — proves fan-out's own auto formula (K * PER_MODEL_CONCURRENCY)
+      // was NOT applied when there is only one eligible model (no fallbackModels).
+      const lines = Array.from({ length: 34 }, (_, i) => userTurn(`u${i}`, `single-model fanout request ${i} `.repeat(30)));
+      const p = writeTranscript(lines);
+
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const releases: Array<() => void> = [];
+      const callModel = vi.fn<CallModelFn>(async () => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise<void>((res) => releases.push(res));
+        inFlight--;
+        return "SUMMARY";
+      });
+
+      const resultPromise = summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        maxChunkTokens: 30,
+        chunkOverlapTurns: 0,
+        concurrency: "auto",
+        callModel,
+      });
+
+      await waitUntil(() => callModel.mock.calls.length >= MAX_AUTO_CONCURRENCY, 30_000);
+      expect(maxInFlight).toBe(MAX_AUTO_CONCURRENCY); // 28, not PER_MODEL_CONCURRENCY's 20
+      expect(maxInFlight).toBeLessThan(34);
+
+      let done = false;
+      const settled = resultPromise.then((r) => { done = true; return r; });
+      while (!done) {
+        releases.splice(0).forEach((r) => r());
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      await settled;
+    }, 30_000);
+
+    it("concurrency: 1 disables fan-out even when multiple free models are eligible", async () => {
+      const lines = Array.from({ length: 4 }, (_, i) => userTurn(`u${i}`, `no-fanout-at-1 request ${i} `.repeat(30)));
+      const p = writeTranscript(lines);
+      const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 1_000_000, maxCompletionTokens: 1_000 };
+
+      const usedModelIds: string[] = [];
+      const callOrder: string[] = [];
+      const callModel = vi.fn<CallModelFn>(async (prompt, modelId) => {
+        const marker = /no-fanout-at-1 request (\d+) /.exec(prompt)?.[1] ?? "?";
+        usedModelIds.push(modelId);
+        callOrder.push(marker);
+        return `SUMMARY-${marker}`;
+      });
+
+      const result = await summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        fallbackModels: [fallback],
+        maxChunkTokens: 30,
+        chunkOverlapTurns: 0,
+        concurrency: 1,
+        callModel,
+      });
+
+      // Every call went to the PRIMARY model only — fan-out's round-robin
+      // across models never engaged — and calls happened in strict index
+      // order, the sequential path's own signature.
+      expect(new Set(usedModelIds)).toEqual(new Set([FREE_MODEL]));
+      expect(callOrder).toEqual(["0", "1", "2", "3"]);
+      expect(result.modelId).toBe(FREE_MODEL);
     });
   });
 

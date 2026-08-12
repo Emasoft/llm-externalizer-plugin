@@ -252869,6 +252869,8 @@ function classifyContextOverflow(detail) {
 var PROMPT_OVERHEAD_TOKENS = 2e3;
 var DEFAULT_MAX_CHUNK_TOKENS = 25e3;
 var MAX_AUTO_CONCURRENCY = 28;
+var PER_MODEL_CONCURRENCY = 20;
+var MAX_FANOUT_MODELS = 4;
 var DEFAULT_CHUNK_TIMEOUT_MS = 24e4;
 var HEDGE_AFTER_MS = 6e4;
 var hedgeAfterMsOverride = null;
@@ -253120,6 +253122,15 @@ async function summarizeSession(options) {
   const windowBudgetForModel = (m) => Math.max(1e3, m.contextLength - m.maxCompletionTokens - PROMPT_OVERHEAD_TOKENS);
   const budgetForModel = (m) => options.maxChunkTokens ?? Math.min(DEFAULT_MAX_CHUNK_TOKENS, windowBudgetForModel(m));
   let maxChunkTokens = budgetForModel(activeModel());
+  const concurrencyRequested = options.concurrency ?? 1;
+  const fanoutCandidate = concurrencyRequested === "auto" || typeof concurrencyRequested === "number" && concurrencyRequested > 1;
+  const fanoutK = Math.min(models.length, MAX_FANOUT_MODELS);
+  const fanoutModelsInit = models.slice(0, fanoutK);
+  const fanoutMinWindowBudget = fanoutK > 1 ? Math.min(...fanoutModelsInit.map(windowBudgetForModel)) : 0;
+  const fanoutActive = fanoutCandidate && (options.fanout ?? true) && fanoutK > 1;
+  if (fanoutActive) {
+    maxChunkTokens = options.maxChunkTokens ?? Math.min(DEFAULT_MAX_CHUNK_TOKENS, fanoutMinWindowBudget);
+  }
   const fallbackEvents = [];
   const stat = statSync12(options.transcriptPath);
   if (!stat.isFile()) {
@@ -253139,8 +253150,9 @@ async function summarizeSession(options) {
   let { chunks } = chunkTurns(turns, {
     maxTokens: maxChunkTokens,
     overlapTurns,
-    hardBudgetTokens: windowBudgetForModel(activeModel())
+    hardBudgetTokens: fanoutActive ? fanoutMinWindowBudget : windowBudgetForModel(activeModel())
   });
+  const fanoutEngaged = fanoutActive && chunks.length > 1;
   if (checkpoint && checkpoint.totalChunks !== chunks.length) {
     throw new Error(
       `session-summary: checkpoint at ${options.checkpointPath} was recorded for ${checkpoint.totalChunks} chunks but this run produced ${chunks.length} chunks from the same identity \u2014 refusing to resume. Delete the checkpoint to start fresh.`
@@ -253254,8 +253266,12 @@ async function summarizeSession(options) {
     }
     rechunkRemainingMap(i, newBudget);
   }
-  const concurrency = options.concurrency === "auto" ? Math.max(1, Math.min(chunks.length, MAX_AUTO_CONCURRENCY)) : Math.max(1, options.concurrency ?? 1);
+  const concurrency = options.concurrency === "auto" ? Math.max(
+    1,
+    Math.min(chunks.length, fanoutEngaged ? fanoutK * PER_MODEL_CONCURRENCY : MAX_AUTO_CONCURRENCY)
+  ) : Math.max(1, options.concurrency ?? 1);
   const onChunkEvent = options.onChunkEvent;
+  const abandonedChunkIndices = /* @__PURE__ */ new Set();
   if (concurrency <= 1) {
     for (let i = 0; i < chunks.length; i++) {
       if (checkpoint.mapSummaries[i] !== null) continue;
@@ -253270,6 +253286,161 @@ async function summarizeSession(options) {
         applyTransition(i, outcome);
       }
     }
+  } else if (fanoutEngaged) {
+    let collectTurnsForIndices2 = function(indices) {
+      const seen = /* @__PURE__ */ new Set();
+      const out = [];
+      for (const idx of indices) {
+        for (const t of chunks[idx].turns) {
+          if (!seen.has(t)) {
+            seen.add(t);
+            out.push(t);
+          }
+        }
+      }
+      return out;
+    }, appendSlotChunks2 = function(slotIdx, fromChunkIndex, newBudget) {
+      const pendingIndices = [fromChunkIndex, ...slotQueues[slotIdx]];
+      const turns2 = collectTurnsForIndices2(pendingIndices);
+      const { chunks: newSub } = chunkTurns(turns2, {
+        maxTokens: newBudget,
+        overlapTurns,
+        hardBudgetTokens: windowBudgetForModel(fanoutSlots[slotIdx].model)
+      });
+      const baseIndex = chunks.length;
+      const appended = newSub.map((c, k) => ({ ...c, index: baseIndex + k }));
+      chunks = [...chunks, ...appended];
+      checkpoint.totalChunks = chunks.length;
+      checkpoint.mapSummaries = [
+        ...checkpoint.mapSummaries,
+        ...new Array(appended.length).fill(null)
+      ];
+      checkpoint.updatedAt = nowIso();
+      saveCheckpoint(options.checkpointPath, checkpoint);
+      for (const idx of pendingIndices) abandonedChunkIndices.add(idx);
+      slotQueues[slotIdx] = appended.map((c) => c.index);
+      fanoutSlots[slotIdx].budget = newBudget;
+    }, redistributeSlotQueue2 = function(deadSlot, alsoIndex) {
+      const aliveSlots = fanoutSlots.map((_, idx) => idx).filter((idx) => idx !== deadSlot && !fanoutSlots[idx].dead);
+      const pending = [alsoIndex, ...slotQueues[deadSlot]];
+      slotQueues[deadSlot] = [];
+      if (aliveSlots.length === 0) return;
+      pending.forEach((idx, k) => {
+        slotQueues[aliveSlots[k % aliveSlots.length]].push(idx);
+      });
+    }, applyFanoutTransition2 = function(slotIdx, i, outcome) {
+      const slot = fanoutSlots[slotIdx];
+      if (outcome.kind === "overflow") {
+        const currentBudget = slot.budget;
+        const newBudget2 = shrinkBudgetOnOverflow(currentBudget);
+        if (newBudget2 === currentBudget) {
+          throw new Error(
+            `session-summary: chunk ${i} (fan-out slot ${slotIdx}, model '${slot.model.id}') still exceeds its context window even at the minimum ${MIN_OVERFLOW_CHUNK_BUDGET}-token re-split floor (${outcome.err.detail}). This model cannot summarize this chunk's content \u2014 try a model with more context. Checkpoint saved at ${options.checkpointPath}.`,
+            { cause: outcome.err }
+          );
+        }
+        appendSlotChunks2(slotIdx, i, newBudget2);
+        return;
+      }
+      if (slot.model.id !== outcome.err.modelId) return;
+      recordUnavailable(outcome.err.modelId, outcome.err.detail);
+      triedModelIds.push(outcome.err.modelId);
+      const oldModel = slot.model;
+      if (nextReplacementIdx >= models.length) {
+        redistributeSlotQueue2(slotIdx, i);
+        slot.dead = true;
+        if (fanoutSlots.every((s) => s.dead)) throw allModelsExhausted(triedModelIds, outcome.err);
+        return;
+      }
+      const newModel = models[nextReplacementIdx++];
+      slot.model = newModel;
+      fallbackEvents.push({
+        fromModel: oldModel.id,
+        toModel: newModel.id,
+        reason: outcome.err.reason,
+        detail: outcome.err.detail,
+        atUnit: `slot ${slotIdx} chunk ${i}`
+      });
+      const newBudget = budgetForModel(newModel);
+      if (newBudget < slot.budget) {
+        appendSlotChunks2(slotIdx, i, newBudget);
+      } else {
+        slot.budget = newBudget;
+      }
+    }, claimNextChunk2 = function() {
+      for (let k = 0; k < fanoutK; k++) {
+        const idx = (slotCursor + k) % fanoutK;
+        if (slotInFlightCount[idx] < PER_MODEL_CONCURRENCY && slotQueues[idx].length > 0) {
+          const chunkIndex = slotQueues[idx].shift();
+          slotInFlightCount[idx]++;
+          slotCursor = (idx + 1) % fanoutK;
+          return { slotIdx: idx, chunkIndex };
+        }
+      }
+      return null;
+    };
+    var collectTurnsForIndices = collectTurnsForIndices2, appendSlotChunks = appendSlotChunks2, redistributeSlotQueue = redistributeSlotQueue2, applyFanoutTransition = applyFanoutTransition2, claimNextChunk = claimNextChunk2;
+    const fanoutSlots = fanoutModelsInit.map((m) => ({
+      model: m,
+      budget: maxChunkTokens,
+      dead: false
+    }));
+    const slotQueues = Array.from({ length: fanoutK }, () => []);
+    for (let i = 0; i < chunks.length; i++) {
+      if (checkpoint.mapSummaries[i] === null) slotQueues[i % fanoutK].push(i);
+    }
+    const slotInFlightCount = new Array(fanoutK).fill(0);
+    let nextReplacementIdx = fanoutK;
+    let slotCursor = 0;
+    const FANOUT_IDLE_POLL_MS = 50;
+    async function fanoutWorker(workerIdx) {
+      if (workerIdx > 0) await sleep(STAGGER_INTERVAL_MS * workerIdx);
+      for (; ; ) {
+        const claim = claimNextChunk2();
+        if (!claim) {
+          const allEmpty = slotQueues.every((q) => q.length === 0);
+          const allIdle = slotInFlightCount.every((c) => c === 0);
+          if (allEmpty && allIdle) return;
+          await sleep(FANOUT_IDLE_POLL_MS);
+          continue;
+        }
+        const { slotIdx, chunkIndex: i } = claim;
+        try {
+          if (checkpoint.mapSummaries[i] !== null) continue;
+          const startedAt = Date.now();
+          onChunkEvent?.({ chunkIndex: i, totalChunks: chunks.length, phase: "start" });
+          for (; ; ) {
+            const result = await callChunkModel(
+              i,
+              fanoutSlots[slotIdx].model,
+              `chunk ${i} (slot ${slotIdx})`,
+              true,
+              sleep
+            );
+            const outcome = finishFromCallResult(i, result);
+            if (outcome.kind === "ok") {
+              onChunkEvent?.({
+                chunkIndex: i,
+                totalChunks: chunks.length,
+                phase: "done",
+                elapsedMs: Date.now() - startedAt
+              });
+              break;
+            }
+            applyFanoutTransition2(slotIdx, i, outcome);
+            if (fanoutSlots[slotIdx].dead || abandonedChunkIndices.has(i) || checkpoint.mapSummaries[i] !== null) {
+              break;
+            }
+          }
+        } finally {
+          slotInFlightCount[slotIdx]--;
+        }
+      }
+    }
+    const workerCount = Math.min(concurrency, chunks.length);
+    const settled = await Promise.allSettled(Array.from({ length: workerCount }, (_, k) => fanoutWorker(k)));
+    const rejected = settled.find((r) => r.status === "rejected");
+    if (rejected) throw rejected.reason;
   } else {
     let raceForFirstOk2 = function(primary, hedge) {
       return new Promise((res, rej) => {
@@ -253422,7 +253593,7 @@ async function summarizeSession(options) {
     if (rejected) throw rejected.reason;
   }
   if (checkpoint.finalSummary === null) {
-    const mapped = checkpoint.mapSummaries;
+    const mapped = checkpoint.mapSummaries.filter((_, i) => !abandonedChunkIndices.has(i));
     checkpoint.finalSummary = joinChunkSummaries(mapped);
     checkpoint.updatedAt = nowIso();
     saveCheckpoint(options.checkpointPath, checkpoint);
@@ -253433,7 +253604,13 @@ async function summarizeSession(options) {
     transcriptStats: stats,
     resumedFromCheckpoint,
     checkpointPath: options.checkpointPath,
-    modelId: activeModel().id,
+    // Under fan-out, several models may have produced the final summary at
+    // once — there is no single "the" active model the way the sequential
+    // and single-model-concurrent branches have one, so this reports the
+    // caller's originally-requested primary model instead of a slot's
+    // (possibly demoted) one. `fallbackEvents` carries the full per-slot
+    // switch history for a caller that needs it.
+    modelId: fanoutEngaged ? options.modelId : activeModel().id,
     fallbackEvents
   };
 }
