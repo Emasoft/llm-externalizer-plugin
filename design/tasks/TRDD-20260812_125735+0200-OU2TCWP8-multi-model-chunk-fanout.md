@@ -1,14 +1,14 @@
 ---
 trdd-id: OU2TCWP8
 title: Dispatch session-summary chunks across several free models in parallel
-column: dev
+column: complete
 created: 2026-08-12T12:57:35+0200
-updated: 2026-08-12T12:57:35+0200
+updated: 2026-08-12T15:10:00+0200
 current-owner: claude-llm-externalizer
 task-type: feature
 approval-tier: 0
 parent-trdd: T4MZ8YQR
-implementation-commits: []
+implementation-commits: [a4031d6, addf86c]
 ---
 
 # Dispatch session-summary chunks across several free models in parallel

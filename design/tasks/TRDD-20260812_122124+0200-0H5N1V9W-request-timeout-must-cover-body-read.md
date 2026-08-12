@@ -1,15 +1,15 @@
 ---
 trdd-id: 0H5N1V9W
 title: Request timeout must cover the body read, not just time-to-first-byte
-column: dev
+column: complete
 created: 2026-08-12T12:21:24+0200
-updated: 2026-08-12T12:21:24+0200
+updated: 2026-08-12T15:10:00+0200
 current-owner: claude-llm-externalizer
 task-type: bugfix
 approval-tier: 0
 parent-trdd: T4MZ8YQR
 relevant-rules: []
-implementation-commits: []
+implementation-commits: [af60ab4]
 ---
 
 # Request timeout must cover the body read, not just time-to-first-byte

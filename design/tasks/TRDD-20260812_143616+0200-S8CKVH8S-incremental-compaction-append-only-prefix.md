@@ -1,14 +1,14 @@
 ---
 trdd-id: S8CKVH8S
 title: Incremental compaction — reuse chunk summaries when the transcript only grew
-column: todo
+column: complete
 created: 2026-08-12T14:36:16+0200
-updated: 2026-08-12T14:36:16+0200
+updated: 2026-08-12T15:10:00+0200
 current-owner: claude-llm-externalizer
 task-type: feature
 approval-tier: 0
 parent-trdd: T4MZ8YQR
-implementation-commits: []
+implementation-commits: [6eb7d6a]
 ---
 
 # Incremental compaction — reuse chunk summaries when the transcript only grew
