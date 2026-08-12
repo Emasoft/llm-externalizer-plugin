@@ -287,6 +287,10 @@ export default defineConfig({
       // where a stalled generation hung the run forever (measured 1890s against
       // a 300s cap) because the abort timer was cleared when headers arrived.
       'src/provider/http.test.ts',
+      // Per-call deadline override — resolveConnection is the single point every
+      // request's timeout flows through, so a dropped override would be silent
+      // (a slow run, not a wrong number).
+      'src/provider/connection.test.ts',
     ],
   },
 });

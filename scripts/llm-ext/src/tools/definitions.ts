@@ -765,6 +765,16 @@ export function buildTools(limitsText: string) {
               "Requests are staggered on launch so a burst never lands in a single instant. " +
               "Set to 1 to force the original sequential behavior.",
           },
+          chunk_timeout_s: {
+            type: "number",
+            description:
+              "Per-chunk deadline in seconds. Default: 120 — deliberately far tighter than the " +
+              "global 300s request timeout, because under concurrency the wall-clock is the " +
+              "SLOWEST chunk, not the average one (measured spread on same-sized chunks was " +
+              "4.4x: 90s to 400s). A chunk exceeding this aborts and is retried or rotated to " +
+              "another free model like any other transient, instead of dragging the whole run. " +
+              "Raise it for a slow model or a huge chunk; an explicit value is honored verbatim.",
+          },
         },
       },
     },

@@ -325,6 +325,11 @@ export interface SimpleCompletionOptions {
   temperature?: number;
   maxTokens?: number;
   model?: string;
+  /** Tighter-than-global per-call deadline in ms, covering the body read as
+   *  well as the headers. Omitted => the global soft timeout. session_summary
+   *  sets this so one straggling chunk cannot drag a whole concurrent run out
+   *  to the global 300s while every sibling has long since finished. */
+  timeoutMs?: number;
   onProgress?: ProgressFn;
   /** Per-call reasoning override. "off" disables reasoning for this call
    *  regardless of the global default (e.g. cluster_synonyms). */

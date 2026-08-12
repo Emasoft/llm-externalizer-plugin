@@ -252869,6 +252869,7 @@ function classifyContextOverflow(detail) {
 var PROMPT_OVERHEAD_TOKENS = 2e3;
 var DEFAULT_MAX_CHUNK_TOKENS = 25e3;
 var MAX_AUTO_CONCURRENCY = 28;
+var DEFAULT_CHUNK_TIMEOUT_MS = 12e4;
 var STAGGER_INTERVAL_MS = 250;
 var TRANSIENT_BACKOFF_MS = 5e3;
 function sleep(ms) {
@@ -253787,7 +253788,7 @@ async function resolveConnection(options, deps) {
   const toolCtx = ctxStore.getStore()?.tool;
   if (toolCtx) assertModelValidated(model, toolCtx, backend.type);
   const headers = deps.apiHeaders();
-  const timeout = deps.getSoftTimeoutMs();
+  const timeout = options?.timeoutMs ?? deps.getSoftTimeoutMs();
   if (backend.type === "local" && await detectLMStudio(deps)) {
     return {
       url: `${backend.baseUrl}/api/v1/chat`,
@@ -257616,8 +257617,10 @@ Settings file is present but its 'profiles' map is empty \u2014 this is a config
             output: ssOutputRaw,
             stdout: ssStdoutRaw,
             max_chunk_tokens: ssMaxChunkTokens,
-            concurrency: ssConcurrencyRaw
+            concurrency: ssConcurrencyRaw,
+            chunk_timeout_s: ssChunkTimeoutSecRaw
           } = args;
+          const ssPerChunkTimeoutMs = typeof ssChunkTimeoutSecRaw === "number" && ssChunkTimeoutSecRaw > 0 ? Math.round(ssChunkTimeoutSecRaw * 1e3) : DEFAULT_CHUNK_TIMEOUT_MS;
           const VALID_PRUNE_LEVELS = /* @__PURE__ */ new Set(["aggressive", "moderate", "none"]);
           const prune = ssPruneRaw ?? "aggressive";
           if (!VALID_PRUNE_LEVELS.has(prune)) {
@@ -257682,7 +257685,23 @@ Settings file is present but its 'profiles' map is empty \u2014 this is a config
           const callModel = async (prompt, modelId, maxOutputTokens) => {
             const resp = await chatCompletionWithRetry(
               [{ role: "user", content: prompt }],
-              { model: modelId, maxTokens: maxOutputTokens, temperature: DEFAULT_TEMPERATURE, onProgress },
+              {
+                model: modelId,
+                maxTokens: maxOutputTokens,
+                temperature: DEFAULT_TEMPERATURE,
+                onProgress,
+                // A per-chunk deadline TIGHTER than the global soft timeout.
+                // Under concurrency the map phase's wall-clock is the SLOWEST
+                // chunk, so one straggler allowed to run the full global 300s
+                // drags the entire run out even though every sibling finished
+                // minutes earlier. Measured spread on same-sized chunks was 4.4x
+                // (90s to 400s), so the tail — not the median — is the cost.
+                // Exceeding this aborts the chunk, which then rotates/retries
+                // like any other transient rather than hanging (TRDD-0H5N1V9W
+                // made the deadline actually cover generation; before that fix
+                // this value would have bounded only time-to-first-byte).
+                timeoutMs: ssPerChunkTimeoutMs
+              },
               providerDeps
             );
             if (resp.finishReason === "error") {
@@ -259891,6 +259910,10 @@ function buildTools(limitsText) {
           concurrency: {
             type: "number",
             description: "How many chunk requests run in flight at once. Default: AUTO \u2014 sized to the chunk count (capped at 28) so every chunk runs in ONE wave, which is what makes wall-clock the slowest single chunk rather than waves x slowest. The cap is measured live against the free tier's burst behavior (a 32-concurrent burst was clean; 64 started tripping its ~20-requests/minute sub-minute limit), and sits below that edge to leave headroom for the rest of the ensemble's traffic. Requests are staggered on launch so a burst never lands in a single instant. Set to 1 to force the original sequential behavior."
+          },
+          chunk_timeout_s: {
+            type: "number",
+            description: "Per-chunk deadline in seconds. Default: 120 \u2014 deliberately far tighter than the global 300s request timeout, because under concurrency the wall-clock is the SLOWEST chunk, not the average one (measured spread on same-sized chunks was 4.4x: 90s to 400s). A chunk exceeding this aborts and is retried or rotated to another free model like any other transient, instead of dragging the whole run. Raise it for a slow model or a huge chunk; an explicit value is honored verbatim."
           }
         }
       }

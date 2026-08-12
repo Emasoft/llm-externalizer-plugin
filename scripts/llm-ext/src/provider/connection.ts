@@ -23,7 +23,7 @@ import type { ConnectionSetup, ProviderDeps } from "./types.js";
  * For openrouter/ollama: uses OpenAI-compat /v1/chat/completions.
  */
 export async function resolveConnection(
-  options: { model?: string } | undefined,
+  options: { model?: string; timeoutMs?: number } | undefined,
   deps: ProviderDeps,
 ): Promise<ConnectionSetup> {
   // T2.7 — snapshot once. detectLMStudio() is awaited, so a reload could
@@ -49,7 +49,14 @@ export async function resolveConnection(
   const toolCtx = ctxStore.getStore()?.tool;
   if (toolCtx) assertModelValidated(model, toolCtx, backend.type);
   const headers = deps.apiHeaders();
-  const timeout = deps.getSoftTimeoutMs();
+  // A caller may impose a TIGHTER per-call deadline than the global soft
+  // timeout — session_summary does, because its wall-clock is set by the SLOWEST
+  // chunk, so a straggler allowed to run the full global 300s drags the whole
+  // run past its target even though every other chunk finished long before.
+  // Only meaningful since the deadline started covering the body read
+  // (TRDD-0H5N1V9W); before that it bounded time-to-first-byte and a stalled
+  // generation ignored it entirely.
+  const timeout = options?.timeoutMs ?? deps.getSoftTimeoutMs();
 
   // Detect LM Studio native API (only for local backends)
   if (backend.type === "local" && (await detectLMStudio(deps))) {

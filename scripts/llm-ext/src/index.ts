@@ -53,7 +53,7 @@ import { makePreflightHook } from "./cluster/preflight_benchmark.js";
 // it to a real model call + real filesystem paths. resolveTranscriptPath /
 // defaultCheckpointPath are CLI-surface plumbing, kept OUT of session_summary/
 // on purpose (see session-summary-resolve.ts's own header).
-import { summarizeSession, type CallModelFn, type ChunkEvent } from "./session_summary/driver.js";
+import { summarizeSession, DEFAULT_CHUNK_TIMEOUT_MS, type CallModelFn, type ChunkEvent } from "./session_summary/driver.js";
 import { selectModels } from "./session_summary/model-select.js";
 import { resolveTranscriptPath, defaultCheckpointPath } from "./session-summary-resolve.js";
 // Provider layer (B1 Phase 5a/5b, TRDD-63314265). These modules import NOTHING
@@ -3791,6 +3791,7 @@ async function dispatchCallToolInner(
           stdout: ssStdoutRaw,
           max_chunk_tokens: ssMaxChunkTokens,
           concurrency: ssConcurrencyRaw,
+          chunk_timeout_s: ssChunkTimeoutSecRaw,
         } = args as {
           transcript?: string;
           session_id?: string;
@@ -3802,7 +3803,18 @@ async function dispatchCallToolInner(
           stdout?: boolean;
           max_chunk_tokens?: number;
           concurrency?: number;
+          chunk_timeout_s?: number;
         };
+
+        // Per-chunk deadline. An explicit value is honored verbatim (including a
+        // very large one — the caller, not this code, decides how long they are
+        // willing to wait); omitted, it defaults to a value well under the
+        // global soft timeout because a concurrent run's wall-clock is its
+        // SLOWEST chunk.
+        const ssPerChunkTimeoutMs =
+          typeof ssChunkTimeoutSecRaw === "number" && ssChunkTimeoutSecRaw > 0
+            ? Math.round(ssChunkTimeoutSecRaw * 1000)
+            : DEFAULT_CHUNK_TIMEOUT_MS;
 
         const VALID_PRUNE_LEVELS = new Set(["aggressive", "moderate", "none"]);
         const prune = ssPruneRaw ?? "aggressive";
@@ -3889,7 +3901,23 @@ async function dispatchCallToolInner(
         const callModel: CallModelFn = async (prompt, modelId, maxOutputTokens) => {
           const resp = await chatCompletionWithRetry(
             [{ role: "user", content: prompt }],
-            { model: modelId, maxTokens: maxOutputTokens, temperature: DEFAULT_TEMPERATURE, onProgress },
+            {
+              model: modelId,
+              maxTokens: maxOutputTokens,
+              temperature: DEFAULT_TEMPERATURE,
+              onProgress,
+              // A per-chunk deadline TIGHTER than the global soft timeout.
+              // Under concurrency the map phase's wall-clock is the SLOWEST
+              // chunk, so one straggler allowed to run the full global 300s
+              // drags the entire run out even though every sibling finished
+              // minutes earlier. Measured spread on same-sized chunks was 4.4x
+              // (90s to 400s), so the tail — not the median — is the cost.
+              // Exceeding this aborts the chunk, which then rotates/retries
+              // like any other transient rather than hanging (TRDD-0H5N1V9W
+              // made the deadline actually cover generation; before that fix
+              // this value would have bounded only time-to-first-byte).
+              timeoutMs: ssPerChunkTimeoutMs,
+            },
             providerDeps,
           );
           if (resp.finishReason === "error") {

@@ -148,6 +148,29 @@ export const DEFAULT_MAX_CHUNK_TOKENS = 25_000;
 export const MAX_AUTO_CONCURRENCY = 28;
 
 /**
+ * Default per-chunk deadline, in ms — deliberately far tighter than the global
+ * soft timeout (300s).
+ *
+ * WHY A SEPARATE, TIGHTER DEADLINE: under concurrency the map phase's wall-clock
+ * is the SLOWEST chunk, not the average one. Measured on same-sized 25k chunks,
+ * per-chunk latency spread 4.4x — 90.6s / 173.0s / 310.6s / 399.7s. So a single
+ * straggler allowed to run the full 300s global timeout drags the entire run out
+ * while every sibling has long since finished. Cutting the tail is worth far
+ * more than shaving the median.
+ *
+ * 120s is ~3.4x the measured ~35s per-request floor (queue + cold start, which a
+ * max_tokens=8 request still paid in full), so it leaves real room for genuine
+ * generation while refusing to wait out a stall. A chunk that exceeds it aborts
+ * and is retried/rotated like any other transient — which only became possible
+ * once the deadline actually covered the body read (TRDD-0H5N1V9W); before that
+ * fix a stalled generation ignored every timeout there was.
+ *
+ * A DEFAULT, NOT A CEILING: `--chunk_timeout_s` is honored verbatim, including
+ * values far above this one.
+ */
+export const DEFAULT_CHUNK_TIMEOUT_MS = 120_000;
+
+/**
  * Minimum spacing between successive worker LAUNCHES under concurrency > 1
  * (owner-specified, 2026-08-12; revised down from an initial 3s estimate
  * once live burst data existed — see `DEFAULT_CONCURRENCY`'s header). Not a
