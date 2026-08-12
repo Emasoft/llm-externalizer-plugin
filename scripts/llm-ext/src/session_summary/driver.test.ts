@@ -14,6 +14,7 @@ import {
   DEFAULT_MAX_CHUNK_TOKENS,
   MAX_AUTO_CONCURRENCY,
   PER_MODEL_CONCURRENCY,
+  MAX_SUMMARY_COMPLETION_TOKENS,
   setHedgeAfterMsForTests,
   type CallModelFn,
 } from "./driver.js";
@@ -59,6 +60,50 @@ describe("driver: summarizeSession", () => {
   function checkpointPath(): string {
     return join(dir, "checkpoint.json");
   }
+
+  // ── Window budget vs the provider's completion ceiling ───────────────
+
+  it("a model whose max_completion equals its whole context still yields a usable input budget", async () => {
+    // REGRESSION, from a real catalog entry: nvidia/nemotron-3-super-120b-a12b:free
+    // reports context_length == max_completion_tokens == 262144. Reserving the
+    // provider's FULL completion allowance left nothing for input, so the usable
+    // budget went negative and clamped to the 1_000 floor. Under fan-out (which
+    // takes min() across the top-K models) that one entry poisoned the whole run:
+    // a real transcript failed to chunk at all, reporting a ~4.4k-token turn as
+    // too large for a "1000 token" budget. The fix reserves what we actually
+    // REQUEST, not the worst case the provider permits.
+    const degenerate: EligibleModel = {
+      id: "vendor/degenerate-completion:free",
+      contextLength: 262_144,
+      maxCompletionTokens: 262_144, // == contextLength, the shape that broke it
+    };
+    // A turn far larger than the old 1_000-token clamp, but trivial for the real budget.
+    const p = writeTranscript([userTurn("u1", "budget regression ".repeat(600))]);
+
+    let requestedMaxOutput = -1;
+    const callModel = vi.fn<CallModelFn>(async (_prompt, _modelId, maxOutputTokens) => {
+      requestedMaxOutput = maxOutputTokens;
+      return "SUMMARY";
+    });
+
+    const result = await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: checkpointPath(),
+      modelId: degenerate.id,
+      modelMaxContext: degenerate.contextLength,
+      modelMaxCompletionTokens: degenerate.maxCompletionTokens,
+      chunkOverlapTurns: 0,
+      callModel,
+    });
+
+    // Before the fix this threw from chunkTurns ("exceeds the model's usable
+    // budget of 1000 tokens even alone") and never reached the model.
+    expect(result.totalChunks).toBeGreaterThanOrEqual(1);
+    expect(callModel).toHaveBeenCalled();
+    // And we must not ASK for the provider's full 262k allowance either — the
+    // reservation and the request have to describe the same thing.
+    expect(requestedMaxOutput).toBe(MAX_SUMMARY_COMPLETION_TOKENS);
+  });
 
   // ── Cost safety ──────────────────────────────────────────────────────
 

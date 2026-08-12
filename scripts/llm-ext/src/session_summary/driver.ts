@@ -75,6 +75,30 @@ import {
 export const PROMPT_OVERHEAD_TOKENS = 2_000;
 
 /**
+ * Ceiling on the completion we REQUEST (and therefore reserve) per chunk.
+ *
+ * THE BUG THIS FIXES: the code used to request — and reserve window space for —
+ * the model's own `max_completion_tokens`, i.e. the largest completion the
+ * provider would ever allow. For most models that is a fraction of the context
+ * and merely wasteful. For `nvidia/nemotron-3-super-120b-a12b:free` the catalog
+ * reports `context_length == max_completion_tokens == 262144`, so reserving the
+ * full completion ceiling left NOTHING for input: the usable budget went
+ * negative and clamped to the 1_000 floor. That model sorts THIRD (the
+ * equal-context tiebreak prefers the LARGER completion ceiling, which is exactly
+ * backwards for input room), so once fan-out began taking `min()` over the top-K
+ * models it poisoned the whole run — a real transcript failed to chunk at all,
+ * reporting a 4437-token turn as too big for a "1000 token" budget.
+ *
+ * A chunk SUMMARY cannot plausibly be larger than the chunk it summarizes, and
+ * chunks are capped at DEFAULT_MAX_CHUNK_TOKENS (25k). 32k is therefore generous
+ * headroom while making the reservation reflect what we actually intend to ask
+ * for, rather than the worst case the provider permits. Both the request and the
+ * reservation use this same value — they must never diverge, or the budget stops
+ * describing the request.
+ */
+export const MAX_SUMMARY_COMPLETION_TOKENS = 32_000;
+
+/**
  * Hard cap on the per-chunk token budget, INDEPENDENT of how big the
  * selected model's context window is. Measured live (TRDD-T4MZ8YQR
  * follow-up): a 1M-context free model handed a single ~150k-token chunk (the
@@ -960,8 +984,19 @@ export async function summarizeSession(
   // below. Passed to `chunkTurns` as `hardBudgetTokens` so an oversized
   // turn is caught (and the run fails loudly, naming the turn) before any
   // model call, per the chunker's atomic-turn invariant.
+  /** The completion size we actually ask a model for on a chunk — and thus the
+   *  amount `windowBudgetForModel` reserves. The two MUST stay in lockstep. */
+  const completionRequestFor = (m: EligibleModel): number =>
+    Math.min(m.maxCompletionTokens, MAX_SUMMARY_COMPLETION_TOKENS);
   const windowBudgetForModel = (m: EligibleModel): number =>
-    Math.max(1_000, m.contextLength - m.maxCompletionTokens - PROMPT_OVERHEAD_TOKENS);
+    Math.max(
+      1_000,
+      // Reserve only what we will actually REQUEST (see
+      // MAX_SUMMARY_COMPLETION_TOKENS), never the provider's maximum allowance —
+      // a model whose max_completion equals its whole context would otherwise
+      // reserve everything and leave a degenerate 1_000-token input budget.
+      m.contextLength - completionRequestFor(m) - PROMPT_OVERHEAD_TOKENS,
+    );
   // Effective budget = min(what the model's window allows, the quality cap)
   // — see DEFAULT_MAX_CHUNK_TOKENS's header. An explicit --max_chunk_tokens
   // from the caller is honored verbatim (the caller made a deliberate
@@ -1155,7 +1190,10 @@ export async function summarizeSession(
       const summary = await callWithRetry(
         renderChunkPrompt(chunks[i], chunks.length),
         model.id,
-        model.maxCompletionTokens,
+        // What we RESERVE in windowBudgetForModel must be what we REQUEST here —
+        // asking for the provider's full allowance (262k on one free model) both
+        // wastes the window and is what drove the usable budget to the 1_000 floor.
+        completionRequestFor(model),
         options.callModel,
         maxRetries,
         label,

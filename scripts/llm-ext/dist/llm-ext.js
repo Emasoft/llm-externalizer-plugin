@@ -252867,6 +252867,7 @@ function classifyContextOverflow(detail) {
 
 // src/session_summary/driver.ts
 var PROMPT_OVERHEAD_TOKENS = 2e3;
+var MAX_SUMMARY_COMPLETION_TOKENS = 32e3;
 var DEFAULT_MAX_CHUNK_TOKENS = 25e3;
 var MAX_AUTO_CONCURRENCY = 28;
 var PER_MODEL_CONCURRENCY = 20;
@@ -253119,7 +253120,15 @@ async function summarizeSession(options) {
   for (const m of models) assertFreeOnlyModel(true, "openrouter", m.id);
   let activeModelIdx = 0;
   const activeModel = () => models[activeModelIdx];
-  const windowBudgetForModel = (m) => Math.max(1e3, m.contextLength - m.maxCompletionTokens - PROMPT_OVERHEAD_TOKENS);
+  const completionRequestFor = (m) => Math.min(m.maxCompletionTokens, MAX_SUMMARY_COMPLETION_TOKENS);
+  const windowBudgetForModel = (m) => Math.max(
+    1e3,
+    // Reserve only what we will actually REQUEST (see
+    // MAX_SUMMARY_COMPLETION_TOKENS), never the provider's maximum allowance —
+    // a model whose max_completion equals its whole context would otherwise
+    // reserve everything and leave a degenerate 1_000-token input budget.
+    m.contextLength - completionRequestFor(m) - PROMPT_OVERHEAD_TOKENS
+  );
   const budgetForModel = (m) => options.maxChunkTokens ?? Math.min(DEFAULT_MAX_CHUNK_TOKENS, windowBudgetForModel(m));
   let maxChunkTokens = budgetForModel(activeModel());
   const concurrencyRequested = options.concurrency ?? 1;
@@ -253211,7 +253220,10 @@ async function summarizeSession(options) {
       const summary = await callWithRetry(
         renderChunkPrompt(chunks[i], chunks.length),
         model.id,
-        model.maxCompletionTokens,
+        // What we RESERVE in windowBudgetForModel must be what we REQUEST here —
+        // asking for the provider's full allowance (262k on one free model) both
+        // wastes the window and is what drove the usable budget to the 1_000 floor.
+        completionRequestFor(model),
         options.callModel,
         maxRetries,
         label,
