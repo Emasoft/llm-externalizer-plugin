@@ -87,9 +87,10 @@ export const GROUPS: Readonly<Record<string, Readonly<Record<string, ActionSpec>
     discover: { command: "discover_new_models" },
     replacements: { command: "check_tool_replacements" },
   },
-  config: {
+  settings: {
     show: { command: "get_settings" },
     profile: { command: "profile" },
+    profiles: { command: "list_profiles" },
     reset: { command: "reset" },
     status: { command: "discover" },
     "scan-local": { command: "scan_local_llm_services" },

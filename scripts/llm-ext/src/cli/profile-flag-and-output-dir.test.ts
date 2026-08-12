@@ -158,12 +158,12 @@ describe("-o / --output_dir on report-writing commands (profile+output-flags tas
     expect(r.stderr).not.toMatch(/no output option/);
   });
 
-  it("config show (get_settings) -o still returns the honest 'no output option' error", async () => {
+  it("settings show (get_settings) -o still returns the honest 'no output option' error", async () => {
     const outDir = mkdtempSync("/tmp/__llm_ext_profileflag_noout_");
-    const r = await runRaw(["config", "show", "-o", outDir, "--quiet"]);
+    const r = await runRaw(["settings", "show", "-o", outDir, "--quiet"]);
     expect(r.exitCode).not.toBe(0);
     expect(r.stderr).toMatch(/no output option/);
-    expect(r.stderr).toMatch(/config show/);
+    expect(r.stderr).toMatch(/settings show/);
   });
 });
 

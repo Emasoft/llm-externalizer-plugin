@@ -47,17 +47,17 @@ describe("resolveInvocation — dispatch + positional/output mapping", () => {
   });
 
   it("-o on an action with NO output parameter fails with an honest message, not the flat parser's", () => {
-    // get_settings (config show) declares neither `output` nor `output_dir` —
+    // get_settings (settings show) declares neither `output` nor `output_dir` —
     // it is a report-less command by design (see profile+output-flags task:
     // scan_folder/high_quality_scan/check_against_specs/compare_files gained
     // output_dir, but the genuinely report-less commands — get_settings among
     // them — must keep this honest error, not fall through to the flat
     // parser's "unexpected argument '-o' (all inputs are named flags)", which
     // is actively wrong: `-o` IS a named flag. The launcher must own this error.
-    const r = resolveInvocation(["config", "show", "-o", "out.md"], tools);
+    const r = resolveInvocation(["settings", "show", "-o", "out.md"], tools);
     expect(r.kind).toBe("error");
     expect((r as { message: string }).message).toContain("no output option");
-    expect((r as { message: string }).message).toContain("config show");
+    expect((r as { message: string }).message).toContain("settings show");
     // and it must NOT leak the misleading flat-parser wording
     expect((r as { message: string }).message).not.toContain("named flags");
   });
@@ -260,7 +260,7 @@ describe("suggestCommand — grouped-vs-flat top-level suggestions (defect 2)", 
 
   it("falls back to a flat command name, distinctly labelled, only when no group is close", () => {
     // 'reset' itself: no group name (session/llm/scan/check/scout/models/
-    // config) is within edit distance 3 of 'reset' (min distance 4), so the
+    // settings) is within edit distance 3 of 'reset' (min distance 4), so the
     // exact-match flat command 'reset' is the only candidate.
     const hint = suggestCommand(
       "reset",

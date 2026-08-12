@@ -14,6 +14,9 @@ export default defineConfig({
       // 'profile' command (TRDD-K3PW7Q2M) — read-only list/show against the
       // real compiled CLI + a throwaway multi-profile settings.yaml.
       'src/profile.test.ts',
+      // config -> settings group rename (settings-rename task) — settings
+      // show/profiles, the removed config group, and the missing-file path.
+      'src/settings-group.test.ts',
       // Launcher → server boot handoff — spawns the real launcher and completes
       // an MCP initialize; catches the -32001 regression that unit-level imports
       // (which never go through launcher.mjs) structurally cannot see.

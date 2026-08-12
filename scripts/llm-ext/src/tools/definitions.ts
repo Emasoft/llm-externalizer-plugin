@@ -680,10 +680,12 @@ export function buildTools(limitsText: string) {
     {
       name: "get_settings",
       description:
-        "Read-only view of settings.yaml. Copies the current settings file to the output " +
-        "directory and returns the copy's path. The MCP cannot write settings — model & " +
-        "profile changes are user-only. Edit ~/.llm-externalizer/settings.yaml manually in " +
-        "your editor, then call the 'reset' tool (or restart Claude Code) to reload.",
+        "Read-only view of settings.yaml. Prints the ACTIVE profile's fully resolved " +
+        "settings (mode, backend, model(s), timeout, context window, auth status) to " +
+        "stdout, and also copies the raw settings file to the output directory, " +
+        "returning the copy's path for manual editing. This tool cannot write settings " +
+        "— model & profile changes are user-only. Edit ~/.llm-externalizer/settings.yaml " +
+        "manually in your editor, then call the 'reset' tool (or restart Claude Code) to reload.",
       inputSchema: { type: "object" as const, properties: {} },
     },
     {
@@ -707,6 +709,18 @@ export function buildTools(limitsText: string) {
           },
         },
       },
+    },
+    {
+      name: "list_profiles",
+      description:
+        "Read-only list of every profile defined in ~/.llm-externalizer/settings.yaml — " +
+        "both the profiles seeded on first run and any the user has since added by hand " +
+        "— with a marker on whichever one is currently active. One line per profile " +
+        "(name, mode, backend, model(s) or free_only pool size). This tool cannot add, " +
+        "switch, edit, or remove a profile; edit settings.yaml manually and call 'reset' " +
+        "to reload. Reports plainly (never crashes) if settings.yaml does not exist yet " +
+        "— it is created automatically the first time any llm-ext command runs.",
+      inputSchema: { type: "object" as const, properties: {} },
     },
     {
       name: "session_summary",

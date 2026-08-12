@@ -1068,6 +1068,125 @@ export function resolveProfile(
   };
 }
 
+// ── Profile display (settings-rename: `settings show` / `settings profiles`) ──
+// Single source of truth for both the `profile --show <name>` formatting and
+// `settings show`'s "print the active profile's resolved settings" requirement
+// — never duplicate this shape in two places.
+
+/** One resolved profile's full detail, as display lines (no trailing newline). */
+export function formatResolvedProfileLines(
+  resolved: ResolvedProfile,
+  profile: Profile,
+  isActive: boolean,
+): string[] {
+  const lines: string[] = [
+    `Profile: ${resolved.name}${isActive ? " (ACTIVE)" : ""}`,
+    `Mode: ${resolved.mode}`,
+    `Backend: ${profile.api} (${resolved.protocol})`,
+    `URL: ${resolved.url}`,
+  ];
+  if (resolved.freeOnly) {
+    lines.push(`Free only: true`);
+    lines.push(`Free pool: ${resolved.freeModels.join(", ") || "(empty)"}`);
+  } else {
+    lines.push(`Model: ${resolved.model}`);
+    if (resolved.secondModel) lines.push(`Second model: ${resolved.secondModel}`);
+    if (resolved.thirdModel) lines.push(`Third model: ${resolved.thirdModel}`);
+  }
+  if (Object.keys(resolved.toolModels).length > 0) {
+    lines.push(
+      `Per-tool overrides: ${Object.entries(resolved.toolModels)
+        .map(([tool, m]) => `${tool}=${m}`)
+        .join(", ")}`,
+    );
+  }
+  lines.push(`Timeout: ${resolved.timeout}s`);
+  lines.push(`Context window: ${resolved.contextWindow.toLocaleString()} tokens`);
+  lines.push(
+    `Auth: ${resolved.authToken ? `set (${resolved.authToken.length} chars)` : "NOT SET"}`,
+  );
+  return lines;
+}
+
+/**
+ * `settings show` (TRDD settings-rename, requirement B): the ACTIVE profile's
+ * resolved configuration, ready to print to stdout. Reads settings.yaml fresh
+ * (via getSettingsPath()/loadSettings(), both env-var-aware) instead of relying
+ * on any module-scoped cache, so it is independently unit-testable and reflects
+ * the file as it is on disk right now. Read-only — never writes settings.yaml.
+ * Never throws: every failure mode (file missing, unparseable, active profile
+ * absent, resolution error) returns a plain-text message instead.
+ */
+export function formatActiveProfileSummary(): string {
+  const settingsPath = getSettingsPath();
+  if (!existsSync(settingsPath)) {
+    return (
+      `No settings file found at ${settingsPath}.\n` +
+      `It is created automatically the first time any llm-ext command runs.`
+    );
+  }
+  const settings = loadSettings();
+  if (!settings) {
+    return `Failed to read/parse ${settingsPath}. Check YAML syntax.`;
+  }
+  const profile = settings.profiles[settings.active];
+  if (!profile) {
+    return (
+      `Active profile '${settings.active}' not found in ${settingsPath}.\n` +
+      `Available profiles: ${Object.keys(settings.profiles).join(", ") || "(none)"}`
+    );
+  }
+  try {
+    const resolved = resolveProfile(settings.active, profile);
+    return formatResolvedProfileLines(resolved, profile, true).join("\n");
+  } catch (err) {
+    return `Failed to resolve active profile '${settings.active}': ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+/**
+ * `settings profiles` / `list_profiles` (TRDD settings-rename, requirement C):
+ * every profile defined in settings.yaml, one line each, with a `*` marker on
+ * the active one. Reads settings.yaml only — never mutates it. Never throws:
+ * a missing file is reported plainly instead (it is created automatically the
+ * first time any llm-ext command runs).
+ */
+export function formatProfilesList(): string {
+  const settingsPath = getSettingsPath();
+  if (!existsSync(settingsPath)) {
+    return (
+      `No settings file found at ${settingsPath}.\n` +
+      `It is created automatically the first time any llm-ext command runs.`
+    );
+  }
+  const settings = loadSettings();
+  if (!settings) {
+    return `Failed to read/parse ${settingsPath}. Check YAML syntax.`;
+  }
+  const profileNames = Object.keys(settings.profiles);
+  if (profileNames.length === 0) {
+    return (
+      `No profiles defined in ${settingsPath}.\n` +
+      `Settings file is present but its 'profiles' map is empty.`
+    );
+  }
+  const lines = [`Settings file: ${settingsPath}`, ""];
+  for (const profileName of profileNames) {
+    const profile = settings.profiles[profileName];
+    const marker = profileName === settings.active ? "* " : "  ";
+    const modelSummary = profile.free_only
+      ? `free_only (${(profile.free_models ?? []).length} models)`
+      : [profile.model, profile.second_model, profile.third_model]
+          .filter(Boolean)
+          .join(", ");
+    lines.push(
+      `${marker}${profileName} — ${profile.mode} / ${profile.api} — ${modelSummary}`,
+    );
+  }
+  lines.push("", "* = active profile. Use --show <name> for full resolved detail.");
+  return lines.join("\n");
+}
+
 /**
  * Resolve the model a given LLM tool should use (TRDD-f45eeaa0 §2.3).
  *

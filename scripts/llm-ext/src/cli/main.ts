@@ -107,6 +107,7 @@ const QUIET_TOOLS = new Set([
   "discover",
   "get_settings",
   "profile",
+  "list_profiles",
   "reset",
   "or_model_info",
   "or_model_info_json",

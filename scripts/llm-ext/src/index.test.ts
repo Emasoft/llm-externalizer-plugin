@@ -70,6 +70,9 @@ describe('tool catalog', () => {
       'discover',
       'get_settings',
       'profile',
+      // list_profiles — read-only list of every profile in settings.yaml
+      // (settings-rename task), with a marker on the active one.
+      'list_profiles',
       // session_summary — compaction-style summary of a whole Claude Code
       // session from its JSONL transcript (TRDD-T4MZ8YQR), map-reduce +
       // checkpointed, $0-only free models.

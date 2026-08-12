@@ -178,6 +178,9 @@ import {
   buildHighQualityProvider,
   highQualityScanRefusal,
   type HighQualityRequest,
+  formatResolvedProfileLines,
+  formatActiveProfileSummary,
+  formatProfilesList,
 } from "./config.js";
 // recordRequest moved with the completion layer (B1 Phase 5b) — the per-request
 // usage line is written where the request is actually made (provider/completion.ts
@@ -2029,6 +2032,7 @@ const RECONCILE_SKIP_TOOLS = new Set([
   "reset",
   "get_settings",
   "profile",
+  "list_profiles",
   "or_model_info",
   "or_model_info_json",
   "or_model_info_table",
@@ -2773,6 +2777,7 @@ async function dispatchCallToolInner(
       name !== "reset" &&
       name !== "get_settings" &&
       name !== "profile" &&
+      name !== "list_profiles" &&
       // The whole point of this tool is helping the user get a WORKING profile
       // in the first place, so it must run even while settings are misconfigured.
       name !== "scan_local_llm_services"
@@ -3822,27 +3827,40 @@ async function dispatchCallToolInner(
       }
 
       case "get_settings": {
-        // Copy settings.yaml to output dir and return only the path (saves context tokens).
-        // Per-call output_dir honored; otherwise default to <project-root>/reports/llm-externalizer/
-        // (resolveProjectMainRoot — $CLAUDE_PROJECT_DIR, never a git root).
+        // `settings show` (TRDD settings-rename, requirement B): print the
+        // ACTIVE profile's resolved settings to stdout, so the user sees them
+        // without opening a file — then ALSO copy the raw settings.yaml to the
+        // output dir (unchanged prior behaviour) for manual editing.
+        const summary = formatActiveProfileSummary();
         try {
           const raw = readFileSync(SETTINGS_FILE, "utf-8");
           const targetDir = outputDir || defaultOutputDir();
           mkdirSync(targetDir, { recursive: true });
           const copyPath = join(targetDir, "settings_edit.yaml");
           writeFileSync(copyPath, raw, "utf-8");
-          return { content: [{ type: "text", text: copyPath }] };
+          return {
+            content: [{ type: "text", text: `${summary}\n\nFull settings file copied to: ${copyPath}` }],
+          };
         } catch (err) {
+          // Resolved-profile summary still printed even when the copy fails
+          // (e.g. output dir unwritable) — the show-settings intent still succeeds.
           return {
             content: [
               {
                 type: "text",
-                text: `Failed to read ${SETTINGS_FILE}: ${err instanceof Error ? err.message : String(err)}`,
+                text: `${summary}\n\nFailed to copy ${SETTINGS_FILE}: ${err instanceof Error ? err.message : String(err)}`,
               },
             ],
             isError: true,
           };
         }
+      }
+
+      case "list_profiles": {
+        // `settings profiles` (TRDD settings-rename, requirement C): every
+        // profile in settings.yaml, one line each, with a `*` marker on the
+        // active one. Read-only — never mutates settings.yaml.
+        return { content: [{ type: "text", text: formatProfilesList() }] };
       }
 
       case "profile": {
@@ -3903,51 +3921,17 @@ async function dispatchCallToolInner(
               isError: true,
             };
           }
-          const lines: string[] = [
-            `Profile: ${resolved.name}${resolved.name === activeSettings.active ? " (ACTIVE)" : ""}`,
-            `Mode: ${resolved.mode}`,
-            `Backend: ${profile.api} (${resolved.protocol})`,
-            `URL: ${resolved.url}`,
-          ];
-          if (resolved.freeOnly) {
-            lines.push(`Free only: true`);
-            lines.push(`Free pool: ${resolved.freeModels.join(", ") || "(empty)"}`);
-          } else {
-            lines.push(`Model: ${resolved.model}`);
-            if (resolved.secondModel) lines.push(`Second model: ${resolved.secondModel}`);
-            if (resolved.thirdModel) lines.push(`Third model: ${resolved.thirdModel}`);
-          }
-          if (Object.keys(resolved.toolModels).length > 0) {
-            lines.push(
-              `Per-tool overrides: ${Object.entries(resolved.toolModels)
-                .map(([tool, m]) => `${tool}=${m}`)
-                .join(", ")}`,
-            );
-          }
-          lines.push(`Timeout: ${resolved.timeout}s`);
-          lines.push(`Context window: ${resolved.contextWindow.toLocaleString()} tokens`);
-          lines.push(
-            `Auth: ${resolved.authToken ? `set (${resolved.authToken.length} chars)` : "NOT SET"}`,
+          const lines = formatResolvedProfileLines(
+            resolved,
+            profile,
+            resolved.name === activeSettings.active,
           );
           return { content: [{ type: "text", text: lines.join("\n") }] };
         }
 
-        // Default: list every profile, one line each.
-        const lines = [`Settings file: ${SETTINGS_FILE}`, ""];
-        for (const profileName of profileNames) {
-          const profile = activeSettings.profiles[profileName];
-          const marker = profileName === activeSettings.active ? "* " : "  ";
-          const modelSummary = profile.free_only
-            ? `free_only (${(profile.free_models ?? []).length} models)`
-            : [profile.model, profile.second_model, profile.third_model]
-                .filter(Boolean)
-                .join(", ");
-          lines.push(
-            `${marker}${profileName} — ${profile.mode} / ${profile.api} — ${modelSummary}`,
-          );
-        }
-        lines.push("", "* = active profile. Use --show <name> for full resolved detail.");
-        return { content: [{ type: "text", text: lines.join("\n") }] };
+        // Default: list every profile, one line each (single source of truth
+        // shared with `settings profiles` / `list_profiles` — config.ts).
+        return { content: [{ type: "text", text: formatProfilesList() }] };
       }
 
       case "session_summary": {

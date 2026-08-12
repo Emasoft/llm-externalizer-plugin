@@ -219197,6 +219197,82 @@ function resolveProfile(name, profile) {
     highQualityModel: resolveHighQualityModel(profile.high_quality_model)
   };
 }
+function formatResolvedProfileLines(resolved, profile, isActive) {
+  const lines = [
+    `Profile: ${resolved.name}${isActive ? " (ACTIVE)" : ""}`,
+    `Mode: ${resolved.mode}`,
+    `Backend: ${profile.api} (${resolved.protocol})`,
+    `URL: ${resolved.url}`
+  ];
+  if (resolved.freeOnly) {
+    lines.push(`Free only: true`);
+    lines.push(`Free pool: ${resolved.freeModels.join(", ") || "(empty)"}`);
+  } else {
+    lines.push(`Model: ${resolved.model}`);
+    if (resolved.secondModel) lines.push(`Second model: ${resolved.secondModel}`);
+    if (resolved.thirdModel) lines.push(`Third model: ${resolved.thirdModel}`);
+  }
+  if (Object.keys(resolved.toolModels).length > 0) {
+    lines.push(
+      `Per-tool overrides: ${Object.entries(resolved.toolModels).map(([tool, m]) => `${tool}=${m}`).join(", ")}`
+    );
+  }
+  lines.push(`Timeout: ${resolved.timeout}s`);
+  lines.push(`Context window: ${resolved.contextWindow.toLocaleString()} tokens`);
+  lines.push(
+    `Auth: ${resolved.authToken ? `set (${resolved.authToken.length} chars)` : "NOT SET"}`
+  );
+  return lines;
+}
+function formatActiveProfileSummary() {
+  const settingsPath = getSettingsPath();
+  if (!existsSync(settingsPath)) {
+    return `No settings file found at ${settingsPath}.
+It is created automatically the first time any llm-ext command runs.`;
+  }
+  const settings = loadSettings();
+  if (!settings) {
+    return `Failed to read/parse ${settingsPath}. Check YAML syntax.`;
+  }
+  const profile = settings.profiles[settings.active];
+  if (!profile) {
+    return `Active profile '${settings.active}' not found in ${settingsPath}.
+Available profiles: ${Object.keys(settings.profiles).join(", ") || "(none)"}`;
+  }
+  try {
+    const resolved = resolveProfile(settings.active, profile);
+    return formatResolvedProfileLines(resolved, profile, true).join("\n");
+  } catch (err3) {
+    return `Failed to resolve active profile '${settings.active}': ${err3 instanceof Error ? err3.message : String(err3)}`;
+  }
+}
+function formatProfilesList() {
+  const settingsPath = getSettingsPath();
+  if (!existsSync(settingsPath)) {
+    return `No settings file found at ${settingsPath}.
+It is created automatically the first time any llm-ext command runs.`;
+  }
+  const settings = loadSettings();
+  if (!settings) {
+    return `Failed to read/parse ${settingsPath}. Check YAML syntax.`;
+  }
+  const profileNames = Object.keys(settings.profiles);
+  if (profileNames.length === 0) {
+    return `No profiles defined in ${settingsPath}.
+Settings file is present but its 'profiles' map is empty.`;
+  }
+  const lines = [`Settings file: ${settingsPath}`, ""];
+  for (const profileName of profileNames) {
+    const profile = settings.profiles[profileName];
+    const marker = profileName === settings.active ? "* " : "  ";
+    const modelSummary = profile.free_only ? `free_only (${(profile.free_models ?? []).length} models)` : [profile.model, profile.second_model, profile.third_model].filter(Boolean).join(", ");
+    lines.push(
+      `${marker}${profileName} \u2014 ${profile.mode} / ${profile.api} \u2014 ${modelSummary}`
+    );
+  }
+  lines.push("", "* = active profile. Use --show <name> for full resolved detail.");
+  return lines.join("\n");
+}
 function resolveModelForTool(resolved, tool, fallback) {
   if (resolved.freeOnly) return resolved.model;
   const override = resolved.toolModels[tool];
@@ -256884,6 +256960,7 @@ var RECONCILE_SKIP_TOOLS = /* @__PURE__ */ new Set([
   "reset",
   "get_settings",
   "profile",
+  "list_profiles",
   "or_model_info",
   "or_model_info_json",
   "or_model_info_table",
@@ -257314,7 +257391,7 @@ async function dispatchCallToolInner(name, rawArgs, opts) {
   const args = rawArgs;
   const onProgress = makeProgressFn(opts.progress === true);
   try {
-    if (!settingsValid && name !== "discover" && name !== "reset" && name !== "get_settings" && name !== "profile" && // The whole point of this tool is helping the user get a WORKING profile
+    if (!settingsValid && name !== "discover" && name !== "reset" && name !== "get_settings" && name !== "profile" && name !== "list_profiles" && // The whole point of this tool is helping the user get a WORKING profile
     // in the first place, so it must run even while settings are misconfigured.
     name !== "scan_local_llm_services") {
       return {
@@ -258139,24 +258216,34 @@ Restart Claude Code (or call the 'reset' tool) to pick up the change.`
           };
         }
         case "get_settings": {
+          const summary = formatActiveProfileSummary();
           try {
             const raw = readFileSync31(SETTINGS_FILE, "utf-8");
             const targetDir = outputDir || defaultOutputDir();
             mkdirSync25(targetDir, { recursive: true });
             const copyPath = join32(targetDir, "settings_edit.yaml");
             writeFileSync23(copyPath, raw, "utf-8");
-            return { content: [{ type: "text", text: copyPath }] };
+            return {
+              content: [{ type: "text", text: `${summary}
+
+Full settings file copied to: ${copyPath}` }]
+            };
           } catch (err3) {
             return {
               content: [
                 {
                   type: "text",
-                  text: `Failed to read ${SETTINGS_FILE}: ${err3 instanceof Error ? err3.message : String(err3)}`
+                  text: `${summary}
+
+Failed to copy ${SETTINGS_FILE}: ${err3 instanceof Error ? err3.message : String(err3)}`
                 }
               ],
               isError: true
             };
           }
+        }
+        case "list_profiles": {
+          return { content: [{ type: "text", text: formatProfilesList() }] };
         }
         case "profile": {
           const profileNames = Object.keys(activeSettings.profiles);
@@ -258200,43 +258287,14 @@ Settings file is present but its 'profiles' map is empty \u2014 this is a config
                 isError: true
               };
             }
-            const lines2 = [
-              `Profile: ${resolved.name}${resolved.name === activeSettings.active ? " (ACTIVE)" : ""}`,
-              `Mode: ${resolved.mode}`,
-              `Backend: ${profile.api} (${resolved.protocol})`,
-              `URL: ${resolved.url}`
-            ];
-            if (resolved.freeOnly) {
-              lines2.push(`Free only: true`);
-              lines2.push(`Free pool: ${resolved.freeModels.join(", ") || "(empty)"}`);
-            } else {
-              lines2.push(`Model: ${resolved.model}`);
-              if (resolved.secondModel) lines2.push(`Second model: ${resolved.secondModel}`);
-              if (resolved.thirdModel) lines2.push(`Third model: ${resolved.thirdModel}`);
-            }
-            if (Object.keys(resolved.toolModels).length > 0) {
-              lines2.push(
-                `Per-tool overrides: ${Object.entries(resolved.toolModels).map(([tool, m]) => `${tool}=${m}`).join(", ")}`
-              );
-            }
-            lines2.push(`Timeout: ${resolved.timeout}s`);
-            lines2.push(`Context window: ${resolved.contextWindow.toLocaleString()} tokens`);
-            lines2.push(
-              `Auth: ${resolved.authToken ? `set (${resolved.authToken.length} chars)` : "NOT SET"}`
+            const lines = formatResolvedProfileLines(
+              resolved,
+              profile,
+              resolved.name === activeSettings.active
             );
-            return { content: [{ type: "text", text: lines2.join("\n") }] };
+            return { content: [{ type: "text", text: lines.join("\n") }] };
           }
-          const lines = [`Settings file: ${SETTINGS_FILE}`, ""];
-          for (const profileName of profileNames) {
-            const profile = activeSettings.profiles[profileName];
-            const marker = profileName === activeSettings.active ? "* " : "  ";
-            const modelSummary = profile.free_only ? `free_only (${(profile.free_models ?? []).length} models)` : [profile.model, profile.second_model, profile.third_model].filter(Boolean).join(", ");
-            lines.push(
-              `${marker}${profileName} \u2014 ${profile.mode} / ${profile.api} \u2014 ${modelSummary}`
-            );
-          }
-          lines.push("", "* = active profile. Use --show <name> for full resolved detail.");
-          return { content: [{ type: "text", text: lines.join("\n") }] };
+          return { content: [{ type: "text", text: formatProfilesList() }] };
         }
         case "session_summary": {
           const {
