@@ -261311,6 +261311,30 @@ Run 'llm-ext ${group} <action> --help' for that action's parameters.
 `
   );
 }
+var PROFILE_AWARE_TOOLS = /* @__PURE__ */ new Set([
+  // Flat catalog (src/tools/definitions.ts) — central LLM pipeline.
+  "chat",
+  "code_task",
+  "session_summary",
+  "batch_check",
+  "scan_folder",
+  "high_quality_scan",
+  "compare_files",
+  "check_references",
+  "check_imports",
+  "check_against_specs",
+  "search_existing_implementations",
+  "cluster_synonyms",
+  // mass_scouting (src/mass_scouting/mcp-tools.ts) — actions whose CLI
+  // handler resolves a model via resolveCliModel()/opts.apiKey and sends it.
+  "mass_scout",
+  "mass_scout_chain",
+  "mass_scout_propose_fieldset",
+  "security_scan",
+  "security_triage_benchmark",
+  "search_existing_benchmark",
+  "check_tool_replacements"
+]);
 function printToolHelp(tool) {
   const props = tool.inputSchema?.properties ?? {};
   const required2 = new Set(tool.inputSchema?.required ?? []);
@@ -261319,17 +261343,24 @@ function printToolHelp(tool) {
 ${tool.description}
 `);
   const keys = Object.keys(props);
-  if (keys.length === 0) {
+  const showProfile = PROFILE_AWARE_TOOLS.has(tool.name);
+  if (keys.length === 0 && !showProfile) {
     process.stdout.write("\nTakes no parameters.\n");
     return;
   }
   process.stdout.write("\nParameters:\n");
-  const width = Math.max(...keys.map((k) => k.length));
+  const width = Math.max(...keys.map((k) => k.length), "profile".length);
   for (const key of keys.sort()) {
     const prop = props[key];
     const tag = required2.has(key) ? " (required)" : "";
     process.stdout.write(
       `  --${key.padEnd(width)}  [${schemaTypeOf(prop)}]${tag} ${firstLine(prop.description ?? "")}
+`
+    );
+  }
+  if (showProfile) {
+    process.stdout.write(
+      `  --${"profile".padEnd(width)}  [string] Use this settings profile for this invocation only (built-in, or a key under \`profiles:\` in ~/.llm-externalizer/settings.yaml). Never modifies settings.yaml. An unknown name fails fast and lists the available profiles.
 `
     );
   }

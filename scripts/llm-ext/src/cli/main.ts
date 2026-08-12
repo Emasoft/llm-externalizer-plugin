@@ -326,22 +326,80 @@ function printGroupHelp(group: string): void {
   );
 }
 
+/**
+ * Tools whose handler issues (or can issue) a real model/network request —
+ * so `--profile <name>` (parsed centrally in extractProfileFlag(), never a
+ * per-tool schema field — see its doc comment) actually changes what the
+ * command does. Everything NOT in this set only reads local state or the
+ * public OpenRouter catalog (no chat/completion request), so showing
+ * `--profile` on it would be misleading.
+ *
+ * This is the single source of truth `printToolHelp()` consults — a new
+ * LLM-calling command is discoverable-by-default ONLY once added here.
+ * Classification is by READING each handler (dispatchCallToolInner in
+ * ../index.ts and dispatchMassScoutTool in ../mass_scouting/mcp-tools.ts),
+ * not by guessing from the name — notably this EXCLUDES `assess_model`,
+ * `check_model_health`, `discover_new_models` (public catalog fetch only,
+ * see RECONCILE_SKIP_TOOLS's own doc comment in ../index.ts), `review_plan`
+ * and `rules_check` (both explicitly "no LLM" in their case bodies), and
+ * most `mass_scout_*` sub-actions (register/preclassify/estimate/search/
+ * search_xjob/get/export/jobs_list/audit_sample/body_get/build_fieldset/
+ * diff/list_bundled_fieldsets — local SQLite + regex only, verified via
+ * cli.ts: none of those handlers accept `opts.apiKey`/`opts.fetchImpl`).
+ * It INCLUDES `code_task` and `session_summary` even though the unrelated
+ * `LLM_TOOLS_SET` in ../index.ts (which only drives `reset`'s in-flight
+ * drain wait) omits them — that set is not an exhaustive "sends a model
+ * request" predicate and is intentionally left untouched here.
+ */
+const PROFILE_AWARE_TOOLS = new Set([
+  // Flat catalog (src/tools/definitions.ts) — central LLM pipeline.
+  "chat",
+  "code_task",
+  "session_summary",
+  "batch_check",
+  "scan_folder",
+  "high_quality_scan",
+  "compare_files",
+  "check_references",
+  "check_imports",
+  "check_against_specs",
+  "search_existing_implementations",
+  "cluster_synonyms",
+  // mass_scouting (src/mass_scouting/mcp-tools.ts) — actions whose CLI
+  // handler resolves a model via resolveCliModel()/opts.apiKey and sends it.
+  "mass_scout",
+  "mass_scout_chain",
+  "mass_scout_propose_fieldset",
+  "security_scan",
+  "security_triage_benchmark",
+  "search_existing_benchmark",
+  "check_tool_replacements",
+]);
+
 function printToolHelp(tool: ToolDef): void {
   const props = tool.inputSchema?.properties ?? {};
   const required = new Set(tool.inputSchema?.required ?? []);
   process.stdout.write(`llm-ext ${toKebab(tool.name)}\n\n${tool.description}\n`);
   const keys = Object.keys(props);
-  if (keys.length === 0) {
+  const showProfile = PROFILE_AWARE_TOOLS.has(tool.name);
+  if (keys.length === 0 && !showProfile) {
     process.stdout.write("\nTakes no parameters.\n");
     return;
   }
   process.stdout.write("\nParameters:\n");
-  const width = Math.max(...keys.map((k) => k.length));
+  const width = Math.max(...keys.map((k) => k.length), "profile".length);
   for (const key of keys.sort()) {
     const prop = props[key];
     const tag = required.has(key) ? " (required)" : "";
     process.stdout.write(
       `  --${key.padEnd(width)}  [${schemaTypeOf(prop)}]${tag} ${firstLine(prop.description ?? "")}\n`,
+    );
+  }
+  if (showProfile) {
+    process.stdout.write(
+      `  --${"profile".padEnd(width)}  [string] Use this settings profile for this invocation only ` +
+        "(built-in, or a key under `profiles:` in ~/.llm-externalizer/settings.yaml). " +
+        "Never modifies settings.yaml. An unknown name fails fast and lists the available profiles.\n",
     );
   }
 }
