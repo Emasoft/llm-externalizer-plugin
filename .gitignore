@@ -77,6 +77,17 @@ llm_externalizer_output/
 .publish.lock
 /reports/
 /reports_dev/
+# Dev-only working folders: scratch, drafts, abandoned-work patches. Never
+# published, never part of the source distribution — and they routinely hold
+# absolute local paths and private data, so committing one is a leak.
+/docs_dev/
+/scripts_dev/
+/samples_dev/
+/examples_dev/
+/tests_dev/
+/downloads_dev/
+/libs_dev/
+/builds_dev/
 /.trashcan/*
 !/.trashcan/.gitkeep
 !/.trashcan/README.txt
