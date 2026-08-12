@@ -29,10 +29,36 @@ implementation-commits: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-08-12
 
-**NEXT ACTION:** wait for the CLI-architecture recon report (`reports/cli-restructure-recon/`),
-then fill in the Phases section with real file:line targets. Do NOT start editing before that —
-the rename's cost is dominated by NAME COUPLING outside the catalog (tests, skills, agents,
-commands, docs), and guessing that surface is how this becomes a half-finished migration.
+**NEXT ACTION:** start **Phase 1 — unify the name registries**. Make dispatch derive from the
+catalog so a command name exists in exactly ONE place, BEFORE renaming anything.
+
+### ⚠ THE RECON FINDING THAT REORDERED THIS CARD (measured 2026-08-12)
+
+Report: `reports/cli-restructure-recon/20260812_154807+0200-recon.md`.
+
+I assumed the risk was the ~60 plugin files. It is not — those are mechanical. **The real risk is
+that the catalog is NOT the single source of truth for dispatch.** A command name lives in FOUR
+independent registries in `src` alone:
+
+| # | registry | where | entries |
+|---|---|---|---|
+| 1 | catalog array (definitions) | `src/tools/definitions.ts` | 45 tool definitions |
+| 2 | `switch (name)` dispatch | `src/index.ts` | 22 `case` labels matching by NAME STRING 1:1 |
+| 3 | `RECONCILE_SKIP_TOOLS` | `src/index.ts:1974-1988` | 11 hardcoded names |
+| 4 | `SINGLE_CALL_TOOLS` | `src/estimate.ts` | subset, hardcoded |
+
+Plus **93 literal occurrences in `README.md`**, asserted by a doc-consistency gate
+(`src/doc-consistency.test.ts`, count assertions at `:82-86`/`:99-101`, membership at `:104-124`).
+
+**Consequence:** renaming first would mean changing the same name in four places and hoping no
+fifth exists — with `tsc` silent throughout, because these are string literals, not symbols. A
+missed `case` label is a command that resolves in help and dies at dispatch.
+
+**Also verified first-hand (not taken from the agent):** positional arguments are not merely
+unimplemented, they are actively rejected — `src/cli/main.ts:209` calls
+`die("unexpected argument '<tok>' (all inputs are named flags)")` on any token not starting with
+`--`. So the owner's `llm-ext session compact <file>.jsonl` requires building positional support,
+not relaxing a check.
 
 ## The owner's directive (2026-08-12, verbatim intent)
 
@@ -117,18 +143,37 @@ The owner's examples change more than the names — they change the *shape* of a
 - A mistyped command must never fall through to a generic usage dump. That is the current
   behaviour and it is what makes 45 commands feel like 450.
 
-## Phases (each ≤5 files; fill targets from the recon report)
+## Phases (each ≤5 files, each lands green; ordered by the recon finding above)
 
-1. **Catalog + router.** Introduce the group/action model in the command catalog and a two-level
-   resolver in the CLI dispatcher. No renames yet — prove the router with the existing names.
-2. **Per-layer help + did-you-mean.** Built against the router from P1, with tests for each layer
-   and for the suggestion set.
-3. **Positional input + `-o` + `--profile`.** The convention change, applied uniformly.
-4. **The rename itself**, group by group, tests moving with each group.
-5. **Call-site sweep** — skills, agents, commands, hooks, README, docs. THE RISK LIVES HERE: a
-   missed reference is a silently broken skill, not a compile error.
-6. **Rebuild dist, full suite, doc-consistency gate** (it asserts command COUNTS in README.md and
-   has failed on exactly this before).
+**P1 — UNIFY THE REGISTRIES. No renames.** Collapse registries 2-4 into the catalog: give each
+catalog entry its handler (replacing the 22-case `switch`), and derive `RECONCILE_SKIP_TOOLS` /
+`SINGLE_CALL_TOOLS` from catalog flags instead of parallel name lists. Add a test asserting that
+every dispatchable name comes from the catalog and no name literal survives outside it.
+*Why first:* after this, a rename touches ONE place in `src` instead of four. This phase is
+valuable even if the rest is deferred — four divergent name registries is a standing bug.
+
+**P2 — Two-level router.** Introduce `group`/`action` on catalog entries and resolve
+`<group> <action>` in `main.ts`. Still no renames: each command keeps its current name as its
+action under a temporary group, proving the resolver before it carries the migration.
+
+**P3 — Per-layer help + did-you-mean.** Three help layers off the P2 router, and Levenshtein
+suggestions at both the group and action layer, exiting non-zero. Tests per layer and for the
+suggestion set (including "suggests nothing when the input is far from every candidate" — a
+confidently wrong suggestion is worse than none).
+
+**P4 — Positional input + `-o` + `--profile`.** Replace the `main.ts:209` blanket rejection with
+a per-action positional slot; keep the "unexpected argument" error for anything beyond the
+declared arity, so a typo'd flag still fails loudly.
+
+**P5 — The rename**, group by group (7 commits), tests moving with each group.
+
+**P6 — Call-site sweep**: ~60 files across `skills/ agents/ commands/ hooks/` + README's 93
+literal occurrences. Mechanical but unforgiving — a missed reference is a silently broken skill,
+not a compile error. Sweep with BOTH kebab and snake spellings (the dispatcher normalizes `-`→`_`,
+so half the references are `scan_folder`, not `scan-folder`).
+
+**P7 — Rebuild dist, full suite, doc-consistency gate.** That gate asserts README counts and
+membership and has failed on exactly this class of change before.
 
 ## Acceptance
 
