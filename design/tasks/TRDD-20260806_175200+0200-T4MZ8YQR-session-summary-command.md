@@ -84,6 +84,33 @@ still produced under the larger verbatim load; (d) completion at all.
 If (c) or (d) fail, the honest response is a follow-up release lowering per-chunk load — NOT
 relaxing the verbatim rule, which is the feature.
 
+### ✅ POST-FIX QUALITY VERIFIED (2026-08-12 02:20) — answers "can the free model do it?"
+
+Live run AFTER the queue-operation extraction fix.
+Report: `reports/llm-externalizer/20260812_022051+0200-session_summary-cc0932.md`
+
+| check | before fix | after fix |
+|---|---|---|
+| the 5 previously-lost user messages | 0/5 | **5/5 PRESENT** |
+| `[janitor-heartbeat]` noise | 17 | **1** |
+| output size | 328 KB | **21 KB** |
+| parts joined | 3/3 | 3/3 |
+| nine-section schema | ✓ | ✓ |
+| prune ratio | 0.103 | **0.076** |
+
+**The 15× size drop is the OPPOSITE of loss.** The old 328 KB was bloated by faithfully
+reproducing heartbeat prompts and skill-doc injections verbatim — the machine noise WAS the
+bulk of the "summary". 21 KB now carries strictly MORE real information. The single surviving
+`janitor-heartbeat` string is legitimate content: the summary's own Errors-and-Fixes table
+describing the bug fixed tonight.
+
+**VERDICT: the free model IS capable of the task.** Its weakness is RELIABILITY, not capability
+— this run still needed retries through a `finish_reason=empty` and a `finish_reason=error`.
+Tally across the night on `nemotron-3-ultra:free`: 1 echo, 2 empties, 2 errors — roughly a third
+of attempts need a retry. That is what the concurrency work addresses: sequentially a failed
+attempt adds its full wasted duration to the total; concurrently it overlaps the chunks still
+working and stops extending the critical path.
+
 ### MEASURED THROUGHPUT + THE PARALLELISATION OPPORTUNITY (2026-08-12)
 
 Measured on the completed run (23:11 → 00:11): **3 chunks / ~150k pruned tokens in 60 min**
