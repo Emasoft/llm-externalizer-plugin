@@ -84,6 +84,29 @@ still produced under the larger verbatim load; (d) completion at all.
 If (c) or (d) fail, the honest response is a follow-up release lowering per-chunk load — NOT
 relaxing the verbatim rule, which is the feature.
 
+### MEASURED THROUGHPUT + THE PARALLELISATION OPPORTUNITY (2026-08-12)
+
+Measured on the completed run (23:11 → 00:11): **3 chunks / ~150k pruned tokens in 60 min**
+= ~20 min per 50k chunk. Extrapolated: a **666k-token** context is ~14 chunks ≈ **4.5–5 hours
+SEQUENTIALLY** (more with retries; `--prune aggressive` cut this session's transcript to 10.3%,
+so pruning usually dominates the raw JSONL size).
+
+**That wall-clock is an ARTEFACT OF SEQUENTIAL PROCESSING, not an inherent cost — and the
+owner's redesign is exactly what makes fixing it safe:**
+- chunks are turn-atomic, so each is independently summarizable;
+- there is no model fold, so no chunk depends on another chunk's summary;
+- the join is deterministic and order-based.
+
+So chunks may be sent CONCURRENTLY with no correctness change at all. Wall-clock collapses to
+roughly one chunk's time — **~20–30 min for 666k** — bounded by free-tier rate limits rather
+than by token count. The existing free-rotation + cooldown machinery already handles 429s.
+Proposed shape: bounded concurrency behind a `--concurrency` flag with a modest default, so the
+free tier is not hammered by default. NOT IMPLEMENTED — awaiting the owner's go-ahead.
+
+Note this only became possible when the model-fold was removed: with a fold, chunk summaries had
+to be collected before the reduce step could run, and a mid-run downgrade re-chunked the
+remainder.
+
 ### REMAINING AFTER HANDOFF
 
 1. Finish/inspect the verification run above.
