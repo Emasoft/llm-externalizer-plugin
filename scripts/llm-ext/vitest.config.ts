@@ -69,10 +69,6 @@ export default defineConfig({
       'src/provider-error-sanitize.test.ts',
       // CLI success-banner helpers — pure path-pick + banner format (TRDD-54f508a4 Issue 4).
       'src/cli.banner.test.ts',
-      // Legacy dist/cli.js mass-scout/security-scan free-mode pre-flight — proves
-      // the legacy entry point consults the SAME auto-free decision the supported
-      // llm-ext catalog dispatch does (TRDD-W9DK4L3N).
-      'src/cli-mass-scout-free.test.ts',
       'src/mass_scouting/fieldset.test.ts',
       'src/mass_scouting/shorthand.test.ts',
       'src/mass_scouting/registry.test.ts',

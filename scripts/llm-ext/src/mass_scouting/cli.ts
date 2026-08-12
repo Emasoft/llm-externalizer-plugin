@@ -357,7 +357,8 @@ function resolveBundledFieldset(
       error: `invalid bundled fieldset name ${JSON.stringify(name)}; allowed: [a-zA-Z0-9_-]`,
     };
   }
-  // dist/cli.js → ../fieldsets/<name>.json
+  // dist/llm-ext.js → ../fieldsets/<name>.json (the bundle sits in dist/, so
+  // this resolution is unchanged by the legacy dist/cli.js removal)
   const here = dirname(fileURLToPath(import.meta.url));
   const candidates = [
     resolve(here, "..", "fieldsets", `${name}.json`),

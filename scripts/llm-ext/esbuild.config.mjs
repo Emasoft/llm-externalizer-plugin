@@ -65,16 +65,11 @@ await Promise.all([
   }),
   build({
     ...shared,
-    entryPoints: ["src/cli.ts"],
-    outfile: "dist/cli.js",
-  }),
-  build({
-    ...shared,
     entryPoints: ["src/benchmark/index.ts"],
     outfile: "dist/benchmark.js",
   }),
 ]);
 
 console.log(
-  "Build complete: dist/index.js, dist/llm-ext.js, dist/cli.js, dist/benchmark.js (fully bundled)",
+  "Build complete: dist/index.js, dist/llm-ext.js, dist/benchmark.js (fully bundled)",
 );

@@ -105,20 +105,24 @@ describe("free-model rotation coverage — every LLM send path can rotate", () =
     expect(index).toMatch(/csPool[\s\S]{0,400}callSingleWithFreeRotation/);
   });
 
-  it("the auto-reconcile pre-flight is wired at BOTH runtime funnels (MCP + CLI)", () => {
+  it("the auto-reconcile pre-flight is wired at the ONE shared dispatcher", () => {
     // Same class of bug as the rotation-wiring guard: the reconcile helper being
     // correct is worthless if a funnel never calls it. Skills / slash-commands /
-    // agents all wrap one of these two entry points, so these two calls are what
-    // make "always assess first" hold for every surface.
+    // agents all wrap the CLI, which routes every tool call through
+    // dispatchCallTool — so this one call is what makes "always assess first"
+    // hold for every surface.
     const index = read("index.ts");
-    expect(index, "MCP dispatch must run reconcile before work tools").toMatch(
+    expect(index, "dispatch must run reconcile before work tools").toMatch(
       /RECONCILE_SKIP_TOOLS[\s\S]{0,400}runModelReconcile\(\)/,
     );
     expect(index).toContain("reconcileModelsBeforeWork");
 
-    const cli = read("cli.ts");
-    expect(cli, "the CLI main must run reconcile before work commands").toContain(
-      "reconcileModelsBeforeWork(makeCliReconcileDeps())",
+    // The CLI inherits the reconcile pre-flight because it dispatches every
+    // command through dispatchCallTool (asserted just above) — there is now
+    // ONE funnel, not two (the standalone MCP server was removed).
+    const cliMain = read("cli/main.ts");
+    expect(cliMain, "the CLI main must dispatch through the shared dispatcher").toContain(
+      "dispatchCallTool",
     );
   });
 

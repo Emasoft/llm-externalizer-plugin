@@ -974,15 +974,17 @@ async function ensureAutoFreeDecided(): Promise<void> {
  * (free mode inactive, or the caller already asked for a ':free' model).
  *
  * Extracted out of `dispatchCallToolInner`'s MASS_SCOUT_TOOL_NAMES branch so it
- * is the ONE place this decision is made, callable by BOTH runtime entry
- * points — the supported `llm-ext` catalog dispatch below, AND the legacy
- * `dist/cli.js` (`src/cli.ts`), which calls `runMassScoutCli` directly and
- * would otherwise never consult it (TRDD-W9DK4L3N: verified zero hits for
- * this decision anywhere under `mass_scouting/` or `cli.ts` before this
- * export existed — a user on the legacy entry point could be billed in a
- * situation where the supported entry point would already have switched to
- * free models). A second, copied implementation at the legacy call site is
- * exactly the kind of duplication that silently rots when this logic changes.
+ * is the ONE place this decision is made. It originally had to be callable by
+ * two runtime entry points; the legacy one (`dist/cli.js` / `src/cli.ts`) called
+ * `runMassScoutCli` directly and would otherwise never have consulted it, so a
+ * user on it could be billed where the supported entry point had already
+ * switched to free models. That entry point is now DELETED (TRDD-W9DK4L3N) and
+ * `llm-ext` catalog dispatch below is the only caller.
+ *
+ * Keep it as one exported decision anyway: the bug it prevented was a SECOND,
+ * copied implementation at another call site, which is the kind of duplication
+ * that silently rots when this logic changes. One entry point today is not a
+ * reason to inline it back into the branch.
  */
 export async function resolveMassScoutFreeModelOverride(
   requestedModel: string,

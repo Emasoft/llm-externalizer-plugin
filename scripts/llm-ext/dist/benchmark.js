@@ -219869,7 +219869,7 @@ function renderEnsembleBlock(profileName, picks) {
   const wrapped = { [profileName]: block };
   return (0, import_yaml2.stringify)(wrapped, { indent: 2 });
 }
-function loadProfileForMutation(settingsPath, profileName) {
+function loadSettingsRoot(settingsPath) {
   if (!existsSync2(settingsPath)) {
     throw new Error(`settings.yaml not found at ${settingsPath}`);
   }
@@ -219887,6 +219887,10 @@ function loadProfileForMutation(settingsPath, profileName) {
   if (!root.profiles || typeof root.profiles !== "object") {
     throw new Error(`settings.yaml at ${settingsPath} missing 'profiles' map.`);
   }
+  return root;
+}
+function loadProfileForMutation(settingsPath, profileName) {
+  const root = loadSettingsRoot(settingsPath);
   const profile = root.profiles[profileName];
   if (!profile || typeof profile !== "object") {
     throw new Error(
