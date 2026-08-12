@@ -252872,7 +252872,7 @@ var DEFAULT_MAX_CHUNK_TOKENS = 25e3;
 var MAX_AUTO_CONCURRENCY = 28;
 var PER_MODEL_CONCURRENCY = 20;
 var MAX_FANOUT_MODELS = 4;
-var DEFAULT_CHUNK_TIMEOUT_MS = 24e4;
+var DEFAULT_CHUNK_TIMEOUT_MS = 6e5;
 var HEDGE_AFTER_MS = 6e4;
 var hedgeAfterMsOverride = null;
 function hedgeAfterMs() {
@@ -260202,7 +260202,7 @@ function buildTools(limitsText) {
           },
           chunk_timeout_s: {
             type: "number",
-            description: "Per-chunk deadline in seconds. Default: 240 \u2014 a BACKSTOP against a stalled generation, not a tail-cutter. Measured chunk times on the current free model spread 4.4x (90s to 400s), so a deadline set below that band aborts work that was merely slow and can trip the circuit breaker; the tail is cut by hedging instead, which races a second model rather than killing the first. A chunk exceeding this aborts and is retried or rotated like any other transient. Raise it for a slow model or a huge chunk; an explicit value is honored verbatim."
+            description: "Per-ATTEMPT deadline in seconds. Default: 600 \u2014 a BACKSTOP against a stalled generation, not a tail-cutter. Free-tier latency was measured at 91-1478s on one transcript and is NOT proportional to chunk size (a 4x smaller chunk was no faster), so a deadline below that band does not bound anything \u2014 it MULTIPLIES total time, one full deadline per doomed attempt. The tail is cut by hedging instead, which races a second model rather than killing the first. Lower this only for a fast local model; an explicit value is honored verbatim."
           }
         }
       }

@@ -218,20 +218,32 @@ export const MAX_FANOUT_MODELS = 4;
  * while every sibling has long since finished. Cutting the tail is worth far
  * more than shaving the median.
  *
- * A DEADLINE IS A BACKSTOP, NOT A TAIL-CUTTER — set it above the working
- * distribution, and let HEDGING cut the tail. This value was FIRST shipped at
- * 120s and that was WRONG, proven by a live run within the hour: measured chunk
- * times on this model were 90.6 / 173.0 / 310.6 / 399.7s, so a 120s deadline sat
- * BELOW the median and aborted three chunks out of four. Five consecutive aborts
- * then tripped the circuit breaker and the run died. Making the deadline do the
- * hedge's job converted "slow but working" into "everything fails" — strictly
- * worse than the slowness it was meant to fix.
+ * A DEADLINE IS A BACKSTOP, NOT A TAIL-CUTTER — it belongs ABOVE the working
+ * distribution, and HEDGING cuts the tail. This was learned the expensive way:
+ * shipped at 120s (aborted 3 chunks in 4, tripped the circuit breaker), raised to
+ * 240s (still below the working band — a live run produced 13 aborts and one
+ * chunk took 1478s, i.e. ~6 consecutive 240s aborts before an attempt survived).
  *
- * 240s is above the measured p75 (~330s is the worst observed; 240s still admits
- * the 90/173s body of the distribution with margin) and below the 300s global,
- * so it catches a genuine STALL without touching work that is merely slow. The
- * tail is cut by `HEDGE_AFTER_MS` instead, which races a second model rather
- * than killing the first.
+ * The deadline is PER-ATTEMPT, not per-chunk. So a value below the model's real
+ * latency does not bound anything — it MULTIPLIES total time, one full deadline
+ * per doomed attempt. That is the opposite of its purpose.
+ *
+ * MEASURED per-chunk latency on the free tier, same transcript:
+ * 91 / 185 / 262 / 312 / 475 / 718 / 1234 / 1478s. Wildly variable, and — the
+ * finding that matters — NOT proportional to chunk size: a 4x smaller (6k) chunk
+ * was no faster and produced 80 aborts instead of 13. A `max_tokens=8` request
+ * still costs ~35s. Free-tier latency is dominated by queueing and contention,
+ * not by how much the model generates.
+ *
+ * Hence 600s: high enough to sit above that whole distribution and catch only a
+ * genuine STALL (the unbounded-hang class TRDD-0H5N1V9W made catchable at all),
+ * low enough to not wait out a dead socket forever. Cutting the tail is
+ * `HEDGE_AFTER_MS`'s job — it races a second model instead of killing the first,
+ * which costs nothing when the first was merely slow.
+ *
+ * DO NOT lower this to chase a latency target. It has been tried twice and made
+ * things strictly worse both times; the constraint is the free tier's per-request
+ * latency, which no chunking, deadline, concurrency or fan-out setting can move.
  *
  * A chunk that does exceed this aborts and is retried/rotated like any other
  * transient — only possible at all once the deadline actually covered the body
@@ -241,7 +253,7 @@ export const MAX_FANOUT_MODELS = 4;
  * A DEFAULT, NOT A CEILING: `--chunk_timeout_s` is honored verbatim, including
  * values far above this one.
  */
-export const DEFAULT_CHUNK_TIMEOUT_MS = 240_000;
+export const DEFAULT_CHUNK_TIMEOUT_MS = 600_000;
 
 /**
  * HEDGING (owner-specified, 2026-08-12). A concurrent run's wall-clock is its
