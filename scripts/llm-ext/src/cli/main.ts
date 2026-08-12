@@ -42,7 +42,7 @@ import { GROUPS, isGroupName, resolveInvocation, suggestCommand } from "./launch
  * longer existed, which aborts the release. This is now the only anchor, so it
  * is load-bearing: do not reformat, inline, or compute it.
  */
-const VERSION = "12.0.0";
+const VERSION = "13.0.0";
 
 // ── Catalog ──────────────────────────────────────────────────────────
 

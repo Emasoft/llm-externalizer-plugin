@@ -1,6 +1,6 @@
 {
   "name": "llm-externalizer",
-  "version": "12.0.0",
+  "version": "13.0.0",
   "type": "module",
   "description": "CLI that offloads bounded LLM tasks to cheaper local (LM Studio, Ollama, vLLM, llama.cpp) or remote (OpenRouter) models. Free models by default; profile-based configuration with ensemble mode.",
   "main": "dist/index.js",

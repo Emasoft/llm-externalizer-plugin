@@ -1,6 +1,1009 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.0.0] - 2026-08-12
+
+### Added
+
+- Feat(cli): grouped launcher — `llm-ext <group> <action> <input> -o <out>`
+
+45 flat commands are unmemorable. This puts a thin front door in front of
+them: 7 groups, uniform <group> <action>, positional input, -o for output.
+
+It is a pure argv rewrite, NOT a refactor. `session compact x.jsonl -o s.md`
+becomes `session_summary --transcript x.jsonl --output s.md` and hands off
+to the dispatcher that already exists. Unmapped flags pass through
+untouched, so every existing parameter keeps working without the table
+knowing it exists -- the table holds only group, action, target command,
+and which flag the positional fills.
+
+Nothing is renamed, deprecated or removed. The launcher engages ONLY when
+argv[0] names a group, and no existing flat command name is a group name,
+so the flat path is untouched -- `llm-ext session_summary --transcript x`
+behaves exactly as before, and `--help --all` still lists the full flat
+catalog.
+
+Help at three layers: top level leads with the 7 groups, `<group> --help`
+lists its actions with their real targets, and `<group> <action> --help`
+DELEGATES to the existing per-command help rather than keeping a second
+copy of the parameter docs that would drift.
+
+Did-you-mean at both layers, exiting non-zero, never auto-running a guess:
+an unknown first token suggests GROUPS ("did you mean group: scan,
+scout?"), an unknown action suggests the grouped form ("did you mean: scan
+folder?") rather than leaking the flat surface being de-emphasized, and
+input far from every candidate suggests nothing -- a confidently wrong
+suggestion is worse than none.
+
+A flag in the action slot (`scan --quiet`) is treated as "show me this
+group", not as an unknown action. Any leading `-` token counts, so a
+global flag added later needs no matching edit here.
+
+launcher-boot.test.ts now asks for `--help --all`: its job is proving the
+real catalog loaded, and the flat list moved behind that flag. It still
+spot-checks a core tool and a mass-scout tool, so the guarantee is
+re-pointed, not weakened.
+
+Verified: tsc 0, eslint 0, vitest 1915 passed / 4 skipped / 0 failed
+(1899 before, +16), build clean. Live: --help leads with groups, scan
+--quiet prints group help, scna and scan foldr suggest correctly and exit
+1, session compact --help and llm ask --help delegate to session-summary
+and chat.
+
+- Feat(session-summary): incremental compaction over the append-only prefix (TRDD-S8CKVH8S)
+
+Measured free-tier latency makes a full compaction cost ~10-25 min and NO setting
+moves it - chunk size, deadline, concurrency and fan-out were each implemented and
+each measured as not the constraint. The only remaining lever is not redoing the
+work, and until now every run redid all of it.
+
+The checkpoint identity pinned transcriptBytes AND transcriptMtimeMs to exact
+equality. A live session appends on every turn, so both changed and the checkpoint
+was always discarded: --resume only ever helped a run interrupted against a FROZEN
+file, never a live session, which is the actual use case.
+
+The property that makes reuse safe: a Claude Code transcript is APPEND-ONLY. If
+the file only grew and the consumed prefix is byte-identical, every chunk summary
+computed over that prefix is still valid by construction. So identity now keeps
+only what genuinely invalidates chunking (path, prune level, chunk budget, overlap)
+and the size/mtime equality is replaced by a prefix proof: the byte length consumed
+plus a streamed sha256 of exactly those bytes.
+
+Decision on resume, fail-safe in both directions:
+- current size < stored          => refuse, full restart (truncation / rotation)
+- prefix sha256 differs          => refuse, full restart, message names it as a
+                                    rewrite rather than a mysterious mismatch
+- grew with a matching prefix    => reuse completed chunk summaries, summarize
+                                    only the turns after the last COMPLETED chunk
+Never reuse against a changed prefix; when in doubt, restart. A silently-wrong
+reuse would corrupt a summary invisibly, which is far worse than redoing work.
+
+transcriptMtimeMs is REMOVED rather than left in place - a field that is written
+but never checked is exactly the kind of thing a later reader trusts.
+
+Economics: the first run still costs 10-25 min, but a run five minutes later costs
+only the new turns. That is what makes the janitor's cache-expiry design (issue
+#251) viable - pre-compute on a cadence, each tick cheap, and /clear + inject an
+always-fresh summary is instant.
+
+Verified: tsc 0, eslint 0, vitest 1909 pass / 4 skip / 0 fail (was 1904), build
+clean, dist rebuilt. Fail-safe branches checked by reading the decision code, not
+by trusting the summary - a truncation and a rewrite must both restart, and both do.
+
+- Feat: add scan-local-llm-services — autodiscover local LLM services (INERT by default)
+
+Owner-requested (2026-08-12): scan and autodiscover running local LLM services,
+show them NUMBERED, ask whether to configure one, then probe the chosen service,
+detect the best configuration for this system, write a profile section into
+settings.yaml and activate it.
+
+IMPLEMENTED BUT NOT ACTIVATED, exactly as asked - the owner is staying on
+OpenRouter for now:
+- it never auto-runs: no hook, no SessionStart, no other command invokes it;
+- a bare invocation writes NO profile and activates nothing;
+- only an explicit --pick N in that same invocation writes or activates anything;
+- the owner's real ~/.llm-externalizer/settings.yaml was never touched - verified
+  by sha256 before and after a live run, not assumed.
+
+Discovery probes 1234 (LM Studio), 8000 (vLLM), 8080 (llama.cpp), 1337 (Jan),
+5000, 8081 for an OpenAI-compatible /v1/models, plus Ollama's native /api/tags on
+11434 - in parallel with a short timeout, so absent services are fast and silent
+rather than errors. Installed CLIs (lms, ollama) are reported separately as
+evidence a service exists but is stopped.
+
+Interaction: default lists and stops. --pick N selects non-interactively; the
+interactive prompt appears only when stdin is a TTY. That split is deliberate -
+agents invoke this CLI too, and a blocking prompt would hang them.
+
+Verified behaviourally on the real binary, not just in tests: it found the live
+service on :8080 with its four models, the lms CLI, and 64 GB / 14 CPUs.
+
+Message correction found by that same run: it said "nothing was written" while a
+cold config dir still gained a settings.yaml - the server's normal first-run
+template bootstrap, not this command. The claim was falsifiable by `find`, so it
+now says "no profile was written and no profile was activated", which is what is
+actually guaranteed.
+
+README counts and the index.test.ts expected-tool list are updated in this commit
+because the doc-consistency gate FAILED without them (44 -> 45 CLI commands,
+21 -> 22 core/utility). That gate did its job; the fix belongs with the change
+that broke it, not in a follow-up.
+
+Verified: tsc 0, eslint 0, vitest 1904 pass / 4 skip / 0 fail, build clean.
+
+- Feat(session-summary): fan chunks out across several free models (TRDD-OU2TCWP8)
+
+Rests on a measurement, not an assumption: the OpenRouter free rate bucket is
+PER-MODEL, not per-account. 64 concurrent against ONE model returns 429s; the
+same 64 split 32+32 across TWO models returns zero. So effective parallelism
+scales with the number of models used.
+
+That dissolves a real deadlock. Per-stream throughput is fixed, so cutting
+wall-clock needs SMALLER chunks (less output each). But smaller chunks mean more
+of them - a 666k context becomes ~83 at 8k - and 83 concurrent is far past one
+model's ~32 cliff. Small chunks and single-wave are mutually exclusive on ONE
+model, and perfectly compatible across four.
+
+Each chunk index is pinned round-robin to one of K = min(models, MAX_FANOUT_MODELS
+= 4) slots, and each slot behaves as an INDEPENDENT single-model pool capped at
+PER_MODEL_CONCURRENCY = 20 (below the measured 32 edge, same headroom reasoning
+as MAX_AUTO_CONCURRENCY = 28). Chunk budget uses the MINIMUM context window across
+the models actually used - sizing to the largest would overflow the smallest.
+
+THE LOAD-BEARING PART, and the reason this is a separate branch rather than a
+flag on the existing one: the single-active-model loop makes a failing worker a
+LEADER that drains every sibling behind a pause gate before re-chunking. That
+whole-pool drain is exactly wrong once each chunk carries its own model - one
+model going bad would re-chunk and discard work already succeeding on another.
+Under fan-out a slot's fallback/overflow touches only its own chunks. A
+slot-local re-split APPENDS its sub-chunks at the end instead of reindexing in
+place, so no other slot's indices ever shift, and the superseded indices are
+recorded in abandonedChunkIndices so they are neither retried nor joined
+(filtered at the join, verified by reading the code rather than the agent's
+summary).
+
+Unchanged where it must be: concurrency<=1 stays byte-for-byte sequential, a
+single eligible model takes the old path (K=1 "fan-out" would just be the
+single-model path with extra bookkeeping), and mapSummaries stays keyed by chunk
+INDEX so join order never depends on completion order.
+
+Verified: tsc 0, eslint 0, vitest 1890 pass / 4 skip / 0 fail (was 1885), build
+clean, dist rebuilt.
+
+Still owed: a measured end-to-end wall-clock. Every number quoted so far for the
+2-3 minute target is arithmetic over measured per-chunk times, not an observed
+run, and it will be reported as measured or not at all.
+
+- Feat(session-summary): hedge straggler chunks; FIX the too-tight chunk deadline
+
+Two changes that belong together, because the second corrects an error the first
+makes unnecessary.
+
+HEDGING. A concurrent run's wall-clock is its SLOWEST chunk, and ~1 in 3 attempts
+on the free model needs a retry. A straggler that hit the deadline previously
+aborted and retried SERIALLY, adding a full attempt to the critical path. Now a
+chunk still running after HEDGE_AFTER_MS (60s) launches a duplicate against the
+NEXT eligible model and the first usable response wins; the loser is abandoned
+and cannot overwrite the winner or write a checkpoint. Bounded: one hedge per
+chunk, and a hedge only launches when a pool slot is free, so it never pushes
+in-flight requests past `concurrency`. Unreachable at concurrency<=1, so the
+sequential path stays byte-for-byte unchanged.
+
+DEADLINE CORRECTION, 120s -> 240s. The 120s default shipped an hour ago was
+WRONG and a live run disproved it within the hour: measured chunk times on this
+model are 90.6 / 173.0 / 310.6 / 399.7s, so 120s sat BELOW the median and aborted
+three chunks out of four. Five consecutive aborts tripped the circuit breaker and
+the run died.
+
+The mistake was conceptual, not numeric: I made the DEADLINE do the HEDGE's job.
+A deadline is a backstop against a stall and belongs ABOVE the working
+distribution; cutting the tail is the hedge's job, because a hedge races a second
+model instead of killing the first. Set below the band, the deadline converted
+"slow but working" into "everything fails" - strictly worse than the slowness it
+was meant to fix. 240s now sits above the body of the distribution and below the
+300s global, so it catches a genuine stall and leaves merely-slow work alone.
+Both the constant's header and the --chunk_timeout_s help text record this, so
+the value is not "tuned" back down by someone reading only the target latency.
+
+Verified: tsc 0, eslint 0, vitest 1885 pass / 4 skip / 0 fail (was 1881), build
+clean, dist rebuilt. Hedge guards checked by reading the code, not the agent's
+summary: hedging is unreachable from the sequential branch, the cap check is
+`inFlight.size + hedgeInFlight >= concurrency`, and `hedgedOnce` spends a chunk's
+single hedge win or lose.
+
+MEASURED, and it changes the plan: the ~20-request bucket is PER-MODEL, not
+per-account. 64 concurrent on one model gives 429s; the same 64 split 32+32 across
+two free models gives ZERO. So effective parallelism scales with the number of
+free models used, which is what makes small-chunk/single-wave viable and puts the
+2-3 minute target within reach. Spreading chunks across models is NOT implemented
+yet - today the pool is one active model plus rotation on failure.
+
+- Feat(session-summary): tighter per-chunk deadline, overridable via --chunk_timeout_s
+
+Under concurrency the map phase's wall-clock is the SLOWEST chunk, not the
+average one. Measured on same-sized 25k chunks, per-chunk latency spread 4.4x:
+90.6s / 173.0s / 310.6s / 399.7s. So one straggler allowed to run the full 300s
+global soft timeout drags the entire run out while every sibling finished
+minutes earlier. Cutting the tail is worth far more than shaving the median.
+
+Adds an optional per-call `timeoutMs` threaded through the ONE place every
+request's (url, model, timeout) tuple is built - resolveConnection - so it
+covers every send path by construction rather than per-call-site. Omitted, it
+falls back to the global soft timeout, so nothing else changes.
+
+session_summary now passes DEFAULT_CHUNK_TIMEOUT_MS (120s), ~3.4x the measured
+~35s per-request floor (queue + cold start, which even a max_tokens=8 request
+paid in full) - room for genuine generation, but it refuses to wait out a stall.
+A chunk that exceeds it aborts and rotates/retries like any other transient.
+
+This is only meaningful because TRDD-0H5N1V9W made the deadline actually cover
+the body read. Before that fix any timeout value here would have bounded
+time-to-first-byte only, and a stalled generation ignored it entirely - which is
+precisely how a chunk reached 1890s against a 300s cap.
+
+A DEFAULT, NOT A CEILING, per the owner's standing rule that limits are the
+caller's to set: --chunk_timeout_s is honored verbatim, including values ABOVE
+the global. One of the tests asserts exactly that, so nobody later "hardens" it
+into a cap.
+
+Tests: 3 new tests on resolveConnection - global fallback when omitted, the
+tighter override reaching the wire, and a larger-than-global override honored.
+Behavioural rather than a code reading, because a DROPPED override would be
+invisible: the run would keep using 300s and present as merely slow, never as a
+wrong number. Registered in vitest.config.ts (the include list is explicit - an
+unregistered test file silently never runs).
+
+Verified: tsc 0, eslint 0, vitest 1881 pass / 4 skip / 0 fail (was 1878), build
+clean, and --chunk_timeout_s confirmed present on the real ./bin/llm-ext path
+rather than only in the source.
+
+- Feat(session-summary): auto-size concurrency so the map phase runs in ONE wave
+
+Wall-clock for the map phase is "slowest chunk + stagger" ONLY when every chunk
+is in flight together. A fixed default of 12 silently split a 27-chunk transcript
+into three sequential waves and roughly TRIPLED wall-clock for no gain, because
+the account admits far more than 12 at once.
+
+--concurrency omitted now means AUTO: min(chunkCount, MAX_AUTO_CONCURRENCY),
+resolved inside the driver AFTER chunking, since "auto" is a function of the
+chunk count and nothing upstream knows it. An explicit number is still honored
+verbatim, and --concurrency 1 still takes the byte-for-byte sequential path.
+The library default stays 1, so no embedding caller is silently opted in.
+
+MAX_AUTO_CONCURRENCY is 28, not the measured 32. A burst of 32 landed 32/32 clean
+against the live account and 64 landed 62/64 (two 429s), so 32 is the measured
+EDGE. Defaulting to the edge of what is clean today is how a small account-side
+change turns a default into a standing 429 storm - the same reasoning that had
+kept the old fixed default well below it. A transcript with more chunks than the
+cap simply runs in more than one wave.
+
+DEFAULT_CONCURRENCY is DELETED rather than left as an unused fallback: nothing
+referenced it once auto landed, and two competing notions of "the default" is
+exactly the drift this codebase avoids. Its measured-burst rationale was not lost
+- it now lives in MAX_AUTO_CONCURRENCY's header, which is the constant that
+actually carries the risk.
+
+The --concurrency help text advertised "Default: 12" and would have been a lie
+the moment auto landed, so it is updated in the same commit.
+
+Tests: two new driver tests. One proves 5 chunks all run in a single wave under
+auto (maxInFlight === 5); the other proves 34 chunks cap at 28 rather than
+fanning out to every chunk, so a big transcript cannot fire a burst past the 429
+cliff. Both budget explicitly for the real 250ms launch stagger - the first
+attempt failed because 28 staggered launches take ~7s and waitUntil defaults to
+2s, which is a property of the test harness, not of the code under test.
+
+Verified: tsc 0, eslint 0, vitest 1878 pass / 4 skip / 0 fail (was 1876), build
+clean, dist rebuilt.
+
+Remaining gap to the 2-3 minute target for a 666k context, measured not guessed:
+a chunk is now BOUNDED at the 300s global timeout but that is still above the
+180s target, and per-chunk latency varies 4.4x (90s to 400s for same-sized
+chunks), so the tail sets wall-clock. Next: a session-summary-specific per-chunk
+deadline, then hedging a straggler to a second free model.
+
+- Feat(session-summary): process chunks concurrently (TRDD-T4MZ8YQR)
+
+A 666k-token context took ~4.5-5h sequentially. The map phase was already
+safe to parallelise and nobody had noticed: chunks are turn-atomic, the
+model-fold was removed earlier so no chunk depends on another's summary,
+and the join is deterministic and order-based. Concurrency was therefore
+available at zero correctness cost - it only became available when the
+fold went away, since a fold had to collect every summary before reducing.
+
+--concurrency (CLI default 12, library default 1) with a 250ms launch
+stagger. Both numbers are MEASURED against the live account, not guessed:
+a burst of 32 landed 32/32 clean, 64 landed 62/64 with two 429s carrying
+x-ratelimit-limit: 20. 12 sits well inside the clean band so an account-side
+change cannot turn the default into a standing 429 storm.
+
+The stagger is 250ms, not the 3s I first specified. I had modelled the risk
+as sustained throughput; the measurement showed it is the instantaneous
+admission burst against a sub-minute bucket. At 3s x 12 workers the stagger
+alone would have added ~33s of dead time to every run.
+
+DEFAULT_MAX_CHUNK_TOKENS 50k -> 25k. Smaller chunks do NOT speed up a
+sequential run - each re-pays the measured ~35s per-request floor, which is
+queue/cold-start bound and independent of output size - so this only pays
+off BECAUSE the map phase is now concurrent.
+
+Correctness under concurrency rests on one invariant, commented at the call
+site: applyTransition mutates the SHARED chunks array and the mapSummaries
+tail, so a model-fallback/overflow transition may only run once every other
+in-flight chunk has settled. First worker to hit one becomes leader, drains
+the others behind a pause gate, applies, rewinds the dispatch cursor. Join
+order is unaffected regardless: mapSummaries is keyed by index, never by
+completion order.
+
+concurrency<=1 takes a separate path that is byte-for-byte the previous
+sequential behaviour - no stagger, no transient backoff - so the default
+library caller is unchanged and --concurrency 1 reproduces the old run
+exactly.
+
+Verified: tsc 0, eslint 0, vitest 1870 pass / 4 skip / 0 fail, build clean,
+--concurrency present on the real ./bin/llm-ext path (not a repo-relative
+dist invocation).
+
+Not changed, and deliberately: free-rotation.ts. I flagged a risk that a
+burst 429 could be misread as daily-quota-exhausted, which would demote the
+model and let one parallel burst walk the whole free pool. Verified it is
+already handled - classifyUnavailable reaches daily-quota only on positive
+per-day phrasing (free-rotation.ts:499), and a bare 429 falls through to
+transient (:519). No change needed.
+
+
+### Documentation
+
+- Docs: close TRDD-DT11TE2Z — grouped launcher shipped and verified
+
+All six acceptance criteria met by 470d175, each verified by running the
+real binary rather than reading the implementer's report.
+
+Records two verification failures of my own, because they were mine and
+they nearly cost the implementer real rework: I twice reported its results
+as "partly false" when the tool was correct and my harness was lying.
+
+1. `$?` after a pipe reports the LAST command, so `llm-ext scna | head`
+   then `echo $?` measures head -- every error path read as exit=0 when
+   they were all correctly exiting 1.
+2. zsh does NOT word-split unquoted $var the way bash does, so
+   `for c in "scan foldr"; do llm-ext $c` passed ONE argv token containing
+   a space. The CLI correctly called that unknown; I read it as a broken
+   launcher and nearly sent a phantom defect back.
+
+Both are the same family: a test harness is code, and an untested harness
+fails silently in the direction of "the product is broken". Written into
+the card's lessons section so the next reader inherits the check --
+reproduce a suspected defect under a differently-shaped command before
+attributing fault to the component.
+
+- Docs: TRDD-DT11TE2Z — withdraw the refactor plan, it is a thin launcher
+
+Owner correction: "i told you to create a simple launcher. it will examine
+the command and dispatch the real cli ts".
+
+The previous revision of this card had grown a 7-phase internal refactor
+-- unify four name registries, rename all 45 commands, sweep ~60
+skills/agents/commands, breaking change, approval tier 3. That was
+over-engineering a request for a front door, and it is withdrawn in full
+rather than quietly trimmed, so the record shows what was rejected.
+
+What it actually is: a translation layer. Read <group> <action>, map to an
+existing command name, turn the positional into that command's primary
+flag, delegate to the dispatch that already exists. Unmapped flags pass
+through untouched, so every existing parameter keeps working without the
+table knowing about it -- the table only needs group, action, target
+command, and which flag the positional fills.
+
+The 45 commands stay exactly as they are and keep working. Nothing is
+renamed, deprecated, or removed; tier drops 3 -> 0 and effort L -> S
+because the change is additive and breaks nothing.
+
+Kept a scope guard in Notes: if implementation starts needing edits to
+index.ts dispatch, the catalog, or any command's parameters, stop -- that
+is the withdrawn plan creeping back.
+
+The recon's real finding (command names duplicated across four registries
+in src) is left OUT of scope on purpose and noted as needing its own card
+if it ever matters. Folding a standing bug into a UX request is how the
+first version of this card went wrong.
+
+- Docs: TRDD-DT11TE2Z — recon reordered the phases; registries before rename
+
+Architecture recon changed the plan, so recording why before any code moves.
+
+I assumed the migration risk was the ~60 skills/agents/commands that name
+commands. It is not -- those are mechanical. The real risk is that the
+catalog is NOT the single source of truth for dispatch: a command name
+lives in FOUR independent registries in src alone -- the catalog array, a
+22-case switch(name) in index.ts, RECONCILE_SKIP_TOOLS (index.ts:1974-1988),
+and SINGLE_CALL_TOOLS in estimate.ts -- plus 93 literal occurrences in
+README that a doc-consistency gate asserts on.
+
+These are string literals, not symbols, so tsc stays silent through all of
+it. Renaming first would mean changing one name in four places and hoping
+no fifth exists; a missed case label is a command that appears in help and
+dies at dispatch.
+
+So Phase 1 is now "unify the registries, rename nothing": dispatch derives
+from the catalog, and a test asserts no name literal survives outside it.
+After that a rename touches one place instead of four. That phase earns
+its keep even if the restructure stalls -- four divergent name registries
+is a standing bug independent of this card.
+
+Also verified first-hand rather than trusting the agent: positional args
+are not merely unimplemented, they are actively rejected at
+src/cli/main.ts:209 with "unexpected argument (all inputs are named
+flags)". The owner's `session compact <file>.jsonl` needs positional
+support BUILT, not a check relaxed.
+
+Sweep note recorded for P6: search both kebab and snake spellings, since
+the dispatcher normalizes - to _ and half the references are scan_folder.
+
+- Docs: add TRDD-DT11TE2Z — collapse 45 flat commands into 7 grouped verbs
+
+The owner's objection is that 45 flat commands are unmemorable, and asked
+for one unified launcher with grouped commands, per-layer help, and a
+"did you mean" on typos.
+
+Half the ask was already satisfied and is recorded as such so it is not
+re-solved: llm-ext is ALREADY the single launcher, and TRDD-W9DK4L3N
+deleted the second entry point earlier today. The unmet half is purely
+the size of the flat surface.
+
+Shape chosen by the owner from three presented options: FULLY GROUPED,
+uniformly <group> <action>, no flat exceptions -- accepting that `compact`
+becomes `session compact` in exchange for one rule with no memorized
+exception list.
+
+The card carries the complete 45-command mapping so nothing can be
+silently dropped in the migration, and records three collapses that go
+beyond renaming: or-model-info{,-json,-table} become one command with
+--format (three commands that differed only in output encoding), the two
+benchmarks merge under --suite, and the DEPRECATED batch-check is deleted
+outright rather than carried through -- a breaking restructure is the
+cheapest moment to honour the no-legacy-code rule.
+
+Also captures the calling-convention change the owner's examples imply but
+do not state: positional primary input instead of --transcript, uniform
+-o, and --profile promoted from YAML-only to a flag.
+
+Phases are deliberately left unfilled pending an architecture recon,
+because the cost is dominated by name coupling OUTSIDE the catalog
+(skills, agents, commands, hooks, docs) and guessing that surface is how a
+rename becomes a half-finished migration. Card is `todo`, not `dev` --
+nobody is working it yet.
+
+- Docs: close TRDD-W9DK4L3N — legacy entry point removed, one CLI surface
+
+Records the closure, and corrects the card's own blast-radius table: it
+claimed four test files read src/cli.ts and each needed a per-assertion
+judgment. Only ONE did. The other two reference the SUBCOMMAND adapters
+mass_scouting/cli.ts and cluster/cli.ts -- namesakes, not references. A
+future reader trusting that table would rewrite two unrelated tests, so
+the correction matters more than the closure.
+
+Also states in the Approval log, explicitly, that this was closed on my
+own judgment and not by a fresh USER approval: the card is tier 3, and the
+call made was that removing an already-uninstalled bundle is dead-code
+cleanup inside the approved option-A-and-B scope, not a new public-API
+break. Recorded that way so it cannot later be misread as a sign-off that
+never happened, with the exact revert that undoes it.
+
+Gitignores /.janitor/ while here -- runtime state (heartbeat flags, the
+pre-compact handoff) that is regeneratable and was sitting untracked,
+one stray `git add` away from being committed.
+
+- Docs: close TRDD-T4MZ8YQR — streaming verified against the 253 MB transcript
+
+The last open acceptance criterion was "never loads the whole file into
+memory; verified against the 265 MB transcript". It had only ever been
+verified STRUCTURALLY (a unit test asserting no sync whole-file read) —
+the real transcript had never been run through the wired CLI.
+
+Measured now, by sampling peak RSS across the process tree while the CLI
+reads, prunes and packs:
+
+  12 MB input  -> 293 MB peak RSS,  5 chunks
+  253 MB input -> 406 MB peak RSS, 77 chunks
+
+20x the input for 1.4x the memory. A whole-file load would have added
+~500 MB on its own (JS strings are UTF-16, so 253 MB of bytes costs ~506
+MB resident). Memory does not scale with raw file size, so the read
+genuinely streams. The run log proves all 253 MB were read and packed
+before sampling stopped, so the number covers the whole read phase.
+
+The +113 MB that does appear is retained DERIVED data — the pruned
+context and 77 simultaneously-held chunk strings — not the raw file.
+Recorded on the card as a known bound, not a defect: memory scales with
+pruned size x chunk count, so a transcript another order of magnitude
+larger would want chunks spilled to disk.
+
+Also fills implementation-commits, which was empty despite 15 feature
+commits having shipped under this card — that field is the backtracking
+path from a future bug to the change that introduced it, so an empty one
+on a shipped card is a real gap.
+
+Column dev -> complete. What remains (publishing ~23 unpushed commits,
+including 9487d9a) is a release step gated on publish.py and the owner's
+call, not dev work — holding the card in dev would assert someone is
+working it, which is the failure mode the kanban rule names.
+
+- Docs: close TRDD-0H5N1V9W, OU2TCWP8, S8CKVH8S — implemented, tested, committed
+
+All three shipped and were left asserting dev/todo. A card that misstates its own
+state is the failure the kanban rule exists to prevent: the board keeps claiming
+work is pending or in progress, and nobody can tell from it that the pipeline
+actually drained.
+
+  0H5N1V9W  request timeout must cover the body read   -> af60ab4
+  OU2TCWP8  multi-model chunk fan-out                  -> a4031d6, addf86c
+  S8CKVH8S  incremental compaction (append-only prefix) -> 6eb7d6a
+
+addf86c is recorded against OU2TCWP8 because the degenerate-budget bug was a
+PRE-EXISTING defect that only became reachable once fan-out consulted the
+third-ranked model - the card is where a future reader will look for why that
+commit exists.
+
+Suite green at 1909 pass / 4 skip / 0 fail with all three landed.
+
+- Docs: record the FINAL measured latency verdict on TRDD-T4MZ8YQR
+
+Every wall-clock figure earlier in the card was arithmetic over per-chunk times,
+not an observed run. The observed runs disagree, so the card now carries a
+verdict section that explicitly supersedes them - otherwise a future reader takes
+'2-3 min reachable' as established and re-runs the dead ends.
+
+Measured, defaults, after all of tonight's work: 91.0 / 262.7 / 1233.7 / 1478.1 s
+per chunk, 13 aborts, 4 free models engaged, ~25 min and still going on chunk 5.
+
+The finding that invalidated the plan: per-request latency is NOT proportional to
+chunk size. Cutting the budget 4x produced 80 aborts on 22 chunks instead of 13 on
+5 - request count quadrupled at unchanged per-request cost. The earliest probe
+already proved it and I failed to follow it through: max_tokens=8 still cost ~35s.
+Free-tier latency is queue/contention bound, not generation bound.
+
+So 2-3 minutes is not reachable on the free tier; ~10-25 min is realistic. The
+card names all four dead ends (smaller chunks, tighter deadline, more concurrency,
+fan-out) so none is retried, and points at TRDD-S8CKVH8S - not redoing the work -
+as the only remaining lever.
+
+Also states plainly that the two bugs fixed tonight (the unbounded hang, the
+degenerate budget) are correctness wins that stand on their own, so the latency
+verdict is not misread as 'the work was wasted'.
+
+- Docs: add TRDD-S8CKVH8S — incremental compaction via append-only prefix
+
+The highest-value remaining item, and the one that makes free-model compaction
+usable in practice.
+
+Measured: free-tier per-chunk latency is 91-1478s and is NOT proportional to
+chunk size, so a full compaction costs ~10-25 minutes and no chunking, deadline,
+concurrency or fan-out setting moves it - all four are implemented and none
+touch the constraint. The only lever left is NOT REDOING THE WORK.
+
+Today every run redoes all of it. The checkpoint identity pins transcriptBytes
+and transcriptMtimeMs to exact equality, and a live session appends on every
+turn, so both change and the checkpoint is always discarded. --resume therefore
+only ever helped a run interrupted against a FROZEN file - never a live session,
+which is the actual use case.
+
+The property that makes the fix safe: a Claude Code transcript is APPEND-ONLY. If
+the file only grew and its consumed prefix is byte-identical, every chunk summary
+over that prefix is still valid by construction. So identity becomes a prefix
+check (length + hash of the consumed bytes) instead of size/mtime equality: grown
++ matching prefix reuses completed chunks and summarizes only the new tail;
+shorter, or a differing prefix, does a full restart exactly as today. Fail safe -
+never silently reuse against a changed prefix.
+
+Economics this changes: first run stays 10-25 min, but a run five minutes later
+costs only the new turns instead of a full redo. That is precisely what makes the
+janitor's cache-expiry design (issue #251) viable - pre-compute on a cadence,
+each tick cheap, and /clear + inject an always-fresh summary is instant.
+
+Card records the two dead ends so they are not retried: a faster model is not
+available (free-tier latency is queue/contention bound - a max_tokens=8 request
+still costs ~35s) and local backends are off the table, the owner uses them for
+other work.
+
+- Docs: add TRDD-OU2TCWP8 — multi-model chunk fan-out
+
+The only remaining item between today's build and the 2-3 minute target for a
+666k context, and it rests on a measurement rather than a guess: the free-tier
+rate bucket is PER-MODEL, not per-account (64 concurrent on one model gives
+429s; the same 64 split across two models gives zero).
+
+That measurement dissolves a real deadlock. Per-stream throughput is fixed, so
+hitting ~180s needs smaller chunks; smaller chunks mean more of them (666k =>
+~83 at 8k), and 83 concurrent is far past one model's ~32 cliff. Small chunks
+and single-wave are mutually exclusive on ONE model, and not on four.
+
+The card names the hard part explicitly so it is not skipped: the concurrent
+loop currently assumes ONE active model, and a failing worker drains every
+sibling behind a pause gate before re-chunking. That whole-pool drain is exactly
+wrong once each chunk carries its own model - one model going bad must not
+re-chunk work already succeeding on another. Failure isolation has to become
+per-model.
+
+Also records the lesson already paid for tonight, at the card level so it is not
+relearned: a deadline is a backstop and belongs ABOVE the working distribution;
+cutting the tail is hedging's job.
+
+- Docs: record root-cause defect — request timeout does not cover generation
+
+Found by tracing during the concurrent-run measurement, not by assuming.
+The slowness was never primarily a parallelism problem.
+
+fetchWithTimeout arms an AbortController, awaits fetch(), then clears the
+timer in a finally. But fetch() resolves on response HEADERS, not on a
+consumed body - so the finally cancels the abort the moment headers land,
+and the caller reads the body afterwards with no deadline at all. The
+configured timeout therefore bounds time-to-first-byte ONLY; generation is
+unbounded.
+
+Evidence: no timeout: in settings.yaml so the 300s default applies, yet
+chunk 5 of the live run reached 1890s - 6.3x its own cap - while
+fetchWithRetry429's remaining = timeout - elapsed arithmetic believed the
+request had long expired. The 'progress ... Ns elapsed' line is a display
+ticker (elapsed/conn.timeout capped at 90%), not a watchdog, and it looks
+identical to a hung socket.
+
+Why it survived: the comment justifying no hard cap says the MCP tool-call
+timeout is inactivity-based and kept alive by heartbeat. That was true under
+MCP, which supplied the outer deadline. MCP is gone - this is CLI-only now -
+so the justification died with the transport while the code it justified
+stayed. Worth remembering as a category: a safety argument that names a
+component can be invalidated by deleting that component.
+
+Impact: a stalled generation hangs the run forever (the 15-retry ladder
+never fires - a retry needs a response and there is none), violating
+fail-fast; and under concurrency the chunk-level p99 sets the entire
+wall-clock, so one unbounded chunk erases the parallelism win. Measured: 4
+chunks at 90-400s, the 5th alone >31min.
+
+Fix is NOT included here - it needs its own TRDD. Direction: keep the
+controller armed until the body is consumed so an over-deadline generation
+aborts loudly and rotates like any other transient. Raising timeout is not
+a fix; it converts an unbounded hang into a longer unbounded hang.
+
+Also corrects my own earlier claim, recorded in janitor issue #251, that the
+slowness was 'inherent, not a tuning bug'. A chunk running 6.3x past its
+configured timeout is a bug. That issue text needs amending once fixed.
+
+- Docs: record MEASURED free-tier concurrency ceiling on TRDD-T4MZ8YQR
+
+Probed the live OpenRouter account rather than trusting the documented
+limit, because the account's rate_limit field is deprecated and returns
+requests:-1 — there is no number to read, only one to measure.
+
+Result: 32 concurrent is clean (32/32, zero 429), 64 breaks (2x 429).
+Dozens in parallel is fine; my earlier '10-16 realistically' estimate was
+pessimistic by ~2x and would have left most of the speedup on the table.
+
+The finding that actually matters is a correctness trap, not a tuning
+number: the 429 returned at 64 is TRANSIENT (its reset timestamp had
+already elapsed 7s earlier - a sub-minute rolling window), NOT a daily
+cap. If classifyUnavailable reads it as quota-exhausted it demotes the
+model, and one parallel burst then walks the whole free pool in seconds
+- turning a 200ms hiccup into 'all candidates exhausted'. Recorded so the
+discriminator (reset proximity; a real daily cap resets hours out at UTC
+midnight) is not rediscovered by debugging a dead run.
+
+Also measured: a ~35s per-request floor that is independent of output
+size (max_tokens=8 still took 35s). This is why smaller chunks do NOT
+speed up a SEQUENTIAL run - each chunk re-pays the floor - and why they
+only pay off concurrently. Recorded because 'split smaller' is the
+obvious wrong fix someone will otherwise try.
+
+Corrected my own earlier instruction: the 3s launch stagger I specified
+modelled sustained throughput, but the real constraint is the
+instantaneous admission burst, so ~250ms suffices. At 3s x 16 workers the
+stagger alone would have added ~45s of dead time to every run.
+
+- Docs: record post-fix quality verification on TRDD-T4MZ8YQR
+
+Answers the owner's question 'have you verified that the free model is
+able to handle the task?' with measured evidence rather than assertion.
+
+WHY this is recorded now: the numbers only exist while the run's report
+is on disk (reports/ is gitignored and purged), so the evidence has to
+live in the card or it is lost. The counter-intuitive result — output
+shrank 328 KB -> 21 KB — reads as catastrophic data loss to anyone who
+sees it later without the explanation, so the card states explicitly
+that the old bulk WAS the heartbeat/skill-doc noise and that the 5
+previously-lost user messages are now all present. Without that note a
+future session would 'fix' the size regression by reverting the prune.
+
+Verdict: capable, not reliable. ~1 in 3 attempts on the free model needs
+a retry (1 echo, 2 empties, 2 errors overnight). That is the case for
+the concurrency work in flight: sequentially a failed attempt adds its
+full wasted duration to the critical path; concurrently it overlaps the
+chunks still working.
+
+- Docs: TRDD-T4MZ8YQR — measured throughput and the parallelisation opportunity
+
+Measured 3 chunks / ~150k pruned tokens in 60 min (~20 min per 50k chunk), so a
+666k-token context is ~14 chunks and ~4.5-5h sequentially.
+
+That wall-clock is an artefact of sequential processing, not an inherent cost:
+chunks are turn-atomic, nothing depends on another chunk's summary, and the
+join is deterministic and order-based — so they can be sent concurrently with
+zero correctness change, collapsing 666k to roughly one chunk's time. Only
+possible because the model-fold was removed. Not implemented; recorded so the
+option is not lost.
+
+- Docs: TRDD-T4MZ8YQR — v12.0.0 released; record the unverified-quality gap and remaining work
+
+Handoff state before compaction. Ships the honest caveat: the nine-section
+schema was produced end-to-end once, but BEFORE the queue-operation extraction
+fix that adds more verbatim material, so post-fix quality is unverified — and
+nemotron has produced an echo, a finish_reason=error and repeated empties, so
+'the free model can do it' rests on one clean run.
+
+
+### Fixed
+
+- Fix: 8 defects from a high-effort review, incl. a concurrent-map deadlock
+
+CRITICAL -- the concurrent map phase deadlocked whenever two or more chunks
+failed at once. becomeLeaderAndTransition drained other in-flight WORKER
+TASKS, but a task that hits a transition becomes a follower and parks on
+the leader's pauseGate: the leader awaited followers that were awaiting the
+leader. A delisted or unavailable model fails every in-flight chunk
+simultaneously, which is precisely this case, so the run hung forever with
+no timeout and no error. The leader now drains outstanding model ATTEMPTS,
+which always settle, in a re-read loop rather than a single snapshot.
+Proven by a repro test that timed out at 20s before the fix and passes in
+2.3s after.
+
+This one is worth dwelling on: it lived in the concurrency work I shipped
+today and reported as verified. Every unit test passed because each tested
+ONE failing chunk; the deadlock needs two. A green suite measured the case
+I thought to write, not the case that occurs when a free model is delisted
+mid-run -- the exact scenario the fan-out work exists to survive.
+
+Also fixed:
+- Uncancelled hedge timer kept the process alive up to 60s after the run
+  finished (one timer per chunk, never cleared, main() returns rather than
+  exiting) -- the CLI printed the report path then appeared to hang.
+- Launcher positional capture stole a flag's value: `scan folder
+  --instructions "find bugs" src/` rewrote "find bugs" into --folder_path.
+  Only input-first ordering had been tested. Now schema-aware, and an
+  unknown flag is assumed to take a value so its argument is never stolen.
+- A transition rewound nextIndex to the failing index, so a second worker
+  claimed a chunk the leader was already retrying; the duplicate inFlight
+  key made the first cleanup delete the second's entry, hiding that attempt
+  from a later drain.
+- An abandoned response body held the event loop for the rest of the
+  request budget (300-600s), a direct consequence of keeping the abort
+  timer armed through the body read.
+- `<group> <action> --help` exited 0 printing nothing when GROUPS named a
+  command the catalog lacks -- it read as "this action has no parameters".
+- DEFAULT_CONCURRENCY was referenced by 7 comments and index.ts after
+  deletion, including a false claim that the CLI passes it and that it
+  "stays at 12"; the CLI passes "auto".
+- The scan list printed twice when the interactive prompt got a blank line.
+
+Verified: tsc 0, vitest 1921 passed / 4 skipped / 0 failed, `eslint .
+--quiet` clean, dist rebuilt so the shipped bundle matches src. Smoke-tested
+through the real binary: the flag-before-positional case now reaches the
+tool instead of dying on "unexpected argument".
+
+Note on the eslint gate: `--max-warnings 0` reports 1 warning -- a stale
+eslint-disable in benchmark-fixtures/search-existing, a file this diff does
+not touch. Left alone on purpose: it is benchmark INPUT, and editing it to
+please a linter risks perturbing benchmark results.
+
+- Fix(session-summary): chunk deadline 240s -> 600s; it is a stall-catcher, not a tail-cutter
+
+Third and final correction to this constant, and the measurement that settles it.
+
+THE DEADLINE IS PER-ATTEMPT, NOT PER-CHUNK. A value below the model's real
+latency therefore bounds nothing - it MULTIPLIES total time, one full deadline
+per doomed attempt. Live run at 240s: 13 aborts, and one chunk took 1478s, i.e.
+roughly six consecutive 240s aborts before an attempt survived.
+
+MEASURED per-chunk latency, free tier, same transcript:
+  91 / 185 / 262 / 312 / 475 / 718 / 1234 / 1478 s
+
+And the finding that invalidates the plan I had been building on: latency is NOT
+proportional to chunk size. A 4x smaller chunk budget (6k) was no faster and
+produced 80 aborts instead of 13, on 22 chunks instead of 5. The earliest probe
+already said so and I did not follow it through - a max_tokens=8 request still
+cost ~35s. Free-tier latency is dominated by queueing and contention, not by how
+much the model generates. So "shrink the chunks to go faster" is wrong: it
+multiplies requests at unchanged per-request cost.
+
+600s sits above that entire distribution, so it catches only a genuine STALL -
+the unbounded-hang class that TRDD-0H5N1V9W made catchable at all - and leaves
+merely-slow work alone. Cutting the tail is HEDGE_AFTER_MS's job: racing a second
+model costs nothing when the first was only slow, whereas killing it costs a full
+attempt.
+
+The header now says DO NOT lower this to chase a latency target, with the numbers
+attached. It has been tried twice (120s, 240s) and made things strictly worse both
+times. The binding constraint is free-tier per-request latency, which no chunking,
+deadline, concurrency or fan-out setting can move.
+
+Consequence worth stating plainly: 2-3 minutes for a 666k context is NOT reachable
+on the current free-model pool. It needs a local model (still $0, latency under
+the user's control - already supported) or a cheap paid one (breaks the $0
+guarantee). Everything landed tonight - the unbounded-hang fix, concurrency,
+auto-sizing, fan-out, hedging - is correct and worth having, and none of it moves
+that constraint.
+
+Verified: tsc 0, eslint 0, vitest 1891 pass / 4 skip / 0 fail, build clean.
+
+- Fix(session-summary): reserve the completion we REQUEST, not the provider's max
+
+Found by the first live run after fan-out landed: a real transcript failed to
+chunk at all, reporting a 4437-token turn as too large for a "usable budget of
+1000 tokens". 1000 is the clamp floor, so the budget had gone NEGATIVE.
+
+Root cause: windowBudgetForModel reserved `max_completion_tokens` - the largest
+completion the provider would ever allow - and callChunkModel then REQUESTED that
+same maximum. For most models that is merely wasteful. For
+nvidia/nemotron-3-super-120b-a12b:free the catalog reports
+context_length == max_completion_tokens == 262144, so reserving the full
+allowance left nothing for input.
+
+Two things turned that latent waste into a hard failure:
+- the equal-context tiebreak prefers the LARGER completion ceiling, which is
+  exactly backwards for input room, so that model sorts THIRD;
+- fan-out takes min() across the top-K models, so one degenerate entry poisoned
+  every chunk in the run.
+
+Fix: reserve and request `min(max_completion_tokens, MAX_SUMMARY_COMPLETION_TOKENS
+= 32k)`. A chunk summary cannot plausibly exceed the chunk it summarizes and
+chunks cap at 25k, so 32k is generous headroom. The reservation and the request
+now come from ONE helper (completionRequestFor) because if they ever diverge the
+budget stops describing the request - which is the whole defect in miniature. Side
+benefit: we stop asking a free model for 262k output tokens to summarize 25k.
+
+This is a pre-existing bug, not one fan-out introduced - single-model runs simply
+never consulted the third-ranked model, so it stayed invisible. Fan-out made it
+reachable, which is why it surfaced the moment the first live run went out.
+
+Test: a regression case pinning the exact catalog shape (context ==
+max_completion == 262144), asserting both that chunking now succeeds AND that the
+requested max output is the capped value rather than the provider's 262k.
+Non-vacuous by construction - before the fix this shape threw inside chunkTurns
+and never reached the model.
+
+Verified: tsc 0, eslint 0, vitest 1891 pass / 4 skip / 0 fail (was 1890), build
+clean, dist rebuilt.
+
+- Fix: request timeout must cover the body read, not just headers (TRDD-0H5N1V9W)
+
+fetchWithTimeout armed an AbortController, awaited fetch(), then cleared the
+timer in a finally. But fetch() resolves on response HEADERS, not on a consumed
+body - so the finally disarmed the abort the instant headers landed and the
+caller read the body with no deadline at all. The configured timeout bounded
+time-to-first-byte only; generation was unbounded.
+
+A model that returned headers promptly and then stalled hung the run FOREVER:
+the 15-retry ladder never fired, because a retry needs a response and there is
+none. Measured on a live session-summary run: one chunk reached 1890s against
+the 300s default (6.3x) before its socket died and the attempt restarted from
+scratch, while fetchWithRetry429's remaining = timeout - elapsed arithmetic
+believed the request had long expired.
+
+Fix: keep the controller armed THROUGH the body read and disarm only once the
+body settles, so an over-deadline generation aborts loudly and rotates like any
+other transient - fail-fast instead of a silent hang. Implemented by piping the
+body through a pass-through TransformStream whose flush/cancel callbacks disarm,
+then returning a Response rebuilt from that stream (Response.body is read-only,
+so it cannot be swapped in place).
+
+Deliberately NOT raising the timeout value: that converts an unbounded hang into a
+longer unbounded hang.
+
+Why this survived so long, worth recording as a category: index.ts:317 justified
+having no hard cap with 'The MCP tool-call timeout is inactivity-based, kept
+alive by heartbeat - no hard cap needed.' That was TRUE under MCP, which supplied
+the outer deadline. MCP is gone and this is CLI-only, so the justification died
+with the transport while the code it justified stayed. A safety argument that
+NAMES a component is invalidated by deleting that component.
+
+Edge cases handled explicitly, each commented at the site:
+- fetch() rejection clears the timer and rethrows (no leaked timer).
+- 204/304/HEAD return the ORIGINAL response - the Response constructor rejects a
+  body for those statuses, so the rebuild path must not be taken.
+- cancel disarms too, so a body nobody reads cannot leave a timer armed to fire
+  later against a response already discarded.
+- inter-retry drain already consumes the body (http.ts:227), so the tap's flush
+  disarms on that path as well - verified, not assumed.
+
+Blast radius enumerated before writing code: 11 fetchWithTimeout call sites - 8
+small metadata endpoints (/v1/models, /v1/key, /v1/credits, LM Studio probes)
+whose bodies arrive in milliseconds, plus the 2 completion paths where the bug
+actually bit. Rebuilding the Response is safe here because no caller reads
+res.url, res.redirected or res.type - grepped, zero hits.
+
+Tests: 6 regression tests in a new src/provider/http.test.ts, REGISTERED in
+vitest.config.ts (the include list is explicit - an unregistered test file
+silently never runs). Proven non-vacuous: the old implementation was replayed
+against the same stalling-body scenario and was still hanging at 10x its own
+deadline, so these tests genuinely fail without the fix rather than passing
+either way.
+
+Verified: tsc 0, eslint 0, vitest 1876 pass / 4 skip / 0 fail (was 1870), build
+clean, dist rebuilt.
+
+- Fix(pkg): the package still described itself as an MCP server
+
+scripts/llm-ext/package.json's description read "MCP server for LLMs" — the
+npm-facing one-liner, and the first thing anyone reads. There is no MCP server:
+it was deleted in v11.0.0 (d557c68), MCP is banned on this machine, and 12.0.0
+is the release that completes the CLI-only direction. It shipped in 12.0.0 with
+that text.
+
+Now matches .claude-plugin/plugin.json, which was already correct — so the two
+manifests agreed on everything except the one sentence describing what the
+thing IS. Rides the next release.
+
+
+### Miscellaneous
+
+- Chore: gitignore the _dev working folders
+
+docs_dev/ was NOT ignored, and I had just written an abandoned-work patch into
+it — a file full of absolute local paths, one 'git add' away from being
+published. The rules require every _dev folder to be gitignored for exactly that
+reason; reports/ and reports_dev/ were covered and the rest were not.
+
+Adds docs_dev, scripts_dev, samples_dev, examples_dev, tests_dev, downloads_dev,
+libs_dev, builds_dev.
+
+
+### Refactored
+
+- Refactor(cli)!: delete the retired legacy entry point (TRDD-W9DK4L3N)
+
+v12.0.0 repointed both published bin names at dist/llm-ext.js, which left
+src/cli.ts building to dist/cli.js as a second entry point that nothing
+installs and nothing imports. Two copies of a dispatcher is exactly the
+"no legacy/obsolete code, only one version exists" rule this project runs
+on, so it goes.
+
+Removed: src/cli.ts, src/cli-mass-scout-free.ts (its only importer was
+cli.ts) and that module's test, the esbuild target, and the committed
+dist/cli.js bundle.
+
+THE REAL WORK WAS ONE TEST, AND IT IS WHY THIS WAS NOT A DELETE-THE-DEAD-
+CODE TASK. free-rotation-coverage.test.ts asserted that the auto-reconcile
+pre-flight runs at BOTH funnels, and its CLI half checked cli.ts for
+"reconcileModelsBeforeWork(makeCliReconcileDeps())". Deleting that
+assertion along with the file would have stayed green while silently
+dropping the guarantee that the CLI reconciles at all. Traced the live
+path first: bin/llm-ext -> src/cli/main.ts -> dispatchCallTool ->
+runModelReconcile(), so coverage genuinely holds through the shared
+dispatcher. The assertion is therefore re-pointed at cli/main.ts to assert
+the single-entry-point invariant, not removed. Test title updated too --
+it said "MCP + CLI" and MCP no longer exists here.
+
+The card claimed four test files read cli.ts and needed per-assertion
+judgment. Verified first-hand: only ONE did. cluster/wiring.test.ts and
+security_scan/wiring.test.ts reference the SUBCOMMAND adapters
+mass_scouting/cli.ts and cluster/cli.ts -- unrelated files with
+confusingly similar names. Trusting the card's own blast radius would
+have meant rewriting two tests that had nothing to do with this.
+
+Also corrected two comments that asserted present-tense facts which the
+deletion made false (a comment naming a file that no longer exists is what
+sends the next reader hunting for it). The mass_scouting fieldset path
+resolution is unaffected -- the bundle is still in dist/, so ../fieldsets
+resolves identically.
+
+resolveMassScoutFreeModelOverride stays exported: the bug it prevents is a
+second copied implementation elsewhere, and one entry point today is not a
+reason to inline it back.
+
+Verified: tsc 0, eslint 0, vitest 1899 passed / 4 skipped / 0 failed
+(1909 before; -10 is the deleted module's own test file), build clean with
+no dist/cli.js.
+
+
 ## [12.0.0] - 2026-08-11
 
 ### Added
