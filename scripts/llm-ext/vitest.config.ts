@@ -37,6 +37,10 @@ export default defineConfig({
       // Dynamic default-profile lifecycle (free/ensemble/mass-scout) — pool
       // fingerprinting, drift decision, and the state sidecar.
       'src/default-profiles.test.ts',
+      // The population RUNNER's own policy — paid gate, lock-before-gate
+      // ordering, fail-open. The wiring test mocks this module, so without
+      // this file the money policy itself has no coverage.
+      'src/default-profiles-runner.test.ts',
       // Phase 4 wiring: the boot gate + the dispatcher hook that actually
       // populate a default profile on first use (previously inert).
       'src/default-profile-wiring.test.ts',
