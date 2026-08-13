@@ -1,6 +1,31 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.3.4] - 2026-08-13
+
+### Fixed
+
+- Fix(ci): stop the release gate failing on its own scratch file
+
+The Release workflow has failed on every tagged release while the local
+publish gate passed. The asymmetry was the whole clue: publish.py never
+writes a validation.json, and the workflow did.
+
+`cpv-remote-validate plugin . --json > validation.json` redirects into the
+directory being scanned, and the shell creates the redirect target before
+CPV starts. So the scan found a zero-length validation.json in the plugin
+root and reported it, correctly, as "[MAJOR] JSON syntax error in
+validation.json: Expecting value: line 1 column 1 (char 0)". That was the
+single blocking finding on every run - the gate failing the release on a
+file the gate had just created. Every other finding was a skillaudit
+advisory and already downgraded.
+
+Both reports now go to RUNNER_TEMP, outside the scanned tree, and the
+classifier reads the path from the environment rather than a fixed name.
+validation.json is also gitignored, for anyone running the validator by
+hand from the repo root.
+
+
 ## [13.3.3] - 2026-08-13
 
 ### Fixed
