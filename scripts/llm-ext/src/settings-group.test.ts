@@ -204,3 +204,89 @@ describe("missing settings.yaml — graceful message, never a crash", () => {
     }
   });
 });
+
+describe("settings profiles — machine-managed vs user, and unpopulated rendering", () => {
+  /** Point config.ts at a throwaway dir holding `yaml`, then read the listing. */
+  async function listingFor(yaml: string): Promise<string> {
+    const dir = mkdtempSync(join("/tmp", "settings-listing-"));
+    const prev = process.env.LLM_EXT_CONFIG_DIR;
+    process.env.LLM_EXT_CONFIG_DIR = dir;
+    try {
+      writeFileSync(join(dir, "settings.yaml"), yaml);
+      const { formatProfilesList } = await import("./config.js");
+      return formatProfilesList();
+    } finally {
+      if (prev === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
+      else process.env.LLM_EXT_CONFIG_DIR = prev;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  const UNPOPULATED_DEFAULTS = [
+    "active: free",
+    "profiles:",
+    "  free:",
+    "    mode: remote-ensemble",
+    "    api: openrouter-remote",
+    "    free_only: true",
+    "    free_models: []",
+    "    model: placeholder/unpopulated-default-profile",
+    "    api_key: $OPENROUTER_API_KEY",
+    // ensemble is NOT free_only, so its unpopulated state is carried by the
+    // sentinel `model` itself. This is the profile that actually exercised the
+    // bug: the old renderer printed the model slots verbatim, so the raw
+    // `placeholder/...` id appeared in the listing. A free_only profile alone
+    // would NOT have caught it — it rendered as "free_only (0 models)".
+    "  ensemble:",
+    "    mode: remote-ensemble",
+    "    api: openrouter-remote",
+    "    model: placeholder/unpopulated-default-profile",
+    "    second_model: placeholder/unpopulated-default-profile",
+    "    third_model: placeholder/unpopulated-default-profile",
+    "    api_key: $OPENROUTER_API_KEY",
+    "  my-own:",
+    "    mode: local",
+    "    api: generic-local",
+    "    model: model-a",
+    "    url: http://127.0.0.1:1",
+    "",
+  ].join("\n");
+
+  it("NEVER prints the raw placeholder sentinel id — it reads as a broken config the user must repair, when it is a normal pre-benchmark state", async () => {
+    const text = await listingFor(UNPOPULATED_DEFAULTS);
+    expect(text).not.toContain("placeholder/unpopulated-default-profile");
+    expect(text).toMatch(/not benchmarked yet/i);
+  });
+
+  it("labels a machine-managed default but NOT a user profile — only free/ensemble/mass-scout refresh themselves", async () => {
+    const text = await listingFor(UNPOPULATED_DEFAULTS);
+    const freeLine = text.split("\n").find((l) => l.includes("free —") || l.includes("free ["));
+    const userLine = text.split("\n").find((l) => l.includes("my-own"));
+    expect(freeLine).toBeDefined();
+    expect(userLine).toBeDefined();
+    expect(freeLine).toContain("[machine-managed]");
+    expect(userLine).not.toContain("[machine-managed]");
+  });
+
+  it("omits the unpopulated explainer once every default carries real models — the note is guidance, not decoration", async () => {
+    const populated = [
+      "active: free",
+      "profiles:",
+      "  free:",
+      "    mode: remote-ensemble",
+      "    api: openrouter-remote",
+      "    free_only: true",
+      "    free_models:",
+      "      - vendor/a:free",
+      "      - vendor/b:free",
+      "    model: vendor/a:free",
+      "    api_key: $OPENROUTER_API_KEY",
+      "",
+    ].join("\n");
+    const text = await listingFor(populated);
+    expect(text).not.toMatch(/not benchmarked yet/i);
+    expect(text).not.toMatch(/Unpopulated profiles are expected/i);
+    // Still labelled — populated does not mean user-owned.
+    expect(text).toContain("[machine-managed]");
+  });
+});
