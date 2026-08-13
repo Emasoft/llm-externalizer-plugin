@@ -259616,7 +259616,8 @@ Settings file is present but its 'profiles' map is empty \u2014 this is a config
 `);
             } else {
               const secs = ((event.elapsedMs ?? 0) / 1e3).toFixed(1);
-              process.stderr.write(`${label} done in ${secs}s
+              const race = event.raceWinnerModel !== void 0 ? ` (race of ${event.raceSize ?? "?"} won by ${event.raceWinnerModel})` : "";
+              process.stderr.write(`${label} done in ${secs}s${race}
 `);
             }
           };

@@ -4343,7 +4343,17 @@ async function dispatchCallToolInner(
             process.stderr.write(`${label} started\n`);
           } else {
             const secs = ((event.elapsedMs ?? 0) / 1000).toFixed(1);
-            process.stderr.write(`${label} done in ${secs}s\n`);
+            // Say WHICH racer won when the single-chunk race decided this
+            // chunk. Without it a "done in 84.2s" line is unattributable: it
+            // reads identically whether the race won in 84s or whether every
+            // racer failed after minutes and the sequential fallback then
+            // took 84s. Those are opposite outcomes and the fix for each is
+            // different, so the line must distinguish them.
+            const race =
+              event.raceWinnerModel !== undefined
+                ? ` (race of ${event.raceSize ?? "?"} won by ${event.raceWinnerModel})`
+                : "";
+            process.stderr.write(`${label} done in ${secs}s${race}\n`);
           }
         };
 
