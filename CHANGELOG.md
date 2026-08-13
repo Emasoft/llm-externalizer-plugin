@@ -1,6 +1,52 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.3.0] - 2026-08-13
+
+### Added
+
+- Feat(profiles): split the 3 machine-managed defaults into 5 explicit ones
+
+free / ensemble / mass-scout  ->  free / free-ensemble / paid /
+paid-ensemble / paid-mass-scout.
+
+WHY the split: the old names hid WHAT COSTS MONEY. `ensemble` was paid and
+`free` was a pool that silently served both the single-model and the
+combined-output case, so a user reading their own settings.yaml could not
+tell which profile would bill them. The new names put the cost class in the
+name, and separate the single-model pick from the 3-model ensemble that was
+previously conflated inside `free`.
+
+Selection rules (first four share ONE keyword sweep, so the split costs no
+extra benchmarking):
+  free            best single free model that passes
+  free-ensemble   best 3 free models that pass (combined output)
+  paid            best single paid model, input AND output both < $1.3/M
+  paid-ensemble   best 3 paid models under the same ceiling
+  paid-mass-scout cheapest passing model, NEVER a :free id
+
+WHY there is no free mass-scout: mass-scouting fires thousands of requests
+and every free tier rate-limits it, so a free scout profile would be a trap
+that looks configured and fails under load. The ':free' exclusion in
+pickMassScoutModel is enforced in CODE, not merely documented, so a caller
+cannot hand one back by accident.
+
+Also corrects a STALE comment in model-qualification/registry.ts that
+claimed only `security_scan` has a benchmark. mass_scout has had its own
+dedicated benchmark all along -- src/mass_scouting/calibrate-payload-size.test.ts,
+measuring per-record classification accuracy across ~11 payload sizes. It
+lives under mass_scouting/ rather than benchmark/<suite>/, which is exactly
+why a search of the suite directory "proved" it absent. It is gated on
+CALIBRATE=1 + OPENROUTER_API_KEY (real spend) and is deliberately NOT wired
+into paid-mass-scout's automatic population; pickMassScoutModel now carries
+an honest note naming it as the future qualification target and what wiring
+it in would require.
+
+Gates: tsc 0 - eslint 0 - build 0 - vitest 2034 passed / 0 failed / 4 skipped
+- dogfood 119 PASS / 0 FAIL (120 checks). No cost guard or assertion was
+weakened to get there.
+
+
 ## [13.2.1] - 2026-08-13
 
 ### Fixed
