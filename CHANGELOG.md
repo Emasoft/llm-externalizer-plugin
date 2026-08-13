@@ -1,6 +1,50 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.3.6] - 2026-08-13
+
+### Fixed
+
+- Fix(ci): restore validation-report.txt as a release asset
+
+Moving the CPV reports to RUNNER_TEMP fixed the self-inflicted blocking
+finding but broke three downstream consumers in the same job that still
+expected ./validation-report.txt: the SHA256SUMS loop, the release upload,
+and the provenance attestation. The upload failed with "no matches found
+for validation-report.txt" and took the job down one step later than
+before - a fix that moved the failure instead of removing it, because the
+change was checked against the step it touched rather than every reference
+to the file it moved.
+
+The text report is now copied back into the workspace immediately after
+the scan that produces it has finished. The scanner never sees a partial
+file, and the asset is published as before. Only validation.json has to
+stay out of the tree: it is not gitignored, and an empty one in the plugin
+root is itself a blocking MAJOR.
+
+
+### Testing
+
+- Test(cli): stop a spawn timeout from reporting as "expected null to be +0"
+
+The publish gate failed on
+"--profile <name> ... positioned AFTER the command" with
+"AssertionError: expected null to be +0", while the same file passed three
+times in a row when run on its own.
+
+execFileAsync kills the child on timeout, which leaves `code` undefined and
+sets `signal`. The harness collapsed that to `exitCode: e.code ?? null`, so
+a 15-second timeout arrived at the assertion as a bare null and the message
+named neither the timeout, the signal, nor the command. The failure was
+real and the report made it look like a logic bug.
+
+The harness now surfaces the signal, whether the kill was a timeout, and
+the argv, so the next occurrence explains itself. The budget goes from 15s
+to 60s: these spawn a cold Node process running the real CLI, and the gate
+that runs them does so while the same machine type-checks, lints and builds
+- which is why it failed there and nowhere else.
+
+
 ## [13.3.5] - 2026-08-13
 
 ### Testing
