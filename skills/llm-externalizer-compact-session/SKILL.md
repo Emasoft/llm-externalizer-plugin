@@ -39,6 +39,34 @@ are in is the point when preparing for `/clear`.
 It prints the report PATH to stdout — Read that, do not echo the transcript. With no `-o`
 the report lands in `<project-root>/reports/llm-externalizer/`.
 
+### When the summary MUST eventually exist
+
+Add `--until-done`. Without it the command is checkpoint-and-stop by design: a chunk gets
+its retry budget, a dead or quota-capped model is demoted to the next ranked free one, and
+when those run out the command FAILS and tells you to re-run. That is the right default for
+an interactive run — it reports the problem instead of sitting on it — and the wrong one for
+an unattended compaction.
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/llm-ext" session compact <target flags> --until-done
+```
+
+Retrying is cheap and correct because of the checkpoint: every pass keeps the chunks that
+already landed and only redoes what did not, so N passes converge instead of repeating work.
+Backoff is 30s doubling to a 15-minute cap; when the failure names an exhausted daily quota
+the wait is capped at the next 00:00 UTC reset instead, because that is when the free tier
+actually returns. A bad argument (a transcript path that does not exist, an unknown profile)
+still fails immediately — `--until-done` retries the compaction, not your typo.
+
+Belt and braces, if the caller must survive the process being killed as well:
+
+```bash
+until "${CLAUDE_PLUGIN_ROOT}/bin/llm-ext" session compact <target flags>; do sleep 60; done
+```
+
+Same convergence property, one level up. Use the flag inside a single invocation, the loop
+when something external may kill the process.
+
 ## What to tell the user
 
 The report path, and the fact that it is a nine-section compaction summary with user
@@ -64,3 +92,9 @@ asked — the whole point is keeping it out of context.
 `--prune aggressive` (default) drops tool-result payloads and pasted file contents;
 `--stdout` prints the summary text instead of a report path; `--resume` requires an
 existing checkpoint and fails fast if none matches.
+
+`--until-done` never gives up (see above). `--max-retries-per-chunk N` raises how many
+times ONE chunk may be re-attempted on the SAME model (default 2, i.e. 3 attempts) — it
+covers provider hiccups and rate-limit backoff, and does NOT cover a delisted or
+quota-exhausted model, which is demoted and replaced regardless of this number. Flags accept
+either spelling: `--until-done` and `--until_done` are the same flag.

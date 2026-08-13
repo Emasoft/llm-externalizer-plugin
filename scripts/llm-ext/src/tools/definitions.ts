@@ -825,6 +825,28 @@ export function buildTools(limitsText: string) {
               "instead, which races a second model rather than killing the first. Lower this " +
               "only for a fast local model; an explicit value is honored verbatim.",
           },
+          max_retries_per_chunk: {
+            type: "number",
+            description:
+              "How many times ONE chunk may be re-attempted on the SAME model before the run " +
+              "gives up on it. Default: 2 (i.e. 3 attempts). This budget covers generic " +
+              "provider hiccups and, on concurrent runs, rate-limit backoff; it does NOT cover " +
+              "a delisted / quota-exhausted / echoing model, which is demoted immediately and " +
+              "replaced by the next ranked free one regardless of this number. Raise it when " +
+              "the free tier is congested and you would rather wait than re-run.",
+          },
+          until_done: {
+            type: "boolean",
+            description:
+              "Keep retrying the WHOLE compaction until it succeeds, instead of failing with a " +
+              "resumable checkpoint. Default: false. Every retry resumes from the checkpoint, " +
+              "so completed chunks are never recomputed and each pass only redoes what never " +
+              "landed. Backoff is exponential (30s doubling to a 15-minute cap); when the " +
+              "failure names an exhausted daily quota the wait is capped at the next 00:00 UTC " +
+              "reset instead, since that is when the free tier actually returns. Use this for " +
+              "unattended runs that must produce a summary eventually; leave it off when you " +
+              "want the command to report a problem rather than sit on it.",
+          },
         },
       },
     },

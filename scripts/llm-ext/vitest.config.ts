@@ -90,6 +90,10 @@ export default defineConfig({
       // a permanent wedge impossible — a latched lock silently freezes the 5
       // machine-managed default profiles on a stale model set.
       'src/bench-lock.test.ts',
+      // --until-done backoff policy. The loop it drives is unbounded, so a zero
+      // wait busy-loops a rate-limited endpoint and a wrong UTC-midnight
+      // calculation either stalls a day or never waits.
+      'src/session_summary/until-done.test.ts',
       // Auto-free on low balance (<$1) — threshold/model/pool helpers (TRDD-542bdbef).
       'src/auto-free.test.ts',
       // Provider-error sanitizer — strips user_id + JSON noise from logs/reports (TRDD-54f508a4).

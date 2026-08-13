@@ -254649,6 +254649,24 @@ async function summarizeSession(options) {
   };
 }
 
+// src/session_summary/until-done.ts
+var UNTIL_DONE_BASE_MS = 3e4;
+var UNTIL_DONE_CAP_MS = 9e5;
+function msUntilUtcMidnight(nowMs) {
+  const now = new Date(nowMs);
+  const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0, 0);
+  return next - nowMs;
+}
+function untilDoneBackoffMs(attempt, quotaCapped, nowMs = Date.now()) {
+  if (quotaCapped) return Math.min(msUntilUtcMidnight(nowMs), UNTIL_DONE_CAP_MS);
+  const exponent = Math.max(0, attempt - 1);
+  const capped = Math.min(exponent, 32);
+  return Math.min(UNTIL_DONE_BASE_MS * 2 ** capped, UNTIL_DONE_CAP_MS);
+}
+function looksQuotaCapped(message) {
+  return /daily[- ]?(quota|cap|limit)|quota exhausted|out of (free )?quota/i.test(message);
+}
+
 // src/session_summary/model-select.ts
 var TEXT_TO_TEXT_MODALITY = "text->text";
 function hasTextInputAndOutput(modality) {
@@ -259517,7 +259535,9 @@ Settings file is present but its 'profiles' map is empty \u2014 this is a config
             stdout: ssStdoutRaw,
             max_chunk_tokens: ssMaxChunkTokens,
             concurrency: ssConcurrencyRaw,
-            chunk_timeout_s: ssChunkTimeoutSecRaw
+            chunk_timeout_s: ssChunkTimeoutSecRaw,
+            max_retries_per_chunk: ssMaxRetriesRaw,
+            until_done: ssUntilDoneRaw
           } = args;
           const ssPerChunkTimeoutMs = typeof ssChunkTimeoutSecRaw === "number" && ssChunkTimeoutSecRaw > 0 ? Math.round(ssChunkTimeoutSecRaw * 1e3) : DEFAULT_CHUNK_TIMEOUT_MS;
           const VALID_PRUNE_LEVELS = /* @__PURE__ */ new Set(["aggressive", "moderate", "none"]);
@@ -259621,26 +259641,41 @@ Settings file is present but its 'profiles' map is empty \u2014 this is a config
 `);
             }
           };
+          const untilDone = ssUntilDoneRaw === true;
           let result;
-          try {
-            result = await summarizeSession({
-              transcriptPath,
-              checkpointPath,
-              modelId: model.id,
-              modelMaxContext: model.contextLength,
-              modelMaxCompletionTokens: model.maxCompletionTokens,
-              fallbackModels,
-              callModel,
-              pruneLevel: prune,
-              maxChunkTokens: typeof ssMaxChunkTokens === "number" ? ssMaxChunkTokens : void 0,
-              concurrency,
-              onChunkEvent
-            });
-          } catch (err3) {
-            return {
-              content: [{ type: "text", text: `FAILED: ${err3 instanceof Error ? err3.message : String(err3)}` }],
-              isError: true
-            };
+          for (let attempt = 1; ; attempt++) {
+            try {
+              result = await summarizeSession({
+                transcriptPath,
+                checkpointPath,
+                modelId: model.id,
+                modelMaxContext: model.contextLength,
+                modelMaxCompletionTokens: model.maxCompletionTokens,
+                fallbackModels,
+                callModel,
+                pruneLevel: prune,
+                maxChunkTokens: typeof ssMaxChunkTokens === "number" ? ssMaxChunkTokens : void 0,
+                maxRetriesPerChunk: typeof ssMaxRetriesRaw === "number" && ssMaxRetriesRaw >= 0 ? Math.floor(ssMaxRetriesRaw) : void 0,
+                concurrency,
+                onChunkEvent
+              });
+              break;
+            } catch (err3) {
+              const msg = err3 instanceof Error ? err3.message : String(err3);
+              if (!untilDone) {
+                return {
+                  content: [{ type: "text", text: `FAILED: ${msg}` }],
+                  isError: true
+                };
+              }
+              const backoffMs = untilDoneBackoffMs(attempt, looksQuotaCapped(msg));
+              process.stderr.write(
+                `[llm-externalizer] session-summary attempt ${attempt} failed: ${msg}
+[llm-externalizer] --until-done: retrying in ${Math.round(backoffMs / 1e3)}s (resumes from the checkpoint; completed chunks are not recomputed)
+`
+              );
+              await new Promise((r) => setTimeout(r, backoffMs));
+            }
           }
           const fallbackLines = result.fallbackEvents.map(
             (e) => `  ${e.atUnit}: '${e.fromModel}' -> '${e.toModel}' (${e.reason}: ${e.detail})`

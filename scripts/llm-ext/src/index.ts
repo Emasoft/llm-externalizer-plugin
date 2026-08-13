@@ -54,6 +54,7 @@ import { makePreflightHook } from "./cluster/preflight_benchmark.js";
 // defaultCheckpointPath are CLI-surface plumbing, kept OUT of session_summary/
 // on purpose (see session-summary-resolve.ts's own header).
 import { summarizeSession, DEFAULT_CHUNK_TIMEOUT_MS, type CallModelFn, type ChunkEvent } from "./session_summary/driver.js";
+import { untilDoneBackoffMs, looksQuotaCapped } from "./session_summary/until-done.js";
 import { selectModels } from "./session_summary/model-select.js";
 import { resolveTranscriptPath, defaultCheckpointPath } from "./session-summary-resolve.js";
 // Provider layer (B1 Phase 5a/5b, TRDD-63314265). These modules import NOTHING
@@ -4181,6 +4182,8 @@ async function dispatchCallToolInner(
           max_chunk_tokens: ssMaxChunkTokens,
           concurrency: ssConcurrencyRaw,
           chunk_timeout_s: ssChunkTimeoutSecRaw,
+          max_retries_per_chunk: ssMaxRetriesRaw,
+          until_done: ssUntilDoneRaw,
         } = args as {
           transcript?: string;
           session_id?: string;
@@ -4193,6 +4196,8 @@ async function dispatchCallToolInner(
           max_chunk_tokens?: number;
           concurrency?: number;
           chunk_timeout_s?: number;
+          max_retries_per_chunk?: number;
+          until_done?: boolean;
         };
 
         // Per-chunk deadline. An explicit value is honored verbatim (including a
@@ -4357,26 +4362,60 @@ async function dispatchCallToolInner(
           }
         };
 
+        // --until-done: keep going until the summary exists.
+        //
+        // The driver is deliberately checkpoint-and-stop: a chunk gets
+        // maxRetriesPerChunk attempts on a model, a dead/quota-capped model is
+        // demoted to the next ranked free one, and when those run out the run
+        // THROWS with a resumable checkpoint. That is the right default — a
+        // command that reports a problem beats one that silently sits on it.
+        //
+        // It is the wrong default for an unattended compaction that must
+        // eventually produce a summary. Retrying is cheap and correct here
+        // BECAUSE of the checkpoint: each pass re-reads the checkpoint, keeps
+        // every chunk that landed, and only redoes what did not. Re-entering
+        // summarizeSession (rather than looping inside it) also re-resolves the
+        // model list, so a model that was quota-capped last pass is picked up
+        // again once its quota resets.
+        const untilDone = ssUntilDoneRaw === true;
+
         let result;
-        try {
-          result = await summarizeSession({
-            transcriptPath,
-            checkpointPath,
-            modelId: model.id,
-            modelMaxContext: model.contextLength,
-            modelMaxCompletionTokens: model.maxCompletionTokens,
-            fallbackModels,
-            callModel,
-            pruneLevel: prune as "aggressive" | "moderate" | "none",
-            maxChunkTokens: typeof ssMaxChunkTokens === "number" ? ssMaxChunkTokens : undefined,
-            concurrency,
-            onChunkEvent,
-          });
-        } catch (err) {
-          return {
-            content: [{ type: "text", text: `FAILED: ${err instanceof Error ? err.message : String(err)}` }],
-            isError: true,
-          };
+        for (let attempt = 1; ; attempt++) {
+          try {
+            result = await summarizeSession({
+              transcriptPath,
+              checkpointPath,
+              modelId: model.id,
+              modelMaxContext: model.contextLength,
+              modelMaxCompletionTokens: model.maxCompletionTokens,
+              fallbackModels,
+              callModel,
+              pruneLevel: prune as "aggressive" | "moderate" | "none",
+              maxChunkTokens: typeof ssMaxChunkTokens === "number" ? ssMaxChunkTokens : undefined,
+              maxRetriesPerChunk:
+                typeof ssMaxRetriesRaw === "number" && ssMaxRetriesRaw >= 0
+                  ? Math.floor(ssMaxRetriesRaw)
+                  : undefined,
+              concurrency,
+              onChunkEvent,
+            });
+            break;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (!untilDone) {
+              return {
+                content: [{ type: "text", text: `FAILED: ${msg}` }],
+                isError: true,
+              };
+            }
+            const backoffMs = untilDoneBackoffMs(attempt, looksQuotaCapped(msg));
+            process.stderr.write(
+              `[llm-externalizer] session-summary attempt ${attempt} failed: ${msg}\n` +
+                `[llm-externalizer] --until-done: retrying in ${Math.round(backoffMs / 1000)}s ` +
+                `(resumes from the checkpoint; completed chunks are not recomputed)\n`,
+            );
+            await new Promise((r) => setTimeout(r, backoffMs));
+          }
         }
 
         const fallbackLines = result.fallbackEvents.map(
