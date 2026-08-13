@@ -24,6 +24,7 @@ import { readFileSync, writeFileSync, renameSync as renameSyncCb, existsSync } f
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
 
 import { registeredTools } from "../model-qualification/registry.js";
+import { DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M } from "../config.js";
 
 export interface CachedResult {
   modelId: string;
@@ -521,4 +522,140 @@ export function addProfileToSettings(
 
   writeSettingsAtomic(settingsPath, root);
   return { profileName, created, activated: opts.setActive === true };
+}
+
+// ── Dynamic default-profile selectors + updaters (owner directive) ──────────
+//
+// The `ensemble` default profile: top 3 PAID models whose input AND output
+// price are BOTH strictly under the ceiling (default
+// DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M, overridable via the settings.yaml
+// global `ensemble_price_ceiling_usd_per_million` key — see config.ts's
+// getEnsemblePriceCeiling). Ranked by quality (meanF1) among the ceiling
+// survivors, cost/latency as tiebreakers — same shape as pickTopN, but the
+// gate is PRICE, not a meanF1 floor.
+
+export function pickEnsembleByPriceCeiling(
+  results: readonly CachedResult[],
+  opts: { priceCeilingUsdPerM?: number; requireSchema?: boolean; topN?: number } = {},
+): PickedModel[] {
+  const ceiling = opts.priceCeilingUsdPerM ?? DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M;
+  const requireSchema = opts.requireSchema ?? true;
+  const topN = opts.topN ?? 3;
+  const survivors: PickedModel[] = [];
+  for (const r of results) {
+    if (!r.ok || r.isBaseline) continue;
+    // The ensemble default profile is a PAID pool by construction — a ':free'
+    // id belongs to the `free` default profile, never here.
+    if (r.modelId.endsWith(":free")) continue;
+    if (requireSchema && r.schemaCompliant === false) continue;
+    if (!(r.inputDollarsPerMillion < ceiling && r.outputDollarsPerMillion < ceiling)) continue;
+    survivors.push({
+      modelId: r.modelId,
+      meanF1: r.meanF1 ?? 0,
+      actualCost: r.actualCost ?? 0,
+      latencyMs: r.latencyMs ?? 0,
+      inputDollarsPerMillion: r.inputDollarsPerMillion,
+      outputDollarsPerMillion: r.outputDollarsPerMillion,
+    });
+  }
+  survivors.sort((a, b) => {
+    if (b.meanF1 !== a.meanF1) return b.meanF1 - a.meanF1;
+    if (a.actualCost !== b.actualCost) return a.actualCost - b.actualCost;
+    return a.latencyMs - b.latencyMs;
+  });
+  // Return what the catalog actually offers rather than throwing below topN.
+  // applyPicksToSettings DERIVES the profile's mode from the pick count (3 →
+  // remote-ensemble with all slots, 1 → remote), so a short list is a valid,
+  // self-consistent profile — whereas throwing would leave the profile
+  // unpopulated and re-trigger the benchmark on the next command. Callers that
+  // genuinely require 3 check the length themselves. Same contract as pickTopN's
+  // consumers in index.ts, which derive topN from the slots the profile runs.
+  return survivors.slice(0, topN);
+}
+
+/**
+ * Pick the single best `mass-scout` model: ultra-low cost (input+output price
+ * ascending is the primary sort key), quality as the tiebreaker. NEVER a
+ * ':free' id — mass-scouting fires thousands of requests and would be
+ * rate-limited on a free tier; this filter is enforced in CODE (not merely
+ * documented) so a caller cannot accidentally hand back a free id.
+ */
+export function pickMassScoutModel(
+  results: readonly CachedResult[],
+  opts: { requireSchema?: boolean } = {},
+): PickedModel {
+  const requireSchema = opts.requireSchema ?? true;
+  const survivors: PickedModel[] = [];
+  for (const r of results) {
+    if (!r.ok || r.isBaseline) continue;
+    if (r.modelId.endsWith(":free")) continue; // hard rule — never a free id
+    if (requireSchema && r.schemaCompliant === false) continue;
+    survivors.push({
+      modelId: r.modelId,
+      meanF1: r.meanF1 ?? 0,
+      actualCost: r.actualCost ?? 0,
+      latencyMs: r.latencyMs ?? 0,
+      inputDollarsPerMillion: r.inputDollarsPerMillion,
+      outputDollarsPerMillion: r.outputDollarsPerMillion,
+    });
+  }
+  survivors.sort((a, b) => {
+    const costA = a.inputDollarsPerMillion + a.outputDollarsPerMillion;
+    const costB = b.inputDollarsPerMillion + b.outputDollarsPerMillion;
+    if (costA !== costB) return costA - costB;
+    return b.meanF1 - a.meanF1;
+  });
+  if (survivors.length === 0) {
+    throw new Error(
+      "pickMassScoutModel: no non-':free' candidate cleared the schema gate.",
+    );
+  }
+  // Defense in depth — the loop above already excludes ':free' ids, but a
+  // hard-fail assertion here means a future refactor of the loop can never
+  // silently reintroduce a free selection for mass-scout.
+  if (survivors[0].modelId.endsWith(":free")) {
+    throw new Error(
+      `pickMassScoutModel: refusing to select ':free' model '${survivors[0].modelId}' — ` +
+        `mass-scout must never use a free-tier model (rate-limit risk at scale).`,
+    );
+  }
+  return survivors[0];
+}
+
+// Default-profile UPDATERS — thin wrappers that reuse the EXISTING atomic
+// writers above, always targeting the exact machine-owned profile name. This
+// IS the ownership invariant: applyFreePoolToSettings / applyPicksToSettings /
+// applyEnsembleSlotToSettings each mutate ONLY the named profile object
+// in-place (loadProfileForMutation) and re-serialize the rest of the document
+// untouched by-key, so a user-authored profile elsewhere in settings.yaml can
+// never be reached by these calls.
+
+/** Repopulate the `free` default profile's free_models pool. */
+export function updateFreeDefaultProfile(
+  settingsPath: string,
+  freeModelIds: readonly string[],
+): FreePoolMutationResult {
+  return applyFreePoolToSettings(settingsPath, "free", freeModelIds);
+}
+
+/** Repopulate the `ensemble` default profile's top-3 model slots. */
+export function updateEnsembleDefaultProfile(
+  settingsPath: string,
+  picks: readonly PickedModel[],
+): YamlMutationResult {
+  return applyPicksToSettings(settingsPath, "ensemble", picks);
+}
+
+/** Repopulate the `mass-scout` default profile's single model slot. */
+export function updateMassScoutDefaultProfile(
+  settingsPath: string,
+  pick: PickedModel,
+): EnsembleSlotMutationResult {
+  if (pick.modelId.endsWith(":free")) {
+    throw new Error(
+      `updateMassScoutDefaultProfile: refusing to write ':free' model '${pick.modelId}' into ` +
+        `mass-scout — mass-scout must never use a free-tier model (rate-limit risk at scale).`,
+    );
+  }
+  return applyEnsembleSlotToSettings(settingsPath, "mass-scout", "model", pick.modelId);
 }

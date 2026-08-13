@@ -105,6 +105,12 @@ export interface Settings {
   /** Named profiles */
   profiles: Record<string, Profile>;
   /**
+   * Override for the `ensemble` default profile's price ceiling (USD per
+   * million tokens, applied to BOTH input and output). Absent/invalid ⟹
+   * DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M. See getEnsemblePriceCeiling().
+   */
+  ensemble_price_ceiling_usd_per_million?: number;
+  /**
    * Master paid-spend switch (USER directive, this session). DEFAULT false —
    * "only free models are viable, everything runs free by default". While false,
    * every remote (OpenRouter) profile is FORCED to free mode at boot regardless of
@@ -433,6 +439,14 @@ export function loadSettings(): Settings | null {
       // Absent / any non-true value ⟺ false: the safe (free) side. A YAML that
       // predates this key, or sets it to a typo, never accidentally enables paid.
       allow_paid_models: parsed.allow_paid_models === true,
+      // Absent / non-finite / non-positive ⟹ undefined, so getEnsemblePriceCeiling()
+      // falls back to the built-in default instead of silently accepting a bad value.
+      ensemble_price_ceiling_usd_per_million:
+        typeof parsed.ensemble_price_ceiling_usd_per_million === "number" &&
+        isFinite(parsed.ensemble_price_ceiling_usd_per_million) &&
+        parsed.ensemble_price_ceiling_usd_per_million > 0
+          ? parsed.ensemble_price_ceiling_usd_per_million
+          : undefined,
     };
   } catch (err) {
     process.stderr.write(
@@ -442,45 +456,150 @@ export function loadSettings(): Settings | null {
   }
 }
 
-/** Default settings with 4 predefined profiles */
+// ── Dynamic default profiles (owner directive) ──────────────────────────────
+//
+// Three profiles are MACHINE-OWNED: `free`, `ensemble`, `mass-scout`. Unlike
+// every other profile (hand-written by the user or the setup-wizard agent),
+// these carry NO predefined model ids — they are populated and kept current by
+// the scan/benchmark/compare procedure (src/benchmark/update-all.ts +
+// src/benchmark/pick.ts's applyFreePoolToSettings / applyPicksToSettings /
+// applyEnsembleSlotToSettings writers, each of which touches ONLY the named
+// profile it is given — see pick.ts's "ownership invariant" note).
+//
+//   free        — the passing free ('*:free') pool, $0.
+//   ensemble    — top 3 models with BOTH input and output price strictly under
+//                 DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M (override via the
+//                 top-level `ensemble_price_ceiling_usd_per_million` key).
+//   mass-scout  — the single best ultra-low-cost, small-input-accurate model
+//                 for mass-scouting; NEVER a ':free' id (thousands of requests
+//                 would rate-limit a free model — enforced in pick.ts's
+//                 pickMassScoutModel and again in updateMassScoutDefaultProfile).
+export const DEFAULT_PROFILE_NAMES = ["free", "ensemble", "mass-scout"] as const;
+export type DefaultProfileName = (typeof DEFAULT_PROFILE_NAMES)[number];
+
+/** True iff `name` is one of the three machine-owned default profiles. */
+export function isDefaultProfileName(name: string): name is DefaultProfileName {
+  return (DEFAULT_PROFILE_NAMES as readonly string[]).includes(name);
+}
+
+/** Ensemble profile price ceiling (USD / million tokens, input AND output),
+ *  overridable via `ensemble_price_ceiling_usd_per_million`. Single source of
+ *  truth — never hardcode 1.3 elsewhere. */
+export const DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M = 1.3;
+
+/** Resolve the effective ensemble price ceiling: the settings override when
+ *  present and valid (loadSettings() already rejects non-finite/non-positive
+ *  values to undefined), else the built-in default. */
+export function getEnsemblePriceCeiling(settings: Settings | null | undefined): number {
+  const raw = settings?.ensemble_price_ceiling_usd_per_million;
+  return typeof raw === "number" && isFinite(raw) && raw > 0
+    ? raw
+    : DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M;
+}
+
+/**
+ * Sentinel model id marking an unpopulated default-profile PLACEHOLDER. Never
+ * a real OpenRouter model id (deliberately unroutable), so a placeholder that
+ * somehow reached the wire would 404 rather than silently bill or mis-route.
+ */
+export const PLACEHOLDER_MODEL_ID = "placeholder/unpopulated-default-profile";
+
+/**
+ * True iff `profile` is a not-yet-populated default-profile placeholder.
+ *
+ * The signal differs by profile SHAPE, and that is load-bearing:
+ *  - free_only  → an EMPTY free_models pool. Its models live in the pool, and
+ *    applyFreePoolToSettings (the writer that populates it) never touches
+ *    `model`. Keying on the sentinel id here would leave `free` looking
+ *    unpopulated forever and re-run its benchmark on every single command.
+ *  - everything else → `model` is the unroutable sentinel, which the slot
+ *    writers (applyPicksToSettings / applyEnsembleSlotToSettings) DO overwrite.
+ */
+export function isPlaceholderProfile(profile: Profile): boolean {
+  if (profile.free_only === true) {
+    return coerceFreeModels(profile.free_models).length === 0;
+  }
+  return profile.model === PLACEHOLDER_MODEL_ID;
+}
+
+function placeholderFreeProfile(): Profile {
+  return {
+    mode: "remote-ensemble",
+    api: "openrouter-remote",
+    free_only: true,
+    free_models: [],
+    // Ignored at runtime — resolveProfile's free_only branch overrides `model`
+    // from free_models[0]. Present because the field is required, and the
+    // unroutable sentinel is the only honest value for an unpopulated slot.
+    model: PLACEHOLDER_MODEL_ID,
+    api_key: "$OPENROUTER_API_KEY",
+  };
+}
+
+function placeholderEnsembleProfile(): Profile {
+  return {
+    mode: "remote-ensemble",
+    api: "openrouter-remote",
+    model: PLACEHOLDER_MODEL_ID,
+    second_model: PLACEHOLDER_MODEL_ID,
+    third_model: PLACEHOLDER_MODEL_ID,
+    api_key: "$OPENROUTER_API_KEY",
+  };
+}
+
+function placeholderMassScoutProfile(): Profile {
+  return {
+    mode: "remote",
+    api: "openrouter-remote",
+    model: PLACEHOLDER_MODEL_ID,
+    api_key: "$OPENROUTER_API_KEY",
+  };
+}
+
+/** Default settings: the 3 dynamic, machine-owned default profiles, each an
+ *  unpopulated PLACEHOLDER (see isPlaceholderProfile). The scan/benchmark/
+ *  compare procedure (update-all.ts) populates them; nothing here hardcodes a
+ *  model id. A placeholder VALIDATES (validateProfile stops after the
+ *  structural checks — see its placeholder guard) so the CLI boots and every
+ *  read-only command works; population happens on first LLM use. */
 export function generateDefaultSettings(): Settings {
   return {
-    active: "local-lmstudio-qwen35",
-    // Explicit free-safe default (USER: free-by-default). The default active
-    // profile is local ($0) so the switch is inert here, but stating it keeps the
-    // object in lock-step with SETTINGS_TEMPLATE and documents the safe posture.
+    active: "free",
+    // Explicit free-safe default (USER: free-by-default).
     allow_paid_models: false,
     profiles: {
-      "local-lmstudio-qwen35": {
-        mode: "local",
-        api: "lmstudio-local",
-        model: "thecluster/qwen3.5-27b-mlx",
-      },
-      "local-ollama-qwen314": {
-        mode: "local",
-        api: "ollama-local",
-        model: "qwen3:14b",
-      },
-      "remote-single-geminiflash": {
-        mode: "remote",
-        api: "openrouter-remote",
-        model: "google/gemini-2.5-flash",
-        api_key: "$OPENROUTER_API_KEY",
-      },
-      "remote-ensemble-geminigrok": {
-        mode: "remote-ensemble",
-        api: "openrouter-remote",
-        model: "google/gemini-2.5-flash",
-        second_model: "x-ai/grok-4.1-fast",
-        third_model: "qwen/qwen3.6-plus",
-        api_key: "$OPENROUTER_API_KEY",
-      },
+      free: placeholderFreeProfile(),
+      ensemble: placeholderEnsembleProfile(),
+      "mass-scout": placeholderMassScoutProfile(),
     },
   };
 }
 
+/** Local-time timestamp `YYYYMMDD_HHMMSS±HHMM` for a corrupt-settings backup
+ *  filename (never UTC — ties the backup to the user's own wall clock). */
+function formatLocalTimestamp(d: Date = new Date()): string {
+  const pad = (n: number, w = 2) => String(Math.abs(n)).padStart(w, "0");
+  const offMin = -d.getTimezoneOffset(); // minutes EAST of UTC
+  const sign = offMin >= 0 ? "+" : "-";
+  const offH = pad(Math.floor(Math.abs(offMin) / 60));
+  const offM = pad(Math.abs(offMin) % 60);
+  return (
+    `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_` +
+    `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}${sign}${offH}${offM}`
+  );
+}
+
 /**
- * Ensure settings.yaml exists. If not, generate default with comments.
+ * Ensure settings.yaml exists AND parses. Regenerates the 3 dynamic default
+ * profiles (free/ensemble/mass-scout, as unpopulated placeholders) when the
+ * file is MISSING or CORRUPT/UNPARSEABLE.
+ *
+ * CRITICAL data-safety invariant: a corrupt file is NEVER silently overwritten.
+ * It is first copied verbatim to a timestamped `settings.yaml.corrupt-<ts>`
+ * backup (local-time±offset, so a user can find "the file from this afternoon")
+ * — only then does a fresh default template get written. The user's own
+ * profiles inside a corrupt file cannot be recovered automatically (the parser
+ * couldn't read them either), so this says so plainly instead of pretending.
  * Also warns if old settings.yml exists (migration hint).
  */
 export function ensureSettingsExist(): Settings {
@@ -506,11 +625,29 @@ export function ensureSettingsExist(): Settings {
     process.stderr.write(
       `[llm-externalizer] Generated default settings at ${settingsPath}\n`,
     );
+  } else if (!loadSettings()) {
+    // File exists but is corrupt/unparseable. Back it up BEFORE writing a
+    // fresh one — never destroy data we could not read; the user's hand-
+    // written profiles may still be recoverable by hand from the backup.
+    const backupPath = `${settingsPath}.corrupt-${formatLocalTimestamp()}`;
+    const raw = readFileSync(settingsPath, "utf-8");
+    writeFileSync(backupPath, raw, "utf-8");
+    try { chmodSync(backupPath, 0o600); } catch { /* Windows may not support chmod */ }
+    process.stderr.write(
+      `[llm-externalizer] WARNING: ${settingsPath} could not be parsed as YAML. ` +
+        `Your original file has been preserved at ${backupPath} — inspect it by ` +
+        `hand to recover any custom profiles; they could NOT be recovered ` +
+        `automatically. Regenerating ${settingsPath} with the 3 machine-managed ` +
+        `default profiles (free, ensemble, mass-scout).\n`,
+    );
+    writeFileSync(settingsPath, SETTINGS_TEMPLATE, "utf-8");
+    try { chmodSync(settingsPath, 0o600); } catch { /* Windows may not support chmod */ }
   }
 
   const settings = loadSettings();
   if (!settings) {
-    // File exists but can't be parsed — fatal
+    // Should be unreachable (we just wrote SETTINGS_TEMPLATE, which is valid
+    // YAML) — but never silently proceed with a null settings object.
     throw new Error(`Failed to parse ${settingsPath}. Check YAML syntax.`);
   }
 
@@ -575,6 +712,18 @@ export function validateProfile(
     errors.push(
       `Mode '${profile.mode}' requires a -remote api preset, got '${profile.api}'`,
     );
+  }
+
+  // ── Unpopulated default-profile placeholder ───────────────────────
+  // A machine-owned default profile (free/ensemble/mass-scout) starts life as
+  // a PLACEHOLDER: correct SHAPE, contents pending until the benchmark runner
+  // populates it on first use. Everything structural — mode, api, preset
+  // existence, mode↔preset compatibility — has been checked above. The CONTENT
+  // checks below (non-empty free_models, ensemble slot count) would reject a
+  // state the CLI must be able to boot into, gating every command behind NOT
+  // CONFIGURED with no way to reach the population hook. Stop here instead.
+  if (isPlaceholderProfile(profile)) {
+    return { valid: errors.length === 0, errors };
   }
 
   // ── free_only rules (TRDD-8b6b3646) ───────────────────────────────
