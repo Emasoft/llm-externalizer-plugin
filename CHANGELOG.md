@@ -1,6 +1,33 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.3.3] - 2026-08-13
+
+### Fixed
+
+- Fix(deps): declare zod, which every clean checkout was missing
+
+CI has failed the typecheck on every release since at least v11.1.0 with
+"Cannot find module 'zod'" in four cluster/ modules. The cause is not a
+CI problem: zod was imported by src but declared nowhere in
+scripts/llm-ext/package.json, so it existed on exactly one machine.
+
+Node and TypeScript resolve modules by walking parent directories, and on
+the publishing machine the walk reached a stray ~/node_modules/zod. Local
+typecheck, lint, build and tests therefore all passed against a package
+that no clone, no CI runner and no contributor had. The failure was
+invisible precisely where it was introduced and unavoidable everywhere
+else.
+
+It also reached the shipped artifact: esbuild bundled that unpinned copy
+into dist/index.js, so releases carried code from a dependency version
+nothing recorded.
+
+zod is now a real dependency with a lockfile entry, and resolves from the
+project's own node_modules rather than from a directory that happens to
+sit above it.
+
+
 ## [13.3.2] - 2026-08-13
 
 ### Fixed
