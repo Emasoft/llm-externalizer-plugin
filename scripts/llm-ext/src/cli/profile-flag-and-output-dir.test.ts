@@ -67,15 +67,33 @@ async function runRaw(args: string[]): Promise<RunResult> {
         LLM_OUTPUT_DIR: outputDir,
         LLM_EXT_INSTALL_RULE: "0",
       },
-      timeout: 15_000,
+      // 60s, not 15s: this spawns a cold Node process running the real CLI, and
+      // the gate that runs it (publish.py) runs it while the machine is also
+      // type-checking, linting and building. A 15s budget failed there while
+      // passing every time in isolation.
+      timeout: 60_000,
       maxBuffer: 8 * 1024 * 1024,
     });
     return { stdout: stdout.trim(), stderr: stderr.trim(), exitCode: 0 };
   } catch (err) {
-    const e = err as { stdout?: string; stderr?: string; code?: number | null };
+    const e = err as {
+      stdout?: string;
+      stderr?: string;
+      code?: number | null;
+      signal?: string | null;
+      killed?: boolean;
+    };
+    // A timeout kill sets `signal` and leaves `code` undefined, so the old
+    // `e.code ?? null` turned "we killed it after N seconds" into a bare
+    // `exitCode: null` and the assertion read "expected null to be +0" — a
+    // message that names neither the timeout nor the command. Say what happened.
+    const stderrText = (e.stderr ?? "").trim();
     return {
       stdout: (e.stdout ?? "").trim(),
-      stderr: (e.stderr ?? "").trim(),
+      stderr: e.signal
+        ? `${stderrText}\n[test harness] child killed by ${e.signal}` +
+          `${e.killed ? " (timeout)" : ""} — args: ${args.join(" ")}`
+        : stderrText,
       exitCode: e.code ?? null,
     };
   }
@@ -114,7 +132,9 @@ describe("--profile <name> global flag", () => {
       [CLI_SCRIPT, "discover", "--profile", "prof-b", "--quiet"],
       {
         env: { ...process.env, LLM_EXT_CONFIG_DIR: tmpConfigDir, LLM_EXT_INSTALL_RULE: "0" },
-        timeout: 15_000,
+        // Same 60s budget and same reason as runRaw above — a cold CLI spawn on
+        // a machine busy running the rest of the publish gate.
+        timeout: 60_000,
       },
     );
 
