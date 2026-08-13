@@ -57,7 +57,7 @@ var require_identity = __commonJS({
     var isDocument = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === DOC;
     var isMap = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === MAP;
     var isPair = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === PAIR;
-    var isScalar = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === SCALAR;
+    var isScalar2 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === SCALAR;
     var isSeq = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === SEQ;
     function isCollection(node) {
       if (node && typeof node === "object")
@@ -79,7 +79,7 @@ var require_identity = __commonJS({
         }
       return false;
     }
-    var hasAnchor = (node) => (isScalar(node) || isCollection(node)) && !!node.anchor;
+    var hasAnchor = (node) => (isScalar2(node) || isCollection(node)) && !!node.anchor;
     exports.ALIAS = ALIAS;
     exports.DOC = DOC;
     exports.MAP = MAP;
@@ -94,7 +94,7 @@ var require_identity = __commonJS({
     exports.isMap = isMap;
     exports.isNode = isNode;
     exports.isPair = isPair;
-    exports.isScalar = isScalar;
+    exports.isScalar = isScalar2;
     exports.isSeq = isSeq;
   }
 });
@@ -5636,7 +5636,7 @@ var require_cst = __commonJS({
     var FLOW_END = "";
     var SCALAR = "";
     var isCollection = (token) => !!token && "items" in token;
-    var isScalar = (token) => !!token && (token.type === "scalar" || token.type === "single-quoted-scalar" || token.type === "double-quoted-scalar" || token.type === "block-scalar");
+    var isScalar2 = (token) => !!token && (token.type === "scalar" || token.type === "single-quoted-scalar" || token.type === "double-quoted-scalar" || token.type === "block-scalar");
     function prettyToken(token) {
       switch (token) {
         case BOM:
@@ -5720,7 +5720,7 @@ var require_cst = __commonJS({
     exports.FLOW_END = FLOW_END;
     exports.SCALAR = SCALAR;
     exports.isCollection = isCollection;
-    exports.isScalar = isScalar;
+    exports.isScalar = isScalar2;
     exports.prettyToken = prettyToken;
     exports.tokenType = tokenType;
   }
@@ -7250,7 +7250,7 @@ var require_public_api = __commonJS({
         return docs;
       return Object.assign([], { empty: true }, composer$1.streamInfo());
     }
-    function parseDocument(source, options = {}) {
+    function parseDocument2(source, options = {}) {
       const { lineCounter: lineCounter2, prettyErrors } = parseOptions(options);
       const parser$1 = new parser.Parser(lineCounter2?.addNewLine);
       const composer$1 = new composer.Composer(options);
@@ -7276,7 +7276,7 @@ var require_public_api = __commonJS({
       } else if (options === void 0 && reviver && typeof reviver === "object") {
         options = reviver;
       }
-      const doc = parseDocument(src, options);
+      const doc = parseDocument2(src, options);
       if (!doc)
         return null;
       doc.warnings.forEach((warning) => log.warn(doc.options.logLevel, warning));
@@ -7312,7 +7312,7 @@ var require_public_api = __commonJS({
     }
     exports.parse = parse3;
     exports.parseAllDocuments = parseAllDocuments;
-    exports.parseDocument = parseDocument;
+    exports.parseDocument = parseDocument2;
     exports.stringify = stringify;
   }
 });
@@ -218111,20 +218111,19 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 });
 
 // src/index.ts
-var import_yaml4 = __toESM(require_dist(), 1);
 import {
-  readFileSync as readFileSync31,
-  writeFileSync as writeFileSync23,
-  mkdirSync as mkdirSync25,
-  existsSync as existsSync25,
-  renameSync as renameSync15,
+  readFileSync as readFileSync33,
+  writeFileSync as writeFileSync25,
+  mkdirSync as mkdirSync26,
+  existsSync as existsSync27,
+  renameSync as renameSync16,
   statSync as statSync14,
   appendFileSync as appendFileSync6,
-  unlinkSync as unlinkSync2
+  unlinkSync as unlinkSync3
 } from "node:fs";
 import { spawnSync as spawnSync4 } from "node:child_process";
 import { createInterface as createInterface3 } from "node:readline/promises";
-import { extname as extname5, join as join32, basename as basename6, dirname as dirname14, resolve as resolve18, isAbsolute as isAbsolute5 } from "node:path";
+import { extname as extname5, join as join34, basename as basename6, dirname as dirname15, resolve as resolve18, isAbsolute as isAbsolute5 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 
 // src/review-plan.ts
@@ -218823,7 +218822,10 @@ function loadSettings() {
       profiles: parsed.profiles || {},
       // Absent / any non-true value ⟺ false: the safe (free) side. A YAML that
       // predates this key, or sets it to a typo, never accidentally enables paid.
-      allow_paid_models: parsed.allow_paid_models === true
+      allow_paid_models: parsed.allow_paid_models === true,
+      // Absent / non-finite / non-positive ⟹ undefined, so getEnsemblePriceCeiling()
+      // falls back to the built-in default instead of silently accepting a bad value.
+      ensemble_price_ceiling_usd_per_million: typeof parsed.ensemble_price_ceiling_usd_per_million === "number" && isFinite(parsed.ensemble_price_ceiling_usd_per_million) && parsed.ensemble_price_ceiling_usd_per_million > 0 ? parsed.ensemble_price_ceiling_usd_per_million : void 0
     };
   } catch (err3) {
     process.stderr.write(
@@ -218833,40 +218835,116 @@ function loadSettings() {
     return null;
   }
 }
+var DEFAULT_PROFILE_NAMES = ["free", "ensemble", "mass-scout"];
+function isDefaultProfileName(name) {
+  return DEFAULT_PROFILE_NAMES.includes(name);
+}
+var DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M = 1.3;
+function getEnsemblePriceCeiling(settings) {
+  const raw = settings?.ensemble_price_ceiling_usd_per_million;
+  return typeof raw === "number" && isFinite(raw) && raw > 0 ? raw : DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M;
+}
+var PLACEHOLDER_MODEL_ID = "placeholder/unpopulated-default-profile";
+function isPlaceholderProfile(profile) {
+  if (profile.free_only === true) {
+    if (profile.free_models !== void 0 && !Array.isArray(profile.free_models)) {
+      return false;
+    }
+    return coerceFreeModels(profile.free_models).length === 0;
+  }
+  return profile.model === PLACEHOLDER_MODEL_ID;
+}
+function isUnpopulatedDefaultProfile(name, profile) {
+  return isDefaultProfileName(name) && isPlaceholderProfile(profile);
+}
+function placeholderFreeProfile() {
+  return {
+    mode: "remote-ensemble",
+    api: "openrouter-remote",
+    free_only: true,
+    free_models: [],
+    // Ignored at runtime — resolveProfile's free_only branch overrides `model`
+    // from free_models[0]. Present because the field is required, and the
+    // unroutable sentinel is the only honest value for an unpopulated slot.
+    model: PLACEHOLDER_MODEL_ID,
+    api_key: "$OPENROUTER_API_KEY"
+  };
+}
+function placeholderEnsembleProfile() {
+  return {
+    mode: "remote-ensemble",
+    api: "openrouter-remote",
+    model: PLACEHOLDER_MODEL_ID,
+    second_model: PLACEHOLDER_MODEL_ID,
+    third_model: PLACEHOLDER_MODEL_ID,
+    api_key: "$OPENROUTER_API_KEY"
+  };
+}
+function placeholderMassScoutProfile() {
+  return {
+    mode: "remote",
+    api: "openrouter-remote",
+    model: PLACEHOLDER_MODEL_ID,
+    api_key: "$OPENROUTER_API_KEY"
+  };
+}
 function generateDefaultSettings() {
   return {
-    active: "local-lmstudio-qwen35",
-    // Explicit free-safe default (USER: free-by-default). The default active
-    // profile is local ($0) so the switch is inert here, but stating it keeps the
-    // object in lock-step with SETTINGS_TEMPLATE and documents the safe posture.
+    active: "free",
+    // Explicit free-safe default (USER: free-by-default).
     allow_paid_models: false,
     profiles: {
-      "local-lmstudio-qwen35": {
-        mode: "local",
-        api: "lmstudio-local",
-        model: "thecluster/qwen3.5-27b-mlx"
-      },
-      "local-ollama-qwen314": {
-        mode: "local",
-        api: "ollama-local",
-        model: "qwen3:14b"
-      },
-      "remote-single-geminiflash": {
-        mode: "remote",
-        api: "openrouter-remote",
-        model: "google/gemini-2.5-flash",
-        api_key: "$OPENROUTER_API_KEY"
-      },
-      "remote-ensemble-geminigrok": {
-        mode: "remote-ensemble",
-        api: "openrouter-remote",
-        model: "google/gemini-2.5-flash",
-        second_model: "x-ai/grok-4.1-fast",
-        third_model: "qwen/qwen3.6-plus",
-        api_key: "$OPENROUTER_API_KEY"
-      }
+      free: placeholderFreeProfile(),
+      ensemble: placeholderEnsembleProfile(),
+      "mass-scout": placeholderMassScoutProfile()
     }
   };
+}
+function renderDefaultSettingsYaml() {
+  const doc = new import_yaml.Document(generateDefaultSettings());
+  doc.commentBefore = [
+    " \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+    " LLM Externalizer \u2014 Settings",
+    " \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+    " Profile-based configuration. Each profile defines a complete LLM backend",
+    " setup. Edit this file by hand, then run `llm-ext settings reset` to reload.",
+    "",
+    " Location: ~/.llm-externalizer/settings.yaml",
+    "",
+    " The three profiles below (free, ensemble, mass-scout) are MACHINE-MANAGED:",
+    " their model ids are chosen and kept current by the benchmark procedure, and",
+    " are (re)populated automatically when a model is retired, repriced, or a",
+    " better one appears. They start EMPTY \u2014 a placeholder model id means 'not",
+    " benchmarked yet', not 'broken'. Any profile you add yourself is left alone,",
+    " forever: nothing here rewrites a profile it does not own.",
+    " \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"
+  ].join("\n");
+  const activeNode = doc.get("active", true);
+  if ((0, import_yaml.isScalar)(activeNode)) {
+    activeNode.comment = " the profile every command uses unless --profile says otherwise";
+  }
+  const paidNode = doc.get("allow_paid_models", true);
+  if ((0, import_yaml.isScalar)(paidNode)) {
+    paidNode.commentBefore = [
+      " \u2500\u2500 Master paid-spend switch \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+      " DEFAULT false \u2014 only FREE models are used, everywhere, by default. While",
+      " this is false (or absent), every remote profile is forced to its free pool",
+      " no matter which 'model' it configures, and the two paid machine-managed",
+      " profiles (ensemble, mass-scout) refuse to auto-benchmark themselves,",
+      " because benchmarking a paid model sends billable requests. Set it to true",
+      " to allow paid models \u2014 then `ensemble` and `mass-scout` populate on first",
+      " use, printing their estimated cost ceiling before spending anything."
+    ].join("\n");
+  }
+  return doc.toString({ indent: 2 });
+}
+function formatLocalTimestamp(d = /* @__PURE__ */ new Date()) {
+  const pad = (n, w = 2) => String(Math.abs(n)).padStart(w, "0");
+  const offMin = -d.getTimezoneOffset();
+  const sign = offMin >= 0 ? "+" : "-";
+  const offH = pad(Math.floor(Math.abs(offMin) / 60));
+  const offM = pad(Math.abs(offMin) % 60);
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}${sign}${offH}${offM}`;
 }
 function ensureSettingsExist() {
   const settingsPath = getSettingsPath();
@@ -218881,7 +218959,7 @@ function ensureSettingsExist() {
   }
   if (!existsSync(settingsPath)) {
     mkdirSync(configDir, { recursive: true });
-    writeFileSync(settingsPath, SETTINGS_TEMPLATE, "utf-8");
+    writeFileSync(settingsPath, renderDefaultSettingsYaml(), "utf-8");
     try {
       chmodSync(settingsPath, 384);
     } catch {
@@ -218890,6 +218968,23 @@ function ensureSettingsExist() {
       `[llm-externalizer] Generated default settings at ${settingsPath}
 `
     );
+  } else if (!loadSettings()) {
+    const backupPath = `${settingsPath}.corrupt-${formatLocalTimestamp()}`;
+    const raw = readFileSync(settingsPath, "utf-8");
+    writeFileSync(backupPath, raw, "utf-8");
+    try {
+      chmodSync(backupPath, 384);
+    } catch {
+    }
+    process.stderr.write(
+      `[llm-externalizer] WARNING: ${settingsPath} could not be parsed as YAML. Your original file has been preserved at ${backupPath} \u2014 inspect it by hand to recover any custom profiles; they could NOT be recovered automatically. Regenerating ${settingsPath} with the 3 machine-managed default profiles (free, ensemble, mass-scout).
+`
+    );
+    writeFileSync(settingsPath, renderDefaultSettingsYaml(), "utf-8");
+    try {
+      chmodSync(settingsPath, 384);
+    } catch {
+    }
   }
   const settings = loadSettings();
   if (!settings) {
@@ -219262,15 +219357,39 @@ It is created automatically the first time any llm-ext command runs.`;
 Settings file is present but its 'profiles' map is empty.`;
   }
   const lines = [`Settings file: ${settingsPath}`, ""];
+  let anyUnpopulated = false;
   for (const profileName of profileNames) {
     const profile = settings.profiles[profileName];
     const marker = profileName === settings.active ? "* " : "  ";
-    const modelSummary = profile.free_only ? `free_only (${(profile.free_models ?? []).length} models)` : [profile.model, profile.second_model, profile.third_model].filter(Boolean).join(", ");
+    const owner = isDefaultProfileName(profileName) ? " [machine-managed]" : "";
+    let modelSummary;
+    if (isUnpopulatedDefaultProfile(profileName, profile)) {
+      anyUnpopulated = true;
+      modelSummary = "not benchmarked yet \u2014 populates on first use";
+    } else if (profile.free_only) {
+      modelSummary = `free_only (${(profile.free_models ?? []).length} models)`;
+    } else {
+      modelSummary = [profile.model, profile.second_model, profile.third_model].filter(Boolean).join(", ");
+    }
     lines.push(
-      `${marker}${profileName} \u2014 ${profile.mode} / ${profile.api} \u2014 ${modelSummary}`
+      `${marker}${profileName}${owner} \u2014 ${profile.mode} / ${profile.api} \u2014 ${modelSummary}`
     );
   }
   lines.push("", "* = active profile. Use --show <name> for full resolved detail.");
+  if (profileNames.some((n) => isDefaultProfileName(n))) {
+    lines.push(
+      "[machine-managed] = free / ensemble / mass-scout. These pick and refresh their own",
+      "models from benchmark results; every other profile is yours and is never modified."
+    );
+  }
+  if (anyUnpopulated) {
+    lines.push(
+      "",
+      "Unpopulated profiles are expected on a fresh install: 'free' works immediately from a",
+      "bundled seed pool while it benchmarks, and the paid profiles populate on first use once",
+      "allow_paid_models is true."
+    );
+  }
   return lines.join("\n");
 }
 function resolveModelForTool(resolved, tool, fallback) {
@@ -219314,143 +219433,6 @@ function assertFreeOnlyModel(freeOnly, backendType, model) {
     );
   }
 }
-var SETTINGS_TEMPLATE = `# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-# LLM Externalizer \u2014 Settings
-# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-# Profile-based configuration. Each profile defines a complete LLM
-# backend setup. Edit this file manually and either restart Claude Code
-# or call the MCP 'reset' tool to reload.
-#
-# Location: ~/.llm-externalizer/settings.yaml
-# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-
-# Active profile name
-active: local-lmstudio-qwen35
-
-# \u2500\u2500 Master paid-spend switch \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-# DEFAULT false \u2014 only FREE models are used, everywhere, by default. While
-# this is false (or absent), every remote (OpenRouter) profile is forced to
-# its free pool no matter what 'model' it configures, and even paid
-# *benchmarks* are refused \u2014 one switch guarantees zero paid spend. Local
-# profiles are $0/offline and always run as-is. Set it true to use paid
-# models (and to benchmark them); per-profile 'free_only' then remains an
-# opt-in. A remote profile with no 'free_models' still runs free \u2014 the
-# server auto-discovers a benchmark-vetted free pool at $0.
-allow_paid_models: false
-
-# \u2500\u2500 Profiles \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-profiles:
-
-  # \u2500\u2500 Local: LM Studio with Qwen 3.5 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  local-lmstudio-qwen35:
-    mode: local
-    api: lmstudio-local
-    model: "thecluster/qwen3.5-27b-mlx"
-    # url: "http://localhost:1234"       # (default from lmstudio-local preset)
-    # api_token: $LM_API_TOKEN           # (default from lmstudio-local preset)
-    # timeout: 300                        # (default from lmstudio-local preset)
-
-  # \u2500\u2500 Local: Ollama with Qwen 3 14B \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  local-ollama-qwen314:
-    mode: local
-    api: ollama-local
-    model: "qwen3:14b"
-    # url: "http://localhost:11434"       # (default from ollama-local preset)
-
-  # \u2500\u2500 Remote: Single model via OpenRouter \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  remote-single-geminiflash:
-    mode: remote
-    api: openrouter-remote
-    model: "google/gemini-2.5-flash"
-    api_key: $OPENROUTER_API_KEY          # set this env var, or replace with direct key
-    # Optional: high-quality scan model (TRDD-DBUSM55E). Drives high_quality_scan \u2014
-    # ONE strong model at max reasoning instead of the cheap 3-model ensemble.
-    # Absent \u2192 these exact defaults are used automatically. Needs an OpenRouter
-    # (remote) profile; NOT available under free_only (it is a paid model).
-    # high_quality_model:
-    #   id: "z-ai/glm-5.2"            # default high-quality model
-    #   reasoning_effort: max          # max -> OpenRouter "xhigh" (the real ceiling)
-    #   cache: true                    # prompt-cache the system prompt across files
-    #   min_quantization: fp8          # accept fp8-or-higher precision endpoints only
-    #   provider: "gmicloud/fp8"       # preferred provider (provider.order[0])
-    #   allow_fallbacks: false         # pin the preferred provider
-
-  # \u2500\u2500 Remote: Ensemble (three models in parallel) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  remote-ensemble-geminigrok:
-    mode: remote-ensemble
-    api: openrouter-remote
-    model: "google/gemini-2.5-flash"
-    second_model: "x-ai/grok-4.1-fast"
-    api_key: $OPENROUTER_API_KEY
-    # Optional: per-tool model overrides (TRDD-f45eeaa0). Absent \u2192 this
-    # profile's \`model\` (back-compat). Keys must be LLM-using tool names;
-    # a model set here should pass that tool's benchmark \u2014 see the
-    # security-triage benchmark (/llm-externalizer-security-triage-benchmark).
-    # tool_models:
-    #   security_scan: "qwen/qwen-2.5-7b-instruct"
-    #   code_task: "google/gemini-2.5-flash"
-
-  # \u2500\u2500 Remote: FREE-ONLY ensemble (zero spend) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  # free_only ignores model/second_model/third_model and uses ONLY the
-  # free_models pool. The top free models that clear the requirements
-  # floor form the ensemble; the rest are the rate-limit fallback pool.
-  # EVERY free_models entry MUST end with ':free' \u2014 the validator rejects
-  # the profile otherwise, so this profile can NEVER bill.
-  #
-  # The 15-model seed list below matches FREE_POOL_SEED in config.ts and
-  # is the canonical default. The auto-benchmark trigger (TRDD-f1510055)
-  # scores this pool when the profile is first activated (free_only=true
-  # + empty :free cache) and writes results to:
-  #   ~/.llm-externalizer/benchmark-results.json (keyword task)
-  #   ~/.llm-externalizer/security-triage-results.json (security_scan)
-  # Run it manually with: /llm-externalizer:llm-externalizer-bench-free-pool
-  remote-free-ensemble:
-    mode: remote-ensemble
-    api: openrouter-remote
-    free_only: true
-    api_key: $OPENROUTER_API_KEY            # free models still need the key (rate-limited, but $0)
-    free_models:
-      - "poolside/laguna-m.1:free"
-      - "deepseek/deepseek-v4-flash:free"
-      - "google/gemma-4-26b-a4b-it:free"
-      - "google/gemma-4-31b-it:free"
-      - "arcee-ai/trinity-large-thinking:free"
-      - "nvidia/nemotron-3-super-120b-a12b:free"
-      - "nvidia/nemotron-3-nano-30b-a3b:free"
-      - "minimax/minimax-m2.5:free"
-      - "qwen/qwen3-next-80b-a3b-instruct:free"
-      - "openai/gpt-oss-120b:free"
-      - "openai/gpt-oss-20b:free"
-      - "qwen/qwen3-coder:free"
-      - "z-ai/glm-4.5-air:free"
-      - "meta-llama/llama-3.3-70b-instruct:free"
-      - "nousresearch/hermes-3-llama-3.1-405b:free"
-
-# \u2500\u2500 API Presets Reference \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-# Use with --api when creating profiles:
-#
-# LOCAL PRESETS (mode: local):
-#   lmstudio-local    LM Studio native API     http://localhost:1234   auth: $LM_API_TOKEN
-#   ollama-local      Ollama OpenAI-compat     http://localhost:11434  auth: (none)
-#   vllm-local        vLLM OpenAI-compat       http://localhost:8000   auth: $VLLM_API_KEY
-#   llamacpp-local    llama.cpp OpenAI-compat   http://localhost:8080   auth: (none)
-#   generic-local     Any OpenAI-compat        (url required)          auth: $LM_API_TOKEN
-#
-# REMOTE PRESETS (mode: remote / remote-ensemble):
-#   openrouter-remote  OpenRouter              https://openrouter.ai   auth: $OPENROUTER_API_KEY
-#
-# All local backends must support structured output (response_format: json_schema).
-#
-# \u2500\u2500 Modes Reference \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-#   local             Sequential requests to a local server
-#   remote            Parallel requests, single model via OpenRouter
-#   remote-ensemble   Parallel requests, three models, combined report
-#
-# \u2500\u2500 Auth Values \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-# Auth fields (api_key, api_token) accept either:
-#   $ENV_VAR_NAME     Resolved from process environment at runtime
-#   "direct-value"    Used as-is (no env lookup)
-`;
 
 // src/review-rules.ts
 function globToRegExp(glob) {
@@ -224374,6 +224356,56 @@ function aggregateModelHealth(events, opts = {}) {
 }
 var ROTATE_WORTHY_STATUSES = [400, 404, 410, 422];
 var ROTATE_WORTHY = new Set(ROTATE_WORTHY_STATUSES);
+var PERSISTENCE_WINDOW_HOURS = 24;
+var PERSISTENCE_MIN_CONSECUTIVE = 3;
+function parseEventHttpStatus(detail) {
+  const m = /\bHTTP (\d{3})\b/.exec(detail);
+  return m ? Number(m[1]) : null;
+}
+function parseEventTimestamp(ts2) {
+  const ms = Date.parse(ts2.replace(/([+-]\d{2})(\d{2})$/, "$1:$2"));
+  return Number.isNaN(ms) ? null : ms;
+}
+function assessModelPersistence(events, opts = {}) {
+  const windowHours = opts.windowHours ?? PERSISTENCE_WINDOW_HOURS;
+  const minConsecutive = opts.minConsecutive ?? PERSISTENCE_MIN_CONSECUTIVE;
+  if (!Number.isFinite(windowHours) || windowHours <= 0) {
+    throw new Error(`assessModelPersistence: windowHours must be > 0, got ${windowHours}`);
+  }
+  if (!Number.isInteger(minConsecutive) || minConsecutive < 1) {
+    throw new Error(`assessModelPersistence: minConsecutive must be a positive integer, got ${minConsecutive}`);
+  }
+  const cutoff = (opts.now ?? /* @__PURE__ */ new Date()).getTime() - windowHours * 36e5;
+  const failuresByModel = /* @__PURE__ */ new Map();
+  for (const ev of events) {
+    if (ev.kind !== "non_retryable_failure") continue;
+    const at = parseEventTimestamp(ev.timestamp);
+    if (at === null || at < cutoff) continue;
+    const status = parseEventHttpStatus(ev.detail);
+    if (status === null) continue;
+    const list = failuresByModel.get(ev.model) ?? [];
+    list.push({ at, status });
+    failuresByModel.set(ev.model, list);
+  }
+  const out = /* @__PURE__ */ new Map();
+  for (const [model, failures] of failuresByModel) {
+    failures.sort((a, b) => a.at - b.at);
+    const latest = failures[failures.length - 1].status;
+    let run = 0;
+    for (let i = failures.length - 1; i >= 0 && failures[i].status === latest; i--) run++;
+    const rotateWorthy = ROTATE_WORTHY.has(latest);
+    const persistentlyBroken = rotateWorthy && run >= minConsecutive;
+    out.set(model, {
+      model,
+      persistentlyBroken,
+      httpStatus: persistentlyBroken ? latest : null,
+      consecutiveFailures: run,
+      windowHours,
+      reason: persistentlyBroken ? `${run} consecutive HTTP ${latest} failures in the last ${windowHours}h (\u2265 ${minConsecutive}) \u2014 permanent model-scoped error` : rotateWorthy ? `${run} consecutive HTTP ${latest} failure(s) in the last ${windowHours}h (< ${minConsecutive}) \u2014 not yet persistent` : `latest failure is HTTP ${latest}, not model-scoped (${ROTATE_WORTHY_STATUSES.join("/")}) \u2014 a model swap would not fix it`
+    });
+  }
+  return out;
+}
 
 // src/security_scan/judge.ts
 var OPENROUTER_URL2 = "https://openrouter.ai/api/v1/chat/completions";
@@ -230554,38 +230586,56 @@ async function runDiscoverNewArrivals(opts = {}) {
 // src/benchmark/pick.ts
 var import_yaml3 = __toESM(require_dist(), 1);
 import { readFileSync as readFileSync16, writeFileSync as writeFileSync11, renameSync as renameSyncCb, existsSync as existsSync10 } from "node:fs";
+function loadCachedReport(path) {
+  if (!existsSync10(path)) {
+    throw new Error(
+      `No cached benchmark results at ${path}. Run \`llm-ext-benchmark\` first (without --from-cache).`
+    );
+  }
+  const raw = readFileSync16(path, "utf-8");
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err3) {
+    throw new Error(`Cached results at ${path} are not valid JSON: ${err3.message}`, { cause: err3 });
+  }
+  if (typeof parsed !== "object" || parsed === null || !Array.isArray(parsed.results)) {
+    throw new Error(`Cached results at ${path} missing 'results' array.`);
+  }
+  return parsed;
+}
 function loadSettingsRoot(settingsPath) {
   if (!existsSync10(settingsPath)) {
     throw new Error(`settings.yaml not found at ${settingsPath}`);
   }
   const raw = readFileSync16(settingsPath, "utf-8");
-  let doc;
-  try {
-    doc = (0, import_yaml3.parse)(raw);
-  } catch (err3) {
-    throw new Error(`settings.yaml at ${settingsPath} is not valid YAML: ${err3.message}`, { cause: err3 });
+  const doc = (0, import_yaml3.parseDocument)(raw);
+  if (doc.errors.length > 0) {
+    throw new Error(`settings.yaml at ${settingsPath} is not valid YAML: ${doc.errors[0].message}`, {
+      cause: doc.errors[0]
+    });
   }
-  if (typeof doc !== "object" || doc === null) {
+  const root = doc.toJS();
+  if (typeof root !== "object" || root === null) {
     throw new Error(`settings.yaml at ${settingsPath} must be a YAML object at the top level.`);
   }
-  const root = doc;
   if (!root.profiles || typeof root.profiles !== "object") {
     throw new Error(`settings.yaml at ${settingsPath} missing 'profiles' map.`);
   }
-  return root;
+  return { doc, root };
 }
 function loadProfileForMutation(settingsPath, profileName) {
-  const root = loadSettingsRoot(settingsPath);
-  const profile = root.profiles[profileName];
+  const handle = loadSettingsRoot(settingsPath);
+  const profile = handle.root.profiles[profileName];
   if (!profile || typeof profile !== "object") {
     throw new Error(
-      `settings.yaml at ${settingsPath} has no profile named '${profileName}'. Existing profiles: ${Object.keys(root.profiles).join(", ")}.`
+      `settings.yaml at ${settingsPath} has no profile named '${profileName}'. Existing profiles: ${Object.keys(handle.root.profiles).join(", ")}.`
     );
   }
-  return { root, profile };
+  return { handle, profile };
 }
-function writeSettingsAtomic(settingsPath, root) {
-  const newRaw = (0, import_yaml3.stringify)(root, { indent: 2 });
+function writeSettingsAtomic(settingsPath, handle) {
+  const newRaw = handle.doc.toString();
   const tmp = settingsPath + ".tmp." + process.pid;
   writeFileSync11(tmp, newRaw, "utf-8");
   renameSyncCb(tmp, settingsPath);
@@ -230601,22 +230651,22 @@ function applyFreePoolToSettings(settingsPath, profileName, modelIds) {
     );
   }
   const newPool = [...new Set(modelIds)];
-  const { root, profile } = loadProfileForMutation(settingsPath, profileName);
+  const { handle, profile } = loadProfileForMutation(settingsPath, profileName);
   const existing = profile.free_models;
   const oldPool = Array.isArray(existing) ? existing.filter((v) => typeof v === "string") : [];
-  profile.free_models = newPool;
-  writeSettingsAtomic(settingsPath, root);
+  handle.doc.setIn(["profiles", profileName, "free_models"], newPool);
+  writeSettingsAtomic(settingsPath, handle);
   return { profileName, oldPool, newPool };
 }
 function addProfileToSettings(settingsPath, profileName, profile, opts = {}) {
   if (typeof profileName !== "string" || profileName.length === 0) {
     throw new Error("addProfileToSettings: profileName must be a non-empty string");
   }
-  const root = loadSettingsRoot(settingsPath);
-  const created = !(profileName in root.profiles);
-  root.profiles[profileName] = profile;
-  if (opts.setActive) root.active = profileName;
-  writeSettingsAtomic(settingsPath, root);
+  const handle = loadSettingsRoot(settingsPath);
+  const created = !(profileName in handle.root.profiles);
+  handle.doc.setIn(["profiles", profileName], profile);
+  if (opts.setActive) handle.doc.setIn(["active"], profileName);
+  writeSettingsAtomic(settingsPath, handle);
   return { profileName, created, activated: opts.setActive === true };
 }
 
@@ -255514,6 +255564,227 @@ async function reconcileModelsBeforeWork(deps) {
 `);
   return { outcome: "ran", reason: null, verdict };
 }
+function toCatalogPriceSnapshot(cat) {
+  return cat.map((m) => ({
+    id: m.id,
+    inputDollarsPerMillion: parseFloat(m.pricing?.prompt ?? "NaN") * 1e6,
+    outputDollarsPerMillion: parseFloat(m.pricing?.completion ?? "NaN") * 1e6
+  }));
+}
+function catalogForReconcile(cat) {
+  const ids = new Set(cat.map((m) => m.id));
+  const catalogById = new Map(cat.map((m) => [m.id, m]));
+  const freeIds = cat.map((m) => m.id).filter(isFreeSuffixModelId);
+  const freeQualified = filterFreeModels(freeIds, catalogById, benchmarkFailedModels());
+  return { ids, freeQualified, priceSnapshot: toCatalogPriceSnapshot(cat) };
+}
+
+// src/default-profiles.ts
+import { createHash as createHash11 } from "node:crypto";
+function poolFingerprint(pool) {
+  const canonical2 = pool.map((m) => `${m.id}\0${m.inputDollarsPerMillion}\0${m.outputDollarsPerMillion}`).sort().join("");
+  return createHash11("sha256").update(canonical2).digest("hex").slice(0, 16);
+}
+function defaultProfileModelIds(profile) {
+  if (profile.free_only) return [...profile.free_models ?? []];
+  return [profile.model, profile.second_model, profile.third_model].filter(
+    (m) => typeof m === "string" && m.length > 0
+  );
+}
+function cachedPricesFromResults(results) {
+  const m = /* @__PURE__ */ new Map();
+  for (const r of results) {
+    m.set(r.modelId, { in: r.inputDollarsPerMillion, out: r.outputDollarsPerMillion });
+  }
+  return m;
+}
+function decideDefaultProfilePopulation(profile, catalog, opts = {}) {
+  if (isPlaceholderProfile(profile)) {
+    return { needsBenchmark: true, reason: "unpopulated" };
+  }
+  const configured = defaultProfileModelIds(profile);
+  const configuredSet = new Set(configured);
+  if (opts.runtimeUnavailableIds?.some((id) => configuredSet.has(id))) {
+    return { needsBenchmark: true, reason: "model-unavailable-at-runtime" };
+  }
+  if (catalog.length > 0) {
+    const liveById = new Map(catalog.map((m) => [m.id, m]));
+    const cachedPrices = opts.cachedPrices ?? /* @__PURE__ */ new Map();
+    for (const id of configured) {
+      const live = liveById.get(id);
+      if (!live) return { needsBenchmark: true, reason: "model-removed" };
+      const cached2 = cachedPrices.get(id);
+      if (cached2 && (live.inputDollarsPerMillion > cached2.in || live.outputDollarsPerMillion > cached2.out)) {
+        return { needsBenchmark: true, reason: "model-price-increased" };
+      }
+    }
+  }
+  if (opts.qualifyingPool && opts.qualifyingPool.length > 0) {
+    const current = poolFingerprint(opts.qualifyingPool);
+    if (opts.lastPoolFingerprint !== void 0 && current !== opts.lastPoolFingerprint) {
+      return { needsBenchmark: true, reason: "new-model-arrived" };
+    }
+  }
+  return { needsBenchmark: false, reason: "up-to-date" };
+}
+async function ensureDefaultProfileReady(profileName, profile, catalog, settingsPath, runBenchmark, opts = {}) {
+  if (!isDefaultProfileName(profileName)) {
+    throw new Error(
+      `ensureDefaultProfileReady: '${profileName}' is not a machine-owned default profile (${DEFAULT_PROFILE_NAMES.join(", ")}).`
+    );
+  }
+  const decision = decideDefaultProfilePopulation(profile, catalog, opts);
+  const now = opts.nowMs ?? Date.now();
+  const cooling = opts.cooldownUntil !== void 0 && now < opts.cooldownUntil;
+  const shouldRun = decision.needsBenchmark && !cooling;
+  if (shouldRun) {
+    await runBenchmark(profileName, settingsPath);
+  }
+  return { profileName, decision, benchmarkRan: shouldRun };
+}
+
+// src/default-profiles-state.ts
+import { existsSync as existsSync25, readFileSync as readFileSync31, writeFileSync as writeFileSync23, renameSync as renameSync15, chmodSync as chmodSync2, unlinkSync as unlinkSync2 } from "node:fs";
+import { join as join32 } from "node:path";
+function defaultProfilesStatePath() {
+  return join32(getConfigDir(), "default-profiles-state.json");
+}
+function readDefaultProfilesState() {
+  const path = defaultProfilesStatePath();
+  if (!existsSync25(path)) return { version: 1, profiles: {} };
+  try {
+    const parsed = JSON.parse(readFileSync31(path, "utf-8"));
+    if (typeof parsed !== "object" || parsed === null) return { version: 1, profiles: {} };
+    const state = parsed;
+    if (state.version !== 1 || typeof state.profiles !== "object" || state.profiles === null) {
+      return { version: 1, profiles: {} };
+    }
+    return { version: 1, profiles: state.profiles };
+  } catch {
+    return { version: 1, profiles: {} };
+  }
+}
+function getProfileRecord(name) {
+  return readDefaultProfilesState().profiles[name];
+}
+var BACKOFF_MS = [15 * 6e4, 60 * 6e4, 4 * 60 * 6e4, 24 * 60 * 6e4];
+
+// src/default-profiles-runner.ts
+import { closeSync as closeSync2, existsSync as existsSync26, mkdirSync as mkdirSync25, openSync as openSync2, readFileSync as readFileSync32, writeFileSync as writeFileSync24 } from "node:fs";
+import { dirname as dirname14, join as join33, resolve as pathResolve2 } from "node:path";
+import { spawn as spawn2 } from "node:child_process";
+import { fileURLToPath as fileURLToPath9 } from "node:url";
+var DISABLE_ENV2 = "LLM_EXT_DISABLE_DEFAULT_PROFILE_POPULATION";
+var PAID_PROFILES = /* @__PURE__ */ new Set(["ensemble", "mass-scout"]);
+function resolveBenchmarkScriptPath2() {
+  const here = dirname14(fileURLToPath9(import.meta.url));
+  const bundled = pathResolve2(here, "benchmark.js");
+  if (existsSync26(bundled)) return bundled;
+  return pathResolve2(here, "..", "dist", "benchmark.js");
+}
+function lockPathFor(profile) {
+  return join33(getConfigDir(), `default-profile-${profile}.lock`);
+}
+function logPathFor(profile) {
+  return join33(getConfigDir(), `default-profile-${profile}.log`);
+}
+function lockHoldsLivePid2(lockPath) {
+  if (!existsSync26(lockPath)) return false;
+  try {
+    const pid = parseInt(readFileSync32(lockPath, "utf-8").trim(), 10);
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (e) {
+      return e.code === "EPERM";
+    }
+  } catch {
+    return false;
+  }
+}
+function populateDefaultProfile(opts) {
+  const {
+    profile,
+    allowPaidModels,
+    log,
+    budgetUsd,
+    lockPath = lockPathFor(opts.profile),
+    logPath = logPathFor(opts.profile),
+    scriptPath = resolveBenchmarkScriptPath2(),
+    env = process.env
+  } = opts;
+  const isPaid = PAID_PROFILES.has(profile);
+  const remedy = isPaid ? `llm-ext-benchmark --populate-default-profile ${profile} --budget-usd ${budgetUsd ?? 2}` : `llm-ext-benchmark --populate-default-profile ${profile}`;
+  if (env[DISABLE_ENV2] === "1") {
+    return { kind: "skipped", profile, reason: `disabled via ${DISABLE_ENV2}` };
+  }
+  if (lockHoldsLivePid2(lockPath)) {
+    return { kind: "skipped", profile, reason: "a population run is already in progress" };
+  }
+  if (isPaid && !allowPaidModels) {
+    return {
+      kind: "refused",
+      profile,
+      reason: `'${profile}' has not been benchmarked yet, and benchmarking it sends billable requests while allow_paid_models is false`,
+      remedy
+    };
+  }
+  try {
+    mkdirSync25(getConfigDir(), { recursive: true });
+  } catch {
+  }
+  let logFd;
+  try {
+    logFd = openSync2(logPath, "a");
+  } catch (e) {
+    return {
+      kind: "skipped",
+      profile,
+      reason: `cannot open log ${logPath}: ${e.message}`
+    };
+  }
+  const argv = [scriptPath, "--populate-default-profile", profile];
+  if (isPaid && budgetUsd !== void 0) argv.push("--budget-usd", String(budgetUsd));
+  let child;
+  try {
+    child = spawn2(process.execPath, argv, {
+      detached: true,
+      stdio: ["ignore", logFd, logFd],
+      env: { ...env, LLM_EXT_AUTO_BENCH_REASON: `default-profile-population:${profile}` }
+    });
+  } catch (e) {
+    try {
+      closeSync2(logFd);
+    } catch {
+    }
+    return { kind: "skipped", profile, reason: `spawn failed: ${e.message}` };
+  }
+  child.on("error", (e) => {
+    log(`[llm-externalizer] default-profile population (${profile}) failed to start: ${e.message}
+`);
+  });
+  child.unref();
+  try {
+    writeFileSync24(lockPath, String(child.pid ?? ""), "utf-8");
+  } catch {
+  }
+  return { kind: "spawned", profile, pid: child.pid ?? null, blocksCaller: isPaid };
+}
+function describeOutcome(outcome) {
+  switch (outcome.kind) {
+    case "refused":
+      return `[llm-externalizer] ${outcome.reason}.
+  Run: ${outcome.remedy}
+  Or set allow_paid_models: true in settings.yaml to let it populate on first use.
+`;
+    case "spawned":
+      return outcome.blocksCaller ? `[llm-externalizer] '${outcome.profile}' is being benchmarked now (~15 min). Re-run this command when it finishes; progress: ${logPathFor(outcome.profile)}
+` : null;
+    case "skipped":
+      return null;
+  }
+}
 
 // src/or-model-info.ts
 function sortedPercentiles(obj) {
@@ -256046,6 +256317,9 @@ function resolveDefaultMaxTokens() {
 var SETTINGS_FILE = getSettingsPath();
 var settingsValid = false;
 var settingsError = "";
+function shouldBootDespiteInvalidActiveProfile(activeName, activeProfile) {
+  return activeProfile !== void 0 && isUnpopulatedDefaultProfile(activeName, activeProfile);
+}
 var activeSettings = (() => {
   try {
     return ensureSettingsExist();
@@ -256062,12 +256336,20 @@ setAllowPaidModels(activeSettings.allow_paid_models === true);
 var activeResolved = (() => {
   const validation = validateSettings(activeSettings);
   if (!validation.valid) {
-    settingsError = `${validation.errors.join("; ")}
+    const activeProfile = activeSettings.profiles[activeSettings.active];
+    if (shouldBootDespiteInvalidActiveProfile(activeSettings.active, activeProfile)) {
+      process.stderr.write(
+        `[llm-externalizer] '${activeSettings.active}' has not been benchmarked yet \u2014 it will populate on first use.
+`
+      );
+    } else {
+      settingsError = `${validation.errors.join("; ")}
 
 Settings file: ${SETTINGS_FILE}`;
-    process.stderr.write(`[llm-externalizer] \u26A0 ${settingsError}
+      process.stderr.write(`[llm-externalizer] \u26A0 ${settingsError}
 `);
-    return null;
+      return null;
+    }
   }
   settingsValid = true;
   const profile = activeSettings.profiles[activeSettings.active];
@@ -256096,6 +256378,9 @@ Settings file: ${SETTINGS_FILE}`;
   });
   return resolved;
 })();
+function __getBootStateForTests() {
+  return { settingsValid, activeResolved: activeResolved !== null };
+}
 var DEFAULT_OPENROUTER_RPS = 5;
 var DEFAULT_MAX_IN_FLIGHT_REMOTE = 200;
 var DEFAULT_TEMPERATURE = 0.1;
@@ -256118,33 +256403,14 @@ function getCurrentBackend() {
   return currentBackend;
 }
 function reloadSettingsFromDisk() {
-  let raw;
-  try {
-    raw = readFileSync31(SETTINGS_FILE, "utf-8");
-  } catch {
-    return false;
-  }
-  let parsed;
-  try {
-    parsed = (0, import_yaml4.parse)(raw);
-  } catch {
+  const newSettings = loadSettings();
+  if (!newSettings) {
     process.stderr.write(
-      `[llm-externalizer] \u26A0 settings.yaml has invalid YAML \u2014 ignoring change
+      `[llm-externalizer] \u26A0 settings.yaml could not be parsed \u2014 ignoring change, keeping the previous settings.
 `
     );
     return false;
   }
-  if (!parsed || typeof parsed !== "object" || !parsed.profiles) {
-    return false;
-  }
-  const newSettings = {
-    active: parsed.active || "",
-    profiles: parsed.profiles || {},
-    // Carry the master switch through the hot-reload — without this line, editing
-    // allow_paid_models in settings.yaml would be silently ignored until restart
-    // (the reload builder used to drop every top-level key but active/profiles).
-    allow_paid_models: parsed.allow_paid_models === true
-  };
   if (newSettings.active) {
     const validation = validateSettings(newSettings);
     if (!validation.valid) {
@@ -256467,14 +256733,14 @@ function waitForRequestsDrained(timeoutMs = 12e4) {
 }
 var SESSION_ID = randomUUID3().slice(0, 8);
 var SESSION_START = /* @__PURE__ */ new Date();
-var LOG_DIR = join32(getConfigDir(), "logs");
-var LOG_FILE = join32(
+var LOG_DIR = join34(getConfigDir(), "logs");
+var LOG_FILE = join34(
   LOG_DIR,
   `session-${SESSION_ID}-${SESSION_START.toISOString().slice(0, 10)}.jsonl`
 );
 function writeLogEntry(entry) {
   try {
-    mkdirSync25(LOG_DIR, { recursive: true });
+    mkdirSync26(LOG_DIR, { recursive: true });
     appendFileSync6(LOG_FILE, JSON.stringify(entry) + "\n");
   } catch {
     process.stderr.write(`[llm-externalizer] Failed to write log entry
@@ -256484,7 +256750,7 @@ function writeLogEntry(entry) {
 var STATS_FILE = "/tmp/claude/llm-externalizer-stats.json";
 function writeStatsFile() {
   try {
-    mkdirSync25("/tmp/claude", { recursive: true, mode: 448 });
+    mkdirSync26("/tmp/claude", { recursive: true, mode: 448 });
     const backend = getCurrentBackend();
     const stats = {
       session_id: SESSION_ID,
@@ -256499,8 +256765,8 @@ function writeStatsFile() {
       backend: backend.type
     };
     const tmpStats = STATS_FILE + ".tmp";
-    writeFileSync23(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
-    renameSync15(tmpStats, STATS_FILE);
+    writeFileSync25(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
+    renameSync16(tmpStats, STATS_FILE);
   } catch {
   }
 }
@@ -256623,7 +256889,7 @@ function defaultOutputDir() {
     _cachedDefaultOutputDir = resolve18(envOverride.trim());
     return _cachedDefaultOutputDir;
   }
-  _cachedDefaultOutputDir = join32(resolveProjectMainRoot(), "reports", "llm-externalizer");
+  _cachedDefaultOutputDir = join34(resolveProjectMainRoot(), "reports", "llm-externalizer");
   return _cachedDefaultOutputDir;
 }
 function _resetDefaultOutputDirCache() {
@@ -256648,14 +256914,14 @@ function canonicalTimestamp(date5 = /* @__PURE__ */ new Date()) {
 }
 function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir) {
   const dir = outputDir || defaultOutputDir();
-  mkdirSync25(dir, { recursive: true });
+  mkdirSync26(dir, { recursive: true });
   const now = /* @__PURE__ */ new Date();
   const ts2 = canonicalTimestamp(now);
   const shortId = randomUUID3().slice(0, 6);
   const srcPart = meta3.inputFile ? `-${sanitizeFilename(meta3.inputFile).replace(/\.md$/, "")}` : "";
   const groupPart = meta3.groupId ? `-group-${meta3.groupId.replace(/[^a-zA-Z0-9_-]/g, "_")}` : "";
   const filename = overrideFilename || `${ts2}-${toolName}${groupPart}${srcPart}-${shortId}.md`;
-  const filepath = join32(dir, filename);
+  const filepath = join34(dir, filename);
   const lines = [
     "# LLM Externalizer Response",
     "",
@@ -256669,11 +256935,11 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
   lines.push("", "---", "", responseText);
   const tmpPath = filepath + ".tmp";
   try {
-    writeFileSync23(tmpPath, lines.join("\n"), "utf-8");
-    renameSync15(tmpPath, filepath);
+    writeFileSync25(tmpPath, lines.join("\n"), "utf-8");
+    renameSync16(tmpPath, filepath);
   } catch (err3) {
     try {
-      unlinkSync2(tmpPath);
+      unlinkSync3(tmpPath);
     } catch {
     }
     throw new Error(
@@ -256807,7 +257073,7 @@ function resolveFolderPath(folderPath, opts) {
   } catch (err3) {
     return { files: [], error: `Invalid folder_path: ${err3 instanceof Error ? err3.message : String(err3)}` };
   }
-  if (!existsSync25(folderPath)) {
+  if (!existsSync27(folderPath)) {
     return { files: [], error: `folder_path not found: ${folderPath}` };
   }
   if (!statSync14(folderPath).isDirectory()) {
@@ -257033,6 +257299,79 @@ async function runModelReconcile() {
     log: (m) => process.stderr.write(m)
   });
 }
+async function maybeEnsureDefaultProfileReady() {
+  const activeName = activeSettings.active;
+  if (!isDefaultProfileName(activeName)) return null;
+  const profile = activeSettings.profiles[activeName];
+  if (!profile) return null;
+  let catalog = [];
+  let qualifyingPool = [];
+  try {
+    const reconcileCatalog = catalogForReconcile(await fetchOpenRouterModels());
+    catalog = reconcileCatalog.priceSnapshot;
+    if (activeName === "free") {
+      const freeIds = new Set(reconcileCatalog.freeQualified);
+      qualifyingPool = catalog.filter((m) => freeIds.has(m.id));
+    } else {
+      const ceiling = getEnsemblePriceCeiling(loadSettings());
+      qualifyingPool = catalog.filter(
+        (m) => !isFreeSuffixModelId(m.id) && m.inputDollarsPerMillion < ceiling && m.outputDollarsPerMillion < ceiling
+      );
+    }
+  } catch {
+  }
+  let cachedPrices;
+  try {
+    const report = loadCachedReport(join34(getConfigDir(), "benchmark-results.json"));
+    cachedPrices = cachedPricesFromResults(report.results);
+  } catch {
+  }
+  const runtimeUnavailableIds = [...assessModelPersistence(readModelEvents()).values()].filter((v) => v.persistentlyBroken).map((v) => v.model);
+  const record2 = getProfileRecord(activeName);
+  const captured = { outcome: null };
+  const runBenchmark = async (profileName) => {
+    captured.outcome = populateDefaultProfile({
+      profile: profileName,
+      allowPaidModels: getAllowPaidModels(),
+      log: (msg) => process.stderr.write(msg)
+    });
+  };
+  const result = await ensureDefaultProfileReady(
+    activeName,
+    profile,
+    catalog,
+    SETTINGS_FILE,
+    runBenchmark,
+    {
+      runtimeUnavailableIds,
+      cooldownUntil: record2?.cooldownUntil,
+      qualifyingPool,
+      lastPoolFingerprint: record2?.poolFingerprint,
+      cachedPrices
+    }
+  );
+  const outcome = captured.outcome;
+  if (result.benchmarkRan && outcome) {
+    const msg = describeOutcome(outcome);
+    if (msg) process.stderr.write(msg);
+    if (outcome.kind === "refused") {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `NOT YET BENCHMARKED
+
+${outcome.reason}.
+Run: ${outcome.remedy}
+Or set allow_paid_models: true in settings.yaml to let it populate on first use.`
+          }
+        ],
+        isError: true
+      };
+    }
+  }
+  return null;
+}
 async function callSingleWithFreeRotation(primary, fallbacks, messages, options) {
   return callWithFreeRotation(
     primary,
@@ -257218,7 +257557,7 @@ ${failed.map((r) => `- **${r.model}**: ${r.content}`).join("\n")}`);
   };
 }
 async function processFileCheck(filePath, task, options = {}) {
-  if (!existsSync25(filePath)) {
+  if (!existsSync27(filePath)) {
     return { filePath, success: false, error: `File not found: ${filePath}` };
   }
   const codeBlock = readFileAsCodeBlock(
@@ -257411,6 +257750,8 @@ Run the "discover" tool to see the current profile status.`
     }
     if (!RECONCILE_SKIP_TOOLS.has(name)) {
       await runModelReconcile();
+      const defaultProfileGate = await maybeEnsureDefaultProfileReady();
+      if (defaultProfileGate) return defaultProfileGate;
     }
     if (MASS_SCOUT_TOOL_NAMES.has(name)) {
       const scoutArgs = { ...args ?? {} };
@@ -257790,7 +258131,7 @@ ${resp.content}${footer}`
               content: [
                 {
                   type: "text",
-                  text: `no rules layer found (checked: --rules, <repo>/.llm-ext/rules.yaml, ${join32(getConfigDir(), "rules.yaml")}) \u2014 tools run with their built-in rubric`
+                  text: `no rules layer found (checked: --rules, <repo>/.llm-ext/rules.yaml, ${join34(getConfigDir(), "rules.yaml")}) \u2014 tools run with their built-in rubric`
                 }
               ]
             };
@@ -258151,7 +258492,7 @@ Restart Claude Code (or call the 'reset' tool) to pick up the change.`
                 };
               }
               try {
-                writeFileSync23(absPath, jsonText, "utf-8");
+                writeFileSync25(absPath, jsonText, "utf-8");
               } catch (err3) {
                 return {
                   content: [
@@ -258218,11 +258559,11 @@ Restart Claude Code (or call the 'reset' tool) to pick up the change.`
         case "get_settings": {
           const summary = formatActiveProfileSummary();
           try {
-            const raw = readFileSync31(SETTINGS_FILE, "utf-8");
+            const raw = readFileSync33(SETTINGS_FILE, "utf-8");
             const targetDir = outputDir || defaultOutputDir();
-            mkdirSync25(targetDir, { recursive: true });
-            const copyPath = join32(targetDir, "settings_edit.yaml");
-            writeFileSync23(copyPath, raw, "utf-8");
+            mkdirSync26(targetDir, { recursive: true });
+            const copyPath = join34(targetDir, "settings_edit.yaml");
+            writeFileSync25(copyPath, raw, "utf-8");
             return {
               content: [{ type: "text", text: `${summary}
 
@@ -258361,7 +258702,7 @@ Settings file is present but its 'profiles' map is empty \u2014 this is a config
           const model = eligible[0];
           const fallbackModels = eligible.slice(1);
           const checkpointPath = ssCheckpointRaw ? resolve18(ssCheckpointRaw) : defaultCheckpointPath(transcriptPath, getConfigDir());
-          if (ssResume === true && !existsSync25(checkpointPath)) {
+          if (ssResume === true && !existsSync27(checkpointPath)) {
             return {
               content: [
                 {
@@ -258603,7 +258944,7 @@ ${result.summary}`,
               const gSucceeded = gAll.filter((r) => r.success);
               const reportSections = [];
               for (const r of gSucceeded) {
-                const content = r.reportPath && existsSync25(r.reportPath) ? readFileSync31(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync27(r.reportPath) ? readFileSync33(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -258739,7 +259080,7 @@ ${gAbortReason}`);
             } else {
               const reportSections = [];
               for (const r of succeeded) {
-                const content = r.reportPath && existsSync25(r.reportPath) ? readFileSync31(r.reportPath, "utf-8") : "";
+                const content = r.reportPath && existsSync27(r.reportPath) ? readFileSync33(r.reportPath, "utf-8") : "";
                 reportSections.push(`## File: ${r.filePath}
 
 ${content}`);
@@ -258893,8 +259234,8 @@ ${content}`);
             } catch (err3) {
               return { error: err3.message };
             }
-            if (!existsSync25(fA)) return { error: `File not found: ${fARaw}` };
-            if (!existsSync25(fB)) return { error: `File not found: ${fBRaw}` };
+            if (!existsSync27(fA)) return { error: `File not found: ${fARaw}` };
+            if (!existsSync27(fB)) return { error: `File not found: ${fBRaw}` };
             if (cfScan && !cfRedact) {
               const scanResult = scanFilesForSecrets([fA, fB]);
               if (scanResult.found) return { error: scanResult.report };
@@ -258956,7 +259297,7 @@ ${fence}${sourceBlocks}` }
             } catch (err3) {
               return { content: [{ type: "text", text: `FAILED: ${err3.message}` }], isError: true };
             }
-            if (!existsSync25(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
+            if (!existsSync27(cfGitRepoSafe)) return { content: [{ type: "text", text: `FAILED: git_repo not found: ${cfGitRepo}` }], isError: true };
             const toRef = cfToRef || "HEAD";
             if (cfFromRef.startsWith("-") || toRef.startsWith("-")) {
               return { content: [{ type: "text", text: "FAILED: git refs must not start with '-'" }], isError: true };
@@ -259027,7 +259368,7 @@ ${sections.join("\n\n---\n\n")}`;
                 {
                   model: "git-diff (no LLM)",
                   task: `${cfFromRef} \u2192 ${toRef}`,
-                  inputFile: join32(cfGitRepoSafe, dg.files[0]),
+                  inputFile: join34(cfGitRepoSafe, dg.files[0]),
                   groupId: gid
                 },
                 void 0,
@@ -259120,7 +259461,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync25(fileA)) {
+          if (!existsSync27(fileA)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileA}` }
@@ -259128,7 +259469,7 @@ ${result.content}`);
               isError: true
             };
           }
-          if (!existsSync25(fileB)) {
+          if (!existsSync27(fileB)) {
             return {
               content: [
                 { type: "text", text: `FAILED: File not found: ${fileB}` }
@@ -259316,13 +259657,13 @@ ${diffFence}` + sourceFileBlocks
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync25(filePath)) {
+                if (!existsSync27(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
                   continue;
                 }
-                const src = readFileSync31(filePath, "utf-8");
+                const src = readFileSync33(filePath, "utf-8");
                 const lang = detectLang(filePath);
                 const deps = extractLocalImports(filePath, src);
                 const depBlocks = [];
@@ -259376,14 +259717,14 @@ ${resp.content}${footer}`);
           const crReports = [];
           const crReportPaths = [];
           for (const filePath of crFilePaths) {
-            if (!existsSync25(filePath)) {
+            if (!existsSync27(filePath)) {
               crReports.push(`## ${filePath}
 
 FAILED: File not found.`);
               crReportPaths.push("(skipped \u2014 file not found)");
               continue;
             }
-            const crSourceCode = readFileSync31(filePath, "utf-8");
+            const crSourceCode = readFileSync33(filePath, "utf-8");
             const crLang = detectLang(filePath);
             const depPaths = extractLocalImports(filePath, crSourceCode);
             const depBlocks = [];
@@ -259556,14 +259897,14 @@ ${crResp.content}${crFooter}`
               const gid = fg.id || "auto";
               const gReports = [];
               for (const filePath of fg.files) {
-                if (!existsSync25(filePath)) {
+                if (!existsSync27(filePath)) {
                   gReports.push(`## ${filePath}
 
 FAILED: File not found.`);
                   continue;
                 }
                 const ciLang = detectLang(filePath);
-                const fileDir = dirname14(filePath);
+                const fileDir = dirname15(filePath);
                 const ciResolveBase = project_root || fileDir;
                 const extractMessages = [
                   { role: "system", content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path inside a filename tag before the file-content tag \u2014 reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.` + FILE_FORMAT_EXAMPLE },
@@ -259585,22 +259926,22 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     continue;
                   }
                   const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-                  const resolvedBase = importPath.startsWith("/") ? resolve18(importPath) : join32(resolveDir, importPath);
+                  const resolvedBase = importPath.startsWith("/") ? resolve18(importPath) : join34(resolveDir, importPath);
                   if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                     packageImports.push(importPath);
                     continue;
                   }
-                  let found = existsSync25(resolvedBase) && statSync14(resolvedBase).isFile();
+                  let found = existsSync27(resolvedBase) && statSync14(resolvedBase).isFile();
                   if (!found && !extname5(resolvedBase)) {
                     for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".json"]) {
-                      if (existsSync25(resolvedBase + ext)) {
+                      if (existsSync27(resolvedBase + ext)) {
                         found = true;
                         break;
                       }
                     }
                     if (!found) {
                       for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                        if (existsSync25(join32(resolvedBase, `index${ext}`))) {
+                        if (existsSync27(join34(resolvedBase, `index${ext}`))) {
                           found = true;
                           break;
                         }
@@ -259634,7 +259975,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
           const ciReports = [];
           const ciReportPaths = [];
           for (const filePath of ciFilePaths) {
-            if (!existsSync25(filePath)) {
+            if (!existsSync27(filePath)) {
               ciReports.push(`## ${filePath}
 
 FAILED: File not found.`);
@@ -259642,7 +259983,7 @@ FAILED: File not found.`);
               continue;
             }
             const ciLang = detectLang(filePath);
-            const fileDir = dirname14(filePath);
+            const fileDir = dirname15(filePath);
             const ciResolveBase = project_root || fileDir;
             const extractMessages = [
               {
@@ -259684,13 +260025,13 @@ FAILED: File not found.`);
                 continue;
               }
               const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-              const resolvedBase = importPath.startsWith("/") ? resolve18(importPath) : join32(resolveDir, importPath);
+              const resolvedBase = importPath.startsWith("/") ? resolve18(importPath) : join34(resolveDir, importPath);
               if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
                 packageImports.push(importPath);
                 continue;
               }
               let found = false;
-              if (existsSync25(resolvedBase) && statSync14(resolvedBase).isFile()) {
+              if (existsSync27(resolvedBase) && statSync14(resolvedBase).isFile()) {
                 found = true;
               }
               if (!found && !extname5(resolvedBase)) {
@@ -259706,14 +260047,14 @@ FAILED: File not found.`);
                   ".rs",
                   ".json"
                 ]) {
-                  if (existsSync25(resolvedBase + ext)) {
+                  if (existsSync27(resolvedBase + ext)) {
                     found = true;
                     break;
                   }
                 }
                 if (!found) {
                   for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                    if (existsSync25(join32(resolvedBase, `index${ext}`))) {
+                    if (existsSync27(join34(resolvedBase, `index${ext}`))) {
                       found = true;
                       break;
                     }
@@ -259855,8 +260196,8 @@ FAILED: File not found.`);
             }
             return resp.content;
           };
-          const csModuleDir = dirname14(fileUrlToPath_cs(import.meta.url));
-          const csEmbeddingsScript = join32(csModuleDir, "..", "scripts", "compute_embeddings.py");
+          const csModuleDir = dirname15(fileUrlToPath_cs(import.meta.url));
+          const csEmbeddingsScript = join34(csModuleDir, "..", "scripts", "compute_embeddings.py");
           const csPreflightModel = getCurrentBackend().model ?? "unknown";
           const csHooks = {
             rawLlmCall: csRawLlmCall,
@@ -259964,6 +260305,7 @@ function writeBootBanner() {
 }
 export {
   FREE_FLOOR_MIN_CONTEXT_TOKENS,
+  __getBootStateForTests,
   _resetDefaultOutputDirCache,
   _testDefaultOutputDir,
   boot,
@@ -259973,6 +260315,7 @@ export {
   filterFreeModels,
   isModelUnavailableError,
   limitsBlock,
+  maybeEnsureDefaultProfileReady,
   overrideActiveProfile,
   parseFreeBelowUsd,
   resolveAutoFreePool,
@@ -259980,6 +260323,7 @@ export {
   resolveMassScoutFreeModelOverride,
   resolveSubsystemFreeModel,
   selectFreeEnsembleModels,
+  shouldBootDespiteInvalidActiveProfile,
   warmEstimatePricing,
   writeBootBanner
 };

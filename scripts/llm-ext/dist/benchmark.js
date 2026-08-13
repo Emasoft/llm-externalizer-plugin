@@ -53,7 +53,7 @@ var require_identity = __commonJS({
     var isDocument = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === DOC;
     var isMap = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === MAP;
     var isPair = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === PAIR;
-    var isScalar = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === SCALAR;
+    var isScalar2 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === SCALAR;
     var isSeq = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === SEQ;
     function isCollection(node) {
       if (node && typeof node === "object")
@@ -75,7 +75,7 @@ var require_identity = __commonJS({
         }
       return false;
     }
-    var hasAnchor = (node) => (isScalar(node) || isCollection(node)) && !!node.anchor;
+    var hasAnchor = (node) => (isScalar2(node) || isCollection(node)) && !!node.anchor;
     exports.ALIAS = ALIAS;
     exports.DOC = DOC;
     exports.MAP = MAP;
@@ -90,7 +90,7 @@ var require_identity = __commonJS({
     exports.isMap = isMap;
     exports.isNode = isNode;
     exports.isPair = isPair;
-    exports.isScalar = isScalar;
+    exports.isScalar = isScalar2;
     exports.isSeq = isSeq;
   }
 });
@@ -5632,7 +5632,7 @@ var require_cst = __commonJS({
     var FLOW_END = "";
     var SCALAR = "";
     var isCollection = (token) => !!token && "items" in token;
-    var isScalar = (token) => !!token && (token.type === "scalar" || token.type === "single-quoted-scalar" || token.type === "double-quoted-scalar" || token.type === "block-scalar");
+    var isScalar2 = (token) => !!token && (token.type === "scalar" || token.type === "single-quoted-scalar" || token.type === "double-quoted-scalar" || token.type === "block-scalar");
     function prettyToken(token) {
       switch (token) {
         case BOM:
@@ -5716,7 +5716,7 @@ var require_cst = __commonJS({
     exports.FLOW_END = FLOW_END;
     exports.SCALAR = SCALAR;
     exports.isCollection = isCollection;
-    exports.isScalar = isScalar;
+    exports.isScalar = isScalar2;
     exports.prettyToken = prettyToken;
     exports.tokenType = tokenType;
   }
@@ -7246,7 +7246,7 @@ var require_public_api = __commonJS({
         return docs;
       return Object.assign([], { empty: true }, composer$1.streamInfo());
     }
-    function parseDocument(source, options = {}) {
+    function parseDocument2(source, options = {}) {
       const { lineCounter: lineCounter2, prettyErrors } = parseOptions(options);
       const parser$1 = new parser.Parser(lineCounter2?.addNewLine);
       const composer$1 = new composer.Composer(options);
@@ -7272,7 +7272,7 @@ var require_public_api = __commonJS({
       } else if (options === void 0 && reviver && typeof reviver === "object") {
         options = reviver;
       }
-      const doc = parseDocument(src, options);
+      const doc = parseDocument2(src, options);
       if (!doc)
         return null;
       doc.warnings.forEach((warning) => log.warn(doc.options.logLevel, warning));
@@ -7308,7 +7308,7 @@ var require_public_api = __commonJS({
     }
     exports.parse = parse;
     exports.parseAllDocuments = parseAllDocuments;
-    exports.parseDocument = parseDocument;
+    exports.parseDocument = parseDocument2;
     exports.stringify = stringify;
   }
 });
@@ -218107,9 +218107,9 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 });
 
 // src/benchmark/index.ts
-import { mkdirSync as mkdirSync14, writeFileSync as writeFileSync14, existsSync as existsSync18 } from "node:fs";
-import { dirname as dirname7, join as join22 } from "node:path";
-import { fileURLToPath as fileURLToPath6 } from "node:url";
+import { mkdirSync as mkdirSync16, writeFileSync as writeFileSync17, existsSync as existsSync20 } from "node:fs";
+import { dirname as dirname8, join as join25 } from "node:path";
+import { fileURLToPath as fileURLToPath7, pathToFileURL } from "node:url";
 
 // src/usage-history.ts
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -218792,7 +218792,10 @@ function loadSettings() {
       profiles: parsed.profiles || {},
       // Absent / any non-true value ⟺ false: the safe (free) side. A YAML that
       // predates this key, or sets it to a typo, never accidentally enables paid.
-      allow_paid_models: parsed.allow_paid_models === true
+      allow_paid_models: parsed.allow_paid_models === true,
+      // Absent / non-finite / non-positive ⟹ undefined, so getEnsemblePriceCeiling()
+      // falls back to the built-in default instead of silently accepting a bad value.
+      ensemble_price_ceiling_usd_per_million: typeof parsed.ensemble_price_ceiling_usd_per_million === "number" && isFinite(parsed.ensemble_price_ceiling_usd_per_million) && parsed.ensemble_price_ceiling_usd_per_million > 0 ? parsed.ensemble_price_ceiling_usd_per_million : void 0
     };
   } catch (err) {
     process.stderr.write(
@@ -218801,6 +218804,15 @@ function loadSettings() {
     );
     return null;
   }
+}
+var DEFAULT_PROFILE_NAMES = ["free", "ensemble", "mass-scout"];
+function isDefaultProfileName(name) {
+  return DEFAULT_PROFILE_NAMES.includes(name);
+}
+var DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M = 1.3;
+function getEnsemblePriceCeiling(settings) {
+  const raw = settings?.ensemble_price_ceiling_usd_per_million;
+  return typeof raw === "number" && isFinite(raw) && raw > 0 ? raw : DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M;
 }
 function coerceToolModels(raw) {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
@@ -219874,52 +219886,53 @@ function loadSettingsRoot(settingsPath) {
     throw new Error(`settings.yaml not found at ${settingsPath}`);
   }
   const raw = readFileSync6(settingsPath, "utf-8");
-  let doc;
-  try {
-    doc = (0, import_yaml2.parse)(raw);
-  } catch (err) {
-    throw new Error(`settings.yaml at ${settingsPath} is not valid YAML: ${err.message}`, { cause: err });
+  const doc = (0, import_yaml2.parseDocument)(raw);
+  if (doc.errors.length > 0) {
+    throw new Error(`settings.yaml at ${settingsPath} is not valid YAML: ${doc.errors[0].message}`, {
+      cause: doc.errors[0]
+    });
   }
-  if (typeof doc !== "object" || doc === null) {
+  const root = doc.toJS();
+  if (typeof root !== "object" || root === null) {
     throw new Error(`settings.yaml at ${settingsPath} must be a YAML object at the top level.`);
   }
-  const root = doc;
   if (!root.profiles || typeof root.profiles !== "object") {
     throw new Error(`settings.yaml at ${settingsPath} missing 'profiles' map.`);
   }
-  return root;
+  return { doc, root };
 }
 function loadProfileForMutation(settingsPath, profileName) {
-  const root = loadSettingsRoot(settingsPath);
-  const profile = root.profiles[profileName];
+  const handle = loadSettingsRoot(settingsPath);
+  const profile = handle.root.profiles[profileName];
   if (!profile || typeof profile !== "object") {
     throw new Error(
-      `settings.yaml at ${settingsPath} has no profile named '${profileName}'. Existing profiles: ${Object.keys(root.profiles).join(", ")}.`
+      `settings.yaml at ${settingsPath} has no profile named '${profileName}'. Existing profiles: ${Object.keys(handle.root.profiles).join(", ")}.`
     );
   }
-  return { root, profile };
+  return { handle, profile };
 }
-function writeSettingsAtomic(settingsPath, root) {
-  const newRaw = (0, import_yaml2.stringify)(root, { indent: 2 });
+function writeSettingsAtomic(settingsPath, handle) {
+  const newRaw = handle.doc.toString();
   const tmp = settingsPath + ".tmp." + process.pid;
   writeFileSync4(tmp, newRaw, "utf-8");
   renameSyncCb(tmp, settingsPath);
 }
 function applyPicksToSettings(settingsPath, profileName, picks) {
   if (picks.length < 1) throw new Error("applyPicksToSettings: need at least one pick");
-  const { root, profile } = loadProfileForMutation(settingsPath, profileName);
+  const { handle, profile } = loadProfileForMutation(settingsPath, profileName);
   const oldEnsemble = {
     model: typeof profile.model === "string" ? profile.model : "",
     ...typeof profile.second_model === "string" ? { second_model: profile.second_model } : {},
     ...typeof profile.third_model === "string" ? { third_model: profile.third_model } : {}
   };
-  profile.mode = picks.length >= 2 ? "remote-ensemble" : "remote";
-  profile.model = picks[0].modelId;
-  if (picks.length >= 2) profile.second_model = picks[1].modelId;
-  else delete profile.second_model;
-  if (picks.length >= 3) profile.third_model = picks[2].modelId;
-  else delete profile.third_model;
-  writeSettingsAtomic(settingsPath, root);
+  const path = ["profiles", profileName];
+  handle.doc.setIn([...path, "mode"], picks.length >= 2 ? "remote-ensemble" : "remote");
+  handle.doc.setIn([...path, "model"], picks[0].modelId);
+  if (picks.length >= 2) handle.doc.setIn([...path, "second_model"], picks[1].modelId);
+  else handle.doc.deleteIn([...path, "second_model"]);
+  if (picks.length >= 3) handle.doc.setIn([...path, "third_model"], picks[2].modelId);
+  else handle.doc.deleteIn([...path, "third_model"]);
+  writeSettingsAtomic(settingsPath, handle);
   return {
     oldEnsemble,
     newEnsemble: {
@@ -219939,12 +219952,12 @@ function applyToolModelToSettings(settingsPath, profileName, tool, modelId) {
       `applyToolModelToSettings: unknown tool '${tool}'. Registered LLM-using tools: ${known.join(", ")}.`
     );
   }
-  const { root, profile } = loadProfileForMutation(settingsPath, profileName);
+  const { handle, profile } = loadProfileForMutation(settingsPath, profileName);
   const existing = profile.tool_models;
   const oldToolModels = existing && typeof existing === "object" && !Array.isArray(existing) ? { ...existing } : {};
   const oldModelId = typeof oldToolModels[tool] === "string" ? oldToolModels[tool] : "";
-  profile.tool_models = { ...oldToolModels, [tool]: modelId };
-  writeSettingsAtomic(settingsPath, root);
+  handle.doc.setIn(["profiles", profileName, "tool_models"], { ...oldToolModels, [tool]: modelId });
+  writeSettingsAtomic(settingsPath, handle);
   return { profileName, tool, oldModelId, newModelId: modelId };
 }
 function applyFreePoolToSettings(settingsPath, profileName, modelIds) {
@@ -219958,11 +219971,11 @@ function applyFreePoolToSettings(settingsPath, profileName, modelIds) {
     );
   }
   const newPool = [...new Set(modelIds)];
-  const { root, profile } = loadProfileForMutation(settingsPath, profileName);
+  const { handle, profile } = loadProfileForMutation(settingsPath, profileName);
   const existing = profile.free_models;
   const oldPool = Array.isArray(existing) ? existing.filter((v) => typeof v === "string") : [];
-  profile.free_models = newPool;
-  writeSettingsAtomic(settingsPath, root);
+  handle.doc.setIn(["profiles", profileName, "free_models"], newPool);
+  writeSettingsAtomic(settingsPath, handle);
   return { profileName, oldPool, newPool };
 }
 var ENSEMBLE_SLOTS = ["model", "second_model", "third_model"];
@@ -219975,16 +219988,90 @@ function applyEnsembleSlotToSettings(settingsPath, profileName, slot, modelId) {
       `applyEnsembleSlotToSettings: unknown slot '${slot}'. Valid slots: ${ENSEMBLE_SLOTS.join(", ")}.`
     );
   }
-  const { root, profile } = loadProfileForMutation(settingsPath, profileName);
+  const { handle, profile } = loadProfileForMutation(settingsPath, profileName);
   if (slot !== "model" && profile.mode !== "remote-ensemble") {
     throw new Error(
       `applyEnsembleSlotToSettings: profile '${profileName}' has mode '${String(profile.mode)}' \u2014 '${slot}' is only read under mode 'remote-ensemble', so writing it would silently do nothing. Switch the profile to remote-ensemble first, or adopt into 'model'.`
     );
   }
   const oldModelId = typeof profile[slot] === "string" ? profile[slot] : "";
-  profile[slot] = modelId;
-  writeSettingsAtomic(settingsPath, root);
+  handle.doc.setIn(["profiles", profileName, slot], modelId);
+  writeSettingsAtomic(settingsPath, handle);
   return { profileName, slot, oldModelId, newModelId: modelId };
+}
+function pickEnsembleByPriceCeiling(results, opts = {}) {
+  const ceiling = opts.priceCeilingUsdPerM ?? DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M;
+  const requireSchema = opts.requireSchema ?? true;
+  const topN = opts.topN ?? 3;
+  const survivors = [];
+  for (const r of results) {
+    if (!r.ok || r.isBaseline) continue;
+    if (r.modelId.endsWith(":free")) continue;
+    if (requireSchema && r.schemaCompliant === false) continue;
+    if (!(r.inputDollarsPerMillion < ceiling && r.outputDollarsPerMillion < ceiling)) continue;
+    survivors.push({
+      modelId: r.modelId,
+      meanF1: r.meanF1 ?? 0,
+      actualCost: r.actualCost ?? 0,
+      latencyMs: r.latencyMs ?? 0,
+      inputDollarsPerMillion: r.inputDollarsPerMillion,
+      outputDollarsPerMillion: r.outputDollarsPerMillion
+    });
+  }
+  survivors.sort((a, b) => {
+    if (b.meanF1 !== a.meanF1) return b.meanF1 - a.meanF1;
+    if (a.actualCost !== b.actualCost) return a.actualCost - b.actualCost;
+    return a.latencyMs - b.latencyMs;
+  });
+  return survivors.slice(0, topN);
+}
+function pickMassScoutModel(results, opts = {}) {
+  const requireSchema = opts.requireSchema ?? true;
+  const survivors = [];
+  for (const r of results) {
+    if (!r.ok || r.isBaseline) continue;
+    if (r.modelId.endsWith(":free")) continue;
+    if (requireSchema && r.schemaCompliant === false) continue;
+    survivors.push({
+      modelId: r.modelId,
+      meanF1: r.meanF1 ?? 0,
+      actualCost: r.actualCost ?? 0,
+      latencyMs: r.latencyMs ?? 0,
+      inputDollarsPerMillion: r.inputDollarsPerMillion,
+      outputDollarsPerMillion: r.outputDollarsPerMillion
+    });
+  }
+  survivors.sort((a, b) => {
+    const costA = a.inputDollarsPerMillion + a.outputDollarsPerMillion;
+    const costB = b.inputDollarsPerMillion + b.outputDollarsPerMillion;
+    if (costA !== costB) return costA - costB;
+    return b.meanF1 - a.meanF1;
+  });
+  if (survivors.length === 0) {
+    throw new Error(
+      "pickMassScoutModel: no non-':free' candidate cleared the schema gate."
+    );
+  }
+  if (survivors[0].modelId.endsWith(":free")) {
+    throw new Error(
+      `pickMassScoutModel: refusing to select ':free' model '${survivors[0].modelId}' \u2014 mass-scout must never use a free-tier model (rate-limit risk at scale).`
+    );
+  }
+  return survivors[0];
+}
+function updateFreeDefaultProfile(settingsPath, freeModelIds) {
+  return applyFreePoolToSettings(settingsPath, "free", freeModelIds);
+}
+function updateEnsembleDefaultProfile(settingsPath, picks) {
+  return applyPicksToSettings(settingsPath, "ensemble", picks);
+}
+function updateMassScoutDefaultProfile(settingsPath, pick) {
+  if (pick.modelId.endsWith(":free")) {
+    throw new Error(
+      `updateMassScoutDefaultProfile: refusing to write ':free' model '${pick.modelId}' into mass-scout \u2014 mass-scout must never use a free-tier model (rate-limit risk at scale).`
+    );
+  }
+  return applyEnsembleSlotToSettings(settingsPath, "mass-scout", "model", pick.modelId);
 }
 
 // src/benchmark/update-all.ts
@@ -229750,6 +229837,116 @@ async function runDiscoverNewArrivals(opts = {}) {
   return { report, reportPath };
 }
 
+// src/default-profiles-state.ts
+import { existsSync as existsSync18, readFileSync as readFileSync22, writeFileSync as writeFileSync14, renameSync as renameSync10, chmodSync as chmodSync2, unlinkSync } from "node:fs";
+import { join as join22 } from "node:path";
+function defaultProfilesStatePath() {
+  return join22(getConfigDir(), "default-profiles-state.json");
+}
+function readDefaultProfilesState() {
+  const path = defaultProfilesStatePath();
+  if (!existsSync18(path)) return { version: 1, profiles: {} };
+  try {
+    const parsed = JSON.parse(readFileSync22(path, "utf-8"));
+    if (typeof parsed !== "object" || parsed === null) return { version: 1, profiles: {} };
+    const state = parsed;
+    if (state.version !== 1 || typeof state.profiles !== "object" || state.profiles === null) {
+      return { version: 1, profiles: {} };
+    }
+    return { version: 1, profiles: state.profiles };
+  } catch {
+    return { version: 1, profiles: {} };
+  }
+}
+function writeDefaultProfilesState(state) {
+  const path = defaultProfilesStatePath();
+  const tmp = `${path}.tmp.${process.pid}`;
+  try {
+    writeFileSync14(tmp, JSON.stringify(state, null, 2), "utf-8");
+    try {
+      chmodSync2(tmp, 384);
+    } catch {
+    }
+    renameSync10(tmp, path);
+  } catch {
+    try {
+      if (existsSync18(tmp)) unlinkSync(tmp);
+    } catch {
+    }
+  }
+}
+function getProfileRecord(name) {
+  return readDefaultProfilesState().profiles[name];
+}
+function putProfileRecord(name, record) {
+  const state = readDefaultProfilesState();
+  state.profiles[name] = record;
+  writeDefaultProfilesState(state);
+}
+function recordBenchmarkSuccess(name, poolFingerprint2, modelIds, nowMs) {
+  putProfileRecord(name, {
+    lastBenchmarkAt: nowMs,
+    poolFingerprint: poolFingerprint2,
+    modelIds: [...modelIds],
+    failCount: 0,
+    cooldownUntil: 0
+  });
+}
+var BACKOFF_MS = [15 * 6e4, 60 * 6e4, 4 * 60 * 6e4, 24 * 60 * 6e4];
+function recordBenchmarkFailure(name, nowMs) {
+  const prev = getProfileRecord(name);
+  const failCount = (prev?.failCount ?? 0) + 1;
+  const backoff = BACKOFF_MS[Math.min(failCount - 1, BACKOFF_MS.length - 1)];
+  putProfileRecord(name, {
+    lastBenchmarkAt: prev?.lastBenchmarkAt ?? 0,
+    // Keep the OLD fingerprint: the attempt failed, so the pool it was reacting
+    // to has NOT been consumed. Banking the new one would mark the drift as
+    // handled and the profile would never retry once the cooldown expired.
+    poolFingerprint: prev?.poolFingerprint ?? "",
+    modelIds: prev?.modelIds ?? [],
+    failCount,
+    cooldownUntil: nowMs + backoff
+  });
+}
+
+// src/default-profiles.ts
+import { createHash as createHash7 } from "node:crypto";
+function poolFingerprint(pool) {
+  const canonical = pool.map((m) => `${m.id}\0${m.inputDollarsPerMillion}\0${m.outputDollarsPerMillion}`).sort().join("");
+  return createHash7("sha256").update(canonical).digest("hex").slice(0, 16);
+}
+
+// src/model-reconcile.ts
+import { mkdirSync as mkdirSync15, readFileSync as readFileSync24, renameSync as renameSync11, writeFileSync as writeFileSync16 } from "node:fs";
+import { join as join24 } from "node:path";
+
+// src/free-pool-auto-bench.ts
+import {
+  closeSync,
+  existsSync as existsSync19,
+  mkdirSync as mkdirSync14,
+  openSync,
+  readFileSync as readFileSync23,
+  writeFileSync as writeFileSync15
+} from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { dirname as dirname7, join as join23, resolve as pathResolve } from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath as fileURLToPath6 } from "node:url";
+var LLM_EXT_HOME = join23(homedir3(), ".llm-externalizer");
+var BENCH_CACHE = join23(LLM_EXT_HOME, "benchmark-results.json");
+var BENCH_LOCK = join23(LLM_EXT_HOME, "free-pool-bench.lock");
+var BENCH_LOG = join23(LLM_EXT_HOME, "free-pool-bench.log");
+
+// src/model-reconcile.ts
+function toCatalogPriceSnapshot(cat) {
+  return cat.map((m) => ({
+    id: m.id,
+    inputDollarsPerMillion: parseFloat(m.pricing?.prompt ?? "NaN") * 1e6,
+    outputDollarsPerMillion: parseFloat(m.pricing?.completion ?? "NaN") * 1e6
+  }));
+}
+
 // src/benchmark/cli-args.ts
 var DEFAULT_QUALIFYING_TOP_N = 15;
 function parseArgs(argv) {
@@ -229790,7 +229987,8 @@ function parseArgs(argv) {
     adoptProfile: null,
     updateAll: false,
     updateMode: "free",
-    budgetUsd: DEFAULT_BUDGET_USD
+    budgetUsd: DEFAULT_BUDGET_USD,
+    populateDefaultProfile: null
   };
   let modeFlag = null;
   let budgetSeen = false;
@@ -229920,6 +230118,15 @@ function parseArgs(argv) {
       opts.apply = true;
     } else if (a === "--update-all") {
       opts.updateAll = true;
+    } else if (a === "--populate-default-profile") {
+      const raw = takeValue(a, i);
+      i++;
+      if (!isDefaultProfileName(raw)) {
+        throw new Error(
+          `--populate-default-profile must be one of ${DEFAULT_PROFILE_NAMES.join(", ")}, got '${raw}'`
+        );
+      }
+      opts.populateDefaultProfile = raw;
     } else if (a === "--free") {
       setMode("free");
     } else if (a === "--paid") {
@@ -229942,8 +230149,11 @@ function parseArgs(argv) {
       throw new Error(`unknown flag: ${a}`);
     }
   }
-  if (!opts.updateAll && (modeFlag !== null || budgetSeen)) {
+  if (!opts.updateAll && opts.populateDefaultProfile === null && (modeFlag !== null || budgetSeen)) {
     throw new Error("--free / --paid / --both / --budget-usd only apply to --update-all");
+  }
+  if (!opts.updateAll && opts.populateDefaultProfile !== null && modeFlag !== null) {
+    throw new Error("--free / --paid / --both only apply to --update-all (not --populate-default-profile \u2014 its mode is implied by the profile name)");
   }
   return opts;
 }
@@ -230014,6 +230224,17 @@ function printHelp() {
       "                    reserved against the cap before it is sent, so the cap cannot be",
       "                    crossed by a call we chose to make. --dry-run prints the full plan",
       "                    and the estimate and spends NOTHING.",
+      "",
+      "Populate ONE named default profile (unlike --update-all, writes ONLY that profile):",
+      `  --populate-default-profile NAME`,
+      `                    NAME is one of: ${DEFAULT_PROFILE_NAMES.join(", ")}. Sweeps and`,
+      "                    writes exactly that machine-managed default profile \u2014 nothing",
+      "                    else (no other profile, no tool_models). 'free' runs under the",
+      "                    same free_only chokepoint as --update-all --free (provably $0).",
+      "                    'ensemble' and 'mass-scout' are PAID: bounded by the same",
+      "                    worst-case pre-flight estimate + --budget-usd cap as --update-all",
+      "                    (aborts before the first call if the estimate exceeds the cap).",
+      "                    --dry-run prints the plan and spends/writes nothing.",
       "",
       "Free-pool sweep (TRDD-f1510055):",
       "  --bench-free-pool Auto-fill the candidate set from the active profile's",
@@ -230181,14 +230402,14 @@ function resolveApiKey6() {
   return k;
 }
 function resolveFixturesDir() {
-  const here = dirname7(fileURLToPath6(import.meta.url));
+  const here = dirname8(fileURLToPath7(import.meta.url));
   const candidates = [
-    join22(here, "fixtures"),
-    join22(here, "..", "src", "benchmark", "fixtures"),
-    join22(here, "..", "..", "src", "benchmark", "fixtures")
+    join25(here, "fixtures"),
+    join25(here, "..", "src", "benchmark", "fixtures"),
+    join25(here, "..", "..", "src", "benchmark", "fixtures")
   ];
   for (const c of candidates) {
-    if (existsSync18(join22(c, "file-01.ts"))) return c;
+    if (existsSync20(join25(c, "file-01.ts"))) return c;
   }
   throw new Error(`Could not locate benchmark fixtures. Tried:
   ${candidates.join("\n  ")}`);
@@ -230237,7 +230458,7 @@ function preflight(opts) {
   }
 }
 function benchmarkCachePath() {
-  return join22(getConfigDir(), "benchmark-results.json");
+  return join25(getConfigDir(), "benchmark-results.json");
 }
 function refuseUnsafeUpdateAll(opts) {
   if (!opts.updateAll || opts.updateMode === "free") return null;
@@ -230315,6 +230536,9 @@ async function main() {
   }
   if (opts.updateAll) {
     return runUpdateAllPhase(opts);
+  }
+  if (opts.populateDefaultProfile !== null) {
+    return runPopulateDefaultProfilePhase(opts);
   }
   if (opts.securityTriage) {
     return runSecurityTriagePhase(opts);
@@ -230468,17 +230692,17 @@ async function runKeywordSweep(opts, fetchImpl) {
     results
   };
   const markdown = renderReport(reportInput);
-  mkdirSync14(dirname7(reportPath), { recursive: true });
-  writeFileSync14(reportPath, markdown, "utf-8");
+  mkdirSync16(dirname8(reportPath), { recursive: true });
+  writeFileSync17(reportPath, markdown, "utf-8");
   console.error(`[benchmark] Report: ${reportPath}`);
   const json = renderJson(reportInput);
   const cacheJsonPath = benchmarkCachePath();
-  mkdirSync14(dirname7(cacheJsonPath), { recursive: true });
-  writeFileSync14(cacheJsonPath, json, "utf-8");
+  mkdirSync16(dirname8(cacheJsonPath), { recursive: true });
+  writeFileSync17(cacheJsonPath, json, "utf-8");
   console.error(`[benchmark] JSON cache: ${cacheJsonPath}`);
   if (opts.jsonPath) {
-    mkdirSync14(dirname7(opts.jsonPath), { recursive: true });
-    writeFileSync14(opts.jsonPath, json, "utf-8");
+    mkdirSync16(dirname8(opts.jsonPath), { recursive: true });
+    writeFileSync17(opts.jsonPath, json, "utf-8");
     console.error(`[benchmark] JSON (user-path): ${opts.jsonPath}`);
   }
   const passers = [...results.values()].filter((r) => r.score?.pass).length;
@@ -230614,6 +230838,192 @@ function describeKeywordWorkload() {
     // ASSUMED_MAX_OUTPUT_TOKENS for why an assumption is unavoidable here, and why a
     // wrong one can cost at most a single call's over-run (the ledger trips on it).
     maxOutputTokensPerCall: ASSUMED_MAX_OUTPUT_TOKENS
+  };
+}
+var defaultPopulateDefaultProfileDeps = {
+  fetchCatalog: () => fetchProgrammingModels(),
+  runSweep: (sweepOpts) => runKeywordSweep(sweepOpts)
+};
+async function runPopulateDefaultProfilePhase(opts, deps = defaultPopulateDefaultProfileDeps) {
+  const name = opts.populateDefaultProfile;
+  if (name === null) {
+    throw new Error("runPopulateDefaultProfilePhase called without --populate-default-profile");
+  }
+  const settingsPath = getSettingsPath();
+  if (name === "free") {
+    return runPopulateFreeDefaultProfile(opts, settingsPath, deps);
+  }
+  return runPopulatePaidDefaultProfile(opts, settingsPath, name, deps);
+}
+async function runPopulateFreeDefaultProfile(opts, settingsPath, deps) {
+  setActiveFreeOnly(true);
+  let configured = FREE_POOL_SEED;
+  try {
+    const settings = loadSettings();
+    const freeProfile = settings?.profiles?.free;
+    if (freeProfile) {
+      const pool = profileFreeModels(freeProfile);
+      if (pool.length > 0) configured = pool;
+    }
+  } catch {
+  }
+  const catalog = await deps.fetchCatalog();
+  const { pool: discoveredPool, rejected } = resolveFreePool(configured, catalog, {
+    autoDiscover: true,
+    autoDiscoverTopN: opts.qualifyingTopN ?? 16
+  });
+  if (rejected.length > 0) {
+    return {
+      ok: false,
+      code: 2,
+      summary: `--populate-default-profile free refuses to run: configured non-':free' id(s) ${JSON.stringify(rejected)} are NOT priced at $0 by the live catalog (they would cost money) or are absent from it \u2014 fix the 'free' profile's free_models list`
+    };
+  }
+  const freeIds = freeSuffixOnly(discoveredPool);
+  if (freeIds.length === 0) {
+    recordBenchmarkFailure("free", Date.now());
+    return {
+      ok: false,
+      code: 2,
+      summary: "--populate-default-profile free: the live catalog currently offers no zero-cost ':free' model that meets the structural bar (structured output / context / output length) \u2014 nothing to benchmark"
+    };
+  }
+  if (opts.dryRun) {
+    return {
+      ok: true,
+      summary: `dry-run \u2014 would sweep ${freeIds.length} zero-cost ':free' model(s) for the 'free' default profile; $0, nothing written`
+    };
+  }
+  const freeIdSet = new Set(freeIds);
+  const qualifyingPool = toCatalogPriceSnapshot(catalog).filter(
+    (m) => freeIdSet.has(m.id)
+  );
+  const sweepOpts = {
+    ...opts,
+    includeIds: freeIds,
+    qualifyingTopN: 0,
+    dryRun: false,
+    fromCache: false
+  };
+  let sweep;
+  try {
+    sweep = await deps.runSweep(sweepOpts);
+  } catch (err) {
+    recordBenchmarkFailure("free", Date.now());
+    throw err;
+  }
+  const passing = passingFreePoolIds(sweep.results);
+  if (passing.length === 0) {
+    recordBenchmarkFailure("free", Date.now());
+    return {
+      ok: false,
+      code: 2,
+      summary: "--populate-default-profile free: no ':free' model passed the sweep \u2014 'free' profile left unchanged",
+      reportPath: sweep.reportPath || void 0
+    };
+  }
+  const w = updateFreeDefaultProfile(settingsPath, passing);
+  recordBenchmarkSuccess("free", poolFingerprint(qualifyingPool), w.newPool, Date.now());
+  return {
+    ok: true,
+    summary: `populate-default-profile free: wrote ${w.newPool.length} model(s) to '${w.profileName}' \u2014 ${w.newPool.join(", ")}`,
+    reportPath: sweep.reportPath || void 0
+  };
+}
+async function runPopulatePaidDefaultProfile(opts, settingsPath, name, deps) {
+  setActiveFreeOnly(false);
+  const catalog = await deps.fetchCatalog();
+  const { candidates: discovered } = buildBenchmarkRoster(catalog, DEFAULT_CRITERIA, [], catalog);
+  const ranked = rankByQualityIndex(discovered);
+  const candidates = opts.qualifyingTopN !== null ? ranked.slice(0, opts.qualifyingTopN) : ranked;
+  if (candidates.length === 0) {
+    recordBenchmarkFailure(name, Date.now());
+    return {
+      ok: false,
+      code: 2,
+      summary: `--populate-default-profile ${name}: no candidate model met the requirement gate \u2014 nothing to benchmark`
+    };
+  }
+  const qualifyingPool = candidates.map((c) => ({
+    id: c.id,
+    inputDollarsPerMillion: c.inputDollarsPerMillion,
+    outputDollarsPerMillion: c.outputDollarsPerMillion
+  }));
+  const workload = describeKeywordWorkload();
+  let estimatedUsd = 0;
+  for (const m of candidates) {
+    estimatedUsd += estimateWorkloadCostUsd(workload, {
+      inputDollarsPerMillion: m.inputDollarsPerMillion,
+      outputDollarsPerMillion: m.outputDollarsPerMillion
+    });
+  }
+  console.error(
+    `[populate-default-profile] ${name}: worst-case estimate $${estimatedUsd.toFixed(4)} over ${candidates.length} candidate(s) (cap $${opts.budgetUsd.toFixed(2)}).`
+  );
+  if (estimatedUsd > opts.budgetUsd) {
+    recordBenchmarkFailure(name, Date.now());
+    return {
+      ok: false,
+      code: 2,
+      summary: `--populate-default-profile ${name}: WORST-CASE pre-flight estimate $${estimatedUsd.toFixed(4)} exceeds the $${opts.budgetUsd.toFixed(2)} cap \u2014 nothing was sent, $0 spent. This bound assumes every call emits its full max_tokens, so real spend is typically far lower. To proceed: --budget-usd ${Math.ceil(estimatedUsd * 100) / 100} (authorizes the worst case), or shrink the sweep with --qualifying-top-n N`
+    };
+  }
+  if (opts.dryRun) {
+    return {
+      ok: true,
+      summary: `dry-run \u2014 would sweep ${candidates.length} candidate(s) for the '${name}' default profile; worst case $${estimatedUsd.toFixed(4)}, nothing sent, nothing written`
+    };
+  }
+  let sweep;
+  try {
+    sweep = await deps.runSweep(opts);
+  } catch (err) {
+    recordBenchmarkFailure(name, Date.now());
+    throw err;
+  }
+  if (name === "ensemble") {
+    const ceiling = getEnsemblePriceCeiling(loadSettings());
+    const picks = pickEnsembleByPriceCeiling(sweep.results, { priceCeilingUsdPerM: ceiling });
+    if (picks.length === 0) {
+      recordBenchmarkFailure(name, Date.now());
+      return {
+        ok: false,
+        code: 2,
+        summary: `--populate-default-profile ensemble: no candidate cleared the $${ceiling.toFixed(2)}/1M price ceiling \u2014 'ensemble' profile left unchanged`,
+        reportPath: sweep.reportPath || void 0
+      };
+    }
+    updateEnsembleDefaultProfile(settingsPath, picks);
+    recordBenchmarkSuccess(
+      name,
+      poolFingerprint(qualifyingPool),
+      picks.map((p) => p.modelId),
+      Date.now()
+    );
+    return {
+      ok: true,
+      summary: `populate-default-profile ensemble: wrote ${picks.length} model(s) \u2014 ${picks.map((p) => p.modelId).join(", ")}`,
+      reportPath: sweep.reportPath || void 0
+    };
+  }
+  let pick;
+  try {
+    pick = pickMassScoutModel(sweep.results);
+  } catch (err) {
+    recordBenchmarkFailure(name, Date.now());
+    return {
+      ok: false,
+      code: 2,
+      summary: `--populate-default-profile mass-scout: ${err.message}`,
+      reportPath: sweep.reportPath || void 0
+    };
+  }
+  const w = updateMassScoutDefaultProfile(settingsPath, pick);
+  recordBenchmarkSuccess(name, poolFingerprint(qualifyingPool), [w.newModelId], Date.now());
+  return {
+    ok: true,
+    summary: `populate-default-profile mass-scout: wrote '${w.newModelId}'`,
+    reportPath: sweep.reportPath || void 0
   };
 }
 async function runSecurityTriagePhase(opts) {
@@ -230814,9 +231224,9 @@ async function runAutoReplacePhase(opts) {
   });
   const ensemble = planEnsembleRotation();
   const fullReport = reportMarkdown + "\n" + renderEnsembleRotationSection(ensemble);
-  const reportPath = join22(resolveProjectMainRoot(), "reports", "auto-replace", `${compactStamp()}-auto-replace.md`);
-  mkdirSync14(dirname7(reportPath), { recursive: true });
-  writeFileSync14(reportPath, fullReport, "utf-8");
+  const reportPath = join25(resolveProjectMainRoot(), "reports", "auto-replace", `${compactStamp()}-auto-replace.md`);
+  mkdirSync16(dirname8(reportPath), { recursive: true });
+  writeFileSync17(reportPath, fullReport, "utf-8");
   console.error("");
   for (const f of findings) {
     const verdict = !f.ranBenchmark ? "healthy \u2014 no benchmark" : f.changed ? `RECOMMEND ${f.incumbentModelId} -> ${f.recommendedModelId}` : `keep ${f.incumbentModelId}`;
@@ -231077,23 +231487,28 @@ function buildReportPath() {
   const offsetAbs = Math.abs(offsetMin);
   const tz = `${offsetSign}${pad(Math.floor(offsetAbs / 60))}${pad(offsetAbs % 60)}`;
   const ts3 = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${tz}`;
-  return join22(root, "reports", "benchmark", `${ts3}-model-comparison.md`);
+  return join25(root, "reports", "benchmark", `${ts3}-model-comparison.md`);
 }
-withUsageContext(
-  { tool: "cli:benchmark", params: "" },
-  () => main().then(
-    (result) => {
-      process.stdout.write(finalLine(result) + "\n");
-      process.exitCode = result.code ?? (result.ok ? 0 : 1);
-    },
-    (err) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (err instanceof Error && err.stack) console.error("[benchmark] fatal:", err.stack);
-      process.stdout.write(finalLine({ ok: false, summary: msg }) + "\n");
-      process.exitCode = 1;
-    }
-  )
-);
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  withUsageContext(
+    { tool: "cli:benchmark", params: "" },
+    () => main().then(
+      (result) => {
+        process.stdout.write(finalLine(result) + "\n");
+        process.exitCode = result.code ?? (result.ok ? 0 : 1);
+      },
+      (err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (err instanceof Error && err.stack) console.error("[benchmark] fatal:", err.stack);
+        process.stdout.write(finalLine({ ok: false, summary: msg }) + "\n");
+        process.exitCode = 1;
+      }
+    )
+  );
+}
+export {
+  runPopulateDefaultProfilePhase
+};
 /*! Bundled license information:
 
 typescript/lib/typescript.js:
