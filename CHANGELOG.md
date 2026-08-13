@@ -1,6 +1,78 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.3.2] - 2026-08-13
+
+### Fixed
+
+- Fix(auto-bench): make the duplicate-spawn lock impossible to wedge
+
+An auto-benchmark that stops running is invisible: "a run is already in
+progress" reads exactly like healthy throttling, while the five
+machine-managed default profiles quietly freeze on a stale model set and
+never react to OpenRouter pool drift again.
+
+The old lock could latch permanently, three ways at once:
+
+  1. Nothing ever deleted it. Neither parent nor child unlinked the lock
+     file, so every successful run left a dead-pid file behind forever.
+  2. Liveness was process.kill(pid, 0) alone. Once a leftover pid is
+     reused by an unrelated process - guaranteed after a reboot, since
+     pids wrap - the check reads "held" forever.
+  3. EPERM counted as held. We always spawn same-uid, so a pid we cannot
+     signal is by definition not our child; that handed the wedge to any
+     root daemon landing on the reused pid.
+
+Staleness is now decided on three independent axes - pid parses, pid is
+signalable by us, mtime within a 2h TTL - and any one of them releases
+the lock. The TTL is what turns "unlikely to wedge" into "cannot wedge":
+even a reused pid expires. The failure direction is deliberate. Releasing
+too eagerly costs at most one duplicate benchmark (the free pool is $0 by
+construction; the paid profiles are gated by allow_paid_models plus a
+per-run opt-in). Releasing too reluctantly costs the feature itself,
+permanently.
+
+The lock is also now claimed with openSync(path, "wx") BEFORE the spawn,
+closing a window in which two processes both passed the check and both
+spawned, and it is rolled back on every failure path.
+
+Also fixed, same subsystem:
+
+- default-profiles-runner resolved its lock and log paths in destructuring
+  defaults, so getConfigDir() - which throws on a config dir outside the
+  allowlist - was evaluated eagerly on entry. The function is documented
+  "never throws" and is awaited from dispatchCallTool, which has no
+  try/catch, so a benchmark meant to be invisible could fail the tool the
+  user actually ran. It now degrades to a skip, after the opt-out check.
+- The same runner created getConfigDir() rather than the directories that
+  actually hold the log and the lock, so an injected path failed to open a
+  log while making a directory nobody asked for.
+- cluster/preflight_benchmark built its cache dir with a bare
+  join(homedir(), ".llm-externalizer"), ignoring LLM_EXT_CONFIG_DIR and
+  bypassing the symlink-escape guard - the same defect fixed one release
+  earlier in free-pool-auto-bench, still live in a sibling module.
+- LLM_EXT_AUTO_BENCH_REASON had four writers and no reader. The benchmark
+  entrypoint now logs it as its first line, so an unexpected bench in a log
+  can be attributed.
+
+Prevention, because prose did not hold the line - the rule was in a header
+comment, the comment was read, and the next module did it wrong anyway:
+
+- The detached-spawn sequence lives in one module (bench-spawn.ts). It had
+  been copy-pasted, so every bug in it existed twice and repairs reached
+  only one copy.
+- ESLint now rejects the ".llm-externalizer" literal outside config.ts and
+  the `spawn` import outside bench-spawn.ts. Both rules were verified to
+  fire on a probe file before being committed.
+
+Tests: 2054 passed, 4 skipped (was 2037). New coverage for each staleness
+axis, for the atomic claim and rollback, and for both fail-open contracts.
+One existing test asserted that a missing log directory causes a skip; that
+was the old defect, so it now asserts the directory is created, with a
+separate case using a path whose parent is a regular file for the genuinely
+unopenable one.
+
+
 ## [13.3.1] - 2026-08-13
 
 ### Fixed
