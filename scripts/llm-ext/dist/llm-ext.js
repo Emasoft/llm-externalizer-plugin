@@ -255685,7 +255685,7 @@ function resolveBenchmarkScriptPath2() {
 function lockPathFor(profile) {
   return join33(getConfigDir(), `default-profile-${profile}.lock`);
 }
-function logPathFor(profile) {
+function defaultProfileLogPath(profile) {
   return join33(getConfigDir(), `default-profile-${profile}.log`);
 }
 function lockHoldsLivePid2(lockPath) {
@@ -255710,12 +255710,12 @@ function populateDefaultProfile(opts) {
     log,
     budgetUsd,
     lockPath = lockPathFor(opts.profile),
-    logPath = logPathFor(opts.profile),
+    logPath = defaultProfileLogPath(opts.profile),
     scriptPath = resolveBenchmarkScriptPath2(),
     env = process.env
   } = opts;
   const isPaid = PAID_PROFILES.has(profile);
-  const remedy = isPaid ? `llm-ext-benchmark --populate-default-profile ${profile} --budget-usd ${budgetUsd ?? 2}` : `llm-ext-benchmark --populate-default-profile ${profile}`;
+  const remedy = isPaid ? `llm-ext-benchmark --populate-default-profile ${profile} --allow-paid-models-tests --budget-usd ${budgetUsd ?? 2}` : `llm-ext-benchmark --populate-default-profile ${profile}`;
   if (env[DISABLE_ENV2] === "1") {
     return { kind: "skipped", profile, reason: `disabled via ${DISABLE_ENV2}` };
   }
@@ -255745,7 +255745,10 @@ function populateDefaultProfile(opts) {
     };
   }
   const argv = [scriptPath, "--populate-default-profile", profile];
-  if (isPaid && budgetUsd !== void 0) argv.push("--budget-usd", String(budgetUsd));
+  if (isPaid) {
+    argv.push("--allow-paid-models-tests");
+    if (budgetUsd !== void 0) argv.push("--budget-usd", String(budgetUsd));
+  }
   let child;
   try {
     child = spawn2(process.execPath, argv, {
@@ -255779,7 +255782,7 @@ function describeOutcome(outcome) {
   Or set allow_paid_models: true in settings.yaml to let it populate on first use.
 `;
     case "spawned":
-      return outcome.blocksCaller ? `[llm-externalizer] '${outcome.profile}' is being benchmarked now (~15 min). Re-run this command when it finishes; progress: ${logPathFor(outcome.profile)}
+      return outcome.blocksCaller ? `[llm-externalizer] '${outcome.profile}' is being benchmarked now (~15 min). Re-run this command when it finishes; progress: ${defaultProfileLogPath(outcome.profile)}
 ` : null;
     case "skipped":
       return null;
@@ -256410,7 +256413,9 @@ function reloadSettingsFromDisk() {
   }
   if (newSettings.active) {
     const validation = validateSettings(newSettings);
-    if (!validation.valid) {
+    const activeProfile = newSettings.profiles[newSettings.active];
+    const exempt = activeProfile !== void 0 && shouldBootDespiteInvalidActiveProfile(newSettings.active, activeProfile);
+    if (!validation.valid && !exempt) {
       process.stderr.write(
         `[llm-externalizer] \u26A0 settings.yaml change rejected: ${validation.errors.join("; ")}
 `
@@ -257355,6 +257360,20 @@ async function maybeEnsureDefaultProfileReady() {
 ${outcome.reason}.
 Run: ${outcome.remedy}
 Or set allow_paid_models: true in settings.yaml to let it populate on first use.`
+          }
+        ],
+        isError: true
+      };
+    }
+    if (outcome.kind === "spawned" && outcome.blocksCaller) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `BENCHMARK IN PROGRESS
+
+'${outcome.profile}' has no models yet and is being benchmarked now (typically ~15 minutes). Re-run this command when it finishes.
+Progress: ${defaultProfileLogPath(outcome.profile)}`
           }
         ],
         isError: true
