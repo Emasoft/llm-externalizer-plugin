@@ -66,6 +66,11 @@ logs/
 # Security / validation output
 security-results/
 validation-report.txt
+# CPV's own --json output. The release workflow now writes it to RUNNER_TEMP,
+# outside the scanned tree, because a zero-length validation.json sitting in the
+# plugin root is itself reported as a blocking MAJOR ("JSON syntax error").
+# Ignored here too, for anyone who runs cpv-remote-validate by hand from the root.
+validation.json
 
 # LLM Externalizer output
 llm_externalizer_output/

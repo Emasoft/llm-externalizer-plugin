@@ -73,13 +73,21 @@ jobs:
           # ~17-linter fan-out serializes on a global uv/npm cache lock.
           PLUGIN_REPO_LINT_PHASE_TIMEOUT: "600"
         run: |
+          # Both outputs go to RUNNER_TEMP, OUTSIDE the directory being scanned.
+          # Writing them into '.' made the gate fail on its own scratch files: the
+          # shell creates the redirect target before CPV starts, so the scan saw a
+          # zero-length validation.json in the plugin root and reported it as
+          # "[MAJOR] JSON syntax error ... Expecting value: line 1 column 1" — one
+          # blocking finding, produced entirely by this step, on every release.
+          REPORT_TXT="${RUNNER_TEMP:-/tmp}/cpv-validation-report.txt"
+          REPORT_JSON="${RUNNER_TEMP:-/tmp}/cpv-validation.json"
           set +e
           uvx --from git+https://github.com/Emasoft/claude-plugins-validation@v3.19.1 \
               --with pyyaml \
-              cpv-remote-validate plugin . > validation-report.txt 2>&1
+              cpv-remote-validate plugin . > "$REPORT_TXT" 2>&1
           text_exit=$?
           set -e
-          cat validation-report.txt
+          cat "$REPORT_TXT"
           if [ "$text_exit" -eq 0 ]; then
             echo "Validation passed (clean)"
             exit 0
@@ -89,14 +97,15 @@ jobs:
           set +e
           uvx --from git+https://github.com/Emasoft/claude-plugins-validation@v3.19.1 \
               --with pyyaml \
-              cpv-remote-validate plugin . --json > validation.json 2>/dev/null
+              cpv-remote-validate plugin . --json > "$REPORT_JSON" 2>/dev/null
           json_exit=$?
           set -e
-          if [ ! -s validation.json ]; then
+          if [ ! -s "$REPORT_JSON" ]; then
             echo "::error::CPV produced no --json output (exit ${json_exit}) — the validator FAILED TO RUN (infra/network/install failure), this is NOT a findings verdict. See the log above."
             exit 1
           fi
-          python3 - <<'PY'
+          CPV_REPORT_JSON="$REPORT_JSON" python3 - <<'PY'
+          import os
           import pathlib
           import sys
 
@@ -109,7 +118,7 @@ jobs:
               classify_cpv_findings,
           )
 
-          raw = pathlib.Path("validation.json").read_text(encoding="utf-8")
+          raw = pathlib.Path(os.environ["CPV_REPORT_JSON"]).read_text(encoding="utf-8")
           repo_root = pathlib.Path(".")
           advisory_optin = _read_skillaudit_advisory_optin(repo_root)
 
@@ -121,7 +130,7 @@ jobs:
               # must never be read as "no findings".
               sys.exit(
                   "::error::CPV --json output could not be parsed — failing "
-                  "closed. See validation-report.txt above."
+                  "closed. See the validation report printed above."
               )
 
           for finding in advisory:
