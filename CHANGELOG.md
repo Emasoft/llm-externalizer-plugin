@@ -1,6 +1,40 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.5.0] - 2026-08-13
+
+### Added
+
+- Feat(session-summary): report the size reduction the compaction achieved
+
+The command reported chunk counts, lines read and a prune ratio - all
+descriptions of how the work was done, none of them the outcome. The one
+number a compaction exists to produce, how much smaller the summary is than
+the transcript it replaces, could only be got by stat'ing two files by hand.
+
+It now prints raw transcript bytes, summary bytes and the reduction
+percentage, to stderr and in the report header. Both go out because stdout
+is a PATH: a caller that never opens the report would otherwise never see
+the number.
+
+Human-readable sizes sit beside exact byte counts on purpose - "2.08 MB" is
+what you read, "2,179,678" is what you compare across runs.
+
+Two cases are deliberately not smoothed over:
+
+- An unusable original size (empty or unreadable transcript) reports
+  "reduction: n/a" rather than a computed value. A divide-by-zero rendering
+  as "NaN% reduction" reads like the compaction broke rather than the
+  arithmetic.
+- A summary LARGER than its transcript says "LARGER than the original"
+  instead of clamping to 0%. That is the one outcome where running the
+  command was not worth it, so it is the last thing to hide.
+
+Tested as a pure module: unit stepping, the two-decimals-below-ten rule, the
+ordinary percentage, null on an unusable input, a negative reduction
+surviving, and the assembled line carrying both size forms.
+
+
 ## [13.4.1] - 2026-08-13
 
 ### Documentation

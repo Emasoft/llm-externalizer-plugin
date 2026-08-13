@@ -262477,7 +262477,7 @@ function resolveInvocation(argv, tools) {
 }
 
 // src/cli/main.ts
-var VERSION = "13.4.1";
+var VERSION = "13.5.0";
 function toKebab(toolName) {
   return toolName.replace(/_/g, "-");
 }
