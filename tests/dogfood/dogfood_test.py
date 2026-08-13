@@ -286,41 +286,88 @@ def phase_build(h: Harness) -> bool:
 
 
 def parse_top_help_tools(top_help: str) -> list[str]:
-    """Extract command names from the 'Commands:' section of `llm-ext --help`.
+    """Every first token `llm-ext <X>` accepts, from `llm-ext --help --all`.
 
-    Ground truth (verified against the real CLI): the CLI prints a 'Commands:'
-    header, then each command indented by two spaces — the first token of the
-    line is the command name, followed by its description (which may itself
-    contain words, so only the first token is the name). Collection stops at the
-    first blank line after the header.
+    A body may invoke EITHER spelling — `llm-ext reset` (flat) or
+    `llm-ext settings show` (grouped) — and `_llm_ext_subcommands` only ever
+    captures the FIRST token. So the catalog is the union of the GROUP names and
+    the FLAT command names; matching against one alone would reject half the
+    corpus as unknown.
 
-    The header used to be 'Tools:' when this was an MCP server. Nothing errored
-    when it changed: the scan simply matched no header, returned [], and every
-    downstream command check degraded to SKIP while still reporting a green
-    run. A parser that yields nothing must never look like a clean pass, which
-    is why the caller now treats an empty catalog as a failure.
+    Ground truth (verified against the real CLI, 2026-08-13):
+
+        Groups:
+          session   compact
+          settings  show, profile, profiles, reset, status, scan-local
+
+        All flat commands (advanced — the groups above dispatch to these):
+          assess-model    Assess ONE OpenRouter model against ...
+
+    Each section is a header line, then entries indented two spaces, ending at
+    the first blank line or first unindented line. Only the first token of an
+    entry is a name (descriptions contain spaces).
+
+    This parser has now been broken TWICE by a header rename — 'Tools:' →
+    'Commands:' when the MCP server was retired, then 'Commands:' → 'Groups:'
+    when the grouped launcher landed. Neither errored: the scan matched no
+    header and returned [], and the SECOND time that empty catalog turned every
+    one of the 31 command checks into a FAIL reading 'not a command in the CLI
+    table (0 known)' — 31 alarms with one cause, none of them real. Hence the
+    header check below is deliberately TOLERANT of the section's trailing prose
+    and matches on the leading word, and the caller still treats an empty
+    catalog as a hard failure.
     """
     verbs: list[str] = []
-    in_tools = False
-    for line in top_help.splitlines():
-        if line.strip() == "Commands:":
-            in_tools = True
-            continue
-        if in_tools:
-            if not line.strip():
-                break
-            if not line.startswith("  "):
-                break
+
+    def collect(lines: list[str], start: int) -> None:
+        for line in lines[start:]:
+            if not line.strip() or not line.startswith("  "):
+                return
             token = line.strip().split()[0]
-            if token:
+            if token and token not in verbs:
                 verbs.append(token)
+
+    lines = top_help.splitlines()
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped == "Groups:" or stripped.startswith("All flat commands"):
+            collect(lines, i + 1)
     return verbs
 
 
-def phase_top_help(h: Harness) -> list[str]:
-    """Run top-level --help, record PASS/FAIL, return the parsed command list."""
-    res = llm_ext(["--help"])
-    if res.code != 0 or "Commands:" not in res.out:
+def parse_group_names(top_help: str) -> set[str]:
+    """Just the GROUP names from `llm-ext --help --all`'s 'Groups:' section.
+
+    Separate from parse_top_help_tools because the two callers want different
+    things: membership checks want every accepted first token (groups AND flat
+    commands), while the `--help` shape check must know which kind it is
+    looking at — a group answers with 'Actions:', a leaf command with a
+    parameter schema.
+    """
+    names: set[str] = set()
+    lines = top_help.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip() != "Groups:":
+            continue
+        for entry in lines[i + 1 :]:
+            if not entry.strip() or not entry.startswith("  "):
+                break
+            names.add(entry.strip().split()[0])
+    return names
+
+
+def phase_top_help(h: Harness) -> tuple[list[str], set[str]]:
+    """Run top-level --help, record PASS/FAIL, return (catalog, group names).
+
+    Both halves are returned because the downstream checks need to tell them
+    apart: membership uses the whole catalog, while the per-verb `--help` shape
+    check must know whether it is looking at a group or a leaf command.
+    """
+    # `--all` is required: plain `--help` lists only the GROUPS, while most
+    # command bodies invoke the flat spelling (`llm-ext reset`). Without it the
+    # catalog is missing every flat name.
+    res = llm_ext(["--help", "--all"])
+    if res.code != 0 or "Groups:" not in res.out:
         h.add(
             "cli",
             "--help",
@@ -328,7 +375,7 @@ def phase_top_help(h: Harness) -> list[str]:
             "top-level `llm-ext --help` lists the command catalog",
             _evidence(res),
         )
-        return []
+        return [], set()
     verbs = parse_top_help_tools(res.out)
     if not verbs:
         h.add(
@@ -336,9 +383,9 @@ def phase_top_help(h: Harness) -> list[str]:
             "--help",
             FAIL,
             "top-level `llm-ext --help` lists the command catalog",
-            "'Commands:' section present but no commands parsed",
+            "'Groups:' section present but no commands parsed",
         )
-        return []
+        return [], set()
     h.add(
         "cli",
         "--help",
@@ -346,7 +393,7 @@ def phase_top_help(h: Harness) -> list[str]:
         f"top-level --help lists {len(verbs)} commands",
         "commands: " + ", ".join(verbs),
     )
-    return verbs
+    return verbs, parse_group_names(res.out)
 
 
 # --------------------------------------------------------------------------- #
@@ -354,7 +401,7 @@ def phase_top_help(h: Harness) -> list[str]:
 # --------------------------------------------------------------------------- #
 
 
-def phase_per_verb_help(h: Harness, verbs: list[str]) -> None:
+def phase_per_verb_help(h: Harness, verbs: list[str], groups: set[str] | None = None) -> None:
     """Every command must print a help block.
 
     Ground truth (re-verified against the real CLI): `llm-ext <cmd> --help`
@@ -366,13 +413,21 @@ def phase_per_verb_help(h: Harness, verbs: list[str]) -> None:
     all 40 checks failed at once — the useful signal being that a whole phase
     failing identically means the assertion moved, not the subject.
     """
+    groups = groups or set()
     for verb in verbs:
         # `--help` is generated from the in-process catalog and exits without
         # any network call, so it should be near-instant. A short timeout makes
         # a stuck help call fail fast instead of stalling the whole suite.
         res = llm_ext([verb, "--help"], timeout=30)
         header_ok = f"llm-ext {verb}" in res.out
-        schema_ok = ("Parameters:" in res.out) or ("Takes no parameters." in res.out)
+        # A GROUP and a FLAT COMMAND answer `--help` with different documents,
+        # and asserting one shape against both is how this check would go red on
+        # correct output. A group dispatches to actions, so its help lists
+        # 'Actions:'; only a leaf command has a parameter schema.
+        if verb in groups:
+            schema_ok = "Actions:" in res.out
+        else:
+            schema_ok = ("Parameters:" in res.out) or ("Takes no parameters." in res.out)
         if res.code == 0 and header_ok and schema_ok:
             h.add("cli-help", verb, PASS, f"`llm-ext {verb} --help` prints its schema")
         else:
@@ -1084,9 +1139,9 @@ def main() -> int:
 
     built = phase_build(h)
     if built:
-        verbs = phase_top_help(h)
+        verbs, groups = phase_top_help(h)
         if verbs:
-            phase_per_verb_help(h, verbs)
+            phase_per_verb_help(h, verbs, groups)
         phase_discover(h)
         phase_benchmark(h)
         phase_readonly_tools(h)
