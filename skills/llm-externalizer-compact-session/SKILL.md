@@ -69,9 +69,20 @@ when something external may kill the process.
 
 ## What to tell the user
 
-The report path, and the fact that it is a nine-section compaction summary with user
-messages preserved VERBATIM. Do not paste the summary body into the conversation unless
-asked — the whole point is keeping it out of context.
+The report path, the fact that it is a nine-section compaction summary with user messages
+preserved VERBATIM, and the **size reduction**. Do not paste the summary body into the
+conversation unless asked — the whole point is keeping it out of context.
+
+The command prints the reduction to stderr and embeds the same line in the report header:
+
+```
+Size: 2.08 MB (2,179,678 B) transcript → 13.9 KB (14,242 B) summary — 99.35% reduction; pruned to 812 KB before summarizing
+```
+
+Raw byte counts sit beside the human-readable sizes on purpose — the human form is what you
+read, the exact number is what you compare across runs. A summary that came out LARGER than
+its transcript says so explicitly; that is the one case where running the command was not
+worth it, so it is never rounded away.
 
 ## Expectations that prevent false alarms
 

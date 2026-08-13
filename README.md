@@ -801,6 +801,18 @@ exits non-zero rather than reporting a false success.
 | `--output <path>` | Custom output directory for the summary report. Default: `<main-project-dir>/reports/llm-externalizer/`. |
 | `--stdout` | Print the summary TEXT directly to stdout (no report file written; banner/progress still go to stderr). |
 
+**What it reports.** Alongside the model, chunk count and prune ratio, the command prints
+the outcome — how much smaller the summary is than the transcript it replaces — to stderr
+and embeds the same line in the report header:
+
+```
+Size: 2.08 MB (2,179,678 B) transcript → 13.9 KB (14,242 B) summary — 99.35% reduction; pruned to 812 KB before summarizing
+```
+
+Exact byte counts sit beside the human-readable sizes deliberately: the human form is what
+you read, the raw number is what you compare across runs. A summary that came out larger
+than its transcript is reported as such rather than rounded to 0%.
+
 **When the summary must exist no matter what.** By default this command is
 checkpoint-and-stop: a chunk gets its retry budget, a dead or quota-capped model is demoted
 to the next ranked free one, and when those run out the command fails and tells you to

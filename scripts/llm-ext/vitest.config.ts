@@ -94,6 +94,10 @@ export default defineConfig({
       // wait busy-loops a rate-limited endpoint and a wrong UTC-midnight
       // calculation either stalls a day or never waits.
       'src/session_summary/until-done.test.ts',
+      // The compaction size report — the one number the command exists to
+      // produce. Guards against a fabricated percentage (a divide-by-zero
+      // rendering as "NaN% reduction" reads like a broken compaction).
+      'src/session_summary/size-report.test.ts',
       // Auto-free on low balance (<$1) — threshold/model/pool helpers (TRDD-542bdbef).
       'src/auto-free.test.ts',
       // Provider-error sanitizer — strips user_id + JSON noise from logs/reports (TRDD-54f508a4).

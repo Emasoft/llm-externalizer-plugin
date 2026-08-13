@@ -55,6 +55,7 @@ import { makePreflightHook } from "./cluster/preflight_benchmark.js";
 // on purpose (see session-summary-resolve.ts's own header).
 import { summarizeSession, DEFAULT_CHUNK_TIMEOUT_MS, type CallModelFn, type ChunkEvent } from "./session_summary/driver.js";
 import { untilDoneBackoffMs, looksQuotaCapped } from "./session_summary/until-done.js";
+import { formatSizeReport } from "./session_summary/size-report.js";
 import { selectModels } from "./session_summary/model-select.js";
 import { resolveTranscriptPath, defaultCheckpointPath } from "./session-summary-resolve.js";
 // Provider layer (B1 Phase 5a/5b, TRDD-63314265). These modules import NOTHING
@@ -4418,6 +4419,20 @@ async function dispatchCallToolInner(
           }
         }
 
+        // The outcome, not the inputs. Chunk counts, lines read and the prune
+        // ratio all describe how the work was done; this is the one number the
+        // command exists to produce, and until now a reader had to stat two
+        // files by hand to get it. Printed to stderr as well as embedded in the
+        // report, because the command's stdout is a PATH — a caller who never
+        // opens the report would otherwise never see it.
+        const summaryBytes = Buffer.byteLength(result.summary, "utf8");
+        const sizeLine = formatSizeReport(
+          result.transcriptStats.bytesIn,
+          summaryBytes,
+          result.transcriptStats.bytesOut,
+        );
+        process.stderr.write(`[llm-externalizer] ${sizeLine}\n`);
+
         const fallbackLines = result.fallbackEvents.map(
           (e) => `  ${e.atUnit}: '${e.fromModel}' -> '${e.toModel}' (${e.reason}: ${e.detail})`,
         );
@@ -4430,6 +4445,7 @@ async function dispatchCallToolInner(
           `Chunks: ${result.totalChunks}\n` +
           `Lines read: ${result.transcriptStats.linesRead}, prune ratio: ` +
           `${result.transcriptStats.pruneRatio.toFixed(3)} (level: ${prune})\n` +
+          `${sizeLine}\n` +
           (result.resumedFromCheckpoint
             ? `Resumed from checkpoint: ${result.checkpointPath}\n`
             : `Checkpoint: ${result.checkpointPath}\n`);

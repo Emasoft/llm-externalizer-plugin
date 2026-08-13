@@ -254667,6 +254667,32 @@ function looksQuotaCapped(message) {
   return /daily[- ]?(quota|cap|limit)|quota exhausted|out of (free )?quota/i.test(message);
 }
 
+// src/session_summary/size-report.ts
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return "?";
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return `${value.toFixed(value < 10 ? 2 : 1)} ${units[unit]}`;
+}
+function reductionPercent(beforeBytes, afterBytes) {
+  if (!Number.isFinite(beforeBytes) || !Number.isFinite(afterBytes)) return null;
+  if (beforeBytes <= 0 || afterBytes < 0) return null;
+  return (1 - afterBytes / beforeBytes) * 100;
+}
+function formatSizeReport(rawBytes, summaryBytes, prunedBytes) {
+  const pct = reductionPercent(rawBytes, summaryBytes);
+  const head = `Size: ${formatBytes(rawBytes)} (${rawBytes.toLocaleString()} B) transcript \u2192 ${formatBytes(summaryBytes)} (${summaryBytes.toLocaleString()} B) summary`;
+  const reduction = pct === null ? " (reduction: n/a)" : ` \u2014 ${pct.toFixed(2)}% ${pct < 0 ? "LARGER than the original" : "reduction"}`;
+  const pruned = typeof prunedBytes === "number" && Number.isFinite(prunedBytes) && prunedBytes >= 0 ? `; pruned to ${formatBytes(prunedBytes)} before summarizing` : "";
+  return `${head}${reduction}${pruned}`;
+}
+
 // src/session_summary/model-select.ts
 var TEXT_TO_TEXT_MODALITY = "text->text";
 function hasTextInputAndOutput(modality) {
@@ -259665,6 +259691,14 @@ Settings file is present but its 'profiles' map is empty \u2014 this is a config
               await new Promise((r) => setTimeout(r, backoffMs));
             }
           }
+          const summaryBytes = Buffer.byteLength(result.summary, "utf8");
+          const sizeLine = formatSizeReport(
+            result.transcriptStats.bytesIn,
+            summaryBytes,
+            result.transcriptStats.bytesOut
+          );
+          process.stderr.write(`[llm-externalizer] ${sizeLine}
+`);
           const fallbackLines = result.fallbackEvents.map(
             (e) => `  ${e.atUnit}: '${e.fromModel}' -> '${e.toModel}' (${e.reason}: ${e.detail})`
           );
@@ -259674,6 +259708,7 @@ ${fallbackLines.join("\n")}
 ` : "") + `Transcript: ${transcriptPath}
 Chunks: ${result.totalChunks}
 Lines read: ${result.transcriptStats.linesRead}, prune ratio: ${result.transcriptStats.pruneRatio.toFixed(3)} (level: ${prune})
+${sizeLine}
 ` + (result.resumedFromCheckpoint ? `Resumed from checkpoint: ${result.checkpointPath}
 ` : `Checkpoint: ${result.checkpointPath}
 `);
