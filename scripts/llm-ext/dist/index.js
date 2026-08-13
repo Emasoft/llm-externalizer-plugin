@@ -254215,6 +254215,44 @@ async function summarizeSession(options) {
     }
     return result;
   }
+  async function raceSingleChunk(racers) {
+    const startedAt = Date.now();
+    onChunkEvent?.({ chunkIndex: 0, totalChunks: 1, phase: "start" });
+    const attempts = racers.map(
+      (model, k) => callChunkModel(0, model, `chunk 0 (race ${k + 1}/${racers.length}: ${model.id})`, true, sleep).then(
+        (result) => ({ ok: true, model, result }),
+        (err3) => ({ ok: false, model, err: err3 })
+      )
+    );
+    return new Promise((resolve19) => {
+      let decided = false;
+      let pending = attempts.length;
+      for (const attempt of attempts) {
+        void attempt.then((settled) => {
+          if (decided) return;
+          if (settled.ok && settled.result.kind === "ok") {
+            decided = true;
+            finishFromCallResult(0, settled.result);
+            onChunkEvent?.({
+              chunkIndex: 0,
+              totalChunks: 1,
+              phase: "done",
+              elapsedMs: Date.now() - startedAt,
+              raceSize: racers.length,
+              raceWinnerModel: settled.model.id
+            });
+            resolve19(true);
+            return;
+          }
+          pending--;
+          if (pending === 0) {
+            decided = true;
+            resolve19(false);
+          }
+        });
+      }
+    });
+  }
   async function attemptChunk(i, retryTransient, sleepFn) {
     return finishFromCallResult(i, await callChunkModel(i, activeModel(), `chunk ${i}`, retryTransient, sleepFn));
   }
@@ -254248,6 +254286,9 @@ async function summarizeSession(options) {
   const onChunkEvent = options.onChunkEvent;
   const abandonedChunkIndices = /* @__PURE__ */ new Set();
   if (concurrency <= 1) {
+    if (chunks.length === 1 && fanoutActive && fanoutModelsInit.length > 1 && checkpoint.mapSummaries[0] === null) {
+      await raceSingleChunk(fanoutModelsInit);
+    }
     for (let i = 0; i < chunks.length; i++) {
       if (checkpoint.mapSummaries[i] !== null) continue;
       const startedAt = Date.now();

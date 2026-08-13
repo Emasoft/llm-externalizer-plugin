@@ -1875,4 +1875,123 @@ describe("driver: summarizeSession", () => {
       expect(maxInFlightCalls).toBeLessThanOrEqual(2);
     }, 10_000);
   });
+
+  // ── Single-chunk RACE ────────────────────────────────────────────────
+  //
+  // A one-chunk run used to get no mitigation at all: auto-concurrency
+  // resolves to 1 (so the sequential branch runs, which does not hedge) and
+  // fan-out needs more than one chunk to engage. Against a free tier whose
+  // measured latency spans 91s-1478s that is the worst possible exposure, and
+  // a real run of this shape took 340.8s. The fix races the SAME chunk across
+  // the top-K models and takes the first usable answer.
+  describe("single-chunk race", () => {
+    const SECOND_MODEL: EligibleModel = {
+      id: "vendor/second-racer:free",
+      contextLength: 1_000_000,
+      maxCompletionTokens: 65_536,
+    };
+
+    it("takes the FIRST model to answer and does not wait for the slow one", async () => {
+      const p = writeTranscript([userTurn("u1", "race me")]);
+      let releaseSlow: (() => void) | null = null;
+      const callModel = vi.fn<CallModelFn>(async (_prompt, modelId) => {
+        if (modelId === FREE_MODEL) {
+          // The primary is the straggler — the exact case that cost 340.8s.
+          await new Promise<void>((r) => { releaseSlow = () => r(); });
+          return "SLOW SUMMARY";
+        }
+        return "FAST SUMMARY";
+      });
+
+      const result = await summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 65_536,
+        fallbackModels: [SECOND_MODEL],
+        concurrency: "auto",
+        callModel,
+      });
+
+      // Resolved WITHOUT the slow model ever settling — that is the whole point.
+      expect(releaseSlow).not.toBeNull();
+      expect(result.summary).toContain("FAST SUMMARY");
+      expect(result.summary).not.toContain("SLOW SUMMARY");
+      // Both were dispatched: one chunk, two concurrent calls.
+      expect(callModel.mock.calls.length).toBe(2);
+      releaseSlow!(); // let the loser finish so the test leaves nothing pending
+    }, 15_000);
+
+    it("a LATE-settling loser never overwrites the winner's committed summary", async () => {
+      const p = writeTranscript([userTurn("u1", "late loser")]);
+      let releaseSlow: (() => void) | null = null;
+      const callModel = vi.fn<CallModelFn>(async (_prompt, modelId) => {
+        if (modelId === FREE_MODEL) {
+          await new Promise<void>((r) => { releaseSlow = () => r(); });
+          return "LOSER SUMMARY";
+        }
+        return "WINNER SUMMARY";
+      });
+
+      const result = await summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 65_536,
+        fallbackModels: [SECOND_MODEL],
+        concurrency: "auto",
+        callModel,
+      });
+      expect(result.summary).toContain("WINNER SUMMARY");
+
+      // Settle the loser AFTER the winner already committed, then prove the
+      // checkpoint on disk still holds the winner: a chunk index is written at
+      // most once, whichever order the racers land in.
+      releaseSlow!();
+      await new Promise((r) => setTimeout(r, 50));
+      const persisted = JSON.parse(readFileSync(checkpointPath(), "utf-8"));
+      expect(persisted.mapSummaries[0]).toContain("WINNER SUMMARY");
+      expect(persisted.mapSummaries[0]).not.toContain("LOSER SUMMARY");
+    }, 15_000);
+
+    it("does not race when there is only one eligible model — nothing to race against", async () => {
+      const p = writeTranscript([userTurn("u1", "solo")]);
+      const callModel = vi.fn<CallModelFn>(async () => "SOLO SUMMARY");
+
+      const result = await summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 65_536,
+        concurrency: "auto",
+        callModel,
+      });
+
+      expect(result.summary).toContain("SOLO SUMMARY");
+      expect(callModel.mock.calls.length).toBe(1); // exactly one call, no duplicate work
+    });
+
+    it("leaves an explicit concurrency:1 caller byte-identical — the library default never races", async () => {
+      const p = writeTranscript([userTurn("u1", "sequential please")]);
+      const callModel = vi.fn<CallModelFn>(async () => "SEQUENTIAL SUMMARY");
+
+      const result = await summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 65_536,
+        fallbackModels: [SECOND_MODEL], // available, but must NOT be raced
+        concurrency: 1,
+        callModel,
+      });
+
+      expect(result.summary).toContain("SEQUENTIAL SUMMARY");
+      expect(callModel.mock.calls.length).toBe(1);
+      expect(callModel.mock.calls.every((c) => c[1] === FREE_MODEL)).toBe(true);
+    });
+  });
 });

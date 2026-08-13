@@ -480,6 +480,14 @@ export interface ChunkEvent {
   /** Set only on "done" — wall-clock time this chunk's index spent being
    *  worked, including any retries/backoff it needed. */
   elapsedMs?: number;
+  /** Set only on "done", and only for a chunk decided by the single-chunk
+   *  RACE: how many models were raced, and which one answered first. The
+   *  race's whole premise is that distinct models sit in DIFFERENT queues,
+   *  and that premise is unproven for any model but the primary — so the
+   *  winner and the field size have to be observable, or nobody can tell
+   *  whether racing is buying anything. */
+  raceSize?: number;
+  raceWinnerModel?: string;
 }
 
 /** One model-to-model switch that happened mid-run, for the caller's report. */
@@ -1399,6 +1407,93 @@ export async function summarizeSession(
     return result;
   }
 
+  /**
+   * Decide a ONE-CHUNK run by racing the same chunk across the top-K free
+   * models at once, first usable answer wins.
+   *
+   * WHY THIS EXISTS. A transcript that prunes down to a single chunk got the
+   * worst deal in the whole module: auto-concurrency resolves to 1, so the
+   * sequential branch runs, which does not hedge; and `fanoutEngaged` requires
+   * `chunks.length > 1`, so fan-out never engages either. One model, one
+   * attempt, no mitigation — against a free tier whose measured per-request
+   * latency spans 91s to 1478s (see `DEFAULT_CHUNK_TIMEOUT_MS`). A real run of
+   * this exact shape took 340.8s for its single chunk.
+   *
+   * WHY RACING RATHER THAN MORE CHUNKS. The intuitive fix is to split the chunk
+   * up and parallelize. That makes it WORSE: latency here is dominated by
+   * queueing, not by how much the model generates (measured — a 4x smaller
+   * chunk was no faster and produced 80 aborts instead of 13), so N chunks turns
+   * the map phase into the MAX of N draws from a heavy tail. Racing K copies of
+   * the SAME chunk turns it into the MIN of K draws instead.
+   *
+   * WHAT MAKES IT SOUND, and what must not be broken:
+   *  - Cost stays $0: every racer is a `:free` model, and `assertFreeOnlyModel`
+   *    has already gated them.
+   *  - Rate safety: K distinct models × ONE request each. The free bucket is
+   *    per-model (measured), and a single request per model is nowhere near the
+   *    32-concurrent edge measured against one model.
+   *  - The chunk budget is already sized for exactly this set. When
+   *    `fanoutActive`, `maxChunkTokens`/`hardBudgetTokens` were computed from
+   *    `fanoutMinWindowBudget` — the MIN window across these same K models — so
+   *    no racer can be handed a chunk its window cannot take.
+   *  - At-most-once commit: only the winner reaches `finishFromCallResult`.
+   *    Losers are dropped on the floor, exactly as a hedge loser is, and
+   *    `writeChunkSummaryOnce` is the backstop if one settles late.
+   *  - A loser NEVER mutates `activeModelIdx` and never runs `applyTransition`.
+   *    A model that 404s or overflows while racing says nothing about the model
+   *    the run is actually pinned to; treating it as a fallback signal would
+   *    rotate the active model on a bystander's failure.
+   *  - Only ALL-K failure falls through, and it falls through to the untouched
+   *    sequential path, which then does the ordinary transition/exhaustion
+   *    handling. So the pessimistic case is exactly the old behavior plus K-1
+   *    wasted free calls.
+   *
+   * Returns true when the chunk is committed, false when every racer failed.
+   */
+  async function raceSingleChunk(racers: EligibleModel[]): Promise<boolean> {
+    const startedAt = Date.now();
+    onChunkEvent?.({ chunkIndex: 0, totalChunks: 1, phase: "start" });
+    // Each racer is normalised to a NEVER-REJECTING promise at creation.
+    // callChunkModel rethrows anything that is not a fallback/overflow, and an
+    // unattached rejection from a loser would surface as an unhandled rejection
+    // long after the winner already returned.
+    const attempts = racers.map((model, k) =>
+      callChunkModel(0, model, `chunk 0 (race ${k + 1}/${racers.length}: ${model.id})`, true, sleep).then(
+        (result) => ({ ok: true as const, model, result }),
+        (err: unknown) => ({ ok: false as const, model, err }),
+      ),
+    );
+
+    return new Promise<boolean>((resolve) => {
+      let decided = false;
+      let pending = attempts.length;
+      for (const attempt of attempts) {
+        void attempt.then((settled) => {
+          if (decided) return; // a winner already committed; discard silently
+          if (settled.ok && settled.result.kind === "ok") {
+            decided = true;
+            finishFromCallResult(0, settled.result);
+            onChunkEvent?.({
+              chunkIndex: 0,
+              totalChunks: 1,
+              phase: "done",
+              elapsedMs: Date.now() - startedAt,
+              raceSize: racers.length,
+              raceWinnerModel: settled.model.id,
+            });
+            resolve(true);
+            return;
+          }
+          pending--;
+          if (pending === 0) {
+            decided = true;
+            resolve(false); // every racer failed — caller falls back to the sequential path
+          }
+        });
+      }
+    });
+  }
+
   /** One attempt cycle on chunk `i` against the currently ACTIVE model — the
    *  ordinary (non-hedged) path used by the sequential loop, and by every
    *  retry-after-transition in the concurrent loop (a chunk already
@@ -1472,6 +1567,28 @@ export async function summarizeSession(
   const abandonedChunkIndices = new Set<number>();
 
   if (concurrency <= 1) {
+    // A ONE-CHUNK run is the only shape with no mitigation at all against the
+    // free tier's latency tail — no hedge (sequential branch) and no fan-out
+    // (`fanoutEngaged` needs > 1 chunk). Race it across the same top-K models
+    // fan-out would have used; see `raceSingleChunk` for why racing and not
+    // splitting. Gated on `fanoutActive` so a caller that explicitly asked for
+    // `concurrency: 1` (the library default, and every non-CLI caller) keeps
+    // byte-identical behavior.
+    if (
+      chunks.length === 1 &&
+      fanoutActive &&
+      fanoutModelsInit.length > 1 &&
+      checkpoint.mapSummaries[0] === null
+    ) {
+      // The return value needs no branch here, and that is the point of the
+      // design: a WIN has already committed chunk 0, so the loop below skips it
+      // on `mapSummaries[0] !== null`; a total LOSS leaves it uncommitted, so
+      // the same loop redoes it on the ACTIVE model with the ordinary
+      // transition/exhaustion handling. The racers' failures deliberately
+      // taught that loop nothing.
+      await raceSingleChunk(fanoutModelsInit);
+    }
+
     // ── MAP (sequential): summarize each chunk, checkpointing after every
     // success. Byte-for-byte the original single-worker behavior — no
     // `retryTransient` backoff (a lone request has no sibling to keep busy
