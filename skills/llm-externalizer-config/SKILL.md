@@ -64,7 +64,7 @@ Use this skill when the user wants to see the current LLM Externalizer configura
 ### Inspect the current profile
 
 ```
-1. llm-ext discover → shows active: remote-ensemble-geminigrok, mode: remote-ensemble
+1. llm-ext discover → shows active: ensemble, mode: remote-ensemble
 2. llm-ext get-settings → /path/to/settings_edit.yaml
 3. Read the file, surface the profiles table to the user
 4. Tell the user: to change, edit ~/.llm-externalizer/settings.yaml, save, then run llm-ext reset

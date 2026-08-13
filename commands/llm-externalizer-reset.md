@@ -47,9 +47,9 @@ ${CLAUDE_PLUGIN_ROOT}/bin/llm-ext reset
 ```
 
 After editing `~/.llm-externalizer/settings.yaml` (e.g. switching the
-active profile from `remote-ensemble-geminigrok` to `free-only`), run
-this to confirm the new settings are valid and the caches are clean
-before the next command reads them.
+active profile from `ensemble` to `free`), run this to confirm the new
+settings are valid and the caches are clean before the next command
+reads them.
 
 ## When NOT to use this
 

@@ -256,7 +256,7 @@ You can hard-code the key (or a different env-var reference) in a profile inside
 
 ```yaml
 profiles:
-  remote-ensemble-geminigrok:
+  ensemble:
     mode: remote-ensemble
     api: openrouter-remote
     api_key: sk-or-v1-...        # literal — do NOT commit this file
@@ -288,7 +288,7 @@ When more than one source is set, the resolution order is:
 2. Literal value in `settings.yaml::profiles.<name>.api_key`
 3. Claude Code keychain (`userConfig.openrouter_api_key`) — **does not currently reach the CLI**; see above
 
-The default profile `remote-ensemble-geminigrok` works out of the box once (1) or (2) is set.
+The `ensemble` profile is one of the three machine-managed defaults — it self-populates the top 3 models under the price ceiling once `allow_paid_models: true` is set in `settings.yaml` and (1) or (2) above supplies a key.
 </details>
 
 <details>
@@ -358,9 +358,9 @@ This makes `free_only` a reliable zero-spend switch for every session that share
 this `settings.yaml`.
 
 ```yaml
-active: remote-free-ensemble
+active: my-free-ensemble
 profiles:
-  remote-free-ensemble:
+  my-free-ensemble:
     mode: remote-ensemble
     api: openrouter-remote
     free_only: true
@@ -891,7 +891,7 @@ The settings file lives at:
 - **Windows:** `%USERPROFILE%\.llm-externalizer\settings.yaml`
 - **WSL2** (Linux side, addressed from Windows): `\\wsl$\Ubuntu\home\<user>\.llm-externalizer\settings.yaml`
 
-The plugin creates it on first install with four starter profiles. Edit it with any text editor, save, then run `llm-ext reset` to purge the caches (a restart is not required — every CLI call re-reads it fresh anyway).
+The plugin creates it on first install with three machine-managed profiles — `free`, `ensemble`, `mass-scout` — that choose and refresh their own models (see [First run → B1](#b1-free-by-default--the-allow_paid_models-master-switch)). Edit it with any text editor, save, then run `llm-ext reset` to purge the caches (a restart is not required — every CLI call re-reads it fresh anyway).
 
 > [!NOTE]
 > The setup wizard uses `scripts/setup/build-snippet.py` to safely quote `settings.yaml` values via stdlib-only logic (no PyYAML at this step) so an attacker who controls a model name or env-var reference cannot trigger arbitrary code execution through a malicious YAML constructor. Documented model IDs are also verified against OpenRouter's live `/v1/models` endpoint by `scripts/publish.py` as a CI gate on every release.

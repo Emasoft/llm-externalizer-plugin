@@ -254,7 +254,7 @@ after reload. Back up before editing; one indent typo breaks every profile.
 ## Profile templates
 
 ```yaml
-active: remote-ensemble-geminigrok
+active: remote-ensemble
 
 profiles:
   # Local — Ollama
@@ -303,7 +303,7 @@ profiles:
     api_key: $OPENROUTER_API_KEY
 
   # Remote — ensemble (3 models in parallel)
-  remote-ensemble-geminigrok:
+  remote-ensemble:
     mode: remote-ensemble
     api: openrouter-remote
     model: "google/gemini-2.5-flash"
