@@ -261530,7 +261530,7 @@ function resolveInvocation(argv, tools) {
 }
 
 // src/cli/main.ts
-var VERSION = "13.1.0";
+var VERSION = "13.2.0";
 function toKebab(toolName) {
   return toolName.replace(/_/g, "-");
 }

@@ -1,6 +1,543 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.2.0] - 2026-08-13
+
+### Added
+
+- Feat(profiles): persist benchmark results — the last two triggers can now fire
+
+Completes the previous commit's stated gap. `recordBenchmarkSuccess` /
+`recordBenchmarkFailure` had ZERO production callers, which meant two of the
+five re-benchmark triggers were structurally dead, not merely untested:
+
+- `new-model-arrived` and `model-price-increased` could never fire, because
+  nothing persisted the qualifying-pool fingerprint or the last-picked prices,
+  so the gate had nothing to compare today's catalog against. Two of the three
+  conditions the owner asked for ("new models / removed models / models with
+  increased costs") were therefore inert; only "removed" worked.
+- The failure backoff never armed: `cooldownUntil` was READ at the gate but
+  never WRITTEN, so a benchmark that always fails (no API key, provider outage)
+  would retry on every single command.
+
+Now the `--populate-default-profile` phase banks its own outcome where the
+benchmark actually completes — success stores the fingerprint of the candidate
+set the picks were drawn FROM (not the raw catalog, so the fingerprint
+describes what was actually chosen among), failure arms the backoff, and
+--dry-run persists nothing. The gate feeds `qualifyingPool`,
+`lastPoolFingerprint` and `cachedPrices` back in, each fail-open: an empty
+catalog, an unreadable cache or a missing state file degrades to "re-check
+later" and never invalidates a populated profile or fails the user's tool call.
+
+The "Not yet wired here (future work)" paragraph is deleted rather than
+reworded, because it is no longer true.
+
++7 tests. The load-bearing one round-trips the fingerprint through DISK and
+then asserts an unchanged pool still reports up-to-date — the anti-thrash
+guarantee has to survive persistence, not just hold in memory, since a
+fingerprint that failed to reload would look like a changed pool and
+re-benchmark forever, which is the exact unbounded-spend bug this design
+exists to prevent.
+
+Verified: tsc 0, eslint 0, build 0, full suite 2014 passed / 0 failed.
+
+- Feat(profiles): wire default-profile population into the dispatcher (3 of 5 triggers live)
+
+The machinery from the previous commits had NO caller — the feature was inert.
+This wires it in three places:
+
+1. BOOT GATE (index.ts). validateProfile correctly reports an unpopulated
+   default profile as invalid: an empty pool cannot serve a request. Left alone
+   that gates every tool behind NOT CONFIGURED on a fresh install, with no
+   reachable path to population. The boot now checks whether EVERY validation
+   failure is an unpopulated machine-owned default and boots anyway if so; a
+   genuine user misconfiguration still fails exactly as before. Deliberately NOT
+   solved by exempting placeholders inside validateProfile -- that was tried
+   earlier in this branch and silently disabled two zero-spend invariants for
+   every profile (empty free_models and a malformed scalar free_models both
+   began reporting VALID), caught only by free-only.test.ts.
+
+2. DISPATCHER HOOK (index.ts, beside runModelReconcile) behind the SAME
+   RECONCILE_SKIP_TOOLS list, so read-only/report-config tools never trigger a
+   benchmark or a spend refusal -- they must report config AS THE USER HAS IT.
+   `free` never blocks: the child is detached and the command proceeds on the
+   existing FREE_POOL_SEED fallback meanwhile. `ensemble`/`mass-scout` under
+   allow_paid_models: false fail the call fast with the remedy rather than
+   spending. The runtime-unavailable trigger reads assessModelPersistence
+   (3 consecutive 400/404/410/422 in 24h), never classifyUnavailable's "gone",
+   so a 429/502/503 blip cannot authorize paid work.
+
+3. PRICES CARRIED THROUGH (model-reconcile.ts). catalogForReconcile reduced the
+   catalog to {ids, freeQualified} and discarded prices, which is why price
+   drift was undetectable anywhere. It now carries a real
+   CatalogPriceSnapshot[], preserving the fail-open contract: an empty catalog
+   still invalidates nothing.
+
+KNOWN INCOMPLETE, and stated because a green suite proves only what it
+executed: two of the five triggers are NOT live yet. "model-price-increased"
+and "new-model-arrived" both need the last-picked prices / qualifying-pool
+fingerprint to be PERSISTED after a completed benchmark, and
+default-profiles-state.ts's recordBenchmarkSuccess/recordBenchmarkFailure still
+have zero production callers. Consequences today: a newly-arrived better model
+is never noticed, a price rise is never noticed, and the failure backoff never
+arms (cooldownUntil is read but never written, so a benchmark that always fails
+retries on every command). The limitation is documented at the gate itself, not
+only here. Next commit closes it.
+
+Verified: tsc 0, eslint 0, build 0, full suite 2007 passed / 0 failed (+11).
+
+- Feat(profiles): populate one default profile on demand, without blocking or surprising
+
+Adds the missing half of dynamic default profiles: a way to actually populate
+one. `--update-all` could only ever write to whatever `settings.active` happened
+to be, so there was no way to say "benchmark and populate `ensemble`".
+
+New: `llm-ext-benchmark --populate-default-profile <free|ensemble|mass-scout>`,
+reusing the existing sweep and the three existing pickers/writers rather than
+adding a second pipeline. The paid names route through the SAME pre-flight
+estimate-and-abort that --update-all uses, so --budget-usd still bounds them and
+a run aborts before the first billable call. `free` goes through the existing
+free-only enforcement and is $0 by construction.
+
+And src/default-profiles-runner.ts, which decides whether to start one. Its
+shape is forced by one fact: a sweep takes ~15 minutes, so "benchmark on first
+use" can never mean "block the command the user just typed". Population is
+therefore always a DETACHED child (the approach free-pool-auto-bench.ts already
+uses), and what differs is what the current command does meanwhile:
+
+  free        - proceeds IMMEDIATELY on FREE_POOL_SEED, the existing "never
+                dark" fallback. No latency, no failure, no spend; the sweep just
+                improves next time.
+  ensemble    - no seed exists and none can: these are paid pools, and a
+  mass-scout    hardcoded default would either bill the user or rot. So the
+                command fails fast with the exact command to run, instead of
+                stalling 15 minutes or spending money nobody authorized. They
+                auto-populate only under allow_paid_models: true -- not a new
+                policy, but the same switch model-reconcile.ts already applies
+                (free: adopt automatically; paid: detect and report).
+
+Two details that are load-bearing rather than defensive:
+
+- The lock check runs BEFORE the paid gate. Otherwise an already-running
+  benchmark would produce "run this command" advice naming the very command
+  in flight, and a user following it would start it twice.
+- child.on("error") is mandatory. A spawn failure (missing benchmark.js,
+  EACCES) arrives as an ASYNCHRONOUS event, and Node re-throws an unhandled
+  'error' as an uncaught exception from a detached tick no try/catch can reach
+  -- killing the process. Population is best-effort; the process is not.
+
+Also: `settings profiles` now marks [machine-managed] vs user profiles and
+renders an unpopulated default as "not benchmarked yet - populates on first
+use". It used to print the raw placeholder/unpopulated-default-profile id, which
+reads as a broken config the user must repair by hand when it is in fact a
+normal state that resolves itself.
+
+Known gap, deliberately not hidden: default-profiles-runner.ts has no tests yet
+(the spawn/lock/refusal matrix needs a hermetic harness) and nothing calls it --
+the dispatcher wiring is the next step.
+
+Verified: build 0, tsc 0, eslint 0, full suite 1996 passed / 0 failed.
+
+- Feat(profiles): fingerprint-based drift detection, replacing an unbounded spend loop
+
+The default-profile drift core asked "is any qualifying model not currently
+configured?" to detect a new arrival. For `ensemble` that is 3 configured slots
+drawn from a pool of ~40 candidates, so ~37 pool members are ALWAYS
+unconfigured: the answer was permanently yes, every check invalidated the
+profile, the benchmark ran, it picked the same three winners, and the check
+invalidated again. An unbounded re-benchmark loop -- on the two PAID profiles,
+i.e. unbounded billable spend.
+
+The bug is structural, not a typo: a pool the caller cannot exhaust can only be
+compared to its OWN previous self, never to the picks drawn from it. Replaced
+with poolFingerprint() -- sha256 over every member's id and both prices, sorted.
+One comparison now covers arrivals, departures and repricings. Sorting is
+load-bearing rather than cosmetic: the catalog endpoint promises no stable
+order, and an order-sensitive hash would re-benchmark billably every time the
+provider reshuffled its JSON.
+
+Also lands:
+
+- default-profiles-state.ts, a sidecar for machine state (fingerprint,
+  timestamp, failure count, cooldown). Deliberately NOT more keys in
+  settings.yaml: that would rewrite a hand-edited file on a routine "nothing
+  changed" check and park a fingerprint the user cannot meaningfully edit next
+  to settings they own. Every read fails OPEN -- a lost state file must degrade
+  to "re-check next time", never to a crash or a refusal to run.
+
+- A failure backoff (15min, 1h, 4h, 24h). Without it a profile whose benchmark
+  cannot succeed (no API key, provider outage) retries on every single command.
+  A live cooldown suppresses the ATTEMPT but never the DIAGNOSIS, so a caller
+  can still report why the profile is stale. A failed attempt deliberately
+  keeps the OLD fingerprint -- banking the new one would mark the drift as
+  handled and the profile would never retry once the cooldown expired.
+
+- The runtime-unavailable trigger is defined against model-events.ts's durable
+  verdict (3 consecutive 400/404/410/422 within 24h), NOT classifyUnavailable's
+  "gone" -- that one is a substring sniff over an error string backing a 1-hour
+  rotation cooldown, far too eager to authorize paid work. A 429/502/503 blip
+  must never cost money.
+
+23 tests, previously zero. The load-bearing one checks a populated 3-slot
+ensemble twice against an unchanged 40-model pool and requires up-to-date BOTH
+times -- it fails against the old implementation, so it is a real regression
+test rather than a restatement.
+
+Verified: tsc 0, eslint 0, full suite 1988 passed / 0 failed.
+
+- Feat(profiles): dynamic default-profile foundation, made to compile and tell the truth
+
+Phase 0 of the free/ensemble/mass-scout dynamic default profiles. Lands the
+partial work (selectors + pure decision core) with the four defects that made
+it unshippable fixed.
+
+WHY each fix:
+
+- config.ts placeholderFreeProfile omitted `model`, which Profile declares
+  required -> `tsc --noEmit` failed. Vitest transpiles without typechecking, so
+  66 tests passed green over a build that could not ship. The sentinel id is the
+  honest value: resolveProfile's free_only branch overrides `model` from
+  free_models[0] anyway, so it is never read.
+
+- isPlaceholderProfile keyed on the sentinel id first, which is WRONG for
+  `free`: its populating writer (applyFreePoolToSettings) only ever replaces
+  free_models and never touches `model`, so a populated `free` would still have
+  reported itself unpopulated -- re-running its benchmark on every command. The
+  signal now follows the profile SHAPE: empty pool for free_only, sentinel id
+  for the slot-based profiles, each matching the writer that populates it.
+
+- A placeholder failed validateProfile (free_only demands a non-empty pool), so
+  a fresh install would boot every tool into NOT CONFIGURED with no reachable
+  path to the population hook. validateProfile now stops after the STRUCTURAL
+  checks (mode, api, preset, mode<->preset) for a placeholder: shape is
+  validated, pending contents are not.
+
+- pickEnsembleByPriceCeiling hardcoded slice(0,3) and threw below 3. Throwing
+  leaves the profile unpopulated, which re-triggers the benchmark next command.
+  It now takes topN and returns what the catalog offers; applyPicksToSettings
+  already derives mode from the pick count, so a short list is self-consistent.
+
+Also drops the unused classifyUnavailable import, replacing it with the reason
+the runtime-gone trigger will NOT be built on it: that verdict is a substring
+sniff backing a 1h cooldown, too eager to authorize a paid benchmark. The
+durable verdict is assessModelPersistence (3 consecutive 400/404/410/422 in
+24h), so a 429/502/503 blip can never cost money.
+
+Verified: tsc --noEmit clean, eslint --quiet clean, 87 tests pass across
+config/settings-group/profile/model-reconcile.
+
+- Feat(cli)!: rename the config group to settings; show and list profiles
+
+Owner request: the config commands become `settings`, `settings show` lists
+the CURRENT profile's settings, and a new command lists ALL profiles.
+
+`llm-ext settings <action>` replaces `llm-ext config <action>`. No alias is
+kept: this project forbids backward-compatibility code, and the group is
+hours old, so retaining `config` would ship legacy from birth. The old
+spelling now fails with a did-you-mean.
+
+`settings show` previously only copied settings.yaml to an output dir and
+returned the path — it "showed" nothing. It now prints the ACTIVE profile
+resolved: name, mode, backend, url, model, second/third model, timeout. The
+file copy is preserved for callers that wanted the artifact.
+
+`settings profiles` is new: every profile in settings.yaml with its
+mode/backend/model summary and a `*` on the active one. It reads only; it
+never writes, preserving the user-only configuration policy.
+
+Both read `~/.llm-externalizer/settings.yaml`. A legacy `settings.yml` may
+sit beside it but is NOT read (config.ts warns) — verified, since the owner
+asked which extension is live.
+
+On the profile MODEL, corrected by the owner mid-task and recorded so the
+next change does not get it wrong: there are TWO tiers. Three DEFAULT
+profiles (free, ensemble, and a mass-scout one) are DYNAMIC — machine-owned
+and kept current by the benchmarks. Every OTHER profile is STATIC, created
+by the user editing settings.yaml or by the setup wizard, local or remote,
+and automation must never rewrite them. Today's listing does not yet
+distinguish the tiers and the shipped SETTINGS_TEMPLATE still hardcodes
+static local/remote profiles instead of the three dynamic ones; both are
+follow-up work, not silently assumed done here.
+
+Verified on the rebuilt binary: `settings profiles` lists all five with the
+active one starred; `settings show` prints the active profile's resolved
+fields; `config show` exits 1 as an unknown command. tsc 0, eslint 0,
+vitest 1953 passed / 4 skipped / 0 failed (+7), build clean.
+
+- Feat(cli): show --profile in the help of every command that uses a profile
+
+--profile worked but was undiscoverable: it appeared once in the top-level
+--help and NOWHERE in the help of the command you were actually running
+(`llm-ext chat --help` listed zero occurrences). A flag you cannot find
+from the command's own help may as well not exist.
+
+It now renders in the parameter list of the 19 commands that make a model
+call, driven by one derived set rather than a hand-maintained name list, so
+a future LLM command inherits it instead of silently missing it.
+
+Deliberately NOT shown on commands that make no model call (reset,
+discover, get_settings, scan_local_llm_services, or_model_info*): a flag
+advertised everywhere teaches nothing, and offering a profile to a command
+that never consults one is a lie the user only discovers by trying it.
+
+Two exclusions are worth recording because I got them wrong and the source
+corrected me. review_plan and rules_check LOOK like LLM commands from their
+parameters (--instructions, --input_files_paths, --rules), and I challenged
+their exclusion on that basis. Reading the handlers settled it: rules_check
+is "Pure lookup, no LLM — the debuggability half of the rules engine", and
+review_plan is "Delegate mode: deterministic scaffolding only, the HOST
+agent reviews" — it resolves the file set and hands it back, making no
+request of its own. Classifying by parameter shape would have advertised a
+no-op flag on both.
+
+Parsing and application of --profile are untouched; this is help rendering
+only, with a test asserting the unknown-profile path still exits non-zero
+listing the real profiles, so the discoverability change cannot quietly
+break the behaviour.
+
+Verified on the rebuilt binary: chat shows the flag with its full
+description, reset shows 0, `--profile nonesuch` still exits 1 and lists
+the five real profiles. tsc 0, eslint 0 at --max-warnings 0, vitest 1946
+passed / 4 skipped / 0 failed, build clean.
+
+
+### Documentation
+
+- Docs: teach the three machine-managed profiles, not the five retired ones
+
+The shipped settings.yaml stopped generating local-lmstudio-qwen35,
+local-ollama-qwen314, remote-single-geminiflash, remote-ensemble-geminigrok and
+remote-free-ensemble, but four user-facing surfaces still taught them: README,
+the setup guide, the reset command, and the config skill. Every one of those
+instructed a reader to set `active:` to a profile a fresh install does not have.
+
+Prose is why this needed a deliberate sweep: tsc, eslint and 1988 passing tests
+cannot see a word of it, so a fully green build proved nothing here. A doc that
+names a profile which no longer exists still "runs" — in the user's hands, and
+it fails there instead of in CI.
+
+Corrected claims, not just names: "four starter profiles" and "the default
+profile works out of the box" were both false. The three defaults are
+machine-managed and self-populating, and the paid two stay unpopulated until
+allow_paid_models is true.
+
+Kept the local LM Studio / Ollama examples, re-presented as profiles a user adds
+themselves (the example is now named my-free-ensemble), since that is exactly
+the distinction the new model draws: three names self-manage, everything else is
+the user's and is never touched.
+
+CHANGELOG.md and the archived TRDDs still name the retired profiles and are left
+alone — those are historical statements and are correct as history.
+
+
+### Fixed
+
+- Fix(dogfood): repair the pre-publish gate — 31 false failures from one stale assertion
+
+`uv run tests/dogfood/dogfood_test.py` reported 35 PASS / 31 FAIL. Every one of
+the 31 was false, and they all had a single cause.
+
+`parse_top_help_tools` scanned for a `Commands:` header. The grouped launcher
+(470d175) changed that header to `Groups:`, so the scan matched nothing and
+returned an empty catalog. The caller then bailed, and every command check
+downstream reported `body runs \`llm-ext reset\` but that is not a command in
+the CLI table (0 known)` — 31 alarms, one root cause, and the CLI was fine the
+whole time (`llm-ext --help` exits 0 and prints the full grouped catalog).
+
+The function's own docstring records this happening ONCE BEFORE, when the
+header went `Tools:` -> `Commands:` as the MCP server was retired. It was fixed
+then by hardcoding the new header, which is why it broke again. The parser is
+now tolerant of the section's trailing prose and reads BOTH sections.
+
+Three real defects fixed, not just the header:
+
+1. It parsed only `--help`, which lists GROUPS. Most command bodies invoke the
+   FLAT spelling (`llm-ext reset`), which only appears under `--help --all`.
+   The catalog is now the union of group names and flat command names, because
+   `_llm_ext_subcommands` captures only the FIRST token and either spelling is
+   legitimate.
+2. A group and a leaf command answer `--help` with different documents. The
+   shape check asserted `Parameters:`/`Takes no parameters.` against both, so
+   all 7 groups failed on correct output once they entered the catalog. Groups
+   are now asserted to list `Actions:` instead — `parse_group_names` exists so
+   the check can tell the two kinds apart rather than guess.
+3. The no-commands-parsed message still said `'Commands:' section present`,
+   which would have misdirected the next person to the wrong header.
+
+Result: 119 PASS / 0 FAIL / 1 SKIP over 120 checks, exit 0. The check COUNT
+rose from 67 to 120 because the phases that used to bail on the empty catalog
+now actually run — the gate was not merely noisy, it was skipping most of its
+own work while looking like it had run.
+
+Found while validating the dynamic default-profile work; the failures predate
+it and are unrelated to it.
+
+- Fix(settings): stop destroying user comments; one source of truth for defaults
+
+Three defects that all shared a root cause: a second copy of something that
+already existed, silently drifting from the first.
+
+1. EVERY settings.yaml write wiped the user's comments. writeSettingsAtomic
+   did yamlParse -> mutate plain object -> yamlStringify, and a plain-object
+   round-trip drops every comment, blank line and anchor. The shipped file
+   carries ~100 lines of explanation; the first benchmark write erased all of
+   it. Two docstrings asserted the opposite ("comments are preserved by-key"),
+   which is how it survived review. Now parseDocument + doc.setIn/deleteIn +
+   doc.toString(), which edits in place. All five public writers already
+   funnelled through the same two private helpers, so one change fixes them
+   all. New test asserts every comment line survives each writer.
+
+2. The on-disk defaults and the in-memory defaults were two hand-maintained
+   copies. SETTINGS_TEMPLATE (the copy that actually reached disk) still
+   declared the five retired profiles, while the code printed "Regenerating
+   with the 3 machine-managed default profiles" -- so corrupt-file recovery
+   wrote the OLD profiles and announced the new ones. Replaced with
+   renderDefaultSettingsYaml(), GENERATED from generateDefaultSettings() and
+   commented via the yaml Document API; the 141-line literal is deleted. A
+   round-trip test makes drift impossible rather than merely unlikely.
+
+3. reloadSettingsFromDisk hand-rebuilt Settings from three known keys, so any
+   other top-level key was silently dropped on every hot-reload -- a bug its
+   own comment recorded having already been hit once. It now calls
+   loadSettings(), the parse that already existed. Kills the class, not the
+   instance. Also restores the "your edit was ignored" warning: loadSettings
+   cannot know a reload was in progress, so without it an unparseable edit
+   changes nothing and explains nothing.
+
+REVERTED a mistake made earlier in this work: validateProfile had been given a
+placeholder exemption so a fresh install would boot. That silently disabled two
+zero-spend invariants for EVERY profile -- an empty free_models list and a
+malformed (YAML scalar) free_models both began reporting VALID, caught only
+because src/free-only.test.ts failed. Weakening a validator to solve a boot
+problem is the wrong layer: an unpopulated profile genuinely cannot serve a
+request, so validateProfile keeps saying so, and the new
+isUnpopulatedDefaultProfile(name, profile) draws the distinction that actually
+matters -- "the user misconfigured this" vs "the machine has not populated it
+yet". The name check is load-bearing: only free/ensemble/mass-scout heal
+themselves. A malformed free_models is now explicitly NOT a placeholder, so a
+user's typo can never be reclassified as "not benchmarked yet" and overwritten.
+
+Verified: tsc 0, eslint 0, full suite 1988 passed / 0 failed.
+
+- Fix(commands): correct 15 broken CLI invocations; add compact-session skill
+
+The owner reported the command docs were "filled with errors". They were,
+and the errors were the kind no gate can catch: a slash command is PROSE
+telling an agent what to run, so a wrong flag name sails through tsc,
+eslint, vitest and every publish gate and only fails when a user runs it.
+
+Audited by VERIFICATION, not reading: extracted all 78 CLI invocations from
+commands/*.md and checked every command name and every flag against the
+live catalog (`llm-ext <cmd> --help`).
+
+15 hard errors fixed. The bulk were mass-scout flag names that never
+existed -- docs said `--db`, `--root`, `--files`; the catalog declares
+`--db_path` (verified: mass-scout-get lists --db_path and nothing else
+matching). Also `--free` passed to scan-folder in the two scan-and-fix
+commands; scan-folder has no such flag, so those recipes died on argv.
+
+3 false existence claims fixed. change-model and configure both asserted
+that `profile` does not exist in the CLI. It does -- it is a real catalog
+command, reachable as `config profile`. The claim now names only
+`set-settings` and `change-model`, which genuinely do not exist, so the
+user-only configuration policy is stated without lying about the surface.
+
+Also adds the compact-session skill the owner asked for: compact ANY
+session transcript at $0, taking `<project-slug>/<session-id>.jsonl` for
+another project, a bare id for the current one, or nothing for this
+project's latest. The load-bearing detail, verified rather than assumed:
+`--session_id` resolves ONLY inside the current project, so another
+project's slug MUST go through `--transcript <full path>` -- getting that
+wrong would silently compact the wrong session. Every flag the skill names
+was confirmed present on the real binary.
+
+The skill also documents the expectations that otherwise read as bugs:
+~10-25 min on free models with 91-1478 s per-chunk variance is queue
+contention, not a hang; do NOT lower --chunk_timeout_s, it is PER ATTEMPT
+and setting it below the working band multiplies cost; and re-runs are
+incremental, so a cadence is cheap even though the first run is not.
+
+Nothing asserts a skills count (checked README and the doc-consistency
+test), so adding one cannot break the gate. README's command table lists it.
+
+Verified: vitest 1931 passed / 4 skipped / 0 failed.
+
+
+### Miscellaneous
+
+- Chore(build): rebuild dist for the dynamic default-profile work
+
+`dist/` is tracked and is what actually runs: `bin/llm-ext` executes
+dist/llm-ext.js, and the CLI-contract tests spawn dist/benchmark.js. The six
+preceding commits in this branch changed only src/, so the shipped bundles
+still carried the pre-feature logic — every normal signal (tsc, eslint, 2014
+passing tests) reads green from src/ and cannot see that gap.
+
+Committed on its own rather than folded into the source commits so the window
+where the bundle lagged its sources is visible in history instead of hidden
+inside a feature diff.
+
+Rebuilt with `npm run build` at 2a6a7ce; build 0.
+
+
+### Testing
+
+- Test(profiles): cover the population runner's own policy, which was mocked away
+
+effdad0 shipped default-profiles-runner.ts and flagged it as untested. The
+follow-up wiring test (default-profile-wiring.test.ts) LOOKS like it closed that
+— it references populateDefaultProfile throughout — but it MOCKS the module. It
+proves the dispatcher calls the runner and nothing whatsoever about what the
+runner decides. Every spend decision in this feature lives in the mocked half,
+so the money policy had no coverage at all while the suite read green.
+
+14 tests, hermetic (the only process spawned is a throwaway .js that exits
+immediately — no benchmark, no network, no spend). They pin:
+
+- the paid gate: ensemble AND mass-scout refuse under allow_paid_models: false
+  and name the exact command; both spawn once it is true
+- `free` is never gated on allow_paid_models (a $0 benchmark has nothing to
+  authorize) and never blocks the caller
+- LOCK BEFORE GATE. With the gate first, a paid profile whose benchmark is
+  already running would answer "refused, run <cmd>" — and a user following that
+  advice starts a second one. The test asserts skipped, and explicitly asserts
+  NOT refused, because the two outcomes differ only in that ordering.
+- a stale lock (dead pid) is ignored, so a crashed benchmark cannot wedge a
+  profile onto the seed pool permanently
+- fail-open: an unopenable log path degrades to "skipped", never a throw, so a
+  population that cannot start never fails the command the user actually ran
+- describeOutcome speaks only when the user must act: silent for a spawned
+  `free`, a re-run hint when a paid population blocks, reason + remedy on a
+  refusal
+
+Verified: tsc 0, eslint 0, full suite 2031 passed / 0 failed, and a
+process-table snapshot shows zero leaked children from the spawn cases.
+
+- Test(settings): pin the machine-managed / unpopulated profile listing
+
+`settings profiles` gained [machine-managed] labelling and friendly rendering of
+an unpopulated default profile in effdad0, with no test. Three added:
+
+- the raw `placeholder/unpopulated-default-profile` sentinel never reaches the
+  listing (it reads as a broken config the user must repair by hand, when it is
+  a normal pre-benchmark state that resolves itself)
+- a machine-managed default is labelled and a user profile is NOT, since only
+  free/ensemble/mass-scout refresh themselves
+- the unpopulated explainer disappears once the defaults carry real models —
+  guidance, not decoration — while the label stays, because populated does not
+  mean user-owned
+
+The fixture deliberately includes an unpopulated `ensemble`, not just `free`.
+That detail is the difference between a real regression test and a tautology:
+`free` is free_only, and the OLD renderer already printed it as
+"free_only (0 models)" — never the sentinel — so a free-only fixture would have
+passed against the very bug this is meant to catch. `ensemble` carries the
+sentinel in three model slots that the old code joined verbatim into the line,
+so the assertion fails against the old behaviour, which is what makes it a test.
+
+Verified: tsc 0, eslint 0, full suite 2017 passed / 0 failed.
+
+
 ## [13.1.0] - 2026-08-12
 
 ### Added
