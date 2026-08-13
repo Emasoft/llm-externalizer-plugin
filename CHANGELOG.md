@@ -1,6 +1,78 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.2.1] - 2026-08-13
+
+### Fixed
+
+- Fix(profiles): paid population could never succeed; and three more review findings
+
+A read-only review of the v13.2.0 subsystem found 5 issues. 4 were real; all are
+fixed here. Every one survived tsc, eslint, 2031 tests and a 119/0 dogfood run.
+
+CRITICAL — paid population was impossible. populateDefaultProfile spawned the
+child WITHOUT `--allow-paid-models-tests`, so assertPaidBenchmarkAllowed's
+per-run opt-in refused in seconds, recordBenchmarkFailure banked a cooldown, and
+the cycle repeated on 15min/1h/4h/24h backoff forever: `ensemble` and
+`mass-scout` could NEVER auto-populate, even with allow_paid_models: true. The
+printed remedy was broken the same way, so a user copy-pasting the suggested fix
+hit the identical error — and the generated settings.yaml told them outright
+that these profiles "populate on first use", which was false.
+
+Reproduced end-to-end against the shipped bundle before fixing (exit 1,
+"paid-benchmark opt-in", $0 spent) and again after (exit 0, worst-case estimate
+$0.1401 under the $2.00 cap). Passing the flag LOOSENS NOTHING: the child
+independently re-reads the master switch `allow_paid_models` from settings.yaml
+and refuses on it first — verified by running the fixed path with the master
+switch off and the flag set, which still refuses, $0 spent. The flag exists to
+stop an unattended spend nobody asked for; this is the spend the user asked for
+by setting the switch and selecting a paid profile.
+
+MAJOR — `blocksCaller` never blocked. Only the "refused" branch returned; a
+"spawned" paid population fell through to null, so the current call proceeded
+with PLACEHOLDER_MODEL_ID and died on a raw provider 404 — the exact failure the
+unroutable sentinel was chosen to make unmistakable. It now returns a clear
+BENCHMARK IN PROGRESS result naming the log to watch. `free` still never blocks.
+
+MAJOR — `reset` rejected the whole settings reload when the active profile was
+an unpopulated machine-owned default (the normal state after a fresh install).
+validateProfile deliberately carries no placeholder exemption, so every caller
+must apply it; the boot path did and reloadSettingsFromDisk did not. That
+discarded any other edit in the same save — including the allow_paid_models flip
+a user would make precisely to get those profiles populated.
+
+MINOR — a comment above reloadSettingsFromDisk still described a settings
+file-watcher polling every 5s. It was deliberately removed; a reader trusting it
+would expect edits to propagate on their own.
+
+NOT a defect (reported CRITICAL, investigated, rejected): a re-benchmark loop
+from stale in-memory settings in "the long-lived MCP server". There is no such
+process — no MCP transport remains in src/, and dispatchCallTool is invoked
+exactly once per CLI process, so every invocation re-reads settings.yaml at boot
+and a completed population is visible to the next command. The finding reasoned
+from a component this project deleted.
+
+Tests: 2 new that assert the child's ACTUAL argv rather than that a spawn merely
+happened — the existing test checked only outcome.kind, which is why the missing
+flag was invisible. Two wiring tests were updated because they asserted the old
+"proceeds, returns null" behaviour, i.e. they encoded the defect; their real
+invariants (429 must not trigger population, 3x404 must) are unchanged.
+
+Verified: tsc 0, eslint 0, build 0, full suite 2033 passed / 0 failed.
+
+
+### Miscellaneous
+
+- Chore(build): rebuild dist for the paid-population fix
+
+Only index.js and llm-ext.js change: the fix lives in
+default-profiles-runner.ts and index.ts, which benchmark.js does not bundle
+(it imports default-profiles-state, not the runner).
+
+Separate from the source commit so the window where the bundle lagged its
+sources stays visible in history rather than hidden inside a fix diff.
+
+
 ## [13.2.0] - 2026-08-13
 
 ### Added
