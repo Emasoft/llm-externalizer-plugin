@@ -3,8 +3,8 @@
  * "robust-giggling-dusk"): the boot gate (index.ts's IIFE around
  * validateSettings) and the dispatcher hook (dispatchCallToolInner, beside
  * runModelReconcile()) that together make the machine-owned default profiles
- * ('free' | 'ensemble' | 'mass-scout') actually populate on first use instead
- * of sitting inert.
+ * ('free' | 'free-ensemble' | 'paid' | 'paid-ensemble' | 'paid-mass-scout')
+ * actually populate on first use instead of sitting inert.
  *
  * Hermetic: no network (global fetch is stubbed), no spend, no real spawn
  * (default-profiles-runner.js's populateDefaultProfile is mocked — index.ts
@@ -60,10 +60,10 @@ profiles:
     api_key: "$OPENROUTER_API_KEY"
 `;
 
-const UNPOPULATED_ENSEMBLE_YAML = `active: ensemble
+const UNPOPULATED_PAID_ENSEMBLE_YAML = `active: paid-ensemble
 allow_paid_models: false
 profiles:
-  ensemble:
+  paid-ensemble:
     mode: remote-ensemble
     api: openrouter-remote
     model: placeholder/unpopulated-default-profile
@@ -72,15 +72,15 @@ profiles:
     api_key: "$OPENROUTER_API_KEY"
 `;
 
-const UNPOPULATED_ENSEMBLE_ALLOW_PAID_YAML = UNPOPULATED_ENSEMBLE_YAML.replace(
+const UNPOPULATED_PAID_ENSEMBLE_ALLOW_PAID_YAML = UNPOPULATED_PAID_ENSEMBLE_YAML.replace(
   "allow_paid_models: false",
   "allow_paid_models: true",
 );
 
-const POPULATED_MASS_SCOUT_YAML = (modelId: string) => `active: mass-scout
+const POPULATED_MASS_SCOUT_YAML = (modelId: string) => `active: paid-mass-scout
 allow_paid_models: true
 profiles:
-  mass-scout:
+  paid-mass-scout:
     mode: remote
     api: openrouter-remote
     model: ${modelId}
@@ -125,12 +125,12 @@ beforeEach(() => {
   populateDefaultProfileMock.mockReset();
   populateDefaultProfileMock.mockImplementation(
     (opts: { profile: string; allowPaidModels: boolean }): PopulationOutcome =>
-      opts.profile === "ensemble" || opts.profile === "mass-scout"
+      opts.profile === "paid-ensemble" || opts.profile === "paid-mass-scout"
         ? opts.allowPaidModels
-          ? { kind: "spawned", profile: opts.profile as "ensemble", pid: 4242, blocksCaller: true }
+          ? { kind: "spawned", profile: opts.profile as "paid-ensemble", pid: 4242, blocksCaller: true }
           : {
               kind: "refused",
-              profile: opts.profile as "ensemble",
+              profile: opts.profile as "paid-ensemble",
               reason: `'${opts.profile}' has not been benchmarked yet, and benchmarking it sends billable requests while allow_paid_models is false`,
               remedy: `llm-ext-benchmark --populate-default-profile ${opts.profile} --budget-usd 2`,
             }
@@ -184,8 +184,8 @@ describe("boot gate — unpopulated default profiles boot instead of NOT CONFIGU
     expect(mod.__getBootStateForTests()).toEqual({ settingsValid: true, activeResolved: true });
   });
 
-  it("a fresh install with an unpopulated 'ensemble' default profile boots", async () => {
-    const mod = await loadFreshIndex(UNPOPULATED_ENSEMBLE_YAML);
+  it("a fresh install with an unpopulated 'paid-ensemble' default profile boots", async () => {
+    const mod = await loadFreshIndex(UNPOPULATED_PAID_ENSEMBLE_YAML);
     expect(mod.__getBootStateForTests()).toEqual({ settingsValid: true, activeResolved: true });
   });
 
@@ -206,7 +206,7 @@ describe("boot gate — unpopulated default profiles boot instead of NOT CONFIGU
         api_key: "$OPENROUTER_API_KEY",
       }),
     ).toBe(true);
-    // Same shape, but NOT one of the 3 machine-owned names — a real user
+    // Same shape, but NOT one of the 5 machine-owned names — a real user
     // misconfiguration (an empty free_models pool on a hand-authored profile
     // is always invalid, never self-healing).
     expect(
@@ -244,33 +244,33 @@ describe("dispatcher hook — maybeEnsureDefaultProfileReady", () => {
     expect(populateDefaultProfileMock.mock.calls[0][0]).toMatchObject({ profile: "free" });
   });
 
-  it("'ensemble' under allow_paid_models: false refuses fast with the remedy, spawns nothing else", async () => {
-    const mod = await loadFreshIndex(UNPOPULATED_ENSEMBLE_YAML);
+  it("'paid-ensemble' under allow_paid_models: false refuses fast with the remedy, spawns nothing else", async () => {
+    const mod = await loadFreshIndex(UNPOPULATED_PAID_ENSEMBLE_YAML);
     await mod.boot();
     const gate = await mod.maybeEnsureDefaultProfileReady();
     expect(gate).not.toBeNull();
     expect(gate?.isError).toBe(true);
     const text = gate?.content[0]?.text ?? "";
     expect(text).toMatch(/has not been benchmarked yet/);
-    expect(text).toMatch(/--populate-default-profile ensemble/);
+    expect(text).toMatch(/--populate-default-profile paid-ensemble/);
     expect(populateDefaultProfileMock).toHaveBeenCalledTimes(1);
   });
 
-  it("'ensemble' under allow_paid_models: true spawns AND blocks this call — proceeding would send the unroutable placeholder to the provider", async () => {
+  it("'paid-ensemble' under allow_paid_models: true spawns AND blocks this call — proceeding would send the unroutable placeholder to the provider", async () => {
     // This test previously asserted `gate === null` ("proceeds"), which encoded
     // a real defect: the profile still holds PLACEHOLDER_MODEL_ID at this
     // moment, so proceeding sent that sentinel to OpenRouter and surfaced a raw
     // 404. `blocksCaller` existed to prevent exactly that and was never acted
     // on. The population still starts — only the current call is stopped, with
     // a message that says what to do.
-    const mod = await loadFreshIndex(UNPOPULATED_ENSEMBLE_ALLOW_PAID_YAML);
+    const mod = await loadFreshIndex(UNPOPULATED_PAID_ENSEMBLE_ALLOW_PAID_YAML);
     await mod.boot();
     const gate = await mod.maybeEnsureDefaultProfileReady();
     expect(populateDefaultProfileMock).toHaveBeenCalledTimes(1);
     expect(gate).not.toBeNull();
     expect(gate?.isError).toBe(true);
     expect(gate?.content?.[0]?.text).toMatch(/BENCHMARK IN PROGRESS/);
-    expect(gate?.content?.[0]?.text).toMatch(/ensemble/);
+    expect(gate?.content?.[0]?.text).toMatch(/paid-ensemble/);
   });
 
   it("a live cooldown suppresses the attempt (no populateDefaultProfile call) on an unpopulated profile", async () => {
@@ -321,13 +321,13 @@ describe("dispatcher hook — maybeEnsureDefaultProfileReady", () => {
       { timestamp: isoTs(1 * 3_600_000), model: modelId, kind: "non_retryable_failure", detail: "HTTP 404" },
     ]);
     const gateB = await modB.maybeEnsureDefaultProfileReady();
-    // mass-scout is PAID and allow_paid_models is true here, so population
+    // paid-mass-scout is PAID and allow_paid_models is true here, so population
     // starts AND this call is blocked — its configured model was just judged
     // persistently dead, so proceeding would re-send the very id that is gone.
     // The trigger invariant this test exists for is the call-count pair below;
     // only the return SHAPE changed.
     expect(gateB?.isError).toBe(true);
     expect(populateDefaultProfileMock).toHaveBeenCalledTimes(1);
-    expect(populateDefaultProfileMock.mock.calls[0][0]).toMatchObject({ profile: "mass-scout" });
+    expect(populateDefaultProfileMock.mock.calls[0][0]).toMatchObject({ profile: "paid-mass-scout" });
   });
 });

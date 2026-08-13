@@ -15,9 +15,20 @@
  * cross-tool selection are explicitly INCREMENTAL — they are added as each tool
  * gets a real benchmark, to avoid abstracting a selection mechanism from a
  * single instance (the premature-abstraction trap the TRDD §1 warns against).
- * Today exactly one tool (`security_scan`) has a benchmark; `mass_scout`/the
- * ensemble reuse the keyword-classification benchmark via the existing
- * benchmark/pick.ts path. The rest carry requirements only (benchmark: null).
+ * Today `security_scan` has a benchmark in this registry, and the
+ * `free`/`free-ensemble`/`paid`/`paid-ensemble` default profiles reuse the
+ * keyword-classification benchmark via the existing benchmark/pick.ts path.
+ * `mass_scout` (the `paid-mass-scout` default profile) has its OWN dedicated
+ * benchmark — src/mass_scouting/calibrate-payload-size.test.ts — measuring
+ * per-record classification accuracy across ~11 payload sizes against a
+ * hand-crafted JSON Schema (deliberately bypassing the scout fieldset DSL's
+ * array_enum repair/dedup, which would corrupt the positional per-record
+ * semantics that benchmark relies on); it is gated on CALIBRATE=1 +
+ * OPENROUTER_API_KEY (not run automatically) and is NOT yet wired into
+ * `paid-mass-scout`'s automatic population — see pick.ts's
+ * pickMassScoutModel for the currently-shipped cost-ascending selection and
+ * the note on what wiring the calibration in would require. The rest carry
+ * requirements only (benchmark: null).
  */
 
 import {

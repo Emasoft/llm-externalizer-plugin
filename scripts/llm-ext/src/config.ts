@@ -458,26 +458,43 @@ export function loadSettings(): Settings | null {
 
 // ── Dynamic default profiles (owner directive) ──────────────────────────────
 //
-// Three profiles are MACHINE-OWNED: `free`, `ensemble`, `mass-scout`. Unlike
-// every other profile (hand-written by the user or the setup-wizard agent),
-// these carry NO predefined model ids — they are populated and kept current by
-// the scan/benchmark/compare procedure (src/benchmark/update-all.ts +
-// src/benchmark/pick.ts's applyFreePoolToSettings / applyPicksToSettings /
-// applyEnsembleSlotToSettings writers, each of which touches ONLY the named
-// profile it is given — see pick.ts's "ownership invariant" note).
+// Five profiles are MACHINE-OWNED: `free`, `free-ensemble`, `paid`,
+// `paid-ensemble`, `paid-mass-scout`. Unlike every other profile (hand-written
+// by the user or the setup-wizard agent), these carry NO predefined model ids
+// — they are populated and kept current by the scan/benchmark/compare
+// procedure (src/benchmark/update-all.ts + src/benchmark/pick.ts's
+// applyFreePoolToSettings / applyPicksToSettings / applyEnsembleSlotToSettings
+// writers, each of which touches ONLY the named profile it is given — see
+// pick.ts's "ownership invariant" note).
 //
-//   free        — the passing free ('*:free') pool, $0.
-//   ensemble    — top 3 models with BOTH input and output price strictly under
-//                 DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M (override via the
-//                 top-level `ensemble_price_ceiling_usd_per_million` key).
-//   mass-scout  — the single best ultra-low-cost, small-input-accurate model
-//                 for mass-scouting; NEVER a ':free' id (thousands of requests
-//                 would rate-limit a free model — enforced in pick.ts's
-//                 pickMassScoutModel and again in updateMassScoutDefaultProfile).
-export const DEFAULT_PROFILE_NAMES = ["free", "ensemble", "mass-scout"] as const;
+//   free            — the SINGLE best passing free ('*:free') model, $0. Its
+//                     free_models pool holds the FULL passing pool (best-first)
+//                     so callWithFreeRotation still has fallbacks — a lone free
+//                     model with no rotation chain would 429 constantly.
+//   free-ensemble   — top 3 of the SAME passing free pool as `free` (one
+//                     benchmark sweep populates both — see
+//                     runPopulateFreeDefaultProfile in benchmark/index.ts).
+//   paid            — the single best PAID model with BOTH input and output
+//                     price strictly under DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M
+//                     (override via the top-level
+//                     `ensemble_price_ceiling_usd_per_million` key).
+//   paid-ensemble   — top 3 models under that same price ceiling.
+//   paid-mass-scout — the single best ultra-low-cost, small-input-accurate
+//                     model for mass-scouting; NEVER a ':free' id (thousands of
+//                     requests would rate-limit a free model — enforced in
+//                     pick.ts's pickMassScoutModel and again in
+//                     updateMassScoutDefaultProfile; deliberately NO free
+//                     mass-scout variant exists, for the same reason).
+export const DEFAULT_PROFILE_NAMES = [
+  "free",
+  "free-ensemble",
+  "paid",
+  "paid-ensemble",
+  "paid-mass-scout",
+] as const;
 export type DefaultProfileName = (typeof DEFAULT_PROFILE_NAMES)[number];
 
-/** True iff `name` is one of the three machine-owned default profiles. */
+/** True iff `name` is one of the five machine-owned default profiles. */
 export function isDefaultProfileName(name: string): name is DefaultProfileName {
   return (DEFAULT_PROFILE_NAMES as readonly string[]).includes(name);
 }
@@ -537,15 +554,19 @@ export function isPlaceholderProfile(profile: Profile): boolean {
  *
  * The name check is load-bearing: an arbitrary user profile with an empty
  * free_models list is a genuine misconfiguration and must keep failing
- * validation. Only free/ensemble/mass-scout populate themselves.
+ * validation. Only the 5 DEFAULT_PROFILE_NAMES populate themselves.
  */
 export function isUnpopulatedDefaultProfile(name: string, profile: Profile): boolean {
   return isDefaultProfileName(name) && isPlaceholderProfile(profile);
 }
 
+/** `mode: "remote"` — resolveProfile's free_only branch still exposes the
+ *  FULL free_models pool as the rotation fallback chain; only `model` (the
+ *  single best pick, freeModels[0]) is what a non-ensemble mode actually
+ *  sends. See resolveProfile's free_only comment. */
 function placeholderFreeProfile(): Profile {
   return {
-    mode: "remote-ensemble",
+    mode: "remote",
     api: "openrouter-remote",
     free_only: true,
     free_models: [],
@@ -557,7 +578,29 @@ function placeholderFreeProfile(): Profile {
   };
 }
 
-function placeholderEnsembleProfile(): Profile {
+/** `mode: "remote-ensemble"` — top 3 of the SAME free_models pool as `free`.
+ *  One benchmark sweep populates both profiles' free_models identically. */
+function placeholderFreeEnsembleProfile(): Profile {
+  return {
+    mode: "remote-ensemble",
+    api: "openrouter-remote",
+    free_only: true,
+    free_models: [],
+    model: PLACEHOLDER_MODEL_ID,
+    api_key: "$OPENROUTER_API_KEY",
+  };
+}
+
+function placeholderPaidProfile(): Profile {
+  return {
+    mode: "remote",
+    api: "openrouter-remote",
+    model: PLACEHOLDER_MODEL_ID,
+    api_key: "$OPENROUTER_API_KEY",
+  };
+}
+
+function placeholderPaidEnsembleProfile(): Profile {
   return {
     mode: "remote-ensemble",
     api: "openrouter-remote",
@@ -568,7 +611,7 @@ function placeholderEnsembleProfile(): Profile {
   };
 }
 
-function placeholderMassScoutProfile(): Profile {
+function placeholderPaidMassScoutProfile(): Profile {
   return {
     mode: "remote",
     api: "openrouter-remote",
@@ -577,13 +620,13 @@ function placeholderMassScoutProfile(): Profile {
   };
 }
 
-/** Default settings: the 3 dynamic, machine-owned default profiles, each an
+/** Default settings: the 5 dynamic, machine-owned default profiles, each an
  *  unpopulated PLACEHOLDER (see isPlaceholderProfile). The scan/benchmark/
- *  compare procedure (update-all.ts) populates them; nothing here hardcodes a
- *  model id. These placeholders do NOT pass validateProfile — an empty pool
- *  genuinely cannot serve a request — so the boot path must recognise them via
- *  isUnpopulatedDefaultProfile() and route them to population rather than to a
- *  misconfiguration error. */
+ *  compare procedure (update-all.ts / benchmark/index.ts) populates them;
+ *  nothing here hardcodes a model id. These placeholders do NOT pass
+ *  validateProfile — an empty pool genuinely cannot serve a request — so the
+ *  boot path must recognise them via isUnpopulatedDefaultProfile() and route
+ *  them to population rather than to a misconfiguration error. */
 export function generateDefaultSettings(): Settings {
   return {
     active: "free",
@@ -591,8 +634,10 @@ export function generateDefaultSettings(): Settings {
     allow_paid_models: false,
     profiles: {
       free: placeholderFreeProfile(),
-      ensemble: placeholderEnsembleProfile(),
-      "mass-scout": placeholderMassScoutProfile(),
+      "free-ensemble": placeholderFreeEnsembleProfile(),
+      paid: placeholderPaidProfile(),
+      "paid-ensemble": placeholderPaidEnsembleProfile(),
+      "paid-mass-scout": placeholderPaidMassScoutProfile(),
     },
   };
 }
@@ -620,12 +665,13 @@ export function renderDefaultSettingsYaml(): string {
     "",
     " Location: ~/.llm-externalizer/settings.yaml",
     "",
-    " The three profiles below (free, ensemble, mass-scout) are MACHINE-MANAGED:",
-    " their model ids are chosen and kept current by the benchmark procedure, and",
-    " are (re)populated automatically when a model is retired, repriced, or a",
-    " better one appears. They start EMPTY — a placeholder model id means 'not",
-    " benchmarked yet', not 'broken'. Any profile you add yourself is left alone,",
-    " forever: nothing here rewrites a profile it does not own.",
+    " The five profiles below (free, free-ensemble, paid, paid-ensemble,",
+    " paid-mass-scout) are MACHINE-MANAGED: their model ids are chosen and kept",
+    " current by the benchmark procedure, and are (re)populated automatically",
+    " when a model is retired, repriced, or a better one appears. They start",
+    " EMPTY — a placeholder model id means 'not benchmarked yet', not 'broken'.",
+    " Any profile you add yourself is left alone, forever: nothing here rewrites",
+    " a profile it does not own.",
     " ──────────────────────────────────────────────────────────────────────",
   ].join("\n");
 
@@ -640,11 +686,12 @@ export function renderDefaultSettingsYaml(): string {
       " ── Master paid-spend switch ─────────────────────────────────────────",
       " DEFAULT false — only FREE models are used, everywhere, by default. While",
       " this is false (or absent), every remote profile is forced to its free pool",
-      " no matter which 'model' it configures, and the two paid machine-managed",
-      " profiles (ensemble, mass-scout) refuse to auto-benchmark themselves,",
-      " because benchmarking a paid model sends billable requests. Set it to true",
-      " to allow paid models — then `ensemble` and `mass-scout` populate on first",
-      " use, printing their estimated cost ceiling before spending anything.",
+      " no matter which 'model' it configures, and the three paid machine-managed",
+      " profiles (paid, paid-ensemble, paid-mass-scout) refuse to auto-benchmark",
+      " themselves, because benchmarking a paid model sends billable requests. Set",
+      " it to true to allow paid models — then `paid`, `paid-ensemble` and",
+      " `paid-mass-scout` populate on first use, printing their estimated cost",
+      " ceiling before spending anything.",
     ].join("\n");
   }
 
@@ -666,9 +713,9 @@ function formatLocalTimestamp(d: Date = new Date()): string {
 }
 
 /**
- * Ensure settings.yaml exists AND parses. Regenerates the 3 dynamic default
- * profiles (free/ensemble/mass-scout, as unpopulated placeholders) when the
- * file is MISSING or CORRUPT/UNPARSEABLE.
+ * Ensure settings.yaml exists AND parses. Regenerates the 5 dynamic default
+ * profiles (free/free-ensemble/paid/paid-ensemble/paid-mass-scout, as
+ * unpopulated placeholders) when the file is MISSING or CORRUPT/UNPARSEABLE.
  *
  * CRITICAL data-safety invariant: a corrupt file is NEVER silently overwritten.
  * It is first copied verbatim to a timestamped `settings.yaml.corrupt-<ts>`
@@ -715,8 +762,8 @@ export function ensureSettingsExist(): Settings {
       `[llm-externalizer] WARNING: ${settingsPath} could not be parsed as YAML. ` +
         `Your original file has been preserved at ${backupPath} — inspect it by ` +
         `hand to recover any custom profiles; they could NOT be recovered ` +
-        `automatically. Regenerating ${settingsPath} with the 3 machine-managed ` +
-        `default profiles (free, ensemble, mass-scout).\n`,
+        `automatically. Regenerating ${settingsPath} with the 5 machine-managed ` +
+        `default profiles (free, free-ensemble, paid, paid-ensemble, paid-mass-scout).\n`,
     );
     writeFileSync(settingsPath, renderDefaultSettingsYaml(), "utf-8");
     try { chmodSync(settingsPath, 0o600); } catch { /* Windows may not support chmod */ }
@@ -1425,8 +1472,9 @@ export function formatProfilesList(): string {
   lines.push("", "* = active profile. Use --show <name> for full resolved detail.");
   if (profileNames.some((n) => isDefaultProfileName(n))) {
     lines.push(
-      "[machine-managed] = free / ensemble / mass-scout. These pick and refresh their own",
-      "models from benchmark results; every other profile is yours and is never modified.",
+      "[machine-managed] = free / free-ensemble / paid / paid-ensemble / paid-mass-scout.",
+      "These pick and refresh their own models from benchmark results; every other",
+      "profile is yours and is never modified.",
     );
   }
   if (anyUnpopulated) {

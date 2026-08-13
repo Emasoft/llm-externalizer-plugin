@@ -1,6 +1,7 @@
 // `--populate-default-profile NAME` — populates exactly ONE named machine-managed
-// default profile ('free' | 'ensemble' | 'mass-scout'), unlike --update-all (which
-// writes whatever `settings.active` happens to be, plus every registered tool).
+// default profile ('free' | 'free-ensemble' | 'paid' | 'paid-ensemble' |
+// 'paid-mass-scout'), unlike --update-all (which writes whatever `settings.active`
+// happens to be, plus every registered tool).
 //
 // Hermetic: no network, no real LLM calls, no spend. The OpenRouter catalog and the
 // keyword sweep are both injected via PopulateDefaultProfileDeps (same seam shape as
@@ -58,23 +59,35 @@ function result(over: Partial<CachedResult> & { modelId: string }): CachedResult
 }
 
 const SETTINGS = [
-  "active: ensemble",
+  "active: paid-ensemble",
   "profiles:",
   "  free:",
+  "    mode: remote",
+  "    api: openrouter-remote",
+  "    api_key: $OPENROUTER_API_KEY",
+  "    free_only: true",
+  "    free_models: []",
+  "    model: placeholder/unpopulated-default-profile",
+  "  free-ensemble:",
   "    mode: remote-ensemble",
   "    api: openrouter-remote",
   "    api_key: $OPENROUTER_API_KEY",
   "    free_only: true",
   "    free_models: []",
   "    model: placeholder/unpopulated-default-profile",
-  "  ensemble:",
+  "  paid:",
+  "    mode: remote",
+  "    api: openrouter-remote",
+  "    api_key: $OPENROUTER_API_KEY",
+  "    model: placeholder/unpopulated-default-profile",
+  "  paid-ensemble:",
   "    mode: remote-ensemble",
   "    api: openrouter-remote",
   "    api_key: $OPENROUTER_API_KEY",
   "    model: placeholder/unpopulated-default-profile",
   "    second_model: placeholder/unpopulated-default-profile",
   "    third_model: placeholder/unpopulated-default-profile",
-  "  mass-scout:",
+  "  paid-mass-scout:",
   "    mode: remote",
   "    api: openrouter-remote",
   "    api_key: $OPENROUTER_API_KEY",
@@ -120,7 +133,7 @@ describe("--populate-default-profile", () => {
     rmSync(cfg, { recursive: true, force: true });
   });
 
-  it("--populate-default-profile free selects via passingFreePoolIds and writes the 'free' profile's free_models", async () => {
+  it("--populate-default-profile free selects via passingFreePoolIds and writes BOTH the 'free' and 'free-ensemble' profiles' free_models", async () => {
     const opts = { ...baseOpts(), populateDefaultProfile: "free" as const };
     const deps: PopulateDefaultProfileDeps = {
       fetchCatalog: async () => [model("v/paid", 0.5, 0.5)],
@@ -142,6 +155,8 @@ describe("--populate-default-profile", () => {
 
     expect(r.ok).toBe(true);
     expect(readSettings(settingsPath).profiles.free.free_models).toEqual(["v/alpha:free"]);
+    // The SAME sweep populates 'free-ensemble' too — one benchmark run, two profiles.
+    expect(readSettings(settingsPath).profiles["free-ensemble"].free_models).toEqual(["v/alpha:free"]);
     // A completed benchmark banks the picks + a fingerprint of the pool that
     // produced them (default-profiles-state.ts), so a later drift check can
     // tell "unchanged" from "the world moved" without re-benchmarking.
@@ -150,10 +165,13 @@ describe("--populate-default-profile", () => {
     expect(record?.failCount).toBe(0);
     expect(typeof record?.poolFingerprint).toBe("string");
     expect(record?.poolFingerprint.length).toBeGreaterThan(0);
+    const ensembleRecord = getProfileRecord("free-ensemble");
+    expect(ensembleRecord?.modelIds).toEqual(["v/alpha:free"]);
+    expect(ensembleRecord?.failCount).toBe(0);
   });
 
-  it("--populate-default-profile ensemble selects via pickEnsembleByPriceCeiling and writes the 'ensemble' profile's slots", async () => {
-    const opts = { ...baseOpts(), populateDefaultProfile: "ensemble" as const };
+  it("--populate-default-profile paid-ensemble selects via pickEnsembleByPriceCeiling and writes the 'paid-ensemble' profile's slots", async () => {
+    const opts = { ...baseOpts(), populateDefaultProfile: "paid-ensemble" as const };
     const catalog = [model("v/a", 0.2, 0.2), model("v/b", 0.3, 0.3), model("v/c", 0.4, 0.4)];
     const deps: PopulateDefaultProfileDeps = {
       fetchCatalog: async () => catalog,
@@ -175,17 +193,48 @@ describe("--populate-default-profile", () => {
     const r = await runPopulateDefaultProfilePhase(opts, deps);
 
     expect(r.ok).toBe(true);
-    const written = readSettings(settingsPath).profiles.ensemble;
+    const written = readSettings(settingsPath).profiles["paid-ensemble"];
     expect(written.model).toBe("v/a");
     expect(written.second_model).toBe("v/b");
     expect(written.third_model).toBe("v/c");
-    const record = getProfileRecord("ensemble");
+    const record = getProfileRecord("paid-ensemble");
     expect(record?.modelIds).toEqual(["v/a", "v/b", "v/c"]);
     expect(record?.failCount).toBe(0);
   });
 
-  it("--populate-default-profile mass-scout selects via pickMassScoutModel and writes the 'mass-scout' profile's model slot", async () => {
-    const opts = { ...baseOpts(), populateDefaultProfile: "mass-scout" as const };
+  it("--populate-default-profile paid selects via pickEnsembleByPriceCeiling with topN 1 and writes only the 'paid' profile's model slot", async () => {
+    const opts = { ...baseOpts(), populateDefaultProfile: "paid" as const };
+    const catalog = [model("v/a", 0.2, 0.2), model("v/b", 0.3, 0.3)];
+    const deps: PopulateDefaultProfileDeps = {
+      fetchCatalog: async () => catalog,
+      runSweep: async (): Promise<SweepOutcome> => ({
+        dryRun: false,
+        candidates: 2,
+        baselines: 0,
+        results: [
+          result({ modelId: "v/a", meanF1: 0.99, inputDollarsPerMillion: 0.2, outputDollarsPerMillion: 0.2 }),
+          result({ modelId: "v/b", meanF1: 0.98, inputDollarsPerMillion: 0.3, outputDollarsPerMillion: 0.3 }),
+        ],
+        reportPath: "",
+        passers: 2,
+        total: 2,
+      }),
+    };
+
+    const r = await runPopulateDefaultProfilePhase(opts, deps);
+
+    expect(r.ok).toBe(true);
+    const written = readSettings(settingsPath).profiles.paid;
+    expect(written.model).toBe("v/a");
+    expect(written.second_model).toBeUndefined();
+    expect(written.third_model).toBeUndefined();
+    const record = getProfileRecord("paid");
+    expect(record?.modelIds).toEqual(["v/a"]);
+    expect(record?.failCount).toBe(0);
+  });
+
+  it("--populate-default-profile paid-mass-scout selects via pickMassScoutModel and writes the 'paid-mass-scout' profile's model slot", async () => {
+    const opts = { ...baseOpts(), populateDefaultProfile: "paid-mass-scout" as const };
     const catalog = [model("v/cheap", 0.05, 0.05)];
     const deps: PopulateDefaultProfileDeps = {
       fetchCatalog: async () => catalog,
@@ -203,18 +252,18 @@ describe("--populate-default-profile", () => {
     const r = await runPopulateDefaultProfilePhase(opts, deps);
 
     expect(r.ok).toBe(true);
-    expect(readSettings(settingsPath).profiles["mass-scout"].model).toBe("v/cheap");
-    expect(getProfileRecord("mass-scout")?.modelIds).toEqual(["v/cheap"]);
+    expect(readSettings(settingsPath).profiles["paid-mass-scout"].model).toBe("v/cheap");
+    expect(getProfileRecord("paid-mass-scout")?.modelIds).toEqual(["v/cheap"]);
   });
 
-  it("an invalid --populate-default-profile name fails fast and names the three valid options", () => {
+  it("an invalid --populate-default-profile name fails fast and names the five valid options", () => {
     expect(() => parseArgs(["node", "benchmark.js", "--populate-default-profile", "bogus"])).toThrow(
-      /--populate-default-profile must be one of free, ensemble, mass-scout, got 'bogus'/,
+      /--populate-default-profile must be one of free, free-ensemble, paid, paid-ensemble, paid-mass-scout, got 'bogus'/,
     );
   });
 
-  it("mass-scout NEVER writes a ':free' id, even when a ':free' candidate has the best score", async () => {
-    const opts = { ...baseOpts(), populateDefaultProfile: "mass-scout" as const };
+  it("paid-mass-scout NEVER writes a ':free' id, even when a ':free' candidate has the best score", async () => {
+    const opts = { ...baseOpts(), populateDefaultProfile: "paid-mass-scout" as const };
     const catalog = [model("v/cheap", 0.05, 0.05)];
     const deps: PopulateDefaultProfileDeps = {
       fetchCatalog: async () => catalog,
@@ -237,19 +286,19 @@ describe("--populate-default-profile", () => {
     const r = await runPopulateDefaultProfilePhase(opts, deps);
 
     expect(r.ok).toBe(true);
-    const written = readSettings(settingsPath).profiles["mass-scout"].model as string;
+    const written = readSettings(settingsPath).profiles["paid-mass-scout"].model as string;
     expect(written.endsWith(":free")).toBe(false);
     expect(written).toBe("v/cheap");
   });
 
-  it("ensemble honours a settings-provided price ceiling, not the 1.3 default", async () => {
+  it("paid-ensemble honours a settings-provided price ceiling, not the 1.3 default", async () => {
     // 0.6/1M is well under the 1.3 built-in default but OVER a custom 0.5 ceiling.
     writeFileSync(
       settingsPath,
       `ensemble_price_ceiling_usd_per_million: 0.5\n${SETTINGS}`,
       "utf-8",
     );
-    const opts = { ...baseOpts(), populateDefaultProfile: "ensemble" as const };
+    const opts = { ...baseOpts(), populateDefaultProfile: "paid-ensemble" as const };
     const catalog = [model("v/under-ceiling", 0.3, 0.3), model("v/over-custom-ceiling", 0.6, 0.6)];
     const deps: PopulateDefaultProfileDeps = {
       fetchCatalog: async () => catalog,
@@ -271,14 +320,14 @@ describe("--populate-default-profile", () => {
     const r = await runPopulateDefaultProfilePhase(opts, deps);
 
     expect(r.ok).toBe(true);
-    const written = readSettings(settingsPath).profiles.ensemble;
+    const written = readSettings(settingsPath).profiles["paid-ensemble"];
     expect(written.model).toBe("v/under-ceiling");
     expect(written.second_model).toBeUndefined();
   });
 
   it("--dry-run writes nothing to settings.yaml and never calls the sweep", async () => {
     const before = readFileSync(settingsPath, "utf-8");
-    const opts = { ...baseOpts(), populateDefaultProfile: "ensemble" as const, dryRun: true };
+    const opts = { ...baseOpts(), populateDefaultProfile: "paid-ensemble" as const, dryRun: true };
     const runSweep = vi.fn(async (): Promise<SweepOutcome> => {
       throw new Error("runSweep must not be called under --dry-run");
     });
@@ -294,12 +343,12 @@ describe("--populate-default-profile", () => {
     expect(readFileSync(settingsPath, "utf-8")).toBe(before);
     // --dry-run must persist NOTHING to the state sidecar either — it's a
     // preview, not an attempt.
-    expect(getProfileRecord("ensemble")).toBeUndefined();
+    expect(getProfileRecord("paid-ensemble")).toBeUndefined();
   });
 
   it("a paid name with a budget lower than the worst-case estimate aborts BEFORE any billable call and arms the failure cooldown", async () => {
     const before = readFileSync(settingsPath, "utf-8");
-    const opts = { ...baseOpts(), populateDefaultProfile: "ensemble" as const, budgetUsd: 0.0000001 };
+    const opts = { ...baseOpts(), populateDefaultProfile: "paid-ensemble" as const, budgetUsd: 0.0000001 };
     const runSweep = vi.fn(async (): Promise<SweepOutcome> => {
       throw new Error("runSweep must not be called once the pre-flight estimate exceeds the budget");
     });
@@ -316,18 +365,21 @@ describe("--populate-default-profile", () => {
     expect(r.summary).toMatch(/WORST-CASE pre-flight estimate/);
     expect(runSweep).not.toHaveBeenCalled();
     expect(readFileSync(settingsPath, "utf-8")).toBe(before);
-    const record = getProfileRecord("ensemble");
+    const record = getProfileRecord("paid-ensemble");
     expect(record?.failCount).toBe(1);
     expect(record?.cooldownUntil).toBeGreaterThan(Date.now());
   });
 
-  it("free: only zero-cost, non-':free'-suffixed candidates survive resolveFreePool — freeSuffixOnly leaves nothing, banks a benchmark failure", async () => {
+  it("free: only zero-cost, non-':free'-suffixed candidates survive resolveFreePool — freeSuffixOnly leaves nothing, banks a benchmark failure for both free profiles", async () => {
     // FREE_POOL_SEED's own ids all carry ':free', so an empty catalog alone can't reach
     // this branch (the seed fallback would still contribute ids) — pin the profile's
     // OWN free_models to a $0 id lacking the ':free' suffix instead: resolveFreePool
     // accepts it (catalog proves $0), but the runtime-required ':free' chokepoint
     // (freeSuffixOnly) then drops it, leaving zero candidates to sweep.
-    const settingsNoSuffix = SETTINGS.replace("    free_models: []", '    free_models: ["v/zero-cost-no-suffix"]');
+    const settingsNoSuffix = SETTINGS.replace(
+      "  free:\n    mode: remote\n    api: openrouter-remote\n    api_key: $OPENROUTER_API_KEY\n    free_only: true\n    free_models: []",
+      '  free:\n    mode: remote\n    api: openrouter-remote\n    api_key: $OPENROUTER_API_KEY\n    free_only: true\n    free_models: ["v/zero-cost-no-suffix"]',
+    );
     writeFileSync(settingsPath, settingsNoSuffix, "utf-8");
     const opts = { ...baseOpts(), populateDefaultProfile: "free" as const };
     const deps: PopulateDefaultProfileDeps = {
@@ -341,9 +393,10 @@ describe("--populate-default-profile", () => {
 
     expect(r.ok).toBe(false);
     expect(getProfileRecord("free")?.failCount).toBe(1);
+    expect(getProfileRecord("free-ensemble")?.failCount).toBe(1);
   });
 
-  it("free: every candidate fails the sweep — banks a benchmark failure, 'free' profile left unchanged", async () => {
+  it("free: every candidate fails the sweep — banks a benchmark failure for both free profiles, both left unchanged", async () => {
     const opts = { ...baseOpts(), populateDefaultProfile: "free" as const };
     const deps: PopulateDefaultProfileDeps = {
       fetchCatalog: async () => [model("v/paid", 0.5, 0.5)],
@@ -362,10 +415,11 @@ describe("--populate-default-profile", () => {
 
     expect(r.ok).toBe(false);
     expect(getProfileRecord("free")?.failCount).toBe(1);
+    expect(getProfileRecord("free-ensemble")?.failCount).toBe(1);
   });
 
-  it("ensemble: no candidate clears the price ceiling — banks a benchmark failure, 'ensemble' left unchanged", async () => {
-    const opts = { ...baseOpts(), populateDefaultProfile: "ensemble" as const };
+  it("paid-ensemble: no candidate clears the price ceiling — banks a benchmark failure, 'paid-ensemble' left unchanged", async () => {
+    const opts = { ...baseOpts(), populateDefaultProfile: "paid-ensemble" as const };
     const catalog = [model("v/pricey", 2, 2)];
     const deps: PopulateDefaultProfileDeps = {
       fetchCatalog: async () => catalog,
@@ -386,12 +440,12 @@ describe("--populate-default-profile", () => {
     const r = await runPopulateDefaultProfilePhase(opts, deps);
 
     expect(r.ok).toBe(false);
-    expect(getProfileRecord("ensemble")?.failCount).toBe(1);
+    expect(getProfileRecord("paid-ensemble")?.failCount).toBe(1);
   });
 
-  it("ensemble: every sweep survivor is over a CUSTOM price ceiling — banks a benchmark failure post-sweep", async () => {
+  it("paid-ensemble: every sweep survivor is over a CUSTOM price ceiling — banks a benchmark failure post-sweep", async () => {
     writeFileSync(settingsPath, `ensemble_price_ceiling_usd_per_million: 0.1\n${SETTINGS}`, "utf-8");
-    const opts = { ...baseOpts(), populateDefaultProfile: "ensemble" as const };
+    const opts = { ...baseOpts(), populateDefaultProfile: "paid-ensemble" as const };
     const catalog = [model("v/under-default-cap-over-custom-ceiling", 0.5, 0.5)];
     const deps: PopulateDefaultProfileDeps = {
       fetchCatalog: async () => catalog,
@@ -417,11 +471,11 @@ describe("--populate-default-profile", () => {
 
     expect(r.ok).toBe(false);
     expect(r.summary).toMatch(/no candidate cleared/);
-    expect(getProfileRecord("ensemble")?.failCount).toBe(1);
+    expect(getProfileRecord("paid-ensemble")?.failCount).toBe(1);
   });
 
-  it("mass-scout: pickMassScoutModel throwing (only ':free' survivors) banks a benchmark failure", async () => {
-    const opts = { ...baseOpts(), populateDefaultProfile: "mass-scout" as const };
+  it("paid-mass-scout: pickMassScoutModel throwing (only ':free' survivors) banks a benchmark failure", async () => {
+    const opts = { ...baseOpts(), populateDefaultProfile: "paid-mass-scout" as const };
     const catalog = [model("v/cheap", 0.05, 0.05)];
     const deps: PopulateDefaultProfileDeps = {
       fetchCatalog: async () => catalog,
@@ -439,6 +493,6 @@ describe("--populate-default-profile", () => {
     const r = await runPopulateDefaultProfilePhase(opts, deps);
 
     expect(r.ok).toBe(false);
-    expect(getProfileRecord("mass-scout")?.failCount).toBe(1);
+    expect(getProfileRecord("paid-mass-scout")?.failCount).toBe(1);
   });
 });

@@ -34,8 +34,8 @@ export default defineConfig({
       'src/safe-body.test.ts',
       // Per-tool model map (tool_models / resolveModelForTool) — TRDD-f45eeaa0.
       'src/config.test.ts',
-      // Dynamic default-profile lifecycle (free/ensemble/mass-scout) — pool
-      // fingerprinting, drift decision, and the state sidecar.
+      // Dynamic default-profile lifecycle (free/free-ensemble/paid/paid-ensemble/
+      // paid-mass-scout) — pool fingerprinting, drift decision, and the state sidecar.
       'src/default-profiles.test.ts',
       // The population RUNNER's own policy — paid gate, lock-before-gate
       // ordering, fail-open. The wiring test mocks this module, so without
@@ -278,9 +278,9 @@ export default defineConfig({
       'src/benchmark/update-all.test.ts',
       // --populate-default-profile NAME: unlike --update-all (writes settings.active
       // plus every registered tool), populates exactly ONE named machine-managed
-      // default profile ('free' | 'ensemble' | 'mass-scout'). Injected catalog + sweep
-      // seams (no network); the pre-flight budget abort and settings.yaml writes are
-      // the REAL code.
+      // default profile ('free' | 'free-ensemble' | 'paid' | 'paid-ensemble' |
+      // 'paid-mass-scout'). Injected catalog + sweep seams (no network); the
+      // pre-flight budget abort and settings.yaml writes are the REAL code.
       'src/benchmark/populate-default-profile.test.ts',
       // Per-tool model-qualification registry (TRDD-f45eeaa0 framework core).
       'src/model-qualification/registry.test.ts',

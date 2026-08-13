@@ -546,13 +546,14 @@ export function addProfileToSettings(
 
 // ── Dynamic default-profile selectors + updaters (owner directive) ──────────
 //
-// The `ensemble` default profile: top 3 PAID models whose input AND output
-// price are BOTH strictly under the ceiling (default
-// DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M, overridable via the settings.yaml
-// global `ensemble_price_ceiling_usd_per_million` key — see config.ts's
-// getEnsemblePriceCeiling). Ranked by quality (meanF1) among the ceiling
-// survivors, cost/latency as tiebreakers — same shape as pickTopN, but the
-// gate is PRICE, not a meanF1 floor.
+// The `paid` / `paid-ensemble` default profiles: the single best (`paid`) or
+// top 3 (`paid-ensemble`) PAID models whose input AND output price are BOTH
+// strictly under the ceiling (default DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M,
+// overridable via the settings.yaml global `ensemble_price_ceiling_usd_per_million`
+// key — see config.ts's getEnsemblePriceCeiling). Ranked by quality (meanF1)
+// among the ceiling survivors, cost/latency as tiebreakers — same shape as
+// pickTopN, but the gate is PRICE, not a meanF1 floor. `topN: 1` for `paid`,
+// `topN: 3` for `paid-ensemble` — same function, same benchmark sweep.
 
 export function pickEnsembleByPriceCeiling(
   results: readonly CachedResult[],
@@ -594,11 +595,28 @@ export function pickEnsembleByPriceCeiling(
 }
 
 /**
- * Pick the single best `mass-scout` model: ultra-low cost (input+output price
- * ascending is the primary sort key), quality as the tiebreaker. NEVER a
- * ':free' id — mass-scouting fires thousands of requests and would be
- * rate-limited on a free tier; this filter is enforced in CODE (not merely
- * documented) so a caller cannot accidentally hand back a free id.
+ * Pick the single best `paid-mass-scout` model: ultra-low cost (input+output
+ * price ascending is the primary sort key), quality (meanF1 from the SHARED
+ * keyword sweep) as the tiebreaker. NEVER a ':free' id — mass-scouting fires
+ * thousands of requests and would be rate-limited on a free tier (and is why
+ * there is deliberately NO free mass-scout profile); this filter is enforced
+ * in CODE (not merely documented) so a caller cannot accidentally hand back a
+ * free id.
+ *
+ * NOTE — this is a proxy criterion, not the ideal one. Mass-scouting's real
+ * workload is extracting many small structured records at scale (e.g.
+ * cataloguing thousands of skills' frontmatter), where the thing that matters
+ * is "negligible cost AND holds classification accuracy at realistic payload
+ * sizes" — not merely "cheapest model that passed the generic keyword sweep".
+ * The purpose-built benchmark for that IS ALREADY WRITTEN —
+ * src/mass_scouting/calibrate-payload-size.test.ts — but it is gated on
+ * CALIBRATE=1 + OPENROUTER_API_KEY (real spend, ~$0.06/run, not run
+ * automatically) and is NOT wired into this selection. Qualifying
+ * `paid-mass-scout` against it would mean: run the calibration across the
+ * cost-ascending candidates this function already ranks, keep only the ones
+ * that hold accuracy at the target payload size, then pick cheapest among
+ * those survivors — a deliberate future change, not a silent scope creep in
+ * this pass.
  */
 export function pickMassScoutModel(
   results: readonly CachedResult[],
@@ -650,7 +668,10 @@ export function pickMassScoutModel(
 // untouched by-key, so a user-authored profile elsewhere in settings.yaml can
 // never be reached by these calls.
 
-/** Repopulate the `free` default profile's free_models pool. */
+/** Repopulate the `free` default profile's free_models pool. Writes the FULL
+ *  passing pool (best-first) — resolveProfile takes freeModels[0] as the
+ *  single active model under this profile's `mode: remote`, while the rest of
+ *  the pool stays available as callWithFreeRotation's fallback chain. */
 export function updateFreeDefaultProfile(
   settingsPath: string,
   freeModelIds: readonly string[],
@@ -658,15 +679,35 @@ export function updateFreeDefaultProfile(
   return applyFreePoolToSettings(settingsPath, "free", freeModelIds);
 }
 
-/** Repopulate the `ensemble` default profile's top-3 model slots. */
-export function updateEnsembleDefaultProfile(
+/** Repopulate the `free-ensemble` default profile's free_models pool — the
+ *  SAME passing pool `free` gets (one benchmark sweep populates both; see
+ *  runPopulateFreeDefaultProfile in benchmark/index.ts). Under this profile's
+ *  `mode: remote-ensemble`, resolveProfile takes freeModels[0..2] as the
+ *  active top-3; the full pool still backs the free-rotation fallback chain. */
+export function updateFreeEnsembleDefaultProfile(
+  settingsPath: string,
+  freeModelIds: readonly string[],
+): FreePoolMutationResult {
+  return applyFreePoolToSettings(settingsPath, "free-ensemble", freeModelIds);
+}
+
+/** Repopulate the `paid` default profile's single model slot. */
+export function updatePaidDefaultProfile(
   settingsPath: string,
   picks: readonly PickedModel[],
 ): YamlMutationResult {
-  return applyPicksToSettings(settingsPath, "ensemble", picks);
+  return applyPicksToSettings(settingsPath, "paid", picks);
 }
 
-/** Repopulate the `mass-scout` default profile's single model slot. */
+/** Repopulate the `paid-ensemble` default profile's top-3 model slots. */
+export function updatePaidEnsembleDefaultProfile(
+  settingsPath: string,
+  picks: readonly PickedModel[],
+): YamlMutationResult {
+  return applyPicksToSettings(settingsPath, "paid-ensemble", picks);
+}
+
+/** Repopulate the `paid-mass-scout` default profile's single model slot. */
 export function updateMassScoutDefaultProfile(
   settingsPath: string,
   pick: PickedModel,
@@ -674,8 +715,8 @@ export function updateMassScoutDefaultProfile(
   if (pick.modelId.endsWith(":free")) {
     throw new Error(
       `updateMassScoutDefaultProfile: refusing to write ':free' model '${pick.modelId}' into ` +
-        `mass-scout — mass-scout must never use a free-tier model (rate-limit risk at scale).`,
+        `paid-mass-scout — mass-scout must never use a free-tier model (rate-limit risk at scale).`,
     );
   }
-  return applyEnsembleSlotToSettings(settingsPath, "mass-scout", "model", pick.modelId);
+  return applyEnsembleSlotToSettings(settingsPath, "paid-mass-scout", "model", pick.modelId);
 }

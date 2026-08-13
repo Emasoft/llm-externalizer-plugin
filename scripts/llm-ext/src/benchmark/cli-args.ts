@@ -128,11 +128,13 @@ export interface CliOptions {
   /** HARD spend cap for --update-all, in USD (P4). Enforced twice: a pre-flight estimate
    *  aborts before the first call, and budget.ts reserves each call before sending it. */
   budgetUsd: number;
-  /** Populate ONE named machine-managed default profile ('free' | 'ensemble' |
-   *  'mass-scout') — unlike --update-all (which writes whatever `settings.active`
-   *  happens to be plus every registered tool), this writes exactly the named
-   *  default profile and nothing else. `--budget-usd` bounds the two paid names
-   *  (ensemble, mass-scout); 'free' is provably $0 regardless. */
+  /** Populate ONE named machine-managed default profile ('free' | 'free-ensemble' |
+   *  'paid' | 'paid-ensemble' | 'paid-mass-scout') — unlike --update-all (which
+   *  writes whatever `settings.active` happens to be plus every registered tool),
+   *  this writes exactly the named default profile and nothing else ('free' and
+   *  'free-ensemble' share one sweep). `--budget-usd` bounds the three paid names
+   *  (paid, paid-ensemble, paid-mass-scout); 'free'/'free-ensemble' are provably
+   *  $0 regardless. */
   populateDefaultProfile: DefaultProfileName | null;
 }
 
@@ -457,9 +459,10 @@ export function printHelp(): void {
       `  --populate-default-profile NAME`,
       `                    NAME is one of: ${DEFAULT_PROFILE_NAMES.join(", ")}. Sweeps and`,
       "                    writes exactly that machine-managed default profile — nothing",
-      "                    else (no other profile, no tool_models). 'free' runs under the",
-      "                    same free_only chokepoint as --update-all --free (provably $0).",
-      "                    'ensemble' and 'mass-scout' are PAID: bounded by the same",
+      "                    else (no other profile, no tool_models); 'free' and 'free-ensemble'",
+      "                    share one sweep. 'free'/'free-ensemble' run under the same free_only",
+      "                    chokepoint as --update-all --free (provably $0). 'paid',",
+      "                    'paid-ensemble' and 'paid-mass-scout' are PAID: bounded by the same",
       "                    worst-case pre-flight estimate + --budget-usd cap as --update-all",
       "                    (aborts before the first call if the estimate exceeds the cap).",
       "                    --dry-run prints the plan and spends/writes nothing.",

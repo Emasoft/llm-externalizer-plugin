@@ -191,17 +191,17 @@ describe("ensureDefaultProfileReady", () => {
     return { runner, callCount: () => calls };
   }
 
-  it("throws naming the three valid default profile names when given a non-default profile name", async () => {
+  it("throws naming the five valid default profile names when given a non-default profile name", async () => {
     const { runner } = makeStubRunner();
     await expect(
       ensureDefaultProfileReady("custom-profile", ensembleProfile(), [], "/tmp/settings.yaml", runner),
-    ).rejects.toThrow(/free, ensemble, mass-scout/);
+    ).rejects.toThrow(/free, free-ensemble, paid, paid-ensemble, paid-mass-scout/);
   });
 
   it("runs the runner exactly once and reports benchmarkRan when the decision needs a benchmark", async () => {
     const { runner, callCount } = makeStubRunner();
     const result = await ensureDefaultProfileReady(
-      "ensemble",
+      "paid-ensemble",
       placeholderProfile(),
       [],
       "/tmp/settings.yaml",
@@ -215,7 +215,7 @@ describe("ensureDefaultProfileReady", () => {
   it("does not run the runner when the decision is up-to-date", async () => {
     const { runner, callCount } = makeStubRunner();
     const result = await ensureDefaultProfileReady(
-      "ensemble",
+      "paid-ensemble",
       ensembleProfile(),
       [],
       "/tmp/settings.yaml",
@@ -230,7 +230,7 @@ describe("ensureDefaultProfileReady", () => {
     const { runner, callCount } = makeStubRunner();
     const nowMs = 1_000_000;
     const result = await ensureDefaultProfileReady(
-      "ensemble",
+      "paid-ensemble",
       placeholderProfile(),
       [],
       "/tmp/settings.yaml",
@@ -247,7 +247,7 @@ describe("ensureDefaultProfileReady", () => {
     const { runner, callCount } = makeStubRunner();
     const nowMs = 1_000_000;
     const result = await ensureDefaultProfileReady(
-      "ensemble",
+      "paid-ensemble",
       placeholderProfile(),
       [],
       "/tmp/settings.yaml",
@@ -290,8 +290,8 @@ describe("default-profiles-state sidecar", () => {
   });
 
   it("recordBenchmarkSuccess then getProfileRecord round-trips fingerprint + modelIds and clears failCount", () => {
-    recordBenchmarkSuccess("ensemble", "fp-abc123", ["a/one", "a/two"], 42);
-    const record = getProfileRecord("ensemble");
+    recordBenchmarkSuccess("paid-ensemble", "fp-abc123", ["a/one", "a/two"], 42);
+    const record = getProfileRecord("paid-ensemble");
     expect(record).toEqual({
       lastBenchmarkAt: 42,
       poolFingerprint: "fp-abc123",
@@ -303,9 +303,9 @@ describe("default-profiles-state sidecar", () => {
 
   it("writing one profile's record leaves the other profiles' records untouched", () => {
     recordBenchmarkSuccess("free", "fp-free", ["free/x"], 1);
-    recordBenchmarkSuccess("ensemble", "fp-ens", ["a/one"], 2);
+    recordBenchmarkSuccess("paid-ensemble", "fp-ens", ["a/one"], 2);
 
-    recordBenchmarkSuccess("ensemble", "fp-ens-2", ["a/one", "a/two"], 3);
+    recordBenchmarkSuccess("paid-ensemble", "fp-ens-2", ["a/one", "a/two"], 3);
 
     expect(getProfileRecord("free")).toEqual({
       lastBenchmarkAt: 1,
@@ -314,20 +314,20 @@ describe("default-profiles-state sidecar", () => {
       failCount: 0,
       cooldownUntil: 0,
     });
-    expect(getProfileRecord("ensemble")?.poolFingerprint).toBe("fp-ens-2");
+    expect(getProfileRecord("paid-ensemble")?.poolFingerprint).toBe("fp-ens-2");
   });
 
   it("recordBenchmarkFailure increments failCount, grows the cooldown backoff, and preserves the previous poolFingerprint", () => {
-    recordBenchmarkSuccess("mass-scout", "fp-original", ["m/1"], 0);
+    recordBenchmarkSuccess("paid-mass-scout", "fp-original", ["m/1"], 0);
 
-    recordBenchmarkFailure("mass-scout", 1_000);
-    const afterFirst = getProfileRecord("mass-scout");
+    recordBenchmarkFailure("paid-mass-scout", 1_000);
+    const afterFirst = getProfileRecord("paid-mass-scout");
     expect(afterFirst?.failCount).toBe(1);
     expect(afterFirst?.poolFingerprint).toBe("fp-original");
     const firstCooldownDelta = (afterFirst?.cooldownUntil ?? 0) - 1_000;
 
-    recordBenchmarkFailure("mass-scout", 2_000);
-    const afterSecond = getProfileRecord("mass-scout");
+    recordBenchmarkFailure("paid-mass-scout", 2_000);
+    const afterSecond = getProfileRecord("paid-mass-scout");
     expect(afterSecond?.failCount).toBe(2);
     // Banking the new fingerprint here would mark the drift as "handled" and
     // the profile would never retry once the cooldown expired — the previous
@@ -347,8 +347,8 @@ describe("default-profiles-state sidecar", () => {
     const profile = ensembleProfile();
     const pool = buildQualifyingPool(40);
 
-    recordBenchmarkSuccess("ensemble", poolFingerprint(pool), ["a/one", "a/two", "a/three"], Date.now());
-    const record = getProfileRecord("ensemble");
+    recordBenchmarkSuccess("paid-ensemble", poolFingerprint(pool), ["a/one", "a/two", "a/three"], Date.now());
+    const record = getProfileRecord("paid-ensemble");
 
     const decision = decideDefaultProfilePopulation(profile, [], {
       qualifyingPool: pool,
@@ -360,8 +360,8 @@ describe("default-profiles-state sidecar", () => {
   it("a pool that gained a qualifying model since the banked fingerprint reads back as new-model-arrived", () => {
     const profile = ensembleProfile();
     const oldPool = buildQualifyingPool(40);
-    recordBenchmarkSuccess("ensemble", poolFingerprint(oldPool), ["a/one", "a/two", "a/three"], Date.now());
-    const record = getProfileRecord("ensemble");
+    recordBenchmarkSuccess("paid-ensemble", poolFingerprint(oldPool), ["a/one", "a/two", "a/three"], Date.now());
+    const record = getProfileRecord("paid-ensemble");
 
     const newPool = [...oldPool, model("filler/new-arrival", 1, 2)];
     const decision = decideDefaultProfilePopulation(profile, [], {

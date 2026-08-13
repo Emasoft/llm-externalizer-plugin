@@ -54,7 +54,7 @@ describe("renderDefaultSettingsYaml() — generated defaults never drift", () =>
     }
   });
 
-  it("does NOT classify a USER profile with an empty free pool as self-healing — only free/ensemble/mass-scout populate themselves", () => {
+  it("does NOT classify a USER profile with an empty free pool as self-healing — only the 5 machine-managed default profiles populate themselves", () => {
     // The name check is the whole point: an arbitrary profile with an empty
     // free_models list is a genuine misconfiguration and must keep failing.
     const userProfile = generateDefaultSettings().profiles.free;
@@ -86,17 +86,25 @@ describe("ensureSettingsExist() — first run and corrupt-file recovery write th
     "remote-free-ensemble",
   ];
 
-  it("on an empty config dir, creates settings.yaml declaring exactly the three machine-managed profiles (free, ensemble, mass-scout)", () => {
+  const FIVE_DEFAULT_PROFILE_NAMES = [
+    "free",
+    "free-ensemble",
+    "paid",
+    "paid-ensemble",
+    "paid-mass-scout",
+  ].sort();
+
+  it("on an empty config dir, creates settings.yaml declaring exactly the five machine-managed profiles (free, free-ensemble, paid, paid-ensemble, paid-mass-scout)", () => {
     ensureSettingsExist();
     const raw = readFileSync(getSettingsPath(), "utf-8");
     const parsed = parseYaml(raw) as { profiles: Record<string, unknown> };
-    expect(Object.keys(parsed.profiles).sort()).toEqual(["ensemble", "free", "mass-scout"]);
+    expect(Object.keys(parsed.profiles).sort()).toEqual(FIVE_DEFAULT_PROFILE_NAMES);
     for (const retired of RETIRED_PROFILE_NAMES) {
       expect(parsed.profiles).not.toHaveProperty(retired);
     }
   });
 
-  it("regresses the actual shipped bug: recovers a corrupt settings.yaml by backing it up verbatim and regenerating the current 3 default profiles (not the old 5)", () => {
+  it("regresses the actual shipped bug: recovers a corrupt settings.yaml by backing it up verbatim and regenerating the current 5 default profiles (not the old 3 or the older 5)", () => {
     const settingsPath = getSettingsPath();
     const corruptContents = "profiles: [\n";
     writeFileSync(settingsPath, corruptContents, "utf-8");
@@ -113,7 +121,7 @@ describe("ensureSettingsExist() — first run and corrupt-file recovery write th
     const regenerated = parseYaml(readFileSync(settingsPath, "utf-8")) as {
       profiles: Record<string, unknown>;
     };
-    expect(Object.keys(regenerated.profiles).sort()).toEqual(["ensemble", "free", "mass-scout"]);
+    expect(Object.keys(regenerated.profiles).sort()).toEqual(FIVE_DEFAULT_PROFILE_NAMES);
     for (const retired of RETIRED_PROFILE_NAMES) {
       expect(regenerated.profiles).not.toHaveProperty(retired);
     }

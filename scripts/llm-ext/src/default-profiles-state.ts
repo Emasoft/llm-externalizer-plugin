@@ -1,6 +1,6 @@
 /**
  * Persistent per-profile bookkeeping for the machine-managed default profiles
- * (`free`, `ensemble`, `mass-scout`).
+ * (`free`, `free-ensemble`, `paid`, `paid-ensemble`, `paid-mass-scout`).
  *
  * WHY a sidecar rather than more keys in settings.yaml: this is MACHINE state,
  * not user configuration. Writing it into settings.yaml would mean rewriting a

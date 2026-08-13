@@ -49,7 +49,9 @@ import {
   pickEnsembleByPriceCeiling,
   pickMassScoutModel,
   updateFreeDefaultProfile,
-  updateEnsembleDefaultProfile,
+  updateFreeEnsembleDefaultProfile,
+  updatePaidDefaultProfile,
+  updatePaidEnsembleDefaultProfile,
   updateMassScoutDefaultProfile,
   renderEnsembleBlock,
   ENSEMBLE_SLOTS,
@@ -402,7 +404,8 @@ async function main(): Promise<CliResult> {
   // --populate-default-profile routes to the SINGLE-profile refresh: unlike
   // --update-all (which writes whatever settings.active happens to be, plus every
   // registered tool), this sweeps and writes EXACTLY the named machine-managed
-  // default profile ('free' | 'ensemble' | 'mass-scout') and nothing else.
+  // default profile ('free' | 'free-ensemble' | 'paid' | 'paid-ensemble' |
+  // 'paid-mass-scout') and nothing else ('free' and 'free-ensemble' share one sweep).
   if (opts.populateDefaultProfile !== null) {
     return runPopulateDefaultProfilePhase(opts);
   }
@@ -897,9 +900,11 @@ const defaultPopulateDefaultProfileDeps: PopulateDefaultProfileDeps = {
 /**
  * `--populate-default-profile NAME` phase. Unlike --update-all (which writes whatever
  * `settings.active` happens to be, plus every registered tool), this sweeps and writes
- * EXACTLY the one named machine-managed default profile — 'free' | 'ensemble' |
- * 'mass-scout' — and nothing else. `name` is already validated to be one of the three
- * (cli-args.ts's isDefaultProfileName gate) by the time this runs.
+ * EXACTLY the requested machine-managed default profile(s) — 'free' | 'free-ensemble' |
+ * 'paid' | 'paid-ensemble' | 'paid-mass-scout' — and nothing else. `name` is already
+ * validated to be one of the five (cli-args.ts's isDefaultProfileName gate) by the time
+ * this runs. `free` and `free-ensemble` share ONE benchmark sweep (see
+ * runPopulateFreeDefaultProfile) since they draw from the same passing free_models pool.
  */
 export async function runPopulateDefaultProfilePhase(
   opts: CliOptions,
@@ -913,16 +918,22 @@ export async function runPopulateDefaultProfilePhase(
     throw new Error("runPopulateDefaultProfilePhase called without --populate-default-profile");
   }
   const settingsPath = getSettingsPath();
-  if (name === "free") {
+  if (name === "free" || name === "free-ensemble") {
     return runPopulateFreeDefaultProfile(opts, settingsPath, deps);
   }
   return runPopulatePaidDefaultProfile(opts, settingsPath, name, deps);
 }
 
 /**
- * The 'free' default profile: sweeps ONLY the zero-cost pool, under the SAME free_only
- * chokepoint --bench-free-pool / --update-all --free already rely on (setActiveFreeOnly
- * + the runner's own runtime guard) — provably $0, never the paid path.
+ * The 'free' AND 'free-ensemble' default profiles: ONE sweep of the zero-cost
+ * pool, under the SAME free_only chokepoint --bench-free-pool / --update-all
+ * --free already rely on (setActiveFreeOnly + the runner's own runtime guard)
+ * — provably $0, never the paid path. Both profiles are written with the
+ * IDENTICAL passing pool (best-first): `free` uses freeModels[0] at runtime
+ * (mode: remote), `free-ensemble` uses freeModels[0..2] (mode:
+ * remote-ensemble) — see resolveProfile in config.ts. Writing both from one
+ * sweep means a caller of EITHER name keeps both current, and never runs the
+ * (identical) sweep twice.
  */
 async function runPopulateFreeDefaultProfile(
   opts: CliOptions,
@@ -967,6 +978,7 @@ async function runPopulateFreeDefaultProfile(
   const freeIds = freeSuffixOnly(discoveredPool);
   if (freeIds.length === 0) {
     recordBenchmarkFailure("free", Date.now());
+    recordBenchmarkFailure("free-ensemble", Date.now());
     return {
       ok: false,
       code: 2,
@@ -979,7 +991,7 @@ async function runPopulateFreeDefaultProfile(
   if (opts.dryRun) {
     return {
       ok: true,
-      summary: `dry-run — would sweep ${freeIds.length} zero-cost ':free' model(s) for the 'free' default profile; $0, nothing written`,
+      summary: `dry-run — would sweep ${freeIds.length} zero-cost ':free' model(s) for the 'free'/'free-ensemble' default profiles; $0, nothing written`,
     };
   }
 
@@ -1006,40 +1018,51 @@ async function runPopulateFreeDefaultProfile(
     sweep = await deps.runSweep(sweepOpts);
   } catch (err) {
     recordBenchmarkFailure("free", Date.now());
+    recordBenchmarkFailure("free-ensemble", Date.now());
     throw err;
   }
   const passing = passingFreePoolIds(sweep.results);
   if (passing.length === 0) {
     recordBenchmarkFailure("free", Date.now());
+    recordBenchmarkFailure("free-ensemble", Date.now());
     return {
       ok: false,
       code: 2,
-      summary: "--populate-default-profile free: no ':free' model passed the sweep — 'free' profile left unchanged",
+      summary:
+        "--populate-default-profile free: no ':free' model passed the sweep — " +
+        "'free'/'free-ensemble' profiles left unchanged",
       reportPath: sweep.reportPath || undefined,
     };
   }
+  // Same passing pool written to BOTH profiles — see this function's docstring.
   const w = updateFreeDefaultProfile(settingsPath, passing);
-  recordBenchmarkSuccess("free", poolFingerprint(qualifyingPool), w.newPool, Date.now());
+  const wEnsemble = updateFreeEnsembleDefaultProfile(settingsPath, passing);
+  const fingerprint = poolFingerprint(qualifyingPool);
+  recordBenchmarkSuccess("free", fingerprint, w.newPool, Date.now());
+  recordBenchmarkSuccess("free-ensemble", fingerprint, wEnsemble.newPool, Date.now());
   return {
     ok: true,
-    summary: `populate-default-profile free: wrote ${w.newPool.length} model(s) to '${w.profileName}' — ${w.newPool.join(", ")}`,
+    summary:
+      `populate-default-profile free: wrote ${w.newPool.length} model(s) to '${w.profileName}' and ` +
+      `'${wEnsemble.profileName}' — ${w.newPool.join(", ")}`,
     reportPath: sweep.reportPath || undefined,
   };
 }
 
 /**
- * The 'ensemble' / 'mass-scout' default profiles: PAID. Bounded by the SAME worst-case
- * pre-flight estimate + abort that --update-all's paid phase uses (see
- * update-all.ts::runUpdateAll, the "PRE-FLIGHT COST ESTIMATE" step) — computed here over
- * the same requirement-gated, quality-ranked candidate roster runKeywordSweep itself
- * builds (discover.ts's qualify + rankByQualityIndex), so the estimate and the actual
- * roster can never disagree about which models are in play. No second budget system:
+ * The 'paid' / 'paid-ensemble' / 'paid-mass-scout' default profiles: PAID.
+ * Bounded by the SAME worst-case pre-flight estimate + abort that --update-all's
+ * paid phase uses (see update-all.ts::runUpdateAll, the "PRE-FLIGHT COST
+ * ESTIMATE" step) — computed here over the same requirement-gated,
+ * quality-ranked candidate roster runKeywordSweep itself builds (discover.ts's
+ * qualify + rankByQualityIndex), so the estimate and the actual roster can
+ * never disagree about which models are in play. No second budget system:
  * this reuses update-all.ts's own estimateWorkloadCostUsd.
  */
 async function runPopulatePaidDefaultProfile(
   opts: CliOptions,
   settingsPath: string,
-  name: "ensemble" | "mass-scout",
+  name: "paid" | "paid-ensemble" | "paid-mass-scout",
   deps: PopulateDefaultProfileDeps,
 ): Promise<CliResult> {
   setActiveFreeOnly(false);
@@ -1057,8 +1080,8 @@ async function runPopulatePaidDefaultProfile(
     };
   }
   // The candidate set the picker will select from — banked on success (and
-  // reused, unchanged, whichever of ensemble/mass-scout actually writes) as
-  // the drift-detection baseline for THIS profile name.
+  // reused, unchanged, whichever of paid/paid-ensemble/paid-mass-scout
+  // actually writes) as the drift-detection baseline for THIS profile name.
   const qualifyingPool: CatalogPriceSnapshot[] = candidates.map((c) => ({
     id: c.id,
     inputDollarsPerMillion: c.inputDollarsPerMillion,
@@ -1107,19 +1130,21 @@ async function runPopulatePaidDefaultProfile(
     throw err;
   }
 
-  if (name === "ensemble") {
+  if (name === "paid" || name === "paid-ensemble") {
+    const topN = name === "paid" ? 1 : 3;
     const ceiling = getEnsemblePriceCeiling(loadSettings());
-    const picks = pickEnsembleByPriceCeiling(sweep.results, { priceCeilingUsdPerM: ceiling });
+    const picks = pickEnsembleByPriceCeiling(sweep.results, { priceCeilingUsdPerM: ceiling, topN });
     if (picks.length === 0) {
       recordBenchmarkFailure(name, Date.now());
       return {
         ok: false,
         code: 2,
-        summary: `--populate-default-profile ensemble: no candidate cleared the $${ceiling.toFixed(2)}/1M price ceiling — 'ensemble' profile left unchanged`,
+        summary: `--populate-default-profile ${name}: no candidate cleared the $${ceiling.toFixed(2)}/1M price ceiling — '${name}' profile left unchanged`,
         reportPath: sweep.reportPath || undefined,
       };
     }
-    updateEnsembleDefaultProfile(settingsPath, picks);
+    if (name === "paid") updatePaidDefaultProfile(settingsPath, picks);
+    else updatePaidEnsembleDefaultProfile(settingsPath, picks);
     recordBenchmarkSuccess(
       name,
       poolFingerprint(qualifyingPool),
@@ -1128,12 +1153,12 @@ async function runPopulatePaidDefaultProfile(
     );
     return {
       ok: true,
-      summary: `populate-default-profile ensemble: wrote ${picks.length} model(s) — ${picks.map((p) => p.modelId).join(", ")}`,
+      summary: `populate-default-profile ${name}: wrote ${picks.length} model(s) — ${picks.map((p) => p.modelId).join(", ")}`,
       reportPath: sweep.reportPath || undefined,
     };
   }
 
-  // 'mass-scout' — pickMassScoutModel throws (never returns a ':free' id) rather
+  // 'paid-mass-scout' — pickMassScoutModel throws (never returns a ':free' id) rather
   // than silently falling back; surface that as a normal [FAILED] outcome.
   let pick: PickedModel;
   try {
@@ -1143,7 +1168,7 @@ async function runPopulatePaidDefaultProfile(
     return {
       ok: false,
       code: 2,
-      summary: `--populate-default-profile mass-scout: ${(err as Error).message}`,
+      summary: `--populate-default-profile paid-mass-scout: ${(err as Error).message}`,
       reportPath: sweep.reportPath || undefined,
     };
   }
@@ -1151,7 +1176,7 @@ async function runPopulatePaidDefaultProfile(
   recordBenchmarkSuccess(name, poolFingerprint(qualifyingPool), [w.newModelId], Date.now());
   return {
     ok: true,
-    summary: `populate-default-profile mass-scout: wrote '${w.newModelId}'`,
+    summary: `populate-default-profile paid-mass-scout: wrote '${w.newModelId}'`,
     reportPath: sweep.reportPath || undefined,
   };
 }

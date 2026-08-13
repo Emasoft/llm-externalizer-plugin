@@ -218805,7 +218805,13 @@ function loadSettings() {
     return null;
   }
 }
-var DEFAULT_PROFILE_NAMES = ["free", "ensemble", "mass-scout"];
+var DEFAULT_PROFILE_NAMES = [
+  "free",
+  "free-ensemble",
+  "paid",
+  "paid-ensemble",
+  "paid-mass-scout"
+];
 function isDefaultProfileName(name) {
   return DEFAULT_PROFILE_NAMES.includes(name);
 }
@@ -220062,16 +220068,22 @@ function pickMassScoutModel(results, opts = {}) {
 function updateFreeDefaultProfile(settingsPath, freeModelIds) {
   return applyFreePoolToSettings(settingsPath, "free", freeModelIds);
 }
-function updateEnsembleDefaultProfile(settingsPath, picks) {
-  return applyPicksToSettings(settingsPath, "ensemble", picks);
+function updateFreeEnsembleDefaultProfile(settingsPath, freeModelIds) {
+  return applyFreePoolToSettings(settingsPath, "free-ensemble", freeModelIds);
+}
+function updatePaidDefaultProfile(settingsPath, picks) {
+  return applyPicksToSettings(settingsPath, "paid", picks);
+}
+function updatePaidEnsembleDefaultProfile(settingsPath, picks) {
+  return applyPicksToSettings(settingsPath, "paid-ensemble", picks);
 }
 function updateMassScoutDefaultProfile(settingsPath, pick) {
   if (pick.modelId.endsWith(":free")) {
     throw new Error(
-      `updateMassScoutDefaultProfile: refusing to write ':free' model '${pick.modelId}' into mass-scout \u2014 mass-scout must never use a free-tier model (rate-limit risk at scale).`
+      `updateMassScoutDefaultProfile: refusing to write ':free' model '${pick.modelId}' into paid-mass-scout \u2014 mass-scout must never use a free-tier model (rate-limit risk at scale).`
     );
   }
-  return applyEnsembleSlotToSettings(settingsPath, "mass-scout", "model", pick.modelId);
+  return applyEnsembleSlotToSettings(settingsPath, "paid-mass-scout", "model", pick.modelId);
 }
 
 // src/benchmark/update-all.ts
@@ -230229,9 +230241,10 @@ function printHelp() {
       `  --populate-default-profile NAME`,
       `                    NAME is one of: ${DEFAULT_PROFILE_NAMES.join(", ")}. Sweeps and`,
       "                    writes exactly that machine-managed default profile \u2014 nothing",
-      "                    else (no other profile, no tool_models). 'free' runs under the",
-      "                    same free_only chokepoint as --update-all --free (provably $0).",
-      "                    'ensemble' and 'mass-scout' are PAID: bounded by the same",
+      "                    else (no other profile, no tool_models); 'free' and 'free-ensemble'",
+      "                    share one sweep. 'free'/'free-ensemble' run under the same free_only",
+      "                    chokepoint as --update-all --free (provably $0). 'paid',",
+      "                    'paid-ensemble' and 'paid-mass-scout' are PAID: bounded by the same",
       "                    worst-case pre-flight estimate + --budget-usd cap as --update-all",
       "                    (aborts before the first call if the estimate exceeds the cap).",
       "                    --dry-run prints the plan and spends/writes nothing.",
@@ -230850,7 +230863,7 @@ async function runPopulateDefaultProfilePhase(opts, deps = defaultPopulateDefaul
     throw new Error("runPopulateDefaultProfilePhase called without --populate-default-profile");
   }
   const settingsPath = getSettingsPath();
-  if (name === "free") {
+  if (name === "free" || name === "free-ensemble") {
     return runPopulateFreeDefaultProfile(opts, settingsPath, deps);
   }
   return runPopulatePaidDefaultProfile(opts, settingsPath, name, deps);
@@ -230882,6 +230895,7 @@ async function runPopulateFreeDefaultProfile(opts, settingsPath, deps) {
   const freeIds = freeSuffixOnly(discoveredPool);
   if (freeIds.length === 0) {
     recordBenchmarkFailure("free", Date.now());
+    recordBenchmarkFailure("free-ensemble", Date.now());
     return {
       ok: false,
       code: 2,
@@ -230891,7 +230905,7 @@ async function runPopulateFreeDefaultProfile(opts, settingsPath, deps) {
   if (opts.dryRun) {
     return {
       ok: true,
-      summary: `dry-run \u2014 would sweep ${freeIds.length} zero-cost ':free' model(s) for the 'free' default profile; $0, nothing written`
+      summary: `dry-run \u2014 would sweep ${freeIds.length} zero-cost ':free' model(s) for the 'free'/'free-ensemble' default profiles; $0, nothing written`
     };
   }
   const freeIdSet = new Set(freeIds);
@@ -230910,23 +230924,28 @@ async function runPopulateFreeDefaultProfile(opts, settingsPath, deps) {
     sweep = await deps.runSweep(sweepOpts);
   } catch (err) {
     recordBenchmarkFailure("free", Date.now());
+    recordBenchmarkFailure("free-ensemble", Date.now());
     throw err;
   }
   const passing = passingFreePoolIds(sweep.results);
   if (passing.length === 0) {
     recordBenchmarkFailure("free", Date.now());
+    recordBenchmarkFailure("free-ensemble", Date.now());
     return {
       ok: false,
       code: 2,
-      summary: "--populate-default-profile free: no ':free' model passed the sweep \u2014 'free' profile left unchanged",
+      summary: "--populate-default-profile free: no ':free' model passed the sweep \u2014 'free'/'free-ensemble' profiles left unchanged",
       reportPath: sweep.reportPath || void 0
     };
   }
   const w = updateFreeDefaultProfile(settingsPath, passing);
-  recordBenchmarkSuccess("free", poolFingerprint(qualifyingPool), w.newPool, Date.now());
+  const wEnsemble = updateFreeEnsembleDefaultProfile(settingsPath, passing);
+  const fingerprint = poolFingerprint(qualifyingPool);
+  recordBenchmarkSuccess("free", fingerprint, w.newPool, Date.now());
+  recordBenchmarkSuccess("free-ensemble", fingerprint, wEnsemble.newPool, Date.now());
   return {
     ok: true,
-    summary: `populate-default-profile free: wrote ${w.newPool.length} model(s) to '${w.profileName}' \u2014 ${w.newPool.join(", ")}`,
+    summary: `populate-default-profile free: wrote ${w.newPool.length} model(s) to '${w.profileName}' and '${wEnsemble.profileName}' \u2014 ${w.newPool.join(", ")}`,
     reportPath: sweep.reportPath || void 0
   };
 }
@@ -230981,19 +231000,21 @@ async function runPopulatePaidDefaultProfile(opts, settingsPath, name, deps) {
     recordBenchmarkFailure(name, Date.now());
     throw err;
   }
-  if (name === "ensemble") {
+  if (name === "paid" || name === "paid-ensemble") {
+    const topN = name === "paid" ? 1 : 3;
     const ceiling = getEnsemblePriceCeiling(loadSettings());
-    const picks = pickEnsembleByPriceCeiling(sweep.results, { priceCeilingUsdPerM: ceiling });
+    const picks = pickEnsembleByPriceCeiling(sweep.results, { priceCeilingUsdPerM: ceiling, topN });
     if (picks.length === 0) {
       recordBenchmarkFailure(name, Date.now());
       return {
         ok: false,
         code: 2,
-        summary: `--populate-default-profile ensemble: no candidate cleared the $${ceiling.toFixed(2)}/1M price ceiling \u2014 'ensemble' profile left unchanged`,
+        summary: `--populate-default-profile ${name}: no candidate cleared the $${ceiling.toFixed(2)}/1M price ceiling \u2014 '${name}' profile left unchanged`,
         reportPath: sweep.reportPath || void 0
       };
     }
-    updateEnsembleDefaultProfile(settingsPath, picks);
+    if (name === "paid") updatePaidDefaultProfile(settingsPath, picks);
+    else updatePaidEnsembleDefaultProfile(settingsPath, picks);
     recordBenchmarkSuccess(
       name,
       poolFingerprint(qualifyingPool),
@@ -231002,7 +231023,7 @@ async function runPopulatePaidDefaultProfile(opts, settingsPath, name, deps) {
     );
     return {
       ok: true,
-      summary: `populate-default-profile ensemble: wrote ${picks.length} model(s) \u2014 ${picks.map((p) => p.modelId).join(", ")}`,
+      summary: `populate-default-profile ${name}: wrote ${picks.length} model(s) \u2014 ${picks.map((p) => p.modelId).join(", ")}`,
       reportPath: sweep.reportPath || void 0
     };
   }
@@ -231014,7 +231035,7 @@ async function runPopulatePaidDefaultProfile(opts, settingsPath, name, deps) {
     return {
       ok: false,
       code: 2,
-      summary: `--populate-default-profile mass-scout: ${err.message}`,
+      summary: `--populate-default-profile paid-mass-scout: ${err.message}`,
       reportPath: sweep.reportPath || void 0
     };
   }
@@ -231022,7 +231043,7 @@ async function runPopulatePaidDefaultProfile(opts, settingsPath, name, deps) {
   recordBenchmarkSuccess(name, poolFingerprint(qualifyingPool), [w.newModelId], Date.now());
   return {
     ok: true,
-    summary: `populate-default-profile mass-scout: wrote '${w.newModelId}'`,
+    summary: `populate-default-profile paid-mass-scout: wrote '${w.newModelId}'`,
     reportPath: sweep.reportPath || void 0
   };
 }

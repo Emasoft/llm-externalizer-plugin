@@ -8,16 +8,17 @@
  * uses for the free pool), and what differs per profile is what the CURRENT
  * command does while that child runs:
  *
- *   free        — proceeds immediately on FREE_POOL_SEED, the existing
- *                 "never dark" fallback (resolveAutoFreePool). Nothing is
- *                 blocked, nothing is spent, and the sweep upgrades the pool
- *                 for next time.
- *   ensemble    — no seed exists and none can: these are PAID pools, and any
- *   mass-scout    hardcoded default would either bill the user or go stale.
- *                 So the command fails fast with a remedy instead of stalling
- *                 15 minutes or spending money nobody authorized.
+ *   free            — proceeds immediately on FREE_POOL_SEED, the existing
+ *   free-ensemble     "never dark" fallback (resolveAutoFreePool). Nothing is
+ *                     blocked, nothing is spent, and the sweep upgrades the
+ *                     pool for next time.
+ *   paid            — no seed exists and none can: these are PAID pools, and
+ *   paid-ensemble     any hardcoded default would either bill the user or go
+ *   paid-mass-scout   stale. So the command fails fast with a remedy instead
+ *                     of stalling 15 minutes or spending money nobody
+ *                     authorized.
  *
- * The paid pair only auto-spawn under `allow_paid_models: true`. That is not a
+ * The paid trio only auto-spawn under `allow_paid_models: true`. That is not a
  * new policy invented here — it is the same switch model-reconcile.ts already
  * applies (FREE: detect and adopt automatically; PAID: detect and report), and
  * benchmarking a paid model sends billable requests.
@@ -35,7 +36,7 @@ import { getConfigDir, type DefaultProfileName } from "./config.js";
 const DISABLE_ENV = "LLM_EXT_DISABLE_DEFAULT_PROFILE_POPULATION";
 
 /** Profiles that cost money to benchmark, and so never populate unasked. */
-const PAID_PROFILES: ReadonlySet<string> = new Set(["ensemble", "mass-scout"]);
+const PAID_PROFILES: ReadonlySet<string> = new Set(["paid", "paid-ensemble", "paid-mass-scout"]);
 
 export type PopulationOutcome =
   /** A detached benchmark is now running; the caller may proceed (free) or report (paid). */

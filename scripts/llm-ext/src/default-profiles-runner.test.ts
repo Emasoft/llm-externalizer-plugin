@@ -49,20 +49,20 @@ function opts(over: Partial<Parameters<typeof populateDefaultProfile>[0]> = {}) 
 
 describe("populateDefaultProfile — the paid gate", () => {
   it("REFUSES a paid profile under allow_paid_models: false, and names the exact command instead of just failing", () => {
-    const r = populateDefaultProfile(opts({ profile: "ensemble", allowPaidModels: false }));
+    const r = populateDefaultProfile(opts({ profile: "paid-ensemble", allowPaidModels: false }));
     expect(r.kind).toBe("refused");
     if (r.kind !== "refused") throw new Error("unreachable");
-    expect(r.remedy).toContain("--populate-default-profile ensemble");
+    expect(r.remedy).toContain("--populate-default-profile paid-ensemble");
     expect(r.reason).toMatch(/billable/i);
   });
 
-  it("REFUSES mass-scout too — both paid profiles are gated, not just ensemble", () => {
-    const r = populateDefaultProfile(opts({ profile: "mass-scout", allowPaidModels: false }));
+  it("REFUSES paid-mass-scout too — all three paid profiles are gated, not just paid-ensemble", () => {
+    const r = populateDefaultProfile(opts({ profile: "paid-mass-scout", allowPaidModels: false }));
     expect(r.kind).toBe("refused");
   });
 
   it("spawns a paid profile once allow_paid_models is true, and marks it as blocking the caller", () => {
-    const r = populateDefaultProfile(opts({ profile: "ensemble", allowPaidModels: true }));
+    const r = populateDefaultProfile(opts({ profile: "paid-ensemble", allowPaidModels: true }));
     expect(r.kind).toBe("spawned");
     if (r.kind !== "spawned") throw new Error("unreachable");
     // Paid population cannot be waited out inline (~15 min), so the caller must
@@ -106,10 +106,10 @@ describe("populateDefaultProfile — the argv handed to the child", () => {
     // population failed in seconds, banked a cooldown, and retried forever.
     // Asserting outcome.kind ONLY — as the original test did — cannot see this;
     // the spawn succeeds either way. The defect lives in the argv.
-    const argv = recordedArgv({ profile: "ensemble", allowPaidModels: true, budgetUsd: 2 });
+    const argv = recordedArgv({ profile: "paid-ensemble", allowPaidModels: true, budgetUsd: 2 });
     expect(argv).toContain("--allow-paid-models-tests");
     expect(argv).toContain("--populate-default-profile");
-    expect(argv).toContain("ensemble");
+    expect(argv).toContain("paid-ensemble");
     expect(argv).toContain("--budget-usd");
   });
 
@@ -137,7 +137,7 @@ describe("populateDefaultProfile — the lock", () => {
     const lockPath = join(cfg, "held.lock");
     writeFileSync(lockPath, String(process.pid));
     const r = populateDefaultProfile(
-      opts({ profile: "ensemble", allowPaidModels: false, lockPath }),
+      opts({ profile: "paid-ensemble", allowPaidModels: false, lockPath }),
     );
     expect(r.kind).toBe("skipped");
     expect(r.kind).not.toBe("refused");
@@ -183,16 +183,16 @@ describe("describeOutcome — says something only when the user must act", () =>
   });
 
   it("tells the user to re-run when a PAID population blocks the current command", () => {
-    const r = populateDefaultProfile(opts({ profile: "ensemble", allowPaidModels: true }));
+    const r = populateDefaultProfile(opts({ profile: "paid-ensemble", allowPaidModels: true }));
     const msg = describeOutcome(r);
     expect(msg).not.toBeNull();
-    expect(msg).toMatch(/ensemble/);
+    expect(msg).toMatch(/paid-ensemble/);
   });
 
   it("surfaces both the reason and the remedy on a refusal — a refusal with no way forward is a dead end", () => {
-    const r = populateDefaultProfile(opts({ profile: "ensemble", allowPaidModels: false }));
+    const r = populateDefaultProfile(opts({ profile: "paid-ensemble", allowPaidModels: false }));
     const msg = describeOutcome(r);
-    expect(msg).toContain("--populate-default-profile ensemble");
+    expect(msg).toContain("--populate-default-profile paid-ensemble");
     expect(msg).toMatch(/allow_paid_models/);
   });
 

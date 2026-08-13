@@ -262,10 +262,10 @@ let settingsError = "";
  * Whether boot should proceed despite `validation` (validateSettings on the
  * active profile) having FAILED, because the failure is exactly the
  * self-healing "not benchmarked yet" placeholder state of a machine-owned
- * default profile ('free' | 'ensemble' | 'mass-scout') — never a genuine
- * misconfiguration. Extracted as a pure function (used by the module-load
- * boot IIFE below, which is otherwise hard to unit-test directly) so the
- * decision itself is independently testable.
+ * default profile ('free' | 'free-ensemble' | 'paid' | 'paid-ensemble' |
+ * 'paid-mass-scout') — never a genuine misconfiguration. Extracted as a pure
+ * function (used by the module-load boot IIFE below, which is otherwise hard
+ * to unit-test directly) so the decision itself is independently testable.
  */
 export function shouldBootDespiteInvalidActiveProfile(
   activeName: string,
@@ -297,8 +297,9 @@ let activeResolved: ResolvedProfile | null = (() => {
   const validation = validateSettings(activeSettings);
   if (!validation.valid) {
     const activeProfile = activeSettings.profiles[activeSettings.active];
-    // A machine-owned default profile ('free' | 'ensemble' | 'mass-scout')
-    // that has never been benchmarked yet is EXPECTED to fail validateProfile
+    // A machine-owned default profile ('free' | 'free-ensemble' | 'paid' |
+    // 'paid-ensemble' | 'paid-mass-scout') that has never been benchmarked
+    // yet is EXPECTED to fail validateProfile
     // (an empty pool / a placeholder model id genuinely cannot serve a
     // request) — that is not a user misconfiguration, it is the self-healing
     // "not populated yet" state. Booting anyway lets the dispatcher hook
@@ -2182,30 +2183,31 @@ async function runModelReconcile(): Promise<void> {
 
 /**
  * Lazily populate the ACTIVE profile when it is a machine-owned default
- * ('free' | 'ensemble' | 'mass-scout') and needs a (re)benchmark: unpopulated,
- * a configured model removed from the catalog / its price rose, or a
- * configured model proven persistently dead at runtime. The caller (see
- * dispatchCallToolInner) gates this behind the SAME RECONCILE_SKIP_TOOLS list
- * as runModelReconcile(), so read-only/report-config tools never trigger a
- * benchmark or a spend refusal — they report the config AS THE USER HAS IT.
+ * ('free' | 'free-ensemble' | 'paid' | 'paid-ensemble' | 'paid-mass-scout')
+ * and needs a (re)benchmark: unpopulated, a configured model removed from the
+ * catalog / its price rose, or a configured model proven persistently dead at
+ * runtime. The caller (see dispatchCallToolInner) gates this behind the SAME
+ * RECONCILE_SKIP_TOOLS list as runModelReconcile(), so read-only/report-config
+ * tools never trigger a benchmark or a spend refusal — they report the config
+ * AS THE USER HAS IT.
  *
- * `free` NEVER blocks: populateDefaultProfile spawns a detached child and
- * returns immediately, and the current command proceeds on the existing
- * FREE_POOL_SEED fallback (resolveAutoFreePool) while it runs in the
- * background. `ensemble`/`mass-scout` are paid — under `allow_paid_models:
- * false` the runner REFUSES rather than spending, and this function fails the
- * tool call fast with the refusal's remedy text so the user isn't billed for
- * something nobody authorized.
+ * `free`/`free-ensemble` NEVER block: populateDefaultProfile spawns a detached
+ * child and returns immediately, and the current command proceeds on the
+ * existing FREE_POOL_SEED fallback (resolveAutoFreePool) while it runs in the
+ * background. `paid`/`paid-ensemble`/`paid-mass-scout` are paid — under
+ * `allow_paid_models: false` the runner REFUSES rather than spending, and this
+ * function fails the tool call fast with the refusal's remedy text so the
+ * user isn't billed for something nobody authorized.
  *
  * `cachedPrices` and `qualifyingPool` — decideDefaultProfilePopulation's
  * "model-price-increased" and "new-model-arrived" triggers — are wired from
- * this profile's OWN candidate class (the `:free` pool for `free`; the
- * paid pool under the ensemble price ceiling for `ensemble`/`mass-scout`)
- * and from the last-persisted fingerprint/prices
- * (default-profiles-state.ts's getProfileRecord / the cached benchmark
- * report). Both degrade to "no drift signal" — never a false invalidation —
- * on any read failure, per decideDefaultProfilePopulation's own fail-open
- * contract.
+ * this profile's OWN candidate class (the `:free` pool for `free`/
+ * `free-ensemble`; the paid pool under the ensemble price ceiling for
+ * `paid`/`paid-ensemble`/`paid-mass-scout`) and from the last-persisted
+ * fingerprint/prices (default-profiles-state.ts's getProfileRecord / the
+ * cached benchmark report). Both degrade to "no drift signal" — never a false
+ * invalidation — on any read failure, per decideDefaultProfilePopulation's own
+ * fail-open contract.
  *
  * Returns a ToolResult ONLY when the tool call itself must fail (a paid
  * default profile refused to auto-benchmark) — null means "proceed",
@@ -2225,13 +2227,16 @@ export async function maybeEnsureDefaultProfileReady(): Promise<ToolResult | nul
   try {
     const reconcileCatalog = catalogForReconcile(await fetchOpenRouterModels());
     catalog = reconcileCatalog.priceSnapshot;
-    if (activeName === "free") {
+    if (activeName === "free" || activeName === "free-ensemble") {
       const freeIds = new Set(reconcileCatalog.freeQualified);
       qualifyingPool = catalog.filter((m) => freeIds.has(m.id));
     } else {
-      // ensemble / mass-scout: the same paid, ceiling-qualifying class
-      // pick.ts's pickEnsembleByPriceCeiling draws from (strictly under the
-      // ceiling on BOTH input and output, never a ':free' id).
+      // paid / paid-ensemble / paid-mass-scout: the same paid,
+      // ceiling-qualifying class pick.ts's pickEnsembleByPriceCeiling draws
+      // from (strictly under the ceiling on BOTH input and output, never a
+      // ':free' id). paid-mass-scout's ACTUAL selection pool is broader (any
+      // non-':free' id, see pickMassScoutModel) — this narrower ceiling class
+      // is used only as the drift-detection fingerprint, same as before.
       const ceiling = getEnsemblePriceCeiling(loadSettings());
       qualifyingPool = catalog.filter(
         (m) =>
@@ -3020,8 +3025,9 @@ async function dispatchCallToolInner(
     if (!RECONCILE_SKIP_TOOLS.has(name)) {
       await runModelReconcile();
       // The active profile may itself be an unpopulated/drifted machine-owned
-      // default ('free' | 'ensemble' | 'mass-scout') — populate it lazily
-      // before the tool does real work. Same skip list as runModelReconcile
+      // default ('free' | 'free-ensemble' | 'paid' | 'paid-ensemble' |
+      // 'paid-mass-scout') — populate it lazily before the tool does real
+      // work. Same skip list as runModelReconcile
       // (above) so read-only/report-config tools never trigger this.
       const defaultProfileGate = await maybeEnsureDefaultProfileReady();
       if (defaultProfileGate) return defaultProfileGate;

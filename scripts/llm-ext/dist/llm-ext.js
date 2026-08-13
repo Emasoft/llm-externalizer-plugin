@@ -218835,7 +218835,13 @@ function loadSettings() {
     return null;
   }
 }
-var DEFAULT_PROFILE_NAMES = ["free", "ensemble", "mass-scout"];
+var DEFAULT_PROFILE_NAMES = [
+  "free",
+  "free-ensemble",
+  "paid",
+  "paid-ensemble",
+  "paid-mass-scout"
+];
 function isDefaultProfileName(name) {
   return DEFAULT_PROFILE_NAMES.includes(name);
 }
@@ -218859,7 +218865,7 @@ function isUnpopulatedDefaultProfile(name, profile) {
 }
 function placeholderFreeProfile() {
   return {
-    mode: "remote-ensemble",
+    mode: "remote",
     api: "openrouter-remote",
     free_only: true,
     free_models: [],
@@ -218870,7 +218876,25 @@ function placeholderFreeProfile() {
     api_key: "$OPENROUTER_API_KEY"
   };
 }
-function placeholderEnsembleProfile() {
+function placeholderFreeEnsembleProfile() {
+  return {
+    mode: "remote-ensemble",
+    api: "openrouter-remote",
+    free_only: true,
+    free_models: [],
+    model: PLACEHOLDER_MODEL_ID,
+    api_key: "$OPENROUTER_API_KEY"
+  };
+}
+function placeholderPaidProfile() {
+  return {
+    mode: "remote",
+    api: "openrouter-remote",
+    model: PLACEHOLDER_MODEL_ID,
+    api_key: "$OPENROUTER_API_KEY"
+  };
+}
+function placeholderPaidEnsembleProfile() {
   return {
     mode: "remote-ensemble",
     api: "openrouter-remote",
@@ -218880,7 +218904,7 @@ function placeholderEnsembleProfile() {
     api_key: "$OPENROUTER_API_KEY"
   };
 }
-function placeholderMassScoutProfile() {
+function placeholderPaidMassScoutProfile() {
   return {
     mode: "remote",
     api: "openrouter-remote",
@@ -218895,8 +218919,10 @@ function generateDefaultSettings() {
     allow_paid_models: false,
     profiles: {
       free: placeholderFreeProfile(),
-      ensemble: placeholderEnsembleProfile(),
-      "mass-scout": placeholderMassScoutProfile()
+      "free-ensemble": placeholderFreeEnsembleProfile(),
+      paid: placeholderPaidProfile(),
+      "paid-ensemble": placeholderPaidEnsembleProfile(),
+      "paid-mass-scout": placeholderPaidMassScoutProfile()
     }
   };
 }
@@ -218911,12 +218937,13 @@ function renderDefaultSettingsYaml() {
     "",
     " Location: ~/.llm-externalizer/settings.yaml",
     "",
-    " The three profiles below (free, ensemble, mass-scout) are MACHINE-MANAGED:",
-    " their model ids are chosen and kept current by the benchmark procedure, and",
-    " are (re)populated automatically when a model is retired, repriced, or a",
-    " better one appears. They start EMPTY \u2014 a placeholder model id means 'not",
-    " benchmarked yet', not 'broken'. Any profile you add yourself is left alone,",
-    " forever: nothing here rewrites a profile it does not own.",
+    " The five profiles below (free, free-ensemble, paid, paid-ensemble,",
+    " paid-mass-scout) are MACHINE-MANAGED: their model ids are chosen and kept",
+    " current by the benchmark procedure, and are (re)populated automatically",
+    " when a model is retired, repriced, or a better one appears. They start",
+    " EMPTY \u2014 a placeholder model id means 'not benchmarked yet', not 'broken'.",
+    " Any profile you add yourself is left alone, forever: nothing here rewrites",
+    " a profile it does not own.",
     " \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"
   ].join("\n");
   const activeNode = doc.get("active", true);
@@ -218929,11 +218956,12 @@ function renderDefaultSettingsYaml() {
       " \u2500\u2500 Master paid-spend switch \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
       " DEFAULT false \u2014 only FREE models are used, everywhere, by default. While",
       " this is false (or absent), every remote profile is forced to its free pool",
-      " no matter which 'model' it configures, and the two paid machine-managed",
-      " profiles (ensemble, mass-scout) refuse to auto-benchmark themselves,",
-      " because benchmarking a paid model sends billable requests. Set it to true",
-      " to allow paid models \u2014 then `ensemble` and `mass-scout` populate on first",
-      " use, printing their estimated cost ceiling before spending anything."
+      " no matter which 'model' it configures, and the three paid machine-managed",
+      " profiles (paid, paid-ensemble, paid-mass-scout) refuse to auto-benchmark",
+      " themselves, because benchmarking a paid model sends billable requests. Set",
+      " it to true to allow paid models \u2014 then `paid`, `paid-ensemble` and",
+      " `paid-mass-scout` populate on first use, printing their estimated cost",
+      " ceiling before spending anything."
     ].join("\n");
   }
   return doc.toString({ indent: 2 });
@@ -218977,7 +219005,7 @@ function ensureSettingsExist() {
     } catch {
     }
     process.stderr.write(
-      `[llm-externalizer] WARNING: ${settingsPath} could not be parsed as YAML. Your original file has been preserved at ${backupPath} \u2014 inspect it by hand to recover any custom profiles; they could NOT be recovered automatically. Regenerating ${settingsPath} with the 3 machine-managed default profiles (free, ensemble, mass-scout).
+      `[llm-externalizer] WARNING: ${settingsPath} could not be parsed as YAML. Your original file has been preserved at ${backupPath} \u2014 inspect it by hand to recover any custom profiles; they could NOT be recovered automatically. Regenerating ${settingsPath} with the 5 machine-managed default profiles (free, free-ensemble, paid, paid-ensemble, paid-mass-scout).
 `
     );
     writeFileSync(settingsPath, renderDefaultSettingsYaml(), "utf-8");
@@ -219378,8 +219406,9 @@ Settings file is present but its 'profiles' map is empty.`;
   lines.push("", "* = active profile. Use --show <name> for full resolved detail.");
   if (profileNames.some((n) => isDefaultProfileName(n))) {
     lines.push(
-      "[machine-managed] = free / ensemble / mass-scout. These pick and refresh their own",
-      "models from benchmark results; every other profile is yours and is never modified."
+      "[machine-managed] = free / free-ensemble / paid / paid-ensemble / paid-mass-scout.",
+      "These pick and refresh their own models from benchmark results; every other",
+      "profile is yours and is never modified."
     );
   }
   if (anyUnpopulated) {
@@ -255675,7 +255704,7 @@ import { dirname as dirname14, join as join33, resolve as pathResolve2 } from "n
 import { spawn as spawn2 } from "node:child_process";
 import { fileURLToPath as fileURLToPath9 } from "node:url";
 var DISABLE_ENV2 = "LLM_EXT_DISABLE_DEFAULT_PROFILE_POPULATION";
-var PAID_PROFILES = /* @__PURE__ */ new Set(["ensemble", "mass-scout"]);
+var PAID_PROFILES = /* @__PURE__ */ new Set(["paid", "paid-ensemble", "paid-mass-scout"]);
 function resolveBenchmarkScriptPath2() {
   const here = dirname14(fileURLToPath9(import.meta.url));
   const bundled = pathResolve2(here, "benchmark.js");
@@ -257305,7 +257334,7 @@ async function maybeEnsureDefaultProfileReady() {
   try {
     const reconcileCatalog = catalogForReconcile(await fetchOpenRouterModels());
     catalog = reconcileCatalog.priceSnapshot;
-    if (activeName === "free") {
+    if (activeName === "free" || activeName === "free-ensemble") {
       const freeIds = new Set(reconcileCatalog.freeQualified);
       qualifyingPool = catalog.filter((m) => freeIds.has(m.id));
     } else {

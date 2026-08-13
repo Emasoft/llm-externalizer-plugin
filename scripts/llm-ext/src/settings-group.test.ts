@@ -232,12 +232,12 @@ describe("settings profiles — machine-managed vs user, and unpopulated renderi
     "    free_models: []",
     "    model: placeholder/unpopulated-default-profile",
     "    api_key: $OPENROUTER_API_KEY",
-    // ensemble is NOT free_only, so its unpopulated state is carried by the
+    // paid-ensemble is NOT free_only, so its unpopulated state is carried by the
     // sentinel `model` itself. This is the profile that actually exercised the
     // bug: the old renderer printed the model slots verbatim, so the raw
     // `placeholder/...` id appeared in the listing. A free_only profile alone
     // would NOT have caught it — it rendered as "free_only (0 models)".
-    "  ensemble:",
+    "  paid-ensemble:",
     "    mode: remote-ensemble",
     "    api: openrouter-remote",
     "    model: placeholder/unpopulated-default-profile",
@@ -258,7 +258,7 @@ describe("settings profiles — machine-managed vs user, and unpopulated renderi
     expect(text).toMatch(/not benchmarked yet/i);
   });
 
-  it("labels a machine-managed default but NOT a user profile — only free/ensemble/mass-scout refresh themselves", async () => {
+  it("labels a machine-managed default but NOT a user profile — only the 5 machine-managed default profiles refresh themselves", async () => {
     const text = await listingFor(UNPOPULATED_DEFAULTS);
     const freeLine = text.split("\n").find((l) => l.includes("free —") || l.includes("free ["));
     const userLine = text.split("\n").find((l) => l.includes("my-own"));
