@@ -348,6 +348,12 @@ def test_vmlx_bench_delegation_when_cli_present(monkeypatch: pytest.MonkeyPatch)
         assert "--json" in args
         return FakeCompleted()
 
+    # The CLI must be made present, not assumed present. run_vmlx_bench returns
+    # None immediately when shutil.which("vmlx") is None, so without this patch
+    # the test asserts nothing on a machine that has no vmlx installed — which
+    # is every CI runner. It passed for months only on developer machines that
+    # happened to have the binary, and failed the release job every time.
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: "/usr/bin/vmlx")
     monkeypatch.setattr(subprocess, "run", fake_run)
     perf = mod.run_vmlx_bench("mlx-community/Qwen3-8B-4bit")
     assert perf["tokens_per_second"] == 42.5
@@ -364,6 +370,10 @@ def test_vmlx_bench_returns_none_on_failure(monkeypatch: pytest.MonkeyPatch) -> 
         stdout = ""
         stderr = "boom"
 
+    # Same reason as the delegation test above, in the opposite direction:
+    # without a present CLI this asserts None for the wrong reason (no binary),
+    # not the reason it is named for (the binary ran and exited non-zero).
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: "/usr/bin/vmlx")
     monkeypatch.setattr(subprocess, "run", lambda *a, **kw: FakeCompleted())
     assert mod.run_vmlx_bench("any-model") is None
 
