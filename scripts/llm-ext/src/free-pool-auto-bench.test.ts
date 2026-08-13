@@ -275,6 +275,55 @@ describe("maybeTriggerFreePoolBench — default paths honour LLM_EXT_CONFIG_DIR"
     expect(announced).toContain(realpathSync(cfgDir));
     expect(announced).not.toContain(join(homedir(), ".llm-externalizer"));
   });
+
+  // The lock/log assertion above cannot see a regression in the CACHE path:
+  // with the cache resolved back to $HOME, a clean CI box simply finds no file,
+  // reports "no :free entries", and spawns — which is what that test asserts.
+  // Reading the REAL cache was the headline harm in the first place, so prove
+  // it separately, from the one outcome only the configured dir can produce.
+  it("reads the benchmark cache from LLM_EXT_CONFIG_DIR, not from $HOME", () => {
+    writeFileSync(
+      join(cfgDir, "benchmark-results.json"),
+      JSON.stringify({ results: [{ modelId: "qwen/qwen3-coder:free" }] }),
+      "utf-8",
+    );
+
+    const r = maybeTriggerFreePoolBench({
+      activeProfile: "remote-free-ensemble",
+      // cachePath deliberately OMITTED — the whole point.
+      scriptPath: stubScript,
+      log: (m: string) => log.push(m),
+      env: {} as NodeJS.ProcessEnv,
+      freeOnlyActive: true,
+      freeOnlyWasOn: false,
+    });
+
+    expect(r.outcome).toBe("skipped");
+    expect(r.reason).toBe("cache already has :free entries");
+    expect(existsSync(join(cfgDir, "free-pool-bench.lock"))).toBe(false);
+  });
+
+  // getConfigDir() THROWS on a dir outside its allowlist ($HOME or /tmp). This
+  // helper is called from index.ts's module-load boot IIFE and from the middle
+  // of applyNewSettings' atomic swap, neither of which wraps it — so a throw
+  // here would kill boot, or leave that swap half-published. Fail-open instead.
+  it("degrades to a skip when the configured dir is outside the allowlist", () => {
+    process.env.LLM_EXT_CONFIG_DIR = "/etc/llm-ext-not-an-allowed-config-dir";
+
+    const r = maybeTriggerFreePoolBench({
+      activeProfile: "remote-free-ensemble",
+      scriptPath: stubScript,
+      log: (m: string) => log.push(m),
+      env: {} as NodeJS.ProcessEnv,
+      freeOnlyActive: true,
+      freeOnlyWasOn: false,
+    });
+
+    expect(r.outcome).toBe("skipped");
+    expect(r.reason).toBe("config dir unavailable");
+    expect(r.pid).toBeNull();
+    expect(log.join("")).toContain("config dir unusable");
+  });
 });
 
 describe("maybeTriggerFreePoolBench — robustness", () => {

@@ -14,21 +14,15 @@
  * leak through.
  */
 
-import {
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join, resolve as pathResolve } from "node:path";
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { getConfigDir } from "./config.js";
+import { benchLockIsHeld } from "./bench-lock.js";
+import { resolveBenchmarkScriptPath, spawnDetachedBench } from "./bench-spawn.js";
 
-// Resolved PER CALL through getConfigDir(), never as import-time constants
-// built from homedir(). Two things broke when these were constants:
+// The bench cache/lock/log live in the CONFIG dir, resolved PER CALL through
+// getConfigDir() (see maybeTriggerFreePoolBench), never as import-time
+// constants built from homedir(). Two things broke when these were constants:
 //
 //   1. LLM_EXT_CONFIG_DIR was IGNORED here while settings.yaml honoured it, so
 //      a run pointed at a scratch/CI config dir still read the cache, took the
@@ -42,35 +36,18 @@ import { getConfigDir } from "./config.js";
 //      planted symlink. A plain join(homedir(), ...) skips that check, so this
 //      module was bypassing a security control, not just an env var.
 //
-// Functions, not constants, because the env var must be read when the path is
-// USED — a module-level call would freeze whatever the env held at first
-// import, which is exactly the bug in a slower disguise (tests that set the
-// var per-case would still collide).
-const benchCachePath = (): string => join(getConfigDir(), "benchmark-results.json");
-const benchLockPath = (): string => join(getConfigDir(), "free-pool-bench.lock");
-const benchLogPath = (): string => join(getConfigDir(), "free-pool-bench.log");
+// Resolved at CALL time, not at module scope, because the env var must be read
+// when the path is USED — a module-level call would freeze whatever the env
+// held at first import, which is exactly the bug in a slower disguise (tests
+// that set the var per-case would still collide).
+const BENCH_CACHE_FILE = "benchmark-results.json";
+const BENCH_LOCK_FILE = "free-pool-bench.lock";
+const BENCH_LOG_FILE = "free-pool-bench.log";
 const DISABLE_ENV = "LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH";
-
-/** Public so tests can override; default looks up the bundled benchmark.js
- *  relative to whichever .js loaded this module (works for both the
- *  unbundled compile-time path and the esbuild-bundled dist/ layout). */
-export function resolveBenchmarkScriptPath(): string {
-  // When bundled, every src/* file collapses into dist/index.js and the
-  // benchmark entrypoint lives next to it as dist/benchmark.js. When run
-  // from compiled src/ output (tests), we still want dist/benchmark.js
-  // so the spawned process boots the exact code path the user would.
-  const here = dirname(fileURLToPath(import.meta.url));
-  // Try `<here>/benchmark.js` (bundled dist layout) first, then
-  // `<here>/../dist/benchmark.js` (running from src/ during tests).
-  const bundled = pathResolve(here, "benchmark.js");
-  if (existsSync(bundled)) return bundled;
-  const fromSrc = pathResolve(here, "..", "dist", "benchmark.js");
-  return fromSrc;
-}
 
 /** True iff the cached benchmark JSON contains at least one `:free` model
  *  in its `results[]` array. Missing/unreadable cache returns false. */
-function benchCacheHasFreeEntries(cachePath: string = benchCachePath()): boolean {
+function benchCacheHasFreeEntries(cachePath: string): boolean {
   try {
     const raw = readFileSync(cachePath, "utf-8");
     const data = JSON.parse(raw) as { results?: Array<{ modelId?: string }> };
@@ -78,28 +55,6 @@ function benchCacheHasFreeEntries(cachePath: string = benchCachePath()): boolean
     return data.results.some(
       (r) => typeof r?.modelId === "string" && r.modelId.endsWith(":free"),
     );
-  } catch {
-    return false;
-  }
-}
-
-/** True iff a lock file holds a still-alive PID. Stale locks (PID gone)
- *  return false AND the caller should clear the lock. */
-function lockHoldsLivePid(lockPath: string = benchLockPath()): boolean {
-  if (!existsSync(lockPath)) return false;
-  try {
-    const pid = parseInt(readFileSync(lockPath, "utf-8").trim(), 10);
-    if (!Number.isInteger(pid) || pid <= 0) return false;
-    // `process.kill(pid, 0)` doesn't kill — it only checks existence.
-    // Throws ESRCH if the process is gone; throws EPERM if alive but
-    // unowned. Either non-throw means the PID is in the process table.
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "EPERM") return true;
-      return false;
-    }
   } catch {
     return false;
   }
@@ -114,11 +69,11 @@ export interface MaybeTriggerOpts {
   freeOnlyWasOn: boolean | null;
   /** Stderr sink — caller supplies process.stderr.write or a stub. */
   log: (msg: string) => void;
-  /** Override for the cache path (tests). Default: ~/.llm-externalizer/benchmark-results.json. */
+  /** Override for the cache path (tests). Default: <getConfigDir()>/benchmark-results.json. */
   cachePath?: string;
-  /** Override for the lock path (tests). Default: ~/.llm-externalizer/free-pool-bench.lock. */
+  /** Override for the lock path (tests). Default: <getConfigDir()>/free-pool-bench.lock. */
   lockPath?: string;
-  /** Override for the log path (tests). Default: ~/.llm-externalizer/free-pool-bench.log. */
+  /** Override for the log path (tests). Default: <getConfigDir()>/free-pool-bench.log. */
   logPath?: string;
   /** Override for the benchmark.js path (tests). Default: resolved via import.meta.url. */
   scriptPath?: string;
@@ -154,7 +109,7 @@ export interface TriggerResult {
  *      → not a *transition*, just a re-resolve.
  *
  * Otherwise: spawn a detached `node <benchmark.js> --bench-free-pool`,
- * write the child PID to the lock file, log to benchLogPath(), return.
+ * write the child PID to the lock file, log to the resolved log path, return.
  */
 export function maybeTriggerFreePoolBench(
   opts: MaybeTriggerOpts,
@@ -164,9 +119,6 @@ export function maybeTriggerFreePoolBench(
     freeOnlyActive,
     freeOnlyWasOn,
     log,
-    cachePath = benchCachePath(),
-    lockPath = benchLockPath(),
-    logPath = benchLogPath(),
     scriptPath = resolveBenchmarkScriptPath(),
     env = process.env,
     force = false,
@@ -181,6 +133,44 @@ export function maybeTriggerFreePoolBench(
     );
     return { outcome: "skipped", reason: "disabled via env", pid: null };
   }
+
+  // Resolve the config dir ONCE, after the two cheap skips above, and only when
+  // a path was NOT injected. Two reasons this is not a default-parameter
+  // expression:
+  //
+  //   PERF — a destructuring default is evaluated eagerly, before the first
+  //   skip check, so three getConfigDir() calls (each walking ancestors with
+  //   realpathSync) ran on every settings reload even though the overwhelmingly
+  //   common outcome is an immediate "free_only not active" return.
+  //
+  //   FAIL-OPEN — getConfigDir() THROWS when the resolved dir escapes its
+  //   allowlist ($HOME or /tmp). This function is fire-and-forget: index.ts calls it
+  //   from the module-load boot IIFE and from the middle of applyNewSettings'
+  //   ATOMIC swap, and neither wraps it. A throw out of a default parameter
+  //   would kill boot outright, or leave that swap half-published (new
+  //   activeSettings, stale currentBackend). Every other failure in here
+  //   degrades to a skip; this one must too.
+  const needsConfigDir =
+    opts.cachePath === undefined ||
+    opts.lockPath === undefined ||
+    opts.logPath === undefined;
+  let configDir = "";
+  if (needsConfigDir) {
+    try {
+      configDir = getConfigDir();
+    } catch (e) {
+      log(
+        `[llm-externalizer] free-pool auto-bench: config dir unusable: ${
+          (e as Error).message
+        }\n`,
+      );
+      return { outcome: "skipped", reason: "config dir unavailable", pid: null };
+    }
+  }
+  const cachePath = opts.cachePath ?? join(configDir, BENCH_CACHE_FILE);
+  const lockPath = opts.lockPath ?? join(configDir, BENCH_LOCK_FILE);
+  const logPath = opts.logPath ?? join(configDir, BENCH_LOG_FILE);
+
   // `force` (a reconcile-driven pool change) bypasses the cache-has-entries skip:
   // the newly-adopted models are unscored, so an existing cache is exactly the
   // case that DOES need a re-bench.
@@ -191,7 +181,10 @@ export function maybeTriggerFreePoolBench(
       pid: null,
     };
   }
-  if (lockHoldsLivePid(lockPath)) {
+  // Cheap early-out with the SAME predicate spawnDetachedBench's atomic claim
+  // uses — this only buys a clearer log line and skips the work below; the
+  // claim inside spawnDetachedBench is the actual guard against a double spawn.
+  if (benchLockIsHeld(lockPath)) {
     log(
       `[llm-externalizer] free-pool auto-bench: another run is already in progress (see ${lockPath}).\n`,
     );
@@ -212,81 +205,23 @@ export function maybeTriggerFreePoolBench(
     };
   }
 
-  // Ensure the config dir exists (first-run case where the user never
-  // touched settings.yaml manually).
-  try {
-    mkdirSync(getConfigDir(), { recursive: true });
-  } catch {
-    /* dir already exists — fine */
-  }
-
-  // Open the log file in append mode and hand the fd to the child's
-  // stdout+stderr. The fd stays open across our return; the OS reaps
-  // it when the child exits.
-  let logFd: number;
-  try {
-    logFd = openSync(logPath, "a");
-  } catch (e) {
-    log(
-      `[llm-externalizer] free-pool auto-bench: could not open log ${logPath}: ${
-        (e as Error).message
-      }\n`,
-    );
-    return { outcome: "skipped", reason: "cannot open log file", pid: null };
-  }
-
-  let child;
-  try {
-    child = spawn(
-      process.execPath,
-      [scriptPath, "--bench-free-pool", "--min-f1", "0.5"],
-      {
-        detached: true,
-        stdio: ["ignore", logFd, logFd],
-        env: { ...env, LLM_EXT_AUTO_BENCH_REASON: `free_only_transition:${activeProfile}` },
-      },
-    );
-  } catch (e) {
-    // spawn() throws SYNCHRONOUSLY on argument/resource errors (EMFILE, ENOMEM,
-    // a bad options shape). This is a fire-and-forget optimisation launched from
-    // the reconcile pre-flight, which is contractually fail-open — a benchmark
-    // we could not start must never fail the tool the user actually ran.
-    log(
-      `[llm-externalizer] free-pool auto-bench: could not spawn: ${(e as Error).message}\n`,
-    );
-    try {
-      closeSync(logFd);
-    } catch {
-      /* already closed */
-    }
-    return { outcome: "skipped", reason: "spawn failed", pid: null };
-  }
-
-  // MANDATORY, and NOT redundant with the try/catch above: a spawn FAILURE
-  // (ENOENT on a missing benchmark.js, EACCES) is reported as an ASYNCHRONOUS
-  // 'error' event, not a throw. An 'error' event with no listener is, per Node's
-  // EventEmitter contract, re-thrown as an UNCAUGHT EXCEPTION — which would kill
-  // the whole MCP server, from a detached tick that no try/catch anywhere can
-  // reach. The fail-open contract dies with it. Swallowing to a log is the entire
-  // point: the bench is best-effort, the server is not.
-  child.on("error", (e: Error) => {
-    log(`[llm-externalizer] free-pool auto-bench: child failed to start: ${e.message}\n`);
+  const spawned = spawnDetachedBench({
+    lockPath,
+    logPath,
+    scriptPath,
+    args: ["--bench-free-pool", "--min-f1", "0.5"],
+    env,
+    reason: `free_only_transition:${activeProfile}`,
+    log,
   });
-
-  // Detach so the bench survives MCP server shutdown.
-  child.unref();
-
-  // Best-effort PID record. If the write fails (e.g. read-only FS) we
-  // still log + return — the bench is already running.
-  try {
-    writeFileSync(lockPath, String(child.pid ?? ""), "utf-8");
-  } catch {
-    /* lock unwritable — duplicate-spawn detection silently degrades */
+  if (!spawned.ok) {
+    log(`[llm-externalizer] free-pool auto-bench: ${spawned.reason}.\n`);
+    return { outcome: "skipped", reason: spawned.reason, pid: null };
   }
 
   log(
-    `[llm-externalizer] free_only transition for profile '${activeProfile}' + no :free entries in cache → spawned auto-bench (pid ${child.pid}). Log: ${logPath}\n`,
+    `[llm-externalizer] free_only transition for profile '${activeProfile}' + no :free entries in cache → spawned auto-bench (pid ${spawned.pid}). Log: ${logPath}\n`,
   );
 
-  return { outcome: "spawned", reason: null, pid: child.pid ?? null };
+  return { outcome: "spawned", reason: null, pid: spawned.pid };
 }

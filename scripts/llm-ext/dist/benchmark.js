@@ -16004,7 +16004,7 @@ ${lanes.join("\n")}
               return process.memoryUsage().heapUsed;
             },
             getFileSize(path) {
-              const stat = statSync10(path);
+              const stat = statSync11(path);
               if (stat == null ? void 0 : stat.isFile()) {
                 return stat.size;
               }
@@ -16048,7 +16048,7 @@ ${lanes.join("\n")}
             }
           };
           return nodeSystem;
-          function statSync10(path) {
+          function statSync11(path) {
             try {
               return _fs.statSync(path, statSyncOptions);
             } catch {
@@ -16107,7 +16107,7 @@ ${lanes.join("\n")}
               activeSession.post("Profiler.stop", (err, { profile }) => {
                 var _a;
                 if (!err) {
-                  if ((_a = statSync10(profilePath)) == null ? void 0 : _a.isDirectory()) {
+                  if ((_a = statSync11(profilePath)) == null ? void 0 : _a.isDirectory()) {
                     profilePath = _path.join(profilePath, `${(/* @__PURE__ */ new Date()).toISOString().replace(/:/g, "-")}+P${process.pid}.cpuprofile`);
                   }
                   try {
@@ -16227,7 +16227,7 @@ ${lanes.join("\n")}
                 let stat;
                 if (typeof dirent === "string" || dirent.isSymbolicLink()) {
                   const name = combinePaths(path, entry);
-                  stat = statSync10(name);
+                  stat = statSync11(name);
                   if (!stat) {
                     continue;
                   }
@@ -16251,7 +16251,7 @@ ${lanes.join("\n")}
             return matchFiles(path, extensions, excludes, includes, useCaseSensitiveFileNames2, process.cwd(), depth, getAccessibleFileSystemEntries, realpath);
           }
           function fileSystemEntryExists(path, entryKind) {
-            const stat = statSync10(path);
+            const stat = statSync11(path);
             if (!stat) {
               return false;
             }
@@ -16293,7 +16293,7 @@ ${lanes.join("\n")}
           }
           function getModifiedTime3(path) {
             var _a;
-            return (_a = statSync10(path)) == null ? void 0 : _a.mtime;
+            return (_a = statSync11(path)) == null ? void 0 : _a.mtime;
           }
           function setModifiedTime(path, time) {
             try {
@@ -218107,7 +218107,7 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 });
 
 // src/benchmark/index.ts
-import { mkdirSync as mkdirSync16, writeFileSync as writeFileSync17, existsSync as existsSync20 } from "node:fs";
+import { mkdirSync as mkdirSync16, writeFileSync as writeFileSync17, existsSync as existsSync21 } from "node:fs";
 import { dirname as dirname8, join as join25 } from "node:path";
 import { fileURLToPath as fileURLToPath7, pathToFileURL } from "node:url";
 
@@ -229929,19 +229929,20 @@ function poolFingerprint(pool) {
 }
 
 // src/model-reconcile.ts
-import { mkdirSync as mkdirSync15, readFileSync as readFileSync24, renameSync as renameSync11, writeFileSync as writeFileSync16 } from "node:fs";
+import { mkdirSync as mkdirSync15, readFileSync as readFileSync25, renameSync as renameSync11, writeFileSync as writeFileSync16 } from "node:fs";
 import { join as join24 } from "node:path";
 
 // src/free-pool-auto-bench.ts
-import {
-  closeSync,
-  existsSync as existsSync19,
-  mkdirSync as mkdirSync14,
-  openSync,
-  readFileSync as readFileSync23,
-  writeFileSync as writeFileSync15
-} from "node:fs";
-import { dirname as dirname7, join as join23, resolve as pathResolve } from "node:path";
+import { readFileSync as readFileSync24 } from "node:fs";
+import { join as join23 } from "node:path";
+
+// src/bench-lock.ts
+import { existsSync as existsSync19, openSync, closeSync, readFileSync as readFileSync23, statSync as statSync10, unlinkSync as unlinkSync2, writeFileSync as writeFileSync15 } from "node:fs";
+var BENCH_LOCK_TTL_MS = 2 * 60 * 6e4;
+
+// src/bench-spawn.ts
+import { closeSync as closeSync2, existsSync as existsSync20, mkdirSync as mkdirSync14, openSync as openSync2 } from "node:fs";
+import { dirname as dirname7, resolve as pathResolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 
@@ -230417,7 +230418,7 @@ function resolveFixturesDir() {
     join25(here, "..", "..", "src", "benchmark", "fixtures")
   ];
   for (const c of candidates) {
-    if (existsSync20(join25(c, "file-01.ts"))) return c;
+    if (existsSync21(join25(c, "file-01.ts"))) return c;
   }
   throw new Error(`Could not locate benchmark fixtures. Tried:
   ${candidates.join("\n  ")}`);
@@ -230483,6 +230484,11 @@ function refuseUnsafeUpdateAll(opts) {
 }
 async function main() {
   const opts = parseArgs(process.argv);
+  const autoBenchReason = process.env.LLM_EXT_AUTO_BENCH_REASON;
+  if (autoBenchReason) {
+    process.stderr.write(`[llm-externalizer] benchmark started automatically \u2014 reason: ${autoBenchReason}
+`);
+  }
   setPaidBenchmarksAllowed(opts.allowPaidModelsTests);
   validateCombinations(opts);
   const refusal = refuseUnsafeUpdateAll(opts);

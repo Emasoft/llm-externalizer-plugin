@@ -27,11 +27,10 @@
  * tool the user actually ran.
  */
 
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve as pathResolve } from "node:path";
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { getConfigDir, type DefaultProfileName } from "./config.js";
+import { benchLockIsHeld } from "./bench-lock.js";
+import { resolveBenchmarkScriptPath, spawnDetachedBench } from "./bench-spawn.js";
 
 const DISABLE_ENV = "LLM_EXT_DISABLE_DEFAULT_PROFILE_POPULATION";
 
@@ -40,57 +39,35 @@ const PAID_PROFILES: ReadonlySet<string> = new Set(["paid", "paid-ensemble", "pa
 
 export type PopulationOutcome =
   /** A detached benchmark is now running; the caller may proceed (free) or report (paid). */
-  | { kind: "spawned"; profile: DefaultProfileName; pid: number | null; blocksCaller: boolean }
+  | {
+      kind: "spawned";
+      profile: DefaultProfileName;
+      pid: number | null;
+      blocksCaller: boolean;
+      /**
+       * Where the child is writing. Carried on the outcome rather than
+       * re-derived by the message sites: defaultProfileLogPath() calls
+       * getConfigDir(), which THROWS on a config dir outside the allowlist, and
+       * a message-rendering path is the last place that may throw.
+       */
+      logPath: string;
+    }
   /** Nothing was started, and nothing needed to be. */
   | { kind: "skipped"; profile: DefaultProfileName; reason: string }
   /** Deliberately not started; `remedy` is the exact command the user can run. */
   | { kind: "refused"; profile: DefaultProfileName; reason: string; remedy: string };
-
-/**
- * Locate the bundled benchmark entrypoint. Mirrors
- * free-pool-auto-bench.resolveBenchmarkScriptPath: when esbuild-bundled every
- * src/* file collapses into dist/index.js and benchmark.js sits beside it;
- * when running from compiled src/ (tests) we still want dist/benchmark.js so
- * the child boots the exact code path a user would.
- */
-export function resolveBenchmarkScriptPath(): string {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const bundled = pathResolve(here, "benchmark.js");
-  if (existsSync(bundled)) return bundled;
-  return pathResolve(here, "..", "dist", "benchmark.js");
-}
 
 function lockPathFor(profile: DefaultProfileName): string {
   return join(getConfigDir(), `default-profile-${profile}.lock`);
 }
 
 /** Where a population child's stdout/stderr lands — surfaced to the user when a
- *  paid population blocks their command, so "wait ~15 min" is checkable. */
+ *  paid population blocks their command, so "wait ~15 min" is checkable.
+ *  Throws if the config dir is outside the allowlist (see getConfigDir), which
+ *  is why the spawned outcome CARRIES its resolved path instead of calling this
+ *  again from a message-rendering path. */
 export function defaultProfileLogPath(profile: DefaultProfileName): string {
   return join(getConfigDir(), `default-profile-${profile}.log`);
-}
-
-/**
- * True iff the lock holds a still-running PID. A stale lock (process gone)
- * reads as unlocked, so a crashed benchmark cannot wedge a profile forever —
- * which for `free` would mean permanently running on the seed pool.
- */
-function lockHoldsLivePid(lockPath: string): boolean {
-  if (!existsSync(lockPath)) return false;
-  try {
-    const pid = parseInt(readFileSync(lockPath, "utf-8").trim(), 10);
-    if (!Number.isInteger(pid) || pid <= 0) return false;
-    try {
-      // Signal 0 does not kill — it only asks whether the pid exists.
-      process.kill(pid, 0);
-      return true;
-    } catch (e) {
-      // EPERM means alive but owned by another user; only ESRCH means gone.
-      return (e as NodeJS.ErrnoException).code === "EPERM";
-    }
-  } catch {
-    return false;
-  }
 }
 
 export interface PopulateOpts {
@@ -118,8 +95,6 @@ export function populateDefaultProfile(opts: PopulateOpts): PopulationOutcome {
     allowPaidModels,
     log,
     budgetUsd,
-    lockPath = lockPathFor(opts.profile),
-    logPath = defaultProfileLogPath(opts.profile),
     scriptPath = resolveBenchmarkScriptPath(),
     env = process.env,
   } = opts;
@@ -138,10 +113,33 @@ export function populateDefaultProfile(opts: PopulateOpts): PopulationOutcome {
     return { kind: "skipped", profile, reason: `disabled via ${DISABLE_ENV}` };
   }
 
+  // Resolve the paths HERE, not as destructuring defaults. Two reasons, and the
+  // second one shipped as a real defect:
+  //
+  //   FAIL-OPEN — lockPathFor/defaultProfileLogPath call getConfigDir(), which
+  //   THROWS when the config dir is outside its allowlist. As default parameters
+  //   they were evaluated eagerly, on entry, so this function — documented
+  //   "Never throws" and awaited from maybeEnsureDefaultProfileReady inside
+  //   dispatchCallTool, which has no try/catch — could kill the user's tool call
+  //   over a benchmark that is meant to be invisible.
+  //
+  //   ORDER — they also ran before the DISABLE_ENV opt-out, so a user who had
+  //   explicitly turned population OFF still paid for (and could still be thrown
+  //   by) a config-dir resolve.
+  let lockPath: string;
+  let logPath: string;
+  try {
+    lockPath = opts.lockPath ?? lockPathFor(profile);
+    logPath = opts.logPath ?? defaultProfileLogPath(profile);
+  } catch (e) {
+    return { kind: "skipped", profile, reason: `config dir unusable: ${(e as Error).message}` };
+  }
+
   // Checked BEFORE the paid gate: if a benchmark is already running there is
   // nothing to refuse and nothing to advise — saying "run this command" while
-  // that very command is mid-flight would just get it run twice.
-  if (lockHoldsLivePid(lockPath)) {
+  // that very command is mid-flight would just get it run twice. Same predicate
+  // spawnDetachedBench's atomic claim uses; this only buys the clearer message.
+  if (benchLockIsHeld(lockPath)) {
     return { kind: "skipped", profile, reason: "a population run is already in progress" };
   }
 
@@ -156,24 +154,7 @@ export function populateDefaultProfile(opts: PopulateOpts): PopulationOutcome {
     };
   }
 
-  try {
-    mkdirSync(getConfigDir(), { recursive: true });
-  } catch {
-    /* already exists */
-  }
-
-  let logFd: number;
-  try {
-    logFd = openSync(logPath, "a");
-  } catch (e) {
-    return {
-      kind: "skipped",
-      profile,
-      reason: `cannot open log ${logPath}: ${(e as Error).message}`,
-    };
-  }
-
-  const argv = [scriptPath, "--populate-default-profile", profile];
+  const args = ["--populate-default-profile", profile];
   if (isPaid) {
     // WITHOUT this the child dies in seconds at assertPaidBenchmarkAllowed's
     // per-run opt-in check, banks a failure cooldown, and retries forever on
@@ -185,41 +166,24 @@ export function populateDefaultProfile(opts: PopulateOpts): PopulationOutcome {
     // carries the authorization the user already gave across the process
     // boundary — the flag exists to stop an UNATTENDED spend nobody asked for,
     // and this spend is exactly the one they asked for.
-    argv.push("--allow-paid-models-tests");
-    if (budgetUsd !== undefined) argv.push("--budget-usd", String(budgetUsd));
+    args.push("--allow-paid-models-tests");
+    if (budgetUsd !== undefined) args.push("--budget-usd", String(budgetUsd));
   }
 
-  let child;
-  try {
-    child = spawn(process.execPath, argv, {
-      detached: true,
-      stdio: ["ignore", logFd, logFd],
-      env: { ...env, LLM_EXT_AUTO_BENCH_REASON: `default-profile-population:${profile}` },
-    });
-  } catch (e) {
-    // spawn() throws SYNCHRONOUSLY on argument/resource errors (EMFILE, ENOMEM).
-    try { closeSync(logFd); } catch { /* already closed */ }
-    return { kind: "skipped", profile, reason: `spawn failed: ${(e as Error).message}` };
-  }
-
-  // MANDATORY, and not redundant with the try/catch: a spawn FAILURE (ENOENT on
-  // a missing benchmark.js, EACCES) arrives as an ASYNCHRONOUS 'error' event.
-  // Per Node's EventEmitter contract an 'error' with no listener is re-thrown as
-  // an UNCAUGHT EXCEPTION — from a detached tick no try/catch can reach — which
-  // would kill the whole process. Population is best-effort; the process is not.
-  child.on("error", (e: Error) => {
-    log(`[llm-externalizer] default-profile population (${profile}) failed to start: ${e.message}\n`);
+  const spawned = spawnDetachedBench({
+    lockPath,
+    logPath,
+    scriptPath,
+    args,
+    env,
+    reason: `default-profile-population:${profile}`,
+    log,
   });
-
-  child.unref();
-
-  try {
-    writeFileSync(lockPath, String(child.pid ?? ""), "utf-8");
-  } catch {
-    /* lock unwritable — duplicate-spawn detection degrades, population still runs */
+  if (!spawned.ok) {
+    return { kind: "skipped", profile, reason: spawned.reason };
   }
 
-  return { kind: "spawned", profile, pid: child.pid ?? null, blocksCaller: isPaid };
+  return { kind: "spawned", profile, pid: spawned.pid, blocksCaller: isPaid, logPath };
 }
 
 /**
@@ -233,7 +197,7 @@ export function describeOutcome(outcome: PopulationOutcome): string | null {
       return `[llm-externalizer] ${outcome.reason}.\n  Run: ${outcome.remedy}\n  Or set allow_paid_models: true in settings.yaml to let it populate on first use.\n`;
     case "spawned":
       return outcome.blocksCaller
-        ? `[llm-externalizer] '${outcome.profile}' is being benchmarked now (~15 min). Re-run this command when it finishes; progress: ${defaultProfileLogPath(outcome.profile)}\n`
+        ? `[llm-externalizer] '${outcome.profile}' is being benchmarked now (~15 min). Re-run this command when it finishes; progress: ${outcome.logPath}\n`
         : null;
     case "skipped":
       return null;

@@ -279,6 +279,16 @@ function refuseUnsafeUpdateAll(opts: CliOptions): CliResult | null {
 
 async function main(): Promise<CliResult> {
   const opts = parseArgs(process.argv);
+  // Say WHY this process exists, first line of its log. When a bench child is
+  // auto-spawned (free-pool transition, model reconcile, default-profile
+  // population) the parent exports LLM_EXT_AUTO_BENCH_REASON, and this is the
+  // only place it is ever read back: without it the log shows a benchmark
+  // nobody can attribute, and three call sites were computing a reason that
+  // reached no reader at all.
+  const autoBenchReason = process.env.LLM_EXT_AUTO_BENCH_REASON;
+  if (autoBenchReason) {
+    process.stderr.write(`[llm-externalizer] benchmark started automatically — reason: ${autoBenchReason}\n`);
+  }
   // Publish the paid-benchmark opt-in for the whole process, so every phase's
   // assertPaidBenchmarkAllowed chokepoint sees it (USER cost-safety directive).
   setPaidBenchmarksAllowed(opts.allowPaidModelsTests);

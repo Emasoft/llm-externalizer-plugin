@@ -86,6 +86,10 @@ export default defineConfig({
       'src/model-reconcile.test.ts',
       // Free-pool auto-bench trigger — fire-and-forget detached child (TRDD-f1510055).
       'src/free-pool-auto-bench.test.ts',
+      // The shared duplicate-spawn lock. Tests the three staleness axes that make
+      // a permanent wedge impossible — a latched lock silently freezes the 5
+      // machine-managed default profiles on a stale model set.
+      'src/bench-lock.test.ts',
       // Auto-free on low balance (<$1) — threshold/model/pool helpers (TRDD-542bdbef).
       'src/auto-free.test.ts',
       // Provider-error sanitizer — strips user_id + JSON noise from logs/reports (TRDD-54f508a4).

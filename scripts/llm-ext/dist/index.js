@@ -16008,7 +16008,7 @@ ${lanes.join("\n")}
               return process.memoryUsage().heapUsed;
             },
             getFileSize(path) {
-              const stat = statSync15(path);
+              const stat = statSync16(path);
               if (stat == null ? void 0 : stat.isFile()) {
                 return stat.size;
               }
@@ -16052,7 +16052,7 @@ ${lanes.join("\n")}
             }
           };
           return nodeSystem;
-          function statSync15(path) {
+          function statSync16(path) {
             try {
               return _fs.statSync(path, statSyncOptions);
             } catch {
@@ -16111,7 +16111,7 @@ ${lanes.join("\n")}
               activeSession.post("Profiler.stop", (err3, { profile }) => {
                 var _a2;
                 if (!err3) {
-                  if ((_a2 = statSync15(profilePath)) == null ? void 0 : _a2.isDirectory()) {
+                  if ((_a2 = statSync16(profilePath)) == null ? void 0 : _a2.isDirectory()) {
                     profilePath = _path.join(profilePath, `${(/* @__PURE__ */ new Date()).toISOString().replace(/:/g, "-")}+P${process.pid}.cpuprofile`);
                   }
                   try {
@@ -16231,7 +16231,7 @@ ${lanes.join("\n")}
                 let stat;
                 if (typeof dirent === "string" || dirent.isSymbolicLink()) {
                   const name = combinePaths(path, entry);
-                  stat = statSync15(name);
+                  stat = statSync16(name);
                   if (!stat) {
                     continue;
                   }
@@ -16255,7 +16255,7 @@ ${lanes.join("\n")}
             return matchFiles(path, extensions, excludes, includes, useCaseSensitiveFileNames2, process.cwd(), depth, getAccessibleFileSystemEntries, realpath);
           }
           function fileSystemEntryExists(path, entryKind) {
-            const stat = statSync15(path);
+            const stat = statSync16(path);
             if (!stat) {
               return false;
             }
@@ -16297,7 +16297,7 @@ ${lanes.join("\n")}
           }
           function getModifiedTime3(path) {
             var _a2;
-            return (_a2 = statSync15(path)) == null ? void 0 : _a2.mtime;
+            return (_a2 = statSync16(path)) == null ? void 0 : _a2.mtime;
           }
           function setModifiedTime(path, time3) {
             try {
@@ -218113,17 +218113,17 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 // src/index.ts
 import {
   readFileSync as readFileSync33,
-  writeFileSync as writeFileSync25,
-  mkdirSync as mkdirSync26,
+  writeFileSync as writeFileSync24,
+  mkdirSync as mkdirSync25,
   existsSync as existsSync27,
   renameSync as renameSync16,
-  statSync as statSync14,
+  statSync as statSync15,
   appendFileSync as appendFileSync6,
-  unlinkSync as unlinkSync3
+  unlinkSync as unlinkSync4
 } from "node:fs";
 import { spawnSync as spawnSync4 } from "node:child_process";
 import { createInterface as createInterface3 } from "node:readline/promises";
-import { extname as extname5, join as join34, basename as basename6, dirname as dirname15, resolve as resolve18, isAbsolute as isAbsolute5 } from "node:path";
+import { extname as extname5, join as join34, basename as basename6, dirname as dirname14, resolve as resolve18, isAbsolute as isAbsolute5 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 
 // src/review-plan.ts
@@ -251235,7 +251235,6 @@ function buildEarlyAbort(invocation, errors, warnings, profileName, tStart) {
 import { createHash as createHash8 } from "node:crypto";
 import { mkdirSync as mkdirSync20, readFileSync as readFileSync26, writeFileSync as writeFileSync18, existsSync as existsSync21, renameSync as renameSync11 } from "node:fs";
 import { join as join27, dirname as dirname10 } from "node:path";
-import { homedir as homedir3 } from "node:os";
 var DEFAULT_PREFLIGHT_PROMPT = `You are given 3 short sentences with numeric ids. Group sentences that have IDENTICAL or NEARLY-IDENTICAL overall meaning (full-sentence meaning equivalence, NOT word-by-word synonym matching).
 
 Output: a JSON object {"groups": [[id, id, ...], [id], ...]}.
@@ -251252,7 +251251,7 @@ function profileHash(profileFingerprint) {
   return createHash8("sha256").update(profileFingerprint).digest("hex").slice(0, 16);
 }
 function defaultCacheDir() {
-  return join27(homedir3(), ".llm-externalizer", "cache");
+  return join27(getConfigDir(), "cache");
 }
 function todayLocalISO() {
   const d = /* @__PURE__ */ new Date();
@@ -253924,7 +253923,7 @@ async function selectModels(options = {}) {
 
 // src/session-summary-resolve.ts
 import { existsSync as existsSync22, readdirSync as readdirSync8, statSync as statSync13 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
+import { homedir as homedir3 } from "node:os";
 import { join as join28, resolve as resolve16 } from "node:path";
 import { createHash as createHash10 } from "node:crypto";
 function projectSlug(absProjectRoot) {
@@ -253939,7 +253938,7 @@ function resolveTranscriptPath(options = {}) {
     return p;
   }
   const projectRoot = resolve16(options.projectRoot ?? resolveProjectMainRoot());
-  const claudeProjectsDir = options.claudeProjectsDir ?? join28(homedir4(), ".claude", "projects");
+  const claudeProjectsDir = options.claudeProjectsDir ?? join28(homedir3(), ".claude", "projects");
   const slug = projectSlug(projectRoot);
   const sessionDir = join28(claudeProjectsDir, slug);
   if (options.sessionId) {
@@ -255057,7 +255056,7 @@ import {
   unlinkSync
 } from "node:fs";
 import { randomBytes as randomBytes3 } from "node:crypto";
-import { homedir as homedir5, tmpdir } from "node:os";
+import { homedir as homedir4, tmpdir } from "node:os";
 import { dirname as dirname12, join as join29, resolve as resolve17, sep as sep2 } from "node:path";
 import { fileURLToPath as fileURLToPath7 } from "node:url";
 var RULE_FILENAME = "use-llm-externalizer.md";
@@ -255079,7 +255078,7 @@ function resolveBundledRulePath() {
 }
 function resolveClaudeRulesDir() {
   const cfg = process.env.CLAUDE_CONFIG_DIR;
-  const base = cfg && cfg.length > 0 ? resolve17(cfg) : join29(homedir5(), ".claude");
+  const base = cfg && cfg.length > 0 ? resolve17(cfg) : join29(homedir4(), ".claude");
   return join29(base, "rules");
 }
 function canonical(p) {
@@ -255095,9 +255094,9 @@ function underAllowedRoot(dir) {
   const d = canonical(dir);
   const roots = [];
   try {
-    roots.push(realpathSync4(homedir5()));
+    roots.push(realpathSync4(homedir4()));
   } catch {
-    roots.push(homedir5());
+    roots.push(homedir4());
   }
   if (process.env.CLAUDE_CONFIG_DIR && process.env.CLAUDE_CONFIG_DIR.length > 0) {
     roots.push(canonical(resolve17(process.env.CLAUDE_CONFIG_DIR)));
@@ -255291,56 +255290,153 @@ function buildProfileForService(service, existingProfileNames) {
 }
 
 // src/model-reconcile.ts
-import { mkdirSync as mkdirSync24, readFileSync as readFileSync30, renameSync as renameSync14, writeFileSync as writeFileSync22 } from "node:fs";
+import { mkdirSync as mkdirSync24, readFileSync as readFileSync31, renameSync as renameSync14, writeFileSync as writeFileSync22 } from "node:fs";
 import { join as join31 } from "node:path";
 
 // src/free-pool-auto-bench.ts
-import {
-  closeSync,
-  existsSync as existsSync24,
-  mkdirSync as mkdirSync23,
-  openSync,
-  readFileSync as readFileSync29,
-  writeFileSync as writeFileSync21
-} from "node:fs";
-import { dirname as dirname13, join as join30, resolve as pathResolve } from "node:path";
-import { spawn } from "node:child_process";
-import { fileURLToPath as fileURLToPath8 } from "node:url";
-var benchCachePath = () => join30(getConfigDir(), "benchmark-results.json");
-var benchLockPath = () => join30(getConfigDir(), "free-pool-bench.lock");
-var benchLogPath = () => join30(getConfigDir(), "free-pool-bench.log");
-var DISABLE_ENV = "LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH";
-function resolveBenchmarkScriptPath() {
-  const here = dirname13(fileURLToPath8(import.meta.url));
-  const bundled = pathResolve(here, "benchmark.js");
-  if (existsSync24(bundled)) return bundled;
-  const fromSrc = pathResolve(here, "..", "dist", "benchmark.js");
-  return fromSrc;
-}
-function benchCacheHasFreeEntries(cachePath6 = benchCachePath()) {
-  try {
-    const raw = readFileSync29(cachePath6, "utf-8");
-    const data = JSON.parse(raw);
-    if (!Array.isArray(data?.results)) return false;
-    return data.results.some(
-      (r) => typeof r?.modelId === "string" && r.modelId.endsWith(":free")
-    );
-  } catch {
-    return false;
-  }
-}
-function lockHoldsLivePid(lockPath = benchLockPath()) {
+import { readFileSync as readFileSync30 } from "node:fs";
+import { join as join30 } from "node:path";
+
+// src/bench-lock.ts
+import { existsSync as existsSync24, openSync, closeSync, readFileSync as readFileSync29, statSync as statSync14, unlinkSync as unlinkSync2, writeFileSync as writeFileSync21 } from "node:fs";
+var BENCH_LOCK_TTL_MS = 2 * 60 * 6e4;
+function benchLockIsHeld(lockPath, nowMs = Date.now()) {
   if (!existsSync24(lockPath)) return false;
   try {
+    if (nowMs - statSync14(lockPath).mtimeMs > BENCH_LOCK_TTL_MS) return false;
     const pid = parseInt(readFileSync29(lockPath, "utf-8").trim(), 10);
     if (!Number.isInteger(pid) || pid <= 0) return false;
     try {
       process.kill(pid, 0);
       return true;
     } catch (e) {
-      if (e.code === "EPERM") return true;
+      void e;
       return false;
     }
+  } catch {
+    return false;
+  }
+}
+function claimBenchLock(lockPath, nowMs = Date.now()) {
+  const tryCreate = () => {
+    try {
+      const fd = openSync(lockPath, "wx");
+      try {
+        writeFileSync21(fd, String(process.pid), "utf-8");
+      } finally {
+        closeSync(fd);
+      }
+      return { ok: true };
+    } catch (e) {
+      if (e.code === "EEXIST") return null;
+      return { ok: false, reason: "unwritable", detail: e.message };
+    }
+  };
+  const first = tryCreate();
+  if (first !== null) return first;
+  if (benchLockIsHeld(lockPath, nowMs)) {
+    return { ok: false, reason: "held", detail: lockPath };
+  }
+  try {
+    unlinkSync2(lockPath);
+  } catch {
+  }
+  const second = tryCreate();
+  if (second !== null) return second;
+  return { ok: false, reason: "held", detail: lockPath };
+}
+function commitBenchLock(lockPath, pid) {
+  try {
+    writeFileSync21(lockPath, String(pid), "utf-8");
+  } catch {
+  }
+}
+function releaseBenchLock(lockPath) {
+  try {
+    unlinkSync2(lockPath);
+  } catch {
+  }
+}
+
+// src/bench-spawn.ts
+import { closeSync as closeSync2, existsSync as existsSync25, mkdirSync as mkdirSync23, openSync as openSync2 } from "node:fs";
+import { dirname as dirname13, resolve as pathResolve } from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath as fileURLToPath8 } from "node:url";
+function resolveBenchmarkScriptPath() {
+  const here = dirname13(fileURLToPath8(import.meta.url));
+  const bundled = pathResolve(here, "benchmark.js");
+  if (existsSync25(bundled)) return bundled;
+  return pathResolve(here, "..", "dist", "benchmark.js");
+}
+function spawnDetachedBench(opts) {
+  const { lockPath, logPath, scriptPath, args, env, reason, log } = opts;
+  for (const d of /* @__PURE__ */ new Set([dirname13(logPath), dirname13(lockPath)])) {
+    try {
+      mkdirSync23(d, { recursive: true });
+    } catch {
+    }
+  }
+  const claim = claimBenchLock(lockPath);
+  if (!claim.ok) {
+    return {
+      ok: false,
+      reason: claim.reason === "held" ? "a run is already in progress" : `cannot write lock ${lockPath}: ${claim.detail}`
+    };
+  }
+  let logFd;
+  try {
+    logFd = openSync2(logPath, "a");
+  } catch (e) {
+    releaseBenchLock(lockPath);
+    return { ok: false, reason: `cannot open log ${logPath}: ${e.message}` };
+  }
+  let child;
+  try {
+    child = spawn(process.execPath, [scriptPath, ...args], {
+      detached: true,
+      stdio: ["ignore", logFd, logFd],
+      env: { ...env, LLM_EXT_AUTO_BENCH_REASON: env.LLM_EXT_AUTO_BENCH_REASON ?? reason }
+    });
+  } catch (e) {
+    try {
+      closeSync2(logFd);
+    } catch {
+    }
+    releaseBenchLock(lockPath);
+    return { ok: false, reason: `spawn failed: ${e.message}` };
+  }
+  child.on("error", (e) => {
+    log(`[llm-externalizer] detached bench failed to start: ${e.message}
+`);
+    releaseBenchLock(lockPath);
+  });
+  child.unref();
+  try {
+    closeSync2(logFd);
+  } catch {
+  }
+  if (typeof child.pid === "number") {
+    commitBenchLock(lockPath, child.pid);
+  } else {
+    releaseBenchLock(lockPath);
+  }
+  return { ok: true, pid: child.pid ?? null };
+}
+
+// src/free-pool-auto-bench.ts
+var BENCH_CACHE_FILE = "benchmark-results.json";
+var BENCH_LOCK_FILE = "free-pool-bench.lock";
+var BENCH_LOG_FILE = "free-pool-bench.log";
+var DISABLE_ENV = "LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH";
+function benchCacheHasFreeEntries(cachePath6) {
+  try {
+    const raw = readFileSync30(cachePath6, "utf-8");
+    const data = JSON.parse(raw);
+    if (!Array.isArray(data?.results)) return false;
+    return data.results.some(
+      (r) => typeof r?.modelId === "string" && r.modelId.endsWith(":free")
+    );
   } catch {
     return false;
   }
@@ -255351,9 +255447,6 @@ function maybeTriggerFreePoolBench(opts) {
     freeOnlyActive,
     freeOnlyWasOn,
     log,
-    cachePath: cachePath6 = benchCachePath(),
-    lockPath = benchLockPath(),
-    logPath = benchLogPath(),
     scriptPath = resolveBenchmarkScriptPath(),
     env = process.env,
     force = false
@@ -255368,6 +255461,22 @@ function maybeTriggerFreePoolBench(opts) {
     );
     return { outcome: "skipped", reason: "disabled via env", pid: null };
   }
+  const needsConfigDir = opts.cachePath === void 0 || opts.lockPath === void 0 || opts.logPath === void 0;
+  let configDir = "";
+  if (needsConfigDir) {
+    try {
+      configDir = getConfigDir();
+    } catch (e) {
+      log(
+        `[llm-externalizer] free-pool auto-bench: config dir unusable: ${e.message}
+`
+      );
+      return { outcome: "skipped", reason: "config dir unavailable", pid: null };
+    }
+  }
+  const cachePath6 = opts.cachePath ?? join30(configDir, BENCH_CACHE_FILE);
+  const lockPath = opts.lockPath ?? join30(configDir, BENCH_LOCK_FILE);
+  const logPath = opts.logPath ?? join30(configDir, BENCH_LOG_FILE);
   if (!force && benchCacheHasFreeEntries(cachePath6)) {
     return {
       outcome: "skipped",
@@ -255375,7 +255484,7 @@ function maybeTriggerFreePoolBench(opts) {
       pid: null
     };
   }
-  if (lockHoldsLivePid(lockPath)) {
+  if (benchLockIsHeld(lockPath)) {
     log(
       `[llm-externalizer] free-pool auto-bench: another run is already in progress (see ${lockPath}).
 `
@@ -255393,56 +255502,25 @@ function maybeTriggerFreePoolBench(opts) {
       pid: null
     };
   }
-  try {
-    mkdirSync23(getConfigDir(), { recursive: true });
-  } catch {
-  }
-  let logFd;
-  try {
-    logFd = openSync(logPath, "a");
-  } catch (e) {
-    log(
-      `[llm-externalizer] free-pool auto-bench: could not open log ${logPath}: ${e.message}
-`
-    );
-    return { outcome: "skipped", reason: "cannot open log file", pid: null };
-  }
-  let child;
-  try {
-    child = spawn(
-      process.execPath,
-      [scriptPath, "--bench-free-pool", "--min-f1", "0.5"],
-      {
-        detached: true,
-        stdio: ["ignore", logFd, logFd],
-        env: { ...env, LLM_EXT_AUTO_BENCH_REASON: `free_only_transition:${activeProfile}` }
-      }
-    );
-  } catch (e) {
-    log(
-      `[llm-externalizer] free-pool auto-bench: could not spawn: ${e.message}
-`
-    );
-    try {
-      closeSync(logFd);
-    } catch {
-    }
-    return { outcome: "skipped", reason: "spawn failed", pid: null };
-  }
-  child.on("error", (e) => {
-    log(`[llm-externalizer] free-pool auto-bench: child failed to start: ${e.message}
-`);
+  const spawned = spawnDetachedBench({
+    lockPath,
+    logPath,
+    scriptPath,
+    args: ["--bench-free-pool", "--min-f1", "0.5"],
+    env,
+    reason: `free_only_transition:${activeProfile}`,
+    log
   });
-  child.unref();
-  try {
-    writeFileSync21(lockPath, String(child.pid ?? ""), "utf-8");
-  } catch {
+  if (!spawned.ok) {
+    log(`[llm-externalizer] free-pool auto-bench: ${spawned.reason}.
+`);
+    return { outcome: "skipped", reason: spawned.reason, pid: null };
   }
   log(
-    `[llm-externalizer] free_only transition for profile '${activeProfile}' + no :free entries in cache \u2192 spawned auto-bench (pid ${child.pid}). Log: ${logPath}
+    `[llm-externalizer] free_only transition for profile '${activeProfile}' + no :free entries in cache \u2192 spawned auto-bench (pid ${spawned.pid}). Log: ${logPath}
 `
   );
-  return { outcome: "spawned", reason: null, pid: child.pid ?? null };
+  return { outcome: "spawned", reason: null, pid: spawned.pid };
 }
 
 // src/model-reconcile.ts
@@ -255521,7 +255599,7 @@ function reconcileStateFilePath() {
 }
 function readLastReconcileMs() {
   try {
-    const raw = readFileSync30(reconcileStateFilePath(), "utf-8");
+    const raw = readFileSync31(reconcileStateFilePath(), "utf-8");
     const parsed = JSON.parse(raw);
     return typeof parsed.lastRunMs === "number" && Number.isFinite(parsed.lastRunMs) ? parsed.lastRunMs : null;
   } catch {
@@ -255671,16 +255749,16 @@ async function ensureDefaultProfileReady(profileName, profile, catalog, settings
 }
 
 // src/default-profiles-state.ts
-import { existsSync as existsSync25, readFileSync as readFileSync31, writeFileSync as writeFileSync23, renameSync as renameSync15, chmodSync as chmodSync2, unlinkSync as unlinkSync2 } from "node:fs";
+import { existsSync as existsSync26, readFileSync as readFileSync32, writeFileSync as writeFileSync23, renameSync as renameSync15, chmodSync as chmodSync2, unlinkSync as unlinkSync3 } from "node:fs";
 import { join as join32 } from "node:path";
 function defaultProfilesStatePath() {
   return join32(getConfigDir(), "default-profiles-state.json");
 }
 function readDefaultProfilesState() {
   const path = defaultProfilesStatePath();
-  if (!existsSync25(path)) return { version: 1, profiles: {} };
+  if (!existsSync26(path)) return { version: 1, profiles: {} };
   try {
-    const parsed = JSON.parse(readFileSync31(path, "utf-8"));
+    const parsed = JSON.parse(readFileSync32(path, "utf-8"));
     if (typeof parsed !== "object" || parsed === null) return { version: 1, profiles: {} };
     const state = parsed;
     if (state.version !== 1 || typeof state.profiles !== "object" || state.profiles === null) {
@@ -255697,38 +255775,14 @@ function getProfileRecord(name) {
 var BACKOFF_MS = [15 * 6e4, 60 * 6e4, 4 * 60 * 6e4, 24 * 60 * 6e4];
 
 // src/default-profiles-runner.ts
-import { closeSync as closeSync2, existsSync as existsSync26, mkdirSync as mkdirSync25, openSync as openSync2, readFileSync as readFileSync32, writeFileSync as writeFileSync24 } from "node:fs";
-import { dirname as dirname14, join as join33, resolve as pathResolve2 } from "node:path";
-import { spawn as spawn2 } from "node:child_process";
-import { fileURLToPath as fileURLToPath9 } from "node:url";
+import { join as join33 } from "node:path";
 var DISABLE_ENV2 = "LLM_EXT_DISABLE_DEFAULT_PROFILE_POPULATION";
 var PAID_PROFILES = /* @__PURE__ */ new Set(["paid", "paid-ensemble", "paid-mass-scout"]);
-function resolveBenchmarkScriptPath2() {
-  const here = dirname14(fileURLToPath9(import.meta.url));
-  const bundled = pathResolve2(here, "benchmark.js");
-  if (existsSync26(bundled)) return bundled;
-  return pathResolve2(here, "..", "dist", "benchmark.js");
-}
 function lockPathFor(profile) {
   return join33(getConfigDir(), `default-profile-${profile}.lock`);
 }
 function defaultProfileLogPath(profile) {
   return join33(getConfigDir(), `default-profile-${profile}.log`);
-}
-function lockHoldsLivePid2(lockPath) {
-  if (!existsSync26(lockPath)) return false;
-  try {
-    const pid = parseInt(readFileSync32(lockPath, "utf-8").trim(), 10);
-    if (!Number.isInteger(pid) || pid <= 0) return false;
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch (e) {
-      return e.code === "EPERM";
-    }
-  } catch {
-    return false;
-  }
 }
 function populateDefaultProfile(opts) {
   const {
@@ -255736,9 +255790,7 @@ function populateDefaultProfile(opts) {
     allowPaidModels,
     log,
     budgetUsd,
-    lockPath = lockPathFor(opts.profile),
-    logPath = defaultProfileLogPath(opts.profile),
-    scriptPath = resolveBenchmarkScriptPath2(),
+    scriptPath = resolveBenchmarkScriptPath(),
     env = process.env
   } = opts;
   const isPaid = PAID_PROFILES.has(profile);
@@ -255746,7 +255798,15 @@ function populateDefaultProfile(opts) {
   if (env[DISABLE_ENV2] === "1") {
     return { kind: "skipped", profile, reason: `disabled via ${DISABLE_ENV2}` };
   }
-  if (lockHoldsLivePid2(lockPath)) {
+  let lockPath;
+  let logPath;
+  try {
+    lockPath = opts.lockPath ?? lockPathFor(profile);
+    logPath = opts.logPath ?? defaultProfileLogPath(profile);
+  } catch (e) {
+    return { kind: "skipped", profile, reason: `config dir unusable: ${e.message}` };
+  }
+  if (benchLockIsHeld(lockPath)) {
     return { kind: "skipped", profile, reason: "a population run is already in progress" };
   }
   if (isPaid && !allowPaidModels) {
@@ -255757,49 +255817,24 @@ function populateDefaultProfile(opts) {
       remedy
     };
   }
-  try {
-    mkdirSync25(getConfigDir(), { recursive: true });
-  } catch {
-  }
-  let logFd;
-  try {
-    logFd = openSync2(logPath, "a");
-  } catch (e) {
-    return {
-      kind: "skipped",
-      profile,
-      reason: `cannot open log ${logPath}: ${e.message}`
-    };
-  }
-  const argv = [scriptPath, "--populate-default-profile", profile];
+  const args = ["--populate-default-profile", profile];
   if (isPaid) {
-    argv.push("--allow-paid-models-tests");
-    if (budgetUsd !== void 0) argv.push("--budget-usd", String(budgetUsd));
+    args.push("--allow-paid-models-tests");
+    if (budgetUsd !== void 0) args.push("--budget-usd", String(budgetUsd));
   }
-  let child;
-  try {
-    child = spawn2(process.execPath, argv, {
-      detached: true,
-      stdio: ["ignore", logFd, logFd],
-      env: { ...env, LLM_EXT_AUTO_BENCH_REASON: `default-profile-population:${profile}` }
-    });
-  } catch (e) {
-    try {
-      closeSync2(logFd);
-    } catch {
-    }
-    return { kind: "skipped", profile, reason: `spawn failed: ${e.message}` };
-  }
-  child.on("error", (e) => {
-    log(`[llm-externalizer] default-profile population (${profile}) failed to start: ${e.message}
-`);
+  const spawned = spawnDetachedBench({
+    lockPath,
+    logPath,
+    scriptPath,
+    args,
+    env,
+    reason: `default-profile-population:${profile}`,
+    log
   });
-  child.unref();
-  try {
-    writeFileSync24(lockPath, String(child.pid ?? ""), "utf-8");
-  } catch {
+  if (!spawned.ok) {
+    return { kind: "skipped", profile, reason: spawned.reason };
   }
-  return { kind: "spawned", profile, pid: child.pid ?? null, blocksCaller: isPaid };
+  return { kind: "spawned", profile, pid: spawned.pid, blocksCaller: isPaid, logPath };
 }
 function describeOutcome(outcome) {
   switch (outcome.kind) {
@@ -255809,7 +255844,7 @@ function describeOutcome(outcome) {
   Or set allow_paid_models: true in settings.yaml to let it populate on first use.
 `;
     case "spawned":
-      return outcome.blocksCaller ? `[llm-externalizer] '${outcome.profile}' is being benchmarked now (~15 min). Re-run this command when it finishes; progress: ${defaultProfileLogPath(outcome.profile)}
+      return outcome.blocksCaller ? `[llm-externalizer] '${outcome.profile}' is being benchmarked now (~15 min). Re-run this command when it finishes; progress: ${outcome.logPath}
 ` : null;
     case "skipped":
       return null;
@@ -256772,7 +256807,7 @@ var LOG_FILE = join34(
 );
 function writeLogEntry(entry) {
   try {
-    mkdirSync26(LOG_DIR, { recursive: true });
+    mkdirSync25(LOG_DIR, { recursive: true });
     appendFileSync6(LOG_FILE, JSON.stringify(entry) + "\n");
   } catch {
     process.stderr.write(`[llm-externalizer] Failed to write log entry
@@ -256782,7 +256817,7 @@ function writeLogEntry(entry) {
 var STATS_FILE = "/tmp/claude/llm-externalizer-stats.json";
 function writeStatsFile() {
   try {
-    mkdirSync26("/tmp/claude", { recursive: true, mode: 448 });
+    mkdirSync25("/tmp/claude", { recursive: true, mode: 448 });
     const backend = getCurrentBackend();
     const stats = {
       session_id: SESSION_ID,
@@ -256797,7 +256832,7 @@ function writeStatsFile() {
       backend: backend.type
     };
     const tmpStats = STATS_FILE + ".tmp";
-    writeFileSync25(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
+    writeFileSync24(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 384 });
     renameSync16(tmpStats, STATS_FILE);
   } catch {
   }
@@ -256946,7 +256981,7 @@ function canonicalTimestamp(date5 = /* @__PURE__ */ new Date()) {
 }
 function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir) {
   const dir = outputDir || defaultOutputDir();
-  mkdirSync26(dir, { recursive: true });
+  mkdirSync25(dir, { recursive: true });
   const now = /* @__PURE__ */ new Date();
   const ts2 = canonicalTimestamp(now);
   const shortId = randomUUID3().slice(0, 6);
@@ -256967,11 +257002,11 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
   lines.push("", "---", "", responseText);
   const tmpPath = filepath + ".tmp";
   try {
-    writeFileSync25(tmpPath, lines.join("\n"), "utf-8");
+    writeFileSync24(tmpPath, lines.join("\n"), "utf-8");
     renameSync16(tmpPath, filepath);
   } catch (err3) {
     try {
-      unlinkSync3(tmpPath);
+      unlinkSync4(tmpPath);
     } catch {
     }
     throw new Error(
@@ -257108,7 +257143,7 @@ function resolveFolderPath(folderPath, opts) {
   if (!existsSync27(folderPath)) {
     return { files: [], error: `folder_path not found: ${folderPath}` };
   }
-  if (!statSync14(folderPath).isDirectory()) {
+  if (!statSync15(folderPath).isDirectory()) {
     return { files: [], error: `Not a directory: ${folderPath}` };
   }
   const files = walkDir(folderPath, {
@@ -257174,7 +257209,7 @@ function buildEstimateDeps() {
     },
     fileSizeBytes(path) {
       try {
-        return statSync14(path).size;
+        return statSync15(path).size;
       } catch {
         return 0;
       }
@@ -258211,7 +258246,7 @@ matched: (none \u2014 no entry's glob matches ${target})`;
           }
           const planFiles = resolved.files.map((p) => {
             try {
-              return { path: p, bytes: statSync14(p).size };
+              return { path: p, bytes: statSync15(p).size };
             } catch {
               return { path: p, bytes: 0 };
             }
@@ -258538,7 +258573,7 @@ Restart Claude Code (or call the 'reset' tool) to pick up the change.`
                 };
               }
               try {
-                writeFileSync25(absPath, jsonText, "utf-8");
+                writeFileSync24(absPath, jsonText, "utf-8");
               } catch (err3) {
                 return {
                   content: [
@@ -258607,9 +258642,9 @@ Restart Claude Code (or call the 'reset' tool) to pick up the change.`
           try {
             const raw = readFileSync33(SETTINGS_FILE, "utf-8");
             const targetDir = outputDir || defaultOutputDir();
-            mkdirSync26(targetDir, { recursive: true });
+            mkdirSync25(targetDir, { recursive: true });
             const copyPath = join34(targetDir, "settings_edit.yaml");
-            writeFileSync25(copyPath, raw, "utf-8");
+            writeFileSync24(copyPath, raw, "utf-8");
             return {
               content: [{ type: "text", text: `${summary}
 
@@ -259950,7 +259985,7 @@ FAILED: File not found.`);
                   continue;
                 }
                 const ciLang = detectLang(filePath);
-                const fileDir = dirname15(filePath);
+                const fileDir = dirname14(filePath);
                 const ciResolveBase = project_root || fileDir;
                 const extractMessages = [
                   { role: "system", content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path inside a filename tag before the file-content tag \u2014 reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.` + FILE_FORMAT_EXAMPLE },
@@ -259977,7 +260012,7 @@ ${readFileAsCodeBlock(filePath, void 0, ciRedact, ciBudgetBytes, ciRegexRedact)}
                     packageImports.push(importPath);
                     continue;
                   }
-                  let found = existsSync27(resolvedBase) && statSync14(resolvedBase).isFile();
+                  let found = existsSync27(resolvedBase) && statSync15(resolvedBase).isFile();
                   if (!found && !extname5(resolvedBase)) {
                     for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".json"]) {
                       if (existsSync27(resolvedBase + ext)) {
@@ -260029,7 +260064,7 @@ FAILED: File not found.`);
               continue;
             }
             const ciLang = detectLang(filePath);
-            const fileDir = dirname15(filePath);
+            const fileDir = dirname14(filePath);
             const ciResolveBase = project_root || fileDir;
             const extractMessages = [
               {
@@ -260077,7 +260112,7 @@ FAILED: File not found.`);
                 continue;
               }
               let found = false;
-              if (existsSync27(resolvedBase) && statSync14(resolvedBase).isFile()) {
+              if (existsSync27(resolvedBase) && statSync15(resolvedBase).isFile()) {
                 found = true;
               }
               if (!found && !extname5(resolvedBase)) {
@@ -260242,7 +260277,7 @@ FAILED: File not found.`);
             }
             return resp.content;
           };
-          const csModuleDir = dirname15(fileUrlToPath_cs(import.meta.url));
+          const csModuleDir = dirname14(fileUrlToPath_cs(import.meta.url));
           const csEmbeddingsScript = join34(csModuleDir, "..", "scripts", "compute_embeddings.py");
           const csPreflightModel = getCurrentBackend().model ?? "unknown";
           const csHooks = {

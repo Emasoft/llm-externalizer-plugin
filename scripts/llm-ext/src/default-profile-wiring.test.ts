@@ -127,14 +127,26 @@ beforeEach(() => {
     (opts: { profile: string; allowPaidModels: boolean }): PopulationOutcome =>
       opts.profile === "paid-ensemble" || opts.profile === "paid-mass-scout"
         ? opts.allowPaidModels
-          ? { kind: "spawned", profile: opts.profile as "paid-ensemble", pid: 4242, blocksCaller: true }
+          ? {
+              kind: "spawned",
+              profile: opts.profile as "paid-ensemble",
+              pid: 4242,
+              blocksCaller: true,
+              logPath: "/tmp/llm-ext-test/default-profile-paid-ensemble.log",
+            }
           : {
               kind: "refused",
               profile: opts.profile as "paid-ensemble",
               reason: `'${opts.profile}' has not been benchmarked yet, and benchmarking it sends billable requests while allow_paid_models is false`,
               remedy: `llm-ext-benchmark --populate-default-profile ${opts.profile} --budget-usd 2`,
             }
-        : { kind: "spawned", profile: "free", pid: 4242, blocksCaller: false },
+        : {
+            kind: "spawned",
+            profile: "free",
+            pid: 4242,
+            blocksCaller: false,
+            logPath: "/tmp/llm-ext-test/default-profile-free.log",
+          },
   );
   getProfileRecordMock.mockReset();
   getProfileRecordMock.mockReturnValue(undefined);

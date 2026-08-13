@@ -6,7 +6,8 @@
 // bugs in failure triage.
 //
 // Cached per-profile-per-day at:
-//   ~/.llm-externalizer/cache/benchmark-<profile-hash>-<YYYY-MM-DD>.json
+//   <getConfigDir()>/cache/benchmark-<profile-hash>-<YYYY-MM-DD>.json
+//   (i.e. ~/.llm-externalizer/cache/... unless LLM_EXT_CONFIG_DIR overrides it)
 // Same-day re-runs skip the LLM call entirely.
 //
 // The LLM call itself is injected as a callback so this module is
@@ -16,8 +17,8 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { homedir } from "node:os";
 import { z } from "zod";
+import { getConfigDir } from "../config.js";
 
 export const DEFAULT_PREFLIGHT_PROMPT = `You are given 3 short sentences with numeric ids. Group sentences that have IDENTICAL or NEARLY-IDENTICAL overall meaning (full-sentence meaning equivalence, NOT word-by-word synonym matching).
 
@@ -73,7 +74,14 @@ export function profileHash(profileFingerprint: string): string {
 }
 
 function defaultCacheDir(): string {
-  return join(homedir(), ".llm-externalizer", "cache");
+  // getConfigDir() — NOT join(homedir(), ".llm-externalizer"): the bare join
+  // ignores LLM_EXT_CONFIG_DIR (so a run pointed at a scratch/CI config dir
+  // still read and wrote the user's REAL cache) and skips getConfigDir()'s
+  // symlink resolution of the deepest existing ancestor, which is what stops
+  // mkdirSync(recursive) from being walked outside the allowed path by a
+  // planted symlink. Every preflight test injects `cacheDir`, which is exactly
+  // why this default went unnoticed.
+  return join(getConfigDir(), "cache");
 }
 
 function todayLocalISO(): string {

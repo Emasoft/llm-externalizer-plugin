@@ -171,8 +171,37 @@ describe("populateDefaultProfile — the opt-out", () => {
   });
 
   it("fails OPEN on an unopenable log path — a population that cannot start must never fail the user's actual command", () => {
-    const r = populateDefaultProfile(opts({ logPath: join(cfg, "no-such-dir", "x.log") }));
+    // The parent is a regular FILE, so neither mkdir nor open can succeed. A
+    // merely MISSING directory is not unopenable any more — the runner creates
+    // it, which is what makes a first run work — so testing with one would
+    // assert the opposite of the intended behaviour.
+    const notADir = join(cfg, "blocker");
+    writeFileSync(notADir, "not a directory\n");
+    const r = populateDefaultProfile(opts({ logPath: join(notADir, "x.log") }));
     expect(r.kind).toBe("skipped"); // never a throw
+  });
+
+  it("creates a MISSING log directory instead of skipping — a first run, before the config dir exists, must still populate", () => {
+    const r = populateDefaultProfile(opts({ logPath: join(cfg, "brand-new-dir", "x.log") }));
+    expect(r.kind).toBe("spawned");
+    expect(existsSync(join(cfg, "brand-new-dir", "x.log"))).toBe(true);
+  });
+
+  it("fails OPEN when the config dir is outside the allowlist — getConfigDir throws, and this runs inside a tool call that must not die", () => {
+    // Reachable for real: populateDefaultProfile is awaited from
+    // maybeEnsureDefaultProfileReady inside dispatchCallTool, which has no
+    // try/catch, so a throw here would fail the tool the user actually ran.
+    process.env.LLM_EXT_CONFIG_DIR = "/etc/llm-ext-not-allowed";
+    const r = populateDefaultProfile({
+      profile: "free" as const,
+      allowPaidModels: false,
+      log: () => {},
+      scriptPath: noopScript,
+      env: { ...process.env } as NodeJS.ProcessEnv,
+    });
+    expect(r.kind).toBe("skipped");
+    if (r.kind !== "skipped") throw new Error("unreachable");
+    expect(r.reason).toMatch(/config dir unusable/);
   });
 });
 

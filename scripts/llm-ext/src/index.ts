@@ -341,8 +341,9 @@ let activeResolved: ResolvedProfile | null = (() => {
   // (judge/scout/benchmark) enforce the cost-safety guard (TRDD-97ef8b63).
   setActiveFreeOnly(resolved.freeOnly);
   // Auto-bench the free pool when free_only is ON and the cache lacks
-  // :free entries (TRDD-f1510055). Fire-and-forget — never blocks server
-  // boot; the detached child writes to ~/.llm-externalizer/free-pool-bench.log.
+  // :free entries (TRDD-f1510055). Fire-and-forget — never blocks server boot;
+  // the detached child writes to <getConfigDir()>/free-pool-bench.log (i.e.
+  // ~/.llm-externalizer/... unless LLM_EXT_CONFIG_DIR overrides it).
   // Cost-safety: --bench-free-pool + the runner's free_only guard reject
   // any non-:free model, so this is zero-spend by construction.
   // At startup we don't know the *prior* free_only state, so pass null —
