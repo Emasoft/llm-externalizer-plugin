@@ -3851,9 +3851,10 @@ async function dispatchCallToolInner(
         const profileNames = Object.keys(activeSettings.profiles);
         if (profileNames.length === 0) {
           // Fail fast: an empty profiles map is a configuration error, not "no
-          // profiles yet" — ensureSettingsExist() always seeds 4 defaults on
-          // first run, so an empty map here means the file was hand-edited into
-          // an invalid state. Say so instead of silently printing an empty list.
+          // profiles yet" — ensureSettingsExist() always seeds the three
+          // machine-managed defaults (free, ensemble, mass-scout) on first run,
+          // so an empty map here means the file was hand-edited into an invalid
+          // state. Say so instead of silently printing an empty list.
           return {
             content: [
               {

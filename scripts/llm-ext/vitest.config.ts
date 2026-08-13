@@ -269,6 +269,12 @@ export default defineConfig({
       // per-tool runners are seams; settings.yaml is a REAL file written by the REAL
       // atomic writers.
       'src/benchmark/update-all.test.ts',
+      // --populate-default-profile NAME: unlike --update-all (writes settings.active
+      // plus every registered tool), populates exactly ONE named machine-managed
+      // default profile ('free' | 'ensemble' | 'mass-scout'). Injected catalog + sweep
+      // seams (no network); the pre-flight budget abort and settings.yaml writes are
+      // the REAL code.
+      'src/benchmark/populate-default-profile.test.ts',
       // Per-tool model-qualification registry (TRDD-f45eeaa0 framework core).
       'src/model-qualification/registry.test.ts',
       // Cross-tool model assessment (requirements half of the per-tool gate).

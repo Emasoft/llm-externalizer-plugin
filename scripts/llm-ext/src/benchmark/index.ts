@@ -17,7 +17,7 @@
 
 import { mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { withUsageContext } from "../usage-history.js";
 import { buildGroundTruth, BENCHMARK_KEYWORDS } from "./ground-truth.js";
@@ -29,7 +29,9 @@ import {
   setPaidBenchmarksAllowed,
   rankByQualityIndex,
   resolveFreePool,
+  freeSuffixOnly,
   fetchProgrammingModels,
+  type OpenRouterModel,
   type QualifiedModel,
 } from "./discover.js";
 import { runBenchmarkOnModel, keywordPromptChars, type RunOutcome } from "./runner.js";
@@ -44,6 +46,11 @@ import {
   loadCachedReport,
   passingFreePoolIds,
   pickTopN,
+  pickEnsembleByPriceCeiling,
+  pickMassScoutModel,
+  updateFreeDefaultProfile,
+  updateEnsembleDefaultProfile,
+  updateMassScoutDefaultProfile,
   renderEnsembleBlock,
   ENSEMBLE_SLOTS,
   type CachedReport,
@@ -51,7 +58,7 @@ import {
   type EnsembleSlot,
   type PickedModel,
 } from "./pick.js";
-import { runUpdateAll, type EnsembleSweepRun, type ToolBenchmarkRun } from "./update-all.js";
+import { runUpdateAll, estimateWorkloadCostUsd, type EnsembleSweepRun, type ToolBenchmarkRun } from "./update-all.js";
 import { ASSUMED_MAX_OUTPUT_TOKENS } from "./budget.js";
 import type { BenchmarkWorkload } from "./workload-types.js";
 import { runSecurityTriageBenchmark } from "./security-triage/index.js";
@@ -87,6 +94,7 @@ import {
   setAllowPaidModels,
   profileFreeModels,
   FREE_POOL_SEED,
+  getEnsemblePriceCeiling,
 } from "../config.js";
 
 import { parseArgs, type CliOptions } from "./cli-args.js";
@@ -388,6 +396,14 @@ async function main(): Promise<CliResult> {
     return runUpdateAllPhase(opts);
   }
 
+  // --populate-default-profile routes to the SINGLE-profile refresh: unlike
+  // --update-all (which writes whatever settings.active happens to be, plus every
+  // registered tool), this sweeps and writes EXACTLY the named machine-managed
+  // default profile ('free' | 'ensemble' | 'mass-scout') and nothing else.
+  if (opts.populateDefaultProfile !== null) {
+    return runPopulateDefaultProfilePhase(opts);
+  }
+
   // --security-triage routes to the security_scan triage benchmark — a wholly
   // separate task (verdict adjudication, not keyword classification) that reuses
   // the security_scan judge pipeline and gates auto-selection on a pass.
@@ -511,7 +527,7 @@ async function main(): Promise<CliResult> {
 }
 
 /** What a keyword sweep produced. `dryRun` short-circuits before any paid call. */
-interface SweepOutcome {
+export interface SweepOutcome {
   dryRun: boolean;
   candidates: number;
   baselines: number;
@@ -855,6 +871,243 @@ function describeKeywordWorkload(): BenchmarkWorkload {
     // ASSUMED_MAX_OUTPUT_TOKENS for why an assumption is unavoidable here, and why a
     // wrong one can cost at most a single call's over-run (the ledger trips on it).
     maxOutputTokensPerCall: ASSUMED_MAX_OUTPUT_TOKENS,
+  };
+}
+
+/**
+ * `--populate-default-profile NAME` — the DEPS this phase drives: the live OpenRouter
+ * catalog and the keyword sweep, both injectable so the phase is testable offline
+ * (same seam shape as UpdateAllDeps in update-all.ts). Production uses the real
+ * fetch + the real runKeywordSweep; a test injects a canned catalog and canned
+ * CachedResult[] so no network call and no fixture load ever happens.
+ */
+export interface PopulateDefaultProfileDeps {
+  fetchCatalog: () => Promise<OpenRouterModel[]>;
+  runSweep: (sweepOpts: CliOptions) => Promise<SweepOutcome>;
+}
+
+const defaultPopulateDefaultProfileDeps: PopulateDefaultProfileDeps = {
+  fetchCatalog: () => fetchProgrammingModels(),
+  runSweep: (sweepOpts) => runKeywordSweep(sweepOpts),
+};
+
+/**
+ * `--populate-default-profile NAME` phase. Unlike --update-all (which writes whatever
+ * `settings.active` happens to be, plus every registered tool), this sweeps and writes
+ * EXACTLY the one named machine-managed default profile — 'free' | 'ensemble' |
+ * 'mass-scout' — and nothing else. `name` is already validated to be one of the three
+ * (cli-args.ts's isDefaultProfileName gate) by the time this runs.
+ */
+export async function runPopulateDefaultProfilePhase(
+  opts: CliOptions,
+  deps: PopulateDefaultProfileDeps = defaultPopulateDefaultProfileDeps,
+): Promise<CliResult> {
+  const name = opts.populateDefaultProfile;
+  if (name === null) {
+    // Unreachable from the CLI (main() only calls this once opts.populateDefaultProfile
+    // is set) — a defensive fail-fast so a future caller of this exported function
+    // cannot get a silent no-op instead of a clear error.
+    throw new Error("runPopulateDefaultProfilePhase called without --populate-default-profile");
+  }
+  const settingsPath = getSettingsPath();
+  if (name === "free") {
+    return runPopulateFreeDefaultProfile(opts, settingsPath, deps);
+  }
+  return runPopulatePaidDefaultProfile(opts, settingsPath, name, deps);
+}
+
+/**
+ * The 'free' default profile: sweeps ONLY the zero-cost pool, under the SAME free_only
+ * chokepoint --bench-free-pool / --update-all --free already rely on (setActiveFreeOnly
+ * + the runner's own runtime guard) — provably $0, never the paid path.
+ */
+async function runPopulateFreeDefaultProfile(
+  opts: CliOptions,
+  settingsPath: string,
+  deps: PopulateDefaultProfileDeps,
+): Promise<CliResult> {
+  setActiveFreeOnly(true);
+
+  // Seed the pool from the 'free' default profile's OWN current free_models (so a
+  // re-run refreshes what it already owns), falling back to FREE_POOL_SEED — same
+  // fallback --bench-free-pool uses when the active profile pins nothing.
+  let configured: readonly string[] = FREE_POOL_SEED;
+  try {
+    const settings = loadSettings();
+    const freeProfile = settings?.profiles?.free;
+    if (freeProfile) {
+      const pool = profileFreeModels(freeProfile);
+      if (pool.length > 0) configured = pool;
+    }
+  } catch {
+    /* settings not loadable — FREE_POOL_SEED is still a valid $0 seed */
+  }
+
+  const catalog = await deps.fetchCatalog();
+  const { pool: discoveredPool, rejected } = resolveFreePool(configured, catalog, {
+    autoDiscover: true,
+    autoDiscoverTopN: opts.qualifyingTopN ?? 16,
+  });
+  if (rejected.length > 0) {
+    return {
+      ok: false,
+      code: 2,
+      summary:
+        `--populate-default-profile free refuses to run: configured non-':free' id(s) ${JSON.stringify(rejected)} ` +
+        `are NOT priced at $0 by the live catalog (they would cost money) or are absent from it — fix the ` +
+        `'free' profile's free_models list`,
+    };
+  }
+  // Same reasoning as --update-all's free phase (see runUpdateAllPhase): the runtime
+  // send-time chokepoint (assertFreeOnlyModel) admits ONLY ':free'-suffixed ids, so a
+  // zero-cost id lacking that suffix must be dropped here, before it reaches the sweep.
+  const freeIds = freeSuffixOnly(discoveredPool);
+  if (freeIds.length === 0) {
+    return {
+      ok: false,
+      code: 2,
+      summary:
+        "--populate-default-profile free: the live catalog currently offers no zero-cost ':free' model " +
+        "that meets the structural bar (structured output / context / output length) — nothing to benchmark",
+    };
+  }
+
+  if (opts.dryRun) {
+    return {
+      ok: true,
+      summary: `dry-run — would sweep ${freeIds.length} zero-cost ':free' model(s) for the 'free' default profile; $0, nothing written`,
+    };
+  }
+
+  // Bypass the normal cost filter exactly like --bench-free-pool: the resolved pool
+  // rides in as --include baselines (qualifyingTopN: 0 empties the auto-discovered
+  // candidate list), and free_only (set above) is the guard that keeps this $0.
+  const sweepOpts: CliOptions = {
+    ...opts,
+    includeIds: freeIds,
+    qualifyingTopN: 0,
+    dryRun: false,
+    fromCache: false,
+  };
+  const sweep = await deps.runSweep(sweepOpts);
+  const passing = passingFreePoolIds(sweep.results);
+  if (passing.length === 0) {
+    return {
+      ok: false,
+      code: 2,
+      summary: "--populate-default-profile free: no ':free' model passed the sweep — 'free' profile left unchanged",
+      reportPath: sweep.reportPath || undefined,
+    };
+  }
+  const w = updateFreeDefaultProfile(settingsPath, passing);
+  return {
+    ok: true,
+    summary: `populate-default-profile free: wrote ${w.newPool.length} model(s) to '${w.profileName}' — ${w.newPool.join(", ")}`,
+    reportPath: sweep.reportPath || undefined,
+  };
+}
+
+/**
+ * The 'ensemble' / 'mass-scout' default profiles: PAID. Bounded by the SAME worst-case
+ * pre-flight estimate + abort that --update-all's paid phase uses (see
+ * update-all.ts::runUpdateAll, the "PRE-FLIGHT COST ESTIMATE" step) — computed here over
+ * the same requirement-gated, quality-ranked candidate roster runKeywordSweep itself
+ * builds (discover.ts's qualify + rankByQualityIndex), so the estimate and the actual
+ * roster can never disagree about which models are in play. No second budget system:
+ * this reuses update-all.ts's own estimateWorkloadCostUsd.
+ */
+async function runPopulatePaidDefaultProfile(
+  opts: CliOptions,
+  settingsPath: string,
+  name: "ensemble" | "mass-scout",
+  deps: PopulateDefaultProfileDeps,
+): Promise<CliResult> {
+  setActiveFreeOnly(false);
+
+  const catalog = await deps.fetchCatalog();
+  const { candidates: discovered } = buildBenchmarkRoster(catalog, DEFAULT_CRITERIA, [], catalog);
+  const ranked = rankByQualityIndex(discovered);
+  const candidates = opts.qualifyingTopN !== null ? ranked.slice(0, opts.qualifyingTopN) : ranked;
+  if (candidates.length === 0) {
+    return {
+      ok: false,
+      code: 2,
+      summary: `--populate-default-profile ${name}: no candidate model met the requirement gate — nothing to benchmark`,
+    };
+  }
+
+  const workload = describeKeywordWorkload();
+  let estimatedUsd = 0;
+  for (const m of candidates) {
+    estimatedUsd += estimateWorkloadCostUsd(workload, {
+      inputDollarsPerMillion: m.inputDollarsPerMillion,
+      outputDollarsPerMillion: m.outputDollarsPerMillion,
+    });
+  }
+  console.error(
+    `[populate-default-profile] ${name}: worst-case estimate $${estimatedUsd.toFixed(4)} over ${candidates.length} candidate(s) (cap $${opts.budgetUsd.toFixed(2)}).`,
+  );
+  if (estimatedUsd > opts.budgetUsd) {
+    // ABORT BEFORE SPENDING A CENT — same rule and same message shape as
+    // --update-all's pre-flight abort (runUpdateAll), so the fix is always the same
+    // typed decision: raise --budget-usd, shrink --qualifying-top-n, or go --free.
+    return {
+      ok: false,
+      code: 2,
+      summary:
+        `--populate-default-profile ${name}: WORST-CASE pre-flight estimate $${estimatedUsd.toFixed(4)} exceeds the ` +
+        `$${opts.budgetUsd.toFixed(2)} cap — nothing was sent, $0 spent. This bound assumes every call emits its ` +
+        `full max_tokens, so real spend is typically far lower. To proceed: --budget-usd ${Math.ceil(estimatedUsd * 100) / 100} ` +
+        `(authorizes the worst case), or shrink the sweep with --qualifying-top-n N`,
+    };
+  }
+
+  if (opts.dryRun) {
+    return {
+      ok: true,
+      summary: `dry-run — would sweep ${candidates.length} candidate(s) for the '${name}' default profile; worst case $${estimatedUsd.toFixed(4)}, nothing sent, nothing written`,
+    };
+  }
+
+  const sweep = await deps.runSweep(opts);
+
+  if (name === "ensemble") {
+    const ceiling = getEnsemblePriceCeiling(loadSettings());
+    const picks = pickEnsembleByPriceCeiling(sweep.results, { priceCeilingUsdPerM: ceiling });
+    if (picks.length === 0) {
+      return {
+        ok: false,
+        code: 2,
+        summary: `--populate-default-profile ensemble: no candidate cleared the $${ceiling.toFixed(2)}/1M price ceiling — 'ensemble' profile left unchanged`,
+        reportPath: sweep.reportPath || undefined,
+      };
+    }
+    updateEnsembleDefaultProfile(settingsPath, picks);
+    return {
+      ok: true,
+      summary: `populate-default-profile ensemble: wrote ${picks.length} model(s) — ${picks.map((p) => p.modelId).join(", ")}`,
+      reportPath: sweep.reportPath || undefined,
+    };
+  }
+
+  // 'mass-scout' — pickMassScoutModel throws (never returns a ':free' id) rather
+  // than silently falling back; surface that as a normal [FAILED] outcome.
+  let pick: PickedModel;
+  try {
+    pick = pickMassScoutModel(sweep.results);
+  } catch (err) {
+    return {
+      ok: false,
+      code: 2,
+      summary: `--populate-default-profile mass-scout: ${(err as Error).message}`,
+      reportPath: sweep.reportPath || undefined,
+    };
+  }
+  const w = updateMassScoutDefaultProfile(settingsPath, pick);
+  return {
+    ok: true,
+    summary: `populate-default-profile mass-scout: wrote '${w.newModelId}'`,
+    reportPath: sweep.reportPath || undefined,
   };
 }
 
@@ -1545,18 +1798,37 @@ function buildReportPath(): string {
 // why the slash commands asked an AGENT to read stderr and pick a message.
 //
 // process.exitCode (not process.exit) so buffered stdout is flushed first.
-withUsageContext({ tool: "cli:benchmark", params: "" }, () =>
-  main().then(
-    (result) => {
-      process.stdout.write(finalLine(result) + "\n");
-      process.exitCode = result.code ?? (result.ok ? 0 : 1);
-    },
-    (err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      // The stack is diagnostic noise for the caller; keep it on stderr only.
-      if (err instanceof Error && err.stack) console.error("[benchmark] fatal:", err.stack);
-      process.stdout.write(finalLine({ ok: false, summary: msg }) + "\n");
-      process.exitCode = 1;
-    },
-  ),
-);
+//
+// Guarded on "am I the process entry point": this module also exports
+// runPopulateDefaultProfilePhase (with an injectable-deps seam, like update-all.ts's
+// runUpdateAll) so its picker/budget logic can be unit-tested with a stubbed catalog +
+// sweep — no network, no fixtures, no real argv parsing. Without this guard, merely
+// IMPORTING index.ts under a test runner would unconditionally parse the test runner's
+// own argv and kick off a real run (main() was always "runs at import time" by design —
+// that's why cli-args.ts was split out; this guard extends the same testability
+// property to the phases index.ts now also exports).
+//
+// Deliberately NOT an env-var flag (e.g. process.env.VITEST): cli-contract.test.ts
+// spawns dist/benchmark.js via spawnSync with `env: { ...process.env, … }`, which
+// inherits VITEST=true from the parent test process into the CHILD — an env guard would
+// make the real bundled CLI silently no-op under every one of those (already-passing)
+// subprocess tests. import.meta.url vs argv[1] is immune to that: it is true only when
+// THIS file is the actual process entry point (`node dist/benchmark.js`), never when a
+// test merely imports it in-process or spawns it as a child with an inherited env.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  withUsageContext({ tool: "cli:benchmark", params: "" }, () =>
+    main().then(
+      (result) => {
+        process.stdout.write(finalLine(result) + "\n");
+        process.exitCode = result.code ?? (result.ok ? 0 : 1);
+      },
+      (err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        // The stack is diagnostic noise for the caller; keep it on stderr only.
+        if (err instanceof Error && err.stack) console.error("[benchmark] fatal:", err.stack);
+        process.stdout.write(finalLine({ ok: false, summary: msg }) + "\n");
+        process.exitCode = 1;
+      },
+    ),
+  );
+}

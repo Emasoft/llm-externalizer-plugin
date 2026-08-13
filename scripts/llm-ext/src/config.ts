@@ -1396,19 +1396,47 @@ export function formatProfilesList(): string {
     );
   }
   const lines = [`Settings file: ${settingsPath}`, ""];
+  let anyUnpopulated = false;
   for (const profileName of profileNames) {
     const profile = settings.profiles[profileName];
     const marker = profileName === settings.active ? "* " : "  ";
-    const modelSummary = profile.free_only
-      ? `free_only (${(profile.free_models ?? []).length} models)`
-      : [profile.model, profile.second_model, profile.third_model]
-          .filter(Boolean)
-          .join(", ");
+    const owner = isDefaultProfileName(profileName) ? " [machine-managed]" : "";
+
+    // An unpopulated default profile must NOT print its sentinel model id.
+    // `placeholder/unpopulated-default-profile` looks like a broken config the
+    // user is expected to fix by hand, when in fact it is a normal pre-benchmark
+    // state that resolves itself — so say what it actually means.
+    let modelSummary: string;
+    if (isUnpopulatedDefaultProfile(profileName, profile)) {
+      anyUnpopulated = true;
+      modelSummary = "not benchmarked yet — populates on first use";
+    } else if (profile.free_only) {
+      modelSummary = `free_only (${(profile.free_models ?? []).length} models)`;
+    } else {
+      modelSummary = [profile.model, profile.second_model, profile.third_model]
+        .filter(Boolean)
+        .join(", ");
+    }
+
     lines.push(
-      `${marker}${profileName} — ${profile.mode} / ${profile.api} — ${modelSummary}`,
+      `${marker}${profileName}${owner} — ${profile.mode} / ${profile.api} — ${modelSummary}`,
     );
   }
   lines.push("", "* = active profile. Use --show <name> for full resolved detail.");
+  if (profileNames.some((n) => isDefaultProfileName(n))) {
+    lines.push(
+      "[machine-managed] = free / ensemble / mass-scout. These pick and refresh their own",
+      "models from benchmark results; every other profile is yours and is never modified.",
+    );
+  }
+  if (anyUnpopulated) {
+    lines.push(
+      "",
+      "Unpopulated profiles are expected on a fresh install: 'free' works immediately from a",
+      "bundled seed pool while it benchmarks, and the paid profiles populate on first use once",
+      "allow_paid_models is true.",
+    );
+  }
   return lines.join("\n");
 }
 

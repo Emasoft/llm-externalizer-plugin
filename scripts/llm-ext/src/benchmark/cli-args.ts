@@ -10,6 +10,7 @@
 
 import { DEFAULT_CRITERIA } from "./discover.js";
 import { DEFAULT_BUDGET_USD } from "./budget.js";
+import { DEFAULT_PROFILE_NAMES, isDefaultProfileName, type DefaultProfileName } from "../config.js";
 
 export interface CliOptions {
   includeIds: string[];
@@ -127,6 +128,12 @@ export interface CliOptions {
   /** HARD spend cap for --update-all, in USD (P4). Enforced twice: a pre-flight estimate
    *  aborts before the first call, and budget.ts reserves each call before sending it. */
   budgetUsd: number;
+  /** Populate ONE named machine-managed default profile ('free' | 'ensemble' |
+   *  'mass-scout') — unlike --update-all (which writes whatever `settings.active`
+   *  happens to be plus every registered tool), this writes exactly the named
+   *  default profile and nothing else. `--budget-usd` bounds the two paid names
+   *  (ensemble, mass-scout); 'free' is provably $0 regardless. */
+  populateDefaultProfile: DefaultProfileName | null;
 }
 
 /** `--free` (default) | `--paid` | `--both`. */
@@ -176,6 +183,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     updateAll: false,
     updateMode: "free",
     budgetUsd: DEFAULT_BUDGET_USD,
+    populateDefaultProfile: null,
   };
   // The mode flags are mutually exclusive: `--free --paid` has no coherent meaning, and
   // silently letting the last one win would decide — without saying so — whether the run
@@ -326,6 +334,15 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       opts.apply = true;
     } else if (a === "--update-all") {
       opts.updateAll = true;
+    } else if (a === "--populate-default-profile") {
+      const raw = takeValue(a, i);
+      i++;
+      if (!isDefaultProfileName(raw)) {
+        throw new Error(
+          `--populate-default-profile must be one of ${DEFAULT_PROFILE_NAMES.join(", ")}, got '${raw}'`,
+        );
+      }
+      opts.populateDefaultProfile = raw;
     } else if (a === "--free") {
       setMode("free");
     } else if (a === "--paid") {
@@ -354,8 +371,16 @@ export function parseArgs(argv: readonly string[]): CliOptions {
   // A mode/budget flag with no --update-all is a SILENT NO-OP — the user typed a
   // cost-safety instruction that would be ignored. That is the one failure mode a
   // spend cap can never have, so it is a usage error, not a shrug.
-  if (!opts.updateAll && (modeFlag !== null || budgetSeen)) {
+  if (!opts.updateAll && opts.populateDefaultProfile === null && (modeFlag !== null || budgetSeen)) {
     throw new Error("--free / --paid / --both / --budget-usd only apply to --update-all");
+  }
+  // --populate-default-profile carves an EXCEPTION out of the rule above for
+  // --budget-usd only: it bounds the two paid default-profile names exactly like it
+  // bounds --update-all's paid phase. --free/--paid/--both select a WHOLE-refresh mode
+  // that --populate-default-profile has no use for — its mode is implied by the target
+  // profile name — so those three stay refused even with --populate-default-profile set.
+  if (!opts.updateAll && opts.populateDefaultProfile !== null && modeFlag !== null) {
+    throw new Error("--free / --paid / --both only apply to --update-all (not --populate-default-profile — its mode is implied by the profile name)");
   }
   return opts;
 }
@@ -427,6 +452,17 @@ export function printHelp(): void {
       "                    reserved against the cap before it is sent, so the cap cannot be",
       "                    crossed by a call we chose to make. --dry-run prints the full plan",
       "                    and the estimate and spends NOTHING.",
+      "",
+      "Populate ONE named default profile (unlike --update-all, writes ONLY that profile):",
+      `  --populate-default-profile NAME`,
+      `                    NAME is one of: ${DEFAULT_PROFILE_NAMES.join(", ")}. Sweeps and`,
+      "                    writes exactly that machine-managed default profile — nothing",
+      "                    else (no other profile, no tool_models). 'free' runs under the",
+      "                    same free_only chokepoint as --update-all --free (provably $0).",
+      "                    'ensemble' and 'mass-scout' are PAID: bounded by the same",
+      "                    worst-case pre-flight estimate + --budget-usd cap as --update-all",
+      "                    (aborts before the first call if the estimate exceeds the cap).",
+      "                    --dry-run prints the plan and spends/writes nothing.",
       "",
       "Free-pool sweep (TRDD-f1510055):",
       "  --bench-free-pool Auto-fill the candidate set from the active profile's",
