@@ -791,11 +791,23 @@ exits non-zero rather than reporting a false success.
 | (neither given) | Defaults to the most recently modified transcript for the current project. |
 | `--prune aggressive\|moderate\|none` | Default `aggressive` — drops tool-result payloads, pasted file contents, thinking blocks. |
 | `--min-context <n>` | Optional hard floor on eligible model `context_length`. Default: none (biggest available is used). |
-| `--max-chunk-tokens <n>` | Override the per-chunk/per-fold token budget. Default: `min(50000, model window budget)`. |
+| `--max-chunk-tokens <n>` | Override the per-chunk/per-fold token budget. Default: `min(25000, model window budget)` — smaller than the window on purpose, since quality collapses well before the context limit and small chunks parallelize better. |
+| `--concurrency <n>` | Chunk requests in flight at once. Default: AUTO — `min(chunkCount, 28)`, so the whole map phase runs in one wave. `1` forces the original sequential behaviour. |
+| `--chunk-timeout-s <n>` | Per-ATTEMPT deadline. Default: 600. A backstop against a stalled generation, not a tail-cutter — setting it below the free tier's working band multiplies total time instead of bounding it. |
+| `--max-retries-per-chunk <n>` | How many times ONE chunk may be re-attempted on the SAME model. Default: 2 (3 attempts). Covers provider hiccups and rate-limit backoff; a delisted or quota-exhausted model is demoted and replaced regardless of this number. |
+| `--until-done` | Retry the whole compaction until it succeeds instead of failing with a resumable checkpoint. Each pass resumes, so completed chunks are never recomputed. Backoff 30s doubling to a 15-min cap; an exhausted daily quota waits for the 00:00 UTC reset instead. Argument errors still fail immediately. |
 | `--resume` | Require an existing, matching checkpoint — fails fast instead of silently starting fresh. |
 | `--checkpoint <path>` | Override the checkpoint file. Default: derived deterministically from the transcript path under `~/.llm-externalizer/session-summary-checkpoints/`. |
 | `--output <path>` | Custom output directory for the summary report. Default: `<main-project-dir>/reports/llm-externalizer/`. |
 | `--stdout` | Print the summary TEXT directly to stdout (no report file written; banner/progress still go to stderr). |
+
+**When the summary must exist no matter what.** By default this command is
+checkpoint-and-stop: a chunk gets its retry budget, a dead or quota-capped model is demoted
+to the next ranked free one, and when those run out the command fails and tells you to
+re-run. Use `--until-done` for unattended runs; wrap it in
+`until llm-ext session-summary …; do sleep 60; done` as well if the process itself might be
+killed. Both converge for the same reason — the checkpoint makes every pass keep the work
+that already landed.
 
 **Worked examples:**
 
@@ -815,6 +827,11 @@ llm-ext session-summary \
 #     `--resume` fails fast instead of silently starting over if no matching
 #     checkpoint exists yet at the default checkpoint path.
 llm-ext session-summary --transcript /path/to/session.jsonl --resume
+
+# (d) Unattended: must produce a summary eventually. Retries the whole
+#     compaction, resuming from the checkpoint each pass, and waits for the
+#     00:00 UTC reset when the failure is an exhausted daily quota.
+llm-ext session-summary --until-done --max-retries-per-chunk 10
 ```
 
 Verified: `llm-ext session-summary --resume` (no transcript, no checkpoint) fails fast with
