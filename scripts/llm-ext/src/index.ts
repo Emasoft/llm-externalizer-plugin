@@ -159,6 +159,7 @@ function resolveDefaultMaxTokens(): number {
 import {
   type Settings,
   type ResolvedProfile,
+  type Profile,
   API_PRESETS,
   validateSettings,
   resolveProfile,
@@ -167,6 +168,8 @@ import {
   getSettingsPath,
   getConfigDir,
   generateDefaultSettings,
+  isDefaultProfileName,
+  isUnpopulatedDefaultProfile,
   setActiveFreeOnly,
   setAllowPaidModels,
   getAllowPaidModels,
@@ -205,8 +208,21 @@ import {
   reconcileModelsBeforeWork,
   readLastReconcileMs,
   writeLastReconcileMs,
+  catalogForReconcile,
   type ReconcileConfigured,
 } from "./model-reconcile.js";
+import {
+  ensureDefaultProfileReady,
+  type CatalogPriceSnapshot,
+  type DefaultProfileBenchmarkRunner,
+} from "./default-profiles.js";
+import { getProfileRecord } from "./default-profiles-state.js";
+import {
+  populateDefaultProfile,
+  describeOutcome,
+  type PopulationOutcome,
+} from "./default-profiles-runner.js";
+import { readModelEvents, assessModelPersistence } from "./model-events.js";
 import {
   AllFreeModelsExhaustedError,
   approvedFreePoolFromSettings,
@@ -238,6 +254,22 @@ const SETTINGS_FILE = getSettingsPath();
 let settingsValid = false;
 let settingsError = "";
 
+/**
+ * Whether boot should proceed despite `validation` (validateSettings on the
+ * active profile) having FAILED, because the failure is exactly the
+ * self-healing "not benchmarked yet" placeholder state of a machine-owned
+ * default profile ('free' | 'ensemble' | 'mass-scout') — never a genuine
+ * misconfiguration. Extracted as a pure function (used by the module-load
+ * boot IIFE below, which is otherwise hard to unit-test directly) so the
+ * decision itself is independently testable.
+ */
+export function shouldBootDespiteInvalidActiveProfile(
+  activeName: string,
+  activeProfile: Profile | undefined,
+): boolean {
+  return activeProfile !== undefined && isUnpopulatedDefaultProfile(activeName, activeProfile);
+}
+
 // ── Profile-based startup ────────────────────────────────────────────
 // Load settings.yaml, validate active profile, resolve to concrete values.
 // ensureSettingsExist() generates default settings.yaml on first run.
@@ -260,9 +292,26 @@ setAllowPaidModels(activeSettings.allow_paid_models === true);
 let activeResolved: ResolvedProfile | null = (() => {
   const validation = validateSettings(activeSettings);
   if (!validation.valid) {
-    settingsError = `${validation.errors.join("; ")}\n\nSettings file: ${SETTINGS_FILE}`;
-    process.stderr.write(`[llm-externalizer] ⚠ ${settingsError}\n`);
-    return null;
+    const activeProfile = activeSettings.profiles[activeSettings.active];
+    // A machine-owned default profile ('free' | 'ensemble' | 'mass-scout')
+    // that has never been benchmarked yet is EXPECTED to fail validateProfile
+    // (an empty pool / a placeholder model id genuinely cannot serve a
+    // request) — that is not a user misconfiguration, it is the self-healing
+    // "not populated yet" state. Booting anyway lets the dispatcher hook
+    // (dispatchCallToolInner, beside runModelReconcile()) populate it lazily
+    // on first real use. Gating boot here on validateProfile's verdict would
+    // send every fresh install into NOT CONFIGURED with no path forward. A
+    // genuinely misconfigured user profile (any other invalid shape) still
+    // falls through to the NOT CONFIGURED branch below, unchanged.
+    if (shouldBootDespiteInvalidActiveProfile(activeSettings.active, activeProfile)) {
+      process.stderr.write(
+        `[llm-externalizer] '${activeSettings.active}' has not been benchmarked yet — it will populate on first use.\n`,
+      );
+    } else {
+      settingsError = `${validation.errors.join("; ")}\n\nSettings file: ${SETTINGS_FILE}`;
+      process.stderr.write(`[llm-externalizer] ⚠ ${settingsError}\n`);
+      return null;
+    }
   }
   settingsValid = true;
   const profile = activeSettings.profiles[activeSettings.active];
@@ -301,6 +350,21 @@ let activeResolved: ResolvedProfile | null = (() => {
   });
   return resolved;
 })();
+
+/**
+ * Test-only accessor for the module-load boot outcome. `settingsValid` /
+ * `activeResolved` are private by design (module state, not a public API) —
+ * this exists solely so a test can dynamically re-import index.ts against a
+ * controlled settings.yaml (via vi.resetModules()) and assert whether boot
+ * treated an unpopulated default profile as bootable (Task 1's boot gate)
+ * without duplicating the decision logic in the test.
+ */
+export function __getBootStateForTests(): {
+  settingsValid: boolean;
+  activeResolved: boolean;
+} {
+  return { settingsValid, activeResolved: activeResolved !== null };
+}
 
 const DEFAULT_OPENROUTER_RPS = 5; // conservative default if balance can't be determined
 const DEFAULT_MAX_IN_FLIGHT_REMOTE = 200; // safety cap on total concurrent requests
@@ -2097,6 +2161,108 @@ async function runModelReconcile(): Promise<void> {
   });
 }
 
+/**
+ * Lazily populate the ACTIVE profile when it is a machine-owned default
+ * ('free' | 'ensemble' | 'mass-scout') and needs a (re)benchmark: unpopulated,
+ * a configured model removed from the catalog / its price rose, or a
+ * configured model proven persistently dead at runtime. The caller (see
+ * dispatchCallToolInner) gates this behind the SAME RECONCILE_SKIP_TOOLS list
+ * as runModelReconcile(), so read-only/report-config tools never trigger a
+ * benchmark or a spend refusal — they report the config AS THE USER HAS IT.
+ *
+ * `free` NEVER blocks: populateDefaultProfile spawns a detached child and
+ * returns immediately, and the current command proceeds on the existing
+ * FREE_POOL_SEED fallback (resolveAutoFreePool) while it runs in the
+ * background. `ensemble`/`mass-scout` are paid — under `allow_paid_models:
+ * false` the runner REFUSES rather than spending, and this function fails the
+ * tool call fast with the refusal's remedy text so the user isn't billed for
+ * something nobody authorized.
+ *
+ * Not yet wired here (future work, outside this pass's scope): `cachedPrices`
+ * and `qualifyingPool` — decideDefaultProfilePopulation's "model-price-
+ * increased" and "new-model-arrived" triggers — because nothing currently
+ * PERSISTS the last-picked prices / qualifying pool for a completed
+ * benchmark (default-profiles-state.ts's recordBenchmarkSuccess has no
+ * caller yet). The "unpopulated", "model-removed", and
+ * "model-unavailable-at-runtime" triggers are fully live.
+ *
+ * Returns a ToolResult ONLY when the tool call itself must fail (a paid
+ * default profile refused to auto-benchmark) — null means "proceed",
+ * whether or not a benchmark was actually started.
+ */
+export async function maybeEnsureDefaultProfileReady(): Promise<ToolResult | null> {
+  const activeName = activeSettings.active;
+  if (!isDefaultProfileName(activeName)) return null;
+  const profile = activeSettings.profiles[activeName];
+  if (!profile) return null;
+
+  // Fail-open: a catalog fetch failure must never falsely invalidate an
+  // already-populated profile (decideDefaultProfilePopulation's own
+  // contract) — so an empty snapshot here is the safe degrade, not an error.
+  let catalog: CatalogPriceSnapshot[] = [];
+  try {
+    catalog = catalogForReconcile(await fetchOpenRouterModels()).priceSnapshot;
+  } catch {
+    /* empty catalog is the fail-open default */
+  }
+
+  // Durable, model-scoped runtime failures only (model-events.ts's
+  // assessModelPersistence — 3 consecutive 400/404/410/422 within 24h). A
+  // transient 429/502/503 blip must never authorize a paid benchmark.
+  const runtimeUnavailableIds = [...assessModelPersistence(readModelEvents()).values()]
+    .filter((v) => v.persistentlyBroken)
+    .map((v) => v.model);
+
+  const record = getProfileRecord(activeName);
+
+  // Captured via an object property (not a bare `let`) so the type stays
+  // `PopulationOutcome | null` at every read site — TS drops flow narrowing
+  // on a plain closed-over `let` the moment an intervening `await` could have
+  // let the closure run, which otherwise widens `outcome.kind` below to
+  // `never` and the discriminant check fails to type-check.
+  const captured: { outcome: PopulationOutcome | null } = { outcome: null };
+  const runBenchmark: DefaultProfileBenchmarkRunner = async (profileName) => {
+    captured.outcome = populateDefaultProfile({
+      profile: profileName,
+      allowPaidModels: getAllowPaidModels(),
+      log: (msg) => process.stderr.write(msg),
+    });
+  };
+
+  const result = await ensureDefaultProfileReady(
+    activeName,
+    profile,
+    catalog,
+    SETTINGS_FILE,
+    runBenchmark,
+    {
+      runtimeUnavailableIds,
+      cooldownUntil: record?.cooldownUntil,
+    },
+  );
+
+  const outcome = captured.outcome;
+  if (result.benchmarkRan && outcome) {
+    const msg = describeOutcome(outcome);
+    if (msg) process.stderr.write(msg);
+    if (outcome.kind === "refused") {
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `NOT YET BENCHMARKED\n\n${outcome.reason}.\n` +
+              `Run: ${outcome.remedy}\n` +
+              `Or set allow_paid_models: true in settings.yaml to let it populate on first use.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+  return null;
+}
+
 /** One free-pool call with rotation, for the paths that have no ensemble slots
  *  (a ':free' modelOverride, ensemble:false, or a file too large for every
  *  ensemble primary). Throws AllFreeModelsExhaustedError only after every
@@ -2779,6 +2945,12 @@ async function dispatchCallToolInner(
     // Skipped for the pure status/meta tools so they stay instant.
     if (!RECONCILE_SKIP_TOOLS.has(name)) {
       await runModelReconcile();
+      // The active profile may itself be an unpopulated/drifted machine-owned
+      // default ('free' | 'ensemble' | 'mass-scout') — populate it lazily
+      // before the tool does real work. Same skip list as runModelReconcile
+      // (above) so read-only/report-config tools never trigger this.
+      const defaultProfileGate = await maybeEnsureDefaultProfileReady();
+      if (defaultProfileGate) return defaultProfileGate;
     }
 
     // mass-scouting tools are thin shims around the CLI dispatcher in

@@ -37,6 +37,9 @@ export default defineConfig({
       // Dynamic default-profile lifecycle (free/ensemble/mass-scout) — pool
       // fingerprinting, drift decision, and the state sidecar.
       'src/default-profiles.test.ts',
+      // Phase 4 wiring: the boot gate + the dispatcher hook that actually
+      // populate a default profile on first use (previously inert).
+      'src/default-profile-wiring.test.ts',
       // renderDefaultSettingsYaml() round-trip + first-run/corrupt-recovery
       // regression tests for the removed SETTINGS_TEMPLATE hand-maintained copy.
       'src/config-default-settings.test.ts',

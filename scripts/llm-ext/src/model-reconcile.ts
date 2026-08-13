@@ -37,6 +37,7 @@ import { filterFreeModels, type FreeModelCatalogEntry } from "./free-rotation.js
 import { fetchProgrammingModels } from "./benchmark/discover.js";
 import { applyFreePoolToSettings } from "./benchmark/pick.js";
 import { benchmarkFailedModels } from "./benchmark/security-triage/index.js";
+import type { CatalogPriceSnapshot } from "./default-profiles.js";
 import { maybeTriggerFreePoolBench } from "./free-pool-auto-bench.js";
 
 // ── Shapes ──────────────────────────────────────────────────────────────
@@ -403,21 +404,51 @@ export async function reconcileModelsBeforeWork(
 // ── Shared catalog mapping ──────────────────────────────────────────────
 
 /**
+ * Convert a raw OpenRouter catalog entry list to price snapshots (id + $/M
+ * input/output — default-profiles.ts's CatalogPriceSnapshot shape). Exported
+ * separately from catalogForReconcile so a caller that already fetched the
+ * catalog for the reconcile (index.ts's dispatcher hook) can derive the
+ * default-profile drift-detection input from the SAME fetch, no second
+ * network round-trip.
+ *
+ * Unparseable pricing (missing field, non-numeric string) is carried through
+ * as NaN rather than dropped or zeroed: dropping the id would make a
+ * configured model with broken pricing metadata look REMOVED (a false
+ * "model-removed" trigger); zeroing it would make "no data" indistinguishable
+ * from a real price cut to $0 and could mask a genuine increase once real
+ * pricing data returns. NaN compares false on both `>` directions, so it
+ * silently skips only the price-increase check for that one id.
+ */
+export function toCatalogPriceSnapshot(
+  cat: ReadonlyArray<{ id: string; pricing?: { prompt?: string; completion?: string } }>,
+): CatalogPriceSnapshot[] {
+  return cat.map((m) => ({
+    id: m.id,
+    inputDollarsPerMillion: parseFloat(m.pricing?.prompt ?? "NaN") * 1_000_000,
+    outputDollarsPerMillion: parseFloat(m.pricing?.completion ?? "NaN") * 1_000_000,
+  }));
+}
+
+/**
  * Map a fetched catalog to the reconcile's `fetchCatalog` result shape — the
- * id-set plus the requirements-qualified ':free' arrivals. ONE copy, used by
- * BOTH surfaces (index.ts's runModelReconcile and makeCliReconcileDeps below):
+ * id-set, the requirements-qualified ':free' arrivals, AND the per-model price
+ * snapshot (previously discarded here, so price drift was undetectable
+ * anywhere — see toCatalogPriceSnapshot above). ONE copy, used by BOTH
+ * surfaces (index.ts's runModelReconcile and makeCliReconcileDeps below):
  * they fetch through different clients (the MCP's cached fetchOpenRouterModels
  * vs the CLI's fetchProgrammingModels), but the QUALIFICATION rules must be the
  * same list, or the two surfaces silently reconcile different free classes.
  */
 export function catalogForReconcile(
-  cat: ReadonlyArray<{ id: string } & FreeModelCatalogEntry>,
-): { ids: Set<string>; freeQualified: string[] } {
+  cat: ReadonlyArray<
+    { id: string; pricing?: { prompt?: string; completion?: string } } & FreeModelCatalogEntry
+  >,
+): { ids: Set<string>; freeQualified: string[]; priceSnapshot: CatalogPriceSnapshot[] } {
   const ids = new Set(cat.map((m) => m.id));
   const catalogById = new Map(cat.map((m) => [m.id, m]));
   const freeIds = cat.map((m) => m.id).filter(isFreeSuffixModelId);
   const freeQualified = filterFreeModels(freeIds, catalogById, benchmarkFailedModels());
-  return { ids, freeQualified };
+  return { ids, freeQualified, priceSnapshot: toCatalogPriceSnapshot(cat) };
 }
 
 // ── CLI-side deps factory ───────────────────────────────────────────────
