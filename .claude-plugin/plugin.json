@@ -1,6 +1,6 @@
 {
   "name": "llm-externalizer",
-  "version": "13.3.4",
+  "version": "13.3.5",
   "description": "CLI that offloads bounded LLM tasks from Claude Code to cheaper local (LM Studio, Ollama, vLLM, llama.cpp) or remote (OpenRouter) models. Free models by default; profile-based configuration with ensemble mode.",
   "author": {
     "name": "Emasoft",

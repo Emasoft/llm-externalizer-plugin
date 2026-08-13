@@ -1,6 +1,30 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.3.5] - 2026-08-13
+
+### Testing
+
+- Test(vmlx): make the "CLI present" tests actually make it present
+
+The release job failed on test_vmlx_bench_delegation_when_cli_present with
+"TypeError: 'NoneType' object is not subscriptable", while the same test
+passed locally. run_vmlx_bench returns None immediately when
+shutil.which("vmlx") is None, and the test patched only subprocess.run -
+so it asserted the delegation path only on a machine that happened to have
+vmlx installed, and asserted nothing on any runner that did not.
+
+Its sibling failed the same way in the opposite direction:
+test_vmlx_bench_returns_none_on_failure got None because there was no
+binary, not because the binary exited non-zero, so it passed in CI while
+proving nothing.
+
+Both now patch shutil.which, the pattern a third test in this same file
+already used. Verified by running the suite twice - once on a PATH that
+includes vmlx and once on a PATH that does not, the CI condition: 190
+passed both times.
+
+
 ## [13.3.4] - 2026-08-13
 
 ### Fixed
