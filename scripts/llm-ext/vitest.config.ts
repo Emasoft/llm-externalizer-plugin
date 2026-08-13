@@ -34,6 +34,12 @@ export default defineConfig({
       'src/safe-body.test.ts',
       // Per-tool model map (tool_models / resolveModelForTool) — TRDD-f45eeaa0.
       'src/config.test.ts',
+      // Dynamic default-profile lifecycle (free/ensemble/mass-scout) — pool
+      // fingerprinting, drift decision, and the state sidecar.
+      'src/default-profiles.test.ts',
+      // renderDefaultSettingsYaml() round-trip + first-run/corrupt-recovery
+      // regression tests for the removed SETTINGS_TEMPLATE hand-maintained copy.
+      'src/config-default-settings.test.ts',
       // high_quality_scan prompt-cache wire transform (TRDD-DBUSM55E).
       'src/high-quality-scan.test.ts',
       // Usage-rule installer (~/.claude/rules/use-llm-externalizer.md).
@@ -125,6 +131,12 @@ export default defineConfig({
       // adapter (runClusterSynonymsCli). Mock rawLlmCall, no network.
       'src/cluster/wiring.test.ts',
       'src/benchmark/pick.test.ts',
+      // Every settings.yaml writer must leave the user's comments intact — the
+      // writers used to round-trip through a plain object and silently wipe
+      // them. This include entry is load-bearing: the list is EXPLICIT, so an
+      // unregistered test file runs only when named by hand and is invisible
+      // to `npx vitest run` and to CI.
+      'src/benchmark/pick-comment-preservation.test.ts',
       // Per-tool model writer (applyToolModelToSettings) — CLI/cron-only,
       // read-only-MCP-guarded (TRDD-828238b5 A7-P2).
       'src/benchmark/apply-tool-model.test.ts',
